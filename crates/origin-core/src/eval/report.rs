@@ -835,7 +835,7 @@ mod tests {
 ///
 /// Returns 1.0 when n=0 (no signal).
 pub fn mcnemar_p_value(b: u32, c: u32) -> f64 {
-    let n = (b + c) as u64;
+    let n = (b as u64) + (c as u64);
     if n == 0 {
         return 1.0;
     }
@@ -923,7 +923,7 @@ fn z_for_alpha(alpha: f64) -> f64 {
 /// `c` = "method B correct, method A wrong" discordant pair count.
 /// Returns 1.0 when n == 0.
 pub fn mcnemar_mid_p(b: u32, c: u32) -> f64 {
-    let n = (b + c) as u64;
+    let n = (b as u64) + (c as u64);
     if n == 0 {
         return 1.0;
     }
@@ -969,11 +969,17 @@ pub fn odds_ratio_mcnemar(b: u32, c: u32) -> f64 {
 ///
 /// `successes` = number of successes; `total` = sample size; `alpha` = significance level.
 /// `alpha` must be 0.01, 0.05, or 0.10.
+/// Precondition: `successes <= total` (debug-asserted). Violating this causes `p_hat > 1.0`,
+/// which produces a negative radicand and NaN output.
 /// Returns (0.0, 1.0) when `total` == 0.
 pub fn wilson_ci(successes: u32, total: u32, alpha: f64) -> (f64, f64) {
     if total == 0 {
         return (0.0, 1.0);
     }
+    debug_assert!(
+        successes <= total,
+        "successes ({successes}) exceeds total ({total})"
+    );
     let n = total as f64;
     let p_hat = successes as f64 / n;
     let z = z_for_alpha(alpha);
@@ -1061,6 +1067,13 @@ mod mcnemar_tests {
         let (lo1, hi1) = wilson_ci(0, 10, 0.05);
         assert!(lo1 == 0.0);
         assert!(hi1 > 0.0 && hi1 < 0.5);
+    }
+
+    #[test]
+    #[should_panic(expected = "successes")]
+    #[cfg(debug_assertions)]
+    fn wilson_ci_panics_when_successes_exceeds_total() {
+        let _ = wilson_ci(101, 100, 0.05);
     }
 
     #[test]
