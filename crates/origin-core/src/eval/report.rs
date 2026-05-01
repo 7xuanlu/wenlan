@@ -899,9 +899,185 @@ fn log_sum_exp(a: f64, b: f64) -> f64 {
     m + ((a - m).exp() + (b - m).exp()).ln()
 }
 
+/// Returns the z-value for the given alpha level (two-tailed normal quantile at 1 - alpha/2).
+/// Only supports alpha in {0.01, 0.05, 0.10}.
+fn z_for_alpha(alpha: f64) -> f64 {
+    if (alpha - 0.05).abs() < 1e-12 {
+        1.959_963_984_540_054
+    } else if (alpha - 0.10).abs() < 1e-12 {
+        1.644_853_626_951_472_2
+    } else if (alpha - 0.01).abs() < 1e-12 {
+        2.575_829_303_548_900_4
+    } else {
+        unimplemented!("alpha must be 0.01, 0.05, or 0.10")
+    }
+}
+
+/// Mid-p variant of McNemar's test (Fagerland, Lydersen, Laake 2013,
+/// BMC Med Res Methodology 13:91).
+///
+/// Uniformly better than exact McNemar across sample sizes. Subtracts half
+/// the boundary mass from the tail probability.
+///
+/// `b` = "method A correct, method B wrong" discordant pair count.
+/// `c` = "method B correct, method A wrong" discordant pair count.
+/// Returns 1.0 when n == 0.
+pub fn mcnemar_mid_p(b: u32, c: u32) -> f64 {
+    let n = (b + c) as u64;
+    if n == 0 {
+        return 1.0;
+    }
+    let m = b.min(c) as u64;
+    let log_half_n = -(n as f64) * std::f64::consts::LN_2;
+
+    // Pr(X = m | n, p=0.5)
+    let log_pmf_m = log_binomial(n, m) + log_half_n;
+    let pmf_m = log_pmf_m.exp();
+
+    // Pr(X < m | n, p=0.5) = sum over k in 0..m (exclusive)
+    let mut log_cdf_excl: f64 = f64::NEG_INFINITY;
+    for k in 0..m {
+        let log_pmf = log_binomial(n, k) + log_half_n;
+        log_cdf_excl = log_sum_exp(log_cdf_excl, log_pmf);
+    }
+    let cdf_excl = if m == 0 { 0.0 } else { log_cdf_excl.exp() };
+
+    // One-sided mid-p = Pr(X < m) + 0.5 * Pr(X = m)
+    let one_sided = cdf_excl + 0.5 * pmf_m;
+    (2.0 * one_sided).min(1.0)
+}
+
+/// Odds ratio for matched-pairs binary outcome (McNemar effect size).
+///
+/// `b` = discordant pairs where method A wins; `c` = discordant pairs where method B wins.
+/// Returns 1.0 when both are 0 (no information), INFINITY when c == 0 and b > 0, 0.0 when b == 0 and c > 0.
+pub fn odds_ratio_mcnemar(b: u32, c: u32) -> f64 {
+    if b == 0 && c == 0 {
+        return 1.0;
+    }
+    if c == 0 {
+        return f64::INFINITY;
+    }
+    if b == 0 {
+        return 0.0;
+    }
+    b as f64 / c as f64
+}
+
+/// Wilson score confidence interval for a single proportion.
+/// Reference: Wilson 1927.
+///
+/// `successes` = number of successes; `total` = sample size; `alpha` = significance level.
+/// `alpha` must be 0.01, 0.05, or 0.10.
+/// Returns (0.0, 1.0) when `total` == 0.
+pub fn wilson_ci(successes: u32, total: u32, alpha: f64) -> (f64, f64) {
+    if total == 0 {
+        return (0.0, 1.0);
+    }
+    let n = total as f64;
+    let p_hat = successes as f64 / n;
+    let z = z_for_alpha(alpha);
+    let z2 = z * z;
+    let denom = 1.0 + z2 / n;
+    let center = (p_hat + z2 / (2.0 * n)) / denom;
+    let spread = z * ((p_hat * (1.0 - p_hat) + z2 / (4.0 * n)) / n).sqrt() / denom;
+    let lower = (center - spread).max(0.0);
+    let upper = (center + spread).min(1.0);
+    (lower, upper)
+}
+
+/// Newcombe-Wilson hybrid confidence interval for paired proportion difference.
+/// Reference: Newcombe 1998, Stat Med 17:2635 (Method 10).
+///
+/// `n` = total paired observations; `b` = method A correct & method B wrong;
+/// `c` = method A wrong & method B correct; `alpha` = significance level.
+/// Returns (0.0, 0.0) when `n` == 0 or when `b` == 0 && `c` == 0.
+pub fn paired_diff_ci_newcombe(n: u32, b: u32, c: u32, alpha: f64) -> (f64, f64) {
+    if n == 0 {
+        return (0.0, 0.0);
+    }
+    if b == 0 && c == 0 {
+        return (0.0, 0.0);
+    }
+    let fn_ = n as f64;
+    let fb = b as f64;
+    let fc = c as f64;
+    let delta_hat = (fb - fc) / fn_;
+
+    let (l1, u1) = wilson_ci(b, n, alpha);
+    let (l2, u2) = wilson_ci(c, n, alpha);
+
+    let p1 = fb / fn_;
+    let p2 = fc / fn_;
+
+    let lower = (delta_hat - ((p1 - l1).powi(2) + (u2 - p2).powi(2)).sqrt()).max(-1.0);
+    let upper = (delta_hat + ((u1 - p1).powi(2) + (p2 - l2).powi(2)).sqrt()).min(1.0);
+    (lower, upper)
+}
+
 #[cfg(test)]
 mod mcnemar_tests {
     use super::*;
+
+    #[test]
+    fn mid_p_smaller_than_exact_for_small_n() {
+        // For (b=10, c=0): exact two-sided p ≈ 0.00195, mid-p ≈ 0.000976
+        // (mid-p subtracts half the boundary mass).
+        let exact = mcnemar_p_value(10, 0);
+        let mid = mcnemar_mid_p(10, 0);
+        assert!(mid < exact, "expected mid-p ({mid}) < exact ({exact})");
+        assert!(mid > 0.0);
+    }
+
+    #[test]
+    fn mid_p_no_disagreements_returns_one() {
+        assert!((mcnemar_mid_p(0, 0) - 1.0).abs() < 1e-12);
+    }
+
+    #[test]
+    fn mid_p_handles_balanced_discordance() {
+        // b == c: two-sided mid-p should be at most 1.0
+        let p = mcnemar_mid_p(5, 5);
+        assert!(p > 0.0 && p <= 1.0);
+    }
+
+    #[test]
+    fn odds_ratio_basics() {
+        assert_eq!(odds_ratio_mcnemar(0, 0), 1.0);
+        assert!(odds_ratio_mcnemar(5, 0).is_infinite());
+        assert_eq!(odds_ratio_mcnemar(0, 5), 0.0);
+        assert!((odds_ratio_mcnemar(6, 3) - 2.0).abs() < 1e-12);
+    }
+
+    #[test]
+    fn wilson_ci_basics() {
+        // 50/100 at alpha=0.05: known CI ≈ (0.4038, 0.5962)
+        let (lo, hi) = wilson_ci(50, 100, 0.05);
+        assert!((lo - 0.4038).abs() < 1e-3, "lo={lo}");
+        assert!((hi - 0.5962).abs() < 1e-3, "hi={hi}");
+        // Boundary cases
+        let (lo0, hi0) = wilson_ci(0, 0, 0.05);
+        assert_eq!((lo0, hi0), (0.0, 1.0));
+        let (lo1, hi1) = wilson_ci(0, 10, 0.05);
+        assert!(lo1 == 0.0);
+        assert!(hi1 > 0.0 && hi1 < 0.5);
+    }
+
+    #[test]
+    fn paired_diff_ci_basics() {
+        // n=100, b=20, c=10: delta_hat = 0.10. Newcombe hybrid CI brackets 0.10.
+        let (lo, hi) = paired_diff_ci_newcombe(100, 20, 10, 0.05);
+        assert!(
+            lo < 0.10 && hi > 0.10,
+            "expected CI brackets 0.10, got [{lo}, {hi}]"
+        );
+        assert!(hi - lo > 0.0);
+        assert!(lo >= -1.0 && hi <= 1.0);
+
+        // No discordance: delta = 0, CI = (0, 0)
+        let (lo0, hi0) = paired_diff_ci_newcombe(100, 0, 0, 0.05);
+        assert_eq!((lo0, hi0), (0.0, 0.0));
+    }
 
     #[test]
     fn wikipedia_example_b121_c59_p_below_1e_4() {
