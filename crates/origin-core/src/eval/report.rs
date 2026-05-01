@@ -820,3 +820,114 @@ mod tests {
         assert_ne!(p_rerank, p_aq);
     }
 }
+
+// ---------------------------------------------------------------------------
+// McNemar exact test
+// ---------------------------------------------------------------------------
+
+/// Two-sided exact McNemar's test p-value for paired binary outcomes.
+///
+/// `b` = count of "structured correct, decomposed wrong" flips;
+/// `c` = count of "structured wrong, decomposed correct" flips.
+///
+/// Uses the binomial distribution at p=0.5 over the discordant pairs.
+/// p_two_sided = 2 * Pr(X <= min(b,c) | n=b+c, p=0.5), clipped to 1.0.
+///
+/// Returns 1.0 when n=0 (no signal).
+pub fn mcnemar_p_value(b: u32, c: u32) -> f64 {
+    let n = (b + c) as u64;
+    if n == 0 {
+        return 1.0;
+    }
+    let m = b.min(c) as u64;
+    // Compute log Pr(X <= m | n, p=0.5) via log-sum-exp over log-PMFs for stability.
+    let log_half_n = -(n as f64) * std::f64::consts::LN_2;
+    let mut log_cdf: f64 = f64::NEG_INFINITY;
+    for k in 0..=m {
+        let log_pmf = log_binomial(n, k) + log_half_n;
+        log_cdf = log_sum_exp(log_cdf, log_pmf);
+    }
+    let one_sided = log_cdf.exp();
+    (2.0 * one_sided).min(1.0)
+}
+
+/// log(C(n, k)) computed via lgamma for numerical stability.
+fn log_binomial(n: u64, k: u64) -> f64 {
+    if k == 0 || k == n {
+        return 0.0;
+    }
+    let k = k.min(n - k);
+    lgamma(n as f64 + 1.0) - lgamma(k as f64 + 1.0) - lgamma((n - k) as f64 + 1.0)
+}
+
+/// Lanczos approximation to lgamma. Sufficient precision for our use case
+/// (b, c are nonnegative integer counts up to a few thousand).
+fn lgamma(x: f64) -> f64 {
+    if x < 0.5 {
+        return std::f64::consts::PI.ln() - (std::f64::consts::PI * x).sin().ln() - lgamma(1.0 - x);
+    }
+    let g = 7.0;
+    let p = [
+        0.999_999_999_999_809_9,
+        676.520_368_121_885_1,
+        -1_259.139_216_722_402_8,
+        771.323_428_777_653_1,
+        -176.615_029_162_140_6,
+        12.507_343_278_686_905,
+        -0.138_571_095_265_720_12,
+        9.984_369_578_019_572e-6,
+        1.505_632_735_149_311_6e-7,
+    ];
+    let x = x - 1.0;
+    let mut a = p[0];
+    for (i, &pi) in p.iter().enumerate().skip(1) {
+        a += pi / (x + i as f64);
+    }
+    let t = x + g + 0.5;
+    0.5 * (2.0 * std::f64::consts::PI).ln() + (x + 0.5) * t.ln() - t + a.ln()
+}
+
+/// Numerically-stable log(exp(a) + exp(b)).
+fn log_sum_exp(a: f64, b: f64) -> f64 {
+    if a == f64::NEG_INFINITY {
+        return b;
+    }
+    if b == f64::NEG_INFINITY {
+        return a;
+    }
+    let m = a.max(b);
+    m + ((a - m).exp() + (b - m).exp()).ln()
+}
+
+#[cfg(test)]
+mod mcnemar_tests {
+    use super::*;
+
+    #[test]
+    fn wikipedia_example_b121_c59_p_below_1e_4() {
+        // Wikipedia McNemar's example: 121 vs 59 disagreements.
+        // Two-sided exact p ≈ 1.6e-5 per scipy.stats.mcnemar(exact=True).
+        let p = mcnemar_p_value(121, 59);
+        assert!(p < 1e-4, "expected p<1e-4, got {p}");
+    }
+
+    #[test]
+    fn no_disagreements_p_one() {
+        // 0 vs 0 disagreements: no signal, p = 1.0.
+        assert!((mcnemar_p_value(0, 0) - 1.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn one_vs_zero_p_one() {
+        // 1 vs 0: tiny dataset, two-sided p = 1.0
+        // (one-sided P(X<=0|n=1, p=0.5) = 0.5; two-sided = 1.0).
+        assert!((mcnemar_p_value(1, 0) - 1.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn ten_vs_zero_p_below_005() {
+        // n=10, all flips one direction. Two-sided exact p ≈ 0.00195. Easy <0.05.
+        let p = mcnemar_p_value(10, 0);
+        assert!(p < 0.05, "expected p<0.05, got {p}");
+    }
+}
