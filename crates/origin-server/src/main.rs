@@ -2,6 +2,7 @@
 //! Origin headless daemon — runs the memory server without Tauri.
 
 mod cmd_backfill;
+mod cmd_setup;
 mod config_routes;
 mod error;
 mod import_routes;
@@ -24,7 +25,7 @@ use tokio::sync::RwLock;
 
 /// Origin memory daemon — headless HTTP server.
 #[derive(Parser)]
-#[command(name = "origin-server", version, about)]
+#[command(name = "origin", bin_name = "origin", version, about)]
 struct Cli {
     #[command(subcommand)]
     command: Option<Command>,
@@ -44,11 +45,38 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
+    /// Guided setup for Basic Memory, a local model, or an Anthropic key.
+    Setup {
+        /// Set up without a model or API key.
+        #[arg(long)]
+        basic: bool,
+        /// Download and select a local model, for example qwen3-4b.
+        #[arg(long, value_name = "MODEL_ID")]
+        model: Option<String>,
+        /// Read an Anthropic key from this environment variable.
+        #[arg(long = "anthropic-api-key-env", value_name = "ENV_VAR")]
+        anthropic_api_key_env: Option<String>,
+        /// Skip confirmation prompts where possible.
+        #[arg(short = 'y', long)]
+        yes: bool,
+    },
+    /// Diagnose daemon, model, and API key setup.
+    Doctor,
+    /// Manage local models.
+    Model {
+        #[command(subcommand)]
+        command: cmd_setup::ModelCommand,
+    },
+    /// Manage provider API keys.
+    Key {
+        #[command(subcommand)]
+        command: cmd_setup::KeyCommand,
+    },
     /// Install as a macOS LaunchAgent (auto-start on login).
     Install,
     /// Uninstall the LaunchAgent.
     Uninstall,
-    /// Show daemon status (launchd + health check).
+    /// Show daemon, model, and API key status.
     Status,
     /// Delete archived stale concepts (Mode B cleanup). See spec
     /// 2026-04-25-bad-concept-distill-fix-design.md. Daemon must be stopped first.
@@ -407,9 +435,15 @@ async fn run_daemon() -> anyhow::Result<()> {
         let shared_for_llm = shared.clone();
         let on_device_id = config.on_device_model.clone();
         tokio::spawn(async move {
+            let Some(on_device_id) = on_device_id else {
+                tracing::info!(
+                    "[on-device] no local model selected, skipping init (run `origin model install` to enable)"
+                );
+                return;
+            };
             let result = tokio::task::spawn_blocking(move || {
                 let model =
-                    origin_core::on_device_models::resolve_or_default(on_device_id.as_deref());
+                    origin_core::on_device_models::resolve_or_default(Some(on_device_id.as_str()));
                 if !origin_core::on_device_models::is_cached(model) {
                     tracing::info!(
                         "[on-device] model {} not cached, skipping init (use settings to download)",
@@ -654,9 +688,29 @@ async fn main() -> anyhow::Result<()> {
     }
 
     match cli.command {
+        Some(Command::Setup {
+            basic,
+            model,
+            anthropic_api_key_env,
+            yes,
+        }) => {
+            cmd_setup::run_setup(cmd_setup::SetupArgs {
+                basic,
+                model,
+                anthropic_api_key_env,
+                yes,
+            })
+            .await
+        }
+        Some(Command::Doctor) => cmd_setup::run_doctor().await,
+        Some(Command::Model { command }) => cmd_setup::run_model(command).await,
+        Some(Command::Key { command }) => cmd_setup::run_key(command).await,
         Some(Command::Install) => cmd_install(),
         Some(Command::Uninstall) => cmd_uninstall(),
-        Some(Command::Status) => cmd_status().await,
+        Some(Command::Status) => {
+            cmd_status().await?;
+            cmd_setup::print_runtime_status().await
+        }
         Some(Command::BackfillStaleConcepts { dry_run }) => cmd_backfill::run(dry_run).await,
         None => run_daemon().await,
     }

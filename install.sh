@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Origin installer — downloads origin-server and origin-mcp to ~/.origin/bin/
+# Origin installer — downloads Origin runtime binaries to ~/.origin/bin/
 # Usage: curl -fsSL https://raw.githubusercontent.com/7xuanlu/origin/main/install.sh | bash
 # Prerelease: curl -fsSL ... | ORIGIN_RELEASE_TAG=v0.2.0-alpha.1 bash
 
@@ -97,9 +97,18 @@ download_binary "origin-mcp"
 
 chmod +x "${BIN_DIR}/origin-server" "${BIN_DIR}/origin-mcp"
 
+cat > "${BIN_DIR}/origin" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+exec "${DIR}/origin-server" "$@"
+EOF
+chmod +x "${BIN_DIR}/origin"
+
 # Clear macOS quarantine attribute (unsigned binaries downloaded from the internet)
 xattr -cr "${BIN_DIR}/origin-server" 2>/dev/null || true
 xattr -cr "${BIN_DIR}/origin-mcp"    2>/dev/null || true
+xattr -cr "${BIN_DIR}/origin"        2>/dev/null || true
 
 ok "Permissions set"
 
@@ -156,15 +165,19 @@ if [[ -z "${REQUESTED_TAG}" ]]; then
   printf '\n'
   printf '       source %s\n' "${RC_FILE}"
   printf '\n'
-  printf '  2. Register Origin as a background service (launchd):\n'
+  printf '  2. Set up Origin:\n'
   printf '\n'
-  printf '       origin-server install\n'
+  printf '       origin setup\n'
   printf '\n'
-  printf '  3. Verify the daemon is running:\n'
+  printf '  3. Register Origin as a background service (launchd):\n'
   printf '\n'
-  printf '       origin-server status\n'
+  printf '       origin install\n'
   printf '\n'
-  printf '  4. Add the MCP server to Claude Desktop or Cursor:\n'
+  printf '  4. Verify the daemon and memory setup:\n'
+  printf '\n'
+  printf '       origin status\n'
+  printf '\n'
+  printf '  5. Add the MCP server to Claude Desktop or Cursor:\n'
   printf '\n'
   printf '       {\n'
   printf '         "mcpServers": {\n'
@@ -183,7 +196,7 @@ else
   printf '\n'
   printf '  2. Start this exact tagged daemon in an isolated runtime:\n'
   printf '\n'
-  printf '       origin-server --port %s --data-dir "%s"\n' "${EXACT_RUNTIME_PORT}" "${EXACT_RUNTIME_DATA_DIR}"
+  printf '       origin --port %s --data-dir "%s"\n' "${EXACT_RUNTIME_PORT}" "${EXACT_RUNTIME_DATA_DIR}"
   printf '\n'
   printf '  3. Add this exact-release MCP server to Claude Desktop or Cursor:\n'
   printf '\n'
@@ -198,13 +211,14 @@ else
   printf '\n'
   printf '     Data dir: %s\n' "${EXACT_RUNTIME_DATA_DIR}"
   printf '\n'
-  printf '  4. Do not run origin-server install for exact tagged installs.\n'
+  printf '  4. Do not run origin install for exact tagged installs.\n'
   printf '\n'
   printf '     That replaces the stable com.origin.server LaunchAgent.\n'
   printf '\n'
 fi
-printf '\033[1;33mNote:\033[0m Origin can store and retrieve memories without downloading an on-device model.\n'
-printf '      Local synthesis models are opt-in from the desktop app settings.\n'
+printf '\033[1;33mNote:\033[0m Origin can store and retrieve memories without a local LLM or API key.\n'
+printf '      Local models are opt-in with `origin model install` or from the desktop app settings.\n'
+printf '      Anthropic can be configured with `origin key set anthropic`.\n'
 if [[ -n "${REQUESTED_TAG}" ]]; then
   printf '      Manual release page for this install: %s\n' "${RELEASE_PAGE}"
 fi

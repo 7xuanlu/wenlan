@@ -997,10 +997,16 @@ impl MemoryDB {
         if let Err(e) = conn.execute_batch(FTS_TRIGGERS).await {
             log::warn!("[memory_db] FTS triggers failed (may already exist): {}", e);
         }
-        // Create vector indexes only for fresh databases.
-        // For existing DBs, indexes already exist and CREATE INDEX IF NOT EXISTS
-        // with libsql_vector_idx triggers a full DiskANN rebuild that blocks for minutes.
-        // Detect fresh DB by checking if this is a new file (no memories yet).
+        // Do not create DiskANN vector indexes during startup.
+        //
+        // libSQL's `CREATE INDEX ... libsql_vector_idx(...)` can block for
+        // minutes on existing databases, and on 2026-05-02 we observed it
+        // hang for more than 60s on an empty first-run database. Search paths
+        // already catch missing vector indexes and fall back to FTS, so startup
+        // should prefer an available daemon over blocking first-run setup.
+        //
+        // Track vector-index lifecycle separately from daemon boot.
+        // Detect whether the DB is empty only for the log message.
         let is_fresh_db = {
             let mut rows = conn
                 .query("SELECT COUNT(*) FROM memories", libsql::params![])
@@ -1015,21 +1021,7 @@ impl MemoryDB {
                 == 0
         };
         if is_fresh_db {
-            log::warn!("[memory_db] fresh DB, creating vector indexes...");
-            if let Err(e) = conn.execute(
-                "CREATE INDEX IF NOT EXISTS memories_vec_idx ON memories (
-                    libsql_vector_idx(embedding, 'metric=cosine', 'compress_neighbors=float8', 'max_neighbors=32')
-                )", (),
-            ).await {
-                log::warn!("[memory_db] memories vector index creation failed: {}", e);
-            }
-            if let Err(e) = conn.execute(
-                "CREATE INDEX IF NOT EXISTS entities_vec_idx ON entities (
-                    libsql_vector_idx(embedding, 'metric=cosine', 'compress_neighbors=float8', 'max_neighbors=32')
-                )", (),
-            ).await {
-                log::warn!("[memory_db] entities vector index creation failed: {}", e);
-            }
+            log::warn!("[memory_db] fresh DB, deferring vector index creation");
         } else {
             log::warn!("[memory_db] existing DB, skipping vector index creation");
         }

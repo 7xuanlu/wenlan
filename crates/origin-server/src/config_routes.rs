@@ -90,6 +90,127 @@ pub struct SuccessResponse {
     pub ok: bool,
 }
 
+// ── Setup/status endpoints ─────────────────────────────────────────────────
+
+#[derive(Debug, Serialize)]
+pub struct SetupStatusResponse {
+    pub setup_completed: bool,
+    pub mode: String,
+    pub anthropic_key_configured: bool,
+    pub local_model_selected: Option<String>,
+    pub local_model_loaded: Option<String>,
+    pub local_model_cached: bool,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct AnthropicKeyRequest {
+    pub api_key: String,
+}
+
+fn has_anthropic_key(cfg: &config::Config) -> bool {
+    cfg.anthropic_api_key
+        .as_deref()
+        .map(|key| !key.trim().is_empty())
+        .unwrap_or(false)
+}
+
+fn apply_anthropic_provider(state: &mut crate::state::ServerState, cfg: &config::Config) {
+    if let Some(ref key) = cfg.anthropic_api_key {
+        if !key.trim().is_empty() {
+            let routine_model = cfg
+                .routine_model
+                .clone()
+                .unwrap_or_else(|| origin_core::llm_provider::DEFAULT_ROUTINE_MODEL.to_string());
+            let synthesis_model = cfg
+                .synthesis_model
+                .clone()
+                .unwrap_or_else(|| "claude-sonnet-4-6".to_string());
+            state.api_llm = Some(Arc::new(origin_core::llm_provider::ApiProvider::new(
+                key.clone(),
+                routine_model,
+            )));
+            state.synthesis_llm = Some(Arc::new(origin_core::llm_provider::ApiProvider::new(
+                key.clone(),
+                synthesis_model,
+            )));
+            return;
+        }
+    }
+    state.api_llm = None;
+    state.synthesis_llm = None;
+}
+
+/// GET /api/setup/status — return setup + model/key status for every client.
+pub async fn handle_get_setup_status(
+    State(state): State<SharedState>,
+) -> Result<Json<SetupStatusResponse>, ServerError> {
+    let cfg = config::load_config();
+    let selected_model = cfg
+        .on_device_model
+        .as_deref()
+        .map(|id| on_device_models::resolve_or_default(Some(id)));
+    let local_model_cached = selected_model
+        .map(on_device_models::is_cached)
+        .unwrap_or(false);
+    let local_model_loaded = {
+        let s = state.read().await;
+        s.loaded_on_device_model.clone()
+    };
+    let anthropic_key_configured = has_anthropic_key(&cfg);
+    let mode = if anthropic_key_configured {
+        "anthropic-key"
+    } else if selected_model.is_some() {
+        "local-model"
+    } else {
+        "basic-memory"
+    };
+
+    Ok(Json(SetupStatusResponse {
+        setup_completed: cfg.setup_completed,
+        mode: mode.to_string(),
+        anthropic_key_configured,
+        local_model_selected: selected_model.map(|model| model.id.to_string()),
+        local_model_loaded,
+        local_model_cached,
+    }))
+}
+
+/// PUT /api/setup/anthropic-key — save and hot-load the Anthropic provider.
+pub async fn handle_set_anthropic_key(
+    State(state): State<SharedState>,
+    Json(req): Json<AnthropicKeyRequest>,
+) -> Result<Json<SuccessResponse>, ServerError> {
+    let key = req.api_key.trim().to_string();
+    if key.is_empty() {
+        return Err(ServerError::ValidationError(
+            "api_key cannot be empty".into(),
+        ));
+    }
+    let mut cfg = config::load_config();
+    cfg.setup_completed = true;
+    cfg.anthropic_api_key = Some(key);
+    config::save_config(&cfg).map_err(|e| ServerError::Internal(e.to_string()))?;
+    {
+        let mut s = state.write().await;
+        apply_anthropic_provider(&mut s, &cfg);
+    }
+    Ok(Json(SuccessResponse { ok: true }))
+}
+
+/// DELETE /api/setup/anthropic-key — clear the Anthropic provider.
+pub async fn handle_clear_anthropic_key(
+    State(state): State<SharedState>,
+) -> Result<Json<SuccessResponse>, ServerError> {
+    let mut cfg = config::load_config();
+    cfg.anthropic_api_key = None;
+    config::save_config(&cfg).map_err(|e| ServerError::Internal(e.to_string()))?;
+    {
+        let mut s = state.write().await;
+        apply_anthropic_provider(&mut s, &cfg);
+    }
+    Ok(Json(SuccessResponse { ok: true }))
+}
+
 // ── On-device model endpoints ──────────────────────────────────────────────
 
 #[derive(Debug, Serialize)]
@@ -135,13 +256,16 @@ pub async fn handle_get_on_device_model(
     };
     let models: Vec<OnDeviceModelEntry> =
         on_device_models::MODELS.iter().map(model_entry).collect();
-    // Resolve selected against registry so stale config values map to the default.
-    let selected = on_device_models::resolve_or_default(cfg.on_device_model.as_deref())
-        .id
-        .to_string();
+    // Resolve selected against registry so stale config values map to the default,
+    // but keep Basic Memory distinct from "default local model selected".
+    let selected = cfg
+        .on_device_model
+        .as_deref()
+        .map(|id| on_device_models::resolve_or_default(Some(id)))
+        .map(|model| model.id.to_string());
     Ok(Json(OnDeviceModelResponse {
         loaded,
-        selected: Some(selected),
+        selected,
         models,
     }))
 }
@@ -185,6 +309,7 @@ pub async fn handle_download_on_device_model(
 
     // Persist the selection.
     let mut cfg = config::load_config();
+    cfg.setup_completed = true;
     cfg.on_device_model = Some(req.model_id.clone());
     config::save_config(&cfg).map_err(|e| ServerError::Internal(e.to_string()))?;
 
@@ -198,4 +323,131 @@ pub async fn handle_download_on_device_model(
 
     tracing::info!("[on-device] model {} downloaded and loaded", req.model_id);
     Ok(Json(SuccessResponse { ok: true }))
+}
+
+#[cfg(test)]
+mod setup_status_tests {
+    use axum::body::Body;
+    use axum::http::{Request, StatusCode};
+    use serde_json::Value;
+    use std::sync::OnceLock;
+    use tokio::sync::{Mutex, RwLock};
+    use tower::ServiceExt;
+
+    use super::*;
+    use crate::state::ServerState;
+
+    static ORIGIN_DATA_DIR_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+
+    struct OriginDataDirGuard {
+        previous: Option<std::ffi::OsString>,
+        _tmp: tempfile::TempDir,
+    }
+
+    impl OriginDataDirGuard {
+        fn new() -> Self {
+            let tmp = tempfile::tempdir().unwrap();
+            let previous = std::env::var_os("ORIGIN_DATA_DIR");
+            std::env::set_var("ORIGIN_DATA_DIR", tmp.path());
+            Self {
+                previous,
+                _tmp: tmp,
+            }
+        }
+    }
+
+    impl Drop for OriginDataDirGuard {
+        fn drop(&mut self) {
+            match &self.previous {
+                Some(value) => std::env::set_var("ORIGIN_DATA_DIR", value),
+                None => std::env::remove_var("ORIGIN_DATA_DIR"),
+            }
+        }
+    }
+
+    async fn response_json(resp: axum::response::Response) -> Value {
+        let bytes = axum::body::to_bytes(resp.into_body(), 1_048_576)
+            .await
+            .unwrap();
+        serde_json::from_slice(&bytes).unwrap()
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn setup_status_defaults_to_basic_memory() {
+        let _lock = ORIGIN_DATA_DIR_LOCK
+            .get_or_init(|| Mutex::new(()))
+            .lock()
+            .await;
+        let _env = OriginDataDirGuard::new();
+        let state = Arc::new(RwLock::new(ServerState::default()));
+        let app = crate::router::build_router(state);
+
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri("/api/setup/status")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = response_json(resp).await;
+        assert_eq!(body["setup_completed"], false);
+        assert_eq!(body["mode"], "basic-memory");
+        assert_eq!(body["anthropic_key_configured"], false);
+        assert_eq!(body["local_model_selected"], Value::Null);
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn set_anthropic_key_marks_setup_completed_and_hot_loads_provider() {
+        let _lock = ORIGIN_DATA_DIR_LOCK
+            .get_or_init(|| Mutex::new(()))
+            .lock()
+            .await;
+        let _env = OriginDataDirGuard::new();
+        let state = Arc::new(RwLock::new(ServerState::default()));
+        let app = crate::router::build_router(state.clone());
+
+        let resp = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("PUT")
+                    .uri("/api/setup/anthropic-key")
+                    .header("content-type", "application/json")
+                    .body(Body::from(r#"{"api_key":"sk-ant-test"}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+
+        let cfg = config::load_config();
+        assert!(cfg.setup_completed);
+        assert_eq!(cfg.anthropic_api_key.as_deref(), Some("sk-ant-test"));
+        {
+            let s = state.read().await;
+            assert!(s.api_llm.is_some());
+            assert!(s.synthesis_llm.is_some());
+        }
+
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri("/api/setup/status")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = response_json(resp).await;
+        assert_eq!(body["setup_completed"], true);
+        assert_eq!(body["mode"], "anthropic-key");
+        assert_eq!(body["anthropic_key_configured"], true);
+    }
 }
