@@ -4,7 +4,7 @@
 #![allow(dead_code)]
 use anyhow::{Context, Result};
 use std::io;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
@@ -98,6 +98,29 @@ fn log_dir() -> Result<PathBuf> {
 fn current_app_path() -> Result<PathBuf> {
     let exe = std::env::current_exe()?;
     std::fs::canonicalize(&exe).context("canonicalize current_exe")
+}
+
+fn is_stable_launch_agent_target(exe: &Path) -> bool {
+    if exe.file_name().and_then(|s| s.to_str()) != Some("origin") {
+        return false;
+    }
+
+    let Some(app_bundle) = exe.ancestors().find(|p| {
+        p.extension()
+            .and_then(|ext| ext.to_str())
+            .is_some_and(|ext| ext == "app")
+    }) else {
+        return false;
+    };
+
+    if app_bundle.file_name().and_then(|s| s.to_str()) != Some("Origin.app") {
+        return false;
+    }
+
+    app_bundle == Path::new("/Applications/Origin.app")
+        || dirs::home_dir()
+            .map(|home| app_bundle == home.join("Applications/Origin.app"))
+            .unwrap_or(false)
 }
 
 pub fn install_app_plist(launchctl: &dyn LaunchctlExec) -> Result<()> {
@@ -206,35 +229,37 @@ pub fn first_run_install_if_needed(launchctl: &dyn LaunchctlExec) -> Result<()> 
         return Ok(());
     }
 
-    let exe_canonical = std::env::current_exe()
-        .ok()
-        .and_then(|p| std::fs::canonicalize(&p).ok());
+    let exe_canonical = match current_app_path() {
+        Ok(path) => path,
+        Err(e) => {
+            log::warn!("[first-run] unable to resolve current app path: {e}");
+            return Ok(());
+        }
+    };
+
+    if !is_stable_launch_agent_target(&exe_canonical) {
+        log::warn!(
+            "[first-run] skipping LaunchAgent install from non-stable app path: {}",
+            exe_canonical.display()
+        );
+        return Ok(());
+    }
 
     let app_plist_stale = app_plist_path()
         .ok()
         .and_then(|p| std::fs::read_to_string(&p).ok())
-        .map(|content| {
-            if let Some(exe) = &exe_canonical {
-                !content.contains(exe.to_string_lossy().as_ref())
-            } else {
-                false
-            }
-        })
+        .map(|content| !content.contains(exe_canonical.to_string_lossy().as_ref()))
         .unwrap_or(true); // missing plist = stale
 
     let server_plist_stale = server_plist_path()
         .ok()
         .and_then(|p| std::fs::read_to_string(&p).ok())
         .map(|content| {
-            if let Some(exe) = &exe_canonical {
-                let expected_server = exe
-                    .parent()
-                    .map(|p| p.join("origin-server").to_string_lossy().to_string())
-                    .unwrap_or_default();
-                !content.contains(&expected_server)
-            } else {
-                false
-            }
+            let expected_server = exe_canonical
+                .parent()
+                .map(|p| p.join("origin-server").to_string_lossy().to_string())
+                .unwrap_or_default();
+            !content.contains(&expected_server)
         })
         .unwrap_or(true);
 
@@ -256,6 +281,13 @@ pub fn first_run_install_if_needed(launchctl: &dyn LaunchctlExec) -> Result<()> 
 pub async fn set_run_at_login(enabled: bool, launchctl: &dyn LaunchctlExec) -> Result<()> {
     let _guard = RUN_AT_LOGIN_LOCK.lock().await;
     if enabled {
+        let exe = current_app_path()?;
+        if !is_stable_launch_agent_target(&exe) {
+            anyhow::bail!(
+                "refusing to enable Run at Login from non-stable app path: {}",
+                exe.display()
+            );
+        }
         set_user_opted_out(false)?;
         install_server_plist_via_subprocess()?;
         install_app_plist(launchctl)?;
@@ -406,6 +438,22 @@ mod tests {
         assert!(user_opted_out());
 
         std::env::remove_var("ORIGIN_DATA_DIR");
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn stable_launch_agent_target_rejects_private_tmp_app_bundle() {
+        assert!(!is_stable_launch_agent_target(std::path::Path::new(
+            "/private/tmp/origin-update-test/Origin.app/Contents/MacOS/origin"
+        )));
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn stable_launch_agent_target_allows_applications_app_bundle() {
+        assert!(is_stable_launch_agent_target(std::path::Path::new(
+            "/Applications/Origin.app/Contents/MacOS/origin"
+        )));
     }
 
     #[test]
