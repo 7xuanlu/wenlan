@@ -216,7 +216,7 @@ else
   printf '     That replaces the stable com.origin.server LaunchAgent.\n'
   printf '\n'
 fi
-printf '\033[1;33mNote:\033[0m Origin can store and retrieve memories without downloading an on-device model.\n'
+printf '\033[1;33mNote:\033[0m Origin can store and retrieve memories without a local LLM or API key.\n'
 printf '      Local models are opt-in with `origin model install` or from the desktop app settings.\n'
 printf '      Anthropic can be configured with `origin key set anthropic`.\n'
 if [[ -n "${REQUESTED_TAG}" ]]; then

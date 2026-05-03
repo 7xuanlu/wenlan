@@ -75,7 +75,7 @@ origin install
 origin status
 ```
 
-Origin works without a model for local storage, search, recall, and MCP memory. To unlock richer extraction, background refinement, and concept synthesis, choose a local model or Anthropic key:
+Origin works without a local LLM or API key for local storage, search, recall, and MCP memory. To unlock richer extraction, background refinement, and concept synthesis, choose a local model or Anthropic key:
 
 ```bash
 origin model install

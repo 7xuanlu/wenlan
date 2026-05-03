@@ -181,7 +181,7 @@ jobs:
           \`\`\`
           Downloads exact binaries and prints manual isolated daemon/MCP setup steps.
 
-          > Origin works in Basic Memory mode without a model. Local models are opt-in from the desktop app or `origin model install`.
+          > Origin works in Basic Memory mode without a local LLM or API key. Local models are opt-in from the desktop app or `origin model install`.
           INSTALL_EOF
 
           # Strip leading whitespace from heredoc indentation

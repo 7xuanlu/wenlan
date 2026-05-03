@@ -187,6 +187,7 @@ pub async fn handle_set_anthropic_key(
         ));
     }
     let mut cfg = config::load_config();
+    cfg.setup_completed = true;
     cfg.anthropic_api_key = Some(key);
     config::save_config(&cfg).map_err(|e| ServerError::Internal(e.to_string()))?;
     {
@@ -308,6 +309,7 @@ pub async fn handle_download_on_device_model(
 
     // Persist the selection.
     let mut cfg = config::load_config();
+    cfg.setup_completed = true;
     cfg.on_device_model = Some(req.model_id.clone());
     config::save_config(&cfg).map_err(|e| ServerError::Internal(e.to_string()))?;
 
@@ -321,4 +323,131 @@ pub async fn handle_download_on_device_model(
 
     tracing::info!("[on-device] model {} downloaded and loaded", req.model_id);
     Ok(Json(SuccessResponse { ok: true }))
+}
+
+#[cfg(test)]
+mod setup_status_tests {
+    use axum::body::Body;
+    use axum::http::{Request, StatusCode};
+    use serde_json::Value;
+    use std::sync::OnceLock;
+    use tokio::sync::{Mutex, RwLock};
+    use tower::ServiceExt;
+
+    use super::*;
+    use crate::state::ServerState;
+
+    static ORIGIN_DATA_DIR_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+
+    struct OriginDataDirGuard {
+        previous: Option<std::ffi::OsString>,
+        _tmp: tempfile::TempDir,
+    }
+
+    impl OriginDataDirGuard {
+        fn new() -> Self {
+            let tmp = tempfile::tempdir().unwrap();
+            let previous = std::env::var_os("ORIGIN_DATA_DIR");
+            std::env::set_var("ORIGIN_DATA_DIR", tmp.path());
+            Self {
+                previous,
+                _tmp: tmp,
+            }
+        }
+    }
+
+    impl Drop for OriginDataDirGuard {
+        fn drop(&mut self) {
+            match &self.previous {
+                Some(value) => std::env::set_var("ORIGIN_DATA_DIR", value),
+                None => std::env::remove_var("ORIGIN_DATA_DIR"),
+            }
+        }
+    }
+
+    async fn response_json(resp: axum::response::Response) -> Value {
+        let bytes = axum::body::to_bytes(resp.into_body(), 1_048_576)
+            .await
+            .unwrap();
+        serde_json::from_slice(&bytes).unwrap()
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn setup_status_defaults_to_basic_memory() {
+        let _lock = ORIGIN_DATA_DIR_LOCK
+            .get_or_init(|| Mutex::new(()))
+            .lock()
+            .await;
+        let _env = OriginDataDirGuard::new();
+        let state = Arc::new(RwLock::new(ServerState::default()));
+        let app = crate::router::build_router(state);
+
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri("/api/setup/status")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = response_json(resp).await;
+        assert_eq!(body["setup_completed"], false);
+        assert_eq!(body["mode"], "basic-memory");
+        assert_eq!(body["anthropic_key_configured"], false);
+        assert_eq!(body["local_model_selected"], Value::Null);
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn set_anthropic_key_marks_setup_completed_and_hot_loads_provider() {
+        let _lock = ORIGIN_DATA_DIR_LOCK
+            .get_or_init(|| Mutex::new(()))
+            .lock()
+            .await;
+        let _env = OriginDataDirGuard::new();
+        let state = Arc::new(RwLock::new(ServerState::default()));
+        let app = crate::router::build_router(state.clone());
+
+        let resp = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("PUT")
+                    .uri("/api/setup/anthropic-key")
+                    .header("content-type", "application/json")
+                    .body(Body::from(r#"{"api_key":"sk-ant-test"}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+
+        let cfg = config::load_config();
+        assert!(cfg.setup_completed);
+        assert_eq!(cfg.anthropic_api_key.as_deref(), Some("sk-ant-test"));
+        {
+            let s = state.read().await;
+            assert!(s.api_llm.is_some());
+            assert!(s.synthesis_llm.is_some());
+        }
+
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri("/api/setup/status")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = response_json(resp).await;
+        assert_eq!(body["setup_completed"], true);
+        assert_eq!(body["mode"], "anthropic-key");
+        assert_eq!(body["anthropic_key_configured"], true);
+    }
 }

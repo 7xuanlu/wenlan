@@ -57,7 +57,7 @@ pub async fn run_setup(args: SetupArgs) -> anyhow::Result<()> {
     if args.basic {
         configure_basic_memory()?;
         println!("Origin is set up in Basic Memory mode.");
-        println!("Storage, search, recall, and MCP memory work without a model or API key.");
+        println!("Storage, search, recall, and MCP memory work without a local LLM or API key.");
         return Ok(());
     }
 
@@ -157,7 +157,7 @@ async fn interactive_setup() -> anyhow::Result<()> {
     println!("Set up Origin");
     println!();
     println!("1) Basic Memory");
-    println!("   Store, search, recall, and MCP memory. No model or API key.");
+    println!("   Store, search, recall, and MCP memory. No local LLM or API key.");
     println!("2) Local Model");
     println!("   Download a local model for richer extraction and background synthesis.");
     println!("3) Anthropic Key");
@@ -260,6 +260,7 @@ async fn install_model(model_id: &str, yes: bool) -> anyhow::Result<()> {
             })
             .await??;
             let mut cfg = config::load_config();
+            cfg.setup_completed = true;
             cfg.on_device_model = Some(model.id.to_string());
             config::save_config(&cfg)?;
             println!("Local model ready: {}", model.id);
@@ -296,6 +297,7 @@ async fn set_anthropic_key(key: String) -> anyhow::Result<()> {
         Ok(_) => println!("Anthropic key saved and active in the running daemon."),
         Err(_) => {
             let mut cfg = config::load_config();
+            cfg.setup_completed = true;
             cfg.anthropic_api_key = Some(body["api_key"].as_str().unwrap().to_string());
             config::save_config(&cfg)?;
             println!("Anthropic key saved. Start or restart the daemon to activate it.");
@@ -328,6 +330,7 @@ fn configure_basic_memory() -> anyhow::Result<()> {
     let mut cfg = config::load_config();
     cfg.setup_completed = true;
     cfg.on_device_model = None;
+    cfg.anthropic_api_key = None;
     config::save_config(&cfg)?;
     Ok(())
 }
