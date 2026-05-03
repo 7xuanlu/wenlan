@@ -5,7 +5,14 @@
 [![License](https://img.shields.io/badge/license-AGPL--3.0-blue)](LICENSE)
 ![Platform](https://img.shields.io/badge/platform-macOS%20Apple%20Silicon-black)
 
+![Origin demo](https://github.com/user-attachments/assets/d77806a4-69c2-4580-b95d-f8152323d122)
+
+<details>
+<summary>Watch full demo</summary>
+
 https://github.com/user-attachments/assets/6407e96a-9b84-4506-b702-c4a5f8da2920
+
+</details>
 
 [Origin](https://useorigin.app) runs quietly behind the AI tools you already use. It gives your AI a place to carry decisions, lessons, gotchas, and project context instead of rediscovering them in every new chat.
 
