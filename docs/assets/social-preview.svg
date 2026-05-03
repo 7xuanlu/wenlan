@@ -10,7 +10,7 @@
   </g>
 
   <g transform="translate(118 164)">
-    <rect width="312" height="312" rx="72" fill="#1A1A2E" fill-opacity="0.36"/>
+    <rect width="312" height="312" rx="64" fill="url(#tile)"/>
     <circle cx="156" cy="156" r="98" stroke="url(#ring)" stroke-width="48"/>
     <circle cx="197" cy="97" r="26" fill="url(#orb)"/>
   </g>
@@ -31,6 +31,10 @@
   </g>
 
   <defs>
+    <linearGradient id="tile" x1="48" y1="18" x2="290" y2="312" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#1B1B34"/>
+      <stop offset="1" stop-color="#111126"/>
+    </linearGradient>
     <linearGradient id="ring" x1="58" y1="156" x2="254" y2="156" gradientUnits="userSpaceOnUse">
       <stop stop-color="#6C63FF"/>
       <stop offset="0.48" stop-color="#5BA3E6"/>
