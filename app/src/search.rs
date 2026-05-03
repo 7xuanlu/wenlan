@@ -350,11 +350,21 @@ pub async fn get_api_key() -> Result<Option<String>, String> {
 }
 
 #[tauri::command]
-pub async fn set_api_key(_state: tauri::State<'_, State>, key: String) -> Result<(), String> {
-    let key_opt = if key.is_empty() { None } else { Some(key) };
-    let mut cfg = config::load_config();
-    cfg.anthropic_api_key = key_opt;
-    config::save_config(&cfg).map_err(|e| e.to_string())?;
+pub async fn set_api_key(state: tauri::State<'_, State>, key: String) -> Result<(), String> {
+    let client = {
+        let s = state.read().await;
+        s.client.clone()
+    };
+    if key.trim().is_empty() {
+        client
+            .delete_path::<serde_json::Value>("/api/setup/anthropic-key")
+            .await?;
+    } else {
+        let body = serde_json::json!({ "api_key": key });
+        client
+            .put_json::<_, serde_json::Value>("/api/setup/anthropic-key", &body)
+            .await?;
+    }
     log::info!("[settings] API key updated");
     Ok(())
 }

@@ -90,6 +90,126 @@ pub struct SuccessResponse {
     pub ok: bool,
 }
 
+// ── Setup/status endpoints ─────────────────────────────────────────────────
+
+#[derive(Debug, Serialize)]
+pub struct SetupStatusResponse {
+    pub setup_completed: bool,
+    pub mode: String,
+    pub anthropic_key_configured: bool,
+    pub local_model_selected: Option<String>,
+    pub local_model_loaded: Option<String>,
+    pub local_model_cached: bool,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct AnthropicKeyRequest {
+    pub api_key: String,
+}
+
+fn has_anthropic_key(cfg: &config::Config) -> bool {
+    cfg.anthropic_api_key
+        .as_deref()
+        .map(|key| !key.trim().is_empty())
+        .unwrap_or(false)
+}
+
+fn apply_anthropic_provider(state: &mut crate::state::ServerState, cfg: &config::Config) {
+    if let Some(ref key) = cfg.anthropic_api_key {
+        if !key.trim().is_empty() {
+            let routine_model = cfg
+                .routine_model
+                .clone()
+                .unwrap_or_else(|| origin_core::llm_provider::DEFAULT_ROUTINE_MODEL.to_string());
+            let synthesis_model = cfg
+                .synthesis_model
+                .clone()
+                .unwrap_or_else(|| "claude-sonnet-4-6".to_string());
+            state.api_llm = Some(Arc::new(origin_core::llm_provider::ApiProvider::new(
+                key.clone(),
+                routine_model,
+            )));
+            state.synthesis_llm = Some(Arc::new(origin_core::llm_provider::ApiProvider::new(
+                key.clone(),
+                synthesis_model,
+            )));
+            return;
+        }
+    }
+    state.api_llm = None;
+    state.synthesis_llm = None;
+}
+
+/// GET /api/setup/status — return setup + model/key status for every client.
+pub async fn handle_get_setup_status(
+    State(state): State<SharedState>,
+) -> Result<Json<SetupStatusResponse>, ServerError> {
+    let cfg = config::load_config();
+    let selected_model = cfg
+        .on_device_model
+        .as_deref()
+        .map(|id| on_device_models::resolve_or_default(Some(id)));
+    let local_model_cached = selected_model
+        .map(on_device_models::is_cached)
+        .unwrap_or(false);
+    let local_model_loaded = {
+        let s = state.read().await;
+        s.loaded_on_device_model.clone()
+    };
+    let anthropic_key_configured = has_anthropic_key(&cfg);
+    let mode = if anthropic_key_configured {
+        "anthropic-key"
+    } else if selected_model.is_some() {
+        "local-model"
+    } else {
+        "basic-memory"
+    };
+
+    Ok(Json(SetupStatusResponse {
+        setup_completed: cfg.setup_completed,
+        mode: mode.to_string(),
+        anthropic_key_configured,
+        local_model_selected: selected_model.map(|model| model.id.to_string()),
+        local_model_loaded,
+        local_model_cached,
+    }))
+}
+
+/// PUT /api/setup/anthropic-key — save and hot-load the Anthropic provider.
+pub async fn handle_set_anthropic_key(
+    State(state): State<SharedState>,
+    Json(req): Json<AnthropicKeyRequest>,
+) -> Result<Json<SuccessResponse>, ServerError> {
+    let key = req.api_key.trim().to_string();
+    if key.is_empty() {
+        return Err(ServerError::ValidationError(
+            "api_key cannot be empty".into(),
+        ));
+    }
+    let mut cfg = config::load_config();
+    cfg.anthropic_api_key = Some(key);
+    config::save_config(&cfg).map_err(|e| ServerError::Internal(e.to_string()))?;
+    {
+        let mut s = state.write().await;
+        apply_anthropic_provider(&mut s, &cfg);
+    }
+    Ok(Json(SuccessResponse { ok: true }))
+}
+
+/// DELETE /api/setup/anthropic-key — clear the Anthropic provider.
+pub async fn handle_clear_anthropic_key(
+    State(state): State<SharedState>,
+) -> Result<Json<SuccessResponse>, ServerError> {
+    let mut cfg = config::load_config();
+    cfg.anthropic_api_key = None;
+    config::save_config(&cfg).map_err(|e| ServerError::Internal(e.to_string()))?;
+    {
+        let mut s = state.write().await;
+        apply_anthropic_provider(&mut s, &cfg);
+    }
+    Ok(Json(SuccessResponse { ok: true }))
+}
+
 // ── On-device model endpoints ──────────────────────────────────────────────
 
 #[derive(Debug, Serialize)]
@@ -135,13 +255,16 @@ pub async fn handle_get_on_device_model(
     };
     let models: Vec<OnDeviceModelEntry> =
         on_device_models::MODELS.iter().map(model_entry).collect();
-    // Resolve selected against registry so stale config values map to the default.
-    let selected = on_device_models::resolve_or_default(cfg.on_device_model.as_deref())
-        .id
-        .to_string();
+    // Resolve selected against registry so stale config values map to the default,
+    // but keep Basic Memory distinct from "default local model selected".
+    let selected = cfg
+        .on_device_model
+        .as_deref()
+        .map(|id| on_device_models::resolve_or_default(Some(id)))
+        .map(|model| model.id.to_string());
     Ok(Json(OnDeviceModelResponse {
         loaded,
-        selected: Some(selected),
+        selected,
         models,
     }))
 }

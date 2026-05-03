@@ -259,6 +259,16 @@ pub fn build_router(state: SharedState) -> Router {
             "/api/config/skip-apps",
             get(config_routes::handle_get_skip_apps).put(config_routes::handle_update_skip_apps),
         )
+        // Setup status + provider key management
+        .route(
+            "/api/setup/status",
+            get(config_routes::handle_get_setup_status),
+        )
+        .route(
+            "/api/setup/anthropic-key",
+            put(config_routes::handle_set_anthropic_key)
+                .delete(config_routes::handle_clear_anthropic_key),
+        )
         // On-device model (list + download-and-load)
         .route(
             "/api/on-device-model",

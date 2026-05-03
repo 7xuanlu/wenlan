@@ -36,7 +36,7 @@ For Claude Code, Cursor, Codex, Claude Desktop, Windsurf, Gemini CLI, or another
 }
 ```
 
-On first run, `npx origin-mcp` downloads the MCP binary from the [origin-mcp repo](https://github.com/7xuanlu/origin-mcp). It connects to the local Origin daemon on `127.0.0.1:7878`, started by the desktop app or the headless install below.
+On first run, `npx origin-mcp` downloads the MCP connector from the [origin-mcp repo](https://github.com/7xuanlu/origin-mcp). It connects to the local Origin daemon on `127.0.0.1:7878`, started by the desktop app or the headless install below.
 
 ### 2. Add the desktop app
 
@@ -63,8 +63,17 @@ Use this path for automation, servers, or no-GUI setups.
 ```bash
 curl -fsSL https://raw.githubusercontent.com/7xuanlu/origin/main/install.sh | bash
 export PATH="$HOME/.origin/bin:$PATH"
-origin-server install
-origin-server status
+origin setup
+origin install
+origin status
+```
+
+Origin works without a model for local storage, search, recall, and MCP memory. To unlock richer extraction, background refinement, and concept synthesis, choose a local model or Anthropic key:
+
+```bash
+origin model install
+origin key set anthropic
+origin doctor
 ```
 
 ---
@@ -124,8 +133,8 @@ Retrieval quality on standard long-memory benchmarks. Numbers come from BGE-Base
 
 - Memories are stored locally at `~/Library/Application Support/origin/memorydb/origin_memory.db` by default.
 - The daemon listens on `127.0.0.1:7878`; the desktop app and MCP clients call that local API.
-- There is no cloud sync or telemetry by default. Remote access and external LLM endpoints are opt-in settings.
-- On-device Qwen models download only when requested and use the `hf-hub` cache.
+- There is no cloud sync or telemetry by default. Remote Access and Anthropic keys are opt-in settings.
+- On-device Qwen models download only when requested from the app or `origin model install`, and use the `hf-hub` cache.
 - Security reports: [SECURITY.md](SECURITY.md).
 
 ---
