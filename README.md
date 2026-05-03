@@ -10,7 +10,7 @@
 <details>
 <summary>Watch full demo</summary>
 
-https://github.com/user-attachments/assets/6407e96a-9b84-4506-b702-c4a5f8da2920
+[Watch on YouTube](https://youtu.be/bV5h089DYDc)
 
 </details>
 
