@@ -46,6 +46,7 @@ pub mod router;
 pub mod schema;
 pub mod sources;
 pub mod spaces;
+pub mod synthesis;
 pub mod system_info;
 pub mod tags;
 pub mod topic_match;
