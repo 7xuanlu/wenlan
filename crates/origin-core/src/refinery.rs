@@ -28,7 +28,6 @@ pub const ALL_PHASES: &[&str] = &[
     "decision_backfill",
     "prune_rejections",
     "kg_rethink",
-    "retry_failed_enrichment",
 ];
 
 /// What triggered a refinery cycle. Different triggers run different subsets
@@ -58,11 +57,7 @@ impl TriggerKind {
             Self::BurstEnd => matches!(phase_name, "recaps" | "refinement_queue"),
             Self::Idle => matches!(
                 phase_name,
-                "community_detection"
-                    | "emergence"
-                    | "re-distill"
-                    | "decision_logs"
-                    | "retry_failed_enrichment"
+                "community_detection" | "emergence" | "re-distill" | "decision_logs"
             ),
             Self::Daily => matches!(
                 phase_name,
@@ -797,23 +792,6 @@ pub async fn run_periodic_steep_with_api(
             }
             phases.push(phase);
         }
-    }
-
-    // Phase 11: Retry failed enrichment — self-healing (now includes LLM title re-enrichment)
-    if trigger.runs_phase("retry_failed_enrichment") {
-        let title_llm = api_llm.or(llm);
-        let phase = run_phase("retry_failed_enrichment", || async {
-            let retried = retry_failed_enrichment(db_ref, tuning, title_llm).await?;
-            log::info!("[refinery] retry_failed_enrichment: retried {retried} steps");
-            let (nudge, headline) = classify_backfill(retried);
-            Ok(PhaseOutput {
-                items_processed: retried,
-                nudge,
-                headline,
-            })
-        })
-        .await;
-        phases.push(phase);
     }
 
     let elapsed = steep_start.elapsed();
@@ -3381,258 +3359,6 @@ async fn apply_merge_by_tier(
     Ok(())
 }
 
-/// Retry enrichment steps that previously failed (status = "failed") but
-/// haven't exceeded `max_enrichment_retries`. Non-LLM steps (dedup,
-/// entity_link, contradiction, concept_contradiction, entity_suggestion)
-/// are retried directly. When an LLM is provided, title_enrich steps
-/// (failed + needs_retry) are retried via a dedicated loop using
-/// `get_title_reenrich_candidates`, plus a one-time backfill of old
-/// ok-but-truncated titles via `get_truncated_title_memories`. On success
-/// the step is marked "ok"; on repeated failure and max retries reached
-/// the step is moved to "abandoned".
-pub(crate) async fn retry_failed_enrichment(
-    db: &MemoryDB,
-    tuning: &crate::tuning::RefineryConfig,
-    llm: Option<&Arc<dyn LlmProvider>>,
-) -> Result<usize, OriginError> {
-    let failed = db
-        .get_failed_enrichment_memories(tuning.max_enrichment_retries, 20)
-        .await?;
-
-    let mut retried = 0usize;
-    for (source_id, step_name, content) in &failed {
-        log::info!("[refinery] retrying enrichment step '{step_name}' for {source_id}");
-        let result = match step_name.as_str() {
-            "dedup" => crate::post_ingest::check_dedup(db, source_id, content, tuning)
-                .await
-                .map(|_| ()),
-            "entity_link" => crate::post_ingest::auto_link_entity(db, source_id, content, tuning)
-                .await
-                .map(|_| ()),
-            "contradiction" => {
-                let mt = db.get_memory_type(source_id).await.unwrap_or(None);
-                let domain = db.get_memory_domain(source_id).await.unwrap_or(None);
-                if let Some(mt) = &mt {
-                    crate::post_ingest::check_contradiction(
-                        db,
-                        source_id,
-                        mt,
-                        domain.as_deref(),
-                        None,
-                        content,
-                    )
-                    .await
-                    .map(|_| ())
-                } else {
-                    Ok(())
-                }
-            }
-            "concept_contradiction" => {
-                crate::post_ingest::check_page_contradiction(db, source_id, content)
-                    .await
-                    .map(|_| ())
-            }
-            "entity_suggestion" => crate::post_ingest::suggest_entity_creation(db, content).await,
-            // title_enrich is handled by the dedicated title loop below
-            "title_enrich" => continue,
-            // Other LLM-requiring steps can't be retried without LLM
-            _ => {
-                log::info!("[refinery] step '{step_name}' requires LLM, skipping");
-                continue;
-            }
-        };
-        match result {
-            Ok(()) => {
-                db.record_enrichment_step(source_id, step_name, "ok", None)
-                    .await
-                    .ok();
-                retried += 1;
-            }
-            Err(e) => {
-                log::warn!("[refinery] retry of '{step_name}' for {source_id} failed: {e}");
-                // Check current attempts BEFORE recording, so we can decide
-                // whether to mark failed (retryable) or abandoned (final).
-                let current_attempts = db
-                    .get_enrichment_steps(source_id)
-                    .await
-                    .ok()
-                    .and_then(|steps| {
-                        steps
-                            .iter()
-                            .find(|s| s.step == *step_name)
-                            .map(|s| s.attempts)
-                    })
-                    .unwrap_or(0);
-                // record_enrichment_step increments attempts via UPSERT, so
-                // after this call attempts = current_attempts + 1.
-                let status = if (current_attempts + 1) as usize >= tuning.max_enrichment_retries {
-                    "abandoned"
-                } else {
-                    "failed"
-                };
-                db.record_enrichment_step(source_id, step_name, status, Some(&e.to_string()))
-                    .await
-                    .ok();
-                if status == "abandoned" {
-                    log::info!(
-                        "[refinery] step '{step_name}' for {source_id} abandoned after {} attempts",
-                        current_attempts + 1
-                    );
-                }
-                retried += 1;
-            }
-        }
-    }
-
-    // Title re-enrichment pass -- uses dedicated query and handles
-    // the three-variant TitleEnrichResult (not just Ok/Err).
-    if let Some(llm_ref) = llm {
-        let candidates = db
-            .get_title_reenrich_candidates(tuning.max_enrichment_retries, 10)
-            .await?;
-        for (source_id, content) in &candidates {
-            log::info!("[refinery] re-enriching title for {source_id}");
-            match crate::post_ingest::enrich_title(db, source_id, content, llm_ref, false).await {
-                Ok(crate::post_ingest::TitleEnrichResult::Enriched) => {
-                    db.record_enrichment_step(source_id, "title_enrich", "ok", None)
-                        .await
-                        .ok();
-                    retried += 1;
-                }
-                Ok(crate::post_ingest::TitleEnrichResult::NotNeeded) => {
-                    // Title was fixed externally (e.g., user edited it)
-                    db.record_enrichment_step(source_id, "title_enrich", "ok", None)
-                        .await
-                        .ok();
-                    retried += 1;
-                }
-                Ok(crate::post_ingest::TitleEnrichResult::LlmRejected) => {
-                    let current_attempts = db
-                        .get_enrichment_steps(source_id)
-                        .await
-                        .ok()
-                        .and_then(|steps| {
-                            steps
-                                .iter()
-                                .find(|s| s.step == "title_enrich")
-                                .map(|s| s.attempts)
-                        })
-                        .unwrap_or(0);
-                    let status = if (current_attempts + 1) as usize >= tuning.max_enrichment_retries
-                    {
-                        "abandoned"
-                    } else {
-                        "needs_retry"
-                    };
-                    db.record_enrichment_step(
-                        source_id,
-                        "title_enrich",
-                        status,
-                        Some("llm_rejected"),
-                    )
-                    .await
-                    .ok();
-                    if status == "abandoned" {
-                        log::info!(
-                            "[refinery] title_enrich for {source_id} abandoned after {} attempts",
-                            current_attempts + 1
-                        );
-                    }
-                    retried += 1;
-                }
-                Err(e) => {
-                    log::warn!("[refinery] title re-enrichment for {source_id} failed: {e}");
-                    let current_attempts = db
-                        .get_enrichment_steps(source_id)
-                        .await
-                        .ok()
-                        .and_then(|steps| {
-                            steps
-                                .iter()
-                                .find(|s| s.step == "title_enrich")
-                                .map(|s| s.attempts)
-                        })
-                        .unwrap_or(0);
-                    let status = if (current_attempts + 1) as usize >= tuning.max_enrichment_retries
-                    {
-                        "abandoned"
-                    } else {
-                        "failed"
-                    };
-                    db.record_enrichment_step(
-                        source_id,
-                        "title_enrich",
-                        status,
-                        Some(&e.to_string()),
-                    )
-                    .await
-                    .ok();
-                    if status == "abandoned" {
-                        log::info!(
-                            "[refinery] title_enrich for {source_id} abandoned after {} attempts",
-                            current_attempts + 1
-                        );
-                    }
-                    retried += 1;
-                }
-            }
-        }
-
-        // One-time backfill: catch old memories recorded as ok but still truncated.
-        if db
-            .get_app_metadata("title_backfill_done")
-            .await
-            .ok()
-            .flatten()
-            .is_none()
-        {
-            let old = db.get_truncated_title_memories(10).await?;
-            for (source_id, content) in &old {
-                log::info!("[refinery] backfill title re-enrichment for {source_id}");
-                match crate::post_ingest::enrich_title(db, source_id, content, llm_ref, false).await
-                {
-                    Ok(crate::post_ingest::TitleEnrichResult::Enriched) => {
-                        db.record_enrichment_step(source_id, "title_enrich", "ok", None)
-                            .await
-                            .ok();
-                        retried += 1;
-                    }
-                    Ok(crate::post_ingest::TitleEnrichResult::LlmRejected) => {
-                        db.record_enrichment_step(
-                            source_id,
-                            "title_enrich",
-                            "needs_retry",
-                            Some("llm_rejected"),
-                        )
-                        .await
-                        .ok();
-                        retried += 1;
-                    }
-                    Ok(crate::post_ingest::TitleEnrichResult::NotNeeded) => {
-                        // Already has a good title
-                    }
-                    Err(e) => {
-                        log::warn!("[refinery] backfill title for {source_id} failed: {e}");
-                        db.record_enrichment_step(
-                            source_id,
-                            "title_enrich",
-                            "failed",
-                            Some(&e.to_string()),
-                        )
-                        .await
-                        .ok();
-                    }
-                }
-            }
-            if old.is_empty() {
-                let _ = db.set_app_metadata("title_backfill_done", "1").await;
-            }
-        }
-    }
-
-    Ok(retried)
-}
-
 /// Trigger a refinery steep on demand — used by the chat import flow to
 /// process freshly-ingested memories without waiting for the scheduled
 /// 30-minute tick.
@@ -3954,7 +3680,6 @@ mod tests {
             "emergence",
             "re-distill",
             "decision_logs",
-            "retry_failed_enrichment",
         ];
         for &exp in expected {
             assert!(
@@ -4070,7 +3795,7 @@ mod tests {
 
         let phase_names: Vec<&str> = result.phases.iter().map(|p| p.name.as_str()).collect();
 
-        // All 16 phases must run with Backstop. `kg_rethink` is
+        // All 15 phases must run with Backstop. `kg_rethink` is
         // rate-limited, so on a fresh DB (last_kg_rethink_ts=0) it runs
         // on the first steep.
         let expected: &[&str] = &[
@@ -4089,7 +3814,6 @@ mod tests {
             "decision_backfill",
             "prune_rejections",
             "kg_rethink",
-            "retry_failed_enrichment",
         ];
         for &exp in expected {
             assert!(
@@ -5191,124 +4915,6 @@ mod tests {
             strip_source_prefix("[has spaces] content"),
             "[has spaces] content"
         );
-    }
-
-    // ── retry_failed_enrichment tests (Task 8) ─────────────────────────
-
-    #[tokio::test]
-    async fn test_retry_failed_enrichment_phase() {
-        let (db, _dir) = test_db().await;
-        let doc = make_memory(
-            "mem_retry_test",
-            "Python uses indentation for blocks",
-            "fact",
-            "tech",
-        );
-        db.upsert_documents(vec![doc]).await.unwrap();
-        db.record_enrichment_step("mem_retry_test", "dedup", "failed", Some("transient error"))
-            .await
-            .unwrap();
-        db.record_enrichment_step("mem_retry_test", "entity_link", "ok", None)
-            .await
-            .unwrap();
-        let tuning = crate::tuning::RefineryConfig::default();
-        let count = retry_failed_enrichment(&db, &tuning, None).await.unwrap();
-        assert!(count > 0, "should have retried at least one memory");
-        let steps = db.get_enrichment_steps("mem_retry_test").await.unwrap();
-        let dedup = steps.iter().find(|s| s.step == "dedup").unwrap();
-        assert_eq!(dedup.status, "ok", "retry should have fixed the dedup step");
-    }
-
-    #[tokio::test]
-    async fn test_retry_skips_abandoned_steps() {
-        let (db, _dir) = test_db().await;
-        let doc = make_memory("mem_abandon_skip", "test content", "fact", "tech");
-        db.upsert_documents(vec![doc]).await.unwrap();
-        db.record_enrichment_step(
-            "mem_abandon_skip",
-            "entity_extract",
-            "abandoned",
-            Some("gave up"),
-        )
-        .await
-        .unwrap();
-        let tuning = crate::tuning::RefineryConfig::default();
-        let count = retry_failed_enrichment(&db, &tuning, None).await.unwrap();
-        assert_eq!(count, 0, "should not retry abandoned steps");
-        let steps = db.get_enrichment_steps("mem_abandon_skip").await.unwrap();
-        assert_eq!(steps[0].status, "abandoned");
-    }
-
-    #[tokio::test]
-    async fn test_title_reenrich_skipped_without_llm() {
-        let (db, _dir) = test_db().await;
-        let mut doc = make_memory(
-            "mem_title_no_llm",
-            "A very long memory content that will result in a truncated title when initially stored by the system",
-            "fact",
-            "tech",
-        );
-        doc.title = "A very long memory content that will result in a truncated title when ini..."
-            .to_string();
-        db.upsert_documents(vec![doc]).await.unwrap();
-        db.record_enrichment_step(
-            "mem_title_no_llm",
-            "title_enrich",
-            "failed",
-            Some("llm error"),
-        )
-        .await
-        .unwrap();
-
-        let tuning = crate::tuning::RefineryConfig::default();
-        let _count = retry_failed_enrichment(&db, &tuning, None).await.unwrap();
-        let steps = db.get_enrichment_steps("mem_title_no_llm").await.unwrap();
-        let title_step = steps.iter().find(|s| s.step == "title_enrich").unwrap();
-        assert_eq!(
-            title_step.status, "failed",
-            "should still be failed without LLM"
-        );
-    }
-
-    #[tokio::test]
-    async fn test_title_reenrich_runs_when_only_needs_retry_exists() {
-        // Regression: the title loop must run even when get_failed_enrichment_memories
-        // returns empty (no "failed" steps). Only "needs_retry" title steps exist.
-        let (db, _dir) = test_db().await;
-        let doc = make_memory(
-            "mem_needs_retry_only",
-            "Some content about machine learning pipelines",
-            "fact",
-            "tech",
-        );
-        db.upsert_documents(vec![doc]).await.unwrap();
-        // Record title_enrich as needs_retry (not "failed") -- this is the LlmRejected case
-        db.record_enrichment_step(
-            "mem_needs_retry_only",
-            "title_enrich",
-            "needs_retry",
-            Some("llm_rejected"),
-        )
-        .await
-        .unwrap();
-
-        // No other steps are "failed", so get_failed_enrichment_memories returns empty.
-        // The title loop must still run and find this via get_title_reenrich_candidates.
-        let tuning = crate::tuning::RefineryConfig::default();
-        // Pass None for LLM -- title loop is guarded by llm.is_some(), so it won't
-        // actually re-enrich, but the function must not return early before reaching
-        // the title loop. We verify the function completes without panic.
-        let count = retry_failed_enrichment(&db, &tuning, None).await.unwrap();
-        // With None LLM, the title loop is skipped, so count should be 0.
-        // The key assertion is that we got here at all (no early return).
-        assert_eq!(count, 0);
-        // Step should still be needs_retry (unchanged, since no LLM was provided)
-        let steps = db
-            .get_enrichment_steps("mem_needs_retry_only")
-            .await
-            .unwrap();
-        let title_step = steps.iter().find(|s| s.step == "title_enrich").unwrap();
-        assert_eq!(title_step.status, "needs_retry");
     }
 
     #[test]
