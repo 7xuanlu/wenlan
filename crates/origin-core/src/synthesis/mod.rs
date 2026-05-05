@@ -5,4 +5,5 @@
 //! (chronological digests) and decision_logs (decision tracebacks). They run
 //! periodically rather than on each ingest.
 
+pub mod decision_logs;
 pub mod recaps;

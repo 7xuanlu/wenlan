@@ -789,8 +789,13 @@ async fn run_lifecycle_phases(
         let _ =
             crate::synthesis::recaps::generate_recaps(db, Some(llm_ref), &prompts, &refinery_cfg)
                 .await;
-        let _ = crate::refinery::generate_decision_logs(db, Some(llm_ref), &prompts, &refinery_cfg)
-            .await;
+        let _ = crate::synthesis::decision_logs::generate_decision_logs(
+            db,
+            Some(llm_ref),
+            &prompts,
+            &refinery_cfg,
+        )
+        .await;
     }
     measure!(
         db,
