@@ -24,7 +24,6 @@ pub const ALL_PHASES: &[&str] = &[
     "re-distill",
     "refinement_queue",
     "decision_logs",
-    "decision_backfill",
     "prune_rejections",
     "kg_rethink",
 ];
@@ -65,7 +64,6 @@ impl TriggerKind {
                     | "reweave"
                     | "reembed"
                     | "entity_extraction"
-                    | "decision_backfill"
                     | "prune_rejections"
                     | "kg_rethink"
             ),
@@ -76,7 +74,7 @@ impl TriggerKind {
     /// of phases, so they need different time budgets:
     /// - BurstEnd: tight (recaps + refinement only, should be fast)
     /// - Idle/Daily: moderate (focused subsets, no competition)
-    /// - Backstop: generous (runs all 14 phases, safety net every 6h)
+    /// - Backstop: generous (runs all 13 phases, safety net every 6h)
     pub fn deadline_secs(&self, base: u64) -> u64 {
         match self {
             Self::BurstEnd => base,      // 120s — recaps should be fast
@@ -117,7 +115,7 @@ pub struct PhaseOutput {
 // ---------------------------------------------------------------------------
 
 /// Backfill phases (decay, promote, reweave, reembed,
-/// entity_extraction, community_detection, decision_backfill,
+/// entity_extraction, community_detection,
 /// prune_rejections) are pure plumbing — always Silent.
 pub(crate) fn classify_backfill(_count: usize) -> (Nudge, Option<String>) {
     (Nudge::Silent, None)
@@ -565,7 +563,6 @@ pub async fn run_periodic_steep_with_api(
             if elapsed >= deadline {
                 if !deadline_hit {
                     log::warn!("[refinery] deadline exceeded ({}s >= {}s) — skipping remaining deadline-gated phases", elapsed, deadline);
-                    deadline_hit = true;
                 }
                 false
             } else {
@@ -576,35 +573,6 @@ pub async fn run_periodic_steep_with_api(
         let phase = run_phase("decision_logs", || async {
             let count = generate_decision_logs(db_ref, llm, prompts, tuning).await?;
             let (nudge, headline) = classify_decision_logs(count);
-            Ok(PhaseOutput {
-                items_processed: count,
-                nudge,
-                headline,
-            })
-        })
-        .await;
-        phases.push(phase);
-    }
-
-    // Phase 7b: Backfill structured_fields for decisions that lack them
-    let backfill_llm = api_llm.or(llm);
-    if trigger.runs_phase("decision_backfill")
-        && {
-            let elapsed = steep_start.elapsed().as_secs();
-            if elapsed >= deadline {
-                if !deadline_hit {
-                    log::warn!("[refinery] deadline exceeded ({}s >= {}s) — skipping remaining deadline-gated phases", elapsed, deadline);
-                }
-                false
-            } else {
-                true
-            }
-        }
-    {
-        let phase = run_phase("decision_backfill", || async {
-            let count =
-                backfill_decision_structured_fields(db_ref, backfill_llm, prompts, 5).await?;
-            let (nudge, headline) = classify_backfill(count);
             Ok(PhaseOutput {
                 items_processed: count,
                 nudge,
@@ -2444,79 +2412,6 @@ async fn process_refinement_queue(
     Ok(processed)
 }
 
-/// Backfill structured_fields for decision memories that lack them.
-/// Runs extraction via LLM to populate decision, context, alternatives_considered, etc.
-/// Processes `limit` decisions per steep to stay within budget.
-pub(crate) async fn backfill_decision_structured_fields(
-    db: &MemoryDB,
-    llm: Option<&Arc<dyn LlmProvider>>,
-    _prompts: &PromptRegistry,
-    limit: usize,
-) -> Result<usize, OriginError> {
-    let llm = match llm {
-        Some(l) if l.is_available() => l,
-        _ => return Ok(0),
-    };
-
-    let candidates = db.get_decisions_without_structured_fields(limit).await?;
-    if candidates.is_empty() {
-        return Ok(0);
-    }
-
-    let mut backfilled = 0usize;
-    for (source_id, content) in &candidates {
-        let truncated: String = content.chars().take(500).collect();
-        let prompt = crate::memory_schema::extraction_prompt("decision");
-
-        match tokio::time::timeout(
-            std::time::Duration::from_secs(5),
-            llm.generate(crate::llm_provider::LlmRequest {
-                system_prompt: Some(prompt),
-                user_prompt: truncated,
-                max_tokens: 256,
-                temperature: 0.1,
-                label: None,
-                timeout_secs: None,
-            }),
-        )
-        .await
-        {
-            Ok(Ok(raw)) => {
-                let (fields_json, _retrieval_cue) =
-                    crate::llm_provider::parse_extraction_response(&raw);
-                if let Some(ref json_str) = fields_json {
-                    if !json_str.is_empty() && json_str != "{}" {
-                        if let Err(e) = db.update_structured_fields(source_id, json_str).await {
-                            log::warn!(
-                                "[refinery] backfill structured_fields for {}: {}",
-                                source_id,
-                                e
-                            );
-                        } else {
-                            backfilled += 1;
-                            log::info!(
-                                "[refinery] backfilled structured_fields for decision {}",
-                                source_id
-                            );
-                        }
-                    }
-                }
-            }
-            Ok(Err(e)) => log::warn!("[refinery] backfill LLM error for {}: {}", source_id, e),
-            Err(_) => log::warn!("[refinery] backfill timeout for {}", source_id),
-        }
-    }
-
-    if backfilled > 0 {
-        log::info!(
-            "[refinery] backfilled structured_fields for {}/{} decisions",
-            backfilled,
-            candidates.len()
-        );
-    }
-    Ok(backfilled)
-}
-
 /// Generate decision logs: recap-like summaries for clusters of decision memories.
 /// Groups recent decision memories and generates a summary recap if not already covered.
 pub(crate) async fn generate_decision_logs(
@@ -3348,7 +3243,6 @@ mod tests {
         assert!(!t.runs_phase("reweave"));
         assert!(!t.runs_phase("reembed"));
         assert!(!t.runs_phase("entity_extraction"));
-        assert!(!t.runs_phase("decision_backfill"));
         assert!(!t.runs_phase("prune_rejections"));
     }
 
@@ -3360,7 +3254,6 @@ mod tests {
         assert!(t.runs_phase("reweave"));
         assert!(t.runs_phase("reembed"));
         assert!(t.runs_phase("entity_extraction"));
-        assert!(t.runs_phase("decision_backfill"));
         assert!(t.runs_phase("prune_rejections"));
         // Should NOT run synthesis or burst phases
         assert!(!t.runs_phase("recaps"));
@@ -3615,7 +3508,7 @@ mod tests {
 
         let phase_names: Vec<&str> = result.phases.iter().map(|p| p.name.as_str()).collect();
 
-        // Daily subset — all maintenance + backfill phases including
+        // Daily subset — all maintenance phases including
         // prune_rejections (promoted to a tracked phase in Task 4).
         let expected: &[&str] = &[
             "decay",
@@ -3623,7 +3516,6 @@ mod tests {
             "reweave",
             "reembed",
             "entity_extraction",
-            "decision_backfill",
             "prune_rejections",
             "kg_rethink",
         ];
@@ -3680,7 +3572,7 @@ mod tests {
 
         let phase_names: Vec<&str> = result.phases.iter().map(|p| p.name.as_str()).collect();
 
-        // All 14 phases must run with Backstop. `kg_rethink` is
+        // All 13 phases must run with Backstop. `kg_rethink` is
         // rate-limited, so on a fresh DB (last_kg_rethink_ts=0) it runs
         // on the first steep.
         let expected: &[&str] = &[
@@ -3695,7 +3587,6 @@ mod tests {
             "re-distill",
             "refinement_queue",
             "decision_logs",
-            "decision_backfill",
             "prune_rejections",
             "kg_rethink",
         ];
