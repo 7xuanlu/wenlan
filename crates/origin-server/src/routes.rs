@@ -350,23 +350,23 @@ pub async fn handle_chat_context(
         .map(|r| format!("[{}] {}", r.title, r.content))
         .collect();
 
-    // Source IDs from search results — used to gate concept relevance.
-    // A concept is only included if its source memories overlap with the
+    // Source IDs from search results — used to gate page relevance.
+    // A page is only included if its source memories overlap with the
     // memories that search_memory returned for this query.
     let search_source_ids: std::collections::HashSet<String> = filtered_search
         .iter()
         .map(|r| r.source_id.clone())
         .collect();
 
-    let concept_results: Vec<String> =
+    let page_results: Vec<String> =
         if tier_allowed(&classification.trust_level, 2) && query != "recent context" {
-            let raw_concepts = db.search_pages(query, 3).await.unwrap_or_default();
-            let concepts = origin_core::pages::filter_pages_by_source_overlap(
-                &raw_concepts,
+            let raw_pages = db.search_pages(query, 3).await.unwrap_or_default();
+            let pages = origin_core::pages::filter_pages_by_source_overlap(
+                &raw_pages,
                 &search_source_ids,
                 concept_min_overlap,
             );
-            concepts
+            pages
                 .iter()
                 .map(|c| {
                     let summary = c.summary.as_deref().unwrap_or("");
@@ -404,7 +404,7 @@ pub async fn handle_chat_context(
         goals.join(" "),
         corrections.join(" "),
         decisions.join(" "),
-        concept_results.join(" ")
+        page_results.join(" ")
     );
     let tier3_text = filtered_search
         .iter()
@@ -470,9 +470,9 @@ pub async fn handle_chat_context(
         sections.push(sec);
     }
 
-    if !concept_results.is_empty() {
+    if !page_results.is_empty() {
         let mut sec = String::from("## Compiled Knowledge\n");
-        for item in &concept_results {
+        for item in &page_results {
             sec.push_str(&format!("{}\n\n---\n\n", item));
         }
         sections.push(sec);
@@ -577,7 +577,7 @@ pub async fn handle_chat_context(
             goals,
         },
         knowledge: KnowledgeContext {
-            concepts: concept_results,
+            concepts: page_results, // wire field names retained for back-compat with origin-mcp; rename deferred
             decisions,
             relevant_memories: filtered_search,
             graph_context: graph_observations,
@@ -701,8 +701,8 @@ pub async fn handle_distill(
     .await?;
 
     Ok(Json(serde_json::json!({
-        "concepts_created": distilled,
-        "concepts_updated": deep,
+        "concepts_created": distilled, // wire field names retained for back-compat with origin-mcp; rename deferred
+        "concepts_updated": deep,      // wire field names retained for back-compat with origin-mcp; rename deferred
     })))
 }
 
@@ -725,7 +725,7 @@ pub async fn handle_redistill(
     Ok(Json(serde_json::json!({"status": "ok"})))
 }
 
-// ===== Recent retrieval / concept-change feeds =====
+// ===== Recent retrieval / page-change feeds =====
 
 #[derive(Debug, Default, Deserialize)]
 pub struct RecentLimitQuery {
@@ -733,7 +733,7 @@ pub struct RecentLimitQuery {
     pub limit: Option<i64>,
 }
 
-/// GET /api/retrievals/recent - Recent agent retrieval events joined to concept titles.
+/// GET /api/retrievals/recent - Recent agent retrieval events joined to page titles.
 pub async fn handle_recent_retrievals(
     State(state): State<Arc<RwLock<ServerState>>>,
     axum::extract::Query(q): axum::extract::Query<RecentLimitQuery>,
@@ -751,7 +751,7 @@ pub async fn handle_recent_retrievals(
     Ok(Json(events))
 }
 
-/// GET /api/pages/recent-changes - Recent concept created/revised events.
+/// GET /api/pages/recent-changes - Recent page created/revised events.
 pub async fn handle_recent_page_changes(
     State(state): State<Arc<RwLock<ServerState>>>,
     axum::extract::Query(q): axum::extract::Query<RecentLimitQuery>,
@@ -769,7 +769,7 @@ pub async fn handle_recent_page_changes(
     Ok(Json(changes))
 }
 
-/// GET /api/pages/recent — top-N concept activity with badge deltas.
+/// GET /api/pages/recent — top-N page activity with badge deltas.
 /// `since_ms` scopes badge derivation only; the feed is always top-N by recency.
 pub async fn handle_recent_pages(
     State(state): State<Arc<RwLock<ServerState>>>,
@@ -821,7 +821,7 @@ mod recent_endpoints_tests {
     }
 
     #[tokio::test]
-    async fn get_recent_concept_changes_without_db_returns_503() {
+    async fn get_recent_page_changes_without_db_returns_503() {
         let state = Arc::new(RwLock::new(ServerState::default()));
         let app = crate::router::build_router(state);
         let req = Request::builder()
@@ -848,7 +848,7 @@ mod recent_endpoints_tests {
     }
 
     #[tokio::test]
-    async fn get_recent_concept_changes_route_is_registered() {
+    async fn get_recent_page_changes_route_is_registered() {
         let state = Arc::new(RwLock::new(ServerState::default()));
         let app = crate::router::build_router(state);
         let req = Request::builder()
@@ -861,7 +861,7 @@ mod recent_endpoints_tests {
     }
 
     #[tokio::test]
-    async fn get_recent_concepts_route_is_registered() {
+    async fn get_recent_pages_route_is_registered() {
         let state = Arc::new(RwLock::new(ServerState::default()));
         let app = crate::router::build_router(state);
         let req = Request::builder()
@@ -875,7 +875,7 @@ mod recent_endpoints_tests {
     }
 
     #[tokio::test]
-    async fn get_recent_concepts_without_db_returns_503() {
+    async fn get_recent_pages_without_db_returns_503() {
         let state = Arc::new(RwLock::new(ServerState::default()));
         let app = crate::router::build_router(state);
         let req = Request::builder()

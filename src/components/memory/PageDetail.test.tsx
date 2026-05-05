@@ -78,10 +78,10 @@ function renderWithQuery(ui: React.ReactElement) {
 
 describe("PageDetail", () => {
   const defaultProps = {
-    conceptId: "concept_abc",
+    pageId: "concept_abc",
     onBack: vi.fn(),
     onMemoryClick: vi.fn(),
-    onConceptClick: vi.fn(),
+    onPageClick: vi.fn(),
   };
 
   beforeEach(() => { vi.clearAllMocks(); });

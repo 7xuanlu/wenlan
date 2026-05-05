@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 //! `backfill-stale-concepts` CLI subcommand.
 //!
-//! Deletes archived concepts that look like Mode B failures (large
+//! Deletes archived pages that look like Mode B failures (large
 //! source_memory_ids, no entity, no domain, not user-edited). Source memories
 //! are NOT modified — see spec 2026-04-25-bad-concept-distill-fix-design.md
 //! for the rationale and follow-up steps required to re-distill them.
@@ -49,14 +49,14 @@ pub async fn run(dry_run: bool) -> anyhow::Result<()> {
     let candidates = db
         .find_stale_archived_pages()
         .await
-        .context("querying stale concepts")?;
+        .context("querying stale pages")?;
 
     if candidates.is_empty() {
-        println!("No stale archived concepts found. Nothing to do.");
+        println!("No stale archived pages found. Nothing to do.");
         return Ok(());
     }
 
-    println!("Found {} candidate concept(s):\n", candidates.len());
+    println!("Found {} candidate page(s):\n", candidates.len());
     for c in &candidates {
         println!(
             "  {} \"{}\" — {} sources — created {}",
@@ -75,7 +75,7 @@ pub async fn run(dry_run: bool) -> anyhow::Result<()> {
 
     // Step 4: confirm.
     print!(
-        "Delete {} concept(s) and their concept_sources rows? (y/N): ",
+        "Delete {} page(s) and their concept_sources rows? (y/N): ",
         candidates.len()
     );
     io::stdout().flush().ok();
@@ -95,12 +95,12 @@ pub async fn run(dry_run: bool) -> anyhow::Result<()> {
     for c in &candidates {
         db.delete_page(&c.id)
             .await
-            .with_context(|| format!("deleting concept {}", c.id))?;
+            .with_context(|| format!("deleting page {}", c.id))?;
         deleted += 1;
     }
 
     println!(
-        "Deleted {} concept(s). Source memories were NOT modified.",
+        "Deleted {} page(s). Source memories were NOT modified.",
         deleted
     );
     println!();

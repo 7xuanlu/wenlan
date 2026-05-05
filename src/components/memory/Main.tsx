@@ -499,10 +499,10 @@ export default function Main({ initialMemoryId, initialView, onBackFromDetail }:
             />
           ) : view.kind === "concept" ? (
             <PageDetail
-              conceptId={view.conceptId}
+              pageId={view.conceptId}
               onBack={navigateBack}
               onMemoryClick={(sid) => navigateTo({ kind: "memory", sourceId: sid })}
-              onConceptClick={(id) => navigateTo({ kind: "concept", conceptId: id })}
+              onPageClick={(id) => navigateTo({ kind: "concept", conceptId: id })}
             />
           ) : view.kind === "home" ? (
             <HomePage

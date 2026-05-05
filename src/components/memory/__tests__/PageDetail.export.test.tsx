@@ -41,7 +41,7 @@ describe("PageDetail export", () => {
 
     render(
       <PageDetail
-        conceptId="c1"
+        pageId="c1"
         onBack={vi.fn()}
         onMemoryClick={vi.fn()}
       />,
@@ -74,7 +74,7 @@ describe("PageDetail export", () => {
 
     render(
       <PageDetail
-        conceptId="c1"
+        pageId="c1"
         onBack={vi.fn()}
         onMemoryClick={vi.fn()}
       />,
@@ -119,7 +119,7 @@ describe("PageDetail export", () => {
 
     render(
       <PageDetail
-        conceptId="c1"
+        pageId="c1"
         onBack={vi.fn()}
         onMemoryClick={vi.fn()}
       />,
@@ -165,7 +165,7 @@ describe("PageDetail export", () => {
 
     render(
       <PageDetail
-        conceptId="c1"
+        pageId="c1"
         onBack={vi.fn()}
         onMemoryClick={vi.fn()}
       />,

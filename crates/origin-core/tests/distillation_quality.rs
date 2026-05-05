@@ -4,7 +4,7 @@
 //! Covers:
 //! 1. The 800-char per-memory snippet cap (pure logic, no DB needed).
 //! 2. That a 4-memory cluster about a topic has enough total content to
-//!    pass the 200-char thin-cluster guard in `distill_concepts`.
+//!    pass the 200-char thin-cluster guard in `distill_pages`.
 //! 3. That the batch `get_memories_by_source_ids` returns correct results.
 
 use origin_core::db::MemoryDB;
@@ -43,7 +43,7 @@ fn make_memory_doc(source_id: &str, content: &str) -> RawDocument {
 }
 
 /// A 4-memory cluster about libSQL vector search has enough total content to
-/// pass the 200-char thin-cluster guard used in `distill_concepts`.
+/// pass the 200-char thin-cluster guard used in `distill_pages`.
 /// This ensures small clusters of meaningful memories will not be silently skipped.
 #[tokio::test]
 async fn four_memory_cluster_passes_thin_content_guard() {
