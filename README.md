@@ -1,4 +1,6 @@
-![Origin social preview](docs/assets/social-preview.png)
+<p align="center">
+  <img src="./docs/assets/social-preview.png" alt="Origin: Where AI memory compounds." width="100%">
+</p>
 
 [![CI](https://github.com/7xuanlu/origin/actions/workflows/ci.yml/badge.svg)](https://github.com/7xuanlu/origin/actions/workflows/ci.yml)
 [![Release](https://img.shields.io/github/v/release/7xuanlu/origin)](https://github.com/7xuanlu/origin/releases/latest)
@@ -14,11 +16,11 @@
 
 </details>
 
-[Origin](https://useorigin.app) runs quietly behind the AI tools you already use. It gives your AI a place to carry decisions, lessons, gotchas, and project context instead of rediscovering them in every new chat.
+Local-first memory that carries decisions, lessons, gotchas, and project context across chats, projects, and time.
 
 The daemon does the memory chores in the background: deduplicating, linking related ideas, distilling pages, and keeping provenance attached.
 
-Use optional desktop app to search, inspect, edit, and delete what Origin learned.
+Use the optional desktop app to search, inspect, edit, and delete what Origin learned.
 
 **Status:** Early preview for macOS Apple Silicon. Expect fast iteration and some sharp edges.
 
