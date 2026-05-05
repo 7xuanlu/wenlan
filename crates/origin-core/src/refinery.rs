@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
 use crate::activity::ACTIVITY_GAP_SECS;
+use crate::contradiction::ContradictionResult;
 use crate::db::MemoryDB;
 use crate::error::OriginError;
 use crate::llm_provider::{LlmProvider, LlmRequest};
-use crate::merge::ContradictionResult;
 use crate::prompts::PromptRegistry;
 use crate::sources::StabilityTier;
 use serde::Serialize;
