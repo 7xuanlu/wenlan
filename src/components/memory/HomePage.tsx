@@ -6,10 +6,10 @@ import {
   deleteFileChunks,
   dismissContradiction,
   getMemoryStats,
-  listConcepts,
+  listPages,
   listMemoriesRich,
   listRecentChanges,
-  listRecentConcepts,
+  listRecentPages,
   listRecentMemories,
   listRecentRetrievals,
   listUnconfirmedMemories,
@@ -20,9 +20,9 @@ import { RefiningList } from "./RefiningList";
 import { ConnectionsList } from "./ConnectionsList";
 import { RetrievalsList } from "./RetrievalsList";
 import { WhatHappensNextCard, type HomePageState } from "../onboarding/WhatHappensNextCard";
-import { GhostConceptsRow } from "../onboarding/GhostConceptsRow";
+import { GhostPagesRow } from "../onboarding/GhostPagesRow";
 import { useMilestones } from "../onboarding/useMilestones";
-import { FirstConceptModal } from "../onboarding/FirstConceptModal";
+import { FirstPageModal } from "../onboarding/FirstPageModal";
 import { MilestoneHighlight } from "../onboarding/MilestoneHighlight";
 
 interface HomePageProps {
@@ -87,7 +87,7 @@ export default function HomePage({
 
   const { data: recentConceptItems = [] } = useQuery({
     queryKey: ["recentConceptItems", lastVisitMs],
-    queryFn: () => listRecentConcepts(10, lastVisitMs),
+    queryFn: () => listRecentPages(10, lastVisitMs),
     refetchInterval: 30_000,
   });
 
@@ -117,7 +117,7 @@ export default function HomePage({
 
   const { data: recentConcepts = [] } = useQuery({
     queryKey: ["recent-concepts"],
-    queryFn: () => listConcepts("active", undefined, 10),
+    queryFn: () => listPages("active", undefined, 10),
     refetchInterval: 10_000,
   });
 
@@ -238,7 +238,7 @@ export default function HomePage({
             intensity="full"
           >
             <section>
-              <GhostConceptsRow />
+              <GhostPagesRow />
             </section>
           </MilestoneHighlight>
         </>
@@ -285,7 +285,7 @@ export default function HomePage({
       )}
 
       {shouldShowFirstConceptModal && firstConcept && (
-        <FirstConceptModal
+        <FirstPageModal
           concept={firstConcept}
           onOpen={(id) => {
             localStorage.removeItem(FIRST_CONCEPT_SHOWN_KEY);

@@ -757,9 +757,9 @@ export interface EntitySuggestion {
   created_at: string;
 }
 
-// ── Concepts ───────────────────────────────────────────────────────────
+// ── Pages ───────────────────────────────────────────────────────────
 
-export interface Concept {
+export interface Page {
   id: string;
   title: string;
   summary: string | null;
@@ -778,22 +778,39 @@ export interface Concept {
   user_edited?: boolean;
 }
 
-export interface ConceptSource {
+/** @deprecated Use {@link Page} instead. Kept for gradual migration. */
+export type Concept = Page;
+
+export interface PageSource {
+  // wire format still uses concept_id; rename deferred until origin-mcp is updated
   concept_id: string;
   memory_source_id: string;
   linked_at: number;
   link_reason?: string | null;
 }
 
-export interface ConceptSourceWithMemory {
-  source: ConceptSource;
+/** @deprecated Use {@link PageSource} instead. Kept for gradual migration. */
+export type ConceptSource = PageSource;
+
+export interface PageSourceWithMemory {
+  source: PageSource;
   memory: MemoryItem | null;
 }
 
+/** @deprecated Use {@link PageSourceWithMemory} instead. Kept for gradual migration. */
+export type ConceptSourceWithMemory = PageSourceWithMemory;
+
+export async function getPageSources(
+  pageId: string,
+): Promise<PageSourceWithMemory[]> {
+  return invoke("get_page_sources", { pageId });
+}
+
+/** @deprecated Use {@link getPageSources} instead. */
 export async function getConceptSources(
   conceptId: string,
-): Promise<ConceptSourceWithMemory[]> {
-  return invoke("get_concept_sources", { conceptId });
+): Promise<PageSourceWithMemory[]> {
+  return getPageSources(conceptId);
 }
 
 // ── Profiles & Agent Connections ─────────────────────────────────────
@@ -1058,38 +1075,76 @@ export async function dismissEntitySuggestion(id: string): Promise<void> {
   return invoke("dismiss_entity_suggestion_cmd", { id });
 }
 
-// ===== Concepts =====
+// ===== Pages =====
 
-export async function getConcept(id: string): Promise<Concept | null> {
-  return invoke("get_concept", { id });
+export async function getPage(id: string): Promise<Page | null> {
+  return invoke("get_page", { id });
 }
 
+/** @deprecated Use {@link getPage} instead. */
+export async function getConcept(id: string): Promise<Page | null> {
+  return getPage(id);
+}
+
+export async function updatePage(id: string, content: string): Promise<void> {
+  return invoke("update_page", { id, content });
+}
+
+/** @deprecated Use {@link updatePage} instead. */
 export async function updateConcept(id: string, content: string): Promise<void> {
-  return invoke("update_concept", { id, content });
+  return updatePage(id, content);
 }
 
+export async function deletePage(id: string): Promise<void> {
+  return invoke("delete_page", { id });
+}
+
+/** @deprecated Use {@link deletePage} instead. */
 export async function deleteConcept(id: string): Promise<void> {
-  return invoke("delete_concept", { id });
+  return deletePage(id);
 }
 
+export async function archivePage(id: string): Promise<void> {
+  return invoke("archive_page", { id });
+}
+
+/** @deprecated Use {@link archivePage} instead. */
 export async function archiveConcept(id: string): Promise<void> {
-  return invoke("archive_concept", { id });
+  return archivePage(id);
 }
 
+export async function searchPages(
+  query: string,
+  limit?: number,
+): Promise<Page[]> {
+  return invoke("search_pages", { query, limit: limit ?? 5 });
+}
+
+/** @deprecated Use {@link searchPages} instead. */
 export async function searchConcepts(
   query: string,
   limit?: number,
-): Promise<Concept[]> {
-  return invoke("search_concepts", { query, limit: limit ?? 5 });
+): Promise<Page[]> {
+  return searchPages(query, limit);
 }
 
+export async function listPages(
+  status?: string,
+  domain?: string,
+  limit?: number,
+  offset?: number,
+): Promise<Page[]> {
+  return invoke("list_pages", { status, domain, limit, offset });
+}
+
+/** @deprecated Use {@link listPages} instead. */
 export async function listConcepts(
   status?: string,
   domain?: string,
   limit?: number,
   offset?: number,
-): Promise<Concept[]> {
-  return invoke("list_concepts", { status, domain, limit, offset });
+): Promise<Page[]> {
+  return listPages(status, domain, limit, offset);
 }
 
 // ── Home delta feed ────────────────────────────────────────────────────
@@ -1098,27 +1153,35 @@ export interface RetrievalEvent {
   timestamp_ms: number;
   agent_name: string;
   query?: string | null;
+  // wire format still uses concept_titles/concept_ids; rename deferred until origin-mcp is updated
   concept_titles: string[];
-  /** Stable concept IDs corresponding 1:1 with concept_titles. Empty on legacy events. */
+  /** Stable page IDs corresponding 1:1 with concept_titles. Empty on legacy events. */
   concept_ids: string[];
   memory_snippets: string[];
 }
 
-export type ConceptChangeKind = "created" | "revised" | "merged";
+export type PageChangeKind = "created" | "revised" | "merged";
 
-export interface ConceptChange {
+/** @deprecated Use {@link PageChangeKind} instead. */
+export type ConceptChangeKind = PageChangeKind;
+
+export interface PageChange {
+  // wire format still uses concept_id; rename deferred until origin-mcp is updated
   concept_id: string;
   title: string;
-  change_kind: ConceptChangeKind;
+  change_kind: PageChangeKind;
   changed_at_ms: number;
 }
+
+/** @deprecated Use {@link PageChange} instead. */
+export type ConceptChange = PageChange;
 
 export async function listRecentRetrievals(limit?: number): Promise<RetrievalEvent[]> {
   return invoke<RetrievalEvent[]>("list_recent_retrievals", { limit: limit ?? 10 });
 }
 
-export async function listRecentChanges(limit?: number): Promise<ConceptChange[]> {
-  return invoke<ConceptChange[]>("list_recent_changes", { limit: limit ?? 10 });
+export async function listRecentChanges(limit?: number): Promise<PageChange[]> {
+  return invoke<PageChange[]>("list_recent_changes", { limit: limit ?? 10 });
 }
 
 export type ActivityKind = "concept" | "memory";
@@ -1157,14 +1220,22 @@ export async function listUnconfirmedMemories(
   return invoke<RecentActivityItem[]>("list_unconfirmed_memories", { limit });
 }
 
+export async function listRecentPages(
+  limit: number,
+  sinceMs?: number,
+): Promise<RecentActivityItem[]> {
+  return invoke<RecentActivityItem[]>("list_recent_pages", {
+    limit,
+    sinceMs: sinceMs ?? null,
+  });
+}
+
+/** @deprecated Use {@link listRecentPages} instead. */
 export async function listRecentConcepts(
   limit: number,
   sinceMs?: number,
 ): Promise<RecentActivityItem[]> {
-  return invoke<RecentActivityItem[]>("list_recent_concepts", {
-    limit,
-    sinceMs: sinceMs ?? null,
-  });
+  return listRecentPages(limit, sinceMs);
 }
 
 export interface RecentRelation {
@@ -1187,17 +1258,32 @@ export async function listRecentRelations(
   });
 }
 
+export async function exportPagesToObsidian(
+  vaultPath: string,
+): Promise<{ exported: number; skipped: number; failed: number }> {
+  return invoke("export_pages_to_obsidian", { vaultPath });
+}
+
+/** @deprecated Use {@link exportPagesToObsidian} instead. */
 export async function exportConceptsToObsidian(
   vaultPath: string,
 ): Promise<{ exported: number; skipped: number; failed: number }> {
-  return invoke("export_concepts_to_obsidian", { vaultPath });
+  return exportPagesToObsidian(vaultPath);
 }
 
+export async function exportPageToObsidian(
+  pageId: string,
+  vaultPath: string,
+): Promise<string> {
+  return invoke("export_page_to_obsidian", { pageId, vaultPath });
+}
+
+/** @deprecated Use {@link exportPageToObsidian} instead. */
 export async function exportConceptToObsidian(
   conceptId: string,
   vaultPath: string,
 ): Promise<string> {
-  return invoke("export_concept_to_obsidian", { conceptId, vaultPath });
+  return exportPageToObsidian(conceptId, vaultPath);
 }
 
 // ===== Knowledge Directory =====

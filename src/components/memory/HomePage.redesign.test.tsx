@@ -17,9 +17,11 @@ vi.mock("../../lib/tauri", async () => {
   return {
     ...actual,
     listRecentRetrievals: vi.fn(),
+    listRecentPages: vi.fn(),
     listRecentConcepts: vi.fn(),
     listRecentMemories: vi.fn(),
     listUnconfirmedMemories: vi.fn(),
+    listPages: vi.fn(),
     listConcepts: vi.fn(),
     listRecentChanges: vi.fn(),
     listRecentRelations: vi.fn(),
@@ -50,9 +52,11 @@ function renderHome() {
 beforeEach(() => {
   localStorage.clear();
   vi.mocked(tauri.listRecentRetrievals).mockResolvedValue([]);
+  vi.mocked(tauri.listRecentPages).mockResolvedValue([]);
   vi.mocked(tauri.listRecentConcepts).mockResolvedValue([]);
   vi.mocked(tauri.listRecentMemories).mockResolvedValue([]);
   vi.mocked(tauri.listUnconfirmedMemories).mockResolvedValue([]);
+  vi.mocked(tauri.listPages).mockResolvedValue([]);
   vi.mocked(tauri.listConcepts).mockResolvedValue([]);
   vi.mocked(tauri.listRecentChanges).mockResolvedValue([]);
   vi.mocked(tauri.listRecentRelations).mockResolvedValue([]);
@@ -154,7 +158,7 @@ describe("HomePage redesign", () => {
 
   it("renders worth-a-glance with only review-worthy items", async () => {
     const now = Date.now();
-    vi.mocked(tauri.listRecentConcepts).mockResolvedValue([
+    vi.mocked(tauri.listRecentPages).mockResolvedValue([
       { kind: "concept", id: "c1", title: "Flagged concept", snippet: "s", timestamp_ms: now, badge: { kind: "needs_review" } },
       { kind: "concept", id: "c2", title: "Fresh concept", snippet: "s", timestamp_ms: now - 500, badge: { kind: "new" } },
     ] as any);

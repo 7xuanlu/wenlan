@@ -6,7 +6,7 @@ import {
   listMemoriesRich,
   getMemoryStats,
   searchEntities,
-  searchConcepts,
+  searchPages,
   deleteFileChunks,
 } from "../../lib/tauri";
 import ActivityFeed from "./ActivityFeed";
@@ -20,7 +20,7 @@ import ConstellationMap from "./ConstellationMap";
 import MemoryStatusBar from "./MemoryStatusBar";
 import MemorySearchResult from "./MemorySearchResult";
 import MemoryDetail from "./MemoryDetail";
-import ConceptDetail from "./ConceptDetail";
+import PageDetail from "./PageDetail";
 import SettingsPage from "./SettingsPage";
 import { ImportView } from "./ImportView";
 import { SetupWizard } from "../SetupWizard";
@@ -97,8 +97,8 @@ export default function Main({ initialMemoryId, initialView, onBackFromDetail }:
   });
 
   const { data: conceptResults = [] } = useQuery({
-    queryKey: ["searchConcepts", debouncedEntityQuery],
-    queryFn: () => searchConcepts(debouncedEntityQuery, 5),
+    queryKey: ["searchPages", debouncedEntityQuery],
+    queryFn: () => searchPages(debouncedEntityQuery, 5),
     enabled: debouncedEntityQuery.length > 0,
   });
 
@@ -498,7 +498,7 @@ export default function Main({ initialMemoryId, initialView, onBackFromDetail }:
               onMemoryClick={(sid) => navigateTo({ kind: "memory", sourceId: sid })}
             />
           ) : view.kind === "concept" ? (
-            <ConceptDetail
+            <PageDetail
               conceptId={view.conceptId}
               onBack={navigateBack}
               onMemoryClick={(sid) => navigateTo({ kind: "memory", sourceId: sid })}

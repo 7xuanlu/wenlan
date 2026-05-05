@@ -2,12 +2,12 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, waitFor, fireEvent } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import ConceptDetail from "../ConceptDetail";
+import PageDetail from "../PageDetail";
 import * as tauri from "../../../lib/tauri";
 
 vi.mock("../../../lib/tauri");
 
-const MOCK_CONCEPT: tauri.Concept = {
+const MOCK_PAGE: tauri.Page = {
   id: "c1",
   title: "Test Concept",
   content: "Some concept content",
@@ -29,18 +29,18 @@ function wrapper({ children }: { children: React.ReactNode }) {
   return <QueryClientProvider client={qc}>{children}</QueryClientProvider>;
 }
 
-describe("ConceptDetail export", () => {
+describe("PageDetail export", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    vi.mocked(tauri.getConcept).mockResolvedValue(MOCK_CONCEPT);
-    vi.mocked(tauri.listConcepts).mockResolvedValue([MOCK_CONCEPT]);
+    vi.mocked(tauri.getPage).mockResolvedValue(MOCK_PAGE);
+    vi.mocked(tauri.listPages).mockResolvedValue([MOCK_PAGE]);
   });
 
   it("disables export button when no obsidian sources exist", async () => {
     vi.mocked(tauri.listRegisteredSources).mockResolvedValue([]);
 
     render(
-      <ConceptDetail
+      <PageDetail
         conceptId="c1"
         onBack={vi.fn()}
         onMemoryClick={vi.fn()}
@@ -68,12 +68,12 @@ describe("ConceptDetail export", () => {
         memory_count: 20,
       },
     ]);
-    vi.mocked(tauri.exportConceptToObsidian).mockResolvedValue(
+    vi.mocked(tauri.exportPageToObsidian).mockResolvedValue(
       "/Users/test/vault/Origin/concepts/Test Concept.md",
     );
 
     render(
-      <ConceptDetail
+      <PageDetail
         conceptId="c1"
         onBack={vi.fn()}
         onMemoryClick={vi.fn()}
@@ -88,7 +88,7 @@ describe("ConceptDetail export", () => {
     fireEvent.click(screen.getByTitle("Export to Obsidian"));
 
     await waitFor(() => {
-      expect(tauri.exportConceptToObsidian).toHaveBeenCalledWith(
+      expect(tauri.exportPageToObsidian).toHaveBeenCalledWith(
         "c1",
         "/Users/test/vault/Origin/concepts",
       );
@@ -118,7 +118,7 @@ describe("ConceptDetail export", () => {
     ]);
 
     render(
-      <ConceptDetail
+      <PageDetail
         conceptId="c1"
         onBack={vi.fn()}
         onMemoryClick={vi.fn()}
@@ -159,12 +159,12 @@ describe("ConceptDetail export", () => {
         memory_count: 10,
       },
     ]);
-    vi.mocked(tauri.exportConceptToObsidian).mockResolvedValue(
+    vi.mocked(tauri.exportPageToObsidian).mockResolvedValue(
       "/Users/test/vault-two/Origin/concepts/Test Concept.md",
     );
 
     render(
-      <ConceptDetail
+      <PageDetail
         conceptId="c1"
         onBack={vi.fn()}
         onMemoryClick={vi.fn()}
@@ -187,7 +187,7 @@ describe("ConceptDetail export", () => {
     fireEvent.click(screen.getByText("vault-two"));
 
     await waitFor(() => {
-      expect(tauri.exportConceptToObsidian).toHaveBeenCalledWith(
+      expect(tauri.exportPageToObsidian).toHaveBeenCalledWith(
         "c1",
         "/Users/test/vault-two/Origin/concepts",
       );
