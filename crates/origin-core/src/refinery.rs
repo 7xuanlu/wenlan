@@ -16,7 +16,6 @@ pub const ALL_PHASES: &[&str] = &[
     "decay",
     "promote",
     "recaps",
-    "reclassify",
     "reweave",
     "reembed",
     "entity_extraction",
@@ -63,7 +62,6 @@ impl TriggerKind {
                 phase_name,
                 "decay"
                     | "promote"
-                    | "reclassify"
                     | "reweave"
                     | "reembed"
                     | "entity_extraction"
@@ -78,7 +76,7 @@ impl TriggerKind {
     /// of phases, so they need different time budgets:
     /// - BurstEnd: tight (recaps + refinement only, should be fast)
     /// - Idle/Daily: moderate (focused subsets, no competition)
-    /// - Backstop: generous (runs all 15 phases, safety net every 6h)
+    /// - Backstop: generous (runs all 14 phases, safety net every 6h)
     pub fn deadline_secs(&self, base: u64) -> u64 {
         match self {
             Self::BurstEnd => base,      // 120s — recaps should be fast
@@ -118,7 +116,7 @@ pub struct PhaseOutput {
 // Nudge classifiers — one pure function per phase archetype.
 // ---------------------------------------------------------------------------
 
-/// Backfill phases (decay, promote, reclassify, reweave, reembed,
+/// Backfill phases (decay, promote, reweave, reembed,
 /// entity_extraction, community_detection, decision_backfill,
 /// prune_rejections) are pure plumbing — always Silent.
 pub(crate) fn classify_backfill(_count: usize) -> (Nudge, Option<String>) {
@@ -255,7 +253,7 @@ where
 // Post-ingest dedup and recap checks moved to post_ingest.rs
 
 /// Periodic steep — called every 30 minutes by the scheduler.
-/// Runs phases sequentially: decay, recaps, reclassify, reweave, reembed, entity extraction, distillation, refinement queue, decision logs.
+/// Runs phases sequentially: decay, recaps, reweave, reembed, entity extraction, distillation, refinement queue, decision logs.
 /// Each phase is isolated — a failure in one phase doesn't prevent subsequent phases from running.
 pub async fn run_periodic_steep(
     db: &MemoryDB,
@@ -307,7 +305,6 @@ pub async fn run_periodic_steep_with_api(
     // valid even when their producing phase is skipped by the trigger.
     let mut memories_decayed: u64 = 0;
     let mut recaps_generated: u32 = 0;
-    let mut imports_reclassified: u32 = 0;
     let mut distilled: u32 = 0;
 
     // Phase 1: Decay pass
@@ -366,23 +363,7 @@ pub async fn run_periodic_steep_with_api(
         phases.push(phase);
     }
 
-    // Phase 3: Reclassify imported memories
-    if trigger.runs_phase("reclassify") {
-        let phase = run_phase("reclassify", || async {
-            let count = reclassify_imports(db_ref, llm, prompts).await?;
-            let (nudge, headline) = classify_backfill(count);
-            Ok(PhaseOutput {
-                items_processed: count,
-                nudge,
-                headline,
-            })
-        })
-        .await;
-        imports_reclassified = phase.items_processed as u32;
-        phases.push(phase);
-    }
-
-    // Phase 4: Reweave entity links (link unlinked memories to recently-created entities)
+    // Phase 3: Reweave entity links (link unlinked memories to recently-created entities)
     if trigger.runs_phase("reweave")
         && {
             let elapsed = steep_start.elapsed().as_secs();
@@ -816,101 +797,10 @@ pub async fn run_periodic_steep_with_api(
     Ok(SteepResult {
         memories_decayed,
         recaps_generated,
-        imports_reclassified,
         distilled,
         pending_remaining,
         phases,
     })
-}
-
-/// Reclassify memories that lack proper memory_type or domain classification.
-async fn reclassify_imports(
-    db: &MemoryDB,
-    llm: Option<&Arc<dyn LlmProvider>>,
-    prompts: &PromptRegistry,
-) -> Result<usize, OriginError> {
-    let mut reclassified = 0usize;
-    if let Some(llm) = llm {
-        let imports = db.get_unclassified_imports(10).await?;
-        for (source_id, content) in &imports {
-            // Check which fields are actually missing so we only fill NULLs
-            let existing = db.get_memory_classification(source_id).await?;
-            let needs_type = existing.0.is_none();
-            let needs_domain = existing.1.is_none();
-
-            let truncated: String = content.chars().take(1000).collect();
-            let response = llm
-                .generate(LlmRequest {
-                    system_prompt: Some(prompts.classify_memory_quality_strict.clone()),
-                    user_prompt: truncated,
-                    max_tokens: 128,
-                    temperature: 0.1,
-                    label: None,
-                    timeout_secs: None,
-                })
-                .await;
-
-            match response {
-                Ok(output) => {
-                    if let Some(classification) =
-                        crate::llm_provider::parse_classify_response(&output)
-                    {
-                        let sid_prefix: String = source_id.chars().take(12).collect();
-                        log::info!(
-                            "[refinery] reclassified {} -> type={}, domain={:?}",
-                            sid_prefix,
-                            classification.memory_type,
-                            classification.domain,
-                        );
-                        // Only update memory_type if it was NULL
-                        if needs_type {
-                            if let Err(e) = db
-                                .update_memory_type(source_id, &classification.memory_type)
-                                .await
-                            {
-                                log::warn!("[refinery] reclassify type update failed: {e}");
-                            }
-                        }
-                        // Only update domain if it was NULL
-                        if needs_domain {
-                            if let Some(ref domain) = classification.domain {
-                                if let Err(e) = db.update_domain(source_id, domain).await {
-                                    log::warn!("[refinery] reclassify domain update failed: {e}");
-                                }
-                                // Auto-create space for newly classified domain
-                                if let Err(e) = db.auto_create_space_if_needed(domain).await {
-                                    log::warn!("[refinery] auto-create space failed: {e}");
-                                }
-                            } else {
-                                // LLM returned no domain — set fallback to prevent infinite retry
-                                if let Err(e) = db.update_domain(source_id, "general").await {
-                                    log::warn!("[refinery] reclassify fallback domain failed: {e}");
-                                }
-                            }
-                        }
-                        if let Some(ref quality) = classification.quality {
-                            if let Err(e) = db.update_quality(source_id, quality).await {
-                                log::warn!("[refinery] reclassify quality update failed: {e}");
-                            }
-                        }
-                        reclassified += 1;
-                    }
-                }
-                Err(e) => {
-                    let sid_prefix: String = source_id.chars().take(12).collect();
-                    log::warn!(
-                        "[refinery] reclassification failed for {}: {}",
-                        sid_prefix,
-                        e
-                    );
-                }
-            }
-        }
-        if reclassified > 0 {
-            log::info!("[refinery] reclassified {} memories", reclassified);
-        }
-    }
-    Ok(reclassified)
 }
 
 /// Extract entities from a single memory via LLM. Returns the primary entity_id if one was created/found.
@@ -3393,7 +3283,6 @@ pub async fn trigger_steep_now(
 pub struct SteepResult {
     pub memories_decayed: u64,
     pub recaps_generated: u32,
-    pub imports_reclassified: u32,
     pub distilled: u32,
     pub pending_remaining: u32,
     pub phases: Vec<PhaseResult>,
@@ -3441,7 +3330,6 @@ mod tests {
         assert!(!t.runs_phase("emergence"));
         assert!(!t.runs_phase("community_detection"));
         assert!(!t.runs_phase("decision_logs"));
-        assert!(!t.runs_phase("reclassify"));
         assert!(!t.runs_phase("prune_rejections"));
     }
 
@@ -3457,7 +3345,6 @@ mod tests {
         assert!(!t.runs_phase("refinement_queue"));
         assert!(!t.runs_phase("decay"));
         assert!(!t.runs_phase("promote"));
-        assert!(!t.runs_phase("reclassify"));
         assert!(!t.runs_phase("reweave"));
         assert!(!t.runs_phase("reembed"));
         assert!(!t.runs_phase("entity_extraction"));
@@ -3470,7 +3357,6 @@ mod tests {
         let t = TriggerKind::Daily;
         assert!(t.runs_phase("decay"));
         assert!(t.runs_phase("promote"));
-        assert!(t.runs_phase("reclassify"));
         assert!(t.runs_phase("reweave"));
         assert!(t.runs_phase("reembed"));
         assert!(t.runs_phase("entity_extraction"));
@@ -3734,7 +3620,6 @@ mod tests {
         let expected: &[&str] = &[
             "decay",
             "promote",
-            "reclassify",
             "reweave",
             "reembed",
             "entity_extraction",
@@ -3795,14 +3680,13 @@ mod tests {
 
         let phase_names: Vec<&str> = result.phases.iter().map(|p| p.name.as_str()).collect();
 
-        // All 15 phases must run with Backstop. `kg_rethink` is
+        // All 14 phases must run with Backstop. `kg_rethink` is
         // rate-limited, so on a fresh DB (last_kg_rethink_ts=0) it runs
         // on the first steep.
         let expected: &[&str] = &[
             "decay",
             "promote",
             "recaps",
-            "reclassify",
             "reweave",
             "reembed",
             "entity_extraction",
@@ -4202,7 +4086,7 @@ mod tests {
                 phase.error
             );
         }
-        // Should have at least decay, recaps, reclassify, reweave, reembed, entity_extraction, distillation, refinement_queue, decision_logs
+        // Should have at least decay, recaps, reweave, reembed, entity_extraction, distillation, refinement_queue, decision_logs
         assert!(
             result.phases.len() >= 6,
             "should have at least 6 phases, got {}",
