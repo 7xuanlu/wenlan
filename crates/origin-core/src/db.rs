@@ -4878,7 +4878,7 @@ impl MemoryDB {
         Ok(())
     }
 
-    /// Get memories that need classification (memory_type IS NULL or domain IS NULL).
+    /// Get memories that need classification (memory_type IS NULL).
     /// Returns (source_id, content) pairs grouped by source_id so each memory is
     /// processed exactly once, even when chunked into multiple rows.
     pub async fn get_unclassified_imports(
@@ -4891,7 +4891,7 @@ impl MemoryDB {
                 "SELECT source_id, GROUP_CONCAT(content, ' ') as combined_content
                  FROM memories
                  WHERE source = 'memory'
-                   AND (memory_type IS NULL OR domain IS NULL)
+                   AND memory_type IS NULL
                  GROUP BY source_id
                  ORDER BY MAX(last_modified) DESC
                  LIMIT ?1",
@@ -4917,14 +4917,14 @@ impl MemoryDB {
         Ok(results)
     }
 
-    /// Count memories that still need classification (memory_type or domain is NULL).
+    /// Count memories that still need classification (memory_type IS NULL).
     pub async fn count_unclassified_imports(&self) -> Result<usize, OriginError> {
         let conn = self.conn.lock().await;
         let mut rows = conn
             .query(
                 "SELECT COUNT(DISTINCT source_id) FROM memories
                  WHERE source = 'memory'
-                   AND (memory_type IS NULL OR domain IS NULL)",
+                   AND memory_type IS NULL",
                 libsql::params![],
             )
             .await
@@ -15139,7 +15139,7 @@ impl MemoryDB {
     /// Store a single memory from a bulk chat import. Skips classification,
     /// extraction, and event emission — those happen later via the refinery
     /// steep cycle. Uses `source = 'memory'` and `memory_type = NULL` so the row
-    /// matches the `memory_type IS NULL OR domain IS NULL` filter in `get_unclassified_imports`.
+    /// matches the `memory_type IS NULL` filter in `get_unclassified_imports`.
     pub async fn store_raw_import_memory(
         &self,
         source_id: &str,

@@ -191,8 +191,8 @@ pub async fn handle_chat_export_import(
     // Loop safety: after Phase 1 writes memory_type, the row is no longer
     // returned by get_unclassified_imports. Even when LLM is absent we write
     // memory_type = "fact" so the row exits the unclassified set. A hard cap
-    // of MAX_ITER=3 consecutive non-empty batches without a count reduction
-    // aborts with an error to prevent infinite loops if apply_enrichment fails.
+    // of MAX_STUCK_ITERS consecutive iterations without a count reduction
+    // aborts with an error to cover any case where the row count stops decreasing.
     let db_for_enrich = db.clone();
     let import_id_for_enrich = import_id.clone();
     tokio::spawn(async move {
