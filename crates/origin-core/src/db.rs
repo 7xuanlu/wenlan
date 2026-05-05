@@ -11279,13 +11279,15 @@ impl MemoryDB {
     }
 
     /// Count confirmed narrative-eligible memories.
+    // Must stay in sync with get_memories_for_narrative — see issue:
+    // narrative cache invalidation requires count and fetch over identical type set.
     pub async fn get_narrative_memory_count(&self) -> Result<u64, OriginError> {
         let conn = self.conn.lock().await;
         let mut rows = conn
             .query(
                 "SELECT COUNT(DISTINCT source_id) FROM memories \
                  WHERE source = 'memory' AND confirmed = 1 AND chunk_index = 0 \
-                   AND memory_type IN ('identity', 'preference', 'decision', 'goal', 'lesson', 'gotcha')",
+                   AND memory_type IN ('identity', 'preference', 'goal')",
                 (),
             )
             .await
