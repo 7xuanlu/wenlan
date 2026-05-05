@@ -82,8 +82,9 @@ mod tests {
             MemoryType::Identity,
             MemoryType::Preference,
             MemoryType::Decision,
+            MemoryType::Lesson,
+            MemoryType::Gotcha,
             MemoryType::Fact,
-            MemoryType::Goal,
         ] {
             let s = variant.to_string();
             let parsed: MemoryType = s.parse().unwrap();
@@ -146,7 +147,11 @@ mod tests {
         assert_eq!(stability_tier(Some("preference")), StabilityTier::Protected);
         assert_eq!(stability_tier(Some("fact")), StabilityTier::Standard);
         assert_eq!(stability_tier(Some("decision")), StabilityTier::Standard);
-        assert_eq!(stability_tier(Some("goal")), StabilityTier::Ephemeral);
+        assert_eq!(stability_tier(Some("lesson")), StabilityTier::Standard);
+        assert_eq!(stability_tier(Some("gotcha")), StabilityTier::Standard);
+        // Deprecated: legacy "goal" rows still in DB pre-migration map to
+        // Protected via Identity fold (aspirations = identity).
+        assert_eq!(stability_tier(Some("goal")), StabilityTier::Protected);
         assert_eq!(stability_tier(None), StabilityTier::Ephemeral);
     }
 }
