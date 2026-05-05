@@ -706,7 +706,7 @@ pub async fn handle_distill(
     })))
 }
 
-/// POST /api/distill/{concept_id}
+/// POST /api/distill/{page_id}
 pub async fn handle_redistill(
     State(state): State<Arc<RwLock<ServerState>>>,
     Path(concept_id): Path<String>,
@@ -751,7 +751,7 @@ pub async fn handle_recent_retrievals(
     Ok(Json(events))
 }
 
-/// GET /api/concepts/recent-changes - Recent concept created/revised events.
+/// GET /api/pages/recent-changes - Recent concept created/revised events.
 pub async fn handle_recent_page_changes(
     State(state): State<Arc<RwLock<ServerState>>>,
     axum::extract::Query(q): axum::extract::Query<RecentLimitQuery>,
@@ -769,7 +769,7 @@ pub async fn handle_recent_page_changes(
     Ok(Json(changes))
 }
 
-/// GET /api/concepts/recent — top-N concept activity with badge deltas.
+/// GET /api/pages/recent — top-N concept activity with badge deltas.
 /// `since_ms` scopes badge derivation only; the feed is always top-N by recency.
 pub async fn handle_recent_pages(
     State(state): State<Arc<RwLock<ServerState>>>,
@@ -826,7 +826,7 @@ mod recent_endpoints_tests {
         let app = crate::router::build_router(state);
         let req = Request::builder()
             .method("GET")
-            .uri("/api/concepts/recent-changes?limit=5")
+            .uri("/api/pages/recent-changes?limit=5")
             .body(Body::empty())
             .unwrap();
         let response = app.oneshot(req).await.unwrap();
@@ -853,7 +853,7 @@ mod recent_endpoints_tests {
         let app = crate::router::build_router(state);
         let req = Request::builder()
             .method("GET")
-            .uri("/api/concepts/recent-changes")
+            .uri("/api/pages/recent-changes")
             .body(Body::empty())
             .unwrap();
         let response = app.oneshot(req).await.unwrap();
@@ -866,7 +866,7 @@ mod recent_endpoints_tests {
         let app = crate::router::build_router(state);
         let req = Request::builder()
             .method("GET")
-            .uri("/api/concepts/recent?limit=5")
+            .uri("/api/pages/recent?limit=5")
             .body(Body::empty())
             .unwrap();
         let response = app.oneshot(req).await.unwrap();
@@ -880,7 +880,7 @@ mod recent_endpoints_tests {
         let app = crate::router::build_router(state);
         let req = Request::builder()
             .method("GET")
-            .uri("/api/concepts/recent?limit=5&since_ms=1000")
+            .uri("/api/pages/recent?limit=5&since_ms=1000")
             .body(Body::empty())
             .unwrap();
         let response = app.oneshot(req).await.unwrap();

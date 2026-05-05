@@ -41,10 +41,10 @@ pub fn build_router(state: SharedState) -> Router {
             "/api/memory/unconfirmed",
             get(memory_routes::handle_list_unconfirmed_memories),
         )
-        .route("/api/concepts/recent", get(routes::handle_recent_pages))
+        .route("/api/pages/recent", get(routes::handle_recent_pages))
         .route("/api/steep", post(routes::handle_steep))
         .route("/api/distill", post(routes::handle_distill))
-        .route("/api/distill/{concept_id}", post(routes::handle_redistill))
+        .route("/api/distill/{page_id}", post(routes::handle_redistill))
         .route(
             "/api/eval/distillation",
             get(routes::handle_distillation_eval),
@@ -199,37 +199,37 @@ pub fn build_router(state: SharedState) -> Router {
             "/api/spaces/{name}",
             put(memory_routes::handle_update_space).delete(memory_routes::handle_delete_space),
         )
-        // Concepts
+        // Pages (legacy SQL tables still named "concepts" — see db.rs)
         .route(
-            "/api/concepts",
+            "/api/pages",
             get(memory_routes::handle_list_pages).post(memory_routes::handle_create_page),
         )
         .route(
-            "/api/concepts/search",
+            "/api/pages/search",
             post(memory_routes::handle_search_pages),
         )
         .route(
-            "/api/concepts/export",
+            "/api/pages/export",
             post(memory_routes::handle_export_pages),
         )
         .route(
-            "/api/concepts/recent-changes",
+            "/api/pages/recent-changes",
             get(routes::handle_recent_page_changes),
         )
         .route(
-            "/api/concepts/{id}/export",
+            "/api/pages/{id}/export",
             post(memory_routes::handle_export_page),
         )
         .route(
-            "/api/concepts/{id}",
+            "/api/pages/{id}",
             get(memory_routes::handle_get_page).delete(memory_routes::handle_delete_page),
         )
         .route(
-            "/api/concepts/{id}/sources",
+            "/api/pages/{id}/sources",
             get(memory_routes::handle_get_page_sources),
         )
         .route(
-            "/api/concepts/{id}/archive",
+            "/api/pages/{id}/archive",
             post(memory_routes::handle_archive_page),
         )
         // Rejections
@@ -427,7 +427,7 @@ pub fn build_router(state: SharedState) -> Router {
             post(memory_routes::handle_delete_snapshot),
         )
         .route(
-            "/api/memory/{id}/update-concept",
+            "/api/memory/{id}/update-page",
             post(memory_routes::handle_update_page),
         )
         // Knowledge directory

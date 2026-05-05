@@ -1948,7 +1948,7 @@ pub async fn handle_get_rejections(
     Ok(Json(records))
 }
 
-/// GET /api/concepts
+/// GET /api/pages
 pub async fn handle_list_pages(
     State(state): State<Arc<RwLock<ServerState>>>,
     axum::extract::Query(params): axum::extract::Query<HashMap<String, String>>,
@@ -1973,7 +1973,7 @@ pub async fn handle_list_pages(
     Ok(Json(serde_json::json!({ "concepts": concepts })))
 }
 
-/// GET /api/concepts/:id
+/// GET /api/pages/:id
 pub async fn handle_get_page(
     State(state): State<Arc<RwLock<ServerState>>>,
     Path(id): Path<String>,
@@ -1987,7 +1987,7 @@ pub async fn handle_get_page(
     }
 }
 
-/// GET /api/concepts/{id}/sources
+/// GET /api/pages/{id}/sources
 ///
 /// Returns all source memories linked to a concept via the concept_sources join table,
 /// enriched with memory metadata for display.
@@ -2029,7 +2029,7 @@ pub async fn handle_get_page_sources(
     Ok(Json(result))
 }
 
-/// POST /api/concepts/{id}/archive
+/// POST /api/pages/{id}/archive
 pub async fn handle_archive_page(
     State(state): State<Arc<RwLock<ServerState>>>,
     Path(id): Path<String>,
@@ -2042,7 +2042,7 @@ pub async fn handle_archive_page(
     Ok(Json(serde_json::json!({"status": "archived"})))
 }
 
-/// DELETE /api/concepts/{id}
+/// DELETE /api/pages/{id}
 pub async fn handle_delete_page(
     State(state): State<Arc<RwLock<ServerState>>>,
     Path(id): Path<String>,
@@ -2055,7 +2055,7 @@ pub async fn handle_delete_page(
     Ok(Json(serde_json::json!({"status": "deleted"})))
 }
 
-/// POST /api/concepts/search
+/// POST /api/pages/search
 pub async fn handle_search_pages(
     State(state): State<Arc<RwLock<ServerState>>>,
     Json(req): Json<SearchPagesRequest>,
@@ -2069,7 +2069,7 @@ pub async fn handle_search_pages(
     Ok(Json(serde_json::json!({ "concepts": results })))
 }
 
-/// POST /api/concepts
+/// POST /api/pages
 pub async fn handle_create_page(
     State(state): State<Arc<RwLock<ServerState>>>,
     Json(req): Json<CreateConceptRequest>,
@@ -2120,7 +2120,7 @@ pub struct ExportConceptsRequest {
     pub vault_path: Option<String>,
 }
 
-/// POST /api/concepts/export
+/// POST /api/pages/export
 pub async fn handle_export_pages(
     State(state): State<Arc<RwLock<ServerState>>>,
     Json(req): Json<ExportConceptsRequest>,
@@ -2134,7 +2134,7 @@ pub async fn handle_export_pages(
     };
     let vault_path = req
         .vault_path
-        .unwrap_or_else(|| "~/obsidian-vault/Origin/concepts".to_string());
+        .unwrap_or_else(|| "~/obsidian-vault/Origin/pages".to_string());
     let expanded = if let Some(rest) = vault_path.strip_prefix("~/") {
         let home = std::env::var("HOME").unwrap_or_default();
         format!("{}/{}", home, rest)
@@ -2150,7 +2150,7 @@ pub async fn handle_export_pages(
     Ok(Json(stats))
 }
 
-/// POST /api/concepts/{id}/export
+/// POST /api/pages/{id}/export
 pub async fn handle_export_page(
     State(state): State<Arc<RwLock<ServerState>>>,
     Path(concept_id): Path<String>,

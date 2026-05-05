@@ -3105,6 +3105,11 @@ impl MemoryDB {
 
             if version < 26 {
                 let conn = self.conn.lock().await;
+                // Legacy table name. The canonical Rust type is `Page` (Phase 0c.1
+                // taxonomy refactor) but we keep the SQL identifiers as `concepts` /
+                // `concept_sources` / `concept_id` to avoid a complex FTS+index+FK
+                // rename migration. Bundle the SQL rename with a future schema-evolution
+                // migration when schema work is needed anyway.
                 conn.execute_batch("
                     CREATE TABLE IF NOT EXISTS concepts (
                         id TEXT PRIMARY KEY,

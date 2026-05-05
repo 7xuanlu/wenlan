@@ -2596,7 +2596,7 @@ pub async fn get_concept(
     // rather than the previous silent `Err(_) => Ok(None)` which hid
     // wrapper/deserialization bugs behind a "not found" UI.
     match client
-        .get_json::<GetConceptWire>(&format!("/api/concepts/{}", id))
+        .get_json::<GetConceptWire>(&format!("/api/pages/{}", id))
         .await
     {
         Ok(wrapped) => Ok(wrapped.concept),
@@ -2631,7 +2631,7 @@ pub async fn archive_concept(state: tauri::State<'_, State>, id: String) -> Resu
     let s = state.read().await;
     let _resp: serde_json::Value = s
         .client
-        .post_empty(&format!("/api/concepts/{}/archive", id))
+        .post_empty(&format!("/api/pages/{}/archive", id))
         .await?;
     Ok(())
 }
@@ -2639,10 +2639,7 @@ pub async fn archive_concept(state: tauri::State<'_, State>, id: String) -> Resu
 #[tauri::command]
 pub async fn delete_concept(state: tauri::State<'_, State>, id: String) -> Result<(), String> {
     let s = state.read().await;
-    let _resp: serde_json::Value = s
-        .client
-        .delete_path(&format!("/api/concepts/{}", id))
-        .await?;
+    let _resp: serde_json::Value = s.client.delete_path(&format!("/api/pages/{}", id)).await?;
     Ok(())
 }
 
@@ -2678,9 +2675,9 @@ pub async fn list_concepts(
         params.push(format!("offset={}", o));
     }
     let path = if params.is_empty() {
-        "/api/concepts".to_string()
+        "/api/pages".to_string()
     } else {
-        format!("/api/concepts?{}", params.join("&"))
+        format!("/api/pages?{}", params.join("&"))
     };
     let resp: ListConceptsWire = client.get_json(&path).await?;
     Ok(resp.concepts)
@@ -2694,7 +2691,7 @@ pub async fn search_concepts(
 ) -> Result<Vec<crate::pages::Page>, String> {
     let client = state.read().await.client.clone();
     let req = requests::SearchPagesRequest { query, limit };
-    let resp: ListConceptsWire = client.post_json("/api/concepts/search", &req).await?;
+    let resp: ListConceptsWire = client.post_json("/api/pages/search", &req).await?;
     Ok(resp.concepts)
 }
 
@@ -2715,7 +2712,7 @@ pub async fn export_concepts_to_obsidian(
     // Fetch concepts from daemon, then export locally
     let concepts: Vec<crate::pages::Page> = {
         let client = state.read().await.client.clone();
-        let resp: ListConceptsWire = client.get_json("/api/concepts").await?;
+        let resp: ListConceptsWire = client.get_json("/api/pages").await?;
         resp.concepts
     };
     let expanded = if let Some(rest) = vault_path.strip_prefix("~/") {
@@ -2737,7 +2734,7 @@ pub async fn export_concept_to_obsidian(
     vault_path: String,
 ) -> Result<String, String> {
     let client = state.read().await.client.clone();
-    let path = format!("/api/concepts/{}/export", concept_id);
+    let path = format!("/api/pages/{}/export", concept_id);
     let req = requests::ExportPageRequest { vault_path };
     let resp: responses::ExportPageResponse = client.post_json(&path, &req).await?;
     Ok(resp.path)

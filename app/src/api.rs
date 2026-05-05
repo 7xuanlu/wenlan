@@ -234,7 +234,7 @@ impl OriginClient {
         &self,
         limit: i64,
     ) -> Result<Vec<origin_types::PageChange>, String> {
-        let path = format!("/api/concepts/recent-changes?limit={}", limit);
+        let path = format!("/api/pages/recent-changes?limit={}", limit);
         self.get_json(&path).await
     }
 
@@ -264,8 +264,8 @@ impl OriginClient {
         since_ms: Option<i64>,
     ) -> Result<Vec<origin_types::RecentActivityItem>, String> {
         let path = match since_ms {
-            Some(ms) => format!("/api/concepts/recent?limit={}&since_ms={}", limit, ms),
-            None => format!("/api/concepts/recent?limit={}", limit),
+            Some(ms) => format!("/api/pages/recent?limit={}&since_ms={}", limit, ms),
+            None => format!("/api/pages/recent?limit={}", limit),
         };
         self.get_json(&path).await
     }
@@ -289,7 +289,7 @@ impl OriginClient {
         &self,
         concept_id: &str,
     ) -> Result<Vec<origin_types::PageSourceWithMemory>, String> {
-        let path = format!("/api/concepts/{}/sources", concept_id);
+        let path = format!("/api/pages/{}/sources", concept_id);
         self.get_json(&path).await
     }
 }
