@@ -30,7 +30,6 @@ pub use origin_core::activity;
 pub use origin_core::briefing;
 pub use origin_core::chunker;
 pub use origin_core::classify;
-pub use origin_core::concepts;
 pub use origin_core::config;
 pub use origin_core::context_packager;
 pub use origin_core::contradiction;
@@ -47,6 +46,7 @@ pub use origin_core::llm_provider;
 pub use origin_core::memory_schema;
 pub use origin_core::merge;
 pub use origin_core::narrative;
+pub use origin_core::pages;
 pub use origin_core::post_ingest;
 pub use origin_core::privacy;
 pub use origin_core::prompts;
@@ -1078,28 +1078,28 @@ pub fn run() {
             search::correct_memory_cmd,
             // Quality gate commands
             search::get_rejection_log,
-            // Concept commands
-            search::get_concept,
-            search::get_concept_sources,
-            search::update_concept,
-            search::archive_concept,
-            search::delete_concept,
-            search::list_concepts,
-            search::search_concepts,
+            // Page commands
+            search::get_page,
+            search::get_page_sources,
+            search::update_page,
+            search::archive_page,
+            search::delete_page,
+            search::list_pages,
+            search::search_pages,
             // Home delta feed commands
             search::list_recent_retrievals,
             search::list_recent_changes,
             search::list_recent_memories,
             search::list_unconfirmed_memories,
-            search::list_recent_concepts,
+            search::list_recent_pages,
             search::list_recent_relations,
-            search::export_concepts_to_obsidian,
-            search::export_concept_to_obsidian,
+            search::export_pages_to_obsidian,
+            search::export_page_to_obsidian,
             search::get_knowledge_path,
             search::count_knowledge_files,
             // Distillation trigger commands
             search::trigger_distillation,
-            search::redistill_concept,
+            search::redistill_page,
             // Ambient overlay commands
             search::dismiss_ambient_card,
             search::trigger_ambient,

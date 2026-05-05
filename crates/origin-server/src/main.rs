@@ -297,7 +297,7 @@ async fn run_daemon() -> anyhow::Result<()> {
                 .unwrap_or(false);
 
         if !already_attempted && !has_md_files {
-            match db_arc.list_concepts("active", 10_000, 0).await {
+            match db_arc.list_pages("active", 10_000, 0).await {
                 Ok(concepts) if !concepts.is_empty() => {
                     tracing::info!(
                         "[backfill] knowledge dir empty; writing {} concepts to {}",
@@ -345,7 +345,7 @@ async fn run_daemon() -> anyhow::Result<()> {
                     // exist should retry.
                 }
                 Err(e) => {
-                    tracing::warn!("[backfill] list_concepts failed: {}", e);
+                    tracing::warn!("[backfill] list_pages failed: {}", e);
                 }
             }
         }

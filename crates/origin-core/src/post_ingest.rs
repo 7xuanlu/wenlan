@@ -253,7 +253,7 @@ pub async fn run_post_ingest_enrichment(
     }
 
     // 3b. Concept contradiction check — flag related concepts for re-distill if new memory contradicts
-    match check_concept_contradiction(db, source_id, content).await {
+    match check_page_contradiction(db, source_id, content).await {
         Ok(n) if n > 0 => {
             log::info!("[post_ingest] {source_id}: flagged {n} concept(s) for re-distill");
             db.record_enrichment_step(source_id, "concept_contradiction", "ok", None)
@@ -347,7 +347,7 @@ pub async fn run_post_ingest_enrichment(
     // API for standalone core consumers. See 2026-04-12-event-driven-steep-triggers.
 
     // 7. Concept growth — update matching concept with new memory
-    match grow_concept(
+    match grow_page(
         db,
         source_id,
         content,
@@ -364,11 +364,11 @@ pub async fn run_post_ingest_enrichment(
                 .await
                 .ok();
             if let Some(kp) = knowledge_path {
-                write_grown_concept(db, source_id, kp).await;
+                write_grown_page(db, source_id, kp).await;
             }
         }
         Ok(false) => {
-            // grow_concept returns false when LLM is unavailable — treat as skipped
+            // grow_page returns false when LLM is unavailable — treat as skipped
             if llm.map(|l| l.is_available()).unwrap_or(false) {
                 db.record_enrichment_step(source_id, "concept_growth", "ok", None)
                     .await
@@ -523,7 +523,7 @@ pub(crate) async fn auto_link_entity(
 /// Uses FTS5 search to find related concepts, then checks for negation signals
 /// with topic overlap. Flags contradicting concepts for re-distill by adding the
 /// new memory to their source list.
-pub(crate) async fn check_concept_contradiction(
+pub(crate) async fn check_page_contradiction(
     db: &MemoryDB,
     source_id: &str,
     content: &str,
@@ -534,7 +534,7 @@ pub(crate) async fn check_concept_contradiction(
         .take(15)
         .collect::<Vec<_>>()
         .join(" ");
-    let concepts = db.search_concepts(&query, 3).await.unwrap_or_default();
+    let concepts = db.search_pages(&query, 3).await.unwrap_or_default();
     if concepts.is_empty() {
         return Ok(0);
     }
@@ -578,7 +578,7 @@ pub(crate) async fn check_concept_contradiction(
             let refs: Vec<&str> = new_sources.iter().map(|s| s.as_str()).collect();
             // Update sources without changing content — re-distill will recompile
             let _ = db
-                .update_concept_content(&concept.id, &concept.content, &refs, "concept_growth")
+                .update_page_content(&concept.id, &concept.content, &refs, "concept_growth")
                 .await;
             log::info!("[post_ingest] concept '{}' flagged for re-distill due to potential contradiction from {}",
                 concept.title, source_id);
@@ -646,7 +646,7 @@ pub(crate) async fn enrich_title(
 }
 
 /// Check if new memory matches an existing concept; if so, update it.
-pub(crate) async fn grow_concept(
+pub(crate) async fn grow_page(
     db: &MemoryDB,
     source_id: &str,
     content: &str,
@@ -668,7 +668,7 @@ pub(crate) async fn grow_concept(
     };
 
     let concept = match db
-        .find_matching_concept(entity_id, mem_embedding, growth_threshold)
+        .find_matching_page(entity_id, mem_embedding, growth_threshold)
         .await?
     {
         Some(c) => c,
@@ -706,7 +706,7 @@ pub(crate) async fn grow_concept(
         source_ids.push(source_id.to_string());
     }
     let source_refs: Vec<&str> = source_ids.iter().map(|s| s.as_str()).collect();
-    db.update_concept_content(&concept.id, updated, &source_refs, "concept_growth")
+    db.update_page_content(&concept.id, updated, &source_refs, "concept_growth")
         .await?;
 
     // Log activity: attribute to the agent who authored the triggering memory.
@@ -728,8 +728,8 @@ pub(crate) async fn grow_concept(
     Ok(true)
 }
 
-async fn write_grown_concept(db: &MemoryDB, source_id: &str, knowledge_path: &std::path::Path) {
-    match db.find_concept_by_source_memory(source_id).await {
+async fn write_grown_page(db: &MemoryDB, source_id: &str, knowledge_path: &std::path::Path) {
+    match db.find_page_by_source_memory(source_id).await {
         Ok(Some(concept)) => {
             let writer =
                 crate::export::knowledge::KnowledgeWriter::new(knowledge_path.to_path_buf());

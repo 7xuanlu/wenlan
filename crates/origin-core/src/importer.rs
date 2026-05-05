@@ -67,8 +67,9 @@ const VALID_TYPES: &[&str] = &[
     "identity",
     "preference",
     "decision",
+    "lesson",
+    "gotcha",
     "fact",
-    "goal",
     "correction",
     "custom",
     "recap", // legacy — accepted but stored as "fact"

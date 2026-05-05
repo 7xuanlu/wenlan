@@ -19,7 +19,9 @@ pub enum MilestoneId {
     IntelligenceReady,
     FirstMemory,
     FirstRecall,
-    FirstConcept,
+    /// Wire format preserved as "first-concept" until 0c.2/0c.3 DB/API rename pass.
+    #[serde(rename = "first-concept")]
+    FirstPage,
     GraphAlive,
     SecondAgent,
 }
@@ -30,7 +32,7 @@ impl MilestoneId {
             MilestoneId::IntelligenceReady => "intelligence-ready",
             MilestoneId::FirstMemory => "first-memory",
             MilestoneId::FirstRecall => "first-recall",
-            MilestoneId::FirstConcept => "first-concept",
+            MilestoneId::FirstPage => "first-concept",
             MilestoneId::GraphAlive => "graph-alive",
             MilestoneId::SecondAgent => "second-agent",
         }
@@ -44,7 +46,7 @@ impl FromStr for MilestoneId {
             "intelligence-ready" => Ok(MilestoneId::IntelligenceReady),
             "first-memory" => Ok(MilestoneId::FirstMemory),
             "first-recall" => Ok(MilestoneId::FirstRecall),
-            "first-concept" => Ok(MilestoneId::FirstConcept),
+            "first-concept" => Ok(MilestoneId::FirstPage),
             "graph-alive" => Ok(MilestoneId::GraphAlive),
             "second-agent" => Ok(MilestoneId::SecondAgent),
             _ => Err(format!("unknown milestone id: {}", s)),
@@ -142,14 +144,14 @@ impl<'a> MilestoneEvaluator<'a> {
     /// (≥1 active concept exists) and/or `graph-alive` (≥5 entities AND
     /// ≥1 relation). Both checks are independent and idempotent.
     pub async fn check_after_refinery_pass(&self) -> Result<(), OriginError> {
-        let active_count = self.db.count_active_concepts().await?;
+        let active_count = self.db.count_active_pages().await?;
         if active_count >= 1 {
-            if let Some(first) = self.db.oldest_active_concept().await? {
+            if let Some(first) = self.db.oldest_active_page().await? {
                 let payload = serde_json::json!({
-                    "concept_id": first.id,
+                    "page_id": first.id,
                     "title": first.title,
                 });
-                self.fire(MilestoneId::FirstConcept, Some(payload)).await?;
+                self.fire(MilestoneId::FirstPage, Some(payload)).await?;
             }
         }
 
@@ -221,7 +223,7 @@ mod tests {
         MilestoneId::IntelligenceReady,
         MilestoneId::FirstMemory,
         MilestoneId::FirstRecall,
-        MilestoneId::FirstConcept,
+        MilestoneId::FirstPage,
         MilestoneId::GraphAlive,
         MilestoneId::SecondAgent,
     ];

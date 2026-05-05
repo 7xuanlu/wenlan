@@ -18,9 +18,9 @@ pub use entities::{
     Relation, RelationWithEntity,
 };
 pub use memory::{
-    ActivityBadge, ActivityKind, AgentActivityRow, AgentConnection, ConceptChange,
-    ConceptChangeKind, DomainInfo, EnrichmentStatusResponse, EnrichmentStepStatus, HomeStats,
-    IndexedFileInfo, MemoryItem, MemoryStats, MemoryVersionItem, Profile, RecentActivityItem,
+    ActivityBadge, ActivityKind, AgentActivityRow, AgentConnection, DomainInfo,
+    EnrichmentStatusResponse, EnrichmentStepStatus, HomeStats, IndexedFileInfo, MemoryItem,
+    MemoryStats, MemoryVersionItem, PageChange, PageChangeKind, Profile, RecentActivityItem,
     RejectionRecord, RetrievalEvent, SearchResult, SessionSnapshot, SnapshotCapture,
     SnapshotCaptureWithContent, Space, TopMemory, TypeBreakdown,
 };
@@ -44,10 +44,11 @@ pub struct ChangelogEntry {
     pub incoming_source_id: Option<String>,
 }
 
-/// A link between a concept and one of its source memories (concept_sources join table).
+/// A link between a page and one of its source memories.
+/// (Backed by the `concept_sources` SQL table; rename deferred for back-compat.)
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ConceptSource {
-    pub concept_id: String,
+pub struct PageSource {
+    pub page_id: String,
     pub memory_source_id: String,
     /// Unix timestamp of when this link was created.
     pub linked_at: i64,
@@ -55,10 +56,10 @@ pub struct ConceptSource {
     pub link_reason: Option<String>,
 }
 
-/// Concept source enriched with the memory's metadata (for the API response).
+/// Page source enriched with the memory's metadata (for the API response).
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ConceptSourceWithMemory {
-    pub source: ConceptSource,
+pub struct PageSourceWithMemory {
+    pub source: PageSource,
     pub memory: Option<crate::memory::MemoryItem>,
 }
 
@@ -82,8 +83,9 @@ mod tests {
             MemoryType::Identity,
             MemoryType::Preference,
             MemoryType::Decision,
+            MemoryType::Lesson,
+            MemoryType::Gotcha,
             MemoryType::Fact,
-            MemoryType::Goal,
         ] {
             let s = variant.to_string();
             let parsed: MemoryType = s.parse().unwrap();
@@ -146,7 +148,11 @@ mod tests {
         assert_eq!(stability_tier(Some("preference")), StabilityTier::Protected);
         assert_eq!(stability_tier(Some("fact")), StabilityTier::Standard);
         assert_eq!(stability_tier(Some("decision")), StabilityTier::Standard);
-        assert_eq!(stability_tier(Some("goal")), StabilityTier::Ephemeral);
+        assert_eq!(stability_tier(Some("lesson")), StabilityTier::Standard);
+        assert_eq!(stability_tier(Some("gotcha")), StabilityTier::Standard);
+        // Deprecated: legacy "goal" rows still in DB pre-migration map to
+        // Protected via Identity fold (aspirations = identity).
+        assert_eq!(stability_tier(Some("goal")), StabilityTier::Protected);
         assert_eq!(stability_tier(None), StabilityTier::Ephemeral);
     }
 }
@@ -161,14 +167,14 @@ mod retrieval_event_tests {
             timestamp_ms: 1_700_000_000_000,
             agent_name: "claude-code".into(),
             query: Some("origin positioning".into()),
-            concept_titles: vec!["Origin positioning".into(), "Daemon architecture".into()],
-            concept_ids: vec![],
+            page_titles: vec!["Origin positioning".into(), "Daemon architecture".into()],
+            page_ids: vec![],
             memory_snippets: vec![],
         };
         let s = serde_json::to_string(&e).unwrap();
         let back: RetrievalEvent = serde_json::from_str(&s).unwrap();
         assert_eq!(back.agent_name, "claude-code");
-        assert_eq!(back.concept_titles.len(), 2);
+        assert_eq!(back.page_titles.len(), 2);
         assert_eq!(back.query.as_deref(), Some("origin positioning"));
     }
 
@@ -178,8 +184,8 @@ mod retrieval_event_tests {
             timestamp_ms: 1_700_000_000_000,
             agent_name: "claude-code".into(),
             query: None,
-            concept_titles: vec![],
-            concept_ids: vec![],
+            page_titles: vec![],
+            page_ids: vec![],
             memory_snippets: vec![],
         };
         let s = serde_json::to_string(&e).unwrap();
@@ -189,15 +195,15 @@ mod retrieval_event_tests {
         );
         let back: RetrievalEvent = serde_json::from_str(&s).unwrap();
         assert_eq!(back.query, None);
-        assert!(back.concept_titles.is_empty());
+        assert!(back.page_titles.is_empty());
     }
 
     #[test]
-    fn concept_change_roundtrips() {
-        let c = ConceptChange {
-            concept_id: "concept_abc".into(),
-            title: "Wiki-style prose concepts".into(),
-            change_kind: ConceptChangeKind::Revised,
+    fn page_change_roundtrips() {
+        let c = PageChange {
+            page_id: "page_abc".into(),
+            title: "Wiki-style prose pages".into(),
+            change_kind: PageChangeKind::Revised,
             changed_at_ms: 1_700_000_000_000,
         };
         let s = serde_json::to_string(&c).unwrap();
@@ -205,7 +211,7 @@ mod retrieval_event_tests {
             s.contains("\"change_kind\":\"revised\""),
             "expected snake_case change_kind on the wire, got: {s}",
         );
-        let back: ConceptChange = serde_json::from_str(&s).unwrap();
-        assert_eq!(back.change_kind, ConceptChangeKind::Revised);
+        let back: PageChange = serde_json::from_str(&s).unwrap();
+        assert_eq!(back.change_kind, PageChangeKind::Revised);
     }
 }

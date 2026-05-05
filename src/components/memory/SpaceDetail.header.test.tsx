@@ -105,7 +105,7 @@ describe("SpaceDetail context header", () => {
         spaceName="Origin"
         onBack={() => {}}
         onSelectMemory={() => {}}
-        onSelectConcept={() => {}}
+        onSelectPage={() => {}}
         onEntityClick={() => {}}
       />,
     );
@@ -122,7 +122,7 @@ describe("SpaceDetail context header", () => {
         spaceName="Origin"
         onBack={() => {}}
         onSelectMemory={() => {}}
-        onSelectConcept={() => {}}
+        onSelectPage={() => {}}
         onEntityClick={() => {}}
       />,
     );
@@ -139,7 +139,7 @@ describe("SpaceDetail context header", () => {
         spaceName="Origin"
         onBack={() => {}}
         onSelectMemory={() => {}}
-        onSelectConcept={() => {}}
+        onSelectPage={() => {}}
         onEntityClick={() => {}}
       />,
     );
@@ -155,7 +155,7 @@ describe("SpaceDetail context header", () => {
         spaceName="Origin"
         onBack={() => {}}
         onSelectMemory={() => {}}
-        onSelectConcept={() => {}}
+        onSelectPage={() => {}}
         onEntityClick={() => {}}
       />,
     );

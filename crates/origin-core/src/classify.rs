@@ -19,8 +19,15 @@ use llama_cpp_2::sampling::LlamaSampler;
 use std::num::NonZeroU32;
 use std::time::Instant;
 
-/// Valid memory types for classification (5 canonical types).
-const VALID_MEMORY_TYPES: &[&str] = &["identity", "preference", "fact", "decision", "goal"];
+/// Valid memory types for classification (6 canonical types).
+const VALID_MEMORY_TYPES: &[&str] = &[
+    "identity",
+    "preference",
+    "decision",
+    "lesson",
+    "gotcha",
+    "fact",
+];
 
 /// Result of classifying a single memory.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -105,12 +112,14 @@ pub fn parse_classification_response(
 }
 
 /// Parse LLM output for profile sub-classification. Fallback: "identity" (Protected tier).
+/// Profile alias resolves to identity | preference (Goal deprecated -> Identity).
 pub fn parse_profile_subtype(raw: &str) -> &'static str {
     let first = raw.split_whitespace().next().unwrap_or("").to_lowercase();
     match first.as_str() {
         "identity" => "identity",
         "preference" => "preference",
-        "goal" => "goal",
+        // Deprecated: legacy LLM output still says "goal" -> fold to identity.
+        "goal" => "identity",
         _ => "identity", // safest default -- Protected tier
     }
 }
@@ -541,16 +550,17 @@ mod tests {
             parse_profile_subtype("preference\nsome extra"),
             "preference"
         );
-        assert_eq!(parse_profile_subtype("GOAL"), "goal");
+        // Deprecated: "goal" folds to identity (post-taxonomy refactor).
+        assert_eq!(parse_profile_subtype("GOAL"), "identity");
         assert_eq!(parse_profile_subtype("bogus"), "identity"); // fallback
         assert_eq!(parse_profile_subtype(""), "identity"); // fallback
     }
 
     #[test]
     fn test_classify_prompt_contains_all_types() {
-        // Verify the classify prompt would include all valid types
+        // Verify the classify prompt would include all valid types (6 canonical).
         let all = origin_types::MemoryType::all_values();
-        let prompt_types = "identity, preference, decision, fact, goal";
+        let prompt_types = "identity, preference, decision, lesson, gotcha, fact";
         for val in all {
             assert!(
                 prompt_types.contains(val),

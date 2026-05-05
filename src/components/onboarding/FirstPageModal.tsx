@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { useEffect, useRef } from "react";
 
-interface Concept {
+interface Page {
   id: string;
   title: string;
   summary?: string | null;
@@ -9,8 +9,8 @@ interface Concept {
 }
 
 interface Props {
-  concept: Concept;
-  onOpen: (conceptId: string) => void;
+  concept: Page;
+  onOpen: (pageId: string) => void;
   onDismiss: () => void;
 }
 
@@ -18,7 +18,7 @@ interface Props {
 const FOCUSABLE_SELECTOR =
   'a[href], button:not([disabled]), textarea:not([disabled]), input:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])';
 
-export function FirstConceptModal({ concept, onOpen, onDismiss }: Props) {
+export function FirstPageModal({ concept, onOpen, onDismiss }: Props) {
   const dialogRef = useRef<HTMLDivElement | null>(null);
 
   // Focus trap: on mount focus the first focusable element inside the dialog,

@@ -1601,11 +1601,11 @@ pub async fn run_title_enrichment_for_eval(
 
 /// On-device enrichment via production code paths. Mirrors production exactly:
 /// `refinery::extract_entities_from_memories` → `post_ingest::enrich_title` per memory →
-/// `refinery::distill_concepts`. Free but slow (Qwen3-4B serial ≈ several hours at LME scale).
+/// `refinery::distill_pages`. Free but slow (Qwen3-4B serial ≈ several hours at LME scale).
 ///
 /// Concurrency: entity + title phases dispatch up to `EVAL_ENRICHMENT_CONCURRENCY` parallel LLM
 /// calls (default 1 = serial). Distillation stays serial due to cluster ordering dependencies:
-/// `distill_concepts` builds clusters by scanning enrichment state written by prior phases, and
+/// `distill_pages` builds clusters by scanning enrichment state written by prior phases, and
 /// splitting it would break the FK ordering assumptions in `find_distillation_clusters`.
 ///
 /// Batching: when `EVAL_ENRICHMENT_BATCH_SIZE > 1`, entity extraction uses
@@ -1616,7 +1616,7 @@ pub async fn run_title_enrichment_for_eval(
 ///
 /// For staged evals (e.g. `pipeline.rs` Flat/Enriched/Distilled), call the three sub-steps
 /// independently — `run_entity_extraction_for_eval`, `run_title_enrichment_for_eval`,
-/// `refinery::distill_concepts` — so each stage can be measured in isolation.
+/// `refinery::distill_pages` — so each stage can be measured in isolation.
 pub async fn enrich_db_for_eval_local(
     db: &MemoryDB,
     llm: &Arc<dyn crate::llm_provider::LlmProvider>,
@@ -1648,8 +1648,7 @@ pub async fn enrich_db_for_eval_local(
 
     let prompts = PromptRegistry::load(&PromptRegistry::override_dir());
     let tuning = DistillationConfig::default();
-    let concepts =
-        crate::refinery::distill_concepts(db, Some(llm), &prompts, &tuning, None).await?;
+    let concepts = crate::refinery::distill_pages(db, Some(llm), &prompts, &tuning, None).await?;
     eprintln!("    [distill_local] {} concepts", concepts);
 
     Ok((entities, titles, concepts))
@@ -1730,7 +1729,7 @@ pub async fn run_title_enrichment_batch_api(
 
 /// Batch concept distillation via Anthropic Batch API.
 ///
-/// Replaces production `distill_concepts` (which uses sequential on-device LLM)
+/// Replaces production `distill_pages` (which uses sequential on-device LLM)
 /// with a batch API approach. Same DB queries and concept storage, different
 /// LLM execution model.
 ///
@@ -1789,7 +1788,7 @@ pub async fn run_concept_distillation_batch_api(
 
         // Skip if concept with similar sources exists (Jaccard > 0.8)
         let overlap = db
-            .max_concept_overlap(&cluster.source_ids)
+            .max_page_overlap(&cluster.source_ids)
             .await
             .unwrap_or(0.0);
         if overlap > 0.8 {
@@ -1954,9 +1953,9 @@ pub async fn run_concept_distillation_batch_api(
 
         let source_refs: Vec<&str> = meta.source_ids.iter().map(|s| s.as_str()).collect();
         let now = chrono::Utc::now().to_rfc3339();
-        let concept_id = crate::concepts::Concept::new_id();
+        let concept_id = crate::pages::Page::new_id();
 
-        db.insert_concept(
+        db.insert_page(
             &concept_id,
             &title,
             summary.as_deref(),

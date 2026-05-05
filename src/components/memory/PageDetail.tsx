@@ -2,24 +2,24 @@
 import { useState, useCallback, useMemo, useRef, useEffect } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
-  getConcept,
-  listConcepts,
-  updateConcept,
-  deleteConcept,
+  getPage,
+  listPages,
+  updatePage,
+  deletePage,
   clipboardWrite,
-  exportConceptToObsidian,
+  exportPageToObsidian,
   listRegisteredSources,
-  getConceptSources,
+  getPageSources,
   type MemoryItem,
-  type Concept,
+  type Page,
 } from "../../lib/tauri";
 import ContentRenderer from "./ContentRenderer";
 
-interface ConceptDetailProps {
-  conceptId: string;
+interface PageDetailProps {
+  pageId: string;
   onBack: () => void;
   onMemoryClick: (sourceId: string) => void;
-  onConceptClick?: (conceptId: string) => void;
+  onPageClick?: (pageId: string) => void;
 }
 
 function relativeTimeFromISO(iso: string): string {
@@ -46,10 +46,10 @@ function parseRelatedConcepts(content: string): Array<{ title: string }> {
   return links;
 }
 
-/** Build a map of lowercase title → concept id for resolved wikilinks */
-function buildConceptLookup(concepts: Concept[]): Map<string, string> {
+/** Build a map of lowercase title → page id for resolved wikilinks */
+function buildPageLookup(pages: Page[]): Map<string, string> {
   const map = new Map<string, string>();
-  for (const c of concepts) {
+  for (const c of pages) {
     map.set(c.title.toLowerCase(), c.id);
   }
   return map;
@@ -97,7 +97,7 @@ function relativeMs(ms: number): string {
   return `${Math.floor(delta / 86_400_000)}d ago`;
 }
 
-export default function ConceptDetail({ conceptId, onBack, onMemoryClick, onConceptClick }: ConceptDetailProps) {
+export default function PageDetail({ pageId, onBack, onMemoryClick, onPageClick }: PageDetailProps) {
   const queryClient = useQueryClient();
   const [copied, setCopied] = useState(false);
   const [exported, setExported] = useState(false);
@@ -106,18 +106,18 @@ export default function ConceptDetail({ conceptId, onBack, onMemoryClick, onConc
   const [exportMenuOpen, setExportMenuOpen] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
-  const { data: concept, isLoading } = useQuery({
-    queryKey: ["concept", conceptId],
-    queryFn: () => getConcept(conceptId),
+  const { data: page, isLoading } = useQuery({
+    queryKey: ["page", pageId],
+    queryFn: () => getPage(pageId),
   });
 
-  const { data: allConcepts = [] } = useQuery({
-    queryKey: ["concepts-for-links"],
-    queryFn: () => listConcepts("active"),
+  const { data: allPages = [] } = useQuery({
+    queryKey: ["pages-for-links"],
+    queryFn: () => listPages("active"),
     staleTime: 30000,
   });
 
-  const conceptLookup = buildConceptLookup(allConcepts);
+  const pageLookup = buildPageLookup(allPages);
 
   const { data: registeredSources = [] } = useQuery({
     queryKey: ["registeredSources"],
@@ -130,15 +130,15 @@ export default function ConceptDetail({ conceptId, onBack, onMemoryClick, onConc
     [registeredSources],
   );
 
-  const { data: conceptSources } = useQuery({
-    queryKey: ["concept-sources", conceptId],
-    queryFn: () => getConceptSources(conceptId),
-    enabled: !!conceptId,
+  const { data: pageSources } = useQuery({
+    queryKey: ["page-sources", pageId],
+    queryFn: () => getPageSources(pageId),
+    enabled: !!pageId,
   });
 
   // Extract MemoryItems from the join table result.
   // Sort: versioned (updated) memories first, then by last_modified descending.
-  const sourceMemories: MemoryItem[] | undefined = conceptSources
+  const sourceMemories: MemoryItem[] | undefined = pageSources
     ?.filter((cs) => cs.memory !== null)
     .map((cs) => cs.memory as MemoryItem)
     .sort((a, b) => {
@@ -149,51 +149,51 @@ export default function ConceptDetail({ conceptId, onBack, onMemoryClick, onConc
     });
 
   const updateMutation = useMutation({
-    mutationFn: (content: string) => updateConcept(conceptId, content),
+    mutationFn: (content: string) => updatePage(pageId, content),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["concept", conceptId] });
-      queryClient.invalidateQueries({ queryKey: ["concepts"] });
+      queryClient.invalidateQueries({ queryKey: ["page", pageId] });
+      queryClient.invalidateQueries({ queryKey: ["pages"] });
       setEditing(false);
     },
   });
 
   const deleteMutation = useMutation({
-    mutationFn: () => deleteConcept(conceptId),
+    mutationFn: () => deletePage(pageId),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["concepts"] });
+      queryClient.invalidateQueries({ queryKey: ["pages"] });
       onBack();
     },
   });
 
   const copyAsContext = useCallback(async () => {
-    if (!concept) return;
-    const domain = concept.domain ? `**Domain:** ${concept.domain}` : "";
-    const version = `**Version:** ${concept.version}`;
-    const compiled = `**Last compiled:** ${concept.last_compiled}`;
+    if (!page) return;
+    const domain = page.domain ? `**Domain:** ${page.domain}` : "";
+    const version = `**Version:** ${page.version}`;
+    const compiled = `**Last compiled:** ${page.last_compiled}`;
     const meta = [domain, version, compiled].filter(Boolean).join("\n");
     const text = [
-      `## ${concept.title}`,
+      `## ${page.title}`,
       meta,
       "",
-      concept.content,
+      page.content,
     ].join("\n");
     await clipboardWrite(text);
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
-  }, [concept]);
+  }, [page]);
 
   const handleExportToVault = useCallback(
     async (vaultPath: string) => {
       setExportMenuOpen(false);
-      await exportConceptToObsidian(conceptId, `${vaultPath}/Origin/concepts`);
+      await exportPageToObsidian(pageId, `${vaultPath}/Origin/concepts`);
       setExported(true);
       setTimeout(() => setExported(false), 2000);
     },
-    [conceptId],
+    [pageId],
   );
 
   const handleSave = () => {
-    if (editContent.trim() && editContent !== concept?.content) {
+    if (editContent.trim() && editContent !== page?.content) {
       updateMutation.mutate(editContent.trim());
     } else {
       setEditing(false);
@@ -220,7 +220,7 @@ export default function ConceptDetail({ conceptId, onBack, onMemoryClick, onConc
 
   if (isLoading) return null;
 
-  if (!concept) {
+  if (!page) {
     return (
       <div className="flex flex-col items-center justify-center gap-2 py-20">
         <span
@@ -230,7 +230,7 @@ export default function ConceptDetail({ conceptId, onBack, onMemoryClick, onConc
             color: "var(--mem-text-tertiary)",
           }}
         >
-          Concept not found
+          Page not found
         </span>
         <button
           onClick={onBack}
@@ -243,16 +243,16 @@ export default function ConceptDetail({ conceptId, onBack, onMemoryClick, onConc
     );
   }
 
-  const sourceCount = conceptSources?.length ?? concept.source_memory_ids.length;
-  const relatedConcepts = parseRelatedConcepts(concept.content);
+  const sourceCount = pageSources?.length ?? page.source_memory_ids.length;
+  const relatedPages = parseRelatedConcepts(page.content);
 
   // Strip ## Sources (shown as MemoryCard UI below)
-  // Convert [[wikilinks]] to markdown links if they resolve to concepts, else plain text
-  const cleanedContent = concept.content
+  // Convert [[wikilinks]] to markdown links if they resolve to pages, else plain text
+  const cleanedContent = page.content
     .replace(/^#\s+.*\n+/, "") // Strip title heading (displayed separately by UI)
     .replace(/## Sources\n[\s\S]*?(?=\n## |\s*$)/, "")
     .replace(/\[\[([^\]]+)\]\]/g, (_match, title) => {
-      const cid = conceptLookup.get(title.toLowerCase());
+      const cid = pageLookup.get(title.toLowerCase());
       if (cid) return `[${title}](#concept:${cid})`;
       return title;
     })
@@ -268,7 +268,7 @@ export default function ConceptDetail({ conceptId, onBack, onMemoryClick, onConc
     ? cleanedContent.slice(sentenceEnd + 1).trim()
     : cleanedContent;
 
-  // Intercept concept/memory link clicks in rendered content (capture phase beats target="_blank")
+  // Intercept page/memory link clicks in rendered content (capture phase beats target="_blank")
   const handleContentClick = (e: React.MouseEvent) => {
     const anchor = (e.target as HTMLElement).closest("a");
     if (!anchor) return;
@@ -276,7 +276,7 @@ export default function ConceptDetail({ conceptId, onBack, onMemoryClick, onConc
     if (href.startsWith("#concept:")) {
       e.preventDefault();
       e.stopPropagation();
-      onConceptClick?.(href.replace("#concept:", ""));
+      onPageClick?.(href.replace("#concept:", ""));
     } else if (href.startsWith("#memory:")) {
       e.preventDefault();
       e.stopPropagation();
@@ -284,9 +284,9 @@ export default function ConceptDetail({ conceptId, onBack, onMemoryClick, onConc
     }
   };
 
-  // Only show Related Concepts for wikilinks that resolve to actual concepts
-  const resolvedConcepts = relatedConcepts
-    .map((rc) => ({ title: rc.title, id: conceptLookup.get(rc.title.toLowerCase()) }))
+  // Only show Related Pages for wikilinks that resolve to actual pages
+  const resolvedPages = relatedPages
+    .map((rc) => ({ title: rc.title, id: pageLookup.get(rc.title.toLowerCase()) }))
     .filter((rc): rc is { title: string; id: string } => rc.id != null);
 
   return (
@@ -312,20 +312,20 @@ export default function ConceptDetail({ conceptId, onBack, onMemoryClick, onConc
                 lineHeight: "1.4",
               }}
             >
-              {concept.title}
+              {page.title}
             </h2>
             <div
               className="flex items-center gap-2 mt-1.5 flex-wrap"
               style={{ fontFamily: "var(--mem-font-mono)", fontSize: "11px", color: "var(--mem-text-tertiary)" }}
             >
-              <span>Last distilled {relativeTimeFromISO(concept.last_compiled)}</span>
+              <span>Last distilled {relativeTimeFromISO(page.last_compiled)}</span>
               <span style={{ opacity: 0.4 }}>&middot;</span>
               <span>from {sourceCount} {sourceCount === 1 ? "memory" : "memories"}</span>
-              {concept.stale_reason && (
+              {page.stale_reason && (
                 <>
                   <span style={{ opacity: 0.4 }}>&middot;</span>
-                  <span style={{ color: concept.stale_reason === "source_conflict" ? "var(--mem-accent-amber)" : "var(--mem-text-tertiary)" }}>
-                    {concept.stale_reason === "source_conflict" ? "needs review" : "updating..."}
+                  <span style={{ color: page.stale_reason === "source_conflict" ? "var(--mem-accent-amber)" : "var(--mem-text-tertiary)" }}>
+                    {page.stale_reason === "source_conflict" ? "needs review" : "updating..."}
                   </span>
                 </>
               )}
@@ -336,7 +336,7 @@ export default function ConceptDetail({ conceptId, onBack, onMemoryClick, onConc
           <div className="flex items-center gap-0.5 shrink-0">
             {!editing && (
               <button
-                onClick={() => { setEditContent(concept.content); setEditing(true); }}
+                onClick={() => { setEditContent(page.content); setEditing(true); }}
                 className="p-1.5 rounded-md transition-colors duration-150 hover:bg-[var(--mem-hover-strong)]"
                 style={{ color: "var(--mem-text-tertiary)" }}
                 title="Edit concept"
@@ -484,7 +484,7 @@ export default function ConceptDetail({ conceptId, onBack, onMemoryClick, onConc
         </div>
       ) : (
         <div onClickCapture={handleContentClick}>
-          {(concept.summary || tldr) && (
+          {(page.summary || tldr) && (
             <div
               className="pl-4 py-2 mb-4"
               style={{ borderLeft: "3px solid var(--mem-accent-concept)" }}
@@ -498,7 +498,7 @@ export default function ConceptDetail({ conceptId, onBack, onMemoryClick, onConc
                   fontStyle: "italic",
                 }}
               >
-                {concept.summary || tldr}
+                {page.summary || tldr}
               </p>
             </div>
           )}
@@ -506,8 +506,8 @@ export default function ConceptDetail({ conceptId, onBack, onMemoryClick, onConc
         </div>
       )}
 
-      {/* Related Concepts — from [[wikilinks]] in content */}
-      {!editing && resolvedConcepts.length > 0 && (
+      {/* Related Pages — from [[wikilinks]] in content */}
+      {!editing && resolvedPages.length > 0 && (
         <div>
           <h3
             className="mb-2"
@@ -520,13 +520,13 @@ export default function ConceptDetail({ conceptId, onBack, onMemoryClick, onConc
               color: "var(--mem-text-tertiary)",
             }}
           >
-            Related Concepts
+            Related Pages
           </h3>
           <div className="flex flex-col gap-1.5">
-            {resolvedConcepts.map((rc) => (
+            {resolvedPages.map((rc) => (
               <button
                 key={rc.id}
-                onClick={() => onConceptClick?.(rc.id)}
+                onClick={() => onPageClick?.(rc.id)}
                 className="w-full text-left rounded-lg px-4 py-3 transition-colors duration-150 cursor-pointer hover:bg-[var(--mem-hover)] group"
                 style={{ backgroundColor: "var(--mem-surface)", border: "1px solid var(--mem-border)" }}
               >
@@ -574,7 +574,7 @@ export default function ConceptDetail({ conceptId, onBack, onMemoryClick, onConc
             ))}
             {/* While loading show placeholders matching source count */}
             {!sourceMemories &&
-              concept.source_memory_ids.map((id) => (
+              page.source_memory_ids.map((id) => (
                 <li
                   key={id}
                   style={{

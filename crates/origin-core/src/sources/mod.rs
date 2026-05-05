@@ -161,14 +161,24 @@ mod tests {
             "decision".parse::<MemoryType>().unwrap(),
             MemoryType::Decision
         );
+        assert_eq!("lesson".parse::<MemoryType>().unwrap(), MemoryType::Lesson);
+        assert_eq!("gotcha".parse::<MemoryType>().unwrap(), MemoryType::Gotcha);
         assert_eq!("fact".parse::<MemoryType>().unwrap(), MemoryType::Fact);
-        assert_eq!("goal".parse::<MemoryType>().unwrap(), MemoryType::Goal);
+        // Deprecated: "goal" folds into Identity (aspirations = identity).
+        assert_eq!("goal".parse::<MemoryType>().unwrap(), MemoryType::Identity);
         // Case insensitive
         assert_eq!(
             "IDENTITY".parse::<MemoryType>().unwrap(),
             MemoryType::Identity
         );
         assert_eq!("Fact".parse::<MemoryType>().unwrap(), MemoryType::Fact);
+        assert_eq!("GOTCHA".parse::<MemoryType>().unwrap(), MemoryType::Gotcha);
+    }
+
+    #[test]
+    fn test_memory_type_aliases_require_subclassification() {
+        assert!("profile".parse::<MemoryType>().is_err());
+        assert!("knowledge".parse::<MemoryType>().is_err());
     }
 
     #[test]
@@ -179,6 +189,11 @@ mod tests {
         ));
         assert!(matches!(
             stability_tier(Some("preference")),
+            StabilityTier::Protected
+        ));
+        // Deprecated rows: "goal" still maps to Protected via Identity fold.
+        assert!(matches!(
+            stability_tier(Some("goal")),
             StabilityTier::Protected
         ));
     }
@@ -193,14 +208,18 @@ mod tests {
             stability_tier(Some("decision")),
             StabilityTier::Standard
         ));
+        assert!(matches!(
+            stability_tier(Some("lesson")),
+            StabilityTier::Standard
+        ));
+        assert!(matches!(
+            stability_tier(Some("gotcha")),
+            StabilityTier::Standard
+        ));
     }
 
     #[test]
     fn test_stability_tier_ephemeral() {
-        assert!(matches!(
-            stability_tier(Some("goal")),
-            StabilityTier::Ephemeral
-        ));
         assert!(matches!(stability_tier(None), StabilityTier::Ephemeral));
         assert!(matches!(
             stability_tier(Some("unknown_junk")),

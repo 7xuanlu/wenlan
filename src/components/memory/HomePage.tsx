@@ -6,10 +6,10 @@ import {
   deleteFileChunks,
   dismissContradiction,
   getMemoryStats,
-  listConcepts,
+  listPages,
   listMemoriesRich,
   listRecentChanges,
-  listRecentConcepts,
+  listRecentPages,
   listRecentMemories,
   listRecentRetrievals,
   listUnconfirmedMemories,
@@ -20,9 +20,9 @@ import { RefiningList } from "./RefiningList";
 import { ConnectionsList } from "./ConnectionsList";
 import { RetrievalsList } from "./RetrievalsList";
 import { WhatHappensNextCard, type HomePageState } from "../onboarding/WhatHappensNextCard";
-import { GhostConceptsRow } from "../onboarding/GhostConceptsRow";
+import { GhostPagesRow } from "../onboarding/GhostPagesRow";
 import { useMilestones } from "../onboarding/useMilestones";
-import { FirstConceptModal } from "../onboarding/FirstConceptModal";
+import { FirstPageModal } from "../onboarding/FirstPageModal";
 import { MilestoneHighlight } from "../onboarding/MilestoneHighlight";
 
 interface HomePageProps {
@@ -30,7 +30,7 @@ interface HomePageProps {
   onNavigateStream: () => void;
   onNavigateLog: () => void;
   onNavigateGraph: () => void;
-  onSelectConcept?: (conceptId: string) => void;
+  onSelectPage?: (pageId: string) => void;
 }
 
 const FIRST_CONCEPT_SHOWN_KEY = "onboarding:firstConceptShownCount";
@@ -55,7 +55,7 @@ export default function HomePage({
   onNavigateStream,
   onNavigateLog: _onNavigateLog,
   onNavigateGraph: _onNavigateGraph,
-  onSelectConcept,
+  onSelectPage,
 }: HomePageProps) {
   const queryClient = useQueryClient();
 
@@ -87,7 +87,7 @@ export default function HomePage({
 
   const { data: recentConceptItems = [] } = useQuery({
     queryKey: ["recentConceptItems", lastVisitMs],
-    queryFn: () => listRecentConcepts(10, lastVisitMs),
+    queryFn: () => listRecentPages(10, lastVisitMs),
     refetchInterval: 30_000,
   });
 
@@ -117,7 +117,7 @@ export default function HomePage({
 
   const { data: recentConcepts = [] } = useQuery({
     queryKey: ["recent-concepts"],
-    queryFn: () => listConcepts("active", undefined, 10),
+    queryFn: () => listPages("active", undefined, 10),
     refetchInterval: 10_000,
   });
 
@@ -173,10 +173,10 @@ export default function HomePage({
     (m) => m.id === "first-concept" && m.acknowledged_at == null,
   );
   const firstConceptData = firstConceptMs?.payload as
-    | { concept_id?: string; title?: string }
+    | { page_id?: string; title?: string }
     | undefined;
-  const firstConcept = firstConceptData?.concept_id
-    ? recentConcepts.find((c) => c.id === firstConceptData.concept_id)
+  const firstConcept = firstConceptData?.page_id
+    ? recentConcepts.find((c) => c.id === firstConceptData.page_id)
     : null;
 
   const homePageState = deriveHomePageState({
@@ -238,7 +238,7 @@ export default function HomePage({
             intensity="full"
           >
             <section>
-              <GhostConceptsRow />
+              <GhostPagesRow />
             </section>
           </MilestoneHighlight>
         </>
@@ -266,31 +266,31 @@ export default function HomePage({
               await queryClient.invalidateQueries({ queryKey: ["unconfirmedMemories"] });
             }}
             onNavigate={(kind, id) => {
-              if (kind === "concept") onSelectConcept?.(id);
+              if (kind === "concept") onSelectPage?.(id);
               else onNavigateMemory(id);
             }}
             recapCount={recapCount}
             onViewRecaps={onNavigateStream}
           />
-          <RefiningList changes={changes} concepts={recentConcepts} onSelectConcept={onSelectConcept} />
+          <RefiningList changes={changes} pages={recentConcepts} onSelectPage={onSelectPage} />
           <RetrievalsList
             events={retrievals}
-            onSelectConceptById={(conceptId) => onSelectConcept?.(conceptId)}
+            onSelectPageById={(pageId) => onSelectPage?.(pageId)}
           />
           <ConnectionsList
-            onSelectConcept={onSelectConcept}
+            onSelectPage={onSelectPage}
             onSelectEntity={undefined}
           />
         </>
       )}
 
       {shouldShowFirstConceptModal && firstConcept && (
-        <FirstConceptModal
+        <FirstPageModal
           concept={firstConcept}
           onOpen={(id) => {
             localStorage.removeItem(FIRST_CONCEPT_SHOWN_KEY);
             acknowledge("first-concept");
-            onSelectConcept?.(id);
+            onSelectPage?.(id);
           }}
           onDismiss={() => {
             localStorage.removeItem(FIRST_CONCEPT_SHOWN_KEY);

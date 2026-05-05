@@ -6,7 +6,7 @@ import {
   listMemoriesRich,
   getMemoryStats,
   searchEntities,
-  searchConcepts,
+  searchPages,
   deleteFileChunks,
 } from "../../lib/tauri";
 import ActivityFeed from "./ActivityFeed";
@@ -20,7 +20,7 @@ import ConstellationMap from "./ConstellationMap";
 import MemoryStatusBar from "./MemoryStatusBar";
 import MemorySearchResult from "./MemorySearchResult";
 import MemoryDetail from "./MemoryDetail";
-import ConceptDetail from "./ConceptDetail";
+import PageDetail from "./PageDetail";
 import SettingsPage from "./SettingsPage";
 import { ImportView } from "./ImportView";
 import { SetupWizard } from "../SetupWizard";
@@ -37,7 +37,7 @@ interface MainProps {
   onBackFromDetail?: () => void;
 }
 
-type View = { kind: "home" } | { kind: "stream" } | { kind: "activity" } | { kind: "recaps" } | { kind: "entity"; entityId: string } | { kind: "profile" } | { kind: "memory"; sourceId: string } | { kind: "settings"; section?: SettingsSection } | { kind: "import" } | { kind: "connect-agent" } | { kind: "space"; spaceName: string } | { kind: "graph" } | { kind: "concept"; conceptId: string } | { kind: "decisions" };
+type View = { kind: "home" } | { kind: "stream" } | { kind: "activity" } | { kind: "recaps" } | { kind: "entity"; entityId: string } | { kind: "profile" } | { kind: "memory"; sourceId: string } | { kind: "settings"; section?: SettingsSection } | { kind: "import" } | { kind: "connect-agent" } | { kind: "space"; spaceName: string } | { kind: "graph" } | { kind: "page"; pageId: string } | { kind: "decisions" };
 
 const SIDEBAR_KEY = "origin-sidebar-collapsed";
 
@@ -97,8 +97,8 @@ export default function Main({ initialMemoryId, initialView, onBackFromDetail }:
   });
 
   const { data: conceptResults = [] } = useQuery({
-    queryKey: ["searchConcepts", debouncedEntityQuery],
-    queryFn: () => searchConcepts(debouncedEntityQuery, 5),
+    queryKey: ["searchPages", debouncedEntityQuery],
+    queryFn: () => searchPages(debouncedEntityQuery, 5),
     enabled: debouncedEntityQuery.length > 0,
   });
 
@@ -167,7 +167,7 @@ export default function Main({ initialMemoryId, initialView, onBackFromDetail }:
       if (e.key === "Escape") {
         if (query) {
           setQuery("");
-        } else if (view.kind === "entity" || view.kind === "memory" || view.kind === "settings" || view.kind === "import" || view.kind === "graph" || view.kind === "concept" || view.kind === "decisions") {
+        } else if (view.kind === "entity" || view.kind === "memory" || view.kind === "settings" || view.kind === "import" || view.kind === "graph" || view.kind === "page" || view.kind === "decisions") {
           navigateBack();
         }
       }
@@ -341,14 +341,14 @@ export default function Main({ initialMemoryId, initialView, onBackFromDetail }:
                         color: "var(--mem-text-tertiary)",
                       }}
                     >
-                      Concepts
+                      Pages
                     </p>
                     {conceptResults.map((c) => (
                       <div
                         key={c.id}
                         className="rounded-lg px-4 py-3 cursor-pointer transition-colors duration-150 hover:bg-[var(--mem-hover)]"
                         style={{ backgroundColor: "var(--mem-surface)", border: "1px solid var(--mem-border)" }}
-                        onClick={() => { setQuery(""); navigateTo({ kind: "concept", conceptId: c.id }); }}
+                        onClick={() => { setQuery(""); navigateTo({ kind: "page", pageId: c.id }); }}
                       >
                         <div className="flex items-center gap-2.5">
                           <span className="w-2 h-2 rounded-full shrink-0" style={{ backgroundColor: "var(--mem-accent-concept)" }} />
@@ -468,14 +468,14 @@ export default function Main({ initialMemoryId, initialView, onBackFromDetail }:
             <DecisionLog
               onBack={navigateBack}
               onSelectMemory={(sid) => navigateTo({ kind: "memory", sourceId: sid })}
-              onSelectConcept={(id) => navigateTo({ kind: "concept", conceptId: id })}
+              onSelectPage={(id) => navigateTo({ kind: "page", pageId: id })}
             />
           ) : view.kind === "space" ? (
             <SpaceDetail
               spaceName={view.spaceName}
               onBack={navigateBack}
               onSelectMemory={(sid) => navigateTo({ kind: "memory", sourceId: sid })}
-              onSelectConcept={(id) => navigateTo({ kind: "concept", conceptId: id })}
+              onSelectPage={(id) => navigateTo({ kind: "page", pageId: id })}
               onEntityClick={handleEntityClick}
             />
           ) : view.kind === "memory" ? (
@@ -497,12 +497,12 @@ export default function Main({ initialMemoryId, initialView, onBackFromDetail }:
               onEntityClick={handleEntityClick}
               onMemoryClick={(sid) => navigateTo({ kind: "memory", sourceId: sid })}
             />
-          ) : view.kind === "concept" ? (
-            <ConceptDetail
-              conceptId={view.conceptId}
+          ) : view.kind === "page" ? (
+            <PageDetail
+              pageId={view.pageId}
               onBack={navigateBack}
               onMemoryClick={(sid) => navigateTo({ kind: "memory", sourceId: sid })}
-              onConceptClick={(id) => navigateTo({ kind: "concept", conceptId: id })}
+              onPageClick={(id) => navigateTo({ kind: "page", pageId: id })}
             />
           ) : view.kind === "home" ? (
             <HomePage
@@ -510,7 +510,7 @@ export default function Main({ initialMemoryId, initialView, onBackFromDetail }:
               onNavigateStream={() => navigateTo({ kind: "recaps" })}
               onNavigateLog={() => navigateTo({ kind: "stream" })}
               onNavigateGraph={() => navigateTo({ kind: "graph" })}
-              onSelectConcept={(id) => navigateTo({ kind: "concept", conceptId: id })}
+              onSelectPage={(id) => navigateTo({ kind: "page", pageId: id })}
             />
           ) : view.kind === "activity" ? (
             <ActivityFeed

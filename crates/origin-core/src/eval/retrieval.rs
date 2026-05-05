@@ -980,8 +980,10 @@ pub enum PipelineStage {
     Raw,
     /// Simulated distillation: groups of similar memories merged into single entries.
     Distilled,
-    /// Simulated concept: all related memories compiled into one dense article.
-    Concept,
+    /// Simulated page: all related memories compiled into one dense article.
+    /// Wire format preserved as "concept" until 0c.3 serde rename pass.
+    #[serde(rename = "concept")]
+    Page,
 }
 
 /// Per-stage token metrics.
@@ -3063,7 +3065,7 @@ mod tests {
     /// how much context is delivered to an LLM before and after consolidation.
     ///
     /// Picks the fixture case with the most seeds, seeds a DB, measures raw token
-    /// counts, runs real LLM distillation (`distill_concepts`), then re-measures.
+    /// counts, runs real LLM distillation (`distill_pages`), then re-measures.
     ///
     /// Requires the Qwen3-4B model to be present in the hf-hub cache.
     /// Run with: cargo test -p origin-core --lib eval::retrieval::tests::benchmark_pipeline_token_real_llm -- --ignored --nocapture
@@ -3073,7 +3075,7 @@ mod tests {
         use crate::llm_provider::OnDeviceProvider;
         use crate::on_device_models;
         use crate::prompts::PromptRegistry;
-        use crate::refinery::distill_concepts;
+        use crate::refinery::distill_pages;
         use crate::tuning::DistillationConfig;
 
         let fixture_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -3199,7 +3201,7 @@ mod tests {
         // Seed the same DB for distillation (reuse db_raw).
         eprintln!("\nRunning distillation ...");
         let distill_start = std::time::Instant::now();
-        let concepts_created = distill_concepts(
+        let concepts_created = distill_pages(
             &db_raw,
             Some(&llm_provider),
             &prompts,
@@ -3208,7 +3210,7 @@ mod tests {
         )
         .await
         .unwrap_or_else(|e| {
-            eprintln!("  distill_concepts error (non-fatal): {}", e);
+            eprintln!("  distill_pages error (non-fatal): {}", e);
             0
         });
         let distill_ms = distill_start.elapsed().as_millis();

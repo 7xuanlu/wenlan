@@ -1,15 +1,15 @@
 import { describe, it, expect } from "vitest";
 import { render, screen } from "@testing-library/react";
-import { GhostConceptsRow } from "../GhostConceptsRow";
+import { GhostPagesRow } from "../GhostPagesRow";
 
-describe("GhostConceptsRow", () => {
+describe("GhostPagesRow", () => {
   it("renders the hint line", () => {
-    render(<GhostConceptsRow />);
+    render(<GhostPagesRow />);
     expect(screen.getByText(/Concepts will appear here/i)).toBeInTheDocument();
   });
 
   it("renders exactly 3 ghost cards", () => {
-    const { container } = render(<GhostConceptsRow />);
+    const { container } = render(<GhostPagesRow />);
     const ghosts = container.querySelectorAll("[data-ghost-card]");
     expect(ghosts.length).toBe(3);
   });

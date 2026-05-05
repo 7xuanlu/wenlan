@@ -2576,92 +2576,89 @@ pub async fn correct_memory_cmd(
         .to_string())
 }
 
-// ── Concepts ──────────────────────────────────────────────────────────
+// ── Pages ──────────────────────────────────────────────────────────
 
-/// Wire wrapper for the daemon's `{ "concept": {...} }` response shape.
+/// Wire wrapper for the daemon's `{ "page": {...} }` response shape.
 #[derive(serde::Deserialize)]
-struct GetConceptWire {
-    concept: Option<crate::concepts::Concept>,
+struct GetPageWire {
+    page: Option<crate::pages::Page>,
 }
 
 #[tauri::command]
-pub async fn get_concept(
+pub async fn get_page(
     state: tauri::State<'_, State>,
     id: String,
-) -> Result<Option<crate::concepts::Concept>, String> {
+) -> Result<Option<crate::pages::Page>, String> {
     let client = state.read().await.client.clone();
-    // The daemon returns 404 when the concept doesn't exist, which reqwest
+    // The daemon returns 404 when the page doesn't exist, which reqwest
     // turns into an error. Distinguish "not found" from real errors so the
     // frontend sees None for the former and a real error for the latter —
     // rather than the previous silent `Err(_) => Ok(None)` which hid
     // wrapper/deserialization bugs behind a "not found" UI.
     match client
-        .get_json::<GetConceptWire>(&format!("/api/concepts/{}", id))
+        .get_json::<GetPageWire>(&format!("/api/pages/{}", id))
         .await
     {
-        Ok(wrapped) => Ok(wrapped.concept),
+        Ok(wrapped) => Ok(wrapped.page),
         Err(e) => {
             let msg = e.to_string();
             if msg.contains("404") || msg.to_lowercase().contains("not found") {
                 Ok(None)
             } else {
-                Err(format!("get_concept failed: {}", msg))
+                Err(format!("get_page failed: {}", msg))
             }
         }
     }
 }
 
 #[tauri::command]
-pub async fn update_concept(
+pub async fn update_page(
     state: tauri::State<'_, State>,
     id: String,
     content: String,
 ) -> Result<(), String> {
     let s = state.read().await;
-    let req = requests::UpdateConceptRequest { content };
+    let req = requests::UpdatePageRequest { content };
     let _resp: responses::SuccessResponse = s
         .client
-        .post_json(&format!("/api/memory/{}/update-concept", id), &req)
+        .post_json(&format!("/api/memory/{}/update-page", id), &req)
         .await?;
     Ok(())
 }
 
 #[tauri::command]
-pub async fn archive_concept(state: tauri::State<'_, State>, id: String) -> Result<(), String> {
+pub async fn archive_page(state: tauri::State<'_, State>, id: String) -> Result<(), String> {
     let s = state.read().await;
     let _resp: serde_json::Value = s
         .client
-        .post_empty(&format!("/api/concepts/{}/archive", id))
+        .post_empty(&format!("/api/pages/{}/archive", id))
         .await?;
     Ok(())
 }
 
 #[tauri::command]
-pub async fn delete_concept(state: tauri::State<'_, State>, id: String) -> Result<(), String> {
+pub async fn delete_page(state: tauri::State<'_, State>, id: String) -> Result<(), String> {
     let s = state.read().await;
-    let _resp: serde_json::Value = s
-        .client
-        .delete_path(&format!("/api/concepts/{}", id))
-        .await?;
+    let _resp: serde_json::Value = s.client.delete_path(&format!("/api/pages/{}", id)).await?;
     Ok(())
 }
 
-/// Wire wrapper matching the daemon's `{ "concepts": [...] }` response shape.
-/// Kept local to search.rs because `Concept` lives in origin-core (not
+/// Wire wrapper matching the daemon's `{ "pages": [...] }` response shape.
+/// Kept local to search.rs because `Page` lives in origin-core (not
 /// origin-types), so we can't put this in the shared response types.
 #[derive(serde::Deserialize)]
-struct ListConceptsWire {
-    concepts: Vec<crate::concepts::Concept>,
+struct ListPagesWire {
+    pages: Vec<crate::pages::Page>,
 }
 
 #[tauri::command]
-pub async fn list_concepts(
+pub async fn list_pages(
     state: tauri::State<'_, State>,
     status: Option<String>,
     domain: Option<String>,
     limit: Option<usize>,
     offset: Option<usize>,
-) -> Result<Vec<crate::concepts::Concept>, String> {
+) -> Result<Vec<crate::pages::Page>, String> {
     let client = state.read().await.client.clone();
     // Build query string from the filter params that were previously ignored.
     let mut params: Vec<String> = Vec::new();
@@ -2678,45 +2675,45 @@ pub async fn list_concepts(
         params.push(format!("offset={}", o));
     }
     let path = if params.is_empty() {
-        "/api/concepts".to_string()
+        "/api/pages".to_string()
     } else {
-        format!("/api/concepts?{}", params.join("&"))
+        format!("/api/pages?{}", params.join("&"))
     };
-    let resp: ListConceptsWire = client.get_json(&path).await?;
-    Ok(resp.concepts)
+    let resp: ListPagesWire = client.get_json(&path).await?;
+    Ok(resp.pages)
 }
 
 #[tauri::command]
-pub async fn search_concepts(
+pub async fn search_pages(
     state: tauri::State<'_, State>,
     query: String,
     limit: Option<usize>,
-) -> Result<Vec<crate::concepts::Concept>, String> {
+) -> Result<Vec<crate::pages::Page>, String> {
     let client = state.read().await.client.clone();
-    let req = requests::SearchConceptsRequest { query, limit };
-    let resp: ListConceptsWire = client.post_json("/api/concepts/search", &req).await?;
-    Ok(resp.concepts)
+    let req = requests::SearchPagesRequest { query, limit };
+    let resp: ListPagesWire = client.post_json("/api/pages/search", &req).await?;
+    Ok(resp.pages)
 }
 
 #[tauri::command]
-pub async fn get_concept_sources(
+pub async fn get_page_sources(
     state: tauri::State<'_, State>,
-    concept_id: String,
-) -> Result<Vec<origin_types::ConceptSourceWithMemory>, String> {
+    page_id: String,
+) -> Result<Vec<origin_types::PageSourceWithMemory>, String> {
     let client = { state.read().await.client.clone() };
-    client.get_concept_sources(&concept_id).await
+    client.get_page_sources(&page_id).await
 }
 
 #[tauri::command]
-pub async fn export_concepts_to_obsidian(
+pub async fn export_pages_to_obsidian(
     state: tauri::State<'_, State>,
     vault_path: String,
 ) -> Result<crate::export::ExportStats, String> {
-    // Fetch concepts from daemon, then export locally
-    let concepts: Vec<crate::concepts::Concept> = {
+    // Fetch pages from daemon, then export locally
+    let pages: Vec<crate::pages::Page> = {
         let client = state.read().await.client.clone();
-        let resp: ListConceptsWire = client.get_json("/api/concepts").await?;
-        resp.concepts
+        let resp: ListPagesWire = client.get_json("/api/pages").await?;
+        resp.pages
     };
     let expanded = if let Some(rest) = vault_path.strip_prefix("~/") {
         let home = std::env::var("HOME").unwrap_or_default();
@@ -2726,20 +2723,20 @@ pub async fn export_concepts_to_obsidian(
     };
     let exporter =
         crate::export::obsidian::ObsidianExporter::new(std::path::PathBuf::from(expanded));
-    use crate::export::ConceptExporter;
-    exporter.export_all(&concepts).map_err(|e| e.to_string())
+    use crate::export::PageExporter;
+    exporter.export_all(&pages).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
-pub async fn export_concept_to_obsidian(
+pub async fn export_page_to_obsidian(
     state: tauri::State<'_, State>,
-    concept_id: String,
+    page_id: String,
     vault_path: String,
 ) -> Result<String, String> {
     let client = state.read().await.client.clone();
-    let path = format!("/api/concepts/{}/export", concept_id);
-    let req = requests::ExportConceptRequest { vault_path };
-    let resp: responses::ExportConceptResponse = client.post_json(&path, &req).await?;
+    let path = format!("/api/pages/{}/export", page_id);
+    let req = requests::ExportPageRequest { vault_path };
+    let resp: responses::ExportPageResponse = client.post_json(&path, &req).await?;
     Ok(resp.path)
 }
 
@@ -2768,14 +2765,11 @@ pub async fn trigger_distillation(
 }
 
 #[tauri::command]
-pub async fn redistill_concept(
-    state: tauri::State<'_, State>,
-    concept_id: String,
-) -> Result<(), String> {
+pub async fn redistill_page(state: tauri::State<'_, State>, page_id: String) -> Result<(), String> {
     let s = state.read().await;
     let _resp: serde_json::Value = s
         .client
-        .post_empty(&format!("/api/distill/{}", concept_id))
+        .post_empty(&format!("/api/distill/{}", page_id))
         .await?;
     Ok(())
 }
@@ -3256,7 +3250,7 @@ pub async fn list_recent_retrievals(
 pub async fn list_recent_changes(
     state: tauri::State<'_, State>,
     limit: Option<i64>,
-) -> Result<Vec<origin_types::ConceptChange>, String> {
+) -> Result<Vec<origin_types::PageChange>, String> {
     let client = {
         let s = state.read().await;
         s.client.clone()
@@ -3292,7 +3286,7 @@ pub async fn list_unconfirmed_memories(
 }
 
 #[tauri::command]
-pub async fn list_recent_concepts(
+pub async fn list_recent_pages(
     state: tauri::State<'_, State>,
     limit: Option<i64>,
     since_ms: Option<i64>,
@@ -3302,7 +3296,7 @@ pub async fn list_recent_concepts(
         s.client.clone()
     };
     client
-        .list_recent_concepts(limit.unwrap_or(10), since_ms)
+        .list_recent_pages(limit.unwrap_or(10), since_ms)
         .await
 }
 

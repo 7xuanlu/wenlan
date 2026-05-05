@@ -145,7 +145,7 @@ pub struct ProfileContext {
 #[derive(Debug, Serialize, Deserialize)]
 pub struct KnowledgeContext {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub concepts: Vec<String>,
+    pub pages: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub decisions: Vec<String>,
     #[serde(default)]
@@ -360,7 +360,7 @@ pub struct IngestResponse {
 // ===== Concept Export =====
 
 #[derive(Debug, Deserialize, Serialize)]
-pub struct ExportConceptResponse {
+pub struct ExportPageResponse {
     pub path: String,
 }
 
@@ -490,7 +490,7 @@ mod tests {
                 goals: vec![],
             },
             knowledge: KnowledgeContext {
-                concepts: vec![],
+                pages: vec![],
                 decisions: vec![],
                 relevant_memories: vec![],
                 graph_context: vec![],
@@ -506,7 +506,7 @@ mod tests {
 
         let json = serde_json::to_string(&response).unwrap();
         let parsed: ChatContextResponse = serde_json::from_str(&json).unwrap();
-        assert!(parsed.knowledge.concepts.is_empty());
+        assert!(parsed.knowledge.pages.is_empty());
         assert!(parsed.knowledge.decisions.is_empty());
         assert!(parsed.knowledge.relevant_memories.is_empty());
         assert!(parsed.knowledge.graph_context.is_empty());

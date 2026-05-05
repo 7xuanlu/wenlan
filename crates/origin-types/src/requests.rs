@@ -231,7 +231,7 @@ pub struct CreateConceptRequest {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-pub struct SearchConceptsRequest {
+pub struct SearchPagesRequest {
     pub query: String,
     #[serde(default)]
     pub limit: Option<usize>,
@@ -401,14 +401,14 @@ pub struct CorrectMemoryRequest {
 // ===== Concepts update =====
 
 #[derive(Debug, Serialize, Deserialize)]
-pub struct UpdateConceptRequest {
+pub struct UpdatePageRequest {
     pub content: String,
 }
 
 // ===== Concept Export =====
 
 #[derive(Debug, Deserialize, Serialize)]
-pub struct ExportConceptRequest {
+pub struct ExportPageRequest {
     pub vault_path: String,
 }
 

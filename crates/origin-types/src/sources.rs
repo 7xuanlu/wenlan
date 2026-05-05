@@ -7,30 +7,49 @@ use std::collections::HashMap;
 /// Closed taxonomy of memory facets -- validated at API boundary.
 /// Stored as lowercase TEXT in SQLite.
 ///
-/// Reduced from 8 to 5 types: Correction, Custom, Recap removed.
-/// - Correction -> Fact (corrections are just facts that update prior knowledge)
-/// - Custom -> Fact (catch-all absorbed into the most general type)
-/// - Recap -> is_recap flag on chunks table (orthogonal to memory type)
+/// Six user-facing types after taxonomy refactor:
+/// - Identity, Preference -- about the user (Protected tier)
+/// - Decision -- choices made (Standard tier)
+/// - Lesson -- positive learnings (Standard tier)
+/// - Gotcha -- traps/warnings/negative learnings (Standard tier)
+/// - Fact -- durable knowledge (Standard tier)
+///
+/// Goal is deprecated: incoming "goal" parses as Identity (aspirations
+/// are part of who the user is). Existing rows migrate via DB migration.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum MemoryType {
     Identity,
     Preference,
     Decision,
+    Lesson,
+    Gotcha,
     Fact,
-    Goal,
 }
 
 impl MemoryType {
-    /// All valid lowercase string values (5 canonical types).
+    /// All valid lowercase string values (6 canonical types).
     pub fn all_values() -> &'static [&'static str] {
-        &["identity", "preference", "decision", "fact", "goal"]
+        &[
+            "identity",
+            "preference",
+            "decision",
+            "lesson",
+            "gotcha",
+            "fact",
+        ]
     }
 
     /// Check if input is the "profile" high-level alias (case-insensitive).
     /// Used by the store flow to detect when async LLM sub-classification is needed.
     pub fn is_profile_alias(s: &str) -> bool {
         s.eq_ignore_ascii_case("profile")
+    }
+
+    /// Check if input is the "knowledge" high-level alias (case-insensitive).
+    /// Knowledge expands to fact | lesson | gotcha and needs sub-classification.
+    pub fn is_knowledge_alias(s: &str) -> bool {
+        s.eq_ignore_ascii_case("knowledge")
     }
 }
 
@@ -40,8 +59,9 @@ impl std::fmt::Display for MemoryType {
             Self::Identity => "identity",
             Self::Preference => "preference",
             Self::Decision => "decision",
+            Self::Lesson => "lesson",
+            Self::Gotcha => "gotcha",
             Self::Fact => "fact",
-            Self::Goal => "goal",
         };
         f.write_str(s)
     }
@@ -54,13 +74,18 @@ impl std::str::FromStr for MemoryType {
             "identity" => Ok(Self::Identity),
             "preference" => Ok(Self::Preference),
             "decision" => Ok(Self::Decision),
+            "lesson" => Ok(Self::Lesson),
+            "gotcha" => Ok(Self::Gotcha),
             "fact" => Ok(Self::Fact),
-            "goal" => Ok(Self::Goal),
-            // High-level alias: "knowledge" maps directly to Fact
-            "knowledge" => Ok(Self::Fact),
+            // Deprecated: "goal" folds into Identity (aspirations = identity).
+            "goal" => Ok(Self::Identity),
             // High-level alias: "profile" needs async LLM sub-classification
             "profile" => Err(
-                "profile requires sub-classification into identity, preference, or goal -- use classify_memory_type".to_string()
+                "profile requires sub-classification into identity or preference -- use classify_memory_type".to_string()
+            ),
+            // High-level alias: "knowledge" needs sub-classification (fact | lesson | gotcha)
+            "knowledge" => Err(
+                "knowledge requires sub-classification into fact, lesson, or gotcha -- use classify_memory_type".to_string()
             ),
             // Backward compat: removed types map to Fact
             "correction" | "custom" | "recap" => Ok(Self::Fact),
@@ -78,9 +103,9 @@ impl std::str::FromStr for MemoryType {
 pub enum StabilityTier {
     /// identity, preference -- supersede requires human confirmation
     Protected,
-    /// fact, decision -- supersede auto-applies unconfirmed
+    /// fact, decision, lesson, gotcha -- supersede auto-applies unconfirmed
     Standard,
-    /// goal -- supersede auto-applies silently
+    /// catch-all for unknown / removed types -- supersede auto-applies silently
     Ephemeral,
 }
 
@@ -88,7 +113,11 @@ pub enum StabilityTier {
 pub fn stability_tier(memory_type: Option<&str>) -> StabilityTier {
     match memory_type {
         Some("identity") | Some("preference") => StabilityTier::Protected,
-        Some("fact") | Some("decision") => StabilityTier::Standard,
+        Some("fact") | Some("decision") | Some("lesson") | Some("gotcha") => {
+            StabilityTier::Standard
+        }
+        // Deprecated: "goal" still in DB rows pre-migration -> treat as Identity (Protected).
+        Some("goal") => StabilityTier::Protected,
         _ => StabilityTier::Ephemeral,
     }
 }

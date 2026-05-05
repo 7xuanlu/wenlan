@@ -17,9 +17,11 @@ vi.mock("../../lib/tauri", async () => {
   return {
     ...actual,
     listRecentRetrievals: vi.fn(),
+    listRecentPages: vi.fn(),
     listRecentConcepts: vi.fn(),
     listRecentMemories: vi.fn(),
     listUnconfirmedMemories: vi.fn(),
+    listPages: vi.fn(),
     listConcepts: vi.fn(),
     listRecentChanges: vi.fn(),
     listRecentRelations: vi.fn(),
@@ -50,9 +52,11 @@ function renderHome() {
 beforeEach(() => {
   localStorage.clear();
   vi.mocked(tauri.listRecentRetrievals).mockResolvedValue([]);
+  vi.mocked(tauri.listRecentPages).mockResolvedValue([]);
   vi.mocked(tauri.listRecentConcepts).mockResolvedValue([]);
   vi.mocked(tauri.listRecentMemories).mockResolvedValue([]);
   vi.mocked(tauri.listUnconfirmedMemories).mockResolvedValue([]);
+  vi.mocked(tauri.listPages).mockResolvedValue([]);
   vi.mocked(tauri.listConcepts).mockResolvedValue([]);
   vi.mocked(tauri.listRecentChanges).mockResolvedValue([]);
   vi.mocked(tauri.listRecentRelations).mockResolvedValue([]);
@@ -112,8 +116,8 @@ describe("HomePage redesign", () => {
         timestamp_ms: Date.now(),
         agent_name: "claude-code",
         query: "positioning",
-        concept_titles: ["Origin positioning", "Daemon architecture"],
-        concept_ids: ["concept_pos", "concept_arch"],
+        page_titles: ["Origin positioning", "Daemon architecture"],
+        page_ids: ["concept_pos", "concept_arch"],
         memory_snippets: [],
       },
     ]);
@@ -130,8 +134,8 @@ describe("HomePage redesign", () => {
         timestamp_ms: Date.now(),
         agent_name: "unknown",
         query: "anything",
-        concept_titles: ["Should not appear"],
-        concept_ids: [],
+        page_titles: ["Should not appear"],
+        page_ids: [],
         memory_snippets: [],
       },
     ]);
@@ -154,7 +158,7 @@ describe("HomePage redesign", () => {
 
   it("renders worth-a-glance with only review-worthy items", async () => {
     const now = Date.now();
-    vi.mocked(tauri.listRecentConcepts).mockResolvedValue([
+    vi.mocked(tauri.listRecentPages).mockResolvedValue([
       { kind: "concept", id: "c1", title: "Flagged concept", snippet: "s", timestamp_ms: now, badge: { kind: "needs_review" } },
       { kind: "concept", id: "c2", title: "Fresh concept", snippet: "s", timestamp_ms: now - 500, badge: { kind: "new" } },
     ] as any);
@@ -170,15 +174,15 @@ describe("HomePage redesign", () => {
   });
 
   it("retrieval card with archived concept shows archived badge and does not navigate", async () => {
-    const onSelectConcept = vi.fn();
-    // Event has concept_ids: [] simulating an archived concept (no active match found at read time)
+    const onSelectPage = vi.fn();
+    // Event has page_ids: [] simulating an archived concept (no active match found at read time)
     vi.mocked(tauri.listRecentRetrievals).mockResolvedValue([
       {
         timestamp_ms: Date.now(),
         agent_name: "claude-code",
         query: "origin arch",
-        concept_titles: ["Origin Architecture"],
-        concept_ids: [],
+        page_titles: ["Origin Architecture"],
+        page_ids: [],
         memory_snippets: [],
       },
     ]);
@@ -190,18 +194,18 @@ describe("HomePage redesign", () => {
           onNavigateStream={() => {}}
           onNavigateLog={() => {}}
           onNavigateGraph={() => {}}
-          onSelectConcept={onSelectConcept}
+          onSelectPage={onSelectPage}
         />
       </QueryClientProvider>,
     );
     // Wait for the retrievals section to render
     await screen.findByTestId("retrievals");
     // The archived badge should be visible
-    expect(screen.getByTitle("This concept has been archived")).toBeInTheDocument();
-    // Clicking should not navigate because concept_ids is empty
+    expect(screen.getByTitle("This page has been archived")).toBeInTheDocument();
+    // Clicking should not navigate because page_ids is empty
     const item = screen.getByTestId("retrieval-item");
     await userEvent.click(item);
-    expect(onSelectConcept).not.toHaveBeenCalled();
+    expect(onSelectPage).not.toHaveBeenCalled();
   });
 
   it("empty state shows greeting plus WhatHappensNextCard, no data zones", async () => {

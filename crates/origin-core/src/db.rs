@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 use crate::cache::EmbeddingCache;
 use crate::chunker::ChunkingEngine;
-use crate::concepts::Concept;
 use crate::error::OriginError;
 use crate::events::EventEmitter;
+use crate::pages::Page;
 use crate::privacy::redact_pii;
 use crate::sources::{stability_tier, RawDocument};
 
@@ -3105,6 +3105,11 @@ impl MemoryDB {
 
             if version < 26 {
                 let conn = self.conn.lock().await;
+                // Legacy table name. The canonical Rust type is `Page` (Phase 0c.1
+                // taxonomy refactor) but we keep the SQL identifiers as `concepts` /
+                // `concept_sources` / `concept_id` to avoid a complex FTS+index+FK
+                // rename migration. Bundle the SQL rename with a future schema-evolution
+                // migration when schema work is needed anyway.
                 conn.execute_batch("
                     CREATE TABLE IF NOT EXISTS concepts (
                         id TEXT PRIMARY KEY,
@@ -3957,7 +3962,7 @@ impl MemoryDB {
                 }
 
                 // Backfill embeddings for concepts that have NULL embedding
-                let backfilled = self.backfill_concept_embeddings().await.unwrap_or(0);
+                let backfilled = self.backfill_page_embeddings().await.unwrap_or(0);
                 log::info!(
                     "[migration] Migration 42 applied: concepts vector index with cosine+float8, backfilled {} embeddings",
                     backfilled
@@ -4106,10 +4111,10 @@ impl MemoryDB {
             // Migration 44: re-run the migration 40 backfill of `concept_sources`
             // from `source_memory_ids` JSON. Migration 40 only fired the backfill
             // when the version was below 40, so any concept created later that
-            // went through `insert_concept` (which writes only the JSON column,
+            // went through `insert_page` (which writes only the JSON column,
             // not the join row) leaves `concept_sources` empty for that concept.
             // The eval per-scenario DBs at version 43 with PR #4 distillation are
-            // the concrete trigger: search_concepts dual-path falls back to JSON
+            // the concrete trigger: search_pages dual-path falls back to JSON
             // today, but anything that depends on the join (cascade delete,
             // reverse lookup, staleness signals, redistill_changed_concepts)
             // silently no-ops. INSERT OR IGNORE is idempotent: existing join
@@ -4179,6 +4184,36 @@ impl MemoryDB {
                     "[migration] Migration 44 applied: backfilled {} concept_sources rows from source_memory_ids JSON",
                     inserted
                 );
+            }
+
+            // Migration 45: fold memory_type='goal' rows into 'identity'.
+            // Phase 0a of the taxonomy refactor removed the Goal variant; incoming
+            // "goal" strings now parse to Identity at FromStr time. Existing DB rows
+            // written before Phase 0a still carry memory_type='goal' and must be
+            // migrated so queries, filters, and the UI see a consistent taxonomy.
+            if version < 45 {
+                let conn = self.conn.lock().await;
+
+                conn.execute("BEGIN", ())
+                    .await
+                    .map_err(|e| OriginError::VectorDb(format!("m45 begin: {e}")))?;
+
+                conn.execute(
+                    "UPDATE memories SET memory_type = 'identity' WHERE memory_type = 'goal'",
+                    (),
+                )
+                .await
+                .map_err(|e| OriginError::VectorDb(format!("m45 update: {e}")))?;
+
+                conn.execute("COMMIT", ())
+                    .await
+                    .map_err(|e| OriginError::VectorDb(format!("m45 commit: {e}")))?;
+
+                conn.execute("PRAGMA user_version = 45", ())
+                    .await
+                    .map_err(|e| OriginError::VectorDb(format!("m45 bump: {e}")))?;
+
+                log::info!("[migration] Migration 45 applied: folded goal-type rows into identity (taxonomy refactor)");
             }
         }
 
@@ -9573,13 +9608,13 @@ impl MemoryDB {
             .map(|r| r.get::<u64>(0).unwrap_or(0))
             .unwrap_or(0);
 
-        // ---- Key insights (identity + preference + decision + goal + fact) ----
+        // ---- Key insights (all classified memory types) ----
 
         let mut rows = conn
             .query(
                 "SELECT COUNT(DISTINCT source_id) FROM memories \
                  WHERE source = 'memory' AND confirmed = 1 \
-                   AND memory_type IN ('identity', 'preference', 'decision', 'goal', 'fact')",
+                   AND memory_type IN ('identity', 'preference', 'decision', 'goal', 'lesson', 'gotcha', 'fact')",
                 libsql::params![],
             )
             .await
@@ -10335,28 +10370,26 @@ impl MemoryDB {
     // ===== Count helpers for MilestoneEvaluator =====
 
     /// Count active (i.e. not archived/superseded) concepts.
-    pub async fn count_active_concepts(&self) -> Result<i64, OriginError> {
+    pub async fn count_active_pages(&self) -> Result<i64, OriginError> {
         let conn = self.conn.lock().await;
         let mut rows = conn
             .query("SELECT COUNT(*) FROM concepts WHERE status = 'active'", ())
             .await
-            .map_err(|e| OriginError::VectorDb(format!("count_active_concepts query: {}", e)))?;
+            .map_err(|e| OriginError::VectorDb(format!("count_active_pages query: {}", e)))?;
         let row = rows
             .next()
             .await
-            .map_err(|e| OriginError::VectorDb(format!("count_active_concepts next: {}", e)))?
-            .ok_or_else(|| OriginError::Generic("count_active_concepts: no rows".into()))?;
+            .map_err(|e| OriginError::VectorDb(format!("count_active_pages next: {}", e)))?
+            .ok_or_else(|| OriginError::Generic("count_active_pages: no rows".into()))?;
         row.get::<i64>(0)
-            .map_err(|e| OriginError::VectorDb(format!("count_active_concepts get: {}", e)))
+            .map_err(|e| OriginError::VectorDb(format!("count_active_pages get: {}", e)))
     }
 
     /// Return the most-recently-modified active concept, if any. Used by
     /// `MilestoneEvaluator::check_after_refinery_pass` to build the
     /// `first-concept` payload.
-    pub async fn first_active_concept(
-        &self,
-    ) -> Result<Option<crate::concepts::Concept>, OriginError> {
-        let mut list = self.list_concepts("active", 1, 0).await?;
+    pub async fn first_active_page(&self) -> Result<Option<crate::pages::Page>, OriginError> {
+        let mut list = self.list_pages("active", 1, 0).await?;
         Ok(list.pop())
     }
 
@@ -10364,9 +10397,7 @@ impl MemoryDB {
     /// `created_at` ascending). Used by `MilestoneEvaluator::check_after_refinery_pass`
     /// so the `first-concept` milestone payload references the concept that
     /// was actually compiled first, not the most recently edited one.
-    pub async fn oldest_active_concept(
-        &self,
-    ) -> Result<Option<crate::concepts::Concept>, OriginError> {
+    pub async fn oldest_active_page(&self) -> Result<Option<crate::pages::Page>, OriginError> {
         let conn = self.conn.lock().await;
         let mut rows = conn
             .query(
@@ -10375,13 +10406,13 @@ impl MemoryDB {
                 (),
             )
             .await
-            .map_err(|e| OriginError::VectorDb(format!("oldest_active_concept: {e}")))?;
+            .map_err(|e| OriginError::VectorDb(format!("oldest_active_page: {e}")))?;
         match rows
             .next()
             .await
-            .map_err(|e| OriginError::VectorDb(format!("oldest_active_concept next: {e}")))?
+            .map_err(|e| OriginError::VectorDb(format!("oldest_active_page next: {e}")))?
         {
-            Some(row) => Ok(Some(Self::row_to_concept(&row)?)),
+            Some(row) => Ok(Some(Self::row_to_page(&row)?)),
             None => Ok(None),
         }
     }
@@ -11216,6 +11247,8 @@ impl MemoryDB {
     // ===== Narrative Cache =====
 
     /// Fetch confirmed memories of profile types (identity, preference, goal) for narrative.
+    // Must stay in sync with get_narrative_memory_count — see issue:
+    // narrative cache invalidation requires fetch and count over identical type set.
     pub async fn get_memories_for_narrative(
         &self,
         limit: usize,
@@ -11249,13 +11282,15 @@ impl MemoryDB {
     }
 
     /// Count confirmed narrative-eligible memories.
+    // Must stay in sync with get_memories_for_narrative — see issue:
+    // narrative cache invalidation requires count and fetch over identical type set.
     pub async fn get_narrative_memory_count(&self) -> Result<u64, OriginError> {
         let conn = self.conn.lock().await;
         let mut rows = conn
             .query(
                 "SELECT COUNT(DISTINCT source_id) FROM memories \
                  WHERE source = 'memory' AND confirmed = 1 AND chunk_index = 0 \
-                   AND memory_type IN ('identity', 'preference', 'decision', 'goal')",
+                   AND memory_type IN ('identity', 'preference', 'goal')",
                 (),
             )
             .await
@@ -12912,8 +12947,8 @@ impl MemoryDB {
                 timestamp_ms: ts_s.saturating_mul(1000),
                 agent_name: agent,
                 query,
-                concept_titles: titles,
-                concept_ids,
+                page_titles: titles,
+                page_ids: concept_ids,
                 memory_snippets: snippets,
             });
         }
@@ -12932,12 +12967,12 @@ impl MemoryDB {
     ///
     /// `Merged` is currently never emitted: the `concepts` schema has no
     /// merge-tracking column (e.g. `merged_into` / `superseded_by`). The
-    /// `ConceptChangeKind::Merged` variant remains defined in `origin-types`
+    /// `PageChangeKind::Merged` variant remains defined in `origin-types`
     /// so a later task can extend this method once such a column exists.
     pub async fn list_recent_changes(
         &self,
         limit: i64,
-    ) -> Result<Vec<origin_types::ConceptChange>, OriginError> {
+    ) -> Result<Vec<origin_types::PageChange>, OriginError> {
         let conn = self.conn.lock().await;
         let mut rows = conn
             .query(
@@ -12959,19 +12994,19 @@ impl MemoryDB {
             let last_modified: String = row.get(4).unwrap_or_default();
 
             let change_kind = if version > 1 {
-                origin_types::ConceptChangeKind::Revised
+                origin_types::PageChangeKind::Revised
             } else if created_at == last_modified {
-                origin_types::ConceptChangeKind::Created
+                origin_types::PageChangeKind::Created
             } else {
-                origin_types::ConceptChangeKind::Revised
+                origin_types::PageChangeKind::Revised
             };
 
             let changed_at_ms = chrono::DateTime::parse_from_rfc3339(&last_modified)
                 .map(|dt| dt.timestamp_millis())
                 .unwrap_or(0);
 
-            out.push(origin_types::ConceptChange {
-                concept_id: id,
+            out.push(origin_types::PageChange {
+                page_id: id,
                 title,
                 change_kind,
                 changed_at_ms,
@@ -13190,7 +13225,7 @@ impl MemoryDB {
     ///
     /// Badge precedence (high → low):
     ///   NeedsReview > New > Growing > Revised > None
-    pub async fn list_recent_concepts_with_badges(
+    pub async fn list_recent_pages_with_badges(
         &self,
         limit: i64,
         since_ms: Option<i64>,
@@ -13348,7 +13383,7 @@ impl MemoryDB {
                 .unwrap_or(0);
 
             items.push(RecentActivityItem {
-                kind: ActivityKind::Concept,
+                kind: ActivityKind::Page,
                 id,
                 title,
                 snippet,
@@ -13668,12 +13703,12 @@ impl MemoryDB {
     /// Dual-writes the concept row and one `concept_sources` row per
     /// `source_memory_id` inside a single BEGIN/COMMIT so the join table is
     /// always consistent with the legacy `source_memory_ids` JSON column at
-    /// creation time. The pre-existing fallback path (`update_concept_content`
+    /// creation time. The pre-existing fallback path (`update_page_content`
     /// dual-writes on edit) only fires when a concept is updated, so without
     /// this dual-write at insert, brand-new concepts left the join table empty
     /// until migration 44 backfilled them retroactively.
     #[allow(clippy::too_many_arguments)]
-    pub async fn insert_concept(
+    pub async fn insert_page(
         &self,
         id: &str,
         title: &str,
@@ -13695,11 +13730,11 @@ impl MemoryDB {
         let embedding_sql = match self.generate_embeddings(&[embed_text]) {
             Ok(vecs) if !vecs.is_empty() => Some(Self::vec_to_sql(&vecs[0])),
             Ok(_) => {
-                log::warn!("insert_concept: empty embedding result for {id}");
+                log::warn!("insert_page: empty embedding result for {id}");
                 None
             }
             Err(e) => {
-                log::warn!("insert_concept: embedding failed for {id}: {e}");
+                log::warn!("insert_page: embedding failed for {id}: {e}");
                 None
             }
         };
@@ -13713,7 +13748,7 @@ impl MemoryDB {
         let conn = self.conn.lock().await;
         conn.execute("BEGIN", ())
             .await
-            .map_err(|e| OriginError::VectorDb(format!("insert_concept begin: {e}")))?;
+            .map_err(|e| OriginError::VectorDb(format!("insert_page begin: {e}")))?;
 
         let concept_result = match &embedding_sql {
             Some(emb) => {
@@ -13733,7 +13768,7 @@ impl MemoryDB {
         };
         if let Err(e) = concept_result {
             let _ = conn.execute("ROLLBACK", ()).await;
-            return Err(OriginError::VectorDb(format!("insert_concept: {e}")));
+            return Err(OriginError::VectorDb(format!("insert_page: {e}")));
         }
 
         // Idempotent join writes. INSERT OR IGNORE protects against a row that
@@ -13749,19 +13784,19 @@ impl MemoryDB {
             {
                 let _ = conn.execute("ROLLBACK", ()).await;
                 return Err(OriginError::VectorDb(format!(
-                    "insert_concept concept_sources: {e}"
+                    "insert_page concept_sources: {e}"
                 )));
             }
         }
 
         conn.execute("COMMIT", ())
             .await
-            .map_err(|e| OriginError::VectorDb(format!("insert_concept commit: {e}")))?;
+            .map_err(|e| OriginError::VectorDb(format!("insert_page commit: {e}")))?;
         Ok(())
     }
 
     /// Retrieve a concept by id. Returns None if not found.
-    pub async fn get_concept(&self, id: &str) -> Result<Option<Concept>, OriginError> {
+    pub async fn get_page(&self, id: &str) -> Result<Option<Page>, OriginError> {
         let conn = self.conn.lock().await;
         let mut rows = conn
             .query(
@@ -13770,19 +13805,16 @@ impl MemoryDB {
                 libsql::params![id],
             )
             .await
-            .map_err(|e| OriginError::VectorDb(format!("get_concept: {e}")))?;
+            .map_err(|e| OriginError::VectorDb(format!("get_page: {e}")))?;
         match rows.next().await {
-            Ok(Some(row)) => Ok(Some(Self::row_to_concept(&row)?)),
+            Ok(Some(row)) => Ok(Some(Self::row_to_page(&row)?)),
             Ok(None) => Ok(None),
-            Err(e) => Err(OriginError::VectorDb(format!("get_concept row: {e}"))),
+            Err(e) => Err(OriginError::VectorDb(format!("get_page row: {e}"))),
         }
     }
 
     /// Find an active concept linked to a specific entity. Returns None if not found.
-    pub async fn get_concept_by_entity(
-        &self,
-        entity_id: &str,
-    ) -> Result<Option<Concept>, OriginError> {
+    pub async fn get_page_by_entity(&self, entity_id: &str) -> Result<Option<Page>, OriginError> {
         let conn = self.conn.lock().await;
         let mut rows = conn
             .query(
@@ -13791,26 +13823,26 @@ impl MemoryDB {
                 libsql::params![entity_id],
             )
             .await
-            .map_err(|e| OriginError::VectorDb(format!("get_concept_by_entity: {e}")))?;
+            .map_err(|e| OriginError::VectorDb(format!("get_page_by_entity: {e}")))?;
         match rows.next().await {
-            Ok(Some(row)) => Ok(Some(Self::row_to_concept(&row)?)),
+            Ok(Some(row)) => Ok(Some(Self::row_to_page(&row)?)),
             Ok(None) => Ok(None),
             Err(e) => Err(OriginError::VectorDb(format!(
-                "get_concept_by_entity row: {e}"
+                "get_page_by_entity row: {e}"
             ))),
         }
     }
 
     /// Find an active concept that includes a specific source memory.
-    pub async fn find_concept_by_source_memory(
+    pub async fn find_page_by_source_memory(
         &self,
         source_id: &str,
-    ) -> Result<Option<Concept>, OriginError> {
+    ) -> Result<Option<Page>, OriginError> {
         let conn = self.conn.lock().await;
         let mut rows = conn.query(
             "SELECT id FROM concepts WHERE status = 'active' AND source_memory_ids LIKE ?1 LIMIT 1",
             libsql::params![format!("%\"{}\"%" , source_id)],
-        ).await.map_err(|e| OriginError::VectorDb(format!("find_concept_by_source_memory: {e}")))?;
+        ).await.map_err(|e| OriginError::VectorDb(format!("find_page_by_source_memory: {e}")))?;
 
         match rows
             .next()
@@ -13821,19 +13853,19 @@ impl MemoryDB {
                 let id: String = row.get(0).unwrap_or_default();
                 drop(rows);
                 drop(conn);
-                self.get_concept(&id).await
+                self.get_page(&id).await
             }
             None => Ok(None),
         }
     }
 
     /// List concepts filtered by status, ordered by last_modified descending.
-    pub async fn list_concepts(
+    pub async fn list_pages(
         &self,
         status: &str,
         limit: i64,
         offset: i64,
-    ) -> Result<Vec<Concept>, OriginError> {
+    ) -> Result<Vec<Page>, OriginError> {
         let conn = self.conn.lock().await;
         let mut rows = conn
             .query(
@@ -13842,22 +13874,22 @@ impl MemoryDB {
                 libsql::params![status, limit, offset],
             )
             .await
-            .map_err(|e| OriginError::VectorDb(format!("list_concepts: {e}")))?;
+            .map_err(|e| OriginError::VectorDb(format!("list_pages: {e}")))?;
         let mut results = Vec::new();
         while let Ok(Some(row)) = rows.next().await {
-            results.push(Self::row_to_concept(&row)?);
+            results.push(Self::row_to_page(&row)?);
         }
         Ok(results)
     }
 
     /// List concepts, optionally filtered by domain.
-    pub async fn list_concepts_by_domain(
+    pub async fn list_pages_by_domain(
         &self,
         status: &str,
         domain: Option<&str>,
         limit: usize,
         offset: usize,
-    ) -> Result<Vec<Concept>, OriginError> {
+    ) -> Result<Vec<Page>, OriginError> {
         let conn = self.conn.lock().await;
         let (sql, params): (String, Vec<libsql::Value>) = if let Some(d) = domain {
             (
@@ -13892,7 +13924,7 @@ impl MemoryDB {
             .await
             .map_err(|e| OriginError::VectorDb(e.to_string()))?
         {
-            results.push(Self::row_to_concept(&row)?);
+            results.push(Self::row_to_page(&row)?);
         }
         Ok(results)
     }
@@ -13900,7 +13932,7 @@ impl MemoryDB {
     /// Update a concept's content and source memory ids. Increments version, updates timestamps.
     /// Dual-writes: updates the JSON `source_memory_ids` column (backward compat) AND
     /// inserts any new links into the `concept_sources` join table.
-    pub async fn update_concept_content(
+    pub async fn update_page_content(
         &self,
         id: &str,
         content: &str,
@@ -13918,7 +13950,7 @@ impl MemoryDB {
             libsql::params![content, source_ids_json, now, id],
         )
         .await
-        .map_err(|e| OriginError::VectorDb(format!("update_concept_content: {e}")))?;
+        .map_err(|e| OriginError::VectorDb(format!("update_page_content: {e}")))?;
         // Dual-write: insert any new source links into the join table (idempotent)
         for sid in source_memory_ids {
             let _ = conn
@@ -13932,15 +13964,15 @@ impl MemoryDB {
     }
 
     /// Find a matching concept for a new memory — by entity_id first, then embedding similarity.
-    pub async fn find_matching_concept(
+    pub async fn find_matching_page(
         &self,
         entity_id: Option<&str>,
         memory_embedding: &[f32],
         similarity_threshold: f64,
-    ) -> Result<Option<Concept>, OriginError> {
+    ) -> Result<Option<Page>, OriginError> {
         // First: try entity_id match
         if let Some(eid) = entity_id {
-            if let Some(concept) = self.get_concept_by_entity(eid).await? {
+            if let Some(concept) = self.get_page_by_entity(eid).await? {
                 return Ok(Some(concept));
             }
         }
@@ -13970,7 +14002,7 @@ impl MemoryDB {
             let dist: f64 = row.get(15).unwrap_or(1.0);
             let similarity = 1.0 - dist;
             if similarity >= similarity_threshold {
-                return Ok(Some(Self::row_to_concept(&row)?));
+                return Ok(Some(Self::row_to_page(&row)?));
             }
         }
 
@@ -13979,10 +14011,7 @@ impl MemoryDB {
 
     /// Check if a concept's inputs have changed since last compilation.
     /// True if source memories were modified or new memories linked to same entity.
-    pub async fn has_concept_sources_changed(
-        &self,
-        concept: &Concept,
-    ) -> Result<bool, OriginError> {
+    pub async fn has_page_sources_changed(&self, concept: &Page) -> Result<bool, OriginError> {
         let conn = self.conn.lock().await;
 
         // Check 1: Any source memory modified after last_compiled?
@@ -14088,7 +14117,7 @@ impl MemoryDB {
     }
 
     /// Archive a concept (set status to 'archived').
-    pub async fn archive_concept(&self, id: &str) -> Result<(), OriginError> {
+    pub async fn archive_page(&self, id: &str) -> Result<(), OriginError> {
         let now = chrono::Utc::now().to_rfc3339();
         let conn = self.conn.lock().await;
         conn.execute(
@@ -14096,13 +14125,13 @@ impl MemoryDB {
             libsql::params![now, id],
         )
         .await
-        .map_err(|e| OriginError::VectorDb(format!("archive_concept: {e}")))?;
+        .map_err(|e| OriginError::VectorDb(format!("archive_page: {e}")))?;
         Ok(())
     }
 
     /// Check maximum Jaccard overlap between a set of source_ids and any existing concept.
     /// Returns 0.0-1.0 (0 = no overlap, 1 = identical source set).
-    pub async fn max_concept_overlap(&self, source_ids: &[String]) -> Result<f64, OriginError> {
+    pub async fn max_page_overlap(&self, source_ids: &[String]) -> Result<f64, OriginError> {
         let conn = self.conn.lock().await;
         let mut rows = conn
             .query(
@@ -14164,11 +14193,11 @@ impl MemoryDB {
         Ok(covered)
     }
 
-    pub async fn delete_concept(&self, id: &str) -> Result<(), OriginError> {
+    pub async fn delete_page(&self, id: &str) -> Result<(), OriginError> {
         let conn = self.conn.lock().await;
         conn.execute("DELETE FROM concepts WHERE id = ?1", libsql::params![id])
             .await
-            .map_err(|e| OriginError::VectorDb(format!("delete_concept: {e}")))?;
+            .map_err(|e| OriginError::VectorDb(format!("delete_page: {e}")))?;
         Ok(())
     }
 
@@ -14177,11 +14206,7 @@ impl MemoryDB {
     /// Embeds the query, runs DiskANN vector search on concept embeddings
     /// (title+summary), runs FTS5 MATCH on concept content, then merges
     /// results with Reciprocal Rank Fusion (same pattern as search_memory).
-    pub async fn search_concepts(
-        &self,
-        query: &str,
-        limit: usize,
-    ) -> Result<Vec<Concept>, OriginError> {
+    pub async fn search_pages(&self, query: &str, limit: usize) -> Result<Vec<Page>, OriginError> {
         // Embed query before acquiring conn lock (same pattern as search_memory)
         let embedding = self.get_or_compute_embedding(query)?;
         let vec_str = Self::vec_to_sql(&embedding);
@@ -14196,7 +14221,7 @@ impl MemoryDB {
                               COALESCE(c.user_edited, 0)";
 
         // --- Vector search via DiskANN index ---
-        let mut vector_results: Vec<(String, f64, Concept)> = Vec::new();
+        let mut vector_results: Vec<(String, f64, Page)> = Vec::new();
         let vec_sql = format!(
             "SELECT {}, vector_distance_cos(c.embedding, vector32(?1)) AS dist \
              FROM vector_top_k('idx_concepts_embedding', vector32(?1), ?2) AS vt \
@@ -14210,25 +14235,25 @@ impl MemoryDB {
         {
             Ok(mut rows) => {
                 while let Ok(Some(row)) = rows.next().await {
-                    match Self::row_to_concept(&row) {
+                    match Self::row_to_page(&row) {
                         Ok(concept) => {
                             let distance: f64 = row.get(15).unwrap_or(1.0);
                             let id = concept.id.clone();
                             vector_results.push((id, distance, concept));
                         }
                         Err(e) => {
-                            log::warn!("[search_concepts] skipping malformed vector row: {e}")
+                            log::warn!("[search_pages] skipping malformed vector row: {e}")
                         }
                     }
                 }
             }
             Err(e) => {
-                log::warn!("[search_concepts] vector search failed: {e}");
+                log::warn!("[search_pages] vector search failed: {e}");
             }
         }
 
         // --- FTS search with AND-then-OR fallback ---
-        let mut fts_results: Vec<(String, Concept)> = Vec::new();
+        let mut fts_results: Vec<(String, Page)> = Vec::new();
         let fts_sql = format!(
             "SELECT {} \
              FROM concepts c \
@@ -14245,14 +14270,14 @@ impl MemoryDB {
             {
                 Ok(mut rows) => {
                     while let Ok(Some(row)) = rows.next().await {
-                        if let Ok(concept) = Self::row_to_concept(&row) {
+                        if let Ok(concept) = Self::row_to_page(&row) {
                             let id = concept.id.clone();
                             fts_results.push((id, concept));
                         }
                     }
                 }
                 Err(e) => {
-                    log::debug!("[search_concepts] FTS query failed ({}): {e}", fts_q);
+                    log::debug!("[search_pages] FTS query failed ({}): {e}", fts_q);
                 }
             }
             if !fts_results.is_empty() {
@@ -14267,7 +14292,7 @@ impl MemoryDB {
         let fts_weight = 0.2f32;
         let mut score_map: std::collections::HashMap<String, f32> =
             std::collections::HashMap::new();
-        let mut concept_map: std::collections::HashMap<String, Concept> =
+        let mut concept_map: std::collections::HashMap<String, Page> =
             std::collections::HashMap::new();
 
         for (rank, (id, distance, concept)) in vector_results.into_iter().enumerate() {
@@ -14291,7 +14316,7 @@ impl MemoryDB {
         }
 
         // Sort by combined RRF score, attach to concepts, return top limit
-        let mut final_results: Vec<Concept> = concept_map.into_values().collect();
+        let mut final_results: Vec<Page> = concept_map.into_values().collect();
         final_results.sort_by(|a, b| {
             let sa = score_map.get(&a.id).unwrap_or(&0.0);
             let sb = score_map.get(&b.id).unwrap_or(&0.0);
@@ -14308,8 +14333,8 @@ impl MemoryDB {
     /// Backfill embeddings for concepts with NULL embedding column.
     ///
     /// Called by migration 42 and can be run manually for maintenance.
-    /// Computes embeddings from title + summary (same as insert_concept).
-    pub async fn backfill_concept_embeddings(&self) -> Result<usize, OriginError> {
+    /// Computes embeddings from title + summary (same as insert_page).
+    pub async fn backfill_page_embeddings(&self) -> Result<usize, OriginError> {
         let needs_embed: Vec<(String, String)> = {
             let conn = self.conn.lock().await;
             let mut rows = conn
@@ -14368,11 +14393,11 @@ impl MemoryDB {
     }
 
     /// Parse a row into a Concept. Column order must match the SELECT used in concept queries.
-    fn row_to_concept(row: &libsql::Row) -> Result<Concept, OriginError> {
+    fn row_to_page(row: &libsql::Row) -> Result<Page, OriginError> {
         let source_ids_json: String = row.get::<String>(6).unwrap_or_else(|_| "[]".to_string());
         let source_memory_ids: Vec<String> =
             serde_json::from_str(&source_ids_json).unwrap_or_default();
-        Ok(Concept {
+        Ok(Page {
             id: row
                 .get::<String>(0)
                 .map_err(|e| OriginError::VectorDb(format!("concept id: {e}")))?,
@@ -14402,7 +14427,7 @@ impl MemoryDB {
             sources_updated_count: row.get::<i64>(12).unwrap_or(0),
             stale_reason: row.get::<Option<String>>(13).unwrap_or(None),
             user_edited: row.get::<i64>(14).unwrap_or(0) != 0,
-            relevance_score: 0.0, // populated by search_concepts after RRF fusion
+            relevance_score: 0.0, // populated by search_pages after RRF fusion
         })
     }
 
@@ -14543,7 +14568,7 @@ impl MemoryDB {
 
     /// Link a memory to a concept in the concept_sources join table.
     /// Idempotent: INSERT OR IGNORE on the composite primary key.
-    pub async fn link_concept_source(
+    pub async fn link_page_source(
         &self,
         concept_id: &str,
         memory_source_id: &str,
@@ -14556,15 +14581,15 @@ impl MemoryDB {
             libsql::params![concept_id, memory_source_id, now, link_reason],
         )
         .await
-        .map_err(|e| OriginError::VectorDb(format!("link_concept_source: {e}")))?;
+        .map_err(|e| OriginError::VectorDb(format!("link_page_source: {e}")))?;
         Ok(())
     }
 
     /// Get all source memories linked to a concept, ordered by linked_at ascending.
-    pub async fn get_concept_sources(
+    pub async fn get_page_sources(
         &self,
         concept_id: &str,
-    ) -> Result<Vec<origin_types::ConceptSource>, OriginError> {
+    ) -> Result<Vec<origin_types::PageSource>, OriginError> {
         let conn = self.conn.lock().await;
         let mut rows = conn
             .query(
@@ -14572,16 +14597,16 @@ impl MemoryDB {
                 libsql::params![concept_id],
             )
             .await
-            .map_err(|e| OriginError::VectorDb(format!("get_concept_sources: {e}")))?;
+            .map_err(|e| OriginError::VectorDb(format!("get_page_sources: {e}")))?;
         let mut result = Vec::new();
         while let Some(row) = rows
             .next()
             .await
             .map_err(|e| OriginError::VectorDb(e.to_string()))?
         {
-            result.push(origin_types::ConceptSource {
-                concept_id: row.get(0).map_err(|e| {
-                    OriginError::VectorDb(format!("concept_sources concept_id: {e}"))
+            result.push(origin_types::PageSource {
+                page_id: row.get(0).map_err(|e| {
+                    OriginError::VectorDb(format!("concept_sources concept_id column: {e}"))
                 })?,
                 memory_source_id: row.get(1).map_err(|e| {
                     OriginError::VectorDb(format!("concept_sources memory_source_id: {e}"))
@@ -14594,10 +14619,10 @@ impl MemoryDB {
     }
 
     /// Reverse lookup: find all active concepts that reference a given memory source_id.
-    pub async fn get_concepts_for_memory(
+    pub async fn get_pages_for_memory(
         &self,
         memory_source_id: &str,
-    ) -> Result<Vec<crate::concepts::Concept>, OriginError> {
+    ) -> Result<Vec<crate::pages::Page>, OriginError> {
         let conn = self.conn.lock().await;
         let mut rows = conn
             .query(
@@ -14610,20 +14635,20 @@ impl MemoryDB {
                 libsql::params![memory_source_id],
             )
             .await
-            .map_err(|e| OriginError::VectorDb(format!("get_concepts_for_memory: {e}")))?;
+            .map_err(|e| OriginError::VectorDb(format!("get_pages_for_memory: {e}")))?;
         let mut result = Vec::new();
         while let Some(row) = rows
             .next()
             .await
             .map_err(|e| OriginError::VectorDb(e.to_string()))?
         {
-            result.push(Self::row_to_concept(&row)?);
+            result.push(Self::row_to_page(&row)?);
         }
         Ok(result)
     }
 
     /// Remove concept_sources rows where the referenced memory no longer exists.
-    pub async fn cleanup_orphaned_concept_sources(&self) -> Result<usize, OriginError> {
+    pub async fn cleanup_orphaned_page_sources(&self) -> Result<usize, OriginError> {
         let conn = self.conn.lock().await;
         let rows_affected = conn
             .execute(
@@ -14631,7 +14656,7 @@ impl MemoryDB {
                 (),
             )
             .await
-            .map_err(|e| OriginError::VectorDb(format!("cleanup_orphaned_concept_sources: {e}")))?;
+            .map_err(|e| OriginError::VectorDb(format!("cleanup_orphaned_page_sources: {e}")))?;
         Ok(rows_affected as usize)
     }
 
@@ -14660,23 +14685,19 @@ impl MemoryDB {
     }
 
     /// Mark a concept as stale with a specific reason.
-    pub async fn set_concept_stale(
-        &self,
-        concept_id: &str,
-        reason: &str,
-    ) -> Result<(), OriginError> {
+    pub async fn set_page_stale(&self, concept_id: &str, reason: &str) -> Result<(), OriginError> {
         let conn = self.conn.lock().await;
         conn.execute(
             "UPDATE concepts SET stale_reason = ?1 WHERE id = ?2",
             libsql::params![reason, concept_id],
         )
         .await
-        .map_err(|e| OriginError::VectorDb(format!("set_concept_stale: {e}")))?;
+        .map_err(|e| OriginError::VectorDb(format!("set_page_stale: {e}")))?;
         Ok(())
     }
 
     /// Increment a concept's sources_updated_count (for trivial/non-conflicting source changes).
-    pub async fn increment_concept_sources_updated(
+    pub async fn increment_page_sources_updated(
         &self,
         concept_id: &str,
     ) -> Result<(), OriginError> {
@@ -14686,15 +14707,15 @@ impl MemoryDB {
             libsql::params![concept_id],
         )
         .await
-        .map_err(|e| OriginError::VectorDb(format!("increment_concept_sources_updated: {e}")))?;
+        .map_err(|e| OriginError::VectorDb(format!("increment_page_sources_updated: {e}")))?;
         Ok(())
     }
 
     /// List active concepts with the given stale_reason, up to `limit` rows.
-    pub async fn list_stale_concepts(
+    pub async fn list_stale_pages(
         &self,
         reason: &str,
-    ) -> Result<Vec<crate::concepts::Concept>, OriginError> {
+    ) -> Result<Vec<crate::pages::Page>, OriginError> {
         let conn = self.conn.lock().await;
         let mut rows = conn
             .query(
@@ -14702,14 +14723,14 @@ impl MemoryDB {
                 libsql::params![reason],
             )
             .await
-            .map_err(|e| OriginError::VectorDb(format!("list_stale_concepts: {e}")))?;
+            .map_err(|e| OriginError::VectorDb(format!("list_stale_pages: {e}")))?;
         let mut result = Vec::new();
         while let Some(row) = rows
             .next()
             .await
             .map_err(|e| OriginError::VectorDb(e.to_string()))?
         {
-            result.push(Self::row_to_concept(&row)?);
+            result.push(Self::row_to_page(&row)?);
         }
         Ok(result)
     }
@@ -14717,9 +14738,7 @@ impl MemoryDB {
     /// Find archived concepts that look like Mode B failures: large
     /// source_memory_ids count, no entity, no domain, not user-edited.
     /// Used by the `backfill-stale-concepts` CLI subcommand.
-    pub async fn find_stale_archived_concepts(
-        &self,
-    ) -> Result<Vec<crate::concepts::Concept>, OriginError> {
+    pub async fn find_stale_archived_pages(&self) -> Result<Vec<crate::pages::Page>, OriginError> {
         let conn = self.conn.lock().await;
         let mut rows = conn
             .query(
@@ -14734,7 +14753,7 @@ impl MemoryDB {
                 (),
             )
             .await
-            .map_err(|e| OriginError::VectorDb(format!("find_stale_archived_concepts: {e}")))?;
+            .map_err(|e| OriginError::VectorDb(format!("find_stale_archived_pages: {e}")))?;
 
         let mut out = Vec::new();
         while let Some(row) = rows
@@ -14742,20 +14761,20 @@ impl MemoryDB {
             .await
             .map_err(|e| OriginError::VectorDb(e.to_string()))?
         {
-            out.push(Self::row_to_concept(&row)?);
+            out.push(Self::row_to_page(&row)?);
         }
         Ok(out)
     }
 
     /// Clear staleness fields after successful re-distillation.
-    pub async fn clear_concept_staleness(&self, concept_id: &str) -> Result<(), OriginError> {
+    pub async fn clear_page_staleness(&self, concept_id: &str) -> Result<(), OriginError> {
         let conn = self.conn.lock().await;
         conn.execute(
             "UPDATE concepts SET stale_reason = NULL, sources_updated_count = 0 WHERE id = ?1",
             libsql::params![concept_id],
         )
         .await
-        .map_err(|e| OriginError::VectorDb(format!("clear_concept_staleness: {e}")))?;
+        .map_err(|e| OriginError::VectorDb(format!("clear_page_staleness: {e}")))?;
         Ok(())
     }
 
@@ -21019,7 +21038,7 @@ pub(crate) mod tests {
         let (db, _dir) = test_db().await;
         let now = chrono::Utc::now().to_rfc3339();
         let id = "concept_test1";
-        db.insert_concept(
+        db.insert_page(
             id,
             "Test Title",
             Some("A summary"),
@@ -21032,7 +21051,7 @@ pub(crate) mod tests {
         .await
         .unwrap();
 
-        let concept = db.get_concept(id).await.unwrap().unwrap();
+        let concept = db.get_page(id).await.unwrap().unwrap();
         assert_eq!(concept.title, "Test Title");
         assert_eq!(concept.version, 1);
         assert_eq!(concept.source_memory_ids, vec!["mem_1", "mem_2"]);
@@ -21041,13 +21060,13 @@ pub(crate) mod tests {
 
     #[tokio::test]
     async fn test_insert_concept_writes_concept_sources() {
-        // Source-side fix verification: insert_concept must populate the
+        // Source-side fix verification: insert_page must populate the
         // concept_sources join table at creation, not leave it empty for
         // migration 44 to backfill later.
         let (db, _dir) = test_db().await;
         let now = chrono::Utc::now().to_rfc3339();
         let id = "concept_dualwrite";
-        db.insert_concept(
+        db.insert_page(
             id,
             "Dual Write Test",
             Some("Tests that concept_sources is populated at insert time"),
@@ -21060,11 +21079,11 @@ pub(crate) mod tests {
         .await
         .unwrap();
 
-        let sources = db.get_concept_sources(id).await.unwrap();
+        let sources = db.get_page_sources(id).await.unwrap();
         assert_eq!(
             sources.len(),
             3,
-            "insert_concept must write one concept_sources row per source_memory_id"
+            "insert_page must write one concept_sources row per source_memory_id"
         );
 
         let mut mem_ids: Vec<&str> = sources
@@ -21078,7 +21097,7 @@ pub(crate) mod tests {
             assert_eq!(
                 s.link_reason.as_deref(),
                 Some("distill"),
-                "all rows from insert_concept should have link_reason='distill'"
+                "all rows from insert_page should have link_reason='distill'"
             );
         }
 
@@ -21099,7 +21118,7 @@ pub(crate) mod tests {
     async fn test_update_concept_content() {
         let (db, _dir) = test_db().await;
         let now = chrono::Utc::now().to_rfc3339();
-        db.insert_concept(
+        db.insert_page(
             "concept_u1",
             "Title",
             None,
@@ -21112,10 +21131,10 @@ pub(crate) mod tests {
         .await
         .unwrap();
 
-        db.update_concept_content("concept_u1", "v2 content", &["m1", "m2"], "concept_growth")
+        db.update_page_content("concept_u1", "v2 content", &["m1", "m2"], "concept_growth")
             .await
             .unwrap();
-        let c = db.get_concept("concept_u1").await.unwrap().unwrap();
+        let c = db.get_page("concept_u1").await.unwrap().unwrap();
         assert_eq!(c.content, "v2 content");
         assert_eq!(c.version, 2);
         assert_eq!(c.source_memory_ids, vec!["m1", "m2"]);
@@ -21125,15 +21144,15 @@ pub(crate) mod tests {
     async fn test_list_active_concepts() {
         let (db, _dir) = test_db().await;
         let now = chrono::Utc::now().to_rfc3339();
-        db.insert_concept("c1", "Title A", None, "content", None, None, &["m1"], &now)
+        db.insert_page("c1", "Title A", None, "content", None, None, &["m1"], &now)
             .await
             .unwrap();
-        db.insert_concept("c2", "Title B", None, "content", None, None, &["m2"], &now)
+        db.insert_page("c2", "Title B", None, "content", None, None, &["m2"], &now)
             .await
             .unwrap();
-        db.archive_concept("c2").await.unwrap();
+        db.archive_page("c2").await.unwrap();
 
-        let active = db.list_concepts("active", 100, 0).await.unwrap();
+        let active = db.list_pages("active", 100, 0).await.unwrap();
         assert_eq!(active.len(), 1);
         assert_eq!(active[0].id, "c1");
     }
@@ -21142,7 +21161,7 @@ pub(crate) mod tests {
     async fn test_delete_concept() {
         let (db, _dir) = test_db().await;
         let now = chrono::Utc::now().to_rfc3339();
-        db.insert_concept(
+        db.insert_page(
             "c_del",
             "To Delete",
             None,
@@ -21156,23 +21175,23 @@ pub(crate) mod tests {
         .unwrap();
 
         // Verify it exists
-        assert!(db.get_concept("c_del").await.unwrap().is_some());
+        assert!(db.get_page("c_del").await.unwrap().is_some());
 
         // Delete it
-        db.delete_concept("c_del").await.unwrap();
+        db.delete_page("c_del").await.unwrap();
 
         // Verify it's gone
-        assert!(db.get_concept("c_del").await.unwrap().is_none());
+        assert!(db.get_page("c_del").await.unwrap().is_none());
 
         // Deleting non-existent ID should not error
-        db.delete_concept("nonexistent").await.unwrap();
+        db.delete_page("nonexistent").await.unwrap();
     }
 
     #[tokio::test]
     async fn test_get_concept_by_entity() {
         let (db, _dir) = test_db().await;
         let now = chrono::Utc::now().to_rfc3339();
-        db.insert_concept(
+        db.insert_page(
             "c_ent",
             "Entity Concept",
             None,
@@ -21185,11 +21204,11 @@ pub(crate) mod tests {
         .await
         .unwrap();
 
-        let found = db.get_concept_by_entity("ent_123").await.unwrap();
+        let found = db.get_page_by_entity("ent_123").await.unwrap();
         assert!(found.is_some());
         assert_eq!(found.unwrap().id, "c_ent");
 
-        let missing = db.get_concept_by_entity("ent_999").await.unwrap();
+        let missing = db.get_page_by_entity("ent_999").await.unwrap();
         assert!(missing.is_none());
     }
 
@@ -21197,7 +21216,7 @@ pub(crate) mod tests {
     async fn test_find_matching_concept_by_entity() {
         let (db, _dir) = test_db().await;
         let now = chrono::Utc::now().to_rfc3339();
-        db.insert_concept(
+        db.insert_page(
             "c_match",
             "libSQL Architecture",
             None,
@@ -21211,7 +21230,7 @@ pub(crate) mod tests {
         .unwrap();
 
         let found = db
-            .find_matching_concept(Some("entity_libsql"), &[0.0; EMBEDDING_DIM], 0.75)
+            .find_matching_page(Some("entity_libsql"), &[0.0; EMBEDDING_DIM], 0.75)
             .await
             .unwrap();
         assert!(found.is_some());
@@ -21219,7 +21238,7 @@ pub(crate) mod tests {
 
         // No match by entity_id, and zero-vec won't be similar enough
         let missing = db
-            .find_matching_concept(Some("no_such_entity"), &[0.0; EMBEDDING_DIM], 0.75)
+            .find_matching_page(Some("no_such_entity"), &[0.0; EMBEDDING_DIM], 0.75)
             .await
             .unwrap();
         assert!(missing.is_none());
@@ -21229,7 +21248,7 @@ pub(crate) mod tests {
     async fn test_search_concepts_fts() {
         let (db, _dir) = test_db().await;
         let now = chrono::Utc::now().to_rfc3339();
-        db.insert_concept(
+        db.insert_page(
             "c_search",
             "libSQL Vector Storage",
             Some("Stores vectors in F32_BLOB"),
@@ -21242,7 +21261,7 @@ pub(crate) mod tests {
         .await
         .unwrap();
 
-        let results = db.search_concepts("DiskANN vector", 10).await.unwrap();
+        let results = db.search_pages("DiskANN vector", 10).await.unwrap();
         assert!(!results.is_empty(), "should find concept via FTS");
         assert_eq!(results[0].id, "c_search");
     }
@@ -21251,7 +21270,7 @@ pub(crate) mod tests {
     async fn test_search_concepts_vector() {
         let (db, _dir) = test_db().await;
         let now = chrono::Utc::now().to_rfc3339();
-        db.insert_concept(
+        db.insert_page(
             "c_vec",
             "Database Architecture",
             Some("How data is stored and indexed in the system"),
@@ -21266,7 +21285,7 @@ pub(crate) mod tests {
 
         // Query with different words than the concept (no keyword overlap)
         let results = db
-            .search_concepts("what databases does the project use", 10)
+            .search_pages("what databases does the project use", 10)
             .await
             .unwrap();
         assert!(
@@ -21430,7 +21449,7 @@ pub(crate) mod tests {
         let now = chrono::Utc::now().to_rfc3339();
 
         // Insert a concept whose only source memory is "mem_10"
-        db.insert_concept(
+        db.insert_page(
             "concept_1",
             "Test concept",
             Some("A test concept"),
@@ -21444,17 +21463,17 @@ pub(crate) mod tests {
         .unwrap();
 
         // Searching for "mem_1" must NOT match "mem_10"
-        let result = db.find_concept_by_source_memory("mem_1").await.unwrap();
+        let result = db.find_page_by_source_memory("mem_1").await.unwrap();
         assert!(
             result.is_none(),
-            "find_concept_by_source_memory('mem_1') should NOT match concept with only 'mem_10'"
+            "find_page_by_source_memory('mem_1') should NOT match concept with only 'mem_10'"
         );
 
         // But searching for "mem_10" should match
-        let result = db.find_concept_by_source_memory("mem_10").await.unwrap();
+        let result = db.find_page_by_source_memory("mem_10").await.unwrap();
         assert!(
             result.is_some(),
-            "find_concept_by_source_memory('mem_10') should find the concept"
+            "find_page_by_source_memory('mem_10') should find the concept"
         );
     }
 
@@ -21539,18 +21558,15 @@ pub(crate) mod tests {
         db.record_milestone(MilestoneId::FirstMemory, None)
             .await
             .unwrap();
-        db.record_milestone(
-            MilestoneId::FirstConcept,
-            Some(serde_json::json!({"id":"c1"})),
-        )
-        .await
-        .unwrap();
+        db.record_milestone(MilestoneId::FirstPage, Some(serde_json::json!({"id":"c1"})))
+            .await
+            .unwrap();
 
         let list = db.list_milestones().await.unwrap();
         assert_eq!(list.len(), 2);
         let has_concept = list
             .iter()
-            .any(|m| m.id == MilestoneId::FirstConcept && m.payload.is_some());
+            .any(|m| m.id == MilestoneId::FirstPage && m.payload.is_some());
         assert!(has_concept);
     }
 
@@ -21573,17 +21589,17 @@ pub(crate) mod tests {
     async fn test_increment_milestone_shown_count() {
         use crate::onboarding::MilestoneId;
         let (db, _tmp) = test_db().await;
-        db.record_milestone(MilestoneId::FirstConcept, None)
+        db.record_milestone(MilestoneId::FirstPage, None)
             .await
             .unwrap();
 
         let c1 = db
-            .increment_milestone_shown_count(MilestoneId::FirstConcept)
+            .increment_milestone_shown_count(MilestoneId::FirstPage)
             .await
             .unwrap();
         assert_eq!(c1, 1);
         let c2 = db
-            .increment_milestone_shown_count(MilestoneId::FirstConcept)
+            .increment_milestone_shown_count(MilestoneId::FirstPage)
             .await
             .unwrap();
         assert_eq!(c2, 2);
@@ -21596,7 +21612,7 @@ pub(crate) mod tests {
         db.record_milestone(MilestoneId::FirstMemory, None)
             .await
             .unwrap();
-        db.record_milestone(MilestoneId::FirstConcept, None)
+        db.record_milestone(MilestoneId::FirstPage, None)
             .await
             .unwrap();
 
@@ -21691,7 +21707,7 @@ pub(crate) mod tests {
     async fn list_recent_retrievals_resolves_memory_ids_to_concept_titles() {
         let (db, _dir) = test_db().await;
         let now = chrono::Utc::now().to_rfc3339();
-        db.insert_concept(
+        db.insert_page(
             "concept_1",
             "Origin positioning",
             None,
@@ -21722,13 +21738,13 @@ pub(crate) mod tests {
         assert_eq!(events[0].agent_name, "claude-desktop");
         assert_eq!(events[0].query, None);
         assert_eq!(
-            events[0].concept_titles,
+            events[0].page_titles,
             vec!["Origin positioning".to_string()]
         );
         assert_eq!(events[1].agent_name, "claude-code");
         assert_eq!(events[1].query.as_deref(), Some("positioning"));
         assert_eq!(
-            events[1].concept_titles,
+            events[1].page_titles,
             vec!["Origin positioning".to_string()]
         );
     }
@@ -21785,8 +21801,8 @@ pub(crate) mod tests {
             })
             .expect("expected an event with the memory snippet");
         assert!(
-            ev.concept_titles.is_empty(),
-            "concept_titles must be empty when no concept references the memory"
+            ev.page_titles.is_empty(),
+            "page_titles must be empty when no page references the memory"
         );
         assert!(
             ev.memory_snippets
@@ -21801,7 +21817,7 @@ pub(crate) mod tests {
     async fn list_recent_retrievals_dedupes_concept_titles_within_event() {
         let (db, _dir) = test_db().await;
         let now = chrono::Utc::now().to_rfc3339();
-        db.insert_concept(
+        db.insert_page(
             "concept_shared",
             "Shared",
             None,
@@ -21824,7 +21840,7 @@ pub(crate) mod tests {
         .unwrap();
         let events = db.list_recent_retrievals(10).await.unwrap();
         assert_eq!(events.len(), 1);
-        assert_eq!(events[0].concept_titles, vec!["Shared".to_string()]);
+        assert_eq!(events[0].page_titles, vec!["Shared".to_string()]);
     }
 
     #[tokio::test]
@@ -21837,7 +21853,7 @@ pub(crate) mod tests {
             .await
             .unwrap();
         // Also insert a concept to exercise the combined concept+snippet path.
-        db.insert_concept(
+        db.insert_page(
             "concept_snip",
             "Snippet Concept",
             None,
@@ -21971,19 +21987,19 @@ pub(crate) mod tests {
 
     #[tokio::test]
     async fn list_recent_changes_classifies_created_vs_revised() {
-        use origin_types::ConceptChangeKind;
+        use origin_types::PageChangeKind;
 
         let (db, _dir) = test_db().await;
         let now = chrono::Utc::now().to_rfc3339();
         let earlier = (chrono::Utc::now() - chrono::Duration::days(3)).to_rfc3339();
 
         // Created: version==1, created_at == last_modified
-        db.insert_concept("c_new", "New idea", None, "content", None, None, &[], &now)
+        db.insert_page("c_new", "New idea", None, "content", None, None, &[], &now)
             .await
             .unwrap();
 
-        // Revised: version > 1 (requires direct UPDATE — insert_concept writes version=1)
-        db.insert_concept(
+        // Revised: version > 1 (requires direct UPDATE — insert_page writes version=1)
+        db.insert_page(
             "c_rev",
             "Older idea",
             None,
@@ -22006,19 +22022,19 @@ pub(crate) mod tests {
         }
 
         let changes = db.list_recent_changes(10).await.unwrap();
-        let by_id: std::collections::HashMap<String, ConceptChangeKind> = changes
+        let by_id: std::collections::HashMap<String, PageChangeKind> = changes
             .iter()
-            .map(|c| (c.concept_id.clone(), c.change_kind))
+            .map(|c| (c.page_id.clone(), c.change_kind))
             .collect();
-        assert_eq!(by_id.get("c_new"), Some(&ConceptChangeKind::Created));
-        assert_eq!(by_id.get("c_rev"), Some(&ConceptChangeKind::Revised));
+        assert_eq!(by_id.get("c_new"), Some(&PageChangeKind::Created));
+        assert_eq!(by_id.get("c_rev"), Some(&PageChangeKind::Revised));
     }
 
     #[tokio::test]
     async fn list_recent_changes_excludes_non_active() {
         let (db, _dir) = test_db().await;
         let now = chrono::Utc::now().to_rfc3339();
-        db.insert_concept(
+        db.insert_page(
             "c_active",
             "Still here",
             None,
@@ -22030,14 +22046,14 @@ pub(crate) mod tests {
         )
         .await
         .unwrap();
-        db.insert_concept("c_gone", "Archived", None, "content", None, None, &[], &now)
+        db.insert_page("c_gone", "Archived", None, "content", None, None, &[], &now)
             .await
             .unwrap();
-        db.archive_concept("c_gone").await.unwrap();
+        db.archive_page("c_gone").await.unwrap();
 
         let changes = db.list_recent_changes(10).await.unwrap();
         let ids: std::collections::HashSet<String> =
-            changes.iter().map(|c| c.concept_id.clone()).collect();
+            changes.iter().map(|c| c.page_id.clone()).collect();
         assert!(ids.contains("c_active"));
         assert!(!ids.contains("c_gone"));
     }
@@ -22047,17 +22063,17 @@ pub(crate) mod tests {
         let (db, _dir) = test_db().await;
         let older = "2026-01-01T00:00:00Z".to_string();
         let newer = "2026-04-15T12:00:00Z".to_string();
-        db.insert_concept("c_old", "Old", None, "content", None, None, &[], &older)
+        db.insert_page("c_old", "Old", None, "content", None, None, &[], &older)
             .await
             .unwrap();
-        db.insert_concept("c_new", "New", None, "content", None, None, &[], &newer)
+        db.insert_page("c_new", "New", None, "content", None, None, &[], &newer)
             .await
             .unwrap();
 
         let changes = db.list_recent_changes(10).await.unwrap();
         assert!(changes.len() >= 2);
-        assert_eq!(changes[0].concept_id, "c_new");
-        assert_eq!(changes[1].concept_id, "c_old");
+        assert_eq!(changes[0].page_id, "c_new");
+        assert_eq!(changes[1].page_id, "c_old");
     }
 
     // ==================== list_recent_memories ====================
@@ -22460,7 +22476,7 @@ pub(crate) mod tests {
         assert_eq!(items.len(), 2);
     }
 
-    // ==================== list_recent_concepts_with_badges ====================
+    // ==================== list_recent_pages_with_badges ====================
 
     /// Insert a concept row with explicit Unix-second timestamps and version.
     /// `source_memory_ids` is serialised to JSON and stored in the TEXT column.
@@ -22513,7 +22529,7 @@ pub(crate) mod tests {
 
         // since_ms = 1_000 ms → since_s = 1 s. concept_a.created_at (5s) >= 1s → New.
         let items = db
-            .list_recent_concepts_with_badges(10, Some(1_000))
+            .list_recent_pages_with_badges(10, Some(1_000))
             .await
             .unwrap();
         let item = items
@@ -22556,7 +22572,7 @@ pub(crate) mod tests {
         // mem_old (created_at=1) < 2 → doesn't qualify; mem_fresh_1 (2) >= 2 and mem_fresh_2 (3) >= 2
         // → added = 2 → Growing { added: 2 }.
         let items = db
-            .list_recent_concepts_with_badges(10, Some(2_000))
+            .list_recent_pages_with_badges(10, Some(2_000))
             .await
             .unwrap();
         let item = items
@@ -22584,7 +22600,7 @@ pub(crate) mod tests {
 
         // since_ms = 2_000 ms → since_s = 2.
         let items = db
-            .list_recent_concepts_with_badges(10, Some(2_000))
+            .list_recent_pages_with_badges(10, Some(2_000))
             .await
             .unwrap();
         let item = items
@@ -22643,7 +22659,7 @@ pub(crate) mod tests {
         .await;
 
         let items = db
-            .list_recent_concepts_with_badges(10, Some(1_000))
+            .list_recent_pages_with_badges(10, Some(1_000))
             .await
             .unwrap();
         let item = items
@@ -22679,7 +22695,7 @@ pub(crate) mod tests {
         // limit=3, since_ms=i64::MAX (no concept satisfies 'new/revised/growing').
         // Expect exactly 3 items, newest first, all badge None.
         let items = db
-            .list_recent_concepts_with_badges(3, Some(i64::MAX))
+            .list_recent_pages_with_badges(3, Some(i64::MAX))
             .await
             .unwrap();
         assert_eq!(items.len(), 3, "expected exactly 3 items");
@@ -22752,8 +22768,8 @@ pub(crate) mod tests {
         // 1. Simulate the pre-fix bug: write the concepts row directly, with
         //    `source_memory_ids` JSON populated but no matching `concept_sources`
         //    rows. This mirrors the state of any concept that was written by
-        //    insert_concept before the source-side dual-write fix landed.
-        //    (insert_concept now dual-writes; using raw SQL here is the only way
+        //    insert_page before the source-side dual-write fix landed.
+        //    (insert_page now dual-writes; using raw SQL here is the only way
         //    to reach the legacy state migration 44 is meant to backfill.)
         let now = chrono::Utc::now().to_rfc3339();
         {
@@ -22898,7 +22914,7 @@ pub(crate) mod tests {
 
     // ==================== Topic-key upsert feature tests ====================
 
-    // ---- link_concept_source + get_concept_sources ----
+    // ---- link_page_source + get_page_sources ----
 
     #[tokio::test]
     async fn test_link_concept_source_idempotent() {
@@ -22906,7 +22922,7 @@ pub(crate) mod tests {
         let now = chrono::Utc::now().to_rfc3339();
 
         // Insert a concept and a memory to satisfy FK + existence expectations.
-        db.insert_concept("c1", "Concept One", None, "content", None, None, &[], &now)
+        db.insert_page("c1", "Concept One", None, "content", None, None, &[], &now)
             .await
             .unwrap();
         let mem_doc = make_memory_doc(
@@ -22919,21 +22935,21 @@ pub(crate) mod tests {
         db.upsert_documents(vec![mem_doc]).await.unwrap();
 
         // Link once.
-        db.link_concept_source("c1", "src1", "initial_link")
+        db.link_page_source("c1", "src1", "initial_link")
             .await
             .unwrap();
         // Link again with the same (concept_id, memory_source_id) — idempotent INSERT OR IGNORE.
-        db.link_concept_source("c1", "src1", "duplicate_link")
+        db.link_page_source("c1", "src1", "duplicate_link")
             .await
             .unwrap();
 
-        let sources = db.get_concept_sources("c1").await.unwrap();
+        let sources = db.get_page_sources("c1").await.unwrap();
         assert_eq!(
             sources.len(),
             1,
             "idempotent insert should produce exactly 1 row"
         );
-        assert_eq!(sources[0].concept_id, "c1");
+        assert_eq!(sources[0].page_id, "c1");
         assert_eq!(sources[0].memory_source_id, "src1");
     }
 
@@ -22942,7 +22958,7 @@ pub(crate) mod tests {
         let (db, _dir) = test_db().await;
         let now = chrono::Utc::now().to_rfc3339();
 
-        db.insert_concept(
+        db.insert_page(
             "c_ord",
             "Ordering test",
             None,
@@ -22992,14 +23008,14 @@ pub(crate) mod tests {
             .unwrap();
         }
 
-        let sources = db.get_concept_sources("c_ord").await.unwrap();
+        let sources = db.get_page_sources("c_ord").await.unwrap();
         assert_eq!(sources.len(), 2);
         // Should be ordered by linked_at ASC: src_a first, src_b second.
         assert_eq!(sources[0].memory_source_id, "src_a");
         assert_eq!(sources[1].memory_source_id, "src_b");
     }
 
-    // ---- get_concepts_for_memory ----
+    // ---- get_pages_for_memory ----
 
     #[tokio::test]
     async fn test_get_concepts_for_memory_reverse_lookup() {
@@ -23016,7 +23032,7 @@ pub(crate) mod tests {
         .await
         .unwrap();
 
-        db.insert_concept(
+        db.insert_page(
             "concept_x",
             "Concept X",
             None,
@@ -23028,7 +23044,7 @@ pub(crate) mod tests {
         )
         .await
         .unwrap();
-        db.insert_concept(
+        db.insert_page(
             "concept_y",
             "Concept Y",
             None,
@@ -23042,14 +23058,14 @@ pub(crate) mod tests {
         .unwrap();
 
         // Link the same memory to both concepts.
-        db.link_concept_source("concept_x", "mem_rev", "reason_x")
+        db.link_page_source("concept_x", "mem_rev", "reason_x")
             .await
             .unwrap();
-        db.link_concept_source("concept_y", "mem_rev", "reason_y")
+        db.link_page_source("concept_y", "mem_rev", "reason_y")
             .await
             .unwrap();
 
-        let concepts = db.get_concepts_for_memory("mem_rev").await.unwrap();
+        let concepts = db.get_pages_for_memory("mem_rev").await.unwrap();
         assert_eq!(concepts.len(), 2, "memory should be linked to 2 concepts");
 
         let ids: Vec<&str> = concepts.iter().map(|c| c.id.as_str()).collect();
@@ -23072,7 +23088,7 @@ pub(crate) mod tests {
         .await
         .unwrap();
 
-        db.insert_concept(
+        db.insert_page(
             "c_active",
             "Active concept",
             None,
@@ -23084,7 +23100,7 @@ pub(crate) mod tests {
         )
         .await
         .unwrap();
-        db.insert_concept(
+        db.insert_page(
             "c_archived",
             "Archived concept",
             None,
@@ -23096,29 +23112,29 @@ pub(crate) mod tests {
         )
         .await
         .unwrap();
-        db.archive_concept("c_archived").await.unwrap();
+        db.archive_page("c_archived").await.unwrap();
 
-        db.link_concept_source("c_active", "mem_arc", "r")
+        db.link_page_source("c_active", "mem_arc", "r")
             .await
             .unwrap();
-        db.link_concept_source("c_archived", "mem_arc", "r")
+        db.link_page_source("c_archived", "mem_arc", "r")
             .await
             .unwrap();
 
-        let concepts = db.get_concepts_for_memory("mem_arc").await.unwrap();
+        let concepts = db.get_pages_for_memory("mem_arc").await.unwrap();
         // Only active concepts should be returned.
         assert_eq!(concepts.len(), 1);
         assert_eq!(concepts[0].id, "c_active");
     }
 
-    // ---- cleanup_orphaned_concept_sources ----
+    // ---- cleanup_orphaned_page_sources ----
 
     #[tokio::test]
     async fn test_cleanup_orphaned_concept_sources() {
         let (db, _dir) = test_db().await;
         let now = chrono::Utc::now().to_rfc3339();
 
-        db.insert_concept(
+        db.insert_page(
             "c_clean",
             "Cleanup test",
             None,
@@ -23141,7 +23157,7 @@ pub(crate) mod tests {
         )])
         .await
         .unwrap();
-        db.link_concept_source("c_clean", "mem_ghost", "reason")
+        db.link_page_source("c_clean", "mem_ghost", "reason")
             .await
             .unwrap();
 
@@ -23154,17 +23170,17 @@ pub(crate) mod tests {
         }
 
         // Confirm orphan exists.
-        let sources_before = db.get_concept_sources("c_clean").await.unwrap();
+        let sources_before = db.get_page_sources("c_clean").await.unwrap();
         assert_eq!(
             sources_before.len(),
             1,
             "orphan row should be present before cleanup"
         );
 
-        let removed = db.cleanup_orphaned_concept_sources().await.unwrap();
+        let removed = db.cleanup_orphaned_page_sources().await.unwrap();
         assert_eq!(removed, 1, "should remove exactly 1 orphaned row");
 
-        let sources_after = db.get_concept_sources("c_clean").await.unwrap();
+        let sources_after = db.get_page_sources("c_clean").await.unwrap();
         assert_eq!(
             sources_after.len(),
             0,
@@ -23177,7 +23193,7 @@ pub(crate) mod tests {
         let (db, _dir) = test_db().await;
         let now = chrono::Utc::now().to_rfc3339();
 
-        db.insert_concept(
+        db.insert_page(
             "c_keep",
             "Keep test",
             None,
@@ -23198,17 +23214,17 @@ pub(crate) mod tests {
         )])
         .await
         .unwrap();
-        db.link_concept_source("c_keep", "mem_valid", "reason")
+        db.link_page_source("c_keep", "mem_valid", "reason")
             .await
             .unwrap();
 
-        let removed = db.cleanup_orphaned_concept_sources().await.unwrap();
+        let removed = db.cleanup_orphaned_page_sources().await.unwrap();
         assert_eq!(
             removed, 0,
             "no orphans should be removed when all memories exist"
         );
 
-        let sources = db.get_concept_sources("c_keep").await.unwrap();
+        let sources = db.get_page_sources("c_keep").await.unwrap();
         assert_eq!(sources.len(), 1, "valid row should be intact");
     }
 
@@ -23810,14 +23826,14 @@ pub(crate) mod tests {
         assert!(!result, "non-existent memory should not be protected");
     }
 
-    // ---- set_concept_stale / clear_concept_staleness / list_stale_concepts ----
+    // ---- set_page_stale / clear_page_staleness / list_stale_pages ----
 
     #[tokio::test]
     async fn test_stale_concepts_lifecycle() {
         let (db, _dir) = test_db().await;
         let now = chrono::Utc::now().to_rfc3339();
 
-        db.insert_concept(
+        db.insert_page(
             "c_stale",
             "Stale concept",
             None,
@@ -23831,27 +23847,27 @@ pub(crate) mod tests {
         .unwrap();
 
         // Initially no stale concepts.
-        let stale = db.list_stale_concepts("source_updated").await.unwrap();
+        let stale = db.list_stale_pages("source_updated").await.unwrap();
         assert!(stale.is_empty(), "no stale concepts initially");
 
         // Mark stale.
-        db.set_concept_stale("c_stale", "source_updated")
+        db.set_page_stale("c_stale", "source_updated")
             .await
             .unwrap();
 
-        let stale = db.list_stale_concepts("source_updated").await.unwrap();
+        let stale = db.list_stale_pages("source_updated").await.unwrap();
         assert_eq!(stale.len(), 1);
         assert_eq!(stale[0].id, "c_stale");
         assert_eq!(stale[0].stale_reason.as_deref(), Some("source_updated"));
 
         // Clear staleness.
-        db.clear_concept_staleness("c_stale").await.unwrap();
+        db.clear_page_staleness("c_stale").await.unwrap();
 
-        let stale_after = db.list_stale_concepts("source_updated").await.unwrap();
+        let stale_after = db.list_stale_pages("source_updated").await.unwrap();
         assert!(stale_after.is_empty(), "staleness should be cleared");
 
         // Verify stale_reason is NULL and sources_updated_count is 0 after clearing.
-        let c = db.get_concept("c_stale").await.unwrap().unwrap();
+        let c = db.get_page("c_stale").await.unwrap().unwrap();
         assert!(
             c.stale_reason.is_none(),
             "stale_reason should be None after clearing"
@@ -23864,7 +23880,7 @@ pub(crate) mod tests {
         let (db, _dir) = test_db().await;
         let now = chrono::Utc::now().to_rfc3339();
 
-        db.insert_concept(
+        db.insert_page(
             "c_stale_arc",
             "Stale archived",
             None,
@@ -23876,26 +23892,26 @@ pub(crate) mod tests {
         )
         .await
         .unwrap();
-        db.set_concept_stale("c_stale_arc", "source_updated")
+        db.set_page_stale("c_stale_arc", "source_updated")
             .await
             .unwrap();
-        db.archive_concept("c_stale_arc").await.unwrap();
+        db.archive_page("c_stale_arc").await.unwrap();
 
-        let stale = db.list_stale_concepts("source_updated").await.unwrap();
+        let stale = db.list_stale_pages("source_updated").await.unwrap();
         assert!(
             stale.is_empty(),
             "archived concepts should not appear in stale list"
         );
     }
 
-    // ---- increment_concept_sources_updated ----
+    // ---- increment_page_sources_updated ----
 
     #[tokio::test]
     async fn test_increment_concept_sources_updated() {
         let (db, _dir) = test_db().await;
         let now = chrono::Utc::now().to_rfc3339();
 
-        db.insert_concept(
+        db.insert_page(
             "c_inc",
             "Increment test",
             None,
@@ -23909,13 +23925,13 @@ pub(crate) mod tests {
         .unwrap();
 
         // sources_updated_count starts at 0.
-        let c = db.get_concept("c_inc").await.unwrap().unwrap();
+        let c = db.get_page("c_inc").await.unwrap().unwrap();
         assert_eq!(c.sources_updated_count, 0);
 
-        db.increment_concept_sources_updated("c_inc").await.unwrap();
-        db.increment_concept_sources_updated("c_inc").await.unwrap();
+        db.increment_page_sources_updated("c_inc").await.unwrap();
+        db.increment_page_sources_updated("c_inc").await.unwrap();
 
-        let c = db.get_concept("c_inc").await.unwrap().unwrap();
+        let c = db.get_page("c_inc").await.unwrap().unwrap();
         assert_eq!(
             c.sources_updated_count, 2,
             "should be 2 after two increments"
@@ -24435,7 +24451,7 @@ pub(crate) mod tests {
         let small_refs: Vec<&str> = small_sources.iter().map(|s| s.as_str()).collect();
 
         // Qualifying: archived, big, no domain, no entity, not user_edited
-        db.insert_concept(
+        db.insert_page(
             "c_stale",
             "Stale One",
             None,
@@ -24447,10 +24463,10 @@ pub(crate) mod tests {
         )
         .await
         .unwrap();
-        db.archive_concept("c_stale").await.unwrap();
+        db.archive_page("c_stale").await.unwrap();
 
         // Disqualifying: small (size <= 50)
-        db.insert_concept(
+        db.insert_page(
             "c_small",
             "Small One",
             None,
@@ -24462,10 +24478,10 @@ pub(crate) mod tests {
         )
         .await
         .unwrap();
-        db.archive_concept("c_small").await.unwrap();
+        db.archive_page("c_small").await.unwrap();
 
         // Disqualifying: has entity
-        db.insert_concept(
+        db.insert_page(
             "c_entity",
             "With Entity",
             None,
@@ -24477,10 +24493,10 @@ pub(crate) mod tests {
         )
         .await
         .unwrap();
-        db.archive_concept("c_entity").await.unwrap();
+        db.archive_page("c_entity").await.unwrap();
 
         // Disqualifying: has domain
-        db.insert_concept(
+        db.insert_page(
             "c_domain",
             "With Domain",
             None,
@@ -24492,16 +24508,16 @@ pub(crate) mod tests {
         )
         .await
         .unwrap();
-        db.archive_concept("c_domain").await.unwrap();
+        db.archive_page("c_domain").await.unwrap();
 
         // Disqualifying: still active (not archived)
-        db.insert_concept(
+        db.insert_page(
             "c_active", "Active", None, "content", None, None, &big_refs, &now,
         )
         .await
         .unwrap();
 
-        let candidates = db.find_stale_archived_concepts().await.unwrap();
+        let candidates = db.find_stale_archived_pages().await.unwrap();
         let ids: Vec<String> = candidates.iter().map(|c| c.id.clone()).collect();
         assert!(ids.contains(&"c_stale".to_string()), "missing c_stale");
         assert!(
@@ -24527,7 +24543,7 @@ pub(crate) mod tests {
     async fn delete_concept_cascades_to_concept_sources() {
         let (db, _dir) = test_db().await;
         let now = chrono::Utc::now().to_rfc3339();
-        db.insert_concept(
+        db.insert_page(
             "c_cascade",
             "Cascade Test",
             None,
@@ -24541,22 +24557,106 @@ pub(crate) mod tests {
         .unwrap();
 
         // Link a source row.
-        db.link_concept_source("c_cascade", "mem_x", "test")
+        db.link_page_source("c_cascade", "mem_x", "test")
             .await
             .unwrap();
 
         // Verify the link exists.
-        let sources_before = db.get_concept_sources("c_cascade").await.unwrap();
+        let sources_before = db.get_page_sources("c_cascade").await.unwrap();
         assert_eq!(sources_before.len(), 1, "concept_sources row should exist");
 
         // Delete the concept; cascade should drop the join row.
-        db.delete_concept("c_cascade").await.unwrap();
+        db.delete_page("c_cascade").await.unwrap();
 
-        let sources_after = db.get_concept_sources("c_cascade").await.unwrap();
+        let sources_after = db.get_page_sources("c_cascade").await.unwrap();
         assert!(
             sources_after.is_empty(),
             "concept_sources should be empty after concept delete (FK cascade): {:?}",
             sources_after
         );
+    }
+
+    #[tokio::test]
+    async fn test_migration_45_folds_goal_to_identity() {
+        let (db, _dir) = test_db().await;
+
+        // 1. Insert a memory row with memory_type='goal' directly (bypassing the
+        //    MemoryType FromStr which already folds "goal" to Identity post-Phase-0a).
+        //    Roll back user_version to 44 so migration 45 fires on re-run.
+        let source_id = "mem_m45_test";
+        {
+            let conn = db.conn.lock().await;
+            let now = chrono::Utc::now().timestamp();
+            conn.execute(
+                "INSERT INTO memories \
+                 (id, source_id, source, chunk_index, title, content, memory_type, \
+                  chunk_type, confirmed, created_at, last_modified) \
+                 VALUES (?1, ?2, 'memory', 0, 'Ship v1.0', \
+                  'I want to ship v1.0 this quarter', 'goal', \
+                  'text', 1, ?3, ?3)",
+                libsql::params![format!("{source_id}_c0"), source_id, now],
+            )
+            .await
+            .unwrap();
+
+            // Roll back to version 44 so migration 45 re-fires.
+            conn.execute("PRAGMA user_version = 44", ()).await.unwrap();
+        }
+
+        // 2. Re-run migrations — should trigger migration 45.
+        db.run_migrations(&crate::events::NoopEmitter)
+            .await
+            .unwrap();
+
+        // 3. Verify memory_type was folded to 'identity'.
+        {
+            let conn = db.conn.lock().await;
+            let mut rows = conn
+                .query(
+                    "SELECT memory_type FROM memories WHERE source_id = ?1",
+                    libsql::params![source_id],
+                )
+                .await
+                .unwrap();
+            let row = rows.next().await.unwrap().unwrap();
+            let memory_type: String = row.get(0).unwrap();
+            assert_eq!(
+                memory_type, "identity",
+                "migration 45 must fold memory_type='goal' into 'identity'"
+            );
+        }
+
+        // 4. Verify user_version is now 45.
+        {
+            let conn = db.conn.lock().await;
+            let mut rows = conn.query("PRAGMA user_version", ()).await.unwrap();
+            let row = rows.next().await.unwrap().unwrap();
+            let version: i64 = row.get(0).unwrap();
+            assert!(
+                version >= 45,
+                "user_version should be at least 45 after migration, got {version}"
+            );
+        }
+
+        // 5. Idempotency: re-run with version already at 45 must not error or change data.
+        db.run_migrations(&crate::events::NoopEmitter)
+            .await
+            .unwrap();
+        {
+            let conn = db.conn.lock().await;
+            let mut rows = conn
+                .query(
+                    "SELECT memory_type FROM memories WHERE source_id = ?1",
+                    libsql::params![source_id],
+                )
+                .await
+                .unwrap();
+            let row = rows.next().await.unwrap().unwrap();
+            let memory_type: String = row.get(0).unwrap();
+            assert_eq!(
+                memory_type, "identity",
+                "idempotent re-run must not alter data"
+            );
+        }
     }
 }

@@ -21,7 +21,7 @@ interface SpaceDetailProps {
   spaceName: string;
   onBack: () => void;
   onSelectMemory: (sourceId: string) => void;
-  onSelectConcept: (conceptId: string) => void;
+  onSelectPage: (pageId: string) => void;
   onEntityClick: (entityId: string) => void;
 }
 
@@ -29,7 +29,7 @@ export default function SpaceDetail({
   spaceName,
   onBack,
   onSelectMemory,
-  onSelectConcept,
+  onSelectPage,
   onEntityClick,
 }: SpaceDetailProps) {
   const queryClient = useQueryClient();
@@ -554,7 +554,7 @@ export default function SpaceDetail({
             {concepts.map((c, i) => (
               <button
                 key={c.id}
-                onClick={() => onSelectConcept(c.id)}
+                onClick={() => onSelectPage(c.id)}
                 className="text-left px-4 py-3.5 rounded-xl transition-colors duration-200 hover:bg-[var(--mem-hover)] group flex flex-col"
                 style={{
                   border: "1px solid var(--mem-border)",

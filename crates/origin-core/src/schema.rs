@@ -32,13 +32,7 @@ impl MemorySchema {
                 optional: vec!["alternatives_considered", "date", "reversible"],
                 retrieval_cue_template: "What was decided about {decision} and why?".into(),
             },
-            "goal" => Self {
-                memory_type: "goal".into(),
-                required: vec!["objective"],
-                optional: vec!["target_date", "milestones", "status", "blockers"],
-                retrieval_cue_template: "What is the goal for {objective} and its status?".into(),
-            },
-            // Wildcard must be last — catches "fact" and unknown types
+            // Wildcard must be last — catches "fact", legacy "goal", and unknown types
             _ => Self {
                 memory_type: "fact".into(),
                 required: vec!["claim"],
@@ -157,7 +151,14 @@ mod tests {
 
     #[test]
     fn test_all_types_have_schemas() {
-        for t in ["identity", "preference", "decision", "fact", "goal"] {
+        for t in [
+            "identity",
+            "preference",
+            "decision",
+            "lesson",
+            "gotcha",
+            "fact",
+        ] {
             let schema = MemorySchema::for_type(t);
             assert!(!schema.required.is_empty(), "{} has no required fields", t);
             assert!(

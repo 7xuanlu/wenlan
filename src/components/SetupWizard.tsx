@@ -1064,7 +1064,7 @@ function DoneStep({
             lineHeight: 1.6,
           }}
         >
-          Origin notices patterns, compiles them into concepts, and links what
+          Origin notices patterns, distills them into pages, and links what
           you know across tools.
         </p>
         <button
@@ -1154,14 +1154,14 @@ function DoneStep({
             margin: 0,
           }}
         >
-          Origin notices patterns, compiles them into concepts, and links what
+          Origin notices patterns, distills them into pages, and links what
           you know across tools.
         </p>
       </div>
 
       {/* Import stats card — surfaces the essential value Origin extracted:
           memories in, topics (entities) pulled out, and a forward line about
-          concepts that will compile as the refinery runs. We rename
+          pages that will distill as the refinery runs. We rename
           "entities" → "topics" at the UI layer because that's the word end
           users think in; the data model keeps its canonical name. */}
       {hasImportData && (
@@ -1213,7 +1213,7 @@ function DoneStep({
           {/* Topics + connections — elevated from mono afterthought to a
               proper two-stat row. This is the knowledge graph surfacing
               into the onboarding: every topic is a potential anchor for a
-              concept. */}
+              page. */}
           {kgTotal > 0 && (
             <div
               className="flex items-stretch"
@@ -1238,8 +1238,8 @@ function DoneStep({
             </div>
           )}
 
-          {/* Potential-concepts expectation. Honest (no fabricated number):
-              just the promise that compilation is next. */}
+          {/* Potential-pages expectation. Honest (no fabricated number):
+              just the promise that distillation is next. */}
           <p
             style={{
               fontFamily: "var(--mem-font-body)",
@@ -1250,7 +1250,7 @@ function DoneStep({
               margin: 0,
             }}
           >
-            Concepts will compile from these as Origin connects the dots.
+            Pages will distill from these as Origin connects the dots.
           </p>
         </div>
       )}

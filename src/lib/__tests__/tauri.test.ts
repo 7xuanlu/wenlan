@@ -4,7 +4,7 @@ vi.mock("@tauri-apps/api/core", () => ({
   invoke: vi.fn(),
 }));
 
-describe("sources, concept export, and knowledge wrappers", () => {
+describe("sources, page export, and knowledge wrappers", () => {
   beforeEach(() => {
     vi.resetAllMocks();
   });
@@ -61,13 +61,13 @@ describe("sources, concept export, and knowledge wrappers", () => {
     });
   });
 
-  it("exportConceptToObsidian passes conceptId and vaultPath", async () => {
+  it("exportPageToObsidian passes pageId and vaultPath", async () => {
     const { invoke } = await import("@tauri-apps/api/core");
-    const { exportConceptToObsidian } = await import("../tauri");
+    const { exportPageToObsidian } = await import("../tauri");
     (invoke as ReturnType<typeof vi.fn>).mockResolvedValue("/path/to/file.md");
-    await exportConceptToObsidian("c123", "/vault");
-    expect(invoke).toHaveBeenCalledWith("export_concept_to_obsidian", {
-      conceptId: "c123",
+    await exportPageToObsidian("c123", "/vault");
+    expect(invoke).toHaveBeenCalledWith("export_page_to_obsidian", {
+      pageId: "c123",
       vaultPath: "/vault",
     });
   });

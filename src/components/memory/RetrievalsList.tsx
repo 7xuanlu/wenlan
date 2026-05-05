@@ -4,8 +4,8 @@ import type { RetrievalEvent } from "../../lib/tauri";
 
 interface Props {
   events: RetrievalEvent[];
-  /** Navigate to a concept by its stable ID. Replaces the old title-lookup path. */
-  onSelectConceptById?: (conceptId: string) => void;
+  /** Navigate to a page by its stable ID. Replaces the old title-lookup path. */
+  onSelectPageById?: (pageId: string) => void;
   onViewRecaps?: () => void;
 }
 
@@ -67,7 +67,7 @@ const SECTION_SUB_STYLE: React.CSSProperties = {
   marginTop: 2,
 };
 
-export function RetrievalsList({ events, onSelectConceptById, onViewRecaps }: Props) {
+export function RetrievalsList({ events, onSelectPageById, onViewRecaps }: Props) {
   const trusted = events.filter((e) => isTrustedAgent(e.agent_name));
   if (!trusted.length) return null;
 
@@ -79,7 +79,7 @@ export function RetrievalsList({ events, onSelectConceptById, onViewRecaps }: Pr
       </p>
       <ul className="space-y-2">
         {trusted.map((e, i) => (
-          <RetrievalItem key={i} event={e} onSelectConceptById={onSelectConceptById} />
+          <RetrievalItem key={i} event={e} onSelectPageById={onSelectPageById} />
         ))}
       </ul>
       {onViewRecaps && (
@@ -108,22 +108,22 @@ export function RetrievalsList({ events, onSelectConceptById, onViewRecaps }: Pr
 
 function RetrievalItem({
   event,
-  onSelectConceptById,
+  onSelectPageById,
 }: {
   event: RetrievalEvent;
-  onSelectConceptById?: (conceptId: string) => void;
+  onSelectPageById?: (pageId: string) => void;
 }) {
   const [hover, setHover] = useState(false);
-  // Prefer concept_ids (stable) for navigation; fall back to positional index
-  // which maps to concept_titles[0] when no id is available (legacy events).
-  const conceptIds = (event.concept_ids ?? []).filter(Boolean);
-  const concepts = event.concept_titles.filter(Boolean);
+  // Prefer page_ids (stable) for navigation; fall back to positional index
+  // which maps to page_titles[0] when no id is available (legacy events).
+  const pageIds = (event.page_ids ?? []).filter(Boolean);
+  const pages = event.page_titles.filter(Boolean);
   const memories = (event.memory_snippets ?? []).filter(Boolean);
-  const hasContent = concepts.length > 0 || memories.length > 0;
+  const hasContent = pages.length > 0 || memories.length > 0;
 
-  // The first navigable concept ID for this event. Legacy events (no concept_ids)
+  // The first navigable page ID for this event. Legacy events (no page_ids)
   // produce an empty string, which the click handler guards against.
-  const primaryConceptId = conceptIds[0] ?? "";
+  const primaryPageId = pageIds[0] ?? "";
 
   // Cards with results are clickable (productive retrieval).
   // Cards with no results are informational only (dry run).
@@ -137,21 +137,21 @@ function RetrievalItem({
         style={{
           backgroundColor: hover ? "var(--mem-hover)" : "transparent",
           borderColor: "var(--mem-border)",
-          cursor: primaryConceptId ? "pointer" : "default",
+          cursor: primaryPageId ? "pointer" : "default",
         }}
         onClick={() => {
-          if (primaryConceptId) onSelectConceptById?.(primaryConceptId);
+          if (primaryPageId) onSelectPageById?.(primaryPageId);
         }}
         onKeyDown={(e) => {
-          if ((e.key === "Enter" || e.key === " ") && primaryConceptId) {
+          if ((e.key === "Enter" || e.key === " ") && primaryPageId) {
             e.preventDefault();
-            onSelectConceptById?.(primaryConceptId);
+            onSelectPageById?.(primaryPageId);
           }
         }}
         onMouseEnter={() => setHover(true)}
         onMouseLeave={() => setHover(false)}
       >
-        <RetrievalItemBody event={event} concepts={concepts} memories={memories} archived={!primaryConceptId && concepts.length > 0} />
+        <RetrievalItemBody event={event} pages={pages} memories={memories} archived={!primaryPageId && pages.length > 0} />
       </li>
     );
   }
@@ -167,23 +167,23 @@ function RetrievalItem({
         opacity: 0.75,
       }}
     >
-      <RetrievalItemBody event={event} concepts={concepts} memories={memories} />
+      <RetrievalItemBody event={event} pages={pages} memories={memories} />
     </li>
   );
 }
 
 function RetrievalItemBody({
   event,
-  concepts,
+  pages,
   memories,
   archived,
 }: {
   event: RetrievalEvent;
-  concepts: string[];
+  pages: string[];
   memories: string[];
   archived?: boolean;
 }) {
-  const hasContent = concepts.length > 0 || memories.length > 0;
+  const hasContent = pages.length > 0 || memories.length > 0;
   return (
     <>
       <div className="flex items-baseline gap-2 mb-1.5">
@@ -234,13 +234,13 @@ function RetrievalItemBody({
               lineHeight: 1.4,
             }}
           >
-            {concepts.length > 0
-              ? concepts.map((t) => `"${t}"`).join(" · ")
+            {pages.length > 0
+              ? pages.map((t) => `"${t}"`).join(" · ")
               : memories.map((m) => `"${m}"`).join(" · ")}
           </p>
           {archived && (
             <span
-              title="This concept has been archived"
+              title="This page has been archived"
               style={{
                 fontFamily: "var(--mem-font-body)",
                 fontSize: 10,
