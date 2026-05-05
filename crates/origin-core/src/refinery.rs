@@ -2817,36 +2817,6 @@ async fn apply_merge_by_tier(
     Ok(())
 }
 
-/// Trigger a refinery steep on demand — used by the chat import flow to
-/// process freshly-ingested memories without waiting for the scheduled
-/// 30-minute tick.
-///
-/// This is a thin wrapper around the existing steep logic. Callers should
-/// await completion before showing "done" to users.
-pub async fn trigger_steep_now(
-    db: Arc<MemoryDB>,
-    llm: Option<&Arc<dyn LlmProvider>>,
-    api_llm: Option<&Arc<dyn LlmProvider>>,
-    synthesis_llm: Option<&Arc<dyn LlmProvider>>,
-) -> Result<SteepResult, OriginError> {
-    let prompts = PromptRegistry::load(&PromptRegistry::override_dir());
-    let tuning = crate::tuning::TuningConfig::load(&crate::tuning::TuningConfig::config_path());
-
-    log::info!("[refinery] on-demand steep triggered");
-    run_periodic_steep_with_api(
-        &db,
-        llm,
-        api_llm,
-        synthesis_llm,
-        &prompts,
-        &tuning.refinery,
-        &tuning.confidence,
-        &tuning.distillation,
-        TriggerKind::Backstop,
-    )
-    .await
-}
-
 #[derive(Debug, Serialize)]
 pub struct SteepResult {
     pub memories_decayed: u64,
@@ -3696,22 +3666,6 @@ mod tests {
         db.archive_page("c_int").await.unwrap();
         let active = db.list_pages("active", 100, 0).await.unwrap();
         assert_eq!(active.len(), 0);
-    }
-
-    #[tokio::test]
-    async fn test_trigger_steep_now_runs_steep() {
-        let (db, _dir) = test_db().await;
-        let db_arc = std::sync::Arc::new(db);
-
-        // Insert a fake unclassified import memory.
-        db_arc
-            .store_raw_import_memory("import_claude_conv-xyz_0", "Hello world", None, None, 0)
-            .await
-            .unwrap();
-
-        // Trigger on-demand steep.
-        let result = trigger_steep_now(db_arc.clone(), None, None, None).await;
-        assert!(result.is_ok(), "steep failed: {:?}", result.err());
     }
 
     // ── Nudge + PhaseOutput tests (Task 1) ──────────────────────────────
