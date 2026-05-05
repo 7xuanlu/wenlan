@@ -47,7 +47,7 @@ pub async fn run(dry_run: bool) -> anyhow::Result<()> {
 
     // Step 3: query candidates.
     let candidates = db
-        .find_stale_archived_concepts()
+        .find_stale_archived_pages()
         .await
         .context("querying stale concepts")?;
 
@@ -93,7 +93,7 @@ pub async fn run(dry_run: bool) -> anyhow::Result<()> {
     // concept_sources rows cascade automatically (ON DELETE CASCADE FK).
     let mut deleted = 0usize;
     for c in &candidates {
-        db.delete_concept(&c.id)
+        db.delete_page(&c.id)
             .await
             .with_context(|| format!("deleting concept {}", c.id))?;
         deleted += 1;

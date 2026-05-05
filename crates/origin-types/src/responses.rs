@@ -360,7 +360,7 @@ pub struct IngestResponse {
 // ===== Concept Export =====
 
 #[derive(Debug, Deserialize, Serialize)]
-pub struct ExportConceptResponse {
+pub struct ExportPageResponse {
     pub path: String,
 }
 

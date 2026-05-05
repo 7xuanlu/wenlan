@@ -418,7 +418,7 @@ pub async fn handle_store_memory(
                                             )
                                         });
                                         if let Ok(concepts) =
-                                            db_clone.get_concepts_for_memory(&msid).await
+                                            db_clone.get_pages_for_memory(&msid).await
                                         {
                                             for concept in concepts {
                                                 let stale_reason = match sim {
@@ -428,13 +428,11 @@ pub async fn handle_store_memory(
                                                 };
                                                 if let Some(reason) = stale_reason {
                                                     let _ = db_clone
-                                                        .set_concept_stale(&concept.id, reason)
+                                                        .set_page_stale(&concept.id, reason)
                                                         .await;
                                                 } else {
                                                     let _ = db_clone
-                                                        .increment_concept_sources_updated(
-                                                            &concept.id,
-                                                        )
+                                                        .increment_page_sources_updated(&concept.id)
                                                         .await;
                                                 }
                                             }
@@ -1951,7 +1949,7 @@ pub async fn handle_get_rejections(
 }
 
 /// GET /api/concepts
-pub async fn handle_list_concepts(
+pub async fn handle_list_pages(
     State(state): State<Arc<RwLock<ServerState>>>,
     axum::extract::Query(params): axum::extract::Query<HashMap<String, String>>,
 ) -> Result<Json<serde_json::Value>, ServerError> {
@@ -1969,20 +1967,20 @@ pub async fn handle_list_concepts(
     let s = state.read().await;
     let db = s.db.as_ref().ok_or(ServerError::DbNotInitialized)?;
     let concepts = db
-        .list_concepts_by_domain(status, domain, limit, offset)
+        .list_pages_by_domain(status, domain, limit, offset)
         .await
         .map_err(|e| ServerError::SearchFailed(e.to_string()))?;
     Ok(Json(serde_json::json!({ "concepts": concepts })))
 }
 
 /// GET /api/concepts/:id
-pub async fn handle_get_concept(
+pub async fn handle_get_page(
     State(state): State<Arc<RwLock<ServerState>>>,
     Path(id): Path<String>,
 ) -> Result<Json<serde_json::Value>, ServerError> {
     let s = state.read().await;
     let db = s.db.as_ref().ok_or(ServerError::DbNotInitialized)?;
-    match db.get_concept(&id).await {
+    match db.get_page(&id).await {
         Ok(Some(concept)) => Ok(Json(serde_json::json!({ "concept": concept }))),
         Ok(None) => Err(ServerError::NotFound("concept not found".to_string())),
         Err(e) => Err(ServerError::SearchFailed(e.to_string())),
@@ -1993,17 +1991,17 @@ pub async fn handle_get_concept(
 ///
 /// Returns all source memories linked to a concept via the concept_sources join table,
 /// enriched with memory metadata for display.
-pub async fn handle_get_concept_sources(
+pub async fn handle_get_page_sources(
     State(state): State<Arc<RwLock<ServerState>>>,
     Path(id): Path<String>,
-) -> Result<Json<Vec<origin_types::ConceptSourceWithMemory>>, ServerError> {
+) -> Result<Json<Vec<origin_types::PageSourceWithMemory>>, ServerError> {
     let db = {
         let s = state.read().await;
         s.db.clone().ok_or(ServerError::DbNotInitialized)?
     };
 
     let sources = db
-        .get_concept_sources(&id)
+        .get_page_sources(&id)
         .await
         .map_err(|e| ServerError::SearchFailed(e.to_string()))?;
 
@@ -2014,14 +2012,14 @@ pub async fn handle_get_concept_sources(
         .await
         .map_err(|e| ServerError::SearchFailed(e.to_string()))?;
 
-    let result: Vec<origin_types::ConceptSourceWithMemory> = sources
+    let result: Vec<origin_types::PageSourceWithMemory> = sources
         .iter()
         .map(|s| {
             let memory = memories
                 .iter()
                 .find(|m| m.source_id == s.memory_source_id)
                 .cloned();
-            origin_types::ConceptSourceWithMemory {
+            origin_types::PageSourceWithMemory {
                 source: s.clone(),
                 memory,
             }
@@ -2032,56 +2030,56 @@ pub async fn handle_get_concept_sources(
 }
 
 /// POST /api/concepts/{id}/archive
-pub async fn handle_archive_concept(
+pub async fn handle_archive_page(
     State(state): State<Arc<RwLock<ServerState>>>,
     Path(id): Path<String>,
 ) -> Result<Json<serde_json::Value>, ServerError> {
     let s = state.read().await;
     let db = s.db.as_ref().ok_or(ServerError::DbNotInitialized)?;
-    db.archive_concept(&id)
+    db.archive_page(&id)
         .await
         .map_err(|e| ServerError::SearchFailed(e.to_string()))?;
     Ok(Json(serde_json::json!({"status": "archived"})))
 }
 
 /// DELETE /api/concepts/{id}
-pub async fn handle_delete_concept(
+pub async fn handle_delete_page(
     State(state): State<Arc<RwLock<ServerState>>>,
     Path(id): Path<String>,
 ) -> Result<Json<serde_json::Value>, ServerError> {
     let s = state.read().await;
     let db = s.db.as_ref().ok_or(ServerError::DbNotInitialized)?;
-    db.delete_concept(&id)
+    db.delete_page(&id)
         .await
         .map_err(|e| ServerError::SearchFailed(e.to_string()))?;
     Ok(Json(serde_json::json!({"status": "deleted"})))
 }
 
 /// POST /api/concepts/search
-pub async fn handle_search_concepts(
+pub async fn handle_search_pages(
     State(state): State<Arc<RwLock<ServerState>>>,
-    Json(req): Json<SearchConceptsRequest>,
+    Json(req): Json<SearchPagesRequest>,
 ) -> Result<Json<serde_json::Value>, ServerError> {
     let s = state.read().await;
     let db = s.db.as_ref().ok_or(ServerError::DbNotInitialized)?;
     let results = db
-        .search_concepts(&req.query, req.limit.unwrap_or(20))
+        .search_pages(&req.query, req.limit.unwrap_or(20))
         .await
         .map_err(|e| ServerError::SearchFailed(e.to_string()))?;
     Ok(Json(serde_json::json!({ "concepts": results })))
 }
 
 /// POST /api/concepts
-pub async fn handle_create_concept(
+pub async fn handle_create_page(
     State(state): State<Arc<RwLock<ServerState>>>,
     Json(req): Json<CreateConceptRequest>,
 ) -> Result<Json<serde_json::Value>, ServerError> {
     let s = state.read().await;
     let db = s.db.as_ref().ok_or(ServerError::DbNotInitialized)?;
-    let id = origin_core::concepts::Concept::new_id();
+    let id = origin_core::pages::Page::new_id();
     let now = chrono::Utc::now().to_rfc3339();
     let source_refs: Vec<&str> = req.source_memory_ids.iter().map(|s| s.as_str()).collect();
-    db.insert_concept(
+    db.insert_page(
         &id,
         &req.title,
         req.summary.as_deref(),
@@ -2111,7 +2109,7 @@ pub struct CreateConceptRequest {
 }
 
 #[derive(Debug, Deserialize)]
-pub struct SearchConceptsRequest {
+pub struct SearchPagesRequest {
     pub query: String,
     #[serde(default)]
     pub limit: Option<usize>,
@@ -2123,14 +2121,14 @@ pub struct ExportConceptsRequest {
 }
 
 /// POST /api/concepts/export
-pub async fn handle_export_concepts(
+pub async fn handle_export_pages(
     State(state): State<Arc<RwLock<ServerState>>>,
     Json(req): Json<ExportConceptsRequest>,
 ) -> Result<Json<origin_core::export::ExportStats>, ServerError> {
     let concepts = {
         let s = state.read().await;
         let db = s.db.as_ref().ok_or(ServerError::DbNotInitialized)?;
-        db.list_concepts("active", 1000, 0)
+        db.list_pages("active", 1000, 0)
             .await
             .map_err(|e| ServerError::Internal(e.to_string()))?
     };
@@ -2145,7 +2143,7 @@ pub async fn handle_export_concepts(
     };
     let exporter =
         origin_core::export::obsidian::ObsidianExporter::new(std::path::PathBuf::from(expanded));
-    use origin_core::export::ConceptExporter;
+    use origin_core::export::PageExporter;
     let stats = exporter
         .export_all(&concepts)
         .map_err(|e| ServerError::Internal(e.to_string()))?;
@@ -2153,11 +2151,11 @@ pub async fn handle_export_concepts(
 }
 
 /// POST /api/concepts/{id}/export
-pub async fn handle_export_concept(
+pub async fn handle_export_page(
     State(state): State<Arc<RwLock<ServerState>>>,
     Path(concept_id): Path<String>,
-    Json(req): Json<origin_types::requests::ExportConceptRequest>,
-) -> Result<Json<origin_types::responses::ExportConceptResponse>, ServerError> {
+    Json(req): Json<origin_types::requests::ExportPageRequest>,
+) -> Result<Json<origin_types::responses::ExportPageResponse>, ServerError> {
     // Clone Arc out of the guard so we don't hold the RwLock read guard
     // across the DB await. (CLAUDE.md: never hold tokio::sync::RwLock guards
     // across .await.)
@@ -2167,7 +2165,7 @@ pub async fn handle_export_concept(
     };
 
     let concept = db
-        .get_concept(&concept_id)
+        .get_page(&concept_id)
         .await
         .map_err(|e| ServerError::Internal(e.to_string()))?
         .ok_or_else(|| ServerError::NotFound(format!("Concept not found: {}", concept_id)))?;
@@ -2181,12 +2179,12 @@ pub async fn handle_export_concept(
 
     let exporter =
         origin_core::export::obsidian::ObsidianExporter::new(std::path::PathBuf::from(expanded));
-    use origin_core::export::ConceptExporter;
+    use origin_core::export::PageExporter;
     let result = exporter
         .export(&concept)
         .map_err(|e| ServerError::Internal(e.to_string()))?;
 
-    Ok(Json(origin_types::responses::ExportConceptResponse {
+    Ok(Json(origin_types::responses::ExportPageResponse {
         path: result.path,
     }))
 }
@@ -3132,10 +3130,10 @@ pub async fn handle_get_snapshot_captures_with_content(
 }
 
 /// POST /api/memory/{id}/update-concept
-pub async fn handle_update_concept(
+pub async fn handle_update_page(
     State(state): State<Arc<RwLock<ServerState>>>,
     Path(id): Path<String>,
-    Json(req): Json<origin_types::requests::UpdateConceptRequest>,
+    Json(req): Json<origin_types::requests::UpdatePageRequest>,
 ) -> Result<Json<origin_types::responses::SuccessResponse>, ServerError> {
     let db = {
         let s = state.read().await;
@@ -3145,13 +3143,13 @@ pub async fn handle_update_concept(
     // the new content body. Passing &[] here would wipe the concept's
     // source list, causing silent data loss.
     let existing_sources: Vec<String> = db
-        .get_concept(&id)
+        .get_page(&id)
         .await
         .map_err(|e| ServerError::Internal(e.to_string()))?
         .map(|c| c.source_memory_ids)
         .unwrap_or_default();
     let existing_refs: Vec<&str> = existing_sources.iter().map(String::as_str).collect();
-    db.update_concept_content(&id, &req.content, &existing_refs, "manual_edit")
+    db.update_page_content(&id, &req.content, &existing_refs, "manual_edit")
         .await
         .map_err(|e| ServerError::Internal(e.to_string()))?;
     Ok(Json(origin_types::responses::SuccessResponse { ok: true }))

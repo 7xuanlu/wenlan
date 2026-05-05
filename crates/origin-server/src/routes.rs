@@ -360,8 +360,8 @@ pub async fn handle_chat_context(
 
     let concept_results: Vec<String> =
         if tier_allowed(&classification.trust_level, 2) && query != "recent context" {
-            let raw_concepts = db.search_concepts(query, 3).await.unwrap_or_default();
-            let concepts = origin_core::concepts::filter_concepts_by_source_overlap(
+            let raw_concepts = db.search_pages(query, 3).await.unwrap_or_default();
+            let concepts = origin_core::pages::filter_pages_by_source_overlap(
                 &raw_concepts,
                 &search_source_ids,
                 concept_min_overlap,
@@ -683,7 +683,7 @@ pub async fn handle_distill(
         let config = origin_core::config::load_config();
         Some(config.knowledge_path_or_default())
     };
-    let distilled = origin_core::refinery::distill_concepts(
+    let distilled = origin_core::refinery::distill_pages(
         db,
         prefer_llm,
         prompts,
@@ -691,7 +691,7 @@ pub async fn handle_distill(
         knowledge_path.as_deref(),
     )
     .await?;
-    let deep = origin_core::refinery::deep_distill_concepts(
+    let deep = origin_core::refinery::deep_distill_pages(
         db,
         prefer_llm,
         prompts,
@@ -752,10 +752,10 @@ pub async fn handle_recent_retrievals(
 }
 
 /// GET /api/concepts/recent-changes - Recent concept created/revised events.
-pub async fn handle_recent_concept_changes(
+pub async fn handle_recent_page_changes(
     State(state): State<Arc<RwLock<ServerState>>>,
     axum::extract::Query(q): axum::extract::Query<RecentLimitQuery>,
-) -> Result<Json<Vec<origin_types::ConceptChange>>, ServerError> {
+) -> Result<Json<Vec<origin_types::PageChange>>, ServerError> {
     let limit = q.limit.unwrap_or(10).clamp(1, 100);
     let db = {
         let s = state.read().await;
@@ -771,7 +771,7 @@ pub async fn handle_recent_concept_changes(
 
 /// GET /api/concepts/recent — top-N concept activity with badge deltas.
 /// `since_ms` scopes badge derivation only; the feed is always top-N by recency.
-pub async fn handle_recent_concepts(
+pub async fn handle_recent_pages(
     State(state): State<Arc<RwLock<ServerState>>>,
     axum::extract::Query(q): axum::extract::Query<crate::memory_routes::RecentActivityQuery>,
 ) -> Result<Json<Vec<origin_types::RecentActivityItem>>, ServerError> {
@@ -781,7 +781,7 @@ pub async fn handle_recent_concepts(
     };
     let db = db.ok_or(ServerError::DbNotInitialized)?;
     let items = db
-        .list_recent_concepts_with_badges(q.limit.unwrap_or(10), q.since_ms)
+        .list_recent_pages_with_badges(q.limit.unwrap_or(10), q.since_ms)
         .await
         .map_err(|e| ServerError::Internal(e.to_string()))?;
     Ok(Json(items))

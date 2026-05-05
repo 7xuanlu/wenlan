@@ -550,7 +550,7 @@ async fn test_lifecycle_fixture_no_llm() {
     // Should still have 6 phases
     assert_eq!(report.phases.len(), 6);
 
-    // Without LLM, EntityExtraction/Distillation/ConceptRetrieval/Insights should match PostIngest
+    // Without LLM, EntityExtraction/Distillation/PageRetrieval/Insights should match PostIngest
     let post_ingest_ndcg = report.phases[1].ndcg_at_10;
     let entity_ndcg = report.phases[2].ndcg_at_10;
     let distill_ndcg = report.phases[3].ndcg_at_10;
@@ -571,7 +571,7 @@ async fn test_lifecycle_fixture_no_llm() {
     );
     assert!(
         (concept_ndcg - post_ingest_ndcg).abs() < 1e-9,
-        "Without LLM, ConceptRetrieval NDCG ({}) should match PostIngest ({})",
+        "Without LLM, PageRetrieval NDCG ({}) should match PostIngest ({})",
         concept_ndcg,
         post_ingest_ndcg
     );
@@ -889,11 +889,11 @@ async fn test_lifecycle_pipeline_quality() {
 }
 
 /// Tests that the concept compilation pipeline produces searchable concepts.
-/// Seeds memories → runs distillation with mock LLM → verifies ConceptRetrieval phase has non-zero concept_count.
+/// Seeds memories → runs distillation with mock LLM → verifies PageRetrieval phase has non-zero concept_count.
 ///
-/// Note: `extract_entities_from_memories` and `distill_concepts` are pub(crate) and not
+/// Note: `extract_entities_from_memories` and `distill_pages` are pub(crate) and not
 /// accessible from integration tests, so we use `run_lifecycle_fixture` which invokes the full
-/// pipeline internally and exposes the ConceptRetrieval phase in the report.
+/// pipeline internally and exposes the PageRetrieval phase in the report.
 #[tokio::test]
 async fn test_concept_retrieval_eval() {
     use origin_lib::eval::lifecycle::{run_lifecycle_fixture, EvalMockLlm, LifecyclePhase};
@@ -906,14 +906,14 @@ async fn test_concept_retrieval_eval() {
         .await
         .unwrap();
 
-    // Must have a ConceptRetrieval phase in the report
+    // Must have a PageRetrieval phase in the report
     let concept_phase = report
         .phases
         .iter()
-        .find(|p| p.phase == LifecyclePhase::ConceptRetrieval);
+        .find(|p| p.phase == LifecyclePhase::PageRetrieval);
     assert!(
         concept_phase.is_some(),
-        "LifecycleReport should contain a ConceptRetrieval phase"
+        "LifecycleReport should contain a PageRetrieval phase"
     );
 
     let cp = concept_phase.unwrap();
@@ -921,17 +921,17 @@ async fn test_concept_retrieval_eval() {
     // NDCG and MRR must be within [0, 1]
     assert!(
         cp.ndcg_at_10 >= 0.0 && cp.ndcg_at_10 <= 1.0,
-        "ConceptRetrieval NDCG@10 out of range: {}",
+        "PageRetrieval NDCG@10 out of range: {}",
         cp.ndcg_at_10
     );
     assert!(
         cp.mrr >= 0.0 && cp.mrr <= 1.0,
-        "ConceptRetrieval MRR out of range: {}",
+        "PageRetrieval MRR out of range: {}",
         cp.mrr
     );
 
     println!(
-        "ConceptRetrieval phase: concept_count={}, NDCG@10={:.4}, MRR={:.4}",
+        "PageRetrieval phase: concept_count={}, NDCG@10={:.4}, MRR={:.4}",
         cp.concept_count, cp.ndcg_at_10, cp.mrr
     );
 
@@ -1204,7 +1204,7 @@ async fn test_concept_before_after_comparison() {
             .join("\n");
         let concept_id = format!("concept_case_{}", i);
         let _ = db
-            .insert_concept(
+            .insert_page(
                 &concept_id,
                 &format!(
                     "Compiled: {}",
@@ -1219,8 +1219,8 @@ async fn test_concept_before_after_comparison() {
             )
             .await;
 
-        // Combined: search_concepts + search_memory
-        let concepts = db.search_concepts(&case.query, 3).await.unwrap_or_default();
+        // Combined: search_pages + search_memory
+        let concepts = db.search_pages(&case.query, 3).await.unwrap_or_default();
         let mut combined: Vec<String> = Vec::new();
         for concept in &concepts {
             for sid in &concept.source_memory_ids {
@@ -1254,8 +1254,8 @@ async fn test_concept_before_after_comparison() {
 
         // Clean up this case's concept to avoid cross-case FTS contamination.
         // Memories stay (shared DB is realistic — real DBs have all memories).
-        // But concepts from case N shouldn't pollute case N+1's search_concepts results.
-        let _ = db.delete_concept(&concept_id).await;
+        // But concepts from case N shouldn't pollute case N+1's search_pages results.
+        let _ = db.delete_page(&concept_id).await;
     }
 
     let avg_recall_before = total_recall_before / scored_cases.max(1) as f64;
@@ -2507,10 +2507,7 @@ async fn smoke_fullpipeline() {
         .join("\n");
     let flat_tokens = count_tokens(&flat_ctx);
 
-    let concept_results = db
-        .search_concepts(&qa.question, 3)
-        .await
-        .unwrap_or_default();
+    let concept_results = db.search_pages(&qa.question, 3).await.unwrap_or_default();
     let mut structured_parts: Vec<String> = Vec::new();
     if !concept_results.is_empty() {
         structured_parts.push("## Compiled Knowledge".to_string());
@@ -3592,7 +3589,7 @@ fn print_judge_report(report: &origin_lib::eval::judge::JudgedE2EReport) {
 
 /// Probe concept relevance scores from enriched DBs.
 ///
-/// Runs search_concepts with real embeddings on sample questions from each benchmark.
+/// Runs search_pages with real embeddings on sample questions from each benchmark.
 /// Prints score distributions so we can set a data-driven threshold.
 ///
 /// ```bash
@@ -3686,7 +3683,7 @@ async fn probe_concept_scores() {
 
         let mut all_scores: Vec<f32> = Vec::new();
         for (cat, question) in &samples {
-            let concepts = db.search_concepts(question, 3).await.unwrap_or_default();
+            let concepts = db.search_pages(question, 3).await.unwrap_or_default();
             let scores: Vec<f32> = concepts.iter().map(|c| c.relevance_score).collect();
             let tokens: Vec<usize> = concepts
                 .iter()
@@ -3729,7 +3726,7 @@ async fn probe_concept_scores() {
 
 /// Probe source overlap gate across ALL questions in both enriched DBs.
 ///
-/// Runs search_memory + search_concepts for every question, counts how many
+/// Runs search_memory + search_pages for every question, counts how many
 /// concepts pass the overlap gate (>= min_overlap source memories overlap
 /// with search results). This validates whether the gate behaves as expected
 /// without running expensive LLM answer generation.
@@ -3741,9 +3738,9 @@ async fn probe_concept_scores() {
 #[tokio::test]
 #[ignore]
 async fn probe_overlap_gate() {
-    use origin_core::concepts::filter_concepts_by_source_overlap;
     use origin_core::db::MemoryDB;
     use origin_core::events::NoopEmitter;
+    use origin_core::pages::filter_pages_by_source_overlap;
     use origin_lib::eval::shared::eval_shared_embedder;
     use std::collections::HashMap;
     use std::sync::Arc;
@@ -3830,9 +3827,9 @@ async fn probe_overlap_gate() {
             let search_ids: std::collections::HashSet<String> =
                 results.iter().map(|r| r.source_id.clone()).collect();
 
-            // Real search_concepts (top-3)
-            let raw_concepts = db.search_concepts(q, 3).await.unwrap_or_default();
-            let kept = filter_concepts_by_source_overlap(&raw_concepts, &search_ids, min_overlap);
+            // Real search_pages (top-3)
+            let raw_concepts = db.search_pages(q, 3).await.unwrap_or_default();
+            let kept = filter_pages_by_source_overlap(&raw_concepts, &search_ids, min_overlap);
 
             for c in &raw_concepts {
                 total_concepts += 1;
@@ -4106,10 +4103,10 @@ fn eval_baselines_dir_override_env_var() {
 ///   1. Backup → `origin_memory.db.backup_<unix_ts>`.
 ///   2. Open via `MemoryDB::new_with_shared_embedder` (no cache check, no re-seed).
 ///   3. Delete every existing concept (status active + archived) via the public
-///      `delete_concept` API. concept_sources cascades via FK.
-///   4. Call `refinery::distill_concepts` directly. Cluster threshold honored.
+///      `delete_page` API. concept_sources cascades via FK.
+///   4. Call `refinery::distill_pages` directly. Cluster threshold honored.
 ///   5. Verify: new concepts > 0; first concept has at least one row in
-///      `concept_sources` via `get_concept_sources`.
+///      `concept_sources` via `get_page_sources`.
 ///
 /// Run:
 ///   EVAL_BASELINES_DIR=/Users/lucian/Repos/origin/.worktrees/eval-per-scenario/app/eval/baselines \
@@ -4287,7 +4284,7 @@ async fn redistill_one_conv(
     embedder: origin_lib::memory_db::SharedEmbedder,
 ) -> Result<(), String> {
     use origin_lib::memory_db::MemoryDB;
-    use origin_lib::refinery::distill_concepts;
+    use origin_lib::refinery::distill_pages;
     use std::sync::Arc;
 
     let emitter: Arc<dyn origin_core::events::EventEmitter> = Arc::new(origin_core::NoopEmitter);
@@ -4296,18 +4293,18 @@ async fn redistill_one_conv(
         .map_err(|e| format!("open: {e}"))?;
 
     let active = db
-        .list_concepts("active", 100_000, 0)
+        .list_pages("active", 100_000, 0)
         .await
-        .map_err(|e| format!("list_concepts active: {e}"))?;
+        .map_err(|e| format!("list_pages active: {e}"))?;
     let archived = db
-        .list_concepts("archived", 100_000, 0)
+        .list_pages("archived", 100_000, 0)
         .await
-        .map_err(|e| format!("list_concepts archived: {e}"))?;
+        .map_err(|e| format!("list_pages archived: {e}"))?;
     let total_existing = active.len() + archived.len();
     for c in active.iter().chain(archived.iter()) {
-        db.delete_concept(&c.id)
+        db.delete_page(&c.id)
             .await
-            .map_err(|e| format!("delete_concept {}: {e}", c.id))?;
+            .map_err(|e| format!("delete_page {}: {e}", c.id))?;
     }
     eprintln!(
         "[redistill] {}: cleared {} concepts (active={}, archived={})",
@@ -4318,22 +4315,22 @@ async fn redistill_one_conv(
     );
 
     let conv_t0 = std::time::Instant::now();
-    let created = distill_concepts(&db, Some(llm), prompts, tuning, None)
+    let created = distill_pages(&db, Some(llm), prompts, tuning, None)
         .await
-        .map_err(|e| format!("distill_concepts: {e}"))?;
+        .map_err(|e| format!("distill_pages: {e}"))?;
     let conv_secs = conv_t0.elapsed().as_secs_f32();
 
     let new_active = db
-        .list_concepts("active", 100_000, 0)
+        .list_pages("active", 100_000, 0)
         .await
-        .map_err(|e| format!("post list_concepts: {e}"))?;
+        .map_err(|e| format!("post list_pages: {e}"))?;
     let mut sources_total = 0usize;
     let mut concepts_with_sources = 0usize;
     for c in &new_active {
         let s = db
-            .get_concept_sources(&c.id)
+            .get_page_sources(&c.id)
             .await
-            .map_err(|e| format!("get_concept_sources {}: {e}", c.id))?;
+            .map_err(|e| format!("get_page_sources {}: {e}", c.id))?;
         sources_total += s.len();
         if !s.is_empty() {
             concepts_with_sources += 1;

@@ -2581,14 +2581,14 @@ pub async fn correct_memory_cmd(
 /// Wire wrapper for the daemon's `{ "concept": {...} }` response shape.
 #[derive(serde::Deserialize)]
 struct GetConceptWire {
-    concept: Option<crate::concepts::Concept>,
+    concept: Option<crate::pages::Page>,
 }
 
 #[tauri::command]
 pub async fn get_concept(
     state: tauri::State<'_, State>,
     id: String,
-) -> Result<Option<crate::concepts::Concept>, String> {
+) -> Result<Option<crate::pages::Page>, String> {
     let client = state.read().await.client.clone();
     // The daemon returns 404 when the concept doesn't exist, which reqwest
     // turns into an error. Distinguish "not found" from real errors so the
@@ -2618,7 +2618,7 @@ pub async fn update_concept(
     content: String,
 ) -> Result<(), String> {
     let s = state.read().await;
-    let req = requests::UpdateConceptRequest { content };
+    let req = requests::UpdatePageRequest { content };
     let _resp: responses::SuccessResponse = s
         .client
         .post_json(&format!("/api/memory/{}/update-concept", id), &req)
@@ -2651,7 +2651,7 @@ pub async fn delete_concept(state: tauri::State<'_, State>, id: String) -> Resul
 /// origin-types), so we can't put this in the shared response types.
 #[derive(serde::Deserialize)]
 struct ListConceptsWire {
-    concepts: Vec<crate::concepts::Concept>,
+    concepts: Vec<crate::pages::Page>,
 }
 
 #[tauri::command]
@@ -2661,7 +2661,7 @@ pub async fn list_concepts(
     domain: Option<String>,
     limit: Option<usize>,
     offset: Option<usize>,
-) -> Result<Vec<crate::concepts::Concept>, String> {
+) -> Result<Vec<crate::pages::Page>, String> {
     let client = state.read().await.client.clone();
     // Build query string from the filter params that were previously ignored.
     let mut params: Vec<String> = Vec::new();
@@ -2691,9 +2691,9 @@ pub async fn search_concepts(
     state: tauri::State<'_, State>,
     query: String,
     limit: Option<usize>,
-) -> Result<Vec<crate::concepts::Concept>, String> {
+) -> Result<Vec<crate::pages::Page>, String> {
     let client = state.read().await.client.clone();
-    let req = requests::SearchConceptsRequest { query, limit };
+    let req = requests::SearchPagesRequest { query, limit };
     let resp: ListConceptsWire = client.post_json("/api/concepts/search", &req).await?;
     Ok(resp.concepts)
 }
@@ -2702,7 +2702,7 @@ pub async fn search_concepts(
 pub async fn get_concept_sources(
     state: tauri::State<'_, State>,
     concept_id: String,
-) -> Result<Vec<origin_types::ConceptSourceWithMemory>, String> {
+) -> Result<Vec<origin_types::PageSourceWithMemory>, String> {
     let client = { state.read().await.client.clone() };
     client.get_concept_sources(&concept_id).await
 }
@@ -2713,7 +2713,7 @@ pub async fn export_concepts_to_obsidian(
     vault_path: String,
 ) -> Result<crate::export::ExportStats, String> {
     // Fetch concepts from daemon, then export locally
-    let concepts: Vec<crate::concepts::Concept> = {
+    let concepts: Vec<crate::pages::Page> = {
         let client = state.read().await.client.clone();
         let resp: ListConceptsWire = client.get_json("/api/concepts").await?;
         resp.concepts
@@ -2726,7 +2726,7 @@ pub async fn export_concepts_to_obsidian(
     };
     let exporter =
         crate::export::obsidian::ObsidianExporter::new(std::path::PathBuf::from(expanded));
-    use crate::export::ConceptExporter;
+    use crate::export::PageExporter;
     exporter.export_all(&concepts).map_err(|e| e.to_string())
 }
 
@@ -2738,8 +2738,8 @@ pub async fn export_concept_to_obsidian(
 ) -> Result<String, String> {
     let client = state.read().await.client.clone();
     let path = format!("/api/concepts/{}/export", concept_id);
-    let req = requests::ExportConceptRequest { vault_path };
-    let resp: responses::ExportConceptResponse = client.post_json(&path, &req).await?;
+    let req = requests::ExportPageRequest { vault_path };
+    let resp: responses::ExportPageResponse = client.post_json(&path, &req).await?;
     Ok(resp.path)
 }
 
@@ -3256,7 +3256,7 @@ pub async fn list_recent_retrievals(
 pub async fn list_recent_changes(
     state: tauri::State<'_, State>,
     limit: Option<i64>,
-) -> Result<Vec<origin_types::ConceptChange>, String> {
+) -> Result<Vec<origin_types::PageChange>, String> {
     let client = {
         let s = state.read().await;
         s.client.clone()

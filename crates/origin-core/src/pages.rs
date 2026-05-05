@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-//! Knowledge compilation: concepts are structured documents compiled from memory clusters.
+//! Knowledge compilation: pages are synthesized wiki entries distilled from memory clusters.
 
 use serde::{Deserialize, Serialize};
 
-/// A compiled knowledge concept — structured, cross-referenced, backed by source memories.
+/// A compiled knowledge page — structured, cross-referenced, backed by source memories.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Concept {
+pub struct Page {
     pub id: String,
     pub title: String,
     pub summary: Option<String>,
@@ -21,11 +21,11 @@ pub struct Concept {
     pub last_modified: String,
     /// How many source memories were updated since last distillation.
     pub sources_updated_count: i64,
-    /// Why this concept is stale: "source_updated" | "source_conflict" | None.
+    /// Why this page is stale: "source_updated" | "source_conflict" | None.
     pub stale_reason: Option<String>,
-    /// True if a human has edited this concept's content directly.
+    /// True if a human has edited this page's content directly.
     pub user_edited: bool,
-    /// Relevance score from search (0.0-1.0). Only populated by `search_concepts`;
+    /// Relevance score from search (0.0-1.0). Only populated by `search_pages`;
     /// zero for persisted/non-search contexts.
     #[serde(default, skip_serializing_if = "is_zero_f32")]
     pub relevance_score: f32,
@@ -35,29 +35,29 @@ fn is_zero_f32(v: &f32) -> bool {
     *v == 0.0
 }
 
-impl Concept {
+impl Page {
     pub fn new_id() -> String {
         format!("concept_{}", uuid::Uuid::new_v4())
     }
 }
 
-/// Filter concepts by source overlap with search results.
+/// Filter pages by source overlap with search results.
 ///
-/// A concept is contextually relevant if the memories it was compiled from
+/// A page is contextually relevant if the memories it was compiled from
 /// overlap with the memories that search_memory returned for this query.
-/// This is the strongest relevance signal: it answers "is this concept about
+/// This is the strongest relevance signal: it answers "is this page about
 /// the thing I'm searching for?" rather than relying on embedding similarity
-/// (which we proved doesn't discriminate between good and garbage concepts).
+/// (which we proved doesn't discriminate between good and garbage pages).
 ///
 /// `min_overlap`: minimum number of search result source_ids that must appear
-/// in the concept's `source_memory_ids`. Recommended: 2 (filters noise while
-/// keeping concepts with genuine topical overlap).
-pub fn filter_concepts_by_source_overlap(
-    concepts: &[Concept],
+/// in the page's `source_memory_ids`. Recommended: 2 (filters noise while
+/// keeping pages with genuine topical overlap).
+pub fn filter_pages_by_source_overlap(
+    pages: &[Page],
     search_result_source_ids: &std::collections::HashSet<String>,
     min_overlap: usize,
-) -> Vec<Concept> {
-    concepts
+) -> Vec<Page> {
+    pages
         .iter()
         .filter(|c| {
             let overlap = c
@@ -76,8 +76,8 @@ mod tests {
     use super::*;
     use std::collections::HashSet;
 
-    fn make_concept(id: &str, source_ids: &[&str]) -> Concept {
-        Concept {
+    fn make_page(id: &str, source_ids: &[&str]) -> Page {
+        Page {
             id: id.to_string(),
             title: id.to_string(),
             summary: None,
@@ -99,54 +99,54 @@ mod tests {
 
     #[test]
     fn test_overlap_keeps_matching_concept() {
-        let concepts = vec![make_concept("c1", &["m1", "m2", "m3"])];
+        let pages = vec![make_page("c1", &["m1", "m2", "m3"])];
         let search_ids: HashSet<String> = ["m1", "m2"].iter().map(|s| s.to_string()).collect();
-        let kept = filter_concepts_by_source_overlap(&concepts, &search_ids, 2);
+        let kept = filter_pages_by_source_overlap(&pages, &search_ids, 2);
         assert_eq!(kept.len(), 1);
     }
 
     #[test]
     fn test_overlap_filters_low_overlap() {
-        let concepts = vec![make_concept("c1", &["m1", "m2", "m3"])];
+        let pages = vec![make_page("c1", &["m1", "m2", "m3"])];
         let search_ids: HashSet<String> = ["m1", "m99"].iter().map(|s| s.to_string()).collect();
-        let kept = filter_concepts_by_source_overlap(&concepts, &search_ids, 2);
+        let kept = filter_pages_by_source_overlap(&pages, &search_ids, 2);
         assert_eq!(kept.len(), 0); // only 1 overlap, need 2
     }
 
     #[test]
     fn test_overlap_empty_concept_sources() {
-        let concepts = vec![make_concept("c1", &[])];
+        let pages = vec![make_page("c1", &[])];
         let search_ids: HashSet<String> = ["m1"].iter().map(|s| s.to_string()).collect();
-        let kept = filter_concepts_by_source_overlap(&concepts, &search_ids, 1);
+        let kept = filter_pages_by_source_overlap(&pages, &search_ids, 1);
         assert_eq!(kept.len(), 0);
     }
 
     #[test]
     fn test_overlap_empty_search_results() {
-        let concepts = vec![make_concept("c1", &["m1", "m2"])];
+        let pages = vec![make_page("c1", &["m1", "m2"])];
         let search_ids: HashSet<String> = HashSet::new();
-        let kept = filter_concepts_by_source_overlap(&concepts, &search_ids, 1);
+        let kept = filter_pages_by_source_overlap(&pages, &search_ids, 1);
         assert_eq!(kept.len(), 0);
     }
 
     #[test]
     fn test_overlap_zero_threshold_keeps_all() {
-        let concepts = vec![make_concept("c1", &["m1"]), make_concept("c2", &["m99"])];
+        let pages = vec![make_page("c1", &["m1"]), make_page("c2", &["m99"])];
         let search_ids: HashSet<String> = ["m1"].iter().map(|s| s.to_string()).collect();
-        let kept = filter_concepts_by_source_overlap(&concepts, &search_ids, 0);
+        let kept = filter_pages_by_source_overlap(&pages, &search_ids, 0);
         assert_eq!(kept.len(), 2); // min_overlap=0 keeps everything
     }
 
     #[test]
     fn test_overlap_mixed_keeps_and_filters() {
-        let concepts = vec![
-            make_concept("good", &["m1", "m2", "m3", "m4", "m5"]),
-            make_concept("noise", &["m90", "m91", "m92"]),
-            make_concept("edge", &["m1", "m90"]),
+        let pages = vec![
+            make_page("good", &["m1", "m2", "m3", "m4", "m5"]),
+            make_page("noise", &["m90", "m91", "m92"]),
+            make_page("edge", &["m1", "m90"]),
         ];
         let search_ids: HashSet<String> =
             ["m1", "m2", "m3"].iter().map(|s| s.to_string()).collect();
-        let kept = filter_concepts_by_source_overlap(&concepts, &search_ids, 2);
+        let kept = filter_pages_by_source_overlap(&pages, &search_ids, 2);
         assert_eq!(kept.len(), 1);
         assert_eq!(kept[0].id, "good"); // 3 overlap
                                         // "noise" has 0 overlap, "edge" has 1 overlap — both filtered at min_overlap=2

@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-//! Knowledge writer — exports concepts as `.md` files with state tracking.
+//! Knowledge writer — exports pages as `.md` files with state tracking.
 
-use crate::concepts::Concept;
 use crate::error::OriginError;
 use crate::export::obsidian::{convert_links_to_wikilinks, slugify};
+use crate::pages::Page;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -29,23 +29,23 @@ impl KnowledgeWriter {
         Self { path }
     }
 
-    pub fn write_concept(&self, concept: &Concept) -> Result<String, OriginError> {
+    pub fn write_concept(&self, page: &Page) -> Result<String, OriginError> {
         let origin_dir = self.path.join(".origin");
         std::fs::create_dir_all(&origin_dir)?;
 
-        let filename = format!("{}.md", slugify(&concept.title));
+        let filename = format!("{}.md", slugify(&page.title));
         let file_path = self.path.join(&filename);
 
-        let content = render_markdown(concept);
+        let content = render_markdown(page);
         std::fs::write(&file_path, &content)?;
 
         let mut state = self.load_state();
         state.concepts.insert(
-            concept.id.clone(),
+            page.id.clone(),
             ConceptFileState {
                 file: filename,
-                version: concept.version,
-                last_written: concept.last_modified.clone(),
+                version: page.version,
+                last_written: page.last_modified.clone(),
             },
         );
         self.save_state(&state)?;
@@ -83,25 +83,25 @@ impl KnowledgeWriter {
     }
 }
 
-fn render_markdown(concept: &Concept) -> String {
+fn render_markdown(page: &Page) -> String {
     let mut out = String::new();
 
     // Frontmatter
     out.push_str("---\n");
-    out.push_str(&format!("title: \"{}\"\n", concept.title));
-    if let Some(ref domain) = concept.domain {
+    out.push_str(&format!("title: \"{}\"\n", page.title));
+    if let Some(ref domain) = page.domain {
         out.push_str(&format!("domain: {}\n", domain));
     }
-    out.push_str(&format!("origin_id: {}\n", concept.id));
-    out.push_str(&format!("origin_version: {}\n", concept.version));
-    let created_date: String = concept.created_at.chars().take(10).collect();
-    let modified_date: String = concept.last_modified.chars().take(10).collect();
+    out.push_str(&format!("origin_id: {}\n", page.id));
+    out.push_str(&format!("origin_version: {}\n", page.version));
+    let created_date: String = page.created_at.chars().take(10).collect();
+    let modified_date: String = page.last_modified.chars().take(10).collect();
     out.push_str(&format!("created: {}\n", created_date));
     out.push_str(&format!("modified: {}\n", modified_date));
     out.push_str("---\n\n");
 
     // Body with wikilinks
-    out.push_str(&convert_links_to_wikilinks(&concept.content));
+    out.push_str(&convert_links_to_wikilinks(&page.content));
     out.push('\n');
 
     out
@@ -110,10 +110,10 @@ fn render_markdown(concept: &Concept) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::concepts::Concept;
+    use crate::pages::Page;
 
-    fn test_concept() -> Concept {
-        Concept {
+    fn test_concept() -> Page {
+        Page {
             id: "concept_test123".to_string(),
             title: "Rust Ownership".to_string(),
             summary: Some("Memory safety without GC".to_string()),
@@ -137,9 +137,9 @@ mod tests {
     fn test_write_concept_creates_file() {
         let dir = tempfile::TempDir::new().unwrap();
         let writer = KnowledgeWriter::new(dir.path().to_path_buf());
-        let concept = test_concept();
+        let page = test_concept();
 
-        let path = writer.write_concept(&concept).unwrap();
+        let path = writer.write_concept(&page).unwrap();
         assert!(path.ends_with("rust-ownership.md"));
 
         let content = std::fs::read_to_string(&path).unwrap();
@@ -193,12 +193,12 @@ mod tests {
         let dir = tempfile::TempDir::new().unwrap();
         let writer = KnowledgeWriter::new(dir.path().to_path_buf());
 
-        let c1 = Concept {
+        let c1 = Page {
             id: "concept_a".to_string(),
             title: "Alpha".to_string(),
             ..test_concept()
         };
-        let c2 = Concept {
+        let c2 = Page {
             id: "concept_b".to_string(),
             title: "Beta".to_string(),
             ..test_concept()
@@ -219,16 +219,16 @@ mod tests {
         let dir = tempfile::TempDir::new().unwrap();
         let writer = KnowledgeWriter::new(dir.path().to_path_buf());
 
-        let mut concept = test_concept();
-        writer.write_concept(&concept).unwrap();
+        let mut page = test_concept();
+        writer.write_concept(&page).unwrap();
 
         let v1 = std::fs::read_to_string(dir.path().join("rust-ownership.md")).unwrap();
         assert!(v1.contains("origin_version: 2"));
 
         // Update version and content
-        concept.version = 3;
-        concept.content = "## Updated\nNew content.".to_string();
-        writer.write_concept(&concept).unwrap();
+        page.version = 3;
+        page.content = "## Updated\nNew content.".to_string();
+        writer.write_concept(&page).unwrap();
 
         let v2 = std::fs::read_to_string(dir.path().join("rust-ownership.md")).unwrap();
         assert!(v2.contains("origin_version: 3"));
@@ -245,11 +245,11 @@ mod tests {
         let dir = tempfile::TempDir::new().unwrap();
         let writer = KnowledgeWriter::new(dir.path().to_path_buf());
 
-        let concept = Concept {
+        let page = Page {
             domain: None,
             ..test_concept()
         };
-        let path = writer.write_concept(&concept).unwrap();
+        let path = writer.write_concept(&page).unwrap();
         let content = std::fs::read_to_string(&path).unwrap();
         assert!(!content.contains("domain:"));
     }

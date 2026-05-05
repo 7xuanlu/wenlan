@@ -762,7 +762,7 @@ async fn generate_e2e_answers_for_question(
     let mut structured_parts: Vec<String> = Vec::new();
 
     // Concept articles (like chat-context's "Compiled Knowledge" section)
-    let concepts = db.search_concepts(question, 3).await.unwrap_or_default();
+    let concepts = db.search_pages(question, 3).await.unwrap_or_default();
     if !concepts.is_empty() {
         structured_parts.push("## Compiled Knowledge".to_string());
         for c in &concepts {
@@ -874,7 +874,7 @@ pub async fn run_e2e_context_eval(
         eprintln!("  [enriching]...");
         let entities = run_entity_extraction_for_eval(&db, &llm).await?;
         let concepts =
-            crate::refinery::distill_concepts(&db, Some(&llm), &prompts, &tuning, None).await?;
+            crate::refinery::distill_pages(&db, Some(&llm), &prompts, &tuning, None).await?;
         eprintln!(
             "  [enriched] {} entities, {} concepts. generating answers...",
             entities, concepts
@@ -1021,7 +1021,7 @@ pub async fn run_e2e_context_eval_longmemeval(
         // Enrich + distill
         let _entities = run_entity_extraction_for_eval(&db, &llm).await?;
         let _concepts =
-            crate::refinery::distill_concepts(&db, Some(&llm), &prompts, &tuning, None).await?;
+            crate::refinery::distill_pages(&db, Some(&llm), &prompts, &tuning, None).await?;
 
         // Generate answers
         let ground_truth = sample
@@ -1093,7 +1093,7 @@ async fn build_structured_context(
     search_limit: usize,
     domain: Option<&str>,
 ) -> Result<(String, usize), OriginError> {
-    use crate::concepts::filter_concepts_by_source_overlap;
+    use crate::pages::filter_pages_by_source_overlap;
 
     let results = db
         .search_memory(question, search_limit, None, domain, None, None, None, None)
@@ -1112,9 +1112,8 @@ async fn build_structured_context(
         .unwrap_or_else(|| crate::tuning::DistillationConfig::default().concept_min_overlap);
 
     let mut parts: Vec<String> = Vec::new();
-    let raw_concepts = db.search_concepts(question, 3).await.unwrap_or_default();
-    let concepts =
-        filter_concepts_by_source_overlap(&raw_concepts, &search_source_ids, min_overlap);
+    let raw_concepts = db.search_pages(question, 3).await.unwrap_or_default();
+    let concepts = filter_pages_by_source_overlap(&raw_concepts, &search_source_ids, min_overlap);
 
     if !raw_concepts.is_empty() {
         for c in &raw_concepts {

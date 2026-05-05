@@ -4,8 +4,8 @@
 pub mod knowledge;
 pub mod obsidian;
 
-use crate::concepts::Concept;
 use crate::error::OriginError;
+use crate::pages::Page;
 use serde::Serialize;
 
 #[derive(Debug, Serialize)]
@@ -21,8 +21,8 @@ pub struct ExportStats {
     pub failed: usize,
 }
 
-/// Trait for exporting concepts to external formats/systems.
-pub trait ConceptExporter {
-    fn export(&self, concept: &Concept) -> Result<ExportResult, OriginError>;
-    fn export_all(&self, concepts: &[Concept]) -> Result<ExportStats, OriginError>;
+/// Trait for exporting pages to external formats/systems.
+pub trait PageExporter {
+    fn export(&self, page: &Page) -> Result<ExportResult, OriginError>;
+    fn export_all(&self, pages: &[Page]) -> Result<ExportStats, OriginError>;
 }

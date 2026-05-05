@@ -359,7 +359,7 @@ async fn expand_evidence_for_distillation(
 /// For each conversation:
 /// 1. Flat: seed observations, measure retrieval quality + tokens
 /// 2. Enriched: run entity extraction on the same DB
-/// 3. Distilled: run `distill_concepts()` with real LLM, measure again
+/// 3. Distilled: run `distill_pages()` with real LLM, measure again
 ///
 /// Requires on-device LLM (Metal GPU). Run with sandbox disabled.
 pub async fn run_locomo_pipeline_eval(
@@ -523,7 +523,7 @@ pub async fn run_locomo_pipeline_eval(
         // ---- Condition 3: Distilled (real LLM) ----
         eprintln!("  [distilled] running distillation...");
         let distilled_count =
-            crate::refinery::distill_concepts(&db, Some(&llm), &prompts, &tuning, None).await?;
+            crate::refinery::distill_pages(&db, Some(&llm), &prompts, &tuning, None).await?;
         eprintln!("    distilled {} concepts", distilled_count);
 
         // Count clusters that were found (for reporting)
@@ -831,7 +831,7 @@ pub async fn run_longmemeval_pipeline_eval(
 
         // ---- Distilled ----
         let distilled_count =
-            crate::refinery::distill_concepts(&db, Some(&llm), &prompts, &tuning, None).await?;
+            crate::refinery::distill_pages(&db, Some(&llm), &prompts, &tuning, None).await?;
 
         let clusters = db
             .find_distillation_clusters(

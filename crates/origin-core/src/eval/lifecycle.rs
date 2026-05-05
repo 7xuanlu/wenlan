@@ -39,7 +39,7 @@ pub enum LifecyclePhase {
     /// After LLM distillation (consolidate clusters, archive originals).
     Distillation,
     /// After concept compilation — measures whether FTS5 concept search finds compiled knowledge.
-    ConceptRetrieval,
+    PageRetrieval,
     /// After LLM insights generation (recaps + decision logs).
     Insights,
 }
@@ -51,7 +51,7 @@ impl LifecyclePhase {
             Self::PostIngest => "PostIngest",
             Self::EntityExtraction => "EntityExtraction",
             Self::Distillation => "Distillation",
-            Self::ConceptRetrieval => "ConceptRetrieval",
+            Self::PageRetrieval => "PageRetrieval",
             Self::Insights => "Insights",
         }
     }
@@ -78,12 +78,12 @@ pub struct PhaseMetrics {
     pub memory_count: usize,
     pub entity_count: usize,
     pub archived_count: usize,
-    /// Number of compiled concepts in the DB (only meaningful for ConceptRetrieval+).
+    /// Number of compiled concepts in the DB (only meaningful for PageRetrieval+).
     #[serde(default)]
     pub concept_count: usize,
     /// Unbounded coverage when concept source_memory_ids supplement search_memory results.
     /// Fraction of relevant memories found in (concept sources ∪ search results), no rank cutoff.
-    /// Only computed for ConceptRetrieval phase; 0.0 for other phases. Oracle ceiling metric.
+    /// Only computed for PageRetrieval phase; 0.0 for other phases. Oracle ceiling metric.
     #[serde(default)]
     pub concept_coverage: f64,
     pub duration_ms: u64,
@@ -98,7 +98,7 @@ pub struct PhaseDelta {
     pub mrr_delta: f64,
     pub recall_at_5_delta: f64,
     /// Combined recall delta (search_memory ∪ concept source_ids). Non-zero only for
-    /// transitions into ConceptRetrieval phase.
+    /// transitions into PageRetrieval phase.
     #[serde(default)]
     pub combined_recall_delta: f64,
     pub verdict: String,
@@ -108,7 +108,7 @@ impl PhaseDelta {
     fn compute(from: &PhaseMetrics, to: &PhaseMetrics) -> Self {
         let ndcg_delta = to.ndcg_at_10 - from.ndcg_at_10;
         let combined_delta =
-            if to.phase == LifecyclePhase::ConceptRetrieval && to.concept_coverage > 0.0 {
+            if to.phase == LifecyclePhase::PageRetrieval && to.concept_coverage > 0.0 {
                 to.concept_coverage - from.recall_at_5
             } else {
                 0.0
@@ -416,7 +416,7 @@ async fn measure_phase(
 
     // Check concept count ONCE before the loop — skip FTS5 queries when no concepts exist.
     let (memory_count, archived_count, entity_count, concept_count) = count_db_state(db).await?;
-    let should_search_concepts = phase == LifecyclePhase::ConceptRetrieval && concept_count > 0;
+    let should_search_concepts = phase == LifecyclePhase::PageRetrieval && concept_count > 0;
 
     for (query, grades, relevant, domain) in queries {
         let results = db
@@ -442,7 +442,7 @@ async fn measure_phase(
 
         // Combined recall: search_memory ∪ concept source_ids (simulates chat-context Tier 2.5 + 3)
         if should_search_concepts {
-            let concepts = db.search_concepts(query, 3).await.unwrap_or_default();
+            let concepts = db.search_pages(query, 3).await.unwrap_or_default();
             let mut combined: Vec<String> = Vec::new();
             for concept in &concepts {
                 for sid in &concept.source_memory_ids {
@@ -701,7 +701,7 @@ async fn run_lifecycle_phases(
         let merged_before = get_merged_ids(db).await?;
 
         let _ =
-            crate::refinery::distill_concepts(db, Some(llm_ref), &prompts, &distillation_cfg, None)
+            crate::refinery::distill_pages(db, Some(llm_ref), &prompts, &distillation_cfg, None)
                 .await;
 
         let mut tracker = SupersedesTracker::new();
@@ -721,14 +721,14 @@ async fn run_lifecycle_phases(
         per_case_ndcg
     );
 
-    // --- Phase 3.5: ConceptRetrieval (FTS on compiled concepts) ---
+    // --- Phase 3.5: PageRetrieval (FTS on compiled concepts) ---
     // Measures the DB state after distillation has created concepts.
     // Captures whether distilled concepts + archived originals improve retrieval.
     let phase_start = std::time::Instant::now();
     measure!(
         db,
         cases,
-        LifecyclePhase::ConceptRetrieval,
+        LifecyclePhase::PageRetrieval,
         phase_start,
         all_phases,
         per_case_ndcg
@@ -1381,7 +1381,7 @@ impl LifecycleReport {
                     "hurt" => " HURT",
                     _ => "",
                 };
-                let combined_str = if d.to == LifecyclePhase::ConceptRetrieval
+                let combined_str = if d.to == LifecyclePhase::PageRetrieval
                     && d.combined_recall_delta.abs() > 1e-6
                 {
                     format!(
@@ -1452,11 +1452,11 @@ impl LifecycleReport {
             ));
         }
 
-        // Concept impact summary — only when ConceptRetrieval phase has data
+        // Concept impact summary — only when PageRetrieval phase has data
         let concept_phase = self
             .phases
             .iter()
-            .find(|p| p.phase == LifecyclePhase::ConceptRetrieval);
+            .find(|p| p.phase == LifecyclePhase::PageRetrieval);
         let distill_phase = self
             .phases
             .iter()
@@ -1625,7 +1625,7 @@ mod tests {
             duration_ms: 50,
         };
         let to = PhaseMetrics {
-            phase: LifecyclePhase::ConceptRetrieval,
+            phase: LifecyclePhase::PageRetrieval,
             ndcg_at_5: 0.8,
             ndcg_at_10: 0.85,
             mrr: 0.9,
@@ -1933,8 +1933,8 @@ mod tests {
 
     #[test]
     fn concept_retrieval_phase_exists() {
-        let phase = LifecyclePhase::ConceptRetrieval;
-        assert_eq!(phase.name(), "ConceptRetrieval");
+        let phase = LifecyclePhase::PageRetrieval;
+        assert_eq!(phase.name(), "PageRetrieval");
         assert!(!phase.requires_llm());
     }
 }

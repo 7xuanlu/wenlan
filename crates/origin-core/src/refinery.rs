@@ -523,8 +523,7 @@ pub async fn run_periodic_steep_with_api(
     let kp_ref = knowledge_path.as_deref();
     if trigger.runs_phase("emergence") {
         let phase = run_phase("emergence", || async {
-            let count =
-                distill_concepts(db_ref, compile_llm, prompts, distillation, kp_ref).await?;
+            let count = distill_pages(db_ref, compile_llm, prompts, distillation, kp_ref).await?;
             let (nudge, headline) = classify_emergence(count);
             Ok(PhaseOutput {
                 items_processed: count,
@@ -553,9 +552,9 @@ pub async fn run_periodic_steep_with_api(
         }
     {
         let phase = run_phase("re-distill", || async {
-            let changed = redistill_changed_concepts(db_ref, compile_llm, prompts).await?;
+            let changed = redistill_changed_pages(db_ref, compile_llm, prompts).await?;
             // Also re-distill concepts explicitly marked stale by topic-key upserts.
-            let stale = re_distill_stale_concepts(db_ref, compile_llm, prompts).await?;
+            let stale = re_distill_stale_pages(db_ref, compile_llm, prompts).await?;
             let count = changed + stale;
             let (nudge, headline) = classify_redistill(count);
             Ok(PhaseOutput {
@@ -651,7 +650,7 @@ pub async fn run_periodic_steep_with_api(
         let phase = run_phase("prune_rejections", || async {
             let count = db_ref.prune_rejections(30).await?;
             // Clean up concept_sources rows whose source memories were deleted.
-            match db_ref.cleanup_orphaned_concept_sources().await {
+            match db_ref.cleanup_orphaned_page_sources().await {
                 Ok(n) if n > 0 => {
                     log::info!("[refinery] cleaned {} orphaned concept_sources rows", n);
                 }
@@ -1269,7 +1268,7 @@ async fn refine_clusters_with_llm(
 /// Process a single distillation cluster.
 ///
 /// Returns `Ok(true)` if a concept was created, `Ok(false)` if the cluster was skipped.
-/// Extracted from `distill_concepts` to enable parallel cluster processing via
+/// Extracted from `distill_pages` to enable parallel cluster processing via
 /// `DISTILL_CLUSTER_CONCURRENCY`.
 async fn distill_one_cluster(
     db: &MemoryDB,
@@ -1287,7 +1286,7 @@ async fn distill_one_cluster(
     // Skip if a concept with very similar sources already exists (Jaccard > 0.8)
     // Memories CAN appear in multiple concepts — this only prevents duplicate concepts
     let overlap = db
-        .max_concept_overlap(&cluster.source_ids)
+        .max_page_overlap(&cluster.source_ids)
         .await
         .unwrap_or(0.0);
     if overlap > 0.8 {
@@ -1450,9 +1449,9 @@ async fn distill_one_cluster(
             // Build source IDs as &str refs
             let source_refs: Vec<&str> = cluster.source_ids.iter().map(|s| s.as_str()).collect();
             let now = chrono::Utc::now().to_rfc3339();
-            let concept_id = crate::concepts::Concept::new_id();
+            let concept_id = crate::pages::Page::new_id();
 
-            db.insert_concept(
+            db.insert_page(
                 &concept_id,
                 &title,
                 summary.as_deref(),
@@ -1492,7 +1491,7 @@ async fn distill_one_cluster(
             }
 
             if let Some(writer) = knowledge_writer {
-                if let Ok(Some(c)) = db.get_concept(&concept_id).await {
+                if let Ok(Some(c)) = db.get_page(&concept_id).await {
                     match writer.write_concept(&c) {
                         Ok(p) => log::info!("[distill] wrote concept to {p}"),
                         Err(e) => log::warn!("[distill] knowledge write failed: {e}"),
@@ -1515,7 +1514,7 @@ async fn distill_one_cluster(
 
 /// Distill memory clusters into structured concepts.
 /// Memories can appear in multiple concepts. Jaccard overlap prevents duplicate concepts.
-pub async fn distill_concepts(
+pub async fn distill_pages(
     db: &MemoryDB,
     llm: Option<&Arc<dyn LlmProvider>>,
     prompts: &PromptRegistry,
@@ -1584,7 +1583,7 @@ pub async fn distill_concepts(
         // Skip if a concept with very similar sources already exists (Jaccard > 0.8)
         // Memories CAN appear in multiple concepts — this only prevents duplicate concepts
         let overlap = db
-            .max_concept_overlap(&cluster.source_ids)
+            .max_page_overlap(&cluster.source_ids)
             .await
             .unwrap_or(0.0);
         if overlap > 0.8 {
@@ -1744,9 +1743,9 @@ pub async fn distill_concepts(
                 let source_refs: Vec<&str> =
                     cluster.source_ids.iter().map(|s| s.as_str()).collect();
                 let now = chrono::Utc::now().to_rfc3339();
-                let concept_id = crate::concepts::Concept::new_id();
+                let concept_id = crate::pages::Page::new_id();
 
-                db.insert_concept(
+                db.insert_page(
                     &concept_id,
                     &title,
                     summary.as_deref(),
@@ -1787,7 +1786,7 @@ pub async fn distill_concepts(
                 }
 
                 if let Some(ref writer) = knowledge_writer {
-                    if let Ok(Some(c)) = db.get_concept(&concept_id).await {
+                    if let Ok(Some(c)) = db.get_page(&concept_id).await {
                         match writer.write_concept(&c) {
                             Ok(p) => log::info!("[distill] wrote concept to {p}"),
                             Err(e) => log::warn!("[distill] knowledge write failed: {e}"),
@@ -1828,7 +1827,7 @@ async fn assign_orphan_memories(
     }
 
     // Get existing concept titles
-    let concepts = db.list_concepts("active", 100, 0).await?;
+    let concepts = db.list_pages("active", 100, 0).await?;
     if concepts.is_empty() && orphans.len() < 3 {
         return Ok(0); // Not enough material
     }
@@ -1895,14 +1894,14 @@ async fn assign_orphan_memories(
                     if idx < orphans.len() && !concept_id.is_empty() {
                         let source_id = &orphans[idx].0;
                         // Add this memory to the concept's source list
-                        if let Ok(Some(concept)) = db.get_concept(concept_id).await {
+                        if let Ok(Some(concept)) = db.get_page(concept_id).await {
                             if !concept.source_memory_ids.contains(&source_id.to_string()) {
                                 let mut merged_sources = concept.source_memory_ids.clone();
                                 merged_sources.push(source_id.to_string());
                                 let refs: Vec<&str> =
                                     merged_sources.iter().map(|s| s.as_str()).collect();
                                 let _ = db
-                                    .update_concept_content(
+                                    .update_page_content(
                                         concept_id,
                                         &concept.content,
                                         &refs,
@@ -1951,11 +1950,11 @@ async fn assign_orphan_memories(
                         .collect();
                     let content_text = contents.join("\n\n");
 
-                    let concept_id = crate::concepts::Concept::new_id();
+                    let concept_id = crate::pages::Page::new_id();
                     let now = chrono::Utc::now().to_rfc3339();
 
                     let _ = db
-                        .insert_concept(
+                        .insert_page(
                             &concept_id,
                             title,
                             Some(&format!(
@@ -1972,7 +1971,7 @@ async fn assign_orphan_memories(
                     assigned += source_ids.len();
 
                     if let Some(ref writer) = knowledge_writer {
-                        if let Ok(Some(c)) = db.get_concept(&concept_id).await {
+                        if let Ok(Some(c)) = db.get_page(&concept_id).await {
                             match writer.write_concept(&c) {
                                 Ok(p) => log::info!("[distill] wrote concept to {p}"),
                                 Err(e) => log::warn!("[distill] knowledge write failed: {e}"),
@@ -1995,7 +1994,7 @@ async fn assign_orphan_memories(
 
 /// Full Karpathy-style deep distill: emergence + orphans + recompile ALL + global review.
 /// Triggered by "Distill now" button or weekly background schedule.
-pub async fn deep_distill_concepts(
+pub async fn deep_distill_pages(
     db: &MemoryDB,
     llm: Option<&Arc<dyn LlmProvider>>,
     prompts: &PromptRegistry,
@@ -2010,7 +2009,7 @@ pub async fn deep_distill_concepts(
     let mut total = 0usize;
 
     // 1. Emergence — create new concepts from clusters
-    let created = distill_concepts(db, llm, prompts, tuning, knowledge_path)
+    let created = distill_pages(db, llm, prompts, tuning, knowledge_path)
         .await
         .unwrap_or(0);
     total += created;
@@ -2030,9 +2029,9 @@ pub async fn deep_distill_concepts(
     }
 
     // 3. Recompile ALL active concepts (not just changed ones — full refresh)
-    let all_active = db.list_concepts("active", 200, 0).await?;
+    let all_active = db.list_pages("active", 200, 0).await?;
     for concept in &all_active {
-        match recompile_single_concept(db, llm_ref, prompts, concept).await {
+        match recompile_single_page(db, llm_ref, prompts, concept).await {
             Ok(true) => total += 1,
             Ok(false) => {}
             Err(e) => log::warn!(
@@ -2045,7 +2044,7 @@ pub async fn deep_distill_concepts(
 
     // 4. Global review — merge/split/create analysis
     if all_active.len() >= 5 {
-        match global_concept_review(db, llm_ref, prompts, &all_active).await {
+        match global_page_review(db, llm_ref, prompts, &all_active).await {
             Ok(n) => {
                 total += n;
                 if n > 0 {
@@ -2062,7 +2061,7 @@ pub async fn deep_distill_concepts(
 
 /// Re-distill concepts whose source memories have changed.
 /// Called by the steep cycle — only refreshes concepts with meaningful input changes.
-pub(crate) async fn redistill_changed_concepts(
+pub(crate) async fn redistill_changed_pages(
     db: &MemoryDB,
     llm: Option<&Arc<dyn LlmProvider>>,
     prompts: &PromptRegistry,
@@ -2072,19 +2071,16 @@ pub(crate) async fn redistill_changed_concepts(
         _ => return Ok(0),
     };
 
-    let all_active = db.list_concepts("active", 200, 0).await?;
+    let all_active = db.list_pages("active", 200, 0).await?;
     let mut recompiled = 0usize;
 
     for concept in &all_active {
-        let changed = db
-            .has_concept_sources_changed(concept)
-            .await
-            .unwrap_or(false);
+        let changed = db.has_page_sources_changed(concept).await.unwrap_or(false);
         if !changed {
             continue;
         }
 
-        match recompile_single_concept(db, llm, prompts, concept).await {
+        match recompile_single_page(db, llm, prompts, concept).await {
             Ok(true) => recompiled += 1,
             Ok(false) => {}
             Err(e) => log::warn!("[re-distill] failed for '{}': {}", concept.title, e),
@@ -2101,11 +2097,11 @@ pub(crate) async fn redistill_changed_concepts(
 }
 
 /// Recompile a single concept from its source memories via LLM.
-async fn recompile_single_concept(
+async fn recompile_single_page(
     db: &MemoryDB,
     llm: &Arc<dyn LlmProvider>,
     prompts: &PromptRegistry,
-    concept: &crate::concepts::Concept,
+    concept: &crate::pages::Page,
 ) -> Result<bool, OriginError> {
     let memories = db
         .get_memory_contents_by_ids(&concept.source_memory_ids)
@@ -2156,7 +2152,7 @@ async fn recompile_single_concept(
                     .iter()
                     .map(|s| s.as_str())
                     .collect();
-                db.update_concept_content(&concept.id, &content, &source_refs, "re_distill")
+                db.update_page_content(&concept.id, &content, &source_refs, "re_distill")
                     .await?;
                 log::info!("[re-distill] refreshed concept '{}'", concept.title);
                 return Ok(true);
@@ -2170,7 +2166,7 @@ async fn recompile_single_concept(
 
 /// Re-distill concepts explicitly marked stale by topic-key upserts.
 ///
-/// Distinct from `redistill_changed_concepts` (which checks last_modified timestamps):
+/// Distinct from `redistill_changed_pages` (which checks last_modified timestamps):
 /// this targets concepts whose source memories were updated in-place and thus didn't
 /// change their last_modified. The `stale_reason` field is set by the topic-match
 /// upsert path in handle_store_memory.
@@ -2178,12 +2174,12 @@ async fn recompile_single_concept(
 /// - `source_updated`: LLM re-distills using the join table's current source list.
 /// - `source_conflict`: user-edited concept — escalates to `source_conflict` only,
 ///   does not overwrite user content.
-pub(crate) async fn re_distill_stale_concepts(
+pub(crate) async fn re_distill_stale_pages(
     db: &MemoryDB,
     llm: Option<&Arc<dyn LlmProvider>>,
     prompts: &PromptRegistry,
 ) -> Result<usize, OriginError> {
-    let stale = db.list_stale_concepts("source_updated").await?;
+    let stale = db.list_stale_pages("source_updated").await?;
     if stale.is_empty() {
         return Ok(0);
     }
@@ -2203,7 +2199,7 @@ pub(crate) async fn re_distill_stale_concepts(
     for concept in &stale {
         if concept.user_edited {
             // Never auto-overwrite user edits — escalate to conflict so a human sees it.
-            db.set_concept_stale(&concept.id, "source_conflict").await?;
+            db.set_page_stale(&concept.id, "source_conflict").await?;
             log::info!(
                 "[re-distill-stale] user-edited concept '{}' escalated to source_conflict",
                 concept.title
@@ -2212,7 +2208,7 @@ pub(crate) async fn re_distill_stale_concepts(
         }
 
         // Fetch current sources via join table (more accurate than JSON column after upserts).
-        let sources = db.get_concept_sources(&concept.id).await?;
+        let sources = db.get_page_sources(&concept.id).await?;
         let source_id_strings: Vec<String> =
             sources.iter().map(|s| s.memory_source_id.clone()).collect();
         let source_id_refs: Vec<&str> = source_id_strings.iter().map(|s| s.as_str()).collect();
@@ -2221,7 +2217,7 @@ pub(crate) async fn re_distill_stale_concepts(
                 "[re-distill-stale] concept '{}' has no sources in join table, clearing staleness",
                 concept.title
             );
-            db.clear_concept_staleness(&concept.id).await?;
+            db.clear_page_staleness(&concept.id).await?;
             continue;
         }
 
@@ -2232,7 +2228,7 @@ pub(crate) async fn re_distill_stale_concepts(
                 "[re-distill-stale] concept '{}' sources are all orphaned, clearing staleness",
                 concept.title
             );
-            db.clear_concept_staleness(&concept.id).await?;
+            db.clear_page_staleness(&concept.id).await?;
             continue;
         }
 
@@ -2269,9 +2265,9 @@ pub(crate) async fn re_distill_stale_concepts(
                     .trim()
                     .to_string();
                 if !content.is_empty() {
-                    db.update_concept_content(&concept.id, &content, &source_id_refs, "re_distill")
+                    db.update_page_content(&concept.id, &content, &source_id_refs, "re_distill")
                         .await?;
-                    db.clear_concept_staleness(&concept.id).await?;
+                    db.clear_page_staleness(&concept.id).await?;
                     recompiled += 1;
                     log::info!("[re-distill-stale] refreshed concept '{}'", concept.title);
                 }
@@ -2291,11 +2287,11 @@ pub(crate) async fn re_distill_stale_concepts(
 }
 
 /// Layer 3: Periodic global review -- merge/split/create concepts based on holistic analysis.
-async fn global_concept_review(
+async fn global_page_review(
     db: &MemoryDB,
     llm: &Arc<dyn LlmProvider>,
     prompts: &PromptRegistry,
-    concepts: &[crate::concepts::Concept],
+    concepts: &[crate::pages::Page],
 ) -> Result<usize, OriginError> {
     let concepts_text: String = concepts
         .iter()
@@ -2337,10 +2333,9 @@ async fn global_concept_review(
                     }
 
                     // Merge: transfer source_memory_ids from remove to keep, archive remove
-                    if let (Ok(Some(keep)), Ok(Some(remove))) = (
-                        db.get_concept(keep_id).await,
-                        db.get_concept(remove_id).await,
-                    ) {
+                    if let (Ok(Some(keep)), Ok(Some(remove))) =
+                        (db.get_page(keep_id).await, db.get_page(remove_id).await)
+                    {
                         let mut merged_sources = keep.source_memory_ids.clone();
                         for sid in &remove.source_memory_ids {
                             if !merged_sources.contains(sid) {
@@ -2349,9 +2344,9 @@ async fn global_concept_review(
                         }
                         let refs: Vec<&str> = merged_sources.iter().map(|s| s.as_str()).collect();
                         let _ = db
-                            .update_concept_content(keep_id, &keep.content, &refs, "re_distill")
+                            .update_page_content(keep_id, &keep.content, &refs, "re_distill")
                             .await;
-                        let _ = db.archive_concept(remove_id).await;
+                        let _ = db.archive_page(remove_id).await;
                         changes += 1;
                         log::info!(
                             "[distill] merged concept '{}' into '{}'",
@@ -2406,7 +2401,7 @@ pub async fn deep_distill_single(
     };
 
     let concept = db
-        .get_concept(concept_id)
+        .get_page(concept_id)
         .await?
         .ok_or_else(|| OriginError::VectorDb(format!("Concept {} not found", concept_id)))?;
 
@@ -2466,7 +2461,7 @@ pub async fn deep_distill_single(
         .iter()
         .map(|s| s.as_str())
         .collect();
-    db.update_concept_content(concept_id, &content, &source_refs, "distill")
+    db.update_page_content(concept_id, &content, &source_refs, "distill")
         .await?;
 
     log::info!(
@@ -3439,7 +3434,7 @@ pub(crate) async fn retry_failed_enrichment(
                 }
             }
             "concept_contradiction" => {
-                crate::post_ingest::check_concept_contradiction(db, source_id, content)
+                crate::post_ingest::check_page_contradiction(db, source_id, content)
                     .await
                     .map(|_| ())
             }
@@ -4653,7 +4648,7 @@ mod tests {
         }
 
         // Run distillation (no LLM — should skip gracefully, return 0)
-        let result = distill_concepts(
+        let result = distill_pages(
             &db,
             None,
             &PromptRegistry::default(),
@@ -4665,7 +4660,7 @@ mod tests {
         assert_eq!(result, 0);
 
         // No concepts created without LLM
-        let concepts = db.list_concepts("active", 100, 0).await.unwrap();
+        let concepts = db.list_pages("active", 100, 0).await.unwrap();
         assert_eq!(concepts.len(), 0);
     }
 
@@ -4695,11 +4690,11 @@ mod tests {
         }
 
         // 2. Verify no concepts yet
-        let concepts = db.list_concepts("active", 100, 0).await.unwrap();
+        let concepts = db.list_pages("active", 100, 0).await.unwrap();
         assert_eq!(concepts.len(), 0);
 
         // 3. Run distillation (no LLM — graceful skip)
-        let distilled = distill_concepts(
+        let distilled = distill_pages(
             &db,
             None,
             &PromptRegistry::default(),
@@ -4712,7 +4707,7 @@ mod tests {
 
         // 4. Verify concept CRUD works end-to-end
         let now = chrono::Utc::now().to_rfc3339();
-        db.insert_concept(
+        db.insert_page(
             "c_int",
             "libSQL Storage",
             Some("Database layer"),
@@ -4726,15 +4721,15 @@ mod tests {
         .unwrap();
 
         // 5. Verify concept search
-        let found = db.search_concepts("libSQL storage", 10).await.unwrap();
+        let found = db.search_pages("libSQL storage", 10).await.unwrap();
         assert!(!found.is_empty());
 
         // 6. Verify concept by entity lookup
-        let by_entity = db.get_concept_by_entity("entity_libsql_lc").await.unwrap();
+        let by_entity = db.get_page_by_entity("entity_libsql_lc").await.unwrap();
         assert!(by_entity.is_some());
 
         // 7. Update and verify version increment
-        db.update_concept_content(
+        db.update_page_content(
             "c_int",
             "## Key Facts\n- updated",
             &["lifecycle_0", "lifecycle_1", "lifecycle_2", "lifecycle_3"],
@@ -4742,13 +4737,13 @@ mod tests {
         )
         .await
         .unwrap();
-        let updated = db.get_concept("c_int").await.unwrap().unwrap();
+        let updated = db.get_page("c_int").await.unwrap().unwrap();
         assert_eq!(updated.version, 2);
         assert_eq!(updated.source_memory_ids.len(), 4);
 
         // 8. Archive and verify
-        db.archive_concept("c_int").await.unwrap();
-        let active = db.list_concepts("active", 100, 0).await.unwrap();
+        db.archive_page("c_int").await.unwrap();
+        let active = db.list_pages("active", 100, 0).await.unwrap();
         assert_eq!(active.len(), 0);
     }
 

@@ -233,7 +233,7 @@ impl OriginClient {
     pub async fn list_recent_changes(
         &self,
         limit: i64,
-    ) -> Result<Vec<origin_types::ConceptChange>, String> {
+    ) -> Result<Vec<origin_types::PageChange>, String> {
         let path = format!("/api/concepts/recent-changes?limit={}", limit);
         self.get_json(&path).await
     }
@@ -288,7 +288,7 @@ impl OriginClient {
     pub async fn get_concept_sources(
         &self,
         concept_id: &str,
-    ) -> Result<Vec<origin_types::ConceptSourceWithMemory>, String> {
+    ) -> Result<Vec<origin_types::PageSourceWithMemory>, String> {
         let path = format!("/api/concepts/{}/sources", concept_id);
         self.get_json(&path).await
     }

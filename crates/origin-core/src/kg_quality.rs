@@ -48,7 +48,7 @@ pub async fn verify_entity(
 }
 
 /// Run post-store verification on a newly distilled concept.
-pub async fn verify_concept(
+pub async fn verify_page(
     db: &MemoryDB,
     concept_id: &str,
     concept_title: &str,

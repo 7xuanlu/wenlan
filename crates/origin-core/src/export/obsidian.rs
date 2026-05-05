@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-//! Obsidian vault exporter for concepts.
+//! Obsidian vault exporter for pages.
 
-use crate::concepts::Concept;
 use crate::error::OriginError;
-use crate::export::{ConceptExporter, ExportResult, ExportStats};
+use crate::export::{ExportResult, ExportStats, PageExporter};
+use crate::pages::Page;
 use std::path::PathBuf;
 
 pub struct ObsidianExporter {
@@ -16,32 +16,32 @@ impl ObsidianExporter {
     }
 }
 
-impl ConceptExporter for ObsidianExporter {
-    fn export(&self, concept: &Concept) -> Result<ExportResult, OriginError> {
+impl PageExporter for ObsidianExporter {
+    fn export(&self, page: &Page) -> Result<ExportResult, OriginError> {
         std::fs::create_dir_all(&self.vault_path)?;
 
-        let filename = format!("{}.md", slugify(&concept.title));
+        let filename = format!("{}.md", slugify(&page.title));
         let path = self.vault_path.join(&filename);
 
-        let frontmatter = build_frontmatter(concept);
-        let body = convert_links_to_wikilinks(&concept.content);
+        let frontmatter = build_frontmatter(page);
+        let body = convert_links_to_wikilinks(&page.content);
         let output = format!("---\n{}---\n\n{}\n", frontmatter, body);
 
         std::fs::write(&path, &output)?;
 
         Ok(ExportResult {
-            concept_id: concept.id.clone(),
+            concept_id: page.id.clone(),
             path: path.to_string_lossy().to_string(),
         })
     }
 
-    fn export_all(&self, concepts: &[Concept]) -> Result<ExportStats, OriginError> {
+    fn export_all(&self, pages: &[Page]) -> Result<ExportStats, OriginError> {
         let mut stats = ExportStats::default();
-        for concept in concepts {
-            match self.export(concept) {
+        for page in pages {
+            match self.export(page) {
                 Ok(_) => stats.exported += 1,
                 Err(e) => {
-                    log::warn!("[obsidian] export failed for '{}': {}", concept.title, e);
+                    log::warn!("[obsidian] export failed for '{}': {}", page.title, e);
                     stats.failed += 1;
                 }
             }
@@ -50,20 +50,20 @@ impl ConceptExporter for ObsidianExporter {
     }
 }
 
-fn build_frontmatter(concept: &Concept) -> String {
+fn build_frontmatter(page: &Page) -> String {
     let mut fm = String::new();
-    fm.push_str(&format!("title: {}\n", concept.title));
-    if let Some(ref domain) = concept.domain {
+    fm.push_str(&format!("title: {}\n", page.title));
+    if let Some(ref domain) = page.domain {
         fm.push_str(&format!("tags:\n  - {}\n", domain));
     }
-    if let Some(ref summary) = concept.summary {
+    if let Some(ref summary) = page.summary {
         fm.push_str(&format!("aliases:\n  - {}\n", summary));
     }
-    fm.push_str(&format!("origin_id: {}\n", concept.id));
-    fm.push_str(&format!("origin_version: {}\n", concept.version));
+    fm.push_str(&format!("origin_id: {}\n", page.id));
+    fm.push_str(&format!("origin_version: {}\n", page.version));
     // Use chars().take(10) for date extraction — safe for ISO dates
-    let created_date: String = concept.created_at.chars().take(10).collect();
-    let modified_date: String = concept.last_modified.chars().take(10).collect();
+    let created_date: String = page.created_at.chars().take(10).collect();
+    let modified_date: String = page.last_modified.chars().take(10).collect();
     fm.push_str(&format!("created: {}\n", created_date));
     fm.push_str(&format!("modified: {}\n", modified_date));
     fm
@@ -101,10 +101,10 @@ pub fn slugify(title: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::concepts::Concept;
+    use crate::pages::Page;
 
-    fn test_concept() -> Concept {
-        Concept {
+    fn test_concept() -> Page {
+        Page {
             id: "concept_abc".to_string(),
             title: "libSQL Architecture".to_string(),
             summary: Some("Core database layer".to_string()),
@@ -128,9 +128,9 @@ mod tests {
     fn test_obsidian_export_creates_file() {
         let dir = tempfile::TempDir::new().unwrap();
         let exporter = ObsidianExporter::new(dir.path().to_path_buf());
-        let concept = test_concept();
+        let page = test_concept();
 
-        let result = exporter.export(&concept).unwrap();
+        let result = exporter.export(&page).unwrap();
         let file_content = std::fs::read_to_string(&result.path).unwrap();
 
         // Check frontmatter
@@ -155,9 +155,9 @@ mod tests {
     fn test_export_all() {
         let dir = tempfile::TempDir::new().unwrap();
         let exporter = ObsidianExporter::new(dir.path().to_path_buf());
-        let concepts = vec![test_concept()];
+        let pages = vec![test_concept()];
 
-        let stats = exporter.export_all(&concepts).unwrap();
+        let stats = exporter.export_all(&pages).unwrap();
         assert_eq!(stats.exported, 1);
         assert_eq!(stats.failed, 0);
     }

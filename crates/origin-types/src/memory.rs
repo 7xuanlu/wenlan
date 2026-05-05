@@ -356,24 +356,24 @@ pub struct RetrievalEvent {
     pub memory_snippets: Vec<String>,
 }
 
-/// The kind of change that happened to a concept.
+/// The kind of change that happened to a page.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
-pub enum ConceptChangeKind {
+pub enum PageChangeKind {
     Created,
     Revised,
     Merged,
 }
 
-/// A change event for a concept — feeds the home page delta zones.
+/// A change event for a page — feeds the home page delta zones.
 ///
 /// Backs Zones 1 and 3 of the home page: surfacing newly created, revised,
-/// or merged concepts so the user sees their knowledge base evolving.
+/// or merged pages so the user sees their knowledge base evolving.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct ConceptChange {
+pub struct PageChange {
     pub concept_id: String,
     pub title: String,
-    pub change_kind: ConceptChangeKind,
+    pub change_kind: PageChangeKind,
     pub changed_at_ms: i64,
 }
 
@@ -381,7 +381,9 @@ pub struct ConceptChange {
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ActivityKind {
-    Concept,
+    /// Wire format preserved as "concept" until 0c.3 serde rename pass.
+    #[serde(rename = "concept")]
+    Page,
     Memory,
 }
 

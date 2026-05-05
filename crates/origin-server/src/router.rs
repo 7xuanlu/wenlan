@@ -41,7 +41,7 @@ pub fn build_router(state: SharedState) -> Router {
             "/api/memory/unconfirmed",
             get(memory_routes::handle_list_unconfirmed_memories),
         )
-        .route("/api/concepts/recent", get(routes::handle_recent_concepts))
+        .route("/api/concepts/recent", get(routes::handle_recent_pages))
         .route("/api/steep", post(routes::handle_steep))
         .route("/api/distill", post(routes::handle_distill))
         .route("/api/distill/{concept_id}", post(routes::handle_redistill))
@@ -202,35 +202,35 @@ pub fn build_router(state: SharedState) -> Router {
         // Concepts
         .route(
             "/api/concepts",
-            get(memory_routes::handle_list_concepts).post(memory_routes::handle_create_concept),
+            get(memory_routes::handle_list_pages).post(memory_routes::handle_create_page),
         )
         .route(
             "/api/concepts/search",
-            post(memory_routes::handle_search_concepts),
+            post(memory_routes::handle_search_pages),
         )
         .route(
             "/api/concepts/export",
-            post(memory_routes::handle_export_concepts),
+            post(memory_routes::handle_export_pages),
         )
         .route(
             "/api/concepts/recent-changes",
-            get(routes::handle_recent_concept_changes),
+            get(routes::handle_recent_page_changes),
         )
         .route(
             "/api/concepts/{id}/export",
-            post(memory_routes::handle_export_concept),
+            post(memory_routes::handle_export_page),
         )
         .route(
             "/api/concepts/{id}",
-            get(memory_routes::handle_get_concept).delete(memory_routes::handle_delete_concept),
+            get(memory_routes::handle_get_page).delete(memory_routes::handle_delete_page),
         )
         .route(
             "/api/concepts/{id}/sources",
-            get(memory_routes::handle_get_concept_sources),
+            get(memory_routes::handle_get_page_sources),
         )
         .route(
             "/api/concepts/{id}/archive",
-            post(memory_routes::handle_archive_concept),
+            post(memory_routes::handle_archive_page),
         )
         // Rejections
         .route(
@@ -428,7 +428,7 @@ pub fn build_router(state: SharedState) -> Router {
         )
         .route(
             "/api/memory/{id}/update-concept",
-            post(memory_routes::handle_update_concept),
+            post(memory_routes::handle_update_page),
         )
         // Knowledge directory
         .route(

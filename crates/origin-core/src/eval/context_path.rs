@@ -124,7 +124,7 @@ impl ContextPathReport {
 ///
 /// Seeds one conversation at a time, runs enrichment + distillation, then for each question:
 /// 1. recall path: search_memory top-K, check evidence coverage
-/// 2. context path: search_memory top-K + search_concepts top-3 source_ids, check coverage
+/// 2. context path: search_memory top-K + search_pages top-3 source_ids, check coverage
 ///
 /// Reports coverage delta: how many evidence items does the context path recover
 /// that recall alone misses.
@@ -211,7 +211,7 @@ pub async fn run_context_path_eval(
         eprintln!("  [enriching] {} titles. distilling...", titles);
 
         let concepts =
-            crate::refinery::distill_concepts(&db, Some(&llm), &prompts, &tuning, None).await?;
+            crate::refinery::distill_pages(&db, Some(&llm), &prompts, &tuning, None).await?;
         eprintln!("  [enriched] {} concepts. evaluating...", concepts);
 
         // Evaluate each question
@@ -248,22 +248,16 @@ pub async fn run_context_path_eval(
 
             let recall_found = evidence_ids.intersection(&recall_ids).count();
 
-            // --- Context path: search_memory + search_concepts ---
+            // --- Context path: search_memory + search_pages ---
             let mut context_ids = recall_ids.clone();
             let mut context_tokens = recall_tokens;
 
             // Add concept source_ids
-            let concept_results = db
-                .search_concepts(&qa.question, 3)
-                .await
-                .unwrap_or_default();
+            let concept_results = db.search_pages(&qa.question, 3).await.unwrap_or_default();
             for concept in &concept_results {
                 context_tokens += count_tokens(&concept.content);
                 // Get source memories via concept_sources join table
-                let sources = db
-                    .get_concept_sources(&concept.id)
-                    .await
-                    .unwrap_or_default();
+                let sources = db.get_page_sources(&concept.id).await.unwrap_or_default();
                 for src in &sources {
                     context_ids.insert(src.memory_source_id.clone());
                 }
@@ -479,7 +473,7 @@ pub async fn run_context_path_eval_longmemeval(
         // Each distillation call takes ~30s (LLM inference), so skipping saves hours.
         if memories.len() >= 15 {
             let _concepts =
-                crate::refinery::distill_concepts(&db, Some(&llm), &prompts, &tuning, None).await?;
+                crate::refinery::distill_pages(&db, Some(&llm), &prompts, &tuning, None).await?;
         }
 
         // --- Recall path ---
@@ -505,15 +499,12 @@ pub async fn run_context_path_eval_longmemeval(
         let mut context_tokens = recall_tokens;
 
         let concept_results = db
-            .search_concepts(&sample.question, 3)
+            .search_pages(&sample.question, 3)
             .await
             .unwrap_or_default();
         for concept in &concept_results {
             context_tokens += count_tokens(&concept.content);
-            let sources = db
-                .get_concept_sources(&concept.id)
-                .await
-                .unwrap_or_default();
+            let sources = db.get_page_sources(&concept.id).await.unwrap_or_default();
             for src in &sources {
                 context_ids.insert(src.memory_source_id.clone());
             }

@@ -18,9 +18,9 @@ pub use entities::{
     Relation, RelationWithEntity,
 };
 pub use memory::{
-    ActivityBadge, ActivityKind, AgentActivityRow, AgentConnection, ConceptChange,
-    ConceptChangeKind, DomainInfo, EnrichmentStatusResponse, EnrichmentStepStatus, HomeStats,
-    IndexedFileInfo, MemoryItem, MemoryStats, MemoryVersionItem, Profile, RecentActivityItem,
+    ActivityBadge, ActivityKind, AgentActivityRow, AgentConnection, DomainInfo,
+    EnrichmentStatusResponse, EnrichmentStepStatus, HomeStats, IndexedFileInfo, MemoryItem,
+    MemoryStats, MemoryVersionItem, PageChange, PageChangeKind, Profile, RecentActivityItem,
     RejectionRecord, RetrievalEvent, SearchResult, SessionSnapshot, SnapshotCapture,
     SnapshotCaptureWithContent, Space, TopMemory, TypeBreakdown,
 };
@@ -44,9 +44,9 @@ pub struct ChangelogEntry {
     pub incoming_source_id: Option<String>,
 }
 
-/// A link between a concept and one of its source memories (concept_sources join table).
+/// A link between a page and one of its source memories (concept_sources join table).
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ConceptSource {
+pub struct PageSource {
     pub concept_id: String,
     pub memory_source_id: String,
     /// Unix timestamp of when this link was created.
@@ -55,10 +55,10 @@ pub struct ConceptSource {
     pub link_reason: Option<String>,
 }
 
-/// Concept source enriched with the memory's metadata (for the API response).
+/// Page source enriched with the memory's metadata (for the API response).
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ConceptSourceWithMemory {
-    pub source: ConceptSource,
+pub struct PageSourceWithMemory {
+    pub source: PageSource,
     pub memory: Option<crate::memory::MemoryItem>,
 }
 
@@ -199,10 +199,10 @@ mod retrieval_event_tests {
 
     #[test]
     fn concept_change_roundtrips() {
-        let c = ConceptChange {
+        let c = PageChange {
             concept_id: "concept_abc".into(),
-            title: "Wiki-style prose concepts".into(),
-            change_kind: ConceptChangeKind::Revised,
+            title: "Wiki-style prose pages".into(),
+            change_kind: PageChangeKind::Revised,
             changed_at_ms: 1_700_000_000_000,
         };
         let s = serde_json::to_string(&c).unwrap();
@@ -210,7 +210,7 @@ mod retrieval_event_tests {
             s.contains("\"change_kind\":\"revised\""),
             "expected snake_case change_kind on the wire, got: {s}",
         );
-        let back: ConceptChange = serde_json::from_str(&s).unwrap();
-        assert_eq!(back.change_kind, ConceptChangeKind::Revised);
+        let back: PageChange = serde_json::from_str(&s).unwrap();
+        assert_eq!(back.change_kind, PageChangeKind::Revised);
     }
 }
