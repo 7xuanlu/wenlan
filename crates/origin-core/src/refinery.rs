@@ -36,7 +36,7 @@ pub const ALL_PHASES: &[&str] = &[
 /// - `BurstEnd`: only `recaps` + `refinement_queue`.
 /// - `Idle`: only synthesis phases (`community_detection`, `emergence`,
 ///   `re-distill`, `decision_logs`).
-/// - `Daily`: only maintenance + backfill phases.
+/// - `Daily`: only maintenance phases.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TriggerKind {
     Backstop,
@@ -556,7 +556,9 @@ pub async fn run_periodic_steep_with_api(
         phases.push(phase);
     }
 
-    // Phase 7: Decision log generation (lightweight recap for decisions)
+    // Phase 7: Decision log generation (lightweight recap for decisions).
+    // Last deadline-gated phase: omit `deadline_hit = true` — no phase after
+    // this reads the flag, so the assignment would be dead code (clippy -D).
     if trigger.runs_phase("decision_logs")
         && {
             let elapsed = steep_start.elapsed().as_secs();
@@ -3537,7 +3539,7 @@ mod tests {
         for name in &phase_names {
             assert!(
                 expected.contains(name),
-                "Daily should only run maintenance + backfill phases, got unexpected: {}",
+                "Daily should only run maintenance phases, got unexpected: {}",
                 name
             );
         }
