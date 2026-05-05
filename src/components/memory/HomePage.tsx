@@ -173,10 +173,10 @@ export default function HomePage({
     (m) => m.id === "first-concept" && m.acknowledged_at == null,
   );
   const firstConceptData = firstConceptMs?.payload as
-    | { concept_id?: string; title?: string }
+    | { page_id?: string; title?: string }
     | undefined;
-  const firstConcept = firstConceptData?.concept_id
-    ? recentConcepts.find((c) => c.id === firstConceptData.concept_id)
+  const firstConcept = firstConceptData?.page_id
+    ? recentConcepts.find((c) => c.id === firstConceptData.page_id)
     : null;
 
   const homePageState = deriveHomePageState({
@@ -272,7 +272,7 @@ export default function HomePage({
             recapCount={recapCount}
             onViewRecaps={onNavigateStream}
           />
-          <RefiningList changes={changes} concepts={recentConcepts} onSelectPage={onSelectPage} />
+          <RefiningList changes={changes} pages={recentConcepts} onSelectPage={onSelectPage} />
           <RetrievalsList
             events={retrievals}
             onSelectPageById={(pageId) => onSelectPage?.(pageId)}

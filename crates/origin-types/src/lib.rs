@@ -44,10 +44,11 @@ pub struct ChangelogEntry {
     pub incoming_source_id: Option<String>,
 }
 
-/// A link between a page and one of its source memories (concept_sources join table).
+/// A link between a page and one of its source memories.
+/// (Backed by the `concept_sources` SQL table; rename deferred for back-compat.)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PageSource {
-    pub concept_id: String,
+    pub page_id: String,
     pub memory_source_id: String,
     /// Unix timestamp of when this link was created.
     pub linked_at: i64,
@@ -166,14 +167,14 @@ mod retrieval_event_tests {
             timestamp_ms: 1_700_000_000_000,
             agent_name: "claude-code".into(),
             query: Some("origin positioning".into()),
-            concept_titles: vec!["Origin positioning".into(), "Daemon architecture".into()],
-            concept_ids: vec![],
+            page_titles: vec!["Origin positioning".into(), "Daemon architecture".into()],
+            page_ids: vec![],
             memory_snippets: vec![],
         };
         let s = serde_json::to_string(&e).unwrap();
         let back: RetrievalEvent = serde_json::from_str(&s).unwrap();
         assert_eq!(back.agent_name, "claude-code");
-        assert_eq!(back.concept_titles.len(), 2);
+        assert_eq!(back.page_titles.len(), 2);
         assert_eq!(back.query.as_deref(), Some("origin positioning"));
     }
 
@@ -183,8 +184,8 @@ mod retrieval_event_tests {
             timestamp_ms: 1_700_000_000_000,
             agent_name: "claude-code".into(),
             query: None,
-            concept_titles: vec![],
-            concept_ids: vec![],
+            page_titles: vec![],
+            page_ids: vec![],
             memory_snippets: vec![],
         };
         let s = serde_json::to_string(&e).unwrap();
@@ -194,13 +195,13 @@ mod retrieval_event_tests {
         );
         let back: RetrievalEvent = serde_json::from_str(&s).unwrap();
         assert_eq!(back.query, None);
-        assert!(back.concept_titles.is_empty());
+        assert!(back.page_titles.is_empty());
     }
 
     #[test]
-    fn concept_change_roundtrips() {
+    fn page_change_roundtrips() {
         let c = PageChange {
-            concept_id: "concept_abc".into(),
+            page_id: "page_abc".into(),
             title: "Wiki-style prose pages".into(),
             change_kind: PageChangeKind::Revised,
             changed_at_ms: 1_700_000_000_000,

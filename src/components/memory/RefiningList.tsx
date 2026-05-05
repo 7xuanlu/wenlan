@@ -1,39 +1,39 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { useMemo, useState } from "react";
-import type { Concept, ConceptChange } from "../../lib/tauri";
+import type { Page, PageChange } from "../../lib/tauri";
 
 interface Props {
-  changes: ConceptChange[];
-  concepts?: Concept[];
+  changes: PageChange[];
+  pages?: Page[];
   onSelectPage?: (pageId: string) => void;
 }
 
 function explanationFor(
-  change: ConceptChange,
-  concept: Concept | undefined,
+  change: PageChange,
+  page: Page | undefined,
 ): string {
   switch (change.change_kind) {
     case "created": {
-      const n = concept?.source_memory_ids.length;
+      const n = page?.source_memory_ids.length;
       return n != null && n >= 2 ? `distilled from ${n} memories` : "newly distilled";
     }
     case "revised": {
-      if (!concept) return "refined as evidence settled";
-      // Show a peek at the current summary so the user sees what the concept now asserts.
-      let raw = (concept.summary?.trim() || "");
+      if (!page) return "refined as evidence settled";
+      // Show a peek at the current summary so the user sees what the page now asserts.
+      let raw = (page.summary?.trim() || "");
       if (!raw) {
         // Fall back to content, stripping leading markdown heading.
-        raw = (concept.content?.trim() || "").replace(/^#+\s+[^\n]*\n+/, "");
+        raw = (page.content?.trim() || "").replace(/^#+\s+[^\n]*\n+/, "");
       }
       const text = raw.replace(/\s+/g, " ").trim();
       if (!text) {
-        return concept.version >= 2 ? `refined to version ${concept.version}` : "refined as evidence settled";
+        return page.version >= 2 ? `refined to version ${page.version}` : "refined as evidence settled";
       }
       const peek = text.length > 90 ? text.slice(0, 90).trimEnd() + "..." : text;
       return `now reads: "${peek}"`;
     }
     case "merged": {
-      const n = concept?.source_memory_ids.length;
+      const n = page?.source_memory_ids.length;
       return n != null && n >= 2
         ? `steeped together from ${n} sources`
         : "steeped together";
@@ -77,79 +77,79 @@ function recencyWeight(now: number, ms: number): number {
   return 0;
 }
 
-function entityCentrality(concept: Concept, allConcepts: Concept[]): number {
-  if (!concept.entity_id) return 1;
-  const refs = allConcepts.filter((c) => c.entity_id === concept.entity_id).length;
+function entityCentrality(page: Page, allPages: Page[]): number {
+  if (!page.entity_id) return 1;
+  const refs = allPages.filter((c) => c.entity_id === page.entity_id).length;
   return 1 + refs / 10;
 }
 
 function scoreOf(
-  c: ConceptChange,
-  concept: Concept,
-  allConcepts: Concept[],
+  c: PageChange,
+  page: Page,
+  allPages: Page[],
   now: number,
 ): number {
   // resolved_contradiction_bonus: no data path today; default 1.0 with a TODO comment.
   const resolvedContradictionBonus = 1.0; // TODO: detect when refinement cleared a needs_review flag
-  const sourceScore = Math.log(concept.source_memory_ids.length + 1);
-  return sourceScore * recencyWeight(now, c.changed_at_ms) * entityCentrality(concept, allConcepts) * resolvedContradictionBonus;
+  const sourceScore = Math.log(page.source_memory_ids.length + 1);
+  return sourceScore * recencyWeight(now, c.changed_at_ms) * entityCentrality(page, allPages) * resolvedContradictionBonus;
 }
 
-function substantiveGate(c: ConceptChange, concept: Concept): boolean {
+function substantiveGate(c: PageChange, page: Page): boolean {
   switch (c.change_kind) {
     case "created":
-      return concept.source_memory_ids.length >= 4;
+      return page.source_memory_ids.length >= 4;
     case "revised":
-      return concept.version >= 3;
+      return page.version >= 3;
     case "merged":
-      return concept.source_memory_ids.length >= 3;
+      return page.source_memory_ids.length >= 3;
   }
 }
 
-export function RefiningList({ changes, concepts, onSelectPage }: Props) {
-  const conceptById = useMemo(
-    () => new Map((concepts ?? []).map((c) => [c.id, c])),
-    [concepts],
+export function RefiningList({ changes, pages, onSelectPage }: Props) {
+  const pageById = useMemo(
+    () => new Map((pages ?? []).map((c) => [c.id, c])),
+    [pages],
   );
 
-  const conceptIdSet = useMemo(
-    () => new Set((concepts ?? []).map((c) => c.id)),
-    [concepts],
+  const pageIdSet = useMemo(
+    () => new Set((pages ?? []).map((c) => c.id)),
+    [pages],
   );
 
   const scored = useMemo(() => {
     const now = Date.now();
 
-    // Gate 1: Dedupe by concept_id, keep most recent changed_at_ms.
-    const deduped = new Map<string, ConceptChange>();
+    // Gate 1: Dedupe by page_id, keep most recent changed_at_ms.
+    const deduped = new Map<string, PageChange>();
     for (const c of changes) {
-      const existing = deduped.get(c.concept_id);
+      const existing = deduped.get(c.page_id);
       if (!existing || c.changed_at_ms > existing.changed_at_ms) {
-        deduped.set(c.concept_id, c);
+        deduped.set(c.page_id, c);
       }
     }
 
-    const candidates: Array<{ change: ConceptChange; concept: Concept; score: number }> = [];
+    const candidates: Array<{ change: PageChange; page: Page; score: number }> = [];
     for (const c of deduped.values()) {
       // Gate 2: Fresh (within 48h).
       if (now - c.changed_at_ms > MS_48H) continue;
 
-      // Gate 3: Touched (concept_id appears in the recentConcepts lookup).
-      if (!conceptIdSet.has(c.concept_id)) continue;
+      // Gate 3: Touched (page_id appears in the recentPages lookup).
+      if (!pageIdSet.has(c.page_id)) continue;
 
-      const concept = conceptById.get(c.concept_id);
-      if (!concept) continue;
+      const page = pageById.get(c.page_id);
+      if (!page) continue;
 
       // Gate 4: Substantive.
-      if (!substantiveGate(c, concept)) continue;
+      if (!substantiveGate(c, page)) continue;
 
-      const score = scoreOf(c, concept, concepts ?? [], now);
-      candidates.push({ change: c, concept, score });
+      const score = scoreOf(c, page, pages ?? [], now);
+      candidates.push({ change: c, page, score });
     }
 
     candidates.sort((a, b) => b.score - a.score);
     return candidates.slice(0, TOP_N);
-  }, [changes, concepts, conceptById, conceptIdSet]);
+  }, [changes, pages, pageById, pageIdSet]);
 
   if (scored.length === 0) return null;
 
@@ -160,11 +160,11 @@ export function RefiningList({ changes, concepts, onSelectPage }: Props) {
         quality settling in as you keep working
       </p>
       <ul>
-        {scored.map(({ change, concept }, index) => (
+        {scored.map(({ change, page }, index) => (
           <RefiningItem
-            key={change.concept_id}
+            key={change.page_id}
             change={change}
-            concept={concept}
+            page={page}
             onSelectPage={onSelectPage}
             isLast={index === scored.length - 1}
           />
@@ -176,18 +176,18 @@ export function RefiningList({ changes, concepts, onSelectPage }: Props) {
 
 function RefiningItem({
   change,
-  concept,
+  page,
   onSelectPage,
   isLast,
 }: {
-  change: ConceptChange;
-  concept: Concept | undefined;
+  change: PageChange;
+  page: Page | undefined;
   onSelectPage?: (pageId: string) => void;
   isLast: boolean;
 }) {
   const [hover, setHover] = useState(false);
   const clickable = Boolean(onSelectPage);
-  const explanation = explanationFor(change, concept);
+  const explanation = explanationFor(change, page);
 
   return (
     <li
@@ -202,7 +202,7 @@ function RefiningItem({
       }}
       onMouseEnter={() => setHover(true)}
       onMouseLeave={() => setHover(false)}
-      onClick={() => onSelectPage?.(change.concept_id)}
+      onClick={() => onSelectPage?.(change.page_id)}
     >
       <div className="flex items-baseline gap-3">
         <span

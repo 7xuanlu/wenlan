@@ -1966,11 +1966,11 @@ pub async fn handle_list_pages(
 
     let s = state.read().await;
     let db = s.db.as_ref().ok_or(ServerError::DbNotInitialized)?;
-    let concepts = db
+    let pages = db
         .list_pages_by_domain(status, domain, limit, offset)
         .await
         .map_err(|e| ServerError::SearchFailed(e.to_string()))?;
-    Ok(Json(serde_json::json!({ "concepts": concepts })))
+    Ok(Json(serde_json::json!({ "pages": pages })))
 }
 
 /// GET /api/pages/:id
@@ -1981,8 +1981,8 @@ pub async fn handle_get_page(
     let s = state.read().await;
     let db = s.db.as_ref().ok_or(ServerError::DbNotInitialized)?;
     match db.get_page(&id).await {
-        Ok(Some(concept)) => Ok(Json(serde_json::json!({ "concept": concept }))),
-        Ok(None) => Err(ServerError::NotFound("concept not found".to_string())),
+        Ok(Some(page)) => Ok(Json(serde_json::json!({ "page": page }))),
+        Ok(None) => Err(ServerError::NotFound("page not found".to_string())),
         Err(e) => Err(ServerError::SearchFailed(e.to_string())),
     }
 }
@@ -2066,7 +2066,7 @@ pub async fn handle_search_pages(
         .search_pages(&req.query, req.limit.unwrap_or(20))
         .await
         .map_err(|e| ServerError::SearchFailed(e.to_string()))?;
-    Ok(Json(serde_json::json!({ "concepts": results })))
+    Ok(Json(serde_json::json!({ "pages": results })))
 }
 
 /// POST /api/pages
@@ -2116,16 +2116,16 @@ pub struct SearchPagesRequest {
 }
 
 #[derive(Debug, Deserialize)]
-pub struct ExportConceptsRequest {
+pub struct ExportPagesRequest {
     pub vault_path: Option<String>,
 }
 
 /// POST /api/pages/export
 pub async fn handle_export_pages(
     State(state): State<Arc<RwLock<ServerState>>>,
-    Json(req): Json<ExportConceptsRequest>,
+    Json(req): Json<ExportPagesRequest>,
 ) -> Result<Json<origin_core::export::ExportStats>, ServerError> {
-    let concepts = {
+    let pages = {
         let s = state.read().await;
         let db = s.db.as_ref().ok_or(ServerError::DbNotInitialized)?;
         db.list_pages("active", 1000, 0)
@@ -2145,7 +2145,7 @@ pub async fn handle_export_pages(
         origin_core::export::obsidian::ObsidianExporter::new(std::path::PathBuf::from(expanded));
     use origin_core::export::PageExporter;
     let stats = exporter
-        .export_all(&concepts)
+        .export_all(&pages)
         .map_err(|e| ServerError::Internal(e.to_string()))?;
     Ok(Json(stats))
 }
@@ -2153,7 +2153,7 @@ pub async fn handle_export_pages(
 /// POST /api/pages/{id}/export
 pub async fn handle_export_page(
     State(state): State<Arc<RwLock<ServerState>>>,
-    Path(concept_id): Path<String>,
+    Path(page_id): Path<String>,
     Json(req): Json<origin_types::requests::ExportPageRequest>,
 ) -> Result<Json<origin_types::responses::ExportPageResponse>, ServerError> {
     // Clone Arc out of the guard so we don't hold the RwLock read guard
@@ -2164,11 +2164,11 @@ pub async fn handle_export_page(
         s.db.clone().ok_or(ServerError::DbNotInitialized)?
     };
 
-    let concept = db
-        .get_page(&concept_id)
+    let page = db
+        .get_page(&page_id)
         .await
         .map_err(|e| ServerError::Internal(e.to_string()))?
-        .ok_or_else(|| ServerError::NotFound(format!("Concept not found: {}", concept_id)))?;
+        .ok_or_else(|| ServerError::NotFound(format!("Page not found: {}", page_id)))?;
 
     let expanded = if let Some(rest) = req.vault_path.strip_prefix("~/") {
         let home = std::env::var("HOME").unwrap_or_default();
@@ -2181,7 +2181,7 @@ pub async fn handle_export_page(
         origin_core::export::obsidian::ObsidianExporter::new(std::path::PathBuf::from(expanded));
     use origin_core::export::PageExporter;
     let result = exporter
-        .export(&concept)
+        .export(&page)
         .map_err(|e| ServerError::Internal(e.to_string()))?;
 
     Ok(Json(origin_types::responses::ExportPageResponse {

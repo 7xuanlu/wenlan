@@ -1449,10 +1449,10 @@ async fn distill_one_cluster(
             // Build source IDs as &str refs
             let source_refs: Vec<&str> = cluster.source_ids.iter().map(|s| s.as_str()).collect();
             let now = chrono::Utc::now().to_rfc3339();
-            let concept_id = crate::pages::Page::new_id();
+            let page_id = crate::pages::Page::new_id();
 
             db.insert_page(
-                &concept_id,
+                &page_id,
                 &title,
                 summary.as_deref(),
                 &content,
@@ -1491,7 +1491,7 @@ async fn distill_one_cluster(
             }
 
             if let Some(writer) = knowledge_writer {
-                if let Ok(Some(c)) = db.get_page(&concept_id).await {
+                if let Ok(Some(c)) = db.get_page(&page_id).await {
                     match writer.write_concept(&c) {
                         Ok(p) => log::info!("[distill] wrote concept to {p}"),
                         Err(e) => log::warn!("[distill] knowledge write failed: {e}"),
@@ -1743,10 +1743,10 @@ pub async fn distill_pages(
                 let source_refs: Vec<&str> =
                     cluster.source_ids.iter().map(|s| s.as_str()).collect();
                 let now = chrono::Utc::now().to_rfc3339();
-                let concept_id = crate::pages::Page::new_id();
+                let page_id = crate::pages::Page::new_id();
 
                 db.insert_page(
-                    &concept_id,
+                    &page_id,
                     &title,
                     summary.as_deref(),
                     &content,
@@ -1786,7 +1786,7 @@ pub async fn distill_pages(
                 }
 
                 if let Some(ref writer) = knowledge_writer {
-                    if let Ok(Some(c)) = db.get_page(&concept_id).await {
+                    if let Ok(Some(c)) = db.get_page(&page_id).await {
                         match writer.write_concept(&c) {
                             Ok(p) => log::info!("[distill] wrote concept to {p}"),
                             Err(e) => log::warn!("[distill] knowledge write failed: {e}"),
@@ -1887,14 +1887,14 @@ async fn assign_orphan_memories(
                         .get("memory_index")
                         .and_then(|v| v.as_u64())
                         .unwrap_or(999) as usize;
-                    let concept_id = assignment
-                        .get("concept_id")
+                    let page_id = assignment
+                        .get("page_id")
                         .and_then(|v| v.as_str())
                         .unwrap_or("");
-                    if idx < orphans.len() && !concept_id.is_empty() {
+                    if idx < orphans.len() && !page_id.is_empty() {
                         let source_id = &orphans[idx].0;
                         // Add this memory to the concept's source list
-                        if let Ok(Some(concept)) = db.get_page(concept_id).await {
+                        if let Ok(Some(concept)) = db.get_page(page_id).await {
                             if !concept.source_memory_ids.contains(&source_id.to_string()) {
                                 let mut merged_sources = concept.source_memory_ids.clone();
                                 merged_sources.push(source_id.to_string());
@@ -1902,7 +1902,7 @@ async fn assign_orphan_memories(
                                     merged_sources.iter().map(|s| s.as_str()).collect();
                                 let _ = db
                                     .update_page_content(
-                                        concept_id,
+                                        page_id,
                                         &concept.content,
                                         &refs,
                                         "concept_growth",
@@ -1950,12 +1950,12 @@ async fn assign_orphan_memories(
                         .collect();
                     let content_text = contents.join("\n\n");
 
-                    let concept_id = crate::pages::Page::new_id();
+                    let page_id = crate::pages::Page::new_id();
                     let now = chrono::Utc::now().to_rfc3339();
 
                     let _ = db
                         .insert_page(
-                            &concept_id,
+                            &page_id,
                             title,
                             Some(&format!(
                                 "Auto-grouped from {} orphan memories",
@@ -1971,7 +1971,7 @@ async fn assign_orphan_memories(
                     assigned += source_ids.len();
 
                     if let Some(ref writer) = knowledge_writer {
-                        if let Ok(Some(c)) = db.get_page(&concept_id).await {
+                        if let Ok(Some(c)) = db.get_page(&page_id).await {
                             match writer.write_concept(&c) {
                                 Ok(p) => log::info!("[distill] wrote concept to {p}"),
                                 Err(e) => log::warn!("[distill] knowledge write failed: {e}"),
@@ -2359,10 +2359,7 @@ async fn global_page_review(
             // Note: splits and missing concepts logged but not auto-applied (too risky)
             if let Some(splits) = parsed.get("splits").and_then(|a| a.as_array()) {
                 for split in splits {
-                    let cid = split
-                        .get("concept_id")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("");
+                    let cid = split.get("page_id").and_then(|v| v.as_str()).unwrap_or("");
                     let titles = split.get("sub_titles").and_then(|v| v.as_array());
                     if !cid.is_empty() {
                         log::info!(
@@ -2384,7 +2381,7 @@ pub async fn deep_distill_single(
     db: &MemoryDB,
     llm: Option<&Arc<dyn LlmProvider>>,
     prompts: &PromptRegistry,
-    concept_id: &str,
+    page_id: &str,
 ) -> Result<(), OriginError> {
     let llm = match llm {
         Some(l) if l.is_available() => l,
@@ -2401,18 +2398,15 @@ pub async fn deep_distill_single(
     };
 
     let concept = db
-        .get_page(concept_id)
+        .get_page(page_id)
         .await?
-        .ok_or_else(|| OriginError::VectorDb(format!("Concept {} not found", concept_id)))?;
+        .ok_or_else(|| OriginError::VectorDb(format!("Concept {} not found", page_id)))?;
 
     let memories = db
         .get_memory_contents_by_ids(&concept.source_memory_ids)
         .await?;
     if memories.is_empty() {
-        log::warn!(
-            "[distill] no source memories found for concept {}",
-            concept_id
-        );
+        log::warn!("[distill] no source memories found for concept {}", page_id);
         return Ok(());
     }
 
@@ -2461,7 +2455,7 @@ pub async fn deep_distill_single(
         .iter()
         .map(|s| s.as_str())
         .collect();
-    db.update_page_content(concept_id, &content, &source_refs, "distill")
+    db.update_page_content(page_id, &content, &source_refs, "distill")
         .await?;
 
     log::info!(

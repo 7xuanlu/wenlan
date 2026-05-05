@@ -333,10 +333,10 @@ pub struct RejectionRecord {
     pub created_at: i64,
 }
 
-/// An event describing when an agent retrieved concepts/memories from Origin.
+/// An event describing when an agent retrieved pages/memories from Origin.
 ///
 /// Backs Zone 4 of the home page ("Where Claude leaned on you") — a proof
-/// surface showing which concepts were pulled into an agent's context and
+/// surface showing which pages were pulled into an agent's context and
 /// when, giving the user evidence their curated knowledge is in use.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct RetrievalEvent {
@@ -345,13 +345,13 @@ pub struct RetrievalEvent {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub query: Option<String>,
     #[serde(default)]
-    pub concept_titles: Vec<String>,
-    /// Stable concept IDs corresponding 1:1 with `concept_titles`.
+    pub page_titles: Vec<String>,
+    /// Stable page IDs corresponding 1:1 with `page_titles`.
     /// Used by the UI to navigate directly by ID rather than doing a
     /// fragile title lookup. Empty on legacy events recorded before this
     /// field was added; the UI falls back to the title-match path in that case.
     #[serde(default)]
-    pub concept_ids: Vec<String>,
+    pub page_ids: Vec<String>,
     #[serde(default)]
     pub memory_snippets: Vec<String>,
 }
@@ -371,7 +371,7 @@ pub enum PageChangeKind {
 /// or merged pages so the user sees their knowledge base evolving.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct PageChange {
-    pub concept_id: String,
+    pub page_id: String,
     pub title: String,
     pub change_kind: PageChangeKind,
     pub changed_at_ms: i64,
@@ -381,8 +381,6 @@ pub struct PageChange {
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ActivityKind {
-    /// Wire format preserved as "concept" until 0c.3 serde rename pass.
-    #[serde(rename = "concept")]
     Page,
     Memory,
 }
@@ -466,8 +464,8 @@ mod tests {
             timestamp_ms: 1,
             agent_name: "claude-code".into(),
             query: None,
-            concept_titles: vec![],
-            concept_ids: vec![],
+            page_titles: vec![],
+            page_ids: vec![],
             memory_snippets: vec!["The first line of the memory".into()],
         };
         let s = serde_json::to_string(&evt).unwrap();

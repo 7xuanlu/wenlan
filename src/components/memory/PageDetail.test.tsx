@@ -22,7 +22,7 @@ vi.mock("../../lib/tauri", () => ({
   }),
   getPageSources: vi.fn().mockResolvedValue([
     {
-      source: { concept_id: "concept_abc", memory_source_id: "mem_1", linked_at: 1712000000, link_reason: "concept_growth" },
+      source: { page_id: "page_abc", memory_source_id: "mem_1", linked_at: 1712000000, link_reason: "concept_growth" },
       memory: {
         source_id: "mem_1",
         title: "libSQL stores vectors",
@@ -37,7 +37,7 @@ vi.mock("../../lib/tauri", () => ({
       },
     },
     {
-      source: { concept_id: "concept_abc", memory_source_id: "mem_2", linked_at: 1712100000, link_reason: "concept_growth" },
+      source: { page_id: "page_abc", memory_source_id: "mem_2", linked_at: 1712100000, link_reason: "concept_growth" },
       memory: {
         source_id: "mem_2",
         title: "DiskANN indexing strategy",

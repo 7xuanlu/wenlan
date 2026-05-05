@@ -116,8 +116,8 @@ describe("HomePage redesign", () => {
         timestamp_ms: Date.now(),
         agent_name: "claude-code",
         query: "positioning",
-        concept_titles: ["Origin positioning", "Daemon architecture"],
-        concept_ids: ["concept_pos", "concept_arch"],
+        page_titles: ["Origin positioning", "Daemon architecture"],
+        page_ids: ["concept_pos", "concept_arch"],
         memory_snippets: [],
       },
     ]);
@@ -134,8 +134,8 @@ describe("HomePage redesign", () => {
         timestamp_ms: Date.now(),
         agent_name: "unknown",
         query: "anything",
-        concept_titles: ["Should not appear"],
-        concept_ids: [],
+        page_titles: ["Should not appear"],
+        page_ids: [],
         memory_snippets: [],
       },
     ]);
@@ -175,14 +175,14 @@ describe("HomePage redesign", () => {
 
   it("retrieval card with archived concept shows archived badge and does not navigate", async () => {
     const onSelectPage = vi.fn();
-    // Event has concept_ids: [] simulating an archived concept (no active match found at read time)
+    // Event has page_ids: [] simulating an archived concept (no active match found at read time)
     vi.mocked(tauri.listRecentRetrievals).mockResolvedValue([
       {
         timestamp_ms: Date.now(),
         agent_name: "claude-code",
         query: "origin arch",
-        concept_titles: ["Origin Architecture"],
-        concept_ids: [],
+        page_titles: ["Origin Architecture"],
+        page_ids: [],
         memory_snippets: [],
       },
     ]);
@@ -201,8 +201,8 @@ describe("HomePage redesign", () => {
     // Wait for the retrievals section to render
     await screen.findByTestId("retrievals");
     // The archived badge should be visible
-    expect(screen.getByTitle("This concept has been archived")).toBeInTheDocument();
-    // Clicking should not navigate because concept_ids is empty
+    expect(screen.getByTitle("This page has been archived")).toBeInTheDocument();
+    // Clicking should not navigate because page_ids is empty
     const item = screen.getByTestId("retrieval-item");
     await userEvent.click(item);
     expect(onSelectPage).not.toHaveBeenCalled();

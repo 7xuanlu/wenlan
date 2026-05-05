@@ -782,8 +782,7 @@ export interface Page {
 export type Concept = Page;
 
 export interface PageSource {
-  // wire format still uses concept_id; rename deferred until origin-mcp is updated
-  concept_id: string;
+  page_id: string;
   memory_source_id: string;
   linked_at: number;
   link_reason?: string | null;
@@ -1153,10 +1152,9 @@ export interface RetrievalEvent {
   timestamp_ms: number;
   agent_name: string;
   query?: string | null;
-  // wire format still uses concept_titles/concept_ids; rename deferred until origin-mcp is updated
-  concept_titles: string[];
-  /** Stable page IDs corresponding 1:1 with concept_titles. Empty on legacy events. */
-  concept_ids: string[];
+  page_titles: string[];
+  /** Stable page IDs corresponding 1:1 with page_titles. Empty on legacy events. */
+  page_ids: string[];
   memory_snippets: string[];
 }
 
@@ -1166,8 +1164,7 @@ export type PageChangeKind = "created" | "revised" | "merged";
 export type ConceptChangeKind = PageChangeKind;
 
 export interface PageChange {
-  // wire format still uses concept_id; rename deferred until origin-mcp is updated
-  concept_id: string;
+  page_id: string;
   title: string;
   change_kind: PageChangeKind;
   changed_at_ms: number;

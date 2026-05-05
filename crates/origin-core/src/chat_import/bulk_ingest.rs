@@ -147,10 +147,10 @@ pub async fn bulk_import_conversations(
                 "stage": "stage_a",
                 "memories_processed": current_count,
                 "memories_total": total_estimate,
-                "entity_counts": {"people": 0, "projects": 0, "concepts": 0, "decisions": 0, "tools": 0},
-                "concepts_written": 0,
-                "concepts_total": 0,
-                "latest_concept_titles": []
+                "entity_counts": {"people": 0, "projects": 0, "pages": 0, "decisions": 0, "tools": 0},
+                "pages_written": 0,
+                "pages_total": 0,
+                "latest_page_titles": []
             });
             let _ = emitter.emit("chat-import-progress", &payload.to_string());
             last_emitted_count = current_count;
@@ -168,10 +168,10 @@ pub async fn bulk_import_conversations(
             "stage": "stage_a",
             "memories_processed": memories_stored,
             "memories_total": total_estimate,
-            "entity_counts": {"people": 0, "projects": 0, "concepts": 0, "decisions": 0, "tools": 0},
-            "concepts_written": 0,
-            "concepts_total": 0,
-            "latest_concept_titles": []
+            "entity_counts": {"people": 0, "projects": 0, "pages": 0, "decisions": 0, "tools": 0},
+            "pages_written": 0,
+            "pages_total": 0,
+            "latest_page_titles": []
         });
         let _ = emitter.emit("chat-import-progress", &payload.to_string());
     }

@@ -577,7 +577,7 @@ pub async fn handle_chat_context(
             goals,
         },
         knowledge: KnowledgeContext {
-            concepts: page_results, // wire field names retained for back-compat with origin-mcp; rename deferred
+            pages: page_results,
             decisions,
             relevant_memories: filtered_search,
             graph_context: graph_observations,
@@ -701,15 +701,15 @@ pub async fn handle_distill(
     .await?;
 
     Ok(Json(serde_json::json!({
-        "concepts_created": distilled, // wire field names retained for back-compat with origin-mcp; rename deferred
-        "concepts_updated": deep,      // wire field names retained for back-compat with origin-mcp; rename deferred
+        "pages_created": distilled,
+        "pages_updated": deep,
     })))
 }
 
 /// POST /api/distill/{page_id}
 pub async fn handle_redistill(
     State(state): State<Arc<RwLock<ServerState>>>,
-    Path(concept_id): Path<String>,
+    Path(page_id): Path<String>,
 ) -> Result<Json<serde_json::Value>, ServerError> {
     let s = state.read().await;
     let db =
@@ -720,7 +720,7 @@ pub async fn handle_redistill(
     let prompts = &s.prompts;
 
     let prefer_llm = api_llm.or(llm);
-    origin_core::refinery::deep_distill_single(db, prefer_llm, prompts, &concept_id).await?;
+    origin_core::refinery::deep_distill_single(db, prefer_llm, prompts, &page_id).await?;
 
     Ok(Json(serde_json::json!({"status": "ok"})))
 }

@@ -12947,8 +12947,8 @@ impl MemoryDB {
                 timestamp_ms: ts_s.saturating_mul(1000),
                 agent_name: agent,
                 query,
-                concept_titles: titles,
-                concept_ids,
+                page_titles: titles,
+                page_ids: concept_ids,
                 memory_snippets: snippets,
             });
         }
@@ -13006,7 +13006,7 @@ impl MemoryDB {
                 .unwrap_or(0);
 
             out.push(origin_types::PageChange {
-                concept_id: id,
+                page_id: id,
                 title,
                 change_kind,
                 changed_at_ms,
@@ -14605,8 +14605,8 @@ impl MemoryDB {
             .map_err(|e| OriginError::VectorDb(e.to_string()))?
         {
             result.push(origin_types::PageSource {
-                concept_id: row.get(0).map_err(|e| {
-                    OriginError::VectorDb(format!("concept_sources concept_id: {e}"))
+                page_id: row.get(0).map_err(|e| {
+                    OriginError::VectorDb(format!("concept_sources concept_id column: {e}"))
                 })?,
                 memory_source_id: row.get(1).map_err(|e| {
                     OriginError::VectorDb(format!("concept_sources memory_source_id: {e}"))
@@ -21738,13 +21738,13 @@ pub(crate) mod tests {
         assert_eq!(events[0].agent_name, "claude-desktop");
         assert_eq!(events[0].query, None);
         assert_eq!(
-            events[0].concept_titles,
+            events[0].page_titles,
             vec!["Origin positioning".to_string()]
         );
         assert_eq!(events[1].agent_name, "claude-code");
         assert_eq!(events[1].query.as_deref(), Some("positioning"));
         assert_eq!(
-            events[1].concept_titles,
+            events[1].page_titles,
             vec!["Origin positioning".to_string()]
         );
     }
@@ -21801,8 +21801,8 @@ pub(crate) mod tests {
             })
             .expect("expected an event with the memory snippet");
         assert!(
-            ev.concept_titles.is_empty(),
-            "concept_titles must be empty when no concept references the memory"
+            ev.page_titles.is_empty(),
+            "page_titles must be empty when no page references the memory"
         );
         assert!(
             ev.memory_snippets
@@ -21840,7 +21840,7 @@ pub(crate) mod tests {
         .unwrap();
         let events = db.list_recent_retrievals(10).await.unwrap();
         assert_eq!(events.len(), 1);
-        assert_eq!(events[0].concept_titles, vec!["Shared".to_string()]);
+        assert_eq!(events[0].page_titles, vec!["Shared".to_string()]);
     }
 
     #[tokio::test]
@@ -22024,7 +22024,7 @@ pub(crate) mod tests {
         let changes = db.list_recent_changes(10).await.unwrap();
         let by_id: std::collections::HashMap<String, PageChangeKind> = changes
             .iter()
-            .map(|c| (c.concept_id.clone(), c.change_kind))
+            .map(|c| (c.page_id.clone(), c.change_kind))
             .collect();
         assert_eq!(by_id.get("c_new"), Some(&PageChangeKind::Created));
         assert_eq!(by_id.get("c_rev"), Some(&PageChangeKind::Revised));
@@ -22053,7 +22053,7 @@ pub(crate) mod tests {
 
         let changes = db.list_recent_changes(10).await.unwrap();
         let ids: std::collections::HashSet<String> =
-            changes.iter().map(|c| c.concept_id.clone()).collect();
+            changes.iter().map(|c| c.page_id.clone()).collect();
         assert!(ids.contains("c_active"));
         assert!(!ids.contains("c_gone"));
     }
@@ -22072,8 +22072,8 @@ pub(crate) mod tests {
 
         let changes = db.list_recent_changes(10).await.unwrap();
         assert!(changes.len() >= 2);
-        assert_eq!(changes[0].concept_id, "c_new");
-        assert_eq!(changes[1].concept_id, "c_old");
+        assert_eq!(changes[0].page_id, "c_new");
+        assert_eq!(changes[1].page_id, "c_old");
     }
 
     // ==================== list_recent_memories ====================
@@ -22949,7 +22949,7 @@ pub(crate) mod tests {
             1,
             "idempotent insert should produce exactly 1 row"
         );
-        assert_eq!(sources[0].concept_id, "c1");
+        assert_eq!(sources[0].page_id, "c1");
         assert_eq!(sources[0].memory_source_id, "src1");
     }
 

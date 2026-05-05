@@ -2578,10 +2578,10 @@ pub async fn correct_memory_cmd(
 
 // ── Pages ──────────────────────────────────────────────────────────
 
-/// Wire wrapper for the daemon's `{ "concept": {...} }` response shape.
+/// Wire wrapper for the daemon's `{ "page": {...} }` response shape.
 #[derive(serde::Deserialize)]
 struct GetPageWire {
-    concept: Option<crate::pages::Page>,
+    page: Option<crate::pages::Page>,
 }
 
 #[tauri::command]
@@ -2599,7 +2599,7 @@ pub async fn get_page(
         .get_json::<GetPageWire>(&format!("/api/pages/{}", id))
         .await
     {
-        Ok(wrapped) => Ok(wrapped.concept),
+        Ok(wrapped) => Ok(wrapped.page),
         Err(e) => {
             let msg = e.to_string();
             if msg.contains("404") || msg.to_lowercase().contains("not found") {
@@ -2621,7 +2621,7 @@ pub async fn update_page(
     let req = requests::UpdatePageRequest { content };
     let _resp: responses::SuccessResponse = s
         .client
-        .post_json(&format!("/api/memory/{}/update-concept", id), &req)
+        .post_json(&format!("/api/memory/{}/update-page", id), &req)
         .await?;
     Ok(())
 }
@@ -2643,12 +2643,12 @@ pub async fn delete_page(state: tauri::State<'_, State>, id: String) -> Result<(
     Ok(())
 }
 
-/// Wire wrapper matching the daemon's `{ "concepts": [...] }` response shape.
+/// Wire wrapper matching the daemon's `{ "pages": [...] }` response shape.
 /// Kept local to search.rs because `Page` lives in origin-core (not
 /// origin-types), so we can't put this in the shared response types.
 #[derive(serde::Deserialize)]
 struct ListPagesWire {
-    concepts: Vec<crate::pages::Page>,
+    pages: Vec<crate::pages::Page>,
 }
 
 #[tauri::command]
@@ -2680,7 +2680,7 @@ pub async fn list_pages(
         format!("/api/pages?{}", params.join("&"))
     };
     let resp: ListPagesWire = client.get_json(&path).await?;
-    Ok(resp.concepts)
+    Ok(resp.pages)
 }
 
 #[tauri::command]
@@ -2692,7 +2692,7 @@ pub async fn search_pages(
     let client = state.read().await.client.clone();
     let req = requests::SearchPagesRequest { query, limit };
     let resp: ListPagesWire = client.post_json("/api/pages/search", &req).await?;
-    Ok(resp.concepts)
+    Ok(resp.pages)
 }
 
 #[tauri::command]
@@ -2701,7 +2701,7 @@ pub async fn get_page_sources(
     page_id: String,
 ) -> Result<Vec<origin_types::PageSourceWithMemory>, String> {
     let client = { state.read().await.client.clone() };
-    client.get_concept_sources(&page_id).await
+    client.get_page_sources(&page_id).await
 }
 
 #[tauri::command]
@@ -2710,10 +2710,10 @@ pub async fn export_pages_to_obsidian(
     vault_path: String,
 ) -> Result<crate::export::ExportStats, String> {
     // Fetch pages from daemon, then export locally
-    let concepts: Vec<crate::pages::Page> = {
+    let pages: Vec<crate::pages::Page> = {
         let client = state.read().await.client.clone();
         let resp: ListPagesWire = client.get_json("/api/pages").await?;
-        resp.concepts
+        resp.pages
     };
     let expanded = if let Some(rest) = vault_path.strip_prefix("~/") {
         let home = std::env::var("HOME").unwrap_or_default();
@@ -2724,7 +2724,7 @@ pub async fn export_pages_to_obsidian(
     let exporter =
         crate::export::obsidian::ObsidianExporter::new(std::path::PathBuf::from(expanded));
     use crate::export::PageExporter;
-    exporter.export_all(&concepts).map_err(|e| e.to_string())
+    exporter.export_all(&pages).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -3296,7 +3296,7 @@ pub async fn list_recent_pages(
         s.client.clone()
     };
     client
-        .list_recent_concepts(limit.unwrap_or(10), since_ms)
+        .list_recent_pages(limit.unwrap_or(10), since_ms)
         .await
 }
 

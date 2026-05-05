@@ -148,7 +148,7 @@ impl<'a> MilestoneEvaluator<'a> {
         if active_count >= 1 {
             if let Some(first) = self.db.oldest_active_page().await? {
                 let payload = serde_json::json!({
-                    "concept_id": first.id,
+                    "page_id": first.id,
                     "title": first.title,
                 });
                 self.fire(MilestoneId::FirstPage, Some(payload)).await?;

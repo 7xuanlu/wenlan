@@ -258,7 +258,7 @@ impl OriginClient {
         self.get_json(&path).await
     }
 
-    pub async fn list_recent_concepts(
+    pub async fn list_recent_pages(
         &self,
         limit: i64,
         since_ms: Option<i64>,
@@ -285,11 +285,11 @@ impl OriginClient {
         self.get_json(&path).await
     }
 
-    pub async fn get_concept_sources(
+    pub async fn get_page_sources(
         &self,
-        concept_id: &str,
+        page_id: &str,
     ) -> Result<Vec<origin_types::PageSourceWithMemory>, String> {
-        let path = format!("/api/pages/{}/sources", concept_id);
+        let path = format!("/api/pages/{}/sources", page_id);
         self.get_json(&path).await
     }
 }
