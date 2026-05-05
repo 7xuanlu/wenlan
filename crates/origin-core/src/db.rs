@@ -8830,22 +8830,6 @@ impl MemoryDB {
         }
     }
 
-    /// Reset any "abandoned" steps for a memory back to "failed" with attempts = 0.
-    /// Returns the number of rows updated.
-    pub async fn reset_abandoned_steps(&self, source_id: &str) -> Result<u64, OriginError> {
-        let now = chrono::Utc::now().timestamp();
-        let conn = self.conn.lock().await;
-        let rows_affected = conn
-            .execute(
-                "UPDATE enrichment_steps SET status = 'failed', attempts = 0, updated_at = ?1
-                 WHERE source_id = ?2 AND status = 'abandoned'",
-                libsql::params![now, source_id],
-            )
-            .await
-            .map_err(|e| OriginError::VectorDb(format!("reset_abandoned_steps: {e}")))?;
-        Ok(rows_affected)
-    }
-
     /// Return memories with at least one `failed` enrichment step that hasn't
     /// exceeded `max_attempts`, ordered oldest-first. Returns (source_id, step_name, content).
     pub async fn get_failed_enrichment_memories(
@@ -12373,36 +12357,6 @@ impl MemoryDB {
                 .get(3)
                 .map_err(|e| OriginError::VectorDb(e.to_string()))?;
             results.push((source_id, content, domain, last_modified));
-        }
-        Ok(results)
-    }
-
-    /// Get decision memories that lack structured_fields (for backfill).
-    pub async fn get_decisions_without_structured_fields(
-        &self,
-        limit: usize,
-    ) -> Result<Vec<(String, String)>, OriginError> {
-        let conn = self.conn.lock().await;
-        let mut rows = conn
-            .query(
-                "SELECT source_id, content FROM memories \
-                 WHERE source = 'memory' AND memory_type = 'decision' AND chunk_index = 0 \
-                   AND confirmed != 0 AND (structured_fields IS NULL OR structured_fields = '') \
-                 ORDER BY last_modified DESC LIMIT ?1",
-                libsql::params![limit as i64],
-            )
-            .await
-            .map_err(|e| OriginError::VectorDb(format!("get_decisions_without_sf: {}", e)))?;
-
-        let mut results = Vec::new();
-        while let Some(row) = rows
-            .next()
-            .await
-            .map_err(|e| OriginError::VectorDb(e.to_string()))?
-        {
-            let source_id: String = row.get(0).unwrap_or_default();
-            let content: String = row.get(1).unwrap_or_default();
-            results.push((source_id, content));
         }
         Ok(results)
     }
@@ -24193,30 +24147,6 @@ pub(crate) mod tests {
             .unwrap();
         let summary = db.get_enrichment_summary("mem_all_fail").await.unwrap();
         assert_eq!(summary, "enrichment_failed");
-    }
-
-    #[tokio::test]
-    async fn test_reset_abandoned_steps() {
-        let (db, _dir) = test_db().await;
-        let doc = make_memory_doc("mem_abandon_test", "test", "fact", "tech", "agent");
-        db.upsert_documents(vec![doc]).await.unwrap();
-        db.record_enrichment_step(
-            "mem_abandon_test",
-            "entity_extract",
-            "abandoned",
-            Some("gave up"),
-        )
-        .await
-        .unwrap();
-        db.record_enrichment_step("mem_abandon_test", "dedup", "ok", None)
-            .await
-            .unwrap();
-        let reset = db.reset_abandoned_steps("mem_abandon_test").await.unwrap();
-        assert_eq!(reset, 1);
-        let steps = db.get_enrichment_steps("mem_abandon_test").await.unwrap();
-        let extract = steps.iter().find(|s| s.step == "entity_extract").unwrap();
-        assert_eq!(extract.status, "failed");
-        assert_eq!(extract.attempts, 0);
     }
 
     #[tokio::test]

@@ -104,8 +104,9 @@ pub async fn handle_chat_export_import(
     let batch = origin_core::chat_import::dispatch_parse(&bytes)
         .map_err(|e| ServerError::ChatImport(format!("parse failed: {e}")))?;
 
-    // 4. Snapshot Arc<MemoryDB> + LLM providers out of the RwLock guard before any awaits.
-    let (db, llm, api_llm, synthesis_llm) = {
+    // 4. Snapshot Arc<MemoryDB> + LLM providers + enrichment config out of the
+    //    RwLock guard before any awaits.
+    let (db, llm, api_llm, _synthesis_llm, prompts, tuning, knowledge_path) = {
         let guard = state.read().await;
         let db = guard
             .db
@@ -117,6 +118,9 @@ pub async fn handle_chat_export_import(
             guard.llm.clone(),
             guard.api_llm.clone(),
             guard.synthesis_llm.clone(),
+            guard.prompts.clone(),
+            guard.tuning.clone(),
+            guard.watch_paths.first().cloned(),
         )
     };
 
@@ -163,7 +167,7 @@ pub async fn handle_chat_export_import(
         }
     };
 
-    // 7. Mark StageB and spawn background steep.
+    // 7. Mark StageB and spawn background enrichment pass.
     db.update_import_state_stage(
         &import_id,
         origin_core::chat_import::bulk_ingest::ImportStage::StageB,
@@ -173,41 +177,43 @@ pub async fn handle_chat_export_import(
     .await
     .map_err(|e| ServerError::ChatImport(format!("update_import_state_stage: {e}")))?;
 
-    // Spawn background refinery loop that keeps steeping until all imported
-    // memories are classified. Only then does import_state transition to Done.
-    // This keeps the import visible via GET /api/import/state while the
-    // refinery is still working through the batch.
-    let db_for_steep = db.clone();
-    let import_id_for_steep = import_id.clone();
+    // Spawn background bulk post-ingest enrichment pass for all imported memories
+    // that still lack memory_type or domain. Processes in batches of 100 with
+    // concurrency 8 until none remain, then marks the import Done.
+    let db_for_enrich = db.clone();
+    let import_id_for_enrich = import_id.clone();
     tokio::spawn(async move {
+        use futures::stream::{self, StreamExt};
+        const BATCH: usize = 100;
+        const CONCURRENCY: usize = 8;
+
+        // Prefer API LLM for enrichment (faster for bulk); fall back to on-device.
+        let prefer_llm: Option<std::sync::Arc<dyn origin_core::llm_provider::LlmProvider>> =
+            api_llm.or(llm);
+
         loop {
-            let steep_result = origin_core::refinery::trigger_steep_now(
-                db_for_steep.clone(),
-                llm.as_ref(),
-                api_llm.as_ref(),
-                synthesis_llm.as_ref(),
-            )
-            .await;
-            if let Err(e) = steep_result {
-                let msg = format!("steep failed: {e}");
-                tracing::error!("[chat-import] {msg}");
-                let _ = db_for_steep
-                    .update_import_state_stage_with_error(
-                        &import_id_for_steep,
-                        origin_core::chat_import::bulk_ingest::ImportStage::Error,
-                        None,
-                        None,
-                        Some(&msg),
-                    )
-                    .await;
-                return;
-            }
-            // Check if all import memories are classified.
-            let remaining = db_for_steep.count_unclassified_imports().await.unwrap_or(0);
-            if remaining == 0 {
-                let _ = db_for_steep
+            let candidates = match db_for_enrich.get_unclassified_imports(BATCH).await {
+                Ok(v) => v,
+                Err(e) => {
+                    let msg = format!("get_unclassified_imports failed: {e}");
+                    tracing::error!("[chat-import-enrich] {msg}");
+                    let _ = db_for_enrich
+                        .update_import_state_stage_with_error(
+                            &import_id_for_enrich,
+                            origin_core::chat_import::bulk_ingest::ImportStage::Error,
+                            None,
+                            None,
+                            Some(&msg),
+                        )
+                        .await;
+                    return;
+                }
+            };
+            if candidates.is_empty() {
+                // All imports enriched — mark Done.
+                let _ = db_for_enrich
                     .update_import_state_stage(
-                        &import_id_for_steep,
+                        &import_id_for_enrich,
                         origin_core::chat_import::bulk_ingest::ImportStage::Done,
                         None,
                         None,
@@ -215,8 +221,38 @@ pub async fn handle_chat_export_import(
                     .await;
                 return;
             }
-            // Brief pause between steep cycles to avoid busy-looping.
-            tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+            // Process this batch with bounded concurrency.
+            stream::iter(candidates)
+                .for_each_concurrent(CONCURRENCY, |(source_id, content)| {
+                    let db_inner = db_for_enrich.clone();
+                    let prompts = prompts.clone();
+                    let tuning = tuning.clone();
+                    let knowledge_path = knowledge_path.clone();
+                    let llm_inner = prefer_llm.clone();
+                    async move {
+                        if let Err(e) = origin_core::post_ingest::run_post_ingest_enrichment(
+                            &db_inner,
+                            &source_id,
+                            &content,
+                            None,
+                            None,
+                            None,
+                            None,
+                            llm_inner.as_ref(),
+                            &prompts,
+                            &tuning.refinery,
+                            &tuning.distillation,
+                            knowledge_path.as_deref(),
+                        )
+                        .await
+                        {
+                            tracing::warn!(
+                                "[chat-import-enrich] post_ingest failed for {source_id}: {e}"
+                            );
+                        }
+                    }
+                })
+                .await;
         }
     });
 
