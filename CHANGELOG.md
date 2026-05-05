@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.3.0](https://github.com/7xuanlu/origin/compare/v0.2.1...v0.3.0) (2026-05-05)
+
+
+### Features
+
+* rename Concept → Page + expand MemoryType taxonomy ([4b91089](https://github.com/7xuanlu/origin/commit/4b91089f305d7e3f43ef49a4a0b8ddd44c4e8ab1))
+
+
+### Bug Fixes
+
+* add branded Origin setup flow ([dd4208a](https://github.com/7xuanlu/origin/commit/dd4208a85996d6487045463161aa9466e1c39e45))
+* **updater:** avoid temp LaunchAgent paths ([#48](https://github.com/7xuanlu/origin/issues/48)) ([14af3e4](https://github.com/7xuanlu/origin/commit/14af3e4321948952376da767830c2bf4afca3041))
+
 ## [0.2.1](https://github.com/7xuanlu/origin/compare/v0.2.0...v0.2.1) (2026-05-03)
 
 
