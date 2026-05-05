@@ -78,7 +78,7 @@ impl TriggerKind {
     /// of phases, so they need different time budgets:
     /// - BurstEnd: tight (recaps + refinement only, should be fast)
     /// - Idle/Daily: moderate (focused subsets, no competition)
-    /// - Backstop: generous (runs all 14 phases, safety net every 6h)
+    /// - Backstop: generous (runs all 15 phases, safety net every 6h)
     pub fn deadline_secs(&self, base: u64) -> u64 {
         match self {
             Self::BurstEnd => base,      // 120s — recaps should be fast
