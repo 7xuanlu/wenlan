@@ -335,9 +335,9 @@ const VALID_MEMORY_TYPES: &[&str] = &[
     "identity",
     "preference",
     "decision",
+    "lesson",
+    "gotcha",
     "fact",
-    "goal",
-    "recap",
 ];
 
 /// Normalize invalid memory_type to the closest valid type.
@@ -353,7 +353,7 @@ fn normalize_memory_type(raw: &str) -> String {
         "embedding_model" | "model" | "technical" => "decision".to_string(),
         "entity" | "concept" | "knowledge" => "fact".to_string(),
         "personal" | "bio" | "background" => "identity".to_string(),
-        "wish" | "aspiration" | "plan" => "goal".to_string(),
+        "wish" | "aspiration" | "plan" | "goal" => "identity".to_string(),
         "like" | "dislike" | "favorite" => "preference".to_string(),
         _ => "fact".to_string(), // safe default
     }
@@ -563,7 +563,9 @@ mod tests {
         assert_eq!(normalize_memory_type("fact"), "fact");
         assert_eq!(normalize_memory_type("Decision"), "decision");
         assert_eq!(normalize_memory_type("IDENTITY"), "identity");
-        assert_eq!(normalize_memory_type("recap"), "recap");
+        assert_eq!(normalize_memory_type("lesson"), "lesson");
+        assert_eq!(normalize_memory_type("gotcha"), "gotcha");
+        assert_eq!(normalize_memory_type("recap"), "fact"); // legacy type, folds to fact
     }
 
     #[test]

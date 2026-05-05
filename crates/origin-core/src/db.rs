@@ -11246,6 +11246,8 @@ impl MemoryDB {
     // ===== Narrative Cache =====
 
     /// Fetch confirmed memories of profile types (identity, preference, goal) for narrative.
+    // Must stay in sync with get_narrative_memory_count — see issue:
+    // narrative cache invalidation requires fetch and count over identical type set.
     pub async fn get_memories_for_narrative(
         &self,
         limit: usize,
