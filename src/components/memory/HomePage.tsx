@@ -30,7 +30,7 @@ interface HomePageProps {
   onNavigateStream: () => void;
   onNavigateLog: () => void;
   onNavigateGraph: () => void;
-  onSelectConcept?: (conceptId: string) => void;
+  onSelectPage?: (pageId: string) => void;
 }
 
 const FIRST_CONCEPT_SHOWN_KEY = "onboarding:firstConceptShownCount";
@@ -55,7 +55,7 @@ export default function HomePage({
   onNavigateStream,
   onNavigateLog: _onNavigateLog,
   onNavigateGraph: _onNavigateGraph,
-  onSelectConcept,
+  onSelectPage,
 }: HomePageProps) {
   const queryClient = useQueryClient();
 
@@ -266,19 +266,19 @@ export default function HomePage({
               await queryClient.invalidateQueries({ queryKey: ["unconfirmedMemories"] });
             }}
             onNavigate={(kind, id) => {
-              if (kind === "concept") onSelectConcept?.(id);
+              if (kind === "concept") onSelectPage?.(id);
               else onNavigateMemory(id);
             }}
             recapCount={recapCount}
             onViewRecaps={onNavigateStream}
           />
-          <RefiningList changes={changes} concepts={recentConcepts} onSelectConcept={onSelectConcept} />
+          <RefiningList changes={changes} concepts={recentConcepts} onSelectPage={onSelectPage} />
           <RetrievalsList
             events={retrievals}
-            onSelectConceptById={(conceptId) => onSelectConcept?.(conceptId)}
+            onSelectPageById={(pageId) => onSelectPage?.(pageId)}
           />
           <ConnectionsList
-            onSelectConcept={onSelectConcept}
+            onSelectPage={onSelectPage}
             onSelectEntity={undefined}
           />
         </>
@@ -290,7 +290,7 @@ export default function HomePage({
           onOpen={(id) => {
             localStorage.removeItem(FIRST_CONCEPT_SHOWN_KEY);
             acknowledge("first-concept");
-            onSelectConcept?.(id);
+            onSelectPage?.(id);
           }}
           onDismiss={() => {
             localStorage.removeItem(FIRST_CONCEPT_SHOWN_KEY);

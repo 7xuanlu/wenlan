@@ -69,14 +69,14 @@ describe("DecisionLog", () => {
   });
 
   it("renders decision entries after loading", async () => {
-    render(wrap(<DecisionLog onBack={noop} onSelectMemory={noop} onSelectConcept={noop} />));
+    render(wrap(<DecisionLog onBack={noop} onSelectMemory={noop} onSelectPage={noop} />));
     expect(await screen.findByText(/Decisions/)).toBeInTheDocument();
     expect(await screen.findByText("Use libSQL over Neo4j")).toBeInTheDocument();
     expect(await screen.findByText("Ship wiki-style concepts")).toBeInTheDocument();
   });
 
   it("shows domain filter pills", async () => {
-    render(wrap(<DecisionLog onBack={noop} onSelectMemory={noop} onSelectConcept={noop} />));
+    render(wrap(<DecisionLog onBack={noop} onSelectMemory={noop} onSelectPage={noop} />));
     // Wait for data to load via a domain pill
     const archPill = await screen.findByRole("button", { name: "architecture" });
     expect(archPill).toBeInTheDocument();
@@ -86,12 +86,12 @@ describe("DecisionLog", () => {
   });
 
   it("shows context preview in collapsed state", async () => {
-    render(wrap(<DecisionLog onBack={noop} onSelectMemory={noop} onSelectConcept={noop} />));
+    render(wrap(<DecisionLog onBack={noop} onSelectMemory={noop} onSelectPage={noop} />));
     expect(await screen.findByText(/Evaluated Neo4j/)).toBeInTheDocument();
   });
 
   it("shows alternatives when entry is expanded", async () => {
-    render(wrap(<DecisionLog onBack={noop} onSelectMemory={noop} onSelectConcept={noop} />));
+    render(wrap(<DecisionLog onBack={noop} onSelectMemory={noop} onSelectPage={noop} />));
     // Wait for entries to load
     const entry = await screen.findByText("Use libSQL over Neo4j");
     // Click to expand
@@ -103,14 +103,14 @@ describe("DecisionLog", () => {
 
   it("calls onBack when back button is clicked", async () => {
     const onBack = vi.fn();
-    render(wrap(<DecisionLog onBack={onBack} onSelectMemory={noop} onSelectConcept={noop} />));
+    render(wrap(<DecisionLog onBack={onBack} onSelectMemory={noop} onSelectPage={noop} />));
     await screen.findByText(/Decisions/);
     fireEvent.click(screen.getByLabelText("Go back"));
     expect(onBack).toHaveBeenCalledTimes(1);
   });
 
   it("shows reversibility indicator when expanded", async () => {
-    render(wrap(<DecisionLog onBack={noop} onSelectMemory={noop} onSelectConcept={noop} />));
+    render(wrap(<DecisionLog onBack={noop} onSelectMemory={noop} onSelectPage={noop} />));
     // Expand the second entry which has reversible: true
     const entry = await screen.findByText("Ship wiki-style concepts");
     fireEvent.click(entry.closest("[data-testid='decision-entry']")!);
@@ -118,7 +118,7 @@ describe("DecisionLog", () => {
   });
 
   it("filters by domain when pill is clicked", async () => {
-    render(wrap(<DecisionLog onBack={noop} onSelectMemory={noop} onSelectConcept={noop} />));
+    render(wrap(<DecisionLog onBack={noop} onSelectMemory={noop} onSelectPage={noop} />));
     const architecturePill = await screen.findByRole("button", { name: "architecture" });
     fireEvent.click(architecturePill);
     await waitFor(() => {
@@ -128,7 +128,7 @@ describe("DecisionLog", () => {
   });
 
   it("shows count in header", async () => {
-    render(wrap(<DecisionLog onBack={noop} onSelectMemory={noop} onSelectConcept={noop} />));
+    render(wrap(<DecisionLog onBack={noop} onSelectMemory={noop} onSelectPage={noop} />));
     // 2 decisions in mock data
     expect(await screen.findByText("2")).toBeInTheDocument();
   });

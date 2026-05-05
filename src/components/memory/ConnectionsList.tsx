@@ -10,7 +10,7 @@ import {
 } from "../../lib/tauri";
 
 interface Props {
-  onSelectConcept?: (conceptId: string) => void;
+  onSelectPage?: (pageId: string) => void;
   // TODO: wire onSelectEntity once entity-detail navigation exists
   onSelectEntity?: (entityId: string) => void;
 }
@@ -149,7 +149,7 @@ function buildInsights(
   return all.slice(0, 5);
 }
 
-export function ConnectionsList({ onSelectConcept, onSelectEntity }: Props) {
+export function ConnectionsList({ onSelectPage, onSelectEntity }: Props) {
   const { data: concepts = [] } = useQuery({
     queryKey: ["connections-concepts"],
     queryFn: () => listConcepts("active", undefined, 30),
@@ -185,7 +185,7 @@ export function ConnectionsList({ onSelectConcept, onSelectEntity }: Props) {
             key={insight.key}
             insight={insight}
             isLast={i === insights.length - 1}
-            onSelectConcept={onSelectConcept}
+            onSelectPage={onSelectPage}
             onSelectEntity={onSelectEntity}
           />
         ))}
@@ -197,12 +197,12 @@ export function ConnectionsList({ onSelectConcept, onSelectEntity }: Props) {
 function InsightRow({
   insight,
   isLast,
-  onSelectConcept,
+  onSelectPage,
   onSelectEntity,
 }: {
   insight: Insight;
   isLast: boolean;
-  onSelectConcept?: (conceptId: string) => void;
+  onSelectPage?: (pageId: string) => void;
   onSelectEntity?: (entityId: string) => void;
 }) {
   const [hover, setHover] = useState(false);
@@ -211,17 +211,17 @@ function InsightRow({
     if (insight.category === "recurring") {
       if (onSelectEntity && insight.entityId) {
         onSelectEntity(insight.entityId);
-      } else if (onSelectConcept && insight.conceptId) {
-        onSelectConcept(insight.conceptId);
+      } else if (onSelectPage && insight.conceptId) {
+        onSelectPage(insight.conceptId);
       }
-    } else if (onSelectConcept && insight.conceptId) {
-      onSelectConcept(insight.conceptId);
+    } else if (onSelectPage && insight.conceptId) {
+      onSelectPage(insight.conceptId);
     }
   }
 
   const clickable = insight.category === "recurring"
-    ? Boolean(onSelectEntity ?? onSelectConcept)
-    : Boolean(onSelectConcept);
+    ? Boolean(onSelectEntity ?? onSelectPage)
+    : Boolean(onSelectPage);
 
   const prefix = insight.category === "recurring" ? "You've returned to " : "";
 

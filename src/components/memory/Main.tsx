@@ -37,7 +37,7 @@ interface MainProps {
   onBackFromDetail?: () => void;
 }
 
-type View = { kind: "home" } | { kind: "stream" } | { kind: "activity" } | { kind: "recaps" } | { kind: "entity"; entityId: string } | { kind: "profile" } | { kind: "memory"; sourceId: string } | { kind: "settings"; section?: SettingsSection } | { kind: "import" } | { kind: "connect-agent" } | { kind: "space"; spaceName: string } | { kind: "graph" } | { kind: "concept"; conceptId: string } | { kind: "decisions" };
+type View = { kind: "home" } | { kind: "stream" } | { kind: "activity" } | { kind: "recaps" } | { kind: "entity"; entityId: string } | { kind: "profile" } | { kind: "memory"; sourceId: string } | { kind: "settings"; section?: SettingsSection } | { kind: "import" } | { kind: "connect-agent" } | { kind: "space"; spaceName: string } | { kind: "graph" } | { kind: "page"; pageId: string } | { kind: "decisions" };
 
 const SIDEBAR_KEY = "origin-sidebar-collapsed";
 
@@ -167,7 +167,7 @@ export default function Main({ initialMemoryId, initialView, onBackFromDetail }:
       if (e.key === "Escape") {
         if (query) {
           setQuery("");
-        } else if (view.kind === "entity" || view.kind === "memory" || view.kind === "settings" || view.kind === "import" || view.kind === "graph" || view.kind === "concept" || view.kind === "decisions") {
+        } else if (view.kind === "entity" || view.kind === "memory" || view.kind === "settings" || view.kind === "import" || view.kind === "graph" || view.kind === "page" || view.kind === "decisions") {
           navigateBack();
         }
       }
@@ -348,7 +348,7 @@ export default function Main({ initialMemoryId, initialView, onBackFromDetail }:
                         key={c.id}
                         className="rounded-lg px-4 py-3 cursor-pointer transition-colors duration-150 hover:bg-[var(--mem-hover)]"
                         style={{ backgroundColor: "var(--mem-surface)", border: "1px solid var(--mem-border)" }}
-                        onClick={() => { setQuery(""); navigateTo({ kind: "concept", conceptId: c.id }); }}
+                        onClick={() => { setQuery(""); navigateTo({ kind: "page", pageId: c.id }); }}
                       >
                         <div className="flex items-center gap-2.5">
                           <span className="w-2 h-2 rounded-full shrink-0" style={{ backgroundColor: "var(--mem-accent-concept)" }} />
@@ -468,14 +468,14 @@ export default function Main({ initialMemoryId, initialView, onBackFromDetail }:
             <DecisionLog
               onBack={navigateBack}
               onSelectMemory={(sid) => navigateTo({ kind: "memory", sourceId: sid })}
-              onSelectConcept={(id) => navigateTo({ kind: "concept", conceptId: id })}
+              onSelectPage={(id) => navigateTo({ kind: "page", pageId: id })}
             />
           ) : view.kind === "space" ? (
             <SpaceDetail
               spaceName={view.spaceName}
               onBack={navigateBack}
               onSelectMemory={(sid) => navigateTo({ kind: "memory", sourceId: sid })}
-              onSelectConcept={(id) => navigateTo({ kind: "concept", conceptId: id })}
+              onSelectPage={(id) => navigateTo({ kind: "page", pageId: id })}
               onEntityClick={handleEntityClick}
             />
           ) : view.kind === "memory" ? (
@@ -497,12 +497,12 @@ export default function Main({ initialMemoryId, initialView, onBackFromDetail }:
               onEntityClick={handleEntityClick}
               onMemoryClick={(sid) => navigateTo({ kind: "memory", sourceId: sid })}
             />
-          ) : view.kind === "concept" ? (
+          ) : view.kind === "page" ? (
             <PageDetail
-              pageId={view.conceptId}
+              pageId={view.pageId}
               onBack={navigateBack}
               onMemoryClick={(sid) => navigateTo({ kind: "memory", sourceId: sid })}
-              onPageClick={(id) => navigateTo({ kind: "concept", conceptId: id })}
+              onPageClick={(id) => navigateTo({ kind: "page", pageId: id })}
             />
           ) : view.kind === "home" ? (
             <HomePage
@@ -510,7 +510,7 @@ export default function Main({ initialMemoryId, initialView, onBackFromDetail }:
               onNavigateStream={() => navigateTo({ kind: "recaps" })}
               onNavigateLog={() => navigateTo({ kind: "stream" })}
               onNavigateGraph={() => navigateTo({ kind: "graph" })}
-              onSelectConcept={(id) => navigateTo({ kind: "concept", conceptId: id })}
+              onSelectPage={(id) => navigateTo({ kind: "page", pageId: id })}
             />
           ) : view.kind === "activity" ? (
             <ActivityFeed

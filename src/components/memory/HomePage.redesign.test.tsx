@@ -174,7 +174,7 @@ describe("HomePage redesign", () => {
   });
 
   it("retrieval card with archived concept shows archived badge and does not navigate", async () => {
-    const onSelectConcept = vi.fn();
+    const onSelectPage = vi.fn();
     // Event has concept_ids: [] simulating an archived concept (no active match found at read time)
     vi.mocked(tauri.listRecentRetrievals).mockResolvedValue([
       {
@@ -194,7 +194,7 @@ describe("HomePage redesign", () => {
           onNavigateStream={() => {}}
           onNavigateLog={() => {}}
           onNavigateGraph={() => {}}
-          onSelectConcept={onSelectConcept}
+          onSelectPage={onSelectPage}
         />
       </QueryClientProvider>,
     );
@@ -205,7 +205,7 @@ describe("HomePage redesign", () => {
     // Clicking should not navigate because concept_ids is empty
     const item = screen.getByTestId("retrieval-item");
     await userEvent.click(item);
-    expect(onSelectConcept).not.toHaveBeenCalled();
+    expect(onSelectPage).not.toHaveBeenCalled();
   });
 
   it("empty state shows greeting plus WhatHappensNextCard, no data zones", async () => {

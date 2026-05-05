@@ -5,7 +5,7 @@ import type { Concept, ConceptChange } from "../../lib/tauri";
 interface Props {
   changes: ConceptChange[];
   concepts?: Concept[];
-  onSelectConcept?: (conceptId: string) => void;
+  onSelectPage?: (pageId: string) => void;
 }
 
 function explanationFor(
@@ -106,7 +106,7 @@ function substantiveGate(c: ConceptChange, concept: Concept): boolean {
   }
 }
 
-export function RefiningList({ changes, concepts, onSelectConcept }: Props) {
+export function RefiningList({ changes, concepts, onSelectPage }: Props) {
   const conceptById = useMemo(
     () => new Map((concepts ?? []).map((c) => [c.id, c])),
     [concepts],
@@ -165,7 +165,7 @@ export function RefiningList({ changes, concepts, onSelectConcept }: Props) {
             key={change.concept_id}
             change={change}
             concept={concept}
-            onSelectConcept={onSelectConcept}
+            onSelectPage={onSelectPage}
             isLast={index === scored.length - 1}
           />
         ))}
@@ -177,16 +177,16 @@ export function RefiningList({ changes, concepts, onSelectConcept }: Props) {
 function RefiningItem({
   change,
   concept,
-  onSelectConcept,
+  onSelectPage,
   isLast,
 }: {
   change: ConceptChange;
   concept: Concept | undefined;
-  onSelectConcept?: (conceptId: string) => void;
+  onSelectPage?: (pageId: string) => void;
   isLast: boolean;
 }) {
   const [hover, setHover] = useState(false);
-  const clickable = Boolean(onSelectConcept);
+  const clickable = Boolean(onSelectPage);
   const explanation = explanationFor(change, concept);
 
   return (
@@ -202,7 +202,7 @@ function RefiningItem({
       }}
       onMouseEnter={() => setHover(true)}
       onMouseLeave={() => setHover(false)}
-      onClick={() => onSelectConcept?.(change.concept_id)}
+      onClick={() => onSelectPage?.(change.concept_id)}
     >
       <div className="flex items-baseline gap-3">
         <span

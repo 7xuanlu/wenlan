@@ -10,7 +10,7 @@ import {
 interface DecisionLogProps {
   onBack: () => void;
   onSelectMemory: (sourceId: string) => void;
-  onSelectConcept: (conceptId: string) => void;
+  onSelectPage: (pageId: string) => void;
 }
 
 function parseStructured(mem: MemoryItem): {
@@ -361,7 +361,7 @@ function DecisionEntryRow({
 
 // ── Main component ─────────────────────────────────────────────────────
 
-export default function DecisionLog({ onBack, onSelectMemory, onSelectConcept: _onSelectConcept }: DecisionLogProps) {
+export default function DecisionLog({ onBack, onSelectMemory, onSelectPage: _onSelectPage }: DecisionLogProps) {
   const [domainFilter, setDomainFilter] = useState<string | null>(null);
   const [expandedId, setExpandedId] = useState<string | null>(null);
 

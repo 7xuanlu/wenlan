@@ -4,8 +4,8 @@ import type { RetrievalEvent } from "../../lib/tauri";
 
 interface Props {
   events: RetrievalEvent[];
-  /** Navigate to a concept by its stable ID. Replaces the old title-lookup path. */
-  onSelectConceptById?: (conceptId: string) => void;
+  /** Navigate to a page by its stable ID. Replaces the old title-lookup path. */
+  onSelectPageById?: (pageId: string) => void;
   onViewRecaps?: () => void;
 }
 
@@ -67,7 +67,7 @@ const SECTION_SUB_STYLE: React.CSSProperties = {
   marginTop: 2,
 };
 
-export function RetrievalsList({ events, onSelectConceptById, onViewRecaps }: Props) {
+export function RetrievalsList({ events, onSelectPageById, onViewRecaps }: Props) {
   const trusted = events.filter((e) => isTrustedAgent(e.agent_name));
   if (!trusted.length) return null;
 
@@ -79,7 +79,7 @@ export function RetrievalsList({ events, onSelectConceptById, onViewRecaps }: Pr
       </p>
       <ul className="space-y-2">
         {trusted.map((e, i) => (
-          <RetrievalItem key={i} event={e} onSelectConceptById={onSelectConceptById} />
+          <RetrievalItem key={i} event={e} onSelectPageById={onSelectPageById} />
         ))}
       </ul>
       {onViewRecaps && (
@@ -108,10 +108,10 @@ export function RetrievalsList({ events, onSelectConceptById, onViewRecaps }: Pr
 
 function RetrievalItem({
   event,
-  onSelectConceptById,
+  onSelectPageById,
 }: {
   event: RetrievalEvent;
-  onSelectConceptById?: (conceptId: string) => void;
+  onSelectPageById?: (pageId: string) => void;
 }) {
   const [hover, setHover] = useState(false);
   // Prefer concept_ids (stable) for navigation; fall back to positional index
@@ -123,7 +123,7 @@ function RetrievalItem({
 
   // The first navigable concept ID for this event. Legacy events (no concept_ids)
   // produce an empty string, which the click handler guards against.
-  const primaryConceptId = conceptIds[0] ?? "";
+  const primaryPageId = conceptIds[0] ?? "";
 
   // Cards with results are clickable (productive retrieval).
   // Cards with no results are informational only (dry run).
@@ -137,21 +137,21 @@ function RetrievalItem({
         style={{
           backgroundColor: hover ? "var(--mem-hover)" : "transparent",
           borderColor: "var(--mem-border)",
-          cursor: primaryConceptId ? "pointer" : "default",
+          cursor: primaryPageId ? "pointer" : "default",
         }}
         onClick={() => {
-          if (primaryConceptId) onSelectConceptById?.(primaryConceptId);
+          if (primaryPageId) onSelectPageById?.(primaryPageId);
         }}
         onKeyDown={(e) => {
-          if ((e.key === "Enter" || e.key === " ") && primaryConceptId) {
+          if ((e.key === "Enter" || e.key === " ") && primaryPageId) {
             e.preventDefault();
-            onSelectConceptById?.(primaryConceptId);
+            onSelectPageById?.(primaryPageId);
           }
         }}
         onMouseEnter={() => setHover(true)}
         onMouseLeave={() => setHover(false)}
       >
-        <RetrievalItemBody event={event} concepts={concepts} memories={memories} archived={!primaryConceptId && concepts.length > 0} />
+        <RetrievalItemBody event={event} concepts={concepts} memories={memories} archived={!primaryPageId && concepts.length > 0} />
       </li>
     );
   }
