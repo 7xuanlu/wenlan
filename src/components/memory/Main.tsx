@@ -341,7 +341,7 @@ export default function Main({ initialMemoryId, initialView, onBackFromDetail }:
                         color: "var(--mem-text-tertiary)",
                       }}
                     >
-                      Concepts
+                      Pages
                     </p>
                     {conceptResults.map((c) => (
                       <div

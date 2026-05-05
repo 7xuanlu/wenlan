@@ -1064,7 +1064,7 @@ function DoneStep({
             lineHeight: 1.6,
           }}
         >
-          Origin notices patterns, compiles them into concepts, and links what
+          Origin notices patterns, distills them into pages, and links what
           you know across tools.
         </p>
         <button
@@ -1154,7 +1154,7 @@ function DoneStep({
             margin: 0,
           }}
         >
-          Origin notices patterns, compiles them into concepts, and links what
+          Origin notices patterns, distills them into pages, and links what
           you know across tools.
         </p>
       </div>
@@ -1250,7 +1250,7 @@ function DoneStep({
               margin: 0,
             }}
           >
-            Concepts will compile from these as Origin connects the dots.
+            Pages will distill from these as Origin connects the dots.
           </p>
         </div>
       )}
