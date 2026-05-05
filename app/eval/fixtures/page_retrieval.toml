@@ -1,5 +1,5 @@
-# Concept retrieval — tests that compiled concepts surface for knowledge-level queries.
-# These memories should cluster during distillation, producing concepts that
+# Page retrieval — tests that distilled pages surface for knowledge-level queries.
+# These memories should cluster during distillation, producing pages that
 # answer broad "how does X work?" queries better than individual memories.
 
 [[cases]]

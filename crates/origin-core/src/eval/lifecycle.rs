@@ -1932,7 +1932,7 @@ mod tests {
     }
 
     #[test]
-    fn concept_retrieval_phase_exists() {
+    fn page_retrieval_phase_exists() {
         let phase = LifecyclePhase::PageRetrieval;
         assert_eq!(phase.name(), "PageRetrieval");
         assert!(!phase.requires_llm());

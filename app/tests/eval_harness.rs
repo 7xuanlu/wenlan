@@ -895,7 +895,7 @@ async fn test_lifecycle_pipeline_quality() {
 /// accessible from integration tests, so we use `run_lifecycle_fixture` which invokes the full
 /// pipeline internally and exposes the PageRetrieval phase in the report.
 #[tokio::test]
-async fn test_concept_retrieval_eval() {
+async fn test_page_retrieval_eval() {
     use origin_lib::eval::lifecycle::{run_lifecycle_fixture, EvalMockLlm, LifecyclePhase};
     use std::sync::Arc;
 

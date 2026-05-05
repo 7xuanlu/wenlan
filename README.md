@@ -16,7 +16,7 @@
 
 [Origin](https://useorigin.app) runs quietly behind the AI tools you already use. It gives your AI a place to carry decisions, lessons, gotchas, and project context instead of rediscovering them in every new chat.
 
-The daemon does the memory chores in the background: deduplicating, linking related ideas, compiling concepts, and keeping provenance attached.
+The daemon does the memory chores in the background: deduplicating, linking related ideas, distilling pages, and keeping provenance attached.
 
 Use optional desktop app to search, inspect, edit, and delete what Origin learned.
 
@@ -75,7 +75,7 @@ origin install
 origin status
 ```
 
-Origin works without a local LLM or API key for local storage, search, recall, and MCP memory. To unlock richer extraction, background refinement, and concept synthesis, choose a local model or Anthropic key:
+Origin works without a local LLM or API key for local storage, search, recall, and MCP memory. To unlock richer extraction, background refinement, and page synthesis, choose a local model or Anthropic key:
 
 ```bash
 origin model install
@@ -91,7 +91,7 @@ AI work has a continuity problem. Most memory tools ask you to trust a cloud API
 
 **Your AI starts from scratch too often.** Origin carries decisions, preferences, gotchas, and project context across chats, projects, and time.
 
-**Memory gets worse when nobody maintains it.** Origin runs a background refinery that deduplicates captures, links related ideas, compiles concepts, and keeps provenance attached.
+**Memory gets worse when nobody maintains it.** Origin runs a background refinery that deduplicates captures, links related ideas, distills pages, and keeps provenance attached.
 
 **You need to see and correct what it learned.** The desktop app lets you search, inspect, edit, and delete memories instead of trusting a black box.
 
@@ -117,7 +117,7 @@ Use your AI tools normally. Origin runs in the background, keeps the useful part
 1. **Install Origin.** The desktop app lives in the macOS menu bar and keeps the local daemon running.
 2. **Connect your AI tools.** Claude Code, Cursor, Codex, Claude Desktop, Windsurf, Gemini CLI, and other MCP clients connect through `origin-mcp`. Claude.ai and ChatGPT web use Remote Access.
 3. **Capture useful context.** Agents save decisions, preferences, project facts, gotchas, and lessons while you work.
-4. **Refine in the background.** Origin deduplicates captures, links related ideas, compiles concepts, and preserves where each memory came from.
+4. **Refine in the background.** Origin deduplicates captures, links related ideas, distills pages, and preserves where each memory came from.
 5. **Recall when needed.** Retrieval combines vector search, full-text search, and knowledge graph signals without replaying full chat history.
 6. **Inspect and export.** Use the desktop app to search, edit, delete, verify, and export what Origin learned.
 

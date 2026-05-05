@@ -187,7 +187,7 @@ The repo is a Cargo workspace with 4 crates:
 | Crate | Role | Key dependencies |
 |---|---|---|
 | `crates/origin-types` | Shared API boundary types (request/response, memory, entities). License: Apache-2.0 so `origin-mcp` (MIT) and other downstream consumers can use it without AGPL contamination. | serde only — no heavy deps |
-| `crates/origin-core` | All business logic: DB, embeddings, LLM engine, search, classification, knowledge graph, refinery, concepts, export, eval. **Must have NO tauri or axum dependencies.** | libSQL, FastEmbed, llama-cpp-2, hf-hub |
+| `crates/origin-core` | All business logic: DB, embeddings, LLM engine, search, classification, knowledge graph, refinery, pages, export, eval. **Must have NO tauri or axum dependencies.** | libSQL, FastEmbed, llama-cpp-2, hf-hub |
 | `crates/origin-server` | Headless HTTP daemon on `127.0.0.1:7878`. Depends on `origin-core`. Provides `install/uninstall/status` subcommands for launchd management. | axum, tower, clap |
 | `app/` (crate name `origin`) | Thin Tauri desktop client. Depends on `origin-types` + `reqwest` (HTTP) + a minimal bit of `origin-core` for sensor utilities. All data commands proxy to the daemon. | tauri, reqwest |
 
@@ -304,8 +304,8 @@ All business logic lives here. No tauri, no axum. Framework-agnostic.
 | `llm_provider.rs` | `LlmProvider` trait + `ApiProvider` (Anthropic API) + `OnDeviceProvider` shim |
 | `llm_classifier.rs` | Higher-level classification orchestration |
 | `refinery.rs` | Background refinement queue — dedup, auto-linking, consolidation |
-| `post_ingest.rs` | Post-ingest enrichment (dedup check, entity linking, title enrich, recap, concept growth) |
-| `concepts.rs` | Type definitions for the Concept struct. Actual clustering + distillation live in `db.rs` + `refinery.rs` |
+| `post_ingest.rs` | Post-ingest enrichment (dedup check, entity linking, title enrich, recap, page growth) |
+| `pages.rs` | Type definitions for the `Page` struct (synthesized wiki entries distilled from memory clusters). Actual clustering + distillation live in `db.rs` + `refinery.rs`. SQL tables remain `concepts`/`concept_sources` historically. |
 | `spaces.rs` | Spaces / tag store |
 | `narrative.rs` | Profile narrative assembly (editorial prose) |
 | `briefing.rs` | Daily briefing assembly |
@@ -337,7 +337,7 @@ HTTP daemon — owns the Axum router + all routes. All handlers operate on `Arc<
 | `state.rs` | `ServerState` struct with `db: Option<Arc<MemoryDB>>`, `llm`, `prompts`, `tuning`, `quality_gate`, `space_store`, `access_tracker`, `llm_processing_ids`, `watch_paths`. `SharedState = Arc<RwLock<ServerState>>` |
 | `router.rs` | `build_router(state) -> axum::Router` — all route registrations |
 | `routes.rs` | General endpoints: health, search, context, chat-context, status, profile/agents |
-| `memory_routes.rs` | Memory CRUD, knowledge graph, classification, entities, concepts |
+| `memory_routes.rs` | Memory CRUD, knowledge graph, classification, entities, pages |
 | `ingest_routes.rs` | `/api/ingest/*` — text, webpage, memory |
 | `ingest_batcher.rs` | Request-level coalescer for concurrent `/api/memory/store` — folds QualityGate in-line; async classify/extract; passes enrichment + hint through in the response |
 | `knowledge_routes.rs` | Entity/relation/observation read paths + knowledge-graph queries |
