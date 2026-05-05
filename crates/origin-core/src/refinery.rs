@@ -410,15 +410,7 @@ pub async fn run_periodic_steep_with_api(
         }
     {
         let phase = run_phase("reembed", || async {
-            let candidates = db_ref.get_reembed_candidates(5).await?;
-            let mut count = 0;
-            for (chunk_id, content) in &candidates {
-                if let Err(e) = db_ref.reembed_memory(chunk_id, content).await {
-                    log::warn!("[refinery] reembed failed for {}: {}", chunk_id, e);
-                } else {
-                    count += 1;
-                }
-            }
+            let count = crate::migrations::reembed::run(db_ref, 5).await?;
             let (nudge, headline) = classify_backfill(count);
             Ok(PhaseOutput {
                 items_processed: count,
