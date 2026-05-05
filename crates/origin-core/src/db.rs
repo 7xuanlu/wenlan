@@ -4180,6 +4180,36 @@ impl MemoryDB {
                     inserted
                 );
             }
+
+            // Migration 45: fold memory_type='goal' rows into 'identity'.
+            // Phase 0a of the taxonomy refactor removed the Goal variant; incoming
+            // "goal" strings now parse to Identity at FromStr time. Existing DB rows
+            // written before Phase 0a still carry memory_type='goal' and must be
+            // migrated so queries, filters, and the UI see a consistent taxonomy.
+            if version < 45 {
+                let conn = self.conn.lock().await;
+
+                conn.execute("BEGIN", ())
+                    .await
+                    .map_err(|e| OriginError::VectorDb(format!("m45 begin: {e}")))?;
+
+                conn.execute(
+                    "UPDATE memories SET memory_type = 'identity' WHERE memory_type = 'goal'",
+                    (),
+                )
+                .await
+                .map_err(|e| OriginError::VectorDb(format!("m45 update: {e}")))?;
+
+                conn.execute("COMMIT", ())
+                    .await
+                    .map_err(|e| OriginError::VectorDb(format!("m45 commit: {e}")))?;
+
+                conn.execute("PRAGMA user_version = 45", ())
+                    .await
+                    .map_err(|e| OriginError::VectorDb(format!("m45 bump: {e}")))?;
+
+                log::info!("[migration] Migration 45 applied: folded goal-type rows into identity (taxonomy refactor)");
+            }
         }
 
         Ok(())
@@ -9573,13 +9603,13 @@ impl MemoryDB {
             .map(|r| r.get::<u64>(0).unwrap_or(0))
             .unwrap_or(0);
 
-        // ---- Key insights (identity + preference + decision + goal + fact) ----
+        // ---- Key insights (all classified memory types) ----
 
         let mut rows = conn
             .query(
                 "SELECT COUNT(DISTINCT source_id) FROM memories \
                  WHERE source = 'memory' AND confirmed = 1 \
-                   AND memory_type IN ('identity', 'preference', 'decision', 'goal', 'fact')",
+                   AND memory_type IN ('identity', 'preference', 'decision', 'goal', 'lesson', 'gotcha', 'fact')",
                 libsql::params![],
             )
             .await
@@ -11255,7 +11285,7 @@ impl MemoryDB {
             .query(
                 "SELECT COUNT(DISTINCT source_id) FROM memories \
                  WHERE source = 'memory' AND confirmed = 1 AND chunk_index = 0 \
-                   AND memory_type IN ('identity', 'preference', 'decision', 'goal')",
+                   AND memory_type IN ('identity', 'preference', 'decision', 'goal', 'lesson', 'gotcha')",
                 (),
             )
             .await
@@ -24558,5 +24588,89 @@ pub(crate) mod tests {
             "concept_sources should be empty after concept delete (FK cascade): {:?}",
             sources_after
         );
+    }
+
+    #[tokio::test]
+    async fn test_migration_45_folds_goal_to_identity() {
+        let (db, _dir) = test_db().await;
+
+        // 1. Insert a memory row with memory_type='goal' directly (bypassing the
+        //    MemoryType FromStr which already folds "goal" to Identity post-Phase-0a).
+        //    Roll back user_version to 44 so migration 45 fires on re-run.
+        let source_id = "mem_m45_test";
+        {
+            let conn = db.conn.lock().await;
+            let now = chrono::Utc::now().timestamp();
+            conn.execute(
+                "INSERT INTO memories \
+                 (id, source_id, source, chunk_index, title, content, memory_type, \
+                  chunk_type, confirmed, created_at, last_modified) \
+                 VALUES (?1, ?2, 'memory', 0, 'Ship v1.0', \
+                  'I want to ship v1.0 this quarter', 'goal', \
+                  'text', 1, ?3, ?3)",
+                libsql::params![format!("{source_id}_c0"), source_id, now],
+            )
+            .await
+            .unwrap();
+
+            // Roll back to version 44 so migration 45 re-fires.
+            conn.execute("PRAGMA user_version = 44", ()).await.unwrap();
+        }
+
+        // 2. Re-run migrations — should trigger migration 45.
+        db.run_migrations(&crate::events::NoopEmitter)
+            .await
+            .unwrap();
+
+        // 3. Verify memory_type was folded to 'identity'.
+        {
+            let conn = db.conn.lock().await;
+            let mut rows = conn
+                .query(
+                    "SELECT memory_type FROM memories WHERE source_id = ?1",
+                    libsql::params![source_id],
+                )
+                .await
+                .unwrap();
+            let row = rows.next().await.unwrap().unwrap();
+            let memory_type: String = row.get(0).unwrap();
+            assert_eq!(
+                memory_type, "identity",
+                "migration 45 must fold memory_type='goal' into 'identity'"
+            );
+        }
+
+        // 4. Verify user_version is now 45.
+        {
+            let conn = db.conn.lock().await;
+            let mut rows = conn.query("PRAGMA user_version", ()).await.unwrap();
+            let row = rows.next().await.unwrap().unwrap();
+            let version: i64 = row.get(0).unwrap();
+            assert!(
+                version >= 45,
+                "user_version should be at least 45 after migration, got {version}"
+            );
+        }
+
+        // 5. Idempotency: re-run with version already at 45 must not error or change data.
+        db.run_migrations(&crate::events::NoopEmitter)
+            .await
+            .unwrap();
+        {
+            let conn = db.conn.lock().await;
+            let mut rows = conn
+                .query(
+                    "SELECT memory_type FROM memories WHERE source_id = ?1",
+                    libsql::params![source_id],
+                )
+                .await
+                .unwrap();
+            let row = rows.next().await.unwrap().unwrap();
+            let memory_type: String = row.get(0).unwrap();
+            assert_eq!(
+                memory_type, "identity",
+                "idempotent re-run must not alter data"
+            );
+        }
     }
 }

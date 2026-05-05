@@ -180,7 +180,7 @@ pub async fn generate_blind(
         let blind_prompt = format!(
             "You are generating test data for a personal memory system. The system stores memories with these fields:\n\
             - content: the memory text\n\
-            - memory_type: one of \"identity\", \"preference\", \"decision\", \"fact\", \"goal\"\n\
+            - memory_type: one of \"identity\", \"preference\", \"decision\", \"lesson\", \"gotcha\", \"fact\"\n\
             - domain: a project or topic name (e.g., \"work\", \"cooking\", \"fitness\", \"projectX\")\n\
             - confirmed: whether the user has verified this memory (true/false)\n\n\
             Create a realistic search scenario about {topic_hint} (scenario #{num}):\n\

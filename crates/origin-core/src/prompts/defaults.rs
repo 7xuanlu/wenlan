@@ -5,7 +5,7 @@
 pub(crate) const CLASSIFY_MEMORY: &str = "\
 Classify this memory. Respond with ONLY valid JSON:\n\
 {\"memory_type\": \"...\", \"domain\": \"...\", \"tags\": [\"...\", \"...\"]}\n\n\
-memory_type must be one of: identity, preference, decision, fact, goal\n\
+memory_type must be one of: identity, preference, decision, lesson, gotcha, fact\n\
 - decision: a choice was made between alternatives, or a direction was chosen with rationale (e.g. \"switched from X to Y because...\", \"chose to use X over Y\")\n\
 - fact: objective knowledge without a choice (e.g. \"X supports feature Y\", \"the API returns JSON\")\n\
 domain is a short topic label (1-3 words, lowercase)\n\
@@ -14,7 +14,7 @@ tags are 2-4 semantic keywords (lowercase)";
 pub(crate) const CLASSIFY_MEMORY_QUALITY: &str = "\
 Classify this memory. Respond with ONLY valid JSON:\n\
 {\"memory_type\": \"...\", \"domain\": \"...\", \"tags\": [\"...\", \"...\"], \"quality\": \"...\"}\n\n\
-memory_type must be one of: identity, preference, decision, fact, goal\n\
+memory_type must be one of: identity, preference, decision, lesson, gotcha, fact\n\
 - decision: a choice was made between alternatives, or a direction was chosen with rationale (e.g. \"switched from X to Y because...\", \"chose to use X over Y\")\n\
 - fact: objective knowledge without a choice (e.g. \"X supports feature Y\", \"the API returns JSON\")\n\
 domain is a short topic label (1-3 words, lowercase)\n\
@@ -24,7 +24,7 @@ quality is low (vague/trivial), medium (useful), or high (specific+actionable)";
 pub(crate) const CLASSIFY_MEMORY_QUALITY_STRICT: &str = "\
 Classify this memory. Respond with ONLY valid JSON:\n\
 {\"memory_type\": \"...\", \"domain\": \"...\", \"tags\": [\"...\", \"...\"], \"quality\": \"...\"}\n\n\
-memory_type must be one of: identity, preference, decision, fact, goal\n\
+memory_type must be one of: identity, preference, decision, lesson, gotcha, fact\n\
 - decision: a choice was made between alternatives, or a direction was chosen with rationale (e.g. \"switched from X to Y because...\", \"chose to use X over Y\")\n\
 - fact: objective knowledge without a choice (e.g. \"X supports feature Y\", \"the API returns JSON\")\n\
 domain is a short topic label (1-3 words, lowercase)\n\
