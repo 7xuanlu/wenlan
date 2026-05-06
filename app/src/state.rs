@@ -8,7 +8,7 @@
 
 use crate::api::OriginClient;
 use crate::remote_access::RemoteAccessState;
-use origin_core::working_memory::WorkingMemory;
+use origin_types::working_memory::WorkingMemory;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::PathBuf;
