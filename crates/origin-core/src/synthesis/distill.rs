@@ -759,8 +759,14 @@ pub async fn deep_distill_pages(
     }
 
     // 2. Orphan assignment — assign unlinked memories to concepts or propose new ones
-    match crate::refinery::assign_orphan_memories(db, llm_ref, prompts, tuning, knowledge_path)
-        .await
+    match crate::synthesis::emergence::assign_orphan_memories(
+        db,
+        llm_ref,
+        prompts,
+        tuning,
+        knowledge_path,
+    )
+    .await
     {
         Ok(n) => {
             total += n;
@@ -787,7 +793,9 @@ pub async fn deep_distill_pages(
 
     // 4. Global review — merge/split/create analysis
     if all_active.len() >= 5 {
-        match crate::refinery::global_page_review(db, llm_ref, prompts, &all_active).await {
+        match crate::synthesis::emergence::global_page_review(db, llm_ref, prompts, &all_active)
+            .await
+        {
             Ok(n) => {
                 total += n;
                 if n > 0 {
