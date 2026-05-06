@@ -8,6 +8,12 @@ pub(crate) use helpers::*;
 // tests outside this crate.
 pub use crate::synthesis::distill::{deep_distill_pages, deep_distill_single, distill_pages};
 
+// Re-export KG phase functions from `kg::*` to preserve the public API path
+// `origin_core::refinery::{extract_single_memory_entities, reweave_entity_links}`.
+// External callers: post_ingest.rs, eval/shared.rs, origin-server::memory_routes.rs.
+pub use crate::kg::entity_extraction::extract_single_memory_entities;
+pub use crate::kg::reweave::reweave_entity_links;
+
 // Internal re-imports for refinery code that still calls into the moved
 // distillation helpers (distill_one_cluster + refine_clusters_with_llm +
 // recompile_single_page from other refinery phases).
@@ -750,88 +756,6 @@ pub async fn run_periodic_steep_with_api(
     })
 }
 
-/// Extract entities from a single memory via LLM. Returns the primary entity_id if one was created/found.
-pub async fn extract_single_memory_entities(
-    db: &MemoryDB,
-    llm: &Arc<dyn LlmProvider>,
-    prompts: &PromptRegistry,
-    source_id: &str,
-    content: &str,
-) -> Result<Option<String>, OriginError> {
-    let truncated: String = content.chars().take(500).collect();
-    let numbered = format!("1. {}", truncated);
-
-    let response = llm
-        .generate(LlmRequest {
-            system_prompt: Some(prompts.extract_knowledge_graph.clone()),
-            user_prompt: numbered,
-            max_tokens: 512,
-            temperature: 0.3,
-            label: None,
-            timeout_secs: None,
-        })
-        .await
-        .map_err(|e| OriginError::Llm(format!("entity extraction: {}", e)))?;
-
-    let batch = [(0usize, content.to_string())];
-    let kg_results = crate::extract::parse_kg_response(&response, &batch);
-
-    let mut entity_cache: std::collections::HashMap<String, String> =
-        std::collections::HashMap::new();
-    let mut first_entity_id: Option<String> = None;
-
-    for kg in &kg_results {
-        for entity in &kg.entities {
-            match crate::importer::resolve_or_create_entity(
-                db,
-                &mut entity_cache,
-                entity,
-                "post_ingest",
-            )
-            .await
-            {
-                Ok((id, _created)) => {
-                    if first_entity_id.is_none() {
-                        first_entity_id = Some(id);
-                    }
-                }
-                Err(e) => log::warn!("[post_ingest] entity create failed: {e}"),
-            }
-        }
-        for obs in &kg.observations {
-            if let Some(entity_id) = entity_cache.get(&obs.entity.to_lowercase()) {
-                let _ = db
-                    .add_observation(entity_id, &obs.content, Some("post_ingest"), None)
-                    .await;
-            }
-        }
-        for rel in &kg.relations {
-            let from_id = entity_cache.get(&rel.from.to_lowercase()).cloned();
-            let to_id = entity_cache.get(&rel.to.to_lowercase()).cloned();
-            if let (Some(from), Some(to)) = (from_id, to_id) {
-                let _ = db
-                    .create_relation(
-                        &from,
-                        &to,
-                        &rel.relation_type,
-                        Some("post_ingest"),
-                        rel.confidence,
-                        rel.explanation.as_deref(),
-                        Some(source_id),
-                    )
-                    .await;
-            }
-        }
-    }
-
-    // Link memory to first entity
-    if let Some(ref eid) = first_entity_id {
-        let _ = db.update_memory_entity_id(source_id, eid).await;
-    }
-
-    Ok(first_entity_id)
-}
-
 /// Extract entities from unlinked memories via LLM and create them in the knowledge graph.
 /// Processes `limit` memories per steep to avoid GPU overload.
 /// Acts as a backfill for any memories that failed store-time extraction.
@@ -876,32 +800,6 @@ pub(crate) async fn extract_entities_from_memories(
         );
     }
     Ok(total_created)
-}
-
-/// Reweave entity links: find memories with no entity_id and try to match them
-/// against existing entities via vector similarity.
-pub async fn reweave_entity_links(
-    db: &MemoryDB,
-    limit: usize,
-    entity_link_distance: f64,
-) -> Result<usize, OriginError> {
-    let unlinked = db.get_unlinked_memories(limit).await?;
-    let mut linked = 0usize;
-    for (source_id, content) in &unlinked {
-        let entities = db.search_entities_by_vector(content, 3).await?;
-        for entity in &entities {
-            if entity.distance < entity_link_distance as f32 {
-                db.update_memory_entity_id(source_id, &entity.entity.id)
-                    .await?;
-                linked += 1;
-                break;
-            }
-        }
-    }
-    if linked > 0 {
-        log::info!("[refinery] reweave: linked {} memories to entities", linked);
-    }
-    Ok(linked)
 }
 
 /// Re-distill concepts whose source memories have changed.
