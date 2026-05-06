@@ -462,6 +462,16 @@ mod tests {
 
     #[test]
     #[serial_test::serial]
+    fn stable_launch_agent_target_allows_renamed_origin_app_binary() {
+        // After Phase 3 PR1 rename (origin -> origin-app), new installs ship
+        // with binary path `.../MacOS/origin-app`. The check must accept both.
+        assert!(is_stable_launch_agent_target(std::path::Path::new(
+            "/Applications/Origin.app/Contents/MacOS/origin-app"
+        )));
+    }
+
+    #[test]
+    #[serial_test::serial]
     fn install_app_plist_rolls_back_file_when_launchctl_load_fails() {
         // H5: when `launchctl load` reports non-zero status, the plist file
         // must be removed so stale-plist detection on next startup does not

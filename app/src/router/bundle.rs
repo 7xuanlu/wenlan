@@ -7,6 +7,11 @@ use chrono::{DateTime, Utc};
 /// Source classification for a context bundle. Replaces the previous
 /// stringly-typed `trigger_type: String` field for compiler-checked match
 /// arms across the router pipeline.
+///
+/// `Context` has no producer in the current code path — it is the historical
+/// fallback string emitted by `extract_ingest_fields` for non-Thought bundles
+/// (currently only `Hotkey`). Kept as a variant to preserve the legacy HTTP
+/// `source = "context"` payload value for downstream consumers.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TriggerSource {
     Hotkey,
