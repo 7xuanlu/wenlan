@@ -16,7 +16,7 @@
 
 use anyhow::{Context, Result};
 use origin_types::{
-    requests::{ListMemoriesRequest, SearchRequest, StoreMemoryRequest},
+    requests::{ListMemoriesRequest, SearchRequest, StoreMemoryRequest, UpdateAgentRequest},
     responses::{
         AgentResponse, HealthResponse, KnowledgeContext, ListMemoriesResponse, SearchResponse,
         StoreMemoryResponse,
@@ -217,5 +217,23 @@ impl OriginClient {
         resp.json()
             .await
             .context("parsing /api/agents/{name} response")
+    }
+
+    /// PUT /api/agents/{name} — update an agent's metadata.
+    pub async fn update_agent(&self, name: &str, req: UpdateAgentRequest) -> Result<AgentResponse> {
+        let url = format!("{}/api/agents/{}", self.base_url, name);
+        let resp = self
+            .http
+            .put(&url)
+            .json(&req)
+            .send()
+            .await
+            .with_context(|| format!("PUT {} failed", url))?;
+        let resp = resp
+            .error_for_status()
+            .with_context(|| format!("daemon returned error for {}", url))?;
+        resp.json()
+            .await
+            .context("parsing /api/agents/{name} update response")
     }
 }

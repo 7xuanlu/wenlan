@@ -62,6 +62,11 @@ enum Commands {
         #[arg(short = 't', long = "type")]
         memory_type: Option<String>,
     },
+    /// Manage registered agents (list / show / edit).
+    Agents {
+        #[command(subcommand)]
+        cmd: commands::agents::AgentsCmd,
+    },
 }
 
 #[tokio::main]
@@ -86,6 +91,7 @@ async fn main() -> anyhow::Result<()> {
         Commands::List { limit, memory_type } => {
             commands::list::run(&client, format, cli.quiet, limit, memory_type).await?
         }
+        Commands::Agents { cmd } => commands::agents::run(&client, format, cli.quiet, cmd).await?,
     }
     Ok(())
 }
