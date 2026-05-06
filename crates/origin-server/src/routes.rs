@@ -651,20 +651,6 @@ pub struct SteepResponse {
     pub phases: Vec<origin_core::refinery::PhaseResult>,
 }
 
-/// GET /api/eval/distillation
-pub async fn handle_distillation_eval(
-    State(state): State<Arc<RwLock<ServerState>>>,
-) -> Result<Json<origin_core::eval::distillation_quality::DistillationQualityReport>, ServerError> {
-    let s = state.read().await;
-    let db =
-        s.db.as_ref()
-            .ok_or(ServerError::Internal("DB not initialized".into()))?;
-    let report = origin_core::eval::distillation_quality::evaluate_distillation_quality(db)
-        .await
-        .map_err(|e| ServerError::Internal(e.to_string()))?;
-    Ok(Json(report))
-}
-
 /// POST /api/distill
 pub async fn handle_distill(
     State(state): State<Arc<RwLock<ServerState>>>,
