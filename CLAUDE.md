@@ -232,11 +232,10 @@ This keeps `origin-core` framework-agnostic and testable with `NoopEmitter` in u
 
 ### Multi-Window Architecture
 
-Four Tauri windows from a single webview, routed by URL hash in `src/main.tsx`:
+Three Tauri windows from a single webview, routed by URL hash in `src/main.tsx`:
 - **main** — Spotlight search / Memory view / Settings / Chunk viewer
 - **toast** — Transparent overlay for capture notifications (non-activating panel)
 - **quick-capture** — Popup for quick thought capture
-- **icon** — Small icon trigger overlay near the cursor/selection
 
 ### Unified Trigger Architecture
 

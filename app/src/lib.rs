@@ -6,7 +6,6 @@ extern crate objc;
 // ── App-specific modules (Tauri, sensors, UI) ──
 pub mod api;
 pub mod events;
-mod icon_types;
 mod indexer;
 mod lifecycle;
 pub mod mcp_config;
@@ -339,57 +338,6 @@ pub fn run() {
                         }
                     }
                 }
-            }
-
-            // Create transparent icon trigger window
-            {
-                use tauri::{WebviewUrl, WebviewWindowBuilder};
-
-                let icon_win = WebviewWindowBuilder::new(
-                    app,
-                    "icon",
-                    WebviewUrl::App("index.html#icon".into()),
-                )
-                .title("")
-                .inner_size(60.0, 44.0)
-                .decorations(false)
-                .transparent(true)
-                .always_on_top(true)
-                .skip_taskbar(true)
-                .resizable(false)
-                .focused(false)
-                .visible(false)
-                .build()?;
-
-                #[cfg(target_os = "macos")]
-                #[allow(deprecated)]
-                {
-                    use cocoa::appkit::NSColor;
-                    use cocoa::base::{id, nil, NO};
-                    use raw_window_handle::HasWindowHandle;
-
-                    if let Ok(raw_handle) = icon_win.window_handle() {
-                        if let raw_window_handle::RawWindowHandle::AppKit(appkit) =
-                            raw_handle.as_raw()
-                        {
-                            let ns_view = appkit.ns_view.as_ptr() as id;
-                            unsafe {
-                                let ns_win: id = objc::msg_send![ns_view, window];
-                                let clear = NSColor::clearColor(nil);
-                                let _: () = msg_send![ns_win, setBackgroundColor: clear];
-                                let _: () = msg_send![ns_win, setOpaque: NO];
-                                let _: () = msg_send![ns_win, setHasShadow: NO];
-                                let style_mask: u64 = msg_send![ns_win, styleMask];
-                                let _: () =
-                                    msg_send![ns_win, setStyleMask: style_mask | (1u64 << 7)];
-                                let _: () = msg_send![ns_win, setLevel: 25_i64];
-                            }
-                        }
-                    }
-                }
-
-                #[cfg(not(target_os = "macos"))]
-                let _ = icon_win;
             }
 
             // Register global shortcuts
@@ -951,9 +899,6 @@ pub fn run() {
             search::set_screen_capture_enabled,
             search::check_screen_permission,
             search::request_screen_permission,
-            search::check_accessibility_permission,
-            search::request_accessibility_permission,
-            search::trigger_icon_click,
             // Decision log commands
             search::list_decisions_cmd,
             search::list_decision_domains_cmd,
