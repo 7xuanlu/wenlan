@@ -2,7 +2,7 @@
 //! `origin store [text] [--file <path>] [--type <type>]` — POST /api/memory/store.
 
 use anyhow::{Context, Result};
-use std::io::Read;
+use std::io::{IsTerminal, Read};
 use std::path::PathBuf;
 
 use crate::client::OriginClient;
@@ -22,6 +22,11 @@ pub async fn run(
             std::fs::read_to_string(&p).with_context(|| format!("reading {}", p.display()))?
         }
         (None, None) => {
+            // Reject interactive TTY stdin — would block indefinitely waiting for EOF.
+            // User must provide text, --file, or pipe content.
+            if std::io::stdin().is_terminal() {
+                anyhow::bail!("No input — provide text, --file <path>, or pipe content via stdin");
+            }
             let mut s = String::new();
             std::io::stdin()
                 .read_to_string(&mut s)
