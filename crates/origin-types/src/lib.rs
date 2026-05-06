@@ -6,6 +6,7 @@
 //! limited to serde and serde_json -- no heavy runtime deps.
 
 pub mod entities;
+pub mod events;
 pub mod import;
 pub mod memory;
 pub mod onboarding;
