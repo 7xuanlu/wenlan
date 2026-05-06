@@ -8,6 +8,7 @@
 pub mod entities;
 pub mod import;
 pub mod memory;
+pub mod onboarding;
 pub mod requests;
 pub mod responses;
 pub mod sources;
