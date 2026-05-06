@@ -25,7 +25,7 @@ pub async fn run(
             // Reject interactive TTY stdin — would block indefinitely waiting for EOF.
             // User must provide text, --file, or pipe content.
             if std::io::stdin().is_terminal() {
-                anyhow::bail!("No input — provide text, --file <path>, or pipe content via stdin");
+                anyhow::bail!("No input. Provide text, --file <path>, or pipe content via stdin.");
             }
             let mut s = String::new();
             std::io::stdin()
@@ -39,7 +39,7 @@ pub async fn run(
     };
     let content = content.trim().to_string();
     if content.is_empty() {
-        anyhow::bail!("Empty content — provide text, --file, or pipe content via stdin");
+        anyhow::bail!("Empty content. Provide text, --file, or pipe content via stdin.");
     }
     let resp = client.store(content, memory_type).await?;
     if quiet {

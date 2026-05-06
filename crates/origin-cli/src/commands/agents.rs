@@ -142,7 +142,7 @@ async fn edit(
 ) -> Result<()> {
     if trust.is_none() && enabled.is_none() && display_name.is_none() && description.is_none() {
         anyhow::bail!(
-            "No fields to update — provide at least --trust, --enabled, --display-name, or --description"
+            "No fields to update. Provide at least --trust, --enabled, --display-name, or --description."
         );
     }
     let req = UpdateAgentRequest {

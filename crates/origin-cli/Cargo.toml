@@ -1,10 +1,11 @@
 [package]
 name = "origin"
-version = "0.3.0"
+version = "0.3.0" # x-release-please-version
 edition = "2021"
 license = "Apache-2.0"
-description = "Origin CLI — talk to the local Origin daemon from your terminal."
+description = "Origin CLI. Talk to the local Origin daemon from your terminal."
 default-run = "origin"
+publish = false
 
 [[bin]]
 name = "origin"

@@ -10,7 +10,7 @@ use output::OutputFormat;
 #[command(
     name = "origin",
     version,
-    about = "Origin CLI — talk to the local Origin daemon"
+    about = "Origin CLI. Talk to the local Origin daemon."
 )]
 struct Cli {
     #[command(subcommand)]

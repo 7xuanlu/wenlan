@@ -1,6 +1,6 @@
 # origin-cli
 
-Origin CLI — talk to the local Origin daemon from your terminal.
+Origin CLI. Talk to the local Origin daemon from your terminal.
 
 License: Apache-2.0.
 
@@ -87,10 +87,10 @@ origin agents edit claude-code --trust trusted --enabled true
 
 ## Output formats
 
-- `--format auto` (default) — table on TTY, JSON when piped.
-- `--format json` — pretty-printed JSON.
-- `--format table` — human-readable table.
-- `--quiet` / `-q` — suppress success output (errors still go to stderr).
+- `--format auto` (default): table on TTY, JSON when piped.
+- `--format json`: pretty-printed JSON.
+- `--format table`: human-readable table.
+- `--quiet` / `-q`: suppress success output (errors still go to stderr).
 
 ## License
 
