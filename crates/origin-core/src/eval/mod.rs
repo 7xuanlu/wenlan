@@ -11,7 +11,6 @@ pub mod context_path;
 pub mod distillation_quality;
 pub mod fixtures;
 pub mod gen;
-pub mod lifebench;
 pub mod lifecycle;
 pub mod locomo;
 pub mod locomo_plus;
