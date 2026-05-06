@@ -464,7 +464,7 @@ export default function SettingsPage({
                   Screen Capture
                 </div>
                 <p style={{ fontFamily: "var(--mem-font-body)", fontSize: "12px", color: "var(--mem-text-secondary)", marginTop: "2px", lineHeight: "1.5" }}>
-                  Read window text for context cards and snip captures.
+                  Read window text for context cards.
                 </p>
               </div>
               <div className="mt-0.5">
