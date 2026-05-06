@@ -410,6 +410,24 @@ pub struct ExportPageRequest {
     pub vault_path: String,
 }
 
+// ===== LLM test =====
+
+/// `POST /api/llm/test` — probe an OpenAI-compatible LLM endpoint with a 1-shot prompt.
+/// Used by the app settings UI to validate a custom endpoint before saving.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TestLlmRequest {
+    pub endpoint: String,
+    pub model: String,
+    /// Optional override prompt. Defaults to "Say 'hello' and nothing else." server-side.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prompt: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TestLlmResponse {
+    pub response: String,
+}
+
 // ===== Default value functions =====
 
 fn default_limit() -> usize {

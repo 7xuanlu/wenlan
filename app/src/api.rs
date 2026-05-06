@@ -292,4 +292,15 @@ impl OriginClient {
         let path = format!("/api/pages/{}/sources", page_id);
         self.get_json(&path).await
     }
+
+    pub async fn test_llm(&self, endpoint: String, model: String) -> Result<String, String> {
+        let req = origin_types::requests::TestLlmRequest {
+            endpoint,
+            model,
+            prompt: None,
+        };
+        let resp: origin_types::requests::TestLlmResponse =
+            self.post_json("/api/llm/test", &req).await?;
+        Ok(resp.response)
+    }
 }
