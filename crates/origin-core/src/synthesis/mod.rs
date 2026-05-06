@@ -6,4 +6,5 @@
 //! periodically rather than on each ingest.
 
 pub mod decision_logs;
+pub mod distill;
 pub mod recaps;
