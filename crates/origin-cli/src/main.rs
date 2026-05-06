@@ -35,8 +35,10 @@ enum Commands {
 async fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
     let client = client::OriginClient::from_env();
+    // Resolve Auto once based on stdout TTY state. Subcommands receive Json or Table only.
+    let format = cli.format.resolve();
     match cli.command {
-        Commands::Status => commands::status::run(&client, cli.format, cli.quiet).await?,
+        Commands::Status => commands::status::run(&client, format, cli.quiet).await?,
     }
     Ok(())
 }

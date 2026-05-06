@@ -6,9 +6,11 @@ use anyhow::Result;
 use crate::client::OriginClient;
 use crate::output::{print_json, OutputFormat};
 
+/// `format` is the resolved output format (Auto already collapsed in main).
+/// `quiet` suppresses success output; errors still propagate via `?` to stderr.
+/// We still hit the daemon under `quiet` to surface connection failures via exit code.
 pub async fn run(client: &OriginClient, format: OutputFormat, quiet: bool) -> Result<()> {
     let health = client.health().await?;
-    let format = format.resolve();
     if quiet {
         return Ok(());
     }
@@ -16,7 +18,7 @@ pub async fn run(client: &OriginClient, format: OutputFormat, quiet: bool) -> Re
         OutputFormat::Json => {
             print_json(&health)?;
         }
-        OutputFormat::Table | OutputFormat::Auto => {
+        OutputFormat::Table => {
             println!("Origin daemon");
             println!("  Status:        {}", health.status);
             println!(
@@ -30,6 +32,7 @@ pub async fn run(client: &OriginClient, format: OutputFormat, quiet: bool) -> Re
             println!("  Version:       {}", health.version);
             println!("  Host:          {}", client.base_url());
         }
+        OutputFormat::Auto => unreachable!("Auto resolved by main before dispatch"),
     }
     Ok(())
 }
