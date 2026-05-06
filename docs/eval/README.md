@@ -22,5 +22,5 @@ python3 scripts/update-readme-eval.py
 
 ## Notes
 
-- LongMemEval, LoCoMo-Plus, and LifeBench use `Recall@5`, `MRR`, and `NDCG@10` as headline fields.
+- LongMemEval and LoCoMo-Plus use `Recall@5`, `MRR`, and `NDCG@10` as headline fields.
 - Keep `notes` concise, e.g. "pending reproducibility pass" or run metadata.

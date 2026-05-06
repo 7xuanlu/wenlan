@@ -12,12 +12,6 @@
       "mrr": null,
       "ndcg_at_10": null,
       "notes": "To be published after first stable run"
-    },
-    "lifebench": {
-      "recall_at_5": null,
-      "mrr": null,
-      "ndcg_at_10": null,
-      "notes": "To be published after first stable run"
     }
   }
 }

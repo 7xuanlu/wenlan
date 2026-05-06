@@ -324,7 +324,7 @@ All business logic lives here. No tauri, no axum. Framework-agnostic.
 | `router/classify.rs`, `content_score.rs` | Smart router scoring helpers (non-tauri parts) |
 | `config.rs` | Persistent config at `~/Library/Application Support/origin/config.json` |
 | `export/` | Markdown/JSON/zip/PDF exporters |
-| `eval/` | Benchmark harness: LoCoMo, LongMemEval, LoCoMo-Plus, LifeBench. Each benchmark has base (embedding-only), reranked (LLM rescores after search), and expanded (LLM query expansion before search) variants. Baselines in `app/eval/baselines/` (gitignored). |
+| `eval/` | Benchmark harness: LoCoMo, LongMemEval, LoCoMo-Plus. Each benchmark has base (embedding-only), reranked (LLM rescores after search), and expanded (LLM query expansion before search) variants. Baselines in `app/eval/baselines/` (gitignored). |
 | `state.rs` | `CoreState` — shared state struct used by origin-server |
 
 ## Key Modules — origin-server (`crates/origin-server/src/`)
