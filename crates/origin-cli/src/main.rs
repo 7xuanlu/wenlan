@@ -1,5 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
+mod client;
+mod output;
+
 use clap::{Parser, Subcommand};
+use output::OutputFormat;
 
 #[derive(Parser)]
 #[command(
@@ -20,13 +24,6 @@ struct Cli {
     quiet: bool,
 }
 
-#[derive(clap::ValueEnum, Clone, Copy, Debug)]
-enum OutputFormat {
-    Auto,
-    Json,
-    Table,
-}
-
 #[derive(Subcommand)]
 enum Commands {
     /// Show daemon health + version (stub — wired in later task).
@@ -36,6 +33,7 @@ enum Commands {
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
+    let _format = cli.format.resolve();
     match cli.command {
         Commands::Status => {
             println!(
