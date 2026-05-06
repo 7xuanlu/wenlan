@@ -41,6 +41,7 @@ pub struct WindowOcrResult {
 
 /// Lightweight focused-window metadata — no screenshots taken.
 /// ~5ms on macOS vs ~200ms×N for capture_windows.
+#[allow(dead_code)]
 pub struct FocusedWindowMeta {
     pub app_name: String,
     pub window_name: String,
@@ -48,6 +49,7 @@ pub struct FocusedWindowMeta {
 
 /// Return metadata for the currently focused window without taking any screenshots.
 /// Returns None if no focused window is found (e.g. desktop focused).
+#[allow(dead_code)]
 pub fn focused_window_meta() -> Option<FocusedWindowMeta> {
     use xcap::Window;
     let windows = Window::all().ok()?;
@@ -68,6 +70,7 @@ pub fn focused_window_meta() -> Option<FocusedWindowMeta> {
 /// Capture only the focused window — single CGWindowListCreateImage call instead of N.
 /// Returns None if no focused window found or screenshot fails.
 #[cfg(target_os = "macos")]
+#[allow(dead_code)]
 pub fn capture_focused_window() -> Result<Option<WindowCapture>, OriginError> {
     use xcap::Window;
     let windows = Window::all().map_err(|e| OriginError::Vision(format!("xcap list: {e}")))?;
@@ -102,6 +105,7 @@ pub fn capture_focused_window() -> Result<Option<WindowCapture>, OriginError> {
 }
 
 #[cfg(not(target_os = "macos"))]
+#[allow(dead_code)]
 pub fn capture_focused_window() -> Result<Option<WindowCapture>, OriginError> {
     Ok(None)
 }
@@ -236,6 +240,7 @@ pub fn ocr_per_window(_captures: &[WindowCapture]) -> Result<Vec<WindowOcrResult
 /// Capture a screen region via CoreGraphics and run Apple Vision OCR.
 /// Coordinates are in macOS display points — Retina scaling is handled natively.
 #[cfg(target_os = "macos")]
+#[allow(dead_code)]
 pub fn ocr_region(x: f64, y: f64, w: f64, h: f64) -> Result<Vec<WindowOcrResult>, OriginError> {
     let cg_image = unsafe { cg_capture_region(x, y, w, h) };
     if cg_image.is_null() {
@@ -281,6 +286,7 @@ pub fn ocr_region(x: f64, y: f64, w: f64, h: f64) -> Result<Vec<WindowOcrResult>
 }
 
 #[cfg(not(target_os = "macos"))]
+#[allow(dead_code)]
 pub fn ocr_region(_x: f64, _y: f64, _w: f64, _h: f64) -> Result<Vec<WindowOcrResult>, OriginError> {
     Ok(vec![])
 }
@@ -288,6 +294,7 @@ pub fn ocr_region(_x: f64, _y: f64, _w: f64, _h: f64) -> Result<Vec<WindowOcrRes
 // ── macOS CoreGraphics FFI ─────────────────────────────────────────────────
 
 #[cfg(target_os = "macos")]
+#[allow(dead_code)]
 mod cg {
     use std::ffi::c_void;
 
@@ -352,6 +359,7 @@ mod cg {
 /// Capture a screen region via CGWindowListCreateImage with explicit CGRect.
 /// Coordinates are in macOS display points — Retina scaling handled natively.
 #[cfg(target_os = "macos")]
+#[allow(dead_code)]
 unsafe fn cg_capture_region(x: f64, y: f64, w: f64, h: f64) -> *const std::ffi::c_void {
     let rect = cg::CGRect {
         origin: cg::CGPoint { x, y },
@@ -411,6 +419,7 @@ unsafe fn dynamic_image_to_gray_cgimage(img: &image::DynamicImage) -> *const std
 /// Drawing into a grayscale context lets CG handle color → gray conversion.
 /// Returns a new CGImage (caller must CFRelease).
 #[cfg(target_os = "macos")]
+#[allow(dead_code)]
 unsafe fn cgimage_to_grayscale(cg_image: *const std::ffi::c_void) -> *const std::ffi::c_void {
     let width = cg::CGImageGetWidth(cg_image);
     let height = cg::CGImageGetHeight(cg_image);

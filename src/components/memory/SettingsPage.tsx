@@ -130,79 +130,6 @@ function SectionHeader({ icon, label }: { icon: React.ReactNode; label: string }
   );
 }
 
-const AMBIENT_MODE_OPTIONS: { value: string; label: string; icon: React.ReactNode }[] = [
-  {
-    value: "off",
-    label: "Off",
-    icon: (
-      <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M18.364 18.364A9 9 0 005.636 5.636m12.728 12.728L5.636 5.636m12.728 12.728A9 9 0 015.636 5.636" />
-      </svg>
-    ),
-  },
-  {
-    value: "on_demand",
-    label: "On Demand",
-    icon: (
-      <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M15 15l-2 5L9 9l11 4-5 2zm0 0l5 5M7.188 2.239l.777 2.897M5.136 7.965l-2.898-.777M13.95 4.05l-2.122 2.122m-5.657 5.656l-2.12 2.122" />
-      </svg>
-    ),
-  },
-  {
-    value: "proactive",
-    label: "Proactive",
-    icon: (
-      <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
-        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" />
-      </svg>
-    ),
-  },
-];
-
-function AmbientModeToggle({
-  mode,
-  screenPermission,
-  onChangeMode,
-  onRequestPermission,
-}: {
-  mode: string;
-  screenPermission: boolean;
-  onChangeMode: (mode: string) => void;
-  onRequestPermission: () => void;
-}) {
-  return (
-    <div className="flex bg-[var(--mem-hover)] rounded-lg p-0.5 shrink-0">
-      {AMBIENT_MODE_OPTIONS.map((opt) => (
-        <button
-          key={opt.value}
-          onClick={() => {
-            if (opt.value !== "off" && !screenPermission) {
-              onRequestPermission();
-            }
-            onChangeMode(opt.value);
-          }}
-          className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md transition-all duration-200 whitespace-nowrap ${
-            mode === opt.value
-              ? "text-white shadow-sm"
-              : "text-[var(--mem-text-secondary)] hover:text-[var(--mem-text)]"
-          }`}
-          style={{
-            fontFamily: "var(--mem-font-body)",
-            fontSize: "11px",
-            fontWeight: 500,
-            backgroundColor: mode === opt.value ? "var(--mem-accent-indigo)" : "transparent",
-          }}
-        >
-          {opt.icon}
-          {opt.label}
-        </button>
-      ))}
-    </div>
-  );
-}
-
 // ── Main component ─────────────────────────────────────────────────────
 
 import type { SettingsSection } from "./settings/SettingsSidebar";
@@ -253,23 +180,6 @@ export default function SettingsPage({
       return invoke("set_screen_capture_enabled", { enabled });
     },
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["screenCaptureEnabled"] }),
-  });
-
-  // ── Ambient mode ──────────────────────────────────────────────────
-  const { data: ambientMode = "on_demand" } = useQuery({
-    queryKey: ["ambientMode"],
-    queryFn: async () => {
-      const { invoke } = await import("@tauri-apps/api/core");
-      return invoke("get_ambient_mode") as Promise<string>;
-    },
-  });
-
-  const ambientModeMutation = useMutation({
-    mutationFn: async (mode: string) => {
-      const { invoke } = await import("@tauri-apps/api/core");
-      return invoke("set_ambient_mode", { mode });
-    },
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["ambientMode"] }),
   });
 
   const { data: screenPermission = false, refetch: refetchPermission } = useQuery({
@@ -514,98 +424,6 @@ export default function SettingsPage({
             </div>
           </div>
 
-          <div className="mx-5 border-t border-[var(--mem-border)]" style={{ opacity: 0.4 }} />
-
-          {/* Ambient Mode */}
-          <div className={`px-5 py-4 transition-opacity ${!screenCaptureEnabled ? "opacity-40 pointer-events-none" : ""}`}>
-            <div className="flex items-center justify-between gap-4">
-              <div className="min-w-0">
-                <div style={{ fontFamily: "var(--mem-font-body)", fontSize: "14px", fontWeight: 500, color: "var(--mem-text)" }}>Ambient Mode</div>
-                <p style={{ fontFamily: "var(--mem-font-body)", fontSize: "12px", color: "var(--mem-text-secondary)", marginTop: "2px", lineHeight: "1.5" }}>
-                  Surface context cards when you switch apps or interact with people.
-                </p>
-              </div>
-              <AmbientModeToggle
-                mode={screenCaptureEnabled ? ambientMode : "off"}
-                screenPermission={screenPermission}
-                onChangeMode={(mode) => ambientModeMutation.mutate(mode)}
-                onRequestPermission={async () => {
-                  const { invoke: inv } = await import("@tauri-apps/api/core");
-                  await inv("request_screen_permission");
-                  setTimeout(() => refetchPermission(), 1000);
-                }}
-              />
-            </div>
-            <div className="mt-2" style={{ fontFamily: "var(--mem-font-body)", fontSize: "11px", color: "var(--mem-text-tertiary)", lineHeight: "1.5" }}>
-              {!screenCaptureEnabled && <span>Enable Screen Capture to use ambient mode.</span>}
-              {screenCaptureEnabled && ambientMode === "off" && <span>Ambient overlay is disabled.</span>}
-              {screenCaptureEnabled && ambientMode === "on_demand" && <span>Cards surface when you trigger manually (Cmd+Shift+O).</span>}
-              {screenCaptureEnabled && ambientMode === "proactive" && <span>Cards surface automatically when you switch windows.</span>}
-            </div>
-          </div>
-
-          {/* Test buttons — only when ambient mode is active */}
-          {screenCaptureEnabled && ambientMode !== "off" && (
-            <>
-              <div className="mx-5 border-t border-[var(--mem-border)]" style={{ opacity: 0.4 }} />
-              <div className="px-5 py-3">
-                <div className="flex items-center justify-between">
-                  <span style={{ fontFamily: "var(--mem-font-body)", fontSize: "12px", color: "var(--mem-text-secondary)" }}>
-                    Test ambient overlay
-                  </span>
-                  <div className="flex gap-2">
-                    <button
-                      onClick={async () => {
-                        const { emit: globalEmit } = await import("@tauri-apps/api/event");
-                        globalEmit("ambient-card", {
-                          card_id: "test-" + Date.now(),
-                          kind: "person_context",
-                          title: "Alice Chen",
-                          topic: "Q3 Budget",
-                          body: "Last discussed Mar 15. She pushed back on annual billing. You agreed to revisit in April.",
-                          sources: ["Claude Code"],
-                          memory_count: 3,
-                          primary_source_id: "test",
-                          created_at: Math.floor(Date.now() / 1000),
-                        });
-                      }}
-                      className="px-2.5 py-1 rounded-md text-[11px] font-medium transition-colors"
-                      style={{ fontFamily: "var(--mem-font-body)", background: "var(--mem-hover-strong)", color: "var(--mem-text)" }}
-                    >
-                      Test Card
-                    </button>
-                    <button
-                      onClick={async () => {
-                        const { invoke: inv } = await import("@tauri-apps/api/core");
-                        const result = await inv("trigger_ambient");
-                        console.log("[ambient] trigger result:", result);
-                      }}
-                      className="px-2.5 py-1 rounded-md text-[11px] font-medium transition-colors"
-                      style={{ fontFamily: "var(--mem-font-body)", background: "var(--mem-hover-strong)", color: "var(--mem-text)" }}
-                    >
-                      Trigger Now
-                    </button>
-                    <button
-                      onClick={() => {
-                        const btn = document.activeElement as HTMLElement;
-                        btn?.blur();
-                        setTimeout(async () => {
-                          const { invoke: inv } = await import("@tauri-apps/api/core");
-                          const result = await inv("trigger_ambient");
-                          console.log("[ambient] delayed trigger result:", result);
-                        }, 3000);
-                      }}
-                      className="px-2.5 py-1 rounded-md text-[11px] font-medium transition-colors"
-                      style={{ fontFamily: "var(--mem-font-body)", background: "var(--mem-hover-strong)", color: "var(--mem-text)" }}
-                      title="Switch to another app within 3 seconds"
-                    >
-                      Trigger in 3s
-                    </button>
-                  </div>
-                </div>
-              </div>
-            </>
-          )}
         </div>
       </section>
       )}

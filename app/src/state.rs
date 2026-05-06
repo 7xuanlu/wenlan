@@ -55,10 +55,6 @@ pub struct AppState {
     pub trigger_tx: Option<tokio::sync::mpsc::Sender<crate::trigger::types::TriggerEvent>>,
     /// Last context bundle received from the router.
     pub last_context_bundle: Option<crate::router::bundle::ContextBundle>,
-    /// Ambient overlay dismissal records.
-    pub ambient_dismissals: Vec<crate::ambient::types::DismissalRecord>,
-    /// Ambient overlay mode: proactive, on_demand, or off.
-    pub ambient_mode: crate::ambient::types::AmbientMode,
     /// Screen capture enabled.
     pub screen_capture_enabled: bool,
     /// Remote access tunnel state.
@@ -92,8 +88,6 @@ impl Default for AppState {
             app_handle: None,
             trigger_tx: None,
             last_context_bundle: None,
-            ambient_dismissals: Vec::new(),
-            ambient_mode: crate::ambient::types::AmbientMode::default(),
             screen_capture_enabled: false,
             remote_access: tokio::sync::Mutex::new(RemoteAccessState::default()),
             working_memory: Arc::new(tokio::sync::Mutex::new(WorkingMemory::new())),

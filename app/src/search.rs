@@ -202,65 +202,6 @@ pub async fn position_quick_capture(app: tauri::AppHandle) -> Result<(), String>
     Ok(())
 }
 
-#[tauri::command]
-#[allow(deprecated)]
-pub async fn position_ambient_bottom_right(
-    app: tauri::AppHandle,
-    width: f64,
-    height: f64,
-) -> Result<(), String> {
-    use tauri::Manager;
-
-    let win = app
-        .get_webview_window("ambient")
-        .ok_or("ambient window not found")?;
-
-    #[cfg(target_os = "macos")]
-    {
-        use cocoa::base::id;
-        use cocoa::foundation::NSRect;
-        use raw_window_handle::HasWindowHandle;
-        use tauri::{LogicalPosition, LogicalSize};
-
-        let raw_handle = win.window_handle().map_err(|e| e.to_string())?;
-        if let raw_window_handle::RawWindowHandle::AppKit(appkit) = raw_handle.as_raw() {
-            let ns_view = appkit.ns_view.as_ptr() as id;
-
-            let (visible, screen_h) = unsafe {
-                let ns_win: id = objc::msg_send![ns_view, window];
-                if ns_win.is_null() {
-                    return Err("NSWindow not attached".into());
-                }
-                let screen: id = objc::msg_send![ns_win, screen];
-                if screen.is_null() {
-                    return Err("NSScreen not available".into());
-                }
-                let visible: NSRect = objc::msg_send![screen, visibleFrame];
-                let frame: NSRect = objc::msg_send![screen, frame];
-                (visible, frame.size.height)
-            };
-
-            let padding = 16.0;
-            let win_padding = 28.0;
-
-            win.set_size(LogicalSize::new(width, height))
-                .map_err(|e| e.to_string())?;
-
-            let x = visible.origin.x + visible.size.width - width - padding + win_padding;
-            let y = screen_h - visible.origin.y - padding - height + win_padding;
-
-            log::debug!("[ambient-pos] visible=({:.0},{:.0} {:.0}x{:.0}) screen_h={:.0} → size=({:.0},{:.0}) pos=({:.0},{:.0}) win_pad={:.0}",
-                visible.origin.x, visible.origin.y, visible.size.width, visible.size.height,
-                screen_h, width, height, x, y, win_padding);
-
-            win.set_position(LogicalPosition::new(x, y))
-                .map_err(|e| e.to_string())?;
-        }
-    }
-
-    Ok(())
-}
-
 // ── Permission commands (kept as-is) ──────────────────────────────────
 
 #[tauri::command]
@@ -459,23 +400,6 @@ pub async fn write_mcp_config(client_type: String) -> Result<(), String> {
 #[tauri::command]
 pub async fn get_origin_mcp_entry() -> Result<serde_json::Value, String> {
     Ok(crate::mcp_config::origin_mcp_entry())
-}
-
-#[tauri::command]
-pub async fn get_ambient_mode(state: tauri::State<'_, State>) -> Result<String, String> {
-    let app_state = state.read().await;
-    let mode = serde_json::to_string(&app_state.ambient_mode)
-        .unwrap_or_else(|_| "\"on_demand\"".to_string());
-    Ok(mode.trim_matches('"').to_string())
-}
-
-#[tauri::command]
-pub async fn set_ambient_mode(state: tauri::State<'_, State>, mode: String) -> Result<(), String> {
-    let parsed: crate::ambient::types::AmbientMode = serde_json::from_str(&format!("\"{}\"", mode))
-        .map_err(|_| format!("Invalid mode: {}. Use proactive, on_demand, or off", mode))?;
-    let mut app_state = state.write().await;
-    app_state.ambient_mode = parsed;
-    Ok(())
 }
 
 #[tauri::command]
@@ -680,39 +604,6 @@ pub async fn rotate_remote_token(
     app_handle: tauri::AppHandle,
 ) -> Result<String, String> {
     crate::remote_access::rotate_token(&app_handle).await
-}
-
-// ── Ambient overlay commands ──────────────────────────────────────────
-
-#[tauri::command]
-pub async fn dismiss_ambient_card(
-    state: tauri::State<'_, State>,
-    query: String,
-) -> Result<(), String> {
-    let mut app_state = state.write().await;
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs();
-
-    app_state
-        .ambient_dismissals
-        .push(crate::ambient::types::DismissalRecord {
-            query,
-            dismissed_at: now,
-        });
-
-    app_state.ambient_dismissals.retain(|d| d.is_active());
-    Ok(())
-}
-
-#[tauri::command]
-pub async fn trigger_ambient(
-    state: tauri::State<'_, State>,
-) -> Result<crate::ambient::types::AmbientTriggerResult, String> {
-    let app_state = state.inner().clone();
-    let result = crate::ambient::monitor::trigger_ambient_now(&app_state).await;
-    Ok(result)
 }
 
 // ── File / open commands ──────────────────────────────────────────────
@@ -2922,8 +2813,8 @@ fn icon_loading_card(
     card_id: String,
     title: String,
     created_at: u64,
-) -> crate::ambient::types::AmbientCard {
-    use crate::ambient::types::{AmbientCard, AmbientCardKind};
+) -> crate::icon_types::AmbientCard {
+    use crate::icon_types::{AmbientCard, AmbientCardKind};
     AmbientCard {
         card_id: card_id.clone(),
         kind: AmbientCardKind::PersonContext,
@@ -2943,8 +2834,8 @@ fn icon_no_results_card(
     card_id: String,
     title: String,
     created_at: u64,
-) -> crate::ambient::types::AmbientCard {
-    use crate::ambient::types::{AmbientCard, AmbientCardKind};
+) -> crate::icon_types::AmbientCard {
+    use crate::icon_types::{AmbientCard, AmbientCardKind};
     AmbientCard {
         card_id,
         kind: AmbientCardKind::PersonContext,
@@ -2970,7 +2861,7 @@ pub async fn trigger_icon_click(
     x: f64,
     y: f64,
 ) -> Result<(), String> {
-    use crate::ambient::types::{AmbientCard, AmbientCardKind, SelectionCardEvent};
+    use crate::icon_types::{AmbientCard, AmbientCardKind, SelectionCardEvent};
     use tauri::Emitter;
 
     let now = std::time::SystemTime::now()
@@ -3048,10 +2939,10 @@ pub async fn trigger_icon_click(
                 .filter(|a| seen.insert(a.clone()))
                 .collect();
 
-            let snippets: Vec<crate::ambient::types::MemorySnippet> = good
+            let snippets: Vec<crate::icon_types::MemorySnippet> = good
                 .iter()
                 .take(5)
-                .map(|r| crate::ambient::types::MemorySnippet {
+                .map(|r| crate::icon_types::MemorySnippet {
                     source: r
                         .source_agent
                         .clone()

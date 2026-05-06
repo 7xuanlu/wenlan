@@ -5,7 +5,6 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import App from "./App";
 import ToastOverlay from "./components/ToastOverlay";
 import QuickCaptureWindow from "./components/QuickCaptureWindow";
-import AmbientOverlay from "./components/AmbientOverlay";
 import IconOverlay from "./components/IconOverlay";
 import { applyTheme } from "./lib/theme";
 import "./index.css";
@@ -16,7 +15,6 @@ applyTheme();
 
 const isToast = window.location.hash === "#toast";
 const isQuickCapture = window.location.hash === "#quick-capture";
-const isAmbient = window.location.hash === "#ambient";
 const isIcon = window.location.hash === "#icon";
 
 if (isToast) {
@@ -30,11 +28,6 @@ if (isToast) {
     <React.StrictMode>
       <QuickCaptureWindow />
     </React.StrictMode>,
-  );
-} else if (isAmbient) {
-  // No StrictMode — same reasoning as toast: avoid Tauri event listener races
-  ReactDOM.createRoot(document.getElementById("root")!).render(
-    <AmbientOverlay />,
   );
 } else if (isIcon) {
   // No StrictMode — avoid Tauri event listener races in hidden window

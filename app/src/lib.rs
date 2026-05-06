@@ -4,9 +4,9 @@
 extern crate objc;
 
 // ── App-specific modules (Tauri, sensors, UI) ──
-mod ambient;
 pub mod api;
 pub mod events;
+mod icon_types;
 mod indexer;
 mod lifecycle;
 pub mod mcp_config;
@@ -341,54 +341,6 @@ pub fn run() {
                 }
             }
 
-            // Create transparent ambient overlay window
-            {
-                use tauri::{WebviewUrl, WebviewWindowBuilder};
-
-                let ambient_win = WebviewWindowBuilder::new(
-                    app,
-                    "ambient",
-                    WebviewUrl::App("index.html#ambient".into()),
-                )
-                .title("")
-                .inner_size(360.0, 400.0)
-                .decorations(false)
-                .transparent(true)
-                .always_on_top(true)
-                .skip_taskbar(true)
-                .resizable(false)
-                .focused(false)
-                .visible(false)
-                .build()?;
-
-                #[cfg(target_os = "macos")]
-                #[allow(deprecated)]
-                {
-                    use cocoa::appkit::NSColor;
-                    use cocoa::base::{id, nil, NO};
-                    use raw_window_handle::HasWindowHandle;
-
-                    if let Ok(raw_handle) = ambient_win.window_handle() {
-                        if let raw_window_handle::RawWindowHandle::AppKit(appkit) =
-                            raw_handle.as_raw()
-                        {
-                            let ns_view = appkit.ns_view.as_ptr() as id;
-                            unsafe {
-                                let ns_win: id = objc::msg_send![ns_view, window];
-                                let clear = NSColor::clearColor(nil);
-                                let _: () = msg_send![ns_win, setBackgroundColor: clear];
-                                let _: () = msg_send![ns_win, setOpaque: NO];
-                                let _: () = msg_send![ns_win, setHasShadow: NO];
-                                let style_mask: u64 = msg_send![ns_win, styleMask];
-                                let _: () =
-                                    msg_send![ns_win, setStyleMask: style_mask | (1u64 << 7)];
-                                let _: () = msg_send![ns_win, setLevel: 25_i64];
-                            }
-                        }
-                    }
-                }
-            }
-
             // Create transparent icon trigger window
             {
                 use tauri::{WebviewUrl, WebviewWindowBuilder};
@@ -456,9 +408,6 @@ pub fn run() {
             let quick_capture_shortcut = "CmdOrCtrl+Shift+N"
                 .parse::<tauri_plugin_global_shortcut::Shortcut>()
                 .unwrap();
-            let ambient_shortcut = "CmdOrCtrl+Shift+O"
-                .parse::<tauri_plugin_global_shortcut::Shortcut>()
-                .unwrap();
 
             let state: tauri::State<Arc<RwLock<AppState>>> = app.state();
             let state_clone = state.inner().clone();
@@ -499,12 +448,6 @@ pub fn run() {
                 });
             }
 
-            // Ambient context monitor
-            let ambient_state = state_clone.clone();
-            tauri::async_runtime::spawn(crate::ambient::monitor::run_ambient_monitor(
-                ambient_state,
-            ));
-
             // Register all global shortcuts
             {
                 let handle_for_shortcuts = handle.clone();
@@ -513,9 +456,8 @@ pub fn run() {
                 let spotlight = spotlight_shortcut;
                 let capture = capture_shortcut;
                 let quick_capture = quick_capture_shortcut;
-                let ambient = ambient_shortcut;
                 app.global_shortcut().on_shortcuts(
-                    [toggle, spotlight, capture, quick_capture, ambient],
+                    [toggle, spotlight, capture, quick_capture],
                     move |_app, shortcut, event| {
                         use tauri::Emitter;
                         use tauri_plugin_global_shortcut::ShortcutState;
@@ -582,24 +524,6 @@ pub fn run() {
                                         let _ = window.show();
                                         let _ = window.set_focus();
                                     }
-                                }
-                            }
-                        } else if *shortcut == ambient {
-                            if let Some(win) = handle_for_shortcuts.get_webview_window("ambient") {
-                                if win.is_visible().unwrap_or(false) {
-                                    let _ = win.hide();
-                                } else {
-                                    let _ = win.show();
-                                    let h = handle_for_shortcuts.clone();
-                                    tauri::async_runtime::spawn(async move {
-                                        let _ = search::position_ambient_bottom_right(
-                                            h.clone(),
-                                            400.0,
-                                            200.0,
-                                        )
-                                        .await;
-                                        let _ = h.emit("trigger-ambient", ());
-                                    });
                                 }
                             }
                         }
@@ -894,7 +818,6 @@ pub fn run() {
             search::suggest_tags,
             search::dismiss_quick_capture,
             search::position_quick_capture,
-            search::position_ambient_bottom_right,
             search::get_working_memory,
             search::get_session_snapshots,
             search::get_snapshot_captures,
@@ -1024,11 +947,6 @@ pub fn run() {
             // Distillation trigger commands
             search::trigger_distillation,
             search::redistill_page,
-            // Ambient overlay commands
-            search::dismiss_ambient_card,
-            search::trigger_ambient,
-            search::get_ambient_mode,
-            search::set_ambient_mode,
             search::get_screen_capture_enabled,
             search::set_screen_capture_enabled,
             search::check_screen_permission,
