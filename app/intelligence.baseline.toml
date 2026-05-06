@@ -61,7 +61,6 @@ packager_interval_secs = 300
 [eval]
 enabled = true
 signal_capture = true
-auto_tune_enabled = false    # closed-core only
 llm_judge_enabled = false    # closed-core only
 llm_judge_sample_rate = 10
 min_signals_for_tune = 50

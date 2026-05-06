@@ -44,7 +44,6 @@ pub use origin_core::importer;
 pub use origin_core::llm_classifier;
 pub use origin_core::llm_provider;
 pub use origin_core::memory_schema;
-pub use origin_core::merge;
 pub use origin_core::narrative;
 pub use origin_core::pages;
 pub use origin_core::post_ingest;

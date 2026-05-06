@@ -280,8 +280,6 @@ pub struct RefineryConfig {
     pub kg_rethink_interval_hours: u64,
     #[serde(default = "d_5_usize")]
     pub entity_backfill_batch_size: usize,
-    #[serde(default = "d_3_usize")]
-    pub max_enrichment_retries: usize,
     #[serde(default)]
     pub topic_match: TopicMatchConfig,
 }
@@ -432,8 +430,6 @@ pub struct EvalConfig {
     #[serde(default = "d_true")]
     pub signal_capture: bool,
     #[serde(default = "d_false")]
-    pub auto_tune_enabled: bool,
-    #[serde(default = "d_false")]
     pub llm_judge_enabled: bool,
     #[serde(default = "d_10_usize")]
     pub llm_judge_sample_rate: usize,
@@ -499,7 +495,6 @@ impl Default for RefineryConfig {
             batch_window_secs: d_30_i64(),
             kg_rethink_interval_hours: d_168_u64(),
             entity_backfill_batch_size: d_5_usize(),
-            max_enrichment_retries: d_3_usize(),
             topic_match: TopicMatchConfig::default(),
         }
     }
@@ -553,7 +548,6 @@ impl Default for EvalConfig {
         Self {
             enabled: d_true(),
             signal_capture: d_true(),
-            auto_tune_enabled: d_false(),
             llm_judge_enabled: d_false(),
             llm_judge_sample_rate: d_10_usize(),
             min_signals_for_tune: d_50_usize(),
@@ -711,7 +705,6 @@ score_threshold = 0.25
         let cfg = TuningConfig::default();
         assert!(cfg.eval.enabled);
         assert!(cfg.eval.signal_capture);
-        assert!(!cfg.eval.auto_tune_enabled);
         assert!(!cfg.eval.llm_judge_enabled);
         assert_eq!(cfg.eval.llm_judge_sample_rate, 10);
         assert_eq!(cfg.eval.min_signals_for_tune, 50);

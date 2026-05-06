@@ -1657,27 +1657,6 @@ pub async fn handle_get_enrichment_status(
     }))
 }
 
-/// POST /api/memory/{source_id}/enrichment-status/retry
-///
-/// Resets any abandoned enrichment steps so they will be retried.
-/// Returns the number of steps reset. Idempotent: returns 0 if nothing was abandoned.
-pub async fn handle_retry_enrichment(
-    State(state): State<Arc<RwLock<ServerState>>>,
-    Path(source_id): Path<String>,
-) -> Result<Json<serde_json::Value>, ServerError> {
-    let db = {
-        let s = state.read().await;
-        s.db.clone().ok_or(ServerError::DbNotInitialized)?
-    };
-    let reset = db
-        .reset_abandoned_steps(&source_id)
-        .await
-        .map_err(|e| ServerError::Internal(e.to_string()))?;
-    Ok(Json(
-        serde_json::json!({ "source_id": source_id, "steps_reset": reset }),
-    ))
-}
-
 // ===== Entity Suggestions =====
 
 #[derive(Debug, Serialize)]

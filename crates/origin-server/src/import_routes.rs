@@ -104,8 +104,9 @@ pub async fn handle_chat_export_import(
     let batch = origin_core::chat_import::dispatch_parse(&bytes)
         .map_err(|e| ServerError::ChatImport(format!("parse failed: {e}")))?;
 
-    // 4. Snapshot Arc<MemoryDB> + LLM providers out of the RwLock guard before any awaits.
-    let (db, llm, api_llm, synthesis_llm) = {
+    // 4. Snapshot Arc<MemoryDB> + LLM providers + enrichment config out of the
+    //    RwLock guard before any awaits.
+    let (db, llm, api_llm, prompts, tuning) = {
         let guard = state.read().await;
         let db = guard
             .db
@@ -116,7 +117,8 @@ pub async fn handle_chat_export_import(
             db,
             guard.llm.clone(),
             guard.api_llm.clone(),
-            guard.synthesis_llm.clone(),
+            guard.prompts.clone(),
+            guard.tuning.clone(),
         )
     };
 
@@ -163,7 +165,7 @@ pub async fn handle_chat_export_import(
         }
     };
 
-    // 7. Mark StageB and spawn background steep.
+    // 7. Mark StageB and spawn background enrichment pass.
     db.update_import_state_stage(
         &import_id,
         origin_core::chat_import::bulk_ingest::ImportStage::StageB,
@@ -173,41 +175,64 @@ pub async fn handle_chat_export_import(
     .await
     .map_err(|e| ServerError::ChatImport(format!("update_import_state_stage: {e}")))?;
 
-    // Spawn background refinery loop that keeps steeping until all imported
-    // memories are classified. Only then does import_state transition to Done.
-    // This keeps the import visible via GET /api/import/state while the
-    // refinery is still working through the batch.
-    let db_for_steep = db.clone();
-    let import_id_for_steep = import_id.clone();
+    // Spawn background bulk enrichment pass for all imported memories that still
+    // lack memory_type. Processes in batches of 100 with concurrency 8 until
+    // none remain, then marks the import Done.
+    //
+    // Each iteration does TWO phases matching the canonical handle_store_memory
+    // pattern (memory_routes.rs:850-1008):
+    //   Phase 1: classify → apply_enrichment  (writes memory_type to DB)
+    //   Phase 2: run_post_ingest_enrichment   (entity link, dedup, title, concept)
+    //
+    // Skipped from Phase 1: extract (structured_fields / retrieval_cue). Chat
+    // imports are high-volume bulk data; title_enrich in Phase 2 covers the most
+    // important enrichment. Extract can be added later if needed.
+    //
+    // Loop safety: after Phase 1 writes memory_type, the row is no longer
+    // returned by get_unclassified_imports. Even when LLM is absent we write
+    // memory_type = "fact" so the row exits the unclassified set. A hard cap
+    // of MAX_STUCK_ITERS consecutive iterations without a count reduction
+    // aborts with an error to cover any case where the row count stops decreasing.
+    let db_for_enrich = db.clone();
+    let import_id_for_enrich = import_id.clone();
     tokio::spawn(async move {
+        use futures::stream::{self, StreamExt};
+        const BATCH: usize = 100;
+        const CONCURRENCY: usize = 8;
+        // Abort if we see this many consecutive iterations without progress.
+        const MAX_STUCK_ITERS: usize = 3;
+
+        // Prefer API LLM for enrichment (faster for bulk); fall back to on-device.
+        let prefer_llm: Option<std::sync::Arc<dyn origin_core::llm_provider::LlmProvider>> =
+            api_llm.or(llm);
+
+        let classify_prompt = prompts.classify_memory_quality.clone();
+        let mut stuck_count: usize = 0;
+        let mut last_batch_len: usize = usize::MAX;
+
         loop {
-            let steep_result = origin_core::refinery::trigger_steep_now(
-                db_for_steep.clone(),
-                llm.as_ref(),
-                api_llm.as_ref(),
-                synthesis_llm.as_ref(),
-            )
-            .await;
-            if let Err(e) = steep_result {
-                let msg = format!("steep failed: {e}");
-                tracing::error!("[chat-import] {msg}");
-                let _ = db_for_steep
-                    .update_import_state_stage_with_error(
-                        &import_id_for_steep,
-                        origin_core::chat_import::bulk_ingest::ImportStage::Error,
-                        None,
-                        None,
-                        Some(&msg),
-                    )
-                    .await;
-                return;
-            }
-            // Check if all import memories are classified.
-            let remaining = db_for_steep.count_unclassified_imports().await.unwrap_or(0);
-            if remaining == 0 {
-                let _ = db_for_steep
+            let candidates = match db_for_enrich.get_unclassified_imports(BATCH).await {
+                Ok(v) => v,
+                Err(e) => {
+                    let msg = format!("get_unclassified_imports failed: {e}");
+                    tracing::error!("[chat-import-enrich] {msg}");
+                    let _ = db_for_enrich
+                        .update_import_state_stage_with_error(
+                            &import_id_for_enrich,
+                            origin_core::chat_import::bulk_ingest::ImportStage::Error,
+                            None,
+                            None,
+                            Some(&msg),
+                        )
+                        .await;
+                    return;
+                }
+            };
+            if candidates.is_empty() {
+                // All imports enriched — mark Done.
+                let _ = db_for_enrich
                     .update_import_state_stage(
-                        &import_id_for_steep,
+                        &import_id_for_enrich,
                         origin_core::chat_import::bulk_ingest::ImportStage::Done,
                         None,
                         None,
@@ -215,8 +240,136 @@ pub async fn handle_chat_export_import(
                     .await;
                 return;
             }
-            // Brief pause between steep cycles to avoid busy-looping.
-            tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+
+            // Stuck-loop guard: abort if we're not making progress.
+            if candidates.len() >= last_batch_len {
+                stuck_count += 1;
+                if stuck_count >= MAX_STUCK_ITERS {
+                    let msg = format!(
+                        "enrichment loop stuck after {MAX_STUCK_ITERS} non-progress iterations \
+                         ({} candidates remaining); aborting",
+                        candidates.len()
+                    );
+                    tracing::error!("[chat-import-enrich] {msg}");
+                    let _ = db_for_enrich
+                        .update_import_state_stage_with_error(
+                            &import_id_for_enrich,
+                            origin_core::chat_import::bulk_ingest::ImportStage::Error,
+                            None,
+                            None,
+                            Some(&msg),
+                        )
+                        .await;
+                    return;
+                }
+            } else {
+                stuck_count = 0;
+            }
+            last_batch_len = candidates.len();
+
+            // Process this batch with bounded concurrency.
+            let knowledge_path =
+                Some(origin_core::config::load_config().knowledge_path_or_default());
+            stream::iter(candidates)
+                .for_each_concurrent(CONCURRENCY, |(source_id, content)| {
+                    let db_inner = db_for_enrich.clone();
+                    let prompts = prompts.clone();
+                    let tuning = tuning.clone();
+                    let llm_inner = prefer_llm.clone();
+                    let classify_prompt = classify_prompt.clone();
+                    let knowledge_path = knowledge_path.clone();
+                    async move {
+                        // --- Phase 1: classify + apply_enrichment ---
+                        // Mirrors memory_routes.rs handle_store_memory lines 859-986.
+                        let mut memory_type = "fact".to_string();
+                        let mut domain: Option<String> = None;
+                        let mut quality: Option<String> = None;
+
+                        if let Some(ref llm) = llm_inner {
+                            let truncated: String = content.chars().take(1000).collect();
+                            match tokio::time::timeout(
+                                std::time::Duration::from_secs(30),
+                                llm.generate(origin_core::llm_provider::LlmRequest {
+                                    system_prompt: Some(classify_prompt.clone()),
+                                    user_prompt: truncated,
+                                    max_tokens: 128,
+                                    temperature: 0.1,
+                                    label: None,
+                                    timeout_secs: None,
+                                }),
+                            )
+                            .await
+                            {
+                                Ok(Ok(output)) => {
+                                    if let Some(c) =
+                                        origin_core::llm_provider::parse_classify_response(&output)
+                                    {
+                                        memory_type = c.memory_type;
+                                        domain = c.domain;
+                                        quality = c.quality;
+                                    }
+                                }
+                                Ok(Err(e)) => {
+                                    tracing::warn!(
+                                        "[chat-import-enrich] classify failed for {source_id}: {e}"
+                                    );
+                                }
+                                Err(_) => {
+                                    tracing::warn!(
+                                        "[chat-import-enrich] classify timed out for {source_id}"
+                                    );
+                                }
+                            }
+                        }
+
+                        let supersede_mode = if memory_type == "decision" {
+                            "archive"
+                        } else {
+                            "hide"
+                        };
+
+                        if let Err(e) = db_inner
+                            .apply_enrichment(
+                                &source_id,
+                                &memory_type,
+                                domain.as_deref(),
+                                quality.as_deref(),
+                                supersede_mode,
+                                None,
+                                None,
+                            )
+                            .await
+                        {
+                            tracing::warn!(
+                                "[chat-import-enrich] apply_enrichment failed for {source_id}: {e}"
+                            );
+                            // Still attempt Phase 2 — partial enrichment is better than none.
+                        }
+
+                        // --- Phase 2: post-ingest enrichment ---
+                        if let Err(e) = origin_core::post_ingest::run_post_ingest_enrichment(
+                            &db_inner,
+                            &source_id,
+                            &content,
+                            None,
+                            Some(memory_type.as_str()),
+                            domain.as_deref(),
+                            None,
+                            llm_inner.as_ref(),
+                            &prompts,
+                            &tuning.refinery,
+                            &tuning.distillation,
+                            knowledge_path.as_deref(),
+                        )
+                        .await
+                        {
+                            tracing::warn!(
+                                "[chat-import-enrich] post_ingest failed for {source_id}: {e}"
+                            );
+                        }
+                    }
+                })
+                .await;
         }
     });
 

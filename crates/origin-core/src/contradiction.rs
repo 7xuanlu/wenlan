@@ -6,6 +6,14 @@
 
 use serde_json::Value;
 
+/// Outcome of comparing a new memory against an existing one.
+#[derive(Debug, Clone, PartialEq)]
+pub enum ContradictionResult {
+    Consistent,
+    Contradicts { explanation: String },
+    Supersedes { merged_content: String },
+}
+
 /// Check if two memories of the same type may contradict based on structured fields.
 /// Returns true if key fields overlap but values differ — a candidate for LLM contradiction check.
 /// Returns false on parse failure, missing fields, or non-overlapping contexts.

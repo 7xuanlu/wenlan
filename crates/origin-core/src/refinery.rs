@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
 use crate::activity::ACTIVITY_GAP_SECS;
+use crate::contradiction::ContradictionResult;
 use crate::db::MemoryDB;
 use crate::error::OriginError;
 use crate::llm_provider::{LlmProvider, LlmRequest};
-use crate::merge::ContradictionResult;
 use crate::prompts::PromptRegistry;
 use crate::sources::StabilityTier;
 use serde::Serialize;
@@ -16,7 +16,6 @@ pub const ALL_PHASES: &[&str] = &[
     "decay",
     "promote",
     "recaps",
-    "reclassify",
     "reweave",
     "reembed",
     "entity_extraction",
@@ -25,10 +24,8 @@ pub const ALL_PHASES: &[&str] = &[
     "re-distill",
     "refinement_queue",
     "decision_logs",
-    "decision_backfill",
     "prune_rejections",
     "kg_rethink",
-    "retry_failed_enrichment",
 ];
 
 /// What triggered a refinery cycle. Different triggers run different subsets
@@ -39,7 +36,7 @@ pub const ALL_PHASES: &[&str] = &[
 /// - `BurstEnd`: only `recaps` + `refinement_queue`.
 /// - `Idle`: only synthesis phases (`community_detection`, `emergence`,
 ///   `re-distill`, `decision_logs`).
-/// - `Daily`: only maintenance + backfill phases.
+/// - `Daily`: only maintenance phases.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TriggerKind {
     Backstop,
@@ -58,21 +55,15 @@ impl TriggerKind {
             Self::BurstEnd => matches!(phase_name, "recaps" | "refinement_queue"),
             Self::Idle => matches!(
                 phase_name,
-                "community_detection"
-                    | "emergence"
-                    | "re-distill"
-                    | "decision_logs"
-                    | "retry_failed_enrichment"
+                "community_detection" | "emergence" | "re-distill" | "decision_logs"
             ),
             Self::Daily => matches!(
                 phase_name,
                 "decay"
                     | "promote"
-                    | "reclassify"
                     | "reweave"
                     | "reembed"
                     | "entity_extraction"
-                    | "decision_backfill"
                     | "prune_rejections"
                     | "kg_rethink"
             ),
@@ -83,7 +74,7 @@ impl TriggerKind {
     /// of phases, so they need different time budgets:
     /// - BurstEnd: tight (recaps + refinement only, should be fast)
     /// - Idle/Daily: moderate (focused subsets, no competition)
-    /// - Backstop: generous (runs all 14 phases, safety net every 6h)
+    /// - Backstop: generous (runs all 13 phases, safety net every 6h)
     pub fn deadline_secs(&self, base: u64) -> u64 {
         match self {
             Self::BurstEnd => base,      // 120s — recaps should be fast
@@ -123,29 +114,11 @@ pub struct PhaseOutput {
 // Nudge classifiers — one pure function per phase archetype.
 // ---------------------------------------------------------------------------
 
-/// Backfill phases (decay, promote, reclassify, reweave, reembed,
-/// entity_extraction, community_detection, decision_backfill,
+/// Backfill phases (decay, promote, reweave, reembed,
+/// entity_extraction, community_detection,
 /// prune_rejections) are pure plumbing — always Silent.
 pub(crate) fn classify_backfill(_count: usize) -> (Nudge, Option<String>) {
     (Nudge::Silent, None)
-}
-
-/// Recaps phase — Ambient when any are generated.
-pub(crate) fn classify_recaps(generated: usize) -> (Nudge, Option<String>) {
-    match generated {
-        0 => (Nudge::Silent, None),
-        1 => (
-            Nudge::Ambient,
-            Some("Origin steeped a recent activity burst into a recap".to_string()),
-        ),
-        n => (
-            Nudge::Ambient,
-            Some(format!(
-                "Origin steeped {} recent activity bursts into recaps",
-                n
-            )),
-        ),
-    }
 }
 
 /// Emergence phase — the only phase that can produce `Wow`.
@@ -199,21 +172,6 @@ pub(crate) fn classify_refinement_queue(processed: usize) -> (Nudge, Option<Stri
     }
 }
 
-/// Decision logs phase — Ambient when any logs are generated.
-pub(crate) fn classify_decision_logs(generated: usize) -> (Nudge, Option<String>) {
-    match generated {
-        0 => (Nudge::Silent, None),
-        1 => (
-            Nudge::Ambient,
-            Some("Origin narrated a week's worth of decisions into a log".to_string()),
-        ),
-        n => (
-            Nudge::Ambient,
-            Some(format!("Origin narrated decisions into {} logs", n)),
-        ),
-    }
-}
-
 /// Result of a single phase within a steep cycle.
 #[derive(Debug, Clone, Serialize)]
 pub struct PhaseResult {
@@ -260,7 +218,7 @@ where
 // Post-ingest dedup and recap checks moved to post_ingest.rs
 
 /// Periodic steep — called every 30 minutes by the scheduler.
-/// Runs phases sequentially: decay, recaps, reclassify, reweave, reembed, entity extraction, distillation, refinement queue, decision logs.
+/// Runs phases sequentially: decay, recaps, reweave, reembed, entity extraction, distillation, refinement queue, decision logs.
 /// Each phase is isolated — a failure in one phase doesn't prevent subsequent phases from running.
 pub async fn run_periodic_steep(
     db: &MemoryDB,
@@ -312,7 +270,6 @@ pub async fn run_periodic_steep_with_api(
     // valid even when their producing phase is skipped by the trigger.
     let mut memories_decayed: u64 = 0;
     let mut recaps_generated: u32 = 0;
-    let mut imports_reclassified: u32 = 0;
     let mut distilled: u32 = 0;
 
     // Phase 1: Decay pass
@@ -355,11 +312,13 @@ pub async fn run_periodic_steep_with_api(
     let recap_llm = api_llm.or(llm);
     if trigger.runs_phase("recaps") {
         let phase = run_phase("recaps", || async {
-            let generated = generate_recaps(db_ref, recap_llm, prompts, tuning).await?;
+            let generated =
+                crate::synthesis::recaps::generate_recaps(db_ref, recap_llm, prompts, tuning)
+                    .await?;
             if generated > 0 {
                 log::info!("[refinery] generated {} recaps", generated);
             }
-            let (nudge, headline) = classify_recaps(generated as usize);
+            let (nudge, headline) = crate::synthesis::recaps::classify_recaps(generated as usize);
             Ok(PhaseOutput {
                 items_processed: generated as usize,
                 nudge,
@@ -371,23 +330,7 @@ pub async fn run_periodic_steep_with_api(
         phases.push(phase);
     }
 
-    // Phase 3: Reclassify imported memories
-    if trigger.runs_phase("reclassify") {
-        let phase = run_phase("reclassify", || async {
-            let count = reclassify_imports(db_ref, llm, prompts).await?;
-            let (nudge, headline) = classify_backfill(count);
-            Ok(PhaseOutput {
-                items_processed: count,
-                nudge,
-                headline,
-            })
-        })
-        .await;
-        imports_reclassified = phase.items_processed as u32;
-        phases.push(phase);
-    }
-
-    // Phase 4: Reweave entity links (link unlinked memories to recently-created entities)
+    // Phase 3: Reweave entity links (link unlinked memories to recently-created entities)
     if trigger.runs_phase("reweave")
         && {
             let elapsed = steep_start.elapsed().as_secs();
@@ -436,15 +379,7 @@ pub async fn run_periodic_steep_with_api(
         }
     {
         let phase = run_phase("reembed", || async {
-            let candidates = db_ref.get_reembed_candidates(5).await?;
-            let mut count = 0;
-            for (chunk_id, content) in &candidates {
-                if let Err(e) = db_ref.reembed_memory(chunk_id, content).await {
-                    log::warn!("[refinery] reembed failed for {}: {}", chunk_id, e);
-                } else {
-                    count += 1;
-                }
-            }
+            let count = crate::migrations::reembed::run(db_ref, 5).await?;
             let (nudge, headline) = classify_backfill(count);
             Ok(PhaseOutput {
                 items_processed: count,
@@ -582,14 +517,15 @@ pub async fn run_periodic_steep_with_api(
         phases.push(phase);
     }
 
-    // Phase 7: Decision log generation (lightweight recap for decisions)
+    // Phase 7: Decision log generation (lightweight recap for decisions).
+    // Last deadline-gated phase: omit `deadline_hit = true` — no phase after
+    // this reads the flag, so the assignment would be dead code (clippy -D).
     if trigger.runs_phase("decision_logs")
         && {
             let elapsed = steep_start.elapsed().as_secs();
             if elapsed >= deadline {
                 if !deadline_hit {
                     log::warn!("[refinery] deadline exceeded ({}s >= {}s) — skipping remaining deadline-gated phases", elapsed, deadline);
-                    deadline_hit = true;
                 }
                 false
             } else {
@@ -598,37 +534,11 @@ pub async fn run_periodic_steep_with_api(
         }
     {
         let phase = run_phase("decision_logs", || async {
-            let count = generate_decision_logs(db_ref, llm, prompts, tuning).await?;
-            let (nudge, headline) = classify_decision_logs(count);
-            Ok(PhaseOutput {
-                items_processed: count,
-                nudge,
-                headline,
-            })
-        })
-        .await;
-        phases.push(phase);
-    }
-
-    // Phase 7b: Backfill structured_fields for decisions that lack them
-    let backfill_llm = api_llm.or(llm);
-    if trigger.runs_phase("decision_backfill")
-        && {
-            let elapsed = steep_start.elapsed().as_secs();
-            if elapsed >= deadline {
-                if !deadline_hit {
-                    log::warn!("[refinery] deadline exceeded ({}s >= {}s) — skipping remaining deadline-gated phases", elapsed, deadline);
-                }
-                false
-            } else {
-                true
-            }
-        }
-    {
-        let phase = run_phase("decision_backfill", || async {
-            let count =
-                backfill_decision_structured_fields(db_ref, backfill_llm, prompts, 5).await?;
-            let (nudge, headline) = classify_backfill(count);
+            let count = crate::synthesis::decision_logs::generate_decision_logs(
+                db_ref, llm, prompts, tuning,
+            )
+            .await?;
+            let (nudge, headline) = crate::synthesis::decision_logs::classify_decision_logs(count);
             Ok(PhaseOutput {
                 items_processed: count,
                 nudge,
@@ -799,23 +709,6 @@ pub async fn run_periodic_steep_with_api(
         }
     }
 
-    // Phase 11: Retry failed enrichment — self-healing (now includes LLM title re-enrichment)
-    if trigger.runs_phase("retry_failed_enrichment") {
-        let title_llm = api_llm.or(llm);
-        let phase = run_phase("retry_failed_enrichment", || async {
-            let retried = retry_failed_enrichment(db_ref, tuning, title_llm).await?;
-            log::info!("[refinery] retry_failed_enrichment: retried {retried} steps");
-            let (nudge, headline) = classify_backfill(retried);
-            Ok(PhaseOutput {
-                items_processed: retried,
-                nudge,
-                headline,
-            })
-        })
-        .await;
-        phases.push(phase);
-    }
-
     let elapsed = steep_start.elapsed();
     log::info!(
         "[refinery] steep complete in {}ms — {} phases, {} errors",
@@ -838,101 +731,10 @@ pub async fn run_periodic_steep_with_api(
     Ok(SteepResult {
         memories_decayed,
         recaps_generated,
-        imports_reclassified,
         distilled,
         pending_remaining,
         phases,
     })
-}
-
-/// Reclassify memories that lack proper memory_type or domain classification.
-async fn reclassify_imports(
-    db: &MemoryDB,
-    llm: Option<&Arc<dyn LlmProvider>>,
-    prompts: &PromptRegistry,
-) -> Result<usize, OriginError> {
-    let mut reclassified = 0usize;
-    if let Some(llm) = llm {
-        let imports = db.get_unclassified_imports(10).await?;
-        for (source_id, content) in &imports {
-            // Check which fields are actually missing so we only fill NULLs
-            let existing = db.get_memory_classification(source_id).await?;
-            let needs_type = existing.0.is_none();
-            let needs_domain = existing.1.is_none();
-
-            let truncated: String = content.chars().take(1000).collect();
-            let response = llm
-                .generate(LlmRequest {
-                    system_prompt: Some(prompts.classify_memory_quality_strict.clone()),
-                    user_prompt: truncated,
-                    max_tokens: 128,
-                    temperature: 0.1,
-                    label: None,
-                    timeout_secs: None,
-                })
-                .await;
-
-            match response {
-                Ok(output) => {
-                    if let Some(classification) =
-                        crate::llm_provider::parse_classify_response(&output)
-                    {
-                        let sid_prefix: String = source_id.chars().take(12).collect();
-                        log::info!(
-                            "[refinery] reclassified {} -> type={}, domain={:?}",
-                            sid_prefix,
-                            classification.memory_type,
-                            classification.domain,
-                        );
-                        // Only update memory_type if it was NULL
-                        if needs_type {
-                            if let Err(e) = db
-                                .update_memory_type(source_id, &classification.memory_type)
-                                .await
-                            {
-                                log::warn!("[refinery] reclassify type update failed: {e}");
-                            }
-                        }
-                        // Only update domain if it was NULL
-                        if needs_domain {
-                            if let Some(ref domain) = classification.domain {
-                                if let Err(e) = db.update_domain(source_id, domain).await {
-                                    log::warn!("[refinery] reclassify domain update failed: {e}");
-                                }
-                                // Auto-create space for newly classified domain
-                                if let Err(e) = db.auto_create_space_if_needed(domain).await {
-                                    log::warn!("[refinery] auto-create space failed: {e}");
-                                }
-                            } else {
-                                // LLM returned no domain — set fallback to prevent infinite retry
-                                if let Err(e) = db.update_domain(source_id, "general").await {
-                                    log::warn!("[refinery] reclassify fallback domain failed: {e}");
-                                }
-                            }
-                        }
-                        if let Some(ref quality) = classification.quality {
-                            if let Err(e) = db.update_quality(source_id, quality).await {
-                                log::warn!("[refinery] reclassify quality update failed: {e}");
-                            }
-                        }
-                        reclassified += 1;
-                    }
-                }
-                Err(e) => {
-                    let sid_prefix: String = source_id.chars().take(12).collect();
-                    log::warn!(
-                        "[refinery] reclassification failed for {}: {}",
-                        sid_prefix,
-                        e
-                    );
-                }
-            }
-        }
-        if reclassified > 0 {
-            log::info!("[refinery] reclassified {} memories", reclassified);
-        }
-    }
-    Ok(reclassified)
 }
 
 /// Extract entities from a single memory via LLM. Returns the primary entity_id if one was created/found.
@@ -2576,193 +2378,13 @@ async fn process_refinement_queue(
     Ok(processed)
 }
 
-/// Backfill structured_fields for decision memories that lack them.
-/// Runs extraction via LLM to populate decision, context, alternatives_considered, etc.
-/// Processes `limit` decisions per steep to stay within budget.
-pub(crate) async fn backfill_decision_structured_fields(
-    db: &MemoryDB,
-    llm: Option<&Arc<dyn LlmProvider>>,
-    _prompts: &PromptRegistry,
-    limit: usize,
-) -> Result<usize, OriginError> {
-    let llm = match llm {
-        Some(l) if l.is_available() => l,
-        _ => return Ok(0),
-    };
-
-    let candidates = db.get_decisions_without_structured_fields(limit).await?;
-    if candidates.is_empty() {
-        return Ok(0);
-    }
-
-    let mut backfilled = 0usize;
-    for (source_id, content) in &candidates {
-        let truncated: String = content.chars().take(500).collect();
-        let prompt = crate::memory_schema::extraction_prompt("decision");
-
-        match tokio::time::timeout(
-            std::time::Duration::from_secs(5),
-            llm.generate(crate::llm_provider::LlmRequest {
-                system_prompt: Some(prompt),
-                user_prompt: truncated,
-                max_tokens: 256,
-                temperature: 0.1,
-                label: None,
-                timeout_secs: None,
-            }),
-        )
-        .await
-        {
-            Ok(Ok(raw)) => {
-                let (fields_json, _retrieval_cue) =
-                    crate::llm_provider::parse_extraction_response(&raw);
-                if let Some(ref json_str) = fields_json {
-                    if !json_str.is_empty() && json_str != "{}" {
-                        if let Err(e) = db.update_structured_fields(source_id, json_str).await {
-                            log::warn!(
-                                "[refinery] backfill structured_fields for {}: {}",
-                                source_id,
-                                e
-                            );
-                        } else {
-                            backfilled += 1;
-                            log::info!(
-                                "[refinery] backfilled structured_fields for decision {}",
-                                source_id
-                            );
-                        }
-                    }
-                }
-            }
-            Ok(Err(e)) => log::warn!("[refinery] backfill LLM error for {}: {}", source_id, e),
-            Err(_) => log::warn!("[refinery] backfill timeout for {}", source_id),
-        }
-    }
-
-    if backfilled > 0 {
-        log::info!(
-            "[refinery] backfilled structured_fields for {}/{} decisions",
-            backfilled,
-            candidates.len()
-        );
-    }
-    Ok(backfilled)
-}
-
-/// Generate decision logs: recap-like summaries for clusters of decision memories.
-/// Groups recent decision memories and generates a summary recap if not already covered.
-pub(crate) async fn generate_decision_logs(
-    db: &MemoryDB,
-    llm: Option<&Arc<dyn LlmProvider>>,
-    prompts: &PromptRegistry,
-    tuning: &crate::tuning::RefineryConfig,
-) -> Result<usize, OriginError> {
-    let now = chrono::Utc::now().timestamp();
-    let lookback_start = now - tuning.recap_lookback_secs;
-
-    // Get recent decision memories
-    let recent_decisions = db
-        .get_recent_decisions_for_recap(lookback_start, 50)
-        .await?;
-    if recent_decisions.len() < tuning.min_memories_for_recap {
-        return Ok(0);
-    }
-
-    let bursts = group_into_bursts(&recent_decisions);
-    let mut generated = 0usize;
-
-    for burst in &bursts {
-        if burst.len() < tuning.min_memories_for_recap {
-            continue;
-        }
-
-        let burst_start = burst.iter().map(|m| m.3).min().unwrap_or(0);
-        let burst_end = burst.iter().map(|m| m.3).max().unwrap_or(0);
-
-        if db.has_recap_covering_range(burst_start, burst_end).await? {
-            continue;
-        }
-
-        let burst_slice: Vec<(String, String, Option<String>, i64)> =
-            burst.iter().map(|m| (*m).clone()).collect();
-        let raw_context = build_burst_context(&burst_slice, burst_start, burst_end);
-
-        let (summary, content) = if let Some(llm) = llm {
-            let combined = burst
-                .iter()
-                .enumerate()
-                .map(|(i, (_, content, domain, _))| {
-                    let d = domain.as_deref().unwrap_or("general");
-                    format!("{}. [{}] {}", i + 1, d, content)
-                })
-                .collect::<Vec<_>>()
-                .join("\n");
-
-            let response = llm
-                .generate(LlmRequest {
-                    system_prompt: Some(prompts.summarize_decisions.clone()),
-                    user_prompt: combined,
-                    max_tokens: 128,
-                    temperature: 0.1,
-                    label: None,
-                    timeout_secs: None,
-                })
-                .await;
-
-            match response {
-                Ok(output)
-                    if output.trim().to_lowercase() != "null" && !output.trim().is_empty() =>
-                {
-                    let cleaned = crate::llm_provider::strip_think_tags(&output);
-                    (cleaned.trim().to_string(), raw_context)
-                }
-                _ => {
-                    let summary = format!("Decision log: {} decisions recorded", burst.len());
-                    (summary, raw_context)
-                }
-            }
-        } else {
-            let summary = format!("Decision log: {} decisions recorded", burst.len());
-            (summary, raw_context)
-        };
-
-        let recap_id = format!("recap_{}", uuid::Uuid::new_v4());
-        let doc = crate::sources::RawDocument {
-            source: "memory".to_string(),
-            source_id: recap_id,
-            title: summary.chars().take(80).collect(),
-            summary: Some(summary),
-            content,
-            url: None,
-            last_modified: burst_end,
-            metadata: std::collections::HashMap::new(),
-            memory_type: Some("decision".to_string()),
-            domain: None,
-            source_agent: Some("refinery".to_string()),
-            confidence: Some(0.5),
-            confirmed: None,
-            supersedes: None,
-            pending_revision: false,
-            is_recap: true,
-            ..Default::default()
-        };
-        db.upsert_documents(vec![doc]).await?;
-        generated += 1;
-    }
-
-    if generated > 0 {
-        log::info!("[refinery] generated {} decision logs", generated);
-    }
-    Ok(generated)
-}
-
 /// Group memories by activity bursts (30-min gap → new burst).
 /// Input memories should be sorted by last_modified (ascending or descending).
 /// Output: groups of references into the input slice, each group is one burst.
-type BurstItem = (String, String, Option<String>, i64);
+pub(crate) type BurstItem = (String, String, Option<String>, i64);
 
 #[allow(clippy::type_complexity)]
-fn group_into_bursts(memories: &[BurstItem]) -> Vec<Vec<&BurstItem>> {
+pub(crate) fn group_into_bursts(memories: &[BurstItem]) -> Vec<Vec<&BurstItem>> {
     if memories.is_empty() {
         return Vec::new();
     }
@@ -2791,164 +2413,50 @@ fn group_into_bursts(memories: &[BurstItem]) -> Vec<Vec<&BurstItem>> {
     bursts
 }
 
-/// Public wrapper for generate_recaps, callable from post_ingest module.
-pub async fn generate_recaps_public(
-    db: &MemoryDB,
-    llm: Option<&Arc<dyn LlmProvider>>,
-    prompts: &PromptRegistry,
-    tuning: &crate::tuning::RefineryConfig,
-) -> Result<u32, OriginError> {
-    generate_recaps(db, llm, prompts, tuning).await
-}
+/// Clean memory content for recap display: strip structured field metadata and prefixes.
+pub(crate) fn clean_for_recap(content: &str) -> String {
+    let mut s = content.to_string();
 
-/// Generate recaps from recent non-recap memories.
-/// Groups memories into 30-min activity bursts; generates a recap for each burst
-/// with 3+ memories that isn't already covered by an existing recap.
-pub(crate) async fn generate_recaps(
-    db: &MemoryDB,
-    llm: Option<&Arc<dyn LlmProvider>>,
-    prompts: &PromptRegistry,
-    tuning: &crate::tuning::RefineryConfig,
-) -> Result<u32, OriginError> {
-    let now = chrono::Utc::now().timestamp();
-    let lookback_start = now - tuning.recap_lookback_secs;
-
-    // Get all non-recap memories in the lookback window
-    let recent = db
-        .get_recent_memories_for_recap(lookback_start, 100)
-        .await?;
-    if recent.len() < tuning.min_memories_for_recap {
-        return Ok(0);
+    // Strip "claim: " or "context: " prefix
+    for prefix in &["claim: ", "context: ", "fact: "] {
+        if let Some(rest) = s.strip_prefix(prefix) {
+            s = rest.to_string();
+            break;
+        }
     }
 
-    // Group into bursts by 30-min gaps
-    let bursts = group_into_bursts(&recent);
-    let mut recaps_generated = 0u32;
-
-    for burst in &bursts {
-        if burst.len() < tuning.min_memories_for_recap {
-            continue;
-        }
-
-        // Determine burst time range
-        let burst_start = burst.iter().map(|m| m.3).min().unwrap_or(0);
-        let burst_end = burst.iter().map(|m| m.3).max().unwrap_or(0);
-
-        // Skip if a recap already covers this burst
-        if db.has_recap_covering_range(burst_start, burst_end).await? {
-            continue;
-        }
-
-        // Group content for the LLM
-        let contents: Vec<String> = burst
-            .iter()
-            .map(|(_, content, domain, _)| match domain {
-                Some(d) => format!("[{}] {}", d, content),
-                None => content.clone(),
-            })
-            .collect();
-
-        // Determine the dominant domain
-        let mut domain_counts: std::collections::HashMap<String, usize> =
-            std::collections::HashMap::new();
-        for (_, _, domain, _) in burst.iter() {
-            if let Some(d) = domain {
-                *domain_counts.entry(d.clone()).or_insert(0) += 1;
-            }
-        }
-        let dominant_domain = domain_counts
-            .into_iter()
-            .max_by_key(|(_, count)| *count)
-            .map(|(d, _)| d);
-
-        // Build raw context from burst
-        let burst_slice: Vec<(String, String, Option<String>, i64)> =
-            burst.iter().map(|m| (*m).clone()).collect();
-        let raw_context = build_burst_context(&burst_slice, burst_start, burst_end);
-
-        // Send to LLM for synthesis (or generate without LLM)
-        let (recap_summary, recap_content) = if let Some(llm) = llm {
-            let domain_hint = dominant_domain.as_deref().unwrap_or("general");
-            let combined = contents
-                .iter()
-                .enumerate()
-                .map(|(i, c)| format!("{}. {}", i + 1, c))
-                .collect::<Vec<_>>()
-                .join("\n");
-
-            let response = llm
-                .generate(LlmRequest {
-                    system_prompt: Some(
-                        prompts.detect_pattern.replace("{domain_hint}", domain_hint),
-                    ),
-                    user_prompt: combined,
-                    max_tokens: 128,
-                    temperature: 0.1,
-                    label: None,
-                    timeout_secs: None,
-                })
-                .await;
-
-            match response {
-                Ok(output)
-                    if output.trim().to_lowercase() != "null" && !output.trim().is_empty() =>
-                {
-                    let cleaned = crate::llm_provider::strip_think_tags(&output);
-                    (cleaned.trim().to_string(), raw_context)
-                }
-                _ => generate_simple_recap(&burst_slice, burst_start, burst_end),
-            }
-        } else {
-            generate_simple_recap(&burst_slice, burst_start, burst_end)
-        };
-
-        // Store the recap — set last_modified = burst_end so it sorts next to its source memories
-        let recap_id = format!("recap_{}", uuid::Uuid::new_v4());
-        // Track source memory IDs so the detail view can show exact sources
-        let source_ids: Vec<&str> = burst.iter().map(|(id, _, _, _)| id.as_str()).collect();
-        let structured = serde_json::json!({ "source_ids": source_ids }).to_string();
-        // Generate a short topic title via LLM; fall back to burst header
-        let burst_header: String = recap_content
-            .lines()
-            .take(2)
-            .collect::<Vec<_>>()
-            .join(" · ");
-        let title = if let Some(llm) = llm {
-            generate_short_title(llm, &recap_content)
-                .await
-                .unwrap_or_else(|| burst_header.chars().take(80).collect())
-        } else {
-            burst_header.chars().take(80).collect()
-        };
-        let doc = crate::sources::RawDocument {
-            source: "memory".to_string(),
-            source_id: recap_id,
-            title,
-            summary: Some(recap_summary),
-            content: recap_content,
-            url: None,
-            last_modified: burst_end,
-            metadata: std::collections::HashMap::new(),
-            memory_type: Some("fact".to_string()),
-            domain: dominant_domain,
-            source_agent: Some("refinery".to_string()),
-            confidence: Some(0.5),
-            confirmed: None,
-            supersedes: None,
-            pending_revision: false,
-            is_recap: true,
-            structured_fields: Some(structured),
-            ..Default::default()
-        };
-        db.upsert_documents(vec![doc]).await?;
-        recaps_generated += 1;
+    // Strip trailing structured metadata "| domain: ... | source: ... | verified: ..."
+    if let Some(pos) = s.find(" | domain: ") {
+        s.truncate(pos);
+    } else if let Some(pos) = s.find(" | source: ") {
+        s.truncate(pos);
+    } else if let Some(pos) = s.find(" | verified: ") {
+        s.truncate(pos);
+    } else if let Some(pos) = s.find(" | date: ") {
+        s.truncate(pos);
+    } else if let Some(pos) = s.find(" | decision: ") {
+        s.truncate(pos);
+    } else if let Some(pos) = s.find(" | reversible: ") {
+        s.truncate(pos);
     }
 
-    Ok(recaps_generated)
+    // Trim and cap at first sentence or 200 chars for readability
+    let s = s.trim();
+    if s.len() > 200 {
+        let truncated: String = s.chars().take(200).collect();
+        // Cut at last sentence boundary if possible
+        if let Some(pos) = truncated.rfind(". ") {
+            format!("{}.", &truncated[..pos])
+        } else {
+            format!("{}...", truncated.trim_end())
+        }
+    } else {
+        s.to_string()
+    }
 }
 
 /// Build a structured raw-context string from a burst of memories.
-fn build_burst_context(
+pub(crate) fn build_burst_context(
     memories: &[(String, String, Option<String>, i64)],
     burst_start: i64,
     burst_end: i64,
@@ -3269,78 +2777,6 @@ pub(crate) async fn generate_short_title(
     }
 }
 
-/// Clean memory content for recap display: strip structured field metadata and prefixes.
-fn clean_for_recap(content: &str) -> String {
-    let mut s = content.to_string();
-
-    // Strip "claim: " or "context: " prefix
-    for prefix in &["claim: ", "context: ", "fact: "] {
-        if let Some(rest) = s.strip_prefix(prefix) {
-            s = rest.to_string();
-            break;
-        }
-    }
-
-    // Strip trailing structured metadata "| domain: ... | source: ... | verified: ..."
-    if let Some(pos) = s.find(" | domain: ") {
-        s.truncate(pos);
-    } else if let Some(pos) = s.find(" | source: ") {
-        s.truncate(pos);
-    } else if let Some(pos) = s.find(" | verified: ") {
-        s.truncate(pos);
-    } else if let Some(pos) = s.find(" | date: ") {
-        s.truncate(pos);
-    } else if let Some(pos) = s.find(" | decision: ") {
-        s.truncate(pos);
-    } else if let Some(pos) = s.find(" | reversible: ") {
-        s.truncate(pos);
-    }
-
-    // Trim and cap at first sentence or 200 chars for readability
-    let s = s.trim();
-    if s.len() > 200 {
-        let truncated: String = s.chars().take(200).collect();
-        // Cut at last sentence boundary if possible
-        if let Some(pos) = truncated.rfind(". ") {
-            format!("{}.", &truncated[..pos])
-        } else {
-            format!("{}...", truncated.trim_end())
-        }
-    } else {
-        s.to_string()
-    }
-}
-
-/// Generate a simple recap without LLM (fallback).
-/// Returns (summary, raw_context).
-fn generate_simple_recap(
-    memories: &[(String, String, Option<String>, i64)],
-    burst_start: i64,
-    burst_end: i64,
-) -> (String, String) {
-    let count = memories.len();
-    let domains: Vec<String> = memories
-        .iter()
-        .filter_map(|(_, _, d, _)| d.clone())
-        .collect::<std::collections::HashSet<_>>()
-        .into_iter()
-        .collect();
-
-    let summary = format!(
-        "Recap: {} memories stored{}",
-        count,
-        if domains.is_empty() {
-            String::new()
-        } else {
-            format!(" ({})", domains.join(", "))
-        },
-    );
-
-    let raw_context = build_burst_context(memories, burst_start, burst_end);
-
-    (summary, raw_context)
-}
-
 /// Apply a merge result based on the stability tier of the involved memories.
 async fn apply_merge_by_tier(
     db: &MemoryDB,
@@ -3381,293 +2817,10 @@ async fn apply_merge_by_tier(
     Ok(())
 }
 
-/// Retry enrichment steps that previously failed (status = "failed") but
-/// haven't exceeded `max_enrichment_retries`. Non-LLM steps (dedup,
-/// entity_link, contradiction, concept_contradiction, entity_suggestion)
-/// are retried directly. When an LLM is provided, title_enrich steps
-/// (failed + needs_retry) are retried via a dedicated loop using
-/// `get_title_reenrich_candidates`, plus a one-time backfill of old
-/// ok-but-truncated titles via `get_truncated_title_memories`. On success
-/// the step is marked "ok"; on repeated failure and max retries reached
-/// the step is moved to "abandoned".
-pub(crate) async fn retry_failed_enrichment(
-    db: &MemoryDB,
-    tuning: &crate::tuning::RefineryConfig,
-    llm: Option<&Arc<dyn LlmProvider>>,
-) -> Result<usize, OriginError> {
-    let failed = db
-        .get_failed_enrichment_memories(tuning.max_enrichment_retries, 20)
-        .await?;
-
-    let mut retried = 0usize;
-    for (source_id, step_name, content) in &failed {
-        log::info!("[refinery] retrying enrichment step '{step_name}' for {source_id}");
-        let result = match step_name.as_str() {
-            "dedup" => crate::post_ingest::check_dedup(db, source_id, content, tuning)
-                .await
-                .map(|_| ()),
-            "entity_link" => crate::post_ingest::auto_link_entity(db, source_id, content, tuning)
-                .await
-                .map(|_| ()),
-            "contradiction" => {
-                let mt = db.get_memory_type(source_id).await.unwrap_or(None);
-                let domain = db.get_memory_domain(source_id).await.unwrap_or(None);
-                if let Some(mt) = &mt {
-                    crate::post_ingest::check_contradiction(
-                        db,
-                        source_id,
-                        mt,
-                        domain.as_deref(),
-                        None,
-                        content,
-                    )
-                    .await
-                    .map(|_| ())
-                } else {
-                    Ok(())
-                }
-            }
-            "concept_contradiction" => {
-                crate::post_ingest::check_page_contradiction(db, source_id, content)
-                    .await
-                    .map(|_| ())
-            }
-            "entity_suggestion" => crate::post_ingest::suggest_entity_creation(db, content).await,
-            // title_enrich is handled by the dedicated title loop below
-            "title_enrich" => continue,
-            // Other LLM-requiring steps can't be retried without LLM
-            _ => {
-                log::info!("[refinery] step '{step_name}' requires LLM, skipping");
-                continue;
-            }
-        };
-        match result {
-            Ok(()) => {
-                db.record_enrichment_step(source_id, step_name, "ok", None)
-                    .await
-                    .ok();
-                retried += 1;
-            }
-            Err(e) => {
-                log::warn!("[refinery] retry of '{step_name}' for {source_id} failed: {e}");
-                // Check current attempts BEFORE recording, so we can decide
-                // whether to mark failed (retryable) or abandoned (final).
-                let current_attempts = db
-                    .get_enrichment_steps(source_id)
-                    .await
-                    .ok()
-                    .and_then(|steps| {
-                        steps
-                            .iter()
-                            .find(|s| s.step == *step_name)
-                            .map(|s| s.attempts)
-                    })
-                    .unwrap_or(0);
-                // record_enrichment_step increments attempts via UPSERT, so
-                // after this call attempts = current_attempts + 1.
-                let status = if (current_attempts + 1) as usize >= tuning.max_enrichment_retries {
-                    "abandoned"
-                } else {
-                    "failed"
-                };
-                db.record_enrichment_step(source_id, step_name, status, Some(&e.to_string()))
-                    .await
-                    .ok();
-                if status == "abandoned" {
-                    log::info!(
-                        "[refinery] step '{step_name}' for {source_id} abandoned after {} attempts",
-                        current_attempts + 1
-                    );
-                }
-                retried += 1;
-            }
-        }
-    }
-
-    // Title re-enrichment pass -- uses dedicated query and handles
-    // the three-variant TitleEnrichResult (not just Ok/Err).
-    if let Some(llm_ref) = llm {
-        let candidates = db
-            .get_title_reenrich_candidates(tuning.max_enrichment_retries, 10)
-            .await?;
-        for (source_id, content) in &candidates {
-            log::info!("[refinery] re-enriching title for {source_id}");
-            match crate::post_ingest::enrich_title(db, source_id, content, llm_ref, false).await {
-                Ok(crate::post_ingest::TitleEnrichResult::Enriched) => {
-                    db.record_enrichment_step(source_id, "title_enrich", "ok", None)
-                        .await
-                        .ok();
-                    retried += 1;
-                }
-                Ok(crate::post_ingest::TitleEnrichResult::NotNeeded) => {
-                    // Title was fixed externally (e.g., user edited it)
-                    db.record_enrichment_step(source_id, "title_enrich", "ok", None)
-                        .await
-                        .ok();
-                    retried += 1;
-                }
-                Ok(crate::post_ingest::TitleEnrichResult::LlmRejected) => {
-                    let current_attempts = db
-                        .get_enrichment_steps(source_id)
-                        .await
-                        .ok()
-                        .and_then(|steps| {
-                            steps
-                                .iter()
-                                .find(|s| s.step == "title_enrich")
-                                .map(|s| s.attempts)
-                        })
-                        .unwrap_or(0);
-                    let status = if (current_attempts + 1) as usize >= tuning.max_enrichment_retries
-                    {
-                        "abandoned"
-                    } else {
-                        "needs_retry"
-                    };
-                    db.record_enrichment_step(
-                        source_id,
-                        "title_enrich",
-                        status,
-                        Some("llm_rejected"),
-                    )
-                    .await
-                    .ok();
-                    if status == "abandoned" {
-                        log::info!(
-                            "[refinery] title_enrich for {source_id} abandoned after {} attempts",
-                            current_attempts + 1
-                        );
-                    }
-                    retried += 1;
-                }
-                Err(e) => {
-                    log::warn!("[refinery] title re-enrichment for {source_id} failed: {e}");
-                    let current_attempts = db
-                        .get_enrichment_steps(source_id)
-                        .await
-                        .ok()
-                        .and_then(|steps| {
-                            steps
-                                .iter()
-                                .find(|s| s.step == "title_enrich")
-                                .map(|s| s.attempts)
-                        })
-                        .unwrap_or(0);
-                    let status = if (current_attempts + 1) as usize >= tuning.max_enrichment_retries
-                    {
-                        "abandoned"
-                    } else {
-                        "failed"
-                    };
-                    db.record_enrichment_step(
-                        source_id,
-                        "title_enrich",
-                        status,
-                        Some(&e.to_string()),
-                    )
-                    .await
-                    .ok();
-                    if status == "abandoned" {
-                        log::info!(
-                            "[refinery] title_enrich for {source_id} abandoned after {} attempts",
-                            current_attempts + 1
-                        );
-                    }
-                    retried += 1;
-                }
-            }
-        }
-
-        // One-time backfill: catch old memories recorded as ok but still truncated.
-        if db
-            .get_app_metadata("title_backfill_done")
-            .await
-            .ok()
-            .flatten()
-            .is_none()
-        {
-            let old = db.get_truncated_title_memories(10).await?;
-            for (source_id, content) in &old {
-                log::info!("[refinery] backfill title re-enrichment for {source_id}");
-                match crate::post_ingest::enrich_title(db, source_id, content, llm_ref, false).await
-                {
-                    Ok(crate::post_ingest::TitleEnrichResult::Enriched) => {
-                        db.record_enrichment_step(source_id, "title_enrich", "ok", None)
-                            .await
-                            .ok();
-                        retried += 1;
-                    }
-                    Ok(crate::post_ingest::TitleEnrichResult::LlmRejected) => {
-                        db.record_enrichment_step(
-                            source_id,
-                            "title_enrich",
-                            "needs_retry",
-                            Some("llm_rejected"),
-                        )
-                        .await
-                        .ok();
-                        retried += 1;
-                    }
-                    Ok(crate::post_ingest::TitleEnrichResult::NotNeeded) => {
-                        // Already has a good title
-                    }
-                    Err(e) => {
-                        log::warn!("[refinery] backfill title for {source_id} failed: {e}");
-                        db.record_enrichment_step(
-                            source_id,
-                            "title_enrich",
-                            "failed",
-                            Some(&e.to_string()),
-                        )
-                        .await
-                        .ok();
-                    }
-                }
-            }
-            if old.is_empty() {
-                let _ = db.set_app_metadata("title_backfill_done", "1").await;
-            }
-        }
-    }
-
-    Ok(retried)
-}
-
-/// Trigger a refinery steep on demand — used by the chat import flow to
-/// process freshly-ingested memories without waiting for the scheduled
-/// 30-minute tick.
-///
-/// This is a thin wrapper around the existing steep logic. Callers should
-/// await completion before showing "done" to users.
-pub async fn trigger_steep_now(
-    db: Arc<MemoryDB>,
-    llm: Option<&Arc<dyn LlmProvider>>,
-    api_llm: Option<&Arc<dyn LlmProvider>>,
-    synthesis_llm: Option<&Arc<dyn LlmProvider>>,
-) -> Result<SteepResult, OriginError> {
-    let prompts = PromptRegistry::load(&PromptRegistry::override_dir());
-    let tuning = crate::tuning::TuningConfig::load(&crate::tuning::TuningConfig::config_path());
-
-    log::info!("[refinery] on-demand steep triggered");
-    run_periodic_steep_with_api(
-        &db,
-        llm,
-        api_llm,
-        synthesis_llm,
-        &prompts,
-        &tuning.refinery,
-        &tuning.confidence,
-        &tuning.distillation,
-        TriggerKind::Backstop,
-    )
-    .await
-}
-
 #[derive(Debug, Serialize)]
 pub struct SteepResult {
     pub memories_decayed: u64,
     pub recaps_generated: u32,
-    pub imports_reclassified: u32,
     pub distilled: u32,
     pub pending_remaining: u32,
     pub phases: Vec<PhaseResult>,
@@ -3715,7 +2868,6 @@ mod tests {
         assert!(!t.runs_phase("emergence"));
         assert!(!t.runs_phase("community_detection"));
         assert!(!t.runs_phase("decision_logs"));
-        assert!(!t.runs_phase("reclassify"));
         assert!(!t.runs_phase("prune_rejections"));
     }
 
@@ -3731,11 +2883,9 @@ mod tests {
         assert!(!t.runs_phase("refinement_queue"));
         assert!(!t.runs_phase("decay"));
         assert!(!t.runs_phase("promote"));
-        assert!(!t.runs_phase("reclassify"));
         assert!(!t.runs_phase("reweave"));
         assert!(!t.runs_phase("reembed"));
         assert!(!t.runs_phase("entity_extraction"));
-        assert!(!t.runs_phase("decision_backfill"));
         assert!(!t.runs_phase("prune_rejections"));
     }
 
@@ -3744,11 +2894,9 @@ mod tests {
         let t = TriggerKind::Daily;
         assert!(t.runs_phase("decay"));
         assert!(t.runs_phase("promote"));
-        assert!(t.runs_phase("reclassify"));
         assert!(t.runs_phase("reweave"));
         assert!(t.runs_phase("reembed"));
         assert!(t.runs_phase("entity_extraction"));
-        assert!(t.runs_phase("decision_backfill"));
         assert!(t.runs_phase("prune_rejections"));
         // Should NOT run synthesis or burst phases
         assert!(!t.runs_phase("recaps"));
@@ -3954,7 +3102,6 @@ mod tests {
             "emergence",
             "re-distill",
             "decision_logs",
-            "retry_failed_enrichment",
         ];
         for &exp in expected {
             assert!(
@@ -4004,16 +3151,14 @@ mod tests {
 
         let phase_names: Vec<&str> = result.phases.iter().map(|p| p.name.as_str()).collect();
 
-        // Daily subset — all maintenance + backfill phases including
+        // Daily subset — all maintenance phases including
         // prune_rejections (promoted to a tracked phase in Task 4).
         let expected: &[&str] = &[
             "decay",
             "promote",
-            "reclassify",
             "reweave",
             "reembed",
             "entity_extraction",
-            "decision_backfill",
             "prune_rejections",
             "kg_rethink",
         ];
@@ -4035,7 +3180,7 @@ mod tests {
         for name in &phase_names {
             assert!(
                 expected.contains(name),
-                "Daily should only run maintenance + backfill phases, got unexpected: {}",
+                "Daily should only run maintenance phases, got unexpected: {}",
                 name
             );
         }
@@ -4070,14 +3215,13 @@ mod tests {
 
         let phase_names: Vec<&str> = result.phases.iter().map(|p| p.name.as_str()).collect();
 
-        // All 16 phases must run with Backstop. `kg_rethink` is
+        // All 13 phases must run with Backstop. `kg_rethink` is
         // rate-limited, so on a fresh DB (last_kg_rethink_ts=0) it runs
         // on the first steep.
         let expected: &[&str] = &[
             "decay",
             "promote",
             "recaps",
-            "reclassify",
             "reweave",
             "reembed",
             "entity_extraction",
@@ -4086,10 +3230,8 @@ mod tests {
             "re-distill",
             "refinement_queue",
             "decision_logs",
-            "decision_backfill",
             "prune_rejections",
             "kg_rethink",
-            "retry_failed_enrichment",
         ];
         for &exp in expected {
             assert!(
@@ -4291,161 +3433,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_generate_recaps_from_recent_memories() {
-        let (db, _dir) = test_db().await;
-
-        // Insert 5 recent memories (enough to trigger recap)
-        let now = chrono::Utc::now().timestamp();
-        for i in 0..5 {
-            let mut doc = make_memory(
-                &format!("recent_{}", i),
-                &format!("Working on feature {} for the Origin project", i),
-                "fact",
-                "engineering",
-            );
-            doc.last_modified = now - 60 * i as i64; // spread across last 5 minutes
-            db.upsert_documents(vec![doc]).await.unwrap();
-        }
-
-        // No recap should exist yet
-        assert!(!db.has_recap_since(now - 86400_i64).await.unwrap());
-
-        // Generate recaps (no LLM — uses simple fallback)
-        let generated = generate_recaps(
-            &db,
-            None,
-            &PromptRegistry::default(),
-            &crate::tuning::RefineryConfig::default(),
-        )
-        .await
-        .unwrap();
-        assert_eq!(generated, 1, "should generate 1 recap");
-
-        // Recap should now exist
-        assert!(db.has_recap_since(now - 86400_i64).await.unwrap());
-
-        // Running again should skip (recap already exists)
-        let generated2 = generate_recaps(
-            &db,
-            None,
-            &PromptRegistry::default(),
-            &crate::tuning::RefineryConfig::default(),
-        )
-        .await
-        .unwrap();
-        assert_eq!(generated2, 0, "should not generate duplicate recap");
-
-        // The recap should be searchable (stored as memory_type=fact, is_recap=1)
-        let results = db
-            .search_memory(
-                "Origin project feature",
-                10,
-                Some("fact"),
-                None,
-                None,
-                None,
-                None,
-                None,
-            )
-            .await
-            .unwrap();
-        assert!(!results.is_empty(), "recap should be searchable as fact");
-    }
-
-    #[tokio::test]
-    async fn test_recap_separates_content_and_summary() {
-        let (db, _dir) = test_db().await;
-
-        let now = chrono::Utc::now().timestamp();
-        for i in 0..4 {
-            let mut doc = make_memory(
-                &format!("sep_{}", i),
-                &format!("Debugging issue {} in the auth module", i),
-                "fact",
-                "engineering",
-            );
-            doc.last_modified = now - 60 * i as i64;
-            db.upsert_documents(vec![doc]).await.unwrap();
-        }
-
-        let generated = generate_recaps(
-            &db,
-            None,
-            &PromptRegistry::default(),
-            &crate::tuning::RefineryConfig::default(),
-        )
-        .await
-        .unwrap();
-        assert_eq!(generated, 1);
-
-        // Find the recap via search (stored as memory_type=fact, is_recap=1)
-        let results = db
-            .search_memory(
-                "auth module debugging",
-                10,
-                Some("fact"),
-                None,
-                None,
-                None,
-                None,
-                None,
-            )
-            .await
-            .unwrap();
-        assert!(!results.is_empty(), "recap should be searchable as fact");
-
-        // Find the recap result (source_id starts with "recap_")
-        let recap_result = results
-            .iter()
-            .find(|r| r.source_id.starts_with("recap_"))
-            .expect("should find a recap entry in results");
-
-        // Fetch full detail to verify content vs summary separation
-        let detail = db
-            .get_memory_detail(&recap_result.source_id)
-            .await
-            .unwrap()
-            .unwrap();
-        assert!(detail.summary.is_some(), "recap should have a summary");
-        let summary = detail.summary.unwrap();
-        assert!(
-            summary.starts_with("Recap:"),
-            "summary should be the concise line"
-        );
-        assert!(
-            detail.content.contains("Activity burst:"),
-            "content should be the structured context"
-        );
-        assert_ne!(detail.content, summary, "content and summary must differ");
-    }
-
-    #[tokio::test]
-    async fn test_no_recap_when_too_few_memories() {
-        let (db, _dir) = test_db().await;
-
-        // Only 2 memories — below threshold
-        let now = chrono::Utc::now().timestamp();
-        for i in 0..2 {
-            let mut doc = make_memory(&format!("few_{}", i), "Some content", "fact", "eng");
-            doc.last_modified = now - 60;
-            db.upsert_documents(vec![doc]).await.unwrap();
-        }
-
-        let generated = generate_recaps(
-            &db,
-            None,
-            &PromptRegistry::default(),
-            &crate::tuning::RefineryConfig::default(),
-        )
-        .await
-        .unwrap();
-        assert_eq!(
-            generated, 0,
-            "should not generate recap with too few memories"
-        );
-    }
-
-    #[tokio::test]
     async fn test_steep_returns_phase_results() {
         let (db, _dir) = test_db().await;
 
@@ -4478,7 +3465,7 @@ mod tests {
                 phase.error
             );
         }
-        // Should have at least decay, recaps, reclassify, reweave, reembed, entity_extraction, distillation, refinement_queue, decision_logs
+        // Should have at least decay, recaps, reweave, reembed, entity_extraction, distillation, refinement_queue, decision_logs
         assert!(
             result.phases.len() >= 6,
             "should have at least 6 phases, got {}",
@@ -4554,66 +3541,6 @@ mod tests {
         let pending = db.get_pending_refinements().await.unwrap();
         assert_eq!(pending.len(), 1);
         assert_eq!(pending[0].status, "awaiting_review");
-    }
-
-    #[tokio::test]
-    async fn test_decision_logs_no_decisions() {
-        let (db, _dir) = test_db().await;
-
-        // No decision memories → should generate 0 logs
-        let generated = generate_decision_logs(
-            &db,
-            None,
-            &PromptRegistry::default(),
-            &crate::tuning::RefineryConfig::default(),
-        )
-        .await
-        .unwrap();
-        assert_eq!(generated, 0);
-    }
-
-    #[tokio::test]
-    async fn test_decision_logs_with_decisions() {
-        let (db, _dir) = test_db().await;
-
-        let now = chrono::Utc::now().timestamp();
-        for i in 0..4 {
-            let mut doc = make_memory(
-                &format!("dec_{}", i),
-                &format!("Decided to use approach {} for the backend refactor", i),
-                "decision",
-                "engineering",
-            );
-            doc.last_modified = now - 60 * i as i64;
-            db.upsert_documents(vec![doc]).await.unwrap();
-        }
-
-        let generated = generate_decision_logs(
-            &db,
-            None,
-            &PromptRegistry::default(),
-            &crate::tuning::RefineryConfig::default(),
-        )
-        .await
-        .unwrap();
-        assert_eq!(generated, 1, "should generate 1 decision log");
-
-        // Verify the decision log is stored as decision type with is_recap=true
-        let results = db
-            .search_memory(
-                "backend refactor approach",
-                10,
-                Some("decision"),
-                None,
-                None,
-                None,
-                None,
-                None,
-            )
-            .await
-            .unwrap();
-        let recap = results.iter().find(|r| r.source_id.starts_with("recap_"));
-        assert!(recap.is_some(), "should find a decision log recap");
     }
 
     #[tokio::test]
@@ -4741,22 +3668,6 @@ mod tests {
         assert_eq!(active.len(), 0);
     }
 
-    #[tokio::test]
-    async fn test_trigger_steep_now_runs_steep() {
-        let (db, _dir) = test_db().await;
-        let db_arc = std::sync::Arc::new(db);
-
-        // Insert a fake unclassified import memory.
-        db_arc
-            .store_raw_import_memory("import_claude_conv-xyz_0", "Hello world", None, None, 0)
-            .await
-            .unwrap();
-
-        // Trigger on-demand steep.
-        let result = trigger_steep_now(db_arc.clone(), None, None, None).await;
-        assert!(result.is_ok(), "steep failed: {:?}", result.err());
-    }
-
     // ── Nudge + PhaseOutput tests (Task 1) ──────────────────────────────
 
     #[test]
@@ -4805,34 +3716,6 @@ mod tests {
         assert_eq!(classify_backfill(0), (Nudge::Silent, None));
         assert_eq!(classify_backfill(1), (Nudge::Silent, None));
         assert_eq!(classify_backfill(100), (Nudge::Silent, None));
-    }
-
-    #[test]
-    fn test_classify_recaps_silent_when_zero() {
-        assert_eq!(classify_recaps(0), (Nudge::Silent, None));
-    }
-
-    #[test]
-    fn test_classify_recaps_ambient_when_generated() {
-        let (nudge, headline) = classify_recaps(1);
-        assert_eq!(nudge, Nudge::Ambient);
-        let h = headline.expect("headline should be set");
-        assert!(
-            h.contains("steeped"),
-            "headline should use steep vocabulary: {}",
-            h
-        );
-    }
-
-    #[test]
-    fn test_classify_recaps_plural_form() {
-        let (_, headline) = classify_recaps(3);
-        let h = headline.expect("headline should be set");
-        assert!(
-            h.contains('3'),
-            "multi-recap headline should mention the count: {}",
-            h
-        );
     }
 
     #[test]
@@ -4906,34 +3789,6 @@ mod tests {
         assert!(
             h.contains("contradiction"),
             "headline should describe contradiction resolution: {}",
-            h
-        );
-    }
-
-    #[test]
-    fn test_classify_decision_logs_silent_when_zero() {
-        assert_eq!(classify_decision_logs(0), (Nudge::Silent, None));
-    }
-
-    #[test]
-    fn test_classify_decision_logs_ambient_when_generated() {
-        let (nudge, headline) = classify_decision_logs(1);
-        assert_eq!(nudge, Nudge::Ambient);
-        let h = headline.expect("headline should be set");
-        assert!(
-            h.contains("decision"),
-            "headline should mention decisions: {}",
-            h
-        );
-    }
-
-    #[test]
-    fn test_classify_decision_logs_plural_form() {
-        let (_, headline) = classify_decision_logs(3);
-        let h = headline.expect("headline should be set");
-        assert!(
-            h.contains('3'),
-            "plural headline should mention count: {}",
             h
         );
     }
@@ -5027,7 +3882,7 @@ mod tests {
     async fn test_non_silent_phases_can_be_logged_as_activity() {
         let (db, _dir) = test_db().await;
 
-        let (nudge, headline) = classify_recaps(2);
+        let (nudge, headline) = crate::synthesis::recaps::classify_recaps(2);
         assert_eq!(nudge, Nudge::Ambient);
         let headline = headline.expect("Ambient should have a headline");
 
@@ -5191,124 +4046,6 @@ mod tests {
             strip_source_prefix("[has spaces] content"),
             "[has spaces] content"
         );
-    }
-
-    // ── retry_failed_enrichment tests (Task 8) ─────────────────────────
-
-    #[tokio::test]
-    async fn test_retry_failed_enrichment_phase() {
-        let (db, _dir) = test_db().await;
-        let doc = make_memory(
-            "mem_retry_test",
-            "Python uses indentation for blocks",
-            "fact",
-            "tech",
-        );
-        db.upsert_documents(vec![doc]).await.unwrap();
-        db.record_enrichment_step("mem_retry_test", "dedup", "failed", Some("transient error"))
-            .await
-            .unwrap();
-        db.record_enrichment_step("mem_retry_test", "entity_link", "ok", None)
-            .await
-            .unwrap();
-        let tuning = crate::tuning::RefineryConfig::default();
-        let count = retry_failed_enrichment(&db, &tuning, None).await.unwrap();
-        assert!(count > 0, "should have retried at least one memory");
-        let steps = db.get_enrichment_steps("mem_retry_test").await.unwrap();
-        let dedup = steps.iter().find(|s| s.step == "dedup").unwrap();
-        assert_eq!(dedup.status, "ok", "retry should have fixed the dedup step");
-    }
-
-    #[tokio::test]
-    async fn test_retry_skips_abandoned_steps() {
-        let (db, _dir) = test_db().await;
-        let doc = make_memory("mem_abandon_skip", "test content", "fact", "tech");
-        db.upsert_documents(vec![doc]).await.unwrap();
-        db.record_enrichment_step(
-            "mem_abandon_skip",
-            "entity_extract",
-            "abandoned",
-            Some("gave up"),
-        )
-        .await
-        .unwrap();
-        let tuning = crate::tuning::RefineryConfig::default();
-        let count = retry_failed_enrichment(&db, &tuning, None).await.unwrap();
-        assert_eq!(count, 0, "should not retry abandoned steps");
-        let steps = db.get_enrichment_steps("mem_abandon_skip").await.unwrap();
-        assert_eq!(steps[0].status, "abandoned");
-    }
-
-    #[tokio::test]
-    async fn test_title_reenrich_skipped_without_llm() {
-        let (db, _dir) = test_db().await;
-        let mut doc = make_memory(
-            "mem_title_no_llm",
-            "A very long memory content that will result in a truncated title when initially stored by the system",
-            "fact",
-            "tech",
-        );
-        doc.title = "A very long memory content that will result in a truncated title when ini..."
-            .to_string();
-        db.upsert_documents(vec![doc]).await.unwrap();
-        db.record_enrichment_step(
-            "mem_title_no_llm",
-            "title_enrich",
-            "failed",
-            Some("llm error"),
-        )
-        .await
-        .unwrap();
-
-        let tuning = crate::tuning::RefineryConfig::default();
-        let _count = retry_failed_enrichment(&db, &tuning, None).await.unwrap();
-        let steps = db.get_enrichment_steps("mem_title_no_llm").await.unwrap();
-        let title_step = steps.iter().find(|s| s.step == "title_enrich").unwrap();
-        assert_eq!(
-            title_step.status, "failed",
-            "should still be failed without LLM"
-        );
-    }
-
-    #[tokio::test]
-    async fn test_title_reenrich_runs_when_only_needs_retry_exists() {
-        // Regression: the title loop must run even when get_failed_enrichment_memories
-        // returns empty (no "failed" steps). Only "needs_retry" title steps exist.
-        let (db, _dir) = test_db().await;
-        let doc = make_memory(
-            "mem_needs_retry_only",
-            "Some content about machine learning pipelines",
-            "fact",
-            "tech",
-        );
-        db.upsert_documents(vec![doc]).await.unwrap();
-        // Record title_enrich as needs_retry (not "failed") -- this is the LlmRejected case
-        db.record_enrichment_step(
-            "mem_needs_retry_only",
-            "title_enrich",
-            "needs_retry",
-            Some("llm_rejected"),
-        )
-        .await
-        .unwrap();
-
-        // No other steps are "failed", so get_failed_enrichment_memories returns empty.
-        // The title loop must still run and find this via get_title_reenrich_candidates.
-        let tuning = crate::tuning::RefineryConfig::default();
-        // Pass None for LLM -- title loop is guarded by llm.is_some(), so it won't
-        // actually re-enrich, but the function must not return early before reaching
-        // the title loop. We verify the function completes without panic.
-        let count = retry_failed_enrichment(&db, &tuning, None).await.unwrap();
-        // With None LLM, the title loop is skipped, so count should be 0.
-        // The key assertion is that we got here at all (no early return).
-        assert_eq!(count, 0);
-        // Step should still be needs_retry (unchanged, since no LLM was provided)
-        let steps = db
-            .get_enrichment_steps("mem_needs_retry_only")
-            .await
-            .unwrap();
-        let title_step = steps.iter().find(|s| s.step == "title_enrich").unwrap();
-        assert_eq!(title_step.status, "needs_retry");
     }
 
     #[test]

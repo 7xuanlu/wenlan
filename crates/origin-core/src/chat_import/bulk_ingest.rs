@@ -1,10 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Bulk ingest helper for chat imports.
 //!
-//! Takes a batch of `ParsedConversation`s and stores them as raw memories
-//! tagged for the existing `reclassify_imports` pipeline to pick up. Does
-//! NOT run classification, extraction, or distillation itself — that work
-//! happens in the refinery steep that runs after ingest finishes.
+//! Takes a batch of `ParsedConversation`s and stores them as raw memories.
+//! Does NOT run classification, extraction, or distillation itself — that work
+//! happens via post_ingest.rs on ingest and the refinery steep that runs after.
 
 use crate::chat_import::types::{ParsedConversation, Vendor};
 use crate::db::MemoryDB;
@@ -80,8 +79,8 @@ pub struct BulkImportResult {
 /// and `memory_type = NULL`. All messages in the same conversation share
 /// the same `source_id`, with `chunk_index` distinguishing ordinal position.
 ///
-/// This matches the existing `import_%` pattern that
-/// `refinery::reclassify_imports` picks up automatically.
+/// Memories are stored with `source = 'memory'` and `memory_type = NULL`;
+/// post-ingest classification runs via `post_ingest.rs` on each stored memory.
 pub async fn bulk_import_conversations(
     db: Arc<MemoryDB>,
     batch: &[ParsedConversation],
