@@ -1,17 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
-use serde::Serialize;
-
-#[derive(Debug, Clone, Serialize)]
-pub struct SystemInfo {
-    pub total_ram_gb: f64,
-    pub available_ram_gb: f64,
-    pub has_metal: bool,
-    pub has_cuda: bool,
-    pub os: String,
-    pub arch: String,
-    pub recommended_builtin: String,
-}
+pub use origin_types::system_info::SystemInfo;
 
 pub fn detect_system_info() -> SystemInfo {
     use sysinfo::System;

@@ -12,6 +12,7 @@ pub mod onboarding;
 pub mod requests;
 pub mod responses;
 pub mod sources;
+pub mod system_info;
 
 // Re-export commonly used types at crate root for convenience.
 pub use entities::{
