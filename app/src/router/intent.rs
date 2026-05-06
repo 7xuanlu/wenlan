@@ -333,10 +333,6 @@ fn extract_ingest_fields(
     std::collections::HashMap<String, String>,
 ) {
     let source = match bundle.trigger_type.as_str() {
-        "ambient" => "ambient",
-        "focus" => "focus_capture",
-        "hotkey" => "hotkey_capture",
-        "snip" => "snip_capture",
         "thought" => "quick_thought",
         _ => "context",
     }
