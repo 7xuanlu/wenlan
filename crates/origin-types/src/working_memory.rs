@@ -4,6 +4,15 @@
 use serde::{Deserialize, Serialize};
 use std::collections::VecDeque;
 
+/// Current unix timestamp (seconds). Used by `WorkingMemory::prune` and tests.
+/// Uses `std::time` to keep origin-types free of chrono.
+fn now_unix_secs() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0)
+}
+
 /// Rolling buffer retention: 15 minutes.
 const DEFAULT_MAX_AGE_SECS: i64 = 900;
 
@@ -64,7 +73,7 @@ impl WorkingMemory {
 
     /// Remove entries older than max_age_secs.
     fn prune(&mut self) {
-        let cutoff = chrono::Utc::now().timestamp() - self.max_age_secs;
+        let cutoff = now_unix_secs() - self.max_age_secs;
         self.entries.retain(|e| e.timestamp >= cutoff);
     }
 }
@@ -80,7 +89,7 @@ mod tests {
     use super::*;
 
     fn now() -> i64 {
-        chrono::Utc::now().timestamp()
+        now_unix_secs()
     }
 
     fn make_entry(source_id: &str, app: &str, ts: i64) -> WorkingMemoryEntry {
