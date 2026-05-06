@@ -5204,7 +5204,7 @@ dependencies = [
 
 [[package]]
 name = "origin"
-version = "0.2.1"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -5255,7 +5255,7 @@ dependencies = [
 
 [[package]]
 name = "origin-core"
-version = "0.2.1"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -5292,7 +5292,7 @@ dependencies = [
 
 [[package]]
 name = "origin-server"
-version = "0.2.1"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "axum 0.8.8",
@@ -5319,7 +5319,7 @@ dependencies = [
 
 [[package]]
 name = "origin-types"
-version = "0.2.1"
+version = "0.3.0"
 dependencies = [
  "serde",
  "serde_json",
