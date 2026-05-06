@@ -162,6 +162,7 @@ impl<'a> MilestoneEvaluator<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::str::FromStr;
 
     const ALL: &[MilestoneId] = &[
         MilestoneId::IntelligenceReady,
