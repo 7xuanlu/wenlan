@@ -19,6 +19,5 @@ pub mod report;
 pub mod retrieval;
 pub mod runner;
 pub mod signals;
-pub mod store_quality;
 /// Backward-compat alias: old code using `eval::token_efficiency::*` still works.
 pub use retrieval as token_efficiency;
