@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-//! fixture-gen: Generate eval fixtures and run store quality checks.
+//! fixture-gen: Generate eval fixtures.
 //!
 //! Lives in origin-core (not the Tauri app crate) so Tauri's bundler
 //! doesn't copy it into Origin.app/Contents/MacOS. Binaries under
