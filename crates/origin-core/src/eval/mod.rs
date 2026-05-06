@@ -12,7 +12,6 @@ pub mod fixtures;
 pub mod gen;
 pub mod lifecycle;
 pub mod locomo;
-pub mod locomo_plus;
 pub mod longmemeval;
 pub mod metrics;
 pub mod pipeline;

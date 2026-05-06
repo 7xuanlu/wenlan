@@ -834,23 +834,6 @@ async fn save_longmemeval_expanded_baseline() {
 }
 
 #[tokio::test]
-#[ignore]
-async fn save_locomo_plus_baseline() {
-    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("eval/data/locomo_plus.json");
-    if !path.exists() {
-        println!("SKIP: locomo_plus.json not found");
-        return;
-    }
-    let report = origin_lib::eval::locomo_plus::run_locomo_plus_eval(&path, None)
-        .await
-        .unwrap();
-    let baseline_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("eval/baselines/locomo_plus_baseline.json");
-    report.save_baseline(&baseline_path).unwrap();
-    println!("Saved LoCoMo-Plus baseline to {:?}", baseline_path);
-}
-
-#[tokio::test]
 async fn test_lifecycle_pipeline_quality() {
     use origin_lib::eval::lifecycle::{run_lifecycle_fixture, EvalMockLlm};
     use std::sync::Arc;
