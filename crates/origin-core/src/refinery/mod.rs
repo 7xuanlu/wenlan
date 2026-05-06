@@ -1,32 +1,35 @@
 // SPDX-License-Identifier: Apache-2.0
+pub(crate) mod helpers;
+pub(crate) use helpers::*;
+
+mod phase;
+pub use phase::Phase;
+
+// Re-export distillation functions from `synthesis::distill` to preserve the
+// public API path `origin_core::refinery::{distill_pages, deep_distill_pages,
+// deep_distill_single}`. These callers live in origin-server, eval modules, and
+// tests outside this crate.
+pub use crate::synthesis::distill::{deep_distill_pages, deep_distill_single, distill_pages};
+
+// Re-export KG phase functions from `kg::*` to preserve the public API path
+// `origin_core::refinery::{extract_single_memory_entities, reweave_entity_links}`.
+// External callers: post_ingest.rs, eval/shared.rs, origin-server::memory_routes.rs.
+pub use crate::kg::entity_extraction::extract_single_memory_entities;
+pub use crate::kg::reweave::reweave_entity_links;
+
+// Internal re-imports for refinery code that still calls into the moved
+// distillation helpers (distill_one_cluster + refine_clusters_with_llm +
+// recompile_single_page from other refinery phases).
+use crate::synthesis::distill::recompile_single_page;
+use crate::synthesis::refinement_queue::process_refinement_queue;
+
 use crate::activity::ACTIVITY_GAP_SECS;
-use crate::contradiction::ContradictionResult;
 use crate::db::MemoryDB;
 use crate::error::OriginError;
 use crate::llm_provider::{LlmProvider, LlmRequest};
 use crate::prompts::PromptRegistry;
-use crate::sources::StabilityTier;
 use serde::Serialize;
 use std::sync::Arc;
-
-/// Canonical list of refinery phase names — single source of truth for the
-/// phase set. Adding a new phase requires adding its name here AND adding it
-/// to the appropriate non-Backstop arms in `TriggerKind::runs_phase`.
-pub const ALL_PHASES: &[&str] = &[
-    "decay",
-    "promote",
-    "recaps",
-    "reweave",
-    "reembed",
-    "entity_extraction",
-    "community_detection",
-    "emergence",
-    "re-distill",
-    "refinement_queue",
-    "decision_logs",
-    "prune_rejections",
-    "kg_rethink",
-];
 
 /// What triggered a refinery cycle. Different triggers run different subsets
 /// of phases — the goal is to do the right work at the right time.
@@ -46,26 +49,29 @@ pub enum TriggerKind {
 }
 
 impl TriggerKind {
-    /// Returns true if this trigger should run the phase named `phase_name`.
-    /// Unknown phase names always return `false` — typos at call sites fail
-    /// loud as "phase skipped" rather than silently matching.
-    pub fn runs_phase(&self, phase_name: &str) -> bool {
+    /// Returns true if this trigger should run `phase`. The compiler-checked
+    /// `Phase` enum makes typo'd phase names a compile error — earlier
+    /// string-based versions could silently skip phases when names drifted.
+    pub fn runs_phase(&self, phase: Phase) -> bool {
         match self {
-            Self::Backstop => ALL_PHASES.contains(&phase_name),
-            Self::BurstEnd => matches!(phase_name, "recaps" | "refinement_queue"),
+            Self::Backstop => true,
+            Self::BurstEnd => matches!(phase, Phase::Recaps | Phase::RefinementQueue),
             Self::Idle => matches!(
-                phase_name,
-                "community_detection" | "emergence" | "re-distill" | "decision_logs"
+                phase,
+                Phase::CommunityDetection
+                    | Phase::Emergence
+                    | Phase::ReDistill
+                    | Phase::DecisionLogs
             ),
             Self::Daily => matches!(
-                phase_name,
-                "decay"
-                    | "promote"
-                    | "reweave"
-                    | "reembed"
-                    | "entity_extraction"
-                    | "prune_rejections"
-                    | "kg_rethink"
+                phase,
+                Phase::Decay
+                    | Phase::Promote
+                    | Phase::Reweave
+                    | Phase::Reembed
+                    | Phase::EntityExtraction
+                    | Phase::PruneRejections
+                    | Phase::KgRethink
             ),
         }
     }
@@ -186,10 +192,10 @@ pub struct PhaseResult {
     pub headline: Option<String>,
 }
 
-/// Run a named phase, capturing timing and errors. Returns PhaseResult even
+/// Run a typed phase, capturing timing and errors. Returns PhaseResult even
 /// on failure. On error, the nudge is always `Silent` and headline is `None`
 /// — backend failures should not produce user-facing notifications.
-async fn run_phase<F, Fut>(name: &str, f: F) -> PhaseResult
+async fn run_phase<F, Fut>(phase: Phase, f: F) -> PhaseResult
 where
     F: FnOnce() -> Fut,
     Fut: std::future::Future<Output = Result<PhaseOutput, OriginError>>,
@@ -197,7 +203,7 @@ where
     let start = std::time::Instant::now();
     match f().await {
         Ok(output) => PhaseResult {
-            name: name.to_string(),
+            name: phase.as_str().to_string(),
             duration_ms: start.elapsed().as_millis() as u64,
             items_processed: output.items_processed,
             error: None,
@@ -205,7 +211,7 @@ where
             headline: output.headline,
         },
         Err(e) => PhaseResult {
-            name: name.to_string(),
+            name: phase.as_str().to_string(),
             duration_ms: start.elapsed().as_millis() as u64,
             items_processed: 0,
             error: Some(e.to_string()),
@@ -274,8 +280,8 @@ pub async fn run_periodic_steep_with_api(
 
     // Phase 1: Decay pass
     let db_ref = db;
-    if trigger.runs_phase("decay") {
-        let phase = run_phase("decay", || async {
+    if trigger.runs_phase(Phase::Decay) {
+        let phase = run_phase(Phase::Decay, || async {
             let decayed = db_ref.decay_update_confidence().await? as usize;
             log::info!("[refinery] decay steep: updated {} memories", decayed);
             let (nudge, headline) = classify_backfill(decayed);
@@ -291,8 +297,8 @@ pub async fn run_periodic_steep_with_api(
     }
 
     // Phase 1b: Promote uncontradicted memories from 'new' to 'learned'
-    if trigger.runs_phase("promote") {
-        let phase = run_phase("promote", || async {
+    if trigger.runs_phase(Phase::Promote) {
+        let phase = run_phase(Phase::Promote, || async {
             let promoted = db_ref.promote_uncontradicted(7).await?;
             if promoted > 0 {
                 log::info!("[refinery] promoted {} memories to 'learned'", promoted);
@@ -310,8 +316,8 @@ pub async fn run_periodic_steep_with_api(
 
     // Phase 2: Recap generation (prefer API LLM for title generation)
     let recap_llm = api_llm.or(llm);
-    if trigger.runs_phase("recaps") {
-        let phase = run_phase("recaps", || async {
+    if trigger.runs_phase(Phase::Recaps) {
+        let phase = run_phase(Phase::Recaps, || async {
             let generated =
                 crate::synthesis::recaps::generate_recaps(db_ref, recap_llm, prompts, tuning)
                     .await?;
@@ -331,7 +337,7 @@ pub async fn run_periodic_steep_with_api(
     }
 
     // Phase 3: Reweave entity links (link unlinked memories to recently-created entities)
-    if trigger.runs_phase("reweave")
+    if trigger.runs_phase(Phase::Reweave)
         && {
             let elapsed = steep_start.elapsed().as_secs();
             if elapsed >= deadline {
@@ -345,7 +351,7 @@ pub async fn run_periodic_steep_with_api(
             }
         }
     {
-        let phase = run_phase("reweave", || async {
+        let phase = run_phase(Phase::Reweave, || async {
             let count = reweave_entity_links(
                 db_ref,
                 tuning.max_reweave_per_steep,
@@ -364,7 +370,7 @@ pub async fn run_periodic_steep_with_api(
     }
 
     // Phase 4b: Re-embed memories with stale embeddings (structured content model)
-    if trigger.runs_phase("reembed")
+    if trigger.runs_phase(Phase::Reembed)
         && {
             let elapsed = steep_start.elapsed().as_secs();
             if elapsed >= deadline {
@@ -378,7 +384,7 @@ pub async fn run_periodic_steep_with_api(
             }
         }
     {
-        let phase = run_phase("reembed", || async {
+        let phase = run_phase(Phase::Reembed, || async {
             let count = crate::migrations::reembed::run(db_ref, 5).await?;
             let (nudge, headline) = classify_backfill(count);
             Ok(PhaseOutput {
@@ -393,7 +399,7 @@ pub async fn run_periodic_steep_with_api(
 
     // Phase 5: Entity extraction — prefer API LLM (better JSON accuracy), fall back to on-device
     let extract_llm = api_llm.or(llm);
-    if trigger.runs_phase("entity_extraction")
+    if trigger.runs_phase(Phase::EntityExtraction)
         && {
             let elapsed = steep_start.elapsed().as_secs();
             if elapsed >= deadline {
@@ -407,7 +413,7 @@ pub async fn run_periodic_steep_with_api(
             }
         }
     {
-        let phase = run_phase("entity_extraction", || async {
+        let phase = run_phase(Phase::EntityExtraction, || async {
             let count = extract_entities_from_memories(db_ref, extract_llm, prompts, 5).await?;
             let (nudge, headline) = classify_backfill(count);
             Ok(PhaseOutput {
@@ -421,7 +427,7 @@ pub async fn run_periodic_steep_with_api(
     }
 
     // Phase 5b: Community detection (runs before distillation to inform clustering)
-    if trigger.runs_phase("community_detection")
+    if trigger.runs_phase(Phase::CommunityDetection)
         && {
             let elapsed = steep_start.elapsed().as_secs();
             if elapsed >= deadline {
@@ -435,7 +441,7 @@ pub async fn run_periodic_steep_with_api(
             }
         }
     {
-        let phase = run_phase("community_detection", || async {
+        let phase = run_phase(Phase::CommunityDetection, || async {
             let count = db_ref.detect_communities().await?;
             let (nudge, headline) = classify_backfill(count);
             Ok(PhaseOutput {
@@ -456,8 +462,8 @@ pub async fn run_periodic_steep_with_api(
         Some(config.knowledge_path_or_default())
     };
     let kp_ref = knowledge_path.as_deref();
-    if trigger.runs_phase("emergence") {
-        let phase = run_phase("emergence", || async {
+    if trigger.runs_phase(Phase::Emergence) {
+        let phase = run_phase(Phase::Emergence, || async {
             let count = distill_pages(db_ref, compile_llm, prompts, distillation, kp_ref).await?;
             let (nudge, headline) = classify_emergence(count);
             Ok(PhaseOutput {
@@ -472,7 +478,7 @@ pub async fn run_periodic_steep_with_api(
     }
 
     // Phase 6b: Re-distill — refresh concepts whose source memories changed
-    if trigger.runs_phase("re-distill")
+    if trigger.runs_phase(Phase::ReDistill)
         && {
             let elapsed = steep_start.elapsed().as_secs();
             if elapsed >= deadline {
@@ -486,7 +492,7 @@ pub async fn run_periodic_steep_with_api(
             }
         }
     {
-        let phase = run_phase("re-distill", || async {
+        let phase = run_phase(Phase::ReDistill, || async {
             let changed = redistill_changed_pages(db_ref, compile_llm, prompts).await?;
             // Also re-distill concepts explicitly marked stale by topic-key upserts.
             let stale = re_distill_stale_pages(db_ref, compile_llm, prompts).await?;
@@ -503,8 +509,8 @@ pub async fn run_periodic_steep_with_api(
     }
 
     // Phase 6c: Process refinement queue (contradictions + entity suggestions only)
-    if trigger.runs_phase("refinement_queue") {
-        let phase = run_phase("refinement_queue", || async {
+    if trigger.runs_phase(Phase::RefinementQueue) {
+        let phase = run_phase(Phase::RefinementQueue, || async {
             let count = process_refinement_queue(db_ref, llm, prompts, tuning).await?;
             let (nudge, headline) = classify_refinement_queue(count);
             Ok(PhaseOutput {
@@ -520,7 +526,7 @@ pub async fn run_periodic_steep_with_api(
     // Phase 7: Decision log generation (lightweight recap for decisions).
     // Last deadline-gated phase: omit `deadline_hit = true` — no phase after
     // this reads the flag, so the assignment would be dead code (clippy -D).
-    if trigger.runs_phase("decision_logs")
+    if trigger.runs_phase(Phase::DecisionLogs)
         && {
             let elapsed = steep_start.elapsed().as_secs();
             if elapsed >= deadline {
@@ -533,7 +539,7 @@ pub async fn run_periodic_steep_with_api(
             }
         }
     {
-        let phase = run_phase("decision_logs", || async {
+        let phase = run_phase(Phase::DecisionLogs, || async {
             let count = crate::synthesis::decision_logs::generate_decision_logs(
                 db_ref, llm, prompts, tuning,
             )
@@ -556,8 +562,8 @@ pub async fn run_periodic_steep_with_api(
     // Promoted from tail cleanup to a proper phase in PR A so it can be
     // gated uniformly by TriggerKind and tracked in result.phases like
     // every other phase.
-    if trigger.runs_phase("prune_rejections") {
-        let phase = run_phase("prune_rejections", || async {
+    if trigger.runs_phase(Phase::PruneRejections) {
+        let phase = run_phase(Phase::PruneRejections, || async {
             let count = db_ref.prune_rejections(30).await?;
             // Clean up concept_sources rows whose source memories were deleted.
             match db_ref.cleanup_orphaned_page_sources().await {
@@ -578,94 +584,11 @@ pub async fn run_periodic_steep_with_api(
         phases.push(phase);
     }
 
-    // Phase 9: Entity backfill — gradually re-extract entities from memories
-    // that were stored before the chat template fix (or where extraction silently
-    // failed). Processes a small batch per steep to avoid GPU overload.
-    if trigger.runs_phase("entity_backfill") {
-        if let Some(llm_ref) = llm {
-            let phase = run_phase("entity_backfill", || async {
-                let batch = db_ref
-                    .find_memories_without_entities(tuning.entity_backfill_batch_size)
-                    .await?;
-                if batch.is_empty() {
-                    return Ok(PhaseOutput {
-                        items_processed: 0,
-                        nudge: Nudge::Silent,
-                        headline: None,
-                    });
-                }
-                let mut extracted = 0usize;
-                for (source_id, content) in &batch {
-                    match extract_single_memory_entities(
-                        db_ref, llm_ref, prompts, source_id, content,
-                    )
-                    .await
-                    {
-                        Ok(Some(_)) => {
-                            extracted += 1;
-                            // Record a step so the memory becomes eligible for
-                            // distillation (find_distillation_clusters gates on
-                            // EXISTS enrichment_steps; without this, file-synced
-                            // memories that bypass /api/memory/store would never
-                            // pass the gate).
-                            let _ = db_ref
-                                .record_enrichment_step(source_id, "entity_backfill", "ok", None)
-                                .await;
-                        }
-                        Ok(None) => {
-                            // Mark as attempted so we don't retry forever
-                            let _ = db_ref.update_memory_entity_id(source_id, "").await;
-                            let _ = db_ref
-                                .record_enrichment_step(
-                                    source_id,
-                                    "entity_backfill",
-                                    "skipped",
-                                    Some("no entities extracted"),
-                                )
-                                .await;
-                        }
-                        Err(e) => {
-                            log::warn!("[refinery] entity_backfill failed for {}: {e}", source_id);
-                            // Record the failure so the memory eventually becomes
-                            // eligible for distillation (per spec: "once at least
-                            // one step is recorded — even if failed — the memory
-                            // is admitted, deliberate to avoid stuck-forever").
-                            let _ = db_ref
-                                .record_enrichment_step(
-                                    source_id,
-                                    "entity_backfill",
-                                    "failed",
-                                    Some(&e.to_string()),
-                                )
-                                .await;
-                            break; // LLM may be down, stop batch
-                        }
-                    }
-                }
-                if extracted > 0 {
-                    log::info!(
-                        "[refinery] entity_backfill: extracted entities for {}/{} memories",
-                        extracted,
-                        batch.len()
-                    );
-                }
-                let (nudge, headline) = classify_backfill(extracted);
-                Ok(PhaseOutput {
-                    items_processed: extracted,
-                    nudge,
-                    headline,
-                })
-            })
-            .await;
-            phases.push(phase);
-        }
-    }
-
     // Phase 10: KG rethink — periodic knowledge graph quality maintenance.
     // Rate-limited by `kg_rethink_interval_hours` (default 168h = weekly)
     // via `app_metadata.last_kg_rethink_ts`. All five sub-phases are cheap
     // when the graph is clean; the gate mainly avoids redundant log spam.
-    if trigger.runs_phase("kg_rethink") {
+    if trigger.runs_phase(Phase::KgRethink) {
         let interval_secs = (tuning.kg_rethink_interval_hours as i64).saturating_mul(3600);
         let now = chrono::Utc::now().timestamp();
         let last_ts: i64 = db
@@ -676,7 +599,7 @@ pub async fn run_periodic_steep_with_api(
             .and_then(|s| s.parse().ok())
             .unwrap_or(0);
         if now.saturating_sub(last_ts) >= interval_secs {
-            let phase = run_phase("kg_rethink", || async {
+            let phase = run_phase(Phase::KgRethink, || async {
                 let report = crate::kg_quality::run_rethink(db_ref, llm, tuning).await?;
                 let total = report.merge_candidates
                     + report.types_normalized
@@ -737,88 +660,6 @@ pub async fn run_periodic_steep_with_api(
     })
 }
 
-/// Extract entities from a single memory via LLM. Returns the primary entity_id if one was created/found.
-pub async fn extract_single_memory_entities(
-    db: &MemoryDB,
-    llm: &Arc<dyn LlmProvider>,
-    prompts: &PromptRegistry,
-    source_id: &str,
-    content: &str,
-) -> Result<Option<String>, OriginError> {
-    let truncated: String = content.chars().take(500).collect();
-    let numbered = format!("1. {}", truncated);
-
-    let response = llm
-        .generate(LlmRequest {
-            system_prompt: Some(prompts.extract_knowledge_graph.clone()),
-            user_prompt: numbered,
-            max_tokens: 512,
-            temperature: 0.3,
-            label: None,
-            timeout_secs: None,
-        })
-        .await
-        .map_err(|e| OriginError::Llm(format!("entity extraction: {}", e)))?;
-
-    let batch = [(0usize, content.to_string())];
-    let kg_results = crate::extract::parse_kg_response(&response, &batch);
-
-    let mut entity_cache: std::collections::HashMap<String, String> =
-        std::collections::HashMap::new();
-    let mut first_entity_id: Option<String> = None;
-
-    for kg in &kg_results {
-        for entity in &kg.entities {
-            match crate::importer::resolve_or_create_entity(
-                db,
-                &mut entity_cache,
-                entity,
-                "post_ingest",
-            )
-            .await
-            {
-                Ok((id, _created)) => {
-                    if first_entity_id.is_none() {
-                        first_entity_id = Some(id);
-                    }
-                }
-                Err(e) => log::warn!("[post_ingest] entity create failed: {e}"),
-            }
-        }
-        for obs in &kg.observations {
-            if let Some(entity_id) = entity_cache.get(&obs.entity.to_lowercase()) {
-                let _ = db
-                    .add_observation(entity_id, &obs.content, Some("post_ingest"), None)
-                    .await;
-            }
-        }
-        for rel in &kg.relations {
-            let from_id = entity_cache.get(&rel.from.to_lowercase()).cloned();
-            let to_id = entity_cache.get(&rel.to.to_lowercase()).cloned();
-            if let (Some(from), Some(to)) = (from_id, to_id) {
-                let _ = db
-                    .create_relation(
-                        &from,
-                        &to,
-                        &rel.relation_type,
-                        Some("post_ingest"),
-                        rel.confidence,
-                        rel.explanation.as_deref(),
-                        Some(source_id),
-                    )
-                    .await;
-            }
-        }
-    }
-
-    // Link memory to first entity
-    if let Some(ref eid) = first_entity_id {
-        let _ = db.update_memory_entity_id(source_id, eid).await;
-    }
-
-    Ok(first_entity_id)
-}
-
 /// Extract entities from unlinked memories via LLM and create them in the knowledge graph.
 /// Processes `limit` memories per steep to avoid GPU overload.
 /// Acts as a backfill for any memories that failed store-time extraction.
@@ -865,1002 +706,6 @@ pub(crate) async fn extract_entities_from_memories(
     Ok(total_created)
 }
 
-/// Reweave entity links: find memories with no entity_id and try to match them
-/// against existing entities via vector similarity.
-pub async fn reweave_entity_links(
-    db: &MemoryDB,
-    limit: usize,
-    entity_link_distance: f64,
-) -> Result<usize, OriginError> {
-    let unlinked = db.get_unlinked_memories(limit).await?;
-    let mut linked = 0usize;
-    for (source_id, content) in &unlinked {
-        let entities = db.search_entities_by_vector(content, 3).await?;
-        for entity in &entities {
-            if entity.distance < entity_link_distance as f32 {
-                db.update_memory_entity_id(source_id, &entity.entity.id)
-                    .await?;
-                linked += 1;
-                break;
-            }
-        }
-    }
-    if linked > 0 {
-        log::info!("[refinery] reweave: linked {} memories to entities", linked);
-    }
-    Ok(linked)
-}
-
-/// LLM cluster refinement: for entities with multiple clusters, ask the LLM to merge/split/rename.
-async fn refine_clusters_with_llm(
-    llm: &Arc<dyn LlmProvider>,
-    prompts: &PromptRegistry,
-    clusters: Vec<crate::db::DistillationCluster>,
-    token_limit: usize,
-) -> Vec<crate::db::DistillationCluster> {
-    // Group clusters by entity
-    let mut by_entity: std::collections::HashMap<String, Vec<usize>> =
-        std::collections::HashMap::new();
-    for (i, c) in clusters.iter().enumerate() {
-        let key = c
-            .entity_name
-            .as_deref()
-            .or(c.entity_id.as_deref())
-            .unwrap_or("unlinked")
-            .to_string();
-        by_entity.entry(key).or_default().push(i);
-    }
-
-    // Only refine entities with 2+ clusters (single clusters = nothing to merge/split)
-    let entities_to_refine: Vec<(String, Vec<usize>)> = by_entity
-        .into_iter()
-        .filter(|(_, indices)| indices.len() >= 2)
-        .collect();
-
-    if entities_to_refine.is_empty() {
-        return clusters;
-    }
-
-    let mut result = clusters;
-    let mut merged_indices: std::collections::HashSet<usize> = std::collections::HashSet::new();
-
-    for (entity, indices) in &entities_to_refine {
-        // Build one-line summaries for each cluster
-        let summaries: String = indices
-            .iter()
-            .enumerate()
-            .map(|(j, &idx)| {
-                let c = &result[idx];
-                let preview: String = c
-                    .contents
-                    .iter()
-                    .take(3)
-                    .map(|s| {
-                        let trimmed: String = s.chars().take(60).collect();
-                        format!("\"{}...\"", trimmed)
-                    })
-                    .collect::<Vec<_>>()
-                    .join(" / ");
-                format!("{}. [{} memories] {}", j, c.source_ids.len(), preview)
-            })
-            .collect::<Vec<_>>()
-            .join("\n");
-
-        let user_prompt = format!("Entity: {}\n\n{}", entity, summaries);
-
-        let response = llm
-            .generate(LlmRequest {
-                system_prompt: Some(prompts.refine_clusters.clone()),
-                user_prompt,
-                max_tokens: 512,
-                temperature: 0.2,
-                label: None,
-                timeout_secs: None,
-            })
-            .await;
-
-        match response {
-            Ok(raw) => {
-                let clean = crate::llm_provider::strip_think_tags(&raw);
-                if let Some(json_str) = crate::engine::extract_json_array(&clean) {
-                    if let Ok(actions) = serde_json::from_str::<Vec<serde_json::Value>>(&json_str) {
-                        for action in &actions {
-                            let act = action
-                                .get("action")
-                                .and_then(|v| v.as_str())
-                                .unwrap_or("keep");
-                            match act {
-                                "merge" => {
-                                    if let Some(to_merge) =
-                                        action.get("clusters").and_then(|v| v.as_array())
-                                    {
-                                        let mut merge_indices: Vec<usize> = to_merge
-                                            .iter()
-                                            .filter_map(|v| v.as_u64().map(|n| n as usize))
-                                            .filter(|&j| j < indices.len())
-                                            .collect();
-                                        merge_indices.sort_unstable();
-                                        merge_indices.dedup();
-                                        if merge_indices.len() >= 2 {
-                                            // Guard: don't merge if the result would exceed
-                                            // the token limit that sub_cluster_by_tokens split
-                                            // on. This prevents the LLM from re-merging
-                                            // sub-clusters into a monster that OOMs distillation.
-                                            let merged_tokens: usize = merge_indices
-                                                .iter()
-                                                .map(|&j| result[indices[j]].estimated_tokens)
-                                                .sum();
-                                            if merged_tokens > token_limit {
-                                                log::info!(
-                                                    "[refine] skipping merge for '{}' — merged tokens {} > limit {}",
-                                                    entity, merged_tokens, token_limit
-                                                );
-                                            } else {
-                                                // Merge: combine all into the first
-                                                let first = indices[merge_indices[0]];
-                                                for &j in &merge_indices[1..] {
-                                                    let idx = indices[j];
-                                                    let extra_ids = result[idx].source_ids.clone();
-                                                    let extra_contents =
-                                                        result[idx].contents.clone();
-                                                    result[first].source_ids.extend(extra_ids);
-                                                    result[first].contents.extend(extra_contents);
-                                                    result[first].estimated_tokens +=
-                                                        result[idx].estimated_tokens;
-                                                    merged_indices.insert(idx);
-                                                }
-                                                if let Some(title) =
-                                                    action.get("title").and_then(|v| v.as_str())
-                                                {
-                                                    result[first].entity_name =
-                                                        Some(title.to_string());
-                                                }
-                                                log::info!(
-                                                    "[refine] merged {} clusters for '{}'",
-                                                    merge_indices.len(),
-                                                    entity
-                                                );
-                                            } // close else (token guard)
-                                        }
-                                    }
-                                }
-                                "rename" => {
-                                    if let (Some(j), Some(title)) = (
-                                        action
-                                            .get("cluster")
-                                            .and_then(|v| v.as_u64().map(|n| n as usize)),
-                                        action.get("title").and_then(|v| v.as_str()),
-                                    ) {
-                                        if j < indices.len() {
-                                            result[indices[j]].entity_name =
-                                                Some(title.to_string());
-                                            log::info!(
-                                                "[refine] renamed cluster {} to '{}' for '{}'",
-                                                j,
-                                                title,
-                                                entity
-                                            );
-                                        }
-                                    }
-                                }
-                                // "keep" and "split" — split is complex (needs new clusters), defer to global_concept_review
-                                _ => {}
-                            }
-                        }
-                    }
-                }
-            }
-            Err(e) => log::warn!("[refine] LLM refinement failed for '{}': {}", entity, e),
-        }
-    }
-
-    // Remove merged clusters
-    if !merged_indices.is_empty() {
-        result = result
-            .into_iter()
-            .enumerate()
-            .filter(|(i, _)| !merged_indices.contains(i))
-            .map(|(_, c)| c)
-            .collect();
-    }
-
-    result
-}
-
-/// Process a single distillation cluster.
-///
-/// Returns `Ok(true)` if a concept was created, `Ok(false)` if the cluster was skipped.
-/// Extracted from `distill_pages` to enable parallel cluster processing via
-/// `DISTILL_CLUSTER_CONCURRENCY`.
-async fn distill_one_cluster(
-    db: &MemoryDB,
-    llm: &Arc<dyn LlmProvider>,
-    prompts: &PromptRegistry,
-    cluster: &crate::db::DistillationCluster,
-    knowledge_writer: Option<&crate::export::knowledge::KnowledgeWriter>,
-) -> Result<bool, OriginError> {
-    let topic = cluster
-        .entity_name
-        .as_deref()
-        .or(cluster.domain.as_deref())
-        .unwrap_or("general");
-
-    // Skip if a concept with very similar sources already exists (Jaccard > 0.8)
-    // Memories CAN appear in multiple concepts — this only prevents duplicate concepts
-    let overlap = db
-        .max_page_overlap(&cluster.source_ids)
-        .await
-        .unwrap_or(0.0);
-    if overlap > 0.8 {
-        log::info!(
-            "[emergence] cluster '{}' overlaps {:.0}% with existing concept, skipping",
-            topic,
-            overlap * 100.0
-        );
-        return Ok(false);
-    }
-
-    // Clean input: strip recap headers, domain prefixes, and structured field noise
-    let cleaned_contents: Vec<String> = cluster
-        .contents
-        .iter()
-        .map(|c| {
-            let mut s = c.trim().to_string();
-            // Strip "Activity burst: ..." header lines
-            if let Some(pos) = s.find("\n- ") {
-                let prefix: String = s.chars().take(pos).collect();
-                if prefix.contains("Activity burst") || prefix.contains("memories across") {
-                    s = s.chars().skip(pos + 1).collect();
-                }
-            }
-            // Strip "- [domain] " prefixes from each line
-            s = s
-                .lines()
-                .map(|line| {
-                    let trimmed = line.trim_start_matches("- ");
-                    if trimmed.starts_with('[') {
-                        if let Some(end) = trimmed.find("] ") {
-                            trimmed[end + 2..].to_string()
-                        } else {
-                            line.to_string()
-                        }
-                    } else {
-                        line.to_string()
-                    }
-                })
-                .collect::<Vec<_>>()
-                .join("\n");
-            // Strip "claim: " prefix
-            if let Some(rest) = s.strip_prefix("claim: ") {
-                s = rest.to_string();
-            }
-            s
-        })
-        .collect();
-
-    // Skip thin clusters — not enough substance for meaningful compilation
-    let total_content_chars: usize = cleaned_contents.iter().map(|c| c.len()).sum();
-    if total_content_chars < 200 {
-        log::info!(
-            "[compile] cluster too thin ({} chars), skipping topic='{}'",
-            total_content_chars,
-            topic
-        );
-        return Ok(false);
-    }
-
-    log::info!(
-        "[distill] processing cluster: {} memories, ~{} tokens",
-        cluster.source_ids.len(),
-        cluster.estimated_tokens
-    );
-
-    // Build user prompt with memory IDs for source attribution.
-    // Cap each memory at 800 chars so the LLM gets meaningful substance
-    // without runaway context. The 800-char cap is honest: it matches the
-    // amount the model can synthesize well at 2048 output tokens.
-    const MEM_SNIPPET_CAP: usize = 800;
-    let memories_block: String = cluster
-        .source_ids
-        .iter()
-        .zip(cleaned_contents.iter())
-        .map(|(id, content)| {
-            let snippet: String = content.chars().take(MEM_SNIPPET_CAP).collect();
-            let snippet = if content.chars().count() > MEM_SNIPPET_CAP {
-                format!("{}...", snippet.trim_end())
-            } else {
-                snippet
-            };
-            format!("[{}] {}", id, snippet)
-        })
-        .collect::<Vec<_>>()
-        .join("\n\n");
-    let user_prompt = format!("Topic: {}\n\n{}", topic, memories_block);
-
-    let response = llm
-        .generate(LlmRequest {
-            system_prompt: Some(prompts.distill_concept.clone()),
-            user_prompt,
-            max_tokens: llm.recommended_max_output(),
-            temperature: 0.1,
-            label: Some("distill_body".into()),
-            timeout_secs: None,
-        })
-        .await;
-
-    match response {
-        Ok(raw) if !raw.trim().is_empty() => {
-            let cleaned = crate::llm_provider::strip_think_tags(&raw);
-            let content = cleaned.trim().to_string();
-
-            if content.is_empty() {
-                log::warn!("[distill] empty output for topic='{}', skipping", topic);
-                return Ok(false);
-            }
-
-            // Hallucination check: output must be semantically similar to input
-            let texts = vec![content.clone(), cleaned_contents.join(" ")];
-            if let Ok(embeddings) = db.generate_embeddings(&texts) {
-                if embeddings.len() == 2 {
-                    let sim = crate::db::cosine_similarity(&embeddings[0], &embeddings[1]);
-                    if sim < 0.6 {
-                        log::warn!(
-                            "[compile] hallucination detected (sim={:.2}) for topic='{}', skipping",
-                            sim,
-                            topic
-                        );
-                        return Ok(false);
-                    }
-                    log::info!(
-                        "[compile] quality check passed (sim={:.2}) for topic='{}'",
-                        sim,
-                        topic
-                    );
-                }
-            }
-
-            // Generate title. If LLM returns None and the only fallback is a generic
-            // placeholder (e.g. "general"), skip this cluster entirely — a generic title
-            // is worse than no concept at all.
-            let llm_title = generate_short_title(llm, &content).await;
-            let title = match llm_title {
-                Some(t) => t,
-                None if is_all_generic_tokens(topic)
-                    || looks_like_markup_styled(topic)
-                    || looks_like_path(topic)
-                    || looks_like_code(topic)
-                    || looks_like_uuid(topic)
-                    || looks_like_short_hash(topic)
-                    || looks_like_commit_message(topic) =>
-                {
-                    log::info!(
-                        "[distill] no title and topic='{}' is garbage, skipping cluster",
-                        topic
-                    );
-                    return Ok(false);
-                }
-                None => topic.to_string(),
-            };
-
-            // Extract summary from first bullet point
-            let summary = content
-                .lines()
-                .find(|l| l.starts_with("- "))
-                .map(|l| l.trim_start_matches("- ").to_string());
-
-            // Build source IDs as &str refs
-            let source_refs: Vec<&str> = cluster.source_ids.iter().map(|s| s.as_str()).collect();
-            let now = chrono::Utc::now().to_rfc3339();
-            let page_id = crate::pages::Page::new_id();
-
-            db.insert_page(
-                &page_id,
-                &title,
-                summary.as_deref(),
-                &content,
-                cluster.entity_id.as_deref(),
-                cluster.domain.as_deref(),
-                &source_refs,
-                &now,
-            )
-            .await?;
-
-            log::info!(
-                "[distill] distilled {} memories -> concept '{}' ('{}')",
-                cluster.source_ids.len(),
-                title,
-                content.chars().take(40).collect::<String>()
-            );
-
-            // Log activity — system-attributed, since distillation is background refinery work.
-            let source_memory_ids: Vec<String> = cluster.source_ids.to_vec();
-            let detail = format!(
-                "created \"{}\" from {} memories",
-                title,
-                cluster.source_ids.len()
-            );
-            if let Err(e) = db
-                .log_agent_activity(
-                    "system",
-                    "concept_create",
-                    &source_memory_ids,
-                    None,
-                    &detail,
-                )
-                .await
-            {
-                log::warn!("[distill] log concept_create activity failed: {e}");
-            }
-
-            if let Some(writer) = knowledge_writer {
-                if let Ok(Some(c)) = db.get_page(&page_id).await {
-                    match writer.write_concept(&c) {
-                        Ok(p) => log::info!("[distill] wrote concept to {p}"),
-                        Err(e) => log::warn!("[distill] knowledge write failed: {e}"),
-                    }
-                }
-            }
-
-            Ok(true)
-        }
-        Ok(_) => {
-            log::warn!("[distill] empty output for topic='{}'", topic);
-            Ok(false)
-        }
-        Err(e) => {
-            log::warn!("[distill] LLM error for topic='{}': {}", topic, e);
-            Ok(false)
-        }
-    }
-}
-
-/// Distill memory clusters into structured concepts.
-/// Memories can appear in multiple concepts. Jaccard overlap prevents duplicate concepts.
-pub async fn distill_pages(
-    db: &MemoryDB,
-    llm: Option<&Arc<dyn LlmProvider>>,
-    prompts: &PromptRegistry,
-    tuning: &crate::tuning::DistillationConfig,
-    knowledge_path: Option<&std::path::Path>,
-) -> Result<usize, OriginError> {
-    let llm = match llm {
-        Some(l) if l.is_available() => l,
-        _ => return Ok(0),
-    };
-
-    // Each model carries its own effective synthesis limit — the max tokens it
-    // can meaningfully synthesize (not just read). Research-calibrated per model
-    // in on_device_models.rs and llm_provider.rs. Falls back to tuning config
-    // if the provider returns the default (for backward compat).
-    let token_limit = llm.synthesis_token_limit();
-    let raw_clusters = db
-        .find_distillation_clusters(
-            tuning.similarity_threshold,
-            tuning.concept_min_cluster_size,
-            tuning.max_clusters_per_steep,
-            token_limit,
-            tuning.max_unlinked_cluster_size,
-        )
-        .await?;
-
-    // LLM cluster refinement: let LLM merge/split/rename clusters per entity
-    let clusters = refine_clusters_with_llm(llm, prompts, raw_clusters, token_limit).await;
-
-    let cluster_concurrency: usize = std::env::var("DISTILL_CLUSTER_CONCURRENCY")
-        .ok()
-        .and_then(|s| s.parse().ok())
-        .unwrap_or(1)
-        .min(4);
-
-    let mut distilled = 0usize;
-
-    // Create the writer once, outside the loop
-    let knowledge_writer =
-        knowledge_path.map(|kp| crate::export::knowledge::KnowledgeWriter::new(kp.to_path_buf()));
-
-    if cluster_concurrency > 1 {
-        let kw = knowledge_writer.as_ref();
-        for chunk in clusters.chunks(cluster_concurrency) {
-            let futs: Vec<_> = chunk
-                .iter()
-                .map(|cluster| distill_one_cluster(db, llm, prompts, cluster, kw))
-                .collect();
-            let results = futures::future::join_all(futs).await;
-            for r in results {
-                if r? {
-                    distilled += 1;
-                }
-            }
-        }
-        return Ok(distilled);
-    }
-
-    for cluster in &clusters {
-        let topic = cluster
-            .entity_name
-            .as_deref()
-            .or(cluster.domain.as_deref())
-            .unwrap_or("general");
-
-        // Skip if a concept with very similar sources already exists (Jaccard > 0.8)
-        // Memories CAN appear in multiple concepts — this only prevents duplicate concepts
-        let overlap = db
-            .max_page_overlap(&cluster.source_ids)
-            .await
-            .unwrap_or(0.0);
-        if overlap > 0.8 {
-            log::info!(
-                "[emergence] cluster '{}' overlaps {:.0}% with existing concept, skipping",
-                topic,
-                overlap * 100.0
-            );
-            continue;
-        }
-
-        // Clean input: strip recap headers, domain prefixes, and structured field noise
-        let cleaned_contents: Vec<String> = cluster
-            .contents
-            .iter()
-            .map(|c| {
-                let mut s = c.trim().to_string();
-                // Strip "Activity burst: ..." header lines
-                if let Some(pos) = s.find("\n- ") {
-                    let prefix: String = s.chars().take(pos).collect();
-                    if prefix.contains("Activity burst") || prefix.contains("memories across") {
-                        s = s.chars().skip(pos + 1).collect();
-                    }
-                }
-                // Strip "- [domain] " prefixes from each line
-                s = s
-                    .lines()
-                    .map(|line| {
-                        let trimmed = line.trim_start_matches("- ");
-                        if trimmed.starts_with('[') {
-                            if let Some(end) = trimmed.find("] ") {
-                                trimmed[end + 2..].to_string()
-                            } else {
-                                line.to_string()
-                            }
-                        } else {
-                            line.to_string()
-                        }
-                    })
-                    .collect::<Vec<_>>()
-                    .join("\n");
-                // Strip "claim: " prefix
-                if let Some(rest) = s.strip_prefix("claim: ") {
-                    s = rest.to_string();
-                }
-                s
-            })
-            .collect();
-
-        // Skip thin clusters — not enough substance for meaningful compilation
-        let total_content_chars: usize = cleaned_contents.iter().map(|c| c.len()).sum();
-        if total_content_chars < 200 {
-            log::info!(
-                "[compile] cluster too thin ({} chars), skipping topic='{}'",
-                total_content_chars,
-                topic
-            );
-            continue;
-        }
-
-        log::info!(
-            "[distill] processing cluster: {} memories, ~{} tokens",
-            cluster.source_ids.len(),
-            cluster.estimated_tokens
-        );
-
-        // Build user prompt with memory IDs for source attribution.
-        // Cap each memory at 800 chars so the LLM gets meaningful substance
-        // without runaway context. The 800-char cap is honest: it matches the
-        // amount the model can synthesize well at 2048 output tokens.
-        const MEM_SNIPPET_CAP: usize = 800;
-        let memories_block: String = cluster
-            .source_ids
-            .iter()
-            .zip(cleaned_contents.iter())
-            .map(|(id, content)| {
-                let snippet: String = content.chars().take(MEM_SNIPPET_CAP).collect();
-                let snippet = if content.chars().count() > MEM_SNIPPET_CAP {
-                    format!("{}...", snippet.trim_end())
-                } else {
-                    snippet
-                };
-                format!("[{}] {}", id, snippet)
-            })
-            .collect::<Vec<_>>()
-            .join("\n\n");
-        let user_prompt = format!("Topic: {}\n\n{}", topic, memories_block);
-
-        let response = llm
-            .generate(LlmRequest {
-                system_prompt: Some(prompts.distill_concept.clone()),
-                user_prompt,
-                max_tokens: llm.recommended_max_output(),
-                temperature: 0.1,
-                label: Some("distill_body".into()),
-                timeout_secs: None,
-            })
-            .await;
-
-        match response {
-            Ok(raw) if !raw.trim().is_empty() => {
-                let cleaned = crate::llm_provider::strip_think_tags(&raw);
-                let content = cleaned.trim().to_string();
-
-                if content.is_empty() {
-                    log::warn!("[distill] empty output for topic='{}', skipping", topic);
-                    continue;
-                }
-
-                // Hallucination check: output must be semantically similar to input
-                let texts = vec![content.clone(), cleaned_contents.join(" ")];
-                if let Ok(embeddings) = db.generate_embeddings(&texts) {
-                    if embeddings.len() == 2 {
-                        let sim = crate::db::cosine_similarity(&embeddings[0], &embeddings[1]);
-                        if sim < 0.6 {
-                            log::warn!("[compile] hallucination detected (sim={:.2}) for topic='{}', skipping", sim, topic);
-                            continue;
-                        }
-                        log::info!(
-                            "[compile] quality check passed (sim={:.2}) for topic='{}'",
-                            sim,
-                            topic
-                        );
-                    }
-                }
-
-                // Generate title. If LLM returns None and the only fallback is a generic
-                // placeholder (e.g. "general"), skip this cluster entirely — a generic title
-                // is worse than no concept at all.
-                let llm_title = generate_short_title(llm, &content).await;
-                let title = match llm_title {
-                    Some(t) => t,
-                    None if is_all_generic_tokens(topic)
-                        || looks_like_markup_styled(topic)
-                        || looks_like_path(topic)
-                        || looks_like_code(topic)
-                        || looks_like_uuid(topic)
-                        || looks_like_short_hash(topic)
-                        || looks_like_commit_message(topic) =>
-                    {
-                        log::info!(
-                            "[distill] no title and topic='{}' is garbage, skipping cluster",
-                            topic
-                        );
-                        continue;
-                    }
-                    None => topic.to_string(),
-                };
-
-                // Extract summary from first bullet point
-                let summary = content
-                    .lines()
-                    .find(|l| l.starts_with("- "))
-                    .map(|l| l.trim_start_matches("- ").to_string());
-
-                // Build source IDs as &str refs
-                let source_refs: Vec<&str> =
-                    cluster.source_ids.iter().map(|s| s.as_str()).collect();
-                let now = chrono::Utc::now().to_rfc3339();
-                let page_id = crate::pages::Page::new_id();
-
-                db.insert_page(
-                    &page_id,
-                    &title,
-                    summary.as_deref(),
-                    &content,
-                    cluster.entity_id.as_deref(),
-                    cluster.domain.as_deref(),
-                    &source_refs,
-                    &now,
-                )
-                .await?;
-
-                log::info!(
-                    "[distill] distilled {} memories -> concept '{}' ('{}')",
-                    cluster.source_ids.len(),
-                    title,
-                    content.chars().take(40).collect::<String>()
-                );
-                distilled += 1;
-
-                // Log activity — system-attributed, since distillation is background refinery work.
-                let source_memory_ids: Vec<String> = cluster.source_ids.to_vec();
-                let detail = format!(
-                    "created \"{}\" from {} memories",
-                    title,
-                    cluster.source_ids.len()
-                );
-                if let Err(e) = db
-                    .log_agent_activity(
-                        "system",
-                        "concept_create",
-                        &source_memory_ids,
-                        None,
-                        &detail,
-                    )
-                    .await
-                {
-                    log::warn!("[distill] log concept_create activity failed: {e}");
-                }
-
-                if let Some(ref writer) = knowledge_writer {
-                    if let Ok(Some(c)) = db.get_page(&page_id).await {
-                        match writer.write_concept(&c) {
-                            Ok(p) => log::info!("[distill] wrote concept to {p}"),
-                            Err(e) => log::warn!("[distill] knowledge write failed: {e}"),
-                        }
-                    }
-                }
-            }
-            Ok(_) => {
-                log::warn!("[distill] empty output for topic='{}'", topic);
-            }
-            Err(e) => {
-                log::warn!("[distill] LLM error for topic='{}': {}", topic, e);
-            }
-        }
-    }
-
-    Ok(distilled)
-}
-
-/// Layer 2: LLM assigns orphan memories to existing concepts or proposes new ones.
-async fn assign_orphan_memories(
-    db: &MemoryDB,
-    llm: &Arc<dyn LlmProvider>,
-    prompts: &PromptRegistry,
-    _tuning: &crate::tuning::DistillationConfig,
-    knowledge_path: Option<&std::path::Path>,
-) -> Result<usize, OriginError> {
-    // Find orphan memories: no entity_id, not already in a concept, not recap/merged
-    let orphans = db.get_unlinked_memories(30).await?;
-    // Filter out merged memories
-    let orphans: Vec<(String, String)> = orphans
-        .into_iter()
-        .filter(|(sid, _)| !sid.starts_with("merged_"))
-        .collect();
-
-    if orphans.is_empty() {
-        return Ok(0);
-    }
-
-    // Get existing concept titles
-    let concepts = db.list_pages("active", 100, 0).await?;
-    if concepts.is_empty() && orphans.len() < 3 {
-        return Ok(0); // Not enough material
-    }
-
-    // Build prompt
-    let memories_text: String = orphans
-        .iter()
-        .enumerate()
-        .map(|(i, (_, c))| format!("{}. {}", i, c.chars().take(200).collect::<String>()))
-        .collect::<Vec<_>>()
-        .join("\n");
-
-    let concepts_text: String = concepts
-        .iter()
-        .map(|c| {
-            format!(
-                "[{}] {}: {}",
-                c.id,
-                c.title,
-                c.summary.as_deref().unwrap_or("")
-            )
-        })
-        .collect::<Vec<_>>()
-        .join("\n");
-
-    let user_prompt = format!(
-        "Unassigned memories:\n{}\n\nExisting concepts:\n{}",
-        memories_text, concepts_text
-    );
-
-    let response = llm
-        .generate(LlmRequest {
-            system_prompt: Some(prompts.assign_orphans.clone()),
-            user_prompt,
-            max_tokens: 1024,
-            temperature: 0.3,
-            label: Some("orphan_assign".into()),
-            timeout_secs: None,
-        })
-        .await
-        .map_err(|e| OriginError::Llm(format!("orphan assignment: {}", e)))?;
-
-    let clean = crate::llm_provider::strip_think_tags(&response);
-
-    // Create the writer once, outside the loop
-    let knowledge_writer =
-        knowledge_path.map(|kp| crate::export::knowledge::KnowledgeWriter::new(kp.to_path_buf()));
-
-    // Parse assignments
-    let mut assigned = 0usize;
-    if let Some(json_str) = crate::llm_provider::extract_json(&clean) {
-        if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(json_str) {
-            // Process assignments to existing concepts
-            if let Some(assignments) = parsed.get("assignments").and_then(|a| a.as_array()) {
-                for assignment in assignments {
-                    let idx = assignment
-                        .get("memory_index")
-                        .and_then(|v| v.as_u64())
-                        .unwrap_or(999) as usize;
-                    let page_id = assignment
-                        .get("page_id")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("");
-                    if idx < orphans.len() && !page_id.is_empty() {
-                        let source_id = &orphans[idx].0;
-                        // Add this memory to the concept's source list
-                        if let Ok(Some(concept)) = db.get_page(page_id).await {
-                            if !concept.source_memory_ids.contains(&source_id.to_string()) {
-                                let mut merged_sources = concept.source_memory_ids.clone();
-                                merged_sources.push(source_id.to_string());
-                                let refs: Vec<&str> =
-                                    merged_sources.iter().map(|s| s.as_str()).collect();
-                                let _ = db
-                                    .update_page_content(
-                                        page_id,
-                                        &concept.content,
-                                        &refs,
-                                        "concept_growth",
-                                    )
-                                    .await;
-                                assigned += 1;
-                            }
-                        }
-                    }
-                }
-            }
-
-            // Process proposals (new concepts from orphan groups)
-            if let Some(proposals) = parsed.get("proposals").and_then(|a| a.as_array()) {
-                for proposal in proposals {
-                    let title = proposal.get("title").and_then(|v| v.as_str()).unwrap_or("");
-                    let indices = proposal
-                        .get("memory_indices")
-                        .and_then(|v| v.as_array())
-                        .map(|arr| {
-                            arr.iter()
-                                .filter_map(|v| v.as_u64().map(|n| n as usize))
-                                .collect::<Vec<_>>()
-                        })
-                        .unwrap_or_default();
-
-                    if title.is_empty() || indices.len() < 2 {
-                        continue;
-                    }
-
-                    let valid_indices: Vec<usize> =
-                        indices.into_iter().filter(|&i| i < orphans.len()).collect();
-                    if valid_indices.len() < 2 {
-                        continue;
-                    }
-
-                    // Create a new concept from these orphan memories
-                    let source_ids: Vec<&str> = valid_indices
-                        .iter()
-                        .map(|&i| orphans[i].0.as_str())
-                        .collect();
-                    let contents: Vec<String> = valid_indices
-                        .iter()
-                        .map(|&i| orphans[i].1.clone())
-                        .collect();
-                    let content_text = contents.join("\n\n");
-
-                    let page_id = crate::pages::Page::new_id();
-                    let now = chrono::Utc::now().to_rfc3339();
-
-                    let _ = db
-                        .insert_page(
-                            &page_id,
-                            title,
-                            Some(&format!(
-                                "Auto-grouped from {} orphan memories",
-                                source_ids.len()
-                            )),
-                            &content_text,
-                            None, // no entity_id
-                            None, // no domain
-                            &source_ids,
-                            &now,
-                        )
-                        .await;
-                    assigned += source_ids.len();
-
-                    if let Some(ref writer) = knowledge_writer {
-                        if let Ok(Some(c)) = db.get_page(&page_id).await {
-                            match writer.write_concept(&c) {
-                                Ok(p) => log::info!("[distill] wrote concept to {p}"),
-                                Err(e) => log::warn!("[distill] knowledge write failed: {e}"),
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    if assigned > 0 {
-        log::info!(
-            "[distill] orphan assignment: {} memories processed",
-            assigned
-        );
-    }
-    Ok(assigned)
-}
-
-/// Full Karpathy-style deep distill: emergence + orphans + recompile ALL + global review.
-/// Triggered by "Distill now" button or weekly background schedule.
-pub async fn deep_distill_pages(
-    db: &MemoryDB,
-    llm: Option<&Arc<dyn LlmProvider>>,
-    prompts: &PromptRegistry,
-    tuning: &crate::tuning::DistillationConfig,
-    knowledge_path: Option<&std::path::Path>,
-) -> Result<usize, OriginError> {
-    let llm_ref = match llm {
-        Some(l) if l.is_available() => l,
-        _ => return Ok(0),
-    };
-
-    let mut total = 0usize;
-
-    // 1. Emergence — create new concepts from clusters
-    let created = distill_pages(db, llm, prompts, tuning, knowledge_path)
-        .await
-        .unwrap_or(0);
-    total += created;
-    if created > 0 {
-        log::info!("[deep_distill] created {} new concepts", created);
-    }
-
-    // 2. Orphan assignment — assign unlinked memories to concepts or propose new ones
-    match assign_orphan_memories(db, llm_ref, prompts, tuning, knowledge_path).await {
-        Ok(n) => {
-            total += n;
-            if n > 0 {
-                log::info!("[deep_distill] assigned {} orphan memories", n);
-            }
-        }
-        Err(e) => log::warn!("[deep_distill] orphan assignment failed: {}", e),
-    }
-
-    // 3. Recompile ALL active concepts (not just changed ones — full refresh)
-    let all_active = db.list_pages("active", 200, 0).await?;
-    for concept in &all_active {
-        match recompile_single_page(db, llm_ref, prompts, concept).await {
-            Ok(true) => total += 1,
-            Ok(false) => {}
-            Err(e) => log::warn!(
-                "[deep_distill] recompile failed for '{}': {}",
-                concept.title,
-                e
-            ),
-        }
-    }
-
-    // 4. Global review — merge/split/create analysis
-    if all_active.len() >= 5 {
-        match global_page_review(db, llm_ref, prompts, &all_active).await {
-            Ok(n) => {
-                total += n;
-                if n > 0 {
-                    log::info!("[deep_distill] global review applied {} changes", n);
-                }
-            }
-            Err(e) => log::warn!("[deep_distill] global review failed: {}", e),
-        }
-    }
-
-    log::info!("[deep_distill] complete: {} total changes", total);
-    Ok(total)
-}
-
 /// Re-distill concepts whose source memories have changed.
 /// Called by the steep cycle — only refreshes concepts with meaningful input changes.
 pub(crate) async fn redistill_changed_pages(
@@ -1896,74 +741,6 @@ pub(crate) async fn redistill_changed_pages(
         );
     }
     Ok(recompiled)
-}
-
-/// Recompile a single concept from its source memories via LLM.
-async fn recompile_single_page(
-    db: &MemoryDB,
-    llm: &Arc<dyn LlmProvider>,
-    prompts: &PromptRegistry,
-    concept: &crate::pages::Page,
-) -> Result<bool, OriginError> {
-    let memories = db
-        .get_memory_contents_by_ids(&concept.source_memory_ids)
-        .await?;
-    if memories.is_empty() {
-        log::warn!(
-            "[re-distill] concept '{}' has no source memories, skipping",
-            concept.id
-        );
-        return Ok(false);
-    }
-
-    const MEM_SNIPPET_CAP: usize = 800;
-    let memories_block: String = memories
-        .iter()
-        .map(|(id, content)| {
-            let snippet: String = content.chars().take(MEM_SNIPPET_CAP).collect();
-            let snippet = if content.chars().count() > MEM_SNIPPET_CAP {
-                format!("{}...", snippet.trim_end())
-            } else {
-                snippet
-            };
-            format!("[{}] {}", id, snippet)
-        })
-        .collect::<Vec<_>>()
-        .join("\n\n");
-    let user_prompt = format!("Topic: {}\n\n{}", concept.title, memories_block);
-
-    let response = llm
-        .generate(LlmRequest {
-            system_prompt: Some(prompts.distill_concept.clone()),
-            user_prompt,
-            max_tokens: llm.recommended_max_output(),
-            temperature: 0.1,
-            label: Some("distill_body".into()),
-            timeout_secs: None,
-        })
-        .await;
-
-    match response {
-        Ok(raw) if !raw.trim().is_empty() => {
-            let content = crate::llm_provider::strip_think_tags(&raw)
-                .trim()
-                .to_string();
-            if !content.is_empty() {
-                let source_refs: Vec<&str> = concept
-                    .source_memory_ids
-                    .iter()
-                    .map(|s| s.as_str())
-                    .collect();
-                db.update_page_content(&concept.id, &content, &source_refs, "re_distill")
-                    .await?;
-                log::info!("[re-distill] refreshed concept '{}'", concept.title);
-                return Ok(true);
-            }
-        }
-        Ok(_) => log::warn!("[re-distill] empty output for '{}'", concept.title),
-        Err(e) => log::warn!("[re-distill] LLM error for '{}': {}", concept.title, e),
-    }
-    Ok(false)
 }
 
 /// Re-distill concepts explicitly marked stale by topic-key upserts.
@@ -2086,296 +863,6 @@ pub(crate) async fn re_distill_stale_pages(
         log::info!("[re-distill-stale] refreshed {} stale concepts", recompiled);
     }
     Ok(recompiled)
-}
-
-/// Layer 3: Periodic global review -- merge/split/create concepts based on holistic analysis.
-async fn global_page_review(
-    db: &MemoryDB,
-    llm: &Arc<dyn LlmProvider>,
-    prompts: &PromptRegistry,
-    concepts: &[crate::pages::Page],
-) -> Result<usize, OriginError> {
-    let concepts_text: String = concepts
-        .iter()
-        .map(|c| {
-            format!(
-                "[{}] {}: {}",
-                c.id,
-                c.title,
-                c.summary.as_deref().unwrap_or("")
-            )
-        })
-        .collect::<Vec<_>>()
-        .join("\n");
-
-    let response = llm
-        .generate(LlmRequest {
-            system_prompt: Some(prompts.global_concept_review.clone()),
-            user_prompt: concepts_text,
-            max_tokens: 1024,
-            temperature: 0.3,
-            label: Some("global_review".into()),
-            timeout_secs: None,
-        })
-        .await
-        .map_err(|e| OriginError::Llm(format!("global review: {}", e)))?;
-
-    let clean = crate::llm_provider::strip_think_tags(&response);
-    let mut changes = 0usize;
-
-    if let Some(json_str) = crate::llm_provider::extract_json(&clean) {
-        if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(json_str) {
-            // Process merges
-            if let Some(merges) = parsed.get("merges").and_then(|a| a.as_array()) {
-                for merge in merges {
-                    let keep_id = merge.get("keep").and_then(|v| v.as_str()).unwrap_or("");
-                    let remove_id = merge.get("remove").and_then(|v| v.as_str()).unwrap_or("");
-                    if keep_id.is_empty() || remove_id.is_empty() {
-                        continue;
-                    }
-
-                    // Merge: transfer source_memory_ids from remove to keep, archive remove
-                    if let (Ok(Some(keep)), Ok(Some(remove))) =
-                        (db.get_page(keep_id).await, db.get_page(remove_id).await)
-                    {
-                        let mut merged_sources = keep.source_memory_ids.clone();
-                        for sid in &remove.source_memory_ids {
-                            if !merged_sources.contains(sid) {
-                                merged_sources.push(sid.clone());
-                            }
-                        }
-                        let refs: Vec<&str> = merged_sources.iter().map(|s| s.as_str()).collect();
-                        let _ = db
-                            .update_page_content(keep_id, &keep.content, &refs, "re_distill")
-                            .await;
-                        let _ = db.archive_page(remove_id).await;
-                        changes += 1;
-                        log::info!(
-                            "[distill] merged concept '{}' into '{}'",
-                            remove.title,
-                            keep.title
-                        );
-                    }
-                }
-            }
-            // Note: splits and missing concepts logged but not auto-applied (too risky)
-            if let Some(splits) = parsed.get("splits").and_then(|a| a.as_array()) {
-                for split in splits {
-                    let cid = split.get("page_id").and_then(|v| v.as_str()).unwrap_or("");
-                    let titles = split.get("sub_titles").and_then(|v| v.as_array());
-                    if !cid.is_empty() {
-                        log::info!(
-                            "[distill] global review suggests splitting concept {}: {:?}",
-                            cid,
-                            titles
-                        );
-                    }
-                }
-            }
-        }
-    }
-
-    Ok(changes)
-}
-
-/// Re-distill a single concept by reloading all source memories and recompiling with LLM.
-pub async fn deep_distill_single(
-    db: &MemoryDB,
-    llm: Option<&Arc<dyn LlmProvider>>,
-    prompts: &PromptRegistry,
-    page_id: &str,
-) -> Result<(), OriginError> {
-    let llm = match llm {
-        Some(l) if l.is_available() => l,
-        Some(_) => {
-            return Err(OriginError::Llm(
-                "LLM not available for re-distillation".into(),
-            ))
-        }
-        None => {
-            return Err(OriginError::Llm(
-                "No LLM available for re-distillation".into(),
-            ))
-        }
-    };
-
-    let concept = db
-        .get_page(page_id)
-        .await?
-        .ok_or_else(|| OriginError::VectorDb(format!("Concept {} not found", page_id)))?;
-
-    let memories = db
-        .get_memory_contents_by_ids(&concept.source_memory_ids)
-        .await?;
-    if memories.is_empty() {
-        log::warn!("[distill] no source memories found for concept {}", page_id);
-        return Ok(());
-    }
-
-    const MEM_SNIPPET_CAP: usize = 800;
-    let memories_block: String = memories
-        .iter()
-        .map(|(id, content)| {
-            let snippet: String = content.chars().take(MEM_SNIPPET_CAP).collect();
-            let snippet = if content.chars().count() > MEM_SNIPPET_CAP {
-                format!("{}...", snippet.trim_end())
-            } else {
-                snippet
-            };
-            format!("[{}] {}", id, snippet)
-        })
-        .collect::<Vec<_>>()
-        .join("\n\n");
-    let user_prompt = format!("Topic: {}\n\n{}", concept.title, memories_block);
-
-    let response = llm
-        .generate(LlmRequest {
-            system_prompt: Some(prompts.distill_concept.clone()),
-            user_prompt,
-            max_tokens: llm.recommended_max_output(),
-            temperature: 0.1,
-            label: Some("distill_body".into()),
-            timeout_secs: None,
-        })
-        .await
-        .map_err(|e| OriginError::Llm(format!("re-distill LLM: {}", e)))?;
-
-    let content = crate::llm_provider::strip_think_tags(&response)
-        .trim()
-        .to_string();
-
-    if content.is_empty() {
-        log::warn!(
-            "[distill] empty output for concept '{}', skipping",
-            concept.title
-        );
-        return Ok(());
-    }
-
-    let source_refs: Vec<&str> = concept
-        .source_memory_ids
-        .iter()
-        .map(|s| s.as_str())
-        .collect();
-    db.update_page_content(page_id, &content, &source_refs, "distill")
-        .await?;
-
-    log::info!(
-        "[distill] re-distilled concept '{}' (v{}->v{})",
-        concept.title,
-        concept.version,
-        concept.version + 1
-    );
-    Ok(())
-}
-
-/// Process pending refinement queue items via LLM.
-async fn process_refinement_queue(
-    db: &MemoryDB,
-    llm: Option<&Arc<dyn LlmProvider>>,
-    prompts: &PromptRegistry,
-    tuning: &crate::tuning::RefineryConfig,
-) -> Result<usize, OriginError> {
-    let pending = db.get_pending_refinements().await?;
-    let mut processed = 0usize;
-
-    for proposal in pending.iter().take(tuning.max_proposals_per_steep) {
-        match proposal.action.as_str() {
-            "dedup_merge" => {
-                // Stale v1 proposal — dismiss (distillation handles merges now)
-                db.resolve_refinement(&proposal.id, "dismissed").await?;
-                processed += 1;
-            }
-            "detect_contradiction" => {
-                if let Some(llm) = llm {
-                    let contents = db.get_memory_contents(&proposal.source_ids).await?;
-                    if contents.len() < 2 {
-                        db.resolve_refinement(&proposal.id, "dismissed").await?;
-                        continue;
-                    }
-
-                    let existing_content = contents.get(1).cloned().unwrap_or_default();
-                    let new_content = contents.first().cloned().unwrap_or_default();
-
-                    let response = llm
-                        .generate(LlmRequest {
-                            system_prompt: Some(prompts.detect_contradiction.clone()),
-                            user_prompt: format!(
-                                "Existing: {}\nNew: {}",
-                                existing_content, new_content
-                            ),
-                            max_tokens: 256,
-                            temperature: 0.1,
-                            label: None,
-                            timeout_secs: None,
-                        })
-                        .await;
-
-                    if let Ok(r) = response {
-                        let r = crate::llm_provider::strip_think_tags(&r);
-                        let r = r.trim().to_string();
-                        let result = if r.starts_with("CONTRADICTS:") {
-                            ContradictionResult::Contradicts {
-                                explanation: r
-                                    .strip_prefix("CONTRADICTS:")
-                                    .unwrap_or("")
-                                    .trim()
-                                    .to_string(),
-                            }
-                        } else if r.starts_with("SUPERSEDES:") {
-                            ContradictionResult::Supersedes {
-                                merged_content: r
-                                    .strip_prefix("SUPERSEDES:")
-                                    .unwrap_or("")
-                                    .trim()
-                                    .to_string(),
-                            }
-                        } else {
-                            ContradictionResult::Consistent
-                        };
-
-                        match result {
-                            ContradictionResult::Consistent => {
-                                db.resolve_refinement(&proposal.id, "dismissed").await?;
-                            }
-                            ContradictionResult::Contradicts { explanation } => {
-                                log::info!("[refinery] contradiction detected: {}", explanation);
-                                db.resolve_refinement(&proposal.id, "awaiting_review")
-                                    .await?;
-                            }
-                            ContradictionResult::Supersedes { merged_content } => {
-                                let tier = db.get_highest_tier(&proposal.source_ids).await?;
-                                apply_merge_by_tier(
-                                    db,
-                                    &proposal.source_ids,
-                                    &merged_content,
-                                    &proposal.id,
-                                    &tier,
-                                )
-                                .await?;
-                            }
-                        }
-                        processed += 1;
-                    }
-                }
-            }
-            "suggest_entity" => {
-                // Entity suggestion: payload contains the suggested entity name.
-                // Mark as awaiting_review so the UI can surface it for approval.
-                db.resolve_refinement(&proposal.id, "awaiting_review")
-                    .await?;
-                log::info!(
-                    "[refinery] entity suggestion queued for review: {:?}",
-                    proposal.payload
-                );
-                processed += 1;
-            }
-            _ => {
-                log::debug!("[refinery] unknown action: {}", proposal.action);
-            }
-        }
-    }
-    Ok(processed)
 }
 
 /// Group memories by activity bursts (30-min gap → new burst).
@@ -2503,182 +990,6 @@ pub(crate) fn build_burst_context(
     )
 }
 
-/// Tokens considered generic stand-ins. A title made entirely of these is not
-/// useful as a concept title. Mostly English; a small set of CJK generics
-/// included for the same reason. Curated to avoid false positives —
-/// `concept`, `concepts`, `content`, `ideas` deliberately excluded because
-/// they appear in legitimate titles too often.
-const GENERIC_TOKENS: &[&str] = &[
-    "general",
-    "various",
-    "miscellaneous",
-    "topic",
-    "topics",
-    "notes",
-    "things",
-    "items",
-    "stuff",
-    "misc",
-    "other",
-    "unknown",
-    "untitled",
-    "random",
-    "assorted",
-    "cluster",
-    "clusters",
-    // CJK generics seen in real LLM output
-    "杂项",
-    "其他",
-    "其它",
-    "通用",
-    "笔记",
-    "主题",
-];
-
-/// Returns true when every word-token of the input (after splitting on
-/// non-alphanumeric separators and lowercasing) is in GENERIC_TOKENS. Used to
-/// reject LLM-produced titles like "General topic" or "Various Notes" or
-/// "Misc-things" (hyphen treated as separator).
-fn is_all_generic_tokens(s: &str) -> bool {
-    let words: Vec<&str> = s
-        .split(|c: char| !c.is_alphanumeric())
-        .map(|w| w.trim())
-        .filter(|w| !w.is_empty())
-        .collect();
-    if words.is_empty() {
-        return false;
-    }
-    words
-        .iter()
-        .all(|w| GENERIC_TOKENS.contains(&w.to_lowercase().as_str()))
-}
-
-/// Returns true when the title contains markdown formatting or document-content
-/// punctuation that shouldn't appear in clean titles. Catches LLM hallucinations
-/// like `**Roland** — 太正統，d-L 連接快` where the model emitted markdown-styled
-/// document content instead of a title. Also catches wikilink brackets and
-/// heading markers that leak in from training data of Markdown corpora.
-fn looks_like_markup_styled(s: &str) -> bool {
-    let trimmed = s.trim();
-    // Markdown emphasis (bold/italic/strikethrough)
-    trimmed.contains("**")
-        || trimmed.contains("__")
-        || trimmed.contains("~~")
-        // Wikilink brackets
-        || trimmed.contains("[[")
-        || trimmed.contains("]]")
-        // Em-dash separator (en-dash and ASCII hyphen are fine)
-        || trimmed.contains('—')
-        // Heading markers at start
-        || trimmed.starts_with('#')
-}
-
-fn looks_like_uuid(s: &str) -> bool {
-    // e.g. 5b064ab2-8919-48b2-8220-8f7680b426dd
-    let trimmed = s.trim();
-    trimmed.len() >= 32
-        && trimmed.chars().filter(|c| *c == '-').count() >= 3
-        && trimmed.chars().all(|c| c.is_ascii_hexdigit() || c == '-')
-}
-
-fn looks_like_short_hash(s: &str) -> bool {
-    // e.g. e554534 (commit SHA prefix) as sole title or lead token
-    let first = s.split_whitespace().next().unwrap_or("");
-    (7..=12).contains(&first.len())
-        && first.chars().all(|c| c.is_ascii_hexdigit())
-        && first.chars().any(|c| c.is_ascii_digit())
-}
-
-fn looks_like_code(s: &str) -> bool {
-    let lowered = s.trim_start().to_lowercase();
-    lowered.starts_with("const ")
-        || lowered.starts_with("let ")
-        || lowered.starts_with("var ")
-        || lowered.starts_with("await ")
-        || lowered.starts_with("function ")
-        || lowered.starts_with("import ")
-        || lowered.starts_with("fn ")
-        || s.contains("=>")
-        || s.contains("{ where:")
-        || s.contains("findUnique")
-}
-
-fn looks_like_path(s: &str) -> bool {
-    let trimmed = s.trim_start();
-    (trimmed.starts_with('[')
-        && (trimmed.contains("obs/")
-            || trimmed.contains("/2026-")
-            || trimmed.contains("/2025-")
-            || trimmed.contains(".md")
-            || trimmed.contains("::")))
-        || trimmed.starts_with('/')
-        || trimmed.starts_with("~/")
-        || trimmed.contains("/Users/")
-        || trimmed.contains("/2026-")
-        || trimmed.contains("/2025-")
-        || trimmed.contains("/inbox/")
-        || trimmed.contains("/second-brain/")
-}
-
-fn looks_like_commit_message(s: &str) -> bool {
-    let trimmed = s.trim_start();
-    let lowered = trimmed.to_lowercase();
-    let plain_prefixes = [
-        "feat:",
-        "fix:",
-        "chore:",
-        "docs:",
-        "refactor:",
-        "test:",
-        "style:",
-        "perf:",
-        "ci:",
-        "build:",
-        "revert:",
-    ];
-    if plain_prefixes.iter().any(|p| lowered.starts_with(p)) {
-        return true;
-    }
-    // Conventional commits with scope: feat(area): ...
-    if let Some(open) = trimmed.find('(') {
-        if let Some(colon_close) = trimmed[open..].find("):") {
-            let _ = colon_close;
-            let prefix_raw = trimmed[..open].to_lowercase();
-            let prefix_clean = prefix_raw.trim_end_matches(':');
-            if plain_prefixes
-                .iter()
-                .any(|p| prefix_clean == p.trim_end_matches(':'))
-            {
-                return true;
-            }
-        }
-    }
-    false
-}
-
-/// Strip a leading bracketed source-ID prefix like `[obs/unix/2026-03-17]`,
-/// `[mem_abc123]`, `[5b064ab2-8919-48b2]` from content before title generation.
-/// Only strips if the bracket content has no spaces and looks like a source token
-/// (contains slash, underscore, double-colon, or is all hex/hyphens).
-fn strip_source_prefix(content: &str) -> &str {
-    let trimmed = content.trim_start();
-    if !trimmed.starts_with('[') {
-        return content;
-    }
-    if let Some(end) = trimmed.find(']') {
-        let inside = &trimmed[1..end];
-        if !inside.contains(' ')
-            && (inside.contains('/')
-                || inside.contains('_')
-                || inside.contains("::")
-                || inside.chars().all(|c| c.is_ascii_hexdigit() || c == '-'))
-        {
-            return trimmed[end + 1..].trim_start();
-        }
-    }
-    content
-}
-
 /// Generate a short 4-6 word topic title from content using LLM.
 pub(crate) async fn generate_short_title(
     llm: &Arc<dyn LlmProvider>,
@@ -2777,46 +1088,6 @@ pub(crate) async fn generate_short_title(
     }
 }
 
-/// Apply a merge result based on the stability tier of the involved memories.
-async fn apply_merge_by_tier(
-    db: &MemoryDB,
-    source_ids: &[String],
-    merged_content: &str,
-    proposal_id: &str,
-    tier: &StabilityTier,
-) -> Result<(), OriginError> {
-    match tier {
-        StabilityTier::Ephemeral => {
-            // Auto-apply silently
-            db.apply_merge(source_ids, merged_content).await?;
-            db.resolve_refinement(proposal_id, "auto_applied").await?;
-            log::info!(
-                "[refinery] auto-applied merge (ephemeral) for {}",
-                proposal_id
-            );
-        }
-        StabilityTier::Standard => {
-            // Auto-apply with notification (toast emitted by caller if app_handle available)
-            db.apply_merge(source_ids, merged_content).await?;
-            db.resolve_refinement(proposal_id, "auto_applied").await?;
-            log::info!(
-                "[refinery] auto-applied merge (standard, notify) for {}",
-                proposal_id
-            );
-        }
-        StabilityTier::Protected => {
-            // Queue for human review — don't auto-apply
-            db.resolve_refinement(proposal_id, "awaiting_review")
-                .await?;
-            log::info!(
-                "[refinery] queued merge for review (protected) for {}",
-                proposal_id
-            );
-        }
-    }
-    Ok(())
-}
-
 #[derive(Debug, Serialize)]
 pub struct SteepResult {
     pub memories_decayed: u64,
@@ -2830,7 +1101,8 @@ pub struct SteepResult {
 mod tests {
     use super::*;
     use crate::db::tests::test_db;
-    use crate::sources::RawDocument;
+    use crate::sources::{RawDocument, StabilityTier};
+    use crate::synthesis::distill::apply_merge_by_tier;
 
     fn make_memory(source_id: &str, content: &str, memory_type: &str, domain: &str) -> RawDocument {
         RawDocument {
@@ -2848,7 +1120,7 @@ mod tests {
 
     #[test]
     fn test_trigger_kind_backstop_runs_all_phases() {
-        for &phase in ALL_PHASES {
+        for &phase in Phase::ALL {
             assert!(
                 TriggerKind::Backstop.runs_phase(phase),
                 "Backstop should run {}",
@@ -2860,71 +1132,61 @@ mod tests {
     #[test]
     fn test_trigger_kind_burst_end_subset() {
         let t = TriggerKind::BurstEnd;
-        assert!(t.runs_phase("recaps"));
-        assert!(t.runs_phase("refinement_queue"));
+        assert!(t.runs_phase(Phase::Recaps));
+        assert!(t.runs_phase(Phase::RefinementQueue));
         // Should NOT run anything else
-        assert!(!t.runs_phase("decay"));
-        assert!(!t.runs_phase("promote"));
-        assert!(!t.runs_phase("emergence"));
-        assert!(!t.runs_phase("community_detection"));
-        assert!(!t.runs_phase("decision_logs"));
-        assert!(!t.runs_phase("prune_rejections"));
+        assert!(!t.runs_phase(Phase::Decay));
+        assert!(!t.runs_phase(Phase::Promote));
+        assert!(!t.runs_phase(Phase::Emergence));
+        assert!(!t.runs_phase(Phase::CommunityDetection));
+        assert!(!t.runs_phase(Phase::DecisionLogs));
+        assert!(!t.runs_phase(Phase::PruneRejections));
     }
 
     #[test]
     fn test_trigger_kind_idle_subset() {
         let t = TriggerKind::Idle;
-        assert!(t.runs_phase("community_detection"));
-        assert!(t.runs_phase("emergence"));
-        assert!(t.runs_phase("re-distill"));
-        assert!(t.runs_phase("decision_logs"));
+        assert!(t.runs_phase(Phase::CommunityDetection));
+        assert!(t.runs_phase(Phase::Emergence));
+        assert!(t.runs_phase(Phase::ReDistill));
+        assert!(t.runs_phase(Phase::DecisionLogs));
         // Should NOT run burst/maintenance/backfill phases
-        assert!(!t.runs_phase("recaps"));
-        assert!(!t.runs_phase("refinement_queue"));
-        assert!(!t.runs_phase("decay"));
-        assert!(!t.runs_phase("promote"));
-        assert!(!t.runs_phase("reweave"));
-        assert!(!t.runs_phase("reembed"));
-        assert!(!t.runs_phase("entity_extraction"));
-        assert!(!t.runs_phase("prune_rejections"));
+        assert!(!t.runs_phase(Phase::Recaps));
+        assert!(!t.runs_phase(Phase::RefinementQueue));
+        assert!(!t.runs_phase(Phase::Decay));
+        assert!(!t.runs_phase(Phase::Promote));
+        assert!(!t.runs_phase(Phase::Reweave));
+        assert!(!t.runs_phase(Phase::Reembed));
+        assert!(!t.runs_phase(Phase::EntityExtraction));
+        assert!(!t.runs_phase(Phase::PruneRejections));
     }
 
     #[test]
     fn test_trigger_kind_daily_subset() {
         let t = TriggerKind::Daily;
-        assert!(t.runs_phase("decay"));
-        assert!(t.runs_phase("promote"));
-        assert!(t.runs_phase("reweave"));
-        assert!(t.runs_phase("reembed"));
-        assert!(t.runs_phase("entity_extraction"));
-        assert!(t.runs_phase("prune_rejections"));
+        assert!(t.runs_phase(Phase::Decay));
+        assert!(t.runs_phase(Phase::Promote));
+        assert!(t.runs_phase(Phase::Reweave));
+        assert!(t.runs_phase(Phase::Reembed));
+        assert!(t.runs_phase(Phase::EntityExtraction));
+        assert!(t.runs_phase(Phase::PruneRejections));
         // Should NOT run synthesis or burst phases
-        assert!(!t.runs_phase("recaps"));
-        assert!(!t.runs_phase("emergence"));
-        assert!(!t.runs_phase("re-distill"));
-        assert!(!t.runs_phase("decision_logs"));
-        assert!(!t.runs_phase("community_detection"));
-        assert!(!t.runs_phase("refinement_queue"));
-    }
-
-    #[test]
-    fn test_trigger_kind_unknown_phase_returns_false() {
-        // Defensive: typos in call sites must NOT silently match.
-        assert!(!TriggerKind::Backstop.runs_phase("typo"));
-        assert!(!TriggerKind::Backstop.runs_phase(""));
-        assert!(!TriggerKind::BurstEnd.runs_phase("typo"));
-        assert!(!TriggerKind::Idle.runs_phase("typo"));
-        assert!(!TriggerKind::Daily.runs_phase("typo"));
+        assert!(!t.runs_phase(Phase::Recaps));
+        assert!(!t.runs_phase(Phase::Emergence));
+        assert!(!t.runs_phase(Phase::ReDistill));
+        assert!(!t.runs_phase(Phase::DecisionLogs));
+        assert!(!t.runs_phase(Phase::CommunityDetection));
+        assert!(!t.runs_phase(Phase::RefinementQueue));
     }
 
     #[test]
     fn test_every_phase_has_non_backstop_trigger() {
-        // Safety net: if a new phase is added to ALL_PHASES but not assigned
+        // Safety net: if a new phase is added to `Phase::ALL` but not assigned
         // to BurstEnd, Idle, or Daily, it silently becomes backstop-only
         // (running every 6 hours instead of at the right time). This test
         // catches that at compile/test time.
         let non_backstop = [TriggerKind::BurstEnd, TriggerKind::Idle, TriggerKind::Daily];
-        for &phase in ALL_PHASES {
+        for &phase in Phase::ALL {
             let covered = non_backstop.iter().any(|t| t.runs_phase(phase));
             assert!(
                 covered,
@@ -3797,7 +2059,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_run_phase_propagates_nudge_and_headline() {
-        let result = run_phase("test_phase", || async {
+        let result = run_phase(Phase::Decay, || async {
             Ok(PhaseOutput {
                 items_processed: 5,
                 nudge: Nudge::Wow,
@@ -3806,7 +2068,7 @@ mod tests {
         })
         .await;
 
-        assert_eq!(result.name, "test_phase");
+        assert_eq!(result.name, "decay");
         assert_eq!(result.items_processed, 5);
         assert_eq!(result.nudge, Nudge::Wow);
         assert_eq!(result.headline.as_deref(), Some("Origin did a wow thing"));
@@ -3815,14 +2077,14 @@ mod tests {
 
     #[tokio::test]
     async fn test_run_phase_on_error_is_silent() {
-        let result = run_phase("test_phase_err", || async {
+        let result = run_phase(Phase::Decay, || async {
             Err::<PhaseOutput, _>(crate::error::OriginError::VectorDb(
                 "test failure".to_string(),
             ))
         })
         .await;
 
-        assert_eq!(result.name, "test_phase_err");
+        assert_eq!(result.name, "decay");
         assert_eq!(result.items_processed, 0);
         assert_eq!(result.nudge, Nudge::Silent);
         assert!(result.headline.is_none());
