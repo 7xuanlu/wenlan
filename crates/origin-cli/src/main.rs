@@ -29,6 +29,14 @@ struct Cli {
 enum Commands {
     /// Show daemon health + version.
     Status,
+    /// Search memories by query (vector + FTS hybrid).
+    Search {
+        /// Search query.
+        query: String,
+        /// Max results (default 10).
+        #[arg(short, long, default_value_t = 10)]
+        limit: usize,
+    },
 }
 
 #[tokio::main]
@@ -39,6 +47,9 @@ async fn main() -> anyhow::Result<()> {
     let format = cli.format.resolve();
     match cli.command {
         Commands::Status => commands::status::run(&client, format, cli.quiet).await?,
+        Commands::Search { query, limit } => {
+            commands::search::run(&client, format, cli.quiet, query, limit).await?
+        }
     }
     Ok(())
 }
