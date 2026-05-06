@@ -2,7 +2,7 @@
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
   "description": "Default capability for Origin",
-  "windows": ["main", "toast", "snip", "quick-capture", "ambient", "icon"],
+  "windows": ["main", "toast", "quick-capture", "icon"],
   "permissions": [
     "core:default",
     "global-shortcut:default",

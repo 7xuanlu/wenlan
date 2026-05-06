@@ -232,12 +232,10 @@ This keeps `origin-core` framework-agnostic and testable with `NoopEmitter` in u
 
 ### Multi-Window Architecture
 
-Six Tauri windows from a single webview, routed by URL hash in `src/main.tsx`:
+Four Tauri windows from a single webview, routed by URL hash in `src/main.tsx`:
 - **main** — Spotlight search / Memory view / Settings / Chunk viewer
 - **toast** — Transparent overlay for capture notifications (non-activating panel)
-- **snip** — Full-screen transparent overlay for region selection
 - **quick-capture** — Popup for quick thought capture
-- **ambient** — Ambient context overlay window
 - **icon** — Small icon trigger overlay near the cursor/selection
 
 ### Unified Trigger Architecture
@@ -245,7 +243,7 @@ Six Tauri windows from a single webview, routed by URL hash in `src/main.tsx`:
 All input sources emit a `TriggerEvent` into a single mpsc channel (capacity 32), consumed by the **smart router** (`router/intent.rs`):
 
 ```
-Sensors (focus, selection, ambient, hotkey, snip, thought)
+Sensors (focus, hotkey, thought)
     → TriggerEvent channel (32)
         → Smart Router (dedup, AFK gating, frame comparison, OCR)
             → ContextBundle channel (8)
@@ -254,7 +252,7 @@ Sensors (focus, selection, ambient, hotkey, snip, thought)
 
 The router applies per-window frame comparison, text dedup (bigram Jaccard, 0.85 threshold), AFK detection (60s idle), and PII redaction before storage.
 
-**Note**: Ambient capture (clipboard, window_activity) is disabled by default as part of the memory-layer pivot. Screen capture infrastructure remains but is opt-in.
+**Note**: Clipboard and window_activity ambient capture are disabled by default as part of the memory-layer pivot. Screen capture infrastructure remains but is opt-in.
 
 ### Two-Pass Capture Pipeline
 
@@ -263,8 +261,8 @@ The router applies per-window frame comparison, text dedup (bigram Jaccard, 0.85
 
 ### Thread Model
 
-- **Tokio runtime** (Tauri-managed): Router, consumer, ambient ticker, IPC server, DB operations
-- **Dedicated std::thread**: Focus sensor (10Hz cursor polling), LLM formatter (GPU inference)
+- **Tokio runtime** (Tauri-managed): Router, consumer, IPC server, DB operations
+- **Dedicated std::thread**: Focus sensor, LLM formatter (GPU inference)
 - **Bridge pattern**: LLM thread captures `tokio::runtime::Handle` for async DB calls via `handle.block_on()`
 - **IMPORTANT**: In `setup()` closure, `tokio::runtime::Handle::current()` panics — use `tauri::async_runtime::block_on(async { Handle::current() })` instead
 
@@ -358,16 +356,15 @@ Thin client — only Tauri-specific code. Data commands proxy to the daemon.
 |---|---|
 | `lib.rs` | Tauri setup, plugin registration, window/tray/shortcut setup, daemon health check on startup, ~146 command registrations |
 | `main.rs` | Tauri entry point |
-| `state.rs` | Simplified `AppState` — `OriginClient`, `app_handle`, UI flags (clipboard_enabled, screen_capture_enabled, ambient_mode, etc.). No MemoryDB, no LLM, no embeddings. |
+| `state.rs` | Simplified `AppState` — `OriginClient`, `app_handle`, UI flags (clipboard_enabled, screen_capture_enabled, etc.). No MemoryDB, no LLM, no embeddings. |
 | `api.rs` | `OriginClient` — `reqwest`-based HTTP client wrapper, one method per endpoint, uses `origin-types` |
 | `events.rs` | `TauriEmitter` — adapter that implements `origin_core::events::EventEmitter` by wrapping `tauri::AppHandle::emit` |
 | `search.rs` | ~146 `#[tauri::command]` functions, most are HTTP proxies to `OriginClient` |
 | `sensor/` | macOS-specific capture: vision, frame_compare, idle |
-| `trigger/` | Focus sensor thread, ambient ticker |
+| `trigger/` | Focus sensor thread |
 | `router/intent.rs` | Smart router (trigger events → context bundles) — still in the app because it's entangled with sensors |
 | `indexer.rs` | File watcher (notify-based, 2s debounce) |
 | `remote_access.rs` | Cloudflare tunnel management for exposing the daemon externally |
-| `ambient/` | Ambient overlay (disabled by default) |
 | `mcp_config.rs` | MCP server configuration for external tools |
 
 ## Key Frontend Modules (src/)
