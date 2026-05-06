@@ -37,6 +37,31 @@ enum Commands {
         #[arg(short, long, default_value_t = 10)]
         limit: usize,
     },
+    /// Recall the working memory bundle for a query.
+    Recall {
+        /// Query to recall context for.
+        query: String,
+    },
+    /// Store a memory. Provide text positionally, or use --file, or pipe via stdin.
+    Store {
+        /// Content text. If omitted and --file unset, read from stdin.
+        text: Option<String>,
+        /// Read content from a file.
+        #[arg(short, long)]
+        file: Option<std::path::PathBuf>,
+        /// Memory type (e.g. fact, task, decision).
+        #[arg(short = 't', long = "type")]
+        memory_type: Option<String>,
+    },
+    /// List recent memories.
+    List {
+        /// Max results.
+        #[arg(short, long, default_value_t = 20)]
+        limit: usize,
+        /// Filter by memory type.
+        #[arg(short = 't', long = "type")]
+        memory_type: Option<String>,
+    },
 }
 
 #[tokio::main]
@@ -49,6 +74,17 @@ async fn main() -> anyhow::Result<()> {
         Commands::Status => commands::status::run(&client, format, cli.quiet).await?,
         Commands::Search { query, limit } => {
             commands::search::run(&client, format, cli.quiet, query, limit).await?
+        }
+        Commands::Recall { query } => {
+            commands::recall::run(&client, format, cli.quiet, query).await?
+        }
+        Commands::Store {
+            text,
+            file,
+            memory_type,
+        } => commands::store::run(&client, format, cli.quiet, text, file, memory_type).await?,
+        Commands::List { limit, memory_type } => {
+            commands::list::run(&client, format, cli.quiet, limit, memory_type).await?
         }
     }
     Ok(())
