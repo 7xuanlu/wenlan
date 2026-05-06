@@ -91,13 +91,13 @@ jobs:
         if: github.ref == 'refs/heads/main'
         run: cargo test -p origin-core --lib eval::token_efficiency -- --ignored
 
-      # Eval harness integration tests (app/tests/eval_harness.rs) need the
+      # Eval harness integration tests (crates/origin-core/tests/eval_harness.rs) need the
       # FastEmbed BGE-Base-EN-v1.5-Q model (~200MB ONNX) which auto-downloads
       # on first run. GitHub Actions macOS runners lack Metal GPU support and
       # the hf-hub crate can't resolve manually seeded cache files.
       #
       # Run eval tests locally:
-      #   cargo test -p origin-app --test eval_harness
+      #   cargo test -p origin-core --test eval_harness
       #
       # The model downloads once into ~/.fastembed_cache and is reused.
       - name: Run app unit tests (eval harness runs locally)
