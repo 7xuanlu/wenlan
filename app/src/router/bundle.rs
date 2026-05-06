@@ -4,6 +4,33 @@ use crate::sensor::vision::{TextObservation, WindowOcrResult};
 use crate::trigger::types::TriggerEvent;
 use chrono::{DateTime, Utc};
 
+/// Source classification for a context bundle. Replaces the previous
+/// stringly-typed `trigger_type: String` field for compiler-checked match
+/// arms across the router pipeline.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TriggerSource {
+    Hotkey,
+    Thought,
+    Context,
+}
+
+impl TriggerSource {
+    /// Stable string form for downstream HTTP payloads + log compatibility.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            TriggerSource::Hotkey => "hotkey",
+            TriggerSource::Thought => "thought",
+            TriggerSource::Context => "context",
+        }
+    }
+}
+
+impl std::fmt::Display for TriggerSource {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
 /// A window snapshot within a context bundle.
 #[derive(Debug, Clone)]
 pub struct WindowSnapshot {
@@ -19,7 +46,7 @@ pub struct WindowSnapshot {
 /// A complete context capture bundle, ready for consumption.
 #[derive(Debug, Clone)]
 pub struct ContextBundle {
-    pub trigger_type: String,
+    pub trigger_type: TriggerSource,
     pub timestamp: DateTime<Utc>,
     #[allow(dead_code)]
     pub intent: Option<IntentClassification>,
@@ -31,7 +58,7 @@ impl ContextBundle {
     /// Create a bundle from a QuickThought text (bypasses vision).
     pub fn from_text(text: String) -> Self {
         Self {
-            trigger_type: "thought".to_string(),
+            trigger_type: TriggerSource::Thought,
             timestamp: Utc::now(),
             intent: None,
             windows: vec![],
@@ -43,7 +70,7 @@ impl ContextBundle {
 /// Assemble a ContextBundle from OCR results (ambient — no intent).
 #[allow(dead_code)]
 pub fn assemble_bundle(ocr: Vec<WindowOcrResult>, event: &TriggerEvent) -> ContextBundle {
-    let trigger_type = trigger_type_str(event);
+    let trigger_type = trigger_source(event);
     let windows = ocr_to_snapshots(ocr);
 
     ContextBundle {
@@ -61,7 +88,7 @@ pub fn assemble_bundle_with_intent(
     event: &TriggerEvent,
     intent: IntentClassification,
 ) -> ContextBundle {
-    let trigger_type = trigger_type_str(event);
+    let trigger_type = trigger_source(event);
     let windows = ocr_to_snapshots(ocr);
 
     ContextBundle {
@@ -171,11 +198,11 @@ fn flush_nav_run(result: &mut Vec<String>, nav_run: &mut Vec<&str>) {
     nav_run.clear();
 }
 
-/// Convert a TriggerEvent to its string type label.
-fn trigger_type_str(event: &TriggerEvent) -> String {
+/// Convert a TriggerEvent to its TriggerSource classification.
+fn trigger_source(event: &TriggerEvent) -> TriggerSource {
     match event {
-        TriggerEvent::ManualHotkey => "hotkey".to_string(),
-        TriggerEvent::QuickThought { .. } => "thought".to_string(),
+        TriggerEvent::ManualHotkey => TriggerSource::Hotkey,
+        TriggerEvent::QuickThought { .. } => TriggerSource::Thought,
     }
 }
 
