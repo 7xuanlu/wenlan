@@ -19,7 +19,7 @@ if [ "$HAS_RUST" = "yes" ]; then
     if echo "$STAGED_FILES" | grep -q '^crates/origin-types/'; then TOUCHED_CRATES="$TOUCHED_CRATES -p origin-types"; fi
     if echo "$STAGED_FILES" | grep -q '^crates/origin-core/'; then TOUCHED_CRATES="$TOUCHED_CRATES -p origin-core"; fi
     if echo "$STAGED_FILES" | grep -q '^crates/origin-server/'; then TOUCHED_CRATES="$TOUCHED_CRATES -p origin-server"; fi
-    if echo "$STAGED_FILES" | grep -q '^app/'; then TOUCHED_CRATES="$TOUCHED_CRATES -p origin"; fi
+    if echo "$STAGED_FILES" | grep -q '^app/'; then TOUCHED_CRATES="$TOUCHED_CRATES -p origin-app"; fi
 
     if [ -n "$TOUCHED_CRATES" ]; then
         echo "  Running Clippy on changed crates..."

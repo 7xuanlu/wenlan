@@ -1,9 +1,9 @@
 [package]
-name = "origin"
+name = "origin-app"
 version = "0.3.0" # x-release-please-version
 edition = "2021"
 license = "AGPL-3.0-only"
-default-run = "origin"
+default-run = "origin-app"
 
 [lib]
 name = "origin_lib"

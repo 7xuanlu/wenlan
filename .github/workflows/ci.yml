@@ -97,11 +97,11 @@ jobs:
       # the hf-hub crate can't resolve manually seeded cache files.
       #
       # Run eval tests locally:
-      #   cargo test -p origin --test eval_harness
+      #   cargo test -p origin-app --test eval_harness
       #
       # The model downloads once into ~/.fastembed_cache and is reused.
       - name: Run app unit tests (eval harness runs locally)
-        run: cargo test -p origin --lib
+        run: cargo test -p origin-app --lib
 
       - name: Run frontend tests
         run: pnpm test

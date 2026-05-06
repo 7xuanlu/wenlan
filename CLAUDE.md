@@ -37,7 +37,7 @@ cargo test --workspace
 cargo check -p origin-types
 cargo check -p origin-core
 cargo check -p origin-server
-cargo check -p origin                  # the Tauri app
+cargo check -p origin-app              # the Tauri app
 
 # Run tests for a single crate
 cargo test -p origin-core
@@ -62,12 +62,12 @@ cargo test -p origin-core --lib locomo::tests
 cargo test -p origin-core --lib longmemeval::tests
 
 # Generate eval baselines (slow, needs Qwen 3.5-9B on Metal GPU):
-cargo test -p origin --test eval_harness save_locomo_baseline -- --ignored --nocapture
-cargo test -p origin --test eval_harness save_locomo_reranked_baseline -- --ignored --nocapture
-cargo test -p origin --test eval_harness save_locomo_expanded_baseline -- --ignored --nocapture
-cargo test -p origin --test eval_harness save_longmemeval_baseline -- --ignored --nocapture
-cargo test -p origin --test eval_harness save_longmemeval_reranked_baseline -- --ignored --nocapture
-cargo test -p origin --test eval_harness save_longmemeval_expanded_baseline -- --ignored --nocapture
+cargo test -p origin-app --test eval_harness save_locomo_baseline -- --ignored --nocapture
+cargo test -p origin-app --test eval_harness save_locomo_reranked_baseline -- --ignored --nocapture
+cargo test -p origin-app --test eval_harness save_locomo_expanded_baseline -- --ignored --nocapture
+cargo test -p origin-app --test eval_harness save_longmemeval_baseline -- --ignored --nocapture
+cargo test -p origin-app --test eval_harness save_longmemeval_reranked_baseline -- --ignored --nocapture
+cargo test -p origin-app --test eval_harness save_longmemeval_expanded_baseline -- --ignored --nocapture
 # Baselines saved to app/eval/baselines/*.json (gitignored)
 ```
 
@@ -82,7 +82,7 @@ Origin runs across several layers. The split is driven by three questions: **(1)
 | **L1 dev loop** | rust-analyzer / IDE | Local | Every save | <1s | No |
 | **L2 pre-commit** | `cargo fmt --all`, clippy on staged crates, vitest if FE staged | Local | `git commit` | ~5s | Yes |
 | **L3 pre-push** | `cargo clippy --workspace --all-targets`, `cargo test --workspace`, `pnpm vitest run --bail 1` | Local | `git push` | ~60-90s | Yes |
-| **L4 CI on PR** | Same checks workspace-wide, plus `cargo test -p origin --lib`, `pnpm test` | GitHub (`ci.yml`) | Every PR | ~10min | Yes (required) |
+| **L4 CI on PR** | Same checks workspace-wide, plus `cargo test -p origin-app --lib`, `pnpm test` | GitHub (`ci.yml`) | Every PR | ~10min | Yes (required) |
 | **L5 coverage on PR** | `cargo llvm-cov` on origin-core + origin-server only; vitest --coverage | GitHub (`coverage.yml`) | Every PR | ~10min | **No (informational)** |
 | **L6 main canary** | Embedding-only eval (`cargo test -p origin-core --lib eval::token_efficiency -- --ignored`) | GitHub (`ci.yml`) | Push to `main` | ~10min | No (post-merge) |
 | **L7 manual local** | `bash scripts/coverage.sh` (HTML coverage), GPU eval suite (`cargo test -- --ignored`), Anthropic batch judge (`ANTHROPIC_API_KEY=... cargo test ...`) | Your laptop | On demand | minutes-hours | No |
@@ -189,7 +189,7 @@ The repo is a Cargo workspace with 4 crates:
 | `crates/origin-types` | Shared API boundary types (request/response, memory, entities). License: Apache-2.0 so `origin-mcp` (MIT) and other downstream consumers can use it without AGPL contamination. | serde only — no heavy deps |
 | `crates/origin-core` | All business logic: DB, embeddings, LLM engine, search, classification, knowledge graph, refinery, pages, export, eval. **Must have NO tauri or axum dependencies.** | libSQL, FastEmbed, llama-cpp-2, hf-hub |
 | `crates/origin-server` | Headless HTTP daemon on `127.0.0.1:7878`. Depends on `origin-core`. Provides `install/uninstall/status` subcommands for launchd management. | axum, tower, clap |
-| `app/` (crate name `origin`) | Thin Tauri desktop client. Depends on `origin-types` + `reqwest` (HTTP) + a minimal bit of `origin-core` for sensor utilities. All data commands proxy to the daemon. | tauri, reqwest |
+| `app/` (crate name `origin-app`) | Thin Tauri desktop client. Depends on `origin-types` + `reqwest` (HTTP) + a minimal bit of `origin-core` for sensor utilities. All data commands proxy to the daemon. | tauri, reqwest |
 
 The daemon (`origin-server`) is the single source of truth. The Tauri app process can come and go; memory storage continues in the daemon. External tools (`origin-mcp`, curl, etc.) talk to the same daemon.
 
@@ -409,7 +409,7 @@ Thin client — only Tauri-specific code. Data commands proxy to the daemon.
 **Tauri app:**
 - **Never pipe Tauri binary output**: `./target/debug/origin 2>&1 | head -N` kills the process via SIGPIPE when head closes. Always redirect to file: `./target/debug/origin > /tmp/origin.log 2>&1 &`. This is the #1 reason the app appears to "exit silently".
 - **Use `pnpm tauri dev` for development**: It handles Vite startup, cargo watch, and the full dev lifecycle. Running `./target/debug/origin` directly skips sidecar management and process lifecycle.
-- **tauri.conf.json is compile-time**: Changes to `trafficLightPosition`, `visible`, `skipTaskbar`, window dimensions are baked into the binary. Requires `cargo build -p origin` and app restart (not HMR).
+- **tauri.conf.json is compile-time**: Changes to `trafficLightPosition`, `visible`, `skipTaskbar`, window dimensions are baked into the binary. Requires `cargo build -p origin-app` and app restart (not HMR).
 - **Vite required for dev binary**: `./target/debug/origin` loads the frontend from `devUrl` (localhost:1420). Without Vite running, the window shows a permanent white screen.
 - **Window visibility**: The main window config has `visible: false`. The app-ready event from React calls `show()` + `center()` after mount. This prevents the white flash and position jump on startup.
 
@@ -459,6 +459,6 @@ touch crates/origin-server/src/router.rs && pnpm dev:all
 - Log filter default is `warn` — add modules explicitly for `info` logs (e.g., `origin_core::db=info`, `origin_server=info`)
 - macOS-specific code uses CoreGraphics/AppKit FFI via `cocoa` and `objc` crates, only in the Tauri app (`app/src/sensor`, `app/src/trigger`)
 - All local data stored in `~/Library/Application Support/origin/` — MemoryDB, config, activities, tags
-- Crate names: `origin-types`, `origin-core`, `origin-server`, `origin` (the Tauri app). The legacy name `origin_lib` still appears as the library name of the `origin` crate in some log filters.
+- Crate names: `origin-types`, `origin-core`, `origin-server`, `origin-app` (the Tauri app). The legacy name `origin_lib` still appears as the library name of the `origin-app` crate in some log filters.
 - **Licenses**: `origin-types`, `origin-core`, and `origin-server` are **Apache-2.0** (permissive — lets downstream tools like `origin-mcp` consume them without AGPL contamination). The Tauri app (`origin` crate in `app/`) is **AGPL-3.0-only** (the shipped desktop product).
 - `origin-mcp` lives in a separate repo (`~/Repos/origin-mcp`), is MIT-licensed, and talks to the daemon via HTTP. It can depend on `origin-types` (Apache-2.0) without license issues.
