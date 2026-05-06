@@ -1356,7 +1356,7 @@ pub async fn list_pending_imports(
 #[tauri::command]
 pub async fn list_onboarding_milestones(
     state: tauri::State<'_, State>,
-) -> Result<Vec<origin_core::onboarding::MilestoneRecord>, String> {
+) -> Result<Vec<origin_types::onboarding::MilestoneRecord>, String> {
     // Snapshot the client out of the guard so we never hold the RwLock across
     // the HTTP .await — holding it would block all writers for the duration
     // of the request. `OriginClient` is `Clone` and cheap to clone.
@@ -2802,7 +2802,7 @@ pub async fn set_model_choice(
 }
 
 #[tauri::command]
-pub async fn get_system_info() -> Result<origin_core::system_info::SystemInfo, String> {
+pub async fn get_system_info() -> Result<origin_types::system_info::SystemInfo, String> {
     Ok(origin_core::system_info::detect_system_info())
 }
 

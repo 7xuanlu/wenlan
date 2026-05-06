@@ -184,7 +184,7 @@ impl OriginClient {
 
     pub async fn list_onboarding_milestones(
         &self,
-    ) -> Result<Vec<origin_core::onboarding::MilestoneRecord>, String> {
+    ) -> Result<Vec<origin_types::onboarding::MilestoneRecord>, String> {
         self.get_json("/api/onboarding/milestones").await
     }
 

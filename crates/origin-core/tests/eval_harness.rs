@@ -7,7 +7,8 @@ use origin_core::eval::runner::{run_eval, GateMode};
 
 #[tokio::test]
 async fn test_eval_harness_produces_report() {
-    let fixture_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../app/eval/fixtures");
+    let fixture_dir =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../app/eval/fixtures");
     let tmp = tempfile::tempdir().unwrap();
 
     let report = run_eval(&fixture_dir, tmp.path(), None, None, GateMode::Off)
@@ -34,7 +35,8 @@ async fn test_eval_harness_produces_report() {
 
 #[tokio::test]
 async fn test_eval_metrics_are_bounded() {
-    let fixture_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../app/eval/fixtures");
+    let fixture_dir =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../app/eval/fixtures");
     let tmp = tempfile::tempdir().unwrap();
 
     let report = run_eval(&fixture_dir, tmp.path(), None, None, GateMode::Off)
@@ -62,7 +64,8 @@ async fn test_eval_metrics_are_bounded() {
 
 #[tokio::test]
 async fn test_eval_baseline_comparison() {
-    let fixture_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../app/eval/fixtures");
+    let fixture_dir =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../app/eval/fixtures");
     let tmp = tempfile::tempdir().unwrap();
     let baseline_path = tmp.path().join("baseline.json");
 
@@ -96,7 +99,8 @@ async fn test_eval_baseline_comparison() {
 
 #[tokio::test]
 async fn test_eval_with_gate_filter() {
-    let fixture_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../app/eval/fixtures");
+    let fixture_dir =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../app/eval/fixtures");
     let tmp = tempfile::tempdir().unwrap();
 
     // Run all three modes
@@ -392,8 +396,8 @@ async fn test_longmemeval_benchmark() {
 #[tokio::test]
 #[ignore]
 async fn test_longmemeval_gate_comparison() {
-    let path =
-        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../app/eval/data/longmemeval_oracle.json");
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../app/eval/data/longmemeval_oracle.json");
     if !path.exists() {
         println!("SKIP: longmemeval_oracle.json not found");
         return;
@@ -485,7 +489,8 @@ async fn test_lifecycle_fixture_with_mock_llm() {
     use origin_core::eval::lifecycle::{run_lifecycle_fixture, EvalMockLlm};
     use std::sync::Arc;
 
-    let fixture_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../app/eval/fixtures");
+    let fixture_dir =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../app/eval/fixtures");
     let mock: Arc<dyn origin_core::llm_provider::LlmProvider> = Arc::new(EvalMockLlm::new());
 
     let report = run_lifecycle_fixture(&fixture_dir, Some(mock))
@@ -543,7 +548,8 @@ async fn test_lifecycle_fixture_with_mock_llm() {
 async fn test_lifecycle_fixture_no_llm() {
     use origin_core::eval::lifecycle::run_lifecycle_fixture;
 
-    let fixture_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../app/eval/fixtures");
+    let fixture_dir =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../app/eval/fixtures");
 
     let report = run_lifecycle_fixture(&fixture_dir, None).await.unwrap();
 
@@ -591,7 +597,8 @@ async fn test_lifecycle_locomo_with_mock_llm() {
     use origin_core::eval::lifecycle::{run_lifecycle_locomo, EvalMockLlm};
     use std::sync::Arc;
 
-    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../app/eval/data/locomo10.json");
+    let path =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../app/eval/data/locomo10.json");
     if !path.exists() {
         println!("SKIP: locomo10.json not found");
         return;
@@ -616,8 +623,8 @@ async fn test_lifecycle_longmemeval_with_mock_llm() {
     use origin_core::eval::lifecycle::{run_lifecycle_longmemeval, EvalMockLlm};
     use std::sync::Arc;
 
-    let path =
-        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../app/eval/data/longmemeval_oracle.json");
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../app/eval/data/longmemeval_oracle.json");
     if !path.exists() {
         println!("SKIP: longmemeval_oracle.json not found");
         return;
@@ -641,7 +648,8 @@ async fn test_lifecycle_longmemeval_with_mock_llm() {
 
 #[tokio::test]
 async fn test_eval_empty_set_and_temporal() {
-    let fixture_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../app/eval/fixtures");
+    let fixture_dir =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../app/eval/fixtures");
     let tmp = tempfile::tempdir().unwrap();
 
     let report = run_eval(&fixture_dir, tmp.path(), None, None, GateMode::Off)
@@ -700,7 +708,8 @@ async fn test_eval_empty_set_and_temporal() {
 #[tokio::test]
 #[ignore]
 async fn save_fixture_baseline() {
-    let fixture_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../app/eval/fixtures");
+    let fixture_dir =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../app/eval/fixtures");
     let tmp = tempfile::tempdir().unwrap();
     let report = run_eval(&fixture_dir, tmp.path(), None, None, GateMode::Off)
         .await
@@ -715,7 +724,8 @@ async fn save_fixture_baseline() {
 #[tokio::test]
 #[ignore]
 async fn save_locomo_baseline() {
-    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../app/eval/data/locomo10.json");
+    let path =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../app/eval/data/locomo10.json");
     if !path.exists() {
         println!("SKIP: locomo10.json not found");
         return;
@@ -732,8 +742,8 @@ async fn save_locomo_baseline() {
 #[tokio::test]
 #[ignore]
 async fn save_longmemeval_baseline() {
-    let path =
-        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../app/eval/data/longmemeval_oracle.json");
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../app/eval/data/longmemeval_oracle.json");
     if !path.exists() {
         println!("SKIP: longmemeval_oracle.json not found");
         return;
@@ -751,7 +761,8 @@ async fn save_longmemeval_baseline() {
 #[ignore]
 async fn save_locomo_reranked_baseline() {
     use std::sync::Arc;
-    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../app/eval/data/locomo10.json");
+    let path =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../app/eval/data/locomo10.json");
     if !path.exists() {
         println!("SKIP: locomo10.json not found");
         return;
@@ -772,8 +783,8 @@ async fn save_locomo_reranked_baseline() {
 #[ignore]
 async fn save_longmemeval_reranked_baseline() {
     use std::sync::Arc;
-    let path =
-        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../app/eval/data/longmemeval_oracle.json");
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../app/eval/data/longmemeval_oracle.json");
     if !path.exists() {
         println!("SKIP: longmemeval_oracle.json not found");
         return;
@@ -794,7 +805,8 @@ async fn save_longmemeval_reranked_baseline() {
 #[ignore]
 async fn save_locomo_expanded_baseline() {
     use std::sync::Arc;
-    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../app/eval/data/locomo10.json");
+    let path =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../app/eval/data/locomo10.json");
     if !path.exists() {
         println!("SKIP: locomo10.json not found");
         return;
@@ -815,8 +827,8 @@ async fn save_locomo_expanded_baseline() {
 #[ignore]
 async fn save_longmemeval_expanded_baseline() {
     use std::sync::Arc;
-    let path =
-        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../app/eval/data/longmemeval_oracle.json");
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../app/eval/data/longmemeval_oracle.json");
     if !path.exists() {
         println!("SKIP: longmemeval_oracle.json not found");
         return;
@@ -838,7 +850,8 @@ async fn test_lifecycle_pipeline_quality() {
     use origin_core::eval::lifecycle::{run_lifecycle_fixture, EvalMockLlm};
     use std::sync::Arc;
 
-    let fixture_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../app/eval/fixtures");
+    let fixture_dir =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../app/eval/fixtures");
     let mock: Arc<dyn origin_core::llm_provider::LlmProvider> = Arc::new(EvalMockLlm::new());
 
     let report = run_lifecycle_fixture(&fixture_dir, Some(mock))
@@ -882,7 +895,8 @@ async fn test_page_retrieval_eval() {
     use origin_core::eval::lifecycle::{run_lifecycle_fixture, EvalMockLlm, LifecyclePhase};
     use std::sync::Arc;
 
-    let fixture_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../app/eval/fixtures");
+    let fixture_dir =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../app/eval/fixtures");
     let mock: Arc<dyn origin_core::llm_provider::LlmProvider> = Arc::new(EvalMockLlm::new());
 
     let report = run_lifecycle_fixture(&fixture_dir, Some(mock))
@@ -943,7 +957,8 @@ async fn test_page_retrieval_eval() {
 async fn test_quality_cost_fixtures() {
     use origin_core::eval::token_efficiency::{run_quality_cost_eval, SearchStrategy};
 
-    let fixture_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../app/eval/fixtures");
+    let fixture_dir =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../app/eval/fixtures");
 
     let strategies = vec![
         SearchStrategy::Origin,
@@ -988,7 +1003,8 @@ async fn test_quality_cost_fixtures() {
 async fn test_quality_cost_agent_workload() {
     use origin_core::eval::token_efficiency::{run_quality_cost_eval, SearchStrategy};
 
-    let fixture_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../app/eval/fixtures");
+    let fixture_dir =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../app/eval/fixtures");
     if !fixture_dir.join("agent_coding_session.toml").exists() {
         println!("SKIP: agent fixtures not found");
         return;
@@ -1014,7 +1030,8 @@ async fn test_quality_cost_agent_workload() {
 async fn save_quality_cost_fixtures_baseline() {
     use origin_core::eval::token_efficiency::{run_quality_cost_eval, SearchStrategy};
 
-    let fixture_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../app/eval/fixtures");
+    let fixture_dir =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../app/eval/fixtures");
     let baseline_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../app/eval/baselines/quality_cost_fixtures_baseline.json");
 
@@ -1039,7 +1056,8 @@ async fn save_quality_cost_fixtures_baseline() {
 async fn test_scaling_curve() {
     use origin_core::eval::token_efficiency::run_scaling_eval;
 
-    let fixture_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../app/eval/fixtures");
+    let fixture_dir =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../app/eval/fixtures");
 
     let sizes = vec![5, 10, 20, 50];
     let points = run_scaling_eval(&fixture_dir, &sizes, 10).await.unwrap();
@@ -1079,14 +1097,15 @@ async fn test_scaling_curve() {
 /// memory-only recall across every fixture query.
 #[tokio::test]
 async fn test_concept_before_after_comparison() {
+    use origin_core::db::MemoryDB;
     use origin_core::eval::fixtures::load_fixtures;
     use origin_core::eval::metrics;
-    use origin_core::db::MemoryDB;
     use origin_core::sources::RawDocument;
     use std::collections::HashSet;
     use std::sync::Arc;
 
-    let fixture_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../app/eval/fixtures");
+    let fixture_dir =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../app/eval/fixtures");
     let cases = load_fixtures(&fixture_dir).unwrap();
 
     // One shared DB for all cases
@@ -1336,8 +1355,8 @@ async fn benchmark_longmemeval_pipeline() {
     use origin_core::eval::token_efficiency::run_longmemeval_pipeline_eval;
     use std::sync::Arc;
 
-    let path =
-        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../app/eval/data/longmemeval_oracle.json");
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../app/eval/data/longmemeval_oracle.json");
     if !path.exists() {
         eprintln!("SKIP: longmemeval_oracle.json not found at {:?}", path);
         return;
@@ -1421,8 +1440,8 @@ async fn benchmark_context_path_longmemeval() {
     use origin_core::eval::token_efficiency::run_context_path_eval_longmemeval;
     use std::sync::Arc;
 
-    let path =
-        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../app/eval/data/longmemeval_oracle.json");
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../app/eval/data/longmemeval_oracle.json");
     if !path.exists() {
         eprintln!("SKIP: longmemeval_oracle.json not found");
         return;
@@ -1476,8 +1495,10 @@ async fn generate_e2e_context_tuples_locomo() {
     assert!(!tuples.is_empty(), "should generate at least some tuples");
 
     // Save for offline judging (try baselines dir, fallback to tmpdir)
-    let baselines_dir = origin_core::eval::shared::eval_baselines_dir_override()
-        .unwrap_or_else(|| std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../app/eval/baselines"));
+    let baselines_dir =
+        origin_core::eval::shared::eval_baselines_dir_override().unwrap_or_else(|| {
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../app/eval/baselines")
+        });
     std::fs::create_dir_all(&baselines_dir).ok();
     let out_path = baselines_dir.join("e2e_context_tuples_locomo.json");
     save_judgment_tuples(&tuples, &out_path).expect("save tuples");
@@ -1493,8 +1514,8 @@ async fn generate_e2e_context_tuples_longmemeval() {
     };
     use std::sync::Arc;
 
-    let path =
-        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../app/eval/data/longmemeval_oracle.json");
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../app/eval/data/longmemeval_oracle.json");
     if !path.exists() {
         eprintln!("SKIP: longmemeval_oracle.json not found");
         return;
@@ -1512,8 +1533,10 @@ async fn generate_e2e_context_tuples_longmemeval() {
     eprintln!("Generated {} judgment tuples", tuples.len());
     assert!(!tuples.is_empty());
 
-    let baselines_dir = origin_core::eval::shared::eval_baselines_dir_override()
-        .unwrap_or_else(|| std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../app/eval/baselines"));
+    let baselines_dir =
+        origin_core::eval::shared::eval_baselines_dir_override().unwrap_or_else(|| {
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../app/eval/baselines")
+        });
     std::fs::create_dir_all(&baselines_dir).ok();
     let out_path = baselines_dir.join("e2e_context_tuples_longmemeval.json");
     save_judgment_tuples(&tuples, &out_path).expect("save tuples");
@@ -1594,8 +1617,10 @@ async fn generate_e2e_context_tuples_locomo_api() {
     eprintln!("Generated {} judgment tuples (Haiku CLI)", tuples.len());
     assert!(!tuples.is_empty());
 
-    let baselines_dir = origin_core::eval::shared::eval_baselines_dir_override()
-        .unwrap_or_else(|| std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../app/eval/baselines"));
+    let baselines_dir =
+        origin_core::eval::shared::eval_baselines_dir_override().unwrap_or_else(|| {
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../app/eval/baselines")
+        });
     std::fs::create_dir_all(&baselines_dir).ok();
     let out_path = baselines_dir.join("e2e_context_tuples_locomo_api.json");
     save_judgment_tuples(&tuples, &out_path).expect("save tuples");
@@ -1710,8 +1735,9 @@ async fn judge_e2e_batch() {
         aggregate_judgments, judge_with_batch_api, load_judgment_tuples,
     };
 
-    let baselines = origin_core::eval::shared::eval_baselines_dir_override()
-        .unwrap_or_else(|| std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../app/eval/baselines"));
+    let baselines = origin_core::eval::shared::eval_baselines_dir_override().unwrap_or_else(|| {
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../app/eval/baselines")
+    });
     let tuples_path = baselines.join("e2e_context_tuples_locomo.json");
     if !tuples_path.exists() {
         eprintln!("SKIP: run generate_e2e_context_tuples_locomo first");
@@ -1780,8 +1806,9 @@ async fn generate_fullpipeline_locomo() {
         .and_then(|s| s.parse().ok())
         .unwrap_or(10.0);
 
-    let baselines = origin_core::eval::shared::eval_baselines_dir_override()
-        .unwrap_or_else(|| std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../app/eval/baselines"));
+    let baselines = origin_core::eval::shared::eval_baselines_dir_override().unwrap_or_else(|| {
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../app/eval/baselines")
+    });
     std::fs::create_dir_all(&baselines).ok();
     let output_path = baselines.join("fullpipeline_locomo_tuples.json");
 
@@ -1817,8 +1844,8 @@ async fn generate_fullpipeline_locomo() {
 async fn generate_fullpipeline_lme() {
     use origin_core::eval::answer_quality::run_fullpipeline_lme_batch;
 
-    let lme_path =
-        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../app/eval/data/longmemeval_oracle.json");
+    let lme_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../app/eval/data/longmemeval_oracle.json");
     if !lme_path.exists() {
         eprintln!("SKIP: longmemeval_oracle.json not found");
         return;
@@ -1837,8 +1864,9 @@ async fn generate_fullpipeline_lme() {
         .and_then(|s| s.parse().ok())
         .unwrap_or(10.0);
 
-    let baselines = origin_core::eval::shared::eval_baselines_dir_override()
-        .unwrap_or_else(|| std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../app/eval/baselines"));
+    let baselines = origin_core::eval::shared::eval_baselines_dir_override().unwrap_or_else(|| {
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../app/eval/baselines")
+    });
     std::fs::create_dir_all(&baselines).ok();
     let output_path = baselines.join("fullpipeline_lme_tuples.json");
 
@@ -1884,8 +1912,8 @@ async fn enrich_fullpipeline_lme_only() {
     };
     use origin_core::sources::RawDocument;
 
-    let lme_path =
-        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../app/eval/data/longmemeval_oracle.json");
+    let lme_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../app/eval/data/longmemeval_oracle.json");
     if !lme_path.exists() {
         eprintln!("SKIP: longmemeval_oracle.json not found");
         return;
@@ -1905,8 +1933,9 @@ async fn enrich_fullpipeline_lme_only() {
         .and_then(|s| s.parse().ok())
         .unwrap_or(0);
 
-    let baselines = origin_core::eval::shared::eval_baselines_dir_override()
-        .unwrap_or_else(|| std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../app/eval/baselines"));
+    let baselines = origin_core::eval::shared::eval_baselines_dir_override().unwrap_or_else(|| {
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../app/eval/baselines")
+    });
     std::fs::create_dir_all(&baselines).ok();
 
     eprintln!(
@@ -2027,8 +2056,9 @@ async fn smoke_enriched_db_reuse() {
     use origin_core::db::MemoryDB;
     use std::sync::Arc;
 
-    let baselines = origin_core::eval::shared::eval_baselines_dir_override()
-        .unwrap_or_else(|| std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../app/eval/baselines"));
+    let baselines = origin_core::eval::shared::eval_baselines_dir_override().unwrap_or_else(|| {
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../app/eval/baselines")
+    });
 
     let mut total_scenarios_checked = 0usize;
     let mut total_passed = 0usize;
@@ -2113,8 +2143,9 @@ async fn judge_fullpipeline_locomo() {
         aggregate_judgments, judge_with_batch_api, load_judgment_tuples,
     };
 
-    let baselines = origin_core::eval::shared::eval_baselines_dir_override()
-        .unwrap_or_else(|| std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../app/eval/baselines"));
+    let baselines = origin_core::eval::shared::eval_baselines_dir_override().unwrap_or_else(|| {
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../app/eval/baselines")
+    });
     // EVAL_TUPLES_FILE override lets us judge alternate files (e.g. *_pregate.json)
     let default_path = baselines.join("fullpipeline_locomo_tuples.json");
     let tuples_path: std::path::PathBuf = std::env::var("EVAL_TUPLES_FILE")
@@ -2155,8 +2186,9 @@ async fn judge_fullpipeline_lme() {
         aggregate_judgments, judge_with_batch_api, load_judgment_tuples,
     };
 
-    let baselines = origin_core::eval::shared::eval_baselines_dir_override()
-        .unwrap_or_else(|| std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../app/eval/baselines"));
+    let baselines = origin_core::eval::shared::eval_baselines_dir_override().unwrap_or_else(|| {
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../app/eval/baselines")
+    });
     let tuples_path = baselines.join("fullpipeline_lme_tuples.json");
     if !tuples_path.exists() {
         eprintln!("SKIP: run generate_fullpipeline_lme first");
@@ -2763,8 +2795,8 @@ async fn smoke_per_scenario_locomo() {
 #[ignore]
 async fn smoke_eval_baselines_dir_e2e() {
     use origin_core::db::MemoryDB;
-    use origin_core::events::NoopEmitter;
     use origin_core::eval::shared::{eval_baselines_dir_override, scenario_db_dir};
+    use origin_core::events::NoopEmitter;
     use std::sync::Arc;
 
     let tmp = tempfile::tempdir().unwrap();
@@ -3127,8 +3159,8 @@ async fn smoke_per_scenario_lme() {
     };
     use origin_core::sources::RawDocument;
 
-    let lme_path =
-        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../app/eval/data/longmemeval_oracle.json");
+    let lme_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../app/eval/data/longmemeval_oracle.json");
     if !lme_path.exists() {
         eprintln!("SKIP: longmemeval_oracle.json not found");
         return;
@@ -3362,8 +3394,9 @@ async fn judge_fullpipeline_lme_cli() {
         aggregate_judgments, judge_with_claude_model_batched_persistent,
         judge_with_claude_model_persistent, load_judgment_tuples,
     };
-    let baselines = origin_core::eval::shared::eval_baselines_dir_override()
-        .unwrap_or_else(|| std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../app/eval/baselines"));
+    let baselines = origin_core::eval::shared::eval_baselines_dir_override().unwrap_or_else(|| {
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../app/eval/baselines")
+    });
     let tuples_path = baselines.join("fullpipeline_lme_tuples.json");
     if !tuples_path.exists() {
         eprintln!("SKIP: run generate_fullpipeline_lme first");
@@ -3459,8 +3492,9 @@ async fn judge_fullpipeline_locomo_cli() {
         aggregate_judgments, judge_with_claude_model_batched_persistent,
         judge_with_claude_model_persistent, load_judgment_tuples,
     };
-    let baselines = origin_core::eval::shared::eval_baselines_dir_override()
-        .unwrap_or_else(|| std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../app/eval/baselines"));
+    let baselines = origin_core::eval::shared::eval_baselines_dir_override().unwrap_or_else(|| {
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../app/eval/baselines")
+    });
     let tuples_path = baselines.join("fullpipeline_locomo_tuples.json");
     if !tuples_path.exists() {
         eprintln!("SKIP: run generate_fullpipeline_locomo first");
@@ -3582,12 +3616,13 @@ fn print_judge_report(report: &origin_core::eval::judge::JudgedE2EReport) {
 #[ignore]
 async fn probe_concept_scores() {
     use origin_core::db::MemoryDB;
-    use origin_core::events::NoopEmitter;
     use origin_core::eval::shared::eval_shared_embedder;
+    use origin_core::events::NoopEmitter;
     use std::sync::Arc;
 
-    let baselines = origin_core::eval::shared::eval_baselines_dir_override()
-        .unwrap_or_else(|| std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../app/eval/baselines"));
+    let baselines = origin_core::eval::shared::eval_baselines_dir_override().unwrap_or_else(|| {
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../app/eval/baselines")
+    });
     let shared_embedder = eval_shared_embedder();
 
     // Sample questions from tuples
@@ -3722,14 +3757,15 @@ async fn probe_concept_scores() {
 #[ignore]
 async fn probe_overlap_gate() {
     use origin_core::db::MemoryDB;
+    use origin_core::eval::shared::eval_shared_embedder;
     use origin_core::events::NoopEmitter;
     use origin_core::pages::filter_pages_by_source_overlap;
-    use origin_core::eval::shared::eval_shared_embedder;
     use std::collections::HashMap;
     use std::sync::Arc;
 
-    let baselines = origin_core::eval::shared::eval_baselines_dir_override()
-        .unwrap_or_else(|| std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../app/eval/baselines"));
+    let baselines = origin_core::eval::shared::eval_baselines_dir_override().unwrap_or_else(|| {
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../app/eval/baselines")
+    });
     let shared_embedder = eval_shared_embedder();
     let min_overlap: usize = std::env::var("EVAL_MIN_OVERLAP")
         .ok()
