@@ -61,10 +61,6 @@ pub struct AppState {
     pub ambient_mode: crate::ambient::types::AmbientMode,
     /// Screen capture enabled.
     pub screen_capture_enabled: bool,
-    /// Selection trigger enabled.
-    pub selection_capture_enabled: bool,
-    /// Stop flag for selection sensor thread.
-    pub selection_stop: std::sync::Arc<std::sync::atomic::AtomicBool>,
     /// Remote access tunnel state.
     pub remote_access: tokio::sync::Mutex<RemoteAccessState>,
     /// Rolling in-memory buffer of recent captures for zero-query Spotlight.
@@ -99,8 +95,6 @@ impl Default for AppState {
             ambient_dismissals: Vec::new(),
             ambient_mode: crate::ambient::types::AmbientMode::default(),
             screen_capture_enabled: false,
-            selection_capture_enabled: false,
-            selection_stop: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
             remote_access: tokio::sync::Mutex::new(RemoteAccessState::default()),
             working_memory: Arc::new(tokio::sync::Mutex::new(WorkingMemory::new())),
         }
@@ -185,7 +179,6 @@ impl AppState {
         let config = crate::config::load_config();
         self.clipboard_enabled = config.clipboard_enabled;
         self.screen_capture_enabled = config.screen_capture_enabled;
-        self.selection_capture_enabled = config.selection_capture_enabled;
 
         let mut restored_paths = Vec::new();
         for path in config.directory_source_paths() {

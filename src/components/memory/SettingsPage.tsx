@@ -281,32 +281,6 @@ export default function SettingsPage({
     refetchInterval: 5000, // re-check after user grants in System Settings
   });
 
-  // ── Selection trigger ──────────────────────────────────────────
-  const { data: selectionEnabled = false } = useQuery({
-    queryKey: ["selectionCaptureEnabled"],
-    queryFn: async () => {
-      const { invoke } = await import("@tauri-apps/api/core");
-      return invoke("get_selection_capture_enabled") as Promise<boolean>;
-    },
-  });
-
-  const selectionMutation = useMutation({
-    mutationFn: async (enabled: boolean) => {
-      const { invoke } = await import("@tauri-apps/api/core");
-      return invoke("set_selection_capture_enabled", { enabled });
-    },
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["selectionCaptureEnabled"] }),
-  });
-
-  const { data: axPermission = false, refetch: refetchAxPermission } = useQuery({
-    queryKey: ["axPermission"],
-    queryFn: async () => {
-      const { invoke } = await import("@tauri-apps/api/core");
-      return invoke("check_accessibility_permission") as Promise<boolean>;
-    },
-    refetchInterval: 5000,
-  });
-
   const { data: captureStats } = useQuery({
     queryKey: ["captureStats"],
     queryFn: getCaptureStats,
@@ -526,65 +500,6 @@ export default function SettingsPage({
                     const { invoke } = await import("@tauri-apps/api/core");
                     await invoke("request_screen_permission");
                     setTimeout(() => refetchPermission(), 1000);
-                  }}
-                  className="px-2 py-0.5 rounded text-[10px] font-medium transition-colors"
-                  style={{
-                    fontFamily: "var(--mem-font-body)",
-                    background: "var(--mem-hover-strong)",
-                    color: "var(--mem-text)",
-                  }}
-                >
-                  Grant Access
-                </button>
-              )}
-            </div>
-          </div>
-
-          <div className="mx-5 border-t border-[var(--mem-border)]" style={{ opacity: 0.4 }} />
-
-          {/* Selection Trigger */}
-          <div className="px-5 py-4">
-            <div className="flex items-start justify-between gap-4">
-              <div className="min-w-0">
-                <div style={{ fontFamily: "var(--mem-font-body)", fontSize: "14px", fontWeight: 500, color: "var(--mem-text)" }}>
-                  Selection Trigger
-                </div>
-                <p style={{ fontFamily: "var(--mem-font-body)", fontSize: "12px", color: "var(--mem-text-secondary)", marginTop: "2px", lineHeight: "1.5" }}>
-                  Highlight text in any app to surface relevant memories near your cursor.
-                </p>
-              </div>
-              <div className="mt-0.5">
-                <Toggle
-                  enabled={selectionEnabled}
-                  onToggle={() => {
-                    const next = !selectionEnabled;
-                    if (next && !axPermission) {
-                      (async () => {
-                        const { invoke: inv } = await import("@tauri-apps/api/core");
-                        await inv("request_accessibility_permission");
-                        setTimeout(() => refetchAxPermission(), 1500);
-                      })();
-                    }
-                    selectionMutation.mutate(next);
-                  }}
-                />
-              </div>
-            </div>
-            {/* Accessibility permission status */}
-            <div className="flex items-center gap-2 mt-2.5">
-              <span
-                className="w-2 h-2 rounded-full shrink-0"
-                style={{ background: axPermission ? "var(--mem-accent-sage)" : "#ef4444" }}
-              />
-              <span style={{ fontFamily: "var(--mem-font-body)", fontSize: "11px", color: "var(--mem-text-tertiary)" }}>
-                Accessibility {axPermission ? "granted" : "not granted"}
-              </span>
-              {!axPermission && (
-                <button
-                  onClick={async () => {
-                    const { invoke: inv } = await import("@tauri-apps/api/core");
-                    await inv("request_accessibility_permission");
-                    setTimeout(() => refetchAxPermission(), 1500);
                   }}
                   className="px-2 py-0.5 rounded text-[10px] font-medium transition-colors"
                   style={{

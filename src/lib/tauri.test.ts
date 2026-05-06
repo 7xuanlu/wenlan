@@ -346,13 +346,6 @@ describe('getCaptureStats', () => {
   });
 });
 
-describe('captureRegion', () => {
-  it('passes coordinates', async () => {
-    await tauri.captureRegion(10, 20, 100, 200);
-    expect(mockInvoke).toHaveBeenCalledWith('capture_region', { x: 10, y: 20, width: 100, height: 200 });
-  });
-});
-
 describe('deleteTag', () => {
   it('passes name', async () => {
     await tauri.deleteTag('old-tag');

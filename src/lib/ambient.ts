@@ -69,14 +69,6 @@ export function listenSelectionCard(
   });
 }
 
-export async function getSelectionCaptureEnabled(): Promise<boolean> {
-  return invoke("get_selection_capture_enabled");
-}
-
-export async function setSelectionCaptureEnabled(enabled: boolean): Promise<void> {
-  return invoke("set_selection_capture_enabled", { enabled });
-}
-
 export async function checkAccessibilityPermission(): Promise<boolean> {
   return invoke("check_accessibility_permission");
 }

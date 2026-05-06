@@ -297,7 +297,18 @@ pub fn request_screen_permission() -> bool {
 
 #[tauri::command]
 pub fn check_accessibility_permission() -> bool {
-    crate::trigger::selection::ax_is_trusted()
+    #[cfg(target_os = "macos")]
+    {
+        #[link(name = "ApplicationServices", kind = "framework")]
+        extern "C" {
+            fn AXIsProcessTrusted() -> bool;
+        }
+        unsafe { AXIsProcessTrusted() }
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        true
+    }
 }
 
 #[tauri::command]
@@ -487,26 +498,6 @@ pub async fn set_screen_capture_enabled(
     Ok(())
 }
 
-#[tauri::command]
-pub async fn get_selection_capture_enabled(state: tauri::State<'_, State>) -> Result<bool, String> {
-    Ok(state.read().await.selection_capture_enabled)
-}
-
-#[tauri::command]
-pub async fn set_selection_capture_enabled(
-    state: tauri::State<'_, State>,
-    enabled: bool,
-) -> Result<(), String> {
-    {
-        let mut app_state = state.write().await;
-        app_state.selection_capture_enabled = enabled;
-    }
-    let mut config = crate::config::load_config();
-    config.selection_capture_enabled = enabled;
-    crate::config::save_config(&config).map_err(|e| e.to_string())?;
-    Ok(())
-}
-
 // ── Activity commands (file-based, local) ─────────────────────────────
 
 #[tauri::command]
@@ -546,31 +537,6 @@ pub async fn trigger_manual_capture(state: tauri::State<'_, State>) -> Result<()
         tx.send(crate::trigger::types::TriggerEvent::ManualHotkey)
             .await
             .map_err(|e| format!("{}", e))?;
-    }
-    Ok(())
-}
-
-#[tauri::command]
-pub async fn capture_region(
-    state: tauri::State<'_, State>,
-    x: f64,
-    y: f64,
-    width: f64,
-    height: f64,
-) -> Result<(), String> {
-    if width < 10.0 || height < 10.0 {
-        return Err("Selection too small".to_string());
-    }
-    let s = state.read().await;
-    if let Some(ref tx) = s.trigger_tx {
-        tx.send(crate::trigger::types::TriggerEvent::DragSnip {
-            x,
-            y,
-            width,
-            height,
-        })
-        .await
-        .map_err(|e| format!("{}", e))?;
     }
     Ok(())
 }
@@ -985,7 +951,6 @@ async fn save_current_config(
         anthropic_api_key: existing.anthropic_api_key,
         remote_access_enabled: existing.remote_access_enabled,
         screen_capture_enabled: app_state.screen_capture_enabled,
-        selection_capture_enabled: app_state.selection_capture_enabled,
         ..existing
     };
     config::save_config(&cfg)

@@ -359,12 +359,6 @@ export async function getCaptureStats(): Promise<CaptureStats> {
   return invoke("get_capture_stats");
 }
 
-// ── Region snip ─────────────────────────────────────────────────────────
-
-export async function captureRegion(x: number, y: number, width: number, height: number): Promise<void> {
-  return invoke("capture_region", { x, y, width, height });
-}
-
 // ── Tags ────────────────────────────────────────────────────────────────
 
 export interface TagData {

@@ -299,55 +299,6 @@ pub fn run() {
                 }
             }
 
-            // Create transparent snip overlay window
-            {
-                use tauri::{WebviewUrl, WebviewWindowBuilder};
-
-                let snip_win = WebviewWindowBuilder::new(
-                    app,
-                    "snip",
-                    WebviewUrl::App("index.html#snip".into()),
-                )
-                .title("")
-                .decorations(false)
-                .transparent(true)
-                .always_on_top(true)
-                .skip_taskbar(true)
-                .resizable(false)
-                .visible(false)
-                .build()?;
-
-                #[cfg(target_os = "macos")]
-                #[allow(deprecated)]
-                {
-                    use cocoa::appkit::NSColor;
-                    use cocoa::base::{id, nil, NO};
-                    use raw_window_handle::HasWindowHandle;
-
-                    if let Ok(raw_handle) = snip_win.window_handle() {
-                        if let raw_window_handle::RawWindowHandle::AppKit(appkit) =
-                            raw_handle.as_raw()
-                        {
-                            let ns_view = appkit.ns_view.as_ptr() as id;
-                            unsafe {
-                                let ns_win: id = objc::msg_send![ns_view, window];
-                                let clear = NSColor::clearColor(nil);
-                                let _: () = msg_send![ns_win, setBackgroundColor: clear];
-                                let _: () = msg_send![ns_win, setOpaque: NO];
-                                let _: () = msg_send![ns_win, setHasShadow: NO];
-                                let _: () = msg_send![ns_win, setLevel: 1000_i64];
-                                let screen: id = msg_send![
-                                    objc::runtime::Class::get("NSScreen").unwrap(),
-                                    mainScreen
-                                ];
-                                let frame: cocoa::foundation::NSRect = msg_send![screen, frame];
-                                let _: () = msg_send![ns_win, setFrame: frame display: NO];
-                            }
-                        }
-                    }
-                }
-            }
-
             // Create quick-capture popup window
             {
                 use tauri::{WebviewUrl, WebviewWindowBuilder};
@@ -502,9 +453,6 @@ pub fn run() {
             let capture_shortcut = "CmdOrCtrl+Shift+M"
                 .parse::<tauri_plugin_global_shortcut::Shortcut>()
                 .unwrap();
-            let snip_shortcut = "CmdOrCtrl+Shift+S"
-                .parse::<tauri_plugin_global_shortcut::Shortcut>()
-                .unwrap();
             let quick_capture_shortcut = "CmdOrCtrl+Shift+N"
                 .parse::<tauri_plugin_global_shortcut::Shortcut>()
                 .unwrap();
@@ -557,18 +505,6 @@ pub fn run() {
                 ambient_state,
             ));
 
-            // Spawn selection sensor if enabled
-            {
-                let sel_enabled = crate::config::load_config().selection_capture_enabled;
-                if sel_enabled {
-                    let sel_tx = trigger_tx.clone();
-                    let stop_flag = tauri::async_runtime::block_on(async {
-                        state_clone.read().await.selection_stop.clone()
-                    });
-                    crate::trigger::selection::spawn_selection_sensor(sel_tx, stop_flag);
-                }
-            }
-
             // Register all global shortcuts
             {
                 let handle_for_shortcuts = handle.clone();
@@ -576,11 +512,10 @@ pub fn run() {
                 let toggle = toggle_shortcut;
                 let spotlight = spotlight_shortcut;
                 let capture = capture_shortcut;
-                let snip = snip_shortcut;
                 let quick_capture = quick_capture_shortcut;
                 let ambient = ambient_shortcut;
                 app.global_shortcut().on_shortcuts(
-                    [toggle, spotlight, capture, snip, quick_capture, ambient],
+                    [toggle, spotlight, capture, quick_capture, ambient],
                     move |_app, shortcut, event| {
                         use tauri::Emitter;
                         use tauri_plugin_global_shortcut::ShortcutState;
@@ -603,15 +538,6 @@ pub fn run() {
                             if crate::config::load_config().screen_capture_enabled {
                                 let _ = trigger_tx_shortcut
                                     .try_send(trigger::types::TriggerEvent::ManualHotkey);
-                            }
-                        } else if *shortcut == snip {
-                            if crate::config::load_config().screen_capture_enabled {
-                                if let Some(window) =
-                                    handle_for_shortcuts.get_webview_window("snip")
-                                {
-                                    let _ = window.show();
-                                    let _ = window.set_focus();
-                                }
                             }
                         } else if *shortcut == quick_capture {
                             if let Some(window) =
@@ -962,7 +888,6 @@ pub fn run() {
             search::rebuild_activities,
             search::trigger_manual_capture,
             search::get_capture_stats,
-            search::capture_region,
             search::list_all_tags,
             search::set_document_tags,
             search::delete_tag,
@@ -1108,9 +1033,6 @@ pub fn run() {
             search::set_screen_capture_enabled,
             search::check_screen_permission,
             search::request_screen_permission,
-            // Selection trigger commands
-            search::get_selection_capture_enabled,
-            search::set_selection_capture_enabled,
             search::check_accessibility_permission,
             search::request_accessibility_permission,
             search::trigger_icon_click,
