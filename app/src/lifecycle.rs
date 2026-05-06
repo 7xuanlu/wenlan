@@ -101,7 +101,11 @@ fn current_app_path() -> Result<PathBuf> {
 }
 
 fn is_stable_launch_agent_target(exe: &Path) -> bool {
-    if exe.file_name().and_then(|s| s.to_str()) != Some("origin") {
+    // Accept both legacy "origin" and renamed "origin-app" binary names.
+    // Tauri crate package was renamed origin -> origin-app in Phase 3 PR1, but
+    // existing user installs may still have the old binary path on disk.
+    let name = exe.file_name().and_then(|s| s.to_str());
+    if name != Some("origin-app") && name != Some("origin") {
         return false;
     }
 

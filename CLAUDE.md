@@ -407,10 +407,10 @@ Thin client — only Tauri-specific code. Data commands proxy to the daemon.
 - **Worktree target directories are shared**: All worktrees share the same `target/` directory in the main repo. Building in one worktree overwrites binaries from another. After switching worktrees, always rebuild to ensure the binary matches the checked-out source.
 
 **Tauri app:**
-- **Never pipe Tauri binary output**: `./target/debug/origin 2>&1 | head -N` kills the process via SIGPIPE when head closes. Always redirect to file: `./target/debug/origin > /tmp/origin.log 2>&1 &`. This is the #1 reason the app appears to "exit silently".
-- **Use `pnpm tauri dev` for development**: It handles Vite startup, cargo watch, and the full dev lifecycle. Running `./target/debug/origin` directly skips sidecar management and process lifecycle.
+- **Never pipe Tauri binary output**: `./target/debug/origin-app 2>&1 | head -N` kills the process via SIGPIPE when head closes. Always redirect to file: `./target/debug/origin-app > /tmp/origin-app.log 2>&1 &`. This is the #1 reason the app appears to "exit silently".
+- **Use `pnpm tauri dev` for development**: It handles Vite startup, cargo watch, and the full dev lifecycle. Running `./target/debug/origin-app` directly skips sidecar management and process lifecycle.
 - **tauri.conf.json is compile-time**: Changes to `trafficLightPosition`, `visible`, `skipTaskbar`, window dimensions are baked into the binary. Requires `cargo build -p origin-app` and app restart (not HMR).
-- **Vite required for dev binary**: `./target/debug/origin` loads the frontend from `devUrl` (localhost:1420). Without Vite running, the window shows a permanent white screen.
+- **Vite required for dev binary**: `./target/debug/origin-app` loads the frontend from `devUrl` (localhost:1420). Without Vite running, the window shows a permanent white screen.
 - **Window visibility**: The main window config has `visible: false`. The app-ready event from React calls `show()` + `center()` after mount. This prevents the white flash and position jump on startup.
 
 **Cleanup scripts:**
