@@ -2,15 +2,11 @@
 //! Output format helpers — JSON, table, quiet.
 //!
 //! `OutputFormat::Auto` resolves based on stdout TTY detection:
-//! - TTY (humans)  → `Table` (pretty)
-//! - Pipe (scripts) → `Json` (machine-readable)
+//! - TTY (humans)  -> `Table` (pretty)
+//! - Pipe (scripts) -> `Json` (machine-readable)
 //!
 //! Uses `std::io::IsTerminal` (stable since Rust 1.70) so we don't pull in
 //! the external `is-terminal` crate.
-//!
-//! `print_json` is allowed-dead-code because it's consumed by Tasks 3-6.
-
-#![allow(dead_code)]
 
 use anyhow::Result;
 use serde::Serialize;

@@ -6,13 +6,8 @@
 //! and reads `ORIGIN_HOST` (full URL) instead of `ORIGIN_PORT` so users can
 //! point the CLI at a remote daemon over a tunnel.
 //!
-//! The methods exposed here are the subset the CLI subcommands (Tasks 3-6)
-//! need: status, ping, search, context, store, list, agents.
-//!
-//! `dead_code` is allowed at the module level because the methods land here
-//! before their callers; Tasks 3-6 wire each subcommand to these methods.
-
-#![allow(dead_code)]
+//! The methods exposed here are the subset the CLI subcommands need:
+//! status, ping, search, context, store, list, agents.
 
 use anyhow::{Context, Result};
 use origin_types::{
@@ -59,18 +54,6 @@ impl OriginClient {
             .error_for_status()
             .with_context(|| format!("daemon returned error for {}", url))?;
         resp.json().await.context("parsing /api/health response")
-    }
-
-    /// GET /api/ping — liveness probe; returns `"pong"`.
-    pub async fn ping(&self) -> Result<String> {
-        let url = format!("{}/api/ping", self.base_url);
-        let resp = self
-            .http
-            .get(&url)
-            .send()
-            .await
-            .with_context(|| format!("GET {} failed", url))?;
-        resp.text().await.context("reading /api/ping response")
     }
 
     /// POST /api/search — hybrid memory search.
