@@ -278,7 +278,6 @@ pub struct ConfigResponse {
     pub setup_completed: bool,
     pub clipboard_enabled: bool,
     pub screen_capture_enabled: bool,
-    pub selection_capture_enabled: bool,
     pub remote_access_enabled: bool,
 }
 

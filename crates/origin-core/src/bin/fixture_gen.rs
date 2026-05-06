@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-//! fixture-gen: Generate eval fixtures and run store quality checks.
+//! fixture-gen: Generate eval fixtures.
 //!
 //! Lives in origin-core (not the Tauri app crate) so Tauri's bundler
 //! doesn't copy it into Origin.app/Contents/MacOS. Binaries under
@@ -9,12 +9,9 @@
 //! Usage:
 //!   cargo run -p origin-core --bin fixture_gen -- --mode regression --count 6 --out eval/fixtures/gen/regression
 //!   cargo run -p origin-core --bin fixture_gen -- --mode blind --count 10 --out eval/fixtures/gen/blind
-//!   cargo run -p origin-core --bin fixture_gen -- --mode store-quality --db-path ~/Library/Application\ Support/origin/memorydb/
 //!   cargo run -p origin-core --bin fixture_gen -- --help
 
-use origin_core::db::MemoryDB;
-use origin_core::eval::{gen, store_quality};
-use origin_core::events::{EventEmitter, NoopEmitter};
+use origin_core::eval::gen;
 use origin_core::llm_provider::{LlmProvider, OnDeviceProvider};
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -24,35 +21,31 @@ struct Args {
     mode: String,
     count: usize,
     out_dir: PathBuf,
-    db_path: Option<PathBuf>,
 }
 
 fn parse_args() -> Result<Args, String> {
     let args: Vec<String> = std::env::args().collect();
 
     if args.iter().any(|a| a == "--help" || a == "-h") {
-        eprintln!("fixture-gen: Generate eval fixtures and run store quality checks\n");
+        eprintln!("fixture-gen: Generate eval fixtures\n");
         eprintln!("Usage:");
         eprintln!(
-            "  cargo run -p origin-core --bin fixture_gen -- --mode <regression|blind|store-quality> [OPTIONS]\n"
+            "  cargo run -p origin-core --bin fixture_gen -- --mode <regression|blind> [OPTIONS]\n"
         );
         eprintln!("Modes:");
         eprintln!("  regression     Pipeline-aware adversarial fixtures (requires on-device LLM)");
-        eprintln!("  blind          Pipeline-ignorant fixtures (requires on-device LLM)");
-        eprintln!("  store-quality  Run store quality metrics against a real Origin DB\n");
+        eprintln!("  blind          Pipeline-ignorant fixtures (requires on-device LLM)\n");
         eprintln!("Options:");
         eprintln!("  --count N      Number of fixtures to generate (default: 6 for regression, 10 for blind)");
         eprintln!("  --out DIR      Output directory (default: eval/fixtures/gen/<mode>)");
-        eprintln!("  --db-path DIR  Path to Origin DB directory (required for store-quality)");
         std::process::exit(0);
     }
 
-    let mode = get_flag(&args, "--mode")
-        .ok_or("--mode is required (regression, blind, or store-quality)")?;
+    let mode = get_flag(&args, "--mode").ok_or("--mode is required (regression or blind)")?;
 
-    if mode != "regression" && mode != "blind" && mode != "store-quality" {
+    if mode != "regression" && mode != "blind" {
         return Err(format!(
-            "unknown mode '{mode}' — expected 'regression', 'blind', or 'store-quality'"
+            "unknown mode '{mode}' — expected 'regression' or 'blind'"
         ));
     }
 
@@ -64,13 +57,10 @@ fn parse_args() -> Result<Args, String> {
     let default_out = format!("eval/fixtures/gen/{}", mode);
     let out_dir = PathBuf::from(get_flag(&args, "--out").unwrap_or(default_out));
 
-    let db_path = get_flag(&args, "--db-path").map(PathBuf::from);
-
     Ok(Args {
         mode,
         count,
         out_dir,
-        db_path,
     })
 }
 
@@ -121,38 +111,6 @@ async fn main() {
                 Ok(n) => eprintln!("Generated {n} fixtures in {}", args.out_dir.display()),
                 Err(e) => {
                     eprintln!("Generation failed: {e}");
-                    std::process::exit(1);
-                }
-            }
-        }
-        "store-quality" => {
-            let db_path = match &args.db_path {
-                Some(p) => p.clone(),
-                None => {
-                    eprintln!("Error: --db-path is required for store-quality mode");
-                    eprintln!(
-                        "Example: --db-path ~/Library/Application\\ Support/origin/memorydb/"
-                    );
-                    std::process::exit(1);
-                }
-            };
-
-            eprintln!("Opening DB at {}...", db_path.display());
-            let emitter: Arc<dyn EventEmitter> = Arc::new(NoopEmitter);
-            let db = match MemoryDB::new(&db_path, emitter).await {
-                Ok(db) => db,
-                Err(e) => {
-                    eprintln!("Failed to open DB at {}: {e}", db_path.display());
-                    std::process::exit(1);
-                }
-            };
-
-            match store_quality::run_store_quality(&db).await {
-                Ok(report) => {
-                    eprintln!("{}", report.to_terminal());
-                }
-                Err(e) => {
-                    eprintln!("Store quality check failed: {e}");
                     std::process::exit(1);
                 }
             }

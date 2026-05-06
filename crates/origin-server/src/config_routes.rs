@@ -20,7 +20,6 @@ fn config_to_response(cfg: &config::Config) -> ConfigResponse {
         setup_completed: cfg.setup_completed,
         clipboard_enabled: cfg.clipboard_enabled,
         screen_capture_enabled: cfg.screen_capture_enabled,
-        selection_capture_enabled: cfg.selection_capture_enabled,
         remote_access_enabled: cfg.remote_access_enabled,
     }
 }
@@ -53,9 +52,6 @@ pub async fn handle_update_config(
     }
     if let Some(v) = req.screen_capture_enabled {
         cfg.screen_capture_enabled = v;
-    }
-    if let Some(v) = req.selection_capture_enabled {
-        cfg.selection_capture_enabled = v;
     }
     if let Some(v) = req.remote_access_enabled {
         cfg.remote_access_enabled = v;

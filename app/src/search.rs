@@ -202,65 +202,6 @@ pub async fn position_quick_capture(app: tauri::AppHandle) -> Result<(), String>
     Ok(())
 }
 
-#[tauri::command]
-#[allow(deprecated)]
-pub async fn position_ambient_bottom_right(
-    app: tauri::AppHandle,
-    width: f64,
-    height: f64,
-) -> Result<(), String> {
-    use tauri::Manager;
-
-    let win = app
-        .get_webview_window("ambient")
-        .ok_or("ambient window not found")?;
-
-    #[cfg(target_os = "macos")]
-    {
-        use cocoa::base::id;
-        use cocoa::foundation::NSRect;
-        use raw_window_handle::HasWindowHandle;
-        use tauri::{LogicalPosition, LogicalSize};
-
-        let raw_handle = win.window_handle().map_err(|e| e.to_string())?;
-        if let raw_window_handle::RawWindowHandle::AppKit(appkit) = raw_handle.as_raw() {
-            let ns_view = appkit.ns_view.as_ptr() as id;
-
-            let (visible, screen_h) = unsafe {
-                let ns_win: id = objc::msg_send![ns_view, window];
-                if ns_win.is_null() {
-                    return Err("NSWindow not attached".into());
-                }
-                let screen: id = objc::msg_send![ns_win, screen];
-                if screen.is_null() {
-                    return Err("NSScreen not available".into());
-                }
-                let visible: NSRect = objc::msg_send![screen, visibleFrame];
-                let frame: NSRect = objc::msg_send![screen, frame];
-                (visible, frame.size.height)
-            };
-
-            let padding = 16.0;
-            let win_padding = 28.0;
-
-            win.set_size(LogicalSize::new(width, height))
-                .map_err(|e| e.to_string())?;
-
-            let x = visible.origin.x + visible.size.width - width - padding + win_padding;
-            let y = screen_h - visible.origin.y - padding - height + win_padding;
-
-            log::debug!("[ambient-pos] visible=({:.0},{:.0} {:.0}x{:.0}) screen_h={:.0} → size=({:.0},{:.0}) pos=({:.0},{:.0}) win_pad={:.0}",
-                visible.origin.x, visible.origin.y, visible.size.width, visible.size.height,
-                screen_h, width, height, x, y, win_padding);
-
-            win.set_position(LogicalPosition::new(x, y))
-                .map_err(|e| e.to_string())?;
-        }
-    }
-
-    Ok(())
-}
-
 // ── Permission commands (kept as-is) ──────────────────────────────────
 
 #[tauri::command]
@@ -292,22 +233,6 @@ pub fn request_screen_permission() -> bool {
     #[cfg(not(target_os = "macos"))]
     {
         true
-    }
-}
-
-#[tauri::command]
-pub fn check_accessibility_permission() -> bool {
-    crate::trigger::selection::ax_is_trusted()
-}
-
-#[tauri::command]
-pub fn request_accessibility_permission() {
-    #[cfg(target_os = "macos")]
-    {
-        use std::process::Command;
-        let _ = Command::new("open")
-            .arg("x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility")
-            .spawn();
     }
 }
 
@@ -451,23 +376,6 @@ pub async fn get_origin_mcp_entry() -> Result<serde_json::Value, String> {
 }
 
 #[tauri::command]
-pub async fn get_ambient_mode(state: tauri::State<'_, State>) -> Result<String, String> {
-    let app_state = state.read().await;
-    let mode = serde_json::to_string(&app_state.ambient_mode)
-        .unwrap_or_else(|_| "\"on_demand\"".to_string());
-    Ok(mode.trim_matches('"').to_string())
-}
-
-#[tauri::command]
-pub async fn set_ambient_mode(state: tauri::State<'_, State>, mode: String) -> Result<(), String> {
-    let parsed: crate::ambient::types::AmbientMode = serde_json::from_str(&format!("\"{}\"", mode))
-        .map_err(|_| format!("Invalid mode: {}. Use proactive, on_demand, or off", mode))?;
-    let mut app_state = state.write().await;
-    app_state.ambient_mode = parsed;
-    Ok(())
-}
-
-#[tauri::command]
 pub async fn get_screen_capture_enabled(state: tauri::State<'_, State>) -> Result<bool, String> {
     Ok(state.read().await.screen_capture_enabled)
 }
@@ -483,26 +391,6 @@ pub async fn set_screen_capture_enabled(
     }
     let mut config = crate::config::load_config();
     config.screen_capture_enabled = enabled;
-    crate::config::save_config(&config).map_err(|e| e.to_string())?;
-    Ok(())
-}
-
-#[tauri::command]
-pub async fn get_selection_capture_enabled(state: tauri::State<'_, State>) -> Result<bool, String> {
-    Ok(state.read().await.selection_capture_enabled)
-}
-
-#[tauri::command]
-pub async fn set_selection_capture_enabled(
-    state: tauri::State<'_, State>,
-    enabled: bool,
-) -> Result<(), String> {
-    {
-        let mut app_state = state.write().await;
-        app_state.selection_capture_enabled = enabled;
-    }
-    let mut config = crate::config::load_config();
-    config.selection_capture_enabled = enabled;
     crate::config::save_config(&config).map_err(|e| e.to_string())?;
     Ok(())
 }
@@ -546,31 +434,6 @@ pub async fn trigger_manual_capture(state: tauri::State<'_, State>) -> Result<()
         tx.send(crate::trigger::types::TriggerEvent::ManualHotkey)
             .await
             .map_err(|e| format!("{}", e))?;
-    }
-    Ok(())
-}
-
-#[tauri::command]
-pub async fn capture_region(
-    state: tauri::State<'_, State>,
-    x: f64,
-    y: f64,
-    width: f64,
-    height: f64,
-) -> Result<(), String> {
-    if width < 10.0 || height < 10.0 {
-        return Err("Selection too small".to_string());
-    }
-    let s = state.read().await;
-    if let Some(ref tx) = s.trigger_tx {
-        tx.send(crate::trigger::types::TriggerEvent::DragSnip {
-            x,
-            y,
-            width,
-            height,
-        })
-        .await
-        .map_err(|e| format!("{}", e))?;
     }
     Ok(())
 }
@@ -714,39 +577,6 @@ pub async fn rotate_remote_token(
     app_handle: tauri::AppHandle,
 ) -> Result<String, String> {
     crate::remote_access::rotate_token(&app_handle).await
-}
-
-// ── Ambient overlay commands ──────────────────────────────────────────
-
-#[tauri::command]
-pub async fn dismiss_ambient_card(
-    state: tauri::State<'_, State>,
-    query: String,
-) -> Result<(), String> {
-    let mut app_state = state.write().await;
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs();
-
-    app_state
-        .ambient_dismissals
-        .push(crate::ambient::types::DismissalRecord {
-            query,
-            dismissed_at: now,
-        });
-
-    app_state.ambient_dismissals.retain(|d| d.is_active());
-    Ok(())
-}
-
-#[tauri::command]
-pub async fn trigger_ambient(
-    state: tauri::State<'_, State>,
-) -> Result<crate::ambient::types::AmbientTriggerResult, String> {
-    let app_state = state.inner().clone();
-    let result = crate::ambient::monitor::trigger_ambient_now(&app_state).await;
-    Ok(result)
 }
 
 // ── File / open commands ──────────────────────────────────────────────
@@ -985,7 +815,6 @@ async fn save_current_config(
         anthropic_api_key: existing.anthropic_api_key,
         remote_access_enabled: existing.remote_access_enabled,
         screen_capture_enabled: app_state.screen_capture_enabled,
-        selection_capture_enabled: app_state.selection_capture_enabled,
         ..existing
     };
     config::save_config(&cfg)
@@ -2947,190 +2776,6 @@ pub async fn sync_registered_source(
     crate::sources::sync::sync_obsidian_vault(&source, state.inner())
         .await
         .map_err(|e| e.to_string())
-}
-
-// ── Icon click / selection overlay ────────────────────────────────────
-
-static ICON_CARD_COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-
-fn icon_loading_card(
-    card_id: String,
-    title: String,
-    created_at: u64,
-) -> crate::ambient::types::AmbientCard {
-    use crate::ambient::types::{AmbientCard, AmbientCardKind};
-    AmbientCard {
-        card_id: card_id.clone(),
-        kind: AmbientCardKind::PersonContext,
-        title,
-        topic: "Searching…".to_string(),
-        body: "Looking up related memories…".to_string(),
-        sources: vec![],
-        memory_count: 0,
-        primary_source_id: card_id,
-        created_at,
-        loading: true,
-        snippets: vec![],
-    }
-}
-
-fn icon_no_results_card(
-    card_id: String,
-    title: String,
-    created_at: u64,
-) -> crate::ambient::types::AmbientCard {
-    use crate::ambient::types::{AmbientCard, AmbientCardKind};
-    AmbientCard {
-        card_id,
-        kind: AmbientCardKind::PersonContext,
-        title,
-        topic: String::new(),
-        body: "No relevant context found.".to_string(),
-        sources: vec![],
-        memory_count: 0,
-        primary_source_id: String::new(),
-        created_at,
-        loading: false,
-        snippets: vec![],
-    }
-}
-
-/// Called when the user clicks the icon overlay.
-/// Emits a loading placeholder card immediately, then searches memory via the
-/// daemon and replaces the card with real results.
-#[tauri::command]
-pub async fn trigger_icon_click(
-    state: tauri::State<'_, Arc<RwLock<AppState>>>,
-    text: String,
-    x: f64,
-    y: f64,
-) -> Result<(), String> {
-    use crate::ambient::types::{AmbientCard, AmbientCardKind, SelectionCardEvent};
-    use tauri::Emitter;
-
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs();
-
-    let card_id = format!(
-        "icon-{}-{}",
-        now,
-        ICON_CARD_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
-    );
-
-    // Emit loading placeholder immediately
-    {
-        let loading_card = icon_loading_card(card_id.clone(), text.chars().take(40).collect(), now);
-        let s = state.read().await;
-        if let Some(handle) = &s.app_handle {
-            let _ = handle.emit(
-                "selection-card",
-                &SelectionCardEvent {
-                    card: loading_card,
-                    cursor_x: x,
-                    cursor_y: y,
-                },
-            );
-        }
-    }
-
-    // Search via daemon and emit real results in background
-    let state_arc = Arc::clone(&*state);
-    let card_id_clone = card_id;
-    tauri::async_runtime::spawn(async move {
-        let client = {
-            let s = state_arc.read().await;
-            s.client.clone()
-        };
-
-        let daemon_req = requests::SearchMemoryRequest {
-            query: text.clone(),
-            limit: 5,
-            memory_type: None,
-            domain: None,
-            source_agent: None,
-        };
-
-        let results = match client
-            .post_json::<_, responses::SearchMemoryResponse>("/api/memory/search", &daemon_req)
-            .await
-        {
-            Ok(resp) => resp.results,
-            Err(_) => vec![],
-        };
-
-        let now2 = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_secs();
-
-        let good: Vec<_> = results.iter().filter(|r| r.raw_score >= 0.02).collect();
-        let title: String = text.chars().take(40).collect();
-
-        let card = if !good.is_empty() {
-            let primary = &good[0];
-            let kind = if primary.memory_type.as_deref() == Some("decision") {
-                AmbientCardKind::DecisionReminder
-            } else {
-                AmbientCardKind::PersonContext
-            };
-
-            let mut seen = std::collections::HashSet::new();
-            let sources: Vec<String> = good
-                .iter()
-                .filter_map(|r| r.source_agent.clone())
-                .filter(|a| seen.insert(a.clone()))
-                .collect();
-
-            let snippets: Vec<crate::ambient::types::MemorySnippet> = good
-                .iter()
-                .take(5)
-                .map(|r| crate::ambient::types::MemorySnippet {
-                    source: r
-                        .source_agent
-                        .clone()
-                        .or_else(|| r.domain.clone())
-                        .unwrap_or_else(|| "memory".to_string()),
-                    text: r.content.chars().take(80).collect(),
-                })
-                .collect();
-
-            // Use primary result content as body (no LLM synthesis in thin client)
-            let body: String = primary.content.chars().take(200).collect();
-
-            AmbientCard {
-                card_id: card_id_clone,
-                kind,
-                title,
-                topic: primary.domain.clone().unwrap_or_default(),
-                body,
-                sources,
-                memory_count: good.len(),
-                primary_source_id: primary.source_id.clone(),
-                created_at: now2,
-                loading: false,
-                snippets,
-            }
-        } else {
-            icon_no_results_card(card_id_clone, title, now2)
-        };
-
-        let s = state_arc.read().await;
-        if let Some(handle) = &s.app_handle {
-            use tauri::Emitter;
-            let _ = handle.emit(
-                "selection-card",
-                &SelectionCardEvent {
-                    card,
-                    cursor_x: x,
-                    cursor_y: y,
-                },
-            );
-        }
-    });
-
-    Ok(())
 }
 
 // ---------------------------------------------------------------------------

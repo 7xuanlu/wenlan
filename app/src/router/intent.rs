@@ -1,5 +1,4 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-use crate::ambient::types::SelectionCardEvent;
 use crate::privacy::redact_pii;
 use crate::router::bundle::{assemble_bundle_with_intent, ContextBundle};
 use crate::router::keywords;
@@ -14,8 +13,8 @@ use tokio::sync::mpsc::{Receiver, Sender};
 use tokio::sync::RwLock;
 
 use origin_core::working_memory::{WorkingMemoryEntry, MAX_SNIPPET_CHARS};
-use origin_types::requests::{IngestTextRequest, SearchMemoryRequest};
-use origin_types::responses::{IngestResponse, SearchMemoryResponse};
+use origin_types::requests::IngestTextRequest;
+use origin_types::responses::IngestResponse;
 
 /// Default keyword classification threshold (matches TuningConfig default).
 const DEFAULT_KEYWORD_MIN_THRESHOLD: f64 = 0.005;
@@ -67,7 +66,6 @@ fn text_similarity(a: &str, b: &str) -> f64 {
 ///
 /// Pattern-matches on TriggerEvent to apply the right optimization strategy:
 /// - ManualHotkey: force OCR all windows, classify intent, send to consumer
-/// - DragSnip: crop before OCR, classify intent, send to consumer
 /// - QuickThought: bypass vision entirely, send to consumer
 pub async fn run_router(
     mut event_rx: Receiver<TriggerEvent>,
@@ -152,181 +150,11 @@ pub async fn run_router(
                 let _ = bundle_tx.send(bundle).await;
             }
 
-            // ── DRAGSNIP: native CG region capture + OCR ──
-            TriggerEvent::DragSnip {
-                x,
-                y,
-                width,
-                height,
-            } => {
-                log::info!(
-                    "[router] snip trigger: x={:.0} y={:.0} w={:.0} h={:.0}",
-                    x,
-                    y,
-                    width,
-                    height
-                );
-
-                let ocr = match sensor::vision::ocr_region(x, y, width, height) {
-                    Ok(results) if !results.is_empty() => results,
-                    Ok(_) => {
-                        log::debug!("[router] snip: OCR returned no text");
-                        continue;
-                    }
-                    Err(e) => {
-                        log::warn!("[router] snip OCR failed: {}", e);
-                        continue;
-                    }
-                };
-
-                let ocr = redact_all(ocr);
-                let intent = keywords::classify(&ocr, DEFAULT_KEYWORD_MIN_THRESHOLD);
-                let bundle = assemble_bundle_with_intent(ocr, &event, intent);
-                let _ = bundle_tx.send(bundle).await;
-            }
-
             // ── QUICK THOUGHT: bypass vision entirely ──
             TriggerEvent::QuickThought { ref text } => {
                 log::info!("[router] quick thought: {} chars", text.len());
                 let bundle = ContextBundle::from_text(text.clone());
                 let _ = bundle_tx.send(bundle).await;
-            }
-
-            // ── FOCUS CHANGE: ambient monitor handles this independently ──
-            TriggerEvent::FocusChange { .. } => {
-                // Intentionally no-op in the router. The ambient monitor runs its
-                // own polling loop and processes focus changes directly.
-            }
-
-            // ── TEXT SELECTION: search with selected text via daemon, emit cursor-positioned card ──
-            TriggerEvent::TextSelected(crate::trigger::types::SelectionEvent {
-                text,
-                cursor_x,
-                cursor_y,
-            }) => {
-                log::info!(
-                    "[router] text selected: {} chars at ({:.0},{:.0})",
-                    text.len(),
-                    cursor_x,
-                    cursor_y
-                );
-
-                let client = state.read().await.client.clone();
-
-                let req = SearchMemoryRequest {
-                    query: text.clone(),
-                    limit: 5,
-                    memory_type: None,
-                    domain: None,
-                    source_agent: None,
-                };
-                let results = match client
-                    .post_json::<SearchMemoryRequest, SearchMemoryResponse>(
-                        "/api/memory/search",
-                        &req,
-                    )
-                    .await
-                {
-                    Ok(resp) => resp.results,
-                    Err(e) => {
-                        log::warn!("[router] text selection search failed: {}", e);
-                        continue;
-                    }
-                };
-
-                let now = std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .unwrap_or_default()
-                    .as_secs();
-
-                use crate::ambient::types::{AmbientCard, AmbientCardKind};
-
-                let good: Vec<_> = results.iter().filter(|r| r.score >= 0.8f32).collect();
-
-                let card = if good.len() >= 2 {
-                    let primary = &good[0];
-                    let kind = if primary.memory_type.as_deref() == Some("decision") {
-                        AmbientCardKind::DecisionReminder
-                    } else {
-                        AmbientCardKind::PersonContext
-                    };
-                    let sources: Vec<String> = good
-                        .iter()
-                        .filter_map(|r| r.source_agent.clone())
-                        .collect::<std::collections::HashSet<_>>()
-                        .into_iter()
-                        .collect();
-                    AmbientCard {
-                        card_id: format!(
-                            "sel-{}-{}",
-                            now,
-                            crate::ambient::monitor::CARD_COUNTER
-                                .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
-                        ),
-                        kind,
-                        title: text.chars().take(40).collect(),
-                        topic: primary.domain.clone().unwrap_or_default(),
-                        body: primary.content.chars().take(200).collect(),
-                        sources,
-                        memory_count: good.len(),
-                        primary_source_id: primary.source_id.clone(),
-                        created_at: now,
-                        loading: false,
-                        snippets: vec![],
-                    }
-                } else {
-                    // No-results card
-                    AmbientCard {
-                        card_id: format!("sel-none-{}", now),
-                        kind: AmbientCardKind::PersonContext,
-                        title: text.chars().take(40).collect(),
-                        topic: String::new(),
-                        body: "No memories found for this selection.".to_string(),
-                        sources: vec![],
-                        memory_count: 0,
-                        primary_source_id: String::new(),
-                        created_at: now,
-                        loading: false,
-                        snippets: vec![],
-                    }
-                };
-
-                let payload = SelectionCardEvent {
-                    card,
-                    cursor_x,
-                    cursor_y,
-                };
-
-                let s = state.read().await;
-                if let Some(handle) = &s.app_handle {
-                    use tauri::Emitter;
-                    let _ = handle.emit("selection-card", &payload);
-                }
-            }
-
-            // ── TEXT ICON: show icon overlay, card fires on click ──
-            TriggerEvent::TextIcon { text, x, y } => {
-                log::info!(
-                    "[router] text icon: {} chars at ({:.0},{:.0})",
-                    text.len(),
-                    x,
-                    y
-                );
-                let payload = crate::ambient::types::ShowIconPayload { text, x, y };
-                let s = state.read().await;
-                if let Some(handle) = &s.app_handle {
-                    use tauri::Emitter;
-                    let _ = handle.emit("show-icon", &payload);
-                }
-            }
-
-            // ── HIDE ICON: user clicked/deselected ──
-            TriggerEvent::HideIcon => {
-                let s = state.read().await;
-                if let Some(handle) = &s.app_handle {
-                    use tauri::Emitter;
-                    let _ = handle.emit("hide-icon", ());
-                }
             }
         }
     }
@@ -505,10 +333,6 @@ fn extract_ingest_fields(
     std::collections::HashMap<String, String>,
 ) {
     let source = match bundle.trigger_type.as_str() {
-        "ambient" => "ambient",
-        "focus" => "focus_capture",
-        "hotkey" => "hotkey_capture",
-        "snip" => "snip_capture",
         "thought" => "quick_thought",
         _ => "context",
     }
@@ -564,17 +388,6 @@ fn extract_ingest_fields(
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn text_selected_event_is_recognized() {
-        use crate::trigger::types::{SelectionEvent, TriggerEvent};
-        let event = TriggerEvent::TextSelected(SelectionEvent {
-            text: "hello world test selection text".into(),
-            cursor_x: 500.0,
-            cursor_y: 300.0,
-        });
-        assert!(matches!(event, TriggerEvent::TextSelected(_)));
-    }
 
     #[test]
     fn test_content_hash_deterministic() {

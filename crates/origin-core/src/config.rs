@@ -62,8 +62,6 @@ pub struct Config {
     #[serde(default)]
     pub screen_capture_enabled: bool,
     #[serde(default)]
-    pub selection_capture_enabled: bool,
-    #[serde(default)]
     pub on_device_model: Option<String>,
     #[serde(default)]
     pub external_llm_endpoint: Option<String>,
@@ -195,7 +193,6 @@ mod tests {
             anthropic_api_key: None,
             remote_access_enabled: false,
             screen_capture_enabled: false,
-            selection_capture_enabled: false,
             ..Config::default()
         };
         config.watch_paths = vec![PathBuf::from("/tmp/test")];

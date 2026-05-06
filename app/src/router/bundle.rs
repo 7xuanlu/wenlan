@@ -175,12 +175,7 @@ fn flush_nav_run(result: &mut Vec<String>, nav_run: &mut Vec<&str>) {
 fn trigger_type_str(event: &TriggerEvent) -> String {
     match event {
         TriggerEvent::ManualHotkey => "hotkey".to_string(),
-        TriggerEvent::DragSnip { .. } => "snip".to_string(),
         TriggerEvent::QuickThought { .. } => "thought".to_string(),
-        TriggerEvent::FocusChange { .. } => "focus_change".to_string(),
-        TriggerEvent::TextSelected { .. } => "text_selection".to_string(),
-        TriggerEvent::TextIcon { .. } => "text_icon".to_string(),
-        TriggerEvent::HideIcon => "hide_icon".to_string(),
     }
 }
 

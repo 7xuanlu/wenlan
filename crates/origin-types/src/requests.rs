@@ -297,8 +297,6 @@ pub struct UpdateConfigRequest {
     #[serde(default)]
     pub screen_capture_enabled: Option<bool>,
     #[serde(default)]
-    pub selection_capture_enabled: Option<bool>,
-    #[serde(default)]
     pub remote_access_enabled: Option<bool>,
 }
 

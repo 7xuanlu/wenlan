@@ -5,21 +5,6 @@ import { startListening, stopListening, onClipboardChange } from "tauri-plugin-c
 import { emit, listen } from "@tauri-apps/api/event";
 import { resizeWindow, resizeWindowCentered } from "./lib/resizeWindow";
 import { ingestClipboard, getClipboardEnabled, shouldSkipClipboardChange, setTrafficLightsVisible, shouldShowWizard, setSetupCompleted, type IndexedFileInfo } from "./lib/tauri";
-import { triggerAmbient, getAmbientMode, setAmbientMode } from "./lib/ambient";
-
-// Expose ambient controls on window for devtools testing
-// Also expose diagnostic helpers
-import { invoke } from "@tauri-apps/api/core";
-const ambientDiag = async () => {
-  const { getAllWebviewWindows } = await import("@tauri-apps/api/webviewWindow");
-  const wins = await getAllWebviewWindows();
-  console.log("All windows:", wins.map(w => `${w.label} (visible: pending)`));
-  for (const w of wins) {
-    const vis = await w.isVisible();
-    console.log(`  ${w.label}: visible=${vis}`);
-  }
-};
-Object.assign(window, { triggerAmbient, getAmbientMode, setAmbientMode, ambientDiag, invoke, emit });
 import { markProcessing, clearProcessing } from "./lib/processingStore";
 import { recordCapture } from "./lib/captureHeartbeat";
 import Spotlight from "./components/Spotlight";
@@ -176,7 +161,7 @@ export default function App() {
     return () => { unlisten.then((f) => f()); };
   }, []);
 
-  // Navigate to memory detail from ambient overlay (cross-window event)
+  // Navigate to memory detail (cross-window event)
   useEffect(() => {
     const unlisten = listen<{ sourceId: string }>("navigate-to-memory", async (event) => {
       const { sourceId } = event.payload;

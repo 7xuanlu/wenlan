@@ -9,20 +9,11 @@ pub struct WindowCapture {
     pub focused: bool,
 }
 
-/// A single text observation from Apple Vision OCR, with bounding box.
-/// Bounding boxes are metadata for cursor proximity / future use.
+/// A single text observation from Apple Vision OCR.
 #[derive(Debug, Clone)]
 pub struct TextObservation {
     pub text: String,
     pub confidence: f64,
-    #[allow(dead_code)]
-    pub x: f64, // normalized 0-1, window-relative, top-left origin
-    #[allow(dead_code)]
-    pub y: f64,
-    #[allow(dead_code)]
-    pub width: f64,
-    #[allow(dead_code)]
-    pub height: f64,
 }
 
 /// OCR result for a single window / region.
@@ -38,73 +29,6 @@ pub struct WindowOcrResult {
 }
 
 // ── Window listing via xcap (for metadata + hash images) ──────────────────
-
-/// Lightweight focused-window metadata — no screenshots taken.
-/// ~5ms on macOS vs ~200ms×N for capture_windows.
-pub struct FocusedWindowMeta {
-    pub app_name: String,
-    pub window_name: String,
-}
-
-/// Return metadata for the currently focused window without taking any screenshots.
-/// Returns None if no focused window is found (e.g. desktop focused).
-pub fn focused_window_meta() -> Option<FocusedWindowMeta> {
-    use xcap::Window;
-    let windows = Window::all().ok()?;
-    windows
-        .iter()
-        .find(|w| {
-            w.is_focused().unwrap_or(false)
-                && !w.is_minimized().unwrap_or(false)
-                && w.width().unwrap_or(0) >= 10
-                && w.height().unwrap_or(0) >= 10
-        })
-        .map(|w| FocusedWindowMeta {
-            app_name: w.app_name().unwrap_or_default(),
-            window_name: w.title().unwrap_or_default(),
-        })
-}
-
-/// Capture only the focused window — single CGWindowListCreateImage call instead of N.
-/// Returns None if no focused window found or screenshot fails.
-#[cfg(target_os = "macos")]
-pub fn capture_focused_window() -> Result<Option<WindowCapture>, OriginError> {
-    use xcap::Window;
-    let windows = Window::all().map_err(|e| OriginError::Vision(format!("xcap list: {e}")))?;
-    let focused = windows.iter().find(|w| {
-        w.is_focused().unwrap_or(false)
-            && !w.is_minimized().unwrap_or(false)
-            && w.width().unwrap_or(0) >= 10
-            && w.height().unwrap_or(0) >= 10
-    });
-    match focused {
-        None => Ok(None),
-        Some(win) => {
-            let buf = match win.capture_image() {
-                Ok(b) => b,
-                Err(e) => {
-                    log::debug!("[vision] focused capture failed: {}", e);
-                    return Ok(None);
-                }
-            };
-            let img = image::DynamicImage::ImageRgba8(
-                image::ImageBuffer::from_raw(buf.width(), buf.height(), buf.into_raw())
-                    .ok_or_else(|| OriginError::Vision("image buffer creation failed".into()))?,
-            );
-            Ok(Some(WindowCapture {
-                image: img,
-                app_name: win.app_name().unwrap_or_default(),
-                window_name: win.title().unwrap_or_default(),
-                focused: true,
-            }))
-        }
-    }
-}
-
-#[cfg(not(target_os = "macos"))]
-pub fn capture_focused_window() -> Result<Option<WindowCapture>, OriginError> {
-    Ok(None)
-}
 
 /// Capture all visible windows via xcap. Returns images for frame_compare hash
 /// and window metadata (app names, focused state). OCR is done separately via
@@ -169,12 +93,12 @@ pub fn capture_windows(
 // ── Per-Window OCR pipeline ───────────────────────────────────────────────
 //
 // Each window's DynamicImage → grayscale luma8 → CGImage via CGBitmapContext
-// → VNRecognizeTextRequest → TextObservation with bounding boxes.
-// Screenpipe pattern: per-window attribution + bounding boxes, but we fire
-// on trigger events instead of 1/sec.
+// → VNRecognizeTextRequest → TextObservation (text + confidence).
+// Screenpipe pattern: per-window attribution, but we fire on trigger events
+// instead of 1/sec.
 
 /// Run Apple Vision OCR on each window capture, returning per-window results
-/// with individual text observations and bounding boxes.
+/// with individual text observations.
 #[cfg(target_os = "macos")]
 pub fn ocr_per_window(captures: &[WindowCapture]) -> Result<Vec<WindowOcrResult>, OriginError> {
     let mut results = Vec::new();
@@ -233,103 +157,14 @@ pub fn ocr_per_window(_captures: &[WindowCapture]) -> Result<Vec<WindowOcrResult
     Ok(vec![])
 }
 
-/// Capture a screen region via CoreGraphics and run Apple Vision OCR.
-/// Coordinates are in macOS display points — Retina scaling is handled natively.
-#[cfg(target_os = "macos")]
-pub fn ocr_region(x: f64, y: f64, w: f64, h: f64) -> Result<Vec<WindowOcrResult>, OriginError> {
-    let cg_image = unsafe { cg_capture_region(x, y, w, h) };
-    if cg_image.is_null() {
-        return Err(OriginError::Vision("Region capture failed".to_string()));
-    }
-
-    let gray = unsafe { cgimage_to_grayscale(cg_image) };
-    let ocr_image = if gray.is_null() { cg_image } else { gray };
-
-    let observations = unsafe { run_vision_ocr(ocr_image) };
-    unsafe { cg::CFRelease(cg_image) };
-    if !gray.is_null() {
-        unsafe { cg::CFRelease(gray) };
-    }
-
-    match observations {
-        Some(obs) if !obs.is_empty() => {
-            let text: String = obs
-                .iter()
-                .map(|o| o.text.as_str())
-                .collect::<Vec<_>>()
-                .join("\n");
-            if text.trim().len() < 5 {
-                log::debug!("[vision] region OCR returned insufficient text");
-                return Ok(vec![]);
-            }
-            let total_confidence: f64 = obs.iter().map(|o| o.confidence).sum();
-            let avg_confidence = total_confidence / obs.len() as f64;
-            Ok(vec![WindowOcrResult {
-                window_name: "Screen snip".to_string(),
-                app_name: "Region Snip".to_string(),
-                text,
-                observations: obs,
-                focused: true,
-                confidence: avg_confidence,
-            }])
-        }
-        _ => {
-            log::debug!("[vision] region OCR returned insufficient text");
-            Ok(vec![])
-        }
-    }
-}
-
-#[cfg(not(target_os = "macos"))]
-pub fn ocr_region(_x: f64, _y: f64, _w: f64, _h: f64) -> Result<Vec<WindowOcrResult>, OriginError> {
-    Ok(vec![])
-}
-
 // ── macOS CoreGraphics FFI ─────────────────────────────────────────────────
 
 #[cfg(target_os = "macos")]
 mod cg {
     use std::ffi::c_void;
 
-    #[repr(C)]
-    #[derive(Clone, Copy)]
-    pub struct CGPoint {
-        pub x: f64,
-        pub y: f64,
-    }
-
-    #[repr(C)]
-    #[derive(Clone, Copy)]
-    pub struct CGSize {
-        pub width: f64,
-        pub height: f64,
-    }
-
-    #[repr(C)]
-    #[derive(Clone, Copy)]
-    pub struct CGRect {
-        pub origin: CGPoint,
-        pub size: CGSize,
-    }
-
-    pub const K_CG_WINDOW_LIST_OPTION_ON_SCREEN_ONLY: u32 = 1 << 0;
-    #[allow(dead_code)]
-    pub const K_CG_WINDOW_LIST_EXCLUDE_DESKTOP_ELEMENTS: u32 = 1 << 4;
-    pub const K_CG_NULL_WINDOW_ID: u32 = 0;
-    pub const K_CG_WINDOW_IMAGE_DEFAULT: u32 = 0;
-
     #[link(name = "CoreGraphics", kind = "framework")]
     extern "C" {
-        pub fn CGWindowListCreateImage(
-            screenBounds: CGRect,
-            listOption: u32,
-            windowID: u32,
-            imageOption: u32,
-        ) -> *const c_void;
-
-        pub fn CGImageGetWidth(image: *const c_void) -> usize;
-        pub fn CGImageGetHeight(image: *const c_void) -> usize;
-
         pub fn CGColorSpaceCreateDeviceGray() -> *const c_void;
         pub fn CGBitmapContextCreate(
             data: *mut c_void,
@@ -341,31 +176,11 @@ mod cg {
             bitmap_info: u32,
         ) -> *const c_void;
         pub fn CGBitmapContextCreateImage(ctx: *const c_void) -> *const c_void;
-        pub fn CGContextDrawImage(ctx: *const c_void, rect: CGRect, image: *const c_void);
         pub fn CGContextRelease(ctx: *const c_void);
         pub fn CGColorSpaceRelease(space: *const c_void);
 
         pub fn CFRelease(cf: *const c_void);
     }
-}
-
-/// Capture a screen region via CGWindowListCreateImage with explicit CGRect.
-/// Coordinates are in macOS display points — Retina scaling handled natively.
-#[cfg(target_os = "macos")]
-unsafe fn cg_capture_region(x: f64, y: f64, w: f64, h: f64) -> *const std::ffi::c_void {
-    let rect = cg::CGRect {
-        origin: cg::CGPoint { x, y },
-        size: cg::CGSize {
-            width: w,
-            height: h,
-        },
-    };
-    cg::CGWindowListCreateImage(
-        rect,
-        cg::K_CG_WINDOW_LIST_OPTION_ON_SCREEN_ONLY,
-        cg::K_CG_NULL_WINDOW_ID,
-        cg::K_CG_WINDOW_IMAGE_DEFAULT,
-    )
 }
 
 /// Convert a DynamicImage to a grayscale CGImage for Apple Vision OCR.
@@ -407,67 +222,18 @@ unsafe fn dynamic_image_to_gray_cgimage(img: &image::DynamicImage) -> *const std
     cg_image
 }
 
-/// Convert a CGImage to grayscale CGImage for improved OCR accuracy.
-/// Drawing into a grayscale context lets CG handle color → gray conversion.
-/// Returns a new CGImage (caller must CFRelease).
-#[cfg(target_os = "macos")]
-unsafe fn cgimage_to_grayscale(cg_image: *const std::ffi::c_void) -> *const std::ffi::c_void {
-    let width = cg::CGImageGetWidth(cg_image);
-    let height = cg::CGImageGetHeight(cg_image);
-
-    if width == 0 || height == 0 {
-        return std::ptr::null();
-    }
-
-    let gray_space = cg::CGColorSpaceCreateDeviceGray();
-
-    // kCGImageAlphaNone = 0 for grayscale
-    let ctx = cg::CGBitmapContextCreate(
-        std::ptr::null_mut(),
-        width,
-        height,
-        8,
-        width, // 1 byte per pixel
-        gray_space,
-        0,
-    );
-
-    if ctx.is_null() {
-        cg::CGColorSpaceRelease(gray_space);
-        return std::ptr::null();
-    }
-
-    let draw_rect = cg::CGRect {
-        origin: cg::CGPoint { x: 0.0, y: 0.0 },
-        size: cg::CGSize {
-            width: width as f64,
-            height: height as f64,
-        },
-    };
-    cg::CGContextDrawImage(ctx, draw_rect, cg_image);
-
-    let gray_image = cg::CGBitmapContextCreateImage(ctx);
-
-    cg::CGContextRelease(ctx);
-    cg::CGColorSpaceRelease(gray_space);
-
-    gray_image
-}
-
 // ── Apple Vision OCR (objc FFI) ────────────────────────────────────────────
 //
-// Runs VNRecognizeTextRequest on a CGImage. Returns TextObservations with
-// bounding boxes from VNRecognizedTextObservation.boundingBox.
+// Runs VNRecognizeTextRequest on a CGImage.
 //
 // Following Screenpipe patterns:
 // - Grayscale preprocessing for faster/better OCR
 // - No confidence filtering at OCR level (return everything)
 // - Proper autorelease pool management
 // - Language correction enabled for better accuracy
-// - Bounding box extraction from each observation
 
 /// Run VNRecognizeTextRequest on a native CGImage.
-/// Returns Vec<TextObservation> with text + bounding boxes.
+/// Returns Vec<TextObservation> with text + confidence.
 #[cfg(target_os = "macos")]
 #[allow(deprecated)]
 unsafe fn run_vision_ocr(cg_image: *const std::ffi::c_void) -> Option<Vec<TextObservation>> {
@@ -526,11 +292,6 @@ unsafe fn run_vision_ocr(cg_image: *const std::ffi::c_void) -> Option<Vec<TextOb
     for i in 0..count {
         let observation: id = msg_send![results, objectAtIndex: i];
 
-        // Extract bounding box from VNRecognizedTextObservation
-        // (inherits boundingBox from VNDetectedObjectObservation)
-        // Vision coordinate system: normalized 0-1, bottom-left origin
-        let bbox: cg::CGRect = msg_send![observation, boundingBox];
-
         let candidates: id = msg_send![observation, topCandidates: 1_usize];
         let n: usize = msg_send![candidates, count];
         if n > 0 {
@@ -540,17 +301,9 @@ unsafe fn run_vision_ocr(cg_image: *const std::ffi::c_void) -> Option<Vec<TextOb
             let text_ns: id = msg_send![candidate, string];
             if let Some(text) = ns_string_to_rust(text_ns) {
                 if !text.is_empty() {
-                    // Convert from Vision's bottom-left origin to top-left origin
-                    let x = bbox.origin.x;
-                    let y = 1.0 - bbox.origin.y - bbox.size.height;
-
                     observations.push(TextObservation {
                         text,
                         confidence: confidence as f64,
-                        x,
-                        y,
-                        width: bbox.size.width,
-                        height: bbox.size.height,
                     });
                 }
             }

@@ -45,10 +45,6 @@ pub fn build_router(state: SharedState) -> Router {
         .route("/api/steep", post(routes::handle_steep))
         .route("/api/distill", post(routes::handle_distill))
         .route("/api/distill/{page_id}", post(routes::handle_redistill))
-        .route(
-            "/api/eval/distillation",
-            get(routes::handle_distillation_eval),
-        )
         // Ingest
         .route("/api/ingest/text", post(ingest_routes::handle_ingest_text))
         .route(

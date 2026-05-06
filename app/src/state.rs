@@ -55,16 +55,8 @@ pub struct AppState {
     pub trigger_tx: Option<tokio::sync::mpsc::Sender<crate::trigger::types::TriggerEvent>>,
     /// Last context bundle received from the router.
     pub last_context_bundle: Option<crate::router::bundle::ContextBundle>,
-    /// Ambient overlay dismissal records.
-    pub ambient_dismissals: Vec<crate::ambient::types::DismissalRecord>,
-    /// Ambient overlay mode: proactive, on_demand, or off.
-    pub ambient_mode: crate::ambient::types::AmbientMode,
     /// Screen capture enabled.
     pub screen_capture_enabled: bool,
-    /// Selection trigger enabled.
-    pub selection_capture_enabled: bool,
-    /// Stop flag for selection sensor thread.
-    pub selection_stop: std::sync::Arc<std::sync::atomic::AtomicBool>,
     /// Remote access tunnel state.
     pub remote_access: tokio::sync::Mutex<RemoteAccessState>,
     /// Rolling in-memory buffer of recent captures for zero-query Spotlight.
@@ -96,11 +88,7 @@ impl Default for AppState {
             app_handle: None,
             trigger_tx: None,
             last_context_bundle: None,
-            ambient_dismissals: Vec::new(),
-            ambient_mode: crate::ambient::types::AmbientMode::default(),
             screen_capture_enabled: false,
-            selection_capture_enabled: false,
-            selection_stop: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
             remote_access: tokio::sync::Mutex::new(RemoteAccessState::default()),
             working_memory: Arc::new(tokio::sync::Mutex::new(WorkingMemory::new())),
         }
@@ -185,7 +173,6 @@ impl AppState {
         let config = crate::config::load_config();
         self.clipboard_enabled = config.clipboard_enabled;
         self.screen_capture_enabled = config.screen_capture_enabled;
-        self.selection_capture_enabled = config.selection_capture_enabled;
 
         let mut restored_paths = Vec::new();
         for path in config.directory_source_paths() {
