@@ -2826,21 +2826,16 @@ pub async fn set_external_llm(
 }
 
 #[tauri::command]
-pub async fn test_external_llm(endpoint: String, model: String) -> Result<String, String> {
-    use origin_core::llm_provider::{LlmProvider, LlmRequest};
-    let provider = origin_core::llm_provider::OpenAICompatibleProvider::new(endpoint, model);
-    let request = LlmRequest {
-        system_prompt: None,
-        user_prompt: "Say 'hello' and nothing else.".into(),
-        max_tokens: 10,
-        temperature: 0.0,
-        label: None,
-        timeout_secs: None,
+pub async fn test_external_llm(
+    state: tauri::State<'_, State>,
+    endpoint: String,
+    model: String,
+) -> Result<String, String> {
+    let client = {
+        let s = state.read().await;
+        s.client.clone()
     };
-    provider
-        .generate(request)
-        .await
-        .map_err(|e| format!("{}", e))
+    client.test_llm(endpoint, model).await
 }
 
 /// Proxy for `GET /api/on-device-model` — returns per-model cache/load state.
