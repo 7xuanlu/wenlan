@@ -1,0 +1,68 @@
+// SPDX-License-Identifier: Apache-2.0
+//! Strongly-typed phase identifiers for the refinery pipeline.
+//!
+//! Replaces the previous string-based `ALL_PHASES: &[&str]` constant. Compiler
+//! enforces exhaustiveness in `TriggerKind::runs_phase` and catches phase-name
+//! typos at call sites.
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Phase {
+    Decay,
+    Promote,
+    Recaps,
+    Reweave,
+    Reembed,
+    EntityExtraction,
+    CommunityDetection,
+    Emergence,
+    ReDistill,
+    RefinementQueue,
+    DecisionLogs,
+    PruneRejections,
+    KgRethink,
+}
+
+impl Phase {
+    /// All phases in canonical order. Used by `Backstop` trigger.
+    pub const ALL: &'static [Phase] = &[
+        Phase::Decay,
+        Phase::Promote,
+        Phase::Recaps,
+        Phase::Reweave,
+        Phase::Reembed,
+        Phase::EntityExtraction,
+        Phase::CommunityDetection,
+        Phase::Emergence,
+        Phase::ReDistill,
+        Phase::RefinementQueue,
+        Phase::DecisionLogs,
+        Phase::PruneRejections,
+        Phase::KgRethink,
+    ];
+
+    /// Stable string identifier — preserved across the refactor for log
+    /// compatibility and `PhaseResult.name` field consumers.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Phase::Decay => "decay",
+            Phase::Promote => "promote",
+            Phase::Recaps => "recaps",
+            Phase::Reweave => "reweave",
+            Phase::Reembed => "reembed",
+            Phase::EntityExtraction => "entity_extraction",
+            Phase::CommunityDetection => "community_detection",
+            Phase::Emergence => "emergence",
+            Phase::ReDistill => "re-distill",
+            Phase::RefinementQueue => "refinement_queue",
+            Phase::DecisionLogs => "decision_logs",
+            Phase::PruneRejections => "prune_rejections",
+            Phase::KgRethink => "kg_rethink",
+        }
+    }
+}
+
+impl std::fmt::Display for Phase {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}

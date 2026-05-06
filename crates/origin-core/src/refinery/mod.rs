@@ -2,6 +2,9 @@
 pub(crate) mod helpers;
 pub(crate) use helpers::*;
 
+mod phase;
+pub use phase::Phase;
+
 // Re-export distillation functions from `synthesis::distill` to preserve the
 // public API path `origin_core::refinery::{distill_pages, deep_distill_pages,
 // deep_distill_single}`. These callers live in origin-server, eval modules, and
@@ -28,25 +31,6 @@ use crate::prompts::PromptRegistry;
 use serde::Serialize;
 use std::sync::Arc;
 
-/// Canonical list of refinery phase names — single source of truth for the
-/// phase set. Adding a new phase requires adding its name here AND adding it
-/// to the appropriate non-Backstop arms in `TriggerKind::runs_phase`.
-pub const ALL_PHASES: &[&str] = &[
-    "decay",
-    "promote",
-    "recaps",
-    "reweave",
-    "reembed",
-    "entity_extraction",
-    "community_detection",
-    "emergence",
-    "re-distill",
-    "refinement_queue",
-    "decision_logs",
-    "prune_rejections",
-    "kg_rethink",
-];
-
 /// What triggered a refinery cycle. Different triggers run different subsets
 /// of phases — the goal is to do the right work at the right time.
 ///
@@ -65,26 +49,29 @@ pub enum TriggerKind {
 }
 
 impl TriggerKind {
-    /// Returns true if this trigger should run the phase named `phase_name`.
-    /// Unknown phase names always return `false` — typos at call sites fail
-    /// loud as "phase skipped" rather than silently matching.
-    pub fn runs_phase(&self, phase_name: &str) -> bool {
+    /// Returns true if this trigger should run `phase`. The compiler-checked
+    /// `Phase` enum makes typo'd phase names a compile error — earlier
+    /// string-based versions could silently skip phases when names drifted.
+    pub fn runs_phase(&self, phase: Phase) -> bool {
         match self {
-            Self::Backstop => ALL_PHASES.contains(&phase_name),
-            Self::BurstEnd => matches!(phase_name, "recaps" | "refinement_queue"),
+            Self::Backstop => true,
+            Self::BurstEnd => matches!(phase, Phase::Recaps | Phase::RefinementQueue),
             Self::Idle => matches!(
-                phase_name,
-                "community_detection" | "emergence" | "re-distill" | "decision_logs"
+                phase,
+                Phase::CommunityDetection
+                    | Phase::Emergence
+                    | Phase::ReDistill
+                    | Phase::DecisionLogs
             ),
             Self::Daily => matches!(
-                phase_name,
-                "decay"
-                    | "promote"
-                    | "reweave"
-                    | "reembed"
-                    | "entity_extraction"
-                    | "prune_rejections"
-                    | "kg_rethink"
+                phase,
+                Phase::Decay
+                    | Phase::Promote
+                    | Phase::Reweave
+                    | Phase::Reembed
+                    | Phase::EntityExtraction
+                    | Phase::PruneRejections
+                    | Phase::KgRethink
             ),
         }
     }
@@ -205,10 +192,10 @@ pub struct PhaseResult {
     pub headline: Option<String>,
 }
 
-/// Run a named phase, capturing timing and errors. Returns PhaseResult even
+/// Run a typed phase, capturing timing and errors. Returns PhaseResult even
 /// on failure. On error, the nudge is always `Silent` and headline is `None`
 /// — backend failures should not produce user-facing notifications.
-async fn run_phase<F, Fut>(name: &str, f: F) -> PhaseResult
+async fn run_phase<F, Fut>(phase: Phase, f: F) -> PhaseResult
 where
     F: FnOnce() -> Fut,
     Fut: std::future::Future<Output = Result<PhaseOutput, OriginError>>,
@@ -216,7 +203,7 @@ where
     let start = std::time::Instant::now();
     match f().await {
         Ok(output) => PhaseResult {
-            name: name.to_string(),
+            name: phase.as_str().to_string(),
             duration_ms: start.elapsed().as_millis() as u64,
             items_processed: output.items_processed,
             error: None,
@@ -224,7 +211,7 @@ where
             headline: output.headline,
         },
         Err(e) => PhaseResult {
-            name: name.to_string(),
+            name: phase.as_str().to_string(),
             duration_ms: start.elapsed().as_millis() as u64,
             items_processed: 0,
             error: Some(e.to_string()),
@@ -293,8 +280,8 @@ pub async fn run_periodic_steep_with_api(
 
     // Phase 1: Decay pass
     let db_ref = db;
-    if trigger.runs_phase("decay") {
-        let phase = run_phase("decay", || async {
+    if trigger.runs_phase(Phase::Decay) {
+        let phase = run_phase(Phase::Decay, || async {
             let decayed = db_ref.decay_update_confidence().await? as usize;
             log::info!("[refinery] decay steep: updated {} memories", decayed);
             let (nudge, headline) = classify_backfill(decayed);
@@ -310,8 +297,8 @@ pub async fn run_periodic_steep_with_api(
     }
 
     // Phase 1b: Promote uncontradicted memories from 'new' to 'learned'
-    if trigger.runs_phase("promote") {
-        let phase = run_phase("promote", || async {
+    if trigger.runs_phase(Phase::Promote) {
+        let phase = run_phase(Phase::Promote, || async {
             let promoted = db_ref.promote_uncontradicted(7).await?;
             if promoted > 0 {
                 log::info!("[refinery] promoted {} memories to 'learned'", promoted);
@@ -329,8 +316,8 @@ pub async fn run_periodic_steep_with_api(
 
     // Phase 2: Recap generation (prefer API LLM for title generation)
     let recap_llm = api_llm.or(llm);
-    if trigger.runs_phase("recaps") {
-        let phase = run_phase("recaps", || async {
+    if trigger.runs_phase(Phase::Recaps) {
+        let phase = run_phase(Phase::Recaps, || async {
             let generated =
                 crate::synthesis::recaps::generate_recaps(db_ref, recap_llm, prompts, tuning)
                     .await?;
@@ -350,7 +337,7 @@ pub async fn run_periodic_steep_with_api(
     }
 
     // Phase 3: Reweave entity links (link unlinked memories to recently-created entities)
-    if trigger.runs_phase("reweave")
+    if trigger.runs_phase(Phase::Reweave)
         && {
             let elapsed = steep_start.elapsed().as_secs();
             if elapsed >= deadline {
@@ -364,7 +351,7 @@ pub async fn run_periodic_steep_with_api(
             }
         }
     {
-        let phase = run_phase("reweave", || async {
+        let phase = run_phase(Phase::Reweave, || async {
             let count = reweave_entity_links(
                 db_ref,
                 tuning.max_reweave_per_steep,
@@ -383,7 +370,7 @@ pub async fn run_periodic_steep_with_api(
     }
 
     // Phase 4b: Re-embed memories with stale embeddings (structured content model)
-    if trigger.runs_phase("reembed")
+    if trigger.runs_phase(Phase::Reembed)
         && {
             let elapsed = steep_start.elapsed().as_secs();
             if elapsed >= deadline {
@@ -397,7 +384,7 @@ pub async fn run_periodic_steep_with_api(
             }
         }
     {
-        let phase = run_phase("reembed", || async {
+        let phase = run_phase(Phase::Reembed, || async {
             let count = crate::migrations::reembed::run(db_ref, 5).await?;
             let (nudge, headline) = classify_backfill(count);
             Ok(PhaseOutput {
@@ -412,7 +399,7 @@ pub async fn run_periodic_steep_with_api(
 
     // Phase 5: Entity extraction — prefer API LLM (better JSON accuracy), fall back to on-device
     let extract_llm = api_llm.or(llm);
-    if trigger.runs_phase("entity_extraction")
+    if trigger.runs_phase(Phase::EntityExtraction)
         && {
             let elapsed = steep_start.elapsed().as_secs();
             if elapsed >= deadline {
@@ -426,7 +413,7 @@ pub async fn run_periodic_steep_with_api(
             }
         }
     {
-        let phase = run_phase("entity_extraction", || async {
+        let phase = run_phase(Phase::EntityExtraction, || async {
             let count = extract_entities_from_memories(db_ref, extract_llm, prompts, 5).await?;
             let (nudge, headline) = classify_backfill(count);
             Ok(PhaseOutput {
@@ -440,7 +427,7 @@ pub async fn run_periodic_steep_with_api(
     }
 
     // Phase 5b: Community detection (runs before distillation to inform clustering)
-    if trigger.runs_phase("community_detection")
+    if trigger.runs_phase(Phase::CommunityDetection)
         && {
             let elapsed = steep_start.elapsed().as_secs();
             if elapsed >= deadline {
@@ -454,7 +441,7 @@ pub async fn run_periodic_steep_with_api(
             }
         }
     {
-        let phase = run_phase("community_detection", || async {
+        let phase = run_phase(Phase::CommunityDetection, || async {
             let count = db_ref.detect_communities().await?;
             let (nudge, headline) = classify_backfill(count);
             Ok(PhaseOutput {
@@ -475,8 +462,8 @@ pub async fn run_periodic_steep_with_api(
         Some(config.knowledge_path_or_default())
     };
     let kp_ref = knowledge_path.as_deref();
-    if trigger.runs_phase("emergence") {
-        let phase = run_phase("emergence", || async {
+    if trigger.runs_phase(Phase::Emergence) {
+        let phase = run_phase(Phase::Emergence, || async {
             let count = distill_pages(db_ref, compile_llm, prompts, distillation, kp_ref).await?;
             let (nudge, headline) = classify_emergence(count);
             Ok(PhaseOutput {
@@ -491,7 +478,7 @@ pub async fn run_periodic_steep_with_api(
     }
 
     // Phase 6b: Re-distill — refresh concepts whose source memories changed
-    if trigger.runs_phase("re-distill")
+    if trigger.runs_phase(Phase::ReDistill)
         && {
             let elapsed = steep_start.elapsed().as_secs();
             if elapsed >= deadline {
@@ -505,7 +492,7 @@ pub async fn run_periodic_steep_with_api(
             }
         }
     {
-        let phase = run_phase("re-distill", || async {
+        let phase = run_phase(Phase::ReDistill, || async {
             let changed = redistill_changed_pages(db_ref, compile_llm, prompts).await?;
             // Also re-distill concepts explicitly marked stale by topic-key upserts.
             let stale = re_distill_stale_pages(db_ref, compile_llm, prompts).await?;
@@ -522,8 +509,8 @@ pub async fn run_periodic_steep_with_api(
     }
 
     // Phase 6c: Process refinement queue (contradictions + entity suggestions only)
-    if trigger.runs_phase("refinement_queue") {
-        let phase = run_phase("refinement_queue", || async {
+    if trigger.runs_phase(Phase::RefinementQueue) {
+        let phase = run_phase(Phase::RefinementQueue, || async {
             let count = process_refinement_queue(db_ref, llm, prompts, tuning).await?;
             let (nudge, headline) = classify_refinement_queue(count);
             Ok(PhaseOutput {
@@ -539,7 +526,7 @@ pub async fn run_periodic_steep_with_api(
     // Phase 7: Decision log generation (lightweight recap for decisions).
     // Last deadline-gated phase: omit `deadline_hit = true` — no phase after
     // this reads the flag, so the assignment would be dead code (clippy -D).
-    if trigger.runs_phase("decision_logs")
+    if trigger.runs_phase(Phase::DecisionLogs)
         && {
             let elapsed = steep_start.elapsed().as_secs();
             if elapsed >= deadline {
@@ -552,7 +539,7 @@ pub async fn run_periodic_steep_with_api(
             }
         }
     {
-        let phase = run_phase("decision_logs", || async {
+        let phase = run_phase(Phase::DecisionLogs, || async {
             let count = crate::synthesis::decision_logs::generate_decision_logs(
                 db_ref, llm, prompts, tuning,
             )
@@ -575,8 +562,8 @@ pub async fn run_periodic_steep_with_api(
     // Promoted from tail cleanup to a proper phase in PR A so it can be
     // gated uniformly by TriggerKind and tracked in result.phases like
     // every other phase.
-    if trigger.runs_phase("prune_rejections") {
-        let phase = run_phase("prune_rejections", || async {
+    if trigger.runs_phase(Phase::PruneRejections) {
+        let phase = run_phase(Phase::PruneRejections, || async {
             let count = db_ref.prune_rejections(30).await?;
             // Clean up concept_sources rows whose source memories were deleted.
             match db_ref.cleanup_orphaned_page_sources().await {
@@ -597,94 +584,11 @@ pub async fn run_periodic_steep_with_api(
         phases.push(phase);
     }
 
-    // Phase 9: Entity backfill — gradually re-extract entities from memories
-    // that were stored before the chat template fix (or where extraction silently
-    // failed). Processes a small batch per steep to avoid GPU overload.
-    if trigger.runs_phase("entity_backfill") {
-        if let Some(llm_ref) = llm {
-            let phase = run_phase("entity_backfill", || async {
-                let batch = db_ref
-                    .find_memories_without_entities(tuning.entity_backfill_batch_size)
-                    .await?;
-                if batch.is_empty() {
-                    return Ok(PhaseOutput {
-                        items_processed: 0,
-                        nudge: Nudge::Silent,
-                        headline: None,
-                    });
-                }
-                let mut extracted = 0usize;
-                for (source_id, content) in &batch {
-                    match extract_single_memory_entities(
-                        db_ref, llm_ref, prompts, source_id, content,
-                    )
-                    .await
-                    {
-                        Ok(Some(_)) => {
-                            extracted += 1;
-                            // Record a step so the memory becomes eligible for
-                            // distillation (find_distillation_clusters gates on
-                            // EXISTS enrichment_steps; without this, file-synced
-                            // memories that bypass /api/memory/store would never
-                            // pass the gate).
-                            let _ = db_ref
-                                .record_enrichment_step(source_id, "entity_backfill", "ok", None)
-                                .await;
-                        }
-                        Ok(None) => {
-                            // Mark as attempted so we don't retry forever
-                            let _ = db_ref.update_memory_entity_id(source_id, "").await;
-                            let _ = db_ref
-                                .record_enrichment_step(
-                                    source_id,
-                                    "entity_backfill",
-                                    "skipped",
-                                    Some("no entities extracted"),
-                                )
-                                .await;
-                        }
-                        Err(e) => {
-                            log::warn!("[refinery] entity_backfill failed for {}: {e}", source_id);
-                            // Record the failure so the memory eventually becomes
-                            // eligible for distillation (per spec: "once at least
-                            // one step is recorded — even if failed — the memory
-                            // is admitted, deliberate to avoid stuck-forever").
-                            let _ = db_ref
-                                .record_enrichment_step(
-                                    source_id,
-                                    "entity_backfill",
-                                    "failed",
-                                    Some(&e.to_string()),
-                                )
-                                .await;
-                            break; // LLM may be down, stop batch
-                        }
-                    }
-                }
-                if extracted > 0 {
-                    log::info!(
-                        "[refinery] entity_backfill: extracted entities for {}/{} memories",
-                        extracted,
-                        batch.len()
-                    );
-                }
-                let (nudge, headline) = classify_backfill(extracted);
-                Ok(PhaseOutput {
-                    items_processed: extracted,
-                    nudge,
-                    headline,
-                })
-            })
-            .await;
-            phases.push(phase);
-        }
-    }
-
     // Phase 10: KG rethink — periodic knowledge graph quality maintenance.
     // Rate-limited by `kg_rethink_interval_hours` (default 168h = weekly)
     // via `app_metadata.last_kg_rethink_ts`. All five sub-phases are cheap
     // when the graph is clean; the gate mainly avoids redundant log spam.
-    if trigger.runs_phase("kg_rethink") {
+    if trigger.runs_phase(Phase::KgRethink) {
         let interval_secs = (tuning.kg_rethink_interval_hours as i64).saturating_mul(3600);
         let now = chrono::Utc::now().timestamp();
         let last_ts: i64 = db
@@ -695,7 +599,7 @@ pub async fn run_periodic_steep_with_api(
             .and_then(|s| s.parse().ok())
             .unwrap_or(0);
         if now.saturating_sub(last_ts) >= interval_secs {
-            let phase = run_phase("kg_rethink", || async {
+            let phase = run_phase(Phase::KgRethink, || async {
                 let report = crate::kg_quality::run_rethink(db_ref, llm, tuning).await?;
                 let total = report.merge_candidates
                     + report.types_normalized
@@ -1216,7 +1120,7 @@ mod tests {
 
     #[test]
     fn test_trigger_kind_backstop_runs_all_phases() {
-        for &phase in ALL_PHASES {
+        for &phase in Phase::ALL {
             assert!(
                 TriggerKind::Backstop.runs_phase(phase),
                 "Backstop should run {}",
@@ -1228,71 +1132,61 @@ mod tests {
     #[test]
     fn test_trigger_kind_burst_end_subset() {
         let t = TriggerKind::BurstEnd;
-        assert!(t.runs_phase("recaps"));
-        assert!(t.runs_phase("refinement_queue"));
+        assert!(t.runs_phase(Phase::Recaps));
+        assert!(t.runs_phase(Phase::RefinementQueue));
         // Should NOT run anything else
-        assert!(!t.runs_phase("decay"));
-        assert!(!t.runs_phase("promote"));
-        assert!(!t.runs_phase("emergence"));
-        assert!(!t.runs_phase("community_detection"));
-        assert!(!t.runs_phase("decision_logs"));
-        assert!(!t.runs_phase("prune_rejections"));
+        assert!(!t.runs_phase(Phase::Decay));
+        assert!(!t.runs_phase(Phase::Promote));
+        assert!(!t.runs_phase(Phase::Emergence));
+        assert!(!t.runs_phase(Phase::CommunityDetection));
+        assert!(!t.runs_phase(Phase::DecisionLogs));
+        assert!(!t.runs_phase(Phase::PruneRejections));
     }
 
     #[test]
     fn test_trigger_kind_idle_subset() {
         let t = TriggerKind::Idle;
-        assert!(t.runs_phase("community_detection"));
-        assert!(t.runs_phase("emergence"));
-        assert!(t.runs_phase("re-distill"));
-        assert!(t.runs_phase("decision_logs"));
+        assert!(t.runs_phase(Phase::CommunityDetection));
+        assert!(t.runs_phase(Phase::Emergence));
+        assert!(t.runs_phase(Phase::ReDistill));
+        assert!(t.runs_phase(Phase::DecisionLogs));
         // Should NOT run burst/maintenance/backfill phases
-        assert!(!t.runs_phase("recaps"));
-        assert!(!t.runs_phase("refinement_queue"));
-        assert!(!t.runs_phase("decay"));
-        assert!(!t.runs_phase("promote"));
-        assert!(!t.runs_phase("reweave"));
-        assert!(!t.runs_phase("reembed"));
-        assert!(!t.runs_phase("entity_extraction"));
-        assert!(!t.runs_phase("prune_rejections"));
+        assert!(!t.runs_phase(Phase::Recaps));
+        assert!(!t.runs_phase(Phase::RefinementQueue));
+        assert!(!t.runs_phase(Phase::Decay));
+        assert!(!t.runs_phase(Phase::Promote));
+        assert!(!t.runs_phase(Phase::Reweave));
+        assert!(!t.runs_phase(Phase::Reembed));
+        assert!(!t.runs_phase(Phase::EntityExtraction));
+        assert!(!t.runs_phase(Phase::PruneRejections));
     }
 
     #[test]
     fn test_trigger_kind_daily_subset() {
         let t = TriggerKind::Daily;
-        assert!(t.runs_phase("decay"));
-        assert!(t.runs_phase("promote"));
-        assert!(t.runs_phase("reweave"));
-        assert!(t.runs_phase("reembed"));
-        assert!(t.runs_phase("entity_extraction"));
-        assert!(t.runs_phase("prune_rejections"));
+        assert!(t.runs_phase(Phase::Decay));
+        assert!(t.runs_phase(Phase::Promote));
+        assert!(t.runs_phase(Phase::Reweave));
+        assert!(t.runs_phase(Phase::Reembed));
+        assert!(t.runs_phase(Phase::EntityExtraction));
+        assert!(t.runs_phase(Phase::PruneRejections));
         // Should NOT run synthesis or burst phases
-        assert!(!t.runs_phase("recaps"));
-        assert!(!t.runs_phase("emergence"));
-        assert!(!t.runs_phase("re-distill"));
-        assert!(!t.runs_phase("decision_logs"));
-        assert!(!t.runs_phase("community_detection"));
-        assert!(!t.runs_phase("refinement_queue"));
-    }
-
-    #[test]
-    fn test_trigger_kind_unknown_phase_returns_false() {
-        // Defensive: typos in call sites must NOT silently match.
-        assert!(!TriggerKind::Backstop.runs_phase("typo"));
-        assert!(!TriggerKind::Backstop.runs_phase(""));
-        assert!(!TriggerKind::BurstEnd.runs_phase("typo"));
-        assert!(!TriggerKind::Idle.runs_phase("typo"));
-        assert!(!TriggerKind::Daily.runs_phase("typo"));
+        assert!(!t.runs_phase(Phase::Recaps));
+        assert!(!t.runs_phase(Phase::Emergence));
+        assert!(!t.runs_phase(Phase::ReDistill));
+        assert!(!t.runs_phase(Phase::DecisionLogs));
+        assert!(!t.runs_phase(Phase::CommunityDetection));
+        assert!(!t.runs_phase(Phase::RefinementQueue));
     }
 
     #[test]
     fn test_every_phase_has_non_backstop_trigger() {
-        // Safety net: if a new phase is added to ALL_PHASES but not assigned
+        // Safety net: if a new phase is added to `Phase::ALL` but not assigned
         // to BurstEnd, Idle, or Daily, it silently becomes backstop-only
         // (running every 6 hours instead of at the right time). This test
         // catches that at compile/test time.
         let non_backstop = [TriggerKind::BurstEnd, TriggerKind::Idle, TriggerKind::Daily];
-        for &phase in ALL_PHASES {
+        for &phase in Phase::ALL {
             let covered = non_backstop.iter().any(|t| t.runs_phase(phase));
             assert!(
                 covered,
@@ -2165,7 +2059,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_run_phase_propagates_nudge_and_headline() {
-        let result = run_phase("test_phase", || async {
+        let result = run_phase(Phase::Decay, || async {
             Ok(PhaseOutput {
                 items_processed: 5,
                 nudge: Nudge::Wow,
@@ -2174,7 +2068,7 @@ mod tests {
         })
         .await;
 
-        assert_eq!(result.name, "test_phase");
+        assert_eq!(result.name, "decay");
         assert_eq!(result.items_processed, 5);
         assert_eq!(result.nudge, Nudge::Wow);
         assert_eq!(result.headline.as_deref(), Some("Origin did a wow thing"));
@@ -2183,14 +2077,14 @@ mod tests {
 
     #[tokio::test]
     async fn test_run_phase_on_error_is_silent() {
-        let result = run_phase("test_phase_err", || async {
+        let result = run_phase(Phase::Decay, || async {
             Err::<PhaseOutput, _>(crate::error::OriginError::VectorDb(
                 "test failure".to_string(),
             ))
         })
         .await;
 
-        assert_eq!(result.name, "test_phase_err");
+        assert_eq!(result.name, "decay");
         assert_eq!(result.items_processed, 0);
         assert_eq!(result.nudge, Nudge::Silent);
         assert!(result.headline.is_none());
