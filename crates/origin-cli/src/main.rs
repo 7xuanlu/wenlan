@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 mod client;
+mod commands;
 mod output;
 
 use clap::{Parser, Subcommand};
@@ -26,20 +27,16 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
-    /// Show daemon health + version (stub — wired in later task).
+    /// Show daemon health + version.
     Status,
 }
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
-    let _format = cli.format.resolve();
+    let client = client::OriginClient::from_env();
     match cli.command {
-        Commands::Status => {
-            println!(
-                "origin-cli v0.3.0 — status subcommand stub (Task 3 wires the real implementation)"
-            );
-            Ok(())
-        }
+        Commands::Status => commands::status::run(&client, cli.format, cli.quiet).await?,
     }
+    Ok(())
 }
