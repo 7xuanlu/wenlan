@@ -5,11 +5,14 @@
 //! origin-core, origin-server, and the Tauri app. Dependencies are
 //! limited to serde and serde_json -- no heavy runtime deps.
 
+pub mod briefing;
 pub mod entities;
 pub mod events;
 pub mod import;
 pub mod memory;
+pub mod narrative;
 pub mod onboarding;
+pub mod pages;
 pub mod requests;
 pub mod responses;
 pub mod sources;
@@ -17,6 +20,7 @@ pub mod system_info;
 pub mod working_memory;
 
 // Re-export commonly used types at crate root for convenience.
+pub use briefing::{BriefingResponse, ContradictionItem};
 pub use entities::{
     Entity, EntityDetail, EntitySearchResult, EntitySuggestion, Observation, RecentRelation,
     Relation, RelationWithEntity,
@@ -28,6 +32,9 @@ pub use memory::{
     RejectionRecord, RetrievalEvent, SearchResult, SessionSnapshot, SnapshotCapture,
     SnapshotCaptureWithContent, Space, TopMemory, TypeBreakdown,
 };
+pub use narrative::NarrativeResponse;
+pub use pages::Page;
+pub use responses::{MemoryDetail, PendingRevision};
 pub use sources::{MemoryType, RawDocument, SourceType, StabilityTier, SyncStatus};
 
 use serde::{Deserialize, Serialize};

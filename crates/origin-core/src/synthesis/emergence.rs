@@ -151,7 +151,7 @@ pub(crate) async fn assign_orphan_memories(
                         .collect();
                     let content_text = contents.join("\n\n");
 
-                    let page_id = crate::pages::Page::new_id();
+                    let page_id = crate::pages::new_page_id();
                     let now = chrono::Utc::now().to_rfc3339();
 
                     let _ = db

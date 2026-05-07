@@ -307,6 +307,36 @@ pub struct MemoryDetailResponse {
     pub memory: Option<MemoryItem>,
 }
 
+/// Detailed chunk-level view of a stored memory, returned by `/api/chunks/{source_id}`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MemoryDetail {
+    pub id: String,
+    pub content: String,
+    pub title: String,
+    pub source_id: String,
+    pub chunk_index: i32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub chunk_type: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub language: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub semantic_unit: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub byte_start: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub byte_end: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub summary: Option<String>,
+}
+
+/// A pending revision waiting for human approval (Protected tier supersede).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PendingRevision {
+    pub source_id: String,
+    pub content: String,
+    pub source_agent: Option<String>,
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 pub struct VersionChainResponse {
     pub versions: Vec<crate::memory::MemoryVersionItem>,

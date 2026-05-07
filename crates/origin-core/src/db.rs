@@ -531,28 +531,8 @@ pub use origin_types::{
     RejectionRecord, Relation, RelationWithEntity, SearchResult, Space, TopMemory, TypeBreakdown,
 };
 
-// --- Types still unique to the DB layer ----------------------------------
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct MemoryDetail {
-    pub id: String,
-    pub content: String,
-    pub title: String,
-    pub source_id: String,
-    pub chunk_index: i32,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub chunk_type: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub language: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub semantic_unit: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub byte_start: Option<i64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub byte_end: Option<i64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub summary: Option<String>,
-}
+// Re-export wire type from origin-types so existing consumers keep working.
+pub use origin_types::responses::MemoryDetail;
 
 #[derive(Debug, Clone)]
 pub struct DistillationCluster {
@@ -564,13 +544,8 @@ pub struct DistillationCluster {
     pub estimated_tokens: usize,
 }
 
-/// A pending revision waiting for human approval (Protected tier supersede).
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct PendingRevision {
-    pub source_id: String,
-    pub content: String,
-    pub source_agent: Option<String>,
-}
+// Re-export wire type from origin-types so existing consumers keep working.
+pub use origin_types::responses::PendingRevision;
 
 /// A memory chunk that needs its embedding refreshed.
 #[derive(Debug, Clone)]

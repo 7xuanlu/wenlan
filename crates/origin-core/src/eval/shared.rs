@@ -1953,7 +1953,7 @@ pub async fn run_concept_distillation_batch_api(
 
         let source_refs: Vec<&str> = meta.source_ids.iter().map(|s| s.as_str()).collect();
         let now = chrono::Utc::now().to_rfc3339();
-        let concept_id = crate::pages::Page::new_id();
+        let concept_id = crate::pages::new_page_id();
 
         db.insert_page(
             &concept_id,
