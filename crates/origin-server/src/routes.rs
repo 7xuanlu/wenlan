@@ -773,6 +773,31 @@ pub async fn handle_recent_pages(
     Ok(Json(items))
 }
 
+/// POST /api/llm/test — probe an OpenAI-compatible LLM endpoint with a 1-shot prompt.
+/// Validates a custom endpoint from the app settings UI before saving.
+pub async fn handle_test_llm(
+    Json(req): Json<origin_types::requests::TestLlmRequest>,
+) -> Result<Json<origin_types::requests::TestLlmResponse>, ServerError> {
+    use origin_core::llm_provider::{LlmProvider, LlmRequest, OpenAICompatibleProvider};
+
+    let provider = OpenAICompatibleProvider::new(req.endpoint, req.model);
+    let llm_req = LlmRequest {
+        system_prompt: None,
+        user_prompt: req
+            .prompt
+            .unwrap_or_else(|| "Say 'hello' and nothing else.".into()),
+        max_tokens: 10,
+        temperature: 0.0,
+        label: None,
+        timeout_secs: None,
+    };
+    let response = provider
+        .generate(llm_req)
+        .await
+        .map_err(|e| ServerError::Internal(format!("test_llm: {e}")))?;
+    Ok(Json(origin_types::requests::TestLlmResponse { response }))
+}
+
 /// POST /api/shutdown — exits the daemon process cleanly.
 /// Returns 200 OK, then exits 0 after a brief delay so the response is delivered.
 pub async fn handle_shutdown() -> &'static str {
