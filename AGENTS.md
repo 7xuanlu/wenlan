@@ -38,6 +38,9 @@ cargo check -p origin-types
 cargo check -p origin-core
 cargo check -p origin-server
 cargo check -p origin-app              # the Tauri app
+cargo check -p origin                  # the CLI binary
+cargo build -p origin --release
+./target/release/origin --help
 
 # Run tests for a single crate
 cargo test -p origin-core
@@ -189,6 +192,7 @@ The repo is a Cargo workspace with 4 crates:
 | `crates/origin-types` | Shared API boundary types (request/response, memory, entities). License: Apache-2.0 so `origin-mcp` (MIT) and other downstream consumers can use it without AGPL contamination. | serde only — no heavy deps |
 | `crates/origin-core` | All business logic: DB, embeddings, LLM engine, search, classification, knowledge graph, refinery, pages, export, eval. **Must have NO tauri or axum dependencies.** | libSQL, FastEmbed, llama-cpp-2, hf-hub |
 | `crates/origin-server` | Headless HTTP daemon on `127.0.0.1:7878`. Depends on `origin-core`. Provides `install/uninstall/status` subcommands for launchd management. | axum, tower, clap |
+| `crates/origin-cli` | CLI binary `origin` (Apache-2.0). Talks to daemon HTTP via `origin-types`. Subcommands: status/search/recall/store/list/agents. | reqwest, clap |
 | `app/` (crate name `origin-app`) | Thin Tauri desktop client. Depends on `origin-types` + `reqwest` (HTTP) + a minimal bit of `origin-core` for sensor utilities. All data commands proxy to the daemon. | tauri, reqwest |
 
 The daemon (`origin-server`) is the single source of truth. The Tauri app process can come and go; memory storage continues in the daemon. External tools (`origin-mcp`, curl, etc.) talk to the same daemon.
