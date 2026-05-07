@@ -75,6 +75,13 @@ pub fn compute_effective_confidence(
 }
 
 /// Trait that all data source connectors must implement.
+///
+/// Intentionally duplicated in `origin-app/app/src/sources/data_source.rs`
+/// because origin-app has no origin-core dependency (Phase 5-D PR2). The
+/// two trait declarations are identical except for the error type
+/// (`OriginError` here, `AppError` in origin-app). The shared data shapes
+/// (`RawDocument`, `SourceStatus`) live in origin-types so connectors can
+/// move freely between crates.
 #[async_trait]
 pub trait DataSource: Send + Sync {
     /// Unique name for this source ("gmail", "notion", etc.)
