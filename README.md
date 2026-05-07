@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="./docs/assets/social-preview.png" alt="Origin: Where AI memory compounds." width="100%">
+  <img src="./docs/assets/social-preview.png" alt="Origin: Where Personal AI Memory Compounds." width="100%">
 </p>
 
 [![CI](https://github.com/7xuanlu/origin/actions/workflows/ci.yml/badge.svg)](https://github.com/7xuanlu/origin/actions/workflows/ci.yml)
