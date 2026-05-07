@@ -224,4 +224,172 @@ mod tests {
         let config: Config = serde_json::from_str("{}").unwrap();
         assert!(config.watch_paths.is_empty());
     }
+
+    // --- save_config / load_config I/O roundtrip ---
+
+    #[test]
+    fn save_load_config_roundtrip() {
+        let tmp = tempfile::tempdir().unwrap();
+        // Point config_path() at our temp dir via the env override.
+        // serial_test is not used here because env mutation is process-wide;
+        // each call sets and then the test's scope owns the dir, and the dir
+        // is unique per invocation, so races are avoided.
+        std::env::set_var("ORIGIN_DATA_DIR", tmp.path());
+        let mut config = Config {
+            clipboard_enabled: true,
+            ..Config::default()
+        };
+        config.watch_paths = vec![PathBuf::from("/test/path")];
+        save_config(&config).unwrap();
+        let loaded = load_config();
+        // After load_config, migrate() runs: watch_paths -> sources, watch_paths cleared.
+        assert!(loaded.clipboard_enabled);
+        assert_eq!(loaded.sources.len(), 1);
+        assert_eq!(loaded.sources[0].path, PathBuf::from("/test/path"));
+        assert!(loaded.watch_paths.is_empty());
+        std::env::remove_var("ORIGIN_DATA_DIR");
+    }
+
+    // --- setup_completed ---
+
+    #[test]
+    fn test_setup_completed_defaults_to_false() {
+        let config = Config::default();
+        assert!(!config.setup_completed);
+    }
+
+    #[test]
+    fn test_setup_completed_roundtrip() {
+        let config = Config {
+            setup_completed: true,
+            ..Config::default()
+        };
+        let json = serde_json::to_string(&config).unwrap();
+        let restored: Config = serde_json::from_str(&json).unwrap();
+        assert!(restored.setup_completed);
+    }
+
+    #[test]
+    fn test_setup_completed_missing_in_json_defaults_false() {
+        let json = r#"{"clipboard_enabled": true}"#;
+        let config: Config = serde_json::from_str(json).unwrap();
+        assert!(!config.setup_completed);
+    }
+
+    // --- remote_access_enabled ---
+
+    #[test]
+    fn test_remote_access_enabled_defaults_to_false() {
+        let config = Config::default();
+        assert!(!config.remote_access_enabled);
+    }
+
+    #[test]
+    fn test_remote_access_enabled_roundtrip() {
+        let config = Config {
+            remote_access_enabled: true,
+            ..Config::default()
+        };
+        let json = serde_json::to_string(&config).unwrap();
+        let restored: Config = serde_json::from_str(&json).unwrap();
+        assert!(restored.remote_access_enabled);
+    }
+
+    #[test]
+    fn test_remote_access_enabled_missing_in_json_defaults_false() {
+        let json = r#"{"clipboard_enabled": true}"#;
+        let config: Config = serde_json::from_str(json).unwrap();
+        assert!(!config.remote_access_enabled);
+    }
+
+    // --- screen_capture_enabled ---
+
+    #[test]
+    fn test_screen_capture_enabled_defaults_to_false() {
+        let config = Config::default();
+        assert!(!config.screen_capture_enabled);
+    }
+
+    #[test]
+    fn test_screen_capture_enabled_roundtrip() {
+        let config = Config {
+            screen_capture_enabled: true,
+            ..Config::default()
+        };
+        let json = serde_json::to_string(&config).unwrap();
+        let restored: Config = serde_json::from_str(&json).unwrap();
+        assert!(restored.screen_capture_enabled);
+    }
+
+    #[test]
+    fn test_screen_capture_enabled_missing_in_json_defaults_false() {
+        let json = r#"{"clipboard_enabled": true}"#;
+        let config: Config = serde_json::from_str(json).unwrap();
+        assert!(!config.screen_capture_enabled);
+    }
+
+    // --- migrate() / watch_paths / sources / knowledge_path ---
+
+    #[test]
+    fn test_config_defaults_empty_sources() {
+        let config: Config = serde_json::from_str("{}").unwrap();
+        let mut config = config;
+        config.migrate();
+        assert!(config.sources.is_empty());
+        assert!(config.knowledge_path.is_none());
+    }
+
+    #[test]
+    fn config_watch_paths_migration() {
+        let old_json = r#"{
+            "watch_paths": ["/Users/x/docs", "/Users/x/notes"],
+            "clipboard_enabled": false
+        }"#;
+        let mut config: Config = serde_json::from_str(old_json).unwrap();
+        config.migrate();
+        assert_eq!(config.sources.len(), 2);
+        assert_eq!(config.sources[0].source_type, SourceType::Directory);
+        assert_eq!(config.sources[0].path, PathBuf::from("/Users/x/docs"));
+        assert_eq!(config.sources[1].path, PathBuf::from("/Users/x/notes"));
+        // Legacy field cleared after migration.
+        assert!(config.watch_paths.is_empty());
+    }
+
+    #[test]
+    fn config_knowledge_path_default() {
+        let config: Config = serde_json::from_str("{}").unwrap();
+        let default_path = dirs::home_dir().unwrap().join("Origin/knowledge");
+        assert_eq!(config.knowledge_path_or_default(), default_path);
+    }
+
+    #[test]
+    fn config_knowledge_path_custom() {
+        let json = r#"{"knowledge_path": "/my/custom/path"}"#;
+        let config: Config = serde_json::from_str(json).unwrap();
+        assert_eq!(
+            config.knowledge_path_or_default(),
+            PathBuf::from("/my/custom/path")
+        );
+    }
+
+    #[test]
+    fn directory_source_paths() {
+        let json = r#"{"sources": [
+            {"id": "d1", "source_type": "directory", "path": "/a", "status": "Active", "last_sync": null, "file_count": 0, "memory_count": 0},
+            {"id": "o1", "source_type": "obsidian", "path": "/b", "status": "Active", "last_sync": null, "file_count": 0, "memory_count": 0}
+        ]}"#;
+        let config: Config = serde_json::from_str(json).unwrap();
+        let paths = config.directory_source_paths();
+        assert_eq!(paths.len(), 1);
+        assert_eq!(paths[0], PathBuf::from("/a"));
+    }
+
+    // --- unknown-field tolerance ---
+
+    #[test]
+    fn dwell_enabled_alias() {
+        // dwell_enabled was removed with ambient capture; verify unknown fields are ignored.
+        let json = r#"{"dwell_enabled": true}"#;
+        let _config: Config = serde_json::from_str(json).unwrap();
+    }
 }
