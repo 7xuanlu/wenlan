@@ -3,11 +3,21 @@
 //! Tests using bundled fixtures run in CI (FastEmbed model cached in GitHub Actions).
 //! Tests needing external data (locomo10.json, longmemeval) or real GPU LLM stay `#[ignore]`.
 
-use origin_lib::eval::runner::{run_eval, GateMode};
+use origin_core::eval::runner::{run_eval, GateMode};
+
+/// Resolve the eval data root. Defaults to `app/eval/` (legacy location).
+/// Override via `ORIGIN_EVAL_ROOT` env var to support Phase 5 PR3 extraction
+/// or local relocation. Centralizing this means future moves touch one site.
+fn eval_root() -> std::path::PathBuf {
+    if let Ok(p) = std::env::var("ORIGIN_EVAL_ROOT") {
+        return std::path::PathBuf::from(p);
+    }
+    std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../app/eval")
+}
 
 #[tokio::test]
 async fn test_eval_harness_produces_report() {
-    let fixture_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("eval/fixtures");
+    let fixture_dir = eval_root().join("fixtures");
     let tmp = tempfile::tempdir().unwrap();
 
     let report = run_eval(&fixture_dir, tmp.path(), None, None, GateMode::Off)
@@ -34,7 +44,7 @@ async fn test_eval_harness_produces_report() {
 
 #[tokio::test]
 async fn test_eval_metrics_are_bounded() {
-    let fixture_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("eval/fixtures");
+    let fixture_dir = eval_root().join("fixtures");
     let tmp = tempfile::tempdir().unwrap();
 
     let report = run_eval(&fixture_dir, tmp.path(), None, None, GateMode::Off)
@@ -62,7 +72,7 @@ async fn test_eval_metrics_are_bounded() {
 
 #[tokio::test]
 async fn test_eval_baseline_comparison() {
-    let fixture_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("eval/fixtures");
+    let fixture_dir = eval_root().join("fixtures");
     let tmp = tempfile::tempdir().unwrap();
     let baseline_path = tmp.path().join("baseline.json");
 
@@ -96,7 +106,7 @@ async fn test_eval_baseline_comparison() {
 
 #[tokio::test]
 async fn test_eval_with_gate_filter() {
-    let fixture_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("eval/fixtures");
+    let fixture_dir = eval_root().join("fixtures");
     let tmp = tempfile::tempdir().unwrap();
 
     // Run all three modes
@@ -178,14 +188,13 @@ async fn test_eval_with_gate_filter() {
 #[tokio::test]
 #[ignore]
 async fn test_locomo_benchmark() {
-    let locomo_path =
-        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("eval/data/locomo10.json");
+    let locomo_path = eval_root().join("data/locomo10.json");
     if !locomo_path.exists() {
         println!("SKIP: locomo10.json not found at {:?}", locomo_path);
         return;
     }
 
-    let report = origin_lib::eval::locomo::run_locomo_eval(&locomo_path)
+    let report = origin_core::eval::locomo::run_locomo_eval(&locomo_path)
         .await
         .unwrap();
 
@@ -255,14 +264,13 @@ async fn test_locomo_benchmark() {
 #[tokio::test]
 #[ignore]
 async fn test_locomo_gate_comparison() {
-    let locomo_path =
-        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("eval/data/locomo10.json");
+    let locomo_path = eval_root().join("data/locomo10.json");
     if !locomo_path.exists() {
         println!("SKIP: locomo10.json not found");
         return;
     }
 
-    use origin_lib::eval::locomo::{run_locomo_eval_with_gate, LocomoGateMode};
+    use origin_core::eval::locomo::{run_locomo_eval_with_gate, LocomoGateMode};
 
     let clean = run_locomo_eval_with_gate(&locomo_path, LocomoGateMode::Clean)
         .await
@@ -343,7 +351,7 @@ async fn test_locomo_gate_comparison() {
 #[ignore]
 async fn test_longmemeval_benchmark() {
     // Try oracle first (small, ~15MB), then S-cleaned (large, ~277MB)
-    let data_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("eval/data");
+    let data_dir = eval_root().join("data");
     let oracle_path = data_dir.join("longmemeval_oracle.json");
     let s_path = data_dir.join("longmemeval_s_cleaned.json");
 
@@ -363,7 +371,7 @@ async fn test_longmemeval_benchmark() {
 
     println!("Running LongMemEval benchmark from {:?}", path);
 
-    let report = origin_lib::eval::longmemeval::run_longmemeval_eval(&path)
+    let report = origin_core::eval::longmemeval::run_longmemeval_eval(&path)
         .await
         .unwrap();
 
@@ -392,14 +400,13 @@ async fn test_longmemeval_benchmark() {
 #[tokio::test]
 #[ignore]
 async fn test_longmemeval_gate_comparison() {
-    let path =
-        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("eval/data/longmemeval_oracle.json");
+    let path = eval_root().join("data/longmemeval_oracle.json");
     if !path.exists() {
         println!("SKIP: longmemeval_oracle.json not found");
         return;
     }
 
-    use origin_lib::eval::longmemeval::{run_longmemeval_eval_with_gate, LongMemEvalGateMode};
+    use origin_core::eval::longmemeval::{run_longmemeval_eval_with_gate, LongMemEvalGateMode};
 
     let clean = run_longmemeval_eval_with_gate(&path, LongMemEvalGateMode::Clean)
         .await
@@ -482,11 +489,11 @@ async fn test_longmemeval_gate_comparison() {
 
 #[tokio::test]
 async fn test_lifecycle_fixture_with_mock_llm() {
-    use origin_lib::eval::lifecycle::{run_lifecycle_fixture, EvalMockLlm};
+    use origin_core::eval::lifecycle::{run_lifecycle_fixture, EvalMockLlm};
     use std::sync::Arc;
 
-    let fixture_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("eval/fixtures");
-    let mock: Arc<dyn origin_lib::llm_provider::LlmProvider> = Arc::new(EvalMockLlm::new());
+    let fixture_dir = eval_root().join("fixtures");
+    let mock: Arc<dyn origin_core::llm_provider::LlmProvider> = Arc::new(EvalMockLlm::new());
 
     let report = run_lifecycle_fixture(&fixture_dir, Some(mock))
         .await
@@ -541,9 +548,9 @@ async fn test_lifecycle_fixture_with_mock_llm() {
 
 #[tokio::test]
 async fn test_lifecycle_fixture_no_llm() {
-    use origin_lib::eval::lifecycle::run_lifecycle_fixture;
+    use origin_core::eval::lifecycle::run_lifecycle_fixture;
 
-    let fixture_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("eval/fixtures");
+    let fixture_dir = eval_root().join("fixtures");
 
     let report = run_lifecycle_fixture(&fixture_dir, None).await.unwrap();
 
@@ -588,16 +595,16 @@ async fn test_lifecycle_fixture_no_llm() {
 #[tokio::test]
 #[ignore]
 async fn test_lifecycle_locomo_with_mock_llm() {
-    use origin_lib::eval::lifecycle::{run_lifecycle_locomo, EvalMockLlm};
+    use origin_core::eval::lifecycle::{run_lifecycle_locomo, EvalMockLlm};
     use std::sync::Arc;
 
-    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("eval/data/locomo10.json");
+    let path = eval_root().join("data/locomo10.json");
     if !path.exists() {
         println!("SKIP: locomo10.json not found");
         return;
     }
 
-    let mock: Arc<dyn origin_lib::llm_provider::LlmProvider> = Arc::new(EvalMockLlm::new());
+    let mock: Arc<dyn origin_core::llm_provider::LlmProvider> = Arc::new(EvalMockLlm::new());
     let report = run_lifecycle_locomo(&path, Some(mock)).await.unwrap();
 
     assert_eq!(report.phases.len(), 6);
@@ -613,17 +620,16 @@ async fn test_lifecycle_locomo_with_mock_llm() {
 #[tokio::test]
 #[ignore]
 async fn test_lifecycle_longmemeval_with_mock_llm() {
-    use origin_lib::eval::lifecycle::{run_lifecycle_longmemeval, EvalMockLlm};
+    use origin_core::eval::lifecycle::{run_lifecycle_longmemeval, EvalMockLlm};
     use std::sync::Arc;
 
-    let path =
-        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("eval/data/longmemeval_oracle.json");
+    let path = eval_root().join("data/longmemeval_oracle.json");
     if !path.exists() {
         println!("SKIP: longmemeval_oracle.json not found");
         return;
     }
 
-    let mock: Arc<dyn origin_lib::llm_provider::LlmProvider> = Arc::new(EvalMockLlm::new());
+    let mock: Arc<dyn origin_core::llm_provider::LlmProvider> = Arc::new(EvalMockLlm::new());
     let report = run_lifecycle_longmemeval(&path, Some(mock)).await.unwrap();
 
     assert_eq!(report.phases.len(), 6);
@@ -641,7 +647,7 @@ async fn test_lifecycle_longmemeval_with_mock_llm() {
 
 #[tokio::test]
 async fn test_eval_empty_set_and_temporal() {
-    let fixture_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("eval/fixtures");
+    let fixture_dir = eval_root().join("fixtures");
     let tmp = tempfile::tempdir().unwrap();
 
     let report = run_eval(&fixture_dir, tmp.path(), None, None, GateMode::Off)
@@ -700,13 +706,12 @@ async fn test_eval_empty_set_and_temporal() {
 #[tokio::test]
 #[ignore]
 async fn save_fixture_baseline() {
-    let fixture_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("eval/fixtures");
+    let fixture_dir = eval_root().join("fixtures");
     let tmp = tempfile::tempdir().unwrap();
     let report = run_eval(&fixture_dir, tmp.path(), None, None, GateMode::Off)
         .await
         .unwrap();
-    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("eval/baselines/fixture_baseline.json");
+    let path = eval_root().join("baselines/fixture_baseline.json");
     report.save_baseline(&path).unwrap();
     println!("Saved fixture baseline to {:?}", path);
     println!("{}", report.to_terminal());
@@ -715,16 +720,15 @@ async fn save_fixture_baseline() {
 #[tokio::test]
 #[ignore]
 async fn save_locomo_baseline() {
-    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("eval/data/locomo10.json");
+    let path = eval_root().join("data/locomo10.json");
     if !path.exists() {
         println!("SKIP: locomo10.json not found");
         return;
     }
-    let report = origin_lib::eval::locomo::run_locomo_eval(&path)
+    let report = origin_core::eval::locomo::run_locomo_eval(&path)
         .await
         .unwrap();
-    let baseline_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("eval/baselines/locomo_baseline.json");
+    let baseline_path = eval_root().join("baselines/locomo_baseline.json");
     report.save_baseline(&baseline_path).unwrap();
     println!("Saved LoCoMo baseline to {:?}", baseline_path);
 }
@@ -732,17 +736,15 @@ async fn save_locomo_baseline() {
 #[tokio::test]
 #[ignore]
 async fn save_longmemeval_baseline() {
-    let path =
-        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("eval/data/longmemeval_oracle.json");
+    let path = eval_root().join("data/longmemeval_oracle.json");
     if !path.exists() {
         println!("SKIP: longmemeval_oracle.json not found");
         return;
     }
-    let report = origin_lib::eval::longmemeval::run_longmemeval_eval(&path)
+    let report = origin_core::eval::longmemeval::run_longmemeval_eval(&path)
         .await
         .unwrap();
-    let baseline_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("eval/baselines/longmemeval_baseline.json");
+    let baseline_path = eval_root().join("baselines/longmemeval_baseline.json");
     report.save_baseline(&baseline_path).unwrap();
     println!("Saved LongMemEval baseline to {:?}", baseline_path);
 }
@@ -751,19 +753,18 @@ async fn save_longmemeval_baseline() {
 #[ignore]
 async fn save_locomo_reranked_baseline() {
     use std::sync::Arc;
-    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("eval/data/locomo10.json");
+    let path = eval_root().join("data/locomo10.json");
     if !path.exists() {
         println!("SKIP: locomo10.json not found");
         return;
     }
-    let llm: Arc<dyn origin_lib::llm_provider::LlmProvider> = Arc::new(
-        origin_lib::llm_provider::OnDeviceProvider::new_with_model(Some("qwen3.5-9b")).unwrap(),
+    let llm: Arc<dyn origin_core::llm_provider::LlmProvider> = Arc::new(
+        origin_core::llm_provider::OnDeviceProvider::new_with_model(Some("qwen3.5-9b")).unwrap(),
     );
-    let report = origin_lib::eval::locomo::run_locomo_eval_reranked(&path, llm)
+    let report = origin_core::eval::locomo::run_locomo_eval_reranked(&path, llm)
         .await
         .unwrap();
-    let baseline_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("eval/baselines/locomo_reranked_baseline.json");
+    let baseline_path = eval_root().join("baselines/locomo_reranked_baseline.json");
     report.save_baseline(&baseline_path).unwrap();
     println!("Saved LoCoMo reranked baseline to {:?}", baseline_path);
 }
@@ -772,20 +773,18 @@ async fn save_locomo_reranked_baseline() {
 #[ignore]
 async fn save_longmemeval_reranked_baseline() {
     use std::sync::Arc;
-    let path =
-        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("eval/data/longmemeval_oracle.json");
+    let path = eval_root().join("data/longmemeval_oracle.json");
     if !path.exists() {
         println!("SKIP: longmemeval_oracle.json not found");
         return;
     }
-    let llm: Arc<dyn origin_lib::llm_provider::LlmProvider> = Arc::new(
-        origin_lib::llm_provider::OnDeviceProvider::new_with_model(Some("qwen3.5-9b")).unwrap(),
+    let llm: Arc<dyn origin_core::llm_provider::LlmProvider> = Arc::new(
+        origin_core::llm_provider::OnDeviceProvider::new_with_model(Some("qwen3.5-9b")).unwrap(),
     );
-    let report = origin_lib::eval::longmemeval::run_longmemeval_eval_reranked(&path, llm)
+    let report = origin_core::eval::longmemeval::run_longmemeval_eval_reranked(&path, llm)
         .await
         .unwrap();
-    let baseline_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("eval/baselines/longmemeval_reranked_baseline.json");
+    let baseline_path = eval_root().join("baselines/longmemeval_reranked_baseline.json");
     report.save_baseline(&baseline_path).unwrap();
     println!("Saved LongMemEval reranked baseline to {:?}", baseline_path);
 }
@@ -794,19 +793,18 @@ async fn save_longmemeval_reranked_baseline() {
 #[ignore]
 async fn save_locomo_expanded_baseline() {
     use std::sync::Arc;
-    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("eval/data/locomo10.json");
+    let path = eval_root().join("data/locomo10.json");
     if !path.exists() {
         println!("SKIP: locomo10.json not found");
         return;
     }
-    let llm: Arc<dyn origin_lib::llm_provider::LlmProvider> = Arc::new(
-        origin_lib::llm_provider::OnDeviceProvider::new_with_model(Some("qwen3.5-9b")).unwrap(),
+    let llm: Arc<dyn origin_core::llm_provider::LlmProvider> = Arc::new(
+        origin_core::llm_provider::OnDeviceProvider::new_with_model(Some("qwen3.5-9b")).unwrap(),
     );
-    let report = origin_lib::eval::locomo::run_locomo_eval_expanded(&path, llm)
+    let report = origin_core::eval::locomo::run_locomo_eval_expanded(&path, llm)
         .await
         .unwrap();
-    let baseline_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("eval/baselines/locomo_expanded_baseline.json");
+    let baseline_path = eval_root().join("baselines/locomo_expanded_baseline.json");
     report.save_baseline(&baseline_path).unwrap();
     println!("Saved LoCoMo expanded baseline to {:?}", baseline_path);
 }
@@ -815,31 +813,29 @@ async fn save_locomo_expanded_baseline() {
 #[ignore]
 async fn save_longmemeval_expanded_baseline() {
     use std::sync::Arc;
-    let path =
-        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("eval/data/longmemeval_oracle.json");
+    let path = eval_root().join("data/longmemeval_oracle.json");
     if !path.exists() {
         println!("SKIP: longmemeval_oracle.json not found");
         return;
     }
-    let llm: Arc<dyn origin_lib::llm_provider::LlmProvider> = Arc::new(
-        origin_lib::llm_provider::OnDeviceProvider::new_with_model(Some("qwen3.5-9b")).unwrap(),
+    let llm: Arc<dyn origin_core::llm_provider::LlmProvider> = Arc::new(
+        origin_core::llm_provider::OnDeviceProvider::new_with_model(Some("qwen3.5-9b")).unwrap(),
     );
-    let report = origin_lib::eval::longmemeval::run_longmemeval_eval_expanded(&path, llm)
+    let report = origin_core::eval::longmemeval::run_longmemeval_eval_expanded(&path, llm)
         .await
         .unwrap();
-    let baseline_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("eval/baselines/longmemeval_expanded_baseline.json");
+    let baseline_path = eval_root().join("baselines/longmemeval_expanded_baseline.json");
     report.save_baseline(&baseline_path).unwrap();
     println!("Saved LongMemEval expanded baseline to {:?}", baseline_path);
 }
 
 #[tokio::test]
 async fn test_lifecycle_pipeline_quality() {
-    use origin_lib::eval::lifecycle::{run_lifecycle_fixture, EvalMockLlm};
+    use origin_core::eval::lifecycle::{run_lifecycle_fixture, EvalMockLlm};
     use std::sync::Arc;
 
-    let fixture_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("eval/fixtures");
-    let mock: Arc<dyn origin_lib::llm_provider::LlmProvider> = Arc::new(EvalMockLlm::new());
+    let fixture_dir = eval_root().join("fixtures");
+    let mock: Arc<dyn origin_core::llm_provider::LlmProvider> = Arc::new(EvalMockLlm::new());
 
     let report = run_lifecycle_fixture(&fixture_dir, Some(mock))
         .await
@@ -879,11 +875,11 @@ async fn test_lifecycle_pipeline_quality() {
 /// pipeline internally and exposes the PageRetrieval phase in the report.
 #[tokio::test]
 async fn test_page_retrieval_eval() {
-    use origin_lib::eval::lifecycle::{run_lifecycle_fixture, EvalMockLlm, LifecyclePhase};
+    use origin_core::eval::lifecycle::{run_lifecycle_fixture, EvalMockLlm, LifecyclePhase};
     use std::sync::Arc;
 
-    let fixture_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("eval/fixtures");
-    let mock: Arc<dyn origin_lib::llm_provider::LlmProvider> = Arc::new(EvalMockLlm::new());
+    let fixture_dir = eval_root().join("fixtures");
+    let mock: Arc<dyn origin_core::llm_provider::LlmProvider> = Arc::new(EvalMockLlm::new());
 
     let report = run_lifecycle_fixture(&fixture_dir, Some(mock))
         .await
@@ -941,9 +937,9 @@ async fn test_page_retrieval_eval() {
 #[tokio::test]
 #[ignore]
 async fn test_quality_cost_fixtures() {
-    use origin_lib::eval::token_efficiency::{run_quality_cost_eval, SearchStrategy};
+    use origin_core::eval::token_efficiency::{run_quality_cost_eval, SearchStrategy};
 
-    let fixture_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("eval/fixtures");
+    let fixture_dir = eval_root().join("fixtures");
 
     let strategies = vec![
         SearchStrategy::Origin,
@@ -986,9 +982,9 @@ async fn test_quality_cost_fixtures() {
 #[tokio::test]
 #[ignore]
 async fn test_quality_cost_agent_workload() {
-    use origin_lib::eval::token_efficiency::{run_quality_cost_eval, SearchStrategy};
+    use origin_core::eval::token_efficiency::{run_quality_cost_eval, SearchStrategy};
 
-    let fixture_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("eval/fixtures");
+    let fixture_dir = eval_root().join("fixtures");
     if !fixture_dir.join("agent_coding_session.toml").exists() {
         println!("SKIP: agent fixtures not found");
         return;
@@ -1012,11 +1008,10 @@ async fn test_quality_cost_agent_workload() {
 #[tokio::test]
 #[ignore]
 async fn save_quality_cost_fixtures_baseline() {
-    use origin_lib::eval::token_efficiency::{run_quality_cost_eval, SearchStrategy};
+    use origin_core::eval::token_efficiency::{run_quality_cost_eval, SearchStrategy};
 
-    let fixture_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("eval/fixtures");
-    let baseline_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("eval/baselines/quality_cost_fixtures_baseline.json");
+    let fixture_dir = eval_root().join("fixtures");
+    let baseline_path = eval_root().join("baselines/quality_cost_fixtures_baseline.json");
 
     let strategies = vec![
         SearchStrategy::Origin,
@@ -1037,9 +1032,9 @@ async fn save_quality_cost_fixtures_baseline() {
 #[tokio::test]
 #[ignore]
 async fn test_scaling_curve() {
-    use origin_lib::eval::token_efficiency::run_scaling_eval;
+    use origin_core::eval::token_efficiency::run_scaling_eval;
 
-    let fixture_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("eval/fixtures");
+    let fixture_dir = eval_root().join("fixtures");
 
     let sizes = vec![5, 10, 20, 50];
     let points = run_scaling_eval(&fixture_dir, &sizes, 10).await.unwrap();
@@ -1079,14 +1074,14 @@ async fn test_scaling_curve() {
 /// memory-only recall across every fixture query.
 #[tokio::test]
 async fn test_concept_before_after_comparison() {
-    use origin_lib::eval::fixtures::load_fixtures;
-    use origin_lib::eval::metrics;
-    use origin_lib::memory_db::MemoryDB;
-    use origin_lib::sources::RawDocument;
+    use origin_core::db::MemoryDB;
+    use origin_core::eval::fixtures::load_fixtures;
+    use origin_core::eval::metrics;
+    use origin_core::sources::RawDocument;
     use std::collections::HashSet;
     use std::sync::Arc;
 
-    let fixture_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("eval/fixtures");
+    let fixture_dir = eval_root().join("fixtures");
     let cases = load_fixtures(&fixture_dir).unwrap();
 
     // One shared DB for all cases
@@ -1280,18 +1275,17 @@ async fn test_concept_before_after_comparison() {
 #[tokio::test]
 #[ignore]
 async fn benchmark_locomo_pipeline() {
-    use origin_lib::eval::token_efficiency::run_locomo_pipeline_eval;
+    use origin_core::eval::token_efficiency::run_locomo_pipeline_eval;
     use std::sync::Arc;
 
-    let locomo_path =
-        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("eval/data/locomo10.json");
+    let locomo_path = eval_root().join("data/locomo10.json");
     if !locomo_path.exists() {
         eprintln!("SKIP: locomo10.json not found at {:?}", locomo_path);
         return;
     }
 
-    let llm: Arc<dyn origin_lib::llm_provider::LlmProvider> = Arc::new(
-        origin_lib::llm_provider::OnDeviceProvider::new()
+    let llm: Arc<dyn origin_core::llm_provider::LlmProvider> = Arc::new(
+        origin_core::llm_provider::OnDeviceProvider::new()
             .expect("Failed to init on-device LLM. Run with sandbox disabled for Metal GPU."),
     );
 
@@ -1333,18 +1327,17 @@ async fn benchmark_locomo_pipeline() {
 #[tokio::test]
 #[ignore]
 async fn benchmark_longmemeval_pipeline() {
-    use origin_lib::eval::token_efficiency::run_longmemeval_pipeline_eval;
+    use origin_core::eval::token_efficiency::run_longmemeval_pipeline_eval;
     use std::sync::Arc;
 
-    let path =
-        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("eval/data/longmemeval_oracle.json");
+    let path = eval_root().join("data/longmemeval_oracle.json");
     if !path.exists() {
         eprintln!("SKIP: longmemeval_oracle.json not found at {:?}", path);
         return;
     }
 
-    let llm: Arc<dyn origin_lib::llm_provider::LlmProvider> = Arc::new(
-        origin_lib::llm_provider::OnDeviceProvider::new()
+    let llm: Arc<dyn origin_core::llm_provider::LlmProvider> = Arc::new(
+        origin_core::llm_provider::OnDeviceProvider::new()
             .expect("Failed to init on-device LLM. Run with sandbox disabled for Metal GPU."),
     );
 
@@ -1388,18 +1381,17 @@ async fn benchmark_longmemeval_pipeline() {
 #[tokio::test]
 #[ignore]
 async fn benchmark_context_path() {
-    use origin_lib::eval::token_efficiency::run_context_path_eval;
+    use origin_core::eval::token_efficiency::run_context_path_eval;
     use std::sync::Arc;
 
-    let locomo_path =
-        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("eval/data/locomo10.json");
+    let locomo_path = eval_root().join("data/locomo10.json");
     if !locomo_path.exists() {
         eprintln!("SKIP: locomo10.json not found");
         return;
     }
 
-    let llm: Arc<dyn origin_lib::llm_provider::LlmProvider> = Arc::new(
-        origin_lib::llm_provider::OnDeviceProvider::new()
+    let llm: Arc<dyn origin_core::llm_provider::LlmProvider> = Arc::new(
+        origin_core::llm_provider::OnDeviceProvider::new()
             .expect("Failed to init on-device LLM. Run with sandbox disabled for Metal GPU."),
     );
 
@@ -1418,18 +1410,17 @@ async fn benchmark_context_path() {
 #[tokio::test]
 #[ignore]
 async fn benchmark_context_path_longmemeval() {
-    use origin_lib::eval::token_efficiency::run_context_path_eval_longmemeval;
+    use origin_core::eval::token_efficiency::run_context_path_eval_longmemeval;
     use std::sync::Arc;
 
-    let path =
-        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("eval/data/longmemeval_oracle.json");
+    let path = eval_root().join("data/longmemeval_oracle.json");
     if !path.exists() {
         eprintln!("SKIP: longmemeval_oracle.json not found");
         return;
     }
 
-    let llm: Arc<dyn origin_lib::llm_provider::LlmProvider> = Arc::new(
-        origin_lib::llm_provider::OnDeviceProvider::new()
+    let llm: Arc<dyn origin_core::llm_provider::LlmProvider> = Arc::new(
+        origin_core::llm_provider::OnDeviceProvider::new()
             .expect("Failed to init on-device LLM. Run with sandbox disabled for Metal GPU."),
     );
 
@@ -1453,18 +1444,17 @@ async fn benchmark_context_path_longmemeval() {
 #[tokio::test]
 #[ignore]
 async fn generate_e2e_context_tuples_locomo() {
-    use origin_lib::eval::token_efficiency::{run_e2e_context_eval, save_judgment_tuples};
+    use origin_core::eval::token_efficiency::{run_e2e_context_eval, save_judgment_tuples};
     use std::sync::Arc;
 
-    let locomo_path =
-        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("eval/data/locomo10.json");
+    let locomo_path = eval_root().join("data/locomo10.json");
     if !locomo_path.exists() {
         eprintln!("SKIP: locomo10.json not found");
         return;
     }
 
-    let llm: Arc<dyn origin_lib::llm_provider::LlmProvider> = Arc::new(
-        origin_lib::llm_provider::OnDeviceProvider::new().expect("Failed to init on-device LLM"),
+    let llm: Arc<dyn origin_core::llm_provider::LlmProvider> = Arc::new(
+        origin_core::llm_provider::OnDeviceProvider::new().expect("Failed to init on-device LLM"),
     );
 
     // 1 conversation, 20 questions for quick validation
@@ -1476,8 +1466,8 @@ async fn generate_e2e_context_tuples_locomo() {
     assert!(!tuples.is_empty(), "should generate at least some tuples");
 
     // Save for offline judging (try baselines dir, fallback to tmpdir)
-    let baselines_dir = origin_lib::eval::shared::eval_baselines_dir_override()
-        .unwrap_or_else(|| std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("eval/baselines"));
+    let baselines_dir = origin_core::eval::shared::eval_baselines_dir_override()
+        .unwrap_or_else(|| eval_root().join("baselines"));
     std::fs::create_dir_all(&baselines_dir).ok();
     let out_path = baselines_dir.join("e2e_context_tuples_locomo.json");
     save_judgment_tuples(&tuples, &out_path).expect("save tuples");
@@ -1488,20 +1478,19 @@ async fn generate_e2e_context_tuples_locomo() {
 #[tokio::test]
 #[ignore]
 async fn generate_e2e_context_tuples_longmemeval() {
-    use origin_lib::eval::token_efficiency::{
+    use origin_core::eval::token_efficiency::{
         run_e2e_context_eval_longmemeval, save_judgment_tuples,
     };
     use std::sync::Arc;
 
-    let path =
-        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("eval/data/longmemeval_oracle.json");
+    let path = eval_root().join("data/longmemeval_oracle.json");
     if !path.exists() {
         eprintln!("SKIP: longmemeval_oracle.json not found");
         return;
     }
 
-    let llm: Arc<dyn origin_lib::llm_provider::LlmProvider> = Arc::new(
-        origin_lib::llm_provider::OnDeviceProvider::new().expect("Failed to init on-device LLM"),
+    let llm: Arc<dyn origin_core::llm_provider::LlmProvider> = Arc::new(
+        origin_core::llm_provider::OnDeviceProvider::new().expect("Failed to init on-device LLM"),
     );
 
     // 50 questions for validation
@@ -1512,8 +1501,8 @@ async fn generate_e2e_context_tuples_longmemeval() {
     eprintln!("Generated {} judgment tuples", tuples.len());
     assert!(!tuples.is_empty());
 
-    let baselines_dir = origin_lib::eval::shared::eval_baselines_dir_override()
-        .unwrap_or_else(|| std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("eval/baselines"));
+    let baselines_dir = origin_core::eval::shared::eval_baselines_dir_override()
+        .unwrap_or_else(|| eval_root().join("baselines"));
     std::fs::create_dir_all(&baselines_dir).ok();
     let out_path = baselines_dir.join("e2e_context_tuples_longmemeval.json");
     save_judgment_tuples(&tuples, &out_path).expect("save tuples");
@@ -1525,12 +1514,11 @@ async fn generate_e2e_context_tuples_longmemeval() {
 #[tokio::test]
 #[ignore]
 async fn judge_e2e_context_locomo() {
-    use origin_lib::eval::token_efficiency::{
+    use origin_core::eval::token_efficiency::{
         aggregate_judgments, judge_with_claude, load_judgment_tuples,
     };
 
-    let tuples_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("eval/baselines/e2e_context_tuples_locomo.json");
+    let tuples_path = eval_root().join("baselines/e2e_context_tuples_locomo.json");
     if !tuples_path.exists() {
         eprintln!("SKIP: run generate_e2e_context_tuples_locomo first");
         return;
@@ -1573,18 +1561,17 @@ async fn judge_e2e_context_locomo() {
 #[tokio::test]
 #[ignore]
 async fn generate_e2e_context_tuples_locomo_api() {
-    use origin_lib::eval::token_efficiency::{run_e2e_context_eval, save_judgment_tuples};
+    use origin_core::eval::token_efficiency::{run_e2e_context_eval, save_judgment_tuples};
     use std::sync::Arc;
 
-    let locomo_path =
-        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("eval/data/locomo10.json");
+    let locomo_path = eval_root().join("data/locomo10.json");
     if !locomo_path.exists() {
         eprintln!("SKIP: locomo10.json not found");
         return;
     }
 
-    let llm: Arc<dyn origin_lib::llm_provider::LlmProvider> =
-        Arc::new(origin_lib::llm_provider::ClaudeCliProvider::haiku());
+    let llm: Arc<dyn origin_core::llm_provider::LlmProvider> =
+        Arc::new(origin_core::llm_provider::ClaudeCliProvider::haiku());
 
     // 1 conversation, 20 questions for quick validation
     let tuples = run_e2e_context_eval(&locomo_path, llm, 10, 1, 20)
@@ -1594,8 +1581,8 @@ async fn generate_e2e_context_tuples_locomo_api() {
     eprintln!("Generated {} judgment tuples (Haiku CLI)", tuples.len());
     assert!(!tuples.is_empty());
 
-    let baselines_dir = origin_lib::eval::shared::eval_baselines_dir_override()
-        .unwrap_or_else(|| std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("eval/baselines"));
+    let baselines_dir = origin_core::eval::shared::eval_baselines_dir_override()
+        .unwrap_or_else(|| eval_root().join("baselines"));
     std::fs::create_dir_all(&baselines_dir).ok();
     let out_path = baselines_dir.join("e2e_context_tuples_locomo_api.json");
     save_judgment_tuples(&tuples, &out_path).expect("save tuples");
@@ -1607,12 +1594,11 @@ async fn generate_e2e_context_tuples_locomo_api() {
 #[tokio::test]
 #[ignore]
 async fn judge_e2e_context_locomo_api_sonnet() {
-    use origin_lib::eval::token_efficiency::{
+    use origin_core::eval::token_efficiency::{
         aggregate_judgments, judge_with_claude_model, load_judgment_tuples,
     };
 
-    let tuples_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("eval/baselines/e2e_context_tuples_locomo_api.json");
+    let tuples_path = eval_root().join("baselines/e2e_context_tuples_locomo_api.json");
     if !tuples_path.exists() {
         eprintln!("SKIP: run generate_e2e_context_tuples_locomo_api first");
         return;
@@ -1653,12 +1639,11 @@ async fn judge_e2e_context_locomo_api_sonnet() {
 #[tokio::test]
 #[ignore]
 async fn judge_e2e_context_locomo_sonnet() {
-    use origin_lib::eval::token_efficiency::{
+    use origin_core::eval::token_efficiency::{
         aggregate_judgments, judge_with_claude_model, load_judgment_tuples,
     };
 
-    let tuples_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("eval/baselines/e2e_context_tuples_locomo.json");
+    let tuples_path = eval_root().join("baselines/e2e_context_tuples_locomo.json");
     if !tuples_path.exists() {
         eprintln!("SKIP: run generate_e2e_context_tuples_locomo first");
         return;
@@ -1706,12 +1691,12 @@ async fn judge_e2e_context_locomo_sonnet() {
 #[tokio::test]
 #[ignore]
 async fn judge_e2e_batch() {
-    use origin_lib::eval::judge::{
+    use origin_core::eval::judge::{
         aggregate_judgments, judge_with_batch_api, load_judgment_tuples,
     };
 
-    let baselines = origin_lib::eval::shared::eval_baselines_dir_override()
-        .unwrap_or_else(|| std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("eval/baselines"));
+    let baselines = origin_core::eval::shared::eval_baselines_dir_override()
+        .unwrap_or_else(|| eval_root().join("baselines"));
     let tuples_path = baselines.join("e2e_context_tuples_locomo.json");
     if !tuples_path.exists() {
         eprintln!("SKIP: run generate_e2e_context_tuples_locomo first");
@@ -1758,10 +1743,9 @@ async fn judge_e2e_batch() {
 #[tokio::test]
 #[ignore]
 async fn generate_fullpipeline_locomo() {
-    use origin_lib::eval::answer_quality::run_fullpipeline_locomo_batch;
+    use origin_core::eval::answer_quality::run_fullpipeline_locomo_batch;
 
-    let locomo_path =
-        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("eval/data/locomo10.json");
+    let locomo_path = eval_root().join("data/locomo10.json");
     if !locomo_path.exists() {
         eprintln!("SKIP: locomo10.json not found");
         return;
@@ -1780,8 +1764,8 @@ async fn generate_fullpipeline_locomo() {
         .and_then(|s| s.parse().ok())
         .unwrap_or(10.0);
 
-    let baselines = origin_lib::eval::shared::eval_baselines_dir_override()
-        .unwrap_or_else(|| std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("eval/baselines"));
+    let baselines = origin_core::eval::shared::eval_baselines_dir_override()
+        .unwrap_or_else(|| eval_root().join("baselines"));
     std::fs::create_dir_all(&baselines).ok();
     let output_path = baselines.join("fullpipeline_locomo_tuples.json");
 
@@ -1790,7 +1774,7 @@ async fn generate_fullpipeline_locomo() {
         answer_model, cost_cap, output_path, cli_mode,
     );
 
-    let enrichment = origin_lib::eval::shared::EnrichmentMode::from_env(&answer_model, cost_cap)
+    let enrichment = origin_core::eval::shared::EnrichmentMode::from_env(&answer_model, cost_cap)
         .expect("EnrichmentMode init failed");
 
     let tuples = run_fullpipeline_locomo_batch(
@@ -1815,10 +1799,9 @@ async fn generate_fullpipeline_locomo() {
 #[tokio::test]
 #[ignore]
 async fn generate_fullpipeline_lme() {
-    use origin_lib::eval::answer_quality::run_fullpipeline_lme_batch;
+    use origin_core::eval::answer_quality::run_fullpipeline_lme_batch;
 
-    let lme_path =
-        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("eval/data/longmemeval_oracle.json");
+    let lme_path = eval_root().join("data/longmemeval_oracle.json");
     if !lme_path.exists() {
         eprintln!("SKIP: longmemeval_oracle.json not found");
         return;
@@ -1837,8 +1820,8 @@ async fn generate_fullpipeline_lme() {
         .and_then(|s| s.parse().ok())
         .unwrap_or(10.0);
 
-    let baselines = origin_lib::eval::shared::eval_baselines_dir_override()
-        .unwrap_or_else(|| std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("eval/baselines"));
+    let baselines = origin_core::eval::shared::eval_baselines_dir_override()
+        .unwrap_or_else(|| eval_root().join("baselines"));
     std::fs::create_dir_all(&baselines).ok();
     let output_path = baselines.join("fullpipeline_lme_tuples.json");
 
@@ -1847,7 +1830,7 @@ async fn generate_fullpipeline_lme() {
         answer_model, cost_cap, output_path, cli_mode,
     );
 
-    let enrichment = origin_lib::eval::shared::EnrichmentMode::from_env(&answer_model, cost_cap)
+    let enrichment = origin_core::eval::shared::EnrichmentMode::from_env(&answer_model, cost_cap)
         .expect("EnrichmentMode init failed");
 
     let tuples = run_fullpipeline_lme_batch(
@@ -1878,14 +1861,13 @@ async fn generate_fullpipeline_lme() {
 #[tokio::test]
 #[ignore]
 async fn enrich_fullpipeline_lme_only() {
-    use origin_lib::eval::longmemeval::{extract_memories, load_longmemeval};
-    use origin_lib::eval::shared::{
+    use origin_core::eval::longmemeval::{extract_memories, load_longmemeval};
+    use origin_core::eval::shared::{
         eval_shared_embedder, open_or_seed_scenario_db, scenario_db_dir, EnrichmentMode,
     };
-    use origin_lib::sources::RawDocument;
+    use origin_core::sources::RawDocument;
 
-    let lme_path =
-        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("eval/data/longmemeval_oracle.json");
+    let lme_path = eval_root().join("data/longmemeval_oracle.json");
     if !lme_path.exists() {
         eprintln!("SKIP: longmemeval_oracle.json not found");
         return;
@@ -1905,8 +1887,8 @@ async fn enrich_fullpipeline_lme_only() {
         .and_then(|s| s.parse().ok())
         .unwrap_or(0);
 
-    let baselines = origin_lib::eval::shared::eval_baselines_dir_override()
-        .unwrap_or_else(|| std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("eval/baselines"));
+    let baselines = origin_core::eval::shared::eval_baselines_dir_override()
+        .unwrap_or_else(|| eval_root().join("baselines"));
     std::fs::create_dir_all(&baselines).ok();
 
     eprintln!(
@@ -2024,11 +2006,11 @@ async fn enrich_fullpipeline_lme_only() {
 /// Fast (no LLM, no API) — just opens DB, counts memories, asserts enrichment_complete.
 #[tokio::test]
 async fn smoke_enriched_db_reuse() {
-    use origin_lib::memory_db::MemoryDB;
+    use origin_core::db::MemoryDB;
     use std::sync::Arc;
 
-    let baselines = origin_lib::eval::shared::eval_baselines_dir_override()
-        .unwrap_or_else(|| std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("eval/baselines"));
+    let baselines = origin_core::eval::shared::eval_baselines_dir_override()
+        .unwrap_or_else(|| eval_root().join("baselines"));
 
     let mut total_scenarios_checked = 0usize;
     let mut total_passed = 0usize;
@@ -2109,12 +2091,12 @@ async fn smoke_enriched_db_reuse() {
 #[tokio::test]
 #[ignore]
 async fn judge_fullpipeline_locomo() {
-    use origin_lib::eval::judge::{
+    use origin_core::eval::judge::{
         aggregate_judgments, judge_with_batch_api, load_judgment_tuples,
     };
 
-    let baselines = origin_lib::eval::shared::eval_baselines_dir_override()
-        .unwrap_or_else(|| std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("eval/baselines"));
+    let baselines = origin_core::eval::shared::eval_baselines_dir_override()
+        .unwrap_or_else(|| eval_root().join("baselines"));
     // EVAL_TUPLES_FILE override lets us judge alternate files (e.g. *_pregate.json)
     let default_path = baselines.join("fullpipeline_locomo_tuples.json");
     let tuples_path: std::path::PathBuf = std::env::var("EVAL_TUPLES_FILE")
@@ -2151,12 +2133,12 @@ async fn judge_fullpipeline_locomo() {
 #[tokio::test]
 #[ignore]
 async fn judge_fullpipeline_lme() {
-    use origin_lib::eval::judge::{
+    use origin_core::eval::judge::{
         aggregate_judgments, judge_with_batch_api, load_judgment_tuples,
     };
 
-    let baselines = origin_lib::eval::shared::eval_baselines_dir_override()
-        .unwrap_or_else(|| std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("eval/baselines"));
+    let baselines = origin_core::eval::shared::eval_baselines_dir_override()
+        .unwrap_or_else(|| eval_root().join("baselines"));
     let tuples_path = baselines.join("fullpipeline_lme_tuples.json");
     if !tuples_path.exists() {
         eprintln!("SKIP: run generate_fullpipeline_lme first");
@@ -2194,14 +2176,13 @@ async fn judge_fullpipeline_lme() {
 #[tokio::test]
 #[ignore]
 async fn quality_distill_4b_vs_9b() {
-    use origin_lib::eval::locomo::{extract_observations, load_locomo};
-    use origin_lib::eval::shared::eval_shared_embedder;
-    use origin_lib::llm_provider::{LlmProvider, LlmRequest, OnDeviceProvider};
-    use origin_lib::prompts::PromptRegistry;
+    use origin_core::eval::locomo::{extract_observations, load_locomo};
+    use origin_core::eval::shared::eval_shared_embedder;
+    use origin_core::llm_provider::{LlmProvider, LlmRequest, OnDeviceProvider};
+    use origin_core::prompts::PromptRegistry;
     use std::sync::Arc;
 
-    let locomo_path =
-        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("eval/data/locomo10.json");
+    let locomo_path = eval_root().join("data/locomo10.json");
     if !locomo_path.exists() {
         eprintln!("SKIP: locomo10.json not found at {:?}", locomo_path);
         return;
@@ -2297,7 +2278,7 @@ async fn quality_distill_4b_vs_9b() {
 
         match result {
             Ok(raw) => {
-                let cleaned = origin_lib::llm_provider::strip_think_tags(&raw);
+                let cleaned = origin_core::llm_provider::strip_think_tags(&raw);
                 let text = cleaned.trim().to_string();
 
                 // Compute similarity to source
@@ -2343,12 +2324,11 @@ async fn quality_distill_4b_vs_9b() {
 #[tokio::test]
 #[ignore]
 async fn probe_batch_sizes() {
-    use origin_lib::eval::locomo::{extract_observations, load_locomo};
-    use origin_lib::eval::shared::probe_extraction_batch_sizes;
+    use origin_core::eval::locomo::{extract_observations, load_locomo};
+    use origin_core::eval::shared::probe_extraction_batch_sizes;
     use std::sync::Arc;
 
-    let locomo_path =
-        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("eval/data/locomo10.json");
+    let locomo_path = eval_root().join("data/locomo10.json");
     if !locomo_path.exists() {
         eprintln!("SKIP: locomo10.json not found");
         return;
@@ -2368,8 +2348,8 @@ async fn probe_batch_sizes() {
 
     // Test 4B first (default), then 9B if available
     let model_id = std::env::var("PROBE_MODEL").ok();
-    let llm: Arc<dyn origin_lib::llm_provider::LlmProvider> = Arc::new(
-        origin_lib::llm_provider::OnDeviceProvider::new_with_model(model_id.as_deref())
+    let llm: Arc<dyn origin_core::llm_provider::LlmProvider> = Arc::new(
+        origin_core::llm_provider::OnDeviceProvider::new_with_model(model_id.as_deref())
             .expect("on-device LLM required"),
     );
     eprintln!("Model: {}", model_id.as_deref().unwrap_or("4B (default)"));
@@ -2407,8 +2387,8 @@ async fn probe_batch_sizes() {
 #[tokio::test]
 #[ignore]
 async fn smoke_fullpipeline() {
-    use origin_lib::eval::locomo::{extract_observations, load_locomo};
-    use origin_lib::eval::shared::{
+    use origin_core::eval::locomo::{extract_observations, load_locomo};
+    use origin_core::eval::shared::{
         count_tokens, eval_shared_embedder, run_concept_distillation_batch_api,
         run_enrichment_batch_api, run_title_enrichment_batch_api,
     };
@@ -2417,8 +2397,7 @@ async fn smoke_fullpipeline() {
     let api_key = std::env::var("ANTHROPIC_API_KEY").expect("ANTHROPIC_API_KEY required");
     let model = "claude-haiku-4-5-20251001";
 
-    let locomo_path =
-        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("eval/data/locomo10.json");
+    let locomo_path = eval_root().join("data/locomo10.json");
     if !locomo_path.exists() {
         eprintln!("SKIP: locomo10.json not found");
         return;
@@ -2440,10 +2419,10 @@ async fn smoke_fullpipeline() {
     .await
     .unwrap();
 
-    let docs: Vec<origin_lib::sources::RawDocument> = memories
+    let docs: Vec<origin_core::sources::RawDocument> = memories
         .iter()
         .enumerate()
-        .map(|(i, mem)| origin_lib::sources::RawDocument {
+        .map(|(i, mem)| origin_core::sources::RawDocument {
             content: mem.content.clone(),
             source_id: format!("locomo_{}_obs_{}", sample.sample_id, i),
             source: "memory".to_string(),
@@ -2542,14 +2521,13 @@ async fn smoke_fullpipeline() {
 #[tokio::test]
 #[ignore]
 async fn smoke_per_scenario_locomo() {
-    use origin_lib::eval::locomo::{extract_observations, load_locomo};
-    use origin_lib::eval::shared::{
+    use origin_core::eval::locomo::{extract_observations, load_locomo};
+    use origin_core::eval::shared::{
         eval_shared_embedder, open_or_seed_scenario_db, scenario_db_dir, EnrichmentMode,
     };
-    use origin_lib::sources::RawDocument;
+    use origin_core::sources::RawDocument;
 
-    let locomo_path =
-        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("eval/data/locomo10.json");
+    let locomo_path = eval_root().join("data/locomo10.json");
     if !locomo_path.exists() {
         eprintln!("SKIP: locomo10.json not found");
         return;
@@ -2763,8 +2741,8 @@ async fn smoke_per_scenario_locomo() {
 #[ignore]
 async fn smoke_eval_baselines_dir_e2e() {
     use origin_core::db::MemoryDB;
+    use origin_core::eval::shared::{eval_baselines_dir_override, scenario_db_dir};
     use origin_core::events::NoopEmitter;
-    use origin_lib::eval::shared::{eval_baselines_dir_override, scenario_db_dir};
     use std::sync::Arc;
 
     let tmp = tempfile::tempdir().unwrap();
@@ -2812,11 +2790,11 @@ async fn smoke_eval_baselines_dir_e2e() {
 #[tokio::test]
 #[ignore]
 async fn smoke_per_scenario_locomo_cli() {
-    use origin_lib::eval::locomo::{extract_observations, load_locomo};
-    use origin_lib::eval::shared::{
+    use origin_core::eval::locomo::{extract_observations, load_locomo};
+    use origin_core::eval::shared::{
         eval_shared_embedder, open_or_seed_scenario_db, scenario_db_dir, EnrichmentMode,
     };
-    use origin_lib::sources::RawDocument;
+    use origin_core::sources::RawDocument;
     use std::sync::Arc;
 
     // Probe for `claude` binary — skip silently if not available.
@@ -2838,8 +2816,7 @@ async fn smoke_per_scenario_locomo_cli() {
         }
     }
 
-    let locomo_path =
-        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("eval/data/locomo10.json");
+    let locomo_path = eval_root().join("data/locomo10.json");
     if !locomo_path.exists() {
         eprintln!("SKIP: locomo10.json not found");
         return;
@@ -2868,8 +2845,8 @@ async fn smoke_per_scenario_locomo_cli() {
     let baselines_dir = tmp.path().to_path_buf();
     eprintln!("[smoke-cli] baselines: {}", baselines_dir.display());
 
-    let cli_llm: Arc<dyn origin_lib::llm_provider::LlmProvider> = Arc::new(
-        origin_lib::llm_provider::ClaudeCliProvider::new("claude-haiku-4-5-20251001"),
+    let cli_llm: Arc<dyn origin_core::llm_provider::LlmProvider> = Arc::new(
+        origin_core::llm_provider::ClaudeCliProvider::new("claude-haiku-4-5-20251001"),
     );
     let enrichment = EnrichmentMode::OnDevice(cli_llm);
     let shared_embedder = eval_shared_embedder();
@@ -2974,11 +2951,11 @@ async fn smoke_per_scenario_locomo_cli() {
 #[tokio::test]
 #[ignore]
 async fn smoke_per_scenario_locomo_cli_batched() {
-    use origin_lib::eval::locomo::{extract_observations, load_locomo};
-    use origin_lib::eval::shared::{
+    use origin_core::eval::locomo::{extract_observations, load_locomo};
+    use origin_core::eval::shared::{
         eval_shared_embedder, open_or_seed_scenario_db, scenario_db_dir, EnrichmentMode,
     };
-    use origin_lib::sources::RawDocument;
+    use origin_core::sources::RawDocument;
 
     let probe = std::process::Command::new("claude")
         .arg("--version")
@@ -2996,8 +2973,7 @@ async fn smoke_per_scenario_locomo_cli_batched() {
         }
     }
 
-    let locomo_path =
-        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("eval/data/locomo10.json");
+    let locomo_path = eval_root().join("data/locomo10.json");
     if !locomo_path.exists() {
         eprintln!("SKIP: locomo10.json not found");
         return;
@@ -3121,14 +3097,13 @@ async fn smoke_per_scenario_locomo_cli_batched() {
 #[tokio::test]
 #[ignore]
 async fn smoke_per_scenario_lme() {
-    use origin_lib::eval::longmemeval::{extract_memories, load_longmemeval};
-    use origin_lib::eval::shared::{
+    use origin_core::eval::longmemeval::{extract_memories, load_longmemeval};
+    use origin_core::eval::shared::{
         eval_shared_embedder, open_or_seed_scenario_db, scenario_db_dir, EnrichmentMode,
     };
-    use origin_lib::sources::RawDocument;
+    use origin_core::sources::RawDocument;
 
-    let lme_path =
-        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("eval/data/longmemeval_oracle.json");
+    let lme_path = eval_root().join("data/longmemeval_oracle.json");
     if !lme_path.exists() {
         eprintln!("SKIP: longmemeval_oracle.json not found");
         return;
@@ -3358,12 +3333,12 @@ async fn smoke_per_scenario_lme() {
 #[tokio::test]
 #[ignore]
 async fn judge_fullpipeline_lme_cli() {
-    use origin_lib::eval::judge::{
+    use origin_core::eval::judge::{
         aggregate_judgments, judge_with_claude_model_batched_persistent,
         judge_with_claude_model_persistent, load_judgment_tuples,
     };
-    let baselines = origin_lib::eval::shared::eval_baselines_dir_override()
-        .unwrap_or_else(|| std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("eval/baselines"));
+    let baselines = origin_core::eval::shared::eval_baselines_dir_override()
+        .unwrap_or_else(|| eval_root().join("baselines"));
     let tuples_path = baselines.join("fullpipeline_lme_tuples.json");
     if !tuples_path.exists() {
         eprintln!("SKIP: run generate_fullpipeline_lme first");
@@ -3455,12 +3430,12 @@ async fn judge_fullpipeline_lme_cli() {
 #[tokio::test]
 #[ignore]
 async fn judge_fullpipeline_locomo_cli() {
-    use origin_lib::eval::judge::{
+    use origin_core::eval::judge::{
         aggregate_judgments, judge_with_claude_model_batched_persistent,
         judge_with_claude_model_persistent, load_judgment_tuples,
     };
-    let baselines = origin_lib::eval::shared::eval_baselines_dir_override()
-        .unwrap_or_else(|| std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("eval/baselines"));
+    let baselines = origin_core::eval::shared::eval_baselines_dir_override()
+        .unwrap_or_else(|| eval_root().join("baselines"));
     let tuples_path = baselines.join("fullpipeline_locomo_tuples.json");
     if !tuples_path.exists() {
         eprintln!("SKIP: run generate_fullpipeline_locomo first");
@@ -3544,7 +3519,7 @@ async fn judge_fullpipeline_locomo_cli() {
 }
 
 /// Print a judge report with per-category breakdown and task-averaged accuracy.
-fn print_judge_report(report: &origin_lib::eval::judge::JudgedE2EReport) {
+fn print_judge_report(report: &origin_core::eval::judge::JudgedE2EReport) {
     eprintln!(
         "\n{:<30} | {:>8} | {:>6} | {:>10}",
         "Approach", "Accuracy", "N", "Ctx Tokens"
@@ -3582,12 +3557,12 @@ fn print_judge_report(report: &origin_lib::eval::judge::JudgedE2EReport) {
 #[ignore]
 async fn probe_concept_scores() {
     use origin_core::db::MemoryDB;
+    use origin_core::eval::shared::eval_shared_embedder;
     use origin_core::events::NoopEmitter;
-    use origin_lib::eval::shared::eval_shared_embedder;
     use std::sync::Arc;
 
-    let baselines = origin_lib::eval::shared::eval_baselines_dir_override()
-        .unwrap_or_else(|| std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("eval/baselines"));
+    let baselines = origin_core::eval::shared::eval_baselines_dir_override()
+        .unwrap_or_else(|| eval_root().join("baselines"));
     let shared_embedder = eval_shared_embedder();
 
     // Sample questions from tuples
@@ -3722,14 +3697,14 @@ async fn probe_concept_scores() {
 #[ignore]
 async fn probe_overlap_gate() {
     use origin_core::db::MemoryDB;
+    use origin_core::eval::shared::eval_shared_embedder;
     use origin_core::events::NoopEmitter;
     use origin_core::pages::filter_pages_by_source_overlap;
-    use origin_lib::eval::shared::eval_shared_embedder;
     use std::collections::HashMap;
     use std::sync::Arc;
 
-    let baselines = origin_lib::eval::shared::eval_baselines_dir_override()
-        .unwrap_or_else(|| std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("eval/baselines"));
+    let baselines = origin_core::eval::shared::eval_baselines_dir_override()
+        .unwrap_or_else(|| eval_root().join("baselines"));
     let shared_embedder = eval_shared_embedder();
     let min_overlap: usize = std::env::var("EVAL_MIN_OVERLAP")
         .ok()
@@ -3913,7 +3888,7 @@ async fn probe_overlap_gate() {
 #[ignore]
 async fn stress_concurrent_inference() {
     use futures::future::join_all;
-    use origin_lib::llm_provider::{LlmProvider, LlmRequest, OnDeviceProvider};
+    use origin_core::llm_provider::{LlmProvider, LlmRequest, OnDeviceProvider};
     use std::sync::Arc;
     use std::time::Instant;
 
@@ -4051,7 +4026,7 @@ fn percentile(sorted: &[f64], p: f64) -> f64 {
 
 #[test]
 fn eval_baselines_dir_override_env_var() {
-    use origin_lib::eval::shared::eval_baselines_dir_override;
+    use origin_core::eval::shared::eval_baselines_dir_override;
 
     // Unset → None.
     temp_env::with_var("EVAL_BASELINES_DIR", None::<&str>, || {
@@ -4106,20 +4081,18 @@ fn eval_baselines_dir_override_env_var() {
 #[tokio::test]
 #[ignore]
 async fn redistill_cached_locomo_concepts() {
-    use origin_lib::eval::shared::{
+    use origin_core::eval::shared::{
         eval_baselines_dir_override, eval_shared_embedder, EnrichmentMode,
     };
-    use origin_lib::prompts::PromptRegistry;
-    use origin_lib::tuning::DistillationConfig;
+    use origin_core::prompts::PromptRegistry;
+    use origin_core::tuning::DistillationConfig;
 
     if std::env::var("EVAL_ALLOW_WIPE").as_deref() != Ok("1") {
         eprintln!("SKIP: set EVAL_ALLOW_WIPE=1 to permit clearing concepts on cached DBs");
         return;
     }
 
-    let baselines = eval_baselines_dir_override().unwrap_or_else(|| {
-        std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("eval/baselines")
-    });
+    let baselines = eval_baselines_dir_override().unwrap_or_else(|| eval_root().join("baselines"));
     let locomo_dir = baselines.join("fullpipeline").join("locomo");
     if !locomo_dir.exists() {
         eprintln!(
@@ -4261,13 +4234,13 @@ async fn redistill_cached_locomo_concepts() {
 async fn redistill_one_conv(
     conv_dir: &std::path::Path,
     conv_name: &str,
-    llm: &std::sync::Arc<dyn origin_lib::llm_provider::LlmProvider>,
-    prompts: &origin_lib::prompts::PromptRegistry,
-    tuning: &origin_lib::tuning::DistillationConfig,
-    embedder: origin_lib::memory_db::SharedEmbedder,
+    llm: &std::sync::Arc<dyn origin_core::llm_provider::LlmProvider>,
+    prompts: &origin_core::prompts::PromptRegistry,
+    tuning: &origin_core::tuning::DistillationConfig,
+    embedder: origin_core::db::SharedEmbedder,
 ) -> Result<(), String> {
-    use origin_lib::memory_db::MemoryDB;
-    use origin_lib::refinery::distill_pages;
+    use origin_core::db::MemoryDB;
+    use origin_core::refinery::distill_pages;
     use std::sync::Arc;
 
     let emitter: Arc<dyn origin_core::events::EventEmitter> = Arc::new(origin_core::NoopEmitter);

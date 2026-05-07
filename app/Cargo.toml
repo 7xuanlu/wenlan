@@ -83,7 +83,6 @@ origin-types = { workspace = true }
 origin-core = { workspace = true }
 
 [dev-dependencies]
-temp-env = { version = "0.3", features = ["async_closure"] }
 serial_test = "3"
 
 [lints.rust]

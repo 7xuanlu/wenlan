@@ -84,20 +84,25 @@ jobs:
       # we either upgrade to a fixed `ort` release or adopt cargo nextest
       # (process-per-test would cover both causes).
       - name: Run Rust tests (core)
-        run: cargo test -p origin-core -- --test-threads=1
+        # Skip eval_harness integration tests — they need the FastEmbed
+        # BGE-Base-EN-v1.5-Q ONNX model (~200MB) which fails to download on
+        # GitHub Actions macOS runners due to hf-hub cache resolution issues.
+        # Lib unit tests + chat_import_e2e + distillation_quality stay in CI;
+        # eval_harness runs locally per the comment block below.
+        run: cargo test -p origin-core --lib --test chat_import_e2e --test distillation_quality -- --test-threads=1
 
       # Eval benchmarks (#[ignore]) — slow embedding-heavy tests, run on main only.
       - name: Run eval benchmarks
         if: github.ref == 'refs/heads/main'
         run: cargo test -p origin-core --lib eval::token_efficiency -- --ignored
 
-      # Eval harness integration tests (app/tests/eval_harness.rs) need the
+      # Eval harness integration tests (crates/origin-core/tests/eval_harness.rs) need the
       # FastEmbed BGE-Base-EN-v1.5-Q model (~200MB ONNX) which auto-downloads
       # on first run. GitHub Actions macOS runners lack Metal GPU support and
       # the hf-hub crate can't resolve manually seeded cache files.
       #
       # Run eval tests locally:
-      #   cargo test -p origin-app --test eval_harness
+      #   cargo test -p origin-core --test eval_harness
       #
       # The model downloads once into ~/.fastembed_cache and is reused.
       - name: Run app unit tests (eval harness runs locally)

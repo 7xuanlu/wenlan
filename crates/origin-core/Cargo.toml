@@ -66,3 +66,4 @@ tiktoken-rs = "0.6"
 futures = { workspace = true }
 
 [dev-dependencies]
+temp-env = { version = "0.3", features = ["async_closure"] }

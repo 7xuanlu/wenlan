@@ -24,38 +24,17 @@ mod updater;
 // ── Re-export origin-core modules ──
 // These re-exports let existing `crate::module::Type` paths work unchanged
 // throughout the app (search.rs, state.rs, router/, etc.)
-pub use origin_core::access_tracker;
 pub use origin_core::activity;
 pub use origin_core::briefing;
-pub use origin_core::chunker;
-pub use origin_core::classify;
 pub use origin_core::config;
-pub use origin_core::context_packager;
-pub use origin_core::contradiction;
 pub use origin_core::db as memory_db;
-pub use origin_core::decay;
-pub use origin_core::engine;
 pub use origin_core::error;
-pub use origin_core::eval;
 pub use origin_core::export;
-pub use origin_core::extract;
-pub use origin_core::importer;
-pub use origin_core::llm_classifier;
-pub use origin_core::llm_provider;
-pub use origin_core::memory_schema;
 pub use origin_core::narrative;
 pub use origin_core::pages;
-pub use origin_core::post_ingest;
 pub use origin_core::privacy;
-pub use origin_core::prompts;
-pub use origin_core::quality_gate;
-pub use origin_core::refinery;
-pub use origin_core::rerank;
-pub use origin_core::schema;
 // sources is a local module (has app-specific sync logic)
 pub use origin_core::spaces;
-pub use origin_core::tags;
-pub use origin_core::tuning;
 pub use origin_core::working_memory;
 
 use state::AppState;

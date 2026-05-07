@@ -65,12 +65,12 @@ cargo test -p origin-core --lib locomo::tests
 cargo test -p origin-core --lib longmemeval::tests
 
 # Generate eval baselines (slow, needs Qwen 3.5-9B on Metal GPU):
-cargo test -p origin-app --test eval_harness save_locomo_baseline -- --ignored --nocapture
-cargo test -p origin-app --test eval_harness save_locomo_reranked_baseline -- --ignored --nocapture
-cargo test -p origin-app --test eval_harness save_locomo_expanded_baseline -- --ignored --nocapture
-cargo test -p origin-app --test eval_harness save_longmemeval_baseline -- --ignored --nocapture
-cargo test -p origin-app --test eval_harness save_longmemeval_reranked_baseline -- --ignored --nocapture
-cargo test -p origin-app --test eval_harness save_longmemeval_expanded_baseline -- --ignored --nocapture
+cargo test -p origin-core --test eval_harness save_locomo_baseline -- --ignored --nocapture
+cargo test -p origin-core --test eval_harness save_locomo_reranked_baseline -- --ignored --nocapture
+cargo test -p origin-core --test eval_harness save_locomo_expanded_baseline -- --ignored --nocapture
+cargo test -p origin-core --test eval_harness save_longmemeval_baseline -- --ignored --nocapture
+cargo test -p origin-core --test eval_harness save_longmemeval_reranked_baseline -- --ignored --nocapture
+cargo test -p origin-core --test eval_harness save_longmemeval_expanded_baseline -- --ignored --nocapture
 # Baselines saved to app/eval/baselines/*.json (gitignored)
 ```
 
