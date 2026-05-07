@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-use crate::error::OriginError;
+use crate::error::AppError;
 
 /// Metadata + image for a captured window (used by frame_compare for hash).
 pub struct WindowCapture {
@@ -37,10 +37,10 @@ pub fn capture_windows(
     skip_apps: &[String],
     skip_title_patterns: &[String],
     private_browsing_detection: bool,
-) -> Result<Vec<WindowCapture>, OriginError> {
+) -> Result<Vec<WindowCapture>, AppError> {
     use xcap::Window;
 
-    let windows = Window::all().map_err(|e| OriginError::Vision(format!("xcap list: {e}")))?;
+    let windows = Window::all().map_err(|e| AppError::Vision(format!("xcap list: {e}")))?;
 
     let mut captures = Vec::new();
     for win in &windows {
@@ -69,9 +69,7 @@ pub fn capture_windows(
         let img = match win.capture_image() {
             Ok(buf) => image::DynamicImage::ImageRgba8(
                 image::ImageBuffer::from_raw(buf.width(), buf.height(), buf.into_raw())
-                    .ok_or_else(|| {
-                        OriginError::Vision("Failed to create image buffer".to_string())
-                    })?,
+                    .ok_or_else(|| AppError::Vision("Failed to create image buffer".to_string()))?,
             ),
             Err(e) => {
                 log::debug!("[vision] capture failed for \"{}\": {}", title, e);
@@ -100,7 +98,7 @@ pub fn capture_windows(
 /// Run Apple Vision OCR on each window capture, returning per-window results
 /// with individual text observations.
 #[cfg(target_os = "macos")]
-pub fn ocr_per_window(captures: &[WindowCapture]) -> Result<Vec<WindowOcrResult>, OriginError> {
+pub fn ocr_per_window(captures: &[WindowCapture]) -> Result<Vec<WindowOcrResult>, AppError> {
     let mut results = Vec::new();
 
     for capture in captures {
@@ -153,7 +151,7 @@ pub fn ocr_per_window(captures: &[WindowCapture]) -> Result<Vec<WindowOcrResult>
 }
 
 #[cfg(not(target_os = "macos"))]
-pub fn ocr_per_window(_captures: &[WindowCapture]) -> Result<Vec<WindowOcrResult>, OriginError> {
+pub fn ocr_per_window(_captures: &[WindowCapture]) -> Result<Vec<WindowOcrResult>, AppError> {
     Ok(vec![])
 }
 

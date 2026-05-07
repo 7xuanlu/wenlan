@@ -5,7 +5,7 @@
 //! chunking) happens inside the origin-server daemon.  This module delegates
 //! to `POST /api/sources/{id}/sync` on the daemon.
 
-use crate::error::OriginError;
+use crate::error::AppError;
 use crate::state::AppState;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -41,7 +41,7 @@ pub fn content_hash(content: &str) -> String {
 pub async fn sync_obsidian_vault(
     source: &Source,
     state: &Arc<RwLock<AppState>>,
-) -> Result<SyncStats, OriginError> {
+) -> Result<SyncStats, AppError> {
     let client = {
         let s = state.read().await;
         s.client.clone()
@@ -51,7 +51,7 @@ pub async fn sync_obsidian_vault(
     let stats: SyncStats = client
         .post_empty(&path)
         .await
-        .map_err(|e| OriginError::Http(format!("daemon sync failed: {}", e)))?;
+        .map_err(|e| AppError::Http(format!("daemon sync failed: {}", e)))?;
 
     Ok(stats)
 }

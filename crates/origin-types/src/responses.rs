@@ -400,6 +400,14 @@ pub struct IngestResponse {
 
 // ===== Concept Export =====
 
+/// Statistics from a bulk page export operation (POST /api/pages/export).
+#[derive(Debug, Default, Serialize, Deserialize)]
+pub struct ExportStats {
+    pub exported: usize,
+    pub skipped: usize,
+    pub failed: usize,
+}
+
 #[derive(Debug, Deserialize, Serialize)]
 pub struct ExportPageResponse {
     pub path: String,

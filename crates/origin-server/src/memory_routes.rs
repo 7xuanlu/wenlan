@@ -8,7 +8,8 @@ use axum::{
 };
 use origin_core::sources::compute_effective_confidence;
 use origin_types::requests::{
-    ConfirmRequest, ListMemoriesRequest, SearchMemoryRequest, StoreMemoryRequest,
+    ConfirmRequest, ExportPagesRequest, ListMemoriesRequest, SearchMemoryRequest,
+    StoreMemoryRequest,
 };
 use origin_types::responses::{
     ConfirmResponse, DeleteResponse, ListMemoriesResponse, SearchMemoryResponse,
@@ -2094,16 +2095,11 @@ pub struct SearchPagesRequest {
     pub limit: Option<usize>,
 }
 
-#[derive(Debug, Deserialize)]
-pub struct ExportPagesRequest {
-    pub vault_path: Option<String>,
-}
-
 /// POST /api/pages/export
 pub async fn handle_export_pages(
     State(state): State<Arc<RwLock<ServerState>>>,
     Json(req): Json<ExportPagesRequest>,
-) -> Result<Json<origin_core::export::ExportStats>, ServerError> {
+) -> Result<Json<origin_types::ExportStats>, ServerError> {
     let pages = {
         let s = state.read().await;
         let db = s.db.as_ref().ok_or(ServerError::DbNotInitialized)?;

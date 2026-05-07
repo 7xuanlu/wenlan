@@ -155,7 +155,7 @@ impl AppState {
 
     /// Initialize after daemon is confirmed healthy.
     /// Loads local file-based state only — no DB or LLM.
-    pub async fn initialize_local(&mut self) -> Result<Vec<PathBuf>, crate::error::OriginError> {
+    pub async fn initialize_local(&mut self) -> Result<Vec<PathBuf>, crate::error::AppError> {
         use crate::sources::local_files::LocalFilesSource;
 
         // Register local files source

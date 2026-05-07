@@ -417,6 +417,12 @@ pub struct UpdatePageRequest {
 
 // ===== Concept Export =====
 
+/// Request body for `POST /api/pages/export` (bulk export all pages to an Obsidian vault).
+#[derive(Debug, Deserialize, Serialize)]
+pub struct ExportPagesRequest {
+    pub vault_path: Option<String>,
+}
+
 #[derive(Debug, Deserialize, Serialize)]
 pub struct ExportPageRequest {
     pub vault_path: String,

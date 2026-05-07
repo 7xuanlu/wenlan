@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-use crate::error::OriginError;
+use crate::error::AppError;
 use crate::sources::local_files::LocalFilesSource;
 use crate::sources::RawDocument;
 use crate::state::AppState;
@@ -37,7 +37,7 @@ struct IngestResponse {
 pub async fn ingest_documents(
     mut docs: Vec<RawDocument>,
     state: &Arc<RwLock<AppState>>,
-) -> Result<usize, OriginError> {
+) -> Result<usize, AppError> {
     if docs.is_empty() {
         return Ok(0);
     }
@@ -131,14 +131,14 @@ pub async fn ingest_documents(
     }
 
     if let Some(err) = last_error {
-        Err(OriginError::VectorDb(err))
+        Err(AppError::Indexer(err))
     } else {
         Ok(total_chunks)
     }
 }
 
 /// Create a file watcher that ingests changed files into the vector database.
-pub fn create_file_watcher(state: Arc<RwLock<AppState>>) -> Result<FileWatcher, OriginError> {
+pub fn create_file_watcher(state: Arc<RwLock<AppState>>) -> Result<FileWatcher, AppError> {
     let debouncer = new_debouncer(
         Duration::from_secs(2),
         None,
@@ -182,7 +182,7 @@ pub fn create_file_watcher(state: Arc<RwLock<AppState>>) -> Result<FileWatcher, 
             }
         },
     )
-    .map_err(|e| OriginError::Indexer(e.to_string()))?;
+    .map_err(|e| AppError::Indexer(e.to_string()))?;
 
     log::info!("File watcher created");
     Ok(debouncer)
@@ -213,7 +213,7 @@ const WATCH_SKIP_DIRS: &[&str] = &[
 /// Instead of a single recursive watch (which monitors build artifacts, .git, etc.
 /// and exhausts file descriptors), we walk the directory tree ourselves and skip
 /// ignored directories, watching each valid directory individually.
-pub fn watch_path(watcher: &mut FileWatcher, path: &Path) -> Result<(), OriginError> {
+pub fn watch_path(watcher: &mut FileWatcher, path: &Path) -> Result<(), AppError> {
     let skip: std::collections::HashSet<&str> = WATCH_SKIP_DIRS.iter().copied().collect();
     let mut count = 0;
 
@@ -228,11 +228,11 @@ fn watch_path_filtered(
     dir: &Path,
     skip: &std::collections::HashSet<&str>,
     count: &mut usize,
-) -> Result<(), OriginError> {
+) -> Result<(), AppError> {
     // Watch this directory (non-recursive)
     watcher
         .watch(dir, notify::RecursiveMode::NonRecursive)
-        .map_err(|e| OriginError::Indexer(format!("Failed to watch {}: {}", dir.display(), e)))?;
+        .map_err(|e| AppError::Indexer(format!("Failed to watch {}: {}", dir.display(), e)))?;
     *count += 1;
 
     // Recurse into child directories, skipping ignored ones
@@ -265,7 +265,7 @@ fn watch_path_filtered(
 pub async fn sync_source(
     source_name: &str,
     state: &Arc<RwLock<AppState>>,
-) -> Result<usize, OriginError> {
+) -> Result<usize, AppError> {
     // Set is_running early so the UI reflects progress immediately
     {
         let mut s = state.write().await;
@@ -290,7 +290,7 @@ pub async fn sync_source(
 async fn sync_source_inner(
     source_name: &str,
     state: &Arc<RwLock<AppState>>,
-) -> Result<usize, OriginError> {
+) -> Result<usize, AppError> {
     let docs = if source_name == "local_files" {
         // Clone watch_paths under a brief read lock, then scan without holding any lock
         let watch_paths = {
@@ -318,20 +318,20 @@ async fn sync_source_inner(
             docs
         })
         .await
-        .map_err(|e| OriginError::Indexer(format!("Scan task failed: {}", e)))?
+        .map_err(|e| AppError::Indexer(format!("Scan task failed: {}", e)))?
     } else {
         // For non-local sources, use write lock so fetch_updates can mutate (token refresh)
         let mut s = state.write().await;
         let source = s
             .sources
             .get_mut(source_name)
-            .ok_or_else(|| OriginError::Source {
+            .ok_or_else(|| AppError::Source {
                 source_name: source_name.to_string(),
                 message: "Source not found".to_string(),
             })?;
 
         if !source.is_connected().await {
-            return Err(OriginError::Source {
+            return Err(AppError::Source {
                 source_name: source_name.to_string(),
                 message: "Source is not connected".to_string(),
             });

@@ -655,7 +655,7 @@ pub async fn add_watch_path(
                 .file_name()
                 .map(|n| n.to_string_lossy().to_string())
                 .unwrap_or_else(|| "dir".to_string());
-            let slug = crate::export::obsidian::slugify(&dirname);
+            let slug = crate::sources::obsidian::slugify(&dirname);
             let id = format!("directory-{}", slug);
             cfg.sources.push(crate::sources::Source {
                 id,
@@ -803,7 +803,7 @@ pub async fn list_sources(state: tauri::State<'_, State>) -> Result<Vec<SourceSt
 
 async fn save_current_config(
     state: &tauri::State<'_, State>,
-) -> Result<(), crate::error::OriginError> {
+) -> Result<(), crate::error::AppError> {
     let app_state = state.read().await;
     let existing = config::load_config();
     let cfg = config::Config {
@@ -1134,9 +1134,9 @@ pub async fn get_chunks(
     state: tauri::State<'_, State>,
     _source: String,
     source_id: String,
-) -> Result<Vec<crate::memory_db::MemoryDetail>, String> {
+) -> Result<Vec<MemoryDetail>, String> {
     let s = state.read().await;
-    let chunks: Vec<crate::memory_db::MemoryDetail> = s
+    let chunks: Vec<MemoryDetail> = s
         .client
         .get_json(&format!("/api/chunks/{}", source_id))
         .await?;
@@ -1840,18 +1840,6 @@ pub async fn list_pinned_memories(
     Ok(resp.memories)
 }
 
-#[tauri::command]
-pub async fn record_eval_signal(
-    _state: tauri::State<'_, State>,
-    _signal_type: String,
-    _memory_id: String,
-    _query_context: Option<String>,
-    _rank_position: Option<i32>,
-) -> Result<(), String> {
-    // Eval signals are now handled entirely by the daemon
-    Ok(())
-}
-
 // ── Pending revisions ─────────────────────────────────────────────────
 
 #[tauri::command]
@@ -1899,9 +1887,9 @@ pub async fn dismiss_contradiction(
 pub async fn get_pending_revision(
     state: tauri::State<'_, State>,
     source_id: String,
-) -> Result<Option<crate::memory_db::PendingRevision>, String> {
+) -> Result<Option<PendingRevision>, String> {
     let s = state.read().await;
-    let revision: Option<crate::memory_db::PendingRevision> = s
+    let revision: Option<PendingRevision> = s
         .client
         .get_json(&format!("/api/memory/pending-revision/{}", source_id))
         .await?;
@@ -1911,37 +1899,34 @@ pub async fn get_pending_revision(
 // ── Briefing / narrative ──────────────────────────────────────────────
 
 #[tauri::command]
-pub async fn get_briefing(
-    state: tauri::State<'_, State>,
-) -> Result<crate::briefing::BriefingResponse, String> {
+pub async fn get_briefing(state: tauri::State<'_, State>) -> Result<BriefingResponse, String> {
     let s = state.read().await;
-    let resp: crate::briefing::BriefingResponse = s.client.get_json("/api/briefing").await?;
+    let resp: BriefingResponse = s.client.get_json("/api/briefing").await?;
     Ok(resp)
 }
 
 #[tauri::command]
 pub async fn get_pending_contradictions(
     _state: tauri::State<'_, State>,
-) -> Result<Vec<crate::briefing::ContradictionItem>, String> {
+) -> Result<Vec<ContradictionItem>, String> {
     Ok(vec![])
 }
 
 #[tauri::command]
 pub async fn get_profile_narrative(
     state: tauri::State<'_, State>,
-) -> Result<crate::narrative::NarrativeResponse, String> {
+) -> Result<NarrativeResponse, String> {
     let s = state.read().await;
-    let resp: crate::narrative::NarrativeResponse =
-        s.client.get_json("/api/profile/narrative").await?;
+    let resp: NarrativeResponse = s.client.get_json("/api/profile/narrative").await?;
     Ok(resp)
 }
 
 #[tauri::command]
 pub async fn regenerate_narrative(
     state: tauri::State<'_, State>,
-) -> Result<crate::narrative::NarrativeResponse, String> {
+) -> Result<NarrativeResponse, String> {
     let s = state.read().await;
-    let resp: crate::narrative::NarrativeResponse = s
+    let resp: NarrativeResponse = s
         .client
         .post_empty("/api/profile/narrative/regenerate")
         .await?;
@@ -2024,16 +2009,6 @@ pub async fn dismiss_entity_suggestion_cmd(
 }
 
 // ── Spaces ────────────────────────────────────────────────────────────
-
-#[derive(Debug, Clone, Serialize)]
-#[allow(dead_code)]
-pub struct SpaceData {
-    pub spaces: Vec<crate::spaces::Space>,
-    pub activity_streams: Vec<crate::spaces::ActivityStream>,
-    pub document_spaces: HashMap<String, String>,
-    pub document_tags: HashMap<String, Vec<String>>,
-    pub tags: Vec<String>,
-}
 
 #[tauri::command]
 pub async fn list_spaces(state: tauri::State<'_, State>) -> Result<Vec<Space>, String> {
@@ -2313,7 +2288,7 @@ fn percent_encode(s: &str) -> String {
 #[tauri::command]
 pub async fn get_working_memory(
     state: tauri::State<'_, State>,
-) -> Result<Vec<crate::working_memory::WorkingMemoryEntry>, String> {
+) -> Result<Vec<origin_types::working_memory::WorkingMemoryEntry>, String> {
     // Working memory is in-process state populated by the context consumer
     // (`router/intent.rs`). Sensors run only in the app process, so this
     // is served from the app's local rolling buffer rather than an HTTP endpoint.
@@ -2410,14 +2385,11 @@ pub async fn correct_memory_cmd(
 /// Wire wrapper for the daemon's `{ "page": {...} }` response shape.
 #[derive(serde::Deserialize)]
 struct GetPageWire {
-    page: Option<crate::pages::Page>,
+    page: Option<Page>,
 }
 
 #[tauri::command]
-pub async fn get_page(
-    state: tauri::State<'_, State>,
-    id: String,
-) -> Result<Option<crate::pages::Page>, String> {
+pub async fn get_page(state: tauri::State<'_, State>, id: String) -> Result<Option<Page>, String> {
     let client = state.read().await.client.clone();
     // The daemon returns 404 when the page doesn't exist, which reqwest
     // turns into an error. Distinguish "not found" from real errors so the
@@ -2477,7 +2449,7 @@ pub async fn delete_page(state: tauri::State<'_, State>, id: String) -> Result<(
 /// origin-types), so we can't put this in the shared response types.
 #[derive(serde::Deserialize)]
 struct ListPagesWire {
-    pages: Vec<crate::pages::Page>,
+    pages: Vec<Page>,
 }
 
 #[tauri::command]
@@ -2487,7 +2459,7 @@ pub async fn list_pages(
     domain: Option<String>,
     limit: Option<usize>,
     offset: Option<usize>,
-) -> Result<Vec<crate::pages::Page>, String> {
+) -> Result<Vec<Page>, String> {
     let client = state.read().await.client.clone();
     // Build query string from the filter params that were previously ignored.
     let mut params: Vec<String> = Vec::new();
@@ -2517,7 +2489,7 @@ pub async fn search_pages(
     state: tauri::State<'_, State>,
     query: String,
     limit: Option<usize>,
-) -> Result<Vec<crate::pages::Page>, String> {
+) -> Result<Vec<Page>, String> {
     let client = state.read().await.client.clone();
     let req = requests::SearchPagesRequest { query, limit };
     let resp: ListPagesWire = client.post_json("/api/pages/search", &req).await?;
@@ -2537,23 +2509,14 @@ pub async fn get_page_sources(
 pub async fn export_pages_to_obsidian(
     state: tauri::State<'_, State>,
     vault_path: String,
-) -> Result<crate::export::ExportStats, String> {
-    // Fetch pages from daemon, then export locally
-    let pages: Vec<crate::pages::Page> = {
-        let client = state.read().await.client.clone();
-        let resp: ListPagesWire = client.get_json("/api/pages").await?;
-        resp.pages
+) -> Result<ExportStats, String> {
+    // Delegate bulk export to the daemon (POST /api/pages/export).
+    // The daemon has direct FS access and owns the ObsidianExporter.
+    let client = state.read().await.client.clone();
+    let req = requests::ExportPagesRequest {
+        vault_path: Some(vault_path),
     };
-    let expanded = if let Some(rest) = vault_path.strip_prefix("~/") {
-        let home = std::env::var("HOME").unwrap_or_default();
-        format!("{}/{}", home, rest)
-    } else {
-        vault_path
-    };
-    let exporter =
-        crate::export::obsidian::ObsidianExporter::new(std::path::PathBuf::from(expanded));
-    use crate::export::PageExporter;
-    exporter.export_all(&pages).map_err(|e| e.to_string())
+    client.post_json("/api/pages/export", &req).await
 }
 
 #[tauri::command]
@@ -2581,26 +2544,6 @@ pub async fn count_knowledge_files(state: tauri::State<'_, State>) -> Result<u64
     let client = state.read().await.client.clone();
     let resp: responses::KnowledgeCountResponse = client.get_json("/api/knowledge/count").await?;
     Ok(resp.count)
-}
-
-// ── Distillation ──────────────────────────────────────────────────────
-
-#[tauri::command]
-pub async fn trigger_distillation(
-    state: tauri::State<'_, State>,
-) -> Result<serde_json::Value, String> {
-    let s = state.read().await;
-    s.client.post_empty("/api/distill").await
-}
-
-#[tauri::command]
-pub async fn redistill_page(state: tauri::State<'_, State>, page_id: String) -> Result<(), String> {
-    let s = state.read().await;
-    let _resp: serde_json::Value = s
-        .client
-        .post_empty(&format!("/api/distill/{}", page_id))
-        .await?;
-    Ok(())
 }
 
 // ── Quality gate / rejections ─────────────────────────────────────────
@@ -2681,7 +2624,7 @@ pub async fn add_source(
         .file_name()
         .map(|n| n.to_string_lossy().to_string())
         .unwrap_or_else(|| "dir".to_string());
-    let slug = crate::export::obsidian::slugify(&dirname);
+    let slug = crate::sources::obsidian::slugify(&dirname);
     let id = format!("{}-{}", st.as_str(), slug);
 
     let mut cfg = config::load_config();

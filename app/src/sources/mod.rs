@@ -1,13 +1,13 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-//! App-level sources -- re-exports origin-types wire types + origin-core trait/impls.
+//! App-level sources: wire types from origin-types + app-local trait/impls.
+pub mod data_source;
+pub mod local_files;
+pub mod obsidian;
 pub mod sync;
 
 // Wire types (Source, SourceStatus, RawDocument, MemoryType, etc.) from the
 // shared types crate -- no heavy deps, safe for downstream consumers.
 pub use origin_types::sources::*;
 
-// Trait and connector impls that depend on origin-core internals.
-pub use origin_core::sources::{
-    base_confidence, compute_effective_confidence, decay_rate, local_files, obsidian, trust_weight,
-    DataSource,
-};
+// App-local DataSource trait (moved from origin-core in Phase 5-D PR2).
+pub use data_source::DataSource;
