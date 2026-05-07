@@ -38,10 +38,11 @@ pub fn assemble_narrative_template(memories: &[NarrativeMemory]) -> String {
         .filter(|m| m.memory_type != "decision" && m.memory_type != "fact")
         .collect();
 
-    // Group by type
+    // Group by type. Phase 0 dropped MemoryType::Goal — existing goal-typed
+    // rows were folded into Identity by migration 45. The render path does
+    // not have a goals branch anymore.
     let mut identities = Vec::new();
     let mut preferences = Vec::new();
-    let mut goals = Vec::new();
 
     for mem in &memories {
         let text = if !mem.title.is_empty() {
@@ -56,7 +57,6 @@ pub fn assemble_narrative_template(memories: &[NarrativeMemory]) -> String {
         match mem.memory_type.as_str() {
             "identity" => identities.push(clean),
             "preference" => preferences.push(clean),
-            "goal" => goals.push(clean),
             _ => {}
         }
     }
@@ -73,15 +73,6 @@ pub fn assemble_narrative_template(memories: &[NarrativeMemory]) -> String {
     if !preferences.is_empty() {
         let joined = join_naturally(&preferences, 2);
         parts.push(format!("You prefer {}.", lowercase_first(&joined)));
-    }
-
-    // Goals: "You're currently focused on X."
-    if !goals.is_empty() {
-        let joined = join_naturally(&goals, 2);
-        parts.push(format!(
-            "You're currently focused on {}.",
-            lowercase_first(&joined)
-        ));
     }
 
     parts.join(" ")
@@ -227,13 +218,15 @@ mod tests {
             mem("A Rust developer", "identity"),
             mem("Dark mode for all UIs", "preference"),
             mem("To use libSQL over SQLite", "decision"),
-            mem("Ship the MVP by March", "goal"),
+            // Phase 0 dropped Goal — former goal-typed memories now render
+            // through the identity branch after migration 45.
+            mem("Someone shipping the MVP by March", "identity"),
         ];
         let result = assemble_narrative_template(&memories);
         // Decision types are filtered out — narrative only includes profile types
         assert_eq!(
             result,
-            "You're a Rust developer. You prefer dark mode for all UIs. You're currently focused on ship the MVP by March."
+            "You're a Rust developer and Someone shipping the MVP by March. You prefer dark mode for all UIs."
         );
     }
 
@@ -302,7 +295,10 @@ mod tests {
             mem("Rust engineer", "identity"),
             mem("Prefers TDD", "preference"),
             mem("Used libSQL over Neo4j", "decision"),
-            mem("Ship wiki this weekend", "goal"),
+            // "goal" rows are folded into identity by migration 45; we keep
+            // a row here typed as identity (not goal) to reflect the new
+            // taxonomy.
+            mem("Shipping the wiki this weekend", "identity"),
         ];
         let result = assemble_narrative_template(&memories);
         assert!(
