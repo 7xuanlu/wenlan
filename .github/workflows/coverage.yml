@@ -54,51 +54,19 @@ jobs:
           restore-keys: |
             fastembed-bge-base-en-v1.5-q-
 
-      - name: Install pnpm
-        uses: pnpm/action-setup@v4
-
-      - name: Install Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: 20
-          cache: pnpm
-
-      - name: Install frontend dependencies
-        run: pnpm install
-
-      - name: Create sidecar placeholders for Tauri build script
-        run: |
-          mkdir -p app/binaries
-          touch app/binaries/origin-server-aarch64-apple-darwin
-          touch app/binaries/origin-mcp-aarch64-apple-darwin
-          touch app/binaries/cloudflared-aarch64-apple-darwin
-
       - name: Install cargo-llvm-cov
         uses: taiki-e/install-action@cargo-llvm-cov
 
       - name: Run Rust coverage (origin-core + origin-server)
-        # Skip --package origin (Tauri app); its crate is Tauri command proxies
-        # which can't be exercised meaningfully without a GUI runtime, and
-        # including it explodes memory on the runner.
         run: |
           cargo llvm-cov --package origin-core --package origin-server \
             --summary-only --json --output-path rust-coverage.json
           cargo llvm-cov --package origin-core --package origin-server \
             --summary-only
 
-      - name: Run frontend coverage
-        run: |
-          pnpm vitest run --coverage \
-            --coverage.thresholds.lines=0 \
-            --coverage.thresholds.functions=0 \
-            --coverage.thresholds.branches=0 \
-            --coverage.thresholds.statements=0
-
       - name: Upload coverage artifacts
         uses: actions/upload-artifact@v4
         with:
           name: coverage-reports
-          path: |
-            rust-coverage.json
-            coverage/
+          path: rust-coverage.json
           retention-days: 7

@@ -1,7 +1,6 @@
 [workspace]
 resolver = "2"
 members = [
-    "app",
     "crates/origin-cli",
     "crates/origin-types",
     "crates/origin-core",

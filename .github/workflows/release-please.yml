@@ -44,15 +44,10 @@ jobs:
           VERSION=$(cat version.txt | tr -d '[:space:]')
           echo "Syncing version files to $VERSION"
 
-          # Cargo.toml files (sed marker)
-          for f in app/Cargo.toml crates/origin-types/Cargo.toml crates/origin-core/Cargo.toml crates/origin-server/Cargo.toml; do
+          # Cargo.toml files (sed marker). The Tauri desktop app moved to
+          # https://github.com/7xuanlu/origin-app and bumps its own versions.
+          for f in crates/origin-cli/Cargo.toml crates/origin-types/Cargo.toml crates/origin-core/Cargo.toml crates/origin-server/Cargo.toml; do
             sed -i "s/^version = \".*\" # x-release-please-version/version = \"$VERSION\" # x-release-please-version/" "$f"
-            echo "  Updated $f"
-          done
-
-          # JSON files (release-please extra-files jsonpath is unreliable with simple type)
-          for f in package.json app/tauri.conf.json; do
-            node -e "const fs=require('fs'); const p='$f'; const j=JSON.parse(fs.readFileSync(p,'utf8')); j.version='$VERSION'; fs.writeFileSync(p,JSON.stringify(j,null,2)+'\n')"
             echo "  Updated $f"
           done
 

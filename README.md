@@ -51,7 +51,9 @@ On first run, `npx origin-mcp` downloads the MCP connector from the [origin-mcp 
 
 Use the desktop app when you want Origin in the menu bar, memory inspection/editing, and Remote Access for Claude.ai or ChatGPT web.
 
-1. Download the `.dmg` from [GitHub Releases](https://github.com/7xuanlu/origin/releases/latest).
+The desktop app ships from a separate repo: [7xuanlu/origin-app](https://github.com/7xuanlu/origin-app).
+
+1. Download the `.dmg` from [origin-app releases](https://github.com/7xuanlu/origin-app/releases/latest).
 2. Drag **Origin** into Applications.
 3. Clear quarantine (the build is currently unsigned):
    ```bash
@@ -152,36 +154,32 @@ Retrieval quality on standard long-memory benchmarks. Numbers come from BGE-Base
 
 Origin is daemon-first. `origin-server` owns the local database, embeddings, refinery, knowledge graph, and HTTP API on `127.0.0.1:7878`. The desktop app and MCP clients are thin clients over that daemon.
 
-Stack: Rust, Tauri 2, libSQL, Tokio, FastEmbed, llama-cpp-2, Axum, React, Tailwind CSS. Full module map: [CLAUDE.md](CLAUDE.md).
+Stack: Rust, libSQL, Tokio, FastEmbed, llama-cpp-2, Axum. The desktop app (Tauri 2 + React) lives in [7xuanlu/origin-app](https://github.com/7xuanlu/origin-app). Full module map: [CLAUDE.md](CLAUDE.md).
 
 ---
 
 ## Build from source
 
+This repo builds the daemon, MCP-facing CLI, and shared types. The desktop app builds from [7xuanlu/origin-app](https://github.com/7xuanlu/origin-app).
+
 ```bash
 git clone https://github.com/7xuanlu/origin.git
 cd origin
-pnpm install
+cargo build -p origin-server
 ```
 
-Single command builds the daemon, starts it, and launches the Tauri app with Vite:
+Run the daemon directly:
 
 ```bash
-pnpm dev:all
+cargo run -p origin-server
 ```
 
-Or run daemon and app separately:
+Or install as a launchd service:
 
 ```bash
-cargo run -p origin-server          # terminal 1
-pnpm tauri dev                      # terminal 2
-```
-
-For local `.dmg` builds:
-
-```bash
-pnpm release            # builds daemon + app bundle
-pnpm release:dmg                # wraps .app into DMG
+cargo build --release -p origin-server
+./target/release/origin-server install
+./target/release/origin-server status
 ```
 
 First build takes several minutes while `llama.cpp` compiles for Metal.
@@ -211,11 +209,11 @@ Bug fixes, eval cases, docs, and features are welcome. Start with [CONTRIBUTING.
 
 ## License
 
-- `origin-types`, `origin-core`, `origin-server`: **Apache-2.0**
-- Desktop app (`app/`) and root frontend UI: **AGPL-3.0-only**
+- `origin-types`, `origin-core`, `origin-server`, `origin` (CLI): **Apache-2.0**
+- [origin-app](https://github.com/7xuanlu/origin-app) (Tauri desktop app + React UI): **AGPL-3.0-only**
 - [origin-mcp](https://github.com/7xuanlu/origin-mcp) (MCP server, npm package, Homebrew): **MIT**
 
-The split keeps the data layer permissively licensed for downstream tools while the shipped desktop app stays AGPL.
+The split keeps the data layer permissively licensed for downstream tools while the shipped desktop app stays AGPL in its own repo.
 
 ---
 

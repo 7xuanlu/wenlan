@@ -42,33 +42,14 @@ jobs:
           restore-keys: |
             fastembed-bge-base-en-v1.5-q-
 
-      - name: Install pnpm
-        uses: pnpm/action-setup@v4
-
-      - name: Install Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: 20
-          cache: pnpm
-
-      - name: Install frontend dependencies
-        run: pnpm install
-
-      - name: Create sidecar placeholders for Tauri build script
-        run: |
-          mkdir -p app/binaries
-          touch app/binaries/origin-server-aarch64-apple-darwin
-          touch app/binaries/origin-mcp-aarch64-apple-darwin
-          touch app/binaries/cloudflared-aarch64-apple-darwin
-
       - name: Check Rust formatting
         run: cargo fmt --check --all
 
       - name: Run Clippy
         run: cargo clippy --workspace --all-targets -- -D warnings
 
-      - name: Run Rust tests (types + server)
-        run: cargo test -p origin-types -p origin-server
+      - name: Run Rust tests (types + server + cli)
+        run: cargo test -p origin-types -p origin-server -p origin
 
       # SIGSEGV flake on macos-latest only (not reproduced locally on M-series
       # in 3 sequential runs; small sample). Confirmed in CI runs 24963231079,
@@ -105,8 +86,3 @@ jobs:
       #   cargo test -p origin-core --test eval_harness
       #
       # The model downloads once into ~/.fastembed_cache and is reused.
-      - name: Run app unit tests (eval harness runs locally)
-        run: cargo test -p origin-app --lib
-
-      - name: Run frontend tests
-        run: pnpm test

@@ -33,11 +33,11 @@ if [ -n "$all_changed" ]; then
 fi
 
 # Pre-push runs FAST checks: clippy + library tests only. Integration tests
-# (app/tests/eval_harness.rs) need the ONNX BGE model and run for minutes;
-# they belong in CI. Coverage gates are NOT enforced here either — the
-# instrumented `cargo llvm-cov` rebuild can take 5-15min and overload memory.
-# Frontend tests run in CI on every PR. Use `bash scripts/coverage.sh` for a
-# local coverage report. See CLAUDE.md "Local vs CI test responsibilities".
+# (crates/origin-core/tests/eval_harness.rs) need the ONNX BGE model and run
+# for minutes; they belong in CI. Coverage gates are NOT enforced here either
+# — the instrumented `cargo llvm-cov` rebuild can take 5-15min and overload
+# memory. Use `bash scripts/coverage.sh` for a local coverage report. See
+# CLAUDE.md "Local vs CI test responsibilities".
 echo "Pre-push: running fast checks..."
 
 echo "  Running Clippy..."

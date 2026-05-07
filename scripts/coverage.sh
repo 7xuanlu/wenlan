@@ -6,17 +6,11 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
 cd "$REPO_ROOT"
 
-echo "Generating Rust coverage report..."
-(cd app && cargo llvm-cov --html)
-echo "  -> app/target/llvm-cov/html/index.html"
+echo "Generating Rust coverage report (origin-core + origin-server)..."
+cargo llvm-cov --html -p origin-core -p origin-server
+echo "  -> target/llvm-cov/html/index.html"
 
-echo ""
-echo "Generating frontend coverage report..."
-pnpm vitest run --coverage
-echo "  -> coverage/index.html"
-
-# Open reports on macOS
+# Open report on macOS
 if command -v open &> /dev/null; then
-    open app/target/llvm-cov/html/index.html
-    open coverage/index.html
+    open target/llvm-cov/html/index.html
 fi
