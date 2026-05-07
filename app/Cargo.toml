@@ -80,7 +80,9 @@ raw-window-handle = "0.6"
 
 # Workspace crates
 origin-types = { workspace = true }
-origin-core = { workspace = true }
+sysinfo = { workspace = true }
+pdf-extract = { workspace = true }
+zip = { workspace = true }
 
 [dev-dependencies]
 serial_test = "3"
