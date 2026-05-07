@@ -34,7 +34,7 @@ pub use memory::{
 };
 pub use narrative::NarrativeResponse;
 pub use pages::Page;
-pub use responses::{MemoryDetail, PendingRevision};
+pub use responses::{ExportStats, MemoryDetail, PendingRevision};
 pub use sources::{MemoryType, RawDocument, SourceType, StabilityTier, SyncStatus};
 
 use serde::{Deserialize, Serialize};

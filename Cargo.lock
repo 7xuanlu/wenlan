@@ -5282,8 +5282,8 @@ dependencies = [
  "notify",
  "notify-debouncer-full",
  "objc",
- "origin-core",
  "origin-types",
+ "pdf-extract",
  "raw-window-handle",
  "regex",
  "reqwest 0.12.28",
@@ -5292,6 +5292,7 @@ dependencies = [
  "serde_yaml",
  "serial_test",
  "sha2",
+ "sysinfo 0.33.1",
  "tauri",
  "tauri-build",
  "tauri-plugin-clipboard-x",
@@ -5312,6 +5313,7 @@ dependencies = [
  "tracing-subscriber",
  "uuid",
  "xcap 0.8.3",
+ "zip 2.4.2",
 ]
 
 [[package]]

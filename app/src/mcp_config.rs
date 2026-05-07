@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-use crate::error::OriginError;
+use crate::error::AppError;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
@@ -112,7 +112,7 @@ pub fn origin_mcp_entry() -> serde_json::Value {
 pub fn write_origin_entry(
     config_path: &std::path::Path,
     is_claude_code: bool,
-) -> Result<(), OriginError> {
+) -> Result<(), AppError> {
     let mut root = if config_path.exists() {
         // Back up existing file
         let backup_path = config_path.with_extension("json.bak");
@@ -120,10 +120,10 @@ pub fn write_origin_entry(
 
         let contents = std::fs::read_to_string(config_path)?;
         serde_json::from_str::<serde_json::Value>(&contents).map_err(|e| {
-            OriginError::Generic(format!("Invalid JSON in {}: {}", config_path.display(), e))
+            AppError::Generic(format!("Invalid JSON in {}: {}", config_path.display(), e))
         })?
     } else if is_claude_code {
-        return Err(OriginError::Generic(
+        return Err(AppError::Generic(
             "Claude Code config file not found — Claude Code manages this file internally".into(),
         ));
     } else {
@@ -142,7 +142,7 @@ pub fn write_origin_entry(
         std::fs::create_dir_all(parent)?;
     }
     let formatted =
-        serde_json::to_string_pretty(&root).map_err(|e| OriginError::Generic(e.to_string()))?;
+        serde_json::to_string_pretty(&root).map_err(|e| AppError::Generic(e.to_string()))?;
     std::fs::write(config_path, formatted)?;
 
     Ok(())

@@ -6,19 +6,15 @@ pub mod obsidian;
 
 use crate::error::OriginError;
 use crate::pages::Page;
-use serde::Serialize;
 
-#[derive(Debug, Serialize)]
+// ExportStats moved to origin-types in Phase 5-D PR2 so the Tauri app can
+// deserialize it without pulling in the full origin-core dep.
+pub use origin_types::ExportStats;
+
+#[derive(Debug)]
 pub struct ExportResult {
     pub concept_id: String,
     pub path: String,
-}
-
-#[derive(Debug, Default, Serialize)]
-pub struct ExportStats {
-    pub exported: usize,
-    pub skipped: usize,
-    pub failed: usize,
 }
 
 /// Trait for exporting pages to external formats/systems.

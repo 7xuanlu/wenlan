@@ -4,11 +4,15 @@
 extern crate objc;
 
 // ── App-specific modules (Tauri, sensors, UI) ──
+pub mod activity;
 pub mod api;
+pub mod config;
+pub mod error;
 pub mod events;
 mod indexer;
 mod lifecycle;
 pub mod mcp_config;
+pub mod privacy;
 pub mod remote_access;
 mod router;
 mod search;
@@ -21,22 +25,6 @@ pub mod system_info;
 pub(crate) mod tray_health;
 mod trigger;
 mod updater;
-
-// ── Re-export origin-core modules ──
-// These re-exports let existing `crate::module::Type` paths work unchanged
-// throughout the app (search.rs, state.rs, router/, etc.)
-pub use origin_core::activity;
-pub use origin_core::briefing;
-pub use origin_core::config;
-pub use origin_core::db as memory_db;
-pub use origin_core::error;
-pub use origin_core::export;
-pub use origin_core::narrative;
-pub use origin_core::pages;
-pub use origin_core::privacy;
-// sources is a local module (has app-specific sync logic)
-pub use origin_core::spaces;
-pub use origin_core::working_memory;
 
 use state::AppState;
 use std::sync::Arc;
@@ -820,7 +808,6 @@ pub fn run() {
             search::pin_memory,
             search::unpin_memory,
             search::list_pinned_memories,
-            search::record_eval_signal,
             search::set_avatar,
             search::get_avatar_data_url,
             search::remove_avatar,
@@ -872,9 +859,6 @@ pub fn run() {
             search::export_page_to_obsidian,
             search::get_knowledge_path,
             search::count_knowledge_files,
-            // Distillation trigger commands
-            search::trigger_distillation,
-            search::redistill_page,
             search::get_screen_capture_enabled,
             search::set_screen_capture_enabled,
             search::check_screen_permission,
