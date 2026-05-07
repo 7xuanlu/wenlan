@@ -14,10 +14,10 @@ reject each before they become authoritative.
 
 ## How to invoke
 
-Pull pending memories from the daemon:
+Pull pending memories via the `origin` MCP server's `list_pending` tool:
 
 ```
-GET http://127.0.0.1:7878/api/memory/list?confirmed=false&limit=20
+list_pending(limit=20)
 ```
 
 For each memory, present:
@@ -27,9 +27,11 @@ For each memory, present:
 - Confidence + quality
 
 Then offer per-item:
-- **Accept** → `POST /api/memory/confirm/{id}` (marks confirmed)
-- **Edit** → present a draft, on save `PUT` the new content
-- **Reject** → `DELETE /api/memory/{id}` (or `POST /api/memory/{id}/archive`)
+- **Accept** → `confirm_memory(memory_id="<id>")`
+- **Edit** → present a draft, on save call `capture` with the new content +
+  `supersedes="<old_id>"` (then `forget(memory_id="<old_id>")` once the
+  replacement lands)
+- **Reject** → `forget(memory_id="<id>")`
 
 ## When to use
 

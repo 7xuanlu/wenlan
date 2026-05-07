@@ -16,15 +16,13 @@ page from its current sources.
 
 ## How to invoke
 
-Currently no MCP tool wraps this — call the daemon HTTP directly:
+Call the `origin` MCP server's `distill` tool. Without an arg, distills any
+clusters with new sources. With `page_id`, re-distills that one page.
 
 ```
-POST http://127.0.0.1:7878/api/distill              # full pass
-POST http://127.0.0.1:7878/api/distill/{page_id}    # single page
+distill()                       # full pass
+distill(page_id="<page_id>")    # single page
 ```
-
-(A `distill` MCP tool will land in origin-mcp v0.4 alongside the
-`remember → capture` rename, after which this skill switches to MCP.)
 
 ## What distillation does
 

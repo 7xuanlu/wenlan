@@ -19,7 +19,7 @@ Two-syllable max. Active where it matters.
 | `/origin:forget <id>` | Delete a memory. Destructive. |
 | `/origin:handoff` | Session-end debrief — capture decisions, lessons, gotchas. Alias: `/origin:debrief`. |
 
-All skills route through MCP where the tool exists; refinery verbs (`/origin:distill`, parts of `/origin:review`) talk to the daemon's HTTP API directly until matching MCP tools land in `origin-mcp` v0.4.
+All skills route through MCP. `origin-mcp` v0.4 added the refinery tools (`distill`, `list_pending`, `confirm_memory`) so the plugin no longer talks to the daemon over raw HTTP.
 
 ## Install
 
@@ -42,7 +42,7 @@ origin status
 
 ## Why a plugin
 
-`origin-mcp` exposes MCP tools (`remember` / `recall` / `context` / `forget` / `doctor`). Triggering them through MCP normally takes a sentence ("call recall with query 'Alice database preferences'"). With this plugin the same call becomes:
+`origin-mcp` exposes MCP tools (`capture` / `recall` / `context` / `distill` / `list_pending` / `confirm_memory` / `forget` / `doctor`). Triggering them through MCP normally takes a sentence ("call recall with query 'Alice database preferences'"). With this plugin the same call becomes:
 
 ```
 /origin:recall Alice database preferences
@@ -77,9 +77,7 @@ origin-plugin/
 
 ## Status
 
-v0.1 preview. Skill names locked. Pending before tagging:
-- Backing MCP tool rename `remember → capture` in `origin-mcp` v0.4.
-- New MCP tools `distill`, `review` (or HTTP-direct path documented).
+v0.1 preview. Skill names locked. Backing MCP tools land in `origin-mcp` v0.4 (`capture` rename, plus `distill` / `list_pending` / `confirm_memory`).
 
 ## License
 

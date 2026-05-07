@@ -13,12 +13,11 @@ moment of insight, like a photograph.
 
 ## How to invoke
 
-Call the `origin` MCP server's `remember` tool (will be renamed to `capture`
-in origin-mcp v0.4) with the user's content as a complete, self-contained
-statement.
+Call the `origin` MCP server's `capture` tool with the user's content as a
+complete, self-contained statement.
 
 ```
-remember(content="<args, written as a full sentence with WHY>")
+capture(content="<args, written as a full sentence with WHY>")
 ```
 
 The daemon auto-classifies type, extracts structured fields, detects

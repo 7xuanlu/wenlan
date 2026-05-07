@@ -16,12 +16,11 @@ context.
 
 1. Summarize the session: list decisions, lessons, gotchas, blockers, and
    pending threads.
-2. For each item, call the `origin` MCP server's `remember` tool (will be
-   renamed to `capture` after origin-mcp v0.4) with one atomic statement
-   per memory.
+2. For each item, call the `origin` MCP server's `capture` tool with one
+   atomic statement per memory.
 
 ```
-remember(content="<one decision / lesson / gotcha as a complete sentence>")
+capture(content="<one decision / lesson / gotcha as a complete sentence>")
 ```
 
 3. Confirm with the user before closing — show the items being stored, let
