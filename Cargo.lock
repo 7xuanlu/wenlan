@@ -5203,7 +5203,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "origin"
+name = "origin-app"
 version = "0.3.0"
 dependencies = [
  "anyhow",

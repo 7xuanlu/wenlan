@@ -101,7 +101,11 @@ fn current_app_path() -> Result<PathBuf> {
 }
 
 fn is_stable_launch_agent_target(exe: &Path) -> bool {
-    if exe.file_name().and_then(|s| s.to_str()) != Some("origin") {
+    // Accept both legacy "origin" and renamed "origin-app" binary names.
+    // Tauri crate package was renamed origin -> origin-app in Phase 3 PR1, but
+    // existing user installs may still have the old binary path on disk.
+    let name = exe.file_name().and_then(|s| s.to_str());
+    if name != Some("origin-app") && name != Some("origin") {
         return false;
     }
 
@@ -453,6 +457,16 @@ mod tests {
     fn stable_launch_agent_target_allows_applications_app_bundle() {
         assert!(is_stable_launch_agent_target(std::path::Path::new(
             "/Applications/Origin.app/Contents/MacOS/origin"
+        )));
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn stable_launch_agent_target_allows_renamed_origin_app_binary() {
+        // After Phase 3 PR1 rename (origin -> origin-app), new installs ship
+        // with binary path `.../MacOS/origin-app`. The check must accept both.
+        assert!(is_stable_launch_agent_target(std::path::Path::new(
+            "/Applications/Origin.app/Contents/MacOS/origin-app"
         )));
     }
 

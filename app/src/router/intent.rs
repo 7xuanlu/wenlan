@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 use crate::privacy::redact_pii;
-use crate::router::bundle::{assemble_bundle_with_intent, ContextBundle};
+use crate::router::bundle::{assemble_bundle_with_intent, ContextBundle, TriggerSource};
 use crate::router::keywords;
 use crate::sensor;
 use crate::state::AppState;
@@ -196,7 +196,7 @@ pub async fn run_context_consumer(
     let mut last_consumer: Option<(String, String, i64)> = None; // (source, text, timestamp)
 
     while let Some(bundle) = bundle_rx.recv().await {
-        let trigger_type = bundle.trigger_type.clone();
+        let trigger_type = bundle.trigger_type.to_string();
 
         // Build title and content from the bundle (same logic as bundle_to_raw_document)
         let (source, source_id, title, content, url, metadata) = extract_ingest_fields(&bundle);
@@ -332,8 +332,8 @@ fn extract_ingest_fields(
     Option<String>,
     std::collections::HashMap<String, String>,
 ) {
-    let source = match bundle.trigger_type.as_str() {
-        "thought" => "quick_thought",
+    let source = match bundle.trigger_type {
+        TriggerSource::Thought => "quick_thought",
         _ => "context",
     }
     .to_string();
