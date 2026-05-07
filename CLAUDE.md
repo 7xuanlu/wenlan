@@ -2,31 +2,21 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+This repo holds the **daemon** (`origin-server`), the **CLI** (`origin`), shared **wire types** (`origin-types`), and **business-logic core** (`origin-core`). The Tauri desktop app (`origin-app`) ships from a separate repo: [7xuanlu/origin-app](https://github.com/7xuanlu/origin-app). The MCP server (`origin-mcp`) is also a separate repo.
+
 ## Build & Dev Commands
 
-Origin is a Cargo workspace with 4 crates: `origin-types`, `origin-core`, `origin-server`, and the Tauri app (`origin`).
+Origin is a Cargo workspace with 4 crates: `origin-types`, `origin-core`, `origin-server`, `origin` (CLI in `crates/origin-cli`).
 
 ```bash
-# Install frontend dependencies
-pnpm install
-
-# Run in development (recommended — single command handles everything):
-pnpm dev:all
-# This runs: (1) cargo build -p origin-server, (2) starts daemon on :7878,
-# (3) pnpm tauri dev (Vite + cargo watch + app).
-# Daemon runs as a background process, NOT as a Tauri sidecar.
-# Sidecar mechanism only works in production builds (known Tauri limitation:
-# github.com/tauri-apps/tauri/issues/1298, #3612, #4780, #13767).
-
-# Or manually in two terminals:
-cargo run -p origin-server            # terminal 1 — daemon
-pnpm tauri dev                        # terminal 2 — app
+# Run the daemon directly:
+cargo run -p origin-server                # listens on 127.0.0.1:7878
 
 # Or start the daemon as a managed launchd service:
 cargo build -p origin-server
-./target/debug/origin-server install   # writes plist, launchctl load
+./target/debug/origin-server install      # writes plist, launchctl load
 ./target/debug/origin-server status
-./target/debug/origin-server uninstall # when done
+./target/debug/origin-server uninstall    # when done
 
 # Workspace-level builds
 cargo check --workspace
@@ -37,8 +27,7 @@ cargo test --workspace
 cargo check -p origin-types
 cargo check -p origin-core
 cargo check -p origin-server
-cargo check -p origin-app              # the Tauri app
-cargo check -p origin                  # the CLI binary
+cargo check -p origin                     # the CLI binary
 cargo build -p origin --release
 ./target/release/origin --help
 
@@ -47,16 +36,10 @@ cargo test -p origin-core
 cargo test -p origin-core --lib <module>::tests
 cargo test -p origin-core <test_name>
 
-# Frontend tests
-pnpm test
-pnpm test:watch
-pnpm test:coverage
-pnpm test:all                          # frontend + app crate tests
-
 # Generate coverage reports (opens in browser)
 bash scripts/coverage.sh
 
-# Set up git hooks (one-time)
+# Set up git hooks (one-time; .githooks/pre-commit + pre-push)
 bash scripts/setup-hooks.sh
 
 # Eval benchmarks (require GPU + model files, run manually)
@@ -71,10 +54,10 @@ cargo test -p origin-core --test eval_harness save_locomo_expanded_baseline -- -
 cargo test -p origin-core --test eval_harness save_longmemeval_baseline -- --ignored --nocapture
 cargo test -p origin-core --test eval_harness save_longmemeval_reranked_baseline -- --ignored --nocapture
 cargo test -p origin-core --test eval_harness save_longmemeval_expanded_baseline -- --ignored --nocapture
-# Baselines saved to app/eval/baselines/*.json (gitignored)
+# Baselines saved to <EVAL_BASELINES_DIR>/*.json (gitignored, default ~/.cache/origin-eval).
 ```
 
-Frontend tests use Vitest + React Testing Library. Git hooks auto-activate on `pnpm install` -- pre-commit auto-formats and checks compilation, pre-push runs clippy + workspace tests (no coverage gate, see below).
+Pre-commit auto-formats Rust and runs Clippy on changed crates. Pre-push runs workspace clippy + library tests.
 
 ## Local vs CI test responsibilities
 
@@ -83,32 +66,32 @@ Origin runs across several layers. The split is driven by three questions: **(1)
 | Layer | What runs | Where | When | Time | Blocks? |
 |---|---|---|---|---|---|
 | **L1 dev loop** | rust-analyzer / IDE | Local | Every save | <1s | No |
-| **L2 pre-commit** | `cargo fmt --all`, clippy on staged crates, vitest if FE staged | Local | `git commit` | ~5s | Yes |
-| **L3 pre-push** | `cargo clippy --workspace --all-targets`, `cargo test --workspace`, `pnpm vitest run --bail 1` | Local | `git push` | ~60-90s | Yes |
-| **L4 CI on PR** | Same checks workspace-wide, plus `cargo test -p origin-app --lib`, `pnpm test` | GitHub (`ci.yml`) | Every PR | ~10min | Yes (required) |
-| **L5 coverage on PR** | `cargo llvm-cov` on origin-core + origin-server only; vitest --coverage | GitHub (`coverage.yml`) | Every PR | ~10min | **No (informational)** |
+| **L2 pre-commit** | `cargo fmt --all`, clippy on staged crates | Local | `git commit` | ~5s | Yes |
+| **L3 pre-push** | `cargo clippy --workspace --all-targets`, `cargo test --workspace --lib` | Local | `git push` | ~60-90s | Yes |
+| **L4 CI on PR** | Same checks workspace-wide; tests for types + server + CLI; core lib tests + chat_import_e2e + distillation_quality | GitHub (`ci.yml`) | Every PR | ~10min | Yes (required) |
+| **L5 coverage on PR** | `cargo llvm-cov` on origin-core + origin-server only | GitHub (`coverage.yml`) | Every PR | ~10min | **No (informational)** |
 | **L6 main canary** | Embedding-only eval (`cargo test -p origin-core --lib eval::token_efficiency -- --ignored`) | GitHub (`ci.yml`) | Push to `main` | ~10min | No (post-merge) |
 | **L7 manual local** | `bash scripts/coverage.sh` (HTML coverage), GPU eval suite (`cargo test -- --ignored`), Anthropic batch judge (`ANTHROPIC_API_KEY=... cargo test ...`) | Your laptop | On demand | minutes-hours | No |
-| **L8 pre-release** | Full eval suite vs saved baseline. Record deltas in vault/memory **never git** (AGPL public-repo rule) | Your laptop | Per release | hours | Soft gate |
+| **L8 pre-release** | Full eval suite vs saved baseline. Record deltas in vault/memory **never git** (Apache-2.0 public-repo rule for daemon; treat numbers as private until you have signed-off baselines) | Your laptop | Per release | hours | Soft gate |
 
 ### What does NOT run in CI and why
 
 - **GPU evals (LongMemEval / LoCoMo runner functions, Qwen3.5-9B inference)** — GitHub macOS runners have no Metal acceleration. The tests are `#[ignore]`d so they don't accidentally run.
 - **Anthropic API batch judge** — costs $0.35/run and requires `ANTHROPIC_API_KEY` which we don't expose to PR runs from forks.
-- **Tauri app coverage** — `--package origin` (the Tauri app crate) is mostly command proxies that can't be exercised without a GUI runtime, and instrumented compilation peaks at 8-16GB RSS. Coverage is scoped to `origin-core + origin-server`.
+- **Tauri / desktop coverage** — the desktop app lives in [7xuanlu/origin-app](https://github.com/7xuanlu/origin-app) and runs its own CI there. This repo's coverage is scoped to `origin-core + origin-server`.
 
 ### Why pre-push doesn't run coverage
 
 Earlier versions of `.githooks/pre-push` enforced a 90% `cargo llvm-cov` gate. That violated the principles above:
-- **Slow:** instrumented rebuild of the Tauri-app-pulling workspace took 5-15min and overloaded memory.
+- **Slow:** instrumented rebuild took 5-15min and overloaded memory.
 - **Not mirrored in CI:** the main `ci.yml` lane doesn't run coverage at all, so the gate added local friction without upstream protection.
-- **Percentage gates rot:** any new untestable surface (Tauri commands, GPU-only eval) drops the percentage and forces busywork.
+- **Percentage gates rot:** any new untestable surface drops the percentage and forces busywork.
 
 The current pre-push runs only clippy + non-instrumented tests. Coverage is L5 (informational on PR) or L7 (manual command on laptop).
 
 ### Eval baselines cache
 
-The per-scenario DB cache (Phase 1 enrichment + Phase 3 answer cache + judge JSONLs) lives at `<baselines_dir>/`, where `baselines_dir` defaults to `app/eval/baselines/` per worktree. Override with `EVAL_BASELINES_DIR=<path>` to point at a shared, worktree-agnostic location:
+The per-scenario DB cache (Phase 1 enrichment + Phase 3 answer cache + judge JSONLs) lives at `<baselines_dir>/`, where `baselines_dir` defaults to `~/.cache/origin-eval` (override with `EVAL_BASELINES_DIR=<path>`):
 
 ```bash
 export EVAL_BASELINES_DIR=$HOME/.cache/origin-eval
@@ -123,8 +106,8 @@ Releases are automated via [release-please](https://github.com/googleapis/releas
 **How it works:**
 1. Every push to `main`, release-please scans new commits and maintains an open "release PR" that accumulates changes and updates `CHANGELOG.md`.
 2. When you're ready to ship, merge the release PR. That triggers a GitHub release (draft) + git tag.
-3. The `v*` tag push triggers `.github/workflows/release.yml`, which builds the Tauri app, bundles sidecars, uploads DMG + standalone binaries to the release, and publishes it (draft -> public).
-4. The release-please workflow also syncs `Cargo.toml` + `package.json` + `tauri.conf.json` versions on the release branch (release-please can't handle Cargo workspaces or JSON extra-files reliably with `simple` release type).
+3. The `v*` tag push triggers `.github/workflows/release.yml`, which builds the daemon (`origin-server`) and `origin-mcp`, uploads standalone binaries to the release, and publishes it.
+4. The release-please workflow also syncs daemon `Cargo.toml` versions on the release branch (release-please can't handle Cargo workspaces reliably with `simple` release type).
 
 **Commit messages control version bumps.** Pre-1.0:
 
@@ -139,13 +122,13 @@ After 1.0, standard semver: `feat:` bumps minor, `BREAKING CHANGE` bumps major.
 
 **IMPORTANT: `feat:` bumps minor, not patch.** Use `fix:` for small features, improvements, and bug fixes. Only use `feat:` when you intentionally want 0.x.0 -> 0.(x+1).0. The `bump-patch-for-minor-pre-major` and `release-as` config flags do NOT work with release-please v17 + simple release type. If a `feat:` commit lands on main, the only way to prevent the minor bump is to rewrite the commit message via `git filter-branch` and force-push.
 
-**Squash merge commit messages matter.** When GitHub squash-merges a PR, the commit message defaults to the PR title. A PR titled `feat: ...` creates a `feat:` commit on main, triggering a minor version bump. Review PR titles before merging -- rename to `fix:` if a minor bump is not intended.
+**Squash merge commit messages matter.** When GitHub squash-merges a PR, the commit message defaults to the PR title. A PR titled `feat: ...` creates a `feat:` commit on main, triggering a minor version bump. Review PR titles before merging — rename to `fix:` if a minor bump is not intended.
 
 **Config files:**
-- `release-please-config.json` -- release type, version bump behavior, extra files
-- `.release-please-manifest.json` -- current version (0.1.1)
-- `.github/workflows/release-please.yml` -- creates/updates release PRs, syncs version files
-- `.github/workflows/release.yml` -- builds app + uploads artifacts on `v*` tag push
+- `release-please-config.json` — release type, version bump behavior
+- `.release-please-manifest.json` — current version
+- `.github/workflows/release-please.yml` — creates/updates release PRs, syncs daemon Cargo.toml versions
+- `.github/workflows/release.yml` — builds daemon + uploads artifacts on `v*` tag push
 
 ```bash
 # To release: just merge the open release-please PR on GitHub.
@@ -155,17 +138,13 @@ cat .release-please-manifest.json
 
 ### Release pipeline gotchas (learned the hard way)
 
-**Version files that must stay in sync:** `version.txt`, `.release-please-manifest.json`, `package.json`, `app/tauri.conf.json`, and all four `Cargo.toml` files (`# x-release-please-version` marker). The release-please workflow syncs these automatically on the release branch, but manual version changes must update all of them.
+**Version files that must stay in sync:** `version.txt`, `.release-please-manifest.json`, and the four daemon `Cargo.toml` files (`# x-release-please-version` marker on the `version` line). The release-please workflow syncs these automatically on the release branch; manual version changes must update all of them. The desktop app version lives in [7xuanlu/origin-app](https://github.com/7xuanlu/origin-app) and bumps independently.
 
 **release-please determines "last version" from merged PR commit messages**, not tags or manifest. It scans for commits matching `chore(main): release X.Y.Z`. Deleting a tag or GitHub Release is NOT enough to reset the version. You must also ensure no commit message in the history matches that pattern, or use `release-as` to force-override.
 
 **Never delete a release tag without also cleaning up the commit history.** If you need to undo a release version, you must rewrite the commit message that release-please created (`git filter-branch --msg-filter`), delete the tag, delete the GitHub Release, and rename the merged PR title via API. Otherwise release-please will keep bumping from the old version.
 
-**Code signing on CI.** The release workflow uses `APPLE_SIGNING_IDENTITY` with `"-"` fallback (ad-hoc signing) when no Apple Developer secrets are configured. The `APPLE_ID`, `APPLE_PASSWORD`, and `APPLE_TEAM_ID` env vars must be completely absent (not empty strings) when not configured, or Tauri attempts notarization and fails with "Team ID must be at least 3 characters".
-
-**The `release.yml` workflow builds everything.** It handles: origin-server (cargo build), origin-mcp (cargo install from separate repo), cloudflared (download from Cloudflare), Tauri app (tauri-action), standalone binary uploads, and crates.io publishing. Do not duplicate build logic in release-please.yml.
-
-**Draft releases.** `release-please-config.json` has `"draft": true`, so release-please creates draft releases. The `release.yml` tauri-action step sets `releaseDraft: false` to publish the release after artifacts are uploaded. This prevents users from seeing empty releases during the build window.
+**The `release.yml` workflow ships the daemon side.** It handles: origin-server (cargo build), origin-mcp (cargo install from separate repo), standalone binary uploads, and crates.io publishing for `origin-types`. It does NOT build a desktop bundle — origin-app builds its own DMG in its own repo.
 
 ### Branch protection
 
@@ -173,15 +152,14 @@ Main branch has: required CI ("Test & Lint") before merge, no force pushes, no d
 
 ### Git hooks (auto-activated)
 
-Hooks activate automatically on `pnpm install` (postinstall script sets `core.hooksPath`). No manual setup needed.
+Manual setup: `bash scripts/setup-hooks.sh`. Hooks live under `.githooks/`.
 
-Pre-commit: **auto-formats** Rust (`cargo fmt --all`, re-stages changed files) + `cargo check` + vitest. Formatting issues can never reach CI.
-Pre-push: `cargo clippy -- -D warnings` + full test suite + coverage gate.
-Manual setup: `bash scripts/setup-hooks.sh` (only needed if you skip `pnpm install`).
+- **Pre-commit:** auto-formats Rust (`cargo fmt --all`, re-stages changed files) + Clippy on changed crates. Formatting issues can never reach CI.
+- **Pre-push:** workspace clippy + library tests. No coverage gate (see above).
 
 ## Architecture
 
-Origin is a **Personal Agent Memory Layer** — a local-first memory server on macOS where AI agents write what they learn and humans curate. Daemon-centric: a headless HTTP server owns all business logic and data, and a thin Tauri desktop app (plus external MCP clients) talk to it via HTTP.
+Origin is a **Personal Agent Memory Layer** — a local-first memory server on macOS where AI agents write what they learn and humans curate. Daemon-centric: a headless HTTP server owns all business logic and data; the desktop app, the CLI, and external MCP clients are all thin clients over its HTTP API.
 
 ### Workspace Layout
 
@@ -189,20 +167,17 @@ The repo is a Cargo workspace with 4 crates:
 
 | Crate | Role | Key dependencies |
 |---|---|---|
-| `crates/origin-types` | Shared API boundary types (request/response, memory, entities). License: Apache-2.0 so `origin-mcp` (MIT) and other downstream consumers can use it without AGPL contamination. | serde only — no heavy deps |
-| `crates/origin-core` | All business logic: DB, embeddings, LLM engine, search, classification, knowledge graph, refinery, pages, export, eval. **Must have NO tauri or axum dependencies.** | libSQL, FastEmbed, llama-cpp-2, hf-hub |
+| `crates/origin-types` | Shared API boundary types (request/response, memory, entities). License: Apache-2.0 so `origin-mcp` (MIT) and other downstream consumers can use it without AGPL contamination. Lightweight: serde + serde_json + anyhow only. | serde |
+| `crates/origin-core` | All business logic: DB, embeddings, LLM engine, search, classification, knowledge graph, refinery, pages, export, eval. **Must have NO axum or tauri dependencies.** | libSQL, FastEmbed, llama-cpp-2, hf-hub |
 | `crates/origin-server` | Headless HTTP daemon on `127.0.0.1:7878`. Depends on `origin-core`. Provides `install/uninstall/status` subcommands for launchd management. | axum, tower, clap |
-| `crates/origin-cli` | CLI binary `origin` (Apache-2.0). Talks to daemon HTTP via `origin-types`. Subcommands: status/search/recall/store/list/agents. | reqwest, clap |
-| `app/` (crate name `origin-app`) | Thin Tauri desktop client. Depends on `origin-types` + `reqwest` (HTTP) + a minimal bit of `origin-core` for sensor utilities. All data commands proxy to the daemon. | tauri, reqwest |
+| `crates/origin-cli` | CLI binary `origin`. Talks to daemon HTTP via `origin-types`. Subcommands: status/search/recall/store/list/agents/install/setup. | reqwest, clap |
 
-The daemon (`origin-server`) is the single source of truth. The Tauri app process can come and go; memory storage continues in the daemon. External tools (`origin-mcp`, curl, etc.) talk to the same daemon.
+The daemon (`origin-server`) is the single source of truth. External tools (the desktop app, `origin-mcp`, `origin` CLI, curl) all talk HTTP to the same daemon.
 
 ### Stack
 
 - **Daemon**: Rust, Axum 0.8 (HTTP), libSQL (Turso's SQLite fork — vectors, knowledge graph, documents), Tokio, FastEmbed (BGE-Base-EN-v1.5-Q, 768-dim, 512-token max), llama-cpp-2 (Qwen3-4B-Instruct-2507 via Metal GPU; Qwen3.5-9B optional), launchd for process management
-- **App (thin client)**: Rust, Tauri 2, reqwest, small sensor/trigger modules for macOS-specific capture
-- **Frontend**: React 19, TanStack React Query 5, Tailwind CSS 4, Vite
-- **Package manager**: pnpm
+- **CLI** (`origin`): Rust, reqwest, clap
 
 ### Database: libSQL (owned by origin-core)
 
@@ -228,66 +203,23 @@ pub trait EventEmitter: Send + Sync {
 pub struct NoopEmitter;
 ```
 
-- The daemon uses `NoopEmitter` (no UI to notify)
-- The Tauri app would use a `TauriEmitter` adapter (`app/src/events.rs`) that wraps `AppHandle::emit`
+- The daemon uses `NoopEmitter` (no UI to notify directly)
+- The desktop app (separate `origin-app` repo) provides a `TauriEmitter` adapter that wraps `AppHandle::emit`
 - `MemoryDB::new(db_path, emitter: Arc<dyn EventEmitter>)` takes the trait object
 
 This keeps `origin-core` framework-agnostic and testable with `NoopEmitter` in unit tests.
 
-### Multi-Window Architecture
-
-Three Tauri windows from a single webview, routed by URL hash in `src/main.tsx`:
-- **main** — Spotlight search / Memory view / Settings / Chunk viewer
-- **toast** — Transparent overlay for capture notifications (non-activating panel)
-- **quick-capture** — Popup for quick thought capture
-
-### Unified Trigger Architecture
-
-All input sources emit a `TriggerEvent` into a single mpsc channel (capacity 32), consumed by the **smart router** (`router/intent.rs`):
-
-```
-Sensors (focus, hotkey, thought)
-    → TriggerEvent channel (32)
-        → Smart Router (dedup, AFK gating, frame comparison, OCR)
-            → ContextBundle channel (8)
-                → Context Consumer (MemoryDB upsert, LLM queue)
-```
-
-The router applies per-window frame comparison, text dedup (bigram Jaccard, 0.85 threshold), AFK detection (60s idle), and PII redaction before storage.
-
-**Note**: Clipboard and window_activity ambient capture are disabled by default as part of the memory-layer pivot. Screen capture infrastructure remains but is opt-in.
-
-### Two-Pass Capture Pipeline
-
-1. **Immediate**: Raw OCR → PII redaction → per-window chunking → MemoryDB upsert → toast notification
-2. **LLM (async)**: Qwen3-4B-Instruct-2507 reformats focused window text → structured summary + category → MemoryDB update → UI refresh
-
-### Thread Model
-
-- **Tokio runtime** (Tauri-managed): Router, consumer, IPC server, DB operations
-- **Dedicated std::thread**: Focus sensor, LLM formatter (GPU inference)
-- **Bridge pattern**: LLM thread captures `tokio::runtime::Handle` for async DB calls via `handle.block_on()`
-- **IMPORTANT**: In `setup()` closure, `tokio::runtime::Handle::current()` panics — use `tauri::async_runtime::block_on(async { Handle::current() })` instead
-
-### State Management
-
-- **Backend**: `Arc<RwLock<AppState>>` managed by Tauri. Atomic flags (`Arc<AtomicBool>`) for feature toggles shared with sensor threads (lock-free reads from hot loops).
-- **Frontend**: TanStack React Query for server state. Module-level stores (`useSyncExternalStore` pattern) for state that must survive React unmounts (`processingStore.ts`, `captureHeartbeat.ts`). localStorage for collapsed section state with 7-day TTL.
-
 ### IPC Surface
 
-All data flows through the daemon's HTTP API. The Tauri app's `#[tauri::command]` functions are thin proxies that call `OriginClient` (`app/src/api.rs`).
+All data flows through the daemon's HTTP API. The desktop app, CLI, and MCP clients all hit it.
 
-- **HTTP API**: Axum on `127.0.0.1:7878`, served by `origin-server`. Used by the Tauri app, the `origin-mcp` MCP server (separate repo), and any external tool.
+- **HTTP API**: Axum on `127.0.0.1:7878`, served by `origin-server`. Used by the desktop app, the `origin-mcp` MCP server (separate repo), the `origin` CLI, and any external tool.
   - General: `/api/health`, `/api/status`, `/api/search`, `/api/context`, `/api/chat-context`, `/api/ping`
   - Ingest: `/api/ingest/text`, `/api/ingest/webpage`, `/api/ingest/memory`
   - Memory CRUD: `/api/memory/store`, `/api/memory/search`, `/api/memory/confirm/{id}`, `/api/memory/list`, `/api/memory/delete/{id}`
   - Knowledge graph: `/api/memory/entities`, `/api/memory/relations`, `/api/memory/observations`
   - Profile & Agents: `/api/profile`, `/api/agents`, `/api/agents/{name}`
   - WebSocket: `/ws/updates`
-- **Tauri commands**: commands in `app/src/search.rs`, registered in `app/src/lib.rs`, called from frontend via `invoke()` wrappers in `src/lib/tauri.ts`. Most are one-line HTTP proxies via `OriginClient`; a handful of macOS-specific commands (quick-capture positioning, tray, sensor toggles) stay native.
-- **Tauri events**: `capture-event` emitted globally for toast/UI updates via `TauriEmitter` adapter.
-- **A legacy native command surface still exists**: many Tauri commands remain app-specific macOS helpers or thin wrappers that have not been migrated into daemon-backed HTTP endpoints. Add server endpoints incrementally as needed rather than assuming full parity.
 
 ## Key Modules — origin-core (`crates/origin-core/src/`)
 
@@ -325,7 +257,7 @@ All business logic lives here. No tauri, no axum. Framework-agnostic.
 | `router/classify.rs`, `content_score.rs` | Smart router scoring helpers (non-tauri parts) |
 | `config.rs` | Persistent config at `~/Library/Application Support/origin/config.json` |
 | `export/` | Markdown/JSON/zip/PDF exporters |
-| `eval/` | Benchmark harness: LoCoMo, LongMemEval. Each benchmark has base (embedding-only), reranked (LLM rescores after search), and expanded (LLM query expansion before search) variants. Baselines in `app/eval/baselines/` (gitignored). |
+| `eval/` | Benchmark harness: LoCoMo, LongMemEval. Each benchmark has base (embedding-only), reranked (LLM rescores after search), and expanded (LLM query expansion before search) variants. Baselines under `EVAL_BASELINES_DIR` (gitignored). |
 | `state.rs` | `CoreState` — shared state struct used by origin-server |
 
 ## Key Modules — origin-server (`crates/origin-server/src/`)
@@ -351,48 +283,22 @@ HTTP daemon — owns the Axum router + all routes. All handlers operate on `Arc<
 | `error.rs` | `ServerError` + axum `IntoResponse` impl |
 | `resources/com.origin.server.plist` | launchd plist template (embedded via `include_str!`) |
 
-## Key Modules — Tauri app (`app/src/`)
+## Key Modules — origin (CLI, `crates/origin-cli/src/`)
 
-Thin client — only Tauri-specific code. Data commands proxy to the daemon.
-
-| Module | Purpose |
-|---|---|
-| `lib.rs` | Tauri setup, plugin registration, window/tray/shortcut setup, daemon health check on startup, ~146 command registrations |
-| `main.rs` | Tauri entry point |
-| `state.rs` | Simplified `AppState` — `OriginClient`, `app_handle`, UI flags (clipboard_enabled, screen_capture_enabled, etc.). No MemoryDB, no LLM, no embeddings. |
-| `api.rs` | `OriginClient` — `reqwest`-based HTTP client wrapper, one method per endpoint, uses `origin-types` |
-| `events.rs` | `TauriEmitter` — adapter that implements `origin_core::events::EventEmitter` by wrapping `tauri::AppHandle::emit` |
-| `search.rs` | ~146 `#[tauri::command]` functions, most are HTTP proxies to `OriginClient` |
-| `sensor/` | macOS-specific capture: vision, frame_compare, idle |
-| `trigger/` | Focus sensor thread |
-| `router/intent.rs` | Smart router (trigger events → context bundles) — still in the app because it's entangled with sensors |
-| `indexer.rs` | File watcher (notify-based, 2s debounce) |
-| `remote_access.rs` | Cloudflare tunnel management for exposing the daemon externally |
-| `mcp_config.rs` | MCP server configuration for external tools |
-
-## Key Frontend Modules (src/)
-
-| Module | Purpose |
-|--------|---------|
-| `main.tsx` | Hash-based multi-window entry point |
-| `App.tsx` | Page navigation (spotlight, memory, settings, chunks), capture event listener |
-| `lib/tauri.ts` | All `invoke()` wrappers + TypeScript interfaces for Tauri commands |
-| `components/MemoryView.tsx` | Primary dashboard — time-grouped files, search, categories, activity timeline |
-| `components/Spotlight.tsx` | Main search UI (Cmd+K) with source filters and working memory |
-| `components/SourceManager.tsx` | Settings page — watch paths, feature toggles, categories |
+The `origin` binary — a thin reqwest-based CLI for the daemon's HTTP API. Subcommands cover `setup`, `install`, `status`, `search`, `recall`, `store`, `list`, `agents`, `model`, `key`, `doctor`. The CLI does not touch the database directly: every command is an HTTP call.
 
 ## Conventions
 
 ### Crate boundaries
 - **origin-core must have NO tauri or axum dependencies.** Verify with `grep -rn "use tauri\|use axum" crates/origin-core/src/` — expect zero hits. Any event emission goes through the `EventEmitter` trait.
-- **origin-types must be lightweight.** Only serde + serde_json. No chrono, no tokio, no heavy deps. These types are shared with `origin-mcp` (MIT-licensed separate repo), so adding heavy deps forces them downstream.
+- **origin-types must be lightweight.** Only serde + serde_json + anyhow. No chrono, no tokio, no heavy deps. These types are shared with `origin-mcp` (MIT-licensed separate repo) and `origin-app` (AGPL-3.0 separate repo via crates.io), so adding heavy deps forces them downstream.
 - **Don't add business logic to origin-server.** Route handlers should call `origin-core` functions with state snapshots — the server's job is HTTP framing, not logic.
-- **Don't add data logic to the Tauri app.** The app is a thin client. Every data command should either proxy via `OriginClient` or be a macOS-specific UI/sensor helper.
+- **Don't add new HTTP endpoints to the CLI.** Use existing daemon endpoints. If a CLI subcommand needs new data, add a daemon endpoint first.
 
 ### Async and locking
 - **Never hold a `tokio::sync::RwLock` read or write guard across `.await`.** Holding a read guard during an LLM call (which can take seconds) blocks all writers. Pattern: snapshot what you need from the guard into a scoped block that ends before the await, then call the async function with the cloned values. See `crates/origin-server/src/memory_routes.rs` `handle_store_memory` for an example of the post-ingest enrichment pattern.
 - **`Arc<MemoryDB>` is the sharing primitive.** `ServerState.db` is `Option<Arc<MemoryDB>>`. Clone the Arc out of the guard rather than borrowing through the guard.
-- **Daemon is the single writer.** Only `origin-server` opens the libSQL database. The Tauri app never touches the DB directly — it talks HTTP.
+- **Daemon is the single writer.** Only `origin-server` opens the libSQL database. The desktop app and CLI never touch the DB directly — they talk HTTP.
 - **libSQL connection pattern**: `MemoryDB` holds `tokio::sync::Mutex<libsql::Connection>` internally. Never try to share a `libsql::Connection` across tasks directly (`Send` but not `Sync`).
 
 ### SQL, strings, data
@@ -410,59 +316,13 @@ Thin client — only Tauri-specific code. Data commands proxy to the daemon.
 - **kill vs kill -9**: `kill <PID>` may not terminate the daemon cleanly. Always use `kill -9 <PID>` and verify with `lsof -ti :7878` afterward. If the port is still in use, another process took over.
 - **Worktree target directories are shared**: All worktrees share the same `target/` directory in the main repo. Building in one worktree overwrites binaries from another. After switching worktrees, always rebuild to ensure the binary matches the checked-out source.
 
-**Tauri app:**
-- **Never pipe Tauri binary output**: `./target/debug/origin-app 2>&1 | head -N` kills the process via SIGPIPE when head closes. Always redirect to file: `./target/debug/origin-app > /tmp/origin-app.log 2>&1 &`. This is the #1 reason the app appears to "exit silently".
-- **Use `pnpm tauri dev` for development**: It handles Vite startup, cargo watch, and the full dev lifecycle. Running `./target/debug/origin-app` directly skips sidecar management and process lifecycle.
-- **tauri.conf.json is compile-time**: Changes to `trafficLightPosition`, `visible`, `skipTaskbar`, window dimensions are baked into the binary. Requires `cargo build -p origin-app` and app restart (not HMR).
-- **Vite required for dev binary**: `./target/debug/origin-app` loads the frontend from `devUrl` (localhost:1420). Without Vite running, the window shows a permanent white screen.
-- **Window visibility**: The main window config has `visible: false`. The app-ready event from React calls `show()` + `center()` after mount. This prevents the white flash and position jump on startup.
-
-**Cleanup scripts:**
-```bash
-pnpm clean:dev      # kills all origin/vite processes, frees ports 7878/1420
-pnpm clean:release    # removes stale DMG temp files and old bundles
-pnpm clean:all      # both
-```
-
-**Clean dev startup (canonical sequence):**
-```bash
-pnpm dev:all        # runs clean:dev first, then builds daemon + starts app
-```
-If post-merge and `pnpm dev:all` shows stale data, force a daemon rebuild first:
-```bash
-touch crates/origin-server/src/router.rs && pnpm dev:all
-```
-
-**Sidecar (dev vs production):**
-- **Sidecar doesn't work in dev mode**: Tauri's `externalBin` sidecar resolution fails during `cargo run` / `tauri dev`. This is a known Tauri limitation (issues #1298, #3612, #4780, #13767). The `[init] Failed to spawn origin-server sidecar: No such file or directory` error is expected in dev. Use `pnpm dev:all` which starts the daemon directly instead.
-- **Sidecar works in production builds**: `tauri build` bundles the sidecar binary correctly. The app's `lib.rs` sidecar spawn code is production-only in practice.
-
-**Release builds:**
-- **C++17 required for llama.cpp on macOS 26.x**: Release builds fail with `no template named 'optional' in namespace 'std'` because macOS Tahoe's SDK defaults to C++14 for the app crate (min version 26.4). Fix: `CXXFLAGS="-std=c++17" pnpm tauri build`. Debug builds are unaffected (different min version). This is a known upstream change: llama.cpp moved from C++11 to C++17 for `std::string_view` and `std::optional` in `common.h`.
-- **DMG packaging**: Tauri's DMG bundler works if stale temp files (`rw.*.dmg`) in `target/release/bundle/macos/` are cleaned first. `release` runs `clean:release` automatically. If Tauri's bundler fails, `pnpm release:dmg` calls `hdiutil` directly as fallback (no external deps).
-- **Dev vs production sidecar isolation**: `dev:daemon` copies the debug binary to `app/binaries/`. `release` copies the release binary. Always run `pnpm release` for production. Never ship a DMG after running `dev:daemon` without rebuilding release first.
-- **Release build (single command)**:
-  ```bash
-  pnpm release          # builds release daemon, copies sidecar, builds .app
-  pnpm release:dmg              # creates DMG from .app (requires create-dmg)
-  # Output: target/release/bundle/macos/Origin.app
-  #         target/release/bundle/dmg/Origin_0.1.0_aarch64.dmg
-  ```
-- **Runtime data separation**: The daemon stores data at `~/Library/Application Support/origin/`. This is shared between dev and production by default (one memory database). The Tauri app's own data goes to `~/Library/Application Support/com.origin.desktop/` (via bundle identifier). Build artifacts live in `target/` (debug vs release).
-- **Dev and prod share data by default**: Both use port 7878 and `~/Library/Application Support/origin/`. This follows Tauri's official pattern (same identifier = same data dir in dev and prod). Your memories are your memories regardless of which build you're running. For isolated testing (onboarding flow, clean slate), override explicitly:
-  ```bash
-  ORIGIN_PORT=7879 ORIGIN_DATA_DIR=/tmp/origin-test pnpm dev:all
-  ```
-- **Code signing (not yet set up)**: The app is currently unsigned. Users must `xattr -cr /Applications/Origin.app`. For proper distribution: Apple Developer account ($99/yr), `signingIdentity` in tauri.conf.json, `Entitlements.plist` for WebView JIT, and notarization via `xcrun notarytool`. Deferred to post-v0.1.0.
-- **Bundle identifier**: `com.origin.desktop` (not `.app`, which conflicts with macOS bundle extension).
-
 **Other:**
 - **Metal/ggml on macOS Tahoe 26.x**: `ggml_metal_init` may fail even though native Metal works. The daemon auto-degrades and continues without LLM. Not a code bug. Check for competing GPU processes: `pgrep -la origin`.
+- **Dev and prod share data by default**: Both use port 7878 and `~/Library/Application Support/origin/`. For isolated testing, override explicitly: `ORIGIN_PORT=7879 ORIGIN_DATA_DIR=/tmp/origin-test cargo run -p origin-server`.
 
 ### Misc
 - Log filter default is `warn` — add modules explicitly for `info` logs (e.g., `origin_core::db=info`, `origin_server=info`)
-- macOS-specific code uses CoreGraphics/AppKit FFI via `cocoa` and `objc` crates, only in the Tauri app (`app/src/sensor`, `app/src/trigger`)
 - All local data stored in `~/Library/Application Support/origin/` — MemoryDB, config, activities, tags
-- Crate names: `origin-types`, `origin-core`, `origin-server`, `origin-app` (the Tauri app). The legacy name `origin_lib` still appears as the library name of the `origin-app` crate in some log filters.
-- **Licenses**: `origin-types`, `origin-core`, and `origin-server` are **Apache-2.0** (permissive — lets downstream tools like `origin-mcp` consume them without AGPL contamination). The Tauri app (`origin` crate in `app/`) is **AGPL-3.0-only** (the shipped desktop product).
-- `origin-mcp` lives in a separate repo (`~/Repos/origin-mcp`), is MIT-licensed, and talks to the daemon via HTTP. It can depend on `origin-types` (Apache-2.0) without license issues.
+- Crate names: `origin-types`, `origin-core`, `origin-server`, `origin` (CLI). The desktop app crate `origin-app` lives in [7xuanlu/origin-app](https://github.com/7xuanlu/origin-app).
+- **Licenses**: `origin-types`, `origin-core`, `origin-server`, `origin` (CLI) are **Apache-2.0** (permissive — lets downstream tools like `origin-mcp` and `origin-app` consume them without contamination). The desktop app in `origin-app` is **AGPL-3.0-only**. The MCP server `origin-mcp` is **MIT** in its own repo.
+- `origin-mcp` lives in a separate repo (`~/Repos/origin-mcp`), is MIT-licensed, and talks to the daemon via HTTP. It depends on `origin-types` (Apache-2.0) without license issues.

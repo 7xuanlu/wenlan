@@ -25,9 +25,11 @@ fi
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
-# Files to update
+# Files to update — daemon workspace crates only.
+# The Tauri desktop app moved to https://github.com/7xuanlu/origin-app and
+# manages its own version bumps independently.
 CARGO_TOMLS=(
-  "$REPO_ROOT/app/Cargo.toml"
+  "$REPO_ROOT/crates/origin-cli/Cargo.toml"
   "$REPO_ROOT/crates/origin-core/Cargo.toml"
   "$REPO_ROOT/crates/origin-server/Cargo.toml"
   "$REPO_ROOT/crates/origin-types/Cargo.toml"
@@ -44,16 +46,6 @@ for f in "${CARGO_TOMLS[@]}"; do
   echo "  Updated $f"
 done
 
-# Update package.json — the top-level "version" field
-PKG_JSON="$REPO_ROOT/package.json"
-sed -i '' -E 's/"version": "[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]*)?"/"version": "'"$NEW_VERSION"'"/' "$PKG_JSON"
-echo "  Updated $PKG_JSON"
-
-# Update tauri.conf.json — the "version" field
-TAURI_CONF="$REPO_ROOT/app/tauri.conf.json"
-sed -i '' -E 's/"version": "[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]*)?"/"version": "'"$NEW_VERSION"'"/' "$TAURI_CONF"
-echo "  Updated $TAURI_CONF"
-
 echo ""
 echo "Regenerating Cargo.lock..."
 cargo generate-lockfile
@@ -61,8 +53,8 @@ echo "  Updated Cargo.lock"
 
 echo ""
 echo "Changed files:"
-git diff --stat app/Cargo.toml crates/*/Cargo.toml package.json app/tauri.conf.json Cargo.lock 2>/dev/null || true
+git diff --stat crates/*/Cargo.toml Cargo.lock 2>/dev/null || true
 
 echo ""
 echo "Done. Verify with:"
-echo '  grep -rn "version" app/Cargo.toml crates/*/Cargo.toml package.json app/tauri.conf.json | grep -E "^\S+:(version|\"version\")"'
+echo '  grep -rn "^version" crates/*/Cargo.toml'

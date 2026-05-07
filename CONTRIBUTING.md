@@ -2,53 +2,45 @@
 
 Origin is a local-first personal AI memory layer. We welcome bug fixes, features, tests, docs, and design feedback.
 
+This repo holds the daemon (`origin-server`), the CLI (`origin`), and the shared types/core (`origin-types`, `origin-core`). The Tauri desktop app lives in [7xuanlu/origin-app](https://github.com/7xuanlu/origin-app); the MCP server lives in [7xuanlu/origin-mcp](https://github.com/7xuanlu/origin-mcp). Bug reports for any of those pieces are welcome here or on the corresponding repo.
+
 ## Development Setup
 
-**Requirements:** macOS Apple Silicon (M1+), [Xcode Command Line Tools](https://developer.apple.com/xcode/resources/), [Rust](https://rustup.rs/) (stable), [Node.js](https://nodejs.org/) 20+, [pnpm](https://pnpm.io/)
+**Requirements:** macOS Apple Silicon (M1+), [Xcode Command Line Tools](https://developer.apple.com/xcode/resources/), [Rust](https://rustup.rs/) (stable).
 
 ```bash
 git clone https://github.com/7xuanlu/origin.git
 cd origin
-pnpm install
+cargo build -p origin-server
 ```
 
-Single command builds the daemon, starts it, and launches the Tauri app:
+Run the daemon directly:
 
 ```bash
-pnpm dev:all
+cargo run -p origin-server
 ```
 
-Or run daemon and app separately:
+Or install as a launchd service:
 
 ```bash
-cargo run -p origin-server          # terminal 1
-pnpm tauri dev                      # terminal 2
+cargo build --release -p origin-server
+./target/release/origin-server install
+./target/release/origin-server status
 ```
 
 > First build can take several minutes while `llama.cpp` compiles for Metal.
 
-### Building a release
-
-```bash
-pnpm release            # builds release daemon, copies to sidecar, builds .app
-pnpm release:dmg                # creates DMG (uses hdiutil, no external deps)
-```
-
-Output: `target/release/bundle/macos/Origin.app` and `target/release/bundle/dmg/Origin_0.1.0_aarch64.dmg`.
-
-`CXXFLAGS="-std=c++17"` is set automatically by `release` (required on macOS 26.x for llama.cpp C++17 features). Do not run `pnpm dev:daemon` before `release` as it overwrites sidecar binaries with debug builds.
-
 ### Running Tests
 
 ```bash
-# Rust workspace
+# Workspace tests
 cargo test --workspace
 
-# Frontend (React)
-pnpm test
-
-# Optional convenience script (if present in package.json)
-pnpm test:all
+# Per-crate
+cargo test -p origin-types
+cargo test -p origin-core --lib
+cargo test -p origin-server
+cargo test -p origin
 ```
 
 ### Linting
@@ -60,12 +52,12 @@ cargo clippy --workspace --all-targets -- -D warnings
 
 ## Architecture Overview
 
-- **Shared types**: `crates/origin-types` (Apache-2.0)
-- **Core logic**: `crates/origin-core` (Apache-2.0)
-- **HTTP daemon**: `crates/origin-server` (Apache-2.0), serves `127.0.0.1:7878`
-- **Desktop app**: `app/` (AGPL-3.0-only), thin Tauri client + macOS integrations
-- **Frontend**: `src/` React app consumed by Tauri webview
-- **Database**: libSQL (vectors + knowledge graph + FTS)
+- **Shared types**: `crates/origin-types` (Apache-2.0). Lightweight wire types shared with `origin-mcp` and `origin-app` via crates.io.
+- **Core logic**: `crates/origin-core` (Apache-2.0). DB, embeddings, LLM engine, search, knowledge graph, refinery, eval. No tauri / no axum dependencies.
+- **HTTP daemon**: `crates/origin-server` (Apache-2.0), serves `127.0.0.1:7878`.
+- **CLI binary**: `crates/origin-cli` (Apache-2.0). The `origin` command for setup, install, search, recall, etc.
+- **Desktop app** (separate repo): [7xuanlu/origin-app](https://github.com/7xuanlu/origin-app), AGPL-3.0-only.
+- **Database**: libSQL (vectors + knowledge graph + FTS).
 
 See `CLAUDE.md` for a full module-by-module breakdown.
 
@@ -80,7 +72,7 @@ Look for issues labeled [`good first issue`](https://github.com/7xuanlu/origin/l
 3. Ensure all tests pass and linting is clean
 4. Open a PR using the template — describe what and how to test
 
-CI runs `cargo fmt --check --all`, `cargo clippy --workspace --all-targets`, `cargo test --workspace`, and `pnpm test`.
+CI runs `cargo fmt --check --all`, `cargo clippy --workspace --all-targets`, and `cargo test` across all daemon crates.
 
 ## Code Conventions
 
@@ -99,6 +91,6 @@ These conventions keep the codebase consistent. See `CLAUDE.md` for the full lis
 
 ## License
 
-Origin is mixed-license: `crates/origin-types`, `crates/origin-core`, and `crates/origin-server` are Apache-2.0; `app/` and the frontend UI are AGPL-3.0-only.
+This repo is Apache-2.0: `crates/origin-types`, `crates/origin-core`, `crates/origin-server`, and `crates/origin-cli`. The desktop app in [origin-app](https://github.com/7xuanlu/origin-app) is AGPL-3.0-only. The MCP server in [origin-mcp](https://github.com/7xuanlu/origin-mcp) is MIT.
 
 By contributing, you agree that your changes will be licensed under the license that applies to the files you modify.

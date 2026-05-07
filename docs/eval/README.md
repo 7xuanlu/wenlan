@@ -4,14 +4,14 @@ This project keeps publishable benchmark numbers in a local gitignored file so R
 
 ## Files
 
-- Local metrics (gitignored): `app/eval/baselines/readme_metrics.json`
+- Local metrics (gitignored): `${EVAL_BASELINES_DIR:-~/.cache/origin-eval}/readme_metrics.json`
 - Tracked template: `docs/eval/readme_metrics.example.json`
 - README updater: `scripts/update-readme-eval.py`
 
 ## Update flow
 
 1. Run benchmark(s) locally and record headline metrics.
-2. Update `app/eval/baselines/readme_metrics.json`.
+2. Update `${EVAL_BASELINES_DIR:-~/.cache/origin-eval}/readme_metrics.json`.
 3. Regenerate README snapshot:
 
 ```bash

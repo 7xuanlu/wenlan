@@ -22,7 +22,7 @@ env:
 
 jobs:
   release:
-    name: Build & Publish Release
+    name: Build & Publish Daemon Release
     runs-on: macos-latest
 
     steps:
@@ -37,30 +37,13 @@ jobs:
         run: |
           TAG="${RELEASE_TAG#v}"
 
-          CARGO_VERSION=$(grep '^version = ' app/Cargo.toml | head -1 | sed 's/version = "\([^"]*\)".*/\1/')
-          TAURI_VERSION=$(node -p "require('./app/tauri.conf.json').version")
-          PKG_VERSION=$(node -p "require('./package.json').version")
+          CARGO_VERSION=$(grep '^version = ' crates/origin-server/Cargo.toml | head -1 | sed 's/version = "\([^"]*\)".*/\1/')
 
-          echo "Tag version:         $TAG"
-          echo "app/Cargo.toml:      $CARGO_VERSION"
-          echo "app/tauri.conf.json: $TAURI_VERSION"
-          echo "package.json:        $PKG_VERSION"
+          echo "Tag version:                          $TAG"
+          echo "crates/origin-server/Cargo.toml:      $CARGO_VERSION"
 
-          MISMATCH=0
           if [ "$TAG" != "$CARGO_VERSION" ]; then
-            echo "ERROR: tag $TAG does not match app/Cargo.toml version $CARGO_VERSION"
-            MISMATCH=1
-          fi
-          if [ "$TAG" != "$TAURI_VERSION" ]; then
-            echo "ERROR: tag $TAG does not match app/tauri.conf.json version $TAURI_VERSION"
-            MISMATCH=1
-          fi
-          if [ "$TAG" != "$PKG_VERSION" ]; then
-            echo "ERROR: tag $TAG does not match package.json version $PKG_VERSION"
-            MISMATCH=1
-          fi
-
-          if [ "$MISMATCH" -eq 1 ]; then
+            echo "ERROR: tag $TAG does not match crates/origin-server/Cargo.toml version $CARGO_VERSION"
             echo ""
             echo "Fix: run 'bash scripts/bump-version.sh $TAG' and push the updated files before tagging."
             exit 1
@@ -76,67 +59,15 @@ jobs:
       - name: Cache Rust dependencies
         uses: Swatinem/rust-cache@v2
 
-      - name: Install pnpm
-        uses: pnpm/action-setup@v4
-
-      - name: Install Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: 20
-          cache: pnpm
-
-      - name: Install frontend dependencies
-        run: pnpm install
-
-      - name: Build origin-server
+      - name: Build origin-server (release)
         run: cargo build --release -p origin-server --target aarch64-apple-darwin
 
-      - name: Install origin-mcp sidecar
+      - name: Build origin-mcp (release)
         run: |
           cargo install --git https://github.com/7xuanlu/origin-mcp --root ./tmp-mcp
-          mkdir -p app/binaries
-          cp tmp-mcp/bin/origin-mcp app/binaries/origin-mcp-aarch64-apple-darwin
-          chmod +x app/binaries/origin-mcp-aarch64-apple-darwin
-
-      - name: Download cloudflared sidecar
-        run: |
-          mkdir -p app/binaries
-          curl -fsSL -o /tmp/cloudflared.tgz \
-            https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-darwin-arm64.tgz
-          tar -xzf /tmp/cloudflared.tgz -C /tmp
-          cp /tmp/cloudflared app/binaries/cloudflared-aarch64-apple-darwin
-          chmod 755 app/binaries/cloudflared-aarch64-apple-darwin
-          xattr -cr app/binaries/cloudflared-aarch64-apple-darwin
-
-      - name: Copy origin-server sidecar
-        run: |
-          cp target/aarch64-apple-darwin/release/origin-server app/binaries/origin-server-aarch64-apple-darwin
-          chmod +x app/binaries/origin-server-aarch64-apple-darwin
 
       - name: Smoke test origin-server
         run: ./target/aarch64-apple-darwin/release/origin-server --help
-
-      - name: Import code signing certificate
-        if: env.APPLE_CERTIFICATE != ''
-        env:
-          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
-          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
-        run: |
-          CERT_PATH=$RUNNER_TEMP/certificate.p12
-          KEYCHAIN_PATH=$RUNNER_TEMP/app-signing.keychain-db
-          KEYCHAIN_PASSWORD=$(openssl rand -hex 12)
-
-          echo "$APPLE_CERTIFICATE" | base64 --decode > "$CERT_PATH"
-
-          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
-          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
-          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
-          security import "$CERT_PATH" -P "$APPLE_CERTIFICATE_PASSWORD" -A -t cert -f pkcs12 -k "$KEYCHAIN_PATH"
-          security set-key-partition-list -S apple-tool:,apple: -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
-          security list-keychain -d user -s "$KEYCHAIN_PATH"
-
-          echo "Certificate imported successfully"
-          security find-identity -v "$KEYCHAIN_PATH"
 
       - name: Compose release body
         run: |
@@ -155,9 +86,7 @@ jobs:
 
           ## Install
 
-          **Desktop app (macOS Apple Silicon):**
-          Download the \`.dmg\` file below, open it, drag to Applications.
-          Then run: \`xattr -cr /Applications/Origin.app\`
+          **Desktop app:** Download from [origin-app releases](https://github.com/7xuanlu/origin-app/releases/latest).
 
           **MCP integration (latest stable channel):**
           \`\`\`
@@ -181,47 +110,31 @@ jobs:
           \`\`\`
           Downloads exact binaries and prints manual isolated daemon/MCP setup steps.
 
-          > Origin works in Basic Memory mode without a local LLM or API key. Local models are opt-in from the desktop app or `origin model install`.
+          > Origin works in Basic Memory mode without a local LLM or API key. Local models are opt-in from \`origin model install\` or the desktop app.
           INSTALL_EOF
 
           # Strip leading whitespace from heredoc indentation
           sed -i '' 's/^          //' release-body.md
           echo "Release body written ($(wc -c < release-body.md) bytes)"
 
-      - name: Build and publish Tauri app
-        uses: tauri-apps/tauri-action@v0
-        with:
-          tagName: v__VERSION__
-          releaseName: 'v__VERSION__'
-          releaseDraft: false
-          prerelease: ${{ contains(env.RELEASE_TAG, '-') }}
-          releaseBody: 'Building...'
-          projectPath: app
-          args: --target aarch64-apple-darwin
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          CXXFLAGS: "-std=c++17"
-          # Ad-hoc sign ("-") when no Apple Developer cert is configured.
-          # APPLE_ID/PASSWORD/TEAM_ID must be omitted (not empty) or Tauri
-          # attempts notarization and fails on "Team ID must be at least 3 characters".
-          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY || '-' }}
-          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
-          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
-
-      - name: Verify updater metadata
+      - name: Create GitHub Release
         run: |
-          if ! gh release view "$RELEASE_TAG" --json assets --jq '.assets[].name' | grep -qx latest.json; then
-            echo "ERROR: latest.json was not uploaded. Check bundle.createUpdaterArtifacts and TAURI_SIGNING_PRIVATE_KEY."
-            exit 1
+          PRERELEASE_FLAG=""
+          if [[ "$RELEASE_TAG" == *-* ]]; then
+            PRERELEASE_FLAG="--prerelease"
           fi
+          gh release create "$RELEASE_TAG" \
+            --title "$RELEASE_TAG" \
+            --notes-file release-body.md \
+            $PRERELEASE_FLAG \
+            || gh release edit "$RELEASE_TAG" --notes-file release-body.md
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Upload standalone origin-server binary
         run: |
-          TAG="$RELEASE_TAG"
           cp target/aarch64-apple-darwin/release/origin-server origin-server-aarch64-apple-darwin
-          gh release upload "$TAG" \
+          gh release upload "$RELEASE_TAG" \
             origin-server-aarch64-apple-darwin \
             --clobber
         env:
@@ -229,17 +142,10 @@ jobs:
 
       - name: Upload standalone origin-mcp binary
         run: |
-          TAG="$RELEASE_TAG"
           cp tmp-mcp/bin/origin-mcp origin-mcp-aarch64-apple-darwin
-          gh release upload "$TAG" \
+          gh release upload "$RELEASE_TAG" \
             origin-mcp-aarch64-apple-darwin \
             --clobber
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Update release body with changelog
-        run: |
-          gh release edit "$RELEASE_TAG" --notes-file release-body.md
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
