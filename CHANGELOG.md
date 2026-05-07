@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.3.1](https://github.com/7xuanlu/origin/compare/v0.3.0...v0.3.1) (2026-05-07)
+
+
+### Bug Fixes
+
+* /api/llm/test endpoint + app proxy (Phase 5 PR3 — recreated) ([#60](https://github.com/7xuanlu/origin/issues/60)) ([64805ee](https://github.com/7xuanlu/origin/commit/64805eedb1025177e0e43f095d67c854a0039b83))
+* origin-cli crate with subcommands (Phase 3 PR2) ([#54](https://github.com/7xuanlu/origin/issues/54)) ([3c9a60f](https://github.com/7xuanlu/origin/commit/3c9a60f9efba6ab5f8b0355f6625a290948ecf09))
+* Phase 5-D PR1 foundation — wire types + config fields + system_info inline ([#61](https://github.com/7xuanlu/origin/issues/61)) ([734920f](https://github.com/7xuanlu/origin/commit/734920f4a72a9548ca0db778d59abca770c2ad32))
+* Phase 5-D PR2 — drop origin-core dep from app crate ([#62](https://github.com/7xuanlu/origin/issues/62)) ([7ffda88](https://github.com/7xuanlu/origin/commit/7ffda88fdb3ac03717590632f3961614c801ef5d))
+
 ## [0.3.0](https://github.com/7xuanlu/origin/compare/v0.2.1...v0.3.0) (2026-05-05)
 
 
