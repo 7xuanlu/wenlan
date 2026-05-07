@@ -4,23 +4,14 @@
 
 [![CI](https://github.com/7xuanlu/origin/actions/workflows/ci.yml/badge.svg)](https://github.com/7xuanlu/origin/actions/workflows/ci.yml)
 [![Release](https://img.shields.io/github/v/release/7xuanlu/origin)](https://github.com/7xuanlu/origin/releases/latest)
-[![License](https://img.shields.io/badge/license-AGPL--3.0-blue)](LICENSE)
+[![Backend License](https://img.shields.io/badge/backend-Apache--2.0-blue)](#license)
 ![Platform](https://img.shields.io/badge/platform-macOS%20Apple%20Silicon-black)
 
-![Origin demo](https://github.com/user-attachments/assets/d77806a4-69c2-4580-b95d-f8152323d122)
+Local-first memory for decisions, lessons, gotchas, and context across sessions, projects, and time. On-demand wiki pages distilled from your sources.
 
-<details>
-<summary>Watch full demo</summary>
+Plain Markdown for you, hybrid index for your AI. Across Claude Code, Codex, Cursor, and other MCP clients.
 
-[Watch on YouTube](https://youtu.be/bV5h089DYDc)
-
-</details>
-
-Local-first memory that carries decisions, lessons, gotchas, and project context across chats, projects, and time.
-
-The daemon does the memory chores in the background: deduplicating, linking related ideas, distilling pages, and keeping provenance attached.
-
-Use the optional desktop app to search, inspect, edit, and delete what Origin learned.
+The daemon does the memory chores in the background: storing, searching, deduplicating, linking related ideas, distilling pages, and keeping provenance attached. This repo ships that local runtime: the `origin-server` daemon, the `origin` terminal CLI, the `origin-core` memory engine, and shared `origin-types`.
 
 **Status:** Early preview for macOS Apple Silicon. Expect fast iteration and some sharp edges.
 
@@ -30,9 +21,49 @@ Use the optional desktop app to search, inspect, edit, and delete what Origin le
 
 **Platform:** macOS Apple Silicon (M1+). Linux, Intel Mac, and Windows are not supported yet.
 
-### 1. Use with Claude Code, Cursor, Codex, or another MCP client
+### 1. Recommended: Claude Code plugin
 
-For Claude Code, Cursor, Codex, Claude Desktop, Windsurf, Gemini CLI, or another client that accepts a JSON `mcpServers` entry, add:
+For the daily experience in Claude Code, install [origin-plugin](https://github.com/7xuanlu/origin-plugin):
+
+```text
+/plugin install 7xuanlu/origin-plugin
+```
+
+The plugin is how you use Origin day to day. It bundles `origin-mcp` and adds slash commands for setup, briefing, capture, recall, distillation, review, forget, and handoff.
+
+After the local daemon is running in step 2, use short commands instead of asking Claude to call MCP tools manually:
+
+```text
+/origin:init
+/origin:brief
+/origin:capture remember this decision...
+/origin:recall database preferences
+/origin:handoff
+```
+
+### 2. Start Origin locally
+
+Origin still needs the local daemon running:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/7xuanlu/origin/main/install.sh | bash
+export PATH="$HOME/.origin/bin:$PATH"
+origin setup
+origin install
+origin status
+```
+
+Origin works without a local LLM or API key for storage, search, recall, and MCP memory. To unlock richer extraction, background refinement, and page synthesis, choose a local model or Anthropic key:
+
+```bash
+origin model install
+origin key set anthropic
+origin doctor
+```
+
+### 3. Manual MCP config
+
+Use this path for Cursor, Codex, Claude Desktop, Windsurf, Gemini CLI, or any client that accepts a JSON `mcpServers` entry:
 
 ```json
 {
@@ -45,59 +76,19 @@ For Claude Code, Cursor, Codex, Claude Desktop, Windsurf, Gemini CLI, or another
 }
 ```
 
-On first run, `npx origin-mcp` downloads the MCP connector from the [origin-mcp repo](https://github.com/7xuanlu/origin-mcp). It connects to the local Origin daemon on `127.0.0.1:7878`, started by the desktop app or the headless install below.
-
-### 2. Add the desktop app
-
-Use the desktop app when you want Origin in the menu bar, memory inspection/editing, and Remote Access for Claude.ai or ChatGPT web.
-
-The desktop app ships from a separate repo: [7xuanlu/origin-app](https://github.com/7xuanlu/origin-app).
-
-1. Download the `.dmg` from [origin-app releases](https://github.com/7xuanlu/origin-app/releases/latest).
-2. Drag **Origin** into Applications.
-3. Clear quarantine (the build is currently unsigned):
-   ```bash
-   sudo xattr -cr /Applications/Origin.app
-   ```
-4. Launch Origin. It runs from the menu bar and starts the local daemon on `127.0.0.1:7878`.
-
-If you already use the MCP config above, `origin-mcp` connects to the desktop app's daemon.
-
-### 3. Claude.ai and ChatGPT web
-
-Use **Remote Access** from the desktop app. Web clients do not use the local stdio `npx` config above.
-
-### 4. Headless daemon only
-
-Use this path for automation, servers, or no-GUI setups.
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/7xuanlu/origin/main/install.sh | bash
-export PATH="$HOME/.origin/bin:$PATH"
-origin setup
-origin install
-origin status
-```
-
-Origin works without a local LLM or API key for local storage, search, recall, and MCP memory. To unlock richer extraction, background refinement, and page synthesis, choose a local model or Anthropic key:
-
-```bash
-origin model install
-origin key set anthropic
-origin doctor
-```
+`origin-mcp` connects to the local Origin daemon on `127.0.0.1:7878`. On first run, `npx origin-mcp` downloads the MCP connector from the [origin-mcp repo](https://github.com/7xuanlu/origin-mcp).
 
 ---
 
 ## Why Origin?
 
-AI work has a continuity problem. Most memory tools ask you to trust a cloud API, maintain a notes/wiki workflow, or move into another app. Origin takes a different shape: a local daemon, a desktop inspection lens, and MCP access from the AI tools you already use.
+AI work has a continuity problem. Most memory tools ask you to trust a cloud API, maintain a notes/wiki workflow, or move into another app. Origin takes a different shape: a local daemon and MCP access from the AI tools you already use.
 
 **Your AI starts from scratch too often.** Origin carries decisions, preferences, gotchas, and project context across chats, projects, and time.
 
 **Memory gets worse when nobody maintains it.** Origin runs a background refinery that deduplicates captures, links related ideas, distills pages, and keeps provenance attached.
 
-**You need to see and correct what it learned.** The desktop app lets you search, inspect, edit, and delete memories instead of trusting a black box.
+**You need to see and correct what it learned.** Memories stay local and traceable instead of disappearing into a black box.
 
 Developers already have `origin` for code. Origin gives AI work a source of truth too: local, traceable, and readable by agents through MCP.
 
@@ -118,12 +109,12 @@ Origin keeps the useful parts together:
 
 Use your AI tools normally. Origin runs in the background, keeps the useful parts, and makes them available when context is needed.
 
-1. **Install Origin.** The desktop app lives in the macOS menu bar and keeps the local daemon running.
-2. **Connect your AI tools.** Claude Code, Cursor, Codex, Claude Desktop, Windsurf, Gemini CLI, and other MCP clients connect through `origin-mcp`. Claude.ai and ChatGPT web use Remote Access.
+1. **Install Origin.** The local daemon owns the memory database and runs on `127.0.0.1:7878`.
+2. **Connect your AI tools.** Claude Code, Cursor, Codex, Claude Desktop, Windsurf, Gemini CLI, and other MCP clients connect through `origin-mcp`.
 3. **Capture useful context.** Agents save decisions, preferences, project facts, gotchas, and lessons while you work.
 4. **Refine in the background.** Origin deduplicates captures, links related ideas, distills pages, and preserves where each memory came from.
 5. **Recall when needed.** Retrieval combines vector search, full-text search, and knowledge graph signals without replaying full chat history.
-6. **Inspect and export.** Use the desktop app to search, edit, delete, verify, and export what Origin learned.
+6. **Inspect and export.** Search, verify, delete, and export what Origin learned through the local runtime surfaces.
 
 ---
 
@@ -143,24 +134,26 @@ Retrieval quality on standard long-memory benchmarks. Numbers come from BGE-Base
 ## Local by default
 
 - Memories are stored locally at `~/Library/Application Support/origin/memorydb/origin_memory.db` by default.
-- The daemon listens on `127.0.0.1:7878`; the desktop app and MCP clients call that local API.
-- There is no cloud sync or telemetry by default. Remote Access and Anthropic keys are opt-in settings.
-- On-device Qwen models download only when requested from the app or `origin model install`, and use the `hf-hub` cache.
+- The daemon listens on `127.0.0.1:7878`; MCP clients and local tools call that local API.
+- There is no cloud sync or telemetry by default. Anthropic keys are opt-in settings.
+- On-device Qwen models download only when requested with `origin model install`, and use the `hf-hub` cache.
 - Security reports: [SECURITY.md](SECURITY.md).
 
 ---
 
 ## Architecture
 
-Origin is daemon-first. `origin-server` owns the local database, embeddings, refinery, knowledge graph, and HTTP API on `127.0.0.1:7878`. The desktop app and MCP clients are thin clients over that daemon.
+Origin is daemon-first. `origin-server` owns the local database, embeddings, refinery, knowledge graph, and HTTP API on `127.0.0.1:7878`. MCP clients and local tools are thin clients over that daemon.
 
-Stack: Rust, libSQL, Tokio, FastEmbed, llama-cpp-2, Axum. The desktop app (Tauri 2 + React) lives in [7xuanlu/origin-app](https://github.com/7xuanlu/origin-app). Full module map: [CLAUDE.md](CLAUDE.md).
+Stack: Rust, libSQL, Tokio, FastEmbed, llama-cpp-2, Axum. Full module map: [CLAUDE.md](CLAUDE.md).
+
+The install script downloads `origin-server` and `origin-mcp` under `~/.origin/bin/`, then creates a small `origin` launcher for setup and service commands.
 
 ---
 
 ## Build from source
 
-This repo builds the daemon, MCP-facing CLI, and shared types. The desktop app builds from [7xuanlu/origin-app](https://github.com/7xuanlu/origin-app).
+This repo builds the daemon, MCP-facing CLI, and shared types.
 
 ```bash
 git clone https://github.com/7xuanlu/origin.git
@@ -209,11 +202,10 @@ Bug fixes, eval cases, docs, and features are welcome. Start with [CONTRIBUTING.
 
 ## License
 
-- `origin-types`, `origin-core`, `origin-server`, `origin` (CLI): **Apache-2.0**
-- [origin-app](https://github.com/7xuanlu/origin-app) (Tauri desktop app + React UI): **AGPL-3.0-only**
+- Backend crates in this repo (`origin-types`, `origin-core`, `origin-server`, `origin` CLI): **Apache-2.0**
 - [origin-mcp](https://github.com/7xuanlu/origin-mcp) (MCP server, npm package, Homebrew): **MIT**
 
-The split keeps the data layer permissively licensed for downstream tools while the shipped desktop app stays AGPL in its own repo.
+The backend stays permissively licensed so MCP clients and downstream local tools can build on the same types and runtime boundary.
 
 ---
 
