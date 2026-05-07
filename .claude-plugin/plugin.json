@@ -1,0 +1,12 @@
+{
+  "name": "origin",
+  "description": "Personal AI memory layer. Bundles the origin-mcp MCP server (auto-installed via npx) and adds short-typed skills for the most common verbs: /origin-recall, /origin-store, /origin-context, /origin-status, /origin-forget. Talks to the local Origin daemon on 127.0.0.1:7878.",
+  "version": "0.1.0",
+  "author": {
+    "name": "Qi-Xuan Lu",
+    "url": "https://github.com/7xuanlu"
+  },
+  "homepage": "https://github.com/7xuanlu/origin",
+  "repository": "https://github.com/7xuanlu/origin-plugin",
+  "license": "Apache-2.0"
+}
