@@ -13,15 +13,14 @@ pub mod obsidian;
 
 use crate::error::OriginError;
 use async_trait::async_trait;
-use serde::{Deserialize, Serialize};
 use std::any::Any;
-use std::path::PathBuf;
 
 // Re-export canonical type definitions from origin-types. This keeps
 // `crate::sources::RawDocument` working for origin-core modules while the
 // authoritative definition lives in the shared types crate.
 pub use origin_types::sources::{
-    stability_tier, MemoryType, RawDocument, SourceType, StabilityTier, SyncStatus,
+    stability_tier, MemoryType, RawDocument, Source, SourceStatus, SourceType, StabilityTier,
+    SyncStatus,
 };
 
 /// Return the confidence ceiling for a stability tier.
@@ -75,43 +74,6 @@ pub fn compute_effective_confidence(
     }
 }
 
-/// Status of a connected source.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SourceStatus {
-    pub name: String,
-    pub connected: bool,
-    pub requires_auth: bool,
-    pub last_sync: Option<i64>,
-    pub document_count: u64,
-    pub error: Option<String>,
-}
-
-/// Persisted source configuration — stored in config.json.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Source {
-    pub id: String,
-    pub source_type: SourceType,
-    pub path: PathBuf,
-    #[serde(default = "default_sync_status")]
-    pub status: SyncStatus,
-    pub last_sync: Option<i64>,
-    #[serde(default)]
-    pub file_count: u64,
-    #[serde(default)]
-    pub memory_count: u64,
-    /// Number of files that failed to read / ingest in the last sync.
-    #[serde(default)]
-    pub last_sync_errors: u64,
-    /// Categorized detail of last sync errors for UI display.
-    /// Known values: "google_drive_offline", "file_read_errors".
-    #[serde(default)]
-    pub last_sync_error_detail: Option<String>,
-}
-
-fn default_sync_status() -> SyncStatus {
-    SyncStatus::Active
-}
-
 /// Trait that all data source connectors must implement.
 #[async_trait]
 pub trait DataSource: Send + Sync {
@@ -146,6 +108,7 @@ pub trait DataSource: Send + Sync {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::PathBuf;
 
     #[test]
     fn test_memory_type_from_str_valid() {

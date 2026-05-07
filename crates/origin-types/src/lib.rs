@@ -6,6 +6,7 @@
 //! limited to serde and serde_json -- no heavy runtime deps.
 
 pub mod entities;
+pub mod events;
 pub mod import;
 pub mod memory;
 pub mod onboarding;
@@ -13,6 +14,7 @@ pub mod requests;
 pub mod responses;
 pub mod sources;
 pub mod system_info;
+pub mod working_memory;
 
 // Re-export commonly used types at crate root for convenience.
 pub use entities::{

@@ -257,3 +257,40 @@ pub enum SyncStatus {
     Paused,
     Error(String),
 }
+
+/// Status of a connected source.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SourceStatus {
+    pub name: String,
+    pub connected: bool,
+    pub requires_auth: bool,
+    pub last_sync: Option<i64>,
+    pub document_count: u64,
+    pub error: Option<String>,
+}
+
+/// Persisted source configuration -- stored in config.json.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Source {
+    pub id: String,
+    pub source_type: SourceType,
+    pub path: std::path::PathBuf,
+    #[serde(default = "default_sync_status")]
+    pub status: SyncStatus,
+    pub last_sync: Option<i64>,
+    #[serde(default)]
+    pub file_count: u64,
+    #[serde(default)]
+    pub memory_count: u64,
+    /// Number of files that failed to read / ingest in the last sync.
+    #[serde(default)]
+    pub last_sync_errors: u64,
+    /// Categorized detail of last sync errors for UI display.
+    /// Known values: "google_drive_offline", "file_read_errors".
+    #[serde(default)]
+    pub last_sync_error_detail: Option<String>,
+}
+
+fn default_sync_status() -> SyncStatus {
+    SyncStatus::Active
+}
