@@ -337,19 +337,22 @@ pub async fn handle_download_on_device_model(
     Ok(Json(SuccessResponse { ok: true }))
 }
 
+/// Shared mutex for tests that mutate the global ORIGIN_DATA_DIR env var.
+/// A single file-level static ensures tests in both test modules serialise
+/// through the same lock and never race with each other.
+#[cfg(test)]
+static TEST_DATA_DIR_LOCK: std::sync::OnceLock<tokio::sync::Mutex<()>> = std::sync::OnceLock::new();
+
 #[cfg(test)]
 mod setup_status_tests {
     use axum::body::Body;
     use axum::http::{Request, StatusCode};
     use serde_json::Value;
-    use std::sync::OnceLock;
-    use tokio::sync::{Mutex, RwLock};
+    use tokio::sync::RwLock;
     use tower::ServiceExt;
 
     use super::*;
     use crate::state::ServerState;
-
-    static ORIGIN_DATA_DIR_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
 
     struct OriginDataDirGuard {
         previous: Option<std::ffi::OsString>,
@@ -386,8 +389,8 @@ mod setup_status_tests {
 
     #[tokio::test(flavor = "current_thread")]
     async fn setup_status_defaults_to_basic_memory() {
-        let _lock = ORIGIN_DATA_DIR_LOCK
-            .get_or_init(|| Mutex::new(()))
+        let _lock = super::TEST_DATA_DIR_LOCK
+            .get_or_init(|| tokio::sync::Mutex::new(()))
             .lock()
             .await;
         let _env = OriginDataDirGuard::new();
@@ -415,8 +418,8 @@ mod setup_status_tests {
 
     #[tokio::test(flavor = "current_thread")]
     async fn set_anthropic_key_marks_setup_completed_and_hot_loads_provider() {
-        let _lock = ORIGIN_DATA_DIR_LOCK
-            .get_or_init(|| Mutex::new(()))
+        let _lock = super::TEST_DATA_DIR_LOCK
+            .get_or_init(|| tokio::sync::Mutex::new(()))
             .lock()
             .await;
         let _env = OriginDataDirGuard::new();
@@ -469,14 +472,11 @@ mod config_model_fields_tests {
     use axum::body::Body;
     use axum::http::{Request, StatusCode};
     use serde_json::Value;
-    use std::sync::OnceLock;
-    use tokio::sync::{Mutex, RwLock};
+    use tokio::sync::RwLock;
     use tower::ServiceExt;
 
     use super::*;
     use crate::state::ServerState;
-
-    static DATA_DIR_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
 
     struct DataDirGuard {
         previous: Option<std::ffi::OsString>,
@@ -513,7 +513,10 @@ mod config_model_fields_tests {
 
     #[tokio::test(flavor = "current_thread")]
     async fn get_config_returns_null_model_fields_by_default() {
-        let _lock = DATA_DIR_LOCK.get_or_init(|| Mutex::new(())).lock().await;
+        let _lock = super::TEST_DATA_DIR_LOCK
+            .get_or_init(|| tokio::sync::Mutex::new(()))
+            .lock()
+            .await;
         let _env = DataDirGuard::new();
         let state = std::sync::Arc::new(RwLock::new(ServerState::default()));
         let app = crate::router::build_router(state);
@@ -540,7 +543,10 @@ mod config_model_fields_tests {
 
     #[tokio::test(flavor = "current_thread")]
     async fn put_config_round_trips_model_fields() {
-        let _lock = DATA_DIR_LOCK.get_or_init(|| Mutex::new(())).lock().await;
+        let _lock = super::TEST_DATA_DIR_LOCK
+            .get_or_init(|| tokio::sync::Mutex::new(()))
+            .lock()
+            .await;
         let _env = DataDirGuard::new();
         let state = std::sync::Arc::new(RwLock::new(ServerState::default()));
         let app = crate::router::build_router(state);
