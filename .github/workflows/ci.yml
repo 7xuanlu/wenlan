@@ -84,7 +84,12 @@ jobs:
       # we either upgrade to a fixed `ort` release or adopt cargo nextest
       # (process-per-test would cover both causes).
       - name: Run Rust tests (core)
-        run: cargo test -p origin-core -- --test-threads=1
+        # Skip eval_harness integration tests — they need the FastEmbed
+        # BGE-Base-EN-v1.5-Q ONNX model (~200MB) which fails to download on
+        # GitHub Actions macOS runners due to hf-hub cache resolution issues.
+        # Lib unit tests + chat_import_e2e + distillation_quality stay in CI;
+        # eval_harness runs locally per the comment block below.
+        run: cargo test -p origin-core --lib --test chat_import_e2e --test distillation_quality -- --test-threads=1
 
       # Eval benchmarks (#[ignore]) — slow embedding-heavy tests, run on main only.
       - name: Run eval benchmarks
