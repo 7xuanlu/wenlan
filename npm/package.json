@@ -1,6 +1,6 @@
 {
   "name": "origin-mcp",
-  "version": "0.2.0",
+  "version": "0.4.1",
   "description": "Personal memory layer for AI agents - MCP server",
   "keywords": ["mcp", "memory", "ai", "agents", "claude", "chatgpt", "origin"],
   "license": "MIT",
