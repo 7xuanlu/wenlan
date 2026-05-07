@@ -279,6 +279,18 @@ pub struct ConfigResponse {
     pub clipboard_enabled: bool,
     pub screen_capture_enabled: bool,
     pub remote_access_enabled: bool,
+    /// Anthropic model used for fast/routine tasks (e.g. classification, tagging).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub routine_model: Option<String>,
+    /// Anthropic model used for synthesis tasks (e.g. distillation, narrative).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub synthesis_model: Option<String>,
+    /// Base URL for an OpenAI-compatible external LLM endpoint.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub external_llm_endpoint: Option<String>,
+    /// Model identifier to use with the external LLM endpoint.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub external_llm_model: Option<String>,
 }
 
 // ===== Indexed files / chunks =====
