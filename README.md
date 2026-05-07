@@ -1,6 +1,6 @@
 # origin-plugin
 
-Claude Code plugin for [Origin](https://github.com/7xuanlu/origin), the personal AI memory layer.
+Claude Code plugin for [Origin](https://github.com/7xuanlu/origin). Where Personal AI Memory Compounds.
 
 Bundles the `origin-mcp` MCP server (auto-installed via `npx -y origin-mcp`) and adds 8 short-typed slash commands for the user-facing memory verbs.
 
