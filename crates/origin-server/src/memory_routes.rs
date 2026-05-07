@@ -2055,7 +2055,7 @@ pub async fn handle_create_page(
 ) -> Result<Json<serde_json::Value>, ServerError> {
     let s = state.read().await;
     let db = s.db.as_ref().ok_or(ServerError::DbNotInitialized)?;
-    let id = origin_core::pages::Page::new_id();
+    let id = origin_core::pages::new_page_id();
     let now = chrono::Utc::now().to_rfc3339();
     let source_refs: Vec<&str> = req.source_memory_ids.iter().map(|s| s.as_str()).collect();
     db.insert_page(

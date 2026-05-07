@@ -298,6 +298,18 @@ pub struct UpdateConfigRequest {
     pub screen_capture_enabled: Option<bool>,
     #[serde(default)]
     pub remote_access_enabled: Option<bool>,
+    /// Anthropic model used for fast/routine tasks (e.g. classification, tagging).
+    #[serde(default)]
+    pub routine_model: Option<String>,
+    /// Anthropic model used for synthesis tasks (e.g. distillation, narrative).
+    #[serde(default)]
+    pub synthesis_model: Option<String>,
+    /// Base URL for an OpenAI-compatible external LLM endpoint.
+    #[serde(default)]
+    pub external_llm_endpoint: Option<String>,
+    /// Model identifier to use with the external LLM endpoint.
+    #[serde(default)]
+    pub external_llm_model: Option<String>,
 }
 
 // ===== Chunks / indexed files =====

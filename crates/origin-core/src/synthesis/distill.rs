@@ -376,7 +376,7 @@ pub(crate) async fn distill_one_cluster(
             // Build source IDs as &str refs
             let source_refs: Vec<&str> = cluster.source_ids.iter().map(|s| s.as_str()).collect();
             let now = chrono::Utc::now().to_rfc3339();
-            let page_id = crate::pages::Page::new_id();
+            let page_id = crate::pages::new_page_id();
 
             db.insert_page(
                 &page_id,
@@ -670,7 +670,7 @@ pub async fn distill_pages(
                 let source_refs: Vec<&str> =
                     cluster.source_ids.iter().map(|s| s.as_str()).collect();
                 let now = chrono::Utc::now().to_rfc3339();
-                let page_id = crate::pages::Page::new_id();
+                let page_id = crate::pages::new_page_id();
 
                 db.insert_page(
                     &page_id,

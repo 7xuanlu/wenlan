@@ -5,15 +5,9 @@ use crate::db::MemoryDB;
 use crate::llm_provider::{LlmProvider, LlmRequest};
 use crate::prompts::PromptRegistry;
 use crate::tuning::NarrativeConfig;
-use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct NarrativeResponse {
-    pub content: String,
-    pub generated_at: i64,
-    pub is_stale: bool,
-    pub memory_count: u64,
-}
+// Re-export wire type from origin-types so existing consumers keep working.
+pub use origin_types::narrative::NarrativeResponse;
 
 /// A memory row loaded for narrative assembly.
 #[derive(Debug, Clone)]

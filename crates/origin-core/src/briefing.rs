@@ -6,16 +6,10 @@ use crate::error::OriginError;
 use crate::llm_provider::{LlmProvider, LlmRequest};
 use crate::prompts::PromptRegistry;
 use crate::tuning::BriefingConfig;
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct BriefingResponse {
-    pub content: String,
-    pub new_today: u64,
-    pub primary_agent: Option<String>,
-    pub generated_at: i64,
-    pub is_stale: bool,
-}
+// Re-export wire types from origin-types so existing consumers keep working.
+pub use origin_types::briefing::{BriefingResponse, ContradictionItem};
 
 /// A memory row loaded for briefing assembly.
 #[derive(Debug, Clone, Serialize)]
@@ -33,16 +27,6 @@ pub struct BriefingStats {
     pub dominant_domain: Option<String>,
     pub primary_agent: Option<String>,
     pub new_today: u64,
-}
-
-/// A pending contradiction surfaced by the refinement queue.
-#[derive(Debug, Clone, Serialize)]
-pub struct ContradictionItem {
-    pub id: String,
-    pub new_content: String,
-    pub existing_content: String,
-    pub new_source_id: String,
-    pub existing_source_id: String,
 }
 
 /// Returns true if the cached briefing is stale.

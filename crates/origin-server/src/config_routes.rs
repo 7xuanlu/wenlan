@@ -21,6 +21,10 @@ fn config_to_response(cfg: &config::Config) -> ConfigResponse {
         clipboard_enabled: cfg.clipboard_enabled,
         screen_capture_enabled: cfg.screen_capture_enabled,
         remote_access_enabled: cfg.remote_access_enabled,
+        routine_model: cfg.routine_model.clone(),
+        synthesis_model: cfg.synthesis_model.clone(),
+        external_llm_endpoint: cfg.external_llm_endpoint.clone(),
+        external_llm_model: cfg.external_llm_model.clone(),
     }
 }
 
@@ -55,6 +59,18 @@ pub async fn handle_update_config(
     }
     if let Some(v) = req.remote_access_enabled {
         cfg.remote_access_enabled = v;
+    }
+    if let Some(v) = req.routine_model {
+        cfg.routine_model = Some(v);
+    }
+    if let Some(v) = req.synthesis_model {
+        cfg.synthesis_model = Some(v);
+    }
+    if let Some(v) = req.external_llm_endpoint {
+        cfg.external_llm_endpoint = Some(v);
+    }
+    if let Some(v) = req.external_llm_model {
+        cfg.external_llm_model = Some(v);
     }
     config::save_config(&cfg).map_err(|e| ServerError::Internal(e.to_string()))?;
     Ok(Json(config_to_response(&cfg)))
@@ -321,19 +337,22 @@ pub async fn handle_download_on_device_model(
     Ok(Json(SuccessResponse { ok: true }))
 }
 
+/// Shared mutex for tests that mutate the global ORIGIN_DATA_DIR env var.
+/// A single file-level static ensures tests in both test modules serialise
+/// through the same lock and never race with each other.
+#[cfg(test)]
+static TEST_DATA_DIR_LOCK: std::sync::OnceLock<tokio::sync::Mutex<()>> = std::sync::OnceLock::new();
+
 #[cfg(test)]
 mod setup_status_tests {
     use axum::body::Body;
     use axum::http::{Request, StatusCode};
     use serde_json::Value;
-    use std::sync::OnceLock;
-    use tokio::sync::{Mutex, RwLock};
+    use tokio::sync::RwLock;
     use tower::ServiceExt;
 
     use super::*;
     use crate::state::ServerState;
-
-    static ORIGIN_DATA_DIR_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
 
     struct OriginDataDirGuard {
         previous: Option<std::ffi::OsString>,
@@ -370,8 +389,8 @@ mod setup_status_tests {
 
     #[tokio::test(flavor = "current_thread")]
     async fn setup_status_defaults_to_basic_memory() {
-        let _lock = ORIGIN_DATA_DIR_LOCK
-            .get_or_init(|| Mutex::new(()))
+        let _lock = super::TEST_DATA_DIR_LOCK
+            .get_or_init(|| tokio::sync::Mutex::new(()))
             .lock()
             .await;
         let _env = OriginDataDirGuard::new();
@@ -399,8 +418,8 @@ mod setup_status_tests {
 
     #[tokio::test(flavor = "current_thread")]
     async fn set_anthropic_key_marks_setup_completed_and_hot_loads_provider() {
-        let _lock = ORIGIN_DATA_DIR_LOCK
-            .get_or_init(|| Mutex::new(()))
+        let _lock = super::TEST_DATA_DIR_LOCK
+            .get_or_init(|| tokio::sync::Mutex::new(()))
             .lock()
             .await;
         let _env = OriginDataDirGuard::new();
@@ -445,5 +464,133 @@ mod setup_status_tests {
         assert_eq!(body["setup_completed"], true);
         assert_eq!(body["mode"], "anthropic-key");
         assert_eq!(body["anthropic_key_configured"], true);
+    }
+}
+
+#[cfg(test)]
+mod config_model_fields_tests {
+    use axum::body::Body;
+    use axum::http::{Request, StatusCode};
+    use serde_json::Value;
+    use tokio::sync::RwLock;
+    use tower::ServiceExt;
+
+    use super::*;
+    use crate::state::ServerState;
+
+    struct DataDirGuard {
+        previous: Option<std::ffi::OsString>,
+        _tmp: tempfile::TempDir,
+    }
+
+    impl DataDirGuard {
+        fn new() -> Self {
+            let tmp = tempfile::tempdir().unwrap();
+            let previous = std::env::var_os("ORIGIN_DATA_DIR");
+            std::env::set_var("ORIGIN_DATA_DIR", tmp.path());
+            Self {
+                previous,
+                _tmp: tmp,
+            }
+        }
+    }
+
+    impl Drop for DataDirGuard {
+        fn drop(&mut self) {
+            match &self.previous {
+                Some(value) => std::env::set_var("ORIGIN_DATA_DIR", value),
+                None => std::env::remove_var("ORIGIN_DATA_DIR"),
+            }
+        }
+    }
+
+    async fn response_json(resp: axum::response::Response) -> Value {
+        let bytes = axum::body::to_bytes(resp.into_body(), 1_048_576)
+            .await
+            .unwrap();
+        serde_json::from_slice(&bytes).unwrap()
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn get_config_returns_null_model_fields_by_default() {
+        let _lock = super::TEST_DATA_DIR_LOCK
+            .get_or_init(|| tokio::sync::Mutex::new(()))
+            .lock()
+            .await;
+        let _env = DataDirGuard::new();
+        let state = std::sync::Arc::new(RwLock::new(ServerState::default()));
+        let app = crate::router::build_router(state);
+
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri("/api/config")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = response_json(resp).await;
+        // Optional fields absent when None
+        assert_eq!(body["routine_model"], Value::Null);
+        assert_eq!(body["synthesis_model"], Value::Null);
+        assert_eq!(body["external_llm_endpoint"], Value::Null);
+        assert_eq!(body["external_llm_model"], Value::Null);
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn put_config_round_trips_model_fields() {
+        let _lock = super::TEST_DATA_DIR_LOCK
+            .get_or_init(|| tokio::sync::Mutex::new(()))
+            .lock()
+            .await;
+        let _env = DataDirGuard::new();
+        let state = std::sync::Arc::new(RwLock::new(ServerState::default()));
+        let app = crate::router::build_router(state);
+
+        let body = serde_json::json!({
+            "routine_model": "claude-haiku-4-5-20251001",
+            "synthesis_model": "claude-opus-4-6",
+            "external_llm_endpoint": "http://localhost:11434/v1",
+            "external_llm_model": "llama3"
+        });
+
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .method("PUT")
+                    .uri("/api/config")
+                    .header("content-type", "application/json")
+                    .body(Body::from(serde_json::to_string(&body).unwrap()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(resp.status(), StatusCode::OK);
+        let resp_body = response_json(resp).await;
+        assert_eq!(resp_body["routine_model"], "claude-haiku-4-5-20251001");
+        assert_eq!(resp_body["synthesis_model"], "claude-opus-4-6");
+        assert_eq!(
+            resp_body["external_llm_endpoint"],
+            "http://localhost:11434/v1"
+        );
+        assert_eq!(resp_body["external_llm_model"], "llama3");
+
+        // Verify persisted to disk
+        let cfg = config::load_config();
+        assert_eq!(
+            cfg.routine_model.as_deref(),
+            Some("claude-haiku-4-5-20251001")
+        );
+        assert_eq!(cfg.synthesis_model.as_deref(), Some("claude-opus-4-6"));
+        assert_eq!(
+            cfg.external_llm_endpoint.as_deref(),
+            Some("http://localhost:11434/v1")
+        );
+        assert_eq!(cfg.external_llm_model.as_deref(), Some("llama3"));
     }
 }

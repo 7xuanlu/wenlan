@@ -2803,7 +2803,7 @@ pub async fn set_model_choice(
 
 #[tauri::command]
 pub async fn get_system_info() -> Result<origin_types::system_info::SystemInfo, String> {
-    Ok(origin_core::system_info::detect_system_info())
+    Ok(crate::system_info::detect_system_info())
 }
 
 #[tauri::command]
