@@ -14505,7 +14505,7 @@ impl MemoryDB {
     /// Idempotent: INSERT OR IGNORE on the composite primary key.
     pub async fn link_page_source(
         &self,
-        concept_id: &str,
+        page_id: &str,
         memory_source_id: &str,
         link_reason: &str,
     ) -> Result<(), OriginError> {
@@ -14513,7 +14513,7 @@ impl MemoryDB {
         let conn = self.conn.lock().await;
         conn.execute(
             "INSERT OR IGNORE INTO concept_sources (concept_id, memory_source_id, linked_at, link_reason) VALUES (?1, ?2, ?3, ?4)",
-            libsql::params![concept_id, memory_source_id, now, link_reason],
+            libsql::params![page_id, memory_source_id, now, link_reason],
         )
         .await
         .map_err(|e| OriginError::VectorDb(format!("link_page_source: {e}")))?;
@@ -14523,13 +14523,13 @@ impl MemoryDB {
     /// Get all source memories linked to a concept, ordered by linked_at ascending.
     pub async fn get_page_sources(
         &self,
-        concept_id: &str,
+        page_id: &str,
     ) -> Result<Vec<origin_types::PageSource>, OriginError> {
         let conn = self.conn.lock().await;
         let mut rows = conn
             .query(
                 "SELECT concept_id, memory_source_id, linked_at, link_reason FROM concept_sources WHERE concept_id = ?1 ORDER BY linked_at ASC",
-                libsql::params![concept_id],
+                libsql::params![page_id],
             )
             .await
             .map_err(|e| OriginError::VectorDb(format!("get_page_sources: {e}")))?;
@@ -14620,11 +14620,11 @@ impl MemoryDB {
     }
 
     /// Mark a concept as stale with a specific reason.
-    pub async fn set_page_stale(&self, concept_id: &str, reason: &str) -> Result<(), OriginError> {
+    pub async fn set_page_stale(&self, page_id: &str, reason: &str) -> Result<(), OriginError> {
         let conn = self.conn.lock().await;
         conn.execute(
             "UPDATE concepts SET stale_reason = ?1 WHERE id = ?2",
-            libsql::params![reason, concept_id],
+            libsql::params![reason, page_id],
         )
         .await
         .map_err(|e| OriginError::VectorDb(format!("set_page_stale: {e}")))?;
@@ -14632,14 +14632,11 @@ impl MemoryDB {
     }
 
     /// Increment a concept's sources_updated_count (for trivial/non-conflicting source changes).
-    pub async fn increment_page_sources_updated(
-        &self,
-        concept_id: &str,
-    ) -> Result<(), OriginError> {
+    pub async fn increment_page_sources_updated(&self, page_id: &str) -> Result<(), OriginError> {
         let conn = self.conn.lock().await;
         conn.execute(
             "UPDATE concepts SET sources_updated_count = sources_updated_count + 1 WHERE id = ?1",
-            libsql::params![concept_id],
+            libsql::params![page_id],
         )
         .await
         .map_err(|e| OriginError::VectorDb(format!("increment_page_sources_updated: {e}")))?;
@@ -14702,11 +14699,11 @@ impl MemoryDB {
     }
 
     /// Clear staleness fields after successful re-distillation.
-    pub async fn clear_page_staleness(&self, concept_id: &str) -> Result<(), OriginError> {
+    pub async fn clear_page_staleness(&self, page_id: &str) -> Result<(), OriginError> {
         let conn = self.conn.lock().await;
         conn.execute(
             "UPDATE concepts SET stale_reason = NULL, sources_updated_count = 0 WHERE id = ?1",
-            libsql::params![concept_id],
+            libsql::params![page_id],
         )
         .await
         .map_err(|e| OriginError::VectorDb(format!("clear_page_staleness: {e}")))?;

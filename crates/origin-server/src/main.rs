@@ -274,7 +274,7 @@ async fn run_daemon() -> anyhow::Result<()> {
     //
     // We gate on a `.origin/.backfill-attempted` marker file (created on
     // first attempt regardless of outcome) so this block only runs once per
-    // daemon install. Without the marker, a persistent write_concept
+    // daemon install. Without the marker, a persistent write_page
     // failure — e.g. permission error on the destination directory — would
     // re-trigger a full DB scan + write attempt on every single startup.
     {
@@ -309,13 +309,13 @@ async fn run_daemon() -> anyhow::Result<()> {
                     );
                     let mut written = 0usize;
                     let mut failed = 0usize;
-                    for concept in &concepts {
-                        match writer.write_concept(concept) {
+                    for page in &concepts {
+                        match writer.write_page(page) {
                             Ok(_) => written += 1,
                             Err(e) => {
                                 tracing::warn!(
-                                    "[backfill] write_concept failed for {}: {}",
-                                    concept.id,
+                                    "[backfill] write_page failed for {}: {}",
+                                    page.id,
                                     e
                                 );
                                 failed += 1;
@@ -326,7 +326,7 @@ async fn run_daemon() -> anyhow::Result<()> {
 
                     // Create the marker file so we don't re-run the
                     // backfill on every subsequent startup — even if every
-                    // write_concept above failed. The user can delete
+                    // write_page above failed. The user can delete
                     // `.origin/.backfill-attempted` to force a retry.
                     if let Some(parent) = marker_path.parent() {
                         let _ = std::fs::create_dir_all(parent);

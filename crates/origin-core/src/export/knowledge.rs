@@ -29,7 +29,7 @@ impl KnowledgeWriter {
         Self { path }
     }
 
-    pub fn write_concept(&self, page: &Page) -> Result<String, OriginError> {
+    pub fn write_page(&self, page: &Page) -> Result<String, OriginError> {
         let origin_dir = self.path.join(".origin");
         std::fs::create_dir_all(&origin_dir)?;
 
@@ -53,10 +53,10 @@ impl KnowledgeWriter {
         Ok(file_path.to_string_lossy().to_string())
     }
 
-    pub fn remove_concept(&self, concept_id: &str) -> Result<(), OriginError> {
+    pub fn remove_page(&self, page_id: &str) -> Result<(), OriginError> {
         let mut state = self.load_state();
 
-        if let Some(entry) = state.concepts.remove(concept_id) {
+        if let Some(entry) = state.concepts.remove(page_id) {
             let file_path = self.path.join(&entry.file);
             if file_path.exists() {
                 std::fs::remove_file(&file_path)?;
@@ -134,12 +134,12 @@ mod tests {
     }
 
     #[test]
-    fn test_write_concept_creates_file() {
+    fn test_write_page_creates_file() {
         let dir = tempfile::TempDir::new().unwrap();
         let writer = KnowledgeWriter::new(dir.path().to_path_buf());
         let page = test_concept();
 
-        let path = writer.write_concept(&page).unwrap();
+        let path = writer.write_page(&page).unwrap();
         assert!(path.ends_with("rust-ownership.md"));
 
         let content = std::fs::read_to_string(&path).unwrap();
@@ -158,7 +158,7 @@ mod tests {
         let dir = tempfile::TempDir::new().unwrap();
         let writer = KnowledgeWriter::new(dir.path().to_path_buf());
 
-        writer.write_concept(&test_concept()).unwrap();
+        writer.write_page(&test_concept()).unwrap();
 
         let state = writer.load_state();
         assert!(state.concepts.contains_key("concept_test123"));
@@ -167,14 +167,14 @@ mod tests {
     }
 
     #[test]
-    fn test_remove_concept_deletes_file() {
+    fn test_remove_page_deletes_file() {
         let dir = tempfile::TempDir::new().unwrap();
         let writer = KnowledgeWriter::new(dir.path().to_path_buf());
 
-        let path = writer.write_concept(&test_concept()).unwrap();
+        let path = writer.write_page(&test_concept()).unwrap();
         assert!(std::path::Path::new(&path).exists());
 
-        writer.remove_concept("concept_test123").unwrap();
+        writer.remove_page("concept_test123").unwrap();
         assert!(!std::path::Path::new(&path).exists());
 
         let state = writer.load_state();
@@ -182,14 +182,14 @@ mod tests {
     }
 
     #[test]
-    fn test_remove_nonexistent_concept_noop() {
+    fn test_remove_nonexistent_page_noop() {
         let dir = tempfile::TempDir::new().unwrap();
         let writer = KnowledgeWriter::new(dir.path().to_path_buf());
-        writer.remove_concept("nonexistent").unwrap();
+        writer.remove_page("nonexistent").unwrap();
     }
 
     #[test]
-    fn test_write_multiple_concepts() {
+    fn test_write_multiple_pages() {
         let dir = tempfile::TempDir::new().unwrap();
         let writer = KnowledgeWriter::new(dir.path().to_path_buf());
 
@@ -204,8 +204,8 @@ mod tests {
             ..test_concept()
         };
 
-        writer.write_concept(&c1).unwrap();
-        writer.write_concept(&c2).unwrap();
+        writer.write_page(&c1).unwrap();
+        writer.write_page(&c2).unwrap();
 
         assert!(dir.path().join("alpha.md").exists());
         assert!(dir.path().join("beta.md").exists());
@@ -220,7 +220,7 @@ mod tests {
         let writer = KnowledgeWriter::new(dir.path().to_path_buf());
 
         let mut page = test_concept();
-        writer.write_concept(&page).unwrap();
+        writer.write_page(&page).unwrap();
 
         let v1 = std::fs::read_to_string(dir.path().join("rust-ownership.md")).unwrap();
         assert!(v1.contains("origin_version: 2"));
@@ -228,7 +228,7 @@ mod tests {
         // Update version and content
         page.version = 3;
         page.content = "## Updated\nNew content.".to_string();
-        writer.write_concept(&page).unwrap();
+        writer.write_page(&page).unwrap();
 
         let v2 = std::fs::read_to_string(dir.path().join("rust-ownership.md")).unwrap();
         assert!(v2.contains("origin_version: 3"));
@@ -249,7 +249,7 @@ mod tests {
             domain: None,
             ..test_concept()
         };
-        let path = writer.write_concept(&page).unwrap();
+        let path = writer.write_page(&page).unwrap();
         let content = std::fs::read_to_string(&path).unwrap();
         assert!(!content.contains("domain:"));
     }

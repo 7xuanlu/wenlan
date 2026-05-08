@@ -173,8 +173,8 @@ pub(crate) async fn assign_orphan_memories(
 
                     if let Some(ref writer) = knowledge_writer {
                         if let Ok(Some(c)) = db.get_page(&page_id).await {
-                            match writer.write_concept(&c) {
-                                Ok(p) => log::info!("[distill] wrote concept to {p}"),
+                            match writer.write_page(&c) {
+                                Ok(p) => log::info!("[distill] wrote page to {p}"),
                                 Err(e) => log::warn!("[distill] knowledge write failed: {e}"),
                             }
                         }

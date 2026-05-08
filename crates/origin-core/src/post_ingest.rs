@@ -730,16 +730,16 @@ pub(crate) async fn grow_page(
 
 async fn write_grown_page(db: &MemoryDB, source_id: &str, knowledge_path: &std::path::Path) {
     match db.find_page_by_source_memory(source_id).await {
-        Ok(Some(concept)) => {
+        Ok(Some(page)) => {
             let writer =
                 crate::export::knowledge::KnowledgeWriter::new(knowledge_path.to_path_buf());
-            match writer.write_concept(&concept) {
-                Ok(path) => log::info!("[post_ingest] wrote concept to {path}"),
+            match writer.write_page(&page) {
+                Ok(path) => log::info!("[post_ingest] wrote page to {path}"),
                 Err(e) => log::warn!("[post_ingest] knowledge write failed: {e}"),
             }
         }
         Ok(None) => {}
-        Err(e) => log::warn!("[post_ingest] concept lookup for knowledge write failed: {e}"),
+        Err(e) => log::warn!("[post_ingest] page lookup for knowledge write failed: {e}"),
     }
 }
 
