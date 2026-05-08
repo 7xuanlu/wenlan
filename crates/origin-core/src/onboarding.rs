@@ -84,8 +84,8 @@ impl<'a> MilestoneEvaluator<'a> {
         Ok(())
     }
 
-    /// Called after a refinery pass completes. May fire `first-concept`
-    /// (≥1 active concept exists) and/or `graph-alive` (≥5 entities AND
+    /// Called after a refinery pass completes. May fire `first-page`
+    /// (≥1 active page exists) and/or `graph-alive` (≥5 entities AND
     /// ≥1 relation). Both checks are independent and idempotent.
     pub async fn check_after_refinery_pass(&self) -> Result<(), OriginError> {
         let active_count = self.db.count_active_pages().await?;

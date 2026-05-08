@@ -79,7 +79,7 @@ enum Command {
     /// Show daemon, model, and API key status.
     Status,
     /// Delete archived stale concepts (Mode B cleanup). See spec
-    /// 2026-04-25-bad-concept-distill-fix-design.md. Daemon must be stopped first.
+    /// 2026-04-25-bad-page-distill-fix-design.md. Daemon must be stopped first.
     BackfillStaleConcepts {
         /// Print candidates without modifying the database.
         #[arg(long)]

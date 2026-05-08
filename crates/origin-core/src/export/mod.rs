@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-//! Generic concept export framework.
+//! Generic page export framework.
 
 pub mod knowledge;
 pub mod obsidian;

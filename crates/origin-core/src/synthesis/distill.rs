@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
-//! Distillation phase — turn memory clusters into structured concept pages.
+//! Distillation phase — turn memory clusters into structured pages.
 //!
 //! This module owns the synthesis side of the refinery: clustering memories,
-//! merging/splitting clusters via LLM, and recompiling concept pages from
+//! merging/splitting clusters via LLM, and recompiling pages from
 //! source memories. Re-exported from `crate::refinery` for API stability.
 
 use crate::db::MemoryDB;
@@ -194,7 +194,7 @@ pub(crate) async fn refine_clusters_with_llm(
 
 /// Process a single distillation cluster.
 ///
-/// Returns `Ok(true)` if a concept was created, `Ok(false)` if the cluster was skipped.
+/// Returns `Ok(true)` if a page was created, `Ok(false)` if the cluster was skipped.
 /// Extracted from `distill_pages` to enable parallel cluster processing via
 /// `DISTILL_CLUSTER_CONCURRENCY`.
 pub(crate) async fn distill_one_cluster(
@@ -210,7 +210,7 @@ pub(crate) async fn distill_one_cluster(
         .or(cluster.domain.as_deref())
         .unwrap_or("general");
 
-    // Skip if a concept with very similar sources already exists (Jaccard > 0.8)
+    // Skip if a page with very similar sources already exists (Jaccard > 0.8)
     // Memories CAN appear in multiple concepts — this only prevents duplicate concepts
     let overlap = db
         .max_page_overlap(&cluster.source_ids)
@@ -218,7 +218,7 @@ pub(crate) async fn distill_one_cluster(
         .unwrap_or(0.0);
     if overlap > 0.8 {
         log::info!(
-            "[emergence] cluster '{}' overlaps {:.0}% with existing concept, skipping",
+            "[emergence] cluster '{}' overlaps {:.0}% with existing page, skipping",
             topic,
             overlap * 100.0
         );
@@ -346,7 +346,7 @@ pub(crate) async fn distill_one_cluster(
 
             // Generate title. If LLM returns None and the only fallback is a generic
             // placeholder (e.g. "general"), skip this cluster entirely — a generic title
-            // is worse than no concept at all.
+            // is worse than no page at all.
             let llm_title = crate::refinery::generate_short_title(llm, &content).await;
             let title = match llm_title {
                 Some(t) => t,
@@ -391,7 +391,7 @@ pub(crate) async fn distill_one_cluster(
             .await?;
 
             log::info!(
-                "[distill] distilled {} memories -> concept '{}' ('{}')",
+                "[distill] distilled {} memories -> page '{}' ('{}')",
                 cluster.source_ids.len(),
                 title,
                 content.chars().take(40).collect::<String>()
@@ -507,7 +507,7 @@ pub async fn distill_pages(
             .or(cluster.domain.as_deref())
             .unwrap_or("general");
 
-        // Skip if a concept with very similar sources already exists (Jaccard > 0.8)
+        // Skip if a page with very similar sources already exists (Jaccard > 0.8)
         // Memories CAN appear in multiple concepts — this only prevents duplicate concepts
         let overlap = db
             .max_page_overlap(&cluster.source_ids)
@@ -515,7 +515,7 @@ pub async fn distill_pages(
             .unwrap_or(0.0);
         if overlap > 0.8 {
             log::info!(
-                "[emergence] cluster '{}' overlaps {:.0}% with existing concept, skipping",
+                "[emergence] cluster '{}' overlaps {:.0}% with existing page, skipping",
                 topic,
                 overlap * 100.0
             );
@@ -639,7 +639,7 @@ pub async fn distill_pages(
 
                 // Generate title. If LLM returns None and the only fallback is a generic
                 // placeholder (e.g. "general"), skip this cluster entirely — a generic title
-                // is worse than no concept at all.
+                // is worse than no page at all.
                 let llm_title = crate::refinery::generate_short_title(llm, &content).await;
                 let title = match llm_title {
                     Some(t) => t,
@@ -685,7 +685,7 @@ pub async fn distill_pages(
                 .await?;
 
                 log::info!(
-                    "[distill] distilled {} memories -> concept '{}' ('{}')",
+                    "[distill] distilled {} memories -> page '{}' ('{}')",
                     cluster.source_ids.len(),
                     title,
                     content.chars().take(40).collect::<String>()
@@ -779,13 +779,13 @@ pub async fn deep_distill_pages(
 
     // 3. Recompile ALL active concepts (not just changed ones — full refresh)
     let all_active = db.list_pages("active", 200, 0).await?;
-    for concept in &all_active {
-        match recompile_single_page(db, llm_ref, prompts, concept).await {
+    for page in &all_active {
+        match recompile_single_page(db, llm_ref, prompts, page).await {
             Ok(true) => total += 1,
             Ok(false) => {}
             Err(e) => log::warn!(
                 "[deep_distill] recompile failed for '{}': {}",
-                concept.title,
+                page.title,
                 e
             ),
         }
@@ -810,20 +810,20 @@ pub async fn deep_distill_pages(
     Ok(total)
 }
 
-/// Recompile a single concept from its source memories via LLM.
+/// Recompile a single page from its source memories via LLM.
 pub(crate) async fn recompile_single_page(
     db: &MemoryDB,
     llm: &Arc<dyn LlmProvider>,
     prompts: &PromptRegistry,
-    concept: &crate::pages::Page,
+    page: &crate::pages::Page,
 ) -> Result<bool, OriginError> {
     let memories = db
-        .get_memory_contents_by_ids(&concept.source_memory_ids)
+        .get_memory_contents_by_ids(&page.source_memory_ids)
         .await?;
     if memories.is_empty() {
         log::warn!(
-            "[re-distill] concept '{}' has no source memories, skipping",
-            concept.id
+            "[re-distill] page '{}' has no source memories, skipping",
+            page.id
         );
         return Ok(false);
     }
@@ -842,7 +842,7 @@ pub(crate) async fn recompile_single_page(
         })
         .collect::<Vec<_>>()
         .join("\n\n");
-    let user_prompt = format!("Topic: {}\n\n{}", concept.title, memories_block);
+    let user_prompt = format!("Topic: {}\n\n{}", page.title, memories_block);
 
     let response = llm
         .generate(LlmRequest {
@@ -861,24 +861,21 @@ pub(crate) async fn recompile_single_page(
                 .trim()
                 .to_string();
             if !content.is_empty() {
-                let source_refs: Vec<&str> = concept
-                    .source_memory_ids
-                    .iter()
-                    .map(|s| s.as_str())
-                    .collect();
-                db.update_page_content(&concept.id, &content, &source_refs, "re_distill")
+                let source_refs: Vec<&str> =
+                    page.source_memory_ids.iter().map(|s| s.as_str()).collect();
+                db.update_page_content(&page.id, &content, &source_refs, "re_distill")
                     .await?;
-                log::info!("[re-distill] refreshed concept '{}'", concept.title);
+                log::info!("[re-distill] refreshed page '{}'", page.title);
                 return Ok(true);
             }
         }
-        Ok(_) => log::warn!("[re-distill] empty output for '{}'", concept.title),
-        Err(e) => log::warn!("[re-distill] LLM error for '{}': {}", concept.title, e),
+        Ok(_) => log::warn!("[re-distill] empty output for '{}'", page.title),
+        Err(e) => log::warn!("[re-distill] LLM error for '{}': {}", page.title, e),
     }
     Ok(false)
 }
 
-/// Re-distill a single concept by reloading all source memories and recompiling with LLM.
+/// Re-distill a single page by reloading all source memories and recompiling with LLM.
 pub async fn deep_distill_single(
     db: &MemoryDB,
     llm: Option<&Arc<dyn LlmProvider>>,
@@ -899,16 +896,16 @@ pub async fn deep_distill_single(
         }
     };
 
-    let concept = db
+    let page = db
         .get_page(page_id)
         .await?
         .ok_or_else(|| OriginError::VectorDb(format!("Concept {} not found", page_id)))?;
 
     let memories = db
-        .get_memory_contents_by_ids(&concept.source_memory_ids)
+        .get_memory_contents_by_ids(&page.source_memory_ids)
         .await?;
     if memories.is_empty() {
-        log::warn!("[distill] no source memories found for concept {}", page_id);
+        log::warn!("[distill] no source memories found for page {}", page_id);
         return Ok(());
     }
 
@@ -926,7 +923,7 @@ pub async fn deep_distill_single(
         })
         .collect::<Vec<_>>()
         .join("\n\n");
-    let user_prompt = format!("Topic: {}\n\n{}", concept.title, memories_block);
+    let user_prompt = format!("Topic: {}\n\n{}", page.title, memories_block);
 
     let response = llm
         .generate(LlmRequest {
@@ -945,26 +942,19 @@ pub async fn deep_distill_single(
         .to_string();
 
     if content.is_empty() {
-        log::warn!(
-            "[distill] empty output for concept '{}', skipping",
-            concept.title
-        );
+        log::warn!("[distill] empty output for page '{}', skipping", page.title);
         return Ok(());
     }
 
-    let source_refs: Vec<&str> = concept
-        .source_memory_ids
-        .iter()
-        .map(|s| s.as_str())
-        .collect();
+    let source_refs: Vec<&str> = page.source_memory_ids.iter().map(|s| s.as_str()).collect();
     db.update_page_content(page_id, &content, &source_refs, "distill")
         .await?;
 
     log::info!(
-        "[distill] re-distilled concept '{}' (v{}->v{})",
-        concept.title,
-        concept.version,
-        concept.version + 1
+        "[distill] re-distilled page '{}' (v{}->v{})",
+        page.title,
+        page.version,
+        page.version + 1
     );
     Ok(())
 }

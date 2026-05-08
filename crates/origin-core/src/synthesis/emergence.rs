@@ -15,7 +15,7 @@ pub(crate) async fn assign_orphan_memories(
     _tuning: &crate::tuning::DistillationConfig,
     knowledge_path: Option<&std::path::Path>,
 ) -> Result<usize, OriginError> {
-    // Find orphan memories: no entity_id, not already in a concept, not recap/merged
+    // Find orphan memories: no entity_id, not already in a page, not recap/merged
     let orphans = db.get_unlinked_memories(30).await?;
     // Filter out merged memories
     let orphans: Vec<(String, String)> = orphans
@@ -27,7 +27,7 @@ pub(crate) async fn assign_orphan_memories(
         return Ok(0);
     }
 
-    // Get existing concept titles
+    // Get existing page titles
     let concepts = db.list_pages("active", 100, 0).await?;
     if concepts.is_empty() && orphans.len() < 3 {
         return Ok(0); // Not enough material
@@ -94,17 +94,17 @@ pub(crate) async fn assign_orphan_memories(
                         .unwrap_or("");
                     if idx < orphans.len() && !page_id.is_empty() {
                         let source_id = &orphans[idx].0;
-                        // Add this memory to the concept's source list
-                        if let Ok(Some(concept)) = db.get_page(page_id).await {
-                            if !concept.source_memory_ids.contains(&source_id.to_string()) {
-                                let mut merged_sources = concept.source_memory_ids.clone();
+                        // Add this memory to the page's source list
+                        if let Ok(Some(page)) = db.get_page(page_id).await {
+                            if !page.source_memory_ids.contains(&source_id.to_string()) {
+                                let mut merged_sources = page.source_memory_ids.clone();
                                 merged_sources.push(source_id.to_string());
                                 let refs: Vec<&str> =
                                     merged_sources.iter().map(|s| s.as_str()).collect();
                                 let _ = db
                                     .update_page_content(
                                         page_id,
-                                        &concept.content,
+                                        &page.content,
                                         &refs,
                                         "concept_growth",
                                     )
@@ -140,7 +140,7 @@ pub(crate) async fn assign_orphan_memories(
                         continue;
                     }
 
-                    // Create a new concept from these orphan memories
+                    // Create a new page from these orphan memories
                     let source_ids: Vec<&str> = valid_indices
                         .iter()
                         .map(|&i| orphans[i].0.as_str())
@@ -256,7 +256,7 @@ pub(crate) async fn global_page_review(
                         let _ = db.archive_page(remove_id).await;
                         changes += 1;
                         log::info!(
-                            "[distill] merged concept '{}' into '{}'",
+                            "[distill] merged page '{}' into '{}'",
                             remove.title,
                             keep.title
                         );
@@ -270,7 +270,7 @@ pub(crate) async fn global_page_review(
                     let titles = split.get("sub_titles").and_then(|v| v.as_array());
                     if !cid.is_empty() {
                         log::info!(
-                            "[distill] global review suggests splitting concept {}: {:?}",
+                            "[distill] global review suggests splitting page {}: {:?}",
                             cid,
                             titles
                         );
