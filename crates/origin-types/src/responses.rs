@@ -139,6 +139,15 @@ pub struct ProfileContext {
     pub narrative: String,
     pub identity: Vec<String>,
     pub preferences: Vec<String>,
+    /// Deprecated: goal taxonomy folded into Identity by migration 45 (Phase 0).
+    /// Always empty — daemon does not emit goal-typed memories. Field stays for
+    /// wire backward compat; will be removed in 0.4.
+    #[deprecated(
+        since = "0.3.2",
+        note = "Goal taxonomy folded into Identity by migration 45 (Phase 0). \
+                Always empty. Will be removed in 0.4."
+    )]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub goals: Vec<String>,
 }
 
@@ -530,14 +539,18 @@ mod tests {
 
     #[test]
     fn chat_context_response_roundtrips_with_empty_knowledge_sections() {
+        // ProfileContext.goals is deprecated; constructing it directly here
+        // for wire roundtrip coverage until 0.4 drops the field entirely.
+        #[allow(deprecated)]
+        let profile = ProfileContext {
+            narrative: "n".into(),
+            identity: vec![],
+            preferences: vec![],
+            goals: vec![],
+        };
         let response = ChatContextResponse {
             context: "context".into(),
-            profile: ProfileContext {
-                narrative: "n".into(),
-                identity: vec![],
-                preferences: vec![],
-                goals: vec![],
-            },
+            profile,
             knowledge: KnowledgeContext {
                 pages: vec![],
                 decisions: vec![],

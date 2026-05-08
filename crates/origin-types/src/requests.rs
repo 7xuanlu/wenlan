@@ -106,6 +106,14 @@ pub struct ChatContextRequest {
     pub max_chunks: usize,
     #[serde(default)]
     pub relevance_threshold: Option<f64>,
+    /// Deprecated: goal-typed memories were folded into identity by migration 45
+    /// (Phase 0). Daemon ignores this field — no goal-load path exists anymore.
+    /// Field stays for wire backward compat; will be removed in 0.4.
+    #[deprecated(
+        since = "0.3.2",
+        note = "Goal taxonomy folded into Identity by migration 45 (Phase 0). \
+                Daemon ignores this field. Will be removed in 0.4."
+    )]
     #[serde(default = "default_true")]
     pub include_goals: bool,
     #[serde(default)]

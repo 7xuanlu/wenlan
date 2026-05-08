@@ -9569,11 +9569,15 @@ impl MemoryDB {
 
         // ---- Key insights (all classified memory types) ----
 
+        // 'goal' dropped per Phase 0 — migration 45 folded all goal rows into
+        // identity, and MemoryType::Goal was removed from origin-types. Any
+        // residual goal-typed rows would have been migrated; keeping 'goal' in
+        // the IN clause is dead.
         let mut rows = conn
             .query(
                 "SELECT COUNT(DISTINCT source_id) FROM memories \
                  WHERE source = 'memory' AND confirmed = 1 \
-                   AND memory_type IN ('identity', 'preference', 'decision', 'goal', 'lesson', 'gotcha', 'fact')",
+                   AND memory_type IN ('identity', 'preference', 'decision', 'lesson', 'gotcha', 'fact')",
                 libsql::params![],
             )
             .await
@@ -11213,11 +11217,12 @@ impl MemoryDB {
         limit: usize,
     ) -> Result<Vec<crate::narrative::NarrativeMemory>, OriginError> {
         let conn = self.conn.lock().await;
+        // 'goal' dropped per Phase 0 (migration 45 folded goal -> identity).
         let mut rows = conn
             .query(
                 "SELECT source_id, title, content, memory_type FROM memories \
                  WHERE source = 'memory' AND confirmed = 1 AND chunk_index = 0 \
-                   AND memory_type IN ('identity', 'preference', 'goal') \
+                   AND memory_type IN ('identity', 'preference') \
                  ORDER BY last_modified DESC LIMIT ?1",
                 libsql::params![limit as i64],
             )
@@ -11245,11 +11250,12 @@ impl MemoryDB {
     // narrative cache invalidation requires count and fetch over identical type set.
     pub async fn get_narrative_memory_count(&self) -> Result<u64, OriginError> {
         let conn = self.conn.lock().await;
+        // Must match get_memories_for_narrative: 'goal' dropped per Phase 0.
         let mut rows = conn
             .query(
                 "SELECT COUNT(DISTINCT source_id) FROM memories \
                  WHERE source = 'memory' AND confirmed = 1 AND chunk_index = 0 \
-                   AND memory_type IN ('identity', 'preference', 'goal')",
+                   AND memory_type IN ('identity', 'preference')",
                 (),
             )
             .await
