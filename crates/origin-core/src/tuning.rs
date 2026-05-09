@@ -303,36 +303,36 @@ pub struct DistillationConfig {
     pub max_retries: usize,
     #[serde(default = "d_20_usize")]
     pub max_clusters_per_steep: usize,
-    #[serde(default = "d_3_usize")]
-    pub concept_min_cluster_size: usize,
-    #[serde(default = "d_075")]
-    pub concept_growth_threshold: f64,
+    #[serde(default = "d_3_usize", alias = "concept_min_cluster_size")]
+    pub page_min_cluster_size: usize,
+    #[serde(default = "d_075", alias = "concept_growth_threshold")]
+    pub page_growth_threshold: f64,
     /// Reserved for future integration into search_memory scoring pipeline.
-    /// Currently concepts are searched via separate search_concepts endpoint.
-    #[serde(default = "d_13_f32")]
-    pub concept_boost: f32,
+    /// Currently pages are searched via separate search_pages endpoint.
+    #[serde(default = "d_13_f32", alias = "concept_boost")]
+    pub page_boost: f32,
     /// Hard cap on size of unlinked-memory clusters (no entity_id, no domain).
     /// Clusters above this size are skipped during distillation. Safety valve
     /// for the runaway-cluster failure mode (see spec 2026-04-25).
     #[serde(default = "d_50_usize")]
     pub max_unlinked_cluster_size: usize,
-    /// Minimum source-memory overlap required for a concept to pass the
-    /// retrieval-time relevance gate. A concept is included in chat context
+    /// Minimum source-memory overlap required for a page to pass the
+    /// retrieval-time relevance gate. A page is included in chat context
     /// only if at least this many of its source memories appear in the
     /// search_memory results for the same query.
     ///
-    /// Default 2: filters concepts whose source memories don't appear in
-    /// search results (LME-style noise) while keeping concepts with genuine
+    /// Default 2: filters pages whose source memories don't appear in
+    /// search results (LME-style noise) while keeping pages with genuine
     /// topical overlap (LoCoMo-style coherence).
     ///
     /// Tradeoffs measured 2026-04-27:
     /// - LME (noisy data): 33.7% -> 39.9% (+6.2pp) at min_overlap=2
     /// - LoCoMo (coherent data): 32.0% -> 30.5% (-1.5pp) at min_overlap=2
     ///
-    /// Lower (1) preserves more concepts but lets noise back in.
+    /// Lower (1) preserves more pages but lets noise back in.
     /// Higher (3+) is more aggressive filtering.
-    #[serde(default = "d_2_usize")]
-    pub concept_min_overlap: usize,
+    #[serde(default = "d_2_usize", alias = "concept_min_overlap")]
+    pub page_min_overlap: usize,
     #[serde(default)]
     pub export_vault_path: Option<String>,
 }
@@ -576,11 +576,11 @@ impl Default for DistillationConfig {
             api_token_limit: d_50000_usize(),
             max_retries: d_3_usize(),
             max_clusters_per_steep: d_20_usize(),
-            concept_min_cluster_size: d_3_usize(),
-            concept_growth_threshold: d_075(),
-            concept_boost: d_13_f32(),
+            page_min_cluster_size: d_3_usize(),
+            page_growth_threshold: d_075(),
+            page_boost: d_13_f32(),
             max_unlinked_cluster_size: d_50_usize(),
-            concept_min_overlap: d_2_usize(),
+            page_min_overlap: d_2_usize(),
             export_vault_path: None,
         }
     }
@@ -749,9 +749,9 @@ score_threshold = 0.25
     #[test]
     fn test_concept_config_defaults() {
         let cfg = DistillationConfig::default();
-        assert_eq!(cfg.concept_min_cluster_size, 3);
-        assert!((cfg.concept_growth_threshold - 0.75).abs() < 0.01);
-        assert!((cfg.concept_boost - 1.3).abs() < 0.01);
+        assert_eq!(cfg.page_min_cluster_size, 3);
+        assert!((cfg.page_growth_threshold - 0.75).abs() < 0.01);
+        assert!((cfg.page_boost - 1.3).abs() < 0.01);
     }
 
     #[test]
@@ -763,6 +763,6 @@ score_threshold = 0.25
     #[test]
     fn distillation_config_default_concept_min_overlap() {
         let cfg = DistillationConfig::default();
-        assert_eq!(cfg.concept_min_overlap, 2);
+        assert_eq!(cfg.page_min_overlap, 2);
     }
 }

@@ -1109,7 +1109,7 @@ async fn build_structured_context(
     let min_overlap: usize = std::env::var("EVAL_CONCEPT_MIN_OVERLAP")
         .ok()
         .and_then(|s| s.parse().ok())
-        .unwrap_or_else(|| crate::tuning::DistillationConfig::default().concept_min_overlap);
+        .unwrap_or_else(|| crate::tuning::DistillationConfig::default().page_min_overlap);
 
     let mut parts: Vec<String> = Vec::new();
     let raw_concepts = db.search_pages(question, 3).await.unwrap_or_default();

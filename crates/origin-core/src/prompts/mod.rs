@@ -27,10 +27,10 @@ pub struct PromptRegistry {
     pub format_ocr_text: String,
     pub extract_structured_fields: String, // template with {memory_type}, {fields_json}, {required}, {optional}
     pub correct_memory: String,            // template with {original}, {correction}
-    pub distill_concept: String,
-    pub update_concept: String,
+    pub distill_page: String,
+    pub update_page: String,
     pub assign_orphans: String,
-    pub global_concept_review: String,
+    pub global_page_review: String,
     pub refine_clusters: String,
 }
 
@@ -55,10 +55,10 @@ impl Default for PromptRegistry {
             format_ocr_text: defaults::FORMAT_OCR_TEXT.to_string(),
             extract_structured_fields: defaults::EXTRACT_STRUCTURED_FIELDS.to_string(),
             correct_memory: defaults::CORRECT_MEMORY.to_string(),
-            distill_concept: defaults::DISTILL_CONCEPT.to_string(),
-            update_concept: defaults::UPDATE_CONCEPT.to_string(),
+            distill_page: defaults::DISTILL_PAGE.to_string(),
+            update_page: defaults::UPDATE_PAGE.to_string(),
             assign_orphans: defaults::ASSIGN_ORPHANS.to_string(),
-            global_concept_review: defaults::GLOBAL_CONCEPT_REVIEW.to_string(),
+            global_page_review: defaults::GLOBAL_PAGE_REVIEW.to_string(),
             refine_clusters: defaults::REFINE_CLUSTERS.to_string(),
         }
     }
@@ -98,19 +98,49 @@ impl PromptRegistry {
                 &mut reg.extract_structured_fields,
             ),
             ("correct_memory", &mut reg.correct_memory),
-            ("distill_concept", &mut reg.distill_concept),
-            ("update_concept", &mut reg.update_concept),
+            ("distill_page", &mut reg.distill_page),
+            ("update_page", &mut reg.update_page),
             ("assign_orphans", &mut reg.assign_orphans),
-            ("global_concept_review", &mut reg.global_concept_review),
+            ("global_page_review", &mut reg.global_page_review),
             ("refine_clusters", &mut reg.refine_clusters),
         ];
+        // Legacy filename fallbacks for the Phase 0 (Page) taxonomy refactor.
+        // Existing user prompt overrides are likely still under the old names;
+        // load them if the new-name file is absent. Drop in next minor release.
+        const LEGACY_ALIASES: &[(&str, &[&str])] = &[
+            ("distill_page", &["distill_concept"]),
+            ("update_page", &["update_concept"]),
+            ("global_page_review", &["global_concept_review"]),
+        ];
         for (name, value) in fields {
-            let path = override_dir.join(format!("{name}.txt"));
-            if let Ok(content) = std::fs::read_to_string(&path) {
+            let canonical = override_dir.join(format!("{name}.txt"));
+            let mut loaded = false;
+            if let Ok(content) = std::fs::read_to_string(&canonical) {
                 let trimmed = content.trim().to_string();
                 if !trimmed.is_empty() {
                     log::info!("[prompts] loaded override: {name}");
                     *value = trimmed;
+                    loaded = true;
+                }
+            }
+            if !loaded {
+                let aliases: &[&str] = LEGACY_ALIASES
+                    .iter()
+                    .find_map(|(canon, aliases)| if *canon == name { Some(*aliases) } else { None })
+                    .unwrap_or(&[]);
+                for alias in aliases {
+                    let alt = override_dir.join(format!("{alias}.txt"));
+                    if let Ok(content) = std::fs::read_to_string(&alt) {
+                        let trimmed = content.trim().to_string();
+                        if !trimmed.is_empty() {
+                            log::warn!(
+                                "[prompts] using legacy override file '{alias}.txt'; \
+                                 rename to '{name}.txt' (legacy support drops next release)"
+                            );
+                            *value = trimmed;
+                            break;
+                        }
+                    }
                 }
             }
         }
@@ -152,10 +182,10 @@ mod tests {
         assert!(!reg.format_ocr_text.is_empty());
         assert!(!reg.extract_structured_fields.is_empty());
         assert!(!reg.correct_memory.is_empty());
-        assert!(!reg.distill_concept.is_empty());
-        assert!(!reg.update_concept.is_empty());
+        assert!(!reg.distill_page.is_empty());
+        assert!(!reg.update_page.is_empty());
         assert!(!reg.assign_orphans.is_empty());
-        assert!(!reg.global_concept_review.is_empty());
+        assert!(!reg.global_page_review.is_empty());
     }
 
     #[test]

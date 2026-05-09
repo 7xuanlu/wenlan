@@ -13,7 +13,7 @@
 //! 4. Entity creation suggestion (stub — full impl in refinery Task 5)
 //! 5. Title enrichment (LLM short title if current looks truncated)
 //! 6. (Removed — recaps now handled by event-driven scheduler)
-//! 7. Concept growth (update matching concept with new memory)
+//! 7. Concept growth (update matching page with new memory)
 //! 8. (Removed -- enrichment status derived from per-step outcomes in enrichment_steps table)
 
 use crate::db::MemoryDB;
@@ -255,21 +255,21 @@ pub async fn run_post_ingest_enrichment(
     // 3b. Concept contradiction check — flag related concepts for re-distill if new memory contradicts
     match check_page_contradiction(db, source_id, content).await {
         Ok(n) if n > 0 => {
-            log::info!("[post_ingest] {source_id}: flagged {n} concept(s) for re-distill");
-            db.record_enrichment_step(source_id, "concept_contradiction", "ok", None)
+            log::info!("[post_ingest] {source_id}: flagged {n} page(s) for re-distill");
+            db.record_enrichment_step(source_id, "page_contradiction", "ok", None)
                 .await
                 .ok();
         }
         Ok(_) => {
-            db.record_enrichment_step(source_id, "concept_contradiction", "ok", None)
+            db.record_enrichment_step(source_id, "page_contradiction", "ok", None)
                 .await
                 .ok();
         }
         Err(e) => {
-            log::warn!("[post_ingest] concept contradiction check failed: {e}");
+            log::warn!("[post_ingest] page contradiction check failed: {e}");
             db.record_enrichment_step(
                 source_id,
-                "concept_contradiction",
+                "page_contradiction",
                 "failed",
                 Some(&e.to_string()),
             )
@@ -346,7 +346,7 @@ pub async fn run_post_ingest_enrichment(
     // not on every write. generate_recaps_public remains in refinery's public
     // API for standalone core consumers. See 2026-04-12-event-driven-steep-triggers.
 
-    // 7. Concept growth — update matching concept with new memory
+    // 7. Concept growth — update matching page with new memory
     match grow_page(
         db,
         source_id,
@@ -354,13 +354,13 @@ pub async fn run_post_ingest_enrichment(
         entity_id,
         llm,
         prompts,
-        distillation.concept_growth_threshold,
+        distillation.page_growth_threshold,
     )
     .await
     {
         Ok(true) => {
-            log::info!("[post_ingest] {source_id}: updated matching concept");
-            db.record_enrichment_step(source_id, "concept_growth", "ok", None)
+            log::info!("[post_ingest] {source_id}: updated matching page");
+            db.record_enrichment_step(source_id, "page_growth", "ok", None)
                 .await
                 .ok();
             if let Some(kp) = knowledge_path {
@@ -370,18 +370,18 @@ pub async fn run_post_ingest_enrichment(
         Ok(false) => {
             // grow_page returns false when LLM is unavailable — treat as skipped
             if llm.map(|l| l.is_available()).unwrap_or(false) {
-                db.record_enrichment_step(source_id, "concept_growth", "ok", None)
+                db.record_enrichment_step(source_id, "page_growth", "ok", None)
                     .await
                     .ok();
             } else {
-                db.record_enrichment_step(source_id, "concept_growth", "skipped", None)
+                db.record_enrichment_step(source_id, "page_growth", "skipped", None)
                     .await
                     .ok();
             }
         }
         Err(e) => {
-            log::warn!("[post_ingest] concept growth failed: {e}");
-            db.record_enrichment_step(source_id, "concept_growth", "failed", Some(&e.to_string()))
+            log::warn!("[post_ingest] page growth failed: {e}");
+            db.record_enrichment_step(source_id, "page_growth", "failed", Some(&e.to_string()))
                 .await
                 .ok();
         }
@@ -519,7 +519,7 @@ pub(crate) async fn auto_link_entity(
     Ok(false)
 }
 
-/// Check if new memory content contradicts any related concept.
+/// Check if new memory content contradicts any related page.
 /// Uses FTS5 search to find related concepts, then checks for negation signals
 /// with topic overlap. Flags contradicting concepts for re-distill by adding the
 /// new memory to their source list.
@@ -542,9 +542,9 @@ pub(crate) async fn check_page_contradiction(
     let mut flagged = 0usize;
     let content_lower = content.to_lowercase();
 
-    for concept in &concepts {
+    for page in &concepts {
         // Quick heuristic: if the memory contains negation/update signals,
-        // it might contradict existing concept content
+        // it might contradict existing page content
         let contradiction_signals = [
             "not ",
             "no longer",
@@ -565,23 +565,23 @@ pub(crate) async fn check_page_contradiction(
             continue;
         }
 
-        // Check if memory overlaps with concept topic (bigram jaccard >= 0.15)
-        let overlap = crate::contradiction::bigram_jaccard(content, &concept.title);
+        // Check if memory overlaps with page topic (bigram jaccard >= 0.15)
+        let overlap = crate::contradiction::bigram_jaccard(content, &page.title);
         if overlap < 0.15 {
             continue;
         }
 
-        // This memory likely contradicts or updates the concept — add it to sources and flag for re-distill
-        if !concept.source_memory_ids.contains(&source_id.to_string()) {
-            let mut new_sources = concept.source_memory_ids.clone();
+        // This memory likely contradicts or updates the page — add it to sources and flag for re-distill
+        if !page.source_memory_ids.contains(&source_id.to_string()) {
+            let mut new_sources = page.source_memory_ids.clone();
             new_sources.push(source_id.to_string());
             let refs: Vec<&str> = new_sources.iter().map(|s| s.as_str()).collect();
             // Update sources without changing content — re-distill will recompile
             let _ = db
-                .update_page_content(&concept.id, &concept.content, &refs, "concept_growth")
+                .update_page_content(&page.id, &page.content, &refs, "page_growth")
                 .await;
-            log::info!("[post_ingest] concept '{}' flagged for re-distill due to potential contradiction from {}",
-                concept.title, source_id);
+            log::info!("[post_ingest] page '{}' flagged for re-distill due to potential contradiction from {}",
+                page.title, source_id);
             flagged += 1;
         }
     }
@@ -645,7 +645,7 @@ pub(crate) async fn enrich_title(
     }
 }
 
-/// Check if new memory matches an existing concept; if so, update it.
+/// Check if new memory matches an existing page; if so, update it.
 pub(crate) async fn grow_page(
     db: &MemoryDB,
     source_id: &str,
@@ -667,7 +667,7 @@ pub(crate) async fn grow_page(
         None => return Ok(false),
     };
 
-    let concept = match db
+    let page = match db
         .find_matching_page(entity_id, mem_embedding, growth_threshold)
         .await?
     {
@@ -675,15 +675,15 @@ pub(crate) async fn grow_page(
         None => return Ok(false),
     };
 
-    // LLM: update concept with new memory
+    // LLM: update page with new memory
     let user_prompt = format!(
         "## Current Concept\n{}\n\n## New Memory\n[{}] {}",
-        concept.content, source_id, content
+        page.content, source_id, content
     );
 
     let response = llm
         .generate(crate::llm_provider::LlmRequest {
-            system_prompt: Some(prompts.update_concept.clone()),
+            system_prompt: Some(prompts.update_page.clone()),
             user_prompt,
             max_tokens: 1024,
             temperature: 0.1,
@@ -691,7 +691,7 @@ pub(crate) async fn grow_page(
             timeout_secs: None,
         })
         .await
-        .map_err(|e| OriginError::Llm(format!("concept growth LLM: {e}")))?;
+        .map_err(|e| OriginError::Llm(format!("page growth LLM: {e}")))?;
 
     let updated = crate::llm_provider::strip_think_tags(&response);
     let updated = updated.trim();
@@ -700,13 +700,13 @@ pub(crate) async fn grow_page(
         return Ok(false);
     }
 
-    // Update concept with new content + add source memory
-    let mut source_ids = concept.source_memory_ids.clone();
+    // Update page with new content + add source memory
+    let mut source_ids = page.source_memory_ids.clone();
     if !source_ids.contains(&source_id.to_string()) {
         source_ids.push(source_id.to_string());
     }
     let source_refs: Vec<&str> = source_ids.iter().map(|s| s.as_str()).collect();
-    db.update_page_content(&concept.id, updated, &source_refs, "concept_growth")
+    db.update_page_content(&page.id, updated, &source_refs, "page_growth")
         .await?;
 
     // Log activity: attribute to the agent who authored the triggering memory.
@@ -716,13 +716,13 @@ pub(crate) async fn grow_page(
         .ok()
         .flatten()
         .unwrap_or_else(|| "system".to_string());
-    let detail = format!("grew \"{}\"", concept.title);
+    let detail = format!("grew \"{}\"", page.title);
     let ids = vec![source_id.to_string()];
     if let Err(e) = db
-        .log_agent_activity(&agent, "concept_grow", &ids, None, &detail)
+        .log_agent_activity(&agent, "page_grow", &ids, None, &detail)
         .await
     {
-        log::warn!("[post_ingest] log concept_grow activity failed: {e}");
+        log::warn!("[post_ingest] log page_grow activity failed: {e}");
     }
 
     Ok(true)
@@ -730,16 +730,16 @@ pub(crate) async fn grow_page(
 
 async fn write_grown_page(db: &MemoryDB, source_id: &str, knowledge_path: &std::path::Path) {
     match db.find_page_by_source_memory(source_id).await {
-        Ok(Some(concept)) => {
+        Ok(Some(page)) => {
             let writer =
                 crate::export::knowledge::KnowledgeWriter::new(knowledge_path.to_path_buf());
-            match writer.write_concept(&concept) {
-                Ok(path) => log::info!("[post_ingest] wrote concept to {path}"),
+            match writer.write_page(&page) {
+                Ok(path) => log::info!("[post_ingest] wrote page to {path}"),
                 Err(e) => log::warn!("[post_ingest] knowledge write failed: {e}"),
             }
         }
         Ok(None) => {}
-        Err(e) => log::warn!("[post_ingest] concept lookup for knowledge write failed: {e}"),
+        Err(e) => log::warn!("[post_ingest] page lookup for knowledge write failed: {e}"),
     }
 }
 
@@ -904,8 +904,8 @@ mod tests {
         let title = steps.iter().find(|s| s.step == "title_enrich").unwrap();
         assert_eq!(title.status, "skipped");
 
-        // concept_growth should be skipped (no LLM)
-        let growth = steps.iter().find(|s| s.step == "concept_growth").unwrap();
+        // page_growth should be skipped (no LLM)
+        let growth = steps.iter().find(|s| s.step == "page_growth").unwrap();
         assert_eq!(growth.status, "skipped");
 
         // Summary should be enriched (no failures)

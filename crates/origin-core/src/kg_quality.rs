@@ -47,24 +47,24 @@ pub async fn verify_entity(
     })
 }
 
-/// Run post-store verification on a newly distilled concept.
+/// Run post-store verification on a newly distilled page.
 pub async fn verify_page(
     db: &MemoryDB,
-    concept_id: &str,
-    concept_title: &str,
+    page_id: &str,
+    page_title: &str,
 ) -> Result<VerificationResult, OriginError> {
     let mut warnings = Vec::new();
 
     let self_retrieval_passed = match db
-        .search_memory(concept_title, 10, None, None, None, None, None, None)
+        .search_memory(page_title, 10, None, None, None, None, None, None)
         .await
     {
         Ok(results) => {
-            let found = results.iter().any(|r| r.source_id == concept_id);
+            let found = results.iter().any(|r| r.source_id == page_id);
             if !found {
                 warnings.push(format!(
-                    "Concept '{}' ({}) not found in top-10 self-retrieval results",
-                    concept_title, concept_id
+                    "Page '{}' ({}) not found in top-10 self-retrieval results",
+                    page_title, page_id
                 ));
             }
             Some(found)

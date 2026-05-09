@@ -1,12 +1,12 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Shared text-classifier helpers used by the refinery pipeline.
 //!
-//! These predicates detect low-quality or structurally-invalid concept titles
+//! These predicates detect low-quality or structurally-invalid page titles
 //! (generic tokens, markup artifacts, UUIDs, code snippets, paths, etc.) so
 //! the refinery can reject or sanitize them before storing.
 
 /// Tokens considered generic stand-ins. A title made entirely of these is not
-/// useful as a concept title. Mostly English; a small set of CJK generics
+/// useful as a page title. Mostly English; a small set of CJK generics
 /// included for the same reason. Curated to avoid false positives —
 /// `concept`, `concepts`, `content`, `ideas` deliberately excluded because
 /// they appear in legitimate titles too often.

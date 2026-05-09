@@ -418,10 +418,10 @@ pub async fn handle_store_memory(
                                                 oe, &new_emb,
                                             )
                                         });
-                                        if let Ok(concepts) =
+                                        if let Ok(pages) =
                                             db_clone.get_pages_for_memory(&msid).await
                                         {
-                                            for concept in concepts {
+                                            for page in pages {
                                                 let stale_reason = match sim {
                                                     Some(s) if s > 0.90 => None, // trivial
                                                     Some(s) if s > 0.60 => Some("source_updated"),
@@ -429,11 +429,11 @@ pub async fn handle_store_memory(
                                                 };
                                                 if let Some(reason) = stale_reason {
                                                     let _ = db_clone
-                                                        .set_page_stale(&concept.id, reason)
+                                                        .set_page_stale(&page.id, reason)
                                                         .await;
                                                 } else {
                                                     let _ = db_clone
-                                                        .increment_page_sources_updated(&concept.id)
+                                                        .increment_page_sources_updated(&page.id)
                                                         .await;
                                                 }
                                             }
@@ -805,7 +805,7 @@ pub async fn handle_store_memory(
     //      `space_store` and require a brief write guard.
     //
     //   2. `run_post_ingest_enrichment(...)` — entity auto-linking, contradiction
-    //      candidate queueing, title enrichment, concept growth. Existing
+    //      candidate queueing, title enrichment, page growth. Existing
     //      behavior; runs with the enriched fields phase 1 produced.
     //
     // IMPORTANT: extract Arcs/clones from the read guard and drop it BEFORE
@@ -988,7 +988,7 @@ pub async fn handle_store_memory(
             }
 
             // Phase 2: existing post-ingest enrichment (entity linking,
-            // contradiction queueing, title enrichment, concept growth).
+            // contradiction queueing, title enrichment, page growth).
             if let Err(e) = origin_core::post_ingest::run_post_ingest_enrichment(
                 &db,
                 &source_id_clone,
@@ -1054,7 +1054,7 @@ pub async fn handle_store_memory(
     let (enrichment, hint) = if llm_available {
         (
             "pending".to_string(),
-            "Stored. Origin is compiling classification + concept links in the \
+            "Stored. Origin is compiling classification + page links in the \
              background (~2s). Recall will surface the enriched form shortly."
                 .to_string(),
         )
@@ -3104,7 +3104,7 @@ pub async fn handle_get_snapshot_captures_with_content(
     Ok(Json(results))
 }
 
-/// POST /api/memory/{id}/update-concept
+/// POST /api/memory/{id}/update-page
 pub async fn handle_update_page(
     State(state): State<Arc<RwLock<ServerState>>>,
     Path(id): Path<String>,
@@ -3115,7 +3115,7 @@ pub async fn handle_update_page(
         s.db.clone().ok_or(ServerError::DbNotInitialized)?
     };
     // Preserve existing source_memory_ids — the HTTP request only carries
-    // the new content body. Passing &[] here would wipe the concept's
+    // the new content body. Passing &[] here would wipe the page's
     // source list, causing silent data loss.
     let existing_sources: Vec<String> = db
         .get_page(&id)

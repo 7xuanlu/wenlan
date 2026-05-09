@@ -133,7 +133,7 @@ pub(crate) fn classify_emergence(new_concepts: usize) -> (Nudge, Option<String>)
         0 => (Nudge::Silent, None),
         1 => (
             Nudge::Wow,
-            Some("Origin steeped your memories into a new concept".to_string()),
+            Some("Origin steeped your memories into a new page".to_string()),
         ),
         n => (
             Nudge::Wow,
@@ -151,7 +151,7 @@ pub(crate) fn classify_redistill(refreshed: usize) -> (Nudge, Option<String>) {
         0 => (Nudge::Silent, None),
         1 => (
             Nudge::Ambient,
-            Some("Origin refreshed a concept with new information".to_string()),
+            Some("Origin refreshed a page with new information".to_string()),
         ),
         n => (
             Nudge::Ambient,
@@ -253,7 +253,7 @@ pub async fn run_periodic_steep(
 
 /// Periodic steep with optional API and synthesis LLM providers.
 /// `api_llm` is used for routine tasks (entity extraction, classification).
-/// `synthesis_llm` is used for distillation/concept synthesis (falls back to api_llm → on-device).
+/// `synthesis_llm` is used for distillation/page synthesis (falls back to api_llm → on-device).
 #[allow(clippy::too_many_arguments)]
 pub async fn run_periodic_steep_with_api(
     db: &MemoryDB,
@@ -640,7 +640,7 @@ pub async fn run_periodic_steep_with_api(
         phases.iter().filter(|p| p.error.is_some()).count(),
     );
 
-    // Onboarding milestone check — first-concept and graph-alive. Runs once
+    // Onboarding milestone check — first-page and graph-alive. Runs once
     // per steep after all phases complete, so entity-extraction (phase 5) and
     // distillation (phase 6) writes are both visible. Each evaluator call is
     // idempotent via DB uniqueness, so repeated passes are harmless.
@@ -721,16 +721,16 @@ pub(crate) async fn redistill_changed_pages(
     let all_active = db.list_pages("active", 200, 0).await?;
     let mut recompiled = 0usize;
 
-    for concept in &all_active {
-        let changed = db.has_page_sources_changed(concept).await.unwrap_or(false);
+    for page in &all_active {
+        let changed = db.has_page_sources_changed(page).await.unwrap_or(false);
         if !changed {
             continue;
         }
 
-        match recompile_single_page(db, llm, prompts, concept).await {
+        match recompile_single_page(db, llm, prompts, page).await {
             Ok(true) => recompiled += 1,
             Ok(false) => {}
-            Err(e) => log::warn!("[re-distill] failed for '{}': {}", concept.title, e),
+            Err(e) => log::warn!("[re-distill] failed for '{}': {}", page.title, e),
         }
     }
 
@@ -751,7 +751,7 @@ pub(crate) async fn redistill_changed_pages(
 /// upsert path in handle_store_memory.
 ///
 /// - `source_updated`: LLM re-distills using the join table's current source list.
-/// - `source_conflict`: user-edited concept — escalates to `source_conflict` only,
+/// - `source_conflict`: user-edited page — escalates to `source_conflict` only,
 ///   does not overwrite user content.
 pub(crate) async fn re_distill_stale_pages(
     db: &MemoryDB,
@@ -775,28 +775,28 @@ pub(crate) async fn re_distill_stale_pages(
     };
 
     let mut recompiled = 0usize;
-    for concept in &stale {
-        if concept.user_edited {
+    for page in &stale {
+        if page.user_edited {
             // Never auto-overwrite user edits — escalate to conflict so a human sees it.
-            db.set_page_stale(&concept.id, "source_conflict").await?;
+            db.set_page_stale(&page.id, "source_conflict").await?;
             log::info!(
-                "[re-distill-stale] user-edited concept '{}' escalated to source_conflict",
-                concept.title
+                "[re-distill-stale] user-edited page '{}' escalated to source_conflict",
+                page.title
             );
             continue;
         }
 
         // Fetch current sources via join table (more accurate than JSON column after upserts).
-        let sources = db.get_page_sources(&concept.id).await?;
+        let sources = db.get_page_sources(&page.id).await?;
         let source_id_strings: Vec<String> =
             sources.iter().map(|s| s.memory_source_id.clone()).collect();
         let source_id_refs: Vec<&str> = source_id_strings.iter().map(|s| s.as_str()).collect();
         if source_id_strings.is_empty() {
             log::warn!(
-                "[re-distill-stale] concept '{}' has no sources in join table, clearing staleness",
-                concept.title
+                "[re-distill-stale] page '{}' has no sources in join table, clearing staleness",
+                page.title
             );
-            db.clear_page_staleness(&concept.id).await?;
+            db.clear_page_staleness(&page.id).await?;
             continue;
         }
 
@@ -804,10 +804,10 @@ pub(crate) async fn re_distill_stale_pages(
         let memories = db.get_memories_by_source_ids(&source_id_strings).await?;
         if memories.is_empty() {
             log::warn!(
-                "[re-distill-stale] concept '{}' sources are all orphaned, clearing staleness",
-                concept.title
+                "[re-distill-stale] page '{}' sources are all orphaned, clearing staleness",
+                page.title
             );
-            db.clear_page_staleness(&concept.id).await?;
+            db.clear_page_staleness(&page.id).await?;
             continue;
         }
 
@@ -826,10 +826,10 @@ pub(crate) async fn re_distill_stale_pages(
             .collect::<Vec<_>>()
             .join("\n\n");
 
-        let user_prompt = format!("Topic: {}\n\n{}", concept.title, memories_block);
+        let user_prompt = format!("Topic: {}\n\n{}", page.title, memories_block);
         let response = llm_ref
             .generate(crate::llm_provider::LlmRequest {
-                system_prompt: Some(prompts.distill_concept.clone()),
+                system_prompt: Some(prompts.distill_page.clone()),
                 user_prompt,
                 max_tokens: llm_ref.recommended_max_output(),
                 temperature: 0.1,
@@ -844,18 +844,15 @@ pub(crate) async fn re_distill_stale_pages(
                     .trim()
                     .to_string();
                 if !content.is_empty() {
-                    db.update_page_content(&concept.id, &content, &source_id_refs, "re_distill")
+                    db.update_page_content(&page.id, &content, &source_id_refs, "re_distill")
                         .await?;
-                    db.clear_page_staleness(&concept.id).await?;
+                    db.clear_page_staleness(&page.id).await?;
                     recompiled += 1;
-                    log::info!("[re-distill-stale] refreshed concept '{}'", concept.title);
+                    log::info!("[re-distill-stale] refreshed page '{}'", page.title);
                 }
             }
-            Ok(_) => log::warn!(
-                "[re-distill-stale] empty LLM output for '{}'",
-                concept.title
-            ),
-            Err(e) => log::warn!("[re-distill-stale] LLM error for '{}': {}", concept.id, e),
+            Ok(_) => log::warn!("[re-distill-stale] empty LLM output for '{}'", page.title),
+            Err(e) => log::warn!("[re-distill-stale] LLM error for '{}': {}", page.id, e),
         }
     }
 
@@ -1888,7 +1885,7 @@ mod tests {
         .unwrap();
         assert_eq!(distilled, 0);
 
-        // 4. Verify concept CRUD works end-to-end
+        // 4. Verify page CRUD works end-to-end
         let now = chrono::Utc::now().to_rfc3339();
         db.insert_page(
             "c_int",
@@ -1903,11 +1900,11 @@ mod tests {
         .await
         .unwrap();
 
-        // 5. Verify concept search
+        // 5. Verify page search
         let found = db.search_pages("libSQL storage", 10).await.unwrap();
         assert!(!found.is_empty());
 
-        // 6. Verify concept by entity lookup
+        // 6. Verify page by entity lookup
         let by_entity = db.get_page_by_entity("entity_libsql_lc").await.unwrap();
         assert!(by_entity.is_some());
 
@@ -1916,7 +1913,7 @@ mod tests {
             "c_int",
             "## Key Facts\n- updated",
             &["lifecycle_0", "lifecycle_1", "lifecycle_2", "lifecycle_3"],
-            "concept_growth",
+            "page_growth",
         )
         .await
         .unwrap();
@@ -1991,8 +1988,8 @@ mod tests {
         assert_eq!(nudge, Nudge::Wow);
         let h = headline.expect("headline should be set");
         assert!(
-            h.contains("new concept"),
-            "headline should mention a new concept: {}",
+            h.contains("new page"),
+            "headline should mention a new page: {}",
             h
         );
     }
@@ -2004,7 +2001,7 @@ mod tests {
         let h = headline.expect("headline should be set");
         assert!(
             h.contains('4'),
-            "multi-concept headline should mention count: {}",
+            "multi-page headline should mention count: {}",
             h
         );
         assert!(h.contains("new concepts"), "should use plural: {}", h);
@@ -2196,7 +2193,7 @@ mod tests {
         assert!(is_all_generic_tokens("misc"));
         assert!(is_all_generic_tokens("other"));
         assert!(is_all_generic_tokens("unknown"));
-        // Note: "concept" no longer in wordlist (false-positive risk on
+        // Note: "page" no longer in wordlist (false-positive risk on
         // legitimate technical titles); not rejected by is_all_generic_tokens.
         // True negatives — these SHOULD pass through.
         assert!(!is_all_generic_tokens("General AI Architecture"));
@@ -2224,7 +2221,7 @@ mod tests {
         assert!(!is_all_generic_tokens("Topic and Notes")); // 'and' saves it
         assert!(!is_all_generic_tokens("libsql Vector Storage"));
         assert!(!is_all_generic_tokens("Origin Memory Layer"));
-        assert!(!is_all_generic_tokens("Origin Concept Model")); // wordlist excludes 'concept'
+        assert!(!is_all_generic_tokens("Origin Concept Model")); // wordlist excludes 'page'
         assert!(!is_all_generic_tokens("Notes on Origin")); // 'on', 'origin' not generic
         assert!(!is_all_generic_tokens("Content Strategy")); // 'content' not in list, 'strategy' not in list
 

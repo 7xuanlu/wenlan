@@ -3,7 +3,7 @@
 //!
 //! Deletes archived pages that look like Mode B failures (large
 //! source_memory_ids, no entity, no domain, not user-edited). Source memories
-//! are NOT modified — see spec 2026-04-25-bad-concept-distill-fix-design.md
+//! are NOT modified — see spec 2026-04-25-bad-page-distill-fix-design.md
 //! for the rationale and follow-up steps required to re-distill them.
 //!
 //! `concept_sources` rows are deleted automatically via ON DELETE CASCADE.

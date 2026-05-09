@@ -1752,7 +1752,7 @@ pub async fn run_concept_distillation_batch_api(
     let clusters = db
         .find_distillation_clusters(
             tuning.similarity_threshold,
-            tuning.concept_min_cluster_size,
+            tuning.page_min_cluster_size,
             tuning.max_clusters_per_steep,
             token_limit,
             tuning.max_unlinked_cluster_size,
@@ -1818,7 +1818,7 @@ pub async fn run_concept_distillation_batch_api(
         batch_requests.push((
             format!("synth_{}", idx),
             user_prompt,
-            Some(prompts.distill_concept.clone()),
+            Some(prompts.distill_page.clone()),
             2048,
         ));
         cluster_meta.push(ClusterMeta {

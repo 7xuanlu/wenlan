@@ -8,16 +8,33 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::PathBuf;
 
+const KNOWLEDGE_STATE_SCHEMA_V2: u32 = 2;
+
 #[derive(Debug, Default, Serialize, Deserialize)]
 struct KnowledgeState {
-    concepts: HashMap<String, ConceptFileState>,
+    #[serde(default = "default_schema_v2")]
+    schema_version: u32,
+    pages: HashMap<String, PageFileState>,
+}
+
+fn default_schema_v2() -> u32 {
+    KNOWLEDGE_STATE_SCHEMA_V2
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-struct ConceptFileState {
+struct PageFileState {
     file: String,
     version: i64,
     last_written: String,
+}
+
+/// Legacy v1 KnowledgeState. The Phase 0 (Page) taxonomy refactor renamed
+/// `concepts` → `pages` and changed the page-id prefix `concept_<uuid>` →
+/// `page_<uuid>`. v1 state.json files are auto-migrated on read. Drop in
+/// next minor release.
+#[derive(Debug, Default, Deserialize)]
+struct LegacyKnowledgeStateV1 {
+    concepts: HashMap<String, PageFileState>,
 }
 
 pub struct KnowledgeWriter {
@@ -29,7 +46,7 @@ impl KnowledgeWriter {
         Self { path }
     }
 
-    pub fn write_concept(&self, page: &Page) -> Result<String, OriginError> {
+    pub fn write_page(&self, page: &Page) -> Result<String, OriginError> {
         let origin_dir = self.path.join(".origin");
         std::fs::create_dir_all(&origin_dir)?;
 
@@ -40,9 +57,9 @@ impl KnowledgeWriter {
         std::fs::write(&file_path, &content)?;
 
         let mut state = self.load_state();
-        state.concepts.insert(
+        state.pages.insert(
             page.id.clone(),
-            ConceptFileState {
+            PageFileState {
                 file: filename,
                 version: page.version,
                 last_written: page.last_modified.clone(),
@@ -53,10 +70,10 @@ impl KnowledgeWriter {
         Ok(file_path.to_string_lossy().to_string())
     }
 
-    pub fn remove_concept(&self, concept_id: &str) -> Result<(), OriginError> {
+    pub fn remove_page(&self, page_id: &str) -> Result<(), OriginError> {
         let mut state = self.load_state();
 
-        if let Some(entry) = state.concepts.remove(concept_id) {
+        if let Some(entry) = state.pages.remove(page_id) {
             let file_path = self.path.join(&entry.file);
             if file_path.exists() {
                 std::fs::remove_file(&file_path)?;
@@ -69,10 +86,39 @@ impl KnowledgeWriter {
 
     fn load_state(&self) -> KnowledgeState {
         let state_path = self.path.join(".origin/state.json");
-        match std::fs::read_to_string(&state_path) {
-            Ok(data) => serde_json::from_str(&data).unwrap_or_default(),
-            Err(_) => KnowledgeState::default(),
+        let data = match std::fs::read_to_string(&state_path) {
+            Ok(d) => d,
+            Err(_) => return KnowledgeState::default(),
+        };
+
+        // v1 detection: has "concepts" key, no "pages" key. Migrate inline.
+        // Heuristic on raw bytes is good enough — the legacy file has at most
+        // a thousand small entries and we only enter this branch once per boot.
+        if data.contains("\"concepts\"") && !data.contains("\"pages\"") {
+            let v1: LegacyKnowledgeStateV1 = serde_json::from_str(&data).unwrap_or_default();
+            log::info!(
+                "[knowledge] migrating state.json v1 -> v2 ({} entries; rewriting concept_ -> page_ id prefix)",
+                v1.concepts.len()
+            );
+            let pages: HashMap<String, PageFileState> = v1
+                .concepts
+                .into_iter()
+                .map(|(id, st)| {
+                    let new_id = if let Some(rest) = id.strip_prefix("concept_") {
+                        format!("page_{rest}")
+                    } else {
+                        id
+                    };
+                    (new_id, st)
+                })
+                .collect();
+            return KnowledgeState {
+                schema_version: KNOWLEDGE_STATE_SCHEMA_V2,
+                pages,
+            };
         }
+
+        serde_json::from_str(&data).unwrap_or_default()
     }
 
     fn save_state(&self, state: &KnowledgeState) -> Result<(), OriginError> {
@@ -134,12 +180,12 @@ mod tests {
     }
 
     #[test]
-    fn test_write_concept_creates_file() {
+    fn test_write_page_creates_file() {
         let dir = tempfile::TempDir::new().unwrap();
         let writer = KnowledgeWriter::new(dir.path().to_path_buf());
         let page = test_concept();
 
-        let path = writer.write_concept(&page).unwrap();
+        let path = writer.write_page(&page).unwrap();
         assert!(path.ends_with("rust-ownership.md"));
 
         let content = std::fs::read_to_string(&path).unwrap();
@@ -158,38 +204,38 @@ mod tests {
         let dir = tempfile::TempDir::new().unwrap();
         let writer = KnowledgeWriter::new(dir.path().to_path_buf());
 
-        writer.write_concept(&test_concept()).unwrap();
+        writer.write_page(&test_concept()).unwrap();
 
         let state = writer.load_state();
-        assert!(state.concepts.contains_key("concept_test123"));
-        assert_eq!(state.concepts["concept_test123"].file, "rust-ownership.md");
-        assert_eq!(state.concepts["concept_test123"].version, 2);
+        assert!(state.pages.contains_key("concept_test123"));
+        assert_eq!(state.pages["concept_test123"].file, "rust-ownership.md");
+        assert_eq!(state.pages["concept_test123"].version, 2);
     }
 
     #[test]
-    fn test_remove_concept_deletes_file() {
+    fn test_remove_page_deletes_file() {
         let dir = tempfile::TempDir::new().unwrap();
         let writer = KnowledgeWriter::new(dir.path().to_path_buf());
 
-        let path = writer.write_concept(&test_concept()).unwrap();
+        let path = writer.write_page(&test_concept()).unwrap();
         assert!(std::path::Path::new(&path).exists());
 
-        writer.remove_concept("concept_test123").unwrap();
+        writer.remove_page("concept_test123").unwrap();
         assert!(!std::path::Path::new(&path).exists());
 
         let state = writer.load_state();
-        assert!(!state.concepts.contains_key("concept_test123"));
+        assert!(!state.pages.contains_key("concept_test123"));
     }
 
     #[test]
-    fn test_remove_nonexistent_concept_noop() {
+    fn test_remove_nonexistent_page_noop() {
         let dir = tempfile::TempDir::new().unwrap();
         let writer = KnowledgeWriter::new(dir.path().to_path_buf());
-        writer.remove_concept("nonexistent").unwrap();
+        writer.remove_page("nonexistent").unwrap();
     }
 
     #[test]
-    fn test_write_multiple_concepts() {
+    fn test_write_multiple_pages() {
         let dir = tempfile::TempDir::new().unwrap();
         let writer = KnowledgeWriter::new(dir.path().to_path_buf());
 
@@ -204,14 +250,14 @@ mod tests {
             ..test_concept()
         };
 
-        writer.write_concept(&c1).unwrap();
-        writer.write_concept(&c2).unwrap();
+        writer.write_page(&c1).unwrap();
+        writer.write_page(&c2).unwrap();
 
         assert!(dir.path().join("alpha.md").exists());
         assert!(dir.path().join("beta.md").exists());
 
         let state = writer.load_state();
-        assert_eq!(state.concepts.len(), 2);
+        assert_eq!(state.pages.len(), 2);
     }
 
     #[test]
@@ -220,7 +266,7 @@ mod tests {
         let writer = KnowledgeWriter::new(dir.path().to_path_buf());
 
         let mut page = test_concept();
-        writer.write_concept(&page).unwrap();
+        writer.write_page(&page).unwrap();
 
         let v1 = std::fs::read_to_string(dir.path().join("rust-ownership.md")).unwrap();
         assert!(v1.contains("origin_version: 2"));
@@ -228,7 +274,7 @@ mod tests {
         // Update version and content
         page.version = 3;
         page.content = "## Updated\nNew content.".to_string();
-        writer.write_concept(&page).unwrap();
+        writer.write_page(&page).unwrap();
 
         let v2 = std::fs::read_to_string(dir.path().join("rust-ownership.md")).unwrap();
         assert!(v2.contains("origin_version: 3"));
@@ -237,7 +283,39 @@ mod tests {
 
         // State reflects new version
         let state = writer.load_state();
-        assert_eq!(state.concepts["concept_test123"].version, 3);
+        assert_eq!(state.pages["concept_test123"].version, 3);
+    }
+
+    #[test]
+    fn test_load_state_migrates_v1_concept_keys_to_page() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let writer = KnowledgeWriter::new(dir.path().to_path_buf());
+
+        // Write a legacy v1 state.json by hand.
+        let v1_json = r#"{
+            "concepts": {
+                "concept_aaa": { "file": "a.md", "version": 1, "last_written": "2026-04-01T00:00:00+00:00" },
+                "concept_bbb": { "file": "b.md", "version": 2, "last_written": "2026-04-02T00:00:00+00:00" }
+            }
+        }"#;
+        std::fs::create_dir_all(dir.path().join(".origin")).unwrap();
+        std::fs::write(dir.path().join(".origin/state.json"), v1_json).unwrap();
+
+        let state = writer.load_state();
+        // v1 keys are auto-rewritten to page_ prefix.
+        assert!(state.pages.contains_key("page_aaa"));
+        assert!(state.pages.contains_key("page_bbb"));
+        assert!(!state.pages.contains_key("concept_aaa"));
+        assert_eq!(state.pages["page_aaa"].file, "a.md");
+        assert_eq!(state.pages["page_bbb"].version, 2);
+        assert_eq!(state.schema_version, KNOWLEDGE_STATE_SCHEMA_V2);
+
+        // After save_state, the file is rewritten in v2 form (no "concepts" key).
+        writer.save_state(&state).unwrap();
+        let written = std::fs::read_to_string(dir.path().join(".origin/state.json")).unwrap();
+        assert!(written.contains("\"pages\""));
+        assert!(!written.contains("\"concepts\""));
+        assert!(written.contains("\"schema_version\""));
     }
 
     #[test]
@@ -249,7 +327,7 @@ mod tests {
             domain: None,
             ..test_concept()
         };
-        let path = writer.write_concept(&page).unwrap();
+        let path = writer.write_page(&page).unwrap();
         let content = std::fs::read_to_string(&path).unwrap();
         assert!(!content.contains("domain:"));
     }
