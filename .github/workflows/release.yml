@@ -34,22 +34,9 @@ jobs:
           fetch-tags: true
 
       - name: Validate version consistency
-        run: |
-          TAG="${RELEASE_TAG#v}"
-
-          CARGO_VERSION=$(grep '^version = ' crates/origin-server/Cargo.toml | head -1 | sed 's/version = "\([^"]*\)".*/\1/')
-
-          echo "Tag version:                          $TAG"
-          echo "crates/origin-server/Cargo.toml:      $CARGO_VERSION"
-
-          if [ "$TAG" != "$CARGO_VERSION" ]; then
-            echo "ERROR: tag $TAG does not match crates/origin-server/Cargo.toml version $CARGO_VERSION"
-            echo ""
-            echo "Fix: run 'bash scripts/bump-version.sh $TAG' and push the updated files before tagging."
-            exit 1
-          fi
-
-          echo "All versions consistent: $TAG"
+        run: bash scripts/validate-versions.sh
+        env:
+          RELEASE_TAG: ${{ env.RELEASE_TAG }}
 
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
@@ -63,8 +50,7 @@ jobs:
         run: cargo build --release -p origin-server --target aarch64-apple-darwin
 
       - name: Build origin-mcp (release)
-        run: |
-          cargo install --git https://github.com/7xuanlu/origin-mcp --root ./tmp-mcp
+        run: cargo build --release -p origin-mcp --target aarch64-apple-darwin
 
       - name: Smoke test origin-server
         run: ./target/aarch64-apple-darwin/release/origin-server --help
@@ -142,15 +128,32 @@ jobs:
 
       - name: Upload standalone origin-mcp binary
         run: |
-          cp tmp-mcp/bin/origin-mcp origin-mcp-aarch64-apple-darwin
-          gh release upload "$RELEASE_TAG" \
-            origin-mcp-aarch64-apple-darwin \
-            --clobber
+          cp target/aarch64-apple-darwin/release/origin-mcp origin-mcp-aarch64-apple-darwin
+          gh release upload "$RELEASE_TAG" origin-mcp-aarch64-apple-darwin --clobber
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Package origin-mcp for Homebrew
+        run: |
+          cp target/aarch64-apple-darwin/release/origin-mcp origin-mcp
+          tar -czf origin-mcp-darwin-arm64.tar.gz origin-mcp
+          rm origin-mcp
+
+      - name: Upload origin-mcp tar for Homebrew
+        run: |
+          gh release upload "$RELEASE_TAG" origin-mcp-darwin-arm64.tar.gz --clobber
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Upload origin-mcp artifacts for downstream jobs
+        uses: actions/upload-artifact@v4
+        with:
+          name: origin-mcp-artifacts
+          path: |
+            origin-mcp-darwin-arm64.tar.gz
+
   publish-crates:
-    name: Publish crates.io (origin-types)
+    name: Publish crates.io (origin-types + origin-mcp)
     needs: release
     runs-on: ubuntu-latest
 
@@ -163,27 +166,126 @@ jobs:
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
 
+      - name: Pre-flight cargo publish dry-run
+        run: |
+          cargo publish -p origin-types --dry-run
+          cargo publish -p origin-mcp --dry-run
+
       - name: Check if origin-types changed since last tag
-        id: check-changed
+        id: check-types
         run: |
           PREV_TAG=$(git tag --sort=-version:refname | grep '^v' | sed -n '2p')
           if [ -z "$PREV_TAG" ]; then
-            echo "No previous tag found; publishing origin-types for the first time."
             echo "changed=true" >> "$GITHUB_OUTPUT"
           else
             CHANGED=$(git diff --name-only "$PREV_TAG" HEAD -- crates/origin-types/)
-            if [ -n "$CHANGED" ]; then
-              echo "origin-types changed since $PREV_TAG:"
-              echo "$CHANGED"
-              echo "changed=true" >> "$GITHUB_OUTPUT"
-            else
-              echo "origin-types unchanged since $PREV_TAG; skipping publish."
-              echo "changed=false" >> "$GITHUB_OUTPUT"
-            fi
+            if [ -n "$CHANGED" ]; then echo "changed=true" >> "$GITHUB_OUTPUT"; else echo "changed=false" >> "$GITHUB_OUTPUT"; fi
           fi
 
       - name: Publish origin-types to crates.io
-        if: steps.check-changed.outputs.changed == 'true' && env.CARGO_REGISTRY_TOKEN != ''
+        if: steps.check-types.outputs.changed == 'true' && env.CARGO_REGISTRY_TOKEN != ''
         run: cargo publish -p origin-types
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+
+      - name: Wait for origin-types to be available on crates.io
+        if: steps.check-types.outputs.changed == 'true'
+        run: |
+          VERSION=$(grep -E '^version = ' Cargo.toml | head -1 | sed -E 's/version = "([^"]+)".*/\1/')
+          for i in $(seq 1 30); do
+            if curl -sf "https://crates.io/api/v1/crates/origin-types/${VERSION}" >/dev/null; then
+              echo "origin-types ${VERSION} available"; break
+            fi
+            echo "Waiting for crates.io to index origin-types ${VERSION}... ($i/30)"
+            sleep 10
+          done
+
+      - name: Publish origin-mcp to crates.io
+        run: cargo publish -p origin-mcp || echo "Already published, skipping"
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+
+  publish-npm:
+    name: Publish to npm
+    needs: publish-crates
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write    # OIDC trusted publishing
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          registry-url: "https://registry.npmjs.org"
+      - name: Sync npm version from tag
+        working-directory: crates/origin-mcp/npm
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          npm version "$VERSION" --no-git-tag-version --allow-same-version
+      - name: Publish
+        working-directory: crates/origin-mcp/npm
+        run: npm publish --provenance --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+  update-homebrew:
+    name: Update Homebrew tap
+    needs: release
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: origin-mcp-artifacts
+          merge-multiple: true
+      - name: Compute checksums and update formula
+        env:
+          HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          SHA_DARWIN_ARM64=$(sha256sum origin-mcp-darwin-arm64.tar.gz | cut -d' ' -f1)
+
+          git clone https://x-access-token:${HOMEBREW_TAP_TOKEN}@github.com/7xuanlu/homebrew-tap.git tap
+          mkdir -p tap/Formula
+
+          cat > tap/Formula/origin-mcp.rb << 'FORMULA'
+          class OriginMcp < Formula
+            desc "MCP server for Origin — personal agent memory layer"
+            homepage "https://github.com/7xuanlu/origin"
+            version "VERSION_PLACEHOLDER"
+            url "https://github.com/7xuanlu/origin/releases/download/vVERSION_PLACEHOLDER/origin-mcp-darwin-arm64.tar.gz"
+            sha256 "SHA_PLACEHOLDER"
+            license "Apache-2.0"
+
+            livecheck do
+              url :homepage
+              strategy :github_latest
+            end
+
+            on_macos do
+              depends_on arch: :arm64
+            end
+
+            def install
+              bin.install "origin-mcp"
+            end
+
+            test do
+              assert_match "origin-mcp", shell_output("#{bin}/origin-mcp --help")
+            end
+          end
+          FORMULA
+
+          sed -i "s/VERSION_PLACEHOLDER/${VERSION}/g" tap/Formula/origin-mcp.rb
+          sed -i "s/SHA_PLACEHOLDER/${SHA_DARWIN_ARM64}/g" tap/Formula/origin-mcp.rb
+
+          cd tap
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add Formula/origin-mcp.rb
+          git commit -m "origin-mcp ${VERSION}"
+          git push origin HEAD:main
+
+      - name: Verify formula syntax
+        run: ruby -c tap/Formula/origin-mcp.rb
