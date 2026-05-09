@@ -1,8 +1,16 @@
 {
   "name": "origin-mcp",
-  "version": "0.4.1",
+  "version": "0.5.0",
   "description": "Personal memory layer for AI agents - MCP server",
-  "keywords": ["mcp", "memory", "ai", "agents", "claude", "chatgpt", "origin"],
+  "keywords": [
+    "mcp",
+    "memory",
+    "ai",
+    "agents",
+    "claude",
+    "chatgpt",
+    "origin"
+  ],
   "license": "MIT",
   "bin": {
     "origin-mcp": "run.js"
@@ -10,8 +18,14 @@
   "scripts": {
     "postinstall": "node install.js"
   },
-  "os": ["darwin", "linux"],
-  "cpu": ["arm64", "x64"],
+  "os": [
+    "darwin",
+    "linux"
+  ],
+  "cpu": [
+    "arm64",
+    "x64"
+  ],
   "repository": {
     "type": "git",
     "url": "https://github.com/7xuanlu/origin-mcp"

@@ -3014,7 +3014,7 @@ dependencies = [
  "anyhow",
  "assert_cmd",
  "clap",
- "origin-types 0.5.0",
+ "origin-types",
  "predicates",
  "reqwest",
  "serde",
@@ -3039,7 +3039,7 @@ dependencies = [
  "llama-cpp-2",
  "log",
  "lru",
- "origin-types 0.5.0",
+ "origin-types",
  "pdf-extract",
  "regex",
  "reqwest",
@@ -3062,7 +3062,7 @@ dependencies = [
 
 [[package]]
 name = "origin-mcp"
-version = "0.4.1"
+version = "0.5.0"
 dependencies = [
  "anyhow",
  "axum 0.8.8",
@@ -3070,7 +3070,7 @@ dependencies = [
  "clap",
  "dirs",
  "http 1.4.0",
- "origin-types 0.3.1",
+ "origin-types",
  "portpicker",
  "rand 0.10.1",
  "reqwest",
@@ -3104,7 +3104,7 @@ dependencies = [
  "hyper 1.9.0",
  "hyper-util",
  "origin-core",
- "origin-types 0.5.0",
+ "origin-types",
  "reqwest",
  "serde",
  "serde_json",
@@ -3116,17 +3116,6 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "uuid",
-]
-
-[[package]]
-name = "origin-types"
-version = "0.3.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "dee6b31fef46f11cc7959c5a259544486ba97ba3c89e89e4d2b853f0b155b8f0"
-dependencies = [
- "anyhow",
- "serde",
- "serde_json",
 ]
 
 [[package]]
