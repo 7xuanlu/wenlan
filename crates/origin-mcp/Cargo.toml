@@ -1,10 +1,10 @@
 [package]
 name = "origin-mcp"
-version = "0.4.1"
-edition = "2021"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
 description = "MCP server for Origin — personal agent memory layer"
-license = "MIT"
-repository = "https://github.com/7xuanlu/origin-mcp"
 
 [lib]
 name = "origin_mcp"
@@ -36,7 +36,7 @@ http = "1"
 tokio-util = "0.7"
 dirs = "6"
 semver = "1"
-origin-types = "0.3"
+origin-types = { workspace = true }
 
 [dev-dependencies]
 tempfile = "3"
