@@ -2266,7 +2266,7 @@ async fn quality_distill_4b_vs_9b() {
         let t0 = std::time::Instant::now();
         let result = llm
             .generate(LlmRequest {
-                system_prompt: Some(prompts.distill_concept.clone()),
+                system_prompt: Some(prompts.distill_page.clone()),
                 user_prompt: user_prompt.clone(),
                 max_tokens,
                 temperature: 0.1,

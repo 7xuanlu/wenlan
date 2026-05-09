@@ -168,7 +168,7 @@ pub(crate) async fn refine_clusters_with_llm(
                                         }
                                     }
                                 }
-                                // "keep" and "split" — split is complex (needs new clusters), defer to global_concept_review
+                                // "keep" and "split" — split is complex (needs new clusters), defer to global_page_review
                                 _ => {}
                             }
                         }
@@ -304,7 +304,7 @@ pub(crate) async fn distill_one_cluster(
 
     let response = llm
         .generate(LlmRequest {
-            system_prompt: Some(prompts.distill_concept.clone()),
+            system_prompt: Some(prompts.distill_page.clone()),
             user_prompt,
             max_tokens: llm.recommended_max_output(),
             temperature: 0.1,
@@ -455,7 +455,7 @@ pub async fn distill_pages(
     let raw_clusters = db
         .find_distillation_clusters(
             tuning.similarity_threshold,
-            tuning.concept_min_cluster_size,
+            tuning.page_min_cluster_size,
             tuning.max_clusters_per_steep,
             token_limit,
             tuning.max_unlinked_cluster_size,
@@ -595,7 +595,7 @@ pub async fn distill_pages(
 
         let response = llm
             .generate(LlmRequest {
-                system_prompt: Some(prompts.distill_concept.clone()),
+                system_prompt: Some(prompts.distill_page.clone()),
                 user_prompt,
                 max_tokens: llm.recommended_max_output(),
                 temperature: 0.1,
@@ -834,7 +834,7 @@ pub(crate) async fn recompile_single_page(
 
     let response = llm
         .generate(LlmRequest {
-            system_prompt: Some(prompts.distill_concept.clone()),
+            system_prompt: Some(prompts.distill_page.clone()),
             user_prompt,
             max_tokens: llm.recommended_max_output(),
             temperature: 0.1,
@@ -915,7 +915,7 @@ pub async fn deep_distill_single(
 
     let response = llm
         .generate(LlmRequest {
-            system_prompt: Some(prompts.distill_concept.clone()),
+            system_prompt: Some(prompts.distill_page.clone()),
             user_prompt,
             max_tokens: llm.recommended_max_output(),
             temperature: 0.1,

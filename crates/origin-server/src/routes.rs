@@ -213,14 +213,14 @@ pub async fn handle_chat_context(
     // search_memory_reranked, log_accesses, etc.) would block every writer
     // to ServerState — e.g. store_memory's space_store update — for the
     // full duration of a rerank call. See CLAUDE.md locking rules.
-    let (db_arc, llm, access_tracker, concept_min_overlap) = {
+    let (db_arc, llm, access_tracker, page_min_overlap) = {
         let s = state.read().await;
         let db = s.db.clone().ok_or(ServerError::DbNotInitialized)?;
         (
             db,
             s.llm.clone(),
             s.access_tracker.clone(),
-            s.tuning.distillation.concept_min_overlap,
+            s.tuning.distillation.page_min_overlap,
         )
     }; // guard dropped here
     let db = db_arc.as_ref();
@@ -358,7 +358,7 @@ pub async fn handle_chat_context(
             let pages = origin_core::pages::filter_pages_by_source_overlap(
                 &raw_pages,
                 &search_source_ids,
-                concept_min_overlap,
+                page_min_overlap,
             );
             pages
                 .iter()

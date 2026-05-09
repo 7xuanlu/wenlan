@@ -829,7 +829,7 @@ pub(crate) async fn re_distill_stale_pages(
         let user_prompt = format!("Topic: {}\n\n{}", page.title, memories_block);
         let response = llm_ref
             .generate(crate::llm_provider::LlmRequest {
-                system_prompt: Some(prompts.distill_concept.clone()),
+                system_prompt: Some(prompts.distill_page.clone()),
                 user_prompt,
                 max_tokens: llm_ref.recommended_max_output(),
                 temperature: 0.1,

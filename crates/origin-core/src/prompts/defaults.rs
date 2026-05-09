@@ -132,7 +132,7 @@ User's correction:\n\
 Write the corrected memory. Keep the same style and length as the original. Only change what the \
 user asked to fix. Respond with ONLY the corrected text, no explanation.";
 
-pub(crate) const DISTILL_CONCEPT: &str = "\
+pub(crate) const DISTILL_PAGE: &str = "\
 Compile these memories into a wiki-style knowledge page.\n\
 \n\
 Format:\n\
@@ -158,7 +158,7 @@ Rules:\n\
 - If sources contradict, keep the most recent and note the contradiction in Open Questions.\n\
 - 3-5 paragraphs total. Quality over quantity.";
 
-pub(crate) const UPDATE_CONCEPT: &str = "\
+pub(crate) const UPDATE_PAGE: &str = "\
 You maintain a wiki-style knowledge page. Update it with new information.\n\
 Integrate new facts into the existing prose naturally — don't just append bullets.\n\
 If the new information contradicts existing content, note it in Open Questions.\n\
@@ -177,7 +177,7 @@ Return a JSON object with two arrays:
 
 Only return valid JSON. No explanation text."#;
 
-pub(crate) const GLOBAL_CONCEPT_REVIEW: &str = r#"You are reviewing a knowledge base for organization quality. Given all page titles and summaries, identify:
+pub(crate) const GLOBAL_PAGE_REVIEW: &str = r#"You are reviewing a knowledge base for organization quality. Given all page titles and summaries, identify:
 1. Pages that should merge (overlapping topics) — return pairs of page_ids
 2. Cross-cutting themes missing — return proposed titles with related page_ids
 3. Pages that should split (too broad) — return page_id with proposed sub-titles

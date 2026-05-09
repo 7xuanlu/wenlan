@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 //! deep_distill: Test on-device model quality for the deep distillation scenario.
-//! Feeds 28 memories into DISTILL_CONCEPT and measures quality + latency.
+//! Feeds 28 memories into DISTILL_PAGE and measures quality + latency.
 
 use origin_core::engine::LlmEngine;
 use origin_core::prompts::PromptRegistry;
@@ -152,7 +152,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let memories_block = MEMORIES.join("\n\n");
     let user = format!("Topic: Origin Architecture\n\n{}", memories_block);
-    let prompt = build_prompt(&prompts.distill_concept, &user);
+    let prompt = build_prompt(&prompts.distill_page, &user);
     let prompt_chars = prompt.len();
 
     let max_tokens = 2048;

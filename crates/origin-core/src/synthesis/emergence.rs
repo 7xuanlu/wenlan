@@ -215,7 +215,7 @@ pub(crate) async fn global_page_review(
 
     let response = llm
         .generate(LlmRequest {
-            system_prompt: Some(prompts.global_concept_review.clone()),
+            system_prompt: Some(prompts.global_page_review.clone()),
             user_prompt: concepts_text,
             max_tokens: 1024,
             temperature: 0.3,

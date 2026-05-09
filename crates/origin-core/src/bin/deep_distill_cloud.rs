@@ -102,7 +102,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .ok_or("No anthropic_api_key in config")?;
 
     let prompts = PromptRegistry::default();
-    let system = prompts.distill_concept.clone();
+    let system = prompts.distill_page.clone();
     let memories_block = MEMORIES.join("\n\n");
     let user = format!("Topic: Origin Architecture\n\n{}", memories_block);
 

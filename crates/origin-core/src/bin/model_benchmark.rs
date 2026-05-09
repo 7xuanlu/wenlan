@@ -9,7 +9,7 @@
 //!   - CLASSIFY_MEMORY (JSON parse, correct enum, domain present)
 //!   - EXTRACT_KNOWLEDGE_GRAPH (JSON parse, entity structure)
 //!   - DETECT_CONTRADICTION (correct label accuracy)
-//!   - DISTILL_CONCEPT (structural: has TLDR, headers, sources)
+//!   - DISTILL_PAGE (structural: has TLDR, headers, sources)
 
 use origin_core::engine::LlmEngine;
 use origin_core::prompts::PromptRegistry;
@@ -470,10 +470,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         0.0,
     ));
 
-    // 4. DISTILL_CONCEPT (single cluster)
+    // 4. DISTILL_PAGE (single cluster)
     let cluster_text = DISTILL_CLUSTER.join("\n\n");
     let distill_user = format!("Topic: Origin Architecture\n\n{}", cluster_text);
-    let distill_prompt = build_prompt(&prompts.distill_concept, &distill_user);
+    let distill_prompt = build_prompt(&prompts.distill_page, &distill_user);
     let distill_samples: Vec<_> = vec![(
         cluster_text,
         distill_prompt,
@@ -481,7 +481,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     )];
     all_results.push(run_benchmark(
         &engine,
-        "DISTILL_CONCEPT",
+        "DISTILL_PAGE",
         distill_samples,
         1024,
         0.1,

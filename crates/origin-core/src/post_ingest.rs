@@ -354,7 +354,7 @@ pub async fn run_post_ingest_enrichment(
         entity_id,
         llm,
         prompts,
-        distillation.concept_growth_threshold,
+        distillation.page_growth_threshold,
     )
     .await
     {
@@ -683,7 +683,7 @@ pub(crate) async fn grow_page(
 
     let response = llm
         .generate(crate::llm_provider::LlmRequest {
-            system_prompt: Some(prompts.update_concept.clone()),
+            system_prompt: Some(prompts.update_page.clone()),
             user_prompt,
             max_tokens: 1024,
             temperature: 0.1,

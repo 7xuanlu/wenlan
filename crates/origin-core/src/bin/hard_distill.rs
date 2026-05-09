@@ -211,7 +211,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let memories_block = MEMORIES.join("\n\n");
     let user = format!("Topic: {}\n\n{}", TOPIC, memories_block);
-    let prompt = build_prompt(&prompts.distill_concept, &user);
+    let prompt = build_prompt(&prompts.distill_page, &user);
 
     println!("=== Hard Distillation Test ===");
     println!("Topic:    {}", TOPIC);
