@@ -226,8 +226,6 @@ jobs:
       - name: Publish
         working-directory: crates/origin-mcp/npm
         run: npm publish --provenance --access public
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
   update-homebrew:
     name: Update Homebrew tap
