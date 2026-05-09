@@ -361,6 +361,7 @@ async fn t5_memory_type_hint_preserved_without_forcing_domain() {
 #[tokio::test]
 async fn t6_context_roundtrip_bug_regression() {
     let (mock, client) = setup().await;
+    #[allow(deprecated)]
     let response = ChatContextResponse {
         context: "you are Lucian".into(),
         profile: ProfileContext {
@@ -412,6 +413,7 @@ async fn t6_context_roundtrip_bug_regression() {
 #[tokio::test]
 async fn t7_context_with_domain() {
     let (mock, client) = setup().await;
+    #[allow(deprecated)]
     let response = ChatContextResponse {
         context: "work context".into(),
         profile: ProfileContext {

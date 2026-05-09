@@ -386,6 +386,7 @@ impl OriginMcpServer {
     }
 
     pub async fn context_impl(&self, params: ContextParams) -> Result<CallToolResult, McpError> {
+        #[allow(deprecated)]
         let req = ChatContextRequest {
             query: None,
             conversation_id: params.topic,
@@ -1053,6 +1054,7 @@ mod tests {
 
     #[test]
     fn chat_context_request_serialization_includes_domain() {
+        #[allow(deprecated)]
         let req = ChatContextRequest {
             query: None,
             conversation_id: Some("topic".into()),
@@ -1430,6 +1432,7 @@ mod tests {
             limit: None,
             domain: None,
         };
+        #[allow(deprecated)]
         let req = ChatContextRequest {
             query: None,
             conversation_id: params.topic,
@@ -1448,6 +1451,7 @@ mod tests {
             limit: Some(5),
             domain: Some("work".into()),
         };
+        #[allow(deprecated)]
         let req = ChatContextRequest {
             query: None,
             conversation_id: params.topic,
@@ -1467,6 +1471,7 @@ mod tests {
             limit: None,
             domain: None,
         };
+        #[allow(deprecated)]
         let req = ChatContextRequest {
             query: None,
             conversation_id: params.topic.clone(),
