@@ -5,15 +5,19 @@ members = [
     "crates/origin-types",
     "crates/origin-core",
     "crates/origin-server",
+    "crates/origin-mcp",
 ]
 
 [workspace.package]
+version = "0.5.0"   # x-release-please-version
 edition = "2021"
+license = "Apache-2.0"
+repository = "https://github.com/7xuanlu/origin"
 
 [workspace.dependencies]
-# Internal crates
-origin-types = { path = "crates/origin-types" }
-origin-core = { path = "crates/origin-core" }
+# Internal crates — both path AND version required for cargo publish
+origin-types = { path = "crates/origin-types", version = "0.5.0" }
+origin-core  = { path = "crates/origin-core",  version = "0.5.0" }
 
 # Serialization
 serde = { version = "1", features = ["derive"] }
