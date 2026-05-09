@@ -1,8 +1,9 @@
 [package]
 name = "origin"
-version = "0.3.0" # x-release-please-version
-edition = "2021"
-license = "Apache-2.0"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
 description = "Origin CLI. Talk to the local Origin daemon from your terminal."
 default-run = "origin"
 publish = false
@@ -12,7 +13,7 @@ name = "origin"
 path = "src/main.rs"
 
 [dependencies]
-origin-types = { path = "../origin-types" }
+origin-types = { workspace = true }
 clap = { version = "4", features = ["derive"] }
 reqwest = { version = "0.12", features = ["json", "rustls-tls"], default-features = false }
 serde = { version = "1", features = ["derive"] }

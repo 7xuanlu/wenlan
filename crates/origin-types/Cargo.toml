@@ -1,10 +1,10 @@
 [package]
 name = "origin-types"
-version = "0.3.1" # x-release-please-version
-edition = "2021"
-license = "Apache-2.0"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
 description = "Shared wire-format types for Origin — the personal agent memory system."
-repository = "https://github.com/7xuanlu/origin"
 homepage = "https://github.com/7xuanlu/origin"
 authors = ["Qi-Xuan Lu <h164654156465@gmail.com>"]
 readme = "README.md"
