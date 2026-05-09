@@ -1,0 +1,9 @@
+/target
+
+# Superpowers working docs (specs, plans, research). Referenced by absolute
+# path during subagent-driven execution; not committed as artifacts.
+docs/superpowers/
+
+# Local cargo overrides (path deps during cross-repo development)
+.cargo/config.toml
+.worktrees/

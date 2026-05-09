@@ -1,0 +1,69 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  check:
+    name: Format + Clippy + Test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Install jq
+        run: sudo apt-get update && sudo apt-get install -y jq
+
+      - name: Cache cargo registry + target
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: cargo fmt --check
+        run: cargo fmt --all -- --check
+
+      - name: cargo clippy
+        run: cargo clippy --locked --all-targets -- -D warnings
+
+      - name: cargo test
+        run: cargo test --locked --all-targets
+
+      - name: Gate - origin-types must resolve to crates.io, not a path
+        run: |
+          SOURCE=$(cargo metadata --format-version 1 --locked \
+            | jq -r '
+              .packages as $packages
+              | (.packages[] | select(.name == "origin-mcp") | .id) as $root_id
+              | (.resolve.nodes[] | select(.id == $root_id).deps[] | select(.name == "origin_types") | .pkg) as $dep_id
+              | $packages[] | select(.id == $dep_id) | (.source // "__PATH__")
+            ')
+          if [ -z "$SOURCE" ]; then
+            echo "ERROR: origin-types dependency not found in origin-mcp's metadata."
+            exit 1
+          fi
+          if [ "$SOURCE" = "__PATH__" ]; then
+            echo "ERROR: origin-types resolved from a local path/workspace source."
+            echo "Path deps are forbidden on main - they break cargo publish and cargo install."
+            exit 1
+          fi
+          if [ "$SOURCE" != "registry+https://github.com/rust-lang/crates.io-index" ]; then
+            echo "ERROR: origin-types must resolve to crates.io registry, got: $SOURCE"
+            echo "Path deps are forbidden on main - they break cargo publish and cargo install."
+            exit 1
+          fi
+          echo "OK: origin-types resolves from crates.io registry."
+
+      - name: cargo publish --dry-run
+        if: always()
+        run: cargo publish --dry-run --locked -p origin-mcp
