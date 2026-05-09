@@ -1913,7 +1913,7 @@ mod tests {
             "c_int",
             "## Key Facts\n- updated",
             &["lifecycle_0", "lifecycle_1", "lifecycle_2", "lifecycle_3"],
-            "concept_growth",
+            "page_growth",
         )
         .await
         .unwrap();

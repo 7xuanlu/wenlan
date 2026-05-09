@@ -10,7 +10,7 @@ pub use origin_types::pages::Page;
 /// is defined in `origin-types` and `impl` blocks on foreign types are
 /// disallowed.
 pub fn new_page_id() -> String {
-    format!("concept_{}", uuid::Uuid::new_v4())
+    format!("page_{}", uuid::Uuid::new_v4())
 }
 
 /// Filter pages by source overlap with search results.

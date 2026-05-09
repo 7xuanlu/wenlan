@@ -405,16 +405,10 @@ pub(crate) async fn distill_one_cluster(
                 cluster.source_ids.len()
             );
             if let Err(e) = db
-                .log_agent_activity(
-                    "system",
-                    "concept_create",
-                    &source_memory_ids,
-                    None,
-                    &detail,
-                )
+                .log_agent_activity("system", "page_create", &source_memory_ids, None, &detail)
                 .await
             {
-                log::warn!("[distill] log concept_create activity failed: {e}");
+                log::warn!("[distill] log page_create activity failed: {e}");
             }
 
             if let Some(writer) = knowledge_writer {
@@ -700,16 +694,10 @@ pub async fn distill_pages(
                     cluster.source_ids.len()
                 );
                 if let Err(e) = db
-                    .log_agent_activity(
-                        "system",
-                        "concept_create",
-                        &source_memory_ids,
-                        None,
-                        &detail,
-                    )
+                    .log_agent_activity("system", "page_create", &source_memory_ids, None, &detail)
                     .await
                 {
-                    log::warn!("[distill] log concept_create activity failed: {e}");
+                    log::warn!("[distill] log page_create activity failed: {e}");
                 }
 
                 if let Some(ref writer) = knowledge_writer {

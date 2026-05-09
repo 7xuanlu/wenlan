@@ -106,7 +106,7 @@ pub(crate) async fn assign_orphan_memories(
                                         page_id,
                                         &page.content,
                                         &refs,
-                                        "concept_growth",
+                                        "page_growth",
                                     )
                                     .await;
                                 assigned += 1;

@@ -256,12 +256,12 @@ pub async fn run_post_ingest_enrichment(
     match check_page_contradiction(db, source_id, content).await {
         Ok(n) if n > 0 => {
             log::info!("[post_ingest] {source_id}: flagged {n} page(s) for re-distill");
-            db.record_enrichment_step(source_id, "concept_contradiction", "ok", None)
+            db.record_enrichment_step(source_id, "page_contradiction", "ok", None)
                 .await
                 .ok();
         }
         Ok(_) => {
-            db.record_enrichment_step(source_id, "concept_contradiction", "ok", None)
+            db.record_enrichment_step(source_id, "page_contradiction", "ok", None)
                 .await
                 .ok();
         }
@@ -269,7 +269,7 @@ pub async fn run_post_ingest_enrichment(
             log::warn!("[post_ingest] page contradiction check failed: {e}");
             db.record_enrichment_step(
                 source_id,
-                "concept_contradiction",
+                "page_contradiction",
                 "failed",
                 Some(&e.to_string()),
             )
@@ -360,7 +360,7 @@ pub async fn run_post_ingest_enrichment(
     {
         Ok(true) => {
             log::info!("[post_ingest] {source_id}: updated matching page");
-            db.record_enrichment_step(source_id, "concept_growth", "ok", None)
+            db.record_enrichment_step(source_id, "page_growth", "ok", None)
                 .await
                 .ok();
             if let Some(kp) = knowledge_path {
@@ -370,18 +370,18 @@ pub async fn run_post_ingest_enrichment(
         Ok(false) => {
             // grow_page returns false when LLM is unavailable — treat as skipped
             if llm.map(|l| l.is_available()).unwrap_or(false) {
-                db.record_enrichment_step(source_id, "concept_growth", "ok", None)
+                db.record_enrichment_step(source_id, "page_growth", "ok", None)
                     .await
                     .ok();
             } else {
-                db.record_enrichment_step(source_id, "concept_growth", "skipped", None)
+                db.record_enrichment_step(source_id, "page_growth", "skipped", None)
                     .await
                     .ok();
             }
         }
         Err(e) => {
             log::warn!("[post_ingest] page growth failed: {e}");
-            db.record_enrichment_step(source_id, "concept_growth", "failed", Some(&e.to_string()))
+            db.record_enrichment_step(source_id, "page_growth", "failed", Some(&e.to_string()))
                 .await
                 .ok();
         }
@@ -578,7 +578,7 @@ pub(crate) async fn check_page_contradiction(
             let refs: Vec<&str> = new_sources.iter().map(|s| s.as_str()).collect();
             // Update sources without changing content — re-distill will recompile
             let _ = db
-                .update_page_content(&page.id, &page.content, &refs, "concept_growth")
+                .update_page_content(&page.id, &page.content, &refs, "page_growth")
                 .await;
             log::info!("[post_ingest] page '{}' flagged for re-distill due to potential contradiction from {}",
                 page.title, source_id);
@@ -706,7 +706,7 @@ pub(crate) async fn grow_page(
         source_ids.push(source_id.to_string());
     }
     let source_refs: Vec<&str> = source_ids.iter().map(|s| s.as_str()).collect();
-    db.update_page_content(&page.id, updated, &source_refs, "concept_growth")
+    db.update_page_content(&page.id, updated, &source_refs, "page_growth")
         .await?;
 
     // Log activity: attribute to the agent who authored the triggering memory.
@@ -719,10 +719,10 @@ pub(crate) async fn grow_page(
     let detail = format!("grew \"{}\"", page.title);
     let ids = vec![source_id.to_string()];
     if let Err(e) = db
-        .log_agent_activity(&agent, "concept_grow", &ids, None, &detail)
+        .log_agent_activity(&agent, "page_grow", &ids, None, &detail)
         .await
     {
-        log::warn!("[post_ingest] log concept_grow activity failed: {e}");
+        log::warn!("[post_ingest] log page_grow activity failed: {e}");
     }
 
     Ok(true)
@@ -904,8 +904,8 @@ mod tests {
         let title = steps.iter().find(|s| s.step == "title_enrich").unwrap();
         assert_eq!(title.status, "skipped");
 
-        // concept_growth should be skipped (no LLM)
-        let growth = steps.iter().find(|s| s.step == "concept_growth").unwrap();
+        // page_growth should be skipped (no LLM)
+        let growth = steps.iter().find(|s| s.step == "page_growth").unwrap();
         assert_eq!(growth.status, "skipped");
 
         // Summary should be enriched (no failures)
