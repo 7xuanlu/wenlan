@@ -4,6 +4,8 @@ description: >
   Delete a memory from Origin by ID. Destructive and cannot be undone —
   prefer `/capture` with `supersedes` for corrections. Invoked as
   `/forget <source_id>`.
+argument-hint: "<source_id>"
+allowed-tools: ["mcp__origin__forget", "mcp__origin__recall"]
 ---
 
 # /forget
