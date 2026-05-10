@@ -1,6 +1,8 @@
 {
-  "origin": {
-    "command": "npx",
-    "args": ["-y", "origin-mcp"]
+  "mcpServers": {
+    "origin": {
+      "command": "npx",
+      "args": ["-y", "origin-mcp"]
+    }
   }
 }
