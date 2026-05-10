@@ -25,11 +25,13 @@ The daemon does the memory chores in the background: storing, searching, dedupli
 
 ```text
 /plugin marketplace add 7xuanlu/origin
-/plugin install origin@7xuanlu
+/plugin install origin@origin-plugins
 /init
 ```
 
 That's it. `/init` is self-healing: detects a missing daemon, runs the install one-liner, configures Basic Memory (no LLM, no API key, no prompts), wires the MCP server, and verifies a real round-trip end-to-end. If anything's already installed, it skips ahead.
+
+> The first command points Claude Code at this repo's community marketplace named `origin-plugins`. An official Anthropic registry listing is planned; this is the path for now.
 
 After install, your data lives under `~/.origin/`:
 
@@ -57,31 +59,7 @@ Any client that accepts a JSON `mcpServers` entry:
 }
 ```
 
-`npx -y origin-mcp` downloads the MCP connector from npm on first run. The daemon must be running locally; if it isn't, the first tool call surfaces the install one-liner.
-
-### Headless / advanced
-
-For automation, servers, or pre-flight installs without invoking the plugin:
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/7xuanlu/origin/main/install.sh | bash
-export PATH="$HOME/.origin/bin:$PATH"
-origin setup --basic       # non-interactive Basic Memory mode
-origin install             # register launchd service
-origin status              # verify
-```
-
-Storage, search, recall, and MCP memory work in Basic Memory without any LLM. To unlock background refinery — auto entity extraction, page synthesis, recaps, knowledge-graph rethink — bring your own model:
-
-```bash
-origin model install       # local Qwen via llama.cpp + Metal
-origin key set anthropic   # cloud LLM (BYOK)
-origin doctor              # check setup
-```
-
-Both are opt-in; the default plugin flow runs entirely without them.
-
-Runtime details: [crates/origin-server](crates/origin-server/README.md).
+`npx -y origin-mcp` downloads the MCP connector from npm on first run. The daemon must be running locally; if it isn't, the first tool call surfaces the install one-liner. See [Headless install](#headless-install) below for the daemon-only path.
 
 ---
 
@@ -119,6 +97,30 @@ Use your AI tools normally. Origin runs in the background and makes durable cont
 3. Agents capture decisions, preferences, project facts, gotchas, and lessons while you work.
 4. Origin deduplicates, links related ideas, distills pages, and preserves where each memory came from.
 5. Recall combines vector search, full-text search, and knowledge graph signals without replaying full chat history.
+
+---
+
+## Headless install
+
+For automation, servers, no-GUI setups, or pre-flight installs without invoking the plugin. Most users don't need this — the Claude Code Quickstart handles all of it.
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/7xuanlu/origin/main/install.sh | bash
+export PATH="$HOME/.origin/bin:$PATH"
+origin setup --basic       # non-interactive Basic Memory mode
+origin install             # register launchd service
+origin status              # verify
+```
+
+Storage, search, recall, and MCP memory work in Basic Memory mode without any LLM. To unlock background refinery (auto entity extraction, page synthesis, recaps, knowledge-graph rethink), bring your own model:
+
+```bash
+origin model install       # local Qwen via llama.cpp + Metal
+origin key set anthropic   # cloud LLM (BYOK)
+origin doctor              # check setup
+```
+
+Both are opt-in; the default plugin flow runs entirely without them. Runtime details: [crates/origin-server](crates/origin-server/README.md).
 
 ---
 
