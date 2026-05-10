@@ -48,14 +48,16 @@ happened. If not a git repo, skip — conversation context is the source.
 ### 3. Infer, do not ask
 
 Synthesize silently from git output + conversation. Categorize each item
-using the daemon's 6 canonical memory types:
+into user-facing groups. Each maps to a daemon `memory_type` for the
+capture call:
 
-- **decision** — architectural choice, tool/pattern selection (with WHY).
-- **lesson** — root cause discovered, workaround found, technical insight.
-- **gotcha** — unexpected behavior, debugging discovery, sharp edge.
-- **preference** — workflow pattern observed, user correction on approach.
-- **fact** — durable project/people/tool fact worth persisting.
-- **identity** — something about the user themselves.
+| Display label | daemon memory_type | What belongs here |
+|---|---|---|
+| Decisions | `decision` | architectural choice, tool/pattern selection (with WHY) |
+| Lessons | `lesson` | root cause discovered, workaround found, technical insight |
+| Insights | `gotcha` | unexpected behavior, debugging discovery, sharp edge |
+| Corrections | `preference` | user pushed back, corrected approach or assumption |
+| Facts | `fact` | durable project/people/tool fact worth persisting |
 
 Non-memory items (not stored, session-log only):
 - **Open threads** — started but not finished, blockers.
@@ -65,10 +67,10 @@ config values). The commit log preserves those.
 
 ### 4. MCP captures (one per item)
 
-For each non-trivial item, call with `memory_type` matching the category:
+For each non-trivial item, call with the mapped `memory_type`:
 
 ```
-capture(content="<one self-contained sentence with WHY>", memory_type="<decision|lesson|gotcha|preference|fact|identity>")
+capture(content="<one self-contained sentence with WHY>", memory_type="<decision|lesson|gotcha|preference|fact>")
 ```
 
 Atomic: one decision per call. Don't merge multiple items into one
@@ -171,21 +173,21 @@ wait is enough for the daemon to release the lock.
 
 ### 9. Confirm
 
-Print one summary block with captures grouped by daemon memory type:
+Print one summary block with captures grouped by display label:
 
 ```
 Handoff stored.
-  decision:   <N> (brief list)
-  lesson:     <N> (brief list)
-  gotcha:     <N> (brief list)
-  preference: <N> (brief list)
-  fact:       <N> (brief list)
-  Session:    ~/.origin/sessions/<filename>
-  Status:     ~/.origin/sessions/_status/<project>.md
-  Git:        <commit hash> session: <slug>
+  Decisions:   <N> (brief list)
+  Lessons:     <N> (brief list)
+  Insights:    <N> (brief list)
+  Corrections: <N> (brief list)
+  Facts:       <N> (brief list)
+  Session:     ~/.origin/sessions/<filename>
+  Status:      ~/.origin/sessions/_status/<project>.md
+  Git:         <commit hash> session: <slug>
 ```
 
-Show each type only if non-empty. List items as short phrases, not
+Show each label only if non-empty. List items as short phrases, not
 full sentences — the session log has the details.
 
 ## When to use
