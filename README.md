@@ -115,28 +115,6 @@ Token efficiency on LoCoMo: 168 tokens per query instead of 4,505 for full repla
 
 ## Repo Map
 
-- All user-facing data lives under `~/.origin/`:
-  - `~/.origin/pages/` — wiki pages (markdown).
-  - `~/.origin/sessions/` — session logs (markdown).
-  - `~/.origin/db/` — symlink to the libSQL store at `~/Library/Application Support/origin/memorydb/`.
-  - `~/.origin/bin/` — installed binaries.
-- Browse it with `open ~/.origin/` (Finder), `code ~/.origin/` (VS Code), or symlink `~/.origin/pages/` into an Obsidian vault for graph view.
-- The daemon listens on `127.0.0.1:7878`; MCP clients and local tools call that local API.
-- There is no cloud sync or telemetry by default. Anthropic keys are opt-in settings.
-- On-device Qwen models download only when requested with `origin model install`, and use the `hf-hub` cache.
-- Security reports: [SECURITY.md](SECURITY.md).
-
-| Path | What lives there |
-| --- | --- |
-| [crates/origin-core](crates/origin-core/README.md) | Storage, search, embeddings, refinery, graph, pages, export, eval. |
-| [crates/origin-server](crates/origin-server/README.md) | Local daemon, setup, launchd service, HTTP API. |
-| [crates/origin-mcp](crates/origin-mcp/README.md) | MCP server, tools, npm package. |
-| [crates/origin-cli](crates/origin-cli/README.md) | Source-built developer CLI for daemon search, recall, store, list, and agents. |
-| [.claude-plugin](.claude-plugin/README.md) and [skills](skills/README.md) | Claude Code plugin metadata and workflow skills. |
-| [docs/eval](docs/eval/README.md) | Benchmark workflow and methodology. |
-
-## Repo Map
-
 Origin is daemon-first. `origin-server` owns the local database, embeddings, refinery, knowledge graph, and HTTP API on `127.0.0.1:7878`. The plugin, MCP server, CLI, and local tools are thin clients over that daemon.
 
 | Path | What lives there |
