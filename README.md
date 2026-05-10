@@ -21,28 +21,30 @@ The daemon does the memory chores in the background: storing, searching, dedupli
 
 ## Quickstart
 
-### Claude Code
+### Claude Code — 30 seconds, three commands
 
 ```text
 /plugin marketplace add 7xuanlu/origin
 /plugin install origin@7xuanlu
-```
-
-Then run:
-
-```text
 /init
 ```
 
-`/init` is self-healing. It auto-installs the daemon if missing, configures Basic Memory (no LLM, no API key), wires up the MCP server, and verifies a real round-trip. A `SessionStart` hook probes on every restart and points you back at `/origin:init` if the daemon goes down.
+That's it. `/init` is self-healing: detects a missing daemon, runs the install one-liner, configures Basic Memory (no LLM, no API key, no prompts), wires the MCP server, and verifies a real round-trip end-to-end. If anything's already installed, it skips ahead.
 
-After `/init`, your data lives at `~/.origin/` (pages, sessions, db symlink). Open it with `open ~/.origin/` or `code ~/.origin/`.
+After install, your data lives under `~/.origin/`:
+
+- `~/.origin/pages/` — wiki pages distilled from your memories
+- `~/.origin/sessions/` — narrative session logs written by `/handoff`
+- `~/.origin/db/` — symlink to the libSQL store
+- `~/.origin/.git/` — Skills auto-commit per logical batch, so `git log ~/.origin/` is a free audit trail
+
+Browse with `open ~/.origin/`, `code ~/.origin/`, or symlink `~/.origin/pages/` into an Obsidian vault for graph view. A `SessionStart` hook quietly probes the daemon on each Claude Code restart and prints a one-line nudge back to `/origin:init` if it ever goes down.
 
 Plugin details: [plugin/](plugin/.claude-plugin/README.md).
 
-### Other MCP clients
+### Other MCP clients (Cursor, Codex, Claude Desktop, Windsurf, Gemini CLI…)
 
-For Cursor, Codex, Claude Desktop, Windsurf, Gemini CLI, or any client that accepts a JSON `mcpServers` entry:
+Any client that accepts a JSON `mcpServers` entry:
 
 ```json
 {
@@ -55,26 +57,29 @@ For Cursor, Codex, Claude Desktop, Windsurf, Gemini CLI, or any client that acce
 }
 ```
 
-`npx origin-mcp` downloads the MCP connector published from [`crates/origin-mcp/`](crates/origin-mcp/README.md). If the local runtime isn't reachable, the first tool call returns the install command and next step.
+`npx -y origin-mcp` downloads the MCP connector from npm on first run. The daemon must be running locally; if it isn't, the first tool call surfaces the install one-liner.
 
-### Local runtime
+### Headless / advanced
 
-Origin runs a local background service on `127.0.0.1:7878`. The plugin and `origin-mcp` tell you when to install it. You can also do it up front:
+For automation, servers, or pre-flight installs without invoking the plugin:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/7xuanlu/origin/main/install.sh | bash
 export PATH="$HOME/.origin/bin:$PATH"
-origin setup
-origin install
+origin setup --basic       # non-interactive Basic Memory mode
+origin install             # register launchd service
+origin status              # verify
 ```
 
-Origin works without a local LLM or API key for storage, search, recall, and MCP memory. To unlock richer extraction, background refinement, and page synthesis:
+Storage, search, recall, and MCP memory work in Basic Memory without any LLM. To unlock background refinery — auto entity extraction, page synthesis, recaps, knowledge-graph rethink — bring your own model:
 
 ```bash
-origin model install
-origin key set anthropic
-origin doctor
+origin model install       # local Qwen via llama.cpp + Metal
+origin key set anthropic   # cloud LLM (BYOK)
+origin doctor              # check setup
 ```
+
+Both are opt-in; the default plugin flow runs entirely without them.
 
 Runtime details: [crates/origin-server](crates/origin-server/README.md).
 
