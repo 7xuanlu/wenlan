@@ -56,6 +56,30 @@ A `SessionStart` hook (`hooks/check-daemon.sh`) probes the local daemon at `127.
 
 Browse with `open ~/.origin/` (Finder), `code ~/.origin/` (VS Code), or symlink `~/.origin/pages/` into an Obsidian vault for the graph view. No Tauri app required.
 
+## Basic Memory mode and agent-side LLM phases
+
+By default `/init` configures **Basic Memory**: no model download, no API
+key, no prompts. The daemon stores, embeds, dedupes, and serves hybrid
+search — it does *not* do LLM-heavy work like classification, entity
+extraction, page synthesis, or reranking.
+
+The skills compensate. Where the daemon would normally call its LLM, the
+skill asks Claude itself to do the equivalent step and posts the result
+back via HTTP:
+
+| Phase | LLM-equipped daemon | Basic Memory + skill |
+|---|---|---|
+| Pick `memory_type` | daemon classifier | `/capture` picks one of 6 types from content |
+| Extract entities/relations | daemon `extract.rs` | `/capture` POSTs to `/api/memory/entities` and `/api/memory/relations` |
+| Synthesize a page | daemon refinery + `/distill` | `/distill` reads the cluster, writes the page, POSTs to `/api/pages` |
+| Expand a query / rerank hits | daemon expansion + rerank | `/recall` rewrites the query before search and reorders hits after |
+
+The daemon stays the single writer and storage owner. Claude does the
+thinking. This is why Basic Memory works without an API key or
+on-device model — and why the same skills also work when you later add
+an LLM. The skills detect the daemon's capabilities and fall through to
+the agent path when needed.
+
 ## Skill Files
 
 The actual skill instructions live in [`../skills`](../skills):
