@@ -16,15 +16,22 @@ moment of insight, like a photograph.
 ## How to invoke
 
 Call the `origin` MCP server's `capture` tool with the user's content as a
-complete, self-contained statement.
+complete, self-contained statement. Attach `topic` from cwd or the
+conversation — don't make the user type it.
 
 ```
-capture(content="<args, written as a full sentence with WHY>")
+capture(content="<args, written as a full sentence with WHY>", topic=<inferred>)
 ```
+
+`topic` inference:
+
+- cwd inside a repo → repo name (e.g. `~/Repos/origin/...` → `"origin"`).
+- Outside any repo → most recent topic from the conversation, or omit.
 
 The daemon auto-classifies type, extracts structured fields, detects
 entities, and links the knowledge graph. Don't set `memory_type` or
-`structured_fields` unless you're confident — omitting beats guessing wrong.
+`structured_fields` unless the content itself names them — omitting beats
+guessing wrong.
 
 ## What to capture
 

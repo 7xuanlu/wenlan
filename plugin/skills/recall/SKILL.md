@@ -18,14 +18,19 @@ ranked by hybrid vector + FTS search.
 Call the `origin` MCP server's `recall` tool with the user's query.
 
 ```
-recall(query="<args>")
+recall(query="<args>", domain=<inferred>, memory_type=<inferred>)
 ```
 
-Optional filters:
-- `memory_type` — narrow to "profile", "knowledge", or precise types
-  (identity, preference, fact, decision, lesson, gotcha)
-- `domain` — narrow to a topic scope (e.g. "rust", "work", "origin")
-- `limit` — default 10. Use 3-5 for quick lookups, 10-20 for exploration.
+**Infer scope yourself — don't ask the user.** The user types `/recall <query>`
+and nothing else. You attach `domain` and `memory_type` based on:
+
+- `domain`: current working directory (e.g. `~/Repos/origin/...` → `"origin"`),
+  the topic being discussed, or whatever space was mentioned in recent turns.
+  Omit if no clear signal.
+- `memory_type`: only when the query itself names a type ("decision on X",
+  "lesson about Y", "preference for Z"). Otherwise omit and let hybrid
+  search rank.
+- `limit`: default 10. Use 3-5 for quick lookups, 10-20 for exploration.
 
 ## When to use
 

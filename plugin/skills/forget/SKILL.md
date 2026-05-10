@@ -5,7 +5,7 @@ description: >
   prefer `/capture` with `supersedes` for corrections. Invoked as
   `/forget <source_id>`.
 argument-hint: "<source_id>"
-allowed-tools: ["mcp__plugin_origin_origin__forget", "mcp__plugin_origin_origin__recall"]
+allowed-tools: ["Bash", "mcp__plugin_origin_origin__forget", "mcp__plugin_origin_origin__recall"]
 ---
 
 # /forget
@@ -40,3 +40,16 @@ forget(memory_id="<source_id>")
 Deletion is destructive. Always confirm with the user before calling forget,
 unless the user has already given an explicit, unambiguous instruction in
 the same turn (e.g. they pasted the ID and said "delete this").
+
+## Auto-commit ~/.origin/
+
+If the deletion removed a page md (daemon archives the page and
+KnowledgeWriter unlinks the file), snapshot the change. Defensive —
+silent skip if `git` missing, `~/.origin/` not a repo, or no diff.
+
+```
+Bash: cd ~/.origin 2>/dev/null && [ -d .git ] && git add -A && \
+      git diff --cached --quiet || \
+      git -c user.name=Origin -c user.email=daemon@origin.local \
+          commit --quiet -m "forget: <source_id>" || true
+```

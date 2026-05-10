@@ -108,12 +108,16 @@ impl Config {
         self.watch_paths.clear();
     }
 
-    /// Returns the configured knowledge path, or `~/Origin/knowledge/` as default.
+    /// Returns the configured pages path, or `~/.origin/pages/` as default.
+    /// Field name remains `knowledge_path` for back-compat with existing
+    /// config files; the default folder is rebranded to `pages/` to match
+    /// the user-facing `Page` concept and the consolidated `~/.origin/`
+    /// data layout.
     pub fn knowledge_path_or_default(&self) -> PathBuf {
         self.knowledge_path.clone().unwrap_or_else(|| {
             dirs::home_dir()
                 .unwrap_or_else(|| PathBuf::from("."))
-                .join("Origin/knowledge")
+                .join(".origin/pages")
         })
     }
 
@@ -373,7 +377,7 @@ mod tests {
     #[test]
     fn test_config_knowledge_path_default() {
         let config: Config = serde_json::from_str("{}").unwrap();
-        let default_path = dirs::home_dir().unwrap().join("Origin/knowledge");
+        let default_path = dirs::home_dir().unwrap().join(".origin/pages");
         assert_eq!(config.knowledge_path_or_default(), default_path);
     }
 

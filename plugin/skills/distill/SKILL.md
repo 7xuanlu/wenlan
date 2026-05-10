@@ -18,13 +18,39 @@ page from its current sources.
 
 ## How to invoke
 
-Call the `origin` MCP server's `distill` tool. Without an arg, distills any
-clusters with new sources. With `page_id`, re-distills that one page.
+Call the `origin` MCP server's `distill` tool. Decide full vs single-page
+yourself — don't push the choice on the user.
 
 ```
-distill()                       # full pass
-distill(page_id="<page_id>")    # single page
+distill()                       # full pass — default
+distill(page_id="<page_id>")    # single page — only when user names one
 ```
+
+**Decision rules:**
+
+- User typed bare `/distill` → full pass.
+- User typed `/distill <something>` and the arg is a page id (looks like
+  `page_xxx` or `concept_xxx`) → single-page re-distill.
+- User typed `/distill <something>` and the arg is a topic/title → recall
+  the matching page first, then call distill with its id. If no match,
+  fall back to full pass.
+
+## Auto-commit ~/.origin/
+
+After the MCP `distill` call returns successfully, snapshot the page
+changes so `git log` reflects the synthesis pass. Defensive — silent
+skip if `git` missing or `~/.origin/` isn't a repo.
+
+```
+Bash: cd ~/.origin 2>/dev/null && [ -d .git ] && git add -A && \
+      git -c user.name=Origin -c user.email=daemon@origin.local \
+          commit --quiet -m "distill: <pages_created> created, <pages_updated> updated" \
+          || true
+```
+
+Use the JSON response (`pages_created`, `pages_updated`) to fill the
+commit message. Skip the commit if both counts are 0 — `git commit`
+with no diff would fail otherwise.
 
 ## What distillation does
 

@@ -1,60 +1,192 @@
 ---
 name: handoff
 description: >
-  Session-end handoff. Capture decisions, lessons, gotchas, and open
-  threads so the next session walks in primed. Invoked as
-  `/handoff`.
-allowed-tools: ["mcp__plugin_origin_origin__capture"]
+  End-of-session ritual. Captures decisions, lessons, gotchas, and open
+  threads. Writes a narrative session log to ~/.origin/sessions/ and stores
+  granular memories via Origin MCP. Invoked as `/handoff`.
+allowed-tools: ["Bash", "mcp__plugin_origin_origin__capture"]
 ---
 
 # /handoff
 
-End-of-session debrief. Stores what was decided, what was learned, and what
-remains open as a single coherent handoff so the next session boots with
-context.
+End-of-session debrief. Three artifacts each pass:
 
-## How to invoke
+1. **Granular MCP captures** — one per decision/lesson/gotcha (DB authoritative).
+2. **Session log md** — narrative thread at `~/.origin/sessions/<YYYY-MM-DD-HHmm>-<slug>.md`.
+3. **Project status md + json** — current goals + last-handoff timestamp at `~/.origin/sessions/_status/`.
 
-1. Summarize the session: list decisions, lessons, gotchas, blockers, and
-   pending threads.
-2. For each item, call the `origin` MCP server's `capture` tool with one
-   atomic statement per memory. Store directly — the daemon dedups against
-   existing knowledge, so re-storing known facts is a no-op.
+These are orthogonal: captures are queryable atoms, session log is the
+narrative thread, status file lets the next session see where we left off.
+
+## Steps
+
+### 1. Detect project + last handoff time
 
 ```
-capture(content="<one decision / lesson / gotcha as a complete sentence>")
+Bash: cd_repo=$(git -C "$PWD" rev-parse --show-toplevel 2>/dev/null); echo "${cd_repo:-no-git}"
 ```
 
-3. Only surface items to the user BEFORE storing if they meet one of these
-   bars:
-   - Contradicts an existing memory (recall returned a conflicting fact).
-   - Marks a critical incident, irreversible action, or production change.
-   - You are uncertain whether the item is durable vs transient.
+- If output is a path → use the basename as `<project>` (e.g. `origin`).
+- If `no-git` → use the cwd basename. Skip git steps below; rely entirely
+  on conversation context.
 
-   Otherwise just store and report a one-line summary at the end:
-   "Handoff: stored N captures, daemon dedup'd M as already-known."
+Read `~/.origin/sessions/_status/handoff-<project>.json` for `lastHandoff`
+timestamp (ISO-8601). If file missing, default to "12 hours ago".
 
-## What to store at handoff
+### 2. Gather session context (parallel, only if git repo)
 
-- Decisions made (with the WHY)
-- Lessons learned (gotchas, things that broke and how)
-- Open threads (what was started, what remains)
-- Corrections (things the user pushed back on)
-- Preferences observed (tools, patterns, vocabulary)
+```
+Bash: git -C <repo> log --oneline --since=<lastHandoff>
+Bash: git -C <repo> status --short
+Bash: git -C <repo> diff --stat HEAD~5..HEAD 2>/dev/null
+Bash: git -C <repo> worktree list
+```
 
-## What NOT to store
+Capture output. Use it alongside conversation history to infer what
+happened. If not a git repo, skip — conversation context is the source.
 
-- Tool output, file paths, command results (re-derivable)
-- Single-word acknowledgments
-- Transient task state still in flight (use `/capture` mid-flow
-  instead)
+### 3. Infer, do not ask
+
+Synthesize silently from git output + conversation. Categorize each item:
+
+- **Decisions** (architectural choice, tool/pattern selection — with WHY).
+- **Lessons** (root cause, workaround, gotcha, technical insight).
+- **Insights** (debugging discovery, unexpected behavior).
+- **Open threads** (started but not finished, blockers).
+- **Corrections** (things the user pushed back on).
+- **Preferences** (workflow patterns observed).
+
+Skip purely mechanical facts already in git (file paths, function names,
+config values). The commit log preserves those.
+
+### 4. MCP captures (one per item)
+
+For each non-trivial item, call:
+
+```
+capture(content="<one self-contained sentence with WHY>", topic="<project>")
+```
+
+Atomic: one decision per call. Don't merge multiple items into one
+memory. The daemon dedups against existing knowledge, so re-storing
+known facts is a no-op.
+
+Only surface items to the user BEFORE storing if they meet one of these
+bars:
+
+- Contradicts an existing memory (recall returned a conflicting fact).
+- Marks a critical incident, irreversible action, or production change.
+- You are uncertain whether the item is durable vs transient.
+
+Otherwise just store and report counts at the end.
+
+### 5. Write session log
+
+Bash heredoc to `~/.origin/sessions/<YYYY-MM-DD-HHmm>-<slug>.md`:
+
+```markdown
+# Session <YYYY-MM-DD HH:MM> — <slug>
+
+**Project:** <project>
+**Range:** <lastHandoff> → <now>
+
+## Accomplished
+- <item>
+
+## Decisions
+- <decision and rationale>
+
+## Lessons & Gotchas
+- <root cause / workaround>
+
+## Open Threads
+- <what's unfinished>
+
+## Captures stored
+- <source_id_or_brief_summary>
+
+## Git summary
+<git log --oneline output>
+```
+
+`<slug>` = kebab-case 2-4 word summary (`session-handoff-md-writer`).
+
+### 6. Update project status
+
+Overwrite `~/.origin/sessions/_status/<project>.md`:
+
+```markdown
+# <Project> — Current Status
+
+## Last session (<date>)
+- <accomplished bullet>
+
+## Open
+- <unfinished item>
+
+## Next
+1. <next step>
+2. <next step>
+```
+
+Single file per project. New session overwrites — this is the *current*
+state, not a log.
+
+### 7. Write timestamp
+
+Overwrite `~/.origin/sessions/_status/handoff-<project>.json`:
+
+```json
+{
+  "lastHandoff": "<ISO-8601 now>",
+  "project": "<project>",
+  "summary": "<one-line>"
+}
+```
+
+Per-project file prevents parallel sessions from clobbering each other.
+
+### 8. Auto-commit ~/.origin/
+
+After writing the files above, snapshot the change so the user can `git
+log` their memory's life timeline. Defensive — silent skip if `git` is
+missing or `~/.origin/` is not a repo yet.
+
+```
+Bash: cd ~/.origin 2>/dev/null && [ -d .git ] && git add -A && \
+      git -c user.name=Origin -c user.email=daemon@origin.local \
+          commit --quiet -m "session: <slug>" || true
+```
+
+### 9. Confirm
+
+Print one summary block:
+
+```
+Handoff stored.
+  Captures:  <N> stored, <M> dedup'd as already-known
+  Session:   ~/.origin/sessions/<filename>
+  Status:    ~/.origin/sessions/_status/<project>.md
+  Git:       1 commit
+```
 
 ## When to use
 
-- User says "wrapping up", "let's call it", "we're done".
+- "Wrapping up", "let's call it", "we're done".
 - Session about to close and useful state would otherwise be lost.
 
 ## When NOT to use
 
 - Mid-flow capture during work → use `/capture` (single memory).
 - Search / lookup → use `/recall`.
+- One-off chat with no decisions or lessons — captures alone are enough.
+
+## Notes on the three artifact classes
+
+- **Memories** (MCP captures) live in the daemon DB only. Confirmation flips
+  a `stability` flag — they never get exported to md.
+- **Pages** are wiki-style syntheses written to `~/.origin/pages/` by the
+  daemon when `/distill` runs. Citations link back to source memory ids.
+- **Sessions** (this skill) live only at `~/.origin/sessions/`. They are
+  the narrative axis: chronological, not topical. Browse them as a
+  changelog of your work.

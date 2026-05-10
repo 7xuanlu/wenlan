@@ -1,38 +1,76 @@
 ---
 name: init
 description: >
-  End-to-end setup check for Origin in this workspace. Verifies the daemon
-  is up, MCP is wired, and a real round-trip works — then prints "Ready"
-  or the exact failing step. Use after `/plugin install origin@7xuanlu`
-  or any time the user says "set up origin", "is origin working", "did
-  origin install correctly", "/init".
+  Frictionless setup. Detects missing daemon, installs it, configures Basic
+  Memory mode, and verifies the full plugin → MCP → daemon round-trip. Run
+  after `/plugin install origin@7xuanlu`, or any time the user says "set up
+  origin", "is origin working", "fix origin".
 allowed-tools: ["Bash", "mcp__plugin_origin_origin__doctor", "mcp__plugin_origin_origin__context"]
 ---
 
 # /init
 
-End-to-end setup check. Goal: 30 seconds from plugin install to a
-provably-working Origin. No guessing.
+Self-healing setup. Goal: 30 seconds, two user actions max (install plugin,
+type /init). Default backend is Basic Memory — no LLM, no API key, no
+prompts. Local model and Anthropic key are opt-in upgrades documented in
+`/help`.
 
-## How to invoke
+## Steps
 
-Run these four steps in order. STOP and report at the FIRST failure with
-the exact next step the user should take. Do not proceed past a failure.
+Run in order. Stop and report at the first failure that needs human
+attention. Otherwise, push through automatically.
 
-### Step 1: daemon health
+### 1. Daemon health probe
 
 ```
 Bash: curl -fsS -m 1 http://127.0.0.1:7878/api/health
 ```
 
-- Pass → continue.
-- Fail → say:
-  > Daemon not running. Run `origin install && origin status`. If
-  > `origin` is not on PATH, run the install one-liner:
-  > `curl -fsSL https://raw.githubusercontent.com/7xuanlu/origin/main/install.sh | bash`,
-  > then `export PATH="$HOME/.origin/bin:$PATH"`.
+- 200 OK → skip to step 4.
+- Anything else → step 2.
 
-### Step 2: backend / setup mode
+### 2. Bootstrap (auto-install if missing)
+
+Detect whether the `origin` CLI is on PATH:
+
+```
+Bash: command -v origin >/dev/null 2>&1 && echo present || echo absent
+```
+
+If `absent`, run the installer (no human prompts):
+
+```
+Bash: curl -fsSL https://raw.githubusercontent.com/7xuanlu/origin/main/install.sh | bash
+```
+
+Then add it to PATH for the current session and configure Basic Memory
+non-interactively:
+
+```
+Bash: export PATH="$HOME/.origin/bin:$PATH" && origin setup --basic && origin install
+```
+
+If `present` (CLI exists, daemon down), just install + start:
+
+```
+Bash: origin setup --basic 2>/dev/null || true; origin install
+```
+
+`origin setup --basic` is idempotent — safe to re-run. `origin install`
+writes the launchd plist and starts the daemon.
+
+### 3. Re-probe daemon health
+
+```
+Bash: for i in 1 2 3 4 5; do curl -fsS -m 1 http://127.0.0.1:7878/api/health && break; sleep 1; done
+```
+
+If the daemon still isn't reachable after ~5s, surface the error and stop.
+Likely cause: launchd plist load failure, port 7878 occupied by another
+process, or macOS Tahoe Metal init issue (daemon degrades but still binds —
+check `lsof -ti :7878`).
+
+### 4. Doctor (verify backend)
 
 Call the `origin` MCP server's `doctor` tool:
 
@@ -40,50 +78,53 @@ Call the `origin` MCP server's `doctor` tool:
 doctor()
 ```
 
-- Pass (any of: Basic Memory / On-device Qwen / Anthropic API configured)
-  → continue, name the mode in the final report.
-- Unconfigured → say:
-  > Pick a backend:
-  > - Basic Memory (no LLM): nothing to do, fastest path.
-  > - On-device Qwen: `origin model install`.
-  > - Anthropic API: `origin key set anthropic`.
+Expected: Basic Memory configured (no model, no key). Capture the mode
+string for the final report.
 
-### Step 3: MCP round-trip
-
-Call `context()` once (no topic):
+### 5. MCP round-trip
 
 ```
 context()
 ```
 
-- Pass → continue.
-- Fail → MCP server not wired. Say:
-  > origin-mcp didn't respond. Restart Claude Code so the plugin's
-  > `.mcp.json` re-spawns the server. If still failing, check
-  > `npx -y origin-mcp` runs without error in a terminal.
+Pass → continue. Fail → MCP not wired. Tell user:
+"origin-mcp didn't respond. Restart Claude Code so the plugin's
+`.mcp.json` re-spawns the server."
 
-### Step 4: ready report
+### 6. Ready report
 
-Print exactly:
+Print:
 
 ```
 Origin ready.
-  Daemon:  up on 127.0.0.1:7878
-  Mode:    <mode from doctor()>
-  MCP:     connected
-  Try:     /brief, /capture <thing to remember>, /recall <query>, /help
+  Daemon:   up on 127.0.0.1:7878
+  Mode:     <mode from doctor()>
+  MCP:      connected
+  Data:     ~/.origin/  (pages, sessions, db symlink)
+  Try:      /brief, /capture <thing>, /recall <query>, /help
 ```
 
-Then dispatch `/help` once for the new user (skip if user already saw it
-this session).
+If this was the first /init invocation in the session, dispatch `/help`
+once so the user sees the verb cheat-sheet without asking.
+
+## Optional upgrades (don't auto-run)
+
+Mention these in the ready report only if the user explicitly asks for
+"richer features" or asks about LLM-backed extraction:
+
+- `origin model install` — local Qwen for background refinement.
+- `origin key set anthropic` — Anthropic for stronger synthesis.
+
+Default flow ignores both. Storage, search, recall, and MCP memory all
+work in Basic Memory mode.
 
 ## When to use
 
 - Right after `/plugin install origin@7xuanlu`.
-- User says "set up origin", "verify origin", "is it working".
-- Hook printed a daemon warning and user wants to confirm fix.
+- Hook printed "daemon down — run /origin:init".
+- User says "set up origin", "is it working", "reinstall origin".
 
 ## When NOT to use
 
-- Daemon already verified this session → use `/brief` instead.
-- Changing one config field — use `origin doctor` or edit settings directly.
+- Daemon already verified this session → `/brief` instead.
+- Editing one config field → `origin doctor` or settings file directly.

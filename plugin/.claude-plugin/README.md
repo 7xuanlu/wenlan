@@ -8,14 +8,15 @@ Claude Code plugin for Origin. It wires Claude Code to `origin-mcp` and adds sho
 0s   /plugin marketplace add 7xuanlu/origin
      /plugin install origin@7xuanlu
 5s   restart Claude Code
-10s  hook auto-checks daemon — silent if up, exact fix if down
-20s  /init   (verifies daemon + MCP + round-trip, prints "Origin ready")
+10s  /init   auto-installs daemon if missing, configures Basic Memory,
+            verifies daemon + MCP + round-trip, prints "Origin ready"
 30s  /brief  (or /capture <something to remember>)
 ```
 
-If the hook prints a daemon warning, follow the printed command. The
-daemon is the only out-of-band dependency. Everything else is wired by
-the plugin.
+`/init` is self-healing — if the daemon isn't running and the `origin`
+CLI isn't on PATH, it runs the install one-liner for you. No copy/paste,
+no restart loop. The `SessionStart` hook only nudges you toward `/init`
+if the daemon ever stops.
 
 ## Install
 
@@ -41,15 +42,19 @@ The marketplace is defined in [`../../.claude-plugin/marketplace.json`](../../.c
 /debrief    alias for /handoff (brief/debrief symmetry)
 ```
 
-A `SessionStart` hook (`hooks/check-daemon.sh`) probes the local daemon at `127.0.0.1:7878`. Three states:
+A `SessionStart` hook (`hooks/check-daemon.sh`) probes the local daemon at `127.0.0.1:7878`. If down, it prints a single line: `daemon not running. Run /origin:init to set up.` The skill owns the install logic — the hook is just a nudge. Hook never blocks the session.
 
-| State | Hook output |
-|---|---|
-| Daemon up | silent |
-| Daemon down, `origin` CLI installed | print `origin install && origin status` |
-| `origin` CLI missing entirely | print install one-liner |
+## Where your data lives
 
-Hook never blocks the session.
+```text
+~/.origin/pages/               wiki pages distilled from memories (md)
+~/.origin/sessions/            session logs by date (md)
+~/.origin/sessions/_status/    current per-project goals + last-handoff timestamp
+~/.origin/db/                  symlink to the libSQL store
+~/.origin/bin/                 installed binaries
+```
+
+Browse with `open ~/.origin/` (Finder), `code ~/.origin/` (VS Code), or symlink `~/.origin/pages/` into an Obsidian vault for the graph view. No Tauri app required.
 
 ## Skill Files
 

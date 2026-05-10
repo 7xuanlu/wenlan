@@ -34,7 +34,9 @@ Then run:
 /init
 ```
 
-`/init` checks the daemon, the MCP wiring, and a real round-trip. If the local runtime is missing it prints the exact next command. A `SessionStart` hook does the same check on every restart and stays silent when everything is up.
+`/init` is self-healing. It auto-installs the daemon if missing, configures Basic Memory (no LLM, no API key), wires up the MCP server, and verifies a real round-trip. A `SessionStart` hook probes on every restart and points you back at `/origin:init` if the daemon goes down.
+
+After `/init`, your data lives at `~/.origin/` (pages, sessions, db symlink). Open it with `open ~/.origin/` or `code ~/.origin/`.
 
 Plugin details: [plugin/](plugin/.claude-plugin/README.md).
 
@@ -130,7 +132,12 @@ Token efficiency on LoCoMo: 168 tokens per query instead of 4,505 for full repla
 
 ## Repo Map
 
-- Memories are stored locally at `~/Library/Application Support/origin/memorydb/origin_memory.db` by default.
+- All user-facing data lives under `~/.origin/`:
+  - `~/.origin/pages/` — wiki pages (markdown).
+  - `~/.origin/sessions/` — session logs (markdown).
+  - `~/.origin/db/` — symlink to the libSQL store at `~/Library/Application Support/origin/memorydb/`.
+  - `~/.origin/bin/` — installed binaries.
+- Browse it with `open ~/.origin/` (Finder), `code ~/.origin/` (VS Code), or symlink `~/.origin/pages/` into an Obsidian vault for graph view.
 - The daemon listens on `127.0.0.1:7878`; MCP clients and local tools call that local API.
 - There is no cloud sync or telemetry by default. Anthropic keys are opt-in settings.
 - On-device Qwen models download only when requested with `origin model install`, and use the `hf-hub` cache.
