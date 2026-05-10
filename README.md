@@ -21,54 +21,26 @@ The daemon does the memory chores in the background: storing, searching, dedupli
 
 ## Quickstart
 
-### 1. Recommended: Claude Code plugin
-
-For the daily experience in Claude Code, install the Origin plugin from this repo:
+### Claude Code
 
 ```text
 /plugin marketplace add 7xuanlu/origin
 /plugin install origin@7xuanlu
 ```
 
-The first command registers this repo as a Claude Code plugin marketplace. The second installs the `origin` plugin and its skills.
-
-After the local daemon is running in step 2, use short commands instead of asking Claude to call MCP tools manually:
+Then run:
 
 ```text
 /init
-/brief
-/capture remember this decision...
-/recall database preferences
-/handoff
 ```
+
+`/init` checks the daemon, the MCP wiring, and a real round-trip. If the local runtime is missing it prints the exact next command. A `SessionStart` hook does the same check on every restart and stays silent when everything is up.
 
 Plugin details: [.claude-plugin](.claude-plugin/README.md).
 
-### 2. Start Origin locally
+### Other MCP clients
 
-Origin still needs the local daemon running. The current prebuilt runtime supports macOS Apple Silicon:
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/7xuanlu/origin/main/install.sh | bash
-export PATH="$HOME/.origin/bin:$PATH"
-origin setup
-origin install
-origin status
-```
-
-Origin works without a local LLM or API key for storage, search, recall, and MCP memory. To unlock richer extraction, background refinement, and page synthesis, choose a local model or Anthropic key:
-
-```bash
-origin model install
-origin key set anthropic
-origin doctor
-```
-
-Daemon details: [crates/origin-server](crates/origin-server/README.md).
-
-### 3. Manual MCP config
-
-Use this path for Cursor, Codex, Claude Desktop, Windsurf, Gemini CLI, or any client that accepts a JSON `mcpServers` entry:
+For Cursor, Codex, Claude Desktop, Windsurf, Gemini CLI, or any client that accepts a JSON `mcpServers` entry:
 
 ```json
 {
@@ -81,9 +53,28 @@ Use this path for Cursor, Codex, Claude Desktop, Windsurf, Gemini CLI, or any cl
 }
 ```
 
-`origin-mcp` connects to the local Origin daemon on `127.0.0.1:7878`. On first run, `npx origin-mcp` downloads the MCP connector published from `crates/origin-mcp/` in this repo.
+`npx origin-mcp` downloads the MCP connector published from [`crates/origin-mcp/`](crates/origin-mcp/README.md). If the local runtime isn't reachable, the first tool call returns the install command and next step.
 
-MCP tools and options: [crates/origin-mcp](crates/origin-mcp/README.md).
+### Local runtime
+
+Origin runs a local background service on `127.0.0.1:7878`. The plugin and `origin-mcp` tell you when to install it. You can also do it up front:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/7xuanlu/origin/main/install.sh | bash
+export PATH="$HOME/.origin/bin:$PATH"
+origin setup
+origin install
+```
+
+Origin works without a local LLM or API key for storage, search, recall, and MCP memory. To unlock richer extraction, background refinement, and page synthesis:
+
+```bash
+origin model install
+origin key set anthropic
+origin doctor
+```
+
+Runtime details: [crates/origin-server](crates/origin-server/README.md).
 
 ---
 
