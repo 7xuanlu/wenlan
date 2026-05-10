@@ -35,9 +35,8 @@ jobs:
               - 'Cargo.lock'
               - '.github/workflows/ci.yml'
             plugin:
-              - 'skills/**'
+              - 'plugin/**'
               - '.claude-plugin/**'
-              - '.mcp.json'
             npm:
               - 'crates/origin-mcp/npm/**'
 
@@ -127,10 +126,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Validate plugin.json schema
-        run: jq -e '.name and .version and .description and .repository' .claude-plugin/plugin.json
+        run: jq -e '.name and .version and .description and .repository' plugin/.claude-plugin/plugin.json
       - name: Validate skill frontmatter
         run: |
-          for f in skills/*/SKILL.md; do
+          for f in plugin/skills/*/SKILL.md; do
             head -5 "$f" | grep -qE '^name:|^description:' || { echo "Missing frontmatter: $f"; exit 1; }
           done
       - uses: DavidAnson/markdownlint-cli2-action@v17
