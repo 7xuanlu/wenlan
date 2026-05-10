@@ -5,7 +5,8 @@ Shared wire-format types for [Origin](https://github.com/7xuanlu/origin) — a p
 This crate defines the HTTP API request/response types and core enums used by:
 - `origin-server` (HTTP backend daemon)
 - `origin-mcp` (MCP server wrapper for AI tools)
-- the Origin desktop app (Tauri IPC)
+- `origin` (source-built developer CLI)
+- downstream local clients that talk to the Origin daemon
 
 ## Stability
 

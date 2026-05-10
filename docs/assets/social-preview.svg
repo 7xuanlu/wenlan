@@ -1,6 +1,6 @@
 <svg width="1280" height="640" viewBox="0 0 1280 640" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="title desc">
   <title id="title">Origin social preview</title>
-  <desc id="desc">Origin: where AI memory compounds.</desc>
+  <desc id="desc">Origin: Memory that compounds with your AI work.</desc>
 
   <rect width="1280" height="640" rx="44" fill="#101024"/>
   <rect x="64" y="64" width="1152" height="512" rx="36" fill="#101024" stroke="#2F3769"/>
@@ -11,18 +11,18 @@
     <circle cx="197" cy="97" r="26" fill="url(#orb)"/>
   </g>
 
-  <g transform="translate(506 151)">
+  <g transform="translate(486 171)">
     <text x="0" y="0" fill="#93E3F2" font-family="Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" font-size="26" font-weight="700" letter-spacing="3">
       ORIGIN
     </text>
-    <text x="0" y="97" fill="#F7F8FF" font-family="Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" font-size="72" font-weight="760">
-      Where AI memory
+    <text x="0" y="97" fill="#F7F8FF" font-family="Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" font-size="58" font-weight="760">
+      Memory that compounds
     </text>
-    <text x="0" y="181" fill="#F7F8FF" font-family="Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" font-size="72" font-weight="760">
-      compounds.
+    <text x="0" y="172" fill="#F7F8FF" font-family="Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" font-size="58" font-weight="760">
+      with your AI work.
     </text>
-    <text x="0" y="255" fill="#BFC6E8" font-family="Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" font-size="30" font-weight="500">
-      Decisions · Lessons · Gotchas · Project context
+    <text x="0" y="248" fill="#BFC6E8" font-family="Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" font-size="30" font-weight="500">
+      Decisions · Lessons · Wiki pages · Project context
     </text>
   </g>
 

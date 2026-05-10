@@ -1,14 +1,12 @@
 # origin-mcp
 
-MCP connector for [Origin](https://github.com/7xuanlu/origin).
+MCP server for [Origin](https://github.com/7xuanlu/origin). It lets Claude Code, Cursor, Codex, Claude Desktop, Windsurf, Gemini CLI, and other MCP clients read and write to the local Origin daemon through the [Model Context Protocol](https://modelcontextprotocol.io).
 
-[Origin](https://useorigin.app) runs quietly behind the AI tools you already use. It gives your AI a place to carry decisions, lessons, gotchas, and project context instead of rediscovering them in every new chat.
-
-`origin-mcp` lets Claude Code, Cursor, Codex, Claude Desktop, Windsurf, Gemini CLI, and other MCP clients read and write to your local Origin runtime through the [Model Context Protocol](https://modelcontextprotocol.io). The daemon owns storage, search, embeddings, and background refinement. This repo is only the MCP connector.
+Origin owns storage, search, embeddings, pages, and background refinement. `origin-mcp` is the connector.
 
 ## Install
 
-Add to your MCP config (Claude Code, Cursor, Claude Desktop, Windsurf, Gemini CLI):
+Most users should install through the root README. If you only need the MCP connector, add this to your MCP client config:
 
 ```json
 {
@@ -21,17 +19,16 @@ Add to your MCP config (Claude Code, Cursor, Claude Desktop, Windsurf, Gemini CL
 }
 ```
 
-Or install the binary directly:
+The npm wrapper currently installs a prebuilt macOS Apple Silicon binary from the Origin release. Use `cargo install origin-mcp` if you want to build from source on another supported Rust target.
+
+Or install a binary directly:
 
 ```bash
-# Via Homebrew
 brew install 7xuanlu/tap/origin-mcp
-
-# Via cargo
 cargo install origin-mcp
 ```
 
-Then add the binary path to your MCP config:
+Then use:
 
 ```json
 {
@@ -43,103 +40,48 @@ Then add the binary path to your MCP config:
 }
 ```
 
-## How it works
-
-`origin-mcp` connects to the Origin daemon running on `127.0.0.1:7878`.
-
-```
-Claude Code / Cursor / Claude Desktop
-    |
-    | MCP (stdio)
-    v
-origin-mcp
-    |
-    | HTTP
-    v
-Origin runtime
-    |
-    v
-Local SQLite + embeddings + knowledge graph
-```
-
-If the daemon is not running, `origin-mcp` returns an actionable setup message. Install the Origin desktop app, or install the headless runtime:
+`origin-mcp` expects the Origin daemon at `http://127.0.0.1:7878` by default. Override it with:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/7xuanlu/origin/main/install.sh | bash
-export PATH="$HOME/.origin/bin:$PATH"
-origin setup
-origin install
-origin status
+origin-mcp --origin-url http://127.0.0.1:7879
 ```
 
-Setup has three paths:
+## Tools
 
-- **Basic Memory:** store, search, and recall immediately. No model download or API key.
-- **On-device Model:** private local extraction and background refinement after model download.
-- **Anthropic Key:** richer extraction and background refinement using your API key.
+| Tool | Purpose |
+| --- | --- |
+| `context` | Load session context. Use at session start or major topic shifts. |
+| `capture` | Save one durable memory: decision, lesson, gotcha, preference, fact, correction, or project context. |
+| `recall` | Search memories and pages by natural-language query. |
+| `distill` | Trigger page distillation for new clusters or a specific `page_id`. |
+| `list_pending` | List unconfirmed memories waiting for review. |
+| `confirm_memory` | Confirm a pending memory by `source_id`. |
+| `forget` | Delete a memory by ID. Destructive. |
+| `doctor` | Diagnose daemon reachability, setup mode, API key state, and on-device model state. |
 
-## Memory tools
+`doctor` mirrors `origin doctor`. It is diagnostic only and is not part of the memory loop.
 
-| Tool | What it does | Annotations |
-|------|-------------|-------------|
-| `capture` | Capture a memory, fact, preference, decision, lesson, or gotcha. The backend auto-classifies type, extracts entities, and links to the knowledge graph. (Renamed from `remember` in v0.4.) | write, non-destructive |
-| `recall` | Search memories and knowledge graph by natural language. Returns ranked results with source tracing. | read-only |
-| `context` | Load session context: identity, preferences, goals, and topic-relevant memories. Call this at session start. | read-only |
-| `forget` | Delete a specific memory and clean up entity links. Requires the memory ID. | destructive, idempotent |
-| `doctor` | Diagnose the local Origin runtime. Use when tools fail or onboarding a new MCP client. | read-only |
-| `distill` | Trigger Origin's distillation pass. Without `page_id`, runs a full pass; with `page_id`, re-distills that single page. | write, idempotent (added in v0.4) |
-| `list_pending` | List unconfirmed memories pending review. Pairs with `confirm_memory` (accept) and `forget` (reject). | read-only (added in v0.4) |
-| `confirm_memory` | Confirm a pending memory by `source_id`. Used during review to accept a captured memory. | write, idempotent (added in v0.4) |
+## Setup Modes
 
-## Diagnostic tool
+Origin works immediately in **Basic Memory** mode: storage, search, recall, and MCP memory are available without a local LLM or API key.
 
-| Tool | What it does | Annotations |
-|------|-------------|-------------|
-| `doctor` | Check daemon reachability, setup mode, Anthropic key state, and on-device model state. | read-only |
+Users can opt into more expensive/refined behavior:
 
-`doctor` matches the `origin doctor` CLI command. It is not part of the memory loop. It exists so an MCP client can explain setup and refinement problems without guessing.
+- **On-device model:** private extraction and refinement after `origin model install`.
+- **Anthropic key:** richer extraction and page synthesis after `origin key set anthropic`.
 
-### What agents should know
+## Agent Guidance
 
-The server ships with proactive-capture instructions that guide agents to store the right things at the right granularity. Key ideas:
+The MCP server ships tool instructions that tell agents to capture durable state proactively:
 
-- **Two mental models**: `profile` (about the user) vs `knowledge` (about the world). Agents should think in these terms when deciding what to store.
-- **One idea per memory.** "Prefers TDD" and "uses pytest" are two memories, not one. Specific memories retrieve better than broad summaries.
-- **Include the why.** "Switched to dark mode because of migraines" is more useful than "uses dark mode."
-- **Omit `memory_type`.** Let the backend auto-classify. Agents get it wrong more often than the classifier.
-- **Anti-noise rules.** Don't store conversation filler, tool output, or things trivially re-derivable from code.
+- One idea per capture.
+- Include the why, not just the what.
+- Name people, projects, and tools explicitly.
+- Omit `memory_type` unless the agent is certain.
+- Do not store tool output, command logs, filler, or transient task state.
 
-See [`src/tools.rs`](src/tools.rs) for the full `with_instructions` text that agents receive.
-
-### Options
-
-```
---origin-url <URL>    Override Origin server URL (default: http://127.0.0.1:7878)
-```
-
-## What Origin does with your memories
-
-Origin works in Basic Memory mode without an on-device model or API key: storage, search, recall, and MCP memory are available immediately.
-
-When the user opts into an on-device model or Anthropic key, Origin can refine memories over time:
-
-- **Deduplication.** Overlapping memories are merged automatically.
-- **Page distillation.** Related memories are clustered into pages: compact, wiki-style summaries that save tokens on retrieval.
-- **Knowledge graph.** Entities and relations are extracted and linked, so "Alice leads the deploy refactor" connects Alice, the project, and the decision.
-- **Contradiction detection.** When new information conflicts with existing memories, Origin surfaces it for your review.
-
-The longer you use it, the better the retrieval gets.
-
-## Requirements
-
-- **Origin runtime** running locally (via the desktop app or `origin setup` / `origin install`)
-- **macOS Apple Silicon** (M1+) at v0.1.0. Linux x64 binaries are built but not yet tested in production.
+See [`src/tools.rs`](src/tools.rs) for the full instructions.
 
 ## License
 
-MIT
-
-## Links
-
-- [Origin](https://github.com/7xuanlu/origin): the desktop app, daemon, and core engine
-- [Model Context Protocol](https://modelcontextprotocol.io): the protocol spec
+Apache-2.0.

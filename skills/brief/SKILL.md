@@ -3,11 +3,11 @@ name: brief
 description: >
   Session-start briefing from Origin. Loads identity, preferences, and
   topic-relevant memories so the agent walks in with context. Invoked as
-  `/origin:brief [topic]`. Call FIRST at session start, before any other
+  `/brief [topic]`. Call FIRST at session start, before any other
   Origin verb.
 ---
 
-# /origin:brief
+# /brief
 
 Pull a curated session brief from Origin: who the user is, what they prefer,
 and what's relevant to the current topic.
@@ -31,9 +31,9 @@ context(topic="<args or null>")
 
 ## When NOT to use
 
-- Specific factual lookup → use `/origin:recall` (more targeted).
-- Storing a new memory → use `/origin:capture`.
-- End of session → use `/origin:handoff`.
+- Specific factual lookup → use `/recall` (more targeted).
+- Storing a new memory → use `/capture`.
+- End of session → use `/handoff`.
 
 ## How to use the result
 

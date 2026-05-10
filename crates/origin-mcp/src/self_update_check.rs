@@ -5,7 +5,7 @@ use std::sync::Mutex;
 use std::time::{Duration, SystemTime};
 
 const CACHE_TTL: Duration = Duration::from_secs(24 * 3600);
-const RELEASES_URL: &str = "https://api.github.com/repos/7xuanlu/origin-mcp/releases/latest";
+const RELEASES_URL: &str = "https://api.github.com/repos/7xuanlu/origin/releases/latest";
 
 /// Process-wide in-memory fallback for environments where on-disk cache writes
 /// fail (locked-down sandboxes, missing dirs::cache_dir, etc). Without this,

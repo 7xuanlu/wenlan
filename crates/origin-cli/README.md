@@ -2,6 +2,8 @@
 
 Origin CLI. Talk to the local Origin daemon from your terminal.
 
+Note: the release installer also creates an `origin` launcher for setup and service commands such as `origin setup`, `origin install`, and `origin doctor`. This crate is the source-built developer CLI for search, recall, store, list, and agent-management commands.
+
 License: Apache-2.0.
 
 ## Install

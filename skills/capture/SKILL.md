@@ -3,10 +3,10 @@ name: capture
 description: >
   Save a memory to Origin in flow. Active capture verb — use proactively
   when the user states a preference, makes a decision, corrects you, or
-  shares a durable fact. Invoked as `/origin:capture <content>`.
+  shares a durable fact. Invoked as `/capture <content>`.
 ---
 
-# /origin:capture
+# /capture
 
 Capture a single memory in the moment. Active verb: agent captures the
 moment of insight, like a photograph.
@@ -52,5 +52,5 @@ one.
 
 ## When NOT to use
 
-- End of session bulk store → use `/origin:handoff` (multi-item batch).
-- Pulling memories back out → use `/origin:recall`.
+- End of session bulk store → use `/handoff` (multi-item batch).
+- Pulling memories back out → use `/recall`.

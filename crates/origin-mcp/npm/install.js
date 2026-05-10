@@ -7,12 +7,10 @@ const https = require("https");
 const http = require("http");
 
 const VERSION = require("./package.json").version;
-const REPO = "7xuanlu/origin-mcp";
+const REPO = "7xuanlu/origin";
 
 const PLATFORM_MAP = {
-  "darwin-arm64": "origin-mcp-darwin-arm64",
-  "darwin-x64": "origin-mcp-darwin-x64",
-  "linux-x64": "origin-mcp-linux-x64",
+  "darwin-arm64": "origin-mcp-aarch64-apple-darwin",
 };
 
 const key = `${process.platform}-${process.arch}`;

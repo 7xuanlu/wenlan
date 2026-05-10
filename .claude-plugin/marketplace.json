@@ -1,0 +1,14 @@
+{
+  "name": "7xuanlu",
+  "owner": {
+    "name": "Qi-Xuan Lu",
+    "url": "https://github.com/7xuanlu"
+  },
+  "plugins": [
+    {
+      "name": "origin",
+      "source": "./",
+      "description": "Claude Code plugin for Origin: MCP memory plus setup, briefing, capture, recall, distillation, review, forget, and handoff skills."
+    }
+  ]
+}

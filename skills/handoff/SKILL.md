@@ -3,10 +3,10 @@ name: handoff
 description: >
   Session-end handoff. Capture decisions, lessons, gotchas, and open
   threads so the next session walks in primed. Invoked as
-  `/origin:handoff` (alias: `/origin:debrief`).
+  `/handoff` (alias: `/debrief`).
 ---
 
-# /origin:handoff
+# /handoff
 
 End-of-session debrief. Stores what was decided, what was learned, and what
 remains open as a single coherent handoff so the next session boots with
@@ -38,12 +38,12 @@ capture(content="<one decision / lesson / gotcha as a complete sentence>")
 
 - Tool output, file paths, command results (re-derivable)
 - Single-word acknowledgments
-- Transient task state still in flight (use `/origin:capture` mid-flow
+- Transient task state still in flight (use `/capture` mid-flow
   instead)
 
 ## Aliases
 
-`/origin:debrief` is an alias for users who prefer the symmetric brief /
+`/debrief` is an alias for users who prefer the symmetric brief /
 debrief pair. Same skill, same behavior.
 
 ## When to use
@@ -53,5 +53,5 @@ debrief pair. Same skill, same behavior.
 
 ## When NOT to use
 
-- Mid-flow capture during work → use `/origin:capture` (single memory).
-- Search / lookup → use `/origin:recall`.
+- Mid-flow capture during work → use `/capture` (single memory).
+- Search / lookup → use `/recall`.
