@@ -6,7 +6,7 @@ description: >
   or the exact failing step. Use after `/plugin install origin@7xuanlu`
   or any time the user says "set up origin", "is origin working", "did
   origin install correctly", "/init".
-allowed-tools: ["Bash", "mcp__origin__doctor", "mcp__origin__context"]
+allowed-tools: ["Bash", "mcp__plugin_origin_origin__doctor", "mcp__plugin_origin_origin__context"]
 ---
 
 # /init

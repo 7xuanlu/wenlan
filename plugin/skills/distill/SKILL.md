@@ -7,7 +7,7 @@ description: >
   knowledge view refreshed; otherwise the daemon does this in the
   background.
 argument-hint: "[page_id]"
-allowed-tools: ["mcp__origin__distill"]
+allowed-tools: ["mcp__plugin_origin_origin__distill"]
 ---
 
 # /distill

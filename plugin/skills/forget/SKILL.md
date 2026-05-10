@@ -5,7 +5,7 @@ description: >
   prefer `/capture` with `supersedes` for corrections. Invoked as
   `/forget <source_id>`.
 argument-hint: "<source_id>"
-allowed-tools: ["mcp__origin__forget", "mcp__origin__recall"]
+allowed-tools: ["mcp__plugin_origin_origin__forget", "mcp__plugin_origin_origin__recall"]
 ---
 
 # /forget

@@ -5,7 +5,7 @@ description: >
   behavior: end-of-session capture of decisions, lessons, gotchas, and
   open threads. Invoked as `/debrief`. Use when the user prefers the
   brief/debrief pair over brief/handoff.
-allowed-tools: ["mcp__origin__capture"]
+allowed-tools: ["mcp__plugin_origin_origin__capture"]
 ---
 
 # /debrief

@@ -6,7 +6,7 @@ description: >
   `/brief [topic]`. Call FIRST at session start, before any other
   Origin verb.
 argument-hint: "[topic]"
-allowed-tools: ["mcp__origin__context", "mcp__origin__recall"]
+allowed-tools: ["mcp__plugin_origin_origin__context", "mcp__plugin_origin_origin__recall"]
 ---
 
 # /brief

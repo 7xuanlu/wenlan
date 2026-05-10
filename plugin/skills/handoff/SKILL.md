@@ -4,7 +4,7 @@ description: >
   Session-end handoff. Capture decisions, lessons, gotchas, and open
   threads so the next session walks in primed. Invoked as
   `/handoff`.
-allowed-tools: ["mcp__origin__capture"]
+allowed-tools: ["mcp__plugin_origin_origin__capture"]
 ---
 
 # /handoff
