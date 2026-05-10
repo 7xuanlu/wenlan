@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="./docs/assets/social-preview.png" alt="Origin: Where Personal AI Memory Compounds." width="100%">
+  <img src="./docs/assets/social-preview.png" alt="Origin: Memory that compounds with your AI work." width="100%">
 </p>
 
 [![CI](https://github.com/7xuanlu/origin/actions/workflows/ci.yml/badge.svg)](https://github.com/7xuanlu/origin/actions/workflows/ci.yml)
@@ -7,9 +7,11 @@
 [![origin-mcp](https://img.shields.io/badge/dynamic/json?label=origin-mcp&query=%24.version&url=https%3A%2F%2Fraw.githubusercontent.com%2F7xuanlu%2Forigin%2Fmain%2Fcrates%2Forigin-mcp%2Fnpm%2Fpackage.json)](crates/origin-mcp)
 [![License](https://img.shields.io/badge/dynamic/json?label=license&query=%24.license&url=https%3A%2F%2Fraw.githubusercontent.com%2F7xuanlu%2Forigin%2Fmain%2Fcrates%2Forigin-mcp%2Fnpm%2Fpackage.json)](#license)
 
-Local-first memory for AI work: decisions, lessons, gotchas, project context, and wiki pages that carry across chats, projects, and time.
+Memory that compounds with your AI work.
 
-Markdown you can read, local search your AI can use. Use it through the Claude Code plugin or any MCP client.
+Capture decisions, lessons, gotchas, project context, and wiki pages that carry across chats, projects, and time.
+
+Markdown you can read, a local database your AI can search. Use it through the Claude Code plugin or any MCP client.
 
 The daemon does the memory chores in the background: storing, searching, deduplicating, linking related ideas, distilling pages, and keeping provenance attached. This repo ships the whole local runtime: the `origin-server` daemon, setup commands, `origin-mcp`, the Claude Code plugin, the `origin-core` memory engine, and shared `origin-types`.
 
