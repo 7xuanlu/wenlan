@@ -24,7 +24,7 @@ The marketplace is defined in [`marketplace.json`](marketplace.json). The plugin
 /handoff
 ```
 
-The local Origin daemon still needs to be running. Use the root README or [`crates/origin-server`](../crates/origin-server/README.md) for daemon setup.
+A `SessionStart` hook (`hooks/check-daemon.sh`) probes the local daemon at `127.0.0.1:7878` and prints a one-line warning if it's not running. The hook never blocks the session. Start the daemon with `origin install && origin status`, or follow [`crates/origin-server`](../crates/origin-server/README.md).
 
 ## Skill Files
 
