@@ -56,7 +56,8 @@ app/binaries/
 
 # Git worktrees
 .worktrees/
-origin-mcp/
+# Top-level sibling clone of origin-mcp (legacy; crates/origin-mcp/ is the in-repo crate)
+/origin-mcp/
 .autopilot-task.md
 
 # Proprietary intelligence overrides (shipped in release builds, not in source)

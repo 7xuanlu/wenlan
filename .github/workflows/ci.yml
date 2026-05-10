@@ -17,12 +17,35 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  check:
-    name: Test & Lint
-    runs-on: macos-latest
-    if: >-
-      !startsWith(github.event.head_commit.message, 'chore(main): release')
+  detect-changes:
+    runs-on: ubuntu-latest
+    outputs:
+      rust:    ${{ steps.filter.outputs.rust }}
+      plugin:  ${{ steps.filter.outputs.plugin }}
+      npm:     ${{ steps.filter.outputs.npm }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            rust:
+              - 'crates/**'
+              - 'Cargo.toml'
+              - 'Cargo.lock'
+              - '.github/workflows/ci.yml'
+            plugin:
+              - 'skills/**'
+              - '.claude-plugin/**'
+              - '.mcp.json'
+            npm:
+              - 'crates/origin-mcp/npm/**'
 
+  rust:
+    name: Test & Lint
+    needs: detect-changes
+    if: "needs.detect-changes.outputs.rust == 'true' && !startsWith(github.event.head_commit.message, 'chore(main): release')"
+    runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
 
@@ -77,6 +100,16 @@ jobs:
         if: github.ref == 'refs/heads/main'
         run: cargo test -p origin-core --lib eval::token_efficiency -- --ignored
 
+      - name: Verify origin-mcp uses path dep for origin-types
+        run: |
+          SOURCE=$(cargo metadata --format-version 1 --locked \
+            | jq -r '.packages[]
+                     | select(.name == "origin-mcp")
+                     | .dependencies[]
+                     | select(.name == "origin-types")
+                     | .source // "PATH"')
+          [[ "$SOURCE" == "PATH" ]] || { echo "ERROR: origin-mcp must use path dep for origin-types"; exit 1; }
+
       # Eval harness integration tests (crates/origin-core/tests/eval_harness.rs) need the
       # FastEmbed BGE-Base-EN-v1.5-Q model (~200MB ONNX) which auto-downloads
       # on first run. GitHub Actions macOS runners lack Metal GPU support and
@@ -86,3 +119,36 @@ jobs:
       #   cargo test -p origin-core --test eval_harness
       #
       # The model downloads once into ~/.fastembed_cache and is reused.
+
+  plugin:
+    needs: detect-changes
+    if: needs.detect-changes.outputs.plugin == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate plugin.json schema
+        run: jq -e '.name and .version and .description and .repository' .claude-plugin/plugin.json
+      - name: Validate skill frontmatter
+        run: |
+          for f in skills/*/SKILL.md; do
+            head -5 "$f" | grep -qE '^name:|^description:' || { echo "Missing frontmatter: $f"; exit 1; }
+          done
+      - uses: DavidAnson/markdownlint-cli2-action@v17
+        with:
+          globs: 'skills/**/*.md'
+        continue-on-error: true   # initial relaxation; tighten after first run
+
+  npm:
+    needs: detect-changes
+    if: needs.detect-changes.outputs.npm == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+      - working-directory: crates/origin-mcp/npm
+        run: |
+          npm pack --dry-run
+          node -c run.js
+          node -c install.js

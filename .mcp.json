@@ -1,0 +1,6 @@
+{
+  "origin": {
+    "command": "npx",
+    "args": ["-y", "origin-mcp"]
+  }
+}

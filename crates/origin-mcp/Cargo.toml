@@ -1,0 +1,44 @@
+[package]
+name = "origin-mcp"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "MCP server for Origin — personal agent memory layer"
+
+[lib]
+name = "origin_mcp"
+path = "src/lib.rs"
+
+[[bin]]
+name = "origin-mcp"
+path = "src/main.rs"
+
+[dependencies]
+rmcp = { version = "~1.5", features = ["server", "transport-io", "transport-streamable-http-server"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+schemars = "1"
+tokio = { version = "1", features = ["full"] }
+clap = { version = "4", features = ["derive"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+anyhow = "1"
+thiserror = "2"
+axum = "0.8"
+tower = "0.5"
+tower-http = { version = "0.6", features = ["cors"] }
+rand = "0.10"
+base64 = "0.22"
+subtle = "2"
+http = "1"
+tokio-util = "0.7"
+dirs = "6"
+semver = "1"
+origin-types = { workspace = true }
+
+[dev-dependencies]
+tempfile = "3"
+portpicker = "0.1"
+wiremock = "0.6"

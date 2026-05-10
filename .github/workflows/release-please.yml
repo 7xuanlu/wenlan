@@ -38,25 +38,19 @@ jobs:
           ref: release-please--branches--main
           token: ${{ secrets.RELEASE_TOKEN }}
 
-      - name: Sync all version files to match release
+      - name: Sync versions to all manifests
+        if: steps.release.outputs.pr != ''
+        run: bash scripts/bump-version.sh
+
+      - name: Commit synced versions to release PR branch
         if: steps.release.outputs.pr != ''
         run: |
-          VERSION=$(cat version.txt | tr -d '[:space:]')
-          echo "Syncing version files to $VERSION"
-
-          # Cargo.toml files (sed marker). The Tauri desktop app moved to
-          # https://github.com/7xuanlu/origin-app and bumps its own versions.
-          for f in crates/origin-cli/Cargo.toml crates/origin-types/Cargo.toml crates/origin-core/Cargo.toml crates/origin-server/Cargo.toml; do
-            sed -i "s/^version = \".*\" # x-release-please-version/version = \"$VERSION\" # x-release-please-version/" "$f"
-            echo "  Updated $f"
-          done
-
-          if git diff --quiet; then
-            echo "No version changes needed"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add Cargo.toml crates/origin-mcp/npm/package.json .claude-plugin/plugin.json
+          if ! git diff --cached --quiet; then
+            git commit -m "chore: sync versions to $(cat version.txt | tr -d '[:space:]')"
+            git push origin HEAD
           else
-            git config user.name "github-actions[bot]"
-            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-            git add -A
-            git commit -m "chore: sync all versions to $VERSION"
-            git push
+            echo "No version drift; nothing to commit."
           fi
