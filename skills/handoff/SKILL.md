@@ -3,8 +3,7 @@ name: handoff
 description: >
   Session-end handoff. Capture decisions, lessons, gotchas, and open
   threads so the next session walks in primed. Invoked as
-  `/handoff`.
-allowed-tools: ["mcp__origin__capture"]
+  `/handoff` (alias: `/debrief`).
 ---
 
 # /handoff
@@ -41,6 +40,11 @@ capture(content="<one decision / lesson / gotcha as a complete sentence>")
 - Single-word acknowledgments
 - Transient task state still in flight (use `/capture` mid-flow
   instead)
+
+## Aliases
+
+`/debrief` is an alias for users who prefer the symmetric brief /
+debrief pair. Same skill, same behavior.
 
 ## When to use
 

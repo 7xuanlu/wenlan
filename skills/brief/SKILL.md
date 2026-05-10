@@ -5,8 +5,6 @@ description: >
   topic-relevant memories so the agent walks in with context. Invoked as
   `/brief [topic]`. Call FIRST at session start, before any other
   Origin verb.
-argument-hint: "[topic]"
-allowed-tools: ["mcp__origin__context", "mcp__origin__recall"]
 ---
 
 # /brief

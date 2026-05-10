@@ -6,8 +6,6 @@ description: >
   `/distill [page_id]`. Run on demand when the user wants the
   knowledge view refreshed; otherwise the daemon does this in the
   background.
-argument-hint: "[page_id]"
-allowed-tools: ["mcp__origin__distill"]
 ---
 
 # /distill

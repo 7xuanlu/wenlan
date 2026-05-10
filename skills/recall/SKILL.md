@@ -4,8 +4,6 @@ description: >
   Search Origin's local memory by query. Targeted lookup, not orientation.
   Invoked as `/recall <query>`. Use when the user asks "do you
   remember", "what do you know about", "look up".
-argument-hint: "<query>"
-allowed-tools: ["mcp__origin__recall"]
 ---
 
 # /recall

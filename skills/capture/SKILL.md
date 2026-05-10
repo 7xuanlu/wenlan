@@ -4,8 +4,6 @@ description: >
   Save a memory to Origin in flow. Active capture verb — use proactively
   when the user states a preference, makes a decision, corrects you, or
   shares a durable fact. Invoked as `/capture <content>`.
-argument-hint: "<content>"
-allowed-tools: ["mcp__origin__capture", "mcp__origin__recall"]
 ---
 
 # /capture
