@@ -167,9 +167,10 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
 
       - name: Pre-flight cargo publish dry-run
-        run: |
-          cargo publish -p origin-types --dry-run
-          cargo publish -p origin-mcp --dry-run
+        # Only origin-types — origin-mcp's --dry-run resolves origin-types from
+        # crates.io which doesn't have the new version until the publish step
+        # runs. Real origin-mcp publish happens after origin-types is indexed.
+        run: cargo publish -p origin-types --dry-run
 
       - name: Check if origin-types changed since last tag
         id: check-types
