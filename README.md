@@ -25,11 +25,11 @@ The daemon does the memory chores in the background: storing, searching, dedupli
 
 ```text
 /plugin marketplace add 7xuanlu/origin
-/plugin install origin@origin-plugins
+/plugin install origin@7xuanlu
 /init
 ```
 
-`/init` is self-healing: detects a missing daemon, runs the install one-liner, configures Basic Memory (no LLM, no API key, no prompts), wires the MCP server, and verifies a real round-trip end-to-end. If anything's already installed, it skips ahead.
+`7xuanlu` is just the GitHub repo owner. If you fork, your install command uses your own handle. `/init` is self-healing: detects a missing daemon, runs the install one-liner, configures Basic Memory (no LLM, no API key, no prompts), wires the MCP server, and verifies a real round-trip end-to-end. If anything's already installed, it skips ahead.
 
 After install, your data lives under `~/.origin/`:
 
