@@ -40,7 +40,7 @@ Bash: command -v origin >/dev/null 2>&1 && echo present || echo absent
 If `absent`, run the installer (no human prompts):
 
 ```
-Bash: curl -fsSL https://raw.githubusercontent.com/7xuanlu/origin/main/install.sh | bash
+Bash: curl -fsSL https://raw.githubusercontent.com/7xuanlu/origin/v0.5.0/install.sh | bash
 ```
 
 Then add it to PATH for the current session and configure Basic Memory

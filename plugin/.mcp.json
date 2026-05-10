@@ -2,7 +2,7 @@
   "mcpServers": {
     "origin": {
       "command": "npx",
-      "args": ["-y", "origin-mcp"]
+      "args": ["-y", "origin-mcp@^0.5.0"]
     }
   }
 }
