@@ -176,15 +176,14 @@ fn format_capture_success(resp: &StoreMemoryResponse) -> String {
 }
 
 fn daemon_setup_hint() -> &'static str {
-    "Install the Origin desktop app, or install the headless runtime and run `origin setup`.
+    "Install the local Origin runtime and run `origin setup`.
 
 Setup choices:
 - Basic Memory: store, search, and recall now. No model download or API key.
 - On-device Model: private local extraction and background refinement after model download.
 - Anthropic Key: richer extraction and background refinement using your API key.
 
-Desktop: https://github.com/7xuanlu/origin/releases/latest
-Headless:
+Install:
   curl -fsSL https://raw.githubusercontent.com/7xuanlu/origin/main/install.sh | bash
   export PATH=\"$HOME/.origin/bin:$PATH\"
   origin setup
@@ -445,7 +444,7 @@ impl OriginMcpServer {
         if self.transport == TransportMode::Http {
             return Ok(CallToolResult::error(vec![Content::text(
                 "Delete operations are not available over remote connections. \
-                 Use the Origin desktop app to delete memories."
+                 Use local MCP on the machine running Origin to delete memories."
                     .to_string(),
             )]));
         }
@@ -507,7 +506,7 @@ impl OriginMcpServer {
         if self.transport == TransportMode::Http {
             return Ok(CallToolResult::error(vec![Content::text(
                 "Confirm operations are not available over remote connections. \
-                 Use the Origin desktop app or local MCP for review."
+                 Use local MCP on the machine running Origin for review."
                     .to_string(),
             )]));
         }
@@ -687,7 +686,7 @@ impl ServerHandler for OriginMcpServer {
         .with_instructions(
             "Origin is your personal memory layer — a local knowledge base that persists across sessions and tools.\n\
              Think of yourself as a curator, not a logger. Store insights, not conversation artifacts.\n\n\
-             Origin is self-evolving — each memory you store contributes to a knowledge structure that grows over time. \
+             Origin is cumulative: each memory you store can be recalled, linked, and distilled into knowledge over time. \
              It's also shared across all the user's tools: what you write, other agents (Claude Desktop, Claude Code, \
              ChatGPT, Cursor, etc.) will read later. Write for any future reader, not just this conversation.\n\n\
              FIRST THING EVERY SESSION: Call context to load the user's identity, preferences, goals, and\n\
@@ -1697,10 +1696,10 @@ mod tests {
     }
 
     #[test]
-    fn instructions_mention_self_evolving_knowledge() {
+    fn instructions_mention_cumulative_knowledge() {
         assert!(
-            server_instructions().contains("self-evolving"),
-            "with_instructions must describe Origin as self-evolving"
+            server_instructions().contains("cumulative"),
+            "with_instructions must describe Origin as cumulative"
         );
     }
 

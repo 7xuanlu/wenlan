@@ -2,12 +2,12 @@
 name: review
 description: >
   Review Origin's pending memories. Walks unconfirmed captures and lets the
-  user accept, edit, or reject each one. Invoked as `/origin:review`. Use
+  user accept, edit, or reject each one. Invoked as `/review`. Use
   when the user wants to audit what was captured before it becomes
   authoritative.
 ---
 
-# /origin:review
+# /review
 
 Walk through pending / unconfirmed memories so the user can accept, edit, or
 reject each before they become authoritative.
@@ -42,9 +42,9 @@ Then offer per-item:
 
 ## When NOT to use
 
-- Single targeted edit → user knows the memory ID, use `/origin:recall` to
+- Single targeted edit → user knows the memory ID, use `/recall` to
   find it then edit directly.
-- Searching for facts → use `/origin:recall`.
+- Searching for facts → use `/recall`.
 
 ## Cost
 

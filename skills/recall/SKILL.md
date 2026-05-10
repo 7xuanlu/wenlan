@@ -2,11 +2,11 @@
 name: recall
 description: >
   Search Origin's local memory by query. Targeted lookup, not orientation.
-  Invoked as `/origin:recall <query>`. Use when the user asks "do you
+  Invoked as `/recall <query>`. Use when the user asks "do you
   remember", "what do you know about", "look up".
 ---
 
-# /origin:recall
+# /recall
 
 Search Origin's memory by natural-language query. Returns matching memories
 ranked by hybrid vector + FTS search.
@@ -33,8 +33,8 @@ Optional filters:
 
 ## When NOT to use
 
-- Broad session orientation → use `/origin:brief` instead.
-- Storing a new memory → use `/origin:capture`.
+- Broad session orientation → use `/brief` instead.
+- Storing a new memory → use `/capture`.
 
 ## Hint: write specific queries
 

@@ -3,12 +3,12 @@ name: distill
 description: >
   Trigger Origin's synthesis pass — clusters related memories into pages,
   surfaces patterns, and rebuilds the wiki view. Invoked as
-  `/origin:distill [page_id]`. Run on demand when the user wants the
+  `/distill [page_id]`. Run on demand when the user wants the
   knowledge view refreshed; otherwise the daemon does this in the
   background.
 ---
 
-# /origin:distill
+# /distill
 
 Run Origin's synthesis (distillation) pass. Without an arg, distills any
 clusters with new sources. With a `page_id` arg, re-distills that specific

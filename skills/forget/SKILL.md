@@ -2,18 +2,18 @@
 name: forget
 description: >
   Delete a memory from Origin by ID. Destructive and cannot be undone —
-  prefer `/origin:capture` with `supersedes` for corrections. Invoked as
-  `/origin:forget <source_id>`.
+  prefer `/capture` with `supersedes` for corrections. Invoked as
+  `/forget <source_id>`.
 ---
 
-# /origin:forget
+# /forget
 
 Permanently delete a memory by its `source_id`.
 
 ## How to invoke
 
 You need the `source_id`. If the user did not provide it, call
-`/origin:recall` first to find the matching memory and confirm with the
+`/recall` first to find the matching memory and confirm with the
 user before deleting.
 
 ```
@@ -28,9 +28,9 @@ forget(memory_id="<source_id>")
 ## When NOT to use
 
 - For corrections, prefer storing a new memory with `supersedes` pointing
-  at the old one. That preserves history. Use `/origin:capture` with the
+  at the old one. That preserves history. Use `/capture` with the
   `supersedes` arg instead.
-- Bulk deletions — call `/origin:review` first, confirm with the user,
+- Bulk deletions — call `/review` first, confirm with the user,
   then delete one at a time.
 
 ## Safety
