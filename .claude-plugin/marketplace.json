@@ -7,7 +7,7 @@
   "plugins": [
     {
       "name": "origin",
-      "source": "./",
+      "source": "./plugin",
       "description": "Claude Code plugin for Origin: MCP memory plus setup, briefing, capture, recall, distillation, review, forget, and handoff skills."
     }
   ]

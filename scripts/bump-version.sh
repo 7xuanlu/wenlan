@@ -43,10 +43,28 @@ echo "  Updated Cargo.toml (workspace.dependencies origin-types/origin-core)"
 (cd crates/origin-mcp/npm && npm version "$NEW_VERSION" --no-git-tag-version --allow-same-version >/dev/null)
 echo "  Updated crates/origin-mcp/npm/package.json"
 
-# 3. Claude plugin manifest
-jq ".version = \"$NEW_VERSION\"" .claude-plugin/plugin.json > .claude-plugin/plugin.json.tmp
-mv .claude-plugin/plugin.json.tmp .claude-plugin/plugin.json
-echo "  Updated .claude-plugin/plugin.json"
+# 3. Claude plugin manifest (moved under plugin/ subdir in v0.5.0)
+PLUGIN_MANIFEST="plugin/.claude-plugin/plugin.json"
+jq ".version = \"$NEW_VERSION\"" "$PLUGIN_MANIFEST" > "${PLUGIN_MANIFEST}.tmp"
+mv "${PLUGIN_MANIFEST}.tmp" "$PLUGIN_MANIFEST"
+echo "  Updated $PLUGIN_MANIFEST"
+
+# 4. Plugin's MCP server pin — `npx -y origin-mcp@^X.Y.Z` so floating tag can't
+# auto-RCE on every Claude Code session.
+PLUGIN_MCP="plugin/.mcp.json"
+jq ".mcpServers.origin.args = [\"-y\", \"origin-mcp@^${NEW_VERSION}\"]" "$PLUGIN_MCP" > "${PLUGIN_MCP}.tmp"
+mv "${PLUGIN_MCP}.tmp" "$PLUGIN_MCP"
+echo "  Updated $PLUGIN_MCP (origin-mcp pin)"
+
+# 5. /init skill install.sh URL pinned to current tag (not `main`), so the
+# install one-liner is reproducible at the release boundary.
+INIT_SKILL="plugin/skills/init/SKILL.md"
+if [[ "$(uname)" == "Darwin" ]]; then
+    sed -i '' -E "s|(raw\\.githubusercontent\\.com/7xuanlu/origin/)(main\|v[0-9]+\\.[0-9]+\\.[0-9]+)(/install\\.sh)|\\1v${NEW_VERSION}\\3|g" "$INIT_SKILL"
+else
+    sed -i -E "s|(raw\\.githubusercontent\\.com/7xuanlu/origin/)(main\|v[0-9]+\\.[0-9]+\\.[0-9]+)(/install\\.sh)|\\1v${NEW_VERSION}\\3|g" "$INIT_SKILL"
+fi
+echo "  Updated $INIT_SKILL (install.sh tag pin)"
 
 echo ""
-echo "Versions synced from version.txt (${NEW_VERSION}) to Cargo.toml + npm + plugin manifests."
+echo "Versions synced from version.txt (${NEW_VERSION}) to Cargo.toml + npm + plugin manifests + plugin MCP/skills."

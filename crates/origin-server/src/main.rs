@@ -267,6 +267,149 @@ async fn run_daemon() -> anyhow::Result<()> {
     let db_arc = Arc::new(db);
     server_state.db = Some(db_arc.clone());
 
+    // Consolidate user-facing assets under ~/.origin/.
+    // - Ensure ~/.origin/{pages, sessions, sessions/_status} exist
+    // - Symlink ~/.origin/db -> <data_dir> (cosmetic alias; DB stays at
+    //   ~/Library/Application Support/origin/memorydb/ to honor macOS conventions
+    //   and avoid moving live SQLite/WAL files mid-flight).
+    // - Migrate legacy ~/Origin/knowledge/ md files into ~/.origin/pages/ if
+    //   the new dir is empty. Never deletes the old dir; user can clean up
+    //   manually after verifying.
+    if let Some(home) = dirs::home_dir() {
+        let origin_dot = home.join(".origin");
+        for sub in ["pages", "sessions", "sessions/_status"] {
+            if let Err(e) = std::fs::create_dir_all(origin_dot.join(sub)) {
+                tracing::warn!("[origin-dir] create {} failed: {}", sub, e);
+            }
+        }
+
+        let db_link = origin_dot.join("db");
+        let link_target_already_correct = std::fs::read_link(&db_link)
+            .map(|t| t == data_dir)
+            .unwrap_or(false);
+        if !link_target_already_correct && !db_link.exists() {
+            #[cfg(unix)]
+            if let Err(e) = std::os::unix::fs::symlink(&data_dir, &db_link) {
+                tracing::warn!(
+                    "[origin-dir] symlink {} -> {} failed: {}",
+                    db_link.display(),
+                    data_dir.display(),
+                    e
+                );
+            }
+        }
+
+        let legacy_pages = home.join("Origin/knowledge");
+        let new_pages = origin_dot.join("pages");
+        let legacy_has_md = std::fs::read_dir(&legacy_pages)
+            .map(|entries| {
+                entries
+                    .filter_map(|e| e.ok())
+                    .any(|e| e.path().extension().and_then(|s| s.to_str()) == Some("md"))
+            })
+            .unwrap_or(false);
+        let new_is_empty = std::fs::read_dir(&new_pages)
+            .map(|entries| {
+                !entries
+                    .filter_map(|e| e.ok())
+                    .any(|e| e.path().extension().and_then(|s| s.to_str()) == Some("md"))
+            })
+            .unwrap_or(true);
+        if legacy_has_md && new_is_empty {
+            tracing::info!(
+                "[migrate] copying md files from {} to {}",
+                legacy_pages.display(),
+                new_pages.display()
+            );
+            if let Ok(entries) = std::fs::read_dir(&legacy_pages) {
+                let mut copied = 0usize;
+                for entry in entries.filter_map(|e| e.ok()) {
+                    let src = entry.path();
+                    if src.extension().and_then(|s| s.to_str()) != Some("md") {
+                        continue;
+                    }
+                    if let Some(name) = src.file_name() {
+                        let dst = new_pages.join(name);
+                        if dst.exists() {
+                            continue;
+                        }
+                        match std::fs::copy(&src, &dst) {
+                            Ok(_) => copied += 1,
+                            Err(e) => tracing::warn!(
+                                "[migrate] copy {} -> {} failed: {}",
+                                src.display(),
+                                dst.display(),
+                                e
+                            ),
+                        }
+                    }
+                }
+                tracing::info!("[migrate] copied {} md files from legacy path", copied);
+            }
+        }
+
+        // Initialize ~/.origin/ as a git repo so users get version history
+        // of pages + sessions for free. Defensive — silent skip if git is
+        // missing or any step fails. Skills (/handoff, /distill, /forget)
+        // commit per logical batch; daemon only does the initial bring-up
+        // here.
+        let dot_git = origin_dot.join(".git");
+        let git_available = std::process::Command::new("git")
+            .arg("--version")
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false);
+        if !dot_git.exists() && git_available {
+            let gitignore = origin_dot.join(".gitignore");
+            if !gitignore.exists() {
+                // No trailing slash on `db` / `bin` — those entries are
+                // symlinks in the consolidated layout, and pattern `db/`
+                // would only match real directories.
+                let _ = std::fs::write(
+                    &gitignore,
+                    "db\nbin\nlogs/\nsessions/_status/handoff-*.json\n",
+                );
+            }
+            let run = |args: &[&str]| {
+                std::process::Command::new("git")
+                    .args(args)
+                    .current_dir(&origin_dot)
+                    .stdout(std::process::Stdio::null())
+                    .stderr(std::process::Stdio::null())
+                    .status()
+                    .ok()
+                    .filter(|s| s.success())
+            };
+            if run(&["init", "--quiet"]).is_some() {
+                let _ = run(&[
+                    "-c",
+                    "user.name=Origin",
+                    "-c",
+                    "user.email=daemon@origin.local",
+                    "commit",
+                    "--allow-empty",
+                    "--quiet",
+                    "-m",
+                    "Origin initialized",
+                ]);
+                let _ = run(&["add", "-A"]);
+                let _ = run(&[
+                    "-c",
+                    "user.name=Origin",
+                    "-c",
+                    "user.email=daemon@origin.local",
+                    "commit",
+                    "--quiet",
+                    "-m",
+                    "backfill: initial pages from DB",
+                ]);
+                tracing::info!("[origin-dir] git init complete at {}", origin_dot.display());
+            }
+        }
+    }
+
     // One-time backfill: if the knowledge directory is empty but the DB has
     // active concepts, write them all to disk. Handles the case where
     // concepts were created before KnowledgeWriter was wired up, or via a

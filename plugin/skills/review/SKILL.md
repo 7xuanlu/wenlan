@@ -5,6 +5,7 @@ description: >
   user accept, edit, or reject each one. Invoked as `/review`. Use
   when the user wants to audit what was captured before it becomes
   authoritative.
+allowed-tools: ["mcp__plugin_origin_origin__list_pending", "mcp__plugin_origin_origin__confirm_memory", "mcp__plugin_origin_origin__capture", "mcp__plugin_origin_origin__forget"]
 ---
 
 # /review

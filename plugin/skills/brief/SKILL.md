@@ -5,6 +5,8 @@ description: >
   topic-relevant memories so the agent walks in with context. Invoked as
   `/brief [topic]`. Call FIRST at session start, before any other
   Origin verb.
+argument-hint: "[topic]"
+allowed-tools: ["mcp__plugin_origin_origin__context", "mcp__plugin_origin_origin__recall"]
 ---
 
 # /brief
@@ -15,12 +17,20 @@ and what's relevant to the current topic.
 ## How to invoke
 
 Call the `origin` MCP server's `context` tool. If the user passed a topic
-argument, pass it through; otherwise call with no topic for general
-orientation.
+argument, pass it through. Otherwise infer scope from the working
+directory and the conversation so far — don't ask the user.
 
 ```
-context(topic="<args or null>")
+context(topic="<args or inferred>", domain=<inferred from cwd or recent turns>)
 ```
+
+**Scope inference rules:**
+
+- `topic`: if user omitted args, pass the most recent topic from the
+  conversation (file or feature being discussed), or omit for a fresh
+  general brief at session start.
+- `domain`: from cwd. `~/Repos/origin/...` → `"origin"`. Other repos → repo
+  name. Outside any repo → omit.
 
 ## When to use
 

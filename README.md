@@ -7,7 +7,9 @@
 [![origin-mcp](https://img.shields.io/badge/dynamic/json?label=origin-mcp&query=%24.version&url=https%3A%2F%2Fraw.githubusercontent.com%2F7xuanlu%2Forigin%2Fmain%2Fcrates%2Forigin-mcp%2Fnpm%2Fpackage.json)](crates/origin-mcp)
 [![License](https://img.shields.io/badge/dynamic/json?label=license&query=%24.license&url=https%3A%2F%2Fraw.githubusercontent.com%2F7xuanlu%2Forigin%2Fmain%2Fcrates%2Forigin-mcp%2Fnpm%2Fpackage.json)](#license)
 
-Developers have `origin` for code. Origin gives AI work its own source of truth: decisions, lessons, gotchas, project context, and wiki pages that carry across chats, projects, and time.
+Memory that compounds with your AI work.
+
+Capture decisions, lessons, gotchas, project context, and wiki pages that carry across chats, projects, and time.
 
 Markdown you can read, plus a local database with hybrid retrieval for your AI. Use it through the Claude Code plugin or any MCP client.
 
@@ -19,54 +21,30 @@ The daemon does the memory chores in the background: storing, searching, dedupli
 
 ## Quickstart
 
-### 1. Install the Claude Code plugin
-
-For the daily experience in Claude Code, install the Origin plugin from this repo:
+### Claude Code — 30 seconds
 
 ```text
 /plugin marketplace add 7xuanlu/origin
 /plugin install origin@7xuanlu
-```
-
-The first command registers this repo as a Claude Code plugin marketplace. The second installs the `origin` plugin and its skills.
-
-After Origin is installed in step 2, use short commands instead of asking Claude to call MCP tools manually:
-
-```text
 /init
-/brief
-/capture remember this decision...
-/recall database preferences
-/handoff
 ```
 
-Plugin details: [.claude-plugin](.claude-plugin/README.md).
+`7xuanlu` is just the GitHub repo owner. If you fork, your install command uses your own handle. `/init` is self-healing: detects a missing daemon, runs the install one-liner, configures Basic Memory (no LLM, no API key, no prompts), wires the MCP server, and verifies a real round-trip end-to-end. If anything's already installed, it skips ahead.
 
-### 2. Install Origin on your machine
+After install, your data lives under `~/.origin/`:
 
-Origin runs locally in the background. The current prebuilt runtime supports macOS Apple Silicon:
+- `~/.origin/pages/` — wiki pages distilled from your memories
+- `~/.origin/sessions/` — narrative session logs written by `/handoff`
+- `~/.origin/db/` — symlink to the libSQL store
+- `~/.origin/.git/` — Skills auto-commit per logical batch, so `git log ~/.origin/` is a free audit trail
 
-```bash
-curl -fsSL https://raw.githubusercontent.com/7xuanlu/origin/main/install.sh | bash
-export PATH="$HOME/.origin/bin:$PATH"
-origin setup
-origin install
-origin status
-```
+Browse with `open ~/.origin/`, `code ~/.origin/`, or symlink `~/.origin/pages/` into an Obsidian vault for graph view. A `SessionStart` hook quietly probes the daemon on each Claude Code restart and prints a one-line nudge back to `/origin:init` if it ever goes down.
 
-Origin works without a local LLM or API key for storage, search, recall, and MCP memory. To unlock richer extraction, background refinement, and page synthesis, choose a local model or Anthropic key:
+Plugin details: [plugin/](plugin/.claude-plugin/README.md).
 
-```bash
-origin model install
-origin key set anthropic
-origin doctor
-```
+### Other MCP clients (Cursor, Codex, Claude Desktop, Windsurf, Gemini CLI…)
 
-Daemon details: [crates/origin-server](crates/origin-server/README.md).
-
-### 3. Manual MCP config
-
-Use this path for Cursor, Codex, Claude Desktop, Windsurf, Gemini CLI, or any client that accepts a JSON `mcpServers` entry:
+Any client that accepts a JSON `mcpServers` entry:
 
 ```json
 {
@@ -79,9 +57,32 @@ Use this path for Cursor, Codex, Claude Desktop, Windsurf, Gemini CLI, or any cl
 }
 ```
 
-`origin-mcp` connects to the local Origin daemon on `127.0.0.1:7878`. On first run, `npx origin-mcp` downloads the MCP connector published from `crates/origin-mcp/` in this repo.
+`npx -y origin-mcp` downloads the MCP connector from npm on first run. The daemon must be running locally; if it isn't, the first tool call surfaces the install one-liner. See [Headless install](#headless-install) below for the daemon-only path.
 
-MCP tools and options: [crates/origin-mcp](crates/origin-mcp/README.md).
+---
+
+## Why Origin?
+
+AI work has a continuity problem. Agents can move fast, but the useful working context often stays trapped in one chat: what changed, why it changed, what broke, what you learned, and what should carry forward. Origin keeps that context local and reusable through the tools you already use.
+
+**Your AI starts from scratch too often.** Origin carries decisions, preferences, gotchas, and project context across chats, projects, and time.
+
+**Memory gets worse when nobody maintains it.** Origin runs a background refinery that deduplicates captures, links related ideas, distills pages, and keeps provenance attached.
+
+**You need to see and correct what it learned.** Memories stay local, traceable, and easy to remove.
+
+Developers already have `origin` for code. Origin gives AI work a source of truth too: local, traceable, and readable by agents through MCP.
+
+For people whose work spans projects, clients, and jobs. Your context should not disappear when a chat ends or when you switch gears.
+
+Origin keeps the useful parts together:
+
+- **Capture:** decisions, lessons, observations, gotchas, and project context.
+- **Refine:** deduplicate, link, and compile memories in the background.
+- **Recall:** relevant context through MCP when your AI needs it.
+- **Inspect:** every memory stays editable and traceable to where it came from.
+
+**96% fewer tokens per query.** Same cost as basic vector search, but 19% more relevant context. 168 tokens instead of 4,505 for full replay. Measured on LoCoMo (2,531 memories, 1,540 queries). Eval harness at `crates/origin-core/src/eval/`.
 
 ---
 
@@ -95,7 +96,7 @@ Use your AI tools normally. Origin runs in the background and makes durable cont
 4. Origin deduplicates, links related ideas, distills pages, and preserves where each memory came from.
 5. Recall combines vector search, full-text search, and knowledge graph signals without replaying full chat history.
 
-No cloud sync or telemetry by default. Local models and Anthropic keys are opt-in.
+Headless install (automation, servers, CI, pre-flight): see [crates/origin-server](crates/origin-server/README.md).
 
 ---
 
@@ -114,7 +115,16 @@ Token efficiency on LoCoMo: 168 tokens per query instead of 4,505 for full repla
 
 ## Repo Map
 
-Origin is daemon-first. `origin-server` owns the local database, embeddings, refinery, knowledge graph, and HTTP API on `127.0.0.1:7878`. The plugin, MCP server, CLI, and local tools are thin clients over that daemon.
+- All user-facing data lives under `~/.origin/`:
+  - `~/.origin/pages/` — wiki pages (markdown).
+  - `~/.origin/sessions/` — session logs (markdown).
+  - `~/.origin/db/` — symlink to the libSQL store at `~/Library/Application Support/origin/memorydb/`.
+  - `~/.origin/bin/` — installed binaries.
+- Browse it with `open ~/.origin/` (Finder), `code ~/.origin/` (VS Code), or symlink `~/.origin/pages/` into an Obsidian vault for graph view.
+- The daemon listens on `127.0.0.1:7878`; MCP clients and local tools call that local API.
+- There is no cloud sync or telemetry by default. Anthropic keys are opt-in settings.
+- On-device Qwen models download only when requested with `origin model install`, and use the `hf-hub` cache.
+- Security reports: [SECURITY.md](SECURITY.md).
 
 | Path | What lives there |
 | --- | --- |
@@ -123,6 +133,19 @@ Origin is daemon-first. `origin-server` owns the local database, embeddings, ref
 | [crates/origin-mcp](crates/origin-mcp/README.md) | MCP server, tools, npm package. |
 | [crates/origin-cli](crates/origin-cli/README.md) | Source-built developer CLI for daemon search, recall, store, list, and agents. |
 | [.claude-plugin](.claude-plugin/README.md) and [skills](skills/README.md) | Claude Code plugin metadata and workflow skills. |
+| [docs/eval](docs/eval/README.md) | Benchmark workflow and methodology. |
+
+## Repo Map
+
+Origin is daemon-first. `origin-server` owns the local database, embeddings, refinery, knowledge graph, and HTTP API on `127.0.0.1:7878`. The plugin, MCP server, CLI, and local tools are thin clients over that daemon.
+
+| Path | What lives there |
+| --- | --- |
+| [crates/origin-core](crates/origin-core/README.md) | Storage, search, embeddings, refinery, graph, pages, export, eval. |
+| [crates/origin-server](crates/origin-server/README.md) | Local daemon, setup, launchd service, HTTP API. |
+| [crates/origin-mcp](crates/origin-mcp/README.md) | MCP server, tools, npm package. |
+| [crates/origin-cli](crates/origin-cli/README.md) | Source-built developer CLI for daemon search, recall, store, list, and agents. |
+| [plugin/](plugin/.claude-plugin/README.md) | Claude Code plugin (`plugin.json`, skills, hooks, `.mcp.json`). Marketplace entry at root [`.claude-plugin/marketplace.json`](.claude-plugin/marketplace.json) lists this plugin via `source: "./plugin"`. |
 | [docs/eval](docs/eval/README.md) | Benchmark workflow and methodology. |
 
 Full contributor map: [CLAUDE.md](CLAUDE.md).
@@ -147,22 +170,22 @@ Component build details live in the crate READMEs linked above.
 ## Boundaries
 
 - Not a chat UI. Keep using Claude, ChatGPT, Cursor, or your agent of choice.
-- Not a notes app or Notion / Obsidian replacement. Markdown exists so you can read the artifact anywhere.
-- Not a memory infrastructure SDK. Origin is for people using AI, not as a backend for other apps.
+- Not a notes app or Notion / Obsidian replacement. Markdown export exists so you can read the artifact anywhere.
+- Not a memory infrastructure SDK. Origin is meant for people using AI, not as a backend for other apps.
 - Best for work that spans sessions, projects, and weeks. One-off chats may not need it.
 
 ---
 
 ## Contributing
 
-Bug fixes, eval cases, docs, and features are welcome. Start with [CONTRIBUTING.md](CONTRIBUTING.md). Architecture and development rules are in [CLAUDE.md](CLAUDE.md). Security reports: [SECURITY.md](SECURITY.md). Please also read the [Code of Conduct](CODE_OF_CONDUCT.md).
+Bug fixes, eval cases, docs, and features are welcome. Start with [CONTRIBUTING.md](CONTRIBUTING.md). Architecture and development rules are in [CLAUDE.md](CLAUDE.md). Please also read the [Code of Conduct](CODE_OF_CONDUCT.md).
 
 ---
 
 ## License
 
 - Rust workspace crates (`origin-types`, `origin-core`, `origin-server`, `origin` CLI, `origin-mcp`): **Apache-2.0**
-- Claude Code plugin files (`.claude-plugin/`, `skills/`) ship from this repo under the same project license metadata.
+- Claude Code plugin files (under `plugin/`, plus the root `.claude-plugin/marketplace.json`) ship from this repo under the same project license metadata.
 
 The runtime stays permissively licensed so MCP clients and downstream local tools can build on the same types and daemon boundary.
 
