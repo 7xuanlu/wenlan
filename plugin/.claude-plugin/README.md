@@ -24,7 +24,7 @@ the plugin.
 /plugin install origin@7xuanlu
 ```
 
-The marketplace is defined in [`marketplace.json`](marketplace.json). The plugin metadata is defined in [`plugin.json`](plugin.json). MCP configuration comes from the repository root [`.mcp.json`](../.mcp.json).
+The marketplace is defined in [`../../.claude-plugin/marketplace.json`](../../.claude-plugin/marketplace.json) (at the repo root). The plugin metadata is defined in [`plugin.json`](plugin.json). MCP configuration is in [`../.mcp.json`](../.mcp.json) (this plugin's `.mcp.json`).
 
 ## Daily Commands
 

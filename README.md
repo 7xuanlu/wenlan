@@ -36,7 +36,7 @@ Then run:
 
 `/init` checks the daemon, the MCP wiring, and a real round-trip. If the local runtime is missing it prints the exact next command. A `SessionStart` hook does the same check on every restart and stays silent when everything is up.
 
-Plugin details: [.claude-plugin](.claude-plugin/README.md).
+Plugin details: [plugin/](plugin/.claude-plugin/README.md).
 
 ### Other MCP clients
 
@@ -155,7 +155,7 @@ Origin is daemon-first. `origin-server` owns the local database, embeddings, ref
 | [crates/origin-server](crates/origin-server/README.md) | Local daemon, setup, launchd service, HTTP API. |
 | [crates/origin-mcp](crates/origin-mcp/README.md) | MCP server, tools, npm package. |
 | [crates/origin-cli](crates/origin-cli/README.md) | Source-built developer CLI for daemon search, recall, store, list, and agents. |
-| [.claude-plugin](.claude-plugin/README.md) and [skills](skills/README.md) | Claude Code plugin metadata and workflow skills. |
+| [plugin/](plugin/.claude-plugin/README.md) | Claude Code plugin (`plugin.json`, skills, hooks, `.mcp.json`). Marketplace entry at root [`.claude-plugin/marketplace.json`](.claude-plugin/marketplace.json) lists this plugin via `source: "./plugin"`. |
 | [docs/eval](docs/eval/README.md) | Benchmark workflow and methodology. |
 
 Full contributor map: [CLAUDE.md](CLAUDE.md).
@@ -195,7 +195,7 @@ Bug fixes, eval cases, docs, and features are welcome. Start with [CONTRIBUTING.
 ## License
 
 - Rust workspace crates (`origin-types`, `origin-core`, `origin-server`, `origin` CLI, `origin-mcp`): **Apache-2.0**
-- Claude Code plugin files (`.claude-plugin/`, `skills/`) ship from this repo under the same project license metadata.
+- Claude Code plugin files (under `plugin/`, plus the root `.claude-plugin/marketplace.json`) ship from this repo under the same project license metadata.
 
 The runtime stays permissively licensed so MCP clients and downstream local tools can build on the same types and daemon boundary.
 
