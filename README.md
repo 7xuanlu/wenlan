@@ -21,7 +21,7 @@ The daemon does the memory chores in the background: storing, searching, dedupli
 
 ## Quickstart
 
-### Claude Code — 30 seconds, three commands
+### Claude Code — 30 seconds
 
 ```text
 /plugin marketplace add 7xuanlu/origin
@@ -29,9 +29,7 @@ The daemon does the memory chores in the background: storing, searching, dedupli
 /init
 ```
 
-That's it. `/init` is self-healing: detects a missing daemon, runs the install one-liner, configures Basic Memory (no LLM, no API key, no prompts), wires the MCP server, and verifies a real round-trip end-to-end. If anything's already installed, it skips ahead.
-
-> The first command points Claude Code at this repo's community marketplace named `origin-plugins`. An official Anthropic registry listing is planned; this is the path for now.
+`/init` is self-healing: detects a missing daemon, runs the install one-liner, configures Basic Memory (no LLM, no API key, no prompts), wires the MCP server, and verifies a real round-trip end-to-end. If anything's already installed, it skips ahead.
 
 After install, your data lives under `~/.origin/`:
 
