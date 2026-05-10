@@ -8,5 +8,7 @@
   },
   "homepage": "https://github.com/7xuanlu/origin",
   "repository": "https://github.com/7xuanlu/origin",
-  "license": "Apache-2.0"
+  "license": "Apache-2.0",
+  "category": "memory",
+  "keywords": ["memory", "knowledge", "context", "recall", "mcp"]
 }
