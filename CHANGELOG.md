@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.5.1](https://github.com/7xuanlu/origin/compare/v0.5.0...v0.5.1) (2026-05-10)
+
+
+### Bug Fixes
+
+* align README with monorepo runtime ([#72](https://github.com/7xuanlu/origin/issues/72)) ([ce44ceb](https://github.com/7xuanlu/origin/commit/ce44ceb1e6ac62027b0f5b4366b6d69fdab053da))
+* **release:** drop origin-mcp from pre-flight dry-run ([a1b804b](https://github.com/7xuanlu/origin/commit/a1b804b4f4e9c1340cae06c3c26a049b85c35e6b))
+* **release:** make origin-types publish idempotent ([afde654](https://github.com/7xuanlu/origin/commit/afde6548d0875ea88b620128831f5259a324159c))
+* **release:** use RELEASE_TAG in npm + homebrew jobs ([f087f87](https://github.com/7xuanlu/origin/commit/f087f8772b585b187bed1cd9470b00471613ecf1))
+
 ## [0.5.0](https://github.com/7xuanlu/origin/compare/v0.3.1...v0.5.0) (2026-05-10)
 
 
