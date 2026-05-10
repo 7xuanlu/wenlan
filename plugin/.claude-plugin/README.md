@@ -1,6 +1,6 @@
 # Origin Claude Code Plugin
 
-Claude Code plugin for Origin. It wires Claude Code to `origin-mcp` and adds short workflow skills for setup, briefing, capture, recall, distillation, review, forget, and handoff.
+Claude Code plugin for Origin. It wires Claude Code to `origin-mcp` and adds short workflow skills for setup, help, briefing, capture, recall, distillation, review, forget, handoff, and debrief.
 
 ## 30-Second Setup
 
@@ -30,6 +30,7 @@ The marketplace is defined in [`../../.claude-plugin/marketplace.json`](../../.c
 
 ```text
 /init       set up + verify Origin works (run once, or to diagnose)
+/help       one-screen reference
 /brief      load identity + topic context (start of session)
 /capture    save one durable memory in flow
 /recall     search local memory
@@ -37,7 +38,7 @@ The marketplace is defined in [`../../.claude-plugin/marketplace.json`](../../.c
 /review     audit pending memories
 /forget     delete a memory by ID
 /handoff    end-of-session debrief
-/help       one-screen reference
+/debrief    alias for /handoff (brief/debrief symmetry)
 ```
 
 A `SessionStart` hook (`hooks/check-daemon.sh`) probes the local daemon at `127.0.0.1:7878`. Three states:
@@ -55,6 +56,7 @@ Hook never blocks the session.
 The actual skill instructions live in [`../skills`](../skills):
 
 - `init`: end-to-end setup verifier (daemon + MCP + round-trip)
+- `help`: one-screen quick reference
 - `brief`: load session context
 - `capture`: save one durable memory
 - `recall`: targeted lookup
@@ -62,7 +64,7 @@ The actual skill instructions live in [`../skills`](../skills):
 - `review`: audit pending memories
 - `forget`: delete a memory by ID
 - `handoff`: capture end-of-session decisions, lessons, gotchas, and open threads
-- `help`: one-screen quick reference
+- `debrief`: alias for `handoff` (brief/debrief symmetry)
 
 ## License
 
