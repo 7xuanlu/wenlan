@@ -7,9 +7,7 @@
 [![origin-mcp](https://img.shields.io/badge/dynamic/json?label=origin-mcp&query=%24.version&url=https%3A%2F%2Fraw.githubusercontent.com%2F7xuanlu%2Forigin%2Fmain%2Fcrates%2Forigin-mcp%2Fnpm%2Fpackage.json)](crates/origin-mcp)
 [![License](https://img.shields.io/badge/dynamic/json?label=license&query=%24.license&url=https%3A%2F%2Fraw.githubusercontent.com%2F7xuanlu%2Forigin%2Fmain%2Fcrates%2Forigin-mcp%2Fnpm%2Fpackage.json)](#license)
 
-Memory that compounds with your AI work.
-
-Capture decisions, lessons, gotchas, project context, and wiki pages that carry across chats, projects, and time.
+Developers have `origin` for code. Origin gives AI work its own source of truth: decisions, lessons, gotchas, project context, and wiki pages that carry across chats, projects, and time.
 
 Markdown you can read, plus a local database with hybrid retrieval for your AI. Use it through the Claude Code plugin or any MCP client.
 
@@ -61,31 +59,6 @@ Any client that accepts a JSON `mcpServers` entry:
 
 ---
 
-## Why Origin?
-
-AI work has a continuity problem. Agents can move fast, but the useful working context often stays trapped in one chat: what changed, why it changed, what broke, what you learned, and what should carry forward. Origin keeps that context local and reusable through the tools you already use.
-
-**Your AI starts from scratch too often.** Origin carries decisions, preferences, gotchas, and project context across chats, projects, and time.
-
-**Memory gets worse when nobody maintains it.** Origin runs a background refinery that deduplicates captures, links related ideas, distills pages, and keeps provenance attached.
-
-**You need to see and correct what it learned.** Memories stay local, traceable, and easy to remove.
-
-Developers already have `origin` for code. Origin gives AI work a source of truth too: local, traceable, and readable by agents through MCP.
-
-For people whose work spans projects, clients, and jobs. Your context should not disappear when a chat ends or when you switch gears.
-
-Origin keeps the useful parts together:
-
-- **Capture:** decisions, lessons, observations, gotchas, and project context.
-- **Refine:** deduplicate, link, and compile memories in the background.
-- **Recall:** relevant context through MCP when your AI needs it.
-- **Inspect:** every memory stays editable and traceable to where it came from.
-
-**96% fewer tokens per query.** Same cost as basic vector search, but 19% more relevant context. 168 tokens instead of 4,505 for full replay. Measured on LoCoMo (2,531 memories, 1,540 queries). Eval harness at `crates/origin-core/src/eval/`.
-
----
-
 ## How Origin works
 
 Use your AI tools normally. Origin runs in the background and makes durable context available when it is needed.
@@ -95,6 +68,8 @@ Use your AI tools normally. Origin runs in the background and makes durable cont
 3. Agents capture decisions, preferences, project facts, gotchas, and lessons while you work.
 4. Origin deduplicates, links related ideas, distills pages, and preserves where each memory came from.
 5. Recall combines vector search, full-text search, and knowledge graph signals without replaying full chat history.
+
+No cloud sync or telemetry by default. Local models and Anthropic keys are opt-in.
 
 Headless install (automation, servers, CI, pre-flight): see [crates/origin-server](crates/origin-server/README.md).
 
@@ -148,15 +123,15 @@ Component build details live in the crate READMEs linked above.
 ## Boundaries
 
 - Not a chat UI. Keep using Claude, ChatGPT, Cursor, or your agent of choice.
-- Not a notes app or Notion / Obsidian replacement. Markdown export exists so you can read the artifact anywhere.
-- Not a memory infrastructure SDK. Origin is meant for people using AI, not as a backend for other apps.
+- Not a notes app or Notion / Obsidian replacement. Markdown exists so you can read the artifact anywhere.
+- Not a memory infrastructure SDK. Origin is for people using AI, not as a backend for other apps.
 - Best for work that spans sessions, projects, and weeks. One-off chats may not need it.
 
 ---
 
 ## Contributing
 
-Bug fixes, eval cases, docs, and features are welcome. Start with [CONTRIBUTING.md](CONTRIBUTING.md). Architecture and development rules are in [CLAUDE.md](CLAUDE.md). Please also read the [Code of Conduct](CODE_OF_CONDUCT.md).
+Bug fixes, eval cases, docs, and features are welcome. Start with [CONTRIBUTING.md](CONTRIBUTING.md). Architecture and development rules are in [CLAUDE.md](CLAUDE.md). Security reports: [SECURITY.md](SECURITY.md). Please also read the [Code of Conduct](CODE_OF_CONDUCT.md).
 
 ---
 
