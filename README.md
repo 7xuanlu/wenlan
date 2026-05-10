@@ -11,7 +11,7 @@ Memory that compounds with your AI work.
 
 Capture decisions, lessons, gotchas, project context, and wiki pages that carry across chats, projects, and time.
 
-Markdown you can read, a local database your AI can search. Use it through the Claude Code plugin or any MCP client.
+Markdown you can read, plus a local database with hybrid retrieval for your AI. Use it through the Claude Code plugin or any MCP client.
 
 The daemon does the memory chores in the background: storing, searching, deduplicating, linking related ideas, distilling pages, and keeping provenance attached. This repo ships the whole local runtime: the `origin-server` daemon, setup commands, `origin-mcp`, the Claude Code plugin, the `origin-core` memory engine, and shared `origin-types`.
 
