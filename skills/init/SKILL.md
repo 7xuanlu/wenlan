@@ -4,7 +4,6 @@ description: >
   Set up Origin in this project / workspace. Pick the cloud or on-device LLM
   backend, register MCP clients, and warm the daemon for first use. Invoked
   as `/init`.
-allowed-tools: ["Bash", "mcp__origin__doctor", "mcp__origin__context"]
 ---
 
 # /init
@@ -23,19 +22,14 @@ First-run setup for Origin in this workspace.
 
 ## How to invoke
 
-Call the `origin` MCP server's `doctor` tool first to read current mode and surface any setup gaps. If unconfigured, walk the user through backend choice. Otherwise report current mode + offer to change.
+Call the daemon's `/api/setup/status` first to read current mode. If `setup_completed` is false, walk the user through backend choice. Otherwise report current mode + offer to change.
 
 ```
-doctor()
+GET  /api/setup/status
+PUT  /api/config           # to switch backend
 ```
 
-If the user wants to switch backend or install a model, shell out:
-
-```
-origin model install
-origin key set anthropic
-origin doctor
-```
+The MCP `doctor` tool is the agent-side equivalent for diagnosing problems mid-flow; this skill is the user-driven setup verb.
 
 ## When to use
 
