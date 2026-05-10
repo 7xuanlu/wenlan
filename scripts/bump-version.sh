@@ -26,6 +26,19 @@ else
 fi
 echo "  Updated Cargo.toml (workspace.package.version)"
 
+# 1b. Cargo.toml workspace.dependencies version pins (origin-types, origin-core)
+# These must match workspace.package.version so cargo publish strips the path
+# and uses the registry version. Without this, the local member resolves
+# `version = "0.X.Y"` against a workspace.package "0.X.Z" and the build fails.
+for dep in origin-types origin-core; do
+    if [[ "$(uname)" == "Darwin" ]]; then
+        sed -i '' -E "s|^(${dep}[[:space:]]+= \\{ path = \"crates/${dep}\", version = \")[^\"]+(\".*)|\\1${NEW_VERSION}\\2|" Cargo.toml
+    else
+        sed -i -E "s|^(${dep}[[:space:]]+= \\{ path = \"crates/${dep}\", version = \")[^\"]+(\".*)|\\1${NEW_VERSION}\\2|" Cargo.toml
+    fi
+done
+echo "  Updated Cargo.toml (workspace.dependencies origin-types/origin-core)"
+
 # 2. npm wrapper package.json
 (cd crates/origin-mcp/npm && npm version "$NEW_VERSION" --no-git-tag-version --allow-same-version >/dev/null)
 echo "  Updated crates/origin-mcp/npm/package.json"

@@ -1,5 +1,27 @@
 # Changelog
 
+## [0.5.0](https://github.com/7xuanlu/origin/compare/v0.3.1...v0.5.0) (2026-05-10)
+
+
+### Features
+
+* **mcp:** switch to workspace inheritance, Apache-2.0, path dep on origin-types ([52721f9](https://github.com/7xuanlu/origin/commit/52721f9490b921cb74a9088322fa61c0a6203dd5))
+* merge origin-mcp + origin-plugin into monorepo (v0.5.0) ([bc95c84](https://github.com/7xuanlu/origin/commit/bc95c846d0a9b8f8381993a996ec26638e79895c))
+* merge origin-mcp into monorepo as crates/origin-mcp/ ([c982ec7](https://github.com/7xuanlu/origin/commit/c982ec738930671f9c7e3eb1f24227fa86fab756))
+* merge origin-plugin into monorepo (staging) ([0fdfe0e](https://github.com/7xuanlu/origin/commit/0fdfe0eeb7b683942bec75be6166dffef30b8c34))
+* **plugin:** update manifest for monorepo (v0.5.0, repository=origin) ([647bab1](https://github.com/7xuanlu/origin/commit/647bab165e21c56437bc613cbf28839282943e89))
+* **scripts:** add validate-versions.sh pre-flight check ([94587d2](https://github.com/7xuanlu/origin/commit/94587d2fc01befafcfe22c5e9dac79227b0abf2c))
+* **scripts:** extend bump-version.sh to sync npm + plugin manifests ([cb26bc4](https://github.com/7xuanlu/origin/commit/cb26bc484c51d8a3aabb95647997c08b238f9803))
+
+
+### Bug Fixes
+
+* bump npm/package.json + Cargo to 0.4.1 (sync after v0.4.0 npm publish skip) ([a8f6a59](https://github.com/7xuanlu/origin/commit/a8f6a5920469d25498c2ca4ee39f63a4363e05b3))
+* **ci,npm:** align npm syntax-check paths and metadata ([4c4e240](https://github.com/7xuanlu/origin/commit/4c4e2408515ff158c99572ff6b6ed7295052e9a4))
+* **ci:** quote rust job if-expression to fix YAML parse ([553eed7](https://github.com/7xuanlu/origin/commit/553eed770a78d5733f57155bab8434e12f100308))
+* **mcp:** suppress deprecated field warnings for include_goals + goals ([4dad838](https://github.com/7xuanlu/origin/commit/4dad83865732b069d853ca698a18504dd93933ef))
+* replace placeholder skills with locked verb set (init/brief/capture/recall/distill/review/forget/handoff) ([196dc75](https://github.com/7xuanlu/origin/commit/196dc7594b19f9d1e3205df698ccbd3bd9d8929a))
+
 ## [0.3.1](https://github.com/7xuanlu/origin/compare/v0.3.0...v0.3.1) (2026-05-07)
 
 
