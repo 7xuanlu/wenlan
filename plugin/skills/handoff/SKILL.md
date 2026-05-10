@@ -47,24 +47,28 @@ happened. If not a git repo, skip — conversation context is the source.
 
 ### 3. Infer, do not ask
 
-Synthesize silently from git output + conversation. Categorize each item:
+Synthesize silently from git output + conversation. Categorize each item
+using the daemon's 6 canonical memory types:
 
-- **Decisions** (architectural choice, tool/pattern selection — with WHY).
-- **Lessons** (root cause, workaround, gotcha, technical insight).
-- **Insights** (debugging discovery, unexpected behavior).
-- **Open threads** (started but not finished, blockers).
-- **Corrections** (things the user pushed back on).
-- **Preferences** (workflow patterns observed).
+- **decision** — architectural choice, tool/pattern selection (with WHY).
+- **lesson** — root cause discovered, workaround found, technical insight.
+- **gotcha** — unexpected behavior, debugging discovery, sharp edge.
+- **preference** — workflow pattern observed, user correction on approach.
+- **fact** — durable project/people/tool fact worth persisting.
+- **identity** — something about the user themselves.
+
+Non-memory items (not stored, session-log only):
+- **Open threads** — started but not finished, blockers.
 
 Skip purely mechanical facts already in git (file paths, function names,
 config values). The commit log preserves those.
 
 ### 4. MCP captures (one per item)
 
-For each non-trivial item, call:
+For each non-trivial item, call with `memory_type` matching the category:
 
 ```
-capture(content="<one self-contained sentence with WHY>", topic="<project>")
+capture(content="<one self-contained sentence with WHY>", memory_type="<decision|lesson|gotcha|preference|fact|identity>")
 ```
 
 Atomic: one decision per call. Don't merge multiple items into one
@@ -167,19 +171,21 @@ wait is enough for the daemon to release the lock.
 
 ### 9. Confirm
 
-Print one summary block with captures broken out by category:
+Print one summary block with captures grouped by daemon memory type:
 
 ```
 Handoff stored.
-  Decisions: <N> (brief list)
-  Lessons:   <N> (brief list)
-  Insights:  <N> (brief list)
-  Session:   ~/.origin/sessions/<filename>
-  Status:    ~/.origin/sessions/_status/<project>.md
-  Git:       <commit hash> session: <slug>
+  decision:   <N> (brief list)
+  lesson:     <N> (brief list)
+  gotcha:     <N> (brief list)
+  preference: <N> (brief list)
+  fact:       <N> (brief list)
+  Session:    ~/.origin/sessions/<filename>
+  Status:     ~/.origin/sessions/_status/<project>.md
+  Git:        <commit hash> session: <slug>
 ```
 
-Show each category only if non-empty. List items as short phrases, not
+Show each type only if non-empty. List items as short phrases, not
 full sentences — the session log has the details.
 
 ## When to use
