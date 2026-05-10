@@ -18,14 +18,21 @@ context.
 1. Summarize the session: list decisions, lessons, gotchas, blockers, and
    pending threads.
 2. For each item, call the `origin` MCP server's `capture` tool with one
-   atomic statement per memory.
+   atomic statement per memory. Store directly — the daemon dedups against
+   existing knowledge, so re-storing known facts is a no-op.
 
 ```
 capture(content="<one decision / lesson / gotcha as a complete sentence>")
 ```
 
-3. Confirm with the user before closing — show the items being stored, let
-   them edit / drop / add.
+3. Only surface items to the user BEFORE storing if they meet one of these
+   bars:
+   - Contradicts an existing memory (recall returned a conflicting fact).
+   - Marks a critical incident, irreversible action, or production change.
+   - You are uncertain whether the item is durable vs transient.
+
+   Otherwise just store and report a one-line summary at the end:
+   "Handoff: stored N captures, daemon dedup'd M as already-known."
 
 ## What to store at handoff
 
