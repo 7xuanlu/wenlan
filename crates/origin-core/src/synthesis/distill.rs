@@ -252,19 +252,42 @@ pub(crate) async fn distill_one_cluster(
         .or(cluster.domain.as_deref())
         .unwrap_or("general");
 
-    // Skip if a page with very similar sources already exists (Jaccard > 0.8)
-    // Memories CAN appear in multiple concepts — this only prevents duplicate concepts
-    let overlap = db
-        .max_page_overlap(&cluster.source_ids)
-        .await
-        .unwrap_or(0.0);
-    if overlap > 0.8 {
-        log::info!(
-            "[emergence] cluster '{}' overlaps {:.0}% with existing page, skipping",
-            topic,
-            overlap * 100.0
-        );
-        return Ok(None);
+    // Find the existing page that overlaps this cluster the most. Memories
+    // can appear in multiple pages; the check below only prevents duplicate
+    // pages, not duplicate sources.
+    let overlap_match = db.find_best_overlapping_page(&cluster.source_ids).await?;
+    if let Some(ref m) = overlap_match {
+        let cluster_size = cluster.source_ids.len();
+        let covered = m.intersection >= cluster_size || m.jaccard >= 0.8;
+        if covered {
+            log::info!(
+                "[emergence] cluster '{}' already covered by page '{}' ({} of {} memories, Jaccard {:.2}), skipping",
+                topic,
+                m.page_title,
+                m.intersection,
+                cluster_size,
+                m.jaccard
+            );
+            return Ok(None);
+        }
+        if m.intersection > 0 {
+            // Partial overlap: page is stale relative to this cluster.
+            // Don't emit a new page — that would be a duplicate carrying
+            // different memories. Bump sources_updated_count so
+            // redistill_changed_pages picks the page up on the next sweep.
+            // Refresh is a separate refinery concern, not part of new-page
+            // emergence.
+            if let Err(e) = db.increment_page_sources_updated(&m.page_id).await {
+                log::warn!("[emergence] could not mark page {} stale: {}", m.page_id, e);
+            }
+            log::info!(
+                "[emergence] cluster '{}' partially overlaps page '{}' ({} new memories) — marked page for refresh, skipping new-page synth",
+                topic,
+                m.page_title,
+                cluster_size - m.intersection
+            );
+            return Ok(None);
+        }
     }
 
     // Clean input: strip recap headers, domain prefixes, and structured field noise

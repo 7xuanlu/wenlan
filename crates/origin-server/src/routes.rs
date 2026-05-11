@@ -728,45 +728,21 @@ pub async fn handle_distill(
     )
     .await?;
 
-    // Filter pending clusters against existing pages so callers only see
-    // genuinely new (or refresh-eligible) work. Reuses
-    // `MemoryDB::find_best_overlapping_page` — same Jaccard logic that
-    // `distill_one_cluster` already relies on, single source of truth.
-    let mut filtered_pending: Vec<serde_json::Value> = Vec::new();
-    for cluster in &result.pending {
-        let cluster_size = cluster.source_ids.len();
+    // Match refinery's filter: any overlap with an existing page means
+    // this isn't a new-page situation. Fully-covered clusters are dropped;
+    // partially-overlapping clusters belong to a stale-page refresh flow
+    // (tracked separately) rather than producing a duplicate new page.
+    // Only clusters with zero overlap surface as new work.
+    let mut filtered_pending: Vec<origin_core::db::DistillationCluster> = Vec::new();
+    for cluster in result.pending {
         let best = db
             .find_best_overlapping_page(&cluster.source_ids)
             .await
             .map_err(|e| ServerError::Internal(e.to_string()))?;
-
-        let (existing_page_id, existing_page_title, new_memory_count) = match best {
-            Some(m) if m.intersection >= cluster_size => {
-                // Cluster fully covered by an existing page — drop.
-                continue;
-            }
-            Some(m) => (
-                Some(m.page_id),
-                Some(m.page_title),
-                cluster_size - m.intersection,
-            ),
-            None => (None, None, cluster_size),
-        };
-
-        let mut payload = serde_json::to_value(cluster).unwrap_or_else(|_| serde_json::json!({}));
-        if let serde_json::Value::Object(ref mut map) = payload {
-            if let Some(id) = existing_page_id {
-                map.insert("existing_page_id".into(), serde_json::json!(id));
-            }
-            if let Some(title) = existing_page_title {
-                map.insert("existing_page_title".into(), serde_json::json!(title));
-            }
-            map.insert(
-                "new_memory_count".into(),
-                serde_json::json!(new_memory_count),
-            );
+        if best.is_some() {
+            continue;
         }
-        filtered_pending.push(payload);
+        filtered_pending.push(cluster);
     }
 
     Ok(Json(serde_json::json!({

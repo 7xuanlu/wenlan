@@ -85,36 +85,22 @@ the LLM choice is consistent with how the user invoked the skill.
 
 ### 3. Synthesize each `pending` cluster
 
-The daemon route already drops clusters fully covered by an existing
-page. Anything in `pending` is either a brand-new cluster or a
-refresh-eligible one (some new memories not yet in the matched page).
-The shape:
-
-```
-pending: [
-  {
-    source_ids, contents, entity_id, entity_name, domain,
-    estimated_tokens,
-    existing_page_id?: string,    // present → this is a refresh
-    existing_page_title?: string,
-    new_memory_count?: int        // memories not yet in the matched page
-  },
-  ...
-]
-```
+The daemon route only returns genuinely new clusters. Clusters fully
+covered by an existing page (subset, or Jaccard ≥ 0.8) are filtered
+out. Partial-overlap clusters are skipped and the matched page is
+marked stale — the refinery's existing refresh pass handles those
+separately. Anything in `pending` is a brand-new cluster.
 
 For each cluster:
 
 - Title: short noun phrase. Prefer `cluster.entity_name` when it's
   specific; if generic (e.g. the project name itself), derive a more
-  specific title from the first memory's content. **Refresh case**:
-  if `existing_page_id` is present, reuse `existing_page_title`
-  unchanged unless the new memories materially change the topic.
+  specific title from the first memory's content.
 - Summary: one sentence — the durable claim.
 - Body: 3-7 paragraphs of wiki prose. Use `[[wikilinks]]`. Cite source
   ids inline with `(source: mem_XXX)`.
 
-POST to `/api/pages` (new cluster):
+POST to `/api/pages`:
 
 ```
 Bash: curl -fsS -X POST http://127.0.0.1:7878/api/pages \
@@ -126,18 +112,6 @@ Bash: curl -fsS -X POST http://127.0.0.1:7878/api/pages \
 
 The daemon's `handle_create_page` writes both the DB row and the md
 file atomically.
-
-**Refresh case** (cluster has `existing_page_id`): instead of creating
-a new page, update the existing one in place. Until a proper update
-route exists, the cleanest move is to delete the old page id and
-create the new one carrying the merged source ids:
-
-```
-Bash: curl -fsS -X DELETE http://127.0.0.1:7878/api/pages/<existing_page_id>
-Bash: curl -fsS -X POST http://127.0.0.1:7878/api/pages \
-  -H 'Content-Type: application/json' \
-  -d '{...same shape as above, source_memory_ids = cluster.source_ids...}'
-```
 
 ### 4. Report terse
 
@@ -155,13 +129,9 @@ Scope `<scope>` is up to date — no new memories to distill.
 ```
 Distilled N page(s) from <total> memories in scope `<scope>`:
   - <Title>  (~/.origin/pages/<slug>.md)
-  - <Title>  (~/.origin/pages/<slug>.md, refreshed)
+  - <Title>  (~/.origin/pages/<slug>.md)
   ...
 ```
-
-Tag refreshed pages (the ones that replaced an `existing_page_id`)
-with `, refreshed` so the user can tell which are new and which got
-updated.
 
 Rules:
 - **Titles, not page ids.** Ids visually truncate; titles read clean.
