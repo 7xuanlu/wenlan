@@ -728,7 +728,7 @@ pub async fn handle_distill(
         })));
     }
 
-    let distilled = origin_core::refinery::distill_pages_scoped(
+    let result = origin_core::refinery::distill_pages_scoped(
         db,
         prefer_llm,
         prompts,
@@ -738,10 +738,10 @@ pub async fn handle_distill(
     )
     .await?;
 
-    // Only run the deep refinement sweep on an unscoped pass. A scoped
-    // /distill call should affect only what the user asked for; daemon's
-    // background scheduler handles the periodic deep sweep.
-    let deep = if scoped {
+    // Only run the deep refinement sweep on an unscoped pass *with* an LLM.
+    // A scoped /distill call should affect only what the user asked for;
+    // daemon's background scheduler handles the periodic deep sweep.
+    let deep = if scoped || !prefer_llm.map(|p| p.is_available()).unwrap_or(false) {
         0
     } else {
         origin_core::refinery::deep_distill_pages(
@@ -755,9 +755,11 @@ pub async fn handle_distill(
     };
 
     Ok(Json(serde_json::json!({
-        "pages_created": distilled,
+        "pages_created": result.created.len(),
         "pages_updated": deep,
         "scoped": scoped,
+        "created_ids": result.created,
+        "pending": result.pending,
     })))
 }
 

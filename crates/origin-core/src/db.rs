@@ -534,7 +534,7 @@ pub use origin_types::{
 // Re-export wire type from origin-types so existing consumers keep working.
 pub use origin_types::responses::MemoryDetail;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct DistillationCluster {
     pub source_ids: Vec<String>,
     pub contents: Vec<String>,
@@ -12224,6 +12224,13 @@ impl MemoryDB {
         // No covered_ids exclusion — memories can participate in multiple pages.
         // Dedup happens in distill_concepts via Jaccard overlap check.
 
+        // No `EXISTS enrichment_steps` gate: the filter assumed the daemon's
+        // LLM would always run enrichment before clustering. Basic Memory
+        // mode invalidates that assumption (enrichment_steps stays empty
+        // forever without an LLM), and the agent-driven path doesn't need
+        // entity_id/memory_type since it reads memory contents directly to
+        // cluster. Embedding similarity is enough as the floor; LLM-equipped
+        // refinery still gets entity_id when present and skips when not.
         let mut sql = String::from(
             "SELECT m.source_id, m.content, m.entity_id, m.domain, m.embedding, e.community_id, e.name \
              FROM memories m \
@@ -12235,8 +12242,7 @@ impl MemoryDB {
                AND m.source_id NOT LIKE 'merged_%' \
                AND m.source_id NOT LIKE 'recap_%' \
                AND m.is_recap = 0 \
-               AND m.embedding IS NOT NULL \
-               AND EXISTS (SELECT 1 FROM enrichment_steps es WHERE es.source_id = m.source_id)",
+               AND m.embedding IS NOT NULL",
         );
         let mut bind: Vec<libsql::Value> = Vec::new();
         if let Some(eid) = entity_id_filter {
@@ -19807,11 +19813,14 @@ pub(crate) mod tests {
     }
 
     #[tokio::test]
-    async fn find_distillation_clusters_excludes_memories_without_enrichment_steps() {
+    async fn find_distillation_clusters_includes_memories_without_enrichment_steps() {
+        // The EXISTS enrichment_steps gate was removed when distillation was
+        // unified to support Basic Memory mode (no daemon LLM, no enrichment).
+        // All eligible memories now enter clustering regardless of enrichment
+        // state; the synthesizer (daemon LLM or agent) decides what to make
+        // of them.
         let (db, _dir) = test_db().await;
 
-        // Insert 4 memories with same entity, all eligible by other criteria.
-        // 2 will have enrichment_steps (eligible after gate), 2 will not (raw).
         let now = chrono::Utc::now().timestamp_millis();
         for (i, sid) in ["mem_e1", "mem_e2", "mem_r1", "mem_r2"].iter().enumerate() {
             let doc = RawDocument {
@@ -19829,34 +19838,33 @@ pub(crate) mod tests {
             db.upsert_documents(vec![doc]).await.unwrap();
         }
 
-        // Record enrichment steps for the first 2 only.
+        // Record enrichment steps for only the first 2 — used to gate, now
+        // doesn't.
         for sid in ["mem_e1", "mem_e2"].iter() {
             db.record_enrichment_step(sid, "dedup", "ok", None)
                 .await
                 .unwrap();
         }
 
-        // Run cluster discovery with min_size=2 so the eligible 2 form a cluster.
         let clusters = db
             .find_distillation_clusters(0.3, 2, 20, 3500, 50)
             .await
             .unwrap();
 
-        // The 2 raw memories must not appear in any cluster.
         let all_source_ids: Vec<String> = clusters
             .iter()
             .flat_map(|c| c.source_ids.iter().cloned())
             .collect();
-        assert!(
-            !all_source_ids.contains(&"mem_r1".to_string()),
-            "raw memory mem_r1 leaked into clusters: {:?}",
-            all_source_ids
-        );
-        assert!(
-            !all_source_ids.contains(&"mem_r2".to_string()),
-            "raw memory mem_r2 leaked into clusters: {:?}",
-            all_source_ids
-        );
+        // All 4 memories share an entity_id and pass every other filter, so
+        // the unenriched pair must now appear in the cluster set too.
+        for sid in ["mem_e1", "mem_e2", "mem_r1", "mem_r2"].iter() {
+            assert!(
+                all_source_ids.contains(&sid.to_string()),
+                "memory {} missing from clusters after enrichment gate removal: {:?}",
+                sid,
+                all_source_ids
+            );
+        }
     }
 
     #[tokio::test]

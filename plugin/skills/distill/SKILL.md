@@ -1,39 +1,37 @@
 ---
 name: distill
 description: >
-  Synthesize wiki pages from related memories. The agent does the LLM
-  work (Claude in this session); the daemon stores the result. Invoked
-  as `/distill [page_id_or_entity_or_domain]`.
+  Synthesize wiki pages from related memories. One endpoint, one flow:
+  daemon clusters and synthesizes what it can; agent finishes whatever
+  the daemon couldn't (no LLM or cluster too big). Invoked as
+  `/distill [target]`.
 argument-hint: "[page_id_or_entity_or_domain]"
 allowed-tools: ["mcp__plugin_origin_origin__recall", "mcp__plugin_origin_origin__distill", "Bash"]
 ---
 
 # /distill
 
-Force a distillation pass now. Pages emerge automatically; the user
-never has to name topics or manage clusters. The Claude session does
-the synthesis — the daemon does not load its own LLM for this skill.
+Force a distillation pass now. The daemon's background refinery runs
+on its own clock; `/distill` is the explicit user-triggered pass.
 
-## Why agent-driven by default
+## Single flow
 
-The daemon may have an on-device LLM (Qwen, etc.) loaded for the
-background refinery. The fans on it are *real*. When the user
-invokes `/distill` interactively, the Claude session is already in
-context and can synthesize for free. Keep the on-device model quiet.
+One POST to the daemon. Response splits into:
 
-If you ever want the daemon to do it instead (e.g. unattended bulk
-runs), call MCP `distill` directly. That path stays available; it is
-just not the default.
+- `pages_created` / `created_ids`: pages the daemon synthesized itself
+  (only when daemon has an LLM).
+- `pending`: clusters the daemon couldn't finish. The agent
+  synthesizes each in this session and POSTs them back to `/api/pages`.
 
-## Default flow
+Trigger timing is the only thing that differs between the background
+refinery and this skill. Code path is the same; daemon hands back
+clusters when it can't synthesize; whoever called fills in the rest.
 
-Always run the three steps below. No "try MCP first, fall back".
+## Flow
 
 ### 1. Pick the scope
 
-For bare `/distill`, infer a target from cwd. Walk the worktree up to
-its parent repo so the same scope is used whether the user is sitting
-in `~/Repos/origin/.worktrees/feature/...` or in `~/Repos/origin`:
+For bare `/distill`, infer a target from cwd:
 
 ```
 Bash: top=$(git -C "$PWD" rev-parse --show-toplevel 2>/dev/null); \
@@ -44,82 +42,80 @@ Bash: top=$(git -C "$PWD" rev-parse --show-toplevel 2>/dev/null); \
       fi
 ```
 
-- Both subshells succeed → use the parent repo basename (works for
-  both main checkouts and worktrees; `git-common-dir` resolves to the
-  primary `.git` either way).
+- Output → use it (e.g. `origin`).
 - Not a git repo → fall back to `basename "$PWD"`.
-- For `/distill <arg>` → use `<arg>`.
-- For `/distill deep` (reserved keyword) → no scope (full pass over
-  every memory). Slow. Use only when the user explicitly asks for it.
+- Reserved keyword `deep` → no scope (global pass).
 
-### 2. Fetch candidate memories
+For `/distill <arg>` → forward `<arg>` to `target`.
+
+### 2. Call the daemon
 
 ```
-recall(query="<scope>", domain="<scope>", limit=50)
+Bash: curl -fsS -X POST http://127.0.0.1:7878/api/distill \
+  -H 'Content-Type: application/json' \
+  -d '{"target":"<scope>"}'
 ```
 
-Use the full `limit=50`. A narrow recall hides clusters and produces a
-one-page pass that looks like a no-op. Take the time to pull the wider
-net.
+Read the JSON response. Possible shapes:
 
-Read the result. Cluster mentally by shared entities or sub-topic. A
-cluster needs at least 3 related memories to be worth synthesizing —
-singletons and pairs go in the "skipped" report below, not into a
-page. Plan to emit every qualifying cluster, not just the strongest
-one.
+```
+{
+  "pages_created": 0,
+  "pages_updated": 0,
+  "scoped": true,
+  "created_ids": [],
+  "pending": [
+    { "source_ids": [...], "contents": [...], "entity_id": ...,
+      "entity_name": ..., "domain": ..., "estimated_tokens": ... },
+    ...
+  ]
+}
+```
 
-### 3. Synthesize and post
+`unresolved` + `hint`: relay to user verbatim and stop.
 
-Write each page in wiki-prose style:
+### 3. Finish each `pending` cluster
 
-- **Title**: short noun phrase (e.g. "Origin daemon architecture").
-- **Summary**: one sentence — the durable claim the page supports.
-- **Body**: 3-8 paragraphs of encyclopedia-style prose. Use
-  `[[wikilinks]]` to reference other pages or entities. Cite source
-  memory ids inline with `(source: mem_XXX)`.
-- **Durable**: write what would still be true in six months, not the
-  current state of in-progress work.
+For each cluster in `pending`:
 
-POST the page back:
+- Title: short noun phrase (use `entity_name` if present, otherwise a
+  short phrase summarizing the cluster).
+- Summary: one sentence — the durable claim.
+- Body: 3-7 paragraphs of wiki prose. Use `[[wikilinks]]`. Cite source
+  ids inline with `(source: mem_XXX)`.
+- Then POST to `/api/pages`:
 
 ```
 Bash: curl -fsS -X POST http://127.0.0.1:7878/api/pages \
   -H 'Content-Type: application/json' \
-  -d '{"title":"<Title>","content":"<page body>","summary":"<one line>",
-       "entity_id":"<primary_entity_id_or_null>","domain":"<scope>",
-       "source_memory_ids":["mem_X","mem_Y","mem_Z"]}'
+  -d '{"title":"...","summary":"...","content":"...",
+       "entity_id":"<cluster.entity_id or null>","domain":"<cluster.domain>",
+       "source_memory_ids":[...]}'
 ```
 
-Repeat for each qualifying cluster, one POST per page.
+The daemon's `handle_create_page` writes both the DB row and the md
+file atomically. No second step needed.
 
-### 4. Report the pass terse
+### 4. Report terse
 
-After all POSTs land, report the pass with one block — no wall of
-text. The user already has the md on disk and can open `/read <id>`
-when they want to see the body. Format:
+After everything lands (daemon-created + agent-finished), report once:
 
 ```
 Distilled N page(s):
-  - <Title 1>  →  /read <id>  (·  ~/.origin/pages/<slug>.md)
-  - <Title 2>  →  /read <id>
+  - <Title>  (~/.origin/pages/<slug>.md)
+  - <Title>  (~/.origin/pages/<slug>.md)
   ...
 
 Skipped M cluster(s):
-  - <topic hint>  (<N> memories, no other peers yet)
+  - <topic>  (<N> memories, no peers yet)
 ```
 
-Rules for the report:
-- One line per page; don't include the page body.
-- Mention the md path once per page so users can open it in Obsidian
-  / VS Code without re-asking.
-- Always include the "Skipped" section when at least one candidate
-  cluster fell below the 3-memory floor — silence here makes the
-  user think there was nothing else to do.
-- Omit "Skipped" only when every memory ended up in a page.
+Rules:
+- **Titles, not page ids.** Ids visually truncate; titles read clean.
+- One line per page. No body in chat — `/read "<title>"` for that.
+- Include the "Skipped" section when anything was skipped.
 
 ## Auto-commit ~/.origin/
-
-After distillation, snapshot page changes:
 
 ```
 Bash: cd ~/.origin 2>/dev/null && [ -d .git ] && git add -A && \
@@ -128,26 +124,25 @@ Bash: cd ~/.origin 2>/dev/null && [ -d .git ] && git add -A && \
           || true
 ```
 
-Skip the commit if no diff — `git commit` with empty staging fails.
+Skip when no diff.
 
 ## When to use
 
-- User says "distill", "synthesize", "rebuild the page on X", "refresh
-  the knowledge view".
-- After bulk import — daemon refinery handles this in the background;
+- User says "distill", "synthesize", "rebuild the page on X".
+- After a bulk import — daemon refinery handles this in the background;
   user can force a pass for immediate visibility.
 
 ## When NOT to use
 
-- Daemon scheduler runs distillation periodically (on-device LLM).
-  Don't trigger redundantly during normal flow.
-- Single memory write → daemon's post-ingest enrichment already covers
-  it; manual distill is over-eager.
+- Trivial / one-off interactions. The background scheduler covers
+  periodic refresh.
+- Single memory write → daemon's post-ingest enrichment already
+  covers it.
 
 ## Cost
 
-Agent path: counts against the current Claude session's tokens. Keep
-clusters small (≤ 20 source memories per page) to control cost.
-
-Daemon path (MCP `distill`): one on-device LLM call per cluster. Off
-by default in this skill; call MCP `distill` directly if you want it.
+Each cluster the agent synthesizes counts against this session's
+tokens. Daemon-side clusters (when an LLM is present) cost daemon LLM
+tokens instead (cents on API, seconds on-device). Either way, keep
+cluster sizes reasonable — the daemon already enforces a per-cluster
+token budget via its tuning config.

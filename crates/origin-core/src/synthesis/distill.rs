@@ -245,7 +245,7 @@ pub(crate) async fn distill_one_cluster(
     prompts: &PromptRegistry,
     cluster: &crate::db::DistillationCluster,
     knowledge_writer: Option<&crate::export::knowledge::KnowledgeWriter>,
-) -> Result<bool, OriginError> {
+) -> Result<Option<String>, OriginError> {
     let topic = cluster
         .entity_name
         .as_deref()
@@ -264,7 +264,7 @@ pub(crate) async fn distill_one_cluster(
             topic,
             overlap * 100.0
         );
-        return Ok(false);
+        return Ok(None);
     }
 
     // Clean input: strip recap headers, domain prefixes, and structured field noise
@@ -313,7 +313,7 @@ pub(crate) async fn distill_one_cluster(
             total_content_chars,
             topic
         );
-        return Ok(false);
+        return Ok(None);
     }
 
     log::info!(
@@ -362,7 +362,7 @@ pub(crate) async fn distill_one_cluster(
 
             if content.is_empty() {
                 log::warn!("[distill] empty output for topic='{}', skipping", topic);
-                return Ok(false);
+                return Ok(None);
             }
 
             // Hallucination check: output must be semantically similar to input
@@ -376,7 +376,7 @@ pub(crate) async fn distill_one_cluster(
                             sim,
                             topic
                         );
-                        return Ok(false);
+                        return Ok(None);
                     }
                     log::info!(
                         "[compile] quality check passed (sim={:.2}) for topic='{}'",
@@ -404,7 +404,7 @@ pub(crate) async fn distill_one_cluster(
                         "[distill] no title and topic='{}' is garbage, skipping cluster",
                         topic
                     );
-                    return Ok(false);
+                    return Ok(None);
                 }
                 None => topic.to_string(),
             };
@@ -462,21 +462,40 @@ pub(crate) async fn distill_one_cluster(
                 }
             }
 
-            Ok(true)
+            Ok(Some(page_id))
         }
         Ok(_) => {
             log::warn!("[distill] empty output for topic='{}'", topic);
-            Ok(false)
+            Ok(None)
         }
         Err(e) => {
             log::warn!("[distill] LLM error for topic='{}': {}", topic, e);
-            Ok(false)
+            Ok(None)
         }
     }
 }
 
+/// Outcome of a distillation pass — pages the daemon synthesized itself,
+/// plus clusters it could not finish (no LLM available, or the cluster
+/// exceeded the LLM's effective context budget). Callers with their own
+/// LLM (e.g. the agent-driven `/distill` skill) can pick up the pending
+/// clusters and finish them.
+#[derive(Debug, Clone, serde::Serialize, Default)]
+pub struct DistillResult {
+    /// Page ids the daemon synthesized + persisted itself this pass.
+    pub created: Vec<String>,
+    /// Clusters the daemon clustered but did not synthesize. Each cluster
+    /// carries the source memory ids, content snippets, and entity / domain
+    /// metadata so the caller has everything it needs to write a page and
+    /// POST back to `/api/pages`.
+    pub pending: Vec<crate::db::DistillationCluster>,
+}
+
 /// Distill memory clusters into structured concepts.
 /// Memories can appear in multiple concepts. Jaccard overlap prevents duplicate concepts.
+///
+/// Returns the count of pages the daemon synthesized itself; refer to
+/// `distill_pages_scoped` for the full `DistillResult` with `pending`.
 pub async fn distill_pages(
     db: &MemoryDB,
     llm: Option<&Arc<dyn LlmProvider>>,
@@ -484,12 +503,18 @@ pub async fn distill_pages(
     tuning: &crate::tuning::DistillationConfig,
     knowledge_path: Option<&std::path::Path>,
 ) -> Result<usize, OriginError> {
-    distill_pages_scoped(db, llm, prompts, tuning, knowledge_path, None).await
+    let r = distill_pages_scoped(db, llm, prompts, tuning, knowledge_path, None).await?;
+    Ok(r.created.len())
 }
 
 /// Same as `distill_pages` but restricts clustering to a single entity, a
 /// single domain, or (when `target` is `DistillTarget::Page`) re-distills one
 /// existing page directly. `None` matches `distill_pages` exactly.
+///
+/// Returns a `DistillResult`: pages the daemon synthesized itself plus
+/// clusters it couldn't finish (no LLM, or cluster too big for the LLM's
+/// context). The HTTP `/api/distill` route hands the `pending` list back
+/// to the caller so the agent-driven skill can synthesize the rest.
 pub async fn distill_pages_scoped(
     db: &MemoryDB,
     llm: Option<&Arc<dyn LlmProvider>>,
@@ -497,19 +522,47 @@ pub async fn distill_pages_scoped(
     tuning: &crate::tuning::DistillationConfig,
     knowledge_path: Option<&std::path::Path>,
     target: Option<DistillTarget>,
-) -> Result<usize, OriginError> {
+) -> Result<DistillResult, OriginError> {
     if let Some(DistillTarget::Page(ref page_id)) = target {
         let updated = deep_distill_single(db, llm, prompts, page_id).await?;
-        return Ok(if updated { 1 } else { 0 });
+        return Ok(DistillResult {
+            created: if updated {
+                vec![page_id.clone()]
+            } else {
+                vec![]
+            },
+            pending: vec![],
+        });
     }
     let (entity_id_filter, domain_filter): (Option<String>, Option<String>) = match target {
         Some(DistillTarget::Entity { id, .. }) => (Some(id), None),
         Some(DistillTarget::Domain(d)) => (None, Some(d)),
         Some(DistillTarget::Page(_)) | None => (None, None),
     };
+    // No LLM available — discover clusters and hand them back as pending
+    // so the caller (typically the /distill skill in Basic Memory mode)
+    // can finish them with its own LLM.
     let llm = match llm {
         Some(l) if l.is_available() => l,
-        _ => return Ok(0),
+        _ => {
+            // Use a generous budget so candidate discovery isn't gated by
+            // a tiny on-device window we don't have anyway.
+            let raw_clusters = db
+                .find_distillation_clusters_scoped(
+                    tuning.similarity_threshold,
+                    tuning.page_min_cluster_size,
+                    tuning.max_clusters_per_steep,
+                    16_000,
+                    tuning.max_unlinked_cluster_size,
+                    entity_id_filter.as_deref(),
+                    domain_filter.as_deref(),
+                )
+                .await?;
+            return Ok(DistillResult {
+                created: vec![],
+                pending: raw_clusters,
+            });
+        }
     };
 
     // Each model carries its own effective synthesis limit — the max tokens it
@@ -538,7 +591,7 @@ pub async fn distill_pages_scoped(
         .unwrap_or(1)
         .min(4);
 
-    let mut distilled = 0usize;
+    let mut created: Vec<String> = Vec::new();
 
     // Create the writer once, outside the loop
     let knowledge_writer =
@@ -553,12 +606,15 @@ pub async fn distill_pages_scoped(
                 .collect();
             let results = futures::future::join_all(futs).await;
             for r in results {
-                if r? {
-                    distilled += 1;
+                if let Some(page_id) = r? {
+                    created.push(page_id);
                 }
             }
         }
-        return Ok(distilled);
+        return Ok(DistillResult {
+            created,
+            pending: vec![],
+        });
     }
 
     for cluster in &clusters {
@@ -751,7 +807,7 @@ pub async fn distill_pages_scoped(
                     title,
                     content.chars().take(40).collect::<String>()
                 );
-                distilled += 1;
+                created.push(page_id.clone());
 
                 // Log activity — system-attributed, since distillation is background refinery work.
                 let source_memory_ids: Vec<String> = cluster.source_ids.to_vec();
@@ -785,7 +841,10 @@ pub async fn distill_pages_scoped(
         }
     }
 
-    Ok(distilled)
+    Ok(DistillResult {
+        created,
+        pending: vec![],
+    })
 }
 
 /// Full Karpathy-style deep distill: emergence + orphans + recompile ALL + global review.
