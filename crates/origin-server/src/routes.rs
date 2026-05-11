@@ -652,48 +652,150 @@ pub struct SteepResponse {
     pub phases: Vec<origin_core::refinery::PhaseResult>,
 }
 
+/// Request body for POST /api/distill. All fields are optional: an empty
+/// body (or omitted Content-Type) is treated as `DistillRequest::default()`
+/// which preserves the historical full-pass behavior.
+///
+/// `deny_unknown_fields` rejects bodies that name a field we don't recognize
+/// (e.g. an old MCP client that still sends `page_id`). The error surfaces as
+/// a 400 with a serde diagnostic — the alternative is silently dropping the
+/// field and running a global pass the caller didn't ask for.
+#[derive(Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DistillRequest {
+    /// Free-form target string. Resolved server-side:
+    /// `page_*`/`concept_*` → page redistill; entity name → scoped distill;
+    /// domain value → scoped distill; anything else → 404-ish hint payload.
+    #[serde(default, alias = "page_id")]
+    pub target: Option<String>,
+}
+
 /// POST /api/distill
 pub async fn handle_distill(
     State(state): State<Arc<RwLock<ServerState>>>,
+    body: axum::body::Bytes,
 ) -> Result<Json<serde_json::Value>, ServerError> {
+    let req: DistillRequest = if body.is_empty() {
+        DistillRequest::default()
+    } else {
+        serde_json::from_slice(&body).map_err(|e| ServerError::ValidationError(e.to_string()))?
+    };
+
+    // `/api/distill` always returns clusters as `pending` — the route is
+    // user-triggered, so synthesis belongs to whoever called it (the agent
+    // session via the skill, or another client with its own LLM). The
+    // background refinery calls `distill_pages_scoped` directly with the
+    // daemon LLM; that path is the one that synthesizes inline. Two
+    // triggers, one shared function, no behavior drift inside the function.
     let s = state.read().await;
     let db =
         s.db.as_ref()
             .ok_or(ServerError::Internal("DB not initialized".into()))?;
-    let llm = s.llm.as_ref();
-    let api_llm = s.api_llm.as_ref();
     let prompts = &s.prompts;
     let tuning = &s.tuning.distillation;
 
-    let prefer_llm = api_llm.or(llm);
     let knowledge_path = {
         let config = origin_core::config::load_config();
         Some(config.knowledge_path_or_default())
     };
-    let distilled = origin_core::refinery::distill_pages(
+
+    let target = match req.target.as_deref() {
+        Some(raw) if !raw.is_empty() => {
+            match origin_core::refinery::resolve_distill_target(db, raw).await? {
+                Some(t) => Some(t),
+                None => {
+                    return Ok(Json(serde_json::json!({
+                        "pages_created": 0,
+                        "pages_updated": 0,
+                        "unresolved": raw,
+                        "hint": "target must be a page id (page_* / concept_*), an entity name, or a domain value",
+                    })));
+                }
+            }
+        }
+        _ => None,
+    };
+
+    let scoped = target.is_some();
+
+    let result = origin_core::refinery::distill_pages_scoped(
         db,
-        prefer_llm,
+        None, // route never invokes daemon LLM; caller synthesizes pending
         prompts,
         tuning,
         knowledge_path.as_deref(),
-    )
-    .await?;
-    let deep = origin_core::refinery::deep_distill_pages(
-        db,
-        prefer_llm,
-        prompts,
-        tuning,
-        knowledge_path.as_deref(),
+        target,
     )
     .await?;
 
+    // Shared "fully covered" rule with refinery (subset OR Jaccard >= 0.8):
+    // those clusters never need synth from either path.
+    //
+    // Partial-overlap clusters diverge intentionally:
+    // - Refinery (no agent reach): marks the page stale and skips. Refresh
+    //   is `redistill_changed_pages`' job and needs daemon LLM.
+    // - Route (agent has LLM in caller's session): surfaces the cluster
+    //   with `existing_page_id` so the skill can synth the refresh inline.
+    //
+    // Divergence sits at the orchestration layer; the primitive is shared.
+    //
+    // Performance: load the active-page source-memory index ONCE and reuse
+    // it across every cluster comparison, so the route is O(P + P*C) hash
+    // ops instead of P*C SQL roundtrips + JSON re-parses.
+    let page_index = db
+        .load_page_source_index()
+        .await
+        .map_err(|e| ServerError::Internal(e.to_string()))?;
+
+    let mut filtered_pending: Vec<serde_json::Value> = Vec::new();
+    for cluster in &result.pending {
+        let cluster_size = cluster.source_ids.len();
+        let best =
+            origin_core::db::best_overlapping_page_in_index(&page_index, &cluster.source_ids);
+
+        let (existing_page_id, existing_page_title, new_memory_count) = match best {
+            Some(m) if m.intersection >= cluster_size || m.jaccard >= 0.8 => continue,
+            Some(m) => (
+                Some(m.page_id),
+                Some(m.page_title),
+                cluster_size - m.intersection,
+            ),
+            None => (None, None, cluster_size),
+        };
+
+        let mut payload = serde_json::to_value(cluster)
+            .map_err(|e| ServerError::Internal(format!("cluster serialize: {e}")))?;
+        if let serde_json::Value::Object(ref mut map) = payload {
+            if let Some(id) = existing_page_id {
+                map.insert("existing_page_id".into(), serde_json::json!(id));
+            }
+            if let Some(title) = existing_page_title {
+                map.insert("existing_page_title".into(), serde_json::json!(title));
+            }
+            map.insert(
+                "new_memory_count".into(),
+                serde_json::json!(new_memory_count),
+            );
+        }
+        filtered_pending.push(payload);
+    }
+
     Ok(Json(serde_json::json!({
-        "pages_created": distilled,
-        "pages_updated": deep,
+        "pages_created": result.created.len(),
+        "scoped": scoped,
+        "created_ids": result.created,
+        "pending": filtered_pending,
     })))
 }
 
 /// POST /api/distill/{page_id}
+///
+/// Re-distill a single page. Requires the daemon to have an LLM available
+/// (on-device or Anthropic key). When no LLM is configured (Basic Memory
+/// mode) the route returns a 200 with a hint payload instead of a 500 —
+/// the caller's intent (refresh this page) can't be honored, but the
+/// failure mode is documented in the response so the skill can surface
+/// it to the user.
 pub async fn handle_redistill(
     State(state): State<Arc<RwLock<ServerState>>>,
     Path(page_id): Path<String>,
@@ -707,9 +809,20 @@ pub async fn handle_redistill(
     let prompts = &s.prompts;
 
     let prefer_llm = api_llm.or(llm);
-    origin_core::refinery::deep_distill_single(db, prefer_llm, prompts, &page_id).await?;
-
-    Ok(Json(serde_json::json!({"status": "ok"})))
+    if prefer_llm.map(|p| p.is_available()).unwrap_or(false) {
+        let updated =
+            origin_core::refinery::deep_distill_single(db, prefer_llm, prompts, &page_id).await?;
+        Ok(Json(serde_json::json!({
+            "status": "ok",
+            "updated": updated,
+        })))
+    } else {
+        Ok(Json(serde_json::json!({
+            "status": "skipped",
+            "updated": false,
+            "hint": "page re-distill needs an LLM in the daemon — install an on-device model or set an Anthropic key via `origin setup` / `/origin:doctor`",
+        })))
+    }
 }
 
 // ===== Recent retrieval / page-change feeds =====

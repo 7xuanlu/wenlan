@@ -534,7 +534,7 @@ pub use origin_types::{
 // Re-export wire type from origin-types so existing consumers keep working.
 pub use origin_types::responses::MemoryDetail;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct DistillationCluster {
     pub source_ids: Vec<String>,
     pub contents: Vec<String>,
@@ -542,6 +542,58 @@ pub struct DistillationCluster {
     pub entity_name: Option<String>,
     pub domain: Option<String>,
     pub estimated_tokens: usize,
+}
+
+/// Returned by `find_best_overlapping_page`: the highest-Jaccard page match
+/// for a candidate cluster's source-memory set, plus the raw intersection
+/// count callers need to distinguish "full subset" (drop the cluster) from
+/// "partial overlap" (cluster is a refresh candidate, not a duplicate).
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct PageOverlap {
+    pub page_id: String,
+    pub page_title: String,
+    pub jaccard: f64,
+    pub intersection: usize,
+}
+
+/// One row of the active-page source-memory index. Built once by
+/// `load_page_source_index` so callers comparing N clusters in a row don't
+/// re-query SQL and re-parse JSON N times.
+#[derive(Debug, Clone)]
+pub struct PageSourceIndex {
+    pub page_id: String,
+    pub page_title: String,
+    pub source_set: std::collections::HashSet<String>,
+}
+
+/// Same Jaccard scoring as `find_best_overlapping_page` but against a
+/// pre-loaded index — O(P) per cluster instead of O(P) + a SQL roundtrip.
+pub fn best_overlapping_page_in_index(
+    index: &[PageSourceIndex],
+    source_ids: &[String],
+) -> Option<PageOverlap> {
+    let input_set: std::collections::HashSet<&str> =
+        source_ids.iter().map(|s| s.as_str()).collect();
+    let mut best: Option<PageOverlap> = None;
+    for entry in index {
+        let page_refs: std::collections::HashSet<&str> =
+            entry.source_set.iter().map(|s| s.as_str()).collect();
+        let intersection = input_set.intersection(&page_refs).count();
+        let union = input_set.union(&page_refs).count();
+        if intersection == 0 || union == 0 {
+            continue;
+        }
+        let jaccard = intersection as f64 / union as f64;
+        if best.as_ref().map(|b| jaccard > b.jaccard).unwrap_or(true) {
+            best = Some(PageOverlap {
+                page_id: entry.page_id.clone(),
+                page_title: entry.page_title.clone(),
+                jaccard,
+                intersection,
+            });
+        }
+    }
+    best
 }
 
 // Re-export wire type from origin-types so existing consumers keep working.
@@ -8829,6 +8881,24 @@ impl MemoryDB {
         Ok(())
     }
 
+    /// True if any non-archived memory carries the given domain. Used by the
+    /// distillation target resolver as a "does this scope exist" check.
+    pub async fn domain_has_memories(&self, domain: &str) -> Result<bool, OriginError> {
+        let conn = self.conn.lock().await;
+        let mut rows = conn
+            .query(
+                "SELECT 1 FROM memories WHERE domain = ?1 LIMIT 1",
+                libsql::params![domain],
+            )
+            .await
+            .map_err(|e| OriginError::VectorDb(format!("domain_has_memories: {}", e)))?;
+        Ok(rows
+            .next()
+            .await
+            .map_err(|e| OriginError::VectorDb(e.to_string()))?
+            .is_some())
+    }
+
     /// Resolve entity by name: exact match → LIKE substring → vector search → None.
     pub async fn resolve_entity_by_name(&self, name: &str) -> Result<Option<String>, OriginError> {
         {
@@ -12173,12 +12243,47 @@ impl MemoryDB {
         token_limit: usize,
         max_unlinked_cluster_size: usize,
     ) -> Result<Vec<DistillationCluster>, OriginError> {
+        self.find_distillation_clusters_scoped(
+            similarity_threshold,
+            min_size,
+            max_clusters,
+            token_limit,
+            max_unlinked_cluster_size,
+            None,
+            None,
+        )
+        .await
+    }
+
+    /// Like `find_distillation_clusters` but restricts the candidate memories
+    /// to a single entity or domain when the caller supplies a filter.
+    /// Both filters can be `None` (full scan, equivalent to the unscoped
+    /// function above) or one can be set; supplying both is allowed and
+    /// applies as an AND.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn find_distillation_clusters_scoped(
+        &self,
+        similarity_threshold: f64,
+        min_size: usize,
+        max_clusters: usize,
+        token_limit: usize,
+        max_unlinked_cluster_size: usize,
+        entity_id_filter: Option<&str>,
+        domain_filter: Option<&str>,
+    ) -> Result<Vec<DistillationCluster>, OriginError> {
         let conn = self.conn.lock().await;
 
         // No covered_ids exclusion — memories can participate in multiple pages.
         // Dedup happens in distill_concepts via Jaccard overlap check.
 
-        let mut rows = conn.query(
+        // No `EXISTS enrichment_steps` gate: the filter assumed the daemon's
+        // LLM would always run enrichment before clustering. Basic Memory
+        // mode invalidates that assumption (enrichment_steps stays empty
+        // forever without an LLM), and the agent-driven path doesn't need
+        // entity_id/memory_type since it reads memory contents directly to
+        // cluster. Embedding similarity is enough as the floor; LLM-equipped
+        // refinery still gets entity_id when present and skips when not.
+        let mut sql = String::from(
             "SELECT m.source_id, m.content, m.entity_id, m.domain, m.embedding, e.community_id, e.name \
              FROM memories m \
              LEFT JOIN entities e ON m.entity_id = e.id \
@@ -12189,11 +12294,23 @@ impl MemoryDB {
                AND m.source_id NOT LIKE 'merged_%' \
                AND m.source_id NOT LIKE 'recap_%' \
                AND m.is_recap = 0 \
-               AND m.embedding IS NOT NULL \
-               AND EXISTS (SELECT 1 FROM enrichment_steps es WHERE es.source_id = m.source_id) \
-             ORDER BY m.entity_id, m.domain, m.last_modified DESC",
-            (),
-        ).await.map_err(|e| OriginError::VectorDb(format!("distillation fetch: {}", e)))?;
+               AND m.embedding IS NOT NULL",
+        );
+        let mut bind: Vec<libsql::Value> = Vec::new();
+        if let Some(eid) = entity_id_filter {
+            sql.push_str(" AND m.entity_id = ?");
+            bind.push(libsql::Value::Text(eid.to_string()));
+        }
+        if let Some(d) = domain_filter {
+            sql.push_str(" AND m.domain = ?");
+            bind.push(libsql::Value::Text(d.to_string()));
+        }
+        sql.push_str(" ORDER BY m.entity_id, m.domain, m.last_modified DESC");
+
+        let mut rows = conn
+            .query(&sql, bind)
+            .await
+            .map_err(|e| OriginError::VectorDb(format!("distillation fetch: {}", e)))?;
 
         let mut memories: Vec<ClusterMemRow> = Vec::new();
         while let Some(row) = rows
@@ -14376,42 +14493,73 @@ impl MemoryDB {
         Ok(())
     }
 
-    /// Check maximum Jaccard overlap between a set of source_ids and any existing page.
-    /// Returns 0.0-1.0 (0 = no overlap, 1 = identical source set).
-    pub async fn max_page_overlap(&self, source_ids: &[String]) -> Result<f64, OriginError> {
+    /// Find the existing active page whose source memories overlap the most
+    /// with the supplied cluster. Returns the page metadata plus Jaccard
+    /// similarity and the raw intersection count, so callers can decide
+    /// whether the cluster is a duplicate (full subset), a refresh candidate
+    /// (partial overlap), or brand new (no overlap).
+    ///
+    /// SELECT is capped at 1000 active pages. Above that, batch with
+    /// `load_page_source_index` + `best_overlapping_page_in_index` so the
+    /// page set is fetched once for N cluster comparisons instead of N times.
+    pub async fn find_best_overlapping_page(
+        &self,
+        source_ids: &[String],
+    ) -> Result<Option<PageOverlap>, OriginError> {
+        let index = self.load_page_source_index().await?;
+        Ok(best_overlapping_page_in_index(&index, source_ids))
+    }
+
+    /// Load every active page's source memory ids into an in-memory index
+    /// so callers comparing N clusters against the page set don't re-query
+    /// SQL and re-parse JSON N times. Capped at 1000 pages (matches
+    /// `find_best_overlapping_page`); a warning is logged when the cap fires.
+    pub async fn load_page_source_index(&self) -> Result<Vec<PageSourceIndex>, OriginError> {
         let conn = self.conn.lock().await;
         let mut rows = conn
             .query(
-                "SELECT source_memory_ids FROM pages WHERE status = 'active'",
+                "SELECT id, title, source_memory_ids FROM pages WHERE status = 'active' LIMIT 1000",
                 (),
             )
             .await
-            .map_err(|e| OriginError::VectorDb(format!("page overlap: {e}")))?;
+            .map_err(|e| OriginError::VectorDb(format!("page index: {e}")))?;
 
-        let input_set: std::collections::HashSet<&str> =
-            source_ids.iter().map(|s| s.as_str()).collect();
-        let mut max_overlap = 0.0f64;
-
+        let mut out: Vec<PageSourceIndex> = Vec::new();
         while let Some(row) = rows
             .next()
             .await
             .map_err(|e| OriginError::VectorDb(e.to_string()))?
         {
-            let json: String = row.get(0).unwrap_or_default();
-            if let Ok(ids) = serde_json::from_str::<Vec<String>>(&json) {
-                let concept_set: std::collections::HashSet<&str> =
-                    ids.iter().map(|s| s.as_str()).collect();
-                let intersection = input_set.intersection(&concept_set).count();
-                let union = input_set.union(&concept_set).count();
-                if union > 0 {
-                    let jaccard = intersection as f64 / union as f64;
-                    if jaccard > max_overlap {
-                        max_overlap = jaccard;
-                    }
-                }
-            }
+            let page_id: String = row.get(0).unwrap_or_default();
+            let page_title: String = row.get(1).unwrap_or_default();
+            let json: String = row.get(2).unwrap_or_default();
+            let Ok(ids) = serde_json::from_str::<Vec<String>>(&json) else {
+                continue;
+            };
+            let source_set: std::collections::HashSet<String> = ids.into_iter().collect();
+            out.push(PageSourceIndex {
+                page_id,
+                page_title,
+                source_set,
+            });
         }
-        Ok(max_overlap)
+        if out.len() == 1000 {
+            log::warn!(
+                "[page-index] hit 1000-page cap; older pages may be missed in overlap checks"
+            );
+        }
+        Ok(out)
+    }
+
+    /// Thin wrapper around `find_best_overlapping_page` that returns just the
+    /// Jaccard value, preserved for callers (notably `distill_one_cluster`)
+    /// that only need the score.
+    pub async fn max_page_overlap(&self, source_ids: &[String]) -> Result<f64, OriginError> {
+        Ok(self
+            .find_best_overlapping_page(source_ids)
+            .await?
+            .map(|m| m.jaccard)
+            .unwrap_or(0.0))
     }
 
     /// Get all memory source_ids that are already covered by active pages.
@@ -19748,11 +19896,14 @@ pub(crate) mod tests {
     }
 
     #[tokio::test]
-    async fn find_distillation_clusters_excludes_memories_without_enrichment_steps() {
+    async fn find_distillation_clusters_includes_memories_without_enrichment_steps() {
+        // The EXISTS enrichment_steps gate was removed when distillation was
+        // unified to support Basic Memory mode (no daemon LLM, no enrichment).
+        // All eligible memories now enter clustering regardless of enrichment
+        // state; the synthesizer (daemon LLM or agent) decides what to make
+        // of them.
         let (db, _dir) = test_db().await;
 
-        // Insert 4 memories with same entity, all eligible by other criteria.
-        // 2 will have enrichment_steps (eligible after gate), 2 will not (raw).
         let now = chrono::Utc::now().timestamp_millis();
         for (i, sid) in ["mem_e1", "mem_e2", "mem_r1", "mem_r2"].iter().enumerate() {
             let doc = RawDocument {
@@ -19770,34 +19921,33 @@ pub(crate) mod tests {
             db.upsert_documents(vec![doc]).await.unwrap();
         }
 
-        // Record enrichment steps for the first 2 only.
+        // Record enrichment steps for only the first 2 — used to gate, now
+        // doesn't.
         for sid in ["mem_e1", "mem_e2"].iter() {
             db.record_enrichment_step(sid, "dedup", "ok", None)
                 .await
                 .unwrap();
         }
 
-        // Run cluster discovery with min_size=2 so the eligible 2 form a cluster.
         let clusters = db
             .find_distillation_clusters(0.3, 2, 20, 3500, 50)
             .await
             .unwrap();
 
-        // The 2 raw memories must not appear in any cluster.
         let all_source_ids: Vec<String> = clusters
             .iter()
             .flat_map(|c| c.source_ids.iter().cloned())
             .collect();
-        assert!(
-            !all_source_ids.contains(&"mem_r1".to_string()),
-            "raw memory mem_r1 leaked into clusters: {:?}",
-            all_source_ids
-        );
-        assert!(
-            !all_source_ids.contains(&"mem_r2".to_string()),
-            "raw memory mem_r2 leaked into clusters: {:?}",
-            all_source_ids
-        );
+        // All 4 memories share an entity_id and pass every other filter, so
+        // the unenriched pair must now appear in the cluster set too.
+        for sid in ["mem_e1", "mem_e2", "mem_r1", "mem_r2"].iter() {
+            assert!(
+                all_source_ids.contains(&sid.to_string()),
+                "memory {} missing from clusters after enrichment gate removal: {:?}",
+                sid,
+                all_source_ids
+            );
+        }
     }
 
     #[tokio::test]

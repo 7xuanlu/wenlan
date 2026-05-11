@@ -50,13 +50,13 @@ impl KnowledgeWriter {
         let origin_dir = self.path.join(".origin");
         std::fs::create_dir_all(&origin_dir)?;
 
-        let filename = format!("{}.md", slugify(&page.title));
+        let mut state = self.load_state();
+        let filename = self.unique_filename(&page.id, &page.title, &state);
         let file_path = self.path.join(&filename);
 
         let content = render_markdown(page);
         std::fs::write(&file_path, &content)?;
 
-        let mut state = self.load_state();
         state.pages.insert(
             page.id.clone(),
             PageFileState {
@@ -70,11 +70,52 @@ impl KnowledgeWriter {
         Ok(file_path.to_string_lossy().to_string())
     }
 
+    /// Resolve a slug-derived filename that does not collide with any other
+    /// page's filename in `state`, AND does not collide with an existing
+    /// file on disk that we have no state entry for (orphan from a manual
+    /// drop, a failed previous rollback, etc.). The caller's own page id is
+    /// allowed to keep its existing filename so version updates stay in
+    /// place.
+    fn unique_filename(&self, page_id: &str, title: &str, state: &KnowledgeState) -> String {
+        // If this page already has a filename recorded, reuse it.
+        if let Some(existing) = state.pages.get(page_id) {
+            return existing.file.clone();
+        }
+        let base = slugify(title);
+        let mut candidate = format!("{}.md", base);
+        let mut n = 2;
+        // Collect filenames belonging to *other* pages.
+        let taken: std::collections::HashSet<&str> = state
+            .pages
+            .iter()
+            .filter(|(id, _)| id.as_str() != page_id)
+            .map(|(_, st)| st.file.as_str())
+            .collect();
+        loop {
+            let collides_state = taken.contains(candidate.as_str());
+            // Defence-in-depth: also check disk in case state.json missed
+            // an orphan file (e.g. user dropped an .md in manually, or a
+            // previous rollback couldn't persist state).
+            let collides_disk = self.path.join(&candidate).exists();
+            if !collides_state && !collides_disk {
+                break;
+            }
+            candidate = format!("{}-{}.md", base, n);
+            n += 1;
+        }
+        candidate
+    }
+
     pub fn remove_page(&self, page_id: &str) -> Result<(), OriginError> {
         let mut state = self.load_state();
 
         if let Some(entry) = state.pages.remove(page_id) {
             let file_path = self.path.join(&entry.file);
+            // Delete the file *before* persisting state. If the file remove
+            // fails we keep the state entry so the daemon can retry; if the
+            // state save fails we have at most a stale empty entry pointing
+            // at a missing file (detectable, recoverable) instead of an
+            // orphan file with no DB or state reference.
             if file_path.exists() {
                 std::fs::remove_file(&file_path)?;
             }

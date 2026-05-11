@@ -2023,15 +2023,38 @@ pub async fn handle_archive_page(
 }
 
 /// DELETE /api/pages/{id}
+///
+/// Removes both the DB row and the projected `.origin/pages/<slug>.md`
+/// file. DB-first so a transient md removal failure leaves a stale file
+/// (cheap to clean up) rather than a stranded DB row (invisible to the
+/// user). The md side failing is logged but not surfaced as an error —
+/// the caller's intent (delete the page) succeeded as far as queries
+/// are concerned.
 pub async fn handle_delete_page(
     State(state): State<Arc<RwLock<ServerState>>>,
     Path(id): Path<String>,
 ) -> Result<Json<serde_json::Value>, ServerError> {
-    let s = state.read().await;
-    let db = s.db.as_ref().ok_or(ServerError::DbNotInitialized)?;
+    let db = {
+        let s = state.read().await;
+        s.db.as_ref()
+            .cloned()
+            .ok_or(ServerError::DbNotInitialized)?
+    };
+
     db.delete_page(&id)
         .await
         .map_err(|e| ServerError::SearchFailed(e.to_string()))?;
+
+    let knowledge_path = origin_core::config::load_config().knowledge_path_or_default();
+    let writer = origin_core::export::knowledge::KnowledgeWriter::new(knowledge_path);
+    if let Err(e) = writer.remove_page(&id) {
+        tracing::warn!(
+            "[page] DB row deleted but md projection cleanup failed for {}: {}",
+            id,
+            e
+        );
+    }
+
     Ok(Json(serde_json::json!({"status": "deleted"})))
 }
 
@@ -2050,27 +2073,78 @@ pub async fn handle_search_pages(
 }
 
 /// POST /api/pages
+///
+/// Atomic md-first + DB-index. The `.origin/pages/<slug>.md` file is the
+/// human-readable canonical form; the DB row is the hybrid index over it.
+/// If the DB insert fails after the md write succeeds, the md file is
+/// removed so the two stores stay consistent.
 pub async fn handle_create_page(
     State(state): State<Arc<RwLock<ServerState>>>,
     Json(req): Json<CreateConceptRequest>,
 ) -> Result<Json<serde_json::Value>, ServerError> {
-    let s = state.read().await;
-    let db = s.db.as_ref().ok_or(ServerError::DbNotInitialized)?;
+    let db = {
+        let s = state.read().await;
+        s.db.as_ref()
+            .cloned()
+            .ok_or(ServerError::DbNotInitialized)?
+    };
+
     let id = origin_core::pages::new_page_id();
     let now = chrono::Utc::now().to_rfc3339();
+    let knowledge_path = origin_core::config::load_config().knowledge_path_or_default();
+
+    let page = origin_core::pages::Page {
+        id: id.clone(),
+        title: req.title.clone(),
+        summary: req.summary.clone(),
+        content: req.content.clone(),
+        entity_id: req.entity_id.clone(),
+        domain: req.domain.clone(),
+        source_memory_ids: req.source_memory_ids.clone(),
+        version: 1,
+        status: "active".to_string(),
+        created_at: now.clone(),
+        last_compiled: now.clone(),
+        last_modified: now.clone(),
+        sources_updated_count: 0,
+        stale_reason: None,
+        user_edited: false,
+        relevance_score: 0.0,
+    };
+
+    // 1. md-first
+    let writer = origin_core::export::knowledge::KnowledgeWriter::new(knowledge_path);
+    writer
+        .write_page(&page)
+        .map_err(|e| ServerError::IngestFailed(format!("write_page: {}", e)))?;
+
+    // 2. DB index
     let source_refs: Vec<&str> = req.source_memory_ids.iter().map(|s| s.as_str()).collect();
-    db.insert_page(
-        &id,
-        &req.title,
-        req.summary.as_deref(),
-        &req.content,
-        req.entity_id.as_deref(),
-        req.domain.as_deref(),
-        &source_refs,
-        &now,
-    )
-    .await
-    .map_err(|e| ServerError::IngestFailed(e.to_string()))?;
+    if let Err(e) = db
+        .insert_page(
+            &id,
+            &req.title,
+            req.summary.as_deref(),
+            &req.content,
+            req.entity_id.as_deref(),
+            req.domain.as_deref(),
+            &source_refs,
+            &now,
+        )
+        .await
+    {
+        // Roll back the md file so the two stores stay consistent. Log any
+        // rollback failure loudly — if the state save itself fails mid-
+        // rollback we want it surfaced, not silently swallowed.
+        if let Err(rb) = writer.remove_page(&id) {
+            tracing::warn!(
+                "[page] DB insert failed and md rollback also failed for {}: db_err={}, rollback_err={}",
+                id, e, rb
+            );
+        }
+        return Err(ServerError::IngestFailed(e.to_string()));
+    }
+
     Ok(Json(serde_json::json!({ "id": id })))
 }
 

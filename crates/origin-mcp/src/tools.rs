@@ -140,9 +140,10 @@ pub struct ForgetParams {
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct DistillParams {
     #[schemars(
-        description = "Optional page ID. If provided, re-distills only that page from its current sources. If omitted, runs a full distillation pass over any clusters with new sources."
+        description = "Optional target scope. Accepts a page id (`page_*` or `concept_*`) to re-distill that single page, an entity name (e.g. `Origin`, `Alice`) to scope clustering to that entity, or a domain value (e.g. `work`, `personal`) to scope to that domain. Omit for a full pass over any clusters with new sources. The daemon resolves the string and falls back with a hint payload if nothing matches."
     )]
-    pub page_id: Option<String>,
+    #[serde(default, alias = "page_id")]
+    pub target: Option<String>,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
@@ -160,6 +161,98 @@ pub struct ConfirmMemoryParams {
         description = "The source_id of the memory to confirm. Get this from list_pending or recall results."
     )]
     pub memory_id: String,
+}
+
+// --- Knowledge graph CRUD params ---
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct CreateEntityParams {
+    #[schemars(
+        description = "Canonical entity name (e.g. 'Alice', 'Origin', 'PostgreSQL'). Use the exact, full name — aliases resolve to this canonical form."
+    )]
+    pub name: String,
+    #[schemars(
+        description = "Entity category: 'person', 'project', 'tool', 'place', 'organization', etc. Free-form string; choose the noun that best describes what it is."
+    )]
+    pub entity_type: String,
+    #[schemars(description = "Topic scope (e.g. 'work', 'origin'). Optional.")]
+    pub domain: Option<String>,
+    #[schemars(
+        description = "0.0-1.0 confidence in the entity assertion. Leave unset for caller-default."
+    )]
+    pub confidence: Option<f32>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct CreateRelationParams {
+    #[schemars(
+        description = "Canonical name of the source entity (e.g. 'Alice'). Must exist or will be created on the daemon side."
+    )]
+    pub from_entity: String,
+    #[schemars(
+        description = "Canonical name of the target entity (e.g. 'Origin'). Must exist or will be created on the daemon side."
+    )]
+    pub to_entity: String,
+    #[schemars(
+        description = "Verb describing the directed relation (e.g. 'works_on', 'prefers', 'uses', 'depends_on'). Snake_case, present-tense."
+    )]
+    pub relation_type: String,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct CreatePageParams {
+    #[schemars(
+        description = "Short noun phrase that names the page (e.g. 'Origin daemon architecture')."
+    )]
+    pub title: String,
+    #[schemars(
+        description = "Markdown body — 3-7 paragraphs of wiki prose with [[wikilinks]]. Cite source ids inline as (source: mem_XXX)."
+    )]
+    pub content: String,
+    #[schemars(description = "Optional one-sentence summary — the durable claim.")]
+    pub summary: Option<String>,
+    #[schemars(
+        description = "Optional entity_id (e.g. 'ent_abc') to anchor the page to a knowledge-graph entity."
+    )]
+    pub entity_id: Option<String>,
+    #[schemars(description = "Topic scope (e.g. 'origin', 'work'). Optional.")]
+    pub domain: Option<String>,
+    #[schemars(
+        description = "Memory source_ids the page is distilled from. Required for traceability."
+    )]
+    #[serde(default)]
+    pub source_memory_ids: Vec<String>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct DeletePageParams {
+    #[schemars(
+        description = "Page id (e.g. 'page_abc' or legacy 'concept_abc'). Get it from get_page or distill output."
+    )]
+    pub page_id: String,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct GetPageParams {
+    #[schemars(
+        description = "Page id (e.g. 'page_abc' or legacy 'concept_abc'). For title-based lookup, search via recall or the daemon's /api/pages/search."
+    )]
+    pub page_id: String,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct ListMemoriesParams {
+    #[schemars(
+        description = "Filter by memory type (e.g. 'fact', 'preference', 'decision'). Optional."
+    )]
+    pub memory_type: Option<String>,
+    #[schemars(description = "Filter by topic/domain. Optional.")]
+    pub domain: Option<String>,
+    #[schemars(
+        description = "Max results, default 100. Increase for bulk listings, decrease for quick scans."
+    )]
+    #[serde(default, deserialize_with = "deserialize_optional_usize_lenient")]
+    pub limit: Option<usize>,
 }
 
 // ===== Internal Implementations =====
@@ -469,21 +562,35 @@ impl OriginMcpServer {
     }
 
     pub async fn distill_impl(&self, params: DistillParams) -> Result<CallToolResult, McpError> {
-        let path = match params.page_id.as_deref() {
-            Some(id) if !id.is_empty() => format!("/api/distill/{}", id),
-            _ => "/api/distill".to_string(),
+        let body = match params.target.as_deref() {
+            Some(t) if !t.is_empty() => serde_json::json!({ "target": t }),
+            _ => serde_json::json!({}),
         };
         match self
             .client
-            .post::<serde_json::Value, serde_json::Value>(&path, &serde_json::json!({}))
+            .post::<serde_json::Value, serde_json::Value>("/api/distill", &body)
             .await
         {
-            Ok(_) => Ok(CallToolResult::success(vec![Content::text(
-                match params.page_id {
-                    Some(id) => format!("Re-distilled page {}.", id),
-                    None => "Distillation pass triggered.".to_string(),
-                },
-            )])),
+            Ok(resp) => {
+                if let Some(unresolved) = resp.get("unresolved").and_then(|v| v.as_str()) {
+                    let hint = resp
+                        .get("hint")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("no matching target");
+                    return Ok(CallToolResult::success(vec![Content::text(format!(
+                        "Could not resolve target `{}`. {}",
+                        unresolved, hint
+                    ))]));
+                }
+                // Return the daemon's structured response verbatim. The caller
+                // (agent in Claude Code, Cursor, etc.) reads `pending` from the
+                // payload, synthesizes each cluster in-session, and POSTs the
+                // resulting pages back to /api/pages. The MCP tool stays as a
+                // thin wrapper; the synthesis lives where the LLM is.
+                let pretty =
+                    serde_json::to_string_pretty(&resp).unwrap_or_else(|_| resp.to_string());
+                Ok(CallToolResult::success(vec![Content::text(pretty)]))
+            }
             Err(e) => Ok(tool_error(e, "distill")),
         }
     }
@@ -522,6 +629,133 @@ impl OriginMcpServer {
             ))])),
             Err(e) => Ok(tool_error(e, "confirm_memory")),
         }
+    }
+
+    pub async fn create_entity_impl(
+        &self,
+        params: CreateEntityParams,
+    ) -> Result<CallToolResult, McpError> {
+        let source_agent = self.resolve_source_agent(None);
+        let req = CreateEntityRequest {
+            name: params.name,
+            entity_type: params.entity_type,
+            domain: params.domain,
+            source_agent,
+            confidence: params.confidence,
+        };
+        let resp: CreateEntityResponse = match self.client.post("/api/memory/entities", &req).await
+        {
+            Ok(r) => r,
+            Err(e) => return Ok(tool_error(e, "create_entity")),
+        };
+        Ok(CallToolResult::success(vec![Content::text(format!(
+            "Created entity {}",
+            resp.id
+        ))]))
+    }
+
+    pub async fn create_relation_impl(
+        &self,
+        params: CreateRelationParams,
+    ) -> Result<CallToolResult, McpError> {
+        let source_agent = self.resolve_source_agent(None);
+        let req = CreateRelationRequest {
+            from_entity: params.from_entity,
+            to_entity: params.to_entity,
+            relation_type: params.relation_type,
+            source_agent,
+        };
+        let resp: CreateRelationResponse =
+            match self.client.post("/api/memory/relations", &req).await {
+                Ok(r) => r,
+                Err(e) => return Ok(tool_error(e, "create_relation")),
+            };
+        Ok(CallToolResult::success(vec![Content::text(format!(
+            "Created relation {}",
+            resp.id
+        ))]))
+    }
+
+    pub async fn create_page_impl(
+        &self,
+        params: CreatePageParams,
+    ) -> Result<CallToolResult, McpError> {
+        let req = CreateConceptRequest {
+            title: params.title,
+            content: params.content,
+            summary: params.summary,
+            entity_id: params.entity_id,
+            domain: params.domain,
+            source_memory_ids: params.source_memory_ids,
+        };
+        let resp: serde_json::Value = match self.client.post("/api/pages", &req).await {
+            Ok(r) => r,
+            Err(e) => return Ok(tool_error(e, "create_page")),
+        };
+        let id = resp
+            .get("id")
+            .and_then(|v| v.as_str())
+            .unwrap_or("(unknown)");
+        Ok(CallToolResult::success(vec![Content::text(format!(
+            "Created page {}",
+            id
+        ))]))
+    }
+
+    pub async fn delete_page_impl(&self, page_id: &str) -> Result<CallToolResult, McpError> {
+        if self.transport == TransportMode::Http {
+            return Ok(CallToolResult::error(vec![Content::text(
+                "Delete operations are not available over remote connections. \
+                 Use local MCP on the machine running Origin to delete pages."
+                    .to_string(),
+            )]));
+        }
+
+        let path = format!("/api/pages/{}", page_id);
+        let resp: serde_json::Value = match self.client.delete(&path).await {
+            Ok(r) => r,
+            Err(e) => return Ok(tool_error(e, "delete_page")),
+        };
+        let status = resp
+            .get("status")
+            .and_then(|v| v.as_str())
+            .unwrap_or("deleted");
+        Ok(CallToolResult::success(vec![Content::text(format!(
+            "Page {} {}",
+            page_id, status
+        ))]))
+    }
+
+    pub async fn get_page_impl(&self, page_id: &str) -> Result<CallToolResult, McpError> {
+        let path = format!("/api/pages/{}", page_id);
+        let resp: serde_json::Value = match self.client.get(&path).await {
+            Ok(r) => r,
+            Err(e) => return Ok(tool_error(e, "get_page")),
+        };
+        let pretty = serde_json::to_string_pretty(&resp).unwrap_or_else(|_| resp.to_string());
+        Ok(CallToolResult::success(vec![Content::text(pretty)]))
+    }
+
+    pub async fn list_memories_impl(
+        &self,
+        params: ListMemoriesParams,
+    ) -> Result<CallToolResult, McpError> {
+        let req = ListMemoriesRequest {
+            memory_type: params.memory_type,
+            domain: params.domain,
+            limit: params.limit.unwrap_or(100),
+        };
+        let resp: ListMemoriesResponse = match self.client.post("/api/memory/list", &req).await {
+            Ok(r) => r,
+            Err(e) => return Ok(tool_error(e, "list_memories")),
+        };
+        let pretty = serde_json::to_string_pretty(&resp.memories)
+            .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+        Ok(CallToolResult::success(vec![Content::text(format!(
+            "{} memories\n{}",
+            resp.memories.len(),
+            pretty
+        ))]))
     }
 }
 
@@ -612,7 +846,7 @@ impl OriginMcpServer {
     }
 
     #[tool(
-        description = "Trigger Origin's distillation pass. With no `page_id`, runs a full pass that clusters new memories into pages and refreshes the wiki view. With a `page_id`, re-distills that single page from its current sources. Use when the user explicitly asks to synthesize, distill, or rebuild a page. The daemon also runs distillation periodically in the background, so don't trigger redundantly during normal flow.",
+        description = "Trigger Origin's distillation pass. With no `target`, runs a full pass that clusters new memories into pages and refreshes the wiki view. With a `target`, scopes the pass: a page id (`page_*` or `concept_*`) re-distills that single page, an entity name scopes clustering to that entity, a domain value scopes to that domain. Use when the user explicitly asks to synthesize, distill, or rebuild a page. The daemon also runs distillation periodically in the background, so don't trigger redundantly during normal flow.",
         annotations(
             title = "Distill",
             read_only_hint = false,
@@ -654,6 +888,102 @@ impl OriginMcpServer {
         Parameters(params): Parameters<ConfirmMemoryParams>,
     ) -> Result<CallToolResult, McpError> {
         self.confirm_memory_impl(&params.memory_id).await
+    }
+
+    // --- Knowledge graph CRUD ---
+
+    #[tool(
+        description = "Create an entity in the knowledge graph. Use when the user names a person, project, tool, or place that isn't yet linked, or when you need a stable id to anchor memories or pages to. The daemon's post-ingest enrichment usually creates entities automatically when an LLM is configured — call this explicitly only when there is no LLM (Basic Memory mode) or you need the id back synchronously.",
+        annotations(
+            title = "Create entity",
+            read_only_hint = false,
+            destructive_hint = false,
+            idempotent_hint = false,
+            open_world_hint = false
+        )
+    )]
+    async fn create_entity(
+        &self,
+        Parameters(params): Parameters<CreateEntityParams>,
+    ) -> Result<CallToolResult, McpError> {
+        self.create_entity_impl(params).await
+    }
+
+    #[tool(
+        description = "Create a directed relation between two entities in the knowledge graph. Use sparingly — most relations come out of the daemon's enrichment when an LLM is configured. Call this explicitly to record a relation the user articulated that the daemon couldn't infer, or in Basic Memory mode where extraction does not run.",
+        annotations(
+            title = "Create relation",
+            read_only_hint = false,
+            destructive_hint = false,
+            idempotent_hint = false,
+            open_world_hint = false
+        )
+    )]
+    async fn create_relation(
+        &self,
+        Parameters(params): Parameters<CreateRelationParams>,
+    ) -> Result<CallToolResult, McpError> {
+        self.create_relation_impl(params).await
+    }
+
+    #[tool(
+        description = "Create a distilled wiki page from a memory cluster. The /distill flow uses this to post agent-synthesized pages back to the daemon. Provide a markdown body with [[wikilinks]] and inline (source: mem_XXX) citations. Pass the source memory ids so the page stays traceable. The daemon writes both the DB row and the on-disk .origin/pages/<slug>.md projection atomically.",
+        annotations(
+            title = "Create page",
+            read_only_hint = false,
+            destructive_hint = false,
+            idempotent_hint = false,
+            open_world_hint = false
+        )
+    )]
+    async fn create_page(
+        &self,
+        Parameters(params): Parameters<CreatePageParams>,
+    ) -> Result<CallToolResult, McpError> {
+        self.create_page_impl(params).await
+    }
+
+    #[tool(
+        description = "Delete a page by id. Destructive — removes both the DB row and the on-disk md projection. Use during a /distill refresh to drop a stale page before creating its replacement, or when the user explicitly asks to remove a page. Pages without sources can be re-derived by running /distill again on the same scope.",
+        annotations(
+            title = "Delete page",
+            read_only_hint = false,
+            destructive_hint = true,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
+    )]
+    async fn delete_page(
+        &self,
+        Parameters(params): Parameters<DeletePageParams>,
+    ) -> Result<CallToolResult, McpError> {
+        self.delete_page_impl(&params.page_id).await
+    }
+
+    #[tool(
+        description = "Fetch a page by id. Returns the full page row including title, summary, body, source memory ids, and metadata. The /read skill uses this for the preview block — agents reading a page should call this rather than guessing the on-disk path, because the md slug is daemon-controlled.",
+        annotations(title = "Get page", read_only_hint = true, open_world_hint = false)
+    )]
+    async fn get_page(
+        &self,
+        Parameters(params): Parameters<GetPageParams>,
+    ) -> Result<CallToolResult, McpError> {
+        self.get_page_impl(&params.page_id).await
+    }
+
+    #[tool(
+        description = "List memories filtered by type and/or domain. Returns the raw memory rows — useful for bulk review, type audits, or feeding a downstream tool. For semantic search use recall; for orientation use context. This is the listing path: predictable order, no relevance ranking.",
+        annotations(
+            title = "List memories",
+            read_only_hint = true,
+            open_world_hint = false
+        )
+    )]
+    async fn list_memories(
+        &self,
+        Parameters(params): Parameters<ListMemoriesParams>,
+    ) -> Result<CallToolResult, McpError> {
+        self.list_memories_impl(params).await
     }
 }
 
@@ -1853,6 +2183,366 @@ mod tests {
         assert!(
             params_schema.contains("knowledge"),
             "RecallParams.memory_type must mention knowledge alias"
+        );
+    }
+
+    // ===== Knowledge graph / page CRUD =====
+
+    // --- CreateEntityParams ---
+
+    #[test]
+    fn test_create_entity_params_minimal() {
+        let json = r#"{"name": "Alice", "entity_type": "person"}"#;
+        let params: CreateEntityParams = serde_json::from_str(json).unwrap();
+        assert_eq!(params.name, "Alice");
+        assert_eq!(params.entity_type, "person");
+        assert!(params.domain.is_none());
+        assert!(params.confidence.is_none());
+    }
+
+    #[test]
+    fn test_create_entity_params_full() {
+        let json = r#"{
+            "name": "PostgreSQL",
+            "entity_type": "tool",
+            "domain": "origin",
+            "confidence": 0.9
+        }"#;
+        let params: CreateEntityParams = serde_json::from_str(json).unwrap();
+        assert_eq!(params.name, "PostgreSQL");
+        assert_eq!(params.entity_type, "tool");
+        assert_eq!(params.domain.as_deref(), Some("origin"));
+        assert_eq!(params.confidence, Some(0.9));
+    }
+
+    #[test]
+    fn test_create_entity_params_missing_name_fails() {
+        let json = r#"{"entity_type": "person"}"#;
+        let result = serde_json::from_str::<CreateEntityParams>(json);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_create_entity_params_missing_type_fails() {
+        let json = r#"{"name": "Alice"}"#;
+        let result = serde_json::from_str::<CreateEntityParams>(json);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_create_entity_request_body_shape() {
+        let server = make_server(TransportMode::Stdio, "claude", None);
+        let params = CreateEntityParams {
+            name: "Origin".into(),
+            entity_type: "project".into(),
+            domain: Some("origin".into()),
+            confidence: Some(0.95),
+        };
+        let source_agent = server.resolve_source_agent(None);
+        let req = CreateEntityRequest {
+            name: params.name,
+            entity_type: params.entity_type,
+            domain: params.domain,
+            source_agent,
+            confidence: params.confidence,
+        };
+        let json = serde_json::to_value(&req).unwrap();
+        assert_eq!(json["name"], "Origin");
+        assert_eq!(json["entity_type"], "project");
+        assert_eq!(json["domain"], "origin");
+        assert_eq!(json["source_agent"], "claude");
+        assert!(json["confidence"].as_f64().unwrap() > 0.94);
+    }
+
+    // --- CreateRelationParams ---
+
+    #[test]
+    fn test_create_relation_params() {
+        let json = r#"{
+            "from_entity": "Alice",
+            "to_entity": "Origin",
+            "relation_type": "works_on"
+        }"#;
+        let params: CreateRelationParams = serde_json::from_str(json).unwrap();
+        assert_eq!(params.from_entity, "Alice");
+        assert_eq!(params.to_entity, "Origin");
+        assert_eq!(params.relation_type, "works_on");
+    }
+
+    #[test]
+    fn test_create_relation_params_missing_field_fails() {
+        let json = r#"{"from_entity": "Alice", "to_entity": "Origin"}"#;
+        let result = serde_json::from_str::<CreateRelationParams>(json);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_create_relation_request_body_shape() {
+        let server = make_server(TransportMode::Stdio, "claude", None);
+        let params = CreateRelationParams {
+            from_entity: "Alice".into(),
+            to_entity: "Origin".into(),
+            relation_type: "prefers".into(),
+        };
+        let source_agent = server.resolve_source_agent(None);
+        let req = CreateRelationRequest {
+            from_entity: params.from_entity,
+            to_entity: params.to_entity,
+            relation_type: params.relation_type,
+            source_agent,
+        };
+        let json = serde_json::to_value(&req).unwrap();
+        assert_eq!(json["from_entity"], "Alice");
+        assert_eq!(json["to_entity"], "Origin");
+        assert_eq!(json["relation_type"], "prefers");
+        assert_eq!(json["source_agent"], "claude");
+    }
+
+    // --- CreatePageParams ---
+
+    #[test]
+    fn test_create_page_params_minimal() {
+        let json = r#"{"title": "Origin daemon", "content": "Body text."}"#;
+        let params: CreatePageParams = serde_json::from_str(json).unwrap();
+        assert_eq!(params.title, "Origin daemon");
+        assert_eq!(params.content, "Body text.");
+        assert!(params.summary.is_none());
+        assert!(params.entity_id.is_none());
+        assert!(params.domain.is_none());
+        assert!(params.source_memory_ids.is_empty());
+    }
+
+    #[test]
+    fn test_create_page_params_full() {
+        let json = r##"{
+            "title": "Origin daemon",
+            "content": "Markdown body with [[wikilinks]].",
+            "summary": "The headless HTTP daemon at the heart of Origin.",
+            "entity_id": "ent_origin",
+            "domain": "origin",
+            "source_memory_ids": ["mem_1", "mem_2"]
+        }"##;
+        let params: CreatePageParams = serde_json::from_str(json).unwrap();
+        assert_eq!(params.title, "Origin daemon");
+        assert_eq!(
+            params.summary.as_deref(),
+            Some("The headless HTTP daemon at the heart of Origin.")
+        );
+        assert_eq!(params.entity_id.as_deref(), Some("ent_origin"));
+        assert_eq!(params.domain.as_deref(), Some("origin"));
+        assert_eq!(params.source_memory_ids, vec!["mem_1", "mem_2"]);
+    }
+
+    #[test]
+    fn test_create_page_params_missing_required_fails() {
+        let json = r#"{"title": "Only title"}"#;
+        let result = serde_json::from_str::<CreatePageParams>(json);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_create_page_request_body_shape() {
+        let params = CreatePageParams {
+            title: "Page".into(),
+            content: "Body".into(),
+            summary: Some("S".into()),
+            entity_id: Some("ent_1".into()),
+            domain: Some("origin".into()),
+            source_memory_ids: vec!["mem_1".into()],
+        };
+        let req = CreateConceptRequest {
+            title: params.title,
+            content: params.content,
+            summary: params.summary,
+            entity_id: params.entity_id,
+            domain: params.domain,
+            source_memory_ids: params.source_memory_ids,
+        };
+        let json = serde_json::to_value(&req).unwrap();
+        assert_eq!(json["title"], "Page");
+        assert_eq!(json["content"], "Body");
+        assert_eq!(json["summary"], "S");
+        assert_eq!(json["entity_id"], "ent_1");
+        assert_eq!(json["domain"], "origin");
+        assert_eq!(json["source_memory_ids"], serde_json::json!(["mem_1"]));
+    }
+
+    // --- DeletePageParams ---
+
+    #[test]
+    fn test_delete_page_params() {
+        let json = r#"{"page_id": "page_abc"}"#;
+        let params: DeletePageParams = serde_json::from_str(json).unwrap();
+        assert_eq!(params.page_id, "page_abc");
+    }
+
+    #[test]
+    fn test_delete_page_params_missing_fails() {
+        let json = r#"{}"#;
+        let result = serde_json::from_str::<DeletePageParams>(json);
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_delete_page_blocked_on_http_transport() {
+        let server = make_server(TransportMode::Http, "agent", None);
+        let result = server.delete_page_impl("page_123").await.unwrap();
+        let content = &result.content[0];
+        match content.raw {
+            rmcp::model::RawContent::Text(ref tc) => {
+                assert!(tc.text.contains("not available over remote connections"));
+            }
+            _ => panic!("expected text content"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_delete_page_allowed_on_stdio_transport() {
+        // No daemon running → falls through to connection error (not transport block).
+        let server = make_server(TransportMode::Stdio, "agent", None);
+        let result = server.delete_page_impl("page_123").await.unwrap();
+        assert!(
+            result.is_error.unwrap_or(false),
+            "should fail with connection error, not transport block"
+        );
+    }
+
+    // --- GetPageParams ---
+
+    #[test]
+    fn test_get_page_params() {
+        let json = r#"{"page_id": "page_abc"}"#;
+        let params: GetPageParams = serde_json::from_str(json).unwrap();
+        assert_eq!(params.page_id, "page_abc");
+    }
+
+    #[test]
+    fn test_get_page_params_missing_fails() {
+        let json = r#"{}"#;
+        let result = serde_json::from_str::<GetPageParams>(json);
+        assert!(result.is_err());
+    }
+
+    // --- ListMemoriesParams ---
+
+    #[test]
+    fn test_list_memories_params_empty() {
+        let json = r#"{}"#;
+        let params: ListMemoriesParams = serde_json::from_str(json).unwrap();
+        assert!(params.memory_type.is_none());
+        assert!(params.domain.is_none());
+        assert!(params.limit.is_none());
+    }
+
+    #[test]
+    fn test_list_memories_params_full() {
+        let json = r#"{"memory_type": "decision", "domain": "origin", "limit": 50}"#;
+        let params: ListMemoriesParams = serde_json::from_str(json).unwrap();
+        assert_eq!(params.memory_type.as_deref(), Some("decision"));
+        assert_eq!(params.domain.as_deref(), Some("origin"));
+        assert_eq!(params.limit, Some(50));
+    }
+
+    #[test]
+    fn test_list_memories_params_limit_as_string() {
+        // MCP clients sometimes serialize numeric params as strings.
+        let json = r#"{"limit": "25"}"#;
+        let params: ListMemoriesParams = serde_json::from_str(json).unwrap();
+        assert_eq!(params.limit, Some(25));
+    }
+
+    #[test]
+    fn test_list_memories_request_body_shape() {
+        let params = ListMemoriesParams {
+            memory_type: Some("fact".into()),
+            domain: None,
+            limit: Some(10),
+        };
+        let req = ListMemoriesRequest {
+            memory_type: params.memory_type,
+            domain: params.domain,
+            limit: params.limit.unwrap_or(100),
+        };
+        let json = serde_json::to_value(&req).unwrap();
+        assert_eq!(json["memory_type"], "fact");
+        assert!(json["domain"].is_null());
+        assert_eq!(json["limit"], 10);
+    }
+
+    #[test]
+    fn test_list_memories_request_default_limit() {
+        let params = ListMemoriesParams {
+            memory_type: None,
+            domain: None,
+            limit: None,
+        };
+        let req = ListMemoriesRequest {
+            memory_type: params.memory_type,
+            domain: params.domain,
+            limit: params.limit.unwrap_or(100),
+        };
+        assert_eq!(req.limit, 100);
+    }
+
+    // --- Tool registration ---
+
+    #[test]
+    fn new_crud_tools_are_registered() {
+        let descriptions = tool_descriptions();
+        for name in [
+            "create_entity",
+            "create_relation",
+            "create_page",
+            "delete_page",
+            "get_page",
+            "list_memories",
+        ] {
+            assert!(
+                descriptions.contains_key(name),
+                "tool `{name}` must be registered, got: {:?}",
+                descriptions.keys().collect::<Vec<_>>()
+            );
+        }
+    }
+
+    #[test]
+    fn create_entity_schema_documents_name_and_type() {
+        let schema = serde_json::to_string(&schemars::schema_for!(CreateEntityParams))
+            .expect("CreateEntityParams schema serializes");
+        assert!(
+            schema.contains("Canonical entity name"),
+            "schema must describe `name` field"
+        );
+        assert!(
+            schema.contains("Entity category"),
+            "schema must describe `entity_type` field"
+        );
+    }
+
+    #[test]
+    fn create_page_schema_documents_traceability() {
+        let schema = serde_json::to_string(&schemars::schema_for!(CreatePageParams))
+            .expect("CreatePageParams schema serializes");
+        assert!(
+            schema.contains("traceability"),
+            "schema must spell out why source_memory_ids matter"
+        );
+    }
+
+    #[test]
+    fn delete_page_tool_is_marked_destructive() {
+        let server = make_server(TransportMode::Stdio, "test", None);
+        let tool = server
+            .tool_router
+            .list_all()
+            .into_iter()
+            .find(|t| t.name == "delete_page")
+            .expect("delete_page registered");
+        let ann = tool.annotations.as_ref().expect("annotations present");
+        assert_eq!(
+            ann.destructive_hint,
+            Some(true),
+            "delete_page must declare destructive_hint=true"
         );
     }
 }

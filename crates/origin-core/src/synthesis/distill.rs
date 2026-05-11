@@ -16,6 +16,48 @@ use crate::refinery::helpers::{
 use crate::sources::StabilityTier;
 use std::sync::Arc;
 
+/// What a distillation pass is scoped to. Resolved from a free-form string
+/// supplied by the user (page id, entity name, or domain value).
+#[derive(Debug, Clone)]
+pub enum DistillTarget {
+    /// Existing page — re-distill from its current sources.
+    Page(String),
+    /// Scope clustering to memories belonging to one entity.
+    Entity { id: String, name: String },
+    /// Scope clustering to memories with a given domain.
+    Domain(String),
+}
+
+/// Resolve a free-form target string into a `DistillTarget`.
+///
+/// Resolution order:
+/// 1. Strings starting with `page_` or `concept_` are treated as page ids.
+/// 2. Exact entity name match (via `MemoryDB::resolve_entity_by_name`).
+/// 3. Exact domain match (any memory with that domain).
+/// 4. Otherwise `None` — caller decides whether to fail loudly or fall through.
+pub async fn resolve_distill_target(
+    db: &MemoryDB,
+    raw: &str,
+) -> Result<Option<DistillTarget>, OriginError> {
+    let s = raw.trim();
+    if s.is_empty() {
+        return Ok(None);
+    }
+    if s.starts_with("page_") || s.starts_with("concept_") {
+        return Ok(Some(DistillTarget::Page(s.to_string())));
+    }
+    if let Some(id) = db.resolve_entity_by_name(s).await? {
+        return Ok(Some(DistillTarget::Entity {
+            id,
+            name: s.to_string(),
+        }));
+    }
+    if db.domain_has_memories(s).await? {
+        return Ok(Some(DistillTarget::Domain(s.to_string())));
+    }
+    Ok(None)
+}
+
 /// LLM cluster refinement: for entities with multiple clusters, ask the LLM to merge/split/rename.
 pub(crate) async fn refine_clusters_with_llm(
     llm: &Arc<dyn LlmProvider>,
@@ -203,26 +245,49 @@ pub(crate) async fn distill_one_cluster(
     prompts: &PromptRegistry,
     cluster: &crate::db::DistillationCluster,
     knowledge_writer: Option<&crate::export::knowledge::KnowledgeWriter>,
-) -> Result<bool, OriginError> {
+) -> Result<Option<String>, OriginError> {
     let topic = cluster
         .entity_name
         .as_deref()
         .or(cluster.domain.as_deref())
         .unwrap_or("general");
 
-    // Skip if a page with very similar sources already exists (Jaccard > 0.8)
-    // Memories CAN appear in multiple concepts — this only prevents duplicate concepts
-    let overlap = db
-        .max_page_overlap(&cluster.source_ids)
-        .await
-        .unwrap_or(0.0);
-    if overlap > 0.8 {
-        log::info!(
-            "[emergence] cluster '{}' overlaps {:.0}% with existing page, skipping",
-            topic,
-            overlap * 100.0
-        );
-        return Ok(false);
+    // Find the existing page that overlaps this cluster the most. Memories
+    // can appear in multiple pages; the check below only prevents duplicate
+    // pages, not duplicate sources.
+    let overlap_match = db.find_best_overlapping_page(&cluster.source_ids).await?;
+    if let Some(ref m) = overlap_match {
+        let cluster_size = cluster.source_ids.len();
+        let covered = m.intersection >= cluster_size || m.jaccard >= 0.8;
+        if covered {
+            log::info!(
+                "[emergence] cluster '{}' already covered by page '{}' ({} of {} memories, Jaccard {:.2}), skipping",
+                topic,
+                m.page_title,
+                m.intersection,
+                cluster_size,
+                m.jaccard
+            );
+            return Ok(None);
+        }
+        if m.intersection > 0 {
+            // Partial overlap: page is stale relative to this cluster.
+            // Don't emit a new page — that would be a duplicate carrying
+            // different memories. Set stale_reason = "source_updated" so
+            // re_distill_stale_pages picks the page up on the next sweep.
+            // (increment_page_sources_updated bumps a counter nothing
+            // reads; the actual refresh trigger is the stale_reason flag.)
+            if let Err(e) = db.set_page_stale(&m.page_id, "source_updated").await {
+                log::warn!("[emergence] could not mark page {} stale: {}", m.page_id, e);
+            }
+            log::info!(
+                "[emergence] cluster '{}' partially overlaps page '{}' ({} new memories) — marked page stale for refresh, skipping new-page synth",
+                topic,
+                m.page_title,
+                cluster_size - m.intersection
+            );
+            return Ok(None);
+        }
     }
 
     // Clean input: strip recap headers, domain prefixes, and structured field noise
@@ -271,7 +336,7 @@ pub(crate) async fn distill_one_cluster(
             total_content_chars,
             topic
         );
-        return Ok(false);
+        return Ok(None);
     }
 
     log::info!(
@@ -320,7 +385,7 @@ pub(crate) async fn distill_one_cluster(
 
             if content.is_empty() {
                 log::warn!("[distill] empty output for topic='{}', skipping", topic);
-                return Ok(false);
+                return Ok(None);
             }
 
             // Hallucination check: output must be semantically similar to input
@@ -334,7 +399,7 @@ pub(crate) async fn distill_one_cluster(
                             sim,
                             topic
                         );
-                        return Ok(false);
+                        return Ok(None);
                     }
                     log::info!(
                         "[compile] quality check passed (sim={:.2}) for topic='{}'",
@@ -362,7 +427,7 @@ pub(crate) async fn distill_one_cluster(
                         "[distill] no title and topic='{}' is garbage, skipping cluster",
                         topic
                     );
-                    return Ok(false);
+                    return Ok(None);
                 }
                 None => topic.to_string(),
             };
@@ -420,21 +485,40 @@ pub(crate) async fn distill_one_cluster(
                 }
             }
 
-            Ok(true)
+            Ok(Some(page_id))
         }
         Ok(_) => {
             log::warn!("[distill] empty output for topic='{}'", topic);
-            Ok(false)
+            Ok(None)
         }
         Err(e) => {
             log::warn!("[distill] LLM error for topic='{}': {}", topic, e);
-            Ok(false)
+            Ok(None)
         }
     }
 }
 
+/// Outcome of a distillation pass — pages the daemon synthesized itself,
+/// plus clusters it could not finish (no LLM available, or the cluster
+/// exceeded the LLM's effective context budget). Callers with their own
+/// LLM (e.g. the agent-driven `/distill` skill) can pick up the pending
+/// clusters and finish them.
+#[derive(Debug, Clone, serde::Serialize, Default)]
+pub struct DistillResult {
+    /// Page ids the daemon synthesized + persisted itself this pass.
+    pub created: Vec<String>,
+    /// Clusters the daemon clustered but did not synthesize. Each cluster
+    /// carries the source memory ids, content snippets, and entity / domain
+    /// metadata so the caller has everything it needs to write a page and
+    /// POST back to `/api/pages`.
+    pub pending: Vec<crate::db::DistillationCluster>,
+}
+
 /// Distill memory clusters into structured concepts.
 /// Memories can appear in multiple concepts. Jaccard overlap prevents duplicate concepts.
+///
+/// Returns the count of pages the daemon synthesized itself; refer to
+/// `distill_pages_scoped` for the full `DistillResult` with `pending`.
 pub async fn distill_pages(
     db: &MemoryDB,
     llm: Option<&Arc<dyn LlmProvider>>,
@@ -442,9 +526,82 @@ pub async fn distill_pages(
     tuning: &crate::tuning::DistillationConfig,
     knowledge_path: Option<&std::path::Path>,
 ) -> Result<usize, OriginError> {
+    let r = distill_pages_scoped(db, llm, prompts, tuning, knowledge_path, None).await?;
+    Ok(r.created.len())
+}
+
+/// Same as `distill_pages` but restricts clustering to a single entity, a
+/// single domain, or (when `target` is `DistillTarget::Page`) re-distills one
+/// existing page directly. `None` matches `distill_pages` exactly.
+///
+/// Returns a `DistillResult`: pages the daemon synthesized itself plus
+/// clusters it couldn't finish (no LLM, or cluster too big for the LLM's
+/// context). The HTTP `/api/distill` route hands the `pending` list back
+/// to the caller so the agent-driven skill can synthesize the rest.
+pub async fn distill_pages_scoped(
+    db: &MemoryDB,
+    llm: Option<&Arc<dyn LlmProvider>>,
+    prompts: &PromptRegistry,
+    tuning: &crate::tuning::DistillationConfig,
+    knowledge_path: Option<&std::path::Path>,
+    target: Option<DistillTarget>,
+) -> Result<DistillResult, OriginError> {
+    if let Some(DistillTarget::Page(ref page_id)) = target {
+        let updated = deep_distill_single(db, llm, prompts, page_id).await?;
+        return Ok(DistillResult {
+            created: if updated {
+                vec![page_id.clone()]
+            } else {
+                vec![]
+            },
+            pending: vec![],
+        });
+    }
+    let (entity_id_filter, domain_filter): (Option<String>, Option<String>) = match target {
+        Some(DistillTarget::Entity { id, .. }) => (Some(id), None),
+        Some(DistillTarget::Domain(d)) => (None, Some(d)),
+        Some(DistillTarget::Page(_)) | None => (None, None),
+    };
+    // No LLM available — discover clusters and hand them back as pending
+    // so the caller (typically the /distill skill in Basic Memory mode)
+    // can finish them with its own LLM.
     let llm = match llm {
         Some(l) if l.is_available() => l,
-        _ => return Ok(0),
+        _ => {
+            // Use a generous budget so candidate discovery isn't gated by
+            // a tiny on-device window we don't have anyway.
+            let mut raw_clusters = db
+                .find_distillation_clusters_scoped(
+                    tuning.similarity_threshold,
+                    tuning.page_min_cluster_size,
+                    tuning.max_clusters_per_steep,
+                    16_000,
+                    tuning.max_unlinked_cluster_size,
+                    entity_id_filter.as_deref(),
+                    domain_filter.as_deref(),
+                )
+                .await?;
+            // Cap each memory's content snippet so the caller-facing payload
+            // doesn't balloon past practical HTTP/MCP response sizes. The
+            // synthesis path uses the same cap when building prompts; doing
+            // it at the boundary keeps both code paths consistent and bounds
+            // the worst-case pending payload to ~MEM_SNIPPET_CAP * total
+            // memories.
+            const MEM_SNIPPET_CAP: usize = 800;
+            for c in raw_clusters.iter_mut() {
+                for content in c.contents.iter_mut() {
+                    if content.chars().count() > MEM_SNIPPET_CAP {
+                        let mut truncated: String = content.chars().take(MEM_SNIPPET_CAP).collect();
+                        truncated.push('…');
+                        *content = truncated;
+                    }
+                }
+            }
+            return Ok(DistillResult {
+                created: vec![],
+                pending: raw_clusters,
+            });
+        }
     };
 
     // Each model carries its own effective synthesis limit — the max tokens it
@@ -453,12 +610,14 @@ pub async fn distill_pages(
     // if the provider returns the default (for backward compat).
     let token_limit = llm.synthesis_token_limit();
     let raw_clusters = db
-        .find_distillation_clusters(
+        .find_distillation_clusters_scoped(
             tuning.similarity_threshold,
             tuning.page_min_cluster_size,
             tuning.max_clusters_per_steep,
             token_limit,
             tuning.max_unlinked_cluster_size,
+            entity_id_filter.as_deref(),
+            domain_filter.as_deref(),
         )
         .await?;
 
@@ -471,7 +630,7 @@ pub async fn distill_pages(
         .unwrap_or(1)
         .min(4);
 
-    let mut distilled = 0usize;
+    let mut created: Vec<String> = Vec::new();
 
     // Create the writer once, outside the loop
     let knowledge_writer =
@@ -486,12 +645,15 @@ pub async fn distill_pages(
                 .collect();
             let results = futures::future::join_all(futs).await;
             for r in results {
-                if r? {
-                    distilled += 1;
+                if let Some(page_id) = r? {
+                    created.push(page_id);
                 }
             }
         }
-        return Ok(distilled);
+        return Ok(DistillResult {
+            created,
+            pending: vec![],
+        });
     }
 
     for cluster in &clusters {
@@ -684,7 +846,7 @@ pub async fn distill_pages(
                     title,
                     content.chars().take(40).collect::<String>()
                 );
-                distilled += 1;
+                created.push(page_id.clone());
 
                 // Log activity — system-attributed, since distillation is background refinery work.
                 let source_memory_ids: Vec<String> = cluster.source_ids.to_vec();
@@ -718,7 +880,10 @@ pub async fn distill_pages(
         }
     }
 
-    Ok(distilled)
+    Ok(DistillResult {
+        created,
+        pending: vec![],
+    })
 }
 
 /// Full Karpathy-style deep distill: emergence + orphans + recompile ALL + global review.
@@ -863,13 +1028,17 @@ pub(crate) async fn recompile_single_page(
     Ok(false)
 }
 
-/// Re-distill a single page by reloading all source memories and recompiling with LLM.
+/// Re-distill a single page by reloading all source memories and recompiling
+/// with the LLM. Returns `Ok(true)` when the page content was actually
+/// rewritten, `Ok(false)` when the call was a no-op (no source memories,
+/// empty LLM output) so callers can report honest counts. Returns
+/// `Err(OriginError::Llm)` only when the LLM call itself fails.
 pub async fn deep_distill_single(
     db: &MemoryDB,
     llm: Option<&Arc<dyn LlmProvider>>,
     prompts: &PromptRegistry,
     page_id: &str,
-) -> Result<(), OriginError> {
+) -> Result<bool, OriginError> {
     let llm = match llm {
         Some(l) if l.is_available() => l,
         Some(_) => {
@@ -894,7 +1063,7 @@ pub async fn deep_distill_single(
         .await?;
     if memories.is_empty() {
         log::warn!("[distill] no source memories found for page {}", page_id);
-        return Ok(());
+        return Ok(false);
     }
 
     const MEM_SNIPPET_CAP: usize = 800;
@@ -931,7 +1100,7 @@ pub async fn deep_distill_single(
 
     if content.is_empty() {
         log::warn!("[distill] empty output for page '{}', skipping", page.title);
-        return Ok(());
+        return Ok(false);
     }
 
     let source_refs: Vec<&str> = page.source_memory_ids.iter().map(|s| s.as_str()).collect();
@@ -944,7 +1113,7 @@ pub async fn deep_distill_single(
         page.version,
         page.version + 1
     );
-    Ok(())
+    Ok(true)
 }
 
 /// Apply a merge result based on the stability tier of the involved memories.

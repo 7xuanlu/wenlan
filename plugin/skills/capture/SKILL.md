@@ -5,7 +5,7 @@ description: >
   when the user states a preference, makes a decision, corrects you, or
   shares a durable fact. Invoked as `/capture <content>`.
 argument-hint: "<content>"
-allowed-tools: ["mcp__plugin_origin_origin__capture", "mcp__plugin_origin_origin__recall"]
+allowed-tools: ["mcp__plugin_origin_origin__capture", "mcp__plugin_origin_origin__recall", "mcp__plugin_origin_origin__create_entity", "mcp__plugin_origin_origin__create_relation", "Bash"]
 ---
 
 # /capture
@@ -20,18 +20,61 @@ complete, self-contained statement. Attach `topic` from cwd or the
 conversation — don't make the user type it.
 
 ```
-capture(content="<args, written as a full sentence with WHY>", topic=<inferred>)
+capture(content="<args, written as a full sentence with WHY>",
+        memory_type="<picked from the 6 types>",
+        entity="<primary entity name, if any>",
+        domain=<inferred>)
 ```
 
-`topic` inference:
+### `memory_type` — agent picks one of 6
+
+The daemon classifies when it has an LLM. In Basic Memory mode it does
+not, so the agent picks the type from the content itself. Use this
+mapping:
+
+| Type | Use for |
+|---|---|
+| `identity` | Durable facts about the user (role, company, language preference) |
+| `preference` | "I prefer X because Y" — a habit, a correction, a stylistic choice |
+| `decision` | "Going with A over B because C" — a specific choice with rationale |
+| `lesson` | Root cause found, workaround discovered, technical insight earned |
+| `gotcha` | Sharp edge, surprising behavior, a thing to watch out for |
+| `fact` | Durable info about people, projects, tools — anchor to `entity` when possible |
+
+If two types fit, pick the one closest to *why the memory matters*. A
+decision *also* implies a preference, but `decision` is more specific.
+
+### `entity` — extract the anchor
+
+Pick the single most important named thing in the content: a person,
+project, tool, place. Use the exact name. Example: "Alice prefers TDD
+because…" → `entity="Alice"`. If the content has no named anchor,
+omit `entity`.
+
+### `topic` / `domain` inference
 
 - cwd inside a repo → repo name (e.g. `~/Repos/origin/...` → `"origin"`).
 - Outside any repo → most recent topic from the conversation, or omit.
 
-The daemon auto-classifies type, extracts structured fields, detects
-entities, and links the knowledge graph. Don't set `memory_type` or
-`structured_fields` unless the content itself names them — omitting beats
-guessing wrong.
+### Multiple entities or relations
+
+The MCP `capture` tool takes a single primary `entity`. For additional
+entities or relations, use the dedicated MCP tools. If the content
+names more than one entity, capture the memory first, then for each
+additional entity:
+
+```
+create_entity(name="<entity>", entity_type="<person|project|tool|place>")
+```
+
+For a relation between two entities:
+
+```
+create_relation(from_entity="<a>", to_entity="<b>", relation_type="<verb>")
+```
+
+Skip these calls when the daemon has an LLM — its post-ingest enrichment
+covers extraction.
 
 ## What to capture
 

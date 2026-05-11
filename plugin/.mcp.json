@@ -1,8 +1,7 @@
 {
   "mcpServers": {
     "origin": {
-      "command": "npx",
-      "args": ["-y", "origin-mcp@^0.5.0"]
+      "command": "${CLAUDE_PLUGIN_ROOT}/bin/origin-mcp-runner.sh"
     }
   }
 }
