@@ -25,7 +25,7 @@ right now.
 ```
 distill(target="<inferred-domain>")    # bare /distill — agent infers cwd domain
 distill(target="<arg>")                # /distill <arg> — user supplies target
-distill()                              # explicit full pass — see below
+distill()                              # /distill deep — global deep pass (no target)
 ```
 
 ### Resolving the target
@@ -38,9 +38,19 @@ Bash: git -C "$PWD" rev-parse --show-toplevel 2>/dev/null
 
 - If output is a path → use its basename (e.g. `~/Repos/origin/...` → `origin`).
 - If not a git repo → fall back to the cwd basename.
-- If even that is empty → pass `target=None` (full pass, slow).
+- If even that is empty → call `distill()` with no `target` (full pass, slow).
 
-For `/distill <arg>`, forward `<arg>` to `target` unchanged.
+For `/distill <arg>`:
+
+- **`/distill deep`** → reserved keyword for the global deep pass. Call
+  `distill()` with **no** `target`. This is the slow Karpathy-style "let
+  the daemon cluster everything" sweep — runs the deep refinement step
+  too. Use sparingly; the background scheduler covers it on a clock.
+- **`/distill <anything else>`** → forward unchanged as `target`.
+
+If a user has an entity or domain literally named `deep`, they need to
+disambiguate (e.g. quote it or use the exact entity id). That's a price
+worth paying for a single short verb.
 
 ### How the daemon resolves `target`
 
