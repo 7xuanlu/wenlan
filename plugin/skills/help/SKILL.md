@@ -1,7 +1,7 @@
 ---
 name: help
 description: >
-  One-screen quick reference for the Origin plugin. Lists the 10 daily
+  One-screen quick reference for the Origin plugin. Lists the daily
   verbs, the daily flow, where data lives, and how to view it without a
   GUI. Use when the user says "help", "what can I do", "list origin
   commands", "how do I use origin", or invokes `/help`.
@@ -24,7 +24,8 @@ Origin plugin — daily verbs
   /brief        load identity + topic context (start of session)
   /capture <x>  save one durable memory in flow
   /recall <q>   search local memory
-  /distill      synthesize pages from clusters
+  /distill [t]  synthesize pages from clusters (scoped to current repo)
+  /read <p>     preview a distilled page inline
   /review       audit pending memories before confirmation
   /forget <id>  delete a memory by ID
   /handoff      end-of-session ritual (session log + captures)

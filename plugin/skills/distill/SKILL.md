@@ -79,8 +79,23 @@ Bash: curl -fsS -X POST http://127.0.0.1:7878/api/pages \
        "source_memory_ids":["mem_X","mem_Y","mem_Z"]}'
 ```
 
-Repeat for each cluster, one POST per page. Report the page ids back
-to the user.
+Repeat for each cluster, one POST per page.
+
+### 4. Echo the page in chat
+
+After each POST, fetch the rendered md so the user can read what just
+got created without leaving Claude Code. Cat the local file (faster
+than another HTTP round trip) and include it inline in the reply:
+
+```
+Bash: slug=$(echo "<Title>" | tr '[:upper:]' '[:lower:]' | sed -E 's/[^a-z0-9]+/-/g; s/^-|-$//g'); \
+      cat "$HOME/.origin/pages/${slug}.md"
+```
+
+Wrap the content in a fenced block when reporting back so the
+rendered output preserves the source view. If the file isn't there
+yet (e.g. KnowledgeWriter not wired into the POST route yet), GET
+`/api/pages/<id>` and print `.page.content` instead.
 
 ## Auto-commit ~/.origin/
 

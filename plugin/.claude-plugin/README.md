@@ -35,7 +35,8 @@ The marketplace is defined in [`../../.claude-plugin/marketplace.json`](../../.c
 /brief      load identity + topic context (start of session)
 /capture    save one durable memory in flow
 /recall     search local memory
-/distill    synthesize pages from clusters
+/distill    synthesize pages from clusters (scoped to current repo)
+/read       preview a distilled page inline
 /review     audit pending memories
 /forget     delete a memory by ID
 /handoff    end-of-session debrief
@@ -90,6 +91,7 @@ The actual skill instructions live in [`../skills`](../skills):
 - `capture`: save one durable memory
 - `recall`: targeted lookup
 - `distill`: refresh wiki pages
+- `read`: preview a distilled page inline
 - `review`: audit pending memories
 - `forget`: delete a memory by ID
 - `handoff`: capture end-of-session decisions, lessons, gotchas, and open threads
