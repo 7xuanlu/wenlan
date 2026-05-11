@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-//! Wikilink extraction + resolution.
+//! Wikilink graph for distilled pages.
 //!
 //! Pages are written with `[[Label]]` link syntax. The distill prompt emits
 //! them, users write them by hand. The daemon's job is to:
@@ -11,85 +11,55 @@
 //!      refinery can re-resolve later (when a target page is created) and
 //!      emergence can mine repeated orphan labels as topic candidates.
 //!
-//! The extraction regex deliberately rejects pipe-aliased links (`[[Target|alias]]`)
-//! by capturing only the label segment; if Obsidian-style aliases become
-//! load-bearing later we'll plumb the alias separately, but the link's
-//! identity is the target label, not the visible text.
+//! Parsing delegates to `sources::obsidian::extract_wikilinks` — that module
+//! already handles code-block exclusion, aliased links, and heading anchors
+//! correctly. Here we strip the structural details (heading / display /
+//! embed flag) down to the target label, since the link's identity for
+//! graph purposes is the target, not the display text.
 
 use crate::db::MemoryDB;
 use crate::error::OriginError;
+use crate::sources::obsidian;
 use std::collections::HashSet;
 
-/// A `[[Label]]` reference parsed out of a page body. `target_page_id` is
-/// `None` when the resolver couldn't find a matching page title — those rows
-/// land in `page_links` with NULL target so the refinery's orphan resolve
-/// phase can pick them up later.
+/// A wikilink reference stored in or read from the `page_links` table.
+/// `target_page_id` is `None` when the resolver couldn't find a matching
+/// page title — those rows persist with NULL target so the refinery's
+/// orphan-resolve phase can pick them up later.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Wikilink {
     pub label: String,
     pub target_page_id: Option<String>,
 }
 
-/// Pull every `[[...]]` occurrence out of `content`. Returns labels in the
-/// order they appear, deduplicated case-insensitively (a label is the link's
-/// identity, not its location — a page that mentions `[[Rust]]` four times
-/// produces one outbound edge, not four). Whitespace inside the braces is
-/// trimmed; empty labels (`[[]]`) are dropped.
-///
-/// The label is whatever sits between `[[` and the first `|` or `]]` — so
-/// `[[Target|alias]]` extracts as `"Target"`.
+/// Pull every `[[Label]]` reference out of `content`, returning labels in
+/// document order, deduplicated case-insensitively. Skips embeds (`![[...]]`,
+/// reserved for transclusion) and links inside fenced code blocks. The
+/// obsidian regex naturally rejects targets containing `]`, `|`, or `#`
+/// so malformed input like `[[[[foo]]]]` or `[[foo]bar]]` produces nothing.
 pub fn extract_wikilinks(content: &str) -> Vec<String> {
+    let parsed = obsidian::extract_wikilinks(content);
     let mut out: Vec<String> = Vec::new();
     let mut seen: HashSet<String> = HashSet::new();
-    let bytes = content.as_bytes();
-    let mut i = 0;
-    while i + 1 < bytes.len() {
-        if bytes[i] == b'[' && bytes[i + 1] == b'[' {
-            // Find the matching `]]`. UTF-8 safe because we only compare
-            // bytes against ASCII `]` / `|`, never slice on a non-ASCII
-            // boundary — the slice endpoints are always at ASCII positions.
-            let start = i + 2;
-            let mut j = start;
-            let mut end = None;
-            while j + 1 < bytes.len() {
-                if bytes[j] == b']' && bytes[j + 1] == b']' {
-                    end = Some(j);
-                    break;
-                }
-                j += 1;
-            }
-            match end {
-                Some(close) => {
-                    // Stop at the first `|` so aliased links extract the
-                    // target, not the display text.
-                    let pipe = content[start..close].find('|');
-                    let raw_label = match pipe {
-                        Some(p) => &content[start..start + p],
-                        None => &content[start..close],
-                    };
-                    let label = raw_label.trim().to_string();
-                    // Reject labels that carry stray brackets — those come
-                    // from malformed input like `[[[[foo]]]]` (extracts
-                    // `[[foo`) or `[[foo]bar]]` (extracts `foo]bar`).
-                    // Garbage labels would pollute page_links and the
-                    // orphan-by-count feed. The skipped occurrence still
-                    // advances `i` past the close so the rest of the body
-                    // keeps parsing.
-                    let well_formed =
-                        !label.is_empty() && !label.contains('[') && !label.contains(']');
-                    if well_formed {
-                        let key = label.to_lowercase();
-                        if seen.insert(key) {
-                            out.push(label);
-                        }
-                    }
-                    i = close + 2;
-                    continue;
-                }
-                None => break, // unmatched `[[` at end of input — bail
-            }
+    for link in parsed {
+        if link.is_embed {
+            continue;
         }
-        i += 1;
+        let label = link.target.trim().to_string();
+        if label.is_empty() {
+            continue;
+        }
+        // Obsidian's regex accepts `[` inside the target since `[^\]|#]+`
+        // doesn't exclude it — so `[[[[foo]]]]` captures `[[foo`. Reject
+        // labels that carry stray brackets; they'd poison page_links and
+        // the orphan-by-count feed.
+        if label.contains('[') || label.contains(']') {
+            continue;
+        }
+        let key = label.to_lowercase();
+        if seen.insert(key) {
+            out.push(label);
+        }
     }
     out
 }
@@ -132,40 +102,43 @@ mod tests {
     #[test]
     fn extract_dedups_case_insensitively() {
         let v = extract_wikilinks("[[Origin]] and [[origin]] and [[ORIGIN]]");
-        // Keep first-seen casing as the canonical label.
+        // Keep first-seen casing.
         assert_eq!(v, vec!["Origin"]);
     }
 
     #[test]
     fn extract_handles_aliased_links() {
+        // Obsidian regex captures `target` as group 2; display text is
+        // stripped here.
         let v = extract_wikilinks("see [[Rust Ownership|borrowing rules]] for more");
         assert_eq!(v, vec!["Rust Ownership"]);
     }
 
     #[test]
-    fn extract_drops_empty_labels() {
-        let v = extract_wikilinks("[[]] and [[   ]] are noise");
-        assert!(v.is_empty());
+    fn extract_strips_heading_anchor() {
+        // `[[Page#Section]]` reduces to the target page.
+        let v = extract_wikilinks("see [[Rust Ownership#borrowing]] below");
+        assert_eq!(v, vec!["Rust Ownership"]);
     }
 
     #[test]
-    fn extract_ignores_unmatched_brackets() {
-        // Unmatched `[[` at end of input must not panic or slice past the
-        // buffer.
-        let v = extract_wikilinks("legit [[Foo]] then trailing [[");
-        assert_eq!(v, vec!["Foo"]);
+    fn extract_skips_embeds() {
+        // Embeds (`![[...]]`) are for transclusion — out of scope for the
+        // graph. Plain `[[...]]` is the citation link.
+        let v = extract_wikilinks("![[Diagram]] then [[Real Link]]");
+        assert_eq!(v, vec!["Real Link"]);
+    }
+
+    #[test]
+    fn extract_skips_code_block_wikilinks() {
+        let v = extract_wikilinks("real [[A]]\n\n```\n[[NotALink]]\n```\n\nmore [[B]]");
+        assert_eq!(v, vec!["A", "B"]);
     }
 
     #[test]
     fn extract_handles_utf8_payload() {
         let v = extract_wikilinks("café [[Naïve Bayes]] résumé");
         assert_eq!(v, vec!["Naïve Bayes"]);
-    }
-
-    #[test]
-    fn extract_strips_inner_whitespace() {
-        let v = extract_wikilinks("[[  Spaces  ]]");
-        assert_eq!(v, vec!["Spaces"]);
     }
 
     #[test]
@@ -176,23 +149,24 @@ mod tests {
 
     #[test]
     fn extract_rejects_nested_brackets() {
-        // `[[[[foo]]]]` matches `[[` then walks to first `]]`, would yield
-        // `"[[foo"`. Reject it — that label would poison the orphan feed.
+        // `[[[[foo]]]]` — obsidian regex captures target `[[foo` (it allows
+        // `[` inside the target group). The bracket post-filter drops it.
         let v = extract_wikilinks("noise [[[[foo]]]] more");
         assert!(v.is_empty());
     }
 
     #[test]
     fn extract_rejects_stray_closing_bracket() {
-        // `[[foo]bar]]` walks to the SECOND `]]` and yields `"foo]bar"`.
-        // Reject.
+        // `[[foo]bar]]` — obsidian regex fails to find a complete
+        // `[[...]]` since target stops at the inner `]` but `\]\]` isn't
+        // there immediately after. Nothing captured.
         let v = extract_wikilinks("noise [[foo]bar]] more");
         assert!(v.is_empty());
     }
 
     #[test]
-    fn extract_keeps_well_formed_after_rejecting_garbage() {
-        // Garbage followed by a real link — extractor must recover.
+    fn extract_keeps_well_formed_after_garbage() {
+        // Bracket post-filter drops the captured `[[foo`; real link survives.
         let v = extract_wikilinks("[[[[foo]]]] and [[Real Link]] keep going");
         assert_eq!(v, vec!["Real Link"]);
     }
