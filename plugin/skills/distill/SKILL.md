@@ -31,17 +31,23 @@ Always run the three steps below. No "try MCP first, fall back".
 
 ### 1. Pick the scope
 
-For bare `/distill`, infer a target from cwd. Use `--git-common-dir`
-so the result stays the same inside a git worktree (otherwise the
-worktree directory name leaks in instead of the parent repo):
+For bare `/distill`, infer a target from cwd. Walk the worktree up to
+its parent repo so the same scope is used whether the user is sitting
+in `~/Repos/origin/.worktrees/feature/...` or in `~/Repos/origin`:
 
 ```
-Bash: g=$(git -C "$PWD" rev-parse --git-common-dir 2>/dev/null); \
-      [ -n "$g" ] && basename "$(dirname "$g")"
+Bash: top=$(git -C "$PWD" rev-parse --show-toplevel 2>/dev/null); \
+      common=$(git -C "$PWD" rev-parse --git-common-dir 2>/dev/null); \
+      if [ -n "$common" ]; then \
+        case "$common" in /*) root=$(dirname "$common");; *) root=$(cd "$top" && cd "$(dirname "$common")" && pwd);; esac; \
+        basename "$root"; \
+      fi
 ```
 
-- If output is a name → use it (e.g. `/Users/lucian/Repos/origin/.git` → `origin`).
-- If not a git repo → fall back to the cwd basename.
+- Both subshells succeed → use the parent repo basename (works for
+  both main checkouts and worktrees; `git-common-dir` resolves to the
+  primary `.git` either way).
+- Not a git repo → fall back to `basename "$PWD"`.
 - For `/distill <arg>` → use `<arg>`.
 - For `/distill deep` (reserved keyword) → no scope (full pass over
   every memory). Slow. Use only when the user explicitly asks for it.
@@ -83,19 +89,19 @@ Repeat for each cluster, one POST per page.
 
 ### 4. Echo the page in chat
 
-After each POST, fetch the rendered md so the user can read what just
-got created without leaving Claude Code. Cat the local file (faster
-than another HTTP round trip) and include it inline in the reply:
+After each POST, fetch the rendered content so the user can read what
+just got created without leaving Claude Code. Use the page id from the
+POST response — the daemon's slug derivation is the canonical one and
+the local heuristic in the skill drifts on apostrophes and punctuation:
 
 ```
-Bash: slug=$(echo "<Title>" | tr '[:upper:]' '[:lower:]' | sed -E 's/[^a-z0-9]+/-/g; s/^-|-$//g'); \
-      cat "$HOME/.origin/pages/${slug}.md"
+Bash: id="<from-POST-response>"; \
+      curl -fsS "http://127.0.0.1:7878/api/pages/$id" \
+        | python3 -c "import json,sys; print(json.load(sys.stdin)['page']['content'])"
 ```
 
 Wrap the content in a fenced block when reporting back so the
-rendered output preserves the source view. If the file isn't there
-yet (e.g. KnowledgeWriter not wired into the POST route yet), GET
-`/api/pages/<id>` and print `.page.content` instead.
+rendered output preserves the source view.
 
 ## Auto-commit ~/.origin/
 

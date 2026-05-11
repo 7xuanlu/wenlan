@@ -142,6 +142,7 @@ pub struct DistillParams {
     #[schemars(
         description = "Optional target scope. Accepts a page id (`page_*` or `concept_*`) to re-distill that single page, an entity name (e.g. `Origin`, `Alice`) to scope clustering to that entity, or a domain value (e.g. `work`, `personal`) to scope to that domain. Omit for a full pass over any clusters with new sources. The daemon resolves the string and falls back with a hint payload if nothing matches."
     )]
+    #[serde(default, alias = "page_id")]
     pub target: Option<String>,
 }
 
@@ -624,7 +625,7 @@ impl OriginMcpServer {
     }
 
     #[tool(
-        description = "Trigger Origin's distillation pass. With no `page_id`, runs a full pass that clusters new memories into pages and refreshes the wiki view. With a `page_id`, re-distills that single page from its current sources. Use when the user explicitly asks to synthesize, distill, or rebuild a page. The daemon also runs distillation periodically in the background, so don't trigger redundantly during normal flow.",
+        description = "Trigger Origin's distillation pass. With no `target`, runs a full pass that clusters new memories into pages and refreshes the wiki view. With a `target`, scopes the pass: a page id (`page_*` or `concept_*`) re-distills that single page, an entity name scopes clustering to that entity, a domain value scopes to that domain. Use when the user explicitly asks to synthesize, distill, or rebuild a page. The daemon also runs distillation periodically in the background, so don't trigger redundantly during normal flow.",
         annotations(
             title = "Distill",
             read_only_hint = false,

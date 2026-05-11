@@ -31,8 +31,10 @@ search-friendly form:
   "auth" → "auth OR authentication").
 
 Don't over-expand. If the query is already specific, leave it alone.
-When in doubt, issue two recall calls — one with the original query and
-one with the expanded form — and merge the results in Phase 3.
+One recall call per `/recall` invocation — duplicate calls double
+embedding load and the merge step is rarely worth it. The daemon's
+own `search_memory_expanded` exists for the multi-query case; if it
+matters, use that endpoint instead of issuing parallel calls here.
 
 ### Phase 2 — call the MCP tool
 
@@ -57,8 +59,7 @@ not perfect — it doesn't know the user's exact intent.
 
 Re-read the returned memories against the *original* query. Promote the
 ones that directly answer the question; demote ones that just share
-keywords. If you issued multiple recall calls in Phase 1, merge and
-de-dup by `source_id` before reranking.
+keywords.
 
 Show the user the top 3-5 reranked hits. Surface the rest only if asked.
 

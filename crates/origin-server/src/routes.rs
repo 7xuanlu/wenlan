@@ -655,12 +655,18 @@ pub struct SteepResponse {
 /// Request body for POST /api/distill. All fields are optional: an empty
 /// body (or omitted Content-Type) is treated as `DistillRequest::default()`
 /// which preserves the historical full-pass behavior.
+///
+/// `deny_unknown_fields` rejects bodies that name a field we don't recognize
+/// (e.g. an old MCP client that still sends `page_id`). The error surfaces as
+/// a 400 with a serde diagnostic — the alternative is silently dropping the
+/// field and running a global pass the caller didn't ask for.
 #[derive(Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct DistillRequest {
     /// Free-form target string. Resolved server-side:
     /// `page_*`/`concept_*` → page redistill; entity name → scoped distill;
     /// domain value → scoped distill; anything else → 404-ish hint payload.
-    #[serde(default)]
+    #[serde(default, alias = "page_id")]
     pub target: Option<String>,
 }
 
@@ -708,6 +714,20 @@ pub async fn handle_distill(
     };
 
     let scoped = target.is_some();
+
+    // Page targets need an LLM to redistill — surface a hint payload rather
+    // than a 500 so Basic-Memory daemons fail visibly.
+    if matches!(target, Some(origin_core::refinery::DistillTarget::Page(_)))
+        && !prefer_llm.map(|p| p.is_available()).unwrap_or(false)
+    {
+        return Ok(Json(serde_json::json!({
+            "pages_created": 0,
+            "pages_updated": 0,
+            "scoped": true,
+            "hint": "page re-distill needs an LLM in the daemon — install an on-device model or set an Anthropic key via `origin setup` / `/origin:doctor`",
+        })));
+    }
+
     let distilled = origin_core::refinery::distill_pages_scoped(
         db,
         prefer_llm,
@@ -742,6 +762,13 @@ pub async fn handle_distill(
 }
 
 /// POST /api/distill/{page_id}
+///
+/// Re-distill a single page. Requires the daemon to have an LLM available
+/// (on-device or Anthropic key). When no LLM is configured (Basic Memory
+/// mode) the route returns a 200 with a hint payload instead of a 500 —
+/// the caller's intent (refresh this page) can't be honored, but the
+/// failure mode is documented in the response so the skill can surface
+/// it to the user.
 pub async fn handle_redistill(
     State(state): State<Arc<RwLock<ServerState>>>,
     Path(page_id): Path<String>,
@@ -755,9 +782,20 @@ pub async fn handle_redistill(
     let prompts = &s.prompts;
 
     let prefer_llm = api_llm.or(llm);
-    origin_core::refinery::deep_distill_single(db, prefer_llm, prompts, &page_id).await?;
-
-    Ok(Json(serde_json::json!({"status": "ok"})))
+    if prefer_llm.map(|p| p.is_available()).unwrap_or(false) {
+        let updated =
+            origin_core::refinery::deep_distill_single(db, prefer_llm, prompts, &page_id).await?;
+        Ok(Json(serde_json::json!({
+            "status": "ok",
+            "updated": updated,
+        })))
+    } else {
+        Ok(Json(serde_json::json!({
+            "status": "skipped",
+            "updated": false,
+            "hint": "page re-distill needs an LLM in the daemon — install an on-device model or set an Anthropic key via `origin setup` / `/origin:doctor`",
+        })))
+    }
 }
 
 // ===== Recent retrieval / page-change feeds =====

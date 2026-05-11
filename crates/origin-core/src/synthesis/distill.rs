@@ -499,8 +499,8 @@ pub async fn distill_pages_scoped(
     target: Option<DistillTarget>,
 ) -> Result<usize, OriginError> {
     if let Some(DistillTarget::Page(ref page_id)) = target {
-        deep_distill_single(db, llm, prompts, page_id).await?;
-        return Ok(1);
+        let updated = deep_distill_single(db, llm, prompts, page_id).await?;
+        return Ok(if updated { 1 } else { 0 });
     }
     let (entity_id_filter, domain_filter): (Option<String>, Option<String>) = match target {
         Some(DistillTarget::Entity { id, .. }) => (Some(id), None),
@@ -930,13 +930,17 @@ pub(crate) async fn recompile_single_page(
     Ok(false)
 }
 
-/// Re-distill a single page by reloading all source memories and recompiling with LLM.
+/// Re-distill a single page by reloading all source memories and recompiling
+/// with the LLM. Returns `Ok(true)` when the page content was actually
+/// rewritten, `Ok(false)` when the call was a no-op (no source memories,
+/// empty LLM output) so callers can report honest counts. Returns
+/// `Err(OriginError::Llm)` only when the LLM call itself fails.
 pub async fn deep_distill_single(
     db: &MemoryDB,
     llm: Option<&Arc<dyn LlmProvider>>,
     prompts: &PromptRegistry,
     page_id: &str,
-) -> Result<(), OriginError> {
+) -> Result<bool, OriginError> {
     let llm = match llm {
         Some(l) if l.is_available() => l,
         Some(_) => {
@@ -961,7 +965,7 @@ pub async fn deep_distill_single(
         .await?;
     if memories.is_empty() {
         log::warn!("[distill] no source memories found for page {}", page_id);
-        return Ok(());
+        return Ok(false);
     }
 
     const MEM_SNIPPET_CAP: usize = 800;
@@ -998,7 +1002,7 @@ pub async fn deep_distill_single(
 
     if content.is_empty() {
         log::warn!("[distill] empty output for page '{}', skipping", page.title);
-        return Ok(());
+        return Ok(false);
     }
 
     let source_refs: Vec<&str> = page.source_memory_ids.iter().map(|s| s.as_str()).collect();
@@ -1011,7 +1015,7 @@ pub async fn deep_distill_single(
         page.version,
         page.version + 1
     );
-    Ok(())
+    Ok(true)
 }
 
 /// Apply a merge result based on the stability tier of the involved memories.

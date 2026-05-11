@@ -18,13 +18,14 @@ MSG
 
 # Compare daemon version vs plugin manifest version. Silent unless mismatch.
 [ -r "$PLUGIN_JSON" ] || exit 0
+command -v python3 >/dev/null 2>&1 || exit 0  # fail closed without python3
 
 extract_version() {
-  sed -nE 's/.*"version"[[:space:]]*:[[:space:]]*"([^"]+)".*/\1/p' "$@" | head -1
+  python3 -c 'import json,sys; print(json.load(sys.stdin).get("version",""))' 2>/dev/null
 }
 
-DAEMON_VER=$(printf '%s' "$RESP" | extract_version /dev/stdin)
-EXPECTED_VER=$(extract_version "$PLUGIN_JSON")
+DAEMON_VER=$(printf '%s' "$RESP" | extract_version)
+EXPECTED_VER=$(extract_version <"$PLUGIN_JSON")
 
 if [ -n "$DAEMON_VER" ] && [ -n "$EXPECTED_VER" ] && [ "$DAEMON_VER" != "$EXPECTED_VER" ]; then
   cat <<MSG
