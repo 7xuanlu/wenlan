@@ -25,7 +25,11 @@ if the daemon ever stops.
 /plugin install origin@7xuanlu
 ```
 
-The marketplace is defined in [`../../.claude-plugin/marketplace.json`](../../.claude-plugin/marketplace.json) (at the repo root). The plugin metadata is defined in [`plugin.json`](plugin.json). MCP configuration is in [`../.mcp.json`](../.mcp.json) (this plugin's `.mcp.json`).
+The marketplace is defined in [`../../.claude-plugin/marketplace.json`](../../.claude-plugin/marketplace.json) (at the repo root). The plugin metadata is defined in [`plugin.json`](plugin.json). MCP configuration is in [`../.mcp.json`](../.mcp.json) (this plugin's `.mcp.json`), which delegates to [`../bin/origin-mcp-runner.sh`](../bin/origin-mcp-runner.sh).
+
+The runner picks the MCP server binary in two paths:
+- **Default** — runs `npx -y origin-mcp@^X.Y.Z` so users get the version pinned by the plugin manifest.
+- **Dev override** — set `ORIGIN_MCP_DEV_BIN=/abs/path/to/origin-mcp` and the runner exec's that binary instead. Lets contributors test local MCP changes without an npm publish.
 
 ## Daily Commands
 

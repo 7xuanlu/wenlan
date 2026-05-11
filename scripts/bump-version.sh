@@ -49,12 +49,17 @@ jq ".version = \"$NEW_VERSION\"" "$PLUGIN_MANIFEST" > "${PLUGIN_MANIFEST}.tmp"
 mv "${PLUGIN_MANIFEST}.tmp" "$PLUGIN_MANIFEST"
 echo "  Updated $PLUGIN_MANIFEST"
 
-# 4. Plugin's MCP server pin — `npx -y origin-mcp@^X.Y.Z` so floating tag can't
-# auto-RCE on every Claude Code session.
-PLUGIN_MCP="plugin/.mcp.json"
-jq ".mcpServers.origin.args = [\"-y\", \"origin-mcp@^${NEW_VERSION}\"]" "$PLUGIN_MCP" > "${PLUGIN_MCP}.tmp"
-mv "${PLUGIN_MCP}.tmp" "$PLUGIN_MCP"
-echo "  Updated $PLUGIN_MCP (origin-mcp pin)"
+# 4. Plugin's MCP server pin — the wrapper script falls back to
+# `npx -y origin-mcp@^X.Y.Z` so a floating tag can't auto-RCE on every
+# Claude Code session. The pin lives in the runner shell script, not
+# .mcp.json, so dev users can override the binary via ORIGIN_MCP_DEV_BIN.
+PLUGIN_MCP_RUNNER="plugin/bin/origin-mcp-runner.sh"
+if [[ "$(uname)" == "Darwin" ]]; then
+    sed -i '' -E "s|(origin-mcp@\\^)[0-9]+\\.[0-9]+\\.[0-9]+|\\1${NEW_VERSION}|g" "$PLUGIN_MCP_RUNNER"
+else
+    sed -i -E "s|(origin-mcp@\\^)[0-9]+\\.[0-9]+\\.[0-9]+|\\1${NEW_VERSION}|g" "$PLUGIN_MCP_RUNNER"
+fi
+echo "  Updated $PLUGIN_MCP_RUNNER (origin-mcp pin)"
 
 # 5. /init skill install.sh URL pinned to current tag (not `main`), so the
 # install one-liner is reproducible at the release boundary.
