@@ -101,7 +101,24 @@ pending: [
 ]
 ```
 
-For each cluster:
+For each cluster, first run a **coherence check** before synthesizing:
+
+- Skim every memory in `cluster.contents`.
+- If the cluster has ≥ ~4 memories and the topics scatter (entity
+  shared but the memories cover unrelated sub-topics — e.g. all tagged
+  `Origin` but spanning RwLock bugs, schema choices, onboarding UI,
+  migrations, and CSS), the cluster is **incoherent**. Skip
+  synthesizing it. Record it for the report under "Skipped (low
+  coherence)" with the existing page title (if refresh) or a short
+  topic hint (if new).
+- Coherent cluster (memories share an actual topic, not just an entity
+  tag) → proceed to synthesis.
+
+The coherence judgement is something only the agent can do — it needs
+to read the prose. Daemon clustering is heuristic; agent is the
+final filter against producing a grab-bag page.
+
+For each coherent cluster:
 
 - Title: short noun phrase. Use `existing_page_title` when refreshing
   unless the new memories materially change the topic. For new
@@ -136,16 +153,15 @@ Bash: curl -fsS -X POST http://127.0.0.1:7878/api/pages \
 
 ### 4. Report terse
 
-The daemon already filtered out clusters fully covered by existing
-pages. So `pending` is empty when scope is up to date.
+Three output shapes. Pick the one that matches what happened.
 
-**If `pending` is empty:**
+**If `pending` is empty (every cluster already fully covered):**
 
 ```
 Scope `<scope>` is up to date — no new memories to distill.
 ```
 
-**If `pending` has clusters and the agent synthesized them:**
+**If at least one cluster was synthesized:**
 
 ```
 Distilled N page(s) from <total> memories in scope `<scope>`:
@@ -156,6 +172,23 @@ Distilled N page(s) from <total> memories in scope `<scope>`:
 
 Tag refreshed pages with `, refreshed` so the user can tell which
 replaced an existing page vs which are brand new.
+
+**If at least one cluster was skipped on the coherence check:**
+
+```
+Skipped M cluster(s) — low coherence (memories share entity but
+topics scatter; would produce a grab-bag page):
+  - "<existing_page_title or topic hint>"  (<N> memories)
+  ...
+```
+
+When both happened in the same pass — some synthesized, some skipped
+— emit both blocks back-to-back.
+
+When the only outcome is skipped clusters (and `pending` was
+non-empty), still emit the Skipped block. Do **not** report "up to
+date" in that case — the scope isn't up to date, the candidates were
+just too low quality.
 
 Rules:
 - **Titles, not page ids.** Ids visually truncate; titles read clean.
