@@ -6,7 +6,7 @@ description: >
   the daemon couldn't (no LLM or cluster too big). Invoked as
   `/distill [target]`.
 argument-hint: "[page_id_or_entity_or_domain]"
-allowed-tools: ["mcp__plugin_origin_origin__recall", "mcp__plugin_origin_origin__distill", "mcp__plugin_origin_origin__create_page", "mcp__plugin_origin_origin__delete_page", "Bash"]
+allowed-tools: ["mcp__plugin_origin_origin__recall", "mcp__plugin_origin_origin__distill", "mcp__plugin_origin_origin__create_page", "mcp__plugin_origin_origin__update_page", "mcp__plugin_origin_origin__delete_page", "Bash"]
 ---
 
 # /distill
@@ -66,7 +66,14 @@ JSON. Possible shapes:
     { "source_ids": [...], "contents": [...], "entity_id": ...,
       "entity_name": ..., "domain": ..., "estimated_tokens": ... },
     ...
-  ]
+  ],
+  "stale_pages": [
+    { "page_id": ..., "title": ..., "summary": ...,
+      "source_memory_ids": [...], "stale_reason": "source_updated",
+      "user_edited": false, "sources_updated_count": 3 },
+    ...
+  ],
+  "stale_truncated": false
 }
 ```
 
@@ -137,23 +144,53 @@ create_page(title="...", summary="...", content="...",
             source_memory_ids=[...])
 ```
 
-**Refresh candidate** (`existing_page_id` is set) — replace the old
-page with the refreshed one via delete then create.
-
-⚠ The two calls are NOT atomic as a pair. `delete_page` cleans DB + md
-atomically, and `create_page` writes the new pair atomically, but a
-daemon restart or network blip between them leaves the page gone with
-no replacement. Recovery is simple: re-run `/distill` — clustering
-will rediscover the same memories and the flow restarts. Note that
-the new page gets a fresh page id; any external reference to the old
-id breaks. A proper `PUT /api/pages/{id}` route would close both gaps
-but is tracked separately.
+**Refresh candidate** (`existing_page_id` is set) — replace the body
+in place via the `update_page` MCP tool. This is a single atomic
+call: replaces content + source list + optional summary, clears the
+daemon's `stale_reason`, bumps version, preserves page_id +
+created_at so external `[[wikilinks]]` keep working.
 
 ```
-delete_page(page_id="<existing_page_id>")
-create_page(title="...", summary="...", content="...",
-            source_memory_ids=cluster.source_ids, ...)
+update_page(page_id=cluster.existing_page_id,
+            content="...",
+            source_memory_ids=cluster.source_ids,
+            summary="...")
 ```
+
+### 3.5 Refresh stale pages
+
+The `stale_pages` block in the response lists pages whose sources
+changed since last compile. Shape:
+
+```
+stale_pages: [
+  { page_id, title, summary, source_memory_ids,
+    sources_updated_count, stale_reason, user_edited },
+  ...
+]
+stale_truncated: <bool>   # true when 10+ stale pages exist
+```
+
+For each stale page:
+
+- **`user_edited == true`** → never auto-rewrite. The user touched
+  the page; the upstream memories also changed. Surface in the
+  "Conflict" report block and stop. The user resolves by hand.
+- **`user_edited == false`** → fetch source memories via `recall`
+  (or `Bash: curl -fsS http://127.0.0.1:7878/api/pages/<id>/sources`),
+  run the same coherence check used for clusters, then call
+  `update_page` with the existing `source_memory_ids` and freshly
+  synthesized prose.
+
+```
+update_page(page_id=stale.page_id,
+            content="<refreshed prose>",
+            source_memory_ids=stale.source_memory_ids,
+            summary="<optional refreshed claim>")
+```
+
+When `stale_truncated == true`, tell the user "more stale pages
+remain — re-run `/distill` after this pass to continue."
 
 ### 4. Report terse
 
@@ -186,8 +223,27 @@ topics scatter; would produce a grab-bag page):
   ...
 ```
 
-When both happened in the same pass — some synthesized, some skipped
-— emit both blocks back-to-back.
+**If at least one stale page was refreshed:**
+
+```
+Refreshed K stale page(s):
+  - <Title>  (~/.origin/pages/<slug>.md)
+  ...
+```
+
+**If at least one stale page was skipped because `user_edited`:**
+
+```
+Conflict on L stale page(s) — page has user edits, sources also
+changed. Open and reconcile manually:
+  - <Title>  (~/.origin/pages/<slug>.md)
+```
+
+Distinct wording from the coherence-skip block so the user can tell
+the two reasons apart at a glance.
+
+Emit the blocks back-to-back when more than one outcome happened in
+the same pass.
 
 When the only outcome is skipped clusters (and `pending` was
 non-empty), still emit the Skipped block. Do **not** report "up to
