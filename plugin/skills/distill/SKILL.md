@@ -107,7 +107,7 @@ file atomically. No second step needed.
 
 ### 4. Report terse
 
-After everything lands (daemon-created + agent-finished), report once:
+After everything lands, report once:
 
 ```
 Distilled N page(s):
@@ -116,13 +116,21 @@ Distilled N page(s):
   ...
 
 Skipped M cluster(s):
-  - <topic>  (<N> memories, no peers yet)
+  - <topic hint>  (<N> memories)
+  ...
 ```
 
 Rules:
 - **Titles, not page ids.** Ids visually truncate; titles read clean.
-- One line per page. No body in chat — `/read "<title>"` for that.
-- Include the "Skipped" section when anything was skipped.
+- One line per synthesized page. No body in chat — `/read "<title>"`
+  for that.
+- **Skipped clusters need a topic hint.** "cluster 1" or "3 memories"
+  alone is useless — the user can't tell what was skipped. Derive a
+  hint from `cluster.entity_name` (when present and not generic like
+  "Origin") or from the first 80 chars of the first memory in
+  `cluster.contents`. Something the user recognizes.
+- Include the "Skipped" section when anything was skipped. Omit it
+  only when every cluster ended up in a page.
 
 ## Auto-commit ~/.origin/
 
