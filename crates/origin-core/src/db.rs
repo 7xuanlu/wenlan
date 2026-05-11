@@ -544,6 +544,18 @@ pub struct DistillationCluster {
     pub estimated_tokens: usize,
 }
 
+/// Returned by `find_best_overlapping_page`: the highest-Jaccard page match
+/// for a candidate cluster's source-memory set, plus the raw intersection
+/// count callers need to distinguish "full subset" (drop the cluster) from
+/// "partial overlap" (cluster is a refresh candidate, not a duplicate).
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct PageOverlap {
+    pub page_id: String,
+    pub page_title: String,
+    pub jaccard: f64,
+    pub intersection: usize,
+}
+
 // Re-export wire type from origin-types so existing consumers keep working.
 pub use origin_types::responses::PendingRevision;
 
@@ -14443,11 +14455,19 @@ impl MemoryDB {
 
     /// Check maximum Jaccard overlap between a set of source_ids and any existing page.
     /// Returns 0.0-1.0 (0 = no overlap, 1 = identical source set).
-    pub async fn max_page_overlap(&self, source_ids: &[String]) -> Result<f64, OriginError> {
+    /// Find the existing active page whose source memories overlap the most
+    /// with the supplied cluster. Returns the page metadata plus Jaccard
+    /// similarity and the raw intersection count, so callers can decide
+    /// whether the cluster is a duplicate (full subset), a refresh candidate
+    /// (partial overlap), or brand new (no overlap).
+    pub async fn find_best_overlapping_page(
+        &self,
+        source_ids: &[String],
+    ) -> Result<Option<PageOverlap>, OriginError> {
         let conn = self.conn.lock().await;
         let mut rows = conn
             .query(
-                "SELECT source_memory_ids FROM pages WHERE status = 'active'",
+                "SELECT id, title, source_memory_ids FROM pages WHERE status = 'active'",
                 (),
             )
             .await
@@ -14455,28 +14475,48 @@ impl MemoryDB {
 
         let input_set: std::collections::HashSet<&str> =
             source_ids.iter().map(|s| s.as_str()).collect();
-        let mut max_overlap = 0.0f64;
+        let mut best: Option<PageOverlap> = None;
 
         while let Some(row) = rows
             .next()
             .await
             .map_err(|e| OriginError::VectorDb(e.to_string()))?
         {
-            let json: String = row.get(0).unwrap_or_default();
-            if let Ok(ids) = serde_json::from_str::<Vec<String>>(&json) {
-                let concept_set: std::collections::HashSet<&str> =
-                    ids.iter().map(|s| s.as_str()).collect();
-                let intersection = input_set.intersection(&concept_set).count();
-                let union = input_set.union(&concept_set).count();
-                if union > 0 {
-                    let jaccard = intersection as f64 / union as f64;
-                    if jaccard > max_overlap {
-                        max_overlap = jaccard;
-                    }
-                }
+            let page_id: String = row.get(0).unwrap_or_default();
+            let page_title: String = row.get(1).unwrap_or_default();
+            let json: String = row.get(2).unwrap_or_default();
+            let Ok(ids) = serde_json::from_str::<Vec<String>>(&json) else {
+                continue;
+            };
+            let page_set: std::collections::HashSet<&str> =
+                ids.iter().map(|s| s.as_str()).collect();
+            let intersection = input_set.intersection(&page_set).count();
+            let union = input_set.union(&page_set).count();
+            if intersection == 0 || union == 0 {
+                continue;
+            }
+            let jaccard = intersection as f64 / union as f64;
+            if best.as_ref().map(|b| jaccard > b.jaccard).unwrap_or(true) {
+                best = Some(PageOverlap {
+                    page_id,
+                    page_title,
+                    jaccard,
+                    intersection,
+                });
             }
         }
-        Ok(max_overlap)
+        Ok(best)
+    }
+
+    /// Thin wrapper around `find_best_overlapping_page` that returns just the
+    /// Jaccard value, preserved for callers (notably `distill_one_cluster`)
+    /// that only need the score.
+    pub async fn max_page_overlap(&self, source_ids: &[String]) -> Result<f64, OriginError> {
+        Ok(self
+            .find_best_overlapping_page(source_ids)
+            .await?
+            .map(|m| m.jaccard)
+            .unwrap_or(0.0))
     }
 
     /// Get all memory source_ids that are already covered by active pages.

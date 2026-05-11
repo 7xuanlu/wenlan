@@ -83,36 +83,38 @@ the LLM choice is consistent with how the user invoked the skill.
 
 `unresolved` + `hint`: relay to user verbatim and stop.
 
-### 3. Overlap check (skip duplicates)
+### 3. Synthesize each `pending` cluster
 
-Before synthesizing anything, fetch existing pages and check each
-cluster against them. Daemon doesn't dedupe at the route level — the
-old Jaccard check used to run inside the daemon's synth path which
-this route bypasses. Without this step, repeated `/distill` calls
-re-create the same pages.
+The daemon route already drops clusters fully covered by an existing
+page. Anything in `pending` is either a brand-new cluster or a
+refresh-eligible one (some new memories not yet in the matched page).
+The shape:
 
 ```
-Bash: curl -fsS "http://127.0.0.1:7878/api/pages?limit=100"
+pending: [
+  {
+    source_ids, contents, entity_id, entity_name, domain,
+    estimated_tokens,
+    existing_page_id?: string,    // present → this is a refresh
+    existing_page_title?: string,
+    new_memory_count?: int        // memories not yet in the matched page
+  },
+  ...
+]
 ```
 
-For each `cluster` in `pending`, compute
-`overlap = |cluster.source_ids ∩ page.source_memory_ids| / |cluster.source_ids ∪ page.source_memory_ids|`
-against every existing page. If `overlap > 0.5` for any page, mark
-the cluster as a duplicate of that page and skip it. Save the existing
-page title and overlap count for the report.
-
-### 4. Synthesize each non-duplicate cluster
-
-For each remaining cluster:
+For each cluster:
 
 - Title: short noun phrase. Prefer `cluster.entity_name` when it's
-  specific; if the entity name is generic (e.g. the project name
-  itself), derive a more specific title from the first memory's
-  content.
+  specific; if generic (e.g. the project name itself), derive a more
+  specific title from the first memory's content. **Refresh case**:
+  if `existing_page_id` is present, reuse `existing_page_title`
+  unchanged unless the new memories materially change the topic.
 - Summary: one sentence — the durable claim.
 - Body: 3-7 paragraphs of wiki prose. Use `[[wikilinks]]`. Cite source
   ids inline with `(source: mem_XXX)`.
-- Then POST to `/api/pages`:
+
+POST to `/api/pages` (new cluster):
 
 ```
 Bash: curl -fsS -X POST http://127.0.0.1:7878/api/pages \
@@ -123,50 +125,50 @@ Bash: curl -fsS -X POST http://127.0.0.1:7878/api/pages \
 ```
 
 The daemon's `handle_create_page` writes both the DB row and the md
-file atomically. No second step needed.
+file atomically.
 
-### 5. Report terse
+**Refresh case** (cluster has `existing_page_id`): instead of creating
+a new page, update the existing one in place. Until a proper update
+route exists, the cleanest move is to delete the old page id and
+create the new one carrying the merged source ids:
 
-Two output shapes — one for "actually distilled something", one for
-"nothing new, scope is up to date".
+```
+Bash: curl -fsS -X DELETE http://127.0.0.1:7878/api/pages/<existing_page_id>
+Bash: curl -fsS -X POST http://127.0.0.1:7878/api/pages \
+  -H 'Content-Type: application/json' \
+  -d '{...same shape as above, source_memory_ids = cluster.source_ids...}'
+```
 
-**If at least one new page synthesized:**
+### 4. Report terse
+
+The daemon already filtered out clusters fully covered by existing
+pages. So `pending` is empty when scope is up to date.
+
+**If `pending` is empty:**
+
+```
+Scope `<scope>` is up to date — no new memories to distill.
+```
+
+**If `pending` has clusters and the agent synthesized them:**
 
 ```
 Distilled N page(s) from <total> memories in scope `<scope>`:
   - <Title>  (~/.origin/pages/<slug>.md)
+  - <Title>  (~/.origin/pages/<slug>.md, refreshed)
   ...
 ```
 
-Add a one-line note only when at least one cluster was also skipped
-as a duplicate, e.g.: `(M cluster(s) already covered by existing
-pages.)`
-
-**If zero new pages and every cluster was a duplicate:**
-
-```
-Scope `<scope>` is up to date — N existing pages already cover the
-candidate clusters. Capture more on new topics to grow latent
-clusters.
-```
-
-That's the whole output. Do **not** list the matched existing pages —
-the user already has them; restating five titles they own makes
-"nothing happened" look like a failure.
-
-**If `pending` was empty in the daemon response:**
-
-```
-Scope `<scope>` has no candidate clusters yet — capture a few more
-related memories to bootstrap distillation.
-```
+Tag refreshed pages (the ones that replaced an `existing_page_id`)
+with `, refreshed` so the user can tell which are new and which got
+updated.
 
 Rules:
 - **Titles, not page ids.** Ids visually truncate; titles read clean.
 - One line per synthesized page. No body in chat — `/read "<title>"`
   for that.
 - `<total>` = sum of `source_ids.len()` across the clusters that were
-  actually synthesized (not the duplicates).
+  actually synthesized.
 - If the pass produced fewer pages than expected, it's the clustering
   thresholds. Most memories sit alone without enough peers to form a
   cluster of 3+. Capture more on the same topic to grow them.
