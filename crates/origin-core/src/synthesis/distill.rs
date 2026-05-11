@@ -16,6 +16,48 @@ use crate::refinery::helpers::{
 use crate::sources::StabilityTier;
 use std::sync::Arc;
 
+/// What a distillation pass is scoped to. Resolved from a free-form string
+/// supplied by the user (page id, entity name, or domain value).
+#[derive(Debug, Clone)]
+pub enum DistillTarget {
+    /// Existing page — re-distill from its current sources.
+    Page(String),
+    /// Scope clustering to memories belonging to one entity.
+    Entity { id: String, name: String },
+    /// Scope clustering to memories with a given domain.
+    Domain(String),
+}
+
+/// Resolve a free-form target string into a `DistillTarget`.
+///
+/// Resolution order:
+/// 1. Strings starting with `page_` or `concept_` are treated as page ids.
+/// 2. Exact entity name match (via `MemoryDB::resolve_entity_by_name`).
+/// 3. Exact domain match (any memory with that domain).
+/// 4. Otherwise `None` — caller decides whether to fail loudly or fall through.
+pub async fn resolve_distill_target(
+    db: &MemoryDB,
+    raw: &str,
+) -> Result<Option<DistillTarget>, OriginError> {
+    let s = raw.trim();
+    if s.is_empty() {
+        return Ok(None);
+    }
+    if s.starts_with("page_") || s.starts_with("concept_") {
+        return Ok(Some(DistillTarget::Page(s.to_string())));
+    }
+    if let Some(id) = db.resolve_entity_by_name(s).await? {
+        return Ok(Some(DistillTarget::Entity {
+            id,
+            name: s.to_string(),
+        }));
+    }
+    if db.domain_has_memories(s).await? {
+        return Ok(Some(DistillTarget::Domain(s.to_string())));
+    }
+    Ok(None)
+}
+
 /// LLM cluster refinement: for entities with multiple clusters, ask the LLM to merge/split/rename.
 pub(crate) async fn refine_clusters_with_llm(
     llm: &Arc<dyn LlmProvider>,
@@ -442,6 +484,29 @@ pub async fn distill_pages(
     tuning: &crate::tuning::DistillationConfig,
     knowledge_path: Option<&std::path::Path>,
 ) -> Result<usize, OriginError> {
+    distill_pages_scoped(db, llm, prompts, tuning, knowledge_path, None).await
+}
+
+/// Same as `distill_pages` but restricts clustering to a single entity, a
+/// single domain, or (when `target` is `DistillTarget::Page`) re-distills one
+/// existing page directly. `None` matches `distill_pages` exactly.
+pub async fn distill_pages_scoped(
+    db: &MemoryDB,
+    llm: Option<&Arc<dyn LlmProvider>>,
+    prompts: &PromptRegistry,
+    tuning: &crate::tuning::DistillationConfig,
+    knowledge_path: Option<&std::path::Path>,
+    target: Option<DistillTarget>,
+) -> Result<usize, OriginError> {
+    if let Some(DistillTarget::Page(ref page_id)) = target {
+        deep_distill_single(db, llm, prompts, page_id).await?;
+        return Ok(1);
+    }
+    let (entity_id_filter, domain_filter): (Option<String>, Option<String>) = match target {
+        Some(DistillTarget::Entity { id, .. }) => (Some(id), None),
+        Some(DistillTarget::Domain(d)) => (None, Some(d)),
+        Some(DistillTarget::Page(_)) | None => (None, None),
+    };
     let llm = match llm {
         Some(l) if l.is_available() => l,
         _ => return Ok(0),
@@ -453,12 +518,14 @@ pub async fn distill_pages(
     // if the provider returns the default (for backward compat).
     let token_limit = llm.synthesis_token_limit();
     let raw_clusters = db
-        .find_distillation_clusters(
+        .find_distillation_clusters_scoped(
             tuning.similarity_threshold,
             tuning.page_min_cluster_size,
             tuning.max_clusters_per_steep,
             token_limit,
             tuning.max_unlinked_cluster_size,
+            entity_id_filter.as_deref(),
+            domain_filter.as_deref(),
         )
         .await?;
 

@@ -140,9 +140,9 @@ pub struct ForgetParams {
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct DistillParams {
     #[schemars(
-        description = "Optional page ID. If provided, re-distills only that page from its current sources. If omitted, runs a full distillation pass over any clusters with new sources."
+        description = "Optional target scope. Accepts a page id (`page_*` or `concept_*`) to re-distill that single page, an entity name (e.g. `Origin`, `Alice`) to scope clustering to that entity, or a domain value (e.g. `work`, `personal`) to scope to that domain. Omit for a full pass over any clusters with new sources. The daemon resolves the string and falls back with a hint payload if nothing matches."
     )]
-    pub page_id: Option<String>,
+    pub target: Option<String>,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
@@ -469,21 +469,33 @@ impl OriginMcpServer {
     }
 
     pub async fn distill_impl(&self, params: DistillParams) -> Result<CallToolResult, McpError> {
-        let path = match params.page_id.as_deref() {
-            Some(id) if !id.is_empty() => format!("/api/distill/{}", id),
-            _ => "/api/distill".to_string(),
+        let body = match params.target.as_deref() {
+            Some(t) if !t.is_empty() => serde_json::json!({ "target": t }),
+            _ => serde_json::json!({}),
         };
         match self
             .client
-            .post::<serde_json::Value, serde_json::Value>(&path, &serde_json::json!({}))
+            .post::<serde_json::Value, serde_json::Value>("/api/distill", &body)
             .await
         {
-            Ok(_) => Ok(CallToolResult::success(vec![Content::text(
-                match params.page_id {
-                    Some(id) => format!("Re-distilled page {}.", id),
-                    None => "Distillation pass triggered.".to_string(),
-                },
-            )])),
+            Ok(resp) => {
+                if let Some(unresolved) = resp.get("unresolved").and_then(|v| v.as_str()) {
+                    let hint = resp
+                        .get("hint")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("no matching target");
+                    return Ok(CallToolResult::success(vec![Content::text(format!(
+                        "Could not resolve target `{}`. {}",
+                        unresolved, hint
+                    ))]));
+                }
+                Ok(CallToolResult::success(vec![Content::text(
+                    match params.target {
+                        Some(t) if !t.is_empty() => format!("Distillation triggered for `{}`.", t),
+                        _ => "Distillation pass triggered.".to_string(),
+                    },
+                )]))
+            }
             Err(e) => Ok(tool_error(e, "distill")),
         }
     }

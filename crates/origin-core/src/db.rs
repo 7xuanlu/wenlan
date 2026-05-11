@@ -8829,6 +8829,24 @@ impl MemoryDB {
         Ok(())
     }
 
+    /// True if any non-archived memory carries the given domain. Used by the
+    /// distillation target resolver as a "does this scope exist" check.
+    pub async fn domain_has_memories(&self, domain: &str) -> Result<bool, OriginError> {
+        let conn = self.conn.lock().await;
+        let mut rows = conn
+            .query(
+                "SELECT 1 FROM memories WHERE domain = ?1 LIMIT 1",
+                libsql::params![domain],
+            )
+            .await
+            .map_err(|e| OriginError::VectorDb(format!("domain_has_memories: {}", e)))?;
+        Ok(rows
+            .next()
+            .await
+            .map_err(|e| OriginError::VectorDb(e.to_string()))?
+            .is_some())
+    }
+
     /// Resolve entity by name: exact match → LIKE substring → vector search → None.
     pub async fn resolve_entity_by_name(&self, name: &str) -> Result<Option<String>, OriginError> {
         {
@@ -12173,12 +12191,40 @@ impl MemoryDB {
         token_limit: usize,
         max_unlinked_cluster_size: usize,
     ) -> Result<Vec<DistillationCluster>, OriginError> {
+        self.find_distillation_clusters_scoped(
+            similarity_threshold,
+            min_size,
+            max_clusters,
+            token_limit,
+            max_unlinked_cluster_size,
+            None,
+            None,
+        )
+        .await
+    }
+
+    /// Like `find_distillation_clusters` but restricts the candidate memories
+    /// to a single entity or domain when the caller supplies a filter.
+    /// Both filters can be `None` (full scan, equivalent to the unscoped
+    /// function above) or one can be set; supplying both is allowed and
+    /// applies as an AND.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn find_distillation_clusters_scoped(
+        &self,
+        similarity_threshold: f64,
+        min_size: usize,
+        max_clusters: usize,
+        token_limit: usize,
+        max_unlinked_cluster_size: usize,
+        entity_id_filter: Option<&str>,
+        domain_filter: Option<&str>,
+    ) -> Result<Vec<DistillationCluster>, OriginError> {
         let conn = self.conn.lock().await;
 
         // No covered_ids exclusion — memories can participate in multiple pages.
         // Dedup happens in distill_concepts via Jaccard overlap check.
 
-        let mut rows = conn.query(
+        let mut sql = String::from(
             "SELECT m.source_id, m.content, m.entity_id, m.domain, m.embedding, e.community_id, e.name \
              FROM memories m \
              LEFT JOIN entities e ON m.entity_id = e.id \
@@ -12190,10 +12236,23 @@ impl MemoryDB {
                AND m.source_id NOT LIKE 'recap_%' \
                AND m.is_recap = 0 \
                AND m.embedding IS NOT NULL \
-               AND EXISTS (SELECT 1 FROM enrichment_steps es WHERE es.source_id = m.source_id) \
-             ORDER BY m.entity_id, m.domain, m.last_modified DESC",
-            (),
-        ).await.map_err(|e| OriginError::VectorDb(format!("distillation fetch: {}", e)))?;
+               AND EXISTS (SELECT 1 FROM enrichment_steps es WHERE es.source_id = m.source_id)",
+        );
+        let mut bind: Vec<libsql::Value> = Vec::new();
+        if let Some(eid) = entity_id_filter {
+            sql.push_str(" AND m.entity_id = ?");
+            bind.push(libsql::Value::Text(eid.to_string()));
+        }
+        if let Some(d) = domain_filter {
+            sql.push_str(" AND m.domain = ?");
+            bind.push(libsql::Value::Text(d.to_string()));
+        }
+        sql.push_str(" ORDER BY m.entity_id, m.domain, m.last_modified DESC");
+
+        let mut rows = conn
+            .query(&sql, bind)
+            .await
+            .map_err(|e| OriginError::VectorDb(format!("distillation fetch: {}", e)))?;
 
         let mut memories: Vec<ClusterMemRow> = Vec::new();
         while let Some(row) = rows

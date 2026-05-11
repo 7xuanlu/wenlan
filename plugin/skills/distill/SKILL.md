@@ -1,71 +1,66 @@
 ---
 name: distill
 description: >
-  Synthesize wiki pages from related memories. With an LLM daemon, calls
-  the MCP `distill` tool. Without one (Basic Memory mode), the agent reads
-  the cluster, writes the page, and posts it back. Invoked as
-  `/distill [topic_or_page_id]`.
-argument-hint: "[topic_or_page_id]"
+  Synthesize wiki pages from related memories. Daemon does the work; the
+  skill just forwards the user's target. Invoked as
+  `/distill [page_id_or_entity_or_domain]`.
+argument-hint: "[page_id_or_entity_or_domain]"
 allowed-tools: ["mcp__plugin_origin_origin__distill", "mcp__plugin_origin_origin__recall", "Bash"]
 ---
 
 # /distill
 
-Synthesize a wiki page from related memories. Two paths:
-
-1. **LLM-equipped daemon** → MCP tool `distill` does the clustering and
-   synthesis server-side.
-2. **Basic Memory** (no LLM in daemon) → the agent does the synthesis
-   itself: read the cluster via HTTP, write the page, POST it back.
-
-The agent picks the path. The MCP tool returns an error or empty result
-when no LLM is available — fall through to Path B then.
+Force a distillation pass now. The daemon's refinery already runs
+distillation in the background — `/distill` is for when the user wants
+the wiki view refreshed immediately. Pages emerge automatically; the
+user never has to name topics or manage clusters.
 
 ## How to invoke
 
-### Try the MCP tool first
+Two flows only. Drop any flags or mode words.
 
 ```
-distill()                       # full pass — when user types bare /distill
-distill(page_id="<page_id>")    # single page re-distill
+distill()                  # full pass — bare /distill
+distill(target="<arg>")    # scoped pass — any other input
 ```
 
-If the response indicates LLM unavailable, or the daemon is in Basic
-Memory mode, switch to the agent-driven path below.
+Pass the user's argument through to `target` unchanged. The daemon
+resolves it:
 
-### Agent-driven synthesis (Basic Memory)
+- `page_*` / `concept_*` → re-distill that single page from its current sources
+- exact entity name → scope clustering to that entity
+- exact domain value → scope to that domain
+- anything else → daemon returns `unresolved` + hint; relay the hint to
+  the user, do not retry blindly
 
-Decide which cluster to distill:
+The skill does no decoding, ambiguity branching, or fallback. That's
+the daemon's job.
 
-- User typed bare `/distill` → pick the topic with the most recent unsynthesized memories (use `recall` with the current domain to surface candidates).
-- User typed `/distill <topic>` → use that topic.
-- User typed `/distill <page_id>` (starts with `page_` or `concept_`) → re-distill that page from its current sources.
+## Basic Memory fallback (no daemon LLM)
 
-Fetch the source memories via MCP `recall` (broad query in the topic
-scope):
+If the MCP `distill` response indicates no LLM is available (Basic
+Memory mode), the agent does the synthesis itself: fetch a cluster,
+write a page, post it back.
+
+Fetch candidate memories via MCP `recall`:
 
 ```
 recall(query="<topic>", domain="<topic>", limit=50)
 ```
 
-Read the result. Cluster by shared entities or sub-topic. Pick one
-cluster per page. Semantic ranking biases results toward the topic
-query — fine for distillation since the goal is finding related
-material.
-
-Write the page in wiki-prose style:
+Read the result. Cluster by shared entities or sub-topic. Write the
+page in wiki-prose style:
 
 - Title: short noun phrase (e.g. "Origin daemon architecture").
 - Summary: one sentence — the durable claim the page supports.
 - Body: 3-8 paragraphs of encyclopedia-style prose. Use `[[wikilinks]]`
   to reference other pages or entities. Cite source memory ids inline
-  with `(source: mem_XXX)` where the claim came from.
-- Keep it durable — write what would still be true in six months, not
-  the current state of in-progress work.
+  with `(source: mem_XXX)`.
+- Durable: write what would still be true in six months, not the
+  current state of in-progress work.
 
-POST the page back. The MCP `distill` tool only triggers the daemon's
-own synthesis pass — it doesn't accept an agent-written page body — so
-fall through to the HTTP page endpoint:
+POST the page back. MCP `distill` doesn't accept an agent-written page
+body, so fall through to the HTTP page endpoint:
 
 ```
 Bash: curl -fsS -X POST http://127.0.0.1:7878/api/pages \
@@ -75,12 +70,9 @@ Bash: curl -fsS -X POST http://127.0.0.1:7878/api/pages \
        "source_memory_ids":["mem_X","mem_Y","mem_Z"]}'
 ```
 
-Repeat for each cluster, one POST per page. Report the page ids back to
-the user.
-
 ## Auto-commit ~/.origin/
 
-After distillation (either path), snapshot page changes:
+After distillation, snapshot page changes:
 
 ```
 Bash: cd ~/.origin 2>/dev/null && [ -d .git ] && git add -A && \
@@ -93,19 +85,17 @@ Skip the commit if no diff — `git commit` with empty staging fails.
 
 ## When to use
 
-- User says "distill", "synthesize", "rebuild the page on X", "refresh the
-  knowledge view".
-- After a bulk import — when the daemon is LLM-equipped its refinery
-  handles this automatically; in Basic Memory mode the user must trigger
-  it.
-- After editing many memories — re-distill affected pages.
+- User says "distill", "synthesize", "rebuild the page on X", "refresh
+  the knowledge view".
+- After bulk import — daemon refinery handles this in the background,
+  but user can force a pass for immediate visibility.
 
 ## When NOT to use
 
 - LLM-equipped daemon already runs distillation periodically. Don't
   trigger redundantly during normal flow.
-- Single memory write → daemon's post-ingest enrichment already runs
-  (when LLM present); manual distill is over-eager.
+- Single memory write → daemon's post-ingest enrichment already covers
+  it; manual distill is over-eager.
 
 ## Cost
 

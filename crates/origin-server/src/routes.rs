@@ -652,10 +652,29 @@ pub struct SteepResponse {
     pub phases: Vec<origin_core::refinery::PhaseResult>,
 }
 
+/// Request body for POST /api/distill. All fields are optional: an empty
+/// body (or omitted Content-Type) is treated as `DistillRequest::default()`
+/// which preserves the historical full-pass behavior.
+#[derive(Debug, Default, Deserialize)]
+pub struct DistillRequest {
+    /// Free-form target string. Resolved server-side:
+    /// `page_*`/`concept_*` → page redistill; entity name → scoped distill;
+    /// domain value → scoped distill; anything else → 404-ish hint payload.
+    #[serde(default)]
+    pub target: Option<String>,
+}
+
 /// POST /api/distill
 pub async fn handle_distill(
     State(state): State<Arc<RwLock<ServerState>>>,
+    body: axum::body::Bytes,
 ) -> Result<Json<serde_json::Value>, ServerError> {
+    let req: DistillRequest = if body.is_empty() {
+        DistillRequest::default()
+    } else {
+        serde_json::from_slice(&body).map_err(|e| ServerError::ValidationError(e.to_string()))?
+    };
+
     let s = state.read().await;
     let db =
         s.db.as_ref()
@@ -670,12 +689,31 @@ pub async fn handle_distill(
         let config = origin_core::config::load_config();
         Some(config.knowledge_path_or_default())
     };
-    let distilled = origin_core::refinery::distill_pages(
+
+    let target = match req.target.as_deref() {
+        Some(raw) if !raw.is_empty() => {
+            match origin_core::refinery::resolve_distill_target(db, raw).await? {
+                Some(t) => Some(t),
+                None => {
+                    return Ok(Json(serde_json::json!({
+                        "pages_created": 0,
+                        "pages_updated": 0,
+                        "unresolved": raw,
+                        "hint": "target must be a page id (page_* / concept_*), an entity name, or a domain value",
+                    })));
+                }
+            }
+        }
+        _ => None,
+    };
+
+    let distilled = origin_core::refinery::distill_pages_scoped(
         db,
         prefer_llm,
         prompts,
         tuning,
         knowledge_path.as_deref(),
+        target,
     )
     .await?;
     let deep = origin_core::refinery::deep_distill_pages(
