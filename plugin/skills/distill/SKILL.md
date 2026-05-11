@@ -41,16 +41,17 @@ Decide which cluster to distill:
 - User typed `/distill <topic>` → use that topic.
 - User typed `/distill <page_id>` (starts with `page_` or `concept_`) → re-distill that page from its current sources.
 
-Fetch the source memories:
+Fetch the source memories via MCP `recall` (broad query in the topic
+scope):
 
 ```
-Bash: curl -fsS -X POST http://127.0.0.1:7878/api/memory/list \
-  -H 'Content-Type: application/json' \
-  -d '{"domain":"<topic>","limit":50}'
+recall(query="<topic>", domain="<topic>", limit=50)
 ```
 
 Read the result. Cluster by shared entities or sub-topic. Pick one
-cluster per page.
+cluster per page. Semantic ranking biases results toward the topic
+query — fine for distillation since the goal is finding related
+material.
 
 Write the page in wiki-prose style:
 
@@ -62,7 +63,9 @@ Write the page in wiki-prose style:
 - Keep it durable — write what would still be true in six months, not
   the current state of in-progress work.
 
-POST the page back:
+POST the page back. The MCP `distill` tool only triggers the daemon's
+own synthesis pass — it doesn't accept an agent-written page body — so
+fall through to the HTTP page endpoint:
 
 ```
 Bash: curl -fsS -X POST http://127.0.0.1:7878/api/pages \

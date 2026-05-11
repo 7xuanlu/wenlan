@@ -5,7 +5,7 @@ description: >
   when the user states a preference, makes a decision, corrects you, or
   shares a durable fact. Invoked as `/capture <content>`.
 argument-hint: "<content>"
-allowed-tools: ["mcp__plugin_origin_origin__capture", "mcp__plugin_origin_origin__recall"]
+allowed-tools: ["mcp__plugin_origin_origin__capture", "mcp__plugin_origin_origin__recall", "Bash"]
 ---
 
 # /capture
@@ -58,8 +58,10 @@ omit `entity`.
 
 ### Multiple entities or relations
 
-If the content names more than one entity, capture the memory first,
-then for each additional entity call the daemon HTTP API:
+The MCP `capture` tool takes a single primary `entity`. For additional
+entities or relations there's no MCP wrapper yet, so call the daemon
+HTTP API directly. If the content names more than one entity, capture
+the memory first, then for each additional entity:
 
 ```
 Bash: curl -fsS -X POST http://127.0.0.1:7878/api/memory/entities \
