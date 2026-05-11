@@ -127,28 +127,46 @@ file atomically. No second step needed.
 
 ### 5. Report terse
 
-Report once after all POSTs land. Include duplicates skipped in step
-3 so the user can see what was already covered:
+Two output shapes — one for "actually distilled something", one for
+"nothing new, scope is up to date".
+
+**If at least one new page synthesized:**
 
 ```
 Distilled N page(s) from <total> memories in scope `<scope>`:
   - <Title>  (~/.origin/pages/<slug>.md)
-  - <Title>  (~/.origin/pages/<slug>.md)
-  ...
-
-Duplicates of existing pages (skipped):
-  - <existing page title>  (<N> memories overlap)
   ...
 ```
 
-Omit the "Duplicates" section when nothing was a duplicate.
+Add a one-line note only when at least one cluster was also skipped
+as a duplicate, e.g.: `(M cluster(s) already covered by existing
+pages.)`
+
+**If zero new pages and every cluster was a duplicate:**
+
+```
+Scope `<scope>` is up to date — N existing pages already cover the
+candidate clusters. Capture more on new topics to grow latent
+clusters.
+```
+
+That's the whole output. Do **not** list the matched existing pages —
+the user already has them; restating five titles they own makes
+"nothing happened" look like a failure.
+
+**If `pending` was empty in the daemon response:**
+
+```
+Scope `<scope>` has no candidate clusters yet — capture a few more
+related memories to bootstrap distillation.
+```
 
 Rules:
 - **Titles, not page ids.** Ids visually truncate; titles read clean.
 - One line per synthesized page. No body in chat — `/read "<title>"`
   for that.
 - `<total>` = sum of `source_ids.len()` across the clusters that were
-  actually synthesized (not the duplicate ones).
+  actually synthesized (not the duplicates).
 - If the pass produced fewer pages than expected, it's the clustering
   thresholds. Most memories sit alone without enough peers to form a
   cluster of 3+. Capture more on the same topic to grow them.
