@@ -2023,15 +2023,38 @@ pub async fn handle_archive_page(
 }
 
 /// DELETE /api/pages/{id}
+///
+/// Removes both the DB row and the projected `.origin/pages/<slug>.md`
+/// file. DB-first so a transient md removal failure leaves a stale file
+/// (cheap to clean up) rather than a stranded DB row (invisible to the
+/// user). The md side failing is logged but not surfaced as an error —
+/// the caller's intent (delete the page) succeeded as far as queries
+/// are concerned.
 pub async fn handle_delete_page(
     State(state): State<Arc<RwLock<ServerState>>>,
     Path(id): Path<String>,
 ) -> Result<Json<serde_json::Value>, ServerError> {
-    let s = state.read().await;
-    let db = s.db.as_ref().ok_or(ServerError::DbNotInitialized)?;
+    let db = {
+        let s = state.read().await;
+        s.db.as_ref()
+            .cloned()
+            .ok_or(ServerError::DbNotInitialized)?
+    };
+
     db.delete_page(&id)
         .await
         .map_err(|e| ServerError::SearchFailed(e.to_string()))?;
+
+    let knowledge_path = origin_core::config::load_config().knowledge_path_or_default();
+    let writer = origin_core::export::knowledge::KnowledgeWriter::new(knowledge_path);
+    if let Err(e) = writer.remove_page(&id) {
+        tracing::warn!(
+            "[page] DB row deleted but md projection cleanup failed for {}: {}",
+            id,
+            e
+        );
+    }
+
     Ok(Json(serde_json::json!({"status": "deleted"})))
 }
 
