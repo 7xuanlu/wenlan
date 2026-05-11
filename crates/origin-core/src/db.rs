@@ -14316,6 +14316,17 @@ impl MemoryDB {
         )
         .await
         .map_err(|e| OriginError::VectorDb(format!("update_page_content: {e}")))?;
+        // Flip user_edited so the refinery's auto-overwrite branch escalates to
+        // source_conflict instead of clobbering a hand-curated body. Only manual
+        // edits set the flag; re_distill / distill / concept_growth must not.
+        if link_reason == "manual_edit" {
+            conn.execute(
+                "UPDATE pages SET user_edited = 1 WHERE id = ?1",
+                libsql::params![id],
+            )
+            .await
+            .map_err(|e| OriginError::VectorDb(format!("update_page_content user_edited: {e}")))?;
+        }
         // Dual-write: insert any new source links into the join table (idempotent)
         for sid in source_memory_ids {
             let _ = conn
@@ -21532,6 +21543,51 @@ pub(crate) mod tests {
         assert_eq!(c.content, "v2 content");
         assert_eq!(c.version, 2);
         assert_eq!(c.source_memory_ids, vec!["m1", "m2"]);
+        // concept_growth must NOT flip user_edited — refinery would then
+        // refuse to recompile every page it grew, defeating background
+        // distillation. Only manual edits set the flag.
+        assert!(!c.user_edited);
+    }
+
+    #[tokio::test]
+    async fn test_update_page_content_manual_edit_flips_user_edited() {
+        let (db, _dir) = test_db().await;
+        let now = chrono::Utc::now().to_rfc3339();
+        db.insert_page(
+            "page_manual",
+            "Manual",
+            None,
+            "v1 content",
+            None,
+            None,
+            &["m1"],
+            &now,
+        )
+        .await
+        .unwrap();
+
+        let before = db.get_page("page_manual").await.unwrap().unwrap();
+        assert!(!before.user_edited);
+
+        db.update_page_content("page_manual", "v2 hand-written", &["m1"], "manual_edit")
+            .await
+            .unwrap();
+        let after_manual = db.get_page("page_manual").await.unwrap().unwrap();
+        assert!(
+            after_manual.user_edited,
+            "manual_edit must flip user_edited so refinery escalates instead of overwriting"
+        );
+
+        // Subsequent re_distill / concept_growth must not unset the flag — it
+        // sticks until the page is replaced or archived.
+        db.update_page_content("page_manual", "v3 from refinery", &["m1"], "re_distill")
+            .await
+            .unwrap();
+        let after_refinery = db.get_page("page_manual").await.unwrap().unwrap();
+        assert!(
+            after_refinery.user_edited,
+            "user_edited must persist across subsequent non-manual writes"
+        );
     }
 
     #[tokio::test]
