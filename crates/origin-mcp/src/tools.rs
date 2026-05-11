@@ -86,9 +86,7 @@ pub struct CaptureParams {
         description = "The memory content. Write as a complete statement with context and reasoning, not shorthand. One idea per memory."
     )]
     pub content: String,
-    #[schemars(
-        description = "\"profile\" (about the user) or \"knowledge\" (about the world) — or precise: \"identity\", \"preference\", \"goal\", \"fact\", \"decision\" — auto-classified if omitted"
-    )]
+    #[schemars(description = origin_types::MEMORY_TYPE_CAPTURE_DESCRIPTION)]
     pub memory_type: Option<String>,
     #[schemars(
         description = "Topic scope (e.g. 'rust', 'work', 'health', 'origin'). Auto-detected if omitted."
@@ -127,9 +125,7 @@ pub struct RecallParams {
     )]
     #[serde(default, deserialize_with = "deserialize_optional_usize_lenient")]
     pub limit: Option<usize>,
-    #[schemars(
-        description = "Filter by type. Two-level filter: \"profile\" (user-facing) or \"knowledge\" (world-facing), or precise: identity, preference, goal, fact, decision."
-    )]
+    #[schemars(description = origin_types::MEMORY_TYPE_FILTER_DESCRIPTION)]
     pub memory_type: Option<String>,
     #[schemars(description = "Filter by topic scope.")]
     pub domain: Option<String>,
@@ -1179,11 +1175,12 @@ impl ServerHandler for OriginMcpServer {
              - Declarative, not narrative: \"User prefers X because Y\" — not \"User said today they prefer X\". \
                Memories outlive the conversation that produced them.\n\n\
              MEMORY TYPES — omit and trust the backend.\n\n\
-             By default, do NOT set memory_type. The backend auto-classifies into identity / preference / goal / \
-             fact / decision with more context than you have. Agents that over-specify types tend to pick wrong.\n\n\
+             By default, do NOT set memory_type. The backend auto-classifies into identity / preference / \
+             decision / lesson / gotcha / fact with more context than you have. Agents that over-specify \
+             types tend to pick wrong.\n\n\
              Opt-in specification:\n\
-             - \"profile\"   — you're sure it's about the user (identity/preference/goal)\n\
-             - \"knowledge\" — you're sure it's about the world (fact/decision)\n\
+             - \"profile\"   — you're sure it's about the user (identity / preference)\n\
+             - \"knowledge\" — you're sure it's about the world (decision / lesson / gotcha / fact)\n\
              - Precise type — only if you're confident and the distinction matters.\n\n\
              EXCEPTION — decisions carry structured fields (alternatives considered, reversibility, domain) \
              that power the Decision Log view. Set memory_type=\"decision\" explicitly ONLY when the user \
@@ -2233,6 +2230,29 @@ mod tests {
     }
 
     #[test]
+    fn instructions_list_every_canonical_memory_type() {
+        let i = server_instructions();
+        for ty in origin_types::VALID_MEMORY_TYPES {
+            assert!(
+                i.contains(ty),
+                "with_instructions must list canonical memory type \"{ty}\" so MCP clients see the full vocabulary",
+            );
+        }
+    }
+
+    #[test]
+    fn instructions_omit_legacy_goal_type() {
+        let i = server_instructions();
+        // "goal" is a legacy value; daemon classifier no longer emits it
+        // (folded via stability tier mapping). It must not appear in the
+        // type vocabulary advertised to MCP clients.
+        assert!(
+            !i.contains("/ goal /") && !i.contains("goal)"),
+            "with_instructions must not advertise legacy \"goal\" memory_type"
+        );
+    }
+
+    #[test]
     fn instructions_carve_out_decisions_for_decision_log() {
         let i = server_instructions();
         assert!(
@@ -2633,6 +2653,30 @@ mod tests {
                 descriptions.contains_key(name),
                 "tool `{name}` must be registered, got: {:?}",
                 descriptions.keys().collect::<Vec<_>>()
+            );
+        }
+    }
+
+    #[test]
+    fn capture_memory_type_schema_lists_every_canonical_type() {
+        let params_schema = serde_json::to_string(&schemars::schema_for!(CaptureParams))
+            .expect("CaptureParams schema serializes");
+        for ty in origin_types::VALID_MEMORY_TYPES {
+            assert!(
+                params_schema.contains(ty),
+                "CaptureParams.memory_type schema must list canonical type \"{ty}\", got: {params_schema}"
+            );
+        }
+    }
+
+    #[test]
+    fn recall_memory_type_schema_lists_every_canonical_type() {
+        let params_schema = serde_json::to_string(&schemars::schema_for!(RecallParams))
+            .expect("RecallParams schema serializes");
+        for ty in origin_types::VALID_MEMORY_TYPES {
+            assert!(
+                params_schema.contains(ty),
+                "RecallParams.memory_type schema must list canonical type \"{ty}\", got: {params_schema}"
             );
         }
     }

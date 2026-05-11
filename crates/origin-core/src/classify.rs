@@ -19,15 +19,9 @@ use llama_cpp_2::sampling::LlamaSampler;
 use std::num::NonZeroU32;
 use std::time::Instant;
 
-/// Valid memory types for classification (6 canonical types).
-const VALID_MEMORY_TYPES: &[&str] = &[
-    "identity",
-    "preference",
-    "decision",
-    "lesson",
-    "gotcha",
-    "fact",
-];
+/// Re-export the canonical set from `origin-types` so the daemon classifier,
+/// the eval harness, and the MCP tool schema all share the same vocabulary.
+use origin_types::VALID_MEMORY_TYPES;
 
 /// Result of classifying a single memory.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]

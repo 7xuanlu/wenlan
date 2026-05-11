@@ -331,14 +331,7 @@ async fn grade_case(
     Ok(graded)
 }
 
-const VALID_MEMORY_TYPES: &[&str] = &[
-    "identity",
-    "preference",
-    "decision",
-    "lesson",
-    "gotcha",
-    "fact",
-];
+use origin_types::VALID_MEMORY_TYPES;
 
 /// Normalize invalid memory_type to the closest valid type.
 fn normalize_memory_type(raw: &str) -> String {
