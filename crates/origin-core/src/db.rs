@@ -15122,19 +15122,44 @@ impl MemoryDB {
         Ok(())
     }
 
-    /// List active pages with the given stale_reason, up to `limit` rows.
+    /// List active pages with the given stale_reason, up to 10 rows.
     pub async fn list_stale_pages(
         &self,
         reason: &str,
     ) -> Result<Vec<crate::pages::Page>, OriginError> {
+        self.list_stale_pages_scoped(reason, None, None).await
+    }
+
+    /// Like `list_stale_pages` but restricts the result set by entity_id or
+    /// domain when either filter is supplied. Used by the `/api/distill`
+    /// route so a scoped pass (`/distill origin`) doesn't dump unrelated
+    /// stale pages on the user.
+    pub async fn list_stale_pages_scoped(
+        &self,
+        reason: &str,
+        entity_id_filter: Option<&str>,
+        domain_filter: Option<&str>,
+    ) -> Result<Vec<crate::pages::Page>, OriginError> {
         let conn = self.conn.lock().await;
+        let mut sql = String::from(
+            "SELECT id, title, summary, content, entity_id, domain, source_memory_ids, version, status, created_at, last_compiled, last_modified, COALESCE(sources_updated_count, 0), stale_reason, COALESCE(user_edited, 0) \
+             FROM pages WHERE stale_reason = ?1 AND status = 'active'",
+        );
+        let mut bind: Vec<libsql::Value> = vec![libsql::Value::Text(reason.to_string())];
+        if let Some(eid) = entity_id_filter {
+            sql.push_str(" AND entity_id = ?");
+            bind.push(libsql::Value::Text(eid.to_string()));
+        }
+        if let Some(d) = domain_filter {
+            sql.push_str(" AND domain = ?");
+            bind.push(libsql::Value::Text(d.to_string()));
+        }
+        sql.push_str(" ORDER BY last_modified DESC LIMIT 10");
+
         let mut rows = conn
-            .query(
-                "SELECT id, title, summary, content, entity_id, domain, source_memory_ids, version, status, created_at, last_compiled, last_modified, COALESCE(sources_updated_count, 0), stale_reason, COALESCE(user_edited, 0) FROM pages WHERE stale_reason = ?1 AND status = 'active' LIMIT 10",
-                libsql::params![reason],
-            )
+            .query(&sql, bind)
             .await
-            .map_err(|e| OriginError::VectorDb(format!("list_stale_pages: {e}")))?;
+            .map_err(|e| OriginError::VectorDb(format!("list_stale_pages_scoped: {e}")))?;
         let mut result = Vec::new();
         while let Some(row) = rows
             .next()
@@ -15187,6 +15212,53 @@ impl MemoryDB {
         .await
         .map_err(|e| OriginError::VectorDb(format!("clear_page_staleness: {e}")))?;
         Ok(())
+    }
+
+    /// Update only a page's summary (or clear it when `summary = None`).
+    /// Kept separate from `update_page_content` so callers can bump the body
+    /// without touching the one-line claim, and vice versa. Does NOT bump
+    /// `version` — that's `update_page_content`'s job since version tracks
+    /// the body, not the summary.
+    pub async fn update_page_summary(
+        &self,
+        page_id: &str,
+        summary: Option<&str>,
+    ) -> Result<(), OriginError> {
+        let conn = self.conn.lock().await;
+        let now = chrono::Utc::now().to_rfc3339();
+        conn.execute(
+            "UPDATE pages SET summary = ?1, last_modified = ?2 WHERE id = ?3",
+            libsql::params![summary, now, page_id],
+        )
+        .await
+        .map_err(|e| OriginError::VectorDb(format!("update_page_summary: {e}")))?;
+        Ok(())
+    }
+
+    /// Read the current `stale_reason` for a page without loading the rest
+    /// of the row. Used by the refinery's CAS re-check before overwriting —
+    /// if another writer (the agent's PUT) cleared staleness during the LLM
+    /// call, refinery yields rather than clobbering the fresher content.
+    pub async fn get_page_stale_reason(
+        &self,
+        page_id: &str,
+    ) -> Result<Option<String>, OriginError> {
+        let conn = self.conn.lock().await;
+        let mut rows = conn
+            .query(
+                "SELECT stale_reason FROM pages WHERE id = ?1",
+                libsql::params![page_id],
+            )
+            .await
+            .map_err(|e| OriginError::VectorDb(format!("get_page_stale_reason: {e}")))?;
+        match rows
+            .next()
+            .await
+            .map_err(|e| OriginError::VectorDb(e.to_string()))?
+        {
+            Some(row) => Ok(row.get::<Option<String>>(0).unwrap_or(None)),
+            None => Ok(None),
+        }
     }
 
     /// Update a memory's content in-place for topic-key upsert.
@@ -24412,6 +24484,146 @@ pub(crate) mod tests {
         assert!(
             stale.is_empty(),
             "archived pages should not appear in stale list"
+        );
+    }
+
+    #[tokio::test]
+    async fn list_stale_pages_scoped_filters_by_entity_and_domain() {
+        let (db, _dir) = test_db().await;
+        let now = chrono::Utc::now().to_rfc3339();
+
+        // Three stale pages, one per scope axis.
+        db.insert_page(
+            "page_origin",
+            "Origin Page",
+            None,
+            "content",
+            Some("ent_origin"),
+            Some("origin"),
+            &[],
+            &now,
+        )
+        .await
+        .unwrap();
+        db.insert_page(
+            "page_other_entity",
+            "Other Entity",
+            None,
+            "content",
+            Some("ent_other"),
+            Some("origin"),
+            &[],
+            &now,
+        )
+        .await
+        .unwrap();
+        db.insert_page(
+            "page_other_domain",
+            "Other Domain",
+            None,
+            "content",
+            Some("ent_origin"),
+            Some("plugin"),
+            &[],
+            &now,
+        )
+        .await
+        .unwrap();
+
+        for id in ["page_origin", "page_other_entity", "page_other_domain"] {
+            db.set_page_stale(id, "source_updated").await.unwrap();
+        }
+
+        // No filter — all three.
+        let all = db
+            .list_stale_pages_scoped("source_updated", None, None)
+            .await
+            .unwrap();
+        assert_eq!(all.len(), 3);
+
+        // Entity filter — only ent_origin.
+        let by_entity = db
+            .list_stale_pages_scoped("source_updated", Some("ent_origin"), None)
+            .await
+            .unwrap();
+        let ids: Vec<&str> = by_entity.iter().map(|p| p.id.as_str()).collect();
+        assert_eq!(ids.len(), 2);
+        assert!(ids.contains(&"page_origin"));
+        assert!(ids.contains(&"page_other_domain"));
+
+        // Domain filter — only origin.
+        let by_domain = db
+            .list_stale_pages_scoped("source_updated", None, Some("origin"))
+            .await
+            .unwrap();
+        let ids: Vec<&str> = by_domain.iter().map(|p| p.id.as_str()).collect();
+        assert_eq!(ids.len(), 2);
+        assert!(ids.contains(&"page_origin"));
+        assert!(ids.contains(&"page_other_entity"));
+
+        // Both filters — intersection.
+        let both = db
+            .list_stale_pages_scoped("source_updated", Some("ent_origin"), Some("origin"))
+            .await
+            .unwrap();
+        assert_eq!(both.len(), 1);
+        assert_eq!(both[0].id, "page_origin");
+    }
+
+    #[tokio::test]
+    async fn update_page_summary_writes_and_clears() {
+        let (db, _dir) = test_db().await;
+        let now = chrono::Utc::now().to_rfc3339();
+        db.insert_page(
+            "page_sum",
+            "Title",
+            Some("old summary"),
+            "body",
+            None,
+            None,
+            &[],
+            &now,
+        )
+        .await
+        .unwrap();
+
+        db.update_page_summary("page_sum", Some("new summary"))
+            .await
+            .unwrap();
+        let p = db.get_page("page_sum").await.unwrap().unwrap();
+        assert_eq!(p.summary.as_deref(), Some("new summary"));
+
+        db.update_page_summary("page_sum", None).await.unwrap();
+        let p = db.get_page("page_sum").await.unwrap().unwrap();
+        assert_eq!(p.summary, None);
+    }
+
+    #[tokio::test]
+    async fn get_page_stale_reason_reads_current_value() {
+        let (db, _dir) = test_db().await;
+        let now = chrono::Utc::now().to_rfc3339();
+        db.insert_page("page_cas", "Title", None, "body", None, None, &[], &now)
+            .await
+            .unwrap();
+
+        assert_eq!(db.get_page_stale_reason("page_cas").await.unwrap(), None);
+
+        db.set_page_stale("page_cas", "source_updated")
+            .await
+            .unwrap();
+        assert_eq!(
+            db.get_page_stale_reason("page_cas").await.unwrap(),
+            Some("source_updated".to_string())
+        );
+
+        db.clear_page_staleness("page_cas").await.unwrap();
+        assert_eq!(db.get_page_stale_reason("page_cas").await.unwrap(), None);
+
+        // Unknown page → None (not an error). Refinery's CAS treats this
+        // the same as "already cleared" so we yield instead of panicking.
+        assert_eq!(
+            db.get_page_stale_reason("page_missing").await.unwrap(),
+            None
         );
     }
 

@@ -847,11 +847,31 @@ pub(crate) async fn re_distill_stale_pages(
                     .trim()
                     .to_string();
                 if !content.is_empty() {
-                    db.update_page_content(&page.id, &content, &source_id_refs, "re_distill")
-                        .await?;
-                    db.clear_page_staleness(&page.id).await?;
-                    recompiled += 1;
-                    log::info!("[re-distill-stale] refreshed page '{}'", page.title);
+                    // CAS-style re-check: if another writer (typically the
+                    // agent's PUT /api/pages/{id} during a `/distill` skill
+                    // pass) cleared staleness during our LLM call, yield.
+                    // Their content is fresher and we should not overwrite.
+                    // One extra SELECT per page is cheap; locks + TTL sweeps
+                    // would be overengineered for two writers that fight
+                    // maybe once a day.
+                    match db.get_page_stale_reason(&page.id).await? {
+                        Some(_) => {
+                            db.update_page_content(
+                                &page.id,
+                                &content,
+                                &source_id_refs,
+                                "re_distill",
+                            )
+                            .await?;
+                            db.clear_page_staleness(&page.id).await?;
+                            recompiled += 1;
+                            log::info!("[re-distill-stale] refreshed page '{}'", page.title);
+                        }
+                        None => log::info!(
+                            "[re-distill-stale] '{}' staleness already cleared, yielding",
+                            page.title
+                        ),
+                    }
                 }
             }
             Ok(_) => log::warn!("[re-distill-stale] empty LLM output for '{}'", page.title),

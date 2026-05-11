@@ -215,7 +215,9 @@ pub fn build_router(state: SharedState) -> Router {
         )
         .route(
             "/api/pages/{id}",
-            get(memory_routes::handle_get_page).delete(memory_routes::handle_delete_page),
+            get(memory_routes::handle_get_page)
+                .put(memory_routes::handle_refresh_page)
+                .delete(memory_routes::handle_delete_page),
         )
         .route(
             "/api/pages/{id}/sources",

@@ -106,6 +106,14 @@ impl KnowledgeWriter {
         candidate
     }
 
+    /// Resolve the filename currently recorded in `state.json` for a page,
+    /// or `None` if the page has no projection yet. Used by the PUT route's
+    /// rollback path so a failed DB update can restore the prior md bytes
+    /// instead of orphaning the file.
+    pub fn page_filename(&self, page_id: &str) -> Option<String> {
+        self.load_state().pages.get(page_id).map(|s| s.file.clone())
+    }
+
     pub fn remove_page(&self, page_id: &str) -> Result<(), OriginError> {
         let mut state = self.load_state();
 

@@ -3204,6 +3204,113 @@ pub async fn handle_update_page(
     Ok(Json(origin_types::responses::SuccessResponse { ok: true }))
 }
 
+/// PUT /api/pages/{id}
+///
+/// Agent-side refresh of a page from its current sources. Replaces content,
+/// source list, optional summary; clears `stale_reason` so the refinery's
+/// re-distill skips on its next tick (CAS pattern — see refinery
+/// `re_distill_stale_pages`). Distinct from POST `/api/pages/{id}`
+/// (manual edit, flips `user_edited`, preserves sources).
+///
+/// Atomicity mirrors `handle_create_page`: write md first, persist DB index
+/// second, roll back md on DB failure. Old md content is held in memory
+/// for the rollback path so a failed DB update doesn't leave a stale .md
+/// without a matching row.
+pub async fn handle_refresh_page(
+    State(state): State<Arc<RwLock<ServerState>>>,
+    Path(id): Path<String>,
+    Json(req): Json<origin_types::requests::RefreshPageRequest>,
+) -> Result<Json<origin_types::responses::SuccessResponse>, ServerError> {
+    let db = {
+        let s = state.read().await;
+        s.db.clone().ok_or(ServerError::DbNotInitialized)?
+    };
+
+    let existing = db
+        .get_page(&id)
+        .await
+        .map_err(|e| ServerError::Internal(e.to_string()))?
+        .ok_or_else(|| ServerError::ValidationError(format!("page {} not found", id)))?;
+
+    let knowledge_path = origin_core::config::load_config().knowledge_path_or_default();
+    let writer = origin_core::export::knowledge::KnowledgeWriter::new(knowledge_path.clone());
+
+    // Snapshot the current md content for rollback. If the file is missing
+    // we tolerate it — the page may have been created before the projection
+    // existed; the rollback then becomes a remove_page.
+    let existing_state_file = writer.page_filename(&id);
+    let existing_md_content = existing_state_file
+        .as_ref()
+        .and_then(|f| std::fs::read_to_string(knowledge_path.join(f)).ok());
+
+    // Build the refreshed Page for md rendering. Bump version + last_modified
+    // mirror what `update_page_content` writes to the DB row.
+    let now = chrono::Utc::now().to_rfc3339();
+    let refreshed_summary = match &req.summary {
+        Some(s) => Some(s.clone()),
+        None => existing.summary.clone(),
+    };
+    let refreshed_page = origin_core::pages::Page {
+        id: existing.id.clone(),
+        title: existing.title.clone(),
+        summary: refreshed_summary.clone(),
+        content: req.content.clone(),
+        entity_id: existing.entity_id.clone(),
+        domain: existing.domain.clone(),
+        source_memory_ids: req.source_memory_ids.clone(),
+        version: existing.version + 1,
+        status: existing.status.clone(),
+        created_at: existing.created_at.clone(),
+        last_compiled: now.clone(),
+        last_modified: now.clone(),
+        sources_updated_count: 0,
+        stale_reason: None,
+        user_edited: existing.user_edited,
+        relevance_score: 0.0,
+    };
+
+    // 1. md-first
+    writer
+        .write_page(&refreshed_page)
+        .map_err(|e| ServerError::IngestFailed(format!("write_page: {}", e)))?;
+
+    // 2. DB index — content + sources + summary + clear staleness.
+    let source_refs: Vec<&str> = req.source_memory_ids.iter().map(String::as_str).collect();
+    let db_result: Result<(), origin_core::error::OriginError> = async {
+        db.update_page_content(&id, &req.content, &source_refs, "agent_refresh")
+            .await?;
+        if req.summary.is_some() {
+            db.update_page_summary(&id, req.summary.as_deref()).await?;
+        }
+        db.clear_page_staleness(&id).await?;
+        Ok(())
+    }
+    .await;
+
+    if let Err(e) = db_result {
+        // Roll back md to the snapshotted content so the two stores stay
+        // consistent. If the file existed before and we have its bytes,
+        // rewrite them; otherwise drop the projection.
+        let rollback = match (existing_state_file, existing_md_content) {
+            (Some(filename), Some(prev)) => {
+                std::fs::write(knowledge_path.join(filename), prev).map_err(|io| io.to_string())
+            }
+            _ => writer.remove_page(&id).map_err(|err| err.to_string()),
+        };
+        if let Err(rb) = rollback {
+            tracing::warn!(
+                "[page] PUT failed and md rollback also failed for {}: db_err={}, rollback_err={}",
+                id,
+                e,
+                rb
+            );
+        }
+        return Err(ServerError::IngestFailed(e.to_string()));
+    }
+
+    Ok(Json(origin_types::responses::SuccessResponse { ok: true }))
+}
+
 // ===== Recent activity feed =====
 
 #[derive(Debug, Default, serde::Deserialize)]
