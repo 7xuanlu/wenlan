@@ -58,10 +58,15 @@ Bash: top=$(git -C "$PWD" rev-parse --show-toplevel 2>/dev/null); \
 recall(query="<scope>", domain="<scope>", limit=50)
 ```
 
-Read the result. Cluster mentally by shared entities or sub-topic.
-Pick one cluster per page. Semantic ranking biases results toward the
-scope query, which is fine for distillation — the goal is finding
-related material.
+Use the full `limit=50`. A narrow recall hides clusters and produces a
+one-page pass that looks like a no-op. Take the time to pull the wider
+net.
+
+Read the result. Cluster mentally by shared entities or sub-topic. A
+cluster needs at least 3 related memories to be worth synthesizing —
+singletons and pairs go in the "skipped" report below, not into a
+page. Plan to emit every qualifying cluster, not just the strongest
+one.
 
 ### 3. Synthesize and post
 
@@ -85,23 +90,32 @@ Bash: curl -fsS -X POST http://127.0.0.1:7878/api/pages \
        "source_memory_ids":["mem_X","mem_Y","mem_Z"]}'
 ```
 
-Repeat for each cluster, one POST per page.
+Repeat for each qualifying cluster, one POST per page.
 
-### 4. Echo the page in chat
+### 4. Report the pass terse
 
-After each POST, fetch the rendered content so the user can read what
-just got created without leaving Claude Code. Use the page id from the
-POST response — the daemon's slug derivation is the canonical one and
-the local heuristic in the skill drifts on apostrophes and punctuation:
+After all POSTs land, report the pass with one block — no wall of
+text. The user already has the md on disk and can open `/read <id>`
+when they want to see the body. Format:
 
 ```
-Bash: id="<from-POST-response>"; \
-      curl -fsS "http://127.0.0.1:7878/api/pages/$id" \
-        | python3 -c "import json,sys; print(json.load(sys.stdin)['page']['content'])"
+Distilled N page(s):
+  - <Title 1>  →  /read <id>  (·  ~/.origin/pages/<slug>.md)
+  - <Title 2>  →  /read <id>
+  ...
+
+Skipped M cluster(s):
+  - <topic hint>  (<N> memories, no other peers yet)
 ```
 
-Wrap the content in a fenced block when reporting back so the
-rendered output preserves the source view.
+Rules for the report:
+- One line per page; don't include the page body.
+- Mention the md path once per page so users can open it in Obsidian
+  / VS Code without re-asking.
+- Always include the "Skipped" section when at least one candidate
+  cluster fell below the 3-memory floor — silence here makes the
+  user think there was nothing else to do.
+- Omit "Skipped" only when every memory ended up in a page.
 
 ## Auto-commit ~/.origin/
 
