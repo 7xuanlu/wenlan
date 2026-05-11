@@ -107,30 +107,29 @@ file atomically. No second step needed.
 
 ### 4. Report terse
 
-After everything lands, report once:
+Synthesize every cluster the daemon returned — that's the whole pending
+list. Then report once:
 
 ```
-Distilled N page(s):
+Distilled N page(s) from <total> memories in scope `<scope>`:
   - <Title>  (~/.origin/pages/<slug>.md)
   - <Title>  (~/.origin/pages/<slug>.md)
   ...
-
-Skipped M cluster(s):
-  - <topic hint>  (<N> memories)
-  ...
 ```
+
+The daemon already filtered out clusters that don't qualify (too small,
+too thin), so there is no "Skipped" section. If the pass produced
+fewer pages than the user expected, it's because the daemon's
+clustering thresholds are conservative — most memories sit alone
+without enough nearby peers to form a cluster of 3+. Capture more on
+the same topic to grow those latent clusters.
 
 Rules:
 - **Titles, not page ids.** Ids visually truncate; titles read clean.
 - One line per synthesized page. No body in chat — `/read "<title>"`
   for that.
-- **Skipped clusters need a topic hint.** "cluster 1" or "3 memories"
-  alone is useless — the user can't tell what was skipped. Derive a
-  hint from `cluster.entity_name` (when present and not generic like
-  "Origin") or from the first 80 chars of the first memory in
-  `cluster.contents`. Something the user recognizes.
-- Include the "Skipped" section when anything was skipped. Omit it
-  only when every cluster ended up in a page.
+- `<total>` = sum of `source_ids.len()` across all returned clusters
+  (the memories the daemon actually drew on, not the full DB).
 
 ## Auto-commit ~/.origin/
 
