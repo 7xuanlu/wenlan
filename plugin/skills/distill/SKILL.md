@@ -48,20 +48,18 @@ Bash: top=$(git -C "$PWD" rev-parse --show-toplevel 2>/dev/null); \
 
 For `/distill <arg>` → forward `<arg>` to `target`.
 
-### 2. Call the daemon
+### 2. Call the MCP tool
 
 ```
-Bash: curl -fsS -X POST http://127.0.0.1:7878/api/distill \
-  -H 'Content-Type: application/json' \
-  -d '{"target":"<scope>"}'
+distill(target="<scope>")
 ```
 
-Read the JSON response. Possible shapes:
+The tool returns the daemon's JSON payload as text. Parse it. Possible
+shapes:
 
 ```
 {
   "pages_created": 0,
-  "pages_updated": 0,
   "scoped": true,
   "created_ids": [],
   "pending": [
@@ -71,6 +69,11 @@ Read the JSON response. Possible shapes:
   ]
 }
 ```
+
+The route never invokes the daemon LLM. `created_ids` is always empty
+when called from this skill; `pending` carries every cluster the
+daemon found. The agent synthesizes them in this session — that's why
+the LLM choice is consistent with how the user invoked the skill.
 
 `unresolved` + `hint`: relay to user verbatim and stop.
 

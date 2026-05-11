@@ -490,12 +490,14 @@ impl OriginMcpServer {
                         unresolved, hint
                     ))]));
                 }
-                Ok(CallToolResult::success(vec![Content::text(
-                    match params.target {
-                        Some(t) if !t.is_empty() => format!("Distillation triggered for `{}`.", t),
-                        _ => "Distillation pass triggered.".to_string(),
-                    },
-                )]))
+                // Return the daemon's structured response verbatim. The caller
+                // (agent in Claude Code, Cursor, etc.) reads `pending` from the
+                // payload, synthesizes each cluster in-session, and POSTs the
+                // resulting pages back to /api/pages. The MCP tool stays as a
+                // thin wrapper; the synthesis lives where the LLM is.
+                let pretty =
+                    serde_json::to_string_pretty(&resp).unwrap_or_else(|_| resp.to_string());
+                Ok(CallToolResult::success(vec![Content::text(pretty)]))
             }
             Err(e) => Ok(tool_error(e, "distill")),
         }

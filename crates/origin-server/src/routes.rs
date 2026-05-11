@@ -681,16 +681,19 @@ pub async fn handle_distill(
         serde_json::from_slice(&body).map_err(|e| ServerError::ValidationError(e.to_string()))?
     };
 
+    // `/api/distill` always returns clusters as `pending` — the route is
+    // user-triggered, so synthesis belongs to whoever called it (the agent
+    // session via the skill, or another client with its own LLM). The
+    // background refinery calls `distill_pages_scoped` directly with the
+    // daemon LLM; that path is the one that synthesizes inline. Two
+    // triggers, one shared function, no behavior drift inside the function.
     let s = state.read().await;
     let db =
         s.db.as_ref()
             .ok_or(ServerError::Internal("DB not initialized".into()))?;
-    let llm = s.llm.as_ref();
-    let api_llm = s.api_llm.as_ref();
     let prompts = &s.prompts;
     let tuning = &s.tuning.distillation;
 
-    let prefer_llm = api_llm.or(llm);
     let knowledge_path = {
         let config = origin_core::config::load_config();
         Some(config.knowledge_path_or_default())
@@ -715,22 +718,9 @@ pub async fn handle_distill(
 
     let scoped = target.is_some();
 
-    // Page targets need an LLM to redistill — surface a hint payload rather
-    // than a 500 so Basic-Memory daemons fail visibly.
-    if matches!(target, Some(origin_core::refinery::DistillTarget::Page(_)))
-        && !prefer_llm.map(|p| p.is_available()).unwrap_or(false)
-    {
-        return Ok(Json(serde_json::json!({
-            "pages_created": 0,
-            "pages_updated": 0,
-            "scoped": true,
-            "hint": "page re-distill needs an LLM in the daemon — install an on-device model or set an Anthropic key via `origin setup` / `/origin:doctor`",
-        })));
-    }
-
     let result = origin_core::refinery::distill_pages_scoped(
         db,
-        prefer_llm,
+        None, // route never invokes daemon LLM; caller synthesizes pending
         prompts,
         tuning,
         knowledge_path.as_deref(),
@@ -738,25 +728,8 @@ pub async fn handle_distill(
     )
     .await?;
 
-    // Only run the deep refinement sweep on an unscoped pass *with* an LLM.
-    // A scoped /distill call should affect only what the user asked for;
-    // daemon's background scheduler handles the periodic deep sweep.
-    let deep = if scoped || !prefer_llm.map(|p| p.is_available()).unwrap_or(false) {
-        0
-    } else {
-        origin_core::refinery::deep_distill_pages(
-            db,
-            prefer_llm,
-            prompts,
-            tuning,
-            knowledge_path.as_deref(),
-        )
-        .await?
-    };
-
     Ok(Json(serde_json::json!({
         "pages_created": result.created.len(),
-        "pages_updated": deep,
         "scoped": scoped,
         "created_ids": result.created,
         "pending": result.pending,
