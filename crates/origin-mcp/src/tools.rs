@@ -280,6 +280,14 @@ pub struct GetPageParams {
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct GetPageLinksParams {
+    #[schemars(
+        description = "Page id (e.g. 'page_abc'). Returns inbound + outbound wikilink graph for that page."
+    )]
+    pub page_id: String,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct ListMemoriesParams {
     #[schemars(
         description = "Filter by memory type (e.g. 'fact', 'preference', 'decision'). Optional."
@@ -822,6 +830,16 @@ impl OriginMcpServer {
         Ok(CallToolResult::success(vec![Content::text(pretty)]))
     }
 
+    pub async fn get_page_links_impl(&self, page_id: &str) -> Result<CallToolResult, McpError> {
+        let path = format!("/api/pages/{}/links", page_id);
+        let resp: serde_json::Value = match self.client.get(&path).await {
+            Ok(r) => r,
+            Err(e) => return Ok(tool_error(e, "get_page_links")),
+        };
+        let pretty = serde_json::to_string_pretty(&resp).unwrap_or_else(|_| resp.to_string());
+        Ok(CallToolResult::success(vec![Content::text(pretty)]))
+    }
+
     pub async fn list_memories_impl(
         &self,
         params: ListMemoriesParams,
@@ -1130,6 +1148,23 @@ impl OriginMcpServer {
         Parameters(params): Parameters<GetPageParams>,
     ) -> Result<CallToolResult, McpError> {
         self.get_page_impl(&params.page_id).await
+    }
+
+    #[tool(
+        description = "Fetch the wikilink graph centered on one page: `outbound` (labels parsed out of this page's body, with target_page_id set when matched; NULL means broken/orphan) and `inbound` (active pages whose body cites this title). Use this for the /read preview to surface 'N inbound, M broken' without parsing the full body.",
+        annotations(
+            title = "Get page links",
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
+    )]
+    async fn get_page_links(
+        &self,
+        Parameters(params): Parameters<GetPageLinksParams>,
+    ) -> Result<CallToolResult, McpError> {
+        self.get_page_links_impl(&params.page_id).await
     }
 
     #[tool(
@@ -2794,6 +2829,7 @@ mod tests {
             "update_page",
             "delete_page",
             "get_page",
+            "get_page_links",
             "list_memories",
             "search_pages",
             "list_pages_recent",

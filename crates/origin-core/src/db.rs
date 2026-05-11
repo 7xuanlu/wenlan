@@ -14778,6 +14778,32 @@ impl MemoryDB {
         Ok(())
     }
 
+    /// Return the titles of all active pages, ordered by most-recently-
+    /// modified, capped at `limit`. Used to seed the distill prompt with
+    /// the canonical label set so the LLM emits `[[Existing Title]]`
+    /// wikilinks that resolve immediately instead of inventing labels the
+    /// resolver has to leave as orphans.
+    pub async fn list_active_page_titles(&self, limit: usize) -> Result<Vec<String>, OriginError> {
+        let conn = self.conn.lock().await;
+        let mut rows = conn
+            .query(
+                "SELECT title FROM pages WHERE status = 'active' \
+                 ORDER BY last_modified DESC LIMIT ?1",
+                libsql::params![limit as i64],
+            )
+            .await
+            .map_err(|e| OriginError::VectorDb(format!("list_active_page_titles: {e}")))?;
+        let mut out = Vec::with_capacity(limit);
+        while let Some(row) = rows
+            .next()
+            .await
+            .map_err(|e| OriginError::VectorDb(e.to_string()))?
+        {
+            out.push(row.get::<String>(0).unwrap_or_default());
+        }
+        Ok(out)
+    }
+
     /// Find an active page id whose title matches `label` (case-insensitive,
     /// trimmed). Used by the wikilink resolver. Returns None when no active
     /// page matches; archived pages are deliberately ignored so a deleted-
@@ -22198,6 +22224,32 @@ pub(crate) mod tests {
     }
 
     // ---- page_links / wikilink graph ----
+
+    #[tokio::test]
+    async fn list_active_page_titles_excludes_archived_and_honours_limit() {
+        let (db, _dir) = test_db().await;
+        let now = chrono::Utc::now().to_rfc3339();
+        db.insert_page("p1", "Alpha", None, "body", None, None, &[], &now)
+            .await
+            .unwrap();
+        db.insert_page("p2", "Beta", None, "body", None, None, &[], &now)
+            .await
+            .unwrap();
+        db.insert_page("p3", "Gamma", None, "body", None, None, &[], &now)
+            .await
+            .unwrap();
+        db.archive_page("p3").await.unwrap();
+
+        let titles = db.list_active_page_titles(10).await.unwrap();
+        assert_eq!(titles.len(), 2);
+        assert!(titles.contains(&"Alpha".to_string()));
+        assert!(titles.contains(&"Beta".to_string()));
+        assert!(!titles.contains(&"Gamma".to_string()));
+
+        // Limit is respected.
+        let one = db.list_active_page_titles(1).await.unwrap();
+        assert_eq!(one.len(), 1);
+    }
 
     #[tokio::test]
     async fn page_links_resolve_against_existing_titles() {

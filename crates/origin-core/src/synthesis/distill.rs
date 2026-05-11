@@ -365,7 +365,27 @@ pub(crate) async fn distill_one_cluster(
         })
         .collect::<Vec<_>>()
         .join("\n\n");
-    let user_prompt = format!("Topic: {}\n\n{}", topic, memories_block);
+    // Seed the prompt with existing page titles so the LLM emits
+    // `[[Existing Title]]` exactly instead of inventing labels (e.g.
+    // "Rust Borrow Checker" vs "Rust Borrow-Checker") that the resolver
+    // can't match. Cap at 100 most-recent titles to keep the prompt
+    // bounded; orphan-by-count surfaces any drift the cap misses.
+    let existing_titles = db.list_active_page_titles(100).await.unwrap_or_default();
+    let titles_hint = if existing_titles.is_empty() {
+        String::new()
+    } else {
+        let formatted = existing_titles
+            .iter()
+            .map(|t| format!("[[{t}]]"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        format!(
+            "Existing pages you may reference with exact-match wikilinks: {formatted}\n\
+             Use these labels verbatim when linking; only invent a new label \
+             when the topic isn't already covered.\n\n"
+        )
+    };
+    let user_prompt = format!("{titles_hint}Topic: {}\n\n{}", topic, memories_block);
 
     let response = llm
         .generate(LlmRequest {
@@ -755,7 +775,26 @@ pub async fn distill_pages_scoped(
             })
             .collect::<Vec<_>>()
             .join("\n\n");
-        let user_prompt = format!("Topic: {}\n\n{}", topic, memories_block);
+        // Seed the prompt with existing page titles so the LLM emits exact-
+        // match `[[Existing Title]]` wikilinks. Identical to the parallel
+        // path in distill_one_cluster; centralized in a helper would risk
+        // breaking the test harness which exercises one path at a time.
+        let existing_titles = db.list_active_page_titles(100).await.unwrap_or_default();
+        let titles_hint = if existing_titles.is_empty() {
+            String::new()
+        } else {
+            let formatted = existing_titles
+                .iter()
+                .map(|t| format!("[[{t}]]"))
+                .collect::<Vec<_>>()
+                .join(", ");
+            format!(
+                "Existing pages you may reference with exact-match wikilinks: {formatted}\n\
+                 Use these labels verbatim when linking; only invent a new label \
+                 when the topic isn't already covered.\n\n"
+            )
+        };
+        let user_prompt = format!("{titles_hint}Topic: {}\n\n{}", topic, memories_block);
 
         let response = llm
             .generate(LlmRequest {
