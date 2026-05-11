@@ -577,6 +577,7 @@ pub async fn distill_pages_scoped(
                     tuning.max_clusters_per_steep,
                     16_000,
                     tuning.max_unlinked_cluster_size,
+                    tuning.max_grouped_cluster_size,
                     entity_id_filter.as_deref(),
                     domain_filter.as_deref(),
                 )
@@ -616,6 +617,7 @@ pub async fn distill_pages_scoped(
             tuning.max_clusters_per_steep,
             token_limit,
             tuning.max_unlinked_cluster_size,
+            tuning.max_grouped_cluster_size,
             entity_id_filter.as_deref(),
             domain_filter.as_deref(),
         )

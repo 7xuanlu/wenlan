@@ -12242,6 +12242,7 @@ impl MemoryDB {
         max_clusters: usize,
         token_limit: usize,
         max_unlinked_cluster_size: usize,
+        max_grouped_cluster_size: usize,
     ) -> Result<Vec<DistillationCluster>, OriginError> {
         self.find_distillation_clusters_scoped(
             similarity_threshold,
@@ -12249,6 +12250,7 @@ impl MemoryDB {
             max_clusters,
             token_limit,
             max_unlinked_cluster_size,
+            max_grouped_cluster_size,
             None,
             None,
         )
@@ -12268,6 +12270,7 @@ impl MemoryDB {
         max_clusters: usize,
         token_limit: usize,
         max_unlinked_cluster_size: usize,
+        max_grouped_cluster_size: usize,
         entity_id_filter: Option<&str>,
         domain_filter: Option<&str>,
     ) -> Result<Vec<DistillationCluster>, OriginError> {
@@ -12386,80 +12389,85 @@ impl MemoryDB {
 
         let mut clusters: Vec<DistillationCluster> = Vec::new();
 
-        // Sub-cluster within each community group by vector similarity
-        for indices in community_groups.values() {
-            let sub = cluster_by_similarity(&memories, indices, similarity_threshold);
-            for group in sub {
-                if group.len() >= min_size {
-                    let cluster = build_distillation_cluster(&memories, &group);
-                    let split = sub_cluster_by_tokens(&memories, cluster, token_limit);
-                    clusters.extend(split);
-                }
-            }
-        }
-
-        // Sub-cluster within each entity group by vector similarity (no community_id)
-        for indices in entity_groups.values() {
-            let sub = cluster_by_similarity(&memories, indices, similarity_threshold);
-            for group in sub {
-                if group.len() >= min_size {
-                    let cluster = build_distillation_cluster(&memories, &group);
-                    let split = sub_cluster_by_tokens(&memories, cluster, token_limit);
-                    clusters.extend(split);
-                }
-            }
-        }
-
-        // Cluster unlinked memories by vector similarity. Apply hard size cap
-        // to prevent runaway clusters of unlabeled memories (safety valve for
-        // the Mode B failure mode — see spec 2026-04-25). Oversized clusters
-        // are re-clustered once with a tighter threshold instead of dropped:
-        // a 200-memory pile usually contains coherent sub-topics that deserve
-        // their own pages, while truly noisy piles produce tighter groups
-        // that still exceed the cap and are then logged + skipped.
-        if unlinked.len() >= min_size {
-            let sub = cluster_by_similarity(&memories, &unlinked, similarity_threshold);
-            for group in sub {
-                if group.len() < min_size {
-                    continue;
-                }
-                if group.len() > max_unlinked_cluster_size {
-                    // Tighten by +0.05 (cosine similarity is logarithmic in
-                    // semantic distance — +0.1 from a default 0.85 jumps to
-                    // 0.95 which is near-duplicate territory and drops most
-                    // legitimate sub-topics at min_size). Cap at 0.92.
-                    let tighter = (similarity_threshold + 0.05).min(0.92);
-                    log::info!(
-                        "[distill] re-splitting oversized unlinked cluster: \
-                         {} memories at threshold {:.2} (cap = {})",
-                        group.len(),
-                        tighter,
-                        max_unlinked_cluster_size,
-                    );
-                    let resplit = cluster_by_similarity(&memories, &group, tighter);
-                    for sub_group in resplit {
-                        if sub_group.len() < min_size {
-                            continue;
-                        }
-                        if sub_group.len() > max_unlinked_cluster_size {
-                            log::info!(
-                                "[distill] dropping unlinked sub-cluster after re-split: \
-                                 {} memories still > cap {}",
-                                sub_group.len(),
-                                max_unlinked_cluster_size,
-                            );
-                            continue;
-                        }
-                        let cluster = build_distillation_cluster(&memories, &sub_group);
-                        let split = sub_cluster_by_tokens(&memories, cluster, token_limit);
-                        clusters.extend(split);
+        // Process a single bucket's similarity-clustered groups with a hard
+        // size cap. Groups that exceed the cap re-cluster once at a tighter
+        // threshold; sub-groups still over the cap are dropped with a log
+        // line. Used by all three buckets (community, entity, unlinked) so
+        // the same grab-bag mitigation applies uniformly — community 16's
+        // 99-memory "Origin" pile was the original failure mode but the
+        // entity-only bucket has the same risk (e.g. one entity that swept
+        // in unrelated sub-topics over time).
+        //
+        // Cosine similarity is logarithmic in semantic distance — +0.1 from
+        // 0.85 lands at 0.95 (near-duplicate), which drops most legitimate
+        // sub-topics at min_size. +0.05 with a cap of 0.92 is the sweet spot.
+        let process_bucket =
+            |bucket_label: &str,
+             indices: &[usize],
+             cap: usize,
+             clusters: &mut Vec<DistillationCluster>| {
+                let sub = cluster_by_similarity(&memories, indices, similarity_threshold);
+                for group in sub {
+                    if group.len() < min_size {
+                        continue;
                     }
-                    continue;
+                    if group.len() > cap {
+                        let tighter = (similarity_threshold + 0.05).min(0.92);
+                        log::info!(
+                            "[distill] re-splitting oversized {} cluster: \
+                         {} memories at threshold {:.2} (cap = {})",
+                            bucket_label,
+                            group.len(),
+                            tighter,
+                            cap,
+                        );
+                        let resplit = cluster_by_similarity(&memories, &group, tighter);
+                        for sub_group in resplit {
+                            if sub_group.len() < min_size {
+                                continue;
+                            }
+                            if sub_group.len() > cap {
+                                log::info!(
+                                    "[distill] dropping {} sub-cluster after re-split: \
+                                 {} memories still > cap {}",
+                                    bucket_label,
+                                    sub_group.len(),
+                                    cap,
+                                );
+                                continue;
+                            }
+                            let cluster = build_distillation_cluster(&memories, &sub_group);
+                            let split = sub_cluster_by_tokens(&memories, cluster, token_limit);
+                            clusters.extend(split);
+                        }
+                        continue;
+                    }
+                    let cluster = build_distillation_cluster(&memories, &group);
+                    let split = sub_cluster_by_tokens(&memories, cluster, token_limit);
+                    clusters.extend(split);
                 }
-                let cluster = build_distillation_cluster(&memories, &group);
-                let split = sub_cluster_by_tokens(&memories, cluster, token_limit);
-                clusters.extend(split);
-            }
+            };
+
+        for indices in community_groups.values() {
+            process_bucket(
+                "community",
+                indices,
+                max_grouped_cluster_size,
+                &mut clusters,
+            );
+        }
+
+        for indices in entity_groups.values() {
+            process_bucket("entity", indices, max_grouped_cluster_size, &mut clusters);
+        }
+
+        if unlinked.len() >= min_size {
+            process_bucket(
+                "unlinked",
+                &unlinked,
+                max_unlinked_cluster_size,
+                &mut clusters,
+            );
         }
 
         log::info!(
@@ -19891,7 +19899,7 @@ pub(crate) mod tests {
         }
 
         let clusters = db
-            .find_distillation_clusters(0.5, 2, 20, 3500, 50)
+            .find_distillation_clusters(0.5, 2, 20, 3500, 50, 50)
             .await
             .unwrap();
         // Should find at least 1 cluster (entity groups with 2+ members)
@@ -19941,7 +19949,7 @@ pub(crate) mod tests {
         }
 
         let clusters = db
-            .find_distillation_clusters(0.3, 2, 20, 3500, 50)
+            .find_distillation_clusters(0.3, 2, 20, 3500, 50, 50)
             .await
             .unwrap();
 
@@ -20001,7 +20009,7 @@ pub(crate) mod tests {
         }
 
         let clusters = db
-            .find_distillation_clusters(0.3, 2, 20, 3500, 5)
+            .find_distillation_clusters(0.3, 2, 20, 3500, 5, 50)
             .await
             .unwrap();
 
@@ -20046,7 +20054,7 @@ pub(crate) mod tests {
         // Run with cap = 30. The single 60-memory unlinked cluster should be
         // skipped entirely. No clusters > 30 should be returned.
         let clusters = db
-            .find_distillation_clusters(0.3, 2, 20, 3500, 30)
+            .find_distillation_clusters(0.3, 2, 20, 3500, 30, 50)
             .await
             .unwrap();
 
@@ -20056,6 +20064,52 @@ pub(crate) mod tests {
                 "cluster of {} memories exceeded cap of 30: {:?}",
                 cluster.source_ids.len(),
                 cluster.source_ids.first()
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn find_distillation_clusters_caps_oversized_entity_group() {
+        // A single entity (think "Origin" community cid=16 in prod) sweeps in
+        // a long tail of unrelated memories over time. Greedy clustering at
+        // 0.73 returns one big blob; the agent's coherence check rejects it
+        // as a grab-bag and the user sees nothing. The grouped-cluster cap
+        // forces a re-split so coherent sub-topics still surface.
+        let (db, _dir) = test_db().await;
+
+        let now = chrono::Utc::now().timestamp_millis();
+        // 20 memories on the same entity, all with similar prose so they
+        // collapse into one greedy cluster at threshold 0.3 — well above the
+        // grouped cap of 6 used below.
+        for i in 0..20 {
+            let doc = RawDocument {
+                source: "memory".to_string(),
+                source_id: format!("mem_origin_{}", i),
+                content: format!("origin distillation pipeline note number {}", i),
+                title: format!("Note {}", i),
+                url: None,
+                last_modified: now + i as i64,
+                memory_type: None,
+                domain: Some("origin".to_string()),
+                entity_id: Some("ent_origin".to_string()),
+                ..Default::default()
+            };
+            db.upsert_documents(vec![doc]).await.unwrap();
+        }
+
+        // grouped cap = 6 → original blob must re-split or drop; no cluster
+        // returned can exceed 6 memories.
+        let clusters = db
+            .find_distillation_clusters(0.3, 2, 20, 3500, 50, 6)
+            .await
+            .unwrap();
+
+        for cluster in &clusters {
+            assert!(
+                cluster.source_ids.len() <= 6,
+                "entity-bucket cluster of {} memories exceeded grouped cap 6 — \
+                 oversized re-split not applied to entity_groups/community_groups",
+                cluster.source_ids.len(),
             );
         }
     }
