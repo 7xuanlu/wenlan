@@ -3301,6 +3301,22 @@ pub async fn handle_refresh_page(
     Path(id): Path<String>,
     Json(req): Json<origin_types::requests::RefreshPageRequest>,
 ) -> Result<Json<origin_types::responses::SuccessResponse>, ServerError> {
+    // Validate the body before touching the filesystem. Empty content would
+    // produce an empty md; empty source list would orphan the page from its
+    // provenance trail — both contradict the route's documented contract.
+    if req.content.trim().is_empty() {
+        return Err(ServerError::ValidationError(
+            "content must not be empty".into(),
+        ));
+    }
+    if req.source_memory_ids.is_empty() {
+        return Err(ServerError::ValidationError(
+            "source_memory_ids must not be empty — refresh keeps the page \
+             linked to its sources"
+                .into(),
+        ));
+    }
+
     let db = {
         let s = state.read().await;
         s.db.clone().ok_or(ServerError::DbNotInitialized)?
@@ -3325,9 +3341,20 @@ pub async fn handle_refresh_page(
 
     // Build the refreshed Page for md rendering. Bump version + last_modified
     // mirror what `update_page_content` writes to the DB row.
+    //
+    // Summary semantics: `None` keeps the existing summary. `Some(s)` where
+    // `s` is non-empty replaces it. `Some("")` clears it — empty string maps
+    // to NULL in the DB so `IS NULL` filters work (per origin-core's NULL
+    // semantics rule). The MCP tool description documents this; normalize
+    // here so the daemon never stores a literal empty string.
     let now = chrono::Utc::now().to_rfc3339();
-    let refreshed_summary = match &req.summary {
-        Some(s) => Some(s.clone()),
+    let summary_update: Option<Option<String>> = match &req.summary {
+        Some(s) if s.is_empty() => Some(None),
+        Some(s) => Some(Some(s.clone())),
+        None => None,
+    };
+    let refreshed_summary = match &summary_update {
+        Some(opt) => opt.clone(),
         None => existing.summary.clone(),
     };
     let refreshed_page = origin_core::pages::Page {
@@ -3359,8 +3386,8 @@ pub async fn handle_refresh_page(
     let db_result: Result<(), origin_core::error::OriginError> = async {
         db.update_page_content(&id, &req.content, &source_refs, "agent_refresh")
             .await?;
-        if req.summary.is_some() {
-            db.update_page_summary(&id, req.summary.as_deref()).await?;
+        if let Some(opt) = &summary_update {
+            db.update_page_summary(&id, opt.as_deref()).await?;
         }
         db.clear_page_staleness(&id).await?;
         Ok(())

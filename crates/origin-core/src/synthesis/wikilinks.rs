@@ -68,7 +68,16 @@ pub fn extract_wikilinks(content: &str) -> Vec<String> {
                         None => &content[start..close],
                     };
                     let label = raw_label.trim().to_string();
-                    if !label.is_empty() {
+                    // Reject labels that carry stray brackets — those come
+                    // from malformed input like `[[[[foo]]]]` (extracts
+                    // `[[foo`) or `[[foo]bar]]` (extracts `foo]bar`).
+                    // Garbage labels would pollute page_links and the
+                    // orphan-by-count feed. The skipped occurrence still
+                    // advances `i` past the close so the rest of the body
+                    // keeps parsing.
+                    let well_formed =
+                        !label.is_empty() && !label.contains('[') && !label.contains(']');
+                    if well_formed {
                         let key = label.to_lowercase();
                         if seen.insert(key) {
                             out.push(label);
@@ -163,5 +172,28 @@ mod tests {
     fn extract_returns_empty_for_no_links() {
         let v = extract_wikilinks("plain prose with [no brackets] only");
         assert!(v.is_empty());
+    }
+
+    #[test]
+    fn extract_rejects_nested_brackets() {
+        // `[[[[foo]]]]` matches `[[` then walks to first `]]`, would yield
+        // `"[[foo"`. Reject it — that label would poison the orphan feed.
+        let v = extract_wikilinks("noise [[[[foo]]]] more");
+        assert!(v.is_empty());
+    }
+
+    #[test]
+    fn extract_rejects_stray_closing_bracket() {
+        // `[[foo]bar]]` walks to the SECOND `]]` and yields `"foo]bar"`.
+        // Reject.
+        let v = extract_wikilinks("noise [[foo]bar]] more");
+        assert!(v.is_empty());
+    }
+
+    #[test]
+    fn extract_keeps_well_formed_after_rejecting_garbage() {
+        // Garbage followed by a real link — extractor must recover.
+        let v = extract_wikilinks("[[[[foo]]]] and [[Real Link]] keep going");
+        assert_eq!(v, vec!["Real Link"]);
     }
 }

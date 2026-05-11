@@ -4569,18 +4569,26 @@ impl MemoryDB {
             // pick up later when the target is recreated.
             if version < 47 {
                 let conn = self.conn.lock().await;
+                // `label_key` is the lowercased label used for cross-page
+                // dedup + the orphan-by-count signal. `label` keeps the
+                // first-seen casing for display. PRIMARY KEY is on
+                // (source, label_key) so a page that says `[[Origin]]`
+                // and another that says `[[origin]]` group together — the
+                // emergence signal "N pages reach for the same label"
+                // doesn't split on casing drift.
                 conn.execute_batch(
                     "CREATE TABLE IF NOT EXISTS page_links (\
                         source_page_id TEXT NOT NULL, \
                         target_page_id TEXT, \
+                        label_key TEXT NOT NULL, \
                         label TEXT NOT NULL, \
-                        PRIMARY KEY (source_page_id, label), \
+                        PRIMARY KEY (source_page_id, label_key), \
                         FOREIGN KEY (source_page_id) REFERENCES pages(id) ON DELETE CASCADE\
                      ); \
                      CREATE INDEX IF NOT EXISTS idx_page_links_target \
                        ON page_links(target_page_id) WHERE target_page_id IS NOT NULL; \
                      CREATE INDEX IF NOT EXISTS idx_page_links_orphan \
-                       ON page_links(label) WHERE target_page_id IS NULL;",
+                       ON page_links(label_key) WHERE target_page_id IS NULL;",
                 )
                 .await
                 .map_err(|e| OriginError::VectorDb(format!("m47 create: {e}")))?;
@@ -12461,12 +12469,19 @@ impl MemoryDB {
                                 continue;
                             }
                             if sub_group.len() > cap {
-                                log::info!(
+                                // warn! not info! — log filter default is
+                                // warn (per CLAUDE.md), so a silently
+                                // dropped cluster of legitimately related
+                                // memories actually surfaces in operator
+                                // logs instead of vanishing.
+                                log::warn!(
                                     "[distill] dropping {} sub-cluster after re-split: \
-                                 {} memories still > cap {}",
+                                 {} memories still > cap {} — raise \
+                                 max_{}_cluster_size if this is a genuine page",
                                     bucket_label,
                                     sub_group.len(),
                                     cap,
+                                    bucket_label,
                                 );
                                 continue;
                             }
@@ -14344,9 +14359,11 @@ impl MemoryDB {
         Ok(results)
     }
 
-    /// Update a page's content and source memory ids. Increments version, updates timestamps.
-    /// Dual-writes: updates the JSON `source_memory_ids` column (backward compat) AND
-    /// inserts any new links into the `page_sources` join table.
+    /// Update a page's content + source memory ids in a single atomic UPDATE
+    /// (content, version bump, timestamps, user_edited flag). Reconciles the
+    /// `page_sources` join table to match the new source set: rows no longer
+    /// in the list get DELETEd, surviving rows keep their existing
+    /// `link_reason` history via INSERT OR IGNORE.
     pub async fn update_page_content(
         &self,
         id: &str,
@@ -14354,30 +14371,110 @@ impl MemoryDB {
         source_memory_ids: &[&str],
         link_reason: &str,
     ) -> Result<(), OriginError> {
+        self.try_update_page_content(id, content, source_memory_ids, link_reason, false)
+            .await
+            .map(|_| ())
+    }
+
+    /// Refinery-flavoured variant of `update_page_content` that gates the
+    /// content swap on `stale_reason IS NOT NULL`. If a concurrent writer
+    /// (typically the agent's PUT) already cleared staleness, the UPDATE
+    /// affects zero rows and we yield instead of clobbering fresher content.
+    /// Returns `true` when the write landed, `false` when it was skipped.
+    /// Folds the CAS into the UPDATE itself — no TOCTOU gap between checking
+    /// `stale_reason` and writing.
+    pub async fn try_update_page_content_if_stale(
+        &self,
+        id: &str,
+        content: &str,
+        source_memory_ids: &[&str],
+        link_reason: &str,
+    ) -> Result<bool, OriginError> {
+        self.try_update_page_content(id, content, source_memory_ids, link_reason, true)
+            .await
+    }
+
+    async fn try_update_page_content(
+        &self,
+        id: &str,
+        content: &str,
+        source_memory_ids: &[&str],
+        link_reason: &str,
+        require_stale: bool,
+    ) -> Result<bool, OriginError> {
         let source_ids_json = serde_json::to_string(&source_memory_ids)
             .map_err(|e| OriginError::VectorDb(format!("serialize source_memory_ids: {e}")))?;
         let now = chrono::Utc::now().to_rfc3339();
         let now_ts = chrono::Utc::now().timestamp();
         let conn = self.conn.lock().await;
-        // Dual-write: update JSON column (backward compat) + increment version + timestamps
-        conn.execute(
-            "UPDATE pages SET content = ?1, source_memory_ids = ?2, version = version + 1, last_compiled = ?3, last_modified = ?3 WHERE id = ?4",
-            libsql::params![content, source_ids_json, now, id],
-        )
-        .await
-        .map_err(|e| OriginError::VectorDb(format!("update_page_content: {e}")))?;
-        // Flip user_edited so the refinery's auto-overwrite branch escalates to
-        // source_conflict instead of clobbering a hand-curated body. Only manual
-        // edits set the flag; re_distill / distill / concept_growth must not.
-        if link_reason == "manual_edit" {
+
+        // Single atomic UPDATE: content + version + timestamps + user_edited
+        // flag. Folding the manual_edit branch into SQL closes the TOCTOU gap
+        // where a concurrent reader could observe new content paired with the
+        // stale `user_edited = 0`. The CAS variant adds `AND stale_reason
+        // IS NOT NULL` so the refinery can guard against the agent's PUT
+        // landing mid-LLM.
+        let sql = if require_stale {
+            "UPDATE pages SET \
+               content = ?1, \
+               source_memory_ids = ?2, \
+               version = version + 1, \
+               last_compiled = ?3, \
+               last_modified = ?3, \
+               user_edited = CASE WHEN ?4 = 'manual_edit' THEN 1 ELSE user_edited END \
+             WHERE id = ?5 AND stale_reason IS NOT NULL"
+        } else {
+            "UPDATE pages SET \
+               content = ?1, \
+               source_memory_ids = ?2, \
+               version = version + 1, \
+               last_compiled = ?3, \
+               last_modified = ?3, \
+               user_edited = CASE WHEN ?4 = 'manual_edit' THEN 1 ELSE user_edited END \
+             WHERE id = ?5"
+        };
+        let affected = conn
+            .execute(
+                sql,
+                libsql::params![content, source_ids_json, now, link_reason, id],
+            )
+            .await
+            .map_err(|e| OriginError::VectorDb(format!("update_page_content: {e}")))?;
+        if require_stale && affected == 0 {
+            return Ok(false);
+        }
+
+        // Reconcile join table: DELETE rows whose memory_source_id is no
+        // longer in the list, then INSERT OR IGNORE the survivors. Preserves
+        // existing `link_reason` on rows that survive — only brand-new rows
+        // pick up the current reason. Empty source list = wipe.
+        if source_memory_ids.is_empty() {
             conn.execute(
-                "UPDATE pages SET user_edited = 1 WHERE id = ?1",
+                "DELETE FROM page_sources WHERE page_id = ?1",
                 libsql::params![id],
             )
             .await
-            .map_err(|e| OriginError::VectorDb(format!("update_page_content user_edited: {e}")))?;
+            .map_err(|e| OriginError::VectorDb(format!("update_page_content prune: {e}")))?;
+        } else {
+            // Build the NOT IN clause via bind parameters — never string
+            // interpolation. Memory ids come from request bodies.
+            let placeholders: String = (0..source_memory_ids.len())
+                .map(|i| format!("?{}", i + 2))
+                .collect::<Vec<_>>()
+                .join(", ");
+            let delete_sql = format!(
+                "DELETE FROM page_sources WHERE page_id = ?1 AND memory_source_id NOT IN ({})",
+                placeholders
+            );
+            let mut bind: Vec<libsql::Value> = Vec::with_capacity(1 + source_memory_ids.len());
+            bind.push(libsql::Value::Text(id.to_string()));
+            for sid in source_memory_ids {
+                bind.push(libsql::Value::Text((*sid).to_string()));
+            }
+            conn.execute(&delete_sql, libsql::params_from_iter(bind))
+                .await
+                .map_err(|e| OriginError::VectorDb(format!("update_page_content prune: {e}")))?;
         }
-        // Dual-write: insert any new source links into the join table (idempotent)
         for sid in source_memory_ids {
             let _ = conn
                 .execute(
@@ -14396,7 +14493,7 @@ impl MemoryDB {
         if let Err(e) = self.refresh_page_wikilinks(id, content).await {
             log::warn!("[page-links] refresh failed for {id}: {e}");
         }
-        Ok(())
+        Ok(true)
     }
 
     /// Extract wikilinks from `content`, resolve them against current page
@@ -14739,12 +14836,14 @@ impl MemoryDB {
             )
             .await?;
             for link in links {
+                let label_key = link.label.to_lowercase();
                 conn.execute(
-                    "INSERT INTO page_links (source_page_id, target_page_id, label) \
-                     VALUES (?1, ?2, ?3)",
+                    "INSERT INTO page_links (source_page_id, target_page_id, label_key, label) \
+                     VALUES (?1, ?2, ?3, ?4)",
                     libsql::params![
                         source_page_id,
                         link.target_page_id.clone(),
+                        label_key,
                         link.label.clone(),
                     ],
                 )
@@ -14777,7 +14876,7 @@ impl MemoryDB {
         let mut rows = conn
             .query(
                 "SELECT target_page_id, label FROM page_links \
-                 WHERE source_page_id = ?1 ORDER BY label",
+                 WHERE source_page_id = ?1 ORDER BY label_key",
                 libsql::params![source_page_id],
             )
             .await
@@ -14798,7 +14897,8 @@ impl MemoryDB {
 
     /// Inbound links to a page — every active source whose body contains a
     /// `[[Title]]` reference that resolves here. Used by the page's "linked
-    /// from" view.
+    /// from" view. Tie-break on source_page_id keeps order stable across
+    /// same-second timestamps.
     pub async fn get_page_inbound_links(
         &self,
         target_page_id: &str,
@@ -14809,7 +14909,7 @@ impl MemoryDB {
                 "SELECT pl.source_page_id, pl.label FROM page_links pl \
                  INNER JOIN pages p ON p.id = pl.source_page_id \
                  WHERE pl.target_page_id = ?1 AND p.status = 'active' \
-                 ORDER BY p.last_modified DESC",
+                 ORDER BY p.last_modified DESC, pl.source_page_id ASC",
                 libsql::params![target_page_id],
             )
             .await
@@ -14828,9 +14928,11 @@ impl MemoryDB {
         Ok(out)
     }
 
-    /// Group every still-orphan label by count. The orphan-by-count feed is
-    /// the actual product win: a label that 3+ independent pages reach for
-    /// is a topic candidate emergence can synthesize a page from.
+    /// Group every still-orphan label by count, restricted to active source
+    /// pages (archived pages keep their `page_links` rows via cascade-on-
+    /// delete-only, but they shouldn't inflate the emergence signal once
+    /// the user has retired them). Returns up to 100 rows; callers needing
+    /// more should raise `min_count` and re-issue.
     pub async fn list_orphan_link_labels(
         &self,
         min_count: i64,
@@ -14838,12 +14940,14 @@ impl MemoryDB {
         let conn = self.conn.lock().await;
         let mut rows = conn
             .query(
-                "SELECT label, COUNT(DISTINCT source_page_id) AS n \
-                 FROM page_links \
-                 WHERE target_page_id IS NULL \
-                 GROUP BY label \
+                "SELECT MIN(pl.label) AS display_label, \
+                        COUNT(DISTINCT pl.source_page_id) AS n \
+                 FROM page_links pl \
+                 INNER JOIN pages p ON p.id = pl.source_page_id \
+                 WHERE pl.target_page_id IS NULL AND p.status = 'active' \
+                 GROUP BY pl.label_key \
                  HAVING n >= ?1 \
-                 ORDER BY n DESC, label ASC \
+                 ORDER BY n DESC, display_label ASC \
                  LIMIT 100",
                 libsql::params![min_count],
             )
@@ -14865,39 +14969,44 @@ impl MemoryDB {
 
     /// Walk the orphan rows and re-resolve them against current page titles.
     /// Returns the number of rows that flipped from NULL to a real target —
-    /// the refinery uses this for the log line. Cheap: one indexed query +
-    /// one UPDATE per flipped row, no LLM.
+    /// the refinery uses this for the log line. Snapshots the label list
+    /// under a brief lock, then drops the connection before the per-label
+    /// lookups so other writers aren't starved while the resolver scans.
     pub async fn resolve_orphan_page_links(&self) -> Result<usize, OriginError> {
-        let conn = self.conn.lock().await;
-        let mut rows = conn
-            .query(
-                "SELECT DISTINCT label FROM page_links WHERE target_page_id IS NULL",
-                (),
-            )
-            .await
-            .map_err(|e| OriginError::VectorDb(format!("resolve_orphan_links list: {e}")))?;
-        let mut labels: Vec<String> = Vec::new();
-        while let Some(row) = rows
-            .next()
-            .await
-            .map_err(|e| OriginError::VectorDb(e.to_string()))?
-        {
-            labels.push(row.get::<String>(0).unwrap_or_default());
-        }
-        drop(rows);
+        let labels: Vec<String> = {
+            let conn = self.conn.lock().await;
+            let mut rows = conn
+                .query(
+                    "SELECT DISTINCT label_key FROM page_links WHERE target_page_id IS NULL",
+                    (),
+                )
+                .await
+                .map_err(|e| OriginError::VectorDb(format!("resolve_orphan_links list: {e}")))?;
+            let mut labels: Vec<String> = Vec::new();
+            while let Some(row) = rows
+                .next()
+                .await
+                .map_err(|e| OriginError::VectorDb(e.to_string()))?
+            {
+                labels.push(row.get::<String>(0).unwrap_or_default());
+            }
+            labels
+        };
 
         let mut resolved = 0usize;
-        for label in labels {
-            let trimmed = label.trim();
+        for label_key in labels {
+            let trimmed = label_key.trim();
             if trimmed.is_empty() {
                 continue;
             }
-            // Re-run the same case-insensitive lookup the resolver uses on
-            // write so behavior stays uniform.
+            // Look up + update under a fresh short-lived lock per label so
+            // other writers (page inserts, ingest) aren't blocked while we
+            // walk the full orphan set.
+            let conn = self.conn.lock().await;
             let mut hit = conn
                 .query(
                     "SELECT id FROM pages \
-                     WHERE LOWER(title) = LOWER(?1) AND status = 'active' \
+                     WHERE LOWER(title) = ?1 AND status = 'active' \
                      LIMIT 1",
                     libsql::params![trimmed],
                 )
@@ -14914,8 +15023,8 @@ impl MemoryDB {
                 drop(hit);
                 conn.execute(
                     "UPDATE page_links SET target_page_id = ?1 \
-                     WHERE label = ?2 AND target_page_id IS NULL",
-                    libsql::params![target, label],
+                     WHERE label_key = ?2 AND target_page_id IS NULL",
+                    libsql::params![target, label_key],
                 )
                 .await
                 .map_err(|e| OriginError::VectorDb(format!("resolve_orphan_links update: {e}")))?;
@@ -22024,6 +22133,21 @@ pub(crate) mod tests {
             after_refinery.user_edited,
             "user_edited must persist across subsequent non-manual writes"
         );
+
+        // A second manual_edit after a refinery write must keep the flag set
+        // (idempotent) — a regression that wrote `user_edited = 0` on the
+        // re_distill branch would pass the earlier asserts but fail here
+        // because the manual_edit doesn't UPSET an already-true flag.
+        db.update_page_content(
+            "page_manual",
+            "v4 hand-tweaked again",
+            &["m1"],
+            "manual_edit",
+        )
+        .await
+        .unwrap();
+        let after_second_manual = db.get_page("page_manual").await.unwrap().unwrap();
+        assert!(after_second_manual.user_edited);
     }
 
     #[tokio::test]
