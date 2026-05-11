@@ -73,7 +73,11 @@ JSON. Possible shapes:
       "user_edited": false, "sources_updated_count": 3 },
     ...
   ],
-  "stale_truncated": false
+  "stale_truncated": false,
+  "orphan_topics": [
+    { "label": "Topic Z", "count": 3 },
+    ...
+  ]
 }
 ```
 
@@ -191,6 +195,25 @@ update_page(page_id=stale.page_id,
 
 When `stale_truncated == true`, tell the user "more stale pages
 remain — re-run `/distill` after this pass to continue."
+
+### 3.6 Surface orphan-topic suggestions
+
+`orphan_topics` lists wikilink labels that 2+ existing pages reach
+for but no page is named for. Each entry is a topic-discovery
+signal — other pages are asking for this page.
+
+Do **not** auto-create pages from this list — the agent doesn't have
+the source memories at hand, and an empty-stub page is worse than no
+page. Surface them in the report so the user can choose to run
+`/distill <label>` intentionally:
+
+```
+Topic suggestions (other pages link here, no page yet):
+  - "Topic Z"  (3 pages reference it)
+  - "Other"    (2 pages reference it)
+```
+
+Skip the section when `orphan_topics` is empty.
 
 ### 4. Report terse
 

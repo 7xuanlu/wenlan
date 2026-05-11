@@ -54,9 +54,31 @@ pub(crate) async fn assign_orphan_memories(
         .collect::<Vec<_>>()
         .join("\n");
 
+    // Surface labels that 2+ other pages link to but no page is named for —
+    // those are first-class topic candidates the LLM should consider when
+    // proposing new pages from orphan memories. The orphan-by-count signal
+    // is the "the rest of the wiki is asking for this page" feed; feeding
+    // it here closes the loop instead of leaving it as a queryable metric
+    // nothing consumes. Best-effort: a failure logs and falls through.
+    let orphan_labels = db.list_orphan_link_labels(2).await.unwrap_or_default();
+    let orphan_hint = if orphan_labels.is_empty() {
+        String::new()
+    } else {
+        let formatted = orphan_labels
+            .iter()
+            .map(|(label, count)| format!("[[{label}]] ({count} other pages)"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        format!(
+            "\n\nTopics other pages already link to but aren't pages yet — \
+             promote a memory cluster into a new page when the orphan memories \
+             match one of these labels:\n{formatted}"
+        )
+    };
+
     let user_prompt = format!(
-        "Unassigned memories:\n{}\n\nExisting concepts:\n{}",
-        memories_text, concepts_text
+        "Unassigned memories:\n{}\n\nExisting concepts:\n{}{}",
+        memories_text, concepts_text, orphan_hint
     );
 
     let response = llm
