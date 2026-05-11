@@ -83,12 +83,32 @@ the LLM choice is consistent with how the user invoked the skill.
 
 `unresolved` + `hint`: relay to user verbatim and stop.
 
-### 3. Finish each `pending` cluster
+### 3. Overlap check (skip duplicates)
 
-For each cluster in `pending`:
+Before synthesizing anything, fetch existing pages and check each
+cluster against them. Daemon doesn't dedupe at the route level — the
+old Jaccard check used to run inside the daemon's synth path which
+this route bypasses. Without this step, repeated `/distill` calls
+re-create the same pages.
 
-- Title: short noun phrase (use `entity_name` if present, otherwise a
-  short phrase summarizing the cluster).
+```
+Bash: curl -fsS "http://127.0.0.1:7878/api/pages?limit=100"
+```
+
+For each `cluster` in `pending`, compute
+`overlap = |cluster.source_ids ∩ page.source_memory_ids| / |cluster.source_ids ∪ page.source_memory_ids|`
+against every existing page. If `overlap > 0.5` for any page, mark
+the cluster as a duplicate of that page and skip it. Save the existing
+page title and overlap count for the report.
+
+### 4. Synthesize each non-duplicate cluster
+
+For each remaining cluster:
+
+- Title: short noun phrase. Prefer `cluster.entity_name` when it's
+  specific; if the entity name is generic (e.g. the project name
+  itself), derive a more specific title from the first memory's
+  content.
 - Summary: one sentence — the durable claim.
 - Body: 3-7 paragraphs of wiki prose. Use `[[wikilinks]]`. Cite source
   ids inline with `(source: mem_XXX)`.
@@ -105,31 +125,33 @@ Bash: curl -fsS -X POST http://127.0.0.1:7878/api/pages \
 The daemon's `handle_create_page` writes both the DB row and the md
 file atomically. No second step needed.
 
-### 4. Report terse
+### 5. Report terse
 
-Synthesize every cluster the daemon returned — that's the whole pending
-list. Then report once:
+Report once after all POSTs land. Include duplicates skipped in step
+3 so the user can see what was already covered:
 
 ```
 Distilled N page(s) from <total> memories in scope `<scope>`:
   - <Title>  (~/.origin/pages/<slug>.md)
   - <Title>  (~/.origin/pages/<slug>.md)
   ...
+
+Duplicates of existing pages (skipped):
+  - <existing page title>  (<N> memories overlap)
+  ...
 ```
 
-The daemon already filtered out clusters that don't qualify (too small,
-too thin), so there is no "Skipped" section. If the pass produced
-fewer pages than the user expected, it's because the daemon's
-clustering thresholds are conservative — most memories sit alone
-without enough nearby peers to form a cluster of 3+. Capture more on
-the same topic to grow those latent clusters.
+Omit the "Duplicates" section when nothing was a duplicate.
 
 Rules:
 - **Titles, not page ids.** Ids visually truncate; titles read clean.
 - One line per synthesized page. No body in chat — `/read "<title>"`
   for that.
-- `<total>` = sum of `source_ids.len()` across all returned clusters
-  (the memories the daemon actually drew on, not the full DB).
+- `<total>` = sum of `source_ids.len()` across the clusters that were
+  actually synthesized (not the duplicate ones).
+- If the pass produced fewer pages than expected, it's the clustering
+  thresholds. Most memories sit alone without enough peers to form a
+  cluster of 3+. Capture more on the same topic to grow them.
 
 ## Auto-commit ~/.origin/
 
