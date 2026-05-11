@@ -4555,6 +4555,40 @@ impl MemoryDB {
                     log::info!("[migration] Self-heal: recreated idx_pages_embedding");
                 }
             }
+
+            // Migration 47: page_links table — wikilink graph. Every `[[Label]]`
+            // in a page body resolves at write time against existing page
+            // titles; resolved links land here with `target_page_id` set,
+            // unresolved (orphan) links land with `target_page_id = NULL`.
+            // The orphan-by-label query feeds emergence as a topic-discovery
+            // signal once enough independent pages link to the same label.
+            //
+            // FK on source_page_id cascades so deleting a page wipes its
+            // outbound links; target_page_id deliberately has no FK so an
+            // archived/deleted target leaves orphan rows the resolver can
+            // pick up later when the target is recreated.
+            if version < 47 {
+                let conn = self.conn.lock().await;
+                conn.execute_batch(
+                    "CREATE TABLE IF NOT EXISTS page_links (\
+                        source_page_id TEXT NOT NULL, \
+                        target_page_id TEXT, \
+                        label TEXT NOT NULL, \
+                        PRIMARY KEY (source_page_id, label), \
+                        FOREIGN KEY (source_page_id) REFERENCES pages(id) ON DELETE CASCADE\
+                     ); \
+                     CREATE INDEX IF NOT EXISTS idx_page_links_target \
+                       ON page_links(target_page_id) WHERE target_page_id IS NOT NULL; \
+                     CREATE INDEX IF NOT EXISTS idx_page_links_orphan \
+                       ON page_links(label) WHERE target_page_id IS NULL;",
+                )
+                .await
+                .map_err(|e| OriginError::VectorDb(format!("m47 create: {e}")))?;
+                conn.execute("PRAGMA user_version = 47", ())
+                    .await
+                    .map_err(|e| OriginError::VectorDb(format!("m47 bump: {e}")))?;
+                log::info!("[migration] Migration 47 applied: page_links table for wikilink graph");
+            }
         }
 
         Ok(())
@@ -14165,6 +14199,14 @@ impl MemoryDB {
         conn.execute("COMMIT", ())
             .await
             .map_err(|e| OriginError::VectorDb(format!("insert_page commit: {e}")))?;
+        drop(conn);
+
+        // Wikilink graph refresh runs after the row + sources are committed
+        // so a failure here can't roll back the page itself. Same trade-off
+        // as update_page_content: link index is recoverable on the next save.
+        if let Err(e) = self.refresh_page_wikilinks(id, content).await {
+            log::warn!("[page-links] refresh failed for new page {id}: {e}");
+        }
         Ok(())
     }
 
@@ -14344,7 +14386,31 @@ impl MemoryDB {
                 )
                 .await;
         }
+        drop(conn);
+
+        // Refresh the wikilink graph for this page. Extraction is pure CPU;
+        // the resolver + replace use their own short-lived locks. Failures
+        // are logged but do not roll back the content write — a broken link
+        // index is recoverable on the next save and far less harmful than
+        // failing to persist the user-facing body.
+        if let Err(e) = self.refresh_page_wikilinks(id, content).await {
+            log::warn!("[page-links] refresh failed for {id}: {e}");
+        }
         Ok(())
+    }
+
+    /// Extract wikilinks from `content`, resolve them against current page
+    /// titles, and replace the page's row set in `page_links`. Idempotent.
+    /// Used by both `insert_page` and `update_page_content` so write paths
+    /// stay coherent without duplicating the orchestration.
+    pub async fn refresh_page_wikilinks(
+        &self,
+        page_id: &str,
+        content: &str,
+    ) -> Result<(), OriginError> {
+        let labels = crate::synthesis::wikilinks::extract_wikilinks(content);
+        let links = crate::synthesis::wikilinks::resolve_against_pages(self, &labels).await?;
+        self.replace_page_links(page_id, &links).await
     }
 
     /// Find a matching page for a new memory — by entity_id first, then embedding similarity.
@@ -14613,6 +14679,250 @@ impl MemoryDB {
             .await
             .map_err(|e| OriginError::VectorDb(format!("delete_page: {e}")))?;
         Ok(())
+    }
+
+    /// Find an active page id whose title matches `label` (case-insensitive,
+    /// trimmed). Used by the wikilink resolver. Returns None when no active
+    /// page matches; archived pages are deliberately ignored so a deleted-
+    /// then-recreated page resolves to the new id, not the dead one.
+    pub async fn find_active_page_id_by_title(
+        &self,
+        label: &str,
+    ) -> Result<Option<String>, OriginError> {
+        let trimmed = label.trim();
+        if trimmed.is_empty() {
+            return Ok(None);
+        }
+        let conn = self.conn.lock().await;
+        let mut rows = conn
+            .query(
+                "SELECT id FROM pages \
+                 WHERE LOWER(title) = LOWER(?1) AND status = 'active' \
+                 LIMIT 1",
+                libsql::params![trimmed],
+            )
+            .await
+            .map_err(|e| OriginError::VectorDb(format!("find_active_page_id_by_title: {e}")))?;
+        match rows
+            .next()
+            .await
+            .map_err(|e| OriginError::VectorDb(e.to_string()))?
+        {
+            Some(row) => Ok(Some(
+                row.get::<String>(0)
+                    .map_err(|e| OriginError::VectorDb(e.to_string()))?,
+            )),
+            None => Ok(None),
+        }
+    }
+
+    /// Replace the entire outbound-link set for a page in one BEGIN/COMMIT.
+    /// Called from `update_page_content` and `insert_page` after wikilink
+    /// extraction so the join table stays coherent with the body.
+    ///
+    /// `links` carries resolved + unresolved labels — unresolved rows go in
+    /// with `target_page_id = NULL` so the refinery's resolve phase can pick
+    /// them up later when the target page exists.
+    pub async fn replace_page_links(
+        &self,
+        source_page_id: &str,
+        links: &[crate::synthesis::wikilinks::Wikilink],
+    ) -> Result<(), OriginError> {
+        let conn = self.conn.lock().await;
+        conn.execute("BEGIN", ())
+            .await
+            .map_err(|e| OriginError::VectorDb(format!("replace_page_links begin: {e}")))?;
+        let exec = async {
+            conn.execute(
+                "DELETE FROM page_links WHERE source_page_id = ?1",
+                libsql::params![source_page_id],
+            )
+            .await?;
+            for link in links {
+                conn.execute(
+                    "INSERT INTO page_links (source_page_id, target_page_id, label) \
+                     VALUES (?1, ?2, ?3)",
+                    libsql::params![
+                        source_page_id,
+                        link.target_page_id.clone(),
+                        link.label.clone(),
+                    ],
+                )
+                .await?;
+            }
+            Ok::<_, libsql::Error>(())
+        }
+        .await;
+        match exec {
+            Ok(()) => {
+                conn.execute("COMMIT", ()).await.map_err(|e| {
+                    OriginError::VectorDb(format!("replace_page_links commit: {e}"))
+                })?;
+                Ok(())
+            }
+            Err(e) => {
+                let _ = conn.execute("ROLLBACK", ()).await;
+                Err(OriginError::VectorDb(format!("replace_page_links: {e}")))
+            }
+        }
+    }
+
+    /// Outbound links from a page. Used by `/api/pages/{id}/links` and the
+    /// `/read` preview's link-count line.
+    pub async fn get_page_outbound_links(
+        &self,
+        source_page_id: &str,
+    ) -> Result<Vec<crate::synthesis::wikilinks::Wikilink>, OriginError> {
+        let conn = self.conn.lock().await;
+        let mut rows = conn
+            .query(
+                "SELECT target_page_id, label FROM page_links \
+                 WHERE source_page_id = ?1 ORDER BY label",
+                libsql::params![source_page_id],
+            )
+            .await
+            .map_err(|e| OriginError::VectorDb(format!("get_page_outbound_links: {e}")))?;
+        let mut out = Vec::new();
+        while let Some(row) = rows
+            .next()
+            .await
+            .map_err(|e| OriginError::VectorDb(e.to_string()))?
+        {
+            out.push(crate::synthesis::wikilinks::Wikilink {
+                target_page_id: row.get::<Option<String>>(0).unwrap_or(None),
+                label: row.get::<String>(1).unwrap_or_default(),
+            });
+        }
+        Ok(out)
+    }
+
+    /// Inbound links to a page — every active source whose body contains a
+    /// `[[Title]]` reference that resolves here. Used by the page's "linked
+    /// from" view.
+    pub async fn get_page_inbound_links(
+        &self,
+        target_page_id: &str,
+    ) -> Result<Vec<(String, String)>, OriginError> {
+        let conn = self.conn.lock().await;
+        let mut rows = conn
+            .query(
+                "SELECT pl.source_page_id, pl.label FROM page_links pl \
+                 INNER JOIN pages p ON p.id = pl.source_page_id \
+                 WHERE pl.target_page_id = ?1 AND p.status = 'active' \
+                 ORDER BY p.last_modified DESC",
+                libsql::params![target_page_id],
+            )
+            .await
+            .map_err(|e| OriginError::VectorDb(format!("get_page_inbound_links: {e}")))?;
+        let mut out = Vec::new();
+        while let Some(row) = rows
+            .next()
+            .await
+            .map_err(|e| OriginError::VectorDb(e.to_string()))?
+        {
+            out.push((
+                row.get::<String>(0).unwrap_or_default(),
+                row.get::<String>(1).unwrap_or_default(),
+            ));
+        }
+        Ok(out)
+    }
+
+    /// Group every still-orphan label by count. The orphan-by-count feed is
+    /// the actual product win: a label that 3+ independent pages reach for
+    /// is a topic candidate emergence can synthesize a page from.
+    pub async fn list_orphan_link_labels(
+        &self,
+        min_count: i64,
+    ) -> Result<Vec<(String, i64)>, OriginError> {
+        let conn = self.conn.lock().await;
+        let mut rows = conn
+            .query(
+                "SELECT label, COUNT(DISTINCT source_page_id) AS n \
+                 FROM page_links \
+                 WHERE target_page_id IS NULL \
+                 GROUP BY label \
+                 HAVING n >= ?1 \
+                 ORDER BY n DESC, label ASC \
+                 LIMIT 100",
+                libsql::params![min_count],
+            )
+            .await
+            .map_err(|e| OriginError::VectorDb(format!("list_orphan_link_labels: {e}")))?;
+        let mut out = Vec::new();
+        while let Some(row) = rows
+            .next()
+            .await
+            .map_err(|e| OriginError::VectorDb(e.to_string()))?
+        {
+            out.push((
+                row.get::<String>(0).unwrap_or_default(),
+                row.get::<i64>(1).unwrap_or(0),
+            ));
+        }
+        Ok(out)
+    }
+
+    /// Walk the orphan rows and re-resolve them against current page titles.
+    /// Returns the number of rows that flipped from NULL to a real target —
+    /// the refinery uses this for the log line. Cheap: one indexed query +
+    /// one UPDATE per flipped row, no LLM.
+    pub async fn resolve_orphan_page_links(&self) -> Result<usize, OriginError> {
+        let conn = self.conn.lock().await;
+        let mut rows = conn
+            .query(
+                "SELECT DISTINCT label FROM page_links WHERE target_page_id IS NULL",
+                (),
+            )
+            .await
+            .map_err(|e| OriginError::VectorDb(format!("resolve_orphan_links list: {e}")))?;
+        let mut labels: Vec<String> = Vec::new();
+        while let Some(row) = rows
+            .next()
+            .await
+            .map_err(|e| OriginError::VectorDb(e.to_string()))?
+        {
+            labels.push(row.get::<String>(0).unwrap_or_default());
+        }
+        drop(rows);
+
+        let mut resolved = 0usize;
+        for label in labels {
+            let trimmed = label.trim();
+            if trimmed.is_empty() {
+                continue;
+            }
+            // Re-run the same case-insensitive lookup the resolver uses on
+            // write so behavior stays uniform.
+            let mut hit = conn
+                .query(
+                    "SELECT id FROM pages \
+                     WHERE LOWER(title) = LOWER(?1) AND status = 'active' \
+                     LIMIT 1",
+                    libsql::params![trimmed],
+                )
+                .await
+                .map_err(|e| OriginError::VectorDb(format!("resolve_orphan_links lookup: {e}")))?;
+            if let Some(row) = hit
+                .next()
+                .await
+                .map_err(|e| OriginError::VectorDb(e.to_string()))?
+            {
+                let target: String = row
+                    .get(0)
+                    .map_err(|e| OriginError::VectorDb(e.to_string()))?;
+                drop(hit);
+                conn.execute(
+                    "UPDATE page_links SET target_page_id = ?1 \
+                     WHERE label = ?2 AND target_page_id IS NULL",
+                    libsql::params![target, label],
+                )
+                .await
+                .map_err(|e| OriginError::VectorDb(format!("resolve_orphan_links update: {e}")))?;
+                resolved += 1;
+            }
+        }
+        Ok(resolved)
     }
 
     /// Search pages via vector similarity + FTS5 with RRF fusion.
@@ -21761,6 +22071,251 @@ pub(crate) mod tests {
 
         // Deleting non-existent ID should not error
         db.delete_page("nonexistent").await.unwrap();
+    }
+
+    // ---- page_links / wikilink graph ----
+
+    #[tokio::test]
+    async fn page_links_resolve_against_existing_titles() {
+        let (db, _dir) = test_db().await;
+        let now = chrono::Utc::now().to_rfc3339();
+
+        // Two existing pages — wikilinks pointing at them should resolve.
+        db.insert_page(
+            "page_target",
+            "Rust Ownership",
+            None,
+            "body",
+            None,
+            None,
+            &[],
+            &now,
+        )
+        .await
+        .unwrap();
+        db.insert_page("page_alpha", "Alpha", None, "body", None, None, &[], &now)
+            .await
+            .unwrap();
+
+        // Source page links to both, plus an orphan label.
+        db.insert_page(
+            "page_src",
+            "Source",
+            None,
+            "see [[Rust Ownership]] and [[Alpha]] and [[Quantum Knitting]]",
+            None,
+            None,
+            &[],
+            &now,
+        )
+        .await
+        .unwrap();
+
+        let out = db.get_page_outbound_links("page_src").await.unwrap();
+        // Three labels, sorted alphabetically.
+        assert_eq!(out.len(), 3);
+        let by_label: std::collections::HashMap<_, _> = out
+            .into_iter()
+            .map(|l| (l.label, l.target_page_id))
+            .collect();
+        assert_eq!(
+            by_label.get("Rust Ownership"),
+            Some(&Some("page_target".to_string()))
+        );
+        assert_eq!(by_label.get("Alpha"), Some(&Some("page_alpha".to_string())));
+        // Orphan stays NULL until the target gets created.
+        assert_eq!(by_label.get("Quantum Knitting"), Some(&None));
+    }
+
+    #[tokio::test]
+    async fn page_links_inbound_excludes_archived() {
+        let (db, _dir) = test_db().await;
+        let now = chrono::Utc::now().to_rfc3339();
+
+        // Target first so source-page writes resolve immediately. (If the
+        // target were inserted last the sources would orphan; the refinery's
+        // resolve_orphan_page_links covers that case in a separate test.)
+        db.insert_page(
+            "page_target_in",
+            "Target",
+            None,
+            "body",
+            None,
+            None,
+            &[],
+            &now,
+        )
+        .await
+        .unwrap();
+        db.insert_page(
+            "page_active_src",
+            "Active source",
+            None,
+            "body links to [[Target]]",
+            None,
+            None,
+            &[],
+            &now,
+        )
+        .await
+        .unwrap();
+        db.insert_page(
+            "page_archived_src",
+            "Archived source",
+            None,
+            "body links to [[Target]]",
+            None,
+            None,
+            &[],
+            &now,
+        )
+        .await
+        .unwrap();
+        db.archive_page("page_archived_src").await.unwrap();
+
+        let inbound = db.get_page_inbound_links("page_target_in").await.unwrap();
+        let src_ids: Vec<&str> = inbound.iter().map(|(s, _)| s.as_str()).collect();
+        assert!(src_ids.contains(&"page_active_src"));
+        // Archived source must not surface even though the row exists in
+        // page_links — the join filters on active status.
+        assert!(!src_ids.contains(&"page_archived_src"));
+    }
+
+    #[tokio::test]
+    async fn page_links_update_overwrites_old_links() {
+        let (db, _dir) = test_db().await;
+        let now = chrono::Utc::now().to_rfc3339();
+
+        db.insert_page(
+            "page_evolving",
+            "Evolving",
+            None,
+            "first version mentions [[Alpha]] and [[Beta]]",
+            None,
+            None,
+            &[],
+            &now,
+        )
+        .await
+        .unwrap();
+
+        let v1 = db.get_page_outbound_links("page_evolving").await.unwrap();
+        assert_eq!(v1.len(), 2);
+
+        // Rewrite — Alpha drops, Gamma appears, Beta stays.
+        db.update_page_content(
+            "page_evolving",
+            "second version mentions [[Gamma]] and [[Beta]]",
+            &[],
+            "manual_edit",
+        )
+        .await
+        .unwrap();
+
+        let v2 = db.get_page_outbound_links("page_evolving").await.unwrap();
+        let labels: std::collections::HashSet<&str> = v2.iter().map(|l| l.label.as_str()).collect();
+        assert!(labels.contains("Gamma"));
+        assert!(labels.contains("Beta"));
+        assert!(!labels.contains("Alpha"));
+        assert_eq!(v2.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn page_links_resolve_orphans_after_target_appears() {
+        let (db, _dir) = test_db().await;
+        let now = chrono::Utc::now().to_rfc3339();
+
+        // Source page first — link is initially orphaned.
+        db.insert_page(
+            "page_a",
+            "A",
+            None,
+            "see [[Topic Z]]",
+            None,
+            None,
+            &[],
+            &now,
+        )
+        .await
+        .unwrap();
+        db.insert_page(
+            "page_b",
+            "B",
+            None,
+            "also [[Topic Z]]",
+            None,
+            None,
+            &[],
+            &now,
+        )
+        .await
+        .unwrap();
+
+        let labels = db.list_orphan_link_labels(2).await.unwrap();
+        assert_eq!(labels, vec![("Topic Z".to_string(), 2)]);
+
+        // Now the target page is created — refinery resolves orphans.
+        db.insert_page(
+            "page_z",
+            "Topic Z",
+            None,
+            "actual body",
+            None,
+            None,
+            &[],
+            &now,
+        )
+        .await
+        .unwrap();
+
+        let resolved = db.resolve_orphan_page_links().await.unwrap();
+        assert_eq!(resolved, 1, "one orphan label flipped to a real target");
+
+        let labels_after = db.list_orphan_link_labels(1).await.unwrap();
+        assert!(
+            labels_after.iter().all(|(l, _)| l != "Topic Z"),
+            "Topic Z should be off the orphan list after resolve"
+        );
+
+        // Confirm both source pages now point at the new target.
+        for src in ["page_a", "page_b"] {
+            let out = db.get_page_outbound_links(src).await.unwrap();
+            assert_eq!(out.len(), 1);
+            assert_eq!(out[0].target_page_id.as_deref(), Some("page_z"));
+        }
+    }
+
+    #[tokio::test]
+    async fn page_links_cascade_on_source_delete() {
+        let (db, _dir) = test_db().await;
+        let now = chrono::Utc::now().to_rfc3339();
+
+        db.insert_page("page_tgt", "Target", None, "body", None, None, &[], &now)
+            .await
+            .unwrap();
+        db.insert_page(
+            "page_src_d",
+            "Source",
+            None,
+            "[[Target]] mention",
+            None,
+            None,
+            &[],
+            &now,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(
+            db.get_page_inbound_links("page_tgt").await.unwrap().len(),
+            1
+        );
+        db.delete_page("page_src_d").await.unwrap();
+        // FK cascade wipes outbound rows when the source row is deleted.
+        assert_eq!(
+            db.get_page_inbound_links("page_tgt").await.unwrap().len(),
+            0
+        );
     }
 
     #[tokio::test]

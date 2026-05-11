@@ -3179,6 +3179,86 @@ pub async fn handle_get_snapshot_captures_with_content(
 }
 
 /// POST /api/memory/{id}/update-page
+/// GET /api/pages/{id}/links
+///
+/// Returns the wikilink graph centered on a page: outbound (labels parsed
+/// out of this page's body, with resolved target_page_id when matched) and
+/// inbound (every active page whose body links to this title). Used by
+/// `/read` to surface "3 inbound, 2 broken" without the caller having to
+/// fetch + parse the full body.
+pub async fn handle_get_page_links(
+    State(state): State<Arc<RwLock<ServerState>>>,
+    Path(id): Path<String>,
+) -> Result<Json<serde_json::Value>, ServerError> {
+    let db = {
+        let s = state.read().await;
+        s.db.clone().ok_or(ServerError::DbNotInitialized)?
+    };
+    let outbound = db
+        .get_page_outbound_links(&id)
+        .await
+        .map_err(|e| ServerError::Internal(e.to_string()))?;
+    let inbound = db
+        .get_page_inbound_links(&id)
+        .await
+        .map_err(|e| ServerError::Internal(e.to_string()))?;
+    let outbound_json: Vec<serde_json::Value> = outbound
+        .into_iter()
+        .map(|l| {
+            serde_json::json!({
+                "label": l.label,
+                "target_page_id": l.target_page_id,
+            })
+        })
+        .collect();
+    let inbound_json: Vec<serde_json::Value> = inbound
+        .into_iter()
+        .map(|(src, label)| serde_json::json!({"source_page_id": src, "label": label}))
+        .collect();
+    Ok(Json(serde_json::json!({
+        "outbound": outbound_json,
+        "inbound": inbound_json,
+    })))
+}
+
+#[derive(Debug, Default, serde::Deserialize)]
+pub struct OrphanLinksQuery {
+    /// Minimum number of distinct source pages reaching for the same label.
+    /// Default 2 — single-source orphans are usually typos, not emergence
+    /// signal.
+    #[serde(default)]
+    pub min_count: Option<i64>,
+}
+
+/// GET /api/pages/orphan-links
+///
+/// Group every unresolved wikilink label across the graph by hit count. A
+/// label reached for by N independent pages is a topic-discovery signal:
+/// emergence can prioritize building a page on it. Capped at 100 rows;
+/// callers needing more should raise min_count and re-issue.
+pub async fn handle_list_orphan_links(
+    State(state): State<Arc<RwLock<ServerState>>>,
+    axum::extract::Query(q): axum::extract::Query<OrphanLinksQuery>,
+) -> Result<Json<serde_json::Value>, ServerError> {
+    let db = {
+        let s = state.read().await;
+        s.db.clone().ok_or(ServerError::DbNotInitialized)?
+    };
+    let min_count = q.min_count.unwrap_or(2).max(1);
+    let labels = db
+        .list_orphan_link_labels(min_count)
+        .await
+        .map_err(|e| ServerError::Internal(e.to_string()))?;
+    let payload: Vec<serde_json::Value> = labels
+        .into_iter()
+        .map(|(label, count)| serde_json::json!({"label": label, "count": count}))
+        .collect();
+    Ok(Json(serde_json::json!({
+        "min_count": min_count,
+        "orphan_labels": payload,
+    })))
+}
+
 pub async fn handle_update_page(
     State(state): State<Arc<RwLock<ServerState>>>,
     Path(id): Path<String>,

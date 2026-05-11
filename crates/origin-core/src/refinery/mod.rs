@@ -468,6 +468,18 @@ pub async fn run_periodic_steep_with_api(
     if trigger.runs_phase(Phase::Emergence) {
         let phase = run_phase(Phase::Emergence, || async {
             let count = distill_pages(db_ref, compile_llm, prompts, distillation, kp_ref).await?;
+            // Re-resolve orphan wikilinks now that distill may have created
+            // new pages. Cheap: one SELECT DISTINCT + per-label UPDATE for
+            // hits; no LLM. Captures the case where page A linked to
+            // [[Topic Z]] before Topic Z existed, and emergence just minted
+            // a Topic Z page.
+            match db_ref.resolve_orphan_page_links().await {
+                Ok(n) if n > 0 => {
+                    log::info!("[emergence] resolved {n} orphan wikilink labels");
+                }
+                Ok(_) => {}
+                Err(e) => log::warn!("[emergence] orphan link resolve failed: {e}"),
+            }
             let (nudge, headline) = classify_emergence(count);
             Ok(PhaseOutput {
                 items_processed: count,
