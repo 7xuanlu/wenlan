@@ -48,20 +48,14 @@ Bash: top=$(git -C "$PWD" rev-parse --show-toplevel 2>/dev/null); \
 
 For `/distill <arg>` → forward `<arg>` to `target`.
 
-### 2. Call the daemon
-
-**TEMP** — using curl while MCP `distill` tool is still on the old npm
-release. Once `origin-mcp` ships a version that returns the daemon's
-JSON verbatim, swap this for `distill(target="<scope>")` via the MCP
-tool.
+### 2. Call the MCP tool
 
 ```
-Bash: curl -fsS -X POST http://127.0.0.1:7878/api/distill \
-  -H 'Content-Type: application/json' \
-  -d '{"target":"<scope>"}'
+distill(target="<scope>")
 ```
 
-Parse the JSON response. Possible shapes:
+The tool returns the daemon's full JSON payload as text. Parse it as
+JSON. Possible shapes:
 
 ```
 {
