@@ -728,21 +728,48 @@ pub async fn handle_distill(
     )
     .await?;
 
-    // Match refinery's filter: any overlap with an existing page means
-    // this isn't a new-page situation. Fully-covered clusters are dropped;
-    // partially-overlapping clusters belong to a stale-page refresh flow
-    // (tracked separately) rather than producing a duplicate new page.
-    // Only clusters with zero overlap surface as new work.
-    let mut filtered_pending: Vec<origin_core::db::DistillationCluster> = Vec::new();
-    for cluster in result.pending {
+    // Shared "fully covered" rule with refinery (subset OR Jaccard >= 0.8):
+    // those clusters never need synth from either path.
+    //
+    // Partial-overlap clusters diverge intentionally:
+    // - Refinery (no agent reach): marks the page stale and skips. Refresh
+    //   is `redistill_changed_pages`' job and needs daemon LLM.
+    // - Route (agent has LLM in caller's session): surfaces the cluster
+    //   with `existing_page_id` so the skill can synth the refresh inline.
+    //
+    // Divergence sits at the orchestration layer; the primitive is shared.
+    let mut filtered_pending: Vec<serde_json::Value> = Vec::new();
+    for cluster in &result.pending {
+        let cluster_size = cluster.source_ids.len();
         let best = db
             .find_best_overlapping_page(&cluster.source_ids)
             .await
             .map_err(|e| ServerError::Internal(e.to_string()))?;
-        if best.is_some() {
-            continue;
+
+        let (existing_page_id, existing_page_title, new_memory_count) = match best {
+            Some(m) if m.intersection >= cluster_size || m.jaccard >= 0.8 => continue,
+            Some(m) => (
+                Some(m.page_id),
+                Some(m.page_title),
+                cluster_size - m.intersection,
+            ),
+            None => (None, None, cluster_size),
+        };
+
+        let mut payload = serde_json::to_value(cluster).unwrap_or_else(|_| serde_json::json!({}));
+        if let serde_json::Value::Object(ref mut map) = payload {
+            if let Some(id) = existing_page_id {
+                map.insert("existing_page_id".into(), serde_json::json!(id));
+            }
+            if let Some(title) = existing_page_title {
+                map.insert("existing_page_title".into(), serde_json::json!(title));
+            }
+            map.insert(
+                "new_memory_count".into(),
+                serde_json::json!(new_memory_count),
+            );
         }
-        filtered_pending.push(cluster);
+        filtered_pending.push(payload);
     }
 
     Ok(Json(serde_json::json!({
