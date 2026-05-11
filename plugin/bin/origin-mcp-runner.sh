@@ -13,9 +13,11 @@
 #
 # Either path means plugin changes to the MCP tool shape can be tested
 # without publishing to npm first.
-set -u
 
-here="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
+# Don't enable `set -u` here: if Claude Code (or any MCP host) invokes the
+# script through a shell that doesn't populate BASH_SOURCE, `set -u` halts
+# before we even get to the npx fallback. Fall back to $0 instead.
+here="$(cd -- "$(dirname -- "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && pwd -P)"
 local_bin="${here}/origin-mcp.local"
 
 if [ -x "${local_bin}" ]; then

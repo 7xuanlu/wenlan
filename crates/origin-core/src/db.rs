@@ -556,6 +556,46 @@ pub struct PageOverlap {
     pub intersection: usize,
 }
 
+/// One row of the active-page source-memory index. Built once by
+/// `load_page_source_index` so callers comparing N clusters in a row don't
+/// re-query SQL and re-parse JSON N times.
+#[derive(Debug, Clone)]
+pub struct PageSourceIndex {
+    pub page_id: String,
+    pub page_title: String,
+    pub source_set: std::collections::HashSet<String>,
+}
+
+/// Same Jaccard scoring as `find_best_overlapping_page` but against a
+/// pre-loaded index — O(P) per cluster instead of O(P) + a SQL roundtrip.
+pub fn best_overlapping_page_in_index(
+    index: &[PageSourceIndex],
+    source_ids: &[String],
+) -> Option<PageOverlap> {
+    let input_set: std::collections::HashSet<&str> =
+        source_ids.iter().map(|s| s.as_str()).collect();
+    let mut best: Option<PageOverlap> = None;
+    for entry in index {
+        let page_refs: std::collections::HashSet<&str> =
+            entry.source_set.iter().map(|s| s.as_str()).collect();
+        let intersection = input_set.intersection(&page_refs).count();
+        let union = input_set.union(&page_refs).count();
+        if intersection == 0 || union == 0 {
+            continue;
+        }
+        let jaccard = intersection as f64 / union as f64;
+        if best.as_ref().map(|b| jaccard > b.jaccard).unwrap_or(true) {
+            best = Some(PageOverlap {
+                page_id: entry.page_id.clone(),
+                page_title: entry.page_title.clone(),
+                jaccard,
+                intersection,
+            });
+        }
+    }
+    best
+}
+
 // Re-export wire type from origin-types so existing consumers keep working.
 pub use origin_types::responses::PendingRevision;
 
@@ -14453,30 +14493,38 @@ impl MemoryDB {
         Ok(())
     }
 
-    /// Check maximum Jaccard overlap between a set of source_ids and any existing page.
-    /// Returns 0.0-1.0 (0 = no overlap, 1 = identical source set).
     /// Find the existing active page whose source memories overlap the most
     /// with the supplied cluster. Returns the page metadata plus Jaccard
     /// similarity and the raw intersection count, so callers can decide
     /// whether the cluster is a duplicate (full subset), a refresh candidate
     /// (partial overlap), or brand new (no overlap).
+    ///
+    /// SELECT is capped at 1000 active pages. Above that, batch with
+    /// `load_page_source_index` + `best_overlapping_page_in_index` so the
+    /// page set is fetched once for N cluster comparisons instead of N times.
     pub async fn find_best_overlapping_page(
         &self,
         source_ids: &[String],
     ) -> Result<Option<PageOverlap>, OriginError> {
+        let index = self.load_page_source_index().await?;
+        Ok(best_overlapping_page_in_index(&index, source_ids))
+    }
+
+    /// Load every active page's source memory ids into an in-memory index
+    /// so callers comparing N clusters against the page set don't re-query
+    /// SQL and re-parse JSON N times. Capped at 1000 pages (matches
+    /// `find_best_overlapping_page`); a warning is logged when the cap fires.
+    pub async fn load_page_source_index(&self) -> Result<Vec<PageSourceIndex>, OriginError> {
         let conn = self.conn.lock().await;
         let mut rows = conn
             .query(
-                "SELECT id, title, source_memory_ids FROM pages WHERE status = 'active'",
+                "SELECT id, title, source_memory_ids FROM pages WHERE status = 'active' LIMIT 1000",
                 (),
             )
             .await
-            .map_err(|e| OriginError::VectorDb(format!("page overlap: {e}")))?;
+            .map_err(|e| OriginError::VectorDb(format!("page index: {e}")))?;
 
-        let input_set: std::collections::HashSet<&str> =
-            source_ids.iter().map(|s| s.as_str()).collect();
-        let mut best: Option<PageOverlap> = None;
-
+        let mut out: Vec<PageSourceIndex> = Vec::new();
         while let Some(row) = rows
             .next()
             .await
@@ -14488,24 +14536,19 @@ impl MemoryDB {
             let Ok(ids) = serde_json::from_str::<Vec<String>>(&json) else {
                 continue;
             };
-            let page_set: std::collections::HashSet<&str> =
-                ids.iter().map(|s| s.as_str()).collect();
-            let intersection = input_set.intersection(&page_set).count();
-            let union = input_set.union(&page_set).count();
-            if intersection == 0 || union == 0 {
-                continue;
-            }
-            let jaccard = intersection as f64 / union as f64;
-            if best.as_ref().map(|b| jaccard > b.jaccard).unwrap_or(true) {
-                best = Some(PageOverlap {
-                    page_id,
-                    page_title,
-                    jaccard,
-                    intersection,
-                });
-            }
+            let source_set: std::collections::HashSet<String> = ids.into_iter().collect();
+            out.push(PageSourceIndex {
+                page_id,
+                page_title,
+                source_set,
+            });
         }
-        Ok(best)
+        if out.len() == 1000 {
+            log::warn!(
+                "[page-index] hit 1000-page cap; older pages may be missed in overlap checks"
+            );
+        }
+        Ok(out)
     }
 
     /// Thin wrapper around `find_best_overlapping_page` that returns just the

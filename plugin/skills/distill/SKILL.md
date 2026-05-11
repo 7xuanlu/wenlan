@@ -139,10 +139,16 @@ Bash: curl -fsS -X POST http://127.0.0.1:7878/api/pages \
 ```
 
 **Refresh candidate** (`existing_page_id` is set) — replace the old
-page with the refreshed one. Until a dedicated update route exists,
-DELETE + POST is the simplest path; daemon `handle_delete_page`
-cleans both DB and md, `handle_create_page` writes the new pair
-atomically:
+page with the refreshed one via DELETE then POST.
+
+⚠ The two calls are NOT atomic as a pair. `handle_delete_page` cleans
+DB + md atomically, and `handle_create_page` writes the new pair
+atomically, but a daemon restart or network blip between them leaves
+the page gone with no replacement. Recovery is simple: re-run
+`/distill` — clustering will rediscover the same memories and the
+flow restarts. Note that the new page gets a fresh page id; any
+external reference to the old id breaks. A proper `PUT /api/pages/{id}`
+route would close both gaps but is tracked separately.
 
 ```
 Bash: curl -fsS -X DELETE "http://127.0.0.1:7878/api/pages/<existing_page_id>"

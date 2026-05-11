@@ -2133,8 +2133,15 @@ pub async fn handle_create_page(
         )
         .await
     {
-        // Roll back the md file so the two stores stay consistent.
-        let _ = writer.remove_page(&id);
+        // Roll back the md file so the two stores stay consistent. Log any
+        // rollback failure loudly — if the state save itself fails mid-
+        // rollback we want it surfaced, not silently swallowed.
+        if let Err(rb) = writer.remove_page(&id) {
+            tracing::warn!(
+                "[page] DB insert failed and md rollback also failed for {}: db_err={}, rollback_err={}",
+                id, e, rb
+            );
+        }
         return Err(ServerError::IngestFailed(e.to_string()));
     }
 

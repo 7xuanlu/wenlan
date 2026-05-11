@@ -71,8 +71,11 @@ impl KnowledgeWriter {
     }
 
     /// Resolve a slug-derived filename that does not collide with any other
-    /// page's filename in `state`. The caller's own page id is allowed to
-    /// keep its existing filename so version updates stay in place.
+    /// page's filename in `state`, AND does not collide with an existing
+    /// file on disk that we have no state entry for (orphan from a manual
+    /// drop, a failed previous rollback, etc.). The caller's own page id is
+    /// allowed to keep its existing filename so version updates stay in
+    /// place.
     fn unique_filename(&self, page_id: &str, title: &str, state: &KnowledgeState) -> String {
         // If this page already has a filename recorded, reuse it.
         if let Some(existing) = state.pages.get(page_id) {
@@ -88,7 +91,15 @@ impl KnowledgeWriter {
             .filter(|(id, _)| id.as_str() != page_id)
             .map(|(_, st)| st.file.as_str())
             .collect();
-        while taken.contains(candidate.as_str()) {
+        loop {
+            let collides_state = taken.contains(candidate.as_str());
+            // Defence-in-depth: also check disk in case state.json missed
+            // an orphan file (e.g. user dropped an .md in manually, or a
+            // previous rollback couldn't persist state).
+            let collides_disk = self.path.join(&candidate).exists();
+            if !collides_state && !collides_disk {
+                break;
+            }
             candidate = format!("{}-{}.md", base, n);
             n += 1;
         }

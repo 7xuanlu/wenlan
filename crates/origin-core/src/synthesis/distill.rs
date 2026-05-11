@@ -273,15 +273,15 @@ pub(crate) async fn distill_one_cluster(
         if m.intersection > 0 {
             // Partial overlap: page is stale relative to this cluster.
             // Don't emit a new page — that would be a duplicate carrying
-            // different memories. Bump sources_updated_count so
-            // redistill_changed_pages picks the page up on the next sweep.
-            // Refresh is a separate refinery concern, not part of new-page
-            // emergence.
-            if let Err(e) = db.increment_page_sources_updated(&m.page_id).await {
+            // different memories. Set stale_reason = "source_updated" so
+            // re_distill_stale_pages picks the page up on the next sweep.
+            // (increment_page_sources_updated bumps a counter nothing
+            // reads; the actual refresh trigger is the stale_reason flag.)
+            if let Err(e) = db.set_page_stale(&m.page_id, "source_updated").await {
                 log::warn!("[emergence] could not mark page {} stale: {}", m.page_id, e);
             }
             log::info!(
-                "[emergence] cluster '{}' partially overlaps page '{}' ({} new memories) — marked page for refresh, skipping new-page synth",
+                "[emergence] cluster '{}' partially overlaps page '{}' ({} new memories) — marked page stale for refresh, skipping new-page synth",
                 topic,
                 m.page_title,
                 cluster_size - m.intersection
@@ -570,7 +570,7 @@ pub async fn distill_pages_scoped(
         _ => {
             // Use a generous budget so candidate discovery isn't gated by
             // a tiny on-device window we don't have anyway.
-            let raw_clusters = db
+            let mut raw_clusters = db
                 .find_distillation_clusters_scoped(
                     tuning.similarity_threshold,
                     tuning.page_min_cluster_size,
@@ -581,6 +581,22 @@ pub async fn distill_pages_scoped(
                     domain_filter.as_deref(),
                 )
                 .await?;
+            // Cap each memory's content snippet so the caller-facing payload
+            // doesn't balloon past practical HTTP/MCP response sizes. The
+            // synthesis path uses the same cap when building prompts; doing
+            // it at the boundary keeps both code paths consistent and bounds
+            // the worst-case pending payload to ~MEM_SNIPPET_CAP * total
+            // memories.
+            const MEM_SNIPPET_CAP: usize = 800;
+            for c in raw_clusters.iter_mut() {
+                for content in c.contents.iter_mut() {
+                    if content.chars().count() > MEM_SNIPPET_CAP {
+                        let mut truncated: String = content.chars().take(MEM_SNIPPET_CAP).collect();
+                        truncated.push('…');
+                        *content = truncated;
+                    }
+                }
+            }
             return Ok(DistillResult {
                 created: vec![],
                 pending: raw_clusters,

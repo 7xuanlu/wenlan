@@ -738,13 +738,20 @@ pub async fn handle_distill(
     //   with `existing_page_id` so the skill can synth the refresh inline.
     //
     // Divergence sits at the orchestration layer; the primitive is shared.
+    //
+    // Performance: load the active-page source-memory index ONCE and reuse
+    // it across every cluster comparison, so the route is O(P + P*C) hash
+    // ops instead of P*C SQL roundtrips + JSON re-parses.
+    let page_index = db
+        .load_page_source_index()
+        .await
+        .map_err(|e| ServerError::Internal(e.to_string()))?;
+
     let mut filtered_pending: Vec<serde_json::Value> = Vec::new();
     for cluster in &result.pending {
         let cluster_size = cluster.source_ids.len();
-        let best = db
-            .find_best_overlapping_page(&cluster.source_ids)
-            .await
-            .map_err(|e| ServerError::Internal(e.to_string()))?;
+        let best =
+            origin_core::db::best_overlapping_page_in_index(&page_index, &cluster.source_ids);
 
         let (existing_page_id, existing_page_title, new_memory_count) = match best {
             Some(m) if m.intersection >= cluster_size || m.jaccard >= 0.8 => continue,
@@ -756,7 +763,8 @@ pub async fn handle_distill(
             None => (None, None, cluster_size),
         };
 
-        let mut payload = serde_json::to_value(cluster).unwrap_or_else(|_| serde_json::json!({}));
+        let mut payload = serde_json::to_value(cluster)
+            .map_err(|e| ServerError::Internal(format!("cluster serialize: {e}")))?;
         if let serde_json::Value::Object(ref mut map) = payload {
             if let Some(id) = existing_page_id {
                 map.insert("existing_page_id".into(), serde_json::json!(id));
