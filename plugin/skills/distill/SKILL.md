@@ -17,24 +17,43 @@ user never has to name topics or manage clusters.
 
 ## How to invoke
 
-Two flows only. Drop any flags or mode words.
+Default is **scoped to the current repo**, not a global pass. Global
+distillation runs continuously in the daemon's background refinery;
+`/distill` is for an on-demand refresh of what the user is working on
+right now.
 
 ```
-distill()                  # full pass — bare /distill
-distill(target="<arg>")    # scoped pass — any other input
+distill(target="<inferred-domain>")    # bare /distill — agent infers cwd domain
+distill(target="<arg>")                # /distill <arg> — user supplies target
+distill()                              # explicit full pass — see below
 ```
 
-Pass the user's argument through to `target` unchanged. The daemon
-resolves it:
+### Resolving the target
 
-- `page_*` / `concept_*` → re-distill that single page from its current sources
-- exact entity name → scope clustering to that entity
-- exact domain value → scope to that domain
+For bare `/distill`, the agent infers a target from cwd:
+
+```
+Bash: git -C "$PWD" rev-parse --show-toplevel 2>/dev/null
+```
+
+- If output is a path → use its basename (e.g. `~/Repos/origin/...` → `origin`).
+- If not a git repo → fall back to the cwd basename.
+- If even that is empty → pass `target=None` (full pass, slow).
+
+For `/distill <arg>`, forward `<arg>` to `target` unchanged.
+
+### How the daemon resolves `target`
+
+- `page_*` / `concept_*` → re-distill that single page from its sources.
+- exact entity name → scope clustering to that entity.
+- exact domain value → scope to that domain.
 - anything else → daemon returns `unresolved` + hint; relay the hint to
-  the user, do not retry blindly
+  the user, do not retry blindly.
 
-The skill does no decoding, ambiguity branching, or fallback. That's
-the daemon's job.
+When `target` is supplied the daemon skips the deep refinement sweep —
+only the scoped clusters are touched. Full deep passes happen in the
+background scheduler or when the user explicitly invokes a global
+pass (no target).
 
 ## Basic Memory fallback (no daemon LLM)
 

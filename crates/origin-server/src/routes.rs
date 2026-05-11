@@ -707,6 +707,7 @@ pub async fn handle_distill(
         _ => None,
     };
 
+    let scoped = target.is_some();
     let distilled = origin_core::refinery::distill_pages_scoped(
         db,
         prefer_llm,
@@ -716,18 +717,27 @@ pub async fn handle_distill(
         target,
     )
     .await?;
-    let deep = origin_core::refinery::deep_distill_pages(
-        db,
-        prefer_llm,
-        prompts,
-        tuning,
-        knowledge_path.as_deref(),
-    )
-    .await?;
+
+    // Only run the deep refinement sweep on an unscoped pass. A scoped
+    // /distill call should affect only what the user asked for; daemon's
+    // background scheduler handles the periodic deep sweep.
+    let deep = if scoped {
+        0
+    } else {
+        origin_core::refinery::deep_distill_pages(
+            db,
+            prefer_llm,
+            prompts,
+            tuning,
+            knowledge_path.as_deref(),
+        )
+        .await?
+    };
 
     Ok(Json(serde_json::json!({
         "pages_created": distilled,
         "pages_updated": deep,
+        "scoped": scoped,
     })))
 }
 
