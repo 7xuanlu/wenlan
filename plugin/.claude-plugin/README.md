@@ -27,9 +27,20 @@ if the daemon ever stops.
 
 The marketplace is defined in [`../../.claude-plugin/marketplace.json`](../../.claude-plugin/marketplace.json) (at the repo root). The plugin metadata is defined in [`plugin.json`](plugin.json). MCP configuration is in [`../.mcp.json`](../.mcp.json) (this plugin's `.mcp.json`), which delegates to [`../bin/origin-mcp-runner.sh`](../bin/origin-mcp-runner.sh).
 
-The runner picks the MCP server binary in two paths:
-- **Default** — runs `npx -y origin-mcp@^X.Y.Z` so users get the version pinned by the plugin manifest.
-- **Dev override** — set `ORIGIN_MCP_DEV_BIN=/abs/path/to/origin-mcp` and the runner exec's that binary instead. Lets contributors test local MCP changes without an npm publish.
+The runner picks the MCP server binary in three paths, in order:
+
+1. **Filesystem override** — if `plugin/bin/origin-mcp.local` exists (typically a symlink to a locally-built binary, gitignored), the runner exec's it. Most reliable: survives plugin reloads that don't re-read env.
+2. **Env var override** — `ORIGIN_MCP_DEV_BIN=/abs/path/to/origin-mcp`. Convenient if you already export it; requires Claude Code to inherit the var at startup.
+3. **Default** — `npx -y origin-mcp@^X.Y.Z`. What end users get after installing the plugin.
+
+To set up the filesystem override during dev:
+
+```
+cargo build -p origin-mcp --release
+ln -s $(pwd)/target/release/origin-mcp plugin/bin/origin-mcp.local
+```
+
+Reload the plugin (`/reload-plugins`) and the wrapper picks the local binary on the next MCP spawn.
 
 ## Daily Commands
 
