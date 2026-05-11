@@ -196,6 +196,29 @@ pub fn spawn_scheduler(shared: SharedState, write_signal: WriteSignal) {
 
             let now = Instant::now();
 
+            // --- 0. Filesystem page watcher: md → DB ---
+            //
+            // md is canonical. When the user edits a page in Obsidian / VS
+            // Code / etc., reflect the change back into the DB so refinery
+            // and search stay aligned with what the user actually wrote.
+            // Cheap: a dir scan + frontmatter parse + content compare per
+            // file. No LLM, no embedding, no network. Skips files whose
+            // origin_version frontmatter trails the DB (daemon wrote
+            // last). Runs every poll so freshness ≈ POLL_INTERVAL.
+            let knowledge_path = origin_core::config::load_config().knowledge_path_or_default();
+            match origin_core::sources::page_watcher::sync_filesystem_edits(&db, &knowledge_path)
+                .await
+            {
+                Ok(stats) if stats.applied > 0 => {
+                    tracing::info!(
+                        "[scheduler] page-watcher applied {} fs_edit(s)",
+                        stats.applied
+                    );
+                }
+                Ok(_) => {}
+                Err(e) => tracing::warn!("[scheduler] page-watcher error: {e}"),
+            }
+
             // --- 1. BurstEnd: per-agent adaptive gap detection ---
             let snap = write_signal.snapshot();
             for (agent, timestamps) in &snap {

@@ -14421,7 +14421,7 @@ impl MemoryDB {
                version = version + 1, \
                last_compiled = ?3, \
                last_modified = ?3, \
-               user_edited = CASE WHEN ?4 = 'manual_edit' THEN 1 ELSE user_edited END \
+               user_edited = CASE WHEN ?4 IN ('manual_edit', 'fs_edit') THEN 1 ELSE user_edited END \
              WHERE id = ?5 AND stale_reason IS NOT NULL"
         } else {
             "UPDATE pages SET \
@@ -14430,7 +14430,7 @@ impl MemoryDB {
                version = version + 1, \
                last_compiled = ?3, \
                last_modified = ?3, \
-               user_edited = CASE WHEN ?4 = 'manual_edit' THEN 1 ELSE user_edited END \
+               user_edited = CASE WHEN ?4 IN ('manual_edit', 'fs_edit') THEN 1 ELSE user_edited END \
              WHERE id = ?5"
         };
         let affected = conn
