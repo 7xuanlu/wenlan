@@ -5,7 +5,7 @@ description: >
   summary, source count, and the local md path. Full body lives on disk —
   open with the user's editor. Invoked as `/read <title_or_id>`.
 argument-hint: "<title_or_id>"
-allowed-tools: ["Bash"]
+allowed-tools: ["mcp__plugin_origin_origin__get_page", "Bash"]
 ---
 
 # /read
@@ -26,27 +26,33 @@ Both end with the same preview block.
 
 ### 1. Direct id
 
+Call the MCP tool to fetch the page:
+
 ```
-Bash: curl -fsS http://127.0.0.1:7878/api/pages/<id> \
-  | python3 -c '
+get_page(page_id="<id>")
+```
+
+The response is a JSON object wrapping `{ "page": {...} }`. Read
+`title`, `summary`, `domain`, and `source_memory_ids` off the page,
+then look up the md filename in `~/.origin/pages/.origin/state.json`:
+
+```
+Bash: python3 -c '
 import json, os, sys
-p = json.load(sys.stdin)["page"]
 state_path = os.path.expanduser("~/.origin/pages/.origin/state.json")
+pid = "<id>"
 filename = None
 try:
     with open(state_path) as f:
-        filename = json.load(f).get("pages", {}).get(p["id"], {}).get("file")
+        filename = json.load(f).get("pages", {}).get(pid, {}).get("file")
 except FileNotFoundError:
     pass
-md_path = f"~/.origin/pages/{filename}" if filename else "(no md projection on disk)"
-sources = len(p.get("source_memory_ids", []))
-print(f"Title:    {p[\"title\"]}")
-print(f"Summary:  {p.get(\"summary\") or \"(no summary)\"}")
-print(f"Sources:  {sources} memories")
-print(f"Domain:   {p.get(\"domain\") or \"(none)\"}")
-print(f"Open:     {md_path}")
+print(f"~/.origin/pages/{filename}" if filename else "(no md projection on disk)")
 '
 ```
+
+Combine the page fields with the resolved md path and emit the preview
+block.
 
 ### 2. Title or freeform word
 
@@ -64,7 +70,7 @@ Bash: id=$(curl -fsS -X POST http://127.0.0.1:7878/api/pages/search \
                 hits=d.get('pages') or d.get('results') or []; \
                 print(hits[0]['id'] if hits else '', end='')")
       [ -z "$id" ] && echo "no page found matching <arg> — try /distill <arg>" && exit 0
-      # then run the preview block above with the resolved id
+      # then call get_page with the resolved id and emit the preview block
 ```
 
 If `$id` is empty after search, tell the user "no page found matching

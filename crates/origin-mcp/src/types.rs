@@ -6,7 +6,11 @@
 //! `origin_types::*` at call sites directly.
 
 pub use origin_types::memory::SearchResult;
-pub use origin_types::requests::{ChatContextRequest, SearchMemoryRequest, StoreMemoryRequest};
+pub use origin_types::requests::{
+    ChatContextRequest, CreateConceptRequest, CreateEntityRequest, CreateRelationRequest,
+    ListMemoriesRequest, SearchMemoryRequest, StoreMemoryRequest,
+};
 pub use origin_types::responses::{
-    ChatContextResponse, DeleteResponse, SearchMemoryResponse, StoreMemoryResponse,
+    ChatContextResponse, CreateEntityResponse, CreateRelationResponse, DeleteResponse,
+    ListMemoriesResponse, SearchMemoryResponse, StoreMemoryResponse,
 };

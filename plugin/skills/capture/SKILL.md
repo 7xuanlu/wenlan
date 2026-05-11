@@ -5,7 +5,7 @@ description: >
   when the user states a preference, makes a decision, corrects you, or
   shares a durable fact. Invoked as `/capture <content>`.
 argument-hint: "<content>"
-allowed-tools: ["mcp__plugin_origin_origin__capture", "mcp__plugin_origin_origin__recall", "Bash"]
+allowed-tools: ["mcp__plugin_origin_origin__capture", "mcp__plugin_origin_origin__recall", "mcp__plugin_origin_origin__create_entity", "mcp__plugin_origin_origin__create_relation", "Bash"]
 ---
 
 # /capture
@@ -59,22 +59,18 @@ omit `entity`.
 ### Multiple entities or relations
 
 The MCP `capture` tool takes a single primary `entity`. For additional
-entities or relations there's no MCP wrapper yet, so call the daemon
-HTTP API directly. If the content names more than one entity, capture
-the memory first, then for each additional entity:
+entities or relations, use the dedicated MCP tools. If the content
+names more than one entity, capture the memory first, then for each
+additional entity:
 
 ```
-Bash: curl -fsS -X POST http://127.0.0.1:7878/api/memory/entities \
-  -H 'Content-Type: application/json' \
-  -d '{"name":"<entity>","entity_type":"<person|project|tool|place>"}'
+create_entity(name="<entity>", entity_type="<person|project|tool|place>")
 ```
 
 For a relation between two entities:
 
 ```
-Bash: curl -fsS -X POST http://127.0.0.1:7878/api/memory/relations \
-  -H 'Content-Type: application/json' \
-  -d '{"from_entity":"<a>","to_entity":"<b>","relation_type":"<verb>"}'
+create_relation(from_entity="<a>", to_entity="<b>", relation_type="<verb>")
 ```
 
 Skip these calls when the daemon has an LLM — its post-ingest enrichment

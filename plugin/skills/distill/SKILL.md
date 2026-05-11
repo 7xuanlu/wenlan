@@ -6,7 +6,7 @@ description: >
   the daemon couldn't (no LLM or cluster too big). Invoked as
   `/distill [target]`.
 argument-hint: "[page_id_or_entity_or_domain]"
-allowed-tools: ["mcp__plugin_origin_origin__recall", "mcp__plugin_origin_origin__distill", "Bash"]
+allowed-tools: ["mcp__plugin_origin_origin__recall", "mcp__plugin_origin_origin__distill", "mcp__plugin_origin_origin__create_page", "mcp__plugin_origin_origin__delete_page", "Bash"]
 ---
 
 # /distill
@@ -128,33 +128,31 @@ For each coherent cluster:
 - Body: 3-7 paragraphs of wiki prose. Use `[[wikilinks]]`. Cite source
   ids inline with `(source: mem_XXX)`.
 
-**New cluster** (no `existing_page_id`) — POST to `/api/pages`:
+**New cluster** (no `existing_page_id`) — call the MCP tool:
 
 ```
-Bash: curl -fsS -X POST http://127.0.0.1:7878/api/pages \
-  -H 'Content-Type: application/json' \
-  -d '{"title":"...","summary":"...","content":"...",
-       "entity_id":"<cluster.entity_id or null>","domain":"<cluster.domain>",
-       "source_memory_ids":[...]}'
+create_page(title="...", summary="...", content="...",
+            entity_id="<cluster.entity_id or omit>",
+            domain="<cluster.domain>",
+            source_memory_ids=[...])
 ```
 
 **Refresh candidate** (`existing_page_id` is set) — replace the old
-page with the refreshed one via DELETE then POST.
+page with the refreshed one via delete then create.
 
-⚠ The two calls are NOT atomic as a pair. `handle_delete_page` cleans
-DB + md atomically, and `handle_create_page` writes the new pair
-atomically, but a daemon restart or network blip between them leaves
-the page gone with no replacement. Recovery is simple: re-run
-`/distill` — clustering will rediscover the same memories and the
-flow restarts. Note that the new page gets a fresh page id; any
-external reference to the old id breaks. A proper `PUT /api/pages/{id}`
-route would close both gaps but is tracked separately.
+⚠ The two calls are NOT atomic as a pair. `delete_page` cleans DB + md
+atomically, and `create_page` writes the new pair atomically, but a
+daemon restart or network blip between them leaves the page gone with
+no replacement. Recovery is simple: re-run `/distill` — clustering
+will rediscover the same memories and the flow restarts. Note that
+the new page gets a fresh page id; any external reference to the old
+id breaks. A proper `PUT /api/pages/{id}` route would close both gaps
+but is tracked separately.
 
 ```
-Bash: curl -fsS -X DELETE "http://127.0.0.1:7878/api/pages/<existing_page_id>"
-Bash: curl -fsS -X POST http://127.0.0.1:7878/api/pages \
-  -H 'Content-Type: application/json' \
-  -d '{...same shape, source_memory_ids = cluster.source_ids...}'
+delete_page(page_id="<existing_page_id>")
+create_page(title="...", summary="...", content="...",
+            source_memory_ids=cluster.source_ids, ...)
 ```
 
 ### 4. Report terse
