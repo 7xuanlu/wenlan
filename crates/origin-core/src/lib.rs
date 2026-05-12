@@ -38,6 +38,7 @@ pub mod on_device_models;
 pub mod onboarding;
 pub mod pages;
 pub mod post_ingest;
+pub mod post_write;
 pub mod privacy;
 pub mod prompts;
 pub mod quality_gate;

@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: AGPL-3.0-only
+// SPDX-License-Identifier: Apache-2.0
 //! LoCoMo benchmark adapter — converts locomo10.json into Origin eval cases.
 //!
 //! LoCoMo (Long Conversational Memory) contains 10 conversations with

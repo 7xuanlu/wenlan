@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: AGPL-3.0-only
+// SPDX-License-Identifier: Apache-2.0
 use super::detection::{detect_content_type, CodeLanguage, ContentType};
 use super::traits::{ChunkContext, ChunkInfo, ChunkingStrategy};
 use regex::Regex;

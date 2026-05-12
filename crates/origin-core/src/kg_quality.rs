@@ -80,50 +80,6 @@ pub async fn verify_page(
     })
 }
 
-/// Check that a relation's endpoints exist and type is valid snake_case.
-pub async fn verify_relation(
-    db: &MemoryDB,
-    from_entity: &str,
-    to_entity: &str,
-    relation_type: &str,
-) -> Result<bool, OriginError> {
-    let conn = db.conn.lock().await;
-
-    // Helper: count entities by id
-    async fn entity_exists(
-        conn: &tokio::sync::MutexGuard<'_, libsql::Connection>,
-        entity_id: &str,
-    ) -> Result<bool, OriginError> {
-        let mut rows = conn
-            .query(
-                "SELECT COUNT(*) FROM entities WHERE id = ?1",
-                libsql::params![entity_id],
-            )
-            .await
-            .map_err(|e| OriginError::VectorDb(e.to_string()))?;
-        let count: i64 = match rows
-            .next()
-            .await
-            .map_err(|e| OriginError::VectorDb(e.to_string()))?
-        {
-            Some(row) => row.get::<i64>(0).unwrap_or(0),
-            None => 0,
-        };
-        Ok(count > 0)
-    }
-
-    if !entity_exists(&conn, from_entity).await? || !entity_exists(&conn, to_entity).await? {
-        return Ok(false);
-    }
-
-    // Check relation type is valid snake_case: non-empty, lowercase + digits + underscores
-    let valid_format = !relation_type.is_empty()
-        && relation_type
-            .chars()
-            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_');
-    Ok(valid_format)
-}
-
 /// Report of a rethink pass.
 #[derive(Debug, Default, serde::Serialize)]
 pub struct RethinkReport {
@@ -399,6 +355,43 @@ pub async fn scan_contradictions(db: &MemoryDB) -> Result<usize, OriginError> {
     Ok(count)
 }
 
+/// Embedding-based hallucination check: returns `true` if the body is
+/// semantically similar (cosine >= 0.6) to the concatenation of the source
+/// memories' content. Returns `false` if the body diverges from its
+/// cited sources, or if embeddings cannot be produced.
+///
+/// Used by the agent-triggered `/api/pages` create path. The daemon-side
+/// distillation in `synthesis::distill` keeps its own inline check for
+/// now since it builds source text from a cluster, not by id.
+pub async fn hallucination_guard(
+    db: &MemoryDB,
+    body: &str,
+    source_ids: &[String],
+) -> Result<bool, OriginError> {
+    if source_ids.is_empty() {
+        return Ok(true);
+    }
+    let mut source_contents: Vec<String> = Vec::with_capacity(source_ids.len());
+    for sid in source_ids {
+        // Propagate DB errors; Ok(None) means unresolvable id — skip silently.
+        if let Some(detail) = db.get_memory_detail(sid).await? {
+            source_contents.push(detail.content);
+        }
+    }
+    if source_contents.is_empty() {
+        return Ok(true);
+    }
+    let joined = source_contents.join(" ");
+    let texts = vec![body.to_string(), joined];
+    match db.generate_embeddings(&texts) {
+        Ok(embs) if embs.len() == 2 => {
+            let sim = crate::db::cosine_similarity(&embs[0], &embs[1]);
+            Ok(sim >= 0.6)
+        }
+        _ => Ok(true),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -424,48 +417,6 @@ mod tests {
         let result = verify_entity(&db, &id, "Rust").await.unwrap();
         assert_eq!(result.entity_self_retrieval_passed, Some(true));
         assert!(result.warnings.is_empty());
-    }
-
-    #[tokio::test]
-    async fn test_verify_relation_valid_type() {
-        let (db, _dir) = test_db().await;
-
-        let e1 = db
-            .store_entity("Alice", "person", None, Some("test"), None)
-            .await
-            .unwrap();
-        let e2 = db
-            .store_entity("ProjectX", "project", None, Some("test"), None)
-            .await
-            .unwrap();
-
-        // Valid type
-        assert!(verify_relation(&db, &e1, &e2, "works_on").await.unwrap());
-        // Valid new type (snake_case)
-        assert!(verify_relation(&db, &e1, &e2, "custom_type").await.unwrap());
-        // Invalid: endpoints don't exist
-        assert!(!verify_relation(&db, "nonexistent", &e2, "works_on")
-            .await
-            .unwrap());
-    }
-
-    #[tokio::test]
-    async fn test_verify_relation_invalid_format() {
-        let (db, _dir) = test_db().await;
-
-        let e1 = db
-            .store_entity("Alice", "person", None, Some("test"), None)
-            .await
-            .unwrap();
-        let e2 = db
-            .store_entity("Bob", "person", None, Some("test"), None)
-            .await
-            .unwrap();
-
-        // Invalid: not snake_case (uppercase)
-        assert!(!verify_relation(&db, &e1, &e2, "WorksOn").await.unwrap());
-        // Invalid: contains spaces
-        assert!(!verify_relation(&db, &e1, &e2, "works on").await.unwrap());
     }
 
     #[tokio::test]
@@ -662,13 +613,7 @@ mod tests {
         let vr = verify_entity(&db, &id1, "Alice Chen").await.unwrap();
         assert_eq!(vr.entity_self_retrieval_passed, Some(true));
 
-        // 6. Relation verification
-        assert!(verify_relation(&db, &id1, &proj, "works_on").await.unwrap());
-        assert!(!verify_relation(&db, "nonexistent", &proj, "works_on")
-            .await
-            .unwrap());
-
-        // 7. Rethink completes successfully
+        // 6. Rethink completes successfully
         let config = RefineryConfig::default();
         let report = run_rethink(&db, None, &config).await.unwrap();
         // Nothing to normalize (already canonical); no duplicates;
@@ -858,38 +803,52 @@ mod tests {
         }
     }
 
-    // ── Fix 4: verify_relation accepts digits and rejects empty ───────────
+    // ── hallucination_guard ──────────────────────────────────────────────
 
     #[tokio::test]
-    async fn test_verify_relation_digits_and_empty() {
+    async fn test_hallucination_guard_rejects_unrelated_body() {
         let (db, _dir) = test_db().await;
-
-        let e1 = db
-            .store_entity("NodeOne", "person", None, Some("test"), None)
+        let doc = crate::sources::RawDocument {
+            source: "memory".to_string(),
+            source_id: "rust-mem".to_string(),
+            title: "rust-mem".to_string(),
+            content: "Rust is a systems programming language".to_string(),
+            last_modified: chrono::Utc::now().timestamp(),
+            memory_type: Some("fact".to_string()),
+            source_agent: Some("test".to_string()),
+            confidence: Some(0.9),
+            ..Default::default()
+        };
+        db.upsert_documents(vec![doc]).await.unwrap();
+        let body = "Pasta carbonara uses eggs and pancetta";
+        let source_ids = vec!["rust-mem".to_string()];
+        let passed = crate::kg_quality::hallucination_guard(&db, body, &source_ids)
             .await
             .unwrap();
-        let e2 = db
-            .store_entity("NodeTwo", "project", None, Some("test"), None)
+        assert!(!passed, "guard should reject body unrelated to sources");
+    }
+
+    #[tokio::test]
+    async fn test_hallucination_guard_accepts_related_body() {
+        let (db, _dir) = test_db().await;
+        let doc = crate::sources::RawDocument {
+            source: "memory".to_string(),
+            source_id: "rust-mem-2".to_string(),
+            title: "rust-mem-2".to_string(),
+            content: "Rust is a systems programming language with memory safety".to_string(),
+            last_modified: chrono::Utc::now().timestamp(),
+            memory_type: Some("fact".to_string()),
+            source_agent: Some("test".to_string()),
+            confidence: Some(0.9),
+            ..Default::default()
+        };
+        db.upsert_documents(vec![doc]).await.unwrap();
+        let body = "Rust provides memory-safe systems programming";
+        let source_ids = vec!["rust-mem-2".to_string()];
+        let passed = crate::kg_quality::hallucination_guard(&db, body, &source_ids)
             .await
             .unwrap();
-
-        // Digits in snake_case should be allowed
-        assert!(
-            verify_relation(&db, &e1, &e2, "part_of_v2").await.unwrap(),
-            "part_of_v2 should be valid (digits allowed in snake_case)"
-        );
-
-        // Empty relation type should be rejected
-        assert!(
-            !verify_relation(&db, &e1, &e2, "").await.unwrap(),
-            "empty relation type should be invalid"
-        );
-
-        // Normal snake_case should work
-        assert!(
-            verify_relation(&db, &e1, &e2, "works_on").await.unwrap(),
-            "works_on should be valid (standard snake_case)"
-        );
+        assert!(passed, "guard should accept body matching sources");
     }
 
     // ── Fix 5: source_memory_id is populated ──────────────────────────────

@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: AGPL-3.0-only
+// SPDX-License-Identifier: Apache-2.0
 //! Shared `claude -p` subprocess primitive for eval CLI batched routes.
 //!
 //! Contains the truly shared bits across judge / answer-gen / enrichment CLI paths:

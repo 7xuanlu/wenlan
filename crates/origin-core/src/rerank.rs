@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: AGPL-3.0-only
+// SPDX-License-Identifier: Apache-2.0
 //! LLM-based reranking of retrieval candidates.
 //!
 //! Given a query and a list of `(id, content)` candidates, asks the on-device

@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: AGPL-3.0-only
+// SPDX-License-Identifier: Apache-2.0
 //! Fixture generation — adversarial and blind test case creation.
 
 use crate::eval::fixtures::{EvalCase, FixtureFile, SeedMemory};

@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: AGPL-3.0-only
+// SPDX-License-Identifier: Apache-2.0
 //! Compiled-in default prompt strings for the intelligence pipeline.
 //! These are the open-source defaults — proprietary overrides are loaded from files at runtime.
 

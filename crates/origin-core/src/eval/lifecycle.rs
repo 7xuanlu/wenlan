@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: AGPL-3.0-only
+// SPDX-License-Identifier: Apache-2.0
 //! Lifecycle eval mode — measures how each pipeline phase affects retrieval quality.
 //!
 //! Runs the full memory pipeline (post-ingest → entity extraction → distillation → insights)

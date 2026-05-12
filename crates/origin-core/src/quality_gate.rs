@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: AGPL-3.0-only
+// SPDX-License-Identifier: Apache-2.0
 //! Pre-store quality gate — rule-based content checks that reject noise before
 //! it reaches the memory database. Covers system prompts, heartbeats, credential
 //! leaks, and trivially short content.

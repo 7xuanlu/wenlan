@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: AGPL-3.0-only
+// SPDX-License-Identifier: Apache-2.0
 //! Anthropic Messages API and Batch API client for eval.
 
 use std::collections::HashMap;

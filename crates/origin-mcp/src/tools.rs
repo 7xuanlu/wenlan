@@ -730,10 +730,11 @@ impl OriginMcpServer {
             Ok(r) => r,
             Err(e) => return Ok(tool_error(e, "create_entity")),
         };
-        Ok(CallToolResult::success(vec![Content::text(format!(
-            "Created entity {}",
-            resp.id
-        ))]))
+        let mut text = format!("Created entity {}", resp.id);
+        for w in &resp.warnings {
+            text.push_str(&format!("\nwarning: {w}"));
+        }
+        Ok(CallToolResult::success(vec![Content::text(text)]))
     }
 
     pub async fn create_relation_impl(
@@ -746,16 +747,20 @@ impl OriginMcpServer {
             to_entity: params.to_entity,
             relation_type: params.relation_type,
             source_agent,
+            confidence: None,
+            explanation: None,
+            source_memory_id: None,
         };
         let resp: CreateRelationResponse =
             match self.client.post("/api/memory/relations", &req).await {
                 Ok(r) => r,
                 Err(e) => return Ok(tool_error(e, "create_relation")),
             };
-        Ok(CallToolResult::success(vec![Content::text(format!(
-            "Created relation {}",
-            resp.id
-        ))]))
+        let mut text = format!("Created relation {}", resp.id);
+        for w in &resp.warnings {
+            text.push_str(&format!("\nwarning: {w}"));
+        }
+        Ok(CallToolResult::success(vec![Content::text(text)]))
     }
 
     pub async fn create_page_impl(
@@ -770,18 +775,15 @@ impl OriginMcpServer {
             domain: params.domain,
             source_memory_ids: params.source_memory_ids,
         };
-        let resp: serde_json::Value = match self.client.post("/api/pages", &req).await {
+        let resp: CreatePageResponse = match self.client.post("/api/pages", &req).await {
             Ok(r) => r,
             Err(e) => return Ok(tool_error(e, "create_page")),
         };
-        let id = resp
-            .get("id")
-            .and_then(|v| v.as_str())
-            .unwrap_or("(unknown)");
-        Ok(CallToolResult::success(vec![Content::text(format!(
-            "Created page {}",
-            id
-        ))]))
+        let mut text = format!("Created page {}", resp.id);
+        for w in &resp.warnings {
+            text.push_str(&format!("\nwarning: {w}"));
+        }
+        Ok(CallToolResult::success(vec![Content::text(text)]))
     }
 
     pub async fn update_page_impl(
@@ -2612,6 +2614,9 @@ mod tests {
             to_entity: params.to_entity,
             relation_type: params.relation_type,
             source_agent,
+            confidence: None,
+            explanation: None,
+            source_memory_id: None,
         };
         let json = serde_json::to_value(&req).unwrap();
         assert_eq!(json["from_entity"], "Alice");

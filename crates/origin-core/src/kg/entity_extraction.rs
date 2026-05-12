@@ -39,17 +39,26 @@ pub async fn extract_single_memory_entities(
 
     for kg in &kg_results {
         for entity in &kg.entities {
-            match crate::importer::resolve_or_create_entity(
-                db,
-                &mut entity_cache,
-                entity,
-                "post_ingest",
-            )
-            .await
-            {
-                Ok((id, _created)) => {
+            let name_lower = entity.name.to_lowercase();
+            // In-batch cache (per-extraction-pass dedup; capability fn doesn't take a cache)
+            if let Some(id) = entity_cache.get(&name_lower) {
+                if first_entity_id.is_none() {
+                    first_entity_id = Some(id.clone());
+                }
+                continue;
+            }
+            let req = origin_types::requests::CreateEntityRequest {
+                name: entity.name.clone(),
+                entity_type: entity.entity_type.clone(),
+                domain: None,
+                source_agent: Some("post_ingest".to_string()),
+                confidence: None,
+            };
+            match crate::post_write::create_entity(db, req, "post_ingest").await {
+                Ok(result) => {
+                    entity_cache.insert(name_lower, result.id.clone());
                     if first_entity_id.is_none() {
-                        first_entity_id = Some(id);
+                        first_entity_id = Some(result.id);
                     }
                 }
                 Err(e) => log::warn!("[post_ingest] entity create failed: {e}"),
@@ -57,26 +66,33 @@ pub async fn extract_single_memory_entities(
         }
         for obs in &kg.observations {
             if let Some(entity_id) = entity_cache.get(&obs.entity.to_lowercase()) {
-                let _ = db
-                    .add_observation(entity_id, &obs.content, Some("post_ingest"), None)
-                    .await;
+                let req = origin_types::requests::AddObservationRequest {
+                    entity_id: entity_id.clone(),
+                    content: obs.content.clone(),
+                    source_agent: Some("post_ingest".to_string()),
+                    confidence: None,
+                };
+                if let Err(e) = crate::post_write::add_observation(db, req, "post_ingest").await {
+                    log::warn!("[post_ingest] add_observation failed: {e}");
+                }
             }
         }
         for rel in &kg.relations {
             let from_id = entity_cache.get(&rel.from.to_lowercase()).cloned();
             let to_id = entity_cache.get(&rel.to.to_lowercase()).cloned();
             if let (Some(from), Some(to)) = (from_id, to_id) {
-                let _ = db
-                    .create_relation(
-                        &from,
-                        &to,
-                        &rel.relation_type,
-                        Some("post_ingest"),
-                        rel.confidence,
-                        rel.explanation.as_deref(),
-                        Some(source_id),
-                    )
-                    .await;
+                let req = origin_types::requests::CreateRelationRequest {
+                    from_entity: from,
+                    to_entity: to,
+                    relation_type: rel.relation_type.clone(),
+                    source_agent: Some("post_ingest".to_string()),
+                    confidence: rel.confidence,
+                    explanation: rel.explanation.clone(),
+                    source_memory_id: Some(source_id.to_string()),
+                };
+                if let Err(e) = crate::post_write::create_relation(db, req, "post_ingest").await {
+                    log::warn!("[post_ingest] create_relation failed: {e}");
+                }
             }
         }
     }

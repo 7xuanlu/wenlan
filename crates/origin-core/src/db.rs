@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: AGPL-3.0-only
+// SPDX-License-Identifier: Apache-2.0
 use crate::cache::EmbeddingCache;
 use crate::chunker::ChunkingEngine;
 use crate::error::OriginError;
@@ -8708,6 +8708,49 @@ impl MemoryDB {
 
         drop(conn);
         Ok(id)
+    }
+
+    pub async fn list_relations_between(
+        &self,
+        from_entity: &str,
+        to_entity: &str,
+    ) -> Result<Vec<(String, String)>, OriginError> {
+        let conn = self.conn.lock().await;
+        let mut rows = conn
+            .query(
+                "SELECT id, relation_type FROM relations WHERE from_entity = ?1 AND to_entity = ?2",
+                libsql::params![from_entity.to_string(), to_entity.to_string()],
+            )
+            .await
+            .map_err(|e| OriginError::VectorDb(e.to_string()))?;
+        let mut result = Vec::new();
+        while let Some(row) = rows
+            .next()
+            .await
+            .map_err(|e| OriginError::VectorDb(e.to_string()))?
+        {
+            result.push((
+                row.get::<String>(0).unwrap_or_default(),
+                row.get::<String>(1).unwrap_or_default(),
+            ));
+        }
+        Ok(result)
+    }
+
+    pub async fn entity_exists(&self, entity_id: &str) -> Result<bool, OriginError> {
+        let conn = self.conn.lock().await;
+        let mut rows = conn
+            .query(
+                "SELECT 1 FROM entities WHERE id = ?1 LIMIT 1",
+                libsql::params![entity_id],
+            )
+            .await
+            .map_err(|e| OriginError::VectorDb(e.to_string()))?;
+        Ok(rows
+            .next()
+            .await
+            .map_err(|e| OriginError::VectorDb(e.to_string()))?
+            .is_some())
     }
 
     pub async fn list_entities(

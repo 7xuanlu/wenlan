@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: AGPL-3.0-only
+// SPDX-License-Identifier: Apache-2.0
 //! Retrieval quality-cost evaluation: search strategy comparison, scaling, ablation.
 
 use crate::db::MemoryDB;

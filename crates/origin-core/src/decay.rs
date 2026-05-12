@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: AGPL-3.0-only
+// SPDX-License-Identifier: Apache-2.0
 use crate::sources::StabilityTier;
 
 /// Compute recency boost: 1.0 / (1.0 + decay_rate * days_since_last_access)

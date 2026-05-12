@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: AGPL-3.0-only
+// SPDX-License-Identifier: Apache-2.0
 //! IR metrics: MRR, NDCG@K, Precision@K, negative leakage.
 
 use std::collections::{HashMap, HashSet};

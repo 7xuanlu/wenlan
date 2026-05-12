@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: AGPL-3.0-only
+// SPDX-License-Identifier: Apache-2.0
 //! Profile narrative generation — LLM-assisted prose about the user.
 
 use crate::db::MemoryDB;

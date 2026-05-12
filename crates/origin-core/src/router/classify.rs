@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: AGPL-3.0-only
+// SPDX-License-Identifier: Apache-2.0
 
 /// Classification result for an incoming query, used to route retrieval strategy.
 #[derive(Debug, Clone, PartialEq)]
