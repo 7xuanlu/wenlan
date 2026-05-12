@@ -288,6 +288,14 @@ pub struct GetPageLinksParams {
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct GetPageSourcesParams {
+    #[schemars(
+        description = "Page id (e.g. 'page_abc'). Returns the source memories that distilled into this page, each enriched with the memory's metadata for display."
+    )]
+    pub page_id: String,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct ListMemoriesParams {
     #[schemars(
         description = "Filter by memory type (e.g. 'fact', 'preference', 'decision'). Optional."
@@ -844,6 +852,22 @@ impl OriginMcpServer {
         Ok(CallToolResult::success(vec![Content::text(pretty)]))
     }
 
+    pub async fn get_page_sources_impl(&self, page_id: &str) -> Result<CallToolResult, McpError> {
+        let path = format!("/api/pages/{}/sources", page_id);
+        // Daemon returns Vec<PageSourceWithMemory> directly (no envelope key).
+        let resp: Vec<PageSourceWithMemory> = match self.client.get(&path).await {
+            Ok(r) => r,
+            Err(e) => return Ok(tool_error(e, "get_page_sources")),
+        };
+        let pretty = serde_json::to_string_pretty(&resp)
+            .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+        Ok(CallToolResult::success(vec![Content::text(format!(
+            "{} sources\n{}",
+            resp.len(),
+            pretty
+        ))]))
+    }
+
     pub async fn list_memories_impl(
         &self,
         params: ListMemoriesParams,
@@ -1169,6 +1193,23 @@ impl OriginMcpServer {
         Parameters(params): Parameters<GetPageLinksParams>,
     ) -> Result<CallToolResult, McpError> {
         self.get_page_links_impl(&params.page_id).await
+    }
+
+    #[tool(
+        description = "Fetch the source memories of a page — the memory ids the page was distilled from, each enriched with the memory's title, content, type, and domain. The /distill skill uses this on the stale-page refresh path: get_page returns ids, get_page_sources returns the full memory content needed to re-synthesize prose.",
+        annotations(
+            title = "Get page sources",
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
+    )]
+    async fn get_page_sources(
+        &self,
+        Parameters(params): Parameters<GetPageSourcesParams>,
+    ) -> Result<CallToolResult, McpError> {
+        self.get_page_sources_impl(&params.page_id).await
     }
 
     #[tool(

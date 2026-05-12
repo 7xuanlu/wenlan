@@ -356,12 +356,22 @@ pub async fn handle_store_memory(
         None
     };
 
-    // --- Topic-match check (pre-batcher) ---
-    // Run before building RawDocument. If the incoming memory matches an existing
-    // topic (same domain+type, similar embedding), upsert in place and return early,
-    // skipping the batcher and avoiding duplicates.
-    // When a protected memory is matched we fall through to normal store but flag
-    // the new memory as a pending revision so the UI can surface it for review.
+    // --- Topic-match check (pre-batcher, protected-flag only) ---
+    //
+    // Used solely to flag `pending_revision` when an incoming memory's topic
+    // overlaps a PROTECTED memory (stability = "protected"). For non-protected
+    // topic matches we used to upsert in place; that silently collapsed
+    // distinct captures that happened to share topic context (same entity /
+    // domain / type + similar phrasing). The 2026-05-11 /handoff incident
+    // documented in `lesson_topic_match_entity_bypass.md` lost 5 of 7 atomic
+    // captures to this path.
+    //
+    // New contract: non-protected topic matches do NOT short-circuit the write
+    // path. Every capture stores as a new memory with a fresh `source_id`.
+    // Any consolidation of similar-but-distinct memories is a refinery
+    // concern, not a write-path concern (matches Mem0 v2.0 + the dominant
+    // production memory-system pattern: hash-only dedup at write, periodic
+    // consolidation later).
     let mut topic_match_protected_id: Option<String> = None;
     {
         let (db_arc, topic_cfg) = {
@@ -370,7 +380,7 @@ pub async fn handle_store_memory(
         };
 
         if let Some(ref db) = db_arc {
-            // Compute embedding synchronously (CPU-bound, no DB lock needed)
+            // Compute embedding synchronously (CPU-bound, no DB lock needed).
             let embedding_result = db.generate_embeddings(&[trimmed_content.to_string()]);
 
             if let Ok(ref embeddings) = embedding_result {
@@ -388,95 +398,22 @@ pub async fn handle_store_memory(
 
                     if let Ok(ref result) = match_result {
                         if let Some(ref matched_source_id) = result.matched_source_id {
-                            // Trust guardrail: don't overwrite protected memories in place.
                             let is_protected = db
                                 .is_memory_protected(matched_source_id)
                                 .await
                                 .unwrap_or(false);
 
-                            if !is_protected {
-                                let upsert_result = db
-                                    .upsert_memory_in_place(
-                                        matched_source_id,
-                                        trimmed_content,
-                                        content_embedding,
-                                        req.source_agent.as_deref(),
-                                        None, // incoming_source_id N/A (no new id yet)
-                                        topic_cfg.changelog_cap,
-                                    )
-                                    .await;
-
-                                if let Ok(()) = upsert_result {
-                                    // Spawn async staleness check for linked concepts.
-                                    let db_clone = db.clone();
-                                    let msid = matched_source_id.clone();
-                                    let old_emb = result.old_embedding.clone();
-                                    let new_emb = content_embedding.clone();
-                                    let handle = tokio::spawn(async move {
-                                        let sim = old_emb.as_deref().map(|oe| {
-                                            origin_core::topic_match::cosine_similarity(
-                                                oe, &new_emb,
-                                            )
-                                        });
-                                        if let Ok(pages) =
-                                            db_clone.get_pages_for_memory(&msid).await
-                                        {
-                                            for page in pages {
-                                                let stale_reason = match sim {
-                                                    Some(s) if s > 0.90 => None, // trivial
-                                                    Some(s) if s > 0.60 => Some("source_updated"),
-                                                    _ => Some("source_conflict"),
-                                                };
-                                                if let Some(reason) = stale_reason {
-                                                    let _ = db_clone
-                                                        .set_page_stale(&page.id, reason)
-                                                        .await;
-                                                } else {
-                                                    let _ = db_clone
-                                                        .increment_page_sources_updated(&page.id)
-                                                        .await;
-                                                }
-                                            }
-                                        }
-                                    });
-                                    tokio::spawn(async move {
-                                        if let Err(e) = handle.await {
-                                            tracing::warn!(
-                                                "[topic_match] staleness check task panicked: {e}"
-                                            );
-                                        }
-                                    });
-
-                                    tracing::info!(
-                                        "[topic_match] upserted in place: source_id={matched_source_id} signals={:?}",
-                                        result.signals
-                                    );
-                                    return Ok(Json(StoreMemoryResponse {
-                                        source_id: matched_source_id.clone(),
-                                        chunks_created: 1,
-                                        memory_type: validated_memory_type
-                                            .clone()
-                                            .unwrap_or_else(|| "fact".to_string()),
-                                        entity_id: resolved_entity_id,
-                                        quality: None,
-                                        warnings: vec![],
-                                        extraction_method: "agent".to_string(),
-                                        enrichment: "not_needed".to_string(),
-                                        hint: "topic_updated".to_string(),
-                                    }));
-                                } else if let Err(ref e) = upsert_result {
-                                    tracing::warn!(
-                                        "[topic_match] upsert_memory_in_place failed, \
-                                         falling through to normal store: {e}"
-                                    );
-                                }
-                            } else {
+                            if is_protected {
                                 tracing::info!(
                                     "[topic_match] matched protected memory {matched_source_id}, \
                                      storing as new pending_revision"
                                 );
                                 topic_match_protected_id = Some(matched_source_id.clone());
                             }
+                            // Non-protected topic match: no longer collapsed
+                            // into the existing row. The incoming memory
+                            // stores as new; periodic consolidation belongs
+                            // in the refinery.
                         }
                     }
                 }
