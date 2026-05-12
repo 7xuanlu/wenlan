@@ -275,7 +275,7 @@ pub async fn add_observation(
         )));
     }
     let content = req.content.trim();
-    if content.len() < 5 {
+    if content.chars().count() < 5 {
         return Err(OriginError::Validation(
             "observation content must be at least 5 characters".into(),
         ));
@@ -528,12 +528,20 @@ mod tests {
             .await
             .unwrap();
         let req = AddObservationRequest {
-            entity_id: alice,
+            entity_id: alice.clone(),
             content: "Alice prefers Rust over Python".to_string(),
             source_agent: Some("test".to_string()),
             confidence: Some(0.9),
         };
         let result = add_observation(&db, req, "test").await.unwrap();
         assert!(!result.id.is_empty());
+
+        // Verify the observation was actually persisted
+        let observations = db
+            .get_observations_for_entities(&[alice], 10)
+            .await
+            .unwrap();
+        assert_eq!(observations.len(), 1);
+        assert!(observations[0].content.contains("Alice prefers Rust"));
     }
 }
