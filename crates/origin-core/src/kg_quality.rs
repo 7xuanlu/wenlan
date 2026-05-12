@@ -417,7 +417,8 @@ pub async fn hallucination_guard(
     }
     let mut source_contents: Vec<String> = Vec::with_capacity(source_ids.len());
     for sid in source_ids {
-        if let Ok(Some(detail)) = db.get_memory_detail(sid).await {
+        // Propagate DB errors; Ok(None) means unresolvable id — skip silently.
+        if let Some(detail) = db.get_memory_detail(sid).await? {
             source_contents.push(detail.content);
         }
     }
