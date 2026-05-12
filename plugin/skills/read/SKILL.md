@@ -5,7 +5,7 @@ description: >
   summary, source count, and the local md path. Full body lives on disk —
   open with the user's editor. Invoked as `/read <title_or_id>`.
 argument-hint: "<title_or_id>"
-allowed-tools: ["mcp__plugin_origin_origin__get_page", "Bash"]
+allowed-tools: ["mcp__plugin_origin_origin__get_page", "mcp__plugin_origin_origin__search_pages", "Bash"]
 ---
 
 # /read
@@ -57,24 +57,19 @@ block.
 ### 2. Title or freeform word
 
 Search first, then fetch the top hit by id and run the same preview
-block. Always resolve through `/api/pages/search` — never derive a slug
-client-side (skill heuristics drift from the canonical `slugify()` on
-apostrophes and punctuation).
+block. Always resolve through the `search_pages` MCP tool — never
+derive a slug client-side (skill heuristics drift from the canonical
+`slugify()` on apostrophes and punctuation).
 
 ```
-Bash: id=$(curl -fsS -X POST http://127.0.0.1:7878/api/pages/search \
-            -H 'Content-Type: application/json' \
-            -d "{\"query\":\"<arg>\",\"limit\":1}" \
-            | python3 -c "import json,sys; \
-                d=json.load(sys.stdin); \
-                hits=d.get('pages') or d.get('results') or []; \
-                print(hits[0]['id'] if hits else '', end='')")
-      [ -z "$id" ] && echo "no page found matching <arg> — try /distill <arg>" && exit 0
-      # then call get_page with the resolved id and emit the preview block
+search_pages(query="<arg>", limit=1)
 ```
 
-If `$id` is empty after search, tell the user "no page found matching
-`<arg>` — try `/distill <arg>` to create one" and stop.
+Parse the returned JSON — the response shape is `{ "pages": [...] }`.
+Read the first hit's `id`. If `pages` is empty, tell the user "no page
+found matching `<arg>` — try `/distill <arg>` to create one" and stop.
+Otherwise call `get_page(page_id=<id>)` and emit the same preview
+block from section 1.
 
 ## Output shape
 
@@ -104,6 +99,6 @@ better than their tools do.
 ## When NOT to use
 
 - Raw memory lookups → use `/recall`.
-- Listing all pages → `curl /api/pages/recent` or
+- Listing all pages → `list_pages_recent` MCP tool or
   `ls ~/.origin/pages/`.
 - Reading the full body → open the md file in the user's editor.

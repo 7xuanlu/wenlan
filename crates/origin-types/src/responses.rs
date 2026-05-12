@@ -3,6 +3,7 @@
 
 use crate::entities::{Entity, EntitySearchResult};
 use crate::memory::{IndexedFileInfo, MemoryItem, MemoryStats, SearchResult};
+use crate::pages::Page;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
@@ -228,6 +229,11 @@ pub struct ListEntitiesResponse {
 #[derive(Debug, Serialize, Deserialize)]
 pub struct SearchEntitiesResponse {
     pub results: Vec<EntitySearchResult>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct SearchPagesResponse {
+    pub pages: Vec<Page>,
 }
 
 // ===== Import =====
