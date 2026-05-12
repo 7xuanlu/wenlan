@@ -310,7 +310,10 @@ pub async fn find_duplicates(db: &MemoryDB, memories: &[ParsedMemory]) -> HashSe
 }
 
 /// Returns (entity_id, was_newly_created).
-pub async fn resolve_or_create_entity(
+/// Bulk-import variant: raw 4-step resolution without post-write enrichment.
+/// Use `post_write::create_entity` for single-entity writes that should fire
+/// the full enrichment ring (verify, activity log, refinery enqueue).
+pub(crate) async fn resolve_entity_bulk(
     db: &MemoryDB,
     entity_cache: &mut HashMap<String, String>,
     entity: &ExtractedEntity,
@@ -668,7 +671,7 @@ pub async fn import_phase3_store(
     for kg in kg_results {
         for entity in &kg.entities {
             if let Ok((_id, true)) =
-                resolve_or_create_entity(db, &mut entity_cache, entity, source).await
+                resolve_entity_bulk(db, &mut entity_cache, entity, source).await
             {
                 entities_created += 1;
             }
@@ -918,7 +921,7 @@ mod tests {
             name: "user".to_string(),
             entity_type: "person".to_string(),
         };
-        let (id, created) = resolve_or_create_entity(&db, &mut cache, &entity, "chatgpt")
+        let (id, created) = resolve_entity_bulk(&db, &mut cache, &entity, "chatgpt")
             .await
             .unwrap();
         assert!(!id.is_empty());
@@ -935,7 +938,7 @@ mod tests {
             name: "user".to_string(),
             entity_type: "person".to_string(),
         };
-        let (id, created) = resolve_or_create_entity(&db, &mut cache, &entity, "chatgpt")
+        let (id, created) = resolve_entity_bulk(&db, &mut cache, &entity, "chatgpt")
             .await
             .unwrap();
         assert_eq!(id, "existing_id");
@@ -955,7 +958,7 @@ mod tests {
         };
 
         // First call: creates entity + alias
-        let (id1, created1) = resolve_or_create_entity(&db, &mut cache, &entity, "test")
+        let (id1, created1) = resolve_entity_bulk(&db, &mut cache, &entity, "test")
             .await
             .unwrap();
         assert!(created1);
@@ -964,7 +967,7 @@ mod tests {
         cache.clear();
 
         // Second call with same case: should resolve via alias, not create
-        let (id2, created2) = resolve_or_create_entity(&db, &mut cache, &entity, "test")
+        let (id2, created2) = resolve_entity_bulk(&db, &mut cache, &entity, "test")
             .await
             .unwrap();
         assert!(!created2);
@@ -978,7 +981,7 @@ mod tests {
             name: "alice chen".to_string(),
             entity_type: "person".to_string(),
         };
-        let (id3, created3) = resolve_or_create_entity(&db, &mut cache, &entity_lower, "test")
+        let (id3, created3) = resolve_entity_bulk(&db, &mut cache, &entity_lower, "test")
             .await
             .unwrap();
         assert!(!created3);

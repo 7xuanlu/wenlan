@@ -22,7 +22,7 @@ pub struct WriteResult {
 /// agent-triggered (`/api/memory/entities`) and daemon-internal
 /// (`kg/entity_extraction.rs`) writes.
 ///
-/// Resolution order (4-step, matches the prior `importer::resolve_or_create_entity`):
+/// Resolution order (4-step, matches `importer::resolve_entity_bulk` used for bulk/eval paths):
 ///   1. Alias lookup
 ///   2. Exact name search
 ///   3. Vector similarity (distance < 0.1 => sim > 0.9)
