@@ -6,6 +6,10 @@ license.workspace = true
 repository.workspace = true
 description = "Headless daemon for Origin — HTTP/MCP server without Tauri"
 
+[lib]
+name = "origin_server"
+path = "src/lib.rs"
+
 [[bin]]
 name = "origin-server"
 path = "src/main.rs"
@@ -35,3 +39,4 @@ sha2 = "0.10"
 
 [dev-dependencies]
 tempfile = { workspace = true }
+tower = { workspace = true }
