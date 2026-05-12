@@ -5,8 +5,7 @@ Claude Code plugin for Origin. It wires Claude Code to `origin-mcp` and adds sho
 ## 30-Second Setup
 
 ```text
-0s   /plugin marketplace add 7xuanlu/origin
-     /plugin install origin@7xuanlu
+0s   /plugin install origin@claude-plugins-official
 5s   restart Claude Code
 10s  /init   auto-installs daemon if missing, configures Basic Memory,
             verifies daemon + MCP + round-trip, prints "Origin ready"
@@ -21,11 +20,17 @@ if the daemon ever stops.
 ## Install
 
 ```text
+/plugin install origin@claude-plugins-official
+```
+
+For local development against this repository, add this repo as a marketplace instead:
+
+```text
 /plugin marketplace add 7xuanlu/origin
 /plugin install origin@7xuanlu
 ```
 
-The marketplace is defined in [`../../.claude-plugin/marketplace.json`](../../.claude-plugin/marketplace.json) (at the repo root). The plugin metadata is defined in [`plugin.json`](plugin.json). MCP configuration is in [`../.mcp.json`](../.mcp.json) (this plugin's `.mcp.json`), which delegates to [`../bin/origin-mcp-runner.sh`](../bin/origin-mcp-runner.sh).
+The development marketplace is defined in [`../../.claude-plugin/marketplace.json`](../../.claude-plugin/marketplace.json) (at the repo root). The plugin metadata is defined in [`plugin.json`](plugin.json). MCP configuration is in [`../.mcp.json`](../.mcp.json) (this plugin's `.mcp.json`), which delegates to [`../bin/origin-mcp-runner.sh`](../bin/origin-mcp-runner.sh).
 
 The runner picks the MCP server binary in three paths, in order:
 

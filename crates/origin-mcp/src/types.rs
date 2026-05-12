@@ -15,3 +15,4 @@ pub use origin_types::responses::{
     CreateRelationResponse, DeleteResponse, ListMemoriesResponse, SearchMemoryResponse,
     SearchPagesResponse, StoreMemoryResponse,
 };
+pub use origin_types::PageSourceWithMemory;
