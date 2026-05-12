@@ -10,6 +10,7 @@ pub mod entities;
 pub mod events;
 pub mod import;
 pub mod memory;
+pub mod memory_type;
 pub mod narrative;
 pub mod onboarding;
 pub mod pages;
@@ -32,6 +33,7 @@ pub use memory::{
     RejectionRecord, RetrievalEvent, SearchResult, SessionSnapshot, SnapshotCapture,
     SnapshotCaptureWithContent, Space, TopMemory, TypeBreakdown,
 };
+pub use memory_type::{MEMORY_TYPE_CAPTURE_DESCRIPTION, MEMORY_TYPE_FILTER_DESCRIPTION};
 pub use narrative::NarrativeResponse;
 pub use pages::Page;
 pub use responses::{ExportStats, MemoryDetail, PendingRevision};

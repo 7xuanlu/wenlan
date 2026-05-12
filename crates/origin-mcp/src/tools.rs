@@ -86,9 +86,7 @@ pub struct CaptureParams {
         description = "The memory content. Write as a complete statement with context and reasoning, not shorthand. One idea per memory."
     )]
     pub content: String,
-    #[schemars(
-        description = "\"profile\" (about the user) or \"knowledge\" (about the world) — or precise: \"identity\", \"preference\", \"goal\", \"fact\", \"decision\" — auto-classified if omitted"
-    )]
+    #[schemars(description = origin_types::MEMORY_TYPE_CAPTURE_DESCRIPTION)]
     pub memory_type: Option<String>,
     #[schemars(
         description = "Topic scope (e.g. 'rust', 'work', 'health', 'origin'). Auto-detected if omitted."
@@ -127,9 +125,7 @@ pub struct RecallParams {
     )]
     #[serde(default, deserialize_with = "deserialize_optional_usize_lenient")]
     pub limit: Option<usize>,
-    #[schemars(
-        description = "Filter by type. Two-level filter: \"profile\" (user-facing) or \"knowledge\" (world-facing), or precise: identity, preference, goal, fact, decision."
-    )]
+    #[schemars(description = origin_types::MEMORY_TYPE_FILTER_DESCRIPTION)]
     pub memory_type: Option<String>,
     #[schemars(description = "Filter by topic scope.")]
     pub domain: Option<String>,
@@ -1179,11 +1175,12 @@ impl ServerHandler for OriginMcpServer {
              - Declarative, not narrative: \"User prefers X because Y\" — not \"User said today they prefer X\". \
                Memories outlive the conversation that produced them.\n\n\
              MEMORY TYPES — omit and trust the backend.\n\n\
-             By default, do NOT set memory_type. The backend auto-classifies into identity / preference / goal / \
-             fact / decision with more context than you have. Agents that over-specify types tend to pick wrong.\n\n\
+             By default, do NOT set memory_type. The backend auto-classifies into identity / preference / \
+             decision / lesson / gotcha / fact with more context than you have. Agents that over-specify \
+             types tend to pick wrong.\n\n\
              Opt-in specification:\n\
-             - \"profile\"   — you're sure it's about the user (identity/preference/goal)\n\
-             - \"knowledge\" — you're sure it's about the world (fact/decision)\n\
+             - \"profile\"   — you're sure it's about the user (identity / preference)\n\
+             - \"knowledge\" — you're sure it's about the world (decision / lesson / gotcha / fact)\n\
              - Precise type — only if you're confident and the distinction matters.\n\n\
              EXCEPTION — decisions carry structured fields (alternatives considered, reversibility, domain) \
              that power the Decision Log view. Set memory_type=\"decision\" explicitly ONLY when the user \
@@ -2021,14 +2018,19 @@ mod tests {
         assert!(json["source_agent"].is_null());
     }
 
-    // ===== Memory type backward compat =====
+    // ===== Memory type pass-through =====
 
+    /// CaptureParams must pass every canonical memory_type through to the
+    /// daemon verbatim. The MCP layer is dumb wire — it doesn't validate or
+    /// rewrite the value; the daemon owns that. Drift test sourced from
+    /// `MemoryType::all_values()` so adding a variant extends coverage
+    /// automatically.
     #[test]
-    fn test_remember_passes_through_all_5_types() {
-        for t in &["identity", "preference", "fact", "decision", "goal"] {
+    fn test_capture_passes_through_all_canonical_types() {
+        for t in origin_types::MemoryType::all_values() {
             let params = CaptureParams {
                 content: "test".into(),
-                memory_type: Some(t.to_string()),
+                memory_type: Some((*t).to_string()),
                 domain: None,
                 entity: None,
                 confidence: None,
@@ -2038,6 +2040,24 @@ mod tests {
             };
             assert_eq!(params.memory_type.as_deref(), Some(*t));
         }
+    }
+
+    /// Legacy "goal" alias still flows through the wire untouched —
+    /// `MemoryType::FromStr` folds it to "identity" daemon-side. The MCP
+    /// layer must not pre-reject it (the daemon owns the fold decision).
+    #[test]
+    fn test_capture_passes_through_legacy_goal_alias() {
+        let params = CaptureParams {
+            content: "test".into(),
+            memory_type: Some("goal".into()),
+            domain: None,
+            entity: None,
+            confidence: None,
+            supersedes: None,
+            structured_fields: None,
+            retrieval_cue: None,
+        };
+        assert_eq!(params.memory_type.as_deref(), Some("goal"));
     }
 
     // ===== Structured fields in remember params =====
@@ -2230,6 +2250,41 @@ mod tests {
             i.contains("do NOT set memory_type"),
             "with_instructions must explicitly say do NOT set memory_type by default"
         );
+    }
+
+    #[test]
+    fn instructions_list_every_canonical_memory_type() {
+        let i = server_instructions();
+        for ty in origin_types::MemoryType::all_values() {
+            assert!(
+                contains_word(&i, ty),
+                "with_instructions must list canonical memory type \"{ty}\" so MCP clients see the full vocabulary",
+            );
+        }
+    }
+
+    #[test]
+    fn instructions_omit_legacy_goal_type() {
+        let i = server_instructions();
+        // "goal" (singular) is a legacy memory_type folded to Identity by
+        // MemoryType::FromStr. The plural English noun "goals" (life goals,
+        // profile.goals chat-context field) is a separate concern and must
+        // NOT trigger this test — tokenizing on word boundaries lets one
+        // through while still catching the legacy memory-type token.
+        assert!(
+            !contains_word(&i, "goal"),
+            "with_instructions must not advertise legacy \"goal\" memory_type"
+        );
+    }
+
+    /// Tokenize on non-alphanumeric boundaries and check whether `needle`
+    /// appears as a standalone token. Mirrors the helper used by the
+    /// origin-types drift tests so "goals" (plural noun) does not false-match
+    /// the legacy "goal" memory_type token.
+    fn contains_word(haystack: &str, needle: &str) -> bool {
+        haystack
+            .split(|c: char| !c.is_ascii_alphanumeric() && c != '_')
+            .any(|tok| tok == needle)
     }
 
     #[test]
@@ -2633,6 +2688,30 @@ mod tests {
                 descriptions.contains_key(name),
                 "tool `{name}` must be registered, got: {:?}",
                 descriptions.keys().collect::<Vec<_>>()
+            );
+        }
+    }
+
+    #[test]
+    fn capture_memory_type_schema_lists_every_canonical_type() {
+        let params_schema = serde_json::to_string(&schemars::schema_for!(CaptureParams))
+            .expect("CaptureParams schema serializes");
+        for ty in origin_types::MemoryType::all_values() {
+            assert!(
+                params_schema.contains(ty),
+                "CaptureParams.memory_type schema must list canonical type \"{ty}\", got: {params_schema}"
+            );
+        }
+    }
+
+    #[test]
+    fn recall_memory_type_schema_lists_every_canonical_type() {
+        let params_schema = serde_json::to_string(&schemars::schema_for!(RecallParams))
+            .expect("RecallParams schema serializes");
+        for ty in origin_types::MemoryType::all_values() {
+            assert!(
+                params_schema.contains(ty),
+                "RecallParams.memory_type schema must list canonical type \"{ty}\", got: {params_schema}"
             );
         }
     }

@@ -16,18 +16,10 @@ use llama_cpp_2::llama_batch::LlamaBatch;
 use llama_cpp_2::model::AddBos;
 use llama_cpp_2::sampling::LlamaSampler;
 
+use origin_types::MemoryType;
+
 use std::num::NonZeroU32;
 use std::time::Instant;
-
-/// Valid memory types for classification (6 canonical types).
-const VALID_MEMORY_TYPES: &[&str] = &[
-    "identity",
-    "preference",
-    "decision",
-    "lesson",
-    "gotcha",
-    "fact",
-];
 
 /// Result of classifying a single memory.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -75,7 +67,7 @@ pub fn parse_classification_response(
                 .get("type")
                 .and_then(|v| v.as_str())
                 .map(|s| s.to_lowercase())
-                .filter(|s| VALID_MEMORY_TYPES.contains(&s.as_str()))
+                .filter(|s| MemoryType::all_values().contains(&s.as_str()))
                 .unwrap_or_else(|| "fact".to_string());
 
             let domain = entry
@@ -124,7 +116,7 @@ pub fn parse_profile_subtype(raw: &str) -> &'static str {
     }
 }
 
-/// Classify a "profile" alias into identity/preference/goal using the on-device engine.
+/// Classify a "profile" alias into identity / preference using the on-device engine.
 ///
 /// Runs synchronously on the engine's worker thread. Caller is responsible for
 /// running this inside `spawn_blocking` if invoking from an async context, since
@@ -558,14 +550,44 @@ mod tests {
 
     #[test]
     fn test_classify_prompt_contains_all_types() {
-        // Verify the classify prompt would include all valid types (6 canonical).
-        let all = origin_types::MemoryType::all_values();
-        let prompt_types = "identity, preference, decision, lesson, gotcha, fact";
-        for val in all {
+        // Drift guard: the compiled-in classify prompt must list every
+        // canonical type so the LLM never emits a value our parser rejects.
+        // Derive the haystack from the actual prompt const rather than a
+        // hand-typed string, otherwise the test rots in parallel with the
+        // prompt itself.
+        use crate::prompts::defaults::CLASSIFY_MEMORY_QUALITY;
+        for val in MemoryType::all_values() {
             assert!(
-                prompt_types.contains(val),
-                "prompt should include type '{}'",
-                val
+                CLASSIFY_MEMORY_QUALITY.contains(val),
+                "CLASSIFY_MEMORY_QUALITY prompt must include canonical type \"{val}\"",
+            );
+        }
+    }
+
+    #[test]
+    fn test_classify_prompts_omit_legacy_goal() {
+        // "goal" is folded to Identity by MemoryType::FromStr — it must not
+        // appear in any LLM-facing prompt or the model will keep emitting it.
+        use crate::prompts::defaults::{
+            BATCH_CLASSIFY, CLASSIFY_MEMORY, CLASSIFY_MEMORY_QUALITY,
+            CLASSIFY_MEMORY_QUALITY_STRICT, CLASSIFY_PROFILE_SUBTYPE,
+        };
+        for (label, prompt) in [
+            ("CLASSIFY_MEMORY", CLASSIFY_MEMORY),
+            ("CLASSIFY_MEMORY_QUALITY", CLASSIFY_MEMORY_QUALITY),
+            (
+                "CLASSIFY_MEMORY_QUALITY_STRICT",
+                CLASSIFY_MEMORY_QUALITY_STRICT,
+            ),
+            ("CLASSIFY_PROFILE_SUBTYPE", CLASSIFY_PROFILE_SUBTYPE),
+            ("BATCH_CLASSIFY", BATCH_CLASSIFY),
+        ] {
+            let has_goal = prompt
+                .split(|c: char| !c.is_ascii_alphanumeric() && c != '_')
+                .any(|tok| tok == "goal");
+            assert!(
+                !has_goal,
+                "{label} prompt still advertises legacy \"goal\" token",
             );
         }
     }
