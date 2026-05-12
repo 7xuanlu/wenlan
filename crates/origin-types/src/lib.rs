@@ -33,9 +33,7 @@ pub use memory::{
     RejectionRecord, RetrievalEvent, SearchResult, SessionSnapshot, SnapshotCapture,
     SnapshotCaptureWithContent, Space, TopMemory, TypeBreakdown,
 };
-pub use memory_type::{
-    MEMORY_TYPE_CAPTURE_DESCRIPTION, MEMORY_TYPE_FILTER_DESCRIPTION, VALID_MEMORY_TYPES,
-};
+pub use memory_type::{MEMORY_TYPE_CAPTURE_DESCRIPTION, MEMORY_TYPE_FILTER_DESCRIPTION};
 pub use narrative::NarrativeResponse;
 pub use pages::Page;
 pub use responses::{ExportStats, MemoryDetail, PendingRevision};

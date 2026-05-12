@@ -1,27 +1,15 @@
 // SPDX-License-Identifier: Apache-2.0
-//! Canonical memory type registry. Single source of truth for the set of
-//! `memory_type` values the daemon accepts and emits.
+//! JSON Schema description strings for the `memory_type` parameter.
 //!
-//! Shared by:
-//! - `origin-core::classify` — classifier enforces this set when parsing LLM output
-//! - `origin-core::eval` — eval harness uses this set when generating synthetic data
-//! - `origin-mcp::tools` — MCP tool schema descriptions reference this set so
-//!   the JSON Schema advertised to clients matches what the daemon accepts
+//! The canonical type set is owned by [`crate::sources::MemoryType`] and
+//! returned by [`MemoryType::all_values`]. This module exposes the prose
+//! description strings that downstream tool schemas (MCP `capture`,
+//! MCP `recall`, future MCP/Tauri schemas) advertise to clients.
 //!
-//! When adding a type, update `VALID_MEMORY_TYPES` below. The drift test in
-//! this module asserts that every type appears in the schema descriptions.
-
-/// The canonical set of memory types accepted by the daemon classifier and
-/// storage layer. Legacy values (e.g. `"goal"`) are folded by callers via
-/// stability tier mapping but are NOT listed here.
-pub const VALID_MEMORY_TYPES: &[&str] = &[
-    "identity",
-    "preference",
-    "decision",
-    "lesson",
-    "gotcha",
-    "fact",
-];
+//! The drift tests below iterate over the canonical enum and assert each
+//! description string lists every variant. Adding a variant to
+//! [`crate::sources::MemoryType`] but forgetting to extend the description
+//! prose fails CI here — not silently in production.
 
 /// JSON Schema `description` for the `memory_type` parameter on memory-write
 /// tools (e.g. MCP `capture`). Lists the two-level filter values (profile /
@@ -43,10 +31,11 @@ pub const MEMORY_TYPE_FILTER_DESCRIPTION: &str =
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::sources::MemoryType;
 
     #[test]
-    fn capture_description_lists_every_valid_type() {
-        for ty in VALID_MEMORY_TYPES {
+    fn capture_description_lists_every_canonical_type() {
+        for ty in MemoryType::all_values() {
             let needle = format!("\"{ty}\"");
             assert!(
                 MEMORY_TYPE_CAPTURE_DESCRIPTION.contains(&needle),
@@ -56,8 +45,8 @@ mod tests {
     }
 
     #[test]
-    fn filter_description_lists_every_valid_type() {
-        for ty in VALID_MEMORY_TYPES {
+    fn filter_description_lists_every_canonical_type() {
+        for ty in MemoryType::all_values() {
             let needle = format!("\"{ty}\"");
             assert!(
                 MEMORY_TYPE_FILTER_DESCRIPTION.contains(&needle),
@@ -66,11 +55,41 @@ mod tests {
         }
     }
 
+    /// "goal" is a legacy alias folded to Identity by `MemoryType::FromStr`.
+    /// It must NOT be advertised in any description surface, or clients will
+    /// believe they can store with `memory_type = "goal"` and get an
+    /// unexpected fold.
     #[test]
-    fn valid_set_has_no_legacy_goal() {
-        assert!(
-            !VALID_MEMORY_TYPES.contains(&"goal"),
-            "\"goal\" is a legacy value folded via stability tier mapping; it must not appear in VALID_MEMORY_TYPES"
-        );
+    fn descriptions_omit_legacy_goal() {
+        for desc in [
+            MEMORY_TYPE_CAPTURE_DESCRIPTION,
+            MEMORY_TYPE_FILTER_DESCRIPTION,
+        ] {
+            assert!(
+                !contains_word(desc, "goal"),
+                "description must not advertise legacy \"goal\": {desc}"
+            );
+        }
+    }
+
+    /// Word-boundary contains: returns true iff `needle` appears as a
+    /// standalone alphanumeric token (not a substring of a longer word).
+    /// Used by drift tests to ensure "goal" rejection doesn't false-match
+    /// on "goals" (plural English noun) elsewhere in prose.
+    pub(crate) fn contains_word(haystack: &str, needle: &str) -> bool {
+        haystack
+            .split(|c: char| !c.is_ascii_alphanumeric() && c != '_')
+            .any(|tok| tok == needle)
+    }
+
+    #[test]
+    fn contains_word_rejects_partial_matches() {
+        assert!(contains_word("goal", "goal"));
+        assert!(contains_word("/ goal /", "goal"));
+        assert!(contains_word("goal,", "goal"));
+        assert!(contains_word("(goal)", "goal"));
+        assert!(!contains_word("goals", "goal"));
+        assert!(!contains_word("their goals here", "goal"));
+        assert!(!contains_word("subgoal", "goal"));
     }
 }

@@ -331,12 +331,10 @@ async fn grade_case(
     Ok(graded)
 }
 
-use origin_types::VALID_MEMORY_TYPES;
-
 /// Normalize invalid memory_type to the closest valid type.
 fn normalize_memory_type(raw: &str) -> String {
     let lower = raw.to_lowercase();
-    if VALID_MEMORY_TYPES.contains(&lower.as_str()) {
+    if origin_types::MemoryType::all_values().contains(&lower.as_str()) {
         return lower;
     }
     // Map common LLM hallucinations to valid types

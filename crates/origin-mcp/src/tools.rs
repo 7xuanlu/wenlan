@@ -2018,14 +2018,19 @@ mod tests {
         assert!(json["source_agent"].is_null());
     }
 
-    // ===== Memory type backward compat =====
+    // ===== Memory type pass-through =====
 
+    /// CaptureParams must pass every canonical memory_type through to the
+    /// daemon verbatim. The MCP layer is dumb wire — it doesn't validate or
+    /// rewrite the value; the daemon owns that. Drift test sourced from
+    /// `MemoryType::all_values()` so adding a variant extends coverage
+    /// automatically.
     #[test]
-    fn test_remember_passes_through_all_5_types() {
-        for t in &["identity", "preference", "fact", "decision", "goal"] {
+    fn test_capture_passes_through_all_canonical_types() {
+        for t in origin_types::MemoryType::all_values() {
             let params = CaptureParams {
                 content: "test".into(),
-                memory_type: Some(t.to_string()),
+                memory_type: Some((*t).to_string()),
                 domain: None,
                 entity: None,
                 confidence: None,
@@ -2035,6 +2040,24 @@ mod tests {
             };
             assert_eq!(params.memory_type.as_deref(), Some(*t));
         }
+    }
+
+    /// Legacy "goal" alias still flows through the wire untouched —
+    /// `MemoryType::FromStr` folds it to "identity" daemon-side. The MCP
+    /// layer must not pre-reject it (the daemon owns the fold decision).
+    #[test]
+    fn test_capture_passes_through_legacy_goal_alias() {
+        let params = CaptureParams {
+            content: "test".into(),
+            memory_type: Some("goal".into()),
+            domain: None,
+            entity: None,
+            confidence: None,
+            supersedes: None,
+            structured_fields: None,
+            retrieval_cue: None,
+        };
+        assert_eq!(params.memory_type.as_deref(), Some("goal"));
     }
 
     // ===== Structured fields in remember params =====
@@ -2232,9 +2255,9 @@ mod tests {
     #[test]
     fn instructions_list_every_canonical_memory_type() {
         let i = server_instructions();
-        for ty in origin_types::VALID_MEMORY_TYPES {
+        for ty in origin_types::MemoryType::all_values() {
             assert!(
-                i.contains(ty),
+                contains_word(&i, ty),
                 "with_instructions must list canonical memory type \"{ty}\" so MCP clients see the full vocabulary",
             );
         }
@@ -2243,13 +2266,25 @@ mod tests {
     #[test]
     fn instructions_omit_legacy_goal_type() {
         let i = server_instructions();
-        // "goal" is a legacy value; daemon classifier no longer emits it
-        // (folded via stability tier mapping). It must not appear in the
-        // type vocabulary advertised to MCP clients.
+        // "goal" (singular) is a legacy memory_type folded to Identity by
+        // MemoryType::FromStr. The plural English noun "goals" (life goals,
+        // profile.goals chat-context field) is a separate concern and must
+        // NOT trigger this test — tokenizing on word boundaries lets one
+        // through while still catching the legacy memory-type token.
         assert!(
-            !i.contains("/ goal /") && !i.contains("goal)"),
+            !contains_word(&i, "goal"),
             "with_instructions must not advertise legacy \"goal\" memory_type"
         );
+    }
+
+    /// Tokenize on non-alphanumeric boundaries and check whether `needle`
+    /// appears as a standalone token. Mirrors the helper used by the
+    /// origin-types drift tests so "goals" (plural noun) does not false-match
+    /// the legacy "goal" memory_type token.
+    fn contains_word(haystack: &str, needle: &str) -> bool {
+        haystack
+            .split(|c: char| !c.is_ascii_alphanumeric() && c != '_')
+            .any(|tok| tok == needle)
     }
 
     #[test]
@@ -2661,7 +2696,7 @@ mod tests {
     fn capture_memory_type_schema_lists_every_canonical_type() {
         let params_schema = serde_json::to_string(&schemars::schema_for!(CaptureParams))
             .expect("CaptureParams schema serializes");
-        for ty in origin_types::VALID_MEMORY_TYPES {
+        for ty in origin_types::MemoryType::all_values() {
             assert!(
                 params_schema.contains(ty),
                 "CaptureParams.memory_type schema must list canonical type \"{ty}\", got: {params_schema}"
@@ -2673,7 +2708,7 @@ mod tests {
     fn recall_memory_type_schema_lists_every_canonical_type() {
         let params_schema = serde_json::to_string(&schemars::schema_for!(RecallParams))
             .expect("RecallParams schema serializes");
-        for ty in origin_types::VALID_MEMORY_TYPES {
+        for ty in origin_types::MemoryType::all_values() {
             assert!(
                 params_schema.contains(ty),
                 "RecallParams.memory_type schema must list canonical type \"{ty}\", got: {params_schema}"

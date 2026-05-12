@@ -33,13 +33,16 @@ quality must be one of: low, medium, high (how specific and actionable is this m
 
 // Used by llm_formatter in the app crate; referenced again once llm_formatter
 // moves into origin-core in a later phase.
+//
+// Profile memories split into 2 subtypes after the taxonomy refactor.
+// "goal" is folded to "identity" by MemoryType::FromStr (aspirations are
+// part of who the user is) and must not appear in this prompt.
 #[allow(dead_code)]
 pub(crate) const CLASSIFY_PROFILE_SUBTYPE: &str = "\
-Classify this profile memory into one of exactly 3 types. Respond with ONLY the type name.\n\n\
-identity — who the user is (role, background, expertise, values)\n\
-preference — how the user likes things done (tools, workflow, style)\n\
-goal — what the user is working toward (objectives, targets, deadlines)\n\n\
-Respond with one word: identity, preference, or goal";
+Classify this profile memory into one of exactly 2 types. Respond with ONLY the type name.\n\n\
+identity — who the user is (role, background, expertise, values, aspirations)\n\
+preference — how the user likes things done (tools, workflow, style)\n\n\
+Respond with one word: identity or preference";
 
 pub(crate) const CLASSIFY_SCREEN: &str = "\
 You classify screen capture text from a desktop application.\n\
@@ -95,7 +98,7 @@ Respond ONLY with JSON: {\"summary\": \"...\", \"tags\": [\"...\"]}";
 
 pub(crate) const BATCH_CLASSIFY: &str = "\
 Classify each memory. Return a JSON array.\n\
-For each: {\"i\": <number>, \"type\": \"<identity|preference|fact|decision|goal>\", \"domain\": \"<work|personal|health|finance|technology|travel|food>\", \"tags\": [\"<tag>\"]}";
+For each: {\"i\": <number>, \"type\": \"<identity|preference|decision|lesson|gotcha|fact>\", \"domain\": \"<work|personal|health|finance|technology|travel|food>\", \"tags\": [\"<tag>\"]}";
 
 pub(crate) const EXTRACT_KNOWLEDGE_GRAPH: &str = "\
 Extract entities and relations from these memories.\n\
