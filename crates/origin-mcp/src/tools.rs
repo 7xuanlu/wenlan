@@ -852,10 +852,7 @@ impl OriginMcpServer {
         Ok(CallToolResult::success(vec![Content::text(pretty)]))
     }
 
-    pub async fn get_page_sources_impl(
-        &self,
-        page_id: &str,
-    ) -> Result<CallToolResult, McpError> {
+    pub async fn get_page_sources_impl(&self, page_id: &str) -> Result<CallToolResult, McpError> {
         let path = format!("/api/pages/{}/sources", page_id);
         // Daemon returns Vec<PageSourceWithMemory> directly (no envelope key).
         let resp: Vec<PageSourceWithMemory> = match self.client.get(&path).await {
