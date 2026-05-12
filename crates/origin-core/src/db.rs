@@ -8737,6 +8737,22 @@ impl MemoryDB {
         Ok(result)
     }
 
+    pub async fn entity_exists(&self, entity_id: &str) -> Result<bool, OriginError> {
+        let conn = self.conn.lock().await;
+        let mut rows = conn
+            .query(
+                "SELECT 1 FROM entities WHERE id = ?1 LIMIT 1",
+                libsql::params![entity_id],
+            )
+            .await
+            .map_err(|e| OriginError::VectorDb(e.to_string()))?;
+        Ok(rows
+            .next()
+            .await
+            .map_err(|e| OriginError::VectorDb(e.to_string()))?
+            .is_some())
+    }
+
     pub async fn list_entities(
         &self,
         entity_type: Option<&str>,

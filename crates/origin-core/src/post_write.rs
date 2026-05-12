@@ -169,13 +169,13 @@ pub async fn create_relation(
     agent: &str,
 ) -> Result<WriteResult, OriginError> {
     // Pre-write validation
-    if !entity_exists(db, &req.from_entity).await? {
+    if !db.entity_exists(&req.from_entity).await? {
         return Err(OriginError::Validation(format!(
             "from_entity '{}' does not exist",
             req.from_entity
         )));
     }
-    if !entity_exists(db, &req.to_entity).await? {
+    if !db.entity_exists(&req.to_entity).await? {
         return Err(OriginError::Validation(format!(
             "to_entity '{}' does not exist",
             req.to_entity
@@ -258,10 +258,6 @@ pub async fn create_relation(
     }
 
     Ok(WriteResult { id, warnings })
-}
-
-async fn entity_exists(db: &MemoryDB, entity_id: &str) -> Result<bool, OriginError> {
-    Ok(db.get_entity_detail(entity_id).await.is_ok())
 }
 
 fn is_valid_snake_case_relation(s: &str) -> bool {
