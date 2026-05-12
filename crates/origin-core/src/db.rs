@@ -7835,7 +7835,9 @@ impl MemoryDB {
                     MAX(structured_fields) as structured_fields,
                     MAX(retrieval_cue) as retrieval_cue,
                     SUM(access_count) as access_count,
-                    MAX(source_text) as source_text
+                    MAX(source_text) as source_text,
+                    MAX(version) as version,
+                    MAX(changelog) as changelog
              FROM memories
              WHERE source = 'memory'
                AND pending_revision = 0
@@ -7903,8 +7905,8 @@ impl MemoryDB {
                 retrieval_cue: row.get::<Option<String>>(20).unwrap_or(None),
                 access_count: row.get::<u64>(21).unwrap_or(0),
                 source_text: row.get::<Option<String>>(22).unwrap_or(None),
-                version: 1,
-                changelog: None,
+                version: row.get::<i64>(23).unwrap_or(1),
+                changelog: row.get::<Option<String>>(24).unwrap_or(None),
                 pending_revision: false,
                 merged_from: None,
             });
@@ -7944,7 +7946,9 @@ impl MemoryDB {
                     MAX(structured_fields) as structured_fields,
                     MAX(retrieval_cue) as retrieval_cue,
                     SUM(access_count) as access_count,
-                    MAX(source_text) as source_text
+                    MAX(source_text) as source_text,
+                    MAX(version) as version,
+                    MAX(changelog) as changelog
              FROM memories
              WHERE pending_revision = 0
                AND source_id = ?1
@@ -7984,8 +7988,8 @@ impl MemoryDB {
                 retrieval_cue: row.get::<Option<String>>(20).unwrap_or(None),
                 access_count: row.get::<u64>(21).unwrap_or(0),
                 source_text: row.get::<Option<String>>(22).unwrap_or(None),
-                version: 1,
-                changelog: None,
+                version: row.get::<i64>(23).unwrap_or(1),
+                changelog: row.get::<Option<String>>(24).unwrap_or(None),
                 pending_revision: false,
                 merged_from: None,
             }))
@@ -8143,7 +8147,9 @@ impl MemoryDB {
                     MAX(structured_fields) as structured_fields,
                     MAX(retrieval_cue) as retrieval_cue,
                     SUM(access_count) as access_count,
-                    MAX(source_text) as source_text
+                    MAX(source_text) as source_text,
+                    MAX(version) as version,
+                    MAX(changelog) as changelog
              FROM memories
              WHERE source = 'memory' AND memory_type = ?1 AND confirmed != 0
              {} {}
@@ -8195,8 +8201,8 @@ impl MemoryDB {
                 retrieval_cue: row.get::<Option<String>>(20).unwrap_or(None),
                 access_count: row.get::<u64>(21).unwrap_or(0),
                 source_text: row.get::<Option<String>>(22).unwrap_or(None),
-                version: 1,
-                changelog: None,
+                version: row.get::<i64>(23).unwrap_or(1),
+                changelog: row.get::<Option<String>>(24).unwrap_or(None),
                 pending_revision: false,
                 merged_from: None,
             });
@@ -8248,7 +8254,9 @@ impl MemoryDB {
                     MAX(structured_fields) as structured_fields,
                     MAX(retrieval_cue) as retrieval_cue,
                     SUM(access_count) as access_count,
-                    MAX(source_text) as source_text
+                    MAX(source_text) as source_text,
+                    MAX(version) as version,
+                    MAX(changelog) as changelog
              FROM memories
              WHERE source = 'memory' AND memory_type = 'decision' AND chunk_index = 0 AND confirmed != 0
              {} {}
@@ -8296,8 +8304,8 @@ impl MemoryDB {
                 retrieval_cue: row.get::<Option<String>>(20).unwrap_or(None),
                 access_count: row.get::<u64>(21).unwrap_or(0),
                 source_text: row.get::<Option<String>>(22).unwrap_or(None),
-                version: 1,
-                changelog: None,
+                version: row.get::<i64>(23).unwrap_or(1),
+                changelog: row.get::<Option<String>>(24).unwrap_or(None),
                 pending_revision: false,
                 merged_from: None,
             });
@@ -11158,7 +11166,8 @@ impl MemoryDB {
                         WHEN SUM(CASE WHEN es.status IN ('ok','skipped') THEN 1 ELSE 0 END) = 0 THEN 'enrichment_failed'
                         ELSE 'enrichment_partial'
                     END FROM enrichment_steps es WHERE es.source_id = c.source_id) AS enrichment_status, c.supersede_mode, c.structured_fields,
-                    c.retrieval_cue, c.access_count, c.source_text
+                    c.retrieval_cue, c.access_count, c.source_text,
+                    c.version, c.changelog
              FROM memories c
              WHERE c.source = 'memory'
                AND c.stability = 'new'
@@ -11219,8 +11228,8 @@ impl MemoryDB {
                 retrieval_cue: row.get::<Option<String>>(19).unwrap_or(None),
                 access_count: row.get::<u64>(20).unwrap_or(0),
                 source_text: row.get::<Option<String>>(21).unwrap_or(None),
-                version: 1,
-                changelog: None,
+                version: row.get::<i64>(22).unwrap_or(1),
+                changelog: row.get::<Option<String>>(23).unwrap_or(None),
                 pending_revision: false,
                 merged_from: None,
             });

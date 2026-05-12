@@ -575,6 +575,16 @@ pub async fn update_page(
         .map(|s| s.as_str())
         .collect();
     let new_set: std::collections::HashSet<&str> = source_refs.iter().copied().collect();
+
+    // Early return: identical content and identical source set — nothing to write.
+    if delta_summary.is_none() && old_set == new_set {
+        return Ok(WriteResult {
+            id: page_id.to_string(),
+            warnings: vec![],
+            wrote: false,
+        });
+    }
+
     let mut added_sources: Vec<&str> = new_set.difference(&old_set).copied().collect();
     added_sources.sort_unstable();
     let added_sources_json = serde_json::Value::Array(
@@ -1322,6 +1332,38 @@ mod tests {
         assert!(
             w2.contains("v2") && w2.contains("v3"),
             "second warning should show v2 → v3: {w2}"
+        );
+    }
+
+    #[tokio::test]
+    async fn update_page_noop_returns_wrote_false() {
+        let (db, _dir) = test_db().await;
+        let mem_id = "mem-noop-1";
+        let content = "Rust is a systems language with memory safety";
+        seed_memory(&db, mem_id, content).await;
+        let page_id = seed_page(&db, mem_id, content).await;
+
+        // Fetch baseline version before no-op call
+        let page_before = db.get_page(&page_id).await.unwrap().unwrap();
+        let version_before = page_before.version;
+
+        // Call update_page with identical content and identical sources
+        let req = UpdatePageRequest {
+            content: content.to_string(),
+            source_memory_ids: vec![mem_id.to_string()],
+        };
+        let result = update_page(&db, &page_id, req, "re_distill", false, None)
+            .await
+            .unwrap();
+
+        assert!(!result.wrote, "identical-content call must not write");
+        assert!(result.warnings.is_empty(), "no-op must produce no warnings");
+
+        // Version must be unchanged
+        let page_after = db.get_page(&page_id).await.unwrap().unwrap();
+        assert_eq!(
+            page_after.version, version_before,
+            "version must not bump on no-op"
         );
     }
 }
