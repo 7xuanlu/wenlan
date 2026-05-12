@@ -7,7 +7,7 @@
 
 use crate::db::MemoryDB;
 use crate::error::OriginError;
-use origin_types::requests::{CreateEntityRequest, CreateRelationRequest};
+use origin_types::requests::{AddObservationRequest, CreateEntityRequest, CreateRelationRequest};
 
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct WriteResult {
@@ -260,6 +260,64 @@ pub async fn create_relation(
     Ok(WriteResult { id, warnings })
 }
 
+/// Add an observation to an existing entity. Canonical entry for both
+/// agent-triggered (`/api/memory/observations`) and daemon-internal callers.
+pub async fn add_observation(
+    db: &MemoryDB,
+    req: AddObservationRequest,
+    agent: &str,
+) -> Result<WriteResult, OriginError> {
+    // Pre-write validation
+    if !db.entity_exists(&req.entity_id).await? {
+        return Err(OriginError::Validation(format!(
+            "entity_id '{}' does not exist",
+            req.entity_id
+        )));
+    }
+    let content = req.content.trim();
+    if content.len() < 5 {
+        return Err(OriginError::Validation(
+            "observation content must be at least 5 characters".into(),
+        ));
+    }
+    if let Some(c) = req.confidence {
+        if !(0.0..=1.0).contains(&c) {
+            return Err(OriginError::Validation(format!(
+                "confidence {c} out of range [0.0, 1.0]"
+            )));
+        }
+    }
+
+    let id = db
+        .add_observation(
+            &req.entity_id,
+            content,
+            req.source_agent.as_deref(),
+            req.confidence,
+        )
+        .await?;
+
+    // Activity log (no verify step yet — observations have no canonical quality check)
+    let detail = format!("entity_id={}, content_len={}", req.entity_id, content.len());
+    if let Err(e) = db
+        .log_agent_activity(
+            agent,
+            "observation_add",
+            std::slice::from_ref(&id),
+            None,
+            &detail,
+        )
+        .await
+    {
+        log::warn!("[add_observation] activity log failed: {e}");
+    }
+
+    Ok(WriteResult {
+        id,
+        warnings: vec![],
+    })
+}
+
 fn is_valid_snake_case_relation(s: &str) -> bool {
     if s.is_empty() {
         return false;
@@ -425,6 +483,57 @@ mod tests {
             source_agent: Some("test".to_string()),
         };
         let result = create_relation(&db, req, "test").await.unwrap();
+        assert!(!result.id.is_empty());
+    }
+
+    #[tokio::test]
+    async fn add_observation_rejects_missing_entity() {
+        let (db, _dir) = test_db().await;
+        let req = AddObservationRequest {
+            entity_id: "no-such-entity".to_string(),
+            content: "Alice prefers Rust".to_string(),
+            source_agent: Some("test".to_string()),
+            confidence: None,
+        };
+        assert!(matches!(
+            add_observation(&db, req, "test").await,
+            Err(OriginError::Validation(_))
+        ));
+    }
+
+    #[tokio::test]
+    async fn add_observation_rejects_short_content() {
+        let (db, _dir) = test_db().await;
+        let alice = db
+            .store_entity("Alice", "person", None, Some("test"), None)
+            .await
+            .unwrap();
+        let req = AddObservationRequest {
+            entity_id: alice,
+            content: "hi".to_string(),
+            source_agent: Some("test".to_string()),
+            confidence: None,
+        };
+        assert!(matches!(
+            add_observation(&db, req, "test").await,
+            Err(OriginError::Validation(_))
+        ));
+    }
+
+    #[tokio::test]
+    async fn add_observation_happy_path() {
+        let (db, _dir) = test_db().await;
+        let alice = db
+            .store_entity("Alice", "person", None, Some("test"), None)
+            .await
+            .unwrap();
+        let req = AddObservationRequest {
+            entity_id: alice,
+            content: "Alice prefers Rust over Python".to_string(),
+            source_agent: Some("test".to_string()),
+            confidence: Some(0.9),
+        };
+        let result = add_observation(&db, req, "test").await.unwrap();
         assert!(!result.id.is_empty());
     }
 }
