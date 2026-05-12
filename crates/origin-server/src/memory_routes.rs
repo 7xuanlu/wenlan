@@ -8,12 +8,12 @@ use axum::{
 };
 use origin_core::sources::compute_effective_confidence;
 use origin_types::requests::{
-    ConfirmRequest, CreateConceptRequest, ExportPagesRequest, ListMemoriesRequest,
-    SearchMemoryRequest, StoreMemoryRequest,
+    ConfirmRequest, CreateConceptRequest, CreateEntityRequest, ExportPagesRequest,
+    ListMemoriesRequest, SearchMemoryRequest, StoreMemoryRequest,
 };
 use origin_types::responses::{
-    ConfirmResponse, DeleteResponse, ListMemoriesResponse, SearchMemoryResponse,
-    StoreMemoryResponse,
+    ConfirmResponse, CreateEntityResponse, DeleteResponse, ListMemoriesResponse,
+    SearchMemoryResponse, StoreMemoryResponse,
 };
 use origin_types::sources::{stability_tier, MemoryType, RawDocument, StabilityTier};
 use serde::{Deserialize, Serialize};
@@ -82,23 +82,6 @@ pub struct UpdateAgentRequest {
 }
 
 // ===== Knowledge Graph Types =====
-
-#[derive(Debug, Deserialize)]
-pub struct CreateEntityRequest {
-    pub name: String,
-    pub entity_type: String,
-    #[serde(default)]
-    pub domain: Option<String>,
-    #[serde(default)]
-    pub source_agent: Option<String>,
-    #[serde(default)]
-    pub confidence: Option<f32>,
-}
-
-#[derive(Debug, Serialize)]
-pub struct CreateEntityResponse {
-    pub id: String,
-}
 
 #[derive(Debug, Deserialize)]
 pub struct CreateRelationRequest {
@@ -1164,21 +1147,23 @@ pub async fn handle_delete_memory(
 
 pub async fn handle_create_entity(
     State(state): State<Arc<RwLock<ServerState>>>,
+    headers: HeaderMap,
     Json(req): Json<CreateEntityRequest>,
 ) -> Result<Json<CreateEntityResponse>, ServerError> {
-    let s = state.read().await;
-    let db = s.db.as_ref().ok_or(ServerError::DbNotInitialized)?;
-    let id = db
-        .store_entity(
-            &req.name,
-            &req.entity_type,
-            req.domain.as_deref(),
-            req.source_agent.as_deref(),
-            req.confidence,
-        )
+    let agent = agent_from_headers(&headers).unwrap_or_else(|| "system".to_string());
+    let db = {
+        let s = state.read().await;
+        s.db.as_ref()
+            .cloned()
+            .ok_or(ServerError::DbNotInitialized)?
+    };
+    let result = origin_core::post_write::create_entity(&db, req, &agent)
         .await
-        .map_err(|e| ServerError::IngestFailed(e.to_string()))?;
-    Ok(Json(CreateEntityResponse { id }))
+        .map_err(map_post_write_err)?;
+    Ok(Json(CreateEntityResponse {
+        id: result.id,
+        warnings: result.warnings,
+    }))
 }
 
 pub async fn handle_create_relation(
@@ -1696,6 +1681,22 @@ fn truncate_for_title(content: &str) -> String {
         format!("{}...", truncated)
     } else {
         first_line.to_string()
+    }
+}
+
+/// Read the `x-agent-name` header and return its value, or `None` if absent/invalid.
+fn agent_from_headers(headers: &HeaderMap) -> Option<String> {
+    headers
+        .get("x-agent-name")
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.to_string())
+}
+
+/// Map an `OriginError` from a post_write capability function to a `ServerError`.
+fn map_post_write_err(e: origin_core::OriginError) -> ServerError {
+    match e {
+        origin_core::OriginError::Validation(msg) => ServerError::ValidationError(msg),
+        other => ServerError::Internal(other.to_string()),
     }
 }
 
