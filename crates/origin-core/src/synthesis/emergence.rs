@@ -5,6 +5,7 @@ use crate::db::MemoryDB;
 use crate::error::OriginError;
 use crate::llm_provider::{LlmProvider, LlmRequest};
 use crate::prompts::PromptRegistry;
+use origin_types::requests::UpdatePageRequest;
 use std::sync::Arc;
 
 /// Layer 2: LLM assigns orphan memories to existing concepts or proposes new ones.
@@ -121,16 +122,18 @@ pub(crate) async fn assign_orphan_memories(
                             if !page.source_memory_ids.contains(&source_id.to_string()) {
                                 let mut merged_sources = page.source_memory_ids.clone();
                                 merged_sources.push(source_id.to_string());
-                                let refs: Vec<&str> =
-                                    merged_sources.iter().map(|s| s.as_str()).collect();
-                                let _ = db
-                                    .update_page_content(
-                                        page_id,
-                                        &page.content,
-                                        &refs,
-                                        "page_growth",
-                                    )
-                                    .await;
+                                let _ = crate::post_write::update_page(
+                                    db,
+                                    page_id,
+                                    UpdatePageRequest {
+                                        content: page.content.clone(),
+                                        source_memory_ids: merged_sources,
+                                    },
+                                    "page_growth",
+                                    false,
+                                    knowledge_path,
+                                )
+                                .await;
                                 assigned += 1;
                             }
                         }
@@ -271,10 +274,18 @@ pub(crate) async fn global_page_review(
                                 merged_sources.push(sid.clone());
                             }
                         }
-                        let refs: Vec<&str> = merged_sources.iter().map(|s| s.as_str()).collect();
-                        let _ = db
-                            .update_page_content(keep_id, &keep.content, &refs, "re_distill")
-                            .await;
+                        let _ = crate::post_write::update_page(
+                            db,
+                            keep_id,
+                            UpdatePageRequest {
+                                content: keep.content.clone(),
+                                source_memory_ids: merged_sources,
+                            },
+                            "re_distill",
+                            false,
+                            None,
+                        )
+                        .await;
                         let _ = db.archive_page(remove_id).await;
                         changes += 1;
                         log::info!(

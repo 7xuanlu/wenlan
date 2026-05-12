@@ -15,6 +15,7 @@ use crate::refinery::helpers::{
 };
 use crate::sources::StabilityTier;
 use crate::synthesis::refinement_queue::{resolve_proposal, ResolveStatus};
+use origin_types::requests::UpdatePageRequest;
 use std::sync::Arc;
 
 /// What a distillation pass is scoped to. Resolved from a free-form string
@@ -1044,10 +1045,18 @@ pub(crate) async fn recompile_single_page(
                 .trim()
                 .to_string();
             if !content.is_empty() {
-                let source_refs: Vec<&str> =
-                    page.source_memory_ids.iter().map(|s| s.as_str()).collect();
-                db.update_page_content(&page.id, &content, &source_refs, "re_distill")
-                    .await?;
+                let _ = crate::post_write::update_page(
+                    db,
+                    &page.id,
+                    UpdatePageRequest {
+                        content,
+                        source_memory_ids: page.source_memory_ids.clone(),
+                    },
+                    "re_distill",
+                    false,
+                    None,
+                )
+                .await?;
                 log::info!("[re-distill] refreshed page '{}'", page.title);
                 return Ok(true);
             }
@@ -1133,9 +1142,18 @@ pub async fn deep_distill_single(
         return Ok(false);
     }
 
-    let source_refs: Vec<&str> = page.source_memory_ids.iter().map(|s| s.as_str()).collect();
-    db.update_page_content(page_id, &content, &source_refs, "distill")
-        .await?;
+    let _ = crate::post_write::update_page(
+        db,
+        page_id,
+        UpdatePageRequest {
+            content,
+            source_memory_ids: page.source_memory_ids.clone(),
+        },
+        "distill",
+        false,
+        None,
+    )
+    .await?;
 
     log::info!(
         "[distill] re-distilled page '{}' (v{}->v{})",

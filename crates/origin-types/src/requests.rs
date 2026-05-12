@@ -429,6 +429,11 @@ pub struct CorrectMemoryRequest {
 #[derive(Debug, Serialize, Deserialize)]
 pub struct UpdatePageRequest {
     pub content: String,
+    /// Source memory IDs to associate with this page version.
+    /// Omitted or empty by HTTP callers that preserve existing sources;
+    /// always populated by `post_write::update_page`.
+    #[serde(default)]
+    pub source_memory_ids: Vec<String>,
 }
 
 /// Body for `PUT /api/pages/{id}` — agent-side refresh of a stale page.

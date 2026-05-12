@@ -20,6 +20,7 @@ use crate::db::MemoryDB;
 use crate::error::OriginError;
 use crate::llm_provider::LlmProvider;
 use crate::prompts::PromptRegistry;
+use origin_types::requests::UpdatePageRequest;
 use std::sync::Arc;
 
 /// Result of the title enrichment step.
@@ -575,11 +576,19 @@ pub(crate) async fn check_page_contradiction(
         if !page.source_memory_ids.contains(&source_id.to_string()) {
             let mut new_sources = page.source_memory_ids.clone();
             new_sources.push(source_id.to_string());
-            let refs: Vec<&str> = new_sources.iter().map(|s| s.as_str()).collect();
             // Update sources without changing content — re-distill will recompile
-            let _ = db
-                .update_page_content(&page.id, &page.content, &refs, "page_growth")
-                .await;
+            let _ = crate::post_write::update_page(
+                db,
+                &page.id,
+                UpdatePageRequest {
+                    content: page.content.clone(),
+                    source_memory_ids: new_sources,
+                },
+                "page_growth",
+                false,
+                None,
+            )
+            .await;
             log::info!("[post_ingest] page '{}' flagged for re-distill due to potential contradiction from {}",
                 page.title, source_id);
             flagged += 1;
@@ -705,9 +714,18 @@ pub(crate) async fn grow_page(
     if !source_ids.contains(&source_id.to_string()) {
         source_ids.push(source_id.to_string());
     }
-    let source_refs: Vec<&str> = source_ids.iter().map(|s| s.as_str()).collect();
-    db.update_page_content(&page.id, updated, &source_refs, "page_growth")
-        .await?;
+    let _ = crate::post_write::update_page(
+        db,
+        &page.id,
+        UpdatePageRequest {
+            content: updated.to_string(),
+            source_memory_ids: source_ids,
+        },
+        "page_growth",
+        false,
+        None,
+    )
+    .await?;
 
     // Log activity: attribute to the agent who authored the triggering memory.
     let agent = db

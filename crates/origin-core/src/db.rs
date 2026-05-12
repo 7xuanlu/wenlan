@@ -4597,6 +4597,36 @@ impl MemoryDB {
                     .map_err(|e| OriginError::VectorDb(format!("m47 bump: {e}")))?;
                 log::info!("[migration] Migration 47 applied: page_links table for wikilink graph");
             }
+
+            // Migration 49: add changelog column to pages for revision surfacing.
+            if version < 49 {
+                let conn = self.conn.lock().await;
+                let has_col: bool = {
+                    let mut rows = conn
+                        .query(
+                            "SELECT COUNT(*) FROM pragma_table_info('pages') WHERE name = 'changelog'",
+                            (),
+                        )
+                        .await
+                        .map_err(|e| OriginError::VectorDb(format!("m49 col check: {e}")))?;
+                    match rows.next().await {
+                        Ok(Some(row)) => row.get::<i64>(0).unwrap_or(0) > 0,
+                        _ => false,
+                    }
+                };
+                if !has_col {
+                    conn.execute(
+                        "ALTER TABLE pages ADD COLUMN changelog TEXT DEFAULT '[]'",
+                        (),
+                    )
+                    .await
+                    .map_err(|e| OriginError::VectorDb(format!("m49 add changelog: {e}")))?;
+                }
+                conn.execute("PRAGMA user_version = 49", ())
+                    .await
+                    .map_err(|e| OriginError::VectorDb(format!("m49 bump: {e}")))?;
+                log::info!("[migration] Migration 49 applied: pages.changelog column for revision surfacing");
+            }
         }
 
         Ok(())
@@ -14463,7 +14493,7 @@ impl MemoryDB {
         source_memory_ids: &[&str],
         link_reason: &str,
     ) -> Result<(), OriginError> {
-        self.try_update_page_content(id, content, source_memory_ids, link_reason, false)
+        self.try_update_page_content(id, content, source_memory_ids, link_reason, false, None)
             .await
             .map(|_| ())
     }
@@ -14482,10 +14512,36 @@ impl MemoryDB {
         source_memory_ids: &[&str],
         link_reason: &str,
     ) -> Result<bool, OriginError> {
-        self.try_update_page_content(id, content, source_memory_ids, link_reason, true)
+        self.try_update_page_content(id, content, source_memory_ids, link_reason, true, None)
             .await
     }
 
+    /// Capability-fn variant: like `try_update_page_content_if_stale` but also
+    /// writes a pre-computed `changelog` JSON string atomically with the content
+    /// update. Called exclusively by `post_write::update_page`; all other callers
+    /// go through `update_page_content` / `try_update_page_content_if_stale`.
+    pub async fn try_update_page_content_with_changelog(
+        &self,
+        id: &str,
+        content: &str,
+        source_memory_ids: &[&str],
+        link_reason: &str,
+        require_stale: bool,
+        changelog: &str,
+    ) -> Result<bool, OriginError> {
+        self.try_update_page_content(
+            id,
+            content,
+            source_memory_ids,
+            link_reason,
+            require_stale,
+            Some(changelog),
+        )
+        .await
+    }
+
+    /// Internal implementation. `require_stale` gates on `stale_reason IS NOT NULL`.
+    /// `changelog` when `Some` is written atomically with the content update.
     async fn try_update_page_content(
         &self,
         id: &str,
@@ -14493,6 +14549,7 @@ impl MemoryDB {
         source_memory_ids: &[&str],
         link_reason: &str,
         require_stale: bool,
+        changelog: Option<&str>,
     ) -> Result<bool, OriginError> {
         let source_ids_json = serde_json::to_string(&source_memory_ids)
             .map_err(|e| OriginError::VectorDb(format!("serialize source_memory_ids: {e}")))?;
@@ -14513,34 +14570,66 @@ impl MemoryDB {
         // human write since stale_reason stays set: the watcher
         // deliberately doesn't clear staleness on apply (refinery
         // escalates to source_conflict on the next sweep instead).
-        let sql = if require_stale {
-            "UPDATE pages SET \
-               content = ?1, \
-               source_memory_ids = ?2, \
-               version = version + 1, \
-               last_compiled = ?3, \
-               last_modified = ?3, \
-               user_edited = CASE WHEN ?4 IN ('manual_edit', 'fs_edit') THEN 1 ELSE user_edited END \
-             WHERE id = ?5 \
-               AND stale_reason IS NOT NULL \
-               AND COALESCE(user_edited, 0) = 0"
+        let affected = if let Some(cl) = changelog {
+            // Changelog-aware variant: write changelog atomically with content.
+            let sql = if require_stale {
+                "UPDATE pages SET \
+                   content = ?1, \
+                   source_memory_ids = ?2, \
+                   version = version + 1, \
+                   last_compiled = ?3, \
+                   last_modified = ?3, \
+                   user_edited = CASE WHEN ?4 IN ('manual_edit', 'fs_edit') THEN 1 ELSE user_edited END, \
+                   changelog = ?6 \
+                 WHERE id = ?5 \
+                   AND stale_reason IS NOT NULL \
+                   AND COALESCE(user_edited, 0) = 0"
+            } else {
+                "UPDATE pages SET \
+                   content = ?1, \
+                   source_memory_ids = ?2, \
+                   version = version + 1, \
+                   last_compiled = ?3, \
+                   last_modified = ?3, \
+                   user_edited = CASE WHEN ?4 IN ('manual_edit', 'fs_edit') THEN 1 ELSE user_edited END, \
+                   changelog = ?6 \
+                 WHERE id = ?5"
+            };
+            conn.execute(
+                sql,
+                libsql::params![content, source_ids_json, now, link_reason, id, cl],
+            )
+            .await
+            .map_err(|e| OriginError::VectorDb(format!("update_page_content: {e}")))?
         } else {
-            "UPDATE pages SET \
-               content = ?1, \
-               source_memory_ids = ?2, \
-               version = version + 1, \
-               last_compiled = ?3, \
-               last_modified = ?3, \
-               user_edited = CASE WHEN ?4 IN ('manual_edit', 'fs_edit') THEN 1 ELSE user_edited END \
-             WHERE id = ?5"
-        };
-        let affected = conn
-            .execute(
+            let sql = if require_stale {
+                "UPDATE pages SET \
+                   content = ?1, \
+                   source_memory_ids = ?2, \
+                   version = version + 1, \
+                   last_compiled = ?3, \
+                   last_modified = ?3, \
+                   user_edited = CASE WHEN ?4 IN ('manual_edit', 'fs_edit') THEN 1 ELSE user_edited END \
+                 WHERE id = ?5 \
+                   AND stale_reason IS NOT NULL \
+                   AND COALESCE(user_edited, 0) = 0"
+            } else {
+                "UPDATE pages SET \
+                   content = ?1, \
+                   source_memory_ids = ?2, \
+                   version = version + 1, \
+                   last_compiled = ?3, \
+                   last_modified = ?3, \
+                   user_edited = CASE WHEN ?4 IN ('manual_edit', 'fs_edit') THEN 1 ELSE user_edited END \
+                 WHERE id = ?5"
+            };
+            conn.execute(
                 sql,
                 libsql::params![content, source_ids_json, now, link_reason, id],
             )
             .await
-            .map_err(|e| OriginError::VectorDb(format!("update_page_content: {e}")))?;
+            .map_err(|e| OriginError::VectorDb(format!("update_page_content: {e}")))?
+        };
         if require_stale && affected == 0 {
             return Ok(false);
         }
@@ -15834,6 +15923,27 @@ impl MemoryDB {
         }
     }
 
+    /// Read the current `changelog` JSON string for a page.
+    /// Returns `"[]"` if the page has no changelog or does not exist.
+    pub async fn get_page_changelog(&self, page_id: &str) -> Result<String, OriginError> {
+        let conn = self.conn.lock().await;
+        let mut rows = conn
+            .query(
+                "SELECT COALESCE(changelog, '[]') FROM pages WHERE id = ?1",
+                libsql::params![page_id],
+            )
+            .await
+            .map_err(|e| OriginError::VectorDb(format!("get_page_changelog: {e}")))?;
+        match rows
+            .next()
+            .await
+            .map_err(|e| OriginError::VectorDb(e.to_string()))?
+        {
+            Some(row) => Ok(row.get::<String>(0).unwrap_or_else(|_| "[]".to_string())),
+            None => Ok("[]".to_string()),
+        }
+    }
+
     /// Update a memory's content in-place for topic-key upsert.
     ///
     /// Workflow:
@@ -16649,12 +16759,374 @@ pub fn derive_memory_badge(
     ActivityBadge::None
 }
 
+/// Compute a short human-readable summary of what changed between two versions
+/// of a page (content diff + source set diff).
+///
+/// Returns `None` when nothing meaningfully changed (content identical AND
+/// source sets identical).  Otherwise returns a compact string like:
+/// `"+mem_xyz; +250 chars (re_distill)"`.
+pub(crate) fn compute_page_delta_summary(
+    old_content: &str,
+    old_source_ids: &[String],
+    new_content: &str,
+    new_source_ids: &[&str],
+    edited_by: &str,
+) -> Option<String> {
+    use std::collections::HashSet;
+
+    // ── Source set diff ────────────────────────────────────────────────────
+    let old_set: HashSet<&str> = old_source_ids.iter().map(|s| s.as_str()).collect();
+    let new_set: HashSet<&str> = new_source_ids.iter().copied().collect();
+
+    let mut added: Vec<&str> = new_set.difference(&old_set).copied().collect();
+    let mut removed: Vec<&str> = old_set.difference(&new_set).copied().collect();
+    added.sort_unstable();
+    removed.sort_unstable();
+
+    // ── Content diff ──────────────────────────────────────────────────────
+    let char_delta = new_content.chars().count() as i64 - old_content.chars().count() as i64;
+    let word_delta = new_content.split_whitespace().count() as i64
+        - old_content.split_whitespace().count() as i64;
+
+    let sources_changed = !added.is_empty() || !removed.is_empty();
+    let content_changed = old_content != new_content;
+
+    if !sources_changed && !content_changed {
+        return None;
+    }
+
+    // ── Special case: synthesize from empty ──────────────────────────────
+    if old_content.is_empty() && edited_by == "distill" {
+        return Some(format!("Synthesized from {} sources", new_source_ids.len()));
+    }
+
+    // ── Build components ─────────────────────────────────────────────────
+    let mut parts: Vec<String> = Vec::new();
+
+    // Sources first (added, then removed).
+    let format_ids = |ids: &[&str], prefix: char| -> String {
+        const MAX: usize = 3;
+        let shown = &ids[..ids.len().min(MAX)];
+        let mut s: String = shown
+            .iter()
+            .map(|id| format!("{}{}", prefix, id))
+            .collect::<Vec<_>>()
+            .join(", ");
+        if ids.len() > MAX {
+            s.push_str(&format!(" (+ {} more)", ids.len() - MAX));
+        }
+        s
+    };
+
+    if !added.is_empty() {
+        parts.push(format_ids(&added, '+'));
+    }
+    if !removed.is_empty() {
+        parts.push(format_ids(&removed, '-'));
+    }
+
+    // Char delta.
+    if content_changed {
+        let sign = if char_delta >= 0 { "+" } else { "" };
+        parts.push(format!("{}{} chars", sign, char_delta));
+    }
+
+    // Word delta — only when >= 5 words difference.
+    if word_delta.unsigned_abs() >= 5 {
+        let sign = if word_delta >= 0 { "+" } else { "" };
+        parts.push(format!("{}{} words", sign, word_delta));
+    }
+
+    // ── Verb/tag prefix or suffix ─────────────────────────────────────────
+    let suffix = match edited_by {
+        "re_distill" => Some("(re_distill)"),
+        "page_growth" => Some("(page_growth)"),
+        _ => None,
+    };
+
+    let prefix = match edited_by {
+        "manual_edit" | "fs_edit" => Some("User-edited"),
+        "refinery_merge" => Some("Merged"),
+        _ => None,
+    };
+
+    let body = parts.join("; ");
+
+    let result = if let Some(pre) = prefix {
+        if body.is_empty() {
+            pre.to_string()
+        } else {
+            format!("{}; {}", pre, body)
+        }
+    } else if let Some(suf) = suffix {
+        if body.is_empty() {
+            suf.to_string()
+        } else {
+            format!("{} {}", body, suf)
+        }
+    } else {
+        // Bare delta; append edited_by tag when it's not a known silent tag.
+        let tag = match edited_by {
+            "" => None,
+            other => Some(format!("({})", other)),
+        };
+        if let Some(t) = tag {
+            if body.is_empty() {
+                t
+            } else {
+                format!("{} {}", body, t)
+            }
+        } else {
+            body
+        }
+    };
+
+    Some(result)
+}
+
+/// Append a changelog entry to a JSON array string, trimming oldest non-protected
+/// entries to stay within `cap`.
+///
+/// Protected entries are those whose `edited_by` field equals `"fs_edit"` or
+/// `"manual_edit"`.  Protected entries are never dropped regardless of `cap`.
+/// If the number of protected entries alone exceeds `cap`, the final array will
+/// be longer than `cap` — protect always wins.
+///
+/// Invalid or empty `existing_json` is treated as an empty array (defensive
+/// default, not an error).
+pub(crate) fn append_changelog_entry(
+    existing_json: &str,
+    entry: serde_json::Value,
+    cap: usize,
+) -> Result<String, crate::error::OriginError> {
+    // Parse or fall back to empty array.
+    let mut entries: Vec<serde_json::Value> =
+        serde_json::from_str(existing_json.trim()).unwrap_or_default();
+
+    // Push the new entry.
+    entries.push(entry);
+
+    // FIFO trim with user-edit protection.
+    // Iterate from the front; drop non-protected entries until len <= cap.
+    if entries.len() > cap {
+        let mut i = 0;
+        while entries.len() > cap && i < entries.len() {
+            let protected = entries[i]
+                .get("edited_by")
+                .and_then(|v| v.as_str())
+                .map(|s| s == "fs_edit" || s == "manual_edit")
+                .unwrap_or(false);
+            if protected {
+                i += 1;
+            } else {
+                entries.remove(i);
+                // don't advance i — next element shifted into position i
+            }
+        }
+    }
+
+    serde_json::to_string(&entries)
+        .map_err(|e| crate::error::OriginError::VectorDb(format!("serialize changelog: {e}")))
+}
+
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
     use std::collections::HashMap;
     use std::sync::OnceLock;
     use tempfile::tempdir;
+
+    // ── compute_page_delta_summary tests ─────────────────────────────────────
+
+    #[test]
+    fn delta_noop_returns_none() {
+        // Identical content and identical source sets → None.
+        let result = compute_page_delta_summary(
+            "same content",
+            &["mem_a".to_string()],
+            "same content",
+            &["mem_a"],
+            "re_distill",
+        );
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn delta_char_only() {
+        // Content changes, sources same, user-edit branch.
+        let result = compute_page_delta_summary(
+            "abc",
+            &["mem_a".to_string()],
+            "abcdef",
+            &["mem_a"],
+            "fs_edit",
+        );
+        let s = result.expect("should be Some");
+        assert!(s.contains("User-edited"), "expected 'User-edited' in: {s}");
+        assert!(s.contains("+3 chars"), "expected '+3 chars' in: {s}");
+    }
+
+    #[test]
+    fn delta_word_delta_surfaces_when_large() {
+        // 6-word change (>= 5 threshold) should appear.
+        let old = "one two three";
+        let new = "one two three four five six seven eight nine";
+        let result =
+            compute_page_delta_summary(old, &["mem_a".to_string()], new, &["mem_a"], "fs_edit");
+        let s = result.expect("should be Some");
+        assert!(s.contains("words"), "expected word delta in: {s}");
+    }
+
+    #[test]
+    fn delta_source_added() {
+        let result = compute_page_delta_summary(
+            "content",
+            &["mem_a".to_string()],
+            "content",
+            &["mem_a", "mem_xyz"],
+            "re_distill",
+        );
+        let s = result.expect("should be Some");
+        assert!(s.contains("+mem_xyz"), "expected '+mem_xyz' in: {s}");
+    }
+
+    #[test]
+    fn delta_source_removed() {
+        let result = compute_page_delta_summary(
+            "content",
+            &["mem_old".to_string(), "mem_keep".to_string()],
+            "content",
+            &["mem_keep"],
+            "re_distill",
+        );
+        let s = result.expect("should be Some");
+        assert!(s.contains("-mem_old"), "expected '-mem_old' in: {s}");
+    }
+
+    #[test]
+    fn delta_many_sources_truncated() {
+        // Adding 5 new sources: first 3 listed, then "(+ 2 more)".
+        let old_sources: Vec<String> = vec!["mem_keep".to_string()];
+        let new_sources = ["mem_keep", "mem_1", "mem_2", "mem_3", "mem_4", "mem_5"];
+        let result = compute_page_delta_summary(
+            "content",
+            &old_sources,
+            "content",
+            &new_sources,
+            "re_distill",
+        );
+        let s = result.expect("should be Some");
+        assert!(s.contains("(+ 2 more)"), "expected '(+ 2 more)' in: {s}");
+    }
+
+    #[test]
+    fn delta_user_edit_branch() {
+        // manual_edit → "User-edited" prefix.
+        let result = compute_page_delta_summary(
+            "original",
+            &["mem_a".to_string()],
+            "original plus more text here",
+            &["mem_a"],
+            "manual_edit",
+        );
+        let s = result.expect("should be Some");
+        assert!(
+            s.starts_with("User-edited"),
+            "expected 'User-edited' prefix in: {s}"
+        );
+    }
+
+    #[test]
+    fn delta_synthesize_from_empty() {
+        // old is empty + edited_by="distill" → "Synthesized from N sources".
+        let result = compute_page_delta_summary(
+            "",
+            &[],
+            "full body content here",
+            &["src_a", "src_b"],
+            "distill",
+        );
+        let s = result.expect("should be Some");
+        assert!(
+            s.starts_with("Synthesized from 2 sources"),
+            "expected synthesize message in: {s}"
+        );
+    }
+
+    #[test]
+    fn delta_re_distill_paren_suffix() {
+        // re_distill with source addition → suffix "(re_distill)".
+        let result = compute_page_delta_summary(
+            "body",
+            &["mem_a".to_string()],
+            "body extended with more",
+            &["mem_a", "mem_new"],
+            "re_distill",
+        );
+        let s = result.expect("should be Some");
+        assert!(
+            s.ends_with("(re_distill)"),
+            "expected '(re_distill)' suffix in: {s}"
+        );
+    }
+
+    #[test]
+    fn delta_distill_nonempty_old_paren_suffix() {
+        // distill with non-empty old content → paren suffix "(distill)" (not silenced).
+        let result = compute_page_delta_summary(
+            "existing content",
+            &["mem_a".to_string()],
+            "existing content extended",
+            &["mem_a"],
+            "distill",
+        );
+        let s = result.expect("should be Some");
+        assert!(
+            s.ends_with("(distill)"),
+            "expected '(distill)' suffix in: {s}"
+        );
+    }
+
+    #[test]
+    fn delta_exactly_3_sources_no_more_suffix() {
+        // Adding exactly 3 new sources: all 3 listed, no "(+ N more)".
+        let old_sources: Vec<String> = vec!["mem_keep".to_string()];
+        let new_sources = ["mem_keep", "mem_1", "mem_2", "mem_3"];
+        let result = compute_page_delta_summary(
+            "content",
+            &old_sources,
+            "content",
+            &new_sources,
+            "re_distill",
+        );
+        let s = result.expect("should be Some");
+        assert!(
+            !s.contains("more)"),
+            "expected no '(+ N more)' for exactly 3 added in: {s}"
+        );
+        assert!(s.contains("+mem_1"), "expected +mem_1 in: {s}");
+        assert!(s.contains("+mem_2"), "expected +mem_2 in: {s}");
+        assert!(s.contains("+mem_3"), "expected +mem_3 in: {s}");
+    }
+
+    #[test]
+    fn delta_exactly_4_sources_one_more_suffix() {
+        // Adding exactly 4 new sources: first 3 listed, then "(+ 1 more)".
+        let old_sources: Vec<String> = vec!["mem_keep".to_string()];
+        let new_sources = ["mem_keep", "mem_1", "mem_2", "mem_3", "mem_4"];
+        let result = compute_page_delta_summary(
+            "content",
+            &old_sources,
+            "content",
+            &new_sources,
+            "re_distill",
+        );
+        let s = result.expect("should be Some");
+        assert!(
+            s.contains("(+ 1 more)"),
+            "expected '(+ 1 more)' for 4 added in: {s}"
+        );
+    }
 
     /// Shared embedder singleton so the ONNX model is loaded exactly once
     /// across all tests (avoids concurrent download/read race).
@@ -26299,5 +26771,238 @@ pub(crate) mod tests {
                 "idempotent re-run must not alter data"
             );
         }
+    }
+
+    #[tokio::test]
+    async fn test_migration_49_pages_changelog_column() {
+        let (db, _dir) = test_db().await;
+
+        // 1. Fresh DB: pages.changelog column must exist with DEFAULT '[]'.
+        {
+            let conn = db.conn.lock().await;
+            let mut rows = conn
+                .query(
+                    "SELECT COUNT(*) FROM pragma_table_info('pages') WHERE name = 'changelog'",
+                    (),
+                )
+                .await
+                .expect("pragma_table_info should succeed");
+            let row = rows.next().await.unwrap().unwrap();
+            let count: i64 = row.get(0).unwrap();
+            assert_eq!(
+                count, 1,
+                "pages.changelog column must exist after migration 49"
+            );
+            drop(rows);
+
+            // Verify default value by inserting a row without specifying changelog.
+            let now = chrono::Utc::now().to_rfc3339();
+            conn.execute(
+                "INSERT INTO pages (id, title, content, source_memory_ids, version, status, \
+                 created_at, last_compiled, last_modified) \
+                 VALUES ('page_m49_test', 'Test', 'body', '[]', 1, 'active', ?1, ?1, ?1)",
+                libsql::params![now.as_str()],
+            )
+            .await
+            .expect("insert without changelog must succeed");
+
+            let mut rows = conn
+                .query("SELECT changelog FROM pages WHERE id = 'page_m49_test'", ())
+                .await
+                .unwrap();
+            let row = rows.next().await.unwrap().unwrap();
+            let changelog: String = row.get(0).unwrap_or_default();
+            assert_eq!(changelog, "[]", "default changelog must be '[]'");
+            drop(rows);
+        }
+
+        // 2. Simulated older DB: roll back to version 47, remove the changelog
+        //    column by recreating the table without it, then re-run migrations.
+        //    FK enforcement is disabled during the rename so FK-referencing
+        //    tables (page_sources, page_links) don't block the DROP.
+        {
+            let conn = db.conn.lock().await;
+
+            conn.execute("PRAGMA foreign_keys = OFF", ()).await.unwrap();
+            conn.execute_batch(
+                "CREATE TABLE pages_pre49 AS \
+                 SELECT id, title, summary, content, entity_id, domain, \
+                 source_memory_ids, version, status, embedding, created_at, last_compiled, \
+                 last_modified, sources_updated_count, stale_reason, user_edited FROM pages; \
+                 DROP TABLE pages; \
+                 ALTER TABLE pages_pre49 RENAME TO pages;",
+            )
+            .await
+            .expect("recreate pages without changelog should succeed");
+            conn.execute("PRAGMA foreign_keys = ON", ()).await.unwrap();
+
+            // Roll back to version 47 so migration 49 re-fires.
+            conn.execute("PRAGMA user_version = 47", ()).await.unwrap();
+        }
+
+        db.run_migrations(&crate::events::NoopEmitter)
+            .await
+            .expect("run_migrations must succeed on pre-49 DB");
+
+        {
+            let conn = db.conn.lock().await;
+
+            // Column must be present after re-migration.
+            let mut rows = conn
+                .query(
+                    "SELECT COUNT(*) FROM pragma_table_info('pages') WHERE name = 'changelog'",
+                    (),
+                )
+                .await
+                .unwrap();
+            let row = rows.next().await.unwrap().unwrap();
+            let count: i64 = row.get(0).unwrap();
+            assert_eq!(
+                count, 1,
+                "pages.changelog must exist after re-migration from pre-49 state"
+            );
+            drop(rows);
+
+            // Existing rows must have '[]' as the default (bare SELECT, no COALESCE).
+            let mut rows = conn
+                .query("SELECT changelog FROM pages WHERE id = 'page_m49_test'", ())
+                .await
+                .unwrap();
+            let row = rows.next().await.unwrap().unwrap();
+            let changelog: String = row.get(0).unwrap_or_default();
+            assert_eq!(
+                changelog, "[]",
+                "existing rows must get '[]' default after migration"
+            );
+            drop(rows);
+
+            // user_version must be at least 49.
+            let mut rows = conn.query("PRAGMA user_version", ()).await.unwrap();
+            let row = rows.next().await.unwrap().unwrap();
+            let version: i64 = row.get(0).unwrap();
+            assert!(
+                version >= 49,
+                "user_version must be >= 49 after migration, got {version}"
+            );
+        }
+    }
+
+    // ── append_changelog_entry tests ─────────────────────────────────────────
+
+    fn make_entry(label: &str) -> serde_json::Value {
+        serde_json::json!({ "summary": label })
+    }
+
+    fn make_protected(label: &str, kind: &str) -> serde_json::Value {
+        serde_json::json!({ "summary": label, "edited_by": kind })
+    }
+
+    #[test]
+    fn changelog_empty_input_append() {
+        let out = append_changelog_entry("", make_entry("first"), 10).unwrap();
+        let arr: Vec<serde_json::Value> = serde_json::from_str(&out).unwrap();
+        assert_eq!(arr.len(), 1);
+        assert_eq!(arr[0]["summary"], "first");
+    }
+
+    #[test]
+    fn changelog_fifo_trim_under_cap() {
+        // Build an array of 9 entries (cap=5), then push a 10th.
+        // After push: 10 entries, cap=5 → oldest 5 dropped, newest 5 kept.
+        let mut json = "[]".to_string();
+        for i in 0..9 {
+            json = append_changelog_entry(&json, make_entry(&format!("e{i}")), 5).unwrap();
+        }
+        // Push 10th entry.
+        json = append_changelog_entry(&json, make_entry("e9"), 5).unwrap();
+        let arr: Vec<serde_json::Value> = serde_json::from_str(&json).unwrap();
+        assert_eq!(arr.len(), 5, "should keep exactly 5; got {}", arr.len());
+        // Newest 5 entries are e5..e9.
+        assert_eq!(arr[0]["summary"], "e5");
+        assert_eq!(arr[4]["summary"], "e9");
+    }
+
+    #[test]
+    fn changelog_user_edits_never_trimmed() {
+        // Push 25 plain entries + 5 protected entries.  Cap=10.
+        // Expectation: 5 protected + 5 most-recent non-protected = 10 total.
+        let mut json = "[]".to_string();
+        // Insert 5 protected at positions 0-4.
+        for i in 0..5 {
+            json = append_changelog_entry(
+                &json,
+                make_protected(
+                    &format!("protected{i}"),
+                    if i % 2 == 0 { "manual_edit" } else { "fs_edit" },
+                ),
+                50, // high cap so they aren't trimmed yet
+            )
+            .unwrap();
+        }
+        // Then push 25 more plain entries, cap=10 enforced from here.
+        for i in 0..25 {
+            json = append_changelog_entry(&json, make_entry(&format!("plain{i}")), 10).unwrap();
+        }
+        let arr: Vec<serde_json::Value> = serde_json::from_str(&json).unwrap();
+        // 5 protected + 5 newest plain = 10.
+        assert_eq!(arr.len(), 10, "expected 10 entries; got {}", arr.len());
+        // All protected still present.
+        let protected_count = arr
+            .iter()
+            .filter(|e| {
+                e.get("edited_by")
+                    .and_then(|v| v.as_str())
+                    .map(|s| s == "manual_edit" || s == "fs_edit")
+                    .unwrap_or(false)
+            })
+            .count();
+        assert_eq!(protected_count, 5);
+    }
+
+    #[test]
+    fn changelog_cap_zero_keeps_user_edits() {
+        // cap=0: all non-protected should be dropped, protected retained.
+        let mut json = "[]".to_string();
+        json =
+            append_changelog_entry(&json, make_protected("keep_me", "manual_edit"), 100).unwrap();
+        json = append_changelog_entry(&json, make_entry("drop_me"), 100).unwrap();
+        json = append_changelog_entry(&json, make_protected("keep_me2", "fs_edit"), 100).unwrap();
+        // Now enforce cap=0 via one more push of a plain entry.
+        json = append_changelog_entry(&json, make_entry("also_dropped"), 0).unwrap();
+        let arr: Vec<serde_json::Value> = serde_json::from_str(&json).unwrap();
+        // Only the 2 protected entries should survive; plain ones dropped.
+        assert_eq!(arr.len(), 2, "expected 2 protected; got {}", arr.len());
+        assert!(arr.iter().all(|e| {
+            e.get("edited_by")
+                .and_then(|v| v.as_str())
+                .map(|s| s == "manual_edit" || s == "fs_edit")
+                .unwrap_or(false)
+        }));
+    }
+
+    #[test]
+    fn changelog_invalid_json_treated_as_empty() {
+        let out = append_changelog_entry("not-json", make_entry("first"), 10).unwrap();
+        let arr: Vec<serde_json::Value> = serde_json::from_str(&out).unwrap();
+        assert_eq!(arr.len(), 1);
+        assert_eq!(arr[0]["summary"], "first");
+    }
+
+    #[test]
+    fn changelog_all_protected_exceeds_cap() {
+        // 5 user-edits, cap=2 → all 5 retained (protect wins over cap).
+        let mut json = "[]".to_string();
+        for i in 0..5 {
+            json =
+                append_changelog_entry(&json, make_protected(&format!("u{i}"), "manual_edit"), 2)
+                    .unwrap();
+        }
+        let arr: Vec<serde_json::Value> = serde_json::from_str(&json).unwrap();
+        assert_eq!(
+            arr.len(),
+            5,
+            "all 5 protected must be retained; got {}",
+            arr.len()
+        );
     }
 }
