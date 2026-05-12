@@ -21,11 +21,14 @@ The daemon does the memory chores in the background: stores what matters, dedupl
 ### Claude Code — 30 seconds
 
 ```text
-/plugin install origin@claude-plugins-official
+/plugin marketplace add 7xuanlu/origin
+/plugin install origin@7xuanlu
 /init
 ```
 
 If Claude Code asks for a restart after installing, restart once, then run `/init`. The plugin handles daemon setup, MCP wiring, Basic Memory mode, and the first round-trip check.
+
+`7xuanlu` is the GitHub repo owner. If you fork Origin, use your own handle in both commands.
 
 Plugin details and daily commands: [plugin/](plugin/.claude-plugin/README.md).
 

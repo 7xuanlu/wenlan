@@ -3,7 +3,7 @@ name: init
 description: >
   Frictionless setup. Detects missing daemon, installs it, configures Basic
   Memory mode, and verifies the full plugin → MCP → daemon round-trip. Run
-  after `/plugin install origin@claude-plugins-official`, or any time the user says "set up
+  after `/plugin install origin@7xuanlu`, or any time the user says "set up
   origin", "is origin working", "fix origin".
 allowed-tools: ["Bash", "mcp__plugin_origin_origin__doctor", "mcp__plugin_origin_origin__context"]
 ---
@@ -120,7 +120,7 @@ work in Basic Memory mode.
 
 ## When to use
 
-- Right after `/plugin install origin@claude-plugins-official`.
+- Right after `/plugin install origin@7xuanlu`.
 - Hook printed "daemon down — run /origin:init".
 - User says "set up origin", "is it working", "reinstall origin".
 
