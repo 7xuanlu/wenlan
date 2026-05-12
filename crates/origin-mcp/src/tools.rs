@@ -32,6 +32,29 @@ where
     }
 }
 
+/// Deserialize an `Option<i64>` that also accepts stringified numbers (e.g. `"1715000000000"`).
+/// Same lenient shape as `deserialize_optional_usize_lenient`, for params that map onto
+/// signed daemon fields (timestamps, badge windows, etc.).
+fn deserialize_optional_i64_lenient<'de, D>(deserializer: D) -> Result<Option<i64>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum StringOrNumber {
+        Number(i64),
+        Str(String),
+    }
+
+    match Option::<StringOrNumber>::deserialize(deserializer)? {
+        None => Ok(None),
+        Some(StringOrNumber::Number(n)) => Ok(Some(n)),
+        Some(StringOrNumber::Str(s)) => {
+            s.parse::<i64>().map(Some).map_err(serde::de::Error::custom)
+        }
+    }
+}
+
 /// Controls which operations are allowed based on transport.
 #[derive(Clone, Debug, PartialEq)]
 pub enum TransportMode {
@@ -253,6 +276,33 @@ pub struct ListMemoriesParams {
     )]
     #[serde(default, deserialize_with = "deserialize_optional_usize_lenient")]
     pub limit: Option<usize>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct SearchPagesParams {
+    #[schemars(
+        description = "Natural-language search over page title + body content (e.g. 'mutex deadlock', 'distillation architecture')."
+    )]
+    pub query: String,
+    #[schemars(
+        description = "Max results, default 20. Use 1 to resolve a title to its id before calling get_page; higher for broader search."
+    )]
+    #[serde(default, deserialize_with = "deserialize_optional_usize_lenient")]
+    pub limit: Option<usize>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct ListPagesRecentParams {
+    #[schemars(
+        description = "Max results, default 10. Use higher (up to ~50) for a wider sweep of recent activity."
+    )]
+    #[serde(default, deserialize_with = "deserialize_optional_usize_lenient")]
+    pub limit: Option<usize>,
+    #[schemars(
+        description = "Optional Unix milliseconds. Items modified before this timestamp lose their 'new'/'updated' badge; the feed itself is still top-N by recency. This is not a date filter — items before `since_ms` are still returned, just without badges. Omit for default badge behavior."
+    )]
+    #[serde(default, deserialize_with = "deserialize_optional_i64_lenient")]
+    pub since_ms: Option<i64>,
 }
 
 // ===== Internal Implementations =====
@@ -757,6 +807,64 @@ impl OriginMcpServer {
             pretty
         ))]))
     }
+
+    pub async fn search_pages_impl(
+        &self,
+        params: SearchPagesParams,
+    ) -> Result<CallToolResult, McpError> {
+        let req = SearchPagesRequest {
+            query: params.query,
+            limit: params.limit,
+        };
+        let resp: SearchPagesResponse = match self.client.post("/api/pages/search", &req).await {
+            Ok(r) => r,
+            Err(e) => return Ok(tool_error(e, "search_pages")),
+        };
+        let pretty = serde_json::to_string_pretty(&resp.pages)
+            .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+        Ok(CallToolResult::success(vec![Content::text(format!(
+            "{} pages\n{}",
+            resp.pages.len(),
+            pretty
+        ))]))
+    }
+
+    pub async fn list_pages_recent_impl(
+        &self,
+        params: ListPagesRecentParams,
+    ) -> Result<CallToolResult, McpError> {
+        let path = build_recent_pages_path(params.limit, params.since_ms);
+        let resp: Vec<RecentActivityItem> = match self.client.get(&path).await {
+            Ok(r) => r,
+            Err(e) => return Ok(tool_error(e, "list_pages_recent")),
+        };
+        let pretty = serde_json::to_string_pretty(&resp)
+            .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+        Ok(CallToolResult::success(vec![Content::text(format!(
+            "{} recent pages\n{}",
+            resp.len(),
+            pretty
+        ))]))
+    }
+}
+
+/// Build the `/api/pages/recent` URL with optional `limit` + `since_ms` query
+/// params. Pure function so the test can exercise the actual builder rather
+/// than a duplicate.
+fn build_recent_pages_path(limit: Option<usize>, since_ms: Option<i64>) -> String {
+    let mut path = String::from("/api/pages/recent");
+    let mut q: Vec<String> = Vec::new();
+    if let Some(l) = limit {
+        q.push(format!("limit={}", l));
+    }
+    if let Some(s) = since_ms {
+        q.push(format!("since_ms={}", s));
+    }
+    if !q.is_empty() {
+        path.push('?');
+        path.push_str(&q.join("&"));
+    }
+    path
 }
 
 // ===== Tool Registrations =====
@@ -984,6 +1092,28 @@ impl OriginMcpServer {
         Parameters(params): Parameters<ListMemoriesParams>,
     ) -> Result<CallToolResult, McpError> {
         self.list_memories_impl(params).await
+    }
+
+    #[tool(
+        description = "Search pages by query. Use to resolve a page title to its id before calling get_page (set `limit: 1` for that), or to browse pages on a topic. Returns matching pages with id, title, and summary. For listing recent activity instead, use list_pages_recent.",
+        annotations(title = "Search pages", read_only_hint = true, open_world_hint = false)
+    )]
+    async fn search_pages(
+        &self,
+        Parameters(params): Parameters<SearchPagesParams>,
+    ) -> Result<CallToolResult, McpError> {
+        self.search_pages_impl(params).await
+    }
+
+    #[tool(
+        description = "List recently created or updated pages. Use when the user asks 'what's new', 'recent pages', 'what got synthesized lately'. Returns top-N pages by activity timestamp with optional badge deltas (`since_ms` scopes the badge window). For a topic search instead, use search_pages.",
+        annotations(title = "Recent pages", read_only_hint = true, open_world_hint = false)
+    )]
+    async fn list_pages_recent(
+        &self,
+        Parameters(params): Parameters<ListPagesRecentParams>,
+    ) -> Result<CallToolResult, McpError> {
+        self.list_pages_recent_impl(params).await
     }
 }
 
@@ -2496,6 +2626,8 @@ mod tests {
             "delete_page",
             "get_page",
             "list_memories",
+            "search_pages",
+            "list_pages_recent",
         ] {
             assert!(
                 descriptions.contains_key(name),
@@ -2544,5 +2676,121 @@ mod tests {
             Some(true),
             "delete_page must declare destructive_hint=true"
         );
+    }
+
+    // --- SearchPagesParams ---
+
+    #[test]
+    fn test_search_pages_params_minimal() {
+        let json = r#"{"query": "mutex deadlock"}"#;
+        let params: SearchPagesParams = serde_json::from_str(json).unwrap();
+        assert_eq!(params.query, "mutex deadlock");
+        assert!(params.limit.is_none());
+    }
+
+    #[test]
+    fn test_search_pages_params_full() {
+        let json = r#"{"query": "distill architecture", "limit": 5}"#;
+        let params: SearchPagesParams = serde_json::from_str(json).unwrap();
+        assert_eq!(params.query, "distill architecture");
+        assert_eq!(params.limit, Some(5));
+    }
+
+    #[test]
+    fn test_search_pages_params_missing_query_fails() {
+        let json = r#"{"limit": 10}"#;
+        let result = serde_json::from_str::<SearchPagesParams>(json);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_search_pages_params_limit_as_string() {
+        let json = r#"{"query": "x", "limit": "3"}"#;
+        let params: SearchPagesParams = serde_json::from_str(json).unwrap();
+        assert_eq!(params.limit, Some(3));
+    }
+
+    #[test]
+    fn test_search_pages_request_body_shape() {
+        let params = SearchPagesParams {
+            query: "mutex".into(),
+            limit: Some(7),
+        };
+        let req = SearchPagesRequest {
+            query: params.query,
+            limit: params.limit,
+        };
+        let json = serde_json::to_value(&req).unwrap();
+        assert_eq!(json["query"], "mutex");
+        assert_eq!(json["limit"], 7);
+    }
+
+    // --- ListPagesRecentParams ---
+
+    #[test]
+    fn test_list_pages_recent_params_empty() {
+        let json = r#"{}"#;
+        let params: ListPagesRecentParams = serde_json::from_str(json).unwrap();
+        assert!(params.limit.is_none());
+        assert!(params.since_ms.is_none());
+    }
+
+    #[test]
+    fn test_list_pages_recent_params_full() {
+        let json = r#"{"limit": 20, "since_ms": 1715000000000}"#;
+        let params: ListPagesRecentParams = serde_json::from_str(json).unwrap();
+        assert_eq!(params.limit, Some(20));
+        assert_eq!(params.since_ms, Some(1715000000000));
+    }
+
+    #[test]
+    fn test_list_pages_recent_params_string_numbers() {
+        let json = r#"{"limit": "15", "since_ms": "1715000000000"}"#;
+        let params: ListPagesRecentParams = serde_json::from_str(json).unwrap();
+        assert_eq!(params.limit, Some(15));
+        assert_eq!(params.since_ms, Some(1715000000000));
+    }
+
+    #[test]
+    fn list_pages_recent_url_construction() {
+        // Exercises the actual builder used by `list_pages_recent_impl` so the
+        // test cannot drift from production behavior.
+        assert_eq!(build_recent_pages_path(None, None), "/api/pages/recent");
+        assert_eq!(
+            build_recent_pages_path(Some(5), None),
+            "/api/pages/recent?limit=5"
+        );
+        assert_eq!(
+            build_recent_pages_path(None, Some(123)),
+            "/api/pages/recent?since_ms=123"
+        );
+        assert_eq!(
+            build_recent_pages_path(Some(10), Some(456)),
+            "/api/pages/recent?limit=10&since_ms=456"
+        );
+        // Negative since_ms (i64 — sentinel like "-1" must still serialize).
+        assert_eq!(
+            build_recent_pages_path(None, Some(-1)),
+            "/api/pages/recent?since_ms=-1"
+        );
+    }
+
+    #[test]
+    fn search_pages_and_list_pages_recent_are_read_only() {
+        let server = make_server(TransportMode::Stdio, "test", None);
+        for name in ["search_pages", "list_pages_recent"] {
+            let tool = server
+                .tool_router
+                .list_all()
+                .into_iter()
+                .find(|t| t.name == name)
+                .unwrap_or_else(|| panic!("`{name}` registered"));
+            let ann = tool.annotations.as_ref().expect("annotations present");
+            assert_eq!(
+                ann.read_only_hint,
+                Some(true),
+                "`{name}` must declare read_only_hint=true"
+            );
+        }
     }
 }
