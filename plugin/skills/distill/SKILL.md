@@ -6,7 +6,7 @@ description: >
   the daemon couldn't (no LLM or cluster too big). Invoked as
   `/distill [target]`.
 argument-hint: "[page_id_or_entity_or_domain]"
-allowed-tools: ["mcp__plugin_origin_origin__recall", "mcp__plugin_origin_origin__distill", "mcp__plugin_origin_origin__create_page", "mcp__plugin_origin_origin__update_page", "mcp__plugin_origin_origin__delete_page", "Bash"]
+allowed-tools: ["mcp__plugin_origin_origin__recall", "mcp__plugin_origin_origin__distill", "mcp__plugin_origin_origin__create_page", "mcp__plugin_origin_origin__update_page", "mcp__plugin_origin_origin__delete_page", "mcp__plugin_origin_origin__get_page_sources", "Bash"]
 ---
 
 # /distill
@@ -180,11 +180,10 @@ For each stale page:
 - **`user_edited == true`** → never auto-rewrite. The user touched
   the page; the upstream memories also changed. Surface in the
   "Conflict" report block and stop. The user resolves by hand.
-- **`user_edited == false`** → fetch source memories via `recall`
-  (or `Bash: curl -fsS http://127.0.0.1:7878/api/pages/<id>/sources`),
-  run the same coherence check used for clusters, then call
-  `update_page` with the existing `source_memory_ids` and freshly
-  synthesized prose.
+- **`user_edited == false`** → fetch source memories via
+  `get_page_sources(page_id="<id>")`, run the same coherence check
+  used for clusters, then call `update_page` with the existing
+  `source_memory_ids` and freshly synthesized prose.
 
 ```
 update_page(page_id=stale.page_id,

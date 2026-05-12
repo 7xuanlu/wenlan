@@ -6,6 +6,7 @@
 //! `origin_types::*` at call sites directly.
 
 pub use origin_types::memory::{RecentActivityItem, SearchResult};
+pub use origin_types::PageSourceWithMemory;
 pub use origin_types::requests::{
     ChatContextRequest, CreateConceptRequest, CreateEntityRequest, CreateRelationRequest,
     ListMemoriesRequest, SearchMemoryRequest, SearchPagesRequest, StoreMemoryRequest,
