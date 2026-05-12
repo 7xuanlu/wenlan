@@ -142,6 +142,12 @@ pub struct CreateRelationRequest {
     pub relation_type: String,
     #[serde(default)]
     pub source_agent: Option<String>,
+    #[serde(default)]
+    pub confidence: Option<f64>,
+    #[serde(default)]
+    pub explanation: Option<String>,
+    #[serde(default)]
+    pub source_memory_id: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]

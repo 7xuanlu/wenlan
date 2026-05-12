@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: AGPL-3.0-only
+// SPDX-License-Identifier: Apache-2.0
 //! E2E answer quality evaluation: generate answers from context, judge quality.
 
 use crate::db::MemoryDB;

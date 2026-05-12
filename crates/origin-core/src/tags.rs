@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: AGPL-3.0-only
+// SPDX-License-Identifier: Apache-2.0
 use crate::error::OriginError;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeSet, HashMap};

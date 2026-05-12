@@ -11,7 +11,8 @@ pub use origin_types::requests::{
     ListMemoriesRequest, SearchMemoryRequest, SearchPagesRequest, StoreMemoryRequest,
 };
 pub use origin_types::responses::{
-    ChatContextResponse, CreateEntityResponse, CreateRelationResponse, DeleteResponse,
-    ListMemoriesResponse, SearchMemoryResponse, SearchPagesResponse, StoreMemoryResponse,
+    AddObservationResponse, ChatContextResponse, CreateEntityResponse, CreatePageResponse,
+    CreateRelationResponse, DeleteResponse, ListMemoriesResponse, SearchMemoryResponse,
+    SearchPagesResponse, StoreMemoryResponse,
 };
 pub use origin_types::PageSourceWithMemory;

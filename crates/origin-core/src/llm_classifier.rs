@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: AGPL-3.0-only
+// SPDX-License-Identifier: Apache-2.0
 use crate::engine::LlmEngine;
 
 use llama_cpp_2::context::params::LlamaContextParams;

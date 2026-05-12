@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: AGPL-3.0-only
+// SPDX-License-Identifier: Apache-2.0
 //! LLM-as-judge infrastructure: types, functions, prompts, Batch API judge.
 
 use crate::error::OriginError;

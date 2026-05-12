@@ -3,23 +3,15 @@
 
 mod cmd_backfill;
 mod cmd_setup;
-mod config_routes;
-mod error;
-mod import_routes;
-mod ingest_batcher;
-mod ingest_routes;
-mod knowledge_routes;
-mod memory_routes;
-mod onboarding_routes;
-mod router;
-mod routes;
-mod scheduler;
-mod source_routes;
-mod state;
-mod websocket;
+
+// All other modules live in the library target (src/lib.rs) so that
+// integration tests in tests/ can reference them as origin_server::<mod>.
+use origin_server::{
+    ingest_batcher, router, scheduler,
+    state::{ServerState, SharedState},
+};
 
 use clap::{Parser, Subcommand};
-use state::{ServerState, SharedState};
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
@@ -556,16 +548,16 @@ async fn run_daemon() -> anyhow::Result<()> {
     {
         let db_for_batcher = db_arc.clone();
         let gate_for_batcher = server_state.quality_gate.clone();
-        let process: crate::ingest_batcher::BatchProcessFn = Arc::new(
+        let process: ingest_batcher::BatchProcessFn = Arc::new(
             move |items: Vec<(origin_core::sources::RawDocument, usize)>| {
                 let db = db_for_batcher.clone();
                 let gate = gate_for_batcher.clone();
                 Box::pin(async move { ingest_batch_process(db, gate, items).await })
             },
         );
-        server_state.ingest_batcher = Some(crate::ingest_batcher::IngestBatcher::spawn(
+        server_state.ingest_batcher = Some(ingest_batcher::IngestBatcher::spawn(
             process,
-            crate::ingest_batcher::BatcherConfig::default(),
+            ingest_batcher::BatcherConfig::default(),
         ));
     }
 

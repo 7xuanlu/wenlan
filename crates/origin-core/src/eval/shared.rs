@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: AGPL-3.0-only
+// SPDX-License-Identifier: Apache-2.0
 //! Shared eval infrastructure: embedder, tokenizer, entity extraction helper.
 
 use crate::db::MemoryDB;
@@ -243,7 +243,7 @@ pub async fn run_enrichment_batch_api(
 
         for kg in &kg_results {
             for entity in &kg.entities {
-                match crate::importer::resolve_or_create_entity(
+                match crate::importer::resolve_entity_bulk(
                     db,
                     &mut entity_cache,
                     entity,
@@ -507,7 +507,7 @@ pub async fn run_entity_extraction_for_eval_batched(
             let mut first_entity_id: Option<String> = None;
 
             for entity in &kg.entities {
-                match crate::importer::resolve_or_create_entity(
+                match crate::importer::resolve_entity_bulk(
                     db,
                     &mut entity_cache,
                     entity,
@@ -1301,7 +1301,7 @@ pub async fn run_entity_extraction_for_eval_cli(
                 name: ent.name.clone(),
                 entity_type: ent.entity_type.clone(),
             };
-            match crate::importer::resolve_or_create_entity(
+            match crate::importer::resolve_entity_bulk(
                 db,
                 &mut entity_cache,
                 &extracted,

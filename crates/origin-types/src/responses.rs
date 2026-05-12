@@ -208,17 +208,31 @@ pub struct AgentResponse {
 #[derive(Debug, Serialize, Deserialize)]
 pub struct CreateEntityResponse {
     pub id: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub warnings: Vec<String>,
 }
 
 #[doc(hidden)]
 #[derive(Debug, Serialize, Deserialize)]
 pub struct CreateRelationResponse {
     pub id: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub warnings: Vec<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct AddObservationResponse {
     pub id: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub warnings: Vec<String>,
+}
+
+#[doc(hidden)]
+#[derive(Debug, Serialize, Deserialize)]
+pub struct CreatePageResponse {
+    pub id: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub warnings: Vec<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]

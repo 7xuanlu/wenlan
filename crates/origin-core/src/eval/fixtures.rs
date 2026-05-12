@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: AGPL-3.0-only
+// SPDX-License-Identifier: Apache-2.0
 //! TOML fixture loader for eval test cases.
 
 use crate::error::OriginError;

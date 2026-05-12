@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: AGPL-3.0-only
+// SPDX-License-Identifier: Apache-2.0
 use serde::Serialize;
 
 #[derive(Debug, thiserror::Error)]
@@ -44,6 +44,9 @@ pub enum OriginError {
 
     #[error("Agent disabled: {0}")]
     AgentDisabled(String),
+
+    #[error("Validation error: {0}")]
+    Validation(String),
 
     #[error("{0}")]
     Generic(String),

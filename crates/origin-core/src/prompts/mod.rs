@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: AGPL-3.0-only
+// SPDX-License-Identifier: Apache-2.0
 //! PromptRegistry — holds all LLM prompt templates used by the intelligence pipeline.
 //! Loaded from override files with compiled-in defaults as fallback.
 pub(crate) mod defaults;

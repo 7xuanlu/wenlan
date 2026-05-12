@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: AGPL-3.0-only
+// SPDX-License-Identifier: Apache-2.0
 //! LongMemEval benchmark adapter — converts LongMemEval dataset into Origin eval cases.
 //!
 //! LongMemEval (ICLR 2025, arXiv:2410.10813) tests 5 core memory retrieval abilities

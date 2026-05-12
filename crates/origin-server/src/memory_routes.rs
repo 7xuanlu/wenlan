@@ -8,11 +8,13 @@ use axum::{
 };
 use origin_core::sources::compute_effective_confidence;
 use origin_types::requests::{
-    ConfirmRequest, ExportPagesRequest, ListMemoriesRequest, SearchMemoryRequest,
+    AddObservationRequest, ConfirmRequest, CreateConceptRequest, CreateEntityRequest,
+    CreateRelationRequest, ExportPagesRequest, ListMemoriesRequest, SearchMemoryRequest,
     StoreMemoryRequest,
 };
 use origin_types::responses::{
-    ConfirmResponse, DeleteResponse, ListMemoriesResponse, SearchMemoryResponse,
+    AddObservationResponse, ConfirmResponse, CreateEntityResponse, CreatePageResponse,
+    CreateRelationResponse, DeleteResponse, ListMemoriesResponse, SearchMemoryResponse,
     StoreMemoryResponse,
 };
 use origin_types::sources::{stability_tier, MemoryType, RawDocument, StabilityTier};
@@ -84,55 +86,9 @@ pub struct UpdateAgentRequest {
 // ===== Knowledge Graph Types =====
 
 #[derive(Debug, Deserialize)]
-pub struct CreateEntityRequest {
-    pub name: String,
-    pub entity_type: String,
-    #[serde(default)]
-    pub domain: Option<String>,
-    #[serde(default)]
-    pub source_agent: Option<String>,
-    #[serde(default)]
-    pub confidence: Option<f32>,
-}
-
-#[derive(Debug, Serialize)]
-pub struct CreateEntityResponse {
-    pub id: String,
-}
-
-#[derive(Debug, Deserialize)]
-pub struct CreateRelationRequest {
-    pub from_entity: String,
-    pub to_entity: String,
-    pub relation_type: String,
-    #[serde(default)]
-    pub source_agent: Option<String>,
-}
-
-#[derive(Debug, Serialize)]
-pub struct CreateRelationResponse {
-    pub id: String,
-}
-
-#[derive(Debug, Deserialize)]
-pub struct AddObservationRequest {
-    pub entity_id: String,
-    pub content: String,
-    #[serde(default)]
-    pub source_agent: Option<String>,
-    #[serde(default)]
-    pub confidence: Option<f32>,
-}
-
-#[derive(Debug, Deserialize)]
 pub struct LinkEntityRequest {
     pub source_id: String,
     pub entity_id: String,
-}
-
-#[derive(Debug, Serialize)]
-pub struct AddObservationResponse {
-    pub id: String,
 }
 
 // ===== Route Handlers =====
@@ -1164,60 +1120,59 @@ pub async fn handle_delete_memory(
 
 pub async fn handle_create_entity(
     State(state): State<Arc<RwLock<ServerState>>>,
+    headers: HeaderMap,
     Json(req): Json<CreateEntityRequest>,
 ) -> Result<Json<CreateEntityResponse>, ServerError> {
-    let s = state.read().await;
-    let db = s.db.as_ref().ok_or(ServerError::DbNotInitialized)?;
-    let id = db
-        .store_entity(
-            &req.name,
-            &req.entity_type,
-            req.domain.as_deref(),
-            req.source_agent.as_deref(),
-            req.confidence,
-        )
-        .await
-        .map_err(|e| ServerError::IngestFailed(e.to_string()))?;
-    Ok(Json(CreateEntityResponse { id }))
+    let agent = extract_agent_name(&headers, None);
+    let db = {
+        let s = state.read().await;
+        s.db.as_ref()
+            .cloned()
+            .ok_or(ServerError::DbNotInitialized)?
+    };
+    let result = origin_core::post_write::create_entity(&db, req, &agent).await?;
+    Ok(Json(CreateEntityResponse {
+        id: result.id,
+        warnings: result.warnings,
+    }))
 }
 
 pub async fn handle_create_relation(
     State(state): State<Arc<RwLock<ServerState>>>,
+    headers: axum::http::HeaderMap,
     Json(req): Json<CreateRelationRequest>,
 ) -> Result<Json<CreateRelationResponse>, ServerError> {
-    let s = state.read().await;
-    let db = s.db.as_ref().ok_or(ServerError::DbNotInitialized)?;
-    let id = db
-        .create_relation(
-            &req.from_entity,
-            &req.to_entity,
-            &req.relation_type,
-            req.source_agent.as_deref(),
-            None,
-            None,
-            None,
-        )
-        .await
-        .map_err(|e| ServerError::IngestFailed(e.to_string()))?;
-    Ok(Json(CreateRelationResponse { id }))
+    let agent = extract_agent_name(&headers, req.source_agent.as_deref());
+    let db = {
+        let s = state.read().await;
+        s.db.as_ref()
+            .cloned()
+            .ok_or(ServerError::DbNotInitialized)?
+    };
+    let result = origin_core::post_write::create_relation(&db, req, &agent).await?;
+    Ok(Json(CreateRelationResponse {
+        id: result.id,
+        warnings: result.warnings,
+    }))
 }
 
 pub async fn handle_add_observation(
     State(state): State<Arc<RwLock<ServerState>>>,
+    headers: HeaderMap,
     Json(req): Json<AddObservationRequest>,
 ) -> Result<Json<AddObservationResponse>, ServerError> {
-    let s = state.read().await;
-    let db = s.db.as_ref().ok_or(ServerError::DbNotInitialized)?;
-    let id = db
-        .add_observation(
-            &req.entity_id,
-            &req.content,
-            req.source_agent.as_deref(),
-            req.confidence,
-        )
-        .await
-        .map_err(|e| ServerError::IngestFailed(e.to_string()))?;
-    Ok(Json(AddObservationResponse { id }))
+    let agent = extract_agent_name(&headers, req.source_agent.as_deref());
+    let db = {
+        let s = state.read().await;
+        s.db.as_ref()
+            .cloned()
+            .ok_or(ServerError::DbNotInitialized)?
+    };
+    let result = origin_core::post_write::add_observation(&db, req, &agent).await?;
+    Ok(Json(AddObservationResponse {
+        id: result.id,
+        warnings: result.warnings,
+    }))
 }
 
 pub async fn handle_link_entity(
@@ -2017,96 +1972,24 @@ pub async fn handle_search_pages(
 /// removed so the two stores stay consistent.
 pub async fn handle_create_page(
     State(state): State<Arc<RwLock<ServerState>>>,
+    headers: HeaderMap,
     Json(req): Json<CreateConceptRequest>,
-) -> Result<Json<serde_json::Value>, ServerError> {
+) -> Result<Json<CreatePageResponse>, ServerError> {
+    let agent = extract_agent_name(&headers, None);
     let db = {
         let s = state.read().await;
         s.db.as_ref()
             .cloned()
             .ok_or(ServerError::DbNotInitialized)?
     };
-
-    let id = origin_core::pages::new_page_id();
-    let now = chrono::Utc::now().to_rfc3339();
     let knowledge_path = origin_core::config::load_config().knowledge_path_or_default();
-
-    let page = origin_core::pages::Page {
-        id: id.clone(),
-        title: req.title.clone(),
-        summary: req.summary.clone(),
-        content: req.content.clone(),
-        entity_id: req.entity_id.clone(),
-        domain: req.domain.clone(),
-        source_memory_ids: req.source_memory_ids.clone(),
-        version: 1,
-        status: "active".to_string(),
-        created_at: now.clone(),
-        last_compiled: now.clone(),
-        last_modified: now.clone(),
-        sources_updated_count: 0,
-        stale_reason: None,
-        user_edited: false,
-        relevance_score: 0.0,
-    };
-
-    // 1. md-first
-    let writer = origin_core::export::knowledge::KnowledgeWriter::new(knowledge_path);
-    writer
-        .write_page(&page)
-        .map_err(|e| ServerError::IngestFailed(format!("write_page: {}", e)))?;
-
-    // 2. DB index
-    let source_refs: Vec<&str> = req.source_memory_ids.iter().map(|s| s.as_str()).collect();
-    if let Err(e) = db
-        .insert_page(
-            &id,
-            &req.title,
-            req.summary.as_deref(),
-            &req.content,
-            req.entity_id.as_deref(),
-            req.domain.as_deref(),
-            &source_refs,
-            &now,
-        )
-        .await
-    {
-        // Roll back the md file so the two stores stay consistent. Log any
-        // rollback failure loudly — if the state save itself fails mid-
-        // rollback we want it surfaced, not silently swallowed.
-        if let Err(rb) = writer.remove_page(&id) {
-            tracing::warn!(
-                "[page] DB insert failed and md rollback also failed for {}: db_err={}, rollback_err={}",
-                id, e, rb
-            );
-        }
-        return Err(ServerError::IngestFailed(e.to_string()));
-    }
-
-    // Back-resolve any orphan wikilinks that point at this title. Existing
-    // pages that wrote `[[New Title]]` before this page existed land as
-    // NULL targets in page_links; this walks them and flips matching rows
-    // so inbound links light up immediately. Cheap — one SELECT DISTINCT
-    // over a small table + per-label UPDATE. Failures are logged but the
-    // route still returns success: the next refinery tick covers it.
-    if let Err(e) = db.resolve_orphan_page_links().await {
-        tracing::warn!("[page] orphan link resolve failed after create {id}: {e}");
-    }
-
-    Ok(Json(serde_json::json!({ "id": id })))
-}
-
-#[derive(Debug, Deserialize)]
-pub struct CreateConceptRequest {
-    pub title: String,
-    pub content: String,
-    #[serde(default)]
-    pub summary: Option<String>,
-    #[serde(default)]
-    pub entity_id: Option<String>,
-    #[serde(default)]
-    pub domain: Option<String>,
-    #[serde(default)]
-    pub source_memory_ids: Vec<String>,
+    let result =
+        origin_core::post_write::create_page(&db, req, &agent, Some(knowledge_path.as_path()))
+            .await?;
+    Ok(Json(CreatePageResponse {
+        id: result.id,
+        warnings: result.warnings,
+    }))
 }
 
 #[derive(Debug, Deserialize)]
@@ -2355,7 +2238,10 @@ pub async fn handle_add_entity_observation(
         )
         .await
         .map_err(|e| ServerError::Internal(e.to_string()))?;
-    Ok(Json(origin_types::responses::AddObservationResponse { id }))
+    Ok(Json(origin_types::responses::AddObservationResponse {
+        id,
+        warnings: vec![],
+    }))
 }
 
 /// PUT /api/memory/observations/{id}
