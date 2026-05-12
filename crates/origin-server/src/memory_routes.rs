@@ -2355,7 +2355,10 @@ pub async fn handle_add_entity_observation(
         )
         .await
         .map_err(|e| ServerError::Internal(e.to_string()))?;
-    Ok(Json(origin_types::responses::AddObservationResponse { id }))
+    Ok(Json(origin_types::responses::AddObservationResponse {
+        id,
+        warnings: vec![],
+    }))
 }
 
 /// PUT /api/memory/observations/{id}
