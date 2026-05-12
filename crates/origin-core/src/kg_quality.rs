@@ -399,6 +399,42 @@ pub async fn scan_contradictions(db: &MemoryDB) -> Result<usize, OriginError> {
     Ok(count)
 }
 
+/// Embedding-based hallucination check: returns `true` if the body is
+/// semantically similar (cosine >= 0.6) to the concatenation of the source
+/// memories' content. Returns `false` if the body diverges from its
+/// cited sources, or if embeddings cannot be produced.
+///
+/// Used by the agent-triggered `/api/pages` create path. The daemon-side
+/// distillation in `synthesis::distill` keeps its own inline check for
+/// now since it builds source text from a cluster, not by id.
+pub async fn hallucination_guard(
+    db: &MemoryDB,
+    body: &str,
+    source_ids: &[String],
+) -> Result<bool, OriginError> {
+    if source_ids.is_empty() {
+        return Ok(true);
+    }
+    let mut source_contents: Vec<String> = Vec::with_capacity(source_ids.len());
+    for sid in source_ids {
+        if let Ok(Some(detail)) = db.get_memory_detail(sid).await {
+            source_contents.push(detail.content);
+        }
+    }
+    if source_contents.is_empty() {
+        return Ok(true);
+    }
+    let joined = source_contents.join(" ");
+    let texts = vec![body.to_string(), joined];
+    match db.generate_embeddings(&texts) {
+        Ok(embs) if embs.len() == 2 => {
+            let sim = crate::db::cosine_similarity(&embs[0], &embs[1]);
+            Ok(sim >= 0.6)
+        }
+        _ => Ok(true),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -890,6 +926,54 @@ mod tests {
             verify_relation(&db, &e1, &e2, "works_on").await.unwrap(),
             "works_on should be valid (standard snake_case)"
         );
+    }
+
+    // ── hallucination_guard ──────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn test_hallucination_guard_rejects_unrelated_body() {
+        let (db, _dir) = test_db().await;
+        let doc = crate::sources::RawDocument {
+            source: "memory".to_string(),
+            source_id: "rust-mem".to_string(),
+            title: "rust-mem".to_string(),
+            content: "Rust is a systems programming language".to_string(),
+            last_modified: chrono::Utc::now().timestamp(),
+            memory_type: Some("fact".to_string()),
+            source_agent: Some("test".to_string()),
+            confidence: Some(0.9),
+            ..Default::default()
+        };
+        db.upsert_documents(vec![doc]).await.unwrap();
+        let body = "Pasta carbonara uses eggs and pancetta";
+        let source_ids = vec!["rust-mem".to_string()];
+        let passed = crate::kg_quality::hallucination_guard(&db, body, &source_ids)
+            .await
+            .unwrap();
+        assert!(!passed, "guard should reject body unrelated to sources");
+    }
+
+    #[tokio::test]
+    async fn test_hallucination_guard_accepts_related_body() {
+        let (db, _dir) = test_db().await;
+        let doc = crate::sources::RawDocument {
+            source: "memory".to_string(),
+            source_id: "rust-mem-2".to_string(),
+            title: "rust-mem-2".to_string(),
+            content: "Rust is a systems programming language with memory safety".to_string(),
+            last_modified: chrono::Utc::now().timestamp(),
+            memory_type: Some("fact".to_string()),
+            source_agent: Some("test".to_string()),
+            confidence: Some(0.9),
+            ..Default::default()
+        };
+        db.upsert_documents(vec![doc]).await.unwrap();
+        let body = "Rust provides memory-safe systems programming";
+        let source_ids = vec!["rust-mem-2".to_string()];
+        let passed = crate::kg_quality::hallucination_guard(&db, body, &source_ids)
+            .await
+            .unwrap();
+        assert!(passed, "guard should accept body matching sources");
     }
 
     // ── Fix 5: source_memory_id is populated ──────────────────────────────
