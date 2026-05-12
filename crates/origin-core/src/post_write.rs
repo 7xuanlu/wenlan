@@ -35,15 +35,19 @@ pub async fn create_entity(
     // Pre-write validation
     let name = req.name.trim();
     if name.is_empty() {
-        return Err(OriginError::Generic("entity name must not be empty".into()));
+        return Err(OriginError::Validation(
+            "entity name must not be empty".into(),
+        ));
     }
     let entity_type = req.entity_type.trim();
     if entity_type.is_empty() {
-        return Err(OriginError::Generic("entity_type must not be empty".into()));
+        return Err(OriginError::Validation(
+            "entity_type must not be empty".into(),
+        ));
     }
     if let Some(c) = req.confidence {
         if !(0.0..=1.0).contains(&c) {
-            return Err(OriginError::Generic(format!(
+            return Err(OriginError::Validation(format!(
                 "confidence {c} out of range [0.0, 1.0]"
             )));
         }
@@ -182,7 +186,7 @@ mod tests {
         };
         assert!(matches!(
             create_entity(&db, req, "test").await,
-            Err(OriginError::Generic(_))
+            Err(OriginError::Validation(_))
         ));
     }
 
@@ -198,7 +202,7 @@ mod tests {
         };
         assert!(matches!(
             create_entity(&db, req, "test").await,
-            Err(OriginError::Generic(_))
+            Err(OriginError::Validation(_))
         ));
     }
 
@@ -214,7 +218,7 @@ mod tests {
         };
         assert!(matches!(
             create_entity(&db, req, "test").await,
-            Err(OriginError::Generic(_))
+            Err(OriginError::Validation(_))
         ));
     }
 

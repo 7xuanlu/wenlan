@@ -45,6 +45,9 @@ pub enum OriginError {
     #[error("Agent disabled: {0}")]
     AgentDisabled(String),
 
+    #[error("Validation error: {0}")]
+    Validation(String),
+
     #[error("{0}")]
     Generic(String),
 }
