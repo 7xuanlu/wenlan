@@ -88,6 +88,7 @@ impl From<origin_core::OriginError> for ServerError {
     fn from(err: origin_core::OriginError) -> Self {
         match err {
             origin_core::OriginError::AgentDisabled(msg) => ServerError::AgentDisabled(msg),
+            origin_core::OriginError::Validation(msg) => ServerError::ValidationError(msg),
             other => ServerError::Internal(other.to_string()),
         }
     }

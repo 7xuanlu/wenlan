@@ -1150,16 +1150,14 @@ pub async fn handle_create_entity(
     headers: HeaderMap,
     Json(req): Json<CreateEntityRequest>,
 ) -> Result<Json<CreateEntityResponse>, ServerError> {
-    let agent = agent_from_headers(&headers).unwrap_or_else(|| "system".to_string());
+    let agent = extract_agent_name(&headers, None);
     let db = {
         let s = state.read().await;
         s.db.as_ref()
             .cloned()
             .ok_or(ServerError::DbNotInitialized)?
     };
-    let result = origin_core::post_write::create_entity(&db, req, &agent)
-        .await
-        .map_err(map_post_write_err)?;
+    let result = origin_core::post_write::create_entity(&db, req, &agent).await?;
     Ok(Json(CreateEntityResponse {
         id: result.id,
         warnings: result.warnings,
@@ -1681,22 +1679,6 @@ fn truncate_for_title(content: &str) -> String {
         format!("{}...", truncated)
     } else {
         first_line.to_string()
-    }
-}
-
-/// Read the `x-agent-name` header and return its value, or `None` if absent/invalid.
-fn agent_from_headers(headers: &HeaderMap) -> Option<String> {
-    headers
-        .get("x-agent-name")
-        .and_then(|v| v.to_str().ok())
-        .map(|s| s.to_string())
-}
-
-/// Map an `OriginError` from a post_write capability function to a `ServerError`.
-fn map_post_write_err(e: origin_core::OriginError) -> ServerError {
-    match e {
-        origin_core::OriginError::Validation(msg) => ServerError::ValidationError(msg),
-        other => ServerError::Internal(other.to_string()),
     }
 }
 
