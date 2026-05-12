@@ -8,12 +8,12 @@ use axum::{
 };
 use origin_core::sources::compute_effective_confidence;
 use origin_types::requests::{
-    ConfirmRequest, CreateConceptRequest, CreateEntityRequest, ExportPagesRequest,
-    ListMemoriesRequest, SearchMemoryRequest, StoreMemoryRequest,
+    ConfirmRequest, CreateConceptRequest, CreateEntityRequest, CreateRelationRequest,
+    ExportPagesRequest, ListMemoriesRequest, SearchMemoryRequest, StoreMemoryRequest,
 };
 use origin_types::responses::{
-    ConfirmResponse, CreateEntityResponse, DeleteResponse, ListMemoriesResponse,
-    SearchMemoryResponse, StoreMemoryResponse,
+    ConfirmResponse, CreateEntityResponse, CreateRelationResponse, DeleteResponse,
+    ListMemoriesResponse, SearchMemoryResponse, StoreMemoryResponse,
 };
 use origin_types::sources::{stability_tier, MemoryType, RawDocument, StabilityTier};
 use serde::{Deserialize, Serialize};
@@ -82,20 +82,6 @@ pub struct UpdateAgentRequest {
 }
 
 // ===== Knowledge Graph Types =====
-
-#[derive(Debug, Deserialize)]
-pub struct CreateRelationRequest {
-    pub from_entity: String,
-    pub to_entity: String,
-    pub relation_type: String,
-    #[serde(default)]
-    pub source_agent: Option<String>,
-}
-
-#[derive(Debug, Serialize)]
-pub struct CreateRelationResponse {
-    pub id: String,
-}
 
 #[derive(Debug, Deserialize)]
 pub struct AddObservationRequest {
@@ -1166,23 +1152,21 @@ pub async fn handle_create_entity(
 
 pub async fn handle_create_relation(
     State(state): State<Arc<RwLock<ServerState>>>,
+    headers: axum::http::HeaderMap,
     Json(req): Json<CreateRelationRequest>,
 ) -> Result<Json<CreateRelationResponse>, ServerError> {
-    let s = state.read().await;
-    let db = s.db.as_ref().ok_or(ServerError::DbNotInitialized)?;
-    let id = db
-        .create_relation(
-            &req.from_entity,
-            &req.to_entity,
-            &req.relation_type,
-            req.source_agent.as_deref(),
-            None,
-            None,
-            None,
-        )
-        .await
-        .map_err(|e| ServerError::IngestFailed(e.to_string()))?;
-    Ok(Json(CreateRelationResponse { id }))
+    let agent = extract_agent_name(&headers, req.source_agent.as_deref());
+    let db = {
+        let s = state.read().await;
+        s.db.as_ref()
+            .cloned()
+            .ok_or(ServerError::DbNotInitialized)?
+    };
+    let result = origin_core::post_write::create_relation(&db, req, &agent).await?;
+    Ok(Json(CreateRelationResponse {
+        id: result.id,
+        warnings: result.warnings,
+    }))
 }
 
 pub async fn handle_add_observation(
