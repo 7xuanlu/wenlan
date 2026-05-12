@@ -3009,7 +3009,7 @@ checksum = "04744f49eae99ab78e0d5c0b603ab218f515ea8cfe5a456d7629ad883a3b6e7d"
 
 [[package]]
 name = "origin"
-version = "0.5.1"
+version = "0.5.2"
 dependencies = [
  "anyhow",
  "assert_cmd",
@@ -3024,7 +3024,7 @@ dependencies = [
 
 [[package]]
 name = "origin-core"
-version = "0.5.1"
+version = "0.5.2"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -3062,7 +3062,7 @@ dependencies = [
 
 [[package]]
 name = "origin-mcp"
-version = "0.5.1"
+version = "0.5.2"
 dependencies = [
  "anyhow",
  "axum 0.8.8",
@@ -3093,7 +3093,7 @@ dependencies = [
 
 [[package]]
 name = "origin-server"
-version = "0.5.1"
+version = "0.5.2"
 dependencies = [
  "anyhow",
  "axum 0.8.8",
@@ -3120,7 +3120,7 @@ dependencies = [
 
 [[package]]
 name = "origin-types"
-version = "0.5.1"
+version = "0.5.2"
 dependencies = [
  "anyhow",
  "serde",
