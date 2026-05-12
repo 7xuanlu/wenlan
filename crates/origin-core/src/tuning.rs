@@ -111,6 +111,9 @@ fn d_false() -> bool {
 fn d_10_usize() -> usize {
     10
 }
+fn d_12_usize() -> usize {
+    12
+}
 fn d_50_usize() -> usize {
     50
 }
@@ -316,6 +319,14 @@ pub struct DistillationConfig {
     /// for the runaway-cluster failure mode (see spec 2026-04-25).
     #[serde(default = "d_50_usize")]
     pub max_unlinked_cluster_size: usize,
+    /// Hard cap on size of entity- or community-grouped clusters before the
+    /// agent's coherence check rejects them as grab-bags. A 12+ prose-memory
+    /// cluster at the default 0.73 similarity is almost always a community
+    /// pile (e.g. cid=16 "Origin" sweeping in unrelated sub-topics). When a
+    /// grouped sub-cluster exceeds this, re-split once at threshold +0.05
+    /// (cap 0.92) and drop sub-clusters that still overflow.
+    #[serde(default = "d_12_usize")]
+    pub max_grouped_cluster_size: usize,
     /// Minimum source-memory overlap required for a page to pass the
     /// retrieval-time relevance gate. A page is included in chat context
     /// only if at least this many of its source memories appear in the
@@ -580,6 +591,7 @@ impl Default for DistillationConfig {
             page_growth_threshold: d_075(),
             page_boost: d_13_f32(),
             max_unlinked_cluster_size: d_50_usize(),
+            max_grouped_cluster_size: d_12_usize(),
             page_min_overlap: d_2_usize(),
             export_vault_path: None,
         }
@@ -758,6 +770,12 @@ score_threshold = 0.25
     fn distillation_config_default_has_unlinked_cluster_cap() {
         let cfg = DistillationConfig::default();
         assert_eq!(cfg.max_unlinked_cluster_size, 50);
+    }
+
+    #[test]
+    fn distillation_config_default_has_grouped_cluster_cap() {
+        let cfg = DistillationConfig::default();
+        assert_eq!(cfg.max_grouped_cluster_size, 12);
     }
 
     #[test]

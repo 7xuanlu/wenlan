@@ -468,6 +468,18 @@ pub async fn run_periodic_steep_with_api(
     if trigger.runs_phase(Phase::Emergence) {
         let phase = run_phase(Phase::Emergence, || async {
             let count = distill_pages(db_ref, compile_llm, prompts, distillation, kp_ref).await?;
+            // Re-resolve orphan wikilinks now that distill may have created
+            // new pages. Cheap: one SELECT DISTINCT + per-label UPDATE for
+            // hits; no LLM. Captures the case where page A linked to
+            // [[Topic Z]] before Topic Z existed, and emergence just minted
+            // a Topic Z page.
+            match db_ref.resolve_orphan_page_links().await {
+                Ok(n) if n > 0 => {
+                    log::info!("[emergence] resolved {n} orphan wikilink labels");
+                }
+                Ok(_) => {}
+                Err(e) => log::warn!("[emergence] orphan link resolve failed: {e}"),
+            }
             let (nudge, headline) = classify_emergence(count);
             Ok(PhaseOutput {
                 items_processed: count,
@@ -847,11 +859,30 @@ pub(crate) async fn re_distill_stale_pages(
                     .trim()
                     .to_string();
                 if !content.is_empty() {
-                    db.update_page_content(&page.id, &content, &source_id_refs, "re_distill")
+                    // Real CAS: the content swap + version bump are gated on
+                    // `stale_reason IS NOT NULL` in the UPDATE itself, so a
+                    // concurrent agent-side PUT that cleared staleness wins
+                    // the race without us having to coordinate. No TOCTOU
+                    // window between the check and the write — it's one
+                    // statement.
+                    let landed = db
+                        .try_update_page_content_if_stale(
+                            &page.id,
+                            &content,
+                            &source_id_refs,
+                            "re_distill",
+                        )
                         .await?;
-                    db.clear_page_staleness(&page.id).await?;
-                    recompiled += 1;
-                    log::info!("[re-distill-stale] refreshed page '{}'", page.title);
+                    if landed {
+                        db.clear_page_staleness(&page.id).await?;
+                        recompiled += 1;
+                        log::info!("[re-distill-stale] refreshed page '{}'", page.title);
+                    } else {
+                        log::info!(
+                            "[re-distill-stale] '{}' staleness already cleared, yielding",
+                            page.title
+                        );
+                    }
                 }
             }
             Ok(_) => log::warn!("[re-distill-stale] empty LLM output for '{}'", page.title),

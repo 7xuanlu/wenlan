@@ -210,16 +210,26 @@ pub fn build_router(state: SharedState) -> Router {
             get(routes::handle_recent_page_changes),
         )
         .route(
+            "/api/pages/orphan-links",
+            get(memory_routes::handle_list_orphan_links),
+        )
+        .route(
             "/api/pages/{id}/export",
             post(memory_routes::handle_export_page),
         )
         .route(
             "/api/pages/{id}",
-            get(memory_routes::handle_get_page).delete(memory_routes::handle_delete_page),
+            get(memory_routes::handle_get_page)
+                .put(memory_routes::handle_refresh_page)
+                .delete(memory_routes::handle_delete_page),
         )
         .route(
             "/api/pages/{id}/sources",
             get(memory_routes::handle_get_page_sources),
+        )
+        .route(
+            "/api/pages/{id}/links",
+            get(memory_routes::handle_get_page_links),
         )
         .route(
             "/api/pages/{id}/archive",

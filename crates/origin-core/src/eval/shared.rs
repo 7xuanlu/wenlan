@@ -1756,6 +1756,7 @@ pub async fn run_concept_distillation_batch_api(
             tuning.max_clusters_per_steep,
             token_limit,
             tuning.max_unlinked_cluster_size,
+            tuning.max_grouped_cluster_size,
         )
         .await?;
 

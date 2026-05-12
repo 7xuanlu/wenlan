@@ -10,6 +10,7 @@
 //! structs used by connectors.
 pub mod local_files;
 pub mod obsidian;
+pub mod page_watcher;
 
 use crate::error::OriginError;
 use async_trait::async_trait;

@@ -2145,6 +2145,16 @@ pub async fn handle_create_page(
         return Err(ServerError::IngestFailed(e.to_string()));
     }
 
+    // Back-resolve any orphan wikilinks that point at this title. Existing
+    // pages that wrote `[[New Title]]` before this page existed land as
+    // NULL targets in page_links; this walks them and flips matching rows
+    // so inbound links light up immediately. Cheap — one SELECT DISTINCT
+    // over a small table + per-label UPDATE. Failures are logged but the
+    // route still returns success: the next refinery tick covers it.
+    if let Err(e) = db.resolve_orphan_page_links().await {
+        tracing::warn!("[page] orphan link resolve failed after create {id}: {e}");
+    }
+
     Ok(Json(serde_json::json!({ "id": id })))
 }
 
@@ -3179,6 +3189,87 @@ pub async fn handle_get_snapshot_captures_with_content(
 }
 
 /// POST /api/memory/{id}/update-page
+/// GET /api/pages/{id}/links
+///
+/// Returns the wikilink graph centered on a page: outbound (labels parsed
+/// out of this page's body, with resolved target_page_id when matched) and
+/// inbound (every active page whose body links to this title). Used by
+/// `/read` to surface "3 inbound, 2 broken" without the caller having to
+/// fetch + parse the full body.
+pub async fn handle_get_page_links(
+    State(state): State<Arc<RwLock<ServerState>>>,
+    Path(id): Path<String>,
+) -> Result<Json<origin_types::responses::PageLinksResponse>, ServerError> {
+    let db = {
+        let s = state.read().await;
+        s.db.clone().ok_or(ServerError::DbNotInitialized)?
+    };
+    let outbound_raw = db
+        .get_page_outbound_links(&id)
+        .await
+        .map_err(|e| ServerError::Internal(e.to_string()))?;
+    let inbound_raw = db
+        .get_page_inbound_links(&id)
+        .await
+        .map_err(|e| ServerError::Internal(e.to_string()))?;
+    let outbound = outbound_raw
+        .into_iter()
+        .map(|l| origin_types::responses::PageLinkOutbound {
+            label: l.label,
+            target_page_id: l.target_page_id,
+        })
+        .collect();
+    let inbound = inbound_raw
+        .into_iter()
+        .map(|(src, label)| origin_types::responses::PageLinkInbound {
+            source_page_id: src,
+            label,
+        })
+        .collect();
+    Ok(Json(origin_types::responses::PageLinksResponse {
+        outbound,
+        inbound,
+    }))
+}
+
+#[derive(Debug, Default, serde::Deserialize)]
+pub struct OrphanLinksQuery {
+    /// Minimum number of distinct source pages reaching for the same label.
+    /// Default 2 — single-source orphans are usually typos, not emergence
+    /// signal.
+    #[serde(default)]
+    pub min_count: Option<i64>,
+}
+
+/// GET /api/pages/orphan-links
+///
+/// Group every unresolved wikilink label across the graph by hit count. A
+/// label reached for by N independent pages is a topic-discovery signal:
+/// emergence can prioritize building a page on it. Capped at 100 rows;
+/// callers needing more should raise min_count and re-issue.
+pub async fn handle_list_orphan_links(
+    State(state): State<Arc<RwLock<ServerState>>>,
+    axum::extract::Query(q): axum::extract::Query<OrphanLinksQuery>,
+) -> Result<Json<serde_json::Value>, ServerError> {
+    let db = {
+        let s = state.read().await;
+        s.db.clone().ok_or(ServerError::DbNotInitialized)?
+    };
+    let min_count = q.min_count.unwrap_or(2).max(1);
+    let labels = db
+        .list_orphan_link_labels(min_count)
+        .await
+        .map_err(|e| ServerError::Internal(e.to_string()))?;
+    let payload: Vec<serde_json::Value> = labels
+        .into_iter()
+        .map(|(label, count)| serde_json::json!({"label": label, "count": count}))
+        .collect();
+    Ok(Json(serde_json::json!({
+        "min_count": min_count,
+        "orphan_labels": payload,
+    })))
+}
+
 pub async fn handle_update_page(
     State(state): State<Arc<RwLock<ServerState>>>,
     Path(id): Path<String>,
@@ -3201,6 +3292,140 @@ pub async fn handle_update_page(
     db.update_page_content(&id, &req.content, &existing_refs, "manual_edit")
         .await
         .map_err(|e| ServerError::Internal(e.to_string()))?;
+    Ok(Json(origin_types::responses::SuccessResponse { ok: true }))
+}
+
+/// PUT /api/pages/{id}
+///
+/// Agent-side refresh of a page from its current sources. Replaces content,
+/// source list, optional summary; clears `stale_reason` so the refinery's
+/// re-distill skips on its next tick (CAS pattern — see refinery
+/// `re_distill_stale_pages`). Distinct from POST `/api/pages/{id}`
+/// (manual edit, flips `user_edited`, preserves sources).
+///
+/// Atomicity mirrors `handle_create_page`: write md first, persist DB index
+/// second, roll back md on DB failure. Old md content is held in memory
+/// for the rollback path so a failed DB update doesn't leave a stale .md
+/// without a matching row.
+pub async fn handle_refresh_page(
+    State(state): State<Arc<RwLock<ServerState>>>,
+    Path(id): Path<String>,
+    Json(req): Json<origin_types::requests::RefreshPageRequest>,
+) -> Result<Json<origin_types::responses::SuccessResponse>, ServerError> {
+    // Validate the body before touching the filesystem. Empty content would
+    // produce an empty md; empty source list would orphan the page from its
+    // provenance trail — both contradict the route's documented contract.
+    if req.content.trim().is_empty() {
+        return Err(ServerError::ValidationError(
+            "content must not be empty".into(),
+        ));
+    }
+    if req.source_memory_ids.is_empty() {
+        return Err(ServerError::ValidationError(
+            "source_memory_ids must not be empty — refresh keeps the page \
+             linked to its sources"
+                .into(),
+        ));
+    }
+
+    let db = {
+        let s = state.read().await;
+        s.db.clone().ok_or(ServerError::DbNotInitialized)?
+    };
+
+    let existing = db
+        .get_page(&id)
+        .await
+        .map_err(|e| ServerError::Internal(e.to_string()))?
+        .ok_or_else(|| ServerError::ValidationError(format!("page {} not found", id)))?;
+
+    let knowledge_path = origin_core::config::load_config().knowledge_path_or_default();
+    let writer = origin_core::export::knowledge::KnowledgeWriter::new(knowledge_path.clone());
+
+    // Snapshot the current md content for rollback. If the file is missing
+    // we tolerate it — the page may have been created before the projection
+    // existed; the rollback then becomes a remove_page.
+    let existing_state_file = writer.page_filename(&id);
+    let existing_md_content = existing_state_file
+        .as_ref()
+        .and_then(|f| std::fs::read_to_string(knowledge_path.join(f)).ok());
+
+    // Build the refreshed Page for md rendering. Bump version + last_modified
+    // mirror what `update_page_content` writes to the DB row.
+    //
+    // Summary semantics: `None` keeps the existing summary. `Some(s)` where
+    // `s` is non-empty replaces it. `Some("")` clears it — empty string maps
+    // to NULL in the DB so `IS NULL` filters work (per origin-core's NULL
+    // semantics rule). The MCP tool description documents this; normalize
+    // here so the daemon never stores a literal empty string.
+    let now = chrono::Utc::now().to_rfc3339();
+    let summary_update: Option<Option<String>> = match &req.summary {
+        Some(s) if s.is_empty() => Some(None),
+        Some(s) => Some(Some(s.clone())),
+        None => None,
+    };
+    let refreshed_summary = match &summary_update {
+        Some(opt) => opt.clone(),
+        None => existing.summary.clone(),
+    };
+    let refreshed_page = origin_core::pages::Page {
+        id: existing.id.clone(),
+        title: existing.title.clone(),
+        summary: refreshed_summary.clone(),
+        content: req.content.clone(),
+        entity_id: existing.entity_id.clone(),
+        domain: existing.domain.clone(),
+        source_memory_ids: req.source_memory_ids.clone(),
+        version: existing.version + 1,
+        status: existing.status.clone(),
+        created_at: existing.created_at.clone(),
+        last_compiled: now.clone(),
+        last_modified: now.clone(),
+        sources_updated_count: 0,
+        stale_reason: None,
+        user_edited: existing.user_edited,
+        relevance_score: 0.0,
+    };
+
+    // 1. md-first
+    writer
+        .write_page(&refreshed_page)
+        .map_err(|e| ServerError::IngestFailed(format!("write_page: {}", e)))?;
+
+    // 2. DB index — content + sources + summary + clear staleness.
+    let source_refs: Vec<&str> = req.source_memory_ids.iter().map(String::as_str).collect();
+    let db_result: Result<(), origin_core::error::OriginError> = async {
+        db.update_page_content(&id, &req.content, &source_refs, "agent_refresh")
+            .await?;
+        if let Some(opt) = &summary_update {
+            db.update_page_summary(&id, opt.as_deref()).await?;
+        }
+        db.clear_page_staleness(&id).await?;
+        Ok(())
+    }
+    .await;
+
+    if let Err(e) = db_result {
+        // Roll back md to the snapshotted content so the two stores stay
+        // consistent. If the file existed before and we have its bytes,
+        // rewrite them; otherwise drop the projection.
+        let rollback = match (existing_state_file, existing_md_content) {
+            (Some(filename), Some(prev)) => {
+                std::fs::write(knowledge_path.join(filename), prev).map_err(|io| io.to_string())
+            }
+            _ => writer.remove_page(&id).map_err(|err| err.to_string()),
+        };
+        if let Err(rb) = rollback {
+            tracing::warn!(
+                "[page] PUT failed and md rollback also failed for {}: db_err={}, rollback_err={}",
+                id,
+                e,
+                rb
+            );
+        }
+        return Err(ServerError::IngestFailed(e.to_string()));
+    }
+
     Ok(Json(origin_types::responses::SuccessResponse { ok: true }))
 }
 

@@ -423,6 +423,23 @@ pub struct UpdatePageRequest {
     pub content: String,
 }
 
+/// Body for `PUT /api/pages/{id}` — agent-side refresh of a stale page.
+///
+/// Distinct from `UpdatePageRequest` (manual content edit via POST) because:
+///  - `source_memory_ids` is replaced, not preserved.
+///  - `summary` is optionally updated.
+///  - The handler clears `stale_reason` in the same transaction.
+///
+/// v1 deliberately excludes title / entity_id / domain changes — slug rename
+/// has its own concurrent-read failure mode and lands as a separate route.
+#[derive(Debug, Serialize, Deserialize)]
+pub struct RefreshPageRequest {
+    pub content: String,
+    pub source_memory_ids: Vec<String>,
+    #[serde(default)]
+    pub summary: Option<String>,
+}
+
 // ===== Concept Export =====
 
 /// Request body for `POST /api/pages/export` (bulk export all pages to an Obsidian vault).

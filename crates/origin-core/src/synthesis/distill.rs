@@ -58,6 +58,30 @@ pub async fn resolve_distill_target(
     Ok(None)
 }
 
+/// Build the "existing page titles" hint prefix that gets prepended to
+/// every distill user prompt so the LLM emits exact-match `[[Title]]`
+/// wikilinks instead of inventing labels. Returns an empty string when
+/// the page set is empty or the DB call errors (best-effort — the worst
+/// case is the LLM invents a label that the orphan-by-count feed will
+/// surface later). Capped at 100 most-recent titles so the prompt stays
+/// bounded on large vaults.
+pub(crate) async fn build_existing_titles_hint(db: &MemoryDB) -> String {
+    let titles = db.list_active_page_titles(100).await.unwrap_or_default();
+    if titles.is_empty() {
+        return String::new();
+    }
+    let formatted = titles
+        .iter()
+        .map(|t| format!("[[{t}]]"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!(
+        "Existing pages you may reference with exact-match wikilinks: {formatted}\n\
+         Use these labels verbatim when linking; only invent a new label \
+         when the topic isn't already covered.\n\n"
+    )
+}
+
 /// LLM cluster refinement: for entities with multiple clusters, ask the LLM to merge/split/rename.
 pub(crate) async fn refine_clusters_with_llm(
     llm: &Arc<dyn LlmProvider>,
@@ -365,7 +389,8 @@ pub(crate) async fn distill_one_cluster(
         })
         .collect::<Vec<_>>()
         .join("\n\n");
-    let user_prompt = format!("Topic: {}\n\n{}", topic, memories_block);
+    let titles_hint = build_existing_titles_hint(db).await;
+    let user_prompt = format!("{titles_hint}Topic: {}\n\n{}", topic, memories_block);
 
     let response = llm
         .generate(LlmRequest {
@@ -577,6 +602,7 @@ pub async fn distill_pages_scoped(
                     tuning.max_clusters_per_steep,
                     16_000,
                     tuning.max_unlinked_cluster_size,
+                    tuning.max_grouped_cluster_size,
                     entity_id_filter.as_deref(),
                     domain_filter.as_deref(),
                 )
@@ -616,6 +642,7 @@ pub async fn distill_pages_scoped(
             tuning.max_clusters_per_steep,
             token_limit,
             tuning.max_unlinked_cluster_size,
+            tuning.max_grouped_cluster_size,
             entity_id_filter.as_deref(),
             domain_filter.as_deref(),
         )
@@ -753,7 +780,8 @@ pub async fn distill_pages_scoped(
             })
             .collect::<Vec<_>>()
             .join("\n\n");
-        let user_prompt = format!("Topic: {}\n\n{}", topic, memories_block);
+        let titles_hint = build_existing_titles_hint(db).await;
+        let user_prompt = format!("{titles_hint}Topic: {}\n\n{}", topic, memories_block);
 
         let response = llm
             .generate(LlmRequest {
@@ -995,7 +1023,8 @@ pub(crate) async fn recompile_single_page(
         })
         .collect::<Vec<_>>()
         .join("\n\n");
-    let user_prompt = format!("Topic: {}\n\n{}", page.title, memories_block);
+    let titles_hint = build_existing_titles_hint(db).await;
+    let user_prompt = format!("{titles_hint}Topic: {}\n\n{}", page.title, memories_block);
 
     let response = llm
         .generate(LlmRequest {

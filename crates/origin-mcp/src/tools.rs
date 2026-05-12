@@ -252,9 +252,37 @@ pub struct DeletePageParams {
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct UpdatePageParams {
+    #[schemars(
+        description = "Page id (e.g. 'page_abc' or legacy 'concept_abc'). Get it from the `stale_pages` block in distill output."
+    )]
+    pub page_id: String,
+    #[schemars(
+        description = "Refreshed markdown body — same wiki-prose style as create_page. Replaces the existing content."
+    )]
+    pub content: String,
+    #[schemars(
+        description = "Full source_memory_ids list for the refreshed page — typically the stale page's existing list (carry through from distill output)."
+    )]
+    pub source_memory_ids: Vec<String>,
+    #[schemars(
+        description = "Optional one-sentence summary. Omit to keep the existing summary; pass empty string to clear it."
+    )]
+    pub summary: Option<String>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct GetPageParams {
     #[schemars(
         description = "Page id (e.g. 'page_abc' or legacy 'concept_abc'). For title-based lookup, search via recall or the daemon's /api/pages/search."
+    )]
+    pub page_id: String,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct GetPageLinksParams {
+    #[schemars(
+        description = "Page id (e.g. 'page_abc'). Returns inbound + outbound wikilink graph for that page."
     )]
     pub page_id: String,
 }
@@ -748,6 +776,29 @@ impl OriginMcpServer {
         ))]))
     }
 
+    pub async fn update_page_impl(
+        &self,
+        params: UpdatePageParams,
+    ) -> Result<CallToolResult, McpError> {
+        let req = origin_types::requests::RefreshPageRequest {
+            content: params.content,
+            source_memory_ids: params.source_memory_ids,
+            summary: params.summary,
+        };
+        let path = format!("/api/pages/{}", params.page_id);
+        // Typed end-to-end: a wire-shape drift on the daemon side fails at
+        // deserialize instead of silently returning the no-op "Refreshed"
+        // line. Same discipline as PR #77's search_pages / list_pages_recent.
+        let _: origin_types::responses::SuccessResponse = match self.client.put(&path, &req).await {
+            Ok(r) => r,
+            Err(e) => return Ok(tool_error(e, "update_page")),
+        };
+        Ok(CallToolResult::success(vec![Content::text(format!(
+            "Refreshed page {}",
+            params.page_id
+        ))]))
+    }
+
     pub async fn delete_page_impl(&self, page_id: &str) -> Result<CallToolResult, McpError> {
         if self.transport == TransportMode::Http {
             return Ok(CallToolResult::error(vec![Content::text(
@@ -779,6 +830,17 @@ impl OriginMcpServer {
             Err(e) => return Ok(tool_error(e, "get_page")),
         };
         let pretty = serde_json::to_string_pretty(&resp).unwrap_or_else(|_| resp.to_string());
+        Ok(CallToolResult::success(vec![Content::text(pretty)]))
+    }
+
+    pub async fn get_page_links_impl(&self, page_id: &str) -> Result<CallToolResult, McpError> {
+        let path = format!("/api/pages/{}/links", page_id);
+        // Typed end-to-end via PageLinksResponse — keeps wire shape pinned.
+        let resp: origin_types::responses::PageLinksResponse = match self.client.get(&path).await {
+            Ok(r) => r,
+            Err(e) => return Ok(tool_error(e, "get_page_links")),
+        };
+        let pretty = serde_json::to_string_pretty(&resp).unwrap_or_else(|_| String::new());
         Ok(CallToolResult::success(vec![Content::text(pretty)]))
     }
 
@@ -1048,6 +1110,23 @@ impl OriginMcpServer {
     }
 
     #[tool(
+        description = "Refresh a stale page in place. Replaces content + source_memory_ids + optional summary, clears the daemon's stale_reason in the same call. Preserves page_id, created_at, and bumps version monotonically — external [[wikilinks]] keep working. Use this on entries in the /distill response's `stale_pages` block instead of delete_page + create_page (which churned ids and lost version history).",
+        annotations(
+            title = "Refresh page",
+            read_only_hint = false,
+            destructive_hint = false,
+            idempotent_hint = false,
+            open_world_hint = false
+        )
+    )]
+    async fn update_page(
+        &self,
+        Parameters(params): Parameters<UpdatePageParams>,
+    ) -> Result<CallToolResult, McpError> {
+        self.update_page_impl(params).await
+    }
+
+    #[tool(
         description = "Delete a page by id. Destructive — removes both the DB row and the on-disk md projection. Use during a /distill refresh to drop a stale page before creating its replacement, or when the user explicitly asks to remove a page. Pages without sources can be re-derived by running /distill again on the same scope.",
         annotations(
             title = "Delete page",
@@ -1073,6 +1152,23 @@ impl OriginMcpServer {
         Parameters(params): Parameters<GetPageParams>,
     ) -> Result<CallToolResult, McpError> {
         self.get_page_impl(&params.page_id).await
+    }
+
+    #[tool(
+        description = "Fetch the wikilink graph centered on one page: `outbound` (labels parsed out of this page's body, with target_page_id set when matched; NULL means broken/orphan) and `inbound` (active pages whose body cites this title). Use this for the /read preview to surface 'N inbound, M broken' without parsing the full body.",
+        annotations(
+            title = "Get page links",
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
+    )]
+    async fn get_page_links(
+        &self,
+        Parameters(params): Parameters<GetPageLinksParams>,
+    ) -> Result<CallToolResult, McpError> {
+        self.get_page_links_impl(&params.page_id).await
     }
 
     #[tool(
@@ -2669,6 +2765,62 @@ mod tests {
         assert_eq!(req.limit, 100);
     }
 
+    // --- UpdatePageParams ---
+
+    #[test]
+    fn test_update_page_params_minimal() {
+        let json =
+            r#"{"page_id": "page_abc", "content": "fresh body", "source_memory_ids": ["mem_1"]}"#;
+        let params: UpdatePageParams = serde_json::from_str(json).unwrap();
+        assert_eq!(params.page_id, "page_abc");
+        assert_eq!(params.content, "fresh body");
+        assert_eq!(params.source_memory_ids, vec!["mem_1"]);
+        assert!(params.summary.is_none());
+    }
+
+    #[test]
+    fn test_update_page_params_with_summary() {
+        let json = r#"{
+            "page_id": "page_abc",
+            "content": "body",
+            "source_memory_ids": ["mem_1", "mem_2"],
+            "summary": "Refreshed claim."
+        }"#;
+        let params: UpdatePageParams = serde_json::from_str(json).unwrap();
+        assert_eq!(params.summary.as_deref(), Some("Refreshed claim."));
+        assert_eq!(params.source_memory_ids.len(), 2);
+    }
+
+    #[test]
+    fn test_update_page_params_missing_required_fails() {
+        // Missing source_memory_ids is a hard fail — refresh without sources
+        // would orphan the page from its provenance trail.
+        let json = r#"{"page_id": "page_abc", "content": "body"}"#;
+        let result = serde_json::from_str::<UpdatePageParams>(json);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_update_page_request_body_shape() {
+        let params = UpdatePageParams {
+            page_id: "page_abc".into(),
+            content: "Body".into(),
+            source_memory_ids: vec!["mem_1".into()],
+            summary: Some("S".into()),
+        };
+        let req = origin_types::requests::RefreshPageRequest {
+            content: params.content,
+            source_memory_ids: params.source_memory_ids,
+            summary: params.summary,
+        };
+        let json = serde_json::to_value(&req).unwrap();
+        assert_eq!(json["content"], "Body");
+        assert_eq!(json["source_memory_ids"], serde_json::json!(["mem_1"]));
+        assert_eq!(json["summary"], "S");
+        // page_id stays in the URL, never the body.
+        assert!(json.get("page_id").is_none());
+    }
+
     // --- Tool registration ---
 
     #[test]
@@ -2678,8 +2830,10 @@ mod tests {
             "create_entity",
             "create_relation",
             "create_page",
+            "update_page",
             "delete_page",
             "get_page",
+            "get_page_links",
             "list_memories",
             "search_pages",
             "list_pages_recent",

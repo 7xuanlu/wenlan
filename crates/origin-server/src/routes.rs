@@ -718,6 +718,16 @@ pub async fn handle_distill(
 
     let scoped = target.is_some();
 
+    // Capture scope filters before moving `target` into distill_pages_scoped
+    // so we can use them to scope the stale-page list below.
+    let (stale_entity_filter, stale_domain_filter) = match &target {
+        Some(origin_core::synthesis::distill::DistillTarget::Entity { id, .. }) => {
+            (Some(id.clone()), None)
+        }
+        Some(origin_core::synthesis::distill::DistillTarget::Domain(d)) => (None, Some(d.clone())),
+        Some(origin_core::synthesis::distill::DistillTarget::Page(_)) | None => (None, None),
+    };
+
     let result = origin_core::refinery::distill_pages_scoped(
         db,
         None, // route never invokes daemon LLM; caller synthesizes pending
@@ -780,11 +790,77 @@ pub async fn handle_distill(
         filtered_pending.push(payload);
     }
 
+    // Surface stale pages so the agent's `/distill` skill can refresh them
+    // via PUT /api/pages/{id}. Restrict to `source_updated` — `source_conflict`
+    // is the user-edited escalation and needs a human-in-the-loop UX, not an
+    // auto-refresh. Scoped by entity/domain when the target was scoped.
+    let stale_pages_list = db
+        .list_stale_pages_scoped(
+            "source_updated",
+            stale_entity_filter.as_deref(),
+            stale_domain_filter.as_deref(),
+        )
+        .await
+        .map_err(|e| ServerError::Internal(e.to_string()))?;
+
+    let stale_pages_payload: Vec<serde_json::Value> = stale_pages_list
+        .iter()
+        .map(|p| {
+            serde_json::json!({
+                "page_id": p.id,
+                "title": p.title,
+                "summary": p.summary,
+                "source_memory_ids": p.source_memory_ids,
+                "sources_updated_count": p.sources_updated_count,
+                "stale_reason": p.stale_reason,
+                "user_edited": p.user_edited,
+            })
+        })
+        .collect();
+    // 10 is the LIMIT inside list_stale_pages_scoped. Surface a hint so the
+    // skill can tell the user to re-run instead of silently dropping rows.
+    let stale_truncated = stale_pages_list.len() == 10;
+
+    // Walk orphan rows in case a page minted earlier in this pass (or by
+    // a concurrent create_page call) now matches an existing orphan label.
+    // The refinery's Emergence phase does the same on its tick; doing it
+    // inline here keeps the route's response (and the skill's view of the
+    // graph) consistent without waiting up to a poll interval.
+    if let Err(e) = db.resolve_orphan_page_links().await {
+        tracing::warn!("[distill] orphan link resolve failed: {e}");
+    }
+
+    // Surface the orphan-wikilink feed so the skill can prompt the user to
+    // distill a page on a topic that other pages already reach for. Cheap:
+    // one GROUP BY against page_links, capped at 100. Threshold N=2 means
+    // a single typo doesn't show up — needs at least two distinct pages
+    // citing the same label before it counts as signal.
+    //
+    // Only surface on unscoped passes. A scoped `/distill rust` user
+    // doesn't want generic topic suggestions from elsewhere in the graph;
+    // that would confuse them about what "scope" means. The unscoped
+    // global pass (`/distill deep` or bare `/distill` outside a repo) is
+    // the right place for this feed.
+    let orphan_topics: Vec<serde_json::Value> = if scoped {
+        Vec::new()
+    } else {
+        let raw = db
+            .list_orphan_link_labels(2)
+            .await
+            .map_err(|e| ServerError::Internal(e.to_string()))?;
+        raw.into_iter()
+            .map(|(label, count)| serde_json::json!({"label": label, "count": count}))
+            .collect()
+    };
+
     Ok(Json(serde_json::json!({
         "pages_created": result.created.len(),
         "scoped": scoped,
         "created_ids": result.created,
         "pending": filtered_pending,
+        "stale_pages": stale_pages_payload,
+        "stale_truncated": stale_truncated,
+        "orphan_topics": orphan_topics,
     })))
 }
 

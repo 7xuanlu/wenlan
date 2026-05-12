@@ -4555,6 +4555,48 @@ impl MemoryDB {
                     log::info!("[migration] Self-heal: recreated idx_pages_embedding");
                 }
             }
+
+            // Migration 47: page_links table — wikilink graph. Every `[[Label]]`
+            // in a page body resolves at write time against existing page
+            // titles; resolved links land here with `target_page_id` set,
+            // unresolved (orphan) links land with `target_page_id = NULL`.
+            // The orphan-by-label query feeds emergence as a topic-discovery
+            // signal once enough independent pages link to the same label.
+            //
+            // FK on source_page_id cascades so deleting a page wipes its
+            // outbound links; target_page_id deliberately has no FK so an
+            // archived/deleted target leaves orphan rows the resolver can
+            // pick up later when the target is recreated.
+            if version < 47 {
+                let conn = self.conn.lock().await;
+                // `label_key` is the lowercased label used for cross-page
+                // dedup + the orphan-by-count signal. `label` keeps the
+                // first-seen casing for display. PRIMARY KEY is on
+                // (source, label_key) so a page that says `[[Origin]]`
+                // and another that says `[[origin]]` group together — the
+                // emergence signal "N pages reach for the same label"
+                // doesn't split on casing drift.
+                conn.execute_batch(
+                    "CREATE TABLE IF NOT EXISTS page_links (\
+                        source_page_id TEXT NOT NULL, \
+                        target_page_id TEXT, \
+                        label_key TEXT NOT NULL, \
+                        label TEXT NOT NULL, \
+                        PRIMARY KEY (source_page_id, label_key), \
+                        FOREIGN KEY (source_page_id) REFERENCES pages(id) ON DELETE CASCADE\
+                     ); \
+                     CREATE INDEX IF NOT EXISTS idx_page_links_target \
+                       ON page_links(target_page_id) WHERE target_page_id IS NOT NULL; \
+                     CREATE INDEX IF NOT EXISTS idx_page_links_orphan \
+                       ON page_links(label_key) WHERE target_page_id IS NULL;",
+                )
+                .await
+                .map_err(|e| OriginError::VectorDb(format!("m47 create: {e}")))?;
+                conn.execute("PRAGMA user_version = 47", ())
+                    .await
+                    .map_err(|e| OriginError::VectorDb(format!("m47 bump: {e}")))?;
+                log::info!("[migration] Migration 47 applied: page_links table for wikilink graph");
+            }
         }
 
         Ok(())
@@ -12242,6 +12284,7 @@ impl MemoryDB {
         max_clusters: usize,
         token_limit: usize,
         max_unlinked_cluster_size: usize,
+        max_grouped_cluster_size: usize,
     ) -> Result<Vec<DistillationCluster>, OriginError> {
         self.find_distillation_clusters_scoped(
             similarity_threshold,
@@ -12249,6 +12292,7 @@ impl MemoryDB {
             max_clusters,
             token_limit,
             max_unlinked_cluster_size,
+            max_grouped_cluster_size,
             None,
             None,
         )
@@ -12268,6 +12312,7 @@ impl MemoryDB {
         max_clusters: usize,
         token_limit: usize,
         max_unlinked_cluster_size: usize,
+        max_grouped_cluster_size: usize,
         entity_id_filter: Option<&str>,
         domain_filter: Option<&str>,
     ) -> Result<Vec<DistillationCluster>, OriginError> {
@@ -12386,80 +12431,92 @@ impl MemoryDB {
 
         let mut clusters: Vec<DistillationCluster> = Vec::new();
 
-        // Sub-cluster within each community group by vector similarity
-        for indices in community_groups.values() {
-            let sub = cluster_by_similarity(&memories, indices, similarity_threshold);
-            for group in sub {
-                if group.len() >= min_size {
-                    let cluster = build_distillation_cluster(&memories, &group);
-                    let split = sub_cluster_by_tokens(&memories, cluster, token_limit);
-                    clusters.extend(split);
-                }
-            }
-        }
-
-        // Sub-cluster within each entity group by vector similarity (no community_id)
-        for indices in entity_groups.values() {
-            let sub = cluster_by_similarity(&memories, indices, similarity_threshold);
-            for group in sub {
-                if group.len() >= min_size {
-                    let cluster = build_distillation_cluster(&memories, &group);
-                    let split = sub_cluster_by_tokens(&memories, cluster, token_limit);
-                    clusters.extend(split);
-                }
-            }
-        }
-
-        // Cluster unlinked memories by vector similarity. Apply hard size cap
-        // to prevent runaway clusters of unlabeled memories (safety valve for
-        // the Mode B failure mode — see spec 2026-04-25). Oversized clusters
-        // are re-clustered once with a tighter threshold instead of dropped:
-        // a 200-memory pile usually contains coherent sub-topics that deserve
-        // their own pages, while truly noisy piles produce tighter groups
-        // that still exceed the cap and are then logged + skipped.
-        if unlinked.len() >= min_size {
-            let sub = cluster_by_similarity(&memories, &unlinked, similarity_threshold);
-            for group in sub {
-                if group.len() < min_size {
-                    continue;
-                }
-                if group.len() > max_unlinked_cluster_size {
-                    // Tighten by +0.05 (cosine similarity is logarithmic in
-                    // semantic distance — +0.1 from a default 0.85 jumps to
-                    // 0.95 which is near-duplicate territory and drops most
-                    // legitimate sub-topics at min_size). Cap at 0.92.
-                    let tighter = (similarity_threshold + 0.05).min(0.92);
-                    log::info!(
-                        "[distill] re-splitting oversized unlinked cluster: \
-                         {} memories at threshold {:.2} (cap = {})",
-                        group.len(),
-                        tighter,
-                        max_unlinked_cluster_size,
-                    );
-                    let resplit = cluster_by_similarity(&memories, &group, tighter);
-                    for sub_group in resplit {
-                        if sub_group.len() < min_size {
-                            continue;
-                        }
-                        if sub_group.len() > max_unlinked_cluster_size {
-                            log::info!(
-                                "[distill] dropping unlinked sub-cluster after re-split: \
-                                 {} memories still > cap {}",
-                                sub_group.len(),
-                                max_unlinked_cluster_size,
-                            );
-                            continue;
-                        }
-                        let cluster = build_distillation_cluster(&memories, &sub_group);
-                        let split = sub_cluster_by_tokens(&memories, cluster, token_limit);
-                        clusters.extend(split);
+        // Process a single bucket's similarity-clustered groups with a hard
+        // size cap. Groups that exceed the cap re-cluster once at a tighter
+        // threshold; sub-groups still over the cap are dropped with a log
+        // line. Used by all three buckets (community, entity, unlinked) so
+        // the same grab-bag mitigation applies uniformly — community 16's
+        // 99-memory "Origin" pile was the original failure mode but the
+        // entity-only bucket has the same risk (e.g. one entity that swept
+        // in unrelated sub-topics over time).
+        //
+        // Cosine similarity is logarithmic in semantic distance — +0.1 from
+        // 0.85 lands at 0.95 (near-duplicate), which drops most legitimate
+        // sub-topics at min_size. +0.05 with a cap of 0.92 is the sweet spot.
+        let process_bucket =
+            |bucket_label: &str,
+             indices: &[usize],
+             cap: usize,
+             clusters: &mut Vec<DistillationCluster>| {
+                let sub = cluster_by_similarity(&memories, indices, similarity_threshold);
+                for group in sub {
+                    if group.len() < min_size {
+                        continue;
                     }
-                    continue;
+                    if group.len() > cap {
+                        let tighter = (similarity_threshold + 0.05).min(0.92);
+                        log::info!(
+                            "[distill] re-splitting oversized {} cluster: \
+                         {} memories at threshold {:.2} (cap = {})",
+                            bucket_label,
+                            group.len(),
+                            tighter,
+                            cap,
+                        );
+                        let resplit = cluster_by_similarity(&memories, &group, tighter);
+                        for sub_group in resplit {
+                            if sub_group.len() < min_size {
+                                continue;
+                            }
+                            if sub_group.len() > cap {
+                                // warn! not info! — log filter default is
+                                // warn (per CLAUDE.md), so a silently
+                                // dropped cluster of legitimately related
+                                // memories actually surfaces in operator
+                                // logs instead of vanishing.
+                                log::warn!(
+                                    "[distill] dropping {} sub-cluster after re-split: \
+                                 {} memories still > cap {} — raise \
+                                 max_{}_cluster_size if this is a genuine page",
+                                    bucket_label,
+                                    sub_group.len(),
+                                    cap,
+                                    bucket_label,
+                                );
+                                continue;
+                            }
+                            let cluster = build_distillation_cluster(&memories, &sub_group);
+                            let split = sub_cluster_by_tokens(&memories, cluster, token_limit);
+                            clusters.extend(split);
+                        }
+                        continue;
+                    }
+                    let cluster = build_distillation_cluster(&memories, &group);
+                    let split = sub_cluster_by_tokens(&memories, cluster, token_limit);
+                    clusters.extend(split);
                 }
-                let cluster = build_distillation_cluster(&memories, &group);
-                let split = sub_cluster_by_tokens(&memories, cluster, token_limit);
-                clusters.extend(split);
-            }
+            };
+
+        for indices in community_groups.values() {
+            process_bucket(
+                "community",
+                indices,
+                max_grouped_cluster_size,
+                &mut clusters,
+            );
+        }
+
+        for indices in entity_groups.values() {
+            process_bucket("entity", indices, max_grouped_cluster_size, &mut clusters);
+        }
+
+        if unlinked.len() >= min_size {
+            process_bucket(
+                "unlinked",
+                &unlinked,
+                max_unlinked_cluster_size,
+                &mut clusters,
+            );
         }
 
         log::info!(
@@ -14157,6 +14214,14 @@ impl MemoryDB {
         conn.execute("COMMIT", ())
             .await
             .map_err(|e| OriginError::VectorDb(format!("insert_page commit: {e}")))?;
+        drop(conn);
+
+        // Wikilink graph refresh runs after the row + sources are committed
+        // so a failure here can't roll back the page itself. Same trade-off
+        // as update_page_content: link index is recoverable on the next save.
+        if let Err(e) = self.refresh_page_wikilinks(id, content).await {
+            log::warn!("[page-links] refresh failed for new page {id}: {e}");
+        }
         Ok(())
     }
 
@@ -14294,9 +14359,11 @@ impl MemoryDB {
         Ok(results)
     }
 
-    /// Update a page's content and source memory ids. Increments version, updates timestamps.
-    /// Dual-writes: updates the JSON `source_memory_ids` column (backward compat) AND
-    /// inserts any new links into the `page_sources` join table.
+    /// Update a page's content + source memory ids in a single atomic UPDATE
+    /// (content, version bump, timestamps, user_edited flag). Reconciles the
+    /// `page_sources` join table to match the new source set: rows no longer
+    /// in the list get DELETEd, surviving rows keep their existing
+    /// `link_reason` history via INSERT OR IGNORE.
     pub async fn update_page_content(
         &self,
         id: &str,
@@ -14304,19 +14371,119 @@ impl MemoryDB {
         source_memory_ids: &[&str],
         link_reason: &str,
     ) -> Result<(), OriginError> {
+        self.try_update_page_content(id, content, source_memory_ids, link_reason, false)
+            .await
+            .map(|_| ())
+    }
+
+    /// Refinery-flavoured variant of `update_page_content` that gates the
+    /// content swap on `stale_reason IS NOT NULL`. If a concurrent writer
+    /// (typically the agent's PUT) already cleared staleness, the UPDATE
+    /// affects zero rows and we yield instead of clobbering fresher content.
+    /// Returns `true` when the write landed, `false` when it was skipped.
+    /// Folds the CAS into the UPDATE itself — no TOCTOU gap between checking
+    /// `stale_reason` and writing.
+    pub async fn try_update_page_content_if_stale(
+        &self,
+        id: &str,
+        content: &str,
+        source_memory_ids: &[&str],
+        link_reason: &str,
+    ) -> Result<bool, OriginError> {
+        self.try_update_page_content(id, content, source_memory_ids, link_reason, true)
+            .await
+    }
+
+    async fn try_update_page_content(
+        &self,
+        id: &str,
+        content: &str,
+        source_memory_ids: &[&str],
+        link_reason: &str,
+        require_stale: bool,
+    ) -> Result<bool, OriginError> {
         let source_ids_json = serde_json::to_string(&source_memory_ids)
             .map_err(|e| OriginError::VectorDb(format!("serialize source_memory_ids: {e}")))?;
         let now = chrono::Utc::now().to_rfc3339();
         let now_ts = chrono::Utc::now().timestamp();
         let conn = self.conn.lock().await;
-        // Dual-write: update JSON column (backward compat) + increment version + timestamps
-        conn.execute(
-            "UPDATE pages SET content = ?1, source_memory_ids = ?2, version = version + 1, last_compiled = ?3, last_modified = ?3 WHERE id = ?4",
-            libsql::params![content, source_ids_json, now, id],
-        )
-        .await
-        .map_err(|e| OriginError::VectorDb(format!("update_page_content: {e}")))?;
-        // Dual-write: insert any new source links into the join table (idempotent)
+
+        // Single atomic UPDATE: content + version + timestamps + user_edited
+        // flag. Folding the manual_edit branch into SQL closes the TOCTOU gap
+        // where a concurrent reader could observe new content paired with the
+        // stale `user_edited = 0`. The CAS variant adds `AND stale_reason
+        // IS NOT NULL` so the refinery can guard against the agent's PUT
+        // landing mid-LLM.
+        // The CAS variant also guards `user_edited = 0` so a fs_edit or
+        // manual_edit that landed mid-LLM (after the refinery loaded the
+        // row but before this UPDATE) takes priority. Without the
+        // user_edited check the refinery would clobber an in-flight
+        // human write since stale_reason stays set: the watcher
+        // deliberately doesn't clear staleness on apply (refinery
+        // escalates to source_conflict on the next sweep instead).
+        let sql = if require_stale {
+            "UPDATE pages SET \
+               content = ?1, \
+               source_memory_ids = ?2, \
+               version = version + 1, \
+               last_compiled = ?3, \
+               last_modified = ?3, \
+               user_edited = CASE WHEN ?4 IN ('manual_edit', 'fs_edit') THEN 1 ELSE user_edited END \
+             WHERE id = ?5 \
+               AND stale_reason IS NOT NULL \
+               AND COALESCE(user_edited, 0) = 0"
+        } else {
+            "UPDATE pages SET \
+               content = ?1, \
+               source_memory_ids = ?2, \
+               version = version + 1, \
+               last_compiled = ?3, \
+               last_modified = ?3, \
+               user_edited = CASE WHEN ?4 IN ('manual_edit', 'fs_edit') THEN 1 ELSE user_edited END \
+             WHERE id = ?5"
+        };
+        let affected = conn
+            .execute(
+                sql,
+                libsql::params![content, source_ids_json, now, link_reason, id],
+            )
+            .await
+            .map_err(|e| OriginError::VectorDb(format!("update_page_content: {e}")))?;
+        if require_stale && affected == 0 {
+            return Ok(false);
+        }
+
+        // Reconcile join table: DELETE rows whose memory_source_id is no
+        // longer in the list, then INSERT OR IGNORE the survivors. Preserves
+        // existing `link_reason` on rows that survive — only brand-new rows
+        // pick up the current reason. Empty source list = wipe.
+        if source_memory_ids.is_empty() {
+            conn.execute(
+                "DELETE FROM page_sources WHERE page_id = ?1",
+                libsql::params![id],
+            )
+            .await
+            .map_err(|e| OriginError::VectorDb(format!("update_page_content prune: {e}")))?;
+        } else {
+            // Build the NOT IN clause via bind parameters — never string
+            // interpolation. Memory ids come from request bodies.
+            let placeholders: String = (0..source_memory_ids.len())
+                .map(|i| format!("?{}", i + 2))
+                .collect::<Vec<_>>()
+                .join(", ");
+            let delete_sql = format!(
+                "DELETE FROM page_sources WHERE page_id = ?1 AND memory_source_id NOT IN ({})",
+                placeholders
+            );
+            let mut bind: Vec<libsql::Value> = Vec::with_capacity(1 + source_memory_ids.len());
+            bind.push(libsql::Value::Text(id.to_string()));
+            for sid in source_memory_ids {
+                bind.push(libsql::Value::Text((*sid).to_string()));
+            }
+            conn.execute(&delete_sql, libsql::params_from_iter(bind))
+                .await
+                .map_err(|e| OriginError::VectorDb(format!("update_page_content prune: {e}")))?;
+        }
         for sid in source_memory_ids {
             let _ = conn
                 .execute(
@@ -14325,7 +14492,31 @@ impl MemoryDB {
                 )
                 .await;
         }
-        Ok(())
+        drop(conn);
+
+        // Refresh the wikilink graph for this page. Extraction is pure CPU;
+        // the resolver + replace use their own short-lived locks. Failures
+        // are logged but do not roll back the content write — a broken link
+        // index is recoverable on the next save and far less harmful than
+        // failing to persist the user-facing body.
+        if let Err(e) = self.refresh_page_wikilinks(id, content).await {
+            log::warn!("[page-links] refresh failed for {id}: {e}");
+        }
+        Ok(true)
+    }
+
+    /// Extract wikilinks from `content`, resolve them against current page
+    /// titles, and replace the page's row set in `page_links`. Idempotent.
+    /// Used by both `insert_page` and `update_page_content` so write paths
+    /// stay coherent without duplicating the orchestration.
+    pub async fn refresh_page_wikilinks(
+        &self,
+        page_id: &str,
+        content: &str,
+    ) -> Result<(), OriginError> {
+        let labels = crate::synthesis::wikilinks::extract_wikilinks(content);
+        let links = crate::synthesis::wikilinks::resolve_against_pages(self, &labels).await?;
+        self.replace_page_links(page_id, &links).await
     }
 
     /// Find a matching page for a new memory — by entity_id first, then embedding similarity.
@@ -14594,6 +14785,288 @@ impl MemoryDB {
             .await
             .map_err(|e| OriginError::VectorDb(format!("delete_page: {e}")))?;
         Ok(())
+    }
+
+    /// Return the titles of all active pages, ordered by most-recently-
+    /// modified, capped at `limit`. Used to seed the distill prompt with
+    /// the canonical label set so the LLM emits `[[Existing Title]]`
+    /// wikilinks that resolve immediately instead of inventing labels the
+    /// resolver has to leave as orphans.
+    pub async fn list_active_page_titles(&self, limit: usize) -> Result<Vec<String>, OriginError> {
+        let conn = self.conn.lock().await;
+        let mut rows = conn
+            .query(
+                "SELECT title FROM pages WHERE status = 'active' \
+                 ORDER BY last_modified DESC LIMIT ?1",
+                libsql::params![limit as i64],
+            )
+            .await
+            .map_err(|e| OriginError::VectorDb(format!("list_active_page_titles: {e}")))?;
+        let mut out = Vec::with_capacity(limit);
+        while let Some(row) = rows
+            .next()
+            .await
+            .map_err(|e| OriginError::VectorDb(e.to_string()))?
+        {
+            out.push(row.get::<String>(0).unwrap_or_default());
+        }
+        Ok(out)
+    }
+
+    /// Find an active page id whose title matches `label` (case-insensitive,
+    /// trimmed). Used by the wikilink resolver. Returns None when no active
+    /// page matches; archived pages are deliberately ignored so a deleted-
+    /// then-recreated page resolves to the new id, not the dead one.
+    pub async fn find_active_page_id_by_title(
+        &self,
+        label: &str,
+    ) -> Result<Option<String>, OriginError> {
+        let trimmed = label.trim();
+        if trimmed.is_empty() {
+            return Ok(None);
+        }
+        let conn = self.conn.lock().await;
+        let mut rows = conn
+            .query(
+                "SELECT id FROM pages \
+                 WHERE LOWER(title) = LOWER(?1) AND status = 'active' \
+                 LIMIT 1",
+                libsql::params![trimmed],
+            )
+            .await
+            .map_err(|e| OriginError::VectorDb(format!("find_active_page_id_by_title: {e}")))?;
+        match rows
+            .next()
+            .await
+            .map_err(|e| OriginError::VectorDb(e.to_string()))?
+        {
+            Some(row) => Ok(Some(
+                row.get::<String>(0)
+                    .map_err(|e| OriginError::VectorDb(e.to_string()))?,
+            )),
+            None => Ok(None),
+        }
+    }
+
+    /// Replace the entire outbound-link set for a page in one BEGIN/COMMIT.
+    /// Called from `update_page_content` and `insert_page` after wikilink
+    /// extraction so the join table stays coherent with the body.
+    ///
+    /// `links` carries resolved + unresolved labels — unresolved rows go in
+    /// with `target_page_id = NULL` so the refinery's resolve phase can pick
+    /// them up later when the target page exists.
+    pub async fn replace_page_links(
+        &self,
+        source_page_id: &str,
+        links: &[crate::synthesis::wikilinks::Wikilink],
+    ) -> Result<(), OriginError> {
+        let conn = self.conn.lock().await;
+        conn.execute("BEGIN", ())
+            .await
+            .map_err(|e| OriginError::VectorDb(format!("replace_page_links begin: {e}")))?;
+        let exec = async {
+            conn.execute(
+                "DELETE FROM page_links WHERE source_page_id = ?1",
+                libsql::params![source_page_id],
+            )
+            .await?;
+            for link in links {
+                let label_key = link.label.to_lowercase();
+                conn.execute(
+                    "INSERT INTO page_links (source_page_id, target_page_id, label_key, label) \
+                     VALUES (?1, ?2, ?3, ?4)",
+                    libsql::params![
+                        source_page_id,
+                        link.target_page_id.clone(),
+                        label_key,
+                        link.label.clone(),
+                    ],
+                )
+                .await?;
+            }
+            Ok::<_, libsql::Error>(())
+        }
+        .await;
+        match exec {
+            Ok(()) => {
+                conn.execute("COMMIT", ()).await.map_err(|e| {
+                    OriginError::VectorDb(format!("replace_page_links commit: {e}"))
+                })?;
+                Ok(())
+            }
+            Err(e) => {
+                let _ = conn.execute("ROLLBACK", ()).await;
+                Err(OriginError::VectorDb(format!("replace_page_links: {e}")))
+            }
+        }
+    }
+
+    /// Outbound links from a page. Used by `/api/pages/{id}/links` and the
+    /// `/read` preview's link-count line.
+    pub async fn get_page_outbound_links(
+        &self,
+        source_page_id: &str,
+    ) -> Result<Vec<crate::synthesis::wikilinks::Wikilink>, OriginError> {
+        let conn = self.conn.lock().await;
+        let mut rows = conn
+            .query(
+                "SELECT target_page_id, label FROM page_links \
+                 WHERE source_page_id = ?1 ORDER BY label_key",
+                libsql::params![source_page_id],
+            )
+            .await
+            .map_err(|e| OriginError::VectorDb(format!("get_page_outbound_links: {e}")))?;
+        let mut out = Vec::new();
+        while let Some(row) = rows
+            .next()
+            .await
+            .map_err(|e| OriginError::VectorDb(e.to_string()))?
+        {
+            out.push(crate::synthesis::wikilinks::Wikilink {
+                target_page_id: row.get::<Option<String>>(0).unwrap_or(None),
+                label: row.get::<String>(1).unwrap_or_default(),
+            });
+        }
+        Ok(out)
+    }
+
+    /// Inbound links to a page — every active source whose body contains a
+    /// `[[Title]]` reference that resolves here. Used by the page's "linked
+    /// from" view. Tie-break on source_page_id keeps order stable across
+    /// same-second timestamps.
+    pub async fn get_page_inbound_links(
+        &self,
+        target_page_id: &str,
+    ) -> Result<Vec<(String, String)>, OriginError> {
+        let conn = self.conn.lock().await;
+        let mut rows = conn
+            .query(
+                "SELECT pl.source_page_id, pl.label FROM page_links pl \
+                 INNER JOIN pages p ON p.id = pl.source_page_id \
+                 WHERE pl.target_page_id = ?1 AND p.status = 'active' \
+                 ORDER BY p.last_modified DESC, pl.source_page_id ASC",
+                libsql::params![target_page_id],
+            )
+            .await
+            .map_err(|e| OriginError::VectorDb(format!("get_page_inbound_links: {e}")))?;
+        let mut out = Vec::new();
+        while let Some(row) = rows
+            .next()
+            .await
+            .map_err(|e| OriginError::VectorDb(e.to_string()))?
+        {
+            out.push((
+                row.get::<String>(0).unwrap_or_default(),
+                row.get::<String>(1).unwrap_or_default(),
+            ));
+        }
+        Ok(out)
+    }
+
+    /// Group every still-orphan label by count, restricted to active source
+    /// pages (archived pages keep their `page_links` rows via cascade-on-
+    /// delete-only, but they shouldn't inflate the emergence signal once
+    /// the user has retired them). Returns up to 100 rows; callers needing
+    /// more should raise `min_count` and re-issue.
+    pub async fn list_orphan_link_labels(
+        &self,
+        min_count: i64,
+    ) -> Result<Vec<(String, i64)>, OriginError> {
+        let conn = self.conn.lock().await;
+        let mut rows = conn
+            .query(
+                "SELECT MIN(pl.label) AS display_label, \
+                        COUNT(DISTINCT pl.source_page_id) AS n \
+                 FROM page_links pl \
+                 INNER JOIN pages p ON p.id = pl.source_page_id \
+                 WHERE pl.target_page_id IS NULL AND p.status = 'active' \
+                 GROUP BY pl.label_key \
+                 HAVING n >= ?1 \
+                 ORDER BY n DESC, display_label ASC \
+                 LIMIT 100",
+                libsql::params![min_count],
+            )
+            .await
+            .map_err(|e| OriginError::VectorDb(format!("list_orphan_link_labels: {e}")))?;
+        let mut out = Vec::new();
+        while let Some(row) = rows
+            .next()
+            .await
+            .map_err(|e| OriginError::VectorDb(e.to_string()))?
+        {
+            out.push((
+                row.get::<String>(0).unwrap_or_default(),
+                row.get::<i64>(1).unwrap_or(0),
+            ));
+        }
+        Ok(out)
+    }
+
+    /// Walk the orphan rows and re-resolve them against current page titles.
+    /// Returns the number of rows that flipped from NULL to a real target —
+    /// the refinery uses this for the log line. Snapshots the label list
+    /// under a brief lock, then drops the connection before the per-label
+    /// lookups so other writers aren't starved while the resolver scans.
+    pub async fn resolve_orphan_page_links(&self) -> Result<usize, OriginError> {
+        let labels: Vec<String> = {
+            let conn = self.conn.lock().await;
+            let mut rows = conn
+                .query(
+                    "SELECT DISTINCT label_key FROM page_links WHERE target_page_id IS NULL",
+                    (),
+                )
+                .await
+                .map_err(|e| OriginError::VectorDb(format!("resolve_orphan_links list: {e}")))?;
+            let mut labels: Vec<String> = Vec::new();
+            while let Some(row) = rows
+                .next()
+                .await
+                .map_err(|e| OriginError::VectorDb(e.to_string()))?
+            {
+                labels.push(row.get::<String>(0).unwrap_or_default());
+            }
+            labels
+        };
+
+        let mut resolved = 0usize;
+        for label_key in labels {
+            let trimmed = label_key.trim();
+            if trimmed.is_empty() {
+                continue;
+            }
+            // Look up + update under a fresh short-lived lock per label so
+            // other writers (page inserts, ingest) aren't blocked while we
+            // walk the full orphan set.
+            let conn = self.conn.lock().await;
+            let mut hit = conn
+                .query(
+                    "SELECT id FROM pages \
+                     WHERE LOWER(title) = ?1 AND status = 'active' \
+                     LIMIT 1",
+                    libsql::params![trimmed],
+                )
+                .await
+                .map_err(|e| OriginError::VectorDb(format!("resolve_orphan_links lookup: {e}")))?;
+            if let Some(row) = hit
+                .next()
+                .await
+                .map_err(|e| OriginError::VectorDb(e.to_string()))?
+            {
+                let target: String = row
+                    .get(0)
+                    .map_err(|e| OriginError::VectorDb(e.to_string()))?;
+                drop(hit);
+                conn.execute(
+                    "UPDATE page_links SET target_page_id = ?1 \
+                     WHERE label_key = ?2 AND target_page_id IS NULL",
+                    libsql::params![target, label_key],
+                )
+                .await
+                .map_err(|e| OriginError::VectorDb(format!("resolve_orphan_links update: {e}")))?;
+                resolved += 1;
+            }
+        }
+        Ok(resolved)
     }
 
     /// Search pages via vector similarity + FTS5 with RRF fusion.
@@ -15103,19 +15576,44 @@ impl MemoryDB {
         Ok(())
     }
 
-    /// List active pages with the given stale_reason, up to `limit` rows.
+    /// List active pages with the given stale_reason, up to 10 rows.
     pub async fn list_stale_pages(
         &self,
         reason: &str,
     ) -> Result<Vec<crate::pages::Page>, OriginError> {
+        self.list_stale_pages_scoped(reason, None, None).await
+    }
+
+    /// Like `list_stale_pages` but restricts the result set by entity_id or
+    /// domain when either filter is supplied. Used by the `/api/distill`
+    /// route so a scoped pass (`/distill origin`) doesn't dump unrelated
+    /// stale pages on the user.
+    pub async fn list_stale_pages_scoped(
+        &self,
+        reason: &str,
+        entity_id_filter: Option<&str>,
+        domain_filter: Option<&str>,
+    ) -> Result<Vec<crate::pages::Page>, OriginError> {
         let conn = self.conn.lock().await;
+        let mut sql = String::from(
+            "SELECT id, title, summary, content, entity_id, domain, source_memory_ids, version, status, created_at, last_compiled, last_modified, COALESCE(sources_updated_count, 0), stale_reason, COALESCE(user_edited, 0) \
+             FROM pages WHERE stale_reason = ?1 AND status = 'active'",
+        );
+        let mut bind: Vec<libsql::Value> = vec![libsql::Value::Text(reason.to_string())];
+        if let Some(eid) = entity_id_filter {
+            sql.push_str(" AND entity_id = ?");
+            bind.push(libsql::Value::Text(eid.to_string()));
+        }
+        if let Some(d) = domain_filter {
+            sql.push_str(" AND domain = ?");
+            bind.push(libsql::Value::Text(d.to_string()));
+        }
+        sql.push_str(" ORDER BY last_modified DESC LIMIT 10");
+
         let mut rows = conn
-            .query(
-                "SELECT id, title, summary, content, entity_id, domain, source_memory_ids, version, status, created_at, last_compiled, last_modified, COALESCE(sources_updated_count, 0), stale_reason, COALESCE(user_edited, 0) FROM pages WHERE stale_reason = ?1 AND status = 'active' LIMIT 10",
-                libsql::params![reason],
-            )
+            .query(&sql, bind)
             .await
-            .map_err(|e| OriginError::VectorDb(format!("list_stale_pages: {e}")))?;
+            .map_err(|e| OriginError::VectorDb(format!("list_stale_pages_scoped: {e}")))?;
         let mut result = Vec::new();
         while let Some(row) = rows
             .next()
@@ -15168,6 +15666,53 @@ impl MemoryDB {
         .await
         .map_err(|e| OriginError::VectorDb(format!("clear_page_staleness: {e}")))?;
         Ok(())
+    }
+
+    /// Update only a page's summary (or clear it when `summary = None`).
+    /// Kept separate from `update_page_content` so callers can bump the body
+    /// without touching the one-line claim, and vice versa. Does NOT bump
+    /// `version` — that's `update_page_content`'s job since version tracks
+    /// the body, not the summary.
+    pub async fn update_page_summary(
+        &self,
+        page_id: &str,
+        summary: Option<&str>,
+    ) -> Result<(), OriginError> {
+        let conn = self.conn.lock().await;
+        let now = chrono::Utc::now().to_rfc3339();
+        conn.execute(
+            "UPDATE pages SET summary = ?1, last_modified = ?2 WHERE id = ?3",
+            libsql::params![summary, now, page_id],
+        )
+        .await
+        .map_err(|e| OriginError::VectorDb(format!("update_page_summary: {e}")))?;
+        Ok(())
+    }
+
+    /// Read the current `stale_reason` for a page without loading the rest
+    /// of the row. Used by the refinery's CAS re-check before overwriting —
+    /// if another writer (the agent's PUT) cleared staleness during the LLM
+    /// call, refinery yields rather than clobbering the fresher content.
+    pub async fn get_page_stale_reason(
+        &self,
+        page_id: &str,
+    ) -> Result<Option<String>, OriginError> {
+        let conn = self.conn.lock().await;
+        let mut rows = conn
+            .query(
+                "SELECT stale_reason FROM pages WHERE id = ?1",
+                libsql::params![page_id],
+            )
+            .await
+            .map_err(|e| OriginError::VectorDb(format!("get_page_stale_reason: {e}")))?;
+        match rows
+            .next()
+            .await
+            .map_err(|e| OriginError::VectorDb(e.to_string()))?
+        {
+            Some(row) => Ok(row.get::<Option<String>>(0).unwrap_or(None)),
+            None => Ok(None),
+        }
     }
 
     /// Update a memory's content in-place for topic-key upsert.
@@ -19880,7 +20425,7 @@ pub(crate) mod tests {
         }
 
         let clusters = db
-            .find_distillation_clusters(0.5, 2, 20, 3500, 50)
+            .find_distillation_clusters(0.5, 2, 20, 3500, 50, 50)
             .await
             .unwrap();
         // Should find at least 1 cluster (entity groups with 2+ members)
@@ -19930,7 +20475,7 @@ pub(crate) mod tests {
         }
 
         let clusters = db
-            .find_distillation_clusters(0.3, 2, 20, 3500, 50)
+            .find_distillation_clusters(0.3, 2, 20, 3500, 50, 50)
             .await
             .unwrap();
 
@@ -19990,7 +20535,7 @@ pub(crate) mod tests {
         }
 
         let clusters = db
-            .find_distillation_clusters(0.3, 2, 20, 3500, 5)
+            .find_distillation_clusters(0.3, 2, 20, 3500, 5, 50)
             .await
             .unwrap();
 
@@ -20035,7 +20580,7 @@ pub(crate) mod tests {
         // Run with cap = 30. The single 60-memory unlinked cluster should be
         // skipped entirely. No clusters > 30 should be returned.
         let clusters = db
-            .find_distillation_clusters(0.3, 2, 20, 3500, 30)
+            .find_distillation_clusters(0.3, 2, 20, 3500, 30, 50)
             .await
             .unwrap();
 
@@ -20045,6 +20590,52 @@ pub(crate) mod tests {
                 "cluster of {} memories exceeded cap of 30: {:?}",
                 cluster.source_ids.len(),
                 cluster.source_ids.first()
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn find_distillation_clusters_caps_oversized_entity_group() {
+        // A single entity (think "Origin" community cid=16 in prod) sweeps in
+        // a long tail of unrelated memories over time. Greedy clustering at
+        // 0.73 returns one big blob; the agent's coherence check rejects it
+        // as a grab-bag and the user sees nothing. The grouped-cluster cap
+        // forces a re-split so coherent sub-topics still surface.
+        let (db, _dir) = test_db().await;
+
+        let now = chrono::Utc::now().timestamp_millis();
+        // 20 memories on the same entity, all with similar prose so they
+        // collapse into one greedy cluster at threshold 0.3 — well above the
+        // grouped cap of 6 used below.
+        for i in 0..20 {
+            let doc = RawDocument {
+                source: "memory".to_string(),
+                source_id: format!("mem_origin_{}", i),
+                content: format!("origin distillation pipeline note number {}", i),
+                title: format!("Note {}", i),
+                url: None,
+                last_modified: now + i as i64,
+                memory_type: None,
+                domain: Some("origin".to_string()),
+                entity_id: Some("ent_origin".to_string()),
+                ..Default::default()
+            };
+            db.upsert_documents(vec![doc]).await.unwrap();
+        }
+
+        // grouped cap = 6 → original blob must re-split or drop; no cluster
+        // returned can exceed 6 memories.
+        let clusters = db
+            .find_distillation_clusters(0.3, 2, 20, 3500, 50, 6)
+            .await
+            .unwrap();
+
+        for cluster in &clusters {
+            assert!(
+                cluster.source_ids.len() <= 6,
+                "entity-bucket cluster of {} memories exceeded grouped cap 6 — \
+                 oversized re-split not applied to entity_groups/community_groups",
+                cluster.source_ids.len(),
             );
         }
     }
@@ -21532,6 +22123,66 @@ pub(crate) mod tests {
         assert_eq!(c.content, "v2 content");
         assert_eq!(c.version, 2);
         assert_eq!(c.source_memory_ids, vec!["m1", "m2"]);
+        // concept_growth must NOT flip user_edited — refinery would then
+        // refuse to recompile every page it grew, defeating background
+        // distillation. Only manual edits set the flag.
+        assert!(!c.user_edited);
+    }
+
+    #[tokio::test]
+    async fn test_update_page_content_manual_edit_flips_user_edited() {
+        let (db, _dir) = test_db().await;
+        let now = chrono::Utc::now().to_rfc3339();
+        db.insert_page(
+            "page_manual",
+            "Manual",
+            None,
+            "v1 content",
+            None,
+            None,
+            &["m1"],
+            &now,
+        )
+        .await
+        .unwrap();
+
+        let before = db.get_page("page_manual").await.unwrap().unwrap();
+        assert!(!before.user_edited);
+
+        db.update_page_content("page_manual", "v2 hand-written", &["m1"], "manual_edit")
+            .await
+            .unwrap();
+        let after_manual = db.get_page("page_manual").await.unwrap().unwrap();
+        assert!(
+            after_manual.user_edited,
+            "manual_edit must flip user_edited so refinery escalates instead of overwriting"
+        );
+
+        // Subsequent re_distill / concept_growth must not unset the flag — it
+        // sticks until the page is replaced or archived.
+        db.update_page_content("page_manual", "v3 from refinery", &["m1"], "re_distill")
+            .await
+            .unwrap();
+        let after_refinery = db.get_page("page_manual").await.unwrap().unwrap();
+        assert!(
+            after_refinery.user_edited,
+            "user_edited must persist across subsequent non-manual writes"
+        );
+
+        // A second manual_edit after a refinery write must keep the flag set
+        // (idempotent) — a regression that wrote `user_edited = 0` on the
+        // re_distill branch would pass the earlier asserts but fail here
+        // because the manual_edit doesn't UPSET an already-true flag.
+        db.update_page_content(
+            "page_manual",
+            "v4 hand-tweaked again",
+            &["m1"],
+            "manual_edit",
+        )
+        .await
+        .unwrap();
+        let after_second_manual = db.get_page("page_manual").await.unwrap().unwrap();
+        assert!(after_second_manual.user_edited);
     }
 
     #[tokio::test]
@@ -21579,6 +22230,277 @@ pub(crate) mod tests {
 
         // Deleting non-existent ID should not error
         db.delete_page("nonexistent").await.unwrap();
+    }
+
+    // ---- page_links / wikilink graph ----
+
+    #[tokio::test]
+    async fn list_active_page_titles_excludes_archived_and_honours_limit() {
+        let (db, _dir) = test_db().await;
+        let now = chrono::Utc::now().to_rfc3339();
+        db.insert_page("p1", "Alpha", None, "body", None, None, &[], &now)
+            .await
+            .unwrap();
+        db.insert_page("p2", "Beta", None, "body", None, None, &[], &now)
+            .await
+            .unwrap();
+        db.insert_page("p3", "Gamma", None, "body", None, None, &[], &now)
+            .await
+            .unwrap();
+        db.archive_page("p3").await.unwrap();
+
+        let titles = db.list_active_page_titles(10).await.unwrap();
+        assert_eq!(titles.len(), 2);
+        assert!(titles.contains(&"Alpha".to_string()));
+        assert!(titles.contains(&"Beta".to_string()));
+        assert!(!titles.contains(&"Gamma".to_string()));
+
+        // Limit is respected.
+        let one = db.list_active_page_titles(1).await.unwrap();
+        assert_eq!(one.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn page_links_resolve_against_existing_titles() {
+        let (db, _dir) = test_db().await;
+        let now = chrono::Utc::now().to_rfc3339();
+
+        // Two existing pages — wikilinks pointing at them should resolve.
+        db.insert_page(
+            "page_target",
+            "Rust Ownership",
+            None,
+            "body",
+            None,
+            None,
+            &[],
+            &now,
+        )
+        .await
+        .unwrap();
+        db.insert_page("page_alpha", "Alpha", None, "body", None, None, &[], &now)
+            .await
+            .unwrap();
+
+        // Source page links to both, plus an orphan label.
+        db.insert_page(
+            "page_src",
+            "Source",
+            None,
+            "see [[Rust Ownership]] and [[Alpha]] and [[Quantum Knitting]]",
+            None,
+            None,
+            &[],
+            &now,
+        )
+        .await
+        .unwrap();
+
+        let out = db.get_page_outbound_links("page_src").await.unwrap();
+        // Three labels, sorted alphabetically.
+        assert_eq!(out.len(), 3);
+        let by_label: std::collections::HashMap<_, _> = out
+            .into_iter()
+            .map(|l| (l.label, l.target_page_id))
+            .collect();
+        assert_eq!(
+            by_label.get("Rust Ownership"),
+            Some(&Some("page_target".to_string()))
+        );
+        assert_eq!(by_label.get("Alpha"), Some(&Some("page_alpha".to_string())));
+        // Orphan stays NULL until the target gets created.
+        assert_eq!(by_label.get("Quantum Knitting"), Some(&None));
+    }
+
+    #[tokio::test]
+    async fn page_links_inbound_excludes_archived() {
+        let (db, _dir) = test_db().await;
+        let now = chrono::Utc::now().to_rfc3339();
+
+        // Target first so source-page writes resolve immediately. (If the
+        // target were inserted last the sources would orphan; the refinery's
+        // resolve_orphan_page_links covers that case in a separate test.)
+        db.insert_page(
+            "page_target_in",
+            "Target",
+            None,
+            "body",
+            None,
+            None,
+            &[],
+            &now,
+        )
+        .await
+        .unwrap();
+        db.insert_page(
+            "page_active_src",
+            "Active source",
+            None,
+            "body links to [[Target]]",
+            None,
+            None,
+            &[],
+            &now,
+        )
+        .await
+        .unwrap();
+        db.insert_page(
+            "page_archived_src",
+            "Archived source",
+            None,
+            "body links to [[Target]]",
+            None,
+            None,
+            &[],
+            &now,
+        )
+        .await
+        .unwrap();
+        db.archive_page("page_archived_src").await.unwrap();
+
+        let inbound = db.get_page_inbound_links("page_target_in").await.unwrap();
+        let src_ids: Vec<&str> = inbound.iter().map(|(s, _)| s.as_str()).collect();
+        assert!(src_ids.contains(&"page_active_src"));
+        // Archived source must not surface even though the row exists in
+        // page_links — the join filters on active status.
+        assert!(!src_ids.contains(&"page_archived_src"));
+    }
+
+    #[tokio::test]
+    async fn page_links_update_overwrites_old_links() {
+        let (db, _dir) = test_db().await;
+        let now = chrono::Utc::now().to_rfc3339();
+
+        db.insert_page(
+            "page_evolving",
+            "Evolving",
+            None,
+            "first version mentions [[Alpha]] and [[Beta]]",
+            None,
+            None,
+            &[],
+            &now,
+        )
+        .await
+        .unwrap();
+
+        let v1 = db.get_page_outbound_links("page_evolving").await.unwrap();
+        assert_eq!(v1.len(), 2);
+
+        // Rewrite — Alpha drops, Gamma appears, Beta stays.
+        db.update_page_content(
+            "page_evolving",
+            "second version mentions [[Gamma]] and [[Beta]]",
+            &[],
+            "manual_edit",
+        )
+        .await
+        .unwrap();
+
+        let v2 = db.get_page_outbound_links("page_evolving").await.unwrap();
+        let labels: std::collections::HashSet<&str> = v2.iter().map(|l| l.label.as_str()).collect();
+        assert!(labels.contains("Gamma"));
+        assert!(labels.contains("Beta"));
+        assert!(!labels.contains("Alpha"));
+        assert_eq!(v2.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn page_links_resolve_orphans_after_target_appears() {
+        let (db, _dir) = test_db().await;
+        let now = chrono::Utc::now().to_rfc3339();
+
+        // Source page first — link is initially orphaned.
+        db.insert_page(
+            "page_a",
+            "A",
+            None,
+            "see [[Topic Z]]",
+            None,
+            None,
+            &[],
+            &now,
+        )
+        .await
+        .unwrap();
+        db.insert_page(
+            "page_b",
+            "B",
+            None,
+            "also [[Topic Z]]",
+            None,
+            None,
+            &[],
+            &now,
+        )
+        .await
+        .unwrap();
+
+        let labels = db.list_orphan_link_labels(2).await.unwrap();
+        assert_eq!(labels, vec![("Topic Z".to_string(), 2)]);
+
+        // Now the target page is created — refinery resolves orphans.
+        db.insert_page(
+            "page_z",
+            "Topic Z",
+            None,
+            "actual body",
+            None,
+            None,
+            &[],
+            &now,
+        )
+        .await
+        .unwrap();
+
+        let resolved = db.resolve_orphan_page_links().await.unwrap();
+        assert_eq!(resolved, 1, "one orphan label flipped to a real target");
+
+        let labels_after = db.list_orphan_link_labels(1).await.unwrap();
+        assert!(
+            labels_after.iter().all(|(l, _)| l != "Topic Z"),
+            "Topic Z should be off the orphan list after resolve"
+        );
+
+        // Confirm both source pages now point at the new target.
+        for src in ["page_a", "page_b"] {
+            let out = db.get_page_outbound_links(src).await.unwrap();
+            assert_eq!(out.len(), 1);
+            assert_eq!(out[0].target_page_id.as_deref(), Some("page_z"));
+        }
+    }
+
+    #[tokio::test]
+    async fn page_links_cascade_on_source_delete() {
+        let (db, _dir) = test_db().await;
+        let now = chrono::Utc::now().to_rfc3339();
+
+        db.insert_page("page_tgt", "Target", None, "body", None, None, &[], &now)
+            .await
+            .unwrap();
+        db.insert_page(
+            "page_src_d",
+            "Source",
+            None,
+            "[[Target]] mention",
+            None,
+            None,
+            &[],
+            &now,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(
+            db.get_page_inbound_links("page_tgt").await.unwrap().len(),
+            1
+        );
+        db.delete_page("page_src_d").await.unwrap();
+        // FK cascade wipes outbound rows when the source row is deleted.
+        assert_eq!(
+            db.get_page_inbound_links("page_tgt").await.unwrap().len(),
+            0
+        );
     }
 
     #[tokio::test]
@@ -24302,6 +25224,146 @@ pub(crate) mod tests {
         assert!(
             stale.is_empty(),
             "archived pages should not appear in stale list"
+        );
+    }
+
+    #[tokio::test]
+    async fn list_stale_pages_scoped_filters_by_entity_and_domain() {
+        let (db, _dir) = test_db().await;
+        let now = chrono::Utc::now().to_rfc3339();
+
+        // Three stale pages, one per scope axis.
+        db.insert_page(
+            "page_origin",
+            "Origin Page",
+            None,
+            "content",
+            Some("ent_origin"),
+            Some("origin"),
+            &[],
+            &now,
+        )
+        .await
+        .unwrap();
+        db.insert_page(
+            "page_other_entity",
+            "Other Entity",
+            None,
+            "content",
+            Some("ent_other"),
+            Some("origin"),
+            &[],
+            &now,
+        )
+        .await
+        .unwrap();
+        db.insert_page(
+            "page_other_domain",
+            "Other Domain",
+            None,
+            "content",
+            Some("ent_origin"),
+            Some("plugin"),
+            &[],
+            &now,
+        )
+        .await
+        .unwrap();
+
+        for id in ["page_origin", "page_other_entity", "page_other_domain"] {
+            db.set_page_stale(id, "source_updated").await.unwrap();
+        }
+
+        // No filter — all three.
+        let all = db
+            .list_stale_pages_scoped("source_updated", None, None)
+            .await
+            .unwrap();
+        assert_eq!(all.len(), 3);
+
+        // Entity filter — only ent_origin.
+        let by_entity = db
+            .list_stale_pages_scoped("source_updated", Some("ent_origin"), None)
+            .await
+            .unwrap();
+        let ids: Vec<&str> = by_entity.iter().map(|p| p.id.as_str()).collect();
+        assert_eq!(ids.len(), 2);
+        assert!(ids.contains(&"page_origin"));
+        assert!(ids.contains(&"page_other_domain"));
+
+        // Domain filter — only origin.
+        let by_domain = db
+            .list_stale_pages_scoped("source_updated", None, Some("origin"))
+            .await
+            .unwrap();
+        let ids: Vec<&str> = by_domain.iter().map(|p| p.id.as_str()).collect();
+        assert_eq!(ids.len(), 2);
+        assert!(ids.contains(&"page_origin"));
+        assert!(ids.contains(&"page_other_entity"));
+
+        // Both filters — intersection.
+        let both = db
+            .list_stale_pages_scoped("source_updated", Some("ent_origin"), Some("origin"))
+            .await
+            .unwrap();
+        assert_eq!(both.len(), 1);
+        assert_eq!(both[0].id, "page_origin");
+    }
+
+    #[tokio::test]
+    async fn update_page_summary_writes_and_clears() {
+        let (db, _dir) = test_db().await;
+        let now = chrono::Utc::now().to_rfc3339();
+        db.insert_page(
+            "page_sum",
+            "Title",
+            Some("old summary"),
+            "body",
+            None,
+            None,
+            &[],
+            &now,
+        )
+        .await
+        .unwrap();
+
+        db.update_page_summary("page_sum", Some("new summary"))
+            .await
+            .unwrap();
+        let p = db.get_page("page_sum").await.unwrap().unwrap();
+        assert_eq!(p.summary.as_deref(), Some("new summary"));
+
+        db.update_page_summary("page_sum", None).await.unwrap();
+        let p = db.get_page("page_sum").await.unwrap().unwrap();
+        assert_eq!(p.summary, None);
+    }
+
+    #[tokio::test]
+    async fn get_page_stale_reason_reads_current_value() {
+        let (db, _dir) = test_db().await;
+        let now = chrono::Utc::now().to_rfc3339();
+        db.insert_page("page_cas", "Title", None, "body", None, None, &[], &now)
+            .await
+            .unwrap();
+
+        assert_eq!(db.get_page_stale_reason("page_cas").await.unwrap(), None);
+
+        db.set_page_stale("page_cas", "source_updated")
+            .await
+            .unwrap();
+        assert_eq!(
+            db.get_page_stale_reason("page_cas").await.unwrap(),
+            Some("source_updated".to_string())
+        );
+
+        db.clear_page_staleness("page_cas").await.unwrap();
+        assert_eq!(db.get_page_stale_reason("page_cas").await.unwrap(), None);
+
+        // Unknown page → None (not an error). Refinery's CAS treats this
+        // the same as "already cleared" so we yield instead of panicking.
+        assert_eq!(
+            db.get_page_stale_reason("page_missing").await.unwrap(),
+            None
         );
     }
 

@@ -5,7 +5,7 @@ description: >
   summary, source count, and the local md path. Full body lives on disk —
   open with the user's editor. Invoked as `/read <title_or_id>`.
 argument-hint: "<title_or_id>"
-allowed-tools: ["mcp__plugin_origin_origin__get_page", "mcp__plugin_origin_origin__search_pages", "Bash"]
+allowed-tools: ["mcp__plugin_origin_origin__get_page", "mcp__plugin_origin_origin__search_pages", "mcp__plugin_origin_origin__get_page_links", "Bash"]
 ---
 
 # /read
@@ -73,15 +73,26 @@ block from section 1.
 
 ## Output shape
 
-Always print exactly these five lines (no body):
+Always print exactly these six lines (no body):
 
 ```
 Title:    <title>
 Summary:  <one sentence>
 Sources:  <N> memories
 Domain:   <domain or (none)>
+Links:    <N inbound, M outbound (<K> broken)>
 Open:     ~/.origin/pages/<slug>.md
 ```
+
+The `Links:` line reports the wikilink graph centered on this page. Call
+`get_page_links(page_id="<id>")` right after `get_page` and count:
+
+- inbound = `len(inbound)`
+- outbound = `len(outbound)`
+- broken = outbound entries where `target_page_id` is null
+
+Omit the parenthetical when broken is zero. Drop the line entirely if
+inbound + outbound is zero.
 
 Don't paraphrase the title, don't trim the summary, don't decorate the
 preview. The block is one screen, predictable, easy to skim.

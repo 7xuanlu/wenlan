@@ -120,6 +120,20 @@ impl OriginClient {
         Self::parse_response(&bytes)
     }
 
+    /// PUT request with JSON body, deserialize JSON response.
+    pub async fn put<B: Serialize, R: DeserializeOwned>(
+        &self,
+        path: &str,
+        body: &B,
+    ) -> Result<R, OriginError> {
+        let url = format!("{}{}", self.base_url, path);
+        let resp = self
+            .send_with_retry(|| self.client.put(&url).json(body))
+            .await?;
+        let bytes = Self::read_body(resp).await?;
+        Self::parse_response(&bytes)
+    }
+
     /// Query the daemon's /api/health, compare versions, and return a
     /// human-readable warning if origin-mcp is older than the daemon's minor.
     /// Returns None if compatible OR if the daemon is unreachable / response
