@@ -8,8 +8,8 @@ use axum::{
 };
 use origin_core::sources::compute_effective_confidence;
 use origin_types::requests::{
-    ConfirmRequest, ExportPagesRequest, ListMemoriesRequest, SearchMemoryRequest,
-    StoreMemoryRequest,
+    ConfirmRequest, CreateConceptRequest, ExportPagesRequest, ListMemoriesRequest,
+    SearchMemoryRequest, StoreMemoryRequest,
 };
 use origin_types::responses::{
     ConfirmResponse, DeleteResponse, ListMemoriesResponse, SearchMemoryResponse,
@@ -2093,20 +2093,6 @@ pub async fn handle_create_page(
     }
 
     Ok(Json(serde_json::json!({ "id": id })))
-}
-
-#[derive(Debug, Deserialize)]
-pub struct CreateConceptRequest {
-    pub title: String,
-    pub content: String,
-    #[serde(default)]
-    pub summary: Option<String>,
-    #[serde(default)]
-    pub entity_id: Option<String>,
-    #[serde(default)]
-    pub domain: Option<String>,
-    #[serde(default)]
-    pub source_memory_ids: Vec<String>,
 }
 
 #[derive(Debug, Deserialize)]
