@@ -1,7 +1,7 @@
 {
   "name": "origin",
   "description": "Personal AI memory layer. Bundles the origin-mcp MCP server (auto-installed via npx) and adds 10 short skills for the user-facing verbs: /init, /help, /brief, /capture, /recall, /distill, /review, /forget, /handoff, /debrief. A SessionStart hook auto-detects daemon state. Talks to the local Origin daemon on 127.0.0.1:7878.",
-  "version": "0.5.0",
+  "version": "0.5.2",
   "author": {
     "name": "Qi-Xuan Lu",
     "url": "https://github.com/7xuanlu"
@@ -10,5 +10,11 @@
   "repository": "https://github.com/7xuanlu/origin",
   "license": "Apache-2.0",
   "category": "memory",
-  "keywords": ["memory", "knowledge", "context", "recall", "mcp"]
+  "keywords": [
+    "memory",
+    "knowledge",
+    "context",
+    "recall",
+    "mcp"
+  ]
 }

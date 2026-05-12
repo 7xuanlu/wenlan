@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.5.2](https://github.com/7xuanlu/origin/compare/v0.5.1...v0.5.2) (2026-05-12)
+
+
+### Bug Fixes
+
+* handoff skill — categorized confirm output + git retry for index.lock ([01f87da](https://github.com/7xuanlu/origin/commit/01f87da9a37cf289c4cc1659c39504dc68f620f4))
+* handoff skill — user-friendly labels mapped to daemon memory types ([9c14c2e](https://github.com/7xuanlu/origin/commit/9c14c2e957720293789246acfed4a4e594221ca2))
+* handoff skill uses daemon's 6 canonical memory types ([9c74d34](https://github.com/7xuanlu/origin/commit/9c74d34baa291b68c2e2fe63d3b9de3acbeb7ee3))
+* MCP wrappers for /api/pages/search + /api/pages/recent ([#77](https://github.com/7xuanlu/origin/issues/77)) ([6fab560](https://github.com/7xuanlu/origin/commit/6fab56012421a6f3b26b8acf601d009dfb53cdf6))
+* **pages:** llm-wiki foundations — user_edited, cluster cap, refresh route, wikilink graph, fs watcher ([#78](https://github.com/7xuanlu/origin/issues/78)) ([a611ae1](https://github.com/7xuanlu/origin/commit/a611ae1c21dad56caacdbd93f5ed7b87fae52b72))
+* plugin UX — ~/.origin consolidation, version pins, skill upgrades ([#73](https://github.com/7xuanlu/origin/issues/73)) ([4483dd6](https://github.com/7xuanlu/origin/commit/4483dd607ef1c8e3c9cdfd22a72e5ecc92ae606a))
+* PR [#73](https://github.com/7xuanlu/origin/issues/73) follow-ups — daemon version hook + Basic Memory skill phases ([#75](https://github.com/7xuanlu/origin/issues/75)) ([b27c0ef](https://github.com/7xuanlu/origin/commit/b27c0efee67d40c5b70403aa90bad92671c799b8))
+* reconcile README with PR [#72](https://github.com/7xuanlu/origin/issues/72) structure ([587b26c](https://github.com/7xuanlu/origin/commit/587b26cf2c532fd67898fec7b829148876634714))
+* remove duplicate Repo Map section from README ([f5b946e](https://github.com/7xuanlu/origin/commit/f5b946e41f33d225dede004213ef5f78cd96791e))
+* update release-please git-add paths for plugin/ subdir migration ([c711034](https://github.com/7xuanlu/origin/commit/c7110347ad46d6236703035c24575f5258c91799))
+
 ## [0.5.1](https://github.com/7xuanlu/origin/compare/v0.5.0...v0.5.1) (2026-05-10)
 
 
