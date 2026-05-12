@@ -1,12 +1,23 @@
-# CLAUDE.md
+# AGENTS.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+This file guides any coding agent working in this repository — Claude Code, Cursor, Codex, GitHub Copilot, Zed, Aider, and similar. It is the canonical agent-instruction file; vendor-specific files (such as `CLAUDE.md`) re-import from here so the rules stay in sync. The format follows the [agents.md](https://agents.md/) spec.
 
-This repo holds the **daemon** (`origin-server`), the **CLI** (`origin`), shared **wire types** (`origin-types`), and **business-logic core** (`origin-core`). The Tauri desktop app (`origin-app`) ships from a separate repo: [7xuanlu/origin-app](https://github.com/7xuanlu/origin-app). The MCP server (`origin-mcp`) is also a separate repo.
+This repo holds the **daemon** (`origin-server`), the **CLI** (`origin`), shared **wire types** (`origin-types`), the **business-logic core** (`origin-core`), and the **MCP server** (`origin-mcp`). All five ship from this monorepo. The Tauri desktop app (`origin-app`) ships from a separate repo: [7xuanlu/origin-app](https://github.com/7xuanlu/origin-app).
+
+## Design Philosophy
+
+- **Simple and elegant over clever** — prefer the straightforward solution; reads-like-easy-to-write usually is right.
+- **Use existing packages** — check for a well-maintained library before custom implementation. Don't reinvent the wheel.
+- **Minimize moving parts** — fewer abstractions, layers, indirections. Complexity must justify itself.
+- **Standard idioms first** — follow ecosystem conventions. Surprising code is usually wrong code.
+- **No speculative surface** — no features beyond what's asked, no abstractions for single-use code, no "flexibility" or "configurability" that wasn't requested, no error handling for impossible scenarios. (Karpathy's Simplicity First.)
+- **Surgical changes** — touch only what the task requires. No "while I'm here" refactors, no adjacent-code cleanups, no formatting fixes outside the diff. Match existing style. Remove only imports/vars your own change made unused; pre-existing dead code needs an explicit ask. (Karpathy's Surgical Changes.)
+- **Challenge assumptions** — don't follow user framing uncritically. If multiple interpretations exist, present them rather than pick silently. Push back when the approach is wrong. (Karpathy's Think Before Coding.)
+- **Verify before claiming done** — run tests, check the build, confirm behavior. Evidence before assertions. (Karpathy's Goal-Driven Execution.)
 
 ## Build & Dev Commands
 
-Origin is a Cargo workspace with 4 crates: `origin-types`, `origin-core`, `origin-server`, `origin` (CLI in `crates/origin-cli`).
+Origin is a Cargo workspace with 5 crates: `origin-types`, `origin-core`, `origin-server`, `origin` (CLI in `crates/origin-cli`), and `origin-mcp`.
 
 ```bash
 # Run the daemon directly:
@@ -144,7 +155,7 @@ cat .release-please-manifest.json
 
 **Never delete a release tag without also cleaning up the commit history.** If you need to undo a release version, you must rewrite the commit message that release-please created (`git filter-branch --msg-filter`), delete the tag, delete the GitHub Release, and rename the merged PR title via API. Otherwise release-please will keep bumping from the old version.
 
-**The `release.yml` workflow ships the daemon side.** It handles: origin-server (cargo build), origin-mcp (cargo install from separate repo), standalone binary uploads, and crates.io publishing for `origin-types`. It does NOT build a desktop bundle — origin-app builds its own DMG in its own repo.
+**The `release.yml` workflow ships the daemon side.** It handles: origin-server (cargo build), origin-mcp (cargo build, same workspace), standalone binary uploads, and crates.io publishing for `origin-types` + `origin-mcp`. It does NOT build a desktop bundle — origin-app builds its own DMG in its own repo.
 
 ### Branch protection
 
@@ -163,16 +174,17 @@ Origin is a **Personal Agent Memory Layer** — a local-first memory server on m
 
 ### Workspace Layout
 
-The repo is a Cargo workspace with 4 crates:
+The repo is a Cargo workspace with 5 crates:
 
 | Crate | Role | Key dependencies |
 |---|---|---|
-| `crates/origin-types` | Shared API boundary types (request/response, memory, entities). License: Apache-2.0 so `origin-mcp` (MIT) and other downstream consumers can use it without AGPL contamination. Lightweight: serde + serde_json + anyhow only. | serde |
+| `crates/origin-types` | Shared API boundary types (request/response, memory, entities). Lightweight: serde + serde_json + anyhow only. Consumed by `origin-mcp`, `origin-app` (separate repo, via crates.io), and any other downstream tool. | serde |
 | `crates/origin-core` | All business logic: DB, embeddings, LLM engine, search, classification, knowledge graph, refinery, pages, export, eval. **Must have NO axum or tauri dependencies.** | libSQL, FastEmbed, llama-cpp-2, hf-hub |
 | `crates/origin-server` | Headless HTTP daemon on `127.0.0.1:7878`. Depends on `origin-core`. Provides `install/uninstall/status` subcommands for launchd management. | axum, tower, clap |
 | `crates/origin-cli` | CLI binary `origin`. Talks to daemon HTTP via `origin-types`. Subcommands: status/search/recall/store/list/agents/install/setup. | reqwest, clap |
+| `crates/origin-mcp` | MCP server binary that bridges MCP clients (Claude Code, Cursor, Codex, Claude Desktop, etc.) to the daemon HTTP API. Stdio + streamable-HTTP transports via the `rmcp` crate. Ships as a standalone binary + npm package (`npx -y origin-mcp`). | rmcp, reqwest, schemars |
 
-The daemon (`origin-server`) is the single source of truth. External tools (the desktop app, `origin-mcp`, `origin` CLI, curl) all talk HTTP to the same daemon.
+The daemon (`origin-server`) is the single source of truth. External tools (the desktop app, MCP clients via `origin-mcp`, `origin` CLI, curl) all talk HTTP to the same daemon. `origin-mcp` source lives in this monorepo; at runtime it's a separate process the MCP client spawns.
 
 ### Stack
 
@@ -213,7 +225,7 @@ This keeps `origin-core` framework-agnostic and testable with `NoopEmitter` in u
 
 All data flows through the daemon's HTTP API. The desktop app, CLI, and MCP clients all hit it.
 
-- **HTTP API**: Axum on `127.0.0.1:7878`, served by `origin-server`. Used by the desktop app, the `origin-mcp` MCP server (separate repo), the `origin` CLI, and any external tool.
+- **HTTP API**: Axum on `127.0.0.1:7878`, served by `origin-server`. Used by the desktop app, the `origin-mcp` MCP server (same workspace, separate binary process), the `origin` CLI, and any external tool.
   - General: `/api/health`, `/api/status`, `/api/search`, `/api/context`, `/api/chat-context`, `/api/ping`
   - Ingest: `/api/ingest/text`, `/api/ingest/webpage`, `/api/ingest/memory`
   - Memory CRUD: `/api/memory/store`, `/api/memory/search`, `/api/memory/confirm/{id}`, `/api/memory/list`, `/api/memory/delete/{id}`
@@ -291,9 +303,10 @@ The `origin` binary — a thin reqwest-based CLI for the daemon's HTTP API. Subc
 
 ### Crate boundaries
 - **origin-core must have NO tauri or axum dependencies.** Verify with `grep -rn "use tauri\|use axum" crates/origin-core/src/` — expect zero hits. Any event emission goes through the `EventEmitter` trait.
-- **origin-types must be lightweight.** Only serde + serde_json + anyhow. No chrono, no tokio, no heavy deps. These types are shared with `origin-mcp` (MIT-licensed separate repo) and `origin-app` (AGPL-3.0 separate repo via crates.io), so adding heavy deps forces them downstream.
+- **origin-types must be lightweight.** Only serde + serde_json + anyhow. No chrono, no tokio, no heavy deps. These types are shared with `origin-mcp` (same workspace, Apache-2.0) and `origin-app` (AGPL-3.0 separate repo, consumes via crates.io), so adding heavy deps forces them downstream.
 - **Don't add business logic to origin-server.** Route handlers should call `origin-core` functions with state snapshots — the server's job is HTTP framing, not logic.
 - **Don't add new HTTP endpoints to the CLI.** Use existing daemon endpoints. If a CLI subcommand needs new data, add a daemon endpoint first.
+- **MCP wrappers in `origin-mcp` always typed-deserialize.** Every `_impl` method in `crates/origin-mcp/src/tools.rs` deserializes the daemon response into a typed wire struct from `origin-types` (e.g. `SearchPagesResponse { pages: Vec<Page> }`), never into `serde_json::Value`. Untyped responses silently emit whatever shape the daemon returns; typed deserialization fails loud on envelope-key drift. Mirror commit `4f545869` and PR #77.
 
 ### Async and locking
 - **Never hold a `tokio::sync::RwLock` read or write guard across `.await`.** Holding a read guard during an LLM call (which can take seconds) blocks all writers. Pattern: snapshot what you need from the guard into a scoped block that ends before the await, then call the async function with the cloned values. See `crates/origin-server/src/memory_routes.rs` `handle_store_memory` for an example of the post-ingest enrichment pattern.
@@ -323,6 +336,6 @@ The `origin` binary — a thin reqwest-based CLI for the daemon's HTTP API. Subc
 ### Misc
 - Log filter default is `warn` — add modules explicitly for `info` logs (e.g., `origin_core::db=info`, `origin_server=info`)
 - All local data stored in `~/Library/Application Support/origin/` — MemoryDB, config, activities, tags
-- Crate names: `origin-types`, `origin-core`, `origin-server`, `origin` (CLI). The desktop app crate `origin-app` lives in [7xuanlu/origin-app](https://github.com/7xuanlu/origin-app).
-- **Licenses**: `origin-types`, `origin-core`, `origin-server`, `origin` (CLI) are **Apache-2.0** (permissive — lets downstream tools like `origin-mcp` and `origin-app` consume them without contamination). The desktop app in `origin-app` is **AGPL-3.0-only**. The MCP server `origin-mcp` is **MIT** in its own repo.
-- `origin-mcp` lives in a separate repo (`~/Repos/origin-mcp`), is MIT-licensed, and talks to the daemon via HTTP. It depends on `origin-types` (Apache-2.0) without license issues.
+- Crate names: `origin-types`, `origin-core`, `origin-server`, `origin` (CLI), `origin-mcp` — all in this workspace. The desktop app crate `origin-app` lives in [7xuanlu/origin-app](https://github.com/7xuanlu/origin-app).
+- **Licenses**: all five workspace crates (`origin-types`, `origin-core`, `origin-server`, `origin` CLI, `origin-mcp`) are **Apache-2.0** via workspace inheritance. The desktop app in `origin-app` is **AGPL-3.0-only** (separate repo).
+- `origin-mcp` is in-tree at `crates/origin-mcp/` (merged from the old `7xuanlu/origin-mcp` repo on 2026-05-09 via `git subtree`). It talks to the daemon via HTTP at runtime and is published to npm as a standalone binary (`npx -y origin-mcp`).
