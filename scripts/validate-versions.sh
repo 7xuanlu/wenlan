@@ -8,7 +8,7 @@ TAG_VER="${RELEASE_TAG#v}"
 VTXT_VER=$(cat version.txt | tr -d '[:space:]')
 WS_VER=$(grep -E '^version = ' Cargo.toml | head -1 | sed -E 's/version = "([^"]+)".*/\1/')
 NPM_VER=$(jq -r .version crates/origin-mcp/npm/package.json)
-PLUGIN_VER=$(jq -r .version .claude-plugin/plugin.json)
+PLUGIN_VER=$(jq -r .version plugin/.claude-plugin/plugin.json)
 
 echo "Tag:         $TAG_VER"
 echo "version.txt: $VTXT_VER"
