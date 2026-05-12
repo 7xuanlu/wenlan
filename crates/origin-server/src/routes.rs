@@ -821,19 +821,37 @@ pub async fn handle_distill(
     // skill can tell the user to re-run instead of silently dropping rows.
     let stale_truncated = stale_pages_list.len() == 10;
 
+    // Walk orphan rows in case a page minted earlier in this pass (or by
+    // a concurrent create_page call) now matches an existing orphan label.
+    // The refinery's Emergence phase does the same on its tick; doing it
+    // inline here keeps the route's response (and the skill's view of the
+    // graph) consistent without waiting up to a poll interval.
+    if let Err(e) = db.resolve_orphan_page_links().await {
+        tracing::warn!("[distill] orphan link resolve failed: {e}");
+    }
+
     // Surface the orphan-wikilink feed so the skill can prompt the user to
     // distill a page on a topic that other pages already reach for. Cheap:
     // one GROUP BY against page_links, capped at 100. Threshold N=2 means
     // a single typo doesn't show up — needs at least two distinct pages
     // citing the same label before it counts as signal.
-    let orphan_topics_raw = db
-        .list_orphan_link_labels(2)
-        .await
-        .map_err(|e| ServerError::Internal(e.to_string()))?;
-    let orphan_topics: Vec<serde_json::Value> = orphan_topics_raw
-        .into_iter()
-        .map(|(label, count)| serde_json::json!({"label": label, "count": count}))
-        .collect();
+    //
+    // Only surface on unscoped passes. A scoped `/distill rust` user
+    // doesn't want generic topic suggestions from elsewhere in the graph;
+    // that would confuse them about what "scope" means. The unscoped
+    // global pass (`/distill deep` or bare `/distill` outside a repo) is
+    // the right place for this feed.
+    let orphan_topics: Vec<serde_json::Value> = if scoped {
+        Vec::new()
+    } else {
+        let raw = db
+            .list_orphan_link_labels(2)
+            .await
+            .map_err(|e| ServerError::Internal(e.to_string()))?;
+        raw.into_iter()
+            .map(|(label, count)| serde_json::json!({"label": label, "count": count}))
+            .collect()
+    };
 
     Ok(Json(serde_json::json!({
         "pages_created": result.created.len(),

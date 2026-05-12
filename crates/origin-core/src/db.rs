@@ -14414,6 +14414,13 @@ impl MemoryDB {
         // stale `user_edited = 0`. The CAS variant adds `AND stale_reason
         // IS NOT NULL` so the refinery can guard against the agent's PUT
         // landing mid-LLM.
+        // The CAS variant also guards `user_edited = 0` so a fs_edit or
+        // manual_edit that landed mid-LLM (after the refinery loaded the
+        // row but before this UPDATE) takes priority. Without the
+        // user_edited check the refinery would clobber an in-flight
+        // human write since stale_reason stays set: the watcher
+        // deliberately doesn't clear staleness on apply (refinery
+        // escalates to source_conflict on the next sweep instead).
         let sql = if require_stale {
             "UPDATE pages SET \
                content = ?1, \
@@ -14422,7 +14429,9 @@ impl MemoryDB {
                last_compiled = ?3, \
                last_modified = ?3, \
                user_edited = CASE WHEN ?4 IN ('manual_edit', 'fs_edit') THEN 1 ELSE user_edited END \
-             WHERE id = ?5 AND stale_reason IS NOT NULL"
+             WHERE id = ?5 \
+               AND stale_reason IS NOT NULL \
+               AND COALESCE(user_edited, 0) = 0"
         } else {
             "UPDATE pages SET \
                content = ?1, \

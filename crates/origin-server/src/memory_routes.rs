@@ -2145,6 +2145,16 @@ pub async fn handle_create_page(
         return Err(ServerError::IngestFailed(e.to_string()));
     }
 
+    // Back-resolve any orphan wikilinks that point at this title. Existing
+    // pages that wrote `[[New Title]]` before this page existed land as
+    // NULL targets in page_links; this walks them and flips matching rows
+    // so inbound links light up immediately. Cheap — one SELECT DISTINCT
+    // over a small table + per-label UPDATE. Failures are logged but the
+    // route still returns success: the next refinery tick covers it.
+    if let Err(e) = db.resolve_orphan_page_links().await {
+        tracing::warn!("[page] orphan link resolve failed after create {id}: {e}");
+    }
+
     Ok(Json(serde_json::json!({ "id": id })))
 }
 
