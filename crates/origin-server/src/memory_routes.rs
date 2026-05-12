@@ -3199,36 +3199,37 @@ pub async fn handle_get_snapshot_captures_with_content(
 pub async fn handle_get_page_links(
     State(state): State<Arc<RwLock<ServerState>>>,
     Path(id): Path<String>,
-) -> Result<Json<serde_json::Value>, ServerError> {
+) -> Result<Json<origin_types::responses::PageLinksResponse>, ServerError> {
     let db = {
         let s = state.read().await;
         s.db.clone().ok_or(ServerError::DbNotInitialized)?
     };
-    let outbound = db
+    let outbound_raw = db
         .get_page_outbound_links(&id)
         .await
         .map_err(|e| ServerError::Internal(e.to_string()))?;
-    let inbound = db
+    let inbound_raw = db
         .get_page_inbound_links(&id)
         .await
         .map_err(|e| ServerError::Internal(e.to_string()))?;
-    let outbound_json: Vec<serde_json::Value> = outbound
+    let outbound = outbound_raw
         .into_iter()
-        .map(|l| {
-            serde_json::json!({
-                "label": l.label,
-                "target_page_id": l.target_page_id,
-            })
+        .map(|l| origin_types::responses::PageLinkOutbound {
+            label: l.label,
+            target_page_id: l.target_page_id,
         })
         .collect();
-    let inbound_json: Vec<serde_json::Value> = inbound
+    let inbound = inbound_raw
         .into_iter()
-        .map(|(src, label)| serde_json::json!({"source_page_id": src, "label": label}))
+        .map(|(src, label)| origin_types::responses::PageLinkInbound {
+            source_page_id: src,
+            label,
+        })
         .collect();
-    Ok(Json(serde_json::json!({
-        "outbound": outbound_json,
-        "inbound": inbound_json,
-    })))
+    Ok(Json(origin_types::responses::PageLinksResponse {
+        outbound,
+        inbound,
+    }))
 }
 
 #[derive(Debug, Default, serde::Deserialize)]

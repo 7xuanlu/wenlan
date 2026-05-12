@@ -236,6 +236,29 @@ pub struct SearchPagesResponse {
     pub pages: Vec<Page>,
 }
 
+/// Wikilink graph centered on a single page. Outbound = labels parsed
+/// out of this page's body; `target_page_id` is `None` for orphans.
+/// Inbound = active pages whose body cites this title.
+#[derive(Debug, Serialize, Deserialize)]
+pub struct PageLinksResponse {
+    pub outbound: Vec<PageLinkOutbound>,
+    pub inbound: Vec<PageLinkInbound>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct PageLinkOutbound {
+    pub label: String,
+    /// `None` when the resolver couldn't find a matching active page —
+    /// surfaces in the orphan-by-count feed via /api/pages/orphan-links.
+    pub target_page_id: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct PageLinkInbound {
+    pub source_page_id: String,
+    pub label: String,
+}
+
 // ===== Import =====
 
 #[derive(Debug, Serialize, Deserialize)]

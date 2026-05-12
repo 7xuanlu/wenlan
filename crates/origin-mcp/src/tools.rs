@@ -786,7 +786,10 @@ impl OriginMcpServer {
             summary: params.summary,
         };
         let path = format!("/api/pages/{}", params.page_id);
-        let _: serde_json::Value = match self.client.put(&path, &req).await {
+        // Typed end-to-end: a wire-shape drift on the daemon side fails at
+        // deserialize instead of silently returning the no-op "Refreshed"
+        // line. Same discipline as PR #77's search_pages / list_pages_recent.
+        let _: origin_types::responses::SuccessResponse = match self.client.put(&path, &req).await {
             Ok(r) => r,
             Err(e) => return Ok(tool_error(e, "update_page")),
         };
@@ -832,11 +835,12 @@ impl OriginMcpServer {
 
     pub async fn get_page_links_impl(&self, page_id: &str) -> Result<CallToolResult, McpError> {
         let path = format!("/api/pages/{}/links", page_id);
-        let resp: serde_json::Value = match self.client.get(&path).await {
+        // Typed end-to-end via PageLinksResponse — keeps wire shape pinned.
+        let resp: origin_types::responses::PageLinksResponse = match self.client.get(&path).await {
             Ok(r) => r,
             Err(e) => return Ok(tool_error(e, "get_page_links")),
         };
-        let pretty = serde_json::to_string_pretty(&resp).unwrap_or_else(|_| resp.to_string());
+        let pretty = serde_json::to_string_pretty(&resp).unwrap_or_else(|_| String::new());
         Ok(CallToolResult::success(vec![Content::text(pretty)]))
     }
 
