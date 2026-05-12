@@ -1,6 +1,6 @@
-# Origin Claude Code Plugin
+# Origin
 
-Claude Code plugin for Origin. It wires Claude Code to `origin-mcp` and adds short workflow skills for setup, help, briefing, capture, recall, distillation, review, forget, handoff, and debrief.
+AI work memory for Claude Code. Origin carries sessions, decisions, lessons, and project context forward, then turns them into searchable memory and wiki pages.
 
 ## 30-Second Setup
 
