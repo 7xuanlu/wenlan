@@ -191,6 +191,20 @@ pub async fn create_relation(
         )));
     }
 
+    // Idempotency: if an identical (from, to, type) triple already exists,
+    // return its id immediately — no log, no refinery enqueue.
+    if let Ok(existing) = db
+        .list_relations_between(&req.from_entity, &req.to_entity)
+        .await
+    {
+        if let Some((existing_id, _)) = existing.into_iter().find(|(_, t)| t == rt) {
+            return Ok(WriteResult {
+                id: existing_id,
+                warnings: vec![],
+            });
+        }
+    }
+
     let id = db
         .create_relation(
             &req.from_entity,
@@ -618,6 +632,43 @@ mod tests {
         };
         let result = create_relation(&db, req, "test").await.unwrap();
         assert!(!result.id.is_empty());
+    }
+
+    #[tokio::test]
+    async fn create_relation_idempotent_no_double_log() {
+        let (db, _dir) = test_db().await;
+        let alice = db
+            .store_entity("Alice", "person", None, Some("test"), None)
+            .await
+            .unwrap();
+        let bob = db
+            .store_entity("Bob", "person", None, Some("test"), None)
+            .await
+            .unwrap();
+        let req1 = CreateRelationRequest {
+            from_entity: alice.clone(),
+            to_entity: bob.clone(),
+            relation_type: "knows".to_string(),
+            source_agent: Some("test".to_string()),
+        };
+        let first = create_relation(&db, req1, "agent-x").await.unwrap();
+        let req2 = CreateRelationRequest {
+            from_entity: alice,
+            to_entity: bob,
+            relation_type: "knows".to_string(),
+            source_agent: Some("test".to_string()),
+        };
+        let second = create_relation(&db, req2, "agent-x").await.unwrap();
+        // Idempotent re-post must resolve to the same relation id.
+        // The second call returns early before logging, so no duplicate activity row.
+        assert_eq!(
+            first.id, second.id,
+            "should resolve to existing relation id"
+        );
+        assert!(
+            second.warnings.is_empty(),
+            "idempotent resolve should have no warnings"
+        );
     }
 
     #[tokio::test]

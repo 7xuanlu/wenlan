@@ -80,50 +80,6 @@ pub async fn verify_page(
     })
 }
 
-/// Check that a relation's endpoints exist and type is valid snake_case.
-pub async fn verify_relation(
-    db: &MemoryDB,
-    from_entity: &str,
-    to_entity: &str,
-    relation_type: &str,
-) -> Result<bool, OriginError> {
-    let conn = db.conn.lock().await;
-
-    // Helper: count entities by id
-    async fn entity_exists(
-        conn: &tokio::sync::MutexGuard<'_, libsql::Connection>,
-        entity_id: &str,
-    ) -> Result<bool, OriginError> {
-        let mut rows = conn
-            .query(
-                "SELECT COUNT(*) FROM entities WHERE id = ?1",
-                libsql::params![entity_id],
-            )
-            .await
-            .map_err(|e| OriginError::VectorDb(e.to_string()))?;
-        let count: i64 = match rows
-            .next()
-            .await
-            .map_err(|e| OriginError::VectorDb(e.to_string()))?
-        {
-            Some(row) => row.get::<i64>(0).unwrap_or(0),
-            None => 0,
-        };
-        Ok(count > 0)
-    }
-
-    if !entity_exists(&conn, from_entity).await? || !entity_exists(&conn, to_entity).await? {
-        return Ok(false);
-    }
-
-    // Check relation type is valid snake_case: non-empty, lowercase + digits + underscores
-    let valid_format = !relation_type.is_empty()
-        && relation_type
-            .chars()
-            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_');
-    Ok(valid_format)
-}
-
 /// Report of a rethink pass.
 #[derive(Debug, Default, serde::Serialize)]
 pub struct RethinkReport {
@@ -464,48 +420,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_verify_relation_valid_type() {
-        let (db, _dir) = test_db().await;
-
-        let e1 = db
-            .store_entity("Alice", "person", None, Some("test"), None)
-            .await
-            .unwrap();
-        let e2 = db
-            .store_entity("ProjectX", "project", None, Some("test"), None)
-            .await
-            .unwrap();
-
-        // Valid type
-        assert!(verify_relation(&db, &e1, &e2, "works_on").await.unwrap());
-        // Valid new type (snake_case)
-        assert!(verify_relation(&db, &e1, &e2, "custom_type").await.unwrap());
-        // Invalid: endpoints don't exist
-        assert!(!verify_relation(&db, "nonexistent", &e2, "works_on")
-            .await
-            .unwrap());
-    }
-
-    #[tokio::test]
-    async fn test_verify_relation_invalid_format() {
-        let (db, _dir) = test_db().await;
-
-        let e1 = db
-            .store_entity("Alice", "person", None, Some("test"), None)
-            .await
-            .unwrap();
-        let e2 = db
-            .store_entity("Bob", "person", None, Some("test"), None)
-            .await
-            .unwrap();
-
-        // Invalid: not snake_case (uppercase)
-        assert!(!verify_relation(&db, &e1, &e2, "WorksOn").await.unwrap());
-        // Invalid: contains spaces
-        assert!(!verify_relation(&db, &e1, &e2, "works on").await.unwrap());
-    }
-
-    #[tokio::test]
     async fn test_verify_entity_warns_on_missing() {
         let (db, _dir) = test_db().await;
 
@@ -699,13 +613,7 @@ mod tests {
         let vr = verify_entity(&db, &id1, "Alice Chen").await.unwrap();
         assert_eq!(vr.entity_self_retrieval_passed, Some(true));
 
-        // 6. Relation verification
-        assert!(verify_relation(&db, &id1, &proj, "works_on").await.unwrap());
-        assert!(!verify_relation(&db, "nonexistent", &proj, "works_on")
-            .await
-            .unwrap());
-
-        // 7. Rethink completes successfully
+        // 6. Rethink completes successfully
         let config = RefineryConfig::default();
         let report = run_rethink(&db, None, &config).await.unwrap();
         // Nothing to normalize (already canonical); no duplicates;
@@ -893,40 +801,6 @@ mod tests {
                 "surviving relation should have canonical type 'works_on', got '{rel_type}'"
             );
         }
-    }
-
-    // ── Fix 4: verify_relation accepts digits and rejects empty ───────────
-
-    #[tokio::test]
-    async fn test_verify_relation_digits_and_empty() {
-        let (db, _dir) = test_db().await;
-
-        let e1 = db
-            .store_entity("NodeOne", "person", None, Some("test"), None)
-            .await
-            .unwrap();
-        let e2 = db
-            .store_entity("NodeTwo", "project", None, Some("test"), None)
-            .await
-            .unwrap();
-
-        // Digits in snake_case should be allowed
-        assert!(
-            verify_relation(&db, &e1, &e2, "part_of_v2").await.unwrap(),
-            "part_of_v2 should be valid (digits allowed in snake_case)"
-        );
-
-        // Empty relation type should be rejected
-        assert!(
-            !verify_relation(&db, &e1, &e2, "").await.unwrap(),
-            "empty relation type should be invalid"
-        );
-
-        // Normal snake_case should work
-        assert!(
-            verify_relation(&db, &e1, &e2, "works_on").await.unwrap(),
-            "works_on should be valid (standard snake_case)"
-        );
     }
 
     // ── hallucination_guard ──────────────────────────────────────────────
