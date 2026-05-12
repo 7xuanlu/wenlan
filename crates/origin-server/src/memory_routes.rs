@@ -8,12 +8,13 @@ use axum::{
 };
 use origin_core::sources::compute_effective_confidence;
 use origin_types::requests::{
-    ConfirmRequest, CreateConceptRequest, CreateEntityRequest, CreateRelationRequest,
-    ExportPagesRequest, ListMemoriesRequest, SearchMemoryRequest, StoreMemoryRequest,
+    AddObservationRequest, ConfirmRequest, CreateConceptRequest, CreateEntityRequest,
+    CreateRelationRequest, ExportPagesRequest, ListMemoriesRequest, SearchMemoryRequest,
+    StoreMemoryRequest,
 };
 use origin_types::responses::{
-    ConfirmResponse, CreateEntityResponse, CreateRelationResponse, DeleteResponse,
-    ListMemoriesResponse, SearchMemoryResponse, StoreMemoryResponse,
+    AddObservationResponse, ConfirmResponse, CreateEntityResponse, CreateRelationResponse,
+    DeleteResponse, ListMemoriesResponse, SearchMemoryResponse, StoreMemoryResponse,
 };
 use origin_types::sources::{stability_tier, MemoryType, RawDocument, StabilityTier};
 use serde::{Deserialize, Serialize};
@@ -84,24 +85,9 @@ pub struct UpdateAgentRequest {
 // ===== Knowledge Graph Types =====
 
 #[derive(Debug, Deserialize)]
-pub struct AddObservationRequest {
-    pub entity_id: String,
-    pub content: String,
-    #[serde(default)]
-    pub source_agent: Option<String>,
-    #[serde(default)]
-    pub confidence: Option<f32>,
-}
-
-#[derive(Debug, Deserialize)]
 pub struct LinkEntityRequest {
     pub source_id: String,
     pub entity_id: String,
-}
-
-#[derive(Debug, Serialize)]
-pub struct AddObservationResponse {
-    pub id: String,
 }
 
 // ===== Route Handlers =====
@@ -1171,20 +1157,21 @@ pub async fn handle_create_relation(
 
 pub async fn handle_add_observation(
     State(state): State<Arc<RwLock<ServerState>>>,
+    headers: HeaderMap,
     Json(req): Json<AddObservationRequest>,
 ) -> Result<Json<AddObservationResponse>, ServerError> {
-    let s = state.read().await;
-    let db = s.db.as_ref().ok_or(ServerError::DbNotInitialized)?;
-    let id = db
-        .add_observation(
-            &req.entity_id,
-            &req.content,
-            req.source_agent.as_deref(),
-            req.confidence,
-        )
-        .await
-        .map_err(|e| ServerError::IngestFailed(e.to_string()))?;
-    Ok(Json(AddObservationResponse { id }))
+    let agent = extract_agent_name(&headers, req.source_agent.as_deref());
+    let db = {
+        let s = state.read().await;
+        s.db.as_ref()
+            .cloned()
+            .ok_or(ServerError::DbNotInitialized)?
+    };
+    let result = origin_core::post_write::add_observation(&db, req, &agent).await?;
+    Ok(Json(AddObservationResponse {
+        id: result.id,
+        warnings: result.warnings,
+    }))
 }
 
 pub async fn handle_link_entity(
