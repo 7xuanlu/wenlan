@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: AGPL-3.0-only
+// SPDX-License-Identifier: Apache-2.0
 //! Memory classification via the on-device LLM engine.
 //!
 //! Wraps [`crate::engine::LlmEngine`] with classification-specific prompts and

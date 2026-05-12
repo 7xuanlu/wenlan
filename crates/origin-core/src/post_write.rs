@@ -211,9 +211,9 @@ pub async fn create_relation(
             &req.to_entity,
             rt,
             req.source_agent.as_deref(),
-            None,
-            None,
-            None,
+            req.confidence,
+            req.explanation.as_deref(),
+            req.source_memory_id.as_deref(),
         )
         .await?;
 
@@ -583,6 +583,9 @@ mod tests {
             to_entity: "missing-2".to_string(),
             relation_type: "knows".to_string(),
             source_agent: Some("test".to_string()),
+            confidence: None,
+            explanation: None,
+            source_memory_id: None,
         };
         assert!(matches!(
             create_relation(&db, req, "test").await,
@@ -606,6 +609,9 @@ mod tests {
             to_entity: bob,
             relation_type: "Knows!".to_string(),
             source_agent: Some("test".to_string()),
+            confidence: None,
+            explanation: None,
+            source_memory_id: None,
         };
         assert!(matches!(
             create_relation(&db, req, "test").await,
@@ -629,6 +635,9 @@ mod tests {
             to_entity: bob,
             relation_type: "knows".to_string(),
             source_agent: Some("test".to_string()),
+            confidence: None,
+            explanation: None,
+            source_memory_id: None,
         };
         let result = create_relation(&db, req, "test").await.unwrap();
         assert!(!result.id.is_empty());
@@ -650,6 +659,9 @@ mod tests {
             to_entity: bob.clone(),
             relation_type: "knows".to_string(),
             source_agent: Some("test".to_string()),
+            confidence: None,
+            explanation: None,
+            source_memory_id: None,
         };
         let first = create_relation(&db, req1, "agent-x").await.unwrap();
         let req2 = CreateRelationRequest {
@@ -657,6 +669,9 @@ mod tests {
             to_entity: bob,
             relation_type: "knows".to_string(),
             source_agent: Some("test".to_string()),
+            confidence: None,
+            explanation: None,
+            source_memory_id: None,
         };
         let second = create_relation(&db, req2, "agent-x").await.unwrap();
         // Idempotent re-post must resolve to the same relation id.

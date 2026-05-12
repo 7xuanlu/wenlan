@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: AGPL-3.0-only
+// SPDX-License-Identifier: Apache-2.0
 use crate::error::OriginError;
 use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};

@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: AGPL-3.0-only
+// SPDX-License-Identifier: Apache-2.0
 //! Structured field comparison for semantic contradiction pre-filtering.
 //!
 //! These functions are cheap (no LLM, no embedding) and serve as a

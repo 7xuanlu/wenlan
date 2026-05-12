@@ -739,6 +739,9 @@ impl OriginMcpServer {
             to_entity: params.to_entity,
             relation_type: params.relation_type,
             source_agent,
+            confidence: None,
+            explanation: None,
+            source_memory_id: None,
         };
         let resp: CreateRelationResponse =
             match self.client.post("/api/memory/relations", &req).await {
@@ -2570,6 +2573,9 @@ mod tests {
             to_entity: params.to_entity,
             relation_type: params.relation_type,
             source_agent,
+            confidence: None,
+            explanation: None,
+            source_memory_id: None,
         };
         let json = serde_json::to_value(&req).unwrap();
         assert_eq!(json["from_entity"], "Alice");

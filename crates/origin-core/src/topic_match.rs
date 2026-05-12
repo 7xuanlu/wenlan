@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: AGPL-3.0-only
+// SPDX-License-Identifier: Apache-2.0
 //! Topic-matching: identifies whether an incoming memory is an update to an
 //! existing topic, enabling in-place upsert instead of creating duplicates.
 

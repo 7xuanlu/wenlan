@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: AGPL-3.0-only
+// SPDX-License-Identifier: Apache-2.0
 //! Memory eval system — quality measurement and feedback capture.
 
 pub mod anthropic;

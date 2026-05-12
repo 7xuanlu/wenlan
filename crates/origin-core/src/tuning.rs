@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: AGPL-3.0-only
+// SPDX-License-Identifier: Apache-2.0
 //! TuningConfig — intelligence-affecting numeric parameters loaded from TOML.
 //! Serde defaults match the current hardcoded values exactly.
 

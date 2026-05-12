@@ -86,6 +86,9 @@ pub async fn extract_single_memory_entities(
                     to_entity: to,
                     relation_type: rel.relation_type.clone(),
                     source_agent: Some("post_ingest".to_string()),
+                    confidence: rel.confidence,
+                    explanation: rel.explanation.clone(),
+                    source_memory_id: Some(source_id.to_string()),
                 };
                 if let Err(e) = crate::post_write::create_relation(db, req, "post_ingest").await {
                     log::warn!("[post_ingest] create_relation failed: {e}");

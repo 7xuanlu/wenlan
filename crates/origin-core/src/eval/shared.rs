@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: AGPL-3.0-only
+// SPDX-License-Identifier: Apache-2.0
 //! Shared eval infrastructure: embedder, tokenizer, entity extraction helper.
 
 use crate::db::MemoryDB;

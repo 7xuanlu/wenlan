@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: AGPL-3.0-only
+// SPDX-License-Identifier: Apache-2.0
 //! Pipeline evaluation: compare Flat vs Enriched vs Distilled conditions.
 
 use super::retrieval::SearchStrategy;

@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: AGPL-3.0-only
+// SPDX-License-Identifier: Apache-2.0
 use super::traits::{floor_char_boundary, ChunkContext, ChunkInfo, ChunkingStrategy};
 
 /// Fixed-size chunking strategy with intelligent split points

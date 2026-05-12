@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: AGPL-3.0-only
+// SPDX-License-Identifier: Apache-2.0
 //! Knowledge-graph extraction via the on-device LLM engine.
 //!
 //! Extracts entities, observations, and relations from batches of memory

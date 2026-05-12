@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: AGPL-3.0-only
+// SPDX-License-Identifier: Apache-2.0
 //! Generic on-device LLM inference engine.
 //!
 //! Wraps `llama-cpp-2` with Metal GPU offload and provides a reusable

@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: AGPL-3.0-only
+// SPDX-License-Identifier: Apache-2.0
 //! Knowledge writer — exports pages as `.md` files with state tracking.
 
 use crate::error::OriginError;

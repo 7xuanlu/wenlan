@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: AGPL-3.0-only
+// SPDX-License-Identifier: Apache-2.0
 //! Knowledge compilation: pages are synthesized wiki entries distilled from memory clusters.
 
 // Re-export the wire type from origin-types so existing consumers keep working.
