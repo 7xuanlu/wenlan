@@ -56,6 +56,14 @@ pub struct SearchResult {
     /// Raw RRF score before normalization -- for absolute relevance gating.
     #[serde(default)]
     pub raw_score: f32,
+    #[serde(default)]
+    pub version: i64,
+    #[serde(default)]
+    pub pending_revision: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub merged_from: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_delta_summary: Option<String>,
 }
 
 /// A full memory item with all metadata.
@@ -95,6 +103,10 @@ pub struct MemoryItem {
     pub version: i64,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub changelog: Option<String>,
+    #[serde(default)]
+    pub pending_revision: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub merged_from: Option<Vec<String>>,
 }
 
 fn default_version() -> i64 {

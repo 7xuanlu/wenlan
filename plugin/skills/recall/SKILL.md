@@ -63,6 +63,33 @@ keywords.
 
 Show the user the top 3-5 reranked hits. Surface the rest only if asked.
 
+### Phase 4 — render revision context (per result)
+
+Each memory may carry revision fields: `version`, `pending_revision`,
+`merged_from`, `last_delta_summary`. Most memories are fresh (v1, none
+set) — render nothing extra for those. Only add a tag line when
+something meaningful is present.
+
+**Condition:** emit the tag line when any of these holds:
+- `version > 1`
+- `merged_from` is non-empty
+- `pending_revision == true`
+
+**Format** — one compact line above the memory body:
+
+```
+<id>  v<N> (merged <K> memories)         ← merged_from has K entries
+<id>  v<N>, pending revision against <id> ← pending_revision true
+<id>  v<N> — <last_delta_summary>         ← version > 1, delta populated
+<id>  v<N>                                ← version > 1, no delta
+```
+
+Rules:
+- Merged takes precedence over pending_revision in the label.
+- Omit `— <delta>` when `last_delta_summary` is empty or null.
+- Skip the tag line entirely when version == 1 (or null) and no other
+  flag is set. Preserves current output for fresh memories.
+
 ## When to use
 
 - "What did I say about X?"

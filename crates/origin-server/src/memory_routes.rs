@@ -3217,6 +3217,10 @@ pub async fn handle_refresh_page(
         stale_reason: None,
         user_edited: existing.user_edited,
         relevance_score: 0.0,
+        last_edited_by: None,
+        last_edited_at: None,
+        last_delta_summary: None,
+        changelog: None,
     };
 
     // 1. md-first
@@ -3683,4 +3687,61 @@ mod dismiss_contradiction_tests {
             "memory should be cleared from needs-review after dismiss"
         );
     }
+}
+
+// ===== Revision history endpoints =====
+
+/// GET /api/memory/{id}/revisions
+///
+/// Walk the supersede chain for a memory and return all revision entries.
+pub async fn handle_get_memory_revisions(
+    State(state): State<Arc<RwLock<ServerState>>>,
+    Path(id): Path<String>,
+) -> Result<Json<origin_types::responses::ListMemoryRevisionsResponse>, ServerError> {
+    let db = {
+        let s = state.read().await;
+        s.db.clone().ok_or(ServerError::DbNotInitialized)?
+    };
+    let entries = db
+        .walk_supersede_chain(&id)
+        .await
+        .map_err(|e| ServerError::Internal(e.to_string()))?;
+    let chain_depth = entries.last().map(|e| e.depth).unwrap_or(0);
+    Ok(Json(origin_types::responses::ListMemoryRevisionsResponse {
+        current_source_id: id,
+        chain_depth,
+        entries,
+    }))
+}
+
+/// GET /api/pages/{id}/revisions
+///
+/// Return the changelog entries for a page, plus envelope metadata.
+pub async fn handle_get_page_revisions(
+    State(state): State<Arc<RwLock<ServerState>>>,
+    Path(id): Path<String>,
+) -> Result<Json<origin_types::responses::ListPageRevisionsResponse>, ServerError> {
+    let db = {
+        let s = state.read().await;
+        s.db.clone().ok_or(ServerError::DbNotInitialized)?
+    };
+    let page = db
+        .get_page(&id)
+        .await
+        .map_err(|e| ServerError::Internal(e.to_string()))?
+        .ok_or_else(|| ServerError::NotFound(format!("page {id} not found")))?;
+    let changelog_str = db
+        .get_page_changelog(&id)
+        .await
+        .map_err(|e| ServerError::Internal(e.to_string()))?;
+    let entries: Vec<origin_types::responses::PageChangelogEntry> =
+        serde_json::from_str(&changelog_str)
+            .map_err(|e| ServerError::Internal(format!("parse changelog: {e}")))?;
+    Ok(Json(origin_types::responses::ListPageRevisionsResponse {
+        page_id: id,
+        current_version: page.version,
+        user_edited: page.user_edited,
+        stale_reason: page.stale_reason.clone(),
+        entries,
+    }))
 }

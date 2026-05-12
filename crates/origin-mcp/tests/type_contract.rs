@@ -89,6 +89,10 @@ fn sample_search_result() -> SearchResult {
         retrieval_cue: None,
         source_text: None,
         raw_score: 0.0,
+        version: 0,
+        pending_revision: false,
+        merged_from: None,
+        last_delta_summary: None,
     }
 }
 

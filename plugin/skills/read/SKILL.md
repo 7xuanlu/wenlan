@@ -73,19 +73,38 @@ block from section 1.
 
 ## Output shape
 
-Always print exactly these six lines (no body):
+Always print exactly these lines (no body):
 
 ```
 Title:    <title>
+Version:  v<N> — <last_edited_by> <relative_time> (<last_delta_summary>)
 Summary:  <one sentence>
 Sources:  <N> memories
 Domain:   <domain or (none)>
 Links:    <N inbound, M outbound (<K> broken)>
 Open:     ~/.origin/pages/<slug>.md
+⚠ Stale: <stale_reason> — run /distill to refresh
 ```
 
-The `Links:` line reports the wikilink graph centered on this page. Call
-`get_page_links(page_id="<id>")` right after `get_page` and count:
+**Version line rules:**
+
+- Always show `v<N>`. When `version` is null or missing, omit the line.
+- Append ` — <last_edited_by>` when populated (e.g. `re_distill`, `user`, `agent`).
+- Append relative time when `last_edited_at` is set (e.g. `2h ago`, `3d ago`).
+- Append `(<last_delta_summary>)` when the field is non-empty.
+- Examples:
+  - `v1 — synthesized 4h ago`
+  - `v4 — re_distill 2h ago (+mem_xyz, +250 chars)`
+  - `v3 — user 1d ago`
+
+**Stale warning rule:**
+
+- Emit the `⚠ Stale:` line only when `stale_reason` is non-null/non-empty.
+- Render `stale_reason` verbatim (daemon sets it; values like
+  `source_updated`, `new_memories` are human-readable enough).
+
+**Links line rules** (unchanged): Call `get_page_links(page_id="<id>")` right after
+`get_page` and count:
 
 - inbound = `len(inbound)`
 - outbound = `len(outbound)`

@@ -121,6 +121,10 @@ mod tests {
             stale_reason: None,
             user_edited: false,
             relevance_score: 0.0,
+            last_edited_by: None,
+            last_edited_at: None,
+            last_delta_summary: None,
+            changelog: None,
         }
     }
 

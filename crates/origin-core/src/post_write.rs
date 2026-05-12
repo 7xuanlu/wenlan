@@ -411,6 +411,10 @@ pub async fn create_page(
         stale_reason: None,
         user_edited: false,
         relevance_score: 0.0,
+        last_edited_by: None,
+        last_edited_at: None,
+        last_delta_summary: None,
+        changelog: None,
     };
 
     // md-first write (only if a knowledge_path was provided)
@@ -1250,6 +1254,74 @@ mod tests {
         assert!(
             warning.contains("v1") && warning.contains("v2"),
             "warning should reference version transition, got: {warning}"
+        );
+    }
+
+    #[tokio::test]
+    async fn update_page_idempotent_warnings_shape() {
+        let (db, _dir) = test_db().await;
+        let mem_id = "mem-idem-shape";
+        let content_v1 = "Rust is a systems language with ownership model";
+        seed_memory(&db, mem_id, content_v1).await;
+        let page_id = seed_page(&db, mem_id, content_v1).await;
+
+        // First call: v1 → v2
+        let r1 = update_page(
+            &db,
+            &page_id,
+            UpdatePageRequest {
+                content: "Rust is a systems language with ownership model and borrow checker"
+                    .to_string(),
+                source_memory_ids: vec![mem_id.to_string()],
+            },
+            "re_distill",
+            false,
+            None,
+        )
+        .await
+        .unwrap();
+        assert!(r1.wrote, "first call should write");
+        assert_eq!(
+            r1.warnings.len(),
+            1,
+            "first call should produce exactly one warning"
+        );
+        let w1 = &r1.warnings[0];
+        assert!(w1.starts_with('v'), "warning must start with 'v': {w1}");
+        assert!(w1.contains('→'), "warning must contain '→': {w1}");
+        assert!(
+            w1.contains("v1") && w1.contains("v2"),
+            "first warning should show v1 → v2: {w1}"
+        );
+
+        // Second call with different content: v2 → v3
+        let r2 = update_page(
+            &db,
+            &page_id,
+            UpdatePageRequest {
+                content:
+                    "Rust is a systems language with ownership model, borrow checker, and lifetimes"
+                        .to_string(),
+                source_memory_ids: vec![mem_id.to_string()],
+            },
+            "re_distill",
+            false,
+            None,
+        )
+        .await
+        .unwrap();
+        assert!(r2.wrote, "second call should write");
+        assert_eq!(
+            r2.warnings.len(),
+            1,
+            "second call should produce exactly one warning"
+        );
+        let w2 = &r2.warnings[0];
+        assert!(w2.starts_with('v'), "warning must start with 'v': {w2}");
+        assert!(w2.contains('→'), "warning must contain '→': {w2}");
+        assert!(
+            w2.contains("v2") && w2.contains("v3"),
+            "second warning should show v2 → v3: {w2}"
         );
     }
 }

@@ -235,6 +235,14 @@ pub fn build_router(state: SharedState) -> Router {
             "/api/pages/{id}/archive",
             post(memory_routes::handle_archive_page),
         )
+        .route(
+            "/api/pages/{id}/revisions",
+            get(memory_routes::handle_get_page_revisions),
+        )
+        .route(
+            "/api/memory/{id}/revisions",
+            get(memory_routes::handle_get_memory_revisions),
+        )
         // Rejections
         .route(
             "/api/memory/rejections",

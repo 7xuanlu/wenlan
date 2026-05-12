@@ -477,6 +477,59 @@ pub struct KnowledgeCountResponse {
     pub count: u64,
 }
 
+// ===== Revision history =====
+
+/// One entry in a memory's supersede chain, returned by `/api/memory/{id}/revisions`.
+///
+/// `depth = 0` is the current (most-recent) memory; higher depths are older
+/// predecessors. `delta_summary` is `None` for the deepest entry (no predecessor
+/// to diff against) and computed heuristically for all shallower entries.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MemoryRevisionEntry {
+    pub source_id: String,
+    pub depth: i64,
+    pub title: String,
+    pub content_preview: String,
+    pub last_modified: i64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source_agent: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub supersede_mode: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub delta_summary: Option<String>,
+}
+
+/// Response envelope for `/api/memory/{id}/revisions`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ListMemoryRevisionsResponse {
+    pub current_source_id: String,
+    pub chain_depth: i64,
+    pub entries: Vec<MemoryRevisionEntry>,
+}
+
+/// One entry in a page's version changelog, returned by `/api/pages/{id}/revisions`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PageChangelogEntry {
+    pub version: i64,
+    pub at: i64,
+    pub edited_by: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub delta_summary: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub incoming_source_ids: Option<Vec<String>>,
+}
+
+/// Response envelope for `/api/pages/{id}/revisions`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ListPageRevisionsResponse {
+    pub page_id: String,
+    pub current_version: i64,
+    pub user_edited: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stale_reason: Option<String>,
+    pub entries: Vec<PageChangelogEntry>,
+}
+
 // ===== Sources =====
 
 #[doc(hidden)]
