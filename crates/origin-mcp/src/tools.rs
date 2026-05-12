@@ -722,10 +722,11 @@ impl OriginMcpServer {
             Ok(r) => r,
             Err(e) => return Ok(tool_error(e, "create_entity")),
         };
-        Ok(CallToolResult::success(vec![Content::text(format!(
-            "Created entity {}",
-            resp.id
-        ))]))
+        let mut text = format!("Created entity {}", resp.id);
+        for w in &resp.warnings {
+            text.push_str(&format!("\nwarning: {w}"));
+        }
+        Ok(CallToolResult::success(vec![Content::text(text)]))
     }
 
     pub async fn create_relation_impl(
@@ -744,10 +745,11 @@ impl OriginMcpServer {
                 Ok(r) => r,
                 Err(e) => return Ok(tool_error(e, "create_relation")),
             };
-        Ok(CallToolResult::success(vec![Content::text(format!(
-            "Created relation {}",
-            resp.id
-        ))]))
+        let mut text = format!("Created relation {}", resp.id);
+        for w in &resp.warnings {
+            text.push_str(&format!("\nwarning: {w}"));
+        }
+        Ok(CallToolResult::success(vec![Content::text(text)]))
     }
 
     pub async fn create_page_impl(
@@ -762,18 +764,15 @@ impl OriginMcpServer {
             domain: params.domain,
             source_memory_ids: params.source_memory_ids,
         };
-        let resp: serde_json::Value = match self.client.post("/api/pages", &req).await {
+        let resp: CreatePageResponse = match self.client.post("/api/pages", &req).await {
             Ok(r) => r,
             Err(e) => return Ok(tool_error(e, "create_page")),
         };
-        let id = resp
-            .get("id")
-            .and_then(|v| v.as_str())
-            .unwrap_or("(unknown)");
-        Ok(CallToolResult::success(vec![Content::text(format!(
-            "Created page {}",
-            id
-        ))]))
+        let mut text = format!("Created page {}", resp.id);
+        for w in &resp.warnings {
+            text.push_str(&format!("\nwarning: {w}"));
+        }
+        Ok(CallToolResult::success(vec![Content::text(text)]))
     }
 
     pub async fn update_page_impl(
