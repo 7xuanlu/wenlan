@@ -56,7 +56,7 @@ pub async fn create_entity(
     let name_lower = name.to_lowercase();
 
     // Step 1: Alias lookup
-    if let Ok(Some(id)) = db.resolve_entity_by_alias(&name_lower).await {
+    if let Some(id) = db.resolve_entity_by_alias(&name_lower).await? {
         return Ok(WriteResult {
             id,
             warnings: vec![],
@@ -64,28 +64,26 @@ pub async fn create_entity(
     }
 
     // Step 2: Exact name search
-    if let Ok(results) = db.search_entities_by_name(name).await {
-        if let Some(existing) = results.first() {
-            let _ = db.add_entity_alias(&name_lower, &existing.id, "auto").await;
-            return Ok(WriteResult {
-                id: existing.id.clone(),
-                warnings: vec![],
-            });
-        }
+    let name_results = db.search_entities_by_name(name).await?;
+    if let Some(existing) = name_results.first() {
+        let _ = db.add_entity_alias(&name_lower, &existing.id, "auto").await;
+        return Ok(WriteResult {
+            id: existing.id.clone(),
+            warnings: vec![],
+        });
     }
 
     // Step 3: Vector similarity (distance < 0.1 => sim > 0.9)
-    if let Ok(results) = db.search_entities_by_vector(name, 1).await {
-        if let Some(result) = results.first() {
-            if result.distance < 0.1 {
-                let _ = db
-                    .add_entity_alias(&name_lower, &result.entity.id, "auto")
-                    .await;
-                return Ok(WriteResult {
-                    id: result.entity.id.clone(),
-                    warnings: vec![],
-                });
-            }
+    let vec_results = db.search_entities_by_vector(name, 1).await?;
+    if let Some(result) = vec_results.first() {
+        if result.distance < 0.1 {
+            let _ = db
+                .add_entity_alias(&name_lower, &result.entity.id, "auto")
+                .await;
+            return Ok(WriteResult {
+                id: result.entity.id.clone(),
+                warnings: vec![],
+            });
         }
     }
 
@@ -168,15 +166,16 @@ mod tests {
     use crate::events::NoopEmitter;
     use std::sync::Arc;
 
-    async fn test_db() -> MemoryDB {
+    async fn test_db() -> (MemoryDB, tempfile::TempDir) {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("test.db");
-        MemoryDB::new(&path, Arc::new(NoopEmitter)).await.unwrap()
+        let db = MemoryDB::new(&path, Arc::new(NoopEmitter)).await.unwrap();
+        (db, dir)
     }
 
     #[tokio::test]
     async fn create_entity_rejects_empty_name() {
-        let db = test_db().await;
+        let (db, _dir) = test_db().await;
         let req = CreateEntityRequest {
             name: "".to_string(),
             entity_type: "person".to_string(),
@@ -192,7 +191,7 @@ mod tests {
 
     #[tokio::test]
     async fn create_entity_rejects_empty_type() {
-        let db = test_db().await;
+        let (db, _dir) = test_db().await;
         let req = CreateEntityRequest {
             name: "Alice".to_string(),
             entity_type: "".to_string(),
@@ -208,7 +207,7 @@ mod tests {
 
     #[tokio::test]
     async fn create_entity_rejects_out_of_range_confidence() {
-        let db = test_db().await;
+        let (db, _dir) = test_db().await;
         let req = CreateEntityRequest {
             name: "Alice".to_string(),
             entity_type: "person".to_string(),
@@ -224,7 +223,7 @@ mod tests {
 
     #[tokio::test]
     async fn create_entity_happy_path_returns_id() {
-        let db = test_db().await;
+        let (db, _dir) = test_db().await;
         let req = CreateEntityRequest {
             name: "Alice".to_string(),
             entity_type: "person".to_string(),
@@ -238,7 +237,7 @@ mod tests {
 
     #[tokio::test]
     async fn create_entity_resolves_to_existing_by_name() {
-        let db = test_db().await;
+        let (db, _dir) = test_db().await;
         let req1 = CreateEntityRequest {
             name: "Alice".to_string(),
             entity_type: "person".to_string(),
