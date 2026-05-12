@@ -7,7 +7,7 @@
 
 use crate::db::MemoryDB;
 use crate::error::OriginError;
-use origin_types::requests::CreateEntityRequest;
+use origin_types::requests::{CreateEntityRequest, CreateRelationRequest};
 
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct WriteResult {
@@ -160,6 +160,122 @@ pub async fn create_entity(
     Ok(WriteResult { id, warnings })
 }
 
+/// Create a directed relation between two entities. Canonical entry for
+/// both agent-triggered (`/api/memory/relations`) and daemon-internal
+/// extraction.
+pub async fn create_relation(
+    db: &MemoryDB,
+    req: CreateRelationRequest,
+    agent: &str,
+) -> Result<WriteResult, OriginError> {
+    // Pre-write validation
+    if !entity_exists(db, &req.from_entity).await? {
+        return Err(OriginError::Validation(format!(
+            "from_entity '{}' does not exist",
+            req.from_entity
+        )));
+    }
+    if !entity_exists(db, &req.to_entity).await? {
+        return Err(OriginError::Validation(format!(
+            "to_entity '{}' does not exist",
+            req.to_entity
+        )));
+    }
+    let rt = req.relation_type.trim();
+    if !is_valid_snake_case_relation(rt) {
+        return Err(OriginError::Validation(format!(
+            "relation_type '{rt}' must be lowercase snake_case (^[a-z][a-z0-9_]*$)"
+        )));
+    }
+
+    let id = db
+        .create_relation(
+            &req.from_entity,
+            &req.to_entity,
+            rt,
+            req.source_agent.as_deref(),
+            None,
+            None,
+            None,
+        )
+        .await?;
+
+    // Post-write enrichment
+    let mut warnings: Vec<String> = Vec::new();
+
+    // Conflict check: existing relation between same (from, to) with different type
+    if let Ok(existing) = db
+        .list_relations_between(&req.from_entity, &req.to_entity)
+        .await
+    {
+        for (existing_id, existing_type) in &existing {
+            if existing_id != &id && existing_type != rt {
+                let id_short: String = id.chars().take(8).collect();
+                let exid_short: String = existing_id.chars().take(8).collect();
+                let proposal_id = format!("rel_conflict_{id_short}_{exid_short}");
+                let payload = serde_json::json!({
+                    "existing_id": existing_id,
+                    "new_id": id,
+                    "from": req.from_entity,
+                    "to": req.to_entity,
+                    "old_type": existing_type,
+                    "new_type": rt,
+                })
+                .to_string();
+                let _ = db
+                    .insert_refinement_proposal(
+                        &proposal_id,
+                        "relation_conflict",
+                        &[id.clone(), existing_id.clone()],
+                        Some(&payload),
+                        0.7,
+                    )
+                    .await;
+                warnings.push(format!(
+                    "conflicting relation exists ({}-{}-{}); enqueued for review",
+                    req.from_entity, existing_type, req.to_entity
+                ));
+            }
+        }
+    }
+
+    // Activity log
+    let detail = format!(
+        "from={}, to={}, type={}",
+        req.from_entity, req.to_entity, rt
+    );
+    if let Err(e) = db
+        .log_agent_activity(
+            agent,
+            "relation_create",
+            std::slice::from_ref(&id),
+            None,
+            &detail,
+        )
+        .await
+    {
+        log::warn!("[create_relation] activity log failed: {e}");
+    }
+
+    Ok(WriteResult { id, warnings })
+}
+
+async fn entity_exists(db: &MemoryDB, entity_id: &str) -> Result<bool, OriginError> {
+    Ok(db.get_entity_detail(entity_id).await.is_ok())
+}
+
+fn is_valid_snake_case_relation(s: &str) -> bool {
+    if s.is_empty() {
+        return false;
+    }
+    let mut chars = s.chars();
+    match chars.next() {
+        Some(c) if c.is_ascii_lowercase() => {}
+        _ => return false,
+    }
+    chars.all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_')
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -255,5 +371,64 @@ mod tests {
         };
         let second = create_entity(&db, req2, "test").await.unwrap();
         assert_eq!(first.id, second.id);
+    }
+
+    #[tokio::test]
+    async fn create_relation_rejects_missing_from_entity() {
+        let (db, _dir) = test_db().await;
+        let req = CreateRelationRequest {
+            from_entity: "missing-1".to_string(),
+            to_entity: "missing-2".to_string(),
+            relation_type: "knows".to_string(),
+            source_agent: Some("test".to_string()),
+        };
+        assert!(matches!(
+            create_relation(&db, req, "test").await,
+            Err(OriginError::Validation(_))
+        ));
+    }
+
+    #[tokio::test]
+    async fn create_relation_rejects_bad_relation_type() {
+        let (db, _dir) = test_db().await;
+        let alice = db
+            .store_entity("Alice", "person", None, Some("test"), None)
+            .await
+            .unwrap();
+        let bob = db
+            .store_entity("Bob", "person", None, Some("test"), None)
+            .await
+            .unwrap();
+        let req = CreateRelationRequest {
+            from_entity: alice,
+            to_entity: bob,
+            relation_type: "Knows!".to_string(),
+            source_agent: Some("test".to_string()),
+        };
+        assert!(matches!(
+            create_relation(&db, req, "test").await,
+            Err(OriginError::Validation(_))
+        ));
+    }
+
+    #[tokio::test]
+    async fn create_relation_happy_path() {
+        let (db, _dir) = test_db().await;
+        let alice = db
+            .store_entity("Alice", "person", None, Some("test"), None)
+            .await
+            .unwrap();
+        let bob = db
+            .store_entity("Bob", "person", None, Some("test"), None)
+            .await
+            .unwrap();
+        let req = CreateRelationRequest {
+            from_entity: alice,
+            to_entity: bob,
+            relation_type: "knows".to_string(),
+            source_agent: Some("test".to_string()),
+        };
+        let result = create_relation(&db, req, "test").await.unwrap();
+        assert!(!result.id.is_empty());
     }
 }

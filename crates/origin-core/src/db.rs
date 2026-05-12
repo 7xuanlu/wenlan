@@ -8710,6 +8710,33 @@ impl MemoryDB {
         Ok(id)
     }
 
+    pub async fn list_relations_between(
+        &self,
+        from_entity: &str,
+        to_entity: &str,
+    ) -> Result<Vec<(String, String)>, OriginError> {
+        let conn = self.conn.lock().await;
+        let mut rows = conn
+            .query(
+                "SELECT id, relation_type FROM relations WHERE from_entity = ?1 AND to_entity = ?2",
+                libsql::params![from_entity.to_string(), to_entity.to_string()],
+            )
+            .await
+            .map_err(|e| OriginError::VectorDb(e.to_string()))?;
+        let mut result = Vec::new();
+        while let Some(row) = rows
+            .next()
+            .await
+            .map_err(|e| OriginError::VectorDb(e.to_string()))?
+        {
+            result.push((
+                row.get::<String>(0).unwrap_or_default(),
+                row.get::<String>(1).unwrap_or_default(),
+            ));
+        }
+        Ok(result)
+    }
+
     pub async fn list_entities(
         &self,
         entity_type: Option<&str>,
