@@ -48,8 +48,14 @@ KnowledgeWriter unlinks the file), snapshot the change. Defensive —
 silent skip if `git` missing, `~/.origin/` not a repo, or no diff.
 
 ```
-Bash: cd ~/.origin 2>/dev/null && [ -d .git ] && git add -A && \
-      git diff --cached --quiet || \
-      git -c user.name=Origin -c user.email=daemon@origin.local \
-          commit --quiet -m "forget: <source_id>" || true
+Bash: git -C ~/.origin add -A && \
+      git -C ~/.origin -c user.name=Origin -c user.email=daemon@origin.local \
+          commit --quiet -m "forget: <source_id>" 2>/dev/null || \
+      (sleep 1 && git -C ~/.origin add -A && \
+       git -C ~/.origin -c user.name=Origin -c user.email=daemon@origin.local \
+           commit --quiet -m "forget: <source_id>" 2>/dev/null) || true
 ```
+
+The retry handles index.lock races — the daemon may be writing to
+`~/.origin/` at the same moment (auto-commit from captures). One-second
+wait is enough for the daemon to release the lock.
