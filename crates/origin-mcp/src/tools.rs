@@ -182,6 +182,26 @@ pub struct ConfirmMemoryParams {
     pub memory_id: String,
 }
 
+// --- Refinery queue params ---
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct ListRefinementsParams {
+    #[schemars(
+        description = "Optional action filter. One of: entity_merge, relation_conflict, detect_contradiction, suggest_entity, dedup_merge."
+    )]
+    #[serde(default)]
+    pub action: Option<String>,
+    #[schemars(description = "Max number of proposals to return. Default 50, max 500.")]
+    #[serde(default, deserialize_with = "deserialize_optional_usize_lenient")]
+    pub limit: Option<usize>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct RejectRefinementParams {
+    #[schemars(description = "The refinement proposal id to dismiss.")]
+    pub id: String,
+}
+
 // --- Knowledge graph CRUD params ---
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
@@ -931,6 +951,57 @@ impl OriginMcpServer {
             pretty
         ))]))
     }
+
+    pub async fn list_refinements_impl(
+        &self,
+        params: ListRefinementsParams,
+    ) -> Result<CallToolResult, McpError> {
+        let mut path = String::from("/api/refinery/queue");
+        let mut q: Vec<String> = Vec::new();
+        if let Some(a) = params.action.as_deref() {
+            q.push(format!("action={}", url_encode_simple(a)));
+        }
+        if let Some(l) = params.limit {
+            q.push(format!("limit={l}"));
+        }
+        if !q.is_empty() {
+            path.push('?');
+            path.push_str(&q.join("&"));
+        }
+
+        let resp: ListRefinementsResponse = match self.client.get(&path).await {
+            Ok(v) => v,
+            Err(e) => return Ok(tool_error(e, "list_refinements")),
+        };
+
+        let pretty = serde_json::to_string_pretty(&resp.proposals)
+            .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+        Ok(CallToolResult::success(vec![Content::text(format!(
+            "{} pending refinement proposals\n{}",
+            resp.proposals.len(),
+            pretty
+        ))]))
+    }
+
+    pub async fn reject_refinement_impl(
+        &self,
+        params: RejectRefinementParams,
+    ) -> Result<CallToolResult, McpError> {
+        let path = format!(
+            "/api/refinery/queue/{}/reject",
+            url_encode_simple(&params.id)
+        );
+        let resp: RejectRefinementResponse =
+            match self.client.post(&path, &serde_json::json!({})).await {
+                Ok(v) => v,
+                Err(e) => return Ok(tool_error(e, "reject_refinement")),
+            };
+
+        Ok(CallToolResult::success(vec![Content::text(format!(
+            "Refinement {} dismissed.",
+            resp.id
+        ))]))
+    }
 }
 
 /// Build the `/api/pages/recent` URL with optional `limit` + `since_ms` query
@@ -950,6 +1021,19 @@ fn build_recent_pages_path(limit: Option<usize>, since_ms: Option<i64>) -> Strin
         path.push_str(&q.join("&"));
     }
     path
+}
+
+/// Percent-encode a string for use in URL query parameter values.
+/// Encodes all characters except unreserved ones (A-Z, a-z, 0-9, `-`, `_`, `.`, `~`).
+fn url_encode_simple(s: &str) -> String {
+    s.chars()
+        .flat_map(|c| match c {
+            'A'..='Z' | 'a'..='z' | '0'..='9' | '-' | '_' | '.' | '~' => {
+                vec![c]
+            }
+            _ => format!("%{:02X}", c as u32).chars().collect(),
+        })
+        .collect()
 }
 
 // ===== Tool Registrations =====
@@ -1250,6 +1334,40 @@ impl OriginMcpServer {
         Parameters(params): Parameters<ListPagesRecentParams>,
     ) -> Result<CallToolResult, McpError> {
         self.list_pages_recent_impl(params).await
+    }
+
+    // --- Refinery queue tools ---
+
+    #[tool(
+        description = "List pending refinement proposals from Origin's daemon-side refinery queue. Use when the user wants to audit what the daemon has queued for review — phrases like 'check refinery', 'pending proposals', 'what's queued'. Returns proposals with action (entity_merge/relation_conflict/detect_contradiction/suggest_entity/dedup_merge), source ids, confidence, and typed payload. Filter by action with optional `action` param. Pair with `reject_refinement` to dismiss noise.",
+        annotations(
+            title = "List refinements",
+            read_only_hint = true,
+            open_world_hint = false
+        )
+    )]
+    async fn list_refinements(
+        &self,
+        Parameters(params): Parameters<ListRefinementsParams>,
+    ) -> Result<CallToolResult, McpError> {
+        self.list_refinements_impl(params).await
+    }
+
+    #[tool(
+        description = "Reject (dismiss) a refinement proposal by id. Use when reviewing the refinery queue and the user decides a proposal is wrong or noise. Marks the queue row dismissed and logs the agent activity. Idempotent: already-dismissed proposals return 422. Note: there is no accept verb yet; keeping a proposal is a no-op (it stays queued).",
+        annotations(
+            title = "Reject refinement",
+            read_only_hint = false,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
+    )]
+    async fn reject_refinement(
+        &self,
+        Parameters(params): Parameters<RejectRefinementParams>,
+    ) -> Result<CallToolResult, McpError> {
+        self.reject_refinement_impl(params).await
     }
 }
 
