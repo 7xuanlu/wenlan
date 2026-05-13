@@ -1066,7 +1066,7 @@ async fn list_entity_suggestions_empty() {
     let (mock, client) = setup().await;
     Mock::given(method("GET"))
         .and(path("/api/memory/entity-suggestions"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(&Vec::<EntitySuggestion>::new()))
+        .respond_with(ResponseTemplate::new(200).set_body_json(Vec::<EntitySuggestion>::new()))
         .mount(&mock)
         .await;
 
