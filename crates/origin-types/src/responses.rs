@@ -941,7 +941,7 @@ mod tests {
         };
         let decoded: OrphanLinksResponse =
             serde_json::from_str(&serde_json::to_string(&resp).unwrap()).unwrap();
-        assert_eq!(decoded.orphan_labels.len(), 0);
+        assert_eq!(decoded, resp);
     }
 
     #[test]
@@ -958,7 +958,6 @@ mod tests {
         assert_eq!(json["revision_source_id"], "mem_rev");
         assert_eq!(json["revision_content"], "new body");
         let decoded: PendingRevisionItem = serde_json::from_value(json).unwrap();
-        assert_eq!(decoded.target_source_id, "mem_target");
-        assert_eq!(decoded.last_modified, 1_715_000_000);
+        assert_eq!(decoded, item);
     }
 }
