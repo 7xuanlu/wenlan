@@ -260,6 +260,12 @@ fn default_confirmed() -> bool {
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct UpdateObservationParams {
+    pub observation_id: String,
+    pub content: String,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct CreatePageParams {
     #[schemars(
         description = "Short noun phrase that names the page (e.g. 'Origin daemon architecture')."
@@ -870,6 +876,24 @@ impl OriginMcpServer {
         ))]))
     }
 
+    pub async fn update_observation_impl(
+        &self,
+        params: UpdateObservationParams,
+    ) -> Result<CallToolResult, McpError> {
+        let req = origin_types::requests::UpdateObservationRequest {
+            content: params.content,
+        };
+        let path = format!("/api/memory/observations/{}", params.observation_id);
+        let _: origin_types::responses::SuccessResponse = match self.client.put(&path, &req).await {
+            Ok(r) => r,
+            Err(e) => return Ok(tool_error(e, "update_observation")),
+        };
+        Ok(CallToolResult::success(vec![Content::text(format!(
+            "Updated observation {}",
+            params.observation_id
+        ))]))
+    }
+
     pub async fn create_page_impl(
         &self,
         params: CreatePageParams,
@@ -1355,6 +1379,23 @@ impl OriginMcpServer {
         Parameters(params): Parameters<ConfirmEntityParams>,
     ) -> Result<CallToolResult, McpError> {
         self.confirm_entity_impl(params).await
+    }
+
+    #[tool(
+        description = "Update the content of an existing observation. Only the text changes — the entity attachment stays the same. To move an observation to a different entity, delete and recreate.",
+        annotations(
+            title = "Update observation",
+            read_only_hint = false,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
+    )]
+    async fn update_observation(
+        &self,
+        Parameters(params): Parameters<UpdateObservationParams>,
+    ) -> Result<CallToolResult, McpError> {
+        self.update_observation_impl(params).await
     }
 
     #[tool(
@@ -3184,6 +3225,7 @@ mod tests {
             "create_relation",
             "create_observation",
             "confirm_entity",
+            "update_observation",
             "create_page",
             "update_page",
             "delete_page",
