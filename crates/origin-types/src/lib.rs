@@ -38,8 +38,9 @@ pub use narrative::NarrativeResponse;
 pub use pages::Page;
 pub use responses::{
     ExportStats, ListMemoryRevisionsResponse, ListPageRevisionsResponse, ListRefinementsResponse,
-    MemoryDetail, MemoryRevisionEntry, PageChangelogEntry, PendingRevision, ProposalAction,
-    RefinementPayload, RefinementProposalSummary, RejectRefinementResponse,
+    MemoryDetail, MemoryRevisionEntry, OrphanLink, OrphanLinksResponse, PageChangelogEntry,
+    PendingRevision, PendingRevisionItem, ProposalAction, RefinementPayload,
+    RefinementProposalSummary, RejectRefinementResponse,
 };
 pub use sources::{MemoryType, RawDocument, SourceType, StabilityTier, SyncStatus};
 
