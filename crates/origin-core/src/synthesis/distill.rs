@@ -574,7 +574,7 @@ pub async fn distill_pages_scoped(
     target: Option<DistillTarget>,
 ) -> Result<DistillResult, OriginError> {
     if let Some(DistillTarget::Page(ref page_id)) = target {
-        let updated = deep_distill_single(db, llm, prompts, page_id).await?;
+        let updated = deep_distill_single(db, llm, prompts, page_id, knowledge_path).await?;
         return Ok(DistillResult {
             created: if updated {
                 vec![page_id.clone()]
@@ -960,10 +960,15 @@ pub async fn deep_distill_pages(
         Err(e) => log::warn!("[deep_distill] orphan assignment failed: {}", e),
     }
 
-    // 3. Recompile ALL active concepts (not just changed ones — full refresh)
-    let all_active = db.list_pages("active", 200, 0).await?;
-    for page in &all_active {
-        match recompile_single_page(db, llm_ref, prompts, page).await {
+    // 3. Refresh stale, non-user-edited pages. Cap 20 per fire so the refinery
+    //    returns control promptly; subsequent fires drain the rest. Order = most-stale
+    //    first (sources_updated_count desc).
+    const DEEP_DISTILL_REFRESH_CAP: i64 = 20;
+    let stale_pages = db
+        .list_pages_stale("active", DEEP_DISTILL_REFRESH_CAP, 0)
+        .await?;
+    for page in &stale_pages {
+        match recompile_single_page(db, llm_ref, prompts, page, knowledge_path).await {
             Ok(true) => total += 1,
             Ok(false) => {}
             Err(e) => log::warn!(
@@ -974,10 +979,18 @@ pub async fn deep_distill_pages(
         }
     }
 
-    // 4. Global review — merge/split/create analysis
+    // 4. Global review — merge/split/create analysis. Needs the full active set
+    //    (not just stale pages) to propose merges/splits across all concepts.
+    let all_active = db.list_pages("active", 200, 0).await?;
     if all_active.len() >= 5 {
-        match crate::synthesis::emergence::global_page_review(db, llm_ref, prompts, &all_active)
-            .await
+        match crate::synthesis::emergence::global_page_review(
+            db,
+            llm_ref,
+            prompts,
+            &all_active,
+            knowledge_path,
+        )
+        .await
         {
             Ok(n) => {
                 total += n;
@@ -999,6 +1012,7 @@ pub(crate) async fn recompile_single_page(
     llm: &Arc<dyn LlmProvider>,
     prompts: &PromptRegistry,
     page: &crate::pages::Page,
+    knowledge_path: Option<&std::path::Path>,
 ) -> Result<bool, OriginError> {
     let memories = db
         .get_memory_contents_by_ids(&page.source_memory_ids)
@@ -1045,7 +1059,7 @@ pub(crate) async fn recompile_single_page(
                 .trim()
                 .to_string();
             if !content.is_empty() {
-                let _ = crate::post_write::update_page(
+                let result = crate::post_write::update_page(
                     db,
                     &page.id,
                     UpdatePageRequest {
@@ -1053,12 +1067,28 @@ pub(crate) async fn recompile_single_page(
                         source_memory_ids: page.source_memory_ids.clone(),
                     },
                     "re_distill",
-                    false,
-                    None,
+                    true,
+                    knowledge_path,
                 )
                 .await?;
-                log::info!("[re-distill] refreshed page '{}'", page.title);
-                return Ok(true);
+                if result.wrote {
+                    log::info!("[re-distill] refreshed page '{}'", page.title);
+                    return Ok(true);
+                } else {
+                    if let Err(e) = db
+                        .log_agent_activity(
+                            "system",
+                            "page_skip_user_edited",
+                            std::slice::from_ref(&page.id),
+                            None,
+                            &format!("re_distill yielded for '{}'", page.title),
+                        )
+                        .await
+                    {
+                        log::warn!("[re-distill] activity log failed: {e}");
+                    }
+                    return Ok(false);
+                }
             }
         }
         Ok(_) => log::warn!("[re-distill] empty output for '{}'", page.title),
@@ -1077,6 +1107,7 @@ pub async fn deep_distill_single(
     llm: Option<&Arc<dyn LlmProvider>>,
     prompts: &PromptRegistry,
     page_id: &str,
+    knowledge_path: Option<&std::path::Path>,
 ) -> Result<bool, OriginError> {
     let llm = match llm {
         Some(l) if l.is_available() => l,
@@ -1142,7 +1173,7 @@ pub async fn deep_distill_single(
         return Ok(false);
     }
 
-    let _ = crate::post_write::update_page(
+    let result = crate::post_write::update_page(
         db,
         page_id,
         UpdatePageRequest {
@@ -1150,18 +1181,34 @@ pub async fn deep_distill_single(
             source_memory_ids: page.source_memory_ids.clone(),
         },
         "distill",
-        false,
-        None,
+        true,
+        knowledge_path,
     )
     .await?;
 
-    log::info!(
-        "[distill] re-distilled page '{}' (v{}->v{})",
-        page.title,
-        page.version,
-        page.version + 1
-    );
-    Ok(true)
+    if result.wrote {
+        log::info!(
+            "[distill] re-distilled page '{}' (v{}->v{})",
+            page.title,
+            page.version,
+            page.version + 1
+        );
+        Ok(true)
+    } else {
+        if let Err(e) = db
+            .log_agent_activity(
+                "system",
+                "page_skip_user_edited",
+                &[page_id.to_string()],
+                None,
+                &format!("distill yielded for '{}'", page.title),
+            )
+            .await
+        {
+            log::warn!("[distill] activity log failed: {e}");
+        }
+        Ok(false)
+    }
 }
 
 /// Apply a merge result based on the stability tier of the involved memories.
@@ -1201,4 +1248,137 @@ pub(crate) async fn apply_merge_by_tier(
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::llm_provider::MockProvider;
+    use std::sync::Arc;
+    use tempfile::TempDir;
+
+    #[tokio::test]
+    async fn recompile_single_page_re_projects_md_when_path_passed() {
+        let (db, _db_dir) = crate::db::tests::test_db().await;
+        let knowledge_dir = TempDir::new().unwrap();
+        let now = chrono::Utc::now().to_rfc3339();
+        let now_ts = chrono::Utc::now().timestamp();
+
+        // Insert a seed memory row directly so get_memory_contents_by_ids returns it.
+        {
+            let conn = db.conn.lock().await;
+            conn.execute(
+                "INSERT INTO memories (id, source_id, title, content, chunk_index, chunk_type, memory_type, domain, source_agent, created_at, last_modified, confirmed, stability, source) \
+                 VALUES (?1, ?1, ?1, 'seed content', 0, 'text', 'fact', 'test', 'claude-code', ?2, ?2, 1, 'confirmed', 'memory')",
+                libsql::params!["mem_seed".to_string(), now_ts],
+            )
+            .await
+            .unwrap();
+        }
+
+        // Insert a page that cites that memory, then mark it stale.
+        db.insert_page(
+            "page_a",
+            "Topic A",
+            None,
+            "original body",
+            None,
+            None,
+            &["mem_seed"],
+            &now,
+        )
+        .await
+        .unwrap();
+        db.set_page_stale("page_a", "source_updated").await.unwrap();
+
+        let llm: Arc<dyn LlmProvider> = Arc::new(MockProvider::new("recompiled body"));
+        let prompts = PromptRegistry::default();
+        let page = db.get_page("page_a").await.unwrap().unwrap();
+
+        let updated = recompile_single_page(&db, &llm, &prompts, &page, Some(knowledge_dir.path()))
+            .await
+            .unwrap();
+        assert!(updated, "recompile should write");
+
+        // Verify md file was re-projected into the knowledge directory.
+        let entries: Vec<_> = std::fs::read_dir(knowledge_dir.path())
+            .unwrap()
+            .flatten()
+            .filter(|e| e.path().extension().map(|x| x == "md").unwrap_or(false))
+            .collect();
+        assert_eq!(entries.len(), 1, "exactly one md file");
+        let content = std::fs::read_to_string(entries[0].path()).unwrap();
+        assert!(
+            content.contains("recompiled body"),
+            "md body should reflect LLM output"
+        );
+    }
+
+    #[tokio::test]
+    async fn deep_distill_pages_only_recompiles_stale_non_user_edited() {
+        let (db, _db_dir) = crate::db::tests::test_db().await;
+        let now = chrono::Utc::now().to_rfc3339();
+        let now_ts = chrono::Utc::now().timestamp();
+
+        // Insert a seed memory row so get_memory_contents_by_ids returns it.
+        {
+            let conn = db.conn.lock().await;
+            conn.execute(
+                "INSERT INTO memories (id, source_id, title, content, chunk_index, chunk_type, memory_type, domain, source_agent, created_at, last_modified, confirmed, stability, source) \
+                 VALUES (?1, ?1, ?1, 'seed content', 0, 'text', 'fact', 'test', 'claude-code', ?2, ?2, 1, 'confirmed', 'memory')",
+                libsql::params!["mem_1".to_string(), now_ts],
+            )
+            .await
+            .unwrap();
+        }
+
+        // 3 pages: stale clean (page_a), stale user-edited (page_b), not stale (page_c).
+        db.insert_page("page_a", "A", None, "body a", None, None, &["mem_1"], &now)
+            .await
+            .unwrap();
+        db.insert_page("page_b", "B", None, "body b", None, None, &["mem_1"], &now)
+            .await
+            .unwrap();
+        db.insert_page("page_c", "C", None, "body c", None, None, &["mem_1"], &now)
+            .await
+            .unwrap();
+
+        db.set_page_stale("page_a", "source_updated").await.unwrap();
+        db.set_page_stale("page_b", "source_updated").await.unwrap();
+
+        // Lock page_b via fs_edit — sets user_edited=1 (require_stale=false to force).
+        db.try_update_page_content_with_changelog(
+            "page_b",
+            "user prose b",
+            &["mem_1"],
+            "fs_edit",
+            false,
+            "user-edited",
+        )
+        .await
+        .unwrap();
+
+        let llm: Arc<dyn crate::llm_provider::LlmProvider> =
+            Arc::new(crate::llm_provider::MockProvider::new("recompiled"));
+        let prompts = crate::prompts::PromptRegistry::default();
+        let tuning = crate::tuning::DistillationConfig::default();
+
+        let _ =
+            crate::synthesis::distill::deep_distill_pages(&db, Some(&llm), &prompts, &tuning, None)
+                .await
+                .unwrap();
+
+        let a = db.get_page("page_a").await.unwrap().unwrap();
+        let b = db.get_page("page_b").await.unwrap().unwrap();
+        let c = db.get_page("page_c").await.unwrap().unwrap();
+        assert_eq!(
+            a.content, "recompiled",
+            "stale clean page should be refreshed"
+        );
+        assert_eq!(
+            b.content, "user prose b",
+            "user-edited page must NOT be touched"
+        );
+        assert_eq!(c.content, "body c", "non-stale page must NOT be touched");
+    }
 }

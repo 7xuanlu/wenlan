@@ -163,6 +163,12 @@ pub struct DistillParams {
     )]
     #[serde(default, alias = "page_id")]
     pub target: Option<String>,
+
+    #[schemars(
+        description = "When true, clears the user_edited flag on the target page before recompile. Use for /distill rebuild <page> to explicitly wipe user prose and regenerate from sources. Only valid when target is a single page id; the daemon ignores it otherwise. Requires daemon LLM."
+    )]
+    #[serde(default)]
+    pub force: Option<bool>,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
@@ -802,10 +808,14 @@ impl OriginMcpServer {
     }
 
     pub async fn distill_impl(&self, params: DistillParams) -> Result<CallToolResult, McpError> {
-        let body = match params.target.as_deref() {
-            Some(t) if !t.is_empty() => serde_json::json!({ "target": t }),
-            _ => serde_json::json!({}),
-        };
+        let mut body = serde_json::Map::new();
+        if let Some(t) = params.target.as_deref().filter(|t| !t.is_empty()) {
+            body.insert("target".into(), serde_json::Value::String(t.to_string()));
+        }
+        if params.force.unwrap_or(false) {
+            body.insert("force".into(), serde_json::Value::Bool(true));
+        }
+        let body = serde_json::Value::Object(body);
         match self
             .client
             .post::<serde_json::Value, serde_json::Value>("/api/distill", &body)
@@ -4122,5 +4132,21 @@ mod tests {
             result.is_err(),
             "envelope-wrapped response must fail typed deserialize"
         );
+    }
+
+    // ===== DistillParams force field =====
+
+    #[test]
+    fn distill_params_deserializes_force() {
+        let p: DistillParams =
+            serde_json::from_str(r#"{"target":"page_xyz","force":true}"#).unwrap();
+        assert_eq!(p.target.as_deref(), Some("page_xyz"));
+        assert_eq!(p.force, Some(true));
+    }
+
+    #[test]
+    fn distill_params_defaults_force_to_none() {
+        let p: DistillParams = serde_json::from_str(r#"{"target":"foo"}"#).unwrap();
+        assert_eq!(p.force, None);
     }
 }

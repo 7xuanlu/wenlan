@@ -224,6 +224,7 @@ pub(crate) async fn global_page_review(
     llm: &Arc<dyn LlmProvider>,
     prompts: &PromptRegistry,
     concepts: &[crate::pages::Page],
+    knowledge_path: Option<&std::path::Path>,
 ) -> Result<usize, OriginError> {
     let concepts_text: String = concepts
         .iter()
@@ -268,31 +269,54 @@ pub(crate) async fn global_page_review(
                     if let (Ok(Some(keep)), Ok(Some(remove))) =
                         (db.get_page(keep_id).await, db.get_page(remove_id).await)
                     {
+                        // Skip the merge if either side is user-edited. Archiving a
+                        // user-edited remove page would discard authored prose; merging
+                        // into a user-edited keep would orphan the watcher's view.
+                        if keep.user_edited || remove.user_edited {
+                            log::info!("[merge] skipping {}→{}: user_edited", remove_id, keep_id);
+                            continue;
+                        }
+
                         let mut merged_sources = keep.source_memory_ids.clone();
                         for sid in &remove.source_memory_ids {
                             if !merged_sources.contains(sid) {
                                 merged_sources.push(sid.clone());
                             }
                         }
-                        let _ = crate::post_write::update_page(
+
+                        let result = crate::post_write::update_page(
                             db,
                             keep_id,
                             UpdatePageRequest {
                                 content: keep.content.clone(),
                                 source_memory_ids: merged_sources,
                             },
-                            "re_distill",
-                            false,
-                            None,
+                            "refinery_merge",
+                            true,
+                            knowledge_path,
                         )
                         .await;
-                        let _ = db.archive_page(remove_id).await;
-                        changes += 1;
-                        log::info!(
-                            "[distill] merged page '{}' into '{}'",
-                            remove.title,
-                            keep.title
-                        );
+
+                        match result {
+                            Ok(crate::post_write::WriteResult { wrote: true, .. }) => {
+                                let _ = db.archive_page(remove_id).await;
+                                changes += 1;
+                                log::info!(
+                                    "[distill] merged page '{}' into '{}'",
+                                    remove.title,
+                                    keep.title
+                                );
+                            }
+                            Ok(crate::post_write::WriteResult { wrote: false, .. }) => {
+                                // CAS lost the race: fs_edit landed between pre-check and SQL UPDATE.
+                                log::info!(
+                                    "[merge] CAS skipped {}→{}: late fs_edit",
+                                    remove_id,
+                                    keep_id
+                                );
+                            }
+                            Err(e) => log::warn!("[merge] update_page failed for {keep_id}: {e}"),
+                        }
                     }
                 }
             }
@@ -314,4 +338,91 @@ pub(crate) async fn global_page_review(
     }
 
     Ok(changes)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::llm_provider::MockProvider;
+    use std::sync::Arc;
+
+    #[tokio::test]
+    async fn global_page_review_skips_merge_when_keep_is_user_edited() {
+        let (db, _tmp) = crate::db::tests::test_db().await;
+        let now = chrono::Utc::now().to_rfc3339();
+        let now_ts = chrono::Utc::now().timestamp();
+
+        // Insert two seed memory rows directly.
+        {
+            let conn = db.conn.lock().await;
+            conn.execute(
+                "INSERT INTO memories (id, source_id, title, content, chunk_index, chunk_type, memory_type, domain, source_agent, created_at, last_modified, confirmed, stability, source) \
+                 VALUES (?1, ?1, 'seed', 'fact', 0, 'text', 'fact', 'test', 'claude-code', ?2, ?2, 1, 'confirmed', 'memory')",
+                libsql::params!["mem_1".to_string(), now_ts],
+            )
+            .await
+            .unwrap();
+            conn.execute(
+                "INSERT INTO memories (id, source_id, title, content, chunk_index, chunk_type, memory_type, domain, source_agent, created_at, last_modified, confirmed, stability, source) \
+                 VALUES (?1, ?1, 'seed two', 'fact', 0, 'text', 'fact', 'test', 'claude-code', ?2, ?2, 1, 'confirmed', 'memory')",
+                libsql::params!["mem_2".to_string(), now_ts],
+            )
+            .await
+            .unwrap();
+        }
+
+        db.insert_page(
+            "page_keep",
+            "Keep",
+            None,
+            "keep body",
+            None,
+            None,
+            &["mem_1"],
+            &now,
+        )
+        .await
+        .unwrap();
+        db.insert_page(
+            "page_remove",
+            "Remove",
+            None,
+            "remove body",
+            None,
+            None,
+            &["mem_2"],
+            &now,
+        )
+        .await
+        .unwrap();
+
+        // Lock the keep page via fs_edit (sets user_edited=1).
+        db.try_update_page_content_with_changelog(
+            "page_keep",
+            "user prose",
+            &["mem_1"],
+            "fs_edit",
+            false,
+            "user-edited",
+        )
+        .await
+        .unwrap();
+
+        let llm: Arc<dyn LlmProvider> = Arc::new(MockProvider::new(
+            r#"{"merges": [{"keep": "page_keep", "remove": "page_remove"}], "splits": [], "missing": []}"#,
+        ));
+        let prompts = PromptRegistry::default();
+        let active = db.list_pages("active", 100, 0).await.unwrap();
+
+        let changes = global_page_review(&db, &llm, &prompts, &active, None)
+            .await
+            .unwrap();
+
+        assert_eq!(
+            changes, 0,
+            "merge should be skipped when keep is user_edited"
+        );
+        let remove = db.get_page("page_remove").await.unwrap().unwrap();
+        assert_eq!(remove.status, "active", "remove page must NOT be archived");
+    }
 }

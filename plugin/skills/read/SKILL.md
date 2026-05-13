@@ -86,6 +86,23 @@ Open:     ~/.origin/pages/<slug>.md
 ⚠ Stale: <stale_reason> — run /distill to refresh
 ```
 
+**Lock banner rule:**
+
+When the page payload returned by `get_page` has `user_edited == true`,
+prepend this line as the very first line of the rendered output, before
+the title:
+
+```
+🔒 You've edited this page. Auto-refresh paused. `/distill rebuild <page-id>` to unlock.
+```
+
+Substitute `<page-id>` with the actual `page.id` value. When
+`user_edited` is false or absent, omit this line entirely.
+
+The lock means the daemon's refinery will not auto-rewrite this page's
+prose from sources — edits stay until the user explicitly runs
+`/distill rebuild` to wipe and regenerate.
+
 **Version line rules:**
 
 - Always show `v<N>`. When `version` is null or missing, omit the line.

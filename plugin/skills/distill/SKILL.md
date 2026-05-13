@@ -5,7 +5,7 @@ description: >
   daemon clusters and synthesizes what it can; agent finishes whatever
   the daemon couldn't (no LLM or cluster too big). Invoked as
   `/distill [target]`.
-argument-hint: "[page_id_or_entity_or_domain]"
+argument-hint: "[target | rebuild <page-id> | deep]"
 allowed-tools: ["mcp__plugin_origin_origin__recall", "mcp__plugin_origin_origin__distill", "mcp__plugin_origin_origin__create_page", "mcp__plugin_origin_origin__update_page", "mcp__plugin_origin_origin__delete_page", "mcp__plugin_origin_origin__get_page_sources", "Bash"]
 ---
 
@@ -13,6 +13,20 @@ allowed-tools: ["mcp__plugin_origin_origin__recall", "mcp__plugin_origin_origin_
 
 Force a distillation pass now. The daemon's background refinery runs
 on its own clock; `/distill` is the explicit user-triggered pass.
+
+## Mental model
+
+Distillation is four operations bundled into one flow:
+
+- **emerge** — cluster new memories into new pages
+- **absorb** — assign orphan memories to existing pages, propose new pages
+  from topics that 2+ existing pages link to but no page is named for
+- **refresh** — regenerate stale pages from their source memories (only when
+  the user has not edited the page; pages you have touched stay locked)
+- **merge** — combine duplicate pages flagged by the daemon's global review
+
+The default flow runs all four. The `rebuild` verb is a destructive opt-in
+that overrides the lock on a single page.
 
 ## Single flow
 
@@ -45,6 +59,13 @@ Bash: top=$(git -C "$PWD" rev-parse --show-toplevel 2>/dev/null); \
 - Output → use it (e.g. `origin`).
 - Not a git repo → fall back to `basename "$PWD"`.
 - Reserved keyword `deep` → no scope (global pass).
+- Reserved keyword sequence `rebuild <page-id>` → call
+  `distill(target=<page-id>, force=true)`. Confirms "Rebuild page <id>?
+  Your edits will be wiped, page regenerates from sources." before
+  proceeding. Skip the rest of this skill — single-page rebuild does
+  not produce `pending` clusters; the daemon's response shape is
+  `{"status": "ok", "force": true, "page_id": ..., "updated": true}`.
+  Report verbatim.
 
 For `/distill <arg>` → forward `<arg>` to `target`.
 
@@ -179,7 +200,9 @@ For each stale page:
 
 - **`user_edited == true`** → never auto-rewrite. The user touched
   the page; the upstream memories also changed. Surface in the
-  "Conflict" report block and stop. The user resolves by hand.
+  "Conflict" report block and stop. The user resolves by hand, OR
+  runs `/distill rebuild <page-id>` to wipe their edits and
+  regenerate from sources.
 - **`user_edited == false`** → fetch source memories via
   `get_page_sources(page_id="<id>")`, run the same coherence check
   used for clusters, then call `update_page` with the existing
@@ -320,6 +343,10 @@ wait is enough for the daemon to release the lock.
 - User says "distill", "synthesize", "rebuild the page on X".
 - After a bulk import — daemon refinery handles this in the background;
   user can force a pass for immediate visibility.
+- `/distill rebuild <page-id>` when you want to wipe a page you
+  previously edited and have the daemon regenerate from current
+  sources. Destructive: your prose goes away. Use after you are
+  done curating a page and want it back on the auto-refresh path.
 
 ## When NOT to use
 
