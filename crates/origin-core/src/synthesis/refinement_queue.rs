@@ -80,6 +80,100 @@ pub async fn resolve_proposal(
     })
 }
 
+/// Outcome of `apply_refinement`. Returned by the HTTP route and MCP tool.
+#[derive(Debug)]
+pub struct AcceptOutcome {
+    pub id: String,
+    pub action_applied: String,
+}
+
+/// Apply a refinement queue proposal using sensible defaults per action variant.
+/// Single dispatch point for both daemon-internal accept paths (none today; reserved)
+/// and agent HTTP triggers. Wraps PR1's idempotent primitives + atomic `resolve_proposal`.
+///
+/// Defaults:
+/// - `entity_merge`: existing entity (source_ids[1]) wins as canonical, new (source_ids[0]) folds in as alias.
+/// - `relation_conflict`: new relation (source_ids[0]) wins, existing (source_ids[1]) deleted.
+/// - `detect_contradiction`: previously-stored memory (source_ids[1]) flagged pending_revision=1.
+/// - `suggest_entity`, `dedup_merge`, unknown: returns Validation (422).
+pub async fn apply_refinement(
+    db: &MemoryDB,
+    id: &str,
+    agent: &str,
+) -> Result<AcceptOutcome, OriginError> {
+    let prop = db
+        .get_refinement_proposal(id)
+        .await?
+        .ok_or_else(|| OriginError::NotFound(format!("refinement proposal {id} not found")))?;
+
+    // Mirror the terminal-status set from resolve_refinement_if_open SQL.
+    if matches!(
+        prop.status.as_str(),
+        "dismissed" | "auto_applied" | "resolved"
+    ) {
+        return Err(OriginError::Validation(format!(
+            "refinement proposal {id} already resolved (status={})",
+            prop.status
+        )));
+    }
+
+    match prop.action.as_str() {
+        "entity_merge" => {
+            let new_id = prop.source_ids.first().ok_or_else(|| {
+                OriginError::Validation("entity_merge missing source_ids[0]".into())
+            })?;
+            let existing_id = prop.source_ids.get(1).ok_or_else(|| {
+                OriginError::Validation("entity_merge missing source_ids[1]".into())
+            })?;
+            db.merge_entities(existing_id, new_id).await?;
+        }
+        "relation_conflict" => {
+            let new_id = prop.source_ids.first().ok_or_else(|| {
+                OriginError::Validation("relation_conflict missing source_ids[0]".into())
+            })?;
+            let existing_id = prop.source_ids.get(1).ok_or_else(|| {
+                OriginError::Validation("relation_conflict missing source_ids[1]".into())
+            })?;
+            db.supersede_relation(existing_id, new_id).await?;
+        }
+        "detect_contradiction" => {
+            let existing_mem = prop.source_ids.get(1).ok_or_else(|| {
+                OriginError::Validation("detect_contradiction missing source_ids[1]".into())
+            })?;
+            db.flag_memory_for_revision(existing_mem).await?;
+        }
+        "suggest_entity" => {
+            return Err(OriginError::Validation(
+                "action 'suggest_entity' has no accept path (reserved for future producer)".into(),
+            ));
+        }
+        "dedup_merge" => {
+            return Err(OriginError::Validation(
+                "action 'dedup_merge' has no accept path (deprecated stale-v1 variant)".into(),
+            ));
+        }
+        other => {
+            return Err(OriginError::Validation(format!("unknown action: {other}")));
+        }
+    }
+
+    resolve_proposal(db, id, ResolveStatus::Resolved, agent).await?;
+
+    let payload = serde_json::json!({
+        "action": prop.action,
+        "source_ids": prop.source_ids,
+    })
+    .to_string();
+    let _ = db
+        .log_agent_activity(agent, "refinement_apply", &prop.source_ids, None, &payload)
+        .await;
+
+    Ok(AcceptOutcome {
+        id: id.to_string(),
+        action_applied: prop.action,
+    })
+}
+
 /// Process pending refinement queue items via LLM.
 pub(crate) async fn process_refinement_queue(
     db: &MemoryDB,
@@ -190,6 +284,21 @@ pub(crate) async fn process_refinement_queue(
                     "[refinery] entity suggestion queued for review: {:?}",
                     proposal.payload
                 );
+                processed += 1;
+            }
+            "entity_merge" | "relation_conflict" => {
+                // Producer wrote pending; surface for human review (Spec A list endpoint
+                // filters by awaiting_review status). Accept dispatch is agent-triggered,
+                // not daemon-auto.
+                //
+                // Guard on status=='pending' to avoid spamming refinement_resolve activity
+                // rows every tick on already-promoted proposals: get_pending_refinements
+                // returns proposals with status NOT IN (terminal), so awaiting_review
+                // proposals would re-match and re-log without this guard.
+                if proposal.status == "pending" {
+                    resolve_proposal(db, &proposal.id, ResolveStatus::AwaitingReview, "daemon")
+                        .await?;
+                }
                 processed += 1;
             }
             _ => {
@@ -392,6 +501,453 @@ mod tests {
         assert_eq!(
             resolve_count, 1,
             "activity log should record exactly one resolve, got {resolve_count}"
+        );
+    }
+
+    // ==================== apply_refinement ====================
+
+    async fn seed_entity_merge_proposal(db: &MemoryDB, id: &str) -> (String, String) {
+        let new_ent = db
+            .create_entity("Acme Corporation", "organization", None)
+            .await
+            .unwrap();
+        let existing_ent = db
+            .create_entity("Acme Corp", "organization", None)
+            .await
+            .unwrap();
+        db.insert_refinement_proposal(
+            id,
+            "entity_merge",
+            &[new_ent.clone(), existing_ent.clone()],
+            None,
+            0.87,
+        )
+        .await
+        .unwrap();
+        {
+            let conn = db.conn.lock().await;
+            conn.execute(
+                "UPDATE refinement_queue SET status = 'awaiting_review' WHERE id = ?1",
+                libsql::params![id],
+            )
+            .await
+            .unwrap();
+        }
+        (new_ent, existing_ent)
+    }
+
+    #[tokio::test]
+    async fn apply_refinement_entity_merge_default_existing_wins() {
+        let (db, _tmp) = test_db().await;
+        let (new_ent, existing_ent) = seed_entity_merge_proposal(&db, "ref_em_1").await;
+
+        let outcome = apply_refinement(&db, "ref_em_1", "test-agent")
+            .await
+            .unwrap();
+        assert_eq!(outcome.action_applied, "entity_merge");
+
+        let conn = db.conn.lock().await;
+        let mut rows = conn
+            .query(
+                "SELECT COUNT(*) FROM entities WHERE id = ?1",
+                libsql::params![existing_ent],
+            )
+            .await
+            .unwrap();
+        let count: i64 = rows.next().await.unwrap().unwrap().get(0).unwrap();
+        assert_eq!(count, 1, "existing entity should remain canonical");
+
+        let mut rows = conn
+            .query(
+                "SELECT COUNT(*) FROM entities WHERE id = ?1",
+                libsql::params![new_ent],
+            )
+            .await
+            .unwrap();
+        let count: i64 = rows.next().await.unwrap().unwrap().get(0).unwrap();
+        assert_eq!(count, 0, "new entity should be merged away");
+    }
+
+    #[tokio::test]
+    async fn apply_refinement_relation_conflict_default_new_wins() {
+        let (db, _tmp) = test_db().await;
+        let from = db.create_entity("Alice", "person", None).await.unwrap();
+        let to = db
+            .create_entity("Acme", "organization", None)
+            .await
+            .unwrap();
+        let existing_rel = db
+            .create_relation(&from, &to, "works_at", None, Some(0.5), None, None)
+            .await
+            .unwrap();
+        let new_rel = db
+            .create_relation(&from, &to, "leads", None, Some(0.9), None, None)
+            .await
+            .unwrap();
+        db.insert_refinement_proposal(
+            "ref_rc_1",
+            "relation_conflict",
+            &[new_rel.clone(), existing_rel.clone()],
+            None,
+            0.7,
+        )
+        .await
+        .unwrap();
+        {
+            let conn = db.conn.lock().await;
+            conn.execute(
+                "UPDATE refinement_queue SET status = 'awaiting_review' WHERE id = ?1",
+                libsql::params!["ref_rc_1"],
+            )
+            .await
+            .unwrap();
+        }
+
+        let outcome = apply_refinement(&db, "ref_rc_1", "test-agent")
+            .await
+            .unwrap();
+        assert_eq!(outcome.action_applied, "relation_conflict");
+
+        let conn = db.conn.lock().await;
+        let mut rows = conn
+            .query(
+                "SELECT COUNT(*) FROM relations WHERE id = ?1",
+                libsql::params![new_rel],
+            )
+            .await
+            .unwrap();
+        let count: i64 = rows.next().await.unwrap().unwrap().get(0).unwrap();
+        assert_eq!(count, 1, "new relation (winner) should remain");
+
+        let mut rows = conn
+            .query(
+                "SELECT COUNT(*) FROM relations WHERE id = ?1",
+                libsql::params![existing_rel],
+            )
+            .await
+            .unwrap();
+        let count: i64 = rows.next().await.unwrap().unwrap().get(0).unwrap();
+        assert_eq!(count, 0, "existing relation (loser) should be deleted");
+    }
+
+    #[tokio::test]
+    async fn apply_refinement_detect_contradiction_flags_existing() {
+        let (db, _tmp) = test_db().await;
+        let new_mem = format!("mem_{}", uuid::Uuid::new_v4().simple());
+        let existing_mem = format!("mem_{}", uuid::Uuid::new_v4().simple());
+        {
+            let conn = db.conn.lock().await;
+            for sid in &[new_mem.clone(), existing_mem.clone()] {
+                conn.execute(
+                    "INSERT INTO memories (id, content, source, source_id, title, chunk_index, \
+                                            chunk_type, source_agent, domain, confidence, confirmed, \
+                                            last_modified, memory_type, pending_revision) \
+                     VALUES (?1, ?2, 'memory', ?3, 'test', 0, 'text', NULL, 'general', 1.0, 0, 1712707200, 'fact', 0)",
+                    libsql::params![sid.clone(), "x".to_string(), sid.clone()],
+                )
+                .await
+                .unwrap();
+            }
+        }
+        db.insert_refinement_proposal(
+            "ref_dc_1",
+            "detect_contradiction",
+            &[new_mem.clone(), existing_mem.clone()],
+            None,
+            0.8,
+        )
+        .await
+        .unwrap();
+        {
+            let conn = db.conn.lock().await;
+            conn.execute(
+                "UPDATE refinement_queue SET status = 'awaiting_review' WHERE id = ?1",
+                libsql::params!["ref_dc_1"],
+            )
+            .await
+            .unwrap();
+        }
+
+        let outcome = apply_refinement(&db, "ref_dc_1", "test-agent")
+            .await
+            .unwrap();
+        assert_eq!(outcome.action_applied, "detect_contradiction");
+
+        let conn = db.conn.lock().await;
+        let mut rows = conn
+            .query(
+                "SELECT pending_revision FROM memories WHERE source_id = ?1",
+                libsql::params![existing_mem],
+            )
+            .await
+            .unwrap();
+        let f: i64 = rows.next().await.unwrap().unwrap().get(0).unwrap();
+        assert_eq!(f, 1, "existing memory should be flagged for revision");
+
+        let mut rows = conn
+            .query(
+                "SELECT pending_revision FROM memories WHERE source_id = ?1",
+                libsql::params![new_mem],
+            )
+            .await
+            .unwrap();
+        let f: i64 = rows.next().await.unwrap().unwrap().get(0).unwrap();
+        assert_eq!(f, 0, "new memory should NOT be flagged");
+    }
+
+    #[tokio::test]
+    async fn apply_refinement_suggest_entity_returns_422() {
+        let (db, _tmp) = test_db().await;
+        db.insert_refinement_proposal(
+            "ref_se_1",
+            "suggest_entity",
+            &["x".into()],
+            Some("{\"name\":\"Acme\"}"),
+            0.9,
+        )
+        .await
+        .unwrap();
+        let err = apply_refinement(&db, "ref_se_1", "test-agent")
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(err, crate::error::OriginError::Validation(_)),
+            "expected Validation for suggest_entity, got {err:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn apply_refinement_dedup_merge_returns_422() {
+        let (db, _tmp) = test_db().await;
+        db.insert_refinement_proposal(
+            "ref_dm_1",
+            "dedup_merge",
+            &["a".into(), "b".into()],
+            None,
+            0.95,
+        )
+        .await
+        .unwrap();
+        let err = apply_refinement(&db, "ref_dm_1", "test-agent")
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(err, crate::error::OriginError::Validation(_)),
+            "expected Validation for dedup_merge, got {err:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn apply_refinement_unknown_action_returns_422() {
+        let (db, _tmp) = test_db().await;
+        db.insert_refinement_proposal("ref_uk_1", "future_action_xyz", &["a".into()], None, 0.5)
+            .await
+            .unwrap();
+        let err = apply_refinement(&db, "ref_uk_1", "test-agent")
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(err, crate::error::OriginError::Validation(_)),
+            "expected Validation for unknown action, got {err:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn apply_refinement_missing_id_returns_404() {
+        let (db, _tmp) = test_db().await;
+        let err = apply_refinement(&db, "ref_nonexistent", "test-agent")
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(err, crate::error::OriginError::NotFound(_)),
+            "expected NotFound, got {err:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn apply_refinement_terminal_proposal_returns_422() {
+        let (db, _tmp) = test_db().await;
+        db.insert_refinement_proposal(
+            "ref_term_1",
+            "entity_merge",
+            &["a".into(), "b".into()],
+            None,
+            0.85,
+        )
+        .await
+        .unwrap();
+        {
+            let conn = db.conn.lock().await;
+            conn.execute(
+                "UPDATE refinement_queue SET status = 'resolved' WHERE id = ?1",
+                libsql::params!["ref_term_1"],
+            )
+            .await
+            .unwrap();
+        }
+        let err = apply_refinement(&db, "ref_term_1", "test-agent")
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(err, crate::error::OriginError::Validation(_)),
+            "expected Validation (terminal), got {err:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn apply_refinement_logs_both_apply_and_resolve_activity() {
+        let (db, _tmp) = test_db().await;
+        let _ = seed_entity_merge_proposal(&db, "ref_log_1").await;
+
+        apply_refinement(&db, "ref_log_1", "test-agent")
+            .await
+            .unwrap();
+
+        let acts = db
+            .list_agent_activity(20, Some("test-agent"), None)
+            .await
+            .unwrap_or_default();
+        let apply_count = acts
+            .iter()
+            .filter(|a| a.action == "refinement_apply")
+            .count();
+        let resolve_count = acts
+            .iter()
+            .filter(|a| a.action == "refinement_resolve")
+            .count();
+        assert_eq!(
+            apply_count, 1,
+            "exactly one refinement_apply row, got {apply_count}"
+        );
+        assert_eq!(
+            resolve_count, 1,
+            "exactly one refinement_resolve row, got {resolve_count}"
+        );
+    }
+
+    #[tokio::test]
+    async fn apply_refinement_idempotent_via_resolve_race() {
+        let (db, _tmp) = test_db().await;
+        let _ = seed_entity_merge_proposal(&db, "ref_race_1").await;
+
+        apply_refinement(&db, "ref_race_1", "client-a")
+            .await
+            .unwrap();
+        let err = apply_refinement(&db, "ref_race_1", "client-b")
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(err, crate::error::OriginError::Validation(_)),
+            "second accept should 422, got {err:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn daemon_arm_promotes_pending_entity_merge_to_awaiting_review() {
+        let (db, _tmp) = test_db().await;
+        db.insert_refinement_proposal(
+            "ref_pending_em",
+            "entity_merge",
+            &["a".into(), "b".into()],
+            None,
+            0.87,
+        )
+        .await
+        .unwrap();
+        // status defaults to 'pending'
+        let tuning = crate::tuning::RefineryConfig::default();
+        let prompts = crate::prompts::PromptRegistry::default();
+        let processed = process_refinement_queue(&db, None, &prompts, &tuning)
+            .await
+            .unwrap();
+        assert!(
+            processed >= 1,
+            "process_refinement_queue should report >=1 processed"
+        );
+
+        let prop = db
+            .get_refinement_proposal("ref_pending_em")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            prop.status, "awaiting_review",
+            "pending entity_merge should promote to awaiting_review"
+        );
+    }
+
+    #[tokio::test]
+    async fn daemon_arm_promotes_pending_relation_conflict_to_awaiting_review() {
+        let (db, _tmp) = test_db().await;
+        db.insert_refinement_proposal(
+            "ref_pending_rc",
+            "relation_conflict",
+            &["a".into(), "b".into()],
+            None,
+            0.7,
+        )
+        .await
+        .unwrap();
+        let tuning = crate::tuning::RefineryConfig::default();
+        let prompts = crate::prompts::PromptRegistry::default();
+        let processed = process_refinement_queue(&db, None, &prompts, &tuning)
+            .await
+            .unwrap();
+        assert!(processed >= 1);
+
+        let prop = db
+            .get_refinement_proposal("ref_pending_rc")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(prop.status, "awaiting_review");
+    }
+
+    #[tokio::test]
+    async fn daemon_arm_skips_already_awaiting_review() {
+        let (db, _tmp) = test_db().await;
+        db.insert_refinement_proposal(
+            "ref_aw_em",
+            "entity_merge",
+            &["a".into(), "b".into()],
+            None,
+            0.87,
+        )
+        .await
+        .unwrap();
+        {
+            let conn = db.conn.lock().await;
+            conn.execute(
+                "UPDATE refinement_queue SET status = 'awaiting_review' WHERE id = ?1",
+                libsql::params!["ref_aw_em"],
+            )
+            .await
+            .unwrap();
+        }
+
+        let tuning = crate::tuning::RefineryConfig::default();
+        let prompts = crate::prompts::PromptRegistry::default();
+        let _ = process_refinement_queue(&db, None, &prompts, &tuning)
+            .await
+            .unwrap();
+
+        // Verify NO new refinement_resolve activity row was logged by the daemon
+        // for this already-awaiting proposal (status guard skipped resolve_proposal).
+        // get_pending_refinements returns proposals with status NOT IN (terminal),
+        // so awaiting_review still shows; the test asserts no spurious daemon activity.
+        let acts = db
+            .list_agent_activity(50, Some("daemon"), None)
+            .await
+            .unwrap_or_default();
+        // No activity rows produced for this proposal at all (it never went through
+        // resolve_proposal in this tick). Check by counting "refinement_resolve" rows.
+        let count = acts
+            .iter()
+            .filter(|a| a.action == "refinement_resolve")
+            .count();
+        assert_eq!(
+            count, 0,
+            "no spurious resolve activity for already-awaiting proposal"
         );
     }
 }

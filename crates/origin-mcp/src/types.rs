@@ -11,9 +11,10 @@ pub use origin_types::requests::{
     ListMemoriesRequest, SearchMemoryRequest, SearchPagesRequest, StoreMemoryRequest,
 };
 pub use origin_types::responses::{
-    AddObservationResponse, ChatContextResponse, CreateEntityResponse, CreatePageResponse,
-    CreateRelationResponse, DeleteResponse, ListMemoriesResponse, ListMemoryRevisionsResponse,
-    ListPageRevisionsResponse, ListRefinementsResponse, MemoryRevisionEntry, PageChangelogEntry,
-    RejectRefinementResponse, SearchMemoryResponse, SearchPagesResponse, StoreMemoryResponse,
+    AcceptRefinementResponse, AddObservationResponse, ChatContextResponse, CreateEntityResponse,
+    CreatePageResponse, CreateRelationResponse, DeleteResponse, ListMemoriesResponse,
+    ListMemoryRevisionsResponse, ListPageRevisionsResponse, ListRefinementsResponse,
+    MemoryRevisionEntry, PageChangelogEntry, RejectRefinementResponse, SearchMemoryResponse,
+    SearchPagesResponse, StoreMemoryResponse,
 };
 pub use origin_types::PageSourceWithMemory;
