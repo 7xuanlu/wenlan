@@ -104,8 +104,8 @@ pub(crate) const EXTRACT_KNOWLEDGE_GRAPH: &str = "\
 Extract entities and relations from these memories.\n\
 \n\
 Entity types: person, project, technology, organization, place, concept\n\
-Relation types (pick from this list): works_on, uses, prefers, decided, leads, knows, created, part_of, contradicts, replaced_by, learned_from, blocked_by, depends_on, related_to, discussed_in, authored, located_in, member_of\n\
-If none fit, propose a new type as lowercase_snake_case.\n\
+Relation types (pick from this list ONLY): works_on, uses, prefers, decided, leads, knows, created, part_of, contradicts, replaced_by, learned_from, blocked_by, depends_on, related_to, discussed_in, authored, located_in, member_of\n\
+If none fit, use `related_to`. Do not invent new types — they are coerced to `related_to` at write.\n\
 \n\
 Return JSON array. For each memory:\n\
 {\"i\": <number>, \"entities\": [{\"name\": \"...\", \"type\": \"...\"}], \"observations\": [{\"entity\": \"...\", \"content\": \"...\"}], \"relations\": [{\"from\": \"...\", \"to\": \"...\", \"type\": \"...\", \"confidence\": 0.0-1.0, \"explanation\": \"one sentence why\"}]}\n\

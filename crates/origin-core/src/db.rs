@@ -8542,9 +8542,12 @@ impl MemoryDB {
     }
 
     /// Resolve a relation type string against the vocabulary (case-insensitive).
-    /// Returns the canonical form if the input matches a canonical or an alias,
-    /// otherwise returns the input unchanged (lowercased).
-    pub async fn resolve_relation_type(&self, relation_type: &str) -> Result<String, OriginError> {
+    /// Returns `Some(canonical)` if the input matches a canonical or an alias,
+    /// `None` if the input is not in the vocabulary.
+    pub async fn resolve_relation_type(
+        &self,
+        relation_type: &str,
+    ) -> Result<Option<String>, OriginError> {
         let lower = relation_type.to_lowercase();
         let conn = self.conn.lock().await;
 
@@ -8564,7 +8567,7 @@ impl MemoryDB {
             .map_err(|e| OriginError::VectorDb(format!("resolve_relation_type row: {}", e)))?
             .is_some()
         {
-            return Ok(lower);
+            return Ok(Some(lower));
         }
         drop(rows);
 
@@ -8587,15 +8590,15 @@ impl MemoryDB {
                 for v in &arr {
                     if let Some(alias) = v.as_str() {
                         if alias.to_lowercase() == lower {
-                            return Ok(canonical);
+                            return Ok(Some(canonical));
                         }
                     }
                 }
             }
         }
 
-        // Not found — return lowercased input unchanged.
-        Ok(lower)
+        // Not found — not a vocabulary type.
+        Ok(None)
     }
 
     /// Increment the usage count for a canonical relation type.
@@ -8926,7 +8929,16 @@ impl MemoryDB {
     ) -> Result<String, OriginError> {
         // Normalize relation type against vocabulary.
         // NOTE: resolve_relation_type acquires the conn lock, so we must not hold it here.
-        let canonical = self.resolve_relation_type(relation_type).await?;
+        let canonical = match self.resolve_relation_type(relation_type).await? {
+            Some(c) => c,
+            None => {
+                log::warn!(
+                    "[create_relation] non-vocabulary type '{}' coerced to 'related_to' (caller should use a canonical type)",
+                    relation_type
+                );
+                "related_to".to_string()
+            }
+        };
 
         let id = uuid::Uuid::new_v4().to_string();
         let now = chrono::Utc::now().timestamp();
@@ -25634,15 +25646,76 @@ pub(crate) mod tests {
         let (db, _dir) = test_db().await;
         assert_eq!(
             db.resolve_relation_type("works_on").await.unwrap(),
-            "works_on"
+            Some("works_on".to_string())
         );
         assert_eq!(
             db.resolve_relation_type("working_at").await.unwrap(),
-            "works_on"
+            Some("works_on".to_string())
         );
+        assert_eq!(db.resolve_relation_type("custom_type").await.unwrap(), None);
+    }
+
+    #[tokio::test]
+    async fn extract_knowledge_graph_prompt_vocabulary_matches_db_seed() {
+        let (db, _tmp) = test_db().await;
+        let prompt = crate::prompts::defaults::EXTRACT_KNOWLEDGE_GRAPH;
+
+        // Extract relation types from prompt (between "Relation types (pick from this list ONLY): " and "\nIf none fit").
+        let start = prompt
+            .find("Relation types (pick from this list ONLY): ")
+            .expect("prompt header");
+        let line = &prompt[start..];
+        let end = line.find('\n').unwrap_or(line.len());
+        let list = &line[..end];
+        let prompt_types: std::collections::BTreeSet<String> = list
+            .strip_prefix("Relation types (pick from this list ONLY): ")
+            .unwrap()
+            .split(", ")
+            .map(|s| s.trim().to_string())
+            .collect();
+
+        let conn = db.conn.lock().await;
+        let mut rows = conn
+            .query("SELECT canonical FROM relation_type_vocabulary", ())
+            .await
+            .unwrap();
+        let mut db_types = std::collections::BTreeSet::new();
+        while let Some(row) = rows.next().await.unwrap() {
+            db_types.insert(row.get::<String>(0).unwrap());
+        }
+        drop(rows);
+        drop(conn);
+
         assert_eq!(
-            db.resolve_relation_type("custom_type").await.unwrap(),
-            "custom_type"
+            prompt_types, db_types,
+            "prompt relation types must match DB vocabulary seed exactly"
+        );
+    }
+
+    #[tokio::test]
+    async fn create_relation_coerces_unknown_type_to_related_to() {
+        let (db, _tmp) = test_db().await;
+        let e1 = db.create_entity("Alice", "person", None).await.unwrap();
+        let e2 = db.create_entity("Bob", "person", None).await.unwrap();
+
+        let id = db
+            .create_relation(&e1, &e2, "is_friend_of", None, None, None, None)
+            .await
+            .unwrap();
+
+        let conn = db.conn.lock().await;
+        let mut rows = conn
+            .query(
+                "SELECT relation_type FROM relations WHERE id = ?1",
+                libsql::params![id],
+            )
+            .await
+            .unwrap();
+        let row = rows.next().await.unwrap().unwrap();
+        let stored: String = row.get(0).unwrap();
+        assert_eq!(
+            stored, "related_to",
+            "unknown relation type should be coerced to related_to"
         );
     }
 
