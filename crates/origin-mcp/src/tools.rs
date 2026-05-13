@@ -441,6 +441,16 @@ pub struct ListEntitySuggestionsParams {}
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct ListPendingImportsParams {}
 
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct ListRejectionsParams {
+    /// Maximum records to return. Default 50. Clamped to 1..=500.
+    #[serde(default, deserialize_with = "deserialize_optional_usize_lenient")]
+    pub limit: Option<usize>,
+    /// Filter by rejection reason code (e.g. "duplicate", "low_quality").
+    #[serde(default)]
+    pub reason: Option<String>,
+}
+
 // ===== Internal Implementations =====
 
 fn format_capture_success(resp: &StoreMemoryResponse) -> String {
@@ -1315,6 +1325,37 @@ impl OriginMcpServer {
             pretty
         ))]))
     }
+
+    pub async fn list_rejections_impl(
+        &self,
+        params: ListRejectionsParams,
+    ) -> Result<CallToolResult, McpError> {
+        let mut path = String::from("/api/memory/rejections");
+        let mut q: Vec<String> = Vec::new();
+        if let Some(l) = params.limit {
+            q.push(format!("limit={}", l.clamp(1, 500)));
+        }
+        if let Some(r) = params.reason.as_deref().filter(|s| !s.is_empty()) {
+            q.push(format!("reason={}", url_encode_simple(r)));
+        }
+        if !q.is_empty() {
+            path.push('?');
+            path.push_str(&q.join("&"));
+        }
+
+        let resp: Vec<origin_types::memory::RejectionRecord> = match self.client.get(&path).await {
+            Ok(v) => v,
+            Err(e) => return Ok(tool_error(e, "list_rejections")),
+        };
+
+        let pretty = serde_json::to_string_pretty(&resp)
+            .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+        Ok(CallToolResult::success(vec![Content::text(format!(
+            "{} rejection(s)\n{}",
+            resp.len(),
+            pretty
+        ))]))
+    }
 }
 
 /// Build the `/api/pages/recent` URL with optional `limit` + `since_ms` query
@@ -1878,6 +1919,22 @@ impl OriginMcpServer {
         Parameters(params): Parameters<ListPendingImportsParams>,
     ) -> Result<CallToolResult, McpError> {
         self.list_pending_imports_impl(params).await
+    }
+
+    #[tool(
+        description = "List quality-gate rejections: memories the daemon discarded before storing, due to low quality, duplication, or other filters. Use when the user asks 'what did Origin reject', 'what was filtered out', or to diagnose why captures are not appearing. Returns rejection records with reason code, detail, and similarity info. Optional `limit` caps results (default 50, max 500). Optional `reason` filters by rejection reason code (e.g. 'duplicate', 'low_quality').",
+        annotations(
+            title = "List rejections",
+            read_only_hint = true,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
+    )]
+    async fn list_rejections(
+        &self,
+        Parameters(params): Parameters<ListRejectionsParams>,
+    ) -> Result<CallToolResult, McpError> {
+        self.list_rejections_impl(params).await
     }
 }
 

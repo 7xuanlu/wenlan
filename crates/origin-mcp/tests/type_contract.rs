@@ -1190,3 +1190,152 @@ async fn list_pending_imports_http_500() {
     let text = text_of(&result);
     assert!(text.to_lowercase().contains("error") || text.contains("500"));
 }
+
+// ===== list_rejections =====
+
+use origin_mcp::tools::ListRejectionsParams;
+use origin_types::memory::RejectionRecord;
+
+fn sample_rejection_record(id: &str) -> RejectionRecord {
+    RejectionRecord {
+        id: id.into(),
+        content: "Low quality content.".into(),
+        source_agent: Some("test-agent".into()),
+        rejection_reason: "low_quality".into(),
+        rejection_detail: Some("Quality score below threshold.".into()),
+        similarity_score: None,
+        similar_to_source_id: None,
+        created_at: 1715000000,
+    }
+}
+
+#[tokio::test]
+async fn list_rejections_happy_path() {
+    let (mock, client) = setup().await;
+    Mock::given(method("GET"))
+        .and(path("/api/memory/rejections"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(vec![sample_rejection_record("rej_abc1")]),
+        )
+        .mount(&mock)
+        .await;
+
+    let server = make_server(client);
+    let result = server
+        .list_rejections_impl(ListRejectionsParams {
+            limit: None,
+            reason: None,
+        })
+        .await
+        .expect("list_rejections_impl failed");
+
+    let text = text_of(&result);
+    assert!(
+        text.starts_with("1 rejection(s)"),
+        "expected '1 rejection(s)' header; got: {text}"
+    );
+    assert!(
+        text.contains("rej_abc1"),
+        "expected rejection id in output; got: {text}"
+    );
+    assert!(
+        text.contains("low_quality"),
+        "expected rejection_reason in output; got: {text}"
+    );
+}
+
+#[tokio::test]
+async fn list_rejections_envelope_guard() {
+    // Daemon must return a raw array. If it wraps under a key, typed
+    // deserialization fails loud instead of returning an empty list silently.
+    // Regression guard for lesson_mcp_typed_deserialize.
+    let wrong = serde_json::json!({ "data": [] });
+    let (mock, client) = setup().await;
+    Mock::given(method("GET"))
+        .and(path("/api/memory/rejections"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(&wrong))
+        .mount(&mock)
+        .await;
+
+    let server = make_server(client);
+    let result = server
+        .list_rejections_impl(ListRejectionsParams {
+            limit: None,
+            reason: None,
+        })
+        .await
+        .expect("list_rejections_impl returned Err unexpectedly");
+
+    let text = text_of(&result);
+    assert!(
+        result.is_error.unwrap_or(false),
+        "envelope-wrapped response must surface as tool error; got: {text}"
+    );
+    assert!(
+        text.contains("Failed to parse"),
+        "error message must mention parse failure; got: {text}"
+    );
+}
+
+#[tokio::test]
+async fn list_rejections_passes_query_params() {
+    let (mock, client) = setup().await;
+    Mock::given(method("GET"))
+        .and(path("/api/memory/rejections"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(Vec::<RejectionRecord>::new()))
+        .mount(&mock)
+        .await;
+
+    let server = make_server(client);
+    server
+        .list_rejections_impl(ListRejectionsParams {
+            limit: Some(30),
+            reason: Some("duplicate".into()),
+        })
+        .await
+        .expect("list_rejections_impl failed");
+
+    let received = mock
+        .received_requests()
+        .await
+        .expect("wiremock captured no requests");
+    assert_eq!(received.len(), 1);
+    let url = received[0].url.to_string();
+    assert!(
+        url.contains("limit=30"),
+        "expected limit=30 in query; got: {url}"
+    );
+    assert!(
+        url.contains("reason=duplicate"),
+        "expected reason=duplicate in query; got: {url}"
+    );
+}
+
+#[tokio::test]
+async fn list_rejections_http_500() {
+    let (mock, client) = setup().await;
+    Mock::given(method("GET"))
+        .and(path("/api/memory/rejections"))
+        .respond_with(ResponseTemplate::new(500).set_body_string("internal error"))
+        .mount(&mock)
+        .await;
+
+    let server = make_server(client);
+    let result = server
+        .list_rejections_impl(ListRejectionsParams {
+            limit: None,
+            reason: None,
+        })
+        .await
+        .expect("list_rejections_impl must not return Err on HTTP 500");
+
+    assert!(
+        result.is_error.unwrap_or(false),
+        "HTTP 500 must surface as tool error"
+    );
+    let text = text_of(&result);
+    assert!(
+        text.contains("500"),
+        "error message must mention HTTP 500; got: {text}"
+    );
+}

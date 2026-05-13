@@ -6,7 +6,7 @@
 //! `origin_types::*` at call sites directly.
 
 pub use origin_types::entities::EntitySuggestion;
-pub use origin_types::memory::{RecentActivityItem, SearchResult};
+pub use origin_types::memory::{RecentActivityItem, RejectionRecord, SearchResult};
 pub use origin_types::requests::{
     ChatContextRequest, CreateConceptRequest, CreateEntityRequest, CreateRelationRequest,
     ListMemoriesRequest, SearchMemoryRequest, SearchPagesRequest, StoreMemoryRequest,
