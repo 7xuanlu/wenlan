@@ -434,6 +434,10 @@ pub fn build_router(state: SharedState) -> Router {
             post(memory_routes::handle_unpin_memory),
         )
         .route(
+            "/api/memory/pending-revisions",
+            get(memory_routes::handle_list_pending_revisions),
+        )
+        .route(
             "/api/memory/pending-revision/{source_id}",
             get(memory_routes::handle_get_pending_revision),
         )
