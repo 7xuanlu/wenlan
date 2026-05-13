@@ -20964,6 +20964,7 @@ pub(crate) mod tests {
     /// `supersedes`, `pending_revision`, and `last_modified` explicitly.
     /// Covers only the columns needed by `list_pending_revisions` tests;
     /// not intended for production use.
+    #[allow(clippy::too_many_arguments)]
     async fn insert_memory_for_test(
         db: &MemoryDB,
         source_id: &str,
