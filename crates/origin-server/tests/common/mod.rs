@@ -9,6 +9,25 @@ use origin_server::state::ServerState;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
+/// Insert a page with a single wikilink reference whose target does not exist,
+/// producing an orphan `page_links` row (`target_page_id IS NULL`).
+///
+/// The `[[orphan_label]]` syntax in content causes `insert_page` to call
+/// `refresh_page_wikilinks`, which writes a `page_links` row with
+/// `target_page_id = NULL` (orphan) because no page with that title exists yet.
+pub async fn insert_page_with_orphan_link(
+    db: &Arc<MemoryDB>,
+    page_id: &str,
+    page_title: &str,
+    orphan_label: &str,
+) {
+    let now = chrono::Utc::now().to_rfc3339();
+    let content = format!("References [[{orphan_label}]] in this page.");
+    db.insert_page(page_id, page_title, None, &content, None, None, &[], &now)
+        .await
+        .expect("insert_page must succeed in test fixture");
+}
+
 /// Build a test app and return `(router, tmp, db_arc)`.
 ///
 /// The caller binds `_tmp` to keep the `TempDir` alive for the test's

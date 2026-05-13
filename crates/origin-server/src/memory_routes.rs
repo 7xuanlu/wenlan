@@ -3109,7 +3109,7 @@ pub struct OrphanLinksQuery {
 pub async fn handle_list_orphan_links(
     State(state): State<Arc<RwLock<ServerState>>>,
     axum::extract::Query(q): axum::extract::Query<OrphanLinksQuery>,
-) -> Result<Json<serde_json::Value>, ServerError> {
+) -> Result<Json<origin_types::responses::OrphanLinksResponse>, ServerError> {
     let db = {
         let s = state.read().await;
         s.db.clone().ok_or(ServerError::DbNotInitialized)?
@@ -3119,14 +3119,14 @@ pub async fn handle_list_orphan_links(
         .list_orphan_link_labels(min_count)
         .await
         .map_err(|e| ServerError::Internal(e.to_string()))?;
-    let payload: Vec<serde_json::Value> = labels
+    let orphan_labels = labels
         .into_iter()
-        .map(|(label, count)| serde_json::json!({"label": label, "count": count}))
+        .map(|(label, count)| origin_types::responses::OrphanLink { label, count })
         .collect();
-    Ok(Json(serde_json::json!({
-        "min_count": min_count,
-        "orphan_labels": payload,
-    })))
+    Ok(Json(origin_types::responses::OrphanLinksResponse {
+        min_count: min_count as usize,
+        orphan_labels,
+    }))
 }
 
 pub async fn handle_update_page(

@@ -3,11 +3,11 @@
 
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
-use origin_types::responses::PendingRevisionItem;
+use origin_types::responses::{OrphanLinksResponse, PendingRevisionItem};
 use tower::ServiceExt;
 
 mod common;
-use common::{insert_memory, test_app};
+use common::{insert_memory, insert_page_with_orphan_link, test_app};
 
 async fn body_as_json<T: serde::de::DeserializeOwned>(response: axum::http::Response<Body>) -> T {
     let bytes = axum::body::to_bytes(response.into_body(), 64 * 1024)
@@ -190,4 +190,42 @@ async fn list_pending_revisions_empty_on_clean_db() {
     assert_eq!(resp.status(), StatusCode::OK);
     let items: Vec<PendingRevisionItem> = body_as_json(resp).await;
     assert!(items.is_empty());
+}
+
+#[tokio::test]
+async fn orphan_links_returns_typed_envelope() {
+    let (app, _tmp, db) = test_app().await;
+
+    // Two pages both referencing "Missing" — an orphan because no page with
+    // that title exists. With min_count=2 both must appear for the label to
+    // surface; this exercises the threshold and the typed envelope shape.
+    insert_page_with_orphan_link(&db, "page1", "Source page", "Missing").await;
+    insert_page_with_orphan_link(&db, "page2", "Other source", "Missing").await;
+
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/pages/orphan-links?min_count=2")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body: OrphanLinksResponse = body_as_json(resp).await;
+
+    assert_eq!(body.min_count, 2, "min_count echo must match query param");
+    assert_eq!(
+        body.orphan_labels.len(),
+        1,
+        "exactly one orphan label expected (got {:?})",
+        body.orphan_labels
+    );
+    let entry = &body.orphan_labels[0];
+    assert_eq!(entry.label, "Missing", "label must be the wikilink text");
+    assert_eq!(
+        entry.count, 2,
+        "count must be the number of distinct source pages"
+    );
 }
