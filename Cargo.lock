@@ -3070,6 +3070,8 @@ dependencies = [
  "clap",
  "dirs",
  "http 1.4.0",
+ "origin-core",
+ "origin-server",
  "origin-types",
  "portpicker",
  "rand 0.10.1",

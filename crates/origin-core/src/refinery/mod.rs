@@ -511,7 +511,7 @@ pub async fn run_periodic_steep_with_api(
         let phase = run_phase(Phase::ReDistill, || async {
             let changed = redistill_changed_pages(db_ref, compile_llm, prompts, kp_ref).await?;
             // Also re-distill concepts explicitly marked stale by topic-key upserts.
-            let stale = re_distill_stale_pages(db_ref, compile_llm, prompts).await?;
+            let stale = re_distill_stale_pages(db_ref, compile_llm, prompts, kp_ref).await?;
             let count = changed + stale;
             let (nudge, headline) = classify_redistill(count);
             Ok(PhaseOutput {
@@ -774,6 +774,7 @@ pub(crate) async fn re_distill_stale_pages(
     db: &MemoryDB,
     llm: Option<&Arc<dyn LlmProvider>>,
     prompts: &PromptRegistry,
+    knowledge_path: Option<&std::path::Path>,
 ) -> Result<usize, OriginError> {
     let stale = db.list_stale_pages("source_updated").await?;
     if stale.is_empty() {
@@ -872,7 +873,7 @@ pub(crate) async fn re_distill_stale_pages(
                         },
                         "re_distill",
                         true,
-                        None,
+                        knowledge_path,
                     )
                     .await?;
                     if result.wrote {
@@ -2351,5 +2352,67 @@ mod tests {
         assert_eq!(actions.len(), 2);
         assert_eq!(actions[0]["action"], "merge");
         assert_eq!(actions[1]["action"], "keep");
+    }
+
+    #[tokio::test]
+    async fn re_distill_stale_pages_re_projects_md_when_path_passed() {
+        use crate::llm_provider::MockProvider;
+        use tempfile::TempDir;
+
+        let (db, _db_dir) = test_db().await;
+        let knowledge_dir = TempDir::new().unwrap();
+        let now = chrono::Utc::now().to_rfc3339();
+        let now_ts = chrono::Utc::now().timestamp();
+
+        // Seed memory row so get_memories_by_source_ids returns it.
+        {
+            let conn = db.conn.lock().await;
+            conn.execute(
+                "INSERT INTO memories (id, source_id, title, content, chunk_index, chunk_type, memory_type, domain, source_agent, created_at, last_modified, confirmed, stability, source) \
+                 VALUES (?1, ?1, ?1, 'seed content', 0, 'text', 'fact', 'test', 'claude-code', ?2, ?2, 1, 'confirmed', 'memory')",
+                libsql::params!["mem_seed".to_string(), now_ts],
+            )
+            .await
+            .unwrap();
+        }
+
+        db.insert_page(
+            "page_stale",
+            "Stale Topic",
+            None,
+            "original body",
+            None,
+            None,
+            &["mem_seed"],
+            &now,
+        )
+        .await
+        .unwrap();
+        db.set_page_stale("page_stale", "source_updated")
+            .await
+            .unwrap();
+
+        let llm: Arc<dyn LlmProvider> = Arc::new(MockProvider::new("refreshed body"));
+        let prompts = PromptRegistry::default();
+
+        let recompiled =
+            re_distill_stale_pages(&db, Some(&llm), &prompts, Some(knowledge_dir.path()))
+                .await
+                .unwrap();
+        assert_eq!(recompiled, 1, "stale page should be re-distilled");
+
+        // md projection should land in knowledge_dir.
+        let entries: Vec<_> = std::fs::read_dir(knowledge_dir.path())
+            .unwrap()
+            .flatten()
+            .filter(|e| e.path().extension().map(|x| x == "md").unwrap_or(false))
+            .collect();
+        assert_eq!(entries.len(), 1, "exactly one md file written");
+        let content = std::fs::read_to_string(entries[0].path()).unwrap();
+        assert!(
+            content.contains("refreshed body"),
+            "md body should reflect LLM output, got: {}",
+            content
+        );
     }
 }
