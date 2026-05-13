@@ -942,6 +942,14 @@ pub async fn handle_redistill(
         Some(config.knowledge_path_or_default())
     };
 
+    // Clear user_edited and mark stale so the CAS gate inside
+    // deep_distill_single (require_stale=true) lets this pass through.
+    // This preserves the original contract of the route: always recompile
+    // the page regardless of its current stale state.
+    db.clear_user_edited(&page_id)
+        .await
+        .map_err(|e| ServerError::Internal(e.to_string()))?;
+
     let prefer_llm = api_llm.or(llm);
     if prefer_llm.map(|p| p.is_available()).unwrap_or(false) {
         let updated = origin_core::refinery::deep_distill_single(
