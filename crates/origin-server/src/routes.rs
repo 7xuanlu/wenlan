@@ -884,10 +884,21 @@ pub async fn handle_redistill(
     let api_llm = s.api_llm.as_ref();
     let prompts = &s.prompts;
 
+    let knowledge_path = {
+        let config = origin_core::config::load_config();
+        Some(config.knowledge_path_or_default())
+    };
+
     let prefer_llm = api_llm.or(llm);
     if prefer_llm.map(|p| p.is_available()).unwrap_or(false) {
-        let updated =
-            origin_core::refinery::deep_distill_single(db, prefer_llm, prompts, &page_id).await?;
+        let updated = origin_core::refinery::deep_distill_single(
+            db,
+            prefer_llm,
+            prompts,
+            &page_id,
+            knowledge_path.as_deref(),
+        )
+        .await?;
         Ok(Json(serde_json::json!({
             "status": "ok",
             "updated": updated,

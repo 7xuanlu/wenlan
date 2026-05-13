@@ -509,7 +509,7 @@ pub async fn run_periodic_steep_with_api(
         }
     {
         let phase = run_phase(Phase::ReDistill, || async {
-            let changed = redistill_changed_pages(db_ref, compile_llm, prompts).await?;
+            let changed = redistill_changed_pages(db_ref, compile_llm, prompts, kp_ref).await?;
             // Also re-distill concepts explicitly marked stale by topic-key upserts.
             let stale = re_distill_stale_pages(db_ref, compile_llm, prompts).await?;
             let count = changed + stale;
@@ -728,6 +728,7 @@ pub(crate) async fn redistill_changed_pages(
     db: &MemoryDB,
     llm: Option<&Arc<dyn LlmProvider>>,
     prompts: &PromptRegistry,
+    knowledge_path: Option<&std::path::Path>,
 ) -> Result<usize, OriginError> {
     let llm = match llm {
         Some(l) if l.is_available() => l,
@@ -743,7 +744,7 @@ pub(crate) async fn redistill_changed_pages(
             continue;
         }
 
-        match recompile_single_page(db, llm, prompts, page).await {
+        match recompile_single_page(db, llm, prompts, page, knowledge_path).await {
             Ok(true) => recompiled += 1,
             Ok(false) => {}
             Err(e) => log::warn!("[re-distill] failed for '{}': {}", page.title, e),
