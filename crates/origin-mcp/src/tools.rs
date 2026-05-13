@@ -341,6 +341,11 @@ pub struct SearchPagesParams {
     )]
     #[serde(default, deserialize_with = "deserialize_optional_usize_lenient")]
     pub limit: Option<usize>,
+    #[schemars(
+        description = "Optional page type filter (e.g. 'recap', 'decision'). Narrows results to one type/domain. Omit to search all types."
+    )]
+    #[serde(default)]
+    pub page_type: Option<String>,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
@@ -919,7 +924,7 @@ impl OriginMcpServer {
         let req = SearchPagesRequest {
             query: params.query,
             limit: params.limit,
-            page_type: None,
+            page_type: params.page_type,
         };
         let resp: SearchPagesResponse = match self.client.post("/api/pages/search", &req).await {
             Ok(r) => r,
@@ -1315,7 +1320,7 @@ impl OriginMcpServer {
     }
 
     #[tool(
-        description = "Search pages by query. Use to resolve a page title to its id before calling get_page (set `limit: 1` for that), or to browse pages on a topic. Returns matching pages with id, title, and summary. For listing recent activity instead, use list_pages_recent.",
+        description = "Search pages by query. Use to resolve a page title to its id before calling get_page (set `limit: 1` for that), or to browse pages on a topic. Returns matching pages with id, title, and summary. Optional `page_type` filter narrows to one type (e.g. `recap`, `decision`). For listing recent activity instead, use list_pages_recent.",
         annotations(title = "Search pages", read_only_hint = true, open_world_hint = false)
     )]
     async fn search_pages(
@@ -3113,11 +3118,12 @@ mod tests {
         let params = SearchPagesParams {
             query: "mutex".into(),
             limit: Some(7),
+            page_type: None,
         };
         let req = SearchPagesRequest {
             query: params.query,
             limit: params.limit,
-            page_type: None,
+            page_type: params.page_type,
         };
         let json = serde_json::to_value(&req).unwrap();
         assert_eq!(json["query"], "mutex");
