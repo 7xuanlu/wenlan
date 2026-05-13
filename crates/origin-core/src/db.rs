@@ -12574,16 +12574,25 @@ impl MemoryDB {
         }
     }
 
-    /// Resolve a refinement proposal with a new status.
-    pub async fn resolve_refinement(&self, id: &str, status: &str) -> Result<(), OriginError> {
+    /// Atomic resolve: flip the proposal's status only if currently non-terminal.
+    /// Returns the rows_affected count (1 if flipped, 0 if missing or already terminal).
+    /// Caller distinguishes missing-vs-terminal via a follow-up `get_refinement_proposal`.
+    pub async fn resolve_refinement_if_open(
+        &self,
+        id: &str,
+        status: &str,
+    ) -> Result<u64, OriginError> {
         let conn = self.conn.lock().await;
-        conn.execute(
-            "UPDATE refinement_queue SET status = ?1, resolved_at = datetime('now') WHERE id = ?2",
-            libsql::params![status, id],
-        )
-        .await
-        .map_err(|e| OriginError::VectorDb(format!("resolve_refinement: {}", e)))?;
-        Ok(())
+        let rows = conn
+            .execute(
+                "UPDATE refinement_queue \
+                 SET status = ?1, resolved_at = datetime('now') \
+                 WHERE id = ?2 AND status NOT IN ('dismissed','auto_applied','resolved')",
+                libsql::params![status, id],
+            )
+            .await
+            .map_err(|e| OriginError::VectorDb(format!("resolve_refinement_if_open: {e}")))?;
+        Ok(rows)
     }
 
     /// Dismiss all `detect_contradiction / awaiting_review` refinement queue rows that
@@ -21827,7 +21836,7 @@ pub(crate) mod tests {
         assert_eq!(pending[0].action, "dedup_merge");
         assert_eq!(pending[0].source_ids, vec!["mem1", "mem2"]);
 
-        db.resolve_refinement("ref_1", "auto_applied")
+        db.resolve_refinement_if_open("ref_1", "auto_applied")
             .await
             .unwrap();
         let pending = db.get_pending_refinements().await.unwrap();
@@ -21865,7 +21874,7 @@ pub(crate) mod tests {
         )
         .await
         .unwrap();
-        db.resolve_refinement("ref_flagged", "awaiting_review")
+        db.resolve_refinement_if_open("ref_flagged", "awaiting_review")
             .await
             .unwrap();
 
@@ -21879,7 +21888,7 @@ pub(crate) mod tests {
         )
         .await
         .unwrap();
-        db.resolve_refinement("ref_clean", "resolved")
+        db.resolve_refinement_if_open("ref_clean", "resolved")
             .await
             .unwrap();
 
@@ -24830,7 +24839,7 @@ pub(crate) mod tests {
         )
         .await
         .unwrap();
-        db.resolve_refinement("ref_nr", "awaiting_review")
+        db.resolve_refinement_if_open("ref_nr", "awaiting_review")
             .await
             .unwrap();
 
@@ -25138,7 +25147,7 @@ pub(crate) mod tests {
         )
         .await
         .unwrap();
-        db.resolve_refinement("ref_concept_flag", "awaiting_review")
+        db.resolve_refinement_if_open("ref_concept_flag", "awaiting_review")
             .await
             .unwrap();
 
@@ -28302,6 +28311,88 @@ pub(crate) mod tests {
         assert!(
             matches!(err, crate::error::OriginError::NotFound(_)),
             "expected NotFound, got {err:?}"
+        );
+    }
+
+    // ==================== resolve_refinement_if_open ====================
+
+    async fn seed_proposal(db: &MemoryDB, id: &str, status: &str) {
+        db.insert_refinement_proposal(id, "entity_merge", &["a".into(), "b".into()], None, 0.85)
+            .await
+            .unwrap();
+        if status != "pending" {
+            let conn = db.conn.lock().await;
+            conn.execute(
+                "UPDATE refinement_queue SET status = ?1 WHERE id = ?2",
+                libsql::params![status, id],
+            )
+            .await
+            .unwrap();
+        }
+    }
+
+    #[tokio::test]
+    async fn resolve_refinement_if_open_updates_open_proposal() {
+        let (db, _tmp) = test_db().await;
+        seed_proposal(&db, "ref_open_1", "awaiting_review").await;
+        let rows = db
+            .resolve_refinement_if_open("ref_open_1", "dismissed")
+            .await
+            .unwrap();
+        assert_eq!(rows, 1, "open proposal should flip");
+
+        let conn = db.conn.lock().await;
+        let mut q = conn
+            .query(
+                "SELECT status FROM refinement_queue WHERE id = ?1",
+                libsql::params!["ref_open_1"],
+            )
+            .await
+            .unwrap();
+        let row = q.next().await.unwrap().unwrap();
+        let s: String = row.get(0).unwrap();
+        assert_eq!(s, "dismissed");
+    }
+
+    #[tokio::test]
+    async fn resolve_refinement_if_open_terminal_returns_zero() {
+        let (db, _tmp) = test_db().await;
+        seed_proposal(&db, "ref_term_1", "resolved").await;
+        let rows = db
+            .resolve_refinement_if_open("ref_term_1", "dismissed")
+            .await
+            .unwrap();
+        assert_eq!(rows, 0, "terminal proposal must not be updated");
+    }
+
+    #[tokio::test]
+    async fn resolve_refinement_if_open_missing_returns_zero() {
+        let (db, _tmp) = test_db().await;
+        let rows = db
+            .resolve_refinement_if_open("ref_nonexistent", "dismissed")
+            .await
+            .unwrap();
+        assert_eq!(rows, 0, "missing proposal returns 0 rows");
+    }
+
+    #[tokio::test]
+    async fn resolve_refinement_if_open_concurrent_only_one_wins() {
+        let (db, _tmp) = test_db().await;
+        seed_proposal(&db, "ref_race", "awaiting_review").await;
+        let db_arc = std::sync::Arc::new(db);
+        let h1 = {
+            let d = db_arc.clone();
+            tokio::spawn(async move { d.resolve_refinement_if_open("ref_race", "dismissed").await })
+        };
+        let h2 = {
+            let d = db_arc.clone();
+            tokio::spawn(async move { d.resolve_refinement_if_open("ref_race", "dismissed").await })
+        };
+        let (r1, r2) = (h1.await.unwrap().unwrap(), h2.await.unwrap().unwrap());
+        assert_eq!(
+            r1 + r2,
+            1,
+            "exactly one caller should see rows=1, got {r1} + {r2}"
         );
     }
 }
