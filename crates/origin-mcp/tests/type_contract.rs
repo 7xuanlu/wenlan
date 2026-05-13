@@ -737,3 +737,104 @@ async fn t12_forward_compat_response_missing_extraction_method() {
     assert_eq!(parsed.extraction_method, "unknown");
     assert!(parsed.warnings.is_empty());
 }
+
+#[tokio::test]
+async fn origin_client_sends_x_agent_name_header() {
+    let mock = MockServer::start().await;
+    let client = OriginClient::new(mock.uri()).with_agent_name("claude-code".into());
+
+    let response = StoreMemoryResponse {
+        source_id: "mem_xan1".into(),
+        chunks_created: 1,
+        memory_type: "fact".into(),
+        entity_id: None,
+        quality: None,
+        warnings: vec![],
+        extraction_method: "none".into(),
+        enrichment: String::new(),
+        hint: String::new(),
+    };
+    Mock::given(method("POST"))
+        .and(path("/api/memory/store"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(&response))
+        .mount(&mock)
+        .await;
+
+    let server = make_server(client);
+    server
+        .capture_impl(CaptureParams {
+            content: "header test".into(),
+            memory_type: None,
+            domain: None,
+            entity: None,
+            confidence: None,
+            supersedes: None,
+            structured_fields: None,
+            retrieval_cue: None,
+        })
+        .await
+        .expect("capture_impl failed");
+
+    let received = mock
+        .received_requests()
+        .await
+        .expect("wiremock captured no requests");
+    assert_eq!(received.len(), 1, "expected exactly 1 request");
+    let headers = &received[0].headers;
+    let value = headers
+        .get("x-agent-name")
+        .expect("x-agent-name header must be present");
+    assert_eq!(
+        value.to_str().expect("header value is valid utf-8"),
+        "claude-code",
+        "x-agent-name header must equal the configured agent name"
+    );
+}
+
+#[tokio::test]
+async fn origin_client_omits_x_agent_name_when_unset() {
+    let (mock, client) = setup().await;
+
+    let response = StoreMemoryResponse {
+        source_id: "mem_xan2".into(),
+        chunks_created: 1,
+        memory_type: "fact".into(),
+        entity_id: None,
+        quality: None,
+        warnings: vec![],
+        extraction_method: "none".into(),
+        enrichment: String::new(),
+        hint: String::new(),
+    };
+    Mock::given(method("POST"))
+        .and(path("/api/memory/store"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(&response))
+        .mount(&mock)
+        .await;
+
+    let server = make_server(client);
+    server
+        .capture_impl(CaptureParams {
+            content: "no header test".into(),
+            memory_type: None,
+            domain: None,
+            entity: None,
+            confidence: None,
+            supersedes: None,
+            structured_fields: None,
+            retrieval_cue: None,
+        })
+        .await
+        .expect("capture_impl failed");
+
+    let received = mock
+        .received_requests()
+        .await
+        .expect("wiremock captured no requests");
+    assert_eq!(received.len(), 1, "expected exactly 1 request");
+    let headers = &received[0].headers;
+    assert!(
+        headers.get("x-agent-name").is_none(),
+        "x-agent-name header must be absent when agent_name is not set"
+    );
+}

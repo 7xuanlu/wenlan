@@ -22,6 +22,7 @@ pub fn discover_origin_url(cli_url: Option<String>) -> String {
 pub struct OriginClient {
     client: Client,
     base_url: String,
+    agent_name: Option<String>,
 }
 
 /// Max retries on connection errors (daemon restarting).
@@ -35,7 +36,14 @@ impl OriginClient {
         Self {
             client: Client::new(),
             base_url,
+            agent_name: None,
         }
+    }
+
+    /// Set the agent name to be sent as `x-agent-name` header on every request.
+    pub fn with_agent_name(mut self, name: String) -> Self {
+        self.agent_name = Some(name);
+        self
     }
 
     /// Retry a request on connection errors (daemon restarting).
@@ -93,7 +101,16 @@ impl OriginClient {
     /// GET request, deserialize JSON response.
     pub async fn get<R: DeserializeOwned>(&self, path: &str) -> Result<R, OriginError> {
         let url = format!("{}{}", self.base_url, path);
-        let resp = self.send_with_retry(|| self.client.get(&url)).await?;
+        let agent = self.agent_name.clone();
+        let resp = self
+            .send_with_retry(|| {
+                let mut req = self.client.get(&url);
+                if let Some(a) = agent.as_deref() {
+                    req = req.header("x-agent-name", a);
+                }
+                req
+            })
+            .await?;
         let bytes = Self::read_body(resp).await?;
         Self::parse_response(&bytes)
     }
@@ -105,8 +122,15 @@ impl OriginClient {
         body: &B,
     ) -> Result<R, OriginError> {
         let url = format!("{}{}", self.base_url, path);
+        let agent = self.agent_name.clone();
         let resp = self
-            .send_with_retry(|| self.client.post(&url).json(body))
+            .send_with_retry(|| {
+                let mut req = self.client.post(&url).json(body);
+                if let Some(a) = agent.as_deref() {
+                    req = req.header("x-agent-name", a);
+                }
+                req
+            })
             .await?;
         let bytes = Self::read_body(resp).await?;
         Self::parse_response(&bytes)
@@ -115,7 +139,16 @@ impl OriginClient {
     /// DELETE request, deserialize JSON response.
     pub async fn delete<R: DeserializeOwned>(&self, path: &str) -> Result<R, OriginError> {
         let url = format!("{}{}", self.base_url, path);
-        let resp = self.send_with_retry(|| self.client.delete(&url)).await?;
+        let agent = self.agent_name.clone();
+        let resp = self
+            .send_with_retry(|| {
+                let mut req = self.client.delete(&url);
+                if let Some(a) = agent.as_deref() {
+                    req = req.header("x-agent-name", a);
+                }
+                req
+            })
+            .await?;
         let bytes = Self::read_body(resp).await?;
         Self::parse_response(&bytes)
     }
@@ -127,8 +160,15 @@ impl OriginClient {
         body: &B,
     ) -> Result<R, OriginError> {
         let url = format!("{}{}", self.base_url, path);
+        let agent = self.agent_name.clone();
         let resp = self
-            .send_with_retry(|| self.client.put(&url).json(body))
+            .send_with_retry(|| {
+                let mut req = self.client.put(&url).json(body);
+                if let Some(a) = agent.as_deref() {
+                    req = req.header("x-agent-name", a);
+                }
+                req
+            })
             .await?;
         let bytes = Self::read_body(resp).await?;
         Self::parse_response(&bytes)
