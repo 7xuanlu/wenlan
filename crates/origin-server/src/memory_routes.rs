@@ -10,7 +10,7 @@ use origin_core::sources::compute_effective_confidence;
 use origin_types::requests::{
     AddObservationRequest, ConfirmRequest, CreateConceptRequest, CreateEntityRequest,
     CreateRelationRequest, ExportPagesRequest, ListMemoriesRequest, SearchMemoryRequest,
-    StoreMemoryRequest,
+    SearchPagesRequest, StoreMemoryRequest,
 };
 use origin_types::responses::{
     AddObservationResponse, ConfirmResponse, CreateEntityResponse, CreatePageResponse,
@@ -1997,15 +1997,6 @@ pub async fn handle_create_page(
         id: result.id,
         warnings: result.warnings,
     }))
-}
-
-#[derive(Debug, Deserialize)]
-pub struct SearchPagesRequest {
-    pub query: String,
-    #[serde(default)]
-    pub limit: Option<usize>,
-    #[serde(default)]
-    pub page_type: Option<String>,
 }
 
 /// POST /api/pages/export

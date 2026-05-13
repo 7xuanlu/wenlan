@@ -16,6 +16,7 @@ fn eval_root() -> std::path::PathBuf {
 }
 
 #[tokio::test]
+#[ignore = "fixtures dir app/eval/fixtures missing: extracted with origin-app to separate repo"]
 async fn test_eval_harness_produces_report() {
     let fixture_dir = eval_root().join("fixtures");
     let tmp = tempfile::tempdir().unwrap();
@@ -43,6 +44,7 @@ async fn test_eval_harness_produces_report() {
 }
 
 #[tokio::test]
+#[ignore = "fixtures dir app/eval/fixtures missing: extracted with origin-app to separate repo"]
 async fn test_eval_metrics_are_bounded() {
     let fixture_dir = eval_root().join("fixtures");
     let tmp = tempfile::tempdir().unwrap();
@@ -71,6 +73,7 @@ async fn test_eval_metrics_are_bounded() {
 }
 
 #[tokio::test]
+#[ignore = "fixtures dir app/eval/fixtures missing: extracted with origin-app to separate repo"]
 async fn test_eval_baseline_comparison() {
     let fixture_dir = eval_root().join("fixtures");
     let tmp = tempfile::tempdir().unwrap();
@@ -105,6 +108,7 @@ async fn test_eval_baseline_comparison() {
 }
 
 #[tokio::test]
+#[ignore = "fixtures dir app/eval/fixtures missing: extracted with origin-app to separate repo"]
 async fn test_eval_with_gate_filter() {
     let fixture_dir = eval_root().join("fixtures");
     let tmp = tempfile::tempdir().unwrap();
@@ -488,6 +492,7 @@ async fn test_longmemeval_gate_comparison() {
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
+#[ignore = "fixtures dir app/eval/fixtures missing: extracted with origin-app to separate repo"]
 async fn test_lifecycle_fixture_with_mock_llm() {
     use origin_core::eval::lifecycle::{run_lifecycle_fixture, EvalMockLlm};
     use std::sync::Arc;
@@ -547,6 +552,7 @@ async fn test_lifecycle_fixture_with_mock_llm() {
 }
 
 #[tokio::test]
+#[ignore = "fixtures dir app/eval/fixtures missing: extracted with origin-app to separate repo"]
 async fn test_lifecycle_fixture_no_llm() {
     use origin_core::eval::lifecycle::run_lifecycle_fixture;
 
@@ -646,6 +652,7 @@ async fn test_lifecycle_longmemeval_with_mock_llm() {
 }
 
 #[tokio::test]
+#[ignore = "fixtures dir app/eval/fixtures missing: extracted with origin-app to separate repo"]
 async fn test_eval_empty_set_and_temporal() {
     let fixture_dir = eval_root().join("fixtures");
     let tmp = tempfile::tempdir().unwrap();
@@ -830,6 +837,7 @@ async fn save_longmemeval_expanded_baseline() {
 }
 
 #[tokio::test]
+#[ignore = "fixtures dir app/eval/fixtures missing: extracted with origin-app to separate repo"]
 async fn test_lifecycle_pipeline_quality() {
     use origin_core::eval::lifecycle::{run_lifecycle_fixture, EvalMockLlm};
     use std::sync::Arc;
@@ -874,6 +882,7 @@ async fn test_lifecycle_pipeline_quality() {
 /// accessible from integration tests, so we use `run_lifecycle_fixture` which invokes the full
 /// pipeline internally and exposes the PageRetrieval phase in the report.
 #[tokio::test]
+#[ignore = "fixtures dir app/eval/fixtures missing: extracted with origin-app to separate repo"]
 async fn test_page_retrieval_eval() {
     use origin_core::eval::lifecycle::{run_lifecycle_fixture, EvalMockLlm, LifecyclePhase};
     use std::sync::Arc;
@@ -1073,6 +1082,7 @@ async fn test_scaling_curve() {
 /// domain + case), then measures combined recall (search_memory ∪ concept source_ids) vs
 /// memory-only recall across every fixture query.
 #[tokio::test]
+#[ignore = "fixtures dir app/eval/fixtures missing: extracted with origin-app to separate repo"]
 async fn test_concept_before_after_comparison() {
     use origin_core::db::MemoryDB;
     use origin_core::eval::fixtures::load_fixtures;
