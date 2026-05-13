@@ -435,6 +435,9 @@ pub struct ListNurtureParams {
     pub domain: Option<String>,
 }
 
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct ListEntitySuggestionsParams {}
+
 // ===== Internal Implementations =====
 
 fn format_capture_success(resp: &StoreMemoryResponse) -> String {
@@ -1273,6 +1276,24 @@ impl OriginMcpServer {
             pretty
         ))]))
     }
+
+    pub async fn list_entity_suggestions_impl(
+        &self,
+        _params: ListEntitySuggestionsParams,
+    ) -> Result<CallToolResult, McpError> {
+        let resp: Vec<origin_types::entities::EntitySuggestion> =
+            match self.client.get("/api/memory/entity-suggestions").await {
+                Ok(v) => v,
+                Err(e) => return Ok(tool_error(e, "list_entity_suggestions")),
+            };
+        let pretty = serde_json::to_string_pretty(&resp)
+            .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+        Ok(CallToolResult::success(vec![Content::text(format!(
+            "{} entity suggestion(s)\n{}",
+            resp.len(),
+            pretty
+        ))]))
+    }
 }
 
 /// Build the `/api/pages/recent` URL with optional `limit` + `since_ms` query
@@ -1797,6 +1818,26 @@ impl OriginMcpServer {
         Parameters(params): Parameters<ListNurtureParams>,
     ) -> Result<CallToolResult, McpError> {
         self.list_nurture_impl(params).await
+    }
+
+    #[tool(
+        description = "List entity-suggestion proposals from the refinery queue \
+                       (action='suggest_entity'). Use when the user asks 'what entities \
+                       does the daemon want to create' or wants to triage merge-vs-create \
+                       decisions. Returns id, proposed entity_name, source_ids, confidence. \
+                       Pair with PR2's approve/dismiss verbs once they land.",
+        annotations(
+            title = "List entity suggestions",
+            read_only_hint = true,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
+    )]
+    async fn list_entity_suggestions(
+        &self,
+        Parameters(params): Parameters<ListEntitySuggestionsParams>,
+    ) -> Result<CallToolResult, McpError> {
+        self.list_entity_suggestions_impl(params).await
     }
 }
 

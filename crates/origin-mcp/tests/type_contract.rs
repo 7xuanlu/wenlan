@@ -1001,3 +1001,98 @@ async fn list_nurture_http_500() {
         "error message must mention HTTP 500; got: {text}"
     );
 }
+
+// ===== list_entity_suggestions =====
+
+use origin_mcp::tools::ListEntitySuggestionsParams;
+use origin_types::entities::EntitySuggestion;
+
+fn sample_entity_suggestion(id: &str, name: &str) -> EntitySuggestion {
+    EntitySuggestion {
+        id: id.into(),
+        entity_name: Some(name.into()),
+        source_ids: vec!["mem_a".into()],
+        confidence: 0.8,
+        created_at: "2026-05-12T00:00:00Z".into(),
+    }
+}
+
+#[tokio::test]
+async fn list_entity_suggestions_happy_path() {
+    let (mock, client) = setup().await;
+    let body = vec![sample_entity_suggestion("sug_1", "PostgreSQL")];
+    Mock::given(method("GET"))
+        .and(path("/api/memory/entity-suggestions"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(&body))
+        .mount(&mock)
+        .await;
+
+    let server = make_server(client);
+    let result = server
+        .list_entity_suggestions_impl(ListEntitySuggestionsParams {})
+        .await
+        .unwrap();
+    let text = text_of(&result);
+    assert!(text.contains("PostgreSQL"));
+    assert!(text.contains("sug_1"));
+}
+
+#[tokio::test]
+async fn list_entity_suggestions_envelope_guard() {
+    let (mock, client) = setup().await;
+    // Wrong shape: object instead of array
+    Mock::given(method("GET"))
+        .and(path("/api/memory/entity-suggestions"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "suggestions": []
+        })))
+        .mount(&mock)
+        .await;
+
+    let server = make_server(client);
+    let result = server
+        .list_entity_suggestions_impl(ListEntitySuggestionsParams {})
+        .await
+        .unwrap();
+    let text = text_of(&result);
+    assert!(
+        text.to_lowercase().contains("error") || text.contains("invalid"),
+        "expected error signal, got: {text}"
+    );
+}
+
+#[tokio::test]
+async fn list_entity_suggestions_empty() {
+    let (mock, client) = setup().await;
+    Mock::given(method("GET"))
+        .and(path("/api/memory/entity-suggestions"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(&Vec::<EntitySuggestion>::new()))
+        .mount(&mock)
+        .await;
+
+    let server = make_server(client);
+    let result = server
+        .list_entity_suggestions_impl(ListEntitySuggestionsParams {})
+        .await
+        .unwrap();
+    let text = text_of(&result);
+    assert!(text.contains("0 entity suggestion"), "got: {text}");
+}
+
+#[tokio::test]
+async fn list_entity_suggestions_http_500() {
+    let (mock, client) = setup().await;
+    Mock::given(method("GET"))
+        .and(path("/api/memory/entity-suggestions"))
+        .respond_with(ResponseTemplate::new(500))
+        .mount(&mock)
+        .await;
+
+    let server = make_server(client);
+    let result = server
+        .list_entity_suggestions_impl(ListEntitySuggestionsParams {})
+        .await
+        .unwrap();
+    let text = text_of(&result);
+    assert!(text.to_lowercase().contains("error") || text.contains("500"));
+}
