@@ -8888,6 +8888,26 @@ impl MemoryDB {
         Ok(())
     }
 
+    /// Set `pending_revision = 1` on all chunks matching `source_id`. Idempotent
+    /// (re-flag is no-op; the UPDATE matches the same row count). Returns NotFound
+    /// when zero rows matched.
+    pub async fn flag_memory_for_revision(&self, source_id: &str) -> Result<(), OriginError> {
+        let conn = self.conn.lock().await;
+        let rows = conn
+            .execute(
+                "UPDATE memories SET pending_revision = 1 WHERE source_id = ?1",
+                libsql::params![source_id],
+            )
+            .await
+            .map_err(|e| OriginError::VectorDb(format!("flag_memory_for_revision: {e}")))?;
+        if rows == 0 {
+            return Err(OriginError::NotFound(format!(
+                "memory {source_id} not found"
+            )));
+        }
+        Ok(())
+    }
+
     /// Create a relation between two entities.
     /// The relation type is normalized against the vocabulary via `resolve_relation_type`
     /// before insertion. On conflict (same from/to/type), updates confidence if higher
@@ -28224,6 +28244,64 @@ pub(crate) mod tests {
         assert!(
             matches!(err, crate::error::OriginError::Validation(_)),
             "expected Validation, got {err:?}"
+        );
+    }
+
+    // ==================== flag_memory_for_revision ====================
+
+    async fn seed_memory(db: &MemoryDB, content: &str) -> String {
+        let source_id = format!("mem_{}", uuid::Uuid::new_v4().simple());
+        let conn = db.conn.lock().await;
+        conn.execute(
+            "INSERT INTO memories (id, content, source, source_id, title, chunk_index, \
+                                    last_modified, chunk_type, source_agent, domain, confidence, \
+                                    confirmed, memory_type, pending_revision) \
+             VALUES (?1, ?2, 'memory', ?3, 'test', 0, 1712707200, 'text', NULL, 'general', 1.0, 0, 'fact', 0)",
+            libsql::params![source_id.clone(), content.to_string(), source_id.clone()],
+        )
+        .await
+        .unwrap();
+        source_id
+    }
+
+    #[tokio::test]
+    async fn flag_memory_for_revision_sets_column() {
+        let (db, _tmp) = test_db().await;
+        let sid = seed_memory(&db, "Coffee helps me focus").await;
+
+        db.flag_memory_for_revision(&sid).await.unwrap();
+
+        let conn = db.conn.lock().await;
+        let mut rows = conn
+            .query(
+                "SELECT pending_revision FROM memories WHERE source_id = ?1",
+                libsql::params![sid],
+            )
+            .await
+            .unwrap();
+        let row = rows.next().await.unwrap().unwrap();
+        let flag: i64 = row.get(0).unwrap();
+        assert_eq!(flag, 1, "pending_revision should be set to 1");
+    }
+
+    #[tokio::test]
+    async fn flag_memory_for_revision_idempotent() {
+        let (db, _tmp) = test_db().await;
+        let sid = seed_memory(&db, "x").await;
+        db.flag_memory_for_revision(&sid).await.unwrap();
+        db.flag_memory_for_revision(&sid).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn flag_memory_for_revision_missing_not_found() {
+        let (db, _tmp) = test_db().await;
+        let err = db
+            .flag_memory_for_revision("mem_nonexistent")
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(err, crate::error::OriginError::NotFound(_)),
+            "expected NotFound, got {err:?}"
         );
     }
 }
