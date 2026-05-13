@@ -532,6 +532,27 @@ pub enum RefinementPayload {
     DedupMerge,
 }
 
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct RefinementProposalSummary {
+    pub id: String,
+    pub action: ProposalAction,
+    pub source_ids: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub payload: Option<RefinementPayload>,
+    pub confidence: f64,
+    pub created_at: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
+pub struct ListRefinementsResponse {
+    pub proposals: Vec<RefinementProposalSummary>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct RejectRefinementResponse {
+    pub id: String,
+}
+
 #[cfg(test)]
 mod refinement_wire_tests {
     use super::*;
@@ -639,6 +660,40 @@ mod refinement_wire_tests {
             parsed,
             RefinementPayload::SuggestEntity { name_hint: None }
         ));
+    }
+
+    #[test]
+    fn list_refinements_response_round_trip() {
+        let resp = ListRefinementsResponse {
+            proposals: vec![RefinementProposalSummary {
+                id: "ref_1".into(),
+                action: ProposalAction::EntityMerge,
+                source_ids: vec!["a".into(), "b".into()],
+                payload: Some(RefinementPayload::EntityMerge {
+                    existing_id: "a".into(),
+                    new_id: "b".into(),
+                    similarity: 0.86,
+                }),
+                confidence: 0.86,
+                created_at: "2026-05-12T00:00:00Z".into(),
+            }],
+        };
+        let json = serde_json::to_string(&resp).unwrap();
+        let parsed: ListRefinementsResponse = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed.proposals.len(), 1);
+        assert_eq!(parsed.proposals[0].id, "ref_1");
+        assert!(matches!(
+            parsed.proposals[0].action,
+            ProposalAction::EntityMerge
+        ));
+    }
+
+    #[test]
+    fn reject_refinement_response_round_trip() {
+        let resp = RejectRefinementResponse { id: "ref_x".into() };
+        let json = serde_json::to_string(&resp).unwrap();
+        let parsed: RejectRefinementResponse = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed.id, "ref_x");
     }
 }
 

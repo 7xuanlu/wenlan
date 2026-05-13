@@ -37,7 +37,8 @@ pub use memory_type::{MEMORY_TYPE_CAPTURE_DESCRIPTION, MEMORY_TYPE_FILTER_DESCRI
 pub use narrative::NarrativeResponse;
 pub use pages::Page;
 pub use responses::{
-    ExportStats, MemoryDetail, PendingRevision, ProposalAction, RefinementPayload,
+    ExportStats, ListRefinementsResponse, MemoryDetail, PendingRevision, ProposalAction,
+    RefinementPayload, RefinementProposalSummary, RejectRefinementResponse,
 };
 pub use sources::{MemoryType, RawDocument, SourceType, StabilityTier, SyncStatus};
 

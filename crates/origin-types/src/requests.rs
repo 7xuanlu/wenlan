@@ -249,6 +249,8 @@ pub struct SearchPagesRequest {
     pub query: String,
     #[serde(default)]
     pub limit: Option<usize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub page_type: Option<String>,
 }
 
 // ===== Ingest =====
@@ -501,4 +503,23 @@ fn default_true() -> bool {
 
 fn default_entity_search_limit() -> usize {
     20
+}
+
+#[cfg(test)]
+mod search_pages_page_type_test {
+    use super::*;
+
+    #[test]
+    fn search_pages_request_accepts_page_type() {
+        let json = r#"{"query":"foo","limit":10,"page_type":"recap"}"#;
+        let parsed: SearchPagesRequest = serde_json::from_str(json).unwrap();
+        assert_eq!(parsed.page_type.as_deref(), Some("recap"));
+    }
+
+    #[test]
+    fn search_pages_request_page_type_optional() {
+        let json = r#"{"query":"foo","limit":10}"#;
+        let parsed: SearchPagesRequest = serde_json::from_str(json).unwrap();
+        assert!(parsed.page_type.is_none());
+    }
 }
