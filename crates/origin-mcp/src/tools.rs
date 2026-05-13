@@ -451,6 +451,13 @@ pub struct ListRejectionsParams {
     pub reason: Option<String>,
 }
 
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct ListPendingRevisionsParams {
+    /// Maximum rows to return. Server defaults to 50, clamps to 500.
+    #[serde(default, deserialize_with = "deserialize_optional_usize_lenient")]
+    pub limit: Option<usize>,
+}
+
 // ===== Internal Implementations =====
 
 fn format_capture_success(resp: &StoreMemoryResponse) -> String {
@@ -1356,6 +1363,28 @@ impl OriginMcpServer {
             pretty
         ))]))
     }
+
+    pub async fn list_pending_revisions_impl(
+        &self,
+        params: ListPendingRevisionsParams,
+    ) -> Result<CallToolResult, McpError> {
+        let path = match params.limit {
+            Some(l) => format!("/api/memory/pending-revisions?limit={}", l.clamp(1, 500)),
+            None => "/api/memory/pending-revisions".to_string(),
+        };
+        let resp: Vec<origin_types::responses::PendingRevisionItem> =
+            match self.client.get(&path).await {
+                Ok(v) => v,
+                Err(e) => return Ok(tool_error(e, "list_pending_revisions")),
+            };
+        let pretty = serde_json::to_string_pretty(&resp)
+            .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+        Ok(CallToolResult::success(vec![Content::text(format!(
+            "{} pending revision(s)\n{}",
+            resp.len(),
+            pretty
+        ))]))
+    }
 }
 
 /// Build the `/api/pages/recent` URL with optional `limit` + `since_ms` query
@@ -1935,6 +1964,27 @@ impl OriginMcpServer {
         Parameters(params): Parameters<ListRejectionsParams>,
     ) -> Result<CallToolResult, McpError> {
         self.list_rejections_impl(params).await
+    }
+
+    #[tool(
+        description = "List memories awaiting human accept/dismiss because a newer version \
+                       was proposed (Protected tier supersede). Use when the user asks \
+                       'what revisions are pending', 'show me memories awaiting approval'. \
+                       Each item carries target_source_id (the memory being revised: pass \
+                       THIS to accept_pending_revision in PR2) and revision_content for \
+                       display. Optional `limit` caps results (default 50, max 500).",
+        annotations(
+            title = "List pending revisions",
+            read_only_hint = true,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
+    )]
+    async fn list_pending_revisions(
+        &self,
+        Parameters(params): Parameters<ListPendingRevisionsParams>,
+    ) -> Result<CallToolResult, McpError> {
+        self.list_pending_revisions_impl(params).await
     }
 }
 

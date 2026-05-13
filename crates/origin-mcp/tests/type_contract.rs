@@ -1339,3 +1339,138 @@ async fn list_rejections_http_500() {
         "error message must mention HTTP 500; got: {text}"
     );
 }
+
+// ===== list_pending_revisions =====
+
+use origin_mcp::tools::ListPendingRevisionsParams;
+use origin_types::responses::PendingRevisionItem;
+
+fn sample_pending_revision_item(target: &str, rev: &str) -> PendingRevisionItem {
+    PendingRevisionItem {
+        target_source_id: target.into(),
+        revision_source_id: rev.into(),
+        revision_content: "Revised body".into(),
+        source_agent: Some("claude-code".into()),
+        last_modified: 1_715_000_000,
+    }
+}
+
+#[tokio::test]
+async fn list_pending_revisions_happy_path() {
+    let (mock, client) = setup().await;
+    Mock::given(method("GET"))
+        .and(path("/api/memory/pending-revisions"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(vec![sample_pending_revision_item("mem_target", "mem_rev")]),
+        )
+        .mount(&mock)
+        .await;
+
+    let server = make_server(client);
+    let result = server
+        .list_pending_revisions_impl(ListPendingRevisionsParams { limit: None })
+        .await
+        .expect("list_pending_revisions_impl failed");
+
+    let text = text_of(&result);
+    assert!(
+        text.contains("mem_target"),
+        "target_source_id must appear in output: {text}"
+    );
+    assert!(
+        text.contains("Revised body"),
+        "revision_content must appear in output: {text}"
+    );
+}
+
+#[tokio::test]
+async fn list_pending_revisions_envelope_guard() {
+    // Daemon must return target_source_id, not target.
+    // Wrong key: "target" instead of "target_source_id". Typed deserialization
+    // must fail loud, surfacing the missing field. This is the C1 regression guard.
+    let wrong = serde_json::json!([
+        {
+            "target": "mem_t",
+            "revision_source_id": "mem_r",
+            "revision_content": "x",
+            "source_agent": null,
+            "last_modified": 0
+        }
+    ]);
+    let (mock, client) = setup().await;
+    Mock::given(method("GET"))
+        .and(path("/api/memory/pending-revisions"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(&wrong))
+        .mount(&mock)
+        .await;
+
+    let server = make_server(client);
+    let result = server
+        .list_pending_revisions_impl(ListPendingRevisionsParams { limit: None })
+        .await
+        .expect("list_pending_revisions_impl returned Err unexpectedly");
+
+    let text = text_of(&result);
+    assert!(
+        result.is_error.unwrap_or(false),
+        "wrong key 'target' instead of 'target_source_id' must surface as tool error; got: {text}"
+    );
+    assert!(
+        text.contains("Failed to parse"),
+        "error message must mention parse failure; got: {text}"
+    );
+}
+
+#[tokio::test]
+async fn list_pending_revisions_passes_limit() {
+    let (mock, client) = setup().await;
+    Mock::given(method("GET"))
+        .and(path("/api/memory/pending-revisions"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(Vec::<PendingRevisionItem>::new()))
+        .mount(&mock)
+        .await;
+
+    let server = make_server(client);
+    server
+        .list_pending_revisions_impl(ListPendingRevisionsParams { limit: Some(25) })
+        .await
+        .expect("list_pending_revisions_impl failed");
+
+    let received = mock
+        .received_requests()
+        .await
+        .expect("wiremock captured no requests");
+    assert_eq!(received.len(), 1);
+    let url = received[0].url.to_string();
+    assert!(
+        url.contains("limit=25"),
+        "expected limit=25 in query; got: {url}"
+    );
+}
+
+#[tokio::test]
+async fn list_pending_revisions_http_500() {
+    let (mock, client) = setup().await;
+    Mock::given(method("GET"))
+        .and(path("/api/memory/pending-revisions"))
+        .respond_with(ResponseTemplate::new(500).set_body_string("internal error"))
+        .mount(&mock)
+        .await;
+
+    let server = make_server(client);
+    let result = server
+        .list_pending_revisions_impl(ListPendingRevisionsParams { limit: None })
+        .await
+        .expect("list_pending_revisions_impl must not return Err on HTTP 500");
+
+    assert!(
+        result.is_error.unwrap_or(false),
+        "HTTP 500 must surface as tool error"
+    );
+    let text = text_of(&result);
+    assert!(
+        text.contains("500"),
+        "error message must mention HTTP 500; got: {text}"
+    );
+}
