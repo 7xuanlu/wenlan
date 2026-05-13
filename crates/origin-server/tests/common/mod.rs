@@ -46,6 +46,21 @@ pub async fn test_app() -> (axum::Router, tempfile::TempDir, Arc<MemoryDB>) {
     (router, dir, db_arc)
 }
 
+/// Count `agent_activity` rows matching both `action` and `agent_name`.
+/// Used by curation mutate HTTP tests to verify activity logging without
+/// requiring direct access to the private `conn` field.
+pub async fn count_activity_for_action_and_agent(
+    db: &Arc<MemoryDB>,
+    action: &str,
+    agent_name: &str,
+) -> i64 {
+    let rows = db
+        .list_agent_activity(1000, Some(agent_name), None)
+        .await
+        .unwrap();
+    rows.iter().filter(|r| r.action == action).count() as i64
+}
+
 /// Insert a memory row directly via `upsert_documents`.
 ///
 /// Matches the `insert_memory_for_test` helper used in `origin-core`'s DB

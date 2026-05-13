@@ -1590,44 +1590,20 @@ pub async fn handle_get_entity_suggestions(
 
 pub async fn handle_approve_entity_suggestion(
     State(state): State<Arc<RwLock<ServerState>>>,
+    headers: axum::http::HeaderMap,
     Path(id): Path<String>,
-) -> Result<Json<serde_json::Value>, ServerError> {
-    let s = state.read().await;
-    let db = s.db.as_ref().ok_or(ServerError::DbNotInitialized)?;
-
-    let pending = db
-        .get_pending_refinements()
-        .await
-        .map_err(|e| ServerError::Internal(e.to_string()))?;
-    let proposal = pending
-        .iter()
-        .find(|p| p.id == id && p.action == "suggest_entity")
-        .ok_or(ServerError::NotFound(format!("suggestion {}", id)))?;
-
-    let entity_name = proposal
-        .payload
-        .clone()
-        .unwrap_or_else(|| "Unknown".to_string());
-
-    let entity_id = db
-        .create_entity(&entity_name, "auto", None)
-        .await
-        .map_err(|e| ServerError::Internal(e.to_string()))?;
-
-    let entity_link_distance = s.tuning.refinery.entity_link_distance;
-    let linked = origin_core::refinery::reweave_entity_links(db, 20, entity_link_distance)
-        .await
-        .map_err(|e| ServerError::Internal(e.to_string()))?;
-
-    db.resolve_refinement_if_open(&id, "completed")
-        .await
-        .map_err(|e| ServerError::Internal(e.to_string()))?;
-
-    Ok(Json(serde_json::json!({
-        "entity_id": entity_id,
-        "entity_name": entity_name,
-        "memories_linked": linked,
-    })))
+) -> Result<Json<origin_types::EntitySuggestionApproveResponse>, ServerError> {
+    let (db, entity_link_distance) = {
+        let s = state.read().await;
+        let db = s.db.as_ref().ok_or(ServerError::DbNotInitialized)?.clone();
+        let d = s.tuning.refinery.entity_link_distance;
+        (db, d)
+    };
+    let agent = extract_agent_name(&headers, None);
+    let result =
+        origin_core::post_write::approve_entity_suggestion(&db, &id, &agent, entity_link_distance)
+            .await?;
+    Ok(Json(result))
 }
 
 pub async fn handle_dismiss_entity_suggestion(
