@@ -257,3 +257,166 @@ async fn reject_already_terminal_returns_422() {
     let resp = app.oneshot(req).await.unwrap();
     assert_eq!(resp.status(), StatusCode::UNPROCESSABLE_ENTITY);
 }
+
+// ── accept endpoint tests ─────────────────────────────────────────────────────
+
+#[tokio::test]
+async fn accept_entity_merge_flow() {
+    let (app, _tmp, db) = test_app().await;
+
+    let new_id = db
+        .create_entity("Acme Corporation", "organization", None)
+        .await
+        .unwrap();
+    let existing_id = db
+        .create_entity("Acme Corp", "organization", None)
+        .await
+        .unwrap();
+    db.insert_refinement_proposal(
+        "ref_accept_em",
+        "entity_merge",
+        &[new_id.clone(), existing_id.clone()],
+        None,
+        0.87,
+    )
+    .await
+    .unwrap();
+    db.resolve_refinement_if_open("ref_accept_em", "awaiting_review")
+        .await
+        .unwrap();
+
+    let req = Request::builder()
+        .method(Method::POST)
+        .uri("/api/refinery/queue/ref_accept_em/accept")
+        .header("x-agent-name", "test-agent")
+        .body(Body::empty())
+        .unwrap();
+    let resp = app.oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    let body = read_body_json(resp).await;
+    assert_eq!(body["id"], "ref_accept_em");
+    assert_eq!(body["action_applied"], "entity_merge");
+
+    // existing_id (canonical) survives; new_id (alias) is merged away
+    assert!(
+        db.get_entity_detail(&existing_id).await.is_ok(),
+        "canonical entity should still exist"
+    );
+    assert!(
+        db.get_entity_detail(&new_id).await.is_err(),
+        "merged-away entity should be deleted"
+    );
+}
+
+#[tokio::test]
+async fn accept_returns_404_for_unknown_id() {
+    let (app, _tmp, _db) = test_app().await;
+    let req = Request::builder()
+        .method(Method::POST)
+        .uri("/api/refinery/queue/ref_nonexistent/accept")
+        .header("x-agent-name", "test-agent")
+        .body(Body::empty())
+        .unwrap();
+    let resp = app.oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn accept_returns_422_for_suggest_entity() {
+    let (app, _tmp, db) = test_app().await;
+    db.insert_refinement_proposal(
+        "ref_se_route",
+        "suggest_entity",
+        &["x".into()],
+        Some("\"Acme\""),
+        0.9,
+    )
+    .await
+    .unwrap();
+    db.resolve_refinement_if_open("ref_se_route", "awaiting_review")
+        .await
+        .unwrap();
+
+    let req = Request::builder()
+        .method(Method::POST)
+        .uri("/api/refinery/queue/ref_se_route/accept")
+        .header("x-agent-name", "test-agent")
+        .body(Body::empty())
+        .unwrap();
+    let resp = app.oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::UNPROCESSABLE_ENTITY);
+}
+
+#[tokio::test]
+async fn accept_returns_422_for_already_resolved() {
+    let (app, _tmp, db) = test_app().await;
+    db.insert_refinement_proposal(
+        "ref_done_accept",
+        "entity_merge",
+        &["a".into(), "b".into()],
+        None,
+        0.85,
+    )
+    .await
+    .unwrap();
+    db.resolve_refinement_if_open("ref_done_accept", "resolved")
+        .await
+        .unwrap();
+
+    let req = Request::builder()
+        .method(Method::POST)
+        .uri("/api/refinery/queue/ref_done_accept/accept")
+        .header("x-agent-name", "test-agent")
+        .body(Body::empty())
+        .unwrap();
+    let resp = app.oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::UNPROCESSABLE_ENTITY);
+}
+
+#[tokio::test]
+async fn accept_logs_apply_and_resolve_activity_with_agent() {
+    let (app, _tmp, db) = test_app().await;
+    let new_id = db
+        .create_entity("Acme Corporation", "organization", None)
+        .await
+        .unwrap();
+    let existing_id = db
+        .create_entity("Acme Corp", "organization", None)
+        .await
+        .unwrap();
+    db.insert_refinement_proposal(
+        "ref_acc_log",
+        "entity_merge",
+        &[new_id, existing_id],
+        None,
+        0.87,
+    )
+    .await
+    .unwrap();
+    db.resolve_refinement_if_open("ref_acc_log", "awaiting_review")
+        .await
+        .unwrap();
+
+    let req = Request::builder()
+        .method(Method::POST)
+        .uri("/api/refinery/queue/ref_acc_log/accept")
+        .header("x-agent-name", "claude-code")
+        .body(Body::empty())
+        .unwrap();
+    let resp = app.oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    let acts = db
+        .list_agent_activity(20, Some("claude-code"), None)
+        .await
+        .unwrap();
+    assert!(
+        acts.iter().any(|a| a.action == "refinement_apply"),
+        "should log refinement_apply"
+    );
+    assert!(
+        acts.iter().any(|a| a.action == "refinement_resolve"),
+        "should log refinement_resolve"
+    );
+}

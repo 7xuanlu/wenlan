@@ -6,10 +6,10 @@
 use axum::extract::{Path, Query, State};
 use axum::http::HeaderMap;
 use axum::Json;
-use origin_core::synthesis::refinement_queue::{resolve_proposal, ResolveStatus};
+use origin_core::synthesis::refinement_queue::{apply_refinement, resolve_proposal, ResolveStatus};
 use origin_types::responses::{
-    ListRefinementsResponse, ProposalAction, RefinementPayload, RefinementProposalSummary,
-    RejectRefinementResponse,
+    AcceptRefinementResponse, ListRefinementsResponse, ProposalAction, RefinementPayload,
+    RefinementProposalSummary, RejectRefinementResponse,
 };
 use serde::Deserialize;
 use std::sync::Arc;
@@ -92,6 +92,28 @@ pub async fn handle_reject_refinement(
         .map_err(ServerError::from)?;
 
     Ok(Json(RejectRefinementResponse { id: result.id }))
+}
+
+pub async fn handle_accept_refinement(
+    State(state): State<Arc<RwLock<ServerState>>>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+) -> Result<Json<AcceptRefinementResponse>, ServerError> {
+    let agent = extract_agent_name(&headers, None);
+
+    let db = {
+        let s = state.read().await;
+        s.db.clone().ok_or(ServerError::DbNotInitialized)?
+    };
+
+    let outcome = apply_refinement(&db, &id, &agent)
+        .await
+        .map_err(ServerError::from)?;
+
+    Ok(Json(AcceptRefinementResponse {
+        id: outcome.id,
+        action_applied: outcome.action_applied,
+    }))
 }
 
 fn parse_action(s: &str) -> Option<ProposalAction> {
