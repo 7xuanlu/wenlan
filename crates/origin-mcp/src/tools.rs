@@ -245,6 +245,45 @@ pub struct CreateRelationParams {
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct CreateObservationParams {
+    pub entity_id: String,
+    pub content: String,
+    #[serde(default)]
+    pub source_agent: Option<String>,
+    #[serde(default)]
+    pub confidence: Option<f32>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct ConfirmEntityParams {
+    pub entity_id: String,
+    #[serde(default = "default_confirmed")]
+    pub confirmed: bool,
+}
+
+fn default_confirmed() -> bool {
+    true
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct UpdateObservationParams {
+    pub observation_id: String,
+    pub content: String,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct ConfirmObservationParams {
+    pub observation_id: String,
+    #[serde(default = "default_confirmed")]
+    pub confirmed: bool,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct DeleteObservationParams {
+    pub observation_id: String,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct CreatePageParams {
     #[schemars(
         description = "Short noun phrase that names the page (e.g. 'Origin daemon architecture')."
@@ -810,6 +849,114 @@ impl OriginMcpServer {
         Ok(CallToolResult::success(vec![Content::text(text)]))
     }
 
+    pub async fn create_observation_impl(
+        &self,
+        params: CreateObservationParams,
+    ) -> Result<CallToolResult, McpError> {
+        let req = origin_types::requests::AddObservationRequest {
+            entity_id: params.entity_id,
+            content: params.content,
+            source_agent: params.source_agent,
+            confidence: params.confidence,
+        };
+        let resp: origin_types::responses::AddObservationResponse =
+            match self.client.post("/api/memory/observations", &req).await {
+                Ok(r) => r,
+                Err(e) => return Ok(tool_error(e, "create_observation")),
+            };
+        let mut text = format!("Created observation {}", resp.id);
+        for w in &resp.warnings {
+            text.push_str(&format!("\nwarning: {w}"));
+        }
+        Ok(CallToolResult::success(vec![Content::text(text)]))
+    }
+
+    pub async fn confirm_entity_impl(
+        &self,
+        params: ConfirmEntityParams,
+    ) -> Result<CallToolResult, McpError> {
+        let req = origin_types::requests::ConfirmEntityRequest {
+            confirmed: params.confirmed,
+        };
+        let path = format!("/api/memory/entities/{}/confirm", params.entity_id);
+        let _: origin_types::responses::SuccessResponse = match self.client.put(&path, &req).await {
+            Ok(r) => r,
+            Err(e) => return Ok(tool_error(e, "confirm_entity")),
+        };
+        Ok(CallToolResult::success(vec![Content::text(format!(
+            "Entity {} {}",
+            params.entity_id,
+            if params.confirmed {
+                "confirmed"
+            } else {
+                "unconfirmed"
+            }
+        ))]))
+    }
+
+    pub async fn update_observation_impl(
+        &self,
+        params: UpdateObservationParams,
+    ) -> Result<CallToolResult, McpError> {
+        let req = origin_types::requests::UpdateObservationRequest {
+            content: params.content,
+        };
+        let path = format!("/api/memory/observations/{}", params.observation_id);
+        let _: origin_types::responses::SuccessResponse = match self.client.put(&path, &req).await {
+            Ok(r) => r,
+            Err(e) => return Ok(tool_error(e, "update_observation")),
+        };
+        Ok(CallToolResult::success(vec![Content::text(format!(
+            "Updated observation {}",
+            params.observation_id
+        ))]))
+    }
+
+    pub async fn confirm_observation_impl(
+        &self,
+        params: ConfirmObservationParams,
+    ) -> Result<CallToolResult, McpError> {
+        let req = origin_types::requests::ConfirmObservationRequest {
+            confirmed: params.confirmed,
+        };
+        let path = format!("/api/memory/observations/{}/confirm", params.observation_id);
+        let _: origin_types::responses::SuccessResponse = match self.client.put(&path, &req).await {
+            Ok(r) => r,
+            Err(e) => return Ok(tool_error(e, "confirm_observation")),
+        };
+        Ok(CallToolResult::success(vec![Content::text(format!(
+            "Observation {} {}",
+            params.observation_id,
+            if params.confirmed {
+                "confirmed"
+            } else {
+                "unconfirmed"
+            }
+        ))]))
+    }
+
+    pub async fn delete_observation_impl(
+        &self,
+        params: DeleteObservationParams,
+    ) -> Result<CallToolResult, McpError> {
+        if self.transport == TransportMode::Http {
+            return Ok(CallToolResult::error(vec![Content::text(
+                "Delete operations are not available over remote connections. \
+                 Use local MCP on the machine running Origin to delete observations."
+                    .to_string(),
+            )]));
+        }
+        let path = format!("/api/memory/observations/{}", params.observation_id);
+        let _: origin_types::responses::SuccessResponse = match self.client.delete(&path).await {
+            Ok(r) => r,
+            Err(e) => return Ok(tool_error(e, "delete_observation")),
+        };
+        Ok(CallToolResult::success(vec![Content::text(format!(
+            "Observation {} deleted",
+            params.observation_id
+        ))]))
+    }
+
     pub async fn create_page_impl(
         &self,
         params: CreatePageParams,
@@ -1281,6 +1428,91 @@ impl OriginMcpServer {
         Parameters(params): Parameters<CreateRelationParams>,
     ) -> Result<CallToolResult, McpError> {
         self.create_relation_impl(params).await
+    }
+
+    #[tool(
+        description = "Attach a factual observation to an existing entity in the knowledge graph. Use sparingly — most observations come from daemon LLM extraction. Call explicitly when the user articulates a fact about a person/project/tool that the daemon couldn't infer, or when running in Basic Memory mode where on-device extraction does not run. Requires the entity_id; resolve via search_entities first if you only have the name. Returns 422 if entity does not exist.",
+        annotations(
+            title = "Create observation",
+            read_only_hint = false,
+            destructive_hint = false,
+            idempotent_hint = false,
+            open_world_hint = false
+        )
+    )]
+    async fn create_observation(
+        &self,
+        Parameters(params): Parameters<CreateObservationParams>,
+    ) -> Result<CallToolResult, McpError> {
+        self.create_observation_impl(params).await
+    }
+
+    #[tool(
+        description = "Confirm (or unconfirm) an entity in the knowledge graph — flips its stability flag from tentative to durable. Call when the user explicitly affirms or revokes an extracted entity (\"yes that's right\", \"no that's wrong\"), or when you have high confidence after seeing the entity reused across multiple contexts. Unconfirmed entities may be pruned by background refinement; confirmed ones persist. Defaults confirmed=true if omitted. Do NOT call for every extracted entity — most should stay unconfirmed and let background refinement decide.",
+        annotations(
+            title = "Confirm entity",
+            read_only_hint = false,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
+    )]
+    async fn confirm_entity(
+        &self,
+        Parameters(params): Parameters<ConfirmEntityParams>,
+    ) -> Result<CallToolResult, McpError> {
+        self.confirm_entity_impl(params).await
+    }
+
+    #[tool(
+        description = "Update the content of an existing observation. Use when the user corrects a fact (\"actually X not Y\") or when you find that a prior observation needs refinement based on new context. Only the content text changes — the entity attachment stays the same. To move an observation to a different entity, delete and recreate. Prefer this over delete+recreate when the entity attachment is correct, so history is preserved.",
+        annotations(
+            title = "Update observation",
+            read_only_hint = false,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
+    )]
+    async fn update_observation(
+        &self,
+        Parameters(params): Parameters<UpdateObservationParams>,
+    ) -> Result<CallToolResult, McpError> {
+        self.update_observation_impl(params).await
+    }
+
+    #[tool(
+        description = "Confirm (or unconfirm) an observation — flips its stability flag from tentative to durable. Call when the user explicitly affirms a specific fact attached to an entity (\"yes Alice does prefer tabs\"), or when you observe the same fact restated across multiple sources. Unconfirmed observations may be pruned by background refinement; confirmed ones persist. Defaults confirmed=true if omitted. Do NOT call for every observation you create — let background refinement promote them when warranted.",
+        annotations(
+            title = "Confirm observation",
+            read_only_hint = false,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
+    )]
+    async fn confirm_observation(
+        &self,
+        Parameters(params): Parameters<ConfirmObservationParams>,
+    ) -> Result<CallToolResult, McpError> {
+        self.confirm_observation_impl(params).await
+    }
+
+    #[tool(
+        description = "Delete an observation by ID. Destructive and cannot be undone — for corrections, prefer update_observation. Not available over remote HTTP MCP transport (local stdio only).",
+        annotations(
+            title = "Delete observation",
+            read_only_hint = false,
+            destructive_hint = true,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
+    )]
+    async fn delete_observation(
+        &self,
+        Parameters(params): Parameters<DeleteObservationParams>,
+    ) -> Result<CallToolResult, McpError> {
+        self.delete_observation_impl(params).await
     }
 
     #[tool(
@@ -2988,6 +3220,22 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn delete_observation_refuses_http_transport() {
+        let server = make_server(TransportMode::Http, "agent", None);
+        let params = DeleteObservationParams {
+            observation_id: "obs_123".to_string(),
+        };
+        let result = server.delete_observation_impl(params).await.unwrap();
+        let content = &result.content[0];
+        match content.raw {
+            rmcp::model::RawContent::Text(ref tc) => {
+                assert!(tc.text.contains("not available over remote connections"));
+            }
+            _ => panic!("expected text content"),
+        }
+    }
+
     // --- GetPageParams ---
 
     #[test]
@@ -3129,6 +3377,11 @@ mod tests {
         for name in [
             "create_entity",
             "create_relation",
+            "create_observation",
+            "confirm_entity",
+            "update_observation",
+            "confirm_observation",
+            "delete_observation",
             "create_page",
             "update_page",
             "delete_page",
