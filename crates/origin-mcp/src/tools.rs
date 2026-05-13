@@ -439,6 +439,12 @@ pub struct ListNurtureParams {
 pub struct ListEntitySuggestionsParams {}
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct ApproveEntitySuggestionRequest {
+    /// The refinement_queue id of the pending entity suggestion to approve.
+    pub suggestion_id: String,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct ListPendingImportsParams {}
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
@@ -1322,6 +1328,27 @@ impl OriginMcpServer {
         ))]))
     }
 
+    pub async fn approve_entity_suggestion_impl(
+        &self,
+        req: ApproveEntitySuggestionRequest,
+    ) -> Result<CallToolResult, McpError> {
+        let path = format!(
+            "/api/memory/entity-suggestions/{}/approve",
+            req.suggestion_id
+        );
+        let response = match self
+            .client
+            .post_empty::<EntitySuggestionApproveResponse>(&path)
+            .await
+        {
+            Ok(r) => r,
+            Err(e) => return Ok(tool_error(e, "approve_entity_suggestion")),
+        };
+        let pretty = serde_json::to_string_pretty(&response)
+            .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+        Ok(CallToolResult::success(vec![Content::text(pretty)]))
+    }
+
     pub async fn list_pending_imports_impl(
         &self,
         _params: ListPendingImportsParams,
@@ -1958,6 +1985,26 @@ impl OriginMcpServer {
         Parameters(params): Parameters<ListEntitySuggestionsParams>,
     ) -> Result<CallToolResult, McpError> {
         self.list_entity_suggestions_impl(params).await
+    }
+
+    #[tool(
+        description = "Approve a pending entity suggestion. Creates the suggested entity in \
+                       the knowledge graph and links related memories. Returns the created \
+                       entity id, entity name, and link count. Returns an error if the \
+                       suggestion id is unknown or already resolved.",
+        annotations(
+            title = "Approve entity suggestion",
+            read_only_hint = false,
+            destructive_hint = false,
+            idempotent_hint = false,
+            open_world_hint = false
+        )
+    )]
+    async fn approve_entity_suggestion(
+        &self,
+        Parameters(req): Parameters<ApproveEntitySuggestionRequest>,
+    ) -> Result<CallToolResult, McpError> {
+        self.approve_entity_suggestion_impl(req).await
     }
 
     #[tool(
