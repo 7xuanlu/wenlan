@@ -18,7 +18,7 @@ async fn body_as_json<T: serde::de::DeserializeOwned>(response: axum::http::Resp
 
 #[tokio::test]
 async fn list_pending_revisions_returns_target_id_not_revision_id() {
-    let (app, db) = test_app().await;
+    let (app, _tmp, db) = test_app().await;
 
     // Target memory (not pending, no supersedes)
     insert_memory(
@@ -68,7 +68,7 @@ async fn list_pending_revisions_returns_target_id_not_revision_id() {
 
 #[tokio::test]
 async fn list_pending_revisions_round_trips_through_accept() {
-    let (app, db) = test_app().await;
+    let (app, _tmp, db) = test_app().await;
     insert_memory(&db, "mem_t", "Orig", "memory", None, None, false, 1).await;
     insert_memory(&db, "mem_r", "Rev", "memory", None, Some("mem_t"), true, 2).await;
 
@@ -85,7 +85,7 @@ async fn list_pending_revisions_round_trips_through_accept() {
     .await;
 
     let target = &items[0].target_source_id;
-    // Call existing accept primitive — proves the id from list is action-compatible
+    // Call existing accept primitive. Proves the id from list is action-compatible.
     db.accept_pending_revision(target)
         .await
         .expect("accept must succeed with target_source_id from list");
@@ -93,7 +93,7 @@ async fn list_pending_revisions_round_trips_through_accept() {
 
 #[tokio::test]
 async fn list_pending_revisions_orders_newest_first() {
-    let (app, db) = test_app().await;
+    let (app, _tmp, db) = test_app().await;
     insert_memory(&db, "mem_t1", "t", "memory", None, None, false, 1).await;
     insert_memory(&db, "mem_t2", "t", "memory", None, None, false, 2).await;
     insert_memory(
@@ -136,7 +136,7 @@ async fn list_pending_revisions_orders_newest_first() {
 
 #[tokio::test]
 async fn list_pending_revisions_clamps_limit() {
-    let (app, db) = test_app().await;
+    let (app, _tmp, db) = test_app().await;
     for i in 0..3 {
         insert_memory(
             &db,
@@ -177,7 +177,7 @@ async fn list_pending_revisions_clamps_limit() {
 
 #[tokio::test]
 async fn list_pending_revisions_empty_on_clean_db() {
-    let (app, _db) = test_app().await;
+    let (app, _tmp, _db) = test_app().await;
     let resp = app
         .oneshot(
             Request::builder()

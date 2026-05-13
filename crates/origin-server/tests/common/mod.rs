@@ -9,31 +9,29 @@ use origin_server::state::ServerState;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
-/// Build a test app and return `(router, db_arc)`.
+/// Build a test app and return `(router, tmp, db_arc)`.
 ///
-/// The underlying `TempDir` is intentionally leaked: integration tests run
-/// to completion before the process exits, so the OS reclaims the temp files.
-/// This avoids lifetime complications when the caller only needs a 2-tuple.
-pub async fn test_app() -> (axum::Router, Arc<MemoryDB>) {
+/// The caller binds `_tmp` to keep the `TempDir` alive for the test's
+/// duration; it drops (and cleans up) when the test function returns.
+pub async fn test_app() -> (axum::Router, tempfile::TempDir, Arc<MemoryDB>) {
     let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().to_path_buf();
-    // Leak the dir so the temp path stays valid for the test's lifetime.
-    std::mem::forget(dir);
-
-    let db = MemoryDB::new(&path, Arc::new(NoopEmitter)).await.unwrap();
+    let db = MemoryDB::new(dir.path(), Arc::new(NoopEmitter))
+        .await
+        .unwrap();
     let db_arc = Arc::new(db);
     let state = ServerState {
         db: Some(db_arc.clone()),
         ..ServerState::default()
     };
     let router = build_router(Arc::new(RwLock::new(state)));
-    (router, db_arc)
+    (router, dir, db_arc)
 }
 
 /// Insert a memory row directly via `upsert_documents`.
 ///
 /// Matches the `insert_memory_for_test` helper used in `origin-core`'s DB
 /// unit tests. All NOT NULL columns in `memories` are covered.
+#[allow(clippy::too_many_arguments)]
 pub async fn insert_memory(
     db: &Arc<MemoryDB>,
     source_id: &str,
