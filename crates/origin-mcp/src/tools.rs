@@ -1327,7 +1327,7 @@ impl OriginMcpServer {
         _params: ListPendingImportsParams,
     ) -> Result<CallToolResult, McpError> {
         let resp: Vec<origin_types::import::PendingImport> =
-            match self.client.get("/api/imports/pending").await {
+            match self.client.get("/api/import/state").await {
                 Ok(v) => v,
                 Err(e) => return Ok(tool_error(e, "list_pending_imports")),
             };

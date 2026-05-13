@@ -113,7 +113,7 @@ async fn run_stdio(origin_url: Option<String>) -> anyhow::Result<()> {
     let base_url = discover_origin_url(origin_url);
     tracing::info!("Connecting to Origin at {}", base_url);
 
-    let client = OriginClient::new(base_url);
+    let client = OriginClient::new(base_url).with_agent_name("claude-code".into());
 
     if let Some(msg) = client.version_handshake().await {
         tracing::warn!("{msg}");

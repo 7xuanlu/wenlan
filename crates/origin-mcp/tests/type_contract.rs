@@ -1117,7 +1117,7 @@ fn sample_pending_import(id: &str) -> PendingImport {
 async fn list_pending_imports_happy_path() {
     let (mock, client) = setup().await;
     Mock::given(method("GET"))
-        .and(path("/api/imports/pending"))
+        .and(path("/api/import/state"))
         .respond_with(
             ResponseTemplate::new(200).set_body_json(vec![sample_pending_import("imp_1")]),
         )
@@ -1138,7 +1138,7 @@ async fn list_pending_imports_happy_path() {
 async fn list_pending_imports_envelope_guard() {
     let (mock, client) = setup().await;
     Mock::given(method("GET"))
-        .and(path("/api/imports/pending"))
+        .and(path("/api/import/state"))
         .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({"items": []})))
         .mount(&mock)
         .await;
@@ -1159,7 +1159,7 @@ async fn list_pending_imports_envelope_guard() {
 async fn list_pending_imports_empty() {
     let (mock, client) = setup().await;
     Mock::given(method("GET"))
-        .and(path("/api/imports/pending"))
+        .and(path("/api/import/state"))
         .respond_with(ResponseTemplate::new(200).set_body_json(Vec::<PendingImport>::new()))
         .mount(&mock)
         .await;
@@ -1177,7 +1177,7 @@ async fn list_pending_imports_empty() {
 async fn list_pending_imports_http_500() {
     let (mock, client) = setup().await;
     Mock::given(method("GET"))
-        .and(path("/api/imports/pending"))
+        .and(path("/api/import/state"))
         .respond_with(ResponseTemplate::new(500))
         .mount(&mock)
         .await;
