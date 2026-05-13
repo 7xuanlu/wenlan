@@ -519,18 +519,15 @@ pub enum RefinementPayload {
     RelationConflict {
         existing_id: String,
         new_id: String,
-        from_entity: String,
-        to_entity: String,
+        from: String,
+        to: String,
         old_type: String,
         new_type: String,
     },
-    DetectContradiction {
-        existing_memory_id: String,
-        new_memory_id: String,
-    },
+    DetectContradiction,
     SuggestEntity {
-        name: String,
-        entity_type: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        name_hint: Option<String>,
     },
     DedupMerge,
 }
@@ -586,6 +583,62 @@ mod refinement_wire_tests {
         let json = r#"{"action":"dedup_merge"}"#;
         let parsed: RefinementPayload = serde_json::from_str(json).unwrap();
         assert!(matches!(parsed, RefinementPayload::DedupMerge));
+    }
+
+    #[test]
+    fn refinement_payload_relation_conflict_round_trip() {
+        let json = r#"{"action":"relation_conflict","existing_id":"r1","new_id":"r2","from":"e_a","to":"e_b","old_type":"works_at","new_type":"founded"}"#;
+        let parsed: RefinementPayload = serde_json::from_str(json).unwrap();
+        match parsed {
+            RefinementPayload::RelationConflict {
+                ref existing_id,
+                ref new_id,
+                ref from,
+                ref to,
+                ref old_type,
+                ref new_type,
+            } => {
+                assert_eq!(existing_id, "r1");
+                assert_eq!(new_id, "r2");
+                assert_eq!(from, "e_a");
+                assert_eq!(to, "e_b");
+                assert_eq!(old_type, "works_at");
+                assert_eq!(new_type, "founded");
+            }
+            _ => panic!("expected RelationConflict"),
+        }
+        let back = serde_json::to_value(&parsed).unwrap();
+        assert_eq!(back["from"], "e_a");
+        assert_eq!(back["to"], "e_b");
+    }
+
+    #[test]
+    fn refinement_payload_detect_contradiction_unit_variant() {
+        let json = r#"{"action":"detect_contradiction"}"#;
+        let parsed: RefinementPayload = serde_json::from_str(json).unwrap();
+        assert!(matches!(parsed, RefinementPayload::DetectContradiction));
+    }
+
+    #[test]
+    fn refinement_payload_suggest_entity_with_name_hint() {
+        let json = r#"{"action":"suggest_entity","name_hint":"PostgreSQL"}"#;
+        let parsed: RefinementPayload = serde_json::from_str(json).unwrap();
+        match parsed {
+            RefinementPayload::SuggestEntity { ref name_hint } => {
+                assert_eq!(name_hint.as_deref(), Some("PostgreSQL"));
+            }
+            _ => panic!("expected SuggestEntity"),
+        }
+    }
+
+    #[test]
+    fn refinement_payload_suggest_entity_without_name_hint() {
+        let json = r#"{"action":"suggest_entity"}"#;
+        let parsed: RefinementPayload = serde_json::from_str(json).unwrap();
+        assert!(matches!(
+            parsed,
+            RefinementPayload::SuggestEntity { name_hint: None }
+        ));
     }
 }
 
