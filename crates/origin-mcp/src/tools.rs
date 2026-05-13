@@ -1422,7 +1422,7 @@ impl OriginMcpServer {
     }
 
     #[tool(
-        description = "Confirm (or unconfirm) an entity in the knowledge graph — flips its stability flag from tentative to durable. Call when the user explicitly affirms or revokes an extracted entity (\"yes that's right\", \"no that's wrong\"), or when you have high confidence after seeing the entity reused across multiple contexts. Unconfirmed entities may be pruned by background refinement; confirmed ones persist. Defaults confirmed=true if omitted. Do NOT call for every extracted entity — most should stay unconfirmed and let the daemon's verification phase decide.",
+        description = "Confirm (or unconfirm) an entity in the knowledge graph — flips its stability flag from tentative to durable. Call when the user explicitly affirms or revokes an extracted entity (\"yes that's right\", \"no that's wrong\"), or when you have high confidence after seeing the entity reused across multiple contexts. Unconfirmed entities may be pruned by background refinement; confirmed ones persist. Defaults confirmed=true if omitted. Do NOT call for every extracted entity — most should stay unconfirmed and let background refinement decide.",
         annotations(
             title = "Confirm entity",
             read_only_hint = false,
@@ -1456,7 +1456,7 @@ impl OriginMcpServer {
     }
 
     #[tool(
-        description = "Confirm (or unconfirm) an observation — flips its stability flag from tentative to durable. Call when the user explicitly affirms a specific fact attached to an entity (\"yes Alice does prefer tabs\"), or when you observe the same fact restated across multiple sources. Unconfirmed observations may be pruned by background refinement; confirmed ones persist. Defaults confirmed=true if omitted. Do NOT call for every observation you create — let the daemon's verification phase promote them when warranted.",
+        description = "Confirm (or unconfirm) an observation — flips its stability flag from tentative to durable. Call when the user explicitly affirms a specific fact attached to an entity (\"yes Alice does prefer tabs\"), or when you observe the same fact restated across multiple sources. Unconfirmed observations may be pruned by background refinement; confirmed ones persist. Defaults confirmed=true if omitted. Do NOT call for every observation you create — let background refinement promote them when warranted.",
         annotations(
             title = "Confirm observation",
             read_only_hint = false,
