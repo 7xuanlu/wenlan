@@ -49,13 +49,26 @@ pub async fn handle_list_refinements(
             None => true,
         })
         .take(limit)
-        .map(|p| RefinementProposalSummary {
-            action: parse_action(&p.action),
-            payload: parse_payload(p.payload.as_deref(), &p.action),
-            id: p.id,
-            source_ids: p.source_ids,
-            confidence: p.confidence,
-            created_at: p.created_at,
+        .filter_map(|p| {
+            let action = match parse_action(&p.action) {
+                Some(a) => a,
+                None => {
+                    tracing::warn!(
+                        proposal_id = %p.id,
+                        action = %p.action,
+                        "refinery: skipping proposal with unknown action variant"
+                    );
+                    return None;
+                }
+            };
+            Some(RefinementProposalSummary {
+                action,
+                payload: parse_payload(p.payload.as_deref(), &p.action),
+                id: p.id,
+                source_ids: p.source_ids,
+                confidence: p.confidence,
+                created_at: p.created_at,
+            })
         })
         .collect();
 
@@ -81,22 +94,25 @@ pub async fn handle_reject_refinement(
     Ok(Json(RejectRefinementResponse { id: result.id }))
 }
 
-fn parse_action(s: &str) -> ProposalAction {
+fn parse_action(s: &str) -> Option<ProposalAction> {
     match s {
-        "entity_merge" => ProposalAction::EntityMerge,
-        "relation_conflict" => ProposalAction::RelationConflict,
-        "detect_contradiction" => ProposalAction::DetectContradiction,
-        "suggest_entity" => ProposalAction::SuggestEntity,
-        _ => ProposalAction::DedupMerge,
+        "entity_merge" => Some(ProposalAction::EntityMerge),
+        "relation_conflict" => Some(ProposalAction::RelationConflict),
+        "detect_contradiction" => Some(ProposalAction::DetectContradiction),
+        "suggest_entity" => Some(ProposalAction::SuggestEntity),
+        "dedup_merge" => Some(ProposalAction::DedupMerge),
+        _ => None,
     }
 }
 
 /// Convert the raw daemon payload string into the typed wire enum.
 ///
 /// Variant decode rules:
-/// - `detect_contradiction` and `dedup_merge`: unit variants, always Some regardless of payload
-/// - `suggest_entity`: raw string payload → `name_hint`
-/// - `entity_merge`, `relation_conflict`: JSON object payload; inject `action` tag
+/// - `detect_contradiction` and `dedup_merge`: unit variants, return Some regardless of payload
+/// - `suggest_entity`: raw string payload lifted into `name_hint`
+/// - `entity_merge`, `relation_conflict`: JSON object payload; inject `action` tag.
+///   Returns `None` if payload is malformed JSON or fails to deserialize.
+/// - Unknown action: falls through to JSON-decode path; returns `None` for unknown shapes.
 fn parse_payload(payload: Option<&str>, action: &str) -> Option<RefinementPayload> {
     match action {
         "detect_contradiction" => return Some(RefinementPayload::DetectContradiction),
@@ -184,5 +200,11 @@ mod parse_payload_tests {
             parsed.is_none(),
             "malformed payload should decode to None, not crash"
         );
+    }
+
+    #[test]
+    fn parse_action_unknown_returns_none() {
+        assert!(super::parse_action("entity_split_v2").is_none());
+        assert!(super::parse_action("").is_none());
     }
 }
