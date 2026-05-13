@@ -14,7 +14,7 @@ The daemon does the memory chores in the background: stores what matters, dedupl
 
 **Status:** Early preview. Expect fast iteration and some sharp edges.
 
-![Origin demo](https://github.com/user-attachments/assets/50522d51-5da5-4c82-a3df-9577c632797d)
+[![Watch the Origin demo](./docs/assets/demo-preview.gif)](https://github.com/user-attachments/assets/50522d51-5da5-4c82-a3df-9577c632797d)
 
 ---
 
