@@ -6,7 +6,7 @@ description: >
   `/brief [topic]`. Call FIRST at session start, before any other
   Origin verb.
 argument-hint: "[topic]"
-allowed-tools: ["mcp__plugin_origin_origin__context", "mcp__plugin_origin_origin__recall", "mcp__plugin_origin_origin__search_pages"]
+allowed-tools: ["mcp__plugin_origin_origin__context", "mcp__plugin_origin_origin__recall"]
 ---
 
 # /brief
@@ -16,7 +16,7 @@ and what's relevant to the current topic.
 
 ## How to invoke
 
-**Step 1.** Call the `origin` MCP server's `context` tool. If the user passed a topic
+Call the `origin` MCP server's `context` tool. If the user passed a topic
 argument, pass it through. Otherwise infer scope from the working directory and
 the conversation so far — don't ask the user.
 
@@ -31,11 +31,6 @@ context(topic="<args or inferred>", domain=<inferred from cwd or recent turns>)
   general brief at session start.
 - `domain`: from cwd. `~/Repos/origin/...` → `"origin"`. Other repos → repo
   name. Outside any repo → omit.
-
-**Step 2.** Call `search_pages(page_type="recap", limit=3)` to load the 3 most recent
-recap pages. If results, prepend a "Recent recaps" section to the brief output
-showing each recap's title + 1-line summary. If the call returns no results or
-errors, omit the section silently — recap pages may not exist yet on a fresh vault.
 
 ## When to use
 
