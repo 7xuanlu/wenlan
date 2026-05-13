@@ -2,11 +2,12 @@
 name: brief
 description: >
   Session-start briefing from Origin. Loads identity, preferences, and
-  topic-relevant memories so the agent walks in with context. Invoked as
-  `/brief [topic]`. Call FIRST at session start, before any other
-  Origin verb.
+  topic-relevant memories so the agent walks in with context. Surfaces any
+  memories the daemon has flagged for human revision before the session uses
+  them. Invoked as `/brief [topic]`. Call FIRST at session start, before any
+  other Origin verb.
 argument-hint: "[topic]"
-allowed-tools: ["mcp__plugin_origin_origin__context", "mcp__plugin_origin_origin__recall"]
+allowed-tools: ["mcp__plugin_origin_origin__context", "mcp__plugin_origin_origin__recall", "mcp__plugin_origin_origin__list_pending_revisions", "mcp__plugin_origin_origin__accept_revision", "mcp__plugin_origin_origin__dismiss_revision"]
 ---
 
 # /brief
@@ -50,3 +51,45 @@ context(topic="<args or inferred>", domain=<inferred from cwd or recent turns>)
 Model how the user thinks. Their preferences, corrections, and past decisions
 tell you how they want to be helped, not just what they already know. Don't
 just look things up: adjust your behavior.
+
+## Pending revisions check
+
+After loading context, call:
+
+```
+list_pending_revisions(limit=10)
+```
+
+If the result is empty, **say nothing**. Do not print "0 pending revisions" or any "all clear" line. The brief is already noisy enough.
+
+If the MCP call errors, log a one-line warning and continue. Do not error out the brief.
+
+If the result is non-empty, render a block at the end of the brief (after the context summary, before handing back to the user). The daemon returns rows already sorted by `last_modified DESC`; just slice the first three.
+
+Each `PendingRevisionItem` carries `target_source_id`, `revision_source_id`, `revision_content`, `source_agent`, and `last_modified`. The original memory's content is **not** on this response. The block displays the proposed revision text and the target memory id; if the user wants to see the original before deciding, they can run `/recall <target_source_id>` first.
+
+```
+Pending revisions (<N> total, top 3 shown):
+
+1. target: mem_abc123  (proposed by <source_agent or "daemon">)
+   revision: "Origin uses Turso libSQL fork (libSQL-server) for vectors..."
+   Action: accept (replace original) | dismiss (drop revision) | skip
+
+2. ...
+```
+
+Inline accept/dismiss verbs map to:
+
+- accept: `accept_revision(target_source_id="<id>")`
+- dismiss: `dismiss_revision(target_source_id="<id>")`
+- skip: no call; the revision stays pending for the next /brief
+
+If `<N> > 3`, end the block with one line:
+
+```
+Run `/review revisions` to walk the rest.
+```
+
+Do not auto-action anything. The user picks per item.
+
+Note: this block surfaces *all* pending revisions, not just this session's, because revisions are about memories you may still be using right now, regardless of when the contradiction was flagged.
