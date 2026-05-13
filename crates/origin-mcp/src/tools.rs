@@ -266,6 +266,13 @@ pub struct UpdateObservationParams {
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct ConfirmObservationParams {
+    pub observation_id: String,
+    #[serde(default = "default_confirmed")]
+    pub confirmed: bool,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct CreatePageParams {
     #[schemars(
         description = "Short noun phrase that names the page (e.g. 'Origin daemon architecture')."
@@ -894,6 +901,29 @@ impl OriginMcpServer {
         ))]))
     }
 
+    pub async fn confirm_observation_impl(
+        &self,
+        params: ConfirmObservationParams,
+    ) -> Result<CallToolResult, McpError> {
+        let req = origin_types::requests::ConfirmObservationRequest {
+            confirmed: params.confirmed,
+        };
+        let path = format!("/api/memory/observations/{}/confirm", params.observation_id);
+        let _: origin_types::responses::SuccessResponse = match self.client.put(&path, &req).await {
+            Ok(r) => r,
+            Err(e) => return Ok(tool_error(e, "confirm_observation")),
+        };
+        Ok(CallToolResult::success(vec![Content::text(format!(
+            "Observation {} {}",
+            params.observation_id,
+            if params.confirmed {
+                "confirmed"
+            } else {
+                "unconfirmed"
+            }
+        ))]))
+    }
+
     pub async fn create_page_impl(
         &self,
         params: CreatePageParams,
@@ -1396,6 +1426,23 @@ impl OriginMcpServer {
         Parameters(params): Parameters<UpdateObservationParams>,
     ) -> Result<CallToolResult, McpError> {
         self.update_observation_impl(params).await
+    }
+
+    #[tool(
+        description = "Confirm (or unconfirm) an observation — flips its stability flag. Defaults confirmed=true if omitted.",
+        annotations(
+            title = "Confirm observation",
+            read_only_hint = false,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
+    )]
+    async fn confirm_observation(
+        &self,
+        Parameters(params): Parameters<ConfirmObservationParams>,
+    ) -> Result<CallToolResult, McpError> {
+        self.confirm_observation_impl(params).await
     }
 
     #[tool(
@@ -3226,6 +3273,7 @@ mod tests {
             "create_observation",
             "confirm_entity",
             "update_observation",
+            "confirm_observation",
             "create_page",
             "update_page",
             "delete_page",
