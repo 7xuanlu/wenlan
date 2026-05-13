@@ -960,9 +960,14 @@ pub async fn deep_distill_pages(
         Err(e) => log::warn!("[deep_distill] orphan assignment failed: {}", e),
     }
 
-    // 3. Recompile ALL active concepts (not just changed ones — full refresh)
-    let all_active = db.list_pages("active", 200, 0).await?;
-    for page in &all_active {
+    // 3. Refresh stale, non-user-edited pages. Cap 20 per fire so the refinery
+    //    returns control promptly; subsequent fires drain the rest. Order = most-stale
+    //    first (sources_updated_count desc).
+    const DEEP_DISTILL_REFRESH_CAP: i64 = 20;
+    let stale_pages = db
+        .list_pages_stale("active", DEEP_DISTILL_REFRESH_CAP, 0)
+        .await?;
+    for page in &stale_pages {
         match recompile_single_page(db, llm_ref, prompts, page, knowledge_path).await {
             Ok(true) => total += 1,
             Ok(false) => {}
@@ -974,7 +979,9 @@ pub async fn deep_distill_pages(
         }
     }
 
-    // 4. Global review — merge/split/create analysis
+    // 4. Global review — merge/split/create analysis. Needs the full active set
+    //    (not just stale pages) to propose merges/splits across all concepts.
+    let all_active = db.list_pages("active", 200, 0).await?;
     if all_active.len() >= 5 {
         match crate::synthesis::emergence::global_page_review(
             db,
@@ -1305,5 +1312,73 @@ mod tests {
             content.contains("recompiled body"),
             "md body should reflect LLM output"
         );
+    }
+
+    #[tokio::test]
+    async fn deep_distill_pages_only_recompiles_stale_non_user_edited() {
+        let (db, _db_dir) = crate::db::tests::test_db().await;
+        let now = chrono::Utc::now().to_rfc3339();
+        let now_ts = chrono::Utc::now().timestamp();
+
+        // Insert a seed memory row so get_memory_contents_by_ids returns it.
+        {
+            let conn = db.conn.lock().await;
+            conn.execute(
+                "INSERT INTO memories (id, source_id, title, content, chunk_index, chunk_type, memory_type, domain, source_agent, created_at, last_modified, confirmed, stability, source) \
+                 VALUES (?1, ?1, ?1, 'seed content', 0, 'text', 'fact', 'test', 'claude-code', ?2, ?2, 1, 'confirmed', 'memory')",
+                libsql::params!["mem_1".to_string(), now_ts],
+            )
+            .await
+            .unwrap();
+        }
+
+        // 3 pages: stale clean (page_a), stale user-edited (page_b), not stale (page_c).
+        db.insert_page("page_a", "A", None, "body a", None, None, &["mem_1"], &now)
+            .await
+            .unwrap();
+        db.insert_page("page_b", "B", None, "body b", None, None, &["mem_1"], &now)
+            .await
+            .unwrap();
+        db.insert_page("page_c", "C", None, "body c", None, None, &["mem_1"], &now)
+            .await
+            .unwrap();
+
+        db.set_page_stale("page_a", "source_updated").await.unwrap();
+        db.set_page_stale("page_b", "source_updated").await.unwrap();
+
+        // Lock page_b via fs_edit — sets user_edited=1 (require_stale=false to force).
+        db.try_update_page_content_with_changelog(
+            "page_b",
+            "user prose b",
+            &["mem_1"],
+            "fs_edit",
+            false,
+            "user-edited",
+        )
+        .await
+        .unwrap();
+
+        let llm: Arc<dyn crate::llm_provider::LlmProvider> =
+            Arc::new(crate::llm_provider::MockProvider::new("recompiled"));
+        let prompts = crate::prompts::PromptRegistry::default();
+        let tuning = crate::tuning::DistillationConfig::default();
+
+        let _ =
+            crate::synthesis::distill::deep_distill_pages(&db, Some(&llm), &prompts, &tuning, None)
+                .await
+                .unwrap();
+
+        let a = db.get_page("page_a").await.unwrap().unwrap();
+        let b = db.get_page("page_b").await.unwrap().unwrap();
+        let c = db.get_page("page_c").await.unwrap().unwrap();
+        assert_eq!(
+            a.content, "recompiled",
+            "stale clean page should be refreshed"
+        );
+        assert_eq!(
+            b.content, "user prose b",
+            "user-edited page must NOT be touched"
+        );
+        assert_eq!(c.content, "body c", "non-stale page must NOT be touched");
     }
 }
