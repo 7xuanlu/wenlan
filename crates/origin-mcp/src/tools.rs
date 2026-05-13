@@ -2564,6 +2564,7 @@ mod tests {
             extraction_method: "llm".into(),
             enrichment: String::new(),
             hint: String::new(),
+            triggered_revisions: vec![],
         };
         let msg = format_capture_success(&resp);
         assert_eq!(msg, "Stored mem_abc");
@@ -2584,6 +2585,7 @@ mod tests {
             extraction_method: "agent".into(),
             enrichment: String::new(),
             hint: String::new(),
+            triggered_revisions: vec![],
         };
         let msg = format_capture_success(&resp);
         assert!(msg.starts_with("Stored mem_abc"));

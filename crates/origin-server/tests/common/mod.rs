@@ -3,6 +3,7 @@
 
 use origin_core::db::MemoryDB;
 use origin_core::events::NoopEmitter;
+use origin_core::quality_gate::QualityGate;
 use origin_core::sources::RawDocument;
 use origin_server::router::build_router;
 use origin_server::state::ServerState;
@@ -42,6 +43,32 @@ pub async fn test_app() -> (axum::Router, tempfile::TempDir, Arc<MemoryDB>) {
     let db_arc = Arc::new(db);
     let state = ServerState {
         db: Some(db_arc.clone()),
+        ..ServerState::default()
+    };
+    let router = build_router(Arc::new(RwLock::new(state)));
+    (router, dir, db_arc)
+}
+
+/// Build a test app with the quality gate disabled.
+///
+/// Use this when the test needs to store memories through the HTTP API
+/// (exercising the full store handler) but the novelty filter would
+/// otherwise reject content that is intentionally similar to an existing
+/// memory — e.g., when testing the topic-match-protected path.
+#[allow(dead_code)]
+pub async fn test_app_no_gate() -> (axum::Router, tempfile::TempDir, Arc<MemoryDB>) {
+    let dir = tempfile::tempdir().unwrap();
+    let db = MemoryDB::new(dir.path(), Arc::new(NoopEmitter))
+        .await
+        .unwrap();
+    let db_arc = Arc::new(db);
+    let gate_cfg = origin_core::tuning::GateConfig {
+        enabled: false,
+        ..Default::default()
+    };
+    let state = ServerState {
+        db: Some(db_arc.clone()),
+        quality_gate: QualityGate::new(gate_cfg),
         ..ServerState::default()
     };
     let router = build_router(Arc::new(RwLock::new(state)));
