@@ -41,7 +41,7 @@ For each proposal, present:
   - `dedup_merge`: no payload — historical (auto-dismissed by daemon)
 
 Then offer per-item:
-- **Accept** → `accept_refinement(id="<id>")` — applies the change with sensible defaults (see below)
+- **Accept** → `accept_refinement(id="<id>")`: applies the change with sensible defaults (see below)
 - **Dismiss** → `reject_refinement(id="<id>")`
 
 **Only dismiss when you are confident the proposal is wrong.** Do not develop a
