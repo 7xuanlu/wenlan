@@ -14814,6 +14814,21 @@ impl MemoryDB {
         Ok(results)
     }
 
+    /// Clear the user_edited flag and mark the page stale with reason "manual_force".
+    /// Used by the `/distill rebuild` force path so the next refinery pass regenerates
+    /// the page from sources. The stale_reason ensures the CAS branch of update_page
+    /// can write through afterwards.
+    pub async fn clear_user_edited(&self, page_id: &str) -> Result<(), OriginError> {
+        let conn = self.conn.lock().await;
+        conn.execute(
+            "UPDATE pages SET user_edited = 0, stale_reason = 'manual_force' WHERE id = ?1",
+            libsql::params![page_id],
+        )
+        .await
+        .map_err(|e| OriginError::VectorDb(format!("clear_user_edited: {e}")))?;
+        Ok(())
+    }
+
     /// List pages, optionally filtered by domain.
     pub async fn list_pages_by_domain(
         &self,
@@ -28880,6 +28895,38 @@ pub(crate) mod tests {
             ids,
             vec!["page_a"],
             "only stale, non-user-edited pages returned"
+        );
+    }
+
+    #[tokio::test]
+    async fn clear_user_edited_unlocks_page_and_sets_stale() {
+        let (db, _tmp) = test_db().await;
+        let now = chrono::Utc::now().to_rfc3339();
+        db.insert_page("page_x", "X", None, "body", None, None, &["mem_1"], &now)
+            .await
+            .unwrap();
+        // Promote user_edited via fs_edit.
+        db.try_update_page_content_with_changelog(
+            "page_x",
+            "user prose",
+            &["mem_1"],
+            "fs_edit",
+            false,
+            "user-edited",
+        )
+        .await
+        .unwrap();
+        let before = db.get_page("page_x").await.unwrap().unwrap();
+        assert!(before.user_edited, "precondition: page should be locked");
+
+        db.clear_user_edited("page_x").await.unwrap();
+
+        let after = db.get_page("page_x").await.unwrap().unwrap();
+        assert!(!after.user_edited, "clear_user_edited should unlock");
+        assert_eq!(
+            after.stale_reason.as_deref(),
+            Some("manual_force"),
+            "clear_user_edited should mark stale so refinery picks it up"
         );
     }
 }
