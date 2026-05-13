@@ -5,7 +5,8 @@
 //! cross-repo refactor; later PRs may remove the module entirely and import
 //! `origin_types::*` at call sites directly.
 
-pub use origin_types::memory::{RecentActivityItem, SearchResult};
+pub use origin_types::entities::EntitySuggestion;
+pub use origin_types::memory::{RecentActivityItem, RejectionRecord, SearchResult};
 pub use origin_types::requests::{
     ChatContextRequest, CreateConceptRequest, CreateEntityRequest, CreateRelationRequest,
     ListMemoriesRequest, SearchMemoryRequest, SearchPagesRequest, StoreMemoryRequest,
@@ -14,7 +15,7 @@ pub use origin_types::responses::{
     AcceptRefinementResponse, AddObservationResponse, ChatContextResponse, CreateEntityResponse,
     CreatePageResponse, CreateRelationResponse, DeleteResponse, ListMemoriesResponse,
     ListMemoryRevisionsResponse, ListPageRevisionsResponse, ListRefinementsResponse,
-    MemoryRevisionEntry, PageChangelogEntry, RejectRefinementResponse, SearchMemoryResponse,
-    SearchPagesResponse, StoreMemoryResponse,
+    MemoryRevisionEntry, NurtureCardsResponse, OrphanLink, OrphanLinksResponse, PageChangelogEntry,
+    RejectRefinementResponse, SearchMemoryResponse, SearchPagesResponse, StoreMemoryResponse,
 };
 pub use origin_types::PageSourceWithMemory;

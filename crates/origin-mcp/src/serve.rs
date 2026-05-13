@@ -36,7 +36,8 @@ async fn health() -> impl IntoResponse {
 }
 
 pub async fn run_serve(config: ServeConfig) -> anyhow::Result<()> {
-    let client = OriginClient::new(config.origin_url.clone());
+    let client =
+        OriginClient::new(config.origin_url.clone()).with_agent_name(config.agent_name.clone());
     let agent_name = config.agent_name.clone();
     let user_id = config.user_id.clone();
     let token = config.token.clone();

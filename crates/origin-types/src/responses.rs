@@ -756,6 +756,38 @@ mod refinement_wire_tests {
     }
 }
 
+/// One orphaned page link label aggregated across sources.
+///
+/// `count` is how many distinct source pages reference this label
+/// without a matching target page existing.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct OrphanLink {
+    pub label: String,
+    pub count: i64,
+}
+
+/// Response for `GET /api/pages/orphan-links`.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct OrphanLinksResponse {
+    pub min_count: usize,
+    pub orphan_labels: Vec<OrphanLink>,
+}
+
+/// One pending revision awaiting human accept/dismiss.
+///
+/// `target_source_id` is the memory being revised; pass it to
+/// `accept_pending_revision` or `dismiss_pending_revision`.
+/// `revision_source_id` is the staged revision row itself, exposed
+/// for diagnostics and round-tripping (not for the action call).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct PendingRevisionItem {
+    pub target_source_id: String,
+    pub revision_source_id: String,
+    pub revision_content: String,
+    pub source_agent: Option<String>,
+    pub last_modified: i64,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -883,5 +915,49 @@ mod tests {
         assert!(parsed.knowledge.decisions.is_empty());
         assert!(parsed.knowledge.relevant_memories.is_empty());
         assert!(parsed.knowledge.graph_context.is_empty());
+    }
+
+    #[test]
+    fn orphan_links_response_golden_string() {
+        let resp = OrphanLinksResponse {
+            min_count: 2,
+            orphan_labels: vec![OrphanLink {
+                label: "Rust".to_string(),
+                count: 3,
+            }],
+        };
+        let s = serde_json::to_string(&resp).unwrap();
+        assert_eq!(
+            s,
+            r#"{"min_count":2,"orphan_labels":[{"label":"Rust","count":3}]}"#
+        );
+    }
+
+    #[test]
+    fn orphan_links_response_empty_round_trip() {
+        let resp = OrphanLinksResponse {
+            min_count: 1,
+            orphan_labels: vec![],
+        };
+        let decoded: OrphanLinksResponse =
+            serde_json::from_str(&serde_json::to_string(&resp).unwrap()).unwrap();
+        assert_eq!(decoded, resp);
+    }
+
+    #[test]
+    fn pending_revision_item_round_trip() {
+        let item = PendingRevisionItem {
+            target_source_id: "mem_target".into(),
+            revision_source_id: "mem_rev".into(),
+            revision_content: "new body".into(),
+            source_agent: Some("claude-code".into()),
+            last_modified: 1_715_000_000,
+        };
+        let json = serde_json::to_value(&item).unwrap();
+        assert_eq!(json["target_source_id"], "mem_target");
+        assert_eq!(json["revision_source_id"], "mem_rev");
+        assert_eq!(json["revision_content"], "new body");
+        let decoded: PendingRevisionItem = serde_json::from_value(json).unwrap();
+        assert_eq!(decoded, item);
     }
 }

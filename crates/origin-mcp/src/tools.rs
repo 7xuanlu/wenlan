@@ -423,6 +423,48 @@ pub struct ListPagesRecentParams {
     pub since_ms: Option<i64>,
 }
 
+// --- Curation read params ---
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct ListNurtureParams {
+    /// Maximum cards to return. Default 50. Clamped to 1..=500.
+    #[serde(default, deserialize_with = "deserialize_optional_usize_lenient")]
+    pub limit: Option<usize>,
+    /// Restrict to a single domain/space.
+    #[serde(default)]
+    pub domain: Option<String>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct ListEntitySuggestionsParams {}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct ListPendingImportsParams {}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct ListRejectionsParams {
+    /// Maximum records to return. Default 50. Clamped to 1..=500.
+    #[serde(default, deserialize_with = "deserialize_optional_usize_lenient")]
+    pub limit: Option<usize>,
+    /// Filter by rejection reason code (e.g. "duplicate", "low_quality").
+    #[serde(default)]
+    pub reason: Option<String>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct ListPendingRevisionsParams {
+    /// Maximum rows to return. Server defaults to 50, clamps to 500.
+    #[serde(default, deserialize_with = "deserialize_optional_usize_lenient")]
+    pub limit: Option<usize>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct ListOrphanLinksParams {
+    /// Minimum reference count a label must have to appear. Default 1. Daemon clamps via `.max(1)`.
+    #[serde(default, deserialize_with = "deserialize_optional_i64_lenient")]
+    pub min_count: Option<i64>,
+}
+
 // ===== Internal Implementations =====
 
 fn format_capture_success(resp: &StoreMemoryResponse) -> String {
@@ -1229,6 +1271,149 @@ impl OriginMcpServer {
             resp.id, resp.action_applied
         ))]))
     }
+
+    pub async fn list_nurture_impl(
+        &self,
+        params: ListNurtureParams,
+    ) -> Result<CallToolResult, McpError> {
+        let mut path = String::from("/api/memory/nurture");
+        let mut q: Vec<String> = Vec::new();
+        if let Some(l) = params.limit {
+            q.push(format!("limit={}", l.clamp(1, 500)));
+        }
+        if let Some(d) = params.domain.as_deref().filter(|s| !s.is_empty()) {
+            q.push(format!("domain={}", url_encode_simple(d)));
+        }
+        if !q.is_empty() {
+            path.push('?');
+            path.push_str(&q.join("&"));
+        }
+
+        let resp: origin_types::responses::NurtureCardsResponse = match self.client.get(&path).await
+        {
+            Ok(v) => v,
+            Err(e) => return Ok(tool_error(e, "list_nurture")),
+        };
+
+        let pretty = serde_json::to_string_pretty(&resp.cards)
+            .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+        Ok(CallToolResult::success(vec![Content::text(format!(
+            "{} nurture cards\n{}",
+            resp.cards.len(),
+            pretty
+        ))]))
+    }
+
+    pub async fn list_entity_suggestions_impl(
+        &self,
+        _params: ListEntitySuggestionsParams,
+    ) -> Result<CallToolResult, McpError> {
+        let resp: Vec<origin_types::entities::EntitySuggestion> =
+            match self.client.get("/api/memory/entity-suggestions").await {
+                Ok(v) => v,
+                Err(e) => return Ok(tool_error(e, "list_entity_suggestions")),
+            };
+        let pretty = serde_json::to_string_pretty(&resp)
+            .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+        Ok(CallToolResult::success(vec![Content::text(format!(
+            "{} entity suggestion(s)\n{}",
+            resp.len(),
+            pretty
+        ))]))
+    }
+
+    pub async fn list_pending_imports_impl(
+        &self,
+        _params: ListPendingImportsParams,
+    ) -> Result<CallToolResult, McpError> {
+        let resp: Vec<origin_types::import::PendingImport> =
+            match self.client.get("/api/import/state").await {
+                Ok(v) => v,
+                Err(e) => return Ok(tool_error(e, "list_pending_imports")),
+            };
+        let pretty = serde_json::to_string_pretty(&resp)
+            .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+        Ok(CallToolResult::success(vec![Content::text(format!(
+            "{} pending import(s)\n{}",
+            resp.len(),
+            pretty
+        ))]))
+    }
+
+    pub async fn list_rejections_impl(
+        &self,
+        params: ListRejectionsParams,
+    ) -> Result<CallToolResult, McpError> {
+        let mut path = String::from("/api/memory/rejections");
+        let mut q: Vec<String> = Vec::new();
+        if let Some(l) = params.limit {
+            q.push(format!("limit={}", l.clamp(1, 500)));
+        }
+        if let Some(r) = params.reason.as_deref().filter(|s| !s.is_empty()) {
+            q.push(format!("reason={}", url_encode_simple(r)));
+        }
+        if !q.is_empty() {
+            path.push('?');
+            path.push_str(&q.join("&"));
+        }
+
+        let resp: Vec<origin_types::memory::RejectionRecord> = match self.client.get(&path).await {
+            Ok(v) => v,
+            Err(e) => return Ok(tool_error(e, "list_rejections")),
+        };
+
+        let pretty = serde_json::to_string_pretty(&resp)
+            .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+        Ok(CallToolResult::success(vec![Content::text(format!(
+            "{} rejection(s)\n{}",
+            resp.len(),
+            pretty
+        ))]))
+    }
+
+    pub async fn list_pending_revisions_impl(
+        &self,
+        params: ListPendingRevisionsParams,
+    ) -> Result<CallToolResult, McpError> {
+        let path = match params.limit {
+            Some(l) => format!("/api/memory/pending-revisions?limit={}", l.clamp(1, 500)),
+            None => "/api/memory/pending-revisions".to_string(),
+        };
+        let resp: Vec<origin_types::responses::PendingRevisionItem> =
+            match self.client.get(&path).await {
+                Ok(v) => v,
+                Err(e) => return Ok(tool_error(e, "list_pending_revisions")),
+            };
+        let pretty = serde_json::to_string_pretty(&resp)
+            .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+        Ok(CallToolResult::success(vec![Content::text(format!(
+            "{} pending revision(s)\n{}",
+            resp.len(),
+            pretty
+        ))]))
+    }
+
+    pub async fn list_orphan_links_impl(
+        &self,
+        params: ListOrphanLinksParams,
+    ) -> Result<CallToolResult, McpError> {
+        let path = match params.min_count {
+            Some(n) => format!("/api/pages/orphan-links?min_count={}", n.max(1)),
+            None => "/api/pages/orphan-links".to_string(),
+        };
+        let resp: origin_types::responses::OrphanLinksResponse = match self.client.get(&path).await
+        {
+            Ok(v) => v,
+            Err(e) => return Ok(tool_error(e, "list_orphan_links")),
+        };
+        let pretty = serde_json::to_string_pretty(&resp)
+            .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+        Ok(CallToolResult::success(vec![Content::text(format!(
+            "{} orphan link(s)\n{}",
+            resp.orphan_labels.len(),
+            pretty
+        ))]))
+    }
 }
 
 /// Build the `/api/pages/recent` URL with optional `limit` + `since_ms` query
@@ -1735,6 +1920,120 @@ impl OriginMcpServer {
         Parameters(params): Parameters<AcceptRefinementParams>,
     ) -> Result<CallToolResult, McpError> {
         self.accept_refinement_impl(params).await
+    }
+
+    // --- Curation read tools ---
+
+    #[tool(
+        description = "List nurture cards: memories flagged for human attention because they are unconfirmed, low-confidence, or have been queued for review by the daemon. Use when the user wants to audit what needs review: phrases like 'what needs my attention', 'unconfirmed memories', 'nurture queue'. Returns memory items with metadata. Optional `limit` caps results (default 50, max 500). Optional `domain` restricts to one topic space. Distinct from `list_pending` (which lists all unconfirmed captures) and `list_refinements` (which lists daemon-generated merge/conflict proposals).",
+        annotations(
+            title = "List nurture cards",
+            read_only_hint = true,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
+    )]
+    async fn list_nurture(
+        &self,
+        Parameters(params): Parameters<ListNurtureParams>,
+    ) -> Result<CallToolResult, McpError> {
+        self.list_nurture_impl(params).await
+    }
+
+    #[tool(
+        description = "List entity-suggestion proposals from the refinery queue \
+                       (action='suggest_entity'). Use when the user asks 'what entities \
+                       does the daemon want to create' or wants to triage merge-vs-create \
+                       decisions. Returns id, proposed entity_name, source_ids, confidence. \
+                       Pair with PR2's approve/dismiss verbs once they land.",
+        annotations(
+            title = "List entity suggestions",
+            read_only_hint = true,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
+    )]
+    async fn list_entity_suggestions(
+        &self,
+        Parameters(params): Parameters<ListEntitySuggestionsParams>,
+    ) -> Result<CallToolResult, McpError> {
+        self.list_entity_suggestions_impl(params).await
+    }
+
+    #[tool(
+        description = "List in-flight chat-history imports awaiting processing or completion. \
+                       Use when the user asks 'what imports are running', 'is my Claude.ai \
+                       export done', or to surface import progress. Returns id, vendor, \
+                       stage, source path, processed/total conversation counts.",
+        annotations(
+            title = "List pending imports",
+            read_only_hint = true,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
+    )]
+    async fn list_pending_imports(
+        &self,
+        Parameters(params): Parameters<ListPendingImportsParams>,
+    ) -> Result<CallToolResult, McpError> {
+        self.list_pending_imports_impl(params).await
+    }
+
+    #[tool(
+        description = "List quality-gate rejections: memories the daemon discarded before storing, due to low quality, duplication, or other filters. Use when the user asks 'what did Origin reject', 'what was filtered out', or to diagnose why captures are not appearing. Returns rejection records with reason code, detail, and similarity info. Optional `limit` caps results (default 50, max 500). Optional `reason` filters by rejection reason code (e.g. 'duplicate', 'low_quality').",
+        annotations(
+            title = "List rejections",
+            read_only_hint = true,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
+    )]
+    async fn list_rejections(
+        &self,
+        Parameters(params): Parameters<ListRejectionsParams>,
+    ) -> Result<CallToolResult, McpError> {
+        self.list_rejections_impl(params).await
+    }
+
+    #[tool(
+        description = "List memories awaiting human accept/dismiss because a newer version \
+                       was proposed (Protected tier supersede). Use when the user asks \
+                       'what revisions are pending', 'show me memories awaiting approval'. \
+                       Each item carries target_source_id (the memory being revised: pass \
+                       THIS to accept_pending_revision in PR2) and revision_content for \
+                       display. Optional `limit` caps results (default 50, max 500).",
+        annotations(
+            title = "List pending revisions",
+            read_only_hint = true,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
+    )]
+    async fn list_pending_revisions(
+        &self,
+        Parameters(params): Parameters<ListPendingRevisionsParams>,
+    ) -> Result<CallToolResult, McpError> {
+        self.list_pending_revisions_impl(params).await
+    }
+
+    #[tool(
+        description = "List wiki-link labels that appear in page bodies but have no matching \
+                       page title. Use when the user asks 'what links are broken', 'orphan links', \
+                       or wants to find knowledge gaps. Returns label names and reference counts. \
+                       Optional `min_count` filters to labels referenced at least N times \
+                       (default 1, minimum 1).",
+        annotations(
+            title = "List orphan links",
+            read_only_hint = true,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
+    )]
+    async fn list_orphan_links(
+        &self,
+        Parameters(params): Parameters<ListOrphanLinksParams>,
+    ) -> Result<CallToolResult, McpError> {
+        self.list_orphan_links_impl(params).await
     }
 }
 

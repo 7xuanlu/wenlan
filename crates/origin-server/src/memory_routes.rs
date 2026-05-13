@@ -2848,6 +2848,33 @@ pub async fn handle_unpin_memory(
     Ok(Json(origin_types::responses::SuccessResponse { ok: true }))
 }
 
+#[derive(Debug, Deserialize)]
+pub struct PendingRevisionsQuery {
+    #[serde(default = "default_pending_revisions_limit")]
+    pub limit: usize,
+}
+
+fn default_pending_revisions_limit() -> usize {
+    50
+}
+
+/// GET /api/memory/pending-revisions?limit=N
+pub async fn handle_list_pending_revisions(
+    State(state): State<Arc<RwLock<ServerState>>>,
+    axum::extract::Query(q): axum::extract::Query<PendingRevisionsQuery>,
+) -> Result<Json<Vec<origin_types::responses::PendingRevisionItem>>, ServerError> {
+    let db = {
+        let s = state.read().await;
+        s.db.clone().ok_or(ServerError::DbNotInitialized)?
+    };
+    let limit = q.limit.clamp(1, 500);
+    let items = db
+        .list_pending_revisions(limit)
+        .await
+        .map_err(|e| ServerError::Internal(e.to_string()))?;
+    Ok(Json(items))
+}
+
 /// GET /api/memory/pending-revision/{source_id}
 pub async fn handle_get_pending_revision(
     State(state): State<Arc<RwLock<ServerState>>>,
@@ -3082,7 +3109,7 @@ pub struct OrphanLinksQuery {
 pub async fn handle_list_orphan_links(
     State(state): State<Arc<RwLock<ServerState>>>,
     axum::extract::Query(q): axum::extract::Query<OrphanLinksQuery>,
-) -> Result<Json<serde_json::Value>, ServerError> {
+) -> Result<Json<origin_types::responses::OrphanLinksResponse>, ServerError> {
     let db = {
         let s = state.read().await;
         s.db.clone().ok_or(ServerError::DbNotInitialized)?
@@ -3092,14 +3119,14 @@ pub async fn handle_list_orphan_links(
         .list_orphan_link_labels(min_count)
         .await
         .map_err(|e| ServerError::Internal(e.to_string()))?;
-    let payload: Vec<serde_json::Value> = labels
+    let orphan_labels = labels
         .into_iter()
-        .map(|(label, count)| serde_json::json!({"label": label, "count": count}))
+        .map(|(label, count)| origin_types::responses::OrphanLink { label, count })
         .collect();
-    Ok(Json(serde_json::json!({
-        "min_count": min_count,
-        "orphan_labels": payload,
-    })))
+    Ok(Json(origin_types::responses::OrphanLinksResponse {
+        min_count: min_count as usize,
+        orphan_labels,
+    }))
 }
 
 pub async fn handle_update_page(

@@ -11577,6 +11577,63 @@ impl MemoryDB {
         }
     }
 
+    /// List staged revisions awaiting human accept/dismiss.
+    ///
+    /// Returns `(target_source_id, revision_source_id, revision_content,
+    /// source_agent, last_modified)` for every row where
+    /// `pending_revision = 1` AND `supersedes IS NOT NULL` AND
+    /// `source = 'memory'`. Sorted newest-first by `last_modified`
+    /// (the only `NOT NULL` timestamp on memories; `created_at` is
+    /// nullable pre-migration-21).
+    ///
+    /// The partial index `idx_memories_pending_revision` covers the
+    /// primary `pending_revision != 0` filter; the residual `source` and
+    /// `supersedes IS NOT NULL` scan is bounded by human-attention
+    /// cardinality.
+    pub async fn list_pending_revisions(
+        &self,
+        limit: usize,
+    ) -> Result<Vec<origin_types::responses::PendingRevisionItem>, OriginError> {
+        let conn = self.conn.lock().await;
+        let mut rows = conn
+            .query(
+                "SELECT supersedes, source_id, content, source_agent, last_modified \
+                 FROM memories \
+                 WHERE pending_revision = 1 \
+                   AND supersedes IS NOT NULL \
+                   AND source = 'memory' \
+                 ORDER BY last_modified DESC \
+                 LIMIT ?1",
+                libsql::params![limit as i64],
+            )
+            .await
+            .map_err(|e| OriginError::VectorDb(format!("list_pending_revisions: {e}")))?;
+
+        let mut out = Vec::new();
+        while let Some(row) = rows
+            .next()
+            .await
+            .map_err(|e| OriginError::VectorDb(format!("list_pending_revisions row: {e}")))?
+        {
+            out.push(origin_types::responses::PendingRevisionItem {
+                target_source_id: row
+                    .get::<String>(0)
+                    .map_err(|e| OriginError::VectorDb(format!("col 0: {e}")))?,
+                revision_source_id: row
+                    .get::<String>(1)
+                    .map_err(|e| OriginError::VectorDb(format!("col 1: {e}")))?,
+                revision_content: row
+                    .get::<String>(2)
+                    .map_err(|e| OriginError::VectorDb(format!("col 2: {e}")))?,
+                source_agent: row.get::<Option<String>>(3).unwrap_or(None),
+                last_modified: row
+                    .get::<i64>(4)
+                    .map_err(|e| OriginError::VectorDb(format!("col 4: {e}")))?,
+            });
+        }
+        Ok(out)
+    }
+
     // ==================== Session / Activity Methods ====================
 
     /// Insert or update an activity record.
@@ -20910,6 +20967,169 @@ pub(crate) mod tests {
         // No more pending revision
         let pr = db.get_pending_revision_for("dismiss_target").await.unwrap();
         assert!(pr.is_none());
+    }
+
+    // ==================== list_pending_revisions ====================
+
+    /// Test-only helper: insert a minimal memory row via `upsert_documents`,
+    /// controlling `source_id`, `content`, `source`, `source_agent`,
+    /// `supersedes`, `pending_revision`, and `last_modified` explicitly.
+    /// Covers only the columns needed by `list_pending_revisions` tests;
+    /// not intended for production use.
+    #[allow(clippy::too_many_arguments)]
+    async fn insert_memory_for_test(
+        db: &MemoryDB,
+        source_id: &str,
+        content: &str,
+        source: &str,
+        source_agent: Option<&str>,
+        supersedes: Option<&str>,
+        pending_revision: bool,
+        last_modified: i64,
+    ) {
+        let doc = RawDocument {
+            source: source.to_string(),
+            source_id: source_id.to_string(),
+            title: format!("title-{}", source_id),
+            content: content.to_string(),
+            source_agent: source_agent.map(|s| s.to_string()),
+            supersedes: supersedes.map(|s| s.to_string()),
+            pending_revision,
+            last_modified,
+            ..Default::default()
+        };
+        db.upsert_documents(vec![doc]).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn list_pending_revisions_returns_target_source_id() {
+        let (db, _dir) = test_db().await;
+
+        // Insert a target memory
+        insert_memory_for_test(
+            &db,
+            "mem_target",
+            "Original content",
+            "memory",
+            Some("alice"),
+            None,
+            false,
+            1_715_000_000,
+        )
+        .await;
+
+        // Insert a revision row that supersedes the target, flagged as pending
+        insert_memory_for_test(
+            &db,
+            "mem_rev",
+            "Revised content",
+            "memory",
+            Some("bob"),
+            Some("mem_target"),
+            true,
+            1_715_000_100,
+        )
+        .await;
+
+        let items = db.list_pending_revisions(10).await.unwrap();
+        assert_eq!(items.len(), 1, "expected 1 pending revision, got {items:?}");
+        let item = &items[0];
+        assert_eq!(item.target_source_id, "mem_target");
+        assert_eq!(item.revision_source_id, "mem_rev");
+        assert_eq!(item.revision_content, "Revised content");
+        assert_eq!(item.source_agent.as_deref(), Some("bob"));
+        assert_eq!(item.last_modified, 1_715_000_100);
+    }
+
+    #[tokio::test]
+    async fn list_pending_revisions_orders_newest_first() {
+        let (db, _dir) = test_db().await;
+        insert_memory_for_test(&db, "mem_t1", "t1", "memory", None, None, false, 1).await;
+        insert_memory_for_test(&db, "mem_t2", "t2", "memory", None, None, false, 2).await;
+        insert_memory_for_test(
+            &db,
+            "mem_r1",
+            "rev1",
+            "memory",
+            None,
+            Some("mem_t1"),
+            true,
+            100,
+        )
+        .await;
+        insert_memory_for_test(
+            &db,
+            "mem_r2",
+            "rev2",
+            "memory",
+            None,
+            Some("mem_t2"),
+            true,
+            200,
+        )
+        .await;
+
+        let items = db.list_pending_revisions(10).await.unwrap();
+        assert_eq!(items.len(), 2);
+        assert_eq!(
+            items[0].revision_source_id, "mem_r2",
+            "newest (last_modified=200) first"
+        );
+        assert_eq!(items[1].revision_source_id, "mem_r1");
+    }
+
+    #[tokio::test]
+    async fn list_pending_revisions_respects_limit() {
+        let (db, _dir) = test_db().await;
+        for i in 0..5_i64 {
+            insert_memory_for_test(
+                &db,
+                &format!("mem_t{i}"),
+                "t",
+                "memory",
+                None,
+                None,
+                false,
+                i,
+            )
+            .await;
+            insert_memory_for_test(
+                &db,
+                &format!("mem_r{i}"),
+                "rev",
+                "memory",
+                None,
+                Some(&format!("mem_t{i}")),
+                true,
+                100 + i,
+            )
+            .await;
+        }
+        let items = db.list_pending_revisions(3).await.unwrap();
+        assert_eq!(items.len(), 3);
+    }
+
+    #[tokio::test]
+    async fn list_pending_revisions_skips_non_pending_and_no_supersedes() {
+        let (db, _dir) = test_db().await;
+        // Non-pending revision (pending=false, has supersedes)
+        insert_memory_for_test(&db, "mem_t1", "t1", "memory", None, None, false, 1).await;
+        insert_memory_for_test(
+            &db,
+            "mem_r1",
+            "rev1",
+            "memory",
+            None,
+            Some("mem_t1"),
+            false,
+            100,
+        )
+        .await;
+        // Pending but no supersedes (defensive: shouldn't match)
+        insert_memory_for_test(&db, "mem_orphan", "orphan", "memory", None, None, true, 200).await;
+
+        let items = db.list_pending_revisions(10).await.unwrap();
+        assert_eq!(items.len(), 0);
     }
 
     // ==================== search_entities_by_vector ====================
