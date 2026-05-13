@@ -3,14 +3,14 @@
 //! Boots the real Axum router with a temp-dir MemoryDB and asserts:
 //!   - typed responses match the wire-type structs
 //!   - missing ids return HTTP 404 (Shape A/B/C)
-//!   - re-call returns HTTP 404 (row consumed after first approve)
+//!   - re-call returns HTTP 404 (row consumed after first approve/dismiss)
 //!   - x-agent-name header threads into agent_activity rows
 
 mod common;
 
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
-use origin_types::EntitySuggestionApproveResponse;
+use origin_types::{EntitySuggestionApproveResponse, EntitySuggestionDismissResponse};
 use tower::ServiceExt;
 
 async fn body_as_json<T: serde::de::DeserializeOwned>(response: axum::http::Response<Body>) -> T {
@@ -139,4 +139,107 @@ async fn approve_entity_suggestion_returns_404_on_re_call() {
         .await
         .unwrap();
     assert_eq!(second.status(), StatusCode::NOT_FOUND);
+}
+
+// ── dismiss_entity_suggestion ────────────────────────────────────────────────
+
+#[tokio::test]
+async fn dismiss_entity_suggestion_succeeds_and_returns_typed_response() {
+    let (router, _tmp, db) = common::test_app().await;
+    seed_entity_suggestion(&db, "ref_dd1", "X").await;
+
+    let response = router
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/memory/entity-suggestions/ref_dd1/dismiss")
+                .header("x-agent-name", "test-agent")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let parsed: EntitySuggestionDismissResponse = body_as_json(response).await;
+    assert_eq!(parsed.suggestion_id, "ref_dd1");
+    assert!(parsed.wrote);
+}
+
+#[tokio::test]
+async fn dismiss_entity_suggestion_returns_404_on_missing_id() {
+    let (router, _tmp, _db) = common::test_app().await;
+
+    let response = router
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/memory/entity-suggestions/ref_missing/dismiss")
+                .header("x-agent-name", "test-agent")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn dismiss_entity_suggestion_returns_404_on_re_call() {
+    let (router, _tmp, db) = common::test_app().await;
+    seed_entity_suggestion(&db, "ref_dd2", "Y").await;
+
+    let first = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/memory/entity-suggestions/ref_dd2/dismiss")
+                .header("x-agent-name", "test-agent")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(first.status(), StatusCode::OK);
+
+    let second = router
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/memory/entity-suggestions/ref_dd2/dismiss")
+                .header("x-agent-name", "test-agent")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(second.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn dismiss_entity_suggestion_threads_x_agent_name() {
+    let (router, _tmp, db) = common::test_app().await;
+    seed_entity_suggestion(&db, "ref_dd3", "Z").await;
+
+    router
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/memory/entity-suggestions/ref_dd3/dismiss")
+                .header("x-agent-name", "cursor-test")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    let count = common::count_activity_for_action_and_agent(
+        &db,
+        "entity_suggestion_dismiss",
+        "cursor-test",
+    )
+    .await;
+    assert_eq!(count, 1);
 }

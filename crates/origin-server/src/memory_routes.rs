@@ -1608,14 +1608,16 @@ pub async fn handle_approve_entity_suggestion(
 
 pub async fn handle_dismiss_entity_suggestion(
     State(state): State<Arc<RwLock<ServerState>>>,
+    headers: axum::http::HeaderMap,
     Path(id): Path<String>,
-) -> Result<Json<serde_json::Value>, ServerError> {
-    let s = state.read().await;
-    let db = s.db.as_ref().ok_or(ServerError::DbNotInitialized)?;
-    db.resolve_refinement_if_open(&id, "dismissed")
-        .await
-        .map_err(|e| ServerError::Internal(e.to_string()))?;
-    Ok(Json(serde_json::json!({ "dismissed": true })))
+) -> Result<Json<origin_types::EntitySuggestionDismissResponse>, ServerError> {
+    let db = {
+        let s = state.read().await;
+        s.db.as_ref().ok_or(ServerError::DbNotInitialized)?.clone()
+    };
+    let agent = extract_agent_name(&headers, None);
+    let result = origin_core::post_write::dismiss_entity_suggestion(&db, &id, &agent).await?;
+    Ok(Json(result))
 }
 
 // ===== Helpers =====

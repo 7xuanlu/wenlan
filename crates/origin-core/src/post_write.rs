@@ -729,6 +729,36 @@ pub async fn approve_entity_suggestion(
     })
 }
 
+/// Dismiss a pending entity suggestion. Canonical entry for both
+/// agent-triggered (`/api/memory/entity-suggestions/{id}/dismiss`) and
+/// daemon-internal triggers. Returns `NotFound` if the suggestion id is
+/// unknown or already resolved.
+pub async fn dismiss_entity_suggestion(
+    db: &MemoryDB,
+    suggestion_id: &str,
+    agent: &str,
+) -> Result<origin_types::EntitySuggestionDismissResponse, OriginError> {
+    let pending = db.get_pending_refinements().await?;
+    let proposal = pending
+        .iter()
+        .find(|p| p.id == suggestion_id && p.action == "suggest_entity");
+    match proposal {
+        None => Err(OriginError::NotFound(format!(
+            "entity suggestion {} not found or already resolved",
+            suggestion_id
+        ))),
+        Some(_) => {
+            db.resolve_refinement_if_open(suggestion_id, "dismissed")
+                .await?;
+            log_activity_best_effort(db, agent, "entity_suggestion_dismiss", suggestion_id).await;
+            Ok(origin_types::EntitySuggestionDismissResponse {
+                suggestion_id: suggestion_id.to_string(),
+                wrote: true,
+            })
+        }
+    }
+}
+
 fn is_valid_snake_case_relation(s: &str) -> bool {
     if s.is_empty() {
         return false;
@@ -1442,6 +1472,53 @@ mod tests {
             page_after.version, version_before,
             "version must not bump on no-op"
         );
+    }
+
+    // ── dismiss_entity_suggestion ────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn dismiss_entity_suggestion_writes_and_logs_on_first_call() {
+        let (db, _tmp) = crate::db::tests::test_db().await;
+        {
+            let conn = db.conn.lock().await;
+            conn.execute(
+                "INSERT INTO refinement_queue (id, action, source_ids, payload, confidence, status) VALUES (?1, 'suggest_entity', '[]', ?2, 0.9, 'awaiting_review')",
+                libsql::params!["ref_d1".to_string(), "DismissMe".to_string()],
+            ).await.unwrap();
+        }
+        let result = dismiss_entity_suggestion(&db, "ref_d1", "test-agent")
+            .await
+            .unwrap();
+        assert_eq!(result.suggestion_id, "ref_d1");
+        assert!(result.wrote);
+    }
+
+    #[tokio::test]
+    async fn dismiss_entity_suggestion_returns_not_found_on_missing_id() {
+        let (db, _tmp) = crate::db::tests::test_db().await;
+        let err = dismiss_entity_suggestion(&db, "ref_does_not_exist", "test-agent")
+            .await
+            .unwrap_err();
+        assert!(matches!(err, OriginError::NotFound(_)));
+    }
+
+    #[tokio::test]
+    async fn dismiss_entity_suggestion_returns_not_found_on_re_call_after_success() {
+        let (db, _tmp) = crate::db::tests::test_db().await;
+        {
+            let conn = db.conn.lock().await;
+            conn.execute(
+                "INSERT INTO refinement_queue (id, action, source_ids, payload, confidence, status) VALUES (?1, 'suggest_entity', '[]', ?2, 0.9, 'awaiting_review')",
+                libsql::params!["ref_d2".to_string(), "DismissTwice".to_string()],
+            ).await.unwrap();
+        }
+        dismiss_entity_suggestion(&db, "ref_d2", "test-agent")
+            .await
+            .unwrap();
+        let err = dismiss_entity_suggestion(&db, "ref_d2", "test-agent")
+            .await
+            .unwrap_err();
+        assert!(matches!(err, OriginError::NotFound(_)));
     }
 
     // ── approve_entity_suggestion ────────────────────────────────────────────
