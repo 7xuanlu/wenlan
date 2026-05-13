@@ -1482,14 +1482,16 @@ pub async fn handle_reclassify_memory(
 
 pub async fn handle_accept_revision(
     State(state): State<Arc<RwLock<ServerState>>>,
+    headers: axum::http::HeaderMap,
     Path(id): Path<String>,
-) -> Result<Json<serde_json::Value>, ServerError> {
-    let s = state.read().await;
-    let db = s.db.as_ref().ok_or(ServerError::DbNotInitialized)?;
-    db.accept_pending_revision(&id)
-        .await
-        .map_err(|e| ServerError::Internal(e.to_string()))?;
-    Ok(Json(serde_json::json!({ "accepted": true })))
+) -> Result<Json<origin_types::RevisionAcceptResponse>, ServerError> {
+    let db = {
+        let s = state.read().await;
+        s.db.as_ref().ok_or(ServerError::DbNotInitialized)?.clone()
+    };
+    let agent = extract_agent_name(&headers, None);
+    let result = origin_core::post_write::accept_pending_revision(&db, &id, &agent).await?;
+    Ok(Json(result))
 }
 
 pub async fn handle_dismiss_revision(

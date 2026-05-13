@@ -759,6 +759,36 @@ pub async fn dismiss_entity_suggestion(
     }
 }
 
+/// Accept a pending memory revision. Canonical entry for both agent-triggered
+/// (`/api/memory/revision/{id}/accept`) and daemon-internal accept-dispatch.
+/// Activates the revision row, suppresses the original, and logs activity.
+/// Returns `NotFound` if no pending revision exists for the target.
+pub async fn accept_pending_revision(
+    db: &MemoryDB,
+    target_source_id: &str,
+    agent: &str,
+) -> Result<origin_types::RevisionAcceptResponse, OriginError> {
+    // Pre-fetch the revision row id so we can return it in the response,
+    // since the DB method consumes the row before returning.
+    let pending = db.get_pending_revision_for(target_source_id).await?;
+    let Some(pending) = pending else {
+        return Err(OriginError::NotFound(format!(
+            "No pending revision for {}",
+            target_source_id
+        )));
+    };
+    let revision_source_id = pending.source_id.clone();
+
+    db.accept_pending_revision(target_source_id).await?;
+    log_activity_best_effort(db, agent, "revision_accept", target_source_id).await;
+
+    Ok(origin_types::RevisionAcceptResponse {
+        target_source_id: target_source_id.to_string(),
+        revision_source_id,
+        wrote: true,
+    })
+}
+
 fn is_valid_snake_case_relation(s: &str) -> bool {
     if s.is_empty() {
         return false;
@@ -1516,6 +1546,59 @@ mod tests {
             .await
             .unwrap();
         let err = dismiss_entity_suggestion(&db, "ref_d2", "test-agent")
+            .await
+            .unwrap_err();
+        assert!(matches!(err, OriginError::NotFound(_)));
+    }
+
+    // ── accept_pending_revision ──────────────────────────────────────────────
+
+    async fn seed_pending_revision(db: &MemoryDB, target: &str, revision: &str) {
+        let now = chrono::Utc::now().timestamp();
+        let conn = db.conn.lock().await;
+        conn.execute(
+            "INSERT INTO memories (id, source_id, title, content, chunk_index, chunk_type, memory_type, domain, source_agent, created_at, last_modified, confirmed, stability, source) VALUES (?1, ?1, ?1, 'original content', 0, 'text', 'fact', 'test', 'claude-code', ?2, ?2, 1, 'confirmed', 'memory')",
+            libsql::params![target.to_string(), now],
+        )
+        .await
+        .unwrap();
+        conn.execute(
+            "INSERT INTO memories (id, source_id, title, content, chunk_index, chunk_type, memory_type, domain, source_agent, created_at, last_modified, confirmed, stability, source, supersedes, pending_revision) VALUES (?1, ?1, ?1, 'revised content', 0, 'text', 'fact', 'test', 'claude-code', ?2, ?2, 0, 'new', 'memory', ?3, 1)",
+            libsql::params![revision.to_string(), now, target.to_string()],
+        )
+        .await
+        .unwrap();
+    }
+
+    #[tokio::test]
+    async fn accept_pending_revision_writes_and_logs_on_first_call() {
+        let (db, _tmp) = crate::db::tests::test_db().await;
+        seed_pending_revision(&db, "mem_apr_target", "mem_apr_rev").await;
+        let result = accept_pending_revision(&db, "mem_apr_target", "test-agent")
+            .await
+            .unwrap();
+        assert_eq!(result.target_source_id, "mem_apr_target");
+        assert_eq!(result.revision_source_id, "mem_apr_rev");
+        assert!(result.wrote);
+    }
+
+    #[tokio::test]
+    async fn accept_pending_revision_returns_not_found_on_missing_id() {
+        let (db, _tmp) = crate::db::tests::test_db().await;
+        let err = accept_pending_revision(&db, "mem_nope", "test-agent")
+            .await
+            .unwrap_err();
+        assert!(matches!(err, OriginError::NotFound(_)));
+    }
+
+    #[tokio::test]
+    async fn accept_pending_revision_returns_not_found_on_re_call_after_success() {
+        let (db, _tmp) = crate::db::tests::test_db().await;
+        seed_pending_revision(&db, "mem_arr_target", "mem_arr_rev").await;
+        accept_pending_revision(&db, "mem_arr_target", "test-agent")
+            .await
+            .unwrap();
+        let err = accept_pending_revision(&db, "mem_arr_target", "test-agent")
             .await
             .unwrap_err();
         assert!(matches!(err, OriginError::NotFound(_)));

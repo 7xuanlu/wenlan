@@ -10,7 +10,9 @@ mod common;
 
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
-use origin_types::{EntitySuggestionApproveResponse, EntitySuggestionDismissResponse};
+use origin_types::{
+    EntitySuggestionApproveResponse, EntitySuggestionDismissResponse, RevisionAcceptResponse,
+};
 use tower::ServiceExt;
 
 async fn body_as_json<T: serde::de::DeserializeOwned>(response: axum::http::Response<Body>) -> T {
@@ -241,5 +243,136 @@ async fn dismiss_entity_suggestion_threads_x_agent_name() {
         "cursor-test",
     )
     .await;
+    assert_eq!(count, 1);
+}
+
+// ── accept_pending_revision ──────────────────────────────────────────────────
+
+async fn seed_pending_revision_in_test_app(
+    db: &std::sync::Arc<origin_core::db::MemoryDB>,
+    target: &str,
+    revision: &str,
+) {
+    let now = chrono::Utc::now().timestamp();
+    use origin_types::RawDocument;
+    // Seed the original (target) memory as confirmed
+    db.upsert_documents(vec![RawDocument {
+        source_id: target.to_string(),
+        title: format!("title-{target}"),
+        content: "original content".to_string(),
+        source: "memory".to_string(),
+        source_agent: Some("claude-code".to_string()),
+        last_modified: now,
+        ..Default::default()
+    }])
+    .await
+    .unwrap();
+    // Seed the revision row pointing at the target with pending_revision=true
+    db.upsert_documents(vec![RawDocument {
+        source_id: revision.to_string(),
+        title: format!("title-{revision}"),
+        content: "revised content".to_string(),
+        source: "memory".to_string(),
+        source_agent: Some("claude-code".to_string()),
+        last_modified: now,
+        supersedes: Some(target.to_string()),
+        pending_revision: true,
+        ..Default::default()
+    }])
+    .await
+    .unwrap();
+}
+
+#[tokio::test]
+async fn accept_revision_succeeds_and_returns_typed_response() {
+    let (router, _tmp, db) = common::test_app().await;
+    seed_pending_revision_in_test_app(&db, "mem_ar1_target", "mem_ar1_rev").await;
+
+    let response = router
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/memory/revision/mem_ar1_target/accept")
+                .header("x-agent-name", "test-agent")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let parsed: RevisionAcceptResponse = body_as_json(response).await;
+    assert_eq!(parsed.target_source_id, "mem_ar1_target");
+    assert_eq!(parsed.revision_source_id, "mem_ar1_rev");
+    assert!(parsed.wrote);
+}
+
+#[tokio::test]
+async fn accept_revision_returns_404_on_missing_target() {
+    let (router, _tmp, _db) = common::test_app().await;
+    let response = router
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/memory/revision/mem_missing/accept")
+                .header("x-agent-name", "test-agent")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn accept_revision_returns_404_on_re_call() {
+    let (router, _tmp, db) = common::test_app().await;
+    seed_pending_revision_in_test_app(&db, "mem_ar2_target", "mem_ar2_rev").await;
+
+    let first = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/memory/revision/mem_ar2_target/accept")
+                .header("x-agent-name", "test-agent")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(first.status(), StatusCode::OK);
+
+    let second = router
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/memory/revision/mem_ar2_target/accept")
+                .header("x-agent-name", "test-agent")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(second.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn accept_revision_threads_x_agent_name() {
+    let (router, _tmp, db) = common::test_app().await;
+    seed_pending_revision_in_test_app(&db, "mem_ar3_target", "mem_ar3_rev").await;
+    router
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/memory/revision/mem_ar3_target/accept")
+                .header("x-agent-name", "openai-test")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let count =
+        common::count_activity_for_action_and_agent(&db, "revision_accept", "openai-test").await;
     assert_eq!(count, 1);
 }
