@@ -5,7 +5,8 @@ AI work memory for Claude Code. Origin carries sessions, decisions, lessons, and
 ## 30-Second Setup
 
 ```text
-0s   /plugin install origin@claude-plugins-official
+0s   /plugin marketplace add 7xuanlu/origin
+     /plugin install origin@7xuanlu
 5s   restart Claude Code
 10s  /init   auto-installs daemon if missing, configures Basic Memory,
             verifies daemon + MCP + round-trip, prints "Origin ready"
@@ -20,17 +21,13 @@ if the daemon ever stops.
 ## Install
 
 ```text
-/plugin install origin@claude-plugins-official
-```
-
-For local development against this repository, add this repo as a marketplace instead:
-
-```text
 /plugin marketplace add 7xuanlu/origin
 /plugin install origin@7xuanlu
 ```
 
-The development marketplace is defined in [`../../.claude-plugin/marketplace.json`](../../.claude-plugin/marketplace.json) (at the repo root). The plugin metadata is defined in [`plugin.json`](plugin.json). MCP configuration is in [`../.mcp.json`](../.mcp.json) (this plugin's `.mcp.json`), which delegates to [`../bin/origin-mcp-runner.sh`](../bin/origin-mcp-runner.sh).
+`7xuanlu` is the GitHub repo owner. If you fork Origin, use your own handle.
+
+The marketplace is defined in [`../../.claude-plugin/marketplace.json`](../../.claude-plugin/marketplace.json) (at the repo root). The plugin metadata is defined in [`plugin.json`](plugin.json). MCP configuration is in [`../.mcp.json`](../.mcp.json) (this plugin's `.mcp.json`), which delegates to [`../bin/origin-mcp-runner.sh`](../bin/origin-mcp-runner.sh).
 
 The runner picks the MCP server binary in three paths, in order:
 
