@@ -11,7 +11,7 @@ These skills keep the daily interface short:
 /capture     save one durable memory
 /recall      search local memory
 /distill     refresh wiki pages
-/review      audit pending memories
+/review captures|revisions   power-user deep audit; daily flow is /brief
 /forget      delete a memory by ID
 /handoff     end-of-session debrief
 /debrief     alias for /handoff
@@ -29,7 +29,7 @@ The skills do not store data themselves. They guide Claude Code to use the local
 | `capture` | Save one durable memory: decision, lesson, gotcha, preference, fact, or correction. |
 | `recall` | Query Origin for focused context. |
 | `distill` | Refresh wiki pages from accumulated memories. |
-| `review` | Inspect pending memories before confirmation. |
+| `review` | Power-user deep audit of pending surfaces (captures, revisions). Daily flow handled by `/brief`. |
 | `forget` | Delete a memory by ID. |
 | `handoff` | End-session capture for decisions, lessons, gotchas, and open threads. |
 | `debrief` | Alias for `handoff` — symmetric with `brief`. |

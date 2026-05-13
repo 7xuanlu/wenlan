@@ -26,7 +26,7 @@ Origin plugin — daily verbs
   /recall <q>   search local memory
   /distill [t]  synthesize pages from clusters (scoped to current repo)
   /read <p>     preview a distilled page inline
-  /review       audit pending memories before confirmation
+  /review <surface>   deep audit (surface = captures|revisions); /brief handles daily
   /forget <id>  delete a memory by ID
   /handoff      end-of-session ritual (session log + captures)
   /debrief      alias for /handoff (brief/debrief symmetry)
