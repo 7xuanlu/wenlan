@@ -1669,7 +1669,10 @@ fn truncate_for_title(content: &str) -> String {
 ///
 /// Unknown callers become `"unknown"` (which the frontend filter hides from the
 /// user-facing dropdown). Honest-unknown beats guessing.
-fn extract_agent_name(headers: &HeaderMap, deprecated_body_agent: Option<&str>) -> String {
+pub(crate) fn extract_agent_name(
+    headers: &HeaderMap,
+    deprecated_body_agent: Option<&str>,
+) -> String {
     if let Some(agent) = headers
         .get("x-agent-name")
         .and_then(|v| v.to_str().ok())
