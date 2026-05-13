@@ -668,6 +668,13 @@ pub struct DistillRequest {
     /// domain value → scoped distill; anything else → 404-ish hint payload.
     #[serde(default, alias = "page_id")]
     pub target: Option<String>,
+
+    /// When true, clears `user_edited` on the resolved page before recompile.
+    /// Used by `/distill rebuild <page>` to opt into wiping user prose.
+    /// Only valid when target resolves to a single page; otherwise returns a hint.
+    /// Requires daemon LLM.
+    #[serde(default)]
+    pub force: bool,
 }
 
 /// POST /api/distill
@@ -693,6 +700,8 @@ pub async fn handle_distill(
             .ok_or(ServerError::Internal("DB not initialized".into()))?;
     let prompts = &s.prompts;
     let tuning = &s.tuning.distillation;
+    let llm = s.llm.as_ref();
+    let api_llm = s.api_llm.as_ref();
 
     let knowledge_path = {
         let config = origin_core::config::load_config();
@@ -715,6 +724,50 @@ pub async fn handle_distill(
         }
         _ => None,
     };
+
+    // Force path: clear user_edited and run a full deep_distill_single.
+    // Only valid when target resolves to a single page; all other targets
+    // (entity, domain, none) return a hint payload.
+    if req.force {
+        match &target {
+            Some(origin_core::synthesis::distill::DistillTarget::Page(page_id)) => {
+                db.clear_user_edited(page_id)
+                    .await
+                    .map_err(|e| ServerError::Internal(e.to_string()))?;
+                let prefer_llm = api_llm.or(llm);
+                if prefer_llm.map(|p| p.is_available()).unwrap_or(false) {
+                    let updated = origin_core::refinery::deep_distill_single(
+                        db,
+                        prefer_llm,
+                        prompts,
+                        page_id,
+                        knowledge_path.as_deref(),
+                    )
+                    .await?;
+                    return Ok(Json(serde_json::json!({
+                        "status": "ok",
+                        "force": true,
+                        "page_id": page_id,
+                        "updated": updated,
+                    })));
+                } else {
+                    return Ok(Json(serde_json::json!({
+                        "status": "skipped",
+                        "force": true,
+                        "page_id": page_id,
+                        "updated": false,
+                        "hint": "force rebuild needs an LLM in the daemon — install an on-device model or set an Anthropic key via `origin setup` / `/origin:doctor`",
+                    })));
+                }
+            }
+            _ => {
+                return Ok(Json(serde_json::json!({
+                    "unresolved": req.target.clone().unwrap_or_default(),
+                    "hint": "force=true only valid when target is a single page id",
+                })));
+            }
+        }
+    }
 
     let scoped = target.is_some();
 
@@ -1097,5 +1150,30 @@ mod recent_endpoints_tests {
             .unwrap();
         let response = app.oneshot(req).await.unwrap();
         assert_eq!(response.status(), 503);
+    }
+}
+
+#[cfg(test)]
+mod distill_request_tests {
+    use super::DistillRequest;
+
+    #[test]
+    fn distill_request_deserializes_force() {
+        let r: DistillRequest =
+            serde_json::from_str(r#"{"target":"page_xyz","force":true}"#).unwrap();
+        assert_eq!(r.target.as_deref(), Some("page_xyz"));
+        assert!(r.force);
+    }
+
+    #[test]
+    fn distill_request_defaults_force_to_false() {
+        let r: DistillRequest = serde_json::from_str(r#"{"target":"foo"}"#).unwrap();
+        assert!(!r.force);
+    }
+
+    #[test]
+    fn distill_request_rejects_unknown_field() {
+        let r = serde_json::from_str::<DistillRequest>(r#"{"bogus":true}"#);
+        assert!(r.is_err(), "deny_unknown_fields should reject unknown keys");
     }
 }
