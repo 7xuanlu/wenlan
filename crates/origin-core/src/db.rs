@@ -8706,6 +8706,160 @@ impl MemoryDB {
         Ok(id)
     }
 
+    /// Merge `alias_id` into `canonical_id`. Re-points all FK references, registers
+    /// the alias name, cleans dangling alias-table rows, and deletes the alias entity.
+    /// Idempotent: returns `Ok(())` if `alias_id` is already gone.
+    pub async fn merge_entities(
+        &self,
+        canonical_id: &str,
+        alias_id: &str,
+    ) -> Result<(), OriginError> {
+        if canonical_id == alias_id {
+            return Err(OriginError::Validation(
+                "merge_entities: canonical and alias are the same id".into(),
+            ));
+        }
+
+        let conn = self.conn.lock().await;
+        let alias_exists: i64 = {
+            let mut rows = conn
+                .query(
+                    "SELECT COUNT(*) FROM entities WHERE id = ?1",
+                    libsql::params![alias_id],
+                )
+                .await
+                .map_err(|e| OriginError::VectorDb(format!("merge_entities count alias: {e}")))?;
+            let row = rows
+                .next()
+                .await
+                .map_err(|e| OriginError::VectorDb(format!("merge_entities row: {e}")))?
+                .ok_or_else(|| OriginError::VectorDb("merge_entities: no count row".into()))?;
+            row.get(0).unwrap_or(0)
+        };
+        if alias_exists == 0 {
+            return Ok(());
+        }
+
+        let canonical_exists: i64 = {
+            let mut rows = conn
+                .query(
+                    "SELECT COUNT(*) FROM entities WHERE id = ?1",
+                    libsql::params![canonical_id],
+                )
+                .await
+                .map_err(|e| {
+                    OriginError::VectorDb(format!("merge_entities count canonical: {e}"))
+                })?;
+            let row = rows
+                .next()
+                .await
+                .map_err(|e| OriginError::VectorDb(format!("merge_entities row: {e}")))?
+                .ok_or_else(|| OriginError::VectorDb("merge_entities: no count row".into()))?;
+            row.get(0).unwrap_or(0)
+        };
+        if canonical_exists == 0 {
+            return Err(OriginError::NotFound(format!(
+                "canonical entity {canonical_id} not found"
+            )));
+        }
+
+        let alias_name: Option<String> = {
+            let mut rows = conn
+                .query(
+                    "SELECT name FROM entities WHERE id = ?1",
+                    libsql::params![alias_id],
+                )
+                .await
+                .map_err(|e| OriginError::VectorDb(format!("merge_entities read name: {e}")))?;
+            let row = rows
+                .next()
+                .await
+                .map_err(|e| OriginError::VectorDb(format!("merge_entities row: {e}")))?;
+            row.and_then(|r| r.get::<String>(0).ok())
+        };
+
+        conn.execute("BEGIN TRANSACTION", ())
+            .await
+            .map_err(|e| OriginError::VectorDb(format!("merge_entities begin: {e}")))?;
+
+        let result: Result<(), OriginError> = async {
+            conn.execute(
+                "UPDATE relations SET from_entity = ?1 WHERE from_entity = ?2",
+                libsql::params![canonical_id, alias_id],
+            )
+            .await
+            .map_err(|e| OriginError::VectorDb(format!("merge_entities rel.from: {e}")))?;
+
+            conn.execute(
+                "UPDATE relations SET to_entity = ?1 WHERE to_entity = ?2",
+                libsql::params![canonical_id, alias_id],
+            )
+            .await
+            .map_err(|e| OriginError::VectorDb(format!("merge_entities rel.to: {e}")))?;
+
+            conn.execute(
+                "UPDATE observations SET entity_id = ?1 WHERE entity_id = ?2",
+                libsql::params![canonical_id, alias_id],
+            )
+            .await
+            .map_err(|e| OriginError::VectorDb(format!("merge_entities obs: {e}")))?;
+
+            conn.execute(
+                "UPDATE memories SET entity_id = ?1 WHERE entity_id = ?2",
+                libsql::params![canonical_id, alias_id],
+            )
+            .await
+            .map_err(|e| OriginError::VectorDb(format!("merge_entities mem: {e}")))?;
+
+            conn.execute(
+                "UPDATE OR IGNORE entity_aliases SET canonical_entity_id = ?1 WHERE canonical_entity_id = ?2",
+                libsql::params![canonical_id, alias_id],
+            )
+            .await
+            .map_err(|e| OriginError::VectorDb(format!("merge_entities alias redirect: {e}")))?;
+
+            if let Some(name) = &alias_name {
+                conn.execute(
+                    "INSERT OR IGNORE INTO entity_aliases (alias_name, canonical_entity_id, created_at, source) \
+                     VALUES (?1, ?2, unixepoch(), 'merge')",
+                    libsql::params![name.as_str(), canonical_id],
+                )
+                .await
+                .map_err(|e| OriginError::VectorDb(format!("merge_entities alias register: {e}")))?;
+            }
+
+            conn.execute(
+                "DELETE FROM entity_aliases WHERE canonical_entity_id = ?1",
+                libsql::params![alias_id],
+            )
+            .await
+            .map_err(|e| OriginError::VectorDb(format!("merge_entities alias cleanup: {e}")))?;
+
+            conn.execute(
+                "DELETE FROM entities WHERE id = ?1",
+                libsql::params![alias_id],
+            )
+            .await
+            .map_err(|e| OriginError::VectorDb(format!("merge_entities delete alias: {e}")))?;
+
+            Ok(())
+        }
+        .await;
+
+        match result {
+            Ok(()) => {
+                conn.execute("COMMIT", ())
+                    .await
+                    .map_err(|e| OriginError::VectorDb(format!("merge_entities commit: {e}")))?;
+                Ok(())
+            }
+            Err(e) => {
+                let _ = conn.execute("ROLLBACK", ()).await;
+                Err(e)
+            }
+        }
+    }
+
     /// Create a relation between two entities.
     /// The relation type is normalized against the vocabulary via `resolve_relation_type`
     /// before insertion. On conflict (same from/to/type), updates confidence if higher
@@ -27700,6 +27854,177 @@ pub(crate) mod tests {
             summary.contains('+'),
             "delta_summary should contain '+' for growth, got: {:?}",
             summary
+        );
+    }
+
+    // ==================== merge_entities ====================
+
+    async fn seed_two_entities(db: &MemoryDB) -> (String, String) {
+        let canonical = db
+            .create_entity("Acme Corp", "organization", None)
+            .await
+            .unwrap();
+        let alias = db
+            .create_entity("Acme Corporation", "organization", None)
+            .await
+            .unwrap();
+        (canonical, alias)
+    }
+
+    #[tokio::test]
+    async fn merge_entities_repoints_relations() {
+        let (db, _tmp) = test_db().await;
+        let (canonical, alias) = seed_two_entities(&db).await;
+        let other = db.create_entity("Bob", "person", None).await.unwrap();
+        let rel_id = db
+            .create_relation(&other, &alias, "works_at", None, Some(0.9), None, None)
+            .await
+            .unwrap();
+
+        db.merge_entities(&canonical, &alias).await.unwrap();
+
+        let conn = db.conn.lock().await;
+        let mut rows = conn
+            .query(
+                "SELECT to_entity FROM relations WHERE id = ?1",
+                libsql::params![rel_id],
+            )
+            .await
+            .unwrap();
+        let row = rows.next().await.unwrap().unwrap();
+        let to: String = row.get(0).unwrap();
+        assert_eq!(to, canonical, "relation should re-point to canonical");
+    }
+
+    #[tokio::test]
+    async fn merge_entities_repoints_observations() {
+        let (db, _tmp) = test_db().await;
+        let (canonical, alias) = seed_two_entities(&db).await;
+        let obs_id = db
+            .add_observation(&alias, "Founded 1985", None, None)
+            .await
+            .unwrap();
+
+        db.merge_entities(&canonical, &alias).await.unwrap();
+
+        let conn = db.conn.lock().await;
+        let mut rows = conn
+            .query(
+                "SELECT entity_id FROM observations WHERE id = ?1",
+                libsql::params![obs_id],
+            )
+            .await
+            .unwrap();
+        let row = rows.next().await.unwrap().unwrap();
+        let eid: String = row.get(0).unwrap();
+        assert_eq!(eid, canonical, "observation should re-point to canonical");
+    }
+
+    #[tokio::test]
+    async fn merge_entities_registers_alias_name() {
+        let (db, _tmp) = test_db().await;
+        let (canonical, alias) = seed_two_entities(&db).await;
+
+        db.merge_entities(&canonical, &alias).await.unwrap();
+
+        let conn = db.conn.lock().await;
+        let mut rows = conn
+            .query(
+                "SELECT canonical_entity_id, source FROM entity_aliases WHERE alias_name = ?1",
+                libsql::params!["Acme Corporation"],
+            )
+            .await
+            .unwrap();
+        let row = rows.next().await.unwrap().expect("alias row should exist");
+        let cid: String = row.get(0).unwrap();
+        let src: String = row.get(1).unwrap();
+        assert_eq!(cid, canonical);
+        assert_eq!(src, "merge");
+    }
+
+    #[tokio::test]
+    async fn merge_entities_deletes_alias_row() {
+        let (db, _tmp) = test_db().await;
+        let (canonical, alias) = seed_two_entities(&db).await;
+
+        db.merge_entities(&canonical, &alias).await.unwrap();
+
+        let conn = db.conn.lock().await;
+        let mut rows = conn
+            .query(
+                "SELECT COUNT(*) FROM entities WHERE id = ?1",
+                libsql::params![alias],
+            )
+            .await
+            .unwrap();
+        let row = rows.next().await.unwrap().unwrap();
+        let count: i64 = row.get(0).unwrap();
+        assert_eq!(count, 0, "alias entity row should be deleted");
+    }
+
+    #[tokio::test]
+    async fn merge_entities_cleans_dangling_aliases_before_delete() {
+        let (db, _tmp) = test_db().await;
+        let (canonical, alias) = seed_two_entities(&db).await;
+        {
+            let conn = db.conn.lock().await;
+            conn.execute(
+                "INSERT INTO entity_aliases (alias_name, canonical_entity_id, created_at, source) \
+                 VALUES (?1, ?2, unixepoch(), 'test')",
+                libsql::params!["Acme Old Name", alias.clone()],
+            )
+            .await
+            .unwrap();
+        }
+
+        db.merge_entities(&canonical, &alias).await.unwrap();
+
+        let conn = db.conn.lock().await;
+        let mut rows = conn
+            .query(
+                "SELECT COUNT(*) FROM entity_aliases WHERE canonical_entity_id = ?1",
+                libsql::params![alias],
+            )
+            .await
+            .unwrap();
+        let row = rows.next().await.unwrap().unwrap();
+        let count: i64 = row.get(0).unwrap();
+        assert_eq!(
+            count, 0,
+            "dangling aliases pointing at alias_id should be cleaned"
+        );
+    }
+
+    #[tokio::test]
+    async fn merge_entities_idempotent() {
+        let (db, _tmp) = test_db().await;
+        let (canonical, alias) = seed_two_entities(&db).await;
+        db.merge_entities(&canonical, &alias).await.unwrap();
+        db.merge_entities(&canonical, &alias).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn merge_entities_same_id_validation_error() {
+        let (db, _tmp) = test_db().await;
+        let (canonical, _alias) = seed_two_entities(&db).await;
+        let err = db.merge_entities(&canonical, &canonical).await.unwrap_err();
+        assert!(
+            matches!(err, crate::error::OriginError::Validation(_)),
+            "expected Validation, got {err:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn merge_entities_canonical_missing_not_found() {
+        let (db, _tmp) = test_db().await;
+        let alias = db.create_entity("Solo", "person", None).await.unwrap();
+        let err = db
+            .merge_entities("ent_nonexistent", &alias)
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(err, crate::error::OriginError::NotFound(_)),
+            "expected NotFound, got {err:?}"
         );
     }
 }
