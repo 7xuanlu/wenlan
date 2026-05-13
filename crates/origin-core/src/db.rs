@@ -28738,7 +28738,7 @@ pub(crate) mod tests {
     }
 
     #[tokio::test]
-    async fn accept_pending_revision_is_transactional_on_partial_failure() {
+    async fn accept_pending_revision_happy_path_then_not_found_on_recall() {
         // Seed: insert a target memory and a pending revision for it.
         let (db, _tmp) = test_db().await;
         let now = chrono::Utc::now().timestamp();
