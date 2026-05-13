@@ -2159,3 +2159,117 @@ async fn dismiss_revision_forwards_x_agent_name() {
         "x-agent-name header must equal configured agent name"
     );
 }
+
+use origin_mcp::tools::DismissContradictionRequest;
+
+#[tokio::test]
+async fn dismiss_contradiction_happy_path() {
+    let (mock, client) = setup().await;
+    Mock::given(method("POST"))
+        .and(path("/api/memory/contradiction/mem_x/dismiss"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "source_id": "mem_x",
+            "wrote": true,
+        })))
+        .mount(&mock)
+        .await;
+    let server = make_server(client);
+    let result = server
+        .dismiss_contradiction_impl(DismissContradictionRequest {
+            source_id: "mem_x".into(),
+        })
+        .await
+        .unwrap();
+    let text = text_of(&result);
+    assert!(
+        text.contains("mem_x"),
+        "expected source_id in output; got: {text}"
+    );
+    assert!(
+        text.contains("true"),
+        "expected wrote=true in output; got: {text}"
+    );
+}
+
+#[tokio::test]
+async fn dismiss_contradiction_envelope_guard() {
+    let (mock, client) = setup().await;
+    Mock::given(method("POST"))
+        .and(path("/api/memory/contradiction/mem_y/dismiss"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "source_id": "mem_y",
+            "wrote": true,
+            "noise": "ok",
+        })))
+        .mount(&mock)
+        .await;
+    let server = make_server(client);
+    let result = server
+        .dismiss_contradiction_impl(DismissContradictionRequest {
+            source_id: "mem_y".into(),
+        })
+        .await
+        .unwrap();
+    let text = text_of(&result);
+    assert!(
+        text.contains("mem_y"),
+        "expected source_id in output; got: {text}"
+    );
+}
+
+#[tokio::test]
+async fn dismiss_contradiction_500_surfaces_as_error() {
+    let (mock, client) = setup().await;
+    Mock::given(method("POST"))
+        .and(path("/api/memory/contradiction/mem_500/dismiss"))
+        .respond_with(ResponseTemplate::new(500).set_body_string("boom"))
+        .mount(&mock)
+        .await;
+    let server = make_server(client);
+    let result = server
+        .dismiss_contradiction_impl(DismissContradictionRequest {
+            source_id: "mem_500".into(),
+        })
+        .await
+        .unwrap();
+    let text = text_of(&result);
+    assert!(
+        text.to_lowercase().contains("error") || text.contains("500"),
+        "expected error signal on 500; got: {text}"
+    );
+}
+
+#[tokio::test]
+async fn dismiss_contradiction_forwards_x_agent_name() {
+    let mock = MockServer::start().await;
+    let client = OriginClient::new(mock.uri()).with_agent_name("test-agent".into());
+    Mock::given(method("POST"))
+        .and(path("/api/memory/contradiction/mem_hdr/dismiss"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "source_id": "mem_hdr",
+            "wrote": true,
+        })))
+        .mount(&mock)
+        .await;
+    let server = make_server(client);
+    server
+        .dismiss_contradiction_impl(DismissContradictionRequest {
+            source_id: "mem_hdr".into(),
+        })
+        .await
+        .unwrap();
+    let received = mock
+        .received_requests()
+        .await
+        .expect("wiremock captured no requests");
+    assert_eq!(received.len(), 1, "expected exactly 1 request");
+    let value = received[0]
+        .headers
+        .get("x-agent-name")
+        .expect("x-agent-name header must be present");
+    assert_eq!(
+        value.to_str().expect("header value is valid utf-8"),
+        "test-agent",
+        "x-agent-name header must equal configured agent name"
+    );
+}

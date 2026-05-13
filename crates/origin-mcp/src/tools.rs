@@ -463,6 +463,12 @@ pub struct DismissRevisionRequest {
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct DismissContradictionRequest {
+    /// The source_id of the memory whose contradiction flags should be dismissed.
+    pub source_id: String,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct ListPendingImportsParams {}
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
@@ -1424,6 +1430,24 @@ impl OriginMcpServer {
         Ok(CallToolResult::success(vec![Content::text(pretty)]))
     }
 
+    pub async fn dismiss_contradiction_impl(
+        &self,
+        req: DismissContradictionRequest,
+    ) -> Result<CallToolResult, McpError> {
+        let path = format!("/api/memory/contradiction/{}/dismiss", req.source_id);
+        let response = match self
+            .client
+            .post_empty::<ContradictionDismissResponse>(&path)
+            .await
+        {
+            Ok(r) => r,
+            Err(e) => return Ok(tool_error(e, "dismiss_contradiction")),
+        };
+        let pretty = serde_json::to_string_pretty(&response)
+            .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+        Ok(CallToolResult::success(vec![Content::text(pretty)]))
+    }
+
     pub async fn list_pending_imports_impl(
         &self,
         _params: ListPendingImportsParams,
@@ -2138,6 +2162,24 @@ impl OriginMcpServer {
         Parameters(req): Parameters<DismissRevisionRequest>,
     ) -> Result<CallToolResult, McpError> {
         self.dismiss_revision_impl(req).await
+    }
+
+    #[tool(
+        description = "Dismiss all awaiting-review contradiction flags for a memory. Idempotent. \
+                       Returns wrote:true even if no rows matched.",
+        annotations(
+            title = "Dismiss contradiction",
+            read_only_hint = false,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
+    )]
+    async fn dismiss_contradiction(
+        &self,
+        Parameters(req): Parameters<DismissContradictionRequest>,
+    ) -> Result<CallToolResult, McpError> {
+        self.dismiss_contradiction_impl(req).await
     }
 
     #[tool(
