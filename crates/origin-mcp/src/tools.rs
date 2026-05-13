@@ -445,6 +445,12 @@ pub struct ApproveEntitySuggestionRequest {
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct DismissEntitySuggestionRequest {
+    /// The refinement_queue id of the pending entity suggestion to dismiss.
+    pub suggestion_id: String,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct ListPendingImportsParams {}
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
@@ -1349,6 +1355,27 @@ impl OriginMcpServer {
         Ok(CallToolResult::success(vec![Content::text(pretty)]))
     }
 
+    pub async fn dismiss_entity_suggestion_impl(
+        &self,
+        req: DismissEntitySuggestionRequest,
+    ) -> Result<CallToolResult, McpError> {
+        let path = format!(
+            "/api/memory/entity-suggestions/{}/dismiss",
+            req.suggestion_id
+        );
+        let response = match self
+            .client
+            .post_empty::<EntitySuggestionDismissResponse>(&path)
+            .await
+        {
+            Ok(r) => r,
+            Err(e) => return Ok(tool_error(e, "dismiss_entity_suggestion")),
+        };
+        let pretty = serde_json::to_string_pretty(&response)
+            .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+        Ok(CallToolResult::success(vec![Content::text(pretty)]))
+    }
+
     pub async fn list_pending_imports_impl(
         &self,
         _params: ListPendingImportsParams,
@@ -2005,6 +2032,25 @@ impl OriginMcpServer {
         Parameters(req): Parameters<ApproveEntitySuggestionRequest>,
     ) -> Result<CallToolResult, McpError> {
         self.approve_entity_suggestion_impl(req).await
+    }
+
+    #[tool(
+        description = "Dismiss a pending entity suggestion. Marks the refinement row resolved \
+                       without creating an entity. Returns an error if the suggestion id is \
+                       unknown or already resolved.",
+        annotations(
+            title = "Dismiss entity suggestion",
+            read_only_hint = false,
+            destructive_hint = false,
+            idempotent_hint = false,
+            open_world_hint = false
+        )
+    )]
+    async fn dismiss_entity_suggestion(
+        &self,
+        Parameters(req): Parameters<DismissEntitySuggestionRequest>,
+    ) -> Result<CallToolResult, McpError> {
+        self.dismiss_entity_suggestion_impl(req).await
     }
 
     #[tool(

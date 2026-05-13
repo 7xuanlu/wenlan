@@ -1804,3 +1804,119 @@ async fn approve_entity_suggestion_forwards_x_agent_name() {
         "x-agent-name header must equal configured agent name"
     );
 }
+
+// ===== dismiss_entity_suggestion =====
+
+use origin_mcp::tools::DismissEntitySuggestionRequest;
+
+#[tokio::test]
+async fn dismiss_entity_suggestion_happy_path() {
+    let (mock, client) = setup().await;
+    Mock::given(method("POST"))
+        .and(path("/api/memory/entity-suggestions/ref_1/dismiss"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "suggestion_id": "ref_1",
+            "wrote": true,
+        })))
+        .mount(&mock)
+        .await;
+    let server = make_server(client);
+    let result = server
+        .dismiss_entity_suggestion_impl(DismissEntitySuggestionRequest {
+            suggestion_id: "ref_1".into(),
+        })
+        .await
+        .unwrap();
+    let text = text_of(&result);
+    assert!(
+        text.contains("ref_1"),
+        "expected suggestion_id in output; got: {text}"
+    );
+    assert!(
+        text.contains("true"),
+        "expected wrote=true in output; got: {text}"
+    );
+}
+
+#[tokio::test]
+async fn dismiss_entity_suggestion_envelope_guard_ignores_extra_fields() {
+    let (mock, client) = setup().await;
+    Mock::given(method("POST"))
+        .and(path("/api/memory/entity-suggestions/ref_2/dismiss"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "suggestion_id": "ref_2",
+            "wrote": true,
+            "unexpected_field": "should be ignored",
+        })))
+        .mount(&mock)
+        .await;
+    let server = make_server(client);
+    let result = server
+        .dismiss_entity_suggestion_impl(DismissEntitySuggestionRequest {
+            suggestion_id: "ref_2".into(),
+        })
+        .await
+        .unwrap();
+    let text = text_of(&result);
+    assert!(
+        text.contains("ref_2"),
+        "expected suggestion_id in output; got: {text}"
+    );
+}
+
+#[tokio::test]
+async fn dismiss_entity_suggestion_returns_error_on_daemon_404() {
+    let (mock, client) = setup().await;
+    Mock::given(method("POST"))
+        .and(path("/api/memory/entity-suggestions/ref_404/dismiss"))
+        .respond_with(ResponseTemplate::new(404).set_body_string("not found"))
+        .mount(&mock)
+        .await;
+    let server = make_server(client);
+    let result = server
+        .dismiss_entity_suggestion_impl(DismissEntitySuggestionRequest {
+            suggestion_id: "ref_404".into(),
+        })
+        .await
+        .unwrap();
+    let text = text_of(&result);
+    assert!(
+        text.to_lowercase().contains("error") || text.contains("404"),
+        "expected error signal on 404; got: {text}"
+    );
+}
+
+#[tokio::test]
+async fn dismiss_entity_suggestion_forwards_x_agent_name() {
+    let mock = MockServer::start().await;
+    let client = OriginClient::new(mock.uri()).with_agent_name("test-agent".into());
+    Mock::given(method("POST"))
+        .and(path("/api/memory/entity-suggestions/ref_hdr/dismiss"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "suggestion_id": "ref_hdr",
+            "wrote": true,
+        })))
+        .mount(&mock)
+        .await;
+    let server = make_server(client);
+    server
+        .dismiss_entity_suggestion_impl(DismissEntitySuggestionRequest {
+            suggestion_id: "ref_hdr".into(),
+        })
+        .await
+        .unwrap();
+    let received = mock
+        .received_requests()
+        .await
+        .expect("wiremock captured no requests");
+    assert_eq!(received.len(), 1, "expected exactly 1 request");
+    let value = received[0]
+        .headers
+        .get("x-agent-name")
+        .expect("x-agent-name header must be present");
+    assert_eq!(
+        value.to_str().expect("header value is valid utf-8"),
+        "test-agent",
+        "x-agent-name header must equal configured agent name"
+    );
+}
