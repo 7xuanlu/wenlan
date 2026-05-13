@@ -202,6 +202,12 @@ pub struct RejectRefinementParams {
     pub id: String,
 }
 
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct AcceptRefinementParams {
+    #[schemars(description = "The refinement proposal id (e.g. \"merge_abc123_def456\").")]
+    pub id: String,
+}
+
 // --- Knowledge graph CRUD params ---
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
@@ -1056,6 +1062,26 @@ impl OriginMcpServer {
             resp.id
         ))]))
     }
+
+    pub async fn accept_refinement_impl(
+        &self,
+        params: AcceptRefinementParams,
+    ) -> Result<CallToolResult, McpError> {
+        let path = format!(
+            "/api/refinery/queue/{}/accept",
+            url_encode_simple(&params.id)
+        );
+        let resp: AcceptRefinementResponse =
+            match self.client.post(&path, &serde_json::json!({})).await {
+                Ok(v) => v,
+                Err(e) => return Ok(tool_error(e, "accept_refinement")),
+            };
+
+        Ok(CallToolResult::success(vec![Content::text(format!(
+            "Refinement {} accepted (action={}).",
+            resp.id, resp.action_applied
+        ))]))
+    }
 }
 
 /// Build the `/api/pages/recent` URL with optional `limit` + `since_ms` query
@@ -1456,6 +1482,27 @@ impl OriginMcpServer {
         Parameters(params): Parameters<RejectRefinementParams>,
     ) -> Result<CallToolResult, McpError> {
         self.reject_refinement_impl(params).await
+    }
+
+    #[tool(
+        description = "Apply a refinement queue proposal using sensible defaults. \
+            entity_merge: existing entity wins as canonical. \
+            relation_conflict: new relation supersedes. \
+            detect_contradiction: previously-stored memory flagged for revision. \
+            Returns 422 for suggest_entity (no producer) and dedup_merge (deprecated).",
+        annotations(
+            title = "Accept refinement",
+            read_only_hint = false,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
+    )]
+    async fn accept_refinement(
+        &self,
+        Parameters(params): Parameters<AcceptRefinementParams>,
+    ) -> Result<CallToolResult, McpError> {
+        self.accept_refinement_impl(params).await
     }
 }
 
@@ -3280,5 +3327,26 @@ mod tests {
                 "`{name}` must declare read_only_hint=true"
             );
         }
+    }
+
+    #[test]
+    fn accept_refinement_response_typed_deserialize() {
+        let raw = r#"{"id":"ref_xyz","action_applied":"entity_merge"}"#;
+        let parsed: AcceptRefinementResponse = serde_json::from_str(raw).unwrap();
+        assert_eq!(parsed.id, "ref_xyz");
+        assert_eq!(parsed.action_applied, "entity_merge");
+    }
+
+    #[test]
+    fn accept_refinement_response_rejects_extra_envelope() {
+        // Daemon must not wrap successful response under an extra key — the
+        // lesson_mcp_typed_deserialize guard. This test verifies a non-typed
+        // shape fails to deserialize loud.
+        let wrong = r#"{"data":{"id":"ref_xyz","action_applied":"entity_merge"}}"#;
+        let result: Result<AcceptRefinementResponse, _> = serde_json::from_str(wrong);
+        assert!(
+            result.is_err(),
+            "envelope-wrapped response must fail typed deserialize"
+        );
     }
 }
