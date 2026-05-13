@@ -17,6 +17,7 @@ pub use origin_types::responses::{
     EntitySuggestionDismissResponse, ListMemoriesResponse, ListMemoryRevisionsResponse,
     ListPageRevisionsResponse, ListRefinementsResponse, MemoryRevisionEntry, NurtureCardsResponse,
     OrphanLink, OrphanLinksResponse, PageChangelogEntry, RejectRefinementResponse,
-    RevisionAcceptResponse, SearchMemoryResponse, SearchPagesResponse, StoreMemoryResponse,
+    RevisionAcceptResponse, RevisionDismissResponse, SearchMemoryResponse, SearchPagesResponse,
+    StoreMemoryResponse,
 };
 pub use origin_types::PageSourceWithMemory;

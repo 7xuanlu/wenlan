@@ -457,6 +457,12 @@ pub struct AcceptRevisionRequest {
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct DismissRevisionRequest {
+    /// The source_id of the memory whose pending revision should be dismissed.
+    pub target_source_id: String,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct ListPendingImportsParams {}
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
@@ -1400,6 +1406,24 @@ impl OriginMcpServer {
         Ok(CallToolResult::success(vec![Content::text(pretty)]))
     }
 
+    pub async fn dismiss_revision_impl(
+        &self,
+        req: DismissRevisionRequest,
+    ) -> Result<CallToolResult, McpError> {
+        let path = format!("/api/memory/revision/{}/dismiss", req.target_source_id);
+        let response = match self
+            .client
+            .post_empty::<RevisionDismissResponse>(&path)
+            .await
+        {
+            Ok(r) => r,
+            Err(e) => return Ok(tool_error(e, "dismiss_revision")),
+        };
+        let pretty = serde_json::to_string_pretty(&response)
+            .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+        Ok(CallToolResult::success(vec![Content::text(pretty)]))
+    }
+
     pub async fn list_pending_imports_impl(
         &self,
         _params: ListPendingImportsParams,
@@ -2095,6 +2119,25 @@ impl OriginMcpServer {
         Parameters(req): Parameters<AcceptRevisionRequest>,
     ) -> Result<CallToolResult, McpError> {
         self.accept_revision_impl(req).await
+    }
+
+    #[tool(
+        description = "Dismiss a pending memory revision. Deletes the revision row; the original \
+                       memory is unchanged. Returns an error if no pending revision exists for \
+                       that target.",
+        annotations(
+            title = "Dismiss revision",
+            read_only_hint = false,
+            destructive_hint = false,
+            idempotent_hint = false,
+            open_world_hint = false
+        )
+    )]
+    async fn dismiss_revision(
+        &self,
+        Parameters(req): Parameters<DismissRevisionRequest>,
+    ) -> Result<CallToolResult, McpError> {
+        self.dismiss_revision_impl(req).await
     }
 
     #[tool(

@@ -2043,3 +2043,119 @@ async fn accept_revision_forwards_x_agent_name() {
         "x-agent-name header must equal configured agent name"
     );
 }
+
+// ===== dismiss_revision =====
+
+use origin_mcp::tools::DismissRevisionRequest;
+
+#[tokio::test]
+async fn dismiss_revision_happy_path() {
+    let (mock, client) = setup().await;
+    Mock::given(method("POST"))
+        .and(path("/api/memory/revision/mem_target/dismiss"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "target_source_id": "mem_target",
+            "wrote": true,
+        })))
+        .mount(&mock)
+        .await;
+    let server = make_server(client);
+    let result = server
+        .dismiss_revision_impl(DismissRevisionRequest {
+            target_source_id: "mem_target".into(),
+        })
+        .await
+        .unwrap();
+    let text = text_of(&result);
+    assert!(
+        text.contains("mem_target"),
+        "expected target_source_id in output; got: {text}"
+    );
+    assert!(
+        text.contains("true"),
+        "expected wrote=true in output; got: {text}"
+    );
+}
+
+#[tokio::test]
+async fn dismiss_revision_envelope_guard() {
+    let (mock, client) = setup().await;
+    Mock::given(method("POST"))
+        .and(path("/api/memory/revision/mem_target/dismiss"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "target_source_id": "mem_target",
+            "wrote": true,
+            "unexpected_field": "should be ignored",
+        })))
+        .mount(&mock)
+        .await;
+    let server = make_server(client);
+    let result = server
+        .dismiss_revision_impl(DismissRevisionRequest {
+            target_source_id: "mem_target".into(),
+        })
+        .await
+        .unwrap();
+    let text = text_of(&result);
+    assert!(
+        text.contains("mem_target"),
+        "expected target_source_id in output; got: {text}"
+    );
+}
+
+#[tokio::test]
+async fn dismiss_revision_404() {
+    let (mock, client) = setup().await;
+    Mock::given(method("POST"))
+        .and(path("/api/memory/revision/mem_missing/dismiss"))
+        .respond_with(ResponseTemplate::new(404).set_body_string("not found"))
+        .mount(&mock)
+        .await;
+    let server = make_server(client);
+    let result = server
+        .dismiss_revision_impl(DismissRevisionRequest {
+            target_source_id: "mem_missing".into(),
+        })
+        .await
+        .unwrap();
+    let text = text_of(&result);
+    assert!(
+        text.to_lowercase().contains("error") || text.contains("404"),
+        "expected error signal on 404; got: {text}"
+    );
+}
+
+#[tokio::test]
+async fn dismiss_revision_forwards_x_agent_name() {
+    let mock = MockServer::start().await;
+    let client = OriginClient::new(mock.uri()).with_agent_name("test-agent".into());
+    Mock::given(method("POST"))
+        .and(path("/api/memory/revision/mem_hdr/dismiss"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "target_source_id": "mem_hdr",
+            "wrote": true,
+        })))
+        .mount(&mock)
+        .await;
+    let server = make_server(client);
+    server
+        .dismiss_revision_impl(DismissRevisionRequest {
+            target_source_id: "mem_hdr".into(),
+        })
+        .await
+        .unwrap();
+    let received = mock
+        .received_requests()
+        .await
+        .expect("wiremock captured no requests");
+    assert_eq!(received.len(), 1, "expected exactly 1 request");
+    let value = received[0]
+        .headers
+        .get("x-agent-name")
+        .expect("x-agent-name header must be present");
+    assert_eq!(
+        value.to_str().expect("header value is valid utf-8"),
+        "test-agent",
+        "x-agent-name header must equal configured agent name"
+    );
+}
