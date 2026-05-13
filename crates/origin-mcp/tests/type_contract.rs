@@ -10,12 +10,12 @@
 
 use origin_mcp::client::OriginClient;
 use origin_mcp::tools::{
-    CaptureParams, ContextParams, OriginMcpServer, RecallParams, TransportMode,
+    CaptureParams, ContextParams, ListNurtureParams, OriginMcpServer, RecallParams, TransportMode,
 };
-use origin_types::memory::SearchResult;
+use origin_types::memory::{MemoryItem, SearchResult};
 use origin_types::responses::{
-    ChatContextResponse, DeleteResponse, KnowledgeContext, ProfileContext, SearchMemoryResponse,
-    StoreMemoryResponse, TierTokenEstimates,
+    ChatContextResponse, DeleteResponse, KnowledgeContext, NurtureCardsResponse, ProfileContext,
+    SearchMemoryResponse, StoreMemoryResponse, TierTokenEstimates,
 };
 use rmcp::model::{CallToolResult, RawContent};
 use wiremock::matchers::{method, path};
@@ -836,5 +836,168 @@ async fn origin_client_omits_x_agent_name_when_unset() {
     assert!(
         headers.get("x-agent-name").is_none(),
         "x-agent-name header must be absent when agent_name is not set"
+    );
+}
+
+fn sample_memory_item() -> MemoryItem {
+    MemoryItem {
+        source_id: "mem_nurture1".into(),
+        title: "Test nurture card".into(),
+        content: "This memory needs review.".into(),
+        summary: None,
+        memory_type: Some("fact".into()),
+        domain: Some("work".into()),
+        source_agent: Some("test-agent".into()),
+        confidence: Some(0.7),
+        confirmed: false,
+        stability: None,
+        pinned: false,
+        supersedes: None,
+        last_modified: 1715000000,
+        chunk_count: 1,
+        entity_id: None,
+        quality: None,
+        is_recap: false,
+        enrichment_status: "done".into(),
+        supersede_mode: "soft".into(),
+        structured_fields: None,
+        retrieval_cue: None,
+        access_count: 0,
+        source_text: None,
+        version: 1,
+        changelog: None,
+        pending_revision: false,
+        merged_from: None,
+    }
+}
+
+#[tokio::test]
+async fn list_nurture_happy_path() {
+    let (mock, client) = setup().await;
+    let response = NurtureCardsResponse {
+        cards: vec![sample_memory_item()],
+    };
+    Mock::given(method("GET"))
+        .and(path("/api/memory/nurture"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(&response))
+        .mount(&mock)
+        .await;
+
+    let server = make_server(client);
+    let result = server
+        .list_nurture_impl(ListNurtureParams {
+            limit: None,
+            domain: None,
+        })
+        .await
+        .expect("list_nurture_impl failed");
+
+    let text = text_of(&result);
+    assert!(
+        text.starts_with("1 nurture cards"),
+        "expected '1 nurture cards' header; got: {text}"
+    );
+    assert!(
+        text.contains("mem_nurture1"),
+        "expected source_id in output; got: {text}"
+    );
+}
+
+#[tokio::test]
+async fn list_nurture_envelope_guard() {
+    // Daemon must not wrap response under an extra key. If it does, typed
+    // deserialization fails loud instead of returning an empty list silently.
+    // Regression guard for lesson_mcp_typed_deserialize.
+    let wrong = serde_json::json!({ "data": { "cards": [] } });
+    let (mock, client) = setup().await;
+    Mock::given(method("GET"))
+        .and(path("/api/memory/nurture"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(&wrong))
+        .mount(&mock)
+        .await;
+
+    let server = make_server(client);
+    let result = server
+        .list_nurture_impl(ListNurtureParams {
+            limit: None,
+            domain: None,
+        })
+        .await
+        .expect("list_nurture_impl returned Err unexpectedly");
+
+    // tool_error path: isError=true text contains "Failed to parse"
+    let text = text_of(&result);
+    assert!(
+        result.is_error.unwrap_or(false),
+        "envelope-wrapped response must surface as tool error; got: {text}"
+    );
+    assert!(
+        text.contains("Failed to parse"),
+        "error message must mention parse failure; got: {text}"
+    );
+}
+
+#[tokio::test]
+async fn list_nurture_passes_query_params() {
+    let (mock, client) = setup().await;
+    let response = NurtureCardsResponse { cards: vec![] };
+    // Use a broad path matcher; we inspect the URL manually.
+    Mock::given(method("GET"))
+        .and(path("/api/memory/nurture"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(&response))
+        .mount(&mock)
+        .await;
+
+    let server = make_server(client);
+    server
+        .list_nurture_impl(ListNurtureParams {
+            limit: Some(25),
+            domain: Some("work".into()),
+        })
+        .await
+        .expect("list_nurture_impl failed");
+
+    let received = mock
+        .received_requests()
+        .await
+        .expect("wiremock captured no requests");
+    assert_eq!(received.len(), 1);
+    let url = received[0].url.to_string();
+    assert!(
+        url.contains("limit=25"),
+        "expected limit=25 in query; got: {url}"
+    );
+    assert!(
+        url.contains("domain=work"),
+        "expected domain=work in query; got: {url}"
+    );
+}
+
+#[tokio::test]
+async fn list_nurture_http_500() {
+    let (mock, client) = setup().await;
+    Mock::given(method("GET"))
+        .and(path("/api/memory/nurture"))
+        .respond_with(ResponseTemplate::new(500).set_body_string("internal error"))
+        .mount(&mock)
+        .await;
+
+    let server = make_server(client);
+    let result = server
+        .list_nurture_impl(ListNurtureParams {
+            limit: None,
+            domain: None,
+        })
+        .await
+        .expect("list_nurture_impl must not return Err on HTTP 500");
+
+    assert!(
+        result.is_error.unwrap_or(false),
+        "HTTP 500 must surface as tool error"
+    );
+    let text = text_of(&result);
+    assert!(
+        text.contains("500"),
+        "error message must mention HTTP 500; got: {text}"
     );
 }

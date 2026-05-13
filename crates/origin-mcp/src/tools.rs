@@ -423,6 +423,18 @@ pub struct ListPagesRecentParams {
     pub since_ms: Option<i64>,
 }
 
+// --- Curation read params ---
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct ListNurtureParams {
+    /// Maximum cards to return. Default 50. Clamped to 1..=500.
+    #[serde(default, deserialize_with = "deserialize_optional_usize_lenient")]
+    pub limit: Option<usize>,
+    /// Restrict to a single domain/space.
+    #[serde(default)]
+    pub domain: Option<String>,
+}
+
 // ===== Internal Implementations =====
 
 fn format_capture_success(resp: &StoreMemoryResponse) -> String {
@@ -1229,6 +1241,38 @@ impl OriginMcpServer {
             resp.id, resp.action_applied
         ))]))
     }
+
+    pub async fn list_nurture_impl(
+        &self,
+        params: ListNurtureParams,
+    ) -> Result<CallToolResult, McpError> {
+        let mut path = String::from("/api/memory/nurture");
+        let mut q: Vec<String> = Vec::new();
+        if let Some(l) = params.limit {
+            q.push(format!("limit={}", l.clamp(1, 500)));
+        }
+        if let Some(d) = params.domain.as_deref().filter(|s| !s.is_empty()) {
+            q.push(format!("domain={}", url_encode_simple(d)));
+        }
+        if !q.is_empty() {
+            path.push('?');
+            path.push_str(&q.join("&"));
+        }
+
+        let resp: origin_types::responses::NurtureCardsResponse = match self.client.get(&path).await
+        {
+            Ok(v) => v,
+            Err(e) => return Ok(tool_error(e, "list_nurture")),
+        };
+
+        let pretty = serde_json::to_string_pretty(&resp.cards)
+            .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+        Ok(CallToolResult::success(vec![Content::text(format!(
+            "{} nurture cards\n{}",
+            resp.cards.len(),
+            pretty
+        ))]))
+    }
 }
 
 /// Build the `/api/pages/recent` URL with optional `limit` + `since_ms` query
@@ -1735,6 +1779,24 @@ impl OriginMcpServer {
         Parameters(params): Parameters<AcceptRefinementParams>,
     ) -> Result<CallToolResult, McpError> {
         self.accept_refinement_impl(params).await
+    }
+
+    // --- Curation read tools ---
+
+    #[tool(
+        description = "List nurture cards — memories flagged for human attention because they are unconfirmed, low-confidence, or have been queued for review by the daemon. Use when the user wants to audit what needs review: phrases like 'what needs my attention', 'unconfirmed memories', 'nurture queue'. Returns memory items with metadata. Optional `limit` caps results (default 50, max 500). Optional `domain` restricts to one topic space. Distinct from `list_pending` (which lists all unconfirmed captures) and `list_refinements` (which lists daemon-generated merge/conflict proposals).",
+        annotations(
+            title = "List nurture cards",
+            read_only_hint = true,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
+    )]
+    async fn list_nurture(
+        &self,
+        Parameters(params): Parameters<ListNurtureParams>,
+    ) -> Result<CallToolResult, McpError> {
+        self.list_nurture_impl(params).await
     }
 }
 
