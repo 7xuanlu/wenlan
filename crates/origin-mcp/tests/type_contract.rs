@@ -1591,3 +1591,91 @@ async fn list_orphan_links_http_500() {
         "error message must mention HTTP 500; got: {text}"
     );
 }
+
+// ===== OriginClient::post_empty =====
+
+#[tokio::test]
+async fn origin_client_post_empty_uses_post_verb() {
+    let (mock, client) = setup().await;
+    let response = DeleteResponse { deleted: true };
+    Mock::given(method("POST"))
+        .and(path("/api/memory/confirm/mem_abc"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(&response))
+        .mount(&mock)
+        .await;
+
+    let _: DeleteResponse = client
+        .post_empty("/api/memory/confirm/mem_abc")
+        .await
+        .expect("post_empty should succeed");
+
+    let received = mock
+        .received_requests()
+        .await
+        .expect("wiremock captured no requests");
+    assert_eq!(received.len(), 1, "expected exactly 1 request");
+    assert_eq!(
+        received[0].method.as_str(),
+        "POST",
+        "expected POST verb, got: {}",
+        received[0].method
+    );
+    assert!(
+        received[0].body.is_empty(),
+        "expected empty request body, got {} bytes",
+        received[0].body.len()
+    );
+}
+
+#[tokio::test]
+async fn origin_client_post_empty_forwards_x_agent_name() {
+    let mock = MockServer::start().await;
+    let client = OriginClient::new(mock.uri()).with_agent_name("test-agent".into());
+    let response = DeleteResponse { deleted: true };
+    Mock::given(method("POST"))
+        .and(path("/api/memory/confirm/mem_xyz"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(&response))
+        .mount(&mock)
+        .await;
+
+    let _: DeleteResponse = client
+        .post_empty("/api/memory/confirm/mem_xyz")
+        .await
+        .expect("post_empty should succeed");
+
+    let received = mock
+        .received_requests()
+        .await
+        .expect("wiremock captured no requests");
+    assert_eq!(received.len(), 1, "expected exactly 1 request");
+    let headers = &received[0].headers;
+    let value = headers
+        .get("x-agent-name")
+        .expect("x-agent-name header must be present");
+    assert_eq!(
+        value.to_str().expect("header value is valid utf-8"),
+        "test-agent",
+        "x-agent-name header must equal configured agent name"
+    );
+}
+
+#[tokio::test]
+async fn origin_client_post_empty_deserializes_typed_response() {
+    let (mock, client) = setup().await;
+    let response = DeleteResponse { deleted: true };
+    Mock::given(method("POST"))
+        .and(path("/api/memory/confirm/mem_typed"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(&response))
+        .mount(&mock)
+        .await;
+
+    let result: DeleteResponse = client
+        .post_empty("/api/memory/confirm/mem_typed")
+        .await
+        .expect("post_empty should deserialize typed response");
+
+    assert!(
+        result.deleted,
+        "expected deleted=true in deserialized response"
+    );
+}
