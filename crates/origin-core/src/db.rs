@@ -8721,6 +8721,9 @@ impl MemoryDB {
         }
 
         let conn = self.conn.lock().await;
+        // Idempotency check: assumes single-writer daemon (no other process holds
+        // a libSQL connection to this DB). Mutex<Connection> serializes within-process;
+        // cross-process races are not defended against.
         let alias_exists: i64 = {
             let mut rows = conn
                 .query(
@@ -8854,7 +8857,9 @@ impl MemoryDB {
                 Ok(())
             }
             Err(e) => {
-                let _ = conn.execute("ROLLBACK", ()).await;
+                if let Err(rollback_err) = conn.execute("ROLLBACK", ()).await {
+                    log::error!("merge_entities ROLLBACK failed: {rollback_err}");
+                }
                 Err(e)
             }
         }
@@ -27876,8 +27881,14 @@ pub(crate) mod tests {
         let (db, _tmp) = test_db().await;
         let (canonical, alias) = seed_two_entities(&db).await;
         let other = db.create_entity("Bob", "person", None).await.unwrap();
-        let rel_id = db
+        // Inbound relation: other --works_at--> alias  (tests to_entity re-point)
+        let rel_in = db
             .create_relation(&other, &alias, "works_at", None, Some(0.9), None, None)
+            .await
+            .unwrap();
+        // Outbound relation: alias --leads--> other  (tests from_entity re-point)
+        let rel_out = db
+            .create_relation(&alias, &other, "leads", None, Some(0.9), None, None)
             .await
             .unwrap();
 
@@ -27887,13 +27898,30 @@ pub(crate) mod tests {
         let mut rows = conn
             .query(
                 "SELECT to_entity FROM relations WHERE id = ?1",
-                libsql::params![rel_id],
+                libsql::params![rel_in],
             )
             .await
             .unwrap();
         let row = rows.next().await.unwrap().unwrap();
         let to: String = row.get(0).unwrap();
-        assert_eq!(to, canonical, "relation should re-point to canonical");
+        assert_eq!(
+            to, canonical,
+            "inbound relation should re-point to canonical via to_entity"
+        );
+
+        let mut rows = conn
+            .query(
+                "SELECT from_entity FROM relations WHERE id = ?1",
+                libsql::params![rel_out],
+            )
+            .await
+            .unwrap();
+        let row = rows.next().await.unwrap().unwrap();
+        let from: String = row.get(0).unwrap();
+        assert_eq!(
+            from, canonical,
+            "outbound relation should re-point to canonical via from_entity"
+        );
     }
 
     #[tokio::test]
@@ -28043,6 +28071,49 @@ pub(crate) mod tests {
         let (canonical, alias) = seed_two_entities(&db).await;
         db.merge_entities(&canonical, &alias).await.unwrap();
         db.merge_entities(&canonical, &alias).await.unwrap();
+
+        // Verify exact state: canonical still exists, alias still gone, exactly one
+        // 'merge' alias row for "Acme Corporation"
+        let conn = db.conn.lock().await;
+
+        let mut rows = conn
+            .query(
+                "SELECT COUNT(*) FROM entities WHERE id = ?1",
+                libsql::params![canonical.clone()],
+            )
+            .await
+            .unwrap();
+        let count: i64 = rows.next().await.unwrap().unwrap().get(0).unwrap();
+        assert_eq!(
+            count, 1,
+            "canonical should remain exactly once after idempotent calls"
+        );
+
+        let mut rows = conn
+            .query(
+                "SELECT COUNT(*) FROM entities WHERE id = ?1",
+                libsql::params![alias.clone()],
+            )
+            .await
+            .unwrap();
+        let count: i64 = rows.next().await.unwrap().unwrap().get(0).unwrap();
+        assert_eq!(
+            count, 0,
+            "alias should remain deleted after idempotent calls"
+        );
+
+        let mut rows = conn
+            .query(
+                "SELECT COUNT(*) FROM entity_aliases WHERE alias_name = ?1 AND source = 'merge'",
+                libsql::params!["Acme Corporation"],
+            )
+            .await
+            .unwrap();
+        let count: i64 = rows.next().await.unwrap().unwrap().get(0).unwrap();
+        assert_eq!(
+            count, 1,
+            "exactly one merge-source alias row should exist (INSERT OR IGNORE)"
+        );
     }
 
     #[tokio::test]
