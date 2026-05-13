@@ -511,6 +511,15 @@ fn format_capture_success(resp: &StoreMemoryResponse) -> String {
             msg.push_str(&format!("\n  - {}", warning));
         }
     }
+    if !resp.triggered_revisions.is_empty() {
+        msg.push_str("\n\nTriggered revisions (protected memories now flagged):");
+        for target_id in &resp.triggered_revisions {
+            msg.push_str(&format!("\n  - {target_id}"));
+        }
+        msg.push_str(
+            "\n\nAction: accept (accept_revision) | dismiss (dismiss_revision) | leave (decide later)",
+        );
+    }
     msg
 }
 
@@ -2564,6 +2573,7 @@ mod tests {
             extraction_method: "llm".into(),
             enrichment: String::new(),
             hint: String::new(),
+            triggered_revisions: vec![],
         };
         let msg = format_capture_success(&resp);
         assert_eq!(msg, "Stored mem_abc");
@@ -2584,11 +2594,51 @@ mod tests {
             extraction_method: "agent".into(),
             enrichment: String::new(),
             hint: String::new(),
+            triggered_revisions: vec![],
         };
         let msg = format_capture_success(&resp);
         assert!(msg.starts_with("Stored mem_abc"));
         assert!(msg.contains("Warnings:"));
         assert!(msg.contains("decision memory missing required 'claim' field"));
+    }
+
+    #[test]
+    fn format_capture_success_surfaces_triggered_revisions() {
+        let resp = StoreMemoryResponse {
+            source_id: "mem_new".into(),
+            chunks_created: 1,
+            memory_type: "fact".into(),
+            entity_id: None,
+            quality: None,
+            warnings: vec![],
+            extraction_method: "agent".into(),
+            enrichment: String::new(),
+            hint: String::new(),
+            triggered_revisions: vec!["mem_protected_target".to_string()],
+        };
+        let out = format_capture_success(&resp);
+        assert!(out.contains("Triggered revisions"));
+        assert!(out.contains("mem_protected_target"));
+        assert!(out.contains("accept_revision"));
+        assert!(out.contains("dismiss_revision"));
+    }
+
+    #[test]
+    fn format_capture_success_omits_section_when_empty() {
+        let resp = StoreMemoryResponse {
+            source_id: "mem_new".into(),
+            chunks_created: 1,
+            memory_type: "fact".into(),
+            entity_id: None,
+            quality: None,
+            warnings: vec![],
+            extraction_method: "agent".into(),
+            enrichment: String::new(),
+            hint: String::new(),
+            triggered_revisions: vec![],
+        };
+        let out = format_capture_success(&resp);
+        assert!(!out.contains("Triggered revisions"));
     }
 
     #[test]

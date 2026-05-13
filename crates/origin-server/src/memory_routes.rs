@@ -402,8 +402,15 @@ pub async fn handle_store_memory(
 
     // A topic-match against a protected memory also flags this as a pending revision.
     let pending_revision = topic_match_protected_id.is_some();
-    // Agent-declared supersedes: trust the caller directly, no auto-detection.
-    let final_supersedes = req.supersedes.clone();
+    // Agent-declared supersedes takes priority. If caller didn't pass one and
+    // topic-match against a protected memory fired, auto-set supersedes so the
+    // new memory is properly linked as a revision-of-protected. Without this,
+    // list_pending_revisions (filters by `supersedes IS NOT NULL`) can't find
+    // the row and /brief surfaces nothing.
+    let final_supersedes = req
+        .supersedes
+        .clone()
+        .or_else(|| topic_match_protected_id.clone());
 
     let agent_for_activity = {
         let s = state.read().await;
@@ -965,6 +972,10 @@ pub async fn handle_store_memory(
         extraction_method,
         enrichment,
         hint,
+        triggered_revisions: topic_match_protected_id
+            .as_ref()
+            .map(|id| vec![id.clone()])
+            .unwrap_or_default(),
     }))
 }
 

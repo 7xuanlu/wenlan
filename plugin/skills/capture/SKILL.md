@@ -5,7 +5,7 @@ description: >
   when the user states a preference, makes a decision, corrects you, or
   shares a durable fact. Invoked as `/capture <content>`.
 argument-hint: "<content>"
-allowed-tools: ["mcp__plugin_origin_origin__capture", "mcp__plugin_origin_origin__recall", "mcp__plugin_origin_origin__create_entity", "mcp__plugin_origin_origin__create_relation", "Bash"]
+allowed-tools: ["mcp__plugin_origin_origin__capture", "mcp__plugin_origin_origin__recall", "mcp__plugin_origin_origin__create_entity", "mcp__plugin_origin_origin__create_relation", "mcp__plugin_origin_origin__accept_revision", "mcp__plugin_origin_origin__dismiss_revision", "Bash"]
 ---
 
 # /capture
@@ -106,3 +106,26 @@ one.
 
 - End of session bulk store → use `/handoff` (multi-item batch).
 - Pulling memories back out → use `/recall`.
+
+## Post-capture contradiction signal
+
+After `capture` returns, check `response.triggered_revisions`. If empty, do nothing. The capture stored cleanly.
+
+If non-empty, render an inline block to the user:
+
+```
+Stored mem_new.
+
+This capture topic-matches a protected memory now flagged for revision:
+  - mem_target_abc
+
+Action: accept (replace original content) | dismiss (drop the revision) | leave (decide later)
+```
+
+Inline verb map:
+
+- accept: `accept_revision(target_source_id="mem_target_abc")`
+- dismiss: `dismiss_revision(target_source_id="mem_target_abc")`
+- leave: no call; surfaces again in next `/brief`
+
+This closes the async gap between trigger and surface. The user resolves contradictions in-flow without waiting for the next session.
