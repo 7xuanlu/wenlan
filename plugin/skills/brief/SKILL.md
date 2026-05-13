@@ -17,8 +17,8 @@ and what's relevant to the current topic.
 ## How to invoke
 
 Call the `origin` MCP server's `context` tool. If the user passed a topic
-argument, pass it through. Otherwise infer scope from the working
-directory and the conversation so far — don't ask the user.
+argument, pass it through. Otherwise infer scope from the working directory and
+the conversation so far — don't ask the user.
 
 ```
 context(topic="<args or inferred>", domain=<inferred from cwd or recent turns>)

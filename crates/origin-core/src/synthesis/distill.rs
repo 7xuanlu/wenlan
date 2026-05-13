@@ -14,6 +14,7 @@ use crate::refinery::helpers::{
     looks_like_path, looks_like_short_hash, looks_like_uuid,
 };
 use crate::sources::StabilityTier;
+use crate::synthesis::refinement_queue::{resolve_proposal, ResolveStatus};
 use std::sync::Arc;
 
 /// What a distillation pass is scoped to. Resolved from a free-form string
@@ -1157,7 +1158,7 @@ pub(crate) async fn apply_merge_by_tier(
         StabilityTier::Ephemeral => {
             // Auto-apply silently
             db.apply_merge(source_ids, merged_content).await?;
-            db.resolve_refinement(proposal_id, "auto_applied").await?;
+            resolve_proposal(db, proposal_id, ResolveStatus::AutoApplied, "daemon").await?;
             log::info!(
                 "[refinery] auto-applied merge (ephemeral) for {}",
                 proposal_id
@@ -1166,7 +1167,7 @@ pub(crate) async fn apply_merge_by_tier(
         StabilityTier::Standard => {
             // Auto-apply with notification (toast emitted by caller if app_handle available)
             db.apply_merge(source_ids, merged_content).await?;
-            db.resolve_refinement(proposal_id, "auto_applied").await?;
+            resolve_proposal(db, proposal_id, ResolveStatus::AutoApplied, "daemon").await?;
             log::info!(
                 "[refinery] auto-applied merge (standard, notify) for {}",
                 proposal_id
@@ -1174,8 +1175,7 @@ pub(crate) async fn apply_merge_by_tier(
         }
         StabilityTier::Protected => {
             // Queue for human review — don't auto-apply
-            db.resolve_refinement(proposal_id, "awaiting_review")
-                .await?;
+            resolve_proposal(db, proposal_id, ResolveStatus::AwaitingReview, "daemon").await?;
             log::info!(
                 "[refinery] queued merge for review (protected) for {}",
                 proposal_id

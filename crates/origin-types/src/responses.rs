@@ -488,6 +488,215 @@ pub struct SyncStatsResponse {
     pub errors: usize,
 }
 
+// ===== Refinement proposals =====
+
+/// The action type for a background-refinery proposal.
+///
+/// Used as the `action` tag in [`RefinementPayload`].
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ProposalAction {
+    EntityMerge,
+    RelationConflict,
+    DetectContradiction,
+    SuggestEntity,
+    DedupMerge,
+}
+
+/// Tagged-union payload emitted by the background refinery.
+///
+/// Each variant carries exactly the fields needed for that action type.
+/// Decoded at the route boundary so downstream consumers (MCP wrappers,
+/// agent skills) can pattern-match instead of inspecting raw JSON strings.
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+#[serde(tag = "action", rename_all = "snake_case")]
+pub enum RefinementPayload {
+    EntityMerge {
+        existing_id: String,
+        new_id: String,
+        similarity: f64,
+    },
+    RelationConflict {
+        existing_id: String,
+        new_id: String,
+        from: String,
+        to: String,
+        old_type: String,
+        new_type: String,
+    },
+    DetectContradiction,
+    SuggestEntity {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        name_hint: Option<String>,
+    },
+    DedupMerge,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct RefinementProposalSummary {
+    pub id: String,
+    pub action: ProposalAction,
+    pub source_ids: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub payload: Option<RefinementPayload>,
+    pub confidence: f64,
+    pub created_at: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
+pub struct ListRefinementsResponse {
+    pub proposals: Vec<RefinementProposalSummary>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct RejectRefinementResponse {
+    pub id: String,
+}
+
+#[cfg(test)]
+mod refinement_wire_tests {
+    use super::*;
+
+    #[test]
+    fn proposal_action_serde_round_trip() {
+        let cases = [
+            ("\"entity_merge\"", ProposalAction::EntityMerge),
+            ("\"relation_conflict\"", ProposalAction::RelationConflict),
+            (
+                "\"detect_contradiction\"",
+                ProposalAction::DetectContradiction,
+            ),
+            ("\"suggest_entity\"", ProposalAction::SuggestEntity),
+            ("\"dedup_merge\"", ProposalAction::DedupMerge),
+        ];
+        for (json, expected) in cases {
+            let parsed: ProposalAction = serde_json::from_str(json).unwrap();
+            assert_eq!(parsed, expected, "deserialize {json}");
+            let back = serde_json::to_string(&expected).unwrap();
+            assert_eq!(back, json, "serialize {expected:?}");
+        }
+    }
+
+    #[test]
+    fn refinement_payload_entity_merge_round_trip() {
+        let json =
+            r#"{"action":"entity_merge","existing_id":"e1","new_id":"e2","similarity":0.87}"#;
+        let parsed: RefinementPayload = serde_json::from_str(json).unwrap();
+        match parsed {
+            RefinementPayload::EntityMerge {
+                ref existing_id,
+                ref new_id,
+                similarity,
+            } => {
+                assert_eq!(existing_id, "e1");
+                assert_eq!(new_id, "e2");
+                assert!((similarity - 0.87).abs() < 1e-9);
+            }
+            _ => panic!("expected EntityMerge variant"),
+        }
+        let back = serde_json::to_value(&parsed).unwrap();
+        assert_eq!(back["action"], "entity_merge");
+        assert_eq!(back["existing_id"], "e1");
+    }
+
+    #[test]
+    fn refinement_payload_dedup_merge_no_fields() {
+        let json = r#"{"action":"dedup_merge"}"#;
+        let parsed: RefinementPayload = serde_json::from_str(json).unwrap();
+        assert!(matches!(parsed, RefinementPayload::DedupMerge));
+    }
+
+    #[test]
+    fn refinement_payload_relation_conflict_round_trip() {
+        let json = r#"{"action":"relation_conflict","existing_id":"r1","new_id":"r2","from":"e_a","to":"e_b","old_type":"works_at","new_type":"founded"}"#;
+        let parsed: RefinementPayload = serde_json::from_str(json).unwrap();
+        match parsed {
+            RefinementPayload::RelationConflict {
+                ref existing_id,
+                ref new_id,
+                ref from,
+                ref to,
+                ref old_type,
+                ref new_type,
+            } => {
+                assert_eq!(existing_id, "r1");
+                assert_eq!(new_id, "r2");
+                assert_eq!(from, "e_a");
+                assert_eq!(to, "e_b");
+                assert_eq!(old_type, "works_at");
+                assert_eq!(new_type, "founded");
+            }
+            _ => panic!("expected RelationConflict"),
+        }
+        let back = serde_json::to_value(&parsed).unwrap();
+        assert_eq!(back["from"], "e_a");
+        assert_eq!(back["to"], "e_b");
+    }
+
+    #[test]
+    fn refinement_payload_detect_contradiction_unit_variant() {
+        let json = r#"{"action":"detect_contradiction"}"#;
+        let parsed: RefinementPayload = serde_json::from_str(json).unwrap();
+        assert!(matches!(parsed, RefinementPayload::DetectContradiction));
+    }
+
+    #[test]
+    fn refinement_payload_suggest_entity_with_name_hint() {
+        let json = r#"{"action":"suggest_entity","name_hint":"PostgreSQL"}"#;
+        let parsed: RefinementPayload = serde_json::from_str(json).unwrap();
+        match parsed {
+            RefinementPayload::SuggestEntity { ref name_hint } => {
+                assert_eq!(name_hint.as_deref(), Some("PostgreSQL"));
+            }
+            _ => panic!("expected SuggestEntity"),
+        }
+    }
+
+    #[test]
+    fn refinement_payload_suggest_entity_without_name_hint() {
+        let json = r#"{"action":"suggest_entity"}"#;
+        let parsed: RefinementPayload = serde_json::from_str(json).unwrap();
+        assert!(matches!(
+            parsed,
+            RefinementPayload::SuggestEntity { name_hint: None }
+        ));
+    }
+
+    #[test]
+    fn list_refinements_response_round_trip() {
+        let resp = ListRefinementsResponse {
+            proposals: vec![RefinementProposalSummary {
+                id: "ref_1".into(),
+                action: ProposalAction::EntityMerge,
+                source_ids: vec!["a".into(), "b".into()],
+                payload: Some(RefinementPayload::EntityMerge {
+                    existing_id: "a".into(),
+                    new_id: "b".into(),
+                    similarity: 0.86,
+                }),
+                confidence: 0.86,
+                created_at: "2026-05-12T00:00:00Z".into(),
+            }],
+        };
+        let json = serde_json::to_string(&resp).unwrap();
+        let parsed: ListRefinementsResponse = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed.proposals.len(), 1);
+        assert_eq!(parsed.proposals[0].id, "ref_1");
+        assert!(matches!(
+            parsed.proposals[0].action,
+            ProposalAction::EntityMerge
+        ));
+    }
+
+    #[test]
+    fn reject_refinement_response_round_trip() {
+        let resp = RejectRefinementResponse { id: "ref_x".into() };
+        let json = serde_json::to_string(&resp).unwrap();
+        let parsed: RejectRefinementResponse = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed.id, "ref_x");
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

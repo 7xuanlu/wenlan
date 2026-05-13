@@ -1198,7 +1198,10 @@ async fn test_concept_before_after_comparison() {
             .await;
 
         // Combined: search_pages + search_memory
-        let concepts = db.search_pages(&case.query, 3).await.unwrap_or_default();
+        let concepts = db
+            .search_pages(&case.query, 3, None)
+            .await
+            .unwrap_or_default();
         let mut combined: Vec<String> = Vec::new();
         for concept in &concepts {
             for sid in &concept.source_memory_ids {
@@ -2469,7 +2472,10 @@ async fn smoke_fullpipeline() {
         .join("\n");
     let flat_tokens = count_tokens(&flat_ctx);
 
-    let concept_results = db.search_pages(&qa.question, 3).await.unwrap_or_default();
+    let concept_results = db
+        .search_pages(&qa.question, 3, None)
+        .await
+        .unwrap_or_default();
     let mut structured_parts: Vec<String> = Vec::new();
     if !concept_results.is_empty() {
         structured_parts.push("## Compiled Knowledge".to_string());
@@ -3641,7 +3647,7 @@ async fn probe_concept_scores() {
 
         let mut all_scores: Vec<f32> = Vec::new();
         for (cat, question) in &samples {
-            let concepts = db.search_pages(question, 3).await.unwrap_or_default();
+            let concepts = db.search_pages(question, 3, None).await.unwrap_or_default();
             let scores: Vec<f32> = concepts.iter().map(|c| c.relevance_score).collect();
             let tokens: Vec<usize> = concepts
                 .iter()
@@ -3786,7 +3792,7 @@ async fn probe_overlap_gate() {
                 results.iter().map(|r| r.source_id.clone()).collect();
 
             // Real search_pages (top-3)
-            let raw_concepts = db.search_pages(q, 3).await.unwrap_or_default();
+            let raw_concepts = db.search_pages(q, 3, None).await.unwrap_or_default();
             let kept = filter_pages_by_source_overlap(&raw_concepts, &search_ids, min_overlap);
 
             for c in &raw_concepts {

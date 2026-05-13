@@ -1669,7 +1669,10 @@ fn truncate_for_title(content: &str) -> String {
 ///
 /// Unknown callers become `"unknown"` (which the frontend filter hides from the
 /// user-facing dropdown). Honest-unknown beats guessing.
-fn extract_agent_name(headers: &HeaderMap, deprecated_body_agent: Option<&str>) -> String {
+pub(crate) fn extract_agent_name(
+    headers: &HeaderMap,
+    deprecated_body_agent: Option<&str>,
+) -> String {
     if let Some(agent) = headers
         .get("x-agent-name")
         .and_then(|v| v.to_str().ok())
@@ -1958,7 +1961,11 @@ pub async fn handle_search_pages(
     let s = state.read().await;
     let db = s.db.as_ref().ok_or(ServerError::DbNotInitialized)?;
     let results = db
-        .search_pages(&req.query, req.limit.unwrap_or(20))
+        .search_pages(
+            &req.query,
+            req.limit.unwrap_or(20),
+            req.page_type.as_deref(),
+        )
         .await
         .map_err(|e| ServerError::SearchFailed(e.to_string()))?;
     Ok(Json(serde_json::json!({ "pages": results })))
@@ -1997,6 +2004,8 @@ pub struct SearchPagesRequest {
     pub query: String,
     #[serde(default)]
     pub limit: Option<usize>,
+    #[serde(default)]
+    pub page_type: Option<String>,
 }
 
 /// POST /api/pages/export

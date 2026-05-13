@@ -36,7 +36,10 @@ pub use memory::{
 pub use memory_type::{MEMORY_TYPE_CAPTURE_DESCRIPTION, MEMORY_TYPE_FILTER_DESCRIPTION};
 pub use narrative::NarrativeResponse;
 pub use pages::Page;
-pub use responses::{ExportStats, MemoryDetail, PendingRevision};
+pub use responses::{
+    ExportStats, ListRefinementsResponse, MemoryDetail, PendingRevision, ProposalAction,
+    RefinementPayload, RefinementProposalSummary, RejectRefinementResponse,
+};
 pub use sources::{MemoryType, RawDocument, SourceType, StabilityTier, SyncStatus};
 
 use serde::{Deserialize, Serialize};

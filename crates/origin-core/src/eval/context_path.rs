@@ -253,7 +253,10 @@ pub async fn run_context_path_eval(
             let mut context_tokens = recall_tokens;
 
             // Add concept source_ids
-            let concept_results = db.search_pages(&qa.question, 3).await.unwrap_or_default();
+            let concept_results = db
+                .search_pages(&qa.question, 3, None)
+                .await
+                .unwrap_or_default();
             for concept in &concept_results {
                 context_tokens += count_tokens(&concept.content);
                 // Get source memories via concept_sources join table
@@ -499,7 +502,7 @@ pub async fn run_context_path_eval_longmemeval(
         let mut context_tokens = recall_tokens;
 
         let concept_results = db
-            .search_pages(&sample.question, 3)
+            .search_pages(&sample.question, 3, None)
             .await
             .unwrap_or_default();
         for concept in &concept_results {

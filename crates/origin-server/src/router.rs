@@ -4,7 +4,7 @@
 use crate::state::SharedState;
 use crate::{
     config_routes, import_routes, ingest_routes, knowledge_routes, memory_routes,
-    onboarding_routes, routes, source_routes, websocket,
+    onboarding_routes, refinery_routes, routes, source_routes, websocket,
 };
 use axum::{
     routing::{delete, get, post, put},
@@ -239,6 +239,15 @@ pub fn build_router(state: SharedState) -> Router {
         .route(
             "/api/memory/rejections",
             get(memory_routes::handle_get_rejections),
+        )
+        // Refinement queue
+        .route(
+            "/api/refinery/queue",
+            get(refinery_routes::handle_list_refinements),
+        )
+        .route(
+            "/api/refinery/queue/{id}/reject",
+            post(refinery_routes::handle_reject_refinement),
         )
         // Sources
         .route(

@@ -1935,7 +1935,7 @@ mod tests {
         .unwrap();
 
         // 5. Verify page search
-        let found = db.search_pages("libSQL storage", 10).await.unwrap();
+        let found = db.search_pages("libSQL storage", 10, None).await.unwrap();
         assert!(!found.is_empty());
 
         // 6. Verify page by entity lookup
