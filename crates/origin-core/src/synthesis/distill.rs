@@ -976,8 +976,14 @@ pub async fn deep_distill_pages(
 
     // 4. Global review — merge/split/create analysis
     if all_active.len() >= 5 {
-        match crate::synthesis::emergence::global_page_review(db, llm_ref, prompts, &all_active)
-            .await
+        match crate::synthesis::emergence::global_page_review(
+            db,
+            llm_ref,
+            prompts,
+            &all_active,
+            knowledge_path,
+        )
+        .await
         {
             Ok(n) => {
                 total += n;
