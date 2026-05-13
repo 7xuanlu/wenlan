@@ -228,13 +228,22 @@ Scope `<scope>` is up to date — no new memories to distill.
 
 ```
 Distilled N page(s) from <total> memories in scope `<scope>`:
-  - <Title>  (~/.origin/pages/<slug>.md)
-  - <Title>  (~/.origin/pages/<slug>.md, refreshed)
+  - <Title>  v1, synthesized from <K> sources
+  - <Title>  v3 → v4: +mem_xyz, +250 chars
   ...
 ```
 
-Tag refreshed pages with `, refreshed` so the user can tell which
-replaced an existing page vs which are brand new.
+For each page, `create_page` and `update_page` return a `WriteResult`
+whose `warnings` array carries a pre-formatted delta line from the
+daemon (e.g. `"v3 → v4: +mem_xyz, +250 chars"`). Render it verbatim
+after the title. When `warnings` is empty or the call returned no
+`WriteResult`, fall back to:
+
+- New page: `v1, synthesized from <K> sources` (K = source_ids length)
+- Refreshed page: `refreshed` (bare, as before)
+
+This lets the user see exactly what changed per page without opening
+each file.
 
 **If at least one cluster was skipped on the coherence check:**
 
@@ -249,9 +258,14 @@ topics scatter; would produce a grab-bag page):
 
 ```
 Refreshed K stale page(s):
-  - <Title>  (~/.origin/pages/<slug>.md)
+  - <Title>  v2 → v3: +mem_abc, +180 chars
+  - <Title>  refreshed
   ...
 ```
+
+Same delta-line rule as new/refresh clusters: render `warnings[0]`
+from the `update_page` WriteResult verbatim; fall back to `refreshed`
+when absent.
 
 **If at least one stale page was skipped because `user_edited`:**
 

@@ -9,6 +9,7 @@ use crate::db::MemoryDB;
 use crate::error::OriginError;
 use origin_types::requests::{
     AddObservationRequest, CreateConceptRequest, CreateEntityRequest, CreateRelationRequest,
+    UpdatePageRequest,
 };
 use std::path::Path;
 
@@ -16,6 +17,7 @@ use std::path::Path;
 pub struct WriteResult {
     pub id: String,
     pub warnings: Vec<String>,
+    pub wrote: bool,
 }
 
 /// Create or resolve an entity. Canonical entry point for both
@@ -63,6 +65,7 @@ pub async fn create_entity(
         return Ok(WriteResult {
             id,
             warnings: vec![],
+            wrote: false,
         });
     }
 
@@ -73,6 +76,7 @@ pub async fn create_entity(
         return Ok(WriteResult {
             id: existing.id.clone(),
             warnings: vec![],
+            wrote: false,
         });
     }
 
@@ -86,6 +90,7 @@ pub async fn create_entity(
             return Ok(WriteResult {
                 id: result.entity.id.clone(),
                 warnings: vec![],
+                wrote: false,
             });
         }
     }
@@ -160,7 +165,11 @@ pub async fn create_entity(
         log::warn!("[create_entity] activity log failed: {e}");
     }
 
-    Ok(WriteResult { id, warnings })
+    Ok(WriteResult {
+        id,
+        warnings,
+        wrote: true,
+    })
 }
 
 /// Create a directed relation between two entities. Canonical entry for
@@ -201,6 +210,7 @@ pub async fn create_relation(
             return Ok(WriteResult {
                 id: existing_id,
                 warnings: vec![],
+                wrote: false,
             });
         }
     }
@@ -274,7 +284,11 @@ pub async fn create_relation(
         log::warn!("[create_relation] activity log failed: {e}");
     }
 
-    Ok(WriteResult { id, warnings })
+    Ok(WriteResult {
+        id,
+        warnings,
+        wrote: true,
+    })
 }
 
 /// Add an observation to an existing entity. Canonical entry for both
@@ -332,6 +346,7 @@ pub async fn add_observation(
     Ok(WriteResult {
         id,
         warnings: vec![],
+        wrote: true,
     })
 }
 
@@ -396,6 +411,10 @@ pub async fn create_page(
         stale_reason: None,
         user_edited: false,
         relevance_score: 0.0,
+        last_edited_by: None,
+        last_edited_at: None,
+        last_delta_summary: None,
+        changelog: None,
     };
 
     // md-first write (only if a knowledge_path was provided)
@@ -463,7 +482,174 @@ pub async fn create_page(
         log::warn!("[create_page] activity log failed: {e}");
     }
 
-    Ok(WriteResult { id, warnings })
+    Ok(WriteResult {
+        id,
+        warnings,
+        wrote: true,
+    })
+}
+
+/// Daemon-internal `edited_by` values that bypass the hallucination guard.
+/// Incremental updates can push aggregate cosine sim below 0.6; running the
+/// guard on these paths would silently drop legitimate refinery writes.
+fn skip_hallucination_guard(edited_by: &str) -> bool {
+    matches!(
+        edited_by,
+        "distill" | "re_distill" | "page_growth" | "refinery_merge"
+    )
+}
+
+/// Update a distilled wiki page. Canonical entry for all page-update paths:
+/// daemon-internal distillation, refinery re-distill, fs watcher, and
+/// future agent-HTTP routes.
+///
+/// Two write modes via `require_stale`:
+/// - `false` — unconditional write (post-ingest, distill, page_growth callers)
+/// - `true`  — CAS: only writes when `stale_reason IS NOT NULL` (refinery callers).
+///   Returns `Ok(WriteResult { warnings: vec![] })` without writing when not stale.
+///
+/// Hallucination guard runs only for `edited_by ∈ {manual_edit, api}`.
+/// Daemon-internal callers (`distill`, `re_distill`, `page_growth`,
+/// `refinery_merge`) skip it — incremental updates may push aggregate cosine
+/// sim below 0.6 and would silently drop legitimate writes.
+pub async fn update_page(
+    db: &MemoryDB,
+    page_id: &str,
+    req: UpdatePageRequest,
+    edited_by: &str,
+    require_stale: bool,
+    knowledge_path: Option<&Path>,
+) -> Result<WriteResult, OriginError> {
+    // ── Pre-write validation ────────────────────────────────────────────────
+    if req.content.trim().is_empty() {
+        return Err(OriginError::Validation(
+            "page content must not be empty".into(),
+        ));
+    }
+    if req.source_memory_ids.is_empty() {
+        return Err(OriginError::Validation(
+            "page must cite at least one source memory".into(),
+        ));
+    }
+    // Source-existence check removed. create_page validates sources at
+    // creation time. Updates only carry forward or extend an already-valid
+    // source list; re-checking on every update would break daemon-internal
+    // callers (fs_edit, re_distill) whose sources may reference pruned
+    // memories.
+
+    // ── Conditional hallucination guard ────────────────────────────────────
+    if !skip_hallucination_guard(edited_by) {
+        let passed =
+            crate::kg_quality::hallucination_guard(db, &req.content, &req.source_memory_ids)
+                .await?;
+        if !passed {
+            return Err(OriginError::Validation(
+                "page body diverges from cited sources (cos sim < 0.6)".into(),
+            ));
+        }
+    }
+
+    // ── Load current page for delta computation ─────────────────────────────
+    let current = db
+        .get_page(page_id)
+        .await?
+        .ok_or_else(|| OriginError::Validation(format!("page '{page_id}' does not exist")))?;
+    let current_version = current.version;
+    let new_version = current_version + 1;
+
+    let source_refs: Vec<&str> = req.source_memory_ids.iter().map(|s| s.as_str()).collect();
+
+    // ── Build changelog entry ───────────────────────────────────────────────
+    let delta_summary = crate::db::compute_page_delta_summary(
+        &current.content,
+        &current.source_memory_ids,
+        &req.content,
+        &source_refs,
+        edited_by,
+    );
+
+    // Compute added sources for the changelog entry
+    let old_set: std::collections::HashSet<&str> = current
+        .source_memory_ids
+        .iter()
+        .map(|s| s.as_str())
+        .collect();
+    let new_set: std::collections::HashSet<&str> = source_refs.iter().copied().collect();
+
+    // Early return: identical content and identical source set — nothing to write.
+    if delta_summary.is_none() && old_set == new_set {
+        return Ok(WriteResult {
+            id: page_id.to_string(),
+            warnings: vec![],
+            wrote: false,
+        });
+    }
+
+    let mut added_sources: Vec<&str> = new_set.difference(&old_set).copied().collect();
+    added_sources.sort_unstable();
+    let added_sources_json = serde_json::Value::Array(
+        added_sources
+            .iter()
+            .map(|s| serde_json::Value::String(s.to_string()))
+            .collect(),
+    );
+
+    let entry = serde_json::json!({
+        "version": new_version,
+        "at": chrono::Utc::now().timestamp(),
+        "edited_by": edited_by,
+        "delta_summary": delta_summary,
+        "incoming_source_ids": added_sources_json,
+    });
+
+    // Read existing changelog and append the new entry
+    let existing_cl = db.get_page_changelog(page_id).await?;
+    const DEFAULT_CHANGELOG_CAP: usize = 20;
+    let new_changelog =
+        crate::db::append_changelog_entry(&existing_cl, entry, DEFAULT_CHANGELOG_CAP)?;
+
+    // ── Apply DB update ─────────────────────────────────────────────────────
+    let wrote = db
+        .try_update_page_content_with_changelog(
+            page_id,
+            &req.content,
+            &source_refs,
+            edited_by,
+            require_stale,
+            &new_changelog,
+        )
+        .await?;
+
+    if !wrote {
+        // CAS skipped — page was not stale; return empty warnings (no-op)
+        return Ok(WriteResult {
+            id: page_id.to_string(),
+            warnings: vec![],
+            wrote: false,
+        });
+    }
+
+    // ── md re-write ─────────────────────────────────────────────────────────
+    if let Some(kp) = knowledge_path {
+        if let Ok(Some(updated_page)) = db.get_page(page_id).await {
+            let writer = crate::export::knowledge::KnowledgeWriter::new(kp.to_path_buf());
+            if let Err(e) = writer.write_page(&updated_page) {
+                log::warn!("[update_page] md re-write failed for {page_id}: {e}");
+            }
+        }
+    }
+
+    // ── Build warnings ──────────────────────────────────────────────────────
+    let warnings = match delta_summary {
+        Some(ref summary) => vec![format!("v{current_version} → v{new_version}: {summary}")],
+        None => vec![],
+    };
+
+    Ok(WriteResult {
+        id: page_id.to_string(),
+        warnings,
+        wrote: true,
+    })
 }
 
 fn is_valid_snake_case_relation(s: &str) -> bool {
@@ -823,5 +1009,361 @@ mod tests {
         };
         let result = create_page(&db, req, "test", None).await.unwrap();
         assert!(result.id.starts_with("page_"));
+    }
+
+    // ── update_page ──────────────────────────────────────────────────────────
+
+    /// Helper: seed a memory and return its source_id.
+    async fn seed_memory(db: &MemoryDB, source_id: &str, content: &str) {
+        let doc = crate::sources::RawDocument {
+            source: "memory".to_string(),
+            source_id: source_id.to_string(),
+            title: source_id.to_string(),
+            content: content.to_string(),
+            last_modified: chrono::Utc::now().timestamp(),
+            memory_type: Some("fact".to_string()),
+            source_agent: Some("test".to_string()),
+            confidence: Some(0.9),
+            ..Default::default()
+        };
+        db.upsert_documents(vec![doc]).await.unwrap();
+    }
+
+    /// Helper: create a page via create_page for an existing memory, return page id.
+    async fn seed_page(db: &MemoryDB, source_id: &str, content: &str) -> String {
+        let req = CreateConceptRequest {
+            title: format!("Page {source_id}"),
+            content: content.to_string(),
+            summary: None,
+            entity_id: None,
+            domain: None,
+            source_memory_ids: vec![source_id.to_string()],
+        };
+        create_page(db, req, "test", None).await.unwrap().id
+    }
+
+    #[tokio::test]
+    async fn update_page_round_trip() {
+        let (db, _dir) = test_db().await;
+        let mem_id = "mem-rpt-1";
+        let content_v1 = "Rust is a systems language with memory safety";
+        seed_memory(&db, mem_id, content_v1).await;
+        let page_id = seed_page(&db, mem_id, content_v1).await;
+
+        // First update → version=2
+        let content_v2 = "Rust is a systems language with memory safety and zero-cost abstractions";
+        let req2 = UpdatePageRequest {
+            content: content_v2.to_string(),
+            source_memory_ids: vec![mem_id.to_string()],
+        };
+        let r2 = update_page(&db, &page_id, req2, "re_distill", false, None)
+            .await
+            .unwrap();
+        assert_eq!(r2.id, page_id);
+
+        // Second update → version=3
+        let content_v3 = "Rust is a systems language with memory safety, zero-cost abstractions and concurrency without data races";
+        let req3 = UpdatePageRequest {
+            content: content_v3.to_string(),
+            source_memory_ids: vec![mem_id.to_string()],
+        };
+        let r3 = update_page(&db, &page_id, req3, "re_distill", false, None)
+            .await
+            .unwrap();
+
+        // Check page version=3
+        let page = db.get_page(&page_id).await.unwrap().unwrap();
+        assert_eq!(page.version, 3);
+
+        // Changelog has 2 entries (v1→v2 and v2→v3)
+        let cl = db.get_page_changelog(&page_id).await.unwrap();
+        let entries: Vec<serde_json::Value> = serde_json::from_str(&cl).unwrap();
+        assert_eq!(entries.len(), 2, "expected 2 changelog entries");
+        assert!(
+            !r3.warnings.is_empty(),
+            "warnings should carry delta summary"
+        );
+    }
+
+    #[tokio::test]
+    async fn update_page_cas_skips_when_not_stale() {
+        let (db, _dir) = test_db().await;
+        let mem_id = "mem-cas-skip";
+        let content = "Rust is a systems language with memory safety";
+        seed_memory(&db, mem_id, content).await;
+        let page_id = seed_page(&db, mem_id, content).await;
+
+        // Page has no stale_reason — CAS with require_stale=true should skip
+        let req = UpdatePageRequest {
+            content: "Rust is a systems language with memory safety and performance".to_string(),
+            source_memory_ids: vec![mem_id.to_string()],
+        };
+        let result = update_page(&db, &page_id, req, "re_distill", true, None)
+            .await
+            .unwrap();
+
+        // Version unchanged (page stays at v1)
+        let page = db.get_page(&page_id).await.unwrap().unwrap();
+        assert_eq!(page.version, 1, "version should not change when CAS skips");
+        assert!(!result.wrote, "wrote must be false when CAS skips");
+        assert!(result.warnings.is_empty(), "no warnings on CAS skip");
+    }
+
+    #[tokio::test]
+    async fn update_page_cas_writes_when_stale() {
+        let (db, _dir) = test_db().await;
+        let mem_id = "mem-cas-write";
+        let content = "Rust is a systems language with memory safety";
+        seed_memory(&db, mem_id, content).await;
+        let page_id = seed_page(&db, mem_id, content).await;
+
+        // Mark page stale
+        db.set_page_stale(&page_id, "source_updated").await.unwrap();
+
+        // CAS with require_stale=true should write when stale
+        let new_content = "Rust is a systems language with memory safety and ownership model";
+        let req = UpdatePageRequest {
+            content: new_content.to_string(),
+            source_memory_ids: vec![mem_id.to_string()],
+        };
+        let result = update_page(&db, &page_id, req, "re_distill", true, None)
+            .await
+            .unwrap();
+
+        let page = db.get_page(&page_id).await.unwrap().unwrap();
+        assert_eq!(page.version, 2, "version should bump on CAS write");
+        assert!(result.wrote, "wrote must be true on CAS write");
+        assert!(
+            !result.warnings.is_empty(),
+            "warnings should carry delta summary"
+        );
+    }
+
+    #[tokio::test]
+    async fn update_page_hallucination_guard_manual_edit_rejects() {
+        let (db, _dir) = test_db().await;
+        let mem_id = "mem-guard-reject";
+        let rust_content = "Rust is a systems programming language with memory safety";
+        seed_memory(&db, mem_id, rust_content).await;
+        let page_id = seed_page(&db, mem_id, rust_content).await;
+
+        // Body completely unrelated to the Rust memory source
+        let req = UpdatePageRequest {
+            content: "Pasta carbonara needs eggs pancetta and pecorino romano cheese".to_string(),
+            source_memory_ids: vec![mem_id.to_string()],
+        };
+        let result = update_page(&db, &page_id, req, "manual_edit", false, None).await;
+        assert!(
+            matches!(result, Err(OriginError::Validation(_))),
+            "hallucination guard should reject manual_edit with unrelated body"
+        );
+    }
+
+    #[tokio::test]
+    async fn update_page_skip_guard_re_distill() {
+        let (db, _dir) = test_db().await;
+        let mem_id = "mem-guard-skip";
+        let rust_content = "Rust is a systems programming language with memory safety";
+        seed_memory(&db, mem_id, rust_content).await;
+        let page_id = seed_page(&db, mem_id, rust_content).await;
+
+        // Same unrelated body — but re_distill skips the guard
+        let req = UpdatePageRequest {
+            content: "Pasta carbonara needs eggs pancetta and pecorino romano cheese".to_string(),
+            source_memory_ids: vec![mem_id.to_string()],
+        };
+        // Should succeed without hallucination check
+        update_page(&db, &page_id, req, "re_distill", false, None)
+            .await
+            .unwrap();
+        let page = db.get_page(&page_id).await.unwrap().unwrap();
+        assert_eq!(page.version, 2);
+    }
+
+    #[tokio::test]
+    async fn update_page_user_edit_flag_set() {
+        let (db, _dir) = test_db().await;
+        let mem_id = "mem-flag-test";
+        let content = "Rust is a systems language with memory safety features and ownership";
+        seed_memory(&db, mem_id, content).await;
+        let page_id = seed_page(&db, mem_id, content).await;
+
+        // fs_edit should set user_edited=1
+        let req = UpdatePageRequest {
+            content:
+                "Rust is a systems language with memory safety features, ownership and borrowing"
+                    .to_string(),
+            source_memory_ids: vec![mem_id.to_string()],
+        };
+        update_page(&db, &page_id, req, "fs_edit", false, None)
+            .await
+            .unwrap();
+        let page = db.get_page(&page_id).await.unwrap().unwrap();
+        assert!(page.user_edited, "user_edited should be true for fs_edit");
+    }
+
+    #[tokio::test]
+    async fn update_page_fs_edit_with_nonexistent_source_succeeds() {
+        // Regression: update_page must not reject fs_edit (or any daemon-internal
+        // caller) when source_memory_ids references a memory that no longer exists.
+        // The source list is carried forward from the existing page; re-validating
+        // on update would break page_watcher for pages whose sources were pruned.
+        // Insert the page directly (bypassing create_page validation) to simulate
+        // a page whose source was valid at creation but since pruned.
+        let (db, _dir) = test_db().await;
+        let ghost_source = "mem-ghost-pruned";
+        let now = chrono::Utc::now().to_rfc3339();
+        let page_id = "page_ghost_src_test";
+        db.insert_page(
+            page_id,
+            "Ghost Source Page",
+            None,
+            "Rust is a systems language with memory safety",
+            None,
+            None,
+            &[ghost_source],
+            &now,
+        )
+        .await
+        .unwrap();
+
+        // fs_edit carrying the non-existent source id must succeed.
+        let req = UpdatePageRequest {
+            content: "Rust is a systems language with memory safety (user edited)".to_string(),
+            source_memory_ids: vec![ghost_source.to_string()],
+        };
+        update_page(&db, page_id, req, "fs_edit", false, None)
+            .await
+            .unwrap();
+        let page = db.get_page(page_id).await.unwrap().unwrap();
+        assert_eq!(page.version, 2);
+    }
+
+    #[tokio::test]
+    async fn update_page_warnings_carry_delta() {
+        let (db, _dir) = test_db().await;
+        let mem_id = "mem-warn-delta";
+        let content = "Rust is a systems language";
+        seed_memory(&db, mem_id, content).await;
+        let page_id = seed_page(&db, mem_id, content).await;
+
+        let new_content = "Rust is a systems language with memory safety and zero-cost abstractions for high performance systems programming";
+        let req = UpdatePageRequest {
+            content: new_content.to_string(),
+            source_memory_ids: vec![mem_id.to_string()],
+        };
+        let result = update_page(&db, &page_id, req, "re_distill", false, None)
+            .await
+            .unwrap();
+
+        assert!(
+            !result.warnings.is_empty(),
+            "warnings should be non-empty when content changes"
+        );
+        let warning = &result.warnings[0];
+        assert!(
+            warning.contains("v1") && warning.contains("v2"),
+            "warning should reference version transition, got: {warning}"
+        );
+    }
+
+    #[tokio::test]
+    async fn update_page_idempotent_warnings_shape() {
+        let (db, _dir) = test_db().await;
+        let mem_id = "mem-idem-shape";
+        let content_v1 = "Rust is a systems language with ownership model";
+        seed_memory(&db, mem_id, content_v1).await;
+        let page_id = seed_page(&db, mem_id, content_v1).await;
+
+        // First call: v1 → v2
+        let r1 = update_page(
+            &db,
+            &page_id,
+            UpdatePageRequest {
+                content: "Rust is a systems language with ownership model and borrow checker"
+                    .to_string(),
+                source_memory_ids: vec![mem_id.to_string()],
+            },
+            "re_distill",
+            false,
+            None,
+        )
+        .await
+        .unwrap();
+        assert!(r1.wrote, "first call should write");
+        assert_eq!(
+            r1.warnings.len(),
+            1,
+            "first call should produce exactly one warning"
+        );
+        let w1 = &r1.warnings[0];
+        assert!(w1.starts_with('v'), "warning must start with 'v': {w1}");
+        assert!(w1.contains('→'), "warning must contain '→': {w1}");
+        assert!(
+            w1.contains("v1") && w1.contains("v2"),
+            "first warning should show v1 → v2: {w1}"
+        );
+
+        // Second call with different content: v2 → v3
+        let r2 = update_page(
+            &db,
+            &page_id,
+            UpdatePageRequest {
+                content:
+                    "Rust is a systems language with ownership model, borrow checker, and lifetimes"
+                        .to_string(),
+                source_memory_ids: vec![mem_id.to_string()],
+            },
+            "re_distill",
+            false,
+            None,
+        )
+        .await
+        .unwrap();
+        assert!(r2.wrote, "second call should write");
+        assert_eq!(
+            r2.warnings.len(),
+            1,
+            "second call should produce exactly one warning"
+        );
+        let w2 = &r2.warnings[0];
+        assert!(w2.starts_with('v'), "warning must start with 'v': {w2}");
+        assert!(w2.contains('→'), "warning must contain '→': {w2}");
+        assert!(
+            w2.contains("v2") && w2.contains("v3"),
+            "second warning should show v2 → v3: {w2}"
+        );
+    }
+
+    #[tokio::test]
+    async fn update_page_noop_returns_wrote_false() {
+        let (db, _dir) = test_db().await;
+        let mem_id = "mem-noop-1";
+        let content = "Rust is a systems language with memory safety";
+        seed_memory(&db, mem_id, content).await;
+        let page_id = seed_page(&db, mem_id, content).await;
+
+        // Fetch baseline version before no-op call
+        let page_before = db.get_page(&page_id).await.unwrap().unwrap();
+        let version_before = page_before.version;
+
+        // Call update_page with identical content and identical sources
+        let req = UpdatePageRequest {
+            content: content.to_string(),
+            source_memory_ids: vec![mem_id.to_string()],
+        };
+        let result = update_page(&db, &page_id, req, "re_distill", false, None)
+            .await
+            .unwrap();
+
+        assert!(!result.wrote, "identical-content call must not write");
+        assert!(result.warnings.is_empty(), "no-op must produce no warnings");
+
+        // Version must be unchanged
+        let page_after = db.get_page(&page_id).await.unwrap().unwrap();
+        assert_eq!(
+            page_after.version, version_before,
+            "version must not bump on no-op"
+        );
     }
 }

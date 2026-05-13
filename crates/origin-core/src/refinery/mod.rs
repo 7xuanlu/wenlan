@@ -25,6 +25,7 @@ pub use crate::kg::reweave::reweave_entity_links;
 // recompile_single_page from other refinery phases).
 use crate::synthesis::distill::recompile_single_page;
 use crate::synthesis::refinement_queue::process_refinement_queue;
+use origin_types::requests::UpdatePageRequest;
 
 use crate::activity::ACTIVITY_GAP_SECS;
 use crate::db::MemoryDB;
@@ -805,7 +806,6 @@ pub(crate) async fn re_distill_stale_pages(
         let sources = db.get_page_sources(&page.id).await?;
         let source_id_strings: Vec<String> =
             sources.iter().map(|s| s.memory_source_id.clone()).collect();
-        let source_id_refs: Vec<&str> = source_id_strings.iter().map(|s| s.as_str()).collect();
         if source_id_strings.is_empty() {
             log::warn!(
                 "[re-distill-stale] page '{}' has no sources in join table, clearing staleness",
@@ -859,21 +859,22 @@ pub(crate) async fn re_distill_stale_pages(
                     .trim()
                     .to_string();
                 if !content.is_empty() {
-                    // Real CAS: the content swap + version bump are gated on
-                    // `stale_reason IS NOT NULL` in the UPDATE itself, so a
-                    // concurrent agent-side PUT that cleared staleness wins
-                    // the race without us having to coordinate. No TOCTOU
-                    // window between the check and the write — it's one
-                    // statement.
-                    let landed = db
-                        .try_update_page_content_if_stale(
-                            &page.id,
-                            &content,
-                            &source_id_refs,
-                            "re_distill",
-                        )
-                        .await?;
-                    if landed {
+                    // Real CAS: require_stale=true means the write only lands
+                    // when stale_reason IS NOT NULL, so a concurrent agent-side
+                    // PUT that cleared staleness wins the race without TOCTOU.
+                    let result = crate::post_write::update_page(
+                        db,
+                        &page.id,
+                        UpdatePageRequest {
+                            content,
+                            source_memory_ids: source_id_strings.clone(),
+                        },
+                        "re_distill",
+                        true,
+                        None,
+                    )
+                    .await?;
+                    if result.wrote {
                         db.clear_page_staleness(&page.id).await?;
                         recompiled += 1;
                         log::info!("[re-distill-stale] refreshed page '{}'", page.title);

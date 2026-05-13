@@ -316,6 +316,22 @@ pub struct GetPageSourcesParams {
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct GetMemoryRevisionsParams {
+    #[schemars(
+        description = "Memory source id (e.g. 'mem_abc' or 'merged_<uuid>'). Returns the full supersede chain ordered by depth (0 = current)."
+    )]
+    pub memory_id: String,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct GetPageRevisionsParams {
+    #[schemars(
+        description = "Page id (e.g. 'page_abc'). Returns the version changelog ordered newest-first."
+    )]
+    pub page_id: String,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct ListMemoriesParams {
     #[schemars(
         description = "Filter by memory type (e.g. 'fact', 'preference', 'decision'). Optional."
@@ -895,6 +911,39 @@ impl OriginMcpServer {
         ))]))
     }
 
+    pub async fn get_memory_revisions_impl(
+        &self,
+        memory_id: &str,
+    ) -> Result<CallToolResult, McpError> {
+        let path = format!("/api/memory/{}/revisions", memory_id);
+        let resp: ListMemoryRevisionsResponse = match self.client.get(&path).await {
+            Ok(r) => r,
+            Err(e) => return Ok(tool_error(e, "get_memory_revisions")),
+        };
+        let pretty = serde_json::to_string_pretty(&resp)
+            .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+        Ok(CallToolResult::success(vec![Content::text(format!(
+            "chain depth {}\n{}",
+            resp.chain_depth, pretty
+        ))]))
+    }
+
+    pub async fn get_page_revisions_impl(&self, page_id: &str) -> Result<CallToolResult, McpError> {
+        let path = format!("/api/pages/{}/revisions", page_id);
+        let resp: ListPageRevisionsResponse = match self.client.get(&path).await {
+            Ok(r) => r,
+            Err(e) => return Ok(tool_error(e, "get_page_revisions")),
+        };
+        let pretty = serde_json::to_string_pretty(&resp)
+            .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+        Ok(CallToolResult::success(vec![Content::text(format!(
+            "version {} ({} entries)\n{}",
+            resp.current_version,
+            resp.entries.len(),
+            pretty
+        ))]))
+    }
+
     pub async fn list_memories_impl(
         &self,
         params: ListMemoriesParams,
@@ -1302,6 +1351,40 @@ impl OriginMcpServer {
         Parameters(params): Parameters<GetPageSourcesParams>,
     ) -> Result<CallToolResult, McpError> {
         self.get_page_sources_impl(&params.page_id).await
+    }
+
+    #[tool(
+        description = "Fetch the supersede chain for a memory — all prior versions ordered by depth (0 = current, 1 = immediate predecessor, …). Use after recall when you need to understand how a memory evolved or verify that a correction was recorded.",
+        annotations(
+            title = "Get memory revisions",
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
+    )]
+    async fn get_memory_revisions(
+        &self,
+        Parameters(params): Parameters<GetMemoryRevisionsParams>,
+    ) -> Result<CallToolResult, McpError> {
+        self.get_memory_revisions_impl(&params.memory_id).await
+    }
+
+    #[tool(
+        description = "Fetch the version changelog for a page — all distillation rounds ordered newest-first. Use after get_page when you need to understand what changed between versions or which source memories triggered a re-distill.",
+        annotations(
+            title = "Get page revisions",
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
+    )]
+    async fn get_page_revisions(
+        &self,
+        Parameters(params): Parameters<GetPageRevisionsParams>,
+    ) -> Result<CallToolResult, McpError> {
+        self.get_page_revisions_impl(&params.page_id).await
     }
 
     #[tool(

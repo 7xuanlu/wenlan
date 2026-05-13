@@ -29,6 +29,14 @@ pub struct Page {
     /// zero for persisted/non-search contexts.
     #[serde(default, skip_serializing_if = "is_zero_f32")]
     pub relevance_score: f32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_edited_by: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_edited_at: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_delta_summary: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub changelog: Option<String>,
 }
 
 fn is_zero_f32(v: &f32) -> bool {

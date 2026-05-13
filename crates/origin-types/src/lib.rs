@@ -37,7 +37,8 @@ pub use memory_type::{MEMORY_TYPE_CAPTURE_DESCRIPTION, MEMORY_TYPE_FILTER_DESCRI
 pub use narrative::NarrativeResponse;
 pub use pages::Page;
 pub use responses::{
-    ExportStats, ListRefinementsResponse, MemoryDetail, PendingRevision, ProposalAction,
+    ExportStats, ListMemoryRevisionsResponse, ListPageRevisionsResponse, ListRefinementsResponse,
+    MemoryDetail, MemoryRevisionEntry, PageChangelogEntry, PendingRevision, ProposalAction,
     RefinementPayload, RefinementProposalSummary, RejectRefinementResponse,
 };
 pub use sources::{MemoryType, RawDocument, SourceType, StabilityTier, SyncStatus};
@@ -141,6 +142,10 @@ mod tests {
             retrieval_cue: None,
             source_text: None,
             raw_score: 0.0,
+            version: 0,
+            pending_revision: false,
+            merged_from: None,
+            last_delta_summary: None,
         };
         let json = serde_json::to_string(&sr).unwrap();
         assert!(json.contains("mem_abc"));

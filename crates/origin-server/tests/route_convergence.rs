@@ -201,3 +201,121 @@ async fn add_observation_short_content_returns_422() {
     .await;
     assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
 }
+
+// ── Revision history endpoints ───────────────────────────────────────────────
+
+/// Helper: return (app, Arc<MemoryDB>, TempDir) for tests that need direct DB
+/// access alongside the HTTP router.
+async fn test_app_with_db() -> (axum::Router, Arc<MemoryDB>, tempfile::TempDir) {
+    let dir = tempfile::tempdir().unwrap();
+    let db = Arc::new(
+        MemoryDB::new(dir.path(), Arc::new(NoopEmitter))
+            .await
+            .unwrap(),
+    );
+    let state = ServerState {
+        db: Some(Arc::clone(&db)),
+        ..ServerState::default()
+    };
+    let router = build_router(Arc::new(RwLock::new(state)));
+    (router, db, dir)
+}
+
+async fn json_get(app: &axum::Router, path: &str) -> (StatusCode, serde_json::Value) {
+    let req = Request::builder()
+        .method(Method::GET)
+        .uri(path)
+        .body(Body::empty())
+        .unwrap();
+    let resp = app.clone().oneshot(req).await.unwrap();
+    let status = resp.status();
+    let bytes = axum::body::to_bytes(resp.into_body(), 1024 * 1024)
+        .await
+        .unwrap();
+    let val: serde_json::Value = if bytes.is_empty() {
+        serde_json::Value::Null
+    } else {
+        serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null)
+    };
+    (status, val)
+}
+
+/// Non-existent source_id returns 200 with an empty entries array.
+/// walk_supersede_chain returns [] for unknown ids; the handler wraps that.
+#[tokio::test]
+async fn memory_revisions_unknown_id_returns_empty_chain() {
+    let (app, _dir) = test_app().await;
+    let (status, body) = json_get(&app, "/api/memory/nonexistent_mem_id/revisions").await;
+    assert_eq!(status, StatusCode::OK, "body: {body}");
+    assert_eq!(
+        body["current_source_id"].as_str(),
+        Some("nonexistent_mem_id"),
+        "envelope current_source_id mismatch: {body}"
+    );
+    assert_eq!(
+        body["chain_depth"].as_i64(),
+        Some(0),
+        "chain_depth should be 0 for unknown id: {body}"
+    );
+    assert!(
+        body["entries"]
+            .as_array()
+            .map(|a| a.is_empty())
+            .unwrap_or(false),
+        "entries should be empty for unknown id: {body}"
+    );
+}
+
+/// Non-existent page id returns 404.
+#[tokio::test]
+async fn page_revisions_unknown_id_returns_404() {
+    let (app, _dir) = test_app().await;
+    let (status, _body) = json_get(&app, "/api/pages/nonexistent_page_id/revisions").await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+}
+
+/// Known page returns 200 with correct envelope and empty entries list
+/// (newly inserted pages have changelog = '[]').
+#[tokio::test]
+async fn page_revisions_known_page_returns_envelope() {
+    let (app, db, _dir) = test_app_with_db().await;
+
+    let page_id = "page_rev_test_001";
+    db.insert_page(
+        page_id,
+        "Test Revision Page",
+        Some("A page for revision testing"),
+        "Full content of the test page for revision surfacing.",
+        None,
+        None,
+        &[],
+        "2026-01-01T00:00:00Z",
+    )
+    .await
+    .unwrap();
+
+    let (status, body) = json_get(&app, &format!("/api/pages/{page_id}/revisions")).await;
+    assert_eq!(status, StatusCode::OK, "body: {body}");
+    assert_eq!(
+        body["page_id"].as_str(),
+        Some(page_id),
+        "envelope page_id mismatch: {body}"
+    );
+    assert_eq!(
+        body["current_version"].as_i64(),
+        Some(1),
+        "newly inserted page should have version=1: {body}"
+    );
+    assert_eq!(
+        body["user_edited"].as_bool(),
+        Some(false),
+        "newly inserted page should not be user_edited: {body}"
+    );
+    assert!(
+        body["entries"]
+            .as_array()
+            .map(|a| a.is_empty())
+            .unwrap_or(false),
+        "fresh page should have empty changelog entries: {body}"
+    );
+}

@@ -24,7 +24,6 @@
 
 use crate::db::MemoryDB;
 use crate::error::OriginError;
-use crate::export::knowledge::KnowledgeWriter;
 use crate::sources::obsidian;
 use std::path::{Path, PathBuf};
 
@@ -177,25 +176,19 @@ async fn sync_one_file(
     // Preserve existing source list — the user edited prose, not the
     // memory provenance. Sources change only via /distill refresh or
     // explicit POST.
-    let source_refs: Vec<&str> = existing
-        .source_memory_ids
-        .iter()
-        .map(String::as_str)
-        .collect();
-    db.update_page_content(&page_id, body_norm, &source_refs, "fs_edit")
+    let req = origin_types::requests::UpdatePageRequest {
+        content: body_norm.to_string(),
+        source_memory_ids: existing.source_memory_ids.clone(),
+    };
+    // Pass knowledge_path so update_page re-projects the md with the new
+    // version stamp; without that the next tick would see origin_version
+    // trailing the DB and skip as SkippedDaemonAhead.
+    // require_stale=false: user edits are unconditional.
+    // knowledge_path=Some: page_watcher IS the fs writer; update_page
+    //   re-projects rather than skipping the write.
+    crate::post_write::update_page(db, &page_id, req, "fs_edit", false, Some(knowledge_path))
         .await?;
 
-    // Re-project the md so the frontmatter's `origin_version` catches up
-    // with the DB. Without this, the next watcher tick would see md
-    // version still trailing the freshly-bumped DB version and refuse to
-    // process subsequent user edits as `SkippedDaemonAhead`. Loads the
-    // updated row to render with the new version + timestamps.
-    if let Some(refreshed) = db.get_page(&page_id).await? {
-        let writer = KnowledgeWriter::new(knowledge_path.to_path_buf());
-        if let Err(e) = writer.write_page(&refreshed) {
-            log::warn!("[page-watcher] DB updated for {page_id} but md re-projection failed: {e}");
-        }
-    }
     Ok(Outcome::Applied { page_id })
 }
 
@@ -204,6 +197,7 @@ mod tests {
     use super::*;
     use crate::db::MemoryDB;
     use crate::events::NoopEmitter;
+    use crate::export::knowledge::KnowledgeWriter;
     use crate::pages::Page;
     use std::sync::Arc;
     use tempfile::TempDir;
@@ -261,6 +255,10 @@ mod tests {
             stale_reason: None,
             user_edited: false,
             relevance_score: 0.0,
+            last_edited_by: None,
+            last_edited_at: None,
+            last_delta_summary: None,
+            changelog: None,
         }
     }
 
