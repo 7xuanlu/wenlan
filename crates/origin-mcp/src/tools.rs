@@ -239,6 +239,16 @@ pub struct CreateRelationParams {
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct CreateObservationParams {
+    pub entity_id: String,
+    pub content: String,
+    #[serde(default)]
+    pub source_agent: Option<String>,
+    #[serde(default)]
+    pub confidence: Option<f32>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct CreatePageParams {
     #[schemars(
         description = "Short noun phrase that names the page (e.g. 'Origin daemon architecture')."
@@ -804,6 +814,28 @@ impl OriginMcpServer {
         Ok(CallToolResult::success(vec![Content::text(text)]))
     }
 
+    pub async fn create_observation_impl(
+        &self,
+        params: CreateObservationParams,
+    ) -> Result<CallToolResult, McpError> {
+        let req = origin_types::requests::AddObservationRequest {
+            entity_id: params.entity_id,
+            content: params.content,
+            source_agent: params.source_agent,
+            confidence: params.confidence,
+        };
+        let resp: origin_types::responses::AddObservationResponse =
+            match self.client.post("/api/memory/observations", &req).await {
+                Ok(r) => r,
+                Err(e) => return Ok(tool_error(e, "create_observation")),
+            };
+        let mut text = format!("Created observation {}", resp.id);
+        for w in &resp.warnings {
+            text.push_str(&format!("\nwarning: {w}"));
+        }
+        Ok(CallToolResult::success(vec![Content::text(text)]))
+    }
+
     pub async fn create_page_impl(
         &self,
         params: CreatePageParams,
@@ -1255,6 +1287,23 @@ impl OriginMcpServer {
         Parameters(params): Parameters<CreateRelationParams>,
     ) -> Result<CallToolResult, McpError> {
         self.create_relation_impl(params).await
+    }
+
+    #[tool(
+        description = "Attach a factual observation to an existing entity in the knowledge graph. Use sparingly — most observations come from daemon LLM extraction. Call explicitly when the user articulates a fact about a person/project/tool that the daemon couldn't infer, or when running in Basic Memory mode where on-device extraction does not run. Requires the entity_id; resolve via search_entities first if you only have the name. Returns 422 if entity does not exist.",
+        annotations(
+            title = "Create observation",
+            read_only_hint = false,
+            destructive_hint = false,
+            idempotent_hint = false,
+            open_world_hint = false
+        )
+    )]
+    async fn create_observation(
+        &self,
+        Parameters(params): Parameters<CreateObservationParams>,
+    ) -> Result<CallToolResult, McpError> {
+        self.create_observation_impl(params).await
     }
 
     #[tool(
@@ -3082,6 +3131,7 @@ mod tests {
         for name in [
             "create_entity",
             "create_relation",
+            "create_observation",
             "create_page",
             "update_page",
             "delete_page",
