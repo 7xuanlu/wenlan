@@ -15,7 +15,7 @@ pub use origin_types::responses::{
     AcceptRefinementResponse, AddObservationResponse, ChatContextResponse, CreateEntityResponse,
     CreatePageResponse, CreateRelationResponse, DeleteResponse, ListMemoriesResponse,
     ListMemoryRevisionsResponse, ListPageRevisionsResponse, ListRefinementsResponse,
-    MemoryRevisionEntry, NurtureCardsResponse, PageChangelogEntry, RejectRefinementResponse,
-    SearchMemoryResponse, SearchPagesResponse, StoreMemoryResponse,
+    MemoryRevisionEntry, NurtureCardsResponse, OrphanLink, OrphanLinksResponse, PageChangelogEntry,
+    RejectRefinementResponse, SearchMemoryResponse, SearchPagesResponse, StoreMemoryResponse,
 };
 pub use origin_types::PageSourceWithMemory;

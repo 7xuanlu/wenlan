@@ -1474,3 +1474,120 @@ async fn list_pending_revisions_http_500() {
         "error message must mention HTTP 500; got: {text}"
     );
 }
+
+// ===== list_orphan_links =====
+
+use origin_mcp::tools::ListOrphanLinksParams;
+use origin_types::responses::{OrphanLink, OrphanLinksResponse};
+
+#[tokio::test]
+async fn list_orphan_links_happy_path() {
+    let (mock, client) = setup().await;
+    let body = OrphanLinksResponse {
+        min_count: 2,
+        orphan_labels: vec![OrphanLink {
+            label: "Rust".into(),
+            count: 4,
+        }],
+    };
+    Mock::given(method("GET"))
+        .and(path("/api/pages/orphan-links"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(&body))
+        .mount(&mock)
+        .await;
+
+    let server = make_server(client);
+    let result = server
+        .list_orphan_links_impl(ListOrphanLinksParams { min_count: None })
+        .await
+        .unwrap();
+    let text = text_of(&result);
+    assert!(text.contains("Rust"), "label must appear in output: {text}");
+    assert!(text.contains("4"), "count must appear in output: {text}");
+}
+
+#[tokio::test]
+async fn list_orphan_links_envelope_guard() {
+    let (mock, client) = setup().await;
+    // Wrong key: "labels" instead of "orphan_labels". Typed deserialization must fail loud.
+    Mock::given(method("GET"))
+        .and(path("/api/pages/orphan-links"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "min_count": 2,
+            "labels": []
+        })))
+        .mount(&mock)
+        .await;
+
+    let server = make_server(client);
+    let result = server
+        .list_orphan_links_impl(ListOrphanLinksParams { min_count: None })
+        .await
+        .unwrap();
+    let text = text_of(&result);
+    assert!(
+        result.is_error.unwrap_or(false),
+        "wrong key 'labels' instead of 'orphan_labels' must surface as tool error; got: {text}"
+    );
+    assert!(
+        text.to_lowercase().contains("error") || text.contains("missing"),
+        "error message must describe parse failure; got: {text}"
+    );
+}
+
+#[tokio::test]
+async fn list_orphan_links_passes_min_count() {
+    let (mock, client) = setup().await;
+    let body = OrphanLinksResponse {
+        min_count: 5,
+        orphan_labels: vec![],
+    };
+    Mock::given(method("GET"))
+        .and(path("/api/pages/orphan-links"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(&body))
+        .mount(&mock)
+        .await;
+
+    let server = make_server(client);
+    server
+        .list_orphan_links_impl(ListOrphanLinksParams { min_count: Some(5) })
+        .await
+        .unwrap();
+
+    let received = mock
+        .received_requests()
+        .await
+        .expect("wiremock captured no requests");
+    assert_eq!(received.len(), 1);
+    let url = received[0].url.to_string();
+    assert!(
+        url.contains("min_count=5"),
+        "expected min_count=5 in query; got: {url}"
+    );
+}
+
+#[tokio::test]
+async fn list_orphan_links_http_500() {
+    let (mock, client) = setup().await;
+    Mock::given(method("GET"))
+        .and(path("/api/pages/orphan-links"))
+        .respond_with(ResponseTemplate::new(500).set_body_string("internal error"))
+        .mount(&mock)
+        .await;
+
+    let server = make_server(client);
+    let result = server
+        .list_orphan_links_impl(ListOrphanLinksParams { min_count: None })
+        .await
+        .expect("list_orphan_links_impl must not return Err on HTTP 500");
+
+    assert!(
+        result.is_error.unwrap_or(false),
+        "HTTP 500 must surface as tool error"
+    );
+    let text = text_of(&result);
+    assert!(
+        text.contains("500"),
+        "error message must mention HTTP 500; got: {text}"
+    );
+}

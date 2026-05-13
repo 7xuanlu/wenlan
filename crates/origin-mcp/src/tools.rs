@@ -458,6 +458,13 @@ pub struct ListPendingRevisionsParams {
     pub limit: Option<usize>,
 }
 
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct ListOrphanLinksParams {
+    /// Minimum reference count a label must have to appear. Default 1. Daemon clamps via `.max(1)`.
+    #[serde(default, deserialize_with = "deserialize_optional_i64_lenient")]
+    pub min_count: Option<i64>,
+}
+
 // ===== Internal Implementations =====
 
 fn format_capture_success(resp: &StoreMemoryResponse) -> String {
@@ -1385,6 +1392,28 @@ impl OriginMcpServer {
             pretty
         ))]))
     }
+
+    pub async fn list_orphan_links_impl(
+        &self,
+        params: ListOrphanLinksParams,
+    ) -> Result<CallToolResult, McpError> {
+        let path = match params.min_count {
+            Some(n) => format!("/api/pages/orphan-links?min_count={}", n.max(1)),
+            None => "/api/pages/orphan-links".to_string(),
+        };
+        let resp: origin_types::responses::OrphanLinksResponse = match self.client.get(&path).await
+        {
+            Ok(v) => v,
+            Err(e) => return Ok(tool_error(e, "list_orphan_links")),
+        };
+        let pretty = serde_json::to_string_pretty(&resp)
+            .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+        Ok(CallToolResult::success(vec![Content::text(format!(
+            "{} orphan link(s)\n{}",
+            resp.orphan_labels.len(),
+            pretty
+        ))]))
+    }
 }
 
 /// Build the `/api/pages/recent` URL with optional `limit` + `since_ms` query
@@ -1985,6 +2014,26 @@ impl OriginMcpServer {
         Parameters(params): Parameters<ListPendingRevisionsParams>,
     ) -> Result<CallToolResult, McpError> {
         self.list_pending_revisions_impl(params).await
+    }
+
+    #[tool(
+        description = "List wiki-link labels that appear in page bodies but have no matching \
+                       page title. Use when the user asks 'what links are broken', 'orphan links', \
+                       or wants to find knowledge gaps. Returns label names and reference counts. \
+                       Optional `min_count` filters to labels referenced at least N times \
+                       (default 1, minimum 1).",
+        annotations(
+            title = "List orphan links",
+            read_only_hint = true,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
+    )]
+    async fn list_orphan_links(
+        &self,
+        Parameters(params): Parameters<ListOrphanLinksParams>,
+    ) -> Result<CallToolResult, McpError> {
+        self.list_orphan_links_impl(params).await
     }
 }
 
