@@ -8706,6 +8706,208 @@ impl MemoryDB {
         Ok(id)
     }
 
+    /// Merge `alias_id` into `canonical_id`. Re-points all FK references, registers
+    /// the alias name, cleans dangling alias-table rows, and deletes the alias entity.
+    /// Idempotent: returns `Ok(())` if `alias_id` is already gone.
+    pub async fn merge_entities(
+        &self,
+        canonical_id: &str,
+        alias_id: &str,
+    ) -> Result<(), OriginError> {
+        if canonical_id == alias_id {
+            return Err(OriginError::Validation(
+                "merge_entities: canonical and alias are the same id".into(),
+            ));
+        }
+
+        let conn = self.conn.lock().await;
+        // Idempotency check: assumes single-writer daemon (no other process holds
+        // a libSQL connection to this DB). Mutex<Connection> serializes within-process;
+        // cross-process races are not defended against.
+        let alias_exists: i64 = {
+            let mut rows = conn
+                .query(
+                    "SELECT COUNT(*) FROM entities WHERE id = ?1",
+                    libsql::params![alias_id],
+                )
+                .await
+                .map_err(|e| OriginError::VectorDb(format!("merge_entities count alias: {e}")))?;
+            let row = rows
+                .next()
+                .await
+                .map_err(|e| OriginError::VectorDb(format!("merge_entities row: {e}")))?
+                .ok_or_else(|| OriginError::VectorDb("merge_entities: no count row".into()))?;
+            row.get(0).unwrap_or(0)
+        };
+        if alias_exists == 0 {
+            return Ok(());
+        }
+
+        let canonical_exists: i64 = {
+            let mut rows = conn
+                .query(
+                    "SELECT COUNT(*) FROM entities WHERE id = ?1",
+                    libsql::params![canonical_id],
+                )
+                .await
+                .map_err(|e| {
+                    OriginError::VectorDb(format!("merge_entities count canonical: {e}"))
+                })?;
+            let row = rows
+                .next()
+                .await
+                .map_err(|e| OriginError::VectorDb(format!("merge_entities row: {e}")))?
+                .ok_or_else(|| OriginError::VectorDb("merge_entities: no count row".into()))?;
+            row.get(0).unwrap_or(0)
+        };
+        if canonical_exists == 0 {
+            return Err(OriginError::NotFound(format!(
+                "canonical entity {canonical_id} not found"
+            )));
+        }
+
+        let alias_name: Option<String> = {
+            let mut rows = conn
+                .query(
+                    "SELECT name FROM entities WHERE id = ?1",
+                    libsql::params![alias_id],
+                )
+                .await
+                .map_err(|e| OriginError::VectorDb(format!("merge_entities read name: {e}")))?;
+            let row = rows
+                .next()
+                .await
+                .map_err(|e| OriginError::VectorDb(format!("merge_entities row: {e}")))?;
+            row.and_then(|r| r.get::<String>(0).ok())
+        };
+
+        conn.execute("BEGIN TRANSACTION", ())
+            .await
+            .map_err(|e| OriginError::VectorDb(format!("merge_entities begin: {e}")))?;
+
+        let result: Result<(), OriginError> = async {
+            conn.execute(
+                "UPDATE relations SET from_entity = ?1 WHERE from_entity = ?2",
+                libsql::params![canonical_id, alias_id],
+            )
+            .await
+            .map_err(|e| OriginError::VectorDb(format!("merge_entities rel.from: {e}")))?;
+
+            conn.execute(
+                "UPDATE relations SET to_entity = ?1 WHERE to_entity = ?2",
+                libsql::params![canonical_id, alias_id],
+            )
+            .await
+            .map_err(|e| OriginError::VectorDb(format!("merge_entities rel.to: {e}")))?;
+
+            conn.execute(
+                "UPDATE observations SET entity_id = ?1 WHERE entity_id = ?2",
+                libsql::params![canonical_id, alias_id],
+            )
+            .await
+            .map_err(|e| OriginError::VectorDb(format!("merge_entities obs: {e}")))?;
+
+            conn.execute(
+                "UPDATE memories SET entity_id = ?1 WHERE entity_id = ?2",
+                libsql::params![canonical_id, alias_id],
+            )
+            .await
+            .map_err(|e| OriginError::VectorDb(format!("merge_entities mem: {e}")))?;
+
+            conn.execute(
+                "UPDATE OR IGNORE entity_aliases SET canonical_entity_id = ?1 WHERE canonical_entity_id = ?2",
+                libsql::params![canonical_id, alias_id],
+            )
+            .await
+            .map_err(|e| OriginError::VectorDb(format!("merge_entities alias redirect: {e}")))?;
+
+            if let Some(name) = &alias_name {
+                conn.execute(
+                    "INSERT OR IGNORE INTO entity_aliases (alias_name, canonical_entity_id, created_at, source) \
+                     VALUES (?1, ?2, unixepoch(), 'merge')",
+                    libsql::params![name.as_str(), canonical_id],
+                )
+                .await
+                .map_err(|e| OriginError::VectorDb(format!("merge_entities alias register: {e}")))?;
+            }
+
+            conn.execute(
+                "DELETE FROM entity_aliases WHERE canonical_entity_id = ?1",
+                libsql::params![alias_id],
+            )
+            .await
+            .map_err(|e| OriginError::VectorDb(format!("merge_entities alias cleanup: {e}")))?;
+
+            conn.execute(
+                "DELETE FROM entities WHERE id = ?1",
+                libsql::params![alias_id],
+            )
+            .await
+            .map_err(|e| OriginError::VectorDb(format!("merge_entities delete alias: {e}")))?;
+
+            Ok(())
+        }
+        .await;
+
+        match result {
+            Ok(()) => {
+                conn.execute("COMMIT", ())
+                    .await
+                    .map_err(|e| OriginError::VectorDb(format!("merge_entities commit: {e}")))?;
+                Ok(())
+            }
+            Err(e) => {
+                if let Err(rollback_err) = conn.execute("ROLLBACK", ()).await {
+                    log::error!("merge_entities ROLLBACK failed: {rollback_err}");
+                }
+                Err(e)
+            }
+        }
+    }
+
+    /// Hard-delete the losing relation. Idempotent: DELETE on missing row is a no-op.
+    /// `winner_id` is accepted for activity-log payload at the capability fn layer;
+    /// existence not verified here (allows recovery if winner was also deleted out-of-band).
+    pub async fn supersede_relation(
+        &self,
+        loser_id: &str,
+        winner_id: &str,
+    ) -> Result<(), OriginError> {
+        if loser_id == winner_id {
+            return Err(OriginError::Validation(
+                "supersede_relation: loser and winner are the same id".into(),
+            ));
+        }
+        let conn = self.conn.lock().await;
+        conn.execute(
+            "DELETE FROM relations WHERE id = ?1",
+            libsql::params![loser_id],
+        )
+        .await
+        .map_err(|e| OriginError::VectorDb(format!("supersede_relation: {e}")))?;
+        Ok(())
+    }
+
+    /// Set `pending_revision = 1` on all chunks matching `source_id`. Idempotent
+    /// (re-flag is no-op; the UPDATE matches the same row count). Returns NotFound
+    /// when zero rows matched.
+    pub async fn flag_memory_for_revision(&self, source_id: &str) -> Result<(), OriginError> {
+        let conn = self.conn.lock().await;
+        let rows = conn
+            .execute(
+                "UPDATE memories SET pending_revision = 1 WHERE source_id = ?1",
+                libsql::params![source_id],
+            )
+            .await
+            .map_err(|e| OriginError::VectorDb(format!("flag_memory_for_revision: {e}")))?;
+        if rows == 0 {
+            return Err(OriginError::NotFound(format!(
+                "memory {source_id} not found"
+            )));
+        }
+        Ok(())
+    }
+
     /// Create a relation between two entities.
     /// The relation type is normalized against the vocabulary via `resolve_relation_type`
     /// before insertion. On conflict (same from/to/type), updates confidence if higher
@@ -12372,16 +12574,25 @@ impl MemoryDB {
         }
     }
 
-    /// Resolve a refinement proposal with a new status.
-    pub async fn resolve_refinement(&self, id: &str, status: &str) -> Result<(), OriginError> {
+    /// Atomic resolve: flip the proposal's status only if currently non-terminal.
+    /// Returns the rows_affected count (1 if flipped, 0 if missing or already terminal).
+    /// Caller distinguishes missing-vs-terminal via a follow-up `get_refinement_proposal`.
+    pub async fn resolve_refinement_if_open(
+        &self,
+        id: &str,
+        status: &str,
+    ) -> Result<u64, OriginError> {
         let conn = self.conn.lock().await;
-        conn.execute(
-            "UPDATE refinement_queue SET status = ?1, resolved_at = datetime('now') WHERE id = ?2",
-            libsql::params![status, id],
-        )
-        .await
-        .map_err(|e| OriginError::VectorDb(format!("resolve_refinement: {}", e)))?;
-        Ok(())
+        let rows = conn
+            .execute(
+                "UPDATE refinement_queue \
+                 SET status = ?1, resolved_at = datetime('now') \
+                 WHERE id = ?2 AND status NOT IN ('dismissed','auto_applied','resolved')",
+                libsql::params![status, id],
+            )
+            .await
+            .map_err(|e| OriginError::VectorDb(format!("resolve_refinement_if_open: {e}")))?;
+        Ok(rows)
     }
 
     /// Dismiss all `detect_contradiction / awaiting_review` refinement queue rows that
@@ -21625,7 +21836,7 @@ pub(crate) mod tests {
         assert_eq!(pending[0].action, "dedup_merge");
         assert_eq!(pending[0].source_ids, vec!["mem1", "mem2"]);
 
-        db.resolve_refinement("ref_1", "auto_applied")
+        db.resolve_refinement_if_open("ref_1", "auto_applied")
             .await
             .unwrap();
         let pending = db.get_pending_refinements().await.unwrap();
@@ -21663,7 +21874,7 @@ pub(crate) mod tests {
         )
         .await
         .unwrap();
-        db.resolve_refinement("ref_flagged", "awaiting_review")
+        db.resolve_refinement_if_open("ref_flagged", "awaiting_review")
             .await
             .unwrap();
 
@@ -21677,7 +21888,7 @@ pub(crate) mod tests {
         )
         .await
         .unwrap();
-        db.resolve_refinement("ref_clean", "resolved")
+        db.resolve_refinement_if_open("ref_clean", "resolved")
             .await
             .unwrap();
 
@@ -24628,7 +24839,7 @@ pub(crate) mod tests {
         )
         .await
         .unwrap();
-        db.resolve_refinement("ref_nr", "awaiting_review")
+        db.resolve_refinement_if_open("ref_nr", "awaiting_review")
             .await
             .unwrap();
 
@@ -24936,7 +25147,7 @@ pub(crate) mod tests {
         )
         .await
         .unwrap();
-        db.resolve_refinement("ref_concept_flag", "awaiting_review")
+        db.resolve_refinement_if_open("ref_concept_flag", "awaiting_review")
             .await
             .unwrap();
 
@@ -27700,6 +27911,488 @@ pub(crate) mod tests {
             summary.contains('+'),
             "delta_summary should contain '+' for growth, got: {:?}",
             summary
+        );
+    }
+
+    // ==================== merge_entities ====================
+
+    async fn seed_two_entities(db: &MemoryDB) -> (String, String) {
+        let canonical = db
+            .create_entity("Acme Corp", "organization", None)
+            .await
+            .unwrap();
+        let alias = db
+            .create_entity("Acme Corporation", "organization", None)
+            .await
+            .unwrap();
+        (canonical, alias)
+    }
+
+    #[tokio::test]
+    async fn merge_entities_repoints_relations() {
+        let (db, _tmp) = test_db().await;
+        let (canonical, alias) = seed_two_entities(&db).await;
+        let other = db.create_entity("Bob", "person", None).await.unwrap();
+        // Inbound relation: other --works_at--> alias  (tests to_entity re-point)
+        let rel_in = db
+            .create_relation(&other, &alias, "works_at", None, Some(0.9), None, None)
+            .await
+            .unwrap();
+        // Outbound relation: alias --leads--> other  (tests from_entity re-point)
+        let rel_out = db
+            .create_relation(&alias, &other, "leads", None, Some(0.9), None, None)
+            .await
+            .unwrap();
+
+        db.merge_entities(&canonical, &alias).await.unwrap();
+
+        let conn = db.conn.lock().await;
+        let mut rows = conn
+            .query(
+                "SELECT to_entity FROM relations WHERE id = ?1",
+                libsql::params![rel_in],
+            )
+            .await
+            .unwrap();
+        let row = rows.next().await.unwrap().unwrap();
+        let to: String = row.get(0).unwrap();
+        assert_eq!(
+            to, canonical,
+            "inbound relation should re-point to canonical via to_entity"
+        );
+
+        let mut rows = conn
+            .query(
+                "SELECT from_entity FROM relations WHERE id = ?1",
+                libsql::params![rel_out],
+            )
+            .await
+            .unwrap();
+        let row = rows.next().await.unwrap().unwrap();
+        let from: String = row.get(0).unwrap();
+        assert_eq!(
+            from, canonical,
+            "outbound relation should re-point to canonical via from_entity"
+        );
+    }
+
+    #[tokio::test]
+    async fn merge_entities_repoints_observations() {
+        let (db, _tmp) = test_db().await;
+        let (canonical, alias) = seed_two_entities(&db).await;
+        let obs_id = db
+            .add_observation(&alias, "Founded 1985", None, None)
+            .await
+            .unwrap();
+
+        db.merge_entities(&canonical, &alias).await.unwrap();
+
+        let conn = db.conn.lock().await;
+        let mut rows = conn
+            .query(
+                "SELECT entity_id FROM observations WHERE id = ?1",
+                libsql::params![obs_id],
+            )
+            .await
+            .unwrap();
+        let row = rows.next().await.unwrap().unwrap();
+        let eid: String = row.get(0).unwrap();
+        assert_eq!(eid, canonical, "observation should re-point to canonical");
+    }
+
+    #[tokio::test]
+    async fn merge_entities_repoints_memories() {
+        let (db, _tmp) = test_db().await;
+        let (canonical, alias) = seed_two_entities(&db).await;
+
+        // Seed a memory row whose entity_id points at the alias entity
+        let source_id = format!("mem_{}", uuid::Uuid::new_v4().simple());
+        {
+            let conn = db.conn.lock().await;
+            conn.execute(
+                "INSERT INTO memories (id, content, source, source_id, title, chunk_index, \
+                                        last_modified, chunk_type, entity_id) \
+                 VALUES (?1, ?2, 'memory', ?3, 'test', 0, 1712707200, 'text', ?4)",
+                libsql::params![
+                    source_id.clone(),
+                    "test content".to_string(),
+                    source_id.clone(),
+                    alias.clone()
+                ],
+            )
+            .await
+            .unwrap();
+        }
+
+        db.merge_entities(&canonical, &alias).await.unwrap();
+
+        let conn = db.conn.lock().await;
+        let mut rows = conn
+            .query(
+                "SELECT entity_id FROM memories WHERE source_id = ?1",
+                libsql::params![source_id],
+            )
+            .await
+            .unwrap();
+        let row = rows.next().await.unwrap().unwrap();
+        let eid: String = row.get(0).unwrap();
+        assert_eq!(
+            eid, canonical,
+            "memory entity_id should re-point to canonical"
+        );
+    }
+
+    #[tokio::test]
+    async fn merge_entities_registers_alias_name() {
+        let (db, _tmp) = test_db().await;
+        let (canonical, alias) = seed_two_entities(&db).await;
+
+        db.merge_entities(&canonical, &alias).await.unwrap();
+
+        let conn = db.conn.lock().await;
+        let mut rows = conn
+            .query(
+                "SELECT canonical_entity_id, source FROM entity_aliases WHERE alias_name = ?1",
+                libsql::params!["Acme Corporation"],
+            )
+            .await
+            .unwrap();
+        let row = rows.next().await.unwrap().expect("alias row should exist");
+        let cid: String = row.get(0).unwrap();
+        let src: String = row.get(1).unwrap();
+        assert_eq!(cid, canonical);
+        assert_eq!(src, "merge");
+    }
+
+    #[tokio::test]
+    async fn merge_entities_deletes_alias_row() {
+        let (db, _tmp) = test_db().await;
+        let (canonical, alias) = seed_two_entities(&db).await;
+
+        db.merge_entities(&canonical, &alias).await.unwrap();
+
+        let conn = db.conn.lock().await;
+        let mut rows = conn
+            .query(
+                "SELECT COUNT(*) FROM entities WHERE id = ?1",
+                libsql::params![alias],
+            )
+            .await
+            .unwrap();
+        let row = rows.next().await.unwrap().unwrap();
+        let count: i64 = row.get(0).unwrap();
+        assert_eq!(count, 0, "alias entity row should be deleted");
+    }
+
+    #[tokio::test]
+    async fn merge_entities_cleans_dangling_aliases_before_delete() {
+        let (db, _tmp) = test_db().await;
+        let (canonical, alias) = seed_two_entities(&db).await;
+        {
+            let conn = db.conn.lock().await;
+            conn.execute(
+                "INSERT INTO entity_aliases (alias_name, canonical_entity_id, created_at, source) \
+                 VALUES (?1, ?2, unixepoch(), 'test')",
+                libsql::params!["Acme Old Name", alias.clone()],
+            )
+            .await
+            .unwrap();
+        }
+
+        db.merge_entities(&canonical, &alias).await.unwrap();
+
+        let conn = db.conn.lock().await;
+        let mut rows = conn
+            .query(
+                "SELECT COUNT(*) FROM entity_aliases WHERE canonical_entity_id = ?1",
+                libsql::params![alias],
+            )
+            .await
+            .unwrap();
+        let row = rows.next().await.unwrap().unwrap();
+        let count: i64 = row.get(0).unwrap();
+        assert_eq!(
+            count, 0,
+            "dangling aliases pointing at alias_id should be cleaned"
+        );
+    }
+
+    #[tokio::test]
+    async fn merge_entities_idempotent() {
+        let (db, _tmp) = test_db().await;
+        let (canonical, alias) = seed_two_entities(&db).await;
+        db.merge_entities(&canonical, &alias).await.unwrap();
+        db.merge_entities(&canonical, &alias).await.unwrap();
+
+        // Verify exact state: canonical still exists, alias still gone, exactly one
+        // 'merge' alias row for "Acme Corporation"
+        let conn = db.conn.lock().await;
+
+        let mut rows = conn
+            .query(
+                "SELECT COUNT(*) FROM entities WHERE id = ?1",
+                libsql::params![canonical.clone()],
+            )
+            .await
+            .unwrap();
+        let count: i64 = rows.next().await.unwrap().unwrap().get(0).unwrap();
+        assert_eq!(
+            count, 1,
+            "canonical should remain exactly once after idempotent calls"
+        );
+
+        let mut rows = conn
+            .query(
+                "SELECT COUNT(*) FROM entities WHERE id = ?1",
+                libsql::params![alias.clone()],
+            )
+            .await
+            .unwrap();
+        let count: i64 = rows.next().await.unwrap().unwrap().get(0).unwrap();
+        assert_eq!(
+            count, 0,
+            "alias should remain deleted after idempotent calls"
+        );
+
+        let mut rows = conn
+            .query(
+                "SELECT COUNT(*) FROM entity_aliases WHERE alias_name = ?1 AND source = 'merge'",
+                libsql::params!["Acme Corporation"],
+            )
+            .await
+            .unwrap();
+        let count: i64 = rows.next().await.unwrap().unwrap().get(0).unwrap();
+        assert_eq!(
+            count, 1,
+            "exactly one merge-source alias row should exist (INSERT OR IGNORE)"
+        );
+    }
+
+    #[tokio::test]
+    async fn merge_entities_same_id_validation_error() {
+        let (db, _tmp) = test_db().await;
+        let (canonical, _alias) = seed_two_entities(&db).await;
+        let err = db.merge_entities(&canonical, &canonical).await.unwrap_err();
+        assert!(
+            matches!(err, crate::error::OriginError::Validation(_)),
+            "expected Validation, got {err:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn merge_entities_canonical_missing_not_found() {
+        let (db, _tmp) = test_db().await;
+        let alias = db.create_entity("Solo", "person", None).await.unwrap();
+        let err = db
+            .merge_entities("ent_nonexistent", &alias)
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(err, crate::error::OriginError::NotFound(_)),
+            "expected NotFound, got {err:?}"
+        );
+    }
+
+    // ==================== supersede_relation ====================
+
+    #[tokio::test]
+    async fn supersede_relation_deletes_loser() {
+        let (db, _tmp) = test_db().await;
+        let from = db.create_entity("Alice", "person", None).await.unwrap();
+        let to = db.create_entity("Carol", "person", None).await.unwrap();
+        let loser = db
+            .create_relation(&from, &to, "knows", None, Some(0.5), None, None)
+            .await
+            .unwrap();
+        let winner = db
+            .create_relation(&from, &to, "manages", None, Some(0.9), None, None)
+            .await
+            .unwrap();
+
+        db.supersede_relation(&loser, &winner).await.unwrap();
+
+        let conn = db.conn.lock().await;
+        let mut rows = conn
+            .query(
+                "SELECT COUNT(*) FROM relations WHERE id = ?1",
+                libsql::params![loser],
+            )
+            .await
+            .unwrap();
+        let row = rows.next().await.unwrap().unwrap();
+        let count: i64 = row.get(0).unwrap();
+        assert_eq!(count, 0, "loser relation should be deleted");
+
+        let mut rows = conn
+            .query(
+                "SELECT COUNT(*) FROM relations WHERE id = ?1",
+                libsql::params![winner],
+            )
+            .await
+            .unwrap();
+        let row = rows.next().await.unwrap().unwrap();
+        let count: i64 = row.get(0).unwrap();
+        assert_eq!(count, 1, "winner relation should remain");
+    }
+
+    #[tokio::test]
+    async fn supersede_relation_idempotent() {
+        let (db, _tmp) = test_db().await;
+        db.supersede_relation("rel_nonexistent", "rel_other")
+            .await
+            .unwrap();
+        db.supersede_relation("rel_nonexistent", "rel_other")
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn supersede_relation_same_id_validation_error() {
+        let (db, _tmp) = test_db().await;
+        let err = db.supersede_relation("rel_x", "rel_x").await.unwrap_err();
+        assert!(
+            matches!(err, crate::error::OriginError::Validation(_)),
+            "expected Validation, got {err:?}"
+        );
+    }
+
+    // ==================== flag_memory_for_revision ====================
+
+    async fn seed_memory(db: &MemoryDB, content: &str) -> String {
+        let source_id = format!("mem_{}", uuid::Uuid::new_v4().simple());
+        let conn = db.conn.lock().await;
+        conn.execute(
+            "INSERT INTO memories (id, content, source, source_id, title, chunk_index, \
+                                    last_modified, chunk_type, source_agent, domain, confidence, \
+                                    confirmed, memory_type, pending_revision) \
+             VALUES (?1, ?2, 'memory', ?3, 'test', 0, 1712707200, 'text', NULL, 'general', 1.0, 0, 'fact', 0)",
+            libsql::params![source_id.clone(), content.to_string(), source_id.clone()],
+        )
+        .await
+        .unwrap();
+        source_id
+    }
+
+    #[tokio::test]
+    async fn flag_memory_for_revision_sets_column() {
+        let (db, _tmp) = test_db().await;
+        let sid = seed_memory(&db, "Coffee helps me focus").await;
+
+        db.flag_memory_for_revision(&sid).await.unwrap();
+
+        let conn = db.conn.lock().await;
+        let mut rows = conn
+            .query(
+                "SELECT pending_revision FROM memories WHERE source_id = ?1",
+                libsql::params![sid],
+            )
+            .await
+            .unwrap();
+        let row = rows.next().await.unwrap().unwrap();
+        let flag: i64 = row.get(0).unwrap();
+        assert_eq!(flag, 1, "pending_revision should be set to 1");
+    }
+
+    #[tokio::test]
+    async fn flag_memory_for_revision_idempotent() {
+        let (db, _tmp) = test_db().await;
+        let sid = seed_memory(&db, "x").await;
+        db.flag_memory_for_revision(&sid).await.unwrap();
+        db.flag_memory_for_revision(&sid).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn flag_memory_for_revision_missing_not_found() {
+        let (db, _tmp) = test_db().await;
+        let err = db
+            .flag_memory_for_revision("mem_nonexistent")
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(err, crate::error::OriginError::NotFound(_)),
+            "expected NotFound, got {err:?}"
+        );
+    }
+
+    // ==================== resolve_refinement_if_open ====================
+
+    async fn seed_proposal(db: &MemoryDB, id: &str, status: &str) {
+        db.insert_refinement_proposal(id, "entity_merge", &["a".into(), "b".into()], None, 0.85)
+            .await
+            .unwrap();
+        if status != "pending" {
+            let conn = db.conn.lock().await;
+            conn.execute(
+                "UPDATE refinement_queue SET status = ?1 WHERE id = ?2",
+                libsql::params![status, id],
+            )
+            .await
+            .unwrap();
+        }
+    }
+
+    #[tokio::test]
+    async fn resolve_refinement_if_open_updates_open_proposal() {
+        let (db, _tmp) = test_db().await;
+        seed_proposal(&db, "ref_open_1", "awaiting_review").await;
+        let rows = db
+            .resolve_refinement_if_open("ref_open_1", "dismissed")
+            .await
+            .unwrap();
+        assert_eq!(rows, 1, "open proposal should flip");
+
+        let conn = db.conn.lock().await;
+        let mut q = conn
+            .query(
+                "SELECT status FROM refinement_queue WHERE id = ?1",
+                libsql::params!["ref_open_1"],
+            )
+            .await
+            .unwrap();
+        let row = q.next().await.unwrap().unwrap();
+        let s: String = row.get(0).unwrap();
+        assert_eq!(s, "dismissed");
+    }
+
+    #[tokio::test]
+    async fn resolve_refinement_if_open_terminal_returns_zero() {
+        let (db, _tmp) = test_db().await;
+        seed_proposal(&db, "ref_term_1", "resolved").await;
+        let rows = db
+            .resolve_refinement_if_open("ref_term_1", "dismissed")
+            .await
+            .unwrap();
+        assert_eq!(rows, 0, "terminal proposal must not be updated");
+    }
+
+    #[tokio::test]
+    async fn resolve_refinement_if_open_missing_returns_zero() {
+        let (db, _tmp) = test_db().await;
+        let rows = db
+            .resolve_refinement_if_open("ref_nonexistent", "dismissed")
+            .await
+            .unwrap();
+        assert_eq!(rows, 0, "missing proposal returns 0 rows");
+    }
+
+    #[tokio::test]
+    async fn resolve_refinement_if_open_concurrent_only_one_wins() {
+        let (db, _tmp) = test_db().await;
+        seed_proposal(&db, "ref_race", "awaiting_review").await;
+        let db_arc = std::sync::Arc::new(db);
+        let h1 = {
+            let d = db_arc.clone();
+            tokio::spawn(async move { d.resolve_refinement_if_open("ref_race", "dismissed").await })
+        };
+        let h2 = {
+            let d = db_arc.clone();
+            tokio::spawn(async move { d.resolve_refinement_if_open("ref_race", "dismissed").await })
+        };
+        let (r1, r2) = (h1.await.unwrap().unwrap(), h2.await.unwrap().unwrap());
+        assert_eq!(
+            r1 + r2,
+            1,
+            "exactly one caller should see rows=1, got {r1} + {r2}"
         );
     }
 }

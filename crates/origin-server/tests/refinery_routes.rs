@@ -47,7 +47,9 @@ async fn seed_awaiting(
     )
     .await
     .unwrap();
-    db.resolve_refinement(id, "awaiting_review").await.unwrap();
+    db.resolve_refinement_if_open(id, "awaiting_review")
+        .await
+        .unwrap();
 }
 
 async fn read_body_json(resp: axum::response::Response) -> serde_json::Value {
@@ -66,7 +68,9 @@ async fn list_queue_returns_only_awaiting_review() {
     db.insert_refinement_proposal("ref_c", "entity_merge", &["src_a".to_string()], None, 0.88)
         .await
         .unwrap();
-    db.resolve_refinement("ref_c", "dismissed").await.unwrap();
+    db.resolve_refinement_if_open("ref_c", "dismissed")
+        .await
+        .unwrap();
 
     let req = Request::builder()
         .method(Method::GET)
@@ -241,7 +245,7 @@ async fn reject_already_terminal_returns_422() {
     )
     .await
     .unwrap();
-    db.resolve_refinement("ref_done", "dismissed")
+    db.resolve_refinement_if_open("ref_done", "dismissed")
         .await
         .unwrap();
 

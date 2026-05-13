@@ -36,42 +36,42 @@ impl ResolveStatus {
     }
 }
 
-fn status_is_terminal(s: &str) -> bool {
-    matches!(s, "dismissed" | "auto_applied" | "resolved")
-}
-
 /// Resolve a refinement queue proposal. Convergent capability fn used by both the
 /// daemon scheduler (refinery phase) and the HTTP reject route. Wraps
-/// `db.resolve_refinement` with idempotency pre-check + agent activity logging.
+/// `db.resolve_refinement_if_open` with idempotency semantics + agent activity logging.
 pub async fn resolve_proposal(
     db: &MemoryDB,
     id: &str,
     status: ResolveStatus,
     agent: &str,
 ) -> Result<WriteResult, OriginError> {
-    let proposal = db
-        .get_refinement_proposal(id)
-        .await?
-        .ok_or_else(|| OriginError::NotFound(format!("refinement proposal {id} not found")))?;
+    let rows = db.resolve_refinement_if_open(id, status.as_str()).await?;
 
-    if status_is_terminal(&proposal.status) {
-        return Err(OriginError::Validation(format!(
-            "refinement proposal {id} already resolved (status={})",
-            proposal.status
-        )));
+    if rows == 0 {
+        // Distinguish 404 (missing) vs 422 (already terminal) via a follow-up lookup.
+        return match db.get_refinement_proposal(id).await? {
+            None => Err(OriginError::NotFound(format!(
+                "refinement proposal {id} not found"
+            ))),
+            Some(p) => Err(OriginError::Validation(format!(
+                "refinement proposal {id} already resolved (status={})",
+                p.status
+            ))),
+        };
     }
 
-    db.resolve_refinement(id, status.as_str()).await?;
-
-    let payload = serde_json::json!({
-        "action": proposal.action,
-        "new_status": status.as_str(),
-        "source_ids": proposal.source_ids,
-    })
-    .to_string();
-    let _ = db
-        .log_agent_activity(agent, "refinement_resolve", &[], None, &payload)
-        .await;
+    // Read back for activity payload — proposal still exists (we just resolved it).
+    if let Ok(Some(prop)) = db.get_refinement_proposal(id).await {
+        let payload = serde_json::json!({
+            "action": prop.action,
+            "new_status": status.as_str(),
+            "source_ids": prop.source_ids,
+        })
+        .to_string();
+        let _ = db
+            .log_agent_activity(agent, "refinement_resolve", &[], None, &payload)
+            .await;
+    }
 
     Ok(WriteResult {
         id: id.to_string(),
@@ -336,6 +336,62 @@ mod tests {
         assert!(
             acts.iter().any(|a| a.action == "refinement_resolve"),
             "expected refinement_resolve activity row, found: {acts:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn resolve_proposal_concurrent_rejects_logs_once() {
+        let (db, _tmp) = test_db().await;
+        db.insert_refinement_proposal(
+            "ref_race_1",
+            "entity_merge",
+            &["a".into(), "b".into()],
+            None,
+            0.85,
+        )
+        .await
+        .unwrap();
+
+        let db_arc = std::sync::Arc::new(db);
+        let h1 = {
+            let d = db_arc.clone();
+            tokio::spawn(async move {
+                resolve_proposal(&d, "ref_race_1", ResolveStatus::Dismissed, "client-a").await
+            })
+        };
+        let h2 = {
+            let d = db_arc.clone();
+            tokio::spawn(async move {
+                resolve_proposal(&d, "ref_race_1", ResolveStatus::Dismissed, "client-b").await
+            })
+        };
+        let r1 = h1.await.unwrap();
+        let r2 = h2.await.unwrap();
+
+        let ok_count = [&r1, &r2].iter().filter(|r| r.is_ok()).count();
+        let err_count = [&r1, &r2].iter().filter(|r| r.is_err()).count();
+        assert_eq!(
+            ok_count, 1,
+            "exactly one resolve should succeed, got {r1:?} / {r2:?}"
+        );
+        assert_eq!(err_count, 1, "exactly one should fail with Validation");
+        let err = if let Err(e) = r1 { e } else { r2.unwrap_err() };
+        assert!(
+            matches!(err, crate::error::OriginError::Validation(_)),
+            "concurrent loser should see Validation, got {err:?}"
+        );
+
+        let acts = db_arc
+            .list_agent_activity(10, None, None)
+            .await
+            .unwrap_or_default();
+        let resolve_count = acts
+            .iter()
+            .filter(|a| a.action == "refinement_resolve")
+            .count();
+        assert_eq!(
+            resolve_count, 1,
+            "activity log should record exactly one resolve, got {resolve_count}"
         );
     }
 }
