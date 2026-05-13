@@ -27,17 +27,17 @@ list_refinements(action="entity_merge")
 ```
 
 Valid action values: `entity_merge`, `relation_conflict`, `detect_contradiction`,
-`suggest_entity`, `dedup_merge`.
+`dedup_merge`. (`suggest_entity` is reserved for a future producer and not
+emitted by any current path.)
 
 For each proposal, present:
-- **Action** (one of the 5 variants above)
+- **Action** (one of the 4 variants above)
 - **Confidence** (0.0 - 1.0)
 - **Source ids** (the memories or entities the proposal references)
 - **Payload summary** — pattern-match on the typed `payload` field:
   - `entity_merge`: "Merge entity `<existing_id>` ↔ `<new_id>` (similarity `<similarity>`)"
   - `relation_conflict`: "Relation `<existing_id>` vs `<new_id>` from `<from>` → `<to>`, type `<old_type>` → `<new_type>`"
   - `detect_contradiction`: source ids list the conflicting memories
-  - `suggest_entity`: name hint `<name_hint>`
   - `dedup_merge`: no payload — historical (auto-dismissed by daemon)
 
 Then offer per-item:
