@@ -488,6 +488,107 @@ pub struct SyncStatsResponse {
     pub errors: usize,
 }
 
+// ===== Refinement proposals =====
+
+/// The action type for a background-refinery proposal.
+///
+/// Used as the `action` tag in [`RefinementPayload`].
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ProposalAction {
+    EntityMerge,
+    RelationConflict,
+    DetectContradiction,
+    SuggestEntity,
+    DedupMerge,
+}
+
+/// Tagged-union payload emitted by the background refinery.
+///
+/// Each variant carries exactly the fields needed for that action type.
+/// Decoded at the route boundary so downstream consumers (MCP wrappers,
+/// agent skills) can pattern-match instead of inspecting raw JSON strings.
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+#[serde(tag = "action", rename_all = "snake_case")]
+pub enum RefinementPayload {
+    EntityMerge {
+        existing_id: String,
+        new_id: String,
+        similarity: f64,
+    },
+    RelationConflict {
+        existing_id: String,
+        new_id: String,
+        from_entity: String,
+        to_entity: String,
+        old_type: String,
+        new_type: String,
+    },
+    DetectContradiction {
+        existing_memory_id: String,
+        new_memory_id: String,
+    },
+    SuggestEntity {
+        name: String,
+        entity_type: Option<String>,
+    },
+    DedupMerge,
+}
+
+#[cfg(test)]
+mod refinement_wire_tests {
+    use super::*;
+
+    #[test]
+    fn proposal_action_serde_round_trip() {
+        let cases = [
+            ("\"entity_merge\"", ProposalAction::EntityMerge),
+            ("\"relation_conflict\"", ProposalAction::RelationConflict),
+            (
+                "\"detect_contradiction\"",
+                ProposalAction::DetectContradiction,
+            ),
+            ("\"suggest_entity\"", ProposalAction::SuggestEntity),
+            ("\"dedup_merge\"", ProposalAction::DedupMerge),
+        ];
+        for (json, expected) in cases {
+            let parsed: ProposalAction = serde_json::from_str(json).unwrap();
+            assert_eq!(parsed, expected, "deserialize {json}");
+            let back = serde_json::to_string(&expected).unwrap();
+            assert_eq!(back, json, "serialize {expected:?}");
+        }
+    }
+
+    #[test]
+    fn refinement_payload_entity_merge_round_trip() {
+        let json =
+            r#"{"action":"entity_merge","existing_id":"e1","new_id":"e2","similarity":0.87}"#;
+        let parsed: RefinementPayload = serde_json::from_str(json).unwrap();
+        match parsed {
+            RefinementPayload::EntityMerge {
+                ref existing_id,
+                ref new_id,
+                similarity,
+            } => {
+                assert_eq!(existing_id, "e1");
+                assert_eq!(new_id, "e2");
+                assert!((similarity - 0.87).abs() < 1e-9);
+            }
+            _ => panic!("expected EntityMerge variant"),
+        }
+        let back = serde_json::to_value(&parsed).unwrap();
+        assert_eq!(back["action"], "entity_merge");
+        assert_eq!(back["existing_id"], "e1");
+    }
+
+    #[test]
+    fn refinement_payload_dedup_merge_no_fields() {
+        let json = r#"{"action":"dedup_merge"}"#;
+        let parsed: RefinementPayload = serde_json::from_str(json).unwrap();
+        assert!(matches!(parsed, RefinementPayload::DedupMerge));
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
