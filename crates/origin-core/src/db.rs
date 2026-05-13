@@ -8865,6 +8865,29 @@ impl MemoryDB {
         }
     }
 
+    /// Hard-delete the losing relation. Idempotent: DELETE on missing row is a no-op.
+    /// `winner_id` is accepted for activity-log payload at the capability fn layer;
+    /// existence not verified here (allows recovery if winner was also deleted out-of-band).
+    pub async fn supersede_relation(
+        &self,
+        loser_id: &str,
+        winner_id: &str,
+    ) -> Result<(), OriginError> {
+        if loser_id == winner_id {
+            return Err(OriginError::Validation(
+                "supersede_relation: loser and winner are the same id".into(),
+            ));
+        }
+        let conn = self.conn.lock().await;
+        conn.execute(
+            "DELETE FROM relations WHERE id = ?1",
+            libsql::params![loser_id],
+        )
+        .await
+        .map_err(|e| OriginError::VectorDb(format!("supersede_relation: {e}")))?;
+        Ok(())
+    }
+
     /// Create a relation between two entities.
     /// The relation type is normalized against the vocabulary via `resolve_relation_type`
     /// before insertion. On conflict (same from/to/type), updates confidence if higher
@@ -28138,6 +28161,69 @@ pub(crate) mod tests {
         assert!(
             matches!(err, crate::error::OriginError::NotFound(_)),
             "expected NotFound, got {err:?}"
+        );
+    }
+
+    // ==================== supersede_relation ====================
+
+    #[tokio::test]
+    async fn supersede_relation_deletes_loser() {
+        let (db, _tmp) = test_db().await;
+        let from = db.create_entity("Alice", "person", None).await.unwrap();
+        let to = db.create_entity("Carol", "person", None).await.unwrap();
+        let loser = db
+            .create_relation(&from, &to, "knows", None, Some(0.5), None, None)
+            .await
+            .unwrap();
+        let winner = db
+            .create_relation(&from, &to, "manages", None, Some(0.9), None, None)
+            .await
+            .unwrap();
+
+        db.supersede_relation(&loser, &winner).await.unwrap();
+
+        let conn = db.conn.lock().await;
+        let mut rows = conn
+            .query(
+                "SELECT COUNT(*) FROM relations WHERE id = ?1",
+                libsql::params![loser],
+            )
+            .await
+            .unwrap();
+        let row = rows.next().await.unwrap().unwrap();
+        let count: i64 = row.get(0).unwrap();
+        assert_eq!(count, 0, "loser relation should be deleted");
+
+        let mut rows = conn
+            .query(
+                "SELECT COUNT(*) FROM relations WHERE id = ?1",
+                libsql::params![winner],
+            )
+            .await
+            .unwrap();
+        let row = rows.next().await.unwrap().unwrap();
+        let count: i64 = row.get(0).unwrap();
+        assert_eq!(count, 1, "winner relation should remain");
+    }
+
+    #[tokio::test]
+    async fn supersede_relation_idempotent() {
+        let (db, _tmp) = test_db().await;
+        db.supersede_relation("rel_nonexistent", "rel_other")
+            .await
+            .unwrap();
+        db.supersede_relation("rel_nonexistent", "rel_other")
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn supersede_relation_same_id_validation_error() {
+        let (db, _tmp) = test_db().await;
+        let err = db.supersede_relation("rel_x", "rel_x").await.unwrap_err();
+        assert!(
+            matches!(err, crate::error::OriginError::Validation(_)),
+            "expected Validation, got {err:?}"
         );
     }
 }
