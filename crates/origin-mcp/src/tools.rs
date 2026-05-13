@@ -439,6 +439,36 @@ pub struct ListNurtureParams {
 pub struct ListEntitySuggestionsParams {}
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct ApproveEntitySuggestionRequest {
+    /// The refinement_queue id of the pending entity suggestion to approve.
+    pub suggestion_id: String,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct DismissEntitySuggestionRequest {
+    /// The refinement_queue id of the pending entity suggestion to dismiss.
+    pub suggestion_id: String,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct AcceptRevisionRequest {
+    /// The source_id of the memory whose pending revision should be accepted.
+    pub target_source_id: String,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct DismissRevisionRequest {
+    /// The source_id of the memory whose pending revision should be dismissed.
+    pub target_source_id: String,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct DismissContradictionRequest {
+    /// The source_id of the memory whose contradiction flags should be dismissed.
+    pub source_id: String,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct ListPendingImportsParams {}
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
@@ -1322,6 +1352,102 @@ impl OriginMcpServer {
         ))]))
     }
 
+    pub async fn approve_entity_suggestion_impl(
+        &self,
+        req: ApproveEntitySuggestionRequest,
+    ) -> Result<CallToolResult, McpError> {
+        let path = format!(
+            "/api/memory/entity-suggestions/{}/approve",
+            req.suggestion_id
+        );
+        let response = match self
+            .client
+            .post_empty::<EntitySuggestionApproveResponse>(&path)
+            .await
+        {
+            Ok(r) => r,
+            Err(e) => return Ok(tool_error(e, "approve_entity_suggestion")),
+        };
+        let pretty = serde_json::to_string_pretty(&response)
+            .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+        Ok(CallToolResult::success(vec![Content::text(pretty)]))
+    }
+
+    pub async fn dismiss_entity_suggestion_impl(
+        &self,
+        req: DismissEntitySuggestionRequest,
+    ) -> Result<CallToolResult, McpError> {
+        let path = format!(
+            "/api/memory/entity-suggestions/{}/dismiss",
+            req.suggestion_id
+        );
+        let response = match self
+            .client
+            .post_empty::<EntitySuggestionDismissResponse>(&path)
+            .await
+        {
+            Ok(r) => r,
+            Err(e) => return Ok(tool_error(e, "dismiss_entity_suggestion")),
+        };
+        let pretty = serde_json::to_string_pretty(&response)
+            .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+        Ok(CallToolResult::success(vec![Content::text(pretty)]))
+    }
+
+    pub async fn accept_revision_impl(
+        &self,
+        req: AcceptRevisionRequest,
+    ) -> Result<CallToolResult, McpError> {
+        let path = format!("/api/memory/revision/{}/accept", req.target_source_id);
+        let response = match self
+            .client
+            .post_empty::<RevisionAcceptResponse>(&path)
+            .await
+        {
+            Ok(r) => r,
+            Err(e) => return Ok(tool_error(e, "accept_revision")),
+        };
+        let pretty = serde_json::to_string_pretty(&response)
+            .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+        Ok(CallToolResult::success(vec![Content::text(pretty)]))
+    }
+
+    pub async fn dismiss_revision_impl(
+        &self,
+        req: DismissRevisionRequest,
+    ) -> Result<CallToolResult, McpError> {
+        let path = format!("/api/memory/revision/{}/dismiss", req.target_source_id);
+        let response = match self
+            .client
+            .post_empty::<RevisionDismissResponse>(&path)
+            .await
+        {
+            Ok(r) => r,
+            Err(e) => return Ok(tool_error(e, "dismiss_revision")),
+        };
+        let pretty = serde_json::to_string_pretty(&response)
+            .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+        Ok(CallToolResult::success(vec![Content::text(pretty)]))
+    }
+
+    pub async fn dismiss_contradiction_impl(
+        &self,
+        req: DismissContradictionRequest,
+    ) -> Result<CallToolResult, McpError> {
+        let path = format!("/api/memory/contradiction/{}/dismiss", req.source_id);
+        let response = match self
+            .client
+            .post_empty::<ContradictionDismissResponse>(&path)
+            .await
+        {
+            Ok(r) => r,
+            Err(e) => return Ok(tool_error(e, "dismiss_contradiction")),
+        };
+        let pretty = serde_json::to_string_pretty(&response)
+            .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+        Ok(CallToolResult::success(vec![Content::text(pretty)]))
+    }
+
     pub async fn list_pending_imports_impl(
         &self,
         _params: ListPendingImportsParams,
@@ -1958,6 +2084,102 @@ impl OriginMcpServer {
         Parameters(params): Parameters<ListEntitySuggestionsParams>,
     ) -> Result<CallToolResult, McpError> {
         self.list_entity_suggestions_impl(params).await
+    }
+
+    #[tool(
+        description = "Approve a pending entity suggestion. Creates the suggested entity in \
+                       the knowledge graph and links related memories. Returns the created \
+                       entity id, entity name, and link count. Returns an error if the \
+                       suggestion id is unknown or already resolved.",
+        annotations(
+            title = "Approve entity suggestion",
+            read_only_hint = false,
+            destructive_hint = false,
+            idempotent_hint = false,
+            open_world_hint = false
+        )
+    )]
+    async fn approve_entity_suggestion(
+        &self,
+        Parameters(req): Parameters<ApproveEntitySuggestionRequest>,
+    ) -> Result<CallToolResult, McpError> {
+        self.approve_entity_suggestion_impl(req).await
+    }
+
+    #[tool(
+        description = "Dismiss a pending entity suggestion. Marks the refinement row resolved \
+                       without creating an entity. Returns an error if the suggestion id is \
+                       unknown or already resolved.",
+        annotations(
+            title = "Dismiss entity suggestion",
+            read_only_hint = false,
+            destructive_hint = false,
+            idempotent_hint = false,
+            open_world_hint = false
+        )
+    )]
+    async fn dismiss_entity_suggestion(
+        &self,
+        Parameters(req): Parameters<DismissEntitySuggestionRequest>,
+    ) -> Result<CallToolResult, McpError> {
+        self.dismiss_entity_suggestion_impl(req).await
+    }
+
+    #[tool(
+        description = "Accept a pending memory revision. Replaces the target memory's content \
+                       with the proposed revision content and removes the revision row from the \
+                       pending list. Returns the consumed revision id. Returns an error if no \
+                       pending revision exists for that target.",
+        annotations(
+            title = "Accept revision",
+            read_only_hint = false,
+            destructive_hint = false,
+            idempotent_hint = false,
+            open_world_hint = false
+        )
+    )]
+    async fn accept_revision(
+        &self,
+        Parameters(req): Parameters<AcceptRevisionRequest>,
+    ) -> Result<CallToolResult, McpError> {
+        self.accept_revision_impl(req).await
+    }
+
+    #[tool(
+        description = "Dismiss a pending memory revision. Deletes the revision row; the original \
+                       memory is unchanged. Returns an error if no pending revision exists for \
+                       that target.",
+        annotations(
+            title = "Dismiss revision",
+            read_only_hint = false,
+            destructive_hint = false,
+            idempotent_hint = false,
+            open_world_hint = false
+        )
+    )]
+    async fn dismiss_revision(
+        &self,
+        Parameters(req): Parameters<DismissRevisionRequest>,
+    ) -> Result<CallToolResult, McpError> {
+        self.dismiss_revision_impl(req).await
+    }
+
+    #[tool(
+        description = "Dismiss all awaiting-review contradiction flags for a memory. Idempotent. \
+                       Returns wrote:true even if no rows matched.",
+        annotations(
+            title = "Dismiss contradiction",
+            read_only_hint = false,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
+    )]
+    async fn dismiss_contradiction(
+        &self,
+        Parameters(req): Parameters<DismissContradictionRequest>,
+    ) -> Result<CallToolResult, McpError> {
+        self.dismiss_contradiction_impl(req).await
     }
 
     #[tool(

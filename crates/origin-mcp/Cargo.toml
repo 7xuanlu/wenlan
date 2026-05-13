@@ -42,3 +42,5 @@ origin-types = { workspace = true }
 tempfile = "3"
 portpicker = "0.1"
 wiremock = "0.6"
+origin-server = { path = "../origin-server" }
+origin-core = { path = "../origin-core" }

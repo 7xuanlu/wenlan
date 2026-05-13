@@ -3,7 +3,7 @@ use crate::error::ServerError;
 use crate::state::ServerState;
 use axum::{
     extract::{Path, State},
-    http::{HeaderMap, StatusCode},
+    http::HeaderMap,
     response::Json,
 };
 use origin_core::sources::compute_effective_confidence;
@@ -1482,26 +1482,30 @@ pub async fn handle_reclassify_memory(
 
 pub async fn handle_accept_revision(
     State(state): State<Arc<RwLock<ServerState>>>,
+    headers: axum::http::HeaderMap,
     Path(id): Path<String>,
-) -> Result<Json<serde_json::Value>, ServerError> {
-    let s = state.read().await;
-    let db = s.db.as_ref().ok_or(ServerError::DbNotInitialized)?;
-    db.accept_pending_revision(&id)
-        .await
-        .map_err(|e| ServerError::Internal(e.to_string()))?;
-    Ok(Json(serde_json::json!({ "accepted": true })))
+) -> Result<Json<origin_types::RevisionAcceptResponse>, ServerError> {
+    let db = {
+        let s = state.read().await;
+        s.db.as_ref().ok_or(ServerError::DbNotInitialized)?.clone()
+    };
+    let agent = extract_agent_name(&headers, None);
+    let result = origin_core::post_write::accept_pending_revision(&db, &id, &agent).await?;
+    Ok(Json(result))
 }
 
 pub async fn handle_dismiss_revision(
     State(state): State<Arc<RwLock<ServerState>>>,
+    headers: axum::http::HeaderMap,
     Path(id): Path<String>,
-) -> Result<Json<serde_json::Value>, ServerError> {
-    let s = state.read().await;
-    let db = s.db.as_ref().ok_or(ServerError::DbNotInitialized)?;
-    db.dismiss_pending_revision(&id)
-        .await
-        .map_err(|e| ServerError::Internal(e.to_string()))?;
-    Ok(Json(serde_json::json!({ "dismissed": true })))
+) -> Result<Json<origin_types::RevisionDismissResponse>, ServerError> {
+    let db = {
+        let s = state.read().await;
+        s.db.as_ref().ok_or(ServerError::DbNotInitialized)?.clone()
+    };
+    let agent = extract_agent_name(&headers, None);
+    let result = origin_core::post_write::dismiss_pending_revision(&db, &id, &agent).await?;
+    Ok(Json(result))
 }
 
 /// POST /api/memory/contradiction/{source_id}/dismiss
@@ -1510,16 +1514,16 @@ pub async fn handle_dismiss_revision(
 /// Returns 200 OK whether or not any rows were matched (idempotent).
 pub async fn handle_dismiss_contradiction(
     State(state): State<Arc<RwLock<ServerState>>>,
+    headers: axum::http::HeaderMap,
     Path(source_id): Path<String>,
-) -> Result<StatusCode, ServerError> {
+) -> Result<Json<origin_types::ContradictionDismissResponse>, ServerError> {
     let db = {
         let s = state.read().await;
-        s.db.clone().ok_or(ServerError::DbNotInitialized)?
+        s.db.as_ref().ok_or(ServerError::DbNotInitialized)?.clone()
     };
-    db.dismiss_contradiction_for_source(&source_id)
-        .await
-        .map_err(|e| ServerError::Internal(e.to_string()))?;
-    Ok(StatusCode::OK)
+    let agent = extract_agent_name(&headers, None);
+    let result = origin_core::post_write::dismiss_contradiction(&db, &source_id, &agent).await?;
+    Ok(Json(result))
 }
 
 // ===== Enrichment Status =====
@@ -1590,56 +1594,34 @@ pub async fn handle_get_entity_suggestions(
 
 pub async fn handle_approve_entity_suggestion(
     State(state): State<Arc<RwLock<ServerState>>>,
+    headers: axum::http::HeaderMap,
     Path(id): Path<String>,
-) -> Result<Json<serde_json::Value>, ServerError> {
-    let s = state.read().await;
-    let db = s.db.as_ref().ok_or(ServerError::DbNotInitialized)?;
-
-    let pending = db
-        .get_pending_refinements()
-        .await
-        .map_err(|e| ServerError::Internal(e.to_string()))?;
-    let proposal = pending
-        .iter()
-        .find(|p| p.id == id && p.action == "suggest_entity")
-        .ok_or(ServerError::NotFound(format!("suggestion {}", id)))?;
-
-    let entity_name = proposal
-        .payload
-        .clone()
-        .unwrap_or_else(|| "Unknown".to_string());
-
-    let entity_id = db
-        .create_entity(&entity_name, "auto", None)
-        .await
-        .map_err(|e| ServerError::Internal(e.to_string()))?;
-
-    let entity_link_distance = s.tuning.refinery.entity_link_distance;
-    let linked = origin_core::refinery::reweave_entity_links(db, 20, entity_link_distance)
-        .await
-        .map_err(|e| ServerError::Internal(e.to_string()))?;
-
-    db.resolve_refinement_if_open(&id, "completed")
-        .await
-        .map_err(|e| ServerError::Internal(e.to_string()))?;
-
-    Ok(Json(serde_json::json!({
-        "entity_id": entity_id,
-        "entity_name": entity_name,
-        "memories_linked": linked,
-    })))
+) -> Result<Json<origin_types::EntitySuggestionApproveResponse>, ServerError> {
+    let (db, entity_link_distance) = {
+        let s = state.read().await;
+        let db = s.db.as_ref().ok_or(ServerError::DbNotInitialized)?.clone();
+        let d = s.tuning.refinery.entity_link_distance;
+        (db, d)
+    };
+    let agent = extract_agent_name(&headers, None);
+    let result =
+        origin_core::post_write::approve_entity_suggestion(&db, &id, &agent, entity_link_distance)
+            .await?;
+    Ok(Json(result))
 }
 
 pub async fn handle_dismiss_entity_suggestion(
     State(state): State<Arc<RwLock<ServerState>>>,
+    headers: axum::http::HeaderMap,
     Path(id): Path<String>,
-) -> Result<Json<serde_json::Value>, ServerError> {
-    let s = state.read().await;
-    let db = s.db.as_ref().ok_or(ServerError::DbNotInitialized)?;
-    db.resolve_refinement_if_open(&id, "dismissed")
-        .await
-        .map_err(|e| ServerError::Internal(e.to_string()))?;
-    Ok(Json(serde_json::json!({ "dismissed": true })))
+) -> Result<Json<origin_types::EntitySuggestionDismissResponse>, ServerError> {
+    let db = {
+        let s = state.read().await;
+        s.db.as_ref().ok_or(ServerError::DbNotInitialized)?.clone()
+    };
+    let agent = extract_agent_name(&headers, None);
+    let result = origin_core::post_write::dismiss_entity_suggestion(&db, &id, &agent).await?;
+    Ok(Json(result))
 }
 
 // ===== Helpers =====

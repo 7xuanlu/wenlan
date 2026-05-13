@@ -15,6 +15,7 @@ use tokio::sync::RwLock;
 /// The `[[orphan_label]]` syntax in content causes `insert_page` to call
 /// `refresh_page_wikilinks`, which writes a `page_links` row with
 /// `target_page_id = NULL` (orphan) because no page with that title exists yet.
+#[allow(dead_code)]
 pub async fn insert_page_with_orphan_link(
     db: &Arc<MemoryDB>,
     page_id: &str,
@@ -32,6 +33,7 @@ pub async fn insert_page_with_orphan_link(
 ///
 /// The caller binds `_tmp` to keep the `TempDir` alive for the test's
 /// duration; it drops (and cleans up) when the test function returns.
+#[allow(dead_code)]
 pub async fn test_app() -> (axum::Router, tempfile::TempDir, Arc<MemoryDB>) {
     let dir = tempfile::tempdir().unwrap();
     let db = MemoryDB::new(dir.path(), Arc::new(NoopEmitter))
@@ -46,11 +48,28 @@ pub async fn test_app() -> (axum::Router, tempfile::TempDir, Arc<MemoryDB>) {
     (router, dir, db_arc)
 }
 
+/// Count `agent_activity` rows matching both `action` and `agent_name`.
+/// Used by curation mutate HTTP tests to verify activity logging without
+/// requiring direct access to the private `conn` field.
+#[allow(dead_code)]
+pub async fn count_activity_for_action_and_agent(
+    db: &Arc<MemoryDB>,
+    action: &str,
+    agent_name: &str,
+) -> i64 {
+    let rows = db
+        .list_agent_activity(1000, Some(agent_name), None)
+        .await
+        .unwrap();
+    rows.iter().filter(|r| r.action == action).count() as i64
+}
+
 /// Insert a memory row directly via `upsert_documents`.
 ///
 /// Matches the `insert_memory_for_test` helper used in `origin-core`'s DB
 /// unit tests. All NOT NULL columns in `memories` are covered.
 #[allow(clippy::too_many_arguments)]
+#[allow(dead_code)]
 pub async fn insert_memory(
     db: &Arc<MemoryDB>,
     source_id: &str,

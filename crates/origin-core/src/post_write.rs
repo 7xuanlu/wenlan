@@ -20,6 +20,24 @@ pub struct WriteResult {
     pub wrote: bool,
 }
 
+/// Best-effort activity logger used by curation-mutate capability fns.
+/// Failure to log does not fail the operation — matches the pattern in
+/// `create_entity`, `create_relation`, etc.
+pub(crate) async fn log_activity_best_effort(
+    db: &MemoryDB,
+    agent: &str,
+    action: &str,
+    target_id: &str,
+) {
+    let target = target_id.to_string();
+    if let Err(e) = db
+        .log_agent_activity(agent, action, std::slice::from_ref(&target), None, "")
+        .await
+    {
+        log::warn!("[{}] activity log failed: {}", action, e);
+    }
+}
+
 /// Create or resolve an entity. Canonical entry point for both
 /// agent-triggered (`/api/memory/entities`) and daemon-internal
 /// (`kg/entity_extraction.rs`) writes.
@@ -648,6 +666,159 @@ pub async fn update_page(
     Ok(WriteResult {
         id: page_id.to_string(),
         warnings,
+        wrote: true,
+    })
+}
+
+/// Approve a pending entity suggestion. Canonical entry for both
+/// agent-triggered (`/api/memory/entity-suggestions/{id}/approve`) and
+/// daemon-internal accept-dispatch.
+///
+/// Resolves the suggested entity name through `post_write::create_entity`
+/// (4-step resolution + idempotency), then reweaves entity links and marks
+/// the refinement row completed. Returns `wrote: false` if the suggestion
+/// resolved to an existing entity. Returns `NotFound` if the suggestion id
+/// is unknown or already resolved.
+pub async fn approve_entity_suggestion(
+    db: &MemoryDB,
+    suggestion_id: &str,
+    agent: &str,
+    entity_link_distance: f64,
+) -> Result<origin_types::EntitySuggestionApproveResponse, OriginError> {
+    let pending = db.get_pending_refinements().await?;
+    let proposal = pending
+        .iter()
+        .find(|p| p.id == suggestion_id && p.action == "suggest_entity")
+        .ok_or_else(|| {
+            OriginError::NotFound(format!(
+                "entity suggestion {} not found or already resolved",
+                suggestion_id
+            ))
+        })?;
+
+    let entity_name = proposal
+        .payload
+        .clone()
+        .unwrap_or_else(|| "Unknown".to_string());
+
+    let create_result = create_entity(
+        db,
+        CreateEntityRequest {
+            name: entity_name.clone(),
+            entity_type: "auto".to_string(),
+            domain: None,
+            source_agent: Some(agent.to_string()),
+            confidence: None,
+        },
+        agent,
+    )
+    .await?;
+
+    let linked = crate::refinery::reweave_entity_links(db, 20, entity_link_distance).await?;
+    db.resolve_refinement_if_open(suggestion_id, "completed")
+        .await?;
+
+    log_activity_best_effort(db, agent, "entity_suggestion_approve", suggestion_id).await;
+
+    Ok(origin_types::EntitySuggestionApproveResponse {
+        suggestion_id: suggestion_id.to_string(),
+        entity_id: create_result.id,
+        entity_name,
+        memories_linked: linked as u32,
+        wrote: create_result.wrote,
+    })
+}
+
+/// Dismiss a pending entity suggestion. Canonical entry for both
+/// agent-triggered (`/api/memory/entity-suggestions/{id}/dismiss`) and
+/// daemon-internal triggers. Returns `NotFound` if the suggestion id is
+/// unknown or already resolved.
+pub async fn dismiss_entity_suggestion(
+    db: &MemoryDB,
+    suggestion_id: &str,
+    agent: &str,
+) -> Result<origin_types::EntitySuggestionDismissResponse, OriginError> {
+    let pending = db.get_pending_refinements().await?;
+    let proposal = pending
+        .iter()
+        .find(|p| p.id == suggestion_id && p.action == "suggest_entity");
+    match proposal {
+        None => Err(OriginError::NotFound(format!(
+            "entity suggestion {} not found or already resolved",
+            suggestion_id
+        ))),
+        Some(_) => {
+            db.resolve_refinement_if_open(suggestion_id, "dismissed")
+                .await?;
+            log_activity_best_effort(db, agent, "entity_suggestion_dismiss", suggestion_id).await;
+            Ok(origin_types::EntitySuggestionDismissResponse {
+                suggestion_id: suggestion_id.to_string(),
+                wrote: true,
+            })
+        }
+    }
+}
+
+/// Accept a pending memory revision. Canonical entry for both agent-triggered
+/// (`/api/memory/revision/{id}/accept`) and daemon-internal accept-dispatch.
+/// Activates the revision row, suppresses the original, and logs activity.
+/// Returns `NotFound` if no pending revision exists for the target.
+pub async fn accept_pending_revision(
+    db: &MemoryDB,
+    target_source_id: &str,
+    agent: &str,
+) -> Result<origin_types::RevisionAcceptResponse, OriginError> {
+    // Pre-fetch the revision row id so we can return it in the response,
+    // since the DB method consumes the row before returning.
+    let pending = db.get_pending_revision_for(target_source_id).await?;
+    let Some(pending) = pending else {
+        return Err(OriginError::NotFound(format!(
+            "No pending revision for {}",
+            target_source_id
+        )));
+    };
+    let revision_source_id = pending.source_id.clone();
+
+    db.accept_pending_revision(target_source_id).await?;
+    log_activity_best_effort(db, agent, "revision_accept", target_source_id).await;
+
+    Ok(origin_types::RevisionAcceptResponse {
+        target_source_id: target_source_id.to_string(),
+        revision_source_id,
+        wrote: true,
+    })
+}
+
+/// Dismiss a pending memory revision. Canonical entry for both
+/// agent-triggered (`/api/memory/revision/{id}/dismiss`) and daemon-internal
+/// triggers. Deletes the pending revision row; the original is untouched.
+/// Returns `NotFound` if no pending revision exists for the target.
+pub async fn dismiss_pending_revision(
+    db: &MemoryDB,
+    target_source_id: &str,
+    agent: &str,
+) -> Result<origin_types::RevisionDismissResponse, OriginError> {
+    db.dismiss_pending_revision(target_source_id).await?;
+    log_activity_best_effort(db, agent, "revision_dismiss", target_source_id).await;
+    Ok(origin_types::RevisionDismissResponse {
+        target_source_id: target_source_id.to_string(),
+        wrote: true,
+    })
+}
+
+/// Dismiss all awaiting-review contradiction flags for a memory. Canonical
+/// entry for both agent-triggered (`/api/memory/contradiction/{source_id}/dismiss`)
+/// and daemon-internal triggers. `wrote: true` is best-effort: the DB method
+/// silently no-ops when no rows match. See spec §3 for the caveat.
+pub async fn dismiss_contradiction(
+    db: &MemoryDB,
+    source_id: &str,
+    agent: &str,
+) -> Result<origin_types::ContradictionDismissResponse, OriginError> {
+    db.dismiss_contradiction_for_source(source_id).await?;
+    log_activity_best_effort(db, agent, "contradiction_dismiss", source_id).await;
+    Ok(origin_types::ContradictionDismissResponse {
+        source_id: source_id.to_string(),
         wrote: true,
     })
 }
@@ -1364,6 +1535,277 @@ mod tests {
         assert_eq!(
             page_after.version, version_before,
             "version must not bump on no-op"
+        );
+    }
+
+    // ── dismiss_entity_suggestion ────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn dismiss_entity_suggestion_writes_and_logs_on_first_call() {
+        let (db, _tmp) = crate::db::tests::test_db().await;
+        {
+            let conn = db.conn.lock().await;
+            conn.execute(
+                "INSERT INTO refinement_queue (id, action, source_ids, payload, confidence, status) VALUES (?1, 'suggest_entity', '[]', ?2, 0.9, 'awaiting_review')",
+                libsql::params!["ref_d1".to_string(), "DismissMe".to_string()],
+            ).await.unwrap();
+        }
+        let result = dismiss_entity_suggestion(&db, "ref_d1", "test-agent")
+            .await
+            .unwrap();
+        assert_eq!(result.suggestion_id, "ref_d1");
+        assert!(result.wrote);
+    }
+
+    #[tokio::test]
+    async fn dismiss_entity_suggestion_returns_not_found_on_missing_id() {
+        let (db, _tmp) = crate::db::tests::test_db().await;
+        let err = dismiss_entity_suggestion(&db, "ref_does_not_exist", "test-agent")
+            .await
+            .unwrap_err();
+        assert!(matches!(err, OriginError::NotFound(_)));
+    }
+
+    #[tokio::test]
+    async fn dismiss_entity_suggestion_returns_not_found_on_re_call_after_success() {
+        let (db, _tmp) = crate::db::tests::test_db().await;
+        {
+            let conn = db.conn.lock().await;
+            conn.execute(
+                "INSERT INTO refinement_queue (id, action, source_ids, payload, confidence, status) VALUES (?1, 'suggest_entity', '[]', ?2, 0.9, 'awaiting_review')",
+                libsql::params!["ref_d2".to_string(), "DismissTwice".to_string()],
+            ).await.unwrap();
+        }
+        dismiss_entity_suggestion(&db, "ref_d2", "test-agent")
+            .await
+            .unwrap();
+        let err = dismiss_entity_suggestion(&db, "ref_d2", "test-agent")
+            .await
+            .unwrap_err();
+        assert!(matches!(err, OriginError::NotFound(_)));
+    }
+
+    // ── accept_pending_revision ──────────────────────────────────────────────
+
+    async fn seed_pending_revision(db: &MemoryDB, target: &str, revision: &str) {
+        let now = chrono::Utc::now().timestamp();
+        let conn = db.conn.lock().await;
+        conn.execute(
+            "INSERT INTO memories (id, source_id, title, content, chunk_index, chunk_type, memory_type, domain, source_agent, created_at, last_modified, confirmed, stability, source) VALUES (?1, ?1, ?1, 'original content', 0, 'text', 'fact', 'test', 'claude-code', ?2, ?2, 1, 'confirmed', 'memory')",
+            libsql::params![target.to_string(), now],
+        )
+        .await
+        .unwrap();
+        conn.execute(
+            "INSERT INTO memories (id, source_id, title, content, chunk_index, chunk_type, memory_type, domain, source_agent, created_at, last_modified, confirmed, stability, source, supersedes, pending_revision) VALUES (?1, ?1, ?1, 'revised content', 0, 'text', 'fact', 'test', 'claude-code', ?2, ?2, 0, 'new', 'memory', ?3, 1)",
+            libsql::params![revision.to_string(), now, target.to_string()],
+        )
+        .await
+        .unwrap();
+    }
+
+    #[tokio::test]
+    async fn accept_pending_revision_writes_and_logs_on_first_call() {
+        let (db, _tmp) = crate::db::tests::test_db().await;
+        seed_pending_revision(&db, "mem_apr_target", "mem_apr_rev").await;
+        let result = accept_pending_revision(&db, "mem_apr_target", "test-agent")
+            .await
+            .unwrap();
+        assert_eq!(result.target_source_id, "mem_apr_target");
+        assert_eq!(result.revision_source_id, "mem_apr_rev");
+        assert!(result.wrote);
+    }
+
+    #[tokio::test]
+    async fn accept_pending_revision_returns_not_found_on_missing_id() {
+        let (db, _tmp) = crate::db::tests::test_db().await;
+        let err = accept_pending_revision(&db, "mem_nope", "test-agent")
+            .await
+            .unwrap_err();
+        assert!(matches!(err, OriginError::NotFound(_)));
+    }
+
+    #[tokio::test]
+    async fn accept_pending_revision_returns_not_found_on_re_call_after_success() {
+        let (db, _tmp) = crate::db::tests::test_db().await;
+        seed_pending_revision(&db, "mem_arr_target", "mem_arr_rev").await;
+        accept_pending_revision(&db, "mem_arr_target", "test-agent")
+            .await
+            .unwrap();
+        let err = accept_pending_revision(&db, "mem_arr_target", "test-agent")
+            .await
+            .unwrap_err();
+        assert!(matches!(err, OriginError::NotFound(_)));
+    }
+
+    // ── dismiss_pending_revision ─────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn dismiss_pending_revision_writes_and_logs_on_first_call() {
+        let (db, _tmp) = crate::db::tests::test_db().await;
+        seed_pending_revision(&db, "mem_dpr_target", "mem_dpr_rev").await;
+        let result = dismiss_pending_revision(&db, "mem_dpr_target", "test-agent")
+            .await
+            .unwrap();
+        assert_eq!(result.target_source_id, "mem_dpr_target");
+        assert!(result.wrote);
+    }
+
+    #[tokio::test]
+    async fn dismiss_pending_revision_returns_not_found_on_missing_id() {
+        let (db, _tmp) = crate::db::tests::test_db().await;
+        let err = dismiss_pending_revision(&db, "mem_nope", "test-agent")
+            .await
+            .unwrap_err();
+        assert!(matches!(err, OriginError::NotFound(_)));
+    }
+
+    #[tokio::test]
+    async fn dismiss_pending_revision_returns_not_found_on_re_call() {
+        let (db, _tmp) = crate::db::tests::test_db().await;
+        seed_pending_revision(&db, "mem_dpr2_target", "mem_dpr2_rev").await;
+        dismiss_pending_revision(&db, "mem_dpr2_target", "test-agent")
+            .await
+            .unwrap();
+        let err = dismiss_pending_revision(&db, "mem_dpr2_target", "test-agent")
+            .await
+            .unwrap_err();
+        assert!(matches!(err, OriginError::NotFound(_)));
+    }
+
+    // ── approve_entity_suggestion ────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn approve_entity_suggestion_creates_new_entity_when_name_unknown() {
+        let (db, _tmp) = crate::db::tests::test_db().await;
+        // Seed a pending refinement_queue row of action=suggest_entity.
+        // Table schema: (id, action, source_ids TEXT, payload, confidence, status, created_at).
+        {
+            let conn = db.conn.lock().await;
+            conn.execute(
+                "INSERT INTO refinement_queue (id, action, source_ids, payload, confidence, status) VALUES (?1, 'suggest_entity', '[]', ?2, 0.9, 'awaiting_review')",
+                libsql::params![
+                    "ref_sugg_1".to_string(),
+                    "Acme Corp".to_string(),
+                ],
+            ).await.unwrap();
+        }
+
+        let result = approve_entity_suggestion(&db, "ref_sugg_1", "test-agent", 0.1)
+            .await
+            .unwrap();
+
+        assert_eq!(result.suggestion_id, "ref_sugg_1");
+        assert_eq!(result.entity_name, "Acme Corp");
+        assert!(result.wrote, "new entity should have wrote=true");
+        assert!(!result.entity_id.is_empty());
+    }
+
+    #[tokio::test]
+    async fn approve_entity_suggestion_returns_not_found_on_missing_suggestion_id() {
+        let (db, _tmp) = crate::db::tests::test_db().await;
+        let err = approve_entity_suggestion(&db, "ref_does_not_exist", "test-agent", 0.1)
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(err, OriginError::NotFound(_)),
+            "expected NotFound, got {:?}",
+            err
+        );
+    }
+
+    #[tokio::test]
+    async fn approve_entity_suggestion_resolves_existing_entity_when_exact_name_matches() {
+        let (db, _tmp) = crate::db::tests::test_db().await;
+        // Pre-create an entity with name "Acme Corp"
+        db.create_entity("Acme Corp", "manual", None).await.unwrap();
+        // Seed a pending refinement with the same name
+        {
+            let conn = db.conn.lock().await;
+            conn.execute(
+                "INSERT INTO refinement_queue (id, action, source_ids, payload, confidence, status) VALUES (?1, 'suggest_entity', '[]', ?2, 0.9, 'awaiting_review')",
+                libsql::params!["ref_sugg_2".to_string(), "Acme Corp".to_string()],
+            ).await.unwrap();
+        }
+
+        let result = approve_entity_suggestion(&db, "ref_sugg_2", "test-agent", 0.1)
+            .await
+            .unwrap();
+
+        assert!(
+            !result.wrote,
+            "existing entity should resolve with wrote=false"
+        );
+    }
+
+    #[tokio::test]
+    async fn approve_entity_suggestion_logs_activity_exactly_once() {
+        let (db, _tmp) = crate::db::tests::test_db().await;
+        {
+            let conn = db.conn.lock().await;
+            conn.execute(
+                "INSERT INTO refinement_queue (id, action, source_ids, payload, confidence, status) VALUES (?1, 'suggest_entity', '[]', ?2, 0.9, 'awaiting_review')",
+                libsql::params!["ref_sugg_3".to_string(), "Once Only Corp".to_string()],
+            ).await.unwrap();
+        }
+
+        approve_entity_suggestion(&db, "ref_sugg_3", "test-agent", 0.1)
+            .await
+            .unwrap();
+
+        // Count agent_activity rows with action = 'entity_suggestion_approve' for this id.
+        // log_agent_activity canonicalizes "test-agent" → "test-agent" (already canonical).
+        let conn = db.conn.lock().await;
+        let mut rows = conn.query(
+            "SELECT COUNT(*) FROM agent_activity WHERE action = 'entity_suggestion_approve' AND memory_ids = 'ref_sugg_3'",
+            libsql::params![],
+        ).await.unwrap();
+        let row = rows.next().await.unwrap().unwrap();
+        let count: i64 = row.get(0).unwrap();
+        assert_eq!(count, 1, "should log exactly once");
+    }
+
+    // ── dismiss_contradiction ────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn dismiss_contradiction_writes_and_returns_wrote_true() {
+        let (db, _tmp) = crate::db::tests::test_db().await;
+        let result = dismiss_contradiction(&db, "mem_any_source_id", "test-agent")
+            .await
+            .unwrap();
+        assert_eq!(result.source_id, "mem_any_source_id");
+        assert!(result.wrote);
+    }
+
+    #[tokio::test]
+    async fn dismiss_contradiction_logs_activity_once_per_call() {
+        let (db, _tmp) = crate::db::tests::test_db().await;
+        dismiss_contradiction(&db, "mem_one", "test-agent")
+            .await
+            .unwrap();
+        let conn = db.conn.lock().await;
+        let mut rows = conn
+            .query(
+                "SELECT COUNT(*) FROM agent_activity WHERE action = 'contradiction_dismiss' AND memory_ids = 'mem_one'",
+                libsql::params![],
+            )
+            .await
+            .unwrap();
+        let row = rows.next().await.unwrap().unwrap();
+        let count: i64 = row.get(0).unwrap();
+        assert_eq!(count, 1);
+    }
+
+    #[tokio::test]
+    async fn dismiss_contradiction_swallows_no_rows_matched() {
+        let (db, _tmp) = crate::db::tests::test_db().await;
+        // No contradiction rows seeded — DB method is silent-idempotent
+        let result = dismiss_contradiction(&db, "mem_no_contradictions", "test-agent")
+            .await
+            .unwrap();
+        assert!(
+            result.wrote,
+            "wrote=true even with no rows matched (best-effort signal per §3 caveat)"
         );
     }
 }

@@ -136,6 +136,24 @@ impl OriginClient {
         Self::parse_response(&bytes)
     }
 
+    /// POST request with empty body, deserialize JSON response.
+    /// Used for mutate endpoints where the id is in the path and no body is needed.
+    pub async fn post_empty<R: DeserializeOwned>(&self, path: &str) -> Result<R, OriginError> {
+        let url = format!("{}{}", self.base_url, path);
+        let agent = self.agent_name.clone();
+        let resp = self
+            .send_with_retry(|| {
+                let mut req = self.client.post(&url);
+                if let Some(a) = agent.as_deref() {
+                    req = req.header("x-agent-name", a);
+                }
+                req
+            })
+            .await?;
+        let bytes = Self::read_body(resp).await?;
+        Self::parse_response(&bytes)
+    }
+
     /// DELETE request, deserialize JSON response.
     pub async fn delete<R: DeserializeOwned>(&self, path: &str) -> Result<R, OriginError> {
         let url = format!("{}{}", self.base_url, path);
