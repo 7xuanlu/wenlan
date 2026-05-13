@@ -93,14 +93,15 @@ pub(crate) async fn process_refinement_queue(
         match proposal.action.as_str() {
             "dedup_merge" => {
                 // Stale v1 proposal — dismiss (distillation handles merges now)
-                db.resolve_refinement(&proposal.id, "dismissed").await?;
+                resolve_proposal(db, &proposal.id, ResolveStatus::Dismissed, "daemon").await?;
                 processed += 1;
             }
             "detect_contradiction" => {
                 if let Some(llm) = llm {
                     let contents = db.get_memory_contents(&proposal.source_ids).await?;
                     if contents.len() < 2 {
-                        db.resolve_refinement(&proposal.id, "dismissed").await?;
+                        resolve_proposal(db, &proposal.id, ResolveStatus::Dismissed, "daemon")
+                            .await?;
                         continue;
                     }
 
@@ -146,12 +147,23 @@ pub(crate) async fn process_refinement_queue(
 
                         match result {
                             ContradictionResult::Consistent => {
-                                db.resolve_refinement(&proposal.id, "dismissed").await?;
+                                resolve_proposal(
+                                    db,
+                                    &proposal.id,
+                                    ResolveStatus::Dismissed,
+                                    "daemon",
+                                )
+                                .await?;
                             }
                             ContradictionResult::Contradicts { explanation } => {
                                 log::info!("[refinery] contradiction detected: {}", explanation);
-                                db.resolve_refinement(&proposal.id, "awaiting_review")
-                                    .await?;
+                                resolve_proposal(
+                                    db,
+                                    &proposal.id,
+                                    ResolveStatus::AwaitingReview,
+                                    "daemon",
+                                )
+                                .await?;
                             }
                             ContradictionResult::Supersedes { merged_content } => {
                                 let tier = db.get_highest_tier(&proposal.source_ids).await?;
@@ -172,8 +184,7 @@ pub(crate) async fn process_refinement_queue(
             "suggest_entity" => {
                 // Entity suggestion: payload contains the suggested entity name.
                 // Mark as awaiting_review so the UI can surface it for approval.
-                db.resolve_refinement(&proposal.id, "awaiting_review")
-                    .await?;
+                resolve_proposal(db, &proposal.id, ResolveStatus::AwaitingReview, "daemon").await?;
                 log::info!(
                     "[refinery] entity suggestion queued for review: {:?}",
                     proposal.payload
@@ -270,6 +281,33 @@ mod tests {
         assert!(
             matches!(err, crate::error::OriginError::Validation(_)),
             "expected Validation, got {err:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn daemon_dismiss_logs_activity_via_convergence() {
+        let (db, _tmp) = test_db().await;
+        db.insert_refinement_proposal(
+            "ref_daemon_1",
+            "dedup_merge",
+            &["a".to_string(), "b".to_string()],
+            None,
+            0.5,
+        )
+        .await
+        .unwrap();
+
+        resolve_proposal(&db, "ref_daemon_1", ResolveStatus::Dismissed, "daemon")
+            .await
+            .unwrap();
+
+        let acts = db
+            .list_agent_activity(10, Some("daemon"), None)
+            .await
+            .unwrap_or_default();
+        assert!(
+            acts.iter().any(|a| a.action == "refinement_resolve"),
+            "daemon path should log refinement_resolve via convergence"
         );
     }
 
