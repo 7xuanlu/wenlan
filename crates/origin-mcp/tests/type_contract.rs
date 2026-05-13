@@ -1096,3 +1096,97 @@ async fn list_entity_suggestions_http_500() {
     let text = text_of(&result);
     assert!(text.to_lowercase().contains("error") || text.contains("500"));
 }
+
+// ===== list_pending_imports =====
+
+use origin_mcp::tools::ListPendingImportsParams;
+use origin_types::import::PendingImport;
+
+fn sample_pending_import(id: &str) -> PendingImport {
+    PendingImport {
+        id: id.into(),
+        vendor: "claude".into(),
+        stage: "ingest".into(),
+        source_path: "/tmp/import.zip".into(),
+        processed_conversations: 5,
+        total_conversations: Some(20),
+    }
+}
+
+#[tokio::test]
+async fn list_pending_imports_happy_path() {
+    let (mock, client) = setup().await;
+    Mock::given(method("GET"))
+        .and(path("/api/imports/pending"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(vec![sample_pending_import("imp_1")]),
+        )
+        .mount(&mock)
+        .await;
+
+    let server = make_server(client);
+    let result = server
+        .list_pending_imports_impl(ListPendingImportsParams {})
+        .await
+        .unwrap();
+    let text = text_of(&result);
+    assert!(text.contains("imp_1"));
+    assert!(text.contains("claude"));
+}
+
+#[tokio::test]
+async fn list_pending_imports_envelope_guard() {
+    let (mock, client) = setup().await;
+    Mock::given(method("GET"))
+        .and(path("/api/imports/pending"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({"items": []})))
+        .mount(&mock)
+        .await;
+
+    let server = make_server(client);
+    let result = server
+        .list_pending_imports_impl(ListPendingImportsParams {})
+        .await
+        .unwrap();
+    let text = text_of(&result);
+    assert!(
+        text.to_lowercase().contains("error") || text.contains("invalid"),
+        "expected error signal, got: {text}"
+    );
+}
+
+#[tokio::test]
+async fn list_pending_imports_empty() {
+    let (mock, client) = setup().await;
+    Mock::given(method("GET"))
+        .and(path("/api/imports/pending"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(Vec::<PendingImport>::new()))
+        .mount(&mock)
+        .await;
+
+    let server = make_server(client);
+    let result = server
+        .list_pending_imports_impl(ListPendingImportsParams {})
+        .await
+        .unwrap();
+    let text = text_of(&result);
+    assert!(text.contains("0 pending import"), "got: {text}");
+}
+
+#[tokio::test]
+async fn list_pending_imports_http_500() {
+    let (mock, client) = setup().await;
+    Mock::given(method("GET"))
+        .and(path("/api/imports/pending"))
+        .respond_with(ResponseTemplate::new(500))
+        .mount(&mock)
+        .await;
+
+    let server = make_server(client);
+    let result = server
+        .list_pending_imports_impl(ListPendingImportsParams {})
+        .await
+        .unwrap();
+    let text = text_of(&result);
+    assert!(text.to_lowercase().contains("error") || text.contains("500"));
+}

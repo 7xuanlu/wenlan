@@ -438,6 +438,9 @@ pub struct ListNurtureParams {
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct ListEntitySuggestionsParams {}
 
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct ListPendingImportsParams {}
+
 // ===== Internal Implementations =====
 
 fn format_capture_success(resp: &StoreMemoryResponse) -> String {
@@ -1294,6 +1297,24 @@ impl OriginMcpServer {
             pretty
         ))]))
     }
+
+    pub async fn list_pending_imports_impl(
+        &self,
+        _params: ListPendingImportsParams,
+    ) -> Result<CallToolResult, McpError> {
+        let resp: Vec<origin_types::import::PendingImport> =
+            match self.client.get("/api/imports/pending").await {
+                Ok(v) => v,
+                Err(e) => return Ok(tool_error(e, "list_pending_imports")),
+            };
+        let pretty = serde_json::to_string_pretty(&resp)
+            .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+        Ok(CallToolResult::success(vec![Content::text(format!(
+            "{} pending import(s)\n{}",
+            resp.len(),
+            pretty
+        ))]))
+    }
 }
 
 /// Build the `/api/pages/recent` URL with optional `limit` + `since_ms` query
@@ -1838,6 +1859,25 @@ impl OriginMcpServer {
         Parameters(params): Parameters<ListEntitySuggestionsParams>,
     ) -> Result<CallToolResult, McpError> {
         self.list_entity_suggestions_impl(params).await
+    }
+
+    #[tool(
+        description = "List in-flight chat-history imports awaiting processing or completion. \
+                       Use when the user asks 'what imports are running', 'is my Claude.ai \
+                       export done', or to surface import progress. Returns id, vendor, \
+                       stage, source path, processed/total conversation counts.",
+        annotations(
+            title = "List pending imports",
+            read_only_hint = true,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
+    )]
+    async fn list_pending_imports(
+        &self,
+        Parameters(params): Parameters<ListPendingImportsParams>,
+    ) -> Result<CallToolResult, McpError> {
+        self.list_pending_imports_impl(params).await
     }
 }
 
