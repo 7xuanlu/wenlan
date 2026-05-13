@@ -1620,7 +1620,7 @@ mod tests {
         .unwrap();
         let pending = db.get_pending_refinements().await.unwrap();
         assert_eq!(pending.len(), 1);
-        db.resolve_refinement("e2e_ref", "auto_applied")
+        db.resolve_refinement_if_open("e2e_ref", "auto_applied")
             .await
             .unwrap();
         assert!(db.get_pending_refinements().await.unwrap().is_empty());

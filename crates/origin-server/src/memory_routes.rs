@@ -1619,7 +1619,7 @@ pub async fn handle_approve_entity_suggestion(
         .await
         .map_err(|e| ServerError::Internal(e.to_string()))?;
 
-    db.resolve_refinement(&id, "completed")
+    db.resolve_refinement_if_open(&id, "completed")
         .await
         .map_err(|e| ServerError::Internal(e.to_string()))?;
 
@@ -1636,7 +1636,7 @@ pub async fn handle_dismiss_entity_suggestion(
 ) -> Result<Json<serde_json::Value>, ServerError> {
     let s = state.read().await;
     let db = s.db.as_ref().ok_or(ServerError::DbNotInitialized)?;
-    db.resolve_refinement(&id, "dismissed")
+    db.resolve_refinement_if_open(&id, "dismissed")
         .await
         .map_err(|e| ServerError::Internal(e.to_string()))?;
     Ok(Json(serde_json::json!({ "dismissed": true })))
@@ -3639,7 +3639,7 @@ mod dismiss_contradiction_tests {
             .await
             .unwrap();
             // Promote to awaiting_review (default insert status is 'pending').
-            db.resolve_refinement("ref_contradiction_1", "awaiting_review")
+            db.resolve_refinement_if_open("ref_contradiction_1", "awaiting_review")
                 .await
                 .unwrap();
         }
