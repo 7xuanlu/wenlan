@@ -5,7 +5,7 @@ description: >
   relation conflicts, contradictions, entity suggestions) and lets the user dismiss noise.
   Invoked as `/refinery`. Use when the user wants to audit what the daemon's refinery
   has queued for review.
-allowed-tools: ["mcp__plugin_origin_origin__list_refinements", "mcp__plugin_origin_origin__reject_refinement"]
+allowed-tools: ["mcp__plugin_origin_origin__list_refinements", "mcp__plugin_origin_origin__reject_refinement", "mcp__plugin_origin_origin__accept_refinement"]
 ---
 
 # /refinery
@@ -41,17 +41,23 @@ For each proposal, present:
   - `dedup_merge`: no payload — historical (auto-dismissed by daemon)
 
 Then offer per-item:
-- **Keep** → no-op (see notice below)
+- **Accept** → `accept_refinement(id="<id>")`: applies the change with sensible defaults (see below)
 - **Dismiss** → `reject_refinement(id="<id>")`
-
-## Accept is not in scope yet
-
-This skill exposes **list + dismiss only**. There is no accept verb in this version.
-Keeping a proposal is a no-op — it stays in the queue for a future session (or for
-the desktop app, when the accept-side spec lands).
 
 **Only dismiss when you are confident the proposal is wrong.** Do not develop a
 habit of dismissing-by-default; that would skew the queue toward attrition.
+
+## Accept a proposal
+
+Use `accept_refinement(id)` to apply the proposed change using sensible defaults.
+
+- **entity_merge:** existing entity wins as canonical. The new entity folds in as an alias. All relations, observations, and memories re-point to the canonical entity.
+- **relation_conflict:** new relation supersedes. Old relation is deleted.
+- **detect_contradiction:** previously-stored memory flagged with `pending_revision=1` for human revisit. The new memory is left unchanged. Accept here means "the contradiction is genuine and the established memory needs attention", not "the new memory wins".
+
+If the default is wrong for your case, reject instead and edit manually via the relevant memory, entity, or relation endpoint.
+
+`suggest_entity` and `dedup_merge` proposals return 422 on accept. `suggest_entity` is reserved for a future producer. `dedup_merge` is deprecated (distillation handles it now). Reject those instead.
 
 ## When to use
 

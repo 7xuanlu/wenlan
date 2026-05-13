@@ -257,6 +257,10 @@ pub fn build_router(state: SharedState) -> Router {
             "/api/refinery/queue/{id}/reject",
             post(refinery_routes::handle_reject_refinement),
         )
+        .route(
+            "/api/refinery/queue/{id}/accept",
+            post(refinery_routes::handle_accept_refinement),
+        )
         // Sources
         .route(
             "/api/sources",

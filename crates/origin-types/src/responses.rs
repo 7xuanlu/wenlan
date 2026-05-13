@@ -606,6 +606,12 @@ pub struct RejectRefinementResponse {
     pub id: String,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AcceptRefinementResponse {
+    pub id: String,
+    pub action_applied: String,
+}
+
 #[cfg(test)]
 mod refinement_wire_tests {
     use super::*;
