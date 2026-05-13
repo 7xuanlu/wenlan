@@ -14784,6 +14784,36 @@ impl MemoryDB {
         Ok(results)
     }
 
+    /// Like `list_pages` but filters to pages flagged stale and not user-edited.
+    /// Ordered by most-stale-first (`sources_updated_count` desc) then oldest-write-first.
+    /// Used by the refinery refresh path to prioritize work and skip locked pages.
+    pub async fn list_pages_stale(
+        &self,
+        status: &str,
+        limit: i64,
+        offset: i64,
+    ) -> Result<Vec<Page>, OriginError> {
+        let conn = self.conn.lock().await;
+        let mut rows = conn
+            .query(
+                "SELECT id, title, summary, content, entity_id, domain, source_memory_ids, version, status, created_at, last_compiled, last_modified, COALESCE(sources_updated_count, 0), stale_reason, COALESCE(user_edited, 0), COALESCE(changelog, '[]')
+                 FROM pages
+                 WHERE status = ?1
+                   AND stale_reason IS NOT NULL
+                   AND COALESCE(user_edited, 0) = 0
+                 ORDER BY COALESCE(sources_updated_count, 0) DESC, last_modified ASC
+                 LIMIT ?2 OFFSET ?3",
+                libsql::params![status, limit, offset],
+            )
+            .await
+            .map_err(|e| OriginError::VectorDb(format!("list_pages_stale: {e}")))?;
+        let mut results = Vec::new();
+        while let Ok(Some(row)) = rows.next().await {
+            results.push(Self::row_to_page(&row)?);
+        }
+        Ok(results)
+    }
+
     /// List pages, optionally filtered by domain.
     pub async fn list_pages_by_domain(
         &self,
@@ -28811,6 +28841,45 @@ pub(crate) mod tests {
             matches!(err, OriginError::NotFound(_)),
             "expected NotFound on re-call, got {:?}",
             err
+        );
+    }
+
+    #[tokio::test]
+    async fn list_pages_stale_filters_and_orders() {
+        let (db, _tmp) = test_db().await;
+        let now = chrono::Utc::now().to_rfc3339();
+
+        // Insert 3 pages: A stale untouched, B stale user-edited, C not stale.
+        db.insert_page("page_a", "A", None, "body a", None, None, &["mem_1"], &now)
+            .await
+            .unwrap();
+        db.insert_page("page_b", "B", None, "body b", None, None, &["mem_2"], &now)
+            .await
+            .unwrap();
+        db.insert_page("page_c", "C", None, "body c", None, None, &["mem_3"], &now)
+            .await
+            .unwrap();
+
+        db.set_page_stale("page_a", "source_updated").await.unwrap();
+        db.set_page_stale("page_b", "source_updated").await.unwrap();
+        // Mark B as user_edited via fs_edit update.
+        db.try_update_page_content_with_changelog(
+            "page_b",
+            "user prose",
+            &["mem_2"],
+            "fs_edit",
+            false,
+            "User-edited content",
+        )
+        .await
+        .unwrap();
+
+        let stale = db.list_pages_stale("active", 10, 0).await.unwrap();
+        let ids: Vec<&str> = stale.iter().map(|p| p.id.as_str()).collect();
+        assert_eq!(
+            ids,
+            vec!["page_a"],
+            "only stale, non-user-edited pages returned"
         );
     }
 }
