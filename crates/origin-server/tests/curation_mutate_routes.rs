@@ -11,8 +11,8 @@ mod common;
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use origin_types::{
-    EntitySuggestionApproveResponse, EntitySuggestionDismissResponse, RevisionAcceptResponse,
-    RevisionDismissResponse,
+    ContradictionDismissResponse, EntitySuggestionApproveResponse, EntitySuggestionDismissResponse,
+    RevisionAcceptResponse, RevisionDismissResponse,
 };
 use tower::ServiceExt;
 
@@ -467,4 +467,104 @@ async fn dismiss_revision_threads_x_agent_name() {
     let count =
         common::count_activity_for_action_and_agent(&db, "revision_dismiss", "zed-test").await;
     assert_eq!(count, 1);
+}
+
+// ── dismiss_contradiction ─────────────────────────────────────────────────────
+
+#[tokio::test]
+async fn dismiss_contradiction_returns_200_with_typed_response_even_for_unknown_id() {
+    let (router, _tmp, _db) = common::test_app().await;
+    let response = router
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/memory/contradiction/mem_unknown/dismiss")
+                .header("x-agent-name", "test-agent")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let parsed: ContradictionDismissResponse = body_as_json(response).await;
+    assert_eq!(parsed.source_id, "mem_unknown");
+    assert!(parsed.wrote);
+}
+
+#[tokio::test]
+async fn dismiss_contradiction_threads_x_agent_name() {
+    let (router, _tmp, db) = common::test_app().await;
+    router
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/memory/contradiction/mem_attr/dismiss")
+                .header("x-agent-name", "mcp-test")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let count =
+        common::count_activity_for_action_and_agent(&db, "contradiction_dismiss", "mcp-test").await;
+    assert_eq!(count, 1);
+}
+
+#[tokio::test]
+async fn dismiss_contradiction_idempotent_re_call_remains_wrote_true() {
+    let (router, _tmp, _db) = common::test_app().await;
+    for _ in 0..3 {
+        let response = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/memory/contradiction/mem_idem/dismiss")
+                    .header("x-agent-name", "test-agent")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let parsed: ContradictionDismissResponse = body_as_json(response).await;
+        assert!(parsed.wrote);
+    }
+}
+
+#[tokio::test]
+async fn dismiss_contradiction_flips_awaiting_review_row_to_dismissed() {
+    let (router, _tmp, db) = common::test_app().await;
+    // Seed a detect_contradiction proposal (status=pending), then promote to awaiting_review.
+    db.insert_refinement_proposal(
+        "ref_contra_1",
+        "detect_contradiction",
+        &["mem_target".to_string()],
+        None,
+        0.9,
+    )
+    .await
+    .unwrap();
+    db.resolve_refinement_if_open("ref_contra_1", "awaiting_review")
+        .await
+        .unwrap();
+
+    router
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/memory/contradiction/mem_target/dismiss")
+                .header("x-agent-name", "test-agent")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    let proposal = db
+        .get_refinement_proposal("ref_contra_1")
+        .await
+        .unwrap()
+        .expect("ref_contra_1 must exist after dismiss");
+    assert_eq!(proposal.status, "dismissed");
 }

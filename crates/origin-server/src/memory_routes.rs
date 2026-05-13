@@ -3,7 +3,7 @@ use crate::error::ServerError;
 use crate::state::ServerState;
 use axum::{
     extract::{Path, State},
-    http::{HeaderMap, StatusCode},
+    http::HeaderMap,
     response::Json,
 };
 use origin_core::sources::compute_effective_confidence;
@@ -1514,16 +1514,16 @@ pub async fn handle_dismiss_revision(
 /// Returns 200 OK whether or not any rows were matched (idempotent).
 pub async fn handle_dismiss_contradiction(
     State(state): State<Arc<RwLock<ServerState>>>,
+    headers: axum::http::HeaderMap,
     Path(source_id): Path<String>,
-) -> Result<StatusCode, ServerError> {
+) -> Result<Json<origin_types::ContradictionDismissResponse>, ServerError> {
     let db = {
         let s = state.read().await;
-        s.db.clone().ok_or(ServerError::DbNotInitialized)?
+        s.db.as_ref().ok_or(ServerError::DbNotInitialized)?.clone()
     };
-    db.dismiss_contradiction_for_source(&source_id)
-        .await
-        .map_err(|e| ServerError::Internal(e.to_string()))?;
-    Ok(StatusCode::OK)
+    let agent = extract_agent_name(&headers, None);
+    let result = origin_core::post_write::dismiss_contradiction(&db, &source_id, &agent).await?;
+    Ok(Json(result))
 }
 
 // ===== Enrichment Status =====

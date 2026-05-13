@@ -806,6 +806,23 @@ pub async fn dismiss_pending_revision(
     })
 }
 
+/// Dismiss all awaiting-review contradiction flags for a memory. Canonical
+/// entry for both agent-triggered (`/api/memory/contradiction/{source_id}/dismiss`)
+/// and daemon-internal triggers. `wrote: true` is best-effort: the DB method
+/// silently no-ops when no rows match. See spec §3 for the caveat.
+pub async fn dismiss_contradiction(
+    db: &MemoryDB,
+    source_id: &str,
+    agent: &str,
+) -> Result<origin_types::ContradictionDismissResponse, OriginError> {
+    db.dismiss_contradiction_for_source(source_id).await?;
+    log_activity_best_effort(db, agent, "contradiction_dismiss", source_id).await;
+    Ok(origin_types::ContradictionDismissResponse {
+        source_id: source_id.to_string(),
+        wrote: true,
+    })
+}
+
 fn is_valid_snake_case_relation(s: &str) -> bool {
     if s.is_empty() {
         return false;
@@ -1746,5 +1763,49 @@ mod tests {
         let row = rows.next().await.unwrap().unwrap();
         let count: i64 = row.get(0).unwrap();
         assert_eq!(count, 1, "should log exactly once");
+    }
+
+    // ── dismiss_contradiction ────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn dismiss_contradiction_writes_and_returns_wrote_true() {
+        let (db, _tmp) = crate::db::tests::test_db().await;
+        let result = dismiss_contradiction(&db, "mem_any_source_id", "test-agent")
+            .await
+            .unwrap();
+        assert_eq!(result.source_id, "mem_any_source_id");
+        assert!(result.wrote);
+    }
+
+    #[tokio::test]
+    async fn dismiss_contradiction_logs_activity_once_per_call() {
+        let (db, _tmp) = crate::db::tests::test_db().await;
+        dismiss_contradiction(&db, "mem_one", "test-agent")
+            .await
+            .unwrap();
+        let conn = db.conn.lock().await;
+        let mut rows = conn
+            .query(
+                "SELECT COUNT(*) FROM agent_activity WHERE action = 'contradiction_dismiss' AND memory_ids = 'mem_one'",
+                libsql::params![],
+            )
+            .await
+            .unwrap();
+        let row = rows.next().await.unwrap().unwrap();
+        let count: i64 = row.get(0).unwrap();
+        assert_eq!(count, 1);
+    }
+
+    #[tokio::test]
+    async fn dismiss_contradiction_swallows_no_rows_matched() {
+        let (db, _tmp) = crate::db::tests::test_db().await;
+        // No contradiction rows seeded — DB method is silent-idempotent
+        let result = dismiss_contradiction(&db, "mem_no_contradictions", "test-agent")
+            .await
+            .unwrap();
+        assert!(
+            result.wrote,
+            "wrote=true even with no rows matched (best-effort signal per §3 caveat)"
+        );
     }
 }
