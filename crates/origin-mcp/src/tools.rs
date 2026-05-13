@@ -1784,7 +1784,7 @@ impl OriginMcpServer {
     // --- Curation read tools ---
 
     #[tool(
-        description = "List nurture cards — memories flagged for human attention because they are unconfirmed, low-confidence, or have been queued for review by the daemon. Use when the user wants to audit what needs review: phrases like 'what needs my attention', 'unconfirmed memories', 'nurture queue'. Returns memory items with metadata. Optional `limit` caps results (default 50, max 500). Optional `domain` restricts to one topic space. Distinct from `list_pending` (which lists all unconfirmed captures) and `list_refinements` (which lists daemon-generated merge/conflict proposals).",
+        description = "List nurture cards: memories flagged for human attention because they are unconfirmed, low-confidence, or have been queued for review by the daemon. Use when the user wants to audit what needs review: phrases like 'what needs my attention', 'unconfirmed memories', 'nurture queue'. Returns memory items with metadata. Optional `limit` caps results (default 50, max 500). Optional `domain` restricts to one topic space. Distinct from `list_pending` (which lists all unconfirmed captures) and `list_refinements` (which lists daemon-generated merge/conflict proposals).",
         annotations(
             title = "List nurture cards",
             read_only_hint = true,
