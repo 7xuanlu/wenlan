@@ -16843,6 +16843,7 @@ impl MemoryDB {
             .await
             .map_err(|e| OriginError::VectorDb(format!("walk_supersede_chain query: {}", e)))?;
 
+        #[allow(clippy::type_complexity)]
         let mut raw: Vec<(
             String,
             i64,
@@ -16903,19 +16904,15 @@ impl MemoryDB {
         let len = raw.len();
         let mut entries: Vec<MemoryRevisionEntry> = raw
             .into_iter()
-            .enumerate()
             .map(
                 |(
-                    _i,
-                    (
-                        sid,
-                        depth,
-                        title,
-                        content_preview,
-                        last_modified,
-                        source_agent,
-                        supersede_mode,
-                    ),
+                    sid,
+                    depth,
+                    title,
+                    content_preview,
+                    last_modified,
+                    source_agent,
+                    supersede_mode,
                 )| {
                     // delta_summary is None for deepest; otherwise compare with i+1.
                     // We don't have the full content here, only the 200-char preview,
