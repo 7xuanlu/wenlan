@@ -27921,6 +27921,48 @@ pub(crate) mod tests {
     }
 
     #[tokio::test]
+    async fn merge_entities_repoints_memories() {
+        let (db, _tmp) = test_db().await;
+        let (canonical, alias) = seed_two_entities(&db).await;
+
+        // Seed a memory row whose entity_id points at the alias entity
+        let source_id = format!("mem_{}", uuid::Uuid::new_v4().simple());
+        {
+            let conn = db.conn.lock().await;
+            conn.execute(
+                "INSERT INTO memories (id, content, source, source_id, title, chunk_index, \
+                                        last_modified, chunk_type, entity_id) \
+                 VALUES (?1, ?2, 'memory', ?3, 'test', 0, 1712707200, 'text', ?4)",
+                libsql::params![
+                    source_id.clone(),
+                    "test content".to_string(),
+                    source_id.clone(),
+                    alias.clone()
+                ],
+            )
+            .await
+            .unwrap();
+        }
+
+        db.merge_entities(&canonical, &alias).await.unwrap();
+
+        let conn = db.conn.lock().await;
+        let mut rows = conn
+            .query(
+                "SELECT entity_id FROM memories WHERE source_id = ?1",
+                libsql::params![source_id],
+            )
+            .await
+            .unwrap();
+        let row = rows.next().await.unwrap().unwrap();
+        let eid: String = row.get(0).unwrap();
+        assert_eq!(
+            eid, canonical,
+            "memory entity_id should re-point to canonical"
+        );
+    }
+
+    #[tokio::test]
     async fn merge_entities_registers_alias_name() {
         let (db, _tmp) = test_db().await;
         let (canonical, alias) = seed_two_entities(&db).await;
