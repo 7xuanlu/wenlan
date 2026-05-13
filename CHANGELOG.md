@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.5.3](https://github.com/7xuanlu/origin/compare/v0.5.2...v0.5.3) (2026-05-13)
+
+
+### Bug Fixes
+
+* get_page_sources MCP tool + auto-commit retry (close skill ↔ MCP boundary) ([#85](https://github.com/7xuanlu/origin/issues/85)) ([101b595](https://github.com/7xuanlu/origin/commit/101b59535e8a14836801f8a9b5054af387510377))
+* memory + page revision surfacing (Phase 1 of Task [#57](https://github.com/7xuanlu/origin/issues/57)) ([#91](https://github.com/7xuanlu/origin/issues/91)) ([02ddd43](https://github.com/7xuanlu/origin/commit/02ddd43d97f7b4a8d83af5ed24c4f15a437455df))
+* **memory_routes:** drop silent topic-match upsert from write path ([#84](https://github.com/7xuanlu/origin/issues/84)) ([46175a0](https://github.com/7xuanlu/origin/commit/46175a0dfc433272994def751828daf8f77e72f7))
+* **topic_match:** entity match must also satisfy similarity threshold ([#83](https://github.com/7xuanlu/origin/issues/83)) ([0670772](https://github.com/7xuanlu/origin/commit/067077225ac619d8e0c69deb54a9a0d3d4ec2a01))
+
 ## [0.5.2](https://github.com/7xuanlu/origin/compare/v0.5.1...v0.5.2) (2026-05-12)
 
 
