@@ -899,6 +899,7 @@ impl OriginMcpServer {
         let req = SearchPagesRequest {
             query: params.query,
             limit: params.limit,
+            page_type: None,
         };
         let resp: SearchPagesResponse = match self.client.post("/api/pages/search", &req).await {
             Ok(r) => r,
@@ -2998,6 +2999,7 @@ mod tests {
         let req = SearchPagesRequest {
             query: params.query,
             limit: params.limit,
+            page_type: None,
         };
         let json = serde_json::to_value(&req).unwrap();
         assert_eq!(json["query"], "mutex");
