@@ -12243,6 +12243,55 @@ impl MemoryDB {
         Ok(())
     }
 
+    /// Fetch a single refinement proposal by id, regardless of status.
+    pub async fn get_refinement_proposal(
+        &self,
+        id: &str,
+    ) -> Result<Option<RefinementProposal>, OriginError> {
+        let conn = self.conn.lock().await;
+        let mut rows = conn
+            .query(
+                "SELECT id, action, source_ids, payload, confidence, status, created_at
+                 FROM refinement_queue WHERE id = ?1 LIMIT 1",
+                libsql::params![id.to_string()],
+            )
+            .await
+            .map_err(|e| OriginError::VectorDb(format!("get_refinement_proposal: {}", e)))?;
+
+        if let Some(row) = rows
+            .next()
+            .await
+            .map_err(|e| OriginError::VectorDb(e.to_string()))?
+        {
+            let source_ids_json: String = row
+                .get(2)
+                .map_err(|e| OriginError::VectorDb(e.to_string()))?;
+            let source_ids: Vec<String> =
+                serde_json::from_str(&source_ids_json).unwrap_or_default();
+            Ok(Some(RefinementProposal {
+                id: row
+                    .get(0)
+                    .map_err(|e| OriginError::VectorDb(e.to_string()))?,
+                action: row
+                    .get(1)
+                    .map_err(|e| OriginError::VectorDb(e.to_string()))?,
+                source_ids,
+                payload: row.get(3).unwrap_or(None),
+                confidence: row
+                    .get(4)
+                    .map_err(|e| OriginError::VectorDb(e.to_string()))?,
+                status: row
+                    .get(5)
+                    .map_err(|e| OriginError::VectorDb(e.to_string()))?,
+                created_at: row
+                    .get(6)
+                    .map_err(|e| OriginError::VectorDb(e.to_string()))?,
+            }))
+        } else {
+            Ok(None)
+        }
+    }
+
     /// Resolve a refinement proposal with a new status.
     pub async fn resolve_refinement(&self, id: &str, status: &str) -> Result<(), OriginError> {
         let conn = self.conn.lock().await;
