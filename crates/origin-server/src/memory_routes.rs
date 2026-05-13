@@ -1961,7 +1961,11 @@ pub async fn handle_search_pages(
     let s = state.read().await;
     let db = s.db.as_ref().ok_or(ServerError::DbNotInitialized)?;
     let results = db
-        .search_pages(&req.query, req.limit.unwrap_or(20))
+        .search_pages(
+            &req.query,
+            req.limit.unwrap_or(20),
+            req.page_type.as_deref(),
+        )
         .await
         .map_err(|e| ServerError::SearchFailed(e.to_string()))?;
     Ok(Json(serde_json::json!({ "pages": results })))
@@ -2000,6 +2004,8 @@ pub struct SearchPagesRequest {
     pub query: String,
     #[serde(default)]
     pub limit: Option<usize>,
+    #[serde(default)]
+    pub page_type: Option<String>,
 }
 
 /// POST /api/pages/export

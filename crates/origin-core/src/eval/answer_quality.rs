@@ -762,7 +762,7 @@ async fn generate_e2e_answers_for_question(
     let mut structured_parts: Vec<String> = Vec::new();
 
     // Concept articles (like chat-context's "Compiled Knowledge" section)
-    let concepts = db.search_pages(question, 3).await.unwrap_or_default();
+    let concepts = db.search_pages(question, 3, None).await.unwrap_or_default();
     if !concepts.is_empty() {
         structured_parts.push("## Compiled Knowledge".to_string());
         for c in &concepts {
@@ -1112,7 +1112,7 @@ async fn build_structured_context(
         .unwrap_or_else(|| crate::tuning::DistillationConfig::default().page_min_overlap);
 
     let mut parts: Vec<String> = Vec::new();
-    let raw_concepts = db.search_pages(question, 3).await.unwrap_or_default();
+    let raw_concepts = db.search_pages(question, 3, None).await.unwrap_or_default();
     let concepts = filter_pages_by_source_overlap(&raw_concepts, &search_source_ids, min_overlap);
 
     if !raw_concepts.is_empty() {

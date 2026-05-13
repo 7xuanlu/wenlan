@@ -15166,7 +15166,12 @@ impl MemoryDB {
     /// Embeds the query, runs DiskANN vector search on page embeddings
     /// (title+summary), runs FTS5 MATCH on page content, then merges
     /// results with Reciprocal Rank Fusion (same pattern as search_memory).
-    pub async fn search_pages(&self, query: &str, limit: usize) -> Result<Vec<Page>, OriginError> {
+    pub async fn search_pages(
+        &self,
+        query: &str,
+        limit: usize,
+        page_type: Option<&str>,
+    ) -> Result<Vec<Page>, OriginError> {
         // Embed query before acquiring conn lock (same pattern as search_memory)
         let embedding = self.get_or_compute_embedding(query)?;
         let vec_str = Self::vec_to_sql(&embedding);
@@ -15180,19 +15185,34 @@ impl MemoryDB {
                               COALESCE(c.sources_updated_count, 0), c.stale_reason, \
                               COALESCE(c.user_edited, 0)";
 
+        // Optional page_type clause: pages store their category in `domain`.
+        // When Some("recap") is passed, only pages with domain='recap' are returned.
+        let type_clause = if page_type.is_some() {
+            " AND c.domain = ?3"
+        } else {
+            ""
+        };
+
         // --- Vector search via DiskANN index ---
         let mut vector_results: Vec<(String, f64, Page)> = Vec::new();
         let vec_sql = format!(
             "SELECT {}, vector_distance_cos(c.embedding, vector32(?1)) AS dist \
              FROM vector_top_k('idx_concepts_embedding', vector32(?1), ?2) AS vt \
              JOIN pages c ON c.rowid = vt.id \
-             WHERE c.status = 'active'",
+             WHERE c.status = 'active'{type_clause}",
             concept_select,
         );
-        match conn
-            .query(&vec_sql, libsql::params![vec_str, fetch_limit])
+        let vec_result = if let Some(pt) = page_type {
+            conn.query(
+                &vec_sql,
+                libsql::params![vec_str.clone(), fetch_limit, pt.to_string()],
+            )
             .await
-        {
+        } else {
+            conn.query(&vec_sql, libsql::params![vec_str, fetch_limit])
+                .await
+        };
+        match vec_result {
             Ok(mut rows) => {
                 while let Ok(Some(row)) = rows.next().await {
                     match Self::row_to_page(&row) {
@@ -15218,16 +15238,23 @@ impl MemoryDB {
             "SELECT {} \
              FROM pages c \
              JOIN pages_fts f ON c.rowid = f.rowid \
-             WHERE pages_fts MATCH ?1 AND c.status = 'active' \
+             WHERE pages_fts MATCH ?1 AND c.status = 'active'{type_clause} \
              ORDER BY rank LIMIT ?2",
             concept_select,
         );
         let fts_queries = vec![query.to_string(), Self::fts_or_query(query)];
         for fts_q in &fts_queries {
-            match conn
-                .query(&fts_sql, libsql::params![fts_q.clone(), fetch_limit])
+            let fts_result = if let Some(pt) = page_type {
+                conn.query(
+                    &fts_sql,
+                    libsql::params![fts_q.clone(), fetch_limit, pt.to_string()],
+                )
                 .await
-            {
+            } else {
+                conn.query(&fts_sql, libsql::params![fts_q.clone(), fetch_limit])
+                    .await
+            };
+            match fts_result {
                 Ok(mut rows) => {
                     while let Ok(Some(row)) = rows.next().await {
                         if let Ok(page) = Self::row_to_page(&row) {
@@ -22669,7 +22696,7 @@ pub(crate) mod tests {
         .await
         .unwrap();
 
-        let results = db.search_pages("DiskANN vector", 10).await.unwrap();
+        let results = db.search_pages("DiskANN vector", 10, None).await.unwrap();
         assert!(!results.is_empty(), "should find page via FTS");
         assert_eq!(results[0].id, "c_search");
     }
@@ -22693,7 +22720,7 @@ pub(crate) mod tests {
 
         // Query with different words than the page (no keyword overlap)
         let results = db
-            .search_pages("what databases does the project use", 10)
+            .search_pages("what databases does the project use", 10, None)
             .await
             .unwrap();
         assert!(
@@ -22701,6 +22728,89 @@ pub(crate) mod tests {
             "should find page via vector similarity even without keyword match"
         );
         assert_eq!(results[0].id, "c_vec");
+    }
+
+    #[tokio::test]
+    async fn search_pages_filters_by_page_type() {
+        let (db, _dir) = test_db().await;
+        let now = chrono::Utc::now().to_rfc3339();
+
+        // Seed 3 pages with different domain values (domain is the type classifier on pages).
+        db.insert_page(
+            "p_recap",
+            "Session Recap: Work in Progress",
+            Some("A summary of recent work"),
+            "Detailed recap content of recent session activity.",
+            None,
+            Some("recap"),
+            &["m1"],
+            &now,
+        )
+        .await
+        .unwrap();
+
+        db.insert_page(
+            "p_decision",
+            "Decision: Use libSQL for Storage",
+            Some("Storage architecture decision"),
+            "We decided to use libSQL because of vector + FTS support.",
+            None,
+            Some("decision"),
+            &["m2"],
+            &now,
+        )
+        .await
+        .unwrap();
+
+        db.insert_page(
+            "p_generic",
+            "Architecture Overview",
+            Some("System architecture notes"),
+            "Overview of the system architecture and components.",
+            None,
+            Some("architecture"),
+            &["m3"],
+            &now,
+        )
+        .await
+        .unwrap();
+
+        // Filter by page_type="recap" — should return only p_recap.
+        let recap_results = db
+            .search_pages("recent work session summary", 10, Some("recap"))
+            .await
+            .unwrap();
+        assert_eq!(
+            recap_results.len(),
+            1,
+            "expected 1 recap page, got {}",
+            recap_results.len()
+        );
+        assert_eq!(recap_results[0].id, "p_recap");
+
+        // Filter by page_type="decision" — should return only p_decision.
+        let decision_results = db
+            .search_pages("storage architecture libSQL", 10, Some("decision"))
+            .await
+            .unwrap();
+        assert_eq!(
+            decision_results.len(),
+            1,
+            "expected 1 decision page, got {}",
+            decision_results.len()
+        );
+        assert_eq!(decision_results[0].id, "p_decision");
+
+        // No filter — should include pages across different domains.
+        // Use a broad query to maximise coverage; at minimum the closest-matching page returns.
+        let all_results = db
+            .search_pages("architecture system recap decision", 10, None)
+            .await
+            .unwrap();
+        assert!(
+            !all_results.is_empty(),
+            "expected at least 1 page without filter"
+        );
     }
 
     #[tokio::test]

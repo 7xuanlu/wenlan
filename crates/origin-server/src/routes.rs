@@ -354,7 +354,7 @@ pub async fn handle_chat_context(
 
     let page_results: Vec<String> =
         if tier_allowed(&classification.trust_level, 2) && query != "recent context" {
-            let raw_pages = db.search_pages(query, 3).await.unwrap_or_default();
+            let raw_pages = db.search_pages(query, 3, None).await.unwrap_or_default();
             let pages = origin_core::pages::filter_pages_by_source_overlap(
                 &raw_pages,
                 &search_source_ids,

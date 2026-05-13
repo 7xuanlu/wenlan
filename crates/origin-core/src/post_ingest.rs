@@ -534,7 +534,7 @@ pub(crate) async fn check_page_contradiction(
         .take(15)
         .collect::<Vec<_>>()
         .join(" ");
-    let concepts = db.search_pages(&query, 3).await.unwrap_or_default();
+    let concepts = db.search_pages(&query, 3, None).await.unwrap_or_default();
     if concepts.is_empty() {
         return Ok(0);
     }

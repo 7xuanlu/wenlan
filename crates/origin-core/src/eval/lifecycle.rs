@@ -442,7 +442,7 @@ async fn measure_phase(
 
         // Combined recall: search_memory ∪ concept source_ids (simulates chat-context Tier 2.5 + 3)
         if should_search_concepts {
-            let concepts = db.search_pages(query, 3).await.unwrap_or_default();
+            let concepts = db.search_pages(query, 3, None).await.unwrap_or_default();
             let mut combined: Vec<String> = Vec::new();
             for concept in &concepts {
                 for sid in &concept.source_memory_ids {
