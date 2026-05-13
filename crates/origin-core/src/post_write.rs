@@ -1486,7 +1486,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn approve_entity_suggestion_resolves_existing_entity_when_alias_hits() {
+    async fn approve_entity_suggestion_resolves_existing_entity_when_exact_name_matches() {
         let (db, _tmp) = crate::db::tests::test_db().await;
         // Pre-create an entity with name "Acme Corp"
         db.create_entity("Acme Corp", "manual", None).await.unwrap();
