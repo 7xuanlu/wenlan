@@ -249,6 +249,17 @@ pub struct CreateObservationParams {
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct ConfirmEntityParams {
+    pub entity_id: String,
+    #[serde(default = "default_confirmed")]
+    pub confirmed: bool,
+}
+
+fn default_confirmed() -> bool {
+    true
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct CreatePageParams {
     #[schemars(
         description = "Short noun phrase that names the page (e.g. 'Origin daemon architecture')."
@@ -836,6 +847,29 @@ impl OriginMcpServer {
         Ok(CallToolResult::success(vec![Content::text(text)]))
     }
 
+    pub async fn confirm_entity_impl(
+        &self,
+        params: ConfirmEntityParams,
+    ) -> Result<CallToolResult, McpError> {
+        let req = origin_types::requests::ConfirmEntityRequest {
+            confirmed: params.confirmed,
+        };
+        let path = format!("/api/memory/entities/{}/confirm", params.entity_id);
+        let _: origin_types::responses::SuccessResponse = match self.client.put(&path, &req).await {
+            Ok(r) => r,
+            Err(e) => return Ok(tool_error(e, "confirm_entity")),
+        };
+        Ok(CallToolResult::success(vec![Content::text(format!(
+            "Entity {} {}",
+            params.entity_id,
+            if params.confirmed {
+                "confirmed"
+            } else {
+                "unconfirmed"
+            }
+        ))]))
+    }
+
     pub async fn create_page_impl(
         &self,
         params: CreatePageParams,
@@ -1304,6 +1338,23 @@ impl OriginMcpServer {
         Parameters(params): Parameters<CreateObservationParams>,
     ) -> Result<CallToolResult, McpError> {
         self.create_observation_impl(params).await
+    }
+
+    #[tool(
+        description = "Confirm (or unconfirm) an entity in the knowledge graph — flips its stability flag. Use when the user explicitly affirms or revokes an extracted entity. Defaults confirmed=true if omitted.",
+        annotations(
+            title = "Confirm entity",
+            read_only_hint = false,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
+    )]
+    async fn confirm_entity(
+        &self,
+        Parameters(params): Parameters<ConfirmEntityParams>,
+    ) -> Result<CallToolResult, McpError> {
+        self.confirm_entity_impl(params).await
     }
 
     #[tool(
@@ -3132,6 +3183,7 @@ mod tests {
             "create_entity",
             "create_relation",
             "create_observation",
+            "confirm_entity",
             "create_page",
             "update_page",
             "delete_page",
