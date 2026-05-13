@@ -173,7 +173,9 @@ pub async fn normalize_non_vocabulary_relations(db: &MemoryDB) -> Result<usize, 
         if rel_type.is_empty() {
             continue;
         }
-        let canonical = db.resolve_relation_type(rel_type).await?;
+        let Some(canonical) = db.resolve_relation_type(rel_type).await? else {
+            continue;
+        };
         if canonical != *rel_type {
             let conn = db.conn.lock().await;
             // Use UPDATE OR IGNORE to skip rows that would violate the unique
@@ -631,29 +633,32 @@ mod tests {
         // "Working_At" should resolve to "works_on" (alias match, case-insensitive)
         let result = db.resolve_relation_type("Working_At").await.unwrap();
         assert_eq!(
-            result, "works_on",
+            result,
+            Some("works_on".to_string()),
             "Working_At should resolve to works_on via case-insensitive alias lookup"
         );
 
         // "WORKS_ON" is itself the canonical, just uppercased — should return "works_on"
         let result = db.resolve_relation_type("WORKS_ON").await.unwrap();
         assert_eq!(
-            result, "works_on",
+            result,
+            Some("works_on".to_string()),
             "WORKS_ON should resolve to works_on via canonical lookup (lowercased)"
         );
 
         // Identity: already canonical lowercase
         let result = db.resolve_relation_type("works_on").await.unwrap();
         assert_eq!(
-            result, "works_on",
+            result,
+            Some("works_on".to_string()),
             "works_on should return itself unchanged"
         );
 
-        // Novel type not in vocabulary: return lowercased input unchanged
+        // Novel type not in vocabulary: return None
         let result = db.resolve_relation_type("novel_type").await.unwrap();
         assert_eq!(
-            result, "novel_type",
-            "novel_type should be returned unchanged (not in vocabulary)"
+            result, None,
+            "novel_type should return None (not in vocabulary)"
         );
     }
 
