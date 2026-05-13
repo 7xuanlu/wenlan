@@ -11477,7 +11477,7 @@ impl MemoryDB {
 
     /// Accept a pending revision for a target memory. The `target_source_id` is the
     /// original memory being superseded. This finds the pending revision that supersedes it,
-    /// activates it, and suppresses the original.
+    /// activates it, and suppresses the original. Both UPDATEs are wrapped in BEGIN/COMMIT.
     pub async fn accept_pending_revision(&self, target_source_id: &str) -> Result<(), OriginError> {
         let conn = self.conn.lock().await;
 
@@ -11498,27 +11498,47 @@ impl MemoryDB {
             row.get::<String>(0)
                 .map_err(|e| OriginError::VectorDb(e.to_string()))?
         } else {
-            return Err(OriginError::VectorDb(format!(
-                "No pending revision found for source_id: {}",
+            return Err(OriginError::NotFound(format!(
+                "No pending revision for source_id: {}",
                 target_source_id
             )));
         };
 
-        // Activate the revision
-        conn.execute(
-            "UPDATE memories SET pending_revision = 0, confirmed = 1, stability = 'confirmed', confidence = 1.0 WHERE source_id = ?1",
-            libsql::params![revision_source_id.clone()],
-        )
-        .await
-        .map_err(|e| OriginError::VectorDb(format!("accept_pending_revision activate: {}", e)))?;
+        conn.execute("BEGIN", ())
+            .await
+            .map_err(|e| OriginError::VectorDb(format!("accept_pending_revision begin: {}", e)))?;
 
-        // Suppress the original
-        conn.execute(
-            "UPDATE memories SET confirmed = 0, stability = 'new' WHERE source_id = ?1",
-            libsql::params![target_source_id.to_string()],
-        )
-        .await
-        .map_err(|e| OriginError::VectorDb(format!("accept_pending_revision suppress: {}", e)))?;
+        let activate_result = conn
+            .execute(
+                "UPDATE memories SET pending_revision = 0, confirmed = 1, stability = 'confirmed', confidence = 1.0 WHERE source_id = ?1",
+                libsql::params![revision_source_id.clone()],
+            )
+            .await;
+        if let Err(e) = activate_result {
+            let _ = conn.execute("ROLLBACK", ()).await;
+            return Err(OriginError::VectorDb(format!(
+                "accept_pending_revision activate: {}",
+                e
+            )));
+        }
+
+        let suppress_result = conn
+            .execute(
+                "UPDATE memories SET confirmed = 0, stability = 'new' WHERE source_id = ?1",
+                libsql::params![target_source_id.to_string()],
+            )
+            .await;
+        if let Err(e) = suppress_result {
+            let _ = conn.execute("ROLLBACK", ()).await;
+            return Err(OriginError::VectorDb(format!(
+                "accept_pending_revision suppress: {}",
+                e
+            )));
+        }
+
+        conn.execute("COMMIT", ())
+            .await
+            .map_err(|e| OriginError::VectorDb(format!("accept_pending_revision commit: {}", e)))?;
 
         Ok(())
     }
@@ -11538,8 +11558,8 @@ impl MemoryDB {
             .await
             .map_err(|e| OriginError::VectorDb(format!("dismiss_pending_revision: {}", e)))?;
         if rows_affected == 0 {
-            return Err(OriginError::VectorDb(format!(
-                "No pending revision found for source_id: {}",
+            return Err(OriginError::NotFound(format!(
+                "No pending revision for source_id: {}",
                 target_source_id
             )));
         }
@@ -28686,6 +28706,111 @@ pub(crate) mod tests {
             r1 + r2,
             1,
             "exactly one caller should see rows=1, got {r1} + {r2}"
+        );
+    }
+
+    #[tokio::test]
+    async fn accept_pending_revision_returns_not_found_variant_on_missing() {
+        let (db, _tmp) = test_db().await;
+        let err = db
+            .accept_pending_revision("mem_does_not_exist")
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(err, OriginError::NotFound(_)),
+            "expected NotFound, got {:?}",
+            err
+        );
+    }
+
+    #[tokio::test]
+    async fn dismiss_pending_revision_returns_not_found_variant_on_missing() {
+        let (db, _tmp) = test_db().await;
+        let err = db
+            .dismiss_pending_revision("mem_does_not_exist")
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(err, OriginError::NotFound(_)),
+            "expected NotFound, got {:?}",
+            err
+        );
+    }
+
+    #[tokio::test]
+    async fn accept_pending_revision_is_transactional_on_partial_failure() {
+        // Seed: insert a target memory and a pending revision for it.
+        let (db, _tmp) = test_db().await;
+        let now = chrono::Utc::now().timestamp();
+        // mem_target is the original; mem_revision supersedes it with pending_revision=true
+        insert_memory_for_test(
+            &db,
+            "mem_target",
+            "original content",
+            "memory",
+            Some("test-agent"),
+            None,
+            false,
+            now,
+        )
+        .await;
+        insert_memory_for_test(
+            &db,
+            "mem_revision",
+            "revised content",
+            "memory",
+            Some("test-agent"),
+            None,
+            true,
+            now,
+        )
+        .await;
+        // Mark mem_revision as pending revision for mem_target.
+        {
+            let conn = db.conn.lock().await;
+            conn.execute(
+                "UPDATE memories SET supersedes = ?1, pending_revision = 1 WHERE source_id = ?2",
+                libsql::params!["mem_target".to_string(), "mem_revision".to_string()],
+            )
+            .await
+            .unwrap();
+        }
+
+        // First call should succeed.
+        db.accept_pending_revision("mem_target").await.unwrap();
+
+        // After accept: revision is now `pending_revision = 0`, original is suppressed.
+        {
+            let conn = db.conn.lock().await;
+            let mut rows = conn
+                .query(
+                    "SELECT pending_revision FROM memories WHERE source_id = 'mem_revision'",
+                    libsql::params![],
+                )
+                .await
+                .unwrap();
+            let row = rows.next().await.unwrap().unwrap();
+            let pr: i64 = row.get(0).unwrap();
+            assert_eq!(pr, 0, "revision should be activated (pending_revision=0)");
+
+            let mut rows2 = conn
+                .query(
+                    "SELECT confirmed FROM memories WHERE source_id = 'mem_target'",
+                    libsql::params![],
+                )
+                .await
+                .unwrap();
+            let row2 = rows2.next().await.unwrap().unwrap();
+            let confirmed: i64 = row2.get(0).unwrap();
+            assert_eq!(confirmed, 0, "original should be suppressed (confirmed=0)");
+        }
+
+        // Second call should return NotFound (revision row no longer has pending_revision=1).
+        let err = db.accept_pending_revision("mem_target").await.unwrap_err();
+        assert!(
+            matches!(err, OriginError::NotFound(_)),
+            "expected NotFound on re-call, got {:?}",
+            err
         );
     }
 }
