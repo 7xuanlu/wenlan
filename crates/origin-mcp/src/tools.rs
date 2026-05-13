@@ -273,6 +273,11 @@ pub struct ConfirmObservationParams {
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct DeleteObservationParams {
+    pub observation_id: String,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct CreatePageParams {
     #[schemars(
         description = "Short noun phrase that names the page (e.g. 'Origin daemon architecture')."
@@ -924,6 +929,28 @@ impl OriginMcpServer {
         ))]))
     }
 
+    pub async fn delete_observation_impl(
+        &self,
+        params: DeleteObservationParams,
+    ) -> Result<CallToolResult, McpError> {
+        if self.transport == TransportMode::Http {
+            return Ok(CallToolResult::error(vec![Content::text(
+                "Delete operations are not available over remote connections. \
+                 Use local MCP on the machine running Origin to delete observations."
+                    .to_string(),
+            )]));
+        }
+        let path = format!("/api/memory/observations/{}", params.observation_id);
+        let _: origin_types::responses::SuccessResponse = match self.client.delete(&path).await {
+            Ok(r) => r,
+            Err(e) => return Ok(tool_error(e, "delete_observation")),
+        };
+        Ok(CallToolResult::success(vec![Content::text(format!(
+            "Observation {} deleted",
+            params.observation_id
+        ))]))
+    }
+
     pub async fn create_page_impl(
         &self,
         params: CreatePageParams,
@@ -1443,6 +1470,23 @@ impl OriginMcpServer {
         Parameters(params): Parameters<ConfirmObservationParams>,
     ) -> Result<CallToolResult, McpError> {
         self.confirm_observation_impl(params).await
+    }
+
+    #[tool(
+        description = "Delete an observation by ID. Destructive and cannot be undone — for corrections, prefer update_observation. Not available over remote HTTP MCP transport (local stdio only).",
+        annotations(
+            title = "Delete observation",
+            read_only_hint = false,
+            destructive_hint = true,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
+    )]
+    async fn delete_observation(
+        &self,
+        Parameters(params): Parameters<DeleteObservationParams>,
+    ) -> Result<CallToolResult, McpError> {
+        self.delete_observation_impl(params).await
     }
 
     #[tool(
@@ -3129,6 +3173,22 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn delete_observation_refuses_http_transport() {
+        let server = make_server(TransportMode::Http, "agent", None);
+        let params = DeleteObservationParams {
+            observation_id: "obs_123".to_string(),
+        };
+        let result = server.delete_observation_impl(params).await.unwrap();
+        let content = &result.content[0];
+        match content.raw {
+            rmcp::model::RawContent::Text(ref tc) => {
+                assert!(tc.text.contains("not available over remote connections"));
+            }
+            _ => panic!("expected text content"),
+        }
+    }
+
     // --- GetPageParams ---
 
     #[test]
@@ -3274,6 +3334,7 @@ mod tests {
             "confirm_entity",
             "update_observation",
             "confirm_observation",
+            "delete_observation",
             "create_page",
             "update_page",
             "delete_page",
