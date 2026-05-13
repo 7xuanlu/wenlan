@@ -106,3 +106,26 @@ one.
 
 - End of session bulk store → use `/handoff` (multi-item batch).
 - Pulling memories back out → use `/recall`.
+
+## Post-capture contradiction signal
+
+After `capture` returns, check `response.triggered_revisions`. If empty, do nothing. The capture stored cleanly.
+
+If non-empty, render an inline block to the user:
+
+```
+Stored mem_new.
+
+This capture topic-matches a protected memory now flagged for revision:
+  - mem_target_abc
+
+Action: accept (replace original content) | dismiss (drop the revision) | leave (decide later)
+```
+
+Inline verb map:
+
+- accept: `accept_revision(target_source_id="mem_target_abc")`
+- dismiss: `dismiss_revision(target_source_id="mem_target_abc")`
+- leave: no call; surfaces again in next `/brief`
+
+This closes the async gap between trigger and surface. The user resolves contradictions in-flow without waiting for the next session.
