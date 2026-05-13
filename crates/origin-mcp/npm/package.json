@@ -1,6 +1,6 @@
 {
   "name": "origin-mcp",
-  "version": "0.5.2",
+  "version": "0.5.3",
   "description": "Personal memory layer for AI agents - MCP server",
   "keywords": [
     "mcp",
