@@ -286,6 +286,21 @@ pub(crate) async fn process_refinement_queue(
                 );
                 processed += 1;
             }
+            "entity_merge" | "relation_conflict" => {
+                // Producer wrote pending; surface for human review (Spec A list endpoint
+                // filters by awaiting_review status). Accept dispatch is agent-triggered,
+                // not daemon-auto.
+                //
+                // Guard on status=='pending' to avoid spamming refinement_resolve activity
+                // rows every tick on already-promoted proposals: get_pending_refinements
+                // returns proposals with status NOT IN (terminal), so awaiting_review
+                // proposals would re-match and re-log without this guard.
+                if proposal.status == "pending" {
+                    resolve_proposal(db, &proposal.id, ResolveStatus::AwaitingReview, "daemon")
+                        .await?;
+                }
+                processed += 1;
+            }
             _ => {
                 log::debug!("[refinery] unknown action: {}", proposal.action);
             }
@@ -824,6 +839,115 @@ mod tests {
         assert!(
             matches!(err, crate::error::OriginError::Validation(_)),
             "second accept should 422, got {err:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn daemon_arm_promotes_pending_entity_merge_to_awaiting_review() {
+        let (db, _tmp) = test_db().await;
+        db.insert_refinement_proposal(
+            "ref_pending_em",
+            "entity_merge",
+            &["a".into(), "b".into()],
+            None,
+            0.87,
+        )
+        .await
+        .unwrap();
+        // status defaults to 'pending'
+        let tuning = crate::tuning::RefineryConfig::default();
+        let prompts = crate::prompts::PromptRegistry::default();
+        let processed = process_refinement_queue(&db, None, &prompts, &tuning)
+            .await
+            .unwrap();
+        assert!(
+            processed >= 1,
+            "process_refinement_queue should report >=1 processed"
+        );
+
+        let prop = db
+            .get_refinement_proposal("ref_pending_em")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            prop.status, "awaiting_review",
+            "pending entity_merge should promote to awaiting_review"
+        );
+    }
+
+    #[tokio::test]
+    async fn daemon_arm_promotes_pending_relation_conflict_to_awaiting_review() {
+        let (db, _tmp) = test_db().await;
+        db.insert_refinement_proposal(
+            "ref_pending_rc",
+            "relation_conflict",
+            &["a".into(), "b".into()],
+            None,
+            0.7,
+        )
+        .await
+        .unwrap();
+        let tuning = crate::tuning::RefineryConfig::default();
+        let prompts = crate::prompts::PromptRegistry::default();
+        let processed = process_refinement_queue(&db, None, &prompts, &tuning)
+            .await
+            .unwrap();
+        assert!(processed >= 1);
+
+        let prop = db
+            .get_refinement_proposal("ref_pending_rc")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(prop.status, "awaiting_review");
+    }
+
+    #[tokio::test]
+    async fn daemon_arm_skips_already_awaiting_review() {
+        let (db, _tmp) = test_db().await;
+        db.insert_refinement_proposal(
+            "ref_aw_em",
+            "entity_merge",
+            &["a".into(), "b".into()],
+            None,
+            0.87,
+        )
+        .await
+        .unwrap();
+        {
+            let conn = db.conn.lock().await;
+            conn.execute(
+                "UPDATE refinement_queue SET status = 'awaiting_review' WHERE id = ?1",
+                libsql::params!["ref_aw_em"],
+            )
+            .await
+            .unwrap();
+        }
+
+        let tuning = crate::tuning::RefineryConfig::default();
+        let prompts = crate::prompts::PromptRegistry::default();
+        let _ = process_refinement_queue(&db, None, &prompts, &tuning)
+            .await
+            .unwrap();
+
+        // Verify NO new refinement_resolve activity row was logged by the daemon
+        // for this already-awaiting proposal (status guard skipped resolve_proposal).
+        // get_pending_refinements returns proposals with status NOT IN (terminal),
+        // so awaiting_review still shows; the test asserts no spurious daemon activity.
+        let acts = db
+            .list_agent_activity(50, Some("daemon"), None)
+            .await
+            .unwrap_or_default();
+        // No activity rows produced for this proposal at all (it never went through
+        // resolve_proposal in this tick). Check by counting "refinement_resolve" rows.
+        let count = acts
+            .iter()
+            .filter(|a| a.action == "refinement_resolve")
+            .count();
+        assert_eq!(
+            count, 0,
+            "no spurious resolve activity for already-awaiting proposal"
         );
     }
 }
