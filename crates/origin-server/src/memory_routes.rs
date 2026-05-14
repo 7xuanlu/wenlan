@@ -1602,38 +1602,6 @@ pub async fn handle_get_entity_suggestions(
     Ok(Json(suggestions))
 }
 
-pub async fn handle_approve_entity_suggestion(
-    State(state): State<Arc<RwLock<ServerState>>>,
-    headers: axum::http::HeaderMap,
-    Path(id): Path<String>,
-) -> Result<Json<origin_types::EntitySuggestionApproveResponse>, ServerError> {
-    let (db, entity_link_distance) = {
-        let s = state.read().await;
-        let db = s.db.as_ref().ok_or(ServerError::DbNotInitialized)?.clone();
-        let d = s.tuning.refinery.entity_link_distance;
-        (db, d)
-    };
-    let agent = extract_agent_name(&headers, None);
-    let result =
-        origin_core::post_write::approve_entity_suggestion(&db, &id, &agent, entity_link_distance)
-            .await?;
-    Ok(Json(result))
-}
-
-pub async fn handle_dismiss_entity_suggestion(
-    State(state): State<Arc<RwLock<ServerState>>>,
-    headers: axum::http::HeaderMap,
-    Path(id): Path<String>,
-) -> Result<Json<origin_types::EntitySuggestionDismissResponse>, ServerError> {
-    let db = {
-        let s = state.read().await;
-        s.db.as_ref().ok_or(ServerError::DbNotInitialized)?.clone()
-    };
-    let agent = extract_agent_name(&headers, None);
-    let result = origin_core::post_write::dismiss_entity_suggestion(&db, &id, &agent).await?;
-    Ok(Json(result))
-}
-
 // ===== Helpers =====
 
 fn truncate_for_title(content: &str) -> String {

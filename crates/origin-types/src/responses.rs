@@ -795,29 +795,6 @@ pub struct PendingRevisionItem {
     pub last_modified: i64,
 }
 
-// ===== Curation mutate responses (Spec C-2) =====
-
-/// Response returned by `POST /api/memory/entity-suggestions/{id}/approve`.
-/// Carries the created (or resolved) entity id, link count, and the wrote flag
-/// from the nested `create_entity` capability fn. `wrote: false` means the
-/// suggestion resolved to an existing entity via alias/exact-name/vector match.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct EntitySuggestionApproveResponse {
-    pub suggestion_id: String,
-    pub entity_id: String,
-    pub entity_name: String,
-    pub memories_linked: u32,
-    pub wrote: bool,
-}
-
-/// Response returned by `POST /api/memory/entity-suggestions/{id}/dismiss`.
-/// `wrote: true` always (404 on missing/already-resolved).
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct EntitySuggestionDismissResponse {
-    pub suggestion_id: String,
-    pub wrote: bool,
-}
-
 /// Response returned by `POST /api/memory/revision/{id}/accept`.
 /// Carries the now-consumed revision row id so agents can correlate with
 /// their `list_pending_revisions` cache.
@@ -849,34 +826,6 @@ pub struct ContradictionDismissResponse {
 #[cfg(test)]
 mod mutation_response_tests {
     use super::*;
-
-    #[test]
-    fn entity_suggestion_approve_response_serializes_byte_identical() {
-        let r = EntitySuggestionApproveResponse {
-            suggestion_id: "ref_123".into(),
-            entity_id: "ent_456".into(),
-            entity_name: "Acme Corp".into(),
-            memories_linked: 7,
-            wrote: true,
-        };
-        let json = serde_json::to_string(&r).unwrap();
-        assert_eq!(
-            json,
-            r#"{"suggestion_id":"ref_123","entity_id":"ent_456","entity_name":"Acme Corp","memories_linked":7,"wrote":true}"#
-        );
-    }
-
-    #[test]
-    fn entity_suggestion_dismiss_response_serializes_byte_identical() {
-        let r = EntitySuggestionDismissResponse {
-            suggestion_id: "ref_123".into(),
-            wrote: true,
-        };
-        assert_eq!(
-            serde_json::to_string(&r).unwrap(),
-            r#"{"suggestion_id":"ref_123","wrote":true}"#
-        );
-    }
 
     #[test]
     fn revision_accept_response_serializes_byte_identical() {
@@ -913,20 +862,6 @@ mod mutation_response_tests {
             serde_json::to_string(&r).unwrap(),
             r#"{"source_id":"mem_abc","wrote":true}"#
         );
-    }
-
-    #[test]
-    fn entity_suggestion_approve_response_round_trips() {
-        let r = EntitySuggestionApproveResponse {
-            suggestion_id: "ref_123".into(),
-            entity_id: "ent_456".into(),
-            entity_name: "Acme".into(),
-            memories_linked: 0,
-            wrote: false,
-        };
-        let json = serde_json::to_string(&r).unwrap();
-        let decoded: EntitySuggestionApproveResponse = serde_json::from_str(&json).unwrap();
-        assert_eq!(decoded, r);
     }
 }
 

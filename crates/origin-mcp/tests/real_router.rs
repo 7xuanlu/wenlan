@@ -15,13 +15,12 @@ use origin_core::{db::MemoryDB, NoopEmitter};
 use origin_mcp::{
     client::OriginClient,
     tools::{
-        AcceptRevisionRequest, ApproveEntitySuggestionRequest, DismissContradictionRequest,
-        DismissEntitySuggestionRequest, DismissRevisionRequest, OriginMcpServer, TransportMode,
+        AcceptRevisionRequest, DismissContradictionRequest, DismissRevisionRequest,
+        OriginMcpServer, TransportMode,
     },
 };
 use origin_types::{
-    ContradictionDismissResponse, EntitySuggestionApproveResponse, EntitySuggestionDismissResponse,
-    RawDocument, RevisionAcceptResponse, RevisionDismissResponse,
+    ContradictionDismissResponse, RawDocument, RevisionAcceptResponse, RevisionDismissResponse,
 };
 use rmcp::model::{CallToolResult, RawContent};
 
@@ -70,13 +69,6 @@ fn text_of(result: &CallToolResult) -> String {
         "expected at least one text Content block; got: {:?}",
         result.content
     );
-}
-
-/// Seed a `suggest_entity` refinement row via public API.
-async fn seed_suggest_entity(db: &MemoryDB, id: &str, entity_name: &str) {
-    db.insert_refinement_proposal(id, "suggest_entity", &[], Some(entity_name), 0.9)
-        .await
-        .unwrap();
 }
 
 /// Seed a pending revision via public API (upsert_documents).
@@ -150,55 +142,6 @@ async fn activity_count(db: &MemoryDB, action: &str, agent: &str) -> usize {
 }
 
 // ── tests ──────────────────────────────────────────────────────────────────
-
-#[tokio::test]
-async fn approve_entity_suggestion_aligns_with_real_router() {
-    let (base_url, db) = boot_test_server().await;
-    seed_suggest_entity(&db, "ref_real_1", "RealCorp").await;
-
-    let server = make_server(&base_url);
-    let result = server
-        .approve_entity_suggestion_impl(ApproveEntitySuggestionRequest {
-            suggestion_id: "ref_real_1".into(),
-        })
-        .await
-        .unwrap();
-
-    let body = text_of(&result);
-    let parsed: EntitySuggestionApproveResponse = serde_json::from_str(&body).unwrap();
-    assert_eq!(parsed.suggestion_id, "ref_real_1");
-    assert_eq!(parsed.entity_name, "RealCorp");
-
-    // Activity row proves the request reached the right route.
-    assert_eq!(
-        activity_count(&db, "entity_suggestion_approve", "test-agent").await,
-        1
-    );
-}
-
-#[tokio::test]
-async fn dismiss_entity_suggestion_aligns_with_real_router() {
-    let (base_url, db) = boot_test_server().await;
-    seed_suggest_entity(&db, "ref_real_2", "DismissReal").await;
-
-    let server = make_server(&base_url);
-    let result = server
-        .dismiss_entity_suggestion_impl(DismissEntitySuggestionRequest {
-            suggestion_id: "ref_real_2".into(),
-        })
-        .await
-        .unwrap();
-
-    let body = text_of(&result);
-    let parsed: EntitySuggestionDismissResponse = serde_json::from_str(&body).unwrap();
-    assert_eq!(parsed.suggestion_id, "ref_real_2");
-    assert!(parsed.wrote);
-
-    assert_eq!(
-        activity_count(&db, "entity_suggestion_dismiss", "test-agent").await,
-        1
-    );
-}
 
 #[tokio::test]
 async fn accept_revision_aligns_with_real_router() {

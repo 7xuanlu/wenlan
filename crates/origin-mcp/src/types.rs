@@ -14,8 +14,7 @@ pub use origin_types::requests::{
 pub use origin_types::responses::{
     AcceptRefinementResponse, AddObservationResponse, ChatContextResponse,
     ContradictionDismissResponse, CreateEntityResponse, CreatePageResponse, CreateRelationResponse,
-    DeleteResponse, EntitySuggestionApproveResponse, EntitySuggestionDismissResponse,
-    ListMemoriesResponse, ListMemoryRevisionsResponse, ListPageRevisionsResponse,
+    DeleteResponse, ListMemoriesResponse, ListMemoryRevisionsResponse, ListPageRevisionsResponse,
     ListRefinementsResponse, MemoryRevisionEntry, NurtureCardsResponse, OrphanLink,
     OrphanLinksResponse, PageChangelogEntry, RejectRefinementResponse, RevisionAcceptResponse,
     RevisionDismissResponse, SearchMemoryResponse, SearchPagesResponse, StoreMemoryResponse,
