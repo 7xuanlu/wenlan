@@ -11,8 +11,8 @@ pub struct StoreMemoryRequest {
     pub content: String,
     #[serde(default)]
     pub memory_type: Option<String>,
-    #[serde(default)]
-    pub domain: Option<String>,
+    #[serde(default, alias = "domain")]
+    pub space: Option<String>,
     #[serde(default)]
     pub source_agent: Option<String>,
     #[serde(default)]
@@ -40,8 +40,8 @@ pub struct SearchMemoryRequest {
     pub limit: usize,
     #[serde(default)]
     pub memory_type: Option<String>,
-    #[serde(default)]
-    pub domain: Option<String>,
+    #[serde(default, alias = "domain")]
+    pub space: Option<String>,
     #[serde(default)]
     pub source_agent: Option<String>,
 }
@@ -50,8 +50,8 @@ pub struct SearchMemoryRequest {
 pub struct ListMemoriesRequest {
     #[serde(default)]
     pub memory_type: Option<String>,
-    #[serde(default)]
-    pub domain: Option<String>,
+    #[serde(default, alias = "domain")]
+    pub space: Option<String>,
     #[serde(default = "default_list_limit")]
     pub limit: usize,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -85,8 +85,8 @@ pub struct SearchRequest {
     #[serde(default = "default_limit")]
     pub limit: usize,
     pub source_filter: Option<String>,
-    #[serde(default)]
-    pub domain: Option<String>,
+    #[serde(default, alias = "domain")]
+    pub space: Option<String>,
 }
 
 #[doc(hidden)]
@@ -118,8 +118,8 @@ pub struct ChatContextRequest {
     )]
     #[serde(default = "default_true")]
     pub include_goals: bool,
-    #[serde(default)]
-    pub domain: Option<String>,
+    #[serde(default, alias = "domain")]
+    pub space: Option<String>,
 }
 
 // ===== Knowledge graph =====
@@ -128,8 +128,8 @@ pub struct ChatContextRequest {
 pub struct CreateEntityRequest {
     pub name: String,
     pub entity_type: String,
-    #[serde(default)]
-    pub domain: Option<String>,
+    #[serde(default, alias = "domain")]
+    pub space: Option<String>,
     #[serde(default)]
     pub source_agent: Option<String>,
     #[serde(default)]
@@ -173,8 +173,8 @@ pub struct LinkEntityRequest {
 pub struct ListEntitiesRequest {
     #[serde(default)]
     pub entity_type: Option<String>,
-    #[serde(default)]
-    pub domain: Option<String>,
+    #[serde(default, alias = "domain")]
+    pub space: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -240,8 +240,8 @@ pub struct CreateConceptRequest {
     pub summary: Option<String>,
     #[serde(default)]
     pub entity_id: Option<String>,
-    #[serde(default)]
-    pub domain: Option<String>,
+    #[serde(default, alias = "domain")]
+    pub space: Option<String>,
     #[serde(default)]
     pub source_memory_ids: Vec<String>,
 }
@@ -408,8 +408,8 @@ pub struct SetDocumentTagsRequest {
 pub struct UpdateMemoryRequest {
     #[serde(default)]
     pub content: Option<String>,
-    #[serde(default)]
-    pub domain: Option<String>,
+    #[serde(default, alias = "domain")]
+    pub space: Option<String>,
     #[serde(default)]
     pub confirmed: Option<bool>,
     #[serde(default)]
@@ -445,7 +445,7 @@ pub struct UpdatePageRequest {
 ///  - `summary` is optionally updated.
 ///  - The handler clears `stale_reason` in the same transaction.
 ///
-/// v1 deliberately excludes title / entity_id / domain changes — slug rename
+/// v1 deliberately excludes title / entity_id / space changes — slug rename
 /// has its own concurrent-read failure mode and lands as a separate route.
 #[derive(Debug, Serialize, Deserialize)]
 pub struct RefreshPageRequest {
@@ -539,7 +539,7 @@ mod list_memories_confirmed_test {
     fn confirmed_false_serializes_to_json() {
         let req = ListMemoriesRequest {
             memory_type: None,
-            domain: None,
+            space: None,
             limit: 20,
             confirmed: Some(false),
         };
@@ -551,7 +551,7 @@ mod list_memories_confirmed_test {
     fn confirmed_none_skips_serialization() {
         let req = ListMemoriesRequest {
             memory_type: None,
-            domain: None,
+            space: None,
             limit: 20,
             confirmed: None,
         };

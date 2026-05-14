@@ -128,7 +128,7 @@ mod tests {
             language: None,
             semantic_unit: None,
             memory_type: Some("fact".into()),
-            domain: None,
+            space: None,
             source_agent: None,
             confidence: Some(0.8),
             confirmed: Some(true),
