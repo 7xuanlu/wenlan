@@ -15,11 +15,9 @@ allowed-tools: ["mcp__plugin_origin_origin__list_pending", "mcp__plugin_origin_o
 Power-user audit lever. Most users do not need /review in daily flow:
 
 - **Pending revisions** surface in `/brief` automatically (top 3 with inline accept/dismiss).
+- **Pending captures from this session** surface in `/handoff`'s preview
+  block (top 3, informational). Use `/review captures` for the deep walk.
 - **Orphan wikilinks** surface in `/distill`'s topic-suggestion block.
-- **Pending captures from this session**: *coming in a follow-up PR*; the
-  underlying MCP wrapper needs plumbing fixes first. For now, use the
-  scoped `/review captures` walk below if you want to audit unconfirmed
-  captures.
 
 Use /review only when you want the deep walk those skills intentionally do not force.
 
@@ -29,11 +27,6 @@ Use /review only when you want the deep walk those skills intentionally do not f
   unfiltered by session). Per item: accept (`confirm_memory`), edit
   (`capture` with `supersedes=<old_id>` then `forget(old_id)`), or
   reject (`forget`).
-
-  Known issue (tracked as `mem_bd4611b5cc69`): the `list_pending` MCP wrapper
-  currently has plumbing problems and may return empty or wrong-shape
-  results. If `/review captures` shows nothing while you know captures
-  are pending, the underlying MCP fix is tracked in Spec C-3b.
 
 - `/review revisions`: walk every pending revision (`list_pending_revisions`,
   no cap). Per item: accept (`accept_revision`), dismiss (`dismiss_revision`),

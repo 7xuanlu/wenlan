@@ -1,21 +1,55 @@
 ---
 name: brief
 description: >
-  Session-start briefing from Origin. Loads identity, preferences, and
-  topic-relevant memories so the agent walks in with context. Surfaces any
-  memories the daemon has flagged for human revision before the session uses
-  them. Invoked as `/brief [topic]`. Call FIRST at session start, before any
-  other Origin verb.
+  Session-start briefing from Origin. Reads the project status file (the
+  /handoff-maintained ledger of Active/Backlog work), then loads identity,
+  preferences, and topic-relevant memories so the agent walks in with context.
+  Surfaces any memories the daemon has flagged for human revision before the
+  session uses them. Invoked as `/brief [topic]`. Call FIRST at session start,
+  before any other Origin verb.
 argument-hint: "[topic]"
-allowed-tools: ["mcp__plugin_origin_origin__context", "mcp__plugin_origin_origin__recall", "mcp__plugin_origin_origin__list_pending_revisions", "mcp__plugin_origin_origin__accept_revision", "mcp__plugin_origin_origin__dismiss_revision"]
+allowed-tools: ["Bash", "mcp__plugin_origin_origin__context", "mcp__plugin_origin_origin__recall", "mcp__plugin_origin_origin__list_pending_revisions", "mcp__plugin_origin_origin__accept_revision", "mcp__plugin_origin_origin__dismiss_revision"]
 ---
 
 # /brief
 
-Pull a curated session brief from Origin: who the user is, what they prefer,
-and what's relevant to the current topic.
+Pull a curated session brief from Origin. Three sources, in order:
 
-## How to invoke
+1. **Project status file** — what `/handoff` last wrote. Authoritative for
+   "what's left to do" right now.
+2. **`context` MCP** — identity, preferences, topic-relevant memories.
+   Background, not ledger.
+3. **`list_pending_revisions`** — daemon-flagged memories awaiting review.
+
+Status file wins on "what's next" because memories rank by topic similarity
+and surface stale items alongside fresh ones; the status file is the live
+ledger maintained per session.
+
+## 1. Read project status file first
+
+Detect project root:
+
+```
+Bash: cd_repo=$(git -C "$PWD" rev-parse --show-toplevel 2>/dev/null); echo "${cd_repo:-no-git}"
+```
+
+- If output is a path → `<project>` = basename (e.g. `origin`).
+- If `no-git` → `<project>` = cwd basename.
+
+Read `~/.origin/sessions/_status/<project>.md`:
+
+```
+Bash: cat ~/.origin/sessions/_status/<project>.md
+```
+
+If the file exists, render its `## Last session`, `## Active`, and `## Backlog`
+sections verbatim at the top of the brief output, under a heading like
+`Status (last session <date>)`. This is the authoritative "what's left" frame.
+
+If the file is missing, say nothing about it. First-time projects haven't
+been handed off yet.
+
+## 2. Call context
 
 Call the `origin` MCP server's `context` tool. If the user passed a topic
 argument, pass it through. Otherwise infer scope from the working directory and
@@ -48,11 +82,17 @@ context(topic="<args or inferred>", domain=<inferred from cwd or recent turns>)
 
 ## How to use the result
 
+Treat the status file as the live ledger (what's next), and the `context`
+memories as background (how the user thinks). When the status file says an
+item is done but a memory still says it's pending, trust the status file —
+memories don't auto-supersede. If you see drift, flag it inline rather than
+parrot the stale memory.
+
 Model how the user thinks. Their preferences, corrections, and past decisions
 tell you how they want to be helped, not just what they already know. Don't
 just look things up: adjust your behavior.
 
-## Pending revisions check
+## 3. Pending revisions check
 
 After loading context, call:
 
