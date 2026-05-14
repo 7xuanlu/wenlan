@@ -111,7 +111,7 @@ pub(crate) async fn generate_decision_logs(
             last_modified: burst_end,
             metadata: std::collections::HashMap::new(),
             memory_type: Some("decision".to_string()),
-            domain: None,
+            space: None,
             source_agent: Some("refinery".to_string()),
             confidence: Some(0.5),
             confirmed: None,
@@ -144,7 +144,7 @@ mod tests {
             source: "memory".to_string(),
             title: content.chars().take(40).collect(),
             memory_type: Some(memory_type.to_string()),
-            domain: Some(domain.to_string()),
+            space: Some(domain.to_string()),
             confidence: Some(0.7),
             last_modified: chrono::Utc::now().timestamp(),
             ..Default::default()

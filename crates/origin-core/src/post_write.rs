@@ -118,7 +118,7 @@ pub async fn create_entity(
         .store_entity(
             name,
             entity_type,
-            req.domain.as_deref(),
+            req.space.as_deref(),
             req.source_agent.as_deref(),
             req.confidence,
         )
@@ -440,7 +440,7 @@ pub async fn create_page(
         summary: req.summary.clone(),
         content: req.content.clone(),
         entity_id: req.entity_id.clone(),
-        domain: req.domain.clone(),
+        space: req.space.clone(),
         source_memory_ids: req.source_memory_ids.clone(),
         version: 1,
         status: "active".to_string(),
@@ -475,7 +475,7 @@ pub async fn create_page(
             req.summary.as_deref(),
             &req.content,
             req.entity_id.as_deref(),
-            req.domain.as_deref(),
+            req.space.as_deref(),
             &source_refs,
             &now,
         )
@@ -787,7 +787,7 @@ mod tests {
         let req = CreateEntityRequest {
             name: "".to_string(),
             entity_type: "person".to_string(),
-            domain: None,
+            space: None,
             source_agent: Some("test".to_string()),
             confidence: None,
         };
@@ -803,7 +803,7 @@ mod tests {
         let req = CreateEntityRequest {
             name: "Alice".to_string(),
             entity_type: "".to_string(),
-            domain: None,
+            space: None,
             source_agent: Some("test".to_string()),
             confidence: None,
         };
@@ -819,7 +819,7 @@ mod tests {
         let req = CreateEntityRequest {
             name: "Alice".to_string(),
             entity_type: "person".to_string(),
-            domain: None,
+            space: None,
             source_agent: Some("test".to_string()),
             confidence: Some(1.5),
         };
@@ -835,7 +835,7 @@ mod tests {
         let req = CreateEntityRequest {
             name: "Alice".to_string(),
             entity_type: "person".to_string(),
-            domain: None,
+            space: None,
             source_agent: Some("test".to_string()),
             confidence: Some(0.9),
         };
@@ -849,7 +849,7 @@ mod tests {
         let req1 = CreateEntityRequest {
             name: "Alice".to_string(),
             entity_type: "person".to_string(),
-            domain: None,
+            space: None,
             source_agent: Some("test".to_string()),
             confidence: None,
         };
@@ -857,7 +857,7 @@ mod tests {
         let req2 = CreateEntityRequest {
             name: "Alice".to_string(),
             entity_type: "person".to_string(),
-            domain: None,
+            space: None,
             source_agent: Some("test".to_string()),
             confidence: None,
         };
@@ -1280,7 +1280,7 @@ mod tests {
             content: "body content that is long enough".to_string(),
             summary: None,
             entity_id: None,
-            domain: None,
+            space: None,
             source_memory_ids: vec!["mem_does_not_exist".to_string()],
         };
         assert!(matches!(
@@ -1310,7 +1310,7 @@ mod tests {
             content: "Pasta carbonara needs eggs and pancetta".to_string(),
             summary: None,
             entity_id: None,
-            domain: None,
+            space: None,
             source_memory_ids: vec!["mem-rust".to_string()],
         };
         // Hallucination guard should reject (cos sim < 0.6)
@@ -1343,7 +1343,7 @@ mod tests {
                 .to_string(),
             summary: Some("memory-safe systems language".to_string()),
             entity_id: None,
-            domain: None,
+            space: None,
             source_memory_ids: vec!["mem-rust-happy".to_string()],
         };
         let result = create_page(&db, req, "test", None).await.unwrap();
@@ -1375,7 +1375,7 @@ mod tests {
             content: content.to_string(),
             summary: None,
             entity_id: None,
-            domain: None,
+            space: None,
             source_memory_ids: vec![source_id.to_string()],
         };
         create_page(db, req, "test", None).await.unwrap().id
@@ -1712,13 +1712,13 @@ mod tests {
         let now = chrono::Utc::now().timestamp();
         let conn = db.conn.lock().await;
         conn.execute(
-            "INSERT INTO memories (id, source_id, title, content, chunk_index, chunk_type, memory_type, domain, source_agent, created_at, last_modified, confirmed, stability, source) VALUES (?1, ?1, ?1, 'original content', 0, 'text', 'fact', 'test', 'claude-code', ?2, ?2, 1, 'confirmed', 'memory')",
+            "INSERT INTO memories (id, source_id, title, content, chunk_index, chunk_type, memory_type, space, source_agent, created_at, last_modified, confirmed, stability, source) VALUES (?1, ?1, ?1, 'original content', 0, 'text', 'fact', 'test', 'claude-code', ?2, ?2, 1, 'confirmed', 'memory')",
             libsql::params![target.to_string(), now],
         )
         .await
         .unwrap();
         conn.execute(
-            "INSERT INTO memories (id, source_id, title, content, chunk_index, chunk_type, memory_type, domain, source_agent, created_at, last_modified, confirmed, stability, source, supersedes, pending_revision) VALUES (?1, ?1, ?1, 'revised content', 0, 'text', 'fact', 'test', 'claude-code', ?2, ?2, 0, 'new', 'memory', ?3, 1)",
+            "INSERT INTO memories (id, source_id, title, content, chunk_index, chunk_type, memory_type, space, source_agent, created_at, last_modified, confirmed, stability, source, supersedes, pending_revision) VALUES (?1, ?1, ?1, 'revised content', 0, 'text', 'fact', 'test', 'claude-code', ?2, ?2, 0, 'new', 'memory', ?3, 1)",
             libsql::params![revision.to_string(), now, target.to_string()],
         )
         .await

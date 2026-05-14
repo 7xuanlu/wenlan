@@ -54,7 +54,7 @@ pub async fn resolve_distill_target(
             name: s.to_string(),
         }));
     }
-    if db.domain_has_memories(s).await? {
+    if db.space_has_memories(s).await? {
         return Ok(Some(DistillTarget::Domain(s.to_string())));
     }
     Ok(None)

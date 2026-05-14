@@ -197,7 +197,7 @@ impl LocalFilesSource {
             metadata,
             memory_type: None,
             source_agent: None,
-            domain: None,
+            space: None,
             confidence: None,
             confirmed: None,
             supersedes: None,

@@ -409,14 +409,14 @@ fn parse_case_json(response: &str) -> Result<EvalCase, crate::error::OriginError
         .as_str()
         .ok_or_else(|| crate::error::OriginError::Generic("missing 'query' field".into()))?
         .to_string();
-    let domain = val["domain"].as_str().map(|s| s.to_string());
+    let space = val["domain"].as_str().map(|s| s.to_string());
 
     let seeds = parse_seed_array(&val["seeds"])?;
     let negatives = parse_seed_array(&val["negative_seeds"])?;
 
     Ok(EvalCase {
         query,
-        domain,
+        space,
         seeds,
         negative_seeds: negatives,
         entities: vec![],
@@ -435,7 +435,7 @@ fn parse_seed_array(val: &serde_json::Value) -> Result<Vec<SeedMemory>, crate::e
             id: item["id"].as_str().unwrap_or("mem_unknown").to_string(),
             content: item["content"].as_str().unwrap_or("").to_string(),
             memory_type: item["memory_type"].as_str().unwrap_or("fact").to_string(),
-            domain: item["domain"].as_str().map(|s| s.to_string()),
+            space: item["domain"].as_str().map(|s| s.to_string()),
             relevance: item["relevance"].as_u64().unwrap_or(0) as u8,
             structured_fields: item["structured_fields"].as_str().map(|s| s.to_string()),
             confidence: None,
@@ -573,12 +573,12 @@ mod tests {
     fn test_validate_case_normalizes_types() {
         let mut case = EvalCase {
             query: "test".into(),
-            domain: None,
+            space: None,
             seeds: vec![SeedMemory {
                 id: "m1".into(),
                 content: "content".into(),
                 memory_type: "embedding_model".into(),
-                domain: None,
+                space: None,
                 relevance: 3,
                 structured_fields: None,
                 confidence: None,
@@ -601,7 +601,7 @@ mod tests {
     fn test_validate_case_rejects_empty() {
         let mut case = EvalCase {
             query: "".into(),
-            domain: None,
+            space: None,
             seeds: vec![],
             negative_seeds: vec![],
             entities: vec![],

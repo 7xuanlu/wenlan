@@ -172,7 +172,7 @@ pub fn sample_to_eval_case(sample: &LongMemEvalSample, memories: &[LongMemEvalMe
                 id: memory_source_id(&mem.question_id, mem.session_idx, mem.turn_idx),
                 content: mem.content.clone(),
                 memory_type: memory_type.to_string(),
-                domain: Some("conversation".to_string()),
+                space: Some("conversation".to_string()),
                 relevance,
                 structured_fields: None,
                 confidence: None,
@@ -188,7 +188,7 @@ pub fn sample_to_eval_case(sample: &LongMemEvalSample, memories: &[LongMemEvalMe
 
     EvalCase {
         query: sample.question.clone(),
-        domain: Some("conversation".to_string()),
+        space: Some("conversation".to_string()),
         seeds,
         negative_seeds: vec![],
         entities: vec![],
@@ -421,7 +421,7 @@ pub async fn run_longmemeval_eval(path: &Path) -> Result<LongMemEvalReport, Orig
                     source: "memory".to_string(),
                     title: format!("{} session {}", mem.role, mem.session_idx),
                     memory_type: Some(memory_type.to_string()),
-                    domain: Some("conversation".to_string()),
+                    space: Some("conversation".to_string()),
                     last_modified: chrono::Utc::now().timestamp(),
                     ..Default::default()
                 }
@@ -532,7 +532,7 @@ pub async fn run_longmemeval_eval_reranked(
                     source: "memory".to_string(),
                     title: format!("{} session {}", mem.role, mem.session_idx),
                     memory_type: Some(memory_type.to_string()),
-                    domain: Some("conversation".to_string()),
+                    space: Some("conversation".to_string()),
                     last_modified: chrono::Utc::now().timestamp(),
                     ..Default::default()
                 }
@@ -643,7 +643,7 @@ pub async fn run_longmemeval_eval_expanded(
                     source: "memory".to_string(),
                     title: format!("{} session {}", mem.role, mem.session_idx),
                     memory_type: Some(memory_type.to_string()),
-                    domain: Some("conversation".to_string()),
+                    space: Some("conversation".to_string()),
                     last_modified: chrono::Utc::now().timestamp(),
                     ..Default::default()
                 }
@@ -818,7 +818,7 @@ fn generate_longmemeval_noise(memory_count: usize) -> Vec<RawDocument> {
             source: "memory".to_string(),
             title: format!("noise_{}", i),
             memory_type: Some("fact".to_string()),
-            domain: Some("conversation".to_string()),
+            space: Some("conversation".to_string()),
             last_modified: chrono::Utc::now().timestamp(),
             ..Default::default()
         });
@@ -868,7 +868,7 @@ pub async fn run_longmemeval_eval_with_gate(
                     source: "memory".to_string(),
                     title: format!("{} session {}", mem.role, mem.session_idx),
                     memory_type: Some(memory_type.to_string()),
-                    domain: Some("conversation".to_string()),
+                    space: Some("conversation".to_string()),
                     last_modified: chrono::Utc::now().timestamp(),
                     ..Default::default()
                 }

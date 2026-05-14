@@ -385,7 +385,7 @@ pub fn note_to_documents(
             content: body.to_string(),
             last_modified: mtime,
             metadata,
-            domain,
+            space: domain,
             memory_type,
             source_agent: Some("obsidian".to_string()),
             ..Default::default()
@@ -415,7 +415,7 @@ pub fn note_to_documents(
                 content: chunk.content.clone(),
                 last_modified: mtime,
                 metadata: metadata.clone(),
-                domain: domain.clone(),
+                space: domain.clone(),
                 memory_type: memory_type.clone(),
                 source_agent: Some("obsidian".to_string()),
                 ..Default::default()
@@ -596,7 +596,7 @@ mod tests {
         // with origin identified via source_agent = "obsidian".
         assert_eq!(docs[0].source, "memory");
         assert_eq!(docs[0].source_agent, Some("obsidian".to_string()));
-        assert_eq!(docs[0].domain, Some("work".to_string()));
+        assert_eq!(docs[0].space, Some("work".to_string()));
         assert_eq!(docs[0].memory_type, Some("decision".to_string()));
         assert!(docs[0].source_id.starts_with("obsidian-main::"));
     }
@@ -607,7 +607,7 @@ mod tests {
         let path = Path::new("/vault/plain.md");
         let docs = note_to_documents("src1", path, content, 1712678400);
         assert_eq!(docs.len(), 1);
-        assert!(docs[0].domain.is_none());
+        assert!(docs[0].space.is_none());
         assert!(docs[0].memory_type.is_none());
     }
 
@@ -649,7 +649,7 @@ mod tests {
         for doc in &docs {
             assert_eq!(doc.source, "memory");
             assert_eq!(doc.source_agent, Some("obsidian".to_string()));
-            assert_eq!(doc.domain, Some("dev".to_string()));
+            assert_eq!(doc.space, Some("dev".to_string()));
         }
         if docs.len() > 1 {
             assert!(docs[1].title.contains("architecture"));
@@ -715,7 +715,7 @@ mod tests {
             .all(|d| d.source_agent == Some("obsidian".to_string())));
         assert!(all_docs
             .iter()
-            .any(|d| d.domain == Some("rust".to_string())));
+            .any(|d| d.space == Some("rust".to_string())));
         assert!(all_docs
             .iter()
             .any(|d| d.memory_type == Some("fact".to_string())));

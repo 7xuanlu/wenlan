@@ -434,7 +434,7 @@ pub async fn run_quality_cost_eval(
                             &case.query,
                             limit,
                             None,
-                            case.domain.as_deref(),
+                            case.space.as_deref(),
                             None,
                             Some(1.0), // neutralize confirmation boost — fixture bias
                             Some(1.0), // neutralize recap penalty — fixture bias
@@ -450,7 +450,7 @@ pub async fn run_quality_cost_eval(
                 }
                 SearchStrategy::NaiveRag => {
                     let results = db
-                        .naive_vector_search(&case.query, limit, case.domain.as_deref())
+                        .naive_vector_search(&case.query, limit, case.space.as_deref())
                         .await?;
                     let ctx_tokens = count_results_tokens(&results);
                     let ranked: Vec<&str> = results.iter().map(|r| r.source_id.as_str()).collect();
@@ -469,7 +469,7 @@ pub async fn run_quality_cost_eval(
                 }
                 SearchStrategy::FtsOnly => {
                     let results = db
-                        .fts_only_search(&case.query, limit, case.domain.as_deref())
+                        .fts_only_search(&case.query, limit, case.space.as_deref())
                         .await?;
                     let ctx_tokens = count_results_tokens(&results);
                     let ranked: Vec<&str> = results.iter().map(|r| r.source_id.as_str()).collect();
@@ -480,7 +480,7 @@ pub async fn run_quality_cost_eval(
                 }
                 SearchStrategy::VectorPlusFts => {
                     let results = db
-                        .vector_plus_fts_search(&case.query, limit, case.domain.as_deref())
+                        .vector_plus_fts_search(&case.query, limit, case.space.as_deref())
                         .await?;
                     let ctx_tokens = count_results_tokens(&results);
                     let ranked: Vec<&str> = results.iter().map(|r| r.source_id.as_str()).collect();
@@ -717,7 +717,7 @@ pub async fn run_multi_turn_eval(
                 query,
                 limit,
                 None,
-                best_case.domain.as_deref(),
+                best_case.space.as_deref(),
                 None,
                 Some(1.0), // neutralize confirmation boost
                 Some(1.0), // neutralize recap penalty
@@ -814,7 +814,7 @@ pub async fn run_native_memory_augmentation(
                 &case.query,
                 limit,
                 None,
-                case.domain.as_deref(),
+                case.space.as_deref(),
                 None,
                 Some(1.0), // neutralize confirmation boost
                 Some(1.0), // neutralize recap penalty
@@ -1089,7 +1089,7 @@ pub async fn run_pipeline_token_eval_simulated(
                     &case.query,
                     limit,
                     None,
-                    case.domain.as_deref(),
+                    case.space.as_deref(),
                     None,
                     Some(1.0),
                     Some(1.0),
@@ -1178,7 +1178,7 @@ pub async fn run_pipeline_token_eval_simulated(
                     &case.query,
                     limit,
                     None,
-                    case.domain.as_deref(),
+                    case.space.as_deref(),
                     None,
                     Some(1.0),
                     Some(1.0),
@@ -1228,16 +1228,16 @@ pub async fn run_pipeline_token_eval_simulated(
             );
             let concept_id = "concept_compiled";
             let concept_domain = case
-                .domain
+                .space
                 .clone()
-                .or_else(|| case.seeds.first().and_then(|s| s.domain.clone()));
+                .or_else(|| case.seeds.first().and_then(|s| s.space.clone()));
             let concept_doc = RawDocument {
                 content: combined_content,
                 source_id: concept_id.to_string(),
                 source: "memory".to_string(),
                 title: "Compiled knowledge".to_string(),
                 memory_type: Some("concept".to_string()),
-                domain: concept_domain,
+                space: concept_domain,
                 ..Default::default()
             };
 
@@ -1269,7 +1269,7 @@ pub async fn run_pipeline_token_eval_simulated(
                     &case.query,
                     limit,
                     None,
-                    case.domain.as_deref(),
+                    case.space.as_deref(),
                     None,
                     Some(1.0),
                     Some(1.0),
@@ -1545,7 +1545,7 @@ pub async fn run_quality_at_scale_eval(
                     &case.query,
                     limit,
                     None,
-                    case.domain.as_deref(),
+                    case.space.as_deref(),
                     None,
                     Some(1.0), // neutralize confirmation boost — fixture bias
                     Some(1.0), // neutralize recap penalty — fixture bias
@@ -1694,7 +1694,7 @@ pub async fn run_scaling_eval(
                     &case.query,
                     limit,
                     None,
-                    case.domain.as_deref(),
+                    case.space.as_deref(),
                     None,
                     Some(1.0),
                     Some(1.0),
@@ -2033,7 +2033,7 @@ pub async fn run_memory_layer_comparison(
                     &case.query,
                     limit,
                     None,
-                    case.domain.as_deref(),
+                    case.space.as_deref(),
                     None,
                     Some(1.0), // neutralize confirmation boost
                     Some(1.0), // neutralize recap penalty
@@ -2662,7 +2662,7 @@ mod tests {
                     source: "memory".to_string(),
                     title: format!("{} session {}", mem.speaker, mem.session_num),
                     memory_type: Some("fact".to_string()),
-                    domain: Some("conversation".to_string()),
+                    space: Some("conversation".to_string()),
                     last_modified: chrono::Utc::now().timestamp(),
                     ..Default::default()
                 })
@@ -3170,7 +3170,7 @@ mod tests {
                 &best_case.query,
                 10,
                 None,
-                best_case.domain.as_deref(),
+                best_case.space.as_deref(),
                 None,
                 Some(1.0),
                 Some(1.0),
@@ -3225,7 +3225,7 @@ mod tests {
                 &best_case.query,
                 10,
                 None,
-                best_case.domain.as_deref(),
+                best_case.space.as_deref(),
                 None,
                 Some(1.0),
                 Some(1.0),

@@ -166,7 +166,7 @@ pub(crate) async fn generate_recaps(
             last_modified: burst_end,
             metadata: std::collections::HashMap::new(),
             memory_type: Some("fact".to_string()),
-            domain: dominant_domain,
+            space: dominant_domain,
             source_agent: Some("refinery".to_string()),
             confidence: Some(0.5),
             confirmed: None,
@@ -226,7 +226,7 @@ mod tests {
             source: "memory".to_string(),
             title: content.chars().take(40).collect(),
             memory_type: Some(memory_type.to_string()),
-            domain: Some(domain.to_string()),
+            space: Some(domain.to_string()),
             confidence: Some(0.7),
             last_modified: chrono::Utc::now().timestamp(),
             ..Default::default()

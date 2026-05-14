@@ -473,7 +473,7 @@ pub async fn run_locomo_pipeline_eval(
                 source: "memory".to_string(),
                 title: format!("{} session {}", mem.speaker, mem.session_num),
                 memory_type: Some("fact".to_string()),
-                domain: Some("conversation".to_string()),
+                space: Some("conversation".to_string()),
                 last_modified: chrono::Utc::now().timestamp(),
                 ..Default::default()
             })
@@ -791,7 +791,7 @@ pub async fn run_longmemeval_pipeline_eval(
                     }
                     .to_string(),
                 ),
-                domain: Some("conversation".to_string()),
+                space: Some("conversation".to_string()),
                 last_modified: chrono::Utc::now().timestamp(),
                 ..Default::default()
             })

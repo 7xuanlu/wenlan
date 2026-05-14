@@ -1145,7 +1145,7 @@ mod tests {
             source: "memory".to_string(),
             title: content.chars().take(40).collect(),
             memory_type: Some(memory_type.to_string()),
-            domain: Some(domain.to_string()),
+            space: Some(domain.to_string()),
             confidence: Some(0.7),
             last_modified: chrono::Utc::now().timestamp(),
             ..Default::default()
@@ -1858,7 +1858,7 @@ mod tests {
                 title: content.to_string(),
                 content: content.to_string(),
                 entity_id: Some("entity_libsql".to_string()),
-                domain: Some("architecture".to_string()),
+                space: Some("architecture".to_string()),
                 ..Default::default()
             };
             db.upsert_documents(vec![doc]).await.unwrap();
@@ -1900,7 +1900,7 @@ mod tests {
                 title: content.to_string(),
                 content: content.to_string(),
                 entity_id: Some("entity_libsql_lc".to_string()),
-                domain: Some("architecture".to_string()),
+                space: Some("architecture".to_string()),
                 ..Default::default()
             };
             db.upsert_documents(vec![doc]).await.unwrap();
