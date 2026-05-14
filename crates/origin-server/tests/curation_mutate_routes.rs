@@ -12,6 +12,7 @@ use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use origin_types::{
     EntitySuggestionApproveResponse, EntitySuggestionDismissResponse, RevisionAcceptResponse,
+    RevisionDismissResponse,
 };
 use tower::ServiceExt;
 
@@ -374,5 +375,96 @@ async fn accept_revision_threads_x_agent_name() {
         .unwrap();
     let count =
         common::count_activity_for_action_and_agent(&db, "revision_accept", "openai-test").await;
+    assert_eq!(count, 1);
+}
+
+// ── dismiss_pending_revision HTTP tests ─────────────────────────────────────
+
+#[tokio::test]
+async fn dismiss_revision_succeeds_and_returns_typed_response() {
+    let (router, _tmp, db) = common::test_app().await;
+    seed_pending_revision_in_test_app(&db, "mem_dr1_target", "mem_dr1_rev").await;
+    let response = router
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/memory/revision/mem_dr1_target/dismiss")
+                .header("x-agent-name", "test-agent")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let parsed: RevisionDismissResponse = body_as_json(response).await;
+    assert_eq!(parsed.target_source_id, "mem_dr1_target");
+    assert!(parsed.wrote);
+}
+
+#[tokio::test]
+async fn dismiss_revision_returns_404_on_missing() {
+    let (router, _tmp, _db) = common::test_app().await;
+    let response = router
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/memory/revision/mem_missing/dismiss")
+                .header("x-agent-name", "test-agent")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn dismiss_revision_returns_404_on_re_call() {
+    let (router, _tmp, db) = common::test_app().await;
+    seed_pending_revision_in_test_app(&db, "mem_dr2_target", "mem_dr2_rev").await;
+    let first = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/memory/revision/mem_dr2_target/dismiss")
+                .header("x-agent-name", "test-agent")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(first.status(), StatusCode::OK);
+    let second = router
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/memory/revision/mem_dr2_target/dismiss")
+                .header("x-agent-name", "test-agent")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(second.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn dismiss_revision_threads_x_agent_name() {
+    let (router, _tmp, db) = common::test_app().await;
+    seed_pending_revision_in_test_app(&db, "mem_dr3_target", "mem_dr3_rev").await;
+    router
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/memory/revision/mem_dr3_target/dismiss")
+                .header("x-agent-name", "zed-test")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let count =
+        common::count_activity_for_action_and_agent(&db, "revision_dismiss", "zed-test").await;
     assert_eq!(count, 1);
 }

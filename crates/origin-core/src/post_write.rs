@@ -789,6 +789,23 @@ pub async fn accept_pending_revision(
     })
 }
 
+/// Dismiss a pending memory revision. Canonical entry for both
+/// agent-triggered (`/api/memory/revision/{id}/dismiss`) and daemon-internal
+/// triggers. Deletes the pending revision row; the original is untouched.
+/// Returns `NotFound` if no pending revision exists for the target.
+pub async fn dismiss_pending_revision(
+    db: &MemoryDB,
+    target_source_id: &str,
+    agent: &str,
+) -> Result<origin_types::RevisionDismissResponse, OriginError> {
+    db.dismiss_pending_revision(target_source_id).await?;
+    log_activity_best_effort(db, agent, "revision_dismiss", target_source_id).await;
+    Ok(origin_types::RevisionDismissResponse {
+        target_source_id: target_source_id.to_string(),
+        wrote: true,
+    })
+}
+
 fn is_valid_snake_case_relation(s: &str) -> bool {
     if s.is_empty() {
         return false;
@@ -1599,6 +1616,41 @@ mod tests {
             .await
             .unwrap();
         let err = accept_pending_revision(&db, "mem_arr_target", "test-agent")
+            .await
+            .unwrap_err();
+        assert!(matches!(err, OriginError::NotFound(_)));
+    }
+
+    // ── dismiss_pending_revision ─────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn dismiss_pending_revision_writes_and_logs_on_first_call() {
+        let (db, _tmp) = crate::db::tests::test_db().await;
+        seed_pending_revision(&db, "mem_dpr_target", "mem_dpr_rev").await;
+        let result = dismiss_pending_revision(&db, "mem_dpr_target", "test-agent")
+            .await
+            .unwrap();
+        assert_eq!(result.target_source_id, "mem_dpr_target");
+        assert!(result.wrote);
+    }
+
+    #[tokio::test]
+    async fn dismiss_pending_revision_returns_not_found_on_missing_id() {
+        let (db, _tmp) = crate::db::tests::test_db().await;
+        let err = dismiss_pending_revision(&db, "mem_nope", "test-agent")
+            .await
+            .unwrap_err();
+        assert!(matches!(err, OriginError::NotFound(_)));
+    }
+
+    #[tokio::test]
+    async fn dismiss_pending_revision_returns_not_found_on_re_call() {
+        let (db, _tmp) = crate::db::tests::test_db().await;
+        seed_pending_revision(&db, "mem_dpr2_target", "mem_dpr2_rev").await;
+        dismiss_pending_revision(&db, "mem_dpr2_target", "test-agent")
+            .await
+            .unwrap();
+        let err = dismiss_pending_revision(&db, "mem_dpr2_target", "test-agent")
             .await
             .unwrap_err();
         assert!(matches!(err, OriginError::NotFound(_)));
