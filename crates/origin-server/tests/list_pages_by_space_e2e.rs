@@ -35,12 +35,7 @@ async fn list_pages(router: &axum::Router, space: Option<&str>) -> ListPagesResp
         )
         .await
         .unwrap();
-    assert_eq!(
-        resp.status(),
-        StatusCode::OK,
-        "GET {} must return 200",
-        uri
-    );
+    assert_eq!(resp.status(), StatusCode::OK, "GET {} must return 200", uri);
     let bytes = axum::body::to_bytes(resp.into_body(), 256 * 1024)
         .await
         .unwrap();
@@ -102,6 +97,9 @@ async fn list_pages_filters_by_space() {
         all.pages.len(),
         2,
         "unfiltered list must return both pages; got: {:?}",
-        all.pages.iter().map(|p| p.title.as_str()).collect::<Vec<_>>()
+        all.pages
+            .iter()
+            .map(|p| p.title.as_str())
+            .collect::<Vec<_>>()
     );
 }

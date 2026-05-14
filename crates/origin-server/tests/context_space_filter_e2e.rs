@@ -129,12 +129,42 @@ async fn context_filters_memories_by_space_across_all_shelves() {
     // Content strings carry unique markers (ALPHA_MARKER vs BETA_MARKER) so we
     // can assert their absence/presence in the combined context string.
     for (source_id, content, memory_type, space) in [
-        ("mem_alpha_id", "ALPHA_MARKER identity content", "identity", "alpha"),
-        ("mem_alpha_pref", "ALPHA_MARKER preference content", "preference", "alpha"),
-        ("mem_alpha_dec", "ALPHA_MARKER decision content", "decision", "alpha"),
-        ("mem_beta_id", "BETA_MARKER identity content", "identity", "beta"),
-        ("mem_beta_pref", "BETA_MARKER preference content", "preference", "beta"),
-        ("mem_beta_dec", "BETA_MARKER decision content", "decision", "beta"),
+        (
+            "mem_alpha_id",
+            "ALPHA_MARKER identity content",
+            "identity",
+            "alpha",
+        ),
+        (
+            "mem_alpha_pref",
+            "ALPHA_MARKER preference content",
+            "preference",
+            "alpha",
+        ),
+        (
+            "mem_alpha_dec",
+            "ALPHA_MARKER decision content",
+            "decision",
+            "alpha",
+        ),
+        (
+            "mem_beta_id",
+            "BETA_MARKER identity content",
+            "identity",
+            "beta",
+        ),
+        (
+            "mem_beta_pref",
+            "BETA_MARKER preference content",
+            "preference",
+            "beta",
+        ),
+        (
+            "mem_beta_dec",
+            "BETA_MARKER decision content",
+            "decision",
+            "beta",
+        ),
     ] {
         insert_and_confirm(&db, source_id, content, memory_type, space).await;
     }

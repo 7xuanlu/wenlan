@@ -501,8 +501,13 @@ mod indexed_file_info_created_at_test {
             "chunk_count":1,"last_modified":1000,"processing":false,
             "memory_type":null,"domain":"work","source_agent":null,
             "confidence":null,"confirmed":null,"stability":null,"pinned":false}"#;
-        let info: IndexedFileInfo = serde_json::from_str(json).expect("legacy domain key should deserialize");
-        assert_eq!(info.space.as_deref(), Some("work"), "alias should map domain -> space");
+        let info: IndexedFileInfo =
+            serde_json::from_str(json).expect("legacy domain key should deserialize");
+        assert_eq!(
+            info.space.as_deref(),
+            Some("work"),
+            "alias should map domain -> space"
+        );
     }
 }
 

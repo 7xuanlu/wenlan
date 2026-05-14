@@ -113,9 +113,14 @@ pub async fn handle_search(
             .await
             .map_err(|e| ServerError::SearchFailed(e.to_string()))?
         } else {
-            db.search(&req.query, req.limit, req.source_filter.as_deref(), req.space.as_deref())
-                .await
-                .map_err(|e| ServerError::SearchFailed(e.to_string()))?
+            db.search(
+                &req.query,
+                req.limit,
+                req.source_filter.as_deref(),
+                req.space.as_deref(),
+            )
+            .await
+            .map_err(|e| ServerError::SearchFailed(e.to_string()))?
         }
     };
 
@@ -310,16 +315,9 @@ pub async fn handle_chat_context(
 
     // Tier 3 (search)
     let search_results = if classification.use_graph {
-        db.search_memory_reranked(
-            query,
-            req.max_chunks,
-            None,
-            space_filter,
-            None,
-            llm.clone(),
-        )
-        .await
-        .unwrap_or_default()
+        db.search_memory_reranked(query, req.max_chunks, None, space_filter, None, llm.clone())
+            .await
+            .unwrap_or_default()
     } else {
         db.search_memory(
             query,

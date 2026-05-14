@@ -81,8 +81,20 @@ async fn doc_search_space_filter_is_noop_until_pr_c() {
     // (the handler hard-codes `space: None`). The chunks table also lacks a
     // `space` column, so the space filter has nowhere to operate even if it
     // were wired through.
-    ingest_doc(&router, "doc_alpha_001", "local_files", "unique_alpha_content").await;
-    ingest_doc(&router, "doc_beta_001", "local_files", "unique_beta_content").await;
+    ingest_doc(
+        &router,
+        "doc_alpha_001",
+        "local_files",
+        "unique_alpha_content",
+    )
+    .await;
+    ingest_doc(
+        &router,
+        "doc_beta_001",
+        "local_files",
+        "unique_beta_content",
+    )
+    .await;
 
     // Search with source_filter="local_files" (not "memory") and space="alpha".
     // The code path hits `MemoryDB::search`, which explicitly discards `space`
@@ -117,7 +129,11 @@ async fn doc_search_space_filter_is_noop_until_pr_c() {
     );
 
     // Confirm both documents are actually present in the results.
-    let source_ids: Vec<&str> = response.results.iter().map(|r| r.source_id.as_str()).collect();
+    let source_ids: Vec<&str> = response
+        .results
+        .iter()
+        .map(|r| r.source_id.as_str())
+        .collect();
     assert!(
         source_ids.contains(&"doc_alpha_001"),
         "doc_alpha_001 must be in results regardless of space filter; got: {:?}",

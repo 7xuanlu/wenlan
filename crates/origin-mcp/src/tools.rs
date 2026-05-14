@@ -2532,8 +2532,13 @@ mod tests {
         // Cached MCP clients (pre-0.7.0 schema) send `"domain"` instead of `"space"`.
         // The serde alias must accept legacy JSON so they don't break for the one-release window.
         let json = r#"{"topic": "project work", "domain": "work"}"#;
-        let params: ContextParams = serde_json::from_str(json).expect("legacy 'domain' key must deserialize");
-        assert_eq!(params.space.as_deref(), Some("work"), "alias must map domain → space");
+        let params: ContextParams =
+            serde_json::from_str(json).expect("legacy 'domain' key must deserialize");
+        assert_eq!(
+            params.space.as_deref(),
+            Some("work"),
+            "alias must map domain → space"
+        );
     }
 
     #[test]

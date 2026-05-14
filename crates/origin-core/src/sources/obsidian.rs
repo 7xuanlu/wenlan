@@ -713,9 +713,7 @@ mod tests {
         assert!(all_docs
             .iter()
             .all(|d| d.source_agent == Some("obsidian".to_string())));
-        assert!(all_docs
-            .iter()
-            .any(|d| d.space == Some("rust".to_string())));
+        assert!(all_docs.iter().any(|d| d.space == Some("rust".to_string())));
         assert!(all_docs
             .iter()
             .any(|d| d.memory_type == Some("fact".to_string())));

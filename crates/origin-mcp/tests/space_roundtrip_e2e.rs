@@ -112,9 +112,7 @@ async fn mcp_capture_and_recall_respects_space() {
     // Daemon accepts both captures (store endpoint returns ok for each).
     Mock::given(method("POST"))
         .and(path("/api/memory/store"))
-        .respond_with(
-            ResponseTemplate::new(200).set_body_json(&store_response("mem_alpha1")),
-        )
+        .respond_with(ResponseTemplate::new(200).set_body_json(&store_response("mem_alpha1")))
         .expect(2)
         .mount(&mock)
         .await;
@@ -232,8 +230,8 @@ async fn mcp_capture_and_recall_respects_space() {
 async fn mcp_legacy_domain_key_still_works() {
     // --- Pure serde layer: CaptureParams ---
     let capture_json = r#"{"content": "legacy capture fact", "domain": "alpha"}"#;
-    let params: CaptureParams =
-        serde_json::from_str(capture_json).expect("legacy 'domain' key must deserialize for CaptureParams");
+    let params: CaptureParams = serde_json::from_str(capture_json)
+        .expect("legacy 'domain' key must deserialize for CaptureParams");
     assert_eq!(
         params.space.as_deref(),
         Some("alpha"),
@@ -242,8 +240,8 @@ async fn mcp_legacy_domain_key_still_works() {
 
     // --- Pure serde layer: RecallParams ---
     let recall_json = r#"{"query": "some fact", "domain": "alpha"}"#;
-    let rparams: RecallParams =
-        serde_json::from_str(recall_json).expect("legacy 'domain' key must deserialize for RecallParams");
+    let rparams: RecallParams = serde_json::from_str(recall_json)
+        .expect("legacy 'domain' key must deserialize for RecallParams");
     assert_eq!(
         rparams.space.as_deref(),
         Some("alpha"),
@@ -255,9 +253,7 @@ async fn mcp_legacy_domain_key_still_works() {
     let mock = MockServer::start().await;
     Mock::given(method("POST"))
         .and(path("/api/memory/store"))
-        .respond_with(
-            ResponseTemplate::new(200).set_body_json(&store_response("mem_legacy1")),
-        )
+        .respond_with(ResponseTemplate::new(200).set_body_json(&store_response("mem_legacy1")))
         .mount(&mock)
         .await;
 
@@ -265,10 +261,9 @@ async fn mcp_legacy_domain_key_still_works() {
     let server = make_server(client);
 
     // Deserialize from legacy JSON to simulate a cached MCP client sending `domain`.
-    let legacy_params: CaptureParams = serde_json::from_str(
-        r#"{"content": "legacy capture fact", "domain": "alpha"}"#,
-    )
-    .expect("legacy JSON must parse");
+    let legacy_params: CaptureParams =
+        serde_json::from_str(r#"{"content": "legacy capture fact", "domain": "alpha"}"#)
+            .expect("legacy JSON must parse");
 
     let result = server
         .capture_impl(legacy_params)

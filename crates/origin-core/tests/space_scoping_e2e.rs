@@ -15,7 +15,9 @@ async fn make_db() -> (Arc<MemoryDB>, tempfile::TempDir) {
     let dir = tempfile::tempdir().expect("tempdir");
     let db_path = dir.path().join("test.db");
     let emitter: Arc<dyn EventEmitter> = Arc::new(NoopEmitter);
-    let db = MemoryDB::new(&db_path, emitter).await.expect("MemoryDB::new");
+    let db = MemoryDB::new(&db_path, emitter)
+        .await
+        .expect("MemoryDB::new");
     (Arc::new(db), dir)
 }
 
@@ -71,7 +73,16 @@ async fn space_uncategorized_matches_null() {
     .unwrap();
 
     let r = db
-        .search_memory("fact", 10, None, Some("uncategorized"), None, None, None, None)
+        .search_memory(
+            "fact",
+            10,
+            None,
+            Some("uncategorized"),
+            None,
+            None,
+            None,
+            None,
+        )
         .await
         .unwrap();
     let texts: Vec<&str> = r.iter().map(|x| x.content.as_str()).collect();

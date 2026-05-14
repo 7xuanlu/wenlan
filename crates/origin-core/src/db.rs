@@ -4658,7 +4658,9 @@ impl MemoryDB {
                 if already_renamed {
                     conn.execute("PRAGMA user_version = 50", ())
                         .await
-                        .map_err(|e| OriginError::VectorDb(format!("m50 bump (already done): {e}")))?;
+                        .map_err(|e| {
+                            OriginError::VectorDb(format!("m50 bump (already done): {e}"))
+                        })?;
                     log::info!("[migration] Migration 50 skipped (already applied): bumped user_version to 50");
                 } else {
                     conn.execute("PRAGMA foreign_keys = OFF", ())
@@ -4717,7 +4719,9 @@ impl MemoryDB {
                             let _ = conn.execute("ROLLBACK", ()).await;
                             conn.execute("PRAGMA foreign_keys = ON", ())
                                 .await
-                                .map_err(|e2| OriginError::VectorDb(format!("m50 fk on (rollback): {e2}")))?;
+                                .map_err(|e2| {
+                                    OriginError::VectorDb(format!("m50 fk on (rollback): {e2}"))
+                                })?;
                             return Err(e);
                         }
                     }
@@ -5498,7 +5502,11 @@ impl MemoryDB {
         Ok(())
     }
 
-    pub async fn update_memory_space(&self, source_id: &str, space: &str) -> Result<(), OriginError> {
+    pub async fn update_memory_space(
+        &self,
+        source_id: &str,
+        space: &str,
+    ) -> Result<(), OriginError> {
         let conn = self.conn.lock().await;
         conn.execute(
             "UPDATE memories SET space = ?1 WHERE source_id = ?2",
@@ -7195,8 +7203,7 @@ impl MemoryDB {
 
         let conn = self.conn.lock().await;
 
-        let (space_clause, space_param): (String, Option<libsql::Value>) = if let Some(d) = space
-        {
+        let (space_clause, space_param): (String, Option<libsql::Value>) = if let Some(d) = space {
             (
                 "AND c.space = ?3".to_string(),
                 Some(libsql::Value::Text(d.to_string())),
@@ -18352,7 +18359,10 @@ pub(crate) mod tests {
         }
         db.upsert_documents(docs).await.unwrap();
 
-        let results = db.search("programming language", 3, None, None).await.unwrap();
+        let results = db
+            .search("programming language", 3, None, None)
+            .await
+            .unwrap();
         assert!(results.len() <= 3, "should respect limit");
     }
 
@@ -29349,7 +29359,11 @@ pub(crate) mod tests {
     /// A zero-filled embedding is stored so the crash-recovery null-embed
     /// backfill (which queries `space`) is never triggered during the
     /// subsequent MemoryDB::new call that fires migration 50.
-    async fn insert_memory_for_test_with_domain(db: &MemoryDB, content: &str, domain: Option<&str>) -> String {
+    async fn insert_memory_for_test_with_domain(
+        db: &MemoryDB,
+        content: &str,
+        domain: Option<&str>,
+    ) -> String {
         let id = format!("mem_test_{}", uuid::Uuid::new_v4().simple());
         let conn = db.conn.lock().await;
         // Build a 768-dim zero vector string for vector32(): "[0.000000,0.000000,...]"
@@ -29357,7 +29371,9 @@ pub(crate) mod tests {
             let mut s = String::with_capacity(768 * 10);
             s.push('[');
             for i in 0..768usize {
-                if i > 0 { s.push(','); }
+                if i > 0 {
+                    s.push(',');
+                }
                 s.push_str("0.000000");
             }
             s.push(']');
