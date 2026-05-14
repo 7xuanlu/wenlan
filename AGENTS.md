@@ -159,7 +159,7 @@ cat .release-please-manifest.json
 
 ### Branch protection
 
-Main branch has: required CI ("Test & Lint") before merge, no force pushes, no deletion. `enforce_admins: false` so the repo owner can push directly for hotfixes. Force push requires temporarily enabling it via API (remember to re-disable after).
+Main branch has: required CI (`conclusion` — aggregate gate over `fmt` + `lint` + `test`, rust-lang convention from cargo / rustup / rust-analyzer) before merge, no force pushes, no deletion. `enforce_admins: false` so the repo owner can push directly for hotfixes. Force push requires temporarily enabling it via API (remember to re-disable after).
 
 ### Git hooks (auto-activated)
 
