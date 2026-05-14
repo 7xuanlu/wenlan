@@ -6,15 +6,21 @@
 //! or subsequent steps.
 //!
 //! Steps:
-//! 1. Dedup check (vector similarity > 0.92 → queue dedup_merge)
-//! 2. Entity auto-linking (vector search entities > 0.85 distance → set entity_id)
-//!    2b. Store-time entity extraction (LLM extract if auto-link found no match)
-//! 3. Semantic contradiction check (type+domain pre-filter → queue detect_contradiction)
-//! 4. Entity creation suggestion (stub — full impl in refinery Task 5)
-//! 5. Title enrichment (LLM short title if current looks truncated)
-//! 6. (Removed — recaps now handled by event-driven scheduler)
-//! 7. Concept growth (update matching page with new memory)
-//! 8. (Removed -- enrichment status derived from per-step outcomes in enrichment_steps table)
+//! 1. Entity auto-linking (vector search entities > 0.85 distance → set entity_id)
+//!    1b. Store-time entity extraction (LLM extract if auto-link found no match)
+//! 2. Entity creation suggestion (stub — full impl in refinery Task 5)
+//! 3. Title enrichment (LLM short title if current looks truncated)
+//! 4. (Removed — recaps now handled by event-driven scheduler)
+//! 5. Concept growth (update matching page with new memory)
+//! 6. (Removed -- enrichment status derived from per-step outcomes in enrichment_steps table)
+//!
+//! Removed steps (dedup_merge and detect_contradiction proposals):
+//! - Dedup check: emitted dedup_merge proposals; accept path is deprecated stale-v1.
+//!   Distillation handles dedup. Removed in post-PR #109 cleanup.
+//! - Contradiction check: emitted detect_contradiction proposals; accept path calls
+//!   flag_memory_for_revision which does not set supersedes IS NOT NULL, so proposals
+//!   never surface in /brief. The topic-match-protected path in memory_routes.rs is
+//!   the only working contradiction-detection path. Removed in post-PR #109 cleanup.
 
 use crate::db::MemoryDB;
 use crate::error::OriginError;
@@ -42,9 +48,9 @@ pub async fn run_post_ingest_enrichment(
     source_id: &str,
     content: &str,
     entity_id: Option<&str>,
-    memory_type: Option<&str>,
-    domain: Option<&str>,
-    structured_fields: Option<&str>,
+    _memory_type: Option<&str>,
+    _domain: Option<&str>,
+    _structured_fields: Option<&str>,
     llm: Option<&Arc<dyn LlmProvider>>,
     prompts: &PromptRegistry,
     tuning: &crate::tuning::RefineryConfig,
@@ -53,32 +59,7 @@ pub async fn run_post_ingest_enrichment(
 ) -> Result<(), OriginError> {
     log::info!("[post_ingest] enriching {source_id}");
 
-    // 1. Dedup check (safety net — topic matching handles most cases pre-batcher;
-    //    this fires only when a duplicate slips through)
-    match check_dedup(db, source_id, content, tuning).await {
-        Ok(n) if n > 0 => {
-            log::warn!(
-                "[post_ingest] dedup safety net fired for {source_id}: {n} duplicate candidate(s) queued. \
-                 This suggests a gap in topic matching or novelty gate."
-            );
-            db.record_enrichment_step(source_id, "dedup", "ok", None)
-                .await
-                .ok();
-        }
-        Ok(_) => {
-            db.record_enrichment_step(source_id, "dedup", "ok", None)
-                .await
-                .ok();
-        }
-        Err(e) => {
-            log::warn!("[post_ingest] dedup check failed: {e}");
-            db.record_enrichment_step(source_id, "dedup", "failed", Some(&e.to_string()))
-                .await
-                .ok();
-        }
-    }
-
-    // 2. Entity auto-linking (only if not already linked)
+    // 1. Entity auto-linking (only if not already linked)
     if entity_id.is_none() {
         match auto_link_entity(db, source_id, content, tuning).await {
             Ok(true) => {
@@ -221,39 +202,7 @@ pub async fn run_post_ingest_enrichment(
             .ok();
     }
 
-    // 3. Semantic contradiction check (type+domain pre-filter)
-    if let Some(mt) = memory_type {
-        match check_contradiction(db, source_id, mt, domain, structured_fields, content).await {
-            Ok(n) if n > 0 => {
-                log::info!("[post_ingest] {source_id}: {n} contradiction candidate(s) queued");
-                db.record_enrichment_step(source_id, "contradiction", "ok", None)
-                    .await
-                    .ok();
-            }
-            Ok(_) => {
-                db.record_enrichment_step(source_id, "contradiction", "ok", None)
-                    .await
-                    .ok();
-            }
-            Err(e) => {
-                log::warn!("[post_ingest] contradiction check failed: {e}");
-                db.record_enrichment_step(
-                    source_id,
-                    "contradiction",
-                    "failed",
-                    Some(&e.to_string()),
-                )
-                .await
-                .ok();
-            }
-        }
-    } else {
-        db.record_enrichment_step(source_id, "contradiction", "skipped", None)
-            .await
-            .ok();
-    }
-
-    // 3b. Concept contradiction check — flag related concepts for re-distill if new memory contradicts
+    // 3. Concept contradiction check — flag related concepts for re-distill if new memory contradicts
     match check_page_contradiction(db, source_id, content).await {
         Ok(n) if n > 0 => {
             log::info!("[post_ingest] {source_id}: flagged {n} page(s) for re-distill");
@@ -407,91 +356,6 @@ pub async fn run_post_ingest_enrichment(
     }
 
     Ok(())
-}
-
-/// Check for semantic contradictions against existing same-type memories.
-pub(crate) async fn check_contradiction(
-    db: &MemoryDB,
-    source_id: &str,
-    memory_type: &str,
-    domain: Option<&str>,
-    structured_fields: Option<&str>,
-    _content: &str,
-) -> Result<usize, OriginError> {
-    if source_id.starts_with("recap_") || memory_type.is_empty() {
-        return Ok(0);
-    }
-    let candidates = db
-        .find_same_type_memories(source_id, memory_type, domain, 3)
-        .await?;
-    if candidates.is_empty() {
-        return Ok(0);
-    }
-    let mut queued = 0;
-    for (existing_id, existing_sf, _existing_content) in &candidates {
-        let is_candidate = match (structured_fields, existing_sf.as_deref()) {
-            (Some(new_sf), Some(old_sf)) => {
-                crate::contradiction::fields_may_contradict(memory_type, old_sf, new_sf)
-            }
-            _ => true, // No structured fields — type+domain overlap is enough signal
-        };
-        if is_candidate {
-            log::info!(
-                "[post_ingest] contradiction candidate: {} vs {}",
-                source_id,
-                existing_id
-            );
-            let proposal_id = format!("contradiction_{}_{}", source_id, existing_id);
-            db.insert_refinement_proposal(
-                &proposal_id,
-                "detect_contradiction",
-                &[source_id.to_string(), existing_id.clone()],
-                None,
-                0.8,
-            )
-            .await?;
-            queued += 1;
-        }
-    }
-    Ok(queued)
-}
-
-/// Check for near-duplicates via vector similarity (cosine > 0.92).
-/// Queues `dedup_merge` refinement proposals for matches.
-pub(crate) async fn check_dedup(
-    db: &MemoryDB,
-    source_id: &str,
-    content: &str,
-    tuning: &crate::tuning::RefineryConfig,
-) -> Result<u32, OriginError> {
-    // Recaps are expected to be similar to their source memories — skip dedup
-    if source_id.starts_with("recap_") {
-        return Ok(0);
-    }
-
-    // Use search() (not search_memory()) to avoid score normalization —
-    // dedup threshold comparison needs raw RRF scores.
-    let results = db.search(content, 5, Some("memory")).await?;
-
-    let mut queued = 0u32;
-    for result in &results {
-        if result.source_id == source_id {
-            continue;
-        }
-        if result.score > tuning.dedup_similarity_threshold as f32 {
-            let id = uuid::Uuid::new_v4().to_string();
-            db.insert_refinement_proposal(
-                &id,
-                "dedup_merge",
-                &[source_id.to_string(), result.source_id.clone()],
-                None,
-                result.score as f64,
-            )
-            .await?;
-            queued += 1;
-        }
-    }
-    Ok(queued)
 }
 
 /// Auto-link memory to an existing entity via vector search.
@@ -809,34 +673,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_check_dedup_skips_recaps() {
-        let (db, _dir) = test_db().await;
-        let tuning = crate::tuning::RefineryConfig::default();
-        let result = check_dedup(&db, "recap_abc", "some content", &tuning)
-            .await
-            .unwrap();
-        assert_eq!(result, 0);
-    }
-
-    #[tokio::test]
-    async fn test_check_dedup_no_duplicates() {
-        let (db, _dir) = test_db().await;
-        let doc = make_doc("mem_unique", "Rust is a systems programming language");
-        db.upsert_documents(vec![doc]).await.unwrap();
-        let tuning = crate::tuning::RefineryConfig::default();
-        let result = check_dedup(
-            &db,
-            "mem_unique",
-            "Rust is a systems programming language",
-            &tuning,
-        )
-        .await
-        .unwrap();
-        // Should not queue self as duplicate
-        assert_eq!(result, 0);
-    }
-
-    #[tokio::test]
     async fn test_auto_link_entity_no_entities() {
         let (db, _dir) = test_db().await;
         let tuning = crate::tuning::RefineryConfig::default();
@@ -910,10 +746,6 @@ mod tests {
         let steps = db.get_enrichment_steps("mem_step_record").await.unwrap();
         assert!(!steps.is_empty(), "should have recorded enrichment steps");
 
-        // dedup should be ok (no duplicates)
-        let dedup = steps.iter().find(|s| s.step == "dedup").unwrap();
-        assert_eq!(dedup.status, "ok");
-
         // entity_extract should be skipped (no LLM)
         let extract = steps.iter().find(|s| s.step == "entity_extract").unwrap();
         assert_eq!(extract.status, "skipped");
@@ -929,104 +761,6 @@ mod tests {
         // Summary should be enriched (no failures)
         let summary = db.get_enrichment_summary("mem_step_record").await.unwrap();
         assert_eq!(summary, "enriched");
-    }
-
-    #[tokio::test]
-    async fn test_full_contradiction_flow() {
-        let (db, _dir) = test_db().await;
-
-        // Store and confirm an existing preference memory
-        let mut existing = make_doc("mem_dark", "I prefer dark mode in editors");
-        existing.memory_type = Some("preference".to_string());
-        existing.domain = Some("tools".to_string());
-        existing.confirmed = Some(true);
-        existing.structured_fields =
-            Some(r#"{"preference":"dark mode","applies_when":"editors"}"#.to_string());
-        db.upsert_documents(vec![existing]).await.unwrap();
-
-        // Store the conflicting memory so it exists in the DB
-        let mut new_doc = make_doc("mem_light", "I prefer light mode in editors");
-        new_doc.memory_type = Some("preference".to_string());
-        new_doc.domain = Some("tools".to_string());
-        new_doc.structured_fields =
-            Some(r#"{"preference":"light mode","applies_when":"editors"}"#.to_string());
-        db.upsert_documents(vec![new_doc]).await.unwrap();
-
-        // Run enrichment on the new conflicting memory
-        let new_sf = r#"{"preference":"light mode","applies_when":"editors"}"#;
-        run_post_ingest_enrichment(
-            &db,
-            "mem_light",
-            "I prefer light mode in editors",
-            None,
-            Some("preference"),
-            Some("tools"),
-            Some(new_sf),
-            None,
-            &crate::prompts::PromptRegistry::default(),
-            &crate::tuning::RefineryConfig::default(),
-            &crate::tuning::DistillationConfig::default(),
-            None,
-        )
-        .await
-        .unwrap();
-
-        // Verify a detect_contradiction refinement was queued
-        let pending = db.get_pending_refinements().await.unwrap();
-        assert!(
-            pending.iter().any(|p| p.action == "detect_contradiction"),
-            "should have queued a detect_contradiction refinement, got: {:?}",
-            pending.iter().map(|p| &p.action).collect::<Vec<_>>()
-        );
-    }
-
-    #[tokio::test]
-    async fn test_no_contradiction_for_different_contexts() {
-        let (db, _dir) = test_db().await;
-
-        // Store and confirm an existing preference for editors
-        let mut existing = make_doc("mem_dark_ed", "I prefer dark mode in editors");
-        existing.memory_type = Some("preference".to_string());
-        existing.domain = Some("tools".to_string());
-        existing.confirmed = Some(true);
-        existing.structured_fields =
-            Some(r#"{"preference":"dark mode","applies_when":"editors"}"#.to_string());
-        db.upsert_documents(vec![existing]).await.unwrap();
-
-        // Store a memory for a different context (reading documents)
-        let mut new_doc = make_doc("mem_light_read", "I prefer light mode for reading");
-        new_doc.memory_type = Some("preference".to_string());
-        new_doc.domain = Some("tools".to_string());
-        new_doc.structured_fields =
-            Some(r#"{"preference":"light mode","applies_when":"reading documents"}"#.to_string());
-        db.upsert_documents(vec![new_doc]).await.unwrap();
-
-        // Run enrichment — different applies_when context should not trigger contradiction
-        let new_sf = r#"{"preference":"light mode","applies_when":"reading documents"}"#;
-        run_post_ingest_enrichment(
-            &db,
-            "mem_light_read",
-            "I prefer light mode for reading",
-            None,
-            Some("preference"),
-            Some("tools"),
-            Some(new_sf),
-            None,
-            &crate::prompts::PromptRegistry::default(),
-            &crate::tuning::RefineryConfig::default(),
-            &crate::tuning::DistillationConfig::default(),
-            None,
-        )
-        .await
-        .unwrap();
-
-        // Verify no detect_contradiction refinement was queued
-        let pending = db.get_pending_refinements().await.unwrap();
-        assert!(
-            !pending.iter().any(|p| p.action == "detect_contradiction"),
-            "should NOT queue contradiction for different contexts, got: {:?}",
-            pending.iter().map(|p| &p.action).collect::<Vec<_>>()
-        );
     }
 
     /// Regression guard for time-windowed store-time entity-extraction batching.

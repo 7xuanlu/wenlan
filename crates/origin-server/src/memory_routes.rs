@@ -704,9 +704,8 @@ pub async fn handle_store_memory(
     //      this phase fills them in via a combined UPDATE. Tags go through
     //      `space_store` and require a brief write guard.
     //
-    //   2. `run_post_ingest_enrichment(...)` — entity auto-linking, contradiction
-    //      candidate queueing, title enrichment, page growth. Existing
-    //      behavior; runs with the enriched fields phase 1 produced.
+    //   2. `run_post_ingest_enrichment(...)` — entity auto-linking, title
+    //      enrichment, page growth. Runs with the enriched fields phase 1 produced.
     //
     // IMPORTANT: extract Arcs/clones from the read guard and drop it BEFORE
     // entering any `.await` on LLM or DB work. Holding a read guard across an
@@ -888,7 +887,7 @@ pub async fn handle_store_memory(
             }
 
             // Phase 2: existing post-ingest enrichment (entity linking,
-            // contradiction queueing, title enrichment, page growth).
+            // title enrichment, page growth).
             if let Err(e) = origin_core::post_ingest::run_post_ingest_enrichment(
                 &db,
                 &source_id_clone,

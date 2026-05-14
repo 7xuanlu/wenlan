@@ -182,7 +182,7 @@ pub async fn handle_chat_export_import(
     // Each iteration does TWO phases matching the canonical handle_store_memory
     // pattern (memory_routes.rs:850-1008):
     //   Phase 1: classify → apply_enrichment  (writes memory_type to DB)
-    //   Phase 2: run_post_ingest_enrichment   (entity link, dedup, title, concept)
+    //   Phase 2: run_post_ingest_enrichment   (entity link, title, concept)
     //
     // Skipped from Phase 1: extract (structured_fields / retrieval_cue). Chat
     // imports are high-volume bulk data; title_enrich in Phase 2 covers the most
