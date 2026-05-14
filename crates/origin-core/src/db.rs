@@ -29227,4 +29227,97 @@ pub(crate) mod tests {
             "clear_user_edited should mark stale so refinery picks it up"
         );
     }
+
+    // ── migration 50 replay test ──────────────────────────────────────────────
+
+    /// Insert a minimal memory row directly via SQL, with an explicit `domain`
+    /// value.  Used by the migration-50 replay test.  Supplies all NOT NULL
+    /// columns that lack a DEFAULT (id, title, chunk_index, chunk_type).
+    async fn insert_memory_for_test_with_domain(db: &MemoryDB, content: &str, domain: Option<&str>) -> String {
+        let id = format!("mem_test_{}", uuid::Uuid::new_v4().simple());
+        let conn = db.conn.lock().await;
+        conn.execute(
+            "INSERT INTO memories \
+             (id, source_id, source, content, source_text, title, chunk_index, chunk_type, \
+              memory_type, domain, created_at, last_modified) \
+             VALUES (?1, ?2, 'memory', ?3, ?3, 'test-title', 0, 'text', 'fact', ?4, \
+                     unixepoch('now'), unixepoch('now'))",
+            libsql::params![
+                id.clone(),
+                id.clone(),
+                content.to_string(),
+                domain.map(String::from)
+            ],
+        )
+        .await
+        .expect("insert_memory_for_test_with_domain failed");
+        id
+    }
+
+    #[tokio::test]
+    async fn migration_50_renames_domain_to_space() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db_path = tmp.path().join("test.db");
+        let db = MemoryDB::new(&db_path, Arc::new(crate::events::NoopEmitter))
+            .await
+            .unwrap();
+
+        // Insert a memory with domain populated.
+        insert_memory_for_test_with_domain(&db, "test fact", Some("alpha")).await;
+
+        // Roll user_version back so migration 50 re-fires on the next open.
+        {
+            let conn = db.conn.lock().await;
+            conn.execute("PRAGMA user_version = 49", ()).await.unwrap();
+        }
+        drop(db);
+
+        // Re-open — migration 50 should fire (or fail to find a column named `domain` if 50 doesn't exist yet).
+        let db = MemoryDB::new(&db_path, Arc::new(crate::events::NoopEmitter))
+            .await
+            .unwrap();
+        let conn = db.conn.lock().await;
+
+        // Column renamed: SELECT space must succeed.
+        let mut rows = conn
+            .query(
+                "SELECT space FROM memories WHERE source_text = ?1",
+                libsql::params!["test fact"],
+            )
+            .await
+            .unwrap();
+        let row = rows.next().await.unwrap().expect("memory row present");
+        let space: Option<String> = row.get(0).unwrap();
+        assert_eq!(
+            space.as_deref(),
+            Some("alpha"),
+            "data must survive RENAME COLUMN"
+        );
+
+        // New index exists.
+        let mut idx_rows = conn
+            .query(
+                "SELECT name FROM sqlite_master WHERE type='index' AND name='idx_memories_space'",
+                (),
+            )
+            .await
+            .unwrap();
+        assert!(
+            idx_rows.next().await.unwrap().is_some(),
+            "idx_memories_space must exist after migration 50"
+        );
+
+        // Old index dropped.
+        let mut old_idx = conn
+            .query(
+                "SELECT name FROM sqlite_master WHERE type='index' AND name='idx_memories_domain'",
+                (),
+            )
+            .await
+            .unwrap();
+        assert!(
+            old_idx.next().await.unwrap().is_none(),
+            "idx_memories_domain must be dropped after migration 50"
+        );
+    }
 }
