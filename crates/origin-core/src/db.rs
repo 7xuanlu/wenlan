@@ -29255,7 +29255,7 @@ pub(crate) mod tests {
     }
 
     #[tokio::test]
-    async fn migration_50_renames_domain_to_space() {
+    async fn test_migration_50_renames_domain_to_space() {
         let tmp = tempfile::tempdir().unwrap();
         let db_path = tmp.path().join("test.db");
         let db = MemoryDB::new(&db_path, Arc::new(crate::events::NoopEmitter))
