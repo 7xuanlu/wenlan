@@ -74,7 +74,10 @@ jobs:
           components: clippy
       - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
         with:
-          shared-key: workspace
+          # Separate from `test` key — clippy emits *.rmeta only, test needs
+          # *.rlib. Shared key loses because lint writes first and test then
+          # gets a partial cache + recompiles from scratch.
+          shared-key: clippy
       - run: cargo clippy --workspace --all-targets -- -D warnings
       - name: Verify origin-mcp uses path dep for origin-types
         run: |
@@ -98,7 +101,7 @@ jobs:
           toolchain: 1.95.0
       - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
         with:
-          shared-key: workspace
+          shared-key: test
       - uses: taiki-e/install-action@3235f8901fd37ffed0052b276cec25a362fb82e9 # v2
         with:
           tool: cargo-nextest
