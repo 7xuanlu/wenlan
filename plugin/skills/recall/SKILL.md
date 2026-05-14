@@ -39,14 +39,15 @@ matters, use that endpoint instead of issuing parallel calls here.
 ### Phase 2 — call the MCP tool
 
 ```
-recall(query="<expanded query>", domain=<inferred>, memory_type=<inferred>)
+recall(query="<expanded query>", space=<inferred>, memory_type=<inferred>)
 ```
 
 Inferences (do not ask the user):
 
-- `domain`: current working directory (e.g. `~/Repos/origin/...` → `"origin"`),
+- `space`: current working directory (e.g. `~/Repos/origin/...` → `"origin"`),
   the topic being discussed, or whatever space was mentioned in recent turns.
-  Omit if no clear signal.
+  Always pass when scope is known; if uncertain, run `list_spaces` later
+  (post-PR-C) or omit.
 - `memory_type`: only when the query itself names a type ("decision on X",
   "lesson about Y", "preference for Z"). Otherwise omit and let hybrid
   search rank.

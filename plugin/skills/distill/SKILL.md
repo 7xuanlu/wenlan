@@ -85,7 +85,7 @@ JSON. Possible shapes:
   "created_ids": [],
   "pending": [
     { "source_ids": [...], "contents": [...], "entity_id": ...,
-      "entity_name": ..., "domain": ..., "estimated_tokens": ... },
+      "entity_name": ..., "space": ..., "estimated_tokens": ... },
     ...
   ],
   "stale_pages": [
@@ -125,7 +125,7 @@ Cluster shape:
 ```
 pending: [
   {
-    source_ids, contents, entity_id, entity_name, domain,
+    source_ids, contents, entity_id, entity_name, space,
     estimated_tokens,
     existing_page_id?, existing_page_title?, new_memory_count?
   },
@@ -165,7 +165,7 @@ For each coherent cluster:
 ```
 create_page(title="...", summary="...", content="...",
             entity_id="<cluster.entity_id or omit>",
-            domain="<cluster.domain>",
+            space="<cluster.space>",
             source_memory_ids=[...])
 ```
 
