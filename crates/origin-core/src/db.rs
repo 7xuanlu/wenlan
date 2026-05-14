@@ -824,8 +824,9 @@ CREATE TABLE IF NOT EXISTS spaces (
     created_at REAL NOT NULL,
     updated_at REAL NOT NULL
 );
-CREATE INDEX IF NOT EXISTS idx_memories_domain ON memories(domain) WHERE domain IS NOT NULL;
-CREATE INDEX IF NOT EXISTS idx_entities_domain ON entities(domain) WHERE domain IS NOT NULL;
+-- idx_memories_domain / idx_entities_domain were managed by migration 12 (create) and
+-- migration 50 (drop + recreate as idx_memories_space / idx_entities_space). They must
+-- not appear in SCHEMA after migration 50 has renamed the column.
 
 -- Rejection log: quality gate diagnostics
 CREATE TABLE IF NOT EXISTS rejected_memories (
@@ -2938,7 +2939,7 @@ impl MemoryDB {
                     let batch: Vec<(String, String, Option<String>)> = {
                         let conn = self.conn.lock().await;
                         let mut rows = conn.query(
-                            "SELECT id, COALESCE(source_text, content), domain FROM memories WHERE embedding IS NULL LIMIT ?1",
+                            "SELECT id, COALESCE(source_text, content), space FROM memories WHERE embedding IS NULL LIMIT ?1",
                             libsql::params![batch_size as i64],
                         ).await.map_err(|e| OriginError::VectorDb(format!("null embed batch: {}", e)))?;
                         let mut batch = Vec::new();
@@ -4627,6 +4628,101 @@ impl MemoryDB {
                     .await
                     .map_err(|e| OriginError::VectorDb(format!("m49 bump: {e}")))?;
                 log::info!("[migration] Migration 49 applied: pages.changelog column for revision surfacing");
+            }
+
+            // Migration 50: rename domain → space on memories, entities, pages.
+            if version < 50 {
+                let conn = self.conn.lock().await;
+                // Idempotency probe: if memories.space already exists the rename
+                // already ran (e.g. test rolled user_version back to 49). Skip
+                // the ALTER TABLE and go straight to bumping user_version.
+                let already_renamed: bool = {
+                    let mut rows = conn
+                        .query(
+                            "SELECT COUNT(*) FROM pragma_table_info('memories') WHERE name = 'space'",
+                            (),
+                        )
+                        .await
+                        .map_err(|e| OriginError::VectorDb(format!("m50 probe: {e}")))?;
+                    match rows.next().await {
+                        Ok(Some(row)) => row.get::<i64>(0).unwrap_or(0) > 0,
+                        _ => false,
+                    }
+                };
+                if already_renamed {
+                    conn.execute("PRAGMA user_version = 50", ())
+                        .await
+                        .map_err(|e| OriginError::VectorDb(format!("m50 bump (already done): {e}")))?;
+                    log::info!("[migration] Migration 50 skipped (already applied): bumped user_version to 50");
+                } else {
+                    conn.execute("PRAGMA foreign_keys = OFF", ())
+                        .await
+                        .map_err(|e| OriginError::VectorDb(format!("m50 fk off: {e}")))?;
+                    conn.execute("BEGIN", ())
+                        .await
+                        .map_err(|e| OriginError::VectorDb(format!("m50 begin: {e}")))?;
+                    let result: Result<(), OriginError> = (|| async {
+                        conn.execute("ALTER TABLE memories RENAME COLUMN domain TO space", ())
+                            .await
+                            .map_err(|e| OriginError::VectorDb(format!("m50 rename memories: {e}")))?;
+                        conn.execute("ALTER TABLE entities RENAME COLUMN domain TO space", ())
+                            .await
+                            .map_err(|e| OriginError::VectorDb(format!("m50 rename entities: {e}")))?;
+                        conn.execute("ALTER TABLE pages RENAME COLUMN domain TO space", ())
+                            .await
+                            .map_err(|e| OriginError::VectorDb(format!("m50 rename pages: {e}")))?;
+                        conn.execute("DROP INDEX IF EXISTS idx_memories_domain", ())
+                            .await
+                            .map_err(|e| OriginError::VectorDb(format!("m50 drop idx memories: {e}")))?;
+                        conn.execute("DROP INDEX IF EXISTS idx_entities_domain", ())
+                            .await
+                            .map_err(|e| OriginError::VectorDb(format!("m50 drop idx entities: {e}")))?;
+                        conn.execute("DROP INDEX IF EXISTS idx_pages_domain", ())
+                            .await
+                            .map_err(|e| OriginError::VectorDb(format!("m50 drop idx pages: {e}")))?;
+                        conn.execute(
+                            "CREATE INDEX IF NOT EXISTS idx_memories_space ON memories(space) WHERE space IS NOT NULL",
+                            (),
+                        )
+                        .await
+                        .map_err(|e| OriginError::VectorDb(format!("m50 create idx memories: {e}")))?;
+                        conn.execute(
+                            "CREATE INDEX IF NOT EXISTS idx_entities_space ON entities(space) WHERE space IS NOT NULL",
+                            (),
+                        )
+                        .await
+                        .map_err(|e| OriginError::VectorDb(format!("m50 create idx entities: {e}")))?;
+                        conn.execute(
+                            "CREATE INDEX IF NOT EXISTS idx_pages_space ON pages(space) WHERE space IS NOT NULL",
+                            (),
+                        )
+                        .await
+                        .map_err(|e| OriginError::VectorDb(format!("m50 create idx pages: {e}")))?;
+                        Ok(())
+                    })()
+                    .await;
+                    match result {
+                        Ok(()) => {
+                            conn.execute("COMMIT", ())
+                                .await
+                                .map_err(|e| OriginError::VectorDb(format!("m50 commit: {e}")))?;
+                        }
+                        Err(e) => {
+                            let _ = conn.execute("ROLLBACK", ()).await;
+                            conn.execute("PRAGMA foreign_keys = ON", ())
+                                .await
+                                .map_err(|e2| OriginError::VectorDb(format!("m50 fk on (rollback): {e2}")))?;
+                            return Err(e);
+                        }
+                    }
+                    conn.execute("PRAGMA foreign_keys = ON", ())
+                        .await
+                        .map_err(|e| OriginError::VectorDb(format!("m50 fk on: {e}")))?;
+                    conn.execute("PRAGMA user_version = 50", ())
+                        .await
+                        .map_err(|e| OriginError::VectorDb(format!("m50 bump: {e}")))?;
+                    log::info!("[migration] Migration 50 applied: renamed domain → space on memories/entities/pages + reindexed");
+                }
             }
         }
 
@@ -27942,9 +28038,11 @@ pub(crate) mod tests {
             let conn = db.conn.lock().await;
 
             conn.execute("PRAGMA foreign_keys = OFF", ()).await.unwrap();
+            // Migration 50 renamed pages.domain → pages.space; use the current
+            // column name here so the table copy does not crash on post-50 DBs.
             conn.execute_batch(
                 "CREATE TABLE pages_pre49 AS \
-                 SELECT id, title, summary, content, entity_id, domain, \
+                 SELECT id, title, summary, content, entity_id, space, \
                  source_memory_ids, version, status, embedding, created_at, last_compiled, \
                  last_modified, sources_updated_count, stale_reason, user_edited FROM pages; \
                  DROP TABLE pages; \
@@ -29236,10 +29334,11 @@ pub(crate) mod tests {
     async fn insert_memory_for_test_with_domain(db: &MemoryDB, content: &str, domain: Option<&str>) -> String {
         let id = format!("mem_test_{}", uuid::Uuid::new_v4().simple());
         let conn = db.conn.lock().await;
+        // After migration 50 the column is `space` (renamed from `domain`).
         conn.execute(
             "INSERT INTO memories \
              (id, source_id, source, content, source_text, title, chunk_index, chunk_type, \
-              memory_type, domain, created_at, last_modified) \
+              memory_type, space, created_at, last_modified) \
              VALUES (?1, ?2, 'memory', ?3, ?3, 'test-title', 0, 'text', 'fact', ?4, \
                      unixepoch('now'), unixepoch('now'))",
             libsql::params![
