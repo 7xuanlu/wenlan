@@ -966,6 +966,13 @@ impl OriginMcpServer {
         &self,
         params: ConfirmEntityParams,
     ) -> Result<CallToolResult, McpError> {
+        if self.transport == TransportMode::Http {
+            return Ok(CallToolResult::error(vec![Content::text(
+                "Confirm operations are not available over remote connections. \
+                 Use local MCP on the machine running Origin to confirm entities."
+                    .to_string(),
+            )]));
+        }
         let req = origin_types::requests::ConfirmEntityRequest {
             confirmed: params.confirmed,
         };
@@ -1007,6 +1014,13 @@ impl OriginMcpServer {
         &self,
         params: ConfirmObservationParams,
     ) -> Result<CallToolResult, McpError> {
+        if self.transport == TransportMode::Http {
+            return Ok(CallToolResult::error(vec![Content::text(
+                "Confirm operations are not available over remote connections. \
+                 Use local MCP on the machine running Origin to confirm observations."
+                    .to_string(),
+            )]));
+        }
         let req = origin_types::requests::ConfirmObservationRequest {
             confirmed: params.confirmed,
         };
@@ -1758,7 +1772,7 @@ impl OriginMcpServer {
     }
 
     #[tool(
-        description = "Confirm (or unconfirm) an entity in the knowledge graph — flips its stability flag from tentative to durable. Call when the user explicitly affirms or revokes an extracted entity (\"yes that's right\", \"no that's wrong\"), or when you have high confidence after seeing the entity reused across multiple contexts. Unconfirmed entities may be pruned by background refinement; confirmed ones persist. Defaults confirmed=true if omitted. Do NOT call for every extracted entity — most should stay unconfirmed and let background refinement decide.",
+        description = "Confirm (or unconfirm) an entity in the knowledge graph — flips its stability flag from tentative to durable. Call when the user explicitly affirms or revokes an extracted entity (\"yes that's right\", \"no that's wrong\"), or when you have high confidence after seeing the entity reused across multiple contexts. Unconfirmed entities may be pruned by background refinement; confirmed ones persist. Defaults confirmed=true if omitted. Do NOT call for every extracted entity — most should stay unconfirmed and let background refinement decide. Not available over remote HTTP MCP transport (local stdio only).",
         annotations(
             title = "Confirm entity",
             read_only_hint = false,
@@ -1792,7 +1806,7 @@ impl OriginMcpServer {
     }
 
     #[tool(
-        description = "Confirm (or unconfirm) an observation — flips its stability flag from tentative to durable. Call when the user explicitly affirms a specific fact attached to an entity (\"yes Alice does prefer tabs\"), or when you observe the same fact restated across multiple sources. Unconfirmed observations may be pruned by background refinement; confirmed ones persist. Defaults confirmed=true if omitted. Do NOT call for every observation you create — let background refinement promote them when warranted.",
+        description = "Confirm (or unconfirm) an observation — flips its stability flag from tentative to durable. Call when the user explicitly affirms a specific fact attached to an entity (\"yes Alice does prefer tabs\"), or when you observe the same fact restated across multiple sources. Unconfirmed observations may be pruned by background refinement; confirmed ones persist. Defaults confirmed=true if omitted. Do NOT call for every observation you create — let background refinement promote them when warranted. Not available over remote HTTP MCP transport (local stdio only).",
         annotations(
             title = "Confirm observation",
             read_only_hint = false,
@@ -3153,6 +3167,68 @@ mod tests {
             source_id: "mem_x".into(),
         };
         let result = server.dismiss_contradiction_impl(req).await.unwrap();
+        assert!(
+            result.is_error.unwrap_or(false),
+            "should fail with connection error, not transport block"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_confirm_entity_blocked_on_http_transport() {
+        let server = make_server(TransportMode::Http, "agent", None);
+        let params = ConfirmEntityParams {
+            entity_id: "ent_x".into(),
+            confirmed: true,
+        };
+        let result = server.confirm_entity_impl(params).await.unwrap();
+        let content = &result.content[0];
+        match content.raw {
+            rmcp::model::RawContent::Text(ref tc) => {
+                assert!(tc.text.contains("not available over remote connections"));
+            }
+            _ => panic!("expected text content"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_confirm_entity_allowed_on_stdio_transport() {
+        let server = make_server(TransportMode::Stdio, "agent", None);
+        let params = ConfirmEntityParams {
+            entity_id: "ent_x".into(),
+            confirmed: true,
+        };
+        let result = server.confirm_entity_impl(params).await.unwrap();
+        assert!(
+            result.is_error.unwrap_or(false),
+            "should fail with connection error, not transport block"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_confirm_observation_blocked_on_http_transport() {
+        let server = make_server(TransportMode::Http, "agent", None);
+        let params = ConfirmObservationParams {
+            observation_id: "obs_x".into(),
+            confirmed: true,
+        };
+        let result = server.confirm_observation_impl(params).await.unwrap();
+        let content = &result.content[0];
+        match content.raw {
+            rmcp::model::RawContent::Text(ref tc) => {
+                assert!(tc.text.contains("not available over remote connections"));
+            }
+            _ => panic!("expected text content"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_confirm_observation_allowed_on_stdio_transport() {
+        let server = make_server(TransportMode::Stdio, "agent", None);
+        let params = ConfirmObservationParams {
+            observation_id: "obs_x".into(),
+            confirmed: true,
+        };
+        let result = server.confirm_observation_impl(params).await.unwrap();
         assert!(
             result.is_error.unwrap_or(false),
             "should fail with connection error, not transport block"
