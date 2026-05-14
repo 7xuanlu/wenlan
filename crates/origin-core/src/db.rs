@@ -4669,7 +4669,7 @@ impl MemoryDB {
                     conn.execute("BEGIN", ())
                         .await
                         .map_err(|e| OriginError::VectorDb(format!("m50 begin: {e}")))?;
-                    let result: Result<(), OriginError> = (|| async {
+                    let result: Result<(), OriginError> = async {
                         conn.execute("ALTER TABLE memories RENAME COLUMN domain TO space", ())
                             .await
                             .map_err(|e| OriginError::VectorDb(format!("m50 rename memories: {e}")))?;
@@ -4707,7 +4707,7 @@ impl MemoryDB {
                         .await
                         .map_err(|e| OriginError::VectorDb(format!("m50 create idx pages: {e}")))?;
                         Ok(())
-                    })()
+                    }
                     .await;
                     match result {
                         Ok(()) => {
