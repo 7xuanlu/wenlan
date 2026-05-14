@@ -1376,6 +1376,13 @@ impl OriginMcpServer {
         &self,
         req: AcceptRevisionRequest,
     ) -> Result<CallToolResult, McpError> {
+        if self.transport == TransportMode::Http {
+            return Ok(CallToolResult::error(vec![Content::text(
+                "Revision operations are not available over remote connections. \
+                 Use local MCP on the machine running Origin to accept memory revisions."
+                    .to_string(),
+            )]));
+        }
         let path = format!("/api/memory/revision/{}/accept", req.target_source_id);
         let response = match self
             .client
@@ -1394,6 +1401,13 @@ impl OriginMcpServer {
         &self,
         req: DismissRevisionRequest,
     ) -> Result<CallToolResult, McpError> {
+        if self.transport == TransportMode::Http {
+            return Ok(CallToolResult::error(vec![Content::text(
+                "Revision operations are not available over remote connections. \
+                 Use local MCP on the machine running Origin to dismiss memory revisions."
+                    .to_string(),
+            )]));
+        }
         let path = format!("/api/memory/revision/{}/dismiss", req.target_source_id);
         let response = match self
             .client
@@ -2068,7 +2082,7 @@ impl OriginMcpServer {
         description = "Accept a pending memory revision. Replaces the target memory's content \
                        with the proposed revision content and removes the revision row from the \
                        pending list. Returns the consumed revision id. Returns an error if no \
-                       pending revision exists for that target.",
+                       pending revision exists for that target. Not available over remote HTTP MCP transport (local stdio only).",
         annotations(
             title = "Accept revision",
             read_only_hint = false,
@@ -2087,7 +2101,7 @@ impl OriginMcpServer {
     #[tool(
         description = "Dismiss a pending memory revision. Deletes the revision row; the original \
                        memory is unchanged. Returns an error if no pending revision exists for \
-                       that target.",
+                       that target. Not available over remote HTTP MCP transport (local stdio only).",
         annotations(
             title = "Dismiss revision",
             read_only_hint = false,
@@ -3043,6 +3057,66 @@ mod tests {
         // (tool-level failure), not McpError (protocol-level).
         let server = make_server(TransportMode::Stdio, "agent", None);
         let result = server.forget_impl("mem_123").await.unwrap();
+        assert!(
+            result.is_error.unwrap_or(false),
+            "should fail with connection error, not transport block"
+        );
+    }
+
+    // ===== Transport security: revision wrappers block on HTTP =====
+
+    #[tokio::test]
+    async fn test_accept_revision_blocked_on_http_transport() {
+        let server = make_server(TransportMode::Http, "agent", None);
+        let req = AcceptRevisionRequest {
+            target_source_id: "mem_x".into(),
+        };
+        let result = server.accept_revision_impl(req).await.unwrap();
+        let content = &result.content[0];
+        match content.raw {
+            rmcp::model::RawContent::Text(ref tc) => {
+                assert!(tc.text.contains("not available over remote connections"));
+            }
+            _ => panic!("expected text content"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_accept_revision_allowed_on_stdio_transport() {
+        let server = make_server(TransportMode::Stdio, "agent", None);
+        let req = AcceptRevisionRequest {
+            target_source_id: "mem_x".into(),
+        };
+        let result = server.accept_revision_impl(req).await.unwrap();
+        assert!(
+            result.is_error.unwrap_or(false),
+            "should fail with connection error, not transport block"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_dismiss_revision_blocked_on_http_transport() {
+        let server = make_server(TransportMode::Http, "agent", None);
+        let req = DismissRevisionRequest {
+            target_source_id: "mem_x".into(),
+        };
+        let result = server.dismiss_revision_impl(req).await.unwrap();
+        let content = &result.content[0];
+        match content.raw {
+            rmcp::model::RawContent::Text(ref tc) => {
+                assert!(tc.text.contains("not available over remote connections"));
+            }
+            _ => panic!("expected text content"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_dismiss_revision_allowed_on_stdio_transport() {
+        let server = make_server(TransportMode::Stdio, "agent", None);
+        let req = DismissRevisionRequest {
+            target_source_id: "mem_x".into(),
+        };
+        let result = server.dismiss_revision_impl(req).await.unwrap();
         assert!(
             result.is_error.unwrap_or(false),
             "should fail with connection error, not transport block"
