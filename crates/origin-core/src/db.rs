@@ -432,14 +432,14 @@ fn build_distillation_cluster(
         .collect();
     let entity_id = memories[indices[0]].entity_id.clone();
     let entity_name = memories[indices[0]].entity_name.clone();
-    let domain = memories[indices[0]].space.clone();
+    let space = memories[indices[0]].space.clone();
     let estimated_tokens = contents.iter().map(|c| c.len() / 4 + 15).sum::<usize>() + 100;
     DistillationCluster {
         source_ids,
         contents,
         entity_id,
         entity_name,
-        domain,
+        space,
         estimated_tokens,
     }
 }
@@ -540,7 +540,7 @@ pub struct DistillationCluster {
     pub contents: Vec<String>,
     pub entity_id: Option<String>,
     pub entity_name: Option<String>,
-    pub domain: Option<String>,
+    pub space: Option<String>,
     pub estimated_tokens: usize,
 }
 
@@ -12455,7 +12455,7 @@ impl MemoryDB {
                 title: row.get(0).unwrap_or_default(),
                 content: row.get(1).unwrap_or_default(),
                 memory_type: row.get(2).unwrap_or_else(|_| "observation".to_string()),
-                domain: row.get::<Option<String>>(3).unwrap_or(None),
+                space: row.get::<Option<String>>(3).unwrap_or(None),
                 last_modified: row.get(4).unwrap_or(0),
             });
         }
@@ -12493,7 +12493,7 @@ impl MemoryDB {
                 title: row.get(0).unwrap_or_default(),
                 content: row.get(1).unwrap_or_default(),
                 memory_type: row.get(2).unwrap_or_else(|_| memory_type.to_string()),
-                domain: row.get::<Option<String>>(3).unwrap_or(None),
+                space: row.get::<Option<String>>(3).unwrap_or(None),
                 last_modified: row.get(4).unwrap_or(0),
             });
         }
@@ -16163,7 +16163,7 @@ impl MemoryDB {
                 content,
                 entity_id,
                 embedding,
-                domain: cand_space,
+                space: cand_space,
                 memory_type: cand_type,
             });
         }

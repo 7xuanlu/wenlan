@@ -65,8 +65,8 @@ pub(crate) async fn generate_decision_logs(
             let combined = burst
                 .iter()
                 .enumerate()
-                .map(|(i, (_, content, domain, _))| {
-                    let d = domain.as_deref().unwrap_or("general");
+                .map(|(i, (_, content, space, _))| {
+                    let d = space.as_deref().unwrap_or("general");
                     format!("{}. [{}] {}", i + 1, d, content)
                 })
                 .collect::<Vec<_>>()
@@ -137,14 +137,14 @@ mod tests {
     use crate::prompts::PromptRegistry;
     use crate::sources::RawDocument;
 
-    fn make_memory(source_id: &str, content: &str, memory_type: &str, domain: &str) -> RawDocument {
+    fn make_memory(source_id: &str, content: &str, memory_type: &str, space: &str) -> RawDocument {
         RawDocument {
             source_id: source_id.to_string(),
             content: content.to_string(),
             source: "memory".to_string(),
             title: content.chars().take(40).collect(),
             memory_type: Some(memory_type.to_string()),
-            space: Some(domain.to_string()),
+            space: Some(space.to_string()),
             confidence: Some(0.7),
             last_modified: chrono::Utc::now().timestamp(),
             ..Default::default()

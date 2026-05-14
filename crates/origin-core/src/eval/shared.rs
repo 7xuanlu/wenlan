@@ -1774,7 +1774,7 @@ pub async fn run_concept_distillation_batch_api(
         idx: usize,
         topic: String,
         entity_id: Option<String>,
-        domain: Option<String>,
+        space: Option<String>,
         source_ids: Vec<String>,
     }
     let mut batch_requests: Vec<(String, String, Option<String>, usize)> = Vec::new();
@@ -1784,7 +1784,7 @@ pub async fn run_concept_distillation_batch_api(
         let topic = cluster
             .entity_name
             .as_deref()
-            .or(cluster.domain.as_deref())
+            .or(cluster.space.as_deref())
             .unwrap_or("general");
 
         // Skip if concept with similar sources exists (Jaccard > 0.8)
@@ -1826,7 +1826,7 @@ pub async fn run_concept_distillation_batch_api(
             idx,
             topic: topic.to_string(),
             entity_id: cluster.entity_id.clone(),
-            domain: cluster.domain.clone(),
+            space: cluster.space.clone(),
             source_ids: cluster.source_ids.clone(),
         });
     }
@@ -1962,7 +1962,7 @@ pub async fn run_concept_distillation_batch_api(
             summary.as_deref(),
             content,
             meta.entity_id.as_deref(),
-            meta.domain.as_deref(),
+            meta.space.as_deref(),
             &source_refs,
             &now,
         )

@@ -633,7 +633,7 @@ pub async fn import_phase3_store(
 
         let classification = classifications.get(i).cloned().unwrap_or_default();
         let memory_type = &classification.memory_type;
-        let domain = classification.domain.as_deref();
+        let domain = classification.space.as_deref();
         let confidence =
             compute_effective_confidence(None, Some(memory_type), "review", None, confidence_cfg);
 

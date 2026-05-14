@@ -640,7 +640,7 @@ mod tests {
             for sid in &[new_mem.clone(), existing_mem.clone()] {
                 conn.execute(
                     "INSERT INTO memories (id, content, source, source_id, title, chunk_index, \
-                                            chunk_type, source_agent, domain, confidence, confirmed, \
+                                            chunk_type, source_agent, space, confidence, confirmed, \
                                             last_modified, memory_type, pending_revision) \
                      VALUES (?1, ?2, 'memory', ?3, 'test', 0, 'text', NULL, 'general', 1.0, 0, 1712707200, 'fact', 0)",
                     libsql::params![sid.clone(), "x".to_string(), sid.clone()],

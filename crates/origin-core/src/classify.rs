@@ -25,7 +25,7 @@ use std::time::Instant;
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct ClassificationResult {
     pub memory_type: String,
-    pub domain: Option<String>,
+    pub space: Option<String>,
     pub tags: Vec<String>,
     /// Quality signal: "low", "medium", "high", or None (default)
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -36,7 +36,7 @@ impl Default for ClassificationResult {
     fn default() -> Self {
         Self {
             memory_type: "fact".to_string(),
-            domain: None,
+            space: None,
             tags: Vec::new(),
             quality: None,
         }
@@ -70,7 +70,7 @@ pub fn parse_classification_response(
                 .filter(|s| MemoryType::all_values().contains(&s.as_str()))
                 .unwrap_or_else(|| "fact".to_string());
 
-            let domain = entry
+            let space = entry
                 .get("domain")
                 .and_then(|v| v.as_str())
                 .filter(|s| !s.is_empty())
@@ -88,7 +88,7 @@ pub fn parse_classification_response(
 
             ClassificationResult {
                 memory_type,
-                domain,
+                space,
                 tags,
                 quality: None,
             }
@@ -291,7 +291,7 @@ impl LlmEngine {
                     .filter(|s| s.parse::<origin_types::MemoryType>().is_ok())
                     .unwrap_or_else(|| "fact".to_string());
 
-                let domain = val
+                let space = val
                     .get("domain")
                     .and_then(|v| v.as_str())
                     .filter(|s| !s.is_empty())
@@ -310,7 +310,7 @@ impl LlmEngine {
 
                 Some(ClassificationResult {
                     memory_type,
-                    domain,
+                    space,
                     tags,
                     quality: None,
                 })
@@ -321,7 +321,7 @@ impl LlmEngine {
                 self.classify_memory_type(content)
                     .map(|mt| ClassificationResult {
                         memory_type: mt,
-                        domain: None,
+                        space: None,
                         tags: Vec::new(),
                         quality: None,
                     })
@@ -496,7 +496,7 @@ mod tests {
         let results = parse_classification_response(json, 2);
         assert_eq!(results.len(), 2);
         assert_eq!(results[0].memory_type, "identity");
-        assert_eq!(results[0].domain, Some("work".to_string()));
+        assert_eq!(results[0].space, Some("work".to_string()));
         assert_eq!(results[1].memory_type, "preference");
     }
 

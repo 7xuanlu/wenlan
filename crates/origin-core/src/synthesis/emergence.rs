@@ -356,14 +356,14 @@ mod tests {
         {
             let conn = db.conn.lock().await;
             conn.execute(
-                "INSERT INTO memories (id, source_id, title, content, chunk_index, chunk_type, memory_type, domain, source_agent, created_at, last_modified, confirmed, stability, source) \
+                "INSERT INTO memories (id, source_id, title, content, chunk_index, chunk_type, memory_type, space, source_agent, created_at, last_modified, confirmed, stability, source) \
                  VALUES (?1, ?1, 'seed', 'fact', 0, 'text', 'fact', 'test', 'claude-code', ?2, ?2, 1, 'confirmed', 'memory')",
                 libsql::params!["mem_1".to_string(), now_ts],
             )
             .await
             .unwrap();
             conn.execute(
-                "INSERT INTO memories (id, source_id, title, content, chunk_index, chunk_type, memory_type, domain, source_agent, created_at, last_modified, confirmed, stability, source) \
+                "INSERT INTO memories (id, source_id, title, content, chunk_index, chunk_type, memory_type, space, source_agent, created_at, last_modified, confirmed, stability, source) \
                  VALUES (?1, ?1, 'seed two', 'fact', 0, 'text', 'fact', 'test', 'claude-code', ?2, ?2, 1, 'confirmed', 'memory')",
                 libsql::params!["mem_2".to_string(), now_ts],
             )

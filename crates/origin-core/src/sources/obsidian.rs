@@ -347,7 +347,7 @@ pub fn note_to_documents(
     let (frontmatter, body) = extract_frontmatter(content);
 
     // Map frontmatter to memory fields
-    let domain = frontmatter.tags().into_iter().next();
+    let space = frontmatter.tags().into_iter().next();
     let memory_type = frontmatter
         .get_str("type")
         .and_then(|t| t.parse::<MemoryType>().ok())
@@ -385,7 +385,7 @@ pub fn note_to_documents(
             content: body.to_string(),
             last_modified: mtime,
             metadata,
-            space: domain,
+            space,
             memory_type,
             source_agent: Some("obsidian".to_string()),
             ..Default::default()
@@ -415,7 +415,7 @@ pub fn note_to_documents(
                 content: chunk.content.clone(),
                 last_modified: mtime,
                 metadata: metadata.clone(),
-                space: domain.clone(),
+                space: space.clone(),
                 memory_type: memory_type.clone(),
                 source_agent: Some("obsidian".to_string()),
                 ..Default::default()

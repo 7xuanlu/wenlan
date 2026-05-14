@@ -77,17 +77,17 @@ pub(crate) async fn generate_recaps(
         // Group content for the LLM
         let contents: Vec<String> = burst
             .iter()
-            .map(|(_, content, domain, _)| match domain {
+            .map(|(_, content, space, _)| match space {
                 Some(d) => format!("[{}] {}", d, content),
                 None => content.clone(),
             })
             .collect();
 
-        // Determine the dominant domain
+        // Determine the dominant space
         let mut domain_counts: std::collections::HashMap<String, usize> =
             std::collections::HashMap::new();
-        for (_, _, domain, _) in burst.iter() {
-            if let Some(d) = domain {
+        for (_, _, space, _) in burst.iter() {
+            if let Some(d) = space {
                 *domain_counts.entry(d.clone()).or_insert(0) += 1;
             }
         }
@@ -219,14 +219,14 @@ mod tests {
     use crate::db::tests::test_db;
     use crate::sources::RawDocument;
 
-    fn make_memory(source_id: &str, content: &str, memory_type: &str, domain: &str) -> RawDocument {
+    fn make_memory(source_id: &str, content: &str, memory_type: &str, space: &str) -> RawDocument {
         RawDocument {
             source_id: source_id.to_string(),
             content: content.to_string(),
             source: "memory".to_string(),
             title: content.chars().take(40).collect(),
             memory_type: Some(memory_type.to_string()),
-            space: Some(domain.to_string()),
+            space: Some(space.to_string()),
             confidence: Some(0.7),
             last_modified: chrono::Utc::now().timestamp(),
             ..Default::default()
