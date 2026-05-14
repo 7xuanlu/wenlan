@@ -29331,21 +29331,40 @@ pub(crate) mod tests {
     /// Insert a minimal memory row directly via SQL, with an explicit `domain`
     /// value.  Used by the migration-50 replay test.  Supplies all NOT NULL
     /// columns that lack a DEFAULT (id, title, chunk_index, chunk_type).
+    ///
+    /// Caller is responsible for ensuring the schema is at pre-migration-50
+    /// state (column named `domain`) before calling this helper.
+    ///
+    /// A zero-filled embedding is stored so the crash-recovery null-embed
+    /// backfill (which queries `space`) is never triggered during the
+    /// subsequent MemoryDB::new call that fires migration 50.
     async fn insert_memory_for_test_with_domain(db: &MemoryDB, content: &str, domain: Option<&str>) -> String {
         let id = format!("mem_test_{}", uuid::Uuid::new_v4().simple());
         let conn = db.conn.lock().await;
-        // After migration 50 the column is `space` (renamed from `domain`).
+        // Build a 768-dim zero vector string for vector32(): "[0.000000,0.000000,...]"
+        let zero_vec: String = {
+            let mut s = String::with_capacity(768 * 10);
+            s.push('[');
+            for i in 0..768usize {
+                if i > 0 { s.push(','); }
+                s.push_str("0.000000");
+            }
+            s.push(']');
+            s
+        };
+        // Pre-migration-50 schema: the column is `domain`.
         conn.execute(
             "INSERT INTO memories \
              (id, source_id, source, content, source_text, title, chunk_index, chunk_type, \
-              memory_type, space, created_at, last_modified) \
+              memory_type, domain, embedding, created_at, last_modified) \
              VALUES (?1, ?2, 'memory', ?3, ?3, 'test-title', 0, 'text', 'fact', ?4, \
-                     unixepoch('now'), unixepoch('now'))",
+                     vector32(?5), unixepoch('now'), unixepoch('now'))",
             libsql::params![
                 id.clone(),
                 id.clone(),
                 content.to_string(),
-                domain.map(String::from)
+                domain.map(String::from),
+                zero_vec
             ],
         )
         .await
@@ -29357,27 +29376,74 @@ pub(crate) mod tests {
     async fn test_migration_50_renames_domain_to_space() {
         let tmp = tempfile::tempdir().unwrap();
         let db_path = tmp.path().join("test.db");
+
+        // First open: runs migrations 1-50, leaving the column named `space`.
         let db = MemoryDB::new(&db_path, Arc::new(crate::events::NoopEmitter))
             .await
             .unwrap();
 
-        // Insert a memory with domain populated.
+        // Reverse the rename so the schema matches pre-migration-50 (column = `domain`).
+        // This sets up the precondition the test exercises: data exists in `domain`,
+        // then migration 50 fires and must preserve it under the renamed column.
+        {
+            let conn = db.conn.lock().await;
+            conn.execute("ALTER TABLE memories RENAME COLUMN space TO domain", ())
+                .await
+                .unwrap();
+            conn.execute("ALTER TABLE entities RENAME COLUMN space TO domain", ())
+                .await
+                .unwrap();
+            conn.execute("ALTER TABLE pages RENAME COLUMN space TO domain", ())
+                .await
+                .unwrap();
+            // Restore the old indexes so migration 50's DROP INDEX IF EXISTS is exercised.
+            conn.execute("DROP INDEX IF EXISTS idx_memories_space", ())
+                .await
+                .unwrap();
+            conn.execute("DROP INDEX IF EXISTS idx_entities_space", ())
+                .await
+                .unwrap();
+            conn.execute("DROP INDEX IF EXISTS idx_pages_space", ())
+                .await
+                .unwrap();
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_memories_domain ON memories(domain) WHERE domain IS NOT NULL",
+                (),
+            )
+            .await
+            .unwrap();
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_entities_domain ON entities(domain) WHERE domain IS NOT NULL",
+                (),
+            )
+            .await
+            .unwrap();
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_pages_domain ON pages(domain) WHERE domain IS NOT NULL",
+                (),
+            )
+            .await
+            .unwrap();
+        }
+
+        // Now insert a row at pre-50 schema: writes to `domain` column.
         insert_memory_for_test_with_domain(&db, "test fact", Some("alpha")).await;
 
-        // Roll user_version back so migration 50 re-fires on the next open.
+        // Roll user_version back to 49 so migration 50 re-fires on next open.
         {
             let conn = db.conn.lock().await;
             conn.execute("PRAGMA user_version = 49", ()).await.unwrap();
         }
         drop(db);
 
-        // Re-open — migration 50 should fire (or fail to find a column named `domain` if 50 doesn't exist yet).
+        // Re-open — migration 50 fires, ALTER RENAME runs against the populated
+        // table, preserving the inserted row's data.
         let db = MemoryDB::new(&db_path, Arc::new(crate::events::NoopEmitter))
             .await
             .unwrap();
         let conn = db.conn.lock().await;
 
-        // Column renamed: SELECT space must succeed.
+        // Data must survive RENAME COLUMN: SELECT against `space` returns the row's value.
         let mut rows = conn
             .query(
                 "SELECT space FROM memories WHERE source_text = ?1",
