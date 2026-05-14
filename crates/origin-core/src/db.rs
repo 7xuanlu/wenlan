@@ -4636,6 +4636,12 @@ impl MemoryDB {
                 // Idempotency probe: if memories.space already exists the rename
                 // already ran (e.g. test rolled user_version back to 49). Skip
                 // the ALTER TABLE and go straight to bumping user_version.
+                //
+                // The probe runs before BEGIN. This is intentional: migrations
+                // run sequentially inside MemoryDB::new before any background
+                // task spawns, so no concurrent writer can race this read.
+                // Moving the probe inside BEGIN would add unnecessary lock
+                // contention without correctness benefit at this lifecycle point.
                 let already_renamed: bool = {
                     let mut rows = conn
                         .query(
