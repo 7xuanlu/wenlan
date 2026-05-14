@@ -73,6 +73,9 @@ app/eval/baselines/
 # Superpowers working docs (specs, plans, research, prototypes)
 docs/superpowers/
 .superpowers/
+
+# Local smoke-test / dev DB artifacts
+memorydb/
 src-tauri/
 
 # Local override for the plugin's MCP runner — typically a symlink to a

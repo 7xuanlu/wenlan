@@ -36,7 +36,7 @@ pub struct TopicMatchCandidate {
     pub content: String,
     pub entity_id: Option<String>,
     pub embedding: Vec<f32>,
-    pub domain: Option<String>,
+    pub space: Option<String>,
     pub memory_type: Option<String>,
 }
 
@@ -61,7 +61,7 @@ pub async fn find_topic_match(
     db: &MemoryDB,
     title: &str,
     memory_type: Option<&str>,
-    domain: Option<&str>,
+    space: Option<&str>,
     entity_id: Option<&str>,
     content_embedding: &[f32],
     config: &TopicMatchConfig,
@@ -73,9 +73,9 @@ pub async fn find_topic_match(
         signals: MatchSignals::default(),
     };
 
-    // Fetch candidates: prefers same domain+type but includes all recent memories.
+    // Fetch candidates: prefers same space+type but includes all recent memories.
     let candidates = db
-        .topic_match_candidates(domain, memory_type, config.max_candidates)
+        .topic_match_candidates(space, memory_type, config.max_candidates)
         .await?;
 
     if candidates.is_empty() {
@@ -134,11 +134,11 @@ pub async fn find_topic_match(
     for (candidate, similarity) in &ranked {
         let title_hit = fts_hits.contains(&candidate.source_id);
 
-        // Compute tiered threshold based on domain+type overlap
-        let domain_match = domain.is_some() && candidate.domain.as_deref() == domain;
+        // Compute tiered threshold based on space+type overlap
+        let space_match = space.is_some() && candidate.space.as_deref() == space;
         let type_match = memory_type.is_some() && candidate.memory_type.as_deref() == memory_type;
 
-        let threshold = match (domain_match, type_match) {
+        let threshold = match (space_match, type_match) {
             (true, true) => config.threshold_exact, // 0.70
             (true, false) | (false, true) => config.threshold_partial, // 0.80
             (false, false) => config.threshold_none, // 0.90
@@ -147,7 +147,7 @@ pub async fn find_topic_match(
         if *similarity >= threshold {
             signals.fts_title_hit = title_hit;
             signals.embedding_similarity = Some(*similarity);
-            let tier = match (domain_match, type_match) {
+            let tier = match (space_match, type_match) {
                 (true, true) => "exact",
                 (true, false) | (false, true) => "partial",
                 (false, false) => "semantic-only",
@@ -260,7 +260,7 @@ mod tests {
             content: "c".into(),
             entity_id: entity_id.map(|s| s.into()),
             embedding,
-            domain: None,
+            space: None,
             memory_type: None,
         }
     }

@@ -54,7 +54,7 @@ pub async fn resolve_distill_target(
             name: s.to_string(),
         }));
     }
-    if db.domain_has_memories(s).await? {
+    if db.space_has_memories(s).await? {
         return Ok(Some(DistillTarget::Domain(s.to_string())));
     }
     Ok(None)
@@ -275,7 +275,7 @@ pub(crate) async fn distill_one_cluster(
     let topic = cluster
         .entity_name
         .as_deref()
-        .or(cluster.domain.as_deref())
+        .or(cluster.space.as_deref())
         .unwrap_or("general");
 
     // Find the existing page that overlaps this cluster the most. Memories
@@ -476,7 +476,7 @@ pub(crate) async fn distill_one_cluster(
                 summary.as_deref(),
                 &content,
                 cluster.entity_id.as_deref(),
-                cluster.domain.as_deref(),
+                cluster.space.as_deref(),
                 &source_refs,
                 &now,
             )
@@ -689,7 +689,7 @@ pub async fn distill_pages_scoped(
         let topic = cluster
             .entity_name
             .as_deref()
-            .or(cluster.domain.as_deref())
+            .or(cluster.space.as_deref())
             .unwrap_or("general");
 
         // Skip if a page with very similar sources already exists (Jaccard > 0.8)
@@ -864,7 +864,7 @@ pub async fn distill_pages_scoped(
                     summary.as_deref(),
                     &content,
                     cluster.entity_id.as_deref(),
-                    cluster.domain.as_deref(),
+                    cluster.space.as_deref(),
                     &source_refs,
                     &now,
                 )
@@ -1268,7 +1268,7 @@ mod tests {
         {
             let conn = db.conn.lock().await;
             conn.execute(
-                "INSERT INTO memories (id, source_id, title, content, chunk_index, chunk_type, memory_type, domain, source_agent, created_at, last_modified, confirmed, stability, source) \
+                "INSERT INTO memories (id, source_id, title, content, chunk_index, chunk_type, memory_type, space, source_agent, created_at, last_modified, confirmed, stability, source) \
                  VALUES (?1, ?1, ?1, 'seed content', 0, 'text', 'fact', 'test', 'claude-code', ?2, ?2, 1, 'confirmed', 'memory')",
                 libsql::params!["mem_seed".to_string(), now_ts],
             )
@@ -1324,7 +1324,7 @@ mod tests {
         {
             let conn = db.conn.lock().await;
             conn.execute(
-                "INSERT INTO memories (id, source_id, title, content, chunk_index, chunk_type, memory_type, domain, source_agent, created_at, last_modified, confirmed, stability, source) \
+                "INSERT INTO memories (id, source_id, title, content, chunk_index, chunk_type, memory_type, space, source_agent, created_at, last_modified, confirmed, stability, source) \
                  VALUES (?1, ?1, ?1, 'seed content', 0, 'text', 'fact', 'test', 'claude-code', ?2, ?2, 1, 'confirmed', 'memory')",
                 libsql::params!["mem_1".to_string(), now_ts],
             )

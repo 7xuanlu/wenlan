@@ -222,7 +222,7 @@ pub async fn run_e2e_answer_eval(
                     &case.query,
                     limit,
                     None,
-                    case.domain.as_deref(),
+                    case.space.as_deref(),
                     None,
                     Some(1.0),
                     Some(1.0),
@@ -483,7 +483,7 @@ pub async fn run_e2e_locomo_eval(
                 source: "memory".to_string(),
                 title: format!("{} session {}", mem.speaker, mem.session_num),
                 memory_type: Some("fact".to_string()),
-                domain: Some("conversation".to_string()),
+                space: Some("conversation".to_string()),
                 last_modified: chrono::Utc::now().timestamp(),
                 ..Default::default()
             })
@@ -863,7 +863,7 @@ pub async fn run_e2e_context_eval(
                 source: "memory".to_string(),
                 title: format!("{} session {}", mem.speaker, mem.session_num),
                 memory_type: Some("fact".to_string()),
-                domain: Some("conversation".to_string()),
+                space: Some("conversation".to_string()),
                 last_modified: chrono::Utc::now().timestamp(),
                 ..Default::default()
             })
@@ -1011,7 +1011,7 @@ pub async fn run_e2e_context_eval_longmemeval(
                     }
                     .to_string(),
                 ),
-                domain: Some("conversation".to_string()),
+                space: Some("conversation".to_string()),
                 last_modified: chrono::Utc::now().timestamp(),
                 ..Default::default()
             })
@@ -1760,7 +1760,7 @@ pub async fn run_fullpipeline_locomo_batch(
                             source: "memory".to_string(),
                             title: format!("{} session {}", mem.speaker, mem.session_num),
                             memory_type: Some("fact".to_string()),
-                            domain: Some("conversation".to_string()),
+                            space: Some("conversation".to_string()),
                             last_modified: chrono::Utc::now().timestamp(),
                             ..Default::default()
                         })
@@ -1896,7 +1896,7 @@ pub async fn run_fullpipeline_locomo_batch(
                                             mem.speaker, mem.session_num
                                         ),
                                         memory_type: Some("fact".to_string()),
-                                        domain: Some("conversation".to_string()),
+                                        space: Some("conversation".to_string()),
                                         last_modified: chrono::Utc::now().timestamp(),
                                         ..Default::default()
                                     })
@@ -2265,7 +2265,7 @@ pub async fn run_fullpipeline_lme_batch(
                                 }
                                 .to_string(),
                             ),
-                            domain: Some("conversation".to_string()),
+                            space: Some("conversation".to_string()),
                             last_modified: chrono::Utc::now().timestamp(),
                             ..Default::default()
                         })
@@ -2408,7 +2408,7 @@ pub async fn run_fullpipeline_lme_batch(
                                             }
                                             .to_string(),
                                         ),
-                                        domain: Some("conversation".to_string()),
+                                        space: Some("conversation".to_string()),
                                         last_modified: chrono::Utc::now().timestamp(),
                                         ..Default::default()
                                     })

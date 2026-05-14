@@ -363,7 +363,7 @@ struct ClusterMemRow {
     entity_id: Option<String>,
     entity_name: Option<String>,
     community_id: Option<u32>,
-    domain: Option<String>,
+    space: Option<String>,
     embedding: Vec<f32>,
 }
 
@@ -432,14 +432,14 @@ fn build_distillation_cluster(
         .collect();
     let entity_id = memories[indices[0]].entity_id.clone();
     let entity_name = memories[indices[0]].entity_name.clone();
-    let domain = memories[indices[0]].domain.clone();
+    let space = memories[indices[0]].space.clone();
     let estimated_tokens = contents.iter().map(|c| c.len() / 4 + 15).sum::<usize>() + 100;
     DistillationCluster {
         source_ids,
         contents,
         entity_id,
         entity_name,
-        domain,
+        space,
         estimated_tokens,
     }
 }
@@ -540,7 +540,7 @@ pub struct DistillationCluster {
     pub contents: Vec<String>,
     pub entity_id: Option<String>,
     pub entity_name: Option<String>,
-    pub domain: Option<String>,
+    pub space: Option<String>,
     pub estimated_tokens: usize,
 }
 
@@ -656,10 +656,10 @@ pub struct RefinementProposal {
     pub created_at: String,
 }
 
-/// A consolidation candidate: a domain with N+ decayed memories.
+/// A consolidation candidate: a space with N+ decayed memories.
 #[derive(Debug, Clone)]
 pub struct ConsolidationCandidate {
-    pub domain: Option<String>,
+    pub space: Option<String>,
     pub count: i64,
 }
 
@@ -824,8 +824,9 @@ CREATE TABLE IF NOT EXISTS spaces (
     created_at REAL NOT NULL,
     updated_at REAL NOT NULL
 );
-CREATE INDEX IF NOT EXISTS idx_memories_domain ON memories(domain) WHERE domain IS NOT NULL;
-CREATE INDEX IF NOT EXISTS idx_entities_domain ON entities(domain) WHERE domain IS NOT NULL;
+-- idx_memories_domain / idx_entities_domain were managed by migration 12 (create) and
+-- migration 50 (drop + recreate as idx_memories_space / idx_entities_space). They must
+-- not appear in SCHEMA after migration 50 has renamed the column.
 
 -- Rejection log: quality gate diagnostics
 CREATE TABLE IF NOT EXISTS rejected_memories (
@@ -2938,7 +2939,7 @@ impl MemoryDB {
                     let batch: Vec<(String, String, Option<String>)> = {
                         let conn = self.conn.lock().await;
                         let mut rows = conn.query(
-                            "SELECT id, COALESCE(source_text, content), domain FROM memories WHERE embedding IS NULL LIMIT ?1",
+                            "SELECT id, COALESCE(source_text, content), space FROM memories WHERE embedding IS NULL LIMIT ?1",
                             libsql::params![batch_size as i64],
                         ).await.map_err(|e| OriginError::VectorDb(format!("null embed batch: {}", e)))?;
                         let mut batch = Vec::new();
@@ -2949,8 +2950,8 @@ impl MemoryDB {
                         {
                             let id: String = row.get(0).unwrap_or_default();
                             let text: String = row.get(1).unwrap_or_default();
-                            let domain: Option<String> = row.get(2).unwrap_or(None);
-                            batch.push((id, text, domain));
+                            let space: Option<String> = row.get(2).unwrap_or(None);
+                            batch.push((id, text, space));
                         }
                         batch
                     };
@@ -2962,8 +2963,8 @@ impl MemoryDB {
                     let texts: Vec<String> = batch
                         .iter()
                         .map(|(_, t, d)| {
-                            if let Some(ref domain) = d {
-                                format!("[{}] {}", domain, t)
+                            if let Some(ref space) = d {
+                                format!("[{}] {}", space, t)
                             } else {
                                 t.clone()
                             }
@@ -4628,6 +4629,111 @@ impl MemoryDB {
                     .map_err(|e| OriginError::VectorDb(format!("m49 bump: {e}")))?;
                 log::info!("[migration] Migration 49 applied: pages.changelog column for revision surfacing");
             }
+
+            // Migration 50: rename domain → space on memories, entities, pages.
+            if version < 50 {
+                let conn = self.conn.lock().await;
+                // Idempotency probe: if memories.space already exists the rename
+                // already ran (e.g. test rolled user_version back to 49). Skip
+                // the ALTER TABLE and go straight to bumping user_version.
+                //
+                // The probe runs before BEGIN. This is intentional: migrations
+                // run sequentially inside MemoryDB::new before any background
+                // task spawns, so no concurrent writer can race this read.
+                // Moving the probe inside BEGIN would add unnecessary lock
+                // contention without correctness benefit at this lifecycle point.
+                let already_renamed: bool = {
+                    let mut rows = conn
+                        .query(
+                            "SELECT COUNT(*) FROM pragma_table_info('memories') WHERE name = 'space'",
+                            (),
+                        )
+                        .await
+                        .map_err(|e| OriginError::VectorDb(format!("m50 probe: {e}")))?;
+                    match rows.next().await {
+                        Ok(Some(row)) => row.get::<i64>(0).unwrap_or(0) > 0,
+                        _ => false,
+                    }
+                };
+                if already_renamed {
+                    conn.execute("PRAGMA user_version = 50", ())
+                        .await
+                        .map_err(|e| {
+                            OriginError::VectorDb(format!("m50 bump (already done): {e}"))
+                        })?;
+                    log::info!("[migration] Migration 50 skipped (already applied): bumped user_version to 50");
+                } else {
+                    conn.execute("PRAGMA foreign_keys = OFF", ())
+                        .await
+                        .map_err(|e| OriginError::VectorDb(format!("m50 fk off: {e}")))?;
+                    conn.execute("BEGIN", ())
+                        .await
+                        .map_err(|e| OriginError::VectorDb(format!("m50 begin: {e}")))?;
+                    let result: Result<(), OriginError> = async {
+                        conn.execute("ALTER TABLE memories RENAME COLUMN domain TO space", ())
+                            .await
+                            .map_err(|e| OriginError::VectorDb(format!("m50 rename memories: {e}")))?;
+                        conn.execute("ALTER TABLE entities RENAME COLUMN domain TO space", ())
+                            .await
+                            .map_err(|e| OriginError::VectorDb(format!("m50 rename entities: {e}")))?;
+                        conn.execute("ALTER TABLE pages RENAME COLUMN domain TO space", ())
+                            .await
+                            .map_err(|e| OriginError::VectorDb(format!("m50 rename pages: {e}")))?;
+                        conn.execute("DROP INDEX IF EXISTS idx_memories_domain", ())
+                            .await
+                            .map_err(|e| OriginError::VectorDb(format!("m50 drop idx memories: {e}")))?;
+                        conn.execute("DROP INDEX IF EXISTS idx_entities_domain", ())
+                            .await
+                            .map_err(|e| OriginError::VectorDb(format!("m50 drop idx entities: {e}")))?;
+                        conn.execute("DROP INDEX IF EXISTS idx_pages_domain", ())
+                            .await
+                            .map_err(|e| OriginError::VectorDb(format!("m50 drop idx pages: {e}")))?;
+                        conn.execute(
+                            "CREATE INDEX IF NOT EXISTS idx_memories_space ON memories(space) WHERE space IS NOT NULL",
+                            (),
+                        )
+                        .await
+                        .map_err(|e| OriginError::VectorDb(format!("m50 create idx memories: {e}")))?;
+                        conn.execute(
+                            "CREATE INDEX IF NOT EXISTS idx_entities_space ON entities(space) WHERE space IS NOT NULL",
+                            (),
+                        )
+                        .await
+                        .map_err(|e| OriginError::VectorDb(format!("m50 create idx entities: {e}")))?;
+                        conn.execute(
+                            "CREATE INDEX IF NOT EXISTS idx_pages_space ON pages(space) WHERE space IS NOT NULL",
+                            (),
+                        )
+                        .await
+                        .map_err(|e| OriginError::VectorDb(format!("m50 create idx pages: {e}")))?;
+                        Ok(())
+                    }
+                    .await;
+                    match result {
+                        Ok(()) => {
+                            conn.execute("COMMIT", ())
+                                .await
+                                .map_err(|e| OriginError::VectorDb(format!("m50 commit: {e}")))?;
+                        }
+                        Err(e) => {
+                            let _ = conn.execute("ROLLBACK", ()).await;
+                            conn.execute("PRAGMA foreign_keys = ON", ())
+                                .await
+                                .map_err(|e2| {
+                                    OriginError::VectorDb(format!("m50 fk on (rollback): {e2}"))
+                                })?;
+                            return Err(e);
+                        }
+                    }
+                    conn.execute("PRAGMA foreign_keys = ON", ())
+                        .await
+                        .map_err(|e| OriginError::VectorDb(format!("m50 fk on: {e}")))?;
+                    conn.execute("PRAGMA user_version = 50", ())
+                        .await
+                        .map_err(|e| OriginError::VectorDb(format!("m50 bump: {e}")))?;
+                    log::info!("[migration] Migration 50 applied: renamed domain → space on memories/entities/pages + reindexed");
+                }
+            }
         }
 
         Ok(())
@@ -4781,8 +4887,8 @@ impl MemoryDB {
         let mut rows = conn
             .query(
                 "SELECT s.id, s.name, s.description, s.suggested, s.created_at, s.updated_at,
-                        (SELECT COUNT(DISTINCT c.source_id) FROM memories c WHERE c.domain = s.name AND c.source = 'memory' AND c.pending_revision = 0 AND COALESCE(c.is_recap, 0) = 0 AND c.source_id NOT IN (SELECT supersedes FROM memories WHERE supersedes IS NOT NULL AND pending_revision = 0 AND source = 'memory' GROUP BY supersedes)) as mem_count,
-                        (SELECT COUNT(*) FROM entities e WHERE e.domain = s.name) as ent_count,
+                        (SELECT COUNT(DISTINCT c.source_id) FROM memories c WHERE c.space = s.name AND c.source = 'memory' AND c.pending_revision = 0 AND COALESCE(c.is_recap, 0) = 0 AND c.source_id NOT IN (SELECT supersedes FROM memories WHERE supersedes IS NOT NULL AND pending_revision = 0 AND source = 'memory' GROUP BY supersedes)) as mem_count,
+                        (SELECT COUNT(*) FROM entities e WHERE e.space = s.name) as ent_count,
                         s.sort_order, s.starred
                  FROM spaces s
                  ORDER BY s.starred DESC, s.sort_order, s.name",
@@ -4818,8 +4924,8 @@ impl MemoryDB {
         let mut rows = conn
             .query(
                 "SELECT s.id, s.name, s.description, s.suggested, s.created_at, s.updated_at,
-                        (SELECT COUNT(DISTINCT c.source_id) FROM memories c WHERE c.domain = s.name AND c.source = 'memory' AND c.pending_revision = 0 AND COALESCE(c.is_recap, 0) = 0 AND c.source_id NOT IN (SELECT supersedes FROM memories WHERE supersedes IS NOT NULL AND pending_revision = 0 AND source = 'memory' GROUP BY supersedes)) as mem_count,
-                        (SELECT COUNT(*) FROM entities e WHERE e.domain = s.name) as ent_count,
+                        (SELECT COUNT(DISTINCT c.source_id) FROM memories c WHERE c.space = s.name AND c.source = 'memory' AND c.pending_revision = 0 AND COALESCE(c.is_recap, 0) = 0 AND c.source_id NOT IN (SELECT supersedes FROM memories WHERE supersedes IS NOT NULL AND pending_revision = 0 AND source = 'memory' GROUP BY supersedes)) as mem_count,
+                        (SELECT COUNT(*) FROM entities e WHERE e.space = s.name) as ent_count,
                         s.sort_order
                  FROM spaces s WHERE s.name = ?1",
                 libsql::params![name],
@@ -4919,7 +5025,7 @@ impl MemoryDB {
 
             if name != new_name {
                 conn.execute(
-                    "UPDATE memories SET domain = ?1 WHERE domain = ?2",
+                    "UPDATE memories SET space = ?1 WHERE space = ?2",
                     libsql::params![new_name, name],
                 )
                 .await
@@ -4928,7 +5034,7 @@ impl MemoryDB {
                 })?;
 
                 conn.execute(
-                    "UPDATE entities SET domain = ?1 WHERE domain = ?2",
+                    "UPDATE entities SET space = ?1 WHERE space = ?2",
                     libsql::params![new_name, name],
                 )
                 .await
@@ -4970,10 +5076,10 @@ impl MemoryDB {
 
         let txn_result = async {
             match memory_action {
-                "keep" => { /* do nothing — orphan memories with domain intact */ }
+                "keep" => { /* do nothing — orphan memories with space tag intact */ }
                 "unassign" => {
                     conn.execute(
-                        "UPDATE memories SET domain = NULL WHERE domain = ?1",
+                        "UPDATE memories SET space = NULL WHERE space = ?1",
                         libsql::params![name],
                     )
                     .await
@@ -4981,7 +5087,7 @@ impl MemoryDB {
                         OriginError::VectorDb(format!("delete_space unassign memories: {}", e))
                     })?;
                     conn.execute(
-                        "UPDATE entities SET domain = NULL WHERE domain = ?1",
+                        "UPDATE entities SET space = NULL WHERE space = ?1",
                         libsql::params![name],
                     )
                     .await
@@ -4991,7 +5097,7 @@ impl MemoryDB {
                 }
                 "delete" => {
                     conn.execute(
-                        "DELETE FROM memories WHERE domain = ?1 AND source = 'memory'",
+                        "DELETE FROM memories WHERE space = ?1 AND source = 'memory'",
                         libsql::params![name],
                     )
                     .await
@@ -4999,7 +5105,7 @@ impl MemoryDB {
                         OriginError::VectorDb(format!("delete_space delete memories: {}", e))
                     })?;
                     conn.execute(
-                        "DELETE FROM entities WHERE domain = ?1",
+                        "DELETE FROM entities WHERE space = ?1",
                         libsql::params![name],
                     )
                     .await
@@ -5010,7 +5116,7 @@ impl MemoryDB {
                 other if other.starts_with("move:") => {
                     let target = &other[5..];
                     conn.execute(
-                        "UPDATE memories SET domain = ?1 WHERE domain = ?2",
+                        "UPDATE memories SET space = ?1 WHERE space = ?2",
                         libsql::params![target, name],
                     )
                     .await
@@ -5018,7 +5124,7 @@ impl MemoryDB {
                         OriginError::VectorDb(format!("delete_space move memories: {}", e))
                     })?;
                     conn.execute(
-                        "UPDATE entities SET domain = ?1 WHERE domain = ?2",
+                        "UPDATE entities SET space = ?1 WHERE space = ?2",
                         libsql::params![target, name],
                     )
                     .await
@@ -5145,8 +5251,8 @@ impl MemoryDB {
         Ok(starred)
     }
 
-    pub async fn auto_create_space_if_needed(&self, domain: &str) -> Result<(), OriginError> {
-        if domain.is_empty() {
+    pub async fn auto_create_space_if_needed(&self, space: &str) -> Result<(), OriginError> {
+        if space.is_empty() {
             return Ok(());
         }
         let conn = self.conn.lock().await;
@@ -5155,7 +5261,7 @@ impl MemoryDB {
         conn.execute(
             "INSERT OR IGNORE INTO spaces (id, name, description, suggested, created_at, updated_at)
              VALUES (?1, ?2, NULL, 1, ?3, ?4)",
-            libsql::params![id, domain, now, now],
+            libsql::params![id, space, now, now],
         )
         .await
         .map_err(|e| OriginError::VectorDb(format!("auto_create_space: {}", e)))?;
@@ -5354,7 +5460,7 @@ impl MemoryDB {
         }
     }
 
-    /// Get the current memory_type and domain for a source_id (first chunk).
+    /// Get the current memory_type and space for a source_id (first chunk).
     pub async fn get_memory_classification(
         &self,
         source_id: &str,
@@ -5362,7 +5468,7 @@ impl MemoryDB {
         let conn = self.conn.lock().await;
         let mut rows = conn
             .query(
-                "SELECT memory_type, domain FROM memories WHERE source_id = ?1 LIMIT 1",
+                "SELECT memory_type, space FROM memories WHERE source_id = ?1 LIMIT 1",
                 libsql::params![source_id],
             )
             .await
@@ -5373,8 +5479,8 @@ impl MemoryDB {
             .map_err(|e| OriginError::VectorDb(e.to_string()))?
         {
             let memory_type: Option<String> = row.get(0).ok();
-            let domain: Option<String> = row.get(1).ok();
-            Ok((memory_type, domain))
+            let space: Option<String> = row.get(1).ok();
+            Ok((memory_type, space))
         } else {
             Ok((None, None))
         }
@@ -5396,11 +5502,15 @@ impl MemoryDB {
         Ok(())
     }
 
-    pub async fn update_domain(&self, source_id: &str, domain: &str) -> Result<(), OriginError> {
+    pub async fn update_memory_space(
+        &self,
+        source_id: &str,
+        space: &str,
+    ) -> Result<(), OriginError> {
         let conn = self.conn.lock().await;
         conn.execute(
-            "UPDATE memories SET domain = ?1 WHERE source_id = ?2",
-            libsql::params![domain, source_id],
+            "UPDATE memories SET space = ?1 WHERE source_id = ?2",
+            libsql::params![space, source_id],
         )
         .await
         .map_err(|e| OriginError::VectorDb(e.to_string()))?;
@@ -5582,7 +5692,7 @@ impl MemoryDB {
     /// Convert a database row to SearchResult.
     /// Columns: 0=id, 1=content, 2=source, 3=source_id, 4=title, 5=summary,
     /// 6=url, 7=chunk_index, 8=last_modified, 9=chunk_type, 10=language,
-    /// 11=byte_start, 12=byte_end, 13=semantic_unit, 14=memory_type, 15=domain,
+    /// 11=byte_start, 12=byte_end, 13=semantic_unit, 14=memory_type, 15=space,
     /// 16=source_agent, 17=confidence, 18=confirmed, 19=stability, 20=supersedes,
     /// 21=entity_id, 22=quality, 23=is_recap, 24=supersede_mode,
     /// 25=structured_fields, 26=retrieval_cue, 27=source_text,
@@ -5622,7 +5732,7 @@ impl MemoryDB {
             language: row.get::<Option<String>>(10).unwrap_or(None),
             semantic_unit: row.get::<Option<String>>(13).unwrap_or(None),
             memory_type: row.get::<Option<String>>(14).unwrap_or(None),
-            domain: row.get::<Option<String>>(15).unwrap_or(None),
+            space: row.get::<Option<String>>(15).unwrap_or(None),
             source_agent: row.get::<Option<String>>(16).unwrap_or(None),
             confidence: row.get::<Option<f64>>(17).unwrap_or(None).map(|v| v as f32),
             confirmed: row.get::<Option<i64>>(18).unwrap_or(None).map(|v| v != 0),
@@ -5673,7 +5783,7 @@ impl MemoryDB {
             byte_end: Option<i64>,
             semantic_unit: Option<String>,
             memory_type: Option<String>,
-            domain: Option<String>,
+            space: Option<String>,
             source_agent: Option<String>,
             confidence: Option<f32>,
             confirmed: Option<bool>,
@@ -5723,12 +5833,12 @@ impl MemoryDB {
                 let hash = format!("{:x}", hasher.finalize());
                 let chunk_id = hash[..16].to_string();
 
-                // Contextual enrichment: for memory rows, prepend domain as embedding
-                // prefix. Autoresearch ablation (2026-04-03) showed [domain]-only
-                // is +25% NDCG over [type | domain] — type labels add noise that
+                // Contextual enrichment: for memory rows, prepend space as embedding
+                // prefix. Autoresearch ablation (2026-04-03) showed [space]-only
+                // is +25% NDCG over [type | space] — type labels add noise that
                 // dilutes semantic signal. Retrieval cue follows on its own line.
                 let embedding_text = if doc.source == "memory" {
-                    let prefix = if let Some(ref d) = doc.domain {
+                    let prefix = if let Some(ref d) = doc.space {
                         format!("[{}] ", d)
                     } else {
                         String::new()
@@ -5762,7 +5872,7 @@ impl MemoryDB {
                     byte_end: chunk.byte_range.map(|(_, e)| e as i64),
                     semantic_unit: chunk.semantic_unit.clone(),
                     memory_type: doc.memory_type.clone(),
-                    domain: doc.domain.clone(),
+                    space: doc.space.clone(),
                     source_agent: doc.source_agent.clone(),
                     confidence: doc.confidence,
                     confirmed: doc.confirmed,
@@ -5846,8 +5956,8 @@ impl MemoryDB {
                 .memory_type
                 .map(|s| s.into())
                 .unwrap_or(libsql::Value::Null);
-            let domain_val: libsql::Value =
-                row.domain.map(|s| s.into()).unwrap_or(libsql::Value::Null);
+            let space_val: libsql::Value =
+                row.space.map(|s| s.into()).unwrap_or(libsql::Value::Null);
             let source_agent_val: libsql::Value = row
                 .source_agent
                 .map(|s| s.into())
@@ -5892,7 +6002,7 @@ impl MemoryDB {
             conn.execute(
                 "INSERT INTO memories (id, content, source, source_id, title, summary, url,
                     chunk_index, last_modified, chunk_type, language, byte_start, byte_end,
-                    semantic_unit, memory_type, domain, source_agent, confidence, confirmed,
+                    semantic_unit, memory_type, space, source_agent, confidence, confirmed,
                     stability, supersedes, pending_revision, word_count,
                     entity_id, enrichment_status, quality, is_recap, supersede_mode,
                     structured_fields, retrieval_cue, source_text,
@@ -5918,7 +6028,7 @@ impl MemoryDB {
                     byte_end_val,
                     semantic_unit_val,
                     memory_type_val,
-                    domain_val,
+                    space_val,
                     source_agent_val,
                     confidence_val,
                     confirmed_val,
@@ -5970,7 +6080,12 @@ impl MemoryDB {
         query: &str,
         limit: usize,
         source_filter: Option<&str>,
+        space: Option<&str>,
     ) -> Result<Vec<SearchResult>, OriginError> {
+        // TODO(PR-C): documents/chunks table currently lacks a `space` column.
+        // The parameter is accepted for API symmetry but ignored on the doc path.
+        // PR-C will add the schema and wire the filter through.
+        let _ = space;
         let embedding = self.get_or_compute_embedding(query)?;
         let vec_str = Self::vec_to_sql(&embedding);
         let fetch_limit = (limit * 3) as i64;
@@ -5983,7 +6098,7 @@ impl MemoryDB {
             let sql = if source_filter.is_some() {
                 "SELECT c.id, c.content, c.source, c.source_id, c.title, c.summary, c.url,
                         c.chunk_index, c.last_modified, c.chunk_type, c.language, c.byte_start,
-                        c.byte_end, c.semantic_unit, c.memory_type, c.domain, c.source_agent,
+                        c.byte_end, c.semantic_unit, c.memory_type, c.space, c.source_agent,
                         c.confidence, c.confirmed, c.stability, c.supersedes,
                         c.entity_id, c.quality, c.is_recap, c.supersede_mode,
                         c.structured_fields, c.retrieval_cue, c.source_text,
@@ -5995,7 +6110,7 @@ impl MemoryDB {
             } else {
                 "SELECT c.id, c.content, c.source, c.source_id, c.title, c.summary, c.url,
                         c.chunk_index, c.last_modified, c.chunk_type, c.language, c.byte_start,
-                        c.byte_end, c.semantic_unit, c.memory_type, c.domain, c.source_agent,
+                        c.byte_end, c.semantic_unit, c.memory_type, c.space, c.source_agent,
                         c.confidence, c.confirmed, c.stability, c.supersedes,
                         c.entity_id, c.quality, c.is_recap, c.supersede_mode,
                         c.structured_fields, c.retrieval_cue, c.source_text,
@@ -6041,7 +6156,7 @@ impl MemoryDB {
             let fts_sql = if source_filter.is_some() {
                 "SELECT c.id, c.content, c.source, c.source_id, c.title, c.summary, c.url,
                         c.chunk_index, c.last_modified, c.chunk_type, c.language, c.byte_start,
-                        c.byte_end, c.semantic_unit, c.memory_type, c.domain, c.source_agent,
+                        c.byte_end, c.semantic_unit, c.memory_type, c.space, c.source_agent,
                         c.confidence, c.confirmed, c.stability, c.supersedes,
                         c.entity_id, c.quality, c.is_recap, c.supersede_mode,
                         c.structured_fields, c.retrieval_cue, c.source_text,
@@ -6055,7 +6170,7 @@ impl MemoryDB {
             } else {
                 "SELECT c.id, c.content, c.source, c.source_id, c.title, c.summary, c.url,
                         c.chunk_index, c.last_modified, c.chunk_type, c.language, c.byte_start,
-                        c.byte_end, c.semantic_unit, c.memory_type, c.domain, c.source_agent,
+                        c.byte_end, c.semantic_unit, c.memory_type, c.space, c.source_agent,
                         c.confidence, c.confirmed, c.stability, c.supersedes,
                         c.entity_id, c.quality, c.is_recap, c.supersede_mode,
                         c.structured_fields, c.retrieval_cue, c.source_text,
@@ -6154,7 +6269,7 @@ impl MemoryDB {
         query: &str,
         limit: usize,
         memory_type: Option<&str>,
-        domain: Option<&str>,
+        space: Option<&str>,
         source_agent: Option<&str>,
         confirmation_boost: Option<f32>,
         recap_penalty: Option<f32>,
@@ -6201,11 +6316,11 @@ impl MemoryDB {
                 }
             }
         }
-        if let Some(d) = domain {
+        if let Some(d) = space {
             if d == "uncategorized" {
-                filter_conditions.push("c.domain IS NULL".to_string());
+                filter_conditions.push("c.space IS NULL".to_string());
             } else {
-                filter_conditions.push("c.domain = ?".to_string());
+                filter_conditions.push("c.space = ?".to_string());
                 filter_values.push(libsql::Value::Text(d.to_string()));
             }
         }
@@ -6251,7 +6366,7 @@ impl MemoryDB {
             let sql = format!(
                 "SELECT c.id, c.content, c.source, c.source_id, c.title, c.summary, c.url,
                         c.chunk_index, c.last_modified, c.chunk_type, c.language, c.byte_start,
-                        c.byte_end, c.semantic_unit, c.memory_type, c.domain, c.source_agent,
+                        c.byte_end, c.semantic_unit, c.memory_type, c.space, c.source_agent,
                         c.confidence, c.confirmed, c.stability, c.supersedes,
                         c.entity_id, c.quality, c.is_recap, c.supersede_mode,
                         c.structured_fields, c.retrieval_cue, c.source_text,
@@ -6311,7 +6426,7 @@ impl MemoryDB {
             let fts_sql = format!(
                 "SELECT c.id, c.content, c.source, c.source_id, c.title, c.summary, c.url,
                         c.chunk_index, c.last_modified, c.chunk_type, c.language, c.byte_start,
-                        c.byte_end, c.semantic_unit, c.memory_type, c.domain, c.source_agent,
+                        c.byte_end, c.semantic_unit, c.memory_type, c.space, c.source_agent,
                         c.confidence, c.confirmed, c.stability, c.supersedes,
                         c.entity_id, c.quality, c.is_recap, c.supersede_mode,
                         c.structured_fields, c.retrieval_cue, c.source_text,
@@ -6400,12 +6515,12 @@ impl MemoryDB {
 
         let now = chrono::Utc::now().timestamp();
 
-        // Domain boost: collect unique domains from results, check if query mentions any.
-        // If it does, results matching that domain get a 1.5x boost.
+        // Space boost: collect unique spaces from results, check if query mentions any.
+        // If it does, results matching that space get a 1.5x boost.
         let query_lower = query.to_lowercase();
-        let query_domains: HashSet<String> = result_map
+        let query_spaces: HashSet<String> = result_map
             .values()
-            .filter_map(|r| r.domain.clone())
+            .filter_map(|r| r.space.clone())
             .filter(|d| query_lower.contains(&d.to_lowercase()))
             .collect();
 
@@ -6457,13 +6572,13 @@ impl MemoryDB {
                     1.0f32
                 };
 
-                // Domain relevance boost: if query mentions a domain name,
-                // memories from that domain get 1.5x to surface above cross-project noise
-                let eff_domain_boost = scoring.map(|s| s.domain_boost).unwrap_or(1.5);
-                let domain_mult = if !query_domains.is_empty() {
-                    if let Some(ref d) = r.domain {
-                        if query_domains.contains(d) {
-                            eff_domain_boost
+                // Space relevance boost: if query mentions a space name,
+                // memories from that space get 1.5x to surface above cross-project noise
+                let eff_space_boost = scoring.map(|s| s.domain_boost).unwrap_or(1.5);
+                let space_mult = if !query_spaces.is_empty() {
+                    if let Some(ref d) = r.space {
+                        if query_spaces.contains(d) {
+                            eff_space_boost
                         } else {
                             1.0
                         }
@@ -6475,7 +6590,7 @@ impl MemoryDB {
                 };
 
                 r.score =
-                    rrf * conf * recency * quality_mult * confirm_mult * recap_mult * domain_mult;
+                    rrf * conf * recency * quality_mult * confirm_mult * recap_mult * space_mult;
 
                 // Mark archived decisions (superseded with mode='archive')
                 if archived_ids.contains(&r.source_id) {
@@ -6619,8 +6734,8 @@ impl MemoryDB {
         {
             let theoretical_max_rrf = (1.0 + fts_weight) / rrf_k;
             let eff_confirm = scoring.map(|s| s.confirmation_boost).unwrap_or(2.5);
-            let eff_domain = scoring.map(|s| s.domain_boost).unwrap_or(1.5);
-            let peak_multiplier = eff_confirm * eff_domain;
+            let eff_space = scoring.map(|s| s.domain_boost).unwrap_or(1.5);
+            let peak_multiplier = eff_confirm * eff_space;
             let reference_max = theoretical_max_rrf * peak_multiplier;
             for r in &mut final_results {
                 r.score = (r.score / reference_max).min(1.0);
@@ -6674,7 +6789,7 @@ impl MemoryDB {
         query: &str,
         limit: usize,
         memory_type: Option<&str>,
-        domain: Option<&str>,
+        space: Option<&str>,
         source_agent: Option<&str>,
         llm: Option<Arc<dyn crate::llm_provider::LlmProvider>>,
     ) -> Result<Vec<SearchResult>, OriginError> {
@@ -6686,7 +6801,7 @@ impl MemoryDB {
                 query,
                 fetch_pool,
                 memory_type,
-                domain,
+                space,
                 source_agent,
                 None,
                 None,
@@ -6803,7 +6918,7 @@ impl MemoryDB {
         query: &str,
         limit: usize,
         memory_type: Option<&str>,
-        domain: Option<&str>,
+        space: Option<&str>,
         source_agent: Option<&str>,
         llm: Option<Arc<dyn crate::llm_provider::LlmProvider>>,
     ) -> Result<Vec<SearchResult>, OriginError> {
@@ -6870,7 +6985,7 @@ impl MemoryDB {
                     q,
                     fetch_pool,
                     memory_type,
-                    domain,
+                    space,
                     source_agent,
                     None,
                     None,
@@ -6892,7 +7007,7 @@ impl MemoryDB {
                     query,
                     limit,
                     memory_type,
-                    domain,
+                    space,
                     source_agent,
                     None,
                     None,
@@ -6991,12 +7106,12 @@ impl MemoryDB {
         &self,
         query: &str,
         limit: usize,
-        domain: Option<&str>,
+        space: Option<&str>,
     ) -> Result<Vec<SearchResult>, OriginError> {
         let embedding = self.get_or_compute_embedding(query)?;
         let vec_str = Self::vec_to_sql(&embedding);
-        // Fetch more candidates when domain filtering (some will be filtered out)
-        let fetch_limit = if domain.is_some() {
+        // Fetch more candidates when space filtering (some will be filtered out)
+        let fetch_limit = if space.is_some() {
             (limit * 3) as i64
         } else {
             limit as i64
@@ -7004,11 +7119,11 @@ impl MemoryDB {
 
         let conn = self.conn.lock().await;
 
-        let (sql, params): (String, Vec<libsql::Value>) = if let Some(d) = domain {
+        let (sql, params): (String, Vec<libsql::Value>) = if let Some(d) = space {
             (
                 "SELECT c.id, c.content, c.source, c.source_id, c.title, c.summary, c.url,
                         c.chunk_index, c.last_modified, c.chunk_type, c.language, c.byte_start,
-                        c.byte_end, c.semantic_unit, c.memory_type, c.domain, c.source_agent,
+                        c.byte_end, c.semantic_unit, c.memory_type, c.space, c.source_agent,
                         c.confidence, c.confirmed, c.stability, c.supersedes,
                         c.entity_id, c.quality, c.is_recap, c.supersede_mode,
                         c.structured_fields, c.retrieval_cue, c.source_text,
@@ -7016,7 +7131,7 @@ impl MemoryDB {
                         vector_distance_cos(c.embedding, vector32(?1))
                  FROM vector_top_k('memories_vec_idx', vector32(?1), ?2) AS vt
                  JOIN memories c ON c.rowid = vt.id
-                 WHERE c.pending_revision = 0 AND c.domain = ?3"
+                 WHERE c.pending_revision = 0 AND c.space = ?3"
                     .to_string(),
                 vec![
                     libsql::Value::Text(vec_str.clone()),
@@ -7028,7 +7143,7 @@ impl MemoryDB {
             (
                 "SELECT c.id, c.content, c.source, c.source_id, c.title, c.summary, c.url,
                         c.chunk_index, c.last_modified, c.chunk_type, c.language, c.byte_start,
-                        c.byte_end, c.semantic_unit, c.memory_type, c.domain, c.source_agent,
+                        c.byte_end, c.semantic_unit, c.memory_type, c.space, c.source_agent,
                         c.confidence, c.confirmed, c.stability, c.supersedes,
                         c.entity_id, c.quality, c.is_recap, c.supersede_mode,
                         c.structured_fields, c.retrieval_cue, c.source_text,
@@ -7078,9 +7193,9 @@ impl MemoryDB {
         &self,
         query: &str,
         limit: usize,
-        domain: Option<&str>,
+        space: Option<&str>,
     ) -> Result<Vec<SearchResult>, OriginError> {
-        let fetch_limit = if domain.is_some() {
+        let fetch_limit = if space.is_some() {
             (limit * 3) as i64
         } else {
             limit as i64
@@ -7088,10 +7203,9 @@ impl MemoryDB {
 
         let conn = self.conn.lock().await;
 
-        let (domain_clause, domain_param): (String, Option<libsql::Value>) = if let Some(d) = domain
-        {
+        let (space_clause, space_param): (String, Option<libsql::Value>) = if let Some(d) = space {
             (
-                "AND c.domain = ?3".to_string(),
+                "AND c.space = ?3".to_string(),
                 Some(libsql::Value::Text(d.to_string())),
             )
         } else {
@@ -7101,7 +7215,7 @@ impl MemoryDB {
         let fts_sql = format!(
             "SELECT c.id, c.content, c.source, c.source_id, c.title, c.summary, c.url,
                     c.chunk_index, c.last_modified, c.chunk_type, c.language, c.byte_start,
-                    c.byte_end, c.semantic_unit, c.memory_type, c.domain, c.source_agent,
+                    c.byte_end, c.semantic_unit, c.memory_type, c.space, c.source_agent,
                     c.confidence, c.confirmed, c.stability, c.supersedes,
                     c.entity_id, c.quality, c.is_recap, c.supersede_mode,
                     c.structured_fields, c.retrieval_cue, c.source_text,
@@ -7113,7 +7227,7 @@ impl MemoryDB {
                AND c.pending_revision = 0 {}
              ORDER BY fts.rank
              LIMIT ?2",
-            domain_clause
+            space_clause
         );
 
         // AND match first, fall back to OR for multi-word queries
@@ -7125,7 +7239,7 @@ impl MemoryDB {
                 libsql::Value::Text(fts_query.clone()),
                 libsql::Value::Integer(fetch_limit),
             ];
-            if let Some(ref dp) = domain_param {
+            if let Some(ref dp) = space_param {
                 params.push(dp.clone());
             }
 
@@ -7171,11 +7285,11 @@ impl MemoryDB {
         &self,
         query: &str,
         limit: usize,
-        domain: Option<&str>,
+        space: Option<&str>,
     ) -> Result<Vec<SearchResult>, OriginError> {
         // Run both searches independently; score normalization is done after merge.
-        let vec_results = self.naive_vector_search(query, limit, domain).await?;
-        let fts_results = self.fts_only_search(query, limit, domain).await?;
+        let vec_results = self.naive_vector_search(query, limit, space).await?;
+        let fts_results = self.fts_only_search(query, limit, space).await?;
 
         // Normalise vector scores (already in [0,1] as cosine similarity).
         // Normalise FTS scores to [0,1] range so both signals are comparable.
@@ -7235,7 +7349,7 @@ impl MemoryDB {
         let conn = self.conn.lock().await;
 
         // Try DiskANN index first
-        let sql = "SELECT e.id, e.name, e.entity_type, e.domain, e.source_agent, e.confidence, e.confirmed, e.created_at, e.updated_at, vector_distance_cos(e.embedding, vector32(?1))
+        let sql = "SELECT e.id, e.name, e.entity_type, e.space, e.source_agent, e.confidence, e.confirmed, e.created_at, e.updated_at, vector_distance_cos(e.embedding, vector32(?1))
                    FROM vector_top_k('entities_vec_idx', vector32(?1), ?2) AS vt
                    JOIN entities e ON e.rowid = vt.id";
 
@@ -7250,7 +7364,7 @@ impl MemoryDB {
                         id: row.get::<String>(0).unwrap_or_default(),
                         name: row.get::<String>(1).unwrap_or_default(),
                         entity_type: row.get::<String>(2).unwrap_or_default(),
-                        domain: row.get::<Option<String>>(3).unwrap_or(None),
+                        space: row.get::<Option<String>>(3).unwrap_or(None),
                         source_agent: row.get::<Option<String>>(4).unwrap_or(None),
                         confidence: row.get::<Option<f64>>(5).unwrap_or(None).map(|v| v as f32),
                         confirmed: row.get::<i64>(6).unwrap_or(0) != 0,
@@ -7275,7 +7389,7 @@ impl MemoryDB {
         // Fallback: brute-force cosine distance when DiskANN index is unavailable or empty
         if results.is_empty() {
             let fallback_sql =
-                "SELECT id, name, entity_type, domain, source_agent, confidence, confirmed, created_at, updated_at, vector_distance_cos(embedding, vector32(?1)) as distance
+                "SELECT id, name, entity_type, space, source_agent, confidence, confirmed, created_at, updated_at, vector_distance_cos(embedding, vector32(?1)) as distance
                  FROM entities
                  WHERE embedding IS NOT NULL
                  ORDER BY distance ASC
@@ -7290,7 +7404,7 @@ impl MemoryDB {
                             id: row.get::<String>(0).unwrap_or_default(),
                             name: row.get::<String>(1).unwrap_or_default(),
                             entity_type: row.get::<String>(2).unwrap_or_default(),
-                            domain: row.get::<Option<String>>(3).unwrap_or(None),
+                            space: row.get::<Option<String>>(3).unwrap_or(None),
                             source_agent: row.get::<Option<String>>(4).unwrap_or(None),
                             confidence: row.get::<Option<f64>>(5).unwrap_or(None).map(|v| v as f32),
                             confirmed: row.get::<i64>(6).unwrap_or(0) != 0,
@@ -7374,7 +7488,7 @@ impl MemoryDB {
                 language: None,
                 semantic_unit: None,
                 memory_type: None,
-                domain: None,
+                space: None,
                 source_agent,
                 confidence: confidence.map(|v| v as f32),
                 confirmed: None,
@@ -7478,7 +7592,7 @@ impl MemoryDB {
             "language",
             "semantic_unit",
             "memory_type",
-            "domain",
+            "space",
             "source_agent",
             "supersedes",
             "confirmed",
@@ -7544,7 +7658,7 @@ impl MemoryDB {
                 "SELECT source_id, MAX(title) as title, MAX(source) as source,
                         MAX(url) as url, COUNT(*) as chunk_count,
                         MAX(last_modified) as last_modified, MAX(summary) as summary,
-                        MAX(memory_type), MAX(domain), MAX(source_agent),
+                        MAX(memory_type), MAX(space), MAX(source_agent),
                         MAX(CAST(confidence AS REAL)), MAX(confirmed), MAX(pinned)
                  FROM memories
                  GROUP BY source_id
@@ -7566,7 +7680,7 @@ impl MemoryDB {
                 summary: row.get::<Option<String>>(6).unwrap_or(None),
                 processing: false,
                 memory_type: row.get::<Option<String>>(7).unwrap_or(None),
-                domain: row.get::<Option<String>>(8).unwrap_or(None),
+                space: row.get::<Option<String>>(8).unwrap_or(None),
                 source_agent: row.get::<Option<String>>(9).unwrap_or(None),
                 confidence: row.get::<Option<f64>>(10).unwrap_or(None).map(|v| v as f32),
                 confirmed: row.get::<Option<i64>>(11).unwrap_or(None).map(|v| v != 0),
@@ -7716,7 +7830,7 @@ impl MemoryDB {
         let conn = self.conn.lock().await;
         let mut rows = conn
             .query(
-                "SELECT source, title, url, summary, memory_type, domain, source_agent,
+                "SELECT source, title, url, summary, memory_type, space, source_agent,
                         confidence, confirmed, supersedes, last_modified
                  FROM memories WHERE source_id = ?1 LIMIT 1",
                 libsql::params![source_id.to_string()],
@@ -7750,7 +7864,7 @@ impl MemoryDB {
             url,
             summary,
             memory_type,
-            domain,
+            space,
             source_agent,
             confidence,
             confirmed,
@@ -7768,7 +7882,7 @@ impl MemoryDB {
                 last_modified,
                 metadata: HashMap::new(),
                 memory_type,
-                domain,
+                space,
                 source_agent,
                 confidence,
                 confirmed,
@@ -7802,7 +7916,7 @@ impl MemoryDB {
     /// List memories with optional filters, returning rich MemoryItem structs for the UI.
     pub async fn list_memories(
         &self,
-        domain: Option<&str>,
+        space: Option<&str>,
         memory_type: Option<&str>,
         confirmed: Option<bool>,
         pinned: Option<bool>,
@@ -7815,7 +7929,7 @@ impl MemoryDB {
                     GROUP_CONCAT(content, '\n') as content,
                     MAX(summary) as summary,
                     MAX(memory_type) as memory_type,
-                    MAX(domain) as domain,
+                    MAX(space) as space,
                     MAX(source_agent) as source_agent,
                     MAX(confidence) as confidence,
                     MAX(confirmed) as confirmed,
@@ -7847,12 +7961,12 @@ impl MemoryDB {
         );
         let mut params: Vec<libsql::Value> = Vec::new();
 
-        if let Some(d) = domain {
+        if let Some(d) = space {
             if d == "uncategorized" {
-                sql.push_str(" AND domain IS NULL");
+                sql.push_str(" AND space IS NULL");
             } else {
                 params.push(d.into());
-                sql.push_str(&format!(" AND domain = ?{}", params.len()));
+                sql.push_str(&format!(" AND space = ?{}", params.len()));
             }
         }
         if let Some(mt) = memory_type {
@@ -7889,7 +8003,7 @@ impl MemoryDB {
                 content: row.get::<String>(2).unwrap_or_default(),
                 summary: row.get::<Option<String>>(3).unwrap_or(None),
                 memory_type: row.get::<Option<String>>(4).unwrap_or(None),
-                domain: row.get::<Option<String>>(5).unwrap_or(None),
+                space: row.get::<Option<String>>(5).unwrap_or(None),
                 source_agent: row.get::<Option<String>>(6).unwrap_or(None),
                 confidence: row.get::<Option<f64>>(7).unwrap_or(None).map(|v| v as f32),
                 confirmed: row.get::<i64>(8).unwrap_or(0) != 0,
@@ -7926,7 +8040,7 @@ impl MemoryDB {
                     GROUP_CONCAT(content, '\n') as content,
                     MAX(summary) as summary,
                     MAX(memory_type) as memory_type,
-                    MAX(domain) as domain,
+                    MAX(space) as space,
                     MAX(source_agent) as source_agent,
                     MAX(confidence) as confidence,
                     MAX(confirmed) as confirmed,
@@ -7972,7 +8086,7 @@ impl MemoryDB {
                 content: row.get::<String>(2).unwrap_or_default(),
                 summary: row.get::<Option<String>>(3).unwrap_or(None),
                 memory_type: row.get::<Option<String>>(4).unwrap_or(None),
-                domain: row.get::<Option<String>>(5).unwrap_or(None),
+                space: row.get::<Option<String>>(5).unwrap_or(None),
                 source_agent: row.get::<Option<String>>(6).unwrap_or(None),
                 confidence: row.get::<Option<f64>>(7).unwrap_or(None).map(|v| v as f32),
                 confirmed: row.get::<i64>(8).unwrap_or(0) != 0,
@@ -8021,7 +8135,7 @@ impl MemoryDB {
                 GROUP_CONCAT(content, '\n') as content,
                 MAX(summary) as summary,
                 MAX(memory_type) as memory_type,
-                MAX(domain) as domain,
+                MAX(space) as space,
                 MAX(source_agent) as source_agent,
                 MAX(confidence) as confidence,
                 MAX(confirmed) as confirmed,
@@ -8075,7 +8189,7 @@ impl MemoryDB {
                 content: row.get::<String>(2).unwrap_or_default(),
                 summary: row.get::<Option<String>>(3).unwrap_or(None),
                 memory_type: row.get::<Option<String>>(4).unwrap_or(None),
-                domain: row.get::<Option<String>>(5).unwrap_or(None),
+                space: row.get::<Option<String>>(5).unwrap_or(None),
                 source_agent: row.get::<Option<String>>(6).unwrap_or(None),
                 confidence: row.get::<Option<f64>>(7).unwrap_or(None).map(|v| v as f32),
                 confirmed: row.get::<i64>(8).unwrap_or(0) != 0,
@@ -8106,18 +8220,18 @@ impl MemoryDB {
     }
 
     /// Load confirmed memories of a specific type, excluding superseded ones.
-    /// Optionally filter by domain when `domain_filter` is `Some`.
+    /// Optionally filter by space when `space_filter` is `Some`.
     pub async fn load_memories_by_type(
         &self,
         memory_type: &str,
         limit: usize,
-        domain_filter: Option<&str>,
+        space_filter: Option<&str>,
     ) -> Result<Vec<MemoryItem>, OriginError> {
         let conn = self.conn.lock().await;
         let supersedes_exclusion = "AND pending_revision = 0 AND source_id NOT IN (SELECT supersedes FROM memories WHERE supersedes IS NOT NULL AND pending_revision = 0 AND source = 'memory' GROUP BY supersedes)";
 
-        let domain_clause = if domain_filter.is_some() {
-            "AND domain = ?3"
+        let space_clause = if space_filter.is_some() {
+            "AND space = ?3"
         } else {
             ""
         };
@@ -8127,7 +8241,7 @@ impl MemoryDB {
                     GROUP_CONCAT(content, '\n') as content,
                     MAX(summary) as summary,
                     MAX(memory_type) as memory_type,
-                    MAX(domain) as domain,
+                    MAX(space) as space,
                     MAX(source_agent) as source_agent,
                     MAX(confidence) as confidence,
                     MAX(confirmed) as confirmed,
@@ -8158,13 +8272,13 @@ impl MemoryDB {
              GROUP BY source_id
              ORDER BY last_modified DESC
              LIMIT ?2",
-            supersedes_exclusion, domain_clause
+            supersedes_exclusion, space_clause
         );
 
-        let mut rows = if let Some(domain) = domain_filter {
+        let mut rows = if let Some(space) = space_filter {
             conn.query(
                 &sql,
-                libsql::params![memory_type.to_string(), limit as i64, domain.to_string()],
+                libsql::params![memory_type.to_string(), limit as i64, space.to_string()],
             )
             .await
         } else {
@@ -8185,7 +8299,7 @@ impl MemoryDB {
                 content: row.get::<String>(2).unwrap_or_default(),
                 summary: row.get::<Option<String>>(3).unwrap_or(None),
                 memory_type: row.get::<Option<String>>(4).unwrap_or(None),
-                domain: row.get::<Option<String>>(5).unwrap_or(None),
+                space: row.get::<Option<String>>(5).unwrap_or(None),
                 source_agent: row.get::<Option<String>>(6).unwrap_or(None),
                 confidence: row.get::<Option<f64>>(7).unwrap_or(None).map(|v| v as f32),
                 confirmed: row.get::<i64>(8).unwrap_or(0) != 0,
@@ -8217,14 +8331,14 @@ impl MemoryDB {
     /// Returns full `MemoryItem` rows with `structured_fields` for expanded view.
     pub async fn load_decisions(
         &self,
-        domain: Option<&str>,
+        space: Option<&str>,
         limit: usize,
     ) -> Result<Vec<MemoryItem>, OriginError> {
         let conn = self.conn.lock().await;
         let supersedes_exclusion = "AND pending_revision = 0 AND source_id NOT IN (SELECT supersedes FROM memories WHERE supersedes IS NOT NULL AND pending_revision = 0 AND source = 'memory' GROUP BY supersedes)";
 
-        let domain_clause = if domain.is_some() {
-            "AND domain = ?2"
+        let space_clause = if space.is_some() {
+            "AND space = ?2"
         } else {
             ""
         };
@@ -8234,7 +8348,7 @@ impl MemoryDB {
                     GROUP_CONCAT(content, '\n') as content,
                     MAX(summary) as summary,
                     MAX(memory_type) as memory_type,
-                    MAX(domain) as domain,
+                    MAX(space) as space,
                     MAX(source_agent) as source_agent,
                     MAX(confidence) as confidence,
                     MAX(confirmed) as confirmed,
@@ -8265,10 +8379,10 @@ impl MemoryDB {
              GROUP BY source_id
              ORDER BY last_modified DESC
              LIMIT ?1",
-            supersedes_exclusion, domain_clause
+            supersedes_exclusion, space_clause
         );
 
-        let mut rows = if let Some(d) = domain {
+        let mut rows = if let Some(d) = space {
             conn.query(&sql, libsql::params![limit as i64, d.to_string()])
                 .await
         } else {
@@ -8288,7 +8402,7 @@ impl MemoryDB {
                 content: row.get::<String>(2).unwrap_or_default(),
                 summary: row.get::<Option<String>>(3).unwrap_or(None),
                 memory_type: row.get::<Option<String>>(4).unwrap_or(None),
-                domain: row.get::<Option<String>>(5).unwrap_or(None),
+                space: row.get::<Option<String>>(5).unwrap_or(None),
                 source_agent: row.get::<Option<String>>(6).unwrap_or(None),
                 confidence: row.get::<Option<f64>>(7).unwrap_or(None).map(|v| v as f32),
                 confirmed: row.get::<i64>(8).unwrap_or(0) != 0,
@@ -8315,26 +8429,26 @@ impl MemoryDB {
         Ok(items)
     }
 
-    /// List distinct domains that have decision memories.
-    pub async fn list_decision_domains(&self) -> Result<Vec<String>, OriginError> {
+    /// List distinct spaces that have decision memories.
+    pub async fn list_decision_spaces(&self) -> Result<Vec<String>, OriginError> {
         let conn = self.conn.lock().await;
-        let sql = "SELECT DISTINCT domain FROM memories WHERE source = 'memory' AND memory_type = 'decision' AND domain IS NOT NULL ORDER BY domain";
+        let sql = "SELECT DISTINCT space FROM memories WHERE source = 'memory' AND memory_type = 'decision' AND space IS NOT NULL ORDER BY space";
         let mut rows = conn
             .query(sql, libsql::params![])
             .await
-            .map_err(|e| OriginError::VectorDb(format!("list_decision_domains: {}", e)))?;
+            .map_err(|e| OriginError::VectorDb(format!("list_decision_spaces: {}", e)))?;
 
-        let mut domains = Vec::new();
+        let mut spaces = Vec::new();
         while let Some(row) = rows
             .next()
             .await
             .map_err(|e| OriginError::VectorDb(e.to_string()))?
         {
             if let Ok(d) = row.get::<String>(0) {
-                domains.push(d);
+                spaces.push(d);
             }
         }
-        Ok(domains)
+        Ok(spaces)
     }
 
     /// List documents matching structured filters, deduped by source_id.
@@ -8343,10 +8457,10 @@ impl MemoryDB {
         &self,
         source: Option<&str>,
         memory_type: Option<&str>,
-        domain: Option<&str>,
+        space: Option<&str>,
         limit: usize,
     ) -> Result<Vec<IndexedFileInfo>, OriginError> {
-        self.list_filtered_confirmed(source, memory_type, domain, None, limit)
+        self.list_filtered_confirmed(source, memory_type, space, None, limit)
             .await
     }
 
@@ -8355,7 +8469,7 @@ impl MemoryDB {
         &self,
         source: Option<&str>,
         memory_type: Option<&str>,
-        domain: Option<&str>,
+        space: Option<&str>,
         confirmed: Option<bool>,
         limit: usize,
     ) -> Result<Vec<IndexedFileInfo>, OriginError> {
@@ -8375,8 +8489,8 @@ impl MemoryDB {
             params.push(mt.to_string().into());
             idx += 1;
         }
-        if let Some(d) = domain {
-            conditions.push(format!("domain = ?{}", idx));
+        if let Some(d) = space {
+            conditions.push(format!("space = ?{}", idx));
             params.push(d.to_string().into());
             idx += 1;
         }
@@ -8413,7 +8527,7 @@ impl MemoryDB {
             "SELECT source_id, MAX(title) as title, MAX(source) as source,
                     MAX(url) as url, COUNT(*) as chunk_count,
                     MAX(last_modified) as last_modified, MAX(summary) as summary,
-                    MAX(memory_type), MAX(domain), MAX(source_agent),
+                    MAX(memory_type), MAX(space), MAX(source_agent),
                     MAX(CAST(confidence AS REAL)), MAX(confirmed), MAX(pinned),
                     MAX(created_at) as created_at,
                     MAX(content) as content
@@ -8442,7 +8556,7 @@ impl MemoryDB {
                 summary: row.get::<Option<String>>(6).unwrap_or(None),
                 processing: false,
                 memory_type: row.get::<Option<String>>(7).unwrap_or(None),
-                domain: row.get::<Option<String>>(8).unwrap_or(None),
+                space: row.get::<Option<String>>(8).unwrap_or(None),
                 source_agent: row.get::<Option<String>>(9).unwrap_or(None),
                 confidence: row.get::<Option<f64>>(10).unwrap_or(None).map(|v| v as f32),
                 confirmed: row.get::<Option<i64>>(11).unwrap_or(None).map(|v| v != 0),
@@ -8466,20 +8580,20 @@ impl MemoryDB {
         &self,
         name: &str,
         entity_type: &str,
-        domain: Option<&str>,
+        space: Option<&str>,
     ) -> Result<String, OriginError> {
         let id = uuid::Uuid::new_v4().to_string();
         let now = chrono::Utc::now().timestamp();
 
         let conn = self.conn.lock().await;
         conn.execute(
-            "INSERT INTO entities (id, name, entity_type, domain, confirmed, created_at, updated_at)
+            "INSERT INTO entities (id, name, entity_type, space, confirmed, created_at, updated_at)
              VALUES (?1, ?2, ?3, ?4, 0, ?5, ?5)",
             libsql::params![
                 id.clone(),
                 name.to_string(),
                 entity_type.to_string(),
-                domain.map(|d| d.to_string()),
+                space.map(|d| d.to_string()),
                 now
             ],
         )
@@ -8494,7 +8608,7 @@ impl MemoryDB {
         &self,
         name: &str,
         entity_type: &str,
-        domain: Option<&str>,
+        space: Option<&str>,
         source_agent: Option<&str>,
         confidence: Option<f32>,
     ) -> Result<String, OriginError> {
@@ -8506,14 +8620,14 @@ impl MemoryDB {
 
         let conn = self.conn.lock().await;
         conn.execute(
-            "INSERT INTO entities (id, name, entity_type, domain, source_agent, confidence,
+            "INSERT INTO entities (id, name, entity_type, space, source_agent, confidence,
                 confirmed, created_at, updated_at, embedding)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, 0, ?7, ?7, vector32(?8))",
             libsql::params![
                 id.clone(),
                 name.to_string(),
                 entity_type.to_string(),
-                domain
+                space
                     .map(|s| libsql::Value::Text(s.to_string()))
                     .unwrap_or(libsql::Value::Null),
                 source_agent
@@ -8655,7 +8769,7 @@ impl MemoryDB {
         let conn = self.conn.lock().await;
         let mut rows = conn
             .query(
-                "SELECT id, name, entity_type, domain, source_agent, confidence, confirmed, created_at, updated_at
+                "SELECT id, name, entity_type, space, source_agent, confidence, confirmed, created_at, updated_at
                  FROM entities WHERE LOWER(name) = LOWER(?1)",
                 libsql::params![name.to_string()],
             )
@@ -8672,7 +8786,7 @@ impl MemoryDB {
                 id: row.get::<String>(0).unwrap_or_default(),
                 name: row.get::<String>(1).unwrap_or_default(),
                 entity_type: row.get::<String>(2).unwrap_or_default(),
-                domain: row.get::<Option<String>>(3).unwrap_or(None),
+                space: row.get::<Option<String>>(3).unwrap_or(None),
                 source_agent: row.get::<Option<String>>(4).unwrap_or(None),
                 confidence: row.get::<Option<f64>>(5).unwrap_or(None).map(|v| v as f32),
                 confirmed: row.get::<i64>(6).unwrap_or(0) != 0,
@@ -9116,12 +9230,12 @@ impl MemoryDB {
     pub async fn list_entities(
         &self,
         entity_type: Option<&str>,
-        domain: Option<&str>,
+        space: Option<&str>,
     ) -> Result<Vec<Entity>, OriginError> {
         let conn = self.conn.lock().await;
 
         let mut sql = String::from(
-            "SELECT id, name, entity_type, domain, source_agent, confidence, confirmed, created_at, updated_at
+            "SELECT id, name, entity_type, space, source_agent, confidence, confirmed, created_at, updated_at
              FROM entities WHERE 1=1"
         );
         let mut params: Vec<libsql::Value> = Vec::new();
@@ -9130,12 +9244,12 @@ impl MemoryDB {
             params.push(et.into());
             sql.push_str(&format!(" AND entity_type = ?{}", params.len()));
         }
-        if let Some(d) = domain {
+        if let Some(d) = space {
             if d == "uncategorized" {
-                sql.push_str(" AND domain IS NULL");
+                sql.push_str(" AND space IS NULL");
             } else {
                 params.push(d.into());
-                sql.push_str(&format!(" AND domain = ?{}", params.len()));
+                sql.push_str(&format!(" AND space = ?{}", params.len()));
             }
         }
 
@@ -9156,7 +9270,7 @@ impl MemoryDB {
                 id: row.get::<String>(0).unwrap_or_default(),
                 name: row.get::<String>(1).unwrap_or_default(),
                 entity_type: row.get::<String>(2).unwrap_or_default(),
-                domain: row.get::<Option<String>>(3).unwrap_or(None),
+                space: row.get::<Option<String>>(3).unwrap_or(None),
                 source_agent: row.get::<Option<String>>(4).unwrap_or(None),
                 confidence: row.get::<Option<f64>>(5).unwrap_or(None).map(|v| v as f32),
                 confirmed: row.get::<i64>(6).unwrap_or(0) != 0,
@@ -9173,7 +9287,7 @@ impl MemoryDB {
         // Fetch entity
         let mut rows = conn
             .query(
-                "SELECT id, name, entity_type, domain, source_agent, confidence, confirmed, created_at, updated_at
+                "SELECT id, name, entity_type, space, source_agent, confidence, confirmed, created_at, updated_at
                  FROM entities WHERE id = ?1",
                 libsql::params![entity_id],
             )
@@ -9189,7 +9303,7 @@ impl MemoryDB {
                 id: row.get::<String>(0).unwrap_or_default(),
                 name: row.get::<String>(1).unwrap_or_default(),
                 entity_type: row.get::<String>(2).unwrap_or_default(),
-                domain: row.get::<Option<String>>(3).unwrap_or(None),
+                space: row.get::<Option<String>>(3).unwrap_or(None),
                 source_agent: row.get::<Option<String>>(4).unwrap_or(None),
                 confidence: row.get::<Option<f64>>(5).unwrap_or(None).map(|v| v as f32),
                 confirmed: row.get::<i64>(6).unwrap_or(0) != 0,
@@ -9326,17 +9440,17 @@ impl MemoryDB {
         Ok(())
     }
 
-    /// True if any non-archived memory carries the given domain. Used by the
+    /// True if any non-archived memory carries the given space. Used by the
     /// distillation target resolver as a "does this scope exist" check.
-    pub async fn domain_has_memories(&self, domain: &str) -> Result<bool, OriginError> {
+    pub async fn space_has_memories(&self, space: &str) -> Result<bool, OriginError> {
         let conn = self.conn.lock().await;
         let mut rows = conn
             .query(
-                "SELECT 1 FROM memories WHERE domain = ?1 LIMIT 1",
-                libsql::params![domain],
+                "SELECT 1 FROM memories WHERE space = ?1 LIMIT 1",
+                libsql::params![space],
             )
             .await
-            .map_err(|e| OriginError::VectorDb(format!("domain_has_memories: {}", e)))?;
+            .map_err(|e| OriginError::VectorDb(format!("space_has_memories: {}", e)))?;
         Ok(rows
             .next()
             .await
@@ -10056,10 +10170,10 @@ impl MemoryDB {
             0
         };
 
-        // Domain breakdown
+        // Space breakdown
         let mut domain_rows = conn
             .query(
-                "SELECT COALESCE(domain, 'uncategorized') as d, COUNT(DISTINCT source_id) as c
+                "SELECT COALESCE(space, 'uncategorized') as d, COUNT(DISTINCT source_id) as c
                  FROM memories WHERE source = 'memory'
                  GROUP BY d ORDER BY c DESC",
                 libsql::params![],
@@ -10421,7 +10535,7 @@ impl MemoryDB {
 
         let mut top_rows = conn
             .query(
-                "SELECT a.source_id, SUBSTR(c.content, 1, 200), c.memory_type, c.domain, COUNT(*) as cnt \
+                "SELECT a.source_id, SUBSTR(c.content, 1, 200), c.memory_type, c.space, COUNT(*) as cnt \
                  FROM access_log a \
                  JOIN memories c ON c.source_id = a.source_id AND c.chunk_index = 0 \
                  WHERE a.accessed_at > ?1 \
@@ -10444,7 +10558,7 @@ impl MemoryDB {
                     Ok(libsql::Value::Text(s)) => Some(s),
                     _ => None,
                 },
-                domain: match row.get_value(3) {
+                space: match row.get_value(3) {
                     Ok(libsql::Value::Text(s)) => Some(s),
                     _ => None,
                 },
@@ -10457,7 +10571,7 @@ impl MemoryDB {
         if top_memories.is_empty() {
             let mut fallback_rows = conn
                 .query(
-                    "SELECT source_id, SUBSTR(content, 1, 200), memory_type, domain, access_count \
+                    "SELECT source_id, SUBSTR(content, 1, 200), memory_type, space, access_count \
                      FROM memories WHERE source = 'memory' AND access_count > 0 AND chunk_index = 0 \
                      ORDER BY access_count DESC LIMIT 3",
                     libsql::params![],
@@ -10477,7 +10591,7 @@ impl MemoryDB {
                         Ok(libsql::Value::Text(s)) => Some(s),
                         _ => None,
                     },
-                    domain: match row.get_value(3) {
+                    space: match row.get_value(3) {
                         Ok(libsql::Value::Text(s)) => Some(s),
                         _ => None,
                     },
@@ -11192,7 +11306,7 @@ impl MemoryDB {
         let conn = self.conn.lock().await;
         let mut rows = conn
             .query(
-                "SELECT id, title, summary, content, entity_id, domain, source_memory_ids, version, status, created_at, last_compiled, last_modified, COALESCE(sources_updated_count, 0), stale_reason, COALESCE(user_edited, 0), COALESCE(changelog, '[]')
+                "SELECT id, title, summary, content, entity_id, space, source_memory_ids, version, status, created_at, last_compiled, last_modified, COALESCE(sources_updated_count, 0), stale_reason, COALESCE(user_edited, 0), COALESCE(changelog, '[]')
                  FROM pages WHERE status = 'active' ORDER BY created_at ASC LIMIT 1",
                 (),
             )
@@ -11340,15 +11454,15 @@ impl MemoryDB {
         }
     }
 
-    pub async fn get_memory_domain(&self, source_id: &str) -> Result<Option<String>, OriginError> {
+    pub async fn get_memory_space(&self, source_id: &str) -> Result<Option<String>, OriginError> {
         let conn = self.conn.lock().await;
         let mut rows = conn
             .query(
-                "SELECT domain FROM memories WHERE source_id = ?1 AND source = 'memory' LIMIT 1",
+                "SELECT space FROM memories WHERE source_id = ?1 AND source = 'memory' LIMIT 1",
                 libsql::params![source_id.to_string()],
             )
             .await
-            .map_err(|e| OriginError::VectorDb(format!("get_memory_domain: {}", e)))?;
+            .map_err(|e| OriginError::VectorDb(format!("get_memory_space: {}", e)))?;
         if let Some(row) = rows
             .next()
             .await
@@ -11433,13 +11547,13 @@ impl MemoryDB {
         domain_filter: Option<&str>,
     ) -> Result<Vec<MemoryItem>, OriginError> {
         let conn = self.conn.lock().await;
-        let domain_clause = if domain_filter.is_some() {
-            "AND c.domain = ?2"
+        let space_clause = if domain_filter.is_some() {
+            "AND c.space = ?2"
         } else {
             ""
         };
         let sql = format!(
-            "SELECT c.source_id, c.title, c.content, c.summary, c.memory_type, c.domain,
+            "SELECT c.source_id, c.title, c.content, c.summary, c.memory_type, c.space,
                     c.source_agent, c.confidence, c.confirmed, c.stability,
                     c.pinned, c.supersedes, c.last_modified,
                     c.entity_id, c.quality, COALESCE(c.is_recap, 0) as is_recap,
@@ -11465,11 +11579,11 @@ impl MemoryDB {
                c.confidence ASC,
                c.last_modified DESC
              LIMIT ?1",
-            domain_clause
+            space_clause
         );
 
-        let mut rows = if let Some(domain) = domain_filter {
-            conn.query(&sql, libsql::params![limit as i64, domain.to_string()])
+        let mut rows = if let Some(space) = domain_filter {
+            conn.query(&sql, libsql::params![limit as i64, space.to_string()])
                 .await
         } else {
             conn.query(&sql, libsql::params![limit as i64]).await
@@ -11483,7 +11597,7 @@ impl MemoryDB {
             .map_err(|e| OriginError::VectorDb(e.to_string()))?
         {
             // Column order: 0=source_id, 1=title, 2=content, 3=summary, 4=memory_type,
-            // 5=domain, 6=source_agent, 7=confidence, 8=confirmed, 9=stability, 10=pinned,
+            // 5=space, 6=source_agent, 7=confidence, 8=confirmed, 9=stability, 10=pinned,
             // 11=supersedes, 12=last_modified, 13=entity_id, 14=quality, 15=is_recap,
             // 16=enrichment_status, 17=supersede_mode, 18=structured_fields, 19=retrieval_cue,
             // 20=access_count, 21=source_text
@@ -11493,7 +11607,7 @@ impl MemoryDB {
                 content: row.get::<String>(2).unwrap_or_default(),
                 summary: row.get::<Option<String>>(3).unwrap_or(None),
                 memory_type: row.get::<Option<String>>(4).unwrap_or(None),
-                domain: row.get::<Option<String>>(5).unwrap_or(None),
+                space: row.get::<Option<String>>(5).unwrap_or(None),
                 source_agent: row.get::<Option<String>>(6).unwrap_or(None),
                 confidence: row.get::<Option<f64>>(7).unwrap_or(None).map(|v| v as f32),
                 confirmed: row.get::<i64>(8).unwrap_or(0) != 0,
@@ -12278,13 +12392,13 @@ impl MemoryDB {
             0
         };
 
-        // Dominant domain (most frequent in last 48h)
+        // Dominant space (most frequent in last 48h)
         let mut rows = conn
             .query(
-                "SELECT domain, COUNT(*) as cnt FROM memories \
+                "SELECT space, COUNT(*) as cnt FROM memories \
                  WHERE source = 'memory' AND last_modified > ?1 AND chunk_index = 0 \
-                   AND domain IS NOT NULL AND domain != '' \
-                 GROUP BY domain ORDER BY cnt DESC LIMIT 1",
+                   AND space IS NOT NULL AND space != '' \
+                 GROUP BY space ORDER BY cnt DESC LIMIT 1",
                 libsql::params![cutoff],
             )
             .await
@@ -12336,7 +12450,7 @@ impl MemoryDB {
         let conn = self.conn.lock().await;
         let mut rows = conn
             .query(
-                "SELECT title, content, COALESCE(memory_type, 'observation'), domain, last_modified
+                "SELECT title, content, COALESCE(memory_type, 'observation'), space, last_modified
              FROM memories
              WHERE source = 'memory' AND chunk_index = 0 AND last_modified > ?1
                AND is_recap = 0
@@ -12359,7 +12473,7 @@ impl MemoryDB {
                 title: row.get(0).unwrap_or_default(),
                 content: row.get(1).unwrap_or_default(),
                 memory_type: row.get(2).unwrap_or_else(|_| "observation".to_string()),
-                domain: row.get::<Option<String>>(3).unwrap_or(None),
+                space: row.get::<Option<String>>(3).unwrap_or(None),
                 last_modified: row.get(4).unwrap_or(0),
             });
         }
@@ -12375,7 +12489,7 @@ impl MemoryDB {
         let conn = self.conn.lock().await;
         let mut rows = conn
             .query(
-                "SELECT title, content, COALESCE(memory_type, 'observation'), domain, last_modified
+                "SELECT title, content, COALESCE(memory_type, 'observation'), space, last_modified
              FROM memories
              WHERE source = 'memory' AND chunk_index = 0
                AND memory_type = ?1 AND confirmed = 1
@@ -12397,7 +12511,7 @@ impl MemoryDB {
                 title: row.get(0).unwrap_or_default(),
                 content: row.get(1).unwrap_or_default(),
                 memory_type: row.get(2).unwrap_or_else(|_| memory_type.to_string()),
-                domain: row.get::<Option<String>>(3).unwrap_or(None),
+                space: row.get::<Option<String>>(3).unwrap_or(None),
                 last_modified: row.get(4).unwrap_or(0),
             });
         }
@@ -12531,21 +12645,21 @@ impl MemoryDB {
 
     // ==================== Same-Type Memory Lookup ====================
 
-    /// Find confirmed memories of the same type and domain.
+    /// Find confirmed memories of the same type and space.
     /// Returns (source_id, structured_fields, content) tuples.
     /// Excludes recaps and the given source_id (self).
     pub async fn find_same_type_memories(
         &self,
         exclude_source_id: &str,
         memory_type: &str,
-        domain: Option<&str>,
+        space: Option<&str>,
         limit: usize,
     ) -> Result<Vec<(String, Option<String>, String)>, OriginError> {
         let conn = self.conn.lock().await;
-        let (sql, params): (String, Vec<libsql::Value>) = if let Some(d) = domain {
+        let (sql, params): (String, Vec<libsql::Value>) = if let Some(d) = space {
             (
                 "SELECT source_id, structured_fields, content FROM memories
-                 WHERE source = 'memory' AND memory_type = ?1 AND domain = ?2
+                 WHERE source = 'memory' AND memory_type = ?1 AND space = ?2
                  AND source_id != ?3 AND is_recap = 0
                  AND chunk_index = 0
                  ORDER BY last_modified DESC LIMIT ?4"
@@ -12560,7 +12674,7 @@ impl MemoryDB {
         } else {
             (
                 "SELECT source_id, structured_fields, content FROM memories
-                 WHERE source = 'memory' AND memory_type = ?1 AND domain IS NULL
+                 WHERE source = 'memory' AND memory_type = ?1 AND space IS NULL
                  AND source_id != ?2 AND is_recap = 0
                  AND chunk_index = 0
                  ORDER BY last_modified DESC LIMIT ?3"
@@ -12792,10 +12906,10 @@ impl MemoryDB {
         // consolidation turns multiple okay memories into one good one,
         // no need to wait for decay first.
         let mut rows = conn.query(
-            "SELECT domain, COUNT(*) as cnt FROM memories
-             WHERE source = 'memory' AND (confirmed = 0 OR confirmed IS NULL) AND (pinned = 0 OR pinned IS NULL) AND domain IS NOT NULL AND chunk_index = 0
+            "SELECT space, COUNT(*) as cnt FROM memories
+             WHERE source = 'memory' AND (confirmed = 0 OR confirmed IS NULL) AND (pinned = 0 OR pinned IS NULL) AND space IS NOT NULL AND chunk_index = 0
              AND supersede_mode != 'archive' AND source_id NOT LIKE 'merged_%'
-             GROUP BY domain HAVING cnt >= ?1",
+             GROUP BY space HAVING cnt >= ?1",
             libsql::params![min_count],
         ).await.map_err(|e| OriginError::VectorDb(format!("consolidation candidates: {}", e)))?;
         let mut results = vec![];
@@ -12805,7 +12919,7 @@ impl MemoryDB {
             .map_err(|e| OriginError::VectorDb(e.to_string()))?
         {
             results.push(ConsolidationCandidate {
-                domain: row.get(0).unwrap_or(None),
+                space: row.get(0).unwrap_or(None),
                 count: row
                     .get(1)
                     .map_err(|e| OriginError::VectorDb(e.to_string()))?,
@@ -12870,7 +12984,7 @@ impl MemoryDB {
         // cluster. Embedding similarity is enough as the floor; LLM-equipped
         // refinery still gets entity_id when present and skips when not.
         let mut sql = String::from(
-            "SELECT m.source_id, m.content, m.entity_id, m.domain, m.embedding, e.community_id, e.name \
+            "SELECT m.source_id, m.content, m.entity_id, m.space, m.embedding, e.community_id, e.name \
              FROM memories m \
              LEFT JOIN entities e ON m.entity_id = e.id \
              WHERE m.source = 'memory' AND m.chunk_index = 0 \
@@ -12888,10 +13002,10 @@ impl MemoryDB {
             bind.push(libsql::Value::Text(eid.to_string()));
         }
         if let Some(d) = domain_filter {
-            sql.push_str(" AND m.domain = ?");
+            sql.push_str(" AND m.space = ?");
             bind.push(libsql::Value::Text(d.to_string()));
         }
-        sql.push_str(" ORDER BY m.entity_id, m.domain, m.last_modified DESC");
+        sql.push_str(" ORDER BY m.entity_id, m.space, m.last_modified DESC");
 
         let mut rows = conn
             .query(&sql, bind)
@@ -12911,7 +13025,7 @@ impl MemoryDB {
                 .get(1)
                 .map_err(|e| OriginError::VectorDb(e.to_string()))?;
             let entity_id: Option<String> = row.get(2).unwrap_or(None);
-            let domain: Option<String> = row.get(3).unwrap_or(None);
+            let space: Option<String> = row.get(3).unwrap_or(None);
             // Parse embedding from F32_BLOB — stored as little-endian f32 bytes
             let emb_bytes: Vec<u8> = row
                 .get(4)
@@ -12928,7 +13042,7 @@ impl MemoryDB {
                 entity_id,
                 entity_name,
                 community_id,
-                domain,
+                space,
                 embedding,
             });
         }
@@ -13078,7 +13192,7 @@ impl MemoryDB {
     // ==================== Recent Memories (for recap generation) ====================
 
     /// Get recent non-recap memories since a given epoch timestamp.
-    /// Returns (source_id, content, domain, last_modified) tuples. Used by the refinery to synthesize recaps.
+    /// Returns (source_id, content, space, last_modified) tuples. Used by the refinery to synthesize recaps.
     pub async fn get_recent_memories_for_recap(
         &self,
         since_epoch: i64,
@@ -13088,7 +13202,7 @@ impl MemoryDB {
         // Use created_at (immutable, set at insert) instead of last_modified
         // (updated by enrichment) to avoid pulling old memories into recaps.
         let mut rows = conn.query(
-            "SELECT source_id, content, domain, COALESCE(created_at, last_modified) FROM memories
+            "SELECT source_id, content, space, COALESCE(created_at, last_modified) FROM memories
              WHERE source = 'memory'
                AND is_recap = 0
                AND source_id NOT LIKE 'merged_%'
@@ -13109,11 +13223,11 @@ impl MemoryDB {
                 .get(0)
                 .map_err(|e| OriginError::VectorDb(e.to_string()))?;
             let content: String = row.get::<String>(1).unwrap_or_default();
-            let domain: Option<String> = row.get(2).unwrap_or(None);
+            let space: Option<String> = row.get(2).unwrap_or(None);
             let last_modified: i64 = row
                 .get(3)
                 .map_err(|e| OriginError::VectorDb(e.to_string()))?;
-            results.push((source_id, content, domain, last_modified));
+            results.push((source_id, content, space, last_modified));
         }
         Ok(results)
     }
@@ -13339,7 +13453,7 @@ impl MemoryDB {
     ) -> Result<Vec<(String, String, Option<String>, i64)>, OriginError> {
         let conn = self.conn.lock().await;
         let mut rows = conn.query(
-            "SELECT source_id, content, domain, COALESCE(created_at, last_modified) FROM memories
+            "SELECT source_id, content, space, COALESCE(created_at, last_modified) FROM memories
              WHERE source = 'memory'
                AND memory_type = 'decision'
                AND is_recap = 0
@@ -13361,11 +13475,11 @@ impl MemoryDB {
                 .get(0)
                 .map_err(|e| OriginError::VectorDb(e.to_string()))?;
             let content: String = row.get::<String>(1).unwrap_or_default();
-            let domain: Option<String> = row.get(2).unwrap_or(None);
+            let space: Option<String> = row.get(2).unwrap_or(None);
             let last_modified: i64 = row
                 .get(3)
                 .map_err(|e| OriginError::VectorDb(e.to_string()))?;
-            results.push((source_id, content, domain, last_modified));
+            results.push((source_id, content, space, last_modified));
         }
         Ok(results)
     }
@@ -13393,15 +13507,15 @@ impl MemoryDB {
     ///
     /// Used by the async enrichment path in `handle_store_memory` after the
     /// memory has been persisted with placeholder values (memory_type="fact",
-    /// no domain/quality, no extracted fields). Runs as two UPDATEs — one
-    /// across all chunks for row-level metadata (memory_type/domain/quality/
+    /// no space/quality, no extracted fields). Runs as two UPDATEs — one
+    /// across all chunks for row-level metadata (memory_type/space/quality/
     /// supersede_mode), one targeted at chunk_index=0 for extraction fields.
     #[allow(clippy::too_many_arguments)]
     pub async fn apply_enrichment(
         &self,
         source_id: &str,
         memory_type: &str,
-        domain: Option<&str>,
+        space: Option<&str>,
         quality: Option<&str>,
         supersede_mode: &str,
         structured_fields: Option<&str>,
@@ -13410,15 +13524,15 @@ impl MemoryDB {
         let conn = self.conn.lock().await;
         // Row-level metadata — mirrored across all chunks. `COALESCE(?, col)`
         // keeps the existing column when the caller passes `None`, so agents
-        // that supplied e.g. a domain at store time don't get it overwritten.
+        // that supplied e.g. a space at store time don't get it overwritten.
         conn.execute(
             "UPDATE memories SET
                 memory_type = ?1,
-                domain = COALESCE(?2, domain),
+                space = COALESCE(?2, space),
                 quality = COALESCE(?3, quality),
                 supersede_mode = ?4
              WHERE source_id = ?5",
-            libsql::params![memory_type, domain, quality, supersede_mode, source_id],
+            libsql::params![memory_type, space, quality, supersede_mode, source_id],
         )
         .await
         .map_err(|e| OriginError::VectorDb(format!("apply_enrichment: {}", e)))?;
@@ -13530,11 +13644,11 @@ impl MemoryDB {
         // Get metadata from the first source memory
         let conn = self.conn.lock().await;
         let mut rows = conn.query(
-            "SELECT memory_type, domain, source_agent FROM memories WHERE source_id = ?1 LIMIT 1",
+            "SELECT memory_type, space, source_agent FROM memories WHERE source_id = ?1 LIMIT 1",
             [source_ids[0].as_str()],
         ).await.map_err(|e| OriginError::VectorDb(format!("apply_merge query: {}", e)))?;
 
-        let (memory_type, domain, source_agent) = if let Some(row) = rows
+        let (memory_type, space, source_agent) = if let Some(row) = rows
             .next()
             .await
             .map_err(|e| OriginError::VectorDb(e.to_string()))?
@@ -13564,7 +13678,7 @@ impl MemoryDB {
             last_modified: chrono::Utc::now().timestamp(),
             metadata: std::collections::HashMap::new(),
             memory_type,
-            domain,
+            space,
             source_agent: Some(source_agent.unwrap_or_else(|| "refinery".to_string())),
             confidence: Some(0.8), // Merged memories get a confidence boost
             confirmed: None,
@@ -14678,7 +14792,7 @@ impl MemoryDB {
         summary: Option<&str>,
         content: &str,
         entity_id: Option<&str>,
-        domain: Option<&str>,
+        space: Option<&str>,
         source_memory_ids: &[&str],
         now: &str,
     ) -> Result<(), OriginError> {
@@ -14716,16 +14830,16 @@ impl MemoryDB {
         let concept_result = match &embedding_sql {
             Some(emb) => {
                 conn.execute(
-                    "INSERT INTO pages (id, title, summary, content, entity_id, domain, source_memory_ids, version, status, embedding, created_at, last_compiled, last_modified)
+                    "INSERT INTO pages (id, title, summary, content, entity_id, space, source_memory_ids, version, status, embedding, created_at, last_compiled, last_modified)
                      VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 1, 'active', vector32(?8), ?9, ?9, ?9)",
-                    libsql::params![id, title, summary, content, entity_id, domain, source_ids_json, emb.as_str(), now],
+                    libsql::params![id, title, summary, content, entity_id, space, source_ids_json, emb.as_str(), now],
                 ).await
             }
             None => {
                 conn.execute(
-                    "INSERT INTO pages (id, title, summary, content, entity_id, domain, source_memory_ids, version, status, created_at, last_compiled, last_modified)
+                    "INSERT INTO pages (id, title, summary, content, entity_id, space, source_memory_ids, version, status, created_at, last_compiled, last_modified)
                      VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 1, 'active', ?8, ?8, ?8)",
-                    libsql::params![id, title, summary, content, entity_id, domain, source_ids_json, now],
+                    libsql::params![id, title, summary, content, entity_id, space, source_ids_json, now],
                 ).await
             }
         };
@@ -14771,7 +14885,7 @@ impl MemoryDB {
         let conn = self.conn.lock().await;
         let mut rows = conn
             .query(
-                "SELECT id, title, summary, content, entity_id, domain, source_memory_ids, version, status, created_at, last_compiled, last_modified, COALESCE(sources_updated_count, 0), stale_reason, COALESCE(user_edited, 0), COALESCE(changelog, '[]')
+                "SELECT id, title, summary, content, entity_id, space, source_memory_ids, version, status, created_at, last_compiled, last_modified, COALESCE(sources_updated_count, 0), stale_reason, COALESCE(user_edited, 0), COALESCE(changelog, '[]')
                  FROM pages WHERE id = ?1",
                 libsql::params![id],
             )
@@ -14789,7 +14903,7 @@ impl MemoryDB {
         let conn = self.conn.lock().await;
         let mut rows = conn
             .query(
-                "SELECT id, title, summary, content, entity_id, domain, source_memory_ids, version, status, created_at, last_compiled, last_modified, COALESCE(sources_updated_count, 0), stale_reason, COALESCE(user_edited, 0), COALESCE(changelog, '[]')
+                "SELECT id, title, summary, content, entity_id, space, source_memory_ids, version, status, created_at, last_compiled, last_modified, COALESCE(sources_updated_count, 0), stale_reason, COALESCE(user_edited, 0), COALESCE(changelog, '[]')
                  FROM pages WHERE entity_id = ?1 AND status = 'active' LIMIT 1",
                 libsql::params![entity_id],
             )
@@ -14840,7 +14954,7 @@ impl MemoryDB {
         let conn = self.conn.lock().await;
         let mut rows = conn
             .query(
-                "SELECT id, title, summary, content, entity_id, domain, source_memory_ids, version, status, created_at, last_compiled, last_modified, COALESCE(sources_updated_count, 0), stale_reason, COALESCE(user_edited, 0), COALESCE(changelog, '[]')
+                "SELECT id, title, summary, content, entity_id, space, source_memory_ids, version, status, created_at, last_compiled, last_modified, COALESCE(sources_updated_count, 0), stale_reason, COALESCE(user_edited, 0), COALESCE(changelog, '[]')
                  FROM pages WHERE status = ?1 ORDER BY last_modified DESC LIMIT ?2 OFFSET ?3",
                 libsql::params![status, limit, offset],
             )
@@ -14865,7 +14979,7 @@ impl MemoryDB {
         let conn = self.conn.lock().await;
         let mut rows = conn
             .query(
-                "SELECT id, title, summary, content, entity_id, domain, source_memory_ids, version, status, created_at, last_compiled, last_modified, COALESCE(sources_updated_count, 0), stale_reason, COALESCE(user_edited, 0), COALESCE(changelog, '[]')
+                "SELECT id, title, summary, content, entity_id, space, source_memory_ids, version, status, created_at, last_compiled, last_modified, COALESCE(sources_updated_count, 0), stale_reason, COALESCE(user_edited, 0), COALESCE(changelog, '[]')
                  FROM pages
                  WHERE status = ?1
                    AND stale_reason IS NOT NULL
@@ -14898,19 +15012,19 @@ impl MemoryDB {
         Ok(())
     }
 
-    /// List pages, optionally filtered by domain.
-    pub async fn list_pages_by_domain(
+    /// List pages, optionally filtered by space.
+    pub async fn list_pages_by_space(
         &self,
         status: &str,
-        domain: Option<&str>,
+        space: Option<&str>,
         limit: usize,
         offset: usize,
     ) -> Result<Vec<Page>, OriginError> {
         let conn = self.conn.lock().await;
-        let (sql, params): (String, Vec<libsql::Value>) = if let Some(d) = domain {
+        let (sql, params): (String, Vec<libsql::Value>) = if let Some(d) = space {
             (
-                "SELECT id, title, summary, content, entity_id, domain, source_memory_ids, version, status, created_at, last_compiled, last_modified, COALESCE(sources_updated_count, 0), stale_reason, COALESCE(user_edited, 0), COALESCE(changelog, '[]')
-                 FROM pages WHERE status = ?1 AND domain = ?2 ORDER BY last_modified DESC LIMIT ?3 OFFSET ?4".to_string(),
+                "SELECT id, title, summary, content, entity_id, space, source_memory_ids, version, status, created_at, last_compiled, last_modified, COALESCE(sources_updated_count, 0), stale_reason, COALESCE(user_edited, 0), COALESCE(changelog, '[]')
+                 FROM pages WHERE status = ?1 AND space = ?2 ORDER BY last_modified DESC LIMIT ?3 OFFSET ?4".to_string(),
                 vec![
                     libsql::Value::Text(status.to_string()),
                     libsql::Value::Text(d.to_string()),
@@ -14920,7 +15034,7 @@ impl MemoryDB {
             )
         } else {
             (
-                "SELECT id, title, summary, content, entity_id, domain, source_memory_ids, version, status, created_at, last_compiled, last_modified, COALESCE(sources_updated_count, 0), stale_reason, COALESCE(user_edited, 0), COALESCE(changelog, '[]')
+                "SELECT id, title, summary, content, entity_id, space, source_memory_ids, version, status, created_at, last_compiled, last_modified, COALESCE(sources_updated_count, 0), stale_reason, COALESCE(user_edited, 0), COALESCE(changelog, '[]')
                  FROM pages WHERE status = ?1 ORDER BY last_modified DESC LIMIT ?2 OFFSET ?3".to_string(),
                 vec![
                     libsql::Value::Text(status.to_string()),
@@ -14932,7 +15046,7 @@ impl MemoryDB {
         let mut rows = conn
             .query(&sql, libsql::params_from_iter(params))
             .await
-            .map_err(|e| OriginError::VectorDb(format!("list pages by domain: {}", e)))?;
+            .map_err(|e| OriginError::VectorDb(format!("list pages by space: {}", e)))?;
 
         let mut results = vec![];
         while let Some(row) = rows
@@ -15183,7 +15297,7 @@ impl MemoryDB {
         let conn = self.conn.lock().await;
         let mut rows = conn
             .query(
-                "SELECT c.id, c.title, c.summary, c.content, c.entity_id, c.domain,
+                "SELECT c.id, c.title, c.summary, c.content, c.entity_id, c.space,
                         c.source_memory_ids, c.version, c.status, c.created_at, c.last_compiled, c.last_modified,
                         COALESCE(c.sources_updated_count, 0), c.stale_reason, COALESCE(c.user_edited, 0),
                         COALESCE(c.changelog, '[]'),
@@ -15733,16 +15847,16 @@ impl MemoryDB {
 
         let conn = self.conn.lock().await;
 
-        let concept_select = "c.id, c.title, c.summary, c.content, c.entity_id, c.domain, \
+        let concept_select = "c.id, c.title, c.summary, c.content, c.entity_id, c.space, \
                               c.source_memory_ids, c.version, c.status, c.created_at, \
                               c.last_compiled, c.last_modified, \
                               COALESCE(c.sources_updated_count, 0), c.stale_reason, \
                               COALESCE(c.user_edited, 0), COALESCE(c.changelog, '[]')";
 
-        // Optional page_type clause: pages store their category in `domain`.
-        // When Some("recap") is passed, only pages with domain='recap' are returned.
+        // Optional page_type clause: pages store their category in `space`.
+        // When Some("recap") is passed, only pages with space='recap' are returned.
         let type_clause = if page_type.is_some() {
-            " AND c.domain = ?3"
+            " AND c.space = ?3"
         } else {
             ""
         };
@@ -15954,7 +16068,7 @@ impl MemoryDB {
                 .get::<String>(3)
                 .map_err(|e| OriginError::VectorDb(format!("page content: {e}")))?,
             entity_id: row.get::<Option<String>>(4).unwrap_or(None),
-            domain: row.get::<Option<String>>(5).unwrap_or(None),
+            space: row.get::<Option<String>>(5).unwrap_or(None),
             source_memory_ids,
             version: row.get::<i64>(7).unwrap_or(1),
             status: row
@@ -16003,26 +16117,26 @@ impl MemoryDB {
     // ===== Topic Match Helpers =====
 
     /// Fetch lightweight candidate memories for topic matching.
-    /// Prefers same domain + memory_type but does not require them.
-    /// Returns candidates with domain/type metadata so the caller can compute
+    /// Prefers same space + memory_type but does not require them.
+    /// Returns candidates with space/type metadata so the caller can compute
     /// tiered thresholds (exact match → lower threshold, no match → higher).
     pub async fn topic_match_candidates(
         &self,
-        domain: Option<&str>,
+        space: Option<&str>,
         memory_type: Option<&str>,
         max_candidates: usize,
     ) -> Result<Vec<crate::topic_match::TopicMatchCandidate>, OriginError> {
         let conn = self.conn.lock().await;
 
-        // Build a flexible query: prefer same domain+type, but include all recent
+        // Build a flexible query: prefer same space+type, but include all recent
         // chunk_index=0 memories as candidates. ORDER BY gives priority to exact
-        // domain+type matches, then partial, then everything else.
-        let sql = "SELECT source_id, title, content, entity_id, embedding, domain, memory_type
+        // space+type matches, then partial, then everything else.
+        let sql = "SELECT source_id, title, content, entity_id, embedding, space, memory_type
                    FROM memories
                    WHERE chunk_index = 0 AND pending_revision = 0
                    ORDER BY
-                     CASE WHEN domain = ?1 AND memory_type = ?2 THEN 0
-                          WHEN domain = ?1 OR memory_type = ?2 THEN 1
+                     CASE WHEN space = ?1 AND memory_type = ?2 THEN 0
+                          WHEN space = ?1 OR memory_type = ?2 THEN 1
                           ELSE 2 END,
                      last_modified DESC
                    LIMIT ?3";
@@ -16030,7 +16144,7 @@ impl MemoryDB {
             .query(
                 sql,
                 libsql::params![
-                    domain.unwrap_or(""),
+                    space.unwrap_or(""),
                     memory_type.unwrap_or(""),
                     max_candidates as i64
                 ],
@@ -16059,7 +16173,7 @@ impl MemoryDB {
                 .chunks_exact(4)
                 .map(|b| f32::from_le_bytes([b[0], b[1], b[2], b[3]]))
                 .collect();
-            let cand_domain: Option<String> = row.get::<Option<String>>(5).unwrap_or(None);
+            let cand_space: Option<String> = row.get::<Option<String>>(5).unwrap_or(None);
             let cand_type: Option<String> = row.get::<Option<String>>(6).unwrap_or(None);
             candidates.push(crate::topic_match::TopicMatchCandidate {
                 source_id,
@@ -16067,7 +16181,7 @@ impl MemoryDB {
                 content,
                 entity_id,
                 embedding,
-                domain: cand_domain,
+                space: cand_space,
                 memory_type: cand_type,
             });
         }
@@ -16195,7 +16309,7 @@ impl MemoryDB {
         let conn = self.conn.lock().await;
         let mut rows = conn
             .query(
-                "SELECT c.id, c.title, c.summary, c.content, c.entity_id, c.domain,
+                "SELECT c.id, c.title, c.summary, c.content, c.entity_id, c.space,
                         c.source_memory_ids, c.version, c.status, c.created_at, c.last_compiled, c.last_modified,
                         COALESCE(c.sources_updated_count, 0), c.stale_reason, COALESCE(c.user_edited, 0),
                         COALESCE(c.changelog, '[]')
@@ -16287,7 +16401,7 @@ impl MemoryDB {
     }
 
     /// Like `list_stale_pages` but restricts the result set by entity_id or
-    /// domain when either filter is supplied. Used by the `/api/distill`
+    /// space when either filter is supplied. Used by the `/api/distill`
     /// route so a scoped pass (`/distill origin`) doesn't dump unrelated
     /// stale pages on the user.
     pub async fn list_stale_pages_scoped(
@@ -16298,7 +16412,7 @@ impl MemoryDB {
     ) -> Result<Vec<crate::pages::Page>, OriginError> {
         let conn = self.conn.lock().await;
         let mut sql = String::from(
-            "SELECT id, title, summary, content, entity_id, domain, source_memory_ids, version, status, created_at, last_compiled, last_modified, COALESCE(sources_updated_count, 0), stale_reason, COALESCE(user_edited, 0), COALESCE(changelog, '[]') \
+            "SELECT id, title, summary, content, entity_id, space, source_memory_ids, version, status, created_at, last_compiled, last_modified, COALESCE(sources_updated_count, 0), stale_reason, COALESCE(user_edited, 0), COALESCE(changelog, '[]') \
              FROM pages WHERE stale_reason = ?1 AND status = 'active'",
         );
         let mut bind: Vec<libsql::Value> = vec![libsql::Value::Text(reason.to_string())];
@@ -16307,7 +16421,7 @@ impl MemoryDB {
             bind.push(libsql::Value::Text(eid.to_string()));
         }
         if let Some(d) = domain_filter {
-            sql.push_str(" AND domain = ?");
+            sql.push_str(" AND space = ?");
             bind.push(libsql::Value::Text(d.to_string()));
         }
         sql.push_str(" ORDER BY last_modified DESC LIMIT 10");
@@ -16328,17 +16442,17 @@ impl MemoryDB {
     }
 
     /// Find archived pages that look like Mode B failures: large
-    /// source_memory_ids count, no entity, no domain, not user-edited.
+    /// source_memory_ids count, no entity, no space, not user-edited.
     /// Used by the `backfill-stale-pages` CLI subcommand.
     pub async fn find_stale_archived_pages(&self) -> Result<Vec<crate::pages::Page>, OriginError> {
         let conn = self.conn.lock().await;
         let mut rows = conn
             .query(
-                "SELECT id, title, summary, content, entity_id, domain, source_memory_ids, version, status, created_at, last_compiled, last_modified, COALESCE(sources_updated_count, 0), stale_reason, COALESCE(user_edited, 0), COALESCE(changelog, '[]')
+                "SELECT id, title, summary, content, entity_id, space, source_memory_ids, version, status, created_at, last_compiled, last_modified, COALESCE(sources_updated_count, 0), stale_reason, COALESCE(user_edited, 0), COALESCE(changelog, '[]')
                  FROM pages
                  WHERE status = 'archived'
                    AND entity_id IS NULL
-                   AND domain IS NULL
+                   AND space IS NULL
                    AND COALESCE(user_edited, 0) = 0
                    AND json_array_length(source_memory_ids) > 50
                  ORDER BY created_at DESC",
@@ -16467,7 +16581,7 @@ impl MemoryDB {
             chunk_type: String,
             language: Option<String>,
             memory_type: Option<String>,
-            domain: Option<String>,
+            space: Option<String>,
             confidence: Option<f64>,
             confirmed: i64,
             stability: String,
@@ -16490,7 +16604,7 @@ impl MemoryDB {
             let mut rows = conn
                 .query(
                     "SELECT source, title, summary, url, chunk_type, language,
-                            memory_type, domain, confidence, confirmed, stability,
+                            memory_type, space, confidence, confirmed, stability,
                             entity_id, enrichment_status, quality, is_recap,
                             structured_fields, retrieval_cue, source_text,
                             COALESCE(created_at, last_modified),
@@ -16523,7 +16637,7 @@ impl MemoryDB {
                 chunk_type: row.get::<String>(4).unwrap_or_else(|_| "prose".to_string()),
                 language: row.get::<Option<String>>(5).unwrap_or(None),
                 memory_type: row.get::<Option<String>>(6).unwrap_or(None),
-                domain: row.get::<Option<String>>(7).unwrap_or(None),
+                space: row.get::<Option<String>>(7).unwrap_or(None),
                 confidence: row.get::<Option<f64>>(8).unwrap_or(None),
                 confirmed: row.get::<i64>(9).unwrap_or(0),
                 stability: row.get::<String>(10).unwrap_or_else(|_| "new".to_string()),
@@ -16603,7 +16717,7 @@ impl MemoryDB {
             let insert_sql = "INSERT INTO memories (
                     id, content, source, source_id, title, summary, url,
                     chunk_index, last_modified, chunk_type, language, byte_start, byte_end,
-                    semantic_unit, memory_type, domain, source_agent, confidence, confirmed,
+                    semantic_unit, memory_type, space, source_agent, confidence, confirmed,
                     stability, supersedes, pending_revision, word_count,
                     entity_id, enrichment_status, quality, is_recap, supersede_mode,
                     structured_fields, retrieval_cue, source_text,
@@ -16632,7 +16746,7 @@ impl MemoryDB {
                     saved.chunk_type,
                     saved.language,
                     saved.memory_type,
-                    saved.domain,
+                    saved.space,
                     source_agent,
                     saved.confidence,
                     saved.confirmed,
@@ -17940,7 +18054,7 @@ pub(crate) mod tests {
             last_modified: chrono::Utc::now().timestamp(),
             metadata: HashMap::new(),
             memory_type: None,
-            domain: None,
+            space: None,
             source_agent: None,
             confidence: None,
             confirmed: None,
@@ -17955,7 +18069,7 @@ pub(crate) mod tests {
         source_id: &str,
         content: &str,
         memory_type: &str,
-        domain: &str,
+        space: &str,
         source_agent: &str,
     ) -> RawDocument {
         let supersede_mode = if memory_type == "decision" {
@@ -17973,7 +18087,7 @@ pub(crate) mod tests {
             last_modified: chrono::Utc::now().timestamp(),
             metadata: HashMap::new(),
             memory_type: Some(memory_type.to_string()),
-            domain: Some(domain.to_string()),
+            space: Some(space.to_string()),
             source_agent: Some(source_agent.to_string()),
             confidence: Some(0.9),
             confirmed: Some(false),
@@ -18177,7 +18291,7 @@ pub(crate) mod tests {
         .await
         .unwrap();
 
-        let results = db.search("Rust programming", 10, None).await.unwrap();
+        let results = db.search("Rust programming", 10, None, None).await.unwrap();
         // Should find at least the Rust document (via FTS even if vector index is absent)
         assert!(!results.is_empty(), "search should return results");
     }
@@ -18203,7 +18317,7 @@ pub(crate) mod tests {
         .unwrap();
 
         let results = db
-            .search("pets animals", 10, Some("local_files"))
+            .search("pets animals", 10, Some("local_files"), None)
             .await
             .unwrap();
         for r in &results {
@@ -18223,7 +18337,7 @@ pub(crate) mod tests {
         .await
         .unwrap();
         // Empty or very short query — should not panic
-        let results = db.search("", 10, None).await;
+        let results = db.search("", 10, None, None).await;
         // May return results or error, but should not panic
         assert!(results.is_ok() || results.is_err());
     }
@@ -18245,7 +18359,10 @@ pub(crate) mod tests {
         }
         db.upsert_documents(docs).await.unwrap();
 
-        let results = db.search("programming language", 3, None).await.unwrap();
+        let results = db
+            .search("programming language", 3, None, None)
+            .await
+            .unwrap();
         assert!(results.len() <= 3, "should respect limit");
     }
 
@@ -18886,9 +19003,9 @@ pub(crate) mod tests {
             .await;
         assert!(result.is_ok());
 
-        // domain is in the whitelist
+        // space is in the whitelist
         let result = db
-            .update_column_by_source_id("local_files", "f1", "domain", "work")
+            .update_column_by_source_id("local_files", "f1", "space", "work")
             .await;
         assert!(result.is_ok());
     }
@@ -19965,7 +20082,7 @@ pub(crate) mod tests {
             title: "TDD preference".to_string(),
             content: "Prefers TDD workflow".to_string(),
             memory_type: Some("preference".to_string()),
-            domain: Some("work".to_string()),
+            space: Some("work".to_string()),
             source_agent: Some("claude".to_string()),
             confidence: Some(0.95),
             confirmed: Some(true),
@@ -19977,7 +20094,7 @@ pub(crate) mod tests {
             title: "Morning person".to_string(),
             content: "Starts work before 8am".to_string(),
             memory_type: Some("fact".to_string()),
-            domain: Some("identity".to_string()),
+            space: Some("identity".to_string()),
             source_agent: Some("claude".to_string()),
             confidence: Some(0.6),
             confirmed: Some(false),
@@ -19991,7 +20108,7 @@ pub(crate) mod tests {
         assert!(all[0].confidence.is_some());
         assert!(all[0].memory_type.is_some());
 
-        // Filter by domain
+        // Filter by space
         let work = db
             .list_memories(Some("work"), None, None, None, 100)
             .await
@@ -20015,7 +20132,7 @@ pub(crate) mod tests {
             source_id: "mem_001".to_string(),
             title: "Fact 1".to_string(),
             content: "Content".to_string(),
-            domain: Some("work".to_string()),
+            space: Some("work".to_string()),
             confirmed: Some(true),
             ..Default::default()
         };
@@ -20024,7 +20141,7 @@ pub(crate) mod tests {
             source_id: "mem_002".to_string(),
             title: "Fact 2".to_string(),
             content: "Content".to_string(),
-            domain: Some("identity".to_string()),
+            space: Some("identity".to_string()),
             confirmed: Some(false),
             ..Default::default()
         };
@@ -20328,21 +20445,21 @@ pub(crate) mod tests {
             .await
             .unwrap();
 
-        // Verify domain is NULL, not empty string
+        // Verify space is NULL, not empty string
         let conn = db.conn.lock().await;
         let mut rows = conn
             .query(
-                "SELECT domain, source_agent, confidence FROM entities WHERE id = ?1",
+                "SELECT space, source_agent, confidence FROM entities WHERE id = ?1",
                 libsql::params![id],
             )
             .await
             .unwrap();
         let row = rows.next().await.unwrap().unwrap();
-        let domain_val = row.get_value(0).unwrap();
+        let space_val = row.get_value(0).unwrap();
         assert!(
-            matches!(domain_val, libsql::Value::Null),
-            "domain should be NULL, got {:?}",
-            domain_val
+            matches!(space_val, libsql::Value::Null),
+            "space should be NULL, got {:?}",
+            space_val
         );
         let agent_val = row.get_value(1).unwrap();
         assert!(
@@ -21045,7 +21162,7 @@ pub(crate) mod tests {
 
         // Search should find original but not the pending revision
         let results = db
-            .search("kubernetes container orchestration", 10, None)
+            .search("kubernetes container orchestration", 10, None, None)
             .await
             .unwrap();
         let ids: Vec<&str> = results.iter().map(|r| r.source_id.as_str()).collect();
@@ -21755,7 +21872,7 @@ pub(crate) mod tests {
             title: "Detail test".to_string(),
             content: "Full content for detail view".to_string(),
             memory_type: Some("fact".to_string()),
-            domain: Some("work".to_string()),
+            space: Some("work".to_string()),
             source_agent: Some("claude".to_string()),
             confidence: Some(0.85),
             confirmed: Some(true),
@@ -21770,7 +21887,7 @@ pub(crate) mod tests {
         assert_eq!(item.source_id, "mem_detail_001");
         assert_eq!(item.content, "Full content for detail view");
         assert_eq!(item.memory_type.as_deref(), Some("fact"));
-        assert_eq!(item.domain.as_deref(), Some("work"));
+        assert_eq!(item.space.as_deref(), Some("work"));
         assert!(item.confirmed);
 
         // Should return None for non-existent
@@ -22062,7 +22179,7 @@ pub(crate) mod tests {
                 title: content.to_string(),
                 content: content.to_string(),
                 entity_id: Some(entity.to_string()),
-                domain: Some("origin".to_string()),
+                space: Some("origin".to_string()),
                 ..Default::default()
             };
             db.upsert_documents(vec![doc]).await.unwrap();
@@ -22107,7 +22224,7 @@ pub(crate) mod tests {
                 url: None,
                 last_modified: now,
                 memory_type: Some("fact".to_string()),
-                domain: Some("test".to_string()),
+                space: Some("test".to_string()),
                 entity_id: Some("ent_test".to_string()),
                 ..Default::default()
             };
@@ -22167,7 +22284,7 @@ pub(crate) mod tests {
                 title: format!("Note {}", i),
                 last_modified: now + i as i64,
                 memory_type: None,
-                domain: None,
+                space: None,
                 entity_id: Some(String::new()), // <-- the marker
                 ..Default::default()
             };
@@ -22214,7 +22331,7 @@ pub(crate) mod tests {
                 url: None,
                 last_modified: now + i as i64,
                 memory_type: None,
-                domain: None,
+                space: None,
                 entity_id: None,
                 ..Default::default()
             };
@@ -22264,7 +22381,7 @@ pub(crate) mod tests {
                 url: None,
                 last_modified: now + i as i64,
                 memory_type: None,
-                domain: Some("origin".to_string()),
+                space: Some("origin".to_string()),
                 entity_id: Some("ent_origin".to_string()),
                 ..Default::default()
             };
@@ -22472,7 +22589,7 @@ pub(crate) mod tests {
         );
         assert!(candidates
             .iter()
-            .any(|c| c.domain == Some("engineering".to_string())));
+            .any(|c| c.space == Some("engineering".to_string())));
     }
 
     // ==================== Decay Engine ====================
@@ -22632,7 +22749,7 @@ pub(crate) mod tests {
             url: None,
             last_modified: chrono::Utc::now().timestamp(),
             memory_type: Some("fact".into()),
-            domain: None,
+            space: None,
             source_agent: None,
             confidence: None,
             confirmed: None,
@@ -22923,11 +23040,11 @@ pub(crate) mod tests {
             "preferences",
             "claude",
         );
-        // Caller-supplied domain should survive a `None` in apply_enrichment.
-        doc.domain = Some("preferences".to_string());
+        // Caller-supplied space should survive a `None` in apply_enrichment.
+        doc.space = Some("preferences".to_string());
         db.upsert_documents(vec![doc]).await.unwrap();
 
-        // Apply enrichment with a refined memory_type, no domain/quality,
+        // Apply enrichment with a refined memory_type, no space/quality,
         // fresh supersede_mode, and a structured-fields payload.
         db.apply_enrichment(
             "mem_apply",
@@ -22945,7 +23062,7 @@ pub(crate) mod tests {
         let conn = db.conn.lock().await;
         let mut rows = conn
             .query(
-                "SELECT memory_type, domain, quality, supersede_mode,
+                "SELECT memory_type, space, quality, supersede_mode,
                         structured_fields, retrieval_cue, needs_reembed
                  FROM memories WHERE source_id = 'mem_apply' AND chunk_index = 0",
                 (),
@@ -22954,7 +23071,7 @@ pub(crate) mod tests {
             .unwrap();
         let row = rows.next().await.unwrap().unwrap();
         let memory_type: String = row.get(0).unwrap();
-        let domain: Option<String> = row.get(1).unwrap();
+        let space: Option<String> = row.get(1).unwrap();
         let quality: Option<String> = row.get(2).unwrap();
         let supersede_mode: String = row.get(3).unwrap();
         let sf: Option<String> = row.get(4).unwrap();
@@ -22963,9 +23080,9 @@ pub(crate) mod tests {
 
         assert_eq!(memory_type, "preference");
         assert_eq!(
-            domain.as_deref(),
+            space.as_deref(),
             Some("preferences"),
-            "None domain input must preserve existing column value via COALESCE"
+            "None space input must preserve existing column value via COALESCE"
         );
         assert_eq!(quality.as_deref(), Some("high"));
         assert_eq!(supersede_mode, "hide");
@@ -23376,14 +23493,14 @@ pub(crate) mod tests {
     #[tokio::test]
     async fn test_find_same_type_memories() {
         let (db, _dir) = test_db().await;
-        // Store unconfirmed preference in "tools" domain (should still be found)
+        // Store unconfirmed preference in "tools" space (should still be found)
         let doc1 = crate::sources::RawDocument {
             source: "memory".to_string(),
             source_id: "mem_p1".to_string(),
             title: "dark mode pref".to_string(),
             content: "I prefer dark mode".to_string(),
             memory_type: Some("preference".to_string()),
-            domain: Some("tools".to_string()),
+            space: Some("tools".to_string()),
             confirmed: Some(false),
             last_modified: chrono::Utc::now().timestamp(),
             enrichment_status: "enriched".to_string(),
@@ -23392,14 +23509,14 @@ pub(crate) mod tests {
         };
         db.upsert_documents(vec![doc1]).await.unwrap();
 
-        // Store a fact in same domain (different type)
+        // Store a fact in same space (different type)
         let doc2 = crate::sources::RawDocument {
             source: "memory".to_string(),
             source_id: "mem_f1".to_string(),
             title: "Rust fact".to_string(),
             content: "Rust is fast".to_string(),
             memory_type: Some("fact".to_string()),
-            domain: Some("tools".to_string()),
+            space: Some("tools".to_string()),
             confirmed: Some(true),
             last_modified: chrono::Utc::now().timestamp(),
             enrichment_status: "enriched".to_string(),
@@ -24410,7 +24527,7 @@ pub(crate) mod tests {
                     entity_id: Some("entity_test".to_string()),
                     entity_name: Some("Test Entity".to_string()),
                     community_id: None,
-                    domain: Some("test".to_string()),
+                    space: Some("test".to_string()),
                     embedding: emb,
                 }
             })
@@ -24533,7 +24650,7 @@ pub(crate) mod tests {
                 entity_id: Some("entity_test".to_string()),
                 entity_name: Some("Test Entity".to_string()),
                 community_id: None,
-                domain: Some("test".to_string()),
+                space: Some("test".to_string()),
                 embedding: vec![0.0f32; 768],
             })
             .collect();
@@ -25550,7 +25667,7 @@ pub(crate) mod tests {
         let conn = db.conn.lock().await;
         conn.execute(
             "INSERT OR REPLACE INTO pages \
-             (id, title, summary, content, entity_id, domain, source_memory_ids, version, status, \
+             (id, title, summary, content, entity_id, space, source_memory_ids, version, status, \
               created_at, last_compiled, last_modified) \
              VALUES (?1, ?2, ?3, 'content', NULL, NULL, ?4, ?5, 'active', ?6, ?6, ?7)",
             libsql::params![
@@ -26469,13 +26586,13 @@ pub(crate) mod tests {
         source_id: &str,
         content: &str,
         memory_type: &str,
-        domain: &str,
+        space: &str,
     ) -> Vec<f32> {
         db.upsert_documents(vec![make_memory_doc(
             source_id,
             content,
             memory_type,
-            domain,
+            space,
             "agent",
         )])
         .await
@@ -27282,7 +27399,7 @@ pub(crate) mod tests {
             title: "Rust programming tips".to_string(),
             content: "Some content about Rust programming.".to_string(),
             memory_type: Some("knowledge".to_string()),
-            domain: Some("work".to_string()),
+            space: Some("work".to_string()),
             source_agent: Some("agent".to_string()),
             confidence: Some(0.9),
             confirmed: Some(false),
@@ -27315,7 +27432,7 @@ pub(crate) mod tests {
                 title: format!("Machine learning notes {sid}"),
                 content: format!("Content for {sid}"),
                 memory_type: Some("knowledge".to_string()),
-                domain: Some("work".to_string()),
+                space: Some("work".to_string()),
                 source_agent: Some("agent".to_string()),
                 confidence: Some(0.9),
                 confirmed: Some(false),
@@ -27942,9 +28059,11 @@ pub(crate) mod tests {
             let conn = db.conn.lock().await;
 
             conn.execute("PRAGMA foreign_keys = OFF", ()).await.unwrap();
+            // Migration 50 renamed pages.domain → pages.space; use the current
+            // column name here so the table copy does not crash on post-50 DBs.
             conn.execute_batch(
                 "CREATE TABLE pages_pre49 AS \
-                 SELECT id, title, summary, content, entity_id, domain, \
+                 SELECT id, title, summary, content, entity_id, space, \
                  source_memory_ids, version, status, embedding, created_at, last_compiled, \
                  last_modified, sources_updated_count, stale_reason, user_edited FROM pages; \
                  DROP TABLE pages; \
@@ -28390,7 +28509,7 @@ pub(crate) mod tests {
 
         // Confirm pending_revision=0 in search results by default.
         let results = db
-            .search("pending revision test memory", 5, None)
+            .search("pending revision test memory", 5, None, None)
             .await
             .unwrap();
         let found = results.iter().find(|r| r.source_id == "pr_test_normal");
@@ -28445,7 +28564,7 @@ pub(crate) mod tests {
 
         // Search for the merged memory.
         let results = db
-            .search("merged A+B combined content", 10, None)
+            .search("merged A+B combined content", 10, None, None)
             .await
             .unwrap();
         let merged = results.iter().find(|r| r.source_id == merged_id);
@@ -28919,7 +29038,7 @@ pub(crate) mod tests {
         let conn = db.conn.lock().await;
         conn.execute(
             "INSERT INTO memories (id, content, source, source_id, title, chunk_index, \
-                                    last_modified, chunk_type, source_agent, domain, confidence, \
+                                    last_modified, chunk_type, source_agent, space, confidence, \
                                     confirmed, memory_type, pending_revision) \
              VALUES (?1, ?2, 'memory', ?3, 'test', 0, 1712707200, 'text', NULL, 'general', 1.0, 0, 'fact', 0)",
             libsql::params![source_id.clone(), content.to_string(), source_id.clone()],
@@ -29225,6 +29344,172 @@ pub(crate) mod tests {
             after.stale_reason.as_deref(),
             Some("manual_force"),
             "clear_user_edited should mark stale so refinery picks it up"
+        );
+    }
+
+    // ── migration 50 replay test ──────────────────────────────────────────────
+
+    /// Insert a minimal memory row directly via SQL, with an explicit `domain`
+    /// value.  Used by the migration-50 replay test.  Supplies all NOT NULL
+    /// columns that lack a DEFAULT (id, title, chunk_index, chunk_type).
+    ///
+    /// Caller is responsible for ensuring the schema is at pre-migration-50
+    /// state (column named `domain`) before calling this helper.
+    ///
+    /// A zero-filled embedding is stored so the crash-recovery null-embed
+    /// backfill (which queries `space`) is never triggered during the
+    /// subsequent MemoryDB::new call that fires migration 50.
+    async fn insert_memory_for_test_with_domain(
+        db: &MemoryDB,
+        content: &str,
+        domain: Option<&str>,
+    ) -> String {
+        let id = format!("mem_test_{}", uuid::Uuid::new_v4().simple());
+        let conn = db.conn.lock().await;
+        // Build a 768-dim zero vector string for vector32(): "[0.000000,0.000000,...]"
+        let zero_vec: String = {
+            let mut s = String::with_capacity(768 * 10);
+            s.push('[');
+            for i in 0..768usize {
+                if i > 0 {
+                    s.push(',');
+                }
+                s.push_str("0.000000");
+            }
+            s.push(']');
+            s
+        };
+        // Pre-migration-50 schema: the column is `domain`.
+        conn.execute(
+            "INSERT INTO memories \
+             (id, source_id, source, content, source_text, title, chunk_index, chunk_type, \
+              memory_type, domain, embedding, created_at, last_modified) \
+             VALUES (?1, ?2, 'memory', ?3, ?3, 'test-title', 0, 'text', 'fact', ?4, \
+                     vector32(?5), unixepoch('now'), unixepoch('now'))",
+            libsql::params![
+                id.clone(),
+                id.clone(),
+                content.to_string(),
+                domain.map(String::from),
+                zero_vec
+            ],
+        )
+        .await
+        .expect("insert_memory_for_test_with_domain failed");
+        id
+    }
+
+    #[tokio::test]
+    async fn test_migration_50_renames_domain_to_space() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db_path = tmp.path().join("test.db");
+
+        // First open: runs migrations 1-50, leaving the column named `space`.
+        let db = MemoryDB::new(&db_path, Arc::new(crate::events::NoopEmitter))
+            .await
+            .unwrap();
+
+        // Reverse the rename so the schema matches pre-migration-50 (column = `domain`).
+        // This sets up the precondition the test exercises: data exists in `domain`,
+        // then migration 50 fires and must preserve it under the renamed column.
+        {
+            let conn = db.conn.lock().await;
+            conn.execute("ALTER TABLE memories RENAME COLUMN space TO domain", ())
+                .await
+                .unwrap();
+            conn.execute("ALTER TABLE entities RENAME COLUMN space TO domain", ())
+                .await
+                .unwrap();
+            conn.execute("ALTER TABLE pages RENAME COLUMN space TO domain", ())
+                .await
+                .unwrap();
+            // Restore the old indexes so migration 50's DROP INDEX IF EXISTS is exercised.
+            conn.execute("DROP INDEX IF EXISTS idx_memories_space", ())
+                .await
+                .unwrap();
+            conn.execute("DROP INDEX IF EXISTS idx_entities_space", ())
+                .await
+                .unwrap();
+            conn.execute("DROP INDEX IF EXISTS idx_pages_space", ())
+                .await
+                .unwrap();
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_memories_domain ON memories(domain) WHERE domain IS NOT NULL",
+                (),
+            )
+            .await
+            .unwrap();
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_entities_domain ON entities(domain) WHERE domain IS NOT NULL",
+                (),
+            )
+            .await
+            .unwrap();
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_pages_domain ON pages(domain) WHERE domain IS NOT NULL",
+                (),
+            )
+            .await
+            .unwrap();
+        }
+
+        // Now insert a row at pre-50 schema: writes to `domain` column.
+        insert_memory_for_test_with_domain(&db, "test fact", Some("alpha")).await;
+
+        // Roll user_version back to 49 so migration 50 re-fires on next open.
+        {
+            let conn = db.conn.lock().await;
+            conn.execute("PRAGMA user_version = 49", ()).await.unwrap();
+        }
+        drop(db);
+
+        // Re-open — migration 50 fires, ALTER RENAME runs against the populated
+        // table, preserving the inserted row's data.
+        let db = MemoryDB::new(&db_path, Arc::new(crate::events::NoopEmitter))
+            .await
+            .unwrap();
+        let conn = db.conn.lock().await;
+
+        // Data must survive RENAME COLUMN: SELECT against `space` returns the row's value.
+        let mut rows = conn
+            .query(
+                "SELECT space FROM memories WHERE source_text = ?1",
+                libsql::params!["test fact"],
+            )
+            .await
+            .unwrap();
+        let row = rows.next().await.unwrap().expect("memory row present");
+        let space: Option<String> = row.get(0).unwrap();
+        assert_eq!(
+            space.as_deref(),
+            Some("alpha"),
+            "data must survive RENAME COLUMN"
+        );
+
+        // New index exists.
+        let mut idx_rows = conn
+            .query(
+                "SELECT name FROM sqlite_master WHERE type='index' AND name='idx_memories_space'",
+                (),
+            )
+            .await
+            .unwrap();
+        assert!(
+            idx_rows.next().await.unwrap().is_some(),
+            "idx_memories_space must exist after migration 50"
+        );
+
+        // Old index dropped.
+        let mut old_idx = conn
+            .query(
+                "SELECT name FROM sqlite_master WHERE type='index' AND name='idx_memories_domain'",
+                (),
+            )
+            .await
+            .unwrap();
+        assert!(
+            old_idx.next().await.unwrap().is_none(),
+            "idx_memories_domain must be dropped after migration 50"
         );
     }
 }

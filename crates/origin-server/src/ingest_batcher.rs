@@ -248,7 +248,7 @@ mod tests {
             last_modified: 0,
             metadata: HashMap::new(),
             memory_type: Some("fact".into()),
-            domain: None,
+            space: None,
             source_agent: Some("test".into()),
             confidence: None,
             confirmed: None,

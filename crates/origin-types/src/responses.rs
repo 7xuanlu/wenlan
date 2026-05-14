@@ -441,6 +441,8 @@ pub struct DecisionsResponse {
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct DecisionDomainsResponse {
+    /// Kept as `domains` for one-release back-compat with callers of
+    /// `/api/decisions/domains`; rename to `spaces` in PR-A+1.
     pub domains: Vec<String>,
 }
 

@@ -50,7 +50,7 @@ pub async fn extract_single_memory_entities(
             let req = origin_types::requests::CreateEntityRequest {
                 name: entity.name.clone(),
                 entity_type: entity.entity_type.clone(),
-                domain: None,
+                space: None,
                 source_agent: Some("post_ingest".to_string()),
                 confidence: None,
             };

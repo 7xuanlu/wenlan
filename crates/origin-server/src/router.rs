@@ -400,6 +400,7 @@ pub fn build_router(state: SharedState) -> Router {
         )
         // Decisions, briefing, working memory, profile narrative, pinned (batch 6)
         .route("/api/decisions", get(memory_routes::handle_list_decisions))
+        // HTTP path stays "domains" for one-release back-compat; rename to "spaces" in PR-A+1.
         .route(
             "/api/decisions/domains",
             get(memory_routes::handle_list_decision_domains),

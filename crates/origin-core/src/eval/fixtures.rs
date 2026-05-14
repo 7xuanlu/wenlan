@@ -13,7 +13,8 @@ pub struct FixtureFile {
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct EvalCase {
     pub query: String,
-    pub domain: Option<String>,
+    #[serde(default, alias = "domain")]
+    pub space: Option<String>,
     #[serde(default)]
     pub seeds: Vec<SeedMemory>,
     #[serde(default)]
@@ -31,7 +32,8 @@ pub struct SeedMemory {
     pub id: String,
     pub content: String,
     pub memory_type: String,
-    pub domain: Option<String>,
+    #[serde(default, alias = "domain")]
+    pub space: Option<String>,
     #[serde(default)]
     pub relevance: u8,
     pub structured_fields: Option<String>,
@@ -58,7 +60,8 @@ pub struct SeedMemory {
 pub struct SeedEntity {
     pub name: String,
     pub entity_type: String,
-    pub domain: Option<String>,
+    #[serde(default, alias = "domain")]
+    pub space: Option<String>,
     #[serde(default)]
     pub observations: Vec<SeedObservation>,
 }
@@ -185,12 +188,12 @@ observations = [
         let fixture = FixtureFile {
             cases: vec![EvalCase {
                 query: "test query".to_string(),
-                domain: Some("test".to_string()),
+                space: Some("test".to_string()),
                 seeds: vec![SeedMemory {
                     id: "mem_1".to_string(),
                     content: "Test content".to_string(),
                     memory_type: "fact".to_string(),
-                    domain: Some("test".to_string()),
+                    space: Some("test".to_string()),
                     relevance: 3,
                     structured_fields: None,
                     confidence: None,
@@ -205,7 +208,7 @@ observations = [
                     id: "neg_1".to_string(),
                     content: "Negative content".to_string(),
                     memory_type: "fact".to_string(),
-                    domain: Some("other".to_string()),
+                    space: Some("other".to_string()),
                     relevance: 0,
                     structured_fields: None,
                     confidence: None,

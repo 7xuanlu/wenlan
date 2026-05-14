@@ -184,8 +184,8 @@ fn render_markdown(page: &Page) -> String {
     // Frontmatter
     out.push_str("---\n");
     out.push_str(&format!("title: \"{}\"\n", page.title));
-    if let Some(ref domain) = page.domain {
-        out.push_str(&format!("domain: {}\n", domain));
+    if let Some(ref space) = page.space {
+        out.push_str(&format!("space: {}\n", space));
     }
     out.push_str(&format!("origin_id: {}\n", page.id));
     out.push_str(&format!("origin_version: {}\n", page.version));
@@ -214,7 +214,7 @@ mod tests {
             summary: Some("Memory safety without GC".to_string()),
             content: "## Overview\nRust uses ownership for memory safety.\n\n## Related\n- [Borrowing](concept_borrow1)".to_string(),
             entity_id: None,
-            domain: Some("rust".to_string()),
+            space: Some("rust".to_string()),
             source_memory_ids: vec!["m1".to_string()],
             version: 2,
             status: "active".to_string(),
@@ -244,7 +244,7 @@ mod tests {
         let content = std::fs::read_to_string(&path).unwrap();
         assert!(content.starts_with("---\n"));
         assert!(content.contains("title: \"Rust Ownership\""));
-        assert!(content.contains("domain: rust"));
+        assert!(content.contains("space: rust"));
         assert!(content.contains("origin_id: concept_test123"));
         assert!(content.contains("origin_version: 2"));
         // Wikilinks converted
@@ -377,11 +377,11 @@ mod tests {
         let writer = KnowledgeWriter::new(dir.path().to_path_buf());
 
         let page = Page {
-            domain: None,
+            space: None,
             ..test_concept()
         };
         let path = writer.write_page(&page).unwrap();
         let content = std::fs::read_to_string(&path).unwrap();
-        assert!(!content.contains("domain:"));
+        assert!(!content.contains("space:"));
     }
 }

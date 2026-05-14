@@ -23,8 +23,8 @@ pub struct SearchRequest {
     #[serde(default = "default_limit")]
     pub limit: usize,
     pub source_filter: Option<String>,
-    #[serde(default)]
-    pub domain: Option<String>,
+    #[serde(default, alias = "domain")]
+    pub space: Option<String>,
 }
 
 fn default_limit() -> usize {
@@ -104,7 +104,7 @@ pub async fn handle_search(
                 &req.query,
                 req.limit,
                 None,
-                req.domain.as_deref(),
+                req.space.as_deref(),
                 None,
                 None,
                 None,
@@ -113,9 +113,14 @@ pub async fn handle_search(
             .await
             .map_err(|e| ServerError::SearchFailed(e.to_string()))?
         } else {
-            db.search(&req.query, req.limit, req.source_filter.as_deref())
-                .await
-                .map_err(|e| ServerError::SearchFailed(e.to_string()))?
+            db.search(
+                &req.query,
+                req.limit,
+                req.source_filter.as_deref(),
+                req.space.as_deref(),
+            )
+            .await
+            .map_err(|e| ServerError::SearchFailed(e.to_string()))?
         }
     };
 
@@ -165,7 +170,7 @@ pub async fn handle_context(
         let s = state.read().await;
         let db = s.db.as_ref().ok_or(ServerError::DbNotInitialized)?;
 
-        db.search(&query, req.limit, None)
+        db.search(&query, req.limit, None, None)
             .await
             .map_err(|e| ServerError::SearchFailed(e.to_string()))?
     };
@@ -237,26 +242,29 @@ pub async fn handle_chat_context(
     };
 
     let classification = classify_query(query, agent_name, &agent_trust, true);
-    let domain_filter = req.domain.as_deref().or(classification.space.as_deref());
+    // classification.space fallback removed (wire-gap fix #3): classifier never
+    // populated it, so the .or() chain was dead code. Callers must now supply
+    // space explicitly via req.space.
+    let space_filter = req.space.as_deref();
 
     // Tier 1 (identity + preferences)
     let (identity, preferences) = if tier_allowed(&classification.trust_level, 1) {
         let mut id_mems = db
-            .load_memories_by_type("identity", 10, domain_filter)
+            .load_memories_by_type("identity", 10, space_filter)
             .await
             .unwrap_or_default();
         let mut pref_mems = db
-            .load_memories_by_type("preference", 10, domain_filter)
+            .load_memories_by_type("preference", 10, space_filter)
             .await
             .unwrap_or_default();
 
-        if id_mems.is_empty() && domain_filter.is_some() {
+        if id_mems.is_empty() && space_filter.is_some() {
             id_mems = db
                 .load_memories_by_type("identity", 5, None)
                 .await
                 .unwrap_or_default();
         }
-        if pref_mems.is_empty() && domain_filter.is_some() {
+        if pref_mems.is_empty() && space_filter.is_some() {
             pref_mems = db
                 .load_memories_by_type("preference", 5, None)
                 .await
@@ -284,7 +292,7 @@ pub async fn handle_chat_context(
     let goals: Vec<String> = Vec::new();
 
     let decisions: Vec<String> = if tier_allowed(&classification.trust_level, 2) {
-        db.load_memories_by_type("decision", 5, domain_filter)
+        db.load_memories_by_type("decision", 5, space_filter)
             .await
             .unwrap_or_default()
             .iter()
@@ -307,22 +315,15 @@ pub async fn handle_chat_context(
 
     // Tier 3 (search)
     let search_results = if classification.use_graph {
-        db.search_memory_reranked(
-            query,
-            req.max_chunks,
-            None,
-            domain_filter,
-            None,
-            llm.clone(),
-        )
-        .await
-        .unwrap_or_default()
+        db.search_memory_reranked(query, req.max_chunks, None, space_filter, None, llm.clone())
+            .await
+            .unwrap_or_default()
     } else {
         db.search_memory(
             query,
             req.max_chunks,
             None,
-            domain_filter,
+            space_filter,
             None,
             None,
             None,
@@ -773,7 +774,7 @@ pub async fn handle_distill(
 
     // Capture scope filters before moving `target` into distill_pages_scoped
     // so we can use them to scope the stale-page list below.
-    let (stale_entity_filter, stale_domain_filter) = match &target {
+    let (stale_entity_filter, stale_space_filter) = match &target {
         Some(origin_core::synthesis::distill::DistillTarget::Entity { id, .. }) => {
             (Some(id.clone()), None)
         }
@@ -851,7 +852,7 @@ pub async fn handle_distill(
         .list_stale_pages_scoped(
             "source_updated",
             stale_entity_filter.as_deref(),
-            stale_domain_filter.as_deref(),
+            stale_space_filter.as_deref(),
         )
         .await
         .map_err(|e| ServerError::Internal(e.to_string()))?;

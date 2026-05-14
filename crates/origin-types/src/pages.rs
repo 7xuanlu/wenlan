@@ -11,7 +11,8 @@ pub struct Page {
     pub summary: Option<String>,
     pub content: String,
     pub entity_id: Option<String>,
-    pub domain: Option<String>,
+    #[serde(default, alias = "domain")]
+    pub space: Option<String>,
     /// Kept for dual-write transition; prefer concept_sources join table for new reads.
     pub source_memory_ids: Vec<String>,
     pub version: i64,

@@ -169,7 +169,7 @@ pub fn sample_to_eval_cases(sample: &LocomoSample, memories: &[LocomoMemory]) ->
                 id: format!("locomo_{}_{}", sample.sample_id, i),
                 content: mem.content.clone(),
                 memory_type: "fact".to_string(),
-                domain: Some("conversation".to_string()),
+                space: Some("conversation".to_string()),
                 relevance,
                 structured_fields: None,
                 confidence: None,
@@ -184,7 +184,7 @@ pub fn sample_to_eval_cases(sample: &LocomoSample, memories: &[LocomoMemory]) ->
 
         cases.push(EvalCase {
             query: qa.question.clone(),
-            domain: Some("conversation".to_string()),
+            space: Some("conversation".to_string()),
             seeds,
             negative_seeds: vec![],
             entities: vec![],
@@ -416,7 +416,7 @@ pub async fn run_locomo_eval(path: &Path) -> Result<LocomoReport, OriginError> {
                 source: "memory".to_string(),
                 title: format!("{} session {}", mem.speaker, mem.session_num),
                 memory_type: Some("fact".to_string()),
-                domain: Some("conversation".to_string()),
+                space: Some("conversation".to_string()),
                 last_modified: chrono::Utc::now().timestamp(),
                 ..Default::default()
             })
@@ -547,7 +547,7 @@ pub async fn run_locomo_eval_reranked(
                 source: "memory".to_string(),
                 title: format!("{} session {}", mem.speaker, mem.session_num),
                 memory_type: Some("fact".to_string()),
-                domain: Some("conversation".to_string()),
+                space: Some("conversation".to_string()),
                 last_modified: chrono::Utc::now().timestamp(),
                 ..Default::default()
             })
@@ -672,7 +672,7 @@ pub async fn run_locomo_eval_expanded(
                 source: "memory".to_string(),
                 title: format!("{} session {}", mem.speaker, mem.session_num),
                 memory_type: Some("fact".to_string()),
-                domain: Some("conversation".to_string()),
+                space: Some("conversation".to_string()),
                 last_modified: chrono::Utc::now().timestamp(),
                 ..Default::default()
             })
@@ -891,7 +891,7 @@ fn generate_noise(sample: &LocomoSample, observation_count: usize) -> Vec<RawDoc
             source: "memory".to_string(),
             title: format!("noise_{}", i),
             memory_type: Some("fact".to_string()),
-            domain: Some("conversation".to_string()),
+            space: Some("conversation".to_string()),
             last_modified: chrono::Utc::now().timestamp(),
             ..Default::default()
         });
@@ -938,7 +938,7 @@ pub async fn run_locomo_eval_with_gate(
                 source: "memory".to_string(),
                 title: format!("{} session {}", mem.speaker, mem.session_num),
                 memory_type: Some("fact".to_string()),
-                domain: Some("conversation".to_string()),
+                space: Some("conversation".to_string()),
                 last_modified: chrono::Utc::now().timestamp(),
                 ..Default::default()
             })

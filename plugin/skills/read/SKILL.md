@@ -33,7 +33,7 @@ get_page(page_id="<id>")
 ```
 
 The response is a JSON object wrapping `{ "page": {...} }`. Read
-`title`, `summary`, `domain`, and `source_memory_ids` off the page,
+`title`, `summary`, `space`, and `source_memory_ids` off the page,
 then look up the md filename in `~/.origin/pages/.origin/state.json`:
 
 ```
@@ -80,7 +80,7 @@ Title:    <title>
 Version:  v<N> — <last_edited_by> <relative_time> (<last_delta_summary>)
 Summary:  <one sentence>
 Sources:  <N> memories
-Domain:   <domain or (none)>
+Space:    <space or (none)>
 Links:    <N inbound, M outbound (<K> broken)>
 Open:     ~/.origin/pages/<slug>.md
 ⚠ Stale: <stale_reason> — run /distill to refresh

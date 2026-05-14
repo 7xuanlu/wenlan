@@ -654,7 +654,7 @@ mod tests {
             last_modified: chrono::Utc::now().timestamp(),
             metadata: std::collections::HashMap::new(),
             memory_type: Some("fact".to_string()),
-            domain: None,
+            space: None,
             source_agent: Some("test".to_string()),
             confidence: Some(0.7),
             confirmed: Some(false),

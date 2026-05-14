@@ -73,7 +73,7 @@ pub async fn handle_ingest_text(
         metadata: req.metadata.unwrap_or_default(),
         memory_type: None,
         source_agent: None,
-        domain: None,
+        space: None,
         confidence: None,
         confirmed: None,
         supersedes: None,
@@ -109,6 +109,7 @@ pub async fn handle_ingest_webpage(
         .nth(1)
         .and_then(|rest| rest.split('/').next())
     {
+        // Metadata blob key kept as "domain" for downstream-reader back-compat.
         metadata.insert("domain".to_string(), domain.to_string());
     }
 
@@ -123,7 +124,7 @@ pub async fn handle_ingest_webpage(
         metadata,
         memory_type: None,
         source_agent: None,
-        domain: None,
+        space: None,
         confidence: None,
         confirmed: None,
         supersedes: None,
@@ -168,7 +169,7 @@ pub async fn handle_ingest_memory(
         metadata,
         memory_type: None,
         source_agent: None,
-        domain: None,
+        space: None,
         confidence: None,
         confirmed: None,
         supersedes: None,

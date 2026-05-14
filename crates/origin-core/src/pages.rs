@@ -55,7 +55,7 @@ mod tests {
             summary: None,
             content: String::new(),
             entity_id: None,
-            domain: None,
+            space: None,
             source_memory_ids: source_ids.iter().map(|s| s.to_string()).collect(),
             version: 1,
             status: "active".to_string(),

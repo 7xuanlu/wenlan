@@ -53,8 +53,8 @@ impl PageExporter for ObsidianExporter {
 fn build_frontmatter(page: &Page) -> String {
     let mut fm = String::new();
     fm.push_str(&format!("title: {}\n", page.title));
-    if let Some(ref domain) = page.domain {
-        fm.push_str(&format!("tags:\n  - {}\n", domain));
+    if let Some(ref space) = page.space {
+        fm.push_str(&format!("tags:\n  - {}\n", space));
     }
     if let Some(ref summary) = page.summary {
         fm.push_str(&format!("aliases:\n  - {}\n", summary));
@@ -110,7 +110,7 @@ mod tests {
             summary: Some("Core database layer".to_string()),
             content: "## Key Facts\n- Stores vectors\n\n## Related Concepts\n- [Origin Architecture](concept_xyz789)\n- [Embedding Pipeline](concept_pqr012)".to_string(),
             entity_id: Some("entity_libsql".to_string()),
-            domain: Some("architecture".to_string()),
+            space: Some("architecture".to_string()),
             source_memory_ids: vec!["m1".to_string(), "m2".to_string()],
             version: 2,
             status: "active".to_string(),

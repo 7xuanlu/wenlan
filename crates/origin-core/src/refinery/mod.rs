@@ -991,23 +991,23 @@ pub(crate) fn build_burst_context(
         .map(|dt| dt.format("%H:%M").to_string())
         .unwrap_or_else(|| burst_end.to_string());
 
-    let domains: Vec<String> = memories
+    let spaces: Vec<String> = memories
         .iter()
         .filter_map(|(_, _, d, _)| d.clone())
         .collect::<std::collections::HashSet<_>>()
         .into_iter()
         .collect();
-    let domains_str = if domains.is_empty() {
+    let spaces_str = if spaces.is_empty() {
         "unknown".to_string()
     } else {
-        domains.join(", ")
+        spaces.join(", ")
     };
 
     let lines: Vec<String> = memories
         .iter()
-        .map(|(_, content, domain, _)| {
+        .map(|(_, content, space, _)| {
             let clean = clean_for_recap(content);
-            match domain {
+            match space {
                 Some(d) => format!("- [{}] {}", d, clean),
                 None => format!("- {}", clean),
             }
@@ -1019,7 +1019,7 @@ pub(crate) fn build_burst_context(
         start_fmt,
         end_fmt,
         memories.len(),
-        domains_str,
+        spaces_str,
         lines.join("\n"),
     )
 }
@@ -1138,14 +1138,14 @@ mod tests {
     use crate::sources::{RawDocument, StabilityTier};
     use crate::synthesis::distill::apply_merge_by_tier;
 
-    fn make_memory(source_id: &str, content: &str, memory_type: &str, domain: &str) -> RawDocument {
+    fn make_memory(source_id: &str, content: &str, memory_type: &str, space: &str) -> RawDocument {
         RawDocument {
             source_id: source_id.to_string(),
             content: content.to_string(),
             source: "memory".to_string(),
             title: content.chars().take(40).collect(),
             memory_type: Some(memory_type.to_string()),
-            domain: Some(domain.to_string()),
+            space: Some(space.to_string()),
             confidence: Some(0.7),
             last_modified: chrono::Utc::now().timestamp(),
             ..Default::default()
@@ -1858,7 +1858,7 @@ mod tests {
                 title: content.to_string(),
                 content: content.to_string(),
                 entity_id: Some("entity_libsql".to_string()),
-                domain: Some("architecture".to_string()),
+                space: Some("architecture".to_string()),
                 ..Default::default()
             };
             db.upsert_documents(vec![doc]).await.unwrap();
@@ -1900,7 +1900,7 @@ mod tests {
                 title: content.to_string(),
                 content: content.to_string(),
                 entity_id: Some("entity_libsql_lc".to_string()),
-                domain: Some("architecture".to_string()),
+                space: Some("architecture".to_string()),
                 ..Default::default()
             };
             db.upsert_documents(vec![doc]).await.unwrap();
@@ -2368,7 +2368,7 @@ mod tests {
         {
             let conn = db.conn.lock().await;
             conn.execute(
-                "INSERT INTO memories (id, source_id, title, content, chunk_index, chunk_type, memory_type, domain, source_agent, created_at, last_modified, confirmed, stability, source) \
+                "INSERT INTO memories (id, source_id, title, content, chunk_index, chunk_type, memory_type, space, source_agent, created_at, last_modified, confirmed, stability, source) \
                  VALUES (?1, ?1, ?1, 'seed content', 0, 'text', 'fact', 'test', 'claude-code', ?2, ?2, 1, 'confirmed', 'memory')",
                 libsql::params!["mem_seed".to_string(), now_ts],
             )

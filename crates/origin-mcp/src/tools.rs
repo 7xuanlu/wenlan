@@ -91,7 +91,8 @@ pub struct CaptureParams {
     #[schemars(
         description = "Topic scope (e.g. 'rust', 'work', 'health', 'origin'). Auto-detected if omitted."
     )]
-    pub domain: Option<String>,
+    #[serde(default, alias = "domain")]
+    pub space: Option<String>,
     #[schemars(
         description = "Person, project, or tool name to anchor to (e.g. 'Alice', 'Origin', 'PostgreSQL'). Helps build the knowledge graph."
     )]
@@ -128,7 +129,8 @@ pub struct RecallParams {
     #[schemars(description = origin_types::MEMORY_TYPE_FILTER_DESCRIPTION)]
     pub memory_type: Option<String>,
     #[schemars(description = "Filter by topic scope.")]
-    pub domain: Option<String>,
+    #[serde(default, alias = "domain")]
+    pub space: Option<String>,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
@@ -143,9 +145,10 @@ pub struct ContextParams {
     #[serde(default, deserialize_with = "deserialize_optional_usize_lenient")]
     pub limit: Option<usize>,
     #[schemars(
-        description = "Scope context to a domain/space (e.g. 'work', 'personal'). Auto-detected from conversation if omitted."
+        description = "Scope context to a space (e.g. 'work', 'personal'). Auto-detected from conversation if omitted."
     )]
-    pub domain: Option<String>,
+    #[serde(default, alias = "domain")]
+    pub space: Option<String>,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
@@ -159,7 +162,7 @@ pub struct ForgetParams {
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct DistillParams {
     #[schemars(
-        description = "Optional target scope. Accepts a page id (`page_*` or `concept_*`) to re-distill that single page, an entity name (e.g. `Origin`, `Alice`) to scope clustering to that entity, or a domain value (e.g. `work`, `personal`) to scope to that domain. Omit for a full pass over any clusters with new sources. The daemon resolves the string and falls back with a hint payload if nothing matches."
+        description = "Optional target scope. Accepts a page id (`page_*` or `concept_*`) to re-distill that single page, an entity name (e.g. `Origin`, `Alice`) to scope clustering to that entity, or a space value (e.g. `work`, `personal`) to scope to that space. Omit for a full pass over any clusters with new sources. The daemon resolves the string and falls back with a hint payload if nothing matches."
     )]
     #[serde(default, alias = "page_id")]
     pub target: Option<String>,
@@ -227,7 +230,8 @@ pub struct CreateEntityParams {
     )]
     pub entity_type: String,
     #[schemars(description = "Topic scope (e.g. 'work', 'origin'). Optional.")]
-    pub domain: Option<String>,
+    #[serde(default, alias = "domain")]
+    pub space: Option<String>,
     #[schemars(
         description = "0.0-1.0 confidence in the entity assertion. Leave unset for caller-default."
     )]
@@ -306,7 +310,8 @@ pub struct CreatePageParams {
     )]
     pub entity_id: Option<String>,
     #[schemars(description = "Topic scope (e.g. 'origin', 'work'). Optional.")]
-    pub domain: Option<String>,
+    #[serde(default, alias = "domain")]
+    pub space: Option<String>,
     #[schemars(
         description = "Memory source_ids the page is distilled from. Required for traceability."
     )]
@@ -388,8 +393,9 @@ pub struct ListMemoriesParams {
         description = "Filter by memory type (e.g. 'fact', 'preference', 'decision'). Optional."
     )]
     pub memory_type: Option<String>,
-    #[schemars(description = "Filter by topic/domain. Optional.")]
-    pub domain: Option<String>,
+    #[schemars(description = "Filter by topic/space. Optional.")]
+    #[serde(default, alias = "domain")]
+    pub space: Option<String>,
     #[schemars(
         description = "Max results, default 100. Increase for bulk listings, decrease for quick scans."
     )]
@@ -409,7 +415,7 @@ pub struct SearchPagesParams {
     #[serde(default, deserialize_with = "deserialize_optional_usize_lenient")]
     pub limit: Option<usize>,
     #[schemars(
-        description = "Optional page type filter (e.g. 'recap', 'decision'). Narrows results to one type/domain. Omit to search all types."
+        description = "Optional page type filter (e.g. 'recap', 'decision'). Narrows results to one type. Omit to search all types."
     )]
     #[serde(default)]
     pub page_type: Option<String>,
@@ -436,9 +442,9 @@ pub struct ListNurtureParams {
     /// Maximum cards to return. Default 50. Clamped to 1..=500.
     #[serde(default, deserialize_with = "deserialize_optional_usize_lenient")]
     pub limit: Option<usize>,
-    /// Restrict to a single domain/space.
-    #[serde(default)]
-    pub domain: Option<String>,
+    /// Restrict to a single space.
+    #[serde(default, alias = "domain")]
+    pub space: Option<String>,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
@@ -680,7 +686,7 @@ impl OriginMcpServer {
         let req = StoreMemoryRequest {
             content: params.content,
             memory_type: params.memory_type,
-            domain: params.domain,
+            space: params.space,
             source_agent,
             title: None,
             confidence: params.confidence,
@@ -706,7 +712,7 @@ impl OriginMcpServer {
             query: params.query,
             limit: params.limit.unwrap_or(10),
             memory_type: params.memory_type,
-            domain: params.domain,
+            space: params.space,
             source_agent: self.resolve_source_agent(None),
         };
 
@@ -734,7 +740,7 @@ impl OriginMcpServer {
             max_chunks: params.limit.unwrap_or(20),
             relevance_threshold: None,
             include_goals: true,
-            domain: params.domain,
+            space: params.space,
         };
 
         // Extract only the `context` string field from the response.
@@ -855,7 +861,7 @@ impl OriginMcpServer {
         let limit = params.limit.unwrap_or(20).min(100);
         let req = ListMemoriesRequest {
             memory_type: None,
-            domain: None,
+            space: None,
             confirmed: Some(false),
             limit,
         };
@@ -898,7 +904,7 @@ impl OriginMcpServer {
         let req = CreateEntityRequest {
             name: params.name,
             entity_type: params.entity_type,
-            domain: params.domain,
+            space: params.space,
             source_agent,
             confidence: params.confidence,
         };
@@ -1078,7 +1084,7 @@ impl OriginMcpServer {
             content: params.content,
             summary: params.summary,
             entity_id: params.entity_id,
-            domain: params.domain,
+            space: params.space,
             source_memory_ids: params.source_memory_ids,
         };
         let resp: CreatePageResponse = match self.client.post("/api/pages", &req).await {
@@ -1222,7 +1228,7 @@ impl OriginMcpServer {
     ) -> Result<CallToolResult, McpError> {
         let req = ListMemoriesRequest {
             memory_type: params.memory_type,
-            domain: params.domain,
+            space: params.space,
             limit: params.limit.unwrap_or(100),
             confirmed: None,
         };
@@ -1373,8 +1379,8 @@ impl OriginMcpServer {
         if let Some(l) = params.limit {
             q.push(format!("limit={}", l.clamp(1, 500)));
         }
-        if let Some(d) = params.domain.as_deref().filter(|s| !s.is_empty()) {
-            q.push(format!("domain={}", url_encode_simple(d)));
+        if let Some(s) = params.space.as_deref().filter(|s| !s.is_empty()) {
+            q.push(format!("space={}", url_encode_simple(s)));
         }
         if !q.is_empty() {
             path.push('?');
@@ -1655,7 +1661,7 @@ impl OriginMcpServer {
     }
 
     #[tool(
-        description = "Search memories by query. Use when the user asks 'do you remember', 'what do you know about', 'look up', or when you need a specific fact before acting.\n\nWrite queries as natural language — the search engine handles semantic matching. For precision, use filters (memory_type, domain) to narrow results. If you get too many results, add filters rather than making the query longer.\n\nThis is for targeted lookups. For broad session orientation, use context instead.",
+        description = "Search memories by query. Use when the user asks 'do you remember', 'what do you know about', 'look up', or when you need a specific fact before acting.\n\nWrite queries as natural language — the search engine handles semantic matching. For precision, use filters (memory_type, space) to narrow results. If you get too many results, add filters rather than making the query longer.\n\nThis is for targeted lookups. For broad session orientation, use context instead.",
         annotations(title = "Recall", read_only_hint = true, open_world_hint = false)
     )]
     async fn recall(
@@ -1702,7 +1708,7 @@ impl OriginMcpServer {
     }
 
     #[tool(
-        description = "Trigger Origin's distillation pass. With no `target`, runs a full pass that clusters new memories into pages and refreshes the wiki view. With a `target`, scopes the pass: a page id (`page_*` or `concept_*`) re-distills that single page, an entity name scopes clustering to that entity, a domain value scopes to that domain. Use when the user explicitly asks to synthesize, distill, or rebuild a page. The daemon also runs distillation periodically in the background, so don't trigger redundantly during normal flow.",
+        description = "Trigger Origin's distillation pass. With no `target`, runs a full pass that clusters new memories into pages and refreshes the wiki view. With a `target`, scopes the pass: a page id (`page_*` or `concept_*`) re-distills that single page, an entity name scopes clustering to that entity, a space value (e.g. `work`, `personal`) scopes to that space. Use when the user explicitly asks to synthesize, distill, or rebuild a page. The daemon also runs distillation periodically in the background, so don't trigger redundantly during normal flow.",
         annotations(
             title = "Distill",
             read_only_hint = false,
@@ -1947,7 +1953,7 @@ impl OriginMcpServer {
     }
 
     #[tool(
-        description = "Fetch the source memories of a page — the memory ids the page was distilled from, each enriched with the memory's title, content, type, and domain. The /distill skill uses this on the stale-page refresh path: get_page returns ids, get_page_sources returns the full memory content needed to re-synthesize prose.",
+        description = "Fetch the source memories of a page — the memory ids the page was distilled from, each enriched with the memory's title, content, type, and space. The /distill skill uses this on the stale-page refresh path: get_page returns ids, get_page_sources returns the full memory content needed to re-synthesize prose.",
         annotations(
             title = "Get page sources",
             read_only_hint = true,
@@ -1998,7 +2004,7 @@ impl OriginMcpServer {
     }
 
     #[tool(
-        description = "List memories filtered by type and/or domain. Returns the raw memory rows — useful for bulk review, type audits, or feeding a downstream tool. For semantic search use recall; for orientation use context. This is the listing path: predictable order, no relevance ranking.",
+        description = "List memories filtered by type and/or space. Returns the raw memory rows — useful for bulk review, type audits, or feeding a downstream tool. For semantic search use recall; for orientation use context. This is the listing path: predictable order, no relevance ranking.",
         annotations(
             title = "List memories",
             read_only_hint = true,
@@ -2093,7 +2099,7 @@ impl OriginMcpServer {
     // --- Curation read tools ---
 
     #[tool(
-        description = "List nurture cards: memories flagged for human attention because they are unconfirmed, low-confidence, or have been queued for review by the daemon. Use when the user wants to audit what needs review: phrases like 'what needs my attention', 'unconfirmed memories', 'nurture queue'. Returns memory items with metadata. Optional `limit` caps results (default 50, max 500). Optional `domain` restricts to one topic space. Distinct from `list_pending` (which lists all unconfirmed captures) and `list_refinements` (which lists daemon-generated merge/conflict proposals).",
+        description = "List nurture cards: memories flagged for human attention because they are unconfirmed, low-confidence, or have been queued for review by the daemon. Use when the user wants to audit what needs review: phrases like 'what needs my attention', 'unconfirmed memories', 'nurture queue'. Returns memory items with metadata. Optional `limit` caps results (default 50, max 500). Optional `space` restricts to one topic space. Distinct from `list_pending` (which lists all unconfirmed captures) and `list_refinements` (which lists daemon-generated merge/conflict proposals).",
         annotations(
             title = "List nurture cards",
             read_only_hint = true,
@@ -2423,7 +2429,7 @@ mod tests {
         let params: CaptureParams = serde_json::from_str(json).unwrap();
         assert_eq!(params.content, "Lucian prefers dark mode");
         assert!(params.memory_type.is_none());
-        assert!(params.domain.is_none());
+        assert!(params.space.is_none());
         assert!(params.entity.is_none());
         assert!(params.confidence.is_none());
         assert!(params.supersedes.is_none());
@@ -2434,7 +2440,7 @@ mod tests {
         let json = r#"{
             "content": "We chose PostgreSQL over MongoDB",
             "memory_type": "decision",
-            "domain": "origin",
+            "space": "origin",
             "entity": "PostgreSQL",
             "confidence": 0.95,
             "supersedes": "mem_abc123"
@@ -2442,7 +2448,7 @@ mod tests {
         let params: CaptureParams = serde_json::from_str(json).unwrap();
         assert_eq!(params.content, "We chose PostgreSQL over MongoDB");
         assert_eq!(params.memory_type.as_deref(), Some("decision"));
-        assert_eq!(params.domain.as_deref(), Some("origin"));
+        assert_eq!(params.space.as_deref(), Some("origin"));
         assert_eq!(params.entity.as_deref(), Some("PostgreSQL"));
         assert_eq!(params.confidence, Some(0.95));
         assert_eq!(params.supersedes.as_deref(), Some("mem_abc123"));
@@ -2471,13 +2477,13 @@ mod tests {
             "query": "database preferences",
             "limit": 5,
             "memory_type": "decision",
-            "domain": "origin"
+            "space": "origin"
         }"#;
         let params: RecallParams = serde_json::from_str(json).unwrap();
         assert_eq!(params.query, "database preferences");
         assert_eq!(params.limit, Some(5));
         assert_eq!(params.memory_type.as_deref(), Some("decision"));
-        assert_eq!(params.domain.as_deref(), Some("origin"));
+        assert_eq!(params.space.as_deref(), Some("origin"));
     }
 
     #[test]
@@ -2502,16 +2508,16 @@ mod tests {
         let params: ContextParams = serde_json::from_str(json).unwrap();
         assert!(params.topic.is_none());
         assert!(params.limit.is_none());
-        assert!(params.domain.is_none());
+        assert!(params.space.is_none());
     }
 
     #[test]
     fn test_context_params_full() {
-        let json = r#"{"topic": "project Origin architecture", "limit": 30, "domain": "work"}"#;
+        let json = r#"{"topic": "project Origin architecture", "limit": 30, "space": "work"}"#;
         let params: ContextParams = serde_json::from_str(json).unwrap();
         assert_eq!(params.topic.as_deref(), Some("project Origin architecture"));
         assert_eq!(params.limit, Some(30));
-        assert_eq!(params.domain.as_deref(), Some("work"));
+        assert_eq!(params.space.as_deref(), Some("work"));
     }
 
     #[test]
@@ -2522,11 +2528,25 @@ mod tests {
     }
 
     #[test]
+    fn legacy_domain_alias_still_deserializes() {
+        // Cached MCP clients (pre-0.7.0 schema) send `"domain"` instead of `"space"`.
+        // The serde alias must accept legacy JSON so they don't break for the one-release window.
+        let json = r#"{"topic": "project work", "domain": "work"}"#;
+        let params: ContextParams =
+            serde_json::from_str(json).expect("legacy 'domain' key must deserialize");
+        assert_eq!(
+            params.space.as_deref(),
+            Some("work"),
+            "alias must map domain → space"
+        );
+    }
+
+    #[test]
     fn store_memory_request_serialization_excludes_user_id() {
         let req = StoreMemoryRequest {
             content: "test content".into(),
             memory_type: None,
-            domain: None,
+            space: None,
             source_agent: Some("test-agent".into()),
             title: None,
             confidence: None,
@@ -2730,7 +2750,7 @@ mod tests {
             query: "test".into(),
             limit: 10,
             memory_type: None,
-            domain: None,
+            space: None,
             source_agent: None,
         };
         let json = serde_json::to_value(&req).unwrap();
@@ -2751,10 +2771,10 @@ mod tests {
             max_chunks: 20,
             relevance_threshold: None,
             include_goals: true,
-            domain: Some("work".into()),
+            space: Some("work".into()),
         };
         let json = serde_json::to_value(&req).unwrap();
-        assert_eq!(json["domain"], serde_json::json!("work"));
+        assert_eq!(json["space"], serde_json::json!("work"));
         assert_eq!(json["conversation_id"], serde_json::json!("topic"));
     }
 
@@ -2842,7 +2862,7 @@ mod tests {
         let req = StoreMemoryRequest {
             content: "test".into(),
             memory_type: Some("decision".into()),
-            domain: None,
+            space: None,
             source_agent: Some("claude".into()),
             title: None,
             confidence: Some(0.9),
@@ -2865,7 +2885,7 @@ mod tests {
         let req = StoreMemoryRequest {
             content: "hello".into(),
             memory_type: Some("fact".into()),
-            domain: None,
+            space: None,
             source_agent: None,
             title: None,
             confidence: None,
@@ -2958,7 +2978,7 @@ mod tests {
             "language": "en",
             "semantic_unit": "sentence",
             "memory_type": "decision",
-            "domain": "origin",
+            "space": "origin",
             "source_agent": "claude",
             "confidence": 0.9,
             "confirmed": true,
@@ -3003,7 +3023,7 @@ mod tests {
             "last_modified": 1711000000,
             "score": 0.8,
             "memory_type": "fact",
-            "domain": null,
+            "space": null,
             "source_agent": null,
             "confidence": null,
             "confirmed": null
@@ -3032,7 +3052,7 @@ mod tests {
             "last_modified": 1711000000,
             "score": 0.92,
             "memory_type": "preference",
-            "domain": null,
+            "space": null,
             "source_agent": null,
             "confidence": null,
             "confirmed": null,
@@ -3067,7 +3087,7 @@ mod tests {
             "last_modified": 1711000000,
             "score": 1.14,
             "memory_type": null,
-            "domain": null,
+            "space": null,
             "source_agent": null,
             "confidence": null,
             "confirmed": null,
@@ -3397,7 +3417,7 @@ mod tests {
         let params = ContextParams {
             topic: Some("test".into()),
             limit: None,
-            domain: None,
+            space: None,
         };
         #[allow(deprecated)]
         let req = ChatContextRequest {
@@ -3406,7 +3426,7 @@ mod tests {
             max_chunks: params.limit.unwrap_or(20),
             relevance_threshold: None,
             include_goals: true,
-            domain: params.domain,
+            space: params.space,
         };
         assert_eq!(req.max_chunks, 20);
     }
@@ -3416,7 +3436,7 @@ mod tests {
         let params = ContextParams {
             topic: None,
             limit: Some(5),
-            domain: Some("work".into()),
+            space: Some("work".into()),
         };
         #[allow(deprecated)]
         let req = ChatContextRequest {
@@ -3425,10 +3445,10 @@ mod tests {
             max_chunks: params.limit.unwrap_or(20),
             relevance_threshold: None,
             include_goals: true,
-            domain: params.domain,
+            space: params.space,
         };
         assert_eq!(req.max_chunks, 5);
-        assert_eq!(req.domain.as_deref(), Some("work"));
+        assert_eq!(req.space.as_deref(), Some("work"));
     }
 
     #[test]
@@ -3436,7 +3456,7 @@ mod tests {
         let params = ContextParams {
             topic: Some("project Origin".into()),
             limit: None,
-            domain: None,
+            space: None,
         };
         #[allow(deprecated)]
         let req = ChatContextRequest {
@@ -3445,7 +3465,7 @@ mod tests {
             max_chunks: params.limit.unwrap_or(20),
             relevance_threshold: None,
             include_goals: true,
-            domain: params.domain,
+            space: params.space,
         };
         assert_eq!(req.conversation_id.as_deref(), Some("project Origin"));
     }
@@ -3458,7 +3478,7 @@ mod tests {
         let params = CaptureParams {
             content: "Alice manages the frontend team".into(),
             memory_type: Some("fact".into()),
-            domain: Some("work".into()),
+            space: Some("work".into()),
             entity: Some("Alice".into()),
             confidence: Some(0.9),
             supersedes: None,
@@ -3472,7 +3492,7 @@ mod tests {
         let req = StoreMemoryRequest {
             content: params.content,
             memory_type: params.memory_type,
-            domain: params.domain,
+            space: params.space,
             source_agent,
             title: None,
             confidence: params.confidence,
@@ -3486,7 +3506,7 @@ mod tests {
         let json = serde_json::to_value(&req).unwrap();
         assert_eq!(json["content"], "Alice manages the frontend team");
         assert_eq!(json["memory_type"], "fact");
-        assert_eq!(json["domain"], "work");
+        assert_eq!(json["space"], "work");
         assert_eq!(json["entity"], "Alice");
         assert!(json["confidence"].as_f64().unwrap() > 0.89);
         // stdio mode: no param, no client_name → falls back to agent_name "claude"
@@ -3509,14 +3529,14 @@ mod tests {
             query: "database choices".into(),
             limit: Some(5),
             memory_type: Some("decision".into()),
-            domain: None,
+            space: None,
         };
 
         let req = SearchMemoryRequest {
             query: params.query,
             limit: params.limit.unwrap_or(10),
             memory_type: params.memory_type,
-            domain: params.domain,
+            space: params.space,
             source_agent: None,
         };
 
@@ -3525,7 +3545,7 @@ mod tests {
         assert_eq!(json["limit"], 5);
         assert_eq!(json["memory_type"], "decision");
         assert!(json.get("entity").is_none());
-        assert!(json["domain"].is_null());
+        assert!(json["space"].is_null());
         assert!(json["source_agent"].is_null());
     }
 
@@ -3542,7 +3562,7 @@ mod tests {
             let params = CaptureParams {
                 content: "test".into(),
                 memory_type: Some((*t).to_string()),
-                domain: None,
+                space: None,
                 entity: None,
                 confidence: None,
                 supersedes: None,
@@ -3561,7 +3581,7 @@ mod tests {
         let params = CaptureParams {
             content: "test".into(),
             memory_type: Some("goal".into()),
-            domain: None,
+            space: None,
             entity: None,
             confidence: None,
             supersedes: None,
@@ -3597,7 +3617,7 @@ mod tests {
         let req = StoreMemoryRequest {
             content: "test".into(),
             memory_type: Some("fact".into()),
-            domain: None,
+            space: None,
             source_agent: None,
             title: None,
             confidence: None,
@@ -3892,7 +3912,7 @@ mod tests {
         let params: CreateEntityParams = serde_json::from_str(json).unwrap();
         assert_eq!(params.name, "Alice");
         assert_eq!(params.entity_type, "person");
-        assert!(params.domain.is_none());
+        assert!(params.space.is_none());
         assert!(params.confidence.is_none());
     }
 
@@ -3901,13 +3921,13 @@ mod tests {
         let json = r#"{
             "name": "PostgreSQL",
             "entity_type": "tool",
-            "domain": "origin",
+            "space": "origin",
             "confidence": 0.9
         }"#;
         let params: CreateEntityParams = serde_json::from_str(json).unwrap();
         assert_eq!(params.name, "PostgreSQL");
         assert_eq!(params.entity_type, "tool");
-        assert_eq!(params.domain.as_deref(), Some("origin"));
+        assert_eq!(params.space.as_deref(), Some("origin"));
         assert_eq!(params.confidence, Some(0.9));
     }
 
@@ -3931,21 +3951,21 @@ mod tests {
         let params = CreateEntityParams {
             name: "Origin".into(),
             entity_type: "project".into(),
-            domain: Some("origin".into()),
+            space: Some("origin".into()),
             confidence: Some(0.95),
         };
         let source_agent = server.resolve_source_agent(None);
         let req = CreateEntityRequest {
             name: params.name,
             entity_type: params.entity_type,
-            domain: params.domain,
+            space: params.space,
             source_agent,
             confidence: params.confidence,
         };
         let json = serde_json::to_value(&req).unwrap();
         assert_eq!(json["name"], "Origin");
         assert_eq!(json["entity_type"], "project");
-        assert_eq!(json["domain"], "origin");
+        assert_eq!(json["space"], "origin");
         assert_eq!(json["source_agent"], "claude");
         assert!(json["confidence"].as_f64().unwrap() > 0.94);
     }
@@ -4007,7 +4027,7 @@ mod tests {
         assert_eq!(params.content, "Body text.");
         assert!(params.summary.is_none());
         assert!(params.entity_id.is_none());
-        assert!(params.domain.is_none());
+        assert!(params.space.is_none());
         assert!(params.source_memory_ids.is_empty());
     }
 
@@ -4018,7 +4038,7 @@ mod tests {
             "content": "Markdown body with [[wikilinks]].",
             "summary": "The headless HTTP daemon at the heart of Origin.",
             "entity_id": "ent_origin",
-            "domain": "origin",
+            "space": "origin",
             "source_memory_ids": ["mem_1", "mem_2"]
         }"##;
         let params: CreatePageParams = serde_json::from_str(json).unwrap();
@@ -4028,7 +4048,7 @@ mod tests {
             Some("The headless HTTP daemon at the heart of Origin.")
         );
         assert_eq!(params.entity_id.as_deref(), Some("ent_origin"));
-        assert_eq!(params.domain.as_deref(), Some("origin"));
+        assert_eq!(params.space.as_deref(), Some("origin"));
         assert_eq!(params.source_memory_ids, vec!["mem_1", "mem_2"]);
     }
 
@@ -4046,7 +4066,7 @@ mod tests {
             content: "Body".into(),
             summary: Some("S".into()),
             entity_id: Some("ent_1".into()),
-            domain: Some("origin".into()),
+            space: Some("origin".into()),
             source_memory_ids: vec!["mem_1".into()],
         };
         let req = CreateConceptRequest {
@@ -4054,7 +4074,7 @@ mod tests {
             content: params.content,
             summary: params.summary,
             entity_id: params.entity_id,
-            domain: params.domain,
+            space: params.space,
             source_memory_ids: params.source_memory_ids,
         };
         let json = serde_json::to_value(&req).unwrap();
@@ -4062,7 +4082,7 @@ mod tests {
         assert_eq!(json["content"], "Body");
         assert_eq!(json["summary"], "S");
         assert_eq!(json["entity_id"], "ent_1");
-        assert_eq!(json["domain"], "origin");
+        assert_eq!(json["space"], "origin");
         assert_eq!(json["source_memory_ids"], serde_json::json!(["mem_1"]));
     }
 
@@ -4145,16 +4165,16 @@ mod tests {
         let json = r#"{}"#;
         let params: ListMemoriesParams = serde_json::from_str(json).unwrap();
         assert!(params.memory_type.is_none());
-        assert!(params.domain.is_none());
+        assert!(params.space.is_none());
         assert!(params.limit.is_none());
     }
 
     #[test]
     fn test_list_memories_params_full() {
-        let json = r#"{"memory_type": "decision", "domain": "origin", "limit": 50}"#;
+        let json = r#"{"memory_type": "decision", "space": "origin", "limit": 50}"#;
         let params: ListMemoriesParams = serde_json::from_str(json).unwrap();
         assert_eq!(params.memory_type.as_deref(), Some("decision"));
-        assert_eq!(params.domain.as_deref(), Some("origin"));
+        assert_eq!(params.space.as_deref(), Some("origin"));
         assert_eq!(params.limit, Some(50));
     }
 
@@ -4170,18 +4190,18 @@ mod tests {
     fn test_list_memories_request_body_shape() {
         let params = ListMemoriesParams {
             memory_type: Some("fact".into()),
-            domain: None,
+            space: None,
             limit: Some(10),
         };
         let req = ListMemoriesRequest {
             memory_type: params.memory_type,
-            domain: params.domain,
+            space: params.space,
             limit: params.limit.unwrap_or(100),
             confirmed: None,
         };
         let json = serde_json::to_value(&req).unwrap();
         assert_eq!(json["memory_type"], "fact");
-        assert!(json["domain"].is_null());
+        assert!(json["space"].is_null());
         assert_eq!(json["limit"], 10);
     }
 
@@ -4189,12 +4209,12 @@ mod tests {
     fn test_list_memories_request_default_limit() {
         let params = ListMemoriesParams {
             memory_type: None,
-            domain: None,
+            space: None,
             limit: None,
         };
         let req = ListMemoriesRequest {
             memory_type: params.memory_type,
-            domain: params.domain,
+            space: params.space,
             limit: params.limit.unwrap_or(100),
             confirmed: None,
         };

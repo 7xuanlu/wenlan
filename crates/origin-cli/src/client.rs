@@ -63,7 +63,7 @@ impl OriginClient {
             query,
             limit,
             source_filter: None,
-            domain: None,
+            space: None,
         };
         let resp = self
             .http
@@ -118,7 +118,7 @@ impl OriginClient {
         let req = StoreMemoryRequest {
             content,
             memory_type,
-            domain: None,
+            space: None,
             source_agent: None,
             title: None,
             confidence: None,
@@ -152,7 +152,7 @@ impl OriginClient {
         let url = format!("{}/api/memory/list", self.base_url);
         let req = ListMemoriesRequest {
             memory_type,
-            domain: None,
+            space: None,
             limit: limit.unwrap_or(100),
             confirmed: None,
         };

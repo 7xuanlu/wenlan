@@ -17,7 +17,7 @@ pub struct BriefingMemory {
     pub title: String,
     pub content: String,
     pub memory_type: String,
-    pub domain: Option<String>,
+    pub space: Option<String>,
     pub last_modified: i64,
 }
 
@@ -197,7 +197,7 @@ mod tests {
             title: title.into(),
             content: title.into(),
             memory_type: "fact".into(),
-            domain: Some("engineering".into()),
+            space: Some("engineering".into()),
             last_modified: 1000,
         }
     }

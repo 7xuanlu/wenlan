@@ -23,7 +23,7 @@ conversation — don't make the user type it.
 capture(content="<args, written as a full sentence with WHY>",
         memory_type="<picked from the 6 types>",
         entity="<primary entity name, if any>",
-        domain=<inferred>)
+        space=<inferred>)
 ```
 
 ### `memory_type` — agent picks one of 6
@@ -51,10 +51,12 @@ project, tool, place. Use the exact name. Example: "Alice prefers TDD
 because…" → `entity="Alice"`. If the content has no named anchor,
 omit `entity`.
 
-### `topic` / `domain` inference
+### `topic` / `space` inference
 
 - cwd inside a repo → repo name (e.g. `~/Repos/origin/...` → `"origin"`).
 - Outside any repo → most recent topic from the conversation, or omit.
+- Always pass `space` when scope is known; if uncertain, run `list_spaces`
+  later (post-PR-C) or omit.
 
 ### Multiple entities or relations
 

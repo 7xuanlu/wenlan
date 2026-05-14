@@ -23,8 +23,8 @@ pub struct SearchResult {
     pub semantic_unit: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub memory_type: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub domain: Option<String>,
+    #[serde(default, alias = "domain", skip_serializing_if = "Option::is_none")]
+    pub space: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub source_agent: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -74,7 +74,8 @@ pub struct MemoryItem {
     pub content: String,
     pub summary: Option<String>,
     pub memory_type: Option<String>,
-    pub domain: Option<String>,
+    #[serde(default, alias = "domain")]
+    pub space: Option<String>,
     pub source_agent: Option<String>,
     pub confidence: Option<f32>,
     pub confirmed: bool,
@@ -165,7 +166,7 @@ pub struct TypeBreakdown {
     pub count: u64,
 }
 
-/// Count breakdown by domain.
+/// Count breakdown by space.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DomainInfo {
     pub name: String,
@@ -185,7 +186,8 @@ pub struct IndexedFileInfo {
     #[serde(default)]
     pub processing: bool,
     pub memory_type: Option<String>,
-    pub domain: Option<String>,
+    #[serde(default, alias = "domain")]
+    pub space: Option<String>,
     pub source_agent: Option<String>,
     pub confidence: Option<f32>,
     pub confirmed: Option<bool>,
@@ -230,7 +232,8 @@ pub struct TopMemory {
     pub source_id: String,
     pub content: String,
     pub memory_type: Option<String>,
-    pub domain: Option<String>,
+    #[serde(default, alias = "domain")]
+    pub space: Option<String>,
     pub times_retrieved: u64,
 }
 
@@ -445,7 +448,7 @@ mod indexed_file_info_created_at_test {
             summary: None,
             processing: false,
             memory_type: None,
-            domain: None,
+            space: None,
             source_agent: None,
             confidence: None,
             confirmed: None,
@@ -467,7 +470,7 @@ mod indexed_file_info_created_at_test {
     fn created_at_defaults_to_zero_when_missing() {
         let json = r#"{"source_id":"x","title":"T","source":"memory","url":null,
             "chunk_count":1,"last_modified":1000,"processing":false,
-            "memory_type":null,"domain":null,"source_agent":null,
+            "memory_type":null,"space":null,"source_agent":null,
             "confidence":null,"confirmed":null,"stability":null,"pinned":false}"#;
         let info: IndexedFileInfo = serde_json::from_str(json).unwrap();
         assert_eq!(info.created_at, 0);
@@ -486,10 +489,25 @@ mod indexed_file_info_created_at_test {
     fn content_defaults_to_empty_when_missing() {
         let json = r#"{"source_id":"x","title":"T","source":"memory","url":null,
             "chunk_count":1,"last_modified":1000,"processing":false,
-            "memory_type":null,"domain":null,"source_agent":null,
+            "memory_type":null,"space":null,"source_agent":null,
             "confidence":null,"confirmed":null,"stability":null,"pinned":false}"#;
         let info: IndexedFileInfo = serde_json::from_str(json).unwrap();
         assert_eq!(info.content, "");
+    }
+
+    #[test]
+    fn legacy_domain_alias_deserializes_to_space() {
+        let json = r#"{"source_id":"x","title":"T","source":"memory","url":null,
+            "chunk_count":1,"last_modified":1000,"processing":false,
+            "memory_type":null,"domain":"work","source_agent":null,
+            "confidence":null,"confirmed":null,"stability":null,"pinned":false}"#;
+        let info: IndexedFileInfo =
+            serde_json::from_str(json).expect("legacy domain key should deserialize");
+        assert_eq!(
+            info.space.as_deref(),
+            Some("work"),
+            "alias should map domain -> space"
+        );
     }
 }
 

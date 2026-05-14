@@ -775,7 +775,7 @@ pub fn parse_classify_response(raw: &str) -> Option<crate::classify::Classificat
         .filter(|s| s.parse::<crate::sources::MemoryType>().is_ok())
         .unwrap_or_else(|| "fact".to_string());
 
-    let domain = val
+    let space = val
         .get("domain")
         .and_then(|v| v.as_str())
         .filter(|s| !s.is_empty())
@@ -800,7 +800,7 @@ pub fn parse_classify_response(raw: &str) -> Option<crate::classify::Classificat
 
     Some(crate::classify::ClassificationResult {
         memory_type,
-        domain,
+        space,
         tags,
         quality,
     })
@@ -1400,7 +1400,7 @@ mod tests {
             r#"{"memory_type": "preference", "domain": "technology", "tags": ["dark mode", "ui"]}"#;
         let result = parse_classify_response(raw).unwrap();
         assert_eq!(result.memory_type, "preference");
-        assert_eq!(result.domain, Some("technology".to_string()));
+        assert_eq!(result.space, Some("technology".to_string()));
         assert_eq!(result.tags, vec!["dark mode", "ui"]);
     }
 
@@ -1410,7 +1410,7 @@ mod tests {
             r#"<think>analyzing...</think>{"memory_type": "fact", "domain": "work", "tags": []}"#;
         let result = parse_classify_response(raw).unwrap();
         assert_eq!(result.memory_type, "fact");
-        assert_eq!(result.domain, Some("work".to_string()));
+        assert_eq!(result.space, Some("work".to_string()));
     }
 
     #[test]

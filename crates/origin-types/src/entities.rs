@@ -9,7 +9,8 @@ pub struct Entity {
     pub id: String,
     pub name: String,
     pub entity_type: String,
-    pub domain: Option<String>,
+    #[serde(default, alias = "domain")]
+    pub space: Option<String>,
     pub source_agent: Option<String>,
     pub confidence: Option<f32>,
     pub confirmed: bool,

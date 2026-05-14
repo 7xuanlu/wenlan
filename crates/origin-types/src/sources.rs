@@ -146,9 +146,9 @@ pub struct RawDocument {
     /// Memory category: "preference", "decision", "fact", "goal", "relationship"
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub memory_type: Option<String>,
-    /// Domain context: "work", "personal", "health", or "project:<name>"
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub domain: Option<String>,
+    /// Space context: "work", "personal", "health", or "project:<name>"
+    #[serde(default, alias = "domain", skip_serializing_if = "Option::is_none")]
+    pub space: Option<String>,
     /// Which AI agent stored this memory (e.g. "claude-code", "chatgpt")
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source_agent: Option<String>,
@@ -214,7 +214,7 @@ impl Default for RawDocument {
             last_modified: 0,
             metadata: HashMap::new(),
             memory_type: None,
-            domain: None,
+            space: None,
             source_agent: None,
             confidence: None,
             confirmed: None,

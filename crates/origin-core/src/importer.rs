@@ -415,7 +415,7 @@ pub async fn import_memories_no_llm(
                 ("import_batch".to_string(), batch_id.clone()),
             ]),
             memory_type: None,
-            domain: None,
+            space: None,
             source_agent: Some(source.to_string()),
             confidence: Some(confidence),
             confirmed: None,
@@ -633,7 +633,7 @@ pub async fn import_phase3_store(
 
         let classification = classifications.get(i).cloned().unwrap_or_default();
         let memory_type = &classification.memory_type;
-        let domain = classification.domain.as_deref();
+        let domain = classification.space.as_deref();
         let confidence =
             compute_effective_confidence(None, Some(memory_type), "review", None, confidence_cfg);
 
@@ -653,7 +653,7 @@ pub async fn import_phase3_store(
                 ("import_batch".to_string(), batch_id.clone()),
             ]),
             memory_type: Some(memory_type.to_string()),
-            domain: domain.map(|s| s.to_string()),
+            space: domain.map(|s| s.to_string()),
             source_agent: Some(source.to_string()),
             confidence: Some(confidence),
             confirmed: None,

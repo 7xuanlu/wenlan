@@ -261,7 +261,6 @@ pub async fn handle_store_memory(
     let memory_type_str = validated_memory_type
         .clone()
         .unwrap_or_else(|| "fact".to_string());
-    let classified_domain: Option<String> = None;
     let classified_tags: Vec<String> = Vec::new();
     let classified_quality: Option<String> = None;
 
@@ -346,7 +345,7 @@ pub async fn handle_store_memory(
                         db,
                         &title,
                         validated_memory_type.as_deref(),
-                        req.domain.as_deref(),
+                        req.space.as_deref(),
                         resolved_entity_id.as_deref(),
                         content_embedding,
                         &topic_cfg,
@@ -426,7 +425,7 @@ pub async fn handle_store_memory(
         "hide".to_string()
     };
 
-    let final_domain = req.domain.or(classified_domain);
+    let final_domain = req.space;
     let structured_fields_for_enrichment = req
         .structured_fields
         .as_ref()
@@ -442,7 +441,7 @@ pub async fn handle_store_memory(
         last_modified: chrono::Utc::now().timestamp(),
         metadata: HashMap::new(),
         memory_type: Some(memory_type_str.clone()),
-        domain: final_domain.clone(),
+        space: final_domain.clone(),
         source_agent: req.source_agent,
         confidence: Some(effective_confidence),
         confirmed,
@@ -798,7 +797,7 @@ pub async fn handle_store_memory(
                                 };
                             }
                             if final_domain.is_none() {
-                                final_domain = c.domain;
+                                final_domain = c.space;
                             }
                             final_quality = c.quality;
                             classified_tags_async = c.tags;
@@ -1040,7 +1039,7 @@ pub async fn handle_search_memory(
             &req.query,
             req.limit,
             req.memory_type.as_deref(),
-            req.domain.as_deref(),
+            req.space.as_deref(),
             req.source_agent.as_deref(),
             None,
             None,
@@ -1118,7 +1117,7 @@ pub async fn handle_list_memories(
         .list_filtered_confirmed(
             Some("memory"),
             req.memory_type.as_deref(),
-            req.domain.as_deref(),
+            req.space.as_deref(),
             req.confirmed,
             req.limit,
         )
@@ -1400,8 +1399,8 @@ fn agent_to_response(a: origin_core::db::AgentConnection) -> AgentResponse {
 pub struct ListEntitiesRequest {
     #[serde(default)]
     pub entity_type: Option<String>,
-    #[serde(default)]
-    pub domain: Option<String>,
+    #[serde(default, alias = "domain")]
+    pub space: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -1416,7 +1415,7 @@ pub async fn handle_list_entities(
     let s = state.read().await;
     let db = s.db.as_ref().ok_or(ServerError::DbNotInitialized)?;
     let entities = db
-        .list_entities(req.entity_type.as_deref(), req.domain.as_deref())
+        .list_entities(req.entity_type.as_deref(), req.space.as_deref())
         .await
         .map_err(|e| ServerError::SearchFailed(e.to_string()))?;
     Ok(Json(ListEntitiesResponse { entities }))
@@ -1787,8 +1786,8 @@ pub async fn handle_delete_space(
 pub struct NurtureCardsQuery {
     #[serde(default = "default_nurture_limit")]
     pub limit: usize,
-    #[serde(default)]
-    pub domain: Option<String>,
+    #[serde(default, alias = "domain")]
+    pub space: Option<String>,
 }
 
 fn default_nurture_limit() -> usize {
@@ -1807,7 +1806,7 @@ pub async fn handle_get_nurture_cards(
     let s = state.read().await;
     let db = s.db.as_ref().ok_or(ServerError::DbNotInitialized)?;
     let cards = db
-        .get_nurture_cards(query.limit, query.domain.as_deref())
+        .get_nurture_cards(query.limit, query.space.as_deref())
         .await
         .map_err(|e| ServerError::Internal(e.to_string()))?;
     Ok(Json(NurtureCardsResponse { cards }))
@@ -1837,7 +1836,10 @@ pub async fn handle_list_pages(
     axum::extract::Query(params): axum::extract::Query<HashMap<String, String>>,
 ) -> Result<Json<serde_json::Value>, ServerError> {
     let status = params.get("status").map(|s| s.as_str()).unwrap_or("active");
-    let domain = params.get("domain").map(|s| s.as_str());
+    let space = params
+        .get("space")
+        .or_else(|| params.get("domain"))
+        .map(|s| s.as_str());
     let limit: usize = params
         .get("limit")
         .and_then(|l| l.parse().ok())
@@ -1850,7 +1852,7 @@ pub async fn handle_list_pages(
     let s = state.read().await;
     let db = s.db.as_ref().ok_or(ServerError::DbNotInitialized)?;
     let pages = db
-        .list_pages_by_domain(status, domain, limit, offset)
+        .list_pages_by_space(status, space, limit, offset)
         .await
         .map_err(|e| ServerError::SearchFailed(e.to_string()))?;
     Ok(Json(serde_json::json!({ "pages": pages })))
@@ -2375,7 +2377,7 @@ pub async fn handle_set_document_space(
         let s = state.read().await;
         s.db.clone().ok_or(ServerError::DbNotInitialized)?
     };
-    db.update_domain(&source_id, &req.space_name)
+    db.update_memory_space(&source_id, &req.space_name)
         .await
         .map_err(|e| ServerError::Internal(e.to_string()))?;
     Ok(Json(origin_types::responses::SuccessResponse { ok: true }))
@@ -2594,8 +2596,8 @@ pub async fn handle_update_memory(
             .await
             .map_err(|e| ServerError::Internal(e.to_string()))?;
     }
-    if let Some(domain) = &req.domain {
-        db.update_domain(&id, domain)
+    if let Some(space) = &req.space {
+        db.update_memory_space(&id, space)
             .await
             .map_err(|e| ServerError::Internal(e.to_string()))?;
     }
@@ -2690,13 +2692,16 @@ pub async fn handle_list_decisions(
         let s = state.read().await;
         s.db.clone().ok_or(ServerError::DbNotInitialized)?
     };
-    let domain = params.get("domain").cloned();
+    let space = params
+        .get("space")
+        .or_else(|| params.get("domain"))
+        .cloned();
     let limit: usize = params
         .get("limit")
         .and_then(|v| v.parse().ok())
         .unwrap_or(100);
     let decisions = db
-        .list_memories(domain.as_deref(), Some("decision"), None, None, limit)
+        .list_memories(space.as_deref(), Some("decision"), None, None, limit)
         .await
         .map_err(|e| ServerError::Internal(e.to_string()))?;
     Ok(Json(origin_types::responses::DecisionsResponse {
@@ -2705,6 +2710,7 @@ pub async fn handle_list_decisions(
 }
 
 /// GET /api/decisions/domains
+/// (Path kept as "domains" for back-compat; will rename to "spaces" in PR-A+1.)
 pub async fn handle_list_decision_domains(
     State(state): State<Arc<RwLock<ServerState>>>,
 ) -> Result<Json<origin_types::responses::DecisionDomainsResponse>, ServerError> {
@@ -2713,7 +2719,7 @@ pub async fn handle_list_decision_domains(
         s.db.clone().ok_or(ServerError::DbNotInitialized)?
     };
     let domains = db
-        .list_decision_domains()
+        .list_decision_spaces()
         .await
         .map_err(|e| ServerError::Internal(e.to_string()))?;
     Ok(Json(origin_types::responses::DecisionDomainsResponse {
@@ -3232,7 +3238,7 @@ pub async fn handle_refresh_page(
         summary: refreshed_summary.clone(),
         content: req.content.clone(),
         entity_id: existing.entity_id.clone(),
-        domain: existing.domain.clone(),
+        space: existing.space.clone(),
         source_memory_ids: req.source_memory_ids.clone(),
         version: existing.version + 1,
         status: existing.status.clone(),

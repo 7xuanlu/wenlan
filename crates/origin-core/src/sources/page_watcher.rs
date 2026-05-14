@@ -212,8 +212,8 @@ mod tests {
 
     fn write_page_md(dir: &std::path::Path, page: &Page, body_override: Option<&str>) {
         let body = body_override.unwrap_or(&page.content);
-        let domain_line = match &page.domain {
-            Some(d) => format!("domain: {d}\n"),
+        let domain_line = match &page.space {
+            Some(d) => format!("space: {d}\n"),
             None => String::new(),
         };
         let content = format!(
@@ -244,7 +244,7 @@ mod tests {
             summary: None,
             content: content.to_string(),
             entity_id: None,
-            domain: None,
+            space: None,
             source_memory_ids: vec!["mem_seed".to_string()],
             version: 1,
             status: "active".to_string(),

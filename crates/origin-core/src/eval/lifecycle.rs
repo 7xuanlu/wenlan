@@ -571,7 +571,7 @@ async fn get_merged_ids(db: &MemoryDB) -> Result<HashSet<String>, OriginError> {
 /// Internal case representation for lifecycle eval.
 struct LifecycleCase {
     query: String,
-    domain: Option<String>,
+    space: Option<String>,
     /// Owned grades: source_id -> relevance grade
     grades: HashMap<String, u8>,
     /// Owned relevant set: source_ids with grade >= 2
@@ -605,7 +605,7 @@ async fn run_lifecycle_phases(
     #[allow(clippy::type_complexity)]
     let build_queries = |cases: &[LifecycleCase]| -> Vec<(String, HashMap<String, u8>, HashSet<String>, Option<String>)> {
         cases.iter().map(|c| {
-            (c.query.clone(), c.grades.clone(), c.relevant.clone(), c.domain.clone())
+            (c.query.clone(), c.grades.clone(), c.relevant.clone(), c.space.clone())
         }).collect()
     };
 
@@ -865,7 +865,7 @@ pub async fn run_lifecycle_fixture(
                 .store_entity(
                     &entity.name,
                     &entity.entity_type,
-                    entity.domain.as_deref(),
+                    entity.space.as_deref(),
                     Some("eval"),
                     None,
                 )
@@ -907,14 +907,14 @@ pub async fn run_lifecycle_fixture(
                     s.id.clone(),
                     s.content.clone(),
                     Some(s.memory_type.clone()),
-                    s.domain.clone(),
+                    s.space.clone(),
                 )
             })
             .collect();
 
         let mut lifecycle_cases = vec![LifecycleCase {
             query: case.query.clone(),
-            domain: case.domain.clone(),
+            space: case.space.clone(),
             grades,
             relevant,
             seeds_meta,
@@ -1023,7 +1023,7 @@ pub async fn run_lifecycle_locomo(
                 source: "memory".to_string(),
                 title: format!("{} session {}", mem.speaker, mem.session_num),
                 memory_type: Some("fact".to_string()),
-                domain: Some("conversation".to_string()),
+                space: Some("conversation".to_string()),
                 last_modified: chrono::Utc::now().timestamp(),
                 ..Default::default()
             })
@@ -1081,7 +1081,7 @@ pub async fn run_lifecycle_locomo(
 
             lifecycle_cases.push(LifecycleCase {
                 query: qa.question.clone(),
-                domain: None, // match run_locomo_eval — no domain filter on search
+                space: None, // match run_locomo_eval — no domain filter on search
                 grades,
                 relevant: relevant_ids,
                 seeds_meta: seeds_meta.clone(),
@@ -1163,7 +1163,7 @@ pub async fn run_lifecycle_longmemeval(
                 source: "memory".to_string(),
                 title: format!("{} session {}", mem.role, mem.session_idx),
                 memory_type: Some(memory_type.to_string()),
-                domain: Some("conversation".to_string()),
+                space: Some("conversation".to_string()),
                 last_modified: chrono::Utc::now().timestamp(),
                 ..Default::default()
             })
@@ -1198,7 +1198,7 @@ pub async fn run_lifecycle_longmemeval(
 
         let mut lifecycle_cases = vec![LifecycleCase {
             query: sample.question.clone(),
-            domain: None, // match run_longmemeval_eval — no domain filter on search
+            space: None, // match run_longmemeval_eval — no domain filter on search
             grades,
             relevant,
             seeds_meta,
