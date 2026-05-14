@@ -8905,27 +8905,59 @@ impl MemoryDB {
         }
     }
 
-    /// Hard-delete the losing relation. Idempotent: DELETE on missing row is a no-op.
-    /// `winner_id` is accepted for activity-log payload at the capability fn layer;
-    /// existence not verified here (allows recovery if winner was also deleted out-of-band).
+    /// Hard-delete the losing relation and return a JSON snapshot of the row
+    /// for the caller to record in activity-log payload (soft-archive via log,
+    /// not via schema column). `Ok(None)` when loser_id does not exist.
+    /// `winner_id` is accepted for activity-log payload at the capability fn
+    /// layer; existence not verified here.
     pub async fn supersede_relation(
         &self,
         loser_id: &str,
         winner_id: &str,
-    ) -> Result<(), OriginError> {
+    ) -> Result<Option<serde_json::Value>, OriginError> {
         if loser_id == winner_id {
             return Err(OriginError::Validation(
                 "supersede_relation: loser and winner are the same id".into(),
             ));
         }
         let conn = self.conn.lock().await;
+
+        let mut rows = conn
+            .query(
+                "SELECT id, from_entity, to_entity, relation_type, source_agent, \
+                        confidence, explanation, source_memory_id, created_at \
+                 FROM relations WHERE id = ?1",
+                libsql::params![loser_id],
+            )
+            .await
+            .map_err(|e| OriginError::VectorDb(format!("supersede_relation select: {e}")))?;
+
+        let snapshot = rows
+            .next()
+            .await
+            .map_err(|e| OriginError::VectorDb(format!("supersede_relation row: {e}")))?
+            .map(|row| {
+                serde_json::json!({
+                    "id":               row.get::<String>(0).ok(),
+                    "from_entity":      row.get::<String>(1).ok(),
+                    "to_entity":        row.get::<String>(2).ok(),
+                    "relation_type":    row.get::<String>(3).ok(),
+                    "source_agent":     row.get::<String>(4).ok(),
+                    "confidence":       row.get::<f64>(5).ok(),
+                    "explanation":      row.get::<String>(6).ok(),
+                    "source_memory_id": row.get::<String>(7).ok(),
+                    "created_at":       row.get::<i64>(8).ok(),
+                })
+            });
+        drop(rows);
+
         conn.execute(
             "DELETE FROM relations WHERE id = ?1",
             libsql::params![loser_id],
         )
         .await
         .map_err(|e| OriginError::VectorDb(format!("supersede_relation: {e}")))?;
-        Ok(())
+        Ok(snapshot)
     }
 
     /// Set `pending_revision = 1` on all chunks matching `source_id`. Idempotent
@@ -28823,6 +28855,61 @@ pub(crate) mod tests {
             matches!(err, crate::error::OriginError::Validation(_)),
             "expected Validation, got {err:?}"
         );
+    }
+
+    #[tokio::test]
+    async fn supersede_relation_returns_snapshot_of_loser() {
+        let (db, _tmp) = test_db().await;
+        let from = db.create_entity("Alice", "person", None).await.unwrap();
+        let to = db.create_entity("Carol", "person", None).await.unwrap();
+        let loser = db
+            .create_relation(
+                &from,
+                &to,
+                "knows",
+                Some("test-agent"),
+                Some(0.5),
+                Some("met at conference"),
+                Some("mem_abc"),
+            )
+            .await
+            .unwrap();
+        let winner = db
+            .create_relation(&from, &to, "manages", None, Some(0.9), None, None)
+            .await
+            .unwrap();
+
+        let snapshot = db
+            .supersede_relation(&loser, &winner)
+            .await
+            .unwrap()
+            .expect("snapshot present when loser existed");
+
+        assert_eq!(snapshot["id"], serde_json::json!(loser));
+        assert_eq!(snapshot["from_entity"], serde_json::json!(from));
+        assert_eq!(snapshot["to_entity"], serde_json::json!(to));
+        assert_eq!(snapshot["relation_type"], serde_json::json!("knows"));
+        assert_eq!(snapshot["source_agent"], serde_json::json!("test-agent"));
+        assert_eq!(snapshot["confidence"], serde_json::json!(0.5));
+        assert_eq!(
+            snapshot["explanation"],
+            serde_json::json!("met at conference")
+        );
+        assert_eq!(snapshot["source_memory_id"], serde_json::json!("mem_abc"));
+        assert!(
+            snapshot["created_at"].is_i64(),
+            "created_at should be present"
+        );
+    }
+
+    #[tokio::test]
+    async fn supersede_relation_returns_none_when_loser_missing() {
+        let (db, _tmp) = test_db().await;
+        let snapshot = db
+            .supersede_relation("rel_nonexistent", "rel_winner")
+            .await
+            .unwrap();
+        assert!(snapshot.is_none(), "no snapshot when loser did not exist");
     }
 
     // ==================== flag_memory_for_revision ====================
