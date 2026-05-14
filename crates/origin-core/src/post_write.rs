@@ -248,38 +248,59 @@ pub async fn create_relation(
     // Post-write enrichment
     let mut warnings: Vec<String> = Vec::new();
 
-    // Conflict check: existing relation between same (from, to) with different type
+    // Conflict check: existing relation between same (from, to) with different
+    // type → auto-supersede (last-write-wins). The /refinery skill no longer
+    // surfaces queue proposals to users (PR #109), so enqueuing for human review
+    // would silently accumulate forever. The same outcome the user would have
+    // hand-applied via `accept_refinement(relation_conflict)` runs immediately
+    // here. Activity log records the daemon's decision for power-user audit
+    // (queryable via list_agent_activity).
     if let Ok(existing) = db
         .list_relations_between(&req.from_entity, &req.to_entity)
         .await
     {
         for (existing_id, existing_type) in &existing {
             if existing_id != &id && existing_type != rt {
-                let id_short: String = id.chars().take(8).collect();
-                let exid_short: String = existing_id.chars().take(8).collect();
-                let proposal_id = format!("rel_conflict_{id_short}_{exid_short}");
-                let payload = serde_json::json!({
-                    "existing_id": existing_id,
-                    "new_id": id,
-                    "from": req.from_entity,
-                    "to": req.to_entity,
-                    "old_type": existing_type,
-                    "new_type": rt,
-                })
-                .to_string();
-                let _ = db
-                    .insert_refinement_proposal(
-                        &proposal_id,
-                        "relation_conflict",
-                        &[id.clone(), existing_id.clone()],
-                        Some(&payload),
-                        0.7,
-                    )
-                    .await;
-                warnings.push(format!(
-                    "conflicting relation exists ({}-{}-{}); enqueued for review",
-                    req.from_entity, existing_type, req.to_entity
-                ));
+                match db.supersede_relation(existing_id, &id).await {
+                    Ok(()) => {
+                        warnings.push(format!(
+                            "auto-superseded existing relation ({}-{}-{}); newer relation now active",
+                            req.from_entity, existing_type, req.to_entity
+                        ));
+                        let payload = serde_json::json!({
+                            "existing_id": existing_id,
+                            "new_id": id,
+                            "from": req.from_entity,
+                            "to": req.to_entity,
+                            "old_type": existing_type,
+                            "new_type": rt,
+                        })
+                        .to_string();
+                        if let Err(e) = db
+                            .log_agent_activity(
+                                agent,
+                                "relation_supersede_auto",
+                                &[id.clone(), existing_id.clone()],
+                                None,
+                                &payload,
+                            )
+                            .await
+                        {
+                            log::warn!("[create_relation] auto-supersede activity log failed: {e}");
+                        }
+                    }
+                    Err(e) => {
+                        log::warn!(
+                            "[create_relation] auto-supersede of {} → {} failed: {e}",
+                            existing_id,
+                            id
+                        );
+                        warnings.push(format!(
+                            "conflicting relation exists ({}-{}-{}); auto-supersede failed",
+                            req.from_entity, existing_type, req.to_entity
+                        ));
+                    }
+                }
             }
         }
     }
@@ -1040,6 +1061,181 @@ mod tests {
         assert!(
             second.warnings.is_empty(),
             "idempotent resolve should have no warnings"
+        );
+    }
+
+    #[tokio::test]
+    async fn create_relation_conflict_auto_supersedes_existing() {
+        let (db, _dir) = test_db().await;
+        let alice = db
+            .store_entity("Alice", "person", None, Some("test"), None)
+            .await
+            .unwrap();
+        let bob = db
+            .store_entity("Bob", "person", None, Some("test"), None)
+            .await
+            .unwrap();
+
+        // Create existing relation: A-knows-B
+        let req_knows = CreateRelationRequest {
+            from_entity: alice.clone(),
+            to_entity: bob.clone(),
+            relation_type: "knows".to_string(),
+            source_agent: Some("test".to_string()),
+            confidence: None,
+            explanation: None,
+            source_memory_id: None,
+        };
+        let knows_result = create_relation(&db, req_knows, "test-agent").await.unwrap();
+        let knows_id = knows_result.id.clone();
+
+        // Create conflicting relation: A-likes-B (different type, same pair)
+        let req_likes = CreateRelationRequest {
+            from_entity: alice.clone(),
+            to_entity: bob.clone(),
+            relation_type: "likes".to_string(),
+            source_agent: Some("test".to_string()),
+            confidence: None,
+            explanation: None,
+            source_memory_id: None,
+        };
+        let likes_result = create_relation(&db, req_likes, "test-agent").await.unwrap();
+
+        // Warning should indicate auto-supersede
+        assert!(
+            likes_result
+                .warnings
+                .iter()
+                .any(|w| w.contains("auto-superseded existing relation")),
+            "expected auto-supersede warning, got: {:?}",
+            likes_result.warnings
+        );
+
+        // Activity log should contain relation_supersede_auto entry
+        let activity = db.list_agent_activity(50, None, None).await.unwrap();
+        assert!(
+            activity
+                .iter()
+                .any(|a| a.action == "relation_supersede_auto"),
+            "expected relation_supersede_auto in activity log"
+        );
+
+        // The old knows relation should be gone (superseded / deleted)
+        let active = db.list_relations_between(&alice, &bob).await.unwrap();
+        let active_ids: Vec<&str> = active.iter().map(|(id, _)| id.as_str()).collect();
+        assert!(
+            !active_ids.contains(&knows_id.as_str()),
+            "old knows relation should be archived/deleted"
+        );
+        assert!(
+            active_ids.contains(&likes_result.id.as_str()),
+            "new likes relation should be active"
+        );
+
+        // No relation_conflict proposal should have been inserted
+        let pending = db.get_pending_refinements().await.unwrap();
+        assert!(
+            !pending.iter().any(|p| p.action == "relation_conflict"),
+            "no relation_conflict proposal should be queued"
+        );
+    }
+
+    #[tokio::test]
+    async fn create_relation_conflict_no_op_when_existing_same_type() {
+        let (db, _dir) = test_db().await;
+        let alice = db
+            .store_entity("Alice", "person", None, Some("test"), None)
+            .await
+            .unwrap();
+        let bob = db
+            .store_entity("Bob", "person", None, Some("test"), None)
+            .await
+            .unwrap();
+
+        // Create A-knows-B
+        let req1 = CreateRelationRequest {
+            from_entity: alice.clone(),
+            to_entity: bob.clone(),
+            relation_type: "knows".to_string(),
+            source_agent: Some("test".to_string()),
+            confidence: None,
+            explanation: None,
+            source_memory_id: None,
+        };
+        let first = create_relation(&db, req1, "test-agent").await.unwrap();
+
+        // Create A-knows-B again (same type → idempotent early return)
+        let req2 = CreateRelationRequest {
+            from_entity: alice.clone(),
+            to_entity: bob.clone(),
+            relation_type: "knows".to_string(),
+            source_agent: Some("test".to_string()),
+            confidence: None,
+            explanation: None,
+            source_memory_id: None,
+        };
+        let second = create_relation(&db, req2, "test-agent").await.unwrap();
+
+        // Should resolve to same id, no supersede warning
+        assert_eq!(first.id, second.id, "idempotent call should return same id");
+        assert!(
+            !second
+                .warnings
+                .iter()
+                .any(|w| w.contains("auto-superseded")),
+            "no supersede warning expected for same-type idempotent call"
+        );
+
+        // No relation_supersede_auto activity
+        let activity = db.list_agent_activity(50, None, None).await.unwrap();
+        assert!(
+            !activity
+                .iter()
+                .any(|a| a.action == "relation_supersede_auto"),
+            "no relation_supersede_auto activity expected for same-type call"
+        );
+    }
+
+    #[tokio::test]
+    async fn create_relation_no_conflict_when_no_existing_relation() {
+        let (db, _dir) = test_db().await;
+        let alice = db
+            .store_entity("Alice", "person", None, Some("test"), None)
+            .await
+            .unwrap();
+        let bob = db
+            .store_entity("Bob", "person", None, Some("test"), None)
+            .await
+            .unwrap();
+
+        // First relation — no prior relation exists
+        let req = CreateRelationRequest {
+            from_entity: alice.clone(),
+            to_entity: bob.clone(),
+            relation_type: "likes".to_string(),
+            source_agent: Some("test".to_string()),
+            confidence: None,
+            explanation: None,
+            source_memory_id: None,
+        };
+        let result = create_relation(&db, req, "test-agent").await.unwrap();
+
+        assert!(!result.id.is_empty());
+        assert!(
+            !result
+                .warnings
+                .iter()
+                .any(|w| w.contains("auto-superseded") || w.contains("supersede")),
+            "no supersede warning expected when no prior relation exists"
+        );
+
+        // No relation_supersede_auto activity
+        let activity = db.list_agent_activity(50, None, None).await.unwrap();
+        assert!(
+            !activity
+                .iter()
+                .any(|a| a.action == "relation_supersede_auto"),
+            "no relation_supersede_auto activity expected on first relation create"
         );
     }
 
