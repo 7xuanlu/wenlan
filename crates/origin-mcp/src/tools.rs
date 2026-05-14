@@ -966,6 +966,13 @@ impl OriginMcpServer {
         &self,
         params: ConfirmEntityParams,
     ) -> Result<CallToolResult, McpError> {
+        if self.transport == TransportMode::Http {
+            return Ok(CallToolResult::error(vec![Content::text(
+                "Confirm operations are not available over remote connections. \
+                 Use local MCP on the machine running Origin to confirm entities."
+                    .to_string(),
+            )]));
+        }
         let req = origin_types::requests::ConfirmEntityRequest {
             confirmed: params.confirmed,
         };
@@ -989,6 +996,13 @@ impl OriginMcpServer {
         &self,
         params: UpdateObservationParams,
     ) -> Result<CallToolResult, McpError> {
+        if self.transport == TransportMode::Http {
+            return Ok(CallToolResult::error(vec![Content::text(
+                "Update operations are not available over remote connections. \
+                 Use local MCP on the machine running Origin to update observations."
+                    .to_string(),
+            )]));
+        }
         let req = origin_types::requests::UpdateObservationRequest {
             content: params.content,
         };
@@ -1007,6 +1021,13 @@ impl OriginMcpServer {
         &self,
         params: ConfirmObservationParams,
     ) -> Result<CallToolResult, McpError> {
+        if self.transport == TransportMode::Http {
+            return Ok(CallToolResult::error(vec![Content::text(
+                "Confirm operations are not available over remote connections. \
+                 Use local MCP on the machine running Origin to confirm observations."
+                    .to_string(),
+            )]));
+        }
         let req = origin_types::requests::ConfirmObservationRequest {
             confirmed: params.confirmed,
         };
@@ -1075,6 +1096,13 @@ impl OriginMcpServer {
         &self,
         params: UpdatePageParams,
     ) -> Result<CallToolResult, McpError> {
+        if self.transport == TransportMode::Http {
+            return Ok(CallToolResult::error(vec![Content::text(
+                "Update operations are not available over remote connections. \
+                 Use local MCP on the machine running Origin to update pages."
+                    .to_string(),
+            )]));
+        }
         let req = origin_types::requests::RefreshPageRequest {
             content: params.content,
             source_memory_ids: params.source_memory_ids,
@@ -1286,6 +1314,13 @@ impl OriginMcpServer {
         &self,
         params: RejectRefinementParams,
     ) -> Result<CallToolResult, McpError> {
+        if self.transport == TransportMode::Http {
+            return Ok(CallToolResult::error(vec![Content::text(
+                "Refinement operations are not available over remote connections. \
+                 Use local MCP on the machine running Origin to reject refinements."
+                    .to_string(),
+            )]));
+        }
         let path = format!(
             "/api/refinery/queue/{}/reject",
             url_encode_simple(&params.id)
@@ -1306,6 +1341,13 @@ impl OriginMcpServer {
         &self,
         params: AcceptRefinementParams,
     ) -> Result<CallToolResult, McpError> {
+        if self.transport == TransportMode::Http {
+            return Ok(CallToolResult::error(vec![Content::text(
+                "Refinement operations are not available over remote connections. \
+                 Use local MCP on the machine running Origin to accept refinements."
+                    .to_string(),
+            )]));
+        }
         let path = format!(
             "/api/refinery/queue/{}/accept",
             url_encode_simple(&params.id)
@@ -1376,6 +1418,13 @@ impl OriginMcpServer {
         &self,
         req: AcceptRevisionRequest,
     ) -> Result<CallToolResult, McpError> {
+        if self.transport == TransportMode::Http {
+            return Ok(CallToolResult::error(vec![Content::text(
+                "Revision operations are not available over remote connections. \
+                 Use local MCP on the machine running Origin to accept memory revisions."
+                    .to_string(),
+            )]));
+        }
         let path = format!("/api/memory/revision/{}/accept", req.target_source_id);
         let response = match self
             .client
@@ -1394,6 +1443,13 @@ impl OriginMcpServer {
         &self,
         req: DismissRevisionRequest,
     ) -> Result<CallToolResult, McpError> {
+        if self.transport == TransportMode::Http {
+            return Ok(CallToolResult::error(vec![Content::text(
+                "Revision operations are not available over remote connections. \
+                 Use local MCP on the machine running Origin to dismiss memory revisions."
+                    .to_string(),
+            )]));
+        }
         let path = format!("/api/memory/revision/{}/dismiss", req.target_source_id);
         let response = match self
             .client
@@ -1412,6 +1468,13 @@ impl OriginMcpServer {
         &self,
         req: DismissContradictionRequest,
     ) -> Result<CallToolResult, McpError> {
+        if self.transport == TransportMode::Http {
+            return Ok(CallToolResult::error(vec![Content::text(
+                "Contradiction operations are not available over remote connections. \
+                 Use local MCP on the machine running Origin to dismiss contradictions."
+                    .to_string(),
+            )]));
+        }
         let path = format!("/api/memory/contradiction/{}/dismiss", req.source_id);
         let response = match self
             .client
@@ -1737,7 +1800,7 @@ impl OriginMcpServer {
     }
 
     #[tool(
-        description = "Confirm (or unconfirm) an entity in the knowledge graph — flips its stability flag from tentative to durable. Call when the user explicitly affirms or revokes an extracted entity (\"yes that's right\", \"no that's wrong\"), or when you have high confidence after seeing the entity reused across multiple contexts. Unconfirmed entities may be pruned by background refinement; confirmed ones persist. Defaults confirmed=true if omitted. Do NOT call for every extracted entity — most should stay unconfirmed and let background refinement decide.",
+        description = "Confirm (or unconfirm) an entity in the knowledge graph — flips its stability flag from tentative to durable. Call when the user explicitly affirms or revokes an extracted entity (\"yes that's right\", \"no that's wrong\"), or when you have high confidence after seeing the entity reused across multiple contexts. Unconfirmed entities may be pruned by background refinement; confirmed ones persist. Defaults confirmed=true if omitted. Do NOT call for every extracted entity — most should stay unconfirmed and let background refinement decide. Not available over remote HTTP MCP transport (local stdio only).",
         annotations(
             title = "Confirm entity",
             read_only_hint = false,
@@ -1754,7 +1817,7 @@ impl OriginMcpServer {
     }
 
     #[tool(
-        description = "Update the content of an existing observation. Use when the user corrects a fact (\"actually X not Y\") or when you find that a prior observation needs refinement based on new context. Only the content text changes — the entity attachment stays the same. To move an observation to a different entity, delete and recreate. Prefer this over delete+recreate when the entity attachment is correct, so history is preserved.",
+        description = "Update the content of an existing observation. Use when the user corrects a fact (\"actually X not Y\") or when you find that a prior observation needs refinement based on new context. Only the content text changes — the entity attachment stays the same. To move an observation to a different entity, delete and recreate. Prefer this over delete+recreate when the entity attachment is correct, so history is preserved. Not available over remote HTTP MCP transport (local stdio only).",
         annotations(
             title = "Update observation",
             read_only_hint = false,
@@ -1771,7 +1834,7 @@ impl OriginMcpServer {
     }
 
     #[tool(
-        description = "Confirm (or unconfirm) an observation — flips its stability flag from tentative to durable. Call when the user explicitly affirms a specific fact attached to an entity (\"yes Alice does prefer tabs\"), or when you observe the same fact restated across multiple sources. Unconfirmed observations may be pruned by background refinement; confirmed ones persist. Defaults confirmed=true if omitted. Do NOT call for every observation you create — let background refinement promote them when warranted.",
+        description = "Confirm (or unconfirm) an observation — flips its stability flag from tentative to durable. Call when the user explicitly affirms a specific fact attached to an entity (\"yes Alice does prefer tabs\"), or when you observe the same fact restated across multiple sources. Unconfirmed observations may be pruned by background refinement; confirmed ones persist. Defaults confirmed=true if omitted. Do NOT call for every observation you create — let background refinement promote them when warranted. Not available over remote HTTP MCP transport (local stdio only).",
         annotations(
             title = "Confirm observation",
             read_only_hint = false,
@@ -1822,7 +1885,7 @@ impl OriginMcpServer {
     }
 
     #[tool(
-        description = "Refresh a stale page in place. Replaces content + source_memory_ids + optional summary, clears the daemon's stale_reason in the same call. Preserves page_id, created_at, and bumps version monotonically — external [[wikilinks]] keep working. Use this on entries in the /distill response's `stale_pages` block instead of delete_page + create_page (which churned ids and lost version history).",
+        description = "Refresh a stale page in place. Replaces content + source_memory_ids + optional summary, clears the daemon's stale_reason in the same call. Preserves page_id, created_at, and bumps version monotonically — external [[wikilinks]] keep working. Use this on entries in the /distill response's `stale_pages` block instead of delete_page + create_page (which churned ids and lost version history). Not available over remote HTTP MCP transport (local stdio only).",
         annotations(
             title = "Refresh page",
             read_only_hint = false,
@@ -1989,7 +2052,7 @@ impl OriginMcpServer {
     }
 
     #[tool(
-        description = "Reject (dismiss) a refinement proposal by id. Use when reviewing the refinery queue and the user decides a proposal is wrong or noise. Marks the queue row dismissed and logs the agent activity. Idempotent: already-dismissed proposals return 422. Note: there is no accept verb yet; keeping a proposal is a no-op (it stays queued).",
+        description = "Reject (dismiss) a refinement proposal by id. Use when reviewing the refinery queue and the user decides a proposal is wrong or noise. Marks the queue row dismissed and logs the agent activity. Idempotent: already-dismissed proposals return 422. Note: there is no accept verb yet; keeping a proposal is a no-op (it stays queued). Not available over remote HTTP MCP transport (local stdio only).",
         annotations(
             title = "Reject refinement",
             read_only_hint = false,
@@ -2010,7 +2073,8 @@ impl OriginMcpServer {
             entity_merge: existing entity wins as canonical. \
             relation_conflict: new relation supersedes. \
             detect_contradiction: previously-stored memory flagged for revision. \
-            Returns 422 for suggest_entity (no producer) and dedup_merge (deprecated).",
+            Returns 422 for suggest_entity (no producer) and dedup_merge (deprecated). \
+            Not available over remote HTTP MCP transport (local stdio only).",
         annotations(
             title = "Accept refinement",
             read_only_hint = false,
@@ -2068,7 +2132,7 @@ impl OriginMcpServer {
         description = "Accept a pending memory revision. Replaces the target memory's content \
                        with the proposed revision content and removes the revision row from the \
                        pending list. Returns the consumed revision id. Returns an error if no \
-                       pending revision exists for that target.",
+                       pending revision exists for that target. Not available over remote HTTP MCP transport (local stdio only).",
         annotations(
             title = "Accept revision",
             read_only_hint = false,
@@ -2087,7 +2151,7 @@ impl OriginMcpServer {
     #[tool(
         description = "Dismiss a pending memory revision. Deletes the revision row; the original \
                        memory is unchanged. Returns an error if no pending revision exists for \
-                       that target.",
+                       that target. Not available over remote HTTP MCP transport (local stdio only).",
         annotations(
             title = "Dismiss revision",
             read_only_hint = false,
@@ -2105,7 +2169,7 @@ impl OriginMcpServer {
 
     #[tool(
         description = "Dismiss all awaiting-review contradiction flags for a memory. Idempotent. \
-                       Returns wrote:true even if no rows matched.",
+                       Returns wrote:true even if no rows matched. Not available over remote HTTP MCP transport (local stdio only).",
         annotations(
             title = "Dismiss contradiction",
             read_only_hint = false,
@@ -3043,6 +3107,283 @@ mod tests {
         // (tool-level failure), not McpError (protocol-level).
         let server = make_server(TransportMode::Stdio, "agent", None);
         let result = server.forget_impl("mem_123").await.unwrap();
+        assert!(
+            result.is_error.unwrap_or(false),
+            "should fail with connection error, not transport block"
+        );
+    }
+
+    // ===== Transport security: revision wrappers block on HTTP =====
+
+    #[tokio::test]
+    async fn test_accept_revision_blocked_on_http_transport() {
+        let server = make_server(TransportMode::Http, "agent", None);
+        let req = AcceptRevisionRequest {
+            target_source_id: "mem_x".into(),
+        };
+        let result = server.accept_revision_impl(req).await.unwrap();
+        let content = &result.content[0];
+        match content.raw {
+            rmcp::model::RawContent::Text(ref tc) => {
+                assert!(tc.text.contains("not available over remote connections"));
+            }
+            _ => panic!("expected text content"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_accept_revision_allowed_on_stdio_transport() {
+        let server = make_server(TransportMode::Stdio, "agent", None);
+        let req = AcceptRevisionRequest {
+            target_source_id: "mem_x".into(),
+        };
+        let result = server.accept_revision_impl(req).await.unwrap();
+        assert!(
+            result.is_error.unwrap_or(false),
+            "should fail with connection error, not transport block"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_dismiss_revision_blocked_on_http_transport() {
+        let server = make_server(TransportMode::Http, "agent", None);
+        let req = DismissRevisionRequest {
+            target_source_id: "mem_x".into(),
+        };
+        let result = server.dismiss_revision_impl(req).await.unwrap();
+        let content = &result.content[0];
+        match content.raw {
+            rmcp::model::RawContent::Text(ref tc) => {
+                assert!(tc.text.contains("not available over remote connections"));
+            }
+            _ => panic!("expected text content"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_dismiss_revision_allowed_on_stdio_transport() {
+        let server = make_server(TransportMode::Stdio, "agent", None);
+        let req = DismissRevisionRequest {
+            target_source_id: "mem_x".into(),
+        };
+        let result = server.dismiss_revision_impl(req).await.unwrap();
+        assert!(
+            result.is_error.unwrap_or(false),
+            "should fail with connection error, not transport block"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_dismiss_contradiction_blocked_on_http_transport() {
+        let server = make_server(TransportMode::Http, "agent", None);
+        let req = DismissContradictionRequest {
+            source_id: "mem_x".into(),
+        };
+        let result = server.dismiss_contradiction_impl(req).await.unwrap();
+        let content = &result.content[0];
+        match content.raw {
+            rmcp::model::RawContent::Text(ref tc) => {
+                assert!(tc.text.contains("not available over remote connections"));
+            }
+            _ => panic!("expected text content"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_dismiss_contradiction_allowed_on_stdio_transport() {
+        let server = make_server(TransportMode::Stdio, "agent", None);
+        let req = DismissContradictionRequest {
+            source_id: "mem_x".into(),
+        };
+        let result = server.dismiss_contradiction_impl(req).await.unwrap();
+        assert!(
+            result.is_error.unwrap_or(false),
+            "should fail with connection error, not transport block"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_confirm_entity_blocked_on_http_transport() {
+        let server = make_server(TransportMode::Http, "agent", None);
+        let params = ConfirmEntityParams {
+            entity_id: "ent_x".into(),
+            confirmed: true,
+        };
+        let result = server.confirm_entity_impl(params).await.unwrap();
+        let content = &result.content[0];
+        match content.raw {
+            rmcp::model::RawContent::Text(ref tc) => {
+                assert!(tc.text.contains("not available over remote connections"));
+            }
+            _ => panic!("expected text content"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_confirm_entity_allowed_on_stdio_transport() {
+        let server = make_server(TransportMode::Stdio, "agent", None);
+        let params = ConfirmEntityParams {
+            entity_id: "ent_x".into(),
+            confirmed: true,
+        };
+        let result = server.confirm_entity_impl(params).await.unwrap();
+        assert!(
+            result.is_error.unwrap_or(false),
+            "should fail with connection error, not transport block"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_confirm_observation_blocked_on_http_transport() {
+        let server = make_server(TransportMode::Http, "agent", None);
+        let params = ConfirmObservationParams {
+            observation_id: "obs_x".into(),
+            confirmed: true,
+        };
+        let result = server.confirm_observation_impl(params).await.unwrap();
+        let content = &result.content[0];
+        match content.raw {
+            rmcp::model::RawContent::Text(ref tc) => {
+                assert!(tc.text.contains("not available over remote connections"));
+            }
+            _ => panic!("expected text content"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_confirm_observation_allowed_on_stdio_transport() {
+        let server = make_server(TransportMode::Stdio, "agent", None);
+        let params = ConfirmObservationParams {
+            observation_id: "obs_x".into(),
+            confirmed: true,
+        };
+        let result = server.confirm_observation_impl(params).await.unwrap();
+        assert!(
+            result.is_error.unwrap_or(false),
+            "should fail with connection error, not transport block"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_update_observation_blocked_on_http_transport() {
+        let server = make_server(TransportMode::Http, "agent", None);
+        let params = UpdateObservationParams {
+            observation_id: "obs_x".into(),
+            content: "new content".into(),
+        };
+        let result = server.update_observation_impl(params).await.unwrap();
+        let content = &result.content[0];
+        match content.raw {
+            rmcp::model::RawContent::Text(ref tc) => {
+                assert!(tc.text.contains("not available over remote connections"));
+            }
+            _ => panic!("expected text content"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_update_observation_allowed_on_stdio_transport() {
+        let server = make_server(TransportMode::Stdio, "agent", None);
+        let params = UpdateObservationParams {
+            observation_id: "obs_x".into(),
+            content: "new content".into(),
+        };
+        let result = server.update_observation_impl(params).await.unwrap();
+        assert!(
+            result.is_error.unwrap_or(false),
+            "should fail with connection error, not transport block"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_update_page_blocked_on_http_transport() {
+        let server = make_server(TransportMode::Http, "agent", None);
+        let params = UpdatePageParams {
+            page_id: "page_x".into(),
+            content: "body".into(),
+            source_memory_ids: vec!["mem_a".into()],
+            summary: None,
+        };
+        let result = server.update_page_impl(params).await.unwrap();
+        let content = &result.content[0];
+        match content.raw {
+            rmcp::model::RawContent::Text(ref tc) => {
+                assert!(tc.text.contains("not available over remote connections"));
+            }
+            _ => panic!("expected text content"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_update_page_allowed_on_stdio_transport() {
+        let server = make_server(TransportMode::Stdio, "agent", None);
+        let params = UpdatePageParams {
+            page_id: "page_x".into(),
+            content: "body".into(),
+            source_memory_ids: vec!["mem_a".into()],
+            summary: None,
+        };
+        let result = server.update_page_impl(params).await.unwrap();
+        assert!(
+            result.is_error.unwrap_or(false),
+            "should fail with connection error, not transport block"
+        );
+    }
+
+    // ===== Refinement queue guards =====
+
+    #[tokio::test]
+    async fn test_reject_refinement_blocked_on_http_transport() {
+        let server = make_server(TransportMode::Http, "agent", None);
+        let params = RejectRefinementParams {
+            id: "merge_abc_def".into(),
+        };
+        let result = server.reject_refinement_impl(params).await.unwrap();
+        let content = &result.content[0];
+        match content.raw {
+            rmcp::model::RawContent::Text(ref tc) => {
+                assert!(tc.text.contains("not available over remote connections"));
+            }
+            _ => panic!("expected text content"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_reject_refinement_allowed_on_stdio_transport() {
+        let server = make_server(TransportMode::Stdio, "agent", None);
+        let params = RejectRefinementParams {
+            id: "merge_abc_def".into(),
+        };
+        let result = server.reject_refinement_impl(params).await.unwrap();
+        assert!(
+            result.is_error.unwrap_or(false),
+            "should fail with connection error, not transport block"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_accept_refinement_blocked_on_http_transport() {
+        let server = make_server(TransportMode::Http, "agent", None);
+        let params = AcceptRefinementParams {
+            id: "merge_abc_def".into(),
+        };
+        let result = server.accept_refinement_impl(params).await.unwrap();
+        let content = &result.content[0];
+        match content.raw {
+            rmcp::model::RawContent::Text(ref tc) => {
+                assert!(tc.text.contains("not available over remote connections"));
+            }
+            _ => panic!("expected text content"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_accept_refinement_allowed_on_stdio_transport() {
+        let server = make_server(TransportMode::Stdio, "agent", None);
+        let params = AcceptRefinementParams {
+            id: "merge_abc_def".into(),
+        };
+        let result = server.accept_refinement_impl(params).await.unwrap();
         assert!(
             result.is_error.unwrap_or(false),
             "should fail with connection error, not transport block"
