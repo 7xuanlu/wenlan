@@ -18278,7 +18278,7 @@ pub(crate) mod tests {
         .await
         .unwrap();
 
-        let results = db.search("Rust programming", 10, None).await.unwrap();
+        let results = db.search("Rust programming", 10, None, None).await.unwrap();
         // Should find at least the Rust document (via FTS even if vector index is absent)
         assert!(!results.is_empty(), "search should return results");
     }
@@ -18304,7 +18304,7 @@ pub(crate) mod tests {
         .unwrap();
 
         let results = db
-            .search("pets animals", 10, Some("local_files"))
+            .search("pets animals", 10, Some("local_files"), None)
             .await
             .unwrap();
         for r in &results {
@@ -18324,7 +18324,7 @@ pub(crate) mod tests {
         .await
         .unwrap();
         // Empty or very short query — should not panic
-        let results = db.search("", 10, None).await;
+        let results = db.search("", 10, None, None).await;
         // May return results or error, but should not panic
         assert!(results.is_ok() || results.is_err());
     }
@@ -18346,7 +18346,7 @@ pub(crate) mod tests {
         }
         db.upsert_documents(docs).await.unwrap();
 
-        let results = db.search("programming language", 3, None).await.unwrap();
+        let results = db.search("programming language", 3, None, None).await.unwrap();
         assert!(results.len() <= 3, "should respect limit");
     }
 
@@ -21146,7 +21146,7 @@ pub(crate) mod tests {
 
         // Search should find original but not the pending revision
         let results = db
-            .search("kubernetes container orchestration", 10, None)
+            .search("kubernetes container orchestration", 10, None, None)
             .await
             .unwrap();
         let ids: Vec<&str> = results.iter().map(|r| r.source_id.as_str()).collect();
@@ -28493,7 +28493,7 @@ pub(crate) mod tests {
 
         // Confirm pending_revision=0 in search results by default.
         let results = db
-            .search("pending revision test memory", 5, None)
+            .search("pending revision test memory", 5, None, None)
             .await
             .unwrap();
         let found = results.iter().find(|r| r.source_id == "pr_test_normal");
@@ -28548,7 +28548,7 @@ pub(crate) mod tests {
 
         // Search for the merged memory.
         let results = db
-            .search("merged A+B combined content", 10, None)
+            .search("merged A+B combined content", 10, None, None)
             .await
             .unwrap();
         let merged = results.iter().find(|r| r.source_id == merged_id);
