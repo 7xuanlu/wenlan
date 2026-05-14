@@ -996,6 +996,13 @@ impl OriginMcpServer {
         &self,
         params: UpdateObservationParams,
     ) -> Result<CallToolResult, McpError> {
+        if self.transport == TransportMode::Http {
+            return Ok(CallToolResult::error(vec![Content::text(
+                "Update operations are not available over remote connections. \
+                 Use local MCP on the machine running Origin to update observations."
+                    .to_string(),
+            )]));
+        }
         let req = origin_types::requests::UpdateObservationRequest {
             content: params.content,
         };
@@ -1089,6 +1096,13 @@ impl OriginMcpServer {
         &self,
         params: UpdatePageParams,
     ) -> Result<CallToolResult, McpError> {
+        if self.transport == TransportMode::Http {
+            return Ok(CallToolResult::error(vec![Content::text(
+                "Update operations are not available over remote connections. \
+                 Use local MCP on the machine running Origin to update pages."
+                    .to_string(),
+            )]));
+        }
         let req = origin_types::requests::RefreshPageRequest {
             content: params.content,
             source_memory_ids: params.source_memory_ids,
@@ -1789,7 +1803,7 @@ impl OriginMcpServer {
     }
 
     #[tool(
-        description = "Update the content of an existing observation. Use when the user corrects a fact (\"actually X not Y\") or when you find that a prior observation needs refinement based on new context. Only the content text changes — the entity attachment stays the same. To move an observation to a different entity, delete and recreate. Prefer this over delete+recreate when the entity attachment is correct, so history is preserved.",
+        description = "Update the content of an existing observation. Use when the user corrects a fact (\"actually X not Y\") or when you find that a prior observation needs refinement based on new context. Only the content text changes — the entity attachment stays the same. To move an observation to a different entity, delete and recreate. Prefer this over delete+recreate when the entity attachment is correct, so history is preserved. Not available over remote HTTP MCP transport (local stdio only).",
         annotations(
             title = "Update observation",
             read_only_hint = false,
@@ -1857,7 +1871,7 @@ impl OriginMcpServer {
     }
 
     #[tool(
-        description = "Refresh a stale page in place. Replaces content + source_memory_ids + optional summary, clears the daemon's stale_reason in the same call. Preserves page_id, created_at, and bumps version monotonically — external [[wikilinks]] keep working. Use this on entries in the /distill response's `stale_pages` block instead of delete_page + create_page (which churned ids and lost version history).",
+        description = "Refresh a stale page in place. Replaces content + source_memory_ids + optional summary, clears the daemon's stale_reason in the same call. Preserves page_id, created_at, and bumps version monotonically — external [[wikilinks]] keep working. Use this on entries in the /distill response's `stale_pages` block instead of delete_page + create_page (which churned ids and lost version history). Not available over remote HTTP MCP transport (local stdio only).",
         annotations(
             title = "Refresh page",
             read_only_hint = false,
@@ -3229,6 +3243,72 @@ mod tests {
             confirmed: true,
         };
         let result = server.confirm_observation_impl(params).await.unwrap();
+        assert!(
+            result.is_error.unwrap_or(false),
+            "should fail with connection error, not transport block"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_update_observation_blocked_on_http_transport() {
+        let server = make_server(TransportMode::Http, "agent", None);
+        let params = UpdateObservationParams {
+            observation_id: "obs_x".into(),
+            content: "new content".into(),
+        };
+        let result = server.update_observation_impl(params).await.unwrap();
+        let content = &result.content[0];
+        match content.raw {
+            rmcp::model::RawContent::Text(ref tc) => {
+                assert!(tc.text.contains("not available over remote connections"));
+            }
+            _ => panic!("expected text content"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_update_observation_allowed_on_stdio_transport() {
+        let server = make_server(TransportMode::Stdio, "agent", None);
+        let params = UpdateObservationParams {
+            observation_id: "obs_x".into(),
+            content: "new content".into(),
+        };
+        let result = server.update_observation_impl(params).await.unwrap();
+        assert!(
+            result.is_error.unwrap_or(false),
+            "should fail with connection error, not transport block"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_update_page_blocked_on_http_transport() {
+        let server = make_server(TransportMode::Http, "agent", None);
+        let params = UpdatePageParams {
+            page_id: "page_x".into(),
+            content: "body".into(),
+            source_memory_ids: vec!["mem_a".into()],
+            summary: None,
+        };
+        let result = server.update_page_impl(params).await.unwrap();
+        let content = &result.content[0];
+        match content.raw {
+            rmcp::model::RawContent::Text(ref tc) => {
+                assert!(tc.text.contains("not available over remote connections"));
+            }
+            _ => panic!("expected text content"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_update_page_allowed_on_stdio_transport() {
+        let server = make_server(TransportMode::Stdio, "agent", None);
+        let params = UpdatePageParams {
+            page_id: "page_x".into(),
+            content: "body".into(),
+            source_memory_ids: vec!["mem_a".into()],
+            summary: None,
+        };
+        let result = server.update_page_impl(params).await.unwrap();
         assert!(
             result.is_error.unwrap_or(false),
             "should fail with connection error, not transport block"
