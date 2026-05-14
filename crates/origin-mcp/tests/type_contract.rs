@@ -10,12 +10,14 @@
 
 use origin_mcp::client::OriginClient;
 use origin_mcp::tools::{
-    CaptureParams, ContextParams, ListNurtureParams, OriginMcpServer, RecallParams, TransportMode,
+    CaptureParams, ContextParams, ListNurtureParams, ListPendingParams, OriginMcpServer,
+    RecallParams, TransportMode,
 };
-use origin_types::memory::{MemoryItem, SearchResult};
+use origin_types::memory::{IndexedFileInfo, MemoryItem, SearchResult};
 use origin_types::responses::{
-    ChatContextResponse, DeleteResponse, KnowledgeContext, NurtureCardsResponse, ProfileContext,
-    SearchMemoryResponse, StoreMemoryResponse, TierTokenEstimates,
+    ChatContextResponse, DeleteResponse, KnowledgeContext, ListMemoriesResponse,
+    NurtureCardsResponse, ProfileContext, SearchMemoryResponse, StoreMemoryResponse,
+    TierTokenEstimates,
 };
 use rmcp::model::{CallToolResult, RawContent};
 use wiremock::matchers::{method, path};
@@ -2038,5 +2040,57 @@ async fn dismiss_contradiction_forwards_x_agent_name() {
         value.to_str().expect("header value is valid utf-8"),
         "test-agent",
         "x-agent-name header must equal configured agent name"
+    );
+}
+
+#[tokio::test]
+async fn t_list_pending_uses_post_with_confirmed_false() {
+    let (mock, client) = setup().await;
+
+    let response = ListMemoriesResponse {
+        memories: vec![IndexedFileInfo {
+            source_id: "mem_pending1".into(),
+            title: "Pending capture".into(),
+            source: "memory".into(),
+            url: None,
+            chunk_count: 1,
+            last_modified: 1_000_000,
+            summary: None,
+            processing: false,
+            memory_type: Some("fact".into()),
+            domain: None,
+            source_agent: Some("claude-code".into()),
+            confidence: None,
+            confirmed: Some(false),
+            stability: None,
+            pinned: false,
+            created_at: 1_000_000,
+        }],
+    };
+
+    Mock::given(method("POST"))
+        .and(path("/api/memory/list"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(&response))
+        .mount(&mock)
+        .await;
+
+    let server = make_server(client);
+    let result = server
+        .list_pending_impl(ListPendingParams { limit: Some(10) })
+        .await
+        .expect("list_pending_impl failed");
+
+    let text = text_of(&result);
+    assert!(
+        text.contains("mem_pending1"),
+        "expected source_id in output; got: {text}"
+    );
+
+    // Verify the request used POST with confirmed=false in the body
+    let body = captured_body(&mock).await;
+    assert_eq!(
+        body["confirmed"],
+        serde_json::json!(false),
+        "list_pending must send confirmed=false in POST body; got: {body}"
     );
 }

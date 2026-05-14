@@ -191,6 +191,11 @@ pub struct IndexedFileInfo {
     pub confirmed: Option<bool>,
     pub stability: Option<String>,
     pub pinned: bool,
+    /// Unix timestamp (seconds) when the memory was first created.
+    /// Populated from the `memories.created_at` column (migration 21).
+    /// Defaults to 0 for rows from before migration 21.
+    #[serde(default)]
+    pub created_at: i64,
 }
 
 /// Home dashboard statistics.
@@ -418,6 +423,49 @@ pub struct RecentActivityItem {
     pub snippet: Option<String>,
     pub timestamp_ms: u64,
     pub badge: ActivityBadge,
+}
+
+#[cfg(test)]
+mod indexed_file_info_created_at_test {
+    use super::*;
+
+    fn make_info(created_at: i64) -> IndexedFileInfo {
+        IndexedFileInfo {
+            source_id: "mem_abc".into(),
+            title: "Title".into(),
+            source: "memory".into(),
+            url: None,
+            chunk_count: 1,
+            last_modified: 1000,
+            summary: None,
+            processing: false,
+            memory_type: None,
+            domain: None,
+            source_agent: None,
+            confidence: None,
+            confirmed: None,
+            stability: None,
+            pinned: false,
+            created_at,
+        }
+    }
+
+    #[test]
+    fn created_at_serializes_in_json() {
+        let info = make_info(1234);
+        let s = serde_json::to_string(&info).unwrap();
+        assert!(s.contains("\"created_at\":1234"), "got: {s}");
+    }
+
+    #[test]
+    fn created_at_defaults_to_zero_when_missing() {
+        let json = r#"{"source_id":"x","title":"T","source":"memory","url":null,
+            "chunk_count":1,"last_modified":1000,"processing":false,
+            "memory_type":null,"domain":null,"source_agent":null,
+            "confidence":null,"confirmed":null,"stability":null,"pinned":false}"#;
+        let info: IndexedFileInfo = serde_json::from_str(json).unwrap();
+        assert_eq!(info.created_at, 0);
+    }
 }
 
 #[cfg(test)]

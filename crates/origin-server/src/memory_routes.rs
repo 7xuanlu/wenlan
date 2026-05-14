@@ -1060,7 +1060,7 @@ pub async fn handle_confirm_memory(
     Ok(Json(ConfirmResponse { confirmed }))
 }
 
-/// GET /api/memory/list
+/// POST /api/memory/list
 pub async fn handle_list_memories(
     State(state): State<Arc<RwLock<ServerState>>>,
     Json(req): Json<ListMemoriesRequest>,
@@ -1068,10 +1068,11 @@ pub async fn handle_list_memories(
     let s = state.read().await;
     let db = s.db.as_ref().ok_or(ServerError::DbNotInitialized)?;
     let memories = db
-        .list_filtered(
+        .list_filtered_confirmed(
             Some("memory"),
             req.memory_type.as_deref(),
             req.domain.as_deref(),
+            req.confirmed,
             req.limit,
         )
         .await
