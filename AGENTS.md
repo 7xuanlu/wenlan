@@ -250,7 +250,7 @@ All business logic lives here. No tauri, no axum. Framework-agnostic.
 | `llm_classifier.rs` | Higher-level classification orchestration |
 | `refinery.rs` | Background refinement queue — dedup, auto-linking, consolidation |
 | `post_ingest.rs` | Post-ingest enrichment (dedup check, entity linking, title enrich, recap, page growth) |
-| `pages.rs` | Type definitions for the `Page` struct (synthesized wiki entries distilled from memory clusters). Actual clustering + distillation live in `db.rs` + `refinery.rs`. SQL tables remain `concepts`/`concept_sources` historically. |
+| `pages.rs` | Type definitions for the `Page` struct (synthesized wiki entries distilled from memory clusters). Actual clustering + distillation live in `db.rs` + `refinery.rs`. SQL tables are `pages`/`page_sources` (renamed from `concepts`/`concept_sources` in migration 46). |
 | `spaces.rs` | Spaces / tag store |
 | `narrative.rs` | Profile narrative assembly (editorial prose) |
 | `briefing.rs` | Daily briefing assembly |
