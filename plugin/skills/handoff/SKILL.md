@@ -168,16 +168,39 @@ Overwrite `~/.origin/sessions/_status/<project>.md`:
 ## Last session (<date>)
 - <accomplished bullet>
 
-## Open
-- <unfinished item>
+## Active
+<!-- Items touched/spawned in the last 1-2 sessions. Real next-move candidates. -->
+- <item> (added <YYYY-MM-DD>)
+- <blocked item> (added <YYYY-MM-DD>) (gated: <trigger>)
 
-## Next
-1. <next step>
-2. <next step>
+## Backlog
+<!-- Older accretion. Not gated, not picked. Promote back to Active when re-engaged. -->
+- <item> (added <YYYY-MM-DD>)
 ```
 
 Single file per project. New session overwrites — this is the *current*
 state, not a log.
+
+**Two sections, not one flat list:** `## Active` and `## Backlog` separate
+the two types of tasks that get mixed otherwise. Active = fresh signal
+worth picking next. Backlog = older parked items, kept for reference but
+not in the "what next?" frame.
+
+**Date stamp every bullet** with `(added <YYYY-MM-DD>)`. Use today's date
+when adding a new item; preserve the original date when carrying an item
+forward. Dates make age visible at a glance and avoid relative-time drift.
+
+**Gated items stay inline-tagged** with `(gated: <trigger>)` — no separate
+section. The tag tells the reader why it can't move yet; the bullet stays
+in whichever section reflects its recency.
+
+**Promotion / demotion rules:**
+- New item this session → `## Active` with today's date
+- Item in `## Active` that wasn't touched this session AND wasn't touched
+  the prior session → demote to `## Backlog` (keep original date)
+- Item in `## Backlog` that work resumed on → promote back to `## Active`
+  (keep original date — staleness is a property of the work, not the
+  bullet text)
 
 ### 7. Write timestamp
 
