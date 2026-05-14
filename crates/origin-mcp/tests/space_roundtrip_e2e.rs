@@ -112,7 +112,7 @@ async fn mcp_capture_and_recall_respects_space() {
     // Daemon accepts both captures (store endpoint returns ok for each).
     Mock::given(method("POST"))
         .and(path("/api/memory/store"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(&store_response("mem_alpha1")))
+        .respond_with(ResponseTemplate::new(200).set_body_json(store_response("mem_alpha1")))
         .expect(2)
         .mount(&mock)
         .await;
@@ -253,7 +253,7 @@ async fn mcp_legacy_domain_key_still_works() {
     let mock = MockServer::start().await;
     Mock::given(method("POST"))
         .and(path("/api/memory/store"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(&store_response("mem_legacy1")))
+        .respond_with(ResponseTemplate::new(200).set_body_json(store_response("mem_legacy1")))
         .mount(&mock)
         .await;
 
