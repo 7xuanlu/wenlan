@@ -32,7 +32,7 @@ fn make_memory_doc(source_id: &str, content: &str) -> RawDocument {
         url: None,
         last_modified: chrono::Utc::now().timestamp(),
         memory_type: Some("fact".to_string()),
-        domain: Some("technology".to_string()),
+        space: Some("technology".to_string()),
         source_agent: Some("test-agent".to_string()),
         confidence: None,
         confirmed: None,

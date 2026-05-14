@@ -1109,7 +1109,7 @@ async fn test_concept_before_after_comparison() {
                 source: "memory".into(),
                 title: seed.id.clone(),
                 memory_type: Some(seed.memory_type.clone()),
-                domain: seed.domain.clone(),
+                space: seed.space.clone(),
                 confirmed: seed.confirmed,
                 last_modified: chrono::Utc::now().timestamp(),
                 ..Default::default()
@@ -1122,7 +1122,7 @@ async fn test_concept_before_after_comparison() {
                 source: "memory".into(),
                 title: neg.id.clone(),
                 memory_type: Some(neg.memory_type.clone()),
-                domain: neg.domain.clone(),
+                space: neg.space.clone(),
                 last_modified: chrono::Utc::now().timestamp(),
                 ..Default::default()
             });
@@ -1170,7 +1170,7 @@ async fn test_concept_before_after_comparison() {
                 &case.query,
                 k,
                 None,
-                case.domain.as_deref(),
+                case.space.as_deref(),
                 None,
                 None,
                 None,
@@ -1201,7 +1201,7 @@ async fn test_concept_before_after_comparison() {
                 Some(&case.query),
                 &concept_content,
                 None,
-                case.domain.as_deref(),
+                case.space.as_deref(),
                 &source_refs,
                 &now,
             )
@@ -1967,7 +1967,7 @@ async fn enrich_fullpipeline_lme_only() {
                             }
                             .to_string(),
                         ),
-                        domain: Some("conversation".to_string()),
+                        space: Some("conversation".to_string()),
                         last_modified: chrono::Utc::now().timestamp(),
                         ..Default::default()
                     })
@@ -2441,7 +2441,7 @@ async fn smoke_fullpipeline() {
             source: "memory".to_string(),
             title: format!("{} session {}", mem.speaker, mem.session_num),
             memory_type: Some("fact".to_string()),
-            domain: Some("conversation".to_string()),
+            space: Some("conversation".to_string()),
             last_modified: chrono::Utc::now().timestamp(),
             ..Default::default()
         })
@@ -2609,7 +2609,7 @@ async fn smoke_per_scenario_locomo() {
                         source: "memory".to_string(),
                         title: format!("{} session {}", mem.speaker, mem.session_num),
                         memory_type: Some("fact".to_string()),
-                        domain: Some("conversation".to_string()),
+                        space: Some("conversation".to_string()),
                         last_modified: chrono::Utc::now().timestamp(),
                         ..Default::default()
                     })
@@ -2696,7 +2696,7 @@ async fn smoke_per_scenario_locomo() {
                     source: "memory".to_string(),
                     title: format!("{} session {}", mem.speaker, mem.session_num),
                     memory_type: Some("fact".to_string()),
-                    domain: Some("conversation".to_string()),
+                    space: Some("conversation".to_string()),
                     last_modified: chrono::Utc::now().timestamp(),
                     ..Default::default()
                 })
@@ -2897,7 +2897,7 @@ async fn smoke_per_scenario_locomo_cli() {
                     source: "memory".to_string(),
                     title: format!("{} session {}", mem.speaker, mem.session_num),
                     memory_type: Some("fact".to_string()),
-                    domain: Some("conversation".to_string()),
+                    space: Some("conversation".to_string()),
                     last_modified: chrono::Utc::now().timestamp(),
                     ..Default::default()
                 })
@@ -3064,7 +3064,7 @@ async fn smoke_per_scenario_locomo_cli_batched() {
                     source: "memory".to_string(),
                     title: format!("{} session {}", mem.speaker, mem.session_num),
                     memory_type: Some("fact".to_string()),
-                    domain: Some("conversation".to_string()),
+                    space: Some("conversation".to_string()),
                     last_modified: chrono::Utc::now().timestamp(),
                     ..Default::default()
                 })
@@ -3190,7 +3190,7 @@ async fn smoke_per_scenario_lme() {
                             }
                             .to_string(),
                         ),
-                        domain: Some("conversation".to_string()),
+                        space: Some("conversation".to_string()),
                         last_modified: chrono::Utc::now().timestamp(),
                         ..Default::default()
                     })
@@ -3286,7 +3286,7 @@ async fn smoke_per_scenario_lme() {
                         }
                         .to_string(),
                     ),
-                    domain: Some("conversation".to_string()),
+                    space: Some("conversation".to_string()),
                     last_modified: chrono::Utc::now().timestamp(),
                     ..Default::default()
                 })
