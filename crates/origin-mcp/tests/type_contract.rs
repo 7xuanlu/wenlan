@@ -75,7 +75,7 @@ fn sample_search_result() -> SearchResult {
         language: None,
         semantic_unit: None,
         memory_type: Some("fact".into()),
-        domain: None,
+        space: None,
         source_agent: None,
         confidence: None,
         confirmed: None,
@@ -127,7 +127,7 @@ async fn t1_remember_roundtrip() {
         .capture_impl(CaptureParams {
             content: "anything".into(),
             memory_type: None,
-            domain: None,
+            space: None,
             entity: None,
             confidence: None,
             supersedes: None,
@@ -174,7 +174,7 @@ async fn t2_remember_surfaces_warnings_when_present() {
         .capture_impl(CaptureParams {
             content: "anything".into(),
             memory_type: Some("decision".into()),
-            domain: None,
+            space: None,
             entity: None,
             confidence: None,
             supersedes: None,
@@ -233,7 +233,7 @@ async fn t3_structured_fields_schema_is_object() {
         .capture_impl(CaptureParams {
             content: "prefers dark mode".into(),
             memory_type: None,
-            domain: None,
+            space: None,
             entity: None,
             confidence: None,
             supersedes: None,
@@ -298,7 +298,7 @@ async fn t4_recall_roundtrip() {
             query: "anything".into(),
             limit: None,
             memory_type: None,
-            domain: None,
+            space: None,
         })
         .await
         .expect("recall_impl failed");
@@ -317,7 +317,7 @@ async fn t4_recall_roundtrip() {
     assert_eq!(body["query"], serde_json::json!("anything"));
     assert_eq!(body["limit"], serde_json::json!(10));
     assert!(body["memory_type"].is_null());
-    assert!(body["domain"].is_null());
+    assert!(body["space"].is_null());
     assert_eq!(
         body["source_agent"],
         serde_json::json!("test-agent"),
@@ -354,7 +354,7 @@ async fn t5_memory_type_hint_preserved_without_forcing_domain() {
         .capture_impl(CaptureParams {
             content: "some content".into(),
             memory_type: Some("fact".into()),
-            domain: None,
+            space: None,
             entity: None,
             confidence: None,
             supersedes: None,
@@ -369,7 +369,7 @@ async fn t5_memory_type_hint_preserved_without_forcing_domain() {
 
     let body = captured_body(&mock).await;
     assert_eq!(body["memory_type"], serde_json::json!("fact"));
-    assert!(body["domain"].is_null());
+    assert!(body["space"].is_null());
 }
 
 #[tokio::test]
@@ -409,7 +409,7 @@ async fn t6_context_roundtrip_bug_regression() {
         .context_impl(ContextParams {
             topic: Some("orientation".into()),
             limit: None,
-            domain: None,
+            space: None,
         })
         .await
         .expect("context_impl failed");
@@ -421,7 +421,7 @@ async fn t6_context_roundtrip_bug_regression() {
     assert_eq!(body["conversation_id"], serde_json::json!("orientation"));
     assert_eq!(body["max_chunks"], serde_json::json!(20));
     assert_eq!(body["include_goals"], serde_json::json!(true));
-    assert!(body["domain"].is_null());
+    assert!(body["space"].is_null());
 }
 
 #[tokio::test]
@@ -461,7 +461,7 @@ async fn t7_context_with_domain() {
         .context_impl(ContextParams {
             topic: None,
             limit: None,
-            domain: Some("work".into()),
+            space: Some("work".into()),
         })
         .await
         .expect("context_impl failed");
@@ -470,7 +470,7 @@ async fn t7_context_with_domain() {
     assert_eq!(text, "work context");
 
     let body = captured_body(&mock).await;
-    assert_eq!(body["domain"], serde_json::json!("work"));
+    assert_eq!(body["space"], serde_json::json!("work"));
 }
 
 #[tokio::test]
@@ -529,7 +529,7 @@ async fn t9_recall_request_does_not_contain_entity() {
             query: "anything".into(),
             limit: None,
             memory_type: None,
-            domain: None,
+            space: None,
         })
         .await
         .expect("recall_impl failed");
@@ -578,7 +578,7 @@ async fn t10_remember_request_does_not_contain_user_id() {
         .capture_impl(CaptureParams {
             content: "anything".into(),
             memory_type: None,
-            domain: None,
+            space: None,
             entity: None,
             confidence: None,
             supersedes: None,
@@ -629,7 +629,7 @@ async fn t11_extraction_method_none_not_in_text() {
         .capture_impl(CaptureParams {
             content: "anything".into(),
             memory_type: None,
-            domain: None,
+            space: None,
             entity: None,
             confidence: None,
             supersedes: None,
@@ -705,7 +705,7 @@ async fn t13_context_forward_compat_with_extra_fields() {
         .context_impl(ContextParams {
             topic: None,
             limit: None,
-            domain: None,
+            space: None,
         })
         .await
         .expect("context_impl must succeed even with extra unknown fields in response");
@@ -734,7 +734,7 @@ async fn t12_forward_compat_response_missing_extraction_method() {
         .capture_impl(CaptureParams {
             content: "anything".into(),
             memory_type: None,
-            domain: None,
+            space: None,
             entity: None,
             confidence: None,
             supersedes: None,
@@ -781,7 +781,7 @@ async fn origin_client_sends_x_agent_name_header() {
         .capture_impl(CaptureParams {
             content: "header test".into(),
             memory_type: None,
-            domain: None,
+            space: None,
             entity: None,
             confidence: None,
             supersedes: None,
@@ -835,7 +835,7 @@ async fn origin_client_omits_x_agent_name_when_unset() {
         .capture_impl(CaptureParams {
             content: "no header test".into(),
             memory_type: None,
-            domain: None,
+            space: None,
             entity: None,
             confidence: None,
             supersedes: None,
@@ -864,7 +864,7 @@ fn sample_memory_item() -> MemoryItem {
         content: "This memory needs review.".into(),
         summary: None,
         memory_type: Some("fact".into()),
-        domain: Some("work".into()),
+        space: Some("work".into()),
         source_agent: Some("test-agent".into()),
         confidence: Some(0.7),
         confirmed: false,
@@ -905,7 +905,7 @@ async fn list_nurture_happy_path() {
     let result = server
         .list_nurture_impl(ListNurtureParams {
             limit: None,
-            domain: None,
+            space: None,
         })
         .await
         .expect("list_nurture_impl failed");
@@ -938,7 +938,7 @@ async fn list_nurture_envelope_guard() {
     let result = server
         .list_nurture_impl(ListNurtureParams {
             limit: None,
-            domain: None,
+            space: None,
         })
         .await
         .expect("list_nurture_impl returned Err unexpectedly");
@@ -970,7 +970,7 @@ async fn list_nurture_passes_query_params() {
     server
         .list_nurture_impl(ListNurtureParams {
             limit: Some(25),
-            domain: Some("work".into()),
+            space: Some("work".into()),
         })
         .await
         .expect("list_nurture_impl failed");
@@ -986,8 +986,8 @@ async fn list_nurture_passes_query_params() {
         "expected limit=25 in query; got: {url}"
     );
     assert!(
-        url.contains("domain=work"),
-        "expected domain=work in query; got: {url}"
+        url.contains("space=work"),
+        "expected space=work in query; got: {url}"
     );
 }
 
@@ -1004,7 +1004,7 @@ async fn list_nurture_http_500() {
     let result = server
         .list_nurture_impl(ListNurtureParams {
             limit: None,
-            domain: None,
+            space: None,
         })
         .await
         .expect("list_nurture_impl must not return Err on HTTP 500");
@@ -2066,7 +2066,7 @@ async fn t_list_pending_uses_post_with_confirmed_false() {
             summary: None,
             processing: false,
             memory_type: Some("fact".into()),
-            domain: None,
+            space: None,
             source_agent: Some("claude-code".into()),
             confidence: None,
             confirmed: Some(false),
