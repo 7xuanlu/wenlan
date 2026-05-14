@@ -13,19 +13,26 @@ on:
     branches: [main]
   workflow_dispatch:
 
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 env:
   CARGO_TERM_COLOR: always
 
 jobs:
   detect-changes:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     outputs:
       rust:    ${{ steps.filter.outputs.rust }}
       plugin:  ${{ steps.filter.outputs.plugin }}
       npm:     ${{ steps.filter.outputs.npm }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: dorny/paths-filter@v3
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: dorny/paths-filter@d1c1ffe0248fe513906c8e24db8ea791d46f8590 # v3
         id: filter
         with:
           filters: |
@@ -33,6 +40,7 @@ jobs:
               - 'crates/**'
               - 'Cargo.toml'
               - 'Cargo.lock'
+              - 'rust-toolchain.toml'
               - '.github/workflows/ci.yml'
             plugin:
               - 'plugin/**'
@@ -40,65 +48,34 @@ jobs:
             npm:
               - 'crates/origin-mcp/npm/**'
 
-  rust:
-    name: Test & Lint
+  fmt:
+    name: fmt
     needs: detect-changes
     if: "needs.detect-changes.outputs.rust == 'true' && !startsWith(github.event.head_commit.message, 'chore(main): release')"
-    runs-on: macos-latest
+    runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
-
-      - name: Install Rust stable
-        uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9 # master 2026-05-13
         with:
-          components: rustfmt, clippy
+          toolchain: 1.95.0
+          components: rustfmt
+      - run: cargo fmt --check --all
 
-      - name: Cache Rust dependencies
-        uses: Swatinem/rust-cache@v2
-
-      - name: Cache FastEmbed ONNX model
-        uses: actions/cache@v4
+  lint:
+    name: lint
+    needs: [detect-changes, fmt]
+    if: "needs.detect-changes.outputs.rust == 'true' && !startsWith(github.event.head_commit.message, 'chore(main): release')"
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9 # master 2026-05-13
         with:
-          path: ~/.fastembed_cache
-          key: fastembed-bge-base-en-v1.5-q-v2
-          restore-keys: |
-            fastembed-bge-base-en-v1.5-q-
-
-      - name: Check Rust formatting
-        run: cargo fmt --check --all
-
-      - name: Run Clippy
-        run: cargo clippy --workspace --all-targets -- -D warnings
-
-      - name: Run Rust tests (types + server + cli)
-        run: cargo test -p origin-types -p origin-server -p origin
-
-      # SIGSEGV flake on macos-latest only (not reproduced locally on M-series
-      # in 3 sequential runs; small sample). Confirmed in CI runs 24963231079,
-      # 25093639841, 25150741261/attempt 1 (2026-04-26 -> 2026-04-30). The
-      # process aborts with `signal: 11, SIGSEGV` near the end of the
-      # origin-core db::tests batch, and the test-runner summary line never
-      # prints. Two plausible causes: (a) a concurrent FFI race between tests
-      # in fastembed/ONNX/libsql, or (b) an ONNX runtime atexit handler in
-      # ort 2.0.0-rc.11. The eval path already mitigates (b) via
-      # `std::mem::forget` on the shared embedder (see
-      # crates/origin-core/src/eval/shared.rs:19-33), but the test path uses a
-      # plain `OnceLock`. `--test-threads=1` only addresses (a). Keep until
-      # we either upgrade to a fixed `ort` release or adopt cargo nextest
-      # (process-per-test would cover both causes).
-      - name: Run Rust tests (core)
-        # Skip eval_harness integration tests — they need the FastEmbed
-        # BGE-Base-EN-v1.5-Q ONNX model (~200MB) which fails to download on
-        # GitHub Actions macOS runners due to hf-hub cache resolution issues.
-        # Lib unit tests + chat_import_e2e + distillation_quality stay in CI;
-        # eval_harness runs locally per the comment block below.
-        run: cargo test -p origin-core --lib --test chat_import_e2e --test distillation_quality -- --test-threads=1
-
-      # Eval benchmarks (#[ignore]) — slow embedding-heavy tests, run on main only.
-      - name: Run eval benchmarks
-        if: github.ref == 'refs/heads/main'
-        run: cargo test -p origin-core --lib eval::token_efficiency -- --ignored
-
+          toolchain: 1.95.0
+          components: clippy
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+        with:
+          shared-key: workspace
+      - run: cargo clippy --workspace --all-targets -- -D warnings
       - name: Verify origin-mcp uses path dep for origin-types
         run: |
           SOURCE=$(cargo metadata --format-version 1 --locked \
@@ -109,22 +86,62 @@ jobs:
                      | .source // "PATH"')
           [[ "$SOURCE" == "PATH" ]] || { echo "ERROR: origin-mcp must use path dep for origin-types"; exit 1; }
 
-      # Eval harness integration tests (crates/origin-core/tests/eval_harness.rs) need the
-      # FastEmbed BGE-Base-EN-v1.5-Q model (~200MB ONNX) which auto-downloads
-      # on first run. GitHub Actions macOS runners lack Metal GPU support and
-      # the hf-hub crate can't resolve manually seeded cache files.
-      #
-      # Run eval tests locally:
-      #   cargo test -p origin-core --test eval_harness
-      #
-      # The model downloads once into ~/.fastembed_cache and is reused.
+  test:
+    name: test
+    needs: [detect-changes, fmt]
+    if: "needs.detect-changes.outputs.rust == 'true' && !startsWith(github.event.head_commit.message, 'chore(main): release')"
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9 # master 2026-05-13
+        with:
+          toolchain: 1.95.0
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+        with:
+          shared-key: workspace
+      - uses: taiki-e/install-action@3235f8901fd37ffed0052b276cec25a362fb82e9 # v2
+        with:
+          tool: cargo-nextest
+      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: ~/.fastembed_cache
+          key: fastembed-bge-base-en-v1.5-q-v2
+          restore-keys: |
+            fastembed-bge-base-en-v1.5-q-
+      - name: Run tests (types + server + cli)
+        run: cargo nextest run -p origin-types -p origin-server -p origin
+      - name: Run tests (core)
+        # nextest process-per-test sidesteps the macOS SIGSEGV root cause
+        # (ONNX atexit FFI race). No --test-threads=1 needed on ubuntu.
+        run: cargo nextest run -p origin-core --lib --test chat_import_e2e --test distillation_quality
+      - name: Run embedding-only eval (main only)
+        if: github.ref == 'refs/heads/main'
+        run: cargo nextest run -p origin-core --lib --run-ignored=only eval::token_efficiency
+
+  # Aggregate gate for branch protection. `if: always()` lets docs-only PRs
+  # (where fmt/lint/test skipped via detect-changes) report success instead of
+  # stalling forever on a never-run required check.
+  ci-success:
+    name: ci-success
+    needs: [detect-changes, fmt, lint, test]
+    if: always() && !cancelled()
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Aggregate
+        run: |
+          for r in '${{ needs.fmt.result }}' '${{ needs.lint.result }}' '${{ needs.test.result }}'; do
+            case "$r" in
+              success|skipped) ;;
+              *) echo "Upstream job failed: $r"; exit 1 ;;
+            esac
+          done
 
   plugin:
     needs: detect-changes
     if: needs.detect-changes.outputs.plugin == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
       - name: Validate plugin.json schema
         run: jq -e '.name and .version and .description and .repository' plugin/.claude-plugin/plugin.json
       - name: Validate skill frontmatter
@@ -132,7 +149,7 @@ jobs:
           for f in plugin/skills/*/SKILL.md; do
             head -5 "$f" | grep -qE '^name:|^description:' || { echo "Missing frontmatter: $f"; exit 1; }
           done
-      - uses: DavidAnson/markdownlint-cli2-action@v17
+      - uses: DavidAnson/markdownlint-cli2-action@db43aef879112c3119a410d69f66701e0d530809 # v17
         with:
           globs: 'skills/**/*.md'
         continue-on-error: true   # initial relaxation; tighten after first run
@@ -140,10 +157,10 @@ jobs:
   npm:
     needs: detect-changes
     if: needs.detect-changes.outputs.npm == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: "24"
       - working-directory: crates/origin-mcp/npm
