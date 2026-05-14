@@ -81,7 +81,7 @@ Origin runs across several layers. The split is driven by three questions: **(1)
 | **L3 pre-push** | `cargo clippy --workspace --all-targets`, `cargo test --workspace --lib` | Local | `git push` | ~60-90s | Yes |
 | **L4 CI on PR** | Same checks workspace-wide; tests for types + server + CLI; core lib tests + chat_import_e2e + distillation_quality | GitHub (`ci.yml`) | Every PR | ~10min | Yes (required) |
 | **L5 coverage on PR** | `cargo llvm-cov` on origin-core + origin-server only | GitHub (`coverage.yml`) | Every PR | ~10min | **No (informational)** |
-| **L6 main canary** | Embedding-only eval (`cargo test -p origin-core --lib eval::token_efficiency -- --ignored`) | GitHub (`ci.yml`) | Push to `main` | ~10min | No (post-merge) |
+| **L6 main canary** | Embedding-only eval (`cargo test -p origin-core --lib eval::retrieval -- --ignored`) | GitHub (`ci.yml`) | Push to `main` | ~10min | No (post-merge) |
 | **L7 manual local** | `bash scripts/coverage.sh` (HTML coverage), GPU eval suite (`cargo test -- --ignored`), Anthropic batch judge (`ANTHROPIC_API_KEY=... cargo test ...`) | Your laptop | On demand | minutes-hours | No |
 | **L8 pre-release** | Full eval suite vs saved baseline. Record deltas in vault/memory **never git** (Apache-2.0 public-repo rule for daemon; treat numbers as private until you have signed-off baselines) | Your laptop | Per release | hours | Soft gate |
 

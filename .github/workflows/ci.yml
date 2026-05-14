@@ -124,7 +124,7 @@ jobs:
         run: cargo nextest run -p origin-core --lib --test chat_import_e2e --test distillation_quality
       - name: Run embedding-only eval (main only)
         if: github.ref == 'refs/heads/main'
-        run: cargo nextest run -p origin-core --lib --run-ignored=only eval::token_efficiency
+        run: cargo nextest run -p origin-core --lib --run-ignored=only eval::retrieval
 
   # Aggregate gate for branch protection. `if: always()` lets docs-only PRs
   # (where fmt/lint/test skipped via detect-changes) report success instead of
