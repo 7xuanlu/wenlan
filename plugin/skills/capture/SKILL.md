@@ -109,9 +109,22 @@ one.
 
 ## Post-capture contradiction signal
 
-After `capture` returns, check `response.triggered_revisions`. If empty, do nothing. The capture stored cleanly.
+After `capture` returns, check `response.triggered_revisions` and `response.auto_superseded`.
 
-If non-empty, render an inline block to the user:
+### auto_superseded (no action needed)
+
+If `auto_superseded` is non-empty, the daemon already resolved the contradiction. Surface it as informational:
+
+```
+Note: auto-superseded mem_X. Origin replaced a prior protected memory because
+trust=high and similarity > 0.9. No action needed.
+```
+
+No accept/dismiss call required. The revision was applied automatically.
+
+### triggered_revisions (human review needed)
+
+If `triggered_revisions` is non-empty (and `auto_superseded` is empty), render an inline block to the user:
 
 ```
 Stored mem_new.
@@ -128,4 +141,6 @@ Inline verb map:
 - dismiss: `dismiss_revision(target_source_id="mem_target_abc")`
 - leave: no call; surfaces again in next `/brief`
 
-This closes the async gap between trigger and surface. The user resolves contradictions in-flow without waiting for the next session.
+Both fields can technically be non-empty in a single response (multiple protected matches), but in practice only one fires per capture: `auto_superseded` fires when trust=full and similarity > 0.9, `triggered_revisions` fires otherwise.
+
+If neither field is non-empty, the capture stored cleanly with no conflicts.
