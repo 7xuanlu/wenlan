@@ -262,7 +262,7 @@ pub async fn create_relation(
         for (existing_id, existing_type) in &existing {
             if existing_id != &id && existing_type != rt {
                 match db.supersede_relation(existing_id, &id).await {
-                    Ok(()) => {
+                    Ok(archived) => {
                         warnings.push(format!(
                             "auto-superseded existing relation ({}-{}-{}); newer relation now active",
                             req.from_entity, existing_type, req.to_entity
@@ -274,6 +274,7 @@ pub async fn create_relation(
                             "to": req.to_entity,
                             "old_type": existing_type,
                             "new_type": rt,
+                            "archived": archived,
                         })
                         .to_string();
                         if let Err(e) = db
@@ -1048,6 +1049,66 @@ mod tests {
         assert!(
             !pending.iter().any(|p| p.action == "relation_conflict"),
             "no relation_conflict proposal should be queued"
+        );
+    }
+
+    #[tokio::test]
+    async fn create_relation_conflict_payload_contains_archived_snapshot() {
+        let (db, _dir) = test_db().await;
+        let alice = db
+            .store_entity("Alice", "person", None, Some("test"), None)
+            .await
+            .unwrap();
+        let bob = db
+            .store_entity("Bob", "person", None, Some("test"), None)
+            .await
+            .unwrap();
+
+        // Existing relation carries full metadata that hard-delete would lose.
+        let req_knows = CreateRelationRequest {
+            from_entity: alice.clone(),
+            to_entity: bob.clone(),
+            relation_type: "knows".to_string(),
+            source_agent: Some("test".to_string()),
+            confidence: Some(0.72),
+            explanation: Some("met at offsite".to_string()),
+            source_memory_id: Some("mem_seed".to_string()),
+        };
+        let knows_id = create_relation(&db, req_knows, "test-agent")
+            .await
+            .unwrap()
+            .id;
+
+        // Conflicting different-type relation triggers auto-supersede.
+        let req_likes = CreateRelationRequest {
+            from_entity: alice.clone(),
+            to_entity: bob.clone(),
+            relation_type: "likes".to_string(),
+            source_agent: Some("test".to_string()),
+            confidence: None,
+            explanation: None,
+            source_memory_id: None,
+        };
+        create_relation(&db, req_likes, "test-agent").await.unwrap();
+
+        let activity = db.list_agent_activity(50, None, None).await.unwrap();
+        let entry = activity
+            .iter()
+            .find(|a| a.action == "relation_supersede_auto")
+            .expect("relation_supersede_auto activity entry");
+
+        let detail = entry.detail.as_ref().expect("payload detail present");
+        let payload: serde_json::Value = serde_json::from_str(detail).expect("payload is JSON");
+        let archived = &payload["archived"];
+        assert_eq!(archived["id"], serde_json::json!(knows_id));
+        assert_eq!(archived["relation_type"], serde_json::json!("knows"));
+        assert_eq!(archived["confidence"], serde_json::json!(0.72));
+        assert_eq!(archived["explanation"], serde_json::json!("met at offsite"));
+        assert_eq!(archived["source_memory_id"], serde_json::json!("mem_seed"));
+        assert_eq!(archived["source_agent"], serde_json::json!("test"));
+        assert!(
+            archived["created_at"].is_i64(),
+            "archived created_at present"
         );
     }
 
