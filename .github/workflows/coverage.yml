@@ -2,7 +2,7 @@ name: Coverage (informational)
 
 # Non-blocking coverage report posted to PRs. Pre-push and the main CI lane
 # both skip coverage; this workflow exists to give visibility without slowing
-# the merge gate. See CLAUDE.md "Local vs CI test responsibilities".
+# the merge gate. See AGENTS.md "Local vs CI test responsibilities".
 
 on:
   pull_request:
@@ -14,6 +14,9 @@ on:
       - '.github/pull_request_template.md'
       - 'LICENSE'
   workflow_dispatch:
+
+permissions:
+  contents: read
 
 # Don't run on every push — only PRs and manual triggers.
 # Cancel in-flight runs when a new commit lands on the PR.
@@ -27,7 +30,7 @@ env:
 jobs:
   coverage:
     name: Coverage report
-    runs-on: macos-latest
+    runs-on: ubuntu-24.04
     if: >-
       github.event_name != 'pull_request' ||
       !startsWith(github.head_ref, 'release-please--branches--')
@@ -36,26 +39,36 @@ jobs:
     continue-on-error: true
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
 
       - name: Install Rust stable
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9 # master 2026-05-13
         with:
+          toolchain: 1.95.0
           components: llvm-tools-preview
 
       - name: Cache Rust dependencies
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+        with:
+          # Coverage builds with `-C instrument-coverage`, so artifacts are not
+          # interchangeable with the `clippy` or `test` caches in ci.yml.
+          shared-key: coverage
 
       - name: Cache FastEmbed ONNX model
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
-          path: ~/.fastembed_cache
+          # Origin's `resolve_fastembed_cache_dir` writes to
+          # `dirs::data_dir()/origin/memorydb/fastembed_cache` on Linux when
+          # no per-DB path or ORIGIN_TEST_FASTEMBED_CACHE override is given.
+          path: ~/.local/share/origin/memorydb/fastembed_cache
           key: fastembed-bge-base-en-v1.5-q-v2
           restore-keys: |
             fastembed-bge-base-en-v1.5-q-
 
       - name: Install cargo-llvm-cov
-        uses: taiki-e/install-action@cargo-llvm-cov
+        uses: taiki-e/install-action@3235f8901fd37ffed0052b276cec25a362fb82e9 # v2
+        with:
+          tool: cargo-llvm-cov
 
       - name: Run Rust coverage (origin-core + origin-server)
         run: |
@@ -65,7 +78,7 @@ jobs:
             --summary-only
 
       - name: Upload coverage artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: coverage-reports
           path: rust-coverage.json
