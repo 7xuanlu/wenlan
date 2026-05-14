@@ -1314,6 +1314,13 @@ impl OriginMcpServer {
         &self,
         params: RejectRefinementParams,
     ) -> Result<CallToolResult, McpError> {
+        if self.transport == TransportMode::Http {
+            return Ok(CallToolResult::error(vec![Content::text(
+                "Refinement operations are not available over remote connections. \
+                 Use local MCP on the machine running Origin to reject refinements."
+                    .to_string(),
+            )]));
+        }
         let path = format!(
             "/api/refinery/queue/{}/reject",
             url_encode_simple(&params.id)
@@ -1334,6 +1341,13 @@ impl OriginMcpServer {
         &self,
         params: AcceptRefinementParams,
     ) -> Result<CallToolResult, McpError> {
+        if self.transport == TransportMode::Http {
+            return Ok(CallToolResult::error(vec![Content::text(
+                "Refinement operations are not available over remote connections. \
+                 Use local MCP on the machine running Origin to accept refinements."
+                    .to_string(),
+            )]));
+        }
         let path = format!(
             "/api/refinery/queue/{}/accept",
             url_encode_simple(&params.id)
@@ -2038,7 +2052,7 @@ impl OriginMcpServer {
     }
 
     #[tool(
-        description = "Reject (dismiss) a refinement proposal by id. Use when reviewing the refinery queue and the user decides a proposal is wrong or noise. Marks the queue row dismissed and logs the agent activity. Idempotent: already-dismissed proposals return 422. Note: there is no accept verb yet; keeping a proposal is a no-op (it stays queued).",
+        description = "Reject (dismiss) a refinement proposal by id. Use when reviewing the refinery queue and the user decides a proposal is wrong or noise. Marks the queue row dismissed and logs the agent activity. Idempotent: already-dismissed proposals return 422. Note: there is no accept verb yet; keeping a proposal is a no-op (it stays queued). Not available over remote HTTP MCP transport (local stdio only).",
         annotations(
             title = "Reject refinement",
             read_only_hint = false,
@@ -2059,7 +2073,8 @@ impl OriginMcpServer {
             entity_merge: existing entity wins as canonical. \
             relation_conflict: new relation supersedes. \
             detect_contradiction: previously-stored memory flagged for revision. \
-            Returns 422 for suggest_entity (no producer) and dedup_merge (deprecated).",
+            Returns 422 for suggest_entity (no producer) and dedup_merge (deprecated). \
+            Not available over remote HTTP MCP transport (local stdio only).",
         annotations(
             title = "Accept refinement",
             read_only_hint = false,
@@ -3309,6 +3324,66 @@ mod tests {
             summary: None,
         };
         let result = server.update_page_impl(params).await.unwrap();
+        assert!(
+            result.is_error.unwrap_or(false),
+            "should fail with connection error, not transport block"
+        );
+    }
+
+    // ===== Refinement queue guards =====
+
+    #[tokio::test]
+    async fn test_reject_refinement_blocked_on_http_transport() {
+        let server = make_server(TransportMode::Http, "agent", None);
+        let params = RejectRefinementParams {
+            id: "merge_abc_def".into(),
+        };
+        let result = server.reject_refinement_impl(params).await.unwrap();
+        let content = &result.content[0];
+        match content.raw {
+            rmcp::model::RawContent::Text(ref tc) => {
+                assert!(tc.text.contains("not available over remote connections"));
+            }
+            _ => panic!("expected text content"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_reject_refinement_allowed_on_stdio_transport() {
+        let server = make_server(TransportMode::Stdio, "agent", None);
+        let params = RejectRefinementParams {
+            id: "merge_abc_def".into(),
+        };
+        let result = server.reject_refinement_impl(params).await.unwrap();
+        assert!(
+            result.is_error.unwrap_or(false),
+            "should fail with connection error, not transport block"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_accept_refinement_blocked_on_http_transport() {
+        let server = make_server(TransportMode::Http, "agent", None);
+        let params = AcceptRefinementParams {
+            id: "merge_abc_def".into(),
+        };
+        let result = server.accept_refinement_impl(params).await.unwrap();
+        let content = &result.content[0];
+        match content.raw {
+            rmcp::model::RawContent::Text(ref tc) => {
+                assert!(tc.text.contains("not available over remote connections"));
+            }
+            _ => panic!("expected text content"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_accept_refinement_allowed_on_stdio_transport() {
+        let server = make_server(TransportMode::Stdio, "agent", None);
+        let params = AcceptRefinementParams {
+            id: "merge_abc_def".into(),
+        };
+        let result = server.accept_refinement_impl(params).await.unwrap();
         assert!(
             result.is_error.unwrap_or(false),
             "should fail with connection error, not transport block"
