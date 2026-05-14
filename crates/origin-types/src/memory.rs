@@ -196,6 +196,11 @@ pub struct IndexedFileInfo {
     /// Defaults to 0 for rows from before migration 21.
     #[serde(default)]
     pub created_at: i64,
+    /// The full memory content. Populated by `list_filtered_confirmed` for
+    /// unconfirmed-review surfaces. Empty string when the producer did not
+    /// include it (e.g. aggregate file-list queries).
+    #[serde(default)]
+    pub content: String,
 }
 
 /// Home dashboard statistics.
@@ -447,6 +452,7 @@ mod indexed_file_info_created_at_test {
             stability: None,
             pinned: false,
             created_at,
+            content: String::new(),
         }
     }
 
@@ -465,6 +471,25 @@ mod indexed_file_info_created_at_test {
             "confidence":null,"confirmed":null,"stability":null,"pinned":false}"#;
         let info: IndexedFileInfo = serde_json::from_str(json).unwrap();
         assert_eq!(info.created_at, 0);
+    }
+
+    #[test]
+    fn content_round_trips() {
+        let mut info = make_info(9999);
+        info.content = "memory body".to_string();
+        let json = serde_json::to_string(&info).unwrap();
+        let back: IndexedFileInfo = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.content, "memory body");
+    }
+
+    #[test]
+    fn content_defaults_to_empty_when_missing() {
+        let json = r#"{"source_id":"x","title":"T","source":"memory","url":null,
+            "chunk_count":1,"last_modified":1000,"processing":false,
+            "memory_type":null,"domain":null,"source_agent":null,
+            "confidence":null,"confirmed":null,"stability":null,"pinned":false}"#;
+        let info: IndexedFileInfo = serde_json::from_str(json).unwrap();
+        assert_eq!(info.content, "");
     }
 }
 

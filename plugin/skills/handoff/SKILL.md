@@ -43,9 +43,19 @@ list_pending(limit=50)
 ```
 
 The MCP returns memory rows with `source_id`, `content`, `created_at`, and
-other metadata. Client-side filter to rows where `created_at >= <lastHandoff>`
-(both as Unix seconds). These are captures this session produced that the
-quality gate left unconfirmed (untrusted-source captures).
+other metadata. Convert `lastHandoff` (ISO-8601 string, e.g.
+`2026-05-13T22:50:00Z`) to a Unix epoch seconds integer before filtering:
+
+```
+Bash: date -j -f %Y-%m-%dT%H:%M:%SZ "$lastHandoff" +%s
+```
+
+Or in your scripting language of choice (Python's `datetime.fromisoformat`,
+JavaScript's `Date.parse`, etc.). Save the result as `lastHandoffEpoch`.
+
+Then filter the response rows: keep where `row.created_at >= lastHandoffEpoch`.
+These are captures this session produced that the quality gate left unconfirmed
+(untrusted-source captures).
 
 If the filtered list is empty, say nothing. Proceed to Step 2.
 

@@ -2065,6 +2065,7 @@ async fn t_list_pending_uses_post_with_confirmed_false() {
             stability: None,
             pinned: false,
             created_at: 1_000_000,
+            content: String::new(),
         }],
     };
 
