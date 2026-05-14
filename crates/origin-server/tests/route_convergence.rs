@@ -319,3 +319,69 @@ async fn page_revisions_known_page_returns_envelope() {
         "fresh page should have empty changelog entries: {body}"
     );
 }
+
+// ── POST /api/memory/list with confirmed filter ──────────────────────────────
+
+#[tokio::test]
+async fn list_memories_confirmed_false_filters_unconfirmed() {
+    use origin_core::sources::RawDocument;
+
+    let (app, db, _dir) = test_app_with_db().await;
+
+    // Insert one confirmed and one unconfirmed memory directly via DB.
+    let doc_confirmed = RawDocument {
+        source: "memory".to_string(),
+        source_id: "mem_conf_001".to_string(),
+        title: "Confirmed memory".to_string(),
+        content: "Some confirmed content about widgets.".to_string(),
+        last_modified: 1_000_000,
+        ..Default::default()
+    };
+    let doc_unconfirmed = RawDocument {
+        source: "memory".to_string(),
+        source_id: "mem_unconf_001".to_string(),
+        title: "Unconfirmed memory".to_string(),
+        content: "Some unconfirmed content about gears.".to_string(),
+        last_modified: 2_000_000,
+        ..Default::default()
+    };
+    db.upsert_documents(vec![doc_confirmed, doc_unconfirmed])
+        .await
+        .unwrap();
+    // Flip the confirmed memory to confirmed=true via the public API
+    db.confirm_memory("mem_conf_001").await.unwrap();
+
+    // POST /api/memory/list with confirmed=false
+    let (status, body) = json_post(
+        &app,
+        "/api/memory/list",
+        None,
+        serde_json::json!({"confirmed": false, "limit": 50}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "body: {body}");
+
+    let memories = body["memories"].as_array().expect("memories array");
+    let ids: Vec<&str> = memories
+        .iter()
+        .filter_map(|m| m["source_id"].as_str())
+        .collect();
+    assert!(
+        ids.contains(&"mem_unconf_001"),
+        "unconfirmed memory must appear; got: {ids:?}"
+    );
+    assert!(
+        !ids.contains(&"mem_conf_001"),
+        "confirmed memory must not appear; got: {ids:?}"
+    );
+
+    // created_at must be present and non-null
+    let unconf = memories
+        .iter()
+        .find(|m| m["source_id"].as_str() == Some("mem_unconf_001"))
+        .expect("unconfirmed memory in response");
+    assert!(
+        unconf["created_at"].is_number(),
+        "created_at must be a number; got: {unconf}"
+    );
+}

@@ -54,6 +54,8 @@ pub struct ListMemoriesRequest {
     pub domain: Option<String>,
     #[serde(default = "default_list_limit")]
     pub limit: usize,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub confirmed: Option<bool>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -526,5 +528,34 @@ mod search_pages_page_type_test {
         let json = r#"{"query":"foo","limit":10}"#;
         let parsed: SearchPagesRequest = serde_json::from_str(json).unwrap();
         assert!(parsed.page_type.is_none());
+    }
+}
+
+#[cfg(test)]
+mod list_memories_confirmed_test {
+    use super::*;
+
+    #[test]
+    fn confirmed_false_serializes_to_json() {
+        let req = ListMemoriesRequest {
+            memory_type: None,
+            domain: None,
+            limit: 20,
+            confirmed: Some(false),
+        };
+        let s = serde_json::to_string(&req).unwrap();
+        assert!(s.contains("\"confirmed\":false"), "got: {s}");
+    }
+
+    #[test]
+    fn confirmed_none_skips_serialization() {
+        let req = ListMemoriesRequest {
+            memory_type: None,
+            domain: None,
+            limit: 20,
+            confirmed: None,
+        };
+        let s = serde_json::to_string(&req).unwrap();
+        assert!(!s.contains("confirmed"), "got: {s}");
     }
 }

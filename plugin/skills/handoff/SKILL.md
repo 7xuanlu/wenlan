@@ -3,8 +3,9 @@ name: handoff
 description: >
   End-of-session ritual. Captures decisions, lessons, gotchas, and open
   threads. Writes a narrative session log to ~/.origin/sessions/ and stores
-  granular memories via Origin MCP. Invoked as `/handoff`.
-allowed-tools: ["Bash", "mcp__plugin_origin_origin__capture"]
+  granular memories via Origin MCP. Previews any unconfirmed captures from
+  the current session before closing. Invoked as `/handoff`.
+allowed-tools: ["Bash", "mcp__plugin_origin_origin__capture", "mcp__plugin_origin_origin__list_pending"]
 ---
 
 # /handoff
@@ -32,6 +33,46 @@ Bash: cd_repo=$(git -C "$PWD" rev-parse --show-toplevel 2>/dev/null); echo "${cd
 
 Read `~/.origin/sessions/_status/handoff-<project>.json` for `lastHandoff`
 timestamp (ISO-8601). If file missing, default to "12 hours ago".
+
+### 1.5 Pending-captures preview
+
+After establishing `<lastHandoff>`, call:
+
+```
+list_pending(limit=50)
+```
+
+The MCP returns memory rows with `source_id`, `content`, `created_at`, and
+other metadata. Convert `lastHandoff` (ISO-8601 string, e.g.
+`2026-05-13T22:50:00Z`) to a Unix epoch seconds integer before filtering:
+
+```
+Bash: date -j -f %Y-%m-%dT%H:%M:%SZ "$lastHandoff" +%s
+```
+
+Or in your scripting language of choice (Python's `datetime.fromisoformat`,
+JavaScript's `Date.parse`, etc.). Save the result as `lastHandoffEpoch`.
+
+Then filter the response rows: keep where `row.created_at >= lastHandoffEpoch`.
+These are captures this session produced that the quality gate left unconfirmed
+(untrusted-source captures).
+
+If the filtered list is empty, say nothing. Proceed to Step 2.
+
+If non-empty, render a preview block once, before the existing capture flow:
+
+```
+Pending captures this session (<N> total, top 3 shown):
+
+1. mem_xyz789  "..."  (untrusted source: <agent>)
+2. ...
+
+Default: proceed (captures stay pending). Opt in by running
+`/review captures` before re-invoking /handoff if you want to walk them.
+```
+
+Do NOT prompt for per-item action inline. The user proceeds with /handoff
+regardless; the preview is informational only.
 
 ### 2. Gather session context (parallel, only if git repo)
 

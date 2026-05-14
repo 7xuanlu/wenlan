@@ -847,12 +847,18 @@ impl OriginMcpServer {
         params: ListPendingParams,
     ) -> Result<CallToolResult, McpError> {
         let limit = params.limit.unwrap_or(20).min(100);
-        let path = format!("/api/memory/list?confirmed=false&limit={}", limit);
-        let value: serde_json::Value = match self.client.get(&path).await {
-            Ok(v) => v,
+        let req = ListMemoriesRequest {
+            memory_type: None,
+            domain: None,
+            confirmed: Some(false),
+            limit,
+        };
+        let resp: ListMemoriesResponse = match self.client.post("/api/memory/list", &req).await {
+            Ok(r) => r,
             Err(e) => return Ok(tool_error(e, "list_pending")),
         };
-        let body = serde_json::to_string_pretty(&value).unwrap_or_else(|_| value.to_string());
+        let body = serde_json::to_string_pretty(&resp.memories)
+            .unwrap_or_else(|e| format!("serialization error: {e}"));
         Ok(CallToolResult::success(vec![Content::text(body)]))
     }
 
@@ -1184,6 +1190,7 @@ impl OriginMcpServer {
             memory_type: params.memory_type,
             domain: params.domain,
             limit: params.limit.unwrap_or(100),
+            confirmed: None,
         };
         let resp: ListMemoriesResponse = match self.client.post("/api/memory/list", &req).await {
             Ok(r) => r,
@@ -3779,6 +3786,7 @@ mod tests {
             memory_type: params.memory_type,
             domain: params.domain,
             limit: params.limit.unwrap_or(100),
+            confirmed: None,
         };
         let json = serde_json::to_value(&req).unwrap();
         assert_eq!(json["memory_type"], "fact");
@@ -3797,6 +3805,7 @@ mod tests {
             memory_type: params.memory_type,
             domain: params.domain,
             limit: params.limit.unwrap_or(100),
+            confirmed: None,
         };
         assert_eq!(req.limit, 100);
     }

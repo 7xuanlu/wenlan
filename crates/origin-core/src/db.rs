@@ -7572,6 +7572,8 @@ impl MemoryDB {
                 confirmed: row.get::<Option<i64>>(11).unwrap_or(None).map(|v| v != 0),
                 stability: None, // not fetched in list_indexed_files aggregate query
                 pinned: row.get::<i64>(12).unwrap_or(0) != 0,
+                created_at: 0, // not fetched in list_indexed_files aggregate query
+                content: String::new(), // not fetched in list_indexed_files aggregate query
             });
         }
         Ok(files)
@@ -8344,6 +8346,19 @@ impl MemoryDB {
         domain: Option<&str>,
         limit: usize,
     ) -> Result<Vec<IndexedFileInfo>, OriginError> {
+        self.list_filtered_confirmed(source, memory_type, domain, None, limit)
+            .await
+    }
+
+    /// Like `list_filtered` but with an optional `confirmed` predicate.
+    pub async fn list_filtered_confirmed(
+        &self,
+        source: Option<&str>,
+        memory_type: Option<&str>,
+        domain: Option<&str>,
+        confirmed: Option<bool>,
+        limit: usize,
+    ) -> Result<Vec<IndexedFileInfo>, OriginError> {
         let conn = self.conn.lock().await;
 
         let mut conditions = Vec::new();
@@ -8365,6 +8380,21 @@ impl MemoryDB {
             params.push(d.to_string().into());
             idx += 1;
         }
+        if let Some(c) = confirmed {
+            if c {
+                conditions.push(format!("confirmed = ?{}", idx));
+                params.push(1i64.into());
+                idx += 1;
+            } else {
+                // NULL means "not yet confirmed" — include both explicit 0 and NULL.
+                // Also exclude archived supersedes and recap rows to match the
+                // same set returned by list_unconfirmed_memories.
+                conditions.push("(confirmed = 0 OR confirmed IS NULL)".to_string());
+                conditions
+                    .push("(supersede_mode IS NULL OR supersede_mode != 'archive')".to_string());
+                conditions.push("(is_recap IS NULL OR is_recap != 1)".to_string());
+            }
+        }
 
         // Exclude superseded memories and pending revisions
         conditions.push("pending_revision = 0".to_string());
@@ -8384,7 +8414,9 @@ impl MemoryDB {
                     MAX(url) as url, COUNT(*) as chunk_count,
                     MAX(last_modified) as last_modified, MAX(summary) as summary,
                     MAX(memory_type), MAX(domain), MAX(source_agent),
-                    MAX(CAST(confidence AS REAL)), MAX(confirmed), MAX(pinned)
+                    MAX(CAST(confidence AS REAL)), MAX(confirmed), MAX(pinned),
+                    MAX(created_at) as created_at,
+                    MAX(content) as content
              FROM memories
              {}
              GROUP BY source_id
@@ -8416,6 +8448,11 @@ impl MemoryDB {
                 confirmed: row.get::<Option<i64>>(11).unwrap_or(None).map(|v| v != 0),
                 stability: None, // not fetched in list_filtered aggregate query
                 pinned: row.get::<i64>(12).unwrap_or(0) != 0,
+                created_at: row.get::<Option<i64>>(13).unwrap_or(None).unwrap_or(0),
+                content: row
+                    .get::<Option<String>>(14)
+                    .unwrap_or(None)
+                    .unwrap_or_default(),
             });
         }
 
@@ -18983,6 +19020,180 @@ pub(crate) mod tests {
     }
 
     // ==================== list_filtered ====================
+
+    /// Insert a memory with an explicit `confirmed` value (0 or 1) and a given `created_at`.
+    async fn insert_memory_with_confirmed(
+        db: &MemoryDB,
+        source_id: &str,
+        content: &str,
+        confirmed: i64,
+        created_at: i64,
+    ) {
+        let conn = db.conn.lock().await;
+        conn.execute(
+            "INSERT OR REPLACE INTO memories \
+             (id, source, source_id, title, content, chunk_index, chunk_type, word_count, \
+              last_modified, confirmed, created_at, stability, supersede_mode) \
+             VALUES (?1, 'memory', ?2, ?3, ?4, 0, 'text', 10, ?5, ?6, ?7, 'new', 'hide')",
+            libsql::params![
+                format!("id_{}", source_id),
+                source_id,
+                format!("title-{}", source_id),
+                content,
+                created_at,
+                confirmed,
+                created_at
+            ],
+        )
+        .await
+        .expect("insert_memory_with_confirmed failed");
+    }
+
+    #[tokio::test]
+    async fn test_list_filtered_confirmed_false_filters_unconfirmed() {
+        let (db, _dir) = test_db().await;
+
+        // Seed: one confirmed, two unconfirmed
+        insert_memory_with_confirmed(&db, "mem_conf", "confirmed content about widgets", 1, 1000)
+            .await;
+        insert_memory_with_confirmed(
+            &db,
+            "mem_unconf_a",
+            "unconfirmed content about sprockets",
+            0,
+            2000,
+        )
+        .await;
+        insert_memory_with_confirmed(
+            &db,
+            "mem_unconf_b",
+            "unconfirmed content about gears",
+            0,
+            3000,
+        )
+        .await;
+
+        let results = db
+            .list_filtered_confirmed(Some("memory"), None, None, Some(false), 100)
+            .await
+            .unwrap();
+
+        assert_eq!(
+            results.len(),
+            2,
+            "expected 2 unconfirmed rows, got {:?}",
+            results.iter().map(|r| &r.source_id).collect::<Vec<_>>()
+        );
+        assert!(
+            results.iter().all(|r| r.confirmed == Some(false)),
+            "all results must be unconfirmed"
+        );
+        // created_at must be populated (non-zero)
+        assert!(
+            results.iter().all(|r| r.created_at > 0),
+            "created_at must be populated"
+        );
+        let ids: Vec<&str> = results.iter().map(|r| r.source_id.as_str()).collect();
+        assert!(ids.contains(&"mem_unconf_a"), "missing mem_unconf_a");
+        assert!(ids.contains(&"mem_unconf_b"), "missing mem_unconf_b");
+    }
+
+    #[tokio::test]
+    async fn test_list_filtered_confirmed_false_excludes_is_recap() {
+        let (db, _dir) = test_db().await;
+
+        // A normal unconfirmed memory — should appear.
+        insert_memory_with_confirmed(&db, "mem_normal", "normal unconfirmed content", 0, 1000)
+            .await;
+
+        // A recap row (is_recap=1, confirmed=0) — must NOT appear.
+        {
+            let conn = db.conn.lock().await;
+            conn.execute(
+                "INSERT OR REPLACE INTO memories \
+                 (id, source, source_id, title, content, chunk_index, chunk_type, word_count, \
+                  last_modified, confirmed, created_at, stability, supersede_mode, is_recap) \
+                 VALUES ('id_mem_recap', 'memory', 'mem_recap', 'recap-title', 'recap body', \
+                         0, 'text', 5, 2000, 0, 2000, 'new', 'hide', 1)",
+                (),
+            )
+            .await
+            .expect("insert recap failed");
+        }
+
+        let results = db
+            .list_filtered_confirmed(Some("memory"), None, None, Some(false), 100)
+            .await
+            .unwrap();
+
+        let ids: Vec<&str> = results.iter().map(|r| r.source_id.as_str()).collect();
+        assert!(ids.contains(&"mem_normal"), "mem_normal must appear");
+        assert!(
+            !ids.contains(&"mem_recap"),
+            "mem_recap (is_recap=1) must be excluded"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_list_filtered_confirmed_false_excludes_archive_supersede_mode() {
+        let (db, _dir) = test_db().await;
+
+        // A normal unconfirmed memory — should appear.
+        insert_memory_with_confirmed(&db, "mem_normal2", "normal unconfirmed content 2", 0, 1000)
+            .await;
+
+        // An archived row (supersede_mode='archive', confirmed=0) — must NOT appear.
+        {
+            let conn = db.conn.lock().await;
+            conn.execute(
+                "INSERT OR REPLACE INTO memories \
+                 (id, source, source_id, title, content, chunk_index, chunk_type, word_count, \
+                  last_modified, confirmed, created_at, stability, supersede_mode) \
+                 VALUES ('id_mem_arch', 'memory', 'mem_arch', 'arch-title', 'arch body', \
+                         0, 'text', 5, 2000, 0, 2000, 'new', 'archive')",
+                (),
+            )
+            .await
+            .expect("insert archive failed");
+        }
+
+        let results = db
+            .list_filtered_confirmed(Some("memory"), None, None, Some(false), 100)
+            .await
+            .unwrap();
+
+        let ids: Vec<&str> = results.iter().map(|r| r.source_id.as_str()).collect();
+        assert!(ids.contains(&"mem_normal2"), "mem_normal2 must appear");
+        assert!(
+            !ids.contains(&"mem_arch"),
+            "mem_arch (supersede_mode=archive) must be excluded"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_list_filtered_confirmed_false_content_populated() {
+        let (db, _dir) = test_db().await;
+
+        insert_memory_with_confirmed(
+            &db,
+            "mem_content_test",
+            "unconfirmed content about sprockets",
+            0,
+            1000,
+        )
+        .await;
+
+        let results = db
+            .list_filtered_confirmed(Some("memory"), None, None, Some(false), 100)
+            .await
+            .unwrap();
+
+        assert_eq!(results.len(), 1);
+        assert_eq!(
+            results[0].content, "unconfirmed content about sprockets",
+            "content field must be populated"
+        );
+    }
 
     #[tokio::test]
     async fn test_list_filtered_by_source() {
