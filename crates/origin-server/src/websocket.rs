@@ -163,7 +163,7 @@ async fn handle_ws_ingest(
         metadata: std::collections::HashMap::new(),
         memory_type: None,
         source_agent: None,
-        domain: None,
+        space: None,
         confidence: None,
         confirmed: None,
         supersedes: None,

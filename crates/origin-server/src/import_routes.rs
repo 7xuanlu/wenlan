@@ -305,7 +305,7 @@ pub async fn handle_chat_export_import(
                                         origin_core::llm_provider::parse_classify_response(&output)
                                     {
                                         memory_type = c.memory_type;
-                                        domain = c.domain;
+                                        domain = c.space;
                                         quality = c.quality;
                                     }
                                 }

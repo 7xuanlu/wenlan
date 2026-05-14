@@ -6066,7 +6066,12 @@ impl MemoryDB {
         query: &str,
         limit: usize,
         source_filter: Option<&str>,
+        space: Option<&str>,
     ) -> Result<Vec<SearchResult>, OriginError> {
+        // TODO(PR-C): documents/chunks table currently lacks a `space` column.
+        // The parameter is accepted for API symmetry but ignored on the doc path.
+        // PR-C will add the schema and wire the filter through.
+        let _ = space;
         let embedding = self.get_or_compute_embedding(query)?;
         let vec_str = Self::vec_to_sql(&embedding);
         let fetch_limit = (limit * 3) as i64;
