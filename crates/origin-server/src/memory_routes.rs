@@ -2710,6 +2710,7 @@ pub async fn handle_list_decisions(
 }
 
 /// GET /api/decisions/domains
+/// (Path kept as "domains" for back-compat; will rename to "spaces" in PR-A+1.)
 pub async fn handle_list_decision_domains(
     State(state): State<Arc<RwLock<ServerState>>>,
 ) -> Result<Json<origin_types::responses::DecisionDomainsResponse>, ServerError> {

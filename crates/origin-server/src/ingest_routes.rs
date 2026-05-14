@@ -109,6 +109,7 @@ pub async fn handle_ingest_webpage(
         .nth(1)
         .and_then(|rest| rest.split('/').next())
     {
+        // Metadata blob key kept as "domain" for downstream-reader back-compat.
         metadata.insert("domain".to_string(), domain.to_string());
     }
 

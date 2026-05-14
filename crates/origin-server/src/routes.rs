@@ -237,6 +237,9 @@ pub async fn handle_chat_context(
     };
 
     let classification = classify_query(query, agent_name, &agent_trust, true);
+    // classification.space fallback removed (wire-gap fix #3): classifier never
+    // populated it, so the .or() chain was dead code. Callers must now supply
+    // space explicitly via req.space.
     let space_filter = req.space.as_deref();
 
     // Tier 1 (identity + preferences)
