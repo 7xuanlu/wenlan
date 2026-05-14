@@ -170,14 +170,6 @@ pub fn build_router(state: SharedState) -> Router {
             "/api/memory/entity-suggestions",
             get(memory_routes::handle_get_entity_suggestions),
         )
-        .route(
-            "/api/memory/entity-suggestions/{id}/approve",
-            post(memory_routes::handle_approve_entity_suggestion),
-        )
-        .route(
-            "/api/memory/entity-suggestions/{id}/dismiss",
-            post(memory_routes::handle_dismiss_entity_suggestion),
-        )
         // Nurture cards
         .route(
             "/api/memory/nurture",

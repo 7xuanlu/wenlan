@@ -37,12 +37,11 @@ pub use memory_type::{MEMORY_TYPE_CAPTURE_DESCRIPTION, MEMORY_TYPE_FILTER_DESCRI
 pub use narrative::NarrativeResponse;
 pub use pages::Page;
 pub use responses::{
-    ContradictionDismissResponse, EntitySuggestionApproveResponse, EntitySuggestionDismissResponse,
-    ExportStats, ListMemoryRevisionsResponse, ListPageRevisionsResponse, ListRefinementsResponse,
-    MemoryDetail, MemoryRevisionEntry, OrphanLink, OrphanLinksResponse, PageChangelogEntry,
-    PendingRevision, PendingRevisionItem, ProposalAction, RefinementPayload,
-    RefinementProposalSummary, RejectRefinementResponse, RevisionAcceptResponse,
-    RevisionDismissResponse,
+    ContradictionDismissResponse, ExportStats, ListMemoryRevisionsResponse,
+    ListPageRevisionsResponse, ListRefinementsResponse, MemoryDetail, MemoryRevisionEntry,
+    OrphanLink, OrphanLinksResponse, PageChangelogEntry, PendingRevision, PendingRevisionItem,
+    ProposalAction, RefinementPayload, RefinementProposalSummary, RejectRefinementResponse,
+    RevisionAcceptResponse, RevisionDismissResponse,
 };
 pub use sources::{MemoryType, RawDocument, SourceType, StabilityTier, SyncStatus};
 
