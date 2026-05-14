@@ -121,8 +121,8 @@ jobs:
   # Aggregate gate for branch protection. `if: always()` lets docs-only PRs
   # (where fmt/lint/test skipped via detect-changes) report success instead of
   # stalling forever on a never-run required check.
-  ci-success:
-    name: ci-success
+  conclusion:
+    name: conclusion
     needs: [detect-changes, fmt, lint, test]
     if: always() && !cancelled()
     runs-on: ubuntu-24.04
