@@ -1426,6 +1426,13 @@ impl OriginMcpServer {
         &self,
         req: DismissContradictionRequest,
     ) -> Result<CallToolResult, McpError> {
+        if self.transport == TransportMode::Http {
+            return Ok(CallToolResult::error(vec![Content::text(
+                "Contradiction operations are not available over remote connections. \
+                 Use local MCP on the machine running Origin to dismiss contradictions."
+                    .to_string(),
+            )]));
+        }
         let path = format!("/api/memory/contradiction/{}/dismiss", req.source_id);
         let response = match self
             .client
@@ -2119,7 +2126,7 @@ impl OriginMcpServer {
 
     #[tool(
         description = "Dismiss all awaiting-review contradiction flags for a memory. Idempotent. \
-                       Returns wrote:true even if no rows matched.",
+                       Returns wrote:true even if no rows matched. Not available over remote HTTP MCP transport (local stdio only).",
         annotations(
             title = "Dismiss contradiction",
             read_only_hint = false,
@@ -3117,6 +3124,35 @@ mod tests {
             target_source_id: "mem_x".into(),
         };
         let result = server.dismiss_revision_impl(req).await.unwrap();
+        assert!(
+            result.is_error.unwrap_or(false),
+            "should fail with connection error, not transport block"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_dismiss_contradiction_blocked_on_http_transport() {
+        let server = make_server(TransportMode::Http, "agent", None);
+        let req = DismissContradictionRequest {
+            source_id: "mem_x".into(),
+        };
+        let result = server.dismiss_contradiction_impl(req).await.unwrap();
+        let content = &result.content[0];
+        match content.raw {
+            rmcp::model::RawContent::Text(ref tc) => {
+                assert!(tc.text.contains("not available over remote connections"));
+            }
+            _ => panic!("expected text content"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_dismiss_contradiction_allowed_on_stdio_transport() {
+        let server = make_server(TransportMode::Stdio, "agent", None);
+        let req = DismissContradictionRequest {
+            source_id: "mem_x".into(),
+        };
+        let result = server.dismiss_contradiction_impl(req).await.unwrap();
         assert!(
             result.is_error.unwrap_or(false),
             "should fail with connection error, not transport block"
