@@ -114,6 +114,7 @@ async fn t1_remember_roundtrip() {
 
         hint: String::new(),
         triggered_revisions: vec![],
+        auto_superseded: vec![],
     };
     Mock::given(method("POST"))
         .and(path("/api/memory/store"))
@@ -160,6 +161,7 @@ async fn t2_remember_surfaces_warnings_when_present() {
 
         hint: String::new(),
         triggered_revisions: vec![],
+        auto_superseded: vec![],
     };
     Mock::given(method("POST"))
         .and(path("/api/memory/store"))
@@ -215,6 +217,7 @@ async fn t3_structured_fields_schema_is_object() {
 
         hint: String::new(),
         triggered_revisions: vec![],
+        auto_superseded: vec![],
     };
     Mock::given(method("POST"))
         .and(path("/api/memory/store"))
@@ -338,6 +341,7 @@ async fn t5_memory_type_hint_preserved_without_forcing_domain() {
 
         hint: String::new(),
         triggered_revisions: vec![],
+        auto_superseded: vec![],
     };
     Mock::given(method("POST"))
         .and(path("/api/memory/store"))
@@ -561,6 +565,7 @@ async fn t10_remember_request_does_not_contain_user_id() {
 
         hint: String::new(),
         triggered_revisions: vec![],
+        auto_superseded: vec![],
     };
     Mock::given(method("POST"))
         .and(path("/api/memory/store"))
@@ -611,6 +616,7 @@ async fn t11_extraction_method_none_not_in_text() {
 
         hint: String::new(),
         triggered_revisions: vec![],
+        auto_superseded: vec![],
     };
     Mock::given(method("POST"))
         .and(path("/api/memory/store"))
@@ -762,6 +768,7 @@ async fn origin_client_sends_x_agent_name_header() {
         enrichment: String::new(),
         hint: String::new(),
         triggered_revisions: vec![],
+        auto_superseded: vec![],
     };
     Mock::given(method("POST"))
         .and(path("/api/memory/store"))
@@ -815,6 +822,7 @@ async fn origin_client_omits_x_agent_name_when_unset() {
         enrichment: String::new(),
         hint: String::new(),
         triggered_revisions: vec![],
+        auto_superseded: vec![],
     };
     Mock::given(method("POST"))
         .and(path("/api/memory/store"))

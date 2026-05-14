@@ -499,6 +499,12 @@ fn format_capture_success(resp: &StoreMemoryResponse) -> String {
             msg.push_str(&format!("\n  - {}", warning));
         }
     }
+    if !resp.auto_superseded.is_empty() {
+        msg.push_str("\n\nAuto-superseded (trust-tier + high-similarity, no action needed):");
+        for target_id in &resp.auto_superseded {
+            msg.push_str(&format!("\n  - {target_id}"));
+        }
+    }
     if !resp.triggered_revisions.is_empty() {
         msg.push_str("\n\nTriggered revisions (protected memories now flagged):");
         for target_id in &resp.triggered_revisions {
@@ -2488,6 +2494,7 @@ mod tests {
             enrichment: String::new(),
             hint: String::new(),
             triggered_revisions: vec![],
+            auto_superseded: vec![],
         };
         let msg = format_capture_success(&resp);
         assert_eq!(msg, "Stored mem_abc");
@@ -2509,6 +2516,7 @@ mod tests {
             enrichment: String::new(),
             hint: String::new(),
             triggered_revisions: vec![],
+            auto_superseded: vec![],
         };
         let msg = format_capture_success(&resp);
         assert!(msg.starts_with("Stored mem_abc"));
@@ -2529,6 +2537,7 @@ mod tests {
             enrichment: String::new(),
             hint: String::new(),
             triggered_revisions: vec!["mem_protected_target".to_string()],
+            auto_superseded: vec![],
         };
         let out = format_capture_success(&resp);
         assert!(out.contains("Triggered revisions"));
@@ -2550,9 +2559,50 @@ mod tests {
             enrichment: String::new(),
             hint: String::new(),
             triggered_revisions: vec![],
+            auto_superseded: vec![],
         };
         let out = format_capture_success(&resp);
         assert!(!out.contains("Triggered revisions"));
+    }
+
+    #[test]
+    fn format_capture_success_surfaces_auto_superseded() {
+        let resp = StoreMemoryResponse {
+            source_id: "mem_new".into(),
+            chunks_created: 1,
+            memory_type: "fact".into(),
+            entity_id: None,
+            quality: None,
+            warnings: vec![],
+            extraction_method: "agent".into(),
+            enrichment: String::new(),
+            hint: String::new(),
+            triggered_revisions: vec![],
+            auto_superseded: vec!["mem_old_xyz".to_string()],
+        };
+        let out = format_capture_success(&resp);
+        assert!(out.contains("Auto-superseded"));
+        assert!(out.contains("mem_old_xyz"));
+        assert!(out.contains("no action needed"));
+    }
+
+    #[test]
+    fn format_capture_success_omits_auto_superseded_when_empty() {
+        let resp = StoreMemoryResponse {
+            source_id: "mem_new".into(),
+            chunks_created: 1,
+            memory_type: "fact".into(),
+            entity_id: None,
+            quality: None,
+            warnings: vec![],
+            extraction_method: "agent".into(),
+            enrichment: String::new(),
+            hint: String::new(),
+            triggered_revisions: vec![],
+            auto_superseded: vec![],
+        };
+        let out = format_capture_success(&resp);
+        assert!(!out.contains("Auto-superseded"));
     }
 
     #[test]

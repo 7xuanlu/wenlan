@@ -329,6 +329,7 @@ pub async fn handle_store_memory(
     // production memory-system pattern: hash-only dedup at write, periodic
     // consolidation later).
     let mut topic_match_protected_id: Option<String> = None;
+    let mut topic_match_similarity: Option<f64> = None;
     {
         let (db_arc, topic_cfg) = {
             let s = state.read().await;
@@ -365,6 +366,7 @@ pub async fn handle_store_memory(
                                      storing as new pending_revision"
                                 );
                                 topic_match_protected_id = Some(matched_source_id.clone());
+                                topic_match_similarity = result.signals.embedding_similarity;
                             }
                             // Non-protected topic match: no longer collapsed
                             // into the existing row. The incoming memory
@@ -961,6 +963,53 @@ pub async fn handle_store_memory(
         ("not_needed".to_string(), String::new())
     };
 
+    // Trust-tier auto-supersede: if the capture came from a full-trust agent
+    // and embedding similarity is high enough, auto-accept the revision
+    // instead of surfacing it for human review via /brief.
+    const TRUST_AUTO_SUPERSEDE_SIM_THRESHOLD: f64 = 0.9;
+    let mut auto_superseded: Vec<String> = Vec::new();
+    let triggered_revisions: Vec<String> = if let Some(ref matched_id) = topic_match_protected_id {
+        let sim = topic_match_similarity.unwrap_or(0.0);
+        if trust_level == "full" && sim > TRUST_AUTO_SUPERSEDE_SIM_THRESHOLD {
+            // Clone db Arc before awaiting — must not hold state guard across .await.
+            let db_for_accept = {
+                let s = state.read().await;
+                s.db.clone()
+            };
+            if let Some(ref db) = db_for_accept {
+                match origin_core::post_write::accept_pending_revision(
+                    db,
+                    matched_id,
+                    &agent_for_activity,
+                )
+                .await
+                {
+                    Ok(_) => {
+                        tracing::info!(
+                            "[trust_auto_supersede] auto-superseded {matched_id} \
+                             (trust=full, sim={sim:.3})"
+                        );
+                        auto_superseded.push(matched_id.clone());
+                        Vec::new() // triggered_revisions empty when auto-superseded
+                    }
+                    Err(e) => {
+                        tracing::warn!(
+                            "[trust_auto_supersede] accept_pending_revision failed for \
+                             {matched_id}: {e}; falling back to /brief surface"
+                        );
+                        vec![matched_id.clone()]
+                    }
+                }
+            } else {
+                vec![matched_id.clone()]
+            }
+        } else {
+            vec![matched_id.clone()]
+        }
+    } else {
+        Vec::new()
+    };
+
     Ok(Json(StoreMemoryResponse {
         source_id,
         chunks_created,
@@ -971,10 +1020,8 @@ pub async fn handle_store_memory(
         extraction_method,
         enrichment,
         hint,
-        triggered_revisions: topic_match_protected_id
-            .as_ref()
-            .map(|id| vec![id.clone()])
-            .unwrap_or_default(),
+        triggered_revisions,
+        auto_superseded,
     }))
 }
 
