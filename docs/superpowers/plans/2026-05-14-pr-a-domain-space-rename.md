@@ -1208,3 +1208,15 @@ Print the PR URL for the user.
 ## Execution log
 
 <!-- Append smoke results, adversarial findings summary, and any deviation notes here. -->
+
+### Task 19: Daemon smoke (2026-05-14 22:35)
+
+- Build: CLEAN. `origin-server v0.6.0` compiled fresh in 23s with CXXFLAGS="-std=c++17".
+- Health endpoint: alive on port 7898, `{"status":"ok","db_initialized":true,"version":"0.6.0"}`.
+- Store + search with `space` (new key): PASS. Alpha memory stored and recalled. Beta memory (distinct content) stored; filtered out when searching space=alpha.
+- Store + search with `domain` (legacy alias): PASS. Gamma memory stored via `"domain":"gamma"` key accepted by `/api/memory/store`. Recalled via `"domain":"gamma"` query param in `/api/search`, returning `"space":"gamma"` in the response. `#[serde(alias = "domain")]` works on both directions.
+- Migration 50: `user_version = 50`, column `memories.space` present, `idx_memories_space` index exists. Old `domain`-named index absent. Migration log confirmed: `Migration 50 applied: renamed domain → space on memories/entities/pages + reindexed`.
+
+Note: `ORIGIN_DATA_DIR` env var override failed silently (sandbox blocked `mktemp -d`; the daemon fell back to relative path `memorydb/` under the worktree checkout). The test DB is in `.worktrees/feature/space-rename/memorydb/` — not the user's real data at `~/Library/Application Support/origin/`. Data isolation held (different directory); port isolation held (7898 vs 7878).
+
+Smoke gate: GREEN.
