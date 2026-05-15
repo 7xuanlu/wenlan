@@ -5,5 +5,7 @@ pub mod agents;
 pub mod list;
 pub mod recall;
 pub mod search;
+pub mod service;
+pub mod setup;
 pub mod status;
 pub mod store;

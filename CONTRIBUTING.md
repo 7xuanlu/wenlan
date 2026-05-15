@@ -2,7 +2,7 @@
 
 Origin is a local-first personal AI memory layer. We welcome bug fixes, features, tests, docs, and design feedback.
 
-This repo holds the daemon (`origin-server`), the CLI (`origin`), and the shared types/core (`origin-types`, `origin-core`). The Tauri desktop app lives in [7xuanlu/origin-app](https://github.com/7xuanlu/origin-app); the MCP server lives in [7xuanlu/origin-mcp](https://github.com/7xuanlu/origin-mcp). Bug reports for any of those pieces are welcome here or on the corresponding repo.
+This repo holds the daemon (`origin-server`), the CLI (`origin`), the MCP server (`origin-mcp`), and the shared types/core (`origin-types`, `origin-core`). The Tauri desktop app lives in [7xuanlu/origin-app](https://github.com/7xuanlu/origin-app). Bug reports for the local runtime, CLI, MCP server, and plugin are welcome here.
 
 ## Development Setup
 
@@ -23,9 +23,10 @@ cargo run -p origin-server
 Or install as a launchd service:
 
 ```bash
-cargo build --release -p origin-server
-./target/release/origin-server install
-./target/release/origin-server status
+cargo build --release -p origin -p origin-server
+./target/release/origin setup --basic
+./target/release/origin install
+./target/release/origin status
 ```
 
 > First build can take several minutes while `llama.cpp` compiles for Metal.
@@ -53,9 +54,10 @@ cargo clippy --workspace --all-targets -- -D warnings
 ## Architecture Overview
 
 - **Shared types**: `crates/origin-types` (Apache-2.0). Lightweight wire types shared with `origin-mcp` and `origin-app` via crates.io.
-- **Core logic**: `crates/origin-core` (Apache-2.0). DB, embeddings, LLM engine, search, knowledge graph, refinery, eval. No tauri / no axum dependencies.
+- **Core logic**: `crates/origin-core` (Apache-2.0). DB, embeddings, LLM engine, search, knowledge graph, distill cycles, eval. No tauri / no axum dependencies.
 - **HTTP daemon**: `crates/origin-server` (Apache-2.0), serves `127.0.0.1:7878`.
-- **CLI binary**: `crates/origin-cli` (Apache-2.0). The `origin` command for setup, install, search, recall, etc.
+- **CLI binary**: `crates/origin-cli` (Apache-2.0). The `origin` command for setup, service management, search, recall, etc.
+- **MCP server**: `crates/origin-mcp` (Apache-2.0). The connector spawned by Claude Code, Cursor, Codex, and other MCP clients.
 - **Desktop app** (separate repo): [7xuanlu/origin-app](https://github.com/7xuanlu/origin-app), AGPL-3.0-only.
 - **Database**: libSQL (vectors + knowledge graph + FTS).
 
@@ -91,6 +93,6 @@ These conventions keep the codebase consistent. See `CLAUDE.md` for the full lis
 
 ## License
 
-This repo is Apache-2.0: `crates/origin-types`, `crates/origin-core`, `crates/origin-server`, and `crates/origin-cli`. The desktop app in [origin-app](https://github.com/7xuanlu/origin-app) is AGPL-3.0-only. The MCP server in [origin-mcp](https://github.com/7xuanlu/origin-mcp) is MIT.
+This repo is Apache-2.0: `crates/origin-types`, `crates/origin-core`, `crates/origin-server`, `crates/origin-cli`, `crates/origin-mcp`, and the Claude Code plugin files. The desktop app in [origin-app](https://github.com/7xuanlu/origin-app) is AGPL-3.0-only.
 
 By contributing, you agree that your changes will be licensed under the license that applies to the files you modify.

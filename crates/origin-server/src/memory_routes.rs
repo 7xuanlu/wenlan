@@ -1731,8 +1731,10 @@ pub struct UpdateSpaceRequest {
 pub async fn handle_list_spaces(
     State(state): State<Arc<RwLock<ServerState>>>,
 ) -> Result<Json<Vec<origin_core::db::Space>>, ServerError> {
-    let s = state.read().await;
-    let db = s.db.as_ref().ok_or(ServerError::DbNotInitialized)?;
+    let db = {
+        let s = state.read().await;
+        s.db.clone().ok_or(ServerError::DbNotInitialized)?
+    };
     let spaces = db
         .list_spaces()
         .await

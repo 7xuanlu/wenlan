@@ -1,8 +1,8 @@
 ---
 name: init
 description: >
-  Frictionless setup. Detects missing daemon, installs it, configures Basic
-  Memory mode, and verifies the full plugin → MCP → daemon round-trip. Run
+  Frictionless setup. Detects missing daemon, installs it, configures local
+  memory, and verifies the full plugin → MCP → daemon round-trip. Run
   after `/plugin install origin@7xuanlu`, or any time the user says "set up
   origin", "is origin working", "fix origin".
 allowed-tools: ["Bash", "mcp__plugin_origin_origin__doctor", "mcp__plugin_origin_origin__context"]
@@ -11,7 +11,7 @@ allowed-tools: ["Bash", "mcp__plugin_origin_origin__doctor", "mcp__plugin_origin
 # /init
 
 Self-healing setup. Goal: 30 seconds, two user actions max (install plugin,
-type /init). Default backend is Basic Memory — no LLM, no API key, no
+type /init). Default backend is local memory — no local model, no API key, no
 prompts. Local model and Anthropic key are opt-in upgrades documented in
 `/help`.
 
@@ -40,10 +40,10 @@ Bash: command -v origin >/dev/null 2>&1 && echo present || echo absent
 If `absent`, run the installer (no human prompts):
 
 ```
-Bash: curl -fsSL https://raw.githubusercontent.com/7xuanlu/origin/v0.5.3/install.sh | bash
+Bash: curl -fsSL https://raw.githubusercontent.com/7xuanlu/origin/v0.6.0/install.sh | bash
 ```
 
-Then add it to PATH for the current session and configure Basic Memory
+Then add it to PATH for the current session and configure local memory
 non-interactively:
 
 ```
@@ -78,7 +78,7 @@ Call the `origin` MCP server's `doctor` tool:
 doctor()
 ```
 
-Expected: Basic Memory configured (no model, no key). Capture the mode
+Expected: local memory configured (no model, no key). Capture the mode
 string for the final report.
 
 ### 5. MCP round-trip
@@ -110,13 +110,13 @@ once so the user sees the verb cheat-sheet without asking.
 ## Optional upgrades (don't auto-run)
 
 Mention these in the ready report only if the user explicitly asks for
-"richer features" or asks about LLM-backed extraction:
+"richer features" or asks about model-backed extraction:
 
-- `origin model install` — local Qwen for background refinement.
+- `origin model install` — local Qwen for distill cycles.
 - `origin key set anthropic` — Anthropic for stronger synthesis.
 
 Default flow ignores both. Storage, search, recall, and MCP memory all
-work in Basic Memory mode.
+work in local memory mode.
 
 ## When to use
 

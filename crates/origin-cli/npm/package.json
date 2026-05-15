@@ -1,0 +1,23 @@
+{
+  "name": "@7xuanlu/origin",
+  "version": "0.6.0",
+  "description": "Frictionless setup for Origin, the local runtime for AI work memory.",
+  "license": "Apache-2.0",
+  "bin": {
+    "origin": "run.js"
+  },
+  "os": [
+    "darwin"
+  ],
+  "cpu": [
+    "arm64"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/7xuanlu/origin.git",
+    "directory": "crates/origin-cli/npm"
+  },
+  "files": [
+    "run.js"
+  ]
+}

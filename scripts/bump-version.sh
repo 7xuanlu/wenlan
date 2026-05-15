@@ -39,9 +39,11 @@ for dep in origin-types origin-core; do
 done
 echo "  Updated Cargo.toml (workspace.dependencies origin-types/origin-core)"
 
-# 2. npm wrapper package.json
+# 2. npm wrapper package.json files
 (cd crates/origin-mcp/npm && npm version "$NEW_VERSION" --no-git-tag-version --allow-same-version >/dev/null)
+(cd crates/origin-cli/npm && npm version "$NEW_VERSION" --no-git-tag-version --allow-same-version >/dev/null)
 echo "  Updated crates/origin-mcp/npm/package.json"
+echo "  Updated crates/origin-cli/npm/package.json"
 
 # 3. Claude plugin manifest (moved under plugin/ subdir in v0.5.0)
 PLUGIN_MANIFEST="plugin/.claude-plugin/plugin.json"

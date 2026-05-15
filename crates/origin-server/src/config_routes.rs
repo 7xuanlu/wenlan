@@ -269,7 +269,7 @@ pub async fn handle_get_on_device_model(
     let models: Vec<OnDeviceModelEntry> =
         on_device_models::MODELS.iter().map(model_entry).collect();
     // Resolve selected against registry so stale config values map to the default,
-    // but keep Basic Memory distinct from "default local model selected".
+    // but keep local memory distinct from "default local model selected".
     let selected = cfg
         .on_device_model
         .as_deref()

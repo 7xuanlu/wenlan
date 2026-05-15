@@ -191,7 +191,7 @@ pub struct ConfirmMemoryParams {
     pub memory_id: String,
 }
 
-// --- Refinery queue params ---
+// --- Review proposal params ---
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct ListRefinementsParams {
@@ -207,13 +207,13 @@ pub struct ListRefinementsParams {
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct RejectRefinementParams {
-    #[schemars(description = "The refinement proposal id to dismiss.")]
+    #[schemars(description = "The review proposal id to dismiss.")]
     pub id: String,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct AcceptRefinementParams {
-    #[schemars(description = "The refinement proposal id (e.g. \"merge_abc123_def456\").")]
+    #[schemars(description = "The review proposal id (e.g. \"merge_abc123_def456\").")]
     pub id: String,
 }
 
@@ -451,6 +451,9 @@ pub struct ListNurtureParams {
 pub struct ListEntitySuggestionsParams {}
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct ListSpacesParams {}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct AcceptRevisionRequest {
     /// The source_id of the memory whose pending revision should be accepted.
     pub target_source_id: String,
@@ -527,9 +530,9 @@ fn daemon_setup_hint() -> &'static str {
     "Install the local Origin runtime and run `origin setup`.
 
 Setup choices:
-- Basic Memory: store, search, and recall now. No model download or API key.
-- On-device Model: private local extraction and background refinement after model download.
-- Anthropic Key: richer extraction and background refinement using your API key.
+- Local Memory: store, search, and recall now. No model download or API key.
+- On-device Model: private local extraction and distill cycles after model download.
+- Anthropic Key: richer extraction and distill cycles using your API key.
 
 Install:
   curl -fsSL https://raw.githubusercontent.com/7xuanlu/origin/main/install.sh | bash
@@ -581,7 +584,7 @@ fn format_doctor_message(status: &serde_json::Value) -> String {
         .unwrap_or(false);
 
     let mode_label = match mode {
-        "basic-memory" => "Basic Memory",
+        "basic-memory" => "Local Memory",
         "local-model" => "On-device Model",
         "anthropic-key" => "Anthropic Key",
         other => other,
@@ -603,9 +606,9 @@ fn format_doctor_message(status: &serde_json::Value) -> String {
         None => "not selected".to_string(),
     };
     let refinement_line = if anthropic_key_configured || local_model_loaded.is_some() {
-        "enabled (richer extraction and background refinement are active)"
+        "enabled (richer extraction and page synthesis are active)"
     } else if setup_completed {
-        "paused (Basic Memory stores, searches, and recalls now. Choose an on-device model or Anthropic key for richer extraction.)"
+        "off (local memory stores, searches, and recalls now. Choose an on-device model or Anthropic key for richer extraction.)"
     } else {
         "not configured"
     };
@@ -616,7 +619,7 @@ fn format_doctor_message(status: &serde_json::Value) -> String {
          Mode: {mode_label}\n\
          Anthropic key: {}\n\
          On-device model: {local_model_line}\n\
-         Background refinement: {refinement_line}",
+         Distill cycles: {refinement_line}",
         if setup_completed {
             "completed"
         } else {
@@ -631,12 +634,12 @@ fn format_doctor_message(status: &serde_json::Value) -> String {
 
     if !setup_completed {
         msg.push_str(
-            "\n\nRun `origin setup` to choose Basic Memory, On-device Model, or Anthropic Key.",
+            "\n\nRun `origin setup` to choose Local Memory, On-device Model, or Anthropic Key.",
         );
     } else if !anthropic_key_configured && local_model_loaded.is_none() {
         msg.push_str(
-            "\n\nBasic Memory works now: capture, recall, and context are available. \
-             To enable richer extraction and background refinement, run `origin model install` \
+            "\n\nLocal memory works now: capture, recall, and context are available. \
+             To enable richer extraction and distill cycles, run `origin model install` \
              or `origin key set anthropic`.",
         );
     }
@@ -1285,6 +1288,23 @@ impl OriginMcpServer {
         ))]))
     }
 
+    pub async fn list_spaces_impl(
+        &self,
+        _params: ListSpacesParams,
+    ) -> Result<CallToolResult, McpError> {
+        let resp: Vec<Space> = match self.client.get("/api/spaces").await {
+            Ok(r) => r,
+            Err(e) => return Ok(tool_error(e, "list_spaces")),
+        };
+        let pretty = serde_json::to_string_pretty(&resp)
+            .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+        Ok(CallToolResult::success(vec![Content::text(format!(
+            "{} spaces\n{}",
+            resp.len(),
+            pretty
+        ))]))
+    }
+
     pub async fn list_refinements_impl(
         &self,
         params: ListRefinementsParams,
@@ -1310,7 +1330,7 @@ impl OriginMcpServer {
         let pretty = serde_json::to_string_pretty(&resp.proposals)
             .map_err(|e| McpError::internal_error(e.to_string(), None))?;
         Ok(CallToolResult::success(vec![Content::text(format!(
-            "{} pending refinement proposals\n{}",
+            "{} pending review proposals\n{}",
             resp.proposals.len(),
             pretty
         ))]))
@@ -1322,8 +1342,8 @@ impl OriginMcpServer {
     ) -> Result<CallToolResult, McpError> {
         if self.transport == TransportMode::Http {
             return Ok(CallToolResult::error(vec![Content::text(
-                "Refinement operations are not available over remote connections. \
-                 Use local MCP on the machine running Origin to reject refinements."
+                "Review proposal operations are not available over remote connections. \
+                 Use local MCP on the machine running Origin to reject proposals."
                     .to_string(),
             )]));
         }
@@ -1338,7 +1358,7 @@ impl OriginMcpServer {
             };
 
         Ok(CallToolResult::success(vec![Content::text(format!(
-            "Refinement {} dismissed.",
+            "Review proposal {} dismissed.",
             resp.id
         ))]))
     }
@@ -1349,8 +1369,8 @@ impl OriginMcpServer {
     ) -> Result<CallToolResult, McpError> {
         if self.transport == TransportMode::Http {
             return Ok(CallToolResult::error(vec![Content::text(
-                "Refinement operations are not available over remote connections. \
-                 Use local MCP on the machine running Origin to accept refinements."
+                "Review proposal operations are not available over remote connections. \
+                 Use local MCP on the machine running Origin to accept proposals."
                     .to_string(),
             )]));
         }
@@ -1365,7 +1385,7 @@ impl OriginMcpServer {
             };
 
         Ok(CallToolResult::success(vec![Content::text(format!(
-            "Refinement {} accepted (action={}).",
+            "Review proposal {} accepted (action={}).",
             resp.id, resp.action_applied
         ))]))
     }
@@ -1683,7 +1703,7 @@ impl OriginMcpServer {
     }
 
     #[tool(
-        description = "Diagnose the local Origin runtime. This is not part of the memory loop. Use only when Origin tools fail, when onboarding a new MCP client, or when the user asks why setup, extraction, or background refinement is paused. Reports daemon reachability, setup mode, Basic Memory, On-device Model, Anthropic key state, and on-device model state.",
+        description = "Diagnose the local Origin runtime. This is not part of the memory loop. Use only when Origin tools fail, when onboarding a new MCP client, or when the user asks why setup, extraction, or distill cycles are off. Reports daemon reachability, setup mode, Local Memory, On-device Model, Anthropic key state, and on-device model state.",
         annotations(title = "Doctor", read_only_hint = true, open_world_hint = false)
     )]
     async fn doctor(&self) -> Result<CallToolResult, McpError> {
@@ -1755,7 +1775,7 @@ impl OriginMcpServer {
     // --- Knowledge graph CRUD ---
 
     #[tool(
-        description = "Create an entity in the knowledge graph. Use when the user names a person, project, tool, or place that isn't yet linked, or when you need a stable id to anchor memories or pages to. The daemon's post-ingest enrichment usually creates entities automatically when an LLM is configured — call this explicitly only when there is no LLM (Basic Memory mode) or you need the id back synchronously.",
+        description = "Create an entity in the knowledge graph. Use when the user names a person, project, tool, or place that isn't yet linked, or when you need a stable id to anchor memories or pages to. The daemon's post-ingest enrichment usually creates entities automatically when a model or Anthropic key is configured — call this explicitly when distill cycles are off or you need the id back synchronously.",
         annotations(
             title = "Create entity",
             read_only_hint = false,
@@ -1772,7 +1792,7 @@ impl OriginMcpServer {
     }
 
     #[tool(
-        description = "Create a directed relation between two entities in the knowledge graph. Use sparingly — most relations come out of the daemon's enrichment when an LLM is configured. Call this explicitly to record a relation the user articulated that the daemon couldn't infer, or in Basic Memory mode where extraction does not run.",
+        description = "Create a directed relation between two entities in the knowledge graph. Use sparingly — most relations come out of the daemon's enrichment when a model or Anthropic key is configured. Call this explicitly to record a relation the user articulated that the daemon couldn't infer, or when distill cycles are off.",
         annotations(
             title = "Create relation",
             read_only_hint = false,
@@ -1789,7 +1809,7 @@ impl OriginMcpServer {
     }
 
     #[tool(
-        description = "Attach a factual observation to an existing entity in the knowledge graph. Use sparingly — most observations come from daemon LLM extraction. Call explicitly when the user articulates a fact about a person/project/tool that the daemon couldn't infer, or when running in Basic Memory mode where on-device extraction does not run. Requires the entity_id; resolve via search_entities first if you only have the name. Returns 422 if entity does not exist.",
+        description = "Attach a factual observation to an existing entity in the knowledge graph. Use sparingly — most observations come from daemon extraction. Call explicitly when the user articulates a fact about a person/project/tool that the daemon couldn't infer, or when distill cycles are off. Requires the entity_id; resolve via search_entities first if you only have the name. Returns 422 if entity does not exist.",
         annotations(
             title = "Create observation",
             read_only_hint = false,
@@ -1806,7 +1826,7 @@ impl OriginMcpServer {
     }
 
     #[tool(
-        description = "Confirm (or unconfirm) an entity in the knowledge graph — flips its stability flag from tentative to durable. Call when the user explicitly affirms or revokes an extracted entity (\"yes that's right\", \"no that's wrong\"), or when you have high confidence after seeing the entity reused across multiple contexts. Unconfirmed entities may be pruned by background refinement; confirmed ones persist. Defaults confirmed=true if omitted. Do NOT call for every extracted entity — most should stay unconfirmed and let background refinement decide. Not available over remote HTTP MCP transport (local stdio only).",
+        description = "Confirm (or unconfirm) an entity in the knowledge graph — flips its stability flag from tentative to durable. Call when the user explicitly affirms or revokes an extracted entity (\"yes that's right\", \"no that's wrong\"), or when you have high confidence after seeing the entity reused across multiple contexts. Unconfirmed entities may be pruned by distill cycles; confirmed ones persist. Defaults confirmed=true if omitted. Do NOT call for every extracted entity — most should stay unconfirmed and let distill cycles decide. Not available over remote HTTP MCP transport (local stdio only).",
         annotations(
             title = "Confirm entity",
             read_only_hint = false,
@@ -1840,7 +1860,7 @@ impl OriginMcpServer {
     }
 
     #[tool(
-        description = "Confirm (or unconfirm) an observation — flips its stability flag from tentative to durable. Call when the user explicitly affirms a specific fact attached to an entity (\"yes Alice does prefer tabs\"), or when you observe the same fact restated across multiple sources. Unconfirmed observations may be pruned by background refinement; confirmed ones persist. Defaults confirmed=true if omitted. Do NOT call for every observation you create — let background refinement promote them when warranted. Not available over remote HTTP MCP transport (local stdio only).",
+        description = "Confirm (or unconfirm) an observation — flips its stability flag from tentative to durable. Call when the user explicitly affirms a specific fact attached to an entity (\"yes Alice does prefer tabs\"), or when you observe the same fact restated across multiple sources. Unconfirmed observations may be pruned by distill cycles; confirmed ones persist. Defaults confirmed=true if omitted. Do NOT call for every observation you create — let distill cycles promote them when warranted. Not available over remote HTTP MCP transport (local stdio only).",
         annotations(
             title = "Confirm observation",
             read_only_hint = false,
@@ -2040,12 +2060,23 @@ impl OriginMcpServer {
         self.list_pages_recent_impl(params).await
     }
 
-    // --- Refinery queue tools ---
+    #[tool(
+        description = "List all spaces in this Origin instance. Use when the user asks 'what spaces exist', 'list my topics', or to discover space names before passing one as a filter to search_memory / list_nurture. Returns each space's name, description, memory_count, entity_count, and timestamps.",
+        annotations(title = "List spaces", read_only_hint = true, open_world_hint = false)
+    )]
+    async fn list_spaces(
+        &self,
+        Parameters(params): Parameters<ListSpacesParams>,
+    ) -> Result<CallToolResult, McpError> {
+        self.list_spaces_impl(params).await
+    }
+
+    // --- Review proposal tools ---
 
     #[tool(
-        description = "List pending refinement proposals from Origin's daemon-side refinery queue. Use when the user wants to audit what the daemon has queued for review — phrases like 'check refinery', 'pending proposals', 'what's queued'. Returns proposals with action (entity_merge/relation_conflict/detect_contradiction/suggest_entity/dedup_merge), source ids, confidence, and typed payload. Filter by action with optional `action` param. Pair with `reject_refinement` to dismiss noise.",
+        description = "List pending review proposals from Origin's daemon-side queue. Use when the user wants to audit what the daemon has queued for review — phrases like 'pending proposals', 'what's queued', 'check review queue'. Returns proposals with action (entity_merge/relation_conflict/detect_contradiction/suggest_entity/dedup_merge), source ids, confidence, and typed payload. Filter by action with optional `action` param. Pair with `reject_refinement` to dismiss noise.",
         annotations(
-            title = "List refinements",
+            title = "List review proposals",
             read_only_hint = true,
             open_world_hint = false
         )
@@ -2058,9 +2089,9 @@ impl OriginMcpServer {
     }
 
     #[tool(
-        description = "Reject (dismiss) a refinement proposal by id. Use when reviewing the refinery queue and the user decides a proposal is wrong or noise. Marks the queue row dismissed and logs the agent activity. Idempotent: already-dismissed proposals return 422. Note: there is no accept verb yet; keeping a proposal is a no-op (it stays queued). Not available over remote HTTP MCP transport (local stdio only).",
+        description = "Reject (dismiss) a review proposal by id. Use when reviewing the daemon queue and the user decides a proposal is wrong or noise. Marks the queue row dismissed and logs the agent activity. Idempotent: already-dismissed proposals return 422. Note: there is no accept verb yet; keeping a proposal is a no-op (it stays queued). Not available over remote HTTP MCP transport (local stdio only).",
         annotations(
-            title = "Reject refinement",
+            title = "Reject review proposal",
             read_only_hint = false,
             destructive_hint = false,
             idempotent_hint = true,
@@ -2075,14 +2106,14 @@ impl OriginMcpServer {
     }
 
     #[tool(
-        description = "Apply a refinement queue proposal using sensible defaults. \
+        description = "Apply a review queue proposal using sensible defaults. \
             entity_merge: existing entity wins as canonical. \
             relation_conflict: new relation supersedes. \
             detect_contradiction: previously-stored memory flagged for revision. \
             Returns 422 for suggest_entity (no producer) and dedup_merge (deprecated). \
             Not available over remote HTTP MCP transport (local stdio only).",
         annotations(
-            title = "Accept refinement",
+            title = "Accept review proposal",
             read_only_hint = false,
             destructive_hint = false,
             idempotent_hint = true,
@@ -2115,7 +2146,7 @@ impl OriginMcpServer {
     }
 
     #[tool(
-        description = "List entity-suggestion proposals from the refinery queue \
+        description = "List entity-suggestion proposals from the daemon review queue \
                        (action='suggest_entity'). Use when the user asks 'what entities \
                        does the daemon want to create' or wants to triage merge-vs-create \
                        decisions. Returns id, proposed entity_name, source_ids, confidence. \
@@ -2690,7 +2721,7 @@ mod tests {
     }
 
     #[test]
-    fn doctor_basic_memory_message_sets_expectations() {
+    fn doctor_local_memory_message_sets_expectations() {
         let msg = format_doctor_message(&serde_json::json!({
             "setup_completed": true,
             "mode": "basic-memory",
@@ -2700,10 +2731,10 @@ mod tests {
             "local_model_cached": false
         }));
 
-        assert!(msg.contains("Mode: Basic Memory"));
+        assert!(msg.contains("Mode: Local Memory"));
         assert!(msg.contains("On-device model: not selected"));
-        assert!(msg.contains("Background refinement: paused"));
-        assert!(msg.contains("Basic Memory works now: capture, recall, and context are available"));
+        assert!(msg.contains("Distill cycles: off"));
+        assert!(msg.contains("Local memory works now: capture, recall, and context are available"));
         assert!(msg.contains("origin model install"));
         assert!(msg.contains("origin key set anthropic"));
     }
@@ -2724,8 +2755,8 @@ mod tests {
             msg.contains("On-device model: qwen3-1.7b (downloaded, loaded)"),
             "{msg}"
         );
-        assert!(msg.contains("Background refinement: enabled"), "{msg}");
-        assert!(!msg.contains("Basic Memory works now"));
+        assert!(msg.contains("Distill cycles: enabled"), "{msg}");
+        assert!(!msg.contains("Local memory works now"));
     }
 
     #[test]
@@ -2741,7 +2772,7 @@ mod tests {
 
         assert!(msg.contains("Setup: not completed"));
         assert!(msg.contains("Run `origin setup`"));
-        assert!(msg.contains("Basic Memory, On-device Model, or Anthropic Key"));
+        assert!(msg.contains("Local Memory, On-device Model, or Anthropic Key"));
     }
 
     #[test]
@@ -3871,7 +3902,7 @@ mod tests {
         let descriptions = tool_descriptions();
         let status = descriptions.get("doctor").expect("doctor tool exists");
         assert!(
-            status.contains("Basic Memory"),
+            status.contains("Local Memory"),
             "doctor description must mention setup modes, got: {status}"
         );
         assert!(
@@ -4298,6 +4329,7 @@ mod tests {
             "list_memories",
             "search_pages",
             "list_pages_recent",
+            "list_spaces",
         ] {
             assert!(
                 descriptions.contains_key(name),

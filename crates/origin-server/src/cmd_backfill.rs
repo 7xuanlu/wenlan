@@ -1,12 +1,11 @@
 // SPDX-License-Identifier: Apache-2.0
-//! `backfill-stale-concepts` CLI subcommand.
+//! `backfill-stale-pages` internal CLI subcommand.
 //!
-//! Deletes archived pages that look like Mode B failures (large
+//! Deletes archived pages that look like old distillation failures (large
 //! source_memory_ids, no entity, no domain, not user-edited). Source memories
-//! are NOT modified — see spec 2026-04-25-bad-page-distill-fix-design.md
-//! for the rationale and follow-up steps required to re-distill them.
+//! are NOT modified.
 //!
-//! `concept_sources` rows are deleted automatically via ON DELETE CASCADE.
+//! `page_sources` rows are deleted automatically via ON DELETE CASCADE.
 
 use anyhow::{anyhow, Context, Result};
 use origin_core::db::MemoryDB;
@@ -75,7 +74,7 @@ pub async fn run(dry_run: bool) -> anyhow::Result<()> {
 
     // Step 4: confirm.
     print!(
-        "Delete {} page(s) and their concept_sources rows? (y/N): ",
+        "Delete {} page(s) and their page_sources rows? (y/N): ",
         candidates.len()
     );
     io::stdout().flush().ok();
@@ -90,7 +89,7 @@ pub async fn run(dry_run: bool) -> anyhow::Result<()> {
     }
 
     // Step 5: delete.
-    // concept_sources rows cascade automatically (ON DELETE CASCADE FK).
+    // page_sources rows cascade automatically (ON DELETE CASCADE FK).
     let mut deleted = 0usize;
     for c in &candidates {
         db.delete_page(&c.id)
@@ -105,7 +104,7 @@ pub async fn run(dry_run: bool) -> anyhow::Result<()> {
     );
     println!();
     println!("Next steps to re-distill the freed sources:");
-    println!("  - Sources with enrichment_steps rows will be eligible on next refinery tick.");
+    println!("  - Sources with enrichment_steps rows will be eligible on the next distill cycle.");
     println!("  - Raw sources need re-enrichment first. Either:");
     println!("    (a) Re-import: touch the original source files (e.g., `touch ~/second-brain/inbox/*.md`)");
     println!("    (b) Wait for entity_backfill to gradually backfill entity_ids");

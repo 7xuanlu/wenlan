@@ -28,4 +28,4 @@ if [ -n "${ORIGIN_MCP_DEV_BIN:-}" ] && [ -x "${ORIGIN_MCP_DEV_BIN}" ]; then
   exec "${ORIGIN_MCP_DEV_BIN}" "$@"
 fi
 
-exec npx -y origin-mcp@^0.5.3 "$@"
+exec npx -y origin-mcp@^0.6.0 "$@"

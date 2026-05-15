@@ -19,7 +19,7 @@ keeps chat scannable, dodges Bash output truncation, and respects the
 
 Two shapes accepted:
 
-1. **Page id** (starts with `page_` or `concept_`) → direct fetch.
+1. **Page id** (starts with `page_`; legacy `concept_` ids still work) → direct fetch.
 2. **Title or freeform word** → search, pick best match, fetch.
 
 Both end with the same preview block.
@@ -99,7 +99,7 @@ the title:
 Substitute `<page-id>` with the actual `page.id` value. When
 `user_edited` is false or absent, omit this line entirely.
 
-The lock means the daemon's refinery will not auto-rewrite this page's
+The lock means daemon distill cycles will not auto-rewrite this page's
 prose from sources — edits stay until the user explicitly runs
 `/distill rebuild` to wipe and regenerate.
 

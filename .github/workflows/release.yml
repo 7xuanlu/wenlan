@@ -46,11 +46,17 @@ jobs:
       - name: Cache Rust dependencies
         uses: Swatinem/rust-cache@v2
 
+      - name: Build origin CLI (release)
+        run: cargo build --release -p origin --target aarch64-apple-darwin
+
       - name: Build origin-server (release)
         run: cargo build --release -p origin-server --target aarch64-apple-darwin
 
       - name: Build origin-mcp (release)
         run: cargo build --release -p origin-mcp --target aarch64-apple-darwin
+
+      - name: Smoke test origin CLI
+        run: ./target/aarch64-apple-darwin/release/origin --help
 
       - name: Smoke test origin-server
         run: ./target/aarch64-apple-darwin/release/origin-server --help
@@ -72,20 +78,22 @@ jobs:
 
           ## Install
 
-          **Desktop app:** Download from [origin-app releases](https://github.com/7xuanlu/origin-app/releases/latest).
+          **Origin setup (local runtime + daemon):**
+          \`\`\`
+          npx -y @7xuanlu/origin setup
+          \`\`\`
 
-          **MCP integration (latest stable channel):**
+          **MCP connector only:**
           \`\`\`
           npx -y origin-mcp
           \`\`\`
 
-          **Exact release on this page:**
+          **Exact release setup:**
           \`\`\`
-          ORIGIN_RELEASE_TAG=${RELEASE_TAG} npx -y origin-mcp
+          ORIGIN_RELEASE_TAG=${RELEASE_TAG} npx -y @7xuanlu/origin setup
           \`\`\`
-          Uses isolated port/data-dir defaults so it does not replace the stable runtime.
 
-          **Developer (headless daemon, latest stable):**
+          **Shell installer:**
           \`\`\`
           curl -fsSL https://raw.githubusercontent.com/7xuanlu/origin/main/install.sh | bash
           \`\`\`
@@ -96,7 +104,7 @@ jobs:
           \`\`\`
           Downloads exact binaries and prints manual isolated daemon/MCP setup steps.
 
-          > Origin works in Basic Memory mode without a local LLM or API key. Local models are opt-in from \`origin model install\` or the desktop app.
+          > Origin works in local memory mode without a local model or API key. Distill cycles are opt-in with \`origin model install\` or \`origin key set anthropic\`.
           INSTALL_EOF
 
           # Strip leading whitespace from heredoc indentation
@@ -114,6 +122,15 @@ jobs:
             --notes-file release-body.md \
             $PRERELEASE_FLAG \
             || gh release edit "$RELEASE_TAG" --notes-file release-body.md
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Upload standalone origin CLI binary
+        run: |
+          cp target/aarch64-apple-darwin/release/origin origin-aarch64-apple-darwin
+          gh release upload "$RELEASE_TAG" \
+            origin-aarch64-apple-darwin \
+            --clobber
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -224,8 +241,16 @@ jobs:
         run: |
           VERSION="${RELEASE_TAG#v}"
           npm version "$VERSION" --no-git-tag-version --allow-same-version
-      - name: Publish
+      - name: Sync setup package version from tag
+        working-directory: crates/origin-cli/npm
+        run: |
+          VERSION="${RELEASE_TAG#v}"
+          npm version "$VERSION" --no-git-tag-version --allow-same-version
+      - name: Publish origin-mcp
         working-directory: crates/origin-mcp/npm
+        run: npm publish --provenance --access public
+      - name: Publish @7xuanlu/origin
+        working-directory: crates/origin-cli/npm
         run: npm publish --provenance --access public
 
   update-homebrew:

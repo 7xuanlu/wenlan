@@ -10,7 +10,7 @@ use output::OutputFormat;
 #[command(
     name = "origin",
     version,
-    about = "Origin CLI. Talk to the local Origin daemon."
+    about = "Origin CLI. Set up and use the local Origin runtime."
 )]
 struct Cli {
     #[command(subcommand)]
@@ -27,8 +27,39 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
-    /// Show daemon health + version.
+    /// Show daemon, service, model, and API key state.
     Status,
+    /// Guided setup for local memory, a local model, or an Anthropic key.
+    Setup {
+        /// Set up without a model or API key.
+        #[arg(long)]
+        basic: bool,
+        /// Download and select a local model, for example qwen3-4b.
+        #[arg(long, value_name = "MODEL_ID")]
+        model: Option<String>,
+        /// Read an Anthropic key from this environment variable.
+        #[arg(long = "anthropic-api-key-env", value_name = "ENV_VAR")]
+        anthropic_api_key_env: Option<String>,
+        /// Skip confirmation prompts where possible.
+        #[arg(short = 'y', long)]
+        yes: bool,
+    },
+    /// Install the Origin daemon as a macOS LaunchAgent.
+    Install,
+    /// Uninstall the Origin LaunchAgent.
+    Uninstall,
+    /// Diagnose daemon, model, and API key setup.
+    Doctor,
+    /// Manage local models.
+    Model {
+        #[command(subcommand)]
+        command: commands::setup::ModelCommand,
+    },
+    /// Manage provider API keys.
+    Key {
+        #[command(subcommand)]
+        command: commands::setup::KeyCommand,
+    },
     /// Search memories by query (vector + FTS hybrid).
     Search {
         /// Search query.
@@ -77,6 +108,25 @@ async fn main() -> anyhow::Result<()> {
     let format = cli.format.resolve();
     match cli.command {
         Commands::Status => commands::status::run(&client, format, cli.quiet).await?,
+        Commands::Setup {
+            basic,
+            model,
+            anthropic_api_key_env,
+            yes,
+        } => {
+            commands::setup::run_setup(commands::setup::SetupArgs {
+                basic,
+                model,
+                anthropic_api_key_env,
+                yes,
+            })
+            .await?
+        }
+        Commands::Install => commands::service::install()?,
+        Commands::Uninstall => commands::service::uninstall()?,
+        Commands::Doctor => commands::setup::run_doctor().await?,
+        Commands::Model { command } => commands::setup::run_model(command).await?,
+        Commands::Key { command } => commands::setup::run_key(command).await?,
         Commands::Search { query, limit } => {
             commands::search::run(&client, format, cli.quiet, query, limit).await?
         }

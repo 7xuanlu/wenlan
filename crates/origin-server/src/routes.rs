@@ -921,7 +921,7 @@ pub async fn handle_distill(
 /// POST /api/distill/{page_id}
 ///
 /// Re-distill a single page. Requires the daemon to have an LLM available
-/// (on-device or Anthropic key). When no LLM is configured (Basic Memory
+/// (on-device or Anthropic key). When no model/key is configured (local memory
 /// mode) the route returns a 200 with a hint payload instead of a 500 —
 /// the caller's intent (refresh this page) can't be honored, but the
 /// failure mode is documented in the response so the skill can surface

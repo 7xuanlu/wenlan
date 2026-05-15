@@ -16,9 +16,10 @@ helps.
 
 ## Two phases
 
-When the daemon has an LLM it can rerank and expand server-side. In Basic
-Memory mode it cannot. The skill always does **agent-side expansion and
-rerank** itself — cheap, makes results good in both modes.
+When a local model or API key is configured, the daemon can rerank and
+expand server-side. In local memory mode it cannot. The skill always does
+**agent-side expansion and rerank** itself — cheap, makes results good in
+both modes.
 
 ### Phase 1 — expand the query (agent-side)
 

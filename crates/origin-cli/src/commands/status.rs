@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
-//! `origin status` — show daemon health + version.
+//! `origin status` — show daemon, service, model, and key state.
 
 use anyhow::Result;
 
+use super::{service, setup};
 use crate::client::OriginClient;
 use crate::output::{print_json, OutputFormat};
 
@@ -10,27 +11,25 @@ use crate::output::{print_json, OutputFormat};
 /// `quiet` suppresses success output; errors still propagate via `?` to stderr.
 /// We still hit the daemon under `quiet` to surface connection failures via exit code.
 pub async fn run(client: &OriginClient, format: OutputFormat, quiet: bool) -> Result<()> {
-    let health = client.health().await?;
     if quiet {
+        let _health = client.health().await?;
         return Ok(());
     }
     match format {
-        OutputFormat::Json => {
-            print_json(&health)?;
-        }
+        OutputFormat::Json => match client.health().await {
+            Ok(health) => print_json(&health)?,
+            Err(err) => {
+                let status = serde_json::json!({
+                    "status": "unreachable",
+                    "error": err.to_string(),
+                });
+                print_json(&status)?;
+            }
+        },
         OutputFormat::Table => {
-            println!("Origin daemon");
-            println!("  Status:        {}", health.status);
-            println!(
-                "  DB:            {}",
-                if health.db_initialized {
-                    "initialized"
-                } else {
-                    "uninitialized"
-                }
-            );
-            println!("  Version:       {}", health.version);
-            println!("  Host:          {}", client.base_url());
+            println!("Origin runtime");
+            service::print_status().await?;
+            setup::print_runtime_status().await?;
         }
         OutputFormat::Auto => unreachable!("Auto resolved by main before dispatch"),
     }
