@@ -94,6 +94,10 @@ jobs:
     needs: [detect-changes, fmt]
     if: "needs.detect-changes.outputs.rust == 'true' && !startsWith(github.event.head_commit.message, 'chore(main): release')"
     runs-on: ubuntu-24.04
+    env:
+      # Drop debuginfo from test artifacts. CI has no debugger attached and the
+      # build cache stays warm via rust-cache. Trims linker time + cache size.
+      CARGO_PROFILE_TEST_DEBUG: "0"
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
       - uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9 # master 2026-05-13
