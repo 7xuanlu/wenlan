@@ -95,33 +95,33 @@ pub async fn handle_search(
 ) -> Result<Json<SearchResponse>, ServerError> {
     let start = std::time::Instant::now();
 
-    let results = {
+    let db = {
         let s = state.read().await;
-        let db = s.db.as_ref().ok_or(ServerError::DbNotInitialized)?;
+        s.db.clone().ok_or(ServerError::DbNotInitialized)?
+    };
 
-        if req.source_filter.as_deref() == Some("memory") {
-            db.search_memory(
-                &req.query,
-                req.limit,
-                None,
-                req.space.as_deref(),
-                None,
-                None,
-                None,
-                None,
-            )
-            .await
-            .map_err(|e| ServerError::SearchFailed(e.to_string()))?
-        } else {
-            db.search(
-                &req.query,
-                req.limit,
-                req.source_filter.as_deref(),
-                req.space.as_deref(),
-            )
-            .await
-            .map_err(|e| ServerError::SearchFailed(e.to_string()))?
-        }
+    let results = if req.source_filter.as_deref() == Some("memory") {
+        db.search_memory(
+            &req.query,
+            req.limit,
+            None,
+            req.space.as_deref(),
+            None,
+            None,
+            None,
+            None,
+        )
+        .await
+        .map_err(|e| ServerError::SearchFailed(e.to_string()))?
+    } else {
+        db.search(
+            &req.query,
+            req.limit,
+            req.source_filter.as_deref(),
+            req.space.as_deref(),
+        )
+        .await
+        .map_err(|e| ServerError::SearchFailed(e.to_string()))?
     };
 
     let took_ms = start.elapsed().as_secs_f64() * 1000.0;

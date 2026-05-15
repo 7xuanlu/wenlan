@@ -1811,8 +1811,10 @@ pub async fn handle_get_nurture_cards(
     State(state): State<Arc<RwLock<ServerState>>>,
     axum::extract::Query(query): axum::extract::Query<NurtureCardsQuery>,
 ) -> Result<Json<NurtureCardsResponse>, ServerError> {
-    let s = state.read().await;
-    let db = s.db.as_ref().ok_or(ServerError::DbNotInitialized)?;
+    let db = {
+        let s = state.read().await;
+        s.db.clone().ok_or(ServerError::DbNotInitialized)?
+    };
     let cards = db
         .get_nurture_cards(query.limit, query.space.as_deref())
         .await
@@ -1830,11 +1832,13 @@ pub async fn handle_get_rejections(
         .and_then(|v| v.parse().ok())
         .unwrap_or(50)
         .min(500);
-    let reason = params.get("reason").map(|s| s.as_str());
+    let reason_owned = params.get("reason").cloned();
 
-    let s = state.read().await;
-    let db = s.db.as_ref().ok_or(ServerError::DbNotInitialized)?;
-    let records = db.get_rejections(limit, reason).await?;
+    let db = {
+        let s = state.read().await;
+        s.db.clone().ok_or(ServerError::DbNotInitialized)?
+    };
+    let records = db.get_rejections(limit, reason_owned.as_deref()).await?;
     Ok(Json(records))
 }
 
