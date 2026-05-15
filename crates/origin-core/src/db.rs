@@ -62,9 +62,7 @@ static EMBEDDER_INIT_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 ///
 /// Returns `None` if path resolution or `OpenOptions` fails. In that case the
 /// caller proceeds with only the process-local mutex (prior behavior).
-fn acquire_embedder_init_file_lock(
-    cache_dir: Option<&std::path::Path>,
-) -> Option<std::fs::File> {
+fn acquire_embedder_init_file_lock(cache_dir: Option<&std::path::Path>) -> Option<std::fs::File> {
     let lock_dir = cache_dir
         .map(|p| p.to_path_buf())
         .or_else(|| dirs::data_dir().map(|d| d.join("origin/memorydb")))?;
@@ -1119,8 +1117,7 @@ impl MemoryDB {
                 // processes). Process-local mutex second (covers parallel inits
                 // within the same process). Lock-ordering: outer file lock,
                 // inner process mutex — both protect the same try_new call.
-                let _file_lock =
-                    acquire_embedder_init_file_lock(embed_cache_for_lock.as_deref());
+                let _file_lock = acquire_embedder_init_file_lock(embed_cache_for_lock.as_deref());
                 let _guard = EMBEDDER_INIT_LOCK.lock().unwrap_or_else(|p| p.into_inner());
                 log::info!("[memory_db] embedder thread: loading ONNX model...");
                 let mut opts = InitOptions::new(EmbeddingModel::BGEBaseENV15Q)
