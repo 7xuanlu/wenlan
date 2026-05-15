@@ -13,10 +13,17 @@ use rusqlite::Connection;
 use std::path::{Path, PathBuf};
 
 fn legacy_db_path() -> PathBuf {
-    dirs::data_local_dir()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join("origin")
-        .join("spaces.db")
+    // Honor ORIGIN_DATA_DIR so scratch / worktree daemons do not reach into
+    // the user's real `~/Library/Application Support/origin/spaces.db` and
+    // rename it out from under a production daemon still running pre-PR-B2.
+    let root = std::env::var_os("ORIGIN_DATA_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| {
+            dirs::data_local_dir()
+                .unwrap_or_else(|| PathBuf::from("."))
+                .join("origin")
+        });
+    root.join("spaces.db")
 }
 
 /// Import tags from a legacy `spaces.db` (if present) into MemoryDB,
@@ -108,6 +115,22 @@ mod tests {
     use super::*;
     use crate::events::NoopEmitter;
     use std::sync::Arc;
+
+    /// `legacy_db_path` must honor `ORIGIN_DATA_DIR` so scratch / worktree
+    /// daemons do not reach into the user's production
+    /// `~/Library/Application Support/origin/spaces.db` and rename it.
+    #[test]
+    fn test_legacy_db_path_honors_origin_data_dir() {
+        // Save + restore so we don't leak env state to other tests.
+        let prev = std::env::var_os("ORIGIN_DATA_DIR");
+        std::env::set_var("ORIGIN_DATA_DIR", "/tmp/origin-spaces-path-test");
+        let p = legacy_db_path();
+        assert_eq!(p, PathBuf::from("/tmp/origin-spaces-path-test/spaces.db"));
+        match prev {
+            Some(v) => std::env::set_var("ORIGIN_DATA_DIR", v),
+            None => std::env::remove_var("ORIGIN_DATA_DIR"),
+        }
+    }
 
     /// Create a temporary spaces.db with a document_tags table and some rows,
     /// then assert they end up in MemoryDB after import_from_path.
