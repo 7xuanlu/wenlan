@@ -41,7 +41,44 @@ pub type SharedEmbedder = Arc<std::sync::Mutex<TextEmbedding>>;
 /// during `try_new` makes inits sequential within a process. Once the model
 /// is on disk, subsequent inits are fast (model load, no download), so the
 /// serialization cost is bounded.
+///
+/// This mutex is process-local. `cargo nextest` runs each test in a forked
+/// process, so it cannot serialize cross-process races on the shared cache.
+/// See [`acquire_embedder_init_file_lock`] for the cross-process companion.
 static EMBEDDER_INIT_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// Acquire an OS-level exclusive file lock to serialize FastEmbed init across
+/// processes.
+///
+/// `EMBEDDER_INIT_LOCK` only serializes within a single process. Under
+/// `cargo nextest`, every test runs in its own forked process and they share
+/// the same FastEmbed cache directory (`dirs::data_dir()/origin/memorydb/
+/// fastembed_cache` on Linux when no per-DB cache or `ORIGIN_TEST_FASTEMBED_CACHE`
+/// override is set). Parallel test processes racing on that cache reproduce
+/// the `Failed to retrieve model_optimized.onnx` symptom, surfacing as
+/// post-merge main CI failures on a different test each run. This file lock
+/// makes the OS serialize the inits at the filesystem layer; the returned
+/// `File` releases the lock when it goes out of scope.
+///
+/// Returns `None` if path resolution or `OpenOptions` fails. In that case the
+/// caller proceeds with only the process-local mutex (prior behavior).
+fn acquire_embedder_init_file_lock(
+    cache_dir: Option<&std::path::Path>,
+) -> Option<std::fs::File> {
+    let lock_dir = cache_dir
+        .map(|p| p.to_path_buf())
+        .or_else(|| dirs::data_dir().map(|d| d.join("origin/memorydb")))?;
+    std::fs::create_dir_all(&lock_dir).ok()?;
+    let lock_path = lock_dir.join(".embedder_init.lock");
+    let file = std::fs::OpenOptions::new()
+        .create(true)
+        .write(true)
+        .truncate(false)
+        .open(&lock_path)
+        .ok()?;
+    file.lock().ok()?;
+    Some(file)
+}
 
 /// Known-client registry — maps canonical technical IDs (what clients send in
 /// `x-agent-name`) to human-friendly display names (what users see in UI).
@@ -1074,10 +1111,16 @@ impl MemoryDB {
                 .unwrap_or_else(|| "<default>".into())
         );
         let (embed_tx, embed_rx) = tokio::sync::oneshot::channel();
+        let embed_cache_for_lock = embed_cache_dir.clone();
         std::thread::Builder::new()
             .name("embedder-init".into())
             .spawn(move || {
-                // Serialize FastEmbed inits process-wide — see EMBEDDER_INIT_LOCK comment.
+                // Cross-process serialization first (covers nextest forked test
+                // processes). Process-local mutex second (covers parallel inits
+                // within the same process). Lock-ordering: outer file lock,
+                // inner process mutex — both protect the same try_new call.
+                let _file_lock =
+                    acquire_embedder_init_file_lock(embed_cache_for_lock.as_deref());
                 let _guard = EMBEDDER_INIT_LOCK.lock().unwrap_or_else(|p| p.into_inner());
                 log::info!("[memory_db] embedder thread: loading ONNX model...");
                 let mut opts = InitOptions::new(EmbeddingModel::BGEBaseENV15Q)
@@ -1182,7 +1225,11 @@ impl MemoryDB {
         std::thread::Builder::new()
             .name("embedder-init-shared".into())
             .spawn(move || {
-                // Serialize FastEmbed inits process-wide — see EMBEDDER_INIT_LOCK comment.
+                // Cross-process serialization first (covers nextest forked test
+                // processes). Process-local mutex second. No `embed_cache_dir`
+                // here — caller doesn't supply one, so the lock falls back to
+                // `dirs::data_dir()/origin/memorydb/.embedder_init.lock`.
+                let _file_lock = acquire_embedder_init_file_lock(None);
                 let _guard = EMBEDDER_INIT_LOCK.lock().unwrap_or_else(|p| p.into_inner());
                 let opts = InitOptions::new(EmbeddingModel::BGEBaseENV15Q)
                     .with_show_download_progress(true);
