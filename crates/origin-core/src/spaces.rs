@@ -117,6 +117,14 @@ mod tests {
         let db_file = tmp.path().join("spaces.db");
         let mem_db_file = tmp.path().join("test.db");
 
+        // Initialize libsql first to match production startup order (MemoryDB::new
+        // before import_legacy_tags). Otherwise rusqlite initializes sqlite3 with
+        // serialized threading and libsql's Builder::new_local panics when it
+        // tries to set its own threading config.
+        let db = MemoryDB::new(&mem_db_file, Arc::new(NoopEmitter))
+            .await
+            .unwrap();
+
         // Write a legacy spaces.db with two docs and some tags.
         {
             let conn = Connection::open(&db_file).unwrap();
@@ -141,10 +149,6 @@ mod tests {
             .unwrap();
         }
 
-        let db = MemoryDB::new(&mem_db_file, Arc::new(NoopEmitter))
-            .await
-            .unwrap();
-
         let count = import_from_path(&db_file, &db).await.unwrap();
         assert_eq!(count, 3);
 
@@ -162,15 +166,15 @@ mod tests {
         let db_file = tmp.path().join("spaces.db");
         let mem_db_file = tmp.path().join("test.db");
 
+        let db = MemoryDB::new(&mem_db_file, Arc::new(NoopEmitter))
+            .await
+            .unwrap();
+
         {
             let conn = Connection::open(&db_file).unwrap();
             conn.execute_batch("CREATE TABLE spaces (id TEXT PRIMARY KEY);")
                 .unwrap();
         }
-
-        let db = MemoryDB::new(&mem_db_file, Arc::new(NoopEmitter))
-            .await
-            .unwrap();
 
         let count = import_from_path(&db_file, &db).await.unwrap();
         assert_eq!(count, 0);
@@ -182,6 +186,10 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let db_file = tmp.path().join("spaces.db");
         let mem_db_file = tmp.path().join("test.db");
+
+        let db = MemoryDB::new(&mem_db_file, Arc::new(NoopEmitter))
+            .await
+            .unwrap();
 
         {
             let conn = Connection::open(&db_file).unwrap();
@@ -199,10 +207,6 @@ mod tests {
             conn.execute("INSERT INTO document_tags VALUES ('baddockey', 'ok')", [])
                 .unwrap();
         }
-
-        let db = MemoryDB::new(&mem_db_file, Arc::new(NoopEmitter))
-            .await
-            .unwrap();
 
         let count = import_from_path(&db_file, &db).await.unwrap();
         assert_eq!(count, 1);
