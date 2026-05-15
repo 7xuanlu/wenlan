@@ -28,8 +28,8 @@ capture(content="<args, written as a full sentence with WHY>",
 
 ### `memory_type` — agent picks one of 6
 
-The daemon classifies when it has an LLM. In Basic Memory mode it does
-not, so the agent picks the type from the content itself. Use this
+The daemon classifies when a local model or API key is configured. In
+local memory mode it does not, so the agent picks the type from the content itself. Use this
 mapping:
 
 | Type | Use for |

@@ -5,6 +5,8 @@ use clap::{Subcommand, ValueEnum};
 use origin_core::{config, on_device_models};
 use std::io::{self, Write};
 
+use crate::client::origin_host_from_env;
+
 #[derive(Clone, Debug)]
 pub struct SetupArgs {
     pub basic: bool,
@@ -56,8 +58,9 @@ pub enum KeyProvider {
 pub async fn run_setup(args: SetupArgs) -> anyhow::Result<()> {
     if args.basic {
         configure_basic_memory()?;
-        println!("Origin is set up in Basic Memory mode.");
-        println!("Storage, search, recall, and MCP memory work without a local LLM or API key.");
+        println!("Origin is set up for local memory.");
+        println!("Storage, search, recall, and MCP memory work without a local model or API key.");
+        println!("Distill cycles stay off until you choose a local model or Anthropic key.");
         return Ok(());
     }
 
@@ -137,9 +140,9 @@ pub async fn run_doctor() -> anyhow::Result<()> {
 
     println!();
     if has_key || has_cached_model {
-        println!("Refinery: ready for richer extraction and background synthesis.");
+        println!("Distill cycles: ready for richer extraction and page synthesis.");
     } else {
-        println!("Refinery: limited until you choose a local model or Anthropic key.");
+        println!("Distill cycles: off until you choose a local model or Anthropic key.");
         println!("  Run: origin model install");
         println!("  Or:  origin key set anthropic");
     }
@@ -156,19 +159,19 @@ pub async fn print_runtime_status() -> anyhow::Result<()> {
 async fn interactive_setup() -> anyhow::Result<()> {
     println!("Set up Origin");
     println!();
-    println!("1) Basic Memory");
-    println!("   Store, search, recall, and MCP memory. No local LLM or API key.");
+    println!("1) Local Memory");
+    println!("   Store, search, recall, and MCP memory. No local model or API key.");
     println!("2) Local Model");
-    println!("   Download a local model for richer extraction and background synthesis.");
+    println!("   Download a local model for private distill cycles.");
     println!("3) Anthropic Key");
-    println!("   Use your Anthropic API key for stronger synthesis. Memory stays local.");
+    println!("   Use your Anthropic API key for stronger distill cycles. Memory stays local.");
     println!();
 
     let choice = prompt_line("Choose 1, 2, or 3 [1]: ")?;
     match choice.trim() {
         "" | "1" => {
             configure_basic_memory()?;
-            println!("Origin is set up in Basic Memory mode.");
+            println!("Origin is set up for local memory.");
             Ok(())
         }
         "2" => {
@@ -343,8 +346,7 @@ fn configured_model() -> Option<&'static on_device_models::OnDeviceModel> {
 }
 
 async fn print_daemon_health() {
-    let port = origin_port();
-    let url = format!("http://127.0.0.1:{}/api/health", port);
+    let url = origin_url("/api/health");
     match reqwest::get(&url).await {
         Ok(resp) if resp.status().is_success() => println!("Daemon: running on {}", url),
         Ok(resp) => println!("Daemon: unhealthy ({})", resp.status()),
@@ -352,15 +354,8 @@ async fn print_daemon_health() {
     }
 }
 
-fn origin_port() -> u16 {
-    std::env::var("ORIGIN_PORT")
-        .ok()
-        .and_then(|v| v.parse().ok())
-        .unwrap_or(7878)
-}
-
 fn origin_url(path: &str) -> String {
-    format!("http://127.0.0.1:{}{}", origin_port(), path)
+    format!("{}{}", origin_host_from_env(), path)
 }
 
 async fn post_json(path: &str, body: &serde_json::Value) -> anyhow::Result<serde_json::Value> {

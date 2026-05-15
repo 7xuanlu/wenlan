@@ -1,8 +1,8 @@
 # origin-mcp
 
-MCP server for [Origin](https://github.com/7xuanlu/origin). It lets Claude Code, Cursor, Codex, Claude Desktop, Windsurf, Gemini CLI, and other MCP clients read and write to the local Origin daemon through the [Model Context Protocol](https://modelcontextprotocol.io).
+MCP server for [Origin](https://github.com/7xuanlu/origin). It lets Claude Code, Cursor, Codex, Claude Desktop, Gemini CLI, and other MCP clients read and write to the local Origin daemon through the [Model Context Protocol](https://modelcontextprotocol.io).
 
-Origin owns storage, search, embeddings, pages, and background refinement. `origin-mcp` is the connector.
+Origin owns storage, search, embeddings, pages, and distill cycles. `origin-mcp` is the connector.
 
 ## Install
 
@@ -63,11 +63,11 @@ origin-mcp --origin-url http://127.0.0.1:7879
 
 ## Setup Modes
 
-Origin works immediately in **Basic Memory** mode: storage, search, recall, and MCP memory are available without a local LLM or API key.
+Origin works immediately in **local memory** mode: storage, search, recall, and MCP memory are available without a local model or API key.
 
-Users can opt into more expensive/refined behavior:
+Users can opt into more expensive distill cycles:
 
-- **On-device model:** private extraction and refinement after `origin model install`.
+- **On-device model:** private extraction and distillation after `origin model install`.
 - **Anthropic key:** richer extraction and page synthesis after `origin key set anthropic`.
 
 ## Agent Guidance

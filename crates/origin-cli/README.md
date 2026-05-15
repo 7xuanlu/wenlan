@@ -1,8 +1,6 @@
 # origin-cli
 
-Origin CLI. Talk to the local Origin daemon from your terminal.
-
-Note: the release installer also creates an `origin` launcher for setup and service commands such as `origin setup`, `origin install`, and `origin doctor`. This crate is the source-built developer CLI for search, recall, store, list, and agent-management commands.
+Origin's product CLI. Use it to set up the local runtime, manage the daemon service, search and recall memory, store new memories, configure models/API keys, and run doctor checks.
 
 License: Apache-2.0.
 
@@ -31,11 +29,59 @@ export ORIGIN_HOST=http://127.0.0.1:7878  # default
 
 ### `origin status`
 
-Show daemon health + version.
+Show daemon, launchd service, model, and API key state.
 
 ```bash
 origin status
 origin status --format json
+```
+
+### `origin setup`
+
+Configure Origin's runtime mode.
+
+```bash
+origin setup                  # interactive
+origin setup --basic          # local memory, no local model or API key
+origin setup --model qwen3-4b # download/select a local model
+origin setup --anthropic-api-key-env ANTHROPIC_API_KEY
+```
+
+### `origin install` / `origin uninstall`
+
+Register or remove the macOS LaunchAgent. The service runs the sibling `origin-server` binary next to `origin`.
+
+```bash
+origin install
+origin uninstall
+```
+
+### `origin doctor`
+
+Diagnose daemon reachability, launchd state, model setup, and API key setup.
+
+```bash
+origin doctor
+```
+
+### `origin model`
+
+Manage opt-in local models.
+
+```bash
+origin model list
+origin model status
+origin model install qwen3-4b
+```
+
+### `origin key`
+
+Manage provider API keys.
+
+```bash
+origin key status
+origin key set anthropic --env ANTHROPIC_API_KEY
+origin key clear anthropic
 ```
 
 ### `origin search <query>`
