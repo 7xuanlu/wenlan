@@ -216,7 +216,7 @@ pub async fn handle_chat_context(
     // the multi-second chain of DB + LLM awaits below. Holding the guard
     // across ~15 sequential awaits (load_memories_by_type, search_*,
     // search_memory_reranked, log_accesses, etc.) would block every writer
-    // to ServerState — e.g. store_memory's space_store update — for the
+    // to ServerState — e.g. store_memory's deferred async work — for the
     // full duration of a rerank call. See CLAUDE.md locking rules.
     let (db_arc, llm, access_tracker, page_min_overlap) = {
         let s = state.read().await;

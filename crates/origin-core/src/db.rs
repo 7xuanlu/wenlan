@@ -4778,6 +4778,50 @@ impl MemoryDB {
                     log::info!("[migration] Migration 50 applied: renamed domain → space on memories/entities/pages + reindexed");
                 }
             }
+
+            // Migration 51: document_tags table for the libSQL tag store.
+            if version < 51 {
+                let conn = self.conn.lock().await;
+                conn.execute("BEGIN", ())
+                    .await
+                    .map_err(|e| OriginError::VectorDb(format!("m51 begin: {e}")))?;
+                let result: Result<(), OriginError> = async {
+                    conn.execute(
+                        "CREATE TABLE IF NOT EXISTS document_tags (
+                            source TEXT NOT NULL,
+                            source_id TEXT NOT NULL,
+                            tag TEXT NOT NULL,
+                            PRIMARY KEY (source, source_id, tag)
+                        )",
+                        (),
+                    )
+                    .await
+                    .map_err(|e| OriginError::VectorDb(format!("m51 create table: {e}")))?;
+                    conn.execute(
+                        "CREATE INDEX IF NOT EXISTS idx_document_tags_tag ON document_tags(tag)",
+                        (),
+                    )
+                    .await
+                    .map_err(|e| OriginError::VectorDb(format!("m51 create index: {e}")))?;
+                    conn.execute("PRAGMA user_version = 51", ())
+                        .await
+                        .map_err(|e| OriginError::VectorDb(format!("m51 bump: {e}")))?;
+                    Ok(())
+                }
+                .await;
+                match result {
+                    Ok(()) => {
+                        conn.execute("COMMIT", ())
+                            .await
+                            .map_err(|e| OriginError::VectorDb(format!("m51 commit: {e}")))?;
+                        log::info!("[migration] Migration 51 applied: document_tags table created");
+                    }
+                    Err(e) => {
+                        let _ = conn.execute("ROLLBACK", ()).await;
+                        return Err(e);
+                    }
+                }
+            }
         }
 
         Ok(())
@@ -5364,6 +5408,118 @@ impl MemoryDB {
         embedder
             .embed(text_refs, None)
             .map_err(|e| OriginError::Embedding(e.to_string()))
+    }
+
+    // ==================== document_tags ====================
+
+    /// Replace all tags for (source, source_id). Returns the normalized final set.
+    /// Normalization: trim + lowercase; empty entries dropped; deduped.
+    pub async fn set_document_tags(
+        &self,
+        source: &str,
+        source_id: &str,
+        tags: Vec<String>,
+    ) -> Result<Vec<String>, OriginError> {
+        let normalized: std::collections::BTreeSet<String> = tags
+            .into_iter()
+            .map(|t| t.trim().to_lowercase())
+            .filter(|t| !t.is_empty())
+            .collect();
+
+        let conn = self.conn.lock().await;
+        conn.execute("BEGIN", ())
+            .await
+            .map_err(|e| OriginError::VectorDb(format!("set_document_tags begin: {e}")))?;
+        let result: Result<(), OriginError> = async {
+            conn.execute(
+                "DELETE FROM document_tags WHERE source = ?1 AND source_id = ?2",
+                libsql::params![source.to_string(), source_id.to_string()],
+            )
+            .await
+            .map_err(|e| OriginError::VectorDb(format!("set_document_tags delete: {e}")))?;
+            for tag in &normalized {
+                conn.execute(
+                    "INSERT OR IGNORE INTO document_tags (source, source_id, tag) VALUES (?1, ?2, ?3)",
+                    libsql::params![source.to_string(), source_id.to_string(), tag.clone()],
+                )
+                .await
+                .map_err(|e| OriginError::VectorDb(format!("set_document_tags insert: {e}")))?;
+            }
+            Ok(())
+        }
+        .await;
+        match result {
+            Ok(()) => {
+                conn.execute("COMMIT", ())
+                    .await
+                    .map_err(|e| OriginError::VectorDb(format!("set_document_tags commit: {e}")))?;
+            }
+            Err(e) => {
+                let _ = conn.execute("ROLLBACK", ()).await;
+                return Err(e);
+            }
+        }
+        Ok(normalized.into_iter().collect())
+    }
+
+    /// Get all tags assigned to (source, source_id).
+    pub async fn get_document_tags(
+        &self,
+        source: &str,
+        source_id: &str,
+    ) -> Result<Vec<String>, OriginError> {
+        let conn = self.conn.lock().await;
+        let mut rows = conn
+            .query(
+                "SELECT tag FROM document_tags WHERE source = ?1 AND source_id = ?2 ORDER BY tag",
+                libsql::params![source.to_string(), source_id.to_string()],
+            )
+            .await
+            .map_err(|e| OriginError::VectorDb(format!("get_document_tags: {e}")))?;
+        let mut out = Vec::new();
+        while let Some(row) = rows
+            .next()
+            .await
+            .map_err(|e| OriginError::VectorDb(e.to_string()))?
+        {
+            out.push(row.get::<String>(0).unwrap_or_default());
+        }
+        Ok(out)
+    }
+
+    /// Delete a tag from all document rows. Returns the number of rows removed.
+    pub async fn delete_tag(&self, name: &str) -> Result<u64, OriginError> {
+        let normalized = name.trim().to_lowercase();
+        if normalized.is_empty() {
+            return Ok(0);
+        }
+        let conn = self.conn.lock().await;
+        let affected = conn
+            .execute(
+                "DELETE FROM document_tags WHERE tag = ?1",
+                libsql::params![normalized],
+            )
+            .await
+            .map_err(|e| OriginError::VectorDb(format!("delete_tag: {e}")))?;
+        Ok(affected)
+    }
+
+    /// List all distinct tags across all documents.
+    pub async fn list_all_tags(&self) -> Result<Vec<String>, OriginError> {
+        let conn = self.conn.lock().await;
+        let mut rows = conn
+            .query("SELECT DISTINCT tag FROM document_tags ORDER BY tag", ())
+            .await
+            .map_err(|e| OriginError::VectorDb(format!("list_all_tags: {e}")))?;
+        let mut out = Vec::new();
+        while let Some(row) = rows
+            .next()
+            .await
+            .map_err(|e| OriginError::VectorDb(e.to_string()))?
+        {
+            out.push(row.get::<String>(0).unwrap_or_default());
+        }
+        Ok(out)
     }
 
     /// Get memories that need re-embedding (structured content was set but embedding is stale).
@@ -29633,6 +29789,194 @@ pub(crate) mod tests {
         assert!(
             old_idx.next().await.unwrap().is_none(),
             "idx_memories_domain must be dropped after migration 50"
+        );
+    }
+
+    // ── document_tags tests ───────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn test_set_and_get_document_tags() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db = MemoryDB::new(
+            &tmp.path().join("test.db"),
+            Arc::new(crate::events::NoopEmitter),
+        )
+        .await
+        .unwrap();
+
+        // Basic set + get.
+        let result = db
+            .set_document_tags(
+                "memory",
+                "doc1",
+                vec![
+                    "Rust".to_string(),
+                    "  TAURI  ".to_string(),
+                    "rust".to_string(), // duplicate after normalization
+                ],
+            )
+            .await
+            .unwrap();
+        assert_eq!(result, vec!["rust", "tauri"]); // BTreeSet: sorted + deduped
+
+        let tags = db.get_document_tags("memory", "doc1").await.unwrap();
+        assert_eq!(tags, vec!["rust", "tauri"]);
+    }
+
+    #[tokio::test]
+    async fn test_set_document_tags_is_idempotent_replace() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db = MemoryDB::new(
+            &tmp.path().join("test.db"),
+            Arc::new(crate::events::NoopEmitter),
+        )
+        .await
+        .unwrap();
+
+        db.set_document_tags(
+            "memory",
+            "doc1",
+            vec!["rust".to_string(), "tauri".to_string()],
+        )
+        .await
+        .unwrap();
+
+        // Re-set with different tags — old ones must be gone.
+        let result = db
+            .set_document_tags("memory", "doc1", vec!["python".to_string()])
+            .await
+            .unwrap();
+        assert_eq!(result, vec!["python"]);
+
+        let tags = db.get_document_tags("memory", "doc1").await.unwrap();
+        assert_eq!(tags, vec!["python"]);
+    }
+
+    #[tokio::test]
+    async fn test_delete_tag() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db = MemoryDB::new(
+            &tmp.path().join("test.db"),
+            Arc::new(crate::events::NoopEmitter),
+        )
+        .await
+        .unwrap();
+
+        db.set_document_tags(
+            "memory",
+            "doc1",
+            vec!["rust".to_string(), "tauri".to_string()],
+        )
+        .await
+        .unwrap();
+        db.set_document_tags("memory", "doc2", vec!["rust".to_string()])
+            .await
+            .unwrap();
+
+        let affected = db.delete_tag("rust").await.unwrap();
+        assert_eq!(affected, 2);
+
+        let tags_doc1 = db.get_document_tags("memory", "doc1").await.unwrap();
+        assert_eq!(tags_doc1, vec!["tauri"]);
+
+        let tags_doc2 = db.get_document_tags("memory", "doc2").await.unwrap();
+        assert!(tags_doc2.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_list_all_tags_select_distinct() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db = MemoryDB::new(
+            &tmp.path().join("test.db"),
+            Arc::new(crate::events::NoopEmitter),
+        )
+        .await
+        .unwrap();
+
+        db.set_document_tags(
+            "memory",
+            "doc1",
+            vec!["rust".to_string(), "tauri".to_string()],
+        )
+        .await
+        .unwrap();
+        db.set_document_tags(
+            "memory",
+            "doc2",
+            vec!["rust".to_string(), "wasm".to_string()],
+        )
+        .await
+        .unwrap();
+
+        let all = db.list_all_tags().await.unwrap();
+        // Distinct + sorted: rust appears in both docs but must appear once.
+        assert_eq!(all, vec!["rust", "tauri", "wasm"]);
+    }
+
+    // ── migration 51 replay test ──────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn test_migration_51_creates_document_tags_table() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db_path = tmp.path().join("test.db");
+
+        // First open: runs all migrations including 51.
+        let db = MemoryDB::new(&db_path, Arc::new(crate::events::NoopEmitter))
+            .await
+            .unwrap();
+
+        // Verify the table and index exist.
+        {
+            let conn = db.conn.lock().await;
+            let mut rows = conn
+                .query(
+                    "SELECT name FROM sqlite_master WHERE type='table' AND name='document_tags'",
+                    (),
+                )
+                .await
+                .unwrap();
+            assert!(
+                rows.next().await.unwrap().is_some(),
+                "document_tags table must exist after migration 51"
+            );
+            let mut idx_rows = conn
+                .query(
+                    "SELECT name FROM sqlite_master WHERE type='index' AND name='idx_document_tags_tag'",
+                    (),
+                )
+                .await
+                .unwrap();
+            assert!(
+                idx_rows.next().await.unwrap().is_some(),
+                "idx_document_tags_tag must exist after migration 51"
+            );
+        }
+
+        // Roll user_version back to 50 and drop the table to simulate a fresh migration.
+        {
+            let conn = db.conn.lock().await;
+            conn.execute("DROP TABLE IF EXISTS document_tags", ())
+                .await
+                .unwrap();
+            conn.execute("PRAGMA user_version = 50", ()).await.unwrap();
+        }
+        drop(db);
+
+        // Re-open — migration 51 re-fires and must recreate the table.
+        let db = MemoryDB::new(&db_path, Arc::new(crate::events::NoopEmitter))
+            .await
+            .unwrap();
+        let conn = db.conn.lock().await;
+        let mut rows = conn
+            .query(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name='document_tags'",
+                (),
+            )
+            .await
+            .unwrap();
+        assert!(
+            rows.next().await.unwrap().is_some(),
+            "document_tags table must exist after migration 51 replay"
         );
     }
 }
