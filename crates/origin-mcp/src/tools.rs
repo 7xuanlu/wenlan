@@ -451,6 +451,9 @@ pub struct ListNurtureParams {
 pub struct ListEntitySuggestionsParams {}
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct ListSpacesParams {}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct AcceptRevisionRequest {
     /// The source_id of the memory whose pending revision should be accepted.
     pub target_source_id: String,
@@ -1285,6 +1288,23 @@ impl OriginMcpServer {
         ))]))
     }
 
+    pub async fn list_spaces_impl(
+        &self,
+        _params: ListSpacesParams,
+    ) -> Result<CallToolResult, McpError> {
+        let resp: Vec<Space> = match self.client.get("/api/spaces").await {
+            Ok(r) => r,
+            Err(e) => return Ok(tool_error(e, "list_spaces")),
+        };
+        let pretty = serde_json::to_string_pretty(&resp)
+            .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+        Ok(CallToolResult::success(vec![Content::text(format!(
+            "{} spaces\n{}",
+            resp.len(),
+            pretty
+        ))]))
+    }
+
     pub async fn list_refinements_impl(
         &self,
         params: ListRefinementsParams,
@@ -2038,6 +2058,17 @@ impl OriginMcpServer {
         Parameters(params): Parameters<ListPagesRecentParams>,
     ) -> Result<CallToolResult, McpError> {
         self.list_pages_recent_impl(params).await
+    }
+
+    #[tool(
+        description = "List all spaces in this Origin instance. Use when the user asks 'what spaces exist', 'list my topics', or to discover space names before passing one as a filter to search_memory / list_nurture. Returns each space's name, description, memory_count, entity_count, and timestamps.",
+        annotations(title = "List spaces", read_only_hint = true, open_world_hint = false)
+    )]
+    async fn list_spaces(
+        &self,
+        Parameters(params): Parameters<ListSpacesParams>,
+    ) -> Result<CallToolResult, McpError> {
+        self.list_spaces_impl(params).await
     }
 
     // --- Refinery queue tools ---
@@ -4298,6 +4329,7 @@ mod tests {
             "list_memories",
             "search_pages",
             "list_pages_recent",
+            "list_spaces",
         ] {
             assert!(
                 descriptions.contains_key(name),

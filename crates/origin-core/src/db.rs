@@ -6126,20 +6126,55 @@ impl MemoryDB {
         source_filter: Option<&str>,
         space: Option<&str>,
     ) -> Result<Vec<SearchResult>, OriginError> {
-        // TODO(PR-C): documents/chunks table currently lacks a `space` column.
-        // The parameter is accepted for API symmetry but ignored on the doc path.
-        // PR-C will add the schema and wire the filter through.
-        let _ = space;
         let embedding = self.get_or_compute_embedding(query)?;
         let vec_str = Self::vec_to_sql(&embedding);
         let fetch_limit = (limit * 3) as i64;
 
         let conn = self.conn.lock().await;
 
+        // Build filter conditions shared by vector and FTS paths.
+        // Conditions use bare `?` placeholders; each branch renumbers them
+        // starting at ?3 to follow the path-specific positional params.
+        let mut filter_conditions: Vec<String> = Vec::new();
+        let mut filter_values: Vec<libsql::Value> = Vec::new();
+        if let Some(filter) = source_filter {
+            filter_conditions.push("c.source = ?".to_string());
+            filter_values.push(libsql::Value::Text(filter.to_string()));
+        }
+        if let Some(sp) = space {
+            if sp == "uncategorized" {
+                filter_conditions.push("c.space IS NULL".to_string());
+            } else {
+                filter_conditions.push("c.space = ?".to_string());
+                filter_values.push(libsql::Value::Text(sp.to_string()));
+            }
+        }
+
         // --- Vector search ---
         let mut vector_results: Vec<SearchResult> = Vec::new();
         {
-            let sql = if source_filter.is_some() {
+            // Renumber placeholders: ?1 = vec_str, ?2 = fetch_limit, ?3.. = filters.
+            let mut vec_where_parts: Vec<String> = Vec::new();
+            let mut param_idx = 3usize;
+            for cond in &filter_conditions {
+                let mut numbered = String::new();
+                for ch in cond.chars() {
+                    if ch == '?' {
+                        numbered.push_str(&format!("?{}", param_idx));
+                        param_idx += 1;
+                    } else {
+                        numbered.push(ch);
+                    }
+                }
+                vec_where_parts.push(numbered);
+            }
+            let vec_filter = if vec_where_parts.is_empty() {
+                String::new()
+            } else {
+                format!(" AND {}", vec_where_parts.join(" AND "))
+            };
+
+            let sql = format!(
                 "SELECT c.id, c.content, c.source, c.source_id, c.title, c.summary, c.url,
                         c.chunk_index, c.last_modified, c.chunk_type, c.language, c.byte_start,
                         c.byte_end, c.semantic_unit, c.memory_type, c.space, c.source_agent,
@@ -6150,32 +6185,17 @@ impl MemoryDB {
                         vector_distance_cos(c.embedding, vector32(?1))
                  FROM vector_top_k('memories_vec_idx', vector32(?1), ?2) AS vt
                  JOIN memories c ON c.rowid = vt.id
-                 WHERE c.pending_revision = 0 AND c.source = ?3"
-            } else {
-                "SELECT c.id, c.content, c.source, c.source_id, c.title, c.summary, c.url,
-                        c.chunk_index, c.last_modified, c.chunk_type, c.language, c.byte_start,
-                        c.byte_end, c.semantic_unit, c.memory_type, c.space, c.source_agent,
-                        c.confidence, c.confirmed, c.stability, c.supersedes,
-                        c.entity_id, c.quality, c.is_recap, c.supersede_mode,
-                        c.structured_fields, c.retrieval_cue, c.source_text,
-                        c.version, c.pending_revision,
-                        vector_distance_cos(c.embedding, vector32(?1))
-                 FROM vector_top_k('memories_vec_idx', vector32(?1), ?2) AS vt
-                 JOIN memories c ON c.rowid = vt.id
-                 WHERE c.pending_revision = 0"
-            };
+                 WHERE c.pending_revision = 0{}",
+                vec_filter
+            );
 
-            let rows_result = if let Some(filter) = source_filter {
-                conn.query(
-                    sql,
-                    libsql::params![vec_str.clone(), fetch_limit, filter.to_string()],
-                )
-                .await
-            } else {
-                conn.query(sql, libsql::params![vec_str, fetch_limit]).await
-            };
+            let mut params: Vec<libsql::Value> = vec![
+                libsql::Value::Text(vec_str.clone()),
+                libsql::Value::Integer(fetch_limit),
+            ];
+            params.extend(filter_values.clone());
 
-            match rows_result {
+            match conn.query(&sql, params).await {
                 Ok(mut rows) => {
                     while let Ok(Some(row)) = rows.next().await {
                         let distance: f64 = row.get(30).unwrap_or(1.0);
@@ -6197,7 +6217,28 @@ impl MemoryDB {
         // --- FTS search ---
         let mut fts_results: Vec<SearchResult> = Vec::new();
         {
-            let fts_sql = if source_filter.is_some() {
+            // Renumber placeholders: ?1 = query, ?2 = fetch_limit, ?3.. = filters.
+            let mut fts_where_parts: Vec<String> = Vec::new();
+            let mut param_idx = 3usize;
+            for cond in &filter_conditions {
+                let mut numbered = String::new();
+                for ch in cond.chars() {
+                    if ch == '?' {
+                        numbered.push_str(&format!("?{}", param_idx));
+                        param_idx += 1;
+                    } else {
+                        numbered.push(ch);
+                    }
+                }
+                fts_where_parts.push(numbered);
+            }
+            let fts_extra = if fts_where_parts.is_empty() {
+                String::new()
+            } else {
+                format!(" AND {}", fts_where_parts.join(" AND "))
+            };
+
+            let fts_sql = format!(
                 "SELECT c.id, c.content, c.source, c.source_id, c.title, c.summary, c.url,
                         c.chunk_index, c.last_modified, c.chunk_type, c.language, c.byte_start,
                         c.byte_end, c.semantic_unit, c.memory_type, c.space, c.source_agent,
@@ -6208,37 +6249,19 @@ impl MemoryDB {
                         fts.rank
                  FROM memories_fts fts
                  JOIN memories c ON fts.rowid = c.rowid
-                 WHERE memories_fts MATCH ?1 AND c.pending_revision = 0 AND c.source = ?3
+                 WHERE memories_fts MATCH ?1 AND c.pending_revision = 0{}
                  ORDER BY fts.rank
-                 LIMIT ?2"
-            } else {
-                "SELECT c.id, c.content, c.source, c.source_id, c.title, c.summary, c.url,
-                        c.chunk_index, c.last_modified, c.chunk_type, c.language, c.byte_start,
-                        c.byte_end, c.semantic_unit, c.memory_type, c.space, c.source_agent,
-                        c.confidence, c.confirmed, c.stability, c.supersedes,
-                        c.entity_id, c.quality, c.is_recap, c.supersede_mode,
-                        c.structured_fields, c.retrieval_cue, c.source_text,
-                        c.version, c.pending_revision,
-                        fts.rank
-                 FROM memories_fts fts
-                 JOIN memories c ON fts.rowid = c.rowid
-                 WHERE memories_fts MATCH ?1 AND c.pending_revision = 0
-                 ORDER BY fts.rank
-                 LIMIT ?2"
-            };
+                 LIMIT ?2",
+                fts_extra
+            );
 
-            let fts_result = if let Some(filter) = source_filter {
-                conn.query(
-                    fts_sql,
-                    libsql::params![query.to_string(), fetch_limit, filter.to_string()],
-                )
-                .await
-            } else {
-                conn.query(fts_sql, libsql::params![query.to_string(), fetch_limit])
-                    .await
-            };
+            let mut params: Vec<libsql::Value> = vec![
+                libsql::Value::Text(query.to_string()),
+                libsql::Value::Integer(fetch_limit),
+            ];
+            params.extend(filter_values.clone());
 
-            match fts_result {
+            match conn.query(&fts_sql, params).await {
                 Ok(mut rows) => {
                     while let Ok(Some(row)) = rows.next().await {
                         let rank: f64 = row.get(30).unwrap_or(0.0);
