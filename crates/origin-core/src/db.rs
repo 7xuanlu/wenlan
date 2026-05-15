@@ -6150,6 +6150,16 @@ impl MemoryDB {
             }
         }
 
+        // Mirror search_memory: hide supersede_mode='hide' targets; archive-mode
+        // memories stay visible. Subquery is restricted to memory rows, so
+        // documents/webpages are unaffected even when source_filter is None.
+        let supersedes_exclusion = "AND c.pending_revision = 0 AND c.source_id NOT IN (\
+            SELECT supersedes FROM memories \
+            WHERE supersedes IS NOT NULL AND pending_revision = 0 AND source = 'memory' \
+            AND supersede_mode = 'hide' \
+            GROUP BY supersedes\
+        )";
+
         // --- Vector search ---
         let mut vector_results: Vec<SearchResult> = Vec::new();
         {
@@ -6171,7 +6181,7 @@ impl MemoryDB {
             let vec_filter = if vec_where_parts.is_empty() {
                 String::new()
             } else {
-                format!(" AND {}", vec_where_parts.join(" AND "))
+                format!("AND {}", vec_where_parts.join(" AND "))
             };
 
             let sql = format!(
@@ -6185,8 +6195,8 @@ impl MemoryDB {
                         vector_distance_cos(c.embedding, vector32(?1))
                  FROM vector_top_k('memories_vec_idx', vector32(?1), ?2) AS vt
                  JOIN memories c ON c.rowid = vt.id
-                 WHERE c.pending_revision = 0{}",
-                vec_filter
+                 WHERE 1=1 {} {}",
+                supersedes_exclusion, vec_filter
             );
 
             let mut params: Vec<libsql::Value> = vec![
@@ -6235,7 +6245,7 @@ impl MemoryDB {
             let fts_extra = if fts_where_parts.is_empty() {
                 String::new()
             } else {
-                format!(" AND {}", fts_where_parts.join(" AND "))
+                format!("AND {}", fts_where_parts.join(" AND "))
             };
 
             let fts_sql = format!(
@@ -6249,10 +6259,10 @@ impl MemoryDB {
                         fts.rank
                  FROM memories_fts fts
                  JOIN memories c ON fts.rowid = c.rowid
-                 WHERE memories_fts MATCH ?1 AND c.pending_revision = 0{}
+                 WHERE memories_fts MATCH ?1 {} {}
                  ORDER BY fts.rank
                  LIMIT ?2",
-                fts_extra
+                supersedes_exclusion, fts_extra
             );
 
             let mut params: Vec<libsql::Value> = vec![
@@ -21622,6 +21632,52 @@ pub(crate) mod tests {
 
         let items = db.list_pending_revisions(10).await.unwrap();
         assert_eq!(items.len(), 0);
+    }
+
+    // ==================== search supersedes_exclusion ====================
+
+    #[tokio::test]
+    async fn search_excludes_hide_mode_supersedes() {
+        let (db, _dir) = test_db().await;
+
+        // Target memory + revision that supersedes it (supersede_mode default = 'hide').
+        // pending_revision=false on the revision so the exclusion subquery matches.
+        insert_memory_for_test(
+            &db,
+            "mem_target",
+            "alpha pickle keyword",
+            "memory",
+            None,
+            None,
+            false,
+            1,
+        )
+        .await;
+        insert_memory_for_test(
+            &db,
+            "mem_rev",
+            "alpha pickle keyword revised",
+            "memory",
+            None,
+            Some("mem_target"),
+            false,
+            2,
+        )
+        .await;
+
+        let results = db.search("pickle", 10, None, None).await.unwrap();
+        let ids: Vec<&str> = results.iter().map(|r| r.source_id.as_str()).collect();
+
+        assert!(
+            ids.contains(&"mem_rev"),
+            "revision must be present (got {:?})",
+            ids
+        );
+        assert!(
+            !ids.contains(&"mem_target"),
+            "superseded target must be excluded from search results (got {:?})",
+            ids
+        );
     }
 
     // ==================== search_entities_by_vector ====================
