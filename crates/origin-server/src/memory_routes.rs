@@ -256,7 +256,7 @@ pub async fn handle_store_memory(
     };
 
     // Placeholder classification. The async enrichment path will replace
-    // these via `db.apply_enrichment(...)` and `space_store.set_document_tags(...)`
+    // these via `db.apply_enrichment(...)` and `db.set_document_tags(...)`
     // once the LLM has run (typically within a few seconds).
     let memory_type_str = validated_memory_type
         .clone()
@@ -702,8 +702,8 @@ pub async fn handle_store_memory(
     //      replaces the inline LLM calls that used to gate the HTTP response.
     //      Sync path stored placeholder values (memory_type="fact" unless the
     //      caller supplied one; no domain/quality/structured_fields from LLM);
-    //      this phase fills them in via a combined UPDATE. Tags go through
-    //      `space_store` and require a brief write guard.
+    //      this phase fills them in via a combined UPDATE. Tags are written
+    //      directly to MemoryDB via `db.set_document_tags(...)`.
     //
     //   2. `run_post_ingest_enrichment(...)` — entity auto-linking, title
     //      enrichment, page growth. Runs with the enriched fields phase 1 produced.
@@ -875,15 +875,14 @@ pub async fn handle_store_memory(
                     }
                 }
 
-                // Write tags. Brief write guard — synchronous in-memory update.
+                // Write tags to MemoryDB.
                 if !classified_tags_async.is_empty() {
-                    let mut s = state_clone.write().await;
-                    s.space_store.set_document_tags(
-                        "memory",
-                        &source_id_clone,
-                        classified_tags_async,
-                    );
-                    let _ = origin_core::spaces::save_spaces(&s.space_store);
+                    if let Err(e) = db
+                        .set_document_tags("memory", &source_id_clone, classified_tags_async)
+                        .await
+                    {
+                        tracing::warn!("[store_memory async] set_document_tags failed: {e}");
+                    }
                 }
             }
 
@@ -2427,8 +2426,14 @@ pub async fn handle_list_activities(
 pub async fn handle_list_tags(
     State(state): State<Arc<RwLock<ServerState>>>,
 ) -> Result<Json<origin_types::responses::TagsResponse>, ServerError> {
-    let s = state.read().await;
-    let tags: Vec<String> = s.space_store.tags.iter().cloned().collect();
+    let db = {
+        let s = state.read().await;
+        s.db.clone().ok_or(ServerError::DbNotInitialized)?
+    };
+    let tags = db
+        .list_all_tags()
+        .await
+        .map_err(|e| ServerError::Internal(e.to_string()))?;
     Ok(Json(origin_types::responses::TagsResponse { tags }))
 }
 
@@ -2437,8 +2442,13 @@ pub async fn handle_delete_tag(
     State(state): State<Arc<RwLock<ServerState>>>,
     Path(name): Path<String>,
 ) -> Result<Json<origin_types::responses::SuccessResponse>, ServerError> {
-    let mut s = state.write().await;
-    s.space_store.delete_tag(&name);
+    let db = {
+        let s = state.read().await;
+        s.db.clone().ok_or(ServerError::DbNotInitialized)?
+    };
+    db.delete_tag(&name)
+        .await
+        .map_err(|e| ServerError::Internal(e.to_string()))?;
     Ok(Json(origin_types::responses::SuccessResponse { ok: true }))
 }
 
@@ -2448,10 +2458,14 @@ pub async fn handle_set_document_tags(
     Path(source_id): Path<String>,
     Json(req): Json<origin_types::requests::SetDocumentTagsRequest>,
 ) -> Result<Json<origin_types::responses::TagsResponse>, ServerError> {
-    let mut s = state.write().await;
-    let tags = s
-        .space_store
-        .set_document_tags("memory", &source_id, req.tags);
+    let db = {
+        let s = state.read().await;
+        s.db.clone().ok_or(ServerError::DbNotInitialized)?
+    };
+    let tags = db
+        .set_document_tags("memory", &source_id, req.tags)
+        .await
+        .map_err(|e| ServerError::Internal(e.to_string()))?;
     Ok(Json(origin_types::responses::TagsResponse { tags }))
 }
 
@@ -2475,16 +2489,15 @@ pub async fn handle_suggest_tags(
     State(state): State<Arc<RwLock<ServerState>>>,
     axum::extract::Query(query): axum::extract::Query<SuggestTagsQuery>,
 ) -> Result<Json<origin_types::responses::TagsResponse>, ServerError> {
-    // Read phase: clone db Arc + snapshot the existing tags vec.
-    // Dropping the guard before the awaits keeps writers unblocked.
-    let (db, existing) = {
+    // Read phase: clone db Arc, drop guard, then fetch existing tags from DB.
+    let db = {
         let s = state.read().await;
-        let db = s.db.clone().ok_or(ServerError::DbNotInitialized)?;
-        let existing = s
-            .space_store
-            .get_document_tags(&query.source, &query.source_id);
-        (db, existing)
+        s.db.clone().ok_or(ServerError::DbNotInitialized)?
     };
+    let existing = db
+        .get_document_tags(&query.source, &query.source_id)
+        .await
+        .map_err(|e| ServerError::Internal(e.to_string()))?;
 
     let chunks = db
         .get_memories_by_source_id(&query.source, &query.source_id)

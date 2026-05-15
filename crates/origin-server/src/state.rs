@@ -8,7 +8,6 @@ use origin_core::db::MemoryDB;
 use origin_core::llm_provider::LlmProvider;
 use origin_core::prompts::PromptRegistry;
 use origin_core::quality_gate::QualityGate;
-use origin_core::spaces::SpaceStore;
 use origin_core::tuning::TuningConfig;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -42,8 +41,6 @@ pub struct ServerState {
     pub access_tracker: AccessTracker,
     /// Pre-store quality gate.
     pub quality_gate: QualityGate,
-    /// Spaces, tags & document assignments.
-    pub space_store: SpaceStore,
     /// Configured directory watch paths.
     pub watch_paths: Vec<PathBuf>,
     /// Write-event tracker for the event-driven steep scheduler.
@@ -69,7 +66,6 @@ impl Default for ServerState {
             tuning: TuningConfig::default(),
             access_tracker: AccessTracker::new(),
             quality_gate: QualityGate::new(origin_core::tuning::GateConfig::default()),
-            space_store: SpaceStore::default(),
             watch_paths: Vec::new(),
             write_signal: WriteSignal::new(),
             ingest_batcher: None,

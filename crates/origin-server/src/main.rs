@@ -363,8 +363,16 @@ async fn run_daemon() -> anyhow::Result<()> {
         }
     }
 
-    // Load space store
-    server_state.space_store = origin_core::spaces::load_spaces();
+    // Import any legacy tag data from the pre-PR-B2 spaces.db file.
+    if let Some(ref db_arc) = server_state.db {
+        match origin_core::spaces::import_legacy_tags(db_arc).await {
+            Ok(n) if n > 0 => {
+                tracing::info!("[startup] imported {} legacy tag triples from spaces.db", n)
+            }
+            Ok(_) => {}
+            Err(e) => tracing::warn!("[startup] legacy tags import failed: {e}"),
+        }
+    }
 
     // Spawn the ingest coalescer. HTTP `/api/memory/store` handlers submit
     // fully-built RawDocuments + pre-computed chunk counts; the coalescer
