@@ -1746,8 +1746,10 @@ pub async fn handle_create_space(
     State(state): State<Arc<RwLock<ServerState>>>,
     Json(req): Json<CreateSpaceRequest>,
 ) -> Result<Json<origin_core::db::Space>, ServerError> {
-    let s = state.read().await;
-    let db = s.db.as_ref().ok_or(ServerError::DbNotInitialized)?;
+    let db = {
+        let s = state.read().await;
+        s.db.clone().ok_or(ServerError::DbNotInitialized)?
+    };
     let space = db
         .create_space(&req.name, req.description.as_deref(), false)
         .await
@@ -1760,8 +1762,10 @@ pub async fn handle_update_space(
     Path(name): Path<String>,
     Json(req): Json<UpdateSpaceRequest>,
 ) -> Result<Json<origin_core::db::Space>, ServerError> {
-    let s = state.read().await;
-    let db = s.db.as_ref().ok_or(ServerError::DbNotInitialized)?;
+    let db = {
+        let s = state.read().await;
+        s.db.clone().ok_or(ServerError::DbNotInitialized)?
+    };
     let new_name = req.new_name.as_deref().unwrap_or(&name);
     let space = db
         .update_space(&name, new_name, req.description.as_deref())
@@ -1774,8 +1778,10 @@ pub async fn handle_delete_space(
     State(state): State<Arc<RwLock<ServerState>>>,
     Path(name): Path<String>,
 ) -> Result<Json<serde_json::Value>, ServerError> {
-    let s = state.read().await;
-    let db = s.db.as_ref().ok_or(ServerError::DbNotInitialized)?;
+    let db = {
+        let s = state.read().await;
+        s.db.clone().ok_or(ServerError::DbNotInitialized)?
+    };
     db.delete_space(&name, "keep")
         .await
         .map_err(|e| ServerError::Internal(e.to_string()))?;
