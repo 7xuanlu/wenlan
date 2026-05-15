@@ -4,13 +4,26 @@
 
 [![CI](https://github.com/7xuanlu/origin/actions/workflows/ci.yml/badge.svg?branch=main&event=push)](https://github.com/7xuanlu/origin/actions/workflows/ci.yml?query=branch%3Amain)
 [![Release](https://img.shields.io/github/v/release/7xuanlu/origin?sort=semver)](https://github.com/7xuanlu/origin/releases/latest)
+[![npm: @7xuanlu/origin](https://img.shields.io/npm/v/%407xuanlu%2Forigin?label=%407xuanlu%2Forigin)](https://www.npmjs.com/package/@7xuanlu/origin)
+[![npm: origin-mcp](https://img.shields.io/npm/v/origin-mcp?label=origin-mcp)](https://www.npmjs.com/package/origin-mcp)
+[![MCP Server](https://img.shields.io/badge/MCP-server-blue)](https://modelcontextprotocol.io)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](#license)
 
-Developers have `origin` for code. Origin is local-first memory for AI work: it carries sessions, decisions, lessons, and project context across chats, projects, and time.
+<p align="center">
+  <a href="#claude-code--30-seconds"><img alt="Claude Code" src="https://img.shields.io/badge/Claude%20Code-plugin-5D4E75"></a>
+  <a href="#other-mcp-clients-and-terminal-use"><img alt="OpenAI Codex" src="https://img.shields.io/badge/OpenAI%20Codex-MCP-111827"></a>
+  <a href="#other-mcp-clients-and-terminal-use"><img alt="Cursor" src="https://img.shields.io/badge/Cursor-MCP-111111"></a>
+  <a href="#other-mcp-clients-and-terminal-use"><img alt="VS Code" src="https://img.shields.io/badge/VS%20Code-MCP-007ACC"></a>
+  <a href="#other-mcp-clients-and-terminal-use"><img alt="Claude Desktop" src="https://img.shields.io/badge/Claude%20Desktop-MCP-D97757"></a>
+  <a href="#other-mcp-clients-and-terminal-use"><img alt="Gemini CLI" src="https://img.shields.io/badge/Gemini%20CLI-MCP-4285F4"></a>
+  <a href="#what-you-get"><img alt="Obsidian" src="https://img.shields.io/badge/Obsidian-Markdown%20pages-7C3AED"></a>
+</p>
 
-Markdown you can read, wiki pages it distills, plus a local database with hybrid retrieval your agents can search. Use it through the Claude Code plugin or any MCP client.
+Developers have `origin` for code. Origin gives AI work its own source of truth: local-first memory for sessions, decisions, lessons, project status, and wiki pages that carry across chats, projects, and time.
 
-The daemon does the memory chores in the background: stores what matters, deduplicates repeat facts, links related ideas, distills wiki pages, and keeps provenance attached. This repo ships the full local runtime for the Claude Code plugin and MCP clients.
+Your agent gets searchable memory, graph context, and hybrid retrieval. You get Markdown session logs, wiki pages, and a git-backed artifact trail under `~/.origin/`.
+
+Origin runs quietly in the background: it stores what matters, deduplicates repeat facts, links related ideas, distills wiki pages, and keeps provenance attached.
 
 **Status:** Early preview. Expect fast iteration and some sharp edges.
 
@@ -30,7 +43,7 @@ The daemon does the memory chores in the background: stores what matters, dedupl
 
 If Claude Code asks for a restart after installing, restart once, then run `/init`. The plugin handles daemon setup, MCP wiring, local memory setup, and the first round-trip check.
 
-`7xuanlu` is the GitHub repo owner. If you fork Origin, use your own handle in both commands.
+Then try `/brief`, `/capture <decision>`, or `/handoff` inside Claude Code.
 
 Plugin details and daily commands: [plugin/](plugin/.claude-plugin/README.md).
 
@@ -45,7 +58,7 @@ npx -y @7xuanlu/origin setup
 That installs the `origin` CLI, `origin-server` daemon, and `origin-mcp` connector into `~/.origin/bin/`, configures local memory, registers the daemon with launchd, and verifies status.
 For terminal use, start with `origin status`, `origin recall <query>`, or `origin store <text>`. CLI details: [crates/origin-cli](crates/origin-cli/README.md).
 
-Then add the MCP connector to Cursor, Codex, Claude Desktop, Gemini CLI, or any client that accepts a JSON `mcpServers` entry:
+Then add the MCP connector to Cursor, Codex, VS Code, Claude Desktop, Gemini CLI, or any client that accepts a JSON `mcpServers` entry:
 
 ```json
 {
@@ -74,7 +87,21 @@ Origin follows the rhythm of an AI work session, with five verbs you use directl
 
 Full skill reference: [plugin/skills](plugin/skills/README.md).
 
-No cloud sync or telemetry by default. Local models and Anthropic keys are opt-in.
+No cloud sync or telemetry by default. Local models and Anthropic keys are opt-in for automatic distill cycles.
+
+---
+
+## What you get
+
+- **Atomic memory layer**: every capture is stored first as a typed memory with source agent, confidence, stability, and supersession metadata.
+- **Hybrid retrieval on libSQL**: memories, pages, FTS5 text search, vector embeddings, and graph context live in one local store your MCP clients can query.
+- **Distill cycles**: run `/distill` manually today, or add a local model/API key for background extraction, page refreshes, recaps, and richer graph links.
+- **Source-backed pages**: pages keep source memory IDs, stale reasons, and revision state so distillation can refresh them without losing provenance.
+- **Background enrichment and decay**: post-ingest passes link entities, enrich titles, grow matching pages, and update effective confidence based on memory type, access, and age.
+- **Knowledge graph context**: people, projects, tools, observations, and relations become retrievable context instead of isolated notes.
+- **Review before trust**: low-confidence captures, pending revisions, protected-memory conflicts, contradictions, and supersession chains can surface instead of silently entering context.
+- **Project-scoped context**: skills infer the current repo or workspace so captures, recalls, and pages stay tied to the work at hand.
+- **Local artifacts**: Markdown pages live in `~/.origin/pages/`, session logs and project status live under `~/.origin/sessions/`, and `~/.origin/` keeps local git history you can inspect, revert, or symlink into Obsidian.
 
 ---
 
@@ -110,7 +137,7 @@ Full contributor map: [CLAUDE.md](CLAUDE.md).
 
 ## Build from source
 
-Most users should install through the Claude Code plugin or the release installer above. For local development:
+Most users should install through the Claude Code plugin. For local development:
 
 ```bash
 git clone https://github.com/7xuanlu/origin.git
