@@ -2,7 +2,6 @@
 //! Origin headless daemon — runs the memory server without Tauri.
 
 mod cmd_backfill;
-mod cmd_setup;
 
 // All other modules live in the library target (src/lib.rs) so that
 // integration tests in tests/ can reference them as origin_server::<mod>.
@@ -17,7 +16,12 @@ use tokio::sync::RwLock;
 
 /// Origin memory daemon — headless HTTP server.
 #[derive(Parser)]
-#[command(name = "origin", bin_name = "origin", version, about)]
+#[command(
+    name = "origin-server",
+    bin_name = "origin-server",
+    version,
+    about = "Origin headless HTTP daemon."
+)]
 struct Cli {
     #[command(subcommand)]
     command: Option<Command>,
@@ -37,42 +41,9 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
-    /// Guided setup for Basic Memory, a local model, or an Anthropic key.
-    Setup {
-        /// Set up without a model or API key.
-        #[arg(long)]
-        basic: bool,
-        /// Download and select a local model, for example qwen3-4b.
-        #[arg(long, value_name = "MODEL_ID")]
-        model: Option<String>,
-        /// Read an Anthropic key from this environment variable.
-        #[arg(long = "anthropic-api-key-env", value_name = "ENV_VAR")]
-        anthropic_api_key_env: Option<String>,
-        /// Skip confirmation prompts where possible.
-        #[arg(short = 'y', long)]
-        yes: bool,
-    },
-    /// Diagnose daemon, model, and API key setup.
-    Doctor,
-    /// Manage local models.
-    Model {
-        #[command(subcommand)]
-        command: cmd_setup::ModelCommand,
-    },
-    /// Manage provider API keys.
-    Key {
-        #[command(subcommand)]
-        command: cmd_setup::KeyCommand,
-    },
-    /// Install as a macOS LaunchAgent (auto-start on login).
-    Install,
-    /// Uninstall the LaunchAgent.
-    Uninstall,
-    /// Show daemon, model, and API key status.
-    Status,
-    /// Delete archived stale concepts (Mode B cleanup). See spec
-    /// 2026-04-25-bad-page-distill-fix-design.md. Daemon must be stopped first.
-    BackfillStaleConcepts {
+    /// Internal maintenance: delete archived stale pages. Daemon must be stopped first.
+    #[command(name = "backfill-stale-pages", hide = true)]
+    BackfillStalePages {
         /// Print candidates without modifying the database.
         #[arg(long)]
         dry_run: bool,
@@ -80,145 +51,6 @@ enum Command {
 }
 
 pub(crate) const PLIST_LABEL: &str = "com.origin.server";
-const PLIST_TEMPLATE: &str = include_str!("../resources/com.origin.server.plist");
-
-fn plist_path() -> std::path::PathBuf {
-    dirs::home_dir()
-        .expect("HOME not set")
-        .join("Library/LaunchAgents")
-        .join(format!("{}.plist", PLIST_LABEL))
-}
-
-fn log_dir() -> std::path::PathBuf {
-    dirs::data_local_dir()
-        .unwrap_or_else(|| std::path::PathBuf::from("."))
-        .join("origin")
-        .join("logs")
-}
-
-fn current_exe_path() -> String {
-    std::env::current_exe()
-        .expect("cannot determine own path")
-        .to_string_lossy()
-        .to_string()
-}
-
-fn cmd_install() -> anyhow::Result<()> {
-    let plist = plist_path();
-    let log_path = log_dir();
-
-    // Ensure log directory exists
-    std::fs::create_dir_all(&log_path)?;
-
-    // Substitute placeholders
-    let content = PLIST_TEMPLATE
-        .replace("__ORIGIN_SERVER_PATH__", &current_exe_path())
-        .replace("__LOG_PATH__", &log_path.to_string_lossy());
-
-    // Ensure LaunchAgents directory exists
-    if let Some(parent) = plist.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
-
-    // Unload first if already installed (ignore errors)
-    if plist.exists() {
-        let _ = std::process::Command::new("launchctl")
-            .args(["unload", &plist.to_string_lossy()])
-            .output();
-    }
-
-    std::fs::write(&plist, content)?;
-    println!("Wrote {}", plist.display());
-
-    let output = std::process::Command::new("launchctl")
-        .args(["load", &plist.to_string_lossy()])
-        .output()?;
-
-    if output.status.success() {
-        println!(
-            "Loaded {} — daemon will start automatically on login",
-            PLIST_LABEL
-        );
-    } else {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        eprintln!("launchctl load failed: {}", stderr);
-    }
-
-    Ok(())
-}
-
-fn cmd_uninstall() -> anyhow::Result<()> {
-    let plist = plist_path();
-
-    if !plist.exists() {
-        println!("{} is not installed", PLIST_LABEL);
-        return Ok(());
-    }
-
-    let output = std::process::Command::new("launchctl")
-        .args(["unload", &plist.to_string_lossy()])
-        .output()?;
-
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        eprintln!("launchctl unload warning: {}", stderr);
-    }
-
-    std::fs::remove_file(&plist)?;
-    println!(
-        "Removed {} — daemon will no longer auto-start",
-        plist.display()
-    );
-
-    Ok(())
-}
-
-async fn cmd_status() -> anyhow::Result<()> {
-    let plist = plist_path();
-
-    // Check plist exists
-    if plist.exists() {
-        println!("Plist: {} (installed)", plist.display());
-    } else {
-        println!("Plist: not installed");
-    }
-
-    // Check launchctl
-    let output = std::process::Command::new("launchctl")
-        .args(["list"])
-        .output()?;
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let registered = stdout.lines().any(|line| line.contains(PLIST_LABEL));
-    println!(
-        "Launchd: {}",
-        if registered {
-            "registered"
-        } else {
-            "not registered"
-        }
-    );
-
-    // Health check
-    let port: u16 = std::env::var("ORIGIN_PORT")
-        .ok()
-        .and_then(|v| v.parse().ok())
-        .unwrap_or(7878);
-    let url = format!("http://127.0.0.1:{}/api/health", port);
-    match reqwest::get(&url).await {
-        Ok(resp) if resp.status().is_success() => {
-            let body = resp.text().await.unwrap_or_default();
-            println!("Health: ok (port {})\n{}", port, body);
-        }
-        Ok(resp) => {
-            println!("Health: unhealthy (status {})", resp.status());
-        }
-        Err(e) => {
-            println!("Health: not reachable ({})", e);
-        }
-    }
-
-    Ok(())
-}
 
 async fn run_daemon() -> anyhow::Result<()> {
     // Logging
@@ -403,9 +235,9 @@ async fn run_daemon() -> anyhow::Result<()> {
     }
 
     // One-time backfill: if the knowledge directory is empty but the DB has
-    // active concepts, write them all to disk. Handles the case where
-    // concepts were created before KnowledgeWriter was wired up, or via a
-    // code path that bypasses the writer.
+    // active pages, write them all to disk. Handles the case where pages were
+    // created before KnowledgeWriter was wired up, or via a code path that
+    // bypasses the writer.
     //
     // We gate on a `.origin/.backfill-attempted` marker file (created on
     // first attempt regardless of outcome) so this block only runs once per
@@ -433,10 +265,10 @@ async fn run_daemon() -> anyhow::Result<()> {
 
         if !already_attempted && !has_md_files {
             match db_arc.list_pages("active", 10_000, 0).await {
-                Ok(concepts) if !concepts.is_empty() => {
+                Ok(pages) if !pages.is_empty() => {
                     tracing::info!(
-                        "[backfill] knowledge dir empty; writing {} concepts to {}",
-                        concepts.len(),
+                        "[backfill] knowledge dir empty; writing {} pages to {}",
+                        pages.len(),
                         knowledge_path.display()
                     );
                     let writer = origin_core::export::knowledge::KnowledgeWriter::new(
@@ -444,7 +276,7 @@ async fn run_daemon() -> anyhow::Result<()> {
                     );
                     let mut written = 0usize;
                     let mut failed = 0usize;
-                    for page in &concepts {
+                    for page in &pages {
                         match writer.write_page(page) {
                             Ok(_) => written += 1,
                             Err(e) => {
@@ -457,7 +289,7 @@ async fn run_daemon() -> anyhow::Result<()> {
                             }
                         }
                     }
-                    tracing::info!("[backfill] wrote {} concepts, {} failed", written, failed);
+                    tracing::info!("[backfill] wrote {} pages, {} failed", written, failed);
 
                     // Create the marker file so we don't re-run the
                     // backfill on every subsequent startup — even if every
@@ -475,9 +307,8 @@ async fn run_daemon() -> anyhow::Result<()> {
                     }
                 }
                 Ok(_) => {
-                    // DB has no concepts yet — nothing to backfill. Don't
-                    // create the marker; the next startup after concepts
-                    // exist should retry.
+                    // DB has no pages yet — nothing to backfill. Don't create
+                    // the marker; the next startup after pages exist should retry.
                 }
                 Err(e) => {
                     tracing::warn!("[backfill] list_pages failed: {}", e);
@@ -823,30 +654,7 @@ async fn main() -> anyhow::Result<()> {
     }
 
     match cli.command {
-        Some(Command::Setup {
-            basic,
-            model,
-            anthropic_api_key_env,
-            yes,
-        }) => {
-            cmd_setup::run_setup(cmd_setup::SetupArgs {
-                basic,
-                model,
-                anthropic_api_key_env,
-                yes,
-            })
-            .await
-        }
-        Some(Command::Doctor) => cmd_setup::run_doctor().await,
-        Some(Command::Model { command }) => cmd_setup::run_model(command).await,
-        Some(Command::Key { command }) => cmd_setup::run_key(command).await,
-        Some(Command::Install) => cmd_install(),
-        Some(Command::Uninstall) => cmd_uninstall(),
-        Some(Command::Status) => {
-            cmd_status().await?;
-            cmd_setup::print_runtime_status().await
-        }
-        Some(Command::BackfillStaleConcepts { dry_run }) => cmd_backfill::run(dry_run).await,
+        Some(Command::BackfillStalePages { dry_run }) => cmd_backfill::run(dry_run).await,
         None => run_daemon().await,
     }
 }

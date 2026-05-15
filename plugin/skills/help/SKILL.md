@@ -20,7 +20,7 @@ abbreviating, no embellishing. The user is asking for the menu.
 ```
 Origin plugin — daily verbs
 
-  /init         set up Origin (auto-installs daemon + Basic Memory)
+  /init         set up Origin (auto-installs daemon + local memory)
   /brief        load identity + topic context (start of session)
   /capture <x>  save one durable memory in flow
   /recall <q>   search local memory
@@ -66,9 +66,9 @@ Three classes of artifact:
 
 Daemon must run at 127.0.0.1:7878. Hook prints "/origin:init" if down.
 
-Optional upgrades for richer features (refinery, page synthesis):
+Optional upgrades for richer distill cycles:
   origin model install            local Qwen, no API cost
-  origin key set anthropic        cloud LLM, higher quality
+  origin key set anthropic        Anthropic API, higher quality
 ```
 
 ## When to use

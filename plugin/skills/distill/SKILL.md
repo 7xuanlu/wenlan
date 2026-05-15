@@ -11,7 +11,7 @@ allowed-tools: ["mcp__plugin_origin_origin__recall", "mcp__plugin_origin_origin_
 
 # /distill
 
-Force a distillation pass now. The daemon's background refinery runs
+Force a distillation pass now. The daemon's background distill cycles run
 on its own clock; `/distill` is the explicit user-triggered pass.
 
 ## Mental model
@@ -37,8 +37,8 @@ One POST to the daemon. Response splits into:
 - `pending`: clusters the daemon couldn't finish. The agent
   synthesizes each in this session and POSTs them back to `/api/pages`.
 
-Trigger timing is the only thing that differs between the background
-refinery and this skill. Code path is the same; daemon hands back
+Trigger timing is the only thing that differs between background distill
+cycles and this skill. Code path is the same; daemon hands back
 clusters when it can't synthesize; whoever called fills in the rest.
 
 ## Flow
@@ -341,7 +341,7 @@ wait is enough for the daemon to release the lock.
 ## When to use
 
 - User says "distill", "synthesize", "rebuild the page on X".
-- After a bulk import — daemon refinery handles this in the background;
+- After a bulk import — daemon distill cycles handle this in the background;
   user can force a pass for immediate visibility.
 - `/distill rebuild <page-id>` when you want to wipe a page you
   previously edited and have the daemon regenerate from current

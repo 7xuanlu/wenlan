@@ -28,15 +28,24 @@ The daemon does the memory chores in the background: stores what matters, dedupl
 /init
 ```
 
-If Claude Code asks for a restart after installing, restart once, then run `/init`. The plugin handles daemon setup, MCP wiring, Basic Memory mode, and the first round-trip check.
+If Claude Code asks for a restart after installing, restart once, then run `/init`. The plugin handles daemon setup, MCP wiring, local memory setup, and the first round-trip check.
 
 `7xuanlu` is the GitHub repo owner. If you fork Origin, use your own handle in both commands.
 
 Plugin details and daily commands: [plugin/](plugin/.claude-plugin/README.md).
 
-### Other MCP clients (Cursor, Codex, Claude Desktop, Gemini CLI…)
+### Other MCP clients and terminal use
 
-Add Origin to any client that accepts a JSON `mcpServers` entry:
+Set up the local Origin runtime:
+
+```bash
+npx -y @7xuanlu/origin setup
+```
+
+That installs the `origin` CLI, `origin-server` daemon, and `origin-mcp` connector into `~/.origin/bin/`, configures local memory, registers the daemon with launchd, and verifies status.
+CLI details: [crates/origin-cli](crates/origin-cli/README.md).
+
+Then add the MCP connector to Cursor, Codex, Claude Desktop, Gemini CLI, or any client that accepts a JSON `mcpServers` entry:
 
 ```json
 {
@@ -49,11 +58,7 @@ Add Origin to any client that accepts a JSON `mcpServers` entry:
 }
 ```
 
-`npx -y origin-mcp` runs the connector on demand. If the local daemon is missing, Origin prints the setup command.
-
-### Terminal / daemon setup
-
-For automation, servers, or pre-flight installs without the Claude Code plugin, use the `origin` launcher. See [crates/origin-server](crates/origin-server/README.md) for `origin setup`, `origin install`, `origin status`, model setup, and service commands.
+The `origin-mcp` connector runs on demand and talks to the local Origin daemon from setup above.
 
 ---
 
@@ -86,14 +91,14 @@ Token efficiency on LoCoMo: 168 tokens per query instead of 4,505 for full repla
 
 ## Repo Map
 
-Origin is daemon-first. `origin-server` owns the local database, embeddings, refinery, knowledge graph, and HTTP API on `127.0.0.1:7878`. The plugin, MCP server, CLI, and local tools are thin clients over that daemon.
+Origin is daemon-first. `origin-server` owns the local database, embeddings, distill cycles, knowledge graph, and HTTP API on `127.0.0.1:7878`. The plugin, MCP server, CLI, and local tools are thin clients over that daemon.
 
 | Path | What lives there |
 | --- | --- |
-| [crates/origin-core](crates/origin-core/README.md) | Storage, search, embeddings, refinery, graph, pages, export, eval. |
-| [crates/origin-server](crates/origin-server/README.md) | Local daemon, setup, launchd service, HTTP API. |
+| [crates/origin-core](crates/origin-core/README.md) | Storage, search, embeddings, distill cycles, graph, pages, export, eval. |
+| [crates/origin-server](crates/origin-server/README.md) | Local daemon and HTTP API. |
 | [crates/origin-mcp](crates/origin-mcp/README.md) | MCP server, tools, npm package. |
-| [crates/origin-cli](crates/origin-cli/README.md) | Source-built developer CLI for daemon search, recall, store, list, and agents. |
+| [crates/origin-cli](crates/origin-cli/README.md) | User CLI for setup, service management, search, recall, store, list, agents, model/key setup, and doctor. |
 | [plugin/](plugin/.claude-plugin/README.md) | Claude Code plugin (`plugin.json`, skills, hooks, `.mcp.json`). Marketplace entry at root [`.claude-plugin/marketplace.json`](.claude-plugin/marketplace.json) lists this plugin via `source: "./plugin"`. |
 | [docs/eval](docs/eval/README.md) | Benchmark workflow and methodology. |
 

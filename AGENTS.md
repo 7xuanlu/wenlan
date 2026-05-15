@@ -24,10 +24,11 @@ Origin is a Cargo workspace with 5 crates: `origin-types`, `origin-core`, `origi
 cargo run -p origin-server                # listens on 127.0.0.1:7878
 
 # Or start the daemon as a managed launchd service:
-cargo build -p origin-server
-./target/debug/origin-server install      # writes plist, launchctl load
-./target/debug/origin-server status
-./target/debug/origin-server uninstall    # when done
+cargo build -p origin -p origin-server
+./target/debug/origin setup --basic       # configure local memory
+./target/debug/origin install             # writes plist, launchctl load
+./target/debug/origin status
+./target/debug/origin uninstall           # when done
 
 # Workspace-level builds
 cargo check --workspace
@@ -117,7 +118,7 @@ Releases are automated via [release-please](https://github.com/googleapis/releas
 **How it works:**
 1. Every push to `main`, release-please scans new commits and maintains an open "release PR" that accumulates changes and updates `CHANGELOG.md`.
 2. When you're ready to ship, merge the release PR. That triggers a GitHub release (draft) + git tag.
-3. The `v*` tag push triggers `.github/workflows/release.yml`, which builds the daemon (`origin-server`) and `origin-mcp`, uploads standalone binaries to the release, and publishes it.
+3. The `v*` tag push triggers `.github/workflows/release.yml`, which builds `origin`, `origin-server`, and `origin-mcp`, uploads standalone binaries to the release, and publishes it.
 4. The release-please workflow also syncs daemon `Cargo.toml` versions on the release branch (release-please can't handle Cargo workspaces reliably with `simple` release type).
 
 **Commit messages control version bumps.** Pre-1.0:
@@ -155,7 +156,7 @@ cat .release-please-manifest.json
 
 **Never delete a release tag without also cleaning up the commit history.** If you need to undo a release version, you must rewrite the commit message that release-please created (`git filter-branch --msg-filter`), delete the tag, delete the GitHub Release, and rename the merged PR title via API. Otherwise release-please will keep bumping from the old version.
 
-**The `release.yml` workflow ships the daemon side.** It handles: origin-server (cargo build), origin-mcp (cargo build, same workspace), standalone binary uploads, and crates.io publishing for `origin-types` + `origin-mcp`. It does NOT build a desktop bundle — origin-app builds its own DMG in its own repo.
+**The `release.yml` workflow ships the local runtime.** It handles: origin CLI, origin-server, origin-mcp, standalone binary uploads, crates.io publishing for `origin-types` + `origin-mcp`, and npm publishing for `origin-mcp` + `@7xuanlu/origin`. It does NOT build a desktop bundle — origin-app builds its own DMG in its own repo.
 
 ### Branch protection
 
@@ -179,9 +180,9 @@ The repo is a Cargo workspace with 5 crates:
 | Crate | Role | Key dependencies |
 |---|---|---|
 | `crates/origin-types` | Shared API boundary types (request/response, memory, entities). Lightweight: serde + serde_json + anyhow only. Consumed by `origin-mcp`, `origin-app` (separate repo, via crates.io), and any other downstream tool. | serde |
-| `crates/origin-core` | All business logic: DB, embeddings, LLM engine, search, classification, knowledge graph, refinery, pages, export, eval. **Must have NO axum or tauri dependencies.** | libSQL, FastEmbed, llama-cpp-2, hf-hub |
+| `crates/origin-core` | All business logic: DB, embeddings, LLM engine, search, classification, knowledge graph, distill cycles, pages, export, eval. **Must have NO axum or tauri dependencies.** | libSQL, FastEmbed, llama-cpp-2, hf-hub |
 | `crates/origin-server` | Headless HTTP daemon on `127.0.0.1:7878`. Depends on `origin-core`. Provides `install/uninstall/status` subcommands for launchd management. | axum, tower, clap |
-| `crates/origin-cli` | CLI binary `origin`. Talks to daemon HTTP via `origin-types`. Subcommands: status/search/recall/store/list/agents/install/setup. | reqwest, clap |
+| `crates/origin-cli` | CLI binary `origin`. Talks to daemon HTTP via `origin-types` and owns setup/service commands. Subcommands: status/search/recall/store/list/agents/install/setup/model/key/doctor. | reqwest, clap |
 | `crates/origin-mcp` | MCP server binary that bridges MCP clients (Claude Code, Cursor, Codex, Claude Desktop, etc.) to the daemon HTTP API. Stdio + streamable-HTTP transports via the `rmcp` crate. Ships as a standalone binary + npm package (`npx -y origin-mcp`). | rmcp, reqwest, schemars |
 
 The daemon (`origin-server`) is the single source of truth. External tools (the desktop app, MCP clients via `origin-mcp`, `origin` CLI, curl) all talk HTTP to the same daemon. `origin-mcp` source lives in this monorepo; at runtime it's a separate process the MCP client spawns.
@@ -248,7 +249,7 @@ All business logic lives here. No tauri, no axum. Framework-agnostic.
 | `merge.rs` | Memory merging, pattern extraction, contradiction detection |
 | `llm_provider.rs` | `LlmProvider` trait + `ApiProvider` (Anthropic API) + `OnDeviceProvider` shim |
 | `llm_classifier.rs` | Higher-level classification orchestration |
-| `refinery.rs` | Background refinement queue — dedup, auto-linking, consolidation |
+| `refinery.rs` | Distill-cycle orchestration, dedup, auto-linking, consolidation |
 | `post_ingest.rs` | Post-ingest enrichment (dedup check, entity linking, title enrich, recap, page growth) |
 | `pages.rs` | Type definitions for the `Page` struct (synthesized wiki entries distilled from memory clusters). Actual clustering + distillation live in `db.rs` + `refinery.rs`. SQL tables are `pages`/`page_sources` (renamed from `concepts`/`concept_sources` in migration 46). |
 | `spaces.rs` | Spaces / tag store |
@@ -260,7 +261,7 @@ All business logic lives here. No tauri, no axum. Framework-agnostic.
 | `context_packager.rs` | Context bundle → prompt packaging |
 | `importer.rs` | File importer pipeline |
 | `quality_gate.rs` | Pre-store quality gate |
-| `tuning.rs` | Tuning config (refinery, distillation, weights) |
+| `tuning.rs` | Tuning config (distill cycles, distillation, weights) |
 | `schema.rs` | Memory schema definitions (formerly `memory_schema.rs`) |
 | `prompts/` | Prompt registry (defaults + override dir loader) |
 | `chunker/` | Code-aware, Markdown-aware, fixed-size chunking |
@@ -278,7 +279,7 @@ HTTP daemon — owns the Axum router + all routes. All handlers operate on `Arc<
 
 | Module | Purpose |
 |---|---|
-| `main.rs` | Binary entry — clap subcommands (`install`/`uninstall`/`status`/daemon), tracing init, port binding with existing-daemon fallback, `MemoryDB::new`, LLM provider init, background tasks, `axum::serve` |
+| `main.rs` | Binary entry — daemon startup plus internal maintenance commands, tracing init, port binding with existing-daemon fallback, `MemoryDB::new`, LLM provider init, background tasks, `axum::serve` |
 | `state.rs` | `ServerState` struct with `db: Option<Arc<MemoryDB>>`, `llm`, `prompts`, `tuning`, `quality_gate`, `space_store`, `access_tracker`, `llm_processing_ids`, `watch_paths`. `SharedState = Arc<RwLock<ServerState>>` |
 | `router.rs` | `build_router(state) -> axum::Router` — all route registrations |
 | `routes.rs` | General endpoints: health, search, context, chat-context, status, profile/agents |
@@ -290,7 +291,7 @@ HTTP daemon — owns the Axum router + all routes. All handlers operate on `Arc<
 | `import_routes.rs` | Bulk import endpoints |
 | `config_routes.rs` | Config read/write endpoints |
 | `onboarding_routes.rs` | First-run wizard / milestone state |
-| `scheduler.rs` | Background periodic tasks (refinery ticks, distillation, etc.) |
+| `scheduler.rs` | Background periodic tasks (distill cycles, distillation, etc.) |
 | `websocket.rs` | `/ws/updates` |
 | `error.rs` | `ServerError` + axum `IntoResponse` impl |
 | `resources/com.origin.server.plist` | launchd plist template (embedded via `include_str!`) |

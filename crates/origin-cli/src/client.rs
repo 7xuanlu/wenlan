@@ -20,6 +20,13 @@ use origin_types::{
 
 const DEFAULT_HOST: &str = "http://127.0.0.1:7878";
 
+pub fn origin_host_from_env() -> String {
+    std::env::var("ORIGIN_HOST")
+        .unwrap_or_else(|_| DEFAULT_HOST.to_string())
+        .trim_end_matches('/')
+        .to_string()
+}
+
 pub struct OriginClient {
     base_url: String,
     http: reqwest::Client,
@@ -28,17 +35,11 @@ pub struct OriginClient {
 impl OriginClient {
     /// Create a client using `ORIGIN_HOST` env var, or default to `http://127.0.0.1:7878`.
     pub fn from_env() -> Self {
-        let base_url = std::env::var("ORIGIN_HOST").unwrap_or_else(|_| DEFAULT_HOST.to_string());
-        // Strip trailing slash so URL joins are predictable.
-        let base_url = base_url.trim_end_matches('/').to_string();
+        let base_url = origin_host_from_env();
         Self {
             base_url,
             http: reqwest::Client::new(),
         }
-    }
-
-    pub fn base_url(&self) -> &str {
-        &self.base_url
     }
 
     /// GET /api/health — daemon liveness + version.

@@ -1029,7 +1029,7 @@ mod integration_tests {
             "The LLM formatter thread captures a tokio runtime handle for async database calls",
             "Config is persisted as JSON at the standard macOS Application Support directory path",
             "Meeting with the design team is scheduled for every Wednesday at two PM Pacific",
-            "The project uses AGPL-3.0-only license for the main app and MIT for the MCP server",
+            "The desktop app uses AGPL-3.0-only while the local runtime uses Apache-2.0",
             "Batch SQL operations should always be wrapped in BEGIN COMMIT transactions for atomicity",
             "The ambient capture system is disabled by default as part of the memory-layer pivot",
             "Frame comparison uses a 3-tier approach with downscaling hashing and Hellinger distance",
