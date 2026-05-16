@@ -246,13 +246,16 @@ jobs:
         run: |
           VERSION="${RELEASE_TAG#v}"
           npm version "$VERSION" --no-git-tag-version --allow-same-version
-      - name: Copy root README into npm packages
-        # npm renders README.md on the package page. Copying root README ensures
-        # both packages always reflect the current project description rather
-        # than rotting per-package READMEs.
+      - name: Copy root README and LICENSE into npm packages
+        # npm renders README.md on the package page and surfaces LICENSE on
+        # the package metadata. Copying root files ensures both packages
+        # always reflect the current project description and the same legal
+        # text the daemon ships under.
         run: |
           cp README.md crates/origin-mcp/npm/README.md
           cp README.md crates/origin-cli/npm/README.md
+          cp LICENSE crates/origin-mcp/npm/LICENSE
+          cp LICENSE crates/origin-cli/npm/LICENSE
       - name: Publish origin-mcp
         working-directory: crates/origin-mcp/npm
         run: npm publish --provenance --access public

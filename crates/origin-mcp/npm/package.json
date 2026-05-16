@@ -4,6 +4,8 @@
   "description": "Personal memory layer for AI agents - MCP server",
   "keywords": [
     "mcp",
+    "ai-memory",
+    "llm-wiki",
     "memory",
     "ai",
     "agents",
@@ -11,6 +13,11 @@
     "chatgpt",
     "origin"
   ],
+  "homepage": "https://github.com/7xuanlu/origin#readme",
+  "bugs": {
+    "url": "https://github.com/7xuanlu/origin/issues"
+  },
+  "author": "7xuanlu <h164654156465@gmail.com>",
   "license": "Apache-2.0",
   "bin": {
     "origin-mcp": "run.js"

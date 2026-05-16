@@ -1,3 +1,4 @@
 node_modules/
-# Generated at release time from root README by release.yml. Don't commit.
+# Generated at release time from root files by release.yml. Don't commit.
 README.md
+LICENSE

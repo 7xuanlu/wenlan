@@ -2,6 +2,24 @@
   "name": "@7xuanlu/origin",
   "version": "0.6.0",
   "description": "Frictionless setup for Origin, the local runtime for AI work memory.",
+  "keywords": [
+    "ai-memory",
+    "llm-wiki",
+    "origin",
+    "memory",
+    "ai",
+    "agents",
+    "knowledge",
+    "claude",
+    "chatgpt",
+    "installer",
+    "setup"
+  ],
+  "homepage": "https://github.com/7xuanlu/origin#readme",
+  "bugs": {
+    "url": "https://github.com/7xuanlu/origin/issues"
+  },
+  "author": "7xuanlu <h164654156465@gmail.com>",
   "license": "Apache-2.0",
   "bin": {
     "origin": "run.js"
@@ -18,6 +36,8 @@
     "directory": "crates/origin-cli/npm"
   },
   "files": [
-    "run.js"
+    "run.js",
+    "README.md",
+    "LICENSE"
   ]
 }
