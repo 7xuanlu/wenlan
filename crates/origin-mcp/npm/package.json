@@ -1,13 +1,17 @@
 {
   "name": "origin-mcp",
   "version": "0.6.0",
-  "description": "Personal memory layer for AI agents - MCP server",
+  "description": "Local-first memory layer for AI agents - MCP server",
   "keywords": [
     "mcp",
     "ai-memory",
     "llm-wiki",
+    "long-term-memory",
+    "local-first",
+    "wiki",
     "memory",
     "ai",
+    "llm",
     "agents",
     "claude",
     "chatgpt",
@@ -24,6 +28,9 @@
   },
   "scripts": {
     "postinstall": "node install.js"
+  },
+  "engines": {
+    "node": ">=18"
   },
   "os": [
     "darwin"

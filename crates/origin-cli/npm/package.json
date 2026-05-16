@@ -1,13 +1,17 @@
 {
   "name": "@7xuanlu/origin",
   "version": "0.6.0",
-  "description": "Frictionless setup for Origin, the local runtime for AI work memory.",
+  "description": "Local-first memory + knowledge layer for AI agents.",
   "keywords": [
     "ai-memory",
     "llm-wiki",
+    "long-term-memory",
+    "local-first",
+    "wiki",
     "origin",
     "memory",
     "ai",
+    "llm",
     "agents",
     "knowledge",
     "claude",
@@ -23,6 +27,9 @@
   "license": "Apache-2.0",
   "bin": {
     "origin": "run.js"
+  },
+  "engines": {
+    "node": ">=18"
   },
   "os": [
     "darwin"
