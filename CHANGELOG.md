@@ -1,5 +1,45 @@
 # Changelog
 
+## [0.6.0](https://github.com/7xuanlu/origin/compare/v0.5.3...v0.6.0) (2026-05-16)
+
+
+### Features
+
+* BM-mode consumer-side accept dispatch ([#96](https://github.com/7xuanlu/origin/issues/96)) ([033ce55](https://github.com/7xuanlu/origin/commit/033ce5570f2e56f384c669e053dcfbcf661db822))
+* BM-mode curation mutate MCPs (Spec C-2) ([#105](https://github.com/7xuanlu/origin/issues/105)) ([73aec7a](https://github.com/7xuanlu/origin/commit/73aec7a127f31d31a41b518a6ebd6a37c304ccfa))
+* rename domain → space + complete e2e scoping (BREAKING CHANGE) ([#123](https://github.com/7xuanlu/origin/issues/123)) ([7281202](https://github.com/7xuanlu/origin/commit/72812025b0dbf73652bd8654f7016633fc2c76ad))
+
+
+### Bug Fixes
+
+* auto-supersede conflicting relations (last-write-wins) ([#111](https://github.com/7xuanlu/origin/issues/111)) ([eda6718](https://github.com/7xuanlu/origin/commit/eda67180ee8c390e6d5c4ed666c0e1dc24295936))
+* bundle quick wins for CI noise + correctness ([#102](https://github.com/7xuanlu/origin/issues/102)) ([edde4c9](https://github.com/7xuanlu/origin/commit/edde4c9e45ebde81c6a607a7a795e54d1e684752))
+* capture inline contradiction signal + surface bug fix ([#110](https://github.com/7xuanlu/origin/issues/110)) ([b35e843](https://github.com/7xuanlu/origin/commit/b35e843d0b15595d0ba17e867906e8e2762011dd))
+* **ci:** main-canary filter eval::token_efficiency → eval::retrieval ([#124](https://github.com/7xuanlu/origin/issues/124)) ([ecfd386](https://github.com/7xuanlu/origin/commit/ecfd3867164f7cfebe0e384900532f1bd020249b))
+* **ci:** split fmt/lint/test on ubuntu, pin toolchain + SHAs ([#117](https://github.com/7xuanlu/origin/issues/117)) ([f5cd75d](https://github.com/7xuanlu/origin/commit/f5cd75d51994725aa9d312711d13439724a45dbe))
+* **core:** apply supersedes_exclusion to MemoryDB::search ([#130](https://github.com/7xuanlu/origin/issues/130)) ([0add226](https://github.com/7xuanlu/origin/commit/0add2268201f794bdf0e3f510f6d0d6a27b8b750))
+* **core:** cross-process file lock around FastEmbed init ([#125](https://github.com/7xuanlu/origin/issues/125)) ([d7aaaab](https://github.com/7xuanlu/origin/commit/d7aaaab418ea1f0e5dcee084be3a1e89b5873e24))
+* **core:** honor ORIGIN_DATA_DIR in spaces.legacy_db_path ([#135](https://github.com/7xuanlu/origin/issues/135)) ([a5c23ee](https://github.com/7xuanlu/origin/commit/a5c23eebb0b7e6cc1995b7fac7586faea1f41b5a))
+* **distill:** respect user_edited + thread knowledge_path + add /distill rebuild ([#106](https://github.com/7xuanlu/origin/issues/106)) ([26a7345](https://github.com/7xuanlu/origin/commit/26a734549e3aed141543b1749deb4f025c89fe52))
+* gate MCP curation wrappers to stdio transport ([#122](https://github.com/7xuanlu/origin/issues/122)) ([d874907](https://github.com/7xuanlu/origin/commit/d87490775e2d213148d42d1f8dabbcef2731dbe0))
+* handoff pending-captures preview + list_pending plumbing (Spec C-3b) ([#114](https://github.com/7xuanlu/origin/issues/114)) ([4fe5fba](https://github.com/7xuanlu/origin/commit/4fe5fbae8a25f49a9f5f288a075cc43dfc41581a))
+* handoff status file uses Active/Backlog two-tier split + date stamps ([#116](https://github.com/7xuanlu/origin/issues/116)) ([636e49a](https://github.com/7xuanlu/origin/commit/636e49aa4e62b4df10e0fe22f58940261b79cfa8))
+* **kg:** coerce non-vocabulary relation types to related_to + prompt update ([#100](https://github.com/7xuanlu/origin/issues/100)) ([d6cd5d8](https://github.com/7xuanlu/origin/commit/d6cd5d8e9ce64617aa23e466cbea7640773d6979))
+* make origin CLI own runtime setup ([#128](https://github.com/7xuanlu/origin/issues/128)) ([4f6d946](https://github.com/7xuanlu/origin/commit/4f6d946153691821c6c7ae13b3529f7f9e47d174))
+* **mcp:** list_spaces tool + activate doc-path space filter ([#126](https://github.com/7xuanlu/origin/issues/126)) ([0ed205f](https://github.com/7xuanlu/origin/commit/0ed205fa21ff351ff38d7be6e1bb7a3d48c069ff))
+* **mcp:** observation CRUD wrappers (PR-A of bm-mode extraction) ([#95](https://github.com/7xuanlu/origin/issues/95)) ([fda9b63](https://github.com/7xuanlu/origin/commit/fda9b631fc05a990b4d38b469a944654ce6d9fad))
+* **refinery:** thread knowledge_path through re_distill_stale_pages ([#108](https://github.com/7xuanlu/origin/issues/108)) ([21a25a0](https://github.com/7xuanlu/origin/commit/21a25a09002373f120184798595227d11065b3be))
+* remove /refinery skill (power-user MCPs stay) ([#109](https://github.com/7xuanlu/origin/issues/109)) ([083f458](https://github.com/7xuanlu/origin/commit/083f4580fe9576a35c49f4938463b17c6536f538))
+* remove entity-suggestion mutate MCPs (dead scaffolding) ([#113](https://github.com/7xuanlu/origin/issues/113)) ([fe6fe18](https://github.com/7xuanlu/origin/commit/fe6fe182a77c12608f7375e7d4832ecfe375e972))
+* **server:** clone Arc&lt;MemoryDB&gt; before await in 3 space-mutate handlers ([#129](https://github.com/7xuanlu/origin/issues/129)) ([226ae8d](https://github.com/7xuanlu/origin/commit/226ae8d8ed0669064320af43745d69b56c56b8ee))
+* **server:** clone Arc&lt;MemoryDB&gt; before await in handle_list_memories ([#136](https://github.com/7xuanlu/origin/issues/136)) ([39a600d](https://github.com/7xuanlu/origin/commit/39a600d4bee3babb1a6b978d806e4b0d13ba93be))
+* **server:** clone Arc&lt;MemoryDB&gt; before await in remaining handlers ([#131](https://github.com/7xuanlu/origin/issues/131)) ([7236eeb](https://github.com/7xuanlu/origin/commit/7236eeb4f5a2a728ddbfd4d0abff6e77c1d43e35))
+* **skills:** /brief reads status file first + /review drops stale C-3b note ([#121](https://github.com/7xuanlu/origin/issues/121)) ([aa9899e](https://github.com/7xuanlu/origin/commit/aa9899e4bd3bd7a12df208ef14a61d02e0281cf0))
+* soft-archive supersede_relation via activity payload ([#120](https://github.com/7xuanlu/origin/issues/120)) ([daf9bc2](https://github.com/7xuanlu/origin/commit/daf9bc20a3e5bd081ea0560ec6a569bb04519b94))
+* stop emitting dedup_merge + detect_contradiction proposals ([#112](https://github.com/7xuanlu/origin/issues/112)) ([521498d](https://github.com/7xuanlu/origin/commit/521498d97c5df4984b1704abf97b592de0868e13))
+* surface pending revisions in /brief + scoped /review walks (Spec C-3 Phase 1) ([#107](https://github.com/7xuanlu/origin/issues/107)) ([54b4e3b](https://github.com/7xuanlu/origin/commit/54b4e3b522416494a5c647e8991810a4b1f93a91))
+* trust-tier auto-supersede for high-confidence contradictions ([#115](https://github.com/7xuanlu/origin/issues/115)) ([0c74271](https://github.com/7xuanlu/origin/commit/0c74271e0ba1ec42b1c1b1878db252a86cdfdb4a))
+
 ## [0.5.3](https://github.com/7xuanlu/origin/compare/v0.5.2...v0.5.3) (2026-05-13)
 
 
