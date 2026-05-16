@@ -38,6 +38,7 @@ jobs:
           filters: |
             rust:
               - 'crates/**'
+              - '!crates/*/npm/**'
               - 'Cargo.toml'
               - 'Cargo.lock'
               - 'rust-toolchain.toml'
@@ -46,7 +47,7 @@ jobs:
               - 'plugin/**'
               - '.claude-plugin/**'
             npm:
-              - 'crates/origin-mcp/npm/**'
+              - 'crates/*/npm/**'
 
   fmt:
     name: fmt

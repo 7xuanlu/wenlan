@@ -1,22 +1,36 @@
 {
   "name": "origin-mcp",
   "version": "0.6.0",
-  "description": "Personal memory layer for AI agents - MCP server",
+  "description": "Local-first memory layer for AI agents - MCP server",
   "keywords": [
     "mcp",
+    "ai-memory",
+    "llm-wiki",
+    "long-term-memory",
+    "local-first",
+    "wiki",
     "memory",
     "ai",
+    "llm",
     "agents",
     "claude",
     "chatgpt",
     "origin"
   ],
+  "homepage": "https://github.com/7xuanlu/origin#readme",
+  "bugs": {
+    "url": "https://github.com/7xuanlu/origin/issues"
+  },
+  "author": "7xuanlu <h164654156465@gmail.com>",
   "license": "Apache-2.0",
   "bin": {
     "origin-mcp": "run.js"
   },
   "scripts": {
     "postinstall": "node install.js"
+  },
+  "engines": {
+    "node": ">=18"
   },
   "os": [
     "darwin"
