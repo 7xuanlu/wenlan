@@ -1110,8 +1110,10 @@ pub async fn handle_list_memories(
     State(state): State<Arc<RwLock<ServerState>>>,
     Json(req): Json<ListMemoriesRequest>,
 ) -> Result<Json<ListMemoriesResponse>, ServerError> {
-    let s = state.read().await;
-    let db = s.db.as_ref().ok_or(ServerError::DbNotInitialized)?;
+    let db = {
+        let s = state.read().await;
+        s.db.clone().ok_or(ServerError::DbNotInitialized)?
+    }; // guard dropped here
     let memories = db
         .list_filtered_confirmed(
             Some("memory"),
