@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.6.1](https://github.com/7xuanlu/origin/compare/v0.6.0...v0.6.1) (2026-05-16)
+
+
+### Bug Fixes
+
+* sync README to npm packages + republish v0.6.0+ with README content ([#137](https://github.com/7xuanlu/origin/issues/137)) ([43e4ce9](https://github.com/7xuanlu/origin/commit/43e4ce966be985ce5b6888a9ff23360e1cc685d9))
+
 ## [0.6.0](https://github.com/7xuanlu/origin/compare/v0.5.3...v0.6.0) (2026-05-16)
 
 

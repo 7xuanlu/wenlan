@@ -9,14 +9,14 @@ members = [
 ]
 
 [workspace.package]
-version = "0.6.0"   # x-release-please-version
+version = "0.6.1"   # x-release-please-version
 edition = "2021"
 license = "Apache-2.0"
 repository = "https://github.com/7xuanlu/origin"
 
 [workspace.dependencies]
 # Internal crates — both path AND version required for cargo publish
-origin-types = { path = "crates/origin-types", version = "0.6.0" }
+origin-types = { path = "crates/origin-types", version = "0.6.1" }
 origin-core  = { path = "crates/origin-core",  version = "0.6.0" }
 
 # Serialization
