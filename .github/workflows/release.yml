@@ -246,12 +246,23 @@ jobs:
         run: |
           VERSION="${RELEASE_TAG#v}"
           npm version "$VERSION" --no-git-tag-version --allow-same-version
+      - name: Copy root README into npm packages
+        # npm renders README.md on the package page. Copying root README ensures
+        # both packages always reflect the current project description rather
+        # than rotting per-package READMEs.
+        run: |
+          cp README.md crates/origin-mcp/npm/README.md
+          cp README.md crates/origin-cli/npm/README.md
       - name: Publish origin-mcp
         working-directory: crates/origin-mcp/npm
         run: npm publish --provenance --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
       - name: Publish @7xuanlu/origin
         working-directory: crates/origin-cli/npm
         run: npm publish --provenance --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
   update-homebrew:
     name: Update Homebrew tap
