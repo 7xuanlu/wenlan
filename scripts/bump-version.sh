@@ -32,9 +32,9 @@ echo "  Updated Cargo.toml (workspace.package.version)"
 # `version = "0.X.Y"` against a workspace.package "0.X.Z" and the build fails.
 for dep in origin-types origin-core; do
     if [[ "$(uname)" == "Darwin" ]]; then
-        sed -i '' -E "s|^(${dep}[[:space:]]+= \\{ path = \"crates/${dep}\", version = \")[^\"]+(\".*)|\\1${NEW_VERSION}\\2|" Cargo.toml
+        sed -i '' -E "s|^(${dep}[[:space:]]+= \\{ path = \"crates/${dep}\",[[:space:]]+version = \")[^\"]+(\".*)|\\1${NEW_VERSION}\\2|" Cargo.toml
     else
-        sed -i -E "s|^(${dep}[[:space:]]+= \\{ path = \"crates/${dep}\", version = \")[^\"]+(\".*)|\\1${NEW_VERSION}\\2|" Cargo.toml
+        sed -i -E "s|^(${dep}[[:space:]]+= \\{ path = \"crates/${dep}\",[[:space:]]+version = \")[^\"]+(\".*)|\\1${NEW_VERSION}\\2|" Cargo.toml
     fi
 done
 echo "  Updated Cargo.toml (workspace.dependencies origin-types/origin-core)"
