@@ -9,6 +9,31 @@ echo "0.5.0" > "$TMPDIR_TEST/version.txt"
 cat > "$TMPDIR_TEST/Cargo.toml" <<EOF
 [workspace.package]
 version = "0.5.0"   # x-release-please-version
+
+[workspace.dependencies]
+origin-types = { path = "crates/origin-types", version = "0.5.0" }
+origin-core  = { path = "crates/origin-core",  version = "0.5.0" }
+EOF
+cat > "$TMPDIR_TEST/Cargo.lock" <<EOF
+[[package]]
+name = "origin"
+version = "0.5.0"
+
+[[package]]
+name = "origin-core"
+version = "0.5.0"
+
+[[package]]
+name = "origin-mcp"
+version = "0.5.0"
+
+[[package]]
+name = "origin-server"
+version = "0.5.0"
+
+[[package]]
+name = "origin-types"
+version = "0.5.0"
 EOF
 echo '{"version": "0.5.0"}' > "$TMPDIR_TEST/crates/origin-mcp/npm/package.json"
 echo '{"version": "0.5.0"}' > "$TMPDIR_TEST/crates/origin-cli/npm/package.json"
@@ -25,3 +50,21 @@ if (cd "$TMPDIR_TEST" && RELEASE_TAG="v0.5.0" bash "$OLDPWD/scripts/validate-ver
     exit 1
 fi
 echo "PASS test 2: drift detected"
+
+# Test 3: internal workspace dependency mismatch → exit 1
+echo '{"version": "0.5.0"}' > "$TMPDIR_TEST/plugin/.claude-plugin/plugin.json"
+perl -0pi -e 's/origin-core  = \{ path = "crates\/origin-core",  version = "0\.5\.0" \}/origin-core  = { path = "crates\/origin-core",  version = "0.4.9" }/' "$TMPDIR_TEST/Cargo.toml"
+if (cd "$TMPDIR_TEST" && RELEASE_TAG="v0.5.0" bash "$OLDPWD/scripts/validate-versions.sh") 2>/dev/null; then
+    echo "FAIL test 3: should have detected internal dependency drift"
+    exit 1
+fi
+echo "PASS test 3: internal dependency drift detected"
+
+# Test 4: Cargo.lock mismatch → exit 1
+perl -0pi -e 's/origin-core  = \{ path = "crates\/origin-core",  version = "0\.4\.9" \}/origin-core  = { path = "crates\/origin-core",  version = "0.5.0" }/' "$TMPDIR_TEST/Cargo.toml"
+perl -0pi -e 's/name = "origin-core"\nversion = "0\.5\.0"/name = "origin-core"\nversion = "0.4.9"/' "$TMPDIR_TEST/Cargo.lock"
+if (cd "$TMPDIR_TEST" && RELEASE_TAG="v0.5.0" bash "$OLDPWD/scripts/validate-versions.sh") 2>/dev/null; then
+    echo "FAIL test 4: should have detected Cargo.lock drift"
+    exit 1
+fi
+echo "PASS test 4: Cargo.lock drift detected"

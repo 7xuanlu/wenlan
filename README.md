@@ -43,7 +43,7 @@ npx -y @7xuanlu/origin setup
 ```
 
 That installs the `origin` CLI, `origin-server` daemon, and `origin-mcp` connector into `~/.origin/bin/`, configures local memory, registers the daemon with launchd, and verifies status.
-CLI details: [crates/origin-cli](crates/origin-cli/README.md).
+For terminal use, start with `origin status`, `origin recall <query>`, or `origin store <text>`. CLI details: [crates/origin-cli](crates/origin-cli/README.md).
 
 Then add the MCP connector to Cursor, Codex, Claude Desktop, Gemini CLI, or any client that accepts a JSON `mcpServers` entry:
 
@@ -64,13 +64,15 @@ The `origin-mcp` connector runs on demand and talks to the local Origin daemon f
 
 ## How Origin works
 
-Origin follows the rhythm of an AI work session.
+Origin follows the rhythm of an AI work session, with five verbs you use directly:
 
-1. **Session starts** — your agent loads relevant project context, recent handoffs, decisions, and pages.
-2. **During work** — save durable decisions, lessons, gotchas, and project facts in chat.
-3. **Session ends** — write a handoff so the next run knows what changed and where to continue.
-4. **Between sessions** — Origin deduplicates, links related ideas, distills wiki pages, and keeps provenance attached.
-5. **Next session** — context comes back through the Claude Code plugin or `origin-mcp`, without replaying full chat history.
+1. **Session starts** — `/brief [topic]` loads project status, identity, preferences, and topic-relevant memories so the agent walks in with context.
+2. **During work** — `/capture <thing>` saves a decision, lesson, gotcha, or project fact in flow. `/recall <query>` looks anything up.
+3. **Session ends** — `/handoff` writes what changed, what's still open, and where to continue, so the next run picks up cleanly.
+4. **Between sessions** — the daemon deduplicates overlapping captures and links related ideas in the background. `/distill` synthesizes wiki pages from clusters of related memories when you want a deliberate pass.
+5. **Next session** — `/brief` brings it all back through the plugin or `origin-mcp`, without replaying full chat history.
+
+Full skill reference: [plugin/skills](plugin/skills/README.md).
 
 No cloud sync or telemetry by default. Local models and Anthropic keys are opt-in.
 

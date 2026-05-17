@@ -20,6 +20,10 @@ EOF
 cat > "$TMPDIR_TEST/Cargo.toml" <<EOF
 [workspace.package]
 version = "0.4.1"   # x-release-please-version
+
+[workspace.dependencies]
+origin-types = { path = "crates/origin-types", version = "0.4.1" }
+origin-core  = { path = "crates/origin-core",  version = "0.4.1" }
 EOF
 
 cat > "$TMPDIR_TEST/crates/origin-mcp/npm/package.json" <<EOF
@@ -47,11 +51,15 @@ EOF
 
 # Assert all manifests bumped to 0.5.0
 WS_VER=$(grep -E '^version = ' "$TMPDIR_TEST/Cargo.toml" | sed -E 's/version = "([^"]+)".*/\1/')
+ORIGIN_TYPES_DEP_VER=$(grep -E '^origin-types[[:space:]]+=' "$TMPDIR_TEST/Cargo.toml" | sed -E 's/.*version = "([^"]+)".*/\1/')
+ORIGIN_CORE_DEP_VER=$(grep -E '^origin-core[[:space:]]+=' "$TMPDIR_TEST/Cargo.toml" | sed -E 's/.*version = "([^"]+)".*/\1/')
 MCP_NPM_VER=$(jq -r .version "$TMPDIR_TEST/crates/origin-mcp/npm/package.json")
 ORIGIN_NPM_VER=$(jq -r .version "$TMPDIR_TEST/crates/origin-cli/npm/package.json")
 PLUGIN_VER=$(jq -r .version "$TMPDIR_TEST/plugin/.claude-plugin/plugin.json")
 
 [[ "$WS_VER" == "0.5.0" ]]   || { echo "FAIL: Cargo.toml not bumped (got $WS_VER)"; exit 1; }
+[[ "$ORIGIN_TYPES_DEP_VER" == "0.5.0" ]] || { echo "FAIL: origin-types dep not bumped (got $ORIGIN_TYPES_DEP_VER)"; exit 1; }
+[[ "$ORIGIN_CORE_DEP_VER" == "0.5.0" ]] || { echo "FAIL: origin-core dep not bumped (got $ORIGIN_CORE_DEP_VER)"; exit 1; }
 [[ "$MCP_NPM_VER" == "0.5.0" ]]  || { echo "FAIL: origin-mcp npm not bumped (got $MCP_NPM_VER)"; exit 1; }
 [[ "$ORIGIN_NPM_VER" == "0.5.0" ]]  || { echo "FAIL: @7xuanlu/origin npm not bumped (got $ORIGIN_NPM_VER)"; exit 1; }
 [[ "$PLUGIN_VER" == "0.5.0" ]] || { echo "FAIL: plugin not bumped (got $PLUGIN_VER)"; exit 1; }
