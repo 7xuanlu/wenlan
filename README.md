@@ -76,10 +76,12 @@ Set up the local Origin runtime:
 npx -y @7xuanlu/origin setup
 ```
 
+Current setup package supports macOS Apple Silicon, matching the release binaries.
+
 That installs the `origin` CLI, `origin-server` daemon, and `origin-mcp` connector into `~/.origin/bin/`, configures local memory, registers the daemon with launchd, and verifies status.
 For terminal use, start with `origin status`, `origin recall <query>`, or `origin store <text>`. CLI details: [crates/origin-cli](crates/origin-cli/README.md).
 
-Then add the MCP connector to Cursor, Codex, VS Code, Claude Desktop, Gemini CLI, or any client that accepts a JSON `mcpServers` entry:
+Then add the MCP connector to your client. For clients that use a JSON `mcpServers` block:
 
 ```json
 {
@@ -92,7 +94,7 @@ Then add the MCP connector to Cursor, Codex, VS Code, Claude Desktop, Gemini CLI
 }
 ```
 
-The `origin-mcp` connector runs on demand and talks to the local Origin daemon from setup above.
+The `origin-mcp` connector runs on demand and talks to the local Origin daemon from setup above. If your client uses another settings format, use the same command and args.
 
 ---
 

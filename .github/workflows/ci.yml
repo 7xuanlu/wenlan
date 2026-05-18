@@ -37,8 +37,12 @@ jobs:
         with:
           filters: |
             rust:
-              - 'crates/**'
-              - '!crates/*/npm/**'
+              # Positive-only globs. With dorny/paths-filter's default
+              # `some` quantifier, a negative glob like `!crates/*/npm/**`
+              # makes README-only PRs match this filter.
+              - 'crates/**/*.rs'
+              - 'crates/**/Cargo.toml'
+              - 'crates/*/resources/**'
               - 'Cargo.toml'
               - 'Cargo.lock'
               - 'rust-toolchain.toml'
