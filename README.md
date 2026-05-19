@@ -19,15 +19,24 @@
   <a href="#what-you-get"><img alt="Obsidian" src="https://img.shields.io/badge/Obsidian-Markdown%20pages-7C3AED"></a>
 </p>
 
-Developers have `origin` for code. Origin gives AI work its own source of truth: local-first memory for sessions, decisions, lessons, project status, and wiki pages that carry across chats, projects, and time.
+**A lightweight daemon for daily AI work — memories, pages, sessions, versioned, agent-agnostic.**
 
-Your agent gets searchable memory, graph context, and hybrid retrieval. You get Markdown session logs, wiki pages, and a git-backed artifact trail under `~/.origin/`.
+Origin captures decisions, lessons, and project context as you work with AI. Distills clusters of memories into wiki pages with citation chains. Hands off sessions cleanly. Every write is a real `git commit` to `~/.origin/.git/` — inspect, revert, branch, blame.
 
-Origin runs quietly in the background: it stores what matters, deduplicates repeat facts, links related ideas, distills wiki pages, and keeps provenance attached.
+Your agent reads searchable memory, graph context, and hybrid retrieval. You read Markdown artifacts under `~/.origin/`. Same store, two surfaces.
 
 **Status:** Early preview. Expect fast iteration and some sharp edges.
 
 [![Watch the Origin demo](./docs/assets/demo-preview.gif)](https://youtu.be/k37gjWVPHwI)
+
+---
+
+## What makes Origin distinct
+
+1. **Real git versioning.** Every memory write is a `git commit` in `~/.origin/.git/`. Inspect with `git log`, revert with `git checkout`, branch and blame — not a Copy-on-Write metaphor.
+2. **Mandatory provenance.** Wiki pages cite source memory IDs. The daemon rejects page writes with empty `source_memory_ids` (HTTP 422). Every distilled claim traces to a captured atom.
+3. **Agent-agnostic from day one.** MCP-native. Works with Claude Code, Cursor, Codex, Claude Desktop, VS Code, Gemini CLI. No lock-in.
+4. **Composition over storage.** Memories distill into pages. Sessions track workflow. ~30 MCP tools across one daemon — not 100+ skills bolted on.
 
 ---
 
@@ -94,11 +103,11 @@ No cloud sync or telemetry by default. Local models and Anthropic keys are opt-i
 ## What you get
 
 - **Atomic memory layer**: every capture is stored first as a typed memory with source agent, confidence, stability, and supersession metadata.
-- **Hybrid retrieval on libSQL**: memories, pages, FTS5 text search, vector embeddings, and graph context live in one local store your MCP clients can query.
-- **Distill cycles**: run `/distill` manually today, or add a local model/API key for background extraction, page refreshes, recaps, and richer graph links.
 - **Source-backed pages**: pages keep source memory IDs, stale reasons, and revision state so distillation can refresh them without losing provenance.
-- **Background enrichment and decay**: post-ingest passes link entities, enrich titles, grow matching pages, and update effective confidence based on memory type, access, and age.
+- **Hybrid retrieval on libSQL**: memories, pages, FTS5 text search, vector embeddings, and graph context live in one local store your MCP clients can query.
 - **Knowledge graph context**: people, projects, tools, observations, and relations become retrievable context instead of isolated notes.
+- **Distill cycles**: run `/distill` manually today, or add a local model/API key for background extraction, page refreshes, recaps, and richer graph links.
+- **Background enrichment and decay**: post-ingest passes link entities, enrich titles, grow matching pages, and update effective confidence based on memory type, access, and age.
 - **Review before trust**: low-confidence captures, pending revisions, protected-memory conflicts, contradictions, and supersession chains can surface instead of silently entering context.
 - **Project-scoped context**: skills infer the current repo or workspace so captures, recalls, and pages stay tied to the work at hand.
 - **Local artifacts**: Markdown pages live in `~/.origin/pages/`, session logs and project status live under `~/.origin/sessions/`, and `~/.origin/` keeps local git history you can inspect, revert, or symlink into Obsidian.
@@ -150,12 +159,15 @@ Build details for the daemon, MCP server, CLI, and core crates live in the crate
 
 ---
 
-## Boundaries
+## What Origin is NOT
 
-- Not a chat UI. Keep using Claude, ChatGPT, Cursor, or your agent of choice.
-- Not a notes app or Notion / Obsidian replacement. Markdown exists so you can read the artifact anywhere.
-- Not a memory infrastructure SDK. Origin is for people using AI, not as a backend for other apps.
-- Best for work that spans sessions, projects, and weeks. One-off chats may not need it.
+- **Not a Life OS.** No habits, calendar, journal, or life-management modules. Origin scopes to AI work artifacts only. If you want a full personal OS, look at [PAI](https://github.com/danielmiessler/PAI).
+- **Not a workflow suite.** ~30 MCP tools across one daemon. If you want 30+ skills, 8+ agents, and an auto-research loop bundled, look at [pro-workflow](https://github.com/rohitg00/pro-workflow). Origin trades breadth for focus.
+- **Not a Copy-on-Write metaphor.** `~/.origin/.git/` is a real git directory. `cd` into it. Run `git log`. Compare to alternatives that simulate versioning without `.git/`.
+- **Not a chat UI.** Keep using Claude Code, Cursor, Codex, or your agent of choice. Origin runs alongside.
+- **Not a notes app or Notion / Obsidian replacement.** Markdown exists so you can read the artifact anywhere.
+- **Not a memory infrastructure SDK.** For people using AI daily, not as a backend for other apps.
+- **Not for one-off chats.** Best when work spans sessions, projects, and weeks.
 
 ---
 
@@ -175,8 +187,18 @@ The permissive license keeps the daemon boundary usable for MCP clients and down
 
 ## Acknowledgments
 
-Adjacent work shaping this space:
+Patterns and projects that shaped this space:
 
-- Andrej Karpathy's [LLM-wiki note](https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f), which helped make the raw-to-wiki pattern legible to the community.
-- Claude Code's `MEMORY.md`, the simplest version of the idea, and the one Origin aims to cooperate with.
-- [PAI](https://github.com/danielmiessler/PAI), [claude-memory-compiler](https://github.com/coleam00/claude-memory-compiler), Palinode: different shapes of the same direction.
+- **The Karpathy LLM-wiki pattern.** [Andrej Karpathy's LLM-wiki note](https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f) made the raw-to-wiki distillation pattern legible to the community. Origin builds on it with mandatory provenance and a versioned daemon.
+- **Claude Code's `MEMORY.md`.** The simplest version of the idea, and the one Origin cooperates with.
+
+Honest peers Origin sits next to:
+
+- **[agentmemory](https://github.com/rohitg00/agentmemory)** — large agent-side memory framework. Origin sits closer to the human-curated workflow surface; agentmemory is closer to the agent runtime.
+- **[basic-memory](https://github.com/basicmachines-co/basic-memory)** — local-first knowledge management with Claude. Obsidian-style notes; Origin's pages are citation-backed distillations from atoms.
+- **[pro-workflow](https://github.com/rohitg00/pro-workflow)** — Claude Code productivity suite with skills, wikis, and an auto-research loop. Broader scope; Origin trades breadth for focus.
+- **[mcp-memory-service](https://github.com/doobidoo/mcp-memory-service)** — production-grade memory service for MCP. Origin layers pages and sessions on top of the memory primitive.
+- **[Memoria](https://github.com/matrixorigin/Memoria)** — "Git for AI Agent Memory" via Copy-on-Write semantics. Origin uses a real `~/.origin/.git/` directory instead.
+- **[OpenMemory](https://github.com/CaviraOSS/OpenMemory)**, **[claude-memory-compiler](https://github.com/coleam00/claude-memory-compiler)**, **[PAI](https://github.com/danielmiessler/PAI)**, Palinode — different shapes in the same direction.
+
+Different shapes of the same problem. Try the one that fits.
