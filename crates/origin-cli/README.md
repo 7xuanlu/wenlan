@@ -84,6 +84,18 @@ origin key set anthropic --env ANTHROPIC_API_KEY
 origin key clear anthropic
 ```
 
+### `origin mcp add <client>`
+
+Configure Origin MCP for a supported client. This is the MCP-only path for Claude Code users who do not want the plugin, and for Codex, Cursor, Claude Desktop, VS Code, and Gemini CLI.
+
+```bash
+origin mcp add claude-code
+origin mcp add codex
+origin mcp add cursor --dry-run
+```
+
+Supported clients: `claude-code`, `codex`, `gemini`, `cursor`, `claude-desktop`, `vscode`.
+
 ### `origin search <query>`
 
 Search memories (vector + FTS hybrid).

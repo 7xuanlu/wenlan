@@ -11,11 +11,11 @@
 
 <p align="center">
   <a href="#claude-code-in-30-seconds"><img alt="Claude Code" src="https://img.shields.io/badge/Claude%20Code-plugin-5D4E75"></a>
-  <a href="#other-mcp-clients-and-terminal-use"><img alt="OpenAI Codex" src="https://img.shields.io/badge/OpenAI%20Codex-MCP-111827"></a>
-  <a href="#other-mcp-clients-and-terminal-use"><img alt="Cursor" src="https://img.shields.io/badge/Cursor-MCP-111111"></a>
-  <a href="#other-mcp-clients-and-terminal-use"><img alt="VS Code" src="https://img.shields.io/badge/VS%20Code-MCP-007ACC"></a>
-  <a href="#other-mcp-clients-and-terminal-use"><img alt="Claude Desktop" src="https://img.shields.io/badge/Claude%20Desktop-MCP-D97757"></a>
-  <a href="#other-mcp-clients-and-terminal-use"><img alt="Gemini CLI" src="https://img.shields.io/badge/Gemini%20CLI-MCP-4285F4"></a>
+  <a href="#mcp-only-setup"><img alt="OpenAI Codex" src="https://img.shields.io/badge/OpenAI%20Codex-MCP-111827"></a>
+  <a href="#mcp-only-setup"><img alt="Cursor" src="https://img.shields.io/badge/Cursor-MCP-111111"></a>
+  <a href="#mcp-only-setup"><img alt="VS Code" src="https://img.shields.io/badge/VS%20Code-MCP-007ACC"></a>
+  <a href="#mcp-only-setup"><img alt="Claude Desktop" src="https://img.shields.io/badge/Claude%20Desktop-MCP-D97757"></a>
+  <a href="#mcp-only-setup"><img alt="Gemini CLI" src="https://img.shields.io/badge/Gemini%20CLI-MCP-4285F4"></a>
   <a href="#what-you-get"><img alt="Obsidian" src="https://img.shields.io/badge/Obsidian-Markdown%20pages-7C3AED"></a>
 </p>
 
@@ -68,7 +68,24 @@ Then try `/brief`, `/capture <decision>`, or `/handoff` inside Claude Code.
 
 Plugin details and daily commands: [plugin/](plugin/.claude-plugin/README.md).
 
-### Other MCP clients and terminal use
+### MCP-only setup
+
+Use this if you want Origin tools in Claude Code without the plugin, or in Codex, Cursor, Claude Desktop, VS Code, or Gemini CLI.
+
+```bash
+npx -y @7xuanlu/origin setup
+origin mcp add claude-code      # or: codex, cursor, claude-desktop, vscode, gemini
+```
+
+MCP-only gives agents tools for capture, recall, context, doctor, and page distillation. It does not install Claude Code slash skills like `/brief`, `/handoff`, `/distill`, or `/init`.
+
+Preview a client config change first:
+
+```bash
+origin mcp add cursor --dry-run
+```
+
+### Terminal runtime setup
 
 Set up the local Origin runtime:
 
@@ -76,25 +93,12 @@ Set up the local Origin runtime:
 npx -y @7xuanlu/origin setup
 ```
 
-Current setup package supports macOS Apple Silicon, matching the release binaries.
+Published setup binaries currently target macOS Apple Silicon. Intel Mac and Linux support need release binaries, service setup, npm maps, and CI smoke tests before they are advertised.
 
 That installs the `origin` CLI, `origin-server` daemon, and `origin-mcp` connector into `~/.origin/bin/`, configures local memory, registers the daemon with launchd, and verifies status.
 For terminal use, start with `origin status`, `origin recall <query>`, or `origin store <text>`. CLI details: [crates/origin-cli](crates/origin-cli/README.md).
 
-Then add the MCP connector to your client. For clients that use a JSON `mcpServers` block:
-
-```json
-{
-  "mcpServers": {
-    "origin": {
-      "command": "npx",
-      "args": ["-y", "origin-mcp"]
-    }
-  }
-}
-```
-
-The `origin-mcp` connector runs on demand and talks to the local Origin daemon from setup above. If your client uses another settings format, use the same command and args.
+The `origin-mcp` connector runs on demand and talks to the local Origin daemon from setup above. Raw MCP config examples live in [crates/origin-mcp](crates/origin-mcp/README.md).
 
 ---
 

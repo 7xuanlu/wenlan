@@ -6,7 +6,14 @@ Origin owns storage, search, embeddings, pages, and distill cycles. `origin-mcp`
 
 ## Install
 
-Most users should install through the root README. If you only need the MCP connector, add this to your MCP client config:
+Most users should install through the root README. After `npx -y @7xuanlu/origin setup`, use the product CLI to configure supported clients:
+
+```bash
+origin mcp add codex              # or: claude-code, cursor, claude-desktop, vscode, gemini
+origin mcp add cursor --dry-run   # preview before editing JSON config
+```
+
+If you only need the raw MCP connector config, add this to your MCP client:
 
 ```json
 {
