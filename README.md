@@ -1,23 +1,13 @@
-<p align="center">
-  <img src="./docs/assets/social-preview.png" alt="Origin: Where AI work compounds. Decisions, lessons, project context, and wiki pages." width="100%">
-</p>
 
-[![CI](https://github.com/7xuanlu/origin/actions/workflows/ci.yml/badge.svg?branch=main&event=push)](https://github.com/7xuanlu/origin/actions/workflows/ci.yml?query=branch%3Amain)
-[![Release](https://img.shields.io/github/v/release/7xuanlu/origin?sort=semver)](https://github.com/7xuanlu/origin/releases/latest)
-[![npm: @7xuanlu/origin](https://img.shields.io/npm/v/%407xuanlu%2Forigin?label=%407xuanlu%2Forigin)](https://www.npmjs.com/package/@7xuanlu/origin)
-[![npm: origin-mcp](https://img.shields.io/npm/v/origin-mcp?label=origin-mcp)](https://www.npmjs.com/package/origin-mcp)
-[![MCP Server](https://img.shields.io/badge/MCP-server-blue)](https://modelcontextprotocol.io)
-[![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](#license)
 
-<p align="center">
-  <a href="#claude-code--30-seconds"><img alt="Claude Code" src="https://img.shields.io/badge/Claude%20Code-plugin-5D4E75"></a>
-  <a href="#other-mcp-clients-and-terminal-use"><img alt="OpenAI Codex" src="https://img.shields.io/badge/OpenAI%20Codex-MCP-111827"></a>
-  <a href="#other-mcp-clients-and-terminal-use"><img alt="Cursor" src="https://img.shields.io/badge/Cursor-MCP-111111"></a>
-  <a href="#other-mcp-clients-and-terminal-use"><img alt="VS Code" src="https://img.shields.io/badge/VS%20Code-MCP-007ACC"></a>
-  <a href="#other-mcp-clients-and-terminal-use"><img alt="Claude Desktop" src="https://img.shields.io/badge/Claude%20Desktop-MCP-D97757"></a>
-  <a href="#other-mcp-clients-and-terminal-use"><img alt="Gemini CLI" src="https://img.shields.io/badge/Gemini%20CLI-MCP-4285F4"></a>
-  <a href="#what-you-get"><img alt="Obsidian" src="https://img.shields.io/badge/Obsidian-Markdown%20pages-7C3AED"></a>
-</p>
+[CI](https://github.com/7xuanlu/origin/actions/workflows/ci.yml?query=branch%3Amain)
+[Release](https://github.com/7xuanlu/origin/releases/latest)
+[npm: @7xuanlu/origin](https://www.npmjs.com/package/@7xuanlu/origin)
+[npm: origin-mcp](https://www.npmjs.com/package/origin-mcp)
+[MCP Server](https://modelcontextprotocol.io)
+[License](#license)
+
+
 
 **A lightweight daemon for daily AI work — memories, pages, sessions, versioned, agent-agnostic.**
 
@@ -27,7 +17,7 @@ Your agent reads searchable memory, graph context, and hybrid retrieval. You rea
 
 **Status:** Early preview. Expect fast iteration and some sharp edges.
 
-[![Watch the Origin demo](./docs/assets/demo-preview.gif)](https://youtu.be/k37gjWVPHwI)
+[Watch the Origin demo](https://youtu.be/k37gjWVPHwI)
 
 ---
 
@@ -35,7 +25,7 @@ Your agent reads searchable memory, graph context, and hybrid retrieval. You rea
 
 1. **Real git versioning.** Every memory write is a `git commit` in `~/.origin/.git/`. Inspect with `git log`, revert with `git checkout`, branch and blame — not a Copy-on-Write metaphor.
 2. **Mandatory provenance.** Wiki pages cite source memory IDs. The daemon rejects page writes with empty `source_memory_ids` (HTTP 422). Every distilled claim traces to a captured atom.
-3. **Agent-agnostic from day one.** MCP-native. Works with Claude Code, Cursor, Codex, Claude Desktop, VS Code, Gemini CLI. No lock-in.
+3. **Curator workflow.** Low-confidence captures stay pending until confirmed. Contradictions, supersession chains, and protected-memory conflicts surface for review — not silently entering context.
 4. **Composition over storage.** Memories distill into pages. Sessions track workflow. ~30 MCP tools across one daemon — not 100+ skills bolted on.
 
 ---
@@ -120,10 +110,12 @@ Retrieval quality on standard long-memory benchmarks. Numbers come from BGE-Base
 
 Token efficiency on LoCoMo: 168 tokens per query instead of 4,505 for full replay, with 19% more relevant context than basic vector search.
 
+
 | Benchmark                   | Recall@5 | MRR   | NDCG@10 |
 | --------------------------- | -------- | ----- | ------- |
 | LongMemEval (oracle, 500 Q) | 88.0%    | 74.2% | 79.0%   |
 | LoCoMo (locomo10)           | 67.3%    | 58.9% | 64.0%   |
+
 
 ---
 
@@ -131,14 +123,16 @@ Token efficiency on LoCoMo: 168 tokens per query instead of 4,505 for full repla
 
 Origin is daemon-first. `origin-server` owns the local database, embeddings, distill cycles, knowledge graph, and HTTP API on `127.0.0.1:7878`. The plugin, MCP server, CLI, and local tools are thin clients over that daemon.
 
-| Path | What lives there |
-| --- | --- |
-| [crates/origin-core](crates/origin-core/README.md) | Storage, search, embeddings, distill cycles, graph, pages, export, eval. |
-| [crates/origin-server](crates/origin-server/README.md) | Local daemon and HTTP API. |
-| [crates/origin-mcp](crates/origin-mcp/README.md) | MCP server, tools, npm package. |
-| [crates/origin-cli](crates/origin-cli/README.md) | User CLI for setup, service management, search, recall, store, list, agents, model/key setup, and doctor. |
-| [plugin/](plugin/.claude-plugin/README.md) | Claude Code plugin (`plugin.json`, skills, hooks, `.mcp.json`). Marketplace entry at root [`.claude-plugin/marketplace.json`](.claude-plugin/marketplace.json) lists this plugin via `source: "./plugin"`. |
-| [docs/eval](docs/eval/README.md) | Benchmark workflow and methodology. |
+
+| Path                                                   | What lives there                                                                                                                                                                                           |
+| ------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| [crates/origin-core](crates/origin-core/README.md)     | Storage, search, embeddings, distill cycles, graph, pages, export, eval.                                                                                                                                   |
+| [crates/origin-server](crates/origin-server/README.md) | Local daemon and HTTP API.                                                                                                                                                                                 |
+| [crates/origin-mcp](crates/origin-mcp/README.md)       | MCP server, tools, npm package.                                                                                                                                                                            |
+| [crates/origin-cli](crates/origin-cli/README.md)       | User CLI for setup, service management, search, recall, store, list, agents, model/key setup, and doctor.                                                                                                  |
+| [plugin/](plugin/.claude-plugin/README.md)             | Claude Code plugin (`plugin.json`, skills, hooks, `.mcp.json`). Marketplace entry at root `[.claude-plugin/marketplace.json](.claude-plugin/marketplace.json)` lists this plugin via `source: "./plugin"`. |
+| [docs/eval](docs/eval/README.md)                       | Benchmark workflow and methodology.                                                                                                                                                                        |
+
 
 Full contributor map: [CLAUDE.md](CLAUDE.md).
 
@@ -163,10 +157,7 @@ Build details for the daemon, MCP server, CLI, and core crates live in the crate
 
 - **Not a Life OS.** No habits, calendar, journal, or life-management modules. Origin scopes to AI work artifacts only. If you want a full personal OS, look at [PAI](https://github.com/danielmiessler/PAI).
 - **Not a workflow suite.** ~30 MCP tools across one daemon. If you want 30+ skills, 8+ agents, and an auto-research loop bundled, look at [pro-workflow](https://github.com/rohitg00/pro-workflow). Origin trades breadth for focus.
-- **Not a Copy-on-Write metaphor.** `~/.origin/.git/` is a real git directory. `cd` into it. Run `git log`. Compare to alternatives that simulate versioning without `.git/`.
-- **Not a chat UI.** Keep using Claude Code, Cursor, Codex, or your agent of choice. Origin runs alongside.
-- **Not a notes app or Notion / Obsidian replacement.** Markdown exists so you can read the artifact anywhere.
-- **Not a memory infrastructure SDK.** For people using AI daily, not as a backend for other apps.
+- **Not a memory infrastructure SDK.** For people using AI daily, not as a backend for other apps building memory features.
 - **Not for one-off chats.** Best when work spans sessions, projects, and weeks.
 
 ---
