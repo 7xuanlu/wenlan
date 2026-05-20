@@ -9,13 +9,11 @@
 
 
 
-**A lightweight daemon for daily AI work — memories, pages, sessions, versioned, agent-agnostic.**
+**Stop re-explaining your project to AI — and stop losing your own decisions between sessions.**
 
-Origin captures decisions, lessons, and project context as you work with AI. Distills clusters of memories into wiki pages with citation chains. Hands off sessions cleanly. Every write is a real `git commit` to `~/.origin/.git/` — inspect, revert, branch, blame.
+Origin: the local daemon for AI work artifacts — the decisions, lessons, citations, and project context that come out of working with AI, captured and versioned in one store. Every claim cites its source — the daemon rejects pages with empty `source_memory_ids` (HTTP 422). Every write commits to `~/.origin/.git/`. Built for Claude Code, Cursor, Codex, and any MCP client. Five verbs, one binary, ~30 MCP tools.
 
 Your agent reads searchable memory, graph context, and hybrid retrieval. You read Markdown artifacts under `~/.origin/`. Same store, two surfaces.
-
-**Status:** Early preview. Expect fast iteration and some sharp edges.
 
 [Watch the Origin demo](https://youtu.be/k37gjWVPHwI)
 
@@ -23,10 +21,28 @@ Your agent reads searchable memory, graph context, and hybrid retrieval. You rea
 
 ## What makes Origin distinct
 
-1. **Real git versioning.** Every memory write is a `git commit` in `~/.origin/.git/`. Inspect with `git log`, revert with `git checkout`, branch and blame — not a Copy-on-Write metaphor.
-2. **Mandatory provenance.** Wiki pages cite source memory IDs. The daemon rejects page writes with empty `source_memory_ids` (HTTP 422). Every distilled claim traces to a captured atom.
-3. **Curator workflow.** Low-confidence captures stay pending until confirmed. Contradictions, supersession chains, and protected-memory conflicts surface for review — not silently entering context.
-4. **Composition over storage.** Memories distill into pages. Sessions track workflow. ~30 MCP tools across one daemon — not 100+ skills bolted on.
+1. **Real git versioning.** Every memory write is a `git commit` in `~/.origin/.git/`. Inspect with `git log`, revert with `git checkout`, branch and blame your AI's history.
+
+   ```text
+   $ cd ~/.origin && git log --oneline -5
+   a1b2c3d page: embedding-retrieval refreshed (4 sources)
+   9f8e7d6 session: handoff embedding-work
+   5a4b3c2 capture: fact mem_def456
+   8d7c6b5 capture: decision mem_abc123
+   3e2f1a0 init: origin v0.6.1
+   ```
+
+2. **Mandatory, refreshable provenance.** Wiki pages cite source memory IDs — the daemon rejects pages with empty `source_memory_ids` (HTTP 422). Pages aren't write-once: each carries `stale_reasons` and `revision_state`, so `/distill` re-runs and background cycles refresh them as new memories arrive — without losing the citation chain.
+
+   ```bash
+   $ curl -X POST http://127.0.0.1:7878/pages \
+       -d '{"title":"X","content":"Y","source_memory_ids":[]}'
+   HTTP/1.1 422 Unprocessable Entity
+   {"error":"source_memory_ids cannot be empty"}
+   ```
+
+3. **Auditable memory.** Low-confidence captures and contradictions surface for review when they happen, instead of silently entering context. Supersession chains and protected-memory conflicts stay visible — audit when you want, trust the defaults when you don't.
+4. **Composition over storage — graph in the loop.** Memories distill into pages. Sessions track workflow. An entity graph (people, projects, tools, relations) joins recall — structural neighbors come back with vector and FTS hits, catching what keyword and embedding search miss alone. ~30 MCP tools across one daemon — not 100+ skills bolted on.
 
 ---
 
@@ -72,6 +88,8 @@ Then add the MCP connector to Cursor, Codex, VS Code, Claude Desktop, Gemini CLI
 
 The `origin-mcp` connector runs on demand and talks to the local Origin daemon from setup above.
 
+> **Status:** Early preview (v0.6.x). Expect fast iteration and some sharp edges.
+
 ---
 
 ## How Origin works
@@ -99,16 +117,16 @@ No cloud sync or telemetry by default. Local models and Anthropic keys are opt-i
 - **Distill cycles**: run `/distill` manually today, or add a local model/API key for background extraction, page refreshes, recaps, and richer graph links.
 - **Background enrichment and decay**: post-ingest passes link entities, enrich titles, grow matching pages, and update effective confidence based on memory type, access, and age.
 - **Review before trust**: low-confidence captures, pending revisions, protected-memory conflicts, contradictions, and supersession chains can surface instead of silently entering context.
-- **Project-scoped context**: skills infer the current repo or workspace so captures, recalls, and pages stay tied to the work at hand.
+- **Explicit spaces**: tag memories, pages, and recalls with `space=work | personal | client-X` so a day-job capture never bleeds into a side-project brief. Auto-detected from the current repo or workspace when no space is set; overridable always.
 - **Local artifacts**: Markdown pages live in `~/.origin/pages/`, session logs and project status live under `~/.origin/sessions/`, and `~/.origin/` keeps local git history you can inspect, revert, or symlink into Obsidian.
 
 ---
 
 ## Evaluation
 
-Retrieval quality on standard long-memory benchmarks. Numbers come from BGE-Base-EN-v1.5-Q embeddings combined with FTS5 and Reciprocal Rank Fusion. Harness at `crates/origin-core/src/eval/`; update workflow in [docs/eval](docs/eval/README.md).
+**Hybrid retrieval, transparent eval.** BGE-Base-EN-v1.5-Q + FTS5 + Reciprocal Rank Fusion. Recall@5 = 88% on LongMemEval (oracle, 500 Q), 67% on LoCoMo. ~168 tokens per recall query. Eval harness at [`crates/origin-core/src/eval/`](crates/origin-core/src/eval/) — run it yourself.
 
-Token efficiency on LoCoMo: 168 tokens per query instead of 4,505 for full replay, with 19% more relevant context than basic vector search.
+Update workflow in [docs/eval](docs/eval/README.md).
 
 
 | Benchmark                   | Recall@5 | MRR   | NDCG@10 |
