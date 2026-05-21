@@ -200,18 +200,18 @@ The permissive license keeps the daemon boundary usable for MCP clients and down
 
 ## Acknowledgments
 
-Patterns and projects that shaped this space:
+Predecessors:
 
-- **The Karpathy LLM-wiki pattern.** [Andrej Karpathy's LLM-wiki note](https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f) made the raw-to-wiki distillation pattern legible to the community. Origin builds on it with mandatory provenance and a versioned daemon.
-- **Claude Code's `MEMORY.md`.** The simplest version of the idea, and the one Origin cooperates with.
+- [Karpathy's LLM-wiki note](https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f). Raw-to-wiki distillation pattern.
+- Claude Code's `MEMORY.md`. The simplest version of the idea.
 
-Honest peers Origin sits next to:
+Peers:
 
-- [agentmemory](https://github.com/rohitg00/agentmemory). Large agent-side memory framework. Origin sits closer to the human-curated workflow surface; agentmemory is closer to the agent runtime.
-- [basic-memory](https://github.com/basicmachines-co/basic-memory). Local-first knowledge management with Claude. Obsidian-style notes; Origin's pages are citation-backed distillations from atoms.
-- [pro-workflow](https://github.com/rohitg00/pro-workflow). Claude Code productivity suite with skills, wikis, and an auto-research loop. Broader scope; Origin trades breadth for focus.
-- [mcp-memory-service](https://github.com/doobidoo/mcp-memory-service). Production-grade memory service for MCP. Origin layers pages and sessions on top of the memory primitive.
-- [Memoria](https://github.com/matrixorigin/Memoria). Claims "Git for AI Agent Memory" via Copy-on-Write semantics. Origin uses a real `~/.origin/.git/` directory instead.
-- [OpenMemory](https://github.com/CaviraOSS/OpenMemory), [claude-memory-compiler](https://github.com/coleam00/claude-memory-compiler), [PAI](https://github.com/danielmiessler/PAI), Palinode. Different shapes in the same direction.
+- [agentmemory](https://github.com/rohitg00/agentmemory). Agent-side memory framework.
+- [basic-memory](https://github.com/basicmachines-co/basic-memory). Local-first knowledge management for Claude.
+- [pro-workflow](https://github.com/rohitg00/pro-workflow). Claude Code productivity suite.
+- [mcp-memory-service](https://github.com/doobidoo/mcp-memory-service). Memory service for MCP.
+- [Memoria](https://github.com/matrixorigin/Memoria). "Git for AI Agent Memory" via Copy-on-Write.
+- [OpenMemory](https://github.com/CaviraOSS/OpenMemory), [claude-memory-compiler](https://github.com/coleam00/claude-memory-compiler), [PAI](https://github.com/danielmiessler/PAI), Palinode. Adjacent shapes.
 
 Different shapes of the same problem. Try the one that fits.
