@@ -1,5 +1,3 @@
-
-
 [CI](https://github.com/7xuanlu/origin/actions/workflows/ci.yml?query=branch%3Amain)
 [Release](https://github.com/7xuanlu/origin/releases/latest)
 [npm: @7xuanlu/origin](https://www.npmjs.com/package/@7xuanlu/origin)
@@ -7,11 +5,9 @@
 [MCP Server](https://modelcontextprotocol.io)
 [License](#license)
 
+**Stop re-explaining your project to AI. Stop losing your own decisions between sessions.**
 
-
-**Stop re-explaining your project to AI — and stop losing your own decisions between sessions.**
-
-Origin: the local daemon for AI work artifacts — the decisions, lessons, citations, and project context that come out of working with AI, captured and versioned in one store. Every claim cites its source — the daemon rejects pages with empty `source_memory_ids` (HTTP 422). Every write commits to `~/.origin/.git/`. Built for Claude Code, Cursor, Codex, and any MCP client. Five verbs, one binary, ~30 MCP tools.
+Origin: the local daemon for AI work artifacts. Decisions, lessons, citations, and project context get captured, distilled, and versioned in one store. Every claim cites its source. The daemon rejects pages with empty `source_memory_ids` (HTTP 422). Every write commits to `~/.origin/.git/`. Built for Claude Code, Cursor, Codex, and any MCP client. Five verbs, one binary, ~30 MCP tools.
 
 Your agent reads searchable memory, graph context, and hybrid retrieval. You read Markdown artifacts under `~/.origin/`. Same store, two surfaces.
 
@@ -21,34 +17,30 @@ Your agent reads searchable memory, graph context, and hybrid retrieval. You rea
 
 ## What makes Origin distinct
 
-1. **Real git versioning.** Every memory write is a `git commit` in `~/.origin/.git/`. Inspect with `git log`, revert with `git checkout`, branch and blame your AI's history.
-
-   ```text
+1. **Composition, not just storage.** Memories distill into pages. Sessions track workflow. An entity graph links people, projects, tools, and relations. Recall pulls vector hits, FTS hits, and graph neighbors together. Keyword search alone misses the connections. ~30 MCP tools across one daemon, not 100+ skills bolted on.
+2. **Real git versioning.** Every memory write is a `git commit` in `~/.origin/.git/`. Inspect with `git log`. Revert with `git checkout`. Branch and blame as needed.
+  ```text
    $ cd ~/.origin && git log --oneline -5
    a1b2c3d page: embedding-retrieval refreshed (4 sources)
    9f8e7d6 session: handoff embedding-work
    5a4b3c2 capture: fact mem_def456
    8d7c6b5 capture: decision mem_abc123
    3e2f1a0 init: origin v0.6.1
-   ```
-
-2. **Mandatory, refreshable provenance.** Wiki pages cite source memory IDs — the daemon rejects pages with empty `source_memory_ids` (HTTP 422). Pages aren't write-once: each carries `stale_reasons` and `revision_state`, so `/distill` re-runs and background cycles refresh them as new memories arrive — without losing the citation chain.
-
-   ```bash
+  ```
+3. **Mandatory, refreshable provenance.** Wiki pages cite source memory IDs. The daemon rejects pages with empty `source_memory_ids` (HTTP 422). Pages aren't write-once: each carries `stale_reasons` and `revision_state`. `/distill` re-runs and background cycles refresh them as new memories arrive, without losing the citation chain.
+  ```bash
    $ curl -X POST http://127.0.0.1:7878/pages \
        -d '{"title":"X","content":"Y","source_memory_ids":[]}'
    HTTP/1.1 422 Unprocessable Entity
    {"error":"source_memory_ids cannot be empty"}
-   ```
-
-3. **Auditable memory.** Low-confidence captures and contradictions surface for review when they happen, instead of silently entering context. Supersession chains and protected-memory conflicts stay visible — audit when you want, trust the defaults when you don't.
-4. **Composition over storage — graph in the loop.** Memories distill into pages. Sessions track workflow. An entity graph (people, projects, tools, relations) joins recall — structural neighbors come back with vector and FTS hits, catching what keyword and embedding search miss alone. ~30 MCP tools across one daemon — not 100+ skills bolted on.
+  ```
+4. **Auditable memory.** Low-confidence captures and contradictions surface for review when they happen, instead of silently entering context. Supersession chains and protected-memory conflicts stay visible. Audit when you want, trust the defaults when you don't.
 
 ---
 
 ## Quickstart
 
-### Claude Code — 30 seconds
+### Claude Code in 30 seconds
 
 ```text
 /plugin marketplace add 7xuanlu/origin
@@ -96,11 +88,11 @@ The `origin-mcp` connector runs on demand and talks to the local Origin daemon f
 
 Origin follows the rhythm of an AI work session, with five verbs you use directly:
 
-1. **Session starts** — `/brief [topic]` loads project status, identity, preferences, and topic-relevant memories so the agent walks in with context.
-2. **During work** — `/capture <thing>` saves a decision, lesson, gotcha, or project fact in flow. `/recall <query>` looks anything up.
-3. **Session ends** — `/handoff` writes what changed, what's still open, and where to continue, so the next run picks up cleanly.
-4. **Between sessions** — the daemon deduplicates overlapping captures and links related ideas in the background. `/distill` synthesizes wiki pages from clusters of related memories when you want a deliberate pass.
-5. **Next session** — `/brief` brings it all back through the plugin or `origin-mcp`, without replaying full chat history.
+1. **Session starts.** `/brief [topic]` loads project status, identity, preferences, and topic-relevant memories so the agent walks in with context.
+2. **During work.** `/capture <thing>` saves a decision, lesson, gotcha, or project fact in flow. `/recall <query>` looks anything up.
+3. **Session ends.** `/handoff` writes what changed, what's still open, and where to continue, so the next run picks up cleanly.
+4. **Between sessions.** The daemon deduplicates overlapping captures and links related ideas in the background. `/distill` synthesizes wiki pages from clusters of related memories when you want a deliberate pass.
+5. **Next session.** `/brief` brings it all back through the plugin or `origin-mcp`, without replaying full chat history.
 
 Full skill reference: [plugin/skills](plugin/skills/README.md).
 
@@ -124,7 +116,7 @@ No cloud sync or telemetry by default. Local models and Anthropic keys are opt-i
 
 ## Evaluation
 
-**Hybrid retrieval, transparent eval.** BGE-Base-EN-v1.5-Q + FTS5 + Reciprocal Rank Fusion. Recall@5 = 88% on LongMemEval (oracle, 500 Q), 67% on LoCoMo. ~168 tokens per recall query. Eval harness at [`crates/origin-core/src/eval/`](crates/origin-core/src/eval/) — run it yourself.
+**Hybrid retrieval, transparent eval.** BGE-Base-EN-v1.5-Q + FTS5 + Reciprocal Rank Fusion. Recall@5 = 88% on LongMemEval (oracle, 500 Q), 67% on LoCoMo. ~168 tokens per recall query. Eval harness at [`crates/origin-core/src/eval/`](crates/origin-core/src/eval/). Run it yourself.
 
 Update workflow in [docs/eval](docs/eval/README.md).
 
@@ -203,11 +195,11 @@ Patterns and projects that shaped this space:
 
 Honest peers Origin sits next to:
 
-- **[agentmemory](https://github.com/rohitg00/agentmemory)** — large agent-side memory framework. Origin sits closer to the human-curated workflow surface; agentmemory is closer to the agent runtime.
-- **[basic-memory](https://github.com/basicmachines-co/basic-memory)** — local-first knowledge management with Claude. Obsidian-style notes; Origin's pages are citation-backed distillations from atoms.
-- **[pro-workflow](https://github.com/rohitg00/pro-workflow)** — Claude Code productivity suite with skills, wikis, and an auto-research loop. Broader scope; Origin trades breadth for focus.
-- **[mcp-memory-service](https://github.com/doobidoo/mcp-memory-service)** — production-grade memory service for MCP. Origin layers pages and sessions on top of the memory primitive.
-- **[Memoria](https://github.com/matrixorigin/Memoria)** — "Git for AI Agent Memory" via Copy-on-Write semantics. Origin uses a real `~/.origin/.git/` directory instead.
-- **[OpenMemory](https://github.com/CaviraOSS/OpenMemory)**, **[claude-memory-compiler](https://github.com/coleam00/claude-memory-compiler)**, **[PAI](https://github.com/danielmiessler/PAI)**, Palinode — different shapes in the same direction.
+- [agentmemory](https://github.com/rohitg00/agentmemory). Large agent-side memory framework. Origin sits closer to the human-curated workflow surface; agentmemory is closer to the agent runtime.
+- [basic-memory](https://github.com/basicmachines-co/basic-memory). Local-first knowledge management with Claude. Obsidian-style notes; Origin's pages are citation-backed distillations from atoms.
+- [pro-workflow](https://github.com/rohitg00/pro-workflow). Claude Code productivity suite with skills, wikis, and an auto-research loop. Broader scope; Origin trades breadth for focus.
+- [mcp-memory-service](https://github.com/doobidoo/mcp-memory-service). Production-grade memory service for MCP. Origin layers pages and sessions on top of the memory primitive.
+- [Memoria](https://github.com/matrixorigin/Memoria). Claims "Git for AI Agent Memory" via Copy-on-Write semantics. Origin uses a real `~/.origin/.git/` directory instead.
+- [OpenMemory](https://github.com/CaviraOSS/OpenMemory), [claude-memory-compiler](https://github.com/coleam00/claude-memory-compiler), [PAI](https://github.com/danielmiessler/PAI), Palinode. Different shapes in the same direction.
 
 Different shapes of the same problem. Try the one that fits.
