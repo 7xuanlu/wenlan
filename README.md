@@ -94,8 +94,6 @@ Then add the MCP connector to Cursor, Codex, VS Code, Claude Desktop, Gemini CLI
 
 The `origin-mcp` connector runs on demand and talks to the local Origin daemon from setup above.
 
-> **Status:** Early preview (v0.6.x). Expect fast iteration and some sharp edges.
-
 ---
 
 ## How Origin works
