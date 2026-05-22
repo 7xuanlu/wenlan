@@ -96,22 +96,29 @@ pub struct CaseResult {
     pub neg_above_relevant: usize,
 }
 
+/// Encode retrieval variant + provider + fixture-hash into a baseline filename.
+/// Shared by EvalReport, LocomoReport, and LongMemEvalReport.
+/// Falls back to `base + ".json"` when `env` is None (back-compat).
+pub fn encode_baseline_filename(env: Option<&ReportEnv>, base: &str) -> String {
+    let Some(env) = env else {
+        return format!("{}.json", base);
+    };
+    let variant = env
+        .retrieval_method
+        .trim_start_matches("search_memory")
+        .trim_start_matches('_');
+    let variant = if variant.is_empty() { "base" } else { variant };
+    format!(
+        "{}__{}__{}__{}.json",
+        base, variant, env.llm_provider_class, env.fixture_revision
+    )
+}
+
 impl EvalReport {
     /// Encode retrieval variant + provider + fixture-hash into baseline filename.
     /// Falls back to base + ".json" if env is missing (back-compat).
     pub fn baseline_filename(&self, base: &str) -> String {
-        let Some(env) = &self.env else {
-            return format!("{}.json", base);
-        };
-        let variant = env
-            .retrieval_method
-            .trim_start_matches("search_memory")
-            .trim_start_matches('_');
-        let variant = if variant.is_empty() { "base" } else { variant };
-        format!(
-            "{}__{}__{}__{}.json",
-            base, variant, env.llm_provider_class, env.fixture_revision
-        )
+        encode_baseline_filename(self.env.as_ref(), base)
     }
 
     /// Format report as terminal-friendly text.

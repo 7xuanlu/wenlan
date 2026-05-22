@@ -399,7 +399,9 @@ async fn save_locomo_baseline() {
     let report = origin_core::eval::locomo::run_locomo_eval(&path)
         .await
         .unwrap();
-    let baseline_path = eval_root().join("baselines/locomo_baseline.json");
+    let baselines_dir = eval_root().join("baselines");
+    std::fs::create_dir_all(&baselines_dir).unwrap();
+    let baseline_path = baselines_dir.join(report.baseline_filename("locomo"));
     report.save_baseline(&baseline_path).unwrap();
     println!("Saved LoCoMo baseline to {:?}", baseline_path);
 }
@@ -415,7 +417,9 @@ async fn save_longmemeval_baseline() {
     let report = origin_core::eval::longmemeval::run_longmemeval_eval(&path)
         .await
         .unwrap();
-    let baseline_path = eval_root().join("baselines/longmemeval_baseline.json");
+    let baselines_dir = eval_root().join("baselines");
+    std::fs::create_dir_all(&baselines_dir).unwrap();
+    let baseline_path = baselines_dir.join(report.baseline_filename("longmemeval"));
     report.save_baseline(&baseline_path).unwrap();
     println!("Saved LongMemEval baseline to {:?}", baseline_path);
 }
@@ -435,7 +439,9 @@ async fn save_locomo_reranked_baseline() {
     let report = origin_core::eval::locomo::run_locomo_eval_reranked(&path, llm)
         .await
         .unwrap();
-    let baseline_path = eval_root().join("baselines/locomo_reranked_baseline.json");
+    let baselines_dir = eval_root().join("baselines");
+    std::fs::create_dir_all(&baselines_dir).unwrap();
+    let baseline_path = baselines_dir.join(report.baseline_filename("locomo"));
     report.save_baseline(&baseline_path).unwrap();
     println!("Saved LoCoMo reranked baseline to {:?}", baseline_path);
 }
@@ -455,7 +461,9 @@ async fn save_longmemeval_reranked_baseline() {
     let report = origin_core::eval::longmemeval::run_longmemeval_eval_reranked(&path, llm)
         .await
         .unwrap();
-    let baseline_path = eval_root().join("baselines/longmemeval_reranked_baseline.json");
+    let baselines_dir = eval_root().join("baselines");
+    std::fs::create_dir_all(&baselines_dir).unwrap();
+    let baseline_path = baselines_dir.join(report.baseline_filename("longmemeval"));
     report.save_baseline(&baseline_path).unwrap();
     println!("Saved LongMemEval reranked baseline to {:?}", baseline_path);
 }
@@ -475,7 +483,9 @@ async fn save_locomo_expanded_baseline() {
     let report = origin_core::eval::locomo::run_locomo_eval_expanded(&path, llm)
         .await
         .unwrap();
-    let baseline_path = eval_root().join("baselines/locomo_expanded_baseline.json");
+    let baselines_dir = eval_root().join("baselines");
+    std::fs::create_dir_all(&baselines_dir).unwrap();
+    let baseline_path = baselines_dir.join(report.baseline_filename("locomo"));
     report.save_baseline(&baseline_path).unwrap();
     println!("Saved LoCoMo expanded baseline to {:?}", baseline_path);
 }
@@ -495,7 +505,9 @@ async fn save_longmemeval_expanded_baseline() {
     let report = origin_core::eval::longmemeval::run_longmemeval_eval_expanded(&path, llm)
         .await
         .unwrap();
-    let baseline_path = eval_root().join("baselines/longmemeval_expanded_baseline.json");
+    let baselines_dir = eval_root().join("baselines");
+    std::fs::create_dir_all(&baselines_dir).unwrap();
+    let baseline_path = baselines_dir.join(report.baseline_filename("longmemeval"));
     report.save_baseline(&baseline_path).unwrap();
     println!("Saved LongMemEval expanded baseline to {:?}", baseline_path);
 }

@@ -376,6 +376,12 @@ impl LongMemEvalReport {
         let content = std::fs::read_to_string(path).ok()?;
         serde_json::from_str(&content).ok()
     }
+
+    /// Encode retrieval variant + provider + fixture-hash into baseline filename.
+    /// Falls back to base + ".json" if env is missing (back-compat).
+    pub fn baseline_filename(&self, base: &str) -> String {
+        crate::eval::report::encode_baseline_filename(self.env.as_ref(), base)
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1007,7 +1013,7 @@ pub async fn run_longmemeval_eval_with_gate(
     // Aggregate
     let per_category = aggregate_by_category(&all_scores);
 
-    Ok(LongMemEvalReport {
+    let mut report = LongMemEvalReport {
         aggregate_ndcg_at_10: avg_field(&all_scores, |s| s.2),
         aggregate_mrr: avg_field(&all_scores, |s| s.3),
         aggregate_recall_at_5: avg_field(&all_scores, |s| s.4),
@@ -1017,7 +1023,20 @@ pub async fn run_longmemeval_eval_with_gate(
         per_category,
         baseline: None,
         env: None,
-    })
+    };
+    report.env = Some(crate::eval::report::ReportEnv {
+        fixture_revision: crate::eval::fixtures::fixture_revision_hash(path)
+            .unwrap_or_else(|_| "unknown".into()),
+        embedder_model: "BGE-Base-EN-v1.5-Q".into(),
+        embedder_revision: "768d".into(),
+        retrieval_method: "search_memory".into(),
+        llm_provider_class: "none".into(),
+        llm_model: "none".into(),
+        judge_model: None,
+        origin_version: env!("CARGO_PKG_VERSION").into(),
+        eval_timestamp_unix: chrono::Utc::now().timestamp(),
+    });
+    Ok(report)
 }
 
 // ---------------------------------------------------------------------------
