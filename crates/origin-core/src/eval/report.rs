@@ -97,6 +97,23 @@ pub struct CaseResult {
 }
 
 impl EvalReport {
+    /// Encode retrieval variant + provider + fixture-hash into baseline filename.
+    /// Falls back to base + ".json" if env is missing (back-compat).
+    pub fn baseline_filename(&self, base: &str) -> String {
+        let Some(env) = &self.env else {
+            return format!("{}.json", base);
+        };
+        let variant = env
+            .retrieval_method
+            .trim_start_matches("search_memory")
+            .trim_start_matches('_');
+        let variant = if variant.is_empty() { "base" } else { variant };
+        format!(
+            "{}__{}__{}__{}.json",
+            base, variant, env.llm_provider_class, env.fixture_revision
+        )
+    }
+
     /// Format report as terminal-friendly text.
     pub fn to_terminal(&self) -> String {
         let mut out = String::new();

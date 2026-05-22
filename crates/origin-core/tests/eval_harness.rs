@@ -3867,3 +3867,28 @@ fn report_env_populated_correctly_per_runner_variant() {
     };
     assert_ne!(base.retrieval_method, reranked.retrieval_method);
 }
+
+#[test]
+fn baseline_filename_encodes_config() {
+    use origin_core::eval::report::{EvalReport, ReportEnv};
+    let r = EvalReport {
+        env: Some(ReportEnv {
+            retrieval_method: "search_memory_reranked".into(),
+            llm_provider_class: "on-device".into(),
+            fixture_revision: "deadbeefcafef00d".into(),
+            ..Default::default()
+        }),
+        ..EvalReport::default()
+    };
+    assert_eq!(
+        r.baseline_filename("longmemeval"),
+        "longmemeval__reranked__on-device__deadbeefcafef00d.json"
+    );
+}
+
+#[test]
+fn baseline_filename_falls_back_when_env_missing() {
+    use origin_core::eval::report::EvalReport;
+    let r = EvalReport::default();
+    assert_eq!(r.baseline_filename("foo"), "foo.json");
+}
