@@ -3776,3 +3776,30 @@ async fn submit_batch_no_cap_env_var_unset_does_not_block() {
     let cost = estimate_batch_cost(&prompts);
     assert!(cost < 0.01, "tiny batch should be sub-cent: got {cost}");
 }
+
+#[test]
+fn latency_summary_p50_p99_from_samples() {
+    use origin_core::eval::latency::{latency_summary, LatencySummary};
+    let samples_ms: Vec<u64> = (1..=100).collect();
+    let s: LatencySummary = latency_summary(&samples_ms);
+    assert!(
+        (s.p50_ms as i64 - 50).abs() <= 1,
+        "p50 ≈ 50, got {}",
+        s.p50_ms
+    );
+    assert!(
+        (s.p99_ms as i64 - 99).abs() <= 1,
+        "p99 ≈ 99, got {}",
+        s.p99_ms
+    );
+    assert_eq!(s.total_ms, samples_ms.iter().sum::<u64>());
+    assert_eq!(s.sample_count, 100);
+}
+
+#[test]
+fn latency_summary_empty_returns_zero() {
+    use origin_core::eval::latency::latency_summary;
+    let s = latency_summary(&[]);
+    assert_eq!(s.sample_count, 0);
+    assert_eq!(s.p50_ms, 0);
+}

@@ -68,6 +68,9 @@ pub struct EvalReport {
     // Environment capture (schema v1)
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub env: Option<ReportEnv>,
+    // Per-query latency summary
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub latency: Option<crate::eval::latency::LatencySummary>,
 }
 
 #[derive(Debug, Clone, Serialize, serde::Deserialize)]
@@ -305,6 +308,7 @@ mod tests {
             baseline: None,
             per_case: vec![],
             env: None,
+            latency: None,
         };
 
         report.save_baseline(&path).unwrap();

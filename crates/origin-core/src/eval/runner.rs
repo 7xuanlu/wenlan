@@ -390,6 +390,7 @@ pub async fn run_eval(
         baseline: baseline_path.and_then(crate::eval::report::EvalReport::load_baseline),
         per_case: case_results,
         env: None,
+        latency: None,
     })
 }
 
