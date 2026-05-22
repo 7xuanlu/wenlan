@@ -38,6 +38,7 @@ tokio = { workspace = true }
 libsql = { workspace = true }
 fastembed = { workspace = true }
 sha2 = { workspace = true }
+hex = { workspace = true }
 lru = { workspace = true }
 
 # Markdown chunking (PR #57, re-hosted from app to origin-core via PR #58 merge)

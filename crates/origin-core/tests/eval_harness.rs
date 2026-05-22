@@ -3726,3 +3726,25 @@ async fn redistill_one_conv(
     }
     Ok(())
 }
+
+#[test]
+fn fixture_revision_hash_is_stable_sha256_prefix() {
+    use origin_core::eval::fixtures::fixture_revision_hash;
+    let tmp = tempfile::NamedTempFile::new().unwrap();
+    std::fs::write(tmp.path(), b"deterministic test bytes").unwrap();
+    let h1 = fixture_revision_hash(tmp.path()).unwrap();
+    let h2 = fixture_revision_hash(tmp.path()).unwrap();
+    assert_eq!(h1, h2, "hash must be deterministic");
+    assert_eq!(h1.len(), 16, "expect 16-char hex prefix of sha256");
+}
+
+#[test]
+fn fixture_revision_hash_changes_when_bytes_change() {
+    use origin_core::eval::fixtures::fixture_revision_hash;
+    let tmp = tempfile::NamedTempFile::new().unwrap();
+    std::fs::write(tmp.path(), b"version one").unwrap();
+    let h1 = fixture_revision_hash(tmp.path()).unwrap();
+    std::fs::write(tmp.path(), b"version two").unwrap();
+    let h2 = fixture_revision_hash(tmp.path()).unwrap();
+    assert_ne!(h1, h2, "hash must change when bytes change");
+}
