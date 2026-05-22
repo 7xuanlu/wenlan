@@ -80,6 +80,16 @@ pub async fn submit_batch(
         return Err(format!("cost_cap_usd suspicious: ${cost_cap_usd}"));
     }
     let est_cost = estimate_batch_cost(&requests);
+    if let Ok(cap_str) = std::env::var("EVAL_MAX_USD") {
+        let cap: f64 = cap_str.parse().unwrap_or(0.0);
+        if cap > 0.0 && est_cost > cap {
+            return Err(format!(
+                "Aborting: estimated cost ${:.4} exceeds EVAL_MAX_USD cap ${:.4}. \
+                 Set EVAL_MAX_USD higher or shrink batch.",
+                est_cost, cap
+            ));
+        }
+    }
     eprintln!(
         "[batch] Estimated cost: ${:.3} ({} requests, cap: ${:.2})",
         est_cost,
