@@ -220,6 +220,7 @@ pub struct OnDeviceProvider {
     synthesis_limit: usize,
     model_context_size: u32,
     model_max_output: u32,
+    resolved_model_id: String,
 }
 
 impl OnDeviceProvider {
@@ -654,6 +655,7 @@ impl OnDeviceProvider {
             synthesis_limit: model_spec.synthesis_token_limit,
             model_context_size: model_spec.context_size,
             model_max_output: model_spec.max_output_tokens,
+            resolved_model_id: model_spec.id.to_string(),
         })
     }
 
@@ -720,7 +722,7 @@ impl LlmProvider for OnDeviceProvider {
     }
 
     fn model_id(&self) -> String {
-        "qwen3-4b".to_string()
+        self.resolved_model_id.clone()
     }
 
     fn recommended_max_output(&self) -> u32 {
@@ -1544,6 +1546,15 @@ mod tests {
         assert!(
             ran.load(Ordering::SeqCst),
             "hook using captured Handle should have spawned the task successfully"
+        );
+    }
+
+    #[test]
+    fn on_device_provider_model_id_reflects_resolved_model() {
+        // resolve_or_default is the same path new_with_model uses to set resolved_model_id.
+        assert_eq!(
+            crate::on_device_models::resolve_or_default(Some("qwen3.5-9b")).id,
+            "qwen3.5-9b"
         );
     }
 }

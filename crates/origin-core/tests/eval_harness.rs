@@ -3833,7 +3833,7 @@ fn judge_prompt_has_branch_for_every_lme_task_category() {
 // ---------------------------------------------------------------------------
 
 #[test]
-fn locomo_report_records_retrieval_unit_memory() {
+fn eval_report_serializes_env_retrieval_method() {
     use origin_core::eval::report::{EvalReport, ReportEnv};
     let r = EvalReport {
         env: Some(ReportEnv {
@@ -3851,6 +3851,7 @@ fn locomo_report_records_retrieval_unit_memory() {
     );
 }
 
+// TODO(eval-repro): verify runner population once GPU baseline saves
 #[test]
 fn report_env_populated_correctly_per_runner_variant() {
     use origin_core::eval::report::ReportEnv;
