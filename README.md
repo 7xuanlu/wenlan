@@ -11,17 +11,17 @@
 
 <p align="center">
   <a href="#claude-code-in-30-seconds"><img alt="Claude Code" src="https://img.shields.io/badge/Claude%20Code-plugin-5D4E75"></a>
-  <a href="#other-mcp-clients-and-terminal-use"><img alt="OpenAI Codex" src="https://img.shields.io/badge/OpenAI%20Codex-MCP-111827"></a>
-  <a href="#other-mcp-clients-and-terminal-use"><img alt="Cursor" src="https://img.shields.io/badge/Cursor-MCP-111111"></a>
-  <a href="#other-mcp-clients-and-terminal-use"><img alt="VS Code" src="https://img.shields.io/badge/VS%20Code-MCP-007ACC"></a>
-  <a href="#other-mcp-clients-and-terminal-use"><img alt="Claude Desktop" src="https://img.shields.io/badge/Claude%20Desktop-MCP-D97757"></a>
-  <a href="#other-mcp-clients-and-terminal-use"><img alt="Gemini CLI" src="https://img.shields.io/badge/Gemini%20CLI-MCP-4285F4"></a>
+  <a href="#mcp-only-setup"><img alt="OpenAI Codex" src="https://img.shields.io/badge/OpenAI%20Codex-MCP-111827"></a>
+  <a href="#mcp-only-setup"><img alt="Cursor" src="https://img.shields.io/badge/Cursor-MCP-111111"></a>
+  <a href="#mcp-only-setup"><img alt="VS Code" src="https://img.shields.io/badge/VS%20Code-MCP-007ACC"></a>
+  <a href="#mcp-only-setup"><img alt="Claude Desktop" src="https://img.shields.io/badge/Claude%20Desktop-MCP-D97757"></a>
+  <a href="#mcp-only-setup"><img alt="Gemini CLI" src="https://img.shields.io/badge/Gemini%20CLI-MCP-4285F4"></a>
   <a href="#what-you-get"><img alt="Obsidian" src="https://img.shields.io/badge/Obsidian-Markdown%20pages-7C3AED"></a>
 </p>
 
-**Stop re-explaining your project to AI. Stop losing your own decisions between sessions.**
+**Your next AI session should pick up the context you built, not lose it in chat history.**
 
-Origin: the local daemon for AI work artifacts. Decisions, lessons, citations, and project context get captured, distilled, and versioned in one store. Every claim cites its source. The daemon rejects pages with empty `source_memory_ids` (HTTP 422). Every write commits to `~/.origin/.git/`. Built for Claude Code, Cursor, Codex, and any MCP client. Five verbs, one binary, ~30 MCP tools.
+Origin gives your daily AI workflow one local home: memory your agents can recall, wiki pages you can read, and source-backed context that captures, distills, and versions decisions, lessons, and project context across chats, projects, and time.
 
 Your agent reads searchable memory, graph context, and hybrid retrieval. You read Markdown artifacts under `~/.origin/`. Same store, two surfaces.
 
@@ -68,7 +68,18 @@ Then try `/brief`, `/capture <decision>`, or `/handoff` inside Claude Code.
 
 Plugin details and daily commands: [plugin/](plugin/.claude-plugin/README.md).
 
-### Other MCP clients and terminal use
+### MCP-only setup
+
+Use this if you want Origin tools in Claude Code without the plugin, or in Codex, Cursor, Claude Desktop, VS Code, or Gemini CLI.
+
+```bash
+npx -y @7xuanlu/origin setup
+~/.origin/bin/origin mcp add claude-code      # or: codex, cursor, claude-desktop, vscode, gemini
+```
+
+MCP-only gives agents tools for capture, recall, context, doctor, and page distillation. It does not install Claude Code slash skills like `/brief`, `/handoff`, `/distill`, or `/init`.
+
+### Terminal runtime setup
 
 Set up the local Origin runtime:
 
@@ -76,23 +87,7 @@ Set up the local Origin runtime:
 npx -y @7xuanlu/origin setup
 ```
 
-That installs the `origin` CLI, `origin-server` daemon, and `origin-mcp` connector into `~/.origin/bin/`, configures local memory, registers the daemon with launchd, and verifies status.
-For terminal use, start with `origin status`, `origin recall <query>`, or `origin store <text>`. CLI details: [crates/origin-cli](crates/origin-cli/README.md).
-
-Then add the MCP connector to Cursor, Codex, VS Code, Claude Desktop, Gemini CLI, or any client that accepts a JSON `mcpServers` entry:
-
-```json
-{
-  "mcpServers": {
-    "origin": {
-      "command": "npx",
-      "args": ["-y", "origin-mcp"]
-    }
-  }
-}
-```
-
-The `origin-mcp` connector runs on demand and talks to the local Origin daemon from setup above.
+Then start with `~/.origin/bin/origin status`, `~/.origin/bin/origin recall <query>`, or `~/.origin/bin/origin store <text>`. CLI details: [crates/origin-cli](crates/origin-cli/README.md).
 
 ---
 
@@ -104,7 +99,7 @@ Origin follows the rhythm of an AI work session, with five verbs you use directl
 2. **During work.** `/capture <thing>` saves a decision, lesson, gotcha, or project fact in flow. `/recall <query>` looks anything up.
 3. **Session ends.** `/handoff` writes what changed, what's still open, and where to continue, so the next run picks up cleanly.
 4. **Between sessions.** The daemon deduplicates overlapping captures and links related ideas in the background. `/distill` synthesizes wiki pages from clusters of related memories when you want a deliberate pass.
-5. **Next session.** `/brief` brings it all back through the plugin or `origin-mcp`, without replaying full chat history.
+5. **Next session.** `/brief` brings it all back in the Claude Code plugin. MCP-only clients call the `context` tool for the same underlying memory without replaying full chat history.
 
 Full skill reference: [plugin/skills](plugin/skills/README.md).
 
@@ -152,7 +147,7 @@ Origin is daemon-first. `origin-server` owns the local database, embeddings, dis
 | [crates/origin-server](crates/origin-server/README.md) | Local daemon and HTTP API.                                                                                                                                                                                 |
 | [crates/origin-mcp](crates/origin-mcp/README.md)       | MCP server, tools, npm package.                                                                                                                                                                            |
 | [crates/origin-cli](crates/origin-cli/README.md)       | User CLI for setup, service management, search, recall, store, list, agents, model/key setup, and doctor.                                                                                                  |
-| [plugin/](plugin/.claude-plugin/README.md)             | Claude Code plugin (`plugin.json`, skills, hooks, `.mcp.json`). Marketplace entry at root `[.claude-plugin/marketplace.json](.claude-plugin/marketplace.json)` lists this plugin via `source: "./plugin"`. |
+| [plugin/](plugin/.claude-plugin/README.md)             | Claude Code plugin (`plugin.json`, skills, hooks, `.mcp.json`).                                                                                                                                           |
 | [docs/eval](docs/eval/README.md)                       | Benchmark workflow and methodology.                                                                                                                                                                        |
 
 

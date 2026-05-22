@@ -60,6 +60,11 @@ enum Commands {
         #[command(subcommand)]
         command: commands::setup::KeyCommand,
     },
+    /// Configure Origin MCP for supported clients.
+    Mcp {
+        #[command(subcommand)]
+        command: commands::mcp::McpCommand,
+    },
     /// Search memories by query (vector + FTS hybrid).
     Search {
         /// Search query.
@@ -127,6 +132,7 @@ async fn main() -> anyhow::Result<()> {
         Commands::Doctor => commands::setup::run_doctor().await?,
         Commands::Model { command } => commands::setup::run_model(command).await?,
         Commands::Key { command } => commands::setup::run_key(command).await?,
+        Commands::Mcp { command } => commands::mcp::run(command, cli.quiet)?,
         Commands::Search { query, limit } => {
             commands::search::run(&client, format, cli.quiet, query, limit).await?
         }

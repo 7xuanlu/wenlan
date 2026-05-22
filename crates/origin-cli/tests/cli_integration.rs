@@ -43,6 +43,7 @@ impl IsolatedRuntime {
         let fake_bin = tempfile::tempdir_in(root.path()).expect("temp fake bin");
         write_fake_launchctl(fake_bin.path());
         ensure_sibling_origin_server();
+        ensure_sibling_origin_mcp();
         Self {
             root,
             home,
@@ -80,6 +81,20 @@ fn write_fake_launchctl(fake_bin: &Path) {
     fs::set_permissions(path, perms).expect("chmod fake launchctl");
 }
 
+fn write_fake_command(fake_bin: &Path, name: &str) {
+    let path = fake_bin.join(name);
+    fs::write(
+        &path,
+        "#!/bin/sh\nprintf '%s' \"${0##*/}\" >> \"$ORIGIN_TEST_CLI_LOG\"\nfor arg in \"$@\"; do printf '\\t%s' \"$arg\" >> \"$ORIGIN_TEST_CLI_LOG\"; done\nprintf '\\n' >> \"$ORIGIN_TEST_CLI_LOG\"\nexit 0\n",
+    )
+    .expect("write fake command");
+    let mut perms = fs::metadata(&path)
+        .expect("fake command metadata")
+        .permissions();
+    perms.set_mode(0o755);
+    fs::set_permissions(path, perms).expect("chmod fake command");
+}
+
 fn ensure_sibling_origin_server() {
     let origin_bin = assert_cmd::cargo::cargo_bin("origin");
     let server = origin_bin
@@ -94,6 +109,30 @@ fn ensure_sibling_origin_server() {
         perms.set_mode(0o755);
         fs::set_permissions(server, perms).expect("chmod fake origin-server");
     }
+}
+
+fn ensure_sibling_origin_mcp() {
+    let path = origin_mcp_sibling();
+    if !path.exists() {
+        fs::write(&path, "#!/bin/sh\nexit 0\n").expect("write fake origin-mcp sibling");
+        let mut perms = fs::metadata(&path)
+            .expect("fake origin-mcp metadata")
+            .permissions();
+        perms.set_mode(0o755);
+        fs::set_permissions(path, perms).expect("chmod fake origin-mcp");
+    }
+}
+
+fn origin_mcp_sibling() -> PathBuf {
+    let origin_bin = assert_cmd::cargo::cargo_bin("origin");
+    origin_bin
+        .parent()
+        .expect("origin binary has parent")
+        .join("origin-mcp")
+}
+
+fn origin_mcp_sibling_arg() -> String {
+    origin_mcp_sibling().display().to_string()
 }
 
 #[test]
@@ -129,9 +168,188 @@ fn each_subcommand_has_help() {
         "doctor",
         "model",
         "key",
+        "mcp",
     ] {
         cli().args([sub, "--help"]).assert().success();
     }
+}
+
+#[test]
+fn mcp_subcommands_have_help() {
+    for args in [&["mcp", "--help"][..], &["mcp", "add", "--help"][..]] {
+        cli().args(args).assert().success();
+    }
+}
+
+#[test]
+fn mcp_add_claude_code_dry_run_explains_tools_only() {
+    let runtime = IsolatedRuntime::new();
+
+    cli_with_isolated_runtime(&runtime)
+        .args(["mcp", "add", "claude-code", "--dry-run"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(format!(
+            "claude mcp add -s user origin -- {}",
+            origin_mcp_sibling_arg()
+        )))
+        .stdout(predicate::str::contains("MCP tools only"))
+        .stdout(predicate::str::contains("/brief"))
+        .stdout(predicate::str::contains("/handoff"))
+        .stdout(predicate::str::contains("/distill"))
+        .stdout(predicate::str::contains("/init"));
+}
+
+#[test]
+fn mcp_add_native_clients_run_add_without_destructive_remove() {
+    let origin_mcp = origin_mcp_sibling_arg();
+    let cases = [
+        (
+            "claude-code",
+            "claude",
+            format!("claude\tmcp\tadd\t-s\tuser\torigin\t--\t{origin_mcp}\n"),
+        ),
+        (
+            "codex",
+            "codex",
+            format!("codex\tmcp\tadd\torigin\t--\t{origin_mcp}\n"),
+        ),
+        (
+            "gemini",
+            "gemini",
+            format!("gemini\tmcp\tadd\t-s\tuser\torigin\t{origin_mcp}\n"),
+        ),
+    ];
+
+    for (client, binary, expected_log) in cases {
+        let runtime = IsolatedRuntime::new();
+        write_fake_command(runtime.fake_bin.path(), binary);
+        let log = runtime.root.path().join(format!("{client}.log"));
+
+        cli_with_isolated_runtime(&runtime)
+            .env("ORIGIN_TEST_CLI_LOG", &log)
+            .args(["mcp", "add", client])
+            .assert()
+            .success()
+            .stdout(predicate::str::contains("Configured Origin MCP"));
+
+        assert_eq!(
+            fs::read_to_string(log).expect("fake client log"),
+            expected_log.as_str()
+        );
+    }
+}
+
+#[test]
+fn mcp_add_cursor_preserves_existing_servers_and_backs_up_changed_origin() {
+    let runtime = IsolatedRuntime::new();
+    let config_path = runtime.home.path().join(".cursor/mcp.json");
+    fs::create_dir_all(config_path.parent().expect("cursor config parent")).unwrap();
+    fs::write(
+        &config_path,
+        r#"{"mcpServers":{"origin":{"command":"old-origin"},"other":{"command":"other-cmd"}}}"#,
+    )
+    .unwrap();
+
+    cli_with_isolated_runtime(&runtime)
+        .args(["mcp", "add", "cursor"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Updated"));
+
+    let updated = fs::read_to_string(&config_path).expect("updated cursor config");
+    assert!(updated.contains(r#""other""#), "{updated}");
+    assert!(
+        updated.contains(&format!(r#""command": "{}""#, origin_mcp_sibling_arg())),
+        "{updated}"
+    );
+    assert!(updated.contains("origin-mcp"), "{updated}");
+
+    let backups: Vec<_> = fs::read_dir(config_path.parent().unwrap())
+        .unwrap()
+        .filter_map(Result::ok)
+        .filter(|entry| {
+            entry
+                .file_name()
+                .to_string_lossy()
+                .starts_with("mcp.json.bak.")
+        })
+        .collect();
+    assert_eq!(backups.len(), 1, "expected one backup");
+    let backup = fs::read_to_string(backups[0].path()).expect("backup content");
+    assert!(backup.contains("old-origin"), "{backup}");
+}
+
+#[test]
+fn mcp_add_cursor_dry_run_prints_only_origin_block() {
+    let runtime = IsolatedRuntime::new();
+    let config_path = runtime.home.path().join(".cursor/mcp.json");
+    fs::create_dir_all(config_path.parent().expect("cursor config parent")).unwrap();
+    fs::write(
+        &config_path,
+        r#"{"mcpServers":{"private":{"command":"secret-tool","env":{"API_KEY":"SECRET_TOKEN"}}}}"#,
+    )
+    .unwrap();
+
+    cli_with_isolated_runtime(&runtime)
+        .args(["mcp", "add", "cursor", "--dry-run"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("mcpServers.origin"))
+        .stdout(predicate::str::contains("origin-mcp"))
+        .stdout(predicate::str::contains("SECRET_TOKEN").not())
+        .stdout(predicate::str::contains("secret-tool").not());
+
+    let unchanged = fs::read_to_string(&config_path).expect("cursor config unchanged");
+    assert!(unchanged.contains("SECRET_TOKEN"), "{unchanged}");
+}
+
+#[test]
+fn mcp_add_json_clients_write_expected_config_shapes() {
+    let runtime = IsolatedRuntime::new();
+
+    cli_with_isolated_runtime(&runtime)
+        .args(["mcp", "add", "claude-desktop"])
+        .assert()
+        .success();
+    let claude = fs::read_to_string(
+        runtime
+            .home
+            .path()
+            .join("Library/Application Support/Claude/claude_desktop_config.json"),
+    )
+    .expect("claude desktop config");
+    assert!(claude.contains(r#""mcpServers""#), "{claude}");
+    assert!(claude.contains("origin-mcp"), "{claude}");
+
+    cli_with_isolated_runtime(&runtime)
+        .current_dir(runtime.root.path())
+        .args(["mcp", "add", "vscode"])
+        .assert()
+        .success();
+    let vscode = fs::read_to_string(runtime.root.path().join(".vscode/mcp.json"))
+        .expect("vscode workspace config");
+    assert!(vscode.contains(r#""servers""#), "{vscode}");
+    assert!(vscode.contains("origin-mcp"), "{vscode}");
+}
+
+#[test]
+fn mcp_add_invalid_json_fails_without_modifying_file() {
+    let runtime = IsolatedRuntime::new();
+    let config_path = runtime.home.path().join(".cursor/mcp.json");
+    fs::create_dir_all(config_path.parent().expect("cursor config parent")).unwrap();
+    fs::write(&config_path, "{not json").unwrap();
+
+    cli_with_isolated_runtime(&runtime)
+        .args(["mcp", "add", "cursor"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("invalid JSON"));
+
+    assert_eq!(
+        fs::read_to_string(&config_path).expect("cursor config still exists"),
+        "{not json"
+    );
 }
 
 #[test]

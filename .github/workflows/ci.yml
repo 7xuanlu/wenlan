@@ -37,8 +37,12 @@ jobs:
         with:
           filters: |
             rust:
-              - 'crates/**'
-              - '!crates/*/npm/**'
+              # Positive-only globs. With dorny/paths-filter's default
+              # `some` quantifier, a negative glob like `!crates/*/npm/**`
+              # makes README-only PRs match this filter.
+              - 'crates/**/*.rs'
+              - 'crates/**/Cargo.toml'
+              - 'crates/*/resources/**'
               - 'Cargo.toml'
               - 'Cargo.lock'
               - 'rust-toolchain.toml'
@@ -176,8 +180,14 @@ jobs:
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: "24"
-      - working-directory: crates/origin-mcp/npm
+      - name: Validate origin-mcp npm package
+        working-directory: crates/origin-mcp/npm
         run: |
           npm pack --dry-run
           node -c run.js
           node -c install.js
+      - name: Validate @7xuanlu/origin npm package
+        working-directory: crates/origin-cli/npm
+        run: |
+          npm pack --dry-run
+          node -c run.js
