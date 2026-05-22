@@ -18,7 +18,12 @@ use std::sync::Arc;
 /// - `knowledge-update`: accepts old+new answers if updated answer is correct
 /// - `single-session-preference`: rubric-based (not exact-match)
 /// - Everything else (LoCoMo categories + LME SSU/SSA/MS): standard benchmark prompt
-fn task_judge_prompt(category: &str, question: &str, ground_truth: &str, answer: &str) -> String {
+pub fn task_judge_prompt(
+    category: &str,
+    question: &str,
+    ground_truth: &str,
+    answer: &str,
+) -> String {
     lme_anscheck_prompt(category, question, ground_truth, answer)
 }
 
@@ -950,12 +955,25 @@ pub fn aggregate_judgments(results: &[JudgmentResult], judge_model: &str) -> Jud
 // ===== Task-Specific Prompt Functions =====
 
 /// LongMemEval answer-check prompt. Returns the appropriate judge prompt for the task type.
+///
+/// Rubric text is mirrored verbatim from the LongMemEval canonical evaluator:
+/// <https://raw.githubusercontent.com/xiaowu0162/longmemeval/main/src/evaluation/evaluate_qa.py>
+/// (function `get_anscheck_prompt`, lines ~20-50). Every LME canonical task category
+/// has an explicit branch so we never silently fall through to a default. See the
+/// audit test `judge_prompt_has_branch_for_every_lme_task_category` in
+/// `crates/origin-core/tests/eval_harness.rs`.
 pub fn lme_anscheck_prompt(task: &str, question: &str, answer: &str, response: &str) -> String {
+    // Each branch begins with an explicit "Task category:" tag so the
+    // category branched on is visible in the rendered prompt and discoverable
+    // by audit tests. The instruction body that follows is the verbatim
+    // canonical LME rubric for that category.
     match task {
-        // LME "temporal-reasoning" + LoCoMo "temporal" — both test temporal recall
+        // LME "temporal-reasoning" + LoCoMo "temporal" — both test temporal recall.
+        // Canonical: evaluate_qa.py line 30, prompt for 'temporal-reasoning'.
         "temporal-reasoning" | "temporal" => {
             format!(
-                "I will give you a question, a correct answer, and a response from a model. \
+                "Task category: temporal-reasoning\n\n\
+                 I will give you a question, a correct answer, and a response from a model. \
                  Please answer yes if the response contains the correct answer. Otherwise, answer no. \
                  If the response is equivalent to the correct answer or contains all the intermediate \
                  steps to get the correct answer, you should also answer yes. If the response only \
@@ -968,9 +986,11 @@ pub fn lme_anscheck_prompt(task: &str, question: &str, answer: &str, response: &
                 question, answer, response
             )
         }
+        // Canonical: evaluate_qa.py line 34, prompt for 'knowledge-update'.
         "knowledge-update" => {
             format!(
-                "I will give you a question, a correct answer, and a response from a model. \
+                "Task category: knowledge-update\n\n\
+                 I will give you a question, a correct answer, and a response from a model. \
                  Please answer yes if the response contains the correct answer. Otherwise, answer no. \
                  If the response contains some previous information along with an updated answer, the \
                  response should be considered as correct as long as the updated answer is the required \
@@ -979,9 +999,11 @@ pub fn lme_anscheck_prompt(task: &str, question: &str, answer: &str, response: &
                 question, answer, response
             )
         }
+        // Canonical: evaluate_qa.py line 38, prompt for 'single-session-preference'.
         "single-session-preference" => {
             format!(
-                "I will give you a question, a rubric for desired personalized response, and a \
+                "Task category: single-session-preference\n\n\
+                 I will give you a question, a rubric for desired personalized response, and a \
                  response from a model. Please answer yes if the response satisfies the desired \
                  response. Otherwise, answer no. The model does not need to reflect all the points \
                  in the rubric. The response is correct as long as it recalls and utilizes the \
@@ -991,21 +1013,53 @@ pub fn lme_anscheck_prompt(task: &str, question: &str, answer: &str, response: &
                 question, answer, response
             )
         }
+        // LME canonical groups single-session-user, single-session-assistant, and
+        // multi-session under the same base prompt (evaluate_qa.py line 26). We
+        // mirror that grouping but split into named branches so each LME category
+        // has explicit coverage and shows up as its own branch in the audit.
+        "single-session-user" => {
+            format!(
+                "Task category: single-session-user\n\n\
+                 {}",
+                lme_base_prompt(question, answer, response)
+            )
+        }
+        "single-session-assistant" => {
+            format!(
+                "Task category: single-session-assistant\n\n\
+                 {}",
+                lme_base_prompt(question, answer, response)
+            )
+        }
+        "multi-session" => {
+            format!(
+                "Task category: multi-session\n\n\
+                 {}",
+                lme_base_prompt(question, answer, response)
+            )
+        }
         _ => {
             // Standard benchmark prompt — same as LoCoMo and LME SSU/SSA/MS.
             // Includes equivalence + subset guidance for fair evaluation.
-            format!(
-                "I will give you a question, a correct answer, and a response from a model. \
-                 Please answer yes if the response contains the correct answer. Otherwise, answer no. \
-                 If the response is equivalent to the correct answer or contains all the intermediate \
-                 steps to get the correct answer, you should also answer yes. If the response only \
-                 contains a subset of the information required by the answer, answer no.\n\n\
-                 Question: {}\n\nCorrect Answer: {}\n\nModel Response: {}\n\n\
-                 Is the model response correct? Answer yes or no only.",
-                question, answer, response
-            )
+            lme_base_prompt(question, answer, response)
         }
     }
+}
+
+/// The base LongMemEval answer-check prompt body, used verbatim from
+/// `evaluate_qa.py` line 26 (single-session-user / single-session-assistant /
+/// multi-session) and reused as the default fallback.
+fn lme_base_prompt(question: &str, answer: &str, response: &str) -> String {
+    format!(
+        "I will give you a question, a correct answer, and a response from a model. \
+         Please answer yes if the response contains the correct answer. Otherwise, answer no. \
+         If the response is equivalent to the correct answer or contains all the intermediate \
+         steps to get the correct answer, you should also answer yes. If the response only \
+         contains a subset of the information required by the answer, answer no.\n\n\
+         Question: {}\n\nCorrect Answer: {}\n\nModel Response: {}\n\n\
+         Is the model response correct? Answer yes or no only.",
+        question, answer, response
+    )
 }
 
 /// LongMemEval answer prompt. Returns (user_prompt, system_prompt) for generating answers.

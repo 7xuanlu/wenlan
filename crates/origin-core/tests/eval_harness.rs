@@ -3803,3 +3803,27 @@ fn latency_summary_empty_returns_zero() {
     assert_eq!(s.sample_count, 0);
     assert_eq!(s.p50_ms, 0);
 }
+
+#[test]
+fn judge_prompt_has_branch_for_every_lme_task_category() {
+    use origin_core::eval::judge::task_judge_prompt;
+    let categories = [
+        "single-session-user",
+        "single-session-assistant",
+        "single-session-preference",
+        "temporal-reasoning",
+        "knowledge-update",
+        "multi-session",
+    ];
+    for cat in categories {
+        let p = task_judge_prompt(cat, "Q", "GT", "A");
+        assert!(!p.is_empty(), "category '{}' produced empty prompt", cat);
+        let lower = p.to_lowercase();
+        assert!(
+            lower.contains(cat) || lower.contains(&cat.replace('-', " ")),
+            "category '{}' prompt should mention the category name or rubric token, got: {}",
+            cat,
+            p.chars().take(200).collect::<String>()
+        );
+    }
+}
