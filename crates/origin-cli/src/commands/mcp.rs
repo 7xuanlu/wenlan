@@ -4,14 +4,21 @@
 use anyhow::{anyhow, bail, Context, Result};
 use clap::{Args, Subcommand, ValueEnum};
 use serde_json::{json, Value};
+use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 const SERVER_NAME: &str = "origin";
-const SERVER_COMMAND: &str = "npx";
-const SERVER_ARGS: [&str; 2] = ["-y", "origin-mcp"];
+const FALLBACK_SERVER_COMMAND: &str = "npx";
+const FALLBACK_SERVER_ARGS: [&str; 2] = ["-y", "origin-mcp"];
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct ServerCommand {
+    command: String,
+    args: Vec<String>,
+}
 
 #[derive(Subcommand)]
 pub enum McpCommand {
@@ -54,22 +61,12 @@ pub fn run(command: McpCommand, quiet: bool) -> Result<()> {
 }
 
 fn add(args: AddArgs, quiet: bool) -> Result<()> {
+    let server = server_command();
     match args.client {
         McpClient::ClaudeCode => add_native(
             "claude-code",
             "claude",
-            &["mcp", "remove", SERVER_NAME],
-            &[
-                "mcp",
-                "add",
-                "-s",
-                "user",
-                SERVER_NAME,
-                "--",
-                SERVER_COMMAND,
-                SERVER_ARGS[0],
-                SERVER_ARGS[1],
-            ],
+            native_args("mcp", &["add", "-s", "user", SERVER_NAME, "--"], &server),
             args.dry_run,
             quiet,
             Some(claude_code_tools_only_note()),
@@ -77,16 +74,7 @@ fn add(args: AddArgs, quiet: bool) -> Result<()> {
         McpClient::Codex => add_native(
             "codex",
             "codex",
-            &["mcp", "remove", SERVER_NAME],
-            &[
-                "mcp",
-                "add",
-                SERVER_NAME,
-                "--",
-                SERVER_COMMAND,
-                SERVER_ARGS[0],
-                SERVER_ARGS[1],
-            ],
+            native_args("mcp", &["add", SERVER_NAME, "--"], &server),
             args.dry_run,
             quiet,
             None,
@@ -94,17 +82,7 @@ fn add(args: AddArgs, quiet: bool) -> Result<()> {
         McpClient::Gemini => add_native(
             "gemini",
             "gemini",
-            &["mcp", "remove", "-s", "user", SERVER_NAME],
-            &[
-                "mcp",
-                "add",
-                "-s",
-                "user",
-                SERVER_NAME,
-                SERVER_COMMAND,
-                SERVER_ARGS[0],
-                SERVER_ARGS[1],
-            ],
+            native_args("mcp", &["add", "-s", "user", SERVER_NAME], &server),
             args.dry_run,
             quiet,
             None,
@@ -113,6 +91,7 @@ fn add(args: AddArgs, quiet: bool) -> Result<()> {
             "cursor",
             home_path(&[".cursor", "mcp.json"])?,
             "mcpServers",
+            &server,
             args.dry_run,
             quiet,
         ),
@@ -125,6 +104,7 @@ fn add(args: AddArgs, quiet: bool) -> Result<()> {
                 "claude_desktop_config.json",
             ])?,
             "mcpServers",
+            &server,
             args.dry_run,
             quiet,
         ),
@@ -133,7 +113,7 @@ fn add(args: AddArgs, quiet: bool) -> Result<()> {
                 .context("determine current directory")?
                 .join(".vscode")
                 .join("mcp.json");
-            add_json_config("vscode", path, "servers", args.dry_run, quiet)
+            add_json_config("vscode", path, "servers", &server, args.dry_run, quiet)
         }
     }
 }
@@ -141,15 +121,13 @@ fn add(args: AddArgs, quiet: bool) -> Result<()> {
 fn add_native(
     client: &str,
     binary: &str,
-    remove_args: &[&str],
-    add_args: &[&str],
+    add_args: Vec<String>,
     dry_run: bool,
     quiet: bool,
     note: Option<&str>,
 ) -> Result<()> {
     if dry_run {
         println!("Would run:");
-        println!("  {} {}", binary, remove_args.join(" "));
         println!("  {} {}", binary, add_args.join(" "));
         if let Some(note) = note {
             println!();
@@ -158,8 +136,7 @@ fn add_native(
         return Ok(());
     }
 
-    run_external(binary, remove_args, true)?;
-    run_external(binary, add_args, false)?;
+    run_external(binary, &add_args)?;
 
     if !quiet {
         println!("Configured Origin MCP for {client}.");
@@ -170,13 +147,13 @@ fn add_native(
     Ok(())
 }
 
-fn run_external(binary: &str, args: &[&str], ignore_failure: bool) -> Result<()> {
+fn run_external(binary: &str, args: &[String]) -> Result<()> {
     let status = Command::new(binary)
         .args(args)
         .status()
         .with_context(|| format!("could not run `{binary}`. Is it installed and on PATH?"))?;
 
-    if !status.success() && !ignore_failure {
+    if !status.success() {
         bail!(
             "`{} {}` failed with status {}",
             binary,
@@ -192,10 +169,11 @@ fn add_json_config(
     client: &str,
     path: PathBuf,
     section_name: &str,
+    server: &ServerCommand,
     dry_run: bool,
     quiet: bool,
 ) -> Result<()> {
-    let server = server_json();
+    let server = server_json(server);
     let mut config = read_json_config(&path)?;
     let changed = upsert_server(&mut config, section_name, server)?;
 
@@ -210,8 +188,14 @@ fn add_json_config(
     }
 
     if dry_run {
-        println!("Would update {}:", path.display());
-        println!("{}", serde_json::to_string_pretty(&config)?);
+        println!(
+            "Would set `{section_name}.{SERVER_NAME}` in {}:",
+            path.display()
+        );
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&config[section_name][SERVER_NAME])?
+        );
         return Ok(());
     }
 
@@ -268,11 +252,14 @@ fn upsert_server(config: &mut Value, section_name: &str, server: Value) -> Resul
     Ok(true)
 }
 
-fn server_json() -> Value {
-    json!({
-        "command": SERVER_COMMAND,
-        "args": SERVER_ARGS,
-    })
+fn server_json(server: &ServerCommand) -> Value {
+    let mut value = json!({
+        "command": server.command,
+    });
+    if !server.args.is_empty() {
+        value["args"] = json!(server.args);
+    }
+    value
 }
 
 fn backup_file(path: &Path) -> Result<PathBuf> {
@@ -317,4 +304,37 @@ fn home_path(parts: &[&str]) -> Result<PathBuf> {
 fn claude_code_tools_only_note() -> &'static str {
     "Claude Code MCP tools only: remember, recall, context, doctor, and related Origin tools. \
 This does not install Origin plugin skills like /brief, /handoff, /distill, or /init."
+}
+
+fn server_command() -> ServerCommand {
+    if let Some(path) = sibling_origin_mcp() {
+        return ServerCommand {
+            command: path.display().to_string(),
+            args: Vec::new(),
+        };
+    }
+
+    ServerCommand {
+        command: FALLBACK_SERVER_COMMAND.to_string(),
+        args: FALLBACK_SERVER_ARGS
+            .iter()
+            .map(|arg| (*arg).to_string())
+            .collect(),
+    }
+}
+
+fn sibling_origin_mcp() -> Option<PathBuf> {
+    let exe = env::current_exe().ok()?;
+    let dir = exe.parent()?;
+    let candidate = dir.join("origin-mcp");
+    candidate.is_file().then_some(candidate)
+}
+
+fn native_args(prefix: &str, args: &[&str], server: &ServerCommand) -> Vec<String> {
+    let mut out = Vec::with_capacity(1 + args.len() + 1 + server.args.len());
+    out.push(prefix.to_string());
+    out.extend(args.iter().map(|arg| (*arg).to_string()));
+    out.push(server.command.clone());
+    out.extend(server.args.iter().cloned());
+    out
 }

@@ -13,6 +13,8 @@ origin mcp add codex              # or: claude-code, cursor, claude-desktop, vsc
 origin mcp add cursor --dry-run   # preview before editing JSON config
 ```
 
+MCP-only setup gives agents tools for capture, recall, context, doctor, and page distillation. It does not install Claude Code slash skills like `/brief`, `/handoff`, `/distill`, or `/init`; use the Origin plugin for that workflow.
+
 If you only need the raw MCP connector config, add this to your MCP client:
 
 ```json
@@ -26,7 +28,7 @@ If you only need the raw MCP connector config, add this to your MCP client:
 }
 ```
 
-The npm wrapper currently installs a prebuilt macOS Apple Silicon binary from the Origin release. Use `cargo install origin-mcp` if you want to build from source on another supported Rust target.
+The npm wrapper currently installs a prebuilt macOS Apple Silicon binary from the Origin release. Other targets require building from source and are not advertised as supported setup targets yet.
 
 Or install a binary directly:
 

@@ -6,6 +6,16 @@ License: Apache-2.0.
 
 ## Install
 
+Recommended user setup:
+
+```bash
+npx -y @7xuanlu/origin setup
+```
+
+The setup package currently targets macOS Apple Silicon, matching the published release binaries. It installs `origin`, `origin-server`, and `origin-mcp` into `~/.origin/bin/`, configures local memory, registers the daemon with launchd, and verifies status.
+
+For local development:
+
 ```bash
 cargo install --path crates/origin-cli
 ```
@@ -95,6 +105,14 @@ origin mcp add cursor --dry-run
 ```
 
 Supported clients: `claude-code`, `codex`, `gemini`, `cursor`, `claude-desktop`, `vscode`.
+
+When `origin-mcp` is installed next to the `origin` CLI, the generated config points at that binary. Otherwise it falls back to `npx -y origin-mcp`.
+
+Use `--dry-run` to preview JSON config edits before writing them:
+
+```bash
+origin mcp add cursor --dry-run
+```
 
 ### `origin search <query>`
 
