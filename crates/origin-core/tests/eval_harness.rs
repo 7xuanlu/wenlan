@@ -3420,6 +3420,48 @@ fn eval_baselines_dir_override_env_var() {
     });
 }
 
+#[test]
+fn eval_report_schema_v1_round_trips_env_fields() {
+    use origin_core::eval::report::{EvalReport, ReportEnv};
+    let r = EvalReport {
+        env: Some(ReportEnv {
+            fixture_revision: "deadbeef".into(),
+            embedder_model: "BGE-Base-EN-v1.5-Q".into(),
+            embedder_revision: "768d".into(),
+            retrieval_method: "search_memory".into(),
+            llm_provider_class: "on-device".into(),
+            llm_model: "Qwen3-4B-Instruct".into(),
+            judge_model: Some("claude-haiku".into()),
+            origin_version: env!("CARGO_PKG_VERSION").into(),
+            eval_timestamp_unix: 1747800000,
+        }),
+        ..EvalReport::default()
+    };
+    let json = serde_json::to_string(&r).unwrap();
+    let back: EvalReport = serde_json::from_str(&json).unwrap();
+    assert_eq!(back.env.as_ref().unwrap().fixture_revision, "deadbeef");
+    assert_eq!(
+        back.env.as_ref().unwrap().embedder_model,
+        "BGE-Base-EN-v1.5-Q"
+    );
+}
+
+#[test]
+fn eval_report_back_compat_loads_pre_v1_json() {
+    // A realistic pre-v1 EvalReport JSON (all required fields, no "env" key).
+    // Verifies that adding env: Option<ReportEnv> doesn't break old reports.
+    let old = r#"{
+        "fixture_count":10,"file_count":2,"search_mode":"search_memory",
+        "ndcg_at_10":0.5,"ndcg_at_5":0.4,"map_at_5":0.3,"map_at_10":0.35,
+        "mrr":0.6,"recall_at_1":0.2,"recall_at_3":0.4,"recall_at_5":0.7,
+        "hit_rate_at_1":0.2,"hit_rate_at_3":0.4,"precision_at_3":0.3,"precision_at_5":0.25,
+        "neg_above_relevant":1,"total_negatives":5,"negative_leakage":4,
+        "baseline":null,"per_case":[]
+    }"#;
+    let r: origin_core::eval::report::EvalReport = serde_json::from_str(old).unwrap();
+    assert!(r.env.is_none());
+}
+
 /// Re-distill cached LoCoMo per-conversation DBs to populate the new
 /// `concept_sources` join table on DBs built before PR #4.
 ///

@@ -4,7 +4,20 @@
 use serde::Serialize;
 use std::path::Path;
 
-#[derive(Debug, Clone, Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, Serialize, serde::Deserialize, Default)]
+pub struct ReportEnv {
+    pub fixture_revision: String,
+    pub embedder_model: String,
+    pub embedder_revision: String,
+    pub retrieval_method: String,
+    pub llm_provider_class: String,
+    pub llm_model: String,
+    pub judge_model: Option<String>,
+    pub origin_version: String,
+    pub eval_timestamp_unix: i64,
+}
+
+#[derive(Debug, Clone, Serialize, serde::Deserialize, Default)]
 pub struct EvalReport {
     pub fixture_count: usize,
     pub file_count: usize,
@@ -52,6 +65,9 @@ pub struct EvalReport {
     // Comparison
     pub baseline: Option<BaselineComparison>,
     pub per_case: Vec<CaseResult>,
+    // Environment capture (schema v1)
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub env: Option<ReportEnv>,
 }
 
 #[derive(Debug, Clone, Serialize, serde::Deserialize)]
@@ -288,6 +304,7 @@ mod tests {
             temporal_ordering_rate: None,
             baseline: None,
             per_case: vec![],
+            env: None,
         };
 
         report.save_baseline(&path).unwrap();
