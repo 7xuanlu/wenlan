@@ -3762,7 +3762,7 @@ async fn submit_batch_aborts_when_estimate_exceeds_eval_max_usd() {
         .expect_err("should abort due to EVAL_MAX_USD cap");
     std::env::remove_var("EVAL_MAX_USD");
     assert!(
-        format!("{}", err).contains("EVAL_MAX_USD"),
+        err.contains("EVAL_MAX_USD"),
         "error should mention cap: {}",
         err
     );
