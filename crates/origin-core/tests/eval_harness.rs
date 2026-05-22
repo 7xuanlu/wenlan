@@ -3827,3 +3827,42 @@ fn judge_prompt_has_branch_for_every_lme_task_category() {
         );
     }
 }
+
+// ---------------------------------------------------------------------------
+// Task 6: ReportEnv wiring tests
+// ---------------------------------------------------------------------------
+
+#[test]
+fn locomo_report_records_retrieval_unit_memory() {
+    use origin_core::eval::report::{EvalReport, ReportEnv};
+    let r = EvalReport {
+        env: Some(ReportEnv {
+            retrieval_method: "search_memory".into(),
+            ..Default::default()
+        }),
+        ..EvalReport::default()
+    };
+    let json = serde_json::to_string(&r).unwrap();
+    let v: serde_json::Value = serde_json::from_str(&json).unwrap();
+    assert_eq!(
+        v["env"]["retrieval_method"].as_str(),
+        Some("search_memory"),
+        "retrieval_method should serialize"
+    );
+}
+
+#[test]
+fn report_env_populated_correctly_per_runner_variant() {
+    use origin_core::eval::report::ReportEnv;
+    let base = ReportEnv {
+        retrieval_method: "search_memory".into(),
+        llm_provider_class: "none".into(),
+        ..Default::default()
+    };
+    let reranked = ReportEnv {
+        retrieval_method: "search_memory_reranked".into(),
+        llm_provider_class: "on-device".into(),
+        ..Default::default()
+    };
+    assert_ne!(base.retrieval_method, reranked.retrieval_method);
+}

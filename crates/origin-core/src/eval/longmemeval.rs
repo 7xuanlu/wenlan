@@ -262,6 +262,9 @@ pub struct LongMemEvalReport {
     /// Baseline comparison from a previous run.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub baseline: Option<LongMemEvalBaseline>,
+    /// Run environment capture (schema v1).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub env: Option<crate::eval::report::ReportEnv>,
 }
 
 impl LongMemEvalReport {
@@ -484,7 +487,7 @@ pub async fn run_longmemeval_eval(path: &Path) -> Result<LongMemEvalReport, Orig
     // Aggregate
     let per_category = aggregate_by_category(&all_scores);
 
-    Ok(LongMemEvalReport {
+    let mut report = LongMemEvalReport {
         aggregate_ndcg_at_10: avg_field(&all_scores, |s| s.2),
         aggregate_mrr: avg_field(&all_scores, |s| s.3),
         aggregate_recall_at_5: avg_field(&all_scores, |s| s.4),
@@ -493,7 +496,21 @@ pub async fn run_longmemeval_eval(path: &Path) -> Result<LongMemEvalReport, Orig
         total_memories,
         per_category,
         baseline: None,
-    })
+        env: None,
+    };
+    report.env = Some(crate::eval::report::ReportEnv {
+        fixture_revision: crate::eval::fixtures::fixture_revision_hash(path)
+            .unwrap_or_else(|_| "unknown".into()),
+        embedder_model: "BGE-Base-EN-v1.5-Q".into(),
+        embedder_revision: "768d".into(),
+        retrieval_method: "search_memory".into(),
+        llm_provider_class: "none".into(),
+        llm_model: "none".into(),
+        judge_model: None,
+        origin_version: env!("CARGO_PKG_VERSION").into(),
+        eval_timestamp_unix: chrono::Utc::now().timestamp(),
+    });
+    Ok(report)
 }
 
 // ---------------------------------------------------------------------------
@@ -595,7 +612,7 @@ pub async fn run_longmemeval_eval_reranked(
     // Aggregate
     let per_category = aggregate_by_category(&all_scores);
 
-    Ok(LongMemEvalReport {
+    let mut report = LongMemEvalReport {
         aggregate_ndcg_at_10: avg_field(&all_scores, |s| s.2),
         aggregate_mrr: avg_field(&all_scores, |s| s.3),
         aggregate_recall_at_5: avg_field(&all_scores, |s| s.4),
@@ -604,7 +621,21 @@ pub async fn run_longmemeval_eval_reranked(
         total_memories,
         per_category,
         baseline: None,
-    })
+        env: None,
+    };
+    report.env = Some(crate::eval::report::ReportEnv {
+        fixture_revision: crate::eval::fixtures::fixture_revision_hash(path)
+            .unwrap_or_else(|_| "unknown".into()),
+        embedder_model: "BGE-Base-EN-v1.5-Q".into(),
+        embedder_revision: "768d".into(),
+        retrieval_method: "search_memory_reranked".into(),
+        llm_provider_class: llm.kind().into(),
+        llm_model: llm.model_id(),
+        judge_model: None,
+        origin_version: env!("CARGO_PKG_VERSION").into(),
+        eval_timestamp_unix: chrono::Utc::now().timestamp(),
+    });
+    Ok(report)
 }
 
 // ---------------------------------------------------------------------------
@@ -706,7 +737,7 @@ pub async fn run_longmemeval_eval_expanded(
     // Aggregate
     let per_category = aggregate_by_category(&all_scores);
 
-    Ok(LongMemEvalReport {
+    let mut report = LongMemEvalReport {
         aggregate_ndcg_at_10: avg_field(&all_scores, |s| s.2),
         aggregate_mrr: avg_field(&all_scores, |s| s.3),
         aggregate_recall_at_5: avg_field(&all_scores, |s| s.4),
@@ -715,7 +746,21 @@ pub async fn run_longmemeval_eval_expanded(
         total_memories,
         per_category,
         baseline: None,
-    })
+        env: None,
+    };
+    report.env = Some(crate::eval::report::ReportEnv {
+        fixture_revision: crate::eval::fixtures::fixture_revision_hash(path)
+            .unwrap_or_else(|_| "unknown".into()),
+        embedder_model: "BGE-Base-EN-v1.5-Q".into(),
+        embedder_revision: "768d".into(),
+        retrieval_method: "search_memory_expanded".into(),
+        llm_provider_class: llm.kind().into(),
+        llm_model: llm.model_id(),
+        judge_model: None,
+        origin_version: env!("CARGO_PKG_VERSION").into(),
+        eval_timestamp_unix: chrono::Utc::now().timestamp(),
+    });
+    Ok(report)
 }
 
 // ---------------------------------------------------------------------------
@@ -971,6 +1016,7 @@ pub async fn run_longmemeval_eval_with_gate(
         total_memories: total_memories_inserted,
         per_category,
         baseline: None,
+        env: None,
     })
 }
 
@@ -1281,6 +1327,7 @@ mod tests {
                 hit_rate_at_1: 0.40,
             }],
             baseline: None,
+            env: None,
         };
         let text = report.to_terminal();
         assert!(text.contains("LongMemEval Benchmark"));
@@ -1324,6 +1371,7 @@ mod tests {
                 },
             ],
             baseline: None,
+            env: None,
         };
 
         report.save_baseline(&path).unwrap();
@@ -1373,6 +1421,7 @@ mod tests {
                     recall_at_5: 0.650,
                 }],
             }),
+            env: None,
         };
 
         let text = report.to_terminal();

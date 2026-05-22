@@ -110,6 +110,16 @@ pub trait LlmProvider: Send + Sync {
     fn context_size(&self) -> u32 {
         8192
     }
+    /// Short identifier for the provider class (e.g. "on-device", "byok-api-anthropic").
+    /// Used by eval report env capture to label runs without GPU access.
+    fn kind(&self) -> &'static str {
+        "unknown"
+    }
+    /// Model identifier for this provider instance. May be dynamic (user-configured).
+    /// Used by eval report env capture.
+    fn model_id(&self) -> String {
+        "unknown".to_string()
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -705,6 +715,14 @@ impl LlmProvider for OnDeviceProvider {
         self.synthesis_limit
     }
 
+    fn kind(&self) -> &'static str {
+        "on-device"
+    }
+
+    fn model_id(&self) -> String {
+        "qwen3-4b".to_string()
+    }
+
     fn recommended_max_output(&self) -> u32 {
         self.model_max_output
     }
@@ -937,6 +955,14 @@ impl LlmProvider for ApiProvider {
             4_096 // Opus and Sonnet produce high-quality long-form
         }
     }
+
+    fn kind(&self) -> &'static str {
+        "byok-api-anthropic"
+    }
+
+    fn model_id(&self) -> String {
+        self.model.clone()
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1039,6 +1065,14 @@ impl LlmProvider for OpenAICompatibleProvider {
 
     fn backend(&self) -> LlmBackend {
         LlmBackend::Api
+    }
+
+    fn kind(&self) -> &'static str {
+        "byok-api-openai-compat"
+    }
+
+    fn model_id(&self) -> String {
+        self.model.clone()
     }
 }
 
@@ -1144,6 +1178,14 @@ impl LlmProvider for ClaudeCliProvider {
     fn recommended_max_output(&self) -> u32 {
         4096
     }
+
+    fn kind(&self) -> &'static str {
+        "subscription-cli"
+    }
+
+    fn model_id(&self) -> String {
+        self.model.clone()
+    }
 }
 
 /// Mock provider for testing -- returns a fixed response.
@@ -1188,6 +1230,10 @@ impl LlmProvider for MockProvider {
 
     fn backend(&self) -> LlmBackend {
         self.backend
+    }
+
+    fn kind(&self) -> &'static str {
+        "mock"
     }
 }
 
