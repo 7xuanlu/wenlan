@@ -71,6 +71,42 @@ cargo test -p origin-core --test eval_harness save_longmemeval_expanded_baseline
 
 Pre-commit auto-formats Rust and runs Clippy on changed crates. Pre-push runs workspace clippy + library tests.
 
+## Cross-platform
+
+Origin runs on macOS (arm64, x86_64), Linux (x86_64, aarch64; musl), and Windows (x86_64).
+
+| OS | Data dir | Service registration |
+|---|---|---|
+| macOS | `~/Library/Application Support/origin/` | launchd via `~/Library/LaunchAgents/com.origin.server.plist` (user-level) |
+| Linux | `~/.local/share/origin/` (or `$XDG_DATA_HOME/origin`) | systemd user unit at `~/.config/systemd/user/com-origin-server.service`. Enable lingering with `loginctl enable-linger` if you want the service alive after logout. |
+| Windows | `%LOCALAPPDATA%\origin\` | winsw-backed Windows service. First install may require admin elevation. |
+
+The `origin install` and `origin uninstall` commands work identically on all three OSes.
+
+### llama-cpp-2 backend
+
+By default, Linux and Windows builds are CPU-only. macOS keeps Metal. CUDA and Vulkan backends are not enabled in v1; they will land behind opt-in cargo features in a follow-up.
+
+### ORT (ONNX Runtime) on Windows
+
+If you see `Failed to load onnxruntime.dll` or version-mismatch errors on Windows, set `ORT_DYLIB_PATH` to the bundled `onnxruntime.dll` inside the Origin install directory before starting the daemon. The bundled DLL ships in the Windows release zip.
+
+### Daemon bind address
+
+The daemon binds to `127.0.0.1:7878` by default. To expose it on a non-loopback address (e.g., inside Docker), set `ORIGIN_BIND_ADDR=0.0.0.0:7878` in the daemon's environment. The Docker image already sets this.
+
+### Manual Windows verification from macOS
+
+The CI matrix runs `windows-2022` on every PR and is the primary signal. For hands-on testing, run a Windows 11 VM via UTM or Parallels; install MSVC 2022 Build Tools and Rust; then `cargo build --release -p origin-server` and `scripts/smoke-windows.ps1`.
+
+### Linux smoke from macOS
+
+```bash
+bash scripts/smoke-linux.sh
+```
+
+Builds the multi-arch daemon image (linux/arm64 for native Apple Silicon speed via OrbStack / Docker Desktop), starts a container, exercises the HTTP API, asserts responses, tears down. Runtime ~3 minutes after the first build.
+
 ## Local vs CI test responsibilities
 
 Origin runs across several layers. The split is driven by three questions: **(1) Can a hosted runner do this?** (no GPU, no API keys, no cost). **(2) Is it under 60s on cold cache?** **(3) Does it gate correctness or measure quality?** Quality measures never gate.
