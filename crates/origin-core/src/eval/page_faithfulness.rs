@@ -36,6 +36,26 @@ pub struct PageFaithfulnessReport {
     pub latency: Option<crate::eval::latency::LatencySummary>,
 }
 
+#[derive(Debug, Clone, Deserialize)]
+pub struct PageFixture {
+    pub description: String,
+    pub case: Vec<PageFixtureCase>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct PageFixtureCase {
+    pub id: String,
+    pub source_memories: Vec<String>,
+    pub distilled_page_body: String,
+    pub expected_min_faithfulness: f64,
+}
+
+pub fn load_page_fixture(path: &std::path::Path) -> Result<PageFixture, String> {
+    let content = std::fs::read_to_string(path)
+        .map_err(|e| format!("failed to read {}: {e}", path.display()))?;
+    toml::from_str(&content).map_err(|e| format!("failed to parse {}: {e}", path.display()))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -62,5 +82,42 @@ mod tests {
             unfaithful_sentences: vec!["This is hallucinated.".to_string()],
         };
         assert!(c.meets_threshold());
+    }
+
+    #[test]
+    fn load_page_fixture_parses_minimal_toml() {
+        let toml_str = r#"
+            description = "smoke"
+
+            [[case]]
+            id = "c1"
+            source_memories = ["Rust is fast.", "Rust is safe."]
+            distilled_page_body = "Rust is fast and safe."
+            expected_min_faithfulness = 0.8
+        "#;
+        let f: PageFixture = toml::from_str(toml_str).expect("toml parses");
+        assert_eq!(f.case.len(), 1);
+        assert_eq!(f.case[0].source_memories.len(), 2);
+        assert!((f.case[0].expected_min_faithfulness - 0.8).abs() < 1e-9);
+    }
+
+    #[test]
+    fn load_page_fixture_from_path_reads_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("test.toml");
+        std::fs::write(
+            &path,
+            r#"
+            description = "file load"
+            [[case]]
+            id = "c1"
+            source_memories = ["x"]
+            distilled_page_body = "x"
+            expected_min_faithfulness = 0.5
+        "#,
+        )
+        .unwrap();
+        let f = load_page_fixture(&path).expect("loads");
+        assert_eq!(f.description, "file load");
     }
 }
