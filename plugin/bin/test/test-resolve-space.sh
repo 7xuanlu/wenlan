@@ -151,6 +151,12 @@ assert_eq 'whitespace-only ORIGIN_SPACE falls through -> personal/default' \
     'personal	default' \
     "$out"
 
+# --- Test 18: trailing whitespace in TOML values still produces a valid mapping
+out="$(SPACES_FILE="$SCRIPT_DIR/fixtures/spaces-trailing-whitespace.toml" ORIGIN_SPACE='' "$RESOLVER" --cwd /tmp/origin-trail-test/sub 2>/dev/null)"
+assert_eq 'trailing whitespace in TOML still matches -> trail/cwd-config' \
+    'trail	cwd-config' \
+    "$out"
+
 # --- Test 14: cwd outside mappings + default key -> uses cwd-config-default
 out="$(SPACES_FILE="$SCRIPT_DIR/fixtures/spaces-basic.toml" ORIGIN_SPACE='' "$RESOLVER" --cwd /opt/somewhere-unmapped 2>/dev/null)"
 assert_eq 'cwd-config default key -> personal/cwd-config-default' \

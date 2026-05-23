@@ -63,12 +63,14 @@ if [ -n "$cwd" ] && [ -f "$spaces_file" ]; then
         }
         in_block && /^prefix[ \t]*=/ {
             sub(/^prefix[ \t]*=[ \t]*/, "")
-            gsub(/^"|"$/, "")
+            sub(/[ \t]*$/, "")
+            gsub(/"/, "")
             cur_prefix = $0
         }
         in_block && /^space[ \t]*=/ {
             sub(/^space[ \t]*=[ \t]*/, "")
-            gsub(/^"|"$/, "")
+            sub(/[ \t]*$/, "")
+            gsub(/"/, "")
             cur_space = $0
         }
         END {
