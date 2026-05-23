@@ -120,6 +120,13 @@ async fn run_daemon() -> anyhow::Result<()> {
                     e
                 );
             }
+            #[cfg(windows)]
+            {
+                tracing::info!(
+                    "Database at {} (no shortcut created; Windows symlinks require admin).",
+                    data_dir.display()
+                );
+            }
         }
 
         let legacy_pages = home.join("Origin/knowledge");
