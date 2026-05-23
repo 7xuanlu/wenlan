@@ -1,7 +1,13 @@
 #!/usr/bin/env bash
-# Plain-bash test harness for resolve-space.sh.
+# Plain-bash test harness for plugin/bin/resolve-space.sh.
 # Each test sets up env then asserts stdout matches expected.
 # Exits 1 on first failure.
+#
+# Spec: docs/superpowers/specs/2026-05-23-space-ux-gap-design.md
+# Plan: docs/superpowers/plans/2026-05-23-space-plan-a-resolver.md
+#
+# Run from any cwd:
+#   ./plugin/bin/test/test-resolve-space.sh
 
 set -u
 
