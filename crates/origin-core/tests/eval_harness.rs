@@ -3972,7 +3972,7 @@ async fn kg_faithfulness_llm_judge_smoke() {
         eprintln!("SKIP: set EVAL_RUN_LLM_JUDGE=1 to actually fire the Batch API");
         return;
     }
-    use origin_core::eval::kg_faithfulness::{KgExpectedEntity, KgExpectedRelation, KgFixtureCase};
+    use origin_core::eval::kg_faithfulness::{KgExpectedEntity, KgFixtureCase};
     use origin_core::eval::kg_faithfulness_llm::judge_kg_case_with_llm;
     use origin_core::extract::{ExtractedEntity, ExtractedRelation, KgExtractionResult};
 
