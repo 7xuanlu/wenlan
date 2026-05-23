@@ -55,7 +55,6 @@ libsql = { version = "0.9", default-features = false, features = ["core", "repli
 
 # Embeddings & LLM
 fastembed = "5"
-llama-cpp-2 = { version = "0.1", features = ["metal", "sampler"] }
 
 # Utilities
 regex = "1"
