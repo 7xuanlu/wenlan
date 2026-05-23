@@ -220,6 +220,9 @@ fn mcp_add_claude_code_dry_run_explains_tools_only() {
         .stdout(predicate::str::contains("/init"));
 }
 
+// Uses #!/bin/sh fake binaries via write_fake_command and Unix-style PATH
+// separators in cli_with_isolated_runtime. Windows port is follow-up work.
+#[cfg(not(target_os = "windows"))]
 #[test]
 fn mcp_add_native_clients_run_add_without_destructive_remove() {
     let origin_mcp = origin_mcp_sibling_arg();
@@ -260,6 +263,9 @@ fn mcp_add_native_clients_run_add_without_destructive_remove() {
     }
 }
 
+// Path comparison embeds origin-mcp sibling path into JSON; backslash
+// escaping on Windows breaks the assert. Follow-up: normalize the path.
+#[cfg(not(target_os = "windows"))]
 #[test]
 fn mcp_add_cursor_preserves_existing_servers_and_backs_up_changed_origin() {
     let runtime = IsolatedRuntime::new();
@@ -354,6 +360,9 @@ fn mcp_add_json_clients_write_expected_config_shapes() {
     assert!(vscode.contains("origin-mcp"), "{vscode}");
 }
 
+// Depends on cli_with_isolated_runtime PATH override which uses Unix
+// separator; Windows runner picks up wrong PATH and fails earlier.
+#[cfg(not(target_os = "windows"))]
 #[test]
 fn mcp_add_invalid_json_fails_without_modifying_file() {
     let runtime = IsolatedRuntime::new();
