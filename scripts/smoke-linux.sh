@@ -44,7 +44,7 @@ done
 echo "==> Store a memory"
 STORE_RESP=$(curl -sf -X POST "http://127.0.0.1:${PORT}/api/memory/store" \
     -H 'Content-Type: application/json' \
-    -d '{"content":"Smoke test memory from macOS host","memory_type":"note"}')
+    -d '{"content":"Smoke test memory from macOS host"}')
 echo "    $STORE_RESP"
 
 echo "==> Search for it"
