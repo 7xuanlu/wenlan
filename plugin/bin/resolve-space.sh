@@ -20,9 +20,9 @@ topic=""
 
 while [ $# -gt 0 ]; do
     case "$1" in
-        --cwd)   cwd="$2"; shift 2 ;;
-        --arg)   arg="$2"; shift 2 ;;
-        --topic) topic="$2"; shift 2 ;;
+        --cwd)   cwd="${2:-}"; shift $(( $# > 1 ? 2 : 1 )) ;;
+        --arg)   arg="${2:-}"; shift $(( $# > 1 ? 2 : 1 )) ;;
+        --topic) topic="${2:-}"; shift $(( $# > 1 ? 2 : 1 )) ;;
         *)       shift ;;
     esac
 done
