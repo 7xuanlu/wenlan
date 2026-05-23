@@ -24,7 +24,13 @@ pub fn task_judge_prompt(
     ground_truth: &str,
     answer: &str,
 ) -> String {
-    lme_anscheck_prompt(category, question, ground_truth, answer)
+    let base = lme_anscheck_prompt(category, question, ground_truth, answer);
+    format!(
+        "{}\n\nRespond with a single JSON object on the final line:\n\
+         {{\"rubric_scores\": {{\"<criterion>\": 0.0_or_1.0, ...}}, \"verdict_reason\": \"<one sentence>\", \"verdict\": \"correct\" | \"incorrect\" | \"partial\"}}\n\n\
+         The rubric_scores keys must match the criteria listed above. Do not wrap the JSON in markdown fences. Do not add prose before or after the JSON object.",
+        base
+    )
 }
 
 // ===== LLM-as-Judge Types =====
@@ -1210,5 +1216,99 @@ pub async fn judge_with_batch_api(
 pub fn stamp_judge_model(env: &mut Option<crate::eval::report::ReportEnv>, model: &str) {
     if let Some(e) = env.as_mut() {
         e.judge_model = Some(model.to_string());
+    }
+}
+
+// ===== Structured Judge Output =====
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum JudgeVerdict {
+    Correct,
+    Incorrect,
+    Partial,
+}
+
+#[derive(Debug, Clone, serde::Deserialize)]
+pub struct StructuredJudgeOutput {
+    #[serde(default)]
+    pub rubric_scores: std::collections::HashMap<String, f64>,
+    #[serde(default)]
+    pub verdict_reason: String,
+    pub verdict: JudgeVerdict,
+}
+
+/// Parse a judge response into a structured verdict.
+///
+/// Priority order:
+/// 1. Direct JSON object matching `StructuredJudgeOutput`.
+/// 2. Markdown-fenced JSON (```json ... ```).
+/// 3. Legacy bare string ("correct" / "incorrect" / "partial").
+///
+/// Anything else is an error — callers should treat that as a judge failure.
+pub fn parse_judge_output(raw: &str) -> Result<StructuredJudgeOutput, String> {
+    let trimmed = raw.trim();
+    if let Ok(s) = serde_json::from_str::<StructuredJudgeOutput>(trimmed) {
+        return Ok(s);
+    }
+    if let Some(fenced) = strip_json_fence(trimmed) {
+        if let Ok(s) = serde_json::from_str::<StructuredJudgeOutput>(fenced) {
+            return Ok(s);
+        }
+    }
+    let normalized = trimmed.to_ascii_lowercase();
+    let legacy = match normalized.as_str() {
+        s if s.starts_with("correct") => Some(JudgeVerdict::Correct),
+        s if s.starts_with("partial") => Some(JudgeVerdict::Partial),
+        s if s.starts_with("incorrect") => Some(JudgeVerdict::Incorrect),
+        _ => None,
+    };
+    legacy
+        .map(|v| StructuredJudgeOutput {
+            rubric_scores: Default::default(),
+            verdict_reason: String::new(),
+            verdict: v,
+        })
+        .ok_or_else(|| {
+            format!(
+                "unparseable judge output: {}",
+                trimmed.chars().take(80).collect::<String>()
+            )
+        })
+}
+
+fn strip_json_fence(s: &str) -> Option<&str> {
+    let s = s.strip_prefix("```json")?.trim_start();
+    s.strip_suffix("```").map(|inner| inner.trim())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_two_stage_judge_output_correct() {
+        let raw = r#"{
+            "rubric_scores": {"factual_match": 1.0, "covers_all_required_facts": 1.0},
+            "verdict_reason": "answer matches gold on every required fact",
+            "verdict": "correct"
+        }"#;
+        let parsed = parse_judge_output(raw).expect("valid JSON");
+        assert_eq!(parsed.verdict, JudgeVerdict::Correct);
+        assert_eq!(parsed.rubric_scores.get("factual_match"), Some(&1.0));
+    }
+
+    #[test]
+    fn parse_two_stage_judge_output_falls_back_to_legacy_string() {
+        let parsed = parse_judge_output("correct").expect("legacy ok");
+        assert_eq!(parsed.verdict, JudgeVerdict::Correct);
+        assert!(parsed.rubric_scores.is_empty());
+    }
+
+    #[test]
+    fn parse_two_stage_judge_output_extracts_fenced_json() {
+        let raw = "```json\n{\"rubric_scores\":{},\"verdict_reason\":\"x\",\"verdict\":\"incorrect\"}\n```";
+        let parsed = parse_judge_output(raw).expect("fenced ok");
+        assert_eq!(parsed.verdict, JudgeVerdict::Incorrect);
     }
 }
