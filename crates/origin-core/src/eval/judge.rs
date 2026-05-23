@@ -24,13 +24,7 @@ pub fn task_judge_prompt(
     ground_truth: &str,
     answer: &str,
 ) -> String {
-    let base = lme_anscheck_prompt(category, question, ground_truth, answer);
-    format!(
-        "{}\n\nRespond with a single JSON object on the final line:\n\
-         {{\"rubric_scores\": {{\"<criterion>\": 0.0_or_1.0, ...}}, \"verdict_reason\": \"<one sentence>\", \"verdict\": \"correct\" | \"incorrect\" | \"partial\"}}\n\n\
-         The rubric_scores keys must match the criteria listed above. Do not wrap the JSON in markdown fences. Do not add prose before or after the JSON object.",
-        base
-    )
+    lme_anscheck_prompt(category, question, ground_truth, answer)
 }
 
 // ===== LLM-as-Judge Types =====
