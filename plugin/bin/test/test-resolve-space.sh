@@ -114,5 +114,24 @@ assert_eq 'empty arg does NOT override -> career/cwd-config' \
     'career	cwd-config' \
     "$out"
 
+# --- Test 13: full precedence ladder
+# Set everything; arg should win.
+out="$(SPACES_FILE="$SCRIPT_DIR/fixtures/spaces-basic.toml" ORIGIN_SPACE='env-space' "$RESOLVER" --cwd /tmp/origin-test/career/foo --arg arg-space --topic topic-space 2>/dev/null)"
+assert_eq 'precedence: arg beats env beats config -> arg-space/arg' \
+    'arg-space	arg' \
+    "$out"
+
+# Remove arg; env should win.
+out="$(SPACES_FILE="$SCRIPT_DIR/fixtures/spaces-basic.toml" ORIGIN_SPACE='env-space' "$RESOLVER" --cwd /tmp/origin-test/career/foo --topic topic-space 2>/dev/null)"
+assert_eq 'precedence: env beats config -> env-space/env' \
+    'env-space	env' \
+    "$out"
+
+# Remove env; cwd-config should win.
+out="$(SPACES_FILE="$SCRIPT_DIR/fixtures/spaces-basic.toml" ORIGIN_SPACE='' "$RESOLVER" --cwd /tmp/origin-test/career/foo --topic topic-space 2>/dev/null)"
+assert_eq 'precedence: cwd-config beats topic -> career/cwd-config' \
+    'career	cwd-config' \
+    "$out"
+
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]
