@@ -33,9 +33,11 @@ try {
             -Body '{"content":"Windows smoke test memory","memory_type":"lesson"}'
         Write-Host "    store ok: $($store | ConvertTo-Json -Compress -Depth 5)"
     } catch {
-        $reader = New-Object System.IO.StreamReader($_.Exception.Response.GetResponseStream())
-        $body = $reader.ReadToEnd()
-        throw "store failed: status=$($_.Exception.Response.StatusCode) body=$body"
+        # ErrorDetails.Message works on both pwsh 5 (WebException) and pwsh 7
+        # (HttpResponseMessage); pwsh 7 dropped GetResponseStream().
+        $body = $_.ErrorDetails.Message
+        $status = $_.Exception.Response.StatusCode.value__
+        throw "store failed: status=$status body=$body"
     }
 
     Write-Host "==> Search"
