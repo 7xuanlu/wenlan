@@ -116,12 +116,12 @@ jobs:
             os: macos-14
             archive: tar.gz
             artifact_name: origin-darwin-x64
-          - target: aarch64-unknown-linux-musl
+          - target: aarch64-unknown-linux-gnu
             os: ubuntu-24.04
             archive: tar.gz
             artifact_name: origin-linux-arm64
             use_cross: true
-          - target: x86_64-unknown-linux-musl
+          - target: x86_64-unknown-linux-gnu
             os: ubuntu-24.04
             archive: tar.gz
             artifact_name: origin-linux-x64

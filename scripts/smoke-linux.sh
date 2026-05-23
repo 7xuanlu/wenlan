@@ -5,7 +5,13 @@ IMAGE_TAG="${IMAGE_TAG:-origin-server:smoke}"
 CONTAINER="${CONTAINER:-origin-smoke}"
 PORT="${PORT:-17878}"
 DATA_DIR="$(mktemp -d -t origin-smoke.XXXXXX)"
-PLATFORM="${PLATFORM:-linux/arm64}"
+# Default to the host arch: linux/arm64 on Apple Silicon devs (fast via OrbStack
+# / Docker Desktop), linux/amd64 on CI (ubuntu-24.04 is amd64; arm64 emulation
+# via QEMU adds 15-30 min). Override with PLATFORM= env var.
+case "$(uname -m)" in
+    arm64|aarch64) PLATFORM="${PLATFORM:-linux/arm64}" ;;
+    *)             PLATFORM="${PLATFORM:-linux/amd64}" ;;
+esac
 
 cleanup() {
     docker rm -f "$CONTAINER" >/dev/null 2>&1 || true

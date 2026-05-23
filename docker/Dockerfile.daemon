@@ -1,20 +1,25 @@
 # syntax=docker/dockerfile:1.7
 #
-# origin-server daemon image (Linux, static musl).
+# origin-server daemon image (Linux, glibc).
 #
-# Build:
+# Build (multi-arch via buildx):
 #   docker buildx build --platform linux/amd64,linux/arm64 \
 #     -f docker/Dockerfile.daemon -t origin-server:dev .
 #
 # Run:
 #   docker run --rm -p 7878:7878 -v origin-data:/data origin-server:dev
+#
+# Why glibc (not musl): the ONNX Runtime crate (`ort` 2.x, pulled in via
+# `fastembed`) does not publish prebuilt musl binaries. Building ort against
+# musl requires vendoring + static linking, which is out of scope. Glibc keeps
+# the build simple. Runtime image is distroless/cc which ships glibc + ld.so.
 
 ARG RUST_VERSION=1
-ARG TARGET_TRIPLE=x86_64-unknown-linux-musl
 
-FROM rust:${RUST_VERSION}-alpine AS chef
-RUN apk add --no-cache musl-dev cmake make perl pkgconfig openssl-dev openssl-libs-static \
-    git bash clang lld linux-headers
+FROM rust:${RUST_VERSION}-bookworm AS chef
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        cmake pkg-config libssl-dev clang lld \
+    && rm -rf /var/lib/apt/lists/*
 RUN cargo install cargo-chef --locked
 WORKDIR /src
 
@@ -23,17 +28,19 @@ COPY . .
 RUN cargo chef prepare --recipe-path recipe.json
 
 FROM chef AS builder
-ARG TARGET_TRIPLE
 COPY --from=planner /src/recipe.json recipe.json
-RUN rustup target add ${TARGET_TRIPLE}
-RUN cargo chef cook --release --target ${TARGET_TRIPLE} --recipe-path recipe.json -p origin-server
+RUN cargo chef cook --release --recipe-path recipe.json -p origin-server
 COPY . .
-RUN cargo build --release --target ${TARGET_TRIPLE} -p origin-server
-RUN strip target/${TARGET_TRIPLE}/release/origin-server
+RUN cargo build --release -p origin-server
+RUN strip target/release/origin-server
 
-FROM gcr.io/distroless/static-debian12:nonroot AS runtime
-ARG TARGET_TRIPLE
-COPY --from=builder /src/target/${TARGET_TRIPLE}/release/origin-server /usr/local/bin/origin-server
+FROM gcr.io/distroless/cc-debian12:nonroot AS runtime
+COPY --from=builder /src/target/release/origin-server /usr/local/bin/origin-server
+# Copy the ONNX Runtime shared library that `ort`'s build script placed next
+# to the binary via the `copy-dylibs` feature. Without this, the daemon
+# crashes on first embedding call with `libonnxruntime.so` not found.
+COPY --from=builder /src/target/release/libonnxruntime.so* /usr/local/lib/
+ENV LD_LIBRARY_PATH=/usr/local/lib
 USER nonroot
 EXPOSE 7878
 # ORIGIN_BIND_ADDR makes the daemon listen on all interfaces so host port
