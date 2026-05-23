@@ -8,15 +8,6 @@
 #
 # Run:
 #   docker run --rm -p 7878:7878 -v origin-data:/data origin-server:dev
-#
-# NOTE: the daemon currently binds to 127.0.0.1:$ORIGIN_PORT (hard-coded in
-# crates/origin-server/src/main.rs). Inside a container that means it is
-# unreachable from the host even with `-p 7878:7878`. Exposing the daemon
-# externally requires either:
-#   (a) adding an `ORIGIN_BIND_ADDR` env var to the daemon so we can set
-#       0.0.0.0:$ORIGIN_PORT here, or
-#   (b) running the container with `--network=host` (Linux only).
-# Tracked as a follow-up to this Dockerfile; see Task 12 report.
 
 ARG RUST_VERSION=1
 ARG TARGET_TRIPLE=x86_64-unknown-linux-musl
@@ -45,8 +36,9 @@ ARG TARGET_TRIPLE
 COPY --from=builder /src/target/${TARGET_TRIPLE}/release/origin-server /usr/local/bin/origin-server
 USER nonroot
 EXPOSE 7878
-# Daemon honors ORIGIN_PORT and ORIGIN_DATA_DIR. It does NOT honor a bind
-# address override yet (see note at top of file).
+# ORIGIN_BIND_ADDR makes the daemon listen on all interfaces so host port
+# publishing (-p 7878:7878) works. Falls back to 127.0.0.1 outside Docker.
+ENV ORIGIN_BIND_ADDR=0.0.0.0:7878
 ENV ORIGIN_PORT=7878
 ENV ORIGIN_DATA_DIR=/data
 VOLUME ["/data"]

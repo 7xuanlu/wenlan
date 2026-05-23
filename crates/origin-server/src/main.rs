@@ -3,6 +3,42 @@
 
 mod cmd_backfill;
 
+/// Resolve the bind address. Honors the `ORIGIN_BIND_ADDR` env var when set
+/// (e.g. inside Docker where the daemon must listen on `0.0.0.0`). Falls back
+/// to the localhost-only address used by the macOS/native install path.
+fn resolve_bind_addr(port: u16) -> String {
+    std::env::var("ORIGIN_BIND_ADDR")
+        .ok()
+        .unwrap_or_else(|| format!("127.0.0.1:{}", port))
+}
+
+#[cfg(test)]
+mod bind_addr_tests {
+    use super::*;
+    use std::sync::{Mutex, OnceLock};
+
+    static TEST_ENV_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+
+    fn env_lock() -> &'static Mutex<()> {
+        TEST_ENV_LOCK.get_or_init(|| Mutex::new(()))
+    }
+
+    #[test]
+    fn default_when_env_unset() {
+        let _guard = env_lock().lock().unwrap();
+        std::env::remove_var("ORIGIN_BIND_ADDR");
+        assert_eq!(resolve_bind_addr(7878), "127.0.0.1:7878");
+    }
+
+    #[test]
+    fn honors_env_when_set() {
+        let _guard = env_lock().lock().unwrap();
+        std::env::set_var("ORIGIN_BIND_ADDR", "0.0.0.0:9090");
+        assert_eq!(resolve_bind_addr(7878), "0.0.0.0:9090");
+        std::env::remove_var("ORIGIN_BIND_ADDR");
+    }
+}
+
 // All other modules live in the library target (src/lib.rs) so that
 // integration tests in tests/ can reference them as origin_server::<mod>.
 use origin_server::{
@@ -501,7 +537,7 @@ async fn run_daemon() -> anyhow::Result<()> {
     let app = router::build_router(shared);
 
     // Bind
-    let addr = format!("127.0.0.1:{}", port);
+    let addr = resolve_bind_addr(port);
     let listener = match tokio::net::TcpListener::bind(&addr).await {
         Ok(l) => {
             tracing::info!("Listening on http://{}", addr);
