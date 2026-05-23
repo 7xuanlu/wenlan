@@ -3930,3 +3930,33 @@ async fn run_kg_faithfulness_smoke() {
     let _ = fixture_dir;
     let _ = run_kg_faithfulness_eval;
 }
+
+#[tokio::test]
+#[ignore]
+async fn run_page_faithfulness_smoke() {
+    use origin_core::eval::page_faithfulness::run_page_faithfulness_eval;
+
+    let fixture_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap()
+        .join("app/eval/page_fixtures");
+    if !fixture_dir.exists() {
+        eprintln!("SKIP: page_fixtures dir not found");
+        return;
+    }
+    let report = run_page_faithfulness_eval(&fixture_dir);
+    eprintln!("\n=== Page-Faithfulness ===");
+    eprintln!(
+        "Mean faithfulness: {:.3} across {} cases ({} below threshold)",
+        report.mean_faithfulness, report.case_count, report.below_threshold_count
+    );
+    for c in &report.per_case {
+        let marker = if c.meets_threshold() { "OK" } else { "FAIL" };
+        eprintln!(
+            "  [{}] {} {:.2} (expected >= {:.2})",
+            marker, c.case_id, c.faithfulness, c.expected_min
+        );
+    }
+}

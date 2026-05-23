@@ -102,6 +102,76 @@ pub fn load_page_fixture(path: &std::path::Path) -> Result<PageFixture, String> 
     toml::from_str(&content).map_err(|e| format!("failed to parse {}: {e}", path.display()))
 }
 
+pub fn score_case(fixture_path: &str, case: &PageFixtureCase) -> PageCaseResult {
+    let sources_joined = case.source_memories.join("\n");
+    let sentences = split_sentences(&case.distilled_page_body);
+    let total = sentences.len();
+    let mut faithful_count = 0usize;
+    let mut unfaithful_sentences: Vec<String> = Vec::new();
+    for s in &sentences {
+        if score_sentence_faithful(s, &sources_joined) {
+            faithful_count += 1;
+        } else {
+            unfaithful_sentences.push(s.trim().to_string());
+        }
+    }
+    let faithfulness = if total == 0 {
+        0.0
+    } else {
+        faithful_count as f64 / total as f64
+    };
+    PageCaseResult {
+        fixture_path: fixture_path.to_string(),
+        case_id: case.id.clone(),
+        sentence_count: total,
+        faithful_count,
+        faithfulness,
+        expected_min: case.expected_min_faithfulness,
+        unfaithful_sentences,
+    }
+}
+
+/// Run the full page-faithfulness benchmark over every fixture under `fixture_dir`.
+/// Skips gracefully if `fixture_dir` doesn't exist.
+pub fn run_page_faithfulness_eval(fixture_dir: &std::path::Path) -> PageFaithfulnessReport {
+    let mut report = PageFaithfulnessReport::default();
+    if !fixture_dir.exists() {
+        return report;
+    }
+    let fixtures: Vec<std::path::PathBuf> = std::fs::read_dir(fixture_dir)
+        .ok()
+        .map(|rd| {
+            rd.filter_map(|e| e.ok().map(|e| e.path()))
+                .filter(|p| p.extension().and_then(|s| s.to_str()) == Some("toml"))
+                .collect()
+        })
+        .unwrap_or_default();
+    for path in &fixtures {
+        let fx = match load_page_fixture(path) {
+            Ok(f) => f,
+            Err(e) => {
+                eprintln!("[page_faith] skip {}: {}", path.display(), e);
+                continue;
+            }
+        };
+        report.fixture_count += 1;
+        let path_str = path.to_string_lossy().to_string();
+        for case in &fx.case {
+            let r = score_case(&path_str, case);
+            if !r.meets_threshold() {
+                report.below_threshold_count += 1;
+            }
+            report.per_case.push(r);
+            report.case_count += 1;
+        }
+    }
+    if !report.per_case.is_empty() {
+        let n = report.per_case.len() as f64;
+        report.mean_faithfulness = report.per_case.iter().map(|c| c.faithfulness).sum::<f64>() / n;
+    }
+    report
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -201,5 +271,41 @@ mod tests {
     fn score_sentence_faithful_empty_sentence_is_faithful() {
         assert!(score_sentence_faithful(".", "anything"));
         assert!(score_sentence_faithful("a is the", "anything"));
+    }
+
+    #[test]
+    fn score_case_perfectly_faithful_page_scores_1() {
+        let case = PageFixtureCase {
+            id: "c1".into(),
+            source_memories: vec![
+                "Rust is a systems programming language.".into(),
+                "Memory safety is provided by Rust.".into(),
+            ],
+            distilled_page_body: "Rust is a systems language. Memory safety is provided.".into(),
+            expected_min_faithfulness: 0.8,
+        };
+        let r = score_case("test.toml", &case);
+        assert!((r.faithfulness - 1.0).abs() < 1e-9);
+        assert_eq!(r.faithful_count, 2);
+        assert_eq!(r.sentence_count, 2);
+        assert!(r.unfaithful_sentences.is_empty());
+        assert!(r.meets_threshold());
+    }
+
+    #[test]
+    fn score_case_hallucinated_page_flags_unfaithful_sentences() {
+        let case = PageFixtureCase {
+            id: "c2".into(),
+            source_memories: vec!["Rust is a systems programming language.".into()],
+            distilled_page_body: "Rust is a systems language. Python is a scripting language."
+                .into(),
+            expected_min_faithfulness: 0.9,
+        };
+        let r = score_case("test.toml", &case);
+        assert!((r.faithfulness - 0.5).abs() < 1e-9);
+        assert_eq!(r.faithful_count, 1);
+        assert_eq!(r.unfaithful_sentences.len(), 1);
+        assert!(r.unfaithful_sentences[0].contains("Python"));
+        assert!(!r.meets_threshold());
     }
 }
