@@ -59,10 +59,12 @@ impl IsolatedRuntime {
             .join("Library/LaunchAgents/com.origin.server.plist")
     }
 
+    #[cfg(target_os = "macos")]
     fn config_path(&self) -> PathBuf {
         self.data.path().join("config.json")
     }
 
+    #[cfg(target_os = "macos")]
     fn root_exists(&self) -> bool {
         self.root.path().exists()
     }
