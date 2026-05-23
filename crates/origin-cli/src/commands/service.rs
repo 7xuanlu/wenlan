@@ -156,6 +156,27 @@ fn build_launchd_plist(
 }
 
 pub fn install() -> Result<()> {
+    #[cfg(target_os = "windows")]
+    {
+        // origin-server is a plain console app; it does not speak the Windows
+        // Service Control Protocol (no SetServiceStatus / control handler).
+        // sc.exe install succeeds but `sc start` times out at 30s (error 1053:
+        // "service did not respond"). Until origin-server is wrapped with the
+        // `windows-service` crate or via Task Scheduler, the `install`
+        // subcommand is not supported on Windows.
+        anyhow::bail!(
+            "`origin install` is not yet supported on Windows.\n\
+             Run the daemon manually instead:\n\
+             \n  Set-Location <install-dir>\n  $env:ORIGIN_BIND_ADDR = \"127.0.0.1:7878\"\n  Start-Process .\\origin-server.exe -WindowStyle Hidden\n\
+             \n\
+             To auto-start at logon, register a per-user Task Scheduler task:\n\
+             \n  schtasks /create /tn OriginServer /sc onlogon /tr \"<install-dir>\\origin-server.exe\"\n\
+             \n\
+             Tracked: cross-platform Windows service support."
+        );
+    }
+
+    #[cfg_attr(target_os = "windows", allow(unreachable_code))]
     let label_value = label()?;
     let program = current_server_path()?;
     let m = manager()?;
@@ -217,6 +238,18 @@ pub fn install() -> Result<()> {
 }
 
 pub fn uninstall() -> Result<()> {
+    #[cfg(target_os = "windows")]
+    {
+        // `origin install` is gated off on Windows; `uninstall` is a no-op for
+        // the matching reason. If a previous build left a stale sc.exe entry,
+        // remove it manually: `sc.exe delete com.origin.server`.
+        anyhow::bail!(
+            "`origin uninstall` is not yet supported on Windows. \
+             If a stale service exists: sc.exe delete com.origin.server"
+        );
+    }
+
+    #[cfg_attr(target_os = "windows", allow(unreachable_code))]
     let label_value = label()?;
     let m = manager()?;
     let _ = m.stop(ServiceStopCtx {

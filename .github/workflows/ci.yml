@@ -234,40 +234,32 @@ jobs:
         run: |
           cargo build --release -p origin-server
           ./scripts/smoke-windows.ps1
-      # E2E install on Windows via sc.exe. The GHA runner is admin by default
-      # so this exercises the real install code path. Real users on Windows
-      # need an elevated terminal; documented in AGENTS.md.
-      - name: E2E origin install (Windows sc.exe, requires admin)
+      # `origin install` on Windows currently exits non-zero with guidance
+      # toward manual run / Task Scheduler. Verify the contract: install
+      # MUST fail with a clear message, not crash, not register a broken
+      # service. Follow-up: implement Windows Service Control Protocol via
+      # the windows-service crate so sc.exe start no longer times out.
+      - name: E2E origin install contract (Windows; expects clean error)
         if: matrix.os == 'windows-2022'
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
-          cargo build -p origin -p origin-server
-          $stage = Join-Path $env:TEMP "origin-stage"
-          if (Test-Path $stage) { Remove-Item -Recurse -Force $stage }
-          New-Item -ItemType Directory -Path $stage | Out-Null
-          Copy-Item target\debug\origin.exe $stage\
-          Copy-Item target\debug\origin-server.exe $stage\
-          try {
-            & $stage\origin.exe install
-            $svc = & sc.exe query com.origin.server 2>&1
-            if ($LASTEXITCODE -ne 0) { throw "service not registered after install: $svc" }
-            Write-Host "    service registered: $svc"
-            $healthy = $false
-            for ($i = 0; $i -lt 30; $i++) {
-              try {
-                $r = Invoke-WebRequest -Uri http://127.0.0.1:7878/api/health -UseBasicParsing -TimeoutSec 1
-                if ($r.StatusCode -eq 200) { $healthy = $true; break }
-              } catch { }
-              Start-Sleep -Seconds 1
-            }
-            if (-not $healthy) { throw "daemon did not become healthy" }
-            Write-Host "    Windows install/health/uninstall round-trip PASS"
+          cargo build -p origin
+          $out = & target\debug\origin.exe install 2>&1
+          $code = $LASTEXITCODE
+          Write-Host "exit code: $code"
+          Write-Host "output: $out"
+          if ($code -eq 0) { throw "install unexpectedly succeeded on Windows" }
+          if ("$out" -notmatch "not yet supported on Windows") {
+            throw "install did not surface the documented Windows guidance"
           }
-          finally {
-            try { & $stage\origin.exe uninstall } catch { Write-Host "uninstall failed: $_" }
-            if (Test-Path $stage) { Remove-Item -Recurse -Force $stage -ErrorAction SilentlyContinue }
+          # Confirm no stale sc.exe service entry left behind.
+          $svc = & sc.exe query com.origin.server 2>&1
+          if ($LASTEXITCODE -eq 0) {
+            & sc.exe delete com.origin.server | Out-Null
+            throw "install must not register a service before erroring; cleaned up stale entry"
           }
+          Write-Host "    Windows install error-contract PASS"
 
   # Aggregate gate for branch protection. `if: always()` lets docs-only PRs
   # (where fmt/lint/test skipped via detect-changes) report success instead of
