@@ -31,5 +31,11 @@ assert_eq 'bare invocation -> personal/default' \
     'personal	default' \
     "$out"
 
+# --- Test 2: --topic falls back to topic when no higher layer hits
+out="$(ORIGIN_SPACE='' "$RESOLVER" --cwd /tmp --topic 'career-research' 2>/dev/null)"
+assert_eq 'topic fallback -> career-research/topic' \
+    'career-research	topic' \
+    "$out"
+
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]

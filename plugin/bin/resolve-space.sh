@@ -27,5 +27,11 @@ while [ $# -gt 0 ]; do
     esac
 done
 
+# Layer 5: topic
+if [ -n "$topic" ]; then
+    printf '%s\ttopic\n' "$topic"
+    exit 0
+fi
+
 # Layer 6: default
 printf 'personal\tdefault\n'
