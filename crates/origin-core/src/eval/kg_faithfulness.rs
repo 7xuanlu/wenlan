@@ -64,6 +64,56 @@ pub struct KgExpectedRelation {
     pub relation_type: String,
 }
 
+pub fn check_entity_faithful_string(name: &str, source: &str) -> bool {
+    let needle = name.to_ascii_lowercase();
+    let hay = source.to_ascii_lowercase();
+    hay.contains(&needle)
+}
+
+pub fn check_relation_faithful_string(
+    rel: &KgExpectedRelation,
+    source: &str,
+    canonical: &[&str],
+) -> bool {
+    check_entity_faithful_string(&rel.from, source)
+        && check_entity_faithful_string(&rel.to, source)
+        && canonical
+            .iter()
+            .any(|c| c.eq_ignore_ascii_case(&rel.relation_type))
+}
+
+pub fn f1(precision: f64, recall: f64) -> f64 {
+    if precision == 0.0 && recall == 0.0 {
+        return 0.0;
+    }
+    2.0 * precision * recall / (precision + recall)
+}
+
+/// Canonical relation vocabulary fallback. No public constant found in
+/// extract.rs or prompts/ — using the 18-type spec list directly.
+pub fn canonical_relation_types() -> Vec<&'static str> {
+    vec![
+        "is_a",
+        "part_of",
+        "related_to",
+        "located_in",
+        "works_at",
+        "knows",
+        "uses",
+        "depends_on",
+        "guarantees",
+        "implements",
+        "extends",
+        "replaces",
+        "supersedes",
+        "owns",
+        "created",
+        "decided",
+        "prefers",
+        "lives_in",
+    ]
+}
+
 pub fn load_kg_fixture(path: &std::path::Path) -> Result<KgFixture, String> {
     let content = std::fs::read_to_string(path)
         .map_err(|e| format!("failed to read {}: {e}", path.display()))?;
@@ -140,5 +190,53 @@ mod tests {
         .unwrap();
         let f = load_kg_fixture(&path).expect("loads");
         assert_eq!(f.description, "file load");
+    }
+
+    #[test]
+    fn check_entity_faithful_string_match_lowercase() {
+        let src = "Rust is a systems programming language.";
+        assert!(check_entity_faithful_string("Rust", src));
+        assert!(check_entity_faithful_string("rust", src));
+        assert!(check_entity_faithful_string("systems programming", src));
+        assert!(!check_entity_faithful_string("Python", src));
+    }
+
+    #[test]
+    fn check_relation_faithful_requires_both_endpoints_and_canonical_type() {
+        let src = "Rust guarantees memory safety.";
+        let canonical = canonical_relation_types();
+        let r_ok = KgExpectedRelation {
+            from: "Rust".into(),
+            to: "memory safety".into(),
+            relation_type: "guarantees".into(),
+        };
+        let r_bad_endpoint = KgExpectedRelation {
+            from: "Python".into(),
+            to: "memory safety".into(),
+            relation_type: "guarantees".into(),
+        };
+        let r_noncanonical_type = KgExpectedRelation {
+            from: "Rust".into(),
+            to: "memory safety".into(),
+            relation_type: "totally_made_up_type".into(),
+        };
+        assert!(check_relation_faithful_string(&r_ok, src, &canonical));
+        assert!(!check_relation_faithful_string(
+            &r_bad_endpoint,
+            src,
+            &canonical
+        ));
+        assert!(!check_relation_faithful_string(
+            &r_noncanonical_type,
+            src,
+            &canonical
+        ));
+    }
+
+    #[test]
+    fn f1_handles_edge_cases() {
+        assert_eq!(f1(0.0, 0.0), 0.0);
+        assert!((f1(1.0, 1.0) - 1.0).abs() < 1e-9);
+        assert!((f1(0.5, 0.5) - 0.5).abs() < 1e-9);
     }
 }
