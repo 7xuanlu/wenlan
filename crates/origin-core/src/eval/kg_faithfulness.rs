@@ -37,6 +37,39 @@ pub struct KgFaithfulnessReport {
     pub latency: Option<crate::eval::latency::LatencySummary>,
 }
 
+#[derive(Debug, Clone, Deserialize)]
+pub struct KgFixture {
+    pub description: String,
+    pub case: Vec<KgFixtureCase>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct KgFixtureCase {
+    pub id: String,
+    pub source_text: String,
+    pub expected_entities: Vec<KgExpectedEntity>,
+    pub expected_relations: Vec<KgExpectedRelation>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct KgExpectedEntity {
+    pub name: String,
+    pub kind: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct KgExpectedRelation {
+    pub from: String,
+    pub to: String,
+    pub relation_type: String,
+}
+
+pub fn load_kg_fixture(path: &std::path::Path) -> Result<KgFixture, String> {
+    let content = std::fs::read_to_string(path)
+        .map_err(|e| format!("failed to read {}: {e}", path.display()))?;
+    toml::from_str(&content).map_err(|e| format!("failed to parse {}: {e}", path.display()))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -65,5 +98,47 @@ mod tests {
             unfaithful_relations: vec![],
         };
         assert!((c.entity_f1 - 0.686).abs() < 0.01);
+    }
+
+    #[test]
+    fn load_kg_fixture_parses_minimal_toml() {
+        let toml_str = r#"
+            description = "smoke"
+
+            [[case]]
+            id = "c1"
+            source_text = "Rust guarantees memory safety."
+            expected_entities = [
+                { name = "Rust", kind = "language" },
+                { name = "memory safety", kind = "concept" },
+            ]
+            expected_relations = [
+                { from = "Rust", to = "memory safety", relation_type = "guarantees" },
+            ]
+        "#;
+        let f: KgFixture = toml::from_str(toml_str).expect("toml parses");
+        assert_eq!(f.case.len(), 1);
+        assert_eq!(f.case[0].expected_entities.len(), 2);
+        assert_eq!(f.case[0].expected_relations[0].relation_type, "guarantees");
+    }
+
+    #[test]
+    fn load_kg_fixture_from_path_reads_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("test.toml");
+        std::fs::write(
+            &path,
+            r#"
+            description = "file load"
+            [[case]]
+            id = "c1"
+            source_text = "X."
+            expected_entities = []
+            expected_relations = []
+        "#,
+        )
+        .unwrap();
+        let f = load_kg_fixture(&path).expect("loads");
+        assert_eq!(f.description, "file load");
     }
 }
