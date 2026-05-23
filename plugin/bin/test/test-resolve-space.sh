@@ -49,5 +49,34 @@ assert_eq 'cwd-repo inside git -> basename/cwd-repo' \
 cd - >/dev/null
 rm -rf "$tmpdir"
 
+# --- Test 4: cwd inside a configured prefix returns the mapped space
+out="$(SPACES_FILE="$SCRIPT_DIR/fixtures/spaces-basic.toml" ORIGIN_SPACE='' "$RESOLVER" --cwd /tmp/origin-test/career/foo 2>/dev/null)"
+assert_eq 'cwd-config prefix match -> career/cwd-config' \
+    'career	cwd-config' \
+    "$out"
+
+# --- Test 5: cwd matching two prefixes returns the longest match
+mkdir -p /tmp/origin-test/extra
+cat > /tmp/origin-test/spaces-two.toml <<'EOF'
+[[mapping]]
+prefix = "/tmp/origin-test"
+space  = "outer"
+
+[[mapping]]
+prefix = "/tmp/origin-test/extra"
+space  = "inner"
+EOF
+out="$(SPACES_FILE=/tmp/origin-test/spaces-two.toml ORIGIN_SPACE='' "$RESOLVER" --cwd /tmp/origin-test/extra/leaf 2>/dev/null)"
+assert_eq 'cwd-config longest prefix wins -> inner/cwd-config' \
+    'inner	cwd-config' \
+    "$out"
+rm -f /tmp/origin-test/spaces-two.toml
+
+# --- Test 6: cwd outside any mapping falls through to next layer (default here)
+out="$(SPACES_FILE="$SCRIPT_DIR/fixtures/spaces-basic.toml" ORIGIN_SPACE='' "$RESOLVER" --cwd /opt/somewhere-unmapped 2>/dev/null)"
+assert_eq 'cwd-config no match -> personal/default' \
+    'personal	default' \
+    "$out"
+
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]
