@@ -114,6 +114,182 @@ pub fn canonical_relation_types() -> Vec<&'static str> {
     ]
 }
 
+pub fn score_case(
+    fixture_path: &str,
+    case: &KgFixtureCase,
+    extracted: &crate::extract::KgExtractionResult,
+) -> KgCaseResult {
+    let canonical = canonical_relation_types();
+
+    // Entity precision: extracted entities that are faithful to source.
+    let mut faithful_extracted = 0usize;
+    let mut unfaithful_entities: Vec<String> = Vec::new();
+    for e in &extracted.entities {
+        if check_entity_faithful_string(&e.name, &case.source_text) {
+            faithful_extracted += 1;
+        } else {
+            unfaithful_entities.push(e.name.clone());
+        }
+    }
+    let entity_precision = if extracted.entities.is_empty() {
+        0.0
+    } else {
+        faithful_extracted as f64 / extracted.entities.len() as f64
+    };
+
+    // Entity recall: expected entities present in extraction.
+    let extracted_names: std::collections::HashSet<String> = extracted
+        .entities
+        .iter()
+        .map(|e| e.name.to_ascii_lowercase())
+        .collect();
+    let recalled_count = case
+        .expected_entities
+        .iter()
+        .filter(|e| extracted_names.contains(&e.name.to_ascii_lowercase()))
+        .count();
+    let entity_recall = if case.expected_entities.is_empty() {
+        0.0
+    } else {
+        recalled_count as f64 / case.expected_entities.len() as f64
+    };
+
+    // Relation precision: extracted relations faithful to source + canonical type.
+    let mut faithful_extracted_rels = 0usize;
+    let mut unfaithful_relations: Vec<String> = Vec::new();
+    for r in &extracted.relations {
+        let as_expected = KgExpectedRelation {
+            from: r.from.clone(),
+            to: r.to.clone(),
+            relation_type: r.relation_type.clone(),
+        };
+        if check_relation_faithful_string(&as_expected, &case.source_text, &canonical) {
+            faithful_extracted_rels += 1;
+        } else {
+            unfaithful_relations.push(format!("{} --{}-> {}", r.from, r.relation_type, r.to));
+        }
+    }
+    let relation_precision = if extracted.relations.is_empty() {
+        0.0
+    } else {
+        faithful_extracted_rels as f64 / extracted.relations.len() as f64
+    };
+
+    // Relation recall: expected relations present in extraction.
+    let extracted_triples: std::collections::HashSet<(String, String, String)> = extracted
+        .relations
+        .iter()
+        .map(|r| {
+            (
+                r.from.to_ascii_lowercase(),
+                r.to.to_ascii_lowercase(),
+                r.relation_type.to_ascii_lowercase(),
+            )
+        })
+        .collect();
+    let recalled_rel_count = case
+        .expected_relations
+        .iter()
+        .filter(|er| {
+            extracted_triples.contains(&(
+                er.from.to_ascii_lowercase(),
+                er.to.to_ascii_lowercase(),
+                er.relation_type.to_ascii_lowercase(),
+            ))
+        })
+        .count();
+    let relation_recall = if case.expected_relations.is_empty() {
+        0.0
+    } else {
+        recalled_rel_count as f64 / case.expected_relations.len() as f64
+    };
+
+    KgCaseResult {
+        fixture_path: fixture_path.to_string(),
+        case_id: case.id.clone(),
+        entity_precision,
+        entity_recall,
+        entity_f1: f1(entity_precision, entity_recall),
+        relation_precision,
+        relation_recall,
+        relation_f1: f1(relation_precision, relation_recall),
+        unfaithful_entities,
+        unfaithful_relations,
+    }
+}
+
+/// Run the full KG-faithfulness benchmark over every fixture under `fixture_dir`.
+pub async fn run_kg_faithfulness_eval(
+    extractor: &crate::engine::LlmEngine,
+    fixture_dir: &std::path::Path,
+) -> KgFaithfulnessReport {
+    let mut report = KgFaithfulnessReport::default();
+    if !fixture_dir.exists() {
+        return report;
+    }
+    let fixtures: Vec<std::path::PathBuf> = std::fs::read_dir(fixture_dir)
+        .ok()
+        .map(|rd| {
+            rd.filter_map(|e| e.ok().map(|e| e.path()))
+                .filter(|p| p.extension().and_then(|s| s.to_str()) == Some("toml"))
+                .collect()
+        })
+        .unwrap_or_default();
+    for path in &fixtures {
+        let fx = match load_kg_fixture(path) {
+            Ok(f) => f,
+            Err(e) => {
+                eprintln!("[kg_faith] skip {}: {}", path.display(), e);
+                continue;
+            }
+        };
+        report.fixture_count += 1;
+        let memories: Vec<(usize, String)> = fx
+            .case
+            .iter()
+            .enumerate()
+            .map(|(i, c)| (i, c.source_text.clone()))
+            .collect();
+        let extracted = extractor.extract_kg_batch(&memories);
+        for (case_idx, case) in fx.case.iter().enumerate() {
+            let ext = extracted.iter().find(|r| r.index == case_idx);
+            let Some(ext) = ext else {
+                continue;
+            };
+            let path_str = path.to_string_lossy().to_string();
+            let case_result = score_case(&path_str, case, ext);
+            report.per_case.push(case_result);
+            report.case_count += 1;
+        }
+    }
+    // Macro-averages.
+    if !report.per_case.is_empty() {
+        let n = report.per_case.len() as f64;
+        report.entity_precision = report
+            .per_case
+            .iter()
+            .map(|c| c.entity_precision)
+            .sum::<f64>()
+            / n;
+        report.entity_recall = report.per_case.iter().map(|c| c.entity_recall).sum::<f64>() / n;
+        report.entity_f1 = report.per_case.iter().map(|c| c.entity_f1).sum::<f64>() / n;
+        report.relation_precision = report
+            .per_case
+            .iter()
+            .map(|c| c.relation_precision)
+            .sum::<f64>()
+            / n;
+        report.relation_recall = report
+            .per_case
+            .iter()
+            .map(|c| c.relation_recall)
+            .sum::<f64>()
+            / n;
+        report.relation_f1 = report.per_case.iter().map(|c| c.relation_f1).sum::<f64>() / n;
+    }
+    report
+}
+
 pub fn load_kg_fixture(path: &std::path::Path) -> Result<KgFixture, String> {
     let content = std::fs::read_to_string(path)
         .map_err(|e| format!("failed to read {}: {e}", path.display()))?;
@@ -238,5 +414,85 @@ mod tests {
         assert_eq!(f1(0.0, 0.0), 0.0);
         assert!((f1(1.0, 1.0) - 1.0).abs() < 1e-9);
         assert!((f1(0.5, 0.5) - 0.5).abs() < 1e-9);
+    }
+
+    #[test]
+    fn score_case_perfect_extraction_yields_f1_1() {
+        let case = KgFixtureCase {
+            id: "c1".into(),
+            source_text: "Rust guarantees memory safety.".into(),
+            expected_entities: vec![
+                KgExpectedEntity {
+                    name: "Rust".into(),
+                    kind: "language".into(),
+                },
+                KgExpectedEntity {
+                    name: "memory safety".into(),
+                    kind: "concept".into(),
+                },
+            ],
+            expected_relations: vec![KgExpectedRelation {
+                from: "Rust".into(),
+                to: "memory safety".into(),
+                relation_type: "guarantees".into(),
+            }],
+        };
+        let extracted = crate::extract::KgExtractionResult {
+            index: 0,
+            entities: vec![
+                crate::extract::ExtractedEntity {
+                    name: "Rust".into(),
+                    entity_type: "language".into(),
+                },
+                crate::extract::ExtractedEntity {
+                    name: "memory safety".into(),
+                    entity_type: "concept".into(),
+                },
+            ],
+            observations: vec![],
+            relations: vec![crate::extract::ExtractedRelation {
+                from: "Rust".into(),
+                to: "memory safety".into(),
+                relation_type: "guarantees".into(),
+                confidence: None,
+                explanation: None,
+            }],
+        };
+        let r = score_case("test.toml", &case, &extracted);
+        assert!((r.entity_f1 - 1.0).abs() < 1e-9);
+        assert!((r.relation_f1 - 1.0).abs() < 1e-9);
+        assert!(r.unfaithful_entities.is_empty());
+    }
+
+    #[test]
+    fn score_case_hallucinated_entity_lowers_precision() {
+        let case = KgFixtureCase {
+            id: "c2".into(),
+            source_text: "Rust is fast.".into(),
+            expected_entities: vec![KgExpectedEntity {
+                name: "Rust".into(),
+                kind: "language".into(),
+            }],
+            expected_relations: vec![],
+        };
+        let extracted = crate::extract::KgExtractionResult {
+            index: 0,
+            entities: vec![
+                crate::extract::ExtractedEntity {
+                    name: "Rust".into(),
+                    entity_type: "language".into(),
+                },
+                crate::extract::ExtractedEntity {
+                    name: "Python".into(),
+                    entity_type: "language".into(),
+                },
+            ],
+            observations: vec![],
+            relations: vec![],
+        };
+        let r = score_case("test.toml", &case, &extracted);
+        assert!((r.entity_precision - 0.5).abs() < 1e-9);
+        assert!((r.entity_recall - 1.0).abs() < 1e-9);
+        assert_eq!(r.unfaithful_entities, vec!["Python".to_string()]);
     }
 }

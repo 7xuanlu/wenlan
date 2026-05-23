@@ -3904,3 +3904,29 @@ fn baseline_filename_falls_back_when_env_missing() {
     let r = EvalReport::default();
     assert_eq!(r.baseline_filename("foo"), "foo.json");
 }
+
+#[tokio::test]
+#[ignore]
+async fn run_kg_faithfulness_smoke() {
+    use origin_core::eval::kg_faithfulness::run_kg_faithfulness_eval;
+
+    let fixture_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap()
+        .join("app/eval/kg_fixtures");
+    if !fixture_dir.exists() {
+        eprintln!("SKIP: kg_fixtures dir not found");
+        return;
+    }
+
+    // IMPORTANT: eval_shared_extractor does NOT exist today (only eval_shared_embedder).
+    // KgExtractor is also not a standalone type — extract_kg_batch lives on LlmEngine.
+    // Constructing LlmEngine requires a model file on disk and Metal GPU access, both
+    // unavailable in CI. Ship the SKIP placeholder; Task 5 lands fixtures and follow-up
+    // work wires the extractor properly.
+    eprintln!("SKIP: extractor construction TBD (see plan Task 4 Step 6 note)");
+    let _ = fixture_dir;
+    let _ = run_kg_faithfulness_eval;
+}
