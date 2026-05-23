@@ -29,7 +29,8 @@ struct Cli {
     /// Override the data directory (for isolated dev/demo runs).
     /// When set, the daemon reads/writes the DB at `<dir>/memorydb/origin_memory.db`
     /// and config at `<dir>/config.json` instead of the default
-    /// `~/Library/Application Support/origin/`. Also honored via `ORIGIN_DATA_DIR` env.
+    /// the platform data directory under `dirs::data_local_dir().join("origin/")`.
+    /// macOS: `~/Library/Application Support/origin/`. Linux: `~/.local/share/origin/`. Windows: `%LOCALAPPDATA%\origin\`. Also honored via `ORIGIN_DATA_DIR` env.
     #[arg(long, global = true)]
     data_dir: Option<std::path::PathBuf>,
 
@@ -94,8 +95,8 @@ async fn run_daemon() -> anyhow::Result<()> {
     // Consolidate user-facing assets under ~/.origin/.
     // - Ensure ~/.origin/{pages, sessions, sessions/_status} exist
     // - Symlink ~/.origin/db -> <data_dir> (cosmetic alias; DB stays at
-    //   ~/Library/Application Support/origin/memorydb/ to honor macOS conventions
-    //   and avoid moving live SQLite/WAL files mid-flight).
+    //   the platform data directory (resolved via `dirs::data_local_dir()` per OS)
+    //   under `origin/memorydb/`, to avoid moving live SQLite/WAL files mid-flight).
     // - Migrate legacy ~/Origin/knowledge/ md files into ~/.origin/pages/ if
     //   the new dir is empty. Never deletes the old dir; user can clean up
     //   manually after verifying.
