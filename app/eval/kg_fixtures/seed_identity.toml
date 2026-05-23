@@ -1,0 +1,25 @@
+# app/eval/kg_fixtures/seed_identity.toml
+description = "Identity / preference / agent-profile statements. Tests extraction over first-person + role statements."
+
+[[case]]
+id = "identity_001"
+source_text = "I work as a backend engineer at Acme Corp, primarily on Rust microservices."
+expected_entities = [
+    { name = "Acme Corp", kind = "organization" },
+    { name = "backend engineer", kind = "role" },
+    { name = "Rust", kind = "language" },
+]
+expected_relations = [
+    { from = "backend engineer", to = "Acme Corp", relation_type = "works_at" },
+]
+
+[[case]]
+id = "identity_002"
+source_text = "Prefer TypeScript over JavaScript for any project with more than 1000 lines of code."
+expected_entities = [
+    { name = "TypeScript", kind = "language" },
+    { name = "JavaScript", kind = "language" },
+]
+expected_relations = [
+    { from = "TypeScript", to = "JavaScript", relation_type = "prefers" },
+]

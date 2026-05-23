@@ -1,0 +1,36 @@
+# app/eval/kg_fixtures/seed_facts.toml
+description = "Factual claims about technical concepts. Tests entity + relation extraction over neutral declarative prose."
+
+[[case]]
+id = "fact_rust_001"
+source_text = "Rust is a systems programming language that guarantees memory safety without garbage collection."
+expected_entities = [
+    { name = "Rust", kind = "language" },
+    { name = "memory safety", kind = "concept" },
+    { name = "garbage collection", kind = "concept" },
+]
+expected_relations = [
+    { from = "Rust", to = "memory safety", relation_type = "guarantees" },
+]
+
+[[case]]
+id = "fact_tokio_001"
+source_text = "Tokio is an async runtime for Rust that provides task scheduling and IO primitives."
+expected_entities = [
+    { name = "Tokio", kind = "library" },
+    { name = "Rust", kind = "language" },
+]
+expected_relations = [
+    { from = "Tokio", to = "Rust", relation_type = "is_a" },
+]
+
+[[case]]
+id = "fact_libsql_001"
+source_text = "Origin uses libSQL for vector storage, knowledge graph tables, and FTS5 full-text search."
+expected_entities = [
+    { name = "Origin", kind = "project" },
+    { name = "libSQL", kind = "library" },
+]
+expected_relations = [
+    { from = "Origin", to = "libSQL", relation_type = "uses" },
+]
