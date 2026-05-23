@@ -255,11 +255,16 @@ jobs:
           }
           # Confirm no stale sc.exe service entry left behind.
           $svc = & sc.exe query com.origin.server 2>&1
-          if ($LASTEXITCODE -eq 0) {
+          $svcExit = $LASTEXITCODE
+          if ($svcExit -eq 0) {
             & sc.exe delete com.origin.server | Out-Null
             throw "install must not register a service before erroring; cleaned up stale entry"
           }
           Write-Host "    Windows install error-contract PASS"
+          # sc.exe query returns 1060 when service not found; that leaks as the
+          # script's exit code under $ErrorActionPreference=Stop. Reset.
+          $global:LASTEXITCODE = 0
+          exit 0
 
   # Aggregate gate for branch protection. `if: always()` lets docs-only PRs
   # (where fmt/lint/test skipped via detect-changes) report success instead of
