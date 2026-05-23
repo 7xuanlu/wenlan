@@ -1,0 +1,18 @@
+# app/eval/page_fixtures/seed_hallucinations.toml
+description = "Pages with extra claims not in source memories. The scorer SHOULD flag these as below threshold."
+
+[[case]]
+id = "page_halluc_001"
+source_memories = [
+    "Rust is a systems programming language.",
+]
+distilled_page_body = "Rust is a systems programming language. Rust was created by Mozilla. The first stable release was 1.0 in 2015."
+expected_min_faithfulness = 0.99
+
+[[case]]
+id = "page_halluc_002"
+source_memories = [
+    "Origin uses libSQL for storage.",
+]
+distilled_page_body = "Origin uses libSQL for storage. libSQL is a fork of SQLite maintained by Turso. The database file lives at a configurable path."
+expected_min_faithfulness = 0.99

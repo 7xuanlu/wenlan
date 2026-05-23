@@ -339,12 +339,6 @@ pub async fn handle_chat_context(
         .filter(|r| r.score >= threshold)
         .collect();
 
-    let graph_observations: Vec<String> = filtered_search
-        .iter()
-        .filter(|r| r.source == "knowledge_graph")
-        .map(|r| format!("[{}] {}", r.title, r.content))
-        .collect();
-
     // Source IDs from search results — used to gate page relevance.
     // A page is only included if its source memories overlap with the
     // memories that search_memory returned for this query.
@@ -473,14 +467,6 @@ pub async fn handle_chat_context(
         sections.push(sec);
     }
 
-    if !graph_observations.is_empty() {
-        let mut sec = String::from("## Knowledge Graph\n");
-        for item in &graph_observations {
-            sec.push_str(&format!("- {}\n", item));
-        }
-        sections.push(sec);
-    }
-
     if !filtered_search.is_empty() {
         let mut sec = String::from("## Relevant Memories\n");
         for r in &filtered_search {
@@ -582,7 +568,7 @@ pub async fn handle_chat_context(
             pages: page_results,
             decisions,
             relevant_memories: filtered_search,
-            graph_context: graph_observations,
+            graph_context: Vec::new(),
         },
         took_ms,
         token_estimates,

@@ -1,0 +1,21 @@
+# app/eval/page_fixtures/seed_decisions.toml
+description = "Faithful distillations of decision-shaped memories."
+
+[[case]]
+id = "page_decision_001"
+source_memories = [
+    "Decided to use BGE-Base-EN-v1.5-Q as the embedding model.",
+    "BGE-Base produces 768-dimension quantized output.",
+    "BGE-Base runs well on M-series Macs with low latency.",
+]
+distilled_page_body = "The embedding model is BGE-Base-EN-v1.5-Q, producing 768-dimension quantized embeddings. BGE-Base runs efficiently on M-series Macs."
+expected_min_faithfulness = 0.85
+
+[[case]]
+id = "page_decision_002"
+source_memories = [
+    "Apache-2.0 was chosen for origin-core to allow downstream consumption.",
+    "The desktop app uses AGPL-3.0 to prevent closed-source forks.",
+]
+distilled_page_body = "Origin licenses origin-core under Apache-2.0 to permit downstream consumption. The desktop app uses AGPL-3.0 to prevent closed-source forks."
+expected_min_faithfulness = 0.85
