@@ -115,8 +115,12 @@ jobs:
       - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
         with:
           shared-key: test
-      - name: Run workspace lib tests
+      - name: Workspace lib tests (Linux/Windows)
+        if: matrix.os != 'macos-14'
         run: cargo test --workspace --lib
+      - name: Workspace lib tests (macOS, single-threaded)
+        if: matrix.os == 'macos-14'
+        run: cargo test --workspace --lib -- --test-threads=1
       # Linux-only extras: nextest-driven integration tests, fastembed cache,
       # eval canary on main, and the Docker daemon smoke test. These match
       # the pre-matrix behavior so we don't lose coverage on PR runs.
