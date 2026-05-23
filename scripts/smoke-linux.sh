@@ -20,7 +20,13 @@ cleanup() {
 trap cleanup EXIT
 
 echo "==> Building ${IMAGE_TAG} for ${PLATFORM}"
+# Optional buildx GHA cache (CI sets BUILDX_CACHE_FROM/_TO). Outside CI the
+# variables are empty and the build runs without remote cache.
+CACHE_ARGS=()
+[ -n "${BUILDX_CACHE_FROM:-}" ] && CACHE_ARGS+=(--cache-from "$BUILDX_CACHE_FROM")
+[ -n "${BUILDX_CACHE_TO:-}" ] && CACHE_ARGS+=(--cache-to "$BUILDX_CACHE_TO")
 docker buildx build --platform "$PLATFORM" --load \
+    "${CACHE_ARGS[@]}" \
     -f docker/Dockerfile.daemon -t "$IMAGE_TAG" .
 
 echo "==> Starting container on port ${PORT}, data ${DATA_DIR}"
