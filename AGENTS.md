@@ -350,6 +350,16 @@ The `origin` binary — a thin reqwest-based CLI for the daemon's HTTP API. Subc
 - **Metal/ggml on macOS Tahoe 26.x**: `ggml_metal_init` may fail even though native Metal works. The daemon auto-degrades and continues without LLM. Not a code bug. Check for competing GPU processes: `pgrep -la origin`.
 - **Dev and prod share data by default**: Both use port 7878 and `~/Library/Application Support/origin/`. For isolated testing, override explicitly: `ORIGIN_PORT=7879 ORIGIN_DATA_DIR=/tmp/origin-test cargo run -p origin-server`.
 
+### Worktree cleanup after squash-merge
+
+GitHub squash-merge bundles all PR commits into one new commit on `main` with a fresh SHA. The original commits on the feature branch keep their old SHAs and remain in the local repo + worktree even though their content has shipped. This creates three traps:
+
+- **`git cherry main feature/<name>` lies.** It compares commit SHAs (not patch content) and will mark all squashed commits as "unmerged" (`+` prefix). The branch may be fully merged content-wise. Verify by reading the squash commit body (`git log -1 --format=%B <squash-sha>`); the body lists each original PR commit message. Alternatively, grep `main`'s log for keywords or file paths the branch added.
+- **Stale worktrees accumulate.** `.worktrees/<name>/` is not auto-removed when a PR merges. After confirming all content is in `main`, run from the main repo root: `git worktree remove --force .worktrees/<name>` then `git branch -D <branch>` (force `-D` is needed because `git` thinks it's unmerged for the same SHA reason) then `git worktree prune`.
+- **`.gitignored` per-checkout artifacts.** Files under gitignored paths (`app/eval/baselines/`, `.fastembed_cache/`, build outputs) live per-worktree. Removing a worktree removes its private copies. If a worktree happened to be the only host of some large gitignored artifact (eval baseline DBs, downloaded models), back it up to the canonical shared location first (e.g. `~/.cache/origin-eval/` via `scripts/migrate-eval-cache.sh`) before deleting the worktree.
+
+Run this hygiene pass roughly once a week or whenever `git worktree list` exceeds ~5 entries. Stale worktree paths waste disk + confuse "is this work merged?" investigations.
+
 ### Misc
 - Log filter default is `warn` — add modules explicitly for `info` logs (e.g., `origin_core::db=info`, `origin_server=info`)
 - All local data stored in `~/Library/Application Support/origin/` — MemoryDB, config, activities, tags
