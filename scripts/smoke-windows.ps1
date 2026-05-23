@@ -27,9 +27,16 @@ try {
     if (-not $healthy) { throw "daemon did not become healthy" }
 
     Write-Host "==> Store a memory"
-    $store = Invoke-RestMethod -Uri "http://127.0.0.1:$Port/api/memory/store" -Method POST `
-        -ContentType "application/json" `
-        -Body '{"content":"Windows smoke test memory"}'
+    try {
+        $store = Invoke-RestMethod -Uri "http://127.0.0.1:$Port/api/memory/store" -Method POST `
+            -ContentType "application/json" `
+            -Body '{"content":"Windows smoke test memory","memory_type":"lesson"}'
+        Write-Host "    store ok: $($store | ConvertTo-Json -Compress -Depth 5)"
+    } catch {
+        $reader = New-Object System.IO.StreamReader($_.Exception.Response.GetResponseStream())
+        $body = $reader.ReadToEnd()
+        throw "store failed: status=$($_.Exception.Response.StatusCode) body=$body"
+    }
 
     Write-Host "==> Search"
     $search = Invoke-RestMethod -Uri "http://127.0.0.1:$Port/api/memory/search" -Method POST `
@@ -43,5 +50,11 @@ try {
 }
 finally {
     Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue
-    Remove-Item -Recurse -Force $DataDir
+    # SQLite WAL -shm file can stay locked briefly after daemon exit on Windows.
+    # Retry deletion a few times before giving up; don't fail the smoke on cleanup.
+    for ($i = 0; $i -lt 5; $i++) {
+        Remove-Item -Recurse -Force $DataDir -ErrorAction SilentlyContinue
+        if (-not (Test-Path $DataDir)) { break }
+        Start-Sleep -Milliseconds 500
+    }
 }
