@@ -27,6 +27,12 @@ while [ $# -gt 0 ]; do
     esac
 done
 
+# Layer 2: ORIGIN_SPACE env var (per-shell pin)
+if [ -n "${ORIGIN_SPACE:-}" ]; then
+    printf '%s\tenv\n' "$ORIGIN_SPACE"
+    exit 0
+fi
+
 # Layer 3: cwd-config TOML mapping
 # Reads file at $SPACES_FILE (override), else ~/.origin/spaces.toml.
 # Parses [[mapping]] blocks; longest prefix matching $cwd wins.

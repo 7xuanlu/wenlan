@@ -90,5 +90,17 @@ assert_eq 'missing TOML file -> falls through to default' \
     'personal	default' \
     "$out"
 
+# --- Test 9: ORIGIN_SPACE env var overrides cwd-config + cwd-repo
+out="$(SPACES_FILE="$SCRIPT_DIR/fixtures/spaces-basic.toml" ORIGIN_SPACE='health' "$RESOLVER" --cwd /tmp/origin-test/career/foo 2>/dev/null)"
+assert_eq 'env overrides cwd-config -> health/env' \
+    'health	env' \
+    "$out"
+
+# --- Test 10: empty ORIGIN_SPACE is treated as unset (does not override)
+out="$(SPACES_FILE="$SCRIPT_DIR/fixtures/spaces-basic.toml" ORIGIN_SPACE='' "$RESOLVER" --cwd /tmp/origin-test/career/foo 2>/dev/null)"
+assert_eq 'empty env does NOT override -> career/cwd-config' \
+    'career	cwd-config' \
+    "$out"
+
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]
