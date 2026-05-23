@@ -4,7 +4,6 @@
 use assert_cmd::Command;
 use predicates::prelude::*;
 use std::fs;
-use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use tempfile::TempDir;
 
@@ -41,6 +40,7 @@ impl IsolatedRuntime {
         let home = tempfile::tempdir_in(root.path()).expect("temp home");
         let data = tempfile::tempdir_in(root.path()).expect("temp data");
         let fake_bin = tempfile::tempdir_in(root.path()).expect("temp fake bin");
+        #[cfg(target_os = "macos")]
         write_fake_launchctl(fake_bin.path());
         ensure_sibling_origin_server();
         ensure_sibling_origin_mcp();
@@ -52,6 +52,7 @@ impl IsolatedRuntime {
         }
     }
 
+    #[cfg(target_os = "macos")]
     fn plist_path(&self) -> PathBuf {
         self.home
             .path()
@@ -67,6 +68,7 @@ impl IsolatedRuntime {
     }
 }
 
+#[cfg(target_os = "macos")]
 fn write_fake_launchctl(fake_bin: &Path) {
     let path = fake_bin.join("launchctl");
     fs::write(
@@ -74,11 +76,15 @@ fn write_fake_launchctl(fake_bin: &Path) {
         "#!/bin/sh\ncase \"$1\" in\n  list) exit 0 ;;\n  load|unload) echo \"fake launchctl $1 $2\"; exit 0 ;;\n  *) echo \"fake launchctl $@\"; exit 0 ;;\nesac\n",
     )
     .expect("write fake launchctl");
-    let mut perms = fs::metadata(&path)
-        .expect("fake launchctl metadata")
-        .permissions();
-    perms.set_mode(0o755);
-    fs::set_permissions(path, perms).expect("chmod fake launchctl");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut perms = fs::metadata(&path)
+            .expect("fake launchctl metadata")
+            .permissions();
+        perms.set_mode(0o755);
+        fs::set_permissions(path, perms).expect("chmod fake launchctl");
+    }
 }
 
 fn write_fake_command(fake_bin: &Path, name: &str) {
@@ -88,11 +94,15 @@ fn write_fake_command(fake_bin: &Path, name: &str) {
         "#!/bin/sh\nprintf '%s' \"${0##*/}\" >> \"$ORIGIN_TEST_CLI_LOG\"\nfor arg in \"$@\"; do printf '\\t%s' \"$arg\" >> \"$ORIGIN_TEST_CLI_LOG\"; done\nprintf '\\n' >> \"$ORIGIN_TEST_CLI_LOG\"\nexit 0\n",
     )
     .expect("write fake command");
-    let mut perms = fs::metadata(&path)
-        .expect("fake command metadata")
-        .permissions();
-    perms.set_mode(0o755);
-    fs::set_permissions(path, perms).expect("chmod fake command");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut perms = fs::metadata(&path)
+            .expect("fake command metadata")
+            .permissions();
+        perms.set_mode(0o755);
+        fs::set_permissions(path, perms).expect("chmod fake command");
+    }
 }
 
 fn ensure_sibling_origin_server() {
@@ -103,11 +113,15 @@ fn ensure_sibling_origin_server() {
         .join("origin-server");
     if !server.exists() {
         fs::write(&server, "#!/bin/sh\nexit 0\n").expect("write fake origin-server sibling");
-        let mut perms = fs::metadata(&server)
-            .expect("fake origin-server metadata")
-            .permissions();
-        perms.set_mode(0o755);
-        fs::set_permissions(server, perms).expect("chmod fake origin-server");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mut perms = fs::metadata(&server)
+                .expect("fake origin-server metadata")
+                .permissions();
+            perms.set_mode(0o755);
+            fs::set_permissions(server, perms).expect("chmod fake origin-server");
+        }
     }
 }
 
@@ -115,11 +129,15 @@ fn ensure_sibling_origin_mcp() {
     let path = origin_mcp_sibling();
     if !path.exists() {
         fs::write(&path, "#!/bin/sh\nexit 0\n").expect("write fake origin-mcp sibling");
-        let mut perms = fs::metadata(&path)
-            .expect("fake origin-mcp metadata")
-            .permissions();
-        perms.set_mode(0o755);
-        fs::set_permissions(path, perms).expect("chmod fake origin-mcp");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mut perms = fs::metadata(&path)
+                .expect("fake origin-mcp metadata")
+                .permissions();
+            perms.set_mode(0o755);
+            fs::set_permissions(path, perms).expect("chmod fake origin-mcp");
+        }
     }
 }
 
@@ -304,6 +322,7 @@ fn mcp_add_cursor_dry_run_prints_only_origin_block() {
     assert!(unchanged.contains("SECRET_TOKEN"), "{unchanged}");
 }
 
+#[cfg(target_os = "macos")]
 #[test]
 fn mcp_add_json_clients_write_expected_config_shapes() {
     let runtime = IsolatedRuntime::new();
@@ -425,6 +444,7 @@ fn doctor_uses_origin_host_for_health_probe() {
         ));
 }
 
+#[cfg(target_os = "macos")]
 #[test]
 fn setup_install_status_uninstall_roundtrip_isolated() {
     let runtime = IsolatedRuntime::new();
