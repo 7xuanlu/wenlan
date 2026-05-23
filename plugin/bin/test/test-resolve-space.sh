@@ -78,10 +78,10 @@ assert_eq 'cwd-config longest prefix wins -> inner/cwd-config' \
     "$out"
 rm -f /tmp/origin-test/spaces-two.toml
 
-# --- Test 6: cwd outside any mapping falls through to next layer (default here)
+# --- Test 6: cwd outside any mapping + default key in TOML -> uses cwd-config-default
 out="$(SPACES_FILE="$SCRIPT_DIR/fixtures/spaces-basic.toml" ORIGIN_SPACE='' "$RESOLVER" --cwd /opt/somewhere-unmapped 2>/dev/null)"
-assert_eq 'cwd-config no match -> personal/default' \
-    'personal	default' \
+assert_eq 'cwd-config no match with default key -> personal/cwd-config-default' \
+    'personal	cwd-config-default' \
     "$out"
 
 # --- Test 7: malformed TOML falls through to next layer; never crashes
@@ -137,6 +137,18 @@ assert_eq 'precedence: env beats config -> env-space/env' \
 out="$(SPACES_FILE="$SCRIPT_DIR/fixtures/spaces-basic.toml" ORIGIN_SPACE='' "$RESOLVER" --cwd /tmp/origin-test/career/foo --topic topic-space 2>/dev/null)"
 assert_eq 'precedence: cwd-config beats topic -> career/cwd-config' \
     'career	cwd-config' \
+    "$out"
+
+# --- Test 14: cwd outside mappings + default key -> uses cwd-config-default
+out="$(SPACES_FILE="$SCRIPT_DIR/fixtures/spaces-basic.toml" ORIGIN_SPACE='' "$RESOLVER" --cwd /opt/somewhere-unmapped 2>/dev/null)"
+assert_eq 'cwd-config default key -> personal/cwd-config-default' \
+    'personal	cwd-config-default' \
+    "$out"
+
+# --- Test 15: no-default fixture without mapping match -> falls through to layer-6 default
+out="$(SPACES_FILE="$SCRIPT_DIR/fixtures/spaces-no-default.toml" ORIGIN_SPACE='' "$RESOLVER" --cwd /opt/no-match-here 2>/dev/null)"
+assert_eq 'no-default fixture no match -> personal/default' \
+    'personal	default' \
     "$out"
 
 printf '\n%d passed, %d failed\n' "$pass" "$fail"

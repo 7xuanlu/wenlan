@@ -2,14 +2,16 @@
 # resolve-space.sh — Resolve the active Origin space from the 6-layer chain.
 #
 # Layers (highest to lowest priority):
-#   1. --arg <space>           explicit override from skill caller
-#   2. ORIGIN_SPACE env var    per-shell pin
-#   3. ~/.origin/spaces.toml   cwd-prefix mapping
-#   4. cwd repo basename       git rev-parse --show-toplevel
-#   5. --topic <string>        conversation topic fallback
-#   6. "personal"              hard default
+#   1. --arg <space>                explicit override from skill caller
+#   2. ORIGIN_SPACE env var         per-shell pin
+#   3. ~/.origin/spaces.toml        cwd-prefix mapping (longest prefix wins)
+#      3.5. top-level `default` key  applies when no [[mapping]] matched
+#   4. cwd repo basename            git rev-parse --show-toplevel
+#   5. --topic <string>             conversation topic fallback
+#   6. "personal"                   hard default
 #
 # Output: "<space>\t<source-layer>" on stdout.
+# Source-layer values: arg | env | cwd-config | cwd-config-default | cwd-repo | topic | default
 # Exit code: 0 on success (always succeeds; layer 6 is the floor).
 
 set -u
@@ -92,8 +94,23 @@ if [ -n "$cwd" ] && [ -f "$spaces_file" ]; then
     done < "$tmp_pairs"
     rm -f "$tmp_pairs"
 
+    # Look for a top-level `default = "..."` key.
+    # `default` is not a valid key inside [[mapping]] blocks (only prefix/space are),
+    # so we can match it without tracking block state.
+    toml_default="$(awk '
+        /^default[ \t]*=/ {
+            sub(/^default[ \t]*=[ \t]*/, "")
+            sub(/[ \t]*$/, "")
+            gsub(/"/, "")
+            print; exit
+        }
+    ' "$spaces_file" 2>/dev/null)"
+
     if [ -n "$best_space" ]; then
         printf '%s\tcwd-config\n' "$best_space"
+        exit 0
+    elif [ -n "$toml_default" ]; then
+        printf '%s\tcwd-config-default\n' "$toml_default"
         exit 0
     fi
 fi
