@@ -20,6 +20,22 @@ fn label() -> Result<ServiceLabel> {
 }
 
 fn manager() -> Result<Box<dyn ServiceManager>> {
+    #[cfg(target_os = "windows")]
+    {
+        // service-manager's native() probes for winsw.exe on PATH or via the
+        // WINSW_PATH env var. Point it at the bundled sibling so user-level
+        // install works without admin elevation.
+        if std::env::var_os("WINSW_PATH").is_none() {
+            let exe = std::env::current_exe().ok();
+            if let Some(parent) = exe.as_ref().and_then(|p| p.parent()) {
+                let winsw = parent.join("winsw.exe");
+                if winsw.exists() {
+                    std::env::set_var("WINSW_PATH", &winsw);
+                }
+            }
+        }
+    }
+
     let mut m = <dyn ServiceManager>::native().context("detect native service manager")?;
     // launchd and systemd-user both support user-level; Windows SCM does not.
     // We try user-level first and silently fall back to system-level on platforms
