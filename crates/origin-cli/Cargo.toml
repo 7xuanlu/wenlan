@@ -8,6 +8,10 @@ description = "Origin CLI for setup, service management, and local AI work memor
 default-run = "origin"
 publish = false
 
+[lib]
+name = "origin_cli"
+path = "src/lib.rs"
+
 [[bin]]
 name = "origin"
 path = "src/main.rs"

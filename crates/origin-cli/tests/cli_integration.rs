@@ -53,7 +53,7 @@ impl IsolatedRuntime {
     }
 
     #[cfg(target_os = "macos")]
-    fn plist_path(&self) -> PathBuf {
+    fn service_unit_path(&self) -> PathBuf {
         self.home
             .path()
             .join("Library/LaunchAgents/com.origin.server.plist")
@@ -444,6 +444,21 @@ fn doctor_uses_origin_host_for_health_probe() {
         ));
 }
 
+#[test]
+fn service_unit_path_resolves_per_os() {
+    let path =
+        origin_cli::commands::service_unit_path().expect("service_unit_path should not fail");
+
+    #[cfg(target_os = "macos")]
+    assert!(path.to_string_lossy().contains("Library/LaunchAgents"));
+
+    #[cfg(target_os = "linux")]
+    assert!(path.to_string_lossy().contains(".config/systemd/user"));
+
+    #[cfg(target_os = "windows")]
+    assert!(path.to_string_lossy().to_lowercase().contains("appdata"));
+}
+
 #[cfg(target_os = "macos")]
 #[test]
 fn setup_install_status_uninstall_roundtrip_isolated() {
@@ -467,10 +482,11 @@ fn setup_install_status_uninstall_roundtrip_isolated() {
         .arg("install")
         .assert()
         .success()
-        .stdout(predicate::str::contains("Wrote"))
-        .stdout(predicate::str::contains("Loaded com.origin.server"));
+        .stdout(predicate::str::contains(
+            "Installed and started com.origin.server",
+        ));
 
-    let plist = fs::read_to_string(runtime.plist_path()).expect("plist written");
+    let plist = fs::read_to_string(runtime.service_unit_path()).expect("plist written");
     assert!(plist.contains("<string>com.origin.server</string>"));
     assert!(plist.contains("origin-server"));
     assert!(!plist.contains("origin</string>"));
@@ -485,10 +501,10 @@ fn setup_install_status_uninstall_roundtrip_isolated() {
         .arg("uninstall")
         .assert()
         .success()
-        .stdout(predicate::str::contains("daemon will no longer auto-start"));
+        .stdout(predicate::str::contains("Uninstalled com.origin.server"));
 
     assert!(
-        !runtime.plist_path().exists(),
+        !runtime.service_unit_path().exists(),
         "uninstall removes launchd plist"
     );
     assert!(

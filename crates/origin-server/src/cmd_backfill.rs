@@ -16,7 +16,7 @@ use std::time::Duration;
 
 const DAEMON_PROBE_TIMEOUT: Duration = Duration::from_millis(500);
 // Re-exported from main.rs to avoid hard-coding the same launchd label twice.
-use crate::PLIST_LABEL;
+use crate::SERVICE_LABEL;
 
 pub async fn run(dry_run: bool) -> anyhow::Result<()> {
     // Step 1a: refuse if launchd has the daemon registered. With KeepAlive on
@@ -118,7 +118,7 @@ pub async fn run(dry_run: bool) -> anyhow::Result<()> {
 /// On non-macOS hosts launchctl is absent — treat that as "not loaded".
 fn check_launchd_unloaded() -> Result<()> {
     let output = match std::process::Command::new("launchctl")
-        .args(["list", PLIST_LABEL])
+        .args(["list", SERVICE_LABEL])
         .output()
     {
         Ok(o) => o,
@@ -129,7 +129,7 @@ fn check_launchd_unloaded() -> Result<()> {
     if output.status.success() {
         Err(anyhow!(
             "launchd has the daemon registered. Unload it first to prevent auto-restart:\n  \
-             launchctl unload ~/Library/LaunchAgents/{PLIST_LABEL}.plist\n\
+             launchctl unload ~/Library/LaunchAgents/{SERVICE_LABEL}.plist\n\
              Then re-run this command. (Reload after with `launchctl load`.)"
         ))
     } else {

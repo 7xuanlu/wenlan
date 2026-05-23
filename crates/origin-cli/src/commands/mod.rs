@@ -10,3 +10,5 @@ pub mod service;
 pub mod setup;
 pub mod status;
 pub mod store;
+
+pub use service::{install, is_installed, service_unit_path, uninstall, SERVICE_LABEL};

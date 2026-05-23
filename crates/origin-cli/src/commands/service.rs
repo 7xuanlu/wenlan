@@ -1,39 +1,66 @@
 // SPDX-License-Identifier: Apache-2.0
-//! LaunchAgent management for the local Origin daemon.
+//! Cross-platform service registration for the Origin daemon.
+//!
+//! Wraps the `service-manager` crate to register `origin-server` with the
+//! host's native service manager (launchd, systemd-user, Windows SCM via winsw).
 
 use anyhow::{Context, Result};
+use service_manager::{
+    ServiceInstallCtx, ServiceLabel, ServiceLevel, ServiceManager, ServiceStartCtx, ServiceStopCtx,
+    ServiceUninstallCtx,
+};
 use std::path::{Path, PathBuf};
 
 use crate::client::origin_host_from_env;
 
-pub(crate) const PLIST_LABEL: &str = "com.origin.server";
-const PLIST_TEMPLATE: &str =
-    include_str!("../../../origin-server/resources/com.origin.server.plist");
+pub const SERVICE_LABEL: &str = "com.origin.server";
 
-pub fn plist_path() -> PathBuf {
-    dirs::home_dir()
-        .expect("HOME not set")
-        .join("Library/LaunchAgents")
-        .join(format!("{}.plist", PLIST_LABEL))
+fn label() -> Result<ServiceLabel> {
+    SERVICE_LABEL.parse().context("invalid service label")
 }
 
-fn log_dir() -> PathBuf {
-    dirs::data_local_dir()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join("origin")
-        .join("logs")
+fn manager() -> Result<Box<dyn ServiceManager>> {
+    let mut m = <dyn ServiceManager>::native().context("detect native service manager")?;
+    // launchd and systemd-user both support user-level; Windows SCM does not.
+    // We try user-level first and silently fall back to system-level on platforms
+    // that reject it. The caller may need admin/elevation on Windows in that case.
+    let _ = m.set_level(ServiceLevel::User);
+    Ok(m)
 }
 
-pub(crate) fn sibling_server_path_for_origin(origin_exe: &Path) -> PathBuf {
-    origin_exe
-        .parent()
-        .unwrap_or_else(|| Path::new("."))
-        .join("origin-server")
+pub fn service_unit_path() -> Result<PathBuf> {
+    #[cfg(target_os = "macos")]
+    {
+        Ok(dirs::home_dir()
+            .context("HOME not set")?
+            .join("Library/LaunchAgents")
+            .join(format!("{}.plist", SERVICE_LABEL)))
+    }
+    #[cfg(target_os = "linux")]
+    {
+        Ok(dirs::config_dir()
+            .context("XDG_CONFIG_HOME not set")?
+            .join("systemd/user")
+            .join(format!("{}.service", SERVICE_LABEL.replace('.', "-"))))
+    }
+    #[cfg(target_os = "windows")]
+    {
+        Ok(dirs::data_local_dir()
+            .context("LOCALAPPDATA not set")?
+            .join("service-manager")
+            .join(format!("{}.xml", SERVICE_LABEL)))
+    }
 }
 
 fn current_server_path() -> Result<PathBuf> {
     let origin_exe = std::env::current_exe().context("cannot determine origin CLI path")?;
-    let server = sibling_server_path_for_origin(&origin_exe);
+    let mut server = origin_exe
+        .parent()
+        .unwrap_or_else(|| Path::new("."))
+        .join("origin-server");
+    if cfg!(target_os = "windows") {
+        server.set_extension("exe");
+    }
     if !server.exists() {
         anyhow::bail!(
             "origin-server not found next to origin at {}. Re-run the Origin installer.",
@@ -43,100 +70,56 @@ fn current_server_path() -> Result<PathBuf> {
     Ok(server)
 }
 
-pub(crate) fn plist_content(server_path: &Path, log_path: &Path) -> String {
-    PLIST_TEMPLATE
-        .replace("__ORIGIN_SERVER_PATH__", &server_path.to_string_lossy())
-        .replace("__LOG_PATH__", &log_path.to_string_lossy())
-}
-
 pub fn install() -> Result<()> {
-    let plist = plist_path();
-    let log_path = log_dir();
-    let server_path = current_server_path()?;
+    let label_value = label()?;
+    let program = current_server_path()?;
+    let m = manager()?;
 
-    std::fs::create_dir_all(&log_path)?;
+    m.install(ServiceInstallCtx {
+        label: label_value.clone(),
+        program,
+        args: vec![],
+        contents: None,
+        username: None,
+        working_directory: None,
+        environment: None,
+        autostart: true,
+        restart_policy: service_manager::RestartPolicy::OnFailure {
+            delay_secs: None,
+            max_retries: None,
+            reset_after_secs: None,
+        },
+    })
+    .context("install service")?;
 
-    if let Some(parent) = plist.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
-
-    if plist.exists() {
-        let _ = std::process::Command::new("launchctl")
-            .arg("unload")
-            .arg(&plist)
-            .output();
-    }
-
-    std::fs::write(&plist, plist_content(&server_path, &log_path))?;
-    println!("Wrote {}", plist.display());
-
-    let output = std::process::Command::new("launchctl")
-        .arg("load")
-        .arg(&plist)
-        .output()?;
-
-    if output.status.success() {
-        println!(
-            "Loaded {} - daemon will start automatically on login",
-            PLIST_LABEL
-        );
-    } else {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        eprintln!("launchctl load failed: {}", stderr);
-    }
-
+    m.start(ServiceStartCtx { label: label_value })
+        .context("start service")?;
+    println!("Installed and started {}.", SERVICE_LABEL);
     Ok(())
 }
 
 pub fn uninstall() -> Result<()> {
-    let plist = plist_path();
-
-    if !plist.exists() {
-        println!("{} is not installed", PLIST_LABEL);
-        return Ok(());
-    }
-
-    let output = std::process::Command::new("launchctl")
-        .arg("unload")
-        .arg(&plist)
-        .output()?;
-
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        eprintln!("launchctl unload warning: {}", stderr);
-    }
-
-    std::fs::remove_file(&plist)?;
-    println!(
-        "Removed {} - daemon will no longer auto-start",
-        plist.display()
-    );
-
+    let label_value = label()?;
+    let m = manager()?;
+    let _ = m.stop(ServiceStopCtx {
+        label: label_value.clone(),
+    });
+    m.uninstall(ServiceUninstallCtx { label: label_value })
+        .context("uninstall service")?;
+    println!("Uninstalled {}.", SERVICE_LABEL);
     Ok(())
 }
 
+pub fn is_installed() -> bool {
+    service_unit_path().map(|p| p.exists()).unwrap_or(false)
+}
+
 pub async fn print_status() -> Result<()> {
-    let plist = plist_path();
-
-    if plist.exists() {
-        println!("Plist: {} (installed)", plist.display());
-    } else {
-        println!("Plist: not installed");
+    match service_unit_path() {
+        Ok(path) if path.exists() => println!("Service unit: {} (installed)", path.display()),
+        Ok(path) => println!("Service unit: {} (not installed)", path.display()),
+        Err(e) => println!("Service unit: unable to resolve ({})", e),
     }
-
-    let output = std::process::Command::new("launchctl")
-        .arg("list")
-        .output()?;
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let registered = stdout.lines().any(|line| line.contains(PLIST_LABEL));
-    println!(
-        "Launchd: {}",
-        if registered {
-            "registered"
-        } else {
-            "not registered"
-        }
-    );
 
     let url = format!("{}/api/health", origin_host_from_env());
     match reqwest::get(&url).await {
@@ -154,29 +137,4 @@ pub async fn print_status() -> Result<()> {
     }
 
     Ok(())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn resolves_origin_server_next_to_origin_cli() {
-        let origin = Path::new("/tmp/origin/bin/origin");
-        assert_eq!(
-            sibling_server_path_for_origin(origin),
-            PathBuf::from("/tmp/origin/bin/origin-server")
-        );
-    }
-
-    #[test]
-    fn plist_points_launchd_at_origin_server() {
-        let server = Path::new("/tmp/origin/bin/origin-server");
-        let log_path = Path::new("/tmp/origin/logs");
-        let content = plist_content(server, log_path);
-
-        assert!(content.contains("/tmp/origin/bin/origin-server"));
-        assert!(!content.contains("/tmp/origin/bin/origin</string>"));
-        assert!(content.contains("/tmp/origin/logs"));
-    }
 }
