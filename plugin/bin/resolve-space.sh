@@ -27,6 +27,12 @@ while [ $# -gt 0 ]; do
     esac
 done
 
+# Layer 1: explicit --arg override
+if [ -n "$arg" ]; then
+    printf '%s\targ\n' "$arg"
+    exit 0
+fi
+
 # Layer 2: ORIGIN_SPACE env var (per-shell pin)
 if [ -n "${ORIGIN_SPACE:-}" ]; then
     printf '%s\tenv\n' "$ORIGIN_SPACE"

@@ -102,5 +102,17 @@ assert_eq 'empty env does NOT override -> career/cwd-config' \
     'career	cwd-config' \
     "$out"
 
+# --- Test 11: --arg overrides env + cwd-config + cwd-repo
+out="$(SPACES_FILE="$SCRIPT_DIR/fixtures/spaces-basic.toml" ORIGIN_SPACE='health' "$RESOLVER" --cwd /tmp/origin-test/career/foo --arg ideas 2>/dev/null)"
+assert_eq 'arg overrides all -> ideas/arg' \
+    'ideas	arg' \
+    "$out"
+
+# --- Test 12: empty --arg is treated as unset
+out="$(SPACES_FILE="$SCRIPT_DIR/fixtures/spaces-basic.toml" ORIGIN_SPACE='' "$RESOLVER" --cwd /tmp/origin-test/career/foo --arg '' 2>/dev/null)"
+assert_eq 'empty arg does NOT override -> career/cwd-config' \
+    'career	cwd-config' \
+    "$out"
+
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]
