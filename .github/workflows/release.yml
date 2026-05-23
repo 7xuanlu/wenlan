@@ -21,10 +21,9 @@ env:
   RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
 
 jobs:
-  release:
-    name: Build & Publish Daemon Release
-    runs-on: macos-latest
-
+  prepare-release:
+    name: Create GitHub Release
+    runs-on: ubuntu-24.04
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -37,29 +36,6 @@ jobs:
         run: bash scripts/validate-versions.sh
         env:
           RELEASE_TAG: ${{ env.RELEASE_TAG }}
-
-      - name: Install Rust stable
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: aarch64-apple-darwin
-
-      - name: Cache Rust dependencies
-        uses: Swatinem/rust-cache@v2
-
-      - name: Build origin CLI (release)
-        run: cargo build --release -p origin --target aarch64-apple-darwin
-
-      - name: Build origin-server (release)
-        run: cargo build --release -p origin-server --target aarch64-apple-darwin
-
-      - name: Build origin-mcp (release)
-        run: cargo build --release -p origin-mcp --target aarch64-apple-darwin
-
-      - name: Smoke test origin CLI
-        run: ./target/aarch64-apple-darwin/release/origin --help
-
-      - name: Smoke test origin-server
-        run: ./target/aarch64-apple-darwin/release/origin-server --help
 
       - name: Compose release body
         run: |
@@ -108,7 +84,7 @@ jobs:
           INSTALL_EOF
 
           # Strip leading whitespace from heredoc indentation
-          sed -i '' 's/^          //' release-body.md
+          sed -i 's/^          //' release-body.md
           echo "Release body written ($(wc -c < release-body.md) bytes)"
 
       - name: Create GitHub Release
@@ -125,49 +101,118 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Upload standalone origin CLI binary
-        run: |
-          cp target/aarch64-apple-darwin/release/origin origin-aarch64-apple-darwin
-          gh release upload "$RELEASE_TAG" \
-            origin-aarch64-apple-darwin \
-            --clobber
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+  release:
+    name: Build & Publish ${{ matrix.target }}
+    needs: prepare-release
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: aarch64-apple-darwin
+            os: macos-14
+            archive: tar.gz
+            artifact_name: origin-darwin-arm64
+          - target: x86_64-apple-darwin
+            os: macos-14
+            archive: tar.gz
+            artifact_name: origin-darwin-x64
+          - target: aarch64-unknown-linux-musl
+            os: ubuntu-24.04
+            archive: tar.gz
+            artifact_name: origin-linux-arm64
+            use_cross: true
+          - target: x86_64-unknown-linux-musl
+            os: ubuntu-24.04
+            archive: tar.gz
+            artifact_name: origin-linux-x64
+            use_cross: true
+          - target: x86_64-pc-windows-msvc
+            os: windows-2022
+            archive: zip
+            artifact_name: origin-windows-x64
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.RELEASE_TAG }}
+          fetch-depth: 0
+          fetch-tags: true
 
-      - name: Upload standalone origin-server binary
-        run: |
-          cp target/aarch64-apple-darwin/release/origin-server origin-server-aarch64-apple-darwin
-          gh release upload "$RELEASE_TAG" \
-            origin-server-aarch64-apple-darwin \
-            --clobber
+      - name: Validate version consistency
+        if: runner.os != 'Windows'
+        run: bash scripts/validate-versions.sh
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ env.RELEASE_TAG }}
 
-      - name: Upload standalone origin-mcp binary
-        run: |
-          cp target/aarch64-apple-darwin/release/origin-mcp origin-mcp-aarch64-apple-darwin
-          gh release upload "$RELEASE_TAG" origin-mcp-aarch64-apple-darwin --clobber
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
 
-      - name: Package origin-mcp for Homebrew
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+
+      - name: Install cross
+        if: matrix.use_cross == true
+        run: cargo install cross --locked
+
+      - name: Build (native)
+        if: matrix.use_cross != true
+        run: cargo build --release -p origin -p origin-server -p origin-mcp --target ${{ matrix.target }}
+
+      - name: Build (cross)
+        if: matrix.use_cross == true
+        run: cross build --release -p origin -p origin-server -p origin-mcp --target ${{ matrix.target }}
+
+      # Cross builds produce binaries we cannot execute on the host runner
+      # (linux/musl arm64 won't run on ubuntu x64). Skip smoke for cross targets.
+      - name: Smoke
+        if: matrix.use_cross != true
+        shell: bash
         run: |
-          cp target/aarch64-apple-darwin/release/origin-mcp origin-mcp
-          tar -czf origin-mcp-darwin-arm64.tar.gz origin-mcp
+          ./target/${{ matrix.target }}/release/origin${{ runner.os == 'Windows' && '.exe' || '' }} --help
+          ./target/${{ matrix.target }}/release/origin-server${{ runner.os == 'Windows' && '.exe' || '' }} --help
+
+      - name: Package
+        shell: bash
+        run: |
+          mkdir -p dist
+          if [ "${{ matrix.archive }}" = "zip" ]; then
+            7z a "dist/${{ matrix.artifact_name }}.zip" \
+              "./target/${{ matrix.target }}/release/origin.exe" \
+              "./target/${{ matrix.target }}/release/origin-server.exe" \
+              "./target/${{ matrix.target }}/release/origin-mcp.exe"
+          else
+            tar -C "target/${{ matrix.target }}/release" -czf "dist/${{ matrix.artifact_name }}.tar.gz" \
+              origin origin-server origin-mcp
+          fi
+
+      # Per-binary archive for origin-mcp consumed by the Homebrew tap formula.
+      # Produced only on the darwin-arm64 leg to match the existing tap entry.
+      - name: Package origin-mcp tarball for Homebrew (darwin-arm64 only)
+        if: matrix.target == 'aarch64-apple-darwin'
+        shell: bash
+        run: |
+          cp "target/${{ matrix.target }}/release/origin-mcp" origin-mcp
+          tar -czf dist/origin-mcp-darwin-arm64.tar.gz origin-mcp
           rm origin-mcp
 
-      - name: Upload origin-mcp tar for Homebrew
-        run: |
-          gh release upload "$RELEASE_TAG" origin-mcp-darwin-arm64.tar.gz --clobber
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Upload archives to release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
+          tag_name: ${{ env.RELEASE_TAG }}
+          # Don't touch the release body composed in prepare-release.
+          append_body: false
+          fail_on_unmatched_files: true
 
-      - name: Upload origin-mcp artifacts for downstream jobs
+      - name: Upload origin-mcp artifact for Homebrew job
+        if: matrix.target == 'aarch64-apple-darwin'
         uses: actions/upload-artifact@v4
         with:
           name: origin-mcp-artifacts
-          path: |
-            origin-mcp-darwin-arm64.tar.gz
+          path: dist/origin-mcp-darwin-arm64.tar.gz
 
   publish-crates:
     name: Publish crates.io (origin-types + origin-mcp)
