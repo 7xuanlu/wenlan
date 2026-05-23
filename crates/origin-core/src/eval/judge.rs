@@ -3,7 +3,7 @@
 
 use crate::error::OriginError;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::path::Path;
 use std::sync::Arc;
 
@@ -1232,7 +1232,7 @@ pub enum JudgeVerdict {
 #[derive(Debug, Clone, serde::Deserialize)]
 pub struct StructuredJudgeOutput {
     #[serde(default)]
-    pub rubric_scores: std::collections::HashMap<String, f64>,
+    pub rubric_scores: BTreeMap<String, f64>,
     #[serde(default)]
     pub verdict_reason: String,
     pub verdict: JudgeVerdict,
@@ -1258,9 +1258,9 @@ pub fn parse_judge_output(raw: &str) -> Result<StructuredJudgeOutput, String> {
     }
     let normalized = trimmed.to_ascii_lowercase();
     let legacy = match normalized.as_str() {
-        s if s.starts_with("correct") => Some(JudgeVerdict::Correct),
-        s if s.starts_with("partial") => Some(JudgeVerdict::Partial),
-        s if s.starts_with("incorrect") => Some(JudgeVerdict::Incorrect),
+        "correct" => Some(JudgeVerdict::Correct),
+        "partial" => Some(JudgeVerdict::Partial),
+        "incorrect" => Some(JudgeVerdict::Incorrect),
         _ => None,
     };
     legacy
@@ -1310,5 +1310,32 @@ mod tests {
         let raw = "```json\n{\"rubric_scores\":{},\"verdict_reason\":\"x\",\"verdict\":\"incorrect\"}\n```";
         let parsed = parse_judge_output(raw).expect("fenced ok");
         assert_eq!(parsed.verdict, JudgeVerdict::Incorrect);
+    }
+
+    #[test]
+    fn parse_judge_output_legacy_partial() {
+        let parsed = parse_judge_output("partial").expect("legacy partial");
+        assert_eq!(parsed.verdict, JudgeVerdict::Partial);
+        assert!(parsed.rubric_scores.is_empty());
+    }
+
+    #[test]
+    fn parse_judge_output_rejects_empty_input() {
+        assert!(parse_judge_output("").is_err());
+        assert!(parse_judge_output("   \n  ").is_err());
+    }
+
+    #[test]
+    fn parse_judge_output_rejects_malformed_json() {
+        assert!(parse_judge_output("{").is_err());
+        assert!(parse_judge_output("{\"verdict\":}").is_err());
+    }
+
+    #[test]
+    fn parse_judge_output_legacy_rejects_substring_false_positives() {
+        // Regression for the starts_with -> exact-match fix.
+        assert!(parse_judge_output("corrects").is_err());
+        assert!(parse_judge_output("correctness").is_err());
+        assert!(parse_judge_output("correct then false").is_err());
     }
 }
