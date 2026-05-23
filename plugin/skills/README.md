@@ -45,7 +45,7 @@ layers. Higher layers override lower ones:
 |---|---|---|
 | 1 | `space:X` inline arg | `/capture space:health "slept 5hrs"` |
 | 2 | `ORIGIN_SPACE` env var | `ORIGIN_SPACE=career claude` |
-| 3 | `~/.origin/spaces.toml` cwd-prefix mapping | see `plugin/examples/spaces.toml` |
+| 3 | `~/.origin/spaces.toml` cwd-prefix mapping (longest prefix wins; ties go to first-defined) | see `plugin/examples/spaces.toml` |
 | 4 | cwd git-repo basename | `~/Repos/origin/...` → `origin` |
 | 5 | conversation topic | (rarely used directly) |
 | 6 | default | `personal` |

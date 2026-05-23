@@ -3,6 +3,9 @@
 #
 # Maps a cwd path-prefix to a space name. Longest matching prefix wins.
 # `~` is expanded to your home directory.
+#
+# Tiebreak: if two mappings have identical-length prefixes both matching
+# the cwd, the first-defined mapping wins.
 
 [[mapping]]
 prefix = "~/Repos/origin"
