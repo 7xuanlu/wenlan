@@ -111,48 +111,79 @@ pub async fn run(dry_run: bool) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Resolves the platform-specific path to the Origin service unit file.
+/// Service label registered with the host service manager. Must match
+/// `origin_cli::commands::service::SERVICE_LABEL` — `service_unit_path_matches_cli`
+/// pins both copies to the on-disk paths `service-manager` 0.11 actually writes.
+const SERVICE_LABEL: &str = "com.origin.server";
+
+/// Resolves the platform-specific path to the Origin service unit file on
+/// Unix-likes. Mirrors the on-disk path that `service-manager` 0.11 writes:
+/// - macOS (launchd): `~/Library/LaunchAgents/com.origin.server.plist`
+///   (uses `ServiceLabel::to_qualified_name()` — qualifier kept).
+/// - Linux (systemd-user): `~/.config/systemd/user/origin-server.service`
+///   (uses `ServiceLabel::to_script_name()` — qualifier DROPPED, org+app
+///   joined with `-`).
 ///
-/// Duplicated from `origin-cli::commands::service::service_unit_path` to avoid
-/// a circular crate dependency (`origin-server` cannot depend on `origin-cli`).
-/// Kept in sync via the `service_unit_path_matches_cli` test below.
+/// Windows uses `sc.exe` which writes no on-disk unit file, so this is
+/// `#[cfg]`-gated off Windows. Kept in sync with
+/// `origin-cli::commands::service::service_unit_path` via
+/// `service_unit_path_matches_cli` below.
+#[cfg(not(target_os = "windows"))]
 fn service_unit_path() -> Result<std::path::PathBuf> {
+    let label: service_manager::ServiceLabel =
+        SERVICE_LABEL.parse().context("invalid service label")?;
     #[cfg(target_os = "macos")]
     {
         Ok(dirs::home_dir()
             .context("HOME not set")?
             .join("Library/LaunchAgents")
-            .join("com.origin.server.plist"))
+            .join(format!("{}.plist", label.to_qualified_name())))
     }
     #[cfg(target_os = "linux")]
     {
         Ok(dirs::config_dir()
             .context("XDG_CONFIG_HOME not set")?
             .join("systemd/user")
-            .join("com-origin-server.service"))
-    }
-    #[cfg(target_os = "windows")]
-    {
-        Ok(dirs::data_local_dir()
-            .context("LOCALAPPDATA not set")?
-            .join("service-manager")
-            .join("com.origin.server.xml"))
+            .join(format!("{}.service", label.to_script_name())))
     }
 }
 
 /// Returns Ok if no service manager has the origin daemon registered.
 /// Returns Err with instructions if a service unit file is present.
 fn check_service_unloaded() -> Result<()> {
-    let unit = service_unit_path()?;
-    if unit.exists() {
-        Err(anyhow!(
-            "The Origin service is registered with the platform service manager at:\n  {}\n\
-             Unload it first to prevent auto-restart:\n  origin uninstall\n\
-             Then re-run this command. (Reinstall after with `origin install`.)",
-            unit.display()
-        ))
-    } else {
-        Ok(())
+    #[cfg(target_os = "windows")]
+    {
+        // `sc.exe query <label>` exits 0 when the service is registered with
+        // the Windows Service Control Manager, 1060 when it is not.
+        let registered = std::process::Command::new("sc.exe")
+            .args(["query", SERVICE_LABEL])
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false);
+        if registered {
+            Err(anyhow!(
+                "The Origin service is registered with the Windows Service Control Manager as \
+                 '{SERVICE_LABEL}'.\n\
+                 Unload it first to prevent auto-restart:\n  origin uninstall\n\
+                 Then re-run this command. (Reinstall after with `origin install`.)"
+            ))
+        } else {
+            Ok(())
+        }
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let unit = service_unit_path()?;
+        if unit.exists() {
+            Err(anyhow!(
+                "The Origin service is registered with the platform service manager at:\n  {}\n\
+                 Unload it first to prevent auto-restart:\n  origin uninstall\n\
+                 Then re-run this command. (Reinstall after with `origin install`.)",
+                unit.display()
+            ))
+        } else {
+            Ok(())
+        }
     }
 }
 
@@ -202,19 +233,25 @@ mod tests {
         check_service_unloaded().expect("expected Ok in clean test env");
     }
 
+    /// Pin both copies (CLI + server) to the on-disk paths `service-manager`
+    /// 0.11 actually writes. If service-manager changes its label-to-path
+    /// rules in a future major bump, this test must be re-derived from the
+    /// crate source (`launchd.rs`, `systemd.rs`), not from prior intuition.
+    #[cfg(not(target_os = "windows"))]
     #[test]
     fn service_unit_path_matches_cli() {
-        // The CLI is the authoritative owner of this constant; verify the
-        // duplicate in origin-server stays in sync. We test the OS-specific
-        // tail because the cli implementation lives in a different crate.
         let path = super::service_unit_path().expect("service_unit_path should not fail");
         let p = path.to_string_lossy();
 
         #[cfg(target_os = "macos")]
-        assert!(p.contains("Library/LaunchAgents/com.origin.server.plist"));
+        assert!(
+            p.ends_with("Library/LaunchAgents/com.origin.server.plist"),
+            "unexpected macOS path: {p}"
+        );
         #[cfg(target_os = "linux")]
-        assert!(p.contains(".config/systemd/user/com-origin-server.service"));
-        #[cfg(target_os = "windows")]
-        assert!(p.to_lowercase().contains("service-manager"));
+        assert!(
+            p.ends_with(".config/systemd/user/origin-server.service"),
+            "unexpected Linux path: {p}"
+        );
     }
 }

@@ -28,6 +28,17 @@ fn manager() -> Result<Box<dyn ServiceManager>> {
     Ok(m)
 }
 
+/// Resolves the platform-specific path to the Origin service unit file.
+///
+/// Mirrors the on-disk path that `service-manager` 0.11 actually writes:
+/// - macOS (launchd): `~/Library/LaunchAgents/<qualified_name>.plist`
+///   (`to_qualified_name()` keeps the qualifier, e.g. `com.origin.server.plist`).
+/// - Linux (systemd-user): `<config_dir>/systemd/user/<script_name>.service`
+///   (`ServiceLabel::to_script_name()` joins org+app with `-` and DROPS the
+///   qualifier, so `com.origin.server` becomes `origin-server.service`).
+/// - Windows (sc.exe): no on-disk unit file. Service state lives in the
+///   Windows registry — see `is_installed()` for the probe.
+#[cfg(not(target_os = "windows"))]
 pub fn service_unit_path() -> Result<PathBuf> {
     #[cfg(target_os = "macos")]
     {
@@ -38,17 +49,11 @@ pub fn service_unit_path() -> Result<PathBuf> {
     }
     #[cfg(target_os = "linux")]
     {
+        let label = label()?;
         Ok(dirs::config_dir()
             .context("XDG_CONFIG_HOME not set")?
             .join("systemd/user")
-            .join(format!("{}.service", SERVICE_LABEL.replace('.', "-"))))
-    }
-    #[cfg(target_os = "windows")]
-    {
-        Ok(dirs::data_local_dir()
-            .context("LOCALAPPDATA not set")?
-            .join("service-manager")
-            .join(format!("{}.xml", SERVICE_LABEL)))
+            .join(format!("{}.service", label.to_script_name())))
     }
 }
 
@@ -111,10 +116,33 @@ pub fn uninstall() -> Result<()> {
 }
 
 pub fn is_installed() -> bool {
-    service_unit_path().map(|p| p.exists()).unwrap_or(false)
+    #[cfg(target_os = "windows")]
+    {
+        // `sc.exe query <label>` exits 0 when the service is registered with
+        // the Windows Service Control Manager, 1060 when it is not. We don't
+        // need admin rights for a read-only query.
+        std::process::Command::new("sc.exe")
+            .args(["query", SERVICE_LABEL])
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false)
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        service_unit_path().map(|p| p.exists()).unwrap_or(false)
+    }
 }
 
 pub async fn print_status() -> Result<()> {
+    #[cfg(target_os = "windows")]
+    {
+        if is_installed() {
+            println!("Service: {} (registered with sc.exe)", SERVICE_LABEL);
+        } else {
+            println!("Service: {} (not installed)", SERVICE_LABEL);
+        }
+    }
+    #[cfg(not(target_os = "windows"))]
     match service_unit_path() {
         Ok(path) if path.exists() => println!("Service unit: {} (installed)", path.display()),
         Ok(path) => println!("Service unit: {} (not installed)", path.display()),

@@ -446,19 +446,24 @@ fn doctor_uses_origin_host_for_health_probe() {
         ));
 }
 
+#[cfg(not(target_os = "windows"))]
 #[test]
 fn service_unit_path_resolves_per_os() {
     let path =
         origin_cli::commands::service_unit_path().expect("service_unit_path should not fail");
 
+    // The path must match the on-disk file `service-manager` 0.11 actually
+    // writes. See `crates/origin-cli/src/commands/service.rs` for the rules
+    // we mirror.
     #[cfg(target_os = "macos")]
-    assert!(path.to_string_lossy().contains("Library/LaunchAgents"));
+    assert!(path
+        .to_string_lossy()
+        .ends_with("Library/LaunchAgents/com.origin.server.plist"));
 
     #[cfg(target_os = "linux")]
-    assert!(path.to_string_lossy().contains(".config/systemd/user"));
-
-    #[cfg(target_os = "windows")]
-    assert!(path.to_string_lossy().to_lowercase().contains("appdata"));
+    assert!(path
+        .to_string_lossy()
+        .ends_with(".config/systemd/user/origin-server.service"));
 }
 
 #[cfg(target_os = "macos")]
