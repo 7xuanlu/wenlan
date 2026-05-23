@@ -93,7 +93,9 @@ fn current_server_path() -> Result<PathBuf> {
 
 /// Resolves the data root the daemon will use at runtime. Mirrors
 /// `crates/origin-server/src/main.rs` so launchd log paths line up with the
-/// on-disk layout the daemon owns.
+/// on-disk layout the daemon owns. macOS-only because launchd is the only
+/// service backend that consumes pre-rendered log paths today.
+#[cfg(target_os = "macos")]
 fn origin_data_root() -> PathBuf {
     std::env::var_os("ORIGIN_DATA_DIR")
         .map(PathBuf::from)
