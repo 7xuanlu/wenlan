@@ -37,5 +37,17 @@ assert_eq 'topic fallback -> career-research/topic' \
     'career-research	topic' \
     "$out"
 
+# --- Test 3: --cwd inside a git repo returns the repo basename
+tmpdir="$(mktemp -d)"
+cd "$tmpdir"
+git init -q
+out="$(ORIGIN_SPACE='' "$RESOLVER" --cwd "$tmpdir" 2>/dev/null)"
+expected_name="$(basename "$tmpdir")"
+assert_eq 'cwd-repo inside git -> basename/cwd-repo' \
+    "${expected_name}	cwd-repo" \
+    "$out"
+cd - >/dev/null
+rm -rf "$tmpdir"
+
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]

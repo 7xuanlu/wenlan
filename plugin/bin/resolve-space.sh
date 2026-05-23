@@ -27,6 +27,15 @@ while [ $# -gt 0 ]; do
     esac
 done
 
+# Layer 4: cwd repo basename (only if cwd is inside a git repo)
+if [ -n "$cwd" ] && [ -d "$cwd" ]; then
+    repo_root="$(cd "$cwd" && git rev-parse --show-toplevel 2>/dev/null || true)"
+    if [ -n "$repo_root" ]; then
+        printf '%s\tcwd-repo\n' "$(basename "$repo_root")"
+        exit 0
+    fi
+fi
+
 # Layer 5: topic
 if [ -n "$topic" ]; then
     printf '%s\ttopic\n' "$topic"
