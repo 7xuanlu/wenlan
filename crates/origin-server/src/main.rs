@@ -51,8 +51,6 @@ enum Command {
     },
 }
 
-pub(crate) const SERVICE_LABEL: &str = "com.origin.server";
-
 async fn run_daemon() -> anyhow::Result<()> {
     // Logging
     tracing_subscriber::fmt()

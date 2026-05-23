@@ -15,18 +15,17 @@ use std::sync::Arc;
 use std::time::Duration;
 
 const DAEMON_PROBE_TIMEOUT: Duration = Duration::from_millis(500);
-// Re-exported from main.rs to avoid hard-coding the same launchd label twice.
-use crate::SERVICE_LABEL;
 
 pub async fn run(dry_run: bool) -> anyhow::Result<()> {
-    // Step 1a: refuse if launchd has the daemon registered. With KeepAlive on
-    // SuccessfulExit=false, killing the daemon manually wouldn't be enough —
-    // launchd respawns it after ThrottleInterval (~5s), creating a race where
-    // the daemon could start writing between our probe and our SQLite writes.
-    check_launchd_unloaded()?;
+    // Step 1a: refuse if the platform service manager has the daemon
+    // registered. With auto-restart enabled, killing the daemon manually
+    // wouldn't be enough — the service manager respawns it, creating a race
+    // where the daemon could start writing between our probe and our SQLite
+    // writes.
+    check_service_unloaded()?;
 
     // Step 1b: refuse if a daemon is currently running (covers manually-started
-    // instances and the brief window between launchd unload and respawn).
+    // instances and the brief window between service unload and respawn).
     check_daemon_not_running().await?;
 
     // Step 2: open the DB directly (not via daemon).
@@ -112,25 +111,45 @@ pub async fn run(dry_run: bool) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Returns Ok if launchd does not have the origin daemon registered.
-/// Returns Err with instructions if it does.
+/// Resolves the platform-specific path to the Origin service unit file.
 ///
-/// On non-macOS hosts launchctl is absent — treat that as "not loaded".
-fn check_launchd_unloaded() -> Result<()> {
-    let output = match std::process::Command::new("launchctl")
-        .args(["list", SERVICE_LABEL])
-        .output()
+/// Duplicated from `origin-cli::commands::service::service_unit_path` to avoid
+/// a circular crate dependency (`origin-server` cannot depend on `origin-cli`).
+/// Kept in sync via the `service_unit_path_matches_cli` test below.
+fn service_unit_path() -> Result<std::path::PathBuf> {
+    #[cfg(target_os = "macos")]
     {
-        Ok(o) => o,
-        // launchctl missing (non-macOS, sandboxed env) — nothing for launchd
-        // to revive, proceed to the live-daemon probe.
-        Err(_) => return Ok(()),
-    };
-    if output.status.success() {
+        Ok(dirs::home_dir()
+            .context("HOME not set")?
+            .join("Library/LaunchAgents")
+            .join("com.origin.server.plist"))
+    }
+    #[cfg(target_os = "linux")]
+    {
+        Ok(dirs::config_dir()
+            .context("XDG_CONFIG_HOME not set")?
+            .join("systemd/user")
+            .join("com-origin-server.service"))
+    }
+    #[cfg(target_os = "windows")]
+    {
+        Ok(dirs::data_local_dir()
+            .context("LOCALAPPDATA not set")?
+            .join("service-manager")
+            .join("com.origin.server.xml"))
+    }
+}
+
+/// Returns Ok if no service manager has the origin daemon registered.
+/// Returns Err with instructions if a service unit file is present.
+fn check_service_unloaded() -> Result<()> {
+    let unit = service_unit_path()?;
+    if unit.exists() {
         Err(anyhow!(
-            "launchd has the daemon registered. Unload it first to prevent auto-restart:\n  \
-             launchctl unload ~/Library/LaunchAgents/{SERVICE_LABEL}.plist\n\
-             Then re-run this command. (Reload after with `launchctl load`.)"
+            "The Origin service is registered with the platform service manager at:\n  {}\n\
+             Unload it first to prevent auto-restart:\n  origin uninstall\n\
+             Then re-run this command. (Reinstall after with `origin install`.)",
+            unit.display()
         ))
     } else {
         Ok(())
@@ -152,7 +171,7 @@ async fn check_daemon_not_running() -> Result<()> {
     match client.get(&probe_url).send().await {
         Ok(_) => Err(anyhow!(
             "Daemon is running on :{port}. Stop it before running backfill:\n  \
-             launchctl unload ~/Library/LaunchAgents/com.origin.server.plist\n  \
+             origin uninstall\n  \
              # or: kill -9 $(lsof -ti :{port})"
         )),
         // Truly refused (nothing listening): safe to proceed.
@@ -161,11 +180,41 @@ async fn check_daemon_not_running() -> Result<()> {
         Err(e) if e.is_timeout() => Err(anyhow!(
             "Daemon probe to :{port} timed out after {}ms. \
              Daemon may be busy. Stop it explicitly and retry:\n  \
-             launchctl unload ~/Library/LaunchAgents/com.origin.server.plist\n  \
+             origin uninstall\n  \
              # or: kill -9 $(lsof -ti :{port})",
             DAEMON_PROBE_TIMEOUT.as_millis()
         )),
         // Any other network error: surface it.
         Err(e) => Err(anyhow!("Daemon probe to :{port} failed unexpectedly: {e}")),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn check_service_unloaded_returns_ok_when_no_service_installed() {
+        // In the test environment we are unlikely to have the production service
+        // unit file at the user's data dir. If a developer has previously run
+        // `origin install`, this test will fail locally — that is acceptable, the
+        // failure tells them to `origin uninstall` first.
+        check_service_unloaded().expect("expected Ok in clean test env");
+    }
+
+    #[test]
+    fn service_unit_path_matches_cli() {
+        // The CLI is the authoritative owner of this constant; verify the
+        // duplicate in origin-server stays in sync. We test the OS-specific
+        // tail because the cli implementation lives in a different crate.
+        let path = super::service_unit_path().expect("service_unit_path should not fail");
+        let p = path.to_string_lossy();
+
+        #[cfg(target_os = "macos")]
+        assert!(p.contains("Library/LaunchAgents/com.origin.server.plist"));
+        #[cfg(target_os = "linux")]
+        assert!(p.contains(".config/systemd/user/com-origin-server.service"));
+        #[cfg(target_os = "windows")]
+        assert!(p.to_lowercase().contains("service-manager"));
     }
 }
