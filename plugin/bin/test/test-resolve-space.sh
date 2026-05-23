@@ -139,6 +139,18 @@ assert_eq 'precedence: cwd-config beats topic -> career/cwd-config' \
     'career	cwd-config' \
     "$out"
 
+# --- Test 16: whitespace-only --arg falls through (does not produce whitespace space)
+out="$(ORIGIN_SPACE='' "$RESOLVER" --cwd /tmp --arg '   ' 2>/dev/null)"
+assert_eq 'whitespace-only --arg falls through -> personal/default' \
+    'personal	default' \
+    "$out"
+
+# --- Test 17: whitespace-only ORIGIN_SPACE falls through
+out="$(ORIGIN_SPACE='   ' "$RESOLVER" --cwd /tmp 2>/dev/null)"
+assert_eq 'whitespace-only ORIGIN_SPACE falls through -> personal/default' \
+    'personal	default' \
+    "$out"
+
 # --- Test 14: cwd outside mappings + default key -> uses cwd-config-default
 out="$(SPACES_FILE="$SCRIPT_DIR/fixtures/spaces-basic.toml" ORIGIN_SPACE='' "$RESOLVER" --cwd /opt/somewhere-unmapped 2>/dev/null)"
 assert_eq 'cwd-config default key -> personal/cwd-config-default' \

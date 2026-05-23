@@ -30,14 +30,16 @@ while [ $# -gt 0 ]; do
 done
 
 # Layer 1: explicit --arg override
-if [ -n "$arg" ]; then
-    printf '%s\targ\n' "$arg"
+arg_trimmed="$(printf '%s' "$arg" | tr -d '[:space:]')"
+if [ -n "$arg_trimmed" ]; then
+    printf '%s\targ\n' "$arg_trimmed"
     exit 0
 fi
 
 # Layer 2: ORIGIN_SPACE env var (per-shell pin)
-if [ -n "${ORIGIN_SPACE:-}" ]; then
-    printf '%s\tenv\n' "$ORIGIN_SPACE"
+env_trimmed="$(printf '%s' "${ORIGIN_SPACE:-}" | tr -d '[:space:]')"
+if [ -n "$env_trimmed" ]; then
+    printf '%s\tenv\n' "$env_trimmed"
     exit 0
 fi
 
