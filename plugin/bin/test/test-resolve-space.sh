@@ -78,5 +78,17 @@ assert_eq 'cwd-config no match -> personal/default' \
     'personal	default' \
     "$out"
 
+# --- Test 7: malformed TOML falls through to next layer; never crashes
+out="$(SPACES_FILE="$SCRIPT_DIR/fixtures/spaces-malformed.toml" ORIGIN_SPACE='' "$RESOLVER" --cwd /opt/no-repo-here 2>/dev/null)"
+assert_eq 'malformed TOML -> falls through to default' \
+    'personal	default' \
+    "$out"
+
+# --- Test 8: missing TOML file -> falls through to next layer
+out="$(SPACES_FILE=/tmp/this-does-not-exist.toml ORIGIN_SPACE='' "$RESOLVER" --cwd /opt/no-repo-here 2>/dev/null)"
+assert_eq 'missing TOML file -> falls through to default' \
+    'personal	default' \
+    "$out"
+
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]
