@@ -194,7 +194,7 @@ The daemon (`origin-server`) is the single source of truth. External tools (the 
 
 ### Database: libSQL (owned by origin-core)
 
-One libSQL database at `~/Library/Application Support/origin/memorydb/origin_memory.db`, owned by `MemoryDB` in `crates/origin-core/src/db.rs`:
+One libSQL database at the platform data directory (`dirs::data_local_dir()/origin/memorydb/origin_memory.db`; on macOS, `~/Library/Application Support/origin/memorydb/origin_memory.db`), owned by `MemoryDB` in `crates/origin-core/src/db.rs`:
 - **Document chunks**: `chunks` table with `F32_BLOB(768)` vector column, DiskANN indexing (768-dim, BGE-Base-EN-v1.5-Q)
 - **Knowledge graph**: `entities`, `relations`, `observations` tables with FK cascades
 - **Full-text search**: FTS5 virtual table (`chunks_fts`) auto-synced via triggers
@@ -268,7 +268,7 @@ All business logic lives here. No tauri, no axum. Framework-agnostic.
 | `sources/` | `RawDocument`, file watchers, Obsidian importer. `RawDocument` and related types re-exported from `origin-types`. |
 | `privacy.rs` | PII redaction |
 | `router/classify.rs`, `content_score.rs` | Smart router scoring helpers (non-tauri parts) |
-| `config.rs` | Persistent config at `~/Library/Application Support/origin/config.json` |
+| `config.rs` | Persistent config at `dirs::data_local_dir()/origin/config.json` (on macOS, `~/Library/Application Support/origin/config.json`) |
 | `export/` | Markdown/JSON/zip/PDF exporters |
 | `eval/` | Benchmark harness: LoCoMo, LongMemEval. Each benchmark has base (embedding-only), reranked (LLM rescores after search), and expanded (LLM query expansion before search) variants. Baselines under `EVAL_BASELINES_DIR` (gitignored). |
 | `state.rs` | `CoreState` — shared state struct used by origin-server |
@@ -332,11 +332,11 @@ The `origin` binary — a thin reqwest-based CLI for the daemon's HTTP API. Subc
 
 **Other:**
 - **Metal/ggml on macOS Tahoe 26.x**: `ggml_metal_init` may fail even though native Metal works. The daemon auto-degrades and continues without LLM. Not a code bug. Check for competing GPU processes: `pgrep -la origin`.
-- **Dev and prod share data by default**: Both use port 7878 and `~/Library/Application Support/origin/`. For isolated testing, override explicitly: `ORIGIN_PORT=7879 ORIGIN_DATA_DIR=/tmp/origin-test cargo run -p origin-server`.
+- **Dev and prod share data by default**: Both use port 7878 and the platform data directory (on macOS, `~/Library/Application Support/origin/`). For isolated testing, override explicitly: `ORIGIN_PORT=7879 ORIGIN_DATA_DIR=/tmp/origin-test cargo run -p origin-server`.
 
 ### Misc
 - Log filter default is `warn` — add modules explicitly for `info` logs (e.g., `origin_core::db=info`, `origin_server=info`)
-- All local data stored in `~/Library/Application Support/origin/` — MemoryDB, config, activities, tags
+- All local data stored in the platform data directory (`dirs::data_local_dir()/origin/`; on macOS, `~/Library/Application Support/origin/`) — MemoryDB, config, activities, tags
 - Crate names: `origin-types`, `origin-core`, `origin-server`, `origin` (CLI), `origin-mcp` — all in this workspace. The desktop app crate `origin-app` lives in [7xuanlu/origin-app](https://github.com/7xuanlu/origin-app).
 - **Licenses**: all five workspace crates (`origin-types`, `origin-core`, `origin-server`, `origin` CLI, `origin-mcp`) are **Apache-2.0** via workspace inheritance. The desktop app in `origin-app` is **AGPL-3.0-only** (separate repo).
 - `origin-mcp` is in-tree at `crates/origin-mcp/` (merged from the old `7xuanlu/origin-mcp` repo on 2026-05-09 via `git subtree`). It talks to the daemon via HTTP at runtime and is published to npm as a standalone binary (`npx -y origin-mcp`).
