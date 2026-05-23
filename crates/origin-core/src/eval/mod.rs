@@ -16,6 +16,7 @@ pub mod lifecycle;
 pub mod locomo;
 pub mod longmemeval;
 pub mod metrics;
+pub mod page_faithfulness;
 pub mod pipeline;
 pub mod report;
 pub mod retrieval;
