@@ -95,10 +95,14 @@ jobs:
           [[ "$SOURCE" == "PATH" ]] || { echo "ERROR: origin-mcp must use path dep for origin-types"; exit 1; }
 
   test:
-    name: test
-    needs: [detect-changes, fmt]
+    name: test (${{ matrix.os }})
+    needs: [detect-changes, fmt, lint]
     if: "needs.detect-changes.outputs.rust == 'true' && !startsWith(github.event.head_commit.message, 'chore(main): release')"
-    runs-on: ubuntu-24.04
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-14, windows-2022]
     env:
       # Drop debuginfo from test artifacts. CI has no debugger attached and the
       # build cache stays warm via rust-cache. Trims linker time + cache size.
@@ -111,10 +115,19 @@ jobs:
       - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
         with:
           shared-key: test
-      - uses: taiki-e/install-action@3235f8901fd37ffed0052b276cec25a362fb82e9 # v2
+      - name: Run workspace lib tests
+        run: cargo test --workspace --lib
+      # Linux-only extras: nextest-driven integration tests, fastembed cache,
+      # eval canary on main, and the Docker daemon smoke test. These match
+      # the pre-matrix behavior so we don't lose coverage on PR runs.
+      - name: Install cargo-nextest (Linux)
+        if: matrix.os == 'ubuntu-24.04'
+        uses: taiki-e/install-action@3235f8901fd37ffed0052b276cec25a362fb82e9 # v2
         with:
           tool: cargo-nextest
-      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+      - name: Cache fastembed model (Linux)
+        if: matrix.os == 'ubuntu-24.04'
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           # Origin's `resolve_fastembed_cache_dir` writes to
           # `dirs::data_dir()/origin/memorydb/fastembed_cache` on Linux when
@@ -125,25 +138,36 @@ jobs:
           key: fastembed-bge-base-en-v1.5-q-v2
           restore-keys: |
             fastembed-bge-base-en-v1.5-q-
-      - name: Run tests (types + server + cli)
-        run: cargo nextest run -p origin-types -p origin-server -p origin
-      - name: Run tests (core)
+      - name: Run integration tests (core) (Linux)
+        if: matrix.os == 'ubuntu-24.04'
         # nextest process-per-test sidesteps the macOS SIGSEGV root cause
         # (ONNX atexit FFI race). No --test-threads=1 needed on ubuntu.
-        run: cargo nextest run -p origin-core --lib --test chat_import_e2e --test distillation_quality
-      - name: Run embedding-only eval (main only)
-        if: github.ref == 'refs/heads/main'
+        run: cargo nextest run -p origin-core --test chat_import_e2e --test distillation_quality
+      - name: Run embedding-only eval (main only, Linux)
+        if: matrix.os == 'ubuntu-24.04' && github.ref == 'refs/heads/main'
         env:
           EVAL_BASELINES_DIR: ${{ runner.temp }}/origin-eval-canary
         run: cargo nextest run -p origin-core --lib --run-ignored=only eval::retrieval
       - name: Upload eval canary baseline (with env schema)
-        if: always()
+        if: always() && matrix.os == 'ubuntu-24.04'
         uses: actions/upload-artifact@v4
         with:
           name: eval-canary-baseline-${{ github.sha }}
           path: ${{ runner.temp }}/origin-eval-canary/*.json
           retention-days: 30
           if-no-files-found: warn
+      - name: Verify docker buildx (Linux)
+        if: matrix.os == 'ubuntu-24.04'
+        run: docker buildx version || docker buildx install
+      - name: Smoke (Linux daemon image)
+        if: matrix.os == 'ubuntu-24.04'
+        run: bash scripts/smoke-linux.sh
+      - name: Smoke (Windows daemon)
+        if: matrix.os == 'windows-2022'
+        shell: pwsh
+        run: |
+          cargo build --release -p origin-server
+          ./scripts/smoke-windows.ps1
 
   # Aggregate gate for branch protection. `if: always()` lets docs-only PRs
   # (where fmt/lint/test skipped via detect-changes) report success instead of
