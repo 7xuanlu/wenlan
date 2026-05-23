@@ -1204,3 +1204,11 @@ pub async fn judge_with_batch_api(
     );
     Ok(results)
 }
+
+/// Stamp the judge model id on a Report's env (no-op when env is None).
+/// Used by runners to record which judge produced the answer-quality metrics.
+pub fn stamp_judge_model(env: &mut Option<crate::eval::report::ReportEnv>, model: &str) {
+    if let Some(e) = env.as_mut() {
+        e.judge_model = Some(model.to_string());
+    }
+}

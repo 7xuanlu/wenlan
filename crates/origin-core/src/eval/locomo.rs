@@ -1439,6 +1439,39 @@ mod tests {
     }
 
     #[test]
+    fn locomo_env_records_judge_model_when_batch_runs() {
+        let mut report = LocomoReport {
+            conversations: vec![],
+            aggregate_ndcg_at_10: 0.0,
+            aggregate_mrr: 0.0,
+            aggregate_recall_at_5: 0.0,
+            aggregate_hit_rate_at_1: 0.0,
+            total_questions: 0,
+            total_memories: 0,
+            per_category_aggregate: vec![],
+            qa_accuracy: None,
+            baseline: None,
+            env: None,
+        };
+        report.env = Some(crate::eval::report::ReportEnv {
+            fixture_revision: "deadbeef".into(),
+            embedder_model: "bge-base-en-v1.5-q".into(),
+            embedder_revision: "768d".into(),
+            retrieval_method: "search_memory".into(),
+            llm_provider_class: "on-device".into(),
+            llm_model: "qwen3-4b".into(),
+            judge_model: None,
+            origin_version: env!("CARGO_PKG_VERSION").into(),
+            eval_timestamp_unix: 0,
+        });
+        crate::eval::judge::stamp_judge_model(&mut report.env, "claude-haiku-4-5-20251001");
+        assert_eq!(
+            report.env.as_ref().and_then(|e| e.judge_model.clone()),
+            Some("claude-haiku-4-5-20251001".to_string())
+        );
+    }
+
+    #[test]
     fn test_to_terminal_with_baseline() {
         let report = LocomoReport {
             conversations: vec![],
