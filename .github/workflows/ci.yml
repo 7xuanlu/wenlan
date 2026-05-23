@@ -121,6 +121,17 @@ jobs:
       - name: Workspace lib tests (macOS, single-threaded)
         if: matrix.os == 'macos-14'
         run: cargo test --workspace --lib -- --test-threads=1
+      # Integration tests for origin-cli + origin-server. Pre-matrix CI ran
+      # these via `cargo nextest run -p origin-types -p origin-server -p origin`
+      # — the lib-tests step alone misses the *.rs files under each crate's
+      # `tests/` dir (route_convergence, refinery_routes, cli_integration, …).
+      # Use `cargo test` so we don't have to install nextest on macOS/Windows.
+      - name: Workspace integration tests (Linux only)
+        if: matrix.os == 'ubuntu-24.04'
+        run: cargo test --workspace --tests
+      - name: Integration tests origin-cli + origin-server (macOS + Windows)
+        if: matrix.os != 'ubuntu-24.04'
+        run: cargo test -p origin -p origin-server --tests
       # Linux-only extras: nextest-driven integration tests, fastembed cache,
       # eval canary on main, and the Docker daemon smoke test. These match
       # the pre-matrix behavior so we don't lose coverage on PR runs.

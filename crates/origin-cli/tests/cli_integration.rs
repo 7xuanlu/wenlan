@@ -497,6 +497,32 @@ fn setup_install_status_uninstall_roundtrip_isolated() {
     assert!(plist.contains("<string>com.origin.server</string>"));
     assert!(plist.contains("origin-server"));
     assert!(!plist.contains("origin</string>"));
+    // Launchd parity with the legacy embedded plist: stdout/stderr go to the
+    // data-root `logs/` dir and `RUST_LOG=info` survives across reboots.
+    assert!(
+        plist.contains("<key>StandardOutPath</key>"),
+        "missing StandardOutPath in plist: {plist}"
+    );
+    assert!(
+        plist.contains("origin-server.stdout.log"),
+        "stdout log path not threaded into plist: {plist}"
+    );
+    assert!(
+        plist.contains("<key>StandardErrorPath</key>"),
+        "missing StandardErrorPath in plist: {plist}"
+    );
+    assert!(
+        plist.contains("origin-server.stderr.log"),
+        "stderr log path not threaded into plist: {plist}"
+    );
+    assert!(
+        plist.contains("<key>EnvironmentVariables</key>"),
+        "missing EnvironmentVariables in plist: {plist}"
+    );
+    assert!(
+        plist.contains("<key>RUST_LOG</key>"),
+        "RUST_LOG not propagated through launchd plist: {plist}"
+    );
 
     cli_with_isolated_runtime(&runtime)
         .args(["status", "--format", "json"])
