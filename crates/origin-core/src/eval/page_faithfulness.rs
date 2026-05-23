@@ -50,6 +50,52 @@ pub struct PageFixtureCase {
     pub expected_min_faithfulness: f64,
 }
 
+const STOPWORDS: &[&str] = &[
+    "with", "from", "that", "this", "these", "those", "have", "been", "will", "would", "could",
+    "should", "their", "there", "where", "when", "what", "which", "while", "about", "after",
+    "before", "between", "into", "over", "under", "very", "more", "most", "some", "such", "than",
+    "then", "they", "them", "your", "yours",
+];
+
+/// Split a page body into sentences. Uses regex on terminal punctuation
+/// followed by whitespace. Final sentence may not have trailing whitespace.
+pub fn split_sentences(body: &str) -> Vec<&str> {
+    let re = regex::Regex::new(r"(?m)[.!?]+\s+").expect("static regex");
+    re.split(body).filter(|s| !s.trim().is_empty()).collect()
+}
+
+/// Extract content-bearing tokens from a sentence: lowercase, length >= 4,
+/// excluding stopwords. Used for faithfulness overlap scoring.
+pub fn content_tokens(sentence: &str) -> Vec<String> {
+    sentence
+        .split(|c: char| !c.is_alphanumeric())
+        .map(|t| t.to_ascii_lowercase())
+        .filter(|t| t.len() >= 4 && !STOPWORDS.contains(&t.as_str()))
+        .collect()
+}
+
+/// Returns true if at least 50% of the sentence's content tokens appear
+/// as whole-word matches in the source text. Sentences with zero content
+/// tokens (pure punctuation / all stopwords) are vacuously faithful.
+pub fn score_sentence_faithful(sentence: &str, source: &str) -> bool {
+    let toks = content_tokens(sentence);
+    if toks.is_empty() {
+        return true;
+    }
+    let lo_source = source.to_ascii_lowercase();
+    let mut hits = 0usize;
+    for t in &toks {
+        let pattern = format!(r"\b{}\b", regex::escape(t));
+        let found = regex::Regex::new(&pattern)
+            .map(|re| re.is_match(&lo_source))
+            .unwrap_or_else(|_| lo_source.contains(t));
+        if found {
+            hits += 1;
+        }
+    }
+    hits * 2 >= toks.len() // >= 50%
+}
+
 pub fn load_page_fixture(path: &std::path::Path) -> Result<PageFixture, String> {
     let content = std::fs::read_to_string(path)
         .map_err(|e| format!("failed to read {}: {e}", path.display()))?;
@@ -119,5 +165,41 @@ mod tests {
         .unwrap();
         let f = load_page_fixture(&path).expect("loads");
         assert_eq!(f.description, "file load");
+    }
+
+    #[test]
+    fn split_sentences_basic_punctuation() {
+        let body = "First sentence. Second sentence! Third question? Final.";
+        let s = split_sentences(body);
+        assert_eq!(s.len(), 4);
+    }
+
+    #[test]
+    fn content_tokens_strips_stopwords_and_short() {
+        let toks = content_tokens("This is a Rust programming language with memory safety.");
+        assert!(toks.contains(&"rust".to_string()));
+        assert!(toks.contains(&"programming".to_string()));
+        assert!(toks.contains(&"language".to_string()));
+        assert!(toks.contains(&"memory".to_string()));
+        assert!(toks.contains(&"safety".to_string()));
+        assert!(!toks.contains(&"this".to_string()));
+        assert!(!toks.contains(&"with".to_string()));
+        assert!(!toks.contains(&"is".to_string()));
+    }
+
+    #[test]
+    fn score_sentence_faithful_majority_overlap() {
+        let sentence = "Rust provides memory safety guarantees.";
+        let sources_all = ["Rust", "provides", "memory safety", "guarantees"].join(" ");
+        assert!(score_sentence_faithful(sentence, &sources_all));
+
+        let sources_one = "Rust is great".to_string();
+        assert!(!score_sentence_faithful(sentence, &sources_one));
+    }
+
+    #[test]
+    fn score_sentence_faithful_empty_sentence_is_faithful() {
+        assert!(score_sentence_faithful(".", "anything"));
+        assert!(score_sentence_faithful("a is the", "anything"));
     }
 }
