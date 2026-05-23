@@ -1,0 +1,22 @@
+# app/eval/page_fixtures/seed_facts.toml
+description = "Faithful distillations of technical fact memories. Should score high."
+
+[[case]]
+id = "page_rust_001"
+source_memories = [
+    "Rust is a systems programming language with memory safety guarantees.",
+    "Tokio is the most common async runtime in the Rust ecosystem.",
+    "Origin uses Rust for its daemon and CLI.",
+]
+distilled_page_body = "Rust is a systems programming language that guarantees memory safety. The Rust ecosystem provides Tokio as its dominant async runtime. Origin uses Rust for its daemon implementation."
+expected_min_faithfulness = 0.85
+
+[[case]]
+id = "page_libsql_001"
+source_memories = [
+    "Origin stores all data in a single libSQL database file.",
+    "libSQL supports vector columns via F32_BLOB type.",
+    "The chunks table uses a 768-dimension vector column for embeddings.",
+]
+distilled_page_body = "Origin persists data in a single libSQL database. Vector embeddings live in a 768-dimension F32_BLOB column on the chunks table."
+expected_min_faithfulness = 0.85
