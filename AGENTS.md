@@ -78,10 +78,10 @@ Origin runs on macOS (arm64, x86_64), Linux (x86_64, aarch64; musl), and Windows
 | OS | Data dir | Service registration |
 |---|---|---|
 | macOS | `~/Library/Application Support/origin/` | launchd via `~/Library/LaunchAgents/com.origin.server.plist` (user-level) |
-| Linux | `~/.local/share/origin/` (or `$XDG_DATA_HOME/origin`) | systemd user unit at `~/.config/systemd/user/com-origin-server.service`. Enable lingering with `loginctl enable-linger` if you want the service alive after logout. |
-| Windows | `%LOCALAPPDATA%\origin\` | winsw-backed Windows service. First install may require admin elevation. |
+| Linux | `~/.local/share/origin/` (or `$XDG_DATA_HOME/origin`) | systemd user unit at `~/.config/systemd/user/origin-server.service` (qualifier dropped per `ServiceLabel::to_script_name()`). Enable lingering with `loginctl enable-linger` if you want the service alive after logout. |
+| Windows | `%LOCALAPPDATA%\origin\` | sc.exe Windows service. `origin install` requires an elevated terminal (Administrator). winsw was evaluated but service-manager 0.11's WinSwServiceManager invokes an API winsw v2 does not support; sc.exe is the supported path for v1. |
 
-The `origin install` and `origin uninstall` commands work identically on all three OSes.
+The `origin install` and `origin uninstall` commands work on all three OSes; Windows requires Administrator elevation.
 
 ### llama-cpp-2 backend
 

@@ -197,13 +197,6 @@ jobs:
             debian:trixie-slim \
             /bin/origin-build/origin-server --help
 
-      - name: Download winsw.exe (Windows only)
-        if: matrix.target == 'x86_64-pc-windows-msvc'
-        shell: bash
-        run: |
-          curl -fsSL -o target/${{ matrix.target }}/release/winsw.exe \
-            https://github.com/winsw/winsw/releases/download/v2.12.0/WinSW-x64.exe
-
       - name: List Windows build artifacts
         if: matrix.target == 'x86_64-pc-windows-msvc'
         shell: bash
@@ -214,11 +207,14 @@ jobs:
         run: |
           mkdir -p dist
           if [ "${{ matrix.archive }}" = "zip" ]; then
+            # No winsw.exe: service-manager 0.11's WinSwServiceManager invokes
+            # an API winsw v2 doesn't support. Windows users install via the
+            # sc.exe path which requires Administrator elevation. Documented
+            # in AGENTS.md.
             7z a "dist/${{ matrix.artifact_name }}.zip" \
               "./target/${{ matrix.target }}/release/origin.exe" \
               "./target/${{ matrix.target }}/release/origin-server.exe" \
               "./target/${{ matrix.target }}/release/origin-mcp.exe" \
-              "./target/${{ matrix.target }}/release/winsw.exe" \
               "./target/${{ matrix.target }}/release/onnxruntime.dll"
           else
             tar -C "target/${{ matrix.target }}/release" -czf "dist/${{ matrix.artifact_name }}.tar.gz" \

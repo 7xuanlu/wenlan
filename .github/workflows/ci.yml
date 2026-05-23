@@ -234,7 +234,10 @@ jobs:
         run: |
           cargo build --release -p origin-server
           ./scripts/smoke-windows.ps1
-      - name: E2E origin install (Windows winsw)
+      # E2E install on Windows via sc.exe. The GHA runner is admin by default
+      # so this exercises the real install code path. Real users on Windows
+      # need an elevated terminal; documented in AGENTS.md.
+      - name: E2E origin install (Windows sc.exe, requires admin)
         if: matrix.os == 'windows-2022'
         shell: pwsh
         run: |
@@ -245,17 +248,13 @@ jobs:
           New-Item -ItemType Directory -Path $stage | Out-Null
           Copy-Item target\debug\origin.exe $stage\
           Copy-Item target\debug\origin-server.exe $stage\
-          Invoke-WebRequest -Uri https://github.com/winsw/winsw/releases/download/v2.12.0/WinSW-x64.exe -OutFile $stage\winsw.exe
           try {
             & $stage\origin.exe install
-            # Confirm registered with the service manager (winsw on PATH -> winsw,
-            # fallback -> sc.exe). Both expose the service via Get-Service or sc.exe.
             $svc = & sc.exe query com.origin.server 2>&1
             if ($LASTEXITCODE -ne 0) { throw "service not registered after install: $svc" }
             Write-Host "    service registered: $svc"
-            # Health check
             $healthy = $false
-            for ($i = 0; $i -lt 20; $i++) {
+            for ($i = 0; $i -lt 30; $i++) {
               try {
                 $r = Invoke-WebRequest -Uri http://127.0.0.1:7878/api/health -UseBasicParsing -TimeoutSec 1
                 if ($r.StatusCode -eq 200) { $healthy = $true; break }

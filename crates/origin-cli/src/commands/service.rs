@@ -20,26 +20,15 @@ fn label() -> Result<ServiceLabel> {
 }
 
 fn manager() -> Result<Box<dyn ServiceManager>> {
-    #[cfg(target_os = "windows")]
-    {
-        // service-manager's native() probes for winsw.exe on PATH or via the
-        // WINSW_PATH env var. Point it at the bundled sibling so user-level
-        // install works without admin elevation.
-        if std::env::var_os("WINSW_PATH").is_none() {
-            let exe = std::env::current_exe().ok();
-            if let Some(parent) = exe.as_ref().and_then(|p| p.parent()) {
-                let winsw = parent.join("winsw.exe");
-                if winsw.exists() {
-                    std::env::set_var("WINSW_PATH", &winsw);
-                }
-            }
-        }
-    }
-
+    // Windows note: `<dyn ServiceManager>::native()` returns `ScServiceManager`
+    // (sc.exe) on Windows. sc.exe requires Administrator privileges. We do NOT
+    // try to use winsw: service-manager 0.11's WinSwServiceManager invokes
+    // `winsw install <name>.xml` which winsw v2 does not understand (v2 expects
+    // rename-pattern config next to its executable). Users on Windows need to
+    // run `origin install` from an elevated terminal.
     let mut m = <dyn ServiceManager>::native().context("detect native service manager")?;
-    // launchd and systemd-user both support user-level; Windows SCM does not.
-    // We try user-level first and silently fall back to system-level on platforms
-    // that reject it. The caller may need admin/elevation on Windows in that case.
+    // launchd and systemd-user both support user-level. Windows sc.exe does not
+    // and silently keeps system-level after this call. macOS + Linux benefit.
     let _ = m.set_level(ServiceLevel::User);
     Ok(m)
 }
