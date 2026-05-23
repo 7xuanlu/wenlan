@@ -30,7 +30,7 @@ try {
     try {
         $store = Invoke-RestMethod -Uri "http://127.0.0.1:$Port/api/memory/store" -Method POST `
             -ContentType "application/json" `
-            -Body '{"content":"Windows smoke test memory","memory_type":"lesson"}'
+            -Body '{"content":"This is a Windows CI smoke test memory verifying the daemon stores notes correctly across cross-platform builds.","memory_type":"lesson"}'
         Write-Host "    store ok: $($store | ConvertTo-Json -Compress -Depth 5)"
     } catch {
         # ErrorDetails.Message works on both pwsh 5 (WebException) and pwsh 7
@@ -45,7 +45,7 @@ try {
         -ContentType "application/json" `
         -Body '{"query":"Windows smoke","limit":3}'
 
-    if (($search | ConvertTo-Json -Depth 10) -notmatch "Windows smoke test memory") {
+    if (($search | ConvertTo-Json -Depth 10) -notmatch "Windows CI smoke test memory") {
         throw "search did not return the stored memory"
     }
     Write-Host "==> PASS"

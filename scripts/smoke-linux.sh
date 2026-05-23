@@ -44,15 +44,15 @@ done
 echo "==> Store a memory"
 STORE_RESP=$(curl -sf -X POST "http://127.0.0.1:${PORT}/api/memory/store" \
     -H 'Content-Type: application/json' \
-    -d '{"content":"Smoke test memory from macOS host","memory_type":"lesson"}')
+    -d '{"content":"This is a Linux Docker smoke test memory verifying the daemon stores notes correctly across cross-platform builds.","memory_type":"lesson"}')
 echo "    $STORE_RESP"
 
 echo "==> Search for it"
 SEARCH_RESP=$(curl -sf -X POST "http://127.0.0.1:${PORT}/api/memory/search" \
     -H 'Content-Type: application/json' \
-    -d '{"query":"smoke test","limit":3}')
+    -d '{"query":"Linux Docker smoke","limit":3}')
 echo "    $SEARCH_RESP"
-echo "$SEARCH_RESP" | grep -q "Smoke test memory" || {
+echo "$SEARCH_RESP" | grep -q "smoke test memory" || {
     echo "FAIL: search did not return stored memory" >&2
     exit 1
 }
