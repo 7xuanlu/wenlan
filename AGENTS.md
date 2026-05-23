@@ -119,6 +119,10 @@ Cache directories accumulate fast (1GB+ per full LoCoMo+LME run) and snapshots s
 - **Archive caches** (`~/.cache/origin-eval.archive-YYYY-MM-DD/`): retain for 30 days after the matching baseline JSON ships to a PR. After that, delete unless the baseline is still actively cited in an open issue or recent release notes. Archives are recreated on demand by re-running the harness.
 - **Don't depend on archive contents for reproducibility** — baselines are reproduced by re-running with the same `ReportEnv` fields, not by replaying cached intermediates.
 
+### KG-faithfulness bench
+
+`app/eval/kg_fixtures/*.toml` hold hand-curated entity + relation ground-truth per source_text case. The `eval::kg_faithfulness` module's smoke test (`#[ignore]`d, runs in L6 main canary) extracts KG from each case and scores entity + relation precision/recall/F1 against the expected ground truth. No LLM judge in this bench — string-match faithfulness only. LLM-judge variant is a follow-up plan.
+
 ## Releasing (release-please)
 
 Releases are automated via [release-please](https://github.com/googleapis/release-please). The workflow runs on every push to `main`.
