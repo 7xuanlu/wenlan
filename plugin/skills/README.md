@@ -35,3 +35,28 @@ The skills do not store data themselves. They guide Claude Code to use the local
 | `debrief` | Alias for `handoff` — symmetric with `brief`. |
 
 Plugin metadata lives in [`.claude-plugin`](../.claude-plugin/README.md).
+
+## Choosing the active space
+
+Every space-aware skill resolves the active memory bucket through six
+layers. Higher layers override lower ones:
+
+| Layer | Mechanism | Example |
+|---|---|---|
+| 1 | `space:X` inline arg | `/capture space:health "slept 5hrs"` |
+| 2 | `ORIGIN_SPACE` env var | `ORIGIN_SPACE=career claude` |
+| 3 | `~/.origin/spaces.toml` cwd-prefix mapping | see `plugin/examples/spaces.toml` |
+| 4 | cwd git-repo basename | `~/Repos/origin/...` → `origin` |
+| 5 | conversation topic | (rarely used directly) |
+| 6 | default | `personal` |
+
+To pin a session to a specific bucket regardless of cwd, set
+`ORIGIN_SPACE` before invoking Claude Code. To pin by working directory
+declaratively, copy `plugin/examples/spaces.toml` to
+`~/.origin/spaces.toml` and edit. To override per call, prefix any
+space-aware skill arg with `space:<name>`.
+
+On the first space-aware skill call of a session, the skill prints one
+line so the user can confirm the active bucket:
+
+    Resolved space: <name> (from <layer>)
