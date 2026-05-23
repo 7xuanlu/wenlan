@@ -165,14 +165,37 @@ jobs:
         if: matrix.use_cross == true
         run: cross build --release -p origin -p origin-server -p origin-mcp --target ${{ matrix.target }}
 
-      # Cross builds produce binaries we cannot execute on the host runner
-      # (linux/musl arm64 won't run on ubuntu x64). Skip smoke for cross targets.
-      - name: Smoke
+      - name: Smoke (native)
         if: matrix.use_cross != true
         shell: bash
         run: |
           ./target/${{ matrix.target }}/release/origin${{ runner.os == 'Windows' && '.exe' || '' }} --help
           ./target/${{ matrix.target }}/release/origin-server${{ runner.os == 'Windows' && '.exe' || '' }} --help
+
+      - name: Set up QEMU (cross targets only)
+        if: matrix.use_cross == true
+        uses: docker/setup-qemu-action@v3
+
+      - name: Smoke (cross via QEMU)
+        if: matrix.use_cross == true
+        run: |
+          # Map matrix.target arch to docker --platform value.
+          case "${{ matrix.target }}" in
+            aarch64-*)  PLAT=linux/arm64 ;;
+            x86_64-*)   PLAT=linux/amd64 ;;
+            *)          echo "unknown arch for ${{ matrix.target }}"; exit 1 ;;
+          esac
+          # debian:trixie-slim has glibc 2.41 (matches what cross builds need).
+          # Mount the release dir + invoke --help. Emulation overhead is negligible
+          # at --help speeds.
+          docker run --rm --platform "$PLAT" \
+            -v ${{ github.workspace }}/target/${{ matrix.target }}/release:/bin/origin-build:ro \
+            debian:trixie-slim \
+            /bin/origin-build/origin --help
+          docker run --rm --platform "$PLAT" \
+            -v ${{ github.workspace }}/target/${{ matrix.target }}/release:/bin/origin-build:ro \
+            debian:trixie-slim \
+            /bin/origin-build/origin-server --help
 
       - name: Download winsw.exe (Windows only)
         if: matrix.target == 'x86_64-pc-windows-msvc'

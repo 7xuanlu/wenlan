@@ -176,6 +176,40 @@ jobs:
           path: ${{ runner.temp }}/origin-eval-canary/*.json
           retention-days: 30
           if-no-files-found: warn
+      - name: E2E origin install (Linux user-systemd)
+        if: matrix.os == 'ubuntu-24.04'
+        run: |
+          set -euo pipefail
+          sudo loginctl enable-linger $(whoami)
+          export XDG_RUNTIME_DIR=/run/user/$(id -u)
+          # Build native (cargo nextest run --workspace --lib already built tests,
+          # but the install path needs the actual release-or-debug binaries).
+          cargo build -p origin -p origin-server
+          STAGE=$(mktemp -d)
+          cp target/debug/origin target/debug/origin-server "$STAGE/"
+          cleanup() {
+            "$STAGE/origin" uninstall 2>/dev/null || true
+            rm -rf "$STAGE"
+          }
+          trap cleanup EXIT
+          "$STAGE/origin" install
+          test -f ~/.config/systemd/user/origin-server.service
+          systemctl --user is-enabled origin-server
+          for i in $(seq 1 20); do
+            if curl -sf http://127.0.0.1:7878/api/health >/dev/null; then
+              echo "    daemon healthy after ${i}s"
+              break
+            fi
+            sleep 1
+            if [ "$i" = "20" ]; then
+              echo "FAIL: daemon did not start under systemd user service" >&2
+              journalctl --user -u origin-server --no-pager | tail -50 >&2 || true
+              exit 1
+            fi
+          done
+          "$STAGE/origin" uninstall
+          test ! -f ~/.config/systemd/user/origin-server.service
+          echo "    Linux install/uninstall round-trip PASS"
       - name: Set up Docker Buildx (Linux)
         if: matrix.os == 'ubuntu-24.04'
         uses: docker/setup-buildx-action@v3
@@ -200,6 +234,41 @@ jobs:
         run: |
           cargo build --release -p origin-server
           ./scripts/smoke-windows.ps1
+      - name: E2E origin install (Windows winsw)
+        if: matrix.os == 'windows-2022'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          cargo build -p origin -p origin-server
+          $stage = Join-Path $env:TEMP "origin-stage"
+          if (Test-Path $stage) { Remove-Item -Recurse -Force $stage }
+          New-Item -ItemType Directory -Path $stage | Out-Null
+          Copy-Item target\debug\origin.exe $stage\
+          Copy-Item target\debug\origin-server.exe $stage\
+          Invoke-WebRequest -Uri https://github.com/winsw/winsw/releases/download/v2.12.0/WinSW-x64.exe -OutFile $stage\winsw.exe
+          try {
+            & $stage\origin.exe install
+            # Confirm registered with the service manager (winsw on PATH -> winsw,
+            # fallback -> sc.exe). Both expose the service via Get-Service or sc.exe.
+            $svc = & sc.exe query com.origin.server 2>&1
+            if ($LASTEXITCODE -ne 0) { throw "service not registered after install: $svc" }
+            Write-Host "    service registered: $svc"
+            # Health check
+            $healthy = $false
+            for ($i = 0; $i -lt 20; $i++) {
+              try {
+                $r = Invoke-WebRequest -Uri http://127.0.0.1:7878/api/health -UseBasicParsing -TimeoutSec 1
+                if ($r.StatusCode -eq 200) { $healthy = $true; break }
+              } catch { }
+              Start-Sleep -Seconds 1
+            }
+            if (-not $healthy) { throw "daemon did not become healthy" }
+            Write-Host "    Windows install/health/uninstall round-trip PASS"
+          }
+          finally {
+            try { & $stage\origin.exe uninstall } catch { Write-Host "uninstall failed: $_" }
+            if (Test-Path $stage) { Remove-Item -Recurse -Force $stage -ErrorAction SilentlyContinue }
+          }
 
   # Aggregate gate for branch protection. `if: always()` lets docs-only PRs
   # (where fmt/lint/test skipped via detect-changes) report success instead of
