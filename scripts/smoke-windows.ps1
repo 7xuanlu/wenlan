@@ -29,7 +29,7 @@ try {
     Write-Host "==> Store a memory"
     $store = Invoke-RestMethod -Uri "http://127.0.0.1:$Port/api/memory/store" -Method POST `
         -ContentType "application/json" `
-        -Body '{"content":"Windows smoke test memory","memory_type":"note"}'
+        -Body '{"content":"Windows smoke test memory"}'
 
     Write-Host "==> Search"
     $search = Invoke-RestMethod -Uri "http://127.0.0.1:$Port/api/memory/search" -Method POST `
