@@ -263,6 +263,9 @@ pub struct LocomoReport {
     /// Baseline comparison from a previous run.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub baseline: Option<LocomoBaseline>,
+    /// Run environment capture (schema v1).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub env: Option<crate::eval::report::ReportEnv>,
 }
 
 impl LocomoReport {
@@ -381,6 +384,12 @@ impl LocomoReport {
     pub fn load_baseline(path: &Path) -> Option<LocomoBaseline> {
         let content = std::fs::read_to_string(path).ok()?;
         serde_json::from_str(&content).ok()
+    }
+
+    /// Encode retrieval variant + provider + fixture-hash into baseline filename.
+    /// Falls back to base + ".json" if env is missing (back-compat).
+    pub fn baseline_filename(&self, base: &str) -> String {
+        crate::eval::report::encode_baseline_filename(self.env.as_ref(), base)
     }
 }
 
@@ -501,7 +510,7 @@ pub async fn run_locomo_eval(path: &Path) -> Result<LocomoReport, OriginError> {
     // 3. This is what competitors report as "J-score" or "accuracy"
     // Currently we report retrieval metrics (NDCG, MRR, Recall) which measure
     // whether the right memories are found, not whether the final answer is correct.
-    Ok(LocomoReport {
+    let mut report = LocomoReport {
         conversations,
         aggregate_ndcg_at_10: avg_field(&all_scores, |s| s.2),
         aggregate_mrr: avg_field(&all_scores, |s| s.3),
@@ -512,7 +521,21 @@ pub async fn run_locomo_eval(path: &Path) -> Result<LocomoReport, OriginError> {
         per_category_aggregate: per_cat_agg,
         qa_accuracy: None,
         baseline: None,
-    })
+        env: None,
+    };
+    report.env = Some(crate::eval::report::ReportEnv {
+        fixture_revision: crate::eval::fixtures::fixture_revision_hash(path)
+            .unwrap_or_else(|_| "unknown".into()),
+        embedder_model: "BGE-Base-EN-v1.5-Q".into(),
+        embedder_revision: "768d".into(),
+        retrieval_method: "search_memory".into(),
+        llm_provider_class: "none".into(),
+        llm_model: "none".into(),
+        judge_model: None,
+        origin_version: env!("CARGO_PKG_VERSION").into(),
+        eval_timestamp_unix: chrono::Utc::now().timestamp(),
+    });
+    Ok(report)
 }
 
 // ---------------------------------------------------------------------------
@@ -626,7 +649,7 @@ pub async fn run_locomo_eval_reranked(
     // Global aggregates
     let per_cat_agg = aggregate_by_category(&all_scores);
 
-    Ok(LocomoReport {
+    let mut report = LocomoReport {
         conversations,
         aggregate_ndcg_at_10: avg_field(&all_scores, |s| s.2),
         aggregate_mrr: avg_field(&all_scores, |s| s.3),
@@ -637,7 +660,21 @@ pub async fn run_locomo_eval_reranked(
         per_category_aggregate: per_cat_agg,
         qa_accuracy: None,
         baseline: None,
-    })
+        env: None,
+    };
+    report.env = Some(crate::eval::report::ReportEnv {
+        fixture_revision: crate::eval::fixtures::fixture_revision_hash(path)
+            .unwrap_or_else(|_| "unknown".into()),
+        embedder_model: "BGE-Base-EN-v1.5-Q".into(),
+        embedder_revision: "768d".into(),
+        retrieval_method: "search_memory_reranked".into(),
+        llm_provider_class: llm.kind().into(),
+        llm_model: llm.model_id(),
+        judge_model: None,
+        origin_version: env!("CARGO_PKG_VERSION").into(),
+        eval_timestamp_unix: chrono::Utc::now().timestamp(),
+    });
+    Ok(report)
 }
 
 // ---------------------------------------------------------------------------
@@ -751,7 +788,7 @@ pub async fn run_locomo_eval_expanded(
     // Global aggregates
     let per_cat_agg = aggregate_by_category(&all_scores);
 
-    Ok(LocomoReport {
+    let mut report = LocomoReport {
         conversations,
         aggregate_ndcg_at_10: avg_field(&all_scores, |s| s.2),
         aggregate_mrr: avg_field(&all_scores, |s| s.3),
@@ -762,7 +799,21 @@ pub async fn run_locomo_eval_expanded(
         per_category_aggregate: per_cat_agg,
         qa_accuracy: None,
         baseline: None,
-    })
+        env: None,
+    };
+    report.env = Some(crate::eval::report::ReportEnv {
+        fixture_revision: crate::eval::fixtures::fixture_revision_hash(path)
+            .unwrap_or_else(|_| "unknown".into()),
+        embedder_model: "BGE-Base-EN-v1.5-Q".into(),
+        embedder_revision: "768d".into(),
+        retrieval_method: "search_memory_expanded".into(),
+        llm_provider_class: llm.kind().into(),
+        llm_model: llm.model_id(),
+        judge_model: None,
+        origin_version: env!("CARGO_PKG_VERSION").into(),
+        eval_timestamp_unix: chrono::Utc::now().timestamp(),
+    });
+    Ok(report)
 }
 
 // ---------------------------------------------------------------------------
@@ -1051,7 +1102,7 @@ pub async fn run_locomo_eval_with_gate(
     // 3. This is what competitors report as "J-score" or "accuracy"
     // Currently we report retrieval metrics (NDCG, MRR, Recall) which measure
     // whether the right memories are found, not whether the final answer is correct.
-    Ok(LocomoReport {
+    let mut report = LocomoReport {
         conversations,
         aggregate_ndcg_at_10: avg_field(&all_scores, |s| s.2),
         aggregate_mrr: avg_field(&all_scores, |s| s.3),
@@ -1062,7 +1113,21 @@ pub async fn run_locomo_eval_with_gate(
         per_category_aggregate: per_cat_agg,
         qa_accuracy: None,
         baseline: None,
-    })
+        env: None,
+    };
+    report.env = Some(crate::eval::report::ReportEnv {
+        fixture_revision: crate::eval::fixtures::fixture_revision_hash(path)
+            .unwrap_or_else(|_| "unknown".into()),
+        embedder_model: "BGE-Base-EN-v1.5-Q".into(),
+        embedder_revision: "768d".into(),
+        retrieval_method: "search_memory".into(),
+        llm_provider_class: "none".into(),
+        llm_model: "none".into(),
+        judge_model: None,
+        origin_version: env!("CARGO_PKG_VERSION").into(),
+        eval_timestamp_unix: chrono::Utc::now().timestamp(),
+    });
+    Ok(report)
 }
 
 /// Average a field across a score slice.
@@ -1354,6 +1419,7 @@ mod tests {
             ],
             qa_accuracy: None,
             baseline: None,
+            env: None,
         };
 
         report.save_baseline(&path).unwrap();
@@ -1405,6 +1471,7 @@ mod tests {
                     recall_at_5: 0.380,
                 }],
             }),
+            env: None,
         };
 
         let text = report.to_terminal();

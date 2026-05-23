@@ -133,7 +133,17 @@ jobs:
         run: cargo nextest run -p origin-core --lib --test chat_import_e2e --test distillation_quality
       - name: Run embedding-only eval (main only)
         if: github.ref == 'refs/heads/main'
+        env:
+          EVAL_BASELINES_DIR: ${{ runner.temp }}/origin-eval-canary
         run: cargo nextest run -p origin-core --lib --run-ignored=only eval::retrieval
+      - name: Upload eval canary baseline (with env schema)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: eval-canary-baseline-${{ github.sha }}
+          path: ${{ runner.temp }}/origin-eval-canary/*.json
+          retention-days: 30
+          if-no-files-found: warn
 
   # Aggregate gate for branch protection. `if: always()` lets docs-only PRs
   # (where fmt/lint/test skipped via detect-changes) report success instead of

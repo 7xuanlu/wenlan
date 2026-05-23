@@ -10,6 +10,7 @@ pub mod answer_quality;
 pub mod context_path;
 pub mod fixtures;
 pub mod gen;
+pub mod latency;
 pub mod lifecycle;
 pub mod locomo;
 pub mod longmemeval;

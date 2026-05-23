@@ -3,7 +3,16 @@
 
 use crate::error::OriginError;
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use std::path::Path;
+
+/// Returns first 16 hex chars of sha256(file bytes). Stable across runs.
+pub fn fixture_revision_hash(path: &Path) -> Result<String, std::io::Error> {
+    let bytes = std::fs::read(path)?;
+    let mut h = Sha256::new();
+    h.update(&bytes);
+    Ok(hex::encode(h.finalize())[..16].to_string())
+}
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct FixtureFile {

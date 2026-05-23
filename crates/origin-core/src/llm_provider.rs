@@ -110,6 +110,16 @@ pub trait LlmProvider: Send + Sync {
     fn context_size(&self) -> u32 {
         8192
     }
+    /// Short identifier for the provider class (e.g. "on-device", "byok-api-anthropic").
+    /// Used by eval report env capture to label runs without GPU access.
+    fn kind(&self) -> &'static str {
+        "unknown"
+    }
+    /// Model identifier for this provider instance. May be dynamic (user-configured).
+    /// Used by eval report env capture.
+    fn model_id(&self) -> String {
+        "unknown".to_string()
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -210,6 +220,7 @@ pub struct OnDeviceProvider {
     synthesis_limit: usize,
     model_context_size: u32,
     model_max_output: u32,
+    resolved_model_id: String,
 }
 
 impl OnDeviceProvider {
@@ -644,6 +655,7 @@ impl OnDeviceProvider {
             synthesis_limit: model_spec.synthesis_token_limit,
             model_context_size: model_spec.context_size,
             model_max_output: model_spec.max_output_tokens,
+            resolved_model_id: model_spec.id.to_string(),
         })
     }
 
@@ -703,6 +715,14 @@ impl LlmProvider for OnDeviceProvider {
 
     fn synthesis_token_limit(&self) -> usize {
         self.synthesis_limit
+    }
+
+    fn kind(&self) -> &'static str {
+        "on-device"
+    }
+
+    fn model_id(&self) -> String {
+        self.resolved_model_id.clone()
     }
 
     fn recommended_max_output(&self) -> u32 {
@@ -937,6 +957,14 @@ impl LlmProvider for ApiProvider {
             4_096 // Opus and Sonnet produce high-quality long-form
         }
     }
+
+    fn kind(&self) -> &'static str {
+        "byok-api-anthropic"
+    }
+
+    fn model_id(&self) -> String {
+        self.model.clone()
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1039,6 +1067,14 @@ impl LlmProvider for OpenAICompatibleProvider {
 
     fn backend(&self) -> LlmBackend {
         LlmBackend::Api
+    }
+
+    fn kind(&self) -> &'static str {
+        "byok-api-openai-compat"
+    }
+
+    fn model_id(&self) -> String {
+        self.model.clone()
     }
 }
 
@@ -1144,6 +1180,14 @@ impl LlmProvider for ClaudeCliProvider {
     fn recommended_max_output(&self) -> u32 {
         4096
     }
+
+    fn kind(&self) -> &'static str {
+        "subscription-cli"
+    }
+
+    fn model_id(&self) -> String {
+        self.model.clone()
+    }
 }
 
 /// Mock provider for testing -- returns a fixed response.
@@ -1188,6 +1232,10 @@ impl LlmProvider for MockProvider {
 
     fn backend(&self) -> LlmBackend {
         self.backend
+    }
+
+    fn kind(&self) -> &'static str {
+        "mock"
     }
 }
 
@@ -1498,6 +1546,15 @@ mod tests {
         assert!(
             ran.load(Ordering::SeqCst),
             "hook using captured Handle should have spawned the task successfully"
+        );
+    }
+
+    #[test]
+    fn on_device_provider_model_id_reflects_resolved_model() {
+        // resolve_or_default is the same path new_with_model uses to set resolved_model_id.
+        assert_eq!(
+            crate::on_device_models::resolve_or_default(Some("qwen3.5-9b")).id,
+            "qwen3.5-9b"
         );
     }
 }

@@ -60,6 +60,7 @@ llama-cpp-2 = { version = "0.1", features = ["metal", "sampler"] }
 # Utilities
 regex = "1"
 sha2 = "0.10"
+hex = "0.4"
 dirs = "6"
 hf-hub = "0.4"
 encoding_rs = "0.8"

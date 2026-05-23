@@ -399,7 +399,9 @@ async fn save_locomo_baseline() {
     let report = origin_core::eval::locomo::run_locomo_eval(&path)
         .await
         .unwrap();
-    let baseline_path = eval_root().join("baselines/locomo_baseline.json");
+    let baselines_dir = eval_root().join("baselines");
+    std::fs::create_dir_all(&baselines_dir).unwrap();
+    let baseline_path = baselines_dir.join(report.baseline_filename("locomo"));
     report.save_baseline(&baseline_path).unwrap();
     println!("Saved LoCoMo baseline to {:?}", baseline_path);
 }
@@ -415,7 +417,9 @@ async fn save_longmemeval_baseline() {
     let report = origin_core::eval::longmemeval::run_longmemeval_eval(&path)
         .await
         .unwrap();
-    let baseline_path = eval_root().join("baselines/longmemeval_baseline.json");
+    let baselines_dir = eval_root().join("baselines");
+    std::fs::create_dir_all(&baselines_dir).unwrap();
+    let baseline_path = baselines_dir.join(report.baseline_filename("longmemeval"));
     report.save_baseline(&baseline_path).unwrap();
     println!("Saved LongMemEval baseline to {:?}", baseline_path);
 }
@@ -435,7 +439,9 @@ async fn save_locomo_reranked_baseline() {
     let report = origin_core::eval::locomo::run_locomo_eval_reranked(&path, llm)
         .await
         .unwrap();
-    let baseline_path = eval_root().join("baselines/locomo_reranked_baseline.json");
+    let baselines_dir = eval_root().join("baselines");
+    std::fs::create_dir_all(&baselines_dir).unwrap();
+    let baseline_path = baselines_dir.join(report.baseline_filename("locomo"));
     report.save_baseline(&baseline_path).unwrap();
     println!("Saved LoCoMo reranked baseline to {:?}", baseline_path);
 }
@@ -455,7 +461,9 @@ async fn save_longmemeval_reranked_baseline() {
     let report = origin_core::eval::longmemeval::run_longmemeval_eval_reranked(&path, llm)
         .await
         .unwrap();
-    let baseline_path = eval_root().join("baselines/longmemeval_reranked_baseline.json");
+    let baselines_dir = eval_root().join("baselines");
+    std::fs::create_dir_all(&baselines_dir).unwrap();
+    let baseline_path = baselines_dir.join(report.baseline_filename("longmemeval"));
     report.save_baseline(&baseline_path).unwrap();
     println!("Saved LongMemEval reranked baseline to {:?}", baseline_path);
 }
@@ -475,7 +483,9 @@ async fn save_locomo_expanded_baseline() {
     let report = origin_core::eval::locomo::run_locomo_eval_expanded(&path, llm)
         .await
         .unwrap();
-    let baseline_path = eval_root().join("baselines/locomo_expanded_baseline.json");
+    let baselines_dir = eval_root().join("baselines");
+    std::fs::create_dir_all(&baselines_dir).unwrap();
+    let baseline_path = baselines_dir.join(report.baseline_filename("locomo"));
     report.save_baseline(&baseline_path).unwrap();
     println!("Saved LoCoMo expanded baseline to {:?}", baseline_path);
 }
@@ -495,7 +505,9 @@ async fn save_longmemeval_expanded_baseline() {
     let report = origin_core::eval::longmemeval::run_longmemeval_eval_expanded(&path, llm)
         .await
         .unwrap();
-    let baseline_path = eval_root().join("baselines/longmemeval_expanded_baseline.json");
+    let baselines_dir = eval_root().join("baselines");
+    std::fs::create_dir_all(&baselines_dir).unwrap();
+    let baseline_path = baselines_dir.join(report.baseline_filename("longmemeval"));
     report.save_baseline(&baseline_path).unwrap();
     println!("Saved LongMemEval expanded baseline to {:?}", baseline_path);
 }
@@ -3420,6 +3432,48 @@ fn eval_baselines_dir_override_env_var() {
     });
 }
 
+#[test]
+fn eval_report_schema_v1_round_trips_env_fields() {
+    use origin_core::eval::report::{EvalReport, ReportEnv};
+    let r = EvalReport {
+        env: Some(ReportEnv {
+            fixture_revision: "deadbeef".into(),
+            embedder_model: "BGE-Base-EN-v1.5-Q".into(),
+            embedder_revision: "768d".into(),
+            retrieval_method: "search_memory".into(),
+            llm_provider_class: "on-device".into(),
+            llm_model: "Qwen3-4B-Instruct".into(),
+            judge_model: Some("claude-haiku".into()),
+            origin_version: env!("CARGO_PKG_VERSION").into(),
+            eval_timestamp_unix: 1747800000,
+        }),
+        ..EvalReport::default()
+    };
+    let json = serde_json::to_string(&r).unwrap();
+    let back: EvalReport = serde_json::from_str(&json).unwrap();
+    assert_eq!(back.env.as_ref().unwrap().fixture_revision, "deadbeef");
+    assert_eq!(
+        back.env.as_ref().unwrap().embedder_model,
+        "BGE-Base-EN-v1.5-Q"
+    );
+}
+
+#[test]
+fn eval_report_back_compat_loads_pre_v1_json() {
+    // A realistic pre-v1 EvalReport JSON (all required fields, no "env" key).
+    // Verifies that adding env: Option<ReportEnv> doesn't break old reports.
+    let old = r#"{
+        "fixture_count":10,"file_count":2,"search_mode":"search_memory",
+        "ndcg_at_10":0.5,"ndcg_at_5":0.4,"map_at_5":0.3,"map_at_10":0.35,
+        "mrr":0.6,"recall_at_1":0.2,"recall_at_3":0.4,"recall_at_5":0.7,
+        "hit_rate_at_1":0.2,"hit_rate_at_3":0.4,"precision_at_3":0.3,"precision_at_5":0.25,
+        "neg_above_relevant":1,"total_negatives":5,"negative_leakage":4,
+        "baseline":null,"per_case":[]
+    }"#;
+    let r: origin_core::eval::report::EvalReport = serde_json::from_str(old).unwrap();
+    assert!(r.env.is_none());
+}
+
 /// Re-distill cached LoCoMo per-conversation DBs to populate the new
 /// `concept_sources` join table on DBs built before PR #4.
 ///
@@ -3683,4 +3737,170 @@ async fn redistill_one_conv(
         ));
     }
     Ok(())
+}
+
+#[test]
+fn fixture_revision_hash_is_stable_sha256_prefix() {
+    use origin_core::eval::fixtures::fixture_revision_hash;
+    let tmp = tempfile::NamedTempFile::new().unwrap();
+    std::fs::write(tmp.path(), b"deterministic test bytes").unwrap();
+    let h1 = fixture_revision_hash(tmp.path()).unwrap();
+    let h2 = fixture_revision_hash(tmp.path()).unwrap();
+    assert_eq!(h1, h2, "hash must be deterministic");
+    assert_eq!(h1.len(), 16, "expect 16-char hex prefix of sha256");
+}
+
+#[test]
+fn fixture_revision_hash_changes_when_bytes_change() {
+    use origin_core::eval::fixtures::fixture_revision_hash;
+    let tmp = tempfile::NamedTempFile::new().unwrap();
+    std::fs::write(tmp.path(), b"version one").unwrap();
+    let h1 = fixture_revision_hash(tmp.path()).unwrap();
+    std::fs::write(tmp.path(), b"version two").unwrap();
+    let h2 = fixture_revision_hash(tmp.path()).unwrap();
+    assert_ne!(h1, h2, "hash must change when bytes change");
+}
+
+#[tokio::test]
+async fn submit_batch_aborts_when_estimate_exceeds_eval_max_usd() {
+    use origin_core::eval::anthropic::submit_batch;
+    std::env::set_var("EVAL_MAX_USD", "0.001");
+    let client = reqwest::Client::new();
+    let huge_prompt = "x".repeat(1_000_000);
+    let prompts = vec![("id-0".to_string(), huge_prompt, None, 2048usize)];
+    // cost_cap_usd set high so only the EVAL_MAX_USD env var triggers the abort
+    let err = submit_batch(&client, "fake-key", prompts, "claude-haiku-4-5", 99.0)
+        .await
+        .expect_err("should abort due to EVAL_MAX_USD cap");
+    std::env::remove_var("EVAL_MAX_USD");
+    assert!(
+        err.contains("EVAL_MAX_USD"),
+        "error should mention cap: {}",
+        err
+    );
+}
+
+#[tokio::test]
+async fn submit_batch_no_cap_env_var_unset_does_not_block() {
+    use origin_core::eval::anthropic::estimate_batch_cost;
+    std::env::remove_var("EVAL_MAX_USD");
+    let prompts = vec![("id".to_string(), "hi".to_string(), None, 16usize)];
+    let cost = estimate_batch_cost(&prompts);
+    assert!(cost < 0.01, "tiny batch should be sub-cent: got {cost}");
+}
+
+#[test]
+fn latency_summary_p50_p99_from_samples() {
+    use origin_core::eval::latency::{latency_summary, LatencySummary};
+    let samples_ms: Vec<u64> = (1..=100).collect();
+    let s: LatencySummary = latency_summary(&samples_ms);
+    assert!(
+        (s.p50_ms as i64 - 50).abs() <= 1,
+        "p50 ≈ 50, got {}",
+        s.p50_ms
+    );
+    assert!(
+        (s.p99_ms as i64 - 99).abs() <= 1,
+        "p99 ≈ 99, got {}",
+        s.p99_ms
+    );
+    assert_eq!(s.total_ms, samples_ms.iter().sum::<u64>());
+    assert_eq!(s.sample_count, 100);
+}
+
+#[test]
+fn latency_summary_empty_returns_zero() {
+    use origin_core::eval::latency::latency_summary;
+    let s = latency_summary(&[]);
+    assert_eq!(s.sample_count, 0);
+    assert_eq!(s.p50_ms, 0);
+}
+
+#[test]
+fn judge_prompt_has_branch_for_every_lme_task_category() {
+    use origin_core::eval::judge::task_judge_prompt;
+    let categories = [
+        "single-session-user",
+        "single-session-assistant",
+        "single-session-preference",
+        "temporal-reasoning",
+        "knowledge-update",
+        "multi-session",
+    ];
+    for cat in categories {
+        let p = task_judge_prompt(cat, "Q", "GT", "A");
+        assert!(!p.is_empty(), "category '{}' produced empty prompt", cat);
+        let lower = p.to_lowercase();
+        assert!(
+            lower.contains(cat) || lower.contains(&cat.replace('-', " ")),
+            "category '{}' prompt should mention the category name or rubric token, got: {}",
+            cat,
+            p.chars().take(200).collect::<String>()
+        );
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Task 6: ReportEnv wiring tests
+// ---------------------------------------------------------------------------
+
+#[test]
+fn eval_report_serializes_env_retrieval_method() {
+    use origin_core::eval::report::{EvalReport, ReportEnv};
+    let r = EvalReport {
+        env: Some(ReportEnv {
+            retrieval_method: "search_memory".into(),
+            ..Default::default()
+        }),
+        ..EvalReport::default()
+    };
+    let json = serde_json::to_string(&r).unwrap();
+    let v: serde_json::Value = serde_json::from_str(&json).unwrap();
+    assert_eq!(
+        v["env"]["retrieval_method"].as_str(),
+        Some("search_memory"),
+        "retrieval_method should serialize"
+    );
+}
+
+// TODO(eval-repro): verify runner population once GPU baseline saves
+#[test]
+fn report_env_populated_correctly_per_runner_variant() {
+    use origin_core::eval::report::ReportEnv;
+    let base = ReportEnv {
+        retrieval_method: "search_memory".into(),
+        llm_provider_class: "none".into(),
+        ..Default::default()
+    };
+    let reranked = ReportEnv {
+        retrieval_method: "search_memory_reranked".into(),
+        llm_provider_class: "on-device".into(),
+        ..Default::default()
+    };
+    assert_ne!(base.retrieval_method, reranked.retrieval_method);
+}
+
+#[test]
+fn baseline_filename_encodes_config() {
+    use origin_core::eval::report::{EvalReport, ReportEnv};
+    let r = EvalReport {
+        env: Some(ReportEnv {
+            retrieval_method: "search_memory_reranked".into(),
+            llm_provider_class: "on-device".into(),
+            fixture_revision: "deadbeefcafef00d".into(),
+            ..Default::default()
+        }),
+        ..EvalReport::default()
+    };
+    assert_eq!(
+        r.baseline_filename("longmemeval"),
+        "longmemeval__reranked__on-device__deadbeefcafef00d.json"
+    );
+}
+
+#[test]
+fn baseline_filename_falls_back_when_env_missing() {
+    use origin_core::eval::report::EvalReport;
+    let r = EvalReport::default();
+    assert_eq!(r.baseline_filename("foo"), "foo.json");
 }

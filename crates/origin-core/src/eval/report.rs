@@ -4,7 +4,20 @@
 use serde::Serialize;
 use std::path::Path;
 
-#[derive(Debug, Clone, Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, Serialize, serde::Deserialize, Default)]
+pub struct ReportEnv {
+    pub fixture_revision: String,
+    pub embedder_model: String,
+    pub embedder_revision: String,
+    pub retrieval_method: String,
+    pub llm_provider_class: String,
+    pub llm_model: String,
+    pub judge_model: Option<String>,
+    pub origin_version: String,
+    pub eval_timestamp_unix: i64,
+}
+
+#[derive(Debug, Clone, Serialize, serde::Deserialize, Default)]
 pub struct EvalReport {
     pub fixture_count: usize,
     pub file_count: usize,
@@ -52,6 +65,12 @@ pub struct EvalReport {
     // Comparison
     pub baseline: Option<BaselineComparison>,
     pub per_case: Vec<CaseResult>,
+    // Environment capture (schema v1)
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub env: Option<ReportEnv>,
+    // Per-query latency summary
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub latency: Option<crate::eval::latency::LatencySummary>,
 }
 
 #[derive(Debug, Clone, Serialize, serde::Deserialize)]
@@ -77,7 +96,31 @@ pub struct CaseResult {
     pub neg_above_relevant: usize,
 }
 
+/// Encode retrieval variant + provider + fixture-hash into a baseline filename.
+/// Shared by EvalReport, LocomoReport, and LongMemEvalReport.
+/// Falls back to `base + ".json"` when `env` is None (back-compat).
+pub fn encode_baseline_filename(env: Option<&ReportEnv>, base: &str) -> String {
+    let Some(env) = env else {
+        return format!("{}.json", base);
+    };
+    let variant = env
+        .retrieval_method
+        .trim_start_matches("search_memory")
+        .trim_start_matches('_');
+    let variant = if variant.is_empty() { "base" } else { variant };
+    format!(
+        "{}__{}__{}__{}.json",
+        base, variant, env.llm_provider_class, env.fixture_revision
+    )
+}
+
 impl EvalReport {
+    /// Encode retrieval variant + provider + fixture-hash into baseline filename.
+    /// Falls back to base + ".json" if env is missing (back-compat).
+    pub fn baseline_filename(&self, base: &str) -> String {
+        encode_baseline_filename(self.env.as_ref(), base)
+    }
+
     /// Format report as terminal-friendly text.
     pub fn to_terminal(&self) -> String {
         let mut out = String::new();
@@ -288,6 +331,8 @@ mod tests {
             temporal_ordering_rate: None,
             baseline: None,
             per_case: vec![],
+            env: None,
+            latency: None,
         };
 
         report.save_baseline(&path).unwrap();
