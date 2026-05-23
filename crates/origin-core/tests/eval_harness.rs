@@ -3960,3 +3960,71 @@ async fn run_page_faithfulness_smoke() {
         );
     }
 }
+
+#[tokio::test]
+#[ignore]
+async fn kg_faithfulness_llm_judge_smoke() {
+    if std::env::var("ANTHROPIC_API_KEY").is_err() {
+        eprintln!("SKIP: ANTHROPIC_API_KEY not set");
+        return;
+    }
+    if std::env::var("EVAL_RUN_LLM_JUDGE").as_deref() != Ok("1") {
+        eprintln!("SKIP: set EVAL_RUN_LLM_JUDGE=1 to actually fire the Batch API");
+        return;
+    }
+    use origin_core::eval::kg_faithfulness::{KgExpectedEntity, KgExpectedRelation, KgFixtureCase};
+    use origin_core::eval::kg_faithfulness_llm::judge_kg_case_with_llm;
+    use origin_core::extract::{ExtractedEntity, ExtractedRelation, KgExtractionResult};
+
+    let case = KgFixtureCase {
+        id: "smoke_001".into(),
+        source_text: "Rust is a systems programming language.".into(),
+        expected_entities: vec![KgExpectedEntity {
+            name: "Rust".into(),
+            kind: "language".into(),
+        }],
+        expected_relations: vec![],
+    };
+    let extracted = KgExtractionResult {
+        index: 0,
+        entities: vec![
+            ExtractedEntity {
+                name: "Rust".into(),
+                entity_type: "language".into(),
+            },
+            ExtractedEntity {
+                name: "Python".into(),
+                entity_type: "language".into(),
+            },
+        ],
+        observations: vec![],
+        relations: vec![ExtractedRelation {
+            from: "Rust".into(),
+            to: "systems programming".into(),
+            relation_type: "is_a".into(),
+            confidence: None,
+            explanation: None,
+        }],
+    };
+    let judged = judge_kg_case_with_llm(&case, &extracted, "claude-haiku-4-5-20251001")
+        .await
+        .expect("judge call");
+    eprintln!("\n=== KG-Faith LLM Judge ===");
+    eprintln!("Case: {}", judged.case_id);
+    eprintln!("Entity faithful rate: {:.2}", judged.entity_faithful_rate);
+    for e in &judged.entities {
+        eprintln!("  [{}] {:?} :: {}", e.name, e.verdict, e.reason);
+    }
+    eprintln!(
+        "Relation faithful rate: {:.2}",
+        judged.relation_faithful_rate
+    );
+    for r in &judged.relations {
+        eprintln!(
+            "  [{} --{}-> {}] {:?} :: {}",
+            r.from, r.relation_type, r.to, r.verdict, r.reason
+        );
+    }
+    assert!(judged.entities.iter().any(|e| e.name == "Rust"));
+    assert!(judged.entities.iter().any(|e| e.name == "Python"));
+}

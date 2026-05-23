@@ -103,6 +103,101 @@ pub struct LlmJudgedKgReport {
     pub per_case: Vec<KgJudgedCase>,
 }
 
+/// Judge a single KgFixtureCase by submitting one batch request per entity
+/// and relation. Returns per-entity + per-relation verdicts plus aggregate
+/// faithful_rate per type. Costs ~$0.01-0.05 per case at typical sizes.
+///
+/// Requires ANTHROPIC_API_KEY env var. Honors EVAL_MAX_USD cost cap.
+pub async fn judge_kg_case_with_llm(
+    case: &crate::eval::kg_faithfulness::KgFixtureCase,
+    extracted: &crate::extract::KgExtractionResult,
+    judge_model: &str,
+) -> Result<KgJudgedCase, String> {
+    let api_key =
+        std::env::var("ANTHROPIC_API_KEY").map_err(|_| "ANTHROPIC_API_KEY required".to_string())?;
+    let client = reqwest::Client::new();
+
+    let mut requests: Vec<(String, String, Option<String>, usize)> = Vec::new();
+    for (i, e) in extracted.entities.iter().enumerate() {
+        let prompt = build_entity_judge_prompt(&case.source_text, &e.name, &e.entity_type);
+        requests.push((format!("e_{i}"), prompt, None, 200));
+    }
+    for (i, r) in extracted.relations.iter().enumerate() {
+        let prompt =
+            build_relation_judge_prompt(&case.source_text, &r.from, &r.to, &r.relation_type);
+        requests.push((format!("r_{i}"), prompt, None, 200));
+    }
+    if requests.is_empty() {
+        return Ok(KgJudgedCase {
+            case_id: case.id.clone(),
+            entities: vec![],
+            relations: vec![],
+            entity_faithful_rate: 0.0,
+            relation_faithful_rate: 0.0,
+        });
+    }
+
+    let batch_id =
+        crate::eval::anthropic::submit_batch(&client, &api_key, requests, judge_model, 0.50)
+            .await?;
+    let results_url = crate::eval::anthropic::poll_batch(&client, &api_key, &batch_id).await?;
+    let results =
+        crate::eval::anthropic::download_batch_results(&client, &api_key, &results_url).await?;
+
+    let mut judged_entities: Vec<KgJudgedEntity> = Vec::new();
+    let mut judged_relations: Vec<KgJudgedRelation> = Vec::new();
+
+    for (i, e) in extracted.entities.iter().enumerate() {
+        let raw = results.get(&format!("e_{i}")).cloned().unwrap_or_default();
+        let (verdict, reason) = parse_judge_response(&raw)
+            .unwrap_or((KgJudgeVerdict::Hallucinated, format!("parse failed: {raw}")));
+        judged_entities.push(KgJudgedEntity {
+            name: e.name.clone(),
+            verdict,
+            reason,
+        });
+    }
+    for (i, r) in extracted.relations.iter().enumerate() {
+        let raw = results.get(&format!("r_{i}")).cloned().unwrap_or_default();
+        let (verdict, reason) = parse_judge_response(&raw)
+            .unwrap_or((KgJudgeVerdict::Hallucinated, format!("parse failed: {raw}")));
+        judged_relations.push(KgJudgedRelation {
+            from: r.from.clone(),
+            to: r.to.clone(),
+            relation_type: r.relation_type.clone(),
+            verdict,
+            reason,
+        });
+    }
+
+    let entity_faithful_rate = if judged_entities.is_empty() {
+        0.0
+    } else {
+        let n = judged_entities
+            .iter()
+            .filter(|e| e.verdict == KgJudgeVerdict::Faithful)
+            .count();
+        n as f64 / judged_entities.len() as f64
+    };
+    let relation_faithful_rate = if judged_relations.is_empty() {
+        0.0
+    } else {
+        let n = judged_relations
+            .iter()
+            .filter(|r| r.verdict == KgJudgeVerdict::Faithful)
+            .count();
+        n as f64 / judged_relations.len() as f64
+    };
+
+    Ok(KgJudgedCase {
+        case_id: case.id.clone(),
+        entities: judged_entities,
+        relations: judged_relations,
+        entity_faithful_rate,
+        relation_faithful_rate,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
