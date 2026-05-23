@@ -9,7 +9,7 @@ expected_entities = [
     { name = "embedding model", kind = "role" },
 ]
 expected_relations = [
-    { from = "BGE-Base-EN-v1.5-Q", to = "embedding model", relation_type = "is_a" },
+    { from = "BGE-Base-EN-v1.5-Q", to = "embedding model", relation_type = "part_of" },
 ]
 
 [[case]]

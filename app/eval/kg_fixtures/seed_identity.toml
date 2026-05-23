@@ -10,7 +10,7 @@ expected_entities = [
     { name = "Rust", kind = "language" },
 ]
 expected_relations = [
-    { from = "backend engineer", to = "Acme Corp", relation_type = "works_at" },
+    { from = "backend engineer", to = "Acme Corp", relation_type = "works_on" },
 ]
 
 [[case]]

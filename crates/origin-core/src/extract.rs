@@ -8,6 +8,31 @@
 
 use crate::engine::{extract_json_array, LlmEngine, CTX_SIZE};
 
+/// Canonical relation type vocabulary, mirroring the production seed at
+/// `crates/origin-core/src/db.rs:3907-3925` (`relation_type_vocabulary` table).
+/// Aliases (e.g. `works_at` → `works_on`) are coerced at write time; this
+/// list is the canonical set only.
+pub const RELATION_VOCABULARY: &[&str] = &[
+    "works_on",
+    "leads",
+    "member_of",
+    "authored",
+    "knows",
+    "located_in",
+    "uses",
+    "depends_on",
+    "created",
+    "part_of",
+    "prefers",
+    "decided",
+    "learned_from",
+    "contradicts",
+    "replaced_by",
+    "blocked_by",
+    "discussed_in",
+    "related_to",
+];
+
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct ExtractedEntity {
     pub name: String,

@@ -64,10 +64,25 @@ pub struct KgExpectedRelation {
     pub relation_type: String,
 }
 
+/// Returns true if `name` appears as a whole-word substring in `source`
+/// (case-insensitive). Uses regex word boundaries (`\b`) to avoid false
+/// positives like "Rust" matching "Trustworthy". Falls back to plain
+/// substring contains() if regex compilation fails (e.g. on pathological
+/// input), preserving the previous behavior.
 pub fn check_entity_faithful_string(name: &str, source: &str) -> bool {
-    let needle = name.to_ascii_lowercase();
-    let hay = source.to_ascii_lowercase();
-    hay.contains(&needle)
+    let needle = name.trim();
+    if needle.is_empty() {
+        return false;
+    }
+    let pattern = format!(r"(?i)\b{}\b", regex::escape(needle));
+    match regex::Regex::new(&pattern) {
+        Ok(re) => re.is_match(source),
+        Err(_) => {
+            let lo_needle = needle.to_ascii_lowercase();
+            let lo_source = source.to_ascii_lowercase();
+            lo_source.contains(&lo_needle)
+        }
+    }
 }
 
 pub fn check_relation_faithful_string(
@@ -89,29 +104,11 @@ pub fn f1(precision: f64, recall: f64) -> f64 {
     2.0 * precision * recall / (precision + recall)
 }
 
-/// Canonical relation vocabulary fallback. No public constant found in
-/// extract.rs or prompts/ — using the 18-type spec list directly.
+/// Canonical relation vocabulary. Sourced from `crate::extract::RELATION_VOCABULARY`
+/// which mirrors the production seed at `db.rs:3907-3925`. Aliases are coerced
+/// at write time so the bench checks canonical names only.
 pub fn canonical_relation_types() -> Vec<&'static str> {
-    vec![
-        "is_a",
-        "part_of",
-        "related_to",
-        "located_in",
-        "works_at",
-        "knows",
-        "uses",
-        "depends_on",
-        "guarantees",
-        "implements",
-        "extends",
-        "replaces",
-        "supersedes",
-        "owns",
-        "created",
-        "decided",
-        "prefers",
-        "lives_in",
-    ]
+    crate::extract::RELATION_VOCABULARY.to_vec()
 }
 
 pub fn score_case(
@@ -333,19 +330,19 @@ mod tests {
 
             [[case]]
             id = "c1"
-            source_text = "Rust guarantees memory safety."
+            source_text = "Rust is related_to memory safety."
             expected_entities = [
                 { name = "Rust", kind = "language" },
                 { name = "memory safety", kind = "concept" },
             ]
             expected_relations = [
-                { from = "Rust", to = "memory safety", relation_type = "guarantees" },
+                { from = "Rust", to = "memory safety", relation_type = "related_to" },
             ]
         "#;
         let f: KgFixture = toml::from_str(toml_str).expect("toml parses");
         assert_eq!(f.case.len(), 1);
         assert_eq!(f.case[0].expected_entities.len(), 2);
-        assert_eq!(f.case[0].expected_relations[0].relation_type, "guarantees");
+        assert_eq!(f.case[0].expected_relations[0].relation_type, "related_to");
     }
 
     #[test]
@@ -379,17 +376,17 @@ mod tests {
 
     #[test]
     fn check_relation_faithful_requires_both_endpoints_and_canonical_type() {
-        let src = "Rust guarantees memory safety.";
+        let src = "Rust is related_to memory safety.";
         let canonical = canonical_relation_types();
         let r_ok = KgExpectedRelation {
             from: "Rust".into(),
             to: "memory safety".into(),
-            relation_type: "guarantees".into(),
+            relation_type: "related_to".into(),
         };
         let r_bad_endpoint = KgExpectedRelation {
             from: "Python".into(),
             to: "memory safety".into(),
-            relation_type: "guarantees".into(),
+            relation_type: "related_to".into(),
         };
         let r_noncanonical_type = KgExpectedRelation {
             from: "Rust".into(),
@@ -420,7 +417,7 @@ mod tests {
     fn score_case_perfect_extraction_yields_f1_1() {
         let case = KgFixtureCase {
             id: "c1".into(),
-            source_text: "Rust guarantees memory safety.".into(),
+            source_text: "Rust is related_to memory safety.".into(),
             expected_entities: vec![
                 KgExpectedEntity {
                     name: "Rust".into(),
@@ -434,7 +431,7 @@ mod tests {
             expected_relations: vec![KgExpectedRelation {
                 from: "Rust".into(),
                 to: "memory safety".into(),
-                relation_type: "guarantees".into(),
+                relation_type: "related_to".into(),
             }],
         };
         let extracted = crate::extract::KgExtractionResult {
@@ -453,7 +450,7 @@ mod tests {
             relations: vec![crate::extract::ExtractedRelation {
                 from: "Rust".into(),
                 to: "memory safety".into(),
-                relation_type: "guarantees".into(),
+                relation_type: "related_to".into(),
                 confidence: None,
                 explanation: None,
             }],
@@ -462,6 +459,33 @@ mod tests {
         assert!((r.entity_f1 - 1.0).abs() < 1e-9);
         assert!((r.relation_f1 - 1.0).abs() < 1e-9);
         assert!(r.unfaithful_entities.is_empty());
+    }
+
+    #[test]
+    fn check_entity_faithful_string_rejects_substring_false_positives() {
+        // "Rust" must not match "Trustworthy" / "Rustaceans" / "intrust"
+        assert!(!check_entity_faithful_string(
+            "Rust",
+            "Trustworthy code matters."
+        ));
+        assert!(!check_entity_faithful_string(
+            "Rust",
+            "Rustaceans love trust."
+        ));
+        // But it should still match when the word appears as a token
+        assert!(check_entity_faithful_string(
+            "Rust",
+            "We chose Rust for safety."
+        ));
+        assert!(check_entity_faithful_string(
+            "rust",
+            "We chose Rust for safety."
+        ));
+        // Multi-word names still work (word boundaries around the full phrase)
+        assert!(check_entity_faithful_string(
+            "memory safety",
+            "Rust provides memory safety."
+        ));
     }
 
     #[test]

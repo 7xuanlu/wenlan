@@ -10,7 +10,7 @@ expected_entities = [
     { name = "garbage collection", kind = "concept" },
 ]
 expected_relations = [
-    { from = "Rust", to = "memory safety", relation_type = "guarantees" },
+    { from = "Rust", to = "memory safety", relation_type = "related_to" },
 ]
 
 [[case]]
@@ -21,7 +21,7 @@ expected_entities = [
     { name = "Rust", kind = "language" },
 ]
 expected_relations = [
-    { from = "Tokio", to = "Rust", relation_type = "is_a" },
+    { from = "Tokio", to = "Rust", relation_type = "depends_on" },
 ]
 
 [[case]]
