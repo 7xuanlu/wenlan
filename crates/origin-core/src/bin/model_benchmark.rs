@@ -95,7 +95,7 @@ const CONTRADICTION_PAIRS: &[(&str, &str, &str)] = &[
         "CONTRADICTS",
     ),
     (
-        "The Origin database is stored in libSQL at ~/Library/Application Support/origin/",
+        "The Origin database is stored in libSQL under the platform data directory (e.g. ~/Library/Application Support/origin on macOS, ~/.local/share/origin on Linux, %LOCALAPPDATA%\\origin on Windows).",
         "Origin uses libSQL for its local database.",
         "CONSISTENT",
     ),
