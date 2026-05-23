@@ -1,0 +1,21 @@
+# nextest configuration. Loaded automatically by cargo-nextest from
+# .config/nextest.toml or .cargo/nextest.toml at the workspace root.
+#
+# https://nexte.st/docs/configuration/
+
+[profile.default]
+# Default leftover settings; we only override test-groups below.
+
+# Serialize all origin-core tests. Many of them instantiate the fastembed
+# embedder which holds a process-level lock on
+# `<cache>/models--Qdrant--bge-base-en-v1.5-onnx-Q/blobs/*.lock`. nextest
+# defaults to one process per test, so without serialization parallel tests
+# race on the cache lock and panic with "Lock acquisition failed". Serial
+# execution mirrors cargo test's in-process behavior and gives the embedder
+# init a clean window.
+[[profile.default.overrides]]
+filter = 'package(origin-core)'
+test-group = 'origin-core'
+
+[profile.default.test-groups]
+origin-core = { max-threads = 1 }
