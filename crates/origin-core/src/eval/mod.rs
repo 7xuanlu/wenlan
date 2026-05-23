@@ -11,6 +11,7 @@ pub mod context_path;
 pub mod fixtures;
 pub mod gen;
 pub mod kg_faithfulness;
+pub mod kg_faithfulness_llm;
 pub mod latency;
 pub mod lifecycle;
 pub mod locomo;
