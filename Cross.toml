@@ -1,0 +1,13 @@
+# Configuration for the `cross` cross-compilation tool used by the release
+# pipeline's Linux build jobs (`x86_64-unknown-linux-gnu`,
+# `aarch64-unknown-linux-gnu`).
+#
+# Pass OPENSSL_* env vars through to the cross container so openssl-sys can
+# build OpenSSL from source. The container does not ship `libssl-dev`, and
+# `openssl-sys` is pulled transitively via fastembed → hf-hub → native-tls.
+
+[build.env]
+passthrough = [
+    "OPENSSL_VENDORED",
+    "OPENSSL_STATIC",
+]
