@@ -145,13 +145,35 @@ jobs:
         env:
           RELEASE_TAG: ${{ env.RELEASE_TAG }}
 
-      - name: Install Rust stable
-        uses: dtolnay/rust-toolchain@stable
+      # rust-toolchain.toml pins the workspace to 1.95.0. The previous
+      # `@stable` install installed targets against the stable channel and
+      # cargo ran with 1.95.0 (per rust-toolchain.toml override), so
+      # `--target x86_64-apple-darwin` failed with `can't find crate for core`
+      # — the target was added to the wrong toolchain. Pin explicitly to
+      # mirror ci.yml.
+      - name: Install Rust 1.95.0 with matrix target
+        uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9 # master 2026-05-13
         with:
+          toolchain: 1.95.0
           targets: ${{ matrix.target }}
+
+      # vcpkg sqlite3 for Windows — libsql 0.9 needs `sqlite3.lib` at link
+      # time and does not bundle SQLite on Windows. Mirrors ci.yml's test
+      # step. GitHub `windows-2022` runner ships vcpkg preinstalled.
+      - name: Install sqlite3 (Windows only)
+        if: matrix.os == 'windows-2022'
+        shell: pwsh
+        run: |
+          vcpkg install sqlite3:x64-windows-static-md
+          "LIB=$env:VCPKG_INSTALLATION_ROOT\installed\x64-windows-static-md\lib;$env:LIB" | Out-File -FilePath $env:GITHUB_ENV -Append
 
       - name: Cache Rust dependencies
         uses: Swatinem/rust-cache@v2
+        with:
+          # Per-target cache key so the macos-14 jobs don't share state
+          # between aarch64 and x86_64 (otherwise the first job's target/
+          # contents pollute the second).
+          shared-key: release-${{ matrix.target }}
 
       - name: Install cross
         if: matrix.use_cross == true
@@ -161,8 +183,16 @@ jobs:
         if: matrix.use_cross != true
         run: cargo build --release -p origin -p origin-server -p origin-mcp --target ${{ matrix.target }}
 
+      # OPENSSL_VENDORED tells openssl-sys to build OpenSSL from source
+      # inside the cross container, which doesn't ship libssl-dev. The dep
+      # is pulled transitively through fastembed → hf-hub → native-tls →
+      # openssl-sys. Cross.toml's `[build.env] passthrough` forwards the
+      # env var into the container.
       - name: Build (cross)
         if: matrix.use_cross == true
+        env:
+          OPENSSL_VENDORED: "1"
+          OPENSSL_STATIC: "1"
         run: cross build --release -p origin -p origin-server -p origin-mcp --target ${{ matrix.target }}
 
       - name: Smoke (native)
