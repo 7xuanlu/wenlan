@@ -294,7 +294,18 @@ fn write_json_atomic(path: &Path, value: &Value) -> Result<()> {
 }
 
 fn home_path(parts: &[&str]) -> Result<PathBuf> {
-    let mut path = dirs::home_dir().ok_or_else(|| anyhow!("could not determine home directory"))?;
+    // Prefer the HOME/USERPROFILE env vars before falling back to the OS
+    // resolver. `dirs::home_dir()` on Windows calls SHGetKnownFolderPath
+    // directly and ignores USERPROFILE, which breaks integration tests
+    // that build an isolated home dir. Production users have USERPROFILE
+    // set to the same value the API returns, so the priority swap is a
+    // no-op for them.
+    let mut path = std::env::var_os("HOME")
+        .filter(|s| !s.is_empty())
+        .or_else(|| std::env::var_os("USERPROFILE").filter(|s| !s.is_empty()))
+        .map(PathBuf::from)
+        .or_else(dirs::home_dir)
+        .ok_or_else(|| anyhow!("could not determine home directory"))?;
     for part in parts {
         path.push(part);
     }
