@@ -184,6 +184,165 @@ pub async fn poll_batch(
     }
 }
 
+/// Internal helper that constructs the per-request params block for a tooled batch.
+/// Extracted so the shape can be unit-tested without making a network call.
+pub(crate) fn build_batch_request_body_with_tool(
+    model: &str,
+    prompt: &str,
+    system: Option<String>,
+    max_tokens: usize,
+    tool_def: &serde_json::Value,
+    tool_name: &str,
+) -> serde_json::Value {
+    let mut params = serde_json::json!({
+        "model": model,
+        "max_tokens": max_tokens,
+        "temperature": 0,
+        "messages": [{"role": "user", "content": prompt}],
+        "tools": [tool_def.clone()],
+        "tool_choice": {"type": "tool", "name": tool_name}
+    });
+    if let Some(sys) = system {
+        params["system"] = serde_json::json!(sys);
+    }
+    params
+}
+
+/// Submit a batch where every request forces a single tool call. Used by the
+/// judge to guarantee structured verdict output via the Messages API tool_use
+/// mechanism.
+///
+/// Anthropic Batch API params field accepts the full Messages API parameter set
+/// (https://platform.claude.com/docs/en/api/creating-message-batches —
+/// "Messages API creation parameters for the individual request"), so tools and
+/// tool_choice flow through verbatim.
+///
+/// Mirrors `submit_batch` cost-cap and EVAL_MAX_USD gating exactly.
+pub async fn submit_batch_with_tool(
+    client: &reqwest::Client,
+    api_key: &str,
+    requests: Vec<(String, String, Option<String>, usize)>, // (custom_id, prompt, system, max_tokens)
+    tool_def: serde_json::Value,
+    tool_name: &str,
+    model: &str,
+    cost_cap_usd: f64,
+) -> Result<String, String> {
+    if !cost_cap_usd.is_finite() || cost_cap_usd > 100.0 {
+        return Err(format!("cost_cap_usd suspicious: ${cost_cap_usd}"));
+    }
+    let est_cost = estimate_batch_cost(&requests);
+    if let Ok(cap_str) = std::env::var("EVAL_MAX_USD") {
+        let cap: f64 = cap_str.parse().unwrap_or(0.0);
+        if cap > 0.0 && est_cost > cap {
+            return Err(format!(
+                "Aborting: estimated cost ${:.4} exceeds EVAL_MAX_USD cap ${:.4}. \
+                 Set EVAL_MAX_USD higher or shrink batch.",
+                est_cost, cap
+            ));
+        }
+    }
+    eprintln!(
+        "[batch_tool] Estimated cost: ${:.3} ({} requests, cap: ${:.2})",
+        est_cost,
+        requests.len(),
+        cost_cap_usd,
+    );
+    if est_cost > cost_cap_usd {
+        return Err(format!(
+            "Estimated cost ${:.3} exceeds cap ${:.2}. Reduce questions or raise cap.",
+            est_cost, cost_cap_usd
+        ));
+    }
+
+    let batch_requests: Vec<serde_json::Value> = requests
+        .into_iter()
+        .map(|(id, prompt, system, max_tokens)| {
+            let params = build_batch_request_body_with_tool(
+                model, &prompt, system, max_tokens, &tool_def, tool_name,
+            );
+            serde_json::json!({
+                "custom_id": id,
+                "params": params
+            })
+        })
+        .collect();
+
+    let body = serde_json::json!({ "requests": batch_requests });
+
+    let resp = client
+        .post("https://api.anthropic.com/v1/messages/batches")
+        .header("x-api-key", api_key)
+        .header("anthropic-version", "2023-06-01")
+        .json(&body)
+        .send()
+        .await
+        .map_err(|e| format!("POST batches: {e}"))?;
+
+    if !resp.status().is_success() {
+        let status = resp.status();
+        let body = resp.text().await.unwrap_or_default();
+        return Err(format!("batches status {status}: {body}"));
+    }
+
+    let resp_json: serde_json::Value = resp
+        .json()
+        .await
+        .map_err(|e| format!("parse batches response: {e}"))?;
+
+    resp_json["id"]
+        .as_str()
+        .map(|s| s.to_string())
+        .ok_or_else(|| format!("no batch id in response: {resp_json}"))
+}
+
+/// Download a batch's results, preserving the full content array per result.
+/// Sibling to `download_batch_results` — that one's text-only extraction is
+/// fine for non-judge callers; this one is mandatory for any caller that
+/// needs tool_use input.
+pub async fn download_batch_results_structured(
+    client: &reqwest::Client,
+    api_key: &str,
+    results_url: &str,
+) -> Result<HashMap<String, serde_json::Value>, String> {
+    let resp = client
+        .get(results_url)
+        .header("x-api-key", api_key)
+        .header("anthropic-version", "2023-06-01")
+        .send()
+        .await
+        .map_err(|e| format!("GET results: {e}"))?;
+
+    if !resp.status().is_success() {
+        let status = resp.status();
+        let body = resp.text().await.unwrap_or_default();
+        return Err(format!("results status {status}: {body}"));
+    }
+
+    let text = resp.text().await.map_err(|e| format!("read body: {e}"))?;
+    let mut results = HashMap::new();
+
+    for line in text.lines() {
+        if line.trim().is_empty() {
+            continue;
+        }
+        let json: serde_json::Value =
+            serde_json::from_str(line).map_err(|e| format!("parse result line: {e}"))?;
+
+        let custom_id = json["custom_id"].as_str().unwrap_or("").to_string();
+        let result_type = json["result"]["type"].as_str().unwrap_or("");
+
+        if result_type == "succeeded" {
+            // Preserve the WHOLE content array so callers can pick tool_use vs text.
+            let content = json["result"]["message"]["content"].clone();
+            results.insert(custom_id, content);
+        } else {
+            eprintln!("[batch_tool] {} result: {}", custom_id, result_type);
+        }
+    }
+
+    Ok(results)
+}
+
 /// Download batch results and return a map of custom_id -> response text.
 pub async fn download_batch_results(
     client: &reqwest::Client,
@@ -225,4 +384,49 @@ pub async fn download_batch_results(
     }
 
     Ok(results)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn build_batch_request_body_with_tool_includes_tool_choice() {
+        let tool_def = serde_json::json!({
+            "name": "record_verdict",
+            "description": "test tool",
+            "input_schema": {"type": "object", "properties": {}, "required": []}
+        });
+        let body = build_batch_request_body_with_tool(
+            "claude-haiku-4-5-20251001",
+            "test prompt",
+            None,
+            10,
+            &tool_def,
+            "record_verdict",
+        );
+        assert_eq!(body["model"], "claude-haiku-4-5-20251001");
+        assert_eq!(body["max_tokens"], 10);
+        assert_eq!(body["temperature"], 0);
+        assert_eq!(body["messages"][0]["role"], "user");
+        assert_eq!(body["messages"][0]["content"], "test prompt");
+        assert_eq!(body["tools"][0]["name"], "record_verdict");
+        assert_eq!(body["tool_choice"]["type"], "tool");
+        assert_eq!(body["tool_choice"]["name"], "record_verdict");
+        assert!(body.get("system").is_none(), "no system when None");
+    }
+
+    #[test]
+    fn build_batch_request_body_with_tool_includes_system_when_some() {
+        let tool_def = serde_json::json!({"name": "record_verdict", "description": "", "input_schema": {"type": "object"}});
+        let body = build_batch_request_body_with_tool(
+            "claude-haiku-4-5-20251001",
+            "user prompt",
+            Some("system prompt".to_string()),
+            10,
+            &tool_def,
+            "record_verdict",
+        );
+        assert_eq!(body["system"], "system prompt");
+    }
 }
