@@ -1205,6 +1205,98 @@ pub async fn judge_with_batch_api(
     Ok(results)
 }
 
+/// Tool schema for the binary judge verdict. Passed as a forced tool_choice in
+/// the batch judge so every response is structured JSON, not free text.
+#[allow(dead_code)] // wired in T4 (judge_with_batch_api)
+pub(crate) fn verdict_tool() -> serde_json::Value {
+    serde_json::json!({
+        "name": "record_verdict",
+        "description": "Record the binary verdict for the model response.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "verdict": {
+                    "type": "string",
+                    "enum": ["yes", "no"],
+                    "description": "yes if response is correct per the rubric, otherwise no"
+                },
+                "verdict_reason": {
+                    "type": "string",
+                    "description": "one-sentence justification"
+                }
+            },
+            "required": ["verdict", "verdict_reason"]
+        }
+    })
+}
+
+/// Extract a binary verdict + reason from a batch response content array.
+/// Returns `(score, reason)`. Score is 1 for yes, 0 for everything else
+/// including parse failure. Parse failures eprintln so the operator sees them.
+///
+/// Happy path: find the first `tool_use` block named `record_verdict`, read
+/// `input.verdict` (case-insensitive `yes`/`no`).
+///
+/// Fallback: if no tool_use block matches, try a `text` block via
+/// `parse_judge_output`. This handles the rare case where the model bypasses
+/// the forced tool_choice or returns mixed content.
+#[allow(dead_code)] // wired in T4 (judge_with_batch_api)
+pub(crate) fn extract_tool_verdict(content: &serde_json::Value) -> (u8, String) {
+    if let Some(blocks) = content.as_array() {
+        for block in blocks {
+            if block["type"] == "tool_use" && block["name"] == "record_verdict" {
+                if let Some(input) = block["input"].as_object() {
+                    let verdict_raw = input.get("verdict").and_then(|v| v.as_str()).unwrap_or("");
+                    let reason = input
+                        .get("verdict_reason")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string();
+
+                    let normalized = verdict_raw.trim().to_ascii_lowercase();
+                    let score = match normalized.as_str() {
+                        "yes" => 1u8,
+                        "no" => 0u8,
+                        other => {
+                            eprintln!(
+                                "[judge_batch] tool_use verdict not in enum: {other:?}; scoring 0"
+                            );
+                            0u8
+                        }
+                    };
+                    return (score, reason);
+                } else {
+                    eprintln!("[judge_batch] tool_use input not an object; scoring 0");
+                    return (0, String::new());
+                }
+            }
+        }
+    }
+
+    let fallback_text = content
+        .as_array()
+        .and_then(|blocks| blocks.iter().find(|b| b["type"] == "text"))
+        .and_then(|b| b["text"].as_str())
+        .unwrap_or("");
+
+    if fallback_text.is_empty() {
+        eprintln!("[judge_batch] tool_use absent and no text fallback; scoring 0");
+        return (0, String::new());
+    }
+
+    eprintln!("[judge_batch] tool_use absent; falling back to text parse");
+    let score = parse_judge_output(fallback_text)
+        .map(|p| {
+            if p.verdict == JudgeVerdict::Yes {
+                1u8
+            } else {
+                0u8
+            }
+        })
+        .unwrap_or(0);
+    (score, fallback_text.to_string())
+}
+
 /// Stamp the judge model id on a Report's env (no-op when env is None).
 /// Used by runners to record which judge produced the answer-quality metrics.
 pub fn stamp_judge_model(env: &mut Option<crate::eval::report::ReportEnv>, model: &str) {
@@ -1359,5 +1451,107 @@ mod tests {
     #[test]
     fn parse_judge_output_garbage_errors() {
         assert!(parse_judge_output("¯\\_(ツ)_/¯").is_err());
+    }
+
+    #[test]
+    fn extract_tool_verdict_happy_path_yes() {
+        let content = serde_json::json!([{
+            "type": "tool_use",
+            "name": "record_verdict",
+            "input": {"verdict": "yes", "verdict_reason": "matches gold"}
+        }]);
+        let (score, reason) = extract_tool_verdict(&content);
+        assert_eq!(score, 1);
+        assert_eq!(reason, "matches gold");
+    }
+
+    #[test]
+    fn extract_tool_verdict_happy_path_no() {
+        let content = serde_json::json!([{
+            "type": "tool_use",
+            "name": "record_verdict",
+            "input": {"verdict": "no", "verdict_reason": "missing required fact"}
+        }]);
+        let (score, _) = extract_tool_verdict(&content);
+        assert_eq!(score, 0);
+    }
+
+    #[test]
+    fn extract_tool_verdict_content_null_scores_zero() {
+        let content = serde_json::Value::Null;
+        let (score, _) = extract_tool_verdict(&content);
+        assert_eq!(score, 0);
+    }
+
+    #[test]
+    fn extract_tool_verdict_wrong_tool_name_falls_through() {
+        let content = serde_json::json!([{
+            "type": "tool_use",
+            "name": "wrong_tool",
+            "input": {"verdict": "yes"}
+        }]);
+        // No matching tool_use block + no text block → score 0.
+        let (score, _) = extract_tool_verdict(&content);
+        assert_eq!(score, 0);
+    }
+
+    #[test]
+    fn extract_tool_verdict_input_is_string_not_object() {
+        let content = serde_json::json!([{
+            "type": "tool_use",
+            "name": "record_verdict",
+            "input": "yes"
+        }]);
+        let (score, _) = extract_tool_verdict(&content);
+        assert_eq!(score, 0);
+    }
+
+    #[test]
+    fn extract_tool_verdict_missing_verdict_key_scores_zero() {
+        let content = serde_json::json!([{
+            "type": "tool_use",
+            "name": "record_verdict",
+            "input": {"verdict_reason": "no verdict provided"}
+        }]);
+        let (score, _) = extract_tool_verdict(&content);
+        assert_eq!(score, 0);
+    }
+
+    #[test]
+    fn extract_tool_verdict_unexpected_verdict_value_scores_zero() {
+        let content = serde_json::json!([{
+            "type": "tool_use",
+            "name": "record_verdict",
+            "input": {"verdict": "maybe", "verdict_reason": "unsure"}
+        }]);
+        let (score, _) = extract_tool_verdict(&content);
+        assert_eq!(score, 0);
+    }
+
+    #[test]
+    fn extract_tool_verdict_case_insensitive_yes() {
+        let content = serde_json::json!([{
+            "type": "tool_use",
+            "name": "record_verdict",
+            "input": {"verdict": "YES", "verdict_reason": "exact"}
+        }]);
+        let (score, _) = extract_tool_verdict(&content);
+        assert_eq!(score, 1);
+    }
+
+    #[test]
+    fn extract_tool_verdict_falls_back_to_text_when_no_tool_block() {
+        let content = serde_json::json!([{"type": "text", "text": "yes"}]);
+        let (score, _) = extract_tool_verdict(&content);
+        assert_eq!(score, 1);
+    }
+
+    #[test]
+    fn extract_tool_verdict_text_fallback_strict_match() {
+        // parse_judge_output is exact-match; multi-line text scores 0.
+        let content =
+            serde_json::json!([{"type": "text", "text": "Yes.\n\nThe model response is correct."}]);
+        let (score, _) = extract_tool_verdict(&content);
+        assert_eq!(score, 0);
     }
 }
