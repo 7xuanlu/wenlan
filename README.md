@@ -31,8 +31,6 @@ Origin gives your daily AI workflow one local home: memory your agents can recal
 
 Your agent reads searchable memory, graph context, and hybrid retrieval. You read Markdown artifacts under `~/.origin/`. Same store, two surfaces.
 
-Runs natively on macOS (Apple Silicon + Intel), Linux (x86_64 + ARM64), and Windows (x86_64). One install path, three OSes; the npm wrapper and `install.sh` auto-detect your platform.
-
 [![Watch the Origin demo](./docs/assets/demo-preview.gif)](https://youtu.be/k37gjWVPHwI)
 
 ---
@@ -165,7 +163,7 @@ Full contributor map: [CLAUDE.md](CLAUDE.md).
 
 ## Build from source
 
-Most users should install through the Claude Code plugin. For local development:
+Origin builds natively on macOS (Apple Silicon + Intel), Linux (x86_64 + ARM64; glibc), and Windows (x86_64). The npm wrapper (`@7xuanlu/origin`, `origin-mcp`) and `install.sh` auto-detect your platform and pull the matching prebuilt release. Most users should install through the Claude Code plugin or `npx`. For local development:
 
 ```bash
 git clone https://github.com/7xuanlu/origin.git
@@ -174,7 +172,7 @@ cargo build --workspace
 cargo run -p origin-server
 ```
 
-Build details for the daemon, MCP server, CLI, and core crates live in the crate READMEs linked above.
+Build details for the daemon, MCP server, CLI, and core crates live in the crate READMEs linked above. Cross-platform specifics (service registration, paths, Windows install limitation) live in [AGENTS.md](AGENTS.md#cross-platform).
 
 ---
 
