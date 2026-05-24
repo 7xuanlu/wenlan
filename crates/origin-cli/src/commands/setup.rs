@@ -147,6 +147,9 @@ pub async fn run_doctor() -> anyhow::Result<()> {
         println!("  Or:  origin key set anthropic");
     }
 
+    let cwd = std::env::current_dir()?;
+    print_space_resolution(&cwd);
+
     Ok(())
 }
 
@@ -391,6 +394,59 @@ async fn delete(path: &str) -> anyhow::Result<()> {
         return Err(anyhow::anyhow!("HTTP {}", resp.status()));
     }
     Ok(())
+}
+
+fn print_space_resolution(cwd: &std::path::Path) {
+    let stdout = std::io::stdout();
+    let mut out = stdout.lock();
+    let _ = writeln!(out, "\n--- Space resolution ---");
+
+    let env = std::env::var("ORIGIN_SPACE").ok().filter(|s| !s.is_empty());
+    let _ = writeln!(
+        out,
+        "ORIGIN_SPACE env:      {}",
+        env.as_deref().unwrap_or("(unset)")
+    );
+
+    let cfg = dirs::home_dir().map(|h| h.join(".origin/spaces.toml"));
+    let cfg_exists = cfg.as_ref().map(|p| p.exists()).unwrap_or(false);
+    let _ = writeln!(
+        out,
+        "~/.origin/spaces.toml: {}",
+        if cfg_exists { "present" } else { "missing" }
+    );
+
+    let _ = writeln!(out, "cwd:                   {}", cwd.display());
+
+    let plugin_resolver = std::env::var("CLAUDE_PLUGIN_ROOT")
+        .ok()
+        .map(|p| format!("{}/bin/resolve-space.sh", p));
+    if let Some(p) = plugin_resolver {
+        if std::path::Path::new(&p).exists() {
+            let _ = writeln!(out, "Plugin resolver:       {}", p);
+            let output = std::process::Command::new(&p)
+                .arg("--cwd")
+                .arg(cwd)
+                .output();
+            if let Ok(o) = output {
+                let s = String::from_utf8_lossy(&o.stdout);
+                let s = s.trim().replace('\t', " (from ");
+                let s = if s.contains(" (from ") {
+                    format!("{})", s)
+                } else {
+                    s.to_string()
+                };
+                let _ = writeln!(out, "Resolved:              {}", s);
+            }
+        } else {
+            let _ = writeln!(out, "Plugin resolver:       not found at {}", p);
+        }
+    } else {
+        let _ = writeln!(
+            out,
+            "Plugin resolver:       CLAUDE_PLUGIN_ROOT not set (running outside Claude Code)"
+        );
+    }
 }
 
 fn prompt_line(prompt: &str) -> anyhow::Result<String> {

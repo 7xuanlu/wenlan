@@ -29,7 +29,6 @@ pdf-extract = { workspace = true }
 zip = { workspace = true }
 
 # On-device LLM inference (phase 3b)
-llama-cpp-2 = { workspace = true }
 hf-hub = { workspace = true }
 encoding_rs = { workspace = true }
 
@@ -66,6 +65,12 @@ env_logger = "0.11"
 # eval modules are not feature-gated, so their deps are regular deps.
 tiktoken-rs = "0.6"
 futures = { workspace = true }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+llama-cpp-2 = { version = "0.1", features = ["metal", "sampler"] }
+
+[target.'cfg(not(target_os = "macos"))'.dependencies]
+llama-cpp-2 = { version = "0.1", features = ["sampler"] }
 
 [dev-dependencies]
 temp-env = { version = "0.3", features = ["async_closure"] }

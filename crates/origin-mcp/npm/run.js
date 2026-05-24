@@ -4,7 +4,8 @@
 const { spawn } = require("child_process");
 const { join } = require("path");
 
-const bin = join(__dirname, "bin", "origin-mcp");
+const binaryName = process.platform === "win32" ? "origin-mcp.exe" : "origin-mcp";
+const bin = join(__dirname, "bin", binaryName);
 const child = spawn(bin, process.argv.slice(2), { stdio: "inherit" });
 
 child.on("exit", (code) => process.exit(code ?? 1));

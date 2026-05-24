@@ -14,8 +14,8 @@ use std::path::{Path, PathBuf};
 
 fn legacy_db_path() -> PathBuf {
     // Honor ORIGIN_DATA_DIR so scratch / worktree daemons do not reach into
-    // the user's real `~/Library/Application Support/origin/spaces.db` and
-    // rename it out from under a production daemon still running pre-PR-B2.
+    // the user's real platform data directory (resolved via `dirs::data_local_dir()` per OS)
+    // `spaces.db` and rename it out from under a production daemon still running pre-PR-B2.
     let root = std::env::var_os("ORIGIN_DATA_DIR")
         .map(PathBuf::from)
         .unwrap_or_else(|| {
@@ -117,8 +117,8 @@ mod tests {
     use std::sync::Arc;
 
     /// `legacy_db_path` must honor `ORIGIN_DATA_DIR` so scratch / worktree
-    /// daemons do not reach into the user's production
-    /// `~/Library/Application Support/origin/spaces.db` and rename it.
+    /// daemons do not reach into the user's production platform data directory
+    /// (resolved via `dirs::data_local_dir()` per OS) `spaces.db` and rename it.
     #[test]
     fn test_legacy_db_path_honors_origin_data_dir() {
         // Save + restore so we don't leak env state to other tests.

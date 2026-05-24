@@ -71,6 +71,42 @@ cargo test -p origin-core --test eval_harness save_longmemeval_expanded_baseline
 
 Pre-commit auto-formats Rust and runs Clippy on changed crates. Pre-push runs workspace clippy + library tests.
 
+## Cross-platform
+
+Origin runs on macOS (arm64, x86_64), Linux (x86_64, aarch64; musl), and Windows (x86_64).
+
+| OS | Data dir | Service registration |
+|---|---|---|
+| macOS | `~/Library/Application Support/origin/` | launchd via `~/Library/LaunchAgents/com.origin.server.plist` (user-level) |
+| Linux | `~/.local/share/origin/` (or `$XDG_DATA_HOME/origin`) | systemd user unit at `~/.config/systemd/user/origin-server.service` (qualifier dropped per `ServiceLabel::to_script_name()`). Enable lingering with `loginctl enable-linger` if you want the service alive after logout. |
+| Windows | `%LOCALAPPDATA%\origin\` | `origin install` is **not supported on Windows in v1**. origin-server is a plain console app and does not speak the Windows Service Control Protocol; sc.exe times out at 30s. Run the daemon manually (`Start-Process .\origin-server.exe -WindowStyle Hidden`) or register a per-user Task Scheduler task with `schtasks /create /sc onlogon`. Tracked follow-up: implement service control via the `windows-service` crate. |
+
+`origin install` / `origin uninstall` work on macOS + Linux. On Windows both commands exit non-zero with guidance toward manual run or Task Scheduler.
+
+### llama-cpp-2 backend
+
+By default, Linux and Windows builds are CPU-only. macOS keeps Metal. CUDA and Vulkan backends are not enabled in v1; they will land behind opt-in cargo features in a follow-up.
+
+### ORT (ONNX Runtime) on Windows
+
+If you see `Failed to load onnxruntime.dll` or version-mismatch errors on Windows, set `ORT_DYLIB_PATH` to the bundled `onnxruntime.dll` inside the Origin install directory before starting the daemon. The bundled DLL ships in the Windows release zip.
+
+### Daemon bind address
+
+The daemon binds to `127.0.0.1:7878` by default. To expose it on a non-loopback address (e.g., inside Docker), set `ORIGIN_BIND_ADDR=0.0.0.0:7878` in the daemon's environment. The Docker image already sets this.
+
+### Manual Windows verification from macOS
+
+The CI matrix runs `windows-2022` on every PR and is the primary signal. For hands-on testing, run a Windows 11 VM via UTM or Parallels; install MSVC 2022 Build Tools and Rust; then `cargo build --release -p origin-server` and `scripts/smoke-windows.ps1`.
+
+### Linux smoke from macOS
+
+```bash
+bash scripts/smoke-linux.sh
+```
+
+Builds the multi-arch daemon image (linux/arm64 for native Apple Silicon speed via OrbStack / Docker Desktop), starts a container, exercises the HTTP API, asserts responses, tears down. Runtime ~3 minutes after the first build.
+
 ## Local vs CI test responsibilities
 
 Origin runs across several layers. The split is driven by three questions: **(1) Can a hosted runner do this?** (no GPU, no API keys, no cost). **(2) Is it under 60s on cold cache?** **(3) Does it gate correctness or measure quality?** Quality measures never gate.
@@ -126,6 +162,8 @@ Cache directories accumulate fast (1GB+ per full LoCoMo+LME run) and snapshots s
 ### Page-distillation faithfulness bench
 
 `app/eval/page_fixtures/*.toml` hold hand-curated source memories + a distilled page body per case + an `expected_min_faithfulness` floor. The `eval::page_faithfulness` module's smoke test (`#[ignore]`d, runs in L6 main canary) splits each page body into sentences and scores what fraction of sentences have ≥ 50% content-token overlap with the union of source memories. Negative-control fixtures in `seed_hallucinations.toml` carry a high `expected_min` floor specifically to verify the scorer flags hallucinated pages. LLM-judge variant deferred.
+
+**Scope limits.** Token-overlap is lexical, not semantic. Paraphrased faithful claims may fail the 50% floor and hallucinated claims with high keyword overlap may pass. Sentence-level granularity only (no multi-sentence claim composition). Acceptable for the smoke-test floor; a real faithfulness gate needs the LLM-judge variant tracked under C-D-LLM.
 
 ## Releasing (release-please)
 
@@ -210,7 +248,7 @@ The daemon (`origin-server`) is the single source of truth. External tools (the 
 
 ### Database: libSQL (owned by origin-core)
 
-One libSQL database at `~/Library/Application Support/origin/memorydb/origin_memory.db`, owned by `MemoryDB` in `crates/origin-core/src/db.rs`:
+One libSQL database at the platform data directory (`dirs::data_local_dir()/origin/memorydb/origin_memory.db`; on macOS, `~/Library/Application Support/origin/memorydb/origin_memory.db`), owned by `MemoryDB` in `crates/origin-core/src/db.rs`:
 - **Document chunks**: `chunks` table with `F32_BLOB(768)` vector column, DiskANN indexing (768-dim, BGE-Base-EN-v1.5-Q)
 - **Knowledge graph**: `entities`, `relations`, `observations` tables with FK cascades
 - **Full-text search**: FTS5 virtual table (`chunks_fts`) auto-synced via triggers
@@ -284,7 +322,7 @@ All business logic lives here. No tauri, no axum. Framework-agnostic.
 | `sources/` | `RawDocument`, file watchers, Obsidian importer. `RawDocument` and related types re-exported from `origin-types`. |
 | `privacy.rs` | PII redaction |
 | `router/classify.rs`, `content_score.rs` | Smart router scoring helpers (non-tauri parts) |
-| `config.rs` | Persistent config at `~/Library/Application Support/origin/config.json` |
+| `config.rs` | Persistent config at `dirs::data_local_dir()/origin/config.json` (on macOS, `~/Library/Application Support/origin/config.json`) |
 | `export/` | Markdown/JSON/zip/PDF exporters |
 | `eval/` | Benchmark harness: LoCoMo, LongMemEval. Each benchmark has base (embedding-only), reranked (LLM rescores after search), and expanded (LLM query expansion before search) variants. Baselines under `EVAL_BASELINES_DIR` (gitignored). |
 | `state.rs` | `CoreState` — shared state struct used by origin-server |
@@ -348,11 +386,22 @@ The `origin` binary — a thin reqwest-based CLI for the daemon's HTTP API. Subc
 
 **Other:**
 - **Metal/ggml on macOS Tahoe 26.x**: `ggml_metal_init` may fail even though native Metal works. The daemon auto-degrades and continues without LLM. Not a code bug. Check for competing GPU processes: `pgrep -la origin`.
-- **Dev and prod share data by default**: Both use port 7878 and `~/Library/Application Support/origin/`. For isolated testing, override explicitly: `ORIGIN_PORT=7879 ORIGIN_DATA_DIR=/tmp/origin-test cargo run -p origin-server`.
+- **Dev and prod share data by default**: Both use port 7878 and the platform data directory (on macOS, `~/Library/Application Support/origin/`). For isolated testing, override explicitly: `ORIGIN_PORT=7879 ORIGIN_DATA_DIR=/tmp/origin-test cargo run -p origin-server`.
+
+### Worktree cleanup after squash-merge
+
+GitHub squash-merge bundles all PR commits into one new commit on `main` with a fresh SHA. The original commits on the feature branch keep their old SHAs and remain in the local repo + worktree even though their content has shipped. This creates three traps:
+
+- **`git cherry main feature/<name>` lies.** It compares commit SHAs (not patch content) and will mark all squashed commits as "unmerged" (`+` prefix). The branch may be fully merged content-wise. Verify by reading the squash commit body (`git log -1 --format=%B <squash-sha>`); the body lists each original PR commit message. Alternatively, grep `main`'s log for keywords or file paths the branch added.
+- **Stale worktrees accumulate.** `.worktrees/<name>/` is not auto-removed when a PR merges. After confirming all content is in `main`, run from the main repo root: `git worktree remove --force .worktrees/<name>` then `git branch -D <branch>` (force `-D` is needed because `git` thinks it's unmerged for the same SHA reason) then `git worktree prune`.
+- **`.gitignored` per-checkout artifacts.** Files under gitignored paths (`app/eval/baselines/`, `.fastembed_cache/`, build outputs) live per-worktree. Removing a worktree removes its private copies. If a worktree happened to be the only host of some large gitignored artifact (eval baseline DBs, downloaded models), back it up to the canonical shared location first (e.g. `~/.cache/origin-eval/` via `scripts/migrate-eval-cache.sh`) before deleting the worktree.
+
+Run this hygiene pass roughly once a week or whenever `git worktree list` exceeds ~5 entries. Stale worktree paths waste disk + confuse "is this work merged?" investigations.
 
 ### Misc
+- `ORIGIN_BIND_ADDR=<host:port>`: override the daemon's bind address (default `127.0.0.1:7878`). Used inside Docker to listen on `0.0.0.0`.
 - Log filter default is `warn` — add modules explicitly for `info` logs (e.g., `origin_core::db=info`, `origin_server=info`)
-- All local data stored in `~/Library/Application Support/origin/` — MemoryDB, config, activities, tags
+- All local data stored in the platform data directory (`dirs::data_local_dir()/origin/`; on macOS, `~/Library/Application Support/origin/`) — MemoryDB, config, activities, tags
 - Crate names: `origin-types`, `origin-core`, `origin-server`, `origin` (CLI), `origin-mcp` — all in this workspace. The desktop app crate `origin-app` lives in [7xuanlu/origin-app](https://github.com/7xuanlu/origin-app).
 - **Licenses**: all five workspace crates (`origin-types`, `origin-core`, `origin-server`, `origin` CLI, `origin-mcp`) are **Apache-2.0** via workspace inheritance. The desktop app in `origin-app` is **AGPL-3.0-only** (separate repo).
 - `origin-mcp` is in-tree at `crates/origin-mcp/` (merged from the old `7xuanlu/origin-mcp` repo on 2026-05-09 via `git subtree`). It talks to the daemon via HTTP at runtime and is published to npm as a standalone binary (`npx -y origin-mcp`).

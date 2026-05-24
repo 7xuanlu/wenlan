@@ -28,7 +28,7 @@ If you only need the raw MCP connector config, add this to your MCP client:
 }
 ```
 
-The npm wrapper currently installs a prebuilt macOS Apple Silicon binary from the Origin release. Other targets require building from source and are not advertised as supported setup targets yet.
+The npm wrapper auto-detects the host platform and downloads the matching prebuilt binary from the Origin release. Supported: macOS (arm64, x64), Linux (x64, arm64; glibc), Windows (x64). Other targets require building from source via `cargo install origin-mcp`.
 
 Or install a binary directly:
 
