@@ -14,6 +14,12 @@ pub struct SearchResult {
     pub url: Option<String>,
     pub chunk_index: i32,
     pub last_modified: i64,
+    /// The user's mental-timeline timestamp (when an event happened, not when
+    /// it was ingested). Populated by a date-extraction pass; NULL by default
+    /// (`memories.event_date` is NULL-able, added in migration 52). Distinct
+    /// from `last_modified`, which tracks ingestion / edit time.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub event_date: Option<i64>,
     pub score: f32,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub chunk_type: Option<String>,

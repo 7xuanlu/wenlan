@@ -123,6 +123,7 @@ mod tests {
             url: None,
             chunk_index: 0,
             last_modified: 1000,
+            event_date: None,
             score: 0.9,
             chunk_type: None,
             language: None,

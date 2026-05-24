@@ -6040,6 +6040,12 @@ impl MemoryDB {
             url: row.get::<Option<String>>(6).unwrap_or(None),
             chunk_index: row.get::<i32>(7).unwrap_or(0),
             last_modified: row.get::<i64>(8).unwrap_or(0),
+            // event_date sits at index 30 in the canonical SELECT list (added
+            // in migration 52, surfaced for the temporal channel). Older
+            // SELECTs that don't include it yield `row.get::<Option<i64>>(30)`
+            // = Err -> None via unwrap_or, which is safe — no caller of this
+            // helper currently consumes event_date except search_memory_with_anchor.
+            event_date: row.get::<Option<i64>>(30).unwrap_or(None),
             score,
             chunk_type: row.get::<Option<String>>(9).unwrap_or(None),
             language: row.get::<Option<String>>(10).unwrap_or(None),
@@ -6460,7 +6466,7 @@ impl MemoryDB {
                         c.confidence, c.confirmed, c.stability, c.supersedes,
                         c.entity_id, c.quality, c.is_recap, c.supersede_mode,
                         c.structured_fields, c.retrieval_cue, c.source_text,
-                        c.version, c.pending_revision,
+                        c.version, c.pending_revision, c.event_date,
                         vector_distance_cos(c.embedding, vector32(?1))
                  FROM vector_top_k('memories_vec_idx', vector32(?1), ?2) AS vt
                  JOIN memories c ON c.rowid = vt.id
@@ -6477,7 +6483,7 @@ impl MemoryDB {
             match conn.query(&sql, params).await {
                 Ok(mut rows) => {
                     while let Ok(Some(row)) = rows.next().await {
-                        let distance: f64 = row.get(30).unwrap_or(1.0);
+                        let distance: f64 = row.get(31).unwrap_or(1.0);
                         if let Ok(result) = Self::row_to_search_result(&row, distance as f32) {
                             vector_results.push(result);
                         }
@@ -6524,7 +6530,7 @@ impl MemoryDB {
                         c.confidence, c.confirmed, c.stability, c.supersedes,
                         c.entity_id, c.quality, c.is_recap, c.supersede_mode,
                         c.structured_fields, c.retrieval_cue, c.source_text,
-                        c.version, c.pending_revision,
+                        c.version, c.pending_revision, c.event_date,
                         fts.rank
                  FROM memories_fts fts
                  JOIN memories c ON fts.rowid = c.rowid
@@ -6543,7 +6549,7 @@ impl MemoryDB {
             match conn.query(&fts_sql, params).await {
                 Ok(mut rows) => {
                     while let Ok(Some(row)) = rows.next().await {
-                        let rank: f64 = row.get(30).unwrap_or(0.0);
+                        let rank: f64 = row.get(31).unwrap_or(0.0);
                         if let Ok(result) = Self::row_to_search_result(&row, rank as f32) {
                             fts_results.push(result);
                         }
@@ -6716,7 +6722,7 @@ impl MemoryDB {
                         c.confidence, c.confirmed, c.stability, c.supersedes,
                         c.entity_id, c.quality, c.is_recap, c.supersede_mode,
                         c.structured_fields, c.retrieval_cue, c.source_text,
-                        c.version, c.pending_revision,
+                        c.version, c.pending_revision, c.event_date,
                         vector_distance_cos(c.embedding, vector32(?1))
                  FROM vector_top_k('memories_vec_idx', vector32(?1), ?2) AS vt
                  JOIN memories c ON c.rowid = vt.id
@@ -6733,7 +6739,7 @@ impl MemoryDB {
             match conn.query(&sql, params).await {
                 Ok(mut rows) => {
                     while let Ok(Some(row)) = rows.next().await {
-                        let distance: f64 = row.get(30).unwrap_or(1.0);
+                        let distance: f64 = row.get(31).unwrap_or(1.0);
                         if let Ok(result) = Self::row_to_search_result(&row, distance as f32) {
                             vector_results.push(result);
                         }
@@ -6776,7 +6782,7 @@ impl MemoryDB {
                         c.confidence, c.confirmed, c.stability, c.supersedes,
                         c.entity_id, c.quality, c.is_recap, c.supersede_mode,
                         c.structured_fields, c.retrieval_cue, c.source_text,
-                        c.version, c.pending_revision,
+                        c.version, c.pending_revision, c.event_date,
                         fts.rank
                  FROM memories_fts fts
                  JOIN memories c ON fts.rowid = c.rowid
@@ -6801,7 +6807,7 @@ impl MemoryDB {
                 match conn.query(&fts_sql, params).await {
                     Ok(mut rows) => {
                         while let Ok(Some(row)) = rows.next().await {
-                            let rank: f64 = row.get(30).unwrap_or(0.0);
+                            let rank: f64 = row.get(31).unwrap_or(0.0);
                             if let Ok(result) = Self::row_to_search_result(&row, rank as f32) {
                                 fts_results.push(result);
                             }
@@ -7124,6 +7130,99 @@ impl MemoryDB {
         }
 
         Ok(final_results)
+    }
+
+    /// Hybrid search with a configurable recency-decay anchor (P0 #2 Phase A).
+    ///
+    /// Mirrors [`search_memory`] and accepts the same filters; the only added
+    /// parameter is `recency_anchor`, which selects the column used for the
+    /// exponential-decay term. With [`AnchorField::LastModified`] (the default
+    /// for [`search_memory`]) results are identical to the base method. With
+    /// [`AnchorField::EventDate`] the decay anchors to `memories.event_date`
+    /// when populated, falling back to `last_modified` when NULL.
+    ///
+    /// Decay defaults to `LastModified` deliberately: an old email imported
+    /// today should rank as freshly ingested. `event_date` is for the user's
+    /// mental timeline, NOT recency decay.
+    ///
+    /// Scope (Phase A): this is a thin wrapper that calls [`search_memory`]
+    /// then re-weights each result by `new_recency / old_recency` and re-sorts.
+    /// It does not extract a shared inner helper — the inner pipeline
+    /// (RRF + dedup chains + graph augmentation + normalization) is too
+    /// interleaved to factor cleanly without a broader refactor. Pulling the
+    /// scoring loop out is queued as a follow-up; for now the multiplier
+    /// approach preserves all existing search semantics. The visible cost is
+    /// one extra `exp()` per result and a re-sort — both negligible vs. the
+    /// vector + FTS round-trip.
+    ///
+    /// [`AnchorField`]: crate::temporal::AnchorField
+    /// [`AnchorField::LastModified`]: crate::temporal::AnchorField::LastModified
+    /// [`AnchorField::EventDate`]: crate::temporal::AnchorField::EventDate
+    #[allow(clippy::too_many_arguments)]
+    pub async fn search_memory_with_anchor(
+        &self,
+        query: &str,
+        limit: usize,
+        memory_type: Option<&str>,
+        space: Option<&str>,
+        source_agent: Option<&str>,
+        confirmation_boost: Option<f32>,
+        recap_penalty: Option<f32>,
+        scoring: Option<&crate::tuning::SearchScoringConfig>,
+        recency_anchor: crate::temporal::AnchorField,
+    ) -> Result<Vec<SearchResult>, OriginError> {
+        let mut results = self
+            .search_memory(
+                query,
+                limit,
+                memory_type,
+                space,
+                source_agent,
+                confirmation_boost,
+                recap_penalty,
+                scoring,
+            )
+            .await?;
+
+        // Fast path: LastModified is what search_memory already baked in.
+        if recency_anchor == crate::temporal::AnchorField::LastModified {
+            return Ok(results);
+        }
+
+        let now = chrono::Utc::now().timestamp();
+        for r in &mut results {
+            let anchored = crate::temporal::resolve_anchor_timestamp(
+                recency_anchor,
+                r.last_modified,
+                r.event_date,
+            );
+            if anchored == r.last_modified {
+                // EventDate was None or equal to last_modified — no shift.
+                continue;
+            }
+            // Mirror decay rate selection from search_memory's inner loop.
+            let tier = stability_tier(r.memory_type.as_deref());
+            let dr = match tier {
+                crate::sources::StabilityTier::Protected => 0.001f64,
+                crate::sources::StabilityTier::Standard => 0.01,
+                crate::sources::StabilityTier::Ephemeral => 0.05,
+            };
+            let old_age_days = ((now - r.last_modified) as f64 / 86400.0).max(0.0);
+            let new_age_days = ((now - anchored) as f64 / 86400.0).max(0.0);
+            // multiplier = new_recency / old_recency = exp(dr * (old_age - new_age)).
+            // Older anchor (older event_date) -> new_age > old_age -> multiplier < 1.
+            let multiplier = ((old_age_days - new_age_days) * dr).exp() as f32;
+            r.score *= multiplier;
+            r.raw_score *= multiplier;
+        }
+        // Re-sort by adjusted score (same tie-break as search_memory).
+        results.sort_by(|a, b| {
+            b.score
+                .partial_cmp(&a.score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+                .then_with(|| a.source_id.cmp(&b.source_id))
+        });
+        Ok(results)
     }
 
     /// Hybrid search with graph augmentation and optional LLM reranking.
@@ -7473,7 +7572,7 @@ impl MemoryDB {
                         c.confidence, c.confirmed, c.stability, c.supersedes,
                         c.entity_id, c.quality, c.is_recap, c.supersede_mode,
                         c.structured_fields, c.retrieval_cue, c.source_text,
-                        c.version, c.pending_revision,
+                        c.version, c.pending_revision, c.event_date,
                         vector_distance_cos(c.embedding, vector32(?1))
                  FROM vector_top_k('memories_vec_idx', vector32(?1), ?2) AS vt
                  JOIN memories c ON c.rowid = vt.id
@@ -7493,7 +7592,7 @@ impl MemoryDB {
                         c.confidence, c.confirmed, c.stability, c.supersedes,
                         c.entity_id, c.quality, c.is_recap, c.supersede_mode,
                         c.structured_fields, c.retrieval_cue, c.source_text,
-                        c.version, c.pending_revision,
+                        c.version, c.pending_revision, c.event_date,
                         vector_distance_cos(c.embedding, vector32(?1))
                  FROM vector_top_k('memories_vec_idx', vector32(?1), ?2) AS vt
                  JOIN memories c ON c.rowid = vt.id
@@ -7510,7 +7609,7 @@ impl MemoryDB {
         match conn.query(&sql, params).await {
             Ok(mut rows) => {
                 while let Ok(Some(row)) = rows.next().await {
-                    let distance: f64 = row.get(30).unwrap_or(1.0);
+                    let distance: f64 = row.get(31).unwrap_or(1.0);
                     let score = (1.0 - distance).max(0.0) as f32;
                     if let Ok(result) = Self::row_to_search_result(&row, score) {
                         results.push(result);
@@ -7565,7 +7664,7 @@ impl MemoryDB {
                     c.confidence, c.confirmed, c.stability, c.supersedes,
                     c.entity_id, c.quality, c.is_recap, c.supersede_mode,
                     c.structured_fields, c.retrieval_cue, c.source_text,
-                    c.version, c.pending_revision,
+                    c.version, c.pending_revision, c.event_date,
                     fts.rank
              FROM memories_fts fts
              JOIN memories c ON fts.rowid = c.rowid
@@ -7593,7 +7692,7 @@ impl MemoryDB {
                 Ok(mut rows) => {
                     while let Ok(Some(row)) = rows.next().await {
                         // FTS5 rank is negative BM25; negate so higher = better
-                        let rank: f64 = row.get(30).unwrap_or(0.0);
+                        let rank: f64 = row.get(31).unwrap_or(0.0);
                         let score = (-rank) as f32;
                         if let Ok(result) = Self::row_to_search_result(&row, score) {
                             results.push(result);
@@ -7829,6 +7928,7 @@ impl MemoryDB {
                 url: None,
                 chunk_index: 0,
                 last_modified: created_at,
+                event_date: None,
                 score: 0.0,
                 chunk_type: None,
                 language: None,
@@ -18749,6 +18849,174 @@ pub(crate) mod tests {
             results[0].content.contains("color"),
             "top result should match query"
         );
+    }
+
+    // ==================== search_memory_with_anchor (temporal channel P0 #2 Phase A) ====================
+
+    #[tokio::test]
+    async fn test_search_memory_with_anchor_last_modified_default() {
+        // Two memories with shared keywords + identical last_modified=now.
+        // Memory `ancient` has event_date five years in the past; memory `now`
+        // has event_date None. With LastModified anchor (default in
+        // search_memory), neither memory's score is shifted from the base
+        // pipeline. With EventDate anchor, `ancient` collapses because the
+        // recency factor evaluates against a 5-year-old timestamp.
+        let (db, _dir) = test_db().await;
+        db.upsert_documents(vec![
+            make_memory_doc(
+                "ancient",
+                "Annual vacation policy: requests must be submitted ahead",
+                "fact",
+                "work",
+                "claude-code",
+            ),
+            make_memory_doc(
+                "now",
+                "Holiday vacation guidance for managers and reports",
+                "fact",
+                "work",
+                "claude-code",
+            ),
+        ])
+        .await
+        .unwrap();
+
+        // Pin event_date on `ancient` to 5 years ago; leave `now` with NULL.
+        let ancient_event = chrono::Utc::now().timestamp() - 86400 * 365 * 5;
+        {
+            let conn = db.conn.lock().await;
+            conn.execute(
+                "UPDATE memories SET event_date = ?1 WHERE source_id = 'ancient'",
+                libsql::params![ancient_event],
+            )
+            .await
+            .unwrap();
+        }
+
+        let lm_results = db
+            .search_memory_with_anchor(
+                "vacation policy",
+                10,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                crate::temporal::AnchorField::LastModified,
+            )
+            .await
+            .unwrap();
+        let ev_results = db
+            .search_memory_with_anchor(
+                "vacation policy",
+                10,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                crate::temporal::AnchorField::EventDate,
+            )
+            .await
+            .unwrap();
+
+        let lm_ancient = lm_results
+            .iter()
+            .find(|r| r.source_id == "ancient")
+            .expect("ancient memory present under LastModified anchor");
+        let ev_ancient = ev_results
+            .iter()
+            .find(|r| r.source_id == "ancient")
+            .expect("ancient memory present under EventDate anchor");
+
+        assert!(
+            ev_ancient.score < lm_ancient.score,
+            "EventDate anchor on a 5y-old event must penalize recency \
+             relative to LastModified default (lm={}, ev={})",
+            lm_ancient.score,
+            ev_ancient.score
+        );
+
+        // Sanity: event_date surfaced on the search result for `ancient`,
+        // and stayed NULL for `now`.
+        assert_eq!(
+            lm_ancient.event_date,
+            Some(ancient_event),
+            "event_date column should round-trip through SELECT"
+        );
+        let lm_now = lm_results
+            .iter()
+            .find(|r| r.source_id == "now")
+            .expect("now memory present");
+        assert_eq!(
+            lm_now.event_date, None,
+            "unpopulated event_date should remain NULL"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_search_memory_with_anchor_event_date_falls_back_when_none() {
+        // When event_date is NULL, resolve_anchor_timestamp returns
+        // last_modified — so the EventDate anchor must produce the same
+        // scores as the LastModified anchor.
+        let (db, _dir) = test_db().await;
+        db.upsert_documents(vec![make_memory_doc(
+            "only",
+            "Quarterly budget review for the office team",
+            "fact",
+            "work",
+            "claude-code",
+        )])
+        .await
+        .unwrap();
+
+        let lm_results = db
+            .search_memory_with_anchor(
+                "budget review",
+                10,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                crate::temporal::AnchorField::LastModified,
+            )
+            .await
+            .unwrap();
+        let ev_results = db
+            .search_memory_with_anchor(
+                "budget review",
+                10,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                crate::temporal::AnchorField::EventDate,
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(
+            lm_results.len(),
+            ev_results.len(),
+            "result counts must match when event_date is NULL"
+        );
+        for (lm, ev) in lm_results.iter().zip(ev_results.iter()) {
+            assert_eq!(lm.source_id, ev.source_id, "ordering must match");
+            assert!(
+                (lm.score - ev.score).abs() < f32::EPSILON,
+                "scores must match when event_date is NULL (lm={}, ev={})",
+                lm.score,
+                ev.score
+            );
+            assert_eq!(lm.event_date, None);
+            assert_eq!(ev.event_date, None);
+        }
     }
 
     #[tokio::test]
