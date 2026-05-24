@@ -13,17 +13,17 @@ fn cli() -> Command {
 
 fn cli_with_isolated_runtime(runtime: &IsolatedRuntime) -> Command {
     let mut cmd = cli();
+    // Prepend fake_bin to the existing PATH using the platform separator
+    // (`:` on Unix, `;` on Windows). `std::env::join_paths` handles both.
+    let path_var = std::env::var_os("PATH").unwrap_or_default();
+    let mut entries: Vec<PathBuf> = vec![runtime.fake_bin.path().to_path_buf()];
+    entries.extend(std::env::split_paths(&path_var));
+    let joined = std::env::join_paths(entries).expect("join PATH entries");
     cmd.env("HOME", runtime.home.path())
+        .env("USERPROFILE", runtime.home.path())
         .env("ORIGIN_DATA_DIR", runtime.data.path())
         .env("ORIGIN_HOST", "http://127.0.0.1:9")
-        .env(
-            "PATH",
-            format!(
-                "{}:{}",
-                runtime.fake_bin.path().display(),
-                std::env::var("PATH").unwrap_or_default()
-            ),
-        );
+        .env("PATH", &joined);
     cmd
 }
 
@@ -90,20 +90,42 @@ fn write_fake_launchctl(fake_bin: &Path) {
 }
 
 fn write_fake_command(fake_bin: &Path, name: &str) {
-    let path = fake_bin.join(name);
-    fs::write(
-        &path,
-        "#!/bin/sh\nprintf '%s' \"${0##*/}\" >> \"$ORIGIN_TEST_CLI_LOG\"\nfor arg in \"$@\"; do printf '\\t%s' \"$arg\" >> \"$ORIGIN_TEST_CLI_LOG\"; done\nprintf '\\n' >> \"$ORIGIN_TEST_CLI_LOG\"\nexit 0\n",
-    )
-    .expect("write fake command");
     #[cfg(unix)]
     {
+        let path = fake_bin.join(name);
+        fs::write(
+            &path,
+            "#!/bin/sh\nprintf '%s' \"${0##*/}\" >> \"$ORIGIN_TEST_CLI_LOG\"\nfor arg in \"$@\"; do printf '\\t%s' \"$arg\" >> \"$ORIGIN_TEST_CLI_LOG\"; done\nprintf '\\n' >> \"$ORIGIN_TEST_CLI_LOG\"\nexit 0\n",
+        )
+        .expect("write fake command");
         use std::os::unix::fs::PermissionsExt;
         let mut perms = fs::metadata(&path)
             .expect("fake command metadata")
             .permissions();
         perms.set_mode(0o755);
         fs::set_permissions(path, perms).expect("chmod fake command");
+    }
+    #[cfg(windows)]
+    {
+        // Windows PATH lookup honors PATHEXT; .cmd is in the default list.
+        // The .cmd file appends `name<TAB>arg1<TAB>arg2...<LF>` to the log so
+        // the Unix-side regression assertion keeps comparing the same shape.
+        let path = fake_bin.join(format!("{name}.cmd"));
+        // %~n0 = batch script basename (without extension). Loop %%i over args.
+        let script = format!(
+            "@echo off\r\n\
+             setlocal enableextensions enabledelayedexpansion\r\n\
+             set \"LINE={name}\"\r\n\
+             :loop\r\n\
+             if \"%~1\"==\"\" goto done\r\n\
+             set \"LINE=!LINE!\t%~1\"\r\n\
+             shift\r\n\
+             goto loop\r\n\
+             :done\r\n\
+             >>\"%ORIGIN_TEST_CLI_LOG%\" echo(!LINE!\r\n\
+             exit /b 0\r\n"
+        );
+        fs::write(&path, script).expect("write fake .cmd");
     }
 }
 
@@ -220,9 +242,6 @@ fn mcp_add_claude_code_dry_run_explains_tools_only() {
         .stdout(predicate::str::contains("/init"));
 }
 
-// Uses #!/bin/sh fake binaries via write_fake_command and Unix-style PATH
-// separators in cli_with_isolated_runtime. Windows port is follow-up work.
-#[cfg(not(target_os = "windows"))]
 #[test]
 fn mcp_add_native_clients_run_add_without_destructive_remove() {
     let origin_mcp = origin_mcp_sibling_arg();
@@ -256,16 +275,15 @@ fn mcp_add_native_clients_run_add_without_destructive_remove() {
             .success()
             .stdout(predicate::str::contains("Configured Origin MCP"));
 
-        assert_eq!(
-            fs::read_to_string(log).expect("fake client log"),
-            expected_log.as_str()
-        );
+        // .cmd shells on Windows write CRLF line endings; the Unix shell
+        // script writes LF. Normalize before the byte-for-byte compare.
+        let actual = fs::read_to_string(log)
+            .expect("fake client log")
+            .replace("\r\n", "\n");
+        assert_eq!(actual, expected_log.as_str());
     }
 }
 
-// Path comparison embeds origin-mcp sibling path into JSON; backslash
-// escaping on Windows breaks the assert. Follow-up: normalize the path.
-#[cfg(not(target_os = "windows"))]
 #[test]
 fn mcp_add_cursor_preserves_existing_servers_and_backs_up_changed_origin() {
     let runtime = IsolatedRuntime::new();
@@ -285,8 +303,11 @@ fn mcp_add_cursor_preserves_existing_servers_and_backs_up_changed_origin() {
 
     let updated = fs::read_to_string(&config_path).expect("updated cursor config");
     assert!(updated.contains(r#""other""#), "{updated}");
+    // serde_json escapes backslashes in path strings (Windows `\` → `\\`).
+    // Mirror the same transform on the expected fragment.
+    let expected_command_json = origin_mcp_sibling_arg().replace('\\', "\\\\");
     assert!(
-        updated.contains(&format!(r#""command": "{}""#, origin_mcp_sibling_arg())),
+        updated.contains(&format!(r#""command": "{expected_command_json}""#)),
         "{updated}"
     );
     assert!(updated.contains("origin-mcp"), "{updated}");
@@ -360,9 +381,6 @@ fn mcp_add_json_clients_write_expected_config_shapes() {
     assert!(vscode.contains("origin-mcp"), "{vscode}");
 }
 
-// Depends on cli_with_isolated_runtime PATH override which uses Unix
-// separator; Windows runner picks up wrong PATH and fails earlier.
-#[cfg(not(target_os = "windows"))]
 #[test]
 fn mcp_add_invalid_json_fails_without_modifying_file() {
     let runtime = IsolatedRuntime::new();
