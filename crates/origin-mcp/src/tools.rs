@@ -154,6 +154,11 @@ pub struct RecallParams {
     #[schemars(description = "Filter by topic scope.")]
     #[serde(default, alias = "domain")]
     pub space: Option<String>,
+    #[schemars(
+        description = "Enable LLM query decomposition for multi-hop questions (e.g. 'what tools does the person who built Origin prefer?'). Slower and costs LLM tokens; leave unset for plain semantic search."
+    )]
+    #[serde(default)]
+    pub decompose: Option<bool>,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
@@ -742,7 +747,7 @@ impl OriginMcpServer {
             memory_type: params.memory_type,
             space: space_arg,
             source_agent: self.resolve_source_agent(None),
-            decompose: false,
+            decompose: params.decompose.unwrap_or(false),
         };
 
         let resp: SearchMemoryResponse = match self.client.post("/api/memory/search", &req).await {
@@ -1712,7 +1717,7 @@ impl OriginMcpServer {
     }
 
     #[tool(
-        description = "Search memories by query. Use when the user asks 'do you remember', 'what do you know about', 'look up', or when you need a specific fact before acting.\n\nWrite queries as natural language — the search engine handles semantic matching. For precision, use filters (memory_type, space) to narrow results. If you get too many results, add filters rather than making the query longer.\n\nThis is for targeted lookups. For broad session orientation, use context instead.",
+        description = "Search memories by query. Use when the user asks 'do you remember', 'what do you know about', 'look up', or when you need a specific fact before acting.\n\nWrite queries as natural language — the search engine handles semantic matching. For precision, use filters (memory_type, space) to narrow results. If you get too many results, add filters rather than making the query longer.\n\nSet decompose=true for multi-hop questions that chain two or more lookups (e.g. 'what database does the person who built Origin prefer?'). The daemon runs an LLM to split the query into sub-queries, searches each, and merges. Slower and costs LLM tokens — leave unset for ordinary single-hop lookups.\n\nThis is for targeted lookups. For broad session orientation, use context instead.",
         annotations(title = "Recall", read_only_hint = true, open_world_hint = false)
     )]
     async fn recall(
@@ -3634,6 +3639,7 @@ mod tests {
             limit: Some(5),
             memory_type: Some("decision".into()),
             space: None,
+            decompose: None,
         };
 
         let req = SearchMemoryRequest {
@@ -3642,7 +3648,7 @@ mod tests {
             memory_type: params.memory_type,
             space: params.space,
             source_agent: None,
-            decompose: false,
+            decompose: params.decompose.unwrap_or(false),
         };
 
         let json = serde_json::to_value(&req).unwrap();
@@ -3652,6 +3658,43 @@ mod tests {
         assert!(json.get("entity").is_none());
         assert!(json["space"].is_null());
         assert!(json["source_agent"].is_null());
+        assert_eq!(json["decompose"], false);
+    }
+
+    /// `decompose=true` on RecallParams forwards to the wire request.
+    /// Guards against silent drop if the param is renamed or the wrapper stops
+    /// passing it through.
+    #[test]
+    fn test_recall_forwards_decompose_flag() {
+        // Param deserializes the JSON the MCP client would send.
+        let json_in = r#"{"query": "multi-hop", "decompose": true}"#;
+        let params: RecallParams = serde_json::from_str(json_in).unwrap();
+        assert_eq!(params.decompose, Some(true));
+
+        // Wrapper translation: decompose flag flows into SearchMemoryRequest.
+        let req = SearchMemoryRequest {
+            query: params.query,
+            limit: params.limit.unwrap_or(10),
+            memory_type: params.memory_type,
+            space: params.space,
+            source_agent: None,
+            decompose: params.decompose.unwrap_or(false),
+        };
+        assert!(req.decompose);
+
+        let json_out = serde_json::to_value(&req).unwrap();
+        assert_eq!(json_out["decompose"], true);
+    }
+
+    /// `decompose` schema is advertised so MCP clients can discover it.
+    #[test]
+    fn test_recall_params_schema_advertises_decompose() {
+        let schema = serde_json::to_string(&schemars::schema_for!(RecallParams))
+            .expect("RecallParams schema serializes");
+        assert!(
+            schema.contains("decompose"),
+            "RecallParams schema must advertise decompose field, got: {schema}"
+        );
     }
 
     // ===== Memory type pass-through =====

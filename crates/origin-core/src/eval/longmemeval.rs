@@ -770,6 +770,130 @@ pub async fn run_longmemeval_eval_expanded(
 }
 
 // ---------------------------------------------------------------------------
+// Decomposed benchmark runner -- same as run_longmemeval_eval but uses search_memory_decomposed
+// ---------------------------------------------------------------------------
+
+/// Same seeding/scoring logic as `run_longmemeval_eval`, but retrieval uses
+/// `search_memory_decomposed`: an LLM splits compound queries into sub-queries,
+/// each is searched independently, and the union is merged + re-ranked. Targets
+/// multi-session aggregate (MSA) and temporal-reasoning (TR) categories where
+/// the answer requires chaining multiple lookups.
+pub async fn run_longmemeval_eval_decomposed(
+    path: &Path,
+    llm: std::sync::Arc<dyn crate::llm_provider::LlmProvider>,
+) -> Result<LongMemEvalReport, OriginError> {
+    let samples = load_longmemeval(path)?;
+    // (question_type, ndcg_5, ndcg_10, mrr, recall_5, hit_rate_1)
+    let mut all_scores: Vec<(String, f64, f64, f64, f64, f64)> = Vec::new();
+    let mut total_memories: usize = 0;
+
+    for sample in &samples {
+        let memories = extract_memories(sample);
+
+        // Create ephemeral DB for this question
+        let tmp = tempfile::tempdir().map_err(|e| OriginError::Generic(format!("tempdir: {e}")))?;
+        let db = MemoryDB::new(tmp.path(), std::sync::Arc::new(crate::events::NoopEmitter)).await?;
+
+        let docs: Vec<RawDocument> = memories
+            .iter()
+            .map(|mem| {
+                let memory_type = match sample.question_type.as_str() {
+                    "single-session-preference" => "preference",
+                    _ => "fact",
+                };
+                RawDocument {
+                    content: mem.content.clone(),
+                    source_id: memory_source_id(&mem.question_id, mem.session_idx, mem.turn_idx),
+                    source: "memory".to_string(),
+                    title: format!("{} session {}", mem.role, mem.session_idx),
+                    memory_type: Some(memory_type.to_string()),
+                    space: Some("conversation".to_string()),
+                    last_modified: chrono::Utc::now().timestamp(),
+                    ..Default::default()
+                }
+            })
+            .collect();
+        total_memories += docs.len();
+        db.upsert_documents(docs).await?;
+
+        let relevant_source_ids: HashSet<String> = memories
+            .iter()
+            .filter(|m| m.has_answer)
+            .map(|m| memory_source_id(&m.question_id, m.session_idx, m.turn_idx))
+            .collect();
+
+        if relevant_source_ids.is_empty() {
+            continue;
+        }
+
+        // Search with query decomposition
+        let results = db
+            .search_memory_decomposed(&sample.question, 10, None, None, None, Some(llm.clone()))
+            .await?;
+
+        let result_ids: Vec<&str> = results.iter().map(|r| r.source_id.as_str()).collect();
+
+        let grades: HashMap<&str, u8> = result_ids
+            .iter()
+            .map(|id| {
+                (
+                    *id,
+                    if relevant_source_ids.contains(*id) {
+                        1
+                    } else {
+                        0
+                    },
+                )
+            })
+            .collect();
+
+        let relevant_set: HashSet<&str> = relevant_source_ids.iter().map(|s| s.as_str()).collect();
+
+        let ndcg_10 = metrics::ndcg_at_k(&result_ids, &grades, 10);
+        let ndcg_5 = metrics::ndcg_at_k(&result_ids, &grades, 5);
+        let mrr_val = metrics::mrr(&result_ids, &relevant_set);
+        let recall_5 = metrics::recall_at_k(&result_ids, &relevant_set, 5);
+        let hr_1 = metrics::hit_rate_at_k(&result_ids, &relevant_set, 1);
+
+        all_scores.push((
+            sample.question_type.clone(),
+            ndcg_5,
+            ndcg_10,
+            mrr_val,
+            recall_5,
+            hr_1,
+        ));
+    }
+
+    let per_category = aggregate_by_category(&all_scores);
+
+    let mut report = LongMemEvalReport {
+        aggregate_ndcg_at_10: avg_field(&all_scores, |s| s.2),
+        aggregate_mrr: avg_field(&all_scores, |s| s.3),
+        aggregate_recall_at_5: avg_field(&all_scores, |s| s.4),
+        aggregate_hit_rate_at_1: avg_field(&all_scores, |s| s.5),
+        total_questions: all_scores.len(),
+        total_memories,
+        per_category,
+        baseline: None,
+        env: None,
+    };
+    report.env = Some(crate::eval::report::ReportEnv {
+        fixture_revision: crate::eval::fixtures::fixture_revision_hash(path)
+            .unwrap_or_else(|_| "unknown".into()),
+        embedder_model: "BGE-Base-EN-v1.5-Q".into(),
+        embedder_revision: "768d".into(),
+        retrieval_method: "search_memory_decomposed".into(),
+        llm_provider_class: llm.kind().into(),
+        llm_model: llm.model_id(),
+        judge_model: None,
+        origin_version: env!("CARGO_PKG_VERSION").into(),
+        eval_timestamp_unix: chrono::Utc::now().timestamp(),
+    });
+    Ok(report)
+}
+
+// ---------------------------------------------------------------------------
 // Gated benchmark runner — clean / noisy / gated comparison
 // ---------------------------------------------------------------------------
 
