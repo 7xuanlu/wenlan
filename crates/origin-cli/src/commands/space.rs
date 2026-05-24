@@ -184,13 +184,17 @@ async fn default_cmd(
     Ok(())
 }
 async fn move_cmd(
-    _c: &OriginClient,
-    _f: OutputFormat,
-    _q: bool,
-    _f2: &str,
-    _t: &str,
+    client: &OriginClient,
+    _format: OutputFormat,
+    quiet: bool,
+    from: &str,
+    to: &str,
 ) -> Result<()> {
-    todo!("Task 5")
+    let n = client.move_space(from, to).await?;
+    if !quiet {
+        println!("Moved {} memories from '{}' to '{}'.", n, from, to);
+    }
+    Ok(())
 }
 async fn show(_c: &OriginClient, _f: OutputFormat, _q: bool, _n: &str) -> Result<()> {
     todo!("Task 6")

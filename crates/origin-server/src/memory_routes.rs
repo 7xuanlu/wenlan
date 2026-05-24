@@ -1789,6 +1789,21 @@ pub async fn handle_delete_space(
     Ok(Json(serde_json::json!({"deleted": name})))
 }
 
+pub async fn handle_move_space(
+    State(state): State<Arc<RwLock<ServerState>>>,
+    Path((from, to)): Path<(String, String)>,
+) -> Result<Json<serde_json::Value>, ServerError> {
+    let db = {
+        let s = state.read().await;
+        s.db.clone().ok_or(ServerError::DbNotInitialized)?
+    };
+    let affected = db
+        .reassign_memories_space(&from, &to)
+        .await
+        .map_err(|e| ServerError::Internal(e.to_string()))?;
+    Ok(Json(serde_json::json!({"affected": affected})))
+}
+
 // ===== Nurture Cards =====
 
 #[derive(Debug, Deserialize)]

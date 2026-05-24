@@ -5242,6 +5242,52 @@ impl MemoryDB {
         Ok(())
     }
 
+    /// Bulk-reassign all memories and entities from `from` space to `to` space.
+    /// Returns the number of memory rows (chunks) updated.
+    pub async fn reassign_memories_space(
+        &self,
+        from: &str,
+        to: &str,
+    ) -> Result<usize, OriginError> {
+        let conn = self.conn.lock().await;
+
+        conn.execute("BEGIN", ())
+            .await
+            .map_err(|e| OriginError::VectorDb(format!("reassign_memories_space begin: {}", e)))?;
+
+        let txn_result = async {
+            let updated = conn
+                .execute(
+                    "UPDATE memories SET space = ?1 WHERE space = ?2",
+                    libsql::params![to, from],
+                )
+                .await
+                .map_err(|e| OriginError::VectorDb(format!("reassign memories: {}", e)))?;
+
+            conn.execute(
+                "UPDATE entities SET space = ?1 WHERE space = ?2",
+                libsql::params![to, from],
+            )
+            .await
+            .map_err(|e| OriginError::VectorDb(format!("reassign entities: {}", e)))?;
+
+            conn.execute("COMMIT", ()).await.map_err(|e| {
+                OriginError::VectorDb(format!("reassign_memories_space commit: {}", e))
+            })?;
+
+            Ok::<usize, OriginError>(updated as usize)
+        }
+        .await;
+
+        match txn_result {
+            Ok(n) => Ok(n),
+            Err(e) => {
+                let _ = conn.execute("ROLLBACK", ()).await;
+                Err(e)
+            }
+        }
+    }
+
     pub async fn confirm_space(&self, name: &str) -> Result<(), OriginError> {
         let conn = self.conn.lock().await;
         let now = chrono::Utc::now().timestamp() as f64;
@@ -29979,5 +30025,59 @@ pub(crate) mod tests {
             rows.next().await.unwrap().is_some(),
             "document_tags table must exist after migration 51 replay"
         );
+    }
+
+    #[tokio::test]
+    async fn reassign_memories_space_works() {
+        let (db, _td) = test_db().await;
+
+        db.create_space("foo", None, false).await.unwrap();
+        db.create_space("bar", None, false).await.unwrap();
+
+        let doc1 = make_memory_doc(
+            "mem_move_1",
+            "First memory in foo.",
+            "knowledge",
+            "foo",
+            "agent",
+        );
+        let doc2 = make_memory_doc(
+            "mem_move_2",
+            "Second memory in foo.",
+            "knowledge",
+            "foo",
+            "agent",
+        );
+        db.upsert_documents(vec![doc1]).await.unwrap();
+        db.upsert_documents(vec![doc2]).await.unwrap();
+
+        let affected = db.reassign_memories_space("foo", "bar").await.unwrap();
+        assert!(
+            affected >= 2,
+            "expected >= 2 rows updated, got {}",
+            affected
+        );
+
+        // Verify via a direct count query.
+        let conn = db.conn.lock().await;
+        let mut rows = conn
+            .query("SELECT COUNT(*) FROM memories WHERE space = 'bar'", ())
+            .await
+            .unwrap();
+        let row = rows.next().await.unwrap().expect("count row");
+        let bar_count: i64 = row.get(0).unwrap();
+        assert!(
+            bar_count >= 2,
+            "expected >= 2 memories in bar, got {}",
+            bar_count
+        );
+
+        let mut rows2 = conn
+            .query("SELECT COUNT(*) FROM memories WHERE space = 'foo'", ())
+            .await
+            .unwrap();
+        let row2 = rows2.next().await.unwrap().expect("count row");
+        let foo_count: i64 = row2.get(0).unwrap();
+        assert_eq!(foo_count, 0, "foo should have 0 memories after move");
     }
 }

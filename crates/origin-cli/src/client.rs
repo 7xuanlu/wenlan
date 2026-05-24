@@ -218,6 +218,22 @@ impl OriginClient {
         Ok(())
     }
 
+    /// POST /api/spaces/{from}/move-to/{to} — bulk reassign memories from one space to another.
+    pub async fn move_space(&self, from: &str, to: &str) -> Result<usize> {
+        let url = format!("{}/api/spaces/{}/move-to/{}", self.base_url, from, to);
+        let resp = self
+            .http
+            .post(&url)
+            .send()
+            .await
+            .with_context(|| format!("POST {} failed", url))?;
+        let resp = resp
+            .error_for_status()
+            .with_context(|| format!("daemon returned error for {}", url))?;
+        let json: serde_json::Value = resp.json().await.context("parsing move-to response")?;
+        Ok(json["affected"].as_u64().unwrap_or(0) as usize)
+    }
+
     /// GET /api/spaces — list all spaces.
     pub async fn list_spaces(&self) -> Result<Vec<origin_types::Space>> {
         let url = format!("{}/api/spaces", self.base_url);
