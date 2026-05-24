@@ -68,8 +68,8 @@ fn manager() -> Result<Box<dyn ServiceManager>> {
 /// - Linux (systemd-user): `<config_dir>/systemd/user/<script_name>.service`
 ///   (`ServiceLabel::to_script_name()` joins org+app with `-` and DROPS the
 ///   qualifier, so `com.origin.server` becomes `origin-server.service`).
-/// - Windows (sc.exe): no on-disk unit file. Service state lives in the
-///   Windows registry — see `is_installed()` for the probe.
+/// - Windows: no on-disk unit file. The scheduled task lives in the Task
+///   Scheduler database — see `is_installed()` for the schtasks-based probe.
 #[cfg(not(target_os = "windows"))]
 pub fn service_unit_path() -> Result<PathBuf> {
     #[cfg(target_os = "macos")]
