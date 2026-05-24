@@ -4,7 +4,7 @@
 use serde::Serialize;
 use std::path::Path;
 
-#[derive(Debug, Clone, Serialize, serde::Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, serde::Deserialize)]
 pub struct ReportEnv {
     pub fixture_revision: String,
     pub embedder_model: String,
@@ -71,6 +71,46 @@ fn default_schema_version() -> u32 {
 }
 fn default_n_runs() -> u32 {
     1
+}
+
+impl Default for ReportEnv {
+    fn default() -> Self {
+        Self {
+            // 9 legacy fields
+            fixture_revision: String::new(),
+            embedder_model: String::new(),
+            embedder_revision: String::new(),
+            retrieval_method: String::new(),
+            llm_provider_class: String::new(),
+            llm_model: String::new(),
+            judge_model: None,
+            origin_version: String::new(),
+            eval_timestamp_unix: 0,
+            // P0a additive fields — mirror serde default attributes
+            layer: None,
+            task: None,
+            variant: None,
+            embed_dim: None,
+            similarity_fn_name: default_similarity_fn(),
+            judge_model_id: None,
+            mcp_schema_hash: None,
+            skill_prompt_hash: None,
+            schema_version: default_schema_version(),
+            schema_db_version: None,
+            migrations_hash: None,
+            n_runs: default_n_runs(),
+            is_single_run: false,
+            run_id: None,
+            timestamp_utc: None,
+            git_sha: None,
+            warmup_iterations: 0,
+            eval_max_usd_baseline_cap: None,
+            eval_max_usd_run_cap: None,
+            eval_max_wall_secs_cap: None,
+            total_cost_usd: 0.0,
+            total_wall_secs: 0,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, serde::Deserialize, Default)]

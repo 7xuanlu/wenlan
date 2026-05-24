@@ -1166,19 +1166,14 @@ pub async fn run_locomo_eval_with_gate(
         baseline: None,
         env: None,
     };
-    report.env = Some(crate::eval::report::ReportEnv {
-        fixture_revision: crate::eval::fixtures::fixture_revision_hash(path)
-            .unwrap_or_else(|_| "unknown".into()),
-        embedder_model: "BGE-Base-EN-v1.5-Q".into(),
-        embedder_revision: "768d".into(),
-        retrieval_method: "search_memory".into(),
-        llm_provider_class: "none".into(),
-        llm_model: "none".into(),
-        judge_model: None,
-        origin_version: env!("CARGO_PKG_VERSION").into(),
-        eval_timestamp_unix: chrono::Utc::now().timestamp(),
-        ..Default::default()
-    });
+    report.env = Some(build_locomo_env(
+        "gated",
+        path,
+        "search_memory",
+        "none",
+        "none",
+        None,
+    ));
     Ok(report)
 }
 

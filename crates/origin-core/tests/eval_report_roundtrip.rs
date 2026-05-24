@@ -67,3 +67,40 @@ fn report_env_deserialize_legacy_shape_without_new_fields() {
     assert_eq!(parsed.n_runs, 1);
     assert_eq!(parsed.similarity_fn_name, "cosine");
 }
+
+#[test]
+fn report_env_default_matches_serde_defaults() {
+    // Verify hand-rolled Default impl mirrors the serde default= attributes.
+    // This catches any drift between Default::default() and deserialized-from-empty state.
+    let d = ReportEnv::default();
+    assert_eq!(d.similarity_fn_name, "cosine", "similarity_fn_name default");
+    assert_eq!(d.schema_version, 1, "schema_version default");
+    assert_eq!(d.n_runs, 1, "n_runs default");
+    // Cross-check: deserializing a JSON that includes the 9 required legacy fields
+    // but omits all P0a fields. The serde `default= "fn"` attributes must produce
+    // the same values as our hand-rolled Default impl.
+    let legacy_only_json = r#"{
+        "fixture_revision": "",
+        "embedder_model": "",
+        "embedder_revision": "",
+        "retrieval_method": "",
+        "llm_provider_class": "",
+        "llm_model": "",
+        "judge_model": null,
+        "origin_version": "",
+        "eval_timestamp_unix": 0
+    }"#;
+    let from_json: ReportEnv = serde_json::from_str(legacy_only_json).unwrap();
+    assert_eq!(
+        from_json.similarity_fn_name, d.similarity_fn_name,
+        "similarity_fn_name must match between Default and serde"
+    );
+    assert_eq!(
+        from_json.schema_version, d.schema_version,
+        "schema_version must match between Default and serde"
+    );
+    assert_eq!(
+        from_json.n_runs, d.n_runs,
+        "n_runs must match between Default and serde"
+    );
+}
