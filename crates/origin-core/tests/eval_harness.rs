@@ -3904,3 +3904,70 @@ fn baseline_filename_falls_back_when_env_missing() {
     let r = EvalReport::default();
     assert_eq!(r.baseline_filename("foo"), "foo.json");
 }
+
+/// Smoke test the Anthropic Batch API tool_use round-trip end-to-end.
+///
+/// Submits a single-item batch with one LME-style triplet, polls until complete,
+/// asserts that the structured verdict extraction returns score 0 or 1 with a
+/// non-empty reason. Validates that:
+///   - Anthropic Batch API accepts `tools` + `tool_choice` in the per-request
+///     params field (the assumption in spec Section 3).
+///   - The tool_use response shape matches `extract_tool_verdict` expectations.
+///
+/// Cost: ~$0.001 per run (single judgment with haiku).
+///
+/// Run before any PR that touches the judge tool_use path and before any 0.7.0
+/// release. If this fails, the assumption that Batch API supports tool_choice
+/// is wrong and Section 3 of the spec must be revised.
+///
+/// ```bash
+/// ANTHROPIC_API_KEY=... cargo test -p origin-core --test eval_harness \
+///   smoke_tool_use_judge_returns_structured_verdict -- --ignored --nocapture
+/// ```
+#[tokio::test]
+#[ignore]
+async fn smoke_tool_use_judge_returns_structured_verdict() {
+    use origin_core::eval::judge::{judge_with_batch_api, JudgmentTuple};
+
+    if std::env::var("ANTHROPIC_API_KEY").is_err() {
+        eprintln!("SKIP: ANTHROPIC_API_KEY not set");
+        return;
+    }
+
+    let tuple = JudgmentTuple {
+        question: "What is the capital of France?".to_string(),
+        ground_truth: "Paris".to_string(),
+        answer: "Paris is the capital of France.".to_string(),
+        category: "single-session-user".to_string(),
+        approach: "smoke".to_string(),
+        context_tokens: 0,
+    };
+
+    let judge_model = std::env::var("EVAL_JUDGE_MODEL")
+        .unwrap_or_else(|_| "claude-haiku-4-5-20251001".to_string());
+
+    eprintln!(
+        "=== L7 smoke: tool_use judge round-trip (model={}) ===",
+        judge_model
+    );
+
+    let results = judge_with_batch_api(&[tuple], &judge_model, Some(0.10))
+        .await
+        .expect("batch judge failed");
+
+    assert_eq!(results.len(), 1, "expected exactly one judgment");
+    let r = &results[0];
+
+    eprintln!("smoke result: score={} reason={:?}", r.score, r.reason);
+
+    assert!(r.score == 0 || r.score == 1, "score must be binary");
+    assert!(
+        !r.reason.is_empty(),
+        "verdict_reason must be non-empty under tool_use"
+    );
+    // Sanity: Paris is correct, judge should return 1.
+    assert_eq!(
+        r.score, 1,
+        "Paris->France obvious-correct judgment should be 1"
+    );
+}
