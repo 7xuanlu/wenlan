@@ -10,7 +10,7 @@ Most users install Origin through the [Claude Code plugin](../../plugin/.claude-
 npx -y @7xuanlu/origin setup
 ```
 
-The installer downloads `origin`, `origin-server`, and `origin-mcp` into `~/.origin/bin/`. Cross-platform: macOS (arm64, x64), Linux (x64, arm64; glibc), Windows (x64). The `origin` CLI owns setup and service management; `origin-server` is the daemon binary the host's service manager runs (launchd on macOS, systemd-user on Linux; Windows runs the binary manually for now).
+The installer downloads `origin`, `origin-server`, and `origin-mcp` into `~/.origin/bin/`. Cross-platform: macOS (arm64, x64), Linux (x64, arm64; glibc), Windows (x64). The `origin` CLI owns setup and service management; `origin-server` is the daemon binary the host's service manager runs (launchd on macOS, systemd-user on Linux, Task Scheduler ONLOGON task on Windows).
 
 ## Setup modes
 
@@ -42,12 +42,12 @@ The libSQL store lives under the platform data directory (`dirs::data_local_dir(
 ## Service Commands
 
 ```bash
-origin install      # register with the host service manager (launchd / systemd-user)
+origin install      # register with the host service manager (launchd / systemd-user / schtasks)
 origin uninstall    # remove from the service manager
 origin status       # service + runtime status
 ```
 
-On Windows `origin install` currently exits non-zero with guidance toward manual run (`Start-Process .\origin-server.exe`) or Task Scheduler. Tracked follow-up.
+On Windows the install path uses `schtasks.exe` to register a per-user `OriginServer` ONLOGON task and triggers it immediately. origin-server stays a plain console app — no Windows Service Control Protocol dispatcher is needed.
 
 The daemon listens on `127.0.0.1:7878`. MCP clients, the Claude Code plugin, and local tools call that local API.
 

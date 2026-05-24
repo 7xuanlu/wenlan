@@ -237,35 +237,59 @@ jobs:
         run: |
           cargo build --release -p origin-server
           ./scripts/smoke-windows.ps1
-      # `origin install` on Windows currently exits non-zero with guidance
-      # toward manual run / Task Scheduler. Verify the contract: install
-      # MUST fail with a clear message, not crash, not register a broken
-      # service. Follow-up: implement Windows Service Control Protocol via
-      # the windows-service crate so sc.exe start no longer times out.
-      - name: E2E origin install contract (Windows; expects clean error)
+      # `origin install` on Windows registers a per-user Task Scheduler
+      # ONLOGON entry via schtasks.exe and triggers it immediately. We
+      # verify the full round-trip: install registers the task, daemon
+      # binds /api/health, uninstall removes the task.
+      - name: E2E origin install round-trip (Windows; schtasks)
         if: matrix.os == 'windows-2022'
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
-          cargo build -p origin
-          $out = & target\debug\origin.exe install 2>&1
-          $code = $LASTEXITCODE
-          Write-Host "exit code: $code"
-          Write-Host "output: $out"
-          if ($code -eq 0) { throw "install unexpectedly succeeded on Windows" }
-          if ("$out" -notmatch "not yet supported on Windows") {
-            throw "install did not surface the documented Windows guidance"
+          cargo build -p origin -p origin-server
+          $installOut = & target\debug\origin.exe install 2>&1
+          $installCode = $LASTEXITCODE
+          Write-Host "install exit=$installCode out=$installOut"
+          if ($installCode -ne 0) { throw "install failed: $installOut" }
+
+          # schtasks /query must report the task as present.
+          & schtasks.exe /query /tn OriginServer | Out-Null
+          if ($LASTEXITCODE -ne 0) { throw "schtasks did not register OriginServer" }
+
+          # /run launched the daemon as a separate process. Poll /api/health.
+          $healthy = $false
+          for ($i = 0; $i -lt 30; $i++) {
+            try {
+              $r = Invoke-WebRequest -Uri "http://127.0.0.1:7878/api/health" -UseBasicParsing -TimeoutSec 1
+              if ($r.StatusCode -eq 200) { $healthy = $true; break }
+            } catch { }
+            Start-Sleep -Seconds 1
           }
-          # Confirm no stale sc.exe service entry left behind.
-          $svc = & sc.exe query com.origin.server 2>&1
-          $svcExit = $LASTEXITCODE
-          if ($svcExit -eq 0) {
-            & sc.exe delete com.origin.server | Out-Null
-            throw "install must not register a service before erroring; cleaned up stale entry"
+          if (-not $healthy) {
+            & schtasks.exe /query /tn OriginServer /fo LIST /v
+            throw "daemon did not respond on /api/health after schtasks /run"
           }
-          Write-Host "    Windows install error-contract PASS"
-          # sc.exe query returns 1060 when service not found; that leaks as the
-          # script's exit code under $ErrorActionPreference=Stop. Reset.
+          Write-Host "    daemon healthy under scheduled task"
+
+          $uninstallOut = & target\debug\origin.exe uninstall 2>&1
+          $uninstallCode = $LASTEXITCODE
+          Write-Host "uninstall exit=$uninstallCode out=$uninstallOut"
+          if ($uninstallCode -ne 0) { throw "uninstall failed: $uninstallOut" }
+
+          # Task must be gone; /query returns 1 with stderr "not found".
+          & schtasks.exe /query /tn OriginServer 2>&1 | Out-Null
+          if ($LASTEXITCODE -eq 0) {
+            & schtasks.exe /delete /tn OriginServer /f | Out-Null
+            throw "uninstall did not remove the scheduled task"
+          }
+
+          # Best-effort: kill any leftover origin-server.exe so the next step
+          # is not blocked on port 7878.
+          Get-Process -Name origin-server -ErrorAction SilentlyContinue |
+            Stop-Process -Force -ErrorAction SilentlyContinue
+
+          Write-Host "    Windows install round-trip PASS"
+          # schtasks /query exit 1 leaks under $ErrorActionPreference=Stop.
           $global:LASTEXITCODE = 0
           exit 0
 
