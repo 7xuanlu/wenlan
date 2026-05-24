@@ -31,6 +31,8 @@ Origin gives your daily AI workflow one local home: memory your agents can recal
 
 Your agent reads searchable memory, graph context, and hybrid retrieval. You read Markdown artifacts under `~/.origin/`. Same store, two surfaces.
 
+Runs natively on macOS (Apple Silicon + Intel), Linux (x86_64 + ARM64), and Windows (x86_64). One install path, three OSes; the npm wrapper and `install.sh` auto-detect your platform.
+
 [![Watch the Origin demo](./docs/assets/demo-preview.gif)](https://youtu.be/k37gjWVPHwI)
 
 ---
