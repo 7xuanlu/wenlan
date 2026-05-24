@@ -169,8 +169,13 @@ fn compute_warnings_and_extraction(
 pub async fn handle_store_memory(
     State(state): State<Arc<RwLock<ServerState>>>,
     headers: HeaderMap,
-    Json(req): Json<StoreMemoryRequest>,
+    crate::space_header::SpaceHeader(header_space): crate::space_header::SpaceHeader,
+    Json(mut req): Json<StoreMemoryRequest>,
 ) -> Result<Json<StoreMemoryResponse>, ServerError> {
+    // Apply X-Origin-Space header as fallback only when body omits `space`.
+    if req.space.is_none() {
+        req.space = header_space;
+    }
     let trimmed_content = req.content.trim();
     if trimmed_content.len() < 10 {
         return Err(ServerError::ValidationError(
@@ -1027,8 +1032,12 @@ pub async fn handle_store_memory(
 pub async fn handle_search_memory(
     State(state): State<Arc<RwLock<ServerState>>>,
     headers: HeaderMap,
-    Json(req): Json<SearchMemoryRequest>,
+    crate::space_header::SpaceHeader(header_space): crate::space_header::SpaceHeader,
+    Json(mut req): Json<SearchMemoryRequest>,
 ) -> Result<Json<SearchMemoryResponse>, ServerError> {
+    if req.space.is_none() {
+        req.space = header_space;
+    }
     let start = std::time::Instant::now();
 
     let results = {
@@ -1108,8 +1117,12 @@ pub async fn handle_confirm_memory(
 /// POST /api/memory/list
 pub async fn handle_list_memories(
     State(state): State<Arc<RwLock<ServerState>>>,
-    Json(req): Json<ListMemoriesRequest>,
+    crate::space_header::SpaceHeader(header_space): crate::space_header::SpaceHeader,
+    Json(mut req): Json<ListMemoriesRequest>,
 ) -> Result<Json<ListMemoriesResponse>, ServerError> {
+    if req.space.is_none() {
+        req.space = header_space;
+    }
     let db = {
         let s = state.read().await;
         s.db.clone().ok_or(ServerError::DbNotInitialized)?
@@ -1179,8 +1192,13 @@ pub async fn handle_delete_memory(
 pub async fn handle_create_entity(
     State(state): State<Arc<RwLock<ServerState>>>,
     headers: HeaderMap,
-    Json(req): Json<CreateEntityRequest>,
+    crate::space_header::SpaceHeader(header_space): crate::space_header::SpaceHeader,
+    Json(mut req): Json<CreateEntityRequest>,
 ) -> Result<Json<CreateEntityResponse>, ServerError> {
+    // Apply X-Origin-Space header as fallback only when body omits `space`.
+    if req.space.is_none() {
+        req.space = header_space;
+    }
     let agent = extract_agent_name(&headers, None);
     let db = {
         let s = state.read().await;
@@ -1411,8 +1429,12 @@ pub struct ListEntitiesResponse {
 
 pub async fn handle_list_entities(
     State(state): State<Arc<RwLock<ServerState>>>,
-    Json(req): Json<ListEntitiesRequest>,
+    crate::space_header::SpaceHeader(header_space): crate::space_header::SpaceHeader,
+    Json(mut req): Json<ListEntitiesRequest>,
 ) -> Result<Json<ListEntitiesResponse>, ServerError> {
+    if req.space.is_none() {
+        req.space = header_space;
+    }
     let s = state.read().await;
     let db = s.db.as_ref().ok_or(ServerError::DbNotInitialized)?;
     let entities = db
@@ -2018,8 +2040,13 @@ pub async fn handle_search_pages(
 pub async fn handle_create_page(
     State(state): State<Arc<RwLock<ServerState>>>,
     headers: HeaderMap,
-    Json(req): Json<CreateConceptRequest>,
+    crate::space_header::SpaceHeader(header_space): crate::space_header::SpaceHeader,
+    Json(mut req): Json<CreateConceptRequest>,
 ) -> Result<Json<CreatePageResponse>, ServerError> {
+    // Apply X-Origin-Space header as fallback only when body omits `space`.
+    if req.space.is_none() {
+        req.space = header_space;
+    }
     let agent = extract_agent_name(&headers, None);
     let db = {
         let s = state.read().await;
