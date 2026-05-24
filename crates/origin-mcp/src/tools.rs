@@ -3,8 +3,11 @@ use crate::types::*;
 use rmcp::{
     handler::server::router::tool::ToolRouter,
     handler::server::wrapper::Parameters,
-    model::{CallToolResult, Content, Implementation, InitializeResult, ServerCapabilities},
-    service::{NotificationContext, RoleServer},
+    model::{
+        CallToolResult, Content, Implementation, InitializeResult, ListToolsResult,
+        PaginatedRequestParams, ServerCapabilities, Tool,
+    },
+    service::{NotificationContext, RequestContext, RoleServer},
     tool, tool_handler, tool_router, ErrorData as McpError, ServerHandler,
 };
 use serde::{Deserialize, Deserializer};
@@ -2326,10 +2329,51 @@ impl OriginMcpServer {
     }
 }
 
+// ===== Schema gating =====
+
+/// Return a copy of `tool` with the `space` field removed from its
+/// `inputSchema.properties` (and from `required` if present).
+///
+/// Called when `ORIGIN_SPACE` is locked so the model never sees the field.
+/// The runtime guard in `effective_space()` is the load-bearing safety net;
+/// this is UX polish on top.
+fn strip_space_from_tool_schema(mut tool: Tool) -> Tool {
+    let mut schema = (*tool.input_schema).clone();
+    if let Some(props) = schema.get_mut("properties").and_then(|v| v.as_object_mut()) {
+        props.remove("space");
+    }
+    if let Some(required) = schema.get_mut("required").and_then(|v| v.as_array_mut()) {
+        required.retain(|v| v.as_str() != Some("space"));
+    }
+    tool.input_schema = std::sync::Arc::new(schema);
+    tool
+}
+
 // ===== ServerHandler =====
 
 #[tool_handler]
 impl ServerHandler for OriginMcpServer {
+    async fn list_tools(
+        &self,
+        _request: Option<PaginatedRequestParams>,
+        _context: RequestContext<RoleServer>,
+    ) -> Result<ListToolsResult, McpError> {
+        let tools = Self::tool_router().list_all();
+        let tools = if crate::lock_state::is_locked() {
+            tools
+                .into_iter()
+                .map(strip_space_from_tool_schema)
+                .collect()
+        } else {
+            tools
+        };
+        Ok(ListToolsResult {
+            tools,
+            meta: None,
+            next_cursor: None,
+        })
+    }
+
     async fn on_initialized(&self, context: NotificationContext<RoleServer>) {
         // Capture client name from MCP initialize handshake
         if let Some(client_info) = context.peer.peer_info() {
@@ -4630,5 +4674,81 @@ mod tests {
         let inbound: Option<String> = None;
         let resolved = effective_space(&inbound);
         assert_eq!(resolved, None);
+    }
+
+    // ===== Schema gating =====
+
+    /// Baseline: the raw `capture` schema from the tool router includes `space`.
+    #[test]
+    fn capture_schema_has_space_in_raw_router() {
+        let tools = OriginMcpServer::tool_router().list_all();
+        let capture = tools
+            .into_iter()
+            .find(|t| t.name == "capture")
+            .expect("capture tool registered");
+        let props = capture
+            .input_schema
+            .get("properties")
+            .and_then(|v| v.as_object())
+            .expect("capture has properties");
+        assert!(
+            props.contains_key("space"),
+            "baseline: capture schema must have space before gating"
+        );
+    }
+
+    /// When locked, `strip_space_from_tool_schema` removes `space` from properties.
+    #[test]
+    fn capture_tool_schema_omits_space_when_locked() {
+        let _guard = crate::lock_state::ENV_LOCK.lock().unwrap();
+        std::env::set_var("ORIGIN_SPACE", "career");
+        crate::lock_state::init_from_env();
+
+        let tools = OriginMcpServer::tool_router().list_all();
+        let tools: Vec<_> = tools
+            .into_iter()
+            .map(strip_space_from_tool_schema)
+            .collect();
+        let capture = tools
+            .iter()
+            .find(|t| t.name == "capture")
+            .expect("capture tool registered");
+        let props = capture
+            .input_schema
+            .get("properties")
+            .and_then(|v| v.as_object())
+            .expect("capture has properties");
+        assert!(
+            !props.contains_key("space"),
+            "space field must be omitted from capture schema when ORIGIN_SPACE is locked"
+        );
+
+        // Clean up.
+        std::env::remove_var("ORIGIN_SPACE");
+        crate::lock_state::init_from_env();
+    }
+
+    /// Unlocked: `list_tools` equivalent — raw router listing preserves `space`.
+    #[test]
+    fn capture_tool_schema_includes_space_when_unlocked() {
+        let _guard = crate::lock_state::ENV_LOCK.lock().unwrap();
+        std::env::remove_var("ORIGIN_SPACE");
+        crate::lock_state::init_from_env();
+
+        // When not locked, tools are returned as-is (no stripping).
+        let tools = OriginMcpServer::tool_router().list_all();
+        let capture = tools
+            .iter()
+            .find(|t| t.name == "capture")
+            .expect("capture tool registered");
+        let props = capture
+            .input_schema
+            .get("properties")
+            .and_then(|v| v.as_object())
+            .expect("capture has properties");
+        assert!(
+            props.contains_key("space"),
+            "space field must be present in capture schema when ORIGIN_SPACE is not locked"
+        );
     }
 }
