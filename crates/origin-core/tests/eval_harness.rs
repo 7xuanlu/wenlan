@@ -3447,6 +3447,7 @@ fn eval_report_schema_v1_round_trips_env_fields() {
             judge_model: Some("claude-haiku".into()),
             origin_version: env!("CARGO_PKG_VERSION").into(),
             eval_timestamp_unix: 1747800000,
+            ..ReportEnv::default()
         }),
         ..EvalReport::default()
     };

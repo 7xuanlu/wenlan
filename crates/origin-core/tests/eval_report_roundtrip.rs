@@ -37,7 +37,7 @@ fn report_env_roundtrip_with_all_fields() {
     let parsed: ReportEnv = serde_json::from_str(&json).unwrap();
     assert_eq!(parsed.layer, Some(EvalLayer::L1Db));
     assert_eq!(parsed.task.as_deref(), Some("locomo"));
-    assert_eq!(parsed.is_single_run, true);
+    assert!(parsed.is_single_run);
     assert_eq!(parsed.warmup_iterations, 5);
     assert_eq!(parsed.total_cost_usd, 0.42);
 }
@@ -63,7 +63,7 @@ fn report_env_deserialize_legacy_shape_without_new_fields() {
     // New P0a fields default cleanly.
     assert_eq!(parsed.layer, None);
     assert_eq!(parsed.schema_version, 1);
-    assert_eq!(parsed.is_single_run, false);
+    assert!(!parsed.is_single_run);
     assert_eq!(parsed.n_runs, 1);
     assert_eq!(parsed.similarity_fn_name, "cosine");
 }
