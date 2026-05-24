@@ -30,7 +30,10 @@ docker buildx build --platform "$PLATFORM" --load \
     -f docker/Dockerfile.daemon -t "$IMAGE_TAG" .
 
 echo "==> Starting container on port ${PORT}, data ${DATA_DIR}"
-docker run --rm -d --name "$CONTAINER" -p "${PORT}:7878" \
+# Deliberately omit --rm: if the daemon crashes before /api/health
+# responds, `docker logs` needs the container record to still exist.
+# The cleanup trap removes it with `docker rm -f` regardless.
+docker run -d --name "$CONTAINER" -p "${PORT}:7878" \
     -v "${DATA_DIR}:/data" "$IMAGE_TAG"
 
 echo "==> Waiting for /api/health"
@@ -42,7 +45,10 @@ for i in $(seq 1 30); do
     sleep 1
     if [ "$i" = "30" ]; then
         echo "FAIL: daemon did not become healthy" >&2
-        docker logs "$CONTAINER" >&2
+        echo "--- container state ---" >&2
+        docker ps -a --filter "name=${CONTAINER}" --format 'id={{.ID}} status={{.Status}} exit={{.RunningFor}}' >&2 || true
+        echo "--- container logs ---" >&2
+        docker logs "$CONTAINER" >&2 || true
         exit 1
     fi
 done
