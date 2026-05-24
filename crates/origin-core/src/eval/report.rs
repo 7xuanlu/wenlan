@@ -15,6 +15,62 @@ pub struct ReportEnv {
     pub judge_model: Option<String>,
     pub origin_version: String,
     pub eval_timestamp_unix: i64,
+
+    // P0a additive fields:
+    #[serde(default)]
+    pub layer: Option<crate::eval::EvalLayer>,
+    #[serde(default)]
+    pub task: Option<String>,
+    #[serde(default)]
+    pub variant: Option<String>,
+    #[serde(default)]
+    pub embed_dim: Option<u32>,
+    #[serde(default = "default_similarity_fn")]
+    pub similarity_fn_name: String,
+    #[serde(default)]
+    pub judge_model_id: Option<String>,
+    #[serde(default)]
+    pub mcp_schema_hash: Option<String>,
+    #[serde(default)]
+    pub skill_prompt_hash: Option<String>,
+    #[serde(default = "default_schema_version")]
+    pub schema_version: u32,
+    #[serde(default)]
+    pub schema_db_version: Option<u32>,
+    #[serde(default)]
+    pub migrations_hash: Option<String>,
+    #[serde(default = "default_n_runs")]
+    pub n_runs: u32,
+    #[serde(default)]
+    pub is_single_run: bool,
+    #[serde(default)]
+    pub run_id: Option<String>,
+    #[serde(default)]
+    pub timestamp_utc: Option<String>,
+    #[serde(default)]
+    pub git_sha: Option<String>,
+    #[serde(default)]
+    pub warmup_iterations: u32,
+    #[serde(default)]
+    pub eval_max_usd_baseline_cap: Option<f64>,
+    #[serde(default)]
+    pub eval_max_usd_run_cap: Option<f64>,
+    #[serde(default)]
+    pub eval_max_wall_secs_cap: Option<u64>,
+    #[serde(default)]
+    pub total_cost_usd: f64,
+    #[serde(default)]
+    pub total_wall_secs: u64,
+}
+
+fn default_similarity_fn() -> String {
+    "cosine".to_string()
+}
+fn default_schema_version() -> u32 {
+    1
+}
+fn default_n_runs() -> u32 {
+    1
 }
 
 #[derive(Debug, Clone, Serialize, serde::Deserialize, Default)]

@@ -534,6 +534,7 @@ pub async fn run_locomo_eval(path: &Path) -> Result<LocomoReport, OriginError> {
         judge_model: None,
         origin_version: env!("CARGO_PKG_VERSION").into(),
         eval_timestamp_unix: chrono::Utc::now().timestamp(),
+        ..Default::default()
     });
     Ok(report)
 }
@@ -673,6 +674,7 @@ pub async fn run_locomo_eval_reranked(
         judge_model: None,
         origin_version: env!("CARGO_PKG_VERSION").into(),
         eval_timestamp_unix: chrono::Utc::now().timestamp(),
+        ..Default::default()
     });
     Ok(report)
 }
@@ -812,6 +814,7 @@ pub async fn run_locomo_eval_expanded(
         judge_model: None,
         origin_version: env!("CARGO_PKG_VERSION").into(),
         eval_timestamp_unix: chrono::Utc::now().timestamp(),
+        ..Default::default()
     });
     Ok(report)
 }
@@ -1126,6 +1129,7 @@ pub async fn run_locomo_eval_with_gate(
         judge_model: None,
         origin_version: env!("CARGO_PKG_VERSION").into(),
         eval_timestamp_unix: chrono::Utc::now().timestamp(),
+        ..Default::default()
     });
     Ok(report)
 }
@@ -1463,6 +1467,7 @@ mod tests {
             judge_model: None,
             origin_version: env!("CARGO_PKG_VERSION").into(),
             eval_timestamp_unix: 0,
+            ..Default::default()
         });
         crate::eval::judge::stamp_judge_model(&mut report.env, "claude-haiku-4-5-20251001");
         assert_eq!(

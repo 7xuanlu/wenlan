@@ -515,6 +515,7 @@ pub async fn run_longmemeval_eval(path: &Path) -> Result<LongMemEvalReport, Orig
         judge_model: None,
         origin_version: env!("CARGO_PKG_VERSION").into(),
         eval_timestamp_unix: chrono::Utc::now().timestamp(),
+        ..Default::default()
     });
     Ok(report)
 }
@@ -640,6 +641,7 @@ pub async fn run_longmemeval_eval_reranked(
         judge_model: None,
         origin_version: env!("CARGO_PKG_VERSION").into(),
         eval_timestamp_unix: chrono::Utc::now().timestamp(),
+        ..Default::default()
     });
     Ok(report)
 }
@@ -765,6 +767,7 @@ pub async fn run_longmemeval_eval_expanded(
         judge_model: None,
         origin_version: env!("CARGO_PKG_VERSION").into(),
         eval_timestamp_unix: chrono::Utc::now().timestamp(),
+        ..Default::default()
     });
     Ok(report)
 }
@@ -1035,6 +1038,7 @@ pub async fn run_longmemeval_eval_with_gate(
         judge_model: None,
         origin_version: env!("CARGO_PKG_VERSION").into(),
         eval_timestamp_unix: chrono::Utc::now().timestamp(),
+        ..Default::default()
     });
     Ok(report)
 }
