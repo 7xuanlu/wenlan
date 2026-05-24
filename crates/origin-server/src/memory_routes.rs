@@ -1192,8 +1192,13 @@ pub async fn handle_delete_memory(
 pub async fn handle_create_entity(
     State(state): State<Arc<RwLock<ServerState>>>,
     headers: HeaderMap,
-    Json(req): Json<CreateEntityRequest>,
+    crate::space_header::SpaceHeader(header_space): crate::space_header::SpaceHeader,
+    Json(mut req): Json<CreateEntityRequest>,
 ) -> Result<Json<CreateEntityResponse>, ServerError> {
+    // Apply X-Origin-Space header as fallback only when body omits `space`.
+    if req.space.is_none() {
+        req.space = header_space;
+    }
     let agent = extract_agent_name(&headers, None);
     let db = {
         let s = state.read().await;
@@ -2020,8 +2025,13 @@ pub async fn handle_search_pages(
 pub async fn handle_create_page(
     State(state): State<Arc<RwLock<ServerState>>>,
     headers: HeaderMap,
-    Json(req): Json<CreateConceptRequest>,
+    crate::space_header::SpaceHeader(header_space): crate::space_header::SpaceHeader,
+    Json(mut req): Json<CreateConceptRequest>,
 ) -> Result<Json<CreatePageResponse>, ServerError> {
+    // Apply X-Origin-Space header as fallback only when body omits `space`.
+    if req.space.is_none() {
+        req.space = header_space;
+    }
     let agent = extract_agent_name(&headers, None);
     let db = {
         let s = state.read().await;

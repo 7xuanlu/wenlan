@@ -8,7 +8,7 @@ mod common;
 
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
-use origin_types::responses::StoreMemoryResponse;
+use origin_types::responses::{CreateEntityResponse, CreatePageResponse, StoreMemoryResponse};
 use tower::ServiceExt;
 
 async fn body_as_json<T: serde::de::DeserializeOwned>(response: axum::http::Response<Body>) -> T {
@@ -209,5 +209,120 @@ async fn list_entities_header_fallback_returns_200() {
         res.status(),
         StatusCode::OK,
         "list_entities with header space must return 200"
+    );
+}
+
+// ===== POST /api/memory/entities (handle_create_entity) =====
+
+#[tokio::test]
+async fn create_entity_uses_header_when_body_omits_space() {
+    let (router, _tmp, db) = common::test_app().await;
+
+    let req = Request::builder()
+        .method("POST")
+        .uri("/api/memory/entities")
+        .header("Content-Type", "application/json")
+        .header("X-Origin-Space", "career")
+        .body(Body::from(
+            serde_json::json!({
+                "name": "test_ent_space_header",
+                "entity_type": "person"
+            })
+            .to_string(),
+        ))
+        .unwrap();
+
+    let res = router.oneshot(req).await.unwrap();
+    assert_eq!(
+        res.status(),
+        StatusCode::OK,
+        "create_entity must return 200"
+    );
+
+    let created: CreateEntityResponse = body_as_json(res).await;
+    let detail = db
+        .get_entity_detail(&created.id)
+        .await
+        .expect("get_entity_detail must not fail");
+    assert_eq!(
+        detail.entity.space.as_deref(),
+        Some("career"),
+        "created entity must have space=career from header, got: {:?}",
+        detail.entity.space
+    );
+}
+
+// ===== POST /api/pages (handle_create_page) =====
+
+#[tokio::test]
+async fn create_page_uses_header_when_body_omits_space() {
+    let (router, _tmp, db) = common::test_app_no_gate().await;
+
+    // Seed a source memory via HTTP so we have a valid source_id to cite.
+    let content = "Rust is a systems programming language with memory safety guarantees";
+    let store_res = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/memory/store")
+                .header("Content-Type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({
+                        "content": content,
+                        "memory_type": "fact"
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        store_res.status(),
+        StatusCode::OK,
+        "seed memory store must return 200"
+    );
+    let stored: StoreMemoryResponse = body_as_json(store_res).await;
+    let source_id = stored.source_id;
+
+    // Create a page citing that memory, omitting `space` in body — header must fill it.
+    let page_content = "Rust provides memory safety through ownership and borrowing.";
+    let create_res = router
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/pages")
+                .header("Content-Type", "application/json")
+                .header("X-Origin-Space", "career")
+                .body(Body::from(
+                    serde_json::json!({
+                        "title": "Rust Systems Language",
+                        "content": page_content,
+                        "source_memory_ids": [source_id]
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        create_res.status(),
+        StatusCode::OK,
+        "create_page must return 200"
+    );
+
+    let created: CreatePageResponse = body_as_json(create_res).await;
+    let page = db
+        .get_page(&created.id)
+        .await
+        .expect("get_page must not fail")
+        .expect("page must exist after creation");
+    assert_eq!(
+        page.space.as_deref(),
+        Some("career"),
+        "created page must have space=career from header, got: {:?}",
+        page.space
     );
 }
