@@ -421,7 +421,8 @@ fn build_locomo_env(
             .unwrap_or_default()
             .as_nanos()
     ));
-    let timestamp_utc = Some(chrono::Utc::now().to_rfc3339());
+    let now = chrono::Utc::now();
+    let timestamp_utc = Some(now.to_rfc3339());
     crate::eval::report::ReportEnv {
         // Legacy fields (needed by encode_baseline_filename and existing callers)
         fixture_revision,
@@ -432,7 +433,7 @@ fn build_locomo_env(
         llm_model: llm_model.to_string(),
         judge_model: judge_model.clone(),
         origin_version: env!("CARGO_PKG_VERSION").into(),
-        eval_timestamp_unix: chrono::Utc::now().timestamp(),
+        eval_timestamp_unix: now.timestamp(),
         // P0a additive fields
         layer: Some(crate::eval::EvalLayer::L1Db),
         task: Some("locomo".to_string()),
