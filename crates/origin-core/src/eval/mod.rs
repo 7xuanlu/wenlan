@@ -13,6 +13,7 @@ pub mod gen;
 pub mod kg_faithfulness;
 pub mod kg_faithfulness_llm;
 pub mod latency;
+pub mod layer;
 pub mod lifecycle;
 pub mod locomo;
 pub mod longmemeval;
@@ -23,5 +24,6 @@ pub mod report;
 pub mod retrieval;
 pub mod runner;
 pub mod signals;
+pub use layer::EvalLayer;
 /// Backward-compat alias: old code using `eval::token_efficiency::*` still works.
 pub use retrieval as token_efficiency;
