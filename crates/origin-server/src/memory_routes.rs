@@ -1032,8 +1032,12 @@ pub async fn handle_store_memory(
 pub async fn handle_search_memory(
     State(state): State<Arc<RwLock<ServerState>>>,
     headers: HeaderMap,
-    Json(req): Json<SearchMemoryRequest>,
+    crate::space_header::SpaceHeader(header_space): crate::space_header::SpaceHeader,
+    Json(mut req): Json<SearchMemoryRequest>,
 ) -> Result<Json<SearchMemoryResponse>, ServerError> {
+    if req.space.is_none() {
+        req.space = header_space;
+    }
     let start = std::time::Instant::now();
 
     let results = {
@@ -1113,8 +1117,12 @@ pub async fn handle_confirm_memory(
 /// POST /api/memory/list
 pub async fn handle_list_memories(
     State(state): State<Arc<RwLock<ServerState>>>,
-    Json(req): Json<ListMemoriesRequest>,
+    crate::space_header::SpaceHeader(header_space): crate::space_header::SpaceHeader,
+    Json(mut req): Json<ListMemoriesRequest>,
 ) -> Result<Json<ListMemoriesResponse>, ServerError> {
+    if req.space.is_none() {
+        req.space = header_space;
+    }
     let db = {
         let s = state.read().await;
         s.db.clone().ok_or(ServerError::DbNotInitialized)?
@@ -1416,8 +1424,12 @@ pub struct ListEntitiesResponse {
 
 pub async fn handle_list_entities(
     State(state): State<Arc<RwLock<ServerState>>>,
-    Json(req): Json<ListEntitiesRequest>,
+    crate::space_header::SpaceHeader(header_space): crate::space_header::SpaceHeader,
+    Json(mut req): Json<ListEntitiesRequest>,
 ) -> Result<Json<ListEntitiesResponse>, ServerError> {
+    if req.space.is_none() {
+        req.space = header_space;
+    }
     let s = state.read().await;
     let db = s.db.as_ref().ok_or(ServerError::DbNotInitialized)?;
     let entities = db

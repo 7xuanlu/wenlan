@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-//! Integration tests: X-Origin-Space header fallback in POST /api/memory/store.
+//! Integration tests: X-Origin-Space header fallback in space-aware POST handlers.
 //!
 //! - When body omits `space`, the header value is used.
 //! - When body supplies `space`, the body wins regardless of the header.
@@ -17,6 +17,8 @@ async fn body_as_json<T: serde::de::DeserializeOwned>(response: axum::http::Resp
         .unwrap();
     serde_json::from_slice(&bytes).expect("response body is valid JSON of expected type")
 }
+
+// ===== /api/memory/store (handle_store_memory) — Task 2, already done =====
 
 #[tokio::test]
 async fn header_used_when_body_omits_space() {
@@ -82,5 +84,130 @@ async fn body_space_wins_over_header() {
         space.as_deref(),
         Some("health"),
         "stored memory must have space=health from body (not career from header), got: {space:?}"
+    );
+}
+
+// ===== /api/memory/search (handle_search_memory) =====
+
+#[tokio::test]
+async fn search_memory_header_fallback_returns_200() {
+    let (router, _tmp, _db) = common::test_app().await;
+
+    let req = Request::builder()
+        .method("POST")
+        .uri("/api/memory/search")
+        .header("Content-Type", "application/json")
+        .header("X-Origin-Space", "career")
+        .body(Body::from(
+            serde_json::json!({
+                "query": "test query"
+            })
+            .to_string(),
+        ))
+        .unwrap();
+
+    let res = router.oneshot(req).await.unwrap();
+    assert_eq!(
+        res.status(),
+        StatusCode::OK,
+        "search_memory with header space must return 200"
+    );
+}
+
+// ===== /api/memory/list (handle_list_memories) =====
+
+#[tokio::test]
+async fn list_memories_header_fallback_returns_200() {
+    let (router, _tmp, _db) = common::test_app().await;
+
+    let req = Request::builder()
+        .method("POST")
+        .uri("/api/memory/list")
+        .header("Content-Type", "application/json")
+        .header("X-Origin-Space", "health")
+        .body(Body::from(serde_json::json!({}).to_string()))
+        .unwrap();
+
+    let res = router.oneshot(req).await.unwrap();
+    assert_eq!(
+        res.status(),
+        StatusCode::OK,
+        "list_memories with header space must return 200"
+    );
+}
+
+// ===== /api/search (handle_search) =====
+
+#[tokio::test]
+async fn search_header_fallback_returns_200() {
+    let (router, _tmp, _db) = common::test_app().await;
+
+    let req = Request::builder()
+        .method("POST")
+        .uri("/api/search")
+        .header("Content-Type", "application/json")
+        .header("X-Origin-Space", "work")
+        .body(Body::from(
+            serde_json::json!({
+                "query": "test query"
+            })
+            .to_string(),
+        ))
+        .unwrap();
+
+    let res = router.oneshot(req).await.unwrap();
+    assert_eq!(
+        res.status(),
+        StatusCode::OK,
+        "search with header space must return 200"
+    );
+}
+
+// ===== /api/chat-context (handle_chat_context) =====
+
+#[tokio::test]
+async fn chat_context_header_fallback_returns_200() {
+    let (router, _tmp, _db) = common::test_app().await;
+
+    let req = Request::builder()
+        .method("POST")
+        .uri("/api/chat-context")
+        .header("Content-Type", "application/json")
+        .header("X-Origin-Space", "personal")
+        .body(Body::from(
+            serde_json::json!({
+                "query": "what do I like?"
+            })
+            .to_string(),
+        ))
+        .unwrap();
+
+    let res = router.oneshot(req).await.unwrap();
+    assert_eq!(
+        res.status(),
+        StatusCode::OK,
+        "chat_context with header space must return 200"
+    );
+}
+
+// ===== /api/memory/entities (handle_list_entities) =====
+
+#[tokio::test]
+async fn list_entities_header_fallback_returns_200() {
+    let (router, _tmp, _db) = common::test_app().await;
+
+    let req = Request::builder()
+        .method("POST")
+        .uri("/api/memory/entities/list")
+        .header("Content-Type", "application/json")
+        .header("X-Origin-Space", "work")
+        .body(Body::from(serde_json::json!({}).to_string()))
+        .unwrap();
+
+    let res = router.oneshot(req).await.unwrap();
+    assert_eq!(
+        res.status(),
+        StatusCode::OK,
+        "list_entities with header space must return 200"
     );
 }
