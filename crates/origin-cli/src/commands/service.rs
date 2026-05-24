@@ -1,8 +1,12 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Cross-platform service registration for the Origin daemon.
 //!
-//! Wraps the `service-manager` crate to register `origin-server` with the
-//! host's native service manager (launchd, systemd-user, Windows SCM via winsw).
+//! - macOS: launchd LaunchAgent via the `service-manager` crate.
+//! - Linux: systemd --user unit via the `service-manager` crate.
+//! - Windows: per-user ONLOGON Task Scheduler entry via `schtasks.exe`.
+//!   We bypass `service-manager`'s `ScServiceManager` because origin-server
+//!   is a plain console app and does not implement the Windows Service
+//!   Control Protocol (`sc start` would time out at 30s with error 1053).
 
 use anyhow::{Context, Result};
 use service_manager::{
@@ -15,20 +19,43 @@ use crate::client::origin_host_from_env;
 
 pub const SERVICE_LABEL: &str = "com.origin.server";
 
+/// Windows Task Scheduler does not love dots in task names. The macOS launchd
+/// and systemd-user paths still use the canonical reverse-DNS `SERVICE_LABEL`.
+#[cfg(target_os = "windows")]
+pub const WINDOWS_TASK_NAME: &str = "OriginServer";
+
 fn label() -> Result<ServiceLabel> {
     SERVICE_LABEL.parse().context("invalid service label")
 }
 
+#[cfg(target_os = "windows")]
+fn run_schtasks(args: &[&str], action: &str) -> Result<std::process::Output> {
+    let output = std::process::Command::new("schtasks.exe")
+        .args(args)
+        .output()
+        .with_context(|| format!("spawn schtasks.exe ({action})"))?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        anyhow::bail!(
+            "schtasks.exe {} failed (exit {}): {}{}",
+            action,
+            output.status.code().unwrap_or(-1),
+            stderr.trim(),
+            if stdout.trim().is_empty() {
+                String::new()
+            } else {
+                format!("\nstdout: {}", stdout.trim())
+            }
+        );
+    }
+    Ok(output)
+}
+
 fn manager() -> Result<Box<dyn ServiceManager>> {
-    // Windows note: `<dyn ServiceManager>::native()` returns `ScServiceManager`
-    // (sc.exe) on Windows. sc.exe requires Administrator privileges. We do NOT
-    // try to use winsw: service-manager 0.11's WinSwServiceManager invokes
-    // `winsw install <name>.xml` which winsw v2 does not understand (v2 expects
-    // rename-pattern config next to its executable). Users on Windows need to
-    // run `origin install` from an elevated terminal.
+    // macOS + Linux only. Windows install/uninstall short-circuit before
+    // calling this and drive schtasks.exe directly (see install/uninstall).
     let mut m = <dyn ServiceManager>::native().context("detect native service manager")?;
-    // launchd and systemd-user both support user-level. Windows sc.exe does not
-    // and silently keeps system-level after this call. macOS + Linux benefit.
     let _ = m.set_level(ServiceLevel::User);
     Ok(m)
 }
@@ -158,22 +185,34 @@ fn build_launchd_plist(
 pub fn install() -> Result<()> {
     #[cfg(target_os = "windows")]
     {
-        // origin-server is a plain console app; it does not speak the Windows
-        // Service Control Protocol (no SetServiceStatus / control handler).
-        // sc.exe install succeeds but `sc start` times out at 30s (error 1053:
-        // "service did not respond"). Until origin-server is wrapped with the
-        // `windows-service` crate or via Task Scheduler, the `install`
-        // subcommand is not supported on Windows.
-        anyhow::bail!(
-            "`origin install` is not yet supported on Windows.\n\
-             Run the daemon manually instead:\n\
-             \n  Set-Location <install-dir>\n  $env:ORIGIN_BIND_ADDR = \"127.0.0.1:7878\"\n  Start-Process .\\origin-server.exe -WindowStyle Hidden\n\
-             \n\
-             To auto-start at logon, register a per-user Task Scheduler task:\n\
-             \n  schtasks /create /tn OriginServer /sc onlogon /tr \"<install-dir>\\origin-server.exe\"\n\
-             \n\
-             Tracked: cross-platform Windows service support."
+        // origin-server is a plain console app and does not speak the Windows
+        // Service Control Protocol, so sc.exe install + start would time out
+        // at 30s with error 1053. Use Task Scheduler instead: register a
+        // per-user ONLOGON task and trigger it immediately. Matches the
+        // user-scope semantics of launchd LaunchAgent (macOS) and
+        // systemd --user (Linux), without needing a service dispatcher in
+        // origin-server.
+        let program = current_server_path()?;
+        let program_str = program.to_string_lossy();
+        run_schtasks(
+            &[
+                "/create",
+                "/tn",
+                WINDOWS_TASK_NAME,
+                "/sc",
+                "ONLOGON",
+                "/tr",
+                &program_str,
+                "/f",
+            ],
+            "create scheduled task",
+        )?;
+        run_schtasks(&["/run", "/tn", WINDOWS_TASK_NAME], "run scheduled task")?;
+        println!(
+            "Installed and started Windows scheduled task '{}' (origin-server).",
+            WINDOWS_TASK_NAME
         );
+        return Ok(());
     }
 
     #[cfg_attr(target_os = "windows", allow(unreachable_code))]
@@ -240,13 +279,20 @@ pub fn install() -> Result<()> {
 pub fn uninstall() -> Result<()> {
     #[cfg(target_os = "windows")]
     {
-        // `origin install` is gated off on Windows; `uninstall` is a no-op for
-        // the matching reason. If a previous build left a stale sc.exe entry,
-        // remove it manually: `sc.exe delete com.origin.server`.
-        anyhow::bail!(
-            "`origin uninstall` is not yet supported on Windows. \
-             If a stale service exists: sc.exe delete com.origin.server"
+        // /end returns nonzero if the task is not currently running; that
+        // is not an error worth surfacing, so swallow the exit code.
+        let _ = std::process::Command::new("schtasks.exe")
+            .args(["/end", "/tn", WINDOWS_TASK_NAME])
+            .output();
+        run_schtasks(
+            &["/delete", "/tn", WINDOWS_TASK_NAME, "/f"],
+            "delete scheduled task",
+        )?;
+        println!(
+            "Uninstalled Windows scheduled task '{}'.",
+            WINDOWS_TASK_NAME
         );
+        return Ok(());
     }
 
     #[cfg_attr(target_os = "windows", allow(unreachable_code))]
@@ -264,11 +310,10 @@ pub fn uninstall() -> Result<()> {
 pub fn is_installed() -> bool {
     #[cfg(target_os = "windows")]
     {
-        // `sc.exe query <label>` exits 0 when the service is registered with
-        // the Windows Service Control Manager, 1060 when it is not. We don't
-        // need admin rights for a read-only query.
-        std::process::Command::new("sc.exe")
-            .args(["query", SERVICE_LABEL])
+        // `schtasks /query /tn <name>` exits 0 when the task exists, 1 when
+        // it does not. No admin rights needed for the read-only query.
+        std::process::Command::new("schtasks.exe")
+            .args(["/query", "/tn", WINDOWS_TASK_NAME])
             .output()
             .map(|o| o.status.success())
             .unwrap_or(false)
@@ -283,9 +328,15 @@ pub async fn print_status() -> Result<()> {
     #[cfg(target_os = "windows")]
     {
         if is_installed() {
-            println!("Service: {} (registered with sc.exe)", SERVICE_LABEL);
+            println!(
+                "Service: scheduled task '{}' (registered)",
+                WINDOWS_TASK_NAME
+            );
         } else {
-            println!("Service: {} (not installed)", SERVICE_LABEL);
+            println!(
+                "Service: scheduled task '{}' (not installed)",
+                WINDOWS_TASK_NAME
+            );
         }
     }
     #[cfg(not(target_os = "windows"))]

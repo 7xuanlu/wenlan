@@ -79,9 +79,9 @@ Origin runs on macOS (arm64, x86_64), Linux (x86_64, aarch64; musl), and Windows
 |---|---|---|
 | macOS | `~/Library/Application Support/origin/` | launchd via `~/Library/LaunchAgents/com.origin.server.plist` (user-level) |
 | Linux | `~/.local/share/origin/` (or `$XDG_DATA_HOME/origin`) | systemd user unit at `~/.config/systemd/user/origin-server.service` (qualifier dropped per `ServiceLabel::to_script_name()`). Enable lingering with `loginctl enable-linger` if you want the service alive after logout. |
-| Windows | `%LOCALAPPDATA%\origin\` | `origin install` is **not supported on Windows in v1**. origin-server is a plain console app and does not speak the Windows Service Control Protocol; sc.exe times out at 30s. Run the daemon manually (`Start-Process .\origin-server.exe -WindowStyle Hidden`) or register a per-user Task Scheduler task with `schtasks /create /sc onlogon`. Tracked follow-up: implement service control via the `windows-service` crate. |
+| Windows | `%LOCALAPPDATA%\origin\` | Per-user Task Scheduler ONLOGON task registered via `schtasks.exe /create /tn OriginServer /sc ONLOGON /tr <exe> /f`. `origin install` short-circuits before service-manager and drives schtasks directly (origin-server is a plain console app and would otherwise time out at 30s under sc.exe + the Windows Service Control Protocol). `origin uninstall` calls `schtasks /delete /tn OriginServer /f`. |
 
-`origin install` / `origin uninstall` work on macOS + Linux. On Windows both commands exit non-zero with guidance toward manual run or Task Scheduler.
+`origin install` / `origin uninstall` work on macOS, Linux, and Windows. macOS + Linux go through the `service-manager` crate (launchd / systemd-user); Windows takes the schtasks path described above so the daemon does not need a service dispatcher.
 
 ### llama-cpp-2 backend
 
