@@ -53,10 +53,16 @@ jobs:
             npm:
               - 'crates/*/npm/**'
 
+  # fmt + lint always run (cheap, cached). Skipping them based on
+  # detect-changes outputs created a FAIL-OPEN path: if detect-changes
+  # failed, its `outputs.rust` was empty, fmt/lint/test all skipped, and
+  # the conclusion gate accepted `skipped` as success → green CI with
+  # zero verification. Always-on fmt+lint closes that surface for the
+  # cheap jobs; the conclusion gate now also fails the build when
+  # detect-changes itself did not succeed.
   fmt:
     name: fmt
-    needs: detect-changes
-    if: "needs.detect-changes.outputs.rust == 'true' && !startsWith(github.event.head_commit.message, 'chore(main): release')"
+    if: "!startsWith(github.event.head_commit.message, 'chore(main): release')"
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
@@ -68,8 +74,8 @@ jobs:
 
   lint:
     name: lint
-    needs: [detect-changes, fmt]
-    if: "needs.detect-changes.outputs.rust == 'true' && !startsWith(github.event.head_commit.message, 'chore(main): release')"
+    needs: [fmt]
+    if: "!startsWith(github.event.head_commit.message, 'chore(main): release')"
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
@@ -267,8 +273,13 @@ jobs:
           exit 0
 
   # Aggregate gate for branch protection. `if: always()` lets docs-only PRs
-  # (where fmt/lint/test skipped via detect-changes) report success instead of
-  # stalling forever on a never-run required check.
+  # (where the test matrix skips via detect-changes) report success instead
+  # of stalling forever on a never-run required check.
+  #
+  # detect-changes.result is checked explicitly: if the path filter itself
+  # fails, downstream jobs would be skipped silently and this gate would
+  # have passed pre-fix. fmt + lint always run now, so `skipped` on them
+  # only occurs on release-please bot pushes (acceptable).
   conclusion:
     name: conclusion
     needs: [detect-changes, fmt, lint, test]
@@ -277,6 +288,11 @@ jobs:
     steps:
       - name: Aggregate
         run: |
+          dc='${{ needs.detect-changes.result }}'
+          if [ "$dc" != 'success' ]; then
+            echo "detect-changes did not succeed: $dc"
+            exit 1
+          fi
           for r in '${{ needs.fmt.result }}' '${{ needs.lint.result }}' '${{ needs.test.result }}'; do
             case "$r" in
               success|skipped) ;;
