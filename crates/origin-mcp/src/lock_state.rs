@@ -40,13 +40,15 @@ pub fn is_locked() -> bool {
         .is_some()
 }
 
+/// Shared mutex for test modules that mutate `ORIGIN_SPACE` env var + the
+/// `LOCKED` RwLock. Exposed as `pub(crate)` so `client::tests` can share the
+/// same serialisation lock and avoid races between test threads.
+#[cfg(test)]
+pub(crate) static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::Mutex;
-
-    // Serialise all tests that touch the global env var + RwLock state.
-    static ENV_LOCK: Mutex<()> = Mutex::new(());
 
     #[test]
     fn locked_space_returns_none_when_env_unset() {

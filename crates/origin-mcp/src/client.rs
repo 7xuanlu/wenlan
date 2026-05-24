@@ -5,6 +5,12 @@ use serde::{de::DeserializeOwned, Serialize};
 
 const DEFAULT_HTTP_URL: &str = "http://127.0.0.1:7878";
 
+/// Single source of truth for the space-lock header name.
+/// Mirrors the daemon's `X-Origin-Space` constant (HTTP normalises to lowercase).
+pub fn space_header_name() -> &'static str {
+    "x-origin-space"
+}
+
 /// Discover the Origin server URL.
 /// Priority: CLI flag > HTTP default.
 /// Note: UDS discovery disabled — reqwest doesn't support unix:// URLs natively.
@@ -98,17 +104,29 @@ impl OriginClient {
             .map_err(|e| OriginError::Deserialize(format!("failed to read response body: {e:#}")))
     }
 
+    /// Attach per-request headers common to all daemon calls:
+    /// `x-agent-name` (when set) and `x-origin-space` (when space is locked).
+    fn attach_common_headers(
+        mut req: reqwest::RequestBuilder,
+        agent: Option<&str>,
+    ) -> reqwest::RequestBuilder {
+        if let Some(a) = agent {
+            req = req.header("x-agent-name", a);
+        }
+        if let Some(space) = crate::lock_state::locked_space() {
+            req = req.header(space_header_name(), space);
+        }
+        req
+    }
+
     /// GET request, deserialize JSON response.
     pub async fn get<R: DeserializeOwned>(&self, path: &str) -> Result<R, OriginError> {
         let url = format!("{}{}", self.base_url, path);
         let agent = self.agent_name.clone();
         let resp = self
             .send_with_retry(|| {
-                let mut req = self.client.get(&url);
-                if let Some(a) = agent.as_deref() {
-                    req = req.header("x-agent-name", a);
-                }
-                req
+                let req = self.client.get(&url);
+                Self::attach_common_headers(req, agent.as_deref())
             })
             .await?;
         let bytes = Self::read_body(resp).await?;
@@ -125,11 +143,8 @@ impl OriginClient {
         let agent = self.agent_name.clone();
         let resp = self
             .send_with_retry(|| {
-                let mut req = self.client.post(&url).json(body);
-                if let Some(a) = agent.as_deref() {
-                    req = req.header("x-agent-name", a);
-                }
-                req
+                let req = self.client.post(&url).json(body);
+                Self::attach_common_headers(req, agent.as_deref())
             })
             .await?;
         let bytes = Self::read_body(resp).await?;
@@ -143,11 +158,8 @@ impl OriginClient {
         let agent = self.agent_name.clone();
         let resp = self
             .send_with_retry(|| {
-                let mut req = self.client.post(&url);
-                if let Some(a) = agent.as_deref() {
-                    req = req.header("x-agent-name", a);
-                }
-                req
+                let req = self.client.post(&url);
+                Self::attach_common_headers(req, agent.as_deref())
             })
             .await?;
         let bytes = Self::read_body(resp).await?;
@@ -160,11 +172,8 @@ impl OriginClient {
         let agent = self.agent_name.clone();
         let resp = self
             .send_with_retry(|| {
-                let mut req = self.client.delete(&url);
-                if let Some(a) = agent.as_deref() {
-                    req = req.header("x-agent-name", a);
-                }
-                req
+                let req = self.client.delete(&url);
+                Self::attach_common_headers(req, agent.as_deref())
             })
             .await?;
         let bytes = Self::read_body(resp).await?;
@@ -181,11 +190,8 @@ impl OriginClient {
         let agent = self.agent_name.clone();
         let resp = self
             .send_with_retry(|| {
-                let mut req = self.client.put(&url).json(body);
-                if let Some(a) = agent.as_deref() {
-                    req = req.header("x-agent-name", a);
-                }
-                req
+                let req = self.client.put(&url).json(body);
+                Self::attach_common_headers(req, agent.as_deref())
             })
             .await?;
         let bytes = Self::read_body(resp).await?;
@@ -251,5 +257,42 @@ mod tests {
         // With no CLI flag and no socket, should fall back to default HTTP
         let url = discover_origin_url(None);
         assert_eq!(url, "http://127.0.0.1:7878");
+    }
+
+    #[test]
+    fn space_header_attached_when_locked() {
+        // Share ENV_LOCK with lock_state::tests to prevent env var races.
+        let _guard = crate::lock_state::ENV_LOCK.lock().unwrap();
+        std::env::set_var("ORIGIN_SPACE", "career");
+        crate::lock_state::init_from_env();
+
+        let client = Client::new();
+        let builder = OriginClient::attach_common_headers(
+            client.get("http://127.0.0.1:7878/api/health"),
+            None,
+        );
+        let req = builder.build().unwrap();
+        let header = req.headers().get(space_header_name()).unwrap();
+        assert_eq!(header.to_str().unwrap(), "career");
+
+        // Clean up.
+        std::env::remove_var("ORIGIN_SPACE");
+        crate::lock_state::init_from_env();
+    }
+
+    #[test]
+    fn space_header_absent_when_unlocked() {
+        // Share ENV_LOCK with lock_state::tests to prevent env var races.
+        let _guard = crate::lock_state::ENV_LOCK.lock().unwrap();
+        std::env::remove_var("ORIGIN_SPACE");
+        crate::lock_state::init_from_env();
+
+        let client = Client::new();
+        let builder = OriginClient::attach_common_headers(
+            client.get("http://127.0.0.1:7878/api/health"),
+            None,
+        );
+        let req = builder.build().unwrap();
+        assert!(req.headers().get(space_header_name()).is_none());
     }
 }
