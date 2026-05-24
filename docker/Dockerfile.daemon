@@ -36,6 +36,10 @@ RUN cargo chef cook --release --recipe-path recipe.json -p origin-server
 COPY . .
 RUN cargo build --release -p origin-server
 RUN strip target/release/origin-server
+# Skeleton dir copied into runtime so /data exists in the image with the
+# right ownership. Without this, Docker creates /data lazily at first
+# run owned by root, and the nonroot user (UID 65532) can't write to it.
+RUN mkdir -p /data-skeleton
 
 FROM gcr.io/distroless/cc-debian13:nonroot AS runtime
 COPY --from=builder /src/target/release/origin-server /usr/local/bin/origin-server
@@ -43,6 +47,11 @@ COPY --from=builder /src/target/release/origin-server /usr/local/bin/origin-serv
 # to the binary via the `copy-dylibs` feature. Without this, the daemon
 # crashes on first embedding call with `libonnxruntime.so` not found.
 COPY --from=builder /src/target/release/libonnxruntime.so* /usr/local/lib/
+# Materialize /data in the image so anonymous volumes inherit the nonroot
+# owner (UID 65532) instead of defaulting to root. Distroless has no shell
+# for a `mkdir`+`chown` RUN step; `COPY --chown` from the builder skeleton
+# does the same job.
+COPY --from=builder --chown=65532:65532 /data-skeleton /data
 ENV LD_LIBRARY_PATH=/usr/local/lib
 USER nonroot
 EXPOSE 7878
