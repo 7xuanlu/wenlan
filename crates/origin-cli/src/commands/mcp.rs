@@ -148,7 +148,12 @@ fn add_native(
 }
 
 fn run_external(binary: &str, args: &[String]) -> Result<()> {
-    let status = Command::new(binary)
+    // Resolve via PATHEXT so .cmd / .bat shims on Windows match. CreateProcess
+    // only auto-appends `.exe`, which would miss a fake `claude.cmd` in tests
+    // and also any real Windows shell-script wrappers the user installed.
+    let resolved = which::which(binary)
+        .with_context(|| format!("could not find `{binary}`. Is it installed and on PATH?"))?;
+    let status = Command::new(&resolved)
         .args(args)
         .status()
         .with_context(|| format!("could not run `{binary}`. Is it installed and on PATH?"))?;

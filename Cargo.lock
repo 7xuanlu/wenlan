@@ -3085,6 +3085,7 @@ dependencies = [
  "service-manager",
  "tempfile",
  "tokio",
+ "which",
 ]
 
 [[package]]
