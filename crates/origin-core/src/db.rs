@@ -5244,12 +5244,24 @@ impl MemoryDB {
 
     /// Bulk-reassign all memories and entities from `from` space to `to` space.
     /// Returns the number of memory rows (chunks) updated.
+    /// Auto-creates the destination space if it is not already registered.
     pub async fn reassign_memories_space(
         &self,
         from: &str,
         to: &str,
     ) -> Result<usize, OriginError> {
         let conn = self.conn.lock().await;
+
+        // Auto-create destination space if not registered yet.
+        let id = uuid::Uuid::new_v4().to_string();
+        let now = chrono::Utc::now().timestamp() as f64;
+        conn.execute(
+            "INSERT OR IGNORE INTO spaces (id, name, description, suggested, sort_order, created_at, updated_at)
+             SELECT ?1, ?2, NULL, 0, COALESCE(MAX(sort_order), -1) + 1, ?3, ?3 FROM spaces",
+            libsql::params![id, to, now],
+        )
+        .await
+        .map_err(|e| OriginError::VectorDb(format!("reassign auto-create-dest: {}", e)))?;
 
         conn.execute("BEGIN", ())
             .await
@@ -30079,5 +30091,34 @@ pub(crate) mod tests {
         let row2 = rows2.next().await.unwrap().expect("count row");
         let foo_count: i64 = row2.get(0).unwrap();
         assert_eq!(foo_count, 0, "foo should have 0 memories after move");
+    }
+
+    #[tokio::test]
+    async fn reassign_memories_space_auto_creates_dest() {
+        let (db, _td) = test_db().await;
+
+        // Only create the source space — destination "baz" does not exist yet.
+        db.create_space("src", None, false).await.unwrap();
+
+        let doc = make_memory_doc(
+            "mem_autocreate_1",
+            "Memory in src.",
+            "knowledge",
+            "src",
+            "agent",
+        );
+        db.upsert_documents(vec![doc]).await.unwrap();
+
+        // Move without pre-creating "baz".
+        let affected = db.reassign_memories_space("src", "baz").await.unwrap();
+        assert!(affected >= 1, "expected >= 1 row updated, got {}", affected);
+
+        // "baz" must now appear in list_spaces.
+        let spaces = db.list_spaces().await.unwrap();
+        assert!(
+            spaces.iter().any(|s| s.name == "baz"),
+            "destination space 'baz' should be registered after move, got: {:?}",
+            spaces.iter().map(|s| &s.name).collect::<Vec<_>>()
+        );
     }
 }
