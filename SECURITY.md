@@ -29,4 +29,10 @@ We are especially interested in:
 
 | Version | Supported |
 |---------|-----------|
-| 0.1.x   | Yes       |
+| 0.7.x   | Yes       |
+| < 0.7.0 | Best-effort |
+
+## Links
+
+- [useorigin.app](https://useorigin.app) — project home
+- [useorigin.app/.well-known/security.txt](https://useorigin.app/.well-known/security.txt) — machine-readable security contact per RFC 9116
