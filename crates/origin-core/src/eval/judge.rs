@@ -1218,9 +1218,8 @@ pub fn stamp_judge_model(env: &mut Option<crate::eval::report::ReportEnv>, model
 #[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum JudgeVerdict {
-    Correct,
-    Incorrect,
-    Partial,
+    Yes,
+    No,
 }
 
 #[derive(Debug, Clone, serde::Deserialize)]
@@ -1237,24 +1236,37 @@ pub struct StructuredJudgeOutput {
 /// Priority order:
 /// 1. Direct JSON object matching `StructuredJudgeOutput`.
 /// 2. Markdown-fenced JSON (```json ... ```).
-/// 3. Legacy bare string ("correct" / "incorrect" / "partial").
+/// 3. Legacy bare token — exact match only ("yes" | "correct" | "no" | "incorrect").
 ///
-/// Anything else is an error — callers should treat that as a judge failure.
+/// Tier 3 is strict (exact match, not substring) to prevent regressions like
+/// "corrects" classifying as Yes. The `partial` token is intentionally absent
+/// since v2 verdict space is binary; the back-compat `correct`/`incorrect`
+/// tokens cover any pre-rewrite JSONL strings stored by the branch's
+/// structured-output era.
+///
+/// Multi-line raw judge text like "No.\n\nThe model response..." (the shape
+/// stored in cached `lme_accuracy_*.json` `judge_response` fields) is NOT
+/// supported and will error. Replay of those caches requires re-judging.
 pub fn parse_judge_output(raw: &str) -> Result<StructuredJudgeOutput, String> {
     let trimmed = raw.trim();
+
+    // Tier 1: direct JSON.
     if let Ok(s) = serde_json::from_str::<StructuredJudgeOutput>(trimmed) {
         return Ok(s);
     }
+
+    // Tier 2: markdown-fenced JSON.
     if let Some(fenced) = strip_json_fence(trimmed) {
         if let Ok(s) = serde_json::from_str::<StructuredJudgeOutput>(fenced) {
             return Ok(s);
         }
     }
+
+    // Tier 3: exact-match legacy bare token.
     let normalized = trimmed.to_ascii_lowercase();
     let legacy = match normalized.as_str() {
-        "correct" => Some(JudgeVerdict::Correct),
-        "partial" => Some(JudgeVerdict::Partial),
-        "incorrect" => Some(JudgeVerdict::Incorrect),
+        "yes" | "correct" => Some(JudgeVerdict::Yes),
+        "no" | "incorrect" => Some(JudgeVerdict::No),
         _ => None,
     };
     legacy
@@ -1281,55 +1293,71 @@ mod tests {
     use super::*;
 
     #[test]
-    fn parse_two_stage_judge_output_correct() {
-        let raw = r#"{
-            "rubric_scores": {"factual_match": 1.0, "covers_all_required_facts": 1.0},
-            "verdict_reason": "answer matches gold on every required fact",
-            "verdict": "correct"
-        }"#;
-        let parsed = parse_judge_output(raw).expect("valid JSON");
-        assert_eq!(parsed.verdict, JudgeVerdict::Correct);
-        assert_eq!(parsed.rubric_scores.get("factual_match"), Some(&1.0));
+    fn parse_judge_output_json_yes() {
+        let raw = r#"{"rubric_scores": {}, "verdict_reason": "ok", "verdict": "yes"}"#;
+        assert_eq!(parse_judge_output(raw).unwrap().verdict, JudgeVerdict::Yes);
     }
 
     #[test]
-    fn parse_two_stage_judge_output_falls_back_to_legacy_string() {
-        let parsed = parse_judge_output("correct").expect("legacy ok");
-        assert_eq!(parsed.verdict, JudgeVerdict::Correct);
-        assert!(parsed.rubric_scores.is_empty());
+    fn parse_judge_output_json_no() {
+        let raw = r#"{"rubric_scores": {}, "verdict_reason": "no", "verdict": "no"}"#;
+        assert_eq!(parse_judge_output(raw).unwrap().verdict, JudgeVerdict::No);
     }
 
     #[test]
-    fn parse_two_stage_judge_output_extracts_fenced_json() {
-        let raw = "```json\n{\"rubric_scores\":{},\"verdict_reason\":\"x\",\"verdict\":\"incorrect\"}\n```";
-        let parsed = parse_judge_output(raw).expect("fenced ok");
-        assert_eq!(parsed.verdict, JudgeVerdict::Incorrect);
+    fn parse_judge_output_fenced_json() {
+        let raw =
+            "```json\n{\"rubric_scores\":{},\"verdict_reason\":\"x\",\"verdict\":\"no\"}\n```";
+        assert_eq!(parse_judge_output(raw).unwrap().verdict, JudgeVerdict::No);
     }
 
     #[test]
-    fn parse_judge_output_legacy_partial() {
-        let parsed = parse_judge_output("partial").expect("legacy partial");
-        assert_eq!(parsed.verdict, JudgeVerdict::Partial);
-        assert!(parsed.rubric_scores.is_empty());
+    fn parse_judge_output_legacy_yes_no_strings_exact_match() {
+        assert_eq!(
+            parse_judge_output("yes").unwrap().verdict,
+            JudgeVerdict::Yes
+        );
+        assert_eq!(parse_judge_output("No").unwrap().verdict, JudgeVerdict::No);
     }
 
     #[test]
-    fn parse_judge_output_rejects_empty_input() {
-        assert!(parse_judge_output("").is_err());
-        assert!(parse_judge_output("   \n  ").is_err());
+    fn parse_judge_output_legacy_correct_incorrect_back_compat() {
+        assert_eq!(
+            parse_judge_output("correct").unwrap().verdict,
+            JudgeVerdict::Yes
+        );
+        assert_eq!(
+            parse_judge_output("incorrect").unwrap().verdict,
+            JudgeVerdict::No
+        );
     }
 
     #[test]
-    fn parse_judge_output_rejects_malformed_json() {
-        assert!(parse_judge_output("{").is_err());
-        assert!(parse_judge_output("{\"verdict\":}").is_err());
+    fn parse_judge_output_drops_partial() {
+        assert!(parse_judge_output("partial").is_err());
     }
 
+    // Regression test: branch's parse_judge_output_legacy_rejects_substring_false_positives
+    // was added specifically to catch silent classification of misleading inputs.
+    // Spec v2 restored exact-match semantics; this test guards that.
     #[test]
-    fn parse_judge_output_legacy_rejects_substring_false_positives() {
-        // Regression for the starts_with -> exact-match fix.
+    fn parse_judge_output_rejects_substring_false_positives() {
         assert!(parse_judge_output("corrects").is_err());
-        assert!(parse_judge_output("correctness").is_err());
-        assert!(parse_judge_output("correct then false").is_err());
+        assert!(parse_judge_output("incorrect-ish").is_err());
+        assert!(parse_judge_output("yes please").is_err());
+        assert!(parse_judge_output("yeses").is_err());
+        assert!(parse_judge_output("nope").is_err());
+    }
+
+    #[test]
+    fn parse_judge_output_rejects_multiline_text() {
+        // Documents that multi-line raw judge text is intentionally not handled.
+        // Cached pre-rewrite JSONLs cannot be replayed; re-judge is required.
+        assert!(parse_judge_output("No.\n\nThe model response is wrong.").is_err());
+    }
+
+    #[test]
+    fn parse_judge_output_garbage_errors() {
+        assert!(parse_judge_output("¯\\_(ツ)_/¯").is_err());
     }
 }
