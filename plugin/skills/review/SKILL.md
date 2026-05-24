@@ -21,6 +21,16 @@ Power-user audit lever. Most users do not need /review in daily flow:
 
 Use /review only when you want the deep walk those skills intentionally do not force.
 
+## Resolve the active space
+
+Call the bundled resolver before listing pending memories:
+
+    resolved="$("$CLAUDE_PLUGIN_ROOT/bin/resolve-space.sh" --cwd "$PWD" 2>/dev/null)"
+    space="$(printf '%s\n' "$resolved" | cut -f1)"
+
+Pass `space="$space"` as a filter to the pending-list MCP call so the
+review is scoped to the active bucket.
+
 ## Scoped invocation
 
 - `/review captures`: walk every unconfirmed memory (`list_pending`,

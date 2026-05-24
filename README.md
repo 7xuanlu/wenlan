@@ -10,6 +10,12 @@
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](#license)
 
 <p align="center">
+  <img alt="macOS" src="https://img.shields.io/badge/macOS-arm64%20%7C%20x64-A2AAAD?logo=apple&logoColor=white">
+  <img alt="Linux" src="https://img.shields.io/badge/Linux-x64%20%7C%20arm64-FCC624?logo=linux&logoColor=black">
+  <img alt="Windows" src="https://img.shields.io/badge/Windows-x64-0078D6?logo=windows&logoColor=white">
+</p>
+
+<p align="center">
   <a href="#claude-code-in-30-seconds"><img alt="Claude Code" src="https://img.shields.io/badge/Claude%20Code-plugin-5D4E75"></a>
   <a href="#mcp-only-setup"><img alt="OpenAI Codex" src="https://img.shields.io/badge/OpenAI%20Codex-MCP-111827"></a>
   <a href="#mcp-only-setup"><img alt="Cursor" src="https://img.shields.io/badge/Cursor-MCP-111111"></a>
@@ -119,6 +125,24 @@ No cloud sync or telemetry by default. Local models and Anthropic keys are opt-i
 - **Explicit spaces**: tag memories, pages, and recalls with `space=work | personal | client-X` so a day-job capture never bleeds into a side-project brief. Auto-detected from the current repo or workspace when no space is set; overridable always.
 - **Local artifacts**: Markdown pages live in `~/.origin/pages/`, session logs and project status live under `~/.origin/sessions/`, and `~/.origin/` keeps local git history you can inspect, revert, or symlink into Obsidian.
 
+### Multi-bucket workflows
+
+Memories belong to a **space** — a bucket like `origin`, `career`, or
+`ideas`. Set the active bucket per shell:
+
+    ORIGIN_SPACE=career claude
+
+Or declaratively via `~/.origin/spaces.toml` (see
+`plugin/examples/spaces.toml`). To manage spaces from the CLI:
+
+    origin space list
+    origin space add ideas --default
+    origin space show ideas
+    origin space move scratch career
+
+`origin doctor` prints the current resolver state so you can see exactly
+which layer chose the active space.
+
 ---
 
 ## Evaluation
@@ -157,7 +181,7 @@ Full contributor map: [CLAUDE.md](CLAUDE.md).
 
 ## Build from source
 
-Most users should install through the Claude Code plugin. For local development:
+Origin builds natively on macOS (Apple Silicon + Intel), Linux (x86_64 + ARM64; glibc), and Windows (x86_64). The npm wrapper (`@7xuanlu/origin`, `origin-mcp`) and `install.sh` auto-detect your platform and pull the matching prebuilt release. Most users should install through the Claude Code plugin or `npx`. For local development:
 
 ```bash
 git clone https://github.com/7xuanlu/origin.git
@@ -166,7 +190,7 @@ cargo build --workspace
 cargo run -p origin-server
 ```
 
-Build details for the daemon, MCP server, CLI, and core crates live in the crate READMEs linked above.
+Build details for the daemon, MCP server, CLI, and core crates live in the crate READMEs linked above. Cross-platform specifics (service registration, paths, Windows install limitation) live in [AGENTS.md](AGENTS.md#cross-platform).
 
 ---
 

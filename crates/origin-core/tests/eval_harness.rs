@@ -3761,9 +3761,16 @@ fn fixture_revision_hash_changes_when_bytes_change() {
     assert_ne!(h1, h2, "hash must change when bytes change");
 }
 
+// Serialize tests that read/write EVAL_MAX_USD. std::env is process-global;
+// parallel cargo-test workers race on set_var/remove_var. tokio::sync::Mutex
+// because the guard is held across .await in submit_batch tests; std::sync
+// Mutex would trigger clippy::await_holding_lock.
+static EVAL_MAX_USD_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
 #[tokio::test]
 async fn submit_batch_aborts_when_estimate_exceeds_eval_max_usd() {
     use origin_core::eval::anthropic::submit_batch;
+    let _guard = EVAL_MAX_USD_LOCK.lock().await;
     std::env::set_var("EVAL_MAX_USD", "0.001");
     let client = reqwest::Client::new();
     let huge_prompt = "x".repeat(1_000_000);
@@ -3783,6 +3790,7 @@ async fn submit_batch_aborts_when_estimate_exceeds_eval_max_usd() {
 #[tokio::test]
 async fn submit_batch_no_cap_env_var_unset_does_not_block() {
     use origin_core::eval::anthropic::estimate_batch_cost;
+    let _guard = EVAL_MAX_USD_LOCK.lock().await;
     std::env::remove_var("EVAL_MAX_USD");
     let prompts = vec![("id".to_string(), "hi".to_string(), None, 16usize)];
     let cost = estimate_batch_cost(&prompts);
@@ -3903,6 +3911,130 @@ fn baseline_filename_falls_back_when_env_missing() {
     use origin_core::eval::report::EvalReport;
     let r = EvalReport::default();
     assert_eq!(r.baseline_filename("foo"), "foo.json");
+}
+
+#[tokio::test]
+#[ignore]
+async fn run_kg_faithfulness_smoke() {
+    use origin_core::eval::kg_faithfulness::run_kg_faithfulness_eval;
+
+    let fixture_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap()
+        .join("app/eval/kg_fixtures");
+    if !fixture_dir.exists() {
+        eprintln!("SKIP: kg_fixtures dir not found");
+        return;
+    }
+
+    // IMPORTANT: eval_shared_extractor does NOT exist today (only eval_shared_embedder).
+    // KgExtractor is also not a standalone type — extract_kg_batch lives on LlmEngine.
+    // Constructing LlmEngine requires a model file on disk and Metal GPU access, both
+    // unavailable in CI. Ship the SKIP placeholder; Task 5 lands fixtures and follow-up
+    // work wires the extractor properly.
+    eprintln!("SKIP: extractor construction TBD (see plan Task 4 Step 6 note)");
+    let _ = fixture_dir;
+    let _ = run_kg_faithfulness_eval;
+}
+
+#[tokio::test]
+#[ignore]
+async fn run_page_faithfulness_smoke() {
+    use origin_core::eval::page_faithfulness::run_page_faithfulness_eval;
+
+    let fixture_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap()
+        .join("app/eval/page_fixtures");
+    if !fixture_dir.exists() {
+        eprintln!("SKIP: page_fixtures dir not found");
+        return;
+    }
+    let report = run_page_faithfulness_eval(&fixture_dir);
+    eprintln!("\n=== Page-Faithfulness ===");
+    eprintln!(
+        "Mean faithfulness: {:.3} across {} cases ({} below threshold)",
+        report.mean_faithfulness, report.case_count, report.below_threshold_count
+    );
+    for c in &report.per_case {
+        let marker = if c.meets_threshold() { "OK" } else { "FAIL" };
+        eprintln!(
+            "  [{}] {} {:.2} (expected >= {:.2})",
+            marker, c.case_id, c.faithfulness, c.expected_min
+        );
+    }
+}
+
+#[tokio::test]
+#[ignore]
+async fn kg_faithfulness_llm_judge_smoke() {
+    if std::env::var("ANTHROPIC_API_KEY").is_err() {
+        eprintln!("SKIP: ANTHROPIC_API_KEY not set");
+        return;
+    }
+    if std::env::var("EVAL_RUN_LLM_JUDGE").as_deref() != Ok("1") {
+        eprintln!("SKIP: set EVAL_RUN_LLM_JUDGE=1 to actually fire the Batch API");
+        return;
+    }
+    use origin_core::eval::kg_faithfulness::{KgExpectedEntity, KgFixtureCase};
+    use origin_core::eval::kg_faithfulness_llm::judge_kg_case_with_llm;
+    use origin_core::extract::{ExtractedEntity, ExtractedRelation, KgExtractionResult};
+
+    let case = KgFixtureCase {
+        id: "smoke_001".into(),
+        source_text: "Rust is a systems programming language.".into(),
+        expected_entities: vec![KgExpectedEntity {
+            name: "Rust".into(),
+            kind: "language".into(),
+        }],
+        expected_relations: vec![],
+    };
+    let extracted = KgExtractionResult {
+        index: 0,
+        entities: vec![
+            ExtractedEntity {
+                name: "Rust".into(),
+                entity_type: "language".into(),
+            },
+            ExtractedEntity {
+                name: "Python".into(),
+                entity_type: "language".into(),
+            },
+        ],
+        observations: vec![],
+        relations: vec![ExtractedRelation {
+            from: "Rust".into(),
+            to: "systems programming".into(),
+            relation_type: "is_a".into(),
+            confidence: None,
+            explanation: None,
+        }],
+    };
+    let judged = judge_kg_case_with_llm(&case, &extracted, "claude-haiku-4-5-20251001")
+        .await
+        .expect("judge call");
+    eprintln!("\n=== KG-Faith LLM Judge ===");
+    eprintln!("Case: {}", judged.case_id);
+    eprintln!("Entity faithful rate: {:.2}", judged.entity_faithful_rate);
+    for e in &judged.entities {
+        eprintln!("  [{}] {:?} :: {}", e.name, e.verdict, e.reason);
+    }
+    eprintln!(
+        "Relation faithful rate: {:.2}",
+        judged.relation_faithful_rate
+    );
+    for r in &judged.relations {
+        eprintln!(
+            "  [{} --{}-> {}] {:?} :: {}",
+            r.from, r.relation_type, r.to, r.verdict, r.reason
+        );
+    }
+    assert!(judged.entities.iter().any(|e| e.name == "Rust"));
+    assert!(judged.entities.iter().any(|e| e.name == "Python"));
 }
 
 /// Smoke test the Anthropic Batch API tool_use round-trip end-to-end.

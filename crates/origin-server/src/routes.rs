@@ -91,8 +91,12 @@ pub async fn handle_status(
 /// POST /api/search - Semantic search endpoint
 pub async fn handle_search(
     State(state): State<Arc<RwLock<ServerState>>>,
-    Json(req): Json<SearchRequest>,
+    crate::space_header::SpaceHeader(header_space): crate::space_header::SpaceHeader,
+    Json(mut req): Json<SearchRequest>,
 ) -> Result<Json<SearchResponse>, ServerError> {
+    if req.space.is_none() {
+        req.space = header_space;
+    }
     let start = std::time::Instant::now();
 
     let db = {
@@ -196,8 +200,12 @@ pub async fn handle_context(
 pub async fn handle_chat_context(
     State(state): State<Arc<RwLock<ServerState>>>,
     headers: HeaderMap,
-    Json(req): Json<ChatContextRequest>,
+    crate::space_header::SpaceHeader(header_space): crate::space_header::SpaceHeader,
+    Json(mut req): Json<ChatContextRequest>,
 ) -> Result<Json<ChatContextResponse>, ServerError> {
+    if req.space.is_none() {
+        req.space = header_space;
+    }
     let start = std::time::Instant::now();
 
     let query = req
@@ -339,12 +347,6 @@ pub async fn handle_chat_context(
         .filter(|r| r.score >= threshold)
         .collect();
 
-    let graph_observations: Vec<String> = filtered_search
-        .iter()
-        .filter(|r| r.source == "knowledge_graph")
-        .map(|r| format!("[{}] {}", r.title, r.content))
-        .collect();
-
     // Source IDs from search results — used to gate page relevance.
     // A page is only included if its source memories overlap with the
     // memories that search_memory returned for this query.
@@ -473,14 +475,6 @@ pub async fn handle_chat_context(
         sections.push(sec);
     }
 
-    if !graph_observations.is_empty() {
-        let mut sec = String::from("## Knowledge Graph\n");
-        for item in &graph_observations {
-            sec.push_str(&format!("- {}\n", item));
-        }
-        sections.push(sec);
-    }
-
     if !filtered_search.is_empty() {
         let mut sec = String::from("## Relevant Memories\n");
         for r in &filtered_search {
@@ -582,7 +576,7 @@ pub async fn handle_chat_context(
             pages: page_results,
             decisions,
             relevant_memories: filtered_search,
-            graph_context: graph_observations,
+            graph_context: Vec::new(),
         },
         took_ms,
         token_estimates,

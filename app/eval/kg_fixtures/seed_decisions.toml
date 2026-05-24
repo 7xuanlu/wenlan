@@ -1,0 +1,25 @@
+# app/eval/kg_fixtures/seed_decisions.toml
+description = "Decision / rationale statements. Tests extraction over because/therefore/decided-to prose."
+
+[[case]]
+id = "decision_001"
+source_text = "Decided to use BGE-Base-EN-v1.5-Q as the embedding model because it provides 768-dim quantized output with low latency on M-series Macs."
+expected_entities = [
+    { name = "BGE-Base-EN-v1.5-Q", kind = "model" },
+    { name = "embedding model", kind = "role" },
+]
+expected_relations = [
+    { from = "BGE-Base-EN-v1.5-Q", to = "embedding model", relation_type = "part_of" },
+]
+
+[[case]]
+id = "decision_002"
+source_text = "Chose Apache-2.0 for origin-core to allow downstream tools to consume the library without AGPL contamination."
+expected_entities = [
+    { name = "Apache-2.0", kind = "license" },
+    { name = "origin-core", kind = "project" },
+    { name = "AGPL", kind = "license" },
+]
+expected_relations = [
+    { from = "origin-core", to = "Apache-2.0", relation_type = "uses" },
+]

@@ -10,7 +10,7 @@ Most users install Origin through the [Claude Code plugin](../../plugin/.claude-
 npx -y @7xuanlu/origin setup
 ```
 
-The installer downloads `origin`, `origin-server`, and `origin-mcp` into `~/.origin/bin/`. The `origin` CLI owns setup and service management; `origin-server` is the daemon binary launchd runs.
+The installer downloads `origin`, `origin-server`, and `origin-mcp` into `~/.origin/bin/`. Cross-platform: macOS (arm64, x64), Linux (x64, arm64; glibc), Windows (x64). The `origin` CLI owns setup and service management; `origin-server` is the daemon binary the host's service manager runs (launchd on macOS, systemd-user on Linux, Task Scheduler ONLOGON task on Windows).
 
 ## Setup modes
 
@@ -37,15 +37,17 @@ All user-facing data lives under `~/.origin/`:
 ~/.origin/.git/                git repo — skills auto-commit per logical batch
 ```
 
-The libSQL store itself lives at `~/Library/Application Support/origin/memorydb/origin_memory.db` (macOS app convention). `~/.origin/db` is a symlink so everything user-facing is browseable from a single tree. Use `open ~/.origin/`, `code ~/.origin/`, or symlink `~/.origin/pages/` into an Obsidian vault for the graph view.
+The libSQL store lives under the platform data directory (`dirs::data_local_dir()/origin/memorydb/origin_memory.db`). On macOS that resolves to `~/Library/Application Support/origin/memorydb/`; on Linux `~/.local/share/origin/memorydb/`; on Windows `%LOCALAPPDATA%\origin\memorydb\`. `~/.origin/db` is a symlink on macOS + Linux so the user-facing tree stays single-rooted (Windows skips the symlink since it needs Developer Mode or admin and the alias is cosmetic). Use `open ~/.origin/`, `code ~/.origin/`, or symlink `~/.origin/pages/` into an Obsidian vault for the graph view.
 
 ## Service Commands
 
 ```bash
-origin install      # install and load the launchd service
-origin uninstall    # unload and remove the launchd service
+origin install      # register with the host service manager (launchd / systemd-user / schtasks)
+origin uninstall    # remove from the service manager
 origin status       # service + runtime status
 ```
+
+On Windows the install path uses `schtasks.exe` to register a per-user `OriginServer` ONLOGON task and triggers it immediately. origin-server stays a plain console app — no Windows Service Control Protocol dispatcher is needed.
 
 The daemon listens on `127.0.0.1:7878`. MCP clients, the Claude Code plugin, and local tools call that local API.
 
@@ -56,7 +58,7 @@ cargo build -p origin-server
 cargo run -p origin-server
 ```
 
-Or build a release binary and install it as a launchd service:
+Or build a release binary and register it with the host service manager:
 
 ```bash
 cargo build --release -p origin -p origin-server
@@ -65,7 +67,7 @@ cargo build --release -p origin -p origin-server
 ./target/release/origin status
 ```
 
-First build takes several minutes while `llama.cpp` compiles for Metal.
+First build on macOS takes several minutes while `llama.cpp` compiles for Metal. On Linux + Windows the build is CPU-only and finishes faster.
 
 ## Main HTTP Surfaces
 

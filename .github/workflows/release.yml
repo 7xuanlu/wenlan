@@ -21,10 +21,9 @@ env:
   RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
 
 jobs:
-  release:
-    name: Build & Publish Daemon Release
-    runs-on: macos-latest
-
+  prepare-release:
+    name: Create GitHub Release
+    runs-on: ubuntu-24.04
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -37,29 +36,6 @@ jobs:
         run: bash scripts/validate-versions.sh
         env:
           RELEASE_TAG: ${{ env.RELEASE_TAG }}
-
-      - name: Install Rust stable
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: aarch64-apple-darwin
-
-      - name: Cache Rust dependencies
-        uses: Swatinem/rust-cache@v2
-
-      - name: Build origin CLI (release)
-        run: cargo build --release -p origin --target aarch64-apple-darwin
-
-      - name: Build origin-server (release)
-        run: cargo build --release -p origin-server --target aarch64-apple-darwin
-
-      - name: Build origin-mcp (release)
-        run: cargo build --release -p origin-mcp --target aarch64-apple-darwin
-
-      - name: Smoke test origin CLI
-        run: ./target/aarch64-apple-darwin/release/origin --help
-
-      - name: Smoke test origin-server
-        run: ./target/aarch64-apple-darwin/release/origin-server --help
 
       - name: Compose release body
         run: |
@@ -108,7 +84,7 @@ jobs:
           INSTALL_EOF
 
           # Strip leading whitespace from heredoc indentation
-          sed -i '' 's/^          //' release-body.md
+          sed -i 's/^          //' release-body.md
           echo "Release body written ($(wc -c < release-body.md) bytes)"
 
       - name: Create GitHub Release
@@ -125,49 +101,191 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Upload standalone origin CLI binary
-        run: |
-          cp target/aarch64-apple-darwin/release/origin origin-aarch64-apple-darwin
-          gh release upload "$RELEASE_TAG" \
-            origin-aarch64-apple-darwin \
-            --clobber
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+  release:
+    name: Build & Publish ${{ matrix.target }}
+    needs: prepare-release
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: aarch64-apple-darwin
+            os: macos-14
+            archive: tar.gz
+            artifact_name: origin-darwin-arm64
+          - target: x86_64-apple-darwin
+            os: macos-14
+            archive: tar.gz
+            artifact_name: origin-darwin-x64
+          - target: aarch64-unknown-linux-gnu
+            os: ubuntu-24.04
+            archive: tar.gz
+            artifact_name: origin-linux-arm64
+            use_cross: true
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-24.04
+            archive: tar.gz
+            artifact_name: origin-linux-x64
+            use_cross: true
+          - target: x86_64-pc-windows-msvc
+            os: windows-2022
+            archive: zip
+            artifact_name: origin-windows-x64
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.RELEASE_TAG }}
+          fetch-depth: 0
+          fetch-tags: true
 
-      - name: Upload standalone origin-server binary
-        run: |
-          cp target/aarch64-apple-darwin/release/origin-server origin-server-aarch64-apple-darwin
-          gh release upload "$RELEASE_TAG" \
-            origin-server-aarch64-apple-darwin \
-            --clobber
+      - name: Validate version consistency
+        if: runner.os != 'Windows'
+        run: bash scripts/validate-versions.sh
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ env.RELEASE_TAG }}
 
-      - name: Upload standalone origin-mcp binary
-        run: |
-          cp target/aarch64-apple-darwin/release/origin-mcp origin-mcp-aarch64-apple-darwin
-          gh release upload "$RELEASE_TAG" origin-mcp-aarch64-apple-darwin --clobber
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
 
-      - name: Package origin-mcp for Homebrew
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+
+      - name: Install cross
+        if: matrix.use_cross == true
+        run: cargo install cross --locked
+
+      - name: Build (native)
+        if: matrix.use_cross != true
+        run: cargo build --release -p origin -p origin-server -p origin-mcp --target ${{ matrix.target }}
+
+      - name: Build (cross)
+        if: matrix.use_cross == true
+        run: cross build --release -p origin -p origin-server -p origin-mcp --target ${{ matrix.target }}
+
+      - name: Smoke (native)
+        if: matrix.use_cross != true
+        shell: bash
         run: |
-          cp target/aarch64-apple-darwin/release/origin-mcp origin-mcp
-          tar -czf origin-mcp-darwin-arm64.tar.gz origin-mcp
+          ./target/${{ matrix.target }}/release/origin${{ runner.os == 'Windows' && '.exe' || '' }} --help
+          ./target/${{ matrix.target }}/release/origin-server${{ runner.os == 'Windows' && '.exe' || '' }} --help
+
+      - name: Set up QEMU (cross targets only)
+        if: matrix.use_cross == true
+        uses: docker/setup-qemu-action@v3
+
+      - name: Smoke (cross via QEMU)
+        if: matrix.use_cross == true
+        run: |
+          # Map matrix.target arch to docker --platform value.
+          case "${{ matrix.target }}" in
+            aarch64-*)  PLAT=linux/arm64 ;;
+            x86_64-*)   PLAT=linux/amd64 ;;
+            *)          echo "unknown arch for ${{ matrix.target }}"; exit 1 ;;
+          esac
+          # debian:trixie-slim has glibc 2.41 (matches what cross builds need).
+          # Mount the release dir + invoke --help. Emulation overhead is negligible
+          # at --help speeds.
+          docker run --rm --platform "$PLAT" \
+            -v ${{ github.workspace }}/target/${{ matrix.target }}/release:/bin/origin-build:ro \
+            debian:trixie-slim \
+            /bin/origin-build/origin --help
+          docker run --rm --platform "$PLAT" \
+            -v ${{ github.workspace }}/target/${{ matrix.target }}/release:/bin/origin-build:ro \
+            debian:trixie-slim \
+            /bin/origin-build/origin-server --help
+
+      - name: List Windows build artifacts
+        if: matrix.target == 'x86_64-pc-windows-msvc'
+        shell: bash
+        run: ls -la target/${{ matrix.target }}/release/ | head -30
+
+      - name: Package
+        shell: bash
+        run: |
+          mkdir -p dist
+          if [ "${{ matrix.archive }}" = "zip" ]; then
+            # No winsw.exe: service-manager 0.11's WinSwServiceManager invokes
+            # an API winsw v2 doesn't support. Windows users install via the
+            # sc.exe path which requires Administrator elevation. Documented
+            # in AGENTS.md.
+            7z a "dist/${{ matrix.artifact_name }}.zip" \
+              "./target/${{ matrix.target }}/release/origin.exe" \
+              "./target/${{ matrix.target }}/release/origin-server.exe" \
+              "./target/${{ matrix.target }}/release/origin-mcp.exe" \
+              "./target/${{ matrix.target }}/release/onnxruntime.dll"
+          else
+            tar -C "target/${{ matrix.target }}/release" -czf "dist/${{ matrix.artifact_name }}.tar.gz" \
+              origin origin-server origin-mcp
+          fi
+
+      # Per-binary archive for origin-mcp consumed by the Homebrew tap formula.
+      # Produced only on the darwin-arm64 leg to match the existing tap entry.
+      - name: Package origin-mcp tarball for Homebrew (darwin-arm64 only)
+        if: matrix.target == 'aarch64-apple-darwin'
+        shell: bash
+        run: |
+          cp "target/${{ matrix.target }}/release/origin-mcp" origin-mcp
+          tar -czf dist/origin-mcp-darwin-arm64.tar.gz origin-mcp
           rm origin-mcp
 
-      - name: Upload origin-mcp tar for Homebrew
+      # Per-binary archive for the origin CLI consumed by the Homebrew tap
+      # formula. Darwin-arm64 only — matches the origin-mcp tap pattern.
+      - name: Package origin CLI tarball for Homebrew (darwin-arm64 only)
+        if: matrix.target == 'aarch64-apple-darwin'
+        shell: bash
         run: |
-          gh release upload "$RELEASE_TAG" origin-mcp-darwin-arm64.tar.gz --clobber
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          cp "target/${{ matrix.target }}/release/origin" origin
+          tar -czf dist/origin-darwin-arm64.tar.gz origin
+          rm origin
 
-      - name: Upload origin-mcp artifacts for downstream jobs
+      - name: Upload archives to release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
+          tag_name: ${{ env.RELEASE_TAG }}
+          # Don't touch the release body composed in prepare-release.
+          append_body: false
+          fail_on_unmatched_files: true
+
+      - name: Upload Homebrew artifacts (origin + origin-mcp)
+        if: matrix.target == 'aarch64-apple-darwin'
         uses: actions/upload-artifact@v4
         with:
-          name: origin-mcp-artifacts
+          name: homebrew-artifacts
           path: |
-            origin-mcp-darwin-arm64.tar.gz
+            dist/origin-darwin-arm64.tar.gz
+            dist/origin-mcp-darwin-arm64.tar.gz
+
+  docker:
+    name: Build & Push Docker Image
+    needs: release
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.RELEASE_TAG }}
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/Dockerfile.daemon
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: |
+            ghcr.io/7xuanlu/origin-server:${{ env.RELEASE_TAG }}
+            ghcr.io/7xuanlu/origin-server:latest
 
   publish-crates:
     name: Publish crates.io (origin-types + origin-mcp)
@@ -189,37 +307,60 @@ jobs:
         # runs. Real origin-mcp publish happens after origin-types is indexed.
         run: cargo publish -p origin-types --dry-run
 
-      - name: Check if origin-types changed since last tag
-        id: check-types
+      - name: Resolve workspace version
+        id: version
         run: |
-          PREV_TAG=$(git tag --sort=-version:refname | grep '^v' | sed -n '2p')
-          if [ -z "$PREV_TAG" ]; then
-            echo "changed=true" >> "$GITHUB_OUTPUT"
-          else
-            CHANGED=$(git diff --name-only "$PREV_TAG" HEAD -- crates/origin-types/)
-            if [ -n "$CHANGED" ]; then echo "changed=true" >> "$GITHUB_OUTPUT"; else echo "changed=false" >> "$GITHUB_OUTPUT"; fi
-          fi
+          VERSION=$(grep -E '^version = ' Cargo.toml | head -1 | sed -E 's/version = "([^"]+)".*/\1/')
+          echo "value=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "Workspace version: $VERSION"
 
       - name: Publish origin-types to crates.io
-        if: steps.check-types.outputs.changed == 'true' && env.CARGO_REGISTRY_TOKEN != ''
-        run: cargo publish -p origin-types || echo "Already published, skipping"
+        # Always attempt when the version is not yet on crates.io.
+        # Prior logic gated on "files changed since last tag" which silently
+        # skipped publish when only the workspace version bumped without
+        # origin-types code changes. v0.6.1 hit this: origin-types code was
+        # stable so publish skipped, then origin-mcp 0.6.1 publish failed
+        # because its `origin-types = "^0.6.1"` dep was unreachable. Both
+        # crates stayed at 0.6.0 while the release job exited SUCCESS because
+        # the trailing `|| echo "Already published, skipping"` masked it.
+        # Registry check is the source of truth.
+        if: env.CARGO_REGISTRY_TOKEN != ''
+        run: |
+          VERSION="${{ steps.version.outputs.value }}"
+          if curl -sf "https://crates.io/api/v1/crates/origin-types/${VERSION}" >/dev/null; then
+            echo "origin-types ${VERSION} already on crates.io, skipping publish"
+          else
+            cargo publish -p origin-types
+          fi
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
 
       - name: Wait for origin-types to be available on crates.io
-        if: steps.check-types.outputs.changed == 'true'
         run: |
-          VERSION=$(grep -E '^version = ' Cargo.toml | head -1 | sed -E 's/version = "([^"]+)".*/\1/')
+          VERSION="${{ steps.version.outputs.value }}"
           for i in $(seq 1 30); do
             if curl -sf "https://crates.io/api/v1/crates/origin-types/${VERSION}" >/dev/null; then
-              echo "origin-types ${VERSION} available"; break
+              echo "origin-types ${VERSION} available"; exit 0
             fi
             echo "Waiting for crates.io to index origin-types ${VERSION}... ($i/30)"
             sleep 10
           done
+          echo "ERROR: origin-types ${VERSION} not visible on crates.io after 5 min"
+          exit 1
 
       - name: Publish origin-mcp to crates.io
-        run: cargo publish -p origin-mcp || echo "Already published, skipping"
+        # Same registry-check pattern. Real errors from cargo publish now
+        # propagate — the prior `|| echo "Already published, skipping"`
+        # swallowed dependency-resolution errors and marked the job SUCCESS
+        # while uploading nothing.
+        if: env.CARGO_REGISTRY_TOKEN != ''
+        run: |
+          VERSION="${{ steps.version.outputs.value }}"
+          if curl -sf "https://crates.io/api/v1/crates/origin-mcp/${VERSION}" >/dev/null; then
+            echo "origin-mcp ${VERSION} already on crates.io, skipping publish"
+          else
+            cargo publish -p origin-mcp
+          fi
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
 
@@ -275,14 +416,15 @@ jobs:
       - name: Download artifacts
         uses: actions/download-artifact@v4
         with:
-          name: origin-mcp-artifacts
+          name: homebrew-artifacts
           merge-multiple: true
-      - name: Compute checksums and update formula
+      - name: Compute checksums and update formulae
         env:
           HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
         run: |
           VERSION="${RELEASE_TAG#v}"
-          SHA_DARWIN_ARM64=$(sha256sum origin-mcp-darwin-arm64.tar.gz | cut -d' ' -f1)
+          SHA_MCP_DARWIN_ARM64=$(sha256sum origin-mcp-darwin-arm64.tar.gz | cut -d' ' -f1)
+          SHA_CLI_DARWIN_ARM64=$(sha256sum origin-darwin-arm64.tar.gz | cut -d' ' -f1)
 
           git clone https://x-access-token:${HOMEBREW_TAP_TOKEN}@github.com/7xuanlu/homebrew-tap.git tap
           mkdir -p tap/Formula
@@ -316,14 +458,47 @@ jobs:
           FORMULA
 
           sed -i "s/VERSION_PLACEHOLDER/${VERSION}/g" tap/Formula/origin-mcp.rb
-          sed -i "s/SHA_PLACEHOLDER/${SHA_DARWIN_ARM64}/g" tap/Formula/origin-mcp.rb
+          sed -i "s/SHA_PLACEHOLDER/${SHA_MCP_DARWIN_ARM64}/g" tap/Formula/origin-mcp.rb
+
+          cat > tap/Formula/origin.rb << 'FORMULA'
+          class Origin < Formula
+            desc "Origin CLI — local-first memory + knowledge layer for AI agents"
+            homepage "https://github.com/7xuanlu/origin"
+            version "VERSION_PLACEHOLDER"
+            url "https://github.com/7xuanlu/origin/releases/download/vVERSION_PLACEHOLDER/origin-darwin-arm64.tar.gz"
+            sha256 "SHA_PLACEHOLDER"
+            license "Apache-2.0"
+
+            livecheck do
+              url :homepage
+              strategy :github_latest
+            end
+
+            on_macos do
+              depends_on arch: :arm64
+            end
+
+            def install
+              bin.install "origin"
+            end
+
+            test do
+              assert_match "origin", shell_output("#{bin}/origin --help")
+            end
+          end
+          FORMULA
+
+          sed -i "s/VERSION_PLACEHOLDER/${VERSION}/g" tap/Formula/origin.rb
+          sed -i "s/SHA_PLACEHOLDER/${SHA_CLI_DARWIN_ARM64}/g" tap/Formula/origin.rb
 
           cd tap
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add Formula/origin-mcp.rb
-          git commit -m "origin-mcp ${VERSION}"
+          git add Formula/origin-mcp.rb Formula/origin.rb
+          git commit -m "origin + origin-mcp ${VERSION}"
           git push origin HEAD:main
 
       - name: Verify formula syntax
-        run: ruby -c tap/Formula/origin-mcp.rb
+        run: |
+          ruby -c tap/Formula/origin-mcp.rb
+          ruby -c tap/Formula/origin.rb

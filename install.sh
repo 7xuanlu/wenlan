@@ -2,8 +2,11 @@
 set -euo pipefail
 
 # Origin installer — downloads Origin runtime binaries to ~/.origin/bin/
-# Usage: curl -fsSL https://raw.githubusercontent.com/7xuanlu/origin/main/install.sh | bash
+# Usage:      curl -fsSL https://raw.githubusercontent.com/7xuanlu/origin/main/install.sh | bash
 # Prerelease: curl -fsSL ... | ORIGIN_RELEASE_TAG=v0.2.0-alpha.1 bash
+#
+# Supported platforms: macOS (arm64, x86_64), Linux (aarch64, x86_64).
+# Windows users: download origin-windows-x64.zip from the GitHub release page.
 
 REPO="7xuanlu/origin"
 REQUESTED_TAG="${ORIGIN_RELEASE_TAG:-${ORIGIN_TAG:-}}"
@@ -40,21 +43,26 @@ derive_isolated_port() {
   printf '%s' "$((8800 + (hash % 1000)))"
 }
 
-# ── OS check ─────────────────────────────────────────────────────────────────
+# ── Platform detection ──────────────────────────────────────────────────────
 
 OS="$(uname -s)"
-[[ "${OS}" == "Darwin" ]] || die "Origin requires macOS. Detected OS: ${OS}"
-
-# ── Architecture ─────────────────────────────────────────────────────────────
-
 ARCH="$(uname -m)"
-case "${ARCH}" in
-  arm64)   TARGET="aarch64-apple-darwin" ;;
-  x86_64)  die "Intel Macs are not yet supported. Origin requires Apple Silicon (M1+)." ;;
-  *)       die "Unsupported architecture: ${ARCH}" ;;
+
+case "${OS}-${ARCH}" in
+  Darwin-arm64)         ASSET="origin-darwin-arm64.tar.gz" ;;
+  Darwin-x86_64)        ASSET="origin-darwin-x64.tar.gz" ;;
+  Linux-aarch64|Linux-arm64)
+                        ASSET="origin-linux-arm64.tar.gz" ;;
+  Linux-x86_64)         ASSET="origin-linux-x64.tar.gz" ;;
+  *)
+    die "Unsupported platform: ${OS}-${ARCH}
+Supported: Darwin-arm64, Darwin-x86_64, Linux-aarch64, Linux-x86_64.
+For Windows, download origin-windows-x64.zip from the GitHub release page:
+  ${RELEASE_PAGE}"
+    ;;
 esac
 
-info "Detected platform: ${TARGET}"
+info "Detected platform: ${OS}-${ARCH} (${ASSET})"
 
 # ── Fetch latest release tag ──────────────────────────────────────────────────
 
@@ -72,38 +80,45 @@ else
   ok "Latest release: ${TAG}"
 fi
 
-# ── Download ──────────────────────────────────────────────────────────────────
+# ── Download & extract ───────────────────────────────────────────────────────
 
 mkdir -p "${BIN_DIR}"
 
 RELEASE_BASE="https://github.com/${REPO}/releases/download/${TAG}"
+DOWNLOAD_URL="${RELEASE_BASE}/${ASSET}"
 
-download_binary() {
-  local name="$1"
-  local url="${RELEASE_BASE}/${name}-${TARGET}"
-  local dest="${BIN_DIR}/${name}"
+TMP_DIR="$(mktemp -d)"
+trap 'rm -rf "${TMP_DIR}"' EXIT
 
-  info "Downloading ${name}..."
-  if ! curl -fSL --progress-bar -o "${dest}" "${url}"; then
-    die "Failed to download ${name} from ${url}"
+info "Downloading ${ASSET}..."
+if ! curl -fSL --progress-bar -o "${TMP_DIR}/${ASSET}" "${DOWNLOAD_URL}"; then
+  die "Failed to download ${ASSET} from ${DOWNLOAD_URL}"
+fi
+ok "Downloaded ${ASSET}"
+
+info "Extracting..."
+if ! tar -xzf "${TMP_DIR}/${ASSET}" -C "${TMP_DIR}"; then
+  die "Failed to extract ${ASSET}"
+fi
+ok "Extracted"
+
+# ── Install binaries ─────────────────────────────────────────────────────────
+
+for bin in origin origin-server origin-mcp; do
+  if [[ ! -f "${TMP_DIR}/${bin}" ]]; then
+    die "Archive ${ASSET} missing expected binary: ${bin}"
   fi
-  ok "Downloaded ${name}"
-}
-
-download_binary "origin"
-download_binary "origin-server"
-download_binary "origin-mcp"
-
-# ── Permissions ───────────────────────────────────────────────────────────────
-
-chmod +x "${BIN_DIR}/origin" "${BIN_DIR}/origin-server" "${BIN_DIR}/origin-mcp"
+  install -m 0755 "${TMP_DIR}/${bin}" "${BIN_DIR}/${bin}"
+done
 
 # Clear macOS quarantine attribute (unsigned binaries downloaded from the internet)
-xattr -cr "${BIN_DIR}/origin"        2>/dev/null || true
-xattr -cr "${BIN_DIR}/origin-server" 2>/dev/null || true
-xattr -cr "${BIN_DIR}/origin-mcp"    2>/dev/null || true
+if [[ "${OS}" == "Darwin" ]]; then
+  xattr -cr "${BIN_DIR}/origin"        2>/dev/null || true
+  xattr -cr "${BIN_DIR}/origin-server" 2>/dev/null || true
+  xattr -cr "${BIN_DIR}/origin-mcp"    2>/dev/null || true
+fi
 
-ok "Permissions set"
+ok "Installed origin, origin-server, origin-mcp to ${BIN_DIR}"
 
 # ── PATH setup ────────────────────────────────────────────────────────────────
 

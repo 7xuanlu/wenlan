@@ -5,7 +5,10 @@ name: Coverage (informational)
 # the merge gate. See AGENTS.md "Local vs CI test responsibilities".
 
 on:
-  pull_request:
+  # Coverage was running on every PR (~7 min). Coverage is informational
+  # and rarely changes the merge decision; restrict to main pushes and
+  # manual dispatch so PRs aren't gated on it.
+  push:
     branches: [main]
     paths-ignore:
       - '**.md'
