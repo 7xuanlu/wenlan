@@ -143,13 +143,32 @@ async fn add(
     name: &str,
     set_default: bool,
 ) -> Result<()> {
-    client.create_space(name).await?;
+    match client.create_space(name).await {
+        Ok(()) => {
+            if !quiet {
+                println!("Registered space '{}'.", name);
+            }
+        }
+        Err(e) => {
+            // Best-effort detection of "already exists" via error string match.
+            // The daemon currently returns 500 on UNIQUE constraint failure;
+            // surface as a non-fatal warning so the --default flow can proceed.
+            let s = e.to_string().to_lowercase();
+            let already_exists = s.contains("unique constraint")
+                || s.contains("already exists")
+                || s.contains("duplicate");
+            if already_exists {
+                if !quiet {
+                    println!("Space '{}' already registered (no-op).", name);
+                }
+            } else {
+                return Err(e);
+            }
+        }
+    }
     if set_default {
         set_default_in_toml(name)?;
-    }
-    if !quiet {
-        println!("Registered space '{}'.", name);
-        if set_default {
+        if !quiet {
             println!("Set '{}' as the default in ~/.origin/spaces.toml.", name);
         }
     }
