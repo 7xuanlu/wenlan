@@ -219,17 +219,14 @@ jobs:
       - name: Set up Docker Buildx (Linux)
         if: matrix.os == 'ubuntu-24.04'
         uses: docker/setup-buildx-action@v3
-      # Docker smoke is informational on PR. ort_sys compiles onnxruntime
-      # from source inside the container, which currently fails against the
-      # bookworm base (glibc 2.36 < required 2.38 __isoc23_strtoull). Tracked
-      # as a follow-up. Native Linux release build (release.yml matrix) is
-      # the gating signal that the daemon works on Linux.
+      # Docker smoke gates the daemon image build + runtime. The base
+      # switched to Debian trixie (13) so ort_sys's onnxruntime build
+      # sees glibc 2.41+ (provides __isoc23_strtoull, required since 2.38).
       #
       # GHA cache speeds up subsequent runs (layers reused across PRs on the
       # same scope). cache-to mode=max preserves intermediate stage layers.
-      - name: Smoke (Linux daemon image, informational)
+      - name: Smoke (Linux daemon image)
         if: matrix.os == 'ubuntu-24.04'
-        continue-on-error: true
         env:
           BUILDX_CACHE_FROM: type=gha,scope=daemon
           BUILDX_CACHE_TO: type=gha,scope=daemon,mode=max

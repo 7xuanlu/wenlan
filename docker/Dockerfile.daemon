@@ -16,7 +16,10 @@
 
 ARG RUST_VERSION=1
 
-FROM rust:${RUST_VERSION}-bookworm AS chef
+# Debian trixie (13) ships glibc 2.41+, which provides the `__isoc23_strtoull`
+# symbol that ort_sys's onnxruntime build needs (added in glibc 2.38). The
+# previous bookworm (12) base shipped glibc 2.36 and broke the daemon image.
+FROM rust:${RUST_VERSION}-trixie AS chef
 RUN apt-get update && apt-get install -y --no-install-recommends \
         cmake pkg-config libssl-dev clang lld \
     && rm -rf /var/lib/apt/lists/*
@@ -34,7 +37,7 @@ COPY . .
 RUN cargo build --release -p origin-server
 RUN strip target/release/origin-server
 
-FROM gcr.io/distroless/cc-debian12:nonroot AS runtime
+FROM gcr.io/distroless/cc-debian13:nonroot AS runtime
 COPY --from=builder /src/target/release/origin-server /usr/local/bin/origin-server
 # Copy the ONNX Runtime shared library that `ort`'s build script placed next
 # to the binary via the `copy-dylibs` feature. Without this, the daemon
