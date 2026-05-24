@@ -78,6 +78,13 @@ First build on macOS takes several minutes while `llama.cpp` compiles for Metal.
 
 See [CLAUDE.md](../../CLAUDE.md) for the full route and module map.
 
+## Links
+
+- [useorigin.app](https://useorigin.app) — project home
+- [useorigin.app/docs/get-started](https://useorigin.app/docs/get-started) — install + verify the first memory loop
+- [useorigin.app/docs/mcp-clients](https://useorigin.app/docs/mcp-clients) — connect Claude Code, Cursor, Codex, Claude Desktop, Gemini CLI
+- [github.com/7xuanlu/origin](https://github.com/7xuanlu/origin) — source
+
 ## License
 
 Apache-2.0.

@@ -43,6 +43,13 @@ See [CLAUDE.md](../../CLAUDE.md) for lower-level invariants and locking rules.
 
 Evaluation docs live in [docs/eval](../../docs/eval/README.md). Slow GPU/API benchmarks are manual and should not run in normal CI.
 
+## Links
+
+- [useorigin.app](https://useorigin.app) — project home
+- [useorigin.app/learn/local-first-ai-memory](https://useorigin.app/learn/local-first-ai-memory) — storage model explained
+- [useorigin.app/learn/markdown-local-index-ai-memory](https://useorigin.app/learn/markdown-local-index-ai-memory) — why Markdown + libSQL together
+- [github.com/7xuanlu/origin](https://github.com/7xuanlu/origin) — source
+
 ## License
 
 Apache-2.0.

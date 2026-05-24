@@ -91,6 +91,14 @@ The MCP server ships tool instructions that tell agents to capture durable state
 
 See [`src/tools.rs`](src/tools.rs) for the full instructions.
 
+## Links
+
+- [useorigin.app](https://useorigin.app) — project home
+- [useorigin.app/learn/mcp-memory-server](https://useorigin.app/learn/mcp-memory-server) — concept article on Origin as an MCP memory server
+- [useorigin.app/docs/mcp-clients](https://useorigin.app/docs/mcp-clients) — connect Claude Code, Cursor, Codex, Claude Desktop, Gemini CLI
+- [npm: origin-mcp](https://www.npmjs.com/package/origin-mcp) — standalone npm package
+- [github.com/7xuanlu/origin](https://github.com/7xuanlu/origin) — source
+
 ## License
 
 Apache-2.0.
