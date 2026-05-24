@@ -1152,7 +1152,7 @@ pub async fn judge_with_batch_api(
         .enumerate()
         .map(|(i, t)| {
             let prompt = task_judge_prompt(&t.category, &t.question, &t.ground_truth, &t.answer);
-            (format!("judge_{i}"), prompt, None, 10usize)
+            (format!("judge_{i}"), prompt, None, 128usize)
         })
         .collect();
 
