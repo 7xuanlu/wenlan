@@ -231,6 +231,16 @@ jobs:
           tar -czf dist/origin-mcp-darwin-arm64.tar.gz origin-mcp
           rm origin-mcp
 
+      # Per-binary archive for the origin CLI consumed by the Homebrew tap
+      # formula. Darwin-arm64 only — matches the origin-mcp tap pattern.
+      - name: Package origin CLI tarball for Homebrew (darwin-arm64 only)
+        if: matrix.target == 'aarch64-apple-darwin'
+        shell: bash
+        run: |
+          cp "target/${{ matrix.target }}/release/origin" origin
+          tar -czf dist/origin-darwin-arm64.tar.gz origin
+          rm origin
+
       - name: Upload archives to release
         uses: softprops/action-gh-release@v2
         with:
@@ -240,12 +250,14 @@ jobs:
           append_body: false
           fail_on_unmatched_files: true
 
-      - name: Upload origin-mcp artifact for Homebrew job
+      - name: Upload Homebrew artifacts (origin + origin-mcp)
         if: matrix.target == 'aarch64-apple-darwin'
         uses: actions/upload-artifact@v4
         with:
-          name: origin-mcp-artifacts
-          path: dist/origin-mcp-darwin-arm64.tar.gz
+          name: homebrew-artifacts
+          path: |
+            dist/origin-darwin-arm64.tar.gz
+            dist/origin-mcp-darwin-arm64.tar.gz
 
   docker:
     name: Build & Push Docker Image
@@ -404,14 +416,15 @@ jobs:
       - name: Download artifacts
         uses: actions/download-artifact@v4
         with:
-          name: origin-mcp-artifacts
+          name: homebrew-artifacts
           merge-multiple: true
-      - name: Compute checksums and update formula
+      - name: Compute checksums and update formulae
         env:
           HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
         run: |
           VERSION="${RELEASE_TAG#v}"
-          SHA_DARWIN_ARM64=$(sha256sum origin-mcp-darwin-arm64.tar.gz | cut -d' ' -f1)
+          SHA_MCP_DARWIN_ARM64=$(sha256sum origin-mcp-darwin-arm64.tar.gz | cut -d' ' -f1)
+          SHA_CLI_DARWIN_ARM64=$(sha256sum origin-darwin-arm64.tar.gz | cut -d' ' -f1)
 
           git clone https://x-access-token:${HOMEBREW_TAP_TOKEN}@github.com/7xuanlu/homebrew-tap.git tap
           mkdir -p tap/Formula
@@ -445,14 +458,47 @@ jobs:
           FORMULA
 
           sed -i "s/VERSION_PLACEHOLDER/${VERSION}/g" tap/Formula/origin-mcp.rb
-          sed -i "s/SHA_PLACEHOLDER/${SHA_DARWIN_ARM64}/g" tap/Formula/origin-mcp.rb
+          sed -i "s/SHA_PLACEHOLDER/${SHA_MCP_DARWIN_ARM64}/g" tap/Formula/origin-mcp.rb
+
+          cat > tap/Formula/origin.rb << 'FORMULA'
+          class Origin < Formula
+            desc "Origin CLI — local-first memory + knowledge layer for AI agents"
+            homepage "https://github.com/7xuanlu/origin"
+            version "VERSION_PLACEHOLDER"
+            url "https://github.com/7xuanlu/origin/releases/download/vVERSION_PLACEHOLDER/origin-darwin-arm64.tar.gz"
+            sha256 "SHA_PLACEHOLDER"
+            license "Apache-2.0"
+
+            livecheck do
+              url :homepage
+              strategy :github_latest
+            end
+
+            on_macos do
+              depends_on arch: :arm64
+            end
+
+            def install
+              bin.install "origin"
+            end
+
+            test do
+              assert_match "origin", shell_output("#{bin}/origin --help")
+            end
+          end
+          FORMULA
+
+          sed -i "s/VERSION_PLACEHOLDER/${VERSION}/g" tap/Formula/origin.rb
+          sed -i "s/SHA_PLACEHOLDER/${SHA_CLI_DARWIN_ARM64}/g" tap/Formula/origin.rb
 
           cd tap
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add Formula/origin-mcp.rb
-          git commit -m "origin-mcp ${VERSION}"
+          git add Formula/origin-mcp.rb Formula/origin.rb
+          git commit -m "origin + origin-mcp ${VERSION}"
           git push origin HEAD:main
 
       - name: Verify formula syntax
-        run: ruby -c tap/Formula/origin-mcp.rb
+        run: |
+          ruby -c tap/Formula/origin-mcp.rb
+          ruby -c tap/Formula/origin.rb
