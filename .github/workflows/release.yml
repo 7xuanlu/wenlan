@@ -112,10 +112,10 @@ jobs:
             os: macos-14
             archive: tar.gz
             artifact_name: origin-darwin-arm64
-          - target: x86_64-apple-darwin
-            os: macos-14
-            archive: tar.gz
-            artifact_name: origin-darwin-x64
+          # x86_64-apple-darwin dropped from v0.7.0: `ort` 2.x does not
+          # publish prebuilt ONNX Runtime binaries for Intel Mac. Adding it
+          # back requires compiling ONNX from source (~15min build) or
+          # switching to the `ort-tract` backend. Tracked as follow-up.
           - target: aarch64-unknown-linux-gnu
             os: ubuntu-24.04
             archive: tar.gz
@@ -179,6 +179,19 @@ jobs:
         if: matrix.use_cross == true
         run: cargo install cross --locked
 
+      # workflow_dispatch can target a tag from before Cross.toml landed,
+      # so write the env-passthrough config inline. Cargo build sees this
+      # file at workspace root; cross reads it for container env vars.
+      - name: Write Cross.toml (env passthrough)
+        if: matrix.use_cross == true
+        shell: bash
+        run: |
+          cat > Cross.toml <<'EOF'
+          [build.env]
+          passthrough = ["OPENSSL_VENDORED", "OPENSSL_STATIC"]
+          EOF
+          cat Cross.toml
+
       - name: Build (native)
         if: matrix.use_cross != true
         run: cargo build --release -p origin -p origin-server -p origin-mcp --target ${{ matrix.target }}
@@ -231,6 +244,26 @@ jobs:
         if: matrix.target == 'x86_64-pc-windows-msvc'
         shell: bash
         run: ls -la target/${{ matrix.target }}/release/ | head -30
+
+      # ort 2.x downloads ONNX Runtime to %LOCALAPPDATA%\ort.pyke.io\... at
+      # build time and does NOT copy the DLL next to the binary on Windows
+      # (no `copy-dylibs` feature surfaced through fastembed). Without the
+      # DLL co-located, the bundled zip can't actually run anywhere. Copy
+      # it before the 7z packaging step.
+      - name: Bundle onnxruntime.dll (Windows)
+        if: matrix.target == 'x86_64-pc-windows-msvc'
+        shell: pwsh
+        run: |
+          $ortRoot = "$env:LOCALAPPDATA\ort.pyke.io\dfbin\x86_64-pc-windows-msvc"
+          $dll = Get-ChildItem -Path $ortRoot -Recurse -Filter onnxruntime.dll | Select-Object -First 1
+          if (-not $dll) {
+            Write-Host "ort cache contents:"
+            Get-ChildItem -Path $ortRoot -Recurse | Format-Table FullName, Length
+            throw "onnxruntime.dll not found under $ortRoot"
+          }
+          $dest = "target\${{ matrix.target }}\release\onnxruntime.dll"
+          Copy-Item -Path $dll.FullName -Destination $dest -Force
+          Write-Host "Copied $($dll.FullName) -> $dest"
 
       - name: Package
         shell: bash
