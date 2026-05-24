@@ -125,6 +125,24 @@ No cloud sync or telemetry by default. Local models and Anthropic keys are opt-i
 - **Explicit spaces**: tag memories, pages, and recalls with `space=work | personal | client-X` so a day-job capture never bleeds into a side-project brief. Auto-detected from the current repo or workspace when no space is set; overridable always.
 - **Local artifacts**: Markdown pages live in `~/.origin/pages/`, session logs and project status live under `~/.origin/sessions/`, and `~/.origin/` keeps local git history you can inspect, revert, or symlink into Obsidian.
 
+### Multi-bucket workflows
+
+Memories belong to a **space** — a bucket like `origin`, `career`, or
+`ideas`. Set the active bucket per shell:
+
+    ORIGIN_SPACE=career claude
+
+Or declaratively via `~/.origin/spaces.toml` (see
+`plugin/examples/spaces.toml`). To manage spaces from the CLI:
+
+    origin space list
+    origin space add ideas --default
+    origin space show ideas
+    origin space move scratch career
+
+`origin doctor` prints the current resolver state so you can see exactly
+which layer chose the active space.
+
 ---
 
 ## Evaluation

@@ -106,12 +106,27 @@ Non-memory items (not stored, session-log only):
 Skip purely mechanical facts already in git (file paths, function names,
 config values). The commit log preserves those.
 
+## Resolve the active space (once per /handoff invocation)
+
+Call the bundled resolver once at the top of the handoff, before any
+captures:
+
+    resolved="$("$CLAUDE_PLUGIN_ROOT/bin/resolve-space.sh" --cwd "$PWD" 2>/dev/null)"
+    space="$(printf '%s\n' "$resolved" | cut -f1)"
+    source_layer="$(printf '%s\n' "$resolved" | cut -f2)"
+
+    echo "Resolved space: $space (from $source_layer)"
+
+Pass `space="$space"` to every `capture(...)` call in the loop. /handoff
+does not accept a `space:X` inline arg — if the user wants a different
+space, they set `ORIGIN_SPACE` before invoking.
+
 ### 4. MCP captures (one per item)
 
 For each non-trivial item, call with the mapped `memory_type`:
 
 ```
-capture(content="<one self-contained sentence with WHY>", memory_type="<decision|lesson|gotcha|preference|fact>")
+capture(content="<one self-contained sentence with WHY>", memory_type="<decision|lesson|gotcha|preference|fact>", space=<resolved>)
 ```
 
 Atomic: one decision per call. Don't merge multiple items into one

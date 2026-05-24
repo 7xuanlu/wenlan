@@ -91,8 +91,12 @@ pub async fn handle_status(
 /// POST /api/search - Semantic search endpoint
 pub async fn handle_search(
     State(state): State<Arc<RwLock<ServerState>>>,
-    Json(req): Json<SearchRequest>,
+    crate::space_header::SpaceHeader(header_space): crate::space_header::SpaceHeader,
+    Json(mut req): Json<SearchRequest>,
 ) -> Result<Json<SearchResponse>, ServerError> {
+    if req.space.is_none() {
+        req.space = header_space;
+    }
     let start = std::time::Instant::now();
 
     let db = {
@@ -196,8 +200,12 @@ pub async fn handle_context(
 pub async fn handle_chat_context(
     State(state): State<Arc<RwLock<ServerState>>>,
     headers: HeaderMap,
-    Json(req): Json<ChatContextRequest>,
+    crate::space_header::SpaceHeader(header_space): crate::space_header::SpaceHeader,
+    Json(mut req): Json<ChatContextRequest>,
 ) -> Result<Json<ChatContextResponse>, ServerError> {
+    if req.space.is_none() {
+        req.space = header_space;
+    }
     let start = std::time::Instant::now();
 
     let query = req
