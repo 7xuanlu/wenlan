@@ -300,6 +300,7 @@ async fn t4_recall_roundtrip() {
             limit: None,
             memory_type: None,
             space: None,
+            anchor: None,
         })
         .await
         .expect("recall_impl failed");
@@ -531,6 +532,7 @@ async fn t9_recall_request_does_not_contain_entity() {
             limit: None,
             memory_type: None,
             space: None,
+            anchor: None,
         })
         .await
         .expect("recall_impl failed");

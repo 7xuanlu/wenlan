@@ -154,6 +154,11 @@ pub struct RecallParams {
     #[schemars(description = "Filter by topic scope.")]
     #[serde(default, alias = "domain")]
     pub space: Option<String>,
+    #[schemars(
+        description = "Recency-decay anchor field. 'event_date' uses the user's mental timeline (when the event happened) for recency ranking; default 'last_modified' uses ingestion time. Only 'event_date' is recognized; other values fall back to default."
+    )]
+    #[serde(default)]
+    pub anchor: Option<String>,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
@@ -742,7 +747,11 @@ impl OriginMcpServer {
             memory_type: params.memory_type,
             space: space_arg,
             source_agent: self.resolve_source_agent(None),
-            anchor: None,
+            // Opt-in temporal anchor. Pass `event_date` to rank by the user's
+            // mental timeline (when things happened) instead of ingestion
+            // time. Daemon tolerates unknown values and falls back to the
+            // default `last_modified` channel.
+            anchor: params.anchor.clone(),
         };
 
         let resp: SearchMemoryResponse = match self.client.post("/api/memory/search", &req).await {
@@ -2572,6 +2581,10 @@ mod tests {
         let params: RecallParams = serde_json::from_str(json).unwrap();
         assert_eq!(params.query, "what does Alice work on?");
         assert!(params.limit.is_none());
+        assert!(
+            params.anchor.is_none(),
+            "anchor omitted must remain None so the daemon receives default last_modified"
+        );
     }
 
     #[test]
@@ -2580,13 +2593,15 @@ mod tests {
             "query": "database preferences",
             "limit": 5,
             "memory_type": "decision",
-            "space": "origin"
+            "space": "origin",
+            "anchor": "event_date"
         }"#;
         let params: RecallParams = serde_json::from_str(json).unwrap();
         assert_eq!(params.query, "database preferences");
         assert_eq!(params.limit, Some(5));
         assert_eq!(params.memory_type.as_deref(), Some("decision"));
         assert_eq!(params.space.as_deref(), Some("origin"));
+        assert_eq!(params.anchor.as_deref(), Some("event_date"));
     }
 
     #[test]
@@ -3634,6 +3649,7 @@ mod tests {
             limit: Some(5),
             memory_type: Some("decision".into()),
             space: None,
+            anchor: None,
         };
 
         let req = SearchMemoryRequest {
@@ -3642,7 +3658,7 @@ mod tests {
             memory_type: params.memory_type,
             space: params.space,
             source_agent: None,
-            anchor: None,
+            anchor: params.anchor.clone(),
         };
 
         let json = serde_json::to_value(&req).unwrap();
@@ -3652,6 +3668,54 @@ mod tests {
         assert!(json.get("entity").is_none());
         assert!(json["space"].is_null());
         assert!(json["source_agent"].is_null());
+        // anchor: None must be omitted from the wire (skip_serializing_if).
+        assert!(
+            json.get("anchor").is_none(),
+            "anchor: None must drop off the wire so the daemon takes its default"
+        );
+    }
+
+    /// `anchor=event_date` on RecallParams forwards to the wire request.
+    /// Guards against silent drop if the param is renamed or the wrapper
+    /// stops passing it through. Mirrors the rerank/decompose forwarding
+    /// tests shipped on the parallel feature branches.
+    #[test]
+    fn test_recall_forwards_anchor_param() {
+        // Param deserializes the JSON the MCP client would send.
+        let json_in = r#"{"query": "when did we ship", "anchor": "event_date"}"#;
+        let params: RecallParams = serde_json::from_str(json_in).unwrap();
+        assert_eq!(params.anchor.as_deref(), Some("event_date"));
+
+        // Wrapper translation: anchor flows into SearchMemoryRequest.
+        let req = SearchMemoryRequest {
+            query: params.query,
+            limit: params.limit.unwrap_or(10),
+            memory_type: params.memory_type,
+            space: params.space,
+            source_agent: None,
+            anchor: params.anchor.clone(),
+        };
+        assert_eq!(req.anchor.as_deref(), Some("event_date"));
+
+        let json_out = serde_json::to_value(&req).unwrap();
+        assert_eq!(json_out["anchor"], "event_date");
+    }
+
+    /// `anchor` schema is advertised so MCP clients can discover it,
+    /// and the description names `event_date` so models understand the
+    /// tradeoff vs. the default ingestion-time channel.
+    #[test]
+    fn test_recall_params_schema_advertises_anchor() {
+        let schema = serde_json::to_string(&schemars::schema_for!(RecallParams))
+            .expect("RecallParams schema serializes");
+        assert!(
+            schema.contains("anchor"),
+            "RecallParams schema must advertise the `anchor` field, got: {schema}"
+        );
+        assert!(
+            schema.contains("event_date"),
+            "RecallParams.anchor description must mention event_date so models understand the tradeoff, got: {schema}"
+        );
     }
 
     // ===== Memory type pass-through =====
