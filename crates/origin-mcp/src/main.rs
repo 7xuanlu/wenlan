@@ -102,6 +102,13 @@ async fn main() -> anyhow::Result<()> {
 
     let cli = Cli::parse();
 
+    origin_mcp::lock_state::init_from_env();
+    if let Some(space) = origin_mcp::lock_state::locked_space() {
+        eprintln!("origin-mcp: ORIGIN_SPACE lock active, space=\"{}\"", space);
+    } else {
+        eprintln!("origin-mcp: ORIGIN_SPACE lock inactive (no lock)");
+    }
+
     match cli.command {
         None => run_stdio(cli.origin_url).await,
         Some(Commands::Serve(args)) => run_serve(args, cli.origin_url).await,
