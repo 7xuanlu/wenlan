@@ -1,0 +1,34 @@
+# Build artifacts
+target/
+**/target/
+**/.fastembed_cache/
+
+# VCS + agent metadata
+.git/
+.github/
+.githooks/
+.worktrees/
+.claude/
+.claude-plugin/
+
+# Docs (not needed by the build)
+docs/
+*.md
+
+# Node + plugin tooling (not needed by daemon build)
+node_modules/
+plugin/
+homebrew/
+
+# Editor / OS junk
+.vscode/
+.idea/
+.DS_Store
+
+# Stray log artifacts that occasionally land at repo root
+*.log
+*.mbtree
+
+# Local env files
+.env
+.env.*

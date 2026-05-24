@@ -53,10 +53,16 @@ jobs:
             npm:
               - 'crates/*/npm/**'
 
+  # fmt + lint always run (cheap, cached). Skipping them based on
+  # detect-changes outputs created a FAIL-OPEN path: if detect-changes
+  # failed, its `outputs.rust` was empty, fmt/lint/test all skipped, and
+  # the conclusion gate accepted `skipped` as success → green CI with
+  # zero verification. Always-on fmt+lint closes that surface for the
+  # cheap jobs; the conclusion gate now also fails the build when
+  # detect-changes itself did not succeed.
   fmt:
     name: fmt
-    needs: detect-changes
-    if: "needs.detect-changes.outputs.rust == 'true' && !startsWith(github.event.head_commit.message, 'chore(main): release')"
+    if: "!startsWith(github.event.head_commit.message, 'chore(main): release')"
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
@@ -68,8 +74,8 @@ jobs:
 
   lint:
     name: lint
-    needs: [detect-changes, fmt]
-    if: "needs.detect-changes.outputs.rust == 'true' && !startsWith(github.event.head_commit.message, 'chore(main): release')"
+    needs: [fmt]
+    if: "!startsWith(github.event.head_commit.message, 'chore(main): release')"
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
@@ -95,10 +101,14 @@ jobs:
           [[ "$SOURCE" == "PATH" ]] || { echo "ERROR: origin-mcp must use path dep for origin-types"; exit 1; }
 
   test:
-    name: test
-    needs: [detect-changes, fmt]
+    name: test (${{ matrix.os }})
+    needs: [detect-changes, fmt, lint]
     if: "needs.detect-changes.outputs.rust == 'true' && !startsWith(github.event.head_commit.message, 'chore(main): release')"
-    runs-on: ubuntu-24.04
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-14, windows-2022]
     env:
       # Drop debuginfo from test artifacts. CI has no debugger attached and the
       # build cache stays warm via rust-cache. Trims linker time + cache size.
@@ -111,10 +121,39 @@ jobs:
       - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
         with:
           shared-key: test
-      - uses: taiki-e/install-action@3235f8901fd37ffed0052b276cec25a362fb82e9 # v2
+      # Windows needs sqlite3.lib for libsql linking (libsql does not bundle
+      # SQLite on Windows). vcpkg ships sqlite3 prebuilt; one-shot install
+      # before any cargo step.
+      - name: Install sqlite3 (Windows only)
+        if: matrix.os == 'windows-2022'
+        run: |
+          vcpkg install sqlite3:x64-windows-static-md
+          "LIB=$env:VCPKG_INSTALLATION_ROOT\installed\x64-windows-static-md\lib;$env:LIB" | Out-File -FilePath $env:GITHUB_ENV -Append
+        shell: pwsh
+      # nextest runs tests as separate processes in parallel; ~2x faster
+      # than `cargo test` on multi-core runners. Install on all 3 OSes.
+      - name: Install cargo-nextest
+        uses: taiki-e/install-action@3235f8901fd37ffed0052b276cec25a362fb82e9 # v2
         with:
           tool: cargo-nextest
-      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+      - name: Workspace lib tests (Linux/Windows)
+        if: matrix.os != 'macos-14'
+        run: cargo nextest run --workspace --lib
+      - name: Workspace lib tests (macOS, single-threaded)
+        if: matrix.os == 'macos-14'
+        # nextest spawns one process per test by default — sidesteps the
+        # ONNX atexit FFI race that required --test-threads=1 with cargo test.
+        run: cargo nextest run --workspace --lib --test-threads=1
+      # Integration tests for origin-cli + origin-server. We deliberately do
+      # NOT use `--workspace --tests` because that pulls in origin-core's
+      # `eval_harness.rs` which requires `ANTHROPIC_API_KEY` (not in CI).
+      # origin-core integration tests run via the Linux-only nextest step
+      # below (chat_import_e2e + distillation_quality).
+      - name: Integration tests origin-cli + origin-server
+        run: cargo nextest run -p origin -p origin-server
+      - name: Cache fastembed model (Linux)
+        if: matrix.os == 'ubuntu-24.04'
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           # Origin's `resolve_fastembed_cache_dir` writes to
           # `dirs::data_dir()/origin/memorydb/fastembed_cache` on Linux when
@@ -125,29 +164,122 @@ jobs:
           key: fastembed-bge-base-en-v1.5-q-v2
           restore-keys: |
             fastembed-bge-base-en-v1.5-q-
-      - name: Run tests (types + server + cli)
-        run: cargo nextest run -p origin-types -p origin-server -p origin
-      - name: Run tests (core)
+      - name: Run integration tests (core) (Linux)
+        if: matrix.os == 'ubuntu-24.04'
         # nextest process-per-test sidesteps the macOS SIGSEGV root cause
         # (ONNX atexit FFI race). No --test-threads=1 needed on ubuntu.
-        run: cargo nextest run -p origin-core --lib --test chat_import_e2e --test distillation_quality
-      - name: Run embedding-only eval (main only)
-        if: github.ref == 'refs/heads/main'
+        run: cargo nextest run -p origin-core --test chat_import_e2e --test distillation_quality
+      - name: Run embedding-only eval (main only, Linux)
+        if: matrix.os == 'ubuntu-24.04' && github.ref == 'refs/heads/main'
         env:
           EVAL_BASELINES_DIR: ${{ runner.temp }}/origin-eval-canary
         run: cargo nextest run -p origin-core --lib --run-ignored=only eval::retrieval
       - name: Upload eval canary baseline (with env schema)
-        if: always()
+        if: always() && matrix.os == 'ubuntu-24.04'
         uses: actions/upload-artifact@v4
         with:
           name: eval-canary-baseline-${{ github.sha }}
           path: ${{ runner.temp }}/origin-eval-canary/*.json
           retention-days: 30
           if-no-files-found: warn
+      - name: E2E origin install (Linux user-systemd)
+        if: matrix.os == 'ubuntu-24.04'
+        run: |
+          set -euo pipefail
+          sudo loginctl enable-linger $(whoami)
+          export XDG_RUNTIME_DIR=/run/user/$(id -u)
+          # Build native (cargo nextest run --workspace --lib already built tests,
+          # but the install path needs the actual release-or-debug binaries).
+          cargo build -p origin -p origin-server
+          STAGE=$(mktemp -d)
+          cp target/debug/origin target/debug/origin-server "$STAGE/"
+          cleanup() {
+            "$STAGE/origin" uninstall 2>/dev/null || true
+            rm -rf "$STAGE"
+          }
+          trap cleanup EXIT
+          "$STAGE/origin" install
+          test -f ~/.config/systemd/user/origin-server.service
+          systemctl --user is-enabled origin-server
+          for i in $(seq 1 20); do
+            if curl -sf http://127.0.0.1:7878/api/health >/dev/null; then
+              echo "    daemon healthy after ${i}s"
+              break
+            fi
+            sleep 1
+            if [ "$i" = "20" ]; then
+              echo "FAIL: daemon did not start under systemd user service" >&2
+              journalctl --user -u origin-server --no-pager | tail -50 >&2 || true
+              exit 1
+            fi
+          done
+          "$STAGE/origin" uninstall
+          test ! -f ~/.config/systemd/user/origin-server.service
+          echo "    Linux install/uninstall round-trip PASS"
+      - name: Set up Docker Buildx (Linux)
+        if: matrix.os == 'ubuntu-24.04'
+        uses: docker/setup-buildx-action@v3
+      # Docker smoke is informational on PR. ort_sys compiles onnxruntime
+      # from source inside the container, which currently fails against the
+      # bookworm base (glibc 2.36 < required 2.38 __isoc23_strtoull). Tracked
+      # as a follow-up. Native Linux release build (release.yml matrix) is
+      # the gating signal that the daemon works on Linux.
+      #
+      # GHA cache speeds up subsequent runs (layers reused across PRs on the
+      # same scope). cache-to mode=max preserves intermediate stage layers.
+      - name: Smoke (Linux daemon image, informational)
+        if: matrix.os == 'ubuntu-24.04'
+        continue-on-error: true
+        env:
+          BUILDX_CACHE_FROM: type=gha,scope=daemon
+          BUILDX_CACHE_TO: type=gha,scope=daemon,mode=max
+        run: bash scripts/smoke-linux.sh
+      - name: Smoke (Windows daemon)
+        if: matrix.os == 'windows-2022'
+        shell: pwsh
+        run: |
+          cargo build --release -p origin-server
+          ./scripts/smoke-windows.ps1
+      # `origin install` on Windows currently exits non-zero with guidance
+      # toward manual run / Task Scheduler. Verify the contract: install
+      # MUST fail with a clear message, not crash, not register a broken
+      # service. Follow-up: implement Windows Service Control Protocol via
+      # the windows-service crate so sc.exe start no longer times out.
+      - name: E2E origin install contract (Windows; expects clean error)
+        if: matrix.os == 'windows-2022'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          cargo build -p origin
+          $out = & target\debug\origin.exe install 2>&1
+          $code = $LASTEXITCODE
+          Write-Host "exit code: $code"
+          Write-Host "output: $out"
+          if ($code -eq 0) { throw "install unexpectedly succeeded on Windows" }
+          if ("$out" -notmatch "not yet supported on Windows") {
+            throw "install did not surface the documented Windows guidance"
+          }
+          # Confirm no stale sc.exe service entry left behind.
+          $svc = & sc.exe query com.origin.server 2>&1
+          $svcExit = $LASTEXITCODE
+          if ($svcExit -eq 0) {
+            & sc.exe delete com.origin.server | Out-Null
+            throw "install must not register a service before erroring; cleaned up stale entry"
+          }
+          Write-Host "    Windows install error-contract PASS"
+          # sc.exe query returns 1060 when service not found; that leaks as the
+          # script's exit code under $ErrorActionPreference=Stop. Reset.
+          $global:LASTEXITCODE = 0
+          exit 0
 
   # Aggregate gate for branch protection. `if: always()` lets docs-only PRs
-  # (where fmt/lint/test skipped via detect-changes) report success instead of
-  # stalling forever on a never-run required check.
+  # (where the test matrix skips via detect-changes) report success instead
+  # of stalling forever on a never-run required check.
+  #
+  # detect-changes.result is checked explicitly: if the path filter itself
+  # fails, downstream jobs would be skipped silently and this gate would
+  # have passed pre-fix. fmt + lint always run now, so `skipped` on them
+  # only occurs on release-please bot pushes (acceptable).
   conclusion:
     name: conclusion
     needs: [detect-changes, fmt, lint, test]
@@ -156,6 +288,11 @@ jobs:
     steps:
       - name: Aggregate
         run: |
+          dc='${{ needs.detect-changes.result }}'
+          if [ "$dc" != 'success' ]; then
+            echo "detect-changes did not succeed: $dc"
+            exit 1
+          fi
           for r in '${{ needs.fmt.result }}' '${{ needs.lint.result }}' '${{ needs.test.result }}'; do
             case "$r" in
               success|skipped) ;;

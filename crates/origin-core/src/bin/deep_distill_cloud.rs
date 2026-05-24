@@ -22,7 +22,7 @@ const MEMORIES: &[&str] = &[
     "[mem_13] AFK detection triggers after 60 seconds of idle via CGEventSource.",
     "[mem_14] Two-pass capture pipeline: immediate OCR/chunk/upsert, then async LLM reformat.",
     "[mem_15] The refinery steep cycle runs every 2 hours — decay, recaps, entity extraction, distillation.",
-    "[mem_16] Origin stores all data locally in ~/Library/Application Support/origin/.",
+    "[mem_16] Origin stores all data locally under the platform data directory (resolved by the dirs crate per OS).",
     "[mem_17] The HTTP server runs on 127.0.0.1:7878 using Axum 0.8 — plus a Unix socket.",
     "[mem_18] Entity extraction uses the EXTRACT_KNOWLEDGE_GRAPH prompt with JSON output.",
     "[mem_19] Concept distillation produces wiki-style pages with TLDR, headers, and [[wikilinks]].",

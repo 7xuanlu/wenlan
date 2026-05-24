@@ -204,6 +204,60 @@ impl OriginClient {
             .context("parsing /api/agents/{name} response")
     }
 
+    /// POST /api/spaces — register a new space.
+    pub async fn create_space(&self, name: &str) -> Result<()> {
+        let url = format!("{}/api/spaces", self.base_url);
+        self.http
+            .post(&url)
+            .json(&serde_json::json!({"name": name}))
+            .send()
+            .await
+            .with_context(|| format!("POST {} failed", url))?
+            .error_for_status()
+            .with_context(|| format!("daemon returned error for {}", url))?;
+        Ok(())
+    }
+
+    /// POST /api/spaces/{from}/move-to/{to} — bulk reassign memories from one space to another.
+    pub async fn move_space(&self, from: &str, to: &str) -> Result<usize> {
+        let url = format!("{}/api/spaces/{}/move-to/{}", self.base_url, from, to);
+        let resp = self
+            .http
+            .post(&url)
+            .send()
+            .await
+            .with_context(|| format!("POST {} failed", url))?;
+        let resp = resp
+            .error_for_status()
+            .with_context(|| format!("daemon returned error for {}", url))?;
+        let json: serde_json::Value = resp.json().await.context("parsing move-to response")?;
+        Ok(json["affected"].as_u64().unwrap_or(0) as usize)
+    }
+
+    /// GET /api/spaces — fetch a single space by name (filters from list).
+    pub async fn get_space(&self, name: &str) -> Result<origin_types::Space> {
+        let spaces = self.list_spaces().await?;
+        spaces
+            .into_iter()
+            .find(|s| s.name == name)
+            .ok_or_else(|| anyhow::anyhow!("space '{}' not found", name))
+    }
+
+    /// GET /api/spaces — list all spaces.
+    pub async fn list_spaces(&self) -> Result<Vec<origin_types::Space>> {
+        let url = format!("{}/api/spaces", self.base_url);
+        let resp = self
+            .http
+            .get(&url)
+            .send()
+            .await
+            .with_context(|| format!("GET {} failed", url))?;
+        let resp = resp
+            .error_for_status()
+            .with_context(|| format!("daemon returned error for {}", url))?;
+        resp.json().await.context("parsing /api/spaces response")
+    }
+
     /// PUT /api/agents/{name} — update an agent's metadata.
     pub async fn update_agent(&self, name: &str, req: UpdateAgentRequest) -> Result<AgentResponse> {
         let url = format!("{}/api/agents/{}", self.base_url, name);

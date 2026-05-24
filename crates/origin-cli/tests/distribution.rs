@@ -99,6 +99,10 @@ fn plugin_manifest_and_mcp_launcher_stay_in_sync() {
 
 #[test]
 fn npm_package_allowlists_match_release_generated_files() {
+    // The @7xuanlu/origin CLI wrapper currently ships a macOS-arm64-only
+    // `run.js`. Linux/Windows users install via the Docker image, the tar/zip
+    // release archives, or `cargo install`, so the npm allowlist stays narrow
+    // on purpose.
     let setup_pkg = read_json("crates/origin-cli/npm/package.json");
     assert_eq!(json_string(&setup_pkg, "name"), "@7xuanlu/origin");
     assert_eq!(setup_pkg["bin"]["origin"], "run.js");
@@ -110,13 +114,20 @@ fn npm_package_allowlists_match_release_generated_files() {
         serde_json::json!(["run.js", "README.md", "LICENSE"])
     );
 
+    // origin-mcp ships prebuilt binaries for every release-matrix target
+    // (darwin x2, linux x2, windows x1) via its npm postinstall. The
+    // allowlist must include each platform the matrix uploads or `npm
+    // install` rejects the package on those hosts.
     let mcp_pkg = read_json("crates/origin-mcp/npm/package.json");
     assert_eq!(json_string(&mcp_pkg, "name"), "origin-mcp");
     assert_eq!(mcp_pkg["bin"]["origin-mcp"], "run.js");
     assert_eq!(mcp_pkg["scripts"]["postinstall"], "node install.js");
     assert_eq!(mcp_pkg["license"], "Apache-2.0");
-    assert_eq!(mcp_pkg["os"], serde_json::json!(["darwin"]));
-    assert_eq!(mcp_pkg["cpu"], serde_json::json!(["arm64"]));
+    assert_eq!(
+        mcp_pkg["os"],
+        serde_json::json!(["darwin", "linux", "win32"])
+    );
+    assert_eq!(mcp_pkg["cpu"], serde_json::json!(["arm64", "x64"]));
     assert_eq!(
         mcp_pkg["files"],
         serde_json::json!(["install.js", "run.js", "README.md", "LICENSE"])
@@ -127,17 +138,23 @@ fn npm_package_allowlists_match_release_generated_files() {
 fn release_workflow_publishes_cli_and_mcp_npm_packages() {
     let workflow = fs::read_to_string(repo_root().join(".github/workflows/release.yml"))
         .expect("read release workflow");
+    // The release workflow uses a target matrix; the strings below are the
+    // matrix step names + artifact names every release must continue to
+    // produce. Adding a target should ALSO add its artifact name here so a
+    // dropped target shows up as a test failure rather than a silent gap in
+    // the release.
     for needle in [
-        "Build origin CLI (release)",
-        "Build origin-server (release)",
-        "Build origin-mcp (release)",
+        "Build & Publish ${{ matrix.target }}",
         "Publish origin-mcp",
         "Publish @7xuanlu/origin",
         "cp README.md crates/origin-mcp/npm/README.md",
         "cp README.md crates/origin-cli/npm/README.md",
-        "origin-aarch64-apple-darwin",
-        "origin-server-aarch64-apple-darwin",
-        "origin-mcp-aarch64-apple-darwin",
+        "origin-darwin-arm64",
+        "origin-darwin-x64",
+        "origin-linux-arm64",
+        "origin-linux-x64",
+        "origin-windows-x64",
+        "origin-mcp-darwin-arm64.tar.gz",
     ] {
         assert!(
             workflow.contains(needle),

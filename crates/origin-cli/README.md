@@ -12,7 +12,7 @@ Recommended user setup:
 npx -y @7xuanlu/origin setup
 ```
 
-The setup package currently targets macOS Apple Silicon, matching the published release binaries. It installs `origin`, `origin-server`, and `origin-mcp` into `~/.origin/bin/`, configures local memory, registers the daemon with launchd, and verifies status.
+The setup package supports macOS (arm64, x64), Linux (x64, arm64), and Windows (x64). It downloads the platform-matching release archive, installs `origin`, `origin-server`, and `origin-mcp` into `~/.origin/bin/`, configures local memory, registers the daemon with the host's native service manager (launchd on macOS, systemd-user on Linux), and verifies status. On Windows, `origin install` is not supported in v1 (daemon does not yet speak the Windows Service Control Protocol); run `origin-server.exe` manually or via Task Scheduler.
 
 For local development:
 
@@ -39,7 +39,7 @@ export ORIGIN_HOST=http://127.0.0.1:7878  # default
 
 ### `origin status`
 
-Show daemon, launchd service, model, and API key state.
+Show daemon, native service (launchd / systemd-user / sc.exe), model, and API key state.
 
 ```bash
 origin status
@@ -59,7 +59,11 @@ origin setup --anthropic-api-key-env ANTHROPIC_API_KEY
 
 ### `origin install` / `origin uninstall`
 
-Register or remove the macOS LaunchAgent. The service runs the sibling `origin-server` binary next to `origin`.
+Register or remove the daemon with the host's native service manager. The service runs the sibling `origin-server` binary next to `origin`.
+
+- **macOS**: launchd user agent at `~/Library/LaunchAgents/com.origin.server.plist`.
+- **Linux**: systemd user unit at `~/.config/systemd/user/origin-server.service`. `loginctl enable-linger` if you want it alive after logout.
+- **Windows**: not yet supported in v1. The console-app daemon does not implement the Windows Service Control Protocol; sc.exe start times out. Run `origin-server.exe` manually or register a Task Scheduler logon task. Tracked follow-up.
 
 ```bash
 origin install
@@ -68,7 +72,7 @@ origin uninstall
 
 ### `origin doctor`
 
-Diagnose daemon reachability, launchd state, model setup, and API key setup.
+Diagnose daemon reachability, native service state (launchd / systemd-user / sc.exe), model setup, and API key setup.
 
 ```bash
 origin doctor
@@ -161,6 +165,18 @@ Manage registered agents.
 origin agents list
 origin agents show claude-code
 origin agents edit claude-code --trust trusted --enabled true
+```
+
+### `origin space <list|add|default|move|show>`
+
+Manage memory spaces (buckets).
+
+```bash
+origin space list
+origin space add ideas --default
+origin space show career
+origin space default work
+origin space move scratch career
 ```
 
 ## Output formats

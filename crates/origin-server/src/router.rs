@@ -184,6 +184,10 @@ pub fn build_router(state: SharedState) -> Router {
             "/api/spaces/{name}",
             put(memory_routes::handle_update_space).delete(memory_routes::handle_delete_space),
         )
+        .route(
+            "/api/spaces/{from}/move-to/{to}",
+            post(memory_routes::handle_move_space),
+        )
         // Pages (legacy SQL tables still named "concepts" — see db.rs)
         .route(
             "/api/pages",
