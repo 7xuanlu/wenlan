@@ -87,27 +87,51 @@ Output ONLY the JSON array, no prose, no markdown.";
 
 /// Decompose `query` into 1..=`MAX_SUB_QUERIES` standalone sub-queries.
 ///
-/// Calls the configured `LlmProvider` once with `DECOMPOSE_SYSTEM_PROMPT`.
-/// Every failure path (timeout, provider error, bracket-locating failure,
-/// `serde_json` parse failure, empty result) logs a `warn!` and returns
-/// `Ok(vec![query.to_string()])`. The caller can treat `len() <= 1` as
-/// "not decomposed" and run a plain single-query search.
-///
-/// Cost telemetry: emits one `log::info!` line under the `[decompose]` tag
-/// containing the estimated input + output token counts (heuristic
-/// `chars / 4`, see [`estimate_tokens`]). Failure paths log
-/// `output=0` plus a parenthetical reason. Surfacing tokens through wire
-/// types (so deployments can gate the path under a cost budget) is a
-/// follow-up; the unused [`DecomposeOutput`] struct reserves the shape.
+/// Thin wrapper over [`decompose_query_with_stats`] that drops the token
+/// estimates. Callers that want cost telemetry (eval harness, future
+/// budget-gated server handler) should call the `_with_stats` variant
+/// directly. See its docs for the full contract — failure semantics,
+/// timeout, and JSON-bracket policy are identical.
 pub async fn decompose_query(
     query: &str,
     llm: &Arc<dyn LlmProvider>,
 ) -> Result<Vec<String>, OriginError> {
-    let fallback = || vec![query.to_string()];
+    Ok(decompose_query_with_stats(query, llm).await?.sub_queries)
+}
 
-    // Estimate the input cost up front so we still log a number on any
+/// Decompose `query` into 1..=`MAX_SUB_QUERIES` standalone sub-queries
+/// and return the full [`DecomposeOutput`] including estimated token
+/// usage from the single LLM call.
+///
+/// Calls the configured `LlmProvider` once with `DECOMPOSE_SYSTEM_PROMPT`.
+/// Every failure path (timeout, provider error, bracket-locating failure,
+/// `serde_json` parse failure, empty result) logs a `warn!` and returns
+/// a `DecomposeOutput` whose `sub_queries` is `vec![query.to_string()]`.
+/// Callers can treat `sub_queries.len() <= 1` as "not decomposed" and run
+/// a plain single-query search.
+///
+/// `output_tokens` is `0` on the timeout / provider-error paths because no
+/// completion was received. On parse-failure paths it still reflects the
+/// estimated tokens from the malformed output, since the LLM did emit a
+/// response (it just wasn't valid JSON).
+///
+/// Cost telemetry: emits one `log::info!` line under the `[decompose]` tag
+/// containing the estimated input + output token counts (heuristic
+/// `chars / 4`, see [`estimate_tokens`]). Failure paths log
+/// `output=0` plus a parenthetical reason.
+pub async fn decompose_query_with_stats(
+    query: &str,
+    llm: &Arc<dyn LlmProvider>,
+) -> Result<DecomposeOutput, OriginError> {
+    // Estimate the input cost up front so we still report a number on any
     // failure path. Input ≈ system prompt + user prompt.
     let input_tokens = estimate_tokens(DECOMPOSE_SYSTEM_PROMPT) + estimate_tokens(query);
+
+    let fallback = |output_tokens: usize| DecomposeOutput {
+        sub_queries: vec![query.to_string()],
+        input_tokens,
+        output_tokens,
+    };
 
     let request = LlmRequest {
         system_prompt: Some(DECOMPOSE_SYSTEM_PROMPT.to_string()),
@@ -126,14 +150,14 @@ pub async fn decompose_query(
             log::info!(
                 "[decompose] estimated tokens: input={input_tokens} output=0 (provider error)"
             );
-            return Ok(fallback());
+            return Ok(fallback(0));
         }
         Err(_) => {
             log::warn!(
                 "[decompose] LLM call exceeded {DECOMPOSE_TIMEOUT_SECS}s timeout, falling back to single query"
             );
             log::info!("[decompose] estimated tokens: input={input_tokens} output=0 (timeout)");
-            return Ok(fallback());
+            return Ok(fallback(0));
         }
     };
 
@@ -144,14 +168,14 @@ pub async fn decompose_query(
         Some(i) => i,
         None => {
             log::warn!("[decompose] LLM output missing '[', falling back to single query");
-            return Ok(fallback());
+            return Ok(fallback(output_tokens));
         }
     };
     let end = match output.rfind(']') {
         Some(i) if i > start => i,
         _ => {
             log::warn!("[decompose] LLM output missing ']', falling back to single query");
-            return Ok(fallback());
+            return Ok(fallback(output_tokens));
         }
     };
     let json_str = &output[start..=end];
@@ -160,18 +184,22 @@ pub async fn decompose_query(
         Ok(v) => v,
         Err(err) => {
             log::warn!("[decompose] JSON parse failed ({err}), falling back to single query");
-            return Ok(fallback());
+            return Ok(fallback(output_tokens));
         }
     };
 
     if parsed.is_empty() {
         log::warn!("[decompose] LLM returned empty array, falling back to single query");
-        return Ok(fallback());
+        return Ok(fallback(output_tokens));
     }
 
-    let mut result = parsed;
-    result.truncate(MAX_SUB_QUERIES);
-    Ok(result)
+    let mut sub_queries = parsed;
+    sub_queries.truncate(MAX_SUB_QUERIES);
+    Ok(DecomposeOutput {
+        sub_queries,
+        input_tokens,
+        output_tokens,
+    })
 }
 
 #[cfg(test)]
@@ -222,36 +250,36 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_decompose_output_estimates_tokens() {
-        // The DecomposeOutput struct is a forward-looking shape; verify its
-        // estimator inputs produce strictly positive token counts for the
-        // standard valid-JSON path so a future wire-types caller can rely on
-        // non-zero counts whenever the LLM call actually happens.
-        let response = r#"["What is X?", "What is Y?"]"#;
-        let llm = mock(response);
-        let query = "Did X change my opinion about Y?";
+    async fn test_decompose_query_with_stats_returns_stats() {
+        // Valid 2-element JSON => sub_queries.len() == 2, both estimates > 0.
+        let llm = mock(r#"["What is X?", "What is Y?"]"#);
+        let stats = decompose_query_with_stats("Did X change my opinion about Y?", &llm)
+            .await
+            .unwrap();
 
-        // decompose_query itself only logs; the public estimator + the struct
-        // are what callers wire up. Mirror what the function computes.
-        let input_tokens = estimate_tokens(DECOMPOSE_SYSTEM_PROMPT) + estimate_tokens(query);
-        let output_tokens = estimate_tokens(response);
-
-        let sub_queries = decompose_query(query, &llm).await.unwrap();
-        let stats = DecomposeOutput {
-            sub_queries,
-            input_tokens,
-            output_tokens,
-        };
-
+        assert_eq!(stats.sub_queries.len(), 2);
         assert!(
             stats.input_tokens > 0,
-            "input estimate must be > 0 (system prompt alone is non-empty)"
+            "input estimate must be > 0 (system prompt + user query)"
         );
         assert!(
             stats.output_tokens > 0,
-            "output estimate must be > 0 for a valid JSON response"
+            "output estimate must be > 0 for a successful LLM response"
         );
-        assert_eq!(stats.sub_queries.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn test_decompose_query_returns_just_sub_queries() {
+        // Thin wrapper drops the stats but keeps the sub_queries result
+        // identical to what the _with_stats variant produces.
+        let llm = mock(r#"["What is X?", "What is Y?"]"#);
+        let result = decompose_query("Did X change my opinion about Y?", &llm)
+            .await
+            .unwrap();
+        assert_eq!(
+            result,
+            vec!["What is X?".to_string(), "What is Y?".to_string()]
+        );
     }
 
     #[tokio::test]

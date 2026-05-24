@@ -7340,14 +7340,10 @@ impl MemoryDB {
 
     /// Hybrid search with LLM query decomposition for multi-hop queries.
     ///
-    /// Calls [`crate::decompose::decompose_query`] to rewrite the query into 2-4
-    /// standalone sub-queries (single-element fallback if not compound). Runs
-    /// `search_memory` for each sub-query, merges results by SearchResult.id
-    /// keeping the max score, sorts descending, truncates to `limit`.
-    ///
-    /// Per the decompose contract, the LLM call degrades silently to a single-
-    /// element vec on any failure, so the worst case is one extra timeout call
-    /// on top of a plain search.
+    /// Thin wrapper over [`Self::search_memory_decomposed_with_stats`] that
+    /// drops the [`crate::decompose::DecomposeOutput`] telemetry. Callers
+    /// that want token-cost stats (eval harness, future budget-gated server
+    /// handler) should call the `_with_stats` variant directly.
     ///
     /// `llm` is required; if `None`, falls back to plain `search_memory`.
     pub async fn search_memory_decomposed(
@@ -7359,8 +7355,50 @@ impl MemoryDB {
         source_agent: Option<&str>,
         llm: Option<Arc<dyn crate::llm_provider::LlmProvider>>,
     ) -> Result<Vec<SearchResult>, OriginError> {
+        let (results, _stats) = self
+            .search_memory_decomposed_with_stats(
+                query,
+                limit,
+                memory_type,
+                space,
+                source_agent,
+                llm,
+            )
+            .await?;
+        Ok(results)
+    }
+
+    /// Hybrid search with LLM query decomposition + decompose-call telemetry.
+    ///
+    /// Same retrieval contract as [`Self::search_memory_decomposed`]: calls
+    /// [`crate::decompose::decompose_query_with_stats`] to rewrite the query
+    /// into 2-4 standalone sub-queries (single-element fallback if not
+    /// compound), runs `search_memory` for each sub-query, merges results by
+    /// `SearchResult.id` keeping the max score, sorts descending, truncates
+    /// to `limit`.
+    ///
+    /// The returned [`crate::decompose::DecomposeOutput`] is `Some(stats)`
+    /// only when the query was actually decomposed into 2+ sub-queries.
+    /// On the not-decomposed paths — `llm = None` shortcut, or the LLM
+    /// returned a single-element passthrough — the result is `None` since
+    /// the caller's cost report is keyed on "did the multi-hop fan-out run".
+    /// (Token estimates for the decompose LLM call itself are still emitted
+    /// via `log::info!` from `decompose_query_with_stats`.)
+    ///
+    /// Per the decompose contract, the LLM call degrades silently to a
+    /// single-element vec on any failure, so the worst case is one extra
+    /// timeout call on top of a plain search.
+    pub async fn search_memory_decomposed_with_stats(
+        &self,
+        query: &str,
+        limit: usize,
+        memory_type: Option<&str>,
+        space: Option<&str>,
+        source_agent: Option<&str>,
+        llm: Option<Arc<dyn crate::llm_provider::LlmProvider>>,
+    ) -> Result<(Vec<SearchResult>, Option<crate::decompose::DecomposeOutput>), OriginError> {
         let Some(llm) = llm else {
-            return self
+            let results = self
                 .search_memory(
                     query,
                     limit,
@@ -7371,14 +7409,18 @@ impl MemoryDB {
                     None,
                     None,
                 )
-                .await;
+                .await?;
+            return Ok((results, None));
         };
 
-        let sub_queries = crate::decompose::decompose_query(query, &llm).await?;
+        let stats = crate::decompose::decompose_query_with_stats(query, &llm).await?;
 
-        if sub_queries.len() <= 1 {
+        if stats.sub_queries.len() <= 1 {
             // Not compound (or decompose failed silently) — passthrough.
-            return self
+            // No multi-hop fan-out happened, so the caller sees `None`.
+            // The decompose call's token estimates still landed in
+            // `log::info!` from `decompose_query_with_stats`.
+            let results = self
                 .search_memory(
                     query,
                     limit,
@@ -7389,12 +7431,13 @@ impl MemoryDB {
                     None,
                     None,
                 )
-                .await;
+                .await?;
+            return Ok((results, None));
         }
 
         let mut merged: HashMap<String, SearchResult> = HashMap::new();
 
-        for sub_query in &sub_queries {
+        for sub_query in &stats.sub_queries {
             let sub_results = self
                 .search_memory(
                     sub_query,
@@ -7426,7 +7469,7 @@ impl MemoryDB {
                 .unwrap_or(std::cmp::Ordering::Equal)
         });
         combined.truncate(limit);
-        Ok(combined)
+        Ok((combined, Some(stats)))
     }
 
     /// Augment search results with knowledge graph observations via RRF merge.
@@ -22349,6 +22392,47 @@ pub(crate) mod tests {
         assert!(
             !results.is_empty(),
             "single-element decomposition should still return results"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_search_memory_decomposed_with_stats_returns_stats() {
+        use crate::llm_provider::{LlmProvider, MockProvider};
+
+        let (db, _dir) = test_db().await;
+        db.upsert_documents(vec![make_memory_doc(
+            "m1",
+            "Rust is a systems programming language",
+            "fact",
+            "software",
+            "claude",
+        )])
+        .await
+        .unwrap();
+
+        // Single-element mock => decomposer reports not-compound; the multi-hop
+        // fan-out path does NOT run, so the caller should see `stats = None`
+        // even though the LLM was invoked. Cost telemetry for the decompose
+        // call itself lives in `log::info!`, not the return value.
+        let llm: Arc<dyn LlmProvider> = Arc::new(MockProvider::new(r#"["Rust programming"]"#));
+        let (results, stats) = db
+            .search_memory_decomposed_with_stats(
+                "Rust programming",
+                10,
+                None,
+                None,
+                None,
+                Some(llm),
+            )
+            .await
+            .unwrap();
+        assert!(
+            !results.is_empty(),
+            "single-element decomposition should still return results"
+        );
+        assert!(
+            stats.is_none(),
+            "stats should be None when no multi-hop fan-out happened"
         );
     }
 
