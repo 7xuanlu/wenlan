@@ -14,6 +14,32 @@ Search Origin's memory by natural-language query. Returns matching memories
 ranked by hybrid vector + FTS search, then re-ordered by the agent if it
 helps.
 
+## Argument parsing
+
+The `/recall` skill accepts one optional inline token of the form
+`space:<name>` anywhere in the argument string. Extract it before
+treating the rest as the query:
+
+    raw_args="<the full argument string passed to /recall>"
+    space_arg="$(printf '%s\n' "$raw_args" | grep -oE 'space:[A-Za-z0-9_-]+' | head -1 | cut -d: -f2)"
+    query="$(printf '%s\n' "$raw_args" | sed -E 's/[[:space:]]*space:[A-Za-z0-9_-]+[[:space:]]*/ /g' | sed -E 's/^[[:space:]]+|[[:space:]]+$//g')"
+
+If `space_arg` is non-empty, pass it to the resolver as `--arg "$space_arg"`.
+
+## Resolve the active space
+
+Call the bundled resolver:
+
+    resolved="$("$CLAUDE_PLUGIN_ROOT/bin/resolve-space.sh" --cwd "$PWD" \
+        ${space_arg:+--arg "$space_arg"} 2>/dev/null)"
+    space="$(printf '%s\n' "$resolved" | cut -f1)"
+    source_layer="$(printf '%s\n' "$resolved" | cut -f2)"
+
+Pass `space="$space"` to the `recall` MCP tool. Print one line before
+the call:
+
+    Resolved space: <space> (from <source-layer>)
+
 ## Two phases
 
 When a local model or API key is configured, the daemon can rerank and
@@ -40,7 +66,7 @@ matters, use that endpoint instead of issuing parallel calls here.
 ### Phase 2 — call the MCP tool
 
 ```
-recall(query="<expanded query>", space=<inferred>, memory_type=<inferred>)
+recall(query="<expanded query>", space=<resolved>, memory_type=<inferred>)
 ```
 
 Inferences (do not ask the user):

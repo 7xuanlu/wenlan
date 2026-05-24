@@ -1,0 +1,28 @@
+# Sample ~/.origin/spaces.toml — copy this file to ~/.origin/spaces.toml
+# and edit to taste.
+#
+# Maps a cwd path-prefix to a space name. Longest matching prefix wins.
+# `~` is expanded to your home directory.
+#
+# Tiebreak: if two mappings have identical-length prefixes both matching
+# the cwd, the first-defined mapping wins.
+
+[[mapping]]
+prefix = "~/Repos/origin"
+space  = "origin"
+
+[[mapping]]
+prefix = "~/notes/brainstorms"
+space  = "ideas"
+
+[[mapping]]
+prefix = "~/notes/career"
+space  = "career"
+
+[[mapping]]
+prefix = "~/notes/health"
+space  = "health"
+
+# Optional. If set, this overrides cwd-repo inference for any cwd that
+# does not match a [[mapping]] above. Default is "personal".
+default = "personal"
