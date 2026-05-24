@@ -4823,6 +4823,60 @@ impl MemoryDB {
                     }
                 }
             }
+
+            // Migration 52: Add NULL-able event_date column to memories for the
+            // temporal channel (P0 #2 Phase A). Distinct from created_at /
+            // last_modified, which track ingestion / edit time. event_date is
+            // the user's mental timeline (e.g. when an event happened) and is
+            // populated later by a date-extraction pass; rows start NULL with
+            // no backfill. Scaffolded in temporal.rs (commit 2161b4e3).
+            if version < 52 {
+                let conn = self.conn.lock().await;
+                let has_event_date = conn
+                    .query(
+                        "SELECT COUNT(*) FROM pragma_table_info('memories') WHERE name = 'event_date'",
+                        (),
+                    )
+                    .await
+                    .map_err(|e| OriginError::VectorDb(format!("m52 check: {e}")))?
+                    .next()
+                    .await
+                    .map_err(|e| OriginError::VectorDb(e.to_string()))?
+                    .map(|r| r.get::<i64>(0).unwrap_or(0))
+                    .unwrap_or(0);
+
+                conn.execute("BEGIN", ())
+                    .await
+                    .map_err(|e| OriginError::VectorDb(format!("m52 begin: {e}")))?;
+                let result: Result<(), OriginError> = async {
+                    if has_event_date == 0 {
+                        conn.execute("ALTER TABLE memories ADD COLUMN event_date INTEGER", ())
+                            .await
+                            .map_err(|e| {
+                                OriginError::VectorDb(format!("m52 add event_date: {e}"))
+                            })?;
+                    }
+                    conn.execute("PRAGMA user_version = 52", ())
+                        .await
+                        .map_err(|e| OriginError::VectorDb(format!("m52 bump: {e}")))?;
+                    Ok(())
+                }
+                .await;
+                match result {
+                    Ok(()) => {
+                        conn.execute("COMMIT", ())
+                            .await
+                            .map_err(|e| OriginError::VectorDb(format!("m52 commit: {e}")))?;
+                        log::info!(
+                            "[memory_db] migration 52: added memories.event_date (NULL-able, no backfill)"
+                        );
+                    }
+                    Err(e) => {
+                        let _ = conn.execute("ROLLBACK", ()).await;
+                        return Err(e);
+                    }
+                }
+            }
         }
 
         Ok(())
@@ -30036,6 +30090,65 @@ pub(crate) mod tests {
         assert!(
             rows.next().await.unwrap().is_some(),
             "document_tags table must exist after migration 51 replay"
+        );
+    }
+
+    // ── migration 52 replay test ──────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn test_migration_52_adds_event_date_column() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db_path = tmp.path().join("test.db");
+
+        // First open: runs all migrations including 52.
+        let db = MemoryDB::new(&db_path, Arc::new(crate::events::NoopEmitter))
+            .await
+            .unwrap();
+
+        // Verify the column exists and is NULL-able with no default.
+        {
+            let conn = db.conn.lock().await;
+            let mut rows = conn
+                .query(
+                    "SELECT COUNT(*) FROM pragma_table_info('memories') WHERE name = 'event_date'",
+                    (),
+                )
+                .await
+                .unwrap();
+            let count: i64 = rows.next().await.unwrap().unwrap().get::<i64>(0).unwrap();
+            assert_eq!(
+                count, 1,
+                "memories.event_date column must exist after migration 52"
+            );
+        }
+
+        // Roll user_version back to 51 and drop the column to simulate replay.
+        // SQLite supports DROP COLUMN as of 3.35; libSQL inherits that.
+        {
+            let conn = db.conn.lock().await;
+            conn.execute("ALTER TABLE memories DROP COLUMN event_date", ())
+                .await
+                .unwrap();
+            conn.execute("PRAGMA user_version = 51", ()).await.unwrap();
+        }
+        drop(db);
+
+        // Re-open — migration 52 re-fires and must re-add the column.
+        let db = MemoryDB::new(&db_path, Arc::new(crate::events::NoopEmitter))
+            .await
+            .unwrap();
+        let conn = db.conn.lock().await;
+        let mut rows = conn
+            .query(
+                "SELECT COUNT(*) FROM pragma_table_info('memories') WHERE name = 'event_date'",
+                (),
+            )
+            .await
+            .unwrap();
+        let count: i64 = rows.next().await.unwrap().unwrap().get::<i64>(0).unwrap();
+        assert_eq!(
+            count, 1,
+            "memories.event_date column must exist after migration 52 replay"
         );
     }
 
