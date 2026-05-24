@@ -55,6 +55,26 @@ where
     }
 }
 
+/// Return the effective space for a tool call: when locked, always the
+/// locked value (warns if model attempted to override); otherwise the
+/// inbound value passed by the model.
+pub fn effective_space(inbound: &Option<String>) -> Option<String> {
+    if let Some(locked) = crate::lock_state::locked_space() {
+        if let Some(passed) = inbound.as_ref() {
+            if passed != &locked {
+                tracing::warn!(
+                    inbound = %passed,
+                    locked = %locked,
+                    "model passed inbound space while ORIGIN_SPACE is locked; using locked value"
+                );
+            }
+        }
+        Some(locked)
+    } else {
+        inbound.clone()
+    }
+}
+
 /// Controls which operations are allowed based on transport.
 #[derive(Clone, Debug, PartialEq)]
 pub enum TransportMode {
@@ -685,11 +705,12 @@ impl OriginMcpServer {
         if let Some(uid) = self.resolve_user_id(None) {
             tracing::debug!(user_id = %uid, "capture invoked");
         }
+        let space_arg = effective_space(&params.space);
 
         let req = StoreMemoryRequest {
             content: params.content,
             memory_type: params.memory_type,
-            space: params.space,
+            space: space_arg,
             source_agent,
             title: None,
             confidence: params.confidence,
@@ -711,11 +732,12 @@ impl OriginMcpServer {
     }
 
     pub async fn recall_impl(&self, params: RecallParams) -> Result<CallToolResult, McpError> {
+        let space_arg = effective_space(&params.space);
         let req = SearchMemoryRequest {
             query: params.query,
             limit: params.limit.unwrap_or(10),
             memory_type: params.memory_type,
-            space: params.space,
+            space: space_arg,
             source_agent: self.resolve_source_agent(None),
         };
 
@@ -736,6 +758,7 @@ impl OriginMcpServer {
     }
 
     pub async fn context_impl(&self, params: ContextParams) -> Result<CallToolResult, McpError> {
+        let space_arg = effective_space(&params.space);
         #[allow(deprecated)]
         let req = ChatContextRequest {
             query: None,
@@ -743,7 +766,7 @@ impl OriginMcpServer {
             max_chunks: params.limit.unwrap_or(20),
             relevance_threshold: None,
             include_goals: true,
-            space: params.space,
+            space: space_arg,
         };
 
         // Extract only the `context` string field from the response.
@@ -904,10 +927,11 @@ impl OriginMcpServer {
         params: CreateEntityParams,
     ) -> Result<CallToolResult, McpError> {
         let source_agent = self.resolve_source_agent(None);
+        let space_arg = effective_space(&params.space);
         let req = CreateEntityRequest {
             name: params.name,
             entity_type: params.entity_type,
-            space: params.space,
+            space: space_arg,
             source_agent,
             confidence: params.confidence,
         };
@@ -1082,12 +1106,13 @@ impl OriginMcpServer {
         &self,
         params: CreatePageParams,
     ) -> Result<CallToolResult, McpError> {
+        let space_arg = effective_space(&params.space);
         let req = CreateConceptRequest {
             title: params.title,
             content: params.content,
             summary: params.summary,
             entity_id: params.entity_id,
-            space: params.space,
+            space: space_arg,
             source_memory_ids: params.source_memory_ids,
         };
         let resp: CreatePageResponse = match self.client.post("/api/pages", &req).await {
@@ -1229,9 +1254,10 @@ impl OriginMcpServer {
         &self,
         params: ListMemoriesParams,
     ) -> Result<CallToolResult, McpError> {
+        let space_arg = effective_space(&params.space);
         let req = ListMemoriesRequest {
             memory_type: params.memory_type,
-            space: params.space,
+            space: space_arg,
             limit: params.limit.unwrap_or(100),
             confirmed: None,
         };
@@ -1394,12 +1420,13 @@ impl OriginMcpServer {
         &self,
         params: ListNurtureParams,
     ) -> Result<CallToolResult, McpError> {
+        let space_arg = effective_space(&params.space);
         let mut path = String::from("/api/memory/nurture");
         let mut q: Vec<String> = Vec::new();
         if let Some(l) = params.limit {
             q.push(format!("limit={}", l.clamp(1, 500)));
         }
-        if let Some(s) = params.space.as_deref().filter(|s| !s.is_empty()) {
+        if let Some(s) = space_arg.as_deref().filter(|s| !s.is_empty()) {
             q.push(format!("space={}", url_encode_simple(s)));
         }
         if !q.is_empty() {
@@ -4557,5 +4584,51 @@ mod tests {
     fn distill_params_defaults_force_to_none() {
         let p: DistillParams = serde_json::from_str(r#"{"target":"foo"}"#).unwrap();
         assert_eq!(p.force, None);
+    }
+
+    // ===== effective_space =====
+
+    #[test]
+    fn locked_overrides_inbound_space() {
+        let _guard = crate::lock_state::ENV_LOCK.lock().unwrap();
+        std::env::set_var("ORIGIN_SPACE", "career");
+        crate::lock_state::init_from_env();
+
+        let inbound = Some("ideas".to_string());
+        let resolved = effective_space(&inbound);
+        assert_eq!(resolved.as_deref(), Some("career"));
+    }
+
+    #[test]
+    fn unlocked_passes_inbound_through() {
+        let _guard = crate::lock_state::ENV_LOCK.lock().unwrap();
+        std::env::remove_var("ORIGIN_SPACE");
+        crate::lock_state::init_from_env();
+
+        let inbound = Some("ideas".to_string());
+        let resolved = effective_space(&inbound);
+        assert_eq!(resolved.as_deref(), Some("ideas"));
+    }
+
+    #[test]
+    fn locked_with_no_inbound_yields_locked() {
+        let _guard = crate::lock_state::ENV_LOCK.lock().unwrap();
+        std::env::set_var("ORIGIN_SPACE", "career");
+        crate::lock_state::init_from_env();
+
+        let inbound: Option<String> = None;
+        let resolved = effective_space(&inbound);
+        assert_eq!(resolved.as_deref(), Some("career"));
+    }
+
+    #[test]
+    fn unlocked_with_no_inbound_yields_none() {
+        let _guard = crate::lock_state::ENV_LOCK.lock().unwrap();
+        std::env::remove_var("ORIGIN_SPACE");
+        crate::lock_state::init_from_env();
+
+        let inbound: Option<String> = None;
+        let resolved = effective_space(&inbound);
+        assert_eq!(resolved, None);
     }
 }
