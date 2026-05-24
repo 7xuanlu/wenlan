@@ -44,6 +44,15 @@ pub struct SearchMemoryRequest {
     pub space: Option<String>,
     #[serde(default)]
     pub source_agent: Option<String>,
+    /// Recency-decay anchor selector for the temporal channel.
+    ///
+    /// Accepts `"event_date"` to anchor decay on `memories.event_date` (the
+    /// user's mental timeline). Any other value, or omission, defaults to
+    /// `last_modified` (ingest time) — the existing behavior. Unknown values
+    /// are tolerated and silently fall back to the default rather than
+    /// returning a 400; the channel is best-effort by design.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub anchor: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]

@@ -6,6 +6,7 @@
 //! or subsequent steps.
 //!
 //! Steps:
+//! 0. Event-date extraction (regex pass → set `memories.event_date`)
 //! 1. Entity auto-linking (vector search entities > 0.85 distance → set entity_id)
 //!    1b. Store-time entity extraction (LLM extract if auto-link found no match)
 //! 2. Entity creation suggestion (stub — full impl in refinery Task 5)
@@ -58,6 +59,29 @@ pub async fn run_post_ingest_enrichment(
     knowledge_path: Option<&std::path::Path>,
 ) -> Result<(), OriginError> {
     log::info!("[post_ingest] enriching {source_id}");
+
+    // 0. Event-date extraction (temporal channel P0 #2 Phase A).
+    // Regex-only first pass; LLM augmentation deferred. Best-effort, never
+    // blocks the rest of the pipeline. NULL when no pattern matches — the
+    // anchor resolver falls back to last_modified for those rows.
+    let now = chrono::Utc::now().timestamp();
+    let extracted = crate::temporal_extract::extract_event_date(content, now);
+    match db.set_event_date(source_id, extracted).await {
+        Ok(()) => {
+            if extracted.is_some() {
+                log::info!("[post_ingest] {source_id}: event_date extracted");
+            }
+            db.record_enrichment_step(source_id, "event_date", "ok", None)
+                .await
+                .ok();
+        }
+        Err(e) => {
+            log::warn!("[post_ingest] event_date set failed: {e}");
+            db.record_enrichment_step(source_id, "event_date", "failed", Some(&e.to_string()))
+                .await
+                .ok();
+        }
+    }
 
     // 1. Entity auto-linking (only if not already linked)
     if entity_id.is_none() {
@@ -864,6 +888,101 @@ mod tests {
 
         assert_eq!(claude_ids, vec!["mem_iso_claude"]);
         assert_eq!(cursor_ids, vec!["mem_iso_cursor"]);
+    }
+
+    /// Regression guard for the event-date extraction step.
+    ///
+    /// `run_post_ingest_enrichment` step 0 calls
+    /// `temporal_extract::extract_event_date` and persists the result via
+    /// `MemoryDB::set_event_date`. With an ISO-8601 date in the content, the
+    /// stored row's `event_date` column must equal the extracted UTC-midnight
+    /// timestamp; with no date pattern present, the column must remain NULL.
+    /// Together these guard the temporal-channel anchor on the ingest side.
+    #[tokio::test]
+    async fn event_date_populated_on_ingest_when_date_present() {
+        let (db, _dir) = test_db().await;
+        let content = "Project kickoff happened on 2024-03-15 in Berlin";
+        let doc = make_doc("mem_event_date_ok", content);
+        db.upsert_documents(vec![doc]).await.unwrap();
+
+        run_post_ingest_enrichment(
+            &db,
+            "mem_event_date_ok",
+            content,
+            None,
+            Some("fact"),
+            None,
+            None,
+            None,
+            &crate::prompts::PromptRegistry::default(),
+            &crate::tuning::RefineryConfig::default(),
+            &crate::tuning::DistillationConfig::default(),
+            None,
+        )
+        .await
+        .unwrap();
+
+        // Read back via direct SQL: get_memory_detail does not project event_date.
+        let row_event_date: Option<i64> = {
+            let conn = db.conn.lock().await;
+            let mut rows = conn
+                .query(
+                    "SELECT event_date FROM memories WHERE source_id = ?1 AND chunk_index = 0",
+                    libsql::params!["mem_event_date_ok"],
+                )
+                .await
+                .unwrap();
+            let row = rows.next().await.unwrap().unwrap();
+            row.get::<Option<i64>>(0).unwrap()
+        };
+
+        // 2024-03-15 00:00:00 UTC = 1710460800
+        assert_eq!(row_event_date, Some(1_710_460_800));
+
+        // And the step is recorded for honest summaries.
+        let steps = db.get_enrichment_steps("mem_event_date_ok").await.unwrap();
+        let event_step = steps.iter().find(|s| s.step == "event_date").unwrap();
+        assert_eq!(event_step.status, "ok");
+    }
+
+    #[tokio::test]
+    async fn event_date_remains_null_when_no_date_in_content() {
+        let (db, _dir) = test_db().await;
+        let content = "Discussed the refactor with the team";
+        let doc = make_doc("mem_event_date_none", content);
+        db.upsert_documents(vec![doc]).await.unwrap();
+
+        run_post_ingest_enrichment(
+            &db,
+            "mem_event_date_none",
+            content,
+            None,
+            Some("fact"),
+            None,
+            None,
+            None,
+            &crate::prompts::PromptRegistry::default(),
+            &crate::tuning::RefineryConfig::default(),
+            &crate::tuning::DistillationConfig::default(),
+            None,
+        )
+        .await
+        .unwrap();
+
+        let row_event_date: Option<i64> = {
+            let conn = db.conn.lock().await;
+            let mut rows = conn
+                .query(
+                    "SELECT event_date FROM memories WHERE source_id = ?1 AND chunk_index = 0",
+                    libsql::params!["mem_event_date_none"],
+                )
+                .await
+                .unwrap();
+            let row = rows.next().await.unwrap().unwrap();
+            row.get::<Option<i64>>(0).unwrap()
+        };
+
+        assert_eq!(row_event_date, None);
     }
 
     #[tokio::test]

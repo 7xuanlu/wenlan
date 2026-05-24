@@ -5852,6 +5852,31 @@ impl MemoryDB {
         Ok(())
     }
 
+    /// Set the `event_date` (mental-timeline anchor) for all rows of a memory.
+    ///
+    /// `event_date` is the user-perspective timestamp (when something
+    /// happened), not when the memory was ingested. NULL is a valid value —
+    /// passing `None` clears any prior extraction. Added in migration 52
+    /// and consumed by [`search_memory_with_anchor`] when the caller asks
+    /// for [`crate::temporal::AnchorField::EventDate`].
+    ///
+    /// Updates every chunk row for the same `source_id` (mirrors
+    /// [`update_title`]) so a multi-chunk memory stays consistent.
+    pub async fn set_event_date(
+        &self,
+        source_id: &str,
+        event_date: Option<i64>,
+    ) -> Result<(), OriginError> {
+        let conn = self.conn.lock().await;
+        conn.execute(
+            "UPDATE memories SET event_date = ?1 WHERE source_id = ?2",
+            libsql::params![event_date, source_id],
+        )
+        .await
+        .map_err(|e| OriginError::VectorDb(e.to_string()))?;
+        Ok(())
+    }
+
     /// Falls back gracefully if the index has no data yet.
     /// Check if a memory with this content already exists.
     /// Uses prefix matching (first 200 chars) so long memories that were

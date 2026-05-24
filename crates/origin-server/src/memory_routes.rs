@@ -1040,21 +1040,47 @@ pub async fn handle_search_memory(
     }
     let start = std::time::Instant::now();
 
+    // Temporal-channel anchor selection (P0 #2). Default is `last_modified`
+    // — the historical behavior. `"event_date"` routes through
+    // `search_memory_with_anchor` so decay anchors to the user's mental
+    // timeline. Unknown strings collapse to the default; the channel is
+    // best-effort and shouldn't 400 on a stray value.
+    let anchor = match req.anchor.as_deref() {
+        Some("event_date") => origin_core::temporal::AnchorField::EventDate,
+        _ => origin_core::temporal::AnchorField::LastModified,
+    };
+
     let results = {
         let s = state.read().await;
         let db = s.db.as_ref().ok_or(ServerError::DbNotInitialized)?;
-        db.search_memory(
-            &req.query,
-            req.limit,
-            req.memory_type.as_deref(),
-            req.space.as_deref(),
-            req.source_agent.as_deref(),
-            None,
-            None,
-            None,
-        )
-        .await
-        .map_err(|e| ServerError::SearchFailed(e.to_string()))?
+        if anchor == origin_core::temporal::AnchorField::EventDate {
+            db.search_memory_with_anchor(
+                &req.query,
+                req.limit,
+                req.memory_type.as_deref(),
+                req.space.as_deref(),
+                req.source_agent.as_deref(),
+                None,
+                None,
+                None,
+                anchor,
+            )
+            .await
+            .map_err(|e| ServerError::SearchFailed(e.to_string()))?
+        } else {
+            db.search_memory(
+                &req.query,
+                req.limit,
+                req.memory_type.as_deref(),
+                req.space.as_deref(),
+                req.source_agent.as_deref(),
+                None,
+                None,
+                None,
+            )
+            .await
+            .map_err(|e| ServerError::SearchFailed(e.to_string()))?
+        }
     };
 
     let source_ids: Vec<String> = results.iter().map(|r| r.source_id.clone()).collect();
@@ -3845,4 +3871,109 @@ pub async fn handle_get_page_revisions(
         stale_reason: page.stale_reason.clone(),
         entries,
     }))
+}
+
+/// Temporal-channel HTTP routing for `/api/memory/search` (P0 #2 Phase A).
+///
+/// `SearchMemoryRequest.anchor` selects which timestamp the recency decay
+/// uses. Default and unknown values fall back to `LastModified` (the
+/// historical behavior); `"event_date"` routes through
+/// `MemoryDB::search_memory_with_anchor` with `AnchorField::EventDate`.
+/// These tests pin both branches end-to-end through the axum router so
+/// drift in the handler match or the wire field surfaces here.
+#[cfg(test)]
+mod search_anchor_routing_tests {
+    use axum::body::Body;
+    use axum::http::{Request, StatusCode};
+    use std::sync::Arc;
+    use tokio::sync::RwLock;
+    use tower::ServiceExt;
+
+    use crate::state::ServerState;
+
+    async fn build_state_with_db() -> (Arc<RwLock<ServerState>>, tempfile::TempDir) {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let emitter: Arc<dyn origin_core::events::EventEmitter> =
+            Arc::new(origin_core::events::NoopEmitter);
+        let db = origin_core::db::MemoryDB::new(tmp.path(), emitter)
+            .await
+            .expect("MemoryDB::new");
+        let server_state = ServerState {
+            db: Some(Arc::new(db)),
+            ..Default::default()
+        };
+        (Arc::new(RwLock::new(server_state)), tmp)
+    }
+
+    #[tokio::test]
+    async fn search_accepts_event_date_anchor() {
+        let (state, _tmp) = build_state_with_db().await;
+        let app = crate::router::build_router(state);
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/memory/search")
+                    .header("content-type", "application/json")
+                    .body(Body::from(r#"{"query":"vacation","anchor":"event_date"}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert!(
+            resp.status().is_success(),
+            "anchor=event_date must route through search_memory_with_anchor, got {}",
+            resp.status()
+        );
+    }
+
+    #[tokio::test]
+    async fn search_omitting_anchor_defaults_to_last_modified() {
+        // Default branch — same handler path that existed before P0 #2.
+        let (state, _tmp) = build_state_with_db().await;
+        let app = crate::router::build_router(state);
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/memory/search")
+                    .header("content-type", "application/json")
+                    .body(Body::from(r#"{"query":"vacation"}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert!(resp.status().is_success(), "default route must succeed");
+    }
+
+    #[tokio::test]
+    async fn search_unknown_anchor_silently_falls_back_not_400() {
+        // Channel is best-effort by design — stray anchor strings should
+        // not 400. See SearchMemoryRequest.anchor doc.
+        let (state, _tmp) = build_state_with_db().await;
+        let app = crate::router::build_router(state);
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/memory/search")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        r#"{"query":"vacation","anchor":"galactic_standard_time"}"#,
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_ne!(
+            resp.status(),
+            StatusCode::BAD_REQUEST,
+            "unknown anchor must not 400"
+        );
+        assert!(
+            resp.status().is_success(),
+            "unknown anchor must fall back to last_modified, got {}",
+            resp.status()
+        );
+    }
 }
