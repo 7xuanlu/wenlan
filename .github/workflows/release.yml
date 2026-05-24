@@ -179,16 +179,27 @@ jobs:
         if: matrix.use_cross == true
         run: cargo install cross --locked
 
-      # workflow_dispatch can target a tag from before Cross.toml landed,
-      # so write the env-passthrough config inline. Cargo build sees this
-      # file at workspace root; cross reads it for container env vars.
-      - name: Write Cross.toml (env passthrough)
+      # workflow_dispatch can target a tag from before Cross.toml landed.
+      # Write it inline. cross runs pre-build commands inside the target
+      # container as root, so we install libssl-dev (openssl-sys needs the
+      # system headers — it's pulled transitively via fastembed → hf-hub →
+      # native-tls). `OPENSSL_VENDORED` is a CARGO FEATURE not an env var,
+      # so the previous env-only attempt did nothing.
+      - name: Write Cross.toml (pre-build libssl-dev)
         if: matrix.use_cross == true
         shell: bash
         run: |
           cat > Cross.toml <<'EOF'
-          [build.env]
-          passthrough = ["OPENSSL_VENDORED", "OPENSSL_STATIC"]
+          [target.x86_64-unknown-linux-gnu]
+          pre-build = [
+              "apt-get update && apt-get install --assume-yes libssl-dev pkg-config",
+          ]
+
+          [target.aarch64-unknown-linux-gnu]
+          pre-build = [
+              "dpkg --add-architecture arm64",
+              "apt-get update && apt-get install --assume-yes libssl-dev:arm64 pkg-config",
+          ]
           EOF
           cat Cross.toml
 
@@ -196,16 +207,8 @@ jobs:
         if: matrix.use_cross != true
         run: cargo build --release -p origin -p origin-server -p origin-mcp --target ${{ matrix.target }}
 
-      # OPENSSL_VENDORED tells openssl-sys to build OpenSSL from source
-      # inside the cross container, which doesn't ship libssl-dev. The dep
-      # is pulled transitively through fastembed → hf-hub → native-tls →
-      # openssl-sys. Cross.toml's `[build.env] passthrough` forwards the
-      # env var into the container.
       - name: Build (cross)
         if: matrix.use_cross == true
-        env:
-          OPENSSL_VENDORED: "1"
-          OPENSSL_STATIC: "1"
         run: cross build --release -p origin -p origin-server -p origin-mcp --target ${{ matrix.target }}
 
       - name: Smoke (native)
@@ -245,21 +248,27 @@ jobs:
         shell: bash
         run: ls -la target/${{ matrix.target }}/release/ | head -30
 
-      # ort 2.x downloads ONNX Runtime to %LOCALAPPDATA%\ort.pyke.io\... at
-      # build time and does NOT copy the DLL next to the binary on Windows
-      # (no `copy-dylibs` feature surfaced through fastembed). Without the
-      # DLL co-located, the bundled zip can't actually run anywhere. Copy
-      # it before the 7z packaging step.
+      # ort 2.x caches link-time `.lib` artifacts under
+      # `%LOCALAPPDATA%\ort.pyke.io\...` but does NOT keep onnxruntime.dll
+      # there on Windows — the build script needs only the import lib for
+      # link time. The bundled zip needs the runtime DLL co-located with
+      # the .exe so users get a self-contained extract. Download ONNX
+      # Runtime 1.20.0 (matches ort 2.0.0-rc.11) from Microsoft's releases
+      # and stage onnxruntime.dll into target/release before packaging.
       - name: Bundle onnxruntime.dll (Windows)
         if: matrix.target == 'x86_64-pc-windows-msvc'
         shell: pwsh
         run: |
-          $ortRoot = "$env:LOCALAPPDATA\ort.pyke.io\dfbin\x86_64-pc-windows-msvc"
-          $dll = Get-ChildItem -Path $ortRoot -Recurse -Filter onnxruntime.dll | Select-Object -First 1
+          $ortVersion = "1.20.0"
+          $zipUrl = "https://github.com/microsoft/onnxruntime/releases/download/v$ortVersion/onnxruntime-win-x64-$ortVersion.zip"
+          $zipPath = "$env:RUNNER_TEMP\onnxruntime.zip"
+          Write-Host "Downloading $zipUrl"
+          Invoke-WebRequest -Uri $zipUrl -OutFile $zipPath
+          Expand-Archive -Path $zipPath -DestinationPath "$env:RUNNER_TEMP\ort-extracted" -Force
+          $dll = Get-ChildItem -Path "$env:RUNNER_TEMP\ort-extracted" -Recurse -Filter onnxruntime.dll | Select-Object -First 1
           if (-not $dll) {
-            Write-Host "ort cache contents:"
-            Get-ChildItem -Path $ortRoot -Recurse | Format-Table FullName, Length
-            throw "onnxruntime.dll not found under $ortRoot"
+            Get-ChildItem -Path "$env:RUNNER_TEMP\ort-extracted" -Recurse | Format-Table FullName, Length
+            throw "onnxruntime.dll not found in extracted zip"
           }
           $dest = "target\${{ matrix.target }}\release\onnxruntime.dll"
           Copy-Item -Path $dll.FullName -Destination $dest -Force
