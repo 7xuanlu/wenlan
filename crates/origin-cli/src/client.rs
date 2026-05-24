@@ -234,6 +234,15 @@ impl OriginClient {
         Ok(json["affected"].as_u64().unwrap_or(0) as usize)
     }
 
+    /// GET /api/spaces — fetch a single space by name (filters from list).
+    pub async fn get_space(&self, name: &str) -> Result<origin_types::Space> {
+        let spaces = self.list_spaces().await?;
+        spaces
+            .into_iter()
+            .find(|s| s.name == name)
+            .ok_or_else(|| anyhow::anyhow!("space '{}' not found", name))
+    }
+
     /// GET /api/spaces — list all spaces.
     pub async fn list_spaces(&self) -> Result<Vec<origin_types::Space>> {
         let url = format!("{}/api/spaces", self.base_url);

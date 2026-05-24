@@ -196,6 +196,29 @@ async fn move_cmd(
     }
     Ok(())
 }
-async fn show(_c: &OriginClient, _f: OutputFormat, _q: bool, _n: &str) -> Result<()> {
-    todo!("Task 6")
+async fn show(client: &OriginClient, format: OutputFormat, quiet: bool, name: &str) -> Result<()> {
+    let space = client.get_space(name).await?;
+    let default = read_default_from_toml();
+    if quiet {
+        return Ok(());
+    }
+    match format {
+        OutputFormat::Json => crate::output::print_json(&space)?,
+        OutputFormat::Table => {
+            println!("Name:           {}", space.name);
+            if let Some(desc) = &space.description {
+                println!("Description:    {}", desc);
+            }
+            println!("Memory count:   {}", space.memory_count);
+            println!("Entity count:   {}", space.entity_count);
+            if space.starred {
+                println!("Starred:        yes");
+            }
+            if default.as_deref() == Some(space.name.as_str()) {
+                println!("Default:        yes (~/.origin/spaces.toml)");
+            }
+        }
+        OutputFormat::Auto => unreachable!("Auto resolved by main before dispatch"),
+    }
+    Ok(())
 }
