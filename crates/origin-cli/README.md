@@ -167,6 +167,18 @@ origin agents show claude-code
 origin agents edit claude-code --trust trusted --enabled true
 ```
 
+### `origin space <list|add|default|move|show>`
+
+Manage memory spaces (buckets).
+
+```bash
+origin space list
+origin space add ideas --default
+origin space show career
+origin space default work
+origin space move scratch career
+```
+
 ## Output formats
 
 - `--format auto` (default): table on TTY, JSON when piped.
