@@ -25,6 +25,10 @@ pub struct MigrationProgress {
 /// Embedding dimension — must match the model (GTE-Base-EN-v1.5-Q = 768).
 pub const EMBEDDING_DIM: usize = 768;
 
+/// Current DB schema version (highest `PRAGMA user_version` applied by `migrate()`).
+/// Bump this whenever a new migration lands. Used as an eval cache invalidation key.
+pub const SCHEMA_VERSION: u32 = 51;
+
 /// Shared embedder reference. Pass to [`MemoryDB::new_with_shared_embedder`] to
 /// reuse a single embedder across many `MemoryDB` instances. Created via
 /// [`MemoryDB::create_shared_embedder`]. Letting downstream callers spell out

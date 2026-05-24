@@ -394,6 +394,68 @@ impl LocomoReport {
 }
 
 // ---------------------------------------------------------------------------
+// ReportEnv builder
+// ---------------------------------------------------------------------------
+
+/// Build a `ReportEnv` for a LoCoMo runner variant.
+///
+/// Fills both the legacy 9 fields (needed by `encode_baseline_filename`) and
+/// the new P0a additive fields. The `llm_provider_class` / `llm_model` legacy
+/// fields and the new P0a fields carry the same information so both views of
+/// the data stay consistent.
+fn build_locomo_env(
+    variant: &str,
+    path: &std::path::Path,
+    retrieval_method: &str,
+    llm_provider_class: &str,
+    llm_model: &str,
+    judge_model: Option<String>,
+) -> crate::eval::report::ReportEnv {
+    let fixture_revision =
+        crate::eval::fixtures::fixture_revision_hash(path).unwrap_or_else(|_| "unknown".into());
+    let n_runs: u32 = 1;
+    let run_id = Some(format!(
+        "run_{}",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos()
+    ));
+    let timestamp_utc = Some(chrono::Utc::now().to_rfc3339());
+    crate::eval::report::ReportEnv {
+        // Legacy fields (needed by encode_baseline_filename and existing callers)
+        fixture_revision,
+        embedder_model: "BGE-Base-EN-v1.5-Q".into(),
+        embedder_revision: "768d".into(),
+        retrieval_method: retrieval_method.to_string(),
+        llm_provider_class: llm_provider_class.to_string(),
+        llm_model: llm_model.to_string(),
+        judge_model: judge_model.clone(),
+        origin_version: env!("CARGO_PKG_VERSION").into(),
+        eval_timestamp_unix: chrono::Utc::now().timestamp(),
+        // P0a additive fields
+        layer: Some(crate::eval::EvalLayer::L1Db),
+        task: Some("locomo".to_string()),
+        variant: Some(variant.to_string()),
+        embed_dim: Some(768),
+        similarity_fn_name: "cosine".to_string(),
+        judge_model_id: judge_model,
+        mcp_schema_hash: None,
+        skill_prompt_hash: None,
+        schema_version: 1,
+        schema_db_version: Some(crate::db::SCHEMA_VERSION),
+        migrations_hash: option_env!("ORIGIN_MIGRATIONS_HASH").map(String::from),
+        n_runs,
+        is_single_run: n_runs == 1,
+        run_id,
+        timestamp_utc,
+        git_sha: option_env!("ORIGIN_GIT_SHA").map(String::from),
+        warmup_iterations: 0,
+        ..Default::default()
+    }
+}
+
+// ---------------------------------------------------------------------------
 // End-to-end benchmark runner
 // ---------------------------------------------------------------------------
 
@@ -523,19 +585,14 @@ pub async fn run_locomo_eval(path: &Path) -> Result<LocomoReport, OriginError> {
         baseline: None,
         env: None,
     };
-    report.env = Some(crate::eval::report::ReportEnv {
-        fixture_revision: crate::eval::fixtures::fixture_revision_hash(path)
-            .unwrap_or_else(|_| "unknown".into()),
-        embedder_model: "BGE-Base-EN-v1.5-Q".into(),
-        embedder_revision: "768d".into(),
-        retrieval_method: "search_memory".into(),
-        llm_provider_class: "none".into(),
-        llm_model: "none".into(),
-        judge_model: None,
-        origin_version: env!("CARGO_PKG_VERSION").into(),
-        eval_timestamp_unix: chrono::Utc::now().timestamp(),
-        ..Default::default()
-    });
+    report.env = Some(build_locomo_env(
+        "base",
+        path,
+        "search_memory",
+        "none",
+        "none",
+        None,
+    ));
     Ok(report)
 }
 
@@ -663,19 +720,14 @@ pub async fn run_locomo_eval_reranked(
         baseline: None,
         env: None,
     };
-    report.env = Some(crate::eval::report::ReportEnv {
-        fixture_revision: crate::eval::fixtures::fixture_revision_hash(path)
-            .unwrap_or_else(|_| "unknown".into()),
-        embedder_model: "BGE-Base-EN-v1.5-Q".into(),
-        embedder_revision: "768d".into(),
-        retrieval_method: "search_memory_reranked".into(),
-        llm_provider_class: llm.kind().into(),
-        llm_model: llm.model_id(),
-        judge_model: None,
-        origin_version: env!("CARGO_PKG_VERSION").into(),
-        eval_timestamp_unix: chrono::Utc::now().timestamp(),
-        ..Default::default()
-    });
+    report.env = Some(build_locomo_env(
+        "reranked",
+        path,
+        "search_memory_reranked",
+        llm.kind(),
+        &llm.model_id(),
+        None,
+    ));
     Ok(report)
 }
 
@@ -803,19 +855,14 @@ pub async fn run_locomo_eval_expanded(
         baseline: None,
         env: None,
     };
-    report.env = Some(crate::eval::report::ReportEnv {
-        fixture_revision: crate::eval::fixtures::fixture_revision_hash(path)
-            .unwrap_or_else(|_| "unknown".into()),
-        embedder_model: "BGE-Base-EN-v1.5-Q".into(),
-        embedder_revision: "768d".into(),
-        retrieval_method: "search_memory_expanded".into(),
-        llm_provider_class: llm.kind().into(),
-        llm_model: llm.model_id(),
-        judge_model: None,
-        origin_version: env!("CARGO_PKG_VERSION").into(),
-        eval_timestamp_unix: chrono::Utc::now().timestamp(),
-        ..Default::default()
-    });
+    report.env = Some(build_locomo_env(
+        "expanded",
+        path,
+        "search_memory_expanded",
+        llm.kind(),
+        &llm.model_id(),
+        None,
+    ));
     Ok(report)
 }
 
