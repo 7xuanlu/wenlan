@@ -678,6 +678,151 @@ pub async fn run_locomo_eval_reranked(
 }
 
 // ---------------------------------------------------------------------------
+// Cross-encoder rerank benchmark runner — same as run_locomo_eval_reranked but
+// swaps the LLM reranker for a cross-encoder model (fastembed TextRerank).
+// ---------------------------------------------------------------------------
+
+/// Same seeding/scoring logic as `run_locomo_eval_reranked`, but retrieval uses
+/// `search_memory_with_reranker` driven by a cross-encoder reranker
+/// (typically `BGERerankerV2M3`). Lets the eval sweep compare LLM-as-judge
+/// reranking against a purpose-built cross-encoder on identical fixtures.
+pub async fn run_locomo_eval_cross_rerank(
+    path: &Path,
+    reranker: std::sync::Arc<dyn crate::reranker::Reranker>,
+) -> Result<LocomoReport, OriginError> {
+    let samples = load_locomo(path)?;
+    let mut conversations = Vec::new();
+    // (category, ndcg_5, ndcg_10, mrr, recall_5, hit_rate_1)
+    let mut all_scores: Vec<(u8, f64, f64, f64, f64, f64)> = Vec::new();
+
+    for sample in &samples {
+        let memories = extract_observations(sample);
+
+        // Create ephemeral DB for this conversation
+        let tmp = tempfile::tempdir().map_err(|e| OriginError::Generic(format!("tempdir: {e}")))?;
+        let db = MemoryDB::new(tmp.path(), std::sync::Arc::new(crate::events::NoopEmitter)).await?;
+
+        // Seed all observations as memories
+        let docs: Vec<RawDocument> = memories
+            .iter()
+            .enumerate()
+            .map(|(i, mem)| RawDocument {
+                content: mem.content.clone(),
+                source_id: format!("locomo_{}_obs_{}", sample.sample_id, i),
+                source: "memory".to_string(),
+                title: format!("{} session {}", mem.speaker, mem.session_num),
+                memory_type: Some("fact".to_string()),
+                space: Some("conversation".to_string()),
+                last_modified: chrono::Utc::now().timestamp(),
+                ..Default::default()
+            })
+            .collect();
+        db.upsert_documents(docs).await?;
+
+        // Map dia_id to source_id for relevance judgments
+        let dia_to_source: HashMap<String, String> = memories
+            .iter()
+            .enumerate()
+            .map(|(i, m)| {
+                (
+                    m.dia_id.clone(),
+                    format!("locomo_{}_obs_{}", sample.sample_id, i),
+                )
+            })
+            .collect();
+
+        let mut conv_scores: Vec<(u8, f64, f64, f64, f64, f64)> = Vec::new();
+
+        for qa in &sample.qa {
+            if qa.category == 5 {
+                continue;
+            }
+
+            let results = db
+                .search_memory_with_reranker(
+                    &qa.question,
+                    10,
+                    None,
+                    None,
+                    None,
+                    Some(reranker.clone()),
+                )
+                .await?;
+
+            let relevant_ids: HashSet<String> = qa
+                .evidence
+                .iter()
+                .filter_map(|did| dia_to_source.get(did).cloned())
+                .collect();
+
+            if relevant_ids.is_empty() {
+                continue;
+            }
+
+            let result_ids: Vec<&str> = results.iter().map(|r| r.source_id.as_str()).collect();
+
+            let grades: HashMap<&str, u8> = result_ids
+                .iter()
+                .map(|id| (*id, if relevant_ids.contains(*id) { 1 } else { 0 }))
+                .collect();
+
+            let relevant_set: HashSet<&str> = relevant_ids.iter().map(|s| s.as_str()).collect();
+
+            let ndcg_10 = metrics::ndcg_at_k(&result_ids, &grades, 10);
+            let ndcg_5 = metrics::ndcg_at_k(&result_ids, &grades, 5);
+            let mrr_val = metrics::mrr(&result_ids, &relevant_set);
+            let recall_5 = metrics::recall_at_k(&result_ids, &relevant_set, 5);
+            let hr_1 = metrics::hit_rate_at_k(&result_ids, &relevant_set, 1);
+
+            conv_scores.push((qa.category, ndcg_5, ndcg_10, mrr_val, recall_5, hr_1));
+            all_scores.push((qa.category, ndcg_5, ndcg_10, mrr_val, recall_5, hr_1));
+        }
+
+        let per_cat = aggregate_by_category(&conv_scores);
+
+        let n = conv_scores.len();
+        conversations.push(LocomoConversationResult {
+            sample_id: sample.sample_id.clone(),
+            memories_seeded: memories.len(),
+            questions_evaluated: n,
+            overall_ndcg_at_10: avg_field(&conv_scores, |s| s.2),
+            overall_mrr: avg_field(&conv_scores, |s| s.3),
+            overall_recall_at_5: avg_field(&conv_scores, |s| s.4),
+            per_category: per_cat,
+        });
+    }
+
+    let per_cat_agg = aggregate_by_category(&all_scores);
+
+    let mut report = LocomoReport {
+        conversations,
+        aggregate_ndcg_at_10: avg_field(&all_scores, |s| s.2),
+        aggregate_mrr: avg_field(&all_scores, |s| s.3),
+        aggregate_recall_at_5: avg_field(&all_scores, |s| s.4),
+        aggregate_hit_rate_at_1: avg_field(&all_scores, |s| s.5),
+        total_questions: all_scores.len(),
+        total_memories: samples.iter().map(|s| extract_observations(s).len()).sum(),
+        per_category_aggregate: per_cat_agg,
+        qa_accuracy: None,
+        baseline: None,
+        env: None,
+    };
+    report.env = Some(crate::eval::report::ReportEnv {
+        fixture_revision: crate::eval::fixtures::fixture_revision_hash(path)
+            .unwrap_or_else(|_| "unknown".into()),
+        embedder_model: "BGE-Base-EN-v1.5-Q".into(),
+        embedder_revision: "768d".into(),
+        retrieval_method: "search_memory_cross_rerank".into(),
+        llm_provider_class: "cross-encoder".into(),
+        llm_model: format!("cross-encoder:{}", reranker.model_id()),
+        judge_model: None,
+        origin_version: env!("CARGO_PKG_VERSION").into(),
+        eval_timestamp_unix: chrono::Utc::now().timestamp(),
+    });
+    Ok(report)
+}
+
+// ---------------------------------------------------------------------------
 // Expanded benchmark runner -- same as run_locomo_eval but uses search_memory_expanded
 // ---------------------------------------------------------------------------
 
