@@ -186,6 +186,14 @@ origin space move scratch career
 - `--format table`: human-readable table.
 - `--quiet` / `-q`: suppress success output (errors still go to stderr).
 
+## Links
+
+- [useorigin.app](https://useorigin.app) — project home
+- [useorigin.app/docs/get-started](https://useorigin.app/docs/get-started) — install + verify the first memory loop
+- [useorigin.app/docs/commands](https://useorigin.app/docs/commands) — Claude Code commands and MCP tools reference
+- [useorigin.app/docs/troubleshooting](https://useorigin.app/docs/troubleshooting) — common failure modes
+- [github.com/7xuanlu/origin](https://github.com/7xuanlu/origin) — source
+
 ## License
 
 Apache-2.0. See top-level LICENSE.
