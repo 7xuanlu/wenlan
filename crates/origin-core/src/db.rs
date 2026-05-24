@@ -330,7 +330,8 @@ impl EmbedConfig {
 /// Resolution order (first hit wins):
 ///   1. The per-DB cache `<db_path>/fastembed_cache` when that directory
 ///      exists and is non-empty. This is what the running daemon uses
-///      at `~/Library/Application Support/origin/memorydb/fastembed_cache`.
+///      at the platform data directory (resolved via `dirs::data_local_dir()` per OS)
+///      under `origin/memorydb/fastembed_cache`.
 ///   2. `ORIGIN_TEST_FASTEMBED_CACHE` env var (escape hatch for CI).
 ///   3. `dirs::data_dir().join("origin/memorydb/fastembed_cache")` —
 ///      matches the production daemon's conventional path on the same

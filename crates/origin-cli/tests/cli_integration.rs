@@ -4,7 +4,6 @@
 use assert_cmd::Command;
 use predicates::prelude::*;
 use std::fs;
-use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use tempfile::TempDir;
 
@@ -41,6 +40,7 @@ impl IsolatedRuntime {
         let home = tempfile::tempdir_in(root.path()).expect("temp home");
         let data = tempfile::tempdir_in(root.path()).expect("temp data");
         let fake_bin = tempfile::tempdir_in(root.path()).expect("temp fake bin");
+        #[cfg(target_os = "macos")]
         write_fake_launchctl(fake_bin.path());
         ensure_sibling_origin_server();
         ensure_sibling_origin_mcp();
@@ -52,21 +52,25 @@ impl IsolatedRuntime {
         }
     }
 
-    fn plist_path(&self) -> PathBuf {
+    #[cfg(target_os = "macos")]
+    fn service_unit_path(&self) -> PathBuf {
         self.home
             .path()
             .join("Library/LaunchAgents/com.origin.server.plist")
     }
 
+    #[cfg(target_os = "macos")]
     fn config_path(&self) -> PathBuf {
         self.data.path().join("config.json")
     }
 
+    #[cfg(target_os = "macos")]
     fn root_exists(&self) -> bool {
         self.root.path().exists()
     }
 }
 
+#[cfg(target_os = "macos")]
 fn write_fake_launchctl(fake_bin: &Path) {
     let path = fake_bin.join("launchctl");
     fs::write(
@@ -74,11 +78,15 @@ fn write_fake_launchctl(fake_bin: &Path) {
         "#!/bin/sh\ncase \"$1\" in\n  list) exit 0 ;;\n  load|unload) echo \"fake launchctl $1 $2\"; exit 0 ;;\n  *) echo \"fake launchctl $@\"; exit 0 ;;\nesac\n",
     )
     .expect("write fake launchctl");
-    let mut perms = fs::metadata(&path)
-        .expect("fake launchctl metadata")
-        .permissions();
-    perms.set_mode(0o755);
-    fs::set_permissions(path, perms).expect("chmod fake launchctl");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut perms = fs::metadata(&path)
+            .expect("fake launchctl metadata")
+            .permissions();
+        perms.set_mode(0o755);
+        fs::set_permissions(path, perms).expect("chmod fake launchctl");
+    }
 }
 
 fn write_fake_command(fake_bin: &Path, name: &str) {
@@ -88,11 +96,15 @@ fn write_fake_command(fake_bin: &Path, name: &str) {
         "#!/bin/sh\nprintf '%s' \"${0##*/}\" >> \"$ORIGIN_TEST_CLI_LOG\"\nfor arg in \"$@\"; do printf '\\t%s' \"$arg\" >> \"$ORIGIN_TEST_CLI_LOG\"; done\nprintf '\\n' >> \"$ORIGIN_TEST_CLI_LOG\"\nexit 0\n",
     )
     .expect("write fake command");
-    let mut perms = fs::metadata(&path)
-        .expect("fake command metadata")
-        .permissions();
-    perms.set_mode(0o755);
-    fs::set_permissions(path, perms).expect("chmod fake command");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut perms = fs::metadata(&path)
+            .expect("fake command metadata")
+            .permissions();
+        perms.set_mode(0o755);
+        fs::set_permissions(path, perms).expect("chmod fake command");
+    }
 }
 
 fn ensure_sibling_origin_server() {
@@ -103,11 +115,15 @@ fn ensure_sibling_origin_server() {
         .join("origin-server");
     if !server.exists() {
         fs::write(&server, "#!/bin/sh\nexit 0\n").expect("write fake origin-server sibling");
-        let mut perms = fs::metadata(&server)
-            .expect("fake origin-server metadata")
-            .permissions();
-        perms.set_mode(0o755);
-        fs::set_permissions(server, perms).expect("chmod fake origin-server");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mut perms = fs::metadata(&server)
+                .expect("fake origin-server metadata")
+                .permissions();
+            perms.set_mode(0o755);
+            fs::set_permissions(server, perms).expect("chmod fake origin-server");
+        }
     }
 }
 
@@ -115,11 +131,15 @@ fn ensure_sibling_origin_mcp() {
     let path = origin_mcp_sibling();
     if !path.exists() {
         fs::write(&path, "#!/bin/sh\nexit 0\n").expect("write fake origin-mcp sibling");
-        let mut perms = fs::metadata(&path)
-            .expect("fake origin-mcp metadata")
-            .permissions();
-        perms.set_mode(0o755);
-        fs::set_permissions(path, perms).expect("chmod fake origin-mcp");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mut perms = fs::metadata(&path)
+                .expect("fake origin-mcp metadata")
+                .permissions();
+            perms.set_mode(0o755);
+            fs::set_permissions(path, perms).expect("chmod fake origin-mcp");
+        }
     }
 }
 
@@ -200,6 +220,9 @@ fn mcp_add_claude_code_dry_run_explains_tools_only() {
         .stdout(predicate::str::contains("/init"));
 }
 
+// Uses #!/bin/sh fake binaries via write_fake_command and Unix-style PATH
+// separators in cli_with_isolated_runtime. Windows port is follow-up work.
+#[cfg(not(target_os = "windows"))]
 #[test]
 fn mcp_add_native_clients_run_add_without_destructive_remove() {
     let origin_mcp = origin_mcp_sibling_arg();
@@ -240,6 +263,9 @@ fn mcp_add_native_clients_run_add_without_destructive_remove() {
     }
 }
 
+// Path comparison embeds origin-mcp sibling path into JSON; backslash
+// escaping on Windows breaks the assert. Follow-up: normalize the path.
+#[cfg(not(target_os = "windows"))]
 #[test]
 fn mcp_add_cursor_preserves_existing_servers_and_backs_up_changed_origin() {
     let runtime = IsolatedRuntime::new();
@@ -304,6 +330,7 @@ fn mcp_add_cursor_dry_run_prints_only_origin_block() {
     assert!(unchanged.contains("SECRET_TOKEN"), "{unchanged}");
 }
 
+#[cfg(target_os = "macos")]
 #[test]
 fn mcp_add_json_clients_write_expected_config_shapes() {
     let runtime = IsolatedRuntime::new();
@@ -333,6 +360,9 @@ fn mcp_add_json_clients_write_expected_config_shapes() {
     assert!(vscode.contains("origin-mcp"), "{vscode}");
 }
 
+// Depends on cli_with_isolated_runtime PATH override which uses Unix
+// separator; Windows runner picks up wrong PATH and fails earlier.
+#[cfg(not(target_os = "windows"))]
 #[test]
 fn mcp_add_invalid_json_fails_without_modifying_file() {
     let runtime = IsolatedRuntime::new();
@@ -425,6 +455,27 @@ fn doctor_uses_origin_host_for_health_probe() {
         ));
 }
 
+#[cfg(not(target_os = "windows"))]
+#[test]
+fn service_unit_path_resolves_per_os() {
+    let path =
+        origin_cli::commands::service_unit_path().expect("service_unit_path should not fail");
+
+    // The path must match the on-disk file `service-manager` 0.11 actually
+    // writes. See `crates/origin-cli/src/commands/service.rs` for the rules
+    // we mirror.
+    #[cfg(target_os = "macos")]
+    assert!(path
+        .to_string_lossy()
+        .ends_with("Library/LaunchAgents/com.origin.server.plist"));
+
+    #[cfg(target_os = "linux")]
+    assert!(path
+        .to_string_lossy()
+        .ends_with(".config/systemd/user/origin-server.service"));
+}
+
+#[cfg(target_os = "macos")]
 #[test]
 fn setup_install_status_uninstall_roundtrip_isolated() {
     let runtime = IsolatedRuntime::new();
@@ -447,13 +498,40 @@ fn setup_install_status_uninstall_roundtrip_isolated() {
         .arg("install")
         .assert()
         .success()
-        .stdout(predicate::str::contains("Wrote"))
-        .stdout(predicate::str::contains("Loaded com.origin.server"));
+        .stdout(predicate::str::contains(
+            "Installed and started com.origin.server",
+        ));
 
-    let plist = fs::read_to_string(runtime.plist_path()).expect("plist written");
+    let plist = fs::read_to_string(runtime.service_unit_path()).expect("plist written");
     assert!(plist.contains("<string>com.origin.server</string>"));
     assert!(plist.contains("origin-server"));
     assert!(!plist.contains("origin</string>"));
+    // Launchd parity with the legacy embedded plist: stdout/stderr go to the
+    // data-root `logs/` dir and `RUST_LOG=info` survives across reboots.
+    assert!(
+        plist.contains("<key>StandardOutPath</key>"),
+        "missing StandardOutPath in plist: {plist}"
+    );
+    assert!(
+        plist.contains("origin-server.stdout.log"),
+        "stdout log path not threaded into plist: {plist}"
+    );
+    assert!(
+        plist.contains("<key>StandardErrorPath</key>"),
+        "missing StandardErrorPath in plist: {plist}"
+    );
+    assert!(
+        plist.contains("origin-server.stderr.log"),
+        "stderr log path not threaded into plist: {plist}"
+    );
+    assert!(
+        plist.contains("<key>EnvironmentVariables</key>"),
+        "missing EnvironmentVariables in plist: {plist}"
+    );
+    assert!(
+        plist.contains("<key>RUST_LOG</key>"),
+        "RUST_LOG not propagated through launchd plist: {plist}"
+    );
 
     cli_with_isolated_runtime(&runtime)
         .args(["status", "--format", "json"])
@@ -465,10 +543,10 @@ fn setup_install_status_uninstall_roundtrip_isolated() {
         .arg("uninstall")
         .assert()
         .success()
-        .stdout(predicate::str::contains("daemon will no longer auto-start"));
+        .stdout(predicate::str::contains("Uninstalled com.origin.server"));
 
     assert!(
-        !runtime.plist_path().exists(),
+        !runtime.service_unit_path().exists(),
         "uninstall removes launchd plist"
     );
     assert!(

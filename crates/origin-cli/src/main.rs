@@ -1,9 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
-mod client;
-mod commands;
-mod output;
-
 use clap::{Parser, Subcommand};
+use origin_cli::{client, commands, output};
 use output::OutputFormat;
 
 #[derive(Parser)]
