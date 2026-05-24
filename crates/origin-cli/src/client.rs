@@ -204,6 +204,21 @@ impl OriginClient {
             .context("parsing /api/agents/{name} response")
     }
 
+    /// GET /api/spaces — list all spaces.
+    pub async fn list_spaces(&self) -> Result<Vec<origin_types::Space>> {
+        let url = format!("{}/api/spaces", self.base_url);
+        let resp = self
+            .http
+            .get(&url)
+            .send()
+            .await
+            .with_context(|| format!("GET {} failed", url))?;
+        let resp = resp
+            .error_for_status()
+            .with_context(|| format!("daemon returned error for {}", url))?;
+        resp.json().await.context("parsing /api/spaces response")
+    }
+
     /// PUT /api/agents/{name} — update an agent's metadata.
     pub async fn update_agent(&self, name: &str, req: UpdateAgentRequest) -> Result<AgentResponse> {
         let url = format!("{}/api/agents/{}", self.base_url, name);

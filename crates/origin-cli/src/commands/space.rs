@@ -7,6 +7,25 @@ use clap::Subcommand;
 use crate::client::OriginClient;
 use crate::output::OutputFormat;
 
+fn read_default_from_toml() -> Option<String> {
+    let home = std::env::var("HOME").ok()?;
+    let path = std::path::PathBuf::from(home).join(".origin/spaces.toml");
+    let body = std::fs::read_to_string(&path).ok()?;
+    for line in body.lines() {
+        let trimmed = line.trim();
+        if let Some(rest) = trimmed.strip_prefix("default") {
+            let rest = rest.trim_start();
+            if let Some(rest) = rest.strip_prefix('=') {
+                let val = rest.trim().trim_matches('"').to_string();
+                if !val.is_empty() {
+                    return Some(val);
+                }
+            }
+        }
+    }
+    None
+}
+
 #[derive(Subcommand)]
 pub enum SpaceCmd {
     /// List all registered spaces.
@@ -53,8 +72,37 @@ pub async fn run(
     }
 }
 
-async fn list(_c: &OriginClient, _f: OutputFormat, _q: bool) -> Result<()> {
-    todo!("Task 2")
+async fn list(client: &OriginClient, format: OutputFormat, quiet: bool) -> Result<()> {
+    let spaces = client.list_spaces().await?;
+    let default = read_default_from_toml();
+    if quiet {
+        return Ok(());
+    }
+    match format {
+        OutputFormat::Json => crate::output::print_json(&spaces)?,
+        OutputFormat::Table => {
+            if spaces.is_empty() {
+                println!("(no spaces registered)");
+                return Ok(());
+            }
+            println!(
+                "{:<20} {:<10} {:<10} {:<8}",
+                "NAME", "MEMORIES", "ENTITIES", "DEFAULT?"
+            );
+            for s in &spaces {
+                let is_default = default.as_deref() == Some(s.name.as_str());
+                println!(
+                    "{:<20} {:<10} {:<10} {:<8}",
+                    s.name,
+                    s.memory_count,
+                    s.entity_count,
+                    if is_default { "yes" } else { "" }
+                );
+            }
+        }
+        OutputFormat::Auto => unreachable!("Auto resolved by main before dispatch"),
+    }
+    Ok(())
 }
 async fn add(_c: &OriginClient, _f: OutputFormat, _q: bool, _n: &str, _d: bool) -> Result<()> {
     todo!("Task 3")
