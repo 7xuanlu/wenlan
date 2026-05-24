@@ -28,3 +28,9 @@ verb feels natural; both invoke the same flow.
 
 - Mid-flow capture during work → use `/capture` (single memory).
 - Search / lookup → use `/recall`.
+
+## Active space
+
+`/debrief` resolves the active space the same way `/handoff` does (see
+the resolver chain in `/handoff`). Set `ORIGIN_SPACE` before invocation
+to override.

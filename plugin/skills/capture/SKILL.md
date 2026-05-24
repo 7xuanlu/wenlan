@@ -13,6 +13,37 @@ allowed-tools: ["mcp__plugin_origin_origin__capture", "mcp__plugin_origin_origin
 Capture a single memory in the moment. Active verb: agent captures the
 moment of insight, like a photograph.
 
+## Argument parsing
+
+The `/capture` skill accepts one optional inline token of the form
+`space:<name>` anywhere in the argument string. Extract it before
+treating the rest as content:
+
+    raw_args="<the full argument string passed to /capture>"
+    space_arg="$(printf '%s\n' "$raw_args" | grep -oE 'space:[A-Za-z0-9_-]+' | head -1 | cut -d: -f2)"
+    content="$(printf '%s\n' "$raw_args" | sed -E 's/[[:space:]]*space:[A-Za-z0-9_-]+[[:space:]]*/ /g' | sed -E 's/^[[:space:]]+|[[:space:]]+$//g')"
+
+If `space_arg` is non-empty, pass it to the resolver as `--arg "$space_arg"`.
+
+## Resolve the active space
+
+Call the bundled resolver:
+
+    resolved="$("$CLAUDE_PLUGIN_ROOT/bin/resolve-space.sh" --cwd "$PWD" \
+        ${space_arg:+--arg "$space_arg"} 2>/dev/null)"
+    space="$(printf '%s\n' "$resolved" | cut -f1)"
+    source_layer="$(printf '%s\n' "$resolved" | cut -f2)"
+
+Pass `space="$space"` to the `capture` MCP tool. Before every capture,
+also print:
+
+    Resolved space: <space> (from <source-layer>)
+
+If the resolved space did not previously exist, the daemon auto-creates
+it. When `source_layer` is `arg`, also print:
+
+    Created new space '<space>' from arg. Register with `origin space add <space>` to silence.
+
 ## How to invoke
 
 Call the `origin` MCP server's `capture` tool with the user's content as a
@@ -23,7 +54,7 @@ conversation — don't make the user type it.
 capture(content="<args, written as a full sentence with WHY>",
         memory_type="<picked from the 6 types>",
         entity="<primary entity name, if any>",
-        space=<inferred>)
+        space=<resolved>)
 ```
 
 ### `memory_type` — agent picks one of 6
