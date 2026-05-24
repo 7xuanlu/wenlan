@@ -100,6 +100,11 @@ enum Commands {
         #[command(subcommand)]
         cmd: commands::agents::AgentsCmd,
     },
+    /// Manage memory spaces (list, add, default, move, show).
+    Space {
+        #[command(subcommand)]
+        cmd: commands::space::SpaceCmd,
+    },
 }
 
 #[tokio::main]
@@ -145,6 +150,7 @@ async fn main() -> anyhow::Result<()> {
             commands::list::run(&client, format, cli.quiet, limit, memory_type).await?
         }
         Commands::Agents { cmd } => commands::agents::run(&client, format, cli.quiet, cmd).await?,
+        Commands::Space { cmd } => commands::space::run(&client, format, cli.quiet, cmd).await?,
     }
     Ok(())
 }

@@ -8,6 +8,7 @@ pub mod recall;
 pub mod search;
 pub mod service;
 pub mod setup;
+pub mod space;
 pub mod status;
 pub mod store;
 
