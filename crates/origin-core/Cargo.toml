@@ -9,6 +9,7 @@ description = "Core business logic for Origin — memory storage, retrieval, and
 [features]
 default = []
 closed-core-eval = []
+eval-harness = []
 
 [dependencies]
 origin-types = { workspace = true }

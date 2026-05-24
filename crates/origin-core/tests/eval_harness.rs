@@ -1,3 +1,4 @@
+#![cfg(feature = "eval-harness")]
 //! Integration test: eval harness runs against seeded DB with fixture data.
 //!
 //! Tests using bundled fixtures run in CI (FastEmbed model cached in GitHub Actions).
