@@ -204,6 +204,20 @@ impl OriginClient {
             .context("parsing /api/agents/{name} response")
     }
 
+    /// POST /api/spaces — register a new space.
+    pub async fn create_space(&self, name: &str) -> Result<()> {
+        let url = format!("{}/api/spaces", self.base_url);
+        self.http
+            .post(&url)
+            .json(&serde_json::json!({"name": name}))
+            .send()
+            .await
+            .with_context(|| format!("POST {} failed", url))?
+            .error_for_status()
+            .with_context(|| format!("daemon returned error for {}", url))?;
+        Ok(())
+    }
+
     /// GET /api/spaces — list all spaces.
     pub async fn list_spaces(&self) -> Result<Vec<origin_types::Space>> {
         let url = format!("{}/api/spaces", self.base_url);

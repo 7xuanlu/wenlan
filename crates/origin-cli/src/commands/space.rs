@@ -7,6 +7,38 @@ use clap::Subcommand;
 use crate::client::OriginClient;
 use crate::output::OutputFormat;
 
+fn set_default_in_toml(name: &str) -> anyhow::Result<()> {
+    use std::io::Write;
+    let home =
+        std::env::var("HOME").map_err(|_| anyhow::anyhow!("HOME environment variable not set"))?;
+    let path = std::path::PathBuf::from(home).join(".origin/spaces.toml");
+    std::fs::create_dir_all(path.parent().unwrap())?;
+
+    let existing = std::fs::read_to_string(&path).unwrap_or_default();
+    let mut found = false;
+    let mut new_body = String::with_capacity(existing.len() + 32);
+    for line in existing.lines() {
+        let trimmed = line.trim_start();
+        if trimmed.starts_with("default") && trimmed.contains('=') {
+            new_body.push_str(&format!("default = \"{}\"\n", name));
+            found = true;
+        } else {
+            new_body.push_str(line);
+            new_body.push('\n');
+        }
+    }
+    if !found {
+        if !new_body.is_empty() && !new_body.ends_with("\n\n") {
+            new_body.push('\n');
+        }
+        new_body.push_str(&format!("default = \"{}\"\n", name));
+    }
+
+    let mut f = std::fs::File::create(&path)?;
+    f.write_all(new_body.as_bytes())?;
+    Ok(())
+}
+
 fn read_default_from_toml() -> Option<String> {
     let home = std::env::var("HOME").ok()?;
     let path = std::path::PathBuf::from(home).join(".origin/spaces.toml");
@@ -104,8 +136,24 @@ async fn list(client: &OriginClient, format: OutputFormat, quiet: bool) -> Resul
     }
     Ok(())
 }
-async fn add(_c: &OriginClient, _f: OutputFormat, _q: bool, _n: &str, _d: bool) -> Result<()> {
-    todo!("Task 3")
+async fn add(
+    client: &OriginClient,
+    _format: OutputFormat,
+    quiet: bool,
+    name: &str,
+    set_default: bool,
+) -> Result<()> {
+    client.create_space(name).await?;
+    if set_default {
+        set_default_in_toml(name)?;
+    }
+    if !quiet {
+        println!("Registered space '{}'.", name);
+        if set_default {
+            println!("Set '{}' as the default in ~/.origin/spaces.toml.", name);
+        }
+    }
+    Ok(())
 }
 async fn default_cmd(
     _c: &OriginClient,
