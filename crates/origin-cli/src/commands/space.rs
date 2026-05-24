@@ -82,7 +82,7 @@ pub enum SpaceCmd {
         /// Destination space.
         to: String,
     },
-    /// Show detail for a space — memory count, page count, last activity.
+    /// Show detail for a space — name, description, memory count, entity count, default + starred flags.
     Show {
         /// Space name.
         name: String,
