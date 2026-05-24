@@ -8,6 +8,7 @@ use origin_core::db::MemoryDB;
 use origin_core::llm_provider::LlmProvider;
 use origin_core::prompts::PromptRegistry;
 use origin_core::quality_gate::QualityGate;
+use origin_core::reranker::Reranker;
 use origin_core::tuning::TuningConfig;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -33,6 +34,10 @@ pub struct ServerState {
     pub synthesis_llm: Option<Arc<dyn LlmProvider>>,
     /// External LLM provider (Ollama, LM Studio, etc.)
     pub external_llm: Option<Arc<dyn LlmProvider>>,
+    /// Cross-encoder reranker for retrieval candidates. Wired by the daemon at
+    /// startup via `origin_core::reranker::init_cross_encoder_reranker`. `None`
+    /// means search falls back to embedding+FTS ordering with no rerank pass.
+    pub reranker: Option<Arc<dyn Reranker>>,
     /// Intelligence prompt templates.
     pub prompts: PromptRegistry,
     /// Intelligence tuning parameters.
@@ -62,6 +67,7 @@ impl Default for ServerState {
             api_llm: None,
             synthesis_llm: None,
             external_llm: None,
+            reranker: None,
             prompts: PromptRegistry::default(),
             tuning: TuningConfig::default(),
             access_tracker: AccessTracker::new(),

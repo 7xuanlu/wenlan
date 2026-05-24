@@ -17,6 +17,7 @@
 //! Async callers should wrap calls in `tokio::task::spawn_blocking` to avoid
 //! blocking the runtime.
 
+use std::sync::Arc;
 use std::sync::Mutex;
 
 use crate::error::OriginError;
@@ -123,6 +124,28 @@ impl Reranker for CrossEncoderReranker {
     }
 }
 
+/// Construct the default cross-encoder reranker and return it as a trait object.
+///
+/// Picks `BGERerankerV2M3` as the default — the larger, multilingual model that
+/// SuperLocalMemory's V3.3 ablation cited as the single largest contributor to
+/// their retrieval stack. Pass `cache_dir` aligned with the embedder cache so
+/// the ~600MB weights download once and stay reusable across processes.
+///
+/// `JINARerankerV1TurboEn` is the smaller / faster alternative worth a sweep
+/// for CPU-only Linux + Windows once the benchmark harness selects between
+/// quality and latency.
+///
+/// Not called in any default-running test — first construction downloads the
+/// model weights (~600MB). Callers must opt in (daemon startup, `--ignored`
+/// tests, manual eval runs).
+pub fn init_cross_encoder_reranker(
+    cache_dir: Option<std::path::PathBuf>,
+) -> Result<Arc<dyn Reranker>, OriginError> {
+    let inner = CrossEncoderReranker::try_new(fastembed::RerankerModel::BGERerankerV2M3, cache_dir)
+        .map_err(|e| OriginError::Llm(format!("init_cross_encoder_reranker: {e}")))?;
+    Ok(Arc::new(inner) as Arc<dyn Reranker>)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -159,5 +182,29 @@ mod tests {
     #[test]
     fn trait_object_safe() {
         let _r: Box<dyn Reranker> = Box::new(NoopReranker);
+    }
+
+    /// Smoke test for the real cross-encoder model. `#[ignore]` because the
+    /// first construction downloads ~600MB of weights. Run manually with
+    /// `cargo test -p origin-core --lib reranker::tests -- --ignored`.
+    #[tokio::test]
+    #[ignore]
+    async fn cross_encoder_real_model_smoke() {
+        let reranker = init_cross_encoder_reranker(None)
+            .expect("cross-encoder init should succeed when weights are reachable");
+        let candidates = vec![
+            ("a".to_string(), "Rust is a systems language".to_string()),
+            ("b".to_string(), "Pasta recipes".to_string()),
+            ("c".to_string(), "Cargo manages Rust deps".to_string()),
+        ];
+        let out = reranker
+            .rerank("rust programming", &candidates)
+            .expect("rerank should not error on a healthy model");
+        assert!(!out.is_empty(), "expected non-empty rerank output");
+        let top_id = out[0].0.as_str();
+        assert!(
+            top_id == "a" || top_id == "c",
+            "expected Rust-related doc on top, got {top_id}"
+        );
     }
 }
