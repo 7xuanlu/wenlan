@@ -405,6 +405,40 @@ async fn run_daemon() -> anyhow::Result<()> {
         }
     }
 
+    // Initialize cross-encoder reranker. Opt-in via `ORIGIN_RERANKER_ENABLED=1`
+    // because first construction downloads ~600MB of model weights. Reuses the
+    // embedder's FastEmbed cache directory so the download is shared with the
+    // BGE embedder. Failure is non-fatal: search falls back to embedding+FTS
+    // ordering with no rerank pass.
+    if std::env::var("ORIGIN_RERANKER_ENABLED").as_deref() == Ok("1") {
+        let cache_dir = origin_core::db::resolve_fastembed_cache_dir(&data_dir);
+        let init_result = tokio::task::spawn_blocking(move || {
+            origin_core::reranker::init_cross_encoder_reranker(cache_dir)
+        })
+        .await;
+        match init_result {
+            Ok(Ok(reranker)) => {
+                tracing::info!(
+                    "[reranker] cross-encoder initialized (model={})",
+                    reranker.model_id()
+                );
+                server_state.reranker = Some(reranker);
+            }
+            Ok(Err(e)) => {
+                tracing::warn!("[reranker] init failed, falling back to embedding+FTS only: {e}");
+            }
+            Err(e) => {
+                tracing::warn!(
+                    "[reranker] init join failed, falling back to embedding+FTS only: {e}"
+                );
+            }
+        }
+    } else {
+        tracing::info!(
+            "[reranker] ORIGIN_RERANKER_ENABLED!=1, skipping cross-encoder init (set =1 to enable)"
+        );
+    }
+
     // Import any legacy tag data from the pre-PR-B2 spaces.db file.
     if let Some(ref db_arc) = server_state.db {
         match origin_core::spaces::import_legacy_tags(db_arc).await {

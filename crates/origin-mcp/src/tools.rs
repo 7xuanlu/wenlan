@@ -742,6 +742,11 @@ impl OriginMcpServer {
             memory_type: params.memory_type,
             space: space_arg,
             source_agent: self.resolve_source_agent(None),
+            // Cross-encoder rerank exposure to MCP is deferred to a follow-up
+            // commit. Today MCP `recall` always uses the plain hybrid search;
+            // opting in here would change the default cost/latency for every
+            // MCP caller without a UX to surface the choice.
+            rerank: false,
         };
 
         let resp: SearchMemoryResponse = match self.client.post("/api/memory/search", &req).await {
@@ -2854,6 +2859,7 @@ mod tests {
             memory_type: None,
             space: None,
             source_agent: None,
+            rerank: false,
         };
         let json = serde_json::to_value(&req).unwrap();
         let obj = json.as_object().unwrap();
@@ -3640,6 +3646,7 @@ mod tests {
             memory_type: params.memory_type,
             space: params.space,
             source_agent: None,
+            rerank: false,
         };
 
         let json = serde_json::to_value(&req).unwrap();
