@@ -169,8 +169,13 @@ fn compute_warnings_and_extraction(
 pub async fn handle_store_memory(
     State(state): State<Arc<RwLock<ServerState>>>,
     headers: HeaderMap,
-    Json(req): Json<StoreMemoryRequest>,
+    crate::space_header::SpaceHeader(header_space): crate::space_header::SpaceHeader,
+    Json(mut req): Json<StoreMemoryRequest>,
 ) -> Result<Json<StoreMemoryResponse>, ServerError> {
+    // Apply X-Origin-Space header as fallback only when body omits `space`.
+    if req.space.is_none() {
+        req.space = header_space;
+    }
     let trimmed_content = req.content.trim();
     if trimmed_content.len() < 10 {
         return Err(ServerError::ValidationError(
