@@ -20,6 +20,7 @@ pub mod context_packager;
 pub mod contradiction;
 pub mod db;
 pub mod decay;
+pub mod decompose;
 pub mod engine;
 pub mod error;
 pub mod eval;
