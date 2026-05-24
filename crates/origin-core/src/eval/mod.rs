@@ -25,5 +25,6 @@ pub mod retrieval;
 pub mod runner;
 pub mod signals;
 pub use layer::EvalLayer;
+
 /// Backward-compat alias: old code using `eval::token_efficiency::*` still works.
 pub use retrieval as token_efficiency;
