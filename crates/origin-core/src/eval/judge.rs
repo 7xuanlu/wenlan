@@ -1128,7 +1128,9 @@ pub async fn judge_with_batch_api(
     judge_model: &str,
     cost_cap: Option<f64>,
 ) -> Result<Vec<JudgmentResult>, crate::error::OriginError> {
-    use crate::eval::anthropic::{download_batch_results, poll_batch, submit_batch};
+    use crate::eval::anthropic::{
+        download_batch_results_structured, poll_batch, submit_batch_with_tool,
+    };
 
     let api_key = std::env::var("ANTHROPIC_API_KEY")
         .map_err(|_| crate::error::OriginError::Generic("ANTHROPIC_API_KEY not set".into()))?;
@@ -1159,15 +1161,23 @@ pub async fn judge_with_batch_api(
         requests.len()
     );
 
-    let batch_id = submit_batch(&client, &api_key, requests, judge_model, cost_cap)
-        .await
-        .map_err(|e| crate::error::OriginError::Generic(format!("batch submit: {e}")))?;
+    let batch_id = submit_batch_with_tool(
+        &client,
+        &api_key,
+        requests,
+        verdict_tool(),
+        "record_verdict",
+        judge_model,
+        cost_cap,
+    )
+    .await
+    .map_err(|e| crate::error::OriginError::Generic(format!("batch submit: {e}")))?;
 
     let results_url = poll_batch(&client, &api_key, &batch_id)
         .await
         .map_err(|e| crate::error::OriginError::Generic(format!("batch poll: {e}")))?;
 
-    let raw_results = download_batch_results(&client, &api_key, &results_url)
+    let raw_results = download_batch_results_structured(&client, &api_key, &results_url)
         .await
         .map_err(|e| crate::error::OriginError::Generic(format!("batch download: {e}")))?;
 
@@ -1175,17 +1185,10 @@ pub async fn judge_with_batch_api(
     for (i, tuple) in tuples.iter().enumerate() {
         let id = format!("judge_{i}");
         let (score, reason) = match raw_results.get(&id) {
-            Some(resp) => {
-                let lower = resp.to_lowercase();
-                if lower.starts_with("yes") {
-                    (1u8, resp.clone())
-                } else {
-                    (0u8, resp.clone())
-                }
-            }
+            Some(content) => extract_tool_verdict(content),
             None => {
                 eprintln!("[judge_batch] missing result for {id}");
-                (0, "judge error: missing result".to_string())
+                (0u8, "judge error: missing result".to_string())
             }
         };
         results.push(JudgmentResult {
@@ -1207,7 +1210,6 @@ pub async fn judge_with_batch_api(
 
 /// Tool schema for the binary judge verdict. Passed as a forced tool_choice in
 /// the batch judge so every response is structured JSON, not free text.
-#[allow(dead_code)] // wired in T4 (judge_with_batch_api)
 pub(crate) fn verdict_tool() -> serde_json::Value {
     serde_json::json!({
         "name": "record_verdict",
@@ -1240,7 +1242,6 @@ pub(crate) fn verdict_tool() -> serde_json::Value {
 /// Fallback: if no tool_use block matches, try a `text` block via
 /// `parse_judge_output`. This handles the rare case where the model bypasses
 /// the forced tool_choice or returns mixed content.
-#[allow(dead_code)] // wired in T4 (judge_with_batch_api)
 pub(crate) fn extract_tool_verdict(content: &serde_json::Value) -> (u8, String) {
     if let Some(blocks) = content.as_array() {
         for block in blocks {
