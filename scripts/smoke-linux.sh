@@ -4,7 +4,6 @@ set -euo pipefail
 IMAGE_TAG="${IMAGE_TAG:-origin-server:smoke}"
 CONTAINER="${CONTAINER:-origin-smoke}"
 PORT="${PORT:-17878}"
-DATA_DIR="$(mktemp -d -t origin-smoke.XXXXXX)"
 # Default to the host arch: linux/arm64 on Apple Silicon devs (fast via OrbStack
 # / Docker Desktop), linux/amd64 on CI (ubuntu-24.04 is amd64; arm64 emulation
 # via QEMU adds 15-30 min). Override with PLATFORM= env var.
@@ -15,7 +14,6 @@ esac
 
 cleanup() {
     docker rm -f "$CONTAINER" >/dev/null 2>&1 || true
-    rm -rf "$DATA_DIR"
 }
 trap cleanup EXIT
 
@@ -29,9 +27,16 @@ docker buildx build --platform "$PLATFORM" --load \
     "${CACHE_ARGS[@]}" \
     -f docker/Dockerfile.daemon -t "$IMAGE_TAG" .
 
-echo "==> Starting container on port ${PORT}, data ${DATA_DIR}"
-docker run --rm -d --name "$CONTAINER" -p "${PORT}:7878" \
-    -v "${DATA_DIR}:/data" "$IMAGE_TAG"
+echo "==> Starting container on port ${PORT}"
+# Deliberately omit --rm: if the daemon crashes before /api/health
+# responds, `docker logs` needs the container record to still exist.
+# The cleanup trap removes it with `docker rm -f` regardless.
+#
+# No host -v mount: container runs as `nonroot` (UID 65532) and a
+# host bind would inherit the runner's UID, breaking writes to /data.
+# Smoke wants ephemeral storage anyway; the named VOLUME in the image
+# gives the container a writable anonymous mount.
+docker run -d --name "$CONTAINER" -p "${PORT}:7878" "$IMAGE_TAG"
 
 echo "==> Waiting for /api/health"
 for i in $(seq 1 30); do
@@ -42,7 +47,10 @@ for i in $(seq 1 30); do
     sleep 1
     if [ "$i" = "30" ]; then
         echo "FAIL: daemon did not become healthy" >&2
-        docker logs "$CONTAINER" >&2
+        echo "--- container state ---" >&2
+        docker ps -a --filter "name=${CONTAINER}" --format 'id={{.ID}} status={{.Status}} exit={{.RunningFor}}' >&2 || true
+        echo "--- container logs ---" >&2
+        docker logs "$CONTAINER" >&2 || true
         exit 1
     fi
 done
