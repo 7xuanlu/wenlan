@@ -24,3 +24,8 @@ python3 scripts/update-readme-eval.py
 
 - LongMemEval uses `Recall@5`, `MRR`, and `NDCG@10` as headline fields.
 - Keep `notes` concise, e.g. "pending reproducibility pass" or run metadata.
+
+## Links
+
+- [useorigin.app](https://useorigin.app) — project home
+- [useorigin.app#benchmarks](https://useorigin.app/#benchmarks) — the public benchmark table sourced from this workflow
