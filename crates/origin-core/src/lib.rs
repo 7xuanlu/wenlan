@@ -51,6 +51,7 @@ pub mod spaces;
 pub mod synthesis;
 pub mod system_info;
 pub mod tags;
+pub mod temporal;
 pub mod topic_match;
 pub mod tuning;
 pub mod working_memory;
