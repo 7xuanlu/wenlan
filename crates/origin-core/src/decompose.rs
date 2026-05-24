@@ -32,6 +32,37 @@ use crate::llm_provider::{LlmProvider, LlmRequest};
 const DECOMPOSE_TIMEOUT_SECS: u64 = 10;
 const MAX_SUB_QUERIES: usize = 4;
 
+/// Token-estimate divisor. The `LlmProvider::generate` trait returns
+/// `Result<String, LlmError>` with no token counts, so we fall back to the
+/// industry-standard `chars / 4` rule of thumb (English BPE-like tokenizers
+/// average ~4 chars per token). This is good enough for gating purposes
+/// (deciding whether to enable decompose under a cost budget) but should
+/// not be quoted as an exact figure.
+const CHARS_PER_TOKEN_ESTIMATE: usize = 4;
+
+/// Estimated token usage from the single decomposition LLM call.
+///
+/// `input_tokens` and `output_tokens` are heuristics derived from
+/// `chars / CHARS_PER_TOKEN_ESTIMATE` because `LlmProvider::generate` does
+/// not surface per-call token usage today. Wire-types exposure (so deployments
+/// can gate the decompose path under a cost budget) is a follow-up commit —
+/// for now the estimate is emitted at `log::info!` from inside
+/// `decompose_query` under the `[decompose]` tag.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DecomposeOutput {
+    pub sub_queries: Vec<String>,
+    pub input_tokens: usize,
+    pub output_tokens: usize,
+}
+
+/// Estimate token count from a UTF-8 string via `chars / 4`. Counts characters
+/// (not bytes) so multi-byte glyphs don't inflate the estimate. Used by
+/// `decompose_query` for the cost-telemetry log line.
+#[inline]
+pub fn estimate_tokens(text: &str) -> usize {
+    text.chars().count() / CHARS_PER_TOKEN_ESTIMATE
+}
+
 const DECOMPOSE_SYSTEM_PROMPT: &str =
     "You are a query decomposition assistant for a personal memory search system.
 The user is searching their own memory database, not the public web.
@@ -61,11 +92,22 @@ Output ONLY the JSON array, no prose, no markdown.";
 /// `serde_json` parse failure, empty result) logs a `warn!` and returns
 /// `Ok(vec![query.to_string()])`. The caller can treat `len() <= 1` as
 /// "not decomposed" and run a plain single-query search.
+///
+/// Cost telemetry: emits one `log::info!` line under the `[decompose]` tag
+/// containing the estimated input + output token counts (heuristic
+/// `chars / 4`, see [`estimate_tokens`]). Failure paths log
+/// `output=0` plus a parenthetical reason. Surfacing tokens through wire
+/// types (so deployments can gate the path under a cost budget) is a
+/// follow-up; the unused [`DecomposeOutput`] struct reserves the shape.
 pub async fn decompose_query(
     query: &str,
     llm: &Arc<dyn LlmProvider>,
 ) -> Result<Vec<String>, OriginError> {
     let fallback = || vec![query.to_string()];
+
+    // Estimate the input cost up front so we still log a number on any
+    // failure path. Input ≈ system prompt + user prompt.
+    let input_tokens = estimate_tokens(DECOMPOSE_SYSTEM_PROMPT) + estimate_tokens(query);
 
     let request = LlmRequest {
         system_prompt: Some(DECOMPOSE_SYSTEM_PROMPT.to_string()),
@@ -81,15 +123,22 @@ pub async fn decompose_query(
         Ok(Ok(output)) => output,
         Ok(Err(err)) => {
             log::warn!("[decompose] LLM provider error, falling back to single query: {err}");
+            log::info!(
+                "[decompose] estimated tokens: input={input_tokens} output=0 (provider error)"
+            );
             return Ok(fallback());
         }
         Err(_) => {
             log::warn!(
                 "[decompose] LLM call exceeded {DECOMPOSE_TIMEOUT_SECS}s timeout, falling back to single query"
             );
+            log::info!("[decompose] estimated tokens: input={input_tokens} output=0 (timeout)");
             return Ok(fallback());
         }
     };
+
+    let output_tokens = estimate_tokens(&output);
+    log::info!("[decompose] estimated tokens: input={input_tokens} output={output_tokens}");
 
     let start = match output.find('[') {
         Some(i) => i,
@@ -160,5 +209,60 @@ mod tests {
         let llm = mock(&format!(r#"["{original}"]"#));
         let result = decompose_query(original, &llm).await.unwrap();
         assert_eq!(result, vec![original.to_string()]);
+    }
+
+    #[test]
+    fn test_estimate_tokens_basic() {
+        // chars / 4 — empty stays 0, exact multiples land where expected.
+        assert_eq!(estimate_tokens(""), 0);
+        assert_eq!(estimate_tokens("abcd"), 1);
+        assert_eq!(estimate_tokens("abcdefgh"), 2);
+        // Multi-byte glyphs count as one char each, not by byte length.
+        assert_eq!(estimate_tokens("日本語日"), 1);
+    }
+
+    #[tokio::test]
+    async fn test_decompose_output_estimates_tokens() {
+        // The DecomposeOutput struct is a forward-looking shape; verify its
+        // estimator inputs produce strictly positive token counts for the
+        // standard valid-JSON path so a future wire-types caller can rely on
+        // non-zero counts whenever the LLM call actually happens.
+        let response = r#"["What is X?", "What is Y?"]"#;
+        let llm = mock(response);
+        let query = "Did X change my opinion about Y?";
+
+        // decompose_query itself only logs; the public estimator + the struct
+        // are what callers wire up. Mirror what the function computes.
+        let input_tokens = estimate_tokens(DECOMPOSE_SYSTEM_PROMPT) + estimate_tokens(query);
+        let output_tokens = estimate_tokens(response);
+
+        let sub_queries = decompose_query(query, &llm).await.unwrap();
+        let stats = DecomposeOutput {
+            sub_queries,
+            input_tokens,
+            output_tokens,
+        };
+
+        assert!(
+            stats.input_tokens > 0,
+            "input estimate must be > 0 (system prompt alone is non-empty)"
+        );
+        assert!(
+            stats.output_tokens > 0,
+            "output estimate must be > 0 for a valid JSON response"
+        );
+        assert_eq!(stats.sub_queries.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn test_decompose_logs_token_estimate() {
+        // Smoke test: the logging path (info! macro) must not panic on any
+        // success or failure variant. We don't capture stderr here; the goal
+        // is to make sure the format-string args still compile + evaluate.
+        let llm = mock(r#"["one", "two"]"#);
+        let _ = decompose_query("happy path", &llm).await.unwrap();
+
+        let llm = mock("garbage with no brackets");
+        let _ = decompose_query("malformed path", &llm).await.unwrap();
     }
 }
