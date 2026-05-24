@@ -1,5 +1,31 @@
 # Changelog
 
+## [0.7.0](https://github.com/7xuanlu/origin/compare/v0.6.1...v0.7.0) (2026-05-24)
+
+
+### Features
+
+* **cli:** implement Windows install via schtasks ([#162](https://github.com/7xuanlu/origin/issues/162)) ([ed9b96f](https://github.com/7xuanlu/origin/commit/ed9b96f6a76eaec4a7b2a32dbc6b7debfa9dd48b))
+* **cli:** origin space subcommands + doctor resolver state (Plan C) ([#159](https://github.com/7xuanlu/origin/issues/159)) ([fd28fb2](https://github.com/7xuanlu/origin/commit/fd28fb2915364a631531bc8d3bb00fbd06881055))
+* cross-platform Linux and Windows support ([#150](https://github.com/7xuanlu/origin/issues/150)) ([e732909](https://github.com/7xuanlu/origin/commit/e7329092884d063172d02a8898cf2b11ae81da29))
+* **eval:** KG-faithfulness benchmark (Plan C-B) ([#149](https://github.com/7xuanlu/origin/issues/149)) ([93b9982](https://github.com/7xuanlu/origin/commit/93b998288db6ca76adb371d4adf99886a55374ce))
+* **eval:** LLM judge for KG-faithfulness (Plan C-C) ([#152](https://github.com/7xuanlu/origin/issues/152)) ([f09fcf2](https://github.com/7xuanlu/origin/commit/f09fcf2878dea156e30d414082267efb6a5bab1e))
+* **eval:** page-distillation faithfulness benchmark (Plan C-D) ([#151](https://github.com/7xuanlu/origin/issues/151)) ([eda861c](https://github.com/7xuanlu/origin/commit/eda861c11d3611d8e4872e3287d7e775bd64bbc2))
+* **eval:** reproducibility foundations (Plan A) ([#145](https://github.com/7xuanlu/origin/issues/145)) ([a8424ef](https://github.com/7xuanlu/origin/commit/a8424ef9453dca62c3b4c0ed8bcd801a9e35cefe))
+* **eval:** structured binary judge via tool_use ([#164](https://github.com/7xuanlu/origin/issues/164)) ([23dba48](https://github.com/7xuanlu/origin/commit/23dba48dec7bcaedd50f3ba65d00367b4c07d319))
+* **plugin:** space resolver + 6-layer chain (Plan A) ([#153](https://github.com/7xuanlu/origin/issues/153)) ([0916e8c](https://github.com/7xuanlu/origin/commit/0916e8c5c83edd2c96b6d2e02d8124de2db12e95))
+* **server, mcp:** X-Origin-Space header + tool schema gating (Plan B) ([#156](https://github.com/7xuanlu/origin/issues/156)) ([285d11a](https://github.com/7xuanlu/origin/commit/285d11a78406585e08169c92bc669ac6ee7bac4c))
+
+
+### Bug Fixes
+
+* **ci:** release.yml — publish-crates correctness + add origin CLI to Homebrew tap ([#163](https://github.com/7xuanlu/origin/issues/163)) ([6780986](https://github.com/7xuanlu/origin/commit/67809868c982cccd39ab20b4ed38bc51569e3ab4))
+* **core:** serialize EVAL_MAX_USD env touches in eval_harness tests ([#160](https://github.com/7xuanlu/origin/issues/160)) ([ae9253c](https://github.com/7xuanlu/origin/commit/ae9253c87e72084cc2879362ccfc08ac7a60d93b))
+* **docker:** switch daemon image base to Debian trixie ([#158](https://github.com/7xuanlu/origin/issues/158)) ([97642c2](https://github.com/7xuanlu/origin/commit/97642c20857f159d6c34a748de18cafda063cecd))
+* **eval:** restore app/eval/fixtures to monorepo for L6 CI canary ([#148](https://github.com/7xuanlu/origin/issues/148)) ([379e2bc](https://github.com/7xuanlu/origin/commit/379e2bc9b961ef4f1a74dae32b2bb8f5831469e4))
+* harden MCP setup distribution path ([d6fb5da](https://github.com/7xuanlu/origin/commit/d6fb5daada78a677d2d61dfe2906f19be3597fad))
+* tighten version sync validation ([#139](https://github.com/7xuanlu/origin/issues/139)) ([80db565](https://github.com/7xuanlu/origin/commit/80db5652190a07b6fb79579c6fb01d62a116461b))
+
 ## [0.6.1](https://github.com/7xuanlu/origin/compare/v0.6.0...v0.6.1) (2026-05-16)
 
 
