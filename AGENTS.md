@@ -2,7 +2,7 @@
 
 This file guides any coding agent working in this repository — Claude Code, Cursor, Codex, GitHub Copilot, Zed, Aider, and similar. It is the canonical agent-instruction file; vendor-specific files (such as `CLAUDE.md`) re-import from here so the rules stay in sync. The format follows the [agents.md](https://agents.md/) spec.
 
-This repo holds the **daemon** (`origin-server`), the **CLI** (`origin`), shared **wire types** (`origin-types`), the **business-logic core** (`origin-core`), and the **MCP server** (`origin-mcp`). All five ship from this monorepo. The Tauri desktop app (`origin-app`) ships from a separate repo: [7xuanlu/origin-app](https://github.com/7xuanlu/origin-app).
+This repo holds the **daemon** (`origin-server`), the **CLI** (`origin`), shared **wire types** (`origin-types`), the **business-logic core** (`origin-core`), and the **MCP server** (`origin-mcp`). All five ship from this monorepo. The Tauri desktop app (`origin-app`) ships from a separate repo: [7xuanlu/origin-app](https://github.com/7xuanlu/origin-app). Public product surface lives at [useorigin.app](https://useorigin.app) (marketing, docs at `/docs`, longer-form writing at `/learn`).
 
 ## Design Philosophy
 
