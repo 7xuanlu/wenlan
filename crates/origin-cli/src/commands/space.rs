@@ -156,12 +156,32 @@ async fn add(
     Ok(())
 }
 async fn default_cmd(
-    _c: &OriginClient,
-    _f: OutputFormat,
-    _q: bool,
-    _n: Option<&str>,
+    _client: &OriginClient,
+    _format: OutputFormat,
+    quiet: bool,
+    name: Option<&str>,
 ) -> Result<()> {
-    todo!("Task 4")
+    match name {
+        Some(n) => {
+            set_default_in_toml(n)?;
+            if !quiet {
+                println!("Set default space to '{}' in ~/.origin/spaces.toml.", n);
+            }
+        }
+        None => match read_default_from_toml() {
+            Some(n) => {
+                if !quiet {
+                    println!("{}", n);
+                }
+            }
+            None => {
+                if !quiet {
+                    println!("(no default space set; resolver layer-6 fallback is \"personal\")");
+                }
+            }
+        },
+    }
+    Ok(())
 }
 async fn move_cmd(
     _c: &OriginClient,
