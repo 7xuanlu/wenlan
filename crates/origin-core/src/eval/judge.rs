@@ -3,7 +3,7 @@
 
 use crate::error::OriginError;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::path::Path;
 use std::sync::Arc;
 
@@ -1128,7 +1128,9 @@ pub async fn judge_with_batch_api(
     judge_model: &str,
     cost_cap: Option<f64>,
 ) -> Result<Vec<JudgmentResult>, crate::error::OriginError> {
-    use crate::eval::anthropic::{download_batch_results, poll_batch, submit_batch};
+    use crate::eval::anthropic::{
+        download_batch_results_structured, poll_batch, submit_batch_with_tool,
+    };
 
     let api_key = std::env::var("ANTHROPIC_API_KEY")
         .map_err(|_| crate::error::OriginError::Generic("ANTHROPIC_API_KEY not set".into()))?;
@@ -1150,7 +1152,7 @@ pub async fn judge_with_batch_api(
         .enumerate()
         .map(|(i, t)| {
             let prompt = task_judge_prompt(&t.category, &t.question, &t.ground_truth, &t.answer);
-            (format!("judge_{i}"), prompt, None, 10usize)
+            (format!("judge_{i}"), prompt, None, 128usize)
         })
         .collect();
 
@@ -1159,15 +1161,23 @@ pub async fn judge_with_batch_api(
         requests.len()
     );
 
-    let batch_id = submit_batch(&client, &api_key, requests, judge_model, cost_cap)
-        .await
-        .map_err(|e| crate::error::OriginError::Generic(format!("batch submit: {e}")))?;
+    let batch_id = submit_batch_with_tool(
+        &client,
+        &api_key,
+        requests,
+        verdict_tool(),
+        "record_verdict",
+        judge_model,
+        cost_cap,
+    )
+    .await
+    .map_err(|e| crate::error::OriginError::Generic(format!("batch submit: {e}")))?;
 
     let results_url = poll_batch(&client, &api_key, &batch_id)
         .await
         .map_err(|e| crate::error::OriginError::Generic(format!("batch poll: {e}")))?;
 
-    let raw_results = download_batch_results(&client, &api_key, &results_url)
+    let raw_results = download_batch_results_structured(&client, &api_key, &results_url)
         .await
         .map_err(|e| crate::error::OriginError::Generic(format!("batch download: {e}")))?;
 
@@ -1175,17 +1185,10 @@ pub async fn judge_with_batch_api(
     for (i, tuple) in tuples.iter().enumerate() {
         let id = format!("judge_{i}");
         let (score, reason) = match raw_results.get(&id) {
-            Some(resp) => {
-                let lower = resp.to_lowercase();
-                if lower.starts_with("yes") {
-                    (1u8, resp.clone())
-                } else {
-                    (0u8, resp.clone())
-                }
-            }
+            Some(content) => extract_tool_verdict(content),
             None => {
                 eprintln!("[judge_batch] missing result for {id}");
-                (0, "judge error: missing result".to_string())
+                (0u8, "judge error: missing result".to_string())
             }
         };
         results.push(JudgmentResult {
@@ -1203,4 +1206,353 @@ pub async fn judge_with_batch_api(
         tuples.len()
     );
     Ok(results)
+}
+
+/// Tool schema for the binary judge verdict. Passed as a forced tool_choice in
+/// the batch judge so every response is structured JSON, not free text.
+pub(crate) fn verdict_tool() -> serde_json::Value {
+    serde_json::json!({
+        "name": "record_verdict",
+        "description": "Record the binary verdict for the model response.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "verdict": {
+                    "type": "string",
+                    "enum": ["yes", "no"],
+                    "description": "yes if response is correct per the rubric, otherwise no"
+                },
+                "verdict_reason": {
+                    "type": "string",
+                    "description": "one-sentence justification"
+                }
+            },
+            "required": ["verdict", "verdict_reason"]
+        }
+    })
+}
+
+/// Extract a binary verdict + reason from a batch response content array.
+/// Returns `(score, reason)`. Score is 1 for yes, 0 for everything else
+/// including parse failure. Parse failures eprintln so the operator sees them.
+///
+/// Happy path: find the first `tool_use` block named `record_verdict`, read
+/// `input.verdict` (case-insensitive `yes`/`no`).
+///
+/// Fallback: if no tool_use block matches, try a `text` block via
+/// `parse_judge_output`. This handles the rare case where the model bypasses
+/// the forced tool_choice or returns mixed content.
+pub(crate) fn extract_tool_verdict(content: &serde_json::Value) -> (u8, String) {
+    if let Some(blocks) = content.as_array() {
+        for block in blocks {
+            if block["type"] == "tool_use" && block["name"] == "record_verdict" {
+                if let Some(input) = block["input"].as_object() {
+                    let verdict_raw = input.get("verdict").and_then(|v| v.as_str()).unwrap_or("");
+                    let reason = input
+                        .get("verdict_reason")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string();
+
+                    let normalized = verdict_raw.trim().to_ascii_lowercase();
+                    let score = match normalized.as_str() {
+                        "yes" => 1u8,
+                        "no" => 0u8,
+                        other => {
+                            eprintln!(
+                                "[judge_batch] tool_use verdict not in enum: {other:?}; scoring 0"
+                            );
+                            0u8
+                        }
+                    };
+                    return (score, reason);
+                } else {
+                    eprintln!("[judge_batch] tool_use input not an object; scoring 0");
+                    return (0, String::new());
+                }
+            }
+        }
+    }
+
+    let fallback_text = content
+        .as_array()
+        .and_then(|blocks| blocks.iter().find(|b| b["type"] == "text"))
+        .and_then(|b| b["text"].as_str())
+        .unwrap_or("");
+
+    if fallback_text.is_empty() {
+        eprintln!("[judge_batch] tool_use absent and no text fallback; scoring 0");
+        return (0, String::new());
+    }
+
+    eprintln!("[judge_batch] tool_use absent; falling back to text parse");
+    let score = parse_judge_output(fallback_text)
+        .map(|p| {
+            if p.verdict == JudgeVerdict::Yes {
+                1u8
+            } else {
+                0u8
+            }
+        })
+        .unwrap_or(0);
+    (score, fallback_text.to_string())
+}
+
+/// Stamp the judge model id on a Report's env (no-op when env is None).
+/// Used by runners to record which judge produced the answer-quality metrics.
+pub fn stamp_judge_model(env: &mut Option<crate::eval::report::ReportEnv>, model: &str) {
+    if let Some(e) = env.as_mut() {
+        e.judge_model = Some(model.to_string());
+    }
+}
+
+// ===== Structured Judge Output =====
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum JudgeVerdict {
+    Yes,
+    No,
+}
+
+#[derive(Debug, Clone, serde::Deserialize)]
+pub struct StructuredJudgeOutput {
+    #[serde(default)]
+    pub rubric_scores: BTreeMap<String, f64>,
+    #[serde(default)]
+    pub verdict_reason: String,
+    pub verdict: JudgeVerdict,
+}
+
+/// Parse a judge response into a structured verdict.
+///
+/// Priority order:
+/// 1. Direct JSON object matching `StructuredJudgeOutput`.
+/// 2. Markdown-fenced JSON (```json ... ```).
+/// 3. Legacy bare token — exact match only ("yes" | "correct" | "no" | "incorrect").
+///
+/// Tier 3 is strict (exact match, not substring) to prevent regressions like
+/// "corrects" classifying as Yes. The `partial` token is intentionally absent
+/// since v2 verdict space is binary; the back-compat `correct`/`incorrect`
+/// tokens cover any pre-rewrite JSONL strings stored by the branch's
+/// structured-output era.
+///
+/// Multi-line raw judge text like "No.\n\nThe model response..." (the shape
+/// stored in cached `lme_accuracy_*.json` `judge_response` fields) is NOT
+/// supported and will error. Replay of those caches requires re-judging.
+pub fn parse_judge_output(raw: &str) -> Result<StructuredJudgeOutput, String> {
+    let trimmed = raw.trim();
+
+    // Tier 1: direct JSON.
+    if let Ok(s) = serde_json::from_str::<StructuredJudgeOutput>(trimmed) {
+        return Ok(s);
+    }
+
+    // Tier 2: markdown-fenced JSON.
+    if let Some(fenced) = strip_json_fence(trimmed) {
+        if let Ok(s) = serde_json::from_str::<StructuredJudgeOutput>(fenced) {
+            return Ok(s);
+        }
+    }
+
+    // Tier 3: exact-match legacy bare token.
+    let normalized = trimmed.to_ascii_lowercase();
+    let legacy = match normalized.as_str() {
+        "yes" | "correct" => Some(JudgeVerdict::Yes),
+        "no" | "incorrect" => Some(JudgeVerdict::No),
+        _ => None,
+    };
+    legacy
+        .map(|v| StructuredJudgeOutput {
+            rubric_scores: Default::default(),
+            verdict_reason: String::new(),
+            verdict: v,
+        })
+        .ok_or_else(|| {
+            format!(
+                "unparseable judge output: {}",
+                trimmed.chars().take(80).collect::<String>()
+            )
+        })
+}
+
+fn strip_json_fence(s: &str) -> Option<&str> {
+    let s = s.strip_prefix("```json")?.trim_start();
+    s.strip_suffix("```").map(|inner| inner.trim())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_judge_output_json_yes() {
+        let raw = r#"{"rubric_scores": {}, "verdict_reason": "ok", "verdict": "yes"}"#;
+        assert_eq!(parse_judge_output(raw).unwrap().verdict, JudgeVerdict::Yes);
+    }
+
+    #[test]
+    fn parse_judge_output_json_no() {
+        let raw = r#"{"rubric_scores": {}, "verdict_reason": "no", "verdict": "no"}"#;
+        assert_eq!(parse_judge_output(raw).unwrap().verdict, JudgeVerdict::No);
+    }
+
+    #[test]
+    fn parse_judge_output_fenced_json() {
+        let raw =
+            "```json\n{\"rubric_scores\":{},\"verdict_reason\":\"x\",\"verdict\":\"no\"}\n```";
+        assert_eq!(parse_judge_output(raw).unwrap().verdict, JudgeVerdict::No);
+    }
+
+    #[test]
+    fn parse_judge_output_legacy_yes_no_strings_exact_match() {
+        assert_eq!(
+            parse_judge_output("yes").unwrap().verdict,
+            JudgeVerdict::Yes
+        );
+        assert_eq!(parse_judge_output("No").unwrap().verdict, JudgeVerdict::No);
+    }
+
+    #[test]
+    fn parse_judge_output_legacy_correct_incorrect_back_compat() {
+        assert_eq!(
+            parse_judge_output("correct").unwrap().verdict,
+            JudgeVerdict::Yes
+        );
+        assert_eq!(
+            parse_judge_output("incorrect").unwrap().verdict,
+            JudgeVerdict::No
+        );
+    }
+
+    #[test]
+    fn parse_judge_output_drops_partial() {
+        assert!(parse_judge_output("partial").is_err());
+    }
+
+    // Regression test: branch's parse_judge_output_legacy_rejects_substring_false_positives
+    // was added specifically to catch silent classification of misleading inputs.
+    // Spec v2 restored exact-match semantics; this test guards that.
+    #[test]
+    fn parse_judge_output_rejects_substring_false_positives() {
+        assert!(parse_judge_output("corrects").is_err());
+        assert!(parse_judge_output("incorrect-ish").is_err());
+        assert!(parse_judge_output("yes please").is_err());
+        assert!(parse_judge_output("yeses").is_err());
+        assert!(parse_judge_output("nope").is_err());
+    }
+
+    #[test]
+    fn parse_judge_output_rejects_multiline_text() {
+        // Documents that multi-line raw judge text is intentionally not handled.
+        // Cached pre-rewrite JSONLs cannot be replayed; re-judge is required.
+        assert!(parse_judge_output("No.\n\nThe model response is wrong.").is_err());
+    }
+
+    #[test]
+    fn parse_judge_output_garbage_errors() {
+        assert!(parse_judge_output("¯\\_(ツ)_/¯").is_err());
+    }
+
+    #[test]
+    fn extract_tool_verdict_happy_path_yes() {
+        let content = serde_json::json!([{
+            "type": "tool_use",
+            "name": "record_verdict",
+            "input": {"verdict": "yes", "verdict_reason": "matches gold"}
+        }]);
+        let (score, reason) = extract_tool_verdict(&content);
+        assert_eq!(score, 1);
+        assert_eq!(reason, "matches gold");
+    }
+
+    #[test]
+    fn extract_tool_verdict_happy_path_no() {
+        let content = serde_json::json!([{
+            "type": "tool_use",
+            "name": "record_verdict",
+            "input": {"verdict": "no", "verdict_reason": "missing required fact"}
+        }]);
+        let (score, _) = extract_tool_verdict(&content);
+        assert_eq!(score, 0);
+    }
+
+    #[test]
+    fn extract_tool_verdict_content_null_scores_zero() {
+        let content = serde_json::Value::Null;
+        let (score, _) = extract_tool_verdict(&content);
+        assert_eq!(score, 0);
+    }
+
+    #[test]
+    fn extract_tool_verdict_wrong_tool_name_falls_through() {
+        let content = serde_json::json!([{
+            "type": "tool_use",
+            "name": "wrong_tool",
+            "input": {"verdict": "yes"}
+        }]);
+        // No matching tool_use block + no text block → score 0.
+        let (score, _) = extract_tool_verdict(&content);
+        assert_eq!(score, 0);
+    }
+
+    #[test]
+    fn extract_tool_verdict_input_is_string_not_object() {
+        let content = serde_json::json!([{
+            "type": "tool_use",
+            "name": "record_verdict",
+            "input": "yes"
+        }]);
+        let (score, _) = extract_tool_verdict(&content);
+        assert_eq!(score, 0);
+    }
+
+    #[test]
+    fn extract_tool_verdict_missing_verdict_key_scores_zero() {
+        let content = serde_json::json!([{
+            "type": "tool_use",
+            "name": "record_verdict",
+            "input": {"verdict_reason": "no verdict provided"}
+        }]);
+        let (score, _) = extract_tool_verdict(&content);
+        assert_eq!(score, 0);
+    }
+
+    #[test]
+    fn extract_tool_verdict_unexpected_verdict_value_scores_zero() {
+        let content = serde_json::json!([{
+            "type": "tool_use",
+            "name": "record_verdict",
+            "input": {"verdict": "maybe", "verdict_reason": "unsure"}
+        }]);
+        let (score, _) = extract_tool_verdict(&content);
+        assert_eq!(score, 0);
+    }
+
+    #[test]
+    fn extract_tool_verdict_case_insensitive_yes() {
+        let content = serde_json::json!([{
+            "type": "tool_use",
+            "name": "record_verdict",
+            "input": {"verdict": "YES", "verdict_reason": "exact"}
+        }]);
+        let (score, _) = extract_tool_verdict(&content);
+        assert_eq!(score, 1);
+    }
+
+    #[test]
+    fn extract_tool_verdict_falls_back_to_text_when_no_tool_block() {
+        let content = serde_json::json!([{"type": "text", "text": "yes"}]);
+        let (score, _) = extract_tool_verdict(&content);
+        assert_eq!(score, 1);
+    }
+
+    #[test]
+    fn extract_tool_verdict_text_fallback_strict_match() {
+        // parse_judge_output is exact-match; multi-line text scores 0.
+        let content =
+            serde_json::json!([{"type": "text", "text": "Yes.\n\nThe model response is correct."}]);
+        let (score, _) = extract_tool_verdict(&content);
+        assert_eq!(score, 0);
+    }
 }
