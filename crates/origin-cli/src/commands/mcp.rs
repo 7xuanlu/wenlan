@@ -148,7 +148,12 @@ fn add_native(
 }
 
 fn run_external(binary: &str, args: &[String]) -> Result<()> {
-    let status = Command::new(binary)
+    // Resolve via PATHEXT so .cmd / .bat shims on Windows match. CreateProcess
+    // only auto-appends `.exe`, which would miss a fake `claude.cmd` in tests
+    // and also any real Windows shell-script wrappers the user installed.
+    let resolved = which::which(binary)
+        .with_context(|| format!("could not find `{binary}`. Is it installed and on PATH?"))?;
+    let status = Command::new(&resolved)
         .args(args)
         .status()
         .with_context(|| format!("could not run `{binary}`. Is it installed and on PATH?"))?;
@@ -294,7 +299,18 @@ fn write_json_atomic(path: &Path, value: &Value) -> Result<()> {
 }
 
 fn home_path(parts: &[&str]) -> Result<PathBuf> {
-    let mut path = dirs::home_dir().ok_or_else(|| anyhow!("could not determine home directory"))?;
+    // Prefer the HOME/USERPROFILE env vars before falling back to the OS
+    // resolver. `dirs::home_dir()` on Windows calls SHGetKnownFolderPath
+    // directly and ignores USERPROFILE, which breaks integration tests
+    // that build an isolated home dir. Production users have USERPROFILE
+    // set to the same value the API returns, so the priority swap is a
+    // no-op for them.
+    let mut path = std::env::var_os("HOME")
+        .filter(|s| !s.is_empty())
+        .or_else(|| std::env::var_os("USERPROFILE").filter(|s| !s.is_empty()))
+        .map(PathBuf::from)
+        .or_else(dirs::home_dir)
+        .ok_or_else(|| anyhow!("could not determine home directory"))?;
     for part in parts {
         path.push(part);
     }

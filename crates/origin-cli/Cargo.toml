@@ -27,6 +27,9 @@ serde_json = "1"
 service-manager = { workspace = true }
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 anyhow = "1"
+# `which` for PATHEXT-aware binary resolution on Windows. std::process::Command
+# only auto-appends `.exe`; .cmd / .bat live behind explicit-extension paths.
+which = "4"
 
 [dev-dependencies]
 assert_cmd = "2"
