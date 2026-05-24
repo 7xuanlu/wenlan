@@ -7338,6 +7338,97 @@ impl MemoryDB {
         Ok(merged)
     }
 
+    /// Hybrid search with LLM query decomposition for multi-hop queries.
+    ///
+    /// Calls [`crate::decompose::decompose_query`] to rewrite the query into 2-4
+    /// standalone sub-queries (single-element fallback if not compound). Runs
+    /// `search_memory` for each sub-query, merges results by SearchResult.id
+    /// keeping the max score, sorts descending, truncates to `limit`.
+    ///
+    /// Per the decompose contract, the LLM call degrades silently to a single-
+    /// element vec on any failure, so the worst case is one extra timeout call
+    /// on top of a plain search.
+    ///
+    /// `llm` is required; if `None`, falls back to plain `search_memory`.
+    pub async fn search_memory_decomposed(
+        &self,
+        query: &str,
+        limit: usize,
+        memory_type: Option<&str>,
+        space: Option<&str>,
+        source_agent: Option<&str>,
+        llm: Option<Arc<dyn crate::llm_provider::LlmProvider>>,
+    ) -> Result<Vec<SearchResult>, OriginError> {
+        let Some(llm) = llm else {
+            return self
+                .search_memory(
+                    query,
+                    limit,
+                    memory_type,
+                    space,
+                    source_agent,
+                    None,
+                    None,
+                    None,
+                )
+                .await;
+        };
+
+        let sub_queries = crate::decompose::decompose_query(query, &llm).await?;
+
+        if sub_queries.len() <= 1 {
+            // Not compound (or decompose failed silently) — passthrough.
+            return self
+                .search_memory(
+                    query,
+                    limit,
+                    memory_type,
+                    space,
+                    source_agent,
+                    None,
+                    None,
+                    None,
+                )
+                .await;
+        }
+
+        let mut merged: HashMap<String, SearchResult> = HashMap::new();
+
+        for sub_query in &sub_queries {
+            let sub_results = self
+                .search_memory(
+                    sub_query,
+                    limit,
+                    memory_type,
+                    space,
+                    source_agent,
+                    None,
+                    None,
+                    None,
+                )
+                .await?;
+            for r in sub_results {
+                merged
+                    .entry(r.id.clone())
+                    .and_modify(|existing| {
+                        if r.score > existing.score {
+                            existing.score = r.score;
+                        }
+                    })
+                    .or_insert(r);
+            }
+        }
+
+        let mut combined: Vec<SearchResult> = merged.into_values().collect();
+        combined.sort_by(|a, b| {
+            b.score
+                .partial_cmp(&a.score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+        combined.truncate(limit);
+        Ok(combined)
+    }
+
     /// Augment search results with knowledge graph observations via RRF merge.
     /// Graph observations boost scores of related memories but are stripped from
     /// final output by search_memory (KG is internal scaffolding, not user-facing).
@@ -22198,6 +22289,66 @@ pub(crate) mod tests {
         assert!(
             results.iter().all(|r| r.source != "knowledge_graph"),
             "knowledge_graph observations should be filtered from reranked output"
+        );
+    }
+
+    // ==================== search_memory_decomposed ====================
+
+    #[tokio::test]
+    async fn test_search_memory_decomposed_without_llm_falls_back() {
+        let (db, _dir) = test_db().await;
+        db.upsert_documents(vec![
+            make_memory_doc(
+                "m1",
+                "Rust is a systems programming language",
+                "fact",
+                "software",
+                "claude",
+            ),
+            make_memory_doc(
+                "m2",
+                "Python is great for data science work",
+                "fact",
+                "software",
+                "claude",
+            ),
+        ])
+        .await
+        .unwrap();
+
+        // Without LLM, decomposed search should behave like plain search.
+        let results = db
+            .search_memory_decomposed("Rust programming", 10, None, None, None, None)
+            .await
+            .unwrap();
+        assert!(!results.is_empty(), "should return results without LLM");
+    }
+
+    #[tokio::test]
+    async fn test_search_memory_decomposed_single_element_passthrough() {
+        use crate::llm_provider::{LlmProvider, MockProvider};
+
+        let (db, _dir) = test_db().await;
+        db.upsert_documents(vec![make_memory_doc(
+            "m1",
+            "Rust is a systems programming language",
+            "fact",
+            "software",
+            "claude",
+        )])
+        .await
+        .unwrap();
+
+        // Mock returns single-element JSON => decomposer treats as not-compound,
+        // search_memory_decomposed should still return results via plain passthrough.
+        let llm: Arc<dyn LlmProvider> = Arc::new(MockProvider::new(r#"["Rust programming"]"#));
+        let results = db
+            .search_memory_decomposed("Rust programming", 10, None, None, None, Some(llm))
+            .await
+            .unwrap();
+        assert!(
+            !results.is_empty(),
+            "single-element decomposition should still return results"
         );
     }
 
