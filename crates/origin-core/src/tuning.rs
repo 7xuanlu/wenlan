@@ -179,6 +179,32 @@ pub struct TuningConfig {
     pub distillation: DistillationConfig,
     #[serde(default)]
     pub gate: GateConfig,
+    #[serde(default)]
+    pub retrieval: RetrievalConfig,
+}
+
+/// Retrieval-layer toggles. Surfaces cost-bearing search features as off-switches
+/// so a deployment can opt out without rebuilding. Today this gates multi-hop
+/// query decomposition (`/api/memory/search?decompose=true`), which costs one
+/// extra LLM call per request. Defaults preserve the current behavior: the
+/// feature is enabled in the daemon but never runs unless a caller opts in via
+/// the request field, so the default `true` is non-disruptive.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(default)]
+pub struct RetrievalConfig {
+    /// When `false`, requests with `decompose: true` log a warning and fall
+    /// back to plain `search_memory`. Useful for cost-sensitive deployments
+    /// that want to disable the per-query LLM decomposition overhead globally.
+    #[serde(default = "d_true")]
+    pub decomposition_enabled: bool,
+}
+
+impl Default for RetrievalConfig {
+    fn default() -> Self {
+        Self {
+            decomposition_enabled: true,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Deserialize)]

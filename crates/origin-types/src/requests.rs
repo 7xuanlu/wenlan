@@ -44,6 +44,14 @@ pub struct SearchMemoryRequest {
     pub space: Option<String>,
     #[serde(default)]
     pub source_agent: Option<String>,
+    /// Opt-in multi-hop retrieval via LLM query decomposition. When `true` and
+    /// the daemon has an LLM provider configured, the search handler fans out
+    /// sub-queries and merges results by id. Falls back to plain search when
+    /// the daemon has no LLM provider, or when decomposition is disabled via
+    /// the `retrieval.decomposition_enabled` tuning knob. Defaults to `false`
+    /// so the common single-hop path is unchanged.
+    #[serde(default)]
+    pub decompose: bool,
 }
 
 #[derive(Debug, Serialize, Deserialize)]

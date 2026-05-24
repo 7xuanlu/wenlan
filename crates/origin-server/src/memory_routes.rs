@@ -1040,9 +1040,51 @@ pub async fn handle_search_memory(
     }
     let start = std::time::Instant::now();
 
-    let results = {
+    // Snapshot what the search needs out of the state guard so we don't hold
+    // the read lock across the (potentially LLM-bound) decomposed call.
+    let (db, llm, decomposition_enabled) = {
         let s = state.read().await;
-        let db = s.db.as_ref().ok_or(ServerError::DbNotInitialized)?;
+        let db = s.db.clone().ok_or(ServerError::DbNotInitialized)?;
+        (db, s.llm.clone(), s.tuning.retrieval.decomposition_enabled)
+    };
+
+    // Route between plain and decomposed search. The decomposed path costs one
+    // extra LLM call per request, so it's opt-in via `decompose: true` AND
+    // gated by both LLM availability and the `retrieval.decomposition_enabled`
+    // tuning knob. Every fallback degrades to plain `search_memory` so the
+    // request still succeeds — decomposition is a quality lift, not a gate.
+    let use_decompose = if req.decompose {
+        if !decomposition_enabled {
+            tracing::warn!(
+                "decompose=true requested but retrieval.decomposition_enabled=false; \
+                 falling back to plain search"
+            );
+            false
+        } else if llm.is_none() {
+            tracing::warn!(
+                "decompose=true requested but no LLM provider configured; \
+                 falling back to plain search"
+            );
+            false
+        } else {
+            true
+        }
+    } else {
+        false
+    };
+
+    let results = if use_decompose {
+        db.search_memory_decomposed(
+            &req.query,
+            req.limit,
+            req.memory_type.as_deref(),
+            req.space.as_deref(),
+            req.source_agent.as_deref(),
+            llm,
+        )
+        .await
+        .map_err(|e| ServerError::SearchFailed(e.to_string()))?
+    } else {
         db.search_memory(
             &req.query,
             req.limit,
@@ -3671,6 +3713,104 @@ mod search_agent_attribution_tests {
                 .iter()
                 .map(|a| (a.action.clone(), a.agent_name.clone()))
                 .collect::<Vec<_>>()
+        );
+    }
+}
+
+/// Routing tests for the `decompose` request param on `/api/memory/search`.
+///
+/// Covers the three fallback branches in `handle_search_memory`'s router:
+/// - `decompose=false` (default): plain search.
+/// - `decompose=true` with `state.llm = None`: warns + falls back to plain search.
+/// - `decompose=true` with `retrieval.decomposition_enabled = false`: warns +
+///   falls back to plain search.
+///
+/// The compound-query lift path (mock LLM returning a 2+ element decomposition)
+/// is exercised by the `search_memory_decomposed` unit tests in
+/// `crates/origin-core/src/db.rs`. Replicating it here would require exposing
+/// `MockProvider` outside `#[cfg(test)]` in origin-core, which is out of scope
+/// for this commit — the routing layer is what matters for the HTTP surface.
+#[cfg(test)]
+mod search_decompose_routing_tests {
+    use axum::body::Body;
+    use axum::http::{Request, StatusCode};
+    use std::sync::Arc;
+    use tokio::sync::RwLock;
+    use tower::ServiceExt;
+
+    use crate::state::ServerState;
+
+    async fn build_state(
+        decomposition_enabled: bool,
+    ) -> (Arc<RwLock<ServerState>>, tempfile::TempDir) {
+        let tmp = tempfile::tempdir().expect("failed to create tempdir");
+        let emitter: Arc<dyn origin_core::events::EventEmitter> =
+            Arc::new(origin_core::events::NoopEmitter);
+        let db = origin_core::db::MemoryDB::new(tmp.path(), emitter)
+            .await
+            .expect("MemoryDB::new should succeed");
+        let mut tuning = origin_core::tuning::TuningConfig::default();
+        tuning.retrieval.decomposition_enabled = decomposition_enabled;
+        let server_state = ServerState {
+            db: Some(Arc::new(db)),
+            tuning,
+            ..Default::default()
+        };
+        (Arc::new(RwLock::new(server_state)), tmp)
+    }
+
+    async fn post_search(app: axum::Router, body: &'static str) -> StatusCode {
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/memory/search")
+                    .header("content-type", "application/json")
+                    .body(Body::from(body))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        resp.status()
+    }
+
+    #[tokio::test]
+    async fn decompose_false_uses_plain_search() {
+        let (state, _tmp) = build_state(true).await;
+        let app = crate::router::build_router(state);
+        let status = post_search(app, r#"{"query":"hello","decompose":false}"#).await;
+        assert!(
+            status.is_success(),
+            "decompose=false should hit plain search and 2xx, got {status}"
+        );
+    }
+
+    #[tokio::test]
+    async fn decompose_true_without_llm_falls_back() {
+        // state.llm = None — handler should log a warning and pick the plain
+        // search branch rather than calling search_memory_decomposed with no
+        // provider. The request must still succeed.
+        let (state, _tmp) = build_state(true).await;
+        let app = crate::router::build_router(state);
+        let status = post_search(app, r#"{"query":"hello","decompose":true}"#).await;
+        assert!(
+            status.is_success(),
+            "decompose=true with no LLM should fall back to plain search and 2xx, got {status}"
+        );
+    }
+
+    #[tokio::test]
+    async fn decompose_true_disabled_by_config_falls_back() {
+        // retrieval.decomposition_enabled = false — even if we had an LLM,
+        // the handler must take the disabled-by-config branch. We don't wire
+        // an LLM here because the disabled-config check fires first.
+        let (state, _tmp) = build_state(false).await;
+        let app = crate::router::build_router(state);
+        let status = post_search(app, r#"{"query":"hello","decompose":true}"#).await;
+        assert!(
+            status.is_success(),
+            "decompose=true with decomposition_enabled=false should fall back to plain search and \
+             2xx, got {status}"
         );
     }
 }

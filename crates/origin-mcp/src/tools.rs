@@ -742,6 +742,7 @@ impl OriginMcpServer {
             memory_type: params.memory_type,
             space: space_arg,
             source_agent: self.resolve_source_agent(None),
+            decompose: false,
         };
 
         let resp: SearchMemoryResponse = match self.client.post("/api/memory/search", &req).await {
@@ -2854,6 +2855,7 @@ mod tests {
             memory_type: None,
             space: None,
             source_agent: None,
+            decompose: false,
         };
         let json = serde_json::to_value(&req).unwrap();
         let obj = json.as_object().unwrap();
@@ -3640,6 +3642,7 @@ mod tests {
             memory_type: params.memory_type,
             space: params.space,
             source_agent: None,
+            decompose: false,
         };
 
         let json = serde_json::to_value(&req).unwrap();
