@@ -194,6 +194,29 @@ Build details for the daemon, MCP server, CLI, and core crates live in the crate
 
 ---
 
+## Learn more
+
+Longer-form writing on AI work memory and how Origin compares lives at [useorigin.app/learn](https://useorigin.app/learn):
+
+**Concepts**
+- [What is AI work memory?](https://useorigin.app/learn/ai-work-memory) — the shape of the problem Origin solves
+- [MCP memory server](https://useorigin.app/learn/mcp-memory-server) — how Origin exposes memory through the Model Context Protocol
+- [Local-first AI memory](https://useorigin.app/learn/local-first-ai-memory) — data, privacy, and control
+- [Markdown + local index](https://useorigin.app/learn/markdown-local-index-ai-memory) — the storage model
+- [AI agent handoff loop](https://useorigin.app/learn/ai-agent-handoff-loop) — session-end discipline that prevents context loss
+
+**Comparisons**
+- [Origin vs Basic Memory](https://useorigin.app/learn/origin-vs-basic-memory) — Markdown knowledge base vs AI work-session memory
+- [Origin vs claude-mem](https://useorigin.app/learn/origin-vs-claude-mem) — observer-style Claude Code memory vs MCP-first cross-tool memory
+- [Origin vs Superlocal Memory](https://useorigin.app/learn/origin-vs-superlocal-memory) — includes the honest LoCoMo benchmark concession
+
+**Docs**
+- [Get started](https://useorigin.app/docs/get-started) — install + verify the first local memory loop
+- [Daily workflow](https://useorigin.app/docs/daily-workflow) — capture, handoff, distill
+- [MCP clients](https://useorigin.app/docs/mcp-clients) — connect Claude Code, Cursor, Codex, Claude Desktop, Gemini CLI
+
+---
+
 ## What Origin is NOT
 
 - **Not a Life OS.** No habits, calendar, journal, or life-management modules. Origin scopes to AI work artifacts only. If you want a full personal OS, look at [PAI](https://github.com/danielmiessler/PAI).
