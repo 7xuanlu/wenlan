@@ -49,14 +49,34 @@ sections verbatim at the top of the brief output, under a heading like
 If the file is missing, say nothing about it. First-time projects haven't
 been handed off yet.
 
-## 2. Call context
+## 2. Resolve the active space
+
+Before any MCP call, resolve the active space by invoking the bundled
+resolver script via Bash:
+
+    "$CLAUDE_PLUGIN_ROOT/bin/resolve-space.sh" --cwd "$PWD" \
+        ${SPACE_ARG:+--arg "$SPACE_ARG"} \
+        ${TOPIC_ARG:+--topic "$TOPIC_ARG"}
+
+The script prints `<space>\t<source-layer>` on stdout. Capture both:
+the `<space>` value is what you pass as `space=...` to MCP tools; the
+`<source-layer>` value is one of `arg`, `env`, `cwd-config`, `cwd-repo`,
+`topic`, `default`.
+
+Print one line to the user before the MCP call:
+
+    Resolved space: <space> (from <source-layer>)
+
+so the user can confirm the resolution before the brief proceeds.
+
+## 3. Call context
 
 Call the `origin` MCP server's `context` tool. If the user passed a topic
 argument, pass it through. Otherwise infer scope from the working directory and
 the conversation so far — don't ask the user.
 
 ```
-context(topic="<args or inferred>", space=<inferred from cwd or recent turns>)
+context(topic="<args or inferred>", space=<resolved>)
 ```
 
 **Scope inference rules:**
@@ -64,9 +84,9 @@ context(topic="<args or inferred>", space=<inferred from cwd or recent turns>)
 - `topic`: if user omitted args, pass the most recent topic from the
   conversation (file or feature being discussed), or omit for a fresh
   general brief at session start.
-- `space`: from cwd. `~/Repos/origin/...` → `"origin"`. Other repos → repo
-  name. Outside any repo → omit. Always pass when scope is known; if
-  uncertain, run `list_spaces` later (post-PR-C) or omit.
+- `space`: use the value from the resolver script above. Always pass it;
+  the resolver guarantees a value (falling back to `"default"` if nothing
+  else matches).
 
 ## When to use
 
@@ -93,7 +113,7 @@ Model how the user thinks. Their preferences, corrections, and past decisions
 tell you how they want to be helped, not just what they already know. Don't
 just look things up: adjust your behavior.
 
-## 3. Pending revisions check
+## 4. Pending revisions check
 
 After loading context, call:
 
