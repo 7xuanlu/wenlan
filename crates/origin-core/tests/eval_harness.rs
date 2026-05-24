@@ -3761,9 +3761,15 @@ fn fixture_revision_hash_changes_when_bytes_change() {
     assert_ne!(h1, h2, "hash must change when bytes change");
 }
 
+// Serialize tests that read/write EVAL_MAX_USD. std::env is process-global;
+// parallel cargo-test workers race on set_var/remove_var. Same pattern as
+// origin-mcp::lock_state::ENV_LOCK.
+static EVAL_MAX_USD_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 #[tokio::test]
 async fn submit_batch_aborts_when_estimate_exceeds_eval_max_usd() {
     use origin_core::eval::anthropic::submit_batch;
+    let _guard = EVAL_MAX_USD_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     std::env::set_var("EVAL_MAX_USD", "0.001");
     let client = reqwest::Client::new();
     let huge_prompt = "x".repeat(1_000_000);
@@ -3783,6 +3789,7 @@ async fn submit_batch_aborts_when_estimate_exceeds_eval_max_usd() {
 #[tokio::test]
 async fn submit_batch_no_cap_env_var_unset_does_not_block() {
     use origin_core::eval::anthropic::estimate_batch_cost;
+    let _guard = EVAL_MAX_USD_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     std::env::remove_var("EVAL_MAX_USD");
     let prompts = vec![("id".to_string(), "hi".to_string(), None, 16usize)];
     let cost = estimate_batch_cost(&prompts);
