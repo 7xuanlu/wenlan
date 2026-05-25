@@ -70,7 +70,14 @@ fastembed = { version = "5", default-features = false, features = [
     "hf-hub",
     "hf-hub-rustls-tls",
     "image-models",
-    "ort-download-binaries-rustls-tls",
+    # ort-download-binaries-native-tls (NOT the rustls variant) because the
+    # rustls variant didn't trigger ort-sys's prebuilt-onnxruntime download
+    # in cross (build failed with "could not find native static library
+    # onnxruntime"). native-tls drags openssl-sys back into the graph, but
+    # the workspace `openssl-sys = { features = ["vendored"] }` declaration
+    # below compiles OpenSSL from source so cross's stale system OpenSSL is
+    # irrelevant.
+    "ort-download-binaries-native-tls",
 ] }
 
 # openssl-sys vendored — belt + suspenders. Even with fastembed swapped to
