@@ -423,6 +423,62 @@ impl LocomoReport {
     pub fn baseline_filename(&self, base: &str) -> String {
         crate::eval::report::encode_baseline_filename(self.env.as_ref(), base)
     }
+
+    /// Project this LocomoReport onto the flat `EvalReport` shape so the
+    /// P0b layered baseline path (`save_full_report`) can consume it.
+    ///
+    /// **Mapping notes:**
+    /// - LoCoMo retrieval metrics map onto `ndcg_at_10` / `mrr` / `recall_at_5`
+    ///   / `hit_rate_at_1` directly.
+    /// - Metrics not surfaced by the LoCoMo runner (ndcg_at_5, map_at_5/10,
+    ///   recall_at_1/3, precision_at_3/5, negative analysis) are zero-filled.
+    /// - `search_mode` is taken from the env stamp when available.
+    /// - `per_case` is left empty; LoCoMo's per-conversation breakdown lives
+    ///   on the strongly-typed report. Consumers wanting per-conversation
+    ///   data should keep using `LocomoReport` directly.
+    pub fn to_eval_report(&self) -> crate::eval::report::EvalReport {
+        let search_mode = self
+            .env
+            .as_ref()
+            .map(|e| e.retrieval_method.clone())
+            .unwrap_or_else(|| "locomo".to_string());
+        crate::eval::report::EvalReport {
+            fixture_count: self.total_questions,
+            file_count: self.conversations.len(),
+            search_mode,
+            ndcg_at_10: self.aggregate_ndcg_at_10,
+            ndcg_at_5: 0.0,
+            map_at_5: 0.0,
+            map_at_10: 0.0,
+            mrr: self.aggregate_mrr,
+            recall_at_1: 0.0,
+            recall_at_3: 0.0,
+            recall_at_5: self.aggregate_recall_at_5,
+            hit_rate_at_1: self.aggregate_hit_rate_at_1,
+            hit_rate_at_3: 0.0,
+            precision_at_3: 0.0,
+            precision_at_5: 0.0,
+            neg_above_relevant: 0,
+            total_negatives: 0,
+            negative_leakage: 0,
+            gate_content_filtered: 0,
+            gate_novelty_filtered: 0,
+            empty_set_count: 0,
+            empty_set_false_confidence: None,
+            score_gap: None,
+            temporal_ordering_total: 0,
+            temporal_ordering_correct: 0,
+            temporal_ordering_rate: None,
+            baseline: None,
+            per_case: Vec::new(),
+            env: self.env.clone(),
+            latency: None,
+            total_scenarios: self.conversations.len(),
+            skipped_scenarios: Vec::new(),
+            enrichment_failures: 0,
+            truncated_reason: None,
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------

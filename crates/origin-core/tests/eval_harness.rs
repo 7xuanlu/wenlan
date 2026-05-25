@@ -16,6 +16,41 @@ fn eval_root() -> std::path::PathBuf {
     std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../app/eval")
 }
 
+/// Root directory for the layered baseline layout. Defaults to
+/// `~/.cache/origin-eval/baselines`; override via `EVAL_BASELINES_DIR`.
+fn baselines_root() -> std::path::PathBuf {
+    if let Ok(p) = std::env::var("EVAL_BASELINES_DIR") {
+        return std::path::PathBuf::from(p).join("baselines");
+    }
+    let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
+    std::path::PathBuf::from(home)
+        .join(".cache")
+        .join("origin-eval")
+        .join("baselines")
+}
+
+/// Dual-write helper: legacy `save_baseline` already called by the caller;
+/// this writes the same data through the P0b layered baseline path so
+/// `compare-baselines` + the L1 directory layout pick it up.
+///
+/// Best-effort: skip if the report has no env stamp (cannot be layered).
+/// Errors are surfaced (panicked) so test failures point at this site.
+fn save_layered<R, F>(report: &R, to_eval: F)
+where
+    R: ?Sized,
+    F: FnOnce(&R) -> origin_core::eval::report::EvalReport,
+{
+    let eval_report = to_eval(report);
+    if eval_report.env.is_none() {
+        eprintln!("save_layered: skipped (no env stamp)");
+        return;
+    }
+    match origin_core::eval::report::save_full_report(&baselines_root(), &eval_report) {
+        Ok(path) => println!("Saved layered baseline to {:?}", path),
+        Err(e) => panic!("save_full_report failed: {e}"),
+    }
+}
+
 #[tokio::test]
 #[ignore]
 async fn test_locomo_benchmark() {
@@ -405,6 +440,7 @@ async fn save_locomo_baseline() {
     let baseline_path = baselines_dir.join(report.baseline_filename("locomo"));
     report.save_baseline(&baseline_path).unwrap();
     println!("Saved LoCoMo baseline to {:?}", baseline_path);
+    save_layered(&report, |r| r.to_eval_report());
 }
 
 #[tokio::test]
@@ -423,6 +459,7 @@ async fn save_longmemeval_baseline() {
     let baseline_path = baselines_dir.join(report.baseline_filename("longmemeval"));
     report.save_baseline(&baseline_path).unwrap();
     println!("Saved LongMemEval baseline to {:?}", baseline_path);
+    save_layered(&report, |r| r.to_eval_report());
 }
 
 #[tokio::test]
@@ -445,6 +482,7 @@ async fn save_locomo_reranked_baseline() {
     let baseline_path = baselines_dir.join(report.baseline_filename("locomo"));
     report.save_baseline(&baseline_path).unwrap();
     println!("Saved LoCoMo reranked baseline to {:?}", baseline_path);
+    save_layered(&report, |r| r.to_eval_report());
 }
 
 #[tokio::test]
@@ -467,6 +505,7 @@ async fn save_longmemeval_reranked_baseline() {
     let baseline_path = baselines_dir.join(report.baseline_filename("longmemeval"));
     report.save_baseline(&baseline_path).unwrap();
     println!("Saved LongMemEval reranked baseline to {:?}", baseline_path);
+    save_layered(&report, |r| r.to_eval_report());
 }
 
 #[tokio::test]
@@ -489,6 +528,7 @@ async fn save_locomo_expanded_baseline() {
     let baseline_path = baselines_dir.join(report.baseline_filename("locomo"));
     report.save_baseline(&baseline_path).unwrap();
     println!("Saved LoCoMo expanded baseline to {:?}", baseline_path);
+    save_layered(&report, |r| r.to_eval_report());
 }
 
 // Cross-encoder rerank variants — fastembed TextRerank (BGERerankerV2M3) in
@@ -556,6 +596,7 @@ async fn save_longmemeval_expanded_baseline() {
     let baseline_path = baselines_dir.join(report.baseline_filename("longmemeval"));
     report.save_baseline(&baseline_path).unwrap();
     println!("Saved LongMemEval expanded baseline to {:?}", baseline_path);
+    save_layered(&report, |r| r.to_eval_report());
 }
 
 // ---------------------------------------------------------------------------
