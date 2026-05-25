@@ -116,16 +116,18 @@ jobs:
           # publish prebuilt ONNX Runtime binaries for Intel Mac. Adding it
           # back requires compiling ONNX from source (~15min build) or
           # switching to the `ort-tract` backend. Tracked as follow-up.
+          # Native ARM Linux runner is free for public repos
+          # (ubuntu-24.04-arm, 4 vCPU Cortex / 16GB). Drops cross entirely
+          # for aarch64: no Docker container, no Cross.toml, no OpenSSL
+          # version chasing. Same setup as x86 below.
           - target: aarch64-unknown-linux-gnu
-            os: ubuntu-24.04
+            os: ubuntu-24.04-arm
             archive: tar.gz
             artifact_name: origin-linux-arm64
-            use_cross: true
           - target: x86_64-unknown-linux-gnu
             os: ubuntu-24.04
             archive: tar.gz
             artifact_name: origin-linux-x64
-            use_cross: true
           - target: x86_64-pc-windows-msvc
             os: windows-2022
             archive: zip
@@ -160,7 +162,6 @@ jobs:
       # sccache caches rustc + build-script outputs to GHA. Big win on the
       # C/C++-heavy crates we pull (openssl-src, ring, llama-cpp-sys).
       - name: Set up sccache
-        if: matrix.use_cross != true
         uses: mozilla-actions/sccache-action@7d986dd989559c6ecdb630a3fd2557667be217ad # v0.0.9
 
       # vcpkg sqlite3 for Windows — libsql 0.9 needs `sqlite3.lib` at link
@@ -176,70 +177,29 @@ jobs:
       - name: Cache Rust dependencies
         uses: Swatinem/rust-cache@v2
         with:
-          # Per-target cache key so the macos-14 jobs don't share state
-          # between aarch64 and x86_64 (otherwise the first job's target/
-          # contents pollute the second).
           shared-key: release-${{ matrix.target }}
           cache-all-crates: "true"
 
-      # cargo-zigbuild replaces `cross` for Linux targets. No Docker
-      # container — uses Zig as the cross C/C++ compiler. ~3-5min faster
-      # per Linux job (no image pull, no apt-get inside container) and
-      # avoids the cross-0.2.5 Ubuntu-16.04-OpenSSL trap entirely.
-      - name: Install Zig + cargo-zigbuild
-        if: matrix.use_cross == true
-        uses: goto-bus-stop/setup-zig@7ab2955eb728f5440978d5824358023be3a2802d # v2
-        with:
-          version: 0.13.0
-      - name: Install cargo-zigbuild
-        if: matrix.use_cross == true
-        run: cargo install cargo-zigbuild --locked
-
-      - name: Build (native)
-        if: matrix.use_cross != true
+      # All targets build natively now. aarch64-unknown-linux-gnu uses the
+      # free ubuntu-24.04-arm runner, x86_64-unknown-linux-gnu uses
+      # ubuntu-24.04. No cross / zigbuild / QEMU needed. Eliminates an
+      # entire class of openssl-sys/system-OpenSSL/container-version traps
+      # that consumed several PRs for v0.7.0.
+      - name: Build
         env:
           SCCACHE_GHA_ENABLED: "true"
           RUSTC_WRAPPER: "sccache"
+          # Use rust-lld on Windows (ships with toolchain, ~3-5min faster
+          # link than link.exe for our binary sizes). Linux + macOS keep
+          # their default linkers (ld / ld64).
+          RUSTFLAGS: ${{ runner.os == 'Windows' && '-C linker-flavor=lld-link' || '' }}
         run: cargo build --release -p origin -p origin-server -p origin-mcp --target ${{ matrix.target }}
 
-      - name: Build (cross via zigbuild)
-        if: matrix.use_cross == true
-        env:
-          SCCACHE_GHA_ENABLED: "true"
-          RUSTC_WRAPPER: "sccache"
-        run: cargo zigbuild --release -p origin -p origin-server -p origin-mcp --target ${{ matrix.target }}
-
-      - name: Smoke (native)
-        if: matrix.use_cross != true
+      - name: Smoke
         shell: bash
         run: |
           ./target/${{ matrix.target }}/release/origin${{ runner.os == 'Windows' && '.exe' || '' }} --help
           ./target/${{ matrix.target }}/release/origin-server${{ runner.os == 'Windows' && '.exe' || '' }} --help
-
-      - name: Set up QEMU (cross targets only)
-        if: matrix.use_cross == true
-        uses: docker/setup-qemu-action@v3
-
-      - name: Smoke (cross via QEMU)
-        if: matrix.use_cross == true
-        run: |
-          # Map matrix.target arch to docker --platform value.
-          case "${{ matrix.target }}" in
-            aarch64-*)  PLAT=linux/arm64 ;;
-            x86_64-*)   PLAT=linux/amd64 ;;
-            *)          echo "unknown arch for ${{ matrix.target }}"; exit 1 ;;
-          esac
-          # debian:trixie-slim has glibc 2.41 (matches what cross builds need).
-          # Mount the release dir + invoke --help. Emulation overhead is negligible
-          # at --help speeds.
-          docker run --rm --platform "$PLAT" \
-            -v ${{ github.workspace }}/target/${{ matrix.target }}/release:/bin/origin-build:ro \
-            debian:trixie-slim \
-            /bin/origin-build/origin --help
-          docker run --rm --platform "$PLAT" \
-            -v ${{ github.workspace }}/target/${{ matrix.target }}/release:/bin/origin-build:ro \
-            debian:trixie-slim \
-            /bin/origin-build/origin-server --help
 
       - name: List Windows build artifacts
         if: matrix.target == 'x86_64-pc-windows-msvc'
