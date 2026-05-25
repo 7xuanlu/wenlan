@@ -1317,9 +1317,20 @@ pub fn stamp_judge_model(env: &mut Option<crate::eval::report::ReportEnv>, model
 // per-row struct name. The existing enum at line 1313 already owns that
 // name (Yes/No tag), so the per-row type lands as `StampedVerdict` and
 // the inner pre-stamp shape as `StampedVerdictCore`. Same intent.
+//
+// **NOT YET WIRED.** As of PR #192 these symbols exist only as
+// unit-tested scaffolding. The batch-judge iteration in
+// `crates/origin-core/src/eval/answer_quality.rs` does not call
+// `stamp_verdict_row` or `write_judge_verdicts_jsonl`. Wiring is
+// deferred to the next PR that regenerates answer-quality baselines,
+// where the JSONL is actually consumed. Until then, treat these as
+// API surface only — no JSONL audit trail will be produced.
 
 /// Per-row, fully-stamped judge verdict. Serialized into the per-run
 /// JSONL at `<baselines_root>/judge_verdicts/<run_id>.jsonl`.
+///
+/// NOT YET WIRED into the batch-judge loop — see module-level note above.
+#[allow(dead_code)]
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct StampedVerdict {
     pub question_id: String,

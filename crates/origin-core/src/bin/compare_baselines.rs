@@ -114,7 +114,16 @@ fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Print a metric delta. When both sides are exactly 0.0 the metric was
+/// likely not computed by the runner that produced the baseline (LoCoMo +
+/// LongMemEval runners zero-fill fields they don't measure when
+/// projecting via `to_eval_report`). Mark those rows as not-computed so an
+/// operator doesn't read the row as evidence of "no change."
 fn print_delta(label: &str, before: f64, after: f64) {
+    if before == 0.0 && after == 0.0 {
+        println!("  {:<12} (not computed by this runner)", label);
+        return;
+    }
     let delta = after - before;
     println!(
         "  {:<12} {:.4} → {:.4}  (Δ {:+.4})",

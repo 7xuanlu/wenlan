@@ -1,14 +1,15 @@
 #!/usr/bin/env bash
-# Regenerate all L1 baselines. Builds binaries first, then runs each save_*_baseline
-# test sequentially. Aborts on first failure.
-#
-# Required env:
-#   ANTHROPIC_API_KEY  (for answer_quality variants only)
-#   EVAL_MAX_USD_RUN   (recommended: 5)
+# Regenerate L1 retrieval baselines. Builds binaries first, then runs each
+# save_*_baseline retrieval test sequentially. Aborts on first failure.
 #
 # Optional env:
 #   EVAL_MAX_WALL_SECS (default 14400 = 4h)
 #   EVAL_BASELINES_DIR (default ~/.cache/origin-eval)
+#
+# Answer-quality baselines (LLM-judge + Anthropic batch) are NOT yet covered
+# by this script — those test functions (save_*_answer_quality_baseline)
+# don't exist in eval_harness.rs as of PR #192. Follow-up PR will add them
+# together with the cost-tracker wiring.
 
 set -euo pipefail
 
@@ -28,27 +29,14 @@ run_save() {
 }
 
 echo ""
-echo "==> Step 1/3: Retrieval baselines (no judge cost)"
+echo "==> Step 1/2: Retrieval baselines (no judge cost)"
 run_save save_locomo_baseline
 run_save save_locomo_reranked_baseline
 run_save save_longmemeval_baseline
 run_save save_longmemeval_reranked_baseline
 
 echo ""
-echo "==> Step 2/3: Answer-quality baselines (judge cost)"
-if [[ -z "${ANTHROPIC_API_KEY:-}" ]]; then
-    echo "ERROR: ANTHROPIC_API_KEY not set; answer_quality saves skipped"
-    exit 1
-fi
-if [[ -z "${EVAL_MAX_USD_RUN:-}" ]]; then
-    echo "Warning: EVAL_MAX_USD_RUN not set; defaulting to 5"
-    export EVAL_MAX_USD_RUN=5
-fi
-run_save save_locomo_answer_quality_baseline
-run_save save_lme_answer_quality_baseline
-
-echo ""
-echo "==> Step 3/3: Verify outputs"
+echo "==> Step 2/2: Verify outputs"
 root="${EVAL_BASELINES_DIR:-$HOME/.cache/origin-eval}"
 echo "Listing $root/baselines/l1_db/..."
 find "$root/baselines/l1_db" -name "*.json" 2>/dev/null | sort

@@ -4,11 +4,11 @@
 //! Emits two compile-time env vars used by `ReportEnv` in the eval harness:
 //!
 //! - `ORIGIN_MIGRATIONS_HASH`: 16-char hex prefix of SHA-256 over the
-//!   migration-bearing source files (`src/db.rs` + `src/migrations/**`).
-//!   Changes whenever a new migration lands, which invalidates eval caches
-//!   that were built against the old schema.
+//!   migration-bearing source files (`src/db.rs` + every file under
+//!   `src/migrations/`). Changes whenever a migration lands, which
+//!   invalidates eval caches that were built against the old schema.
 //!
-//! - `ORIGIN_GIT_SHA`: 12-char short git SHA of HEAD.  Unset in tarball
+//! - `ORIGIN_GIT_SHA`: 12-char short git SHA of HEAD. Unset in tarball
 //!   builds where `.git/` is absent (the `option_env!` call-sites handle
 //!   the None case gracefully).
 
@@ -17,8 +17,9 @@ use std::path::Path;
 
 fn main() {
     // --- migrations hash ---------------------------------------------------
-    // Migrations live as inline Rust inside src/db.rs and src/migrations/.
-    // Hash those files so the hash changes when a migration is added or edited.
+    // Migrations live as inline Rust inside src/db.rs and as standalone
+    // modules under src/migrations/. Hash both so the hash changes when
+    // any migration source is added, edited, or removed.
     let sources: &[&str] = &["src/db.rs", "src/migrations"];
     let mut hasher = Sha256::new();
     let mut found_any = false;
@@ -34,7 +35,7 @@ fn main() {
             hasher.update(b"\n");
             found_any = true;
         } else if p.is_dir() {
-            // Walk the directory, sort for determinism.
+            println!("cargo:rerun-if-changed={}", src);
             let mut entries: Vec<_> = walkdir(p);
             entries.sort();
             for path_str in &entries {
