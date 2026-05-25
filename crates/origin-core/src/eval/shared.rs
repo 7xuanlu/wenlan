@@ -651,6 +651,31 @@ pub fn scenario_db_dir(baselines_dir: &Path, benchmark: &str, scenario_id: &str)
 /// Cache hit: `mem_count > 0 && enriched_count == mem_count` - returns immediately.
 /// Partial resume: `mem_count > 0 && enriched_count < mem_count` - clears and re-seeds.
 /// Empty or new DB: seeds from `seed_docs()` and runs full enrichment.
+/// Stamps schema-affecting invariants for a per-scenario DB cache.
+///
+/// Stored as `cache_env.json` next to `origin_memory.db`. If a stored stamp
+/// disagrees with the current build's stamp, the cached DB is stale because
+/// the underlying schema or migrations changed. The runner refuses to reuse
+/// stale state unless `EVAL_ALLOW_WIPE=1` is set.
+///
+/// The fingerprint is intentionally narrow: only the things this crate
+/// can compute on its own. Comparability across fixture / provider / model
+/// is enforced at the **baseline** layer via `comparable_env_hash`, not here.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+struct ScenarioCacheEnv {
+    schema_db_version: u32,
+    migrations_hash: String,
+}
+
+fn current_cache_env() -> ScenarioCacheEnv {
+    ScenarioCacheEnv {
+        schema_db_version: crate::db::SCHEMA_VERSION,
+        migrations_hash: option_env!("ORIGIN_MIGRATIONS_HASH")
+            .unwrap_or("unknown")
+            .to_string(),
+    }
+}
+
 pub async fn open_or_seed_scenario_db<F>(
     db_dir: &Path,
     shared_embedder: Arc<std::sync::Mutex<fastembed::TextEmbedding>>,
@@ -660,8 +685,58 @@ pub async fn open_or_seed_scenario_db<F>(
 where
     F: FnOnce() -> Vec<RawDocument>,
 {
+    use fs2::FileExt;
+
     std::fs::create_dir_all(db_dir)
         .map_err(|e| OriginError::Generic(format!("create db_dir: {e}")))?;
+
+    // Exclusive lock to prevent two eval runs from corrupting the same scenario DB.
+    let lock_path = db_dir.join("scenario.lock");
+    let lock_file = std::fs::OpenOptions::new()
+        .create(true)
+        .write(true)
+        .truncate(false)
+        .open(&lock_path)
+        .map_err(|e| OriginError::Generic(format!("open scenario.lock: {e}")))?;
+    if FileExt::try_lock_exclusive(&lock_file).is_err()
+        && std::env::var("EVAL_PARALLEL_OK").as_deref() != Ok("1")
+    {
+        return Err(OriginError::Generic(format!(
+            "scenario.db at {} is locked by another eval run. \
+             Set EVAL_PARALLEL_OK=1 to override (results may be corrupted).",
+            db_dir.display()
+        )));
+    }
+
+    // Cache invalidation by schema/migrations stamp. If the on-disk stamp
+    // disagrees with the build's stamp, the cached DB is stale.
+    let cache_env_path = db_dir.join("cache_env.json");
+    let want = current_cache_env();
+    let stamp_match = match std::fs::read(&cache_env_path) {
+        Ok(bytes) => match serde_json::from_slice::<ScenarioCacheEnv>(&bytes) {
+            Ok(stored) => stored == want,
+            Err(_) => false,
+        },
+        Err(_) => !db_dir.join("origin_memory.db").exists(),
+    };
+    if !stamp_match {
+        if std::env::var("EVAL_ALLOW_WIPE").as_deref() != Ok("1") {
+            return Err(OriginError::Generic(format!(
+                "[scenario_db] cache_env mismatch at {} (schema/migrations changed). \
+                 Set EVAL_ALLOW_WIPE=1 to wipe and reseed, or migrate manually.",
+                db_dir.display()
+            )));
+        }
+        log::warn!(
+            "[scenario_db] cache_env mismatch at {} — wiping (EVAL_ALLOW_WIPE=1)",
+            db_dir.display()
+        );
+        let db_file = db_dir.join("origin_memory.db");
+        if db_file.exists() {
+            std::fs::remove_file(&db_file)
+                .map_err(|e| OriginError::Generic(format!("remove stale scenario.db: {e}")))?;
+        }
+    }
 
     let db = MemoryDB::new_with_shared_embedder(
         db_dir,
@@ -679,6 +754,9 @@ where
             db_dir.display(),
             mem_count
         );
+        // Stamp on cache hit too, in case an older run seeded the DB before
+        // cache_env.json existed.
+        write_cache_env_stamp(&cache_env_path, &want);
         return Ok(db);
     }
 
@@ -724,7 +802,28 @@ where
         concepts
     );
 
+    write_cache_env_stamp(&cache_env_path, &want);
+
     Ok(db)
+}
+
+/// Best-effort cache_env.json stamp write. Logs on failure but does not fail
+/// the eval run — a missing stamp will be detected on the next open and the
+/// usual EVAL_ALLOW_WIPE gate will handle it.
+fn write_cache_env_stamp(path: &Path, env: &ScenarioCacheEnv) {
+    let bytes = match serde_json::to_vec_pretty(env) {
+        Ok(b) => b,
+        Err(e) => {
+            log::warn!("[scenario_db] serialize cache_env failed: {e}");
+            return;
+        }
+    };
+    if let Err(e) = std::fs::write(path, bytes) {
+        log::warn!(
+            "[scenario_db] write cache_env stamp to {} failed: {e}",
+            path.display()
+        );
+    }
 }
 
 /// Where to source enrichment work for an eval DB.
@@ -2021,4 +2120,43 @@ pub async fn run_concept_distillation_batch_api(
 
     eprintln!("[batch_distill] Distilled {} concepts", distilled);
     Ok(distilled)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use fs2::FileExt;
+
+    #[test]
+    fn scenario_lock_blocks_concurrent_acquire() {
+        let tmp = tempfile::tempdir().unwrap();
+        let lock_path = tmp.path().join("scenario.lock");
+        let lock1 = std::fs::OpenOptions::new()
+            .create(true)
+            .write(true)
+            .truncate(false)
+            .open(&lock_path)
+            .unwrap();
+        FileExt::try_lock_exclusive(&lock1).unwrap();
+        let lock2 = std::fs::OpenOptions::new()
+            .create(true)
+            .write(true)
+            .truncate(false)
+            .open(&lock_path)
+            .unwrap();
+        assert!(FileExt::try_lock_exclusive(&lock2).is_err());
+    }
+
+    #[test]
+    fn cache_env_stamp_round_trips() {
+        let want = ScenarioCacheEnv {
+            schema_db_version: 99,
+            migrations_hash: "abc123".to_string(),
+        };
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("cache_env.json");
+        write_cache_env_stamp(&path, &want);
+        let got: ScenarioCacheEnv = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        assert_eq!(got, want);
+    }
 }
