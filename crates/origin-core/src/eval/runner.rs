@@ -396,6 +396,10 @@ pub async fn run_eval(
         per_case: case_results,
         env: None,
         latency: Some(LatencySummary::from_micros(&query_micros)),
+        total_scenarios: cases.len(),
+        skipped_scenarios: vec![],
+        enrichment_failures: 0,
+        truncated_reason: None,
     })
 }
 

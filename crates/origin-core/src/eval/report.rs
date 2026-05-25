@@ -167,6 +167,15 @@ pub struct EvalReport {
     // Per-query latency summary
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub latency: Option<crate::eval::latency::LatencySummary>,
+    // Guard fields (P0c)
+    #[serde(default)]
+    pub total_scenarios: usize,
+    #[serde(default)]
+    pub skipped_scenarios: Vec<String>,
+    #[serde(default)]
+    pub enrichment_failures: usize,
+    #[serde(default)]
+    pub truncated_reason: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, serde::Deserialize)]
@@ -398,6 +407,34 @@ impl EvalReport {
         out
     }
 
+    /// Return the name of the first non-finite (NaN or Inf) f64 field, if any.
+    ///
+    /// Used by `save_full_report` to guard against corrupt metric values before
+    /// writing. `serde_json` silently converts NaN/Inf to `null` (JSON has no
+    /// representation for them), so a post-serialization walk would miss them.
+    pub fn first_non_finite_field(&self) -> Option<&'static str> {
+        let checks: &[(&'static str, f64)] = &[
+            ("ndcg_at_10", self.ndcg_at_10),
+            ("ndcg_at_5", self.ndcg_at_5),
+            ("map_at_5", self.map_at_5),
+            ("map_at_10", self.map_at_10),
+            ("mrr", self.mrr),
+            ("recall_at_1", self.recall_at_1),
+            ("recall_at_3", self.recall_at_3),
+            ("recall_at_5", self.recall_at_5),
+            ("hit_rate_at_1", self.hit_rate_at_1),
+            ("hit_rate_at_3", self.hit_rate_at_3),
+            ("precision_at_3", self.precision_at_3),
+            ("precision_at_5", self.precision_at_5),
+        ];
+        for &(name, val) in checks {
+            if !val.is_finite() {
+                return Some(name);
+            }
+        }
+        None
+    }
+
     /// Save current metrics as baseline for future comparison.
     pub fn save_baseline(&self, path: &Path) -> Result<(), std::io::Error> {
         let baseline = BaselineComparison {
@@ -458,6 +495,133 @@ pub struct CategoryBaseline {
     pub ndcg_at_10: f64,
     pub mrr: f64,
     pub recall_at_5: f64,
+}
+
+// ---------------------------------------------------------------------------
+// P0c: save_full_report + save_partial_report
+// ---------------------------------------------------------------------------
+
+/// Save an `EvalReport` to the layered baselines layout with strict guards.
+///
+/// Path: `<root>/<layer>/<task>/<variant>__<comparable_hash>.json`
+/// via [`encode_baseline_path`].
+///
+/// Guards (any failure returns `Err`, no file is written):
+/// - `report.env` must be `Some(...)`.
+/// - All numeric fields must be finite (no NaN, no Inf). Checked by walking
+///   the serialised `serde_json::Value` tree — robust to struct shape changes.
+/// - `skipped_scenarios.len() / total_scenarios <= 5%` when `total_scenarios > 0`.
+/// - `enrichment_failures == 0` unless `EVAL_ACCEPT_PARTIAL=1` is set in the
+///   environment.
+///
+/// Atomic write: serialise to `<final>.tmp.<pid>.<nanos>` in the **same**
+/// directory as the final path, then `std::fs::rename`. Same-filesystem rename
+/// is guaranteed because the tmp file lives beside the target.
+pub fn save_full_report(
+    baselines_root: &std::path::Path,
+    report: &EvalReport,
+) -> anyhow::Result<std::path::PathBuf> {
+    let env = report
+        .env
+        .as_ref()
+        .ok_or_else(|| anyhow::anyhow!("save_full_report: env is required, got None"))?;
+
+    // Guard: all f64 metric fields must be finite.
+    // Note: serde_json serializes NaN/Inf as null (RFC 7159 has no NaN literal),
+    // so a JSON-tree walk would silently miss them. Check struct fields directly.
+    if let Some(bad) = report.first_non_finite_field() {
+        anyhow::bail!(
+            "save_full_report: non-finite metric value (NaN or Inf) in field `{}`",
+            bad
+        );
+    }
+
+    // Guard: skip rate <= 5 %.
+    if report.total_scenarios > 0 {
+        let rate = report.skipped_scenarios.len() as f64 / report.total_scenarios as f64;
+        if rate > 0.05 {
+            anyhow::bail!(
+                "save_full_report: overall skip rate {:.2}% > 5% — write to partial/ instead",
+                rate * 100.0
+            );
+        }
+    }
+
+    // Guard: no enrichment failures unless caller opted in.
+    if report.enrichment_failures > 0 && std::env::var("EVAL_ACCEPT_PARTIAL").is_err() {
+        anyhow::bail!(
+            "save_full_report: {} enrichment_failure(s) present; \
+             set EVAL_ACCEPT_PARTIAL=1 to override",
+            report.enrichment_failures
+        );
+    }
+
+    // Compute final path and ensure parent dir exists.
+    let final_path = encode_baseline_path(baselines_root, env);
+    let parent = final_path
+        .parent()
+        .ok_or_else(|| anyhow::anyhow!("baseline path has no parent: {:?}", final_path))?;
+    std::fs::create_dir_all(parent)?;
+
+    // Atomic same-directory tmp write + rename.
+    let pid = std::process::id();
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    let tmp_filename = format!(
+        "{}.tmp.{}.{}",
+        final_path.file_name().unwrap().to_string_lossy(),
+        pid,
+        nanos
+    );
+    let tmp_path = parent.join(tmp_filename);
+
+    let json = serde_json::to_string_pretty(report)?;
+    std::fs::write(&tmp_path, &json)?;
+    std::fs::rename(&tmp_path, &final_path)?;
+
+    Ok(final_path)
+}
+
+/// Save a partial / truncated / failed report to `<eval_root>/partial/`.
+///
+/// Never writes to the baselines directory, so scripts globbing baselines
+/// never pick up garbage. Format:
+/// `partial/<run_id>__<layer>__<task>__<variant>.json`
+///
+/// `reason` is recorded in `report.truncated_reason` in the saved file.
+pub fn save_partial_report(
+    eval_root: &std::path::Path,
+    report: &EvalReport,
+    reason: &str,
+) -> anyhow::Result<std::path::PathBuf> {
+    let partial_dir = eval_root.join("partial");
+    std::fs::create_dir_all(&partial_dir)?;
+
+    let env = report.env.as_ref();
+    let run_id = env
+        .and_then(|e| e.run_id.as_deref())
+        .unwrap_or("unknown_run");
+    let layer = env
+        .and_then(|e| e.layer)
+        .map(|l| l.as_path_component())
+        .unwrap_or("unknown_layer");
+    let task = env
+        .and_then(|e| e.task.as_deref())
+        .unwrap_or("unknown_task");
+    let variant = env
+        .and_then(|e| e.variant.as_deref())
+        .unwrap_or("unknown_variant");
+
+    let path = partial_dir.join(format!("{}__{}__{}__{}.json", run_id, layer, task, variant));
+
+    let mut to_save = report.clone();
+    to_save.truncated_reason = Some(reason.to_string());
+
+    let json = serde_json::to_string_pretty(&to_save)?;
+    std::fs::write(&path, json)?;
+    Ok(path)
 }
 
 #[cfg(test)]
@@ -554,6 +718,10 @@ mod tests {
             per_case: vec![],
             env: None,
             latency: None,
+            total_scenarios: 0,
+            skipped_scenarios: vec![],
+            enrichment_failures: 0,
+            truncated_reason: None,
         };
 
         report.save_baseline(&path).unwrap();
