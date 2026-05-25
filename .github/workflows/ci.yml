@@ -30,6 +30,10 @@ jobs:
       rust:    ${{ steps.filter.outputs.rust }}
       plugin:  ${{ steps.filter.outputs.plugin }}
       npm:     ${{ steps.filter.outputs.npm }}
+      windows: ${{ steps.filter.outputs.windows }}
+      # Test matrix OSes as a JSON array. Windows is included only when
+      # Windows-affecting files changed (saves ~30min per PR otherwise).
+      test-oses: ${{ steps.matrix.outputs.json }}
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
       - uses: dorny/paths-filter@d1c1ffe0248fe513906c8e24db8ea791d46f8590 # v3
@@ -52,6 +56,30 @@ jobs:
               - '.claude-plugin/**'
             npm:
               - 'crates/*/npm/**'
+            windows:
+              # Files that change Windows-specific behavior. PRs not
+              # touching any of these skip the Windows test job entirely.
+              - 'crates/origin-cli/src/commands/service.rs'
+              - 'crates/origin-cli/src/commands/mcp.rs'
+              - 'crates/origin-cli/tests/cli_integration.rs'
+              - 'crates/origin-cli/tests/distribution.rs'
+              - 'crates/origin-server/src/main.rs'
+              - 'crates/origin-mcp/npm/install.js'
+              - 'scripts/smoke-windows.ps1'
+              - 'install.sh'
+              - 'Cargo.toml'
+              - 'Cargo.lock'
+              - 'rust-toolchain.toml'
+              - '.github/workflows/ci.yml'
+              - '.github/workflows/release.yml'
+
+      - id: matrix
+        run: |
+          if [ "${{ steps.filter.outputs.windows }}" = "true" ]; then
+            echo 'json=["ubuntu-24.04", "macos-14", "windows-2022"]' >> "$GITHUB_OUTPUT"
+          else
+            echo 'json=["ubuntu-24.04", "macos-14"]' >> "$GITHUB_OUTPUT"
+          fi
 
   # fmt + lint always run (cheap, cached). Skipping them based on
   # detect-changes outputs created a FAIL-OPEN path: if detect-changes
@@ -109,9 +137,17 @@ jobs:
     if: "needs.detect-changes.outputs.rust == 'true' && !startsWith(github.event.head_commit.message, 'chore(main): release')"
     runs-on: ${{ matrix.os }}
     strategy:
-      fail-fast: false
+      # Cancel the rest of the matrix when one OS fails. Saves ~20-30min
+      # per PR when a real bug breaks all platforms — Linux/macOS catch
+      # the same regression in 6-15min, Windows would have spent another
+      # ~30min hitting the identical failure.
+      fail-fast: true
       matrix:
-        os: [ubuntu-24.04, macos-14, windows-2022]
+        # Built dynamically by detect-changes.test-oses. Windows is
+        # included only when detect-changes flags a Windows-affecting
+        # file changed. Most PRs don't touch Windows-specific code paths
+        # and pay the ~30min Windows tax anyway today.
+        os: ${{ fromJSON(needs.detect-changes.outputs.test-oses) }}
     env:
       # Drop debuginfo from test artifacts. CI has no debugger attached and the
       # build cache stays warm via rust-cache. Trims linker time + cache size.
@@ -147,8 +183,13 @@ jobs:
         uses: taiki-e/install-action@3235f8901fd37ffed0052b276cec25a362fb82e9 # v2
         with:
           tool: cargo-nextest
-      - name: Workspace lib tests (Linux/Windows)
-        if: matrix.os != 'macos-14'
+      # Workspace lib tests skipped on Windows — Linux + macOS catch the
+      # same cross-platform unit logic in ~5-15min vs 25min on Windows.
+      # Windows-specific behavior (paths, mcp_add, schtasks) is covered
+      # by `Integration tests origin-cli + origin-server` + the schtasks
+      # install round-trip E2E further down.
+      - name: Workspace lib tests (Linux)
+        if: matrix.os == 'ubuntu-24.04'
         run: cargo nextest run --workspace --lib
       - name: Workspace lib tests (macOS, single-threaded)
         if: matrix.os == 'macos-14'
