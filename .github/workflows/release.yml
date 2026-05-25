@@ -157,6 +157,12 @@ jobs:
           toolchain: 1.95.0
           targets: ${{ matrix.target }}
 
+      # sccache caches rustc + build-script outputs to GHA. Big win on the
+      # C/C++-heavy crates we pull (openssl-src, ring, llama-cpp-sys).
+      - name: Set up sccache
+        if: matrix.use_cross != true
+        uses: mozilla-actions/sccache-action@7d986dd989559c6ecdb630a3fd2557667be217ad # v0.0.9
+
       # vcpkg sqlite3 for Windows — libsql 0.9 needs `sqlite3.lib` at link
       # time and does not bundle SQLite on Windows. Mirrors ci.yml's test
       # step. GitHub `windows-2022` runner ships vcpkg preinstalled.
@@ -174,27 +180,34 @@ jobs:
           # between aarch64 and x86_64 (otherwise the first job's target/
           # contents pollute the second).
           shared-key: release-${{ matrix.target }}
+          cache-all-crates: "true"
 
-      - name: Install cross
+      # cargo-zigbuild replaces `cross` for Linux targets. No Docker
+      # container — uses Zig as the cross C/C++ compiler. ~3-5min faster
+      # per Linux job (no image pull, no apt-get inside container) and
+      # avoids the cross-0.2.5 Ubuntu-16.04-OpenSSL trap entirely.
+      - name: Install Zig + cargo-zigbuild
         if: matrix.use_cross == true
-        run: cargo install cross --locked
-
-      # No pre-build openssl install. The cross 0.2.5 container ships
-      # OpenSSL 1.0.2 (Ubuntu 16.04 base), which openssl-sys 0.9.x rejects
-      # as too old. Worse, when openssl-sys finds *any* system OpenSSL it
-      # short-circuits BEFORE checking the `vendored` cargo feature — so a
-      # `pre-build apt-get install libssl-dev` actively breaks the build.
-      # Workspace Cargo.toml's vendored feature (origin-server pulls
-      # `openssl = { workspace = true }`) compiles OpenSSL 3.x from source
-      # via `openssl-src`, so no container packages are needed.
+        uses: goto-bus-stop/setup-zig@7ab2955eb728f5440978d5824358023be3a2802d # v2
+        with:
+          version: 0.13.0
+      - name: Install cargo-zigbuild
+        if: matrix.use_cross == true
+        run: cargo install cargo-zigbuild --locked
 
       - name: Build (native)
         if: matrix.use_cross != true
+        env:
+          SCCACHE_GHA_ENABLED: "true"
+          RUSTC_WRAPPER: "sccache"
         run: cargo build --release -p origin -p origin-server -p origin-mcp --target ${{ matrix.target }}
 
-      - name: Build (cross)
+      - name: Build (cross via zigbuild)
         if: matrix.use_cross == true
-        run: cross build --release -p origin -p origin-server -p origin-mcp --target ${{ matrix.target }}
+        env:
+          SCCACHE_GHA_ENABLED: "true"
+          RUSTC_WRAPPER: "sccache"
+        run: cargo zigbuild --release -p origin -p origin-server -p origin-mcp --target ${{ matrix.target }}
 
       - name: Smoke (native)
         if: matrix.use_cross != true

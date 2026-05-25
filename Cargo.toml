@@ -99,3 +99,15 @@ serde_yaml = "0.9"
 sysinfo = "0.33"
 image = "0.25"
 toml = "0.8"
+
+# Release profile tuned for CI throughput. Default is `codegen-units = 1`
+# + no `lto`, optimized for runtime perf at the cost of long link times.
+# Origin's bottleneck is build time, not the last 5% of release-binary
+# perf. `codegen-units = 16` lets rustc fan out across cores; `lto =
+# "thin"` keeps the LTO pass cheap but still inlines hot paths. Net:
+# ~30-50% off link time on Linux/Windows, binary ~5-10% larger.
+[profile.release]
+codegen-units = 16
+lto = "thin"
+strip = "debuginfo"
+incremental = false
