@@ -192,6 +192,77 @@ pub struct CaseResult {
     pub neg_above_relevant: usize,
 }
 
+/// Hash the subset of `ReportEnv` fields that determine baseline comparability.
+///
+/// Includes: fixture_revision, embedder_revision, llm_provider_class,
+/// llm_model, mcp_schema_hash, skill_prompt_hash, schema_version,
+/// schema_db_version, similarity_fn_name.
+///
+/// Excludes: layer (path component), variant (path component), n_runs,
+/// run_id, timestamp, costs, latency fields. These vary across runs of
+/// the same eval setup, so cross-run comparison of metrics requires the
+/// COMPARABLE subset to match.
+///
+/// **Contract:** any modification to this function's input set (adding,
+/// removing, reordering, or changing the encoding of any field) MUST bump
+/// `default_schema_version()` so old vs new baselines hash distinctly and
+/// don't appear comparable.
+pub fn comparable_env_hash(env: &ReportEnv) -> String {
+    use sha2::{Digest, Sha256};
+    let mut h = Sha256::new();
+    h.update(env.fixture_revision.as_bytes());
+    h.update(b"|");
+    h.update(env.embedder_revision.as_bytes());
+    h.update(b"|");
+    h.update(env.llm_provider_class.as_bytes());
+    h.update(b"|");
+    h.update(env.llm_model.as_bytes());
+    h.update(b"|");
+    h.update(env.mcp_schema_hash.as_deref().unwrap_or("").as_bytes());
+    h.update(b"|");
+    h.update(env.skill_prompt_hash.as_deref().unwrap_or("").as_bytes());
+    h.update(b"|");
+    h.update(env.schema_version.to_string().as_bytes());
+    h.update(b"|");
+    h.update(
+        env.schema_db_version
+            .map(|v| v.to_string())
+            .unwrap_or_default()
+            .as_bytes(),
+    );
+    h.update(b"|");
+    h.update(env.similarity_fn_name.as_bytes());
+    let hex = format!("{:x}", h.finalize());
+    hex.chars().take(8).collect()
+}
+
+/// Encode the on-disk path for a baseline given an env stamp.
+///
+/// Layout: `<root>/<layer_dir>/<task>/<variant>__<comparable_hash>.json`
+///
+/// E.g.: `~/.cache/origin-eval/baselines/l1_db/locomo/base__a1b2c3d4.json`
+///
+/// Panics if env.layer / env.task / env.variant are None — these are required
+/// for any baseline that ships through `save_full_report`.
+pub fn encode_baseline_path(root: &std::path::Path, env: &ReportEnv) -> std::path::PathBuf {
+    let layer = env
+        .layer
+        .expect("encode_baseline_path: env.layer must be Some")
+        .as_path_component();
+    let task = env
+        .task
+        .as_deref()
+        .expect("encode_baseline_path: env.task must be Some");
+    let variant = env
+        .variant
+        .as_deref()
+        .expect("encode_baseline_path: env.variant must be Some");
+    let hash = comparable_env_hash(env);
+    root.join(layer)
+        .join(task)
+        .join(format!("{}__{}.json", variant, hash))
+}
+
 /// Encode retrieval variant + provider + fixture-hash into a baseline filename.
 /// Shared by EvalReport, LocomoReport, and LongMemEvalReport.
 /// Falls back to `base + ".json"` when `env` is None (back-compat).
@@ -392,6 +463,60 @@ pub struct CategoryBaseline {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::eval::EvalLayer;
+
+    fn sample_env(layer: EvalLayer, variant: &str) -> ReportEnv {
+        ReportEnv {
+            layer: Some(layer),
+            task: Some("locomo".to_string()),
+            variant: Some(variant.to_string()),
+            fixture_revision: "fixture_aaaa".to_string(),
+            embedder_revision: "BGE-Base-EN-v1.5-Q".to_string(),
+            llm_provider_class: "on-device".to_string(),
+            llm_model: "qwen3-4b".to_string(),
+            mcp_schema_hash: None,
+            skill_prompt_hash: None,
+            schema_version: 1,
+            schema_db_version: Some(46),
+            similarity_fn_name: "cosine".to_string(),
+            ..ReportEnv::default()
+        }
+    }
+
+    #[test]
+    fn comparable_hash_excludes_layer_and_variant() {
+        // L1 base vs L2 base: same comparable fields → same hash across layers.
+        let h1 = comparable_env_hash(&sample_env(EvalLayer::L1Db, "base"));
+        let h2 = comparable_env_hash(&sample_env(EvalLayer::L2Http, "base"));
+        assert_eq!(h1, h2, "same comparable fields → same hash across layers");
+
+        // base vs reranked at L1: also same hash (variant excluded).
+        let h3 = comparable_env_hash(&sample_env(EvalLayer::L1Db, "reranked"));
+        assert_eq!(h1, h3, "variant should not affect comparable hash");
+    }
+
+    #[test]
+    fn comparable_hash_changes_when_fixture_changes() {
+        let e1 = sample_env(EvalLayer::L1Db, "base");
+        let mut e2 = sample_env(EvalLayer::L1Db, "base");
+        e2.fixture_revision = "different_fixture".to_string();
+        assert_ne!(comparable_env_hash(&e1), comparable_env_hash(&e2));
+    }
+
+    #[test]
+    fn comparable_hash_changes_when_schema_version_bumps() {
+        let e1 = sample_env(EvalLayer::L1Db, "base");
+        let mut e2 = sample_env(EvalLayer::L1Db, "base");
+        e2.schema_version = 2;
+        assert_ne!(comparable_env_hash(&e1), comparable_env_hash(&e2));
+    }
+
+    #[test]
+    fn comparable_hash_stable_across_calls() {
+        let e = sample_env(EvalLayer::L1Db, "base");
+        assert_eq!(comparable_env_hash(&e), comparable_env_hash(&e));
+        assert_eq!(comparable_env_hash(&e).len(), 8, "expected sha256[..8]");
+    }
 
     #[test]
     fn test_baseline_save_load_roundtrip() {
@@ -478,5 +603,35 @@ mod tests {
         let parsed2: BenchmarkHistoryEntry = serde_json::from_str(lines[1]).unwrap();
         assert_eq!(parsed2.benchmark, "locomo");
         assert_eq!(parsed2.git_sha, "def5678");
+    }
+
+    #[test]
+    fn encode_baseline_path_layout() {
+        let env = sample_env(EvalLayer::L1Db, "base");
+        let path = encode_baseline_path(std::path::Path::new("/tmp/baselines"), &env);
+        let comparable = comparable_env_hash(&env);
+        let expected = format!("/tmp/baselines/l1_db/locomo/base__{}.json", comparable);
+        assert_eq!(path.to_string_lossy(), expected);
+    }
+
+    #[test]
+    fn encode_baseline_path_all_layers_distinct() {
+        let base = std::path::Path::new("/tmp");
+        let p1 = encode_baseline_path(base, &sample_env(EvalLayer::L1Db, "base"));
+        let p2 = encode_baseline_path(base, &sample_env(EvalLayer::L2Http, "base"));
+        let p3 = encode_baseline_path(base, &sample_env(EvalLayer::L3Mcp, "base"));
+        assert_ne!(p1, p2);
+        assert_ne!(p2, p3);
+        assert_ne!(p1, p3);
+    }
+
+    #[test]
+    fn encode_baseline_path_all_variants_distinct() {
+        let base = std::path::Path::new("/tmp");
+        let p_base = encode_baseline_path(base, &sample_env(EvalLayer::L1Db, "base"));
+        let p_rerank = encode_baseline_path(base, &sample_env(EvalLayer::L1Db, "reranked"));
+        let p_aq = encode_baseline_path(base, &sample_env(EvalLayer::L1Db, "answer_quality"));
+        assert_ne!(p_base, p_rerank);
+        assert_ne!(p_rerank, p_aq);
     }
 }
