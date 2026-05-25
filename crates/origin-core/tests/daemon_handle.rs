@@ -91,6 +91,19 @@ async fn spawn_uses_ephemeral_port_not_default_7878() {
 }
 
 #[tokio::test]
+async fn smoke_preflight_runs_warmup_against_live_daemon() {
+    if skip_if_no_daemon() {
+        return;
+    }
+    let daemon = DaemonHandle::spawn().await.expect("spawn");
+    // 3 warmup calls — enough to hit the path twice past cold-init,
+    // small enough to stay under the integration-test budget.
+    origin_core::eval::l2_runner::smoke_preflight(&daemon, 3)
+        .await
+        .expect("smoke_preflight");
+}
+
+#[tokio::test]
 async fn pidfile_exists_during_lifetime_and_removed_on_drop() {
     if skip_if_no_daemon() {
         return;
