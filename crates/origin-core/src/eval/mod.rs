@@ -8,6 +8,7 @@ pub mod shared;
 
 pub mod answer_quality;
 pub mod context_path;
+pub mod cost;
 pub mod fixtures;
 pub mod gen;
 pub mod kg_faithfulness;
@@ -24,6 +25,7 @@ pub mod report;
 pub mod retrieval;
 pub mod runner;
 pub mod signals;
+pub mod wall_clock;
 pub use layer::EvalLayer;
 
 /// Backward-compat alias: old code using `eval::token_efficiency::*` still works.

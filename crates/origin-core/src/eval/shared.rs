@@ -264,16 +264,24 @@ pub async fn run_enrichment_batch_api(
             }
             for obs in &kg.observations {
                 if let Some(entity_id) = entity_cache.get(&obs.entity.to_lowercase()) {
-                    let _ = db
+                    if let Err(e) = db
                         .add_observation(entity_id, &obs.content, Some("batch_eval"), None)
-                        .await;
+                        .await
+                    {
+                        log::warn!(
+                            "[batch_enrich] add_observation failed for entity={} source={}: {}",
+                            entity_id,
+                            source_id,
+                            e
+                        );
+                    }
                 }
             }
             for rel in &kg.relations {
                 let from_id = entity_cache.get(&rel.from.to_lowercase()).cloned();
                 let to_id = entity_cache.get(&rel.to.to_lowercase()).cloned();
                 if let (Some(from), Some(to)) = (from_id, to_id) {
-                    let _ = db
+                    if let Err(e) = db
                         .create_relation(
                             &from,
                             &to,
@@ -283,14 +291,30 @@ pub async fn run_enrichment_batch_api(
                             rel.explanation.as_deref(),
                             Some(source_id),
                         )
-                        .await;
+                        .await
+                    {
+                        log::warn!(
+                            "[batch_enrich] create_relation failed from={} to={} source={}: {}",
+                            from,
+                            to,
+                            source_id,
+                            e
+                        );
+                    }
                 }
             }
         }
 
         // Link memory to first entity
         if let Some(ref eid) = first_entity_id {
-            let _ = db.update_memory_entity_id(source_id, eid).await;
+            if let Err(e) = db.update_memory_entity_id(source_id, eid).await {
+                log::warn!(
+                    "[batch_enrich] update_memory_entity_id failed for source={} entity={}: {}",
+                    source_id,
+                    eid,
+                    e
+                );
+            }
         }
     }
 
@@ -526,16 +550,22 @@ pub async fn run_entity_extraction_for_eval_batched(
             }
             for obs in &kg.observations {
                 if let Some(entity_id) = entity_cache.get(&obs.entity.to_lowercase()) {
-                    let _ = db
+                    if let Err(e) = db
                         .add_observation(entity_id, &obs.content, Some("batch_eval"), None)
-                        .await;
+                        .await
+                    {
+                        log::warn!(
+                            "[entity_extract_batched] add_observation failed for entity={} source={}: {}",
+                            entity_id, source_id, e
+                        );
+                    }
                 }
             }
             for rel in &kg.relations {
                 let from_id = entity_cache.get(&rel.from.to_lowercase()).cloned();
                 let to_id = entity_cache.get(&rel.to.to_lowercase()).cloned();
                 if let (Some(from), Some(to)) = (from_id, to_id) {
-                    let _ = db
+                    if let Err(e) = db
                         .create_relation(
                             &from,
                             &to,
@@ -545,13 +575,25 @@ pub async fn run_entity_extraction_for_eval_batched(
                             rel.explanation.as_deref(),
                             Some(source_id),
                         )
-                        .await;
+                        .await
+                    {
+                        log::warn!(
+                            "[entity_extract_batched] create_relation failed from={} to={} source={}: {}",
+                            from, to, source_id, e
+                        );
+                    }
                 }
             }
 
             if let Some(ref eid) = first_entity_id {
-                let _ = db.update_memory_entity_id(source_id, eid).await;
-                chunk_linked += 1;
+                if let Err(e) = db.update_memory_entity_id(source_id, eid).await {
+                    log::warn!(
+                        "[entity_extract_batched] update_memory_entity_id failed for source={} entity={}: {}",
+                        source_id, eid, e
+                    );
+                } else {
+                    chunk_linked += 1;
+                }
             }
         }
 
@@ -1106,7 +1148,7 @@ pub async fn run_entity_extraction_for_eval_cli(
     let all_unlinked = db.get_unlinked_memories(100_000).await?;
     if all_unlinked.is_empty() {
         eprintln!("[enrich-cli-entities] no unlinked memories");
-        let _ = db.mark_all_memories_enriched_for_eval().await?;
+        db.mark_all_memories_enriched_for_eval().await?;
         return Ok(0);
     }
 
@@ -1157,7 +1199,7 @@ pub async fn run_entity_extraction_for_eval_cli(
     );
 
     if let Some(parent) = cache_path.parent() {
-        let _ = std::fs::create_dir_all(parent);
+        let _ = std::fs::create_dir_all(parent); // best-effort: cache dir may already exist
     }
     let mut cache_file = OpenOptions::new()
         .create(true)
@@ -1262,8 +1304,8 @@ pub async fn run_entity_extraction_for_eval_cli(
                             entities: entities.clone(),
                         };
                         if let Ok(line) = serde_json::to_string(&rec) {
-                            let _ = writeln!(file, "{}", line);
-                            let _ = file.flush();
+                            let _ = writeln!(file, "{}", line); // best-effort: cache write
+                            let _ = file.flush(); // best-effort: cache flush
                         }
                     }
                     total_entities_cached.insert(mid, entities.clone());
@@ -1319,12 +1361,18 @@ pub async fn run_entity_extraction_for_eval_cli(
             }
         }
         if let Some(eid) = first_id {
-            let _ = db.update_memory_entity_id(memory_id, &eid).await;
-            total_linked += 1;
+            if let Err(e) = db.update_memory_entity_id(memory_id, &eid).await {
+                log::warn!(
+                    "[enrich-cli-entities] update_memory_entity_id failed for memory={} entity={}: {}",
+                    memory_id, eid, e
+                );
+            } else {
+                total_linked += 1;
+            }
         }
     }
 
-    let _ = db.mark_all_memories_enriched_for_eval().await?;
+    db.mark_all_memories_enriched_for_eval().await?;
     eprintln!(
         "[enrich-cli-entities] DONE: {} batches succ, {} failed, {} retries | aborted={} | total_cost=${:.4} | linked={} entities={}",
         succ_batches, fail_batches, retries, aborted, total_cost, total_linked, total_entities_count
@@ -1395,7 +1443,7 @@ pub async fn run_title_enrichment_for_eval_cli(
     );
 
     if let Some(parent) = cache_path.parent() {
-        let _ = std::fs::create_dir_all(parent);
+        let _ = std::fs::create_dir_all(parent); // best-effort: cache dir may already exist
     }
     let mut cache_file = OpenOptions::new()
         .create(true)
@@ -1494,8 +1542,8 @@ pub async fn run_title_enrichment_for_eval_cli(
                             title: title.clone(),
                         };
                         if let Ok(line) = serde_json::to_string(&rec) {
-                            let _ = writeln!(file, "{}", line);
-                            let _ = file.flush();
+                            let _ = writeln!(file, "{}", line); // best-effort: cache write
+                            let _ = file.flush(); // best-effort: cache flush
                         }
                     }
                     new_titles.insert(mid, title.clone());
