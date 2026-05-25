@@ -52,6 +52,14 @@ pub struct SearchMemoryRequest {
     /// so the common single-hop path is unchanged.
     #[serde(default)]
     pub decompose: bool,
+    /// When `true` AND the daemon has a reranker wired (via
+    /// `ORIGIN_RERANKER_ENABLED=1`), results pass through a cross-encoder
+    /// reranker after the embedding+FTS hybrid step. When `true` but no
+    /// reranker is available, the daemon logs a warning and falls back to
+    /// the plain hybrid ordering. Default `false` to preserve current
+    /// behavior for callers that don't opt in.
+    #[serde(default)]
+    pub rerank: bool,
 }
 
 #[derive(Debug, Serialize, Deserialize)]

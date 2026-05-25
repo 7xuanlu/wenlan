@@ -9,6 +9,7 @@ description = "Core business logic for Origin — memory storage, retrieval, and
 [features]
 default = []
 closed-core-eval = []
+eval-harness = []
 
 [dependencies]
 origin-types = { workspace = true }
@@ -56,6 +57,7 @@ rusqlite = { version = "0.31", default-features = false }
 # tempfile is used from eval/ runners (non-test code paths) in addition to
 # the dev-dependency usage by other modules.
 tempfile = { workspace = true }
+fs2 = { workspace = true }
 
 # Benchmark binaries (model_benchmark, deep_distill, etc.)
 env_logger = "0.11"

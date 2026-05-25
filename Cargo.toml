@@ -106,6 +106,7 @@ serde_yaml = "0.9"
 sysinfo = "0.33"
 image = "0.25"
 toml = "0.8"
+fs2 = "0.4"
 
 # Release profile tuned for CI throughput. Default is `codegen-units = 1`
 # + no `lto`, optimized for runtime perf at the cost of long link times.

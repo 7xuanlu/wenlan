@@ -169,6 +169,7 @@ async fn mcp_capture_and_recall_respects_space() {
             memory_type: None,
             space: Some("alpha".into()),
             decompose: None,
+            rerank: None,
         })
         .await
         .expect("recall_impl failed");

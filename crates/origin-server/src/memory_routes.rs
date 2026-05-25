@@ -1040,63 +1040,89 @@ pub async fn handle_search_memory(
     }
     let start = std::time::Instant::now();
 
-    // Snapshot what the search needs out of the state guard so we don't hold
-    // the read lock across the (potentially LLM-bound) decomposed call.
-    let (db, llm, decomposition_enabled) = {
-        let s = state.read().await;
-        let db = s.db.clone().ok_or(ServerError::DbNotInitialized)?;
-        (db, s.llm.clone(), s.tuning.retrieval.decomposition_enabled)
-    };
+    let results = {
+        // Snapshot what the search needs out of the state guard so we don't hold
+        // the read lock across the (potentially LLM-bound) decomposed call or
+        // the cross-encoder reranker invocation.
+        let (db, llm, reranker, decomposition_enabled) = {
+            let s = state.read().await;
+            let db = s.db.as_ref().ok_or(ServerError::DbNotInitialized)?.clone();
+            (
+                db,
+                s.llm.clone(),
+                s.reranker.clone(),
+                s.tuning.retrieval.decomposition_enabled,
+            )
+        };
 
-    // Route between plain and decomposed search. The decomposed path costs one
-    // extra LLM call per request, so it's opt-in via `decompose: true` AND
-    // gated by both LLM availability and the `retrieval.decomposition_enabled`
-    // tuning knob. Every fallback degrades to plain `search_memory` so the
-    // request still succeeds — decomposition is a quality lift, not a gate.
-    let use_decompose = if req.decompose {
-        if !decomposition_enabled {
-            tracing::warn!(
-                "decompose=true requested but retrieval.decomposition_enabled=false; \
-                 falling back to plain search"
-            );
-            false
-        } else if llm.is_none() {
-            tracing::warn!(
-                "decompose=true requested but no LLM provider configured; \
-                 falling back to plain search"
-            );
-            false
+        // Route between plain / decomposed / cross-rerank. Decomposed and rerank
+        // are orthogonal opt-ins; if both set, rerank wins (composition not yet
+        // supported). Every fallback degrades to plain `search_memory` so the
+        // request still succeeds.
+        let use_decompose = if req.decompose {
+            if !decomposition_enabled {
+                tracing::warn!(
+                    "decompose=true requested but retrieval.decomposition_enabled=false; falling back to plain search"
+                );
+                false
+            } else if llm.is_none() {
+                tracing::warn!(
+                    "decompose=true requested but no LLM provider configured; falling back to plain search"
+                );
+                false
+            } else {
+                true
+            }
         } else {
-            true
-        }
-    } else {
-        false
-    };
+            false
+        };
 
-    let results = if use_decompose {
-        db.search_memory_decomposed(
-            &req.query,
-            req.limit,
-            req.memory_type.as_deref(),
-            req.space.as_deref(),
-            req.source_agent.as_deref(),
-            llm,
-        )
-        .await
-        .map_err(|e| ServerError::SearchFailed(e.to_string()))?
-    } else {
-        db.search_memory(
-            &req.query,
-            req.limit,
-            req.memory_type.as_deref(),
-            req.space.as_deref(),
-            req.source_agent.as_deref(),
-            None,
-            None,
-            None,
-        )
-        .await
-        .map_err(|e| ServerError::SearchFailed(e.to_string()))?
+        if req.rerank {
+            if reranker.is_none() {
+                tracing::warn!(
+                    "[search] rerank=true requested but no reranker wired (set ORIGIN_RERANKER_ENABLED=1); falling back to plain hybrid search"
+                );
+            }
+            if use_decompose {
+                tracing::warn!(
+                    "[search] rerank=true takes precedence; decompose=true ignored (composition not yet supported)"
+                );
+            }
+            db.search_memory_with_reranker(
+                &req.query,
+                req.limit,
+                req.memory_type.as_deref(),
+                req.space.as_deref(),
+                req.source_agent.as_deref(),
+                reranker,
+            )
+            .await
+            .map_err(|e| ServerError::SearchFailed(e.to_string()))?
+        } else if use_decompose {
+            db.search_memory_decomposed(
+                &req.query,
+                req.limit,
+                req.memory_type.as_deref(),
+                req.space.as_deref(),
+                req.source_agent.as_deref(),
+                llm,
+            )
+            .await
+            .map_err(|e| ServerError::SearchFailed(e.to_string()))?
+        } else {
+            db.search_memory(
+                &req.query,
+                req.limit,
+                req.memory_type.as_deref(),
+                req.space.as_deref(),
+                req.source_agent.as_deref(),
+                None,
+                None,
+                None,
+            )
+            .await
+            .map_err(|e| ServerError::SearchFailed(e.to_string()))?
+        }
     };
 
     let source_ids: Vec<String> = results.iter().map(|r| r.source_id.clone()).collect();
@@ -3811,6 +3837,110 @@ mod search_decompose_routing_tests {
             status.is_success(),
             "decompose=true with decomposition_enabled=false should fall back to plain search and \
              2xx, got {status}"
+        );
+    }
+}
+
+/// Wiring tests for the `rerank` flag on `/api/memory/search`.
+///
+/// These verify that the handler reads `ServerState.reranker` and routes
+/// `rerank=true` through `search_memory_with_reranker`. The `NoopReranker`
+/// stand-in keeps these fast and dependency-free — no model weights, no
+/// cross-encoder download. The rerank quality itself is covered by
+/// `origin_core::db::tests::test_search_memory_with_reranker_*`.
+#[cfg(test)]
+mod search_rerank_tests {
+    use axum::body::Body;
+    use axum::http::{Request, StatusCode};
+    use std::sync::Arc;
+    use tokio::sync::RwLock;
+    use tower::ServiceExt;
+
+    use crate::state::ServerState;
+    use origin_core::reranker::{NoopReranker, Reranker};
+
+    async fn build_state(with_reranker: bool) -> (Arc<RwLock<ServerState>>, tempfile::TempDir) {
+        let tmp = tempfile::tempdir().expect("failed to create tempdir");
+        let emitter: Arc<dyn origin_core::events::EventEmitter> =
+            Arc::new(origin_core::events::NoopEmitter);
+        let db = origin_core::db::MemoryDB::new(tmp.path(), emitter)
+            .await
+            .expect("MemoryDB::new should succeed");
+        let reranker: Option<Arc<dyn Reranker>> = if with_reranker {
+            Some(Arc::new(NoopReranker))
+        } else {
+            None
+        };
+        let server_state = ServerState {
+            db: Some(Arc::new(db)),
+            reranker,
+            ..Default::default()
+        };
+        (Arc::new(RwLock::new(server_state)), tmp)
+    }
+
+    async fn search_response(
+        app: axum::Router,
+        body: &'static str,
+    ) -> origin_types::responses::SearchMemoryResponse {
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/memory/search")
+                    .header("content-type", "application/json")
+                    .body(Body::from(body))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK, "search should succeed");
+        let bytes = axum::body::to_bytes(resp.into_body(), 1_048_576)
+            .await
+            .unwrap();
+        serde_json::from_slice(&bytes).expect("parse SearchMemoryResponse")
+    }
+
+    #[tokio::test]
+    async fn rerank_true_with_noop_reranker_returns_same_shape_as_plain_search() {
+        // With reranker wired (NoopReranker) and an empty DB, both `rerank=true`
+        // and `rerank=false` return the same response shape (empty results,
+        // `took_ms` populated). This locks in: the handler doesn't fail when
+        // the reranker is consulted, and the response envelope is unchanged.
+        let (state, _tmp) = build_state(true).await;
+        let app = crate::router::build_router(state);
+
+        let plain = search_response(app.clone(), r#"{"query":"hello"}"#).await;
+        let reranked = search_response(app, r#"{"query":"hello","rerank":true}"#).await;
+
+        assert_eq!(plain.results.len(), reranked.results.len());
+        assert!(plain.took_ms >= 0.0);
+        assert!(reranked.took_ms >= 0.0);
+    }
+
+    #[tokio::test]
+    async fn rerank_true_without_reranker_falls_back_and_returns_ok() {
+        // When `rerank=true` is requested but no reranker is wired, the
+        // handler logs a warning and falls back to plain hybrid search
+        // rather than failing the request.
+        let (state, _tmp) = build_state(false).await;
+        let app = crate::router::build_router(state);
+
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/memory/search")
+                    .header("content-type", "application/json")
+                    .body(Body::from(r#"{"query":"hello","rerank":true}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            resp.status(),
+            StatusCode::OK,
+            "rerank=true without a wired reranker should fall back, not fail"
         );
     }
 }
