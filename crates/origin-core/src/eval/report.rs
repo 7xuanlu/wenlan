@@ -4,7 +4,7 @@
 use serde::Serialize;
 use std::path::Path;
 
-#[derive(Debug, Clone, Serialize, serde::Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, serde::Deserialize)]
 pub struct ReportEnv {
     pub fixture_revision: String,
     pub embedder_model: String,
@@ -15,6 +15,102 @@ pub struct ReportEnv {
     pub judge_model: Option<String>,
     pub origin_version: String,
     pub eval_timestamp_unix: i64,
+
+    // P0a additive fields:
+    #[serde(default)]
+    pub layer: Option<crate::eval::EvalLayer>,
+    #[serde(default)]
+    pub task: Option<String>,
+    #[serde(default)]
+    pub variant: Option<String>,
+    #[serde(default)]
+    pub embed_dim: Option<u32>,
+    #[serde(default = "default_similarity_fn")]
+    pub similarity_fn_name: String,
+    #[serde(default)]
+    pub judge_model_id: Option<String>,
+    #[serde(default)]
+    pub mcp_schema_hash: Option<String>,
+    #[serde(default)]
+    pub skill_prompt_hash: Option<String>,
+    #[serde(default = "default_schema_version")]
+    pub schema_version: u32,
+    #[serde(default)]
+    pub schema_db_version: Option<u32>,
+    #[serde(default)]
+    pub migrations_hash: Option<String>,
+    #[serde(default = "default_n_runs")]
+    pub n_runs: u32,
+    #[serde(default)]
+    pub is_single_run: bool,
+    #[serde(default)]
+    pub run_id: Option<String>,
+    #[serde(default)]
+    pub timestamp_utc: Option<String>,
+    #[serde(default)]
+    pub git_sha: Option<String>,
+    #[serde(default)]
+    pub warmup_iterations: u32,
+    #[serde(default)]
+    pub eval_max_usd_baseline_cap: Option<f64>,
+    #[serde(default)]
+    pub eval_max_usd_run_cap: Option<f64>,
+    #[serde(default)]
+    pub eval_max_wall_secs_cap: Option<u64>,
+    #[serde(default)]
+    pub total_cost_usd: f64,
+    #[serde(default)]
+    pub total_wall_secs: u64,
+}
+
+fn default_similarity_fn() -> String {
+    "cosine".to_string()
+}
+fn default_schema_version() -> u32 {
+    1
+}
+fn default_n_runs() -> u32 {
+    1
+}
+
+impl Default for ReportEnv {
+    fn default() -> Self {
+        Self {
+            // 9 legacy fields
+            fixture_revision: String::new(),
+            embedder_model: String::new(),
+            embedder_revision: String::new(),
+            retrieval_method: String::new(),
+            llm_provider_class: String::new(),
+            llm_model: String::new(),
+            judge_model: None,
+            origin_version: String::new(),
+            eval_timestamp_unix: 0,
+            // P0a additive fields — mirror serde default attributes
+            layer: None,
+            task: None,
+            variant: None,
+            embed_dim: None,
+            similarity_fn_name: default_similarity_fn(),
+            judge_model_id: None,
+            mcp_schema_hash: None,
+            skill_prompt_hash: None,
+            schema_version: default_schema_version(),
+            schema_db_version: None,
+            migrations_hash: None,
+            n_runs: default_n_runs(),
+            is_single_run: false,
+            run_id: None,
+            timestamp_utc: None,
+            git_sha: None,
+            warmup_iterations: 0,
+            eval_max_usd_baseline_cap: None,
+            eval_max_usd_run_cap: None,
+            eval_max_wall_secs_cap: None,
+            total_cost_usd: 0.0,
+            total_wall_secs: 0,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, serde::Deserialize, Default)]
@@ -71,6 +167,15 @@ pub struct EvalReport {
     // Per-query latency summary
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub latency: Option<crate::eval::latency::LatencySummary>,
+    // Guard fields (P0c)
+    #[serde(default)]
+    pub total_scenarios: usize,
+    #[serde(default)]
+    pub skipped_scenarios: Vec<String>,
+    #[serde(default)]
+    pub enrichment_failures: usize,
+    #[serde(default)]
+    pub truncated_reason: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, serde::Deserialize)]
@@ -94,6 +199,77 @@ pub struct CaseResult {
     pub precision_at_3: f64,
     pub negative_leakage: usize,
     pub neg_above_relevant: usize,
+}
+
+/// Hash the subset of `ReportEnv` fields that determine baseline comparability.
+///
+/// Includes: fixture_revision, embedder_revision, llm_provider_class,
+/// llm_model, mcp_schema_hash, skill_prompt_hash, schema_version,
+/// schema_db_version, similarity_fn_name.
+///
+/// Excludes: layer (path component), variant (path component), n_runs,
+/// run_id, timestamp, costs, latency fields. These vary across runs of
+/// the same eval setup, so cross-run comparison of metrics requires the
+/// COMPARABLE subset to match.
+///
+/// **Contract:** any modification to this function's input set (adding,
+/// removing, reordering, or changing the encoding of any field) MUST bump
+/// `default_schema_version()` so old vs new baselines hash distinctly and
+/// don't appear comparable.
+pub fn comparable_env_hash(env: &ReportEnv) -> String {
+    use sha2::{Digest, Sha256};
+    let mut h = Sha256::new();
+    h.update(env.fixture_revision.as_bytes());
+    h.update(b"|");
+    h.update(env.embedder_revision.as_bytes());
+    h.update(b"|");
+    h.update(env.llm_provider_class.as_bytes());
+    h.update(b"|");
+    h.update(env.llm_model.as_bytes());
+    h.update(b"|");
+    h.update(env.mcp_schema_hash.as_deref().unwrap_or("").as_bytes());
+    h.update(b"|");
+    h.update(env.skill_prompt_hash.as_deref().unwrap_or("").as_bytes());
+    h.update(b"|");
+    h.update(env.schema_version.to_string().as_bytes());
+    h.update(b"|");
+    h.update(
+        env.schema_db_version
+            .map(|v| v.to_string())
+            .unwrap_or_default()
+            .as_bytes(),
+    );
+    h.update(b"|");
+    h.update(env.similarity_fn_name.as_bytes());
+    let hex = format!("{:x}", h.finalize());
+    hex.chars().take(8).collect()
+}
+
+/// Encode the on-disk path for a baseline given an env stamp.
+///
+/// Layout: `<root>/<layer_dir>/<task>/<variant>__<comparable_hash>.json`
+///
+/// E.g.: `~/.cache/origin-eval/baselines/l1_db/locomo/base__a1b2c3d4.json`
+///
+/// Panics if env.layer / env.task / env.variant are None — these are required
+/// for any baseline that ships through `save_full_report`.
+pub fn encode_baseline_path(root: &std::path::Path, env: &ReportEnv) -> std::path::PathBuf {
+    let layer = env
+        .layer
+        .expect("encode_baseline_path: env.layer must be Some")
+        .as_path_component();
+    let task = env
+        .task
+        .as_deref()
+        .expect("encode_baseline_path: env.task must be Some");
+    let variant = env
+        .variant
+        .as_deref()
+        .expect("encode_baseline_path: env.variant must be Some");
+    let hash = comparable_env_hash(env);
+    root.join(layer)
+        .join(task)
+        .join(format!("{}__{}.json", variant, hash))
 }
 
 /// Encode retrieval variant + provider + fixture-hash into a baseline filename.
@@ -231,6 +407,49 @@ impl EvalReport {
         out
     }
 
+    /// Return the name of the first non-finite (NaN or Inf) f64 field, if any.
+    ///
+    /// Used by `save_full_report` to guard against corrupt metric values before
+    /// writing. `serde_json` silently converts NaN/Inf to `null` (JSON has no
+    /// representation for them), so a post-serialization walk would miss them.
+    pub fn first_non_finite_field(&self) -> Option<&'static str> {
+        let checks: &[(&'static str, f64)] = &[
+            ("ndcg_at_10", self.ndcg_at_10),
+            ("ndcg_at_5", self.ndcg_at_5),
+            ("map_at_5", self.map_at_5),
+            ("map_at_10", self.map_at_10),
+            ("mrr", self.mrr),
+            ("recall_at_1", self.recall_at_1),
+            ("recall_at_3", self.recall_at_3),
+            ("recall_at_5", self.recall_at_5),
+            ("hit_rate_at_1", self.hit_rate_at_1),
+            ("hit_rate_at_3", self.hit_rate_at_3),
+            ("precision_at_3", self.precision_at_3),
+            ("precision_at_5", self.precision_at_5),
+        ];
+        for &(name, val) in checks {
+            if !val.is_finite() {
+                return Some(name);
+            }
+        }
+        if let Some(v) = self.empty_set_false_confidence {
+            if !v.is_finite() {
+                return Some("empty_set_false_confidence");
+            }
+        }
+        if let Some(v) = self.score_gap {
+            if !v.is_finite() {
+                return Some("score_gap");
+            }
+        }
+        if let Some(v) = self.temporal_ordering_rate {
+            if !v.is_finite() {
+                return Some("temporal_ordering_rate");
+            }
+        }
+        None
+    }
+
     /// Save current metrics as baseline for future comparison.
     pub fn save_baseline(&self, path: &Path) -> Result<(), std::io::Error> {
         let baseline = BaselineComparison {
@@ -293,9 +512,192 @@ pub struct CategoryBaseline {
     pub recall_at_5: f64,
 }
 
+// ---------------------------------------------------------------------------
+// P0c: save_full_report + save_partial_report
+// ---------------------------------------------------------------------------
+
+/// Save an `EvalReport` to the layered baselines layout with strict guards.
+///
+/// Path: `<root>/<layer>/<task>/<variant>__<comparable_hash>.json`
+/// via [`encode_baseline_path`].
+///
+/// Guards (any failure returns `Err`, no file is written):
+/// - `report.env` must be `Some(...)`.
+/// - All metric f64 fields must be finite (no NaN, no Inf). Checked via
+///   `EvalReport::first_non_finite_field()` which walks known metric fields
+///   directly — serde_json silently maps NaN to JSON null, so a serialized
+///   walk would miss the very value we're rejecting.
+/// - `skipped_scenarios.len() / total_scenarios <= 5%` when `total_scenarios > 0`.
+/// - `enrichment_failures == 0` unless `EVAL_ACCEPT_PARTIAL=1` is set in the
+///   environment.
+///
+/// Atomic write: serialise to `<final>.tmp.<pid>.<nanos>` in the **same**
+/// directory as the final path, then `std::fs::rename`. Same-filesystem rename
+/// is guaranteed because the tmp file lives beside the target.
+pub fn save_full_report(
+    baselines_root: &std::path::Path,
+    report: &EvalReport,
+) -> anyhow::Result<std::path::PathBuf> {
+    let env = report
+        .env
+        .as_ref()
+        .ok_or_else(|| anyhow::anyhow!("save_full_report: env is required, got None"))?;
+
+    // Guard: all f64 metric fields must be finite.
+    // Note: serde_json serializes NaN/Inf as null (RFC 7159 has no NaN literal),
+    // so a JSON-tree walk would silently miss them. Check struct fields directly.
+    if let Some(bad) = report.first_non_finite_field() {
+        anyhow::bail!(
+            "save_full_report: non-finite metric value (NaN or Inf) in field `{}`",
+            bad
+        );
+    }
+
+    // Guard: skip rate <= 5 %.
+    if report.total_scenarios > 0 {
+        let rate = report.skipped_scenarios.len() as f64 / report.total_scenarios as f64;
+        if rate > 0.05 {
+            anyhow::bail!(
+                "save_full_report: overall skip rate {:.2}% > 5% — write to partial/ instead",
+                rate * 100.0
+            );
+        }
+    }
+
+    // Guard: no enrichment failures unless caller opted in.
+    if report.enrichment_failures > 0 && std::env::var("EVAL_ACCEPT_PARTIAL").is_err() {
+        anyhow::bail!(
+            "save_full_report: {} enrichment_failure(s) present; \
+             set EVAL_ACCEPT_PARTIAL=1 to override",
+            report.enrichment_failures
+        );
+    }
+
+    // Compute final path and ensure parent dir exists.
+    let final_path = encode_baseline_path(baselines_root, env);
+    let parent = final_path
+        .parent()
+        .ok_or_else(|| anyhow::anyhow!("baseline path has no parent: {:?}", final_path))?;
+    std::fs::create_dir_all(parent)?;
+
+    // Atomic same-directory tmp write + rename.
+    let pid = std::process::id();
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    let tmp_filename = format!(
+        "{}.tmp.{}.{}",
+        final_path.file_name().unwrap().to_string_lossy(),
+        pid,
+        nanos
+    );
+    let tmp_path = parent.join(tmp_filename);
+
+    let json = serde_json::to_string_pretty(report)?;
+    std::fs::write(&tmp_path, &json)?;
+    std::fs::rename(&tmp_path, &final_path)?;
+
+    Ok(final_path)
+}
+
+/// Save a partial / truncated / failed report to `<eval_root>/partial/`.
+///
+/// Never writes to the baselines directory, so scripts globbing baselines
+/// never pick up garbage. Format:
+/// `partial/<run_id>__<layer>__<task>__<variant>.json`
+///
+/// `reason` is recorded in `report.truncated_reason` in the saved file.
+pub fn save_partial_report(
+    eval_root: &std::path::Path,
+    report: &EvalReport,
+    reason: &str,
+) -> anyhow::Result<std::path::PathBuf> {
+    let partial_dir = eval_root.join("partial");
+    std::fs::create_dir_all(&partial_dir)?;
+
+    let env = report.env.as_ref();
+    let run_id = env
+        .and_then(|e| e.run_id.as_deref())
+        .unwrap_or("unknown_run");
+    let layer = env
+        .and_then(|e| e.layer)
+        .map(|l| l.as_path_component())
+        .unwrap_or("unknown_layer");
+    let task = env
+        .and_then(|e| e.task.as_deref())
+        .unwrap_or("unknown_task");
+    let variant = env
+        .and_then(|e| e.variant.as_deref())
+        .unwrap_or("unknown_variant");
+
+    let path = partial_dir.join(format!("{}__{}__{}__{}.json", run_id, layer, task, variant));
+
+    let mut to_save = report.clone();
+    to_save.truncated_reason = Some(reason.to_string());
+
+    let json = serde_json::to_string_pretty(&to_save)?;
+    std::fs::write(&path, json)?;
+    Ok(path)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::eval::EvalLayer;
+
+    fn sample_env(layer: EvalLayer, variant: &str) -> ReportEnv {
+        ReportEnv {
+            layer: Some(layer),
+            task: Some("locomo".to_string()),
+            variant: Some(variant.to_string()),
+            fixture_revision: "fixture_aaaa".to_string(),
+            embedder_revision: "BGE-Base-EN-v1.5-Q".to_string(),
+            llm_provider_class: "on-device".to_string(),
+            llm_model: "qwen3-4b".to_string(),
+            mcp_schema_hash: None,
+            skill_prompt_hash: None,
+            schema_version: 1,
+            schema_db_version: Some(46),
+            similarity_fn_name: "cosine".to_string(),
+            ..ReportEnv::default()
+        }
+    }
+
+    #[test]
+    fn comparable_hash_excludes_layer_and_variant() {
+        // L1 base vs L2 base: same comparable fields → same hash across layers.
+        let h1 = comparable_env_hash(&sample_env(EvalLayer::L1Db, "base"));
+        let h2 = comparable_env_hash(&sample_env(EvalLayer::L2Http, "base"));
+        assert_eq!(h1, h2, "same comparable fields → same hash across layers");
+
+        // base vs reranked at L1: also same hash (variant excluded).
+        let h3 = comparable_env_hash(&sample_env(EvalLayer::L1Db, "reranked"));
+        assert_eq!(h1, h3, "variant should not affect comparable hash");
+    }
+
+    #[test]
+    fn comparable_hash_changes_when_fixture_changes() {
+        let e1 = sample_env(EvalLayer::L1Db, "base");
+        let mut e2 = sample_env(EvalLayer::L1Db, "base");
+        e2.fixture_revision = "different_fixture".to_string();
+        assert_ne!(comparable_env_hash(&e1), comparable_env_hash(&e2));
+    }
+
+    #[test]
+    fn comparable_hash_changes_when_schema_version_bumps() {
+        let e1 = sample_env(EvalLayer::L1Db, "base");
+        let mut e2 = sample_env(EvalLayer::L1Db, "base");
+        e2.schema_version = 2;
+        assert_ne!(comparable_env_hash(&e1), comparable_env_hash(&e2));
+    }
+
+    #[test]
+    fn comparable_hash_stable_across_calls() {
+        let e = sample_env(EvalLayer::L1Db, "base");
+        assert_eq!(comparable_env_hash(&e), comparable_env_hash(&e));
+        assert_eq!(comparable_env_hash(&e).len(), 8, "expected sha256[..8]");
+    }
 
     #[test]
     fn test_baseline_save_load_roundtrip() {
@@ -333,6 +735,10 @@ mod tests {
             per_case: vec![],
             env: None,
             latency: None,
+            total_scenarios: 0,
+            skipped_scenarios: vec![],
+            enrichment_failures: 0,
+            truncated_reason: None,
         };
 
         report.save_baseline(&path).unwrap();
@@ -382,5 +788,35 @@ mod tests {
         let parsed2: BenchmarkHistoryEntry = serde_json::from_str(lines[1]).unwrap();
         assert_eq!(parsed2.benchmark, "locomo");
         assert_eq!(parsed2.git_sha, "def5678");
+    }
+
+    #[test]
+    fn encode_baseline_path_layout() {
+        let env = sample_env(EvalLayer::L1Db, "base");
+        let path = encode_baseline_path(std::path::Path::new("/tmp/baselines"), &env);
+        let comparable = comparable_env_hash(&env);
+        let expected = format!("/tmp/baselines/l1_db/locomo/base__{}.json", comparable);
+        assert_eq!(path.to_string_lossy(), expected);
+    }
+
+    #[test]
+    fn encode_baseline_path_all_layers_distinct() {
+        let base = std::path::Path::new("/tmp");
+        let p1 = encode_baseline_path(base, &sample_env(EvalLayer::L1Db, "base"));
+        let p2 = encode_baseline_path(base, &sample_env(EvalLayer::L2Http, "base"));
+        let p3 = encode_baseline_path(base, &sample_env(EvalLayer::L3Mcp, "base"));
+        assert_ne!(p1, p2);
+        assert_ne!(p2, p3);
+        assert_ne!(p1, p3);
+    }
+
+    #[test]
+    fn encode_baseline_path_all_variants_distinct() {
+        let base = std::path::Path::new("/tmp");
+        let p_base = encode_baseline_path(base, &sample_env(EvalLayer::L1Db, "base"));
+        let p_rerank = encode_baseline_path(base, &sample_env(EvalLayer::L1Db, "reranked"));
+        let p_aq = encode_baseline_path(base, &sample_env(EvalLayer::L1Db, "answer_quality"));
+        assert_ne!(p_base, p_rerank);
+        assert_ne!(p_rerank, p_aq);
     }
 }
