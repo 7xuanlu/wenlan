@@ -576,6 +576,26 @@ async fn run_daemon() -> anyhow::Result<()> {
         }
     };
 
+    // Advertise the bound port before accepting requests.
+    // `addr` may be `127.0.0.1:0`; `local_addr()` gives the real ephemeral port.
+    let local_addr = listener.local_addr()?;
+
+    // Eval harness reads this stdout line to discover the bound port even when
+    // ORIGIN_BIND_ADDR=127.0.0.1:0. Format MUST stay stable — see
+    // crates/origin-core/src/eval/http_harness.rs in the P2 plan.
+    println!("ORIGIN_LISTENING_ON={}", local_addr);
+    use std::io::Write;
+    let _ = std::io::stdout().flush();
+
+    // Alternate signal: write the port to a file if ORIGIN_PORT_FILE is set.
+    // Eval harness uses this when stdout is captured by tracing-appender.
+    if let Ok(port_file) = std::env::var("ORIGIN_PORT_FILE") {
+        if let Err(e) = std::fs::write(&port_file, local_addr.port().to_string()) {
+            tracing::error!("failed to write ORIGIN_PORT_FILE={}: {}", port_file, e);
+            return Err(anyhow::anyhow!("ORIGIN_PORT_FILE write failed: {}", e));
+        }
+    }
+
     // Serve
     axum::serve(listener, app).await?;
 
