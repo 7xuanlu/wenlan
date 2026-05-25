@@ -58,6 +58,10 @@ rusqlite = { version = "0.31", default-features = false }
 # the dev-dependency usage by other modules.
 tempfile = { workspace = true }
 fs2 = { workspace = true }
+# libc — `kill(pid, 0)` existence probe + SIGTERM/SIGKILL in eval/orphan_reaper
+# and eval/http_harness Drop. Unix-only crates feature-gate `process_alive`
+# with `#[cfg(unix)]`; on Windows it returns conservative `true` (no reap).
+libc = "0.2"
 
 # Benchmark binaries (model_benchmark, deep_distill, etc.)
 env_logger = "0.11"
