@@ -114,3 +114,30 @@ fn run_cost_tracker_thread_safe() {
     // 4 threads × 100 iters × $0.01 = $4.00 — well under cap
     assert_eq!(t.total_usd(), 4.0);
 }
+
+#[test]
+fn run_cost_tracker_refunds_on_cap_overage() {
+    let t = RunCostTracker::new(Some(1.0));
+    t.record_usd(0.50).unwrap();
+    let _err = t.record_usd(0.75).unwrap_err();
+    // Total should reflect successful spend only — failed record was refunded.
+    assert_eq!(
+        t.total_usd(),
+        0.50,
+        "failed record_usd must not corrupt total"
+    );
+    // Subsequent records within remaining cap should succeed.
+    t.record_usd(0.40).unwrap();
+    assert_eq!(t.total_usd(), 0.90);
+}
+
+#[test]
+#[cfg(not(debug_assertions))]
+fn run_cost_tracker_negative_cap_saturates_to_zero() {
+    // Defensive: nonsense cap shouldn't wrap to giant u64.
+    // Only runs in release (debug_assert fires under debug, which is the designed behavior).
+    let t = RunCostTracker::new(Some(-1.0));
+    // First record_usd of any positive amount should bail (cap effectively 0).
+    let err = t.record_usd(0.01).unwrap_err();
+    assert!(format!("{}", err).contains("EVAL_MAX_USD_RUN"));
+}

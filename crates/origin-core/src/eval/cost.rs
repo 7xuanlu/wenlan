@@ -17,8 +17,18 @@ pub struct RunCostTracker {
 
 impl RunCostTracker {
     pub fn new(cap_usd: Option<f64>) -> Self {
+        if let Some(cap) = cap_usd {
+            debug_assert!(
+                cap.is_finite() && cap > 0.0,
+                "cap_usd should be finite + positive; got {}",
+                cap
+            );
+        }
         Self {
-            cap_millicents: cap_usd.map(|usd| (usd * 100_000.0).round() as u64),
+            cap_millicents: cap_usd.map(|usd| {
+                let mc = (usd * 100_000.0).round();
+                mc.max(0.0) as u64
+            }),
             total_millicents: AtomicU64::new(0),
         }
     }
@@ -35,6 +45,8 @@ impl RunCostTracker {
         let new_total_mc = self.total_millicents.fetch_add(amount_mc, Ordering::SeqCst) + amount_mc;
         if let Some(cap_mc) = self.cap_millicents {
             if new_total_mc > cap_mc {
+                // Refund — failed record shouldn't corrupt total.
+                self.total_millicents.fetch_sub(amount_mc, Ordering::SeqCst);
                 let new_total_usd = (new_total_mc as f64) / 100_000.0;
                 let cap_usd = (cap_mc as f64) / 100_000.0;
                 anyhow::bail!(
