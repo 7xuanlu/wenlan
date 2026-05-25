@@ -90,6 +90,43 @@ pub fn load_longmemeval(path: &Path) -> Result<Vec<LongMemEvalSample>, OriginErr
     Ok(samples)
 }
 
+/// Truncate the loaded LongMemEval samples in place if `EVAL_LME_LIMIT` is set
+/// to a positive integer. Used by every `run_longmemeval_eval*` variant so a
+/// developer can run a small pre-flight subset (~30min) before committing
+/// to a full multi-hour run.
+fn apply_lme_limit(samples: &mut Vec<LongMemEvalSample>) {
+    apply_limit_from_env(samples, "EVAL_LME_LIMIT", "longmemeval", "questions");
+}
+
+/// Shared helper for `apply_lme_limit`. Parameterized on the env var name so
+/// unit tests can exercise the behavior without racing the production var.
+fn apply_limit_from_env<T>(
+    samples: &mut Vec<T>,
+    env_var: &str,
+    bench_tag: &str,
+    unit_label: &str,
+) {
+    let Some(limit) = std::env::var(env_var)
+        .ok()
+        .and_then(|v| v.parse::<usize>().ok())
+    else {
+        return;
+    };
+    let total = samples.len();
+    if limit < total {
+        samples.truncate(limit);
+        log::warn!(
+            "[eval/{}] {}={} active -- running on {} of {} {}",
+            bench_tag,
+            env_var,
+            limit,
+            samples.len(),
+            total,
+            unit_label
+        );
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Memory extraction
 // ---------------------------------------------------------------------------
@@ -467,7 +504,8 @@ const CATEGORY_ORDER: &[&str] = &[
 /// 3. Search with the question, score against evidence turns
 /// 4. Aggregate per-category and overall metrics
 pub async fn run_longmemeval_eval(path: &Path) -> Result<LongMemEvalReport, OriginError> {
-    let samples = load_longmemeval(path)?;
+    let mut samples = load_longmemeval(path)?;
+    apply_lme_limit(&mut samples);
     // (question_type, ndcg_5, ndcg_10, mrr, recall_5, hit_rate_1)
     let mut all_scores: Vec<(String, f64, f64, f64, f64, f64)> = Vec::new();
     let mut total_memories: usize = 0;
@@ -588,7 +626,8 @@ pub async fn run_longmemeval_eval_reranked(
     path: &Path,
     llm: std::sync::Arc<dyn crate::llm_provider::LlmProvider>,
 ) -> Result<LongMemEvalReport, OriginError> {
-    let samples = load_longmemeval(path)?;
+    let mut samples = load_longmemeval(path)?;
+    apply_lme_limit(&mut samples);
     // (question_type, ndcg_5, ndcg_10, mrr, recall_5, hit_rate_1)
     let mut all_scores: Vec<(String, f64, f64, f64, f64, f64)> = Vec::new();
     let mut total_memories: usize = 0;
@@ -712,7 +751,8 @@ pub async fn run_longmemeval_eval_cross_rerank(
     path: &Path,
     reranker: std::sync::Arc<dyn crate::reranker::Reranker>,
 ) -> Result<LongMemEvalReport, OriginError> {
-    let samples = load_longmemeval(path)?;
+    let mut samples = load_longmemeval(path)?;
+    apply_lme_limit(&mut samples);
     // (question_type, ndcg_5, ndcg_10, mrr, recall_5, hit_rate_1)
     let mut all_scores: Vec<(String, f64, f64, f64, f64, f64)> = Vec::new();
     let mut total_memories: usize = 0;
@@ -813,18 +853,14 @@ pub async fn run_longmemeval_eval_cross_rerank(
         baseline: None,
         env: None,
     };
-    report.env = Some(crate::eval::report::ReportEnv {
-        fixture_revision: crate::eval::fixtures::fixture_revision_hash(path)
-            .unwrap_or_else(|_| "unknown".into()),
-        embedder_model: "BGE-Base-EN-v1.5-Q".into(),
-        embedder_revision: "768d".into(),
-        retrieval_method: "search_memory_cross_rerank".into(),
-        llm_provider_class: "cross-encoder".into(),
-        llm_model: format!("cross-encoder:{}", reranker.model_id()),
-        judge_model: None,
-        origin_version: env!("CARGO_PKG_VERSION").into(),
-        eval_timestamp_unix: chrono::Utc::now().timestamp(),
-    });
+    report.env = Some(build_lme_env(
+        "cross_rerank",
+        path,
+        "search_memory_with_reranker",
+        "cross-encoder",
+        &format!("cross-encoder:{}", reranker.model_id()),
+        None,
+    ));
     Ok(report)
 }
 
@@ -838,7 +874,8 @@ pub async fn run_longmemeval_eval_expanded(
     path: &Path,
     llm: std::sync::Arc<dyn crate::llm_provider::LlmProvider>,
 ) -> Result<LongMemEvalReport, OriginError> {
-    let samples = load_longmemeval(path)?;
+    let mut samples = load_longmemeval(path)?;
+    apply_lme_limit(&mut samples);
     // (question_type, ndcg_5, ndcg_10, mrr, recall_5, hit_rate_1)
     let mut all_scores: Vec<(String, f64, f64, f64, f64, f64)> = Vec::new();
     let mut total_memories: usize = 0;
@@ -1069,7 +1106,8 @@ pub async fn run_longmemeval_eval_with_gate(
     path: &Path,
     mode: LongMemEvalGateMode,
 ) -> Result<LongMemEvalReport, OriginError> {
-    let samples = load_longmemeval(path)?;
+    let mut samples = load_longmemeval(path)?;
+    apply_lme_limit(&mut samples);
     let mut all_scores: Vec<(String, f64, f64, f64, f64, f64)> = Vec::new();
     let mut total_memories_inserted: usize = 0;
 
@@ -1624,5 +1662,49 @@ mod tests {
         assert!(text.contains("Baseline comparison:"));
         assert!(text.contains("->"));
         assert!(text.contains("single-session-user"));
+    }
+
+    /// Build a vec of `n` minimal `LongMemEvalSample`s for env-limit tests.
+    fn mock_samples(n: usize) -> Vec<LongMemEvalSample> {
+        (0..n)
+            .map(|i| {
+                let json = format!(
+                    r#"{{
+                        "question_id": "mock-{i}",
+                        "question_type": "single-session-user",
+                        "question": "q?",
+                        "answer": "a",
+                        "question_date": "2023/04/10 (Mon) 23:07",
+                        "haystack_dates": [],
+                        "haystack_session_ids": [],
+                        "haystack_sessions": [],
+                        "answer_session_ids": []
+                    }}"#
+                );
+                serde_json::from_str::<LongMemEvalSample>(&json).unwrap()
+            })
+            .collect()
+    }
+
+    #[test]
+    fn eval_lme_limit_truncates_when_set() {
+        // Unique env var name so the test doesn't race the real EVAL_LME_LIMIT.
+        let var = "EVAL_LME_LIMIT_TEST_TRUNCATE";
+        let mut samples = mock_samples(8);
+        std::env::set_var(var, "3");
+        apply_limit_from_env(&mut samples, var, "longmemeval", "questions");
+        std::env::remove_var(var);
+        assert_eq!(samples.len(), 3, "limit=3 should truncate 8 down to 3");
+        assert_eq!(samples[0].question_id, "mock-0");
+        assert_eq!(samples[2].question_id, "mock-2");
+    }
+
+    #[test]
+    fn eval_lme_limit_no_op_when_unset() {
+        let var = "EVAL_LME_LIMIT_TEST_NOOP";
+        std::env::remove_var(var);
+        let mut samples = mock_samples(4);
+        apply_limit_from_env(&mut samples, var, "longmemeval", "questions");
+        assert_eq!(samples.len(), 4, "unset env var must leave samples intact");
     }
 }
