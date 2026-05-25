@@ -179,29 +179,14 @@ jobs:
         if: matrix.use_cross == true
         run: cargo install cross --locked
 
-      # workflow_dispatch can target a tag from before Cross.toml landed.
-      # Write it inline. cross runs pre-build commands inside the target
-      # container as root, so we install libssl-dev (openssl-sys needs the
-      # system headers — it's pulled transitively via fastembed → hf-hub →
-      # native-tls). `OPENSSL_VENDORED` is a CARGO FEATURE not an env var,
-      # so the previous env-only attempt did nothing.
-      - name: Write Cross.toml (pre-build libssl-dev)
-        if: matrix.use_cross == true
-        shell: bash
-        run: |
-          cat > Cross.toml <<'EOF'
-          [target.x86_64-unknown-linux-gnu]
-          pre-build = [
-              "apt-get update && apt-get install --assume-yes libssl-dev pkg-config",
-          ]
-
-          [target.aarch64-unknown-linux-gnu]
-          pre-build = [
-              "dpkg --add-architecture arm64",
-              "apt-get update && apt-get install --assume-yes libssl-dev:arm64 pkg-config",
-          ]
-          EOF
-          cat Cross.toml
+      # No pre-build openssl install. The cross 0.2.5 container ships
+      # OpenSSL 1.0.2 (Ubuntu 16.04 base), which openssl-sys 0.9.x rejects
+      # as too old. Worse, when openssl-sys finds *any* system OpenSSL it
+      # short-circuits BEFORE checking the `vendored` cargo feature — so a
+      # `pre-build apt-get install libssl-dev` actively breaks the build.
+      # Workspace Cargo.toml's vendored feature (origin-server pulls
+      # `openssl = { workspace = true }`) compiles OpenSSL 3.x from source
+      # via `openssl-src`, so no container packages are needed.
 
       - name: Build (native)
         if: matrix.use_cross != true
