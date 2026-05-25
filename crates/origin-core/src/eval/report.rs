@@ -4,7 +4,7 @@
 use serde::Serialize;
 use std::path::Path;
 
-#[derive(Debug, Clone, Serialize, serde::Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, serde::Deserialize)]
 pub struct ReportEnv {
     pub fixture_revision: String,
     pub embedder_model: String,
@@ -15,6 +15,102 @@ pub struct ReportEnv {
     pub judge_model: Option<String>,
     pub origin_version: String,
     pub eval_timestamp_unix: i64,
+
+    // P0a additive fields:
+    #[serde(default)]
+    pub layer: Option<crate::eval::EvalLayer>,
+    #[serde(default)]
+    pub task: Option<String>,
+    #[serde(default)]
+    pub variant: Option<String>,
+    #[serde(default)]
+    pub embed_dim: Option<u32>,
+    #[serde(default = "default_similarity_fn")]
+    pub similarity_fn_name: String,
+    #[serde(default)]
+    pub judge_model_id: Option<String>,
+    #[serde(default)]
+    pub mcp_schema_hash: Option<String>,
+    #[serde(default)]
+    pub skill_prompt_hash: Option<String>,
+    #[serde(default = "default_schema_version")]
+    pub schema_version: u32,
+    #[serde(default)]
+    pub schema_db_version: Option<u32>,
+    #[serde(default)]
+    pub migrations_hash: Option<String>,
+    #[serde(default = "default_n_runs")]
+    pub n_runs: u32,
+    #[serde(default)]
+    pub is_single_run: bool,
+    #[serde(default)]
+    pub run_id: Option<String>,
+    #[serde(default)]
+    pub timestamp_utc: Option<String>,
+    #[serde(default)]
+    pub git_sha: Option<String>,
+    #[serde(default)]
+    pub warmup_iterations: u32,
+    #[serde(default)]
+    pub eval_max_usd_baseline_cap: Option<f64>,
+    #[serde(default)]
+    pub eval_max_usd_run_cap: Option<f64>,
+    #[serde(default)]
+    pub eval_max_wall_secs_cap: Option<u64>,
+    #[serde(default)]
+    pub total_cost_usd: f64,
+    #[serde(default)]
+    pub total_wall_secs: u64,
+}
+
+fn default_similarity_fn() -> String {
+    "cosine".to_string()
+}
+fn default_schema_version() -> u32 {
+    1
+}
+fn default_n_runs() -> u32 {
+    1
+}
+
+impl Default for ReportEnv {
+    fn default() -> Self {
+        Self {
+            // 9 legacy fields
+            fixture_revision: String::new(),
+            embedder_model: String::new(),
+            embedder_revision: String::new(),
+            retrieval_method: String::new(),
+            llm_provider_class: String::new(),
+            llm_model: String::new(),
+            judge_model: None,
+            origin_version: String::new(),
+            eval_timestamp_unix: 0,
+            // P0a additive fields — mirror serde default attributes
+            layer: None,
+            task: None,
+            variant: None,
+            embed_dim: None,
+            similarity_fn_name: default_similarity_fn(),
+            judge_model_id: None,
+            mcp_schema_hash: None,
+            skill_prompt_hash: None,
+            schema_version: default_schema_version(),
+            schema_db_version: None,
+            migrations_hash: None,
+            n_runs: default_n_runs(),
+            is_single_run: false,
+            run_id: None,
+            timestamp_utc: None,
+            git_sha: None,
+            warmup_iterations: 0,
+            eval_max_usd_baseline_cap: None,
+            eval_max_usd_run_cap: None,
+            eval_max_wall_secs_cap: None,
+            total_cost_usd: 0.0,
+            total_wall_secs: 0,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, serde::Deserialize, Default)]
