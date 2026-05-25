@@ -1674,8 +1674,7 @@ mod tests {
                 Some("msg_xyz".into()),
             ),
         ];
-        let path =
-            write_judge_verdicts_jsonl(tmp.path(), "run_test", &verdicts).unwrap();
+        let path = write_judge_verdicts_jsonl(tmp.path(), "run_test", &verdicts).unwrap();
         assert!(path.ends_with("judge_verdicts/run_test.jsonl"));
         let body = std::fs::read_to_string(&path).unwrap();
         let lines: Vec<&str> = body.lines().collect();

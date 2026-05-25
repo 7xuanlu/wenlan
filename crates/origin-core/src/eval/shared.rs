@@ -733,9 +733,8 @@ where
         );
         let db_file = db_dir.join("origin_memory.db");
         if db_file.exists() {
-            std::fs::remove_file(&db_file).map_err(|e| {
-                OriginError::Generic(format!("remove stale scenario.db: {e}"))
-            })?;
+            std::fs::remove_file(&db_file)
+                .map_err(|e| OriginError::Generic(format!("remove stale scenario.db: {e}")))?;
         }
     }
 
@@ -2157,8 +2156,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let path = tmp.path().join("cache_env.json");
         write_cache_env_stamp(&path, &want);
-        let got: ScenarioCacheEnv =
-            serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        let got: ScenarioCacheEnv = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
         assert_eq!(got, want);
     }
 }
