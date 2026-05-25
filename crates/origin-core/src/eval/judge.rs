@@ -4,7 +4,7 @@
 use crate::error::OriginError;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 // ===== Judge Prompt (shared between CLI and Batch API paths) =====
@@ -1306,6 +1306,75 @@ pub fn stamp_judge_model(env: &mut Option<crate::eval::report::ReportEnv>, model
     }
 }
 
+// ===== Per-row JudgeVerdict stamping =====
+//
+// `StampedVerdict` captures which judge produced each individual verdict.
+// Useful for replay + audit when a baseline run is later disputed: we can
+// re-query the judge with the same question_id and confirm the verdict
+// matches.
+//
+// **Naming.** Plan §Task 3 originally specified `JudgeVerdict` as the
+// per-row struct name. The existing enum at line 1313 already owns that
+// name (Yes/No tag), so the per-row type lands as `StampedVerdict` and
+// the inner pre-stamp shape as `StampedVerdictCore`. Same intent.
+
+/// Per-row, fully-stamped judge verdict. Serialized into the per-run
+/// JSONL at `<baselines_root>/judge_verdicts/<run_id>.jsonl`.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct StampedVerdict {
+    pub question_id: String,
+    pub verdict: bool,
+    pub raw_output: String,
+    pub judge_model_used: String,
+    pub judge_response_id: Option<String>,
+}
+
+/// Pre-stamp shape: caller builds this from batch result data and
+/// passes it to `stamp_verdict_row` along with the judge model id.
+#[derive(Debug, Clone)]
+pub struct StampedVerdictCore {
+    pub question_id: String,
+    pub verdict: bool,
+    pub raw_output: String,
+}
+
+/// Stamp a `StampedVerdictCore` with the judge model id + optional
+/// upstream response id (e.g. Anthropic batch `id` field).
+pub fn stamp_verdict_row(
+    core: StampedVerdictCore,
+    judge_model: &str,
+    response_id: Option<String>,
+) -> StampedVerdict {
+    StampedVerdict {
+        question_id: core.question_id,
+        verdict: core.verdict,
+        raw_output: core.raw_output,
+        judge_model_used: judge_model.to_string(),
+        judge_response_id: response_id,
+    }
+}
+
+/// Write `verdicts` to `<baselines_root>/judge_verdicts/<run_id>.jsonl`.
+/// Returns the path written.
+pub fn write_judge_verdicts_jsonl(
+    baselines_root: &Path,
+    run_id: &str,
+    verdicts: &[StampedVerdict],
+) -> std::io::Result<PathBuf> {
+    use std::io::Write;
+    let out_dir = baselines_root.join("judge_verdicts");
+    std::fs::create_dir_all(&out_dir)?;
+    let path = out_dir.join(format!("{}.jsonl", run_id));
+    let file = std::fs::File::create(&path)?;
+    let mut writer = std::io::BufWriter::new(file);
+    for v in verdicts {
+        let line = serde_json::to_string(v).map_err(std::io::Error::other)?;
+        writeln!(writer, "{}", line)?;
+    }
+    writer.flush()?;
+    Ok(path)
+}
+
 // ===== Structured Judge Output =====
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
@@ -1554,5 +1623,55 @@ mod tests {
             serde_json::json!([{"type": "text", "text": "Yes.\n\nThe model response is correct."}]);
         let (score, _) = extract_tool_verdict(&content);
         assert_eq!(score, 0);
+    }
+
+    #[test]
+    fn stamp_verdict_row_carries_model_and_id() {
+        let core = StampedVerdictCore {
+            question_id: "q1".into(),
+            verdict: true,
+            raw_output: "yes".into(),
+        };
+        let stamped = stamp_verdict_row(core, "claude-haiku-4-5", Some("msg_abc".into()));
+        assert_eq!(stamped.question_id, "q1");
+        assert!(stamped.verdict);
+        assert_eq!(stamped.raw_output, "yes");
+        assert_eq!(stamped.judge_model_used, "claude-haiku-4-5");
+        assert_eq!(stamped.judge_response_id.as_deref(), Some("msg_abc"));
+    }
+
+    #[test]
+    fn write_judge_verdicts_jsonl_round_trips() {
+        let tmp = tempfile::tempdir().unwrap();
+        let verdicts = vec![
+            stamp_verdict_row(
+                StampedVerdictCore {
+                    question_id: "q1".into(),
+                    verdict: true,
+                    raw_output: "yes".into(),
+                },
+                "haiku",
+                None,
+            ),
+            stamp_verdict_row(
+                StampedVerdictCore {
+                    question_id: "q2".into(),
+                    verdict: false,
+                    raw_output: "no".into(),
+                },
+                "haiku",
+                Some("msg_xyz".into()),
+            ),
+        ];
+        let path =
+            write_judge_verdicts_jsonl(tmp.path(), "run_test", &verdicts).unwrap();
+        assert!(path.ends_with("judge_verdicts/run_test.jsonl"));
+        let body = std::fs::read_to_string(&path).unwrap();
+        let lines: Vec<&str> = body.lines().collect();
+        assert_eq!(lines.len(), 2);
+        let back: StampedVerdict = serde_json::from_str(lines[0]).unwrap();
+        assert_eq!(back, verdicts[0]);
+        let back2: StampedVerdict = serde_json::from_str(lines[1]).unwrap();
+        assert_eq!(back2, verdicts[1]);
     }
 }
