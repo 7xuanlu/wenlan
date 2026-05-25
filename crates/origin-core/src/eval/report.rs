@@ -231,6 +231,33 @@ pub fn comparable_env_hash(env: &ReportEnv) -> String {
     hex.chars().take(8).collect()
 }
 
+/// Encode the on-disk path for a baseline given an env stamp.
+///
+/// Layout: `<root>/<layer_dir>/<task>/<variant>__<comparable_hash>.json`
+///
+/// E.g.: `~/.cache/origin-eval/baselines/l1_db/locomo/base__a1b2c3d4.json`
+///
+/// Panics if env.layer / env.task / env.variant are None — these are required
+/// for any baseline that ships through `save_full_report`.
+pub fn encode_baseline_path(root: &std::path::Path, env: &ReportEnv) -> std::path::PathBuf {
+    let layer = env
+        .layer
+        .expect("encode_baseline_path: env.layer must be Some")
+        .as_path_component();
+    let task = env
+        .task
+        .as_deref()
+        .expect("encode_baseline_path: env.task must be Some");
+    let variant = env
+        .variant
+        .as_deref()
+        .expect("encode_baseline_path: env.variant must be Some");
+    let hash = comparable_env_hash(env);
+    root.join(layer)
+        .join(task)
+        .join(format!("{}__{}.json", variant, hash))
+}
+
 /// Encode retrieval variant + provider + fixture-hash into a baseline filename.
 /// Shared by EvalReport, LocomoReport, and LongMemEvalReport.
 /// Falls back to `base + ".json"` when `env` is None (back-compat).
@@ -571,5 +598,35 @@ mod tests {
         let parsed2: BenchmarkHistoryEntry = serde_json::from_str(lines[1]).unwrap();
         assert_eq!(parsed2.benchmark, "locomo");
         assert_eq!(parsed2.git_sha, "def5678");
+    }
+
+    #[test]
+    fn encode_baseline_path_layout() {
+        let env = sample_env(EvalLayer::L1Db, "base");
+        let path = encode_baseline_path(std::path::Path::new("/tmp/baselines"), &env);
+        let comparable = comparable_env_hash(&env);
+        let expected = format!("/tmp/baselines/l1_db/locomo/base__{}.json", comparable);
+        assert_eq!(path.to_string_lossy(), expected);
+    }
+
+    #[test]
+    fn encode_baseline_path_all_layers_distinct() {
+        let base = std::path::Path::new("/tmp");
+        let p1 = encode_baseline_path(base, &sample_env(EvalLayer::L1Db, "base"));
+        let p2 = encode_baseline_path(base, &sample_env(EvalLayer::L2Http, "base"));
+        let p3 = encode_baseline_path(base, &sample_env(EvalLayer::L3Mcp, "base"));
+        assert_ne!(p1, p2);
+        assert_ne!(p2, p3);
+        assert_ne!(p1, p3);
+    }
+
+    #[test]
+    fn encode_baseline_path_all_variants_distinct() {
+        let base = std::path::Path::new("/tmp");
+        let p_base = encode_baseline_path(base, &sample_env(EvalLayer::L1Db, "base"));
+        let p_rerank = encode_baseline_path(base, &sample_env(EvalLayer::L1Db, "reranked"));
+        let p_aq = encode_baseline_path(base, &sample_env(EvalLayer::L1Db, "answer_quality"));
+        assert_ne!(p_base, p_rerank);
+        assert_ne!(p_rerank, p_aq);
     }
 }
