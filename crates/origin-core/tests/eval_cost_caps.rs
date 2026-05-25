@@ -141,3 +141,17 @@ fn run_cost_tracker_negative_cap_saturates_to_zero() {
     let err = t.record_usd(0.01).unwrap_err();
     assert!(format!("{}", err).contains("EVAL_MAX_USD_RUN"));
 }
+
+use origin_core::eval::anthropic::reconcile_cost_usd;
+
+#[test]
+fn reconcile_cost_matches_haiku_batch_pricing() {
+    // 1M input tokens at $0.25/MTok (batch-discounted) = $0.25
+    assert!((reconcile_cost_usd(1_000_000, 0) - 0.25).abs() < 1e-9);
+    // 1M output at $1.25/MTok = $1.25
+    assert!((reconcile_cost_usd(0, 1_000_000) - 1.25).abs() < 1e-9);
+    // Mixed
+    assert!((reconcile_cost_usd(500_000, 100_000) - (0.125 + 0.125)).abs() < 1e-9);
+    // Zero
+    assert_eq!(reconcile_cost_usd(0, 0), 0.0);
+}

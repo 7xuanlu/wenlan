@@ -81,6 +81,19 @@ pub async fn call_anthropic_api(
     Ok(answer)
 }
 
+/// Compute actual cost in USD for Claude 3.5 Haiku batch pricing.
+///
+/// Pricing (verify against current Anthropic pricing page before each release):
+///   - Input: $0.25 / 1M tokens (batch-discounted from $0.50)
+///   - Output: $1.25 / 1M tokens (batch-discounted from $2.50)
+///
+/// Returns `0.0` for zero-token inputs.
+pub fn reconcile_cost_usd(input_tokens: u64, output_tokens: u64) -> f64 {
+    let input_cost = (input_tokens as f64) * (0.25 / 1_000_000.0);
+    let output_cost = (output_tokens as f64) * (1.25 / 1_000_000.0);
+    input_cost + output_cost
+}
+
 /// Estimate batch cost in USD (Haiku batch pricing: $0.50/MTok input, $2.50/MTok output).
 pub fn estimate_batch_cost(prompts: &[(String, String, Option<String>, usize)]) -> f64 {
     let input_tokens: usize = prompts
