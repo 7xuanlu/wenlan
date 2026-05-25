@@ -3182,7 +3182,7 @@ dependencies = [
  "futures",
  "hyper 1.9.0",
  "hyper-util",
- "openssl",
+ "openssl-sys",
  "origin-core",
  "origin-types",
  "reqwest",

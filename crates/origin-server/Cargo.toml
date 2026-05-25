@@ -37,12 +37,11 @@ uuid = { workspace = true }
 clap = { version = "4", features = ["derive"] }
 futures = { workspace = true }
 sha2 = "0.10"
-# Direct dep with `vendored` feature so cargo's feature unification turns on
-# `openssl-sys/vendored` everywhere the dep is pulled transitively (fastembed
-# → hf-hub → native-tls → openssl-sys). Builds OpenSSL from source — required
-# for the cross-compile Linux build whose container's system OpenSSL is too
-# old. No code in origin-server actually calls `openssl` directly.
-openssl = { workspace = true }
+# Direct openssl-sys dep (workspace declares it with `vendored` feature).
+# Going through the `openssl` wrapper crate did not propagate vendored to
+# openssl-sys inside cross's container resolver. Forcing the direct dep
+# guarantees the feature lands on openssl-sys itself.
+openssl-sys = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }

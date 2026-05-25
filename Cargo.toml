@@ -44,14 +44,14 @@ log = "0.4"
 
 # HTTP
 reqwest = { version = "0.12", features = ["json"] }
-# OpenSSL vendored: builds OpenSSL from source instead of linking the system
-# library. Required because fastembed → hf-hub → native-tls → openssl-sys is
-# transitive, and the `cross` Linux build container's system OpenSSL is too
-# old (the openssl-sys 0.9.x build script wants 1.1.0+/3.x or LibreSSL 3.5+).
-# Adding it as a direct workspace dep with the `vendored` feature engages
-# cargo's feature unification — every transitive consumer of openssl-sys gets
-# the vendored build. ~30s extra build time per target; universal portability.
-openssl = { version = "0.10", features = ["vendored"] }
+# OpenSSL vendored: build OpenSSL from source instead of linking the
+# system library. Required because fastembed → hf-hub → native-tls →
+# openssl-sys is transitive, and the `cross` Linux build container's
+# system OpenSSL is too old (1.0.2 from Ubuntu 16.04 base). Declare
+# `openssl-sys` DIRECTLY with the `vendored` feature — the previous
+# attempt routed through the `openssl` wrapper crate and the feature
+# did not propagate to openssl-sys inside cross's container resolver.
+openssl-sys = { version = "0.9", features = ["vendored"] }
 axum = { version = "0.8", features = ["ws"] }
 tower = "0.5"
 tower-http = { version = "0.6", features = ["cors", "trace", "timeout"] }
