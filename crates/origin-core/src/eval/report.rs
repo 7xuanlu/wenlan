@@ -432,6 +432,21 @@ impl EvalReport {
                 return Some(name);
             }
         }
+        if let Some(v) = self.empty_set_false_confidence {
+            if !v.is_finite() {
+                return Some("empty_set_false_confidence");
+            }
+        }
+        if let Some(v) = self.score_gap {
+            if !v.is_finite() {
+                return Some("score_gap");
+            }
+        }
+        if let Some(v) = self.temporal_ordering_rate {
+            if !v.is_finite() {
+                return Some("temporal_ordering_rate");
+            }
+        }
         None
     }
 
@@ -508,8 +523,10 @@ pub struct CategoryBaseline {
 ///
 /// Guards (any failure returns `Err`, no file is written):
 /// - `report.env` must be `Some(...)`.
-/// - All numeric fields must be finite (no NaN, no Inf). Checked by walking
-///   the serialised `serde_json::Value` tree — robust to struct shape changes.
+/// - All metric f64 fields must be finite (no NaN, no Inf). Checked via
+///   `EvalReport::first_non_finite_field()` which walks known metric fields
+///   directly — serde_json silently maps NaN to JSON null, so a serialized
+///   walk would miss the very value we're rejecting.
 /// - `skipped_scenarios.len() / total_scenarios <= 5%` when `total_scenarios > 0`.
 /// - `enrichment_failures == 0` unless `EVAL_ACCEPT_PARTIAL=1` is set in the
 ///   environment.

@@ -88,3 +88,66 @@ fn save_writes_to_correct_path_with_atomic_rename() {
         .collect();
     assert!(leftovers.is_empty(), "stale .tmp file(s): {:?}", leftovers);
 }
+
+#[test]
+fn save_refuses_nan_in_optional_metric_empty_set_false_confidence() {
+    let mut report = EvalReport {
+        env: Some(sample_env()),
+        ..EvalReport::default()
+    };
+    report.empty_set_false_confidence = Some(f64::NAN);
+    let tmp = tempfile::tempdir().unwrap();
+    let err = save_full_report(tmp.path(), &report).unwrap_err();
+    assert!(
+        format!("{}", err).contains("non-finite"),
+        "unexpected error: {}",
+        err
+    );
+    assert!(
+        format!("{}", err).contains("empty_set_false_confidence"),
+        "should name the field, got: {}",
+        err
+    );
+}
+
+#[test]
+fn save_refuses_nan_in_optional_metric_score_gap() {
+    let mut report = EvalReport {
+        env: Some(sample_env()),
+        ..EvalReport::default()
+    };
+    report.score_gap = Some(f64::NAN);
+    let tmp = tempfile::tempdir().unwrap();
+    let err = save_full_report(tmp.path(), &report).unwrap_err();
+    assert!(
+        format!("{}", err).contains("non-finite"),
+        "unexpected error: {}",
+        err
+    );
+    assert!(
+        format!("{}", err).contains("score_gap"),
+        "should name the field, got: {}",
+        err
+    );
+}
+
+#[test]
+fn save_refuses_nan_in_optional_metric_temporal_ordering_rate() {
+    let mut report = EvalReport {
+        env: Some(sample_env()),
+        ..EvalReport::default()
+    };
+    report.temporal_ordering_rate = Some(f64::NAN);
+    let tmp = tempfile::tempdir().unwrap();
+    let err = save_full_report(tmp.path(), &report).unwrap_err();
+    assert!(
+        format!("{}", err).contains("non-finite"),
+        "unexpected error: {}",
+        err
+    );
+    assert!(
+        format!("{}", err).contains("temporal_ordering_rate"),
+        "should name the field, got: {}",
+        err
+    );
+}
