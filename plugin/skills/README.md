@@ -60,3 +60,10 @@ On the first space-aware skill call of a session, the skill prints one
 line so the user can confirm the active bucket:
 
     Resolved space: <name> (from <layer>)
+
+## Links
+
+- [useorigin.app](https://useorigin.app) — project home
+- [useorigin.app/docs/commands](https://useorigin.app/docs/commands) — full Claude Code commands and MCP tools reference
+- [useorigin.app/docs/daily-workflow](https://useorigin.app/docs/daily-workflow) — brief/capture/recall/handoff loop
+- [useorigin.app/learn/claude-code-memory](https://useorigin.app/learn/claude-code-memory) — Claude Code memory concept article

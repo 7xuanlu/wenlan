@@ -112,20 +112,22 @@ jobs:
             os: macos-14
             archive: tar.gz
             artifact_name: origin-darwin-arm64
-          - target: x86_64-apple-darwin
-            os: macos-14
-            archive: tar.gz
-            artifact_name: origin-darwin-x64
+          # x86_64-apple-darwin dropped from v0.7.0: `ort` 2.x does not
+          # publish prebuilt ONNX Runtime binaries for Intel Mac. Adding it
+          # back requires compiling ONNX from source (~15min build) or
+          # switching to the `ort-tract` backend. Tracked as follow-up.
+          # Native ARM Linux runner is free for public repos
+          # (ubuntu-24.04-arm, 4 vCPU Cortex / 16GB). Drops cross entirely
+          # for aarch64: no Docker container, no Cross.toml, no OpenSSL
+          # version chasing. Same setup as x86 below.
           - target: aarch64-unknown-linux-gnu
-            os: ubuntu-24.04
+            os: ubuntu-24.04-arm
             archive: tar.gz
             artifact_name: origin-linux-arm64
-            use_cross: true
           - target: x86_64-unknown-linux-gnu
             os: ubuntu-24.04
             archive: tar.gz
             artifact_name: origin-linux-x64
-            use_cross: true
           - target: x86_64-pc-windows-msvc
             os: windows-2022
             archive: zip
@@ -157,6 +159,11 @@ jobs:
           toolchain: 1.95.0
           targets: ${{ matrix.target }}
 
+      # sccache caches rustc + build-script outputs to GHA. Big win on the
+      # C/C++-heavy crates we pull (openssl-src, ring, llama-cpp-sys).
+      - name: Set up sccache
+        uses: mozilla-actions/sccache-action@7d986dd989559c6ecdb630a3fd2557667be217ad # v0.0.9
+
       # vcpkg sqlite3 for Windows — libsql 0.9 needs `sqlite3.lib` at link
       # time and does not bundle SQLite on Windows. Mirrors ci.yml's test
       # step. GitHub `windows-2022` runner ships vcpkg preinstalled.
@@ -170,67 +177,76 @@ jobs:
       - name: Cache Rust dependencies
         uses: Swatinem/rust-cache@v2
         with:
-          # Per-target cache key so the macos-14 jobs don't share state
-          # between aarch64 and x86_64 (otherwise the first job's target/
-          # contents pollute the second).
           shared-key: release-${{ matrix.target }}
+          cache-all-crates: "true"
 
-      - name: Install cross
-        if: matrix.use_cross == true
-        run: cargo install cross --locked
+      # rust-lld shipped with the Rust toolchain (~3-5min faster link
+      # than MSVC link.exe on our binary sizes). rustup does NOT proxy
+      # rust-lld, so its path must be discovered via `rustc --print
+      # sysroot`. Export RUSTFLAGS via $GITHUB_ENV so the Build step
+      # picks it up.
+      - name: Configure rust-lld linker (Windows)
+        if: matrix.target == 'x86_64-pc-windows-msvc'
+        shell: pwsh
+        run: |
+          $sysroot = (rustc --print sysroot).Trim()
+          $lld = Join-Path $sysroot "lib/rustlib/x86_64-pc-windows-msvc/bin/rust-lld.exe"
+          if (-not (Test-Path $lld)) {
+            Write-Host "rust-lld.exe not found at $lld, listing sysroot:"
+            Get-ChildItem -Recurse -Filter rust-lld.exe -Path $sysroot
+            throw "rust-lld.exe missing"
+          }
+          $rustflags = "-C linker=$lld -C linker-flavor=lld-link"
+          "RUSTFLAGS=$rustflags" | Out-File -FilePath $env:GITHUB_ENV -Append
+          Write-Host "RUSTFLAGS=$rustflags"
 
-      - name: Build (native)
-        if: matrix.use_cross != true
+      # All targets build natively now. aarch64-unknown-linux-gnu uses the
+      # free ubuntu-24.04-arm runner, x86_64-unknown-linux-gnu uses
+      # ubuntu-24.04. No cross / zigbuild / QEMU needed. Eliminates an
+      # entire class of openssl-sys/system-OpenSSL/container-version traps
+      # that consumed several PRs for v0.7.0.
+      - name: Build
+        env:
+          SCCACHE_GHA_ENABLED: "true"
+          RUSTC_WRAPPER: "sccache"
         run: cargo build --release -p origin -p origin-server -p origin-mcp --target ${{ matrix.target }}
 
-      # OPENSSL_VENDORED tells openssl-sys to build OpenSSL from source
-      # inside the cross container, which doesn't ship libssl-dev. The dep
-      # is pulled transitively through fastembed → hf-hub → native-tls →
-      # openssl-sys. Cross.toml's `[build.env] passthrough` forwards the
-      # env var into the container.
-      - name: Build (cross)
-        if: matrix.use_cross == true
-        env:
-          OPENSSL_VENDORED: "1"
-          OPENSSL_STATIC: "1"
-        run: cross build --release -p origin -p origin-server -p origin-mcp --target ${{ matrix.target }}
-
-      - name: Smoke (native)
-        if: matrix.use_cross != true
+      - name: Smoke
         shell: bash
         run: |
           ./target/${{ matrix.target }}/release/origin${{ runner.os == 'Windows' && '.exe' || '' }} --help
           ./target/${{ matrix.target }}/release/origin-server${{ runner.os == 'Windows' && '.exe' || '' }} --help
 
-      - name: Set up QEMU (cross targets only)
-        if: matrix.use_cross == true
-        uses: docker/setup-qemu-action@v3
-
-      - name: Smoke (cross via QEMU)
-        if: matrix.use_cross == true
-        run: |
-          # Map matrix.target arch to docker --platform value.
-          case "${{ matrix.target }}" in
-            aarch64-*)  PLAT=linux/arm64 ;;
-            x86_64-*)   PLAT=linux/amd64 ;;
-            *)          echo "unknown arch for ${{ matrix.target }}"; exit 1 ;;
-          esac
-          # debian:trixie-slim has glibc 2.41 (matches what cross builds need).
-          # Mount the release dir + invoke --help. Emulation overhead is negligible
-          # at --help speeds.
-          docker run --rm --platform "$PLAT" \
-            -v ${{ github.workspace }}/target/${{ matrix.target }}/release:/bin/origin-build:ro \
-            debian:trixie-slim \
-            /bin/origin-build/origin --help
-          docker run --rm --platform "$PLAT" \
-            -v ${{ github.workspace }}/target/${{ matrix.target }}/release:/bin/origin-build:ro \
-            debian:trixie-slim \
-            /bin/origin-build/origin-server --help
-
       - name: List Windows build artifacts
         if: matrix.target == 'x86_64-pc-windows-msvc'
         shell: bash
         run: ls -la target/${{ matrix.target }}/release/ | head -30
+
+      # ort 2.x caches link-time `.lib` artifacts under
+      # `%LOCALAPPDATA%\ort.pyke.io\...` but does NOT keep onnxruntime.dll
+      # there on Windows — the build script needs only the import lib for
+      # link time. The bundled zip needs the runtime DLL co-located with
+      # the .exe so users get a self-contained extract. Download ONNX
+      # Runtime 1.20.0 (matches ort 2.0.0-rc.11) from Microsoft's releases
+      # and stage onnxruntime.dll into target/release before packaging.
+      - name: Bundle onnxruntime.dll (Windows)
+        if: matrix.target == 'x86_64-pc-windows-msvc'
+        shell: pwsh
+        run: |
+          $ortVersion = "1.20.0"
+          $zipUrl = "https://github.com/microsoft/onnxruntime/releases/download/v$ortVersion/onnxruntime-win-x64-$ortVersion.zip"
+          $zipPath = "$env:RUNNER_TEMP\onnxruntime.zip"
+          Write-Host "Downloading $zipUrl"
+          Invoke-WebRequest -Uri $zipUrl -OutFile $zipPath
+          Expand-Archive -Path $zipPath -DestinationPath "$env:RUNNER_TEMP\ort-extracted" -Force
+          $dll = Get-ChildItem -Path "$env:RUNNER_TEMP\ort-extracted" -Recurse -Filter onnxruntime.dll | Select-Object -First 1
+          if (-not $dll) {
+            Get-ChildItem -Path "$env:RUNNER_TEMP\ort-extracted" -Recurse | Format-Table FullName, Length
+            throw "onnxruntime.dll not found in extracted zip"
+          }
+          $dest = "target\${{ matrix.target }}\release\onnxruntime.dll"
+          Copy-Item -Path $dll.FullName -Destination $dest -Force
+          Write-Host "Copied $($dll.FullName) -> $dest"
 
       - name: Package
         shell: bash
@@ -290,17 +306,29 @@ jobs:
             dist/origin-mcp-darwin-arm64.tar.gz
 
   docker:
-    name: Build & Push Docker Image
+    name: Build & Push Docker Image (${{ matrix.platform }})
     needs: release
-    runs-on: ubuntu-24.04
+    runs-on: ${{ matrix.runs-on }}
     permissions:
       contents: read
       packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux/amd64
+            runs-on: ubuntu-24.04
+            tag-suffix: amd64
+          # Native ARM runner — free for public repos. Building arm64
+          # under QEMU emulation took 90+min and is the dominant cost
+          # of the release pipeline. Native is ~10min instead.
+          - platform: linux/arm64
+            runs-on: ubuntu-24.04-arm
+            tag-suffix: arm64
     steps:
       - uses: actions/checkout@v4
         with:
           ref: ${{ env.RELEASE_TAG }}
-      - uses: docker/setup-qemu-action@v3
       - uses: docker/setup-buildx-action@v3
       - uses: docker/login-action@v3
         with:
@@ -311,11 +339,28 @@ jobs:
         with:
           context: .
           file: docker/Dockerfile.daemon
-          platforms: linux/amd64,linux/arm64
+          platforms: ${{ matrix.platform }}
           push: true
-          tags: |
-            ghcr.io/7xuanlu/origin-server:${{ env.RELEASE_TAG }}
-            ghcr.io/7xuanlu/origin-server:latest
+          tags: ghcr.io/7xuanlu/origin-server:${{ env.RELEASE_TAG }}-${{ matrix.tag-suffix }}
+
+  docker-manifest:
+    name: Combine Docker Manifest (multi-arch)
+    needs: docker
+    runs-on: ubuntu-24.04
+    permissions:
+      packages: write
+    steps:
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Create + push multi-arch manifest
+        run: |
+          TAG="${{ env.RELEASE_TAG }}"
+          IMG="ghcr.io/7xuanlu/origin-server"
+          docker buildx imagetools create -t "$IMG:$TAG" "$IMG:$TAG-amd64" "$IMG:$TAG-arm64"
+          docker buildx imagetools create -t "$IMG:latest"  "$IMG:$TAG-amd64" "$IMG:$TAG-arm64"
 
   publish-crates:
     name: Publish crates.io (origin-types + origin-mcp)
@@ -345,20 +390,16 @@ jobs:
           echo "Workspace version: $VERSION"
 
       - name: Publish origin-types to crates.io
-        # Always attempt when the version is not yet on crates.io.
-        # Prior logic gated on "files changed since last tag" which silently
-        # skipped publish when only the workspace version bumped without
-        # origin-types code changes. v0.6.1 hit this: origin-types code was
-        # stable so publish skipped, then origin-mcp 0.6.1 publish failed
-        # because its `origin-types = "^0.6.1"` dep was unreachable. Both
-        # crates stayed at 0.6.0 while the release job exited SUCCESS because
-        # the trailing `|| echo "Already published, skipping"` masked it.
-        # Registry check is the source of truth.
+        # Source-of-truth registry check uses the sparse index (same as the
+        # downstream `Wait for ... available` step). The v1 web API lags
+        # behind by minutes-to-hours under load and gave false "not
+        # published" answers that caused cargo publish to attempt a
+        # duplicate upload, failing the job.
         if: env.CARGO_REGISTRY_TOKEN != ''
         run: |
           VERSION="${{ steps.version.outputs.value }}"
-          if curl -sf "https://crates.io/api/v1/crates/origin-types/${VERSION}" >/dev/null; then
-            echo "origin-types ${VERSION} already on crates.io, skipping publish"
+          if curl -sf "https://index.crates.io/or/ig/origin-types" | grep -q "\"vers\":\"$VERSION\""; then
+            echo "origin-types ${VERSION} already on sparse index, skipping publish"
           else
             cargo publish -p origin-types
           fi
@@ -366,28 +407,40 @@ jobs:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
 
       - name: Wait for origin-types to be available on crates.io
+        # Poll the sparse index (https://index.crates.io) — that's what
+        # `cargo publish -p origin-mcp` reads to resolve its
+        # `origin-types = "^X.Y.Z"` dep. The v1 web API
+        # (`crates.io/api/v1/crates/<name>/<version>`) lags behind the
+        # sparse index by minutes-to-hours during load, which caused
+        # false negatives (publish succeeded, web API still 404). The
+        # sparse index path for any crate `name` is
+        # `/<prefix>/<name>` where prefix depends on name length;
+        # for 4+ chars: `<first2>/<chars 3-4>/<name>`. `origin-types`
+        # → `or/ig/origin-types`. The index returns NDJSON, one record
+        # per published version.
         run: |
           VERSION="${{ steps.version.outputs.value }}"
-          for i in $(seq 1 30); do
-            if curl -sf "https://crates.io/api/v1/crates/origin-types/${VERSION}" >/dev/null; then
-              echo "origin-types ${VERSION} available"; exit 0
+          INDEX_URL="https://index.crates.io/or/ig/origin-types"
+          for i in $(seq 1 60); do
+            if curl -sf "$INDEX_URL" | grep -q "\"vers\":\"$VERSION\""; then
+              echo "origin-types ${VERSION} visible on sparse index"; exit 0
             fi
-            echo "Waiting for crates.io to index origin-types ${VERSION}... ($i/30)"
+            echo "Waiting for sparse index to publish origin-types ${VERSION}... ($i/60)"
             sleep 10
           done
-          echo "ERROR: origin-types ${VERSION} not visible on crates.io after 5 min"
+          echo "ERROR: origin-types ${VERSION} not visible on sparse index after 10 min"
+          echo "Last index response:"
+          curl -s "$INDEX_URL" | tail -5
           exit 1
 
       - name: Publish origin-mcp to crates.io
-        # Same registry-check pattern. Real errors from cargo publish now
-        # propagate — the prior `|| echo "Already published, skipping"`
-        # swallowed dependency-resolution errors and marked the job SUCCESS
-        # while uploading nothing.
+        # Sparse index check (see origin-types step) avoids the v1 web API
+        # propagation lag that previously caused duplicate-publish failures.
         if: env.CARGO_REGISTRY_TOKEN != ''
         run: |
           VERSION="${{ steps.version.outputs.value }}"
-          if curl -sf "https://crates.io/api/v1/crates/origin-mcp/${VERSION}" >/dev/null; then
-            echo "origin-mcp ${VERSION} already on crates.io, skipping publish"
+          if curl -sf "https://index.crates.io/or/ig/origin-mcp" | grep -q "\"vers\":\"$VERSION\""; then
+            echo "origin-mcp ${VERSION} already on sparse index, skipping publish"
           else
             cargo publish -p origin-mcp
           fi
@@ -429,12 +482,28 @@ jobs:
           cp LICENSE crates/origin-cli/npm/LICENSE
       - name: Publish origin-mcp
         working-directory: crates/origin-mcp/npm
-        run: npm publish --provenance --access public
+        # Skip if version already on npm. Retried releases or re-dispatch
+        # workflows would otherwise fail with "You cannot publish over the
+        # previously published versions". `npm view <pkg>@<v> version`
+        # exits 0 + prints the version when published, exits 1 otherwise.
+        run: |
+          VERSION="${RELEASE_TAG#v}"
+          if npm view "origin-mcp@$VERSION" version >/dev/null 2>&1; then
+            echo "origin-mcp@$VERSION already on npm, skipping"
+          else
+            npm publish --provenance --access public
+          fi
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
       - name: Publish @7xuanlu/origin
         working-directory: crates/origin-cli/npm
-        run: npm publish --provenance --access public
+        run: |
+          VERSION="${RELEASE_TAG#v}"
+          if npm view "@7xuanlu/origin@$VERSION" version >/dev/null 2>&1; then
+            echo "@7xuanlu/origin@$VERSION already on npm, skipping"
+          else
+            npm publish --provenance --access public
+          fi
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
