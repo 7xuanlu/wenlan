@@ -180,6 +180,26 @@ jobs:
           shared-key: release-${{ matrix.target }}
           cache-all-crates: "true"
 
+      # rust-lld shipped with the Rust toolchain (~3-5min faster link
+      # than MSVC link.exe on our binary sizes). rustup does NOT proxy
+      # rust-lld, so its path must be discovered via `rustc --print
+      # sysroot`. Export RUSTFLAGS via $GITHUB_ENV so the Build step
+      # picks it up.
+      - name: Configure rust-lld linker (Windows)
+        if: matrix.target == 'x86_64-pc-windows-msvc'
+        shell: pwsh
+        run: |
+          $sysroot = (rustc --print sysroot).Trim()
+          $lld = Join-Path $sysroot "lib/rustlib/x86_64-pc-windows-msvc/bin/rust-lld.exe"
+          if (-not (Test-Path $lld)) {
+            Write-Host "rust-lld.exe not found at $lld, listing sysroot:"
+            Get-ChildItem -Recurse -Filter rust-lld.exe -Path $sysroot
+            throw "rust-lld.exe missing"
+          }
+          $rustflags = "-C linker=$lld -C linker-flavor=lld-link"
+          "RUSTFLAGS=$rustflags" | Out-File -FilePath $env:GITHUB_ENV -Append
+          Write-Host "RUSTFLAGS=$rustflags"
+
       # All targets build natively now. aarch64-unknown-linux-gnu uses the
       # free ubuntu-24.04-arm runner, x86_64-unknown-linux-gnu uses
       # ubuntu-24.04. No cross / zigbuild / QEMU needed. Eliminates an
