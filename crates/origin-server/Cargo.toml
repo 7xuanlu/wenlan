@@ -37,10 +37,10 @@ uuid = { workspace = true }
 clap = { version = "4", features = ["derive"] }
 futures = { workspace = true }
 sha2 = "0.10"
-# Direct openssl-sys dep (workspace declares it with `vendored` feature).
-# Going through the `openssl` wrapper crate did not propagate vendored to
-# openssl-sys inside cross's container resolver. Forcing the direct dep
-# guarantees the feature lands on openssl-sys itself.
+# Pulls openssl-sys with the vendored feature (declared at workspace level).
+# origin-server doesn't call openssl_sys directly, but the dep needs to land
+# in at least one workspace-member's tree for cargo feature unification to
+# apply the vendored feature to every transitive consumer.
 openssl-sys = { workspace = true }
 
 [dev-dependencies]
