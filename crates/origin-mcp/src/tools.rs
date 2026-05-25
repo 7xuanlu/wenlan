@@ -154,6 +154,11 @@ pub struct RecallParams {
     #[schemars(description = "Filter by topic scope.")]
     #[serde(default, alias = "domain")]
     pub space: Option<String>,
+    #[schemars(
+        description = "Enable cross-encoder reranking. Slower (model inference) but higher retrieval quality. Off by default. Requires ORIGIN_RERANKER_ENABLED=1 on the daemon; otherwise the daemon falls back to the plain hybrid ordering."
+    )]
+    #[serde(default)]
+    pub rerank: Option<bool>,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
@@ -742,6 +747,12 @@ impl OriginMcpServer {
             memory_type: params.memory_type,
             space: space_arg,
             source_agent: self.resolve_source_agent(None),
+            // Opt-in cross-encoder rerank. Default `false` preserves the
+            // current cost/latency for callers that don't pass the flag.
+            // Requires ORIGIN_RERANKER_ENABLED=1 on the daemon to take
+            // effect; otherwise the daemon logs and falls back to plain
+            // hybrid ordering.
+            rerank: params.rerank.unwrap_or(false),
         };
 
         let resp: SearchMemoryResponse = match self.client.post("/api/memory/search", &req).await {
@@ -1711,7 +1722,7 @@ impl OriginMcpServer {
     }
 
     #[tool(
-        description = "Search memories by query. Use when the user asks 'do you remember', 'what do you know about', 'look up', or when you need a specific fact before acting.\n\nWrite queries as natural language — the search engine handles semantic matching. For precision, use filters (memory_type, space) to narrow results. If you get too many results, add filters rather than making the query longer.\n\nThis is for targeted lookups. For broad session orientation, use context instead.",
+        description = "Search memories by query. Use when the user asks 'do you remember', 'what do you know about', 'look up', or when you need a specific fact before acting.\n\nWrite queries as natural language — the search engine handles semantic matching. For precision, use filters (memory_type, space) to narrow results. If you get too many results, add filters rather than making the query longer.\n\nFor higher retrieval quality at the cost of latency, pass `rerank: true` to opt into the cross-encoder reranker (requires ORIGIN_RERANKER_ENABLED=1 on the daemon).\n\nThis is for targeted lookups. For broad session orientation, use context instead.",
         annotations(title = "Recall", read_only_hint = true, open_world_hint = false)
     )]
     async fn recall(
@@ -2571,6 +2582,10 @@ mod tests {
         let params: RecallParams = serde_json::from_str(json).unwrap();
         assert_eq!(params.query, "what does Alice work on?");
         assert!(params.limit.is_none());
+        assert!(
+            params.rerank.is_none(),
+            "rerank omitted must remain None so the daemon receives default false"
+        );
     }
 
     #[test]
@@ -2579,13 +2594,15 @@ mod tests {
             "query": "database preferences",
             "limit": 5,
             "memory_type": "decision",
-            "space": "origin"
+            "space": "origin",
+            "rerank": true
         }"#;
         let params: RecallParams = serde_json::from_str(json).unwrap();
         assert_eq!(params.query, "database preferences");
         assert_eq!(params.limit, Some(5));
         assert_eq!(params.memory_type.as_deref(), Some("decision"));
         assert_eq!(params.space.as_deref(), Some("origin"));
+        assert_eq!(params.rerank, Some(true));
     }
 
     #[test]
@@ -2854,6 +2871,7 @@ mod tests {
             memory_type: None,
             space: None,
             source_agent: None,
+            rerank: false,
         };
         let json = serde_json::to_value(&req).unwrap();
         let obj = json.as_object().unwrap();
@@ -3632,6 +3650,7 @@ mod tests {
             limit: Some(5),
             memory_type: Some("decision".into()),
             space: None,
+            rerank: None,
         };
 
         let req = SearchMemoryRequest {
@@ -3640,6 +3659,7 @@ mod tests {
             memory_type: params.memory_type,
             space: params.space,
             source_agent: None,
+            rerank: params.rerank.unwrap_or(false),
         };
 
         let json = serde_json::to_value(&req).unwrap();
@@ -3649,6 +3669,53 @@ mod tests {
         assert!(json.get("entity").is_none());
         assert!(json["space"].is_null());
         assert!(json["source_agent"].is_null());
+        assert_eq!(json["rerank"], false);
+    }
+
+    #[test]
+    fn test_recall_forwards_rerank_flag() {
+        // When the caller passes rerank: Some(true), the constructed
+        // SearchMemoryRequest must carry rerank=true through to the daemon.
+        let params = RecallParams {
+            query: "database choices".into(),
+            limit: None,
+            memory_type: None,
+            space: None,
+            rerank: Some(true),
+        };
+
+        let req = SearchMemoryRequest {
+            query: params.query,
+            limit: params.limit.unwrap_or(10),
+            memory_type: params.memory_type,
+            space: params.space,
+            source_agent: None,
+            rerank: params.rerank.unwrap_or(false),
+        };
+
+        assert!(
+            req.rerank,
+            "RecallParams.rerank=Some(true) must flow through to SearchMemoryRequest.rerank=true"
+        );
+        let json = serde_json::to_value(&req).unwrap();
+        assert_eq!(json["rerank"], true);
+    }
+
+    #[test]
+    fn test_recall_params_schema_advertises_rerank() {
+        // The schemars-derived JSON Schema for RecallParams must advertise
+        // the rerank field so MCP clients (Claude Desktop, Cursor, etc.) see
+        // it as an available parameter.
+        let params_schema = serde_json::to_string(&schemars::schema_for!(RecallParams))
+            .expect("RecallParams schema serializes");
+        assert!(
+            params_schema.contains("rerank"),
+            "RecallParams schema must advertise the `rerank` field, got: {params_schema}"
+        );
+        assert!(
+            params_schema.contains("cross-encoder"),
+            "RecallParams.rerank description must mention cross-encoder so models understand the tradeoff, got: {params_schema}"
+        );
     }
 
     // ===== Memory type pass-through =====

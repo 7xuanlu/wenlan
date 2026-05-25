@@ -147,6 +147,10 @@ export EVAL_BASELINES_DIR=$HOME/.cache/origin-eval
 
 Path must be writable and local (network mounts not recommended). When set, also chains `EVAL_ENRICHMENT_CACHE_DIR` default to the same dir unless explicitly overridden. Migration: `bash scripts/migrate-eval-cache.sh <source-baselines>`.
 
+### Eval pre-flight subset
+
+Set `EVAL_LOCOMO_LIMIT=N` (or `EVAL_LME_LIMIT=N`) to truncate the fixture and run a small-subset eval (~30min) before committing to full 3h runs. Useful for verifying direction on new retrieval variants. Applies to every `run_locomo_eval*` / `run_longmemeval_eval*` variant. Unset (the default) runs the full fixture unchanged.
+
 ### TTL policy
 
 Cache directories accumulate fast (1GB+ per full LoCoMo+LME run) and snapshots stay valid only as long as the fixture revision + embedder + provider stack remain unchanged. Rule of thumb:

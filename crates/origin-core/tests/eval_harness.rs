@@ -491,6 +491,51 @@ async fn save_locomo_expanded_baseline() {
     println!("Saved LoCoMo expanded baseline to {:?}", baseline_path);
 }
 
+// Cross-encoder rerank variants — fastembed TextRerank (BGERerankerV2M3) in
+// place of the LLM reranker. First run downloads ~600MB of model weights.
+#[tokio::test]
+#[ignore]
+async fn save_locomo_cross_rerank_baseline() {
+    let path = eval_root().join("data/locomo10.json");
+    if !path.exists() {
+        println!("SKIP: locomo10.json not found");
+        return;
+    }
+    let reranker = origin_core::reranker::init_cross_encoder_reranker(None)
+        .expect("init_cross_encoder_reranker failed (downloads ~600MB on first run)");
+    let report = origin_core::eval::locomo::run_locomo_eval_cross_rerank(&path, reranker)
+        .await
+        .unwrap();
+    let baselines_dir = eval_root().join("baselines");
+    std::fs::create_dir_all(&baselines_dir).unwrap();
+    let baseline_path = baselines_dir.join(report.baseline_filename("locomo"));
+    report.save_baseline(&baseline_path).unwrap();
+    println!("Saved LoCoMo cross-rerank baseline to {:?}", baseline_path);
+}
+
+#[tokio::test]
+#[ignore]
+async fn save_longmemeval_cross_rerank_baseline() {
+    let path = eval_root().join("data/longmemeval_oracle.json");
+    if !path.exists() {
+        println!("SKIP: longmemeval_oracle.json not found");
+        return;
+    }
+    let reranker = origin_core::reranker::init_cross_encoder_reranker(None)
+        .expect("init_cross_encoder_reranker failed (downloads ~600MB on first run)");
+    let report = origin_core::eval::longmemeval::run_longmemeval_eval_cross_rerank(&path, reranker)
+        .await
+        .unwrap();
+    let baselines_dir = eval_root().join("baselines");
+    std::fs::create_dir_all(&baselines_dir).unwrap();
+    let baseline_path = baselines_dir.join(report.baseline_filename("longmemeval"));
+    report.save_baseline(&baseline_path).unwrap();
+    println!(
+        "Saved LongMemEval cross-rerank baseline to {:?}",
+        baseline_path
+    );
+}
+
 #[tokio::test]
 #[ignore]
 async fn save_longmemeval_expanded_baseline() {

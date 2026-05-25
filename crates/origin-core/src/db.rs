@@ -7205,6 +7205,91 @@ impl MemoryDB {
         Ok(results)
     }
 
+    /// Hybrid search with reranker-trait reranking.
+    ///
+    /// Equivalent to `search_memory_reranked` but takes a [`Reranker`] trait
+    /// object instead of an `LlmProvider`. Lets callers swap LLM-as-judge
+    /// rerank for a cross-encoder via fastembed without changing the call
+    /// signature elsewhere.
+    ///
+    /// Falls back to the pre-rerank ordering when `reranker` is `None` or when
+    /// the reranker returns an empty result (per `Reranker` contract).
+    ///
+    /// The reranker trait method is sync (fastembed is CPU work). This wrapper
+    /// dispatches it via `tokio::task::spawn_blocking` so the tokio runtime
+    /// stays free.
+    pub async fn search_memory_with_reranker(
+        &self,
+        query: &str,
+        limit: usize,
+        memory_type: Option<&str>,
+        space: Option<&str>,
+        source_agent: Option<&str>,
+        reranker: Option<Arc<dyn crate::reranker::Reranker>>,
+    ) -> Result<Vec<SearchResult>, OriginError> {
+        let fetch_pool = (limit * 2).min(10).max(limit);
+        let mut results = self
+            .search_memory(
+                query,
+                fetch_pool,
+                memory_type,
+                space,
+                source_agent,
+                None,
+                None,
+                None,
+            )
+            .await?;
+
+        if let Some(reranker) = reranker {
+            if results.len() > 1 {
+                let candidates: Vec<(String, String)> = results
+                    .iter()
+                    .map(|r| {
+                        let trimmed: String = r.content.chars().take(512).collect();
+                        (r.id.clone(), trimmed)
+                    })
+                    .collect();
+                let query_owned = query.to_string();
+                let scored =
+                    tokio::task::spawn_blocking(move || reranker.rerank(&query_owned, &candidates))
+                        .await;
+
+                let scored = match scored {
+                    Ok(Ok(v)) => v,
+                    Ok(Err(e)) => {
+                        log::warn!(
+                            "[memory_db] reranker returned err: {e}; keeping original order"
+                        );
+                        Vec::new()
+                    }
+                    Err(e) => {
+                        log::warn!("[memory_db] reranker join failed: {e}; keeping original order");
+                        Vec::new()
+                    }
+                };
+
+                if !scored.is_empty() {
+                    let score_map: std::collections::HashMap<String, f32> =
+                        scored.into_iter().collect();
+                    for r in &mut results {
+                        if let Some(&s) = score_map.get(&r.id) {
+                            r.score = s;
+                        }
+                    }
+                    results.sort_by(|a, b| {
+                        b.score
+                            .partial_cmp(&a.score)
+                            .unwrap_or(std::cmp::Ordering::Equal)
+                    });
+                }
+            }
+        }
+
+        results.truncate(limit);
+        Ok(results)
+    }
+
     /// Hybrid search with LLM-based query expansion BEFORE search.
     /// Generates 2-3 alternative phrasings of the query, runs search_memory for each,
     /// then merges all result sets via RRF. Falls back to plain search_memory if LLM
@@ -22132,6 +22217,74 @@ pub(crate) mod tests {
             .await
             .unwrap();
         assert!(!results.is_empty(), "should return results without LLM");
+    }
+
+    #[tokio::test]
+    async fn test_search_memory_with_reranker_noop_passthrough() {
+        let (db, _dir) = test_db().await;
+        db.upsert_documents(vec![
+            make_memory_doc(
+                "n1",
+                "Rust is a systems programming language",
+                "fact",
+                "software",
+                "claude",
+            ),
+            make_memory_doc(
+                "n2",
+                "Python is great for data science work",
+                "fact",
+                "software",
+                "claude",
+            ),
+            make_memory_doc(
+                "n3",
+                "Cargo manages Rust dependencies",
+                "fact",
+                "software",
+                "claude",
+            ),
+        ])
+        .await
+        .unwrap();
+
+        let reranker: Arc<dyn crate::reranker::Reranker> = Arc::new(crate::reranker::NoopReranker);
+        let results = db
+            .search_memory_with_reranker("Rust programming", 10, None, None, None, Some(reranker))
+            .await
+            .unwrap();
+        assert!(
+            !results.is_empty(),
+            "should return results with noop reranker"
+        );
+        // NoopReranker rewrites all scores to 0.0, which we verify by spot-checking the first.
+        assert_eq!(
+            results[0].score, 0.0,
+            "NoopReranker should rewrite all scores to 0.0"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_search_memory_with_reranker_none_keeps_original_order() {
+        let (db, _dir) = test_db().await;
+        db.upsert_documents(vec![make_memory_doc(
+            "o1",
+            "Rust is a systems programming language",
+            "fact",
+            "software",
+            "claude",
+        )])
+        .await
+        .unwrap();
+
+        let results = db
+            .search_memory_with_reranker("Rust programming", 10, None, None, None, None)
+            .await
+            .unwrap();
+        assert!(
+            !results.is_empty(),
+            "should return results with None reranker"
+        );
     }
 
     #[tokio::test]
