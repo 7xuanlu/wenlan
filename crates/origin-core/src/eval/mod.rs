@@ -25,6 +25,7 @@ pub mod report;
 pub mod retrieval;
 pub mod runner;
 pub mod signals;
+pub mod wall_clock;
 pub use layer::EvalLayer;
 
 /// Backward-compat alias: old code using `eval::token_efficiency::*` still works.

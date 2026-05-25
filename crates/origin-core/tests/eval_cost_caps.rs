@@ -155,3 +155,33 @@ fn reconcile_cost_matches_haiku_batch_pricing() {
     // Zero
     assert_eq!(reconcile_cost_usd(0, 0), 0.0);
 }
+
+use origin_core::eval::wall_clock::WallClockWatchdog;
+use std::time::Duration;
+
+#[tokio::test]
+async fn watchdog_fires_after_cap() {
+    let watchdog = WallClockWatchdog::start_with_check_interval(
+        Duration::from_millis(100),
+        Duration::from_millis(20),
+    );
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    assert!(watchdog.is_exceeded(), "should have fired by now");
+}
+
+#[tokio::test]
+async fn watchdog_does_not_fire_within_cap() {
+    let watchdog = WallClockWatchdog::start_with_check_interval(
+        Duration::from_secs(60),
+        Duration::from_millis(20),
+    );
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    assert!(!watchdog.is_exceeded());
+}
+
+#[tokio::test]
+async fn watchdog_disabled_never_fires() {
+    let watchdog = WallClockWatchdog::disabled();
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    assert!(!watchdog.is_exceeded());
+}
