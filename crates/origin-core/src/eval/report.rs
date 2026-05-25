@@ -202,6 +202,11 @@ pub struct CaseResult {
 /// run_id, timestamp, costs, latency fields. These vary across runs of
 /// the same eval setup, so cross-run comparison of metrics requires the
 /// COMPARABLE subset to match.
+///
+/// **Contract:** any modification to this function's input set (adding,
+/// removing, reordering, or changing the encoding of any field) MUST bump
+/// `default_schema_version()` so old vs new baselines hash distinctly and
+/// don't appear comparable.
 pub fn comparable_env_hash(env: &ReportEnv) -> String {
     use sha2::{Digest, Sha256};
     let mut h = Sha256::new();

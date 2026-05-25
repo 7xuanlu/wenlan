@@ -539,10 +539,7 @@ async fn run_daemon() -> anyhow::Result<()> {
     // Bind
     let addr = resolve_bind_addr(port);
     let listener = match tokio::net::TcpListener::bind(&addr).await {
-        Ok(l) => {
-            tracing::info!("Listening on http://{}", addr);
-            l
-        }
+        Ok(l) => l,
         Err(e) => {
             // Check if existing daemon is healthy
             tracing::warn!("Failed to bind {}: {}", addr, e);
@@ -579,6 +576,7 @@ async fn run_daemon() -> anyhow::Result<()> {
     // Advertise the bound port before accepting requests.
     // `addr` may be `127.0.0.1:0`; `local_addr()` gives the real ephemeral port.
     let local_addr = listener.local_addr()?;
+    tracing::info!("Listening on http://{}", local_addr);
 
     // Eval harness reads this stdout line to discover the bound port even when
     // ORIGIN_BIND_ADDR=127.0.0.1:0. Format MUST stay stable — see
