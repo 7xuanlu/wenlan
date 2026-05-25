@@ -114,6 +114,13 @@ The actual skill instructions live in [`../skills`](../skills):
 - `handoff`: capture end-of-session decisions, lessons, gotchas, and open threads
 - `debrief`: alias for `handoff` (brief/debrief symmetry)
 
+## Links
+
+- [useorigin.app](https://useorigin.app) — project home
+- [useorigin.app/learn/claude-code-memory](https://useorigin.app/learn/claude-code-memory) — Claude Code memory concept article
+- [useorigin.app/docs/daily-workflow](https://useorigin.app/docs/daily-workflow) — the brief/capture/recall/handoff loop
+- [useorigin.app/docs/get-started](https://useorigin.app/docs/get-started) — install + verify
+
 ## License
 
 Apache-2.0.

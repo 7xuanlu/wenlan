@@ -10,7 +10,14 @@ This crate defines the HTTP API request/response types and core enums used by:
 
 ## Stability
 
-Pre-1.0 — expect minor version bumps to include breaking changes, per Rust 0.x convention. Types marked `#[doc(hidden)]` are not part of the stability contract and may change without a version bump.
+Pre-1.0. Expect minor version bumps to include breaking changes, per Rust 0.x convention. Types marked `#[doc(hidden)]` are not part of the stability contract and may change without a version bump.
+
+## Links
+
+- [useorigin.app](https://useorigin.app) — project home
+- [useorigin.app/docs](https://useorigin.app/docs) — install + daily workflow
+- [origin-mcp on crates.io](https://crates.io/crates/origin-mcp) — sibling crate
+- [github.com/7xuanlu/origin](https://github.com/7xuanlu/origin) — source
 
 ## License
 

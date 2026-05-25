@@ -6,7 +6,7 @@ This repo holds the daemon (`origin-server`), the CLI (`origin`), the MCP server
 
 ## Development Setup
 
-**Requirements:** macOS Apple Silicon (M1+), [Xcode Command Line Tools](https://developer.apple.com/xcode/resources/), [Rust](https://rustup.rs/) (stable).
+**Requirements:** macOS (arm64 + x64), Linux (x86_64 + arm64; glibc), or Windows (x86_64); platform build tools ([Xcode Command Line Tools](https://developer.apple.com/xcode/resources/) on macOS, MSVC Build Tools on Windows, gcc + make on Linux); [Rust](https://rustup.rs/) (stable).
 
 ```bash
 git clone https://github.com/7xuanlu/origin.git
@@ -96,3 +96,9 @@ These conventions keep the codebase consistent. See `CLAUDE.md` for the full lis
 This repo is Apache-2.0: `crates/origin-types`, `crates/origin-core`, `crates/origin-server`, `crates/origin-cli`, `crates/origin-mcp`, and the Claude Code plugin files. The desktop app in [origin-app](https://github.com/7xuanlu/origin-app) is AGPL-3.0-only.
 
 By contributing, you agree that your changes will be licensed under the license that applies to the files you modify.
+
+## Links
+
+- [useorigin.app](https://useorigin.app) — project home
+- [useorigin.app/docs/get-started](https://useorigin.app/docs/get-started) — install + verify the local memory loop before opening a PR
+- [useorigin.app/docs/daily-workflow](https://useorigin.app/docs/daily-workflow) — the workflow your changes will fit into
