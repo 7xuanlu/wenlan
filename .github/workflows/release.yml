@@ -189,10 +189,6 @@ jobs:
         env:
           SCCACHE_GHA_ENABLED: "true"
           RUSTC_WRAPPER: "sccache"
-          # Use rust-lld on Windows (ships with toolchain, ~3-5min faster
-          # link than link.exe for our binary sizes). Linux + macOS keep
-          # their default linkers (ld / ld64).
-          RUSTFLAGS: ${{ runner.os == 'Windows' && '-C linker-flavor=lld-link' || '' }}
         run: cargo build --release -p origin -p origin-server -p origin-mcp --target ${{ matrix.target }}
 
       - name: Smoke
