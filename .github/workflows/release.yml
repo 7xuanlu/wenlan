@@ -361,20 +361,16 @@ jobs:
           echo "Workspace version: $VERSION"
 
       - name: Publish origin-types to crates.io
-        # Always attempt when the version is not yet on crates.io.
-        # Prior logic gated on "files changed since last tag" which silently
-        # skipped publish when only the workspace version bumped without
-        # origin-types code changes. v0.6.1 hit this: origin-types code was
-        # stable so publish skipped, then origin-mcp 0.6.1 publish failed
-        # because its `origin-types = "^0.6.1"` dep was unreachable. Both
-        # crates stayed at 0.6.0 while the release job exited SUCCESS because
-        # the trailing `|| echo "Already published, skipping"` masked it.
-        # Registry check is the source of truth.
+        # Source-of-truth registry check uses the sparse index (same as the
+        # downstream `Wait for ... available` step). The v1 web API lags
+        # behind by minutes-to-hours under load and gave false "not
+        # published" answers that caused cargo publish to attempt a
+        # duplicate upload, failing the job.
         if: env.CARGO_REGISTRY_TOKEN != ''
         run: |
           VERSION="${{ steps.version.outputs.value }}"
-          if curl -sf "https://crates.io/api/v1/crates/origin-types/${VERSION}" >/dev/null; then
-            echo "origin-types ${VERSION} already on crates.io, skipping publish"
+          if curl -sf "https://index.crates.io/or/ig/origin-types" | grep -q "\"vers\":\"$VERSION\""; then
+            echo "origin-types ${VERSION} already on sparse index, skipping publish"
           else
             cargo publish -p origin-types
           fi
@@ -382,28 +378,40 @@ jobs:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
 
       - name: Wait for origin-types to be available on crates.io
+        # Poll the sparse index (https://index.crates.io) — that's what
+        # `cargo publish -p origin-mcp` reads to resolve its
+        # `origin-types = "^X.Y.Z"` dep. The v1 web API
+        # (`crates.io/api/v1/crates/<name>/<version>`) lags behind the
+        # sparse index by minutes-to-hours during load, which caused
+        # false negatives (publish succeeded, web API still 404). The
+        # sparse index path for any crate `name` is
+        # `/<prefix>/<name>` where prefix depends on name length;
+        # for 4+ chars: `<first2>/<chars 3-4>/<name>`. `origin-types`
+        # → `or/ig/origin-types`. The index returns NDJSON, one record
+        # per published version.
         run: |
           VERSION="${{ steps.version.outputs.value }}"
-          for i in $(seq 1 30); do
-            if curl -sf "https://crates.io/api/v1/crates/origin-types/${VERSION}" >/dev/null; then
-              echo "origin-types ${VERSION} available"; exit 0
+          INDEX_URL="https://index.crates.io/or/ig/origin-types"
+          for i in $(seq 1 60); do
+            if curl -sf "$INDEX_URL" | grep -q "\"vers\":\"$VERSION\""; then
+              echo "origin-types ${VERSION} visible on sparse index"; exit 0
             fi
-            echo "Waiting for crates.io to index origin-types ${VERSION}... ($i/30)"
+            echo "Waiting for sparse index to publish origin-types ${VERSION}... ($i/60)"
             sleep 10
           done
-          echo "ERROR: origin-types ${VERSION} not visible on crates.io after 5 min"
+          echo "ERROR: origin-types ${VERSION} not visible on sparse index after 10 min"
+          echo "Last index response:"
+          curl -s "$INDEX_URL" | tail -5
           exit 1
 
       - name: Publish origin-mcp to crates.io
-        # Same registry-check pattern. Real errors from cargo publish now
-        # propagate — the prior `|| echo "Already published, skipping"`
-        # swallowed dependency-resolution errors and marked the job SUCCESS
-        # while uploading nothing.
+        # Sparse index check (see origin-types step) avoids the v1 web API
+        # propagation lag that previously caused duplicate-publish failures.
         if: env.CARGO_REGISTRY_TOKEN != ''
         run: |
           VERSION="${{ steps.version.outputs.value }}"
-          if curl -sf "https://crates.io/api/v1/crates/origin-mcp/${VERSION}" >/dev/null; then
-            echo "origin-mcp ${VERSION} already on crates.io, skipping publish"
+          if curl -sf "https://index.crates.io/or/ig/origin-mcp" | grep -q "\"vers\":\"$VERSION\""; then
+            echo "origin-mcp ${VERSION} already on sparse index, skipping publish"
           else
             cargo publish -p origin-mcp
           fi
