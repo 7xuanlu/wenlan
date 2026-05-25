@@ -227,27 +227,13 @@ jobs:
           "$STAGE/origin" uninstall
           test ! -f ~/.config/systemd/user/origin-server.service
           echo "    Linux install/uninstall round-trip PASS"
-      - name: Set up Docker Buildx (Linux)
-        if: matrix.os == 'ubuntu-24.04'
-        uses: docker/setup-buildx-action@v3
-      # Docker smoke gates the daemon image build + runtime. The base
-      # switched to Debian trixie (13) so ort_sys's onnxruntime build
-      # sees glibc 2.41+ (provides __isoc23_strtoull, required since 2.38).
-      #
-      # GHA cache speeds up subsequent runs (layers reused across PRs on the
-      # same scope). cache-to mode=max preserves intermediate stage layers.
-      - name: Smoke (Linux daemon image)
-        if: matrix.os == 'ubuntu-24.04'
-        env:
-          BUILDX_CACHE_FROM: type=gha,scope=daemon
-          BUILDX_CACHE_TO: type=gha,scope=daemon,mode=max
-        run: bash scripts/smoke-linux.sh
-      - name: Smoke (Windows daemon)
-        if: matrix.os == 'windows-2022'
-        shell: pwsh
-        run: |
-          cargo build --release -p origin-server
-          ./scripts/smoke-windows.ps1
+      # Linux Docker smoke + Windows release-build smoke previously ran here.
+      # Both duplicated work that release.yml already does on every tag push
+      # (Docker daemon image + Windows release matrix). Dropping them shaves
+      # ~10min Linux + ~12min Windows per PR. Keep the schtasks install
+      # round-trip below — that's the only contract test PR CI uniquely
+      # exercises.
+
       # `origin install` on Windows registers a per-user Task Scheduler
       # ONLOGON entry via schtasks.exe and triggers it immediately. We
       # verify the full round-trip: install registers the task, daemon
