@@ -536,6 +536,51 @@ async fn save_longmemeval_cross_rerank_baseline() {
     );
 }
 
+// P0 #2 event_date anchor baselines. Embedder-only (no LLM, no model
+// download). Memories carry session timestamps in event_date; the search
+// path uses search_memory_with_anchor(AnchorField::EventDate).
+#[tokio::test]
+#[ignore]
+async fn save_locomo_event_date_anchor_baseline() {
+    let path = eval_root().join("data/locomo10.json");
+    if !path.exists() {
+        println!("SKIP: locomo10.json not found");
+        return;
+    }
+    let report = origin_core::eval::locomo::run_locomo_eval_event_date_anchor(&path)
+        .await
+        .unwrap();
+    let baselines_dir = eval_root().join("baselines");
+    std::fs::create_dir_all(&baselines_dir).unwrap();
+    let baseline_path = baselines_dir.join(report.baseline_filename("locomo"));
+    report.save_baseline(&baseline_path).unwrap();
+    println!(
+        "Saved LoCoMo event_date_anchor baseline to {:?}",
+        baseline_path
+    );
+}
+
+#[tokio::test]
+#[ignore]
+async fn save_longmemeval_event_date_anchor_baseline() {
+    let path = eval_root().join("data/longmemeval_oracle.json");
+    if !path.exists() {
+        println!("SKIP: longmemeval_oracle.json not found");
+        return;
+    }
+    let report = origin_core::eval::longmemeval::run_longmemeval_eval_event_date_anchor(&path)
+        .await
+        .unwrap();
+    let baselines_dir = eval_root().join("baselines");
+    std::fs::create_dir_all(&baselines_dir).unwrap();
+    let baseline_path = baselines_dir.join(report.baseline_filename("longmemeval"));
+    report.save_baseline(&baseline_path).unwrap();
+    println!(
+        "Saved LongMemEval event_date_anchor baseline to {:?}",
+        baseline_path
+    );
+}
+
 #[tokio::test]
 #[ignore]
 async fn save_longmemeval_expanded_baseline() {

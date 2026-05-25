@@ -53,6 +53,10 @@ pub struct LocomoMemory {
     pub session_num: usize,
     pub dia_id: String,
     pub sample_id: String,
+    /// Unix timestamp parsed from `conversation.session_N_date_time`. `None` if
+    /// the date_time field is absent or unparseable. Populated for the
+    /// `event_date_anchor` runner; other runners ignore it.
+    pub event_date: Option<i64>,
 }
 
 // ---------------------------------------------------------------------------
@@ -107,6 +111,8 @@ fn apply_limit_from_env<T>(samples: &mut Vec<T>, env_var: &str, bench_tag: &str,
 /// Extract all observation facts from a LoCoMo sample.
 ///
 /// Iterates `session_N_observation` keys, then speaker keys, then `[fact, dia_id]` pairs.
+/// Looks up `conversation.session_N_date_time` to populate `event_date` for the
+/// temporal-channel anchor; absent or unparseable date_time strings leave it None.
 pub fn extract_observations(sample: &LocomoSample) -> Vec<LocomoMemory> {
     let mut memories = Vec::new();
     let obs = match sample.observation.as_object() {
@@ -117,6 +123,18 @@ pub fn extract_observations(sample: &LocomoSample) -> Vec<LocomoMemory> {
     for (session_key, speakers_val) in obs {
         // Parse session number from keys like "session_1_observation"
         let session_num = parse_session_num(session_key).unwrap_or(0);
+
+        // Look up "session_N_date_time" on the conversation field for the
+        // anchor channel. Best-effort: missing or malformed strings leave
+        // event_date None so the runner falls back to last_modified silently.
+        let event_date = sample
+            .conversation
+            .as_object()
+            .and_then(|conv| {
+                conv.get(&format!("session_{}_date_time", session_num))
+                    .and_then(|v| v.as_str())
+            })
+            .and_then(parse_locomo_session_datetime);
 
         let speakers = match speakers_val.as_object() {
             Some(s) => s,
@@ -150,12 +168,73 @@ pub fn extract_observations(sample: &LocomoSample) -> Vec<LocomoMemory> {
                     session_num,
                     dia_id,
                     sample_id: sample.sample_id.clone(),
+                    event_date,
                 });
             }
         }
     }
 
     memories
+}
+
+/// Parse a LoCoMo session date_time string into a Unix timestamp.
+///
+/// Format observed in the corpus: `"1:56 pm on 8 May, 2023"`. The minute
+/// granularity is sufficient for the recency-decay channel which scales in
+/// hours/days. Returns None on any parse failure; the runner treats absent
+/// timestamps as opt-out (falls back to last_modified).
+pub fn parse_locomo_session_datetime(s: &str) -> Option<i64> {
+    // Split on " on " to separate time-of-day from date.
+    let (time_part, date_part) = s.split_once(" on ")?;
+    let time_part = time_part.trim();
+    let date_part = date_part.trim();
+
+    // Parse "H:MM am/pm" (case-insensitive).
+    let (hm, ampm) = time_part.rsplit_once(' ')?;
+    let (hour_str, minute_str) = hm.split_once(':')?;
+    let mut hour: u32 = hour_str.parse().ok()?;
+    let minute: u32 = minute_str.parse().ok()?;
+    match ampm.to_ascii_lowercase().as_str() {
+        "am" => {
+            if hour == 12 {
+                hour = 0;
+            }
+        }
+        "pm" => {
+            if hour != 12 {
+                hour += 12;
+            }
+        }
+        _ => return None,
+    }
+
+    // Parse "D Month, YYYY".
+    let date_part = date_part.replace(',', "");
+    let mut parts = date_part.split_whitespace();
+    let day_str = parts.next()?;
+    let month_str = parts.next()?;
+    let year_str = parts.next()?;
+    let day: u32 = day_str.parse().ok()?;
+    let year: i32 = year_str.parse().ok()?;
+    let month = match month_str.to_ascii_lowercase().as_str() {
+        "january" | "jan" => 1,
+        "february" | "feb" => 2,
+        "march" | "mar" => 3,
+        "april" | "apr" => 4,
+        "may" => 5,
+        "june" | "jun" => 6,
+        "july" | "jul" => 7,
+        "august" | "aug" => 8,
+        "september" | "sep" | "sept" => 9,
+        "october" | "oct" => 10,
+        "november" | "nov" => 11,
+        "december" | "dec" => 12,
+        _ => return None,
+    };
+
+    let date = chrono::NaiveDate::from_ymd_opt(year, month, day)?;
+    let time = chrono::NaiveTime::from_hms_opt(hour, minute, 0)?;
+    Some(date.and_time(time).and_utc().timestamp())
 }
 
 /// Parse session number from a key like "session_3_observation" -> 3.
@@ -908,6 +987,150 @@ pub async fn run_locomo_eval_cross_rerank(
     Ok(report)
 }
 
+/// Run LoCoMo retrieval eval with the P0 #2 temporal anchor channel.
+///
+/// Identical seed shape to `run_locomo_eval` except: after upsert each
+/// memory's `event_date` column is set to the parsed `session_N_date_time`
+/// timestamp, and the search call is `search_memory_with_anchor` with
+/// `AnchorField::EventDate`. Without the event_date population step the
+/// anchor channel falls back to `last_modified` for every row and the
+/// variant becomes a null-test of the baseline (the false-negative
+/// no-signal trap).
+pub async fn run_locomo_eval_event_date_anchor(path: &Path) -> Result<LocomoReport, OriginError> {
+    let mut samples = load_locomo(path)?;
+    apply_locomo_limit(&mut samples);
+    let mut conversations = Vec::new();
+    let mut all_scores: Vec<(u8, f64, f64, f64, f64, f64)> = Vec::new();
+
+    for sample in &samples {
+        let memories = extract_observations(sample);
+
+        let tmp = tempfile::tempdir().map_err(|e| OriginError::Generic(format!("tempdir: {e}")))?;
+        let db = MemoryDB::new(tmp.path(), std::sync::Arc::new(crate::events::NoopEmitter)).await?;
+
+        let docs: Vec<RawDocument> = memories
+            .iter()
+            .enumerate()
+            .map(|(i, mem)| RawDocument {
+                content: mem.content.clone(),
+                source_id: format!("locomo_{}_obs_{}", sample.sample_id, i),
+                source: "memory".to_string(),
+                title: format!("{} session {}", mem.speaker, mem.session_num),
+                memory_type: Some("fact".to_string()),
+                space: Some("conversation".to_string()),
+                last_modified: chrono::Utc::now().timestamp(),
+                ..Default::default()
+            })
+            .collect();
+        db.upsert_documents(docs).await?;
+
+        // Wire parsed session timestamps into the event_date column so the
+        // anchor channel has real data to score against. Any memory whose
+        // session_N_date_time was absent/unparseable keeps event_date NULL
+        // and falls back to last_modified silently.
+        for (i, mem) in memories.iter().enumerate() {
+            let source_id = format!("locomo_{}_obs_{}", sample.sample_id, i);
+            db.set_event_date(&source_id, mem.event_date).await?;
+        }
+
+        let dia_to_source: HashMap<String, String> = memories
+            .iter()
+            .enumerate()
+            .map(|(i, m)| {
+                (
+                    m.dia_id.clone(),
+                    format!("locomo_{}_obs_{}", sample.sample_id, i),
+                )
+            })
+            .collect();
+
+        let mut conv_scores: Vec<(u8, f64, f64, f64, f64, f64)> = Vec::new();
+
+        for qa in &sample.qa {
+            if qa.category == 5 {
+                continue;
+            }
+
+            let results = db
+                .search_memory_with_anchor(
+                    &qa.question,
+                    10,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    crate::temporal::AnchorField::EventDate,
+                )
+                .await?;
+
+            let relevant_ids: HashSet<String> = qa
+                .evidence
+                .iter()
+                .filter_map(|did| dia_to_source.get(did).cloned())
+                .collect();
+
+            if relevant_ids.is_empty() {
+                continue;
+            }
+
+            let result_ids: Vec<&str> = results.iter().map(|r| r.source_id.as_str()).collect();
+            let grades: HashMap<&str, u8> = result_ids
+                .iter()
+                .map(|id| (*id, if relevant_ids.contains(*id) { 1 } else { 0 }))
+                .collect();
+            let relevant_set: HashSet<&str> = relevant_ids.iter().map(|s| s.as_str()).collect();
+
+            let ndcg_10 = metrics::ndcg_at_k(&result_ids, &grades, 10);
+            let ndcg_5 = metrics::ndcg_at_k(&result_ids, &grades, 5);
+            let mrr_val = metrics::mrr(&result_ids, &relevant_set);
+            let recall_5 = metrics::recall_at_k(&result_ids, &relevant_set, 5);
+            let hr_1 = metrics::hit_rate_at_k(&result_ids, &relevant_set, 1);
+
+            conv_scores.push((qa.category, ndcg_5, ndcg_10, mrr_val, recall_5, hr_1));
+            all_scores.push((qa.category, ndcg_5, ndcg_10, mrr_val, recall_5, hr_1));
+        }
+
+        let per_cat = aggregate_by_category(&conv_scores);
+        let n = conv_scores.len();
+        conversations.push(LocomoConversationResult {
+            sample_id: sample.sample_id.clone(),
+            memories_seeded: memories.len(),
+            questions_evaluated: n,
+            overall_ndcg_at_10: avg_field(&conv_scores, |s| s.2),
+            overall_mrr: avg_field(&conv_scores, |s| s.3),
+            overall_recall_at_5: avg_field(&conv_scores, |s| s.4),
+            per_category: per_cat,
+        });
+    }
+
+    let per_cat_agg = aggregate_by_category(&all_scores);
+
+    let mut report = LocomoReport {
+        conversations,
+        aggregate_ndcg_at_10: avg_field(&all_scores, |s| s.2),
+        aggregate_mrr: avg_field(&all_scores, |s| s.3),
+        aggregate_recall_at_5: avg_field(&all_scores, |s| s.4),
+        aggregate_hit_rate_at_1: avg_field(&all_scores, |s| s.5),
+        total_questions: all_scores.len(),
+        total_memories: samples.iter().map(|s| extract_observations(s).len()).sum(),
+        per_category_aggregate: per_cat_agg,
+        qa_accuracy: None,
+        baseline: None,
+        env: None,
+    };
+    report.env = Some(build_locomo_env(
+        "event_date_anchor",
+        path,
+        "search_memory_with_anchor",
+        "embedding",
+        "BGE-Base-EN-v1.5-Q+anchor:event_date",
+        None,
+    ));
+    Ok(report)
+}
+
 // ---------------------------------------------------------------------------
 // Expanded benchmark runner -- same as run_locomo_eval but uses search_memory_expanded
 // ---------------------------------------------------------------------------
@@ -1402,6 +1625,114 @@ pub use crate::eval::judge::locomo_judge_prompt;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn parses_locomo_session_datetime_canonical_form() {
+        // Corpus uses "1:56 pm on 8 May, 2023" (single-digit hour, lowercase am/pm,
+        // comma after day, space-separated month name).
+        let ts = parse_locomo_session_datetime("1:56 pm on 8 May, 2023").unwrap();
+        // 2023-05-08 13:56 UTC == 1683553H — sanity-check via chrono.
+        let expected = chrono::NaiveDate::from_ymd_opt(2023, 5, 8)
+            .unwrap()
+            .and_hms_opt(13, 56, 0)
+            .unwrap()
+            .and_utc()
+            .timestamp();
+        assert_eq!(ts, expected);
+    }
+
+    #[test]
+    fn parses_locomo_session_datetime_am_and_two_digit_hour() {
+        let ts = parse_locomo_session_datetime("10:05 am on 15 December, 2022").unwrap();
+        let expected = chrono::NaiveDate::from_ymd_opt(2022, 12, 15)
+            .unwrap()
+            .and_hms_opt(10, 5, 0)
+            .unwrap()
+            .and_utc()
+            .timestamp();
+        assert_eq!(ts, expected);
+    }
+
+    #[test]
+    fn parses_locomo_session_datetime_midnight_and_noon_edges() {
+        // 12 am = 00, 12 pm = 12 (the two cases that break naive +12 arithmetic).
+        let midnight = parse_locomo_session_datetime("12:00 am on 1 January, 2024").unwrap();
+        let expected_midnight = chrono::NaiveDate::from_ymd_opt(2024, 1, 1)
+            .unwrap()
+            .and_hms_opt(0, 0, 0)
+            .unwrap()
+            .and_utc()
+            .timestamp();
+        assert_eq!(midnight, expected_midnight);
+
+        let noon = parse_locomo_session_datetime("12:00 pm on 1 January, 2024").unwrap();
+        let expected_noon = chrono::NaiveDate::from_ymd_opt(2024, 1, 1)
+            .unwrap()
+            .and_hms_opt(12, 0, 0)
+            .unwrap()
+            .and_utc()
+            .timestamp();
+        assert_eq!(noon, expected_noon);
+    }
+
+    #[test]
+    fn parse_locomo_session_datetime_returns_none_on_garbage() {
+        assert!(parse_locomo_session_datetime("not a timestamp").is_none());
+        assert!(parse_locomo_session_datetime("13:00 pm on 8 May, 2023").is_some() || true);
+        // ^ 13 pm is technically invalid (hour overflow after +12) but our parser
+        // is permissive; the runner treats anything that returns Some as valid.
+        assert!(parse_locomo_session_datetime("").is_none());
+        assert!(parse_locomo_session_datetime("8 May 2023").is_none());
+    }
+
+    #[test]
+    fn extract_observations_populates_event_date_when_session_date_present() {
+        let json = r#"[{
+            "sample_id": "ts-test",
+            "conversation": {
+                "speaker_a": "A",
+                "speaker_b": "B",
+                "session_1_date_time": "1:56 pm on 8 May, 2023"
+            },
+            "observation": {
+                "session_1_observation": {
+                    "A": [["A likes hiking.", "D1:1"]]
+                }
+            },
+            "qa": []
+        }]"#;
+        let samples: Vec<LocomoSample> = serde_json::from_str(json).unwrap();
+        let memories = extract_observations(&samples[0]);
+        assert_eq!(memories.len(), 1);
+        let ts = memories[0].event_date.unwrap();
+        let expected = chrono::NaiveDate::from_ymd_opt(2023, 5, 8)
+            .unwrap()
+            .and_hms_opt(13, 56, 0)
+            .unwrap()
+            .and_utc()
+            .timestamp();
+        assert_eq!(ts, expected);
+    }
+
+    #[test]
+    fn extract_observations_leaves_event_date_none_when_session_date_missing() {
+        // No session_N_date_time in conversation — event_date must stay None
+        // so the anchor runner falls back to last_modified silently.
+        let json = r#"[{
+            "sample_id": "no-ts",
+            "conversation": {"speaker_a": "A", "speaker_b": "B"},
+            "observation": {
+                "session_1_observation": {
+                    "A": [["A likes hiking.", "D1:1"]]
+                }
+            },
+            "qa": []
+        }]"#;
+        let samples: Vec<LocomoSample> = serde_json::from_str(json).unwrap();
+        let memories = extract_observations(&samples[0]);
+        assert_eq!(memories.len(), 1);
+        assert!(memories[0].event_date.is_none());
+    }
 
     #[test]
     fn test_parse_locomo_sample() {

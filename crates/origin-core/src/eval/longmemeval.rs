@@ -74,6 +74,10 @@ pub struct LongMemEvalMemory {
     pub turn_idx: usize,
     pub has_answer: bool,
     pub question_id: String,
+    /// Unix timestamp parsed from the parallel `haystack_dates[session_idx]`.
+    /// `None` if absent or unparseable; the anchor runner treats None as
+    /// opt-out (falls back to last_modified).
+    pub event_date: Option<i64>,
 }
 
 // ---------------------------------------------------------------------------
@@ -140,6 +144,14 @@ pub fn extract_memories(sample: &LongMemEvalSample) -> Vec<LongMemEvalMemory> {
         .zip(sample.haystack_sessions.iter())
         .enumerate()
     {
+        // haystack_dates is parallel to haystack_session_ids. Bounds-check
+        // defensively; the temporal anchor channel treats absent timestamps
+        // as opt-out.
+        let event_date = sample
+            .haystack_dates
+            .get(sess_idx)
+            .and_then(|s| parse_lme_session_datetime(s));
+
         for (turn_idx, turn) in session.iter().enumerate() {
             // Always include user turns (they contain the personal facts).
             // Include assistant turns only if they have answer evidence,
@@ -153,12 +165,44 @@ pub fn extract_memories(sample: &LongMemEvalSample) -> Vec<LongMemEvalMemory> {
                     turn_idx,
                     has_answer: turn.has_answer,
                     question_id: sample.question_id.clone(),
+                    event_date,
                 });
             }
         }
     }
 
     memories
+}
+
+/// Parse a LongMemEval haystack/question date string into a Unix timestamp.
+///
+/// Format observed in the corpus: `"2023/04/10 (Mon) 17:50"`. The weekday
+/// abbreviation in parens is discarded — it's derivable from the date.
+/// Returns None on any parse failure.
+pub fn parse_lme_session_datetime(s: &str) -> Option<i64> {
+    // Strip the "(Mon)" weekday block (any parenthesized substring).
+    let cleaned: String = {
+        let mut out = String::with_capacity(s.len());
+        let mut depth = 0u32;
+        for ch in s.chars() {
+            match ch {
+                '(' => depth += 1,
+                ')' => {
+                    if depth > 0 {
+                        depth -= 1;
+                    }
+                }
+                _ if depth == 0 => out.push(ch),
+                _ => {}
+            }
+        }
+        out
+    };
+    // Collapse repeated whitespace.
+    let cleaned: String = cleaned.split_whitespace().collect::<Vec<_>>().join(" ");
+    chrono::NaiveDateTime::parse_from_str(&cleaned, "%Y/%m/%d %H:%M")
+        .ok()
+        .map(|dt| dt.and_utc().timestamp())
 }
 
 /// Build a source_id for a memory extracted from a LongMemEval turn.
@@ -859,6 +903,139 @@ pub async fn run_longmemeval_eval_cross_rerank(
     Ok(report)
 }
 
+/// Run LongMemEval retrieval eval with the P0 #2 temporal anchor channel.
+///
+/// Identical seed/score logic to `run_longmemeval_eval` except: after upsert
+/// each memory's `event_date` column is set to the parsed
+/// `haystack_dates[session_idx]` timestamp, and the search uses
+/// `search_memory_with_anchor` with `AnchorField::EventDate`.
+pub async fn run_longmemeval_eval_event_date_anchor(
+    path: &Path,
+) -> Result<LongMemEvalReport, OriginError> {
+    let mut samples = load_longmemeval(path)?;
+    apply_lme_limit(&mut samples);
+    let mut all_scores: Vec<(String, f64, f64, f64, f64, f64)> = Vec::new();
+    let mut total_memories: usize = 0;
+
+    for sample in &samples {
+        let memories = extract_memories(sample);
+
+        let tmp = tempfile::tempdir().map_err(|e| OriginError::Generic(format!("tempdir: {e}")))?;
+        let db = MemoryDB::new(tmp.path(), std::sync::Arc::new(crate::events::NoopEmitter)).await?;
+
+        let docs: Vec<RawDocument> = memories
+            .iter()
+            .map(|mem| {
+                let memory_type = match sample.question_type.as_str() {
+                    "single-session-preference" => "preference",
+                    _ => "fact",
+                };
+                RawDocument {
+                    content: mem.content.clone(),
+                    source_id: memory_source_id(&mem.question_id, mem.session_idx, mem.turn_idx),
+                    source: "memory".to_string(),
+                    title: format!("{} session {}", mem.role, mem.session_idx),
+                    memory_type: Some(memory_type.to_string()),
+                    space: Some("conversation".to_string()),
+                    last_modified: chrono::Utc::now().timestamp(),
+                    ..Default::default()
+                }
+            })
+            .collect();
+        total_memories += docs.len();
+        db.upsert_documents(docs).await?;
+
+        // Wire parsed haystack session timestamps into event_date so the
+        // anchor channel scores against real dates. Memories whose session
+        // date was absent/unparseable keep event_date NULL and fall back to
+        // last_modified silently.
+        for mem in &memories {
+            let source_id = memory_source_id(&mem.question_id, mem.session_idx, mem.turn_idx);
+            db.set_event_date(&source_id, mem.event_date).await?;
+        }
+
+        let relevant_source_ids: HashSet<String> = memories
+            .iter()
+            .filter(|m| m.has_answer)
+            .map(|m| memory_source_id(&m.question_id, m.session_idx, m.turn_idx))
+            .collect();
+
+        if relevant_source_ids.is_empty() {
+            continue;
+        }
+
+        let results = db
+            .search_memory_with_anchor(
+                &sample.question,
+                10,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                crate::temporal::AnchorField::EventDate,
+            )
+            .await?;
+
+        let result_ids: Vec<&str> = results.iter().map(|r| r.source_id.as_str()).collect();
+
+        let grades: HashMap<&str, u8> = result_ids
+            .iter()
+            .map(|id| {
+                (
+                    *id,
+                    if relevant_source_ids.contains(*id) {
+                        1
+                    } else {
+                        0
+                    },
+                )
+            })
+            .collect();
+
+        let relevant_set: HashSet<&str> = relevant_source_ids.iter().map(|s| s.as_str()).collect();
+
+        let ndcg_10 = metrics::ndcg_at_k(&result_ids, &grades, 10);
+        let ndcg_5 = metrics::ndcg_at_k(&result_ids, &grades, 5);
+        let mrr_val = metrics::mrr(&result_ids, &relevant_set);
+        let recall_5 = metrics::recall_at_k(&result_ids, &relevant_set, 5);
+        let hr_1 = metrics::hit_rate_at_k(&result_ids, &relevant_set, 1);
+
+        all_scores.push((
+            sample.question_type.clone(),
+            ndcg_5,
+            ndcg_10,
+            mrr_val,
+            recall_5,
+            hr_1,
+        ));
+    }
+
+    let per_category = aggregate_by_category(&all_scores);
+
+    let mut report = LongMemEvalReport {
+        aggregate_ndcg_at_10: avg_field(&all_scores, |s| s.2),
+        aggregate_mrr: avg_field(&all_scores, |s| s.3),
+        aggregate_recall_at_5: avg_field(&all_scores, |s| s.4),
+        aggregate_hit_rate_at_1: avg_field(&all_scores, |s| s.5),
+        total_questions: all_scores.len(),
+        total_memories,
+        per_category,
+        baseline: None,
+        env: None,
+    };
+    report.env = Some(build_lme_env(
+        "event_date_anchor",
+        path,
+        "search_memory_with_anchor",
+        "embedding",
+        "BGE-Base-EN-v1.5-Q+anchor:event_date",
+        None,
+    ));
+    Ok(report)
+}
+
 // ---------------------------------------------------------------------------
 // Expanded benchmark runner -- same as run_longmemeval_eval but uses search_memory_expanded
 // ---------------------------------------------------------------------------
@@ -1306,6 +1483,66 @@ pub use crate::eval::judge::{
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn parses_lme_session_datetime_canonical_form() {
+        // Corpus format: "2023/04/10 (Mon) 17:50" — slash-dated, weekday in parens.
+        let ts = parse_lme_session_datetime("2023/04/10 (Mon) 17:50").unwrap();
+        let expected = chrono::NaiveDate::from_ymd_opt(2023, 4, 10)
+            .unwrap()
+            .and_hms_opt(17, 50, 0)
+            .unwrap()
+            .and_utc()
+            .timestamp();
+        assert_eq!(ts, expected);
+    }
+
+    #[test]
+    fn parses_lme_session_datetime_without_weekday() {
+        // Defensive: be permissive when the parens block is absent.
+        let ts = parse_lme_session_datetime("2024/12/31 23:59").unwrap();
+        let expected = chrono::NaiveDate::from_ymd_opt(2024, 12, 31)
+            .unwrap()
+            .and_hms_opt(23, 59, 0)
+            .unwrap()
+            .and_utc()
+            .timestamp();
+        assert_eq!(ts, expected);
+    }
+
+    #[test]
+    fn parse_lme_session_datetime_returns_none_on_garbage() {
+        assert!(parse_lme_session_datetime("").is_none());
+        assert!(parse_lme_session_datetime("hello world").is_none());
+        assert!(parse_lme_session_datetime("2023-04-10 17:50").is_none());
+    }
+
+    #[test]
+    fn extract_memories_populates_event_date_from_haystack_dates() {
+        let json = r#"[{
+            "question_id": "ts_q1",
+            "question_type": "single-session-user",
+            "question": "ignored",
+            "answer": "x",
+            "question_date": "2023/04/10 (Mon) 23:07",
+            "haystack_dates": ["2023/04/10 (Mon) 17:50"],
+            "haystack_session_ids": ["session_1"],
+            "haystack_sessions": [[
+                {"role": "user", "content": "fact", "has_answer": true}
+            ]],
+            "answer_session_ids": ["session_1"]
+        }]"#;
+        let samples: Vec<LongMemEvalSample> = serde_json::from_str(json).unwrap();
+        let memories = extract_memories(&samples[0]);
+        assert_eq!(memories.len(), 1);
+        let expected = chrono::NaiveDate::from_ymd_opt(2023, 4, 10)
+            .unwrap()
+            .and_hms_opt(17, 50, 0)
+            .unwrap()
+            .and_utc()
+            .timestamp();
+        assert_eq!(memories[0].event_date, Some(expected));
+    }
 
     fn sample_json() -> &'static str {
         r#"[{
