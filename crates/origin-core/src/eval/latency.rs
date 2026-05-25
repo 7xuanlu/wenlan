@@ -11,6 +11,18 @@ pub struct LatencySummary {
     pub sample_count: usize,
 }
 
+impl LatencySummary {
+    /// Compute P50/P99 over a slice of per-query latencies in microseconds.
+    /// Converts to milliseconds for storage (rounds down).
+    pub fn from_micros(samples: &[u64]) -> Self {
+        if samples.is_empty() {
+            return LatencySummary::default();
+        }
+        let samples_ms: Vec<u64> = samples.iter().map(|&us| us / 1000).collect();
+        latency_summary(&samples_ms)
+    }
+}
+
 /// Sort-based percentile. O(n log n); fine for eval (n < 10k).
 pub fn latency_summary(samples_ms: &[u64]) -> LatencySummary {
     if samples_ms.is_empty() {

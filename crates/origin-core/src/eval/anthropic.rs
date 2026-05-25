@@ -3,6 +3,37 @@
 
 use std::collections::HashMap;
 
+/// Parse the `EVAL_MAX_USD` env var into an optional cap.
+///
+/// Rules:
+/// - `None` / missing → returns `Ok(None)` (no cap configured).
+/// - Negative or zero → error ("must be positive").
+/// - `> $10.0` without `EVAL_I_REALLY_MEAN_IT=1` set → error.
+/// - Parse failure (garbage) → error.
+///
+/// Failure modes are explicit; never silently `unwrap_or(0.0)`.
+pub fn parse_eval_max_usd(value: Option<&str>) -> anyhow::Result<Option<f64>> {
+    let Some(raw) = value else {
+        return Ok(None);
+    };
+    let cap: f64 = raw
+        .parse()
+        .map_err(|e| anyhow::anyhow!("EVAL_MAX_USD must parse as f64; got {:?}: {}", raw, e))?;
+    if !cap.is_finite() {
+        anyhow::bail!("EVAL_MAX_USD must be finite; got {}", cap);
+    }
+    if cap <= 0.0 {
+        anyhow::bail!("EVAL_MAX_USD must be positive; got {}", cap);
+    }
+    if cap > 10.0 && std::env::var("EVAL_I_REALLY_MEAN_IT").is_err() {
+        anyhow::bail!(
+            "EVAL_MAX_USD={} exceeds $10 safety threshold. Set EVAL_I_REALLY_MEAN_IT=1 to override.",
+            cap
+        );
+    }
+    Ok(Some(cap))
+}
+
 /// Call the Anthropic API directly via reqwest. Returns response text.
 /// Much faster than `claude -p` (no process spawn overhead) and costs ~$0.001/call with Haiku.
 pub async fn call_anthropic_api(
@@ -50,6 +81,19 @@ pub async fn call_anthropic_api(
     Ok(answer)
 }
 
+/// Compute actual cost in USD for Claude 3.5 Haiku batch pricing.
+///
+/// Pricing (verify against current Anthropic pricing page before each release):
+///   - Input: $0.25 / 1M tokens (batch-discounted from $0.50)
+///   - Output: $1.25 / 1M tokens (batch-discounted from $2.50)
+///
+/// Returns `0.0` for zero-token inputs.
+pub fn reconcile_cost_usd(input_tokens: u64, output_tokens: u64) -> f64 {
+    let input_cost = (input_tokens as f64) * (0.25 / 1_000_000.0);
+    let output_cost = (output_tokens as f64) * (1.25 / 1_000_000.0);
+    input_cost + output_cost
+}
+
 /// Estimate batch cost in USD (Haiku batch pricing: $0.50/MTok input, $2.50/MTok output).
 pub fn estimate_batch_cost(prompts: &[(String, String, Option<String>, usize)]) -> f64 {
     let input_tokens: usize = prompts
@@ -80,9 +124,10 @@ pub async fn submit_batch(
         return Err(format!("cost_cap_usd suspicious: ${cost_cap_usd}"));
     }
     let est_cost = estimate_batch_cost(&requests);
-    if let Ok(cap_str) = std::env::var("EVAL_MAX_USD") {
-        let cap: f64 = cap_str.parse().unwrap_or(0.0);
-        if cap > 0.0 && est_cost > cap {
+    if let Some(cap) = parse_eval_max_usd(std::env::var("EVAL_MAX_USD").ok().as_deref())
+        .map_err(|e| e.to_string())?
+    {
+        if est_cost > cap {
             return Err(format!(
                 "Aborting: estimated cost ${:.4} exceeds EVAL_MAX_USD cap ${:.4}. \
                  Set EVAL_MAX_USD higher or shrink batch.",
@@ -231,9 +276,10 @@ pub async fn submit_batch_with_tool(
         return Err(format!("cost_cap_usd suspicious: ${cost_cap_usd}"));
     }
     let est_cost = estimate_batch_cost(&requests);
-    if let Ok(cap_str) = std::env::var("EVAL_MAX_USD") {
-        let cap: f64 = cap_str.parse().unwrap_or(0.0);
-        if cap > 0.0 && est_cost > cap {
+    if let Some(cap) = parse_eval_max_usd(std::env::var("EVAL_MAX_USD").ok().as_deref())
+        .map_err(|e| e.to_string())?
+    {
+        if est_cost > cap {
             return Err(format!(
                 "Aborting: estimated cost ${:.4} exceeds EVAL_MAX_USD cap ${:.4}. \
                  Set EVAL_MAX_USD higher or shrink batch.",

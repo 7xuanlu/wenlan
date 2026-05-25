@@ -159,6 +159,11 @@ pub struct RecallParams {
     )]
     #[serde(default)]
     pub anchor: Option<String>,
+    #[schemars(
+        description = "Enable cross-encoder reranking. Slower (model inference) but higher retrieval quality. Off by default. Requires ORIGIN_RERANKER_ENABLED=1 on the daemon; otherwise the daemon falls back to the plain hybrid ordering."
+    )]
+    #[serde(default)]
+    pub rerank: Option<bool>,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
@@ -752,6 +757,12 @@ impl OriginMcpServer {
             // time. Daemon tolerates unknown values and falls back to the
             // default `last_modified` channel.
             anchor: params.anchor.clone(),
+            // Opt-in cross-encoder rerank. Default `false` preserves the
+            // current cost/latency for callers that don't pass the flag.
+            // Requires ORIGIN_RERANKER_ENABLED=1 on the daemon to take
+            // effect; otherwise the daemon logs and falls back to plain
+            // hybrid ordering.
+            rerank: params.rerank.unwrap_or(false),
         };
 
         let resp: SearchMemoryResponse = match self.client.post("/api/memory/search", &req).await {
@@ -1721,7 +1732,7 @@ impl OriginMcpServer {
     }
 
     #[tool(
-        description = "Search memories by query. Use when the user asks 'do you remember', 'what do you know about', 'look up', or when you need a specific fact before acting.\n\nWrite queries as natural language — the search engine handles semantic matching. For precision, use filters (memory_type, space) to narrow results. If you get too many results, add filters rather than making the query longer.\n\nThis is for targeted lookups. For broad session orientation, use context instead.",
+        description = "Search memories by query. Use when the user asks 'do you remember', 'what do you know about', 'look up', or when you need a specific fact before acting.\n\nWrite queries as natural language — the search engine handles semantic matching. For precision, use filters (memory_type, space) to narrow results. If you get too many results, add filters rather than making the query longer.\n\nFor higher retrieval quality at the cost of latency, pass `rerank: true` to opt into the cross-encoder reranker (requires ORIGIN_RERANKER_ENABLED=1 on the daemon).\n\nThis is for targeted lookups. For broad session orientation, use context instead.",
         annotations(title = "Recall", read_only_hint = true, open_world_hint = false)
     )]
     async fn recall(
@@ -2585,6 +2596,10 @@ mod tests {
             params.anchor.is_none(),
             "anchor omitted must remain None so the daemon receives default last_modified"
         );
+        assert!(
+            params.rerank.is_none(),
+            "rerank omitted must remain None so the daemon receives default false"
+        );
     }
 
     #[test]
@@ -2594,7 +2609,8 @@ mod tests {
             "limit": 5,
             "memory_type": "decision",
             "space": "origin",
-            "anchor": "event_date"
+            "anchor": "event_date",
+            "rerank": true
         }"#;
         let params: RecallParams = serde_json::from_str(json).unwrap();
         assert_eq!(params.query, "database preferences");
@@ -2602,6 +2618,7 @@ mod tests {
         assert_eq!(params.memory_type.as_deref(), Some("decision"));
         assert_eq!(params.space.as_deref(), Some("origin"));
         assert_eq!(params.anchor.as_deref(), Some("event_date"));
+        assert_eq!(params.rerank, Some(true));
     }
 
     #[test]
@@ -2871,6 +2888,7 @@ mod tests {
             space: None,
             source_agent: None,
             anchor: None,
+            rerank: false,
         };
         let json = serde_json::to_value(&req).unwrap();
         let obj = json.as_object().unwrap();
@@ -3650,6 +3668,7 @@ mod tests {
             memory_type: Some("decision".into()),
             space: None,
             anchor: None,
+            rerank: None,
         };
 
         let req = SearchMemoryRequest {
@@ -3659,6 +3678,7 @@ mod tests {
             space: params.space,
             source_agent: None,
             anchor: params.anchor.clone(),
+            rerank: params.rerank.unwrap_or(false),
         };
 
         let json = serde_json::to_value(&req).unwrap();
@@ -3673,6 +3693,7 @@ mod tests {
             json.get("anchor").is_none(),
             "anchor: None must drop off the wire so the daemon takes its default"
         );
+        assert_eq!(json["rerank"], false);
     }
 
     /// `anchor=event_date` on RecallParams forwards to the wire request.
@@ -3694,11 +3715,43 @@ mod tests {
             space: params.space,
             source_agent: None,
             anchor: params.anchor.clone(),
+            rerank: params.rerank.unwrap_or(false),
         };
         assert_eq!(req.anchor.as_deref(), Some("event_date"));
 
         let json_out = serde_json::to_value(&req).unwrap();
         assert_eq!(json_out["anchor"], "event_date");
+    }
+
+    #[test]
+    fn test_recall_forwards_rerank_flag() {
+        // When the caller passes rerank: Some(true), the constructed
+        // SearchMemoryRequest must carry rerank=true through to the daemon.
+        let params = RecallParams {
+            query: "database choices".into(),
+            limit: None,
+            memory_type: None,
+            space: None,
+            anchor: None,
+            rerank: Some(true),
+        };
+
+        let req = SearchMemoryRequest {
+            query: params.query,
+            limit: params.limit.unwrap_or(10),
+            memory_type: params.memory_type,
+            space: params.space,
+            source_agent: None,
+            anchor: params.anchor.clone(),
+            rerank: params.rerank.unwrap_or(false),
+        };
+
+        assert!(
+            req.rerank,
+            "RecallParams.rerank=Some(true) must flow through to SearchMemoryRequest.rerank=true"
+        );
+        let json = serde_json::to_value(&req).unwrap();
+        assert_eq!(json["rerank"], true);
     }
 
     /// `anchor` schema is advertised so MCP clients can discover it,
@@ -3715,6 +3768,23 @@ mod tests {
         assert!(
             schema.contains("event_date"),
             "RecallParams.anchor description must mention event_date so models understand the tradeoff, got: {schema}"
+        );
+    }
+
+    #[test]
+    fn test_recall_params_schema_advertises_rerank() {
+        // The schemars-derived JSON Schema for RecallParams must advertise
+        // the rerank field so MCP clients (Claude Desktop, Cursor, etc.) see
+        // it as an available parameter.
+        let params_schema = serde_json::to_string(&schemars::schema_for!(RecallParams))
+            .expect("RecallParams schema serializes");
+        assert!(
+            params_schema.contains("rerank"),
+            "RecallParams schema must advertise the `rerank` field, got: {params_schema}"
+        );
+        assert!(
+            params_schema.contains("cross-encoder"),
+            "RecallParams.rerank description must mention cross-encoder so models understand the tradeoff, got: {params_schema}"
         );
     }
 
