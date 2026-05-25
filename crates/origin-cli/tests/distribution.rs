@@ -150,7 +150,9 @@ fn release_workflow_publishes_cli_and_mcp_npm_packages() {
         "cp README.md crates/origin-mcp/npm/README.md",
         "cp README.md crates/origin-cli/npm/README.md",
         "origin-darwin-arm64",
-        "origin-darwin-x64",
+        // origin-darwin-x64 dropped in v0.7.0 (PR #168) — ort has no
+        // prebuilt for x86_64-apple-darwin. Re-add when ONNX builds from
+        // source or ort-tract becomes viable.
         "origin-linux-arm64",
         "origin-linux-x64",
         "origin-windows-x64",
