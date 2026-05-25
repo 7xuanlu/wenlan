@@ -482,12 +482,28 @@ jobs:
           cp LICENSE crates/origin-cli/npm/LICENSE
       - name: Publish origin-mcp
         working-directory: crates/origin-mcp/npm
-        run: npm publish --provenance --access public
+        # Skip if version already on npm. Retried releases or re-dispatch
+        # workflows would otherwise fail with "You cannot publish over the
+        # previously published versions". `npm view <pkg>@<v> version`
+        # exits 0 + prints the version when published, exits 1 otherwise.
+        run: |
+          VERSION="${RELEASE_TAG#v}"
+          if npm view "origin-mcp@$VERSION" version >/dev/null 2>&1; then
+            echo "origin-mcp@$VERSION already on npm, skipping"
+          else
+            npm publish --provenance --access public
+          fi
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
       - name: Publish @7xuanlu/origin
         working-directory: crates/origin-cli/npm
-        run: npm publish --provenance --access public
+        run: |
+          VERSION="${RELEASE_TAG#v}"
+          if npm view "@7xuanlu/origin@$VERSION" version >/dev/null 2>&1; then
+            echo "@7xuanlu/origin@$VERSION already on npm, skipping"
+          else
+            npm publish --provenance --access public
+          fi
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
