@@ -306,17 +306,29 @@ jobs:
             dist/origin-mcp-darwin-arm64.tar.gz
 
   docker:
-    name: Build & Push Docker Image
+    name: Build & Push Docker Image (${{ matrix.platform }})
     needs: release
-    runs-on: ubuntu-24.04
+    runs-on: ${{ matrix.runs-on }}
     permissions:
       contents: read
       packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux/amd64
+            runs-on: ubuntu-24.04
+            tag-suffix: amd64
+          # Native ARM runner — free for public repos. Building arm64
+          # under QEMU emulation took 90+min and is the dominant cost
+          # of the release pipeline. Native is ~10min instead.
+          - platform: linux/arm64
+            runs-on: ubuntu-24.04-arm
+            tag-suffix: arm64
     steps:
       - uses: actions/checkout@v4
         with:
           ref: ${{ env.RELEASE_TAG }}
-      - uses: docker/setup-qemu-action@v3
       - uses: docker/setup-buildx-action@v3
       - uses: docker/login-action@v3
         with:
@@ -327,11 +339,28 @@ jobs:
         with:
           context: .
           file: docker/Dockerfile.daemon
-          platforms: linux/amd64,linux/arm64
+          platforms: ${{ matrix.platform }}
           push: true
-          tags: |
-            ghcr.io/7xuanlu/origin-server:${{ env.RELEASE_TAG }}
-            ghcr.io/7xuanlu/origin-server:latest
+          tags: ghcr.io/7xuanlu/origin-server:${{ env.RELEASE_TAG }}-${{ matrix.tag-suffix }}
+
+  docker-manifest:
+    name: Combine Docker Manifest (multi-arch)
+    needs: docker
+    runs-on: ubuntu-24.04
+    permissions:
+      packages: write
+    steps:
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Create + push multi-arch manifest
+        run: |
+          TAG="${{ env.RELEASE_TAG }}"
+          IMG="ghcr.io/7xuanlu/origin-server"
+          docker buildx imagetools create -t "$IMG:$TAG" "$IMG:$TAG-amd64" "$IMG:$TAG-arm64"
+          docker buildx imagetools create -t "$IMG:latest"  "$IMG:$TAG-amd64" "$IMG:$TAG-arm64"
 
   publish-crates:
     name: Publish crates.io (origin-types + origin-mcp)
