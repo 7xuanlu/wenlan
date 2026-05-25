@@ -8,6 +8,7 @@ pub mod shared;
 
 pub mod answer_quality;
 pub mod context_path;
+pub mod cost;
 pub mod fixtures;
 pub mod gen;
 pub mod kg_faithfulness;
