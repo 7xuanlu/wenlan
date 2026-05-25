@@ -100,12 +100,7 @@ fn apply_lme_limit(samples: &mut Vec<LongMemEvalSample>) {
 
 /// Shared helper for `apply_lme_limit`. Parameterized on the env var name so
 /// unit tests can exercise the behavior without racing the production var.
-fn apply_limit_from_env<T>(
-    samples: &mut Vec<T>,
-    env_var: &str,
-    bench_tag: &str,
-    unit_label: &str,
-) {
+fn apply_limit_from_env<T>(samples: &mut Vec<T>, env_var: &str, bench_tag: &str, unit_label: &str) {
     let Some(limit) = std::env::var(env_var)
         .ok()
         .and_then(|v| v.parse::<usize>().ok())
