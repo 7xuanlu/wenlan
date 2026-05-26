@@ -1021,6 +1021,125 @@ pub fn paired_diff_ci_newcombe(n: u32, b: u32, c: u32, alpha: f64) -> (f64, f64)
     (lower, upper)
 }
 
+/// Paired-binary report for two retrieval configurations evaluated on the same
+/// question set. Discordant counts feed McNemar; concordant counts inform
+/// agreement-rate. Per-config Wilson CI at alpha=0.05, paired-diff Newcombe
+/// Method 10 CI at alpha=0.05.
+///
+/// Used by the pool-expansion P0a sweep: baseline vs treatment-A (Mem0 shape).
+/// Per-category stratification is the caller's responsibility — pre-filter
+/// the slices to a single category before calling, or call once per category.
+#[derive(Debug, Clone, Serialize, serde::Deserialize)]
+pub struct PairedMcnemarReport {
+    /// Number of queries matched in both baseline and treatment.
+    pub n_matched: u32,
+    /// Baseline-only queries (treatment missing the question).
+    pub n_baseline_only: u32,
+    /// Treatment-only queries (baseline missing the question).
+    pub n_treatment_only: u32,
+    /// Both correct.
+    pub a: u32,
+    /// Baseline correct, treatment wrong.
+    pub b: u32,
+    /// Baseline wrong, treatment correct.
+    pub c: u32,
+    /// Both wrong.
+    pub d: u32,
+    pub exact_p: f64,
+    pub mid_p: f64,
+    pub odds_ratio: f64,
+    pub baseline_accuracy: f64,
+    pub treatment_accuracy: f64,
+    pub baseline_ci_95: (f64, f64),
+    pub treatment_ci_95: (f64, f64),
+    pub accuracy_diff_ci_95: (f64, f64),
+}
+
+/// Compute paired McNemar + Wilson CI + Newcombe paired-diff CI for two
+/// per-case result vectors. Matches by `CaseResult.query` (string equality).
+///
+/// A question is "correct" when its `ndcg_at_10` is at or above `threshold`.
+/// This is a binary projection of a continuous metric; callers should pick
+/// a threshold matched to the eval contract (P0a acceptance criteria locks
+/// `threshold = 0.5`).
+///
+/// Unmatched queries (present in only one slice) are surfaced via
+/// `n_baseline_only` / `n_treatment_only` so the caller can spot missing
+/// scenarios instead of silently dropping them.
+pub fn paired_mcnemar(
+    baseline: &[CaseResult],
+    treatment: &[CaseResult],
+    threshold: f64,
+) -> PairedMcnemarReport {
+    use std::collections::HashMap;
+
+    let treat_map: HashMap<&str, &CaseResult> =
+        treatment.iter().map(|c| (c.query.as_str(), c)).collect();
+    let base_keys: std::collections::HashSet<&str> =
+        baseline.iter().map(|c| c.query.as_str()).collect();
+
+    let mut a: u32 = 0;
+    let mut b: u32 = 0;
+    let mut c: u32 = 0;
+    let mut d: u32 = 0;
+    let mut n_matched: u32 = 0;
+    let mut n_baseline_only: u32 = 0;
+
+    for base in baseline {
+        match treat_map.get(base.query.as_str()) {
+            Some(treat) => {
+                n_matched = n_matched.saturating_add(1);
+                let b_correct = base.ndcg_at_10 >= threshold;
+                let t_correct = treat.ndcg_at_10 >= threshold;
+                match (b_correct, t_correct) {
+                    (true, true) => a = a.saturating_add(1),
+                    (true, false) => b = b.saturating_add(1),
+                    (false, true) => c = c.saturating_add(1),
+                    (false, false) => d = d.saturating_add(1),
+                }
+            }
+            None => n_baseline_only = n_baseline_only.saturating_add(1),
+        }
+    }
+
+    let n_treatment_only: u32 = treatment
+        .iter()
+        .filter(|t| !base_keys.contains(t.query.as_str()))
+        .count() as u32;
+
+    let baseline_correct = a.saturating_add(b);
+    let treatment_correct = a.saturating_add(c);
+
+    let baseline_accuracy = if n_matched == 0 {
+        0.0
+    } else {
+        baseline_correct as f64 / n_matched as f64
+    };
+    let treatment_accuracy = if n_matched == 0 {
+        0.0
+    } else {
+        treatment_correct as f64 / n_matched as f64
+    };
+
+    PairedMcnemarReport {
+        n_matched,
+        n_baseline_only,
+        n_treatment_only,
+        a,
+        b,
+        c,
+        d,
+        exact_p: mcnemar_p_value(b, c),
+        mid_p: mcnemar_mid_p(b, c),
+        odds_ratio: odds_ratio_mcnemar(b, c),
+        baseline_accuracy,
+        treatment_accuracy,
+        baseline_ci_95: wilson_ci(baseline_correct, n_matched, 0.05),
+        treatment_ci_95: wilson_ci(treatment_correct, n_matched, 0.05),
+        accuracy_diff_ci_95: paired_diff_ci_newcombe(n_matched, c, b, 0.05),
+    }
+}
+
 #[cfg(test)]
 mod mcnemar_tests {
     use super::*;
@@ -1074,6 +1193,109 @@ mod mcnemar_tests {
     #[cfg(debug_assertions)]
     fn wilson_ci_panics_when_successes_exceeds_total() {
         let _ = wilson_ci(101, 100, 0.05);
+    }
+
+    fn case(query: &str, ndcg: f64) -> CaseResult {
+        CaseResult {
+            query: query.into(),
+            ndcg_at_10: ndcg,
+            ndcg_at_5: 0.0,
+            map_at_10: 0.0,
+            mrr: 0.0,
+            recall_at_5: 0.0,
+            hit_rate_at_1: 0.0,
+            precision_at_3: 0.0,
+            negative_leakage: 0,
+            neg_above_relevant: 0,
+        }
+    }
+
+    #[test]
+    fn paired_mcnemar_clean_win() {
+        // Baseline: 5 questions all under threshold. Treatment: same 5 over threshold.
+        // b=0, c=5 → treatment always wins on discordant pairs.
+        let base: Vec<_> = (0..5).map(|i| case(&format!("q{i}"), 0.1)).collect();
+        let treat: Vec<_> = (0..5).map(|i| case(&format!("q{i}"), 0.9)).collect();
+        let r = paired_mcnemar(&base, &treat, 0.5);
+        assert_eq!(r.n_matched, 5);
+        assert_eq!(r.b, 0);
+        assert_eq!(r.c, 5);
+        assert_eq!(r.a, 0);
+        assert_eq!(r.d, 0);
+        assert!(r.odds_ratio == 0.0);
+        // p_mid one-sided ≈ 0.5 * (0.5)^5 → very small; two-sided still well below 0.05
+        assert!(r.mid_p < 0.05, "mid_p={}", r.mid_p);
+        assert_eq!(r.baseline_accuracy, 0.0);
+        assert_eq!(r.treatment_accuracy, 1.0);
+        // accuracy diff CI brackets +1.0
+        assert!(r.accuracy_diff_ci_95.0 > 0.0);
+    }
+
+    #[test]
+    fn paired_mcnemar_no_change() {
+        // Identical scores → b=c=0, p=1.0, no signal.
+        let base: Vec<_> = (0..10).map(|i| case(&format!("q{i}"), 0.7)).collect();
+        let treat = base.clone();
+        let r = paired_mcnemar(&base, &treat, 0.5);
+        assert_eq!(r.n_matched, 10);
+        assert_eq!(r.b, 0);
+        assert_eq!(r.c, 0);
+        assert_eq!(r.a, 10);
+        assert!((r.mid_p - 1.0).abs() < 1e-12);
+        assert_eq!(r.baseline_accuracy, 1.0);
+        assert_eq!(r.treatment_accuracy, 1.0);
+    }
+
+    #[test]
+    fn paired_mcnemar_tracks_unmatched_queries() {
+        let base = vec![case("q1", 0.9), case("q2", 0.9), case("q3", 0.1)];
+        let treat = vec![case("q1", 0.9), case("q4", 0.9)];
+        let r = paired_mcnemar(&base, &treat, 0.5);
+        assert_eq!(r.n_matched, 1);
+        assert_eq!(r.n_baseline_only, 2);
+        assert_eq!(r.n_treatment_only, 1);
+    }
+
+    #[test]
+    fn paired_mcnemar_threshold_split() {
+        // 10 questions, threshold=0.5.
+        // 4 baseline-correct (above 0.5), 6 baseline-wrong.
+        // Treatment: 6 correct, 4 wrong. Pattern engineered:
+        // a=3 (both correct), b=1 (base only), c=3 (treat only), d=3 (both wrong)
+        let base = vec![
+            case("q1", 0.9), // base correct
+            case("q2", 0.9),
+            case("q3", 0.9),
+            case("q4", 0.9), // base only correct
+            case("q5", 0.1),
+            case("q6", 0.1),
+            case("q7", 0.1), // treat only correct
+            case("q8", 0.1),
+            case("q9", 0.1),
+            case("q10", 0.1),
+        ];
+        let treat = vec![
+            case("q1", 0.9),
+            case("q2", 0.9),
+            case("q3", 0.9),  // both correct = a
+            case("q4", 0.1),  // base correct, treat wrong = b
+            case("q5", 0.9),  // both? no, base 0.1, treat 0.9 = c
+            case("q6", 0.9),  // c
+            case("q7", 0.9),  // c
+            case("q8", 0.1),  // d
+            case("q9", 0.1),  // d
+            case("q10", 0.1), // d
+        ];
+        let r = paired_mcnemar(&base, &treat, 0.5);
+        assert_eq!(r.n_matched, 10);
+        assert_eq!(r.a, 3);
+        assert_eq!(r.b, 1);
+        assert_eq!(r.c, 3);
+        assert_eq!(r.d, 3);
+        assert!((r.baseline_accuracy - 0.4).abs() < 1e-12);
+        assert!((r.treatment_accuracy - 0.6).abs() < 1e-12);
+        // Newcombe CI for (c - b) / n = (3 - 1) / 10 = +0.2 brackets the point estimate
+        assert!(r.accuracy_diff_ci_95.0 < 0.2 && r.accuracy_diff_ci_95.1 > 0.2);
     }
 
     #[test]
