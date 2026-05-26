@@ -14066,6 +14066,8 @@ impl MemoryDB {
         supersede_mode: &str,
         structured_fields: Option<&str>,
         retrieval_cue: Option<&str>,
+        event_date: Option<i64>,
+        event_end: Option<i64>,
     ) -> Result<(), OriginError> {
         let conn = self.conn.lock().await;
         // Row-level metadata — mirrored across all chunks. `COALESCE(?, col)`
@@ -14096,6 +14098,27 @@ impl MemoryDB {
             )
             .await
             .map_err(|e| OriginError::VectorDb(format!("apply_enrichment (chunk 0): {}", e)))?;
+        }
+
+        // Temporal fields live on chunk_index=0 (the lead chunk carries the
+        // event window; multi-chunk memories should not fan them out to every
+        // chunk). `COALESCE(?, col)` preserves any value set at INSERT time.
+        if event_date.is_some() || event_end.is_some() {
+            let event_date_val: libsql::Value = event_date
+                .map(libsql::Value::Integer)
+                .unwrap_or(libsql::Value::Null);
+            let event_end_val: libsql::Value = event_end
+                .map(libsql::Value::Integer)
+                .unwrap_or(libsql::Value::Null);
+            conn.execute(
+                "UPDATE memories SET
+                    event_date = COALESCE(?1, event_date),
+                    event_end = COALESCE(?2, event_end)
+                 WHERE source_id = ?3 AND chunk_index = 0",
+                libsql::params![event_date_val, event_end_val, source_id],
+            )
+            .await
+            .map_err(|e| OriginError::VectorDb(format!("apply_enrichment (event_date): {}", e)))?;
         }
         Ok(())
     }
@@ -23772,6 +23795,8 @@ pub(crate) mod tests {
             "hide",
             Some(r#"{"preference":"dark mode","applies_when":"editors"}"#),
             Some("What editor theme does Alice use?"),
+            None,
+            None,
         )
         .await
         .unwrap();
@@ -30638,6 +30663,59 @@ pub(crate) mod tests {
         let row2 = rows2.next().await.unwrap().expect("count row");
         let foo_count: i64 = row2.get(0).unwrap();
         assert_eq!(foo_count, 0, "foo should have 0 memories after move");
+    }
+
+    /// Contract test for Task 11: `apply_enrichment` must persist
+    /// `event_date` and `event_end` to the `memories` table so the
+    /// extracted temporal fields survive the async enrichment phase.
+    #[tokio::test]
+    async fn test_store_memory_persists_event_date_and_end() {
+        let (db, _dir) = test_db().await;
+        let doc = make_memory_doc(
+            "mem_evt",
+            "Alice attended the PyCon conference from 2026-04-22 to 2026-04-23",
+            "event",
+            "work",
+            "claude",
+        );
+        db.upsert_documents(vec![doc]).await.unwrap();
+
+        // Simulates the async enrichment path that has the extracted values.
+        db.apply_enrichment(
+            "mem_evt",
+            "event",
+            None,
+            None,
+            "hide",
+            None,
+            None,
+            Some(1779667200i64), // event_date
+            Some(1779753599i64), // event_end
+        )
+        .await
+        .unwrap();
+
+        let conn = db.conn.lock().await;
+        let mut rows = conn
+            .query(
+                "SELECT event_date, event_end FROM memories WHERE source_id = 'mem_evt' LIMIT 1",
+                (),
+            )
+            .await
+            .unwrap();
+        let row = rows.next().await.unwrap().unwrap();
+        let stored_date: Option<i64> = row.get(0).unwrap();
+        let stored_end: Option<i64> = row.get(1).unwrap();
+        assert_eq!(
+            stored_date,
+            Some(1779667200i64),
+            "event_date must be persisted"
+        );
+        assert_eq!(
+            stored_end,
+            Some(1779753599i64),
+            "event_end must be persisted"
+        );
     }
 
     #[tokio::test]

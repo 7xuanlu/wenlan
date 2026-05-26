@@ -337,6 +337,8 @@ pub async fn handle_chat_export_import(
                                 supersede_mode,
                                 None,
                                 None,
+                                None,
+                                None,
                             )
                             .await
                         {
