@@ -115,11 +115,7 @@ mod tests {
         ));
         std::fs::create_dir_all(&data_dir).unwrap();
         let pidfile = tmp.path().join("99999998.pid");
-        std::fs::write(
-            &pidfile,
-            format!("99999998\n{}", data_dir.display()),
-        )
-        .unwrap();
+        std::fs::write(&pidfile, format!("99999998\n{}", data_dir.display())).unwrap();
         cleanup_eval_orphans_in(tmp.path()).unwrap();
         assert!(!pidfile.exists());
         assert!(!data_dir.exists(), "data_dir should have been reaped");
@@ -131,20 +127,16 @@ mod tests {
         // candidates for removal. Anything else stays put.
         let tmp = tempfile::tempdir().unwrap();
         let outside_dir = tempfile::tempdir().unwrap(); // separate tempdir RAII guard
-        // Build a path that does NOT live under env::temp_dir() by walking up
-        // far enough — point at the staging tempdir itself (separate guard, NOT under TMPDIR base path).
-        // env::temp_dir() returns a canonical macOS /var/folders/... path on macOS;
-        // we'll construct an obviously-non-tmp path under the worktree.
+                                                        // Build a path that does NOT live under env::temp_dir() by walking up
+                                                        // far enough — point at the staging tempdir itself (separate guard, NOT under TMPDIR base path).
+                                                        // env::temp_dir() returns a canonical macOS /var/folders/... path on macOS;
+                                                        // we'll construct an obviously-non-tmp path under the worktree.
         let non_tmp = Path::new(env!("CARGO_MANIFEST_DIR")).to_path_buf();
         if !non_tmp.exists() {
             return; // pathological CI env — skip
         }
         let pidfile = tmp.path().join("99999997.pid");
-        std::fs::write(
-            &pidfile,
-            format!("99999997\n{}", non_tmp.display()),
-        )
-        .unwrap();
+        std::fs::write(&pidfile, format!("99999997\n{}", non_tmp.display())).unwrap();
         cleanup_eval_orphans_in(tmp.path()).unwrap();
         assert!(!pidfile.exists(), "pidfile reaped");
         assert!(non_tmp.exists(), "non-tmp dir must NOT be reaped");

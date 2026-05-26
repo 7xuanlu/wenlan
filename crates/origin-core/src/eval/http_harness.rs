@@ -124,10 +124,7 @@ impl DaemonHandle {
     /// Block until the daemon publishes its bound port. Two channels:
     /// (1) stdout `ORIGIN_LISTENING_ON=<addr>` line, (2) the file at
     /// `port_file`. First channel to deliver wins; both have a 30s deadline.
-    async fn wait_for_port(
-        port_file: &Path,
-        stdout: tokio::process::ChildStdout,
-    ) -> Result<u16> {
+    async fn wait_for_port(port_file: &Path, stdout: tokio::process::ChildStdout) -> Result<u16> {
         let deadline = Instant::now() + Duration::from_secs(30);
         let mut reader = BufReader::new(stdout);
         let mut line = String::new();
@@ -277,7 +274,10 @@ mod tests {
     #[test]
     fn resolve_server_binary_rejects_missing_explicit_path() {
         let prev = std::env::var("ORIGIN_SERVER_BIN").ok();
-        std::env::set_var("ORIGIN_SERVER_BIN", "/definitely/does/not/exist/origin-server");
+        std::env::set_var(
+            "ORIGIN_SERVER_BIN",
+            "/definitely/does/not/exist/origin-server",
+        );
         let err = resolve_server_binary().unwrap_err();
         assert!(err.to_string().contains("does not exist"), "got: {}", err);
         match prev {

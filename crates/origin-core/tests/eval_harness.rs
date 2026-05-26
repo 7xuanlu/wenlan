@@ -4336,8 +4336,7 @@ fn save_locomo_l2_baseline_scaffolding_writes_via_save_full_report() {
 
 #[test]
 fn save_longmemeval_l2_baseline_scaffolding_writes_via_save_full_report() {
-    let mut env =
-        origin_core::eval::l2_runner::stamp_l2_env("longmemeval", "reranked", 5);
+    let mut env = origin_core::eval::l2_runner::stamp_l2_env("longmemeval", "reranked", 5);
     env.fixture_revision = "test_fixture_lme".to_string();
     env.embedder_revision = "BGE-Base-EN-v1.5-Q".to_string();
     env.llm_provider_class = "on-device".to_string();

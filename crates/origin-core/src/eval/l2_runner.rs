@@ -203,9 +203,7 @@ mod tests {
         assert!(env.task.is_some());
         assert!(env.variant.is_some());
         let _ = crate::eval::report::comparable_env_hash(&env);
-        let _ = crate::eval::report::encode_baseline_path(
-            std::path::Path::new("/tmp/baselines"),
-            &env,
-        );
+        let _ =
+            crate::eval::report::encode_baseline_path(std::path::Path::new("/tmp/baselines"), &env);
     }
 }
