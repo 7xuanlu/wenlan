@@ -17918,6 +17918,112 @@ impl MemoryDB {
         Ok(())
     }
 
+    // ==================== Migration 55 Pass A — backfill event_date ===========
+
+    /// Startup-time backfill: walk every memory where `event_date IS NULL`, apply
+    /// `temporal_query::extract_cue` over the content using `last_modified` as the
+    /// reference clock, and populate `event_date` + `event_end` when a cue matches.
+    ///
+    /// Idempotent via `app_metadata` flag `backfill_event_date_v1`.  Safe to call
+    /// on every daemon startup; the second call is a no-op after the flag is set.
+    pub async fn run_migration_55_pass_a(&self) -> Result<(), OriginError> {
+        // Idempotency probe.
+        {
+            let conn = self.conn.lock().await;
+            let mut rows = conn
+                .query(
+                    "SELECT value FROM app_metadata WHERE key = 'backfill_event_date_v1'",
+                    (),
+                )
+                .await
+                .map_err(|e| OriginError::VectorDb(format!("m55a probe: {e}")))?;
+            if rows
+                .next()
+                .await
+                .map_err(|e| OriginError::VectorDb(format!("m55a probe row: {e}")))?
+                .is_some()
+            {
+                return Ok(());
+            }
+        }
+
+        // Iterate NULL event_date in batches of 100.
+        let mut offset: i64 = 0;
+        loop {
+            let batch: Vec<(String, String, i64)> = {
+                let conn = self.conn.lock().await;
+                let mut rows = conn
+                    .query(
+                        "SELECT source_id, content, last_modified
+                         FROM memories
+                         WHERE event_date IS NULL
+                         ORDER BY source_id
+                         LIMIT 100 OFFSET ?",
+                        [offset],
+                    )
+                    .await
+                    .map_err(|e| OriginError::VectorDb(format!("m55a select: {e}")))?;
+                let mut v = Vec::new();
+                while let Some(row) = rows
+                    .next()
+                    .await
+                    .map_err(|e| OriginError::VectorDb(format!("m55a row: {e}")))?
+                {
+                    v.push((
+                        row.get::<String>(0).unwrap(),
+                        row.get::<String>(1).unwrap(),
+                        row.get::<i64>(2).unwrap_or(0),
+                    ));
+                }
+                v
+            };
+            let batch_len = batch.len();
+            if batch_len == 0 {
+                break;
+            }
+
+            {
+                let conn = self.conn.lock().await;
+                conn.execute("BEGIN", ())
+                    .await
+                    .map_err(|e| OriginError::VectorDb(format!("m55a begin: {e}")))?;
+                for (sid, content, last_modified) in &batch {
+                    let now = chrono::DateTime::from_timestamp(*last_modified, 0)
+                        .unwrap_or_else(chrono::Utc::now);
+                    if let Some(cue) = crate::temporal_query::extract_cue(content, now) {
+                        conn.execute(
+                            "UPDATE memories SET event_date = ?, event_end = ? WHERE source_id = ?",
+                            libsql::params![cue.range.start, cue.range.end, sid.as_str()],
+                        )
+                        .await
+                        .map_err(|e| OriginError::VectorDb(format!("m55a update: {e}")))?;
+                    }
+                }
+                conn.execute("COMMIT", ())
+                    .await
+                    .map_err(|e| OriginError::VectorDb(format!("m55a commit: {e}")))?;
+            }
+
+            offset += 100;
+            // If the batch had fewer than 100 rows we've exhausted the cursor.
+            if batch_len < 100 {
+                break;
+            }
+        }
+
+        // Set the idempotency flag.
+        {
+            let conn = self.conn.lock().await;
+            conn.execute(
+                "INSERT OR REPLACE INTO app_metadata (key, value) VALUES ('backfill_event_date_v1', '1')",
+                (),
+            )
+            .await
+            .map_err(|e| OriginError::VectorDb(format!("m55a flag: {e}")))?;
+        }
+        Ok(())
+    }
+
     // ==================== Memory Revision Chain ====================
 
     /// Walk the supersede chain starting from `source_id` using a recursive CTE.
@@ -30828,5 +30934,91 @@ pub(crate) mod tests {
         db.link_memory_entities("mem_x", &["ent_a"])
             .await
             .expect("link again");
+    }
+
+    // ── migration 55 Pass A ───────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn test_migration_55_pass_a_backfills_event_date() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db_path = tmp.path().join("test.db");
+        let db = MemoryDB::new(&db_path, Arc::new(crate::events::NoopEmitter))
+            .await
+            .unwrap();
+
+        // Seed two memories: c1 has a "last tuesday" cue that extract_cue matches;
+        // c2 has no temporal cue.
+        {
+            let conn = db.conn.lock().await;
+            conn.execute(
+                "INSERT INTO memories (id, content, source, source_id, title, chunk_index, last_modified, chunk_type) \
+                 VALUES ('c1', 'I met the team last tuesday', 'memory', 'mem_m55_1', 't', 0, 0, 'text')",
+                (),
+            )
+            .await
+            .unwrap();
+            conn.execute(
+                "INSERT INTO memories (id, content, source, source_id, title, chunk_index, last_modified, chunk_type) \
+                 VALUES ('c2', 'just a plain note with no date cue', 'memory', 'mem_m55_2', 't', 0, 0, 'text')",
+                (),
+            )
+            .await
+            .unwrap();
+        }
+
+        // First run: should complete without error.
+        db.run_migration_55_pass_a()
+            .await
+            .expect("pass A first run");
+
+        {
+            let conn = db.conn.lock().await;
+            let mut rows = conn
+                .query(
+                    "SELECT source_id, event_date FROM memories WHERE source_id IN ('mem_m55_1','mem_m55_2') ORDER BY source_id",
+                    (),
+                )
+                .await
+                .unwrap();
+            let mut got: Vec<(String, Option<i64>)> = Vec::new();
+            while let Some(row) = rows.next().await.unwrap() {
+                got.push((
+                    row.get::<String>(0).unwrap(),
+                    row.get::<Option<i64>>(1).unwrap(),
+                ));
+            }
+            // c1 has "last tuesday" — extract_cue returns Some; event_date must be non-NULL.
+            let m1 = got.iter().find(|(id, _)| id == "mem_m55_1").unwrap();
+            assert!(
+                m1.1.is_some(),
+                "mem_m55_1 ('last tuesday') must have event_date set, got None"
+            );
+            // c2 has no temporal cue — event_date stays NULL.
+            let m2 = got.iter().find(|(id, _)| id == "mem_m55_2").unwrap();
+            assert!(
+                m2.1.is_none(),
+                "mem_m55_2 (no cue) must stay NULL, got {:?}",
+                m2.1
+            );
+        }
+
+        // Second invocation must be idempotent (meta flag short-circuits).
+        db.run_migration_55_pass_a()
+            .await
+            .expect("pass A idempotent second run");
+
+        // app_metadata flag must be set.
+        {
+            let conn = db.conn.lock().await;
+            let mut rows = conn
+                .query(
+                    "SELECT value FROM app_metadata WHERE key = 'backfill_event_date_v1'",
+                    (),
+                )
+                .await
+                .unwrap();
+            let row = rows.next().await.unwrap().expect("meta flag must be set");
+            assert_eq!(row.get::<String>(0).unwrap(), "1");
+        }
     }
 }
