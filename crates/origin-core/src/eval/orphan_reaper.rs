@@ -56,10 +56,14 @@ pub fn cleanup_eval_orphans() -> anyhow::Result<usize> {
 
 /// Decide if `dd` lives under the system temp dir, comparing canonical
 /// paths so macOS's `/var/folders/...` vs `/private/var/folders/...`
-/// symlink mismatch doesn't bypass the guard. Falls back to lexical
-/// `starts_with` if canonicalization fails (rare; happens when the path
-/// itself is a dangling symlink — in which case we conservatively refuse
-/// to remove rather than risk a wrong delete).
+/// symlink mismatch doesn't bypass the guard. Falls back to refusing the
+/// reap if canonicalization fails (rare; happens when the path itself is
+/// a dangling symlink — conservative direction, since we can always reap
+/// on the next sweep but cannot un-rm a wrongly-removed dir).
+///
+/// **Windows case-folding is not handled** because `process_alive` on
+/// Windows always returns `true` (no dead-PID detection without
+/// OpenProcess wiring), so this branch never runs on Windows.
 fn is_under_temp_dir(dd: &Path) -> bool {
     let temp = std::env::temp_dir();
     match (dd.canonicalize(), temp.canonicalize()) {

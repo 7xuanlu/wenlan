@@ -37,6 +37,13 @@ use crate::eval::EvalLayer;
 /// so renaming the error message is a single-file change and the four
 /// sentinel tests in `eval_harness.rs` fail loudly if anyone forgets to
 /// update them.
+///
+/// **Will be removed when the wiring PR lands.** Do not match this
+/// externally without coordinating with `l2_runner` — silent string-match
+/// regressions are the exact failure mode this constant was added to
+/// prevent. When wiring is final, ship with a `#[deprecated]` attribute
+/// for at least one release before removal so downstream callers get a
+/// compile-time warning instead of a silent fall-through.
 pub const NOT_YET_WIRED_SENTINEL: &str = "NOT YET WIRED";
 
 /// Caller-facing config for an L2 baseline run.
