@@ -18042,12 +18042,14 @@ impl MemoryDB {
                 .map_err(|e| OriginError::VectorDb(format!("m55a probe row: {e}")))?
                 .is_some()
             {
+                log::info!("[migration] Migration 55 Pass A skipped (already applied)");
                 return Ok(());
             }
         }
 
         // Iterate NULL event_date in batches of 100.
         let mut offset: i64 = 0;
+        let mut scanned: usize = 0;
         loop {
             let batch: Vec<(String, String, i64)> = {
                 let conn = self.conn.lock().await;
@@ -18104,6 +18106,7 @@ impl MemoryDB {
                     .map_err(|e| OriginError::VectorDb(format!("m55a commit: {e}")))?;
             }
 
+            scanned += batch_len;
             offset += 100;
             // If the batch had fewer than 100 rows we've exhausted the cursor.
             if batch_len < 100 {
@@ -18121,6 +18124,9 @@ impl MemoryDB {
             .await
             .map_err(|e| OriginError::VectorDb(format!("m55a flag: {e}")))?;
         }
+        log::info!(
+            "[migration] Migration 55 Pass A complete: scanned {scanned} memories for event_date backfill"
+        );
         Ok(())
     }
 
@@ -18150,6 +18156,7 @@ impl MemoryDB {
                 .map_err(|e| OriginError::VectorDb(format!("m55b probe row: {e}")))?
                 .is_some()
             {
+                log::info!("[migration] Migration 55 Pass B skipped (already applied)");
                 return Ok(());
             }
         }
@@ -18174,6 +18181,9 @@ impl MemoryDB {
         .await
         .map_err(|e| OriginError::VectorDb(format!("m55b flag: {e}")))?;
 
+        log::info!(
+            "[migration] Migration 55 Pass B complete: memory_entities backfilled from memories.entity_id"
+        );
         Ok(())
     }
 
