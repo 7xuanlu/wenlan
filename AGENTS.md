@@ -151,6 +151,16 @@ Path must be writable and local (network mounts not recommended). When set, also
 
 Set `EVAL_LOCOMO_LIMIT=N` (or `EVAL_LME_LIMIT=N`) to truncate the fixture and run a small-subset eval (~30min) before committing to full 3h runs. Useful for verifying direction on new retrieval variants. Applies to every `run_locomo_eval*` / `run_longmemeval_eval*` variant. Unset (the default) runs the full fixture unchanged.
 
+### L2 / L3 baseline cadence
+
+L1 baselines are L6 CI canary territory (post-merge, embedding-only). L2 (live-daemon HTTP) and L3 (MCP stdio roundtrip) baselines are **manual / contributor-driven** — no nightly schedule exists under `.github/workflows/`. Three runner options remain open and undecided:
+
+1. **Self-hosted Mac mini runner** — capex + ops on the project owner; gives Metal-accelerated LLM ingest under the same conditions as local runs.
+2. **Ubuntu CPU-only nightly** — silently changes what's measured (no Metal LLM in ingest path), so reported deltas can't be safely compared against Mac-Metal L1 baselines.
+3. **Manual contributor runs (current default)** — `bash scripts/refresh-l2-baselines.sh` from a laptop with `cargo build -p origin-server` first. No automation.
+
+The choice gates the L2/L3 readiness for external contributors. Until a decision lands, expect L2 + L3 baselines to drift from L1 if the platform stack changes (e.g. embedder swap, daemon route rename). The `comparable_env_hash` (P0b) is the operator's safety net — mismatched hashes refuse to be compared, so silent drift becomes loud.
+
 ### TTL policy
 
 Cache directories accumulate fast (1GB+ per full LoCoMo+LME run) and snapshots stay valid only as long as the fixture revision + embedder + provider stack remain unchanged. Rule of thumb:
