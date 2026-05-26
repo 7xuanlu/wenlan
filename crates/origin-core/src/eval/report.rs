@@ -199,6 +199,8 @@ pub struct CaseResult {
     pub precision_at_3: f64,
     pub negative_leakage: usize,
     pub neg_above_relevant: usize,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub category: Option<String>,
 }
 
 /// Hash the subset of `ReportEnv` fields that determine baseline comparability.
@@ -1207,6 +1209,7 @@ mod mcnemar_tests {
             precision_at_3: 0.0,
             negative_leakage: 0,
             neg_above_relevant: 0,
+            category: None,
         }
     }
 
