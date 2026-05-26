@@ -18024,6 +18024,66 @@ impl MemoryDB {
         Ok(())
     }
 
+    pub async fn run_migration_55_pass_b(&self) -> Result<(), OriginError> {
+        let conn = self.conn.lock().await;
+
+        // Ensure app_metadata exists (idempotent; Task 14 also ensures it).
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS app_metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL)",
+            (),
+        )
+        .await
+        .map_err(|e| OriginError::VectorDb(format!("m55b meta ensure: {e}")))?;
+
+        // Probe idempotency flag.
+        {
+            let mut rows = conn
+                .query(
+                    "SELECT value FROM app_metadata WHERE key = 'backfill_memory_entities_v1'",
+                    (),
+                )
+                .await
+                .map_err(|e| OriginError::VectorDb(format!("m55b probe: {e}")))?;
+            if rows
+                .next()
+                .await
+                .map_err(|e| OriginError::VectorDb(format!("m55b probe row: {e}")))?
+                .is_some()
+            {
+                return Ok(());
+            }
+        }
+
+        // Backfill in a single statement.
+        // ON CONFLICT DO NOTHING handles duplicate (source_id, entity_id) pairs from
+        // memories with multiple chunk rows sharing the same source_id.
+        conn.execute(
+            "INSERT INTO memory_entities (memory_id, entity_id)
+             SELECT source_id, entity_id FROM memories
+             WHERE entity_id IS NOT NULL
+             ON CONFLICT DO NOTHING",
+            (),
+        )
+        .await
+        .map_err(|e| OriginError::VectorDb(format!("m55b insert: {e}")))?;
+
+        conn.execute(
+            "INSERT OR REPLACE INTO app_metadata (key, value) VALUES ('backfill_memory_entities_v1', '1')",
+            (),
+        )
+        .await
+        .map_err(|e| OriginError::VectorDb(format!("m55b flag: {e}")))?;
+
+        Ok(())
+    }
+
+    /// Wires Pass A then Pass B together. Task 21 calls this from server startup.
+    pub async fn run_migration_55(&self) -> Result<(), OriginError> {
+        self.run_migration_55_pass_a().await?;
+        self.run_migration_55_pass_b().await?;
+        Ok(())
+    }
+
     // ==================== Memory Revision Chain ====================
 
     /// Walk the supersede chain starting from `source_id` using a recursive CTE.
@@ -31013,6 +31073,96 @@ pub(crate) mod tests {
             let mut rows = conn
                 .query(
                     "SELECT value FROM app_metadata WHERE key = 'backfill_event_date_v1'",
+                    (),
+                )
+                .await
+                .unwrap();
+            let row = rows.next().await.unwrap().expect("meta flag must be set");
+            assert_eq!(row.get::<String>(0).unwrap(), "1");
+        }
+    }
+
+    #[tokio::test]
+    async fn test_migration_55_pass_b_backfills_memory_entities() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db_path = tmp.path().join("test.db");
+        let db = MemoryDB::new(&db_path, Arc::new(crate::events::NoopEmitter))
+            .await
+            .unwrap();
+
+        {
+            let conn = db.conn.lock().await;
+            // Seed 2 entities.
+            for id in ["e_a", "e_b"] {
+                conn.execute(
+                    "INSERT INTO entities (id, name, entity_type, created_at, updated_at) VALUES (?, 'n', 'Topic', 0, 0)",
+                    [id],
+                )
+                .await
+                .unwrap();
+            }
+
+            // Seed 4 memories: 2 with e_a, 1 with e_b, 1 with NULL entity_id.
+            conn.execute(
+                "INSERT INTO memories (id, content, source, source_id, title, chunk_index, last_modified, chunk_type, entity_id) VALUES ('c1', '', 'memory', 'mem_pb_1', '', 0, 0, 'text', 'e_a')",
+                (),
+            )
+            .await
+            .unwrap();
+            conn.execute(
+                "INSERT INTO memories (id, content, source, source_id, title, chunk_index, last_modified, chunk_type, entity_id) VALUES ('c2', '', 'memory', 'mem_pb_2', '', 0, 0, 'text', 'e_a')",
+                (),
+            )
+            .await
+            .unwrap();
+            conn.execute(
+                "INSERT INTO memories (id, content, source, source_id, title, chunk_index, last_modified, chunk_type, entity_id) VALUES ('c3', '', 'memory', 'mem_pb_3', '', 0, 0, 'text', 'e_b')",
+                (),
+            )
+            .await
+            .unwrap();
+            conn.execute(
+                "INSERT INTO memories (id, content, source, source_id, title, chunk_index, last_modified, chunk_type, entity_id) VALUES ('c4', '', 'memory', 'mem_pb_4', '', 0, 0, 'text', NULL)",
+                (),
+            )
+            .await
+            .unwrap();
+        }
+
+        db.run_migration_55_pass_b().await.expect("pass B");
+
+        {
+            let conn = db.conn.lock().await;
+            let mut rows = conn
+                .query(
+                    "SELECT memory_id, entity_id FROM memory_entities WHERE memory_id LIKE 'mem_pb_%' ORDER BY memory_id, entity_id",
+                    (),
+                )
+                .await
+                .unwrap();
+            let mut got: Vec<(String, String)> = Vec::new();
+            while let Some(row) = rows.next().await.unwrap() {
+                got.push((row.get::<String>(0).unwrap(), row.get::<String>(1).unwrap()));
+            }
+            assert_eq!(
+                got,
+                vec![
+                    ("mem_pb_1".into(), "e_a".into()),
+                    ("mem_pb_2".into(), "e_a".into()),
+                    ("mem_pb_3".into(), "e_b".into()),
+                ]
+            );
+        }
+
+        // Idempotent re-run.
+        db.run_migration_55_pass_b().await.expect("idempotent");
+
+        // Verify the meta flag set.
+        {
+            let conn = db.conn.lock().await;
+            let mut rows = conn
+                .query(
+                    "SELECT value FROM app_metadata WHERE key = 'backfill_memory_entities_v1'",
                     (),
                 )
                 .await
