@@ -61,6 +61,10 @@ pub struct ReportEnv {
     pub total_cost_usd: f64,
     #[serde(default)]
     pub total_wall_secs: u64,
+    /// Runtime flags active during this eval run (e.g. `ORIGIN_DISABLE_SUPERSEDE_FILTER=1`).
+    /// Used to attest to non-default runtime configuration in baseline JSON files.
+    #[serde(default)]
+    pub flags: Vec<String>,
 }
 
 fn default_similarity_fn() -> String {
@@ -109,6 +113,7 @@ impl Default for ReportEnv {
             eval_max_wall_secs_cap: None,
             total_cost_usd: 0.0,
             total_wall_secs: 0,
+            flags: Vec::new(),
         }
     }
 }
@@ -820,6 +825,39 @@ mod tests {
         let p_aq = encode_baseline_path(base, &sample_env(EvalLayer::L1Db, "answer_quality"));
         assert_ne!(p_base, p_rerank);
         assert_ne!(p_rerank, p_aq);
+    }
+
+    #[test]
+    fn report_env_serializes_flags_field() {
+        let env = ReportEnv {
+            flags: vec!["ORIGIN_DISABLE_SUPERSEDE_FILTER=1".into()],
+            ..Default::default()
+        };
+        let json = serde_json::to_string(&env).expect("serialize");
+        assert!(json.contains("\"flags\""), "json missing 'flags' key");
+        assert!(
+            json.contains("ORIGIN_DISABLE_SUPERSEDE_FILTER=1"),
+            "json missing flag value"
+        );
+    }
+
+    #[test]
+    fn report_env_default_flags_empty() {
+        let env = ReportEnv::default();
+        assert!(env.flags.is_empty(), "default flags should be empty vec");
+    }
+
+    #[test]
+    fn report_env_deserializes_missing_flags_as_empty() {
+        // Backward compat: existing baselines without `flags` should still deserialize.
+        let env = ReportEnv::default();
+        let mut value: serde_json::Value = serde_json::to_value(&env).unwrap();
+        if let Some(obj) = value.as_object_mut() {
+            obj.remove("flags");
+        }
+        let json = serde_json::to_string(&value).unwrap();
+        let parsed: ReportEnv = serde_json::from_str(&json).expect("deserialize without flags");
+        assert!(parsed.flags.is_empty());
     }
 }
 
