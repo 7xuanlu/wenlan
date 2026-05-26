@@ -27,7 +27,7 @@ pub const EMBEDDING_DIM: usize = 768;
 
 /// Current DB schema version (highest `PRAGMA user_version` applied by `migrate()`).
 /// Bump this whenever a new migration lands. Used as an eval cache invalidation key.
-pub const SCHEMA_VERSION: u32 = 52;
+pub const SCHEMA_VERSION: u32 = 53;
 
 /// Shared embedder reference. Pass to [`MemoryDB::new_with_shared_embedder`] to
 /// reuse a single embedder across many `MemoryDB` instances. Created via
@@ -4921,6 +4921,48 @@ impl MemoryDB {
                             return Err(e);
                         }
                     }
+                }
+            }
+
+            // Migration 53: upgrade relations traversal indexes to composite covering indexes.
+            if version < 53 {
+                let conn = self.conn.lock().await;
+                // Idempotency probe: check if idx_relations_from already covers 2 columns.
+                let already_composite: bool = {
+                    let mut rows = conn
+                        .query(
+                            "SELECT COUNT(*) FROM pragma_index_info('idx_relations_from')",
+                            (),
+                        )
+                        .await
+                        .map_err(|e| OriginError::VectorDb(format!("m53 probe: {e}")))?;
+                    match rows.next().await {
+                        Ok(Some(row)) => row.get::<i64>(0).unwrap_or(0) >= 2,
+                        _ => false,
+                    }
+                };
+                if already_composite {
+                    conn.execute("PRAGMA user_version = 53", ())
+                        .await
+                        .map_err(|e| {
+                            OriginError::VectorDb(format!("m53 bump (already done): {e}"))
+                        })?;
+                    log::info!("[migration] Migration 53 skipped (already applied): bumped user_version to 53");
+                } else {
+                    conn.execute_batch(
+                        "DROP INDEX IF EXISTS idx_relations_from;
+                         DROP INDEX IF EXISTS idx_relations_to;
+                         CREATE INDEX idx_relations_from ON relations(from_entity, to_entity);
+                         CREATE INDEX idx_relations_to ON relations(to_entity, from_entity);",
+                    )
+                    .await
+                    .map_err(|e| OriginError::VectorDb(format!("m53 reindex: {e}")))?;
+                    conn.execute("PRAGMA user_version = 53", ())
+                        .await
+                        .map_err(|e| OriginError::VectorDb(format!("m53 bump: {e}")))?;
+                    log::info!(
+                        "[migration] Migration 53 applied: relations composite traversal indexes"
+                    );
                 }
             }
         }
@@ -30401,6 +30443,69 @@ pub(crate) mod tests {
                     "idx_memories_event_date".to_string()
                 ]
             );
+        }
+    }
+
+    // ── migration 53 replay test ──────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn test_migration_53_relations_indexes() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db_path = tmp.path().join("test.db");
+
+        // First open: runs all migrations including 53.
+        let db = MemoryDB::new(&db_path, Arc::new(crate::events::NoopEmitter))
+            .await
+            .unwrap();
+
+        {
+            let conn = db.conn.lock().await;
+
+            let mut rows = conn
+                .query("SELECT name FROM sqlite_master WHERE type='index' AND tbl_name='relations' AND name IN ('idx_relations_from', 'idx_relations_to')", ())
+                .await
+                .unwrap();
+            let mut names: Vec<String> = Vec::new();
+            while let Some(row) = rows.next().await.unwrap() {
+                names.push(row.get::<String>(0).unwrap());
+            }
+            names.sort();
+            assert_eq!(
+                names,
+                vec![
+                    "idx_relations_from".to_string(),
+                    "idx_relations_to".to_string()
+                ]
+            );
+
+            // Verify the indexes are composite (cover 2 columns each).
+            let mut rows = conn
+                .query(
+                    "SELECT COUNT(*) FROM pragma_index_info('idx_relations_from')",
+                    (),
+                )
+                .await
+                .unwrap();
+            let count: i64 = if let Some(row) = rows.next().await.unwrap() {
+                row.get::<i64>(0).unwrap_or(0)
+            } else {
+                0
+            };
+            assert_eq!(count, 2, "idx_relations_from must be composite (2 columns)");
+
+            let mut rows2 = conn
+                .query(
+                    "SELECT COUNT(*) FROM pragma_index_info('idx_relations_to')",
+                    (),
+                )
+                .await
+                .unwrap();
+            let count2: i64 = if let Some(row) = rows2.next().await.unwrap() {
+                row.get::<i64>(0).unwrap_or(0)
+            } else {
+                0
+            };
+            assert_eq!(count2, 2, "idx_relations_to must be composite (2 columns)");
         }
     }
 
