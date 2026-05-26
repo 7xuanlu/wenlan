@@ -10090,6 +10090,102 @@ impl MemoryDB {
         Ok(())
     }
 
+    /// Walk memories that have no entity linkage and enrich them via `extract_fn`.
+    ///
+    /// Memories ingested while the LLM was unavailable have `entity_id IS NULL`
+    /// and no rows in `memory_entities`. This sweep processes them in batches
+    /// so the knowledge graph catches up once a provider is available.
+    ///
+    /// `extract_fn` receives the memory content and returns a list of entity ids
+    /// (already created in the DB). Use the closure form to keep `MemoryDB`
+    /// ignorant of the LLM provider — the scheduler passes a thin wrapper around
+    /// `extract_single_memory_entities`.
+    ///
+    /// Returns the count of memories processed (attempted, including any that
+    /// produced zero entities).
+    pub async fn run_enrichment_sweep<F, Fut>(
+        &self,
+        extract_fn: F,
+        batch_size: usize,
+    ) -> Result<usize, OriginError>
+    where
+        F: Fn(String) -> Fut,
+        Fut: std::future::Future<Output = Result<Vec<String>, OriginError>>,
+    {
+        let mut processed = 0usize;
+        let mut offset = 0usize;
+        loop {
+            // Collect a batch of (source_id, content) pairs where the memory has
+            // no entity linkage. We check both the legacy `entity_id` column
+            // (NULL) and the junction table (no row) to handle memories that may
+            // have been written before the migration that introduced
+            // `memory_entities`.
+            let pairs: Vec<(String, String)> = {
+                let conn = self.conn.lock().await;
+                let mut rows = conn
+                    .query(
+                        "SELECT source_id, content FROM memories \
+                         WHERE chunk_index = 0 \
+                           AND entity_id IS NULL \
+                           AND source_id NOT IN (SELECT memory_id FROM memory_entities) \
+                         ORDER BY source_id \
+                         LIMIT ?1 OFFSET ?2",
+                        libsql::params![batch_size as i64, offset as i64],
+                    )
+                    .await
+                    .map_err(|e| {
+                        OriginError::VectorDb(format!("run_enrichment_sweep query: {e}"))
+                    })?;
+                let mut v = Vec::new();
+                while let Ok(Some(row)) = rows.next().await {
+                    let sid: String = row.get(0).unwrap_or_default();
+                    let content: String = row.get(1).unwrap_or_default();
+                    if !sid.is_empty() {
+                        v.push((sid, content));
+                    }
+                }
+                v
+            };
+
+            if pairs.is_empty() {
+                break;
+            }
+            let batch_len = pairs.len();
+
+            for (source_id, content) in pairs {
+                match extract_fn(content).await {
+                    Ok(entity_ids) if !entity_ids.is_empty() => {
+                        let refs: Vec<&str> = entity_ids.iter().map(|s| s.as_str()).collect();
+                        if let Err(e) = self.link_memory_entities(&source_id, &refs).await {
+                            log::warn!(
+                                "[enrichment_sweep] link_memory_entities failed for {source_id}: {e}"
+                            );
+                        }
+                        // Update the legacy 1-1 column to the first entity.
+                        if let Err(e) = self.update_memory_entity_id(&source_id, refs[0]).await {
+                            log::warn!(
+                                "[enrichment_sweep] update_memory_entity_id failed for {source_id}: {e}"
+                            );
+                        }
+                    }
+                    Ok(_) => {
+                        // LLM returned no entities — memory stays unlinked.
+                    }
+                    Err(e) => {
+                        log::warn!("[enrichment_sweep] extraction failed for {source_id}: {e}");
+                    }
+                }
+            }
+            processed += batch_len;
+            if batch_len < batch_size {
+                // Last (partial) batch — done.
+                break;
+            }
+            offset += batch_size;
+        }
+        Ok(processed)
+    }
+
     /// Get the entity_id for a memory (by source_id, chunk_index=0).
     pub async fn get_memory_entity_id(
         &self,
@@ -31170,5 +31266,147 @@ pub(crate) mod tests {
             let row = rows.next().await.unwrap().expect("meta flag must be set");
             assert_eq!(row.get::<String>(0).unwrap(), "1");
         }
+    }
+
+    // ==================== run_enrichment_sweep ====================
+
+    #[tokio::test]
+    async fn test_enrichment_sweep_processes_null_entity_id_memories() {
+        let (db, _dir) = test_db().await;
+
+        // Insert a stub entity that the sweep will "extract".
+        {
+            let conn = db.conn.lock().await;
+            conn.execute(
+                "INSERT INTO entities (id, name, entity_type, created_at, updated_at) \
+                 VALUES ('ent_universal', 'U', 'Topic', 0, 0)",
+                (),
+            )
+            .await
+            .unwrap();
+            // Insert 3 memories with no entity_id and no memory_entities rows.
+            for i in 0..3usize {
+                let cid = format!("c_sweep_{i}");
+                let sid = format!("mem_sweep_{i}");
+                conn.execute(
+                    "INSERT INTO memories \
+                     (id, content, source, source_id, title, chunk_index, last_modified, chunk_type) \
+                     VALUES (?1, 'sample content', 'memory', ?2, '', 0, 0, 'text')",
+                    libsql::params![cid, sid],
+                )
+                .await
+                .unwrap();
+            }
+        }
+
+        // Stub extract_fn: always returns the universal entity id.
+        let processed = db
+            .run_enrichment_sweep(
+                |_content: String| async move { Ok(vec!["ent_universal".to_string()]) },
+                100,
+            )
+            .await
+            .expect("sweep should succeed");
+
+        assert_eq!(processed, 3);
+
+        // Verify memory_entities rows were written.
+        {
+            let conn = db.conn.lock().await;
+            let mut rows = conn
+                .query(
+                    "SELECT memory_id FROM memory_entities \
+                     WHERE entity_id = 'ent_universal' \
+                       AND memory_id LIKE 'mem_sweep_%' \
+                     ORDER BY memory_id",
+                    (),
+                )
+                .await
+                .unwrap();
+            let mut got: Vec<String> = Vec::new();
+            while let Some(row) = rows.next().await.unwrap() {
+                got.push(row.get::<String>(0).unwrap());
+            }
+            assert_eq!(got, vec!["mem_sweep_0", "mem_sweep_1", "mem_sweep_2"]);
+        }
+
+        // Verify the legacy entity_id column was also updated.
+        {
+            let conn = db.conn.lock().await;
+            let mut rows = conn
+                .query(
+                    "SELECT entity_id FROM memories \
+                     WHERE source_id LIKE 'mem_sweep_%' \
+                     ORDER BY source_id",
+                    (),
+                )
+                .await
+                .unwrap();
+            let mut got: Vec<String> = Vec::new();
+            while let Some(row) = rows.next().await.unwrap() {
+                got.push(row.get::<String>(0).unwrap());
+            }
+            assert_eq!(got, vec!["ent_universal", "ent_universal", "ent_universal"]);
+        }
+    }
+
+    #[tokio::test]
+    async fn test_enrichment_sweep_skips_already_linked_memories() {
+        let (db, _dir) = test_db().await;
+
+        {
+            let conn = db.conn.lock().await;
+            conn.execute(
+                "INSERT INTO entities (id, name, entity_type, created_at, updated_at) \
+                 VALUES ('ent_linked', 'L', 'Topic', 0, 0)",
+                (),
+            )
+            .await
+            .unwrap();
+            // One memory already linked via entity_id.
+            conn.execute(
+                "INSERT INTO memories \
+                 (id, content, source, source_id, title, chunk_index, last_modified, chunk_type, entity_id) \
+                 VALUES ('c_linked', 'content', 'memory', 'mem_linked', '', 0, 0, 'text', 'ent_linked')",
+                (),
+            )
+            .await
+            .unwrap();
+            // One memory with entity_id NULL (should be swept).
+            conn.execute(
+                "INSERT INTO memories \
+                 (id, content, source, source_id, title, chunk_index, last_modified, chunk_type) \
+                 VALUES ('c_new', 'content', 'memory', 'mem_new', '', 0, 0, 'text')",
+                (),
+            )
+            .await
+            .unwrap();
+        }
+
+        let processed = db
+            .run_enrichment_sweep(
+                |_content: String| async move { Ok(vec!["ent_linked".to_string()]) },
+                100,
+            )
+            .await
+            .expect("sweep");
+
+        // Only the unlinked memory should be processed.
+        assert_eq!(processed, 1);
+    }
+
+    #[tokio::test]
+    async fn test_enrichment_sweep_empty_returns_zero() {
+        let (db, _dir) = test_db().await;
+
+        let processed = db
+            .run_enrichment_sweep(
+                |_content: String| async move { Ok(vec!["ent_x".to_string()]) },
+                100,
+            )
+            .await
+            .expect("sweep on empty db");
+
+        assert_eq!(processed, 0);
     }
 }
