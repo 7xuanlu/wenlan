@@ -15,6 +15,7 @@ pub mod cache;
 pub mod chat_import;
 pub mod chunker;
 pub mod classify;
+pub mod composite;
 pub mod config;
 pub mod context_packager;
 pub mod contradiction;
