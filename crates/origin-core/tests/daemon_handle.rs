@@ -1,19 +1,24 @@
 // SPDX-License-Identifier: Apache-2.0
 //! `DaemonHandle` integration test — spawn, query, drop without orphans.
 //!
-//! Skipped (treated as `Ok(())`) if `origin-server` isn't built — CI matrix
-//! that doesn't pre-build the daemon won't fail this. Run locally with:
+//! All tests are `#[ignore]`d because they require `origin-server` to be
+//! pre-built (we deliberately do NOT silently green on missing binary —
+//! that was the silent-zero failure mode the P2 adversarial review caught).
+//! Run locally with:
 //!
 //! ```bash
 //! cargo build -p origin-server
-//! cargo test -p origin-core --test daemon_handle --features eval-harness -- --test-threads=1
+//! cargo test -p origin-core --test daemon_handle --features eval-harness \
+//!     -- --ignored --test-threads=1
 //! ```
 
 #![cfg(feature = "eval-harness")]
 
 use origin_core::eval::http_harness::DaemonHandle;
 
-fn skip_if_no_daemon() -> bool {
+/// Panic with a clear "build origin-server first" message if the binary
+/// isn't on disk where the harness will look. Loud-fail beats silent-pass.
+fn assert_daemon_built() {
     let path = std::env::current_exe()
         .ok()
         .and_then(|p| p.parent().and_then(|q| q.parent()).map(|d| d.to_path_buf()));
@@ -24,14 +29,12 @@ fn skip_if_no_daemon() -> bool {
             "origin-server"
         });
         if !bin.exists() {
-            eprintln!(
-                "[daemon_handle] skipping: {} not built — run `cargo build -p origin-server`",
+            panic!(
+                "origin-server binary not found at {} — run `cargo build -p origin-server` first",
                 bin.display()
             );
-            return true;
         }
     }
-    false
 }
 
 fn pgrep_origin_server() -> usize {
@@ -49,10 +52,9 @@ fn pgrep_origin_server() -> usize {
 }
 
 #[tokio::test]
+#[ignore]
 async fn spawn_and_drop_leaves_no_orphans() {
-    if skip_if_no_daemon() {
-        return;
-    }
+    assert_daemon_built();
     let _ = origin_core::eval::orphan_reaper::cleanup_eval_orphans();
     let initial = pgrep_origin_server();
     {
@@ -62,8 +64,8 @@ async fn spawn_and_drop_leaves_no_orphans() {
             .expect("/api/health");
         assert_eq!(resp.status(), 200);
     }
-    // Drop's libc::kill SIGTERM → 1s sleep → SIGKILL. Give kernel another
-    // 2s to fully unmap the process.
+    // Drop's `start_kill` is SIGKILL, immediate. Give the kernel 2s to
+    // unmap the process before pgrep'ing.
     tokio::time::sleep(std::time::Duration::from_secs(2)).await;
     let final_count = pgrep_origin_server();
     assert_eq!(
@@ -73,10 +75,9 @@ async fn spawn_and_drop_leaves_no_orphans() {
 }
 
 #[tokio::test]
+#[ignore]
 async fn spawn_uses_ephemeral_port_not_default_7878() {
-    if skip_if_no_daemon() {
-        return;
-    }
+    assert_daemon_built();
     let daemon = DaemonHandle::spawn().await.expect("spawn");
     let url = daemon.url("/api/health");
     assert!(url.starts_with("http://127.0.0.1:"), "got {url}");
@@ -91,23 +92,19 @@ async fn spawn_uses_ephemeral_port_not_default_7878() {
 }
 
 #[tokio::test]
+#[ignore]
 async fn smoke_preflight_runs_warmup_against_live_daemon() {
-    if skip_if_no_daemon() {
-        return;
-    }
+    assert_daemon_built();
     let daemon = DaemonHandle::spawn().await.expect("spawn");
-    // 3 warmup calls — enough to hit the path twice past cold-init,
-    // small enough to stay under the integration-test budget.
     origin_core::eval::l2_runner::smoke_preflight(&daemon, 3)
         .await
         .expect("smoke_preflight");
 }
 
 #[tokio::test]
+#[ignore]
 async fn pidfile_exists_during_lifetime_and_removed_on_drop() {
-    if skip_if_no_daemon() {
-        return;
-    }
+    assert_daemon_built();
     let pidfile;
     {
         let daemon = DaemonHandle::spawn().await.expect("spawn");

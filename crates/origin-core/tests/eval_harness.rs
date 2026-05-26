@@ -4227,8 +4227,7 @@ fn l2_server_binary_built() -> bool {
 #[ignore]
 async fn save_locomo_l2_baseline_returns_not_wired_until_scoring_lands() {
     if !l2_server_binary_built() {
-        println!("SKIP: origin-server not built — run `cargo build -p origin-server` first");
-        return;
+        panic!("origin-server binary not built — run `cargo build -p origin-server` first");
     }
     let cfg = origin_core::eval::l2_runner::L2Config {
         fixture_path: eval_root().join("data/locomo10.json"),
@@ -4240,8 +4239,8 @@ async fn save_locomo_l2_baseline_returns_not_wired_until_scoring_lands() {
     let err = result.expect_err("L2 runner should return Err until scoring is wired");
     let msg = err.to_string();
     assert!(
-        msg.contains("NOT YET WIRED"),
-        "expected NOT YET WIRED sentinel, got: {msg}"
+        msg.contains(origin_core::eval::l2_runner::NOT_YET_WIRED_SENTINEL),
+        "expected NOT_YET_WIRED_SENTINEL, got: {msg}"
     );
 }
 
@@ -4249,8 +4248,7 @@ async fn save_locomo_l2_baseline_returns_not_wired_until_scoring_lands() {
 #[ignore]
 async fn save_locomo_l2_reranked_baseline_returns_not_wired_until_scoring_lands() {
     if !l2_server_binary_built() {
-        println!("SKIP: origin-server not built");
-        return;
+        panic!("origin-server binary not built — run `cargo build -p origin-server` first");
     }
     let cfg = origin_core::eval::l2_runner::L2Config {
         fixture_path: eval_root().join("data/locomo10.json"),
@@ -4261,15 +4259,16 @@ async fn save_locomo_l2_reranked_baseline_returns_not_wired_until_scoring_lands(
     let err = origin_core::eval::l2_runner::run_locomo_l2(cfg)
         .await
         .expect_err("NOT YET WIRED expected");
-    assert!(err.to_string().contains("NOT YET WIRED"));
+    assert!(err
+        .to_string()
+        .contains(origin_core::eval::l2_runner::NOT_YET_WIRED_SENTINEL));
 }
 
 #[tokio::test]
 #[ignore]
 async fn save_longmemeval_l2_baseline_returns_not_wired_until_scoring_lands() {
     if !l2_server_binary_built() {
-        println!("SKIP: origin-server not built");
-        return;
+        panic!("origin-server binary not built — run `cargo build -p origin-server` first");
     }
     let cfg = origin_core::eval::l2_runner::L2Config {
         fixture_path: eval_root().join("data/longmemeval_oracle.json"),
@@ -4280,15 +4279,16 @@ async fn save_longmemeval_l2_baseline_returns_not_wired_until_scoring_lands() {
     let err = origin_core::eval::l2_runner::run_longmemeval_l2(cfg)
         .await
         .expect_err("NOT YET WIRED expected");
-    assert!(err.to_string().contains("NOT YET WIRED"));
+    assert!(err
+        .to_string()
+        .contains(origin_core::eval::l2_runner::NOT_YET_WIRED_SENTINEL));
 }
 
 #[tokio::test]
 #[ignore]
 async fn save_longmemeval_l2_reranked_baseline_returns_not_wired_until_scoring_lands() {
     if !l2_server_binary_built() {
-        println!("SKIP: origin-server not built");
-        return;
+        panic!("origin-server binary not built — run `cargo build -p origin-server` first");
     }
     let cfg = origin_core::eval::l2_runner::L2Config {
         fixture_path: eval_root().join("data/longmemeval_oracle.json"),
@@ -4299,7 +4299,9 @@ async fn save_longmemeval_l2_reranked_baseline_returns_not_wired_until_scoring_l
     let err = origin_core::eval::l2_runner::run_longmemeval_l2(cfg)
         .await
         .expect_err("NOT YET WIRED expected");
-    assert!(err.to_string().contains("NOT YET WIRED"));
+    assert!(err
+        .to_string()
+        .contains(origin_core::eval::l2_runner::NOT_YET_WIRED_SENTINEL));
 }
 
 #[test]

@@ -39,7 +39,7 @@ pub fn cleanup_eval_orphans_in(daemons_dir: &Path) -> anyhow::Result<usize> {
         let _ = std::fs::remove_file(&path);
         if let Some(data_dir) = lines.next() {
             let dd = Path::new(data_dir.trim());
-            if dd.exists() && dd.starts_with(std::env::temp_dir()) {
+            if dd.exists() && is_under_temp_dir(dd) {
                 let _ = std::fs::remove_dir_all(dd);
             }
         }
@@ -52,6 +52,20 @@ pub fn cleanup_eval_orphans_in(daemons_dir: &Path) -> anyhow::Result<usize> {
 pub fn cleanup_eval_orphans() -> anyhow::Result<usize> {
     let home = dirs::home_dir().ok_or_else(|| anyhow::anyhow!("HOME not set"))?;
     cleanup_eval_orphans_in(&home.join(".cache/origin-eval/daemons"))
+}
+
+/// Decide if `dd` lives under the system temp dir, comparing canonical
+/// paths so macOS's `/var/folders/...` vs `/private/var/folders/...`
+/// symlink mismatch doesn't bypass the guard. Falls back to lexical
+/// `starts_with` if canonicalization fails (rare; happens when the path
+/// itself is a dangling symlink — in which case we conservatively refuse
+/// to remove rather than risk a wrong delete).
+fn is_under_temp_dir(dd: &Path) -> bool {
+    let temp = std::env::temp_dir();
+    match (dd.canonicalize(), temp.canonicalize()) {
+        (Ok(dd_canon), Ok(temp_canon)) => dd_canon.starts_with(&temp_canon),
+        _ => false,
+    }
 }
 
 #[cfg(unix)]

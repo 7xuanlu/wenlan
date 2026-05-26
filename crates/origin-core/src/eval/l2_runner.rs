@@ -32,6 +32,13 @@ use crate::eval::http_harness::DaemonHandle;
 use crate::eval::report::ReportEnv;
 use crate::eval::EvalLayer;
 
+/// Sentinel substring that callers (including tests) match on to detect the
+/// "scaffolding shipped, scoring pending" state. Promoted to a `pub const`
+/// so renaming the error message is a single-file change and the four
+/// sentinel tests in `eval_harness.rs` fail loudly if anyone forgets to
+/// update them.
+pub const NOT_YET_WIRED_SENTINEL: &str = "NOT YET WIRED";
+
 /// Caller-facing config for an L2 baseline run.
 #[derive(Debug, Clone)]
 pub struct L2Config {
@@ -138,8 +145,9 @@ pub async fn run_locomo_l2(_config: L2Config) -> Result<crate::eval::locomo::Loc
     let daemon = DaemonHandle::spawn().await?;
     smoke_preflight(&daemon, _config.warmup_iterations).await?;
     anyhow::bail!(
-        "run_locomo_l2: NOT YET WIRED — scoring loop pending follow-up to factor \
-         per-scenario scoring out of locomo::run_locomo_eval. See l2_runner module doc."
+        "run_locomo_l2: {} — scoring loop pending follow-up to factor \
+         per-scenario scoring out of locomo::run_locomo_eval. See l2_runner module doc.",
+        NOT_YET_WIRED_SENTINEL
     )
 }
 
@@ -153,8 +161,9 @@ pub async fn run_longmemeval_l2(
     let daemon = DaemonHandle::spawn().await?;
     smoke_preflight(&daemon, _config.warmup_iterations).await?;
     anyhow::bail!(
-        "run_longmemeval_l2: NOT YET WIRED — scoring loop pending follow-up to factor \
-         per-scenario scoring out of longmemeval::run_longmemeval_eval. See l2_runner module doc."
+        "run_longmemeval_l2: {} — scoring loop pending follow-up to factor \
+         per-scenario scoring out of longmemeval::run_longmemeval_eval. See l2_runner module doc.",
+        NOT_YET_WIRED_SENTINEL
     )
 }
 
@@ -191,6 +200,15 @@ mod tests {
             stamp_l2_env("locomo", "reranked", 5).retrieval_method,
             "search_memory_reranked"
         );
+    }
+
+    #[test]
+    fn not_yet_wired_sentinel_is_stable() {
+        // If the error wording in run_locomo_l2 / run_longmemeval_l2 ever
+        // drifts away from NOT_YET_WIRED_SENTINEL, the four sentinel tests
+        // in tests/eval_harness.rs become false-passes. This unit test
+        // catches the drift at the source.
+        assert_eq!(NOT_YET_WIRED_SENTINEL, "NOT YET WIRED");
     }
 
     #[test]
