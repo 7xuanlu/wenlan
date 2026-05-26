@@ -27,7 +27,7 @@ pub const EMBEDDING_DIM: usize = 768;
 
 /// Current DB schema version (highest `PRAGMA user_version` applied by `migrate()`).
 /// Bump this whenever a new migration lands. Used as an eval cache invalidation key.
-pub const SCHEMA_VERSION: u32 = 51;
+pub const SCHEMA_VERSION: u32 = 52;
 
 /// Shared embedder reference. Pass to [`MemoryDB::new_with_shared_embedder`] to
 /// reuse a single embedder across many `MemoryDB` instances. Created via
@@ -4851,6 +4851,75 @@ impl MemoryDB {
                     Err(e) => {
                         let _ = conn.execute("ROLLBACK", ()).await;
                         return Err(e);
+                    }
+                }
+            }
+
+            // Migration 52: event_date and event_end temporal columns + indexes.
+            if version < 52 {
+                let conn = self.conn.lock().await;
+                // Idempotency probe: if event_date already exists (e.g. test rolled
+                // user_version back), skip the ALTER TABLE and just bump the version.
+                let already_added: bool = {
+                    let mut rows = conn
+                        .query(
+                            "SELECT COUNT(*) FROM pragma_table_info('memories') WHERE name = 'event_date'",
+                            (),
+                        )
+                        .await
+                        .map_err(|e| OriginError::VectorDb(format!("m52 probe: {e}")))?;
+                    match rows.next().await {
+                        Ok(Some(row)) => row.get::<i64>(0).unwrap_or(0) > 0,
+                        _ => false,
+                    }
+                };
+                if already_added {
+                    conn.execute("PRAGMA user_version = 52", ())
+                        .await
+                        .map_err(|e| {
+                            OriginError::VectorDb(format!("m52 bump (already done): {e}"))
+                        })?;
+                    log::info!("[migration] Migration 52 skipped (already applied): bumped user_version to 52");
+                } else {
+                    conn.execute("BEGIN", ())
+                        .await
+                        .map_err(|e| OriginError::VectorDb(format!("m52 begin: {e}")))?;
+                    let result: Result<(), OriginError> = async {
+                        conn.execute("ALTER TABLE memories ADD COLUMN event_date INTEGER", ())
+                            .await
+                            .map_err(|e| OriginError::VectorDb(format!("m52 add event_date: {e}")))?;
+                        conn.execute("ALTER TABLE memories ADD COLUMN event_end INTEGER", ())
+                            .await
+                            .map_err(|e| OriginError::VectorDb(format!("m52 add event_end: {e}")))?;
+                        conn.execute(
+                            "CREATE INDEX IF NOT EXISTS idx_memories_event_date ON memories(event_date)",
+                            (),
+                        )
+                        .await
+                        .map_err(|e| OriginError::VectorDb(format!("m52 create idx_event_date: {e}")))?;
+                        conn.execute(
+                            "CREATE INDEX IF NOT EXISTS idx_memories_entity_event ON memories(entity_id, event_date)",
+                            (),
+                        )
+                        .await
+                        .map_err(|e| OriginError::VectorDb(format!("m52 create idx_entity_event: {e}")))?;
+                        conn.execute("PRAGMA user_version = 52", ())
+                            .await
+                            .map_err(|e| OriginError::VectorDb(format!("m52 bump: {e}")))?;
+                        Ok(())
+                    }
+                    .await;
+                    match result {
+                        Ok(()) => {
+                            conn.execute("COMMIT", ())
+                                .await
+                                .map_err(|e| OriginError::VectorDb(format!("m52 commit: {e}")))?;
+                            log::info!("[migration] Migration 52 applied: event_date + event_end columns + indexes");
+                        }
+                        Err(e) => {
+                            let _ = conn.execute("ROLLBACK", ()).await;
+                            return Err(e);
+                        }
                     }
                 }
             }
@@ -30285,6 +30354,48 @@ pub(crate) mod tests {
             rows.next().await.unwrap().is_some(),
             "document_tags table must exist after migration 51 replay"
         );
+    }
+
+    // ── migration 52 replay test ──────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn test_migration_52_event_date_columns() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db_path = tmp.path().join("test.db");
+
+        // First open: runs all migrations including 52.
+        let db = MemoryDB::new(&db_path, Arc::new(crate::events::NoopEmitter))
+            .await
+            .unwrap();
+
+        {
+            let conn = db.conn.lock().await;
+
+            let mut rows = conn
+                .query("SELECT name FROM pragma_table_info('memories') WHERE name IN ('event_date', 'event_end')", ())
+                .await
+                .unwrap();
+            let mut names: Vec<String> = Vec::new();
+            while let Some(row) = rows.next().await.unwrap() {
+                names.push(row.get::<String>(0).unwrap());
+            }
+            names.sort();
+            assert_eq!(names, vec!["event_date".to_string(), "event_end".to_string()]);
+
+            let mut rows = conn
+                .query("SELECT name FROM sqlite_master WHERE type='index' AND tbl_name='memories' AND name IN ('idx_memories_event_date', 'idx_memories_entity_event')", ())
+                .await
+                .unwrap();
+            let mut idx_names: Vec<String> = Vec::new();
+            while let Some(row) = rows.next().await.unwrap() {
+                idx_names.push(row.get::<String>(0).unwrap());
+            }
+            idx_names.sort();
+            assert_eq!(
+                idx_names,
+                vec!["idx_memories_entity_event".to_string(), "idx_memories_event_date".to_string()]
+            );
+        }
     }
 
     #[tokio::test]
