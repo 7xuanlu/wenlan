@@ -305,6 +305,31 @@ mod tests {
     }
 
     #[test]
+    fn extract_prompt_contains_event_date_for_every_type() {
+        // Drift-guard: ensures that event_date and event_end survive the full
+        // render pipeline. The schema test above only checks the optional Vec;
+        // this test catches a dropped {optional} placeholder in the template.
+        for ty in [
+            "identity",
+            "preference",
+            "decision",
+            "fact",
+            "lesson",
+            "gotcha",
+        ] {
+            let rendered = extraction_prompt(ty);
+            assert!(
+                rendered.contains("event_date"),
+                "{ty} rendered EXTRACT prompt missing event_date"
+            );
+            assert!(
+                rendered.contains("event_end"),
+                "{ty} rendered EXTRACT prompt missing event_end"
+            );
+        }
+    }
+
+    #[test]
     fn for_type_decision_retains_existing_optional_fields() {
         let s = MemorySchema::for_type("decision");
         assert!(s.optional.contains(&"alternatives_considered"));
