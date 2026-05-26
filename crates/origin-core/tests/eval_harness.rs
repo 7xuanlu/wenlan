@@ -4191,3 +4191,173 @@ async fn smoke_tool_use_judge_returns_structured_verdict() {
         "Paris->France obvious-correct judgment should be 1"
     );
 }
+
+// ---------------------------------------------------------------------------
+// L2 (live-daemon HTTP) baselines — P2 scaffolding
+// ---------------------------------------------------------------------------
+//
+// `run_*_l2` is NOT YET WIRED in P2; these tests document expected behavior:
+//   - `save_*_l2_baseline_returns_not_wired_until_scoring_lands` runs the
+//     daemon end-to-end and asserts the runner returns the documented
+//     "NOT YET WIRED" error. When the follow-up wiring PR lands, these
+//     tests fail loudly, prompting the operator to replace them with full
+//     ingest+query coverage.
+//   - `save_*_l2_baseline_scaffolding_writes_via_save_full_report` exercises
+//     the stamp_l2_env + save_full_report path independent of the daemon:
+//     proves the layered baseline write side of L2 is correct so the
+//     wiring PR only has to deliver the metrics, not re-prove the path.
+
+fn l2_server_binary_built() -> bool {
+    let target_dir = std::env::current_exe()
+        .ok()
+        .and_then(|p| p.parent().and_then(|q| q.parent()).map(|d| d.to_path_buf()));
+    target_dir
+        .map(|d| {
+            d.join(if cfg!(windows) {
+                "origin-server.exe"
+            } else {
+                "origin-server"
+            })
+            .exists()
+        })
+        .unwrap_or(false)
+}
+
+#[tokio::test]
+#[ignore]
+async fn save_locomo_l2_baseline_returns_not_wired_until_scoring_lands() {
+    if !l2_server_binary_built() {
+        println!("SKIP: origin-server not built — run `cargo build -p origin-server` first");
+        return;
+    }
+    let cfg = origin_core::eval::l2_runner::L2Config {
+        fixture_path: eval_root().join("data/locomo10.json"),
+        baselines_root: baselines_root(),
+        variant: "base",
+        ..origin_core::eval::l2_runner::L2Config::default()
+    };
+    let result = origin_core::eval::l2_runner::run_locomo_l2(cfg).await;
+    let err = result.expect_err("L2 runner should return Err until scoring is wired");
+    let msg = err.to_string();
+    assert!(
+        msg.contains("NOT YET WIRED"),
+        "expected NOT YET WIRED sentinel, got: {msg}"
+    );
+}
+
+#[tokio::test]
+#[ignore]
+async fn save_locomo_l2_reranked_baseline_returns_not_wired_until_scoring_lands() {
+    if !l2_server_binary_built() {
+        println!("SKIP: origin-server not built");
+        return;
+    }
+    let cfg = origin_core::eval::l2_runner::L2Config {
+        fixture_path: eval_root().join("data/locomo10.json"),
+        baselines_root: baselines_root(),
+        variant: "reranked",
+        ..origin_core::eval::l2_runner::L2Config::default()
+    };
+    let err = origin_core::eval::l2_runner::run_locomo_l2(cfg)
+        .await
+        .expect_err("NOT YET WIRED expected");
+    assert!(err.to_string().contains("NOT YET WIRED"));
+}
+
+#[tokio::test]
+#[ignore]
+async fn save_longmemeval_l2_baseline_returns_not_wired_until_scoring_lands() {
+    if !l2_server_binary_built() {
+        println!("SKIP: origin-server not built");
+        return;
+    }
+    let cfg = origin_core::eval::l2_runner::L2Config {
+        fixture_path: eval_root().join("data/longmemeval_oracle.json"),
+        baselines_root: baselines_root(),
+        variant: "base",
+        ..origin_core::eval::l2_runner::L2Config::default()
+    };
+    let err = origin_core::eval::l2_runner::run_longmemeval_l2(cfg)
+        .await
+        .expect_err("NOT YET WIRED expected");
+    assert!(err.to_string().contains("NOT YET WIRED"));
+}
+
+#[tokio::test]
+#[ignore]
+async fn save_longmemeval_l2_reranked_baseline_returns_not_wired_until_scoring_lands() {
+    if !l2_server_binary_built() {
+        println!("SKIP: origin-server not built");
+        return;
+    }
+    let cfg = origin_core::eval::l2_runner::L2Config {
+        fixture_path: eval_root().join("data/longmemeval_oracle.json"),
+        baselines_root: baselines_root(),
+        variant: "reranked",
+        ..origin_core::eval::l2_runner::L2Config::default()
+    };
+    let err = origin_core::eval::l2_runner::run_longmemeval_l2(cfg)
+        .await
+        .expect_err("NOT YET WIRED expected");
+    assert!(err.to_string().contains("NOT YET WIRED"));
+}
+
+#[test]
+fn save_locomo_l2_baseline_scaffolding_writes_via_save_full_report() {
+    // Daemon-free: prove stamp_l2_env -> EvalReport -> save_full_report
+    // path produces a writeable layered baseline at the L2 path. When the
+    // wiring PR lands, the real per-question loop fills the metric fields
+    // and this exact path is exercised at the end of the run.
+    let mut env = origin_core::eval::l2_runner::stamp_l2_env("locomo", "base", 5);
+    env.fixture_revision = "test_fixture_locomo".to_string();
+    env.embedder_revision = "BGE-Base-EN-v1.5-Q".to_string();
+    env.llm_provider_class = "on-device".to_string();
+    env.llm_model = "qwen3-4b".to_string();
+    env.schema_db_version = Some(46);
+
+    let report = origin_core::eval::report::EvalReport {
+        env: Some(env),
+        search_mode: "search_memory".to_string(),
+        ndcg_at_10: 0.5,
+        mrr: 0.5,
+        recall_at_5: 0.5,
+        hit_rate_at_1: 0.5,
+        ..origin_core::eval::report::EvalReport::default()
+    };
+    let tmp = tempfile::tempdir().unwrap();
+    let path = origin_core::eval::report::save_full_report(tmp.path(), &report)
+        .expect("save_full_report should accept L2-stamped report");
+    let path_str = path.to_string_lossy();
+    assert!(
+        path_str.contains("l2_http/locomo/base__"),
+        "expected L2 layered path, got {path_str}"
+    );
+}
+
+#[test]
+fn save_longmemeval_l2_baseline_scaffolding_writes_via_save_full_report() {
+    let mut env =
+        origin_core::eval::l2_runner::stamp_l2_env("longmemeval", "reranked", 5);
+    env.fixture_revision = "test_fixture_lme".to_string();
+    env.embedder_revision = "BGE-Base-EN-v1.5-Q".to_string();
+    env.llm_provider_class = "on-device".to_string();
+    env.llm_model = "qwen3-4b".to_string();
+    env.schema_db_version = Some(46);
+
+    let report = origin_core::eval::report::EvalReport {
+        env: Some(env),
+        search_mode: "search_memory_reranked".to_string(),
+        ndcg_at_10: 0.5,
+        mrr: 0.5,
+        recall_at_5: 0.5,
+        hit_rate_at_1: 0.5,
+        ..origin_core::eval::report::EvalReport::default()
+    };
+    let tmp = tempfile::tempdir().unwrap();
+    let path = origin_core::eval::report::save_full_report(tmp.path(), &report).unwrap();
+    let path_str = path.to_string_lossy();
+    assert!(
+        path_str.contains("l2_http/longmemeval/reranked__"),
+        "expected L2 layered path, got {path_str}"
+    );
+}
