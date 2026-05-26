@@ -380,6 +380,33 @@ pub fn resolve_fastembed_cache_dir(db_path: &std::path::Path) -> Option<std::pat
     None
 }
 
+/// How many candidates to fetch from base retrieval before cross-encoder rerank.
+///
+/// Cross-encoder reorders within the candidate set but cannot promote anything
+/// outside it. A narrow pool starves the reranker; a wider one gives it more
+/// raw material at the cost of additional vector+FTS work. Mem0's `memory-decay`
+/// path uses `top_k * 3` floored at 50.
+///
+/// Defaults preserve the pre-2026-05-25 behavior (`max(limit, 10)`) so non-eval
+/// callers see no surprise change. The eval harness flips env to sweep.
+///
+/// * `multiplier_raw` — `RERANK_POOL_MULTIPLIER` env value (default 1, rejected if 0)
+/// * `floor_raw`      — `RERANK_POOL_FLOOR` env value (default 10)
+///
+/// The final pool is `max(limit * multiplier, floor, limit)` with overflow guard.
+pub fn compute_rerank_fetch_pool(
+    limit: usize,
+    multiplier_raw: Option<&str>,
+    floor_raw: Option<&str>,
+) -> usize {
+    let multiplier: usize = multiplier_raw
+        .and_then(|s| s.parse().ok())
+        .filter(|&n: &usize| n >= 1)
+        .unwrap_or(1);
+    let floor: usize = floor_raw.and_then(|s| s.parse().ok()).unwrap_or(10);
+    limit.saturating_mul(multiplier).max(floor).max(limit)
+}
+
 /// Bigram Jaccard similarity between two strings (0.0–1.0).
 /// Used for content-based deduplication in search results.
 fn bigram_jaccard(a: &str, b: &str) -> f64 {
@@ -7227,7 +7254,13 @@ impl MemoryDB {
         source_agent: Option<&str>,
         reranker: Option<Arc<dyn crate::reranker::Reranker>>,
     ) -> Result<Vec<SearchResult>, OriginError> {
-        let fetch_pool = (limit * 2).min(10).max(limit);
+        // Pool widening before cross-encoder rerank — env-overridable.
+        // See `compute_rerank_fetch_pool` for the formula + rationale.
+        let fetch_pool = compute_rerank_fetch_pool(
+            limit,
+            std::env::var("RERANK_POOL_MULTIPLIER").ok().as_deref(),
+            std::env::var("RERANK_POOL_FLOOR").ok().as_deref(),
+        );
         let mut results = self
             .search_memory(
                 query,
@@ -22217,6 +22250,64 @@ pub(crate) mod tests {
             .await
             .unwrap();
         assert!(!results.is_empty(), "should return results without LLM");
+    }
+
+    #[test]
+    fn compute_rerank_fetch_pool_defaults_preserve_legacy() {
+        // Pre-2026-05-25 formula reduced to max(limit, 10) for typical inputs.
+        // Defaults must match so non-eval callers see no surprise behavior change.
+        assert_eq!(compute_rerank_fetch_pool(5, None, None), 10);
+        assert_eq!(compute_rerank_fetch_pool(10, None, None), 10);
+        assert_eq!(compute_rerank_fetch_pool(20, None, None), 20);
+        assert_eq!(compute_rerank_fetch_pool(100, None, None), 100);
+    }
+
+    #[test]
+    fn compute_rerank_fetch_pool_multiplier_widens() {
+        // Mem0-style 3x multiplier with default floor=10.
+        assert_eq!(compute_rerank_fetch_pool(10, Some("3"), None), 30);
+        assert_eq!(compute_rerank_fetch_pool(20, Some("3"), None), 60);
+        // limit*mult below floor → floor wins.
+        assert_eq!(compute_rerank_fetch_pool(2, Some("3"), None), 10);
+    }
+
+    #[test]
+    fn compute_rerank_fetch_pool_floor_widens() {
+        // Mem0-style floor=50 with default multiplier=1.
+        assert_eq!(compute_rerank_fetch_pool(10, None, Some("50")), 50);
+        assert_eq!(compute_rerank_fetch_pool(5, None, Some("50")), 50);
+        // limit > floor → limit wins (never truncate below requested).
+        assert_eq!(compute_rerank_fetch_pool(100, None, Some("50")), 100);
+    }
+
+    #[test]
+    fn compute_rerank_fetch_pool_combined() {
+        // Mem0 default shape: 3x + floor 50.
+        assert_eq!(compute_rerank_fetch_pool(10, Some("3"), Some("50")), 50);
+        assert_eq!(compute_rerank_fetch_pool(20, Some("3"), Some("50")), 60);
+        assert_eq!(compute_rerank_fetch_pool(100, Some("3"), Some("50")), 300);
+    }
+
+    #[test]
+    fn compute_rerank_fetch_pool_rejects_zero_multiplier() {
+        // multiplier=0 would zero the pool — fall back to default 1.
+        assert_eq!(compute_rerank_fetch_pool(10, Some("0"), None), 10);
+    }
+
+    #[test]
+    fn compute_rerank_fetch_pool_handles_bad_input() {
+        // Non-parseable env values fall back to defaults.
+        assert_eq!(compute_rerank_fetch_pool(10, Some("abc"), Some("xyz")), 10);
+        assert_eq!(compute_rerank_fetch_pool(10, Some(""), Some("")), 10);
+    }
+
+    #[test]
+    fn compute_rerank_fetch_pool_overflow_guard() {
+        // saturating_mul prevents panic on absurd multiplier.
+        assert_eq!(
+            compute_rerank_fetch_pool(usize::MAX / 2, Some("4"), None),
+            usize::MAX
+        );
     }
 
     #[tokio::test]
