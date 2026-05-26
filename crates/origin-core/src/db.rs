@@ -843,8 +843,8 @@ CREATE TABLE IF NOT EXISTS relations (
     created_at INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_observations_entity ON observations(entity_id);
-CREATE INDEX IF NOT EXISTS idx_relations_from ON relations(from_entity);
-CREATE INDEX IF NOT EXISTS idx_relations_to ON relations(to_entity);
+CREATE INDEX IF NOT EXISTS idx_relations_from ON relations(from_entity, to_entity);
+CREATE INDEX IF NOT EXISTS idx_relations_to ON relations(to_entity, from_entity);
 
 -- User profile (single row)
 CREATE TABLE IF NOT EXISTS profiles (
