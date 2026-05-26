@@ -18089,7 +18089,8 @@ impl MemoryDB {
                 for (sid, content, last_modified) in &batch {
                     let now = chrono::DateTime::from_timestamp(*last_modified, 0)
                         .unwrap_or_else(chrono::Utc::now);
-                    if let Some(cue) = crate::temporal_query::extract_cue(content, now) {
+                    if let Some(cue) = crate::temporal_query::extract_cue_for_content(content, now)
+                    {
                         conn.execute(
                             "UPDATE memories SET event_date = ?, event_end = ? WHERE source_id = ?",
                             libsql::params![cue.range.start, cue.range.end, sid.as_str()],
@@ -31105,13 +31106,13 @@ pub(crate) mod tests {
             .await
             .unwrap();
 
-        // Seed two memories: c1 has a "last tuesday" cue that extract_cue matches;
-        // c2 has no temporal cue.
+        // Seed two memories: c1 has a calendar-explicit "in Q2 2024" cue that
+        // extract_cue_for_content matches; c2 has no temporal cue.
         {
             let conn = db.conn.lock().await;
             conn.execute(
                 "INSERT INTO memories (id, content, source, source_id, title, chunk_index, last_modified, chunk_type) \
-                 VALUES ('c1', 'I met the team last tuesday', 'memory', 'mem_m55_1', 't', 0, 0, 'text')",
+                 VALUES ('c1', 'we shipped in Q2 2024', 'memory', 'mem_m55_1', 't', 0, 0, 'text')",
                 (),
             )
             .await
@@ -31146,11 +31147,11 @@ pub(crate) mod tests {
                     row.get::<Option<i64>>(1).unwrap(),
                 ));
             }
-            // c1 has "last tuesday" — extract_cue returns Some; event_date must be non-NULL.
+            // c1 has "in Q2 2024" — extract_cue_for_content returns Some; event_date must be non-NULL.
             let m1 = got.iter().find(|(id, _)| id == "mem_m55_1").unwrap();
             assert!(
                 m1.1.is_some(),
-                "mem_m55_1 ('last tuesday') must have event_date set, got None"
+                "mem_m55_1 ('in Q2 2024') must have event_date set, got None"
             );
             // c2 has no temporal cue — event_date stays NULL.
             let m2 = got.iter().find(|(id, _)| id == "mem_m55_2").unwrap();
@@ -31179,6 +31180,63 @@ pub(crate) mod tests {
             let row = rows.next().await.unwrap().expect("meta flag must be set");
             assert_eq!(row.get::<String>(0).unwrap(), "1");
         }
+    }
+
+    #[tokio::test]
+    async fn test_pass_a_skips_query_style_cues_in_content() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db_path = tmp.path().join("test.db");
+        let db = MemoryDB::new(&db_path, Arc::new(crate::events::NoopEmitter))
+            .await
+            .unwrap();
+        {
+            let conn = db.conn.lock().await;
+            // "since 2015" is anaphoric — should NOT be backfilled.
+            conn.execute(
+                "INSERT INTO memories (id, content, source, source_id, title, chunk_index, last_modified, chunk_type) \
+                 VALUES ('cq', 'I have used Rust since 2015', 'memory', 'mem_qs', '', 0, 0, 'text')",
+                (),
+            )
+            .await
+            .unwrap();
+            // "in Q2 2024" is calendar-explicit — SHOULD be backfilled.
+            conn.execute(
+                "INSERT INTO memories (id, content, source, source_id, title, chunk_index, last_modified, chunk_type) \
+                 VALUES ('cq2', 'we shipped in Q2 2024', 'memory', 'mem_q2', '', 0, 0, 'text')",
+                (),
+            )
+            .await
+            .unwrap();
+        }
+        db.run_migration_55_pass_a().await.unwrap();
+        let conn = db.conn.lock().await;
+        let mut rows = conn
+            .query(
+                "SELECT source_id, event_date FROM memories \
+                 WHERE source_id IN ('mem_qs', 'mem_q2') \
+                 ORDER BY source_id",
+                (),
+            )
+            .await
+            .unwrap();
+        let mut got: Vec<(String, Option<i64>)> = Vec::new();
+        while let Some(row) = rows.next().await.unwrap() {
+            got.push((
+                row.get::<String>(0).unwrap(),
+                row.get::<Option<i64>>(1).unwrap(),
+            ));
+        }
+        // mem_q2 comes first alphabetically.
+        let mem_q2 = got.iter().find(|(id, _)| id == "mem_q2").unwrap();
+        let mem_qs = got.iter().find(|(id, _)| id == "mem_qs").unwrap();
+        assert!(
+            mem_q2.1.is_some(),
+            "mem_q2 (Q2 2024) must have event_date set"
+        );
+        assert!(
+            mem_qs.1.is_none(),
+            "mem_qs (since 2015) must NOT have event_date (anaphoric)"
+        );
     }
 
     #[tokio::test]

@@ -4,6 +4,10 @@
 //! Plan B's L1 retrieval uses [`extract_cue`] to drive the temporal channel.
 //! This module ships the yesterday/today/tomorrow patterns; Tasks 7-8 add
 //! week/month/year, weekday, N-ago, quarter, and since patterns.
+//
+// The module is pub(crate) for Plan A. Plan B promotes it and wires extract_cue
+// into the composite scorer; until then the query-side helpers are stubs.
+#![allow(dead_code)]
 
 use chrono::{DateTime, Datelike, Duration, NaiveDate, TimeZone, Utc, Weekday};
 use regex::Regex;
@@ -327,6 +331,58 @@ pub fn extract_cue(query: &str, now: DateTime<Utc>) -> Option<ExtractedCue> {
             confidence: CueConfidence::High,
         });
     }
+    None
+}
+
+/// Extract a temporal cue from memory *content* for ingest backfill.
+///
+/// Unlike [`extract_cue`] (designed for search queries), this function only
+/// matches calendar-explicit patterns that carry an unambiguous date independent
+/// of "now". Anaphoric patterns such as "since YYYY", "before YYYY", "N weeks ago",
+/// "last week/month", and weekday references are all relative to the time of query
+/// and produce misleading ranges when applied to stored content whose reference
+/// clock is the memory's `last_modified` timestamp.
+///
+/// Currently only matches explicit calendar quarters (`in Q2 2024`). Yesterday /
+/// today / tomorrow are also included because they record when an event occurred
+/// relative to the moment the memory was written (i.e. they anchor to
+/// `last_modified`, which is what Pass A passes as `now`).
+pub(crate) fn extract_cue_for_content(content: &str, now: DateTime<Utc>) -> Option<ExtractedCue> {
+    let today = now.date_naive();
+    // Relative-to-now day patterns are safe when `now` = memory's last_modified.
+    if RE_YESTERDAY.is_match(content) {
+        return Some(ExtractedCue {
+            range: full_day_range(today - Duration::days(1)),
+            confidence: CueConfidence::High,
+        });
+    }
+    if RE_TODAY.is_match(content) {
+        return Some(ExtractedCue {
+            range: full_day_range(today),
+            confidence: CueConfidence::High,
+        });
+    }
+    if RE_TOMORROW.is_match(content) {
+        return Some(ExtractedCue {
+            range: full_day_range(today + Duration::days(1)),
+            confidence: CueConfidence::High,
+        });
+    }
+    // Explicit calendar quarter ("in Q2 2024") — the only pattern that anchors to
+    // a calendar period rather than "now".
+    if let Some(caps) = RE_QUARTER.captures(content) {
+        let q_str = caps.get(1).unwrap().as_str();
+        let year: i32 = caps.get(2).unwrap().as_str().parse().unwrap_or(2000);
+        let q: u32 = q_str[1..].parse().unwrap_or(1);
+        return Some(ExtractedCue {
+            range: quarter_range(q, year),
+            confidence: CueConfidence::High,
+        });
+    }
+    // All other patterns (since YYYY, before YYYY, N ago, last week/month/year,
+    // last <weekday>) are anaphoric — their meaning depends on when the query is
+    // asked, not when the event occurred. Skipping them prevents a 10-year window
+    // from "I have used Rust since 2015" polluting the event_date column.
     None
 }
 
