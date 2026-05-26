@@ -10060,6 +10060,36 @@ impl MemoryDB {
         Ok(())
     }
 
+    /// Write a row to `memory_entities` for each entity in `entity_ids`.
+    ///
+    /// Idempotent: `ON CONFLICT DO NOTHING` silently skips duplicates.
+    /// Transactional: inserts are wrapped in BEGIN/COMMIT.
+    pub async fn link_memory_entities(
+        &self,
+        memory_source_id: &str,
+        entity_ids: &[&str],
+    ) -> Result<(), OriginError> {
+        if entity_ids.is_empty() {
+            return Ok(());
+        }
+        let conn = self.conn.lock().await;
+        conn.execute("BEGIN", ())
+            .await
+            .map_err(|e| OriginError::VectorDb(format!("link_memory_entities BEGIN: {e}")))?;
+        for eid in entity_ids {
+            conn.execute(
+                "INSERT INTO memory_entities (memory_id, entity_id) VALUES (?1, ?2) ON CONFLICT DO NOTHING",
+                libsql::params![memory_source_id, *eid],
+            )
+            .await
+            .map_err(|e| OriginError::VectorDb(format!("link_memory_entities INSERT: {e}")))?;
+        }
+        conn.execute("COMMIT", ())
+            .await
+            .map_err(|e| OriginError::VectorDb(format!("link_memory_entities COMMIT: {e}")))?;
+        Ok(())
+    }
+
     /// Get the entity_id for a memory (by source_id, chunk_index=0).
     pub async fn get_memory_entity_id(
         &self,
@@ -30745,5 +30775,58 @@ pub(crate) mod tests {
             "destination space 'baz' should be registered after move, got: {:?}",
             spaces.iter().map(|s| &s.name).collect::<Vec<_>>()
         );
+    }
+
+    #[tokio::test]
+    async fn test_link_memory_entities_writes_junction_rows() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db_path = tmp.path().join("test.db");
+        let db = MemoryDB::new(&db_path, Arc::new(crate::events::NoopEmitter))
+            .await
+            .unwrap();
+
+        {
+            let conn = db.conn.lock().await;
+            for id in ["ent_a", "ent_b", "ent_c"] {
+                conn.execute(
+                    "INSERT INTO entities (id, name, entity_type, created_at, updated_at) VALUES (?, 'n', 'Topic', 0, 0)",
+                    [id],
+                )
+                .await
+                .unwrap();
+            }
+        }
+
+        db.link_memory_entities("mem_x", &["ent_a", "ent_b", "ent_c"])
+            .await
+            .expect("link");
+
+        {
+            let conn = db.conn.lock().await;
+            let mut rows = conn
+                .query(
+                    "SELECT entity_id FROM memory_entities WHERE memory_id = 'mem_x' ORDER BY entity_id",
+                    (),
+                )
+                .await
+                .unwrap();
+            let mut ids: Vec<String> = Vec::new();
+            while let Some(row) = rows.next().await.unwrap() {
+                ids.push(row.get::<String>(0).unwrap());
+            }
+            assert_eq!(
+                ids,
+                vec![
+                    "ent_a".to_string(),
+                    "ent_b".to_string(),
+                    "ent_c".to_string()
+                ]
+            );
+        }
+
+        // Re-linking is idempotent.
+        db.link_memory_entities("mem_x", &["ent_a"])
+            .await
+            .expect("link again");
     }
 }

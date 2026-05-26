@@ -97,9 +97,17 @@ pub async fn extract_single_memory_entities(
         }
     }
 
-    // Link memory to first entity
+    // Link memory to first entity (1-1 legacy column).
     if let Some(ref eid) = first_entity_id {
         let _ = db.update_memory_entity_id(source_id, eid).await;
+    }
+
+    // Write all extracted entities into the many-to-many junction table.
+    if !entity_cache.is_empty() {
+        let ids: Vec<&str> = entity_cache.values().map(|s| s.as_str()).collect();
+        if let Err(e) = db.link_memory_entities(source_id, &ids).await {
+            log::warn!("[post_ingest] link_memory_entities failed: {e}");
+        }
     }
 
     Ok(first_entity_id)
