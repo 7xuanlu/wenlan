@@ -27,7 +27,7 @@ pub const EMBEDDING_DIM: usize = 768;
 
 /// Current DB schema version (highest `PRAGMA user_version` applied by `migrate()`).
 /// Bump this whenever a new migration lands. Used as an eval cache invalidation key.
-pub const SCHEMA_VERSION: u32 = 53;
+pub const SCHEMA_VERSION: u32 = 54;
 
 /// Shared embedder reference. Pass to [`MemoryDB::new_with_shared_embedder`] to
 /// reuse a single embedder across many `MemoryDB` instances. Created via
@@ -4964,6 +4964,27 @@ impl MemoryDB {
                         "[migration] Migration 53 applied: relations composite traversal indexes"
                     );
                 }
+            }
+
+            if version < 54 {
+                let conn = self.conn.lock().await;
+                conn.execute_batch(
+                    "
+                    CREATE TABLE IF NOT EXISTS memory_entities (
+                        memory_id TEXT NOT NULL,
+                        entity_id TEXT NOT NULL REFERENCES entities(id) ON DELETE CASCADE,
+                        PRIMARY KEY (memory_id, entity_id)
+                    );
+                    CREATE INDEX IF NOT EXISTS idx_memory_entities_entity_memory
+                        ON memory_entities(entity_id, memory_id);
+                    ",
+                )
+                .await
+                .map_err(|e| OriginError::VectorDb(format!("m54: {e}")))?;
+                conn.execute("PRAGMA user_version = 54", ())
+                    .await
+                    .map_err(|e| OriginError::VectorDb(format!("m54 bump: {e}")))?;
+                log::info!("[migration] Migration 54 applied: memory_entities junction table");
             }
         }
 
@@ -30507,6 +30528,62 @@ pub(crate) mod tests {
             };
             assert_eq!(count2, 2, "idx_relations_to must be composite (2 columns)");
         }
+    }
+
+    #[tokio::test]
+    async fn test_migration_54_memory_entities_table() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db_path = tmp.path().join("test.db");
+        let db = MemoryDB::new(&db_path, Arc::new(crate::events::NoopEmitter))
+            .await
+            .unwrap();
+        let conn = db.conn.lock().await;
+
+        let mut rows = conn
+            .query("SELECT name FROM pragma_table_info('memory_entities')", ())
+            .await
+            .unwrap();
+        let mut cols: Vec<String> = Vec::new();
+        while let Some(row) = rows.next().await.unwrap() {
+            cols.push(row.get::<String>(0).unwrap());
+        }
+        cols.sort();
+        assert_eq!(cols, vec!["entity_id".to_string(), "memory_id".to_string()]);
+
+        let mut rows = conn
+            .query("SELECT name FROM sqlite_master WHERE type='index' AND tbl_name='memory_entities' AND name='idx_memory_entities_entity_memory'", ())
+            .await
+            .unwrap();
+        assert!(rows.next().await.unwrap().is_some());
+
+        // Seed a real entity so the second insert can succeed under FK.
+        conn.execute(
+            "INSERT INTO entities (id, name, entity_type, created_at, updated_at) VALUES ('ent_x', 'X', 'Topic', 0, 0)",
+            (),
+        )
+        .await
+        .unwrap();
+
+        // memory_id has no FK (source_id non-unique). Insert succeeds.
+        let res = conn
+            .execute(
+                "INSERT INTO memory_entities (memory_id, entity_id) VALUES ('mem_does_not_exist', 'ent_x')",
+                (),
+            )
+            .await;
+        assert!(res.is_ok(), "insert should succeed (no FK on memory_id)");
+
+        // FK on entity_id rejects a bogus entity.
+        let res = conn
+            .execute(
+                "INSERT INTO memory_entities (memory_id, entity_id) VALUES ('mem_y', 'ent_bogus')",
+                (),
+            )
+            .await;
+        assert!(
+            res.is_err(),
+            "insert should fail (FK violation on entity_id)"
+        );
     }
 
     #[tokio::test]
