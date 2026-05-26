@@ -5,7 +5,7 @@
 //! This module ships the yesterday/today/tomorrow patterns; Tasks 7-8 add
 //! week/month/year, weekday, N-ago, quarter, and since patterns.
 
-use chrono::{DateTime, Datelike, Duration, NaiveDate, TimeZone, Utc};
+use chrono::{DateTime, Datelike, Duration, NaiveDate, TimeZone, Utc, Weekday};
 use regex::Regex;
 use std::sync::LazyLock;
 
@@ -37,6 +37,18 @@ static RE_TODAY: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?i)\btoday\b")
 static RE_TOMORROW: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?i)\btomorrow\b").unwrap());
 static RE_LAST_PERIOD: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"(?i)\b(this|last)\s+(week|month|year)\b").unwrap());
+static RE_LAST_WEEKDAY: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"(?i)\blast\s+(monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b")
+        .unwrap()
+});
+static RE_N_AGO: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"(?i)\b(\d+)\s+(day|week|month)s?\s+ago\b").unwrap());
+static RE_QUARTER: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"(?i)\b(?:in|during|throughout)\s+(Q[1-4])\s*(\d{4})\b").unwrap());
+static RE_SINCE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"(?i)\b(?:since|after)\s+(\d{4})\b").unwrap());
+static RE_BEFORE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"(?i)\bbefore\s+(\d{4})\b").unwrap());
 
 const WEEK_BOUNDARY_SECONDS: i64 = 12 * 3600;
 const MONTH_BOUNDARY_SECONDS: i64 = 24 * 3600;
@@ -160,6 +172,58 @@ fn near_year_boundary(now: DateTime<Utc>) -> bool {
         || (next_ts - now_ts).abs() < YEAR_BOUNDARY_SECONDS
 }
 
+fn weekday_from_str(s: &str) -> Option<Weekday> {
+    match s.to_ascii_lowercase().as_str() {
+        "monday" => Some(Weekday::Mon),
+        "tuesday" => Some(Weekday::Tue),
+        "wednesday" => Some(Weekday::Wed),
+        "thursday" => Some(Weekday::Thu),
+        "friday" => Some(Weekday::Fri),
+        "saturday" => Some(Weekday::Sat),
+        "sunday" => Some(Weekday::Sun),
+        _ => None,
+    }
+}
+
+fn last_weekday_range(today: NaiveDate, target: Weekday) -> DateRange {
+    let today_wd = today.weekday().num_days_from_monday();
+    let target_wd = target.num_days_from_monday();
+    // Days to go back; if same weekday go back 7
+    let days_back = if today_wd > target_wd {
+        (today_wd - target_wd) as i64
+    } else {
+        (7 - (target_wd - today_wd)) as i64
+    };
+    let target_date = today - Duration::days(days_back);
+    full_day_range(target_date)
+}
+
+fn quarter_range(q: u32, year: i32) -> DateRange {
+    let (start_month, end_month) = match q {
+        1 => (1u32, 3u32),
+        2 => (4u32, 6u32),
+        3 => (7u32, 9u32),
+        4 => (10u32, 12u32),
+        _ => unreachable!(),
+    };
+    let first = NaiveDate::from_ymd_opt(year, start_month, 1).unwrap();
+    // Last day of end_month
+    let next_first = if end_month == 12 {
+        NaiveDate::from_ymd_opt(year + 1, 1, 1).unwrap()
+    } else {
+        NaiveDate::from_ymd_opt(year, end_month + 1, 1).unwrap()
+    };
+    let last_day = next_first - Duration::days(1);
+    DateRange {
+        start: Utc
+            .from_utc_datetime(&first.and_hms_opt(0, 0, 0).unwrap())
+            .timestamp(),
+        end: Utc
+            .from_utc_datetime(&last_day.and_hms_opt(23, 59, 59).unwrap())
+            .timestamp(),
+    }
+}
+
 /// Extract a temporal cue from a natural-language query.
 ///
 /// Returns `None` if the query does not match any known temporal pattern.
@@ -202,6 +266,66 @@ pub fn extract_cue(query: &str, now: DateTime<Utc>) -> Option<ExtractedCue> {
             CueConfidence::High
         };
         return Some(ExtractedCue { range, confidence });
+    }
+    if let Some(caps) = RE_LAST_WEEKDAY.captures(query) {
+        let weekday_str = caps.get(1).unwrap().as_str();
+        if let Some(target) = weekday_from_str(weekday_str) {
+            return Some(ExtractedCue {
+                range: last_weekday_range(today, target),
+                confidence: CueConfidence::High,
+            });
+        }
+    }
+    if let Some(caps) = RE_N_AGO.captures(query) {
+        let n: i64 = caps.get(1).unwrap().as_str().parse().unwrap_or(1);
+        let unit = caps.get(2).unwrap().as_str().to_ascii_lowercase();
+        let days = match unit.as_str() {
+            "day" => n,
+            "week" => n * 7,
+            "month" => n * 30,
+            _ => n,
+        };
+        let point = now - Duration::days(days);
+        let start = (point - Duration::days(1)).timestamp();
+        let end = (point + Duration::days(1)).timestamp();
+        return Some(ExtractedCue {
+            range: DateRange { start, end },
+            confidence: CueConfidence::High,
+        });
+    }
+    if let Some(caps) = RE_QUARTER.captures(query) {
+        let q_str = caps.get(1).unwrap().as_str();
+        let year: i32 = caps.get(2).unwrap().as_str().parse().unwrap_or(2000);
+        let q: u32 = q_str[1..].parse().unwrap_or(1);
+        return Some(ExtractedCue {
+            range: quarter_range(q, year),
+            confidence: CueConfidence::High,
+        });
+    }
+    if let Some(caps) = RE_SINCE.captures(query) {
+        let year: i32 = caps.get(1).unwrap().as_str().parse().unwrap_or(2000);
+        let first = NaiveDate::from_ymd_opt(year, 1, 1).unwrap();
+        let start = Utc
+            .from_utc_datetime(&first.and_hms_opt(0, 0, 0).unwrap())
+            .timestamp();
+        return Some(ExtractedCue {
+            range: DateRange {
+                start,
+                end: now.timestamp(),
+            },
+            confidence: CueConfidence::High,
+        });
+    }
+    if let Some(caps) = RE_BEFORE.captures(query) {
+        let year: i32 = caps.get(1).unwrap().as_str().parse().unwrap_or(2000);
+        let last = NaiveDate::from_ymd_opt(year - 1, 12, 31).unwrap();
+        let end = Utc
+            .from_utc_datetime(&last.and_hms_opt(23, 59, 59).unwrap())
+            .timestamp();
+        return Some(ExtractedCue {
+            range: DateRange { start: 0, end },
+            confidence: CueConfidence::High,
+        });
     }
     None
 }
@@ -295,5 +419,61 @@ mod tests {
         let now = "2026-05-01T12:00:00Z".parse::<DateTime<Utc>>().unwrap();
         let cue = extract_cue("notes from last month", now).expect("should extract");
         assert_eq!(cue.confidence, CueConfidence::Low);
+    }
+
+    #[test]
+    fn last_tuesday_extracts_most_recent_past_tuesday() {
+        let now = "2026-05-27T12:00:00Z".parse::<DateTime<Utc>>().unwrap(); // Wed
+        let cue = extract_cue("notes from last tuesday", now).expect("extract");
+        assert_eq!(cue.confidence, CueConfidence::High);
+        // 2026-05-26 = Tuesday
+        let expected_start = "2026-05-26T00:00:00Z"
+            .parse::<DateTime<Utc>>()
+            .unwrap()
+            .timestamp();
+        assert_eq!(cue.range.start, expected_start);
+    }
+
+    #[test]
+    fn three_weeks_ago_is_point_with_plus_minus_one_day() {
+        let now = "2026-05-27T00:00:00Z".parse::<DateTime<Utc>>().unwrap();
+        let cue = extract_cue("3 weeks ago", now).expect("extract");
+        // ~2026-05-06; +/- 1 day window
+        assert!(cue.range.end - cue.range.start >= 2 * 86400);
+    }
+
+    #[test]
+    fn quarter_pattern_q2_2024() {
+        let now = Utc::now();
+        let cue = extract_cue("in Q2 2024", now).expect("extract");
+        let q2_start = "2024-04-01T00:00:00Z"
+            .parse::<DateTime<Utc>>()
+            .unwrap()
+            .timestamp();
+        let q2_end = "2024-06-30T23:59:59Z"
+            .parse::<DateTime<Utc>>()
+            .unwrap()
+            .timestamp();
+        assert_eq!(cue.range.start, q2_start);
+        assert_eq!(cue.range.end, q2_end);
+    }
+
+    #[test]
+    fn since_year_is_halfbound_capped_at_now() {
+        let now = "2026-05-27T00:00:00Z".parse::<DateTime<Utc>>().unwrap();
+        let cue = extract_cue("notes since 2024", now).expect("extract");
+        let y2024 = "2024-01-01T00:00:00Z"
+            .parse::<DateTime<Utc>>()
+            .unwrap()
+            .timestamp();
+        assert_eq!(cue.range.start, y2024);
+        assert_eq!(cue.range.end, now.timestamp());
+    }
+
+    #[test]
+    fn malformed_range_does_not_panic() {
+        let now = Utc::now();
+        // Implementation may return None OR a valid range; must not panic.
+        let _ = extract_cue("from March to January", now);
     }
 }
