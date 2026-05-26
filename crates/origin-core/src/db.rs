@@ -30380,7 +30380,10 @@ pub(crate) mod tests {
                 names.push(row.get::<String>(0).unwrap());
             }
             names.sort();
-            assert_eq!(names, vec!["event_date".to_string(), "event_end".to_string()]);
+            assert_eq!(
+                names,
+                vec!["event_date".to_string(), "event_end".to_string()]
+            );
 
             let mut rows = conn
                 .query("SELECT name FROM sqlite_master WHERE type='index' AND tbl_name='memories' AND name IN ('idx_memories_event_date', 'idx_memories_entity_event')", ())
@@ -30393,7 +30396,10 @@ pub(crate) mod tests {
             idx_names.sort();
             assert_eq!(
                 idx_names,
-                vec!["idx_memories_entity_event".to_string(), "idx_memories_event_date".to_string()]
+                vec![
+                    "idx_memories_entity_event".to_string(),
+                    "idx_memories_event_date".to_string()
+                ]
             );
         }
     }
