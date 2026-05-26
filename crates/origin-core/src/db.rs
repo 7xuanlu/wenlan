@@ -10113,13 +10113,16 @@ impl MemoryDB {
         Fut: std::future::Future<Output = Result<Vec<String>, OriginError>>,
     {
         let mut processed = 0usize;
-        let mut offset = 0usize;
         loop {
             // Collect a batch of (source_id, content) pairs where the memory has
             // no entity linkage. We check both the legacy `entity_id` column
             // (NULL) and the junction table (no row) to handle memories that may
             // have been written before the migration that introduced
             // `memory_entities`.
+            //
+            // No OFFSET: as each batch links rows they are removed from the
+            // WHERE filter, so the next LIMIT ? query naturally picks up the
+            // next unlinked batch without offset drift.
             let pairs: Vec<(String, String)> = {
                 let conn = self.conn.lock().await;
                 let mut rows = conn
@@ -10129,8 +10132,8 @@ impl MemoryDB {
                            AND entity_id IS NULL \
                            AND source_id NOT IN (SELECT memory_id FROM memory_entities) \
                          ORDER BY source_id \
-                         LIMIT ?1 OFFSET ?2",
-                        libsql::params![batch_size as i64, offset as i64],
+                         LIMIT ?1",
+                        libsql::params![batch_size as i64],
                     )
                     .await
                     .map_err(|e| {
@@ -10181,7 +10184,7 @@ impl MemoryDB {
                 // Last (partial) batch — done.
                 break;
             }
-            offset += batch_size;
+            // No `offset +=`: natural filter shrinkage handles next iteration.
         }
         Ok(processed)
     }
@@ -31408,5 +31411,42 @@ pub(crate) mod tests {
             .expect("sweep on empty db");
 
         assert_eq!(processed, 0);
+    }
+
+    #[tokio::test]
+    async fn test_enrichment_sweep_processes_all_rows_across_batches() {
+        // batch_size < total exercises the "filter shrinks each iter" path.
+        // The old OFFSET bug caused ~half the rows to be silently skipped.
+        let (db, _dir) = test_db().await;
+        {
+            let conn = db.conn.lock().await;
+            conn.execute(
+                "INSERT INTO entities (id, name, entity_type, created_at, updated_at) \
+                 VALUES ('ent_u', 'U', 'Topic', 0, 0)",
+                (),
+            )
+            .await
+            .unwrap();
+            for i in 0..5usize {
+                let cid = format!("c_b_{i}");
+                let sid = format!("mem_b_{i}");
+                conn.execute(
+                    "INSERT INTO memories \
+                     (id, content, source, source_id, title, chunk_index, last_modified, chunk_type) \
+                     VALUES (?1, '', 'memory', ?2, '', 0, 0, 'text')",
+                    libsql::params![cid, sid],
+                )
+                .await
+                .unwrap();
+            }
+        }
+        let processed = db
+            .run_enrichment_sweep(
+                |_| async move { Ok(vec!["ent_u".to_string()]) },
+                2, // batch_size=2 < 5 total; exercises multi-batch iteration
+            )
+            .await
+            .expect("sweep");
+        assert_eq!(processed, 5, "should process all 5 rows across batches");
     }
 }
