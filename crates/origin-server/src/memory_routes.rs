@@ -836,12 +836,15 @@ pub async fn handle_store_memory(
                     .await
                     {
                         Ok(Ok(output)) => {
-                            let (fields, cue) =
+                            let extracted =
                                 origin_core::llm_provider::parse_extraction_response(&output);
-                            if let Some(f) = fields {
+                            let event_date = extracted.event_date;
+                            let event_end = extracted.event_end;
+                            let _ = (event_date, event_end);
+                            if let Some(f) = extracted.structured_fields {
                                 final_structured_fields = Some(f);
                             }
-                            if let Some(c) = cue {
+                            if let Some(c) = extracted.retrieval_cue {
                                 final_retrieval_cue = Some(c);
                             }
                         }
