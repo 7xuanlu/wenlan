@@ -2,6 +2,9 @@
 ///
 /// stability tier: "new" (0.3) | "learned" (0.7) | "confirmed" (1.0) | other (0.5).
 /// confirmed flag halves the tier when false.
+// Plan B wires these signals into the composite scorer. Until then the module
+// is pub(crate) only and the functions are unused outside their own tests.
+#[allow(dead_code)]
 pub fn trust(confirmed: bool, stability: &str) -> f64 {
     let s = match stability {
         "confirmed" => 1.0,
@@ -19,6 +22,7 @@ pub fn trust(confirmed: bool, stability: &str) -> f64 {
 /// Exponential decay over time. Returns value in (0, 1].
 ///
 /// dt_days >= 0; the function clamps negatives to 0.
+#[allow(dead_code)]
 pub fn recency_decay(last_modified: i64, now: i64, tau_days: f64) -> f64 {
     let dt_days = (now - last_modified).max(0) as f64 / 86400.0;
     (-dt_days / tau_days).exp()
@@ -27,6 +31,7 @@ pub fn recency_decay(last_modified: i64, now: i64, tau_days: f64) -> f64 {
 /// Log-normalized access frequency.
 ///
 /// Returns ln(count + 1). Bounded growth: count=0 → 0, count=10 → ~2.4, count=100 → ~4.6.
+#[allow(dead_code)]
 pub fn access_frequency(access_count: u64) -> f64 {
     ((access_count as f64) + 1.0).ln()
 }
@@ -36,6 +41,7 @@ pub fn access_frequency(access_count: u64) -> f64 {
 /// Returns 0.0 when event_date is None. When Some, returns
 /// exp(-(dt_days^2) / (2 * sigma_days^2)) where dt_days is the absolute difference
 /// between query_date and event_date in days.
+#[allow(dead_code)]
 pub fn temporal_proximity(query_date: i64, event_date: Option<i64>, sigma_days: f64) -> f64 {
     match event_date {
         None => 0.0,
