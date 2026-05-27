@@ -32693,4 +32693,95 @@ pub(crate) mod tests {
             );
         }
     }
+
+    // ==================== Task 16: degenerate-signal renormalization yields valid ranking ====================
+
+    #[tokio::test]
+    async fn test_search_composite_renormalize_on_degenerate() {
+        // Guard against races with tests that flip ORIGIN_USE_LEGACY_SEARCH.
+        let _guard = LEGACY_SEARCH_ENV_LOCK
+            .get_or_init(|| tokio::sync::Mutex::new(()))
+            .lock()
+            .await;
+        std::env::remove_var("ORIGIN_USE_LEGACY_SEARCH");
+
+        let (db, _dir) = test_db().await;
+        let now_ts = chrono::Utc::now().timestamp();
+
+        // Seed memories with NO entity_id, NO event_date, all with embeddings.
+        // Graph signals (graph_distance, activation) will be 0 for all.
+        // Temporal signal will also be 0 (no event_date).
+        // Remaining active signals: semantic, BM25, trust, recency, access_frequency.
+        // compose() must renormalize on those and still return valid scores > 0.
+        let texts = vec![
+            (
+                "mem_degen_1",
+                "software engineering principles clean architecture",
+            ),
+            (
+                "mem_degen_2",
+                "software design patterns dependency injection",
+            ),
+            ("mem_degen_3", "refactoring legacy code base iteratively"),
+        ];
+
+        for (sid, text) in &texts {
+            let emb = db.embed_query(text).expect("embed");
+            let vec_sql = MemoryDB::vec_to_sql_pub(&emb);
+            let cid = format!("c_{sid}");
+            let conn = db.conn.lock().await;
+            conn.execute(
+                &format!(
+                    "INSERT INTO memories (id, source, source_id, title, content,
+                                           chunk_index, last_modified, chunk_type, embedding)
+                     VALUES ('{cid}', 'memory', '{sid}', ?1, ?1,
+                             0, {now_ts}, 'text', vector32('{vec_sql}'))"
+                ),
+                vec![
+                    libsql::Value::Text(text.to_string()),
+                    libsql::Value::Text(text.to_string()),
+                ],
+            )
+            .await
+            .expect("insert memory");
+        }
+
+        // Query with no entity token and no temporal cue → degenerate graph + temporal signals.
+        let results = db
+            .search_memory(
+                "software design principles",
+                5,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+            )
+            .await
+            .expect("composite search must not error on degenerate signals");
+
+        // Results must be non-empty (compose() renormalizes active signals).
+        assert!(
+            !results.is_empty(),
+            "composite must return results even with degenerate graph/temporal signals"
+        );
+
+        // Top-1 score must be > 0 (renormalization produced valid output).
+        assert!(
+            results[0].score > 0.0,
+            "top-1 score must be > 0 after renormalization; got {}",
+            results[0].score
+        );
+
+        // All scores must be finite and non-negative.
+        for r in &results {
+            assert!(
+                r.score.is_finite() && r.score >= 0.0,
+                "all scores must be finite and non-negative; got {} for {}",
+                r.score,
+                r.source_id
+            );
+        }
+    }
 }
