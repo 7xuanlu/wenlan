@@ -32510,4 +32510,187 @@ pub(crate) mod tests {
             ids
         );
     }
+
+    // ==================== Task 15: composite legacy flag returns 3-channel RRF ====================
+
+    #[tokio::test]
+    async fn test_search_composite_legacy_flag() {
+        // Guard: env-var tests cannot race.
+        let _guard = LEGACY_SEARCH_ENV_LOCK
+            .get_or_init(|| tokio::sync::Mutex::new(()))
+            .lock()
+            .await;
+
+        let (db, _dir) = test_db().await;
+        let now_ts = chrono::Utc::now().timestamp();
+
+        // Seed three memories:
+        //  L_vec_only: strong semantic match to query, no entity link, no event_date
+        //  L_fts_only: strong BM25 match (distinctive rare keyword), no embedding
+        //  L_entity: weak semantic match but linked to an entity matching query token
+        //
+        // In legacy RRF: L_vec_only ranks top (strong semantic), L_fts_only second
+        // (FTS match), L_entity has no semantic advantage → ranks last.
+        //
+        // In composite: L_entity gets graph_distance=0 + activation=1.0 bonus that
+        // could push it above L_vec_only. This test verifies LEGACY path ordering.
+
+        // L_vec_only: very similar text to query "memory storage recall"
+        let vec_text = "memory storage recall systems for knowledge retrieval";
+        let emb_v = db.embed_query(vec_text).expect("embed vec");
+        let vec_v = MemoryDB::vec_to_sql_pub(&emb_v);
+
+        // L_fts_only: distinctive rare keyword xylophone for FTS match; no embedding
+        let fts_text = "xylophone percussion instrument music note recall";
+        // Insert with NULL embedding so it won't score in vector channel
+        // but will score in FTS channel.
+
+        // L_entity: weaker semantic text, but linked to entity matching query token
+        let ent_text = "general information about organizing notes";
+        let emb_e = db.embed_query(ent_text).expect("embed entity");
+        let vec_e = MemoryDB::vec_to_sql_pub(&emb_e);
+
+        {
+            let conn = db.conn.lock().await;
+
+            // Insert entity "memory" to match query token
+            conn.execute(
+                "INSERT INTO entities (id, name, entity_type, created_at, updated_at)
+                 VALUES ('ent_legacy_mem', 'memory', 'topic', 0, 0)",
+                (),
+            )
+            .await
+            .expect("insert entity");
+
+            // L_vec_only
+            conn.execute(
+                &format!(
+                    "INSERT INTO memories (id, source, source_id, title, content,
+                                           chunk_index, last_modified, chunk_type, embedding)
+                     VALUES ('c_lv', 'memory', 'mem_leg_vec', 'Vec', ?1,
+                             0, {now_ts}, 'text', vector32('{vec_v}'))"
+                ),
+                vec![libsql::Value::Text(vec_text.to_string())],
+            )
+            .await
+            .expect("insert L_vec_only");
+
+            // L_fts_only: NULL embedding
+            conn.execute(
+                &format!(
+                    "INSERT INTO memories (id, source, source_id, title, content,
+                                           chunk_index, last_modified, chunk_type)
+                     VALUES ('c_lf', 'memory', 'mem_leg_fts', 'FTS', ?1,
+                             0, {now_ts}, 'text')"
+                ),
+                vec![libsql::Value::Text(fts_text.to_string())],
+            )
+            .await
+            .expect("insert L_fts_only");
+
+            // L_entity: weak semantic text, linked to entity
+            conn.execute(
+                &format!(
+                    "INSERT INTO memories (id, source, source_id, title, content,
+                                           chunk_index, last_modified, chunk_type, embedding)
+                     VALUES ('c_le', 'memory', 'mem_leg_ent', 'Ent', ?1,
+                             0, {now_ts}, 'text', vector32('{vec_e}'))"
+                ),
+                vec![libsql::Value::Text(ent_text.to_string())],
+            )
+            .await
+            .expect("insert L_entity");
+
+            // Link L_entity to entity
+            conn.execute(
+                "INSERT INTO memory_entities (memory_id, entity_id)
+                 VALUES ('mem_leg_ent', 'ent_legacy_mem')",
+                (),
+            )
+            .await
+            .expect("link entity");
+        }
+
+        // Run LEGACY search
+        std::env::set_var("ORIGIN_USE_LEGACY_SEARCH", "1");
+        let legacy_results = db
+            .search_memory(
+                "memory storage recall",
+                10,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+            )
+            .await
+            .expect("legacy search must not error");
+        std::env::remove_var("ORIGIN_USE_LEGACY_SEARCH");
+
+        // Run COMPOSITE search
+        let composite_results = db
+            .search_memory(
+                "memory storage recall",
+                10,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+            )
+            .await
+            .expect("composite search must not error");
+
+        // Legacy path must return results
+        assert!(
+            !legacy_results.is_empty(),
+            "legacy search must return results"
+        );
+
+        // L_vec_only (strong semantic match) must appear in legacy results
+        let legacy_ids: Vec<&str> = legacy_results
+            .iter()
+            .map(|r| r.source_id.as_str())
+            .collect();
+        assert!(
+            legacy_ids.contains(&"mem_leg_vec"),
+            "mem_leg_vec must appear in legacy results; got: {:?}",
+            legacy_ids
+        );
+
+        // Composite results must also exist
+        assert!(
+            !composite_results.is_empty(),
+            "composite search must return results"
+        );
+
+        // Key distinction: composite gives entity-linked memory a graph bonus.
+        // L_vec_only in legacy should be ≥ rank of L_entity (no graph bonus in legacy).
+        // In composite, L_entity MAY outrank L_vec_only due to graph signal.
+        // Assert that legacy ordering is purely score-based (no graph boost for entity).
+        let leg_vec_pos = legacy_results
+            .iter()
+            .position(|r| r.source_id == "mem_leg_vec");
+        let leg_ent_pos = legacy_results
+            .iter()
+            .position(|r| r.source_id == "mem_leg_ent");
+
+        // Both should appear
+        assert!(
+            leg_vec_pos.is_some(),
+            "mem_leg_vec must appear in legacy results"
+        );
+
+        if let (Some(vp), Some(ep)) = (leg_vec_pos, leg_ent_pos) {
+            // In legacy, the semantically stronger memory must rank >= entity-linked one.
+            // The entity-linked memory has weaker semantic similarity to the query.
+            assert!(
+                vp <= ep,
+                "legacy: mem_leg_vec (strong semantic) must rank before mem_leg_ent \
+                 (entity-linked, weak semantic); vec_pos={vp} ent_pos={ep}"
+            );
+        }
+    }
 }
