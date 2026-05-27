@@ -2,6 +2,7 @@
 //! TuningConfig — intelligence-affecting numeric parameters loaded from TOML.
 //! Serde defaults match the current hardcoded values exactly.
 
+use crate::error::OriginError;
 use serde::Deserialize;
 use std::path::{Path, PathBuf};
 
@@ -163,6 +164,126 @@ fn d_168_u64() -> u64 {
     168
 }
 
+// ---- RetrievalConfig ----
+
+#[derive(Debug, Clone, serde::Serialize, Deserialize)]
+pub struct CompositeWeights {
+    pub semantic: f64,
+    pub bm25: f64,
+    pub graph_distance: f64,
+    pub activation: f64,
+    pub temporal: f64,
+    pub trust: f64,
+    pub recency: f64,
+    pub access_frequency: f64,
+}
+
+impl Default for CompositeWeights {
+    fn default() -> Self {
+        Self {
+            semantic: 0.27,
+            bm25: 0.11,
+            graph_distance: 0.16,
+            activation: 0.16,
+            temporal: 0.11,
+            trust: 0.07,
+            recency: 0.07,
+            access_frequency: 0.05,
+        }
+    }
+}
+
+fn default_graph_depth() -> u8 {
+    2
+}
+fn default_activation_decay() -> f64 {
+    0.5
+}
+fn default_activation_threshold() -> f64 {
+    0.1
+}
+fn default_activation_max_iter() -> u8 {
+    3
+}
+fn default_temporal_sigma_days() -> f64 {
+    30.0
+}
+fn default_recency_tau_days() -> f64 {
+    30.0
+}
+fn default_pool_size_multiplier() -> usize {
+    5
+}
+fn default_pool_size_floor() -> usize {
+    100
+}
+fn default_pool_size_cap() -> usize {
+    500
+}
+
+#[derive(Debug, Clone, serde::Serialize, Deserialize)]
+pub struct RetrievalConfig {
+    #[serde(default)]
+    pub composite_weights: CompositeWeights,
+    #[serde(default = "default_graph_depth")]
+    pub graph_depth: u8,
+    #[serde(default = "default_activation_decay")]
+    pub activation_decay: f64,
+    #[serde(default = "default_activation_threshold")]
+    pub activation_threshold: f64,
+    #[serde(default = "default_activation_max_iter")]
+    pub activation_max_iter: u8,
+    #[serde(default = "default_temporal_sigma_days")]
+    pub temporal_sigma_days: f64,
+    #[serde(default = "default_recency_tau_days")]
+    pub recency_decay_tau_days: f64,
+    #[serde(default = "default_pool_size_multiplier")]
+    pub pool_size_multiplier: usize,
+    #[serde(default = "default_pool_size_floor")]
+    pub pool_size_floor: usize,
+    #[serde(default = "default_pool_size_cap")]
+    pub pool_size_cap: usize,
+}
+
+impl Default for RetrievalConfig {
+    fn default() -> Self {
+        Self {
+            composite_weights: CompositeWeights::default(),
+            graph_depth: default_graph_depth(),
+            activation_decay: default_activation_decay(),
+            activation_threshold: default_activation_threshold(),
+            activation_max_iter: default_activation_max_iter(),
+            temporal_sigma_days: default_temporal_sigma_days(),
+            recency_decay_tau_days: default_recency_tau_days(),
+            pool_size_multiplier: default_pool_size_multiplier(),
+            pool_size_floor: default_pool_size_floor(),
+            pool_size_cap: default_pool_size_cap(),
+        }
+    }
+}
+
+impl RetrievalConfig {
+    pub fn validate(&self) -> Result<(), OriginError> {
+        let w = &self.composite_weights;
+        let sum = w.semantic
+            + w.bm25
+            + w.graph_distance
+            + w.activation
+            + w.temporal
+            + w.trust
+            + w.recency
+            + w.access_frequency;
+        if (sum - 1.0).abs() > 1e-6 {
+            return Err(OriginError::Validation(format!(
+                "composite_weights sum must be 1.0, got {sum}"
+            )));
+        }
+        Ok(())
+    }
+}
+
+// ---- TuningConfig ----
+
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(default)]
 pub struct TuningConfig {
@@ -179,6 +300,8 @@ pub struct TuningConfig {
     pub distillation: DistillationConfig,
     #[serde(default)]
     pub gate: GateConfig,
+    #[serde(default)]
+    pub retrieval: RetrievalConfig,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -782,5 +905,36 @@ score_threshold = 0.25
     fn distillation_config_default_concept_min_overlap() {
         let cfg = DistillationConfig::default();
         assert_eq!(cfg.page_min_overlap, 2);
+    }
+
+    #[test]
+    fn retrieval_config_defaults_sum_weights_to_one() {
+        let cfg = RetrievalConfig::default();
+        let sum = cfg.composite_weights.semantic
+            + cfg.composite_weights.bm25
+            + cfg.composite_weights.graph_distance
+            + cfg.composite_weights.activation
+            + cfg.composite_weights.temporal
+            + cfg.composite_weights.trust
+            + cfg.composite_weights.recency
+            + cfg.composite_weights.access_frequency;
+        assert!((sum - 1.0).abs() < 1e-6, "weights sum = {sum}");
+
+        assert_eq!(cfg.graph_depth, 2);
+        assert!((cfg.activation_decay - 0.5).abs() < 1e-9);
+        assert!((cfg.activation_threshold - 0.1).abs() < 1e-9);
+        assert_eq!(cfg.activation_max_iter, 3);
+        assert!((cfg.temporal_sigma_days - 30.0).abs() < 1e-9);
+        assert!((cfg.recency_decay_tau_days - 30.0).abs() < 1e-9);
+        assert_eq!(cfg.pool_size_multiplier, 5);
+        assert_eq!(cfg.pool_size_floor, 100);
+        assert_eq!(cfg.pool_size_cap, 500);
+    }
+
+    #[test]
+    fn retrieval_config_validate_rejects_off_weights() {
+        let mut cfg = RetrievalConfig::default();
+        cfg.composite_weights.semantic = 0.5; // breaks sum-to-1
+        assert!(cfg.validate().is_err());
     }
 }

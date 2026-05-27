@@ -239,6 +239,33 @@ pub fn category_name(cat: u8) -> &'static str {
     }
 }
 
+/// Build a `CaseResult` for one LoCoMo QA pair. Metrics not computed by the
+/// LoCoMo runner (map_at_10, precision_at_3, negatives) are zero-filled.
+#[allow(clippy::too_many_arguments)]
+fn build_locomo_case_result(
+    question: &str,
+    category: u8,
+    ndcg_5: f64,
+    ndcg_10: f64,
+    mrr_val: f64,
+    recall_5: f64,
+    hr_1: f64,
+) -> crate::eval::report::CaseResult {
+    crate::eval::report::CaseResult {
+        query: question.to_string(),
+        ndcg_at_10: ndcg_10,
+        ndcg_at_5: ndcg_5,
+        map_at_10: 0.0,
+        mrr: mrr_val,
+        recall_at_5: recall_5,
+        hit_rate_at_1: hr_1,
+        precision_at_3: 0.0,
+        negative_leakage: 0,
+        neg_above_relevant: 0,
+        category: Some(category_name(category).to_string()),
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Benchmark result structs
 // ---------------------------------------------------------------------------
@@ -298,6 +325,10 @@ pub struct LocomoReport {
     /// Run environment capture (schema v1).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub env: Option<crate::eval::report::ReportEnv>,
+    /// Per-question results for paired comparison (McNemar etc.).
+    /// Populated by each runner variant; empty by default for back-compat.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub per_case: Vec<crate::eval::report::CaseResult>,
 }
 
 impl LocomoReport {
@@ -470,7 +501,7 @@ impl LocomoReport {
             temporal_ordering_correct: 0,
             temporal_ordering_rate: None,
             baseline: None,
-            per_case: Vec::new(),
+            per_case: self.per_case.clone(),
             env: self.env.clone(),
             latency: None,
             total_scenarios: self.conversations.len(),
@@ -559,6 +590,7 @@ pub async fn run_locomo_eval(path: &Path) -> Result<LocomoReport, OriginError> {
     let mut conversations = Vec::new();
     // (category, ndcg_5, ndcg_10, mrr, recall_5, hit_rate_1)
     let mut all_scores: Vec<(u8, f64, f64, f64, f64, f64)> = Vec::new();
+    let mut per_case: Vec<crate::eval::report::CaseResult> = Vec::new();
 
     for sample in &samples {
         let memories = extract_observations(sample);
@@ -636,6 +668,15 @@ pub async fn run_locomo_eval(path: &Path) -> Result<LocomoReport, OriginError> {
 
             conv_scores.push((qa.category, ndcg_5, ndcg_10, mrr_val, recall_5, hr_1));
             all_scores.push((qa.category, ndcg_5, ndcg_10, mrr_val, recall_5, hr_1));
+            per_case.push(build_locomo_case_result(
+                &qa.question,
+                qa.category,
+                ndcg_5,
+                ndcg_10,
+                mrr_val,
+                recall_5,
+                hr_1,
+            ));
         }
 
         // Per-category for this conversation
@@ -674,6 +715,7 @@ pub async fn run_locomo_eval(path: &Path) -> Result<LocomoReport, OriginError> {
         qa_accuracy: None,
         baseline: None,
         env: None,
+        per_case,
     };
     report.env = Some(build_locomo_env(
         "base",
@@ -701,6 +743,7 @@ pub async fn run_locomo_eval_reranked(
     let mut conversations = Vec::new();
     // (category, ndcg_5, ndcg_10, mrr, recall_5, hit_rate_1)
     let mut all_scores: Vec<(u8, f64, f64, f64, f64, f64)> = Vec::new();
+    let mut per_case: Vec<crate::eval::report::CaseResult> = Vec::new();
 
     for sample in &samples {
         let memories = extract_observations(sample);
@@ -778,6 +821,15 @@ pub async fn run_locomo_eval_reranked(
 
             conv_scores.push((qa.category, ndcg_5, ndcg_10, mrr_val, recall_5, hr_1));
             all_scores.push((qa.category, ndcg_5, ndcg_10, mrr_val, recall_5, hr_1));
+            per_case.push(build_locomo_case_result(
+                &qa.question,
+                qa.category,
+                ndcg_5,
+                ndcg_10,
+                mrr_val,
+                recall_5,
+                hr_1,
+            ));
         }
 
         // Per-category for this conversation
@@ -810,6 +862,7 @@ pub async fn run_locomo_eval_reranked(
         qa_accuracy: None,
         baseline: None,
         env: None,
+        per_case,
     };
     report.env = Some(build_locomo_env(
         "reranked",
@@ -840,6 +893,7 @@ pub async fn run_locomo_eval_cross_rerank(
     let mut conversations = Vec::new();
     // (category, ndcg_5, ndcg_10, mrr, recall_5, hit_rate_1)
     let mut all_scores: Vec<(u8, f64, f64, f64, f64, f64)> = Vec::new();
+    let mut per_case: Vec<crate::eval::report::CaseResult> = Vec::new();
 
     for sample in &samples {
         let memories = extract_observations(sample);
@@ -922,6 +976,15 @@ pub async fn run_locomo_eval_cross_rerank(
 
             conv_scores.push((qa.category, ndcg_5, ndcg_10, mrr_val, recall_5, hr_1));
             all_scores.push((qa.category, ndcg_5, ndcg_10, mrr_val, recall_5, hr_1));
+            per_case.push(build_locomo_case_result(
+                &qa.question,
+                qa.category,
+                ndcg_5,
+                ndcg_10,
+                mrr_val,
+                recall_5,
+                hr_1,
+            ));
         }
 
         let per_cat = aggregate_by_category(&conv_scores);
@@ -952,6 +1015,7 @@ pub async fn run_locomo_eval_cross_rerank(
         qa_accuracy: None,
         baseline: None,
         env: None,
+        per_case,
     };
     report.env = Some(build_locomo_env(
         "cross_rerank",
@@ -979,6 +1043,7 @@ pub async fn run_locomo_eval_expanded(
     let mut conversations = Vec::new();
     // (category, ndcg_5, ndcg_10, mrr, recall_5, hit_rate_1)
     let mut all_scores: Vec<(u8, f64, f64, f64, f64, f64)> = Vec::new();
+    let mut per_case: Vec<crate::eval::report::CaseResult> = Vec::new();
 
     for sample in &samples {
         let memories = extract_observations(sample);
@@ -1056,6 +1121,15 @@ pub async fn run_locomo_eval_expanded(
 
             conv_scores.push((qa.category, ndcg_5, ndcg_10, mrr_val, recall_5, hr_1));
             all_scores.push((qa.category, ndcg_5, ndcg_10, mrr_val, recall_5, hr_1));
+            per_case.push(build_locomo_case_result(
+                &qa.question,
+                qa.category,
+                ndcg_5,
+                ndcg_10,
+                mrr_val,
+                recall_5,
+                hr_1,
+            ));
         }
 
         // Per-category for this conversation
@@ -1088,6 +1162,7 @@ pub async fn run_locomo_eval_expanded(
         qa_accuracy: None,
         baseline: None,
         env: None,
+        per_case,
     };
     report.env = Some(build_locomo_env(
         "expanded",
@@ -1250,6 +1325,7 @@ pub async fn run_locomo_eval_with_gate(
     apply_locomo_limit(&mut samples);
     let mut conversations = Vec::new();
     let mut all_scores: Vec<(u8, f64, f64, f64, f64, f64)> = Vec::new();
+    let mut per_case: Vec<crate::eval::report::CaseResult> = Vec::new();
     let mut total_memories_inserted: usize = 0;
 
     let gate = match mode {
@@ -1364,6 +1440,15 @@ pub async fn run_locomo_eval_with_gate(
 
             conv_scores.push((qa.category, ndcg_5, ndcg_10, mrr_val, recall_5, hr_1));
             all_scores.push((qa.category, ndcg_5, ndcg_10, mrr_val, recall_5, hr_1));
+            per_case.push(build_locomo_case_result(
+                &qa.question,
+                qa.category,
+                ndcg_5,
+                ndcg_10,
+                mrr_val,
+                recall_5,
+                hr_1,
+            ));
         }
 
         let per_cat = aggregate_by_category(&conv_scores);
@@ -1399,6 +1484,7 @@ pub async fn run_locomo_eval_with_gate(
         qa_accuracy: None,
         baseline: None,
         env: None,
+        per_case,
     };
     report.env = Some(build_locomo_env(
         "gated",
@@ -1701,6 +1787,7 @@ mod tests {
             qa_accuracy: None,
             baseline: None,
             env: None,
+            per_case: vec![],
         };
 
         report.save_baseline(&path).unwrap();
@@ -1733,6 +1820,7 @@ mod tests {
             qa_accuracy: None,
             baseline: None,
             env: None,
+            per_case: vec![],
         };
         report.env = Some(crate::eval::report::ReportEnv {
             fixture_revision: "deadbeef".into(),
@@ -1787,6 +1875,7 @@ mod tests {
                 }],
             }),
             env: None,
+            per_case: vec![],
         };
 
         let text = report.to_terminal();

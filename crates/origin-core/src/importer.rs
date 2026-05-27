@@ -687,11 +687,11 @@ pub async fn import_phase3_store(
                 }
             }
         }
+        let mem_source_id = format!("import_{}_{}", batch_id, kg.index);
         for rel in &kg.relations {
             let from_id = entity_cache.get(&rel.from.to_lowercase()).cloned();
             let to_id = entity_cache.get(&rel.to.to_lowercase()).cloned();
             if let (Some(from), Some(to)) = (from_id, to_id) {
-                let mem_source_id = format!("import_{}_{}", batch_id, kg.index);
                 if db
                     .create_relation(
                         &from,
@@ -707,6 +707,21 @@ pub async fn import_phase3_store(
                 {
                     relations_created += 1;
                 }
+            }
+        }
+        // Link resolved entities to the memory that triggered KG extraction.
+        let entity_ids: Vec<&str> = kg
+            .entities
+            .iter()
+            .filter_map(|e| {
+                entity_cache
+                    .get(e.name.to_lowercase().as_str())
+                    .map(|s| s.as_str())
+            })
+            .collect();
+        if !entity_ids.is_empty() {
+            if let Err(e) = db.link_memory_entities(&mem_source_id, &entity_ids).await {
+                log::warn!("[importer] link_memory_entities failed for {mem_source_id}: {e}");
             }
         }
     }
@@ -1048,5 +1063,96 @@ mod tests {
         )
         .await;
         assert!(result.is_err());
+    }
+
+    // ── Task 13: Bulk import writes memory_entities junction rows ─────
+
+    #[tokio::test]
+    async fn test_import_phase3_links_memory_entities() {
+        use crate::extract::{ExtractedEntity, KgExtractionResult};
+        use std::collections::HashSet;
+
+        let (db, _dir) = crate::db::tests::test_db().await;
+
+        // Build a minimal ImportPrepared with two memories at indices 0 and 1.
+        let memories = vec![
+            ParsedMemory {
+                content: "Alice Chen is an engineer".to_string(),
+                extracted_date: None,
+                memory_type: None,
+            },
+            ParsedMemory {
+                content: "Bob Kim works at Acme Corp".to_string(),
+                extracted_date: None,
+                memory_type: None,
+            },
+        ];
+        let prepared = ImportPrepared {
+            texts: memories.iter().map(|m| m.content.clone()).collect(),
+            memories,
+            duplicates: HashSet::new(),
+        };
+
+        // Synthetic KG: memory 0 → entity "Alice Chen", memory 1 → entity "Bob Kim"
+        // Both belong to the same import so they share the same batch_id prefix,
+        // but the per-memory source_id encodes the index.
+        let kg_results = vec![
+            KgExtractionResult {
+                index: 0,
+                entities: vec![ExtractedEntity {
+                    name: "Alice Chen".to_string(),
+                    entity_type: "person".to_string(),
+                }],
+                observations: vec![],
+                relations: vec![],
+            },
+            KgExtractionResult {
+                index: 1,
+                entities: vec![ExtractedEntity {
+                    name: "Bob Kim".to_string(),
+                    entity_type: "person".to_string(),
+                }],
+                observations: vec![],
+                relations: vec![],
+            },
+        ];
+
+        let classifications = vec![
+            ClassificationResult::default(),
+            ClassificationResult::default(),
+        ];
+
+        let result = import_phase3_store(
+            &db,
+            &prepared,
+            &classifications,
+            &kg_results,
+            "test",
+            &crate::tuning::ConfidenceConfig::default(),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(result.imported, 2);
+        assert_eq!(result.entities_created, 2);
+
+        // Verify memory_entities rows exist for both memories.
+        let batch_id = &result.batch_id;
+        let conn = db.conn.lock().await;
+        for idx in [0usize, 1usize] {
+            let mem_source_id = format!("import_{}_{}", batch_id, idx);
+            let mut rows = conn
+                .query(
+                    "SELECT COUNT(*) FROM memory_entities WHERE memory_id = ?1",
+                    libsql::params![mem_source_id.as_str()],
+                )
+                .await
+                .unwrap();
+            let count: i64 = rows.next().await.unwrap().unwrap().get::<i64>(0).unwrap();
+            assert_eq!(
+                count, 1,
+                "memory_entities missing rows for source_id {mem_source_id}"
+            );
+        }
     }
 }

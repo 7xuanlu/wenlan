@@ -27,7 +27,7 @@ pub const EMBEDDING_DIM: usize = 768;
 
 /// Current DB schema version (highest `PRAGMA user_version` applied by `migrate()`).
 /// Bump this whenever a new migration lands. Used as an eval cache invalidation key.
-pub const SCHEMA_VERSION: u32 = 51;
+pub const SCHEMA_VERSION: u32 = 54;
 
 /// Shared embedder reference. Pass to [`MemoryDB::new_with_shared_embedder`] to
 /// reuse a single embedder across many `MemoryDB` instances. Created via
@@ -378,6 +378,33 @@ pub fn resolve_fastembed_cache_dir(db_path: &std::path::Path) -> Option<std::pat
     }
 
     None
+}
+
+/// How many candidates to fetch from base retrieval before cross-encoder rerank.
+///
+/// Cross-encoder reorders within the candidate set but cannot promote anything
+/// outside it. A narrow pool starves the reranker; a wider one gives it more
+/// raw material at the cost of additional vector+FTS work. Mem0's `memory-decay`
+/// path uses `top_k * 3` floored at 50.
+///
+/// Defaults preserve the pre-2026-05-25 behavior (`max(limit, 10)`) so non-eval
+/// callers see no surprise change. The eval harness flips env to sweep.
+///
+/// * `multiplier_raw` — `RERANK_POOL_MULTIPLIER` env value (default 1, rejected if 0)
+/// * `floor_raw`      — `RERANK_POOL_FLOOR` env value (default 10)
+///
+/// The final pool is `max(limit * multiplier, floor, limit)` with overflow guard.
+pub fn compute_rerank_fetch_pool(
+    limit: usize,
+    multiplier_raw: Option<&str>,
+    floor_raw: Option<&str>,
+) -> usize {
+    let multiplier: usize = multiplier_raw
+        .and_then(|s| s.parse().ok())
+        .filter(|&n: &usize| n >= 1)
+        .unwrap_or(1);
+    let floor: usize = floor_raw.and_then(|s| s.parse().ok()).unwrap_or(10);
+    limit.saturating_mul(multiplier).max(floor).max(limit)
 }
 
 /// Bigram Jaccard similarity between two strings (0.0–1.0).
@@ -816,8 +843,8 @@ CREATE TABLE IF NOT EXISTS relations (
     created_at INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_observations_entity ON observations(entity_id);
-CREATE INDEX IF NOT EXISTS idx_relations_from ON relations(from_entity);
-CREATE INDEX IF NOT EXISTS idx_relations_to ON relations(to_entity);
+CREATE INDEX IF NOT EXISTS idx_relations_from ON relations(from_entity, to_entity);
+CREATE INDEX IF NOT EXISTS idx_relations_to ON relations(to_entity, from_entity);
 
 -- User profile (single row)
 CREATE TABLE IF NOT EXISTS profiles (
@@ -4827,6 +4854,138 @@ impl MemoryDB {
                     }
                 }
             }
+
+            // Migration 52: event_date and event_end temporal columns + indexes.
+            if version < 52 {
+                let conn = self.conn.lock().await;
+                // Idempotency probe: if event_date already exists (e.g. test rolled
+                // user_version back), skip the ALTER TABLE and just bump the version.
+                let already_added: bool = {
+                    let mut rows = conn
+                        .query(
+                            "SELECT COUNT(*) FROM pragma_table_info('memories') WHERE name = 'event_date'",
+                            (),
+                        )
+                        .await
+                        .map_err(|e| OriginError::VectorDb(format!("m52 probe: {e}")))?;
+                    match rows.next().await {
+                        Ok(Some(row)) => row.get::<i64>(0).unwrap_or(0) > 0,
+                        _ => false,
+                    }
+                };
+                if already_added {
+                    conn.execute("PRAGMA user_version = 52", ())
+                        .await
+                        .map_err(|e| {
+                            OriginError::VectorDb(format!("m52 bump (already done): {e}"))
+                        })?;
+                    log::info!("[migration] Migration 52 skipped (already applied): bumped user_version to 52");
+                } else {
+                    conn.execute("BEGIN", ())
+                        .await
+                        .map_err(|e| OriginError::VectorDb(format!("m52 begin: {e}")))?;
+                    let result: Result<(), OriginError> = async {
+                        conn.execute("ALTER TABLE memories ADD COLUMN event_date INTEGER", ())
+                            .await
+                            .map_err(|e| OriginError::VectorDb(format!("m52 add event_date: {e}")))?;
+                        conn.execute("ALTER TABLE memories ADD COLUMN event_end INTEGER", ())
+                            .await
+                            .map_err(|e| OriginError::VectorDb(format!("m52 add event_end: {e}")))?;
+                        conn.execute(
+                            "CREATE INDEX IF NOT EXISTS idx_memories_event_date ON memories(event_date)",
+                            (),
+                        )
+                        .await
+                        .map_err(|e| OriginError::VectorDb(format!("m52 create idx_event_date: {e}")))?;
+                        conn.execute(
+                            "CREATE INDEX IF NOT EXISTS idx_memories_entity_event ON memories(entity_id, event_date)",
+                            (),
+                        )
+                        .await
+                        .map_err(|e| OriginError::VectorDb(format!("m52 create idx_entity_event: {e}")))?;
+                        conn.execute("PRAGMA user_version = 52", ())
+                            .await
+                            .map_err(|e| OriginError::VectorDb(format!("m52 bump: {e}")))?;
+                        Ok(())
+                    }
+                    .await;
+                    match result {
+                        Ok(()) => {
+                            conn.execute("COMMIT", ())
+                                .await
+                                .map_err(|e| OriginError::VectorDb(format!("m52 commit: {e}")))?;
+                            log::info!("[migration] Migration 52 applied: event_date + event_end columns + indexes");
+                        }
+                        Err(e) => {
+                            let _ = conn.execute("ROLLBACK", ()).await;
+                            return Err(e);
+                        }
+                    }
+                }
+            }
+
+            // Migration 53: upgrade relations traversal indexes to composite covering indexes.
+            if version < 53 {
+                let conn = self.conn.lock().await;
+                // Idempotency probe: check if idx_relations_from already covers 2 columns.
+                let already_composite: bool = {
+                    let mut rows = conn
+                        .query(
+                            "SELECT COUNT(*) FROM pragma_index_info('idx_relations_from')",
+                            (),
+                        )
+                        .await
+                        .map_err(|e| OriginError::VectorDb(format!("m53 probe: {e}")))?;
+                    match rows.next().await {
+                        Ok(Some(row)) => row.get::<i64>(0).unwrap_or(0) >= 2,
+                        _ => false,
+                    }
+                };
+                if already_composite {
+                    conn.execute("PRAGMA user_version = 53", ())
+                        .await
+                        .map_err(|e| {
+                            OriginError::VectorDb(format!("m53 bump (already done): {e}"))
+                        })?;
+                    log::info!("[migration] Migration 53 skipped (already applied): bumped user_version to 53");
+                } else {
+                    conn.execute_batch(
+                        "DROP INDEX IF EXISTS idx_relations_from;
+                         DROP INDEX IF EXISTS idx_relations_to;
+                         CREATE INDEX idx_relations_from ON relations(from_entity, to_entity);
+                         CREATE INDEX idx_relations_to ON relations(to_entity, from_entity);",
+                    )
+                    .await
+                    .map_err(|e| OriginError::VectorDb(format!("m53 reindex: {e}")))?;
+                    conn.execute("PRAGMA user_version = 53", ())
+                        .await
+                        .map_err(|e| OriginError::VectorDb(format!("m53 bump: {e}")))?;
+                    log::info!(
+                        "[migration] Migration 53 applied: relations composite traversal indexes"
+                    );
+                }
+            }
+
+            if version < 54 {
+                let conn = self.conn.lock().await;
+                conn.execute_batch(
+                    "
+                    CREATE TABLE IF NOT EXISTS memory_entities (
+                        memory_id TEXT NOT NULL,
+                        entity_id TEXT NOT NULL REFERENCES entities(id) ON DELETE CASCADE,
+                        PRIMARY KEY (memory_id, entity_id)
+                    );
+                    CREATE INDEX IF NOT EXISTS idx_memory_entities_entity_memory
+                        ON memory_entities(entity_id, memory_id);
+                    ",
+                )
+                .await
+                .map_err(|e| OriginError::VectorDb(format!("m54: {e}")))?;
+                conn.execute("PRAGMA user_version = 54", ())
+                    .await
+                    .map_err(|e| OriginError::VectorDb(format!("m54 bump: {e}")))?;
+                log::info!("[migration] Migration 54 applied: memory_entities junction table");
+            }
         }
 
         Ok(())
@@ -7227,7 +7386,13 @@ impl MemoryDB {
         source_agent: Option<&str>,
         reranker: Option<Arc<dyn crate::reranker::Reranker>>,
     ) -> Result<Vec<SearchResult>, OriginError> {
-        let fetch_pool = (limit * 2).min(10).max(limit);
+        // Pool widening before cross-encoder rerank — env-overridable.
+        // See `compute_rerank_fetch_pool` for the formula + rationale.
+        let fetch_pool = compute_rerank_fetch_pool(
+            limit,
+            std::env::var("RERANK_POOL_MULTIPLIER").ok().as_deref(),
+            std::env::var("RERANK_POOL_FLOOR").ok().as_deref(),
+        );
         let mut results = self
             .search_memory(
                 query,
@@ -9893,6 +10058,135 @@ impl MemoryDB {
         .await
         .map_err(|e| OriginError::VectorDb(format!("update_memory_entity_id: {}", e)))?;
         Ok(())
+    }
+
+    /// Write a row to `memory_entities` for each entity in `entity_ids`.
+    ///
+    /// Idempotent: `ON CONFLICT DO NOTHING` silently skips duplicates.
+    /// Transactional: inserts are wrapped in BEGIN/COMMIT.
+    pub async fn link_memory_entities(
+        &self,
+        memory_source_id: &str,
+        entity_ids: &[&str],
+    ) -> Result<(), OriginError> {
+        if entity_ids.is_empty() {
+            return Ok(());
+        }
+        let conn = self.conn.lock().await;
+        conn.execute("BEGIN", ())
+            .await
+            .map_err(|e| OriginError::VectorDb(format!("link_memory_entities BEGIN: {e}")))?;
+        for eid in entity_ids {
+            conn.execute(
+                "INSERT INTO memory_entities (memory_id, entity_id) VALUES (?1, ?2) ON CONFLICT DO NOTHING",
+                libsql::params![memory_source_id, *eid],
+            )
+            .await
+            .map_err(|e| OriginError::VectorDb(format!("link_memory_entities INSERT: {e}")))?;
+        }
+        conn.execute("COMMIT", ())
+            .await
+            .map_err(|e| OriginError::VectorDb(format!("link_memory_entities COMMIT: {e}")))?;
+        Ok(())
+    }
+
+    /// Walk memories that have no entity linkage and enrich them via `extract_fn`.
+    ///
+    /// Memories ingested while the LLM was unavailable have `entity_id IS NULL`
+    /// and no rows in `memory_entities`. This sweep processes them in batches
+    /// so the knowledge graph catches up once a provider is available.
+    ///
+    /// `extract_fn` receives the memory content and returns a list of entity ids
+    /// (already created in the DB). Use the closure form to keep `MemoryDB`
+    /// ignorant of the LLM provider — the scheduler passes a thin wrapper around
+    /// `extract_single_memory_entities`.
+    ///
+    /// Returns the count of memories processed (attempted, including any that
+    /// produced zero entities).
+    pub async fn run_enrichment_sweep<F, Fut>(
+        &self,
+        extract_fn: F,
+        batch_size: usize,
+    ) -> Result<usize, OriginError>
+    where
+        F: Fn(String) -> Fut,
+        Fut: std::future::Future<Output = Result<Vec<String>, OriginError>>,
+    {
+        let mut processed = 0usize;
+        loop {
+            // Collect a batch of (source_id, content) pairs where the memory has
+            // no entity linkage. We check both the legacy `entity_id` column
+            // (NULL) and the junction table (no row) to handle memories that may
+            // have been written before the migration that introduced
+            // `memory_entities`.
+            //
+            // No OFFSET: as each batch links rows they are removed from the
+            // WHERE filter, so the next LIMIT ? query naturally picks up the
+            // next unlinked batch without offset drift.
+            let pairs: Vec<(String, String)> = {
+                let conn = self.conn.lock().await;
+                let mut rows = conn
+                    .query(
+                        "SELECT source_id, content FROM memories \
+                         WHERE chunk_index = 0 \
+                           AND entity_id IS NULL \
+                           AND source_id NOT IN (SELECT memory_id FROM memory_entities) \
+                         ORDER BY source_id \
+                         LIMIT ?1",
+                        libsql::params![batch_size as i64],
+                    )
+                    .await
+                    .map_err(|e| {
+                        OriginError::VectorDb(format!("run_enrichment_sweep query: {e}"))
+                    })?;
+                let mut v = Vec::new();
+                while let Ok(Some(row)) = rows.next().await {
+                    let sid: String = row.get(0).unwrap_or_default();
+                    let content: String = row.get(1).unwrap_or_default();
+                    if !sid.is_empty() {
+                        v.push((sid, content));
+                    }
+                }
+                v
+            };
+
+            if pairs.is_empty() {
+                break;
+            }
+            let batch_len = pairs.len();
+
+            for (source_id, content) in pairs {
+                match extract_fn(content).await {
+                    Ok(entity_ids) if !entity_ids.is_empty() => {
+                        let refs: Vec<&str> = entity_ids.iter().map(|s| s.as_str()).collect();
+                        if let Err(e) = self.link_memory_entities(&source_id, &refs).await {
+                            log::warn!(
+                                "[enrichment_sweep] link_memory_entities failed for {source_id}: {e}"
+                            );
+                        }
+                        // Update the legacy 1-1 column to the first entity.
+                        if let Err(e) = self.update_memory_entity_id(&source_id, refs[0]).await {
+                            log::warn!(
+                                "[enrichment_sweep] update_memory_entity_id failed for {source_id}: {e}"
+                            );
+                        }
+                    }
+                    Ok(_) => {
+                        // LLM returned no entities — memory stays unlinked.
+                    }
+                    Err(e) => {
+                        log::warn!("[enrichment_sweep] extraction failed for {source_id}: {e}");
+                    }
+                }
+            }
+            processed += batch_len;
+            if batch_len < batch_size {
+                // Last (partial) batch — done.
+                break;
+            }
+            // No `offset +=`: natural filter shrinkage handles next iteration.
+        }
+        Ok(processed)
     }
 
     /// Get the entity_id for a memory (by source_id, chunk_index=0).
@@ -13901,6 +14195,8 @@ impl MemoryDB {
         supersede_mode: &str,
         structured_fields: Option<&str>,
         retrieval_cue: Option<&str>,
+        event_date: Option<i64>,
+        event_end: Option<i64>,
     ) -> Result<(), OriginError> {
         let conn = self.conn.lock().await;
         // Row-level metadata — mirrored across all chunks. `COALESCE(?, col)`
@@ -13931,6 +14227,27 @@ impl MemoryDB {
             )
             .await
             .map_err(|e| OriginError::VectorDb(format!("apply_enrichment (chunk 0): {}", e)))?;
+        }
+
+        // Temporal fields live on chunk_index=0 (the lead chunk carries the
+        // event window; multi-chunk memories should not fan them out to every
+        // chunk). `COALESCE(?, col)` preserves any value set at INSERT time.
+        if event_date.is_some() || event_end.is_some() {
+            let event_date_val: libsql::Value = event_date
+                .map(libsql::Value::Integer)
+                .unwrap_or(libsql::Value::Null);
+            let event_end_val: libsql::Value = event_end
+                .map(libsql::Value::Integer)
+                .unwrap_or(libsql::Value::Null);
+            conn.execute(
+                "UPDATE memories SET
+                    event_date = COALESCE(?1, event_date),
+                    event_end = COALESCE(?2, event_end)
+                 WHERE source_id = ?3 AND chunk_index = 0",
+                libsql::params![event_date_val, event_end_val, source_id],
+            )
+            .await
+            .map_err(|e| OriginError::VectorDb(format!("apply_enrichment (event_date): {}", e)))?;
         }
         Ok(())
     }
@@ -17697,6 +18014,183 @@ impl MemoryDB {
         )
         .await
         .map_err(|e| OriginError::VectorDb(format!("set_app_metadata: {}", e)))?;
+        Ok(())
+    }
+
+    // ==================== Migration 55 Pass A — backfill event_date ===========
+
+    /// Startup-time backfill: walk every memory where `event_date IS NULL`, apply
+    /// `temporal_query::extract_cue` over the content using `last_modified` as the
+    /// reference clock, and populate `event_date` + `event_end` when a cue matches.
+    ///
+    /// Idempotent via `app_metadata` flag `backfill_event_date_v1`.  Safe to call
+    /// on every daemon startup; the second call is a no-op after the flag is set.
+    pub async fn run_migration_55_pass_a(&self) -> Result<(), OriginError> {
+        // Idempotency probe.
+        {
+            let conn = self.conn.lock().await;
+            let mut rows = conn
+                .query(
+                    "SELECT value FROM app_metadata WHERE key = 'backfill_event_date_v1'",
+                    (),
+                )
+                .await
+                .map_err(|e| OriginError::VectorDb(format!("m55a probe: {e}")))?;
+            if rows
+                .next()
+                .await
+                .map_err(|e| OriginError::VectorDb(format!("m55a probe row: {e}")))?
+                .is_some()
+            {
+                log::info!("[migration] Migration 55 Pass A skipped (already applied)");
+                return Ok(());
+            }
+        }
+
+        // Iterate NULL event_date in batches of 100.
+        let mut offset: i64 = 0;
+        let mut scanned: usize = 0;
+        loop {
+            let batch: Vec<(String, String, i64)> = {
+                let conn = self.conn.lock().await;
+                let mut rows = conn
+                    .query(
+                        "SELECT source_id, content, last_modified
+                         FROM memories
+                         WHERE event_date IS NULL
+                         ORDER BY source_id
+                         LIMIT 100 OFFSET ?",
+                        [offset],
+                    )
+                    .await
+                    .map_err(|e| OriginError::VectorDb(format!("m55a select: {e}")))?;
+                let mut v = Vec::new();
+                while let Some(row) = rows
+                    .next()
+                    .await
+                    .map_err(|e| OriginError::VectorDb(format!("m55a row: {e}")))?
+                {
+                    v.push((
+                        row.get::<String>(0).unwrap(),
+                        row.get::<String>(1).unwrap(),
+                        row.get::<i64>(2).unwrap_or(0),
+                    ));
+                }
+                v
+            };
+            let batch_len = batch.len();
+            if batch_len == 0 {
+                break;
+            }
+
+            {
+                let conn = self.conn.lock().await;
+                conn.execute("BEGIN", ())
+                    .await
+                    .map_err(|e| OriginError::VectorDb(format!("m55a begin: {e}")))?;
+                for (sid, content, last_modified) in &batch {
+                    let now = chrono::DateTime::from_timestamp(*last_modified, 0)
+                        .unwrap_or_else(chrono::Utc::now);
+                    if let Some(cue) = crate::temporal_query::extract_cue_for_content(content, now)
+                    {
+                        conn.execute(
+                            "UPDATE memories SET event_date = ?, event_end = ? WHERE source_id = ?",
+                            libsql::params![cue.range.start, cue.range.end, sid.as_str()],
+                        )
+                        .await
+                        .map_err(|e| OriginError::VectorDb(format!("m55a update: {e}")))?;
+                    }
+                }
+                conn.execute("COMMIT", ())
+                    .await
+                    .map_err(|e| OriginError::VectorDb(format!("m55a commit: {e}")))?;
+            }
+
+            scanned += batch_len;
+            offset += 100;
+            // If the batch had fewer than 100 rows we've exhausted the cursor.
+            if batch_len < 100 {
+                break;
+            }
+        }
+
+        // Set the idempotency flag.
+        {
+            let conn = self.conn.lock().await;
+            conn.execute(
+                "INSERT OR REPLACE INTO app_metadata (key, value) VALUES ('backfill_event_date_v1', '1')",
+                (),
+            )
+            .await
+            .map_err(|e| OriginError::VectorDb(format!("m55a flag: {e}")))?;
+        }
+        log::info!(
+            "[migration] Migration 55 Pass A complete: scanned {scanned} memories for event_date backfill"
+        );
+        Ok(())
+    }
+
+    pub async fn run_migration_55_pass_b(&self) -> Result<(), OriginError> {
+        let conn = self.conn.lock().await;
+
+        // Ensure app_metadata exists (idempotent; Task 14 also ensures it).
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS app_metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL)",
+            (),
+        )
+        .await
+        .map_err(|e| OriginError::VectorDb(format!("m55b meta ensure: {e}")))?;
+
+        // Probe idempotency flag.
+        {
+            let mut rows = conn
+                .query(
+                    "SELECT value FROM app_metadata WHERE key = 'backfill_memory_entities_v1'",
+                    (),
+                )
+                .await
+                .map_err(|e| OriginError::VectorDb(format!("m55b probe: {e}")))?;
+            if rows
+                .next()
+                .await
+                .map_err(|e| OriginError::VectorDb(format!("m55b probe row: {e}")))?
+                .is_some()
+            {
+                log::info!("[migration] Migration 55 Pass B skipped (already applied)");
+                return Ok(());
+            }
+        }
+
+        // Backfill in a single statement.
+        // ON CONFLICT DO NOTHING handles duplicate (source_id, entity_id) pairs from
+        // memories with multiple chunk rows sharing the same source_id.
+        conn.execute(
+            "INSERT INTO memory_entities (memory_id, entity_id)
+             SELECT source_id, entity_id FROM memories
+             WHERE entity_id IS NOT NULL
+             ON CONFLICT DO NOTHING",
+            (),
+        )
+        .await
+        .map_err(|e| OriginError::VectorDb(format!("m55b insert: {e}")))?;
+
+        conn.execute(
+            "INSERT OR REPLACE INTO app_metadata (key, value) VALUES ('backfill_memory_entities_v1', '1')",
+            (),
+        )
+        .await
+        .map_err(|e| OriginError::VectorDb(format!("m55b flag: {e}")))?;
+
+        log::info!(
+            "[migration] Migration 55 Pass B complete: memory_entities backfilled from memories.entity_id"
+        );
+        Ok(())
+    }
+
+    /// Wires Pass A then Pass B together. Task 21 calls this from server startup.
+    pub async fn run_migration_55(&self) -> Result<(), OriginError> {
+        self.run_migration_55_pass_a().await?;
+        self.run_migration_55_pass_b().await?;
         Ok(())
     }
 
@@ -22219,6 +22713,64 @@ pub(crate) mod tests {
         assert!(!results.is_empty(), "should return results without LLM");
     }
 
+    #[test]
+    fn compute_rerank_fetch_pool_defaults_preserve_legacy() {
+        // Pre-2026-05-25 formula reduced to max(limit, 10) for typical inputs.
+        // Defaults must match so non-eval callers see no surprise behavior change.
+        assert_eq!(compute_rerank_fetch_pool(5, None, None), 10);
+        assert_eq!(compute_rerank_fetch_pool(10, None, None), 10);
+        assert_eq!(compute_rerank_fetch_pool(20, None, None), 20);
+        assert_eq!(compute_rerank_fetch_pool(100, None, None), 100);
+    }
+
+    #[test]
+    fn compute_rerank_fetch_pool_multiplier_widens() {
+        // Mem0-style 3x multiplier with default floor=10.
+        assert_eq!(compute_rerank_fetch_pool(10, Some("3"), None), 30);
+        assert_eq!(compute_rerank_fetch_pool(20, Some("3"), None), 60);
+        // limit*mult below floor → floor wins.
+        assert_eq!(compute_rerank_fetch_pool(2, Some("3"), None), 10);
+    }
+
+    #[test]
+    fn compute_rerank_fetch_pool_floor_widens() {
+        // Mem0-style floor=50 with default multiplier=1.
+        assert_eq!(compute_rerank_fetch_pool(10, None, Some("50")), 50);
+        assert_eq!(compute_rerank_fetch_pool(5, None, Some("50")), 50);
+        // limit > floor → limit wins (never truncate below requested).
+        assert_eq!(compute_rerank_fetch_pool(100, None, Some("50")), 100);
+    }
+
+    #[test]
+    fn compute_rerank_fetch_pool_combined() {
+        // Mem0 default shape: 3x + floor 50.
+        assert_eq!(compute_rerank_fetch_pool(10, Some("3"), Some("50")), 50);
+        assert_eq!(compute_rerank_fetch_pool(20, Some("3"), Some("50")), 60);
+        assert_eq!(compute_rerank_fetch_pool(100, Some("3"), Some("50")), 300);
+    }
+
+    #[test]
+    fn compute_rerank_fetch_pool_rejects_zero_multiplier() {
+        // multiplier=0 would zero the pool — fall back to default 1.
+        assert_eq!(compute_rerank_fetch_pool(10, Some("0"), None), 10);
+    }
+
+    #[test]
+    fn compute_rerank_fetch_pool_handles_bad_input() {
+        // Non-parseable env values fall back to defaults.
+        assert_eq!(compute_rerank_fetch_pool(10, Some("abc"), Some("xyz")), 10);
+        assert_eq!(compute_rerank_fetch_pool(10, Some(""), Some("")), 10);
+    }
+
+    #[test]
+    fn compute_rerank_fetch_pool_overflow_guard() {
+        // saturating_mul prevents panic on absurd multiplier.
+        assert_eq!(
+            compute_rerank_fetch_pool(usize::MAX / 2, Some("4"), None),
+            usize::MAX
+        );
+    }
+
     #[tokio::test]
     async fn test_search_memory_with_reranker_noop_passthrough() {
         let (db, _dir) = test_db().await;
@@ -23549,6 +24101,8 @@ pub(crate) mod tests {
             "hide",
             Some(r#"{"preference":"dark mode","applies_when":"editors"}"#),
             Some("What editor theme does Alice use?"),
+            None,
+            None,
         )
         .await
         .unwrap();
@@ -30196,6 +30750,173 @@ pub(crate) mod tests {
         );
     }
 
+    // ── migration 52 replay test ──────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn test_migration_52_event_date_columns() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db_path = tmp.path().join("test.db");
+
+        // First open: runs all migrations including 52.
+        let db = MemoryDB::new(&db_path, Arc::new(crate::events::NoopEmitter))
+            .await
+            .unwrap();
+
+        {
+            let conn = db.conn.lock().await;
+
+            let mut rows = conn
+                .query("SELECT name FROM pragma_table_info('memories') WHERE name IN ('event_date', 'event_end')", ())
+                .await
+                .unwrap();
+            let mut names: Vec<String> = Vec::new();
+            while let Some(row) = rows.next().await.unwrap() {
+                names.push(row.get::<String>(0).unwrap());
+            }
+            names.sort();
+            assert_eq!(
+                names,
+                vec!["event_date".to_string(), "event_end".to_string()]
+            );
+
+            let mut rows = conn
+                .query("SELECT name FROM sqlite_master WHERE type='index' AND tbl_name='memories' AND name IN ('idx_memories_event_date', 'idx_memories_entity_event')", ())
+                .await
+                .unwrap();
+            let mut idx_names: Vec<String> = Vec::new();
+            while let Some(row) = rows.next().await.unwrap() {
+                idx_names.push(row.get::<String>(0).unwrap());
+            }
+            idx_names.sort();
+            assert_eq!(
+                idx_names,
+                vec![
+                    "idx_memories_entity_event".to_string(),
+                    "idx_memories_event_date".to_string()
+                ]
+            );
+        }
+    }
+
+    // ── migration 53 replay test ──────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn test_migration_53_relations_indexes() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db_path = tmp.path().join("test.db");
+
+        // First open: runs all migrations including 53.
+        let db = MemoryDB::new(&db_path, Arc::new(crate::events::NoopEmitter))
+            .await
+            .unwrap();
+
+        {
+            let conn = db.conn.lock().await;
+
+            let mut rows = conn
+                .query("SELECT name FROM sqlite_master WHERE type='index' AND tbl_name='relations' AND name IN ('idx_relations_from', 'idx_relations_to')", ())
+                .await
+                .unwrap();
+            let mut names: Vec<String> = Vec::new();
+            while let Some(row) = rows.next().await.unwrap() {
+                names.push(row.get::<String>(0).unwrap());
+            }
+            names.sort();
+            assert_eq!(
+                names,
+                vec![
+                    "idx_relations_from".to_string(),
+                    "idx_relations_to".to_string()
+                ]
+            );
+
+            // Verify the indexes are composite (cover 2 columns each).
+            let mut rows = conn
+                .query(
+                    "SELECT COUNT(*) FROM pragma_index_info('idx_relations_from')",
+                    (),
+                )
+                .await
+                .unwrap();
+            let count: i64 = if let Some(row) = rows.next().await.unwrap() {
+                row.get::<i64>(0).unwrap_or(0)
+            } else {
+                0
+            };
+            assert_eq!(count, 2, "idx_relations_from must be composite (2 columns)");
+
+            let mut rows2 = conn
+                .query(
+                    "SELECT COUNT(*) FROM pragma_index_info('idx_relations_to')",
+                    (),
+                )
+                .await
+                .unwrap();
+            let count2: i64 = if let Some(row) = rows2.next().await.unwrap() {
+                row.get::<i64>(0).unwrap_or(0)
+            } else {
+                0
+            };
+            assert_eq!(count2, 2, "idx_relations_to must be composite (2 columns)");
+        }
+    }
+
+    #[tokio::test]
+    async fn test_migration_54_memory_entities_table() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db_path = tmp.path().join("test.db");
+        let db = MemoryDB::new(&db_path, Arc::new(crate::events::NoopEmitter))
+            .await
+            .unwrap();
+        let conn = db.conn.lock().await;
+
+        let mut rows = conn
+            .query("SELECT name FROM pragma_table_info('memory_entities')", ())
+            .await
+            .unwrap();
+        let mut cols: Vec<String> = Vec::new();
+        while let Some(row) = rows.next().await.unwrap() {
+            cols.push(row.get::<String>(0).unwrap());
+        }
+        cols.sort();
+        assert_eq!(cols, vec!["entity_id".to_string(), "memory_id".to_string()]);
+
+        let mut rows = conn
+            .query("SELECT name FROM sqlite_master WHERE type='index' AND tbl_name='memory_entities' AND name='idx_memory_entities_entity_memory'", ())
+            .await
+            .unwrap();
+        assert!(rows.next().await.unwrap().is_some());
+
+        // Seed a real entity so the second insert can succeed under FK.
+        conn.execute(
+            "INSERT INTO entities (id, name, entity_type, created_at, updated_at) VALUES ('ent_x', 'X', 'Topic', 0, 0)",
+            (),
+        )
+        .await
+        .unwrap();
+
+        // memory_id has no FK (source_id non-unique). Insert succeeds.
+        let res = conn
+            .execute(
+                "INSERT INTO memory_entities (memory_id, entity_id) VALUES ('mem_does_not_exist', 'ent_x')",
+                (),
+            )
+            .await;
+        assert!(res.is_ok(), "insert should succeed (no FK on memory_id)");
+
+        // FK on entity_id rejects a bogus entity.
+        let res = conn
+            .execute(
+                "INSERT INTO memory_entities (memory_id, entity_id) VALUES ('mem_y', 'ent_bogus')",
+                (),
+            )
+            .await;
+        assert!(
+            res.is_err(),
+            "insert should fail (FK violation on entity_id)"
+        );
+    }
+
     #[tokio::test]
     async fn reassign_memories_space_works() {
         let (db, _td) = test_db().await;
@@ -30250,6 +30971,59 @@ pub(crate) mod tests {
         assert_eq!(foo_count, 0, "foo should have 0 memories after move");
     }
 
+    /// Contract test for Task 11: `apply_enrichment` must persist
+    /// `event_date` and `event_end` to the `memories` table so the
+    /// extracted temporal fields survive the async enrichment phase.
+    #[tokio::test]
+    async fn test_store_memory_persists_event_date_and_end() {
+        let (db, _dir) = test_db().await;
+        let doc = make_memory_doc(
+            "mem_evt",
+            "Alice attended the PyCon conference from 2026-04-22 to 2026-04-23",
+            "event",
+            "work",
+            "claude",
+        );
+        db.upsert_documents(vec![doc]).await.unwrap();
+
+        // Simulates the async enrichment path that has the extracted values.
+        db.apply_enrichment(
+            "mem_evt",
+            "event",
+            None,
+            None,
+            "hide",
+            None,
+            None,
+            Some(1779667200i64), // event_date
+            Some(1779753599i64), // event_end
+        )
+        .await
+        .unwrap();
+
+        let conn = db.conn.lock().await;
+        let mut rows = conn
+            .query(
+                "SELECT event_date, event_end FROM memories WHERE source_id = 'mem_evt' LIMIT 1",
+                (),
+            )
+            .await
+            .unwrap();
+        let row = rows.next().await.unwrap().unwrap();
+        let stored_date: Option<i64> = row.get(0).unwrap();
+        let stored_end: Option<i64> = row.get(1).unwrap();
+        assert_eq!(
+            stored_date,
+            Some(1779667200i64),
+            "event_date must be persisted"
+        );
+        assert_eq!(
+            stored_end,
+            Some(1779753599i64),
+            "event_end must be persisted"
+        );
+    }
+
     #[tokio::test]
     async fn reassign_memories_space_auto_creates_dest() {
         let (db, _td) = test_db().await;
@@ -30277,5 +31051,470 @@ pub(crate) mod tests {
             "destination space 'baz' should be registered after move, got: {:?}",
             spaces.iter().map(|s| &s.name).collect::<Vec<_>>()
         );
+    }
+
+    #[tokio::test]
+    async fn test_link_memory_entities_writes_junction_rows() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db_path = tmp.path().join("test.db");
+        let db = MemoryDB::new(&db_path, Arc::new(crate::events::NoopEmitter))
+            .await
+            .unwrap();
+
+        {
+            let conn = db.conn.lock().await;
+            for id in ["ent_a", "ent_b", "ent_c"] {
+                conn.execute(
+                    "INSERT INTO entities (id, name, entity_type, created_at, updated_at) VALUES (?, 'n', 'Topic', 0, 0)",
+                    [id],
+                )
+                .await
+                .unwrap();
+            }
+        }
+
+        db.link_memory_entities("mem_x", &["ent_a", "ent_b", "ent_c"])
+            .await
+            .expect("link");
+
+        {
+            let conn = db.conn.lock().await;
+            let mut rows = conn
+                .query(
+                    "SELECT entity_id FROM memory_entities WHERE memory_id = 'mem_x' ORDER BY entity_id",
+                    (),
+                )
+                .await
+                .unwrap();
+            let mut ids: Vec<String> = Vec::new();
+            while let Some(row) = rows.next().await.unwrap() {
+                ids.push(row.get::<String>(0).unwrap());
+            }
+            assert_eq!(
+                ids,
+                vec![
+                    "ent_a".to_string(),
+                    "ent_b".to_string(),
+                    "ent_c".to_string()
+                ]
+            );
+        }
+
+        // Re-linking is idempotent.
+        db.link_memory_entities("mem_x", &["ent_a"])
+            .await
+            .expect("link again");
+    }
+
+    // ── migration 55 Pass A ───────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn test_migration_55_pass_a_backfills_event_date() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db_path = tmp.path().join("test.db");
+        let db = MemoryDB::new(&db_path, Arc::new(crate::events::NoopEmitter))
+            .await
+            .unwrap();
+
+        // Seed two memories: c1 has a calendar-explicit "in Q2 2024" cue that
+        // extract_cue_for_content matches; c2 has no temporal cue.
+        {
+            let conn = db.conn.lock().await;
+            conn.execute(
+                "INSERT INTO memories (id, content, source, source_id, title, chunk_index, last_modified, chunk_type) \
+                 VALUES ('c1', 'we shipped in Q2 2024', 'memory', 'mem_m55_1', 't', 0, 0, 'text')",
+                (),
+            )
+            .await
+            .unwrap();
+            conn.execute(
+                "INSERT INTO memories (id, content, source, source_id, title, chunk_index, last_modified, chunk_type) \
+                 VALUES ('c2', 'just a plain note with no date cue', 'memory', 'mem_m55_2', 't', 0, 0, 'text')",
+                (),
+            )
+            .await
+            .unwrap();
+        }
+
+        // First run: should complete without error.
+        db.run_migration_55_pass_a()
+            .await
+            .expect("pass A first run");
+
+        {
+            let conn = db.conn.lock().await;
+            let mut rows = conn
+                .query(
+                    "SELECT source_id, event_date FROM memories WHERE source_id IN ('mem_m55_1','mem_m55_2') ORDER BY source_id",
+                    (),
+                )
+                .await
+                .unwrap();
+            let mut got: Vec<(String, Option<i64>)> = Vec::new();
+            while let Some(row) = rows.next().await.unwrap() {
+                got.push((
+                    row.get::<String>(0).unwrap(),
+                    row.get::<Option<i64>>(1).unwrap(),
+                ));
+            }
+            // c1 has "in Q2 2024" — extract_cue_for_content returns Some; event_date must be non-NULL.
+            let m1 = got.iter().find(|(id, _)| id == "mem_m55_1").unwrap();
+            assert!(
+                m1.1.is_some(),
+                "mem_m55_1 ('in Q2 2024') must have event_date set, got None"
+            );
+            // c2 has no temporal cue — event_date stays NULL.
+            let m2 = got.iter().find(|(id, _)| id == "mem_m55_2").unwrap();
+            assert!(
+                m2.1.is_none(),
+                "mem_m55_2 (no cue) must stay NULL, got {:?}",
+                m2.1
+            );
+        }
+
+        // Second invocation must be idempotent (meta flag short-circuits).
+        db.run_migration_55_pass_a()
+            .await
+            .expect("pass A idempotent second run");
+
+        // app_metadata flag must be set.
+        {
+            let conn = db.conn.lock().await;
+            let mut rows = conn
+                .query(
+                    "SELECT value FROM app_metadata WHERE key = 'backfill_event_date_v1'",
+                    (),
+                )
+                .await
+                .unwrap();
+            let row = rows.next().await.unwrap().expect("meta flag must be set");
+            assert_eq!(row.get::<String>(0).unwrap(), "1");
+        }
+    }
+
+    #[tokio::test]
+    async fn test_pass_a_skips_query_style_cues_in_content() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db_path = tmp.path().join("test.db");
+        let db = MemoryDB::new(&db_path, Arc::new(crate::events::NoopEmitter))
+            .await
+            .unwrap();
+        {
+            let conn = db.conn.lock().await;
+            // "since 2015" is anaphoric — should NOT be backfilled.
+            conn.execute(
+                "INSERT INTO memories (id, content, source, source_id, title, chunk_index, last_modified, chunk_type) \
+                 VALUES ('cq', 'I have used Rust since 2015', 'memory', 'mem_qs', '', 0, 0, 'text')",
+                (),
+            )
+            .await
+            .unwrap();
+            // "in Q2 2024" is calendar-explicit — SHOULD be backfilled.
+            conn.execute(
+                "INSERT INTO memories (id, content, source, source_id, title, chunk_index, last_modified, chunk_type) \
+                 VALUES ('cq2', 'we shipped in Q2 2024', 'memory', 'mem_q2', '', 0, 0, 'text')",
+                (),
+            )
+            .await
+            .unwrap();
+        }
+        db.run_migration_55_pass_a().await.unwrap();
+        let conn = db.conn.lock().await;
+        let mut rows = conn
+            .query(
+                "SELECT source_id, event_date FROM memories \
+                 WHERE source_id IN ('mem_qs', 'mem_q2') \
+                 ORDER BY source_id",
+                (),
+            )
+            .await
+            .unwrap();
+        let mut got: Vec<(String, Option<i64>)> = Vec::new();
+        while let Some(row) = rows.next().await.unwrap() {
+            got.push((
+                row.get::<String>(0).unwrap(),
+                row.get::<Option<i64>>(1).unwrap(),
+            ));
+        }
+        // mem_q2 comes first alphabetically.
+        let mem_q2 = got.iter().find(|(id, _)| id == "mem_q2").unwrap();
+        let mem_qs = got.iter().find(|(id, _)| id == "mem_qs").unwrap();
+        assert!(
+            mem_q2.1.is_some(),
+            "mem_q2 (Q2 2024) must have event_date set"
+        );
+        assert!(
+            mem_qs.1.is_none(),
+            "mem_qs (since 2015) must NOT have event_date (anaphoric)"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_migration_55_pass_b_backfills_memory_entities() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db_path = tmp.path().join("test.db");
+        let db = MemoryDB::new(&db_path, Arc::new(crate::events::NoopEmitter))
+            .await
+            .unwrap();
+
+        {
+            let conn = db.conn.lock().await;
+            // Seed 2 entities.
+            for id in ["e_a", "e_b"] {
+                conn.execute(
+                    "INSERT INTO entities (id, name, entity_type, created_at, updated_at) VALUES (?, 'n', 'Topic', 0, 0)",
+                    [id],
+                )
+                .await
+                .unwrap();
+            }
+
+            // Seed 4 memories: 2 with e_a, 1 with e_b, 1 with NULL entity_id.
+            conn.execute(
+                "INSERT INTO memories (id, content, source, source_id, title, chunk_index, last_modified, chunk_type, entity_id) VALUES ('c1', '', 'memory', 'mem_pb_1', '', 0, 0, 'text', 'e_a')",
+                (),
+            )
+            .await
+            .unwrap();
+            conn.execute(
+                "INSERT INTO memories (id, content, source, source_id, title, chunk_index, last_modified, chunk_type, entity_id) VALUES ('c2', '', 'memory', 'mem_pb_2', '', 0, 0, 'text', 'e_a')",
+                (),
+            )
+            .await
+            .unwrap();
+            conn.execute(
+                "INSERT INTO memories (id, content, source, source_id, title, chunk_index, last_modified, chunk_type, entity_id) VALUES ('c3', '', 'memory', 'mem_pb_3', '', 0, 0, 'text', 'e_b')",
+                (),
+            )
+            .await
+            .unwrap();
+            conn.execute(
+                "INSERT INTO memories (id, content, source, source_id, title, chunk_index, last_modified, chunk_type, entity_id) VALUES ('c4', '', 'memory', 'mem_pb_4', '', 0, 0, 'text', NULL)",
+                (),
+            )
+            .await
+            .unwrap();
+        }
+
+        db.run_migration_55_pass_b().await.expect("pass B");
+
+        {
+            let conn = db.conn.lock().await;
+            let mut rows = conn
+                .query(
+                    "SELECT memory_id, entity_id FROM memory_entities WHERE memory_id LIKE 'mem_pb_%' ORDER BY memory_id, entity_id",
+                    (),
+                )
+                .await
+                .unwrap();
+            let mut got: Vec<(String, String)> = Vec::new();
+            while let Some(row) = rows.next().await.unwrap() {
+                got.push((row.get::<String>(0).unwrap(), row.get::<String>(1).unwrap()));
+            }
+            assert_eq!(
+                got,
+                vec![
+                    ("mem_pb_1".into(), "e_a".into()),
+                    ("mem_pb_2".into(), "e_a".into()),
+                    ("mem_pb_3".into(), "e_b".into()),
+                ]
+            );
+        }
+
+        // Idempotent re-run.
+        db.run_migration_55_pass_b().await.expect("idempotent");
+
+        // Verify the meta flag set.
+        {
+            let conn = db.conn.lock().await;
+            let mut rows = conn
+                .query(
+                    "SELECT value FROM app_metadata WHERE key = 'backfill_memory_entities_v1'",
+                    (),
+                )
+                .await
+                .unwrap();
+            let row = rows.next().await.unwrap().expect("meta flag must be set");
+            assert_eq!(row.get::<String>(0).unwrap(), "1");
+        }
+    }
+
+    // ==================== run_enrichment_sweep ====================
+
+    #[tokio::test]
+    async fn test_enrichment_sweep_processes_null_entity_id_memories() {
+        let (db, _dir) = test_db().await;
+
+        // Insert a stub entity that the sweep will "extract".
+        {
+            let conn = db.conn.lock().await;
+            conn.execute(
+                "INSERT INTO entities (id, name, entity_type, created_at, updated_at) \
+                 VALUES ('ent_universal', 'U', 'Topic', 0, 0)",
+                (),
+            )
+            .await
+            .unwrap();
+            // Insert 3 memories with no entity_id and no memory_entities rows.
+            for i in 0..3usize {
+                let cid = format!("c_sweep_{i}");
+                let sid = format!("mem_sweep_{i}");
+                conn.execute(
+                    "INSERT INTO memories \
+                     (id, content, source, source_id, title, chunk_index, last_modified, chunk_type) \
+                     VALUES (?1, 'sample content', 'memory', ?2, '', 0, 0, 'text')",
+                    libsql::params![cid, sid],
+                )
+                .await
+                .unwrap();
+            }
+        }
+
+        // Stub extract_fn: always returns the universal entity id.
+        let processed = db
+            .run_enrichment_sweep(
+                |_content: String| async move { Ok(vec!["ent_universal".to_string()]) },
+                100,
+            )
+            .await
+            .expect("sweep should succeed");
+
+        assert_eq!(processed, 3);
+
+        // Verify memory_entities rows were written.
+        {
+            let conn = db.conn.lock().await;
+            let mut rows = conn
+                .query(
+                    "SELECT memory_id FROM memory_entities \
+                     WHERE entity_id = 'ent_universal' \
+                       AND memory_id LIKE 'mem_sweep_%' \
+                     ORDER BY memory_id",
+                    (),
+                )
+                .await
+                .unwrap();
+            let mut got: Vec<String> = Vec::new();
+            while let Some(row) = rows.next().await.unwrap() {
+                got.push(row.get::<String>(0).unwrap());
+            }
+            assert_eq!(got, vec!["mem_sweep_0", "mem_sweep_1", "mem_sweep_2"]);
+        }
+
+        // Verify the legacy entity_id column was also updated.
+        {
+            let conn = db.conn.lock().await;
+            let mut rows = conn
+                .query(
+                    "SELECT entity_id FROM memories \
+                     WHERE source_id LIKE 'mem_sweep_%' \
+                     ORDER BY source_id",
+                    (),
+                )
+                .await
+                .unwrap();
+            let mut got: Vec<String> = Vec::new();
+            while let Some(row) = rows.next().await.unwrap() {
+                got.push(row.get::<String>(0).unwrap());
+            }
+            assert_eq!(got, vec!["ent_universal", "ent_universal", "ent_universal"]);
+        }
+    }
+
+    #[tokio::test]
+    async fn test_enrichment_sweep_skips_already_linked_memories() {
+        let (db, _dir) = test_db().await;
+
+        {
+            let conn = db.conn.lock().await;
+            conn.execute(
+                "INSERT INTO entities (id, name, entity_type, created_at, updated_at) \
+                 VALUES ('ent_linked', 'L', 'Topic', 0, 0)",
+                (),
+            )
+            .await
+            .unwrap();
+            // One memory already linked via entity_id.
+            conn.execute(
+                "INSERT INTO memories \
+                 (id, content, source, source_id, title, chunk_index, last_modified, chunk_type, entity_id) \
+                 VALUES ('c_linked', 'content', 'memory', 'mem_linked', '', 0, 0, 'text', 'ent_linked')",
+                (),
+            )
+            .await
+            .unwrap();
+            // One memory with entity_id NULL (should be swept).
+            conn.execute(
+                "INSERT INTO memories \
+                 (id, content, source, source_id, title, chunk_index, last_modified, chunk_type) \
+                 VALUES ('c_new', 'content', 'memory', 'mem_new', '', 0, 0, 'text')",
+                (),
+            )
+            .await
+            .unwrap();
+        }
+
+        let processed = db
+            .run_enrichment_sweep(
+                |_content: String| async move { Ok(vec!["ent_linked".to_string()]) },
+                100,
+            )
+            .await
+            .expect("sweep");
+
+        // Only the unlinked memory should be processed.
+        assert_eq!(processed, 1);
+    }
+
+    #[tokio::test]
+    async fn test_enrichment_sweep_empty_returns_zero() {
+        let (db, _dir) = test_db().await;
+
+        let processed = db
+            .run_enrichment_sweep(
+                |_content: String| async move { Ok(vec!["ent_x".to_string()]) },
+                100,
+            )
+            .await
+            .expect("sweep on empty db");
+
+        assert_eq!(processed, 0);
+    }
+
+    #[tokio::test]
+    async fn test_enrichment_sweep_processes_all_rows_across_batches() {
+        // batch_size < total exercises the "filter shrinks each iter" path.
+        // The old OFFSET bug caused ~half the rows to be silently skipped.
+        let (db, _dir) = test_db().await;
+        {
+            let conn = db.conn.lock().await;
+            conn.execute(
+                "INSERT INTO entities (id, name, entity_type, created_at, updated_at) \
+                 VALUES ('ent_u', 'U', 'Topic', 0, 0)",
+                (),
+            )
+            .await
+            .unwrap();
+            for i in 0..5usize {
+                let cid = format!("c_b_{i}");
+                let sid = format!("mem_b_{i}");
+                conn.execute(
+                    "INSERT INTO memories \
+                     (id, content, source, source_id, title, chunk_index, last_modified, chunk_type) \
+                     VALUES (?1, '', 'memory', ?2, '', 0, 0, 'text')",
+                    libsql::params![cid, sid],
+                )
+                .await
+                .unwrap();
+            }
+        }
+        let processed = db
+            .run_enrichment_sweep(
+                |_| async move { Ok(vec!["ent_u".to_string()]) },
+                2, // batch_size=2 < 5 total; exercises multi-batch iteration
+            )
+            .await
+            .expect("sweep");
+        assert_eq!(processed, 5, "should process all 5 rows across batches");
     }
 }

@@ -126,6 +126,12 @@ async fn run_daemon() -> anyhow::Result<()> {
     let db_arc = Arc::new(db);
     server_state.db = Some(db_arc.clone());
 
+    // Run migration-55 backfill (event_date regex Pass A + memory_entities Pass B)
+    // before the HTTP listener binds so no ingest races the backfill. Idempotent.
+    db_arc.run_migration_55().await.map_err(|e| {
+        anyhow::anyhow!("running migration 55 (event_date + memory_entities backfill): {e}")
+    })?;
+
     // Consolidate user-facing assets under ~/.origin/.
     // - Ensure ~/.origin/{pages, sessions, sessions/_status} exist
     // - Symlink ~/.origin/db -> <data_dir> (cosmetic alias; DB stays at

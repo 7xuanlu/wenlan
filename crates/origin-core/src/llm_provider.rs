@@ -750,35 +750,68 @@ pub fn sanitize_json_quotes(text: &str) -> String {
         .replace(['\u{2018}', '\u{2019}'], "'")
 }
 
-/// Parse LLM extraction output into structured_fields JSON string and retrieval_cue.
+/// Parsed output from an LLM extraction response.
+#[derive(Debug, Clone, Default)]
+pub struct ExtractedFields {
+    pub structured_fields: Option<String>,
+    pub retrieval_cue: Option<String>,
+    pub event_date: Option<i64>,
+    pub event_end: Option<i64>,
+}
+
+fn parse_iso_to_unix(s: &str) -> Option<i64> {
+    if let Ok(d) = chrono::NaiveDate::parse_from_str(s, "%Y-%m-%d") {
+        return Some(d.and_hms_opt(0, 0, 0).unwrap().and_utc().timestamp());
+    }
+    if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(s) {
+        return Some(dt.timestamp());
+    }
+    None
+}
+
+/// Parse LLM extraction output into an `ExtractedFields` struct.
 /// Reuses existing extract_json + sanitize_json_quotes helpers for robust LLM output parsing.
-pub fn parse_extraction_response(output: &str) -> (Option<String>, Option<String>) {
+pub fn parse_extraction_response(output: &str) -> ExtractedFields {
     let cleaned = strip_think_tags(output);
     let sanitized = sanitize_json_quotes(&cleaned);
     let json_str = match extract_json(&sanitized) {
         Some(s) => s.to_string(),
-        None => return (None, None),
+        None => return ExtractedFields::default(),
     };
-    let json: serde_json::Value = match serde_json::from_str(&json_str) {
+    let mut json: serde_json::Value = match serde_json::from_str(&json_str) {
         Ok(v) => v,
-        Err(_) => return (None, None),
+        Err(_) => return ExtractedFields::default(),
     };
 
-    let retrieval_cue = json
-        .get("retrieval_cue")
-        .and_then(|v| v.as_str())
-        .map(|s| s.to_string());
+    let obj = match json.as_object_mut() {
+        Some(o) => o,
+        None => return ExtractedFields::default(),
+    };
 
-    // Remove retrieval_cue from fields — it's stored separately
-    let mut fields = json.clone();
-    if let Some(obj) = fields.as_object_mut() {
-        obj.remove("retrieval_cue");
-        if obj.is_empty() {
-            return (None, retrieval_cue);
-        }
+    let retrieval_cue = obj
+        .remove("retrieval_cue")
+        .and_then(|v| v.as_str().map(|s| s.to_string()));
+
+    let event_date = obj
+        .remove("event_date")
+        .and_then(|v| v.as_str().and_then(parse_iso_to_unix));
+
+    let event_end = obj
+        .remove("event_end")
+        .and_then(|v| v.as_str().and_then(parse_iso_to_unix));
+
+    let structured_fields = if obj.is_empty() {
+        None
+    } else {
+        Some(serde_json::Value::Object(obj.clone()).to_string())
+    };
+
+    ExtractedFields {
+        structured_fields,
+        retrieval_cue,
+        event_date,
+        event_end,
     }
-
-    (Some(fields.to_string()), retrieval_cue)
 }
 
 /// Parse a classify JSON response from the LLM into a ClassificationResult.
@@ -1411,35 +1444,81 @@ mod tests {
     #[test]
     fn test_parse_extraction_response_valid() {
         let output = r#"{"claim": "I love Rust", "evidence": "10 years exp", "retrieval_cue": "What does the user know about Rust?"}"#;
-        let (fields, cue) = parse_extraction_response(output);
-        assert!(fields.is_some());
-        assert!(cue.is_some());
-        let fields_json: serde_json::Value = serde_json::from_str(&fields.unwrap()).unwrap();
+        let out = parse_extraction_response(output);
+        assert!(out.structured_fields.is_some());
+        assert!(out.retrieval_cue.is_some());
+        let fields_json: serde_json::Value =
+            serde_json::from_str(&out.structured_fields.unwrap()).unwrap();
         assert_eq!(fields_json["claim"], "I love Rust");
-        assert!(cue.unwrap().contains("Rust"));
+        assert!(out.retrieval_cue.unwrap().contains("Rust"));
     }
 
     #[test]
     fn test_parse_extraction_response_with_think_tags() {
         let output = "<think>reasoning</think>{\"claim\": \"test\", \"retrieval_cue\": \"q?\"}";
-        let (fields, cue) = parse_extraction_response(output);
-        assert!(fields.is_some());
-        assert!(cue.is_some());
+        let out = parse_extraction_response(output);
+        assert!(out.structured_fields.is_some());
+        assert!(out.retrieval_cue.is_some());
     }
 
     #[test]
     fn test_parse_extraction_response_invalid() {
-        let (fields, cue) = parse_extraction_response("not json at all");
-        assert!(fields.is_none());
-        assert!(cue.is_none());
+        let out = parse_extraction_response("not json at all");
+        assert!(out.structured_fields.is_none());
+        assert!(out.retrieval_cue.is_none());
     }
 
     #[test]
     fn test_parse_extraction_response_empty_fields() {
         let output = r#"{"retrieval_cue": "just a cue"}"#;
-        let (fields, cue) = parse_extraction_response(output);
-        assert!(fields.is_none()); // No actual fields, just cue
-        assert!(cue.is_some());
+        let out = parse_extraction_response(output);
+        assert!(out.structured_fields.is_none()); // No actual fields, just cue
+        assert!(out.retrieval_cue.is_some());
+    }
+
+    #[test]
+    fn parse_extraction_response_returns_extracted_fields_struct() {
+        let raw = r#"{"claim": "user prefers dark mode", "event_date": "2026-05-26", "retrieval_cue": "What does the user prefer about UI theme?"}"#;
+        let out = parse_extraction_response(raw);
+        assert_eq!(
+            out.retrieval_cue.as_deref(),
+            Some("What does the user prefer about UI theme?")
+        );
+        assert!(out
+            .structured_fields
+            .as_ref()
+            .unwrap()
+            .contains("\"claim\""));
+        // event_date should be stripped from structured_fields and parsed into its own slot.
+        assert!(!out
+            .structured_fields
+            .as_ref()
+            .unwrap()
+            .contains("event_date"));
+        let expected_ts = chrono::NaiveDate::from_ymd_opt(2026, 5, 26)
+            .unwrap()
+            .and_hms_opt(0, 0, 0)
+            .unwrap()
+            .and_utc()
+            .timestamp();
+        assert_eq!(out.event_date, Some(expected_ts));
+        assert_eq!(out.event_end, None);
+    }
+
+    #[test]
+    fn parse_extraction_response_handles_event_end() {
+        let raw = r#"{"claim": "trip lasted a week", "event_date": "2026-05-01", "event_end": "2026-05-08", "retrieval_cue": "When was the trip?"}"#;
+        let out = parse_extraction_response(raw);
+        assert!(out.event_date.is_some());
+        assert!(out.event_end.is_some());
+    }
+
+    #[test]
+    fn parse_extraction_response_missing_dates_returns_none() {
+        let raw = r#"{"claim": "user prefers dark mode", "retrieval_cue": "..."}"#;
+        let out = parse_extraction_response(raw);
+        assert_eq!(out.event_date, None);
+        assert_eq!(out.event_end, None);
     }
 
     #[test]

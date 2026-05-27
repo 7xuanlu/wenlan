@@ -250,6 +250,7 @@ pub async fn run_eval(
                 precision_at_3: 0.0,
                 negative_leakage: 0,
                 neg_above_relevant: 0,
+                category: None,
             });
             continue;
         }
@@ -336,6 +337,7 @@ pub async fn run_eval(
             precision_at_3: case_p3,
             negative_leakage: case_neg,
             neg_above_relevant: case_neg_above,
+            category: None,
         });
     }
 

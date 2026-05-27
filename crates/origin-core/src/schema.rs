@@ -17,26 +17,37 @@ impl MemorySchema {
             "identity" => Self {
                 memory_type: "identity".into(),
                 required: vec!["claim"],
-                optional: vec!["evidence", "since"],
+                optional: vec!["evidence", "since", "event_date", "event_end"],
                 retrieval_cue_template: "Who is the user in terms of {claim}?".into(),
             },
             "preference" => Self {
                 memory_type: "preference".into(),
                 required: vec!["preference", "applies_when"],
-                optional: vec!["strength", "alternatives_rejected"],
+                optional: vec![
+                    "strength",
+                    "alternatives_rejected",
+                    "event_date",
+                    "event_end",
+                ],
                 retrieval_cue_template: "What does the user prefer regarding {preference}?".into(),
             },
             "decision" => Self {
                 memory_type: "decision".into(),
                 required: vec!["decision", "context"],
-                optional: vec!["alternatives_considered", "date", "reversible"],
+                optional: vec![
+                    "alternatives_considered",
+                    "date",
+                    "reversible",
+                    "event_date",
+                    "event_end",
+                ],
                 retrieval_cue_template: "What was decided about {decision} and why?".into(),
             },
             // Wildcard must be last — catches "fact", legacy "goal", and unknown types
             _ => Self {
                 memory_type: "fact".into(),
                 required: vec!["claim"],
-                optional: vec!["source", "verified", "domain"],
+                optional: vec!["source", "verified", "domain", "event_date", "event_end"],
                 retrieval_cue_template: "What do I know about {claim}?".into(),
             },
         }
@@ -268,5 +279,61 @@ mod tests {
         let json = r#"{"claim":"A | B are both valid","source":"docs"}"#;
         let result = flatten_structured_fields(json).unwrap();
         assert!(result.contains("claim: A | B are both valid"));
+    }
+
+    #[test]
+    fn every_type_has_event_date_and_event_end_in_optional() {
+        // "fact", "lesson", "gotcha" all route through the _ wildcard arm
+        for ty in [
+            "identity",
+            "preference",
+            "decision",
+            "fact",
+            "lesson",
+            "gotcha",
+        ] {
+            let s = MemorySchema::for_type(ty);
+            assert!(
+                s.optional.contains(&"event_date"),
+                "{ty} missing event_date in optional"
+            );
+            assert!(
+                s.optional.contains(&"event_end"),
+                "{ty} missing event_end in optional"
+            );
+        }
+    }
+
+    #[test]
+    fn extract_prompt_contains_event_date_for_every_type() {
+        // Drift-guard: ensures that event_date and event_end survive the full
+        // render pipeline. The schema test above only checks the optional Vec;
+        // this test catches a dropped {optional} placeholder in the template.
+        for ty in [
+            "identity",
+            "preference",
+            "decision",
+            "fact",
+            "lesson",
+            "gotcha",
+        ] {
+            let rendered = extraction_prompt(ty);
+            assert!(
+                rendered.contains("event_date"),
+                "{ty} rendered EXTRACT prompt missing event_date"
+            );
+            assert!(
+                rendered.contains("event_end"),
+                "{ty} rendered EXTRACT prompt missing event_end"
+            );
+        }
+    }
+
+    #[test]
+    fn for_type_decision_retains_existing_optional_fields() {
+        let s = MemorySchema::for_type("decision");
+        assert!(s.optional.contains(&"alternatives_considered"));
+        assert!(s.optional.contains(&"date"));
+        assert!(s.optional.contains(&"reversible"));
     }
 }

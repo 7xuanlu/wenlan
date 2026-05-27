@@ -760,6 +760,8 @@ pub async fn handle_store_memory(
             let mut final_quality: Option<String> = None;
             let mut final_structured_fields: Option<String> = initial_structured_fields.clone();
             let mut final_retrieval_cue: Option<String> = None;
+            let mut final_event_date: Option<i64> = None;
+            let mut final_event_end: Option<i64> = None;
             let mut classified_tags_async: Vec<String> = Vec::new();
 
             if let Some(ref llm) = llm {
@@ -836,12 +838,14 @@ pub async fn handle_store_memory(
                     .await
                     {
                         Ok(Ok(output)) => {
-                            let (fields, cue) =
+                            let extracted =
                                 origin_core::llm_provider::parse_extraction_response(&output);
-                            if let Some(f) = fields {
+                            final_event_date = extracted.event_date;
+                            final_event_end = extracted.event_end;
+                            if let Some(f) = extracted.structured_fields {
                                 final_structured_fields = Some(f);
                             }
-                            if let Some(c) = cue {
+                            if let Some(c) = extracted.retrieval_cue {
                                 final_retrieval_cue = Some(c);
                             }
                         }
@@ -864,6 +868,8 @@ pub async fn handle_store_memory(
                         &final_supersede_mode,
                         final_structured_fields.as_deref(),
                         final_retrieval_cue.as_deref(),
+                        final_event_date,
+                        final_event_end,
                     )
                     .await
                 {
