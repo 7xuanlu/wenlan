@@ -279,13 +279,39 @@ jobs:
 
       # Per-binary archive for the origin CLI consumed by the Homebrew tap
       # formula. Darwin-arm64 only — matches the origin-mcp tap pattern.
+      # Filename intentionally distinct from the multi-binary release tarball
+      # `origin-darwin-arm64.tar.gz` to avoid clobbering it in `dist/`.
       - name: Package origin CLI tarball for Homebrew (darwin-arm64 only)
         if: matrix.target == 'aarch64-apple-darwin'
         shell: bash
         run: |
           cp "target/${{ matrix.target }}/release/origin" origin
-          tar -czf dist/origin-darwin-arm64.tar.gz origin
+          tar -czf dist/origin-cli-darwin-arm64.tar.gz origin
           rm origin
+
+      # Smoke test: verify the multi-binary release archive contains all three
+      # binaries before upload. Catches regressions like a same-named Homebrew
+      # tarball clobbering the install.sh-consumed archive (v0.7.0 bug).
+      - name: Verify release archive contains origin, origin-server, origin-mcp
+        shell: bash
+        run: |
+          set -e
+          if [ "${{ matrix.archive }}" = "tar.gz" ]; then
+            contents=$(tar -tzf "dist/${{ matrix.artifact_name }}.tar.gz")
+            suffix=""
+          else
+            contents=$(unzip -l "dist/${{ matrix.artifact_name }}.zip" | awk '{print $NF}')
+            suffix=".exe"
+          fi
+          for bin in origin origin-server origin-mcp; do
+            if ! printf '%s\n' "$contents" | grep -qE "(^|/)${bin}${suffix}$"; then
+              echo "ERROR: dist/${{ matrix.artifact_name }}.${{ matrix.archive }} missing ${bin}${suffix}"
+              echo "--- archive contents ---"
+              printf '%s\n' "$contents"
+              exit 1
+            fi
+          done
+          echo "OK: archive contains origin, origin-server, origin-mcp"
 
       - name: Upload archives to release
         uses: softprops/action-gh-release@v2
@@ -302,7 +328,7 @@ jobs:
         with:
           name: homebrew-artifacts
           path: |
-            dist/origin-darwin-arm64.tar.gz
+            dist/origin-cli-darwin-arm64.tar.gz
             dist/origin-mcp-darwin-arm64.tar.gz
 
   docker:
