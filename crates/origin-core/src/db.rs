@@ -32784,4 +32784,142 @@ pub(crate) mod tests {
             );
         }
     }
+
+    // ==================== Task 17: low-confidence cue uses soft signal only ====================
+
+    #[tokio::test]
+    async fn test_search_composite_low_confidence_cue_no_hard_filter() {
+        // Guard against races with tests that flip ORIGIN_USE_LEGACY_SEARCH.
+        let _guard = LEGACY_SEARCH_ENV_LOCK
+            .get_or_init(|| tokio::sync::Mutex::new(()))
+            .lock()
+            .await;
+        std::env::remove_var("ORIGIN_USE_LEGACY_SEARCH");
+
+        let (db, _dir) = test_db().await;
+
+        // Construct a fixed "now" that is near a week boundary so extract_cue
+        // returns CueConfidence::Low for "last week".
+        // Sunday 23:59 — within 12 hours of Monday boundary.
+        let boundary_now: chrono::DateTime<chrono::Utc> = "2026-05-31T23:59:00Z".parse().unwrap();
+
+        let cue = crate::temporal_query::extract_cue("what did I do last week", boundary_now)
+            .expect("should extract cue near boundary");
+        assert_eq!(
+            cue.confidence,
+            crate::temporal_query::CueConfidence::Low,
+            "near-boundary cue must be Low confidence — this test verifies Low skips hard filter"
+        );
+
+        // The range of the Low cue (last week before Sunday 2026-05-31):
+        //   Mon 2026-05-25 00:00:00Z .. Sun 2026-05-31 23:59:59Z.
+        let range_start = cue.range.start; // ~1748044800 Mon 2026-05-25
+        let range_end = cue.range.end; // ~1748649599 Sun 2026-05-31
+
+        // Timestamps: clearly outside the cue range.
+        let ts_outside = range_start - 30 * 86400; // 30 days before
+        let ts_inside = (range_start + range_end) / 2; // midpoint (inside)
+
+        let content = "review notes about project progress updates";
+        let emb = db.embed_query(content).expect("embed");
+        let vec_sql = MemoryDB::vec_to_sql_pub(&emb);
+
+        {
+            let conn = db.conn.lock().await;
+            // Memory OUTSIDE the would-be hard-filter range
+            conn.execute(
+                &format!(
+                    "INSERT INTO memories (id, source, source_id, title, content,
+                                           chunk_index, last_modified, chunk_type,
+                                           event_date, embedding)
+                     VALUES ('c_low_out', 'memory', 'mem_low_outside', 'Outside', ?1,
+                             0, {ts_outside}, 'text', {ts_outside}, vector32('{vec_sql}'))"
+                ),
+                vec![libsql::Value::Text(content.to_string())],
+            )
+            .await
+            .expect("insert outside memory");
+
+            // Memory INSIDE the would-be range
+            conn.execute(
+                &format!(
+                    "INSERT INTO memories (id, source, source_id, title, content,
+                                           chunk_index, last_modified, chunk_type,
+                                           event_date, embedding)
+                     VALUES ('c_low_in', 'memory', 'mem_low_inside', 'Inside', ?1,
+                             0, {ts_inside}, 'text', {ts_inside}, vector32('{vec_sql}'))"
+                ),
+                vec![libsql::Value::Text(content.to_string())],
+            )
+            .await
+            .expect("insert inside memory");
+        }
+
+        // Run composite search with "what did I do last week".
+        // search_memory() calls extract_cue(query, Utc::now()) with the real clock.
+        // If the real clock happens to also be near a week boundary, Low fires and
+        // the outside memory appears. If the real clock is mid-week, High fires and
+        // the outside memory may be filtered.
+        //
+        // To exercise Low-confidence path deterministically we verify the property
+        // via the hard_filters module directly, then confirm search_memory returns
+        // at least one result (no panic, no crash on degenerate case).
+        //
+        // Hard-filter unit assertion (deterministic):
+        let low_cue_filters = crate::composite::hard_filters::HardFilters {
+            space: None,
+            memory_type: None,
+            exclude_superseded: false,
+            temporal_cue: Some(cue),
+        };
+        let where_clause = crate::composite::hard_filters::build_where(&low_cue_filters);
+        assert!(
+            !where_clause.contains("event_date"),
+            "Low-confidence cue must not produce event_date hard-filter clause; got: {where_clause}"
+        );
+
+        // Integration assertion: search_memory does not panic and returns results.
+        let results = db
+            .search_memory(
+                "what did I do last week",
+                10,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+            )
+            .await
+            .expect("composite search must not error with low-confidence cue");
+
+        // Both inside and outside memories have identical content; both should appear
+        // when the hard filter does NOT fire (which is the case when real clock is also
+        // near boundary) OR just the inside memory when hard filter fires (mid-week clock).
+        // We assert non-empty and at least one of our seeded memories is returned.
+        let ids: Vec<&str> = results.iter().map(|r| r.source_id.as_str()).collect();
+        assert!(
+            ids.contains(&"mem_low_inside") || ids.contains(&"mem_low_outside"),
+            "at least one seeded memory must appear; got: {:?}",
+            ids
+        );
+
+        // Key invariant: if both appear, the outside memory is present (proving hard
+        // filter was NOT applied when the Low cue fired).
+        // We assert this only if the real clock is near a week boundary.
+        let real_now = chrono::Utc::now();
+        let real_cue = crate::temporal_query::extract_cue("what did I do last week", real_now);
+        if let Some(rc) = real_cue {
+            if rc.confidence == crate::temporal_query::CueConfidence::Low {
+                // Low confidence at real clock → hard filter must NOT have fired.
+                // Both inside AND outside memories must appear.
+                assert!(
+                    ids.contains(&"mem_low_outside"),
+                    "when real clock is at Low-confidence boundary, outside memory must NOT \
+                     be filtered by hard filter; got: {:?}",
+                    ids
+                );
+            }
+        }
+    }
 }
