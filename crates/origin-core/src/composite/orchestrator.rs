@@ -374,10 +374,12 @@ mod tests {
         // Run composite search.
         // Use a config with small pool so the test stays fast.
         // -----------------------------------------------------------------
-        let mut cfg = RetrievalConfig::default();
-        cfg.pool_size_multiplier = 2;
-        cfg.pool_size_floor = 5;
-        cfg.pool_size_cap = 20;
+        let cfg = RetrievalConfig {
+            pool_size_multiplier: 2,
+            pool_size_floor: 5,
+            pool_size_cap: 20,
+            ..Default::default()
+        };
 
         let results = search_memory_composite(
             &db,

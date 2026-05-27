@@ -24663,6 +24663,7 @@ pub(crate) mod tests {
     /// Two memories:
     ///   - "sm10_linked":   content "Rust programming language", linked to entity ent_r.
     ///   - "sm10_unlinked": content "Rust programming language but no entity link".
+    ///
     /// Both have identical text so the ONLY thing that can distinguish them in
     /// composite ranking is the graph_distance / activation signals.
     async fn seed_composite_test_db() -> (MemoryDB, tempfile::TempDir) {
