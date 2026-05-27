@@ -6,6 +6,14 @@
 
 use origin_core::eval::runner::{run_eval, GateMode};
 
+// Process-wide mutex serialising tests that mutate environment variables.
+// Integration-test binaries share a process, so parallel `#[ignore]`d tests
+// that call std::env::set_var / remove_var race with each other.
+static EVAL_ENV_LOCK: std::sync::OnceLock<std::sync::Mutex<()>> = std::sync::OnceLock::new();
+fn eval_env_lock() -> &'static std::sync::Mutex<()> {
+    EVAL_ENV_LOCK.get_or_init(|| std::sync::Mutex::new(()))
+}
+
 /// Resolve the eval data root. Defaults to `app/eval/` (legacy location).
 /// Override via `ORIGIN_EVAL_ROOT` env var to support Phase 5 PR3 extraction
 /// or local relocation. Centralizing this means future moves touch one site.
@@ -610,6 +618,7 @@ async fn save_longmemeval_expanded_baseline() {
 #[tokio::test]
 #[ignore = "GPU eval; run manually"]
 async fn save_locomo_composite_baseline() {
+    let _guard = eval_env_lock().lock().unwrap();
     let path = eval_root().join("data/locomo10.json");
     if !path.exists() {
         println!("SKIP: locomo10.json not found");
@@ -635,6 +644,7 @@ async fn save_locomo_composite_baseline() {
 #[tokio::test]
 #[ignore = "GPU eval; run manually"]
 async fn save_locomo_composite_minus_supersession_baseline() {
+    let _guard = eval_env_lock().lock().unwrap();
     let path = eval_root().join("data/locomo10.json");
     if !path.exists() {
         println!("SKIP: locomo10.json not found");
