@@ -6777,7 +6777,7 @@ impl MemoryDB {
         let cfg = crate::tuning::RetrievalConfig::default(); // TODO: wire db.tuning in follow-up
                                                              // Normalize old type names (e.g. "correction" → "fact") before passing to composite,
                                                              // mirroring the legacy path's normalize_type_filter call.
-        let normalized_type: Option<String> = memory_type.map(|mt| Self::normalize_type_filter(mt));
+        let normalized_type: Option<String> = memory_type.map(Self::normalize_type_filter);
         let composite_hits = crate::composite::search_memory_composite(
             self,
             query,
@@ -24826,6 +24826,210 @@ pub(crate) mod tests {
             assert!(
                 diff < 1e-3,
                 "legacy: sm10_linked and sm10_unlinked should have near-equal raw_scores \
+                 (no graph bonus); diff={diff}"
+            );
+        }
+    }
+
+    // --- Task 11: verify derivative entrypoints route through search_memory + honor the flag ---
+
+    #[tokio::test]
+    async fn search_memory_reranked_honors_legacy_flag() {
+        // Env-var tests can race in parallel — guard with the module-level mutex.
+        let _guard = LEGACY_SEARCH_ENV_LOCK
+            .get_or_init(|| tokio::sync::Mutex::new(()))
+            .lock()
+            .await;
+
+        let (db, _dir) = seed_composite_test_db().await;
+
+        // Default (composite) path: entity-linked memory should rank above unlinked.
+        std::env::remove_var("ORIGIN_USE_LEGACY_SEARCH");
+        let composite_results = db
+            .search_memory_reranked("Rust", 5, None, None, None, None)
+            .await
+            .expect("composite reranked must not error");
+
+        // Legacy path: no graph signals, so near-equal raw_scores expected.
+        std::env::set_var("ORIGIN_USE_LEGACY_SEARCH", "1");
+        let legacy_results = db
+            .search_memory_reranked("Rust", 5, None, None, None, None)
+            .await
+            .expect("legacy reranked must not error");
+        std::env::remove_var("ORIGIN_USE_LEGACY_SEARCH");
+
+        assert!(
+            !composite_results.is_empty(),
+            "composite reranked must return results"
+        );
+        assert!(
+            !legacy_results.is_empty(),
+            "legacy reranked must return results"
+        );
+
+        // Composite path must show the entity-linked memory ranking above the unlinked one.
+        let c_linked = composite_results
+            .iter()
+            .position(|r| r.source_id == "sm10_linked");
+        let c_unlinked = composite_results
+            .iter()
+            .position(|r| r.source_id == "sm10_unlinked");
+        if let (Some(cl), Some(cu)) = (c_linked, c_unlinked) {
+            assert!(
+                cl < cu,
+                "composite reranked: sm10_linked must rank above sm10_unlinked (cl={cl} cu={cu})"
+            );
+        }
+
+        // Legacy path: sm10_linked and sm10_unlinked have equal embeddings → near-equal raw_scores.
+        let l_linked = legacy_results.iter().find(|r| r.source_id == "sm10_linked");
+        let l_unlinked = legacy_results
+            .iter()
+            .find(|r| r.source_id == "sm10_unlinked");
+        if let (Some(ll), Some(lu)) = (l_linked, l_unlinked) {
+            let diff = (ll.raw_score - lu.raw_score).abs();
+            assert!(
+                diff < 1e-3,
+                "legacy reranked: sm10_linked and sm10_unlinked must have near-equal raw_scores \
+                 (no graph bonus); diff={diff}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn search_memory_with_reranker_honors_legacy_flag() {
+        // Env-var tests can race in parallel — guard with the module-level mutex.
+        let _guard = LEGACY_SEARCH_ENV_LOCK
+            .get_or_init(|| tokio::sync::Mutex::new(()))
+            .lock()
+            .await;
+
+        let (db, _dir) = seed_composite_test_db().await;
+
+        // Assertion: both paths return results without error and include sm10_linked,
+        // proving search_memory_with_reranker delegates to search_memory in both modes
+        // and the flag is honored (not a bypass path).
+        //
+        // Note: NoopReranker runs only when results.len() > 1.  The legacy path
+        // deduplicates the two identical-content memories to 1 result, so the reranker
+        // branch may not fire.  We therefore do NOT assert on score == 0.0; instead we
+        // verify both paths return at least one result and include the linked memory.
+        let reranker: Arc<dyn crate::reranker::Reranker> = Arc::new(crate::reranker::NoopReranker);
+
+        // Default (composite) path.
+        std::env::remove_var("ORIGIN_USE_LEGACY_SEARCH");
+        let composite_results = db
+            .search_memory_with_reranker("Rust", 5, None, None, None, Some(reranker.clone()))
+            .await
+            .expect("composite with_reranker must not error");
+
+        // Legacy path.
+        std::env::set_var("ORIGIN_USE_LEGACY_SEARCH", "1");
+        let legacy_results = db
+            .search_memory_with_reranker("Rust", 5, None, None, None, Some(reranker))
+            .await
+            .expect("legacy with_reranker must not error");
+        std::env::remove_var("ORIGIN_USE_LEGACY_SEARCH");
+
+        assert!(
+            !composite_results.is_empty(),
+            "composite with_reranker must return results"
+        );
+        assert!(
+            !legacy_results.is_empty(),
+            "legacy with_reranker must return results"
+        );
+
+        let composite_ids: std::collections::HashSet<_> = composite_results
+            .iter()
+            .map(|r| r.source_id.as_str())
+            .collect();
+        let legacy_ids: std::collections::HashSet<_> = legacy_results
+            .iter()
+            .map(|r| r.source_id.as_str())
+            .collect();
+        assert!(
+            composite_ids.contains("sm10_linked"),
+            "composite with_reranker must include sm10_linked"
+        );
+        // Legacy dedup drops one of the two identical-content memories. We only assert
+        // that at least one of the seeded memories is returned (proving the path ran).
+        assert!(
+            legacy_ids.contains("sm10_linked") || legacy_ids.contains("sm10_unlinked"),
+            "legacy with_reranker must return at least one seeded memory; got: {:?}",
+            legacy_ids
+        );
+
+        // On the composite path the reranker always fires (composite returns both
+        // memories before dedup; NoopReranker sets scores to 0.0).
+        assert_eq!(
+            composite_results[0].score, 0.0,
+            "NoopReranker must rewrite score to 0.0 on composite path"
+        );
+    }
+
+    #[tokio::test]
+    async fn search_memory_expanded_honors_legacy_flag() {
+        // Env-var tests can race in parallel — guard with the module-level mutex.
+        let _guard = LEGACY_SEARCH_ENV_LOCK
+            .get_or_init(|| tokio::sync::Mutex::new(()))
+            .lock()
+            .await;
+
+        let (db, _dir) = seed_composite_test_db().await;
+
+        // No LLM passed → expansion skips (no extra queries), so the call degrades to
+        // a single search_memory call.  This is the right shape for asserting flag behavior
+        // without needing GPU or a real LLM provider.
+
+        // Default (composite) path.
+        std::env::remove_var("ORIGIN_USE_LEGACY_SEARCH");
+        let composite_results = db
+            .search_memory_expanded("Rust", 5, None, None, None, None)
+            .await
+            .expect("composite expanded must not error");
+
+        // Legacy path.
+        std::env::set_var("ORIGIN_USE_LEGACY_SEARCH", "1");
+        let legacy_results = db
+            .search_memory_expanded("Rust", 5, None, None, None, None)
+            .await
+            .expect("legacy expanded must not error");
+        std::env::remove_var("ORIGIN_USE_LEGACY_SEARCH");
+
+        assert!(
+            !composite_results.is_empty(),
+            "composite expanded must return results"
+        );
+        assert!(
+            !legacy_results.is_empty(),
+            "legacy expanded must return results"
+        );
+
+        // Composite path: entity-linked memory must rank above unlinked one.
+        let c_linked = composite_results
+            .iter()
+            .position(|r| r.source_id == "sm10_linked");
+        let c_unlinked = composite_results
+            .iter()
+            .position(|r| r.source_id == "sm10_unlinked");
+        if let (Some(cl), Some(cu)) = (c_linked, c_unlinked) {
+            assert!(
+                cl < cu,
+                "composite expanded: sm10_linked must rank above sm10_unlinked (cl={cl} cu={cu})"
+            );
+        }
+
+        // Legacy path: no graph bonus → near-equal raw_scores for identical-content memories.
+        let l_linked = legacy_results.iter().find(|r| r.source_id == "sm10_linked");
+        let l_unlinked = legacy_results
+            .iter()
+            .find(|r| r.source_id == "sm10_unlinked");
+        if let (Some(ll), Some(lu)) = (l_linked, l_unlinked) {
+            let diff = (ll.raw_score - lu.raw_score).abs();
+            assert!(
+                diff < 1e-3,
+                "legacy expanded: sm10_linked and sm10_unlinked must have near-equal raw_scores \
                  (no graph bonus); diff={diff}"
             );
         }
