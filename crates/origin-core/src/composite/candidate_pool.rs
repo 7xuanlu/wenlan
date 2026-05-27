@@ -170,10 +170,8 @@ pub(crate) async fn build_candidate_pool(
                         let stability: String = row.get(5).unwrap_or_else(|_| "new".to_string());
                         let access_count: i64 = row.get(6).unwrap_or(0);
                         let bm25_rank: f64 = row.get(7).unwrap_or(0.0);
-                        // FTS rank is negative in SQLite FTS5 (lower = better match).
-                        // Store the raw rank as bm25_score; callers that need a
-                        // positive score should negate it.
-                        let bm25_score = bm25_rank;
+                        // Negate fts.rank: bm25() returns negative-best-smallest; composite expects larger=better.
+                        let bm25_score = -bm25_rank;
 
                         if source_id.is_empty() {
                             continue;
@@ -196,12 +194,8 @@ pub(crate) async fn build_candidate_pool(
                             .entry(source_id)
                             .and_modify(|c| {
                                 // Keep best semantic_score from vector channel;
-                                // take best (most-negative = higher-ranked) FTS rank.
-                                c.bm25_score = if bm25_score < c.bm25_score {
-                                    bm25_score
-                                } else {
-                                    c.bm25_score
-                                };
+                                // take highest bm25_score (larger = better after negation).
+                                c.bm25_score = c.bm25_score.max(bm25_score);
                             })
                             .or_insert(candidate);
                     }
@@ -308,6 +302,54 @@ mod tests {
         assert!(
             has_semantic,
             "at least one candidate must have semantic_score > 0"
+        );
+    }
+
+    /// Verify that the strong-match memory has a HIGHER bm25_score than the weak-match
+    /// memory after build_candidate_pool.  This guards the sign-inversion fix: fts.rank
+    /// is negative-best-smallest, so we negate it before storing so that larger = better.
+    #[tokio::test]
+    async fn bm25_score_higher_for_stronger_fts_match() {
+        let (db, _dir) = test_db().await;
+
+        // "strong" hits every query term multiple times.
+        seed(
+            &db,
+            "strong_match",
+            "chocolate cake recipe: chocolate chocolate chocolate cake baking chocolate frosting",
+        )
+        .await;
+
+        // "weak" mentions the term only once, buried in unrelated text.
+        seed(
+            &db,
+            "weak_match",
+            "weather forecast today: sunny skies low humidity chocolate expected tomorrow",
+        )
+        .await;
+
+        let query = "chocolate cake";
+        let q_emb = db.embed_query(query).expect("embed_query must succeed");
+
+        let pool = build_candidate_pool(&db, query, &q_emb, 20, &HardFilters::default_open())
+            .await
+            .expect("build_candidate_pool must not fail");
+
+        let strong = pool.iter().find(|c| c.memory_id == "strong_match");
+        let weak = pool.iter().find(|c| c.memory_id == "weak_match");
+
+        // Both memories must appear in the pool (FTS channel should find them).
+        assert!(strong.is_some(), "strong_match not found in pool");
+        assert!(weak.is_some(), "weak_match not found in pool");
+
+        let strong_bm25 = strong.unwrap().bm25_score;
+        let weak_bm25 = weak.unwrap().bm25_score;
+
+        // After negation, the better FTS match must have the higher score.
+        assert!(
+            strong_bm25 > weak_bm25,
+            "strong_match bm25_score ({strong_bm25}) must exceed weak_match ({weak_bm25}); \
+             sign inversion would flip this"
         );
     }
 }
