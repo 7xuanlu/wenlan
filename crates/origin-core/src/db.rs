@@ -6935,7 +6935,6 @@ impl MemoryDB {
              FROM memories c
              WHERE c.source_id IN ({placeholders})
                AND c.chunk_index = 0
-               AND c.pending_revision = 0
              ORDER BY c.source_id"
         );
         let params: Vec<libsql::Value> = source_ids
