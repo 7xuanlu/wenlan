@@ -5620,6 +5620,24 @@ impl MemoryDB {
         Ok(embedding)
     }
 
+    /// `pub(crate)` wrapper over `vec_to_sql` for use by the `composite` module.
+    #[allow(dead_code)]
+    pub(crate) fn vec_to_sql_pub(v: &[f32]) -> String {
+        Self::vec_to_sql(v)
+    }
+
+    /// `pub(crate)` wrapper over `fts_or_query` for use by the `composite` module.
+    #[allow(dead_code)]
+    pub(crate) fn fts_or_query_pub(query: &str) -> String {
+        Self::fts_or_query(query)
+    }
+
+    /// `pub(crate)` wrapper to embed a single query string via the cached embedder.
+    #[allow(dead_code)]
+    pub(crate) fn embed_query(&self, text: &str) -> Result<Vec<f32>, OriginError> {
+        self.get_or_compute_embedding(text)
+    }
+
     /// Generate embeddings for a batch of texts.
     pub fn generate_embeddings(&self, texts: &[String]) -> Result<Vec<Vec<f32>>, OriginError> {
         if texts.is_empty() {
