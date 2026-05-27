@@ -257,4 +257,38 @@ mod tests {
             "memory_type single-quote escaped: {w}"
         );
     }
+
+    #[tokio::test]
+    async fn supersede_filter_runtime_flag_disables_clause() {
+        // Env-var tests can race in parallel — guard with a process-wide mutex.
+        static ENV_LOCK: std::sync::OnceLock<tokio::sync::Mutex<()>> = std::sync::OnceLock::new();
+        let _guard = ENV_LOCK
+            .get_or_init(|| tokio::sync::Mutex::new(()))
+            .lock()
+            .await;
+
+        let (db, _dir) = test_db().await;
+
+        // With the flag set, composite_exclude_superseded() must return false.
+        std::env::set_var("ORIGIN_DISABLE_SUPERSEDE_FILTER", "1");
+        let exclude = db.composite_exclude_superseded();
+        std::env::remove_var("ORIGIN_DISABLE_SUPERSEDE_FILTER");
+
+        assert!(
+            !exclude,
+            "composite_exclude_superseded must return false when ORIGIN_DISABLE_SUPERSEDE_FILTER=1"
+        );
+
+        let filters = HardFilters {
+            space: None,
+            memory_type: None,
+            exclude_superseded: exclude,
+            temporal_cue: None,
+        };
+        let w = build_where(&filters);
+        assert!(
+            !w.contains("supersedes"),
+            "build_where must not emit supersede clause when flag is set: {w}"
+        );
+    }
 }

@@ -118,6 +118,21 @@ impl Default for ReportEnv {
     }
 }
 
+/// Collect active runtime-flag tokens for `ReportEnv.flags`.
+///
+/// Each flag that is set contributes a `"KEY=VALUE"` string so baselines
+/// reflect the ablation configuration at run time.
+pub(crate) fn collect_runtime_flags() -> Vec<String> {
+    let mut flags = Vec::new();
+    if std::env::var("ORIGIN_DISABLE_SUPERSEDE_FILTER")
+        .map(|v| v == "1")
+        .unwrap_or(false)
+    {
+        flags.push("ORIGIN_DISABLE_SUPERSEDE_FILTER=1".into());
+    }
+    flags
+}
+
 #[derive(Debug, Clone, Serialize, serde::Deserialize, Default)]
 pub struct EvalReport {
     pub fixture_count: usize,

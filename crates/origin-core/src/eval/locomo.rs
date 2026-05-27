@@ -571,6 +571,7 @@ fn build_locomo_env(
         timestamp_utc,
         git_sha: option_env!("ORIGIN_GIT_SHA").map(String::from),
         warmup_iterations: 0,
+        flags: crate::eval::report::collect_runtime_flags(),
         ..Default::default()
     }
 }

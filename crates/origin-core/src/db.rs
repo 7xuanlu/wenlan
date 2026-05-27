@@ -10060,6 +10060,19 @@ impl MemoryDB {
         Ok(())
     }
 
+    /// Returns `true` when the supersede-filter should be active (default).
+    ///
+    /// Setting `ORIGIN_DISABLE_SUPERSEDE_FILTER=1` turns it off for ablation
+    /// runs where callers need to see superseded memories alongside active ones.
+    /// The value is read fresh on every call so it responds to runtime changes
+    /// without a daemon restart.
+    #[allow(dead_code)]
+    pub(crate) fn composite_exclude_superseded(&self) -> bool {
+        !std::env::var("ORIGIN_DISABLE_SUPERSEDE_FILTER")
+            .map(|v| v == "1")
+            .unwrap_or(false)
+    }
+
     /// Write a row to `memory_entities` for each entity in `entity_ids`.
     ///
     /// Idempotent: `ON CONFLICT DO NOTHING` silently skips duplicates.
