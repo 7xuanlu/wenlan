@@ -1533,6 +1533,32 @@ fn aggregate_by_category(scores: &[(u8, f64, f64, f64, f64, f64)]) -> Vec<Locomo
 }
 
 // ---------------------------------------------------------------------------
+// Composite benchmark runner — thin wrapper around run_locomo_eval that stamps
+// the variant tag as "composite" so its baseline filename is distinct from the
+// legacy "base" baseline.  Task 10 made composite-search the default path
+// inside `search_memory`, so the retrieval logic is identical; this runner
+// exists purely to produce a separately-named baseline file.
+// ---------------------------------------------------------------------------
+
+/// Run LoCoMo benchmark using the composite search path (Task 10 default).
+///
+/// Functionally equivalent to `run_locomo_eval` — both call
+/// `db.search_memory(...)` and therefore exercise the same composite
+/// vector+FTS+RRF+supersession pipeline.  The difference is that the resulting
+/// `LocomoReport.env.variant` is stamped `"composite"`, which causes
+/// `baseline_filename` to produce `locomo__composite__<hash>.json` rather than
+/// `locomo__base__<hash>.json`.  That makes composite baselines distinct from
+/// any pre-Task-10 baselines saved under the old tag.
+pub async fn run_locomo_eval_composite(path: &Path) -> Result<LocomoReport, OriginError> {
+    let mut report = run_locomo_eval(path).await?;
+    // Override the variant stamp so the baseline filename reads "composite__*".
+    if let Some(ref mut env) = report.env {
+        env.variant = Some("composite".to_string());
+    }
+    Ok(report)
+}
+
+// ---------------------------------------------------------------------------
 // Backward-compat re-exports (prompt functions now live in judge.rs)
 // ---------------------------------------------------------------------------
 

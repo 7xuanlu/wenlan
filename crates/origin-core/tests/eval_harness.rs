@@ -600,6 +600,74 @@ async fn save_longmemeval_expanded_baseline() {
 }
 
 // ---------------------------------------------------------------------------
+// Composite search baseline — saves locomo__composite__<hash>.json
+// ---------------------------------------------------------------------------
+
+/// Save a LoCoMo baseline using the composite search path (Task 10 default).
+/// Stamps variant = "composite" so the file is distinct from the legacy
+/// "base" baseline.  Run manually:
+///   cargo test -p origin-core --test eval_harness save_locomo_composite_baseline -- --ignored --nocapture
+#[tokio::test]
+#[ignore = "GPU eval; run manually"]
+async fn save_locomo_composite_baseline() {
+    let path = eval_root().join("data/locomo10.json");
+    if !path.exists() {
+        println!("SKIP: locomo10.json not found");
+        return;
+    }
+    let report = origin_core::eval::locomo::run_locomo_eval_composite(&path)
+        .await
+        .unwrap();
+    let baselines_dir = eval_root().join("baselines");
+    std::fs::create_dir_all(&baselines_dir).unwrap();
+    let baseline_path = baselines_dir.join(report.baseline_filename("locomo"));
+    report.save_baseline(&baseline_path).unwrap();
+    println!("Saved LoCoMo composite baseline to {:?}", baseline_path);
+    save_layered(&report, |r| r.to_eval_report());
+}
+
+/// Same as `save_locomo_composite_baseline` but with the supersession filter
+/// disabled (`ORIGIN_DISABLE_SUPERSEDE_FILTER=1`).  The flag is included in
+/// `report.env.flags` (via `collect_runtime_flags()`), which flows into the
+/// comparable hash, so the saved file is named distinctly.
+/// Run manually:
+///   ORIGIN_DISABLE_SUPERSEDE_FILTER=1 cargo test -p origin-core --test eval_harness save_locomo_composite_minus_supersession_baseline -- --ignored --nocapture
+#[tokio::test]
+#[ignore = "GPU eval; run manually"]
+async fn save_locomo_composite_minus_supersession_baseline() {
+    let path = eval_root().join("data/locomo10.json");
+    if !path.exists() {
+        println!("SKIP: locomo10.json not found");
+        return;
+    }
+    // Set env var so collect_runtime_flags() picks it up inside the runner.
+    std::env::set_var("ORIGIN_DISABLE_SUPERSEDE_FILTER", "1");
+    let report = origin_core::eval::locomo::run_locomo_eval_composite(&path)
+        .await
+        .unwrap();
+    std::env::remove_var("ORIGIN_DISABLE_SUPERSEDE_FILTER");
+    assert!(
+        report
+            .env
+            .as_ref()
+            .map(|e| e
+                .flags
+                .contains(&"ORIGIN_DISABLE_SUPERSEDE_FILTER=1".to_string()))
+            .unwrap_or(false),
+        "ORIGIN_DISABLE_SUPERSEDE_FILTER=1 must appear in report.env.flags"
+    );
+    let baselines_dir = eval_root().join("baselines");
+    std::fs::create_dir_all(&baselines_dir).unwrap();
+    let baseline_path = baselines_dir.join(report.baseline_filename("locomo"));
+    report.save_baseline(&baseline_path).unwrap();
+    println!(
+        "Saved LoCoMo composite (minus supersession) baseline to {:?}",
+        baseline_path
+    );
+    save_layered(&report, |r| r.to_eval_report());
+}
+
+// ---------------------------------------------------------------------------
 // Token efficiency / quality-cost tests
 // ---------------------------------------------------------------------------
 
