@@ -193,6 +193,22 @@ impl Default for CompositeWeights {
     }
 }
 
+#[cfg(test)]
+impl CompositeWeights {
+    pub(crate) fn default_zero() -> Self {
+        Self {
+            semantic: 0.0,
+            bm25: 0.0,
+            graph_distance: 0.0,
+            activation: 0.0,
+            temporal: 0.0,
+            trust: 0.0,
+            recency: 0.0,
+            access_frequency: 0.0,
+        }
+    }
+}
+
 fn default_graph_depth() -> u8 {
     2
 }
