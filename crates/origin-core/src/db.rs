@@ -32419,4 +32419,95 @@ pub(crate) mod tests {
             returned_ids
         );
     }
+
+    // ==================== Task 14: composite supersession filter (hide vs archive) ====================
+
+    #[tokio::test]
+    async fn test_search_composite_supersession_filter() {
+        // Guard against races with tests that flip ORIGIN_USE_LEGACY_SEARCH.
+        let _guard = LEGACY_SEARCH_ENV_LOCK
+            .get_or_init(|| tokio::sync::Mutex::new(()))
+            .lock()
+            .await;
+        std::env::remove_var("ORIGIN_USE_LEGACY_SEARCH");
+
+        let (db, _dir) = test_db().await;
+        let now_ts = chrono::Utc::now().timestamp();
+
+        // Seed content all containing "note" so semantic search finds them.
+        let content = "personal note about the meeting agenda and action items";
+        let emb = db.embed_query(content).expect("embed");
+        let vec_sql = MemoryDB::vec_to_sql_pub(&emb);
+
+        // 4 memories:
+        //   M_old    — superseded by M_hide (mode='hide')  → must be hidden
+        //   M_hide   — the active superseder (hide mode)   → must be visible
+        //   M_oldish — superseded by M_arch (mode='archive') → must be visible
+        //   M_arch   — the archive-mode superseder          → must be visible
+        {
+            let conn = db.conn.lock().await;
+            for sid in ["mem_ss_old", "mem_ss_hide", "mem_ss_oldish", "mem_ss_arch"] {
+                let cid = format!("c_{sid}");
+                conn.execute(
+                    &format!(
+                        "INSERT INTO memories (id, source, source_id, title, content,
+                                               chunk_index, last_modified, chunk_type, embedding)
+                         VALUES ('{cid}', 'memory', '{sid}', '{sid}', ?1,
+                                 0, {now_ts}, 'text', vector32('{vec_sql}'))"
+                    ),
+                    vec![libsql::Value::Text(content.to_string())],
+                )
+                .await
+                .expect("insert memory");
+            }
+            // M_hide supersedes M_old with mode='hide'
+            conn.execute(
+                "UPDATE memories SET supersedes = 'mem_ss_old', supersede_mode = 'hide'
+                 WHERE source_id = 'mem_ss_hide'",
+                (),
+            )
+            .await
+            .expect("set hide supersedes");
+            // M_arch supersedes M_oldish with mode='archive'
+            conn.execute(
+                "UPDATE memories SET supersedes = 'mem_ss_oldish', supersede_mode = 'archive'
+                 WHERE source_id = 'mem_ss_arch'",
+                (),
+            )
+            .await
+            .expect("set archive supersedes");
+        }
+
+        let results = db
+            .search_memory("note", 10, None, None, None, None, None, None)
+            .await
+            .expect("search_memory must not error");
+
+        let ids: Vec<&str> = results.iter().map(|r| r.source_id.as_str()).collect();
+
+        // hide-mode superseder (active) must appear
+        assert!(
+            ids.contains(&"mem_ss_hide"),
+            "mem_ss_hide (active hide-mode superseder) must be visible; got: {:?}",
+            ids
+        );
+        // archive-mode superseded memory must appear (archive keeps it visible)
+        assert!(
+            ids.contains(&"mem_ss_oldish"),
+            "mem_ss_oldish (archive-mode superseded) must remain visible; got: {:?}",
+            ids
+        );
+        // archive-mode superseder must appear
+        assert!(
+            ids.contains(&"mem_ss_arch"),
+            "mem_ss_arch (archive-mode superseder) must be visible; got: {:?}",
+            ids
+        );
+        // hide-mode superseded memory must NOT appear
+        assert!(
+            !ids.contains(&"mem_ss_old"),
+            "mem_ss_old (hide-mode superseded) must be filtered out; got: {:?}",
+            ids
+        );
+    }
 }
