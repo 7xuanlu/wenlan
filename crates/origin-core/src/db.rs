@@ -32162,4 +32162,112 @@ pub(crate) mod tests {
             .expect("sweep");
         assert_eq!(processed, 5, "should process all 5 rows across batches");
     }
+
+    // ==================== Task 12: composite multi-hop via spreading activation ====================
+
+    /// Seed: entity chain ent_a → ent_b → ent_c linked by relations.
+    /// M_C is a memory linked to ent_c via memory_entities.
+    /// A distractor memory has no entity link.
+    /// Query "alice" matches ent_a by name; activation propagates 2 hops to ent_c.
+    #[tokio::test]
+    async fn test_search_composite_multi_hop_via_activation() {
+        // Guard against races with tests that flip ORIGIN_USE_LEGACY_SEARCH.
+        let _guard = LEGACY_SEARCH_ENV_LOCK
+            .get_or_init(|| tokio::sync::Mutex::new(()))
+            .lock()
+            .await;
+        std::env::remove_var("ORIGIN_USE_LEGACY_SEARCH");
+
+        let (db, _dir) = test_db().await;
+        let now_ts = chrono::Utc::now().timestamp();
+
+        // Seed entities ent_a → ent_b → ent_c as a chain.
+        {
+            let conn = db.conn.lock().await;
+            conn.execute_batch(
+                "INSERT INTO entities (id, name, entity_type, created_at, updated_at)
+                 VALUES
+                   ('ent_mh_a', 'alice', 'person', 0, 0),
+                   ('ent_mh_b', 'Bob', 'person', 0, 0),
+                   ('ent_mh_c', 'Carol', 'person', 0, 0);
+                 INSERT INTO relations (id, from_entity, to_entity, relation_type, created_at)
+                 VALUES
+                   ('rel_mh_ab', 'ent_mh_a', 'ent_mh_b', 'knows', 0),
+                   ('rel_mh_bc', 'ent_mh_b', 'ent_mh_c', 'knows', 0);",
+            )
+            .await
+            .expect("seed entities + relations");
+        }
+
+        // Seed M_C: content about Carol, linked to ent_mh_c via memory_entities.
+        // Seed distractor: content about cooking, no entity link.
+        // Both need embeddings so the vector channel can find them.
+        let mem_c_text = "carol mentioned an interesting project about machine learning models";
+        let distractor_text = "pasta recipe with tomato sauce and fresh basil herbs";
+
+        let emb_c = db.embed_query(mem_c_text).expect("embed mem_c");
+        let emb_d = db.embed_query(distractor_text).expect("embed distractor");
+        let vec_c = MemoryDB::vec_to_sql_pub(&emb_c);
+        let vec_d = MemoryDB::vec_to_sql_pub(&emb_d);
+
+        {
+            let conn = db.conn.lock().await;
+            conn.execute(
+                &format!(
+                    "INSERT INTO memories (id, source, source_id, title, content,
+                                           chunk_index, last_modified, chunk_type, embedding)
+                     VALUES ('c_mh_c', 'memory', 'mem_mh_c', 'Carol note', ?1,
+                             0, {now_ts}, 'text', vector32('{vec_c}'))"
+                ),
+                vec![libsql::Value::Text(mem_c_text.to_string())],
+            )
+            .await
+            .expect("insert mem_mh_c");
+
+            conn.execute(
+                &format!(
+                    "INSERT INTO memories (id, source, source_id, title, content,
+                                           chunk_index, last_modified, chunk_type, embedding)
+                     VALUES ('c_mh_d', 'memory', 'mem_mh_distractor', 'Cooking', ?1,
+                             0, {now_ts}, 'text', vector32('{vec_d}'))"
+                ),
+                vec![libsql::Value::Text(distractor_text.to_string())],
+            )
+            .await
+            .expect("insert distractor");
+        }
+
+        // Link mem_mh_c to ent_mh_c (2 hops from query entity ent_mh_a).
+        db.link_memory_entities("mem_mh_c", &["ent_mh_c"])
+            .await
+            .expect("link_memory_entities");
+
+        // Query "alice" matches ent_mh_a by name token.
+        // Activation spreads: ent_mh_a(1.0) → ent_mh_b(0.5) → ent_mh_c(0.25).
+        // mem_mh_c has entity activation 0.25 via ent_mh_c; distractor has 0.
+        let results = db
+            .search_memory("alice", 10, None, None, None, None, None, None)
+            .await
+            .expect("composite search_memory must not error");
+
+        // mem_mh_c must appear in results — activation lifts it even if semantic
+        // similarity to "alice" alone is modest.
+        let ids: Vec<&str> = results.iter().map(|r| r.source_id.as_str()).collect();
+        assert!(
+            ids.contains(&"mem_mh_c"),
+            "mem_mh_c must appear in results via 2-hop activation; got: {:?}",
+            ids
+        );
+
+        // mem_mh_c must rank in top-3 (activation gives it a strong composite boost).
+        let pos = results
+            .iter()
+            .position(|r| r.source_id == "mem_mh_c")
+            .unwrap();
+        assert!(
+            pos < 3,
+            "mem_mh_c must appear in top-3 (pos={pos}); results: {:?}",
+            ids
+        );
+    }
 }
