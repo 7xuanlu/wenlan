@@ -7364,12 +7364,23 @@ impl MemoryDB {
         Ok(results)
     }
 
-    /// Max pages fetched per query in the page-channel.
-    /// Hardcoded (no tuning struct change) per design philosophy — surgical scope.
-    /// Override at runtime via env: `ORIGIN_DISABLE_PAGE_CHANNEL=1` skips the
-    /// page-channel entirely (used by bar-setting baseline tests to avoid
+    /// Default page-channel pool size. Phase 2 eval at LIMIT=10 showed
+    /// regression (LoCoMo -0.71pt NDCG@10, LME -1.92pt NDCG@10) caused by
+    /// page rows displacing specific-event memory hits in CE rerank. Reduced
+    /// to 3 for the iteration cycle. Override at runtime with
+    /// `ORIGIN_PAGE_CHANNEL_LIMIT=<N>`. `ORIGIN_DISABLE_PAGE_CHANNEL=1` skips
+    /// the channel entirely (used by bar-setting baseline tests to avoid
     /// overwriting pre-PR-B headline numbers — see comparable_hash follow-up).
-    const PAGE_CHANNEL_LIMIT: usize = 10;
+    const PAGE_CHANNEL_LIMIT_DEFAULT: usize = 3;
+
+    /// Resolve the page-channel pool size at call time. Env override lets
+    /// the eval harness sweep tuning values without recompile.
+    fn page_channel_limit() -> usize {
+        std::env::var("ORIGIN_PAGE_CHANNEL_LIMIT")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(Self::PAGE_CHANNEL_LIMIT_DEFAULT)
+    }
 
     /// Hybrid search with reranker-trait reranking.
     ///
@@ -7426,7 +7437,7 @@ impl MemoryDB {
         } else {
             // Log-and-degrade on page-channel failure (mirrors augment_with_graph's
             // silent fallback pattern at db.rs:7605-7608).
-            self.search_pages(query, Self::PAGE_CHANNEL_LIMIT, None)
+            self.search_pages(query, Self::page_channel_limit(), None)
                 .await
                 .unwrap_or_default()
         };
