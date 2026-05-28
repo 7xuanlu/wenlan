@@ -1029,6 +1029,156 @@ pub async fn run_locomo_eval_cross_rerank(
 }
 
 // ---------------------------------------------------------------------------
+// Cross-encoder rerank runner against a pre-seeded consolidated DB (PR-B)
+// ---------------------------------------------------------------------------
+
+/// Like `run_locomo_eval_cross_rerank`, but scores against a PRE-SEEDED
+/// consolidated scenario DB (no per-conversation ephemeral DB, no ingest).
+/// Used by PR-B's page-channel eval to surface distilled pages that the
+/// fullpipeline harness wrote into the cache.
+///
+/// `db` MUST already contain memories with `source_id` formatted as
+/// `locomo_<sample_id>_obs_<i>` (matches both the in-tree fullpipeline
+/// seed path and the ephemeral seed in `run_locomo_eval_cross_rerank`).
+/// Page-channel ON/OFF is controlled by the caller via the
+/// `ORIGIN_DISABLE_PAGE_CHANNEL` env var (read inside
+/// `search_memory_with_reranker`).
+pub async fn run_locomo_eval_cross_rerank_from_db(
+    db: &MemoryDB,
+    path: &Path,
+    reranker: std::sync::Arc<dyn crate::reranker::Reranker>,
+) -> Result<LocomoReport, OriginError> {
+    let mut samples = load_locomo(path)?;
+    apply_locomo_limit(&mut samples);
+    let mut conversations = Vec::new();
+    // (category, ndcg_5, ndcg_10, mrr, recall_5, hit_rate_1)
+    let mut all_scores: Vec<(u8, f64, f64, f64, f64, f64)> = Vec::new();
+    let mut per_case: Vec<crate::eval::report::CaseResult> = Vec::new();
+
+    for sample in &samples {
+        let memories = extract_observations(sample);
+
+        // Re-derive the source_id mapping — matches the fullpipeline seed path.
+        let dia_to_source: HashMap<String, String> = memories
+            .iter()
+            .enumerate()
+            .map(|(i, m)| {
+                (
+                    m.dia_id.clone(),
+                    format!("locomo_{}_obs_{}", sample.sample_id, i),
+                )
+            })
+            .collect();
+
+        let mut conv_scores: Vec<(u8, f64, f64, f64, f64, f64)> = Vec::new();
+
+        for qa in &sample.qa {
+            if qa.category == 5 {
+                continue;
+            }
+
+            let results = db
+                .search_memory_with_reranker(
+                    &qa.question,
+                    10,
+                    None,
+                    None,
+                    None,
+                    Some(reranker.clone()),
+                )
+                .await?;
+
+            let relevant_ids: HashSet<String> = qa
+                .evidence
+                .iter()
+                .filter_map(|did| dia_to_source.get(did).cloned())
+                .collect();
+
+            if relevant_ids.is_empty() {
+                continue;
+            }
+
+            let result_ids: Vec<&str> = results.iter().map(|r| r.source_id.as_str()).collect();
+
+            let grades: HashMap<&str, u8> = result_ids
+                .iter()
+                .map(|id| (*id, if relevant_ids.contains(*id) { 1 } else { 0 }))
+                .collect();
+
+            let relevant_set: HashSet<&str> = relevant_ids.iter().map(|s| s.as_str()).collect();
+
+            let ndcg_10 = metrics::ndcg_at_k(&result_ids, &grades, 10);
+            let ndcg_5 = metrics::ndcg_at_k(&result_ids, &grades, 5);
+            let mrr_val = metrics::mrr(&result_ids, &relevant_set);
+            let recall_5 = metrics::recall_at_k(&result_ids, &relevant_set, 5);
+            let hr_1 = metrics::hit_rate_at_k(&result_ids, &relevant_set, 1);
+
+            conv_scores.push((qa.category, ndcg_5, ndcg_10, mrr_val, recall_5, hr_1));
+            all_scores.push((qa.category, ndcg_5, ndcg_10, mrr_val, recall_5, hr_1));
+            per_case.push(build_locomo_case_result(
+                &qa.question,
+                qa.category,
+                ndcg_5,
+                ndcg_10,
+                mrr_val,
+                recall_5,
+                hr_1,
+            ));
+        }
+
+        let per_cat = aggregate_by_category(&conv_scores);
+        let n = conv_scores.len();
+        conversations.push(LocomoConversationResult {
+            sample_id: sample.sample_id.clone(),
+            memories_seeded: memories.len(),
+            questions_evaluated: n,
+            overall_ndcg_at_10: avg_field(&conv_scores, |s| s.2),
+            overall_mrr: avg_field(&conv_scores, |s| s.3),
+            overall_recall_at_5: avg_field(&conv_scores, |s| s.4),
+            per_category: per_cat,
+        });
+    }
+
+    let per_cat_agg = aggregate_by_category(&all_scores);
+    let mut report = LocomoReport {
+        conversations,
+        aggregate_ndcg_at_10: avg_field(&all_scores, |s| s.2),
+        aggregate_mrr: avg_field(&all_scores, |s| s.3),
+        aggregate_recall_at_5: avg_field(&all_scores, |s| s.4),
+        aggregate_hit_rate_at_1: avg_field(&all_scores, |s| s.5),
+        total_questions: all_scores.len(),
+        total_memories: samples.iter().map(|s| extract_observations(s).len()).sum(),
+        per_category_aggregate: per_cat_agg,
+        qa_accuracy: None,
+        baseline: None,
+        env: None,
+        per_case,
+    };
+
+    // Stamp env.flags to record page_channel state (purely informational
+    // until comparable_hash includes flags — future task).
+    let page_channel_state = if std::env::var("ORIGIN_DISABLE_PAGE_CHANNEL").is_ok() {
+        "off"
+    } else {
+        "on"
+    };
+    let mut env_stamp = build_locomo_env(
+        "cross_rerank_v2_pages",
+        path,
+        "search_memory_with_reranker",
+        "cross-encoder",
+        &format!("cross-encoder:{}", reranker.model_id()),
+        None,
+    );
+    env_stamp
+        .flags
+        .push(format!("page_channel={}", page_channel_state));
+    env_stamp.flags.push("scenario_db=consolidated".to_string());
+    report.env = Some(env_stamp);
+    Ok(report)
+}
+
+// ---------------------------------------------------------------------------
 // Expanded benchmark runner -- same as run_locomo_eval but uses search_memory_expanded
 // ---------------------------------------------------------------------------
 

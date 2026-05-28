@@ -974,6 +974,141 @@ pub async fn run_longmemeval_eval_cross_rerank(
 }
 
 // ---------------------------------------------------------------------------
+// Cross-encoder rerank runner against a pre-seeded consolidated DB (PR-B)
+// ---------------------------------------------------------------------------
+
+/// Like `run_longmemeval_eval_cross_rerank`, but scores against a PRE-SEEDED
+/// consolidated scenario DB (no per-question ephemeral DB, no ingest).
+/// Used by PR-B's page-channel eval to surface distilled pages that the
+/// fullpipeline harness wrote into the cache.
+///
+/// `db` MUST already contain memories with `source_id` formatted as
+/// `lme_<question_id>_<session_idx>_t<turn_idx>` (matches the
+/// `memory_source_id` function used by the LME ephemeral seed path and
+/// the fullpipeline harness).
+/// Page-channel ON/OFF is controlled by the caller via the
+/// `ORIGIN_DISABLE_PAGE_CHANNEL` env var (read inside
+/// `search_memory_with_reranker`).
+pub async fn run_longmemeval_eval_cross_rerank_from_db(
+    db: &MemoryDB,
+    path: &Path,
+    reranker: std::sync::Arc<dyn crate::reranker::Reranker>,
+) -> Result<LongMemEvalReport, OriginError> {
+    let mut samples = load_longmemeval(path)?;
+    apply_lme_limit(&mut samples);
+    // (question_type, ndcg_5, ndcg_10, mrr, recall_5, hit_rate_1)
+    let mut all_scores: Vec<(String, f64, f64, f64, f64, f64)> = Vec::new();
+    let mut per_case: Vec<crate::eval::report::CaseResult> = Vec::new();
+    let mut total_memories: usize = 0;
+
+    for sample in &samples {
+        let memories = extract_memories(sample);
+        total_memories += memories.len();
+
+        // Build relevance judgments: has_answer turns are relevant.
+        // source_id format matches both the ephemeral seed and fullpipeline harness.
+        let relevant_source_ids: HashSet<String> = memories
+            .iter()
+            .filter(|m| m.has_answer)
+            .map(|m| memory_source_id(&m.question_id, m.session_idx, m.turn_idx))
+            .collect();
+
+        if relevant_source_ids.is_empty() {
+            continue;
+        }
+
+        let results = db
+            .search_memory_with_reranker(
+                &sample.question,
+                10,
+                None,
+                None,
+                None,
+                Some(reranker.clone()),
+            )
+            .await?;
+
+        let result_ids: Vec<&str> = results.iter().map(|r| r.source_id.as_str()).collect();
+
+        let grades: HashMap<&str, u8> = result_ids
+            .iter()
+            .map(|id| {
+                (
+                    *id,
+                    if relevant_source_ids.contains(*id) {
+                        1
+                    } else {
+                        0
+                    },
+                )
+            })
+            .collect();
+
+        let relevant_set: HashSet<&str> = relevant_source_ids.iter().map(|s| s.as_str()).collect();
+
+        let ndcg_10 = metrics::ndcg_at_k(&result_ids, &grades, 10);
+        let ndcg_5 = metrics::ndcg_at_k(&result_ids, &grades, 5);
+        let mrr_val = metrics::mrr(&result_ids, &relevant_set);
+        let recall_5 = metrics::recall_at_k(&result_ids, &relevant_set, 5);
+        let hr_1 = metrics::hit_rate_at_k(&result_ids, &relevant_set, 1);
+
+        all_scores.push((
+            sample.question_type.clone(),
+            ndcg_5,
+            ndcg_10,
+            mrr_val,
+            recall_5,
+            hr_1,
+        ));
+        per_case.push(build_lme_case_result(
+            &sample.question,
+            &sample.question_type,
+            ndcg_5,
+            ndcg_10,
+            mrr_val,
+            recall_5,
+            hr_1,
+        ));
+    }
+
+    let per_category = aggregate_by_category(&all_scores);
+    let mut report = LongMemEvalReport {
+        aggregate_ndcg_at_10: avg_field(&all_scores, |s| s.2),
+        aggregate_mrr: avg_field(&all_scores, |s| s.3),
+        aggregate_recall_at_5: avg_field(&all_scores, |s| s.4),
+        aggregate_hit_rate_at_1: avg_field(&all_scores, |s| s.5),
+        total_questions: all_scores.len(),
+        total_memories,
+        per_category,
+        baseline: None,
+        env: None,
+        per_case,
+    };
+
+    // Stamp env.flags to record page_channel state (purely informational
+    // until comparable_hash includes flags — future task).
+    let page_channel_state = if std::env::var("ORIGIN_DISABLE_PAGE_CHANNEL").is_ok() {
+        "off"
+    } else {
+        "on"
+    };
+    let mut env_stamp = build_lme_env(
+        "cross_rerank_v2_pages",
+        path,
+        "search_memory_with_reranker",
+        "cross-encoder",
+        &format!("cross-encoder:{}", reranker.model_id()),
+        None,
+    );
+    env_stamp
+        .flags
+        .push(format!("page_channel={}", page_channel_state));
+    env_stamp.flags.push("scenario_db=consolidated".to_string());
+    report.env = Some(env_stamp);
+    Ok(report)
+}
+
+// ---------------------------------------------------------------------------
 // Expanded benchmark runner -- same as run_longmemeval_eval but uses search_memory_expanded
 // ---------------------------------------------------------------------------
 
