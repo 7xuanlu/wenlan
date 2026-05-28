@@ -147,6 +147,10 @@ export EVAL_BASELINES_DIR=$HOME/.cache/origin-eval
 
 Path must be writable and local (network mounts not recommended). When set, also chains `EVAL_ENRICHMENT_CACHE_DIR` default to the same dir unless explicitly overridden. Migration: `bash scripts/migrate-eval-cache.sh <source-baselines>`.
 
+### Cached scenario DBs (page-channel + retrieval-only evals)
+
+The PR-B page-channel runners reuse the fullpipeline_*.db seeded DBs without re-ingesting. They live at `~/.cache/origin-eval/scenario_seeded/{locomo_v1,lme_v1}/origin_memory.db`. Repopulate via `bash scripts/seed-scenario-dbs.sh` from the repo root. The `cached_scenario_db_check.rs` integration test (L7 manual) verifies migration replay against current schema; it auto-resolves the root from `SCENARIO_DB_ROOT > EVAL_BASELINES_DIR/scenario_seeded > ~/.cache/origin-eval/scenario_seeded/`.
+
 ### Eval pre-flight subset
 
 Set `EVAL_LOCOMO_LIMIT=N` (or `EVAL_LME_LIMIT=N`) to truncate the fixture and run a small-subset eval (~30min) before committing to full 3h runs. Useful for verifying direction on new retrieval variants. Applies to every `run_locomo_eval*` / `run_longmemeval_eval*` variant. Unset (the default) runs the full fixture unchanged.
