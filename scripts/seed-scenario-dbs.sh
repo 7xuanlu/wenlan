@@ -6,7 +6,7 @@
 # PR-B page-channel eval runners
 # (`save_locomo_v2_with_pages_baseline` / `save_longmemeval_v2_with_pages_baseline`).
 #
-# Idempotent. Skips files that already exist (cp -n) so reruns are cheap.
+# Idempotent. Skips files that already exist so reruns are cheap.
 # Honors EVAL_BASELINES_DIR override; defaults to $HOME/.cache/origin-eval.
 set -euo pipefail
 
@@ -27,8 +27,8 @@ if [ ! -f "$LME_SRC" ]; then
     exit 1
 fi
 
-cp -n "$LOCOMO_SRC" "$CACHE/locomo_v1/origin_memory.db" || true
-cp -n "$LME_SRC" "$CACHE/lme_v1/origin_memory.db" || true
+[ -f "$CACHE/locomo_v1/origin_memory.db" ] || cp "$LOCOMO_SRC" "$CACHE/locomo_v1/origin_memory.db"
+[ -f "$CACHE/lme_v1/origin_memory.db" ] || cp "$LME_SRC" "$CACHE/lme_v1/origin_memory.db"
 
 echo "Seeded scenario DBs at $CACHE"
 ls -la "$CACHE/locomo_v1/origin_memory.db" "$CACHE/lme_v1/origin_memory.db"
