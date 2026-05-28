@@ -1085,15 +1085,20 @@ pub async fn run_longmemeval_eval_cross_rerank_from_db(
         per_case,
     };
 
-    // Stamp env.flags to record page_channel state (purely informational
-    // until comparable_hash includes flags — future task).
+    // Branch variant_tag on ORIGIN_DISABLE_PAGE_CHANNEL so page-ON and page-OFF
+    // produce distinct baseline filenames (comparable_hash uses the variant string).
     let page_channel_state = if std::env::var("ORIGIN_DISABLE_PAGE_CHANNEL").is_ok() {
         "off"
     } else {
         "on"
     };
+    let variant_tag = if page_channel_state == "off" {
+        "cross_rerank_v2_no_pages"
+    } else {
+        "cross_rerank_v2_pages"
+    };
     let mut env_stamp = build_lme_env(
-        "cross_rerank_v2_pages",
+        variant_tag,
         path,
         "search_memory_with_reranker",
         "cross-encoder",

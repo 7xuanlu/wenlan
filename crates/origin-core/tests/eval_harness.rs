@@ -664,6 +664,19 @@ async fn save_locomo_v2_with_pages_baseline() {
     .await
     .expect("open locomo_v1 scenario DB");
 
+    // Sanity: cached scenario DB must have distilled pages for page-channel to be measurable.
+    // An empty pages table silently produces page-OFF metrics stamped as page-ON.
+    let pages_count = db
+        .count_active_pages()
+        .await
+        .expect("count_active_pages failed");
+    assert!(
+        pages_count > 0,
+        "cached scenario DB has 0 active pages at {} — run scripts/seed-scenario-dbs.sh and verify with cached_scenario_db_compat_check",
+        db_dir.display()
+    );
+    println!("Pages in scenario DB: {}", pages_count);
+
     let fixture = eval_root().join("data/locomo10.json");
     if !fixture.exists() {
         println!("SKIP: locomo10.json not found");
@@ -681,11 +694,17 @@ async fn save_locomo_v2_with_pages_baseline() {
     let baselines_dir = eval_root().join("baselines");
     std::fs::create_dir_all(&baselines_dir).unwrap();
     let mut filename = report.baseline_filename("locomo");
-    // Insert __with_pages before the .json extension so cmp tools see the variant.
-    if let Some(stripped) = filename.strip_suffix(".json") {
-        filename = format!("{}__with_pages.json", stripped);
+    // Branch suffix on ORIGIN_DISABLE_PAGE_CHANNEL so page-ON and page-OFF artifacts
+    // don't collide at the legacy app/eval/baselines/ path.
+    let suffix = if std::env::var("ORIGIN_DISABLE_PAGE_CHANNEL").is_ok() {
+        "__no_pages"
     } else {
-        filename = format!("{}__with_pages", filename);
+        "__with_pages"
+    };
+    if let Some(stripped) = filename.strip_suffix(".json") {
+        filename = format!("{}{}.json", stripped, suffix);
+    } else {
+        filename = format!("{}{}", filename, suffix);
     }
     let baseline_path = baselines_dir.join(filename);
     report.save_baseline(&baseline_path).unwrap();
@@ -723,6 +742,19 @@ async fn save_longmemeval_v2_with_pages_baseline() {
     .await
     .expect("open lme_v1 scenario DB");
 
+    // Sanity: cached scenario DB must have distilled pages for page-channel to be measurable.
+    // An empty pages table silently produces page-OFF metrics stamped as page-ON.
+    let pages_count = db
+        .count_active_pages()
+        .await
+        .expect("count_active_pages failed");
+    assert!(
+        pages_count > 0,
+        "cached scenario DB has 0 active pages at {} — run scripts/seed-scenario-dbs.sh and verify with cached_scenario_db_compat_check",
+        db_dir.display()
+    );
+    println!("Pages in scenario DB: {}", pages_count);
+
     let fixture = eval_root().join("data/longmemeval_oracle.json");
     if !fixture.exists() {
         println!("SKIP: longmemeval_oracle.json not found");
@@ -741,11 +773,17 @@ async fn save_longmemeval_v2_with_pages_baseline() {
     let baselines_dir = eval_root().join("baselines");
     std::fs::create_dir_all(&baselines_dir).unwrap();
     let mut filename = report.baseline_filename("longmemeval");
-    // Insert __with_pages before the .json extension so cmp tools see the variant.
-    if let Some(stripped) = filename.strip_suffix(".json") {
-        filename = format!("{}__with_pages.json", stripped);
+    // Branch suffix on ORIGIN_DISABLE_PAGE_CHANNEL so page-ON and page-OFF artifacts
+    // don't collide at the legacy app/eval/baselines/ path.
+    let suffix = if std::env::var("ORIGIN_DISABLE_PAGE_CHANNEL").is_ok() {
+        "__no_pages"
     } else {
-        filename = format!("{}__with_pages", filename);
+        "__with_pages"
+    };
+    if let Some(stripped) = filename.strip_suffix(".json") {
+        filename = format!("{}{}.json", stripped, suffix);
+    } else {
+        filename = format!("{}{}", filename, suffix);
     }
     let baseline_path = baselines_dir.join(filename);
     report.save_baseline(&baseline_path).unwrap();
