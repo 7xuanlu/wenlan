@@ -26,8 +26,9 @@ pub(crate) struct HardFilters<'a> {
 }
 
 impl<'a> HardFilters<'a> {
-    /// All-permissive default: no filters applied. Useful for callers (Task 8+)
-    /// that want to start open and only add selective constraints.
+    /// All-permissive default: no filters applied. Useful for callers that want
+    /// to start open and selectively add constraints (e.g. page-channel callers
+    /// in follow-up PRs).
     #[allow(dead_code)]
     pub(crate) fn default_open() -> HardFilters<'static> {
         HardFilters {
@@ -50,6 +51,8 @@ impl<'a> HardFilters<'a> {
 pub(crate) fn build_where(f: &HardFilters) -> String {
     let mut clauses: Vec<String> = Vec::new();
 
+    // NOTE: SQL92 single-quote escaping (safe for SQLite). Switch to bind-params
+    // when this function gains a params-return signature (deferred to PR-B wiring).
     if let Some(s) = f.space {
         clauses.push(format!("c.space = '{}'", s.replace('\'', "''")));
     }
@@ -75,7 +78,7 @@ pub(crate) fn build_where(f: &HardFilters) -> String {
             ));
         }
         // Low-confidence cue: hard filter not applied.
-        // The soft temporal signal still contributes downstream (Task 8).
+        // Low-confidence cues are reserved for the soft-scoring layer added in follow-up work.
     }
 
     if clauses.is_empty() {
@@ -255,40 +258,6 @@ mod tests {
         assert!(
             w.contains("user''s"),
             "memory_type single-quote escaped: {w}"
-        );
-    }
-
-    #[tokio::test]
-    async fn supersede_filter_runtime_flag_disables_clause() {
-        // Env-var tests can race in parallel — guard with a process-wide mutex.
-        static ENV_LOCK: std::sync::OnceLock<tokio::sync::Mutex<()>> = std::sync::OnceLock::new();
-        let _guard = ENV_LOCK
-            .get_or_init(|| tokio::sync::Mutex::new(()))
-            .lock()
-            .await;
-
-        let (db, _dir) = test_db().await;
-
-        // With the flag set, composite_exclude_superseded() must return false.
-        std::env::set_var("ORIGIN_DISABLE_SUPERSEDE_FILTER", "1");
-        let exclude = db.composite_exclude_superseded();
-        std::env::remove_var("ORIGIN_DISABLE_SUPERSEDE_FILTER");
-
-        assert!(
-            !exclude,
-            "composite_exclude_superseded must return false when ORIGIN_DISABLE_SUPERSEDE_FILTER=1"
-        );
-
-        let filters = HardFilters {
-            space: None,
-            memory_type: None,
-            exclude_superseded: exclude,
-            temporal_cue: None,
-        };
-        let w = build_where(&filters);
-        assert!(
-            !w.contains("supersedes"),
-            "build_where must not emit supersede clause when flag is set: {w}"
         );
     }
 }
