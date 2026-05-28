@@ -16563,7 +16563,7 @@ impl MemoryDB {
         let mut vector_results: Vec<(String, f64, Page)> = Vec::new();
         let vec_sql = format!(
             "SELECT {}, vector_distance_cos(c.embedding, vector32(?1)) AS dist \
-             FROM vector_top_k('idx_concepts_embedding', vector32(?1), ?2) AS vt \
+             FROM vector_top_k('idx_pages_embedding', vector32(?1), ?2) AS vt \
              JOIN pages c ON c.rowid = vt.id \
              WHERE c.status = 'active'{type_clause}",
             concept_select,
@@ -25505,6 +25505,41 @@ pub(crate) mod tests {
         assert!(
             !all_results.is_empty(),
             "expected at least 1 page without filter"
+        );
+    }
+
+    // Regression test: search_pages must use idx_pages_embedding (migration 46
+    // renamed the index from idx_concepts_embedding). Without the fix the
+    // vector_top_k call errors silently and falls through to FTS-only; the
+    // query below has zero keyword overlap with the page so only the vector
+    // channel can produce a hit.
+    #[tokio::test]
+    async fn search_pages_uses_idx_pages_embedding_not_concepts() {
+        let (db, _dir) = test_db().await;
+        let now = chrono::Utc::now().to_rfc3339();
+        db.insert_page(
+            "page_rrf_t1",
+            "Origin daemon retrieval",
+            Some("The daemon exposes hybrid memory search over HTTP"),
+            "Origin daemon serves hybrid search combining vector similarity and full-text ranking.",
+            None,
+            Some("architecture"),
+            &["m1"],
+            &now,
+        )
+        .await
+        .unwrap();
+
+        // Query uses semantically related but lexically disjoint terms so FTS
+        // cannot rescue a vector failure.
+        let hits = db
+            .search_pages("server-side retrieval pipeline", 5, None)
+            .await
+            .unwrap();
+        assert!(
+            !hits.is_empty(),
+            "expected non-empty hits with correct vector index; \
+             empty result indicates vector path failed (idx_concepts_embedding stale reference)"
         );
     }
 
