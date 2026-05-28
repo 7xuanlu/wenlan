@@ -8060,6 +8060,60 @@ impl MemoryDB {
         Ok(results)
     }
 
+    /// Convert a `Page` to a `SearchResult` so the page-channel can join the
+    /// memory RRF pool. Pages bypass per-memory modulators (they're pre-distilled
+    /// wiki summaries with their own quality signal). `source` is tagged `"page"`
+    /// so downstream filters / loggers can distinguish.
+    ///
+    /// IMPORTANT: `score` is intentionally set to `0.0` (not `page.relevance_score`).
+    /// The page-channel topology mirrors `augment_with_graph` (db.rs:7619-7629):
+    /// memory results SEED the merged score_map; page rows contribute only the
+    /// RRF mass `1/(60+rank)` on top. Carrying `relevance_score` would double-add
+    /// at different scales and warp ranking. `raw_score` retains the page's
+    /// internal vec+FTS RRF score for diagnostics only.
+    // consumed by search_memory_with_reranker in PR-B Task 3
+    #[allow(dead_code)]
+    fn search_result_from_page(page: Page) -> SearchResult {
+        let last_modified = chrono::DateTime::parse_from_rfc3339(&page.last_modified)
+            .map(|dt| dt.timestamp())
+            .unwrap_or(0);
+        SearchResult {
+            id: page.id.clone(),
+            content: page.content,
+            source: "page".to_string(),
+            source_id: page.id,
+            title: page.title,
+            url: None,
+            chunk_index: 0,
+            last_modified,
+            score: 0.0,
+            chunk_type: None,
+            language: None,
+            semantic_unit: None,
+            memory_type: None,
+            space: page.space,
+            source_agent: None,
+            confidence: None,
+            confirmed: None,
+            stability: None,
+            supersedes: None,
+            summary: page.summary,
+            entity_id: page.entity_id,
+            entity_name: None,
+            quality: None,
+            is_archived: false,
+            is_recap: false,
+            structured_fields: None,
+            retrieval_cue: None,
+            source_text: None,
+            raw_score: page.relevance_score,
+            version: page.version,
+            pending_revision: false,
+            merged_from: None,
+            last_delta_summary: None,
+        }
+    }
+
     /// Insert an eval signal (fire-and-forget, INSERT OR IGNORE for dedup).
     #[allow(clippy::too_many_arguments)]
     pub async fn insert_eval_signal(
@@ -31551,5 +31605,49 @@ pub(crate) mod tests {
             .await
             .expect("sweep");
         assert_eq!(processed, 5, "should process all 5 rows across batches");
+    }
+
+    // ── search_result_from_page tests ────────────────────────────────────────
+
+    #[test]
+    fn from_page_tags_source_and_zeroes_score() {
+        let page = Page {
+            id: "page_x".into(),
+            title: "T".into(),
+            summary: Some("s".into()),
+            content: "body".into(),
+            entity_id: Some("ent_a".into()),
+            space: Some("work".into()),
+            source_memory_ids: vec![],
+            version: 3,
+            status: "active".into(),
+            created_at: "2026-05-01T00:00:00Z".into(),
+            last_compiled: "2026-05-01T00:00:00Z".into(),
+            last_modified: "2026-05-20T12:34:56Z".into(),
+            sources_updated_count: 0,
+            stale_reason: None,
+            user_edited: false,
+            relevance_score: 0.42,
+            last_edited_by: None,
+            last_edited_at: None,
+            last_delta_summary: None,
+            changelog: None,
+        };
+        let r = MemoryDB::search_result_from_page(page);
+        assert_eq!(r.source, "page");
+        assert_eq!(r.id, "page_x");
+        assert_eq!(
+            r.score, 0.0,
+            "fusion-channel rows must start at 0.0; RRF mass is added in the merge loop"
+        );
+        assert_eq!(
+            r.raw_score, 0.42,
+            "raw_score preserves page.relevance_score for diagnostics"
+        );
+        assert_eq!(r.entity_id.as_deref(), Some("ent_a"));
+        assert!(
+            r.last_modified > 0,
+            "RFC3339 string should parse to non-zero Unix ts"
+        );
     }
 }
