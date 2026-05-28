@@ -534,11 +534,11 @@ async fn save_locomo_expanded_baseline() {
 // Cross-encoder rerank variants — fastembed TextRerank (BGERerankerV2M3) in
 // place of the LLM reranker. First run downloads ~600MB of model weights.
 //
-// ORIGIN_DISABLE_PAGE_CHANNEL=1 is forced here to preserve the pre-PR-B
-// 0.684 / 0.883 disk artifacts. These tests use ephemeral per-conversation
-// DBs with no distilled pages so page-channel was already a no-op for them,
-// but the explicit wrap future-proofs against any ephemeral DB change that
-// gains pages.
+// ORIGIN_DISABLE_PAGE_CHANNEL=1 is forced here so the pre-PR-B 0.684 / 0.883
+// disk artifacts stay reproducible regardless of the page-channel default.
+// The ephemeral per-conversation DBs these tests build today have zero
+// distilled pages, so page-channel is a no-op for them with or without the
+// wrap. The wrap makes the intent explicit at the source.
 #[tokio::test]
 #[ignore]
 async fn save_locomo_cross_rerank_baseline() {
@@ -664,17 +664,22 @@ async fn save_locomo_v2_with_pages_baseline() {
     .await
     .expect("open locomo_v1 scenario DB");
 
-    // Sanity: cached scenario DB must have distilled pages for page-channel to be measurable.
-    // An empty pages table silently produces page-OFF metrics stamped as page-ON.
+    // Sanity: cached scenario DB must have distilled pages for page-channel
+    // to be measurable. An empty pages table silently produces page-OFF
+    // metrics stamped as page-ON. SKIP semantics match the fixture-missing
+    // branch below so contributors without seeded DBs get a clear message
+    // instead of a thread panic.
     let pages_count = db
         .count_active_pages()
         .await
         .expect("count_active_pages failed");
-    assert!(
-        pages_count > 0,
-        "cached scenario DB has 0 active pages at {} — run scripts/seed-scenario-dbs.sh and verify with cached_scenario_db_compat_check",
-        db_dir.display()
-    );
+    if pages_count == 0 {
+        println!(
+            "SKIP: cached scenario DB has 0 active pages at {}. Run scripts/seed-scenario-dbs.sh from the repo root then verify with cached_scenario_db_compat_check.",
+            db_dir.display()
+        );
+        return;
+    }
     println!("Pages in scenario DB: {}", pages_count);
 
     let fixture = eval_root().join("data/locomo10.json");
@@ -742,17 +747,22 @@ async fn save_longmemeval_v2_with_pages_baseline() {
     .await
     .expect("open lme_v1 scenario DB");
 
-    // Sanity: cached scenario DB must have distilled pages for page-channel to be measurable.
-    // An empty pages table silently produces page-OFF metrics stamped as page-ON.
+    // Sanity: cached scenario DB must have distilled pages for page-channel
+    // to be measurable. An empty pages table silently produces page-OFF
+    // metrics stamped as page-ON. SKIP semantics match the fixture-missing
+    // branch below so contributors without seeded DBs get a clear message
+    // instead of a thread panic.
     let pages_count = db
         .count_active_pages()
         .await
         .expect("count_active_pages failed");
-    assert!(
-        pages_count > 0,
-        "cached scenario DB has 0 active pages at {} — run scripts/seed-scenario-dbs.sh and verify with cached_scenario_db_compat_check",
-        db_dir.display()
-    );
+    if pages_count == 0 {
+        println!(
+            "SKIP: cached scenario DB has 0 active pages at {}. Run scripts/seed-scenario-dbs.sh from the repo root then verify with cached_scenario_db_compat_check.",
+            db_dir.display()
+        );
+        return;
+    }
     println!("Pages in scenario DB: {}", pages_count);
 
     let fixture = eval_root().join("data/longmemeval_oracle.json");
