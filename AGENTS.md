@@ -151,6 +151,8 @@ Path must be writable and local (network mounts not recommended). When set, also
 
 The PR-B page-channel runners reuse the fullpipeline_*.db seeded DBs without re-ingesting. They live at `~/.cache/origin-eval/scenario_seeded/{locomo_v1,lme_v1}/origin_memory.db`. Repopulate via `bash scripts/seed-scenario-dbs.sh` from the repo root. The `cached_scenario_db_check.rs` integration test (L7 manual) verifies migration replay against current schema; it auto-resolves the root from `SCENARIO_DB_ROOT > EVAL_BASELINES_DIR/scenario_seeded > ~/.cache/origin-eval/scenario_seeded/`.
 
+For full eval discipline (fixture management, baseline layout, env vars, seed scripts, pre-flight checklist, runner conventions), see `app/eval/AGENTS.md` and `crates/origin-core/src/eval/AGENTS.md`. The subdir AGENTS.md files apply per the agents.md hierarchical-instruction convention when an agent is working under those subtrees.
+
 ### Eval pre-flight subset
 
 Set `EVAL_LOCOMO_LIMIT=N` (or `EVAL_LME_LIMIT=N`) to truncate the fixture and run a small-subset eval (~30min) before committing to full 3h runs. Useful for verifying direction on new retrieval variants. Applies to every `run_locomo_eval*` / `run_longmemeval_eval*` variant. Unset (the default) runs the full fixture unchanged.
