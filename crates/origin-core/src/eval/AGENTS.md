@@ -116,20 +116,22 @@ Reranker first-run downloads ~600MB. Account for that on cold caches.
 
 ---
 
-## pages_count sanity assertion (PR-B convention)
+## pages_count sanity gate (PR-B convention)
 
-When using a cached scenario DB, assert that pages exist BEFORE the eval loop. The PR-B runners do this:
+When using a cached scenario DB, check that pages exist BEFORE the eval loop. The PR-B runners SKIP with a clear message when the table is empty:
 
 ```rust
 let pages_count = db.count_active_pages().await.expect("count_active_pages failed");
-assert!(
-    pages_count > 0,
-    "cached scenario DB has 0 active pages at {} - run scripts/seed-scenario-dbs.sh ...",
-    db_dir.display()
-);
+if pages_count == 0 {
+    println!(
+        "SKIP: cached scenario DB has 0 active pages at {}. Run scripts/seed-scenario-dbs.sh from the repo root then verify with cached_scenario_db_compat_check.",
+        db_dir.display()
+    );
+    return;
+}
 ```
 
-Without this assertion, a corrupt or empty page table silently produces page-OFF metrics stamped with the page-ON variant tag. The mislabeling would contaminate any external citation.
+SKIP semantics (rather than panic) match the surrounding fixture-missing branches so a contributor without seeded DBs gets actionable output instead of a thread panic. Without this gate, a corrupt or empty page table silently produces page-OFF metrics stamped with the page-ON variant tag. The mislabeling would contaminate any external citation.
 
 ---
 
