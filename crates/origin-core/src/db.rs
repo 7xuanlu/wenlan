@@ -7993,7 +7993,7 @@ impl MemoryDB {
              FROM observations o
              JOIN entities e ON o.entity_id = e.id
              WHERE o.entity_id IN ({})
-             ORDER BY o.created_at DESC
+             ORDER BY o.confidence DESC NULLS LAST, o.created_at DESC
              LIMIT ?{}",
             placeholders.join(","),
             limit_param
