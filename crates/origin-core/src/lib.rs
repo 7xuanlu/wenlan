@@ -46,6 +46,7 @@ pub mod quality_gate;
 pub mod refinery;
 pub mod rerank;
 pub mod reranker;
+pub(crate) mod retrieval;
 pub mod router;
 pub mod schema;
 pub mod sources;
