@@ -1,4 +1,4 @@
-# crates/origin-core/src/eval — Rust runner conventions
+# crates/origin-core/src/eval - Rust runner conventions
 
 Applies to agents working under `crates/origin-core/src/eval/`. Read alongside root `AGENTS.md` and `app/eval/AGENTS.md` for fixture + artifact context.
 
@@ -124,7 +124,7 @@ When using a cached scenario DB, assert that pages exist BEFORE the eval loop. T
 let pages_count = db.count_active_pages().await.expect("count_active_pages failed");
 assert!(
     pages_count > 0,
-    "cached scenario DB has 0 active pages at {} — run scripts/seed-scenario-dbs.sh ...",
+    "cached scenario DB has 0 active pages at {} - run scripts/seed-scenario-dbs.sh ...",
     db_dir.display()
 );
 ```

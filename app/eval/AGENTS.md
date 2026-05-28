@@ -1,10 +1,10 @@
-# app/eval — Eval Discipline
+# app/eval - Eval Discipline
 
 Applies to agents working under `app/eval/`. Read alongside root `AGENTS.md`, which takes precedence on any topic not covered here.
 
 ---
 
-## data/ — fixture management
+## data/ - fixture management
 
 **`app/eval/data/` is not committed.** It is shown as an untracked directory in `git status`. `.gitignore` only excludes `app/eval/data/longmemeval_*.json` by pattern; `locomo10.json` has no explicit gitignore rule but is also not tracked. Neither file ships in the repo. Every worktree must populate its own copy.
 
@@ -29,7 +29,7 @@ Option B: download from source:
 
 ```bash
 mkdir -p app/eval/data
-# LoCoMo — obtain locomo10.json from the snap-research/locomo repo (see README there)
+# LoCoMo: obtain locomo10.json from the snap-research/locomo repo (see README there)
 # LongMemEval oracle:
 curl -sL 'https://huggingface.co/datasets/xiaowu0162/longmemeval-cleaned/resolve/main/longmemeval_oracle.json' \
   -o app/eval/data/longmemeval_oracle.json
@@ -39,7 +39,7 @@ No import script exists in this repo for the LoCoMo 10-conv subset. If one is ad
 
 ### What silently SKIPs when a fixture is missing
 
-Tests that call `eval_root().join("data/<fixture>.json")` print "SKIP" and return early if the file is absent. They do not fail — they silently produce no metrics. This is the bug that triggered this doc.
+Tests that call `eval_root().join("data/<fixture>.json")` print "SKIP" and return early if the file is absent. They do not fail: they silently produce no metrics. This is the bug that triggered this doc.
 
 Tests that depend on `locomo10.json`:
 - `test_locomo_benchmark`
@@ -72,9 +72,17 @@ Tests that depend on `longmemeval_oracle.json`:
 - `smoke_per_scenario_lme`
 - `judge_fullpipeline_lme` (and `_cli`)
 
+### Sibling fixture trees
+
+Three sibling subdirs live alongside `data/` and are tracked in git:
+
+- `app/eval/kg_fixtures/*.toml` - hand-curated entity + relation ground-truth, consumed by `eval::kg_faithfulness`. See root `AGENTS.md` "KG-faithfulness bench".
+- `app/eval/page_fixtures/*.toml` - hand-curated source memories + distilled page bodies, consumed by `eval::page_faithfulness`. See root `AGENTS.md` "Page-distillation faithfulness bench".
+- `app/eval/fixtures/*.toml` - 41 LoCoMo/LME fixtures vendored from `7xuanlu/origin-app` (PR #148). Used by `eval_harness.rs` integration tests.
+
 ---
 
-## baselines/ — artifact layout
+## baselines/ - artifact layout
 
 `app/eval/baselines/` is gitignored. Two parallel artifact paths exist:
 
@@ -94,11 +102,13 @@ Used by README citations and external references. Written by `report.save_baseli
 ~/.cache/origin-eval/baselines/l1_db/<task>/<variant_tag>__<comparable_hash>.json
 ```
 
-Written by `save_full_report` via the `save_layered` helper in `eval_harness.rs`. Used by `compare-baselines`. The `comparable_hash` is a SHA-256[..8] over a fixed subset of `ReportEnv` fields (fixture revision, embedder revision, LLM provider class, LLM model, mcp_schema_hash, skill_prompt_hash, schema_version, schema_db_version, similarity_fn). The `variant_tag` string (not flags) is the load-bearing differentiator because `flags` is not yet included in the hash (Task #30).
+Written by `save_full_report` via the `save_layered` helper in `eval_harness.rs`. Used by `compare-baselines`. The `comparable_hash` is a SHA-256[..8] over a fixed subset of `ReportEnv` fields (fixture revision, embedder revision, LLM provider class, LLM model, mcp_schema_hash, skill_prompt_hash, schema_version, schema_db_version, similarity_fn_name). The `variant_tag` string (not flags) is the load-bearing differentiator because `flags` is not yet included in the hash (Task #30).
 
 ### Dual-write convention
 
 New PR-B tests call `save_baseline` for the legacy path AND `save_layered` for the layered path. Older tests (`save_locomo_baseline`, `save_longmemeval_baseline`, etc.) call `save_layered` too, via the same pattern.
+
+Exception: `save_locomo_cross_rerank_baseline` and `save_longmemeval_cross_rerank_baseline` write legacy-only by design. This protects the pre-PR-B 0.684/0.883 disk artifacts as a stable reference (see Task 5 plan). New `__with_pages` variants dual-write.
 
 ---
 
@@ -112,7 +122,8 @@ New PR-B tests call `save_baseline` for the legacy path AND `save_layered` for t
 | `EVAL_LME_LIMIT` | Truncate LME fixture to N samples | full fixture | all `run_longmemeval_eval*` variants |
 | `LOCOMO_LIMIT_CONVS` | (fullpipeline only) Limit to first N conversations | full fixture | `generate_fullpipeline_locomo` in `answer_quality.rs` |
 | `EVAL_SCENARIO_CONCURRENCY` | Parallel scenario seeding (fullpipeline) | 1 | `generate_fullpipeline_locomo`, `generate_fullpipeline_lme` in `answer_quality.rs` |
-| `EVAL_MAX_USD` | Cost cap for API-batch judge runs | none | `wall_clock.rs` watchdog |
+| `EVAL_MAX_USD` | Cost cap for API-batch judge runs (pre-flight and per-batch) | none | `anthropic.rs` (`parse_eval_max_usd`, `submit_batch`, `estimate_batch_cost`) |
+| `EVAL_MAX_WALL_SECS` | Wall-clock timeout for eval runs | 14400 (4h) | `wall_clock.rs` watchdog |
 | `EVAL_ALLOW_WIPE` | Allow `clear_all_for_eval` to wipe DB | unset (refuses) | `open_or_seed_scenario_db` stale-cache recovery |
 | `ORIGIN_DISABLE_PAGE_CHANNEL` | Skip page-channel in `search_memory_with_reranker` | unset (page-channel ON) | `db.rs:search_memory_with_reranker`, `locomo.rs:run_locomo_eval_cross_rerank_from_db`, `longmemeval.rs:run_longmemeval_eval_cross_rerank_from_db`, suffix branching in `eval_harness.rs` |
 | `ORIGIN_EVAL_ROOT` | Override `eval_root()` in test harness | `app/eval/` | `eval_root()` in `eval_harness.rs` |
@@ -161,9 +172,9 @@ For the full citation rules (single-run rule, schema-version rule, receipt-only 
 Before running any eval test:
 
 ```
-- [ ] app/eval/data/locomo10.json present — if missing, populate via sibling worktree cp or source download
-- [ ] app/eval/data/longmemeval_oracle.json present — if missing, download via curl (see above)
-- [ ] Cached scenario DBs present at ~/.cache/origin-eval/scenario_seeded/{locomo_v1,lme_v1}/origin_memory.db — if missing, run: bash scripts/seed-scenario-dbs.sh
+- [ ] app/eval/data/locomo10.json present. If missing, populate via sibling worktree cp or source download
+- [ ] app/eval/data/longmemeval_oracle.json present. If missing, download via curl (see above)
+- [ ] Cached scenario DBs present at ~/.cache/origin-eval/scenario_seeded/{locomo_v1,lme_v1}/origin_memory.db. If missing, run: bash scripts/seed-scenario-dbs.sh
 - [ ] Branch is clean: git status --short shows only intentional changes
 - [ ] Limit chosen: EVAL_LOCOMO_LIMIT=2 for ~1min wiring smoke; EVAL_LOCOMO_LIMIT=20 for ~30min subset; unset for full fixture
 - [ ] For A/B comparison runs: identical env except the ONE variable being tested
