@@ -8071,6 +8071,13 @@ impl MemoryDB {
     /// RRF mass `1/(60+rank)` on top. Carrying `relevance_score` would double-add
     /// at different scales and warp ranking. `raw_score` retains the page's
     /// internal vec+FTS RRF score for diagnostics only.
+    ///
+    /// **Recency caveat**: `page.last_modified` is parsed from RFC3339; on parse
+    /// failure, `last_modified=0` (1970-01-01). Page-channel rows MUST stay out of
+    /// recency-based scoring paths (`signals::recency_decay` etc.) or a malformed
+    /// timestamp silently demotes the page to maximum decay. Current consumer
+    /// (PR-B Task 3 two-stage RRF merge) does not route page rows through recency,
+    /// so this is documented as an invariant rather than enforced at the type level.
     // consumed by search_memory_with_reranker in PR-B Task 3
     #[allow(dead_code)]
     fn search_result_from_page(page: Page) -> SearchResult {
@@ -31648,6 +31655,21 @@ pub(crate) mod tests {
         assert!(
             r.last_modified > 0,
             "RFC3339 string should parse to non-zero Unix ts"
+        );
+        // Tighten per code-quality review: protect every non-Option mapping.
+        assert_eq!(r.source_id, "page_x", "source_id should equal page.id");
+        assert_eq!(r.title, "T", "title should pass through unchanged");
+        assert_eq!(r.content, "body", "content should pass through unchanged");
+        assert_eq!(
+            r.summary.as_deref(),
+            Some("s"),
+            "summary should pass through"
+        );
+        assert_eq!(r.version, 3, "version should pass through unchanged");
+        assert_eq!(
+            r.space.as_deref(),
+            Some("work"),
+            "space should pass through"
         );
     }
 }
