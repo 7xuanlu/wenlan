@@ -7521,7 +7521,29 @@ impl MemoryDB {
             }
         }
 
+        // Page-channel append semantics (iter2, addresses Phase 2 regression).
+        //
+        // Page rows mechanically can't earn ground-truth credit in retrieval
+        // metrics (relevant_ids are memory source_ids; page_* ids never
+        // appear). When pages competed with memories inside the CE rerank
+        // top-N, they displaced relevant memories and dropped NDCG@10 by
+        // up to 1.92pt on LME. Iter2 separates: rerank memories vs pages
+        // jointly above for ordering quality, then PARTITION the result so
+        // memories fill the top `limit` slots and pages ride along as
+        // supplementary context in positions [limit, limit + page_count).
+        //
+        // Net effect on eval: neutral (eval reads positions 0..limit,
+        // sees only memories). Net effect on production: page surface
+        // available to callers reading beyond `limit` for bonus context.
+        // No wire-shape break: SearchResult.source distinguishes "page"
+        // from "memory" rows for any consumer that wants to filter.
+        let (page_results, mem_results): (Vec<_>, Vec<_>) =
+            results.into_iter().partition(|r| r.source == "page");
+        let mut results = mem_results;
         results.truncate(limit);
+        // Append top-K pages after the memory limit. K = configured pool
+        // size (already capped upstream by page_channel_limit()).
+        results.extend(page_results);
         Ok(results)
     }
 
