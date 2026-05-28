@@ -7364,6 +7364,13 @@ impl MemoryDB {
         Ok(results)
     }
 
+    /// Max pages fetched per query in the page-channel.
+    /// Hardcoded (no tuning struct change) per design philosophy — surgical scope.
+    /// Override at runtime via env: `ORIGIN_DISABLE_PAGE_CHANNEL=1` skips the
+    /// page-channel entirely (used by bar-setting baseline tests to avoid
+    /// overwriting pre-PR-B headline numbers — see comparable_hash follow-up).
+    const PAGE_CHANNEL_LIMIT: usize = 10;
+
     /// Hybrid search with reranker-trait reranking.
     ///
     /// Equivalent to `search_memory_reranked` but takes a [`Reranker`] trait
@@ -7377,6 +7384,12 @@ impl MemoryDB {
     /// The reranker trait method is sync (fastembed is CPU work). This wrapper
     /// dispatches it via `tokio::task::spawn_blocking` so the tokio runtime
     /// stays free.
+    ///
+    /// Page-channel: pages are injected as a 4th RRF stream between the memory
+    /// pool and the CE rerank step. Memory `r.score` seeds the merged score_map;
+    /// page rows contribute only `1/(60+rank)` RRF mass on top (mirrors
+    /// `augment_with_graph` at db.rs:7619-7644). Disable with
+    /// `ORIGIN_DISABLE_PAGE_CHANNEL=1`.
     pub async fn search_memory_with_reranker(
         &self,
         query: &str,
@@ -7393,7 +7406,9 @@ impl MemoryDB {
             std::env::var("RERANK_POOL_MULTIPLIER").ok().as_deref(),
             std::env::var("RERANK_POOL_FLOOR").ok().as_deref(),
         );
-        let mut results = self
+        let page_channel_disabled = std::env::var("ORIGIN_DISABLE_PAGE_CHANNEL").is_ok();
+
+        let memory_results = self
             .search_memory(
                 query,
                 fetch_pool,
@@ -7406,6 +7421,51 @@ impl MemoryDB {
             )
             .await?;
 
+        let page_results: Vec<Page> = if page_channel_disabled {
+            Vec::new()
+        } else {
+            // Log-and-degrade on page-channel failure (mirrors augment_with_graph's
+            // silent fallback pattern at db.rs:7605-7608).
+            self.search_pages(query, Self::PAGE_CHANNEL_LIMIT, None)
+                .await
+                .unwrap_or_default()
+        };
+
+        // Two-stage RRF merge — mirrors augment_with_graph (db.rs:7619-7644).
+        // Memory r.score SEEDS the merged score_map; page rows contribute only
+        // 1/(60+rank) RRF mass on top. `search_result_from_page` zeros page
+        // score so this addition doesn't double-add at incompatible scales.
+        let mut score_map: HashMap<String, f32> = memory_results
+            .iter()
+            .map(|r| (r.id.clone(), r.score))
+            .collect();
+        let mut result_map: HashMap<String, SearchResult> = memory_results
+            .into_iter()
+            .map(|r| (r.id.clone(), r))
+            .collect();
+
+        for (rank, page) in page_results.into_iter().enumerate() {
+            let rrf_score = 1.0 / (60.0 + rank as f32);
+            let r = Self::search_result_from_page(page);
+            *score_map.entry(r.id.clone()).or_default() += rrf_score;
+            result_map.entry(r.id.clone()).or_insert(r);
+        }
+
+        let mut results: Vec<SearchResult> = result_map
+            .into_values()
+            .map(|mut r| {
+                r.score = *score_map.get(&r.id).unwrap_or(&0.0);
+                r
+            })
+            .collect();
+        results.sort_by(|a, b| {
+            b.score
+                .partial_cmp(&a.score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+                .then_with(|| a.source_id.cmp(&b.source_id))
+        });
+
+        // CE rerank — unchanged from prior body, now operates on the merged pool.
         if let Some(reranker) = reranker {
             if results.len() > 1 {
                 let candidates: Vec<(String, String)> = results
@@ -7435,8 +7495,7 @@ impl MemoryDB {
                 };
 
                 if !scored.is_empty() {
-                    let score_map: std::collections::HashMap<String, f32> =
-                        scored.into_iter().collect();
+                    let score_map: HashMap<String, f32> = scored.into_iter().collect();
                     for r in &mut results {
                         if let Some(&s) = score_map.get(&r.id) {
                             r.score = s;
@@ -8078,8 +8137,7 @@ impl MemoryDB {
     /// timestamp silently demotes the page to maximum decay. Current consumer
     /// (PR-B Task 3 two-stage RRF merge) does not route page rows through recency,
     /// so this is documented as an invariant rather than enforced at the type level.
-    // consumed by search_memory_with_reranker in PR-B Task 3
-    #[allow(dead_code)]
+    // consumed by search_memory_with_reranker (page-channel RRF, PR-B Task 3)
     fn search_result_from_page(page: Page) -> SearchResult {
         let last_modified = chrono::DateTime::parse_from_rfc3339(&page.last_modified)
             .map(|dt| dt.timestamp())
@@ -31670,6 +31728,73 @@ pub(crate) mod tests {
             r.space.as_deref(),
             Some("work"),
             "space should pass through"
+        );
+    }
+
+    // ── page-channel RRF integration tests ───────────────────────────────────
+
+    #[tokio::test]
+    async fn search_with_reranker_includes_pages_by_default() {
+        let (db, _tmp) = test_db().await;
+        let now = chrono::Utc::now().to_rfc3339();
+
+        // Seed a page — insert_page generates a real embedding so search_pages can find it.
+        db.insert_page(
+            "page_t1",
+            "Pages topic title about retrieval",
+            Some("pages topic summary about retrieval"),
+            "pages topic body about retrieval systems",
+            None,
+            None,
+            &[],
+            &now,
+        )
+        .await
+        .unwrap();
+
+        let hits =
+            temp_env::async_with_vars([("ORIGIN_DISABLE_PAGE_CHANNEL", None::<&str>)], async {
+                db.search_memory_with_reranker("pages topic retrieval", 10, None, None, None, None)
+                    .await
+                    .unwrap()
+            })
+            .await;
+        assert!(
+            hits.iter().any(|r| r.source == "page"),
+            "page-channel default-ON: expected at least one source=page hit, got {} results sources={:?}",
+            hits.len(),
+            hits.iter().map(|r| &r.source).collect::<Vec<_>>()
+        );
+    }
+
+    #[tokio::test]
+    async fn search_with_reranker_excludes_pages_when_env_disables() {
+        let (db, _tmp) = test_db().await;
+        let now = chrono::Utc::now().to_rfc3339();
+
+        db.insert_page(
+            "page_t2",
+            "Pages disabled title",
+            Some("pages disabled summary"),
+            "pages disabled body content",
+            None,
+            None,
+            &[],
+            &now,
+        )
+        .await
+        .unwrap();
+
+        let hits = temp_env::async_with_vars([("ORIGIN_DISABLE_PAGE_CHANNEL", Some("1"))], async {
+            db.search_memory_with_reranker("pages disabled", 10, None, None, None, None)
+                .await
+                .unwrap()
+        })
+        .await;
+        assert!(
+            hits.iter().all(|r| r.source != "page"),
+            "ORIGIN_DISABLE_PAGE_CHANNEL=1: expected zero source=page hits, got {:?}",
+            hits.iter().map(|r| (&r.id, &r.source)).collect::<Vec<_>>()
         );
     }
 }
