@@ -2,7 +2,6 @@
 //! TuningConfig — intelligence-affecting numeric parameters loaded from TOML.
 //! Serde defaults match the current hardcoded values exactly.
 
-use crate::error::OriginError;
 use serde::Deserialize;
 use std::path::{Path, PathBuf};
 
@@ -166,33 +165,6 @@ fn d_168_u64() -> u64 {
 
 // ---- RetrievalConfig ----
 
-#[derive(Debug, Clone, serde::Serialize, Deserialize)]
-pub struct CompositeWeights {
-    pub semantic: f64,
-    pub bm25: f64,
-    pub graph_distance: f64,
-    pub activation: f64,
-    pub temporal: f64,
-    pub trust: f64,
-    pub recency: f64,
-    pub access_frequency: f64,
-}
-
-impl Default for CompositeWeights {
-    fn default() -> Self {
-        Self {
-            semantic: 0.27,
-            bm25: 0.11,
-            graph_distance: 0.16,
-            activation: 0.16,
-            temporal: 0.11,
-            trust: 0.07,
-            recency: 0.07,
-            access_frequency: 0.05,
-        }
-    }
-}
-
 fn default_graph_depth() -> u8 {
     2
 }
@@ -223,8 +195,6 @@ fn default_pool_size_cap() -> usize {
 
 #[derive(Debug, Clone, serde::Serialize, Deserialize)]
 pub struct RetrievalConfig {
-    #[serde(default)]
-    pub composite_weights: CompositeWeights,
     #[serde(default = "default_graph_depth")]
     pub graph_depth: u8,
     #[serde(default = "default_activation_decay")]
@@ -248,7 +218,6 @@ pub struct RetrievalConfig {
 impl Default for RetrievalConfig {
     fn default() -> Self {
         Self {
-            composite_weights: CompositeWeights::default(),
             graph_depth: default_graph_depth(),
             activation_decay: default_activation_decay(),
             activation_threshold: default_activation_threshold(),
@@ -259,26 +228,6 @@ impl Default for RetrievalConfig {
             pool_size_floor: default_pool_size_floor(),
             pool_size_cap: default_pool_size_cap(),
         }
-    }
-}
-
-impl RetrievalConfig {
-    pub fn validate(&self) -> Result<(), OriginError> {
-        let w = &self.composite_weights;
-        let sum = w.semantic
-            + w.bm25
-            + w.graph_distance
-            + w.activation
-            + w.temporal
-            + w.trust
-            + w.recency
-            + w.access_frequency;
-        if (sum - 1.0).abs() > 1e-6 {
-            return Err(OriginError::Validation(format!(
-                "composite_weights sum must be 1.0, got {sum}"
-            )));
-        }
-        Ok(())
     }
 }
 
@@ -908,18 +857,8 @@ score_threshold = 0.25
     }
 
     #[test]
-    fn retrieval_config_defaults_sum_weights_to_one() {
+    fn retrieval_config_defaults() {
         let cfg = RetrievalConfig::default();
-        let sum = cfg.composite_weights.semantic
-            + cfg.composite_weights.bm25
-            + cfg.composite_weights.graph_distance
-            + cfg.composite_weights.activation
-            + cfg.composite_weights.temporal
-            + cfg.composite_weights.trust
-            + cfg.composite_weights.recency
-            + cfg.composite_weights.access_frequency;
-        assert!((sum - 1.0).abs() < 1e-6, "weights sum = {sum}");
-
         assert_eq!(cfg.graph_depth, 2);
         assert!((cfg.activation_decay - 0.5).abs() < 1e-9);
         assert!((cfg.activation_threshold - 0.1).abs() < 1e-9);
@@ -929,12 +868,5 @@ score_threshold = 0.25
         assert_eq!(cfg.pool_size_multiplier, 5);
         assert_eq!(cfg.pool_size_floor, 100);
         assert_eq!(cfg.pool_size_cap, 500);
-    }
-
-    #[test]
-    fn retrieval_config_validate_rejects_off_weights() {
-        let mut cfg = RetrievalConfig::default();
-        cfg.composite_weights.semantic = 0.5; // breaks sum-to-1
-        assert!(cfg.validate().is_err());
     }
 }
