@@ -293,6 +293,8 @@ pub struct LongMemEvalBaseline {
     pub recall_at_5: f64,
     pub hit_rate_at_1: f64,
     pub per_category: Vec<crate::eval::report::CategoryBaseline>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub coverage: Option<crate::eval::report::CoverageRecall>,
 }
 
 /// Per-category results.
@@ -328,6 +330,10 @@ pub struct LongMemEvalReport {
     /// Populated by each runner variant; empty by default for back-compat.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub per_case: Vec<crate::eval::report::CaseResult>,
+    /// Source-expanded coverage recall (page-channel `_from_db` runner only;
+    /// None elsewhere). See [`crate::eval::report::CoverageRecall`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub coverage: Option<crate::eval::report::CoverageRecall>,
 }
 
 impl LongMemEvalReport {
@@ -355,6 +361,15 @@ impl LongMemEvalReport {
             "  Hit Rate@1:  {:.4}\n",
             self.aggregate_hit_rate_at_1
         ));
+
+        if let Some(ref cov) = self.coverage {
+            out.push_str(&format!(
+                "  Coverage recall (set-based, page-source-expanded):\n    blind:    {:.4}\n    expanded: {:.4}\n    delta:    {:+.4}  <- page contribution\n",
+                cov.blind,
+                cov.expanded,
+                cov.expanded - cov.blind
+            ));
+        }
 
         if let Some(ref b) = self.baseline {
             out.push_str("\nBaseline comparison:\n");
@@ -429,6 +444,7 @@ impl LongMemEvalReport {
             recall_at_5: self.aggregate_recall_at_5,
             hit_rate_at_1: self.aggregate_hit_rate_at_1,
             per_category,
+            coverage: self.coverage.clone(),
         };
         let json = serde_json::to_string_pretty(&baseline).map_err(std::io::Error::other)?;
         std::fs::write(path, json)
@@ -691,6 +707,7 @@ pub async fn run_longmemeval_eval(path: &Path) -> Result<LongMemEvalReport, Orig
         baseline: None,
         env: None,
         per_case,
+        coverage: None,
     };
     report.env = Some(build_lme_env(
         "base",
@@ -824,6 +841,7 @@ pub async fn run_longmemeval_eval_reranked(
         baseline: None,
         env: None,
         per_case,
+        coverage: None,
     };
     report.env = Some(build_lme_env(
         "reranked",
@@ -961,6 +979,7 @@ pub async fn run_longmemeval_eval_cross_rerank(
         baseline: None,
         env: None,
         per_case,
+        coverage: None,
     };
     report.env = Some(build_lme_env(
         "cross_rerank",
@@ -970,6 +989,198 @@ pub async fn run_longmemeval_eval_cross_rerank(
         &format!("cross-encoder:{}", reranker.model_id()),
         None,
     ));
+    Ok(report)
+}
+
+// ---------------------------------------------------------------------------
+// Cross-encoder rerank runner against a pre-seeded consolidated DB (PR-B)
+// ---------------------------------------------------------------------------
+
+/// Like `run_longmemeval_eval_cross_rerank`, but scores against a PRE-SEEDED
+/// consolidated scenario DB (no per-question ephemeral DB, no ingest).
+/// Used by PR-B's page-channel eval to surface distilled pages that the
+/// fullpipeline harness wrote into the cache.
+///
+/// `db` MUST already contain memories with `source_id` formatted as
+/// `lme_<question_id>_<session_idx>_t<turn_idx>` (matches the
+/// `memory_source_id` function used by the LME ephemeral seed path and
+/// the fullpipeline harness).
+/// Page-channel ON/OFF is controlled by the caller via the
+/// `ORIGIN_ENABLE_PAGE_CHANNEL` env var (read inside
+/// `search_memory_with_reranker`).
+pub async fn run_longmemeval_eval_cross_rerank_from_db(
+    db: &MemoryDB,
+    path: &Path,
+    reranker: std::sync::Arc<dyn crate::reranker::Reranker>,
+) -> Result<LongMemEvalReport, OriginError> {
+    let mut samples = load_longmemeval(path)?;
+    apply_lme_limit(&mut samples);
+    // (question_type, ndcg_5, ndcg_10, mrr, recall_5, hit_rate_1)
+    let mut all_scores: Vec<(String, f64, f64, f64, f64, f64)> = Vec::new();
+    let mut per_case: Vec<crate::eval::report::CaseResult> = Vec::new();
+    let mut total_memories: usize = 0;
+    let mut cov_blind_acc: Vec<f64> = Vec::new();
+    let mut cov_expanded_acc: Vec<f64> = Vec::new();
+
+    for sample in &samples {
+        let memories = extract_memories(sample);
+        total_memories += memories.len();
+
+        // Build relevance judgments: has_answer turns are relevant.
+        // source_id format matches both the ephemeral seed and fullpipeline harness.
+        let relevant_source_ids: HashSet<String> = memories
+            .iter()
+            .filter(|m| m.has_answer)
+            .map(|m| memory_source_id(&m.question_id, m.session_idx, m.turn_idx))
+            .collect();
+
+        if relevant_source_ids.is_empty() {
+            continue;
+        }
+
+        let results = db
+            .search_memory_with_reranker(
+                &sample.question,
+                10,
+                None,
+                None,
+                None,
+                Some(reranker.clone()),
+            )
+            .await?;
+
+        let result_ids: Vec<&str> = results.iter().map(|r| r.source_id.as_str()).collect();
+
+        let grades: HashMap<&str, u8> = result_ids
+            .iter()
+            .map(|id| {
+                (
+                    *id,
+                    if relevant_source_ids.contains(*id) {
+                        1
+                    } else {
+                        0
+                    },
+                )
+            })
+            .collect();
+
+        let relevant_set: HashSet<&str> = relevant_source_ids.iter().map(|s| s.as_str()).collect();
+
+        let ndcg_10 = metrics::ndcg_at_k(&result_ids, &grades, 10);
+        let ndcg_5 = metrics::ndcg_at_k(&result_ids, &grades, 5);
+        let mrr_val = metrics::mrr(&result_ids, &relevant_set);
+        let recall_5 = metrics::recall_at_k(&result_ids, &relevant_set, 5);
+        let hr_1 = metrics::hit_rate_at_k(&result_ids, &relevant_set, 1);
+
+        all_scores.push((
+            sample.question_type.clone(),
+            ndcg_5,
+            ndcg_10,
+            mrr_val,
+            recall_5,
+            hr_1,
+        ));
+        per_case.push(build_lme_case_result(
+            &sample.question,
+            &sample.question_type,
+            ndcg_5,
+            ndcg_10,
+            mrr_val,
+            recall_5,
+            hr_1,
+        ));
+
+        // Source-expanded coverage recall (page provenance, eval-only).
+        // Pages contribute the memory source ids they were distilled from;
+        // memories contribute their own id. Set-based + deduped so a gold
+        // id counts once (no double-count). Reads the full result bundle
+        // (memories in [0..limit] + appended pages) — pages ride after the
+        // limit by the iter2 partition.
+        let page_src_owned: Vec<(String, Vec<String>)> = {
+            let mut v = Vec::new();
+            for r in &results {
+                if r.source == "page" {
+                    let srcs: Vec<String> = db
+                        .get_page_sources(&r.source_id)
+                        .await
+                        .unwrap_or_default()
+                        .into_iter()
+                        .map(|ps| ps.memory_source_id)
+                        .collect();
+                    v.push((r.source_id.clone(), srcs));
+                }
+            }
+            v
+        };
+        let page_sources_map: HashMap<&str, Vec<&str>> = page_src_owned
+            .iter()
+            .map(|(pid, srcs)| (pid.as_str(), srcs.iter().map(|s| s.as_str()).collect()))
+            .collect();
+        let units: Vec<(&str, &str)> = results
+            .iter()
+            .map(|r| (r.source.as_str(), r.source_id.as_str()))
+            .collect();
+        let cov_blind = metrics::coverage_recall(
+            &metrics::build_coverage_set(&units, &HashMap::new()),
+            &relevant_set,
+        );
+        let cov_expanded = metrics::coverage_recall(
+            &metrics::build_coverage_set(&units, &page_sources_map),
+            &relevant_set,
+        );
+        cov_blind_acc.push(cov_blind);
+        cov_expanded_acc.push(cov_expanded);
+    }
+
+    let per_category = aggregate_by_category(&all_scores);
+    let coverage = if cov_blind_acc.is_empty() {
+        None
+    } else {
+        Some(crate::eval::report::CoverageRecall {
+            blind: cov_blind_acc.iter().sum::<f64>() / cov_blind_acc.len() as f64,
+            expanded: cov_expanded_acc.iter().sum::<f64>() / cov_expanded_acc.len() as f64,
+        })
+    };
+    let mut report = LongMemEvalReport {
+        aggregate_ndcg_at_10: avg_field(&all_scores, |s| s.2),
+        aggregate_mrr: avg_field(&all_scores, |s| s.3),
+        aggregate_recall_at_5: avg_field(&all_scores, |s| s.4),
+        aggregate_hit_rate_at_1: avg_field(&all_scores, |s| s.5),
+        total_questions: all_scores.len(),
+        total_memories,
+        per_category,
+        baseline: None,
+        env: None,
+        per_case,
+        coverage,
+    };
+
+    // Branch variant_tag on ORIGIN_ENABLE_PAGE_CHANNEL so page-ON and page-OFF
+    // produce distinct baseline filenames (comparable_hash uses the variant string).
+    let page_channel_state = if crate::db::page_channel_enabled() {
+        "on"
+    } else {
+        "off"
+    };
+    let variant_tag = if page_channel_state == "off" {
+        "cross_rerank_v2_no_pages"
+    } else {
+        "cross_rerank_v2_pages"
+    };
+    let mut env_stamp = build_lme_env(
+        variant_tag,
+        path,
+        "search_memory_with_reranker",
+        "cross-encoder",
+        &format!("cross-encoder:{}", reranker.model_id()),
+        None,
+    );
+    env_stamp
+        .flags
+        .push(format!("page_channel={}", page_channel_state));
+    env_stamp.flags.push("scenario_db=consolidated".to_string());
+    report.env = Some(env_stamp);
     Ok(report)
 }
 
@@ -1094,6 +1305,7 @@ pub async fn run_longmemeval_eval_expanded(
         baseline: None,
         env: None,
         per_case,
+        coverage: None,
     };
     report.env = Some(build_lme_env(
         "expanded",
@@ -1372,6 +1584,7 @@ pub async fn run_longmemeval_eval_with_gate(
         baseline: None,
         env: None,
         per_case,
+        coverage: None,
     };
     report.env = Some(build_lme_env(
         "gated",
@@ -1693,6 +1906,7 @@ mod tests {
             baseline: None,
             env: None,
             per_case: vec![],
+            coverage: None,
         };
         let text = report.to_terminal();
         assert!(text.contains("LongMemEval Benchmark"));
@@ -1738,6 +1952,7 @@ mod tests {
             baseline: None,
             env: None,
             per_case: vec![],
+            coverage: None,
         };
 
         report.save_baseline(&path).unwrap();
@@ -1786,9 +2001,11 @@ mod tests {
                     mrr: 0.550,
                     recall_at_5: 0.650,
                 }],
+                coverage: None,
             }),
             env: None,
             per_case: vec![],
+            coverage: None,
         };
 
         let text = report.to_terminal();

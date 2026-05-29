@@ -208,6 +208,22 @@ pub struct CaseResult {
     pub category: Option<String>,
 }
 
+/// Source-expanded coverage recall for the page-channel eval (task #45).
+///
+/// `blind` is set-based recall over memory results only (a retrieved page
+/// contributes only its own `page_*` id, which never matches memory-keyed
+/// ground truth). `expanded` is recall after expanding each retrieved page to
+/// the memory source ids it was distilled from (provenance expansion). The
+/// `expanded - blind` delta is the honest "pages help" signal. Both are
+/// dedup-safe set metrics — a gold id is credited once regardless of how many
+/// units point to it, so a page-expanded id also retrieved directly cannot
+/// inflate the score.
+#[derive(Debug, Clone, Serialize, serde::Deserialize)]
+pub struct CoverageRecall {
+    pub blind: f64,
+    pub expanded: f64,
+}
+
 /// Hash the subset of `ReportEnv` fields that determine baseline comparability.
 ///
 /// Includes: fixture_revision, embedder_revision, llm_provider_class,

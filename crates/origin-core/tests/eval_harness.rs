@@ -533,47 +533,60 @@ async fn save_locomo_expanded_baseline() {
 
 // Cross-encoder rerank variants — fastembed TextRerank (BGERerankerV2M3) in
 // place of the LLM reranker. First run downloads ~600MB of model weights.
+//
+// ORIGIN_ENABLE_PAGE_CHANNEL is forced to None (unset) here so the pre-PR-B
+// 0.684 / 0.883 disk artifacts stay reproducible regardless of the caller env.
+// The ephemeral per-conversation DBs these tests build today have zero
+// distilled pages, so page-channel is a no-op for them with or without the
+// wrap. The wrap makes the intent explicit at the source.
 #[tokio::test]
 #[ignore]
 async fn save_locomo_cross_rerank_baseline() {
-    let path = eval_root().join("data/locomo10.json");
-    if !path.exists() {
-        println!("SKIP: locomo10.json not found");
-        return;
-    }
-    let reranker = origin_core::reranker::init_cross_encoder_reranker(None)
-        .expect("init_cross_encoder_reranker failed (downloads ~600MB on first run)");
-    let report = origin_core::eval::locomo::run_locomo_eval_cross_rerank(&path, reranker)
-        .await
-        .unwrap();
-    let baselines_dir = eval_root().join("baselines");
-    std::fs::create_dir_all(&baselines_dir).unwrap();
-    let baseline_path = baselines_dir.join(report.baseline_filename("locomo"));
-    report.save_baseline(&baseline_path).unwrap();
-    println!("Saved LoCoMo cross-rerank baseline to {:?}", baseline_path);
+    temp_env::async_with_vars([("ORIGIN_ENABLE_PAGE_CHANNEL", None::<&str>)], async {
+        let path = eval_root().join("data/locomo10.json");
+        if !path.exists() {
+            println!("SKIP: locomo10.json not found");
+            return;
+        }
+        let reranker = origin_core::reranker::init_cross_encoder_reranker(None)
+            .expect("init_cross_encoder_reranker failed (downloads ~600MB on first run)");
+        let report = origin_core::eval::locomo::run_locomo_eval_cross_rerank(&path, reranker)
+            .await
+            .unwrap();
+        let baselines_dir = eval_root().join("baselines");
+        std::fs::create_dir_all(&baselines_dir).unwrap();
+        let baseline_path = baselines_dir.join(report.baseline_filename("locomo"));
+        report.save_baseline(&baseline_path).unwrap();
+        println!("Saved LoCoMo cross-rerank baseline to {:?}", baseline_path);
+    })
+    .await;
 }
 
 #[tokio::test]
 #[ignore]
 async fn save_longmemeval_cross_rerank_baseline() {
-    let path = eval_root().join("data/longmemeval_oracle.json");
-    if !path.exists() {
-        println!("SKIP: longmemeval_oracle.json not found");
-        return;
-    }
-    let reranker = origin_core::reranker::init_cross_encoder_reranker(None)
-        .expect("init_cross_encoder_reranker failed (downloads ~600MB on first run)");
-    let report = origin_core::eval::longmemeval::run_longmemeval_eval_cross_rerank(&path, reranker)
-        .await
-        .unwrap();
-    let baselines_dir = eval_root().join("baselines");
-    std::fs::create_dir_all(&baselines_dir).unwrap();
-    let baseline_path = baselines_dir.join(report.baseline_filename("longmemeval"));
-    report.save_baseline(&baseline_path).unwrap();
-    println!(
-        "Saved LongMemEval cross-rerank baseline to {:?}",
-        baseline_path
-    );
+    temp_env::async_with_vars([("ORIGIN_ENABLE_PAGE_CHANNEL", None::<&str>)], async {
+        let path = eval_root().join("data/longmemeval_oracle.json");
+        if !path.exists() {
+            println!("SKIP: longmemeval_oracle.json not found");
+            return;
+        }
+        let reranker = origin_core::reranker::init_cross_encoder_reranker(None)
+            .expect("init_cross_encoder_reranker failed (downloads ~600MB on first run)");
+        let report =
+            origin_core::eval::longmemeval::run_longmemeval_eval_cross_rerank(&path, reranker)
+                .await
+                .unwrap();
+        let baselines_dir = eval_root().join("baselines");
+        std::fs::create_dir_all(&baselines_dir).unwrap();
+        let baseline_path = baselines_dir.join(report.baseline_filename("longmemeval"));
+        report.save_baseline(&baseline_path).unwrap();
+        println!(
+            "Saved LongMemEval cross-rerank baseline to {:?}",
+            baseline_path
+        );
+    })
+    .await;
 }
 
 #[tokio::test]
@@ -596,6 +609,203 @@ async fn save_longmemeval_expanded_baseline() {
     let baseline_path = baselines_dir.join(report.baseline_filename("longmemeval"));
     report.save_baseline(&baseline_path).unwrap();
     println!("Saved LongMemEval expanded baseline to {:?}", baseline_path);
+    save_layered(&report, |r| r.to_eval_report());
+}
+
+// ---------------------------------------------------------------------------
+// PR-B page-channel with-pages baseline runners
+// ---------------------------------------------------------------------------
+
+/// Resolve the root directory for cached scenario DBs.
+///
+/// Resolution order (highest priority first):
+/// 1. `SCENARIO_DB_ROOT` env var
+/// 2. `${EVAL_BASELINES_DIR}/scenario_seeded`
+/// 3. `~/.cache/origin-eval/scenario_seeded/` (canonical default)
+fn resolve_scenario_db_root_from_harness() -> std::path::PathBuf {
+    if let Ok(p) = std::env::var("SCENARIO_DB_ROOT") {
+        return std::path::PathBuf::from(p);
+    }
+    if let Ok(p) = std::env::var("EVAL_BASELINES_DIR") {
+        return std::path::PathBuf::from(p).join("scenario_seeded");
+    }
+    let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
+    std::path::PathBuf::from(home)
+        .join(".cache")
+        .join("origin-eval")
+        .join("scenario_seeded")
+}
+
+/// PR-B page-channel ON baseline (LoCoMo).
+///
+/// Uses the pre-seeded consolidated scenario DB at
+/// `${SCENARIO_DB_ROOT or ~/.cache/origin-eval/scenario_seeded}/locomo_v1/origin_memory.db`
+/// — skips ingest entirely. Page-channel ON by default; set
+/// `ORIGIN_ENABLE_PAGE_CHANNEL=1` to measure the ON variant. Page-channel is OFF by default.
+///
+/// Filename suffix `__with_pages` distinguishes from the per-conversation
+/// `cross_rerank__*__pool_baseline.json` headline (which uses ephemeral DBs
+/// and is preserved as the 0.684 bar).
+#[tokio::test]
+#[ignore = "needs Metal GPU + cached scenario DB (run scripts/seed-scenario-dbs.sh)"]
+async fn save_locomo_v2_with_pages_baseline() {
+    let scenario_root = resolve_scenario_db_root_from_harness();
+    let db_dir = scenario_root.join("locomo_v1");
+    assert!(
+        db_dir.join("origin_memory.db").exists(),
+        "missing {}/origin_memory.db — run scripts/seed-scenario-dbs.sh",
+        db_dir.display()
+    );
+
+    let db = origin_core::db::MemoryDB::new(
+        &db_dir,
+        std::sync::Arc::new(origin_core::events::NoopEmitter),
+    )
+    .await
+    .expect("open locomo_v1 scenario DB");
+
+    // Sanity: cached scenario DB must have distilled pages for page-channel
+    // to be measurable. An empty pages table silently produces page-OFF
+    // metrics stamped as page-ON. SKIP semantics match the fixture-missing
+    // branch below so contributors without seeded DBs get a clear message
+    // instead of a thread panic.
+    let pages_count = db
+        .count_active_pages()
+        .await
+        .expect("count_active_pages failed");
+    if pages_count == 0 {
+        println!(
+            "SKIP: cached scenario DB has 0 active pages at {}. Run scripts/seed-scenario-dbs.sh from the repo root then verify with cached_scenario_db_compat_check.",
+            db_dir.display()
+        );
+        return;
+    }
+    println!("Pages in scenario DB: {}", pages_count);
+
+    let fixture = eval_root().join("data/locomo10.json");
+    if !fixture.exists() {
+        println!("SKIP: locomo10.json not found");
+        return;
+    }
+
+    let reranker = origin_core::reranker::init_cross_encoder_reranker(None)
+        .expect("init_cross_encoder_reranker failed (downloads ~600MB on first run)");
+
+    let report =
+        origin_core::eval::locomo::run_locomo_eval_cross_rerank_from_db(&db, &fixture, reranker)
+            .await
+            .unwrap();
+
+    let baselines_dir = eval_root().join("baselines");
+    std::fs::create_dir_all(&baselines_dir).unwrap();
+    let mut filename = report.baseline_filename("locomo");
+    // Branch suffix on ORIGIN_ENABLE_PAGE_CHANNEL so page-ON and page-OFF artifacts
+    // don't collide at the legacy app/eval/baselines/ path. Truthy parse via
+    // shared helper so suffix matches what the production code path actually did.
+    let suffix = if origin_core::db::page_channel_enabled() {
+        "__with_pages"
+    } else {
+        "__no_pages"
+    };
+    if let Some(stripped) = filename.strip_suffix(".json") {
+        filename = format!("{}{}.json", stripped, suffix);
+    } else {
+        filename = format!("{}{}", filename, suffix);
+    }
+    let baseline_path = baselines_dir.join(filename);
+    report.save_baseline(&baseline_path).unwrap();
+    println!("Saved LoCoMo v2 with-pages baseline to {:?}", baseline_path);
+    println!("  NDCG@10:  {:.4}", report.aggregate_ndcg_at_10);
+    println!("  Recall@5: {:.4}", report.aggregate_recall_at_5);
+    println!("  MRR:      {:.4}", report.aggregate_mrr);
+    save_layered(&report, |r| r.to_eval_report());
+}
+
+/// PR-B page-channel ON baseline (LongMemEval).
+///
+/// Uses the pre-seeded consolidated scenario DB at
+/// `${SCENARIO_DB_ROOT or ~/.cache/origin-eval/scenario_seeded}/lme_v1/origin_memory.db`
+/// — skips ingest entirely. Page-channel ON by default; set
+/// `ORIGIN_ENABLE_PAGE_CHANNEL=1` to measure the ON variant. Page-channel is OFF by default.
+///
+/// Filename suffix `__with_pages` distinguishes from the per-question
+/// `cross_rerank__*__pool_baseline.json` headline.
+#[tokio::test]
+#[ignore = "needs Metal GPU + cached scenario DB (run scripts/seed-scenario-dbs.sh)"]
+async fn save_longmemeval_v2_with_pages_baseline() {
+    let scenario_root = resolve_scenario_db_root_from_harness();
+    let db_dir = scenario_root.join("lme_v1");
+    assert!(
+        db_dir.join("origin_memory.db").exists(),
+        "missing {}/origin_memory.db — run scripts/seed-scenario-dbs.sh",
+        db_dir.display()
+    );
+
+    let db = origin_core::db::MemoryDB::new(
+        &db_dir,
+        std::sync::Arc::new(origin_core::events::NoopEmitter),
+    )
+    .await
+    .expect("open lme_v1 scenario DB");
+
+    // Sanity: cached scenario DB must have distilled pages for page-channel
+    // to be measurable. An empty pages table silently produces page-OFF
+    // metrics stamped as page-ON. SKIP semantics match the fixture-missing
+    // branch below so contributors without seeded DBs get a clear message
+    // instead of a thread panic.
+    let pages_count = db
+        .count_active_pages()
+        .await
+        .expect("count_active_pages failed");
+    if pages_count == 0 {
+        println!(
+            "SKIP: cached scenario DB has 0 active pages at {}. Run scripts/seed-scenario-dbs.sh from the repo root then verify with cached_scenario_db_compat_check.",
+            db_dir.display()
+        );
+        return;
+    }
+    println!("Pages in scenario DB: {}", pages_count);
+
+    let fixture = eval_root().join("data/longmemeval_oracle.json");
+    if !fixture.exists() {
+        println!("SKIP: longmemeval_oracle.json not found");
+        return;
+    }
+
+    let reranker = origin_core::reranker::init_cross_encoder_reranker(None)
+        .expect("init_cross_encoder_reranker failed (downloads ~600MB on first run)");
+
+    let report = origin_core::eval::longmemeval::run_longmemeval_eval_cross_rerank_from_db(
+        &db, &fixture, reranker,
+    )
+    .await
+    .unwrap();
+
+    let baselines_dir = eval_root().join("baselines");
+    std::fs::create_dir_all(&baselines_dir).unwrap();
+    let mut filename = report.baseline_filename("longmemeval");
+    // Branch suffix on ORIGIN_ENABLE_PAGE_CHANNEL so page-ON and page-OFF artifacts
+    // don't collide at the legacy app/eval/baselines/ path. Truthy parse via
+    // shared helper so suffix matches what the production code path actually did.
+    let suffix = if origin_core::db::page_channel_enabled() {
+        "__with_pages"
+    } else {
+        "__no_pages"
+    };
+    if let Some(stripped) = filename.strip_suffix(".json") {
+        filename = format!("{}{}.json", stripped, suffix);
+    } else {
+        filename = format!("{}{}", filename, suffix);
+    }
+    let baseline_path = baselines_dir.join(filename);
+    report.save_baseline(&baseline_path).unwrap();
+    println!(
+        "Saved LongMemEval v2 with-pages baseline to {:?}",
+        baseline_path
+    );
+    println!("  NDCG@10:  {:.4}", report.aggregate_ndcg_at_10);
+    println!("  Recall@5: {:.4}", report.aggregate_recall_at_5);
+    println!("  MRR:      {:.4}", report.aggregate_mrr);
     save_layered(&report, |r| r.to_eval_report());
 }
 

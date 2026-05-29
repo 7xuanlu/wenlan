@@ -110,6 +110,63 @@ pub fn hit_rate_at_k(ranked_ids: &[&str], relevant_ids: &HashSet<&str>, k: usize
     }
 }
 
+/// Source-coverage set for set-based recall over a retrieved bundle.
+///
+/// Each retrieved unit contributes the source-memory ids it "covers": a
+/// `"page"` unit expands to its `page_sources` ids (provenance expansion,
+/// the HippoRAG / LongMemEval key-value pattern), and every other unit
+/// contributes its own id. The result is a set, so a gold id is covered at
+/// most once no matter how many units point to it — that is what structurally
+/// prevents the double-count a positional metric would suffer when a
+/// page-expanded id is also retrieved directly at another rank.
+///
+/// `units` is `(source_tag, source_id)` per retrieved result. `page_sources`
+/// maps a page id to the memory source ids it was distilled from; a page id
+/// absent from the map (or with no sources) contributes only its own id,
+/// which will not match memory-keyed ground truth.
+pub fn build_coverage_set(
+    units: &[(&str, &str)],
+    page_sources: &HashMap<&str, Vec<&str>>,
+) -> HashSet<String> {
+    let mut covered = HashSet::new();
+    for (source, id) in units {
+        if *source == "page" {
+            match page_sources.get(id) {
+                Some(srcs) if !srcs.is_empty() => {
+                    for s in srcs {
+                        covered.insert((*s).to_string());
+                    }
+                }
+                _ => {
+                    covered.insert((*id).to_string());
+                }
+            }
+        } else {
+            covered.insert((*id).to_string());
+        }
+    }
+    covered
+}
+
+/// Set-based coverage recall: fraction of `relevant` ids present in `covered`.
+///
+/// Position-independent and dedup-safe (both args are sets), unlike
+/// [`recall_at_k`]. This is the metric pages move honestly — a page is
+/// credited via the source ids it brings into `covered`, never as its own id.
+/// Returns 0.0 when `relevant` is empty.
+pub fn coverage_recall(covered: &HashSet<String>, relevant: &HashSet<&str>) -> f64 {
+    if relevant.is_empty() {
+        return 0.0;
+    }
+    let mut found = 0usize;
+    for id in relevant {
+        if covered.contains(*id) {
+            found += 1;
+        }
+    }
+    found as f64 / relevant.len() as f64
+}
+
 /// Negative leakage — count of negative IDs that appear in top-K results.
 pub fn negative_leakage(ranked_ids: &[&str], negative_ids: &HashSet<&str>, k: usize) -> usize {
     let k = k.min(ranked_ids.len());
@@ -468,5 +525,71 @@ mod tests {
         let archived: HashSet<&str> = HashSet::new();
         let results: Vec<(&str, Vec<&str>)> = vec![];
         assert_eq!(archive_leakage(&archived, &results), 0.0);
+    }
+
+    fn sset(ids: &[&str]) -> HashSet<String> {
+        ids.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn coverage_set_memory_only() {
+        let units = vec![("memory", "m1"), ("memory", "m2")];
+        let ps: HashMap<&str, Vec<&str>> = HashMap::new();
+        assert_eq!(build_coverage_set(&units, &ps), sset(&["m1", "m2"]));
+    }
+
+    #[test]
+    fn coverage_set_page_expands_to_sources_not_own_id() {
+        let units = vec![("memory", "m1"), ("page", "p1")];
+        let mut ps = HashMap::new();
+        ps.insert("p1", vec!["m2", "m3"]);
+        assert_eq!(build_coverage_set(&units, &ps), sset(&["m1", "m2", "m3"]));
+    }
+
+    #[test]
+    fn coverage_set_dedup_no_double_count() {
+        let units = vec![("memory", "m2"), ("page", "p1")];
+        let mut ps = HashMap::new();
+        ps.insert("p1", vec!["m2", "m3"]);
+        let cov = build_coverage_set(&units, &ps);
+        assert_eq!(cov, sset(&["m2", "m3"]));
+        assert_eq!(cov.len(), 2, "m2 counted once, not twice");
+    }
+
+    #[test]
+    fn coverage_set_page_without_sources_falls_back_to_own_id() {
+        let units = vec![("page", "p1")];
+        let ps: HashMap<&str, Vec<&str>> = HashMap::new();
+        let cov = build_coverage_set(&units, &ps);
+        assert_eq!(cov, sset(&["p1"]));
+    }
+
+    #[test]
+    fn coverage_recall_empty_relevant_is_zero() {
+        assert_eq!(coverage_recall(&sset(&["m1"]), &HashSet::new()), 0.0);
+    }
+
+    #[test]
+    fn coverage_recall_full_and_partial() {
+        let cov = sset(&["m1", "m2", "m3"]);
+        let rel_full: HashSet<&str> = ["m1", "m2"].into_iter().collect();
+        assert_eq!(coverage_recall(&cov, &rel_full), 1.0);
+        let rel_partial: HashSet<&str> = ["m1", "mX"].into_iter().collect();
+        assert_eq!(coverage_recall(&cov, &rel_partial), 0.5);
+    }
+
+    #[test]
+    fn coverage_recall_page_expansion_lifts_over_blind() {
+        let units = vec![("memory", "m1"), ("page", "p1")];
+        let mut ps = HashMap::new();
+        ps.insert("p1", vec!["m2", "m3"]);
+        let blind = build_coverage_set(&units, &HashMap::new());
+        let expanded = build_coverage_set(&units, &ps);
+        let rel: HashSet<&str> = ["m1", "m2", "m3"].into_iter().collect();
+        let cb = coverage_recall(&blind, &rel);
+        let ce = coverage_recall(&expanded, &rel);
+        assert!((cb - 1.0 / 3.0).abs() < 1e-9, "blind = 1/3, got {cb}");
+        assert!((ce - 1.0).abs() < 1e-9, "expanded = 1.0, got {ce}");
+        assert!(ce > cb, "page expansion must lift coverage");
     }
 }

@@ -278,6 +278,8 @@ pub struct LocomoBaseline {
     pub recall_at_5: f64,
     pub hit_rate_at_1: f64,
     pub per_category: Vec<crate::eval::report::CategoryBaseline>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub coverage: Option<crate::eval::report::CoverageRecall>,
 }
 
 /// Per-category results
@@ -329,6 +331,10 @@ pub struct LocomoReport {
     /// Populated by each runner variant; empty by default for back-compat.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub per_case: Vec<crate::eval::report::CaseResult>,
+    /// Source-expanded coverage recall (page-channel `_from_db` runner only;
+    /// None elsewhere). See [`crate::eval::report::CoverageRecall`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub coverage: Option<crate::eval::report::CoverageRecall>,
 }
 
 impl LocomoReport {
@@ -354,6 +360,15 @@ impl LocomoReport {
             "  Hit Rate@1:  {:.4}\n",
             self.aggregate_hit_rate_at_1
         ));
+
+        if let Some(ref cov) = self.coverage {
+            out.push_str(&format!(
+                "  Coverage recall (set-based, page-source-expanded):\n    blind:    {:.4}\n    expanded: {:.4}\n    delta:    {:+.4}  <- page contribution\n",
+                cov.blind,
+                cov.expanded,
+                cov.expanded - cov.blind
+            ));
+        }
 
         if let Some(ref b) = self.baseline {
             out.push_str("\nBaseline comparison:\n");
@@ -438,6 +453,7 @@ impl LocomoReport {
             recall_at_5: self.aggregate_recall_at_5,
             hit_rate_at_1: self.aggregate_hit_rate_at_1,
             per_category,
+            coverage: self.coverage.clone(),
         };
         let json = serde_json::to_string_pretty(&baseline).map_err(std::io::Error::other)?;
         std::fs::write(path, json)
@@ -716,6 +732,7 @@ pub async fn run_locomo_eval(path: &Path) -> Result<LocomoReport, OriginError> {
         baseline: None,
         env: None,
         per_case,
+        coverage: None,
     };
     report.env = Some(build_locomo_env(
         "base",
@@ -863,6 +880,7 @@ pub async fn run_locomo_eval_reranked(
         baseline: None,
         env: None,
         per_case,
+        coverage: None,
     };
     report.env = Some(build_locomo_env(
         "reranked",
@@ -1016,6 +1034,7 @@ pub async fn run_locomo_eval_cross_rerank(
         baseline: None,
         env: None,
         per_case,
+        coverage: None,
     };
     report.env = Some(build_locomo_env(
         "cross_rerank",
@@ -1025,6 +1044,213 @@ pub async fn run_locomo_eval_cross_rerank(
         &format!("cross-encoder:{}", reranker.model_id()),
         None,
     ));
+    Ok(report)
+}
+
+// ---------------------------------------------------------------------------
+// Cross-encoder rerank runner against a pre-seeded consolidated DB (PR-B)
+// ---------------------------------------------------------------------------
+
+/// Like `run_locomo_eval_cross_rerank`, but scores against a PRE-SEEDED
+/// consolidated scenario DB (no per-conversation ephemeral DB, no ingest).
+/// Used by PR-B's page-channel eval to surface distilled pages that the
+/// fullpipeline harness wrote into the cache.
+///
+/// `db` MUST already contain memories with `source_id` formatted as
+/// `locomo_<sample_id>_obs_<i>` (matches both the in-tree fullpipeline
+/// seed path and the ephemeral seed in `run_locomo_eval_cross_rerank`).
+/// Page-channel ON/OFF is controlled by the caller via the
+/// `ORIGIN_ENABLE_PAGE_CHANNEL` env var (read inside
+/// `search_memory_with_reranker`).
+pub async fn run_locomo_eval_cross_rerank_from_db(
+    db: &MemoryDB,
+    path: &Path,
+    reranker: std::sync::Arc<dyn crate::reranker::Reranker>,
+) -> Result<LocomoReport, OriginError> {
+    let mut samples = load_locomo(path)?;
+    apply_locomo_limit(&mut samples);
+    let mut conversations = Vec::new();
+    // (category, ndcg_5, ndcg_10, mrr, recall_5, hit_rate_1)
+    let mut all_scores: Vec<(u8, f64, f64, f64, f64, f64)> = Vec::new();
+    let mut per_case: Vec<crate::eval::report::CaseResult> = Vec::new();
+    let mut cov_blind_acc: Vec<f64> = Vec::new();
+    let mut cov_expanded_acc: Vec<f64> = Vec::new();
+
+    for sample in &samples {
+        let memories = extract_observations(sample);
+
+        // Re-derive the source_id mapping — matches the fullpipeline seed path.
+        let dia_to_source: HashMap<String, String> = memories
+            .iter()
+            .enumerate()
+            .map(|(i, m)| {
+                (
+                    m.dia_id.clone(),
+                    format!("locomo_{}_obs_{}", sample.sample_id, i),
+                )
+            })
+            .collect();
+
+        let mut conv_scores: Vec<(u8, f64, f64, f64, f64, f64)> = Vec::new();
+
+        for qa in &sample.qa {
+            if qa.category == 5 {
+                continue;
+            }
+
+            let results = db
+                .search_memory_with_reranker(
+                    &qa.question,
+                    10,
+                    None,
+                    None,
+                    None,
+                    Some(reranker.clone()),
+                )
+                .await?;
+
+            let relevant_ids: HashSet<String> = qa
+                .evidence
+                .iter()
+                .filter_map(|did| dia_to_source.get(did).cloned())
+                .collect();
+
+            if relevant_ids.is_empty() {
+                continue;
+            }
+
+            let result_ids: Vec<&str> = results.iter().map(|r| r.source_id.as_str()).collect();
+
+            let grades: HashMap<&str, u8> = result_ids
+                .iter()
+                .map(|id| (*id, if relevant_ids.contains(*id) { 1 } else { 0 }))
+                .collect();
+
+            let relevant_set: HashSet<&str> = relevant_ids.iter().map(|s| s.as_str()).collect();
+
+            let ndcg_10 = metrics::ndcg_at_k(&result_ids, &grades, 10);
+            let ndcg_5 = metrics::ndcg_at_k(&result_ids, &grades, 5);
+            let mrr_val = metrics::mrr(&result_ids, &relevant_set);
+            let recall_5 = metrics::recall_at_k(&result_ids, &relevant_set, 5);
+            let hr_1 = metrics::hit_rate_at_k(&result_ids, &relevant_set, 1);
+
+            conv_scores.push((qa.category, ndcg_5, ndcg_10, mrr_val, recall_5, hr_1));
+            all_scores.push((qa.category, ndcg_5, ndcg_10, mrr_val, recall_5, hr_1));
+            per_case.push(build_locomo_case_result(
+                &qa.question,
+                qa.category,
+                ndcg_5,
+                ndcg_10,
+                mrr_val,
+                recall_5,
+                hr_1,
+            ));
+
+            // Source-expanded coverage recall (page provenance, eval-only).
+            // Pages contribute the memory source ids they were distilled from;
+            // memories contribute their own id. Set-based + deduped so a gold
+            // id counts once (no double-count). Reads the full result bundle
+            // (memories in [0..limit] + appended pages) — pages ride after the
+            // limit by the iter2 partition.
+            let page_src_owned: Vec<(String, Vec<String>)> = {
+                let mut v = Vec::new();
+                for r in &results {
+                    if r.source == "page" {
+                        let srcs: Vec<String> = db
+                            .get_page_sources(&r.source_id)
+                            .await
+                            .unwrap_or_default()
+                            .into_iter()
+                            .map(|ps| ps.memory_source_id)
+                            .collect();
+                        v.push((r.source_id.clone(), srcs));
+                    }
+                }
+                v
+            };
+            let page_sources_map: HashMap<&str, Vec<&str>> = page_src_owned
+                .iter()
+                .map(|(pid, srcs)| (pid.as_str(), srcs.iter().map(|s| s.as_str()).collect()))
+                .collect();
+            let units: Vec<(&str, &str)> = results
+                .iter()
+                .map(|r| (r.source.as_str(), r.source_id.as_str()))
+                .collect();
+            let cov_blind = metrics::coverage_recall(
+                &metrics::build_coverage_set(&units, &HashMap::new()),
+                &relevant_set,
+            );
+            let cov_expanded = metrics::coverage_recall(
+                &metrics::build_coverage_set(&units, &page_sources_map),
+                &relevant_set,
+            );
+            cov_blind_acc.push(cov_blind);
+            cov_expanded_acc.push(cov_expanded);
+        }
+
+        let per_cat = aggregate_by_category(&conv_scores);
+        let n = conv_scores.len();
+        conversations.push(LocomoConversationResult {
+            sample_id: sample.sample_id.clone(),
+            memories_seeded: memories.len(),
+            questions_evaluated: n,
+            overall_ndcg_at_10: avg_field(&conv_scores, |s| s.2),
+            overall_mrr: avg_field(&conv_scores, |s| s.3),
+            overall_recall_at_5: avg_field(&conv_scores, |s| s.4),
+            per_category: per_cat,
+        });
+    }
+
+    let per_cat_agg = aggregate_by_category(&all_scores);
+    let coverage = if cov_blind_acc.is_empty() {
+        None
+    } else {
+        Some(crate::eval::report::CoverageRecall {
+            blind: cov_blind_acc.iter().sum::<f64>() / cov_blind_acc.len() as f64,
+            expanded: cov_expanded_acc.iter().sum::<f64>() / cov_expanded_acc.len() as f64,
+        })
+    };
+    let mut report = LocomoReport {
+        conversations,
+        aggregate_ndcg_at_10: avg_field(&all_scores, |s| s.2),
+        aggregate_mrr: avg_field(&all_scores, |s| s.3),
+        aggregate_recall_at_5: avg_field(&all_scores, |s| s.4),
+        aggregate_hit_rate_at_1: avg_field(&all_scores, |s| s.5),
+        total_questions: all_scores.len(),
+        total_memories: samples.iter().map(|s| extract_observations(s).len()).sum(),
+        per_category_aggregate: per_cat_agg,
+        qa_accuracy: None,
+        baseline: None,
+        env: None,
+        per_case,
+        coverage,
+    };
+
+    // Branch variant_tag on ORIGIN_ENABLE_PAGE_CHANNEL so page-ON and page-OFF
+    // produce distinct baseline filenames (comparable_hash uses the variant string).
+    let page_channel_state = if crate::db::page_channel_enabled() {
+        "on"
+    } else {
+        "off"
+    };
+    let variant_tag = if page_channel_state == "off" {
+        "cross_rerank_v2_no_pages"
+    } else {
+        "cross_rerank_v2_pages"
+    };
+    let mut env_stamp = build_locomo_env(
+        variant_tag,
+        path,
+        "search_memory_with_reranker",
+        "cross-encoder",
+        &format!("cross-encoder:{}", reranker.model_id()),
+        None,
+    );
+    env_stamp
+        .flags
+        .push(format!("page_channel={}", page_channel_state));
+    env_stamp.flags.push("scenario_db=consolidated".to_string());
+    report.env = Some(env_stamp);
     Ok(report)
 }
 
@@ -1163,6 +1389,7 @@ pub async fn run_locomo_eval_expanded(
         baseline: None,
         env: None,
         per_case,
+        coverage: None,
     };
     report.env = Some(build_locomo_env(
         "expanded",
@@ -1485,6 +1712,7 @@ pub async fn run_locomo_eval_with_gate(
         baseline: None,
         env: None,
         per_case,
+        coverage: None,
     };
     report.env = Some(build_locomo_env(
         "gated",
@@ -1788,6 +2016,7 @@ mod tests {
             baseline: None,
             env: None,
             per_case: vec![],
+            coverage: None,
         };
 
         report.save_baseline(&path).unwrap();
@@ -1821,6 +2050,7 @@ mod tests {
             baseline: None,
             env: None,
             per_case: vec![],
+            coverage: None,
         };
         report.env = Some(crate::eval::report::ReportEnv {
             fixture_revision: "deadbeef".into(),
@@ -1873,9 +2103,11 @@ mod tests {
                     mrr: 0.410,
                     recall_at_5: 0.380,
                 }],
+                coverage: None,
             }),
             env: None,
             per_case: vec![],
+            coverage: None,
         };
 
         let text = report.to_terminal();
@@ -1925,5 +2157,37 @@ mod tests {
         let mut samples = mock_samples(5);
         apply_limit_from_env(&mut samples, var, "locomo", "conversations");
         assert_eq!(samples.len(), 5, "unset env var must leave samples intact");
+    }
+
+    #[test]
+    fn to_terminal_prints_coverage_delta_when_present() {
+        let mut report = LocomoReport {
+            conversations: vec![],
+            aggregate_ndcg_at_10: 0.0,
+            aggregate_mrr: 0.0,
+            aggregate_recall_at_5: 0.0,
+            aggregate_hit_rate_at_1: 0.0,
+            total_questions: 0,
+            total_memories: 0,
+            per_category_aggregate: vec![],
+            qa_accuracy: None,
+            baseline: None,
+            env: None,
+            per_case: vec![],
+            coverage: Some(crate::eval::report::CoverageRecall {
+                blind: 0.40,
+                expanded: 0.55,
+            }),
+        };
+        let out = report.to_terminal();
+        assert!(
+            out.contains("Coverage recall"),
+            "missing coverage header:\n{out}"
+        );
+        assert!(out.contains("0.4000"), "missing blind:\n{out}");
+        assert!(out.contains("0.5500"), "missing expanded:\n{out}");
+        assert!(out.contains("+0.1500"), "missing delta:\n{out}");
+        report.coverage = None;
+        assert!(!report.to_terminal().contains("Coverage recall"));
     }
 }
