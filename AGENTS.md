@@ -120,7 +120,7 @@ Origin runs across several layers. The split is driven by three questions: **(1)
 | **L5 coverage on PR** | `cargo llvm-cov` on origin-core + origin-server only | GitHub (`coverage.yml`) | Every PR | ~10min | **No (informational)** |
 | **L6 main canary** | Embedding-only eval (`cargo test -p origin-core --lib eval::retrieval -- --ignored`) | GitHub (`ci.yml`) | Push to `main` | ~10min | No (post-merge) |
 | **L7 manual local** | `bash scripts/coverage.sh` (HTML coverage), GPU eval suite (`cargo test -- --ignored`), Anthropic batch judge (`ANTHROPIC_API_KEY=... cargo test ...`) | Your laptop | On demand | minutes-hours | No |
-| **L8 pre-release** | Full eval suite vs saved baseline. Record deltas in vault/memory **never git** (Apache-2.0 public-repo rule for daemon; treat numbers as private until you have signed-off baselines) | Your laptop | Per release | hours | Soft gate |
+| **L8 pre-release** | Full eval suite vs saved baseline. Commit a **curated, env-stamped snapshot** of headline numbers to a results doc/README (single-run tagged "scaffold"; headline claims need N≥3 + stddev). Raw per-run baselines + history series stay gitignored. See "Commit policy" under Eval Citation Discipline. | Your laptop | Per release | hours | Soft gate |
 
 ### What does NOT run in CI and why
 
@@ -375,6 +375,7 @@ Numbers from `~/.cache/origin-eval/baselines/` carry guardrails that MUST be hon
 - **Receipt-only rule (extends cost-receipt).** Regression thresholds, latency claims, accuracy improvements must have a measured-stddev or N≥3-run backing. No "improved X%" or "regressed Y%" without `compare-baselines` output AND multi-run inputs.
 - **Per-case visibility.** Aggregate accuracy claims must include per-case breakdown when available. Headline-only numbers hide regressions (LoCoMo adversarial-cat-5 contamination is the canonical trap; see `feature/eval-semantic-gaps` discussion).
 - **Layer attribution.** Public numbers must specify L1 / L2 / L3 / L4. No cross-layer averages without explicit weighting.
+- **Commit policy — snapshot, not history.** Metric *values* MAY be committed to git as a **curated, env-stamped snapshot** (the current headline numbers) in a results doc or README section, overwritten per release. Each committed value carries its methodology inline (model, dataset, run count, repro command); single-run results are tagged "scaffold" and headline/external claims still require the Single-run + Receipt-only gates above (N≥3 + stddev). Do **not** commit a per-run *history series* — that is what the gitignored `append_history` file is for. Raw per-run baseline JSONs under `~/.cache/origin-eval/baselines/` stay **gitignored** (artifacts, reproduced by re-running, not source). The repo is Apache-2.0; the older blanket "never commit numbers to git" rule is retired in favor of this snapshot policy.
 
 ### Crate boundaries
 - **origin-core must have NO tauri or axum dependencies.** Verify with `grep -rn "use tauri\|use axum" crates/origin-core/src/` — expect zero hits. Any event emission goes through the `EventEmitter` trait.
