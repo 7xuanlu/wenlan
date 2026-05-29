@@ -1064,6 +1064,8 @@ pub async fn run_locomo_eval_cross_rerank_from_db(
     // (category, ndcg_5, ndcg_10, mrr, recall_5, hit_rate_1)
     let mut all_scores: Vec<(u8, f64, f64, f64, f64, f64)> = Vec::new();
     let mut per_case: Vec<crate::eval::report::CaseResult> = Vec::new();
+    let mut cov_blind_acc: Vec<f64> = Vec::new();
+    let mut cov_expanded_acc: Vec<f64> = Vec::new();
 
     for sample in &samples {
         let memories = extract_observations(sample);
@@ -1134,6 +1136,47 @@ pub async fn run_locomo_eval_cross_rerank_from_db(
                 recall_5,
                 hr_1,
             ));
+
+            // Source-expanded coverage recall (page provenance, eval-only).
+            // Pages contribute the memory source ids they were distilled from;
+            // memories contribute their own id. Set-based + deduped so a gold
+            // id counts once (no double-count). Reads the full result bundle
+            // (memories in [0..limit] + appended pages) — pages ride after the
+            // limit by the iter2 partition.
+            let page_src_owned: Vec<(String, Vec<String>)> = {
+                let mut v = Vec::new();
+                for r in &results {
+                    if r.source == "page" {
+                        let srcs: Vec<String> = db
+                            .get_page_sources(&r.source_id)
+                            .await
+                            .unwrap_or_default()
+                            .into_iter()
+                            .map(|ps| ps.memory_source_id)
+                            .collect();
+                        v.push((r.source_id.clone(), srcs));
+                    }
+                }
+                v
+            };
+            let page_sources_map: HashMap<&str, Vec<&str>> = page_src_owned
+                .iter()
+                .map(|(pid, srcs)| (pid.as_str(), srcs.iter().map(|s| s.as_str()).collect()))
+                .collect();
+            let units: Vec<(&str, &str)> = results
+                .iter()
+                .map(|r| (r.source.as_str(), r.source_id.as_str()))
+                .collect();
+            let cov_blind = metrics::coverage_recall(
+                &metrics::build_coverage_set(&units, &HashMap::new()),
+                &relevant_set,
+            );
+            let cov_expanded = metrics::coverage_recall(
+                &metrics::build_coverage_set(&units, &page_sources_map),
+                &relevant_set,
+            );
+            cov_blind_acc.push(cov_blind);
+            cov_expanded_acc.push(cov_expanded);
         }
 
         let per_cat = aggregate_by_category(&conv_scores);
@@ -1150,6 +1193,14 @@ pub async fn run_locomo_eval_cross_rerank_from_db(
     }
 
     let per_cat_agg = aggregate_by_category(&all_scores);
+    let coverage = if cov_blind_acc.is_empty() {
+        None
+    } else {
+        Some(crate::eval::report::CoverageRecall {
+            blind: cov_blind_acc.iter().sum::<f64>() / cov_blind_acc.len() as f64,
+            expanded: cov_expanded_acc.iter().sum::<f64>() / cov_expanded_acc.len() as f64,
+        })
+    };
     let mut report = LocomoReport {
         conversations,
         aggregate_ndcg_at_10: avg_field(&all_scores, |s| s.2),
@@ -1163,7 +1214,7 @@ pub async fn run_locomo_eval_cross_rerank_from_db(
         baseline: None,
         env: None,
         per_case,
-        coverage: None,
+        coverage,
     };
 
     // Branch variant_tag on ORIGIN_DISABLE_PAGE_CHANNEL so page-ON and page-OFF
