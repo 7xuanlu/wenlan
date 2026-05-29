@@ -700,8 +700,9 @@ async fn save_locomo_v2_with_pages_baseline() {
     std::fs::create_dir_all(&baselines_dir).unwrap();
     let mut filename = report.baseline_filename("locomo");
     // Branch suffix on ORIGIN_DISABLE_PAGE_CHANNEL so page-ON and page-OFF artifacts
-    // don't collide at the legacy app/eval/baselines/ path.
-    let suffix = if std::env::var("ORIGIN_DISABLE_PAGE_CHANNEL").is_ok() {
+    // don't collide at the legacy app/eval/baselines/ path. Truthy parse via
+    // shared helper so suffix matches what the production code path actually did.
+    let suffix = if origin_core::db::page_channel_disabled() {
         "__no_pages"
     } else {
         "__with_pages"
@@ -784,8 +785,9 @@ async fn save_longmemeval_v2_with_pages_baseline() {
     std::fs::create_dir_all(&baselines_dir).unwrap();
     let mut filename = report.baseline_filename("longmemeval");
     // Branch suffix on ORIGIN_DISABLE_PAGE_CHANNEL so page-ON and page-OFF artifacts
-    // don't collide at the legacy app/eval/baselines/ path.
-    let suffix = if std::env::var("ORIGIN_DISABLE_PAGE_CHANNEL").is_ok() {
+    // don't collide at the legacy app/eval/baselines/ path. Truthy parse via
+    // shared helper so suffix matches what the production code path actually did.
+    let suffix = if origin_core::db::page_channel_disabled() {
         "__no_pages"
     } else {
         "__with_pages"

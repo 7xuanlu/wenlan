@@ -1088,12 +1088,21 @@ pub async fn handle_search_memory(
         }
     };
 
-    let source_ids: Vec<String> = results.iter().map(|r| r.source_id.clone()).collect();
+    // Filter to memory rows ONLY before access_log + agent_activity. Page-channel
+    // (PR-B) returns `source="page"` rows whose `source_id` (`page_*`) is NOT a
+    // valid memory id; persisting those into `access_log` or `agent_activity`
+    // breaks downstream analytics that resolve ids against the `memories` table
+    // (e.g. /api/retrievals/recent). See 2026-05-28 adversarial review.
+    let memory_source_ids: Vec<String> = results
+        .iter()
+        .filter(|r| r.source == "memory")
+        .map(|r| r.source_id.clone())
+        .collect();
     {
         let s = state.read().await;
-        s.access_tracker.record_accesses(&source_ids);
+        s.access_tracker.record_accesses(&memory_source_ids);
         if let Some(db) = s.db.as_ref() {
-            if let Err(e) = db.log_accesses(&source_ids).await {
+            if let Err(e) = db.log_accesses(&memory_source_ids).await {
                 tracing::warn!("Failed to log accesses: {}", e);
             }
         }
@@ -1112,7 +1121,13 @@ pub async fn handle_search_memory(
         let detail = format!("found {} results", results.len());
         if let Some(db) = s.db.as_ref() {
             if let Err(e) = db
-                .log_agent_activity(&agent, "search", &source_ids, Some(&req.query), &detail)
+                .log_agent_activity(
+                    &agent,
+                    "search",
+                    &memory_source_ids,
+                    Some(&req.query),
+                    &detail,
+                )
                 .await
             {
                 tracing::warn!("Failed to log agent activity: {}", e);

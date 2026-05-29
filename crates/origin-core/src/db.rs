@@ -407,6 +407,25 @@ pub fn compute_rerank_fetch_pool(
     limit.saturating_mul(multiplier).max(floor).max(limit)
 }
 
+/// True iff `ORIGIN_DISABLE_PAGE_CHANNEL` is set to a truthy value
+/// (`1`, `true`, or `yes`, case-insensitive).
+///
+/// Used by [`MemoryDB::search_memory_with_reranker`] to skip the page-channel
+/// branch and by the eval harness (locomo + longmemeval) to tag baseline
+/// JSON artifacts with their page-ON/OFF variant. All five call sites MUST
+/// share this helper so a `ORIGIN_DISABLE_PAGE_CHANNEL=0` setting can't
+/// disagree between production and eval (which would make baseline filenames
+/// lie about their contents — see AGENTS.md Eval Citation Discipline).
+///
+/// Truthy-only parse (not `is_ok()`): callers can clear the channel by
+/// setting the var to `0` or `false` without `unsetenv`.
+pub fn page_channel_disabled() -> bool {
+    std::env::var("ORIGIN_DISABLE_PAGE_CHANNEL")
+        .ok()
+        .map(|v| matches!(v.trim().to_ascii_lowercase().as_str(), "1" | "true" | "yes"))
+        .unwrap_or(false)
+}
+
 /// Bigram Jaccard similarity between two strings (0.0–1.0).
 /// Used for content-based deduplication in search results.
 fn bigram_jaccard(a: &str, b: &str) -> f64 {
@@ -7417,7 +7436,7 @@ impl MemoryDB {
             std::env::var("RERANK_POOL_MULTIPLIER").ok().as_deref(),
             std::env::var("RERANK_POOL_FLOOR").ok().as_deref(),
         );
-        let page_channel_disabled = std::env::var("ORIGIN_DISABLE_PAGE_CHANNEL").is_ok();
+        let page_channel_disabled = page_channel_disabled();
 
         let memory_results = self
             .search_memory(
@@ -7437,9 +7456,58 @@ impl MemoryDB {
         } else {
             // Log-and-degrade on page-channel failure (mirrors augment_with_graph's
             // silent fallback pattern at db.rs:7605-7608).
-            self.search_pages(query, Self::page_channel_limit(), None)
+            match self
+                .search_pages(query, Self::page_channel_limit(), None)
                 .await
-                .unwrap_or_default()
+            {
+                Ok(pages) => pages,
+                Err(e) => {
+                    log::warn!("[memory_db] page channel degraded: {e}; continuing memory-only");
+                    Vec::new()
+                }
+            }
+        };
+
+        // Space/filter passthrough guard (BEFORE RRF entry — post-merge filtering
+        // would corrupt ranking because the page would have already contributed
+        // RRF mass to a memory before being removed; "ghost signal" problem).
+        //
+        // `search_pages` doesn't natively honor `memory_type`/`space`/`source_agent`
+        // filters because pages don't carry those fields (pages store category in
+        // their own `space` column, used for `page_type` filtering). Instead we
+        // gate pages by `page_sources` overlap with the memory result set: a page
+        // surfaces iff ≥1 of its source memories survived the memory-side filter.
+        //
+        // Without this gate, a `space="work"`-scoped recall could leak pages from
+        // `space="personal"` whose only sources are personal memories — cross-
+        // workspace information disclosure (HIGH per 2026-05-28 adversarial review).
+        let filters_active = memory_type.is_some() || space.is_some() || source_agent.is_some();
+        let page_results: Vec<Page> = if filters_active && !page_results.is_empty() {
+            let allowed_memory_ids: std::collections::HashSet<String> =
+                memory_results.iter().map(|r| r.source_id.clone()).collect();
+            let mut filtered = Vec::with_capacity(page_results.len());
+            for page in page_results {
+                let sources = match self.get_page_sources(&page.id).await {
+                    Ok(v) => v,
+                    Err(e) => {
+                        log::warn!(
+                            "[memory_db] page_sources lookup failed for {}: {e}; \
+                             dropping page from filtered set",
+                            page.id
+                        );
+                        continue;
+                    }
+                };
+                if sources
+                    .iter()
+                    .any(|s| allowed_memory_ids.contains(&s.memory_source_id))
+                {
+                    filtered.push(page);
+                }
+            }
+            filtered
+        } else {
+            page_results
         };
 
         // Two-stage RRF merge — mirrors augment_with_graph (db.rs:7619-7644).
@@ -31829,5 +31897,78 @@ pub(crate) mod tests {
             "ORIGIN_DISABLE_PAGE_CHANNEL=1: expected zero source=page hits, got {:?}",
             hits.iter().map(|r| (&r.id, &r.source)).collect::<Vec<_>>()
         );
+    }
+
+    /// Regression guard for the truthy-parse fix (2026-05-28 adversarial
+    /// review). The pre-fix `is_ok()` check disabled the channel on ANY
+    /// non-empty value, including `0`. After the fix, `0` (falsy) MUST
+    /// keep the channel enabled — same shape as default-on.
+    #[tokio::test]
+    async fn page_channel_disabled_treats_zero_as_enabled() {
+        let (db, _tmp) = test_db().await;
+        let now = chrono::Utc::now().to_rfc3339();
+
+        db.insert_page(
+            "page_truthy_zero",
+            "truthy zero title",
+            Some("truthy zero summary"),
+            "truthy zero body content",
+            None,
+            None,
+            &[],
+            &now,
+        )
+        .await
+        .unwrap();
+
+        let hits = temp_env::async_with_vars([("ORIGIN_DISABLE_PAGE_CHANNEL", Some("0"))], async {
+            db.search_memory_with_reranker("truthy zero", 10, None, None, None, None)
+                .await
+                .unwrap()
+        })
+        .await;
+        assert!(
+            hits.iter().any(|r| r.source == "page"),
+            "ORIGIN_DISABLE_PAGE_CHANNEL=0 must be a no-op (channel stays on), \
+             but got zero source=page hits: {:?}",
+            hits.iter().map(|r| (&r.id, &r.source)).collect::<Vec<_>>()
+        );
+    }
+
+    /// Truthy-parse coverage for synonyms: `true` and `YES` should both
+    /// disable the channel, matching the documented contract on
+    /// `page_channel_disabled()`.
+    #[tokio::test]
+    async fn page_channel_disabled_accepts_truthy_synonyms() {
+        let (db, _tmp) = test_db().await;
+        let now = chrono::Utc::now().to_rfc3339();
+
+        db.insert_page(
+            "page_truthy_syn",
+            "truthy syn title",
+            Some("truthy syn summary"),
+            "truthy syn body content",
+            None,
+            None,
+            &[],
+            &now,
+        )
+        .await
+        .unwrap();
+
+        for value in ["true", "YES", "True"] {
+            let hits =
+                temp_env::async_with_vars([("ORIGIN_DISABLE_PAGE_CHANNEL", Some(value))], async {
+                    db.search_memory_with_reranker("truthy syn", 10, None, None, None, None)
+                        .await
+                        .unwrap()
+                })
+                .await;
+            assert!(
+                hits.iter().all(|r| r.source != "page"),
+                "ORIGIN_DISABLE_PAGE_CHANNEL={value}: expected zero page hits, got {:?}",
+                hits.iter().map(|r| (&r.id, &r.source)).collect::<Vec<_>>()
+            );
+        }
     }
 }

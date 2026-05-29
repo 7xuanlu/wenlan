@@ -1157,7 +1157,7 @@ pub async fn run_locomo_eval_cross_rerank_from_db(
 
     // Branch variant_tag on ORIGIN_DISABLE_PAGE_CHANNEL so page-ON and page-OFF
     // produce distinct baseline filenames (comparable_hash uses the variant string).
-    let page_channel_state = if std::env::var("ORIGIN_DISABLE_PAGE_CHANNEL").is_ok() {
+    let page_channel_state = if crate::db::page_channel_disabled() {
         "off"
     } else {
         "on"
