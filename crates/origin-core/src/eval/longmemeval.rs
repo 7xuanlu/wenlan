@@ -293,6 +293,8 @@ pub struct LongMemEvalBaseline {
     pub recall_at_5: f64,
     pub hit_rate_at_1: f64,
     pub per_category: Vec<crate::eval::report::CategoryBaseline>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub coverage: Option<crate::eval::report::CoverageRecall>,
 }
 
 /// Per-category results.
@@ -328,6 +330,10 @@ pub struct LongMemEvalReport {
     /// Populated by each runner variant; empty by default for back-compat.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub per_case: Vec<crate::eval::report::CaseResult>,
+    /// Source-expanded coverage recall (page-channel `_from_db` runner only;
+    /// None elsewhere). See [`crate::eval::report::CoverageRecall`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub coverage: Option<crate::eval::report::CoverageRecall>,
 }
 
 impl LongMemEvalReport {
@@ -429,6 +435,7 @@ impl LongMemEvalReport {
             recall_at_5: self.aggregate_recall_at_5,
             hit_rate_at_1: self.aggregate_hit_rate_at_1,
             per_category,
+            coverage: self.coverage.clone(),
         };
         let json = serde_json::to_string_pretty(&baseline).map_err(std::io::Error::other)?;
         std::fs::write(path, json)
@@ -691,6 +698,7 @@ pub async fn run_longmemeval_eval(path: &Path) -> Result<LongMemEvalReport, Orig
         baseline: None,
         env: None,
         per_case,
+        coverage: None,
     };
     report.env = Some(build_lme_env(
         "base",
@@ -824,6 +832,7 @@ pub async fn run_longmemeval_eval_reranked(
         baseline: None,
         env: None,
         per_case,
+        coverage: None,
     };
     report.env = Some(build_lme_env(
         "reranked",
@@ -961,6 +970,7 @@ pub async fn run_longmemeval_eval_cross_rerank(
         baseline: None,
         env: None,
         per_case,
+        coverage: None,
     };
     report.env = Some(build_lme_env(
         "cross_rerank",
@@ -1083,6 +1093,7 @@ pub async fn run_longmemeval_eval_cross_rerank_from_db(
         baseline: None,
         env: None,
         per_case,
+        coverage: None,
     };
 
     // Branch variant_tag on ORIGIN_DISABLE_PAGE_CHANNEL so page-ON and page-OFF
@@ -1234,6 +1245,7 @@ pub async fn run_longmemeval_eval_expanded(
         baseline: None,
         env: None,
         per_case,
+        coverage: None,
     };
     report.env = Some(build_lme_env(
         "expanded",
@@ -1512,6 +1524,7 @@ pub async fn run_longmemeval_eval_with_gate(
         baseline: None,
         env: None,
         per_case,
+        coverage: None,
     };
     report.env = Some(build_lme_env(
         "gated",
@@ -1833,6 +1846,7 @@ mod tests {
             baseline: None,
             env: None,
             per_case: vec![],
+            coverage: None,
         };
         let text = report.to_terminal();
         assert!(text.contains("LongMemEval Benchmark"));
@@ -1878,6 +1892,7 @@ mod tests {
             baseline: None,
             env: None,
             per_case: vec![],
+            coverage: None,
         };
 
         report.save_baseline(&path).unwrap();
@@ -1926,9 +1941,11 @@ mod tests {
                     mrr: 0.550,
                     recall_at_5: 0.650,
                 }],
+                coverage: None,
             }),
             env: None,
             per_case: vec![],
+            coverage: None,
         };
 
         let text = report.to_terminal();
