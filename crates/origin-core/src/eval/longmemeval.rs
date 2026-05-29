@@ -362,6 +362,15 @@ impl LongMemEvalReport {
             self.aggregate_hit_rate_at_1
         ));
 
+        if let Some(ref cov) = self.coverage {
+            out.push_str(&format!(
+                "  Coverage recall (set-based, page-source-expanded):\n    blind:    {:.4}\n    expanded: {:.4}\n    delta:    {:+.4}  <- page contribution\n",
+                cov.blind,
+                cov.expanded,
+                cov.expanded - cov.blind
+            ));
+        }
+
         if let Some(ref b) = self.baseline {
             out.push_str("\nBaseline comparison:\n");
             let delta = |name: &str, old: f64, new: f64| -> String {

@@ -361,6 +361,15 @@ impl LocomoReport {
             self.aggregate_hit_rate_at_1
         ));
 
+        if let Some(ref cov) = self.coverage {
+            out.push_str(&format!(
+                "  Coverage recall (set-based, page-source-expanded):\n    blind:    {:.4}\n    expanded: {:.4}\n    delta:    {:+.4}  <- page contribution\n",
+                cov.blind,
+                cov.expanded,
+                cov.expanded - cov.blind
+            ));
+        }
+
         if let Some(ref b) = self.baseline {
             out.push_str("\nBaseline comparison:\n");
             let delta = |name: &str, old: f64, new: f64| -> String {
@@ -2148,5 +2157,37 @@ mod tests {
         let mut samples = mock_samples(5);
         apply_limit_from_env(&mut samples, var, "locomo", "conversations");
         assert_eq!(samples.len(), 5, "unset env var must leave samples intact");
+    }
+
+    #[test]
+    fn to_terminal_prints_coverage_delta_when_present() {
+        let mut report = LocomoReport {
+            conversations: vec![],
+            aggregate_ndcg_at_10: 0.0,
+            aggregate_mrr: 0.0,
+            aggregate_recall_at_5: 0.0,
+            aggregate_hit_rate_at_1: 0.0,
+            total_questions: 0,
+            total_memories: 0,
+            per_category_aggregate: vec![],
+            qa_accuracy: None,
+            baseline: None,
+            env: None,
+            per_case: vec![],
+            coverage: Some(crate::eval::report::CoverageRecall {
+                blind: 0.40,
+                expanded: 0.55,
+            }),
+        };
+        let out = report.to_terminal();
+        assert!(
+            out.contains("Coverage recall"),
+            "missing coverage header:\n{out}"
+        );
+        assert!(out.contains("0.4000"), "missing blind:\n{out}");
+        assert!(out.contains("0.5500"), "missing expanded:\n{out}");
+        assert!(out.contains("+0.1500"), "missing delta:\n{out}");
+        report.coverage = None;
+        assert!(!report.to_terminal().contains("Coverage recall"));
     }
 }
