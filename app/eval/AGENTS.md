@@ -92,9 +92,9 @@ Three sibling subdirs live alongside `data/` and are tracked in git:
 app/eval/baselines/<benchmark>__<retrieval_method>__<hash>.json
 ```
 
-Used by README citations and external references. Written by `report.save_baseline(&baseline_path)`. The `save_locomo_v2_with_pages_baseline` and `save_longmemeval_v2_with_pages_baseline` tests branch the filename suffix on `ORIGIN_DISABLE_PAGE_CHANNEL`:
-- page-channel ON: `...__with_pages.json`
-- page-channel OFF: `...__no_pages.json`
+Used by README citations and external references. Written by `report.save_baseline(&baseline_path)`. The `save_locomo_v2_with_pages_baseline` and `save_longmemeval_v2_with_pages_baseline` tests branch the filename suffix on `ORIGIN_ENABLE_PAGE_CHANNEL`:
+- page-channel ON (`ORIGIN_ENABLE_PAGE_CHANNEL=1`): `...__with_pages.json`
+- page-channel OFF (default, unset): `...__no_pages.json`
 
 ### Layered path (P0b schema, for compare-baselines)
 
@@ -125,7 +125,7 @@ Exception: `save_locomo_cross_rerank_baseline` and `save_longmemeval_cross_reran
 | `EVAL_MAX_USD` | Cost cap for API-batch judge runs (pre-flight and per-batch) | none | `anthropic.rs` (`parse_eval_max_usd`, `submit_batch`, `estimate_batch_cost`) |
 | `EVAL_MAX_WALL_SECS` | Wall-clock timeout for eval runs | 14400 (4h) | `wall_clock.rs` watchdog |
 | `EVAL_ALLOW_WIPE` | Allow `clear_all_for_eval` to wipe DB | unset (refuses) | `open_or_seed_scenario_db` stale-cache recovery |
-| `ORIGIN_DISABLE_PAGE_CHANNEL` | Skip page-channel in `search_memory_with_reranker` | unset (page-channel ON) | `db.rs:search_memory_with_reranker`, `locomo.rs:run_locomo_eval_cross_rerank_from_db`, `longmemeval.rs:run_longmemeval_eval_cross_rerank_from_db`, suffix branching in `eval_harness.rs` |
+| `ORIGIN_ENABLE_PAGE_CHANNEL` | Enable page-channel in `search_memory_with_reranker` | unset (page-channel OFF) | `db.rs:search_memory_with_reranker`, `locomo.rs:run_locomo_eval_cross_rerank_from_db`, `longmemeval.rs:run_longmemeval_eval_cross_rerank_from_db`, suffix branching in `eval_harness.rs` |
 | `ORIGIN_EVAL_ROOT` | Override `eval_root()` in test harness | `app/eval/` | `eval_root()` in `eval_harness.rs` |
 
 ---
@@ -187,13 +187,13 @@ Before running any eval test:
 Page-channel impact is measured by running the same test twice:
 
 ```bash
-# page-channel ON (default):
-cargo test -p origin-core --test eval_harness save_locomo_v2_with_pages_baseline -- --ignored --nocapture
+# page-channel ON (opt-in):
+ORIGIN_ENABLE_PAGE_CHANNEL=1 cargo test -p origin-core --test eval_harness save_locomo_v2_with_pages_baseline -- --ignored --nocapture
 
-# page-channel OFF:
-ORIGIN_DISABLE_PAGE_CHANNEL=1 cargo test -p origin-core --test eval_harness save_locomo_v2_with_pages_baseline -- --ignored --nocapture
+# page-channel OFF (default):
+cargo test -p origin-core --test eval_harness save_locomo_v2_with_pages_baseline -- --ignored --nocapture
 ```
 
-The cached consolidated scenario DB introduces cross-conversation noise compared to the per-conversation ephemeral DB used by `save_locomo_cross_rerank_baseline`. So numbers from `save_locomo_v2_with_pages_baseline` are NOT directly comparable to the published 0.684 LoCoMo bar. They are comparable to the OFF variant of the same runner (`ORIGIN_DISABLE_PAGE_CHANNEL=1`).
+The cached consolidated scenario DB introduces cross-conversation noise compared to the per-conversation ephemeral DB used by `save_locomo_cross_rerank_baseline`. So numbers from `save_locomo_v2_with_pages_baseline` are NOT directly comparable to the published 0.684 LoCoMo bar. They are comparable to the OFF variant of the same runner (page-channel unset/default).
 
 The `variant_tag` field (`cross_rerank_v2_pages` vs `cross_rerank_v2_no_pages`) is the load-bearing differentiator on the layered baseline path, because `comparable_env_hash` does not yet hash `flags` (pending Task #30).

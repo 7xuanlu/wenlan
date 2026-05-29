@@ -65,15 +65,15 @@ The helper exists precisely so the format is defined once. Do not inline an equi
 1. Branch `variant_tag` on the distinguishing env var. Pattern from `locomo.rs`:
 
 ```rust
-let page_channel_state = if std::env::var("ORIGIN_DISABLE_PAGE_CHANNEL").is_ok() {
-    "off"
-} else {
+let page_channel_state = if crate::db::page_channel_enabled() {
     "on"
-};
-let variant_tag = if page_channel_state == "off" {
-    "cross_rerank_v2_no_pages"
 } else {
+    "off"
+};
+let variant_tag = if page_channel_state == "on" {
     "cross_rerank_v2_pages"
+} else {
+    "cross_rerank_v2_no_pages"
 };
 ```
 
@@ -84,19 +84,19 @@ env_stamp.flags.push(format!("page_channel={}", page_channel_state));
 env_stamp.flags.push("scenario_db=consolidated".to_string());
 ```
 
-3. Mirror the filename suffix in `eval_harness.rs` (legacy path). The harness branches `__with_pages` vs `__no_pages` on `ORIGIN_DISABLE_PAGE_CHANNEL`.
+3. Mirror the filename suffix in `eval_harness.rs` (legacy path). The harness branches `__with_pages` vs `__no_pages` on `ORIGIN_ENABLE_PAGE_CHANNEL` (opt-in, default OFF).
 
 ---
 
 ## filename suffix on legacy path
 
-`eval_harness.rs` branches the `app/eval/baselines/` filename suffix on `ORIGIN_DISABLE_PAGE_CHANNEL`:
+`eval_harness.rs` branches the `app/eval/baselines/` filename suffix on `ORIGIN_ENABLE_PAGE_CHANNEL`:
 
 ```rust
-let suffix = if std::env::var("ORIGIN_DISABLE_PAGE_CHANNEL").is_ok() {
-    "__no_pages"
-} else {
+let suffix = if origin_core::db::page_channel_enabled() {
     "__with_pages"
+} else {
+    "__no_pages"
 };
 ```
 

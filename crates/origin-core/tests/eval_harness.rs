@@ -534,15 +534,15 @@ async fn save_locomo_expanded_baseline() {
 // Cross-encoder rerank variants — fastembed TextRerank (BGERerankerV2M3) in
 // place of the LLM reranker. First run downloads ~600MB of model weights.
 //
-// ORIGIN_DISABLE_PAGE_CHANNEL=1 is forced here so the pre-PR-B 0.684 / 0.883
-// disk artifacts stay reproducible regardless of the page-channel default.
+// ORIGIN_ENABLE_PAGE_CHANNEL is forced to None (unset) here so the pre-PR-B
+// 0.684 / 0.883 disk artifacts stay reproducible regardless of the caller env.
 // The ephemeral per-conversation DBs these tests build today have zero
 // distilled pages, so page-channel is a no-op for them with or without the
 // wrap. The wrap makes the intent explicit at the source.
 #[tokio::test]
 #[ignore]
 async fn save_locomo_cross_rerank_baseline() {
-    temp_env::async_with_vars([("ORIGIN_DISABLE_PAGE_CHANNEL", Some("1"))], async {
+    temp_env::async_with_vars([("ORIGIN_ENABLE_PAGE_CHANNEL", None::<&str>)], async {
         let path = eval_root().join("data/locomo10.json");
         if !path.exists() {
             println!("SKIP: locomo10.json not found");
@@ -565,7 +565,7 @@ async fn save_locomo_cross_rerank_baseline() {
 #[tokio::test]
 #[ignore]
 async fn save_longmemeval_cross_rerank_baseline() {
-    temp_env::async_with_vars([("ORIGIN_DISABLE_PAGE_CHANNEL", Some("1"))], async {
+    temp_env::async_with_vars([("ORIGIN_ENABLE_PAGE_CHANNEL", None::<&str>)], async {
         let path = eval_root().join("data/longmemeval_oracle.json");
         if !path.exists() {
             println!("SKIP: longmemeval_oracle.json not found");
@@ -641,7 +641,7 @@ fn resolve_scenario_db_root_from_harness() -> std::path::PathBuf {
 /// Uses the pre-seeded consolidated scenario DB at
 /// `${SCENARIO_DB_ROOT or ~/.cache/origin-eval/scenario_seeded}/locomo_v1/origin_memory.db`
 /// — skips ingest entirely. Page-channel ON by default; set
-/// `ORIGIN_DISABLE_PAGE_CHANNEL=1` to measure the OFF variant.
+/// `ORIGIN_ENABLE_PAGE_CHANNEL=1` to measure the ON variant. Page-channel is OFF by default.
 ///
 /// Filename suffix `__with_pages` distinguishes from the per-conversation
 /// `cross_rerank__*__pool_baseline.json` headline (which uses ephemeral DBs
@@ -699,13 +699,13 @@ async fn save_locomo_v2_with_pages_baseline() {
     let baselines_dir = eval_root().join("baselines");
     std::fs::create_dir_all(&baselines_dir).unwrap();
     let mut filename = report.baseline_filename("locomo");
-    // Branch suffix on ORIGIN_DISABLE_PAGE_CHANNEL so page-ON and page-OFF artifacts
+    // Branch suffix on ORIGIN_ENABLE_PAGE_CHANNEL so page-ON and page-OFF artifacts
     // don't collide at the legacy app/eval/baselines/ path. Truthy parse via
     // shared helper so suffix matches what the production code path actually did.
-    let suffix = if origin_core::db::page_channel_disabled() {
-        "__no_pages"
-    } else {
+    let suffix = if origin_core::db::page_channel_enabled() {
         "__with_pages"
+    } else {
+        "__no_pages"
     };
     if let Some(stripped) = filename.strip_suffix(".json") {
         filename = format!("{}{}.json", stripped, suffix);
@@ -726,7 +726,7 @@ async fn save_locomo_v2_with_pages_baseline() {
 /// Uses the pre-seeded consolidated scenario DB at
 /// `${SCENARIO_DB_ROOT or ~/.cache/origin-eval/scenario_seeded}/lme_v1/origin_memory.db`
 /// — skips ingest entirely. Page-channel ON by default; set
-/// `ORIGIN_DISABLE_PAGE_CHANNEL=1` to measure the OFF variant.
+/// `ORIGIN_ENABLE_PAGE_CHANNEL=1` to measure the ON variant. Page-channel is OFF by default.
 ///
 /// Filename suffix `__with_pages` distinguishes from the per-question
 /// `cross_rerank__*__pool_baseline.json` headline.
@@ -784,13 +784,13 @@ async fn save_longmemeval_v2_with_pages_baseline() {
     let baselines_dir = eval_root().join("baselines");
     std::fs::create_dir_all(&baselines_dir).unwrap();
     let mut filename = report.baseline_filename("longmemeval");
-    // Branch suffix on ORIGIN_DISABLE_PAGE_CHANNEL so page-ON and page-OFF artifacts
+    // Branch suffix on ORIGIN_ENABLE_PAGE_CHANNEL so page-ON and page-OFF artifacts
     // don't collide at the legacy app/eval/baselines/ path. Truthy parse via
     // shared helper so suffix matches what the production code path actually did.
-    let suffix = if origin_core::db::page_channel_disabled() {
-        "__no_pages"
-    } else {
+    let suffix = if origin_core::db::page_channel_enabled() {
         "__with_pages"
+    } else {
+        "__no_pages"
     };
     if let Some(stripped) = filename.strip_suffix(".json") {
         filename = format!("{}{}.json", stripped, suffix);

@@ -1006,7 +1006,7 @@ pub async fn run_longmemeval_eval_cross_rerank(
 /// `memory_source_id` function used by the LME ephemeral seed path and
 /// the fullpipeline harness).
 /// Page-channel ON/OFF is controlled by the caller via the
-/// `ORIGIN_DISABLE_PAGE_CHANNEL` env var (read inside
+/// `ORIGIN_ENABLE_PAGE_CHANNEL` env var (read inside
 /// `search_memory_with_reranker`).
 pub async fn run_longmemeval_eval_cross_rerank_from_db(
     db: &MemoryDB,
@@ -1156,12 +1156,12 @@ pub async fn run_longmemeval_eval_cross_rerank_from_db(
         coverage,
     };
 
-    // Branch variant_tag on ORIGIN_DISABLE_PAGE_CHANNEL so page-ON and page-OFF
+    // Branch variant_tag on ORIGIN_ENABLE_PAGE_CHANNEL so page-ON and page-OFF
     // produce distinct baseline filenames (comparable_hash uses the variant string).
-    let page_channel_state = if crate::db::page_channel_disabled() {
-        "off"
-    } else {
+    let page_channel_state = if crate::db::page_channel_enabled() {
         "on"
+    } else {
+        "off"
     };
     let variant_tag = if page_channel_state == "off" {
         "cross_rerank_v2_no_pages"
