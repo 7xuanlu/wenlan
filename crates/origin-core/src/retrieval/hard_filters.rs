@@ -17,7 +17,7 @@ pub(crate) struct HardFilters<'a> {
     /// Filter to a specific memory_type. `None` = no type filter.
     pub(crate) memory_type: Option<&'a str>,
     /// When `true`, hide superseded memories (supersede_mode = 'hide').
-    /// Uses the verbatim subquery from db.rs search_memory_reranked.
+    /// Uses the verbatim subquery from db.rs search_memory_llm_rerank.
     pub(crate) exclude_superseded: bool,
     /// When `Some` and confidence is `High`, constrain `c.event_date` to the
     /// cue's range (OR allow NULL so undated memories pass through).
@@ -45,7 +45,7 @@ impl<'a> HardFilters<'a> {
 /// Returns an empty string when no filters are active, or a string beginning
 /// with ` AND ` that can be appended directly after `WHERE 1=1`.
 ///
-/// The supersession subquery is verbatim from `db.rs` (`search_memory_reranked`)
+/// The supersession subquery is verbatim from `db.rs` (`search_memory_llm_rerank`)
 /// so both code paths stay in sync.
 #[allow(dead_code)]
 pub(crate) fn build_where(f: &HardFilters) -> String {

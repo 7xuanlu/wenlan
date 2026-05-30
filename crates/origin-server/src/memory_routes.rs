@@ -1034,6 +1034,23 @@ pub async fn handle_store_memory(
     }))
 }
 
+/// Splits a flat Vec<SearchResult> (as returned by `search_memory_cross_rerank`)
+/// into memory rows and page-channel rows.
+///
+/// Returns `(memory_rows, Some(page_rows))` when any page rows are present,
+/// or `(memory_rows, None)` when the slice contains no page rows.
+/// Pure function — no I/O, easy to unit-test.
+pub(crate) fn partition_search_pages(
+    rows: Vec<origin_types::memory::SearchResult>,
+) -> (
+    Vec<origin_types::memory::SearchResult>,
+    Option<Vec<origin_types::memory::SearchResult>>,
+) {
+    let (pages, memories): (Vec<_>, Vec<_>) = rows.into_iter().partition(|r| r.source == "page");
+    let supplemental = if pages.is_empty() { None } else { Some(pages) };
+    (memories, supplemental)
+}
+
 /// POST /api/memory/search
 pub async fn handle_search_memory(
     State(state): State<Arc<RwLock<ServerState>>>,
@@ -1062,7 +1079,7 @@ pub async fn handle_search_memory(
                     "[search] rerank=true requested but no reranker wired (set ORIGIN_RERANKER_ENABLED=1); falling back to plain hybrid search"
                 );
             }
-            db.search_memory_with_reranker(
+            db.search_memory_cross_rerank(
                 &req.query,
                 req.limit,
                 req.memory_type.as_deref(),
@@ -1136,7 +1153,12 @@ pub async fn handle_search_memory(
     }
 
     let took_ms = start.elapsed().as_secs_f64() * 1000.0;
-    Ok(Json(SearchMemoryResponse { results, took_ms }))
+    let (results, supplemental_pages) = partition_search_pages(results);
+    Ok(Json(SearchMemoryResponse {
+        results,
+        took_ms,
+        supplemental_pages,
+    }))
 }
 
 /// POST /api/memory/confirm/{source_id}
@@ -3724,10 +3746,10 @@ mod search_agent_attribution_tests {
 /// Wiring tests for the `rerank` flag on `/api/memory/search`.
 ///
 /// These verify that the handler reads `ServerState.reranker` and routes
-/// `rerank=true` through `search_memory_with_reranker`. The `NoopReranker`
+/// `rerank=true` through `search_memory_cross_rerank`. The `NoopReranker`
 /// stand-in keeps these fast and dependency-free — no model weights, no
 /// cross-encoder download. The rerank quality itself is covered by
-/// `origin_core::db::tests::test_search_memory_with_reranker_*`.
+/// `origin_core::db::tests::test_search_memory_cross_rerank_*`.
 #[cfg(test)]
 mod search_rerank_tests {
     use axum::body::Body;
@@ -3822,6 +3844,95 @@ mod search_rerank_tests {
             StatusCode::OK,
             "rerank=true without a wired reranker should fall back, not fail"
         );
+    }
+}
+
+#[cfg(test)]
+mod partition_pages_tests {
+    use origin_types::memory::SearchResult;
+
+    fn make_result(source: &str, id: &str) -> SearchResult {
+        SearchResult {
+            id: id.to_string(),
+            content: "body".to_string(),
+            source: source.to_string(),
+            source_id: id.to_string(),
+            title: String::new(),
+            url: None,
+            chunk_index: 0,
+            last_modified: 0,
+            score: 1.0,
+            chunk_type: None,
+            language: None,
+            semantic_unit: None,
+            memory_type: None,
+            space: None,
+            source_agent: None,
+            confidence: None,
+            confirmed: None,
+            stability: None,
+            supersedes: None,
+            summary: None,
+            entity_id: None,
+            entity_name: None,
+            quality: None,
+            is_archived: false,
+            is_recap: false,
+            structured_fields: None,
+            retrieval_cue: None,
+            source_text: None,
+            raw_score: 0.0,
+            version: 0,
+            pending_revision: false,
+            merged_from: None,
+            last_delta_summary: None,
+        }
+    }
+
+    /// No page rows — supplemental_pages must be None.
+    #[test]
+    fn no_pages_gives_none() {
+        let rows = vec![
+            make_result("memory", "mem_1"),
+            make_result("memory", "mem_2"),
+        ];
+        let (mems, pages) = super::partition_search_pages(rows);
+        assert_eq!(mems.len(), 2);
+        assert!(pages.is_none());
+    }
+
+    /// Mixed rows: page rows isolated, memory rows preserved, `results.len() <= limit`.
+    #[test]
+    fn page_rows_isolated_from_memory_rows() {
+        let rows = vec![
+            make_result("memory", "mem_1"),
+            make_result("page", "page_1"),
+            make_result("memory", "mem_2"),
+            make_result("page", "page_2"),
+        ];
+        let (mems, pages) = super::partition_search_pages(rows);
+        assert_eq!(mems.len(), 2, "memory rows");
+        assert!(mems.iter().all(|r| r.source == "memory"));
+        let pages = pages.expect("should have page rows");
+        assert_eq!(pages.len(), 2, "page rows");
+        assert!(pages.iter().all(|r| r.source == "page"));
+    }
+
+    /// All rows are pages — memories empty, supplemental Some.
+    #[test]
+    fn all_pages_no_memories() {
+        let rows = vec![make_result("page", "page_a"), make_result("page", "page_b")];
+        let (mems, pages) = super::partition_search_pages(rows);
+        assert!(mems.is_empty());
+        assert_eq!(pages.unwrap().len(), 2);
+    }
+
+    /// Empty input — both empty / None.
+    #[test]
+    fn empty_input() {
+        let (mems, pages) = super::partition_search_pages(vec![]);
+        assert!(mems.is_empty());
+        assert!(pages.is_none());
     }
 }
 

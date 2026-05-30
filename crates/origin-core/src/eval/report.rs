@@ -228,7 +228,7 @@ pub struct CoverageRecall {
 ///
 /// Includes: fixture_revision, embedder_revision, llm_provider_class,
 /// llm_model, mcp_schema_hash, skill_prompt_hash, schema_version,
-/// schema_db_version, similarity_fn_name.
+/// schema_db_version, similarity_fn_name, flags (sorted).
 ///
 /// Excludes: layer (path component), variant (path component), n_runs,
 /// run_id, timestamp, costs, latency fields. These vary across runs of
@@ -264,6 +264,10 @@ pub fn comparable_env_hash(env: &ReportEnv) -> String {
     );
     h.update(b"|");
     h.update(env.similarity_fn_name.as_bytes());
+    h.update(b"|");
+    let mut sorted_flags = env.flags.clone();
+    sorted_flags.sort();
+    h.update(sorted_flags.join(",").as_bytes());
     let hex = format!("{:x}", h.finalize());
     hex.chars().take(8).collect()
 }
@@ -874,6 +878,32 @@ mod tests {
         let json = serde_json::to_string(&value).unwrap();
         let parsed: ReportEnv = serde_json::from_str(&json).expect("deserialize without flags");
         assert!(parsed.flags.is_empty());
+    }
+
+    #[test]
+    fn comparable_env_hash_distinguishes_flags() {
+        // Two envs identical in all other comparable fields but differing in flags
+        // must produce distinct hashes so they don't overwrite each other's baseline.
+        let e1 = ReportEnv {
+            flags: vec!["page_channel=on".into()],
+            ..sample_env(EvalLayer::L1Db, "base")
+        };
+        let e2 = ReportEnv {
+            flags: vec!["page_channel=off".into()],
+            ..sample_env(EvalLayer::L1Db, "base")
+        };
+        assert_ne!(
+            comparable_env_hash(&e1),
+            comparable_env_hash(&e2),
+            "envs differing only in flags must hash differently"
+        );
+        // Also verify that empty flags vs non-empty flags differ.
+        let e3 = sample_env(EvalLayer::L1Db, "base"); // flags = []
+        assert_ne!(
+            comparable_env_hash(&e1),
+            comparable_env_hash(&e3),
+            "non-empty flags must differ from empty flags"
+        );
     }
 }
 

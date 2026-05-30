@@ -56,8 +56,8 @@ The helper exists precisely so the format is defined once. Do not inline an equi
 
 `build_locomo_env` and `build_lme_env` produce a `ReportEnv` struct that stamps every baseline. Key fields:
 
-- `variant`: the `variant_tag` string. This is the load-bearing differentiator for the layered baseline path because `comparable_env_hash` does not yet include `flags` (pending Task #30).
-- `flags`: human-readable `Vec<String>` with `"key=value"` entries. Populated for audit but not yet wired into hashing. Always populate it.
+- `variant`: the `variant_tag` string, a human-readable differentiator for the layered baseline path. As of Task #30, `comparable_env_hash` also includes `flags`, so the hash itself now distinguishes flag-only differences; `variant` is retained for readability.
+- `flags`: human-readable `Vec<String>` with `"key=value"` entries. Wired into `comparable_env_hash` (Task #30, sorted so order is insignificant) and used for audit. Always populate it.
 - `is_single_run`: always `true` for single-run tests. Any baseline with `is_single_run = true` must not be cited externally (see root AGENTS.md Eval Citation Discipline).
 
 ### When adding a new A/B variant

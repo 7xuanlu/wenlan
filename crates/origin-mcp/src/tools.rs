@@ -145,7 +145,7 @@ pub struct RecallParams {
     )]
     pub query: String,
     #[schemars(
-        description = "Max results, default 10. Use 3-5 for quick lookups, 10-20 for exploration."
+        description = "Max memory results (distilled pages are returned separately), default 10. Use 3-5 for quick lookups, 10-20 for exploration."
     )]
     #[serde(default, deserialize_with = "deserialize_optional_usize_lenient")]
     pub limit: Option<usize>,
@@ -763,12 +763,20 @@ impl OriginMcpServer {
         let json = serde_json::to_string_pretty(&resp.results)
             .map_err(|e| McpError::internal_error(e.to_string(), None))?;
 
-        Ok(CallToolResult::success(vec![Content::text(format!(
+        let mut output = format!(
             "{} results ({:.1}ms)\n{}",
             resp.results.len(),
             resp.took_ms,
             json
-        ))]))
+        );
+
+        if let Some(pages) = resp.supplemental_pages.as_ref().filter(|p| !p.is_empty()) {
+            let pages_json = serde_json::to_string_pretty(pages)
+                .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+            output.push_str(&format!("\n\nCompiled pages:\n{}", pages_json));
+        }
+
+        Ok(CallToolResult::success(vec![Content::text(output)]))
     }
 
     pub async fn context_impl(&self, params: ContextParams) -> Result<CallToolResult, McpError> {
