@@ -285,6 +285,7 @@ async fn t4_recall_roundtrip() {
     let response = SearchMemoryResponse {
         results: vec![sample_search_result()],
         took_ms: 10.0,
+        supplemental_pages: None,
     };
     Mock::given(method("POST"))
         .and(path("/api/memory/search"))
@@ -517,6 +518,7 @@ async fn t9_recall_request_does_not_contain_entity() {
     let response = SearchMemoryResponse {
         results: vec![],
         took_ms: 1.0,
+        supplemental_pages: None,
     };
     Mock::given(method("POST"))
         .and(path("/api/memory/search"))

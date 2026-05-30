@@ -7259,6 +7259,11 @@ impl MemoryDB {
     /// This is the quality-focused search path: adds knowledge graph observations
     /// as a third RRF signal, then optionally reranks with the on-device LLM.
     /// Falls back gracefully if graph search or reranking fails.
+    #[deprecated(
+        note = "LLM rerank regresses below no-rerank on LongMemEval (0.722 < 0.790 base); \
+                use plain search_memory or the cross-encoder search_memory_with_reranker. \
+                Retained for eval baseline lineage only."
+    )]
     pub async fn search_memory_reranked(
         &self,
         query: &str,
@@ -22905,6 +22910,7 @@ pub(crate) mod tests {
     // ==================== search_memory_reranked ====================
 
     #[tokio::test]
+    #[allow(deprecated)] // search_memory_reranked retained for eval baseline lineage
     async fn test_search_memory_reranked_without_llm() {
         let (db, _dir) = test_db().await;
         db.upsert_documents(vec![
@@ -23061,6 +23067,7 @@ pub(crate) mod tests {
     }
 
     #[tokio::test]
+    #[allow(deprecated)] // search_memory_reranked retained for eval baseline lineage
     async fn test_search_memory_reranked_respects_limit() {
         let (db, _dir) = test_db().await;
         for i in 0..5 {
@@ -23083,6 +23090,7 @@ pub(crate) mod tests {
     }
 
     #[tokio::test]
+    #[allow(deprecated)] // search_memory_reranked retained for eval baseline lineage
     async fn test_search_memory_reranked_includes_graph_observations() {
         let (db, _dir) = test_db().await;
 

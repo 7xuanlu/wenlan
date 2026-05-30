@@ -751,6 +751,7 @@ pub async fn run_locomo_eval(path: &Path) -> Result<LocomoReport, OriginError> {
 
 /// Same seeding/scoring logic as `run_locomo_eval`, but retrieval uses
 /// `search_memory_reranked` with the supplied LLM for per-query reranking.
+#[allow(deprecated)] // search_memory_reranked retained for eval baseline lineage
 pub async fn run_locomo_eval_reranked(
     path: &Path,
     llm: std::sync::Arc<dyn crate::llm_provider::LlmProvider>,
