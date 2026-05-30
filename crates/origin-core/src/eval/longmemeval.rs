@@ -721,12 +721,12 @@ pub async fn run_longmemeval_eval(path: &Path) -> Result<LongMemEvalReport, Orig
 }
 
 // ---------------------------------------------------------------------------
-// Reranked benchmark runner — same as run_longmemeval_eval but uses search_memory_reranked
+// Reranked benchmark runner — same as run_longmemeval_eval but uses search_memory_llm_rerank
 // ---------------------------------------------------------------------------
 
 /// Same seeding/scoring logic as `run_longmemeval_eval`, but retrieval uses
-/// `search_memory_reranked` with the supplied LLM for per-query reranking.
-#[allow(deprecated)] // search_memory_reranked retained for eval baseline lineage
+/// `search_memory_llm_rerank` with the supplied LLM for per-query reranking.
+#[allow(deprecated)] // search_memory_llm_rerank retained for eval baseline lineage
 pub async fn run_longmemeval_eval_reranked(
     path: &Path,
     llm: std::sync::Arc<dyn crate::llm_provider::LlmProvider>,
@@ -781,7 +781,7 @@ pub async fn run_longmemeval_eval_reranked(
 
         // Search with reranking
         let results = db
-            .search_memory_reranked(&sample.question, 10, None, None, None, Some(llm.clone()))
+            .search_memory_llm_rerank(&sample.question, 10, None, None, None, Some(llm.clone()))
             .await?;
 
         let result_ids: Vec<&str> = results.iter().map(|r| r.source_id.as_str()).collect();
@@ -861,7 +861,7 @@ pub async fn run_longmemeval_eval_reranked(
 // ---------------------------------------------------------------------------
 
 /// Same seeding/scoring logic as `run_longmemeval_eval_reranked`, but retrieval
-/// uses `search_memory_with_reranker` driven by a cross-encoder reranker
+/// uses `search_memory_cross_rerank` driven by a cross-encoder reranker
 /// (typically `BGERerankerV2M3`). Lets the eval sweep compare LLM-as-judge
 /// reranking against a purpose-built cross-encoder on identical fixtures.
 pub async fn run_longmemeval_eval_cross_rerank(
@@ -914,7 +914,7 @@ pub async fn run_longmemeval_eval_cross_rerank(
         }
 
         let results = db
-            .search_memory_with_reranker(
+            .search_memory_cross_rerank(
                 &sample.question,
                 10,
                 None,
@@ -1008,7 +1008,7 @@ pub async fn run_longmemeval_eval_cross_rerank(
 /// the fullpipeline harness).
 /// Page-channel ON/OFF is controlled by the caller via the
 /// `ORIGIN_ENABLE_PAGE_CHANNEL` env var (read inside
-/// `search_memory_with_reranker`).
+/// `search_memory_cross_rerank`).
 pub async fn run_longmemeval_eval_cross_rerank_from_db(
     db: &MemoryDB,
     path: &Path,
@@ -1040,7 +1040,7 @@ pub async fn run_longmemeval_eval_cross_rerank_from_db(
         }
 
         let results = db
-            .search_memory_with_reranker(
+            .search_memory_cross_rerank(
                 &sample.question,
                 10,
                 None,

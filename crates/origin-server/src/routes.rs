@@ -1152,7 +1152,7 @@ mod recent_endpoints_tests {
     }
 }
 
-/// Static assertion: `search_memory_reranked` must NOT appear in this module
+/// Static assertion: `search_memory_llm_rerank` must NOT appear in this module
 /// (routes.rs) at Tier-3.  The LLM reranker regresses below no-rerank on
 /// LongMemEval (0.722 < 0.790 base); Tier-3 uses plain `search_memory`.
 /// This test catches any accidental re-introduction of the reranked call.
@@ -1172,7 +1172,7 @@ mod chat_context_tests {
     /// the route completes its routing phase before reaching any LLM call.
     #[tokio::test]
     async fn chat_context_tier3_without_db_returns_503_not_llm_error() {
-        // No LLM provider is wired — if T3 still called search_memory_reranked
+        // No LLM provider is wired — if T3 still called search_memory_llm_rerank
         // with an llm=None path that short-circuits, this might pass.  But the
         // real guarantee is structural: after removing the reranked branch the
         // handler falls through to DbNotInitialized before touching any LLM.

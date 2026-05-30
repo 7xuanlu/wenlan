@@ -1034,7 +1034,7 @@ pub async fn handle_store_memory(
     }))
 }
 
-/// Splits a flat Vec<SearchResult> (as returned by `search_memory_with_reranker`)
+/// Splits a flat Vec<SearchResult> (as returned by `search_memory_cross_rerank`)
 /// into memory rows and page-channel rows.
 ///
 /// Returns `(memory_rows, Some(page_rows))` when any page rows are present,
@@ -1079,7 +1079,7 @@ pub async fn handle_search_memory(
                     "[search] rerank=true requested but no reranker wired (set ORIGIN_RERANKER_ENABLED=1); falling back to plain hybrid search"
                 );
             }
-            db.search_memory_with_reranker(
+            db.search_memory_cross_rerank(
                 &req.query,
                 req.limit,
                 req.memory_type.as_deref(),
@@ -3746,10 +3746,10 @@ mod search_agent_attribution_tests {
 /// Wiring tests for the `rerank` flag on `/api/memory/search`.
 ///
 /// These verify that the handler reads `ServerState.reranker` and routes
-/// `rerank=true` through `search_memory_with_reranker`. The `NoopReranker`
+/// `rerank=true` through `search_memory_cross_rerank`. The `NoopReranker`
 /// stand-in keeps these fast and dependency-free — no model weights, no
 /// cross-encoder download. The rerank quality itself is covered by
-/// `origin_core::db::tests::test_search_memory_with_reranker_*`.
+/// `origin_core::db::tests::test_search_memory_cross_rerank_*`.
 #[cfg(test)]
 mod search_rerank_tests {
     use axum::body::Body;

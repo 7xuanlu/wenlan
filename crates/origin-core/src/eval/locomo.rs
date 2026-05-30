@@ -746,12 +746,12 @@ pub async fn run_locomo_eval(path: &Path) -> Result<LocomoReport, OriginError> {
 }
 
 // ---------------------------------------------------------------------------
-// Reranked benchmark runner — same as run_locomo_eval but uses search_memory_reranked
+// Reranked benchmark runner — same as run_locomo_eval but uses search_memory_llm_rerank
 // ---------------------------------------------------------------------------
 
 /// Same seeding/scoring logic as `run_locomo_eval`, but retrieval uses
-/// `search_memory_reranked` with the supplied LLM for per-query reranking.
-#[allow(deprecated)] // search_memory_reranked retained for eval baseline lineage
+/// `search_memory_llm_rerank` with the supplied LLM for per-query reranking.
+#[allow(deprecated)] // search_memory_llm_rerank retained for eval baseline lineage
 pub async fn run_locomo_eval_reranked(
     path: &Path,
     llm: std::sync::Arc<dyn crate::llm_provider::LlmProvider>,
@@ -807,7 +807,7 @@ pub async fn run_locomo_eval_reranked(
             }
 
             let results = db
-                .search_memory_reranked(&qa.question, 10, None, None, None, Some(llm.clone()))
+                .search_memory_llm_rerank(&qa.question, 10, None, None, None, Some(llm.clone()))
                 .await?;
 
             // Build relevance judgments: evidence dia_ids -> source_ids = relevant
@@ -900,7 +900,7 @@ pub async fn run_locomo_eval_reranked(
 // ---------------------------------------------------------------------------
 
 /// Same seeding/scoring logic as `run_locomo_eval_reranked`, but retrieval uses
-/// `search_memory_with_reranker` driven by a cross-encoder reranker
+/// `search_memory_cross_rerank` driven by a cross-encoder reranker
 /// (typically `BGERerankerV2M3`). Lets the eval sweep compare LLM-as-judge
 /// reranking against a purpose-built cross-encoder on identical fixtures.
 pub async fn run_locomo_eval_cross_rerank(
@@ -958,7 +958,7 @@ pub async fn run_locomo_eval_cross_rerank(
             }
 
             let results = db
-                .search_memory_with_reranker(
+                .search_memory_cross_rerank(
                     &qa.question,
                     10,
                     None,
@@ -1062,7 +1062,7 @@ pub async fn run_locomo_eval_cross_rerank(
 /// seed path and the ephemeral seed in `run_locomo_eval_cross_rerank`).
 /// Page-channel ON/OFF is controlled by the caller via the
 /// `ORIGIN_ENABLE_PAGE_CHANNEL` env var (read inside
-/// `search_memory_with_reranker`).
+/// `search_memory_cross_rerank`).
 pub async fn run_locomo_eval_cross_rerank_from_db(
     db: &MemoryDB,
     path: &Path,
@@ -1100,7 +1100,7 @@ pub async fn run_locomo_eval_cross_rerank_from_db(
             }
 
             let results = db
-                .search_memory_with_reranker(
+                .search_memory_cross_rerank(
                     &qa.question,
                     10,
                     None,

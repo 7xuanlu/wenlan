@@ -411,7 +411,7 @@ pub fn compute_rerank_fetch_pool(
 /// (`1`, `true`, or `yes`, case-insensitive). The page-channel is OPT-IN:
 /// unset or a falsey value (`0`/`false`/`no`/"") leaves it disabled.
 ///
-/// Used by [`MemoryDB::search_memory_with_reranker`] to gate the page-channel
+/// Used by [`MemoryDB::search_memory_cross_rerank`] to gate the page-channel
 /// branch and by the eval harness (locomo + longmemeval) to tag baseline
 /// JSON artifacts with their page-ON/OFF variant. All five call sites MUST
 /// share this helper so an `ORIGIN_ENABLE_PAGE_CHANNEL` setting can't
@@ -7261,10 +7261,10 @@ impl MemoryDB {
     /// Falls back gracefully if graph search or reranking fails.
     #[deprecated(
         note = "LLM rerank regresses below no-rerank on LongMemEval (0.722 < 0.790 base); \
-                use plain search_memory or the cross-encoder search_memory_with_reranker. \
+                use plain search_memory or the cross-encoder search_memory_cross_rerank. \
                 Retained for eval baseline lineage only."
     )]
-    pub async fn search_memory_reranked(
+    pub async fn search_memory_llm_rerank(
         &self,
         query: &str,
         limit: usize,
@@ -7409,7 +7409,7 @@ impl MemoryDB {
 
     /// Hybrid search with reranker-trait reranking.
     ///
-    /// Equivalent to `search_memory_reranked` but takes a [`Reranker`] trait
+    /// Equivalent to `search_memory_llm_rerank` but takes a [`Reranker`] trait
     /// object instead of an `LlmProvider`. Lets callers swap LLM-as-judge
     /// rerank for a cross-encoder via fastembed without changing the call
     /// signature elsewhere.
@@ -7426,7 +7426,7 @@ impl MemoryDB {
     /// page rows contribute only `1/(60+rank)` RRF mass on top (mirrors
     /// `augment_with_graph` at db.rs:7619-7644). Enable with
     /// `ORIGIN_ENABLE_PAGE_CHANNEL=1` (opt-in, default OFF).
-    pub async fn search_memory_with_reranker(
+    pub async fn search_memory_cross_rerank(
         &self,
         query: &str,
         limit: usize,
@@ -8244,7 +8244,7 @@ impl MemoryDB {
     /// timestamp silently demotes the page to maximum decay. Current consumer
     /// (PR-B Task 3 two-stage RRF merge) does not route page rows through recency,
     /// so this is documented as an invariant rather than enforced at the type level.
-    // consumed by search_memory_with_reranker (page-channel RRF, PR-B Task 3)
+    // consumed by search_memory_cross_rerank (page-channel RRF, PR-B Task 3)
     fn search_result_from_page(page: Page) -> SearchResult {
         let last_modified = chrono::DateTime::parse_from_rfc3339(&page.last_modified)
             .map(|dt| dt.timestamp())
@@ -22907,11 +22907,11 @@ pub(crate) mod tests {
         assert_eq!(memories[0].content, "Always double-check before deploying");
     }
 
-    // ==================== search_memory_reranked ====================
+    // ==================== search_memory_llm_rerank ====================
 
     #[tokio::test]
-    #[allow(deprecated)] // search_memory_reranked retained for eval baseline lineage
-    async fn test_search_memory_reranked_without_llm() {
+    #[allow(deprecated)] // search_memory_llm_rerank retained for eval baseline lineage
+    async fn test_search_memory_llm_rerank_without_llm() {
         let (db, _dir) = test_db().await;
         db.upsert_documents(vec![
             make_memory_doc(
@@ -22934,7 +22934,7 @@ pub(crate) mod tests {
 
         // Without LLM formatter, reranked search should behave like regular search
         let results = db
-            .search_memory_reranked("Rust programming", 10, None, None, None, None)
+            .search_memory_llm_rerank("Rust programming", 10, None, None, None, None)
             .await
             .unwrap();
         assert!(!results.is_empty(), "should return results without LLM");
@@ -22999,7 +22999,7 @@ pub(crate) mod tests {
     }
 
     #[tokio::test]
-    async fn test_search_memory_with_reranker_noop_passthrough() {
+    async fn test_search_memory_cross_rerank_noop_passthrough() {
         let (db, _dir) = test_db().await;
         db.upsert_documents(vec![
             make_memory_doc(
@@ -23029,7 +23029,7 @@ pub(crate) mod tests {
 
         let reranker: Arc<dyn crate::reranker::Reranker> = Arc::new(crate::reranker::NoopReranker);
         let results = db
-            .search_memory_with_reranker("Rust programming", 10, None, None, None, Some(reranker))
+            .search_memory_cross_rerank("Rust programming", 10, None, None, None, Some(reranker))
             .await
             .unwrap();
         assert!(
@@ -23044,7 +23044,7 @@ pub(crate) mod tests {
     }
 
     #[tokio::test]
-    async fn test_search_memory_with_reranker_none_keeps_original_order() {
+    async fn test_search_memory_cross_rerank_none_keeps_original_order() {
         let (db, _dir) = test_db().await;
         db.upsert_documents(vec![make_memory_doc(
             "o1",
@@ -23057,7 +23057,7 @@ pub(crate) mod tests {
         .unwrap();
 
         let results = db
-            .search_memory_with_reranker("Rust programming", 10, None, None, None, None)
+            .search_memory_cross_rerank("Rust programming", 10, None, None, None, None)
             .await
             .unwrap();
         assert!(
@@ -23067,8 +23067,8 @@ pub(crate) mod tests {
     }
 
     #[tokio::test]
-    #[allow(deprecated)] // search_memory_reranked retained for eval baseline lineage
-    async fn test_search_memory_reranked_respects_limit() {
+    #[allow(deprecated)] // search_memory_llm_rerank retained for eval baseline lineage
+    async fn test_search_memory_llm_rerank_respects_limit() {
         let (db, _dir) = test_db().await;
         for i in 0..5 {
             db.upsert_documents(vec![make_memory_doc(
@@ -23083,15 +23083,15 @@ pub(crate) mod tests {
         }
 
         let results = db
-            .search_memory_reranked("programming", 2, None, None, None, None)
+            .search_memory_llm_rerank("programming", 2, None, None, None, None)
             .await
             .unwrap();
         assert!(results.len() <= 2, "should respect limit");
     }
 
     #[tokio::test]
-    #[allow(deprecated)] // search_memory_reranked retained for eval baseline lineage
-    async fn test_search_memory_reranked_includes_graph_observations() {
+    #[allow(deprecated)] // search_memory_llm_rerank retained for eval baseline lineage
+    async fn test_search_memory_llm_rerank_includes_graph_observations() {
         let (db, _dir) = test_db().await;
 
         // Store a memory about dark mode (use words that match FTS query)
@@ -23125,9 +23125,9 @@ pub(crate) mod tests {
         .await
         .unwrap();
 
-        // search_memory_reranked inherits graph augmentation from search_memory, then adds LLM reranking
+        // search_memory_llm_rerank inherits graph augmentation from search_memory, then adds LLM reranking
         let results = db
-            .search_memory_reranked("dark mode", 10, None, None, None, None)
+            .search_memory_llm_rerank("dark mode", 10, None, None, None, None)
             .await
             .unwrap();
         assert!(!results.is_empty(), "should find results");
@@ -31863,7 +31863,7 @@ pub(crate) mod tests {
         .unwrap();
 
         let hits = temp_env::async_with_vars([("ORIGIN_ENABLE_PAGE_CHANNEL", Some("1"))], async {
-            db.search_memory_with_reranker("pages topic retrieval", 10, None, None, None, None)
+            db.search_memory_cross_rerank("pages topic retrieval", 10, None, None, None, None)
                 .await
                 .unwrap()
         })
@@ -31896,7 +31896,7 @@ pub(crate) mod tests {
 
         let hits =
             temp_env::async_with_vars([("ORIGIN_ENABLE_PAGE_CHANNEL", None::<&str>)], async {
-                db.search_memory_with_reranker("pages disabled", 10, None, None, None, None)
+                db.search_memory_cross_rerank("pages disabled", 10, None, None, None, None)
                     .await
                     .unwrap()
             })
@@ -31929,7 +31929,7 @@ pub(crate) mod tests {
         .unwrap();
 
         let hits = temp_env::async_with_vars([("ORIGIN_ENABLE_PAGE_CHANNEL", Some("0"))], async {
-            db.search_memory_with_reranker("truthy zero", 10, None, None, None, None)
+            db.search_memory_cross_rerank("truthy zero", 10, None, None, None, None)
                 .await
                 .unwrap()
         })
@@ -31965,7 +31965,7 @@ pub(crate) mod tests {
         for value in ["true", "YES", "True"] {
             let hits =
                 temp_env::async_with_vars([("ORIGIN_ENABLE_PAGE_CHANNEL", Some(value))], async {
-                    db.search_memory_with_reranker("truthy syn", 10, None, None, None, None)
+                    db.search_memory_cross_rerank("truthy syn", 10, None, None, None, None)
                         .await
                         .unwrap()
                 })
