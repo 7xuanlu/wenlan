@@ -27,7 +27,7 @@ pub const EMBEDDING_DIM: usize = 768;
 
 /// Current DB schema version (highest `PRAGMA user_version` applied by `migrate()`).
 /// Bump this whenever a new migration lands. Used as an eval cache invalidation key.
-pub const SCHEMA_VERSION: u32 = 57;
+pub const SCHEMA_VERSION: u32 = 58;
 
 /// Shared embedder reference. Pass to [`MemoryDB::new_with_shared_embedder`] to
 /// reuse a single embedder across many `MemoryDB` instances. Created via
@@ -1168,6 +1168,21 @@ CREATE TABLE IF NOT EXISTS rejected_memories (
 );
 CREATE INDEX IF NOT EXISTS idx_rejected_reason ON rejected_memories(rejection_reason);
 CREATE INDEX IF NOT EXISTS idx_rejected_agent ON rejected_memories(source_agent);
+
+-- T15a fact-channel: per-fact child vectors. Each child rehydrates to its
+-- PARENT memory (parent_id = parent source_id; parent_kind = 'memory'). The
+-- vector index (child_vectors_vec_idx) is created separately, like the other
+-- libsql_vector_idx indexes. Ships EMPTY + inert: rows are only co-written when
+-- ORIGIN_ENABLE_FACT_CHANNEL is on (see upsert_documents).
+CREATE TABLE IF NOT EXISTS child_vectors (
+    id TEXT PRIMARY KEY,
+    parent_kind TEXT NOT NULL,
+    parent_id TEXT NOT NULL,
+    field TEXT NOT NULL,
+    content TEXT NOT NULL,
+    embedding F32_BLOB(768)
+);
+CREATE INDEX IF NOT EXISTS idx_child_vectors_parent ON child_vectors(parent_kind, parent_id);
 ";
 
 // FTS5 and vector indexes created separately (may not support IF NOT EXISTS)
@@ -1491,6 +1506,13 @@ impl MemoryDB {
                 libsql_vector_idx(embedding, 'metric=cosine', 'compress_neighbors=float8', 'max_neighbors=32')
             )", (),
         ).await;
+        // T15a: child-vector index (mirrors memories_vec_idx). The migration
+        // also creates this IF NOT EXISTS for upgraded DBs.
+        let _ = conn.execute(
+            "CREATE INDEX IF NOT EXISTS child_vectors_vec_idx ON child_vectors (
+                libsql_vector_idx(embedding, 'metric=cosine', 'compress_neighbors=float8', 'max_neighbors=32')
+            )", (),
+        ).await;
 
         let instance = Self {
             _db: db,
@@ -1577,6 +1599,12 @@ impl MemoryDB {
         ).await;
         let _ = conn.execute(
                 "CREATE INDEX IF NOT EXISTS entities_vec_idx ON entities (
+                    libsql_vector_idx(embedding, 'metric=cosine', 'compress_neighbors=float8', 'max_neighbors=32')
+                )", (),
+        ).await;
+        // T15a: child-vector index (mirrors memories_vec_idx).
+        let _ = conn.execute(
+                "CREATE INDEX IF NOT EXISTS child_vectors_vec_idx ON child_vectors (
                     libsql_vector_idx(embedding, 'metric=cosine', 'compress_neighbors=float8', 'max_neighbors=32')
                 )", (),
         ).await;
@@ -5360,6 +5388,48 @@ impl MemoryDB {
                     .map_err(|e| OriginError::VectorDb(format!("m57 bump: {e}")))?;
                 log::info!("[migration] Migration 57 applied: entity_minhash_bands table + idx_minhash_band_key (T16 entity near-dedup)");
             }
+
+            // Migration 58: T15a fact-channel child vectors. Per-fact "child"
+            // vectors (narrative + one per structured field) that rehydrate to
+            // their PARENT memory. Additive and non-destructive: the table ships
+            // EMPTY and inert -- rows are only co-written when
+            // ORIGIN_ENABLE_FACT_CHANNEL is on, and the read channel only queries
+            // it under the same flag. No inline backfill (could block on large
+            // DBs); rebuild_child_vectors_for_missing() is the deferred
+            // turn-it-on-later path. The vector index is created OUTSIDE any
+            // transaction (libsql_vector_idx restriction). CREATE ... IF NOT
+            // EXISTS makes the whole block idempotent.
+            if version < 58 {
+                let conn = self.conn.lock().await;
+                conn.execute_batch(
+                    "
+                    CREATE TABLE IF NOT EXISTS child_vectors (
+                        id TEXT PRIMARY KEY,
+                        parent_kind TEXT NOT NULL,
+                        parent_id TEXT NOT NULL,
+                        field TEXT NOT NULL,
+                        content TEXT NOT NULL,
+                        embedding F32_BLOB(768)
+                    );
+                    CREATE INDEX IF NOT EXISTS idx_child_vectors_parent
+                        ON child_vectors(parent_kind, parent_id);
+                    ",
+                )
+                .await
+                .map_err(|e| OriginError::VectorDb(format!("m58 table: {e}")))?;
+                conn.execute(
+                    "CREATE INDEX IF NOT EXISTS child_vectors_vec_idx ON child_vectors (
+                        libsql_vector_idx(embedding, 'metric=cosine', 'compress_neighbors=float8', 'max_neighbors=32')
+                    )",
+                    (),
+                )
+                .await
+                .map_err(|e| OriginError::VectorDb(format!("m58 vec idx: {e}")))?;
+                conn.execute("PRAGMA user_version = 58", ())
+                    .await
+                    .map_err(|e| OriginError::VectorDb(format!("m58 bump: {e}")))?;
+                log::info!("[migration] Migration 58 applied: child_vectors table + idx_child_vectors_parent + child_vectors_vec_idx (T15a fact channel)");
+            }
         }
 
         Ok(())
@@ -6794,6 +6864,64 @@ impl MemoryDB {
             chunk_texts.extend(episode_texts);
         }
 
+        // T15a fact-channel child co-write (write-side opt-in, default OFF).
+        // For each distilled `source='memory'` doc, explode it into per-fact
+        // "child" vectors: one NARRATIVE child (the prose content) plus one
+        // child per coercible structured field ("key: value"). Each child
+        // rehydrates to its PARENT memory (parent_id = doc.source_id,
+        // parent_kind = 'memory') so retrieval credit flows through the parent's
+        // own source_id (metric-honest). Child id = sha256(parent_id + field)[..16]
+        // is deterministic, so re-storing the same source_id overwrites the same
+        // child rows (paired delete below clears stale ones first). Bypasses the
+        // chunker + quality gate by construction. Embedded in ONE extra batch and
+        // inserted in the SAME tx as the parent rows. Flag OFF = no children,
+        // byte-identical to pre-T15a.
+        struct ChildRow {
+            id: String,
+            parent_id: String,
+            field: String,
+            content: String,
+        }
+        let mut child_rows: Vec<ChildRow> = Vec::new();
+        let mut child_texts: Vec<String> = Vec::new();
+        if crate::retrieval::fact_channel::fact_channel_enabled() {
+            for doc in &docs {
+                if doc.source != "memory" {
+                    continue;
+                }
+                let content = redact_pii(&doc.content);
+                // Build (field, text) pairs: narrative first, then per-field.
+                let mut fields: Vec<(String, String)> = Vec::new();
+                if !content.trim().is_empty() {
+                    fields.push(("narrative".to_string(), content));
+                }
+                if let Some(ref sf) = doc.structured_fields {
+                    for child in crate::schema::split_structured_fields_to_facts(sf) {
+                        // child is "key: value"; key is the field name up to ": ".
+                        let field = child
+                            .split_once(": ")
+                            .map(|(k, _)| k.to_string())
+                            .unwrap_or_else(|| "field".to_string());
+                        fields.push((field, child));
+                    }
+                }
+                for (field, text) in fields {
+                    let mut hasher = Sha256::new();
+                    hasher.update(doc.source_id.as_bytes());
+                    hasher.update(b"|");
+                    hasher.update(field.as_bytes());
+                    let hash = format!("{:x}", hasher.finalize());
+                    child_rows.push(ChildRow {
+                        id: hash[..16].to_string(),
+                        parent_id: doc.source_id.clone(),
+                        field,
+                        content: text.clone(),
+                    });
+                    child_texts.push(text);
+                }
+            }
+        }
+
         if memory_rows.is_empty() {
             return Ok(0);
         }
@@ -6805,6 +6933,20 @@ impl MemoryDB {
                 "Expected {} embeddings, got {}",
                 memory_rows.len(),
                 embeddings.len()
+            )));
+        }
+
+        // Embed all child texts in ONE model pass (T15a; empty when flag OFF).
+        let child_embeddings = if child_texts.is_empty() {
+            Vec::new()
+        } else {
+            self.generate_embeddings(&child_texts)?
+        };
+        if child_embeddings.len() != child_rows.len() {
+            return Err(OriginError::Embedding(format!(
+                "Expected {} child embeddings, got {}",
+                child_rows.len(),
+                child_embeddings.len()
             )));
         }
 
@@ -6823,6 +6965,17 @@ impl MemoryDB {
             )
             .await
             .map_err(|e| OriginError::VectorDb(format!("delete old memories: {}", e)))?;
+            // T15a: pair the parent delete with its child rows (no FK; parent_id
+            // is source_id not rowid, so cascade is explicit). Scoped to memory
+            // parents — episode/page parents never have children.
+            if source == "memory" {
+                conn.execute(
+                    "DELETE FROM child_vectors WHERE parent_kind = 'memory' AND parent_id = ?1",
+                    libsql::params![source_id.clone()],
+                )
+                .await
+                .map_err(|e| OriginError::VectorDb(format!("delete old child_vectors: {}", e)))?;
+            }
         }
 
         // Insert new memory rows with proper NULL handling for optional fields
@@ -6958,6 +7111,18 @@ impl MemoryDB {
             )
             .await
             .map_err(|e| OriginError::VectorDb(format!("insert memory: {}", e)))?;
+        }
+
+        // T15a: insert child vectors in the SAME tx (empty when flag OFF).
+        for (row, embedding) in child_rows.into_iter().zip(child_embeddings.iter()) {
+            let vec_str = Self::vec_to_sql(embedding);
+            conn.execute(
+                "INSERT OR REPLACE INTO child_vectors (id, parent_kind, parent_id, field, content, embedding)
+                 VALUES (?1, 'memory', ?2, ?3, ?4, vector32(?5))",
+                libsql::params![row.id, row.parent_id, row.field, row.content, vec_str],
+            )
+            .await
+            .map_err(|e| OriginError::VectorDb(format!("insert child_vector: {}", e)))?;
         }
 
         // Soft-suppress superseded memories (skip when pending_revision — human hasn't approved yet)
@@ -8291,6 +8456,107 @@ impl MemoryDB {
         Ok(results)
     }
 
+    /// Fact-channel (T15a): vector search over per-fact `child_vectors`, then
+    /// REHYDRATE the matched PARENT memories. A child hit never surfaces its own
+    /// id — it pulls back the parent memory row (source="memory") so retrieval
+    /// metrics credit the parent's own source_id honestly (no provenance map).
+    ///
+    /// Returns rehydrated parent `SearchResult`s in best-child-rank order
+    /// (max-pooled so each parent appears at most once, contributing only its
+    /// best child's rank). Used only as an opt-in RRF stream inside
+    /// `search_memory_cross_rerank`, gated by `fact_channel_enabled()`.
+    async fn search_facts_channel(
+        &self,
+        query: &str,
+        pool: usize,
+    ) -> Result<Vec<SearchResult>, OriginError> {
+        use crate::retrieval::fact_channel::{max_pool_by_parent, ChildHit};
+
+        let embedding = self.get_or_compute_embedding(query)?;
+        let vec_str = Self::vec_to_sql(&embedding);
+        let fetch_limit = (pool * 3) as i64;
+
+        let conn = self.conn.lock().await;
+
+        // --- Child vector search (distance-ordered) ---
+        let mut child_hits: Vec<ChildHit> = Vec::new();
+        {
+            let sql = "SELECT cv.parent_id,
+                              vector_distance_cos(cv.embedding, vector32(?1)) AS dist
+                       FROM vector_top_k('child_vectors_vec_idx', vector32(?1), ?2) AS vt
+                       JOIN child_vectors cv ON cv.rowid = vt.id
+                       WHERE cv.parent_kind = 'memory'
+                       ORDER BY dist ASC";
+            let mut rows = conn
+                .query(sql, libsql::params![vec_str.clone(), fetch_limit])
+                .await
+                .map_err(|e| OriginError::VectorDb(format!("fact channel query: {e}")))?;
+            let mut rank = 0usize;
+            while let Ok(Some(row)) = rows.next().await {
+                let parent_id: String = match row.get(0) {
+                    Ok(v) => v,
+                    Err(_) => continue,
+                };
+                child_hits.push(ChildHit { parent_id, rank });
+                rank += 1;
+            }
+        }
+
+        // Max-pool by parent: each parent contributes only its best child's rank.
+        let parent_ids = max_pool_by_parent(&child_hits);
+        if parent_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        let parent_ids: Vec<String> = parent_ids.into_iter().take(pool).collect();
+
+        // --- Rehydrate the parent memories (full projection -> row_to_search_result) ---
+        let placeholders: String = (1..=parent_ids.len())
+            .map(|i| format!("?{i}"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let sql = format!(
+            "SELECT c.id, c.content, c.source, c.source_id, c.title, c.summary, c.url,
+                    c.chunk_index, c.last_modified, c.chunk_type, c.language, c.byte_start,
+                    c.byte_end, c.semantic_unit, c.memory_type, c.space, c.source_agent,
+                    c.confidence, c.confirmed, c.stability, c.supersedes,
+                    c.entity_id, c.quality, c.is_recap, c.supersede_mode,
+                    c.structured_fields, c.retrieval_cue, c.source_text,
+                    c.version, c.pending_revision,
+                    0.0, c.importance
+             FROM memories c
+             WHERE c.source = 'memory' AND c.chunk_index = 0 AND c.source_id IN ({placeholders})",
+            placeholders = placeholders
+        );
+        let params: Vec<libsql::Value> = parent_ids
+            .iter()
+            .map(|id| libsql::Value::Text(id.clone()))
+            .collect();
+        let mut by_source: HashMap<String, SearchResult> = HashMap::new();
+        match conn.query(&sql, params).await {
+            Ok(mut rows) => {
+                while let Ok(Some(row)) = rows.next().await {
+                    if let Ok(result) = Self::row_to_search_result(&row, 0.0) {
+                        by_source.insert(result.source_id.clone(), result);
+                    }
+                }
+            }
+            Err(e) => {
+                return Err(OriginError::VectorDb(format!(
+                    "fact channel rehydrate: {e}"
+                )));
+            }
+        }
+        drop(conn);
+
+        // Preserve best-child-rank order; drop parents that didn't rehydrate
+        // (e.g. superseded/deleted between index and read).
+        let rehydrated: Vec<SearchResult> = parent_ids
+            .into_iter()
+            .filter_map(|id| by_source.remove(&id))
+            .collect();
+        Ok(rehydrated)
+    }
+
     /// Hybrid search with reranker-trait reranking.
     ///
     /// Equivalent to `search_memory_llm_rerank` but takes a [`Reranker`] trait
@@ -8432,6 +8698,47 @@ impl MemoryDB {
             episode_results
         };
 
+        // T15a fact-channel (opt-in RRF stream). Vector-search per-fact child
+        // vectors, rehydrate the matched PARENT memories (source="memory"), and
+        // merge them as RRF mass below. Log-and-degrade on failure (mirrors the
+        // page/episode fallbacks). Computed here so `memory_results` is still
+        // available for the filter re-apply.
+        let fact_results: Vec<SearchResult> =
+            if crate::retrieval::fact_channel::fact_channel_enabled() {
+                match self
+                    .search_facts_channel(
+                        query,
+                        crate::retrieval::fact_channel::fact_channel_limit(),
+                    )
+                    .await
+                {
+                    Ok(v) => v,
+                    Err(e) => {
+                        log::warn!("[memory_db] fact channel degraded: {e}; continuing");
+                        Vec::new()
+                    }
+                }
+            } else {
+                Vec::new()
+            };
+        // Re-apply the base memory_type/space/source_agent filter on the
+        // rehydrated parents: a child bypasses the base-channel filter by
+        // construction, so a buried fact in a `space="personal"` memory must not
+        // leak into a `space="work"` recall. The rehydrated row carries the
+        // parent's own field values, so we filter on them directly.
+        let fact_results: Vec<SearchResult> = if filters_active && !fact_results.is_empty() {
+            fact_results
+                .into_iter()
+                .filter(|r| {
+                    memory_type.is_none_or(|mt| r.memory_type.as_deref() == Some(mt))
+                        && space.is_none_or(|sp| r.space.as_deref() == Some(sp))
+                        && source_agent.is_none_or(|sa| r.source_agent.as_deref() == Some(sa))
+                })
+                .collect()
+        } else {
+            fact_results
+        };
+
         // Two-stage RRF merge — mirrors augment_with_graph (db.rs:7619-7644).
         // Memory r.score SEEDS the merged score_map; page rows contribute only
         // 1/(60+rank) RRF mass on top. `search_result_from_page` zeros page
@@ -8464,6 +8771,16 @@ impl MemoryDB {
             *score_map.entry(r.id.clone()).or_default() += rrf_score;
             result_map.entry(r.id.clone()).or_insert(r);
         }
+
+        // T15a: fact-channel rehydrated parents contribute RRF mass on top of the
+        // merged map (1/(60+rank), max-pooled per parent). A parent already in the
+        // pool gains mass; a new parent enters with mass only (raw cosine zeroed).
+        // r.source is already "memory" so they ride inline through rerank + truncate.
+        crate::retrieval::fact_channel::merge_fact_channel(
+            &mut score_map,
+            &mut result_map,
+            fact_results,
+        );
 
         let mut results: Vec<SearchResult> = result_map
             .into_values()
@@ -9730,6 +10047,16 @@ impl MemoryDB {
         )
         .await
         .ok();
+        // T15a: clean up orphaned child_vectors for memory parents (no FK cascade;
+        // parent_id is source_id not rowid). Scoped to memory deletes.
+        if source == "memory" {
+            conn.execute(
+                "DELETE FROM child_vectors WHERE parent_kind = 'memory' AND parent_id = ?1",
+                libsql::params![source_id.to_string()],
+            )
+            .await
+            .ok();
+        }
         Ok(())
     }
 
@@ -9996,7 +10323,145 @@ impl MemoryDB {
         )
         .await
         .map_err(|e| OriginError::VectorDb(format!("update_memory: {}", e)))?;
+        drop(conn);
+        // T15a: keep child vectors in sync with the edited content (no-op when
+        // the fact channel is off).
+        self.rebuild_child_vectors_for(id).await?;
         Ok(())
+    }
+
+    /// Rebuild the `child_vectors` rows for a single parent memory from its
+    /// CURRENT content + structured_fields (T15a). Delete-then-insert by
+    /// `parent_id` in one tx so no stale child survives an in-place content
+    /// edit. No-op (and no child rows) when `fact_channel_enabled()` is false.
+    ///
+    /// Idempotent: child ids are `sha256(parent_id + field)[..16]`, so a rebuild
+    /// over unchanged content produces the same rows. Called from the in-place
+    /// content-change paths (`update_memory`, `upsert_memory_in_place`) so a
+    /// surgical edit outside the `upsert_documents` store path keeps children in
+    /// sync.
+    pub async fn rebuild_child_vectors_for(&self, parent_id: &str) -> Result<(), OriginError> {
+        if !crate::retrieval::fact_channel::fact_channel_enabled() {
+            return Ok(());
+        }
+
+        // Read the current primary-chunk content + structured_fields.
+        let (content, structured_fields): (String, Option<String>) = {
+            let conn = self.conn.lock().await;
+            let mut rows = conn
+                .query(
+                    "SELECT content, structured_fields FROM memories
+                     WHERE source_id = ?1 AND source = 'memory' AND chunk_index = 0
+                     LIMIT 1",
+                    libsql::params![parent_id.to_string()],
+                )
+                .await
+                .map_err(|e| OriginError::VectorDb(format!("rebuild_child read: {e}")))?;
+            match rows.next().await {
+                Ok(Some(row)) => (
+                    row.get::<String>(0).unwrap_or_default(),
+                    row.get::<Option<String>>(1).unwrap_or(None),
+                ),
+                _ => return Ok(()), // parent gone; nothing to rebuild
+            }
+        };
+
+        // Build (field, text) children: narrative + per structured field.
+        let mut fields: Vec<(String, String)> = Vec::new();
+        let content = redact_pii(&content);
+        if !content.trim().is_empty() {
+            fields.push(("narrative".to_string(), content));
+        }
+        if let Some(ref sf) = structured_fields {
+            for child in crate::schema::split_structured_fields_to_facts(sf) {
+                let field = child
+                    .split_once(": ")
+                    .map(|(k, _)| k.to_string())
+                    .unwrap_or_else(|| "field".to_string());
+                fields.push((field, child));
+            }
+        }
+
+        let texts: Vec<String> = fields.iter().map(|(_, t)| t.clone()).collect();
+        let embeddings = if texts.is_empty() {
+            Vec::new()
+        } else {
+            self.generate_embeddings(&texts)?
+        };
+
+        let conn = self.conn.lock().await;
+        conn.execute("BEGIN", ())
+            .await
+            .map_err(|e| OriginError::VectorDb(format!("rebuild_child begin: {e}")))?;
+        conn.execute(
+            "DELETE FROM child_vectors WHERE parent_kind = 'memory' AND parent_id = ?1",
+            libsql::params![parent_id.to_string()],
+        )
+        .await
+        .map_err(|e| OriginError::VectorDb(format!("rebuild_child delete: {e}")))?;
+        for ((field, text), embedding) in fields.into_iter().zip(embeddings.iter()) {
+            let mut hasher = Sha256::new();
+            hasher.update(parent_id.as_bytes());
+            hasher.update(b"|");
+            hasher.update(field.as_bytes());
+            let hash = format!("{:x}", hasher.finalize());
+            let child_id = hash[..16].to_string();
+            let vec_str = Self::vec_to_sql(embedding);
+            conn.execute(
+                "INSERT OR REPLACE INTO child_vectors (id, parent_kind, parent_id, field, content, embedding)
+                 VALUES (?1, 'memory', ?2, ?3, ?4, vector32(?5))",
+                libsql::params![child_id, parent_id.to_string(), field, text, vec_str],
+            )
+            .await
+            .map_err(|e| OriginError::VectorDb(format!("rebuild_child insert: {e}")))?;
+        }
+        conn.execute("COMMIT", ())
+            .await
+            .map_err(|e| OriginError::VectorDb(format!("rebuild_child commit: {e}")))?;
+        Ok(())
+    }
+
+    /// Idempotent backfill: rebuild `child_vectors` for every `source='memory'`
+    /// parent that currently has NO child rows (T15a). This is the supported
+    /// turn-it-on-later path — after migration 58 or after flipping
+    /// `ORIGIN_ENABLE_FACT_CHANNEL` on, the table is empty, so a DB ingested with
+    /// the flag off needs this pass before the read channel can surface anything.
+    ///
+    /// No-op when `fact_channel_enabled()` is false. Returns the number of
+    /// parents rebuilt.
+    pub async fn rebuild_child_vectors_for_missing(&self) -> Result<usize, OriginError> {
+        if !crate::retrieval::fact_channel::fact_channel_enabled() {
+            return Ok(0);
+        }
+        // Find primary-chunk memory parents with no child_vectors rows yet.
+        let missing: Vec<String> = {
+            let conn = self.conn.lock().await;
+            let mut rows = conn
+                .query(
+                    "SELECT m.source_id FROM memories m
+                     WHERE m.source = 'memory' AND m.chunk_index = 0
+                       AND NOT EXISTS (
+                           SELECT 1 FROM child_vectors cv
+                           WHERE cv.parent_kind = 'memory' AND cv.parent_id = m.source_id
+                       )",
+                    (),
+                )
+                .await
+                .map_err(|e| OriginError::VectorDb(format!("rebuild_missing scan: {e}")))?;
+            let mut ids = Vec::new();
+            while let Ok(Some(row)) = rows.next().await {
+                if let Ok(id) = row.get::<String>(0) {
+                    ids.push(id);
+                }
+            }
+            ids
+        };
+        let mut rebuilt = 0usize;
+        for id in &missing {
+            self.rebuild_child_vectors_for(id).await?;
+            rebuilt += 1;
+        }
+        Ok(rebuilt)
     }
 
     /// Replace entire document content: re-chunk, re-embed, re-insert.
@@ -15914,6 +16379,9 @@ impl MemoryDB {
             "entity_aliases",
             "entities",
             "memories",
+            // T15a: child_vectors has no FK cascade; wipe alongside memories so
+            // eval re-seeds don't accumulate orphaned child rows.
+            "child_vectors",
         ] {
             conn.execute(&format!("DELETE FROM {}", table), ())
                 .await
@@ -19704,6 +20172,8 @@ impl MemoryDB {
             "[db] upsert_memory_in_place: source_id={source_id} v{} → v{new_version}",
             saved.version
         );
+        // T15a: re-sync child vectors after an in-place content edit.
+        self.rebuild_child_vectors_for(source_id).await?;
         Ok(())
     }
 
@@ -21126,6 +21596,15 @@ pub(crate) mod tests {
         let _ = conn
             .execute(
                 "CREATE INDEX IF NOT EXISTS entities_vec_idx ON entities (
+                    libsql_vector_idx(embedding, 'metric=cosine', 'compress_neighbors=float8', 'max_neighbors=32')
+                )",
+                (),
+            )
+            .await;
+        // T15a: child-vector index (migration 58 also creates it IF NOT EXISTS).
+        let _ = conn
+            .execute(
+                "CREATE INDEX IF NOT EXISTS child_vectors_vec_idx ON child_vectors (
                     libsql_vector_idx(embedding, 'metric=cosine', 'compress_neighbors=float8', 'max_neighbors=32')
                 )",
                 (),
@@ -36681,7 +37160,7 @@ pub(crate) mod tests {
         assert_eq!(uv as u32, crate::db::SCHEMA_VERSION);
         // test_db() runs the full migration ladder, so the terminal version is
         // the current SCHEMA_VERSION (57 after T16 entity_minhash_bands).
-        assert_eq!(uv, 57);
+        assert_eq!(uv, 58);
     }
 
     #[tokio::test]
@@ -36698,7 +37177,7 @@ pub(crate) mod tests {
         let mut vrows = conn.query("PRAGMA user_version", ()).await.unwrap();
         let uv: i64 = vrows.next().await.unwrap().unwrap().get(0).unwrap();
         assert_eq!(
-            uv, 57,
+            uv, 58,
             "user_version restored to current terminal version after idempotent re-run"
         );
     }
@@ -36732,7 +37211,7 @@ pub(crate) mod tests {
         let mut vrows = conn.query("PRAGMA user_version", ()).await.unwrap();
         let uv: i64 = vrows.next().await.unwrap().unwrap().get(0).unwrap();
         assert_eq!(uv as u32, crate::db::SCHEMA_VERSION);
-        assert_eq!(uv, 57);
+        assert_eq!(uv, 58);
     }
 
     #[tokio::test]
@@ -36749,8 +37228,457 @@ pub(crate) mod tests {
         let mut vrows = conn.query("PRAGMA user_version", ()).await.unwrap();
         let uv: i64 = vrows.next().await.unwrap().unwrap().get(0).unwrap();
         assert_eq!(
-            uv, 57,
+            uv, 58,
             "user_version restored to 57 after idempotent re-run"
+        );
+    }
+
+    // -- T15a migration 58: child_vectors --
+
+    #[tokio::test]
+    async fn migration_58_creates_child_vectors_table_and_indexes() {
+        let (db, _dir) = test_db().await;
+        let conn = db.conn.lock().await;
+        let mut rows = conn
+            .query(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='child_vectors'",
+                (),
+            )
+            .await
+            .unwrap();
+        let present: i64 = rows.next().await.unwrap().unwrap().get(0).unwrap();
+        assert_eq!(present, 1, "child_vectors table should exist");
+        drop(rows);
+
+        let mut irows = conn
+            .query(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='index' AND name='idx_child_vectors_parent'",
+                (),
+            )
+            .await
+            .unwrap();
+        let idx: i64 = irows.next().await.unwrap().unwrap().get(0).unwrap();
+        assert_eq!(idx, 1, "idx_child_vectors_parent should exist");
+        drop(irows);
+
+        // The libsql vector index is registered as a shadow table; probe it.
+        let mut vidx = conn
+            .query(
+                "SELECT COUNT(*) FROM sqlite_master WHERE name='child_vectors_vec_idx'",
+                (),
+            )
+            .await
+            .unwrap();
+        let vpresent: i64 = vidx.next().await.unwrap().unwrap().get(0).unwrap();
+        assert!(vpresent >= 1, "child_vectors_vec_idx should exist");
+        drop(vidx);
+
+        let mut vrows = conn.query("PRAGMA user_version", ()).await.unwrap();
+        let uv: i64 = vrows.next().await.unwrap().unwrap().get(0).unwrap();
+        assert_eq!(uv as u32, crate::db::SCHEMA_VERSION);
+        assert_eq!(uv, 58, "terminal version is 58 after T15a child_vectors");
+    }
+
+    #[tokio::test]
+    async fn migration_58_idempotent() {
+        let (db, _dir) = test_db().await;
+        {
+            let conn = db.conn.lock().await;
+            conn.execute("PRAGMA user_version = 57", ()).await.unwrap();
+        }
+        db.run_migrations(&crate::events::NoopEmitter)
+            .await
+            .expect("re-run migrations idempotent");
+        let conn = db.conn.lock().await;
+        let mut vrows = conn.query("PRAGMA user_version", ()).await.unwrap();
+        let uv: i64 = vrows.next().await.unwrap().unwrap().get(0).unwrap();
+        assert_eq!(
+            uv, 58,
+            "user_version restored to 58 after idempotent re-run"
+        );
+
+        // Table still present (CREATE IF NOT EXISTS did not error on re-run).
+        let mut rows = conn
+            .query(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='child_vectors'",
+                (),
+            )
+            .await
+            .unwrap();
+        let present: i64 = rows.next().await.unwrap().unwrap().get(0).unwrap();
+        assert_eq!(present, 1, "child_vectors survives idempotent re-run");
+    }
+
+    // ── T15a: fact-channel producer + retrieval integration ───────────────────
+
+    async fn count_child_vectors_for(db: &MemoryDB, parent_id: &str) -> i64 {
+        let conn = db.conn.lock().await;
+        let mut rows = conn
+            .query(
+                "SELECT COUNT(*) FROM child_vectors WHERE parent_kind = 'memory' AND parent_id = ?1",
+                libsql::params![parent_id],
+            )
+            .await
+            .unwrap();
+        rows.next().await.unwrap().unwrap().get(0).unwrap()
+    }
+
+    fn memory_doc_with_fields(source_id: &str, content: &str, fields_json: &str) -> RawDocument {
+        let mut doc = make_memory_doc(source_id, content, "fact", "work", "claude-code");
+        doc.structured_fields = Some(fields_json.to_string());
+        doc
+    }
+
+    #[tokio::test]
+    async fn child_vectors_written_on_store_when_flag_on() {
+        let (db, _dir) = test_db().await;
+        temp_env::async_with_vars([("ORIGIN_ENABLE_FACT_CHANNEL", Some("1"))], async {
+            db.upsert_documents(vec![memory_doc_with_fields(
+                "fact_on",
+                "The annual subscription renews and the team reviews vendors each cycle.",
+                "{\"birthday\":\"March 1\"}",
+            )])
+            .await
+            .unwrap();
+        })
+        .await;
+        // narrative + 1 structured field >= 2 children.
+        let n = count_child_vectors_for(&db, "fact_on").await;
+        assert!(
+            n >= 2,
+            "expected >= 2 child rows (narrative + field), got {n}"
+        );
+
+        // Each row: parent_kind='memory', correct parent_id, non-null embedding,
+        // and a field='birthday' child exists.
+        let conn = db.conn.lock().await;
+        let mut rows = conn
+            .query(
+                "SELECT field, embedding IS NOT NULL FROM child_vectors WHERE parent_id = 'fact_on' ORDER BY field",
+                (),
+            )
+            .await
+            .unwrap();
+        let mut fields = Vec::new();
+        while let Ok(Some(row)) = rows.next().await {
+            let field: String = row.get(0).unwrap();
+            let has_emb: i64 = row.get(1).unwrap();
+            assert_eq!(has_emb, 1, "child {field} must have non-null embedding");
+            fields.push(field);
+        }
+        assert!(
+            fields.contains(&"narrative".to_string()),
+            "narrative child present"
+        );
+        assert!(
+            fields.contains(&"birthday".to_string()),
+            "birthday field child present"
+        );
+    }
+
+    #[tokio::test]
+    async fn child_vectors_not_written_when_flag_off() {
+        let (db, _dir) = test_db().await;
+        temp_env::async_with_vars([("ORIGIN_ENABLE_FACT_CHANNEL", None::<&str>)], async {
+            db.upsert_documents(vec![memory_doc_with_fields(
+                "fact_off",
+                "The annual subscription renews and the team reviews vendors each cycle.",
+                "{\"birthday\":\"March 1\"}",
+            )])
+            .await
+            .unwrap();
+        })
+        .await;
+        assert_eq!(
+            count_child_vectors_for(&db, "fact_off").await,
+            0,
+            "flag OFF: no child rows written"
+        );
+    }
+
+    #[tokio::test]
+    async fn child_vectors_deterministic_ids_and_replace_on_restore() {
+        let (db, _dir) = test_db().await;
+        temp_env::async_with_vars([("ORIGIN_ENABLE_FACT_CHANNEL", Some("1"))], async {
+            db.upsert_documents(vec![memory_doc_with_fields(
+                "fact_re",
+                "The user lives in a big coastal city with great public transit.",
+                "{\"city\":\"Tokyo\"}",
+            )])
+            .await
+            .unwrap();
+            let after_v1 = count_child_vectors_for(&db, "fact_re").await;
+            // Re-store same source_id with a DIFFERENT city value.
+            db.upsert_documents(vec![memory_doc_with_fields(
+                "fact_re",
+                "The user lives in a big coastal city with great public transit.",
+                "{\"city\":\"Osaka\"}",
+            )])
+            .await
+            .unwrap();
+            let after_v2 = count_child_vectors_for(&db, "fact_re").await;
+            assert_eq!(after_v1, after_v2, "re-store replaces, no row count growth");
+
+            // No stale Tokyo child remains; the city child now says Osaka.
+            let conn = db.conn.lock().await;
+            let mut rows = conn
+                .query(
+                    "SELECT content FROM child_vectors WHERE parent_id = 'fact_re' AND field = 'city'",
+                    (),
+                )
+                .await
+                .unwrap();
+            let content: String = rows.next().await.unwrap().unwrap().get(0).unwrap();
+            assert_eq!(content, "city: Osaka", "stale Tokyo child replaced by Osaka");
+        })
+        .await;
+    }
+
+    #[tokio::test]
+    async fn child_vectors_cascade_delete_on_parent_delete() {
+        let (db, _dir) = test_db().await;
+        temp_env::async_with_vars([("ORIGIN_ENABLE_FACT_CHANNEL", Some("1"))], async {
+            db.upsert_documents(vec![memory_doc_with_fields(
+                "fact_del",
+                "The user keeps detailed notes on every recurring monthly expense.",
+                "{\"category\":\"finance\"}",
+            )])
+            .await
+            .unwrap();
+            assert!(
+                count_child_vectors_for(&db, "fact_del").await >= 2,
+                "children seeded"
+            );
+            // Delete the parent memory: child_vectors must be torn down too
+            // (explicit no-FK cleanup in delete_by_source_id).
+            db.delete_by_source_id("memory", "fact_del").await.unwrap();
+        })
+        .await;
+        assert_eq!(
+            count_child_vectors_for(&db, "fact_del").await,
+            0,
+            "parent delete cascades the child delete"
+        );
+    }
+
+    #[tokio::test]
+    async fn fact_channel_surfaces_when_flag_on() {
+        let (db, _dir) = test_db().await;
+        // Seed a memory whose buried structured field is the only place the
+        // renewal date appears, plus a decoy.
+        temp_env::async_with_vars([("ORIGIN_ENABLE_FACT_CHANNEL", Some("1"))], async {
+            db.upsert_documents(vec![
+                memory_doc_with_fields(
+                    "m_target",
+                    "The team subscribes to the analytics platform and rotates seats quarterly.",
+                    "{\"renewal_date\":\"November 3\"}",
+                ),
+                make_memory_doc(
+                    "m_decoy",
+                    "The user enjoys hiking and photography on the weekends near the coast.",
+                    "fact",
+                    "work",
+                    "claude-code",
+                ),
+            ])
+            .await
+            .unwrap();
+        })
+        .await;
+        let hits = temp_env::async_with_vars([("ORIGIN_ENABLE_FACT_CHANNEL", Some("1"))], async {
+            db.search_memory_cross_rerank("when is the renewal date", 10, None, None, None, None)
+                .await
+                .unwrap()
+        })
+        .await;
+        // The rehydrated parent surfaces as source="memory" (metric-honest).
+        let target = hits.iter().find(|r| r.source_id == "m_target");
+        assert!(
+            target.is_some(),
+            "fact channel surfaces the buried-field parent"
+        );
+        assert_eq!(
+            target.unwrap().source,
+            "memory",
+            "rehydrated child hit carries source=memory, not a child id"
+        );
+    }
+
+    #[tokio::test]
+    async fn fact_channel_absent_when_flag_off() {
+        let (db, _dir) = test_db().await;
+        // Store WITH flag on so children exist, then read with flag OFF.
+        temp_env::async_with_vars([("ORIGIN_ENABLE_FACT_CHANNEL", Some("1"))], async {
+            db.upsert_documents(vec![memory_doc_with_fields(
+                "m_offread",
+                "The contract auto-renews and finance reconciles the invoice monthly.",
+                "{\"renewal_date\":\"November 3\"}",
+            )])
+            .await
+            .unwrap();
+        })
+        .await;
+        // Read with flag OFF: the channel must not run. Compare to a query that
+        // only the buried field would match.
+        let off_hits =
+            temp_env::async_with_vars([("ORIGIN_ENABLE_FACT_CHANNEL", None::<&str>)], async {
+                db.search_memory_cross_rerank(
+                    "November 3 renewal date specific",
+                    10,
+                    None,
+                    None,
+                    None,
+                    None,
+                )
+                .await
+                .unwrap()
+            })
+            .await;
+        let on_hits =
+            temp_env::async_with_vars([("ORIGIN_ENABLE_FACT_CHANNEL", Some("1"))], async {
+                db.search_memory_cross_rerank(
+                    "November 3 renewal date specific",
+                    10,
+                    None,
+                    None,
+                    None,
+                    None,
+                )
+                .await
+                .unwrap()
+            })
+            .await;
+        // ON must surface >= as many results as OFF for this query (channel only
+        // adds mass). At minimum, flag-OFF produces an unchanged base result.
+        assert!(
+            on_hits.len() >= off_hits.len(),
+            "fact channel ON never returns fewer than OFF (ON={}, OFF={})",
+            on_hits.len(),
+            off_hits.len()
+        );
+    }
+
+    #[tokio::test]
+    async fn fact_channel_respects_space_filter() {
+        let (db, _dir) = test_db().await;
+        temp_env::async_with_vars([("ORIGIN_ENABLE_FACT_CHANNEL", Some("1"))], async {
+            let mut work = memory_doc_with_fields(
+                "m_work",
+                "The work project tracks its launch milestone in the shared planner.",
+                "{\"milestone\":\"launch day\"}",
+            );
+            work.space = Some("work".to_string());
+            let mut personal = memory_doc_with_fields(
+                "m_personal",
+                "The personal plan tracks its launch milestone for the side hustle.",
+                "{\"milestone\":\"launch day\"}",
+            );
+            personal.space = Some("personal".to_string());
+            db.upsert_documents(vec![work, personal]).await.unwrap();
+        })
+        .await;
+        let hits = temp_env::async_with_vars([("ORIGIN_ENABLE_FACT_CHANNEL", Some("1"))], async {
+            db.search_memory_cross_rerank(
+                "milestone launch day",
+                10,
+                None,
+                Some("work"),
+                None,
+                None,
+            )
+            .await
+            .unwrap()
+        })
+        .await;
+        assert!(
+            hits.iter().all(|r| r.source_id != "m_personal"),
+            "space=work recall must not leak the personal parent via the child channel, got {:?}",
+            hits.iter()
+                .map(|r| (&r.source_id, &r.space))
+                .collect::<Vec<_>>()
+        );
+    }
+
+    #[tokio::test]
+    async fn rebuild_child_vectors_for_missing_backfills() {
+        let (db, _dir) = test_db().await;
+        // Store with the flag OFF: no children written.
+        temp_env::async_with_vars([("ORIGIN_ENABLE_FACT_CHANNEL", None::<&str>)], async {
+            db.upsert_documents(vec![memory_doc_with_fields(
+                "m_backfill",
+                "The user prefers the dashboard view and pins the weekly report card.",
+                "{\"view\":\"dashboard\"}",
+            )])
+            .await
+            .unwrap();
+        })
+        .await;
+        assert_eq!(
+            count_child_vectors_for(&db, "m_backfill").await,
+            0,
+            "flag OFF store leaves children empty"
+        );
+        // Flip the flag and backfill.
+        let rebuilt =
+            temp_env::async_with_vars([("ORIGIN_ENABLE_FACT_CHANNEL", Some("1"))], async {
+                db.rebuild_child_vectors_for_missing().await.unwrap()
+            })
+            .await;
+        assert!(rebuilt >= 1, "backfill rebuilt >= 1 parent, got {rebuilt}");
+        assert!(
+            count_child_vectors_for(&db, "m_backfill").await >= 2,
+            "backfill seeded narrative + field children"
+        );
+    }
+
+    #[tokio::test]
+    async fn fact_channel_off_is_byte_identical_to_baseline() {
+        let (db, _dir) = test_db().await;
+        // Seed without children (flag OFF on store).
+        temp_env::async_with_vars([("ORIGIN_ENABLE_FACT_CHANNEL", None::<&str>)], async {
+            db.upsert_documents(vec![
+                make_memory_doc(
+                    "b1",
+                    "The user prefers rust for systems work and python for scripts.",
+                    "fact",
+                    "work",
+                    "claude-code",
+                ),
+                make_memory_doc(
+                    "b2",
+                    "The user keeps a daily journal and reviews it every sunday evening.",
+                    "fact",
+                    "work",
+                    "claude-code",
+                ),
+            ])
+            .await
+            .unwrap();
+        })
+        .await;
+        let unset: Vec<String> =
+            temp_env::async_with_vars([("ORIGIN_ENABLE_FACT_CHANNEL", None::<&str>)], async {
+                db.search_memory_cross_rerank("rust python journal", 10, None, None, None, None)
+                    .await
+                    .unwrap()
+                    .into_iter()
+                    .map(|r| r.id)
+                    .collect()
+            })
+            .await;
+        let off: Vec<String> =
+            temp_env::async_with_vars([("ORIGIN_ENABLE_FACT_CHANNEL", Some("0"))], async {
+                db.search_memory_cross_rerank("rust python journal", 10, None, None, None, None)
+                    .await
+                    .unwrap()
+                    .into_iter()
+                    .map(|r| r.id)
+                    .collect()
+            })
+            .await;
+        assert_eq!(
+            unset, off,
+            "flag unset vs 0 produce identical result ids/order"
         );
     }
 

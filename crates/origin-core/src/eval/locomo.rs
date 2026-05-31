@@ -1283,6 +1283,14 @@ pub async fn run_locomo_eval_cross_rerank_from_db(
     } else {
         "off"
     };
+    // T15a: append __fact suffix when ORIGIN_ENABLE_FACT_CHANNEL is on, so
+    // fact-ON and fact-OFF baselines get distinct baseline filenames.
+    let fact_state = if crate::retrieval::fact_channel::fact_channel_enabled() {
+        variant_tag.push_str("__fact");
+        "on"
+    } else {
+        "off"
+    };
     let mut env_stamp = build_locomo_env(
         &variant_tag,
         path,
@@ -1311,6 +1319,7 @@ pub async fn run_locomo_eval_cross_rerank_from_db(
     env_stamp
         .flags
         .push(format!("episode_channel={}", episode_state));
+    env_stamp.flags.push(format!("fact_channel={}", fact_state));
     env_stamp.flags.push("scenario_db=consolidated".to_string());
     report.env = Some(env_stamp);
     Ok(report)
