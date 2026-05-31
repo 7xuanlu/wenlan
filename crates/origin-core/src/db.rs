@@ -430,7 +430,10 @@ pub fn page_channel_enabled() -> bool {
 /// True iff `ORIGIN_ENABLE_EVICTION` is set to a truthy value (`1`, `true`, or
 /// `yes`, case-insensitive). When enabled, the refinery's `evict` phase flips
 /// stale, low-`effective_confidence`, non-immune memories to
-/// `supersede_mode='archive'` (recoverable, never hard-deleted).
+/// `supersede_mode='evicted'` (recoverable, never hard-deleted). `'evicted'` is
+/// a distinct marker from the pre-existing `'archive'` (migration 10 stamps all
+/// `decision` rows `'archive'` while keeping them visible), so eviction never
+/// collides with decisions.
 ///
 /// Default OFF: unset or any falsey value leaves the write/refinery path
 /// byte-identical (unbounded append, nothing archived by policy — preserving
@@ -447,7 +450,7 @@ pub fn eviction_enabled() -> bool {
 /// (`deleted` is always 0); `skipped_disabled` is true when the env flag is off.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EvictionReport {
-    /// Number of memories flipped to `supersede_mode='archive'`.
+    /// Number of memories flipped to `supersede_mode='evicted'`.
     pub archived: usize,
     /// Number of memories hard-deleted. Always 0 in Stage 1 (archive-not-delete).
     pub deleted: usize,
@@ -514,10 +517,19 @@ pub fn select_evictions(
     }
 
     // Gate 2 — per-space cap overflow (lowest effective_confidence first).
+    // Age-gated: only rows at least `min_age_days` old are cap-eligible, so a
+    // fresh high-confidence row is NEVER evicted purely for crowding regardless
+    // of space pressure. Fresh rows are excluded from the cap population
+    // entirely — only stale rows can be capped.
     if let Some(cap) = cfg.per_space_cap {
         let mut by_space: std::collections::HashMap<&str, Vec<&EvictCandidate>> =
             std::collections::HashMap::new();
         for c in &eligible {
+            let old_enough = crate::decay::days_since(c.last_accessed.as_deref(), now_epoch)
+                >= cfg.min_age_days as f64;
+            if !old_enough {
+                continue;
+            }
             if let Some(space) = c.space.as_deref() {
                 by_space.entry(space).or_default().push(c);
             }
@@ -7656,7 +7668,12 @@ impl MemoryDB {
 
         // Supersedes exclusion: only hide memories superseded with mode='hide'.
         // Memories with supersede_mode='archive' remain visible (marked is_archived post-query).
-        let supersedes_exclusion = "AND c.pending_revision = 0 AND c.source_id NOT IN (\
+        // T21: 'evicted' rows are soft-evicted by the refinery and must NOT surface
+        // in default retrieval (recoverable by clearing supersede_mode). 'archive'
+        // decisions stay visible — only 'evicted' is self-excluded here.
+        let supersedes_exclusion = "AND c.pending_revision = 0 \
+            AND (c.supersede_mode IS NULL OR c.supersede_mode != 'evicted') \
+            AND c.source_id NOT IN (\
             SELECT supersedes FROM memories \
             WHERE supersedes IS NOT NULL AND pending_revision = 0 AND source = 'memory' \
             AND supersede_mode = 'hide' \
@@ -11431,8 +11448,10 @@ impl MemoryDB {
                 // Also exclude archived supersedes and recap rows to match the
                 // same set returned by list_unconfirmed_memories.
                 conditions.push("(confirmed = 0 OR confirmed IS NULL)".to_string());
-                conditions
-                    .push("(supersede_mode IS NULL OR supersede_mode != 'archive')".to_string());
+                conditions.push(
+                    "(supersede_mode IS NULL OR supersede_mode NOT IN ('archive', 'evicted'))"
+                        .to_string(),
+                );
                 conditions.push("(is_recap IS NULL OR is_recap != 1)".to_string());
             }
         }
@@ -17486,7 +17505,7 @@ impl MemoryDB {
                             entity_id \
                      FROM memories \
                      WHERE source = 'memory' AND chunk_index = 0 \
-                       AND (supersede_mode IS NULL OR supersede_mode != 'archive') \
+                       AND (supersede_mode IS NULL OR supersede_mode NOT IN ('archive', 'evicted')) \
                      ORDER BY COALESCE(last_modified, created_at) DESC \
                      LIMIT ?1",
                     libsql::params![limit],
@@ -17602,7 +17621,7 @@ impl MemoryDB {
                         created_at, last_modified \
                  FROM memories \
                  WHERE source = 'memory' AND chunk_index = 0 \
-                   AND (supersede_mode IS NULL OR supersede_mode != 'archive') \
+                   AND (supersede_mode IS NULL OR supersede_mode NOT IN ('archive', 'evicted')) \
                    AND (confirmed = 0 OR confirmed IS NULL) \
                    AND (is_recap IS NULL OR is_recap != 1) \
                  ORDER BY COALESCE(last_modified, created_at) DESC \
@@ -18130,7 +18149,7 @@ impl MemoryDB {
     /// T21 Stage 1 — archive-not-delete soft eviction.
     ///
     /// Flips stale, low-`effective_confidence`, non-immune memories to
-    /// `supersede_mode='archive'` so they drop out of default retrieval while
+    /// `supersede_mode='evicted'` so they drop out of default retrieval while
     /// staying fully recoverable in the table (no hard DELETE — Origin's core
     /// contract is "every DELETE is explicit"). The salience proxy is
     /// `effective_confidence`, already folded over confidence × recency × access
@@ -18172,7 +18191,7 @@ impl MemoryDB {
                  FROM memories \
                  WHERE source = 'memory' AND chunk_index = 0 \
                    AND confirmed = 0 AND pinned = 0 \
-                   AND supersede_mode != 'archive' \
+                   AND supersede_mode NOT IN ('archive', 'evicted') \
                    AND effective_confidence IS NOT NULL \
                    AND effective_confidence < ?1",
                 libsql::params![cfg.evict_confidence_floor],
@@ -18208,7 +18227,7 @@ impl MemoryDB {
                      FROM memories \
                      WHERE source = 'memory' AND chunk_index = 0 \
                        AND confirmed = 0 AND pinned = 0 \
-                       AND supersede_mode != 'archive' \
+                       AND supersede_mode NOT IN ('archive', 'evicted') \
                        AND effective_confidence IS NOT NULL",
                     (),
                 )
@@ -18244,7 +18263,7 @@ impl MemoryDB {
                 .map_err(|e| OriginError::VectorDb(format!("evict begin: {e}")))?;
             for source_id in &to_archive {
                 conn.execute(
-                    "UPDATE memories SET supersede_mode = 'archive' \
+                    "UPDATE memories SET supersede_mode = 'evicted' \
                      WHERE source_id = ?1 AND source = 'memory'",
                     libsql::params![source_id.as_str()],
                 )
@@ -27751,7 +27770,7 @@ pub(crate) mod tests {
         let conn = db.conn.lock().await;
         let mut rows = conn
             .query(
-                "SELECT COUNT(*) FROM memories WHERE source = 'memory' AND supersede_mode = 'archive'",
+                "SELECT COUNT(*) FROM memories WHERE source = 'memory' AND supersede_mode = 'evicted'",
                 (),
             )
             .await
@@ -27953,7 +27972,7 @@ pub(crate) mod tests {
                 .await.unwrap();
             let row = rows.next().await.unwrap().unwrap();
             let mode: String = row.get(0).unwrap();
-            assert_eq!(mode, "archive", "{id} (lowest conf) should be archived");
+            assert_eq!(mode, "evicted", "{id} (lowest conf) should be evicted");
         }
         for id in ["cap_0", "cap_1", "cap_2"] {
             let mut rows = conn
@@ -27962,8 +27981,88 @@ pub(crate) mod tests {
                 .await.unwrap();
             let row = rows.next().await.unwrap().unwrap();
             let mode: String = row.get(0).unwrap();
-            assert_ne!(mode, "archive", "{id} (higher conf) should survive");
+            assert_ne!(mode, "evicted", "{id} (higher conf) should survive");
         }
+    }
+
+    // A5b — the per-space cap is age-gated: a FRESH row is never cap-evicted for
+    // crowding even when it is the lowest-confidence row in an over-capped space.
+    // Without the age gate, fresh_lowconf (0.05) would be the first row archived.
+    #[tokio::test]
+    async fn test_evict_stale_per_space_cap_spares_fresh_rows() {
+        let (db, _dir) = test_db().await;
+        // Three aged rows (cap-eligible) + one fresh row in the same space.
+        for (i, c) in [0.8_f64, 0.6, 0.4].iter().enumerate() {
+            seed_evict_row(
+                &db,
+                &format!("aged_{i}"),
+                "fact",
+                "engineering",
+                *c,
+                "strftime('%s','now','-120 days')",
+                false,
+                false,
+            )
+            .await;
+        }
+        // Fresh row with the LOWEST confidence in the space — pure cap-ordering
+        // would archive it first, but the age gate must spare it.
+        seed_evict_row(
+            &db,
+            "fresh_lowconf",
+            "fact",
+            "engineering",
+            0.05,
+            "datetime('now')",
+            false,
+            false,
+        )
+        .await;
+
+        let cfg = crate::tuning::EvictionConfig {
+            per_space_cap: Some(2),
+            ..Default::default()
+        };
+        let report = temp_env::async_with_vars([("ORIGIN_ENABLE_EVICTION", Some("1"))], async {
+            db.evict_stale(&cfg).await.unwrap()
+        })
+        .await;
+        // Only the aged rows count toward the cap: 3 aged, cap 2 -> 1 overflow.
+        assert_eq!(
+            report.archived, 1,
+            "fresh row excluded from cap population -> only 1 aged overflow archived"
+        );
+
+        let conn = db.conn.lock().await;
+        // Fresh low-confidence row survives despite being the cheapest in the space.
+        let mut rows = conn
+            .query(
+                "SELECT supersede_mode FROM memories WHERE source_id = ?1 AND source = 'memory'",
+                libsql::params!["fresh_lowconf"],
+            )
+            .await
+            .unwrap();
+        let row = rows.next().await.unwrap().unwrap();
+        let mode: Option<String> = row.get(0).unwrap();
+        assert_ne!(
+            mode.as_deref(),
+            Some("evicted"),
+            "fresh row must NEVER be cap-evicted regardless of confidence"
+        );
+        // The lowest-confidence AGED row (aged_2 = 0.4) is the one capped.
+        let mut rows = conn
+            .query(
+                "SELECT supersede_mode FROM memories WHERE source_id = ?1 AND source = 'memory'",
+                libsql::params!["aged_2"],
+            )
+            .await
+            .unwrap();
+        let row = rows.next().await.unwrap().unwrap();
+        let mode: String = row.get(0).unwrap();
+        assert_eq!(
+            mode, "evicted",
+            "lowest-confidence aged row is the cap victim"
+        );
     }
 
     // A6 — default OFF is a no-op; flag ON runs.
@@ -28028,36 +28127,107 @@ pub(crate) mod tests {
         assert!(!report.skipped_disabled);
     }
 
-    // A1b — reversibility: an archived row is excluded from default search but
-    // still present in the table and recoverable by clearing supersede_mode.
+    // A1b — the proof that eviction actually works end-to-end: an evicted row is
+    // EXCLUDED from a real `search_memory` call while a control row survives,
+    // the evicted row stays in the table (recoverable), and clearing
+    // supersede_mode makes it REAPPEAR in search. This is the load-bearing test
+    // that the retrieval exclusion (not just the marker flip) is wired up.
     #[tokio::test]
     async fn test_evict_stale_is_reversible_and_excluded_from_search() {
         let (db, _dir) = test_db().await;
-        seed_evict_row(
-            &db,
-            "rev_row",
-            "fact",
-            "engineering",
-            0.05,
-            "strftime('%s','now','-120 days')",
-            false,
-            false,
-        )
-        .await;
-        temp_env::async_with_vars([("ORIGIN_ENABLE_EVICTION", Some("1"))], async {
+        // Two rows with DISTINCT (so they survive search's near-dup collapse)
+        // but topically-related content, both matching a "kubernetes" query.
+        // rev_row: aged + low-confidence -> evicted. keep_row: aged but
+        // high-confidence (above the floor) -> survives Gate 1.
+        db.upsert_documents(vec![
+            make_memory_doc(
+                "rev_row",
+                "the user prefers kubernetes for container orchestration at scale",
+                "fact",
+                "engineering",
+                "claude",
+            ),
+            make_memory_doc(
+                "keep_row",
+                "the user runs kubernetes clusters across three cloud regions daily",
+                "fact",
+                "engineering",
+                "claude",
+            ),
+        ])
+        .await
+        .unwrap();
+        {
+            let conn = db.conn.lock().await;
+            conn.execute(
+                "UPDATE memories SET effective_confidence = 0.05,                  last_accessed = strftime('%s','now','-120 days')                  WHERE source_id = 'rev_row' AND source = 'memory'",
+                (),
+            )
+            .await
+            .unwrap();
+            conn.execute(
+                "UPDATE memories SET effective_confidence = 0.9,                  last_accessed = strftime('%s','now','-120 days')                  WHERE source_id = 'keep_row' AND source = 'memory'",
+                (),
+            )
+            .await
+            .unwrap();
+        }
+
+        let query = "kubernetes orchestration";
+
+        // Pre-condition: both rows are searchable before eviction.
+        let pre = db
+            .search_memory(query, 10, None, None, None, None, None, None)
+            .await
+            .unwrap();
+        let pre_ids: Vec<&str> = pre.iter().map(|r| r.source_id.as_str()).collect();
+        assert!(
+            pre_ids.contains(&"rev_row"),
+            "rev_row searchable before eviction, got {:?}",
+            pre_ids
+        );
+        assert!(
+            pre_ids.contains(&"keep_row"),
+            "keep_row searchable before eviction, got {:?}",
+            pre_ids
+        );
+
+        // Evict.
+        let report = temp_env::async_with_vars([("ORIGIN_ENABLE_EVICTION", Some("1"))], async {
             db.evict_stale(&crate::tuning::EvictionConfig::default())
                 .await
                 .unwrap()
         })
         .await;
-        // Still in the table.
         assert_eq!(
-            count_rows(&db).await,
-            1,
-            "archived row remains in the table"
+            report.archived, 1,
+            "only the low-confidence rev_row is evicted"
         );
-        assert_eq!(count_archived(&db).await, 1);
-        // Recoverable: clear the archive flag, row is no longer archived.
+        assert_eq!(report.deleted, 0, "Stage 1 never deletes");
+
+        // Both rows still physically present — archive, not delete.
+        assert_eq!(count_rows(&db).await, 2, "no rows deleted");
+
+        // Real search now EXCLUDES the evicted row while the control survives.
+        let post = db
+            .search_memory(query, 10, None, None, None, None, None, None)
+            .await
+            .unwrap();
+        let post_ids: Vec<&str> = post.iter().map(|r| r.source_id.as_str()).collect();
+        assert!(
+            !post_ids.contains(&"rev_row"),
+            "evicted rev_row must be ABSENT from search, got {:?}",
+            post_ids
+        );
+        assert!(
+            post_ids.contains(&"keep_row"),
+            "control keep_row must remain in search, got {:?}",
+            post_ids
+        );
+
+        // Recoverable: clear the eviction marker (supersede_mode is NOT NULL with
+        // DEFAULT 'hide', so recovery resets it to the visible default rather
+        // than NULL) -> the row REAPPEARS in search.
         {
             let conn = db.conn.lock().await;
             conn.execute(
@@ -28067,7 +28237,16 @@ pub(crate) mod tests {
             .await
             .unwrap();
         }
-        assert_eq!(count_archived(&db).await, 0, "un-archive restores the row");
+        let recovered = db
+            .search_memory(query, 10, None, None, None, None, None, None)
+            .await
+            .unwrap();
+        let rec_ids: Vec<&str> = recovered.iter().map(|r| r.source_id.as_str()).collect();
+        assert!(
+            rec_ids.contains(&"rev_row"),
+            "un-evicted rev_row must REAPPEAR in search, got {:?}",
+            rec_ids
+        );
     }
 
     // ==================== Decay Engine ====================
