@@ -636,6 +636,145 @@ fn resolve_scenario_db_root_from_harness() -> std::path::PathBuf {
         .join("scenario_seeded")
 }
 
+/// T3 graph-gate A/B experiment (retrieval-only, no GPU LLM, no judge).
+/// Runs the base `search_memory` path over the cached LoCoMo scenario DB with
+/// `ORIGIN_ENABLE_GRAPH_GATE` OFF (graph always on) vs ON (gated), and prints
+/// the retrieval-metric deltas. Single-run = scaffold/direction only.
+#[tokio::test]
+#[ignore = "needs cached scenario DB (run scripts/seed-scenario-dbs.sh); retrieval-only, no GPU"]
+async fn graph_gate_ab_locomo() {
+    use origin_core::eval::locomo::run_locomo_eval_from_db;
+
+    let db_dir = resolve_scenario_db_root_from_harness().join("locomo_v1");
+    if !db_dir.join("origin_memory.db").exists() {
+        println!("SKIP: no seeded DB at {}", db_dir.display());
+        return;
+    }
+    let fixture = eval_root().join("data/locomo10.json");
+    if !fixture.exists() {
+        println!("SKIP: locomo10.json not found");
+        return;
+    }
+    let db = origin_core::db::MemoryDB::new(
+        &db_dir,
+        std::sync::Arc::new(origin_core::events::NoopEmitter),
+    )
+    .await
+    .expect("open locomo_v1 scenario DB");
+
+    let off = temp_env::async_with_vars(
+        [("ORIGIN_ENABLE_GRAPH_GATE", None::<&str>)],
+        run_locomo_eval_from_db(&db, &fixture),
+    )
+    .await
+    .expect("gate-off eval");
+    let on = temp_env::async_with_vars(
+        [("ORIGIN_ENABLE_GRAPH_GATE", Some("1"))],
+        run_locomo_eval_from_db(&db, &fixture),
+    )
+    .await
+    .expect("gate-on eval");
+
+    let cov = |r: &origin_core::eval::locomo::LocomoReport| {
+        r.coverage.as_ref().map(|c| c.blind).unwrap_or(0.0)
+    };
+    println!("=== T3 GRAPH-GATE A/B (LoCoMo, search_memory path, retrieval-only) ===");
+    println!("questions evaluated: {}", off.total_questions);
+    println!(
+        "GATE OFF (graph always): ndcg@10={:.4} recall@5={:.4} mrr={:.4} hit@1={:.4} cov={:.4}",
+        off.aggregate_ndcg_at_10,
+        off.aggregate_recall_at_5,
+        off.aggregate_mrr,
+        off.aggregate_hit_rate_at_1,
+        cov(&off)
+    );
+    println!(
+        "GATE ON  (gated):        ndcg@10={:.4} recall@5={:.4} mrr={:.4} hit@1={:.4} cov={:.4}",
+        on.aggregate_ndcg_at_10,
+        on.aggregate_recall_at_5,
+        on.aggregate_mrr,
+        on.aggregate_hit_rate_at_1,
+        cov(&on)
+    );
+    println!(
+        "DELTA (on-off):          ndcg@10={:+.4} recall@5={:+.4} mrr={:+.4} hit@1={:+.4} cov={:+.4}",
+        on.aggregate_ndcg_at_10 - off.aggregate_ndcg_at_10,
+        on.aggregate_recall_at_5 - off.aggregate_recall_at_5,
+        on.aggregate_mrr - off.aggregate_mrr,
+        on.aggregate_hit_rate_at_1 - off.aggregate_hit_rate_at_1,
+        cov(&on) - cov(&off)
+    );
+}
+
+/// T3 graph-gate A/B experiment on LongMemEval (retrieval-only, no GPU LLM).
+/// Dual-bench companion to `graph_gate_ab_locomo` so T3 is validated on BOTH
+/// metrics, not a partial view.
+#[tokio::test]
+#[ignore = "needs cached scenario DB (run scripts/seed-scenario-dbs.sh); retrieval-only, no GPU"]
+async fn graph_gate_ab_lme() {
+    use origin_core::eval::longmemeval::run_longmemeval_eval_from_db;
+
+    let db_dir = resolve_scenario_db_root_from_harness().join("lme_v1");
+    if !db_dir.join("origin_memory.db").exists() {
+        println!("SKIP: no seeded LME DB at {}", db_dir.display());
+        return;
+    }
+    let fixture = eval_root().join("data/longmemeval_oracle.json");
+    if !fixture.exists() {
+        println!("SKIP: longmemeval_oracle.json not found");
+        return;
+    }
+    let db = origin_core::db::MemoryDB::new(
+        &db_dir,
+        std::sync::Arc::new(origin_core::events::NoopEmitter),
+    )
+    .await
+    .expect("open lme_v1 scenario DB");
+
+    let off = temp_env::async_with_vars(
+        [("ORIGIN_ENABLE_GRAPH_GATE", None::<&str>)],
+        run_longmemeval_eval_from_db(&db, &fixture),
+    )
+    .await
+    .expect("gate-off eval");
+    let on = temp_env::async_with_vars(
+        [("ORIGIN_ENABLE_GRAPH_GATE", Some("1"))],
+        run_longmemeval_eval_from_db(&db, &fixture),
+    )
+    .await
+    .expect("gate-on eval");
+
+    let cov = |r: &origin_core::eval::longmemeval::LongMemEvalReport| {
+        r.coverage.as_ref().map(|c| c.blind).unwrap_or(0.0)
+    };
+    println!("=== T3 GRAPH-GATE A/B (LongMemEval, search_memory path, retrieval-only) ===");
+    println!("questions evaluated: {}", off.total_questions);
+    println!(
+        "GATE OFF (graph always): ndcg@10={:.4} recall@5={:.4} mrr={:.4} hit@1={:.4} cov={:.4}",
+        off.aggregate_ndcg_at_10,
+        off.aggregate_recall_at_5,
+        off.aggregate_mrr,
+        off.aggregate_hit_rate_at_1,
+        cov(&off)
+    );
+    println!(
+        "GATE ON  (gated):        ndcg@10={:.4} recall@5={:.4} mrr={:.4} hit@1={:.4} cov={:.4}",
+        on.aggregate_ndcg_at_10,
+        on.aggregate_recall_at_5,
+        on.aggregate_mrr,
+        on.aggregate_hit_rate_at_1,
+        cov(&on)
+    );
+    println!(
+        "DELTA (on-off):          ndcg@10={:+.4} recall@5={:+.4} mrr={:+.4} hit@1={:+.4} cov={:+.4}",
+        on.aggregate_ndcg_at_10 - off.aggregate_ndcg_at_10,
+        on.aggregate_recall_at_5 - off.aggregate_recall_at_5,
+        on.aggregate_mrr - off.aggregate_mrr,
+        on.aggregate_hit_rate_at_1 - off.aggregate_hit_rate_at_1,
+        cov(&on) - cov(&off)
+    );
+}
+
 /// PR-B page-channel ON baseline (LoCoMo).
 ///
 /// Uses the pre-seeded consolidated scenario DB at

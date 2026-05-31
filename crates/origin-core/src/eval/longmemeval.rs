@@ -1185,6 +1185,121 @@ pub async fn run_longmemeval_eval_cross_rerank_from_db(
     Ok(report)
 }
 
+/// Retrieval eval over a pre-seeded DB using the base `search_memory` path
+/// (vector + FTS + RRF + graph augmentation) — the path the graph gate acts on.
+/// Mirrors `run_longmemeval_eval_cross_rerank_from_db` minus the cross-encoder/
+/// page channel. Reports the graph-gate skip rate (queries that bypass graph)
+/// when `ORIGIN_ENABLE_GRAPH_GATE` is on. Used for the T3 graph-gate A/B.
+pub async fn run_longmemeval_eval_from_db(
+    db: &MemoryDB,
+    path: &Path,
+) -> Result<LongMemEvalReport, OriginError> {
+    let mut samples = load_longmemeval(path)?;
+    apply_lme_limit(&mut samples);
+    let mut all_scores: Vec<(String, f64, f64, f64, f64, f64)> = Vec::new();
+    let mut total_memories: usize = 0;
+    let mut cov_acc: Vec<f64> = Vec::new();
+    let gate_on = crate::db::graph_gate_enabled();
+    let (mut gate_skipped, mut gate_total) = (0usize, 0usize);
+
+    for sample in &samples {
+        let memories = extract_memories(sample);
+        total_memories += memories.len();
+        let relevant_source_ids: HashSet<String> = memories
+            .iter()
+            .filter(|m| m.has_answer)
+            .map(|m| memory_source_id(&m.question_id, m.session_idx, m.turn_idx))
+            .collect();
+        if relevant_source_ids.is_empty() {
+            continue;
+        }
+
+        gate_total += 1;
+        if gate_on && !crate::retrieval::signals::query_warrants_graph(&sample.question) {
+            gate_skipped += 1;
+        }
+        let results = db
+            .search_memory(&sample.question, 10, None, None, None, None, None, None)
+            .await?;
+
+        let result_ids: Vec<&str> = results.iter().map(|r| r.source_id.as_str()).collect();
+        let grades: HashMap<&str, u8> = result_ids
+            .iter()
+            .map(|id| (*id, u8::from(relevant_source_ids.contains(*id))))
+            .collect();
+        let relevant_set: HashSet<&str> = relevant_source_ids.iter().map(|s| s.as_str()).collect();
+
+        let ndcg_10 = metrics::ndcg_at_k(&result_ids, &grades, 10);
+        let ndcg_5 = metrics::ndcg_at_k(&result_ids, &grades, 5);
+        let mrr_val = metrics::mrr(&result_ids, &relevant_set);
+        let recall_5 = metrics::recall_at_k(&result_ids, &relevant_set, 5);
+        let hr_1 = metrics::hit_rate_at_k(&result_ids, &relevant_set, 1);
+        all_scores.push((
+            sample.question_type.clone(),
+            ndcg_5,
+            ndcg_10,
+            mrr_val,
+            recall_5,
+            hr_1,
+        ));
+
+        let units: Vec<(&str, &str)> = results
+            .iter()
+            .map(|r| (r.source.as_str(), r.source_id.as_str()))
+            .collect();
+        cov_acc.push(metrics::coverage_recall(
+            &metrics::build_coverage_set(&units, &HashMap::new()),
+            &relevant_set,
+        ));
+    }
+    if gate_on {
+        eprintln!(
+            "[lme] graph-gate skipped {gate_skipped}/{gate_total} queries ({:.1}%)",
+            100.0 * gate_skipped as f64 / gate_total.max(1) as f64
+        );
+    }
+
+    let per_category = aggregate_by_category(&all_scores);
+    let coverage = if cov_acc.is_empty() {
+        None
+    } else {
+        Some(crate::eval::report::CoverageRecall {
+            blind: cov_acc.iter().sum::<f64>() / cov_acc.len() as f64,
+            expanded: cov_acc.iter().sum::<f64>() / cov_acc.len() as f64,
+        })
+    };
+    let mut report = LongMemEvalReport {
+        aggregate_ndcg_at_10: avg_field(&all_scores, |s| s.2),
+        aggregate_mrr: avg_field(&all_scores, |s| s.3),
+        aggregate_recall_at_5: avg_field(&all_scores, |s| s.4),
+        aggregate_hit_rate_at_1: avg_field(&all_scores, |s| s.5),
+        total_questions: all_scores.len(),
+        total_memories,
+        per_category,
+        baseline: None,
+        env: None,
+        per_case: Vec::new(),
+        coverage,
+    };
+    let graph_gate = if gate_on { "on" } else { "off" };
+    let mut env_stamp = build_lme_env(
+        if gate_on {
+            "search_memory_gate_on"
+        } else {
+            "search_memory_gate_off"
+        },
+        path,
+        "search_memory",
+        "none",
+        "none",
+        None,
+    );
+    env_stamp.flags.push(format!("graph_gate={graph_gate}"));
+    env_stamp.flags.push("scenario_db=consolidated".to_string());
+    report.env = Some(env_stamp);
+    Ok(report)
+}
+
 // ---------------------------------------------------------------------------
 // Expanded benchmark runner -- same as run_longmemeval_eval but uses search_memory_expanded
 // ---------------------------------------------------------------------------

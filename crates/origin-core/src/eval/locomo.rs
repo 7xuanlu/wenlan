@@ -1256,6 +1256,150 @@ pub async fn run_locomo_eval_cross_rerank_from_db(
 }
 
 // ---------------------------------------------------------------------------
+/// Retrieval eval over a pre-seeded DB using the base `search_memory` path
+/// (vector + FTS + RRF + graph augmentation) — the path the graph gate
+/// (`ORIGIN_ENABLE_GRAPH_GATE`) acts on. Mirrors `run_locomo_eval_cross_rerank_from_db`
+/// but without the cross-encoder/page channel, so the only LLM-free retrieval
+/// signal under test is the graph augmentation + its gate. Used for the T3
+/// graph-gate A/B experiment.
+pub async fn run_locomo_eval_from_db(
+    db: &MemoryDB,
+    path: &Path,
+) -> Result<LocomoReport, OriginError> {
+    let mut samples = load_locomo(path)?;
+    apply_locomo_limit(&mut samples);
+    let mut conversations = Vec::new();
+    let mut all_scores: Vec<(u8, f64, f64, f64, f64, f64)> = Vec::new();
+    let mut cov_acc: Vec<f64> = Vec::new();
+    let gate_on = crate::db::graph_gate_enabled();
+    let (mut gate_skipped, mut gate_total) = (0usize, 0usize);
+
+    for sample in &samples {
+        let memories = extract_observations(sample);
+        let dia_to_source: HashMap<String, String> = memories
+            .iter()
+            .enumerate()
+            .map(|(i, m)| {
+                (
+                    m.dia_id.clone(),
+                    format!("locomo_{}_obs_{}", sample.sample_id, i),
+                )
+            })
+            .collect();
+
+        let mut conv_scores: Vec<(u8, f64, f64, f64, f64, f64)> = Vec::new();
+        for qa in &sample.qa {
+            if qa.category == 5 {
+                continue;
+            }
+            gate_total += 1;
+            if gate_on && !crate::retrieval::signals::query_warrants_graph(&qa.question) {
+                gate_skipped += 1;
+            }
+            let results = db
+                .search_memory(&qa.question, 10, None, None, None, None, None, None)
+                .await?;
+
+            let relevant_ids: HashSet<String> = qa
+                .evidence
+                .iter()
+                .filter_map(|did| dia_to_source.get(did).cloned())
+                .collect();
+            if relevant_ids.is_empty() {
+                continue;
+            }
+            let result_ids: Vec<&str> = results.iter().map(|r| r.source_id.as_str()).collect();
+            let grades: HashMap<&str, u8> = result_ids
+                .iter()
+                .map(|id| (*id, if relevant_ids.contains(*id) { 1 } else { 0 }))
+                .collect();
+            let relevant_set: HashSet<&str> = relevant_ids.iter().map(|s| s.as_str()).collect();
+
+            let ndcg_10 = metrics::ndcg_at_k(&result_ids, &grades, 10);
+            let ndcg_5 = metrics::ndcg_at_k(&result_ids, &grades, 5);
+            let mrr_val = metrics::mrr(&result_ids, &relevant_set);
+            let recall_5 = metrics::recall_at_k(&result_ids, &relevant_set, 5);
+            let hr_1 = metrics::hit_rate_at_k(&result_ids, &relevant_set, 1);
+
+            conv_scores.push((qa.category, ndcg_5, ndcg_10, mrr_val, recall_5, hr_1));
+            all_scores.push((qa.category, ndcg_5, ndcg_10, mrr_val, recall_5, hr_1));
+
+            let units: Vec<(&str, &str)> = results
+                .iter()
+                .map(|r| (r.source.as_str(), r.source_id.as_str()))
+                .collect();
+            cov_acc.push(metrics::coverage_recall(
+                &metrics::build_coverage_set(&units, &HashMap::new()),
+                &relevant_set,
+            ));
+        }
+
+        let per_cat = aggregate_by_category(&conv_scores);
+        let n = conv_scores.len();
+        conversations.push(LocomoConversationResult {
+            sample_id: sample.sample_id.clone(),
+            memories_seeded: memories.len(),
+            questions_evaluated: n,
+            overall_ndcg_at_10: avg_field(&conv_scores, |s| s.2),
+            overall_mrr: avg_field(&conv_scores, |s| s.3),
+            overall_recall_at_5: avg_field(&conv_scores, |s| s.4),
+            per_category: per_cat,
+        });
+    }
+
+    if gate_on {
+        eprintln!(
+            "[locomo] graph-gate skipped {gate_skipped}/{gate_total} queries ({:.1}%)",
+            100.0 * gate_skipped as f64 / gate_total.max(1) as f64
+        );
+    }
+    let per_cat_agg = aggregate_by_category(&all_scores);
+    let coverage = if cov_acc.is_empty() {
+        None
+    } else {
+        Some(crate::eval::report::CoverageRecall {
+            blind: cov_acc.iter().sum::<f64>() / cov_acc.len() as f64,
+            expanded: cov_acc.iter().sum::<f64>() / cov_acc.len() as f64,
+        })
+    };
+    let mut report = LocomoReport {
+        conversations,
+        aggregate_ndcg_at_10: avg_field(&all_scores, |s| s.2),
+        aggregate_mrr: avg_field(&all_scores, |s| s.3),
+        aggregate_recall_at_5: avg_field(&all_scores, |s| s.4),
+        aggregate_hit_rate_at_1: avg_field(&all_scores, |s| s.5),
+        total_questions: all_scores.len(),
+        total_memories: samples.iter().map(|s| extract_observations(s).len()).sum(),
+        per_category_aggregate: per_cat_agg,
+        qa_accuracy: None,
+        baseline: None,
+        env: None,
+        per_case: Vec::new(),
+        coverage,
+    };
+    let graph_gate = if crate::db::graph_gate_enabled() {
+        "on"
+    } else {
+        "off"
+    };
+    let mut env_stamp = build_locomo_env(
+        if graph_gate == "off" {
+            "search_memory_gate_off"
+        } else {
+            "search_memory_gate_on"
+        },
+        path,
+        "search_memory",
+        "none",
+        "none",
+        None,
+    );
+    env_stamp.flags.push(format!("graph_gate={graph_gate}"));
+    env_stamp.flags.push("scenario_db=consolidated".to_string());
+    report.env = Some(env_stamp);
+    Ok(report)
+}
+
 // Expanded benchmark runner -- same as run_locomo_eval but uses search_memory_expanded
 // ---------------------------------------------------------------------------
 
