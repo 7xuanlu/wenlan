@@ -229,8 +229,36 @@ mod tests {
     use std::time::Duration;
 
     /// Settle helper: advance wall-clock so spawned delay+work tasks complete.
+    /// Used by the time-tolerant tests (single-schedule, pre-delay abort, etc.)
+    /// whose assertions don't depend on a real-sleep loop finishing inside a
+    /// fixed budget. The force-run / ceiling tests use the event-driven
+    /// `wait_signal` / `wait_until` helpers below instead.
     async fn settle(ms: u64) {
         tokio::time::sleep(Duration::from_millis(ms)).await;
+    }
+
+    /// Block until `notify` is signalled, with a generous timeout so a real hang
+    /// (logic regression) fails fast instead of waiting on a wall-clock budget.
+    /// This is the event-driven replacement for `settle()` in tests that must be
+    /// deterministic under single-threaded CI load: it returns the instant the
+    /// awaited work reaches its signal point, not after a fixed real-time span.
+    async fn wait_signal(notify: &tokio::sync::Notify) {
+        tokio::time::timeout(Duration::from_secs(5), notify.notified())
+            .await
+            .expect("timed out waiting for signal — work never reached its checkpoint");
+    }
+
+    /// Poll `cond` until it holds, yielding between checks, with a 5s timeout.
+    /// Used for the self-cleanup assertion, which happens just after the work
+    /// body's terminal signal and therefore can't be awaited on a single Notify.
+    async fn wait_until(mut cond: impl FnMut() -> bool) {
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while !cond() {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("timed out waiting for condition");
     }
 
     #[tokio::test]
@@ -368,44 +396,65 @@ mod tests {
         );
     }
 
+    /// Event-driven: each scheduled task signals `started` the instant its work
+    /// body runs, and we await that signal (not a fixed `settle`) before reading
+    /// the streak and scheduling the next, so every cancellation lands on an
+    /// in-flight task and counts toward the ceiling regardless of CI load. The
+    /// final (force-run winner) task runs a fixed, bounded, cancel-respecting
+    /// body and signals `done`; the test awaits that signal instead of a fixed
+    /// real-time budget. Only the uncancelled final task completes (intermediates
+    /// are cancelled at their first checkpoint, long before the bounded body
+    /// finishes), so exactly one reflection completes.
     #[tokio::test]
     async fn test_max_deferral_ceiling_forces_run() {
+        use tokio::sync::Notify;
+
         let deb = ReflectionDebouncer::new();
         let runs = Arc::new(AtomicUsize::new(0));
-        // Peak number of work bodies running their loop simultaneously. The
-        // force-run path must stop the prior before the new one completes, so no
-        // two reflections ever run to completion concurrently (the write-write
-        // race FIX 1 closes). A brief cooperative-cancel overlap is fine; what
-        // must hold is that exactly one COMPLETES.
+        // Number of work bodies currently inside their loop. Must drain to 0:
+        // the force-run path stops the prior before the new one completes, so no
+        // work body is ever left running (the write-write race FIX 1 closes).
         let in_work = Arc::new(AtomicUsize::new(0));
         let peak_streak = Arc::new(AtomicUsize::new(0));
+        let done = Arc::new(Notify::new());
 
-        // Each scheduled work starts after a short delay and then runs long
-        // enough to still be in-flight while we hammer reschedules, so every
-        // cancellation is an *in-flight* cancel and counts toward the ceiling.
+        // Schedule MAX_CANCELLATIONS + 2 times. The streak reaches the ceiling
+        // after schedule #(MAX_CANCELLATIONS+1); schedule #(MAX_CANCELLATIONS+2)
+        // is the force-run that cancels the in-flight prior and runs to
+        // completion uncontested.
         for _ in 0..(MAX_CANCELLATIONS + 2) {
             let r = runs.clone();
             let iw = in_work.clone();
+            let started = Arc::new(Notify::new());
+            let started_w = started.clone();
+            let done_w = done.clone();
             deb.schedule("agentA", Duration::from_millis(5), move |cancel| {
                 let r = r.clone();
                 let iw = iw.clone();
+                let started_w = started_w.clone();
+                let done_w = done_w.clone();
                 async move {
                     iw.fetch_add(1, Ordering::SeqCst);
-                    // Long-running work that respects cancellation.
-                    for _ in 0..100 {
+                    started_w.notify_one();
+                    // Fixed, bounded, cancel-respecting work. Intermediates are
+                    // cancelled at their first checkpoint (the next schedule sets
+                    // the flag before this can finish 50 iterations); only the
+                    // final uncancelled task runs the full body and completes.
+                    for _ in 0..50 {
                         if cancel.load(Ordering::SeqCst) {
                             iw.fetch_sub(1, Ordering::SeqCst);
                             return;
                         }
-                        tokio::time::sleep(Duration::from_millis(3)).await;
+                        tokio::task::yield_now().await;
                     }
                     iw.fetch_sub(1, Ordering::SeqCst);
                     r.fetch_add(1, Ordering::SeqCst);
+                    done_w.notify_one();
                 }
             });
-            // Let each work item start (past its 5ms delay) before the next
-            // reschedule, so we drive the in-flight cancel/ceiling path.
-            settle(15).await;
+            // Await this work item being in-flight (past its delay) before the
+            // next reschedule, so we drive the in-flight cancel/ceiling path.
+            wait_signal(&started).await;
             // Track how high the in-flight cancellation streak climbed. With
             // every prior in-flight it must reach exactly MAX_CANCELLATIONS just
             // before the force-run fires.
@@ -437,7 +486,8 @@ mod tests {
             "force-run must reset the cancellation streak to 0"
         );
 
-        settle(500).await;
+        // Block until the force-run winner signals completion (timeout-guarded).
+        wait_signal(&done).await;
         // Exactly one reflection completes: the final force-run cancelled the
         // prior in-flight task, so the prior and the freshly-spawned task never
         // both finish enrichment (no concurrent double-enrichment / page race).
@@ -447,12 +497,15 @@ mod tests {
             "exactly one reflection must complete after a force-run, got {}",
             runs.load(Ordering::SeqCst)
         );
-        // No work body is left running, and the slot is cleaned up.
+        // No work body is left running, and the slot is cleaned up. Both happen
+        // right after the terminal signal, so poll briefly for them to drain.
+        wait_until(|| in_work.load(Ordering::SeqCst) == 0).await;
         assert_eq!(
             in_work.load(Ordering::SeqCst),
             0,
-            "no work body may still be in-flight after settle"
+            "no work body may still be in-flight after completion"
         );
+        wait_until(|| deb.live_keys() == 0).await;
         assert_eq!(
             deb.live_keys(),
             0,
@@ -464,8 +517,20 @@ mod tests {
     /// abort if pre-delay) before the latest task runs, so the prior and the new
     /// task never enrich concurrently. Exactly one work body completes, and the
     /// prior observes cancellation.
+    ///
+    /// Event-driven, not time-budgeted: every "is this task in-flight yet?" and
+    /// "did the latest finish?" question is answered by a signal the work body
+    /// fires (`started` / `done` `Notify`), never by a fixed real-time `settle()`
+    /// racing a real-sleep loop. The CI flake this replaces came from a fixed
+    /// 600ms budget that the latest task's ~300ms real-sleep loop could overrun
+    /// under single-threaded load. With signals the test blocks until the work
+    /// actually reaches each point, independent of scheduler load; a `timeout`
+    /// guard (in `wait_signal`) still fails fast if a real hang ever regresses
+    /// the logic.
     #[tokio::test]
     async fn test_force_run_cancels_prior_only_latest_completes() {
+        use tokio::sync::Notify;
+
         let deb = ReflectionDebouncer::new();
         let completed = Arc::new(AtomicUsize::new(0));
         let prior_observed_cancel = Arc::new(AtomicUsize::new(0));
@@ -473,21 +538,25 @@ mod tests {
         // Prime the streak to the ceiling with in-flight cancels so the NEXT
         // schedule takes the force-run path. The first schedule has no prior to
         // cancel (no bump), so reaching a streak of MAX_CANCELLATIONS needs
-        // MAX_CANCELLATIONS + 1 schedules.
+        // MAX_CANCELLATIONS + 1 schedules. Each primed task signals `started`
+        // the instant its work body runs (i.e. once it is in-flight); we await
+        // that signal — not a fixed delay — before the next schedule, so every
+        // cancellation is guaranteed to land on an in-flight task and count
+        // toward the ceiling regardless of scheduler load.
         for _ in 0..=MAX_CANCELLATIONS {
-            deb.schedule(
-                "agentA",
-                Duration::from_millis(5),
-                move |cancel| async move {
-                    for _ in 0..100 {
-                        if cancel.load(Ordering::SeqCst) {
-                            return;
-                        }
-                        tokio::time::sleep(Duration::from_millis(3)).await;
+            let started = Arc::new(Notify::new());
+            let started_w = started.clone();
+            deb.schedule("agentA", Duration::from_millis(5), move |cancel| {
+                let started_w = started_w.clone();
+                async move {
+                    started_w.notify_one();
+                    // Stay in-flight, respecting cancel, until superseded.
+                    while !cancel.load(Ordering::SeqCst) {
+                        tokio::task::yield_now().await;
                     }
-                },
-            );
-            settle(15).await;
+                }
+            });
+            wait_signal(&started).await;
         }
         assert_eq!(
             deb.cancellations_for("agentA"),
@@ -496,44 +565,54 @@ mod tests {
         );
 
         // This in-flight "prior" is the one the upcoming force-run must stop. It
-        // records whether it observed the cooperative-cancel flag.
+        // signals `started` once in-flight and records whether it observed the
+        // cooperative-cancel flag before exiting.
+        let prior_started = Arc::new(Notify::new());
+        let prior_started_w = prior_started.clone();
         let po = prior_observed_cancel.clone();
-        let cmp = completed.clone();
         deb.schedule("agentA", Duration::from_millis(5), move |cancel| {
+            let prior_started_w = prior_started_w.clone();
             let po = po.clone();
-            let cmp = cmp.clone();
             async move {
-                for _ in 0..100 {
+                prior_started_w.notify_one();
+                loop {
                     if cancel.load(Ordering::SeqCst) {
                         po.fetch_add(1, Ordering::SeqCst);
                         return; // cancelled — must NOT count as completed
                     }
-                    tokio::time::sleep(Duration::from_millis(3)).await;
+                    tokio::task::yield_now().await;
                 }
-                cmp.fetch_add(1, Ordering::SeqCst);
             }
         });
-        // Let this prior start running (in-flight) before the force-run lands.
-        settle(15).await;
+        // Await the prior actually being in-flight before the force-run lands.
+        wait_signal(&prior_started).await;
 
         // Force-run: streak is at the ceiling, the prior above is in-flight, so
         // schedule() must flip the prior's cancel flag (not abort it) and spawn
-        // this latest task, which runs to completion uncontested.
-        let cmp2 = completed.clone();
+        // this latest task, which runs to completion uncontested. The latest does
+        // a fixed, bounded amount of cancel-respecting work (proving it is not
+        // itself cancelled) and then signals `done`.
+        let done = Arc::new(Notify::new());
+        let done_w = done.clone();
+        let cmp = completed.clone();
         deb.schedule("agentA", Duration::from_millis(5), move |cancel| {
-            let cmp2 = cmp2.clone();
+            let done_w = done_w.clone();
+            let cmp = cmp.clone();
             async move {
-                for _ in 0..100 {
+                for _ in 0..50 {
                     if cancel.load(Ordering::SeqCst) {
-                        return;
+                        return; // would mean the latest was wrongly cancelled
                     }
-                    tokio::time::sleep(Duration::from_millis(3)).await;
+                    tokio::task::yield_now().await;
                 }
-                cmp2.fetch_add(1, Ordering::SeqCst);
+                cmp.fetch_add(1, Ordering::SeqCst);
+                done_w.notify_one();
             }
         });
 
-        settle(600).await;
+        // Block until the latest signals completion (timeout-guarded so a real
+        // hang fails fast instead of waiting on a wall-clock budget).
+        wait_signal(&done).await;
         assert_eq!(
             prior_observed_cancel.load(Ordering::SeqCst),
             1,
@@ -544,6 +623,10 @@ mod tests {
             1,
             "exactly one (the latest) reflection may complete; the cancelled prior must not"
         );
+        // The slot self-cleans once the latest's work body returns; cleanup runs
+        // after `done_w.notify_one()`, so poll briefly for it to drain rather
+        // than asserting on a fixed budget.
+        wait_until(|| deb.cancellations_for("agentA").is_none()).await;
         assert_eq!(
             deb.cancellations_for("agentA"),
             None,
