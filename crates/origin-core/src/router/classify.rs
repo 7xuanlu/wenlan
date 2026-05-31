@@ -37,7 +37,7 @@ const TEMPORAL_KEYWORDS: &[&str] = &[
 /// Uses multi-word phrases to avoid false positives on common words like "between".
 const RELATIONAL_KEYWORDS: &[&str] = &[
     "relationship between",
-    "how does.*relate",
+    "relate to",
     "who works",
     "who knows",
     "involved in",
@@ -116,6 +116,7 @@ mod tests {
     fn relational_keywords_trigger_graph() {
         let cases = [
             "What is the relationship between Alice and Bob?",
+            "How does Postgres relate to libSQL?",
             "Who works on the backend team?",
             "Who is involved in the launch?",
             "Who knows about the deployment process?",
