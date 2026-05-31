@@ -427,6 +427,120 @@ pub fn page_channel_enabled() -> bool {
         .unwrap_or(false)
 }
 
+/// True iff `ORIGIN_ENABLE_EVICTION` is set to a truthy value (`1`, `true`, or
+/// `yes`, case-insensitive). When enabled, the refinery's `evict` phase flips
+/// stale, low-`effective_confidence`, non-immune memories to
+/// `supersede_mode='archive'` (recoverable, never hard-deleted).
+///
+/// Default OFF: unset or any falsey value leaves the write/refinery path
+/// byte-identical (unbounded append, nothing archived by policy — preserving
+/// the "no memory count cap" contract). Truthy-only parse, verbatim copy of
+/// [`page_channel_enabled`]. T21 Stage 1.
+pub fn eviction_enabled() -> bool {
+    std::env::var("ORIGIN_ENABLE_EVICTION")
+        .ok()
+        .map(|v| matches!(v.trim().to_ascii_lowercase().as_str(), "1" | "true" | "yes"))
+        .unwrap_or(false)
+}
+
+/// Outcome of one `evict_stale` run. T21 Stage 1 only ever archives
+/// (`deleted` is always 0); `skipped_disabled` is true when the env flag is off.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EvictionReport {
+    /// Number of memories flipped to `supersede_mode='archive'`.
+    pub archived: usize,
+    /// Number of memories hard-deleted. Always 0 in Stage 1 (archive-not-delete).
+    pub deleted: usize,
+    /// True when `ORIGIN_ENABLE_EVICTION` was off, so nothing ran.
+    pub skipped_disabled: bool,
+}
+
+/// A row considered for eviction. Built from the candidate SELECT and fed to the
+/// pure [`select_evictions`] policy function.
+#[derive(Debug, Clone)]
+pub struct EvictCandidate {
+    pub source_id: String,
+    pub effective_confidence: f64,
+    /// Raw `last_accessed` cell as stored (ISO datetime string OR epoch string).
+    /// Parsed via [`crate::decay::days_since`], mirroring `decay_update_confidence`.
+    pub last_accessed: Option<String>,
+    pub memory_type: Option<String>,
+    /// Per-space grouping key (`domain` column). `None` rows never hit the cap.
+    pub space: Option<String>,
+}
+
+/// Pure eviction policy: given candidate rows and config, return the set of
+/// `source_id`s to archive. Separated from the DB mutation so the selection
+/// logic is unit-testable in isolation (candidate set in -> evict set out).
+///
+/// A row is archived when EITHER:
+///   1. it passes both independent gates — `effective_confidence` strictly below
+///      `evict_confidence_floor` AND `last_accessed` at least `min_age_days` old
+///      (age computed in Rust to dodge the TEXT/INTEGER affinity of the
+///      `last_accessed` column), OR
+///   2. its space is over `per_space_cap` and it is in the lowest-confidence
+///      overflow for that space (additive selection, independent of the floor).
+///
+/// Protected-tier rows (identity/preference/goal) are never selected; confirmed
+/// and pinned rows are excluded upstream in the SELECT. Age/floor gates hold
+/// independently: a fresh low-confidence row survives, an old high-confidence
+/// row survives.
+pub fn select_evictions(
+    candidates: &[EvictCandidate],
+    cfg: &crate::tuning::EvictionConfig,
+    now_epoch: i64,
+) -> Vec<String> {
+    use std::collections::BTreeSet;
+
+    // Protected-tier memories are immune regardless of age/confidence/cap.
+    let eligible: Vec<&EvictCandidate> = candidates
+        .iter()
+        .filter(|c| {
+            crate::sources::stability_tier(c.memory_type.as_deref())
+                != crate::sources::StabilityTier::Protected
+        })
+        .collect();
+
+    let mut selected: BTreeSet<String> = BTreeSet::new();
+
+    // Gate 1 — independent floor + age gates.
+    for c in &eligible {
+        let old_enough = crate::decay::days_since(c.last_accessed.as_deref(), now_epoch)
+            >= cfg.min_age_days as f64;
+        let low_value = c.effective_confidence < cfg.evict_confidence_floor;
+        if old_enough && low_value {
+            selected.insert(c.source_id.clone());
+        }
+    }
+
+    // Gate 2 — per-space cap overflow (lowest effective_confidence first).
+    if let Some(cap) = cfg.per_space_cap {
+        let mut by_space: std::collections::HashMap<&str, Vec<&EvictCandidate>> =
+            std::collections::HashMap::new();
+        for c in &eligible {
+            if let Some(space) = c.space.as_deref() {
+                by_space.entry(space).or_default().push(c);
+            }
+        }
+        for (_space, mut rows) in by_space {
+            if rows.len() > cap {
+                // Sort ascending by effective_confidence; lowest are archived.
+                rows.sort_by(|a, b| {
+                    a.effective_confidence
+                        .partial_cmp(&b.effective_confidence)
+                        .unwrap_or(std::cmp::Ordering::Equal)
+                });
+                let overflow = rows.len() - cap;
+                for c in rows.into_iter().take(overflow) {
+                    selected.insert(c.source_id.clone());
+                }
+            }
+        }
+    }
+
+    selected.into_iter().collect()
+}
+
 /// True iff `ORIGIN_ENABLE_DUAL_POOL_RESOLVE` is set to a truthy value
 /// (`1`, `true`, or `yes`, case-insensitive). When enabled, `handle_store_memory`
 /// resolves each incoming memory against two candidate pools (near-duplicates +
@@ -18013,6 +18127,142 @@ impl MemoryDB {
         Ok(deleted as usize)
     }
 
+    /// T21 Stage 1 — archive-not-delete soft eviction.
+    ///
+    /// Flips stale, low-`effective_confidence`, non-immune memories to
+    /// `supersede_mode='archive'` so they drop out of default retrieval while
+    /// staying fully recoverable in the table (no hard DELETE — Origin's core
+    /// contract is "every DELETE is explicit"). The salience proxy is
+    /// `effective_confidence`, already folded over confidence × recency × access
+    /// by the Decay phase, so this MUST run after Decay within a cycle.
+    ///
+    /// Belt-and-suspenders gate: returns `skipped_disabled: true` with zero
+    /// mutations when `ORIGIN_ENABLE_EVICTION` is off, even though the refinery
+    /// dispatch also gates on the flag. Selection logic lives in the pure
+    /// [`select_evictions`]; this method only does the SELECT + batch UPDATE.
+    ///
+    /// `recover_before_delete` is a no-op in Stage 1 (archive IS recovery);
+    /// hard-delete + consolidation is Stage 2 (separate plan).
+    pub async fn evict_stale(
+        &self,
+        cfg: &crate::tuning::EvictionConfig,
+    ) -> Result<EvictionReport, OriginError> {
+        // Belt-and-suspenders: do nothing unless explicitly enabled.
+        if !eviction_enabled() {
+            return Ok(EvictionReport {
+                archived: 0,
+                deleted: 0,
+                skipped_disabled: true,
+            });
+        }
+
+        let now_epoch = chrono::Utc::now().timestamp();
+        let conn = self.conn.lock().await;
+
+        // Candidate SELECT — only type-safe SQL gates here (confirmed/pinned/
+        // already-archived/confidence-floor). The age gate and Protected-tier
+        // exclusion are applied in Rust by select_evictions, because
+        // `last_accessed` is stored as a TEXT datetime string (datetime('now'))
+        // in an INTEGER-affinity column, so a SQL `last_accessed < ?epoch`
+        // compares TEXT vs INTEGER and never fires. We over-select on confidence
+        // and let the pure policy narrow it down.
+        let mut rows = conn
+            .query(
+                "SELECT source_id, effective_confidence, CAST(last_accessed AS TEXT), memory_type, space \
+                 FROM memories \
+                 WHERE source = 'memory' AND chunk_index = 0 \
+                   AND confirmed = 0 AND pinned = 0 \
+                   AND supersede_mode != 'archive' \
+                   AND effective_confidence IS NOT NULL \
+                   AND effective_confidence < ?1",
+                libsql::params![cfg.evict_confidence_floor],
+            )
+            .await
+            .map_err(|e| OriginError::VectorDb(format!("evict_stale select: {e}")))?;
+
+        let mut candidates: Vec<EvictCandidate> = Vec::new();
+        while let Some(row) = rows
+            .next()
+            .await
+            .map_err(|e| OriginError::VectorDb(format!("evict_stale row: {e}")))?
+        {
+            candidates.push(EvictCandidate {
+                source_id: row
+                    .get(0)
+                    .map_err(|e| OriginError::VectorDb(e.to_string()))?,
+                effective_confidence: row.get::<f64>(1).unwrap_or(1.0),
+                last_accessed: row.get(2).unwrap_or(None),
+                memory_type: row.get(3).unwrap_or(None),
+                space: row.get(4).unwrap_or(None),
+            });
+        }
+        drop(rows);
+
+        // When per_space_cap is set, the floor SELECT would hide cap-eligible
+        // rows whose effective_confidence is above the floor. Re-fetch the full
+        // non-immune set for the cap pass so A5 holds independently of the floor.
+        if cfg.per_space_cap.is_some() {
+            let mut all_rows = conn
+                .query(
+                    "SELECT source_id, effective_confidence, CAST(last_accessed AS TEXT), memory_type, space \
+                     FROM memories \
+                     WHERE source = 'memory' AND chunk_index = 0 \
+                       AND confirmed = 0 AND pinned = 0 \
+                       AND supersede_mode != 'archive' \
+                       AND effective_confidence IS NOT NULL",
+                    (),
+                )
+                .await
+                .map_err(|e| OriginError::VectorDb(format!("evict_stale cap select: {e}")))?;
+            candidates.clear();
+            while let Some(row) = all_rows
+                .next()
+                .await
+                .map_err(|e| OriginError::VectorDb(format!("evict_stale cap row: {e}")))?
+            {
+                candidates.push(EvictCandidate {
+                    source_id: row
+                        .get(0)
+                        .map_err(|e| OriginError::VectorDb(e.to_string()))?,
+                    effective_confidence: row.get::<f64>(1).unwrap_or(1.0),
+                    last_accessed: row.get(2).unwrap_or(None),
+                    memory_type: row.get(3).unwrap_or(None),
+                    space: row.get(4).unwrap_or(None),
+                });
+            }
+            drop(all_rows);
+        }
+
+        let to_archive = select_evictions(&candidates, cfg, now_epoch);
+
+        // Archive (NOT delete) in one BEGIN/COMMIT (mirror
+        // decay_update_confidence batch UPDATE).
+        let archived = to_archive.len();
+        if !to_archive.is_empty() {
+            conn.execute("BEGIN", ())
+                .await
+                .map_err(|e| OriginError::VectorDb(format!("evict begin: {e}")))?;
+            for source_id in &to_archive {
+                conn.execute(
+                    "UPDATE memories SET supersede_mode = 'archive' \
+                     WHERE source_id = ?1 AND source = 'memory'",
+                    libsql::params![source_id.as_str()],
+                )
+                .await
+                .map_err(|e| OriginError::VectorDb(format!("evict update: {e}")))?;
+            }
+            conn.execute("COMMIT", ())
+                .await
+                .map_err(|e| OriginError::VectorDb(format!("evict commit: {e}")))?;
+        }
+
+        Ok(EvictionReport {
+            archived,
+            deleted: 0,
+            skipped_disabled: false,
+        })
+    }
+
     // ==================== Concepts ====================
 
     /// Insert a new page. Generates an embedding from `title + summary` if available.
@@ -27441,6 +27691,383 @@ pub(crate) mod tests {
         assert!(candidates
             .iter()
             .any(|c| c.space == Some("engineering".to_string())));
+    }
+
+    // ==================== T21 Eviction (archive-not-delete) ====================
+
+    /// Helper: insert a memory then force its effective_confidence + last_accessed
+    /// (and optionally confirmed/pinned) to specific values for eviction tests.
+    /// `last_accessed_sql` is a SQL expression evaluated at UPDATE time, e.g.
+    /// "strftime('%s','now','-120 days')" (aged) or "datetime('now')" (fresh).
+    #[allow(clippy::too_many_arguments)]
+    async fn seed_evict_row(
+        db: &MemoryDB,
+        source_id: &str,
+        memory_type: &str,
+        space: &str,
+        eff_conf: f64,
+        last_accessed_sql: &str,
+        confirmed: bool,
+        pinned: bool,
+    ) {
+        let doc = make_memory_doc(
+            source_id,
+            "evict test body content",
+            memory_type,
+            space,
+            "claude",
+        );
+        db.upsert_documents(vec![doc]).await.unwrap();
+        let conn = db.conn.lock().await;
+        conn.execute(
+            &format!(
+                "UPDATE memories SET effective_confidence = ?1, last_accessed = {} \
+                 WHERE source_id = ?2 AND source = 'memory'",
+                last_accessed_sql
+            ),
+            libsql::params![eff_conf, source_id],
+        )
+        .await
+        .unwrap();
+        if pinned {
+            conn.execute(
+                "UPDATE memories SET pinned = 1 WHERE source_id = ?1 AND source = 'memory'",
+                libsql::params![source_id],
+            )
+            .await
+            .unwrap();
+        }
+        if confirmed {
+            conn.execute(
+                "UPDATE memories SET confirmed = 1 WHERE source_id = ?1 AND source = 'memory'",
+                libsql::params![source_id],
+            )
+            .await
+            .unwrap();
+        }
+    }
+
+    async fn count_archived(db: &MemoryDB) -> i64 {
+        let conn = db.conn.lock().await;
+        let mut rows = conn
+            .query(
+                "SELECT COUNT(*) FROM memories WHERE source = 'memory' AND supersede_mode = 'archive'",
+                (),
+            )
+            .await
+            .unwrap();
+        let row = rows.next().await.unwrap().unwrap();
+        row.get::<i64>(0).unwrap()
+    }
+
+    async fn count_rows(db: &MemoryDB) -> i64 {
+        let conn = db.conn.lock().await;
+        let mut rows = conn
+            .query("SELECT COUNT(*) FROM memories WHERE source = 'memory'", ())
+            .await
+            .unwrap();
+        let row = rows.next().await.unwrap().unwrap();
+        row.get::<i64>(0).unwrap()
+    }
+
+    // A1 — stale low-confidence aged rows get archived, never deleted.
+    #[tokio::test]
+    async fn test_evict_stale_archives_low_confidence_aged_rows() {
+        let (db, _dir) = test_db().await;
+        for i in 0..3 {
+            seed_evict_row(
+                &db,
+                &format!("stale_{i}"),
+                "fact",
+                "engineering",
+                0.05,
+                "strftime('%s','now','-120 days')",
+                false,
+                false,
+            )
+            .await;
+        }
+        let before = count_rows(&db).await;
+        let report = temp_env::async_with_vars([("ORIGIN_ENABLE_EVICTION", Some("1"))], async {
+            db.evict_stale(&crate::tuning::EvictionConfig::default())
+                .await
+                .unwrap()
+        })
+        .await;
+        assert_eq!(report.archived, 3, "all 3 stale rows archived");
+        assert_eq!(report.deleted, 0, "Stage 1 never deletes");
+        assert!(!report.skipped_disabled);
+        assert_eq!(
+            count_archived(&db).await,
+            3,
+            "3 rows now supersede_mode=archive"
+        );
+        assert_eq!(
+            count_rows(&db).await,
+            before,
+            "row count unchanged — archive, not delete"
+        );
+    }
+
+    // A2 — confirmed / pinned / Protected-tier rows are immune (load-bearing).
+    #[tokio::test]
+    async fn test_evict_stale_spares_confirmed_pinned_protected() {
+        let (db, _dir) = test_db().await;
+        // confirmed=1 (note: setting confirmed without unconfirm trigger keeps pinned state)
+        seed_evict_row(
+            &db,
+            "imm_confirmed",
+            "fact",
+            "engineering",
+            0.05,
+            "strftime('%s','now','-200 days')",
+            true,
+            false,
+        )
+        .await;
+        // pinned=1
+        seed_evict_row(
+            &db,
+            "imm_pinned",
+            "fact",
+            "engineering",
+            0.05,
+            "strftime('%s','now','-200 days')",
+            false,
+            true,
+        )
+        .await;
+        // Protected-tier memory_type (identity)
+        seed_evict_row(
+            &db,
+            "imm_protected",
+            "identity",
+            "engineering",
+            0.05,
+            "strftime('%s','now','-200 days')",
+            false,
+            false,
+        )
+        .await;
+
+        let report = temp_env::async_with_vars([("ORIGIN_ENABLE_EVICTION", Some("1"))], async {
+            db.evict_stale(&crate::tuning::EvictionConfig::default())
+                .await
+                .unwrap()
+        })
+        .await;
+        assert_eq!(
+            report.archived, 0,
+            "confirmed/pinned/protected must never be archived"
+        );
+        assert_eq!(count_archived(&db).await, 0);
+    }
+
+    // A3 — age gate holds independently of confidence: fresh low-conf survives.
+    #[tokio::test]
+    async fn test_evict_stale_respects_age_gate() {
+        let (db, _dir) = test_db().await;
+        seed_evict_row(
+            &db,
+            "fresh_lowconf",
+            "fact",
+            "engineering",
+            0.05,
+            "datetime('now')",
+            false,
+            false,
+        )
+        .await;
+        let report = temp_env::async_with_vars([("ORIGIN_ENABLE_EVICTION", Some("1"))], async {
+            db.evict_stale(&crate::tuning::EvictionConfig::default())
+                .await
+                .unwrap()
+        })
+        .await;
+        assert_eq!(
+            report.archived, 0,
+            "fresh row survives despite low confidence"
+        );
+    }
+
+    // A4 — confidence floor holds independently of age: old valuable survives.
+    #[tokio::test]
+    async fn test_evict_stale_respects_confidence_floor() {
+        let (db, _dir) = test_db().await;
+        seed_evict_row(
+            &db,
+            "old_valuable",
+            "fact",
+            "engineering",
+            0.8,
+            "strftime('%s','now','-200 days')",
+            false,
+            false,
+        )
+        .await;
+        let report = temp_env::async_with_vars([("ORIGIN_ENABLE_EVICTION", Some("1"))], async {
+            db.evict_stale(&crate::tuning::EvictionConfig::default())
+                .await
+                .unwrap()
+        })
+        .await;
+        assert_eq!(
+            report.archived, 0,
+            "old but valuable row survives the floor"
+        );
+    }
+
+    // A5 — per_space_cap archives the lowest-confidence overflow first.
+    #[tokio::test]
+    async fn test_evict_stale_per_space_cap_evicts_lowest_first() {
+        let (db, _dir) = test_db().await;
+        let confs = [0.9_f64, 0.8, 0.2, 0.15, 0.1];
+        for (i, c) in confs.iter().enumerate() {
+            seed_evict_row(
+                &db,
+                &format!("cap_{i}"),
+                "fact",
+                "engineering",
+                *c,
+                "strftime('%s','now','-120 days')",
+                false,
+                false,
+            )
+            .await;
+        }
+        let cfg = crate::tuning::EvictionConfig {
+            per_space_cap: Some(3),
+            ..Default::default()
+        };
+        let report = temp_env::async_with_vars([("ORIGIN_ENABLE_EVICTION", Some("1"))], async {
+            db.evict_stale(&cfg).await.unwrap()
+        })
+        .await;
+        assert_eq!(report.archived, 2, "5 rows, cap 3 -> 2 overflow archived");
+        // The two lowest (cap_4=0.1, cap_3=0.15) must be the archived ones.
+        let conn = db.conn.lock().await;
+        for id in ["cap_3", "cap_4"] {
+            let mut rows = conn
+                .query("SELECT supersede_mode FROM memories WHERE source_id = ?1 AND source = 'memory'",
+                    libsql::params![id])
+                .await.unwrap();
+            let row = rows.next().await.unwrap().unwrap();
+            let mode: String = row.get(0).unwrap();
+            assert_eq!(mode, "archive", "{id} (lowest conf) should be archived");
+        }
+        for id in ["cap_0", "cap_1", "cap_2"] {
+            let mut rows = conn
+                .query("SELECT supersede_mode FROM memories WHERE source_id = ?1 AND source = 'memory'",
+                    libsql::params![id])
+                .await.unwrap();
+            let row = rows.next().await.unwrap().unwrap();
+            let mode: String = row.get(0).unwrap();
+            assert_ne!(mode, "archive", "{id} (higher conf) should survive");
+        }
+    }
+
+    // A6 — default OFF is a no-op; flag ON runs.
+    #[tokio::test]
+    async fn test_evict_stale_disabled_by_default_is_noop() {
+        let (db, _dir) = test_db().await;
+        seed_evict_row(
+            &db,
+            "stale_off",
+            "fact",
+            "engineering",
+            0.05,
+            "strftime('%s','now','-120 days')",
+            false,
+            false,
+        )
+        .await;
+
+        // Flag unset -> skipped, nothing archived.
+        let report = temp_env::async_with_vars([("ORIGIN_ENABLE_EVICTION", None::<&str>)], async {
+            db.evict_stale(&crate::tuning::EvictionConfig::default())
+                .await
+                .unwrap()
+        })
+        .await;
+        assert_eq!(report.archived, 0);
+        assert_eq!(report.deleted, 0);
+        assert!(
+            report.skipped_disabled,
+            "flag-off must report skipped_disabled"
+        );
+        assert_eq!(
+            count_archived(&db).await,
+            0,
+            "no row flips to archive when disabled"
+        );
+
+        // Flag set -> runs.
+        let report = temp_env::async_with_vars([("ORIGIN_ENABLE_EVICTION", Some("1"))], async {
+            db.evict_stale(&crate::tuning::EvictionConfig::default())
+                .await
+                .unwrap()
+        })
+        .await;
+        assert_eq!(report.archived, 1);
+        assert!(!report.skipped_disabled);
+        assert_eq!(count_archived(&db).await, 1);
+    }
+
+    // A7 — empty DB is a clean no-op when enabled.
+    #[tokio::test]
+    async fn test_evict_stale_empty_db_is_clean_noop() {
+        let (db, _dir) = test_db().await;
+        let report = temp_env::async_with_vars([("ORIGIN_ENABLE_EVICTION", Some("1"))], async {
+            db.evict_stale(&crate::tuning::EvictionConfig::default())
+                .await
+                .unwrap()
+        })
+        .await;
+        assert_eq!(report.archived, 0);
+        assert_eq!(report.deleted, 0);
+        assert!(!report.skipped_disabled);
+    }
+
+    // A1b — reversibility: an archived row is excluded from default search but
+    // still present in the table and recoverable by clearing supersede_mode.
+    #[tokio::test]
+    async fn test_evict_stale_is_reversible_and_excluded_from_search() {
+        let (db, _dir) = test_db().await;
+        seed_evict_row(
+            &db,
+            "rev_row",
+            "fact",
+            "engineering",
+            0.05,
+            "strftime('%s','now','-120 days')",
+            false,
+            false,
+        )
+        .await;
+        temp_env::async_with_vars([("ORIGIN_ENABLE_EVICTION", Some("1"))], async {
+            db.evict_stale(&crate::tuning::EvictionConfig::default())
+                .await
+                .unwrap()
+        })
+        .await;
+        // Still in the table.
+        assert_eq!(
+            count_rows(&db).await,
+            1,
+            "archived row remains in the table"
+        );
+        assert_eq!(count_archived(&db).await, 1);
+        // Recoverable: clear the archive flag, row is no longer archived.
+        {
+            let conn = db.conn.lock().await;
+            conn.execute(
+                "UPDATE memories SET supersede_mode = 'hide' WHERE source_id = ?1 AND source = 'memory'",
+                libsql::params!["rev_row"],
+            )
+            .await
+            .unwrap();
+        }
+        assert_eq!(count_archived(&db).await, 0, "un-archive restores the row");
     }
 
     // ==================== Decay Engine ====================
