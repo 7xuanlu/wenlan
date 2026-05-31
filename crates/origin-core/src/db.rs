@@ -27,7 +27,7 @@ pub const EMBEDDING_DIM: usize = 768;
 
 /// Current DB schema version (highest `PRAGMA user_version` applied by `migrate()`).
 /// Bump this whenever a new migration lands. Used as an eval cache invalidation key.
-pub const SCHEMA_VERSION: u32 = 56;
+pub const SCHEMA_VERSION: u32 = 57;
 
 /// Shared embedder reference. Pass to [`MemoryDB::new_with_shared_embedder`] to
 /// reuse a single embedder across many `MemoryDB` instances. Created via
@@ -458,6 +458,25 @@ pub fn temporal_grounding_enabled() -> bool {
 /// [`page_channel_enabled`] (truthy-only parse).
 pub fn episode_channel_enabled() -> bool {
     std::env::var("ORIGIN_ENABLE_EPISODE_CHANNEL")
+        .ok()
+        .map(|v| matches!(v.trim().to_ascii_lowercase().as_str(), "1" | "true" | "yes"))
+        .unwrap_or(false)
+}
+
+/// True iff `ORIGIN_ENABLE_ENTITY_MINHASH` is set to a truthy value
+/// (`1`, `true`, or `yes`, case-insensitive). The deterministic MinHash/LSH
+/// entity near-dedup cascade (T16) is OPT-IN: unset or a falsey value
+/// (`0`/`false`/`no`/"") leaves entity resolution byte-identical to the
+/// pre-T16 4-step cascade (alias -> exact-name -> vector -> create).
+///
+/// When enabled, `post_write::create_entity` and `importer::resolve_entity_bulk`
+/// insert a "Step 2.5" between the exact-name and vector steps: high-entropy
+/// names are char-shingled, MinHash-signed, LSH-banded, and confirmed with an
+/// exact Jaccard >= 0.9 against same-type band collisions. Mirrors
+/// [`page_channel_enabled`] (truthy-only parse) so production and any future
+/// eval wiring can't disagree on the flag.
+pub fn entity_minhash_enabled() -> bool {
+    std::env::var("ORIGIN_ENABLE_ENTITY_MINHASH")
         .ok()
         .map(|v| matches!(v.trim().to_ascii_lowercase().as_str(), "1" | "true" | "yes"))
         .unwrap_or(false)
@@ -5295,6 +5314,34 @@ impl MemoryDB {
                 } else {
                     log::info!("[migration] Migration 56 applied: memories.episode_of column + idx_memories_episode (T2 episode channel)");
                 }
+            }
+
+            // Migration 57: T16 deterministic entity-resolution cascade.
+            // Index high-entropy entity names by their LSH band keys so the
+            // opt-in MinHash near-dedup step (ORIGIN_ENABLE_ENTITY_MINHASH) can
+            // find same-band candidates at entity-creation time. Additive and
+            // non-destructive: the table ships EMPTY and inert -- no backfill,
+            // and the resolution cascade only writes/reads it when the flag is
+            // on. CREATE ... IF NOT EXISTS makes the block idempotent.
+            if version < 57 {
+                let conn = self.conn.lock().await;
+                conn.execute_batch(
+                    "
+                    CREATE TABLE IF NOT EXISTS entity_minhash_bands (
+                        band_key INTEGER NOT NULL,
+                        entity_id TEXT NOT NULL REFERENCES entities(id) ON DELETE CASCADE,
+                        PRIMARY KEY (band_key, entity_id)
+                    );
+                    CREATE INDEX IF NOT EXISTS idx_minhash_band_key
+                        ON entity_minhash_bands(band_key);
+                    ",
+                )
+                .await
+                .map_err(|e| OriginError::VectorDb(format!("m57: {e}")))?;
+                conn.execute("PRAGMA user_version = 57", ())
+                    .await
+                    .map_err(|e| OriginError::VectorDb(format!("m57 bump: {e}")))?;
+                log::info!("[migration] Migration 57 applied: entity_minhash_bands table + idx_minhash_band_key (T16 entity near-dedup)");
             }
         }
 
@@ -10613,6 +10660,188 @@ impl MemoryDB {
         Ok(id)
     }
 
+    /// Persist the LSH band keys for an entity into `entity_minhash_bands`
+    /// (T16). Only high-entropy names are indexed (gated by the caller) so the
+    /// table stays small. `INSERT OR IGNORE` keeps the call idempotent; the
+    /// whole batch runs inside one BEGIN/COMMIT (batch-SQL rule).
+    pub async fn store_entity_minhash_bands(
+        &self,
+        entity_id: &str,
+        band_keys: &[u64],
+    ) -> Result<(), OriginError> {
+        if band_keys.is_empty() {
+            return Ok(());
+        }
+        let conn = self.conn.lock().await;
+        conn.execute("BEGIN TRANSACTION", ())
+            .await
+            .map_err(|e| OriginError::VectorDb(format!("store_minhash begin: {e}")))?;
+        let result: Result<(), OriginError> = async {
+            for &key in band_keys {
+                // libSQL INTEGER is i64; band keys are u64 LSH hashes. Reinterpret
+                // the bit pattern (i64::from_ne_bytes) so the round-trip is exact;
+                // query_entities_by_band applies the inverse on the way out.
+                let signed = key as i64;
+                conn.execute(
+                    "INSERT OR IGNORE INTO entity_minhash_bands (band_key, entity_id) VALUES (?1, ?2)",
+                    libsql::params![signed, entity_id.to_string()],
+                )
+                .await
+                .map_err(|e| OriginError::VectorDb(format!("store_minhash insert: {e}")))?;
+            }
+            Ok(())
+        }
+        .await;
+        match result {
+            Ok(()) => {
+                conn.execute("COMMIT", ())
+                    .await
+                    .map_err(|e| OriginError::VectorDb(format!("store_minhash commit: {e}")))?;
+                Ok(())
+            }
+            Err(e) => {
+                if let Err(rb) = conn.execute("ROLLBACK", ()).await {
+                    log::error!("store_entity_minhash_bands ROLLBACK failed: {rb}");
+                }
+                Err(e)
+            }
+        }
+    }
+
+    /// Return the distinct entity ids that share at least one of `band_keys`
+    /// in `entity_minhash_bands` (T16 LSH candidate lookup). Placeholders are
+    /// parameterized -- band keys are never interpolated into the SQL string.
+    pub async fn query_entities_by_band(
+        &self,
+        band_keys: &[u64],
+    ) -> Result<Vec<String>, OriginError> {
+        if band_keys.is_empty() {
+            return Ok(Vec::new());
+        }
+        let placeholders = (1..=band_keys.len())
+            .map(|i| format!("?{i}"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let sql = format!(
+            "SELECT DISTINCT entity_id FROM entity_minhash_bands WHERE band_key IN ({placeholders})"
+        );
+        let params: Vec<libsql::Value> = band_keys
+            .iter()
+            .map(|&k| libsql::Value::Integer(k as i64))
+            .collect();
+        let conn = self.conn.lock().await;
+        let mut rows = conn
+            .query(&sql, libsql::params_from_iter(params))
+            .await
+            .map_err(|e| OriginError::VectorDb(format!("query_minhash: {e}")))?;
+        let mut ids = Vec::new();
+        while let Some(row) = rows
+            .next()
+            .await
+            .map_err(|e| OriginError::VectorDb(format!("query_minhash row: {e}")))?
+        {
+            if let Ok(id) = row.get::<String>(0) {
+                ids.push(id);
+            }
+        }
+        Ok(ids)
+    }
+
+    /// Remove all band rows for an entity (explicit cleanup on merge-loser
+    /// delete; complements the ON DELETE CASCADE FK in case it is not honored).
+    pub async fn delete_entity_minhash_bands(&self, entity_id: &str) -> Result<(), OriginError> {
+        let conn = self.conn.lock().await;
+        conn.execute(
+            "DELETE FROM entity_minhash_bands WHERE entity_id = ?1",
+            libsql::params![entity_id.to_string()],
+        )
+        .await
+        .map_err(|e| OriginError::VectorDb(format!("delete_minhash: {e}")))?;
+        Ok(())
+    }
+
+    /// Lightweight `(name, entity_type)` fetch for a single entity id. Used by
+    /// the T16 MinHash cascade to apply the same-type guard on band candidates
+    /// without loading the full `EntityDetail` (observations etc.). Returns
+    /// `None` if the id does not exist.
+    pub async fn get_entity_name_type(
+        &self,
+        entity_id: &str,
+    ) -> Result<Option<(String, String)>, OriginError> {
+        let conn = self.conn.lock().await;
+        let mut rows = conn
+            .query(
+                "SELECT name, entity_type FROM entities WHERE id = ?1",
+                libsql::params![entity_id.to_string()],
+            )
+            .await
+            .map_err(|e| OriginError::VectorDb(format!("get_entity_name_type: {e}")))?;
+        if let Some(row) = rows
+            .next()
+            .await
+            .map_err(|e| OriginError::VectorDb(format!("get_entity_name_type row: {e}")))?
+        {
+            let name: String = row.get(0).unwrap_or_default();
+            let etype: String = row.get(1).unwrap_or_default();
+            Ok(Some((name, etype)))
+        } else {
+            Ok(None)
+        }
+    }
+
+    /// T16 "Step 2.5": deterministic MinHash/LSH near-dedup resolution.
+    ///
+    /// SHARED by `post_write::create_entity` and `importer::resolve_entity_bulk`
+    /// so the agent and bulk paths can never diverge (Risk #4). Caller must have
+    /// already checked `entity_minhash_enabled()`. Returns `Some(existing_id)`
+    /// when a same-type band candidate confirms at exact Jaccard >= 0.9 (the
+    /// caller then records a "minhash" alias and resolves to that id); `None`
+    /// when the name is low-entropy/short or no candidate confirms (caller falls
+    /// through to the vector step).
+    pub async fn minhash_resolve_candidate(
+        &self,
+        name: &str,
+        entity_type: &str,
+    ) -> Result<Option<String>, OriginError> {
+        use crate::retrieval::dedup;
+        // Entropy gate: short/low-entropy names (3-char acronyms) are punted to
+        // the vector step so the fuzzy layer never over-merges distinct names.
+        if !dedup::has_high_entropy(name) {
+            return Ok(None);
+        }
+        let bands = dedup::name_band_keys(name);
+        let candidates = self.query_entities_by_band(&bands).await?;
+        for cand_id in candidates {
+            let Some((cand_name, cand_type)) = self.get_entity_name_type(&cand_id).await? else {
+                continue;
+            };
+            // Same-type guard: never auto-merge across entity types.
+            if !cand_type.eq_ignore_ascii_case(entity_type) {
+                continue;
+            }
+            if dedup::name_jaccard(name, &cand_name) >= dedup::FUZZY_JACCARD_THRESHOLD {
+                return Ok(Some(cand_id));
+            }
+        }
+        Ok(None)
+    }
+
+    /// Index a newly created entity's band keys IFF it is high-entropy (T16).
+    /// Keeps `entity_minhash_bands` small by skipping short/low-entropy names.
+    /// Best-effort: caller has already checked `entity_minhash_enabled()`.
+    pub async fn index_entity_minhash_if_eligible(
+        &self,
+        entity_id: &str,
+        name: &str,
+    ) -> Result<(), OriginError> {
+        use crate::retrieval::dedup;
+        if !dedup::has_high_entropy(name) {
+            return Ok(());
+        }
+        let bands = dedup::name_band_keys(name);
+        self.store_entity_minhash_bands(entity_id, &bands).await
+    }
+
     /// Resolve an entity ID from an alias (case-insensitive).
     pub async fn resolve_entity_by_alias(&self, name: &str) -> Result<Option<String>, OriginError> {
         let conn = self.conn.lock().await;
@@ -10894,6 +11123,53 @@ impl MemoryDB {
             row.and_then(|r| r.get::<String>(0).ok())
         };
 
+        // T16 type-promotion inputs: read the alias (loser) type and the
+        // canonical (winner) type BEFORE the transaction so the in-txn UPDATE
+        // can promote a generic canonical to the loser's concrete type. Only
+        // generic -> concrete is ever applied (never concrete -> different
+        // concrete), so the winner's identity is preserved.
+        let alias_type: String = {
+            let mut rows = conn
+                .query(
+                    "SELECT entity_type FROM entities WHERE id = ?1",
+                    libsql::params![alias_id],
+                )
+                .await
+                .map_err(|e| {
+                    OriginError::VectorDb(format!("merge_entities read alias type: {e}"))
+                })?;
+            rows.next()
+                .await
+                .map_err(|e| OriginError::VectorDb(format!("merge_entities row: {e}")))?
+                .and_then(|r| r.get::<String>(0).ok())
+                .unwrap_or_default()
+        };
+        let canonical_type: String = {
+            let mut rows = conn
+                .query(
+                    "SELECT entity_type FROM entities WHERE id = ?1",
+                    libsql::params![canonical_id],
+                )
+                .await
+                .map_err(|e| {
+                    OriginError::VectorDb(format!("merge_entities read canonical type: {e}"))
+                })?;
+            rows.next()
+                .await
+                .map_err(|e| OriginError::VectorDb(format!("merge_entities row: {e}")))?
+                .and_then(|r| r.get::<String>(0).ok())
+                .unwrap_or_default()
+        };
+        // Generic types eligible for promotion (case-insensitive). Promote only
+        // when canonical is generic AND alias is concrete.
+        let is_generic = |t: &str| {
+            matches!(
+                t.trim().to_ascii_lowercase().as_str(),
+                "entity" | "unknown" | ""
+            )
+        };
+        let should_promote = is_generic(&canonical_type) && !is_generic(&alias_type);
+
         conn.execute("BEGIN TRANSACTION", ())
             .await
             .map_err(|e| OriginError::VectorDb(format!("merge_entities begin: {e}")))?;
@@ -10943,6 +11219,30 @@ impl MemoryDB {
                 .await
                 .map_err(|e| OriginError::VectorDb(format!("merge_entities alias register: {e}")))?;
             }
+
+            // T16 conservative type-promotion: generic canonical -> alias's
+            // concrete type. The WHERE guard re-checks both conditions in SQL so
+            // a concurrent write can't demote a concrete canonical. Never flips
+            // between two concrete types.
+            if should_promote {
+                conn.execute(
+                    "UPDATE entities SET entity_type = ?1 \
+                     WHERE id = ?2 \
+                       AND LOWER(entity_type) IN ('entity', 'unknown', '') \
+                       AND LOWER(?1) NOT IN ('entity', 'unknown', '')",
+                    libsql::params![alias_type.as_str(), canonical_id],
+                )
+                .await
+                .map_err(|e| OriginError::VectorDb(format!("merge_entities promote type: {e}")))?;
+            }
+
+            // T16 band cleanup for the loser (complements ON DELETE CASCADE).
+            conn.execute(
+                "DELETE FROM entity_minhash_bands WHERE entity_id = ?1",
+                libsql::params![alias_id],
+            )
+            .await
+            .map_err(|e| OriginError::VectorDb(format!("merge_entities band cleanup: {e}")))?;
 
             conn.execute(
                 "DELETE FROM entity_aliases WHERE canonical_entity_id = ?1",
@@ -32125,6 +32425,116 @@ pub(crate) mod tests {
         );
     }
 
+    // ── T16: type-promotion-on-merge + band cleanup ─────────────────────────
+
+    async fn entity_type_of(db: &MemoryDB, id: &str) -> String {
+        db.get_entity_name_type(id).await.unwrap().unwrap().1
+    }
+
+    #[tokio::test]
+    async fn merge_entities_promotes_generic_to_specific() {
+        let (db, _tmp) = test_db().await;
+        let canonical = db
+            .store_entity("Widget", "entity", None, Some("t"), None)
+            .await
+            .unwrap();
+        let alias = db
+            .store_entity("Widget Inc", "database", None, Some("t"), None)
+            .await
+            .unwrap();
+        db.merge_entities(&canonical, &alias).await.unwrap();
+        assert_eq!(
+            entity_type_of(&db, &canonical).await,
+            "database",
+            "generic canonical must be promoted to the alias concrete type"
+        );
+    }
+
+    #[tokio::test]
+    async fn merge_entities_no_demote_specific() {
+        let (db, _tmp) = test_db().await;
+        let canonical = db
+            .store_entity("Widget", "database", None, Some("t"), None)
+            .await
+            .unwrap();
+        let alias = db
+            .store_entity("Widget Inc", "entity", None, Some("t"), None)
+            .await
+            .unwrap();
+        db.merge_entities(&canonical, &alias).await.unwrap();
+        assert_eq!(
+            entity_type_of(&db, &canonical).await,
+            "database",
+            "concrete canonical must NOT be demoted to a generic alias type"
+        );
+    }
+
+    #[tokio::test]
+    async fn merge_entities_no_flip_between_concrete() {
+        let (db, _tmp) = test_db().await;
+        let canonical = db
+            .store_entity("Widget", "language", None, Some("t"), None)
+            .await
+            .unwrap();
+        let alias = db
+            .store_entity("Widget Inc", "library", None, Some("t"), None)
+            .await
+            .unwrap();
+        db.merge_entities(&canonical, &alias).await.unwrap();
+        assert_eq!(
+            entity_type_of(&db, &canonical).await,
+            "language",
+            "concrete -> different-concrete must never flip"
+        );
+    }
+
+    #[tokio::test]
+    async fn merge_entities_band_cleanup() {
+        let (db, _tmp) = test_db().await;
+        let canonical = db
+            .store_entity(
+                "Vorpalblade Jabberwock Inc",
+                "project",
+                None,
+                Some("t"),
+                None,
+            )
+            .await
+            .unwrap();
+        let alias = db
+            .store_entity(
+                "Vorpalblade Jabberwock Ino",
+                "project",
+                None,
+                Some("t"),
+                None,
+            )
+            .await
+            .unwrap();
+        let alias_bands = crate::retrieval::dedup::name_band_keys("Vorpalblade Jabberwock Ino");
+        db.store_entity_minhash_bands(
+            &canonical,
+            &crate::retrieval::dedup::name_band_keys("Vorpalblade Jabberwock Inc"),
+        )
+        .await
+        .unwrap();
+        db.store_entity_minhash_bands(&alias, &alias_bands)
+            .await
+            .unwrap();
+        db.merge_entities(&canonical, &alias).await.unwrap();
+        // No band row may still point at the deleted loser.
+        let conn = db.conn.lock().await;
+        let mut rows = conn
+            .query(
+                "SELECT COUNT(*) FROM entity_minhash_bands WHERE entity_id = ?1",
+                libsql::params![alias.clone()],
+            )
+            .await
+            .unwrap();
+        let dangling: i64 = rows.next().await.unwrap().unwrap().get(0).unwrap();
+        assert_eq!(dangling, 0, "loser band rows must be removed after merge");
+    }
+
     #[tokio::test]
     async fn merge_entities_same_id_validation_error() {
         let (db, _tmp) = test_db().await;
@@ -35285,7 +35695,9 @@ pub(crate) mod tests {
         let mut vrows = conn.query("PRAGMA user_version", ()).await.unwrap();
         let uv: i64 = vrows.next().await.unwrap().unwrap().get(0).unwrap();
         assert_eq!(uv as u32, crate::db::SCHEMA_VERSION);
-        assert_eq!(uv, 56);
+        // test_db() runs the full migration ladder, so the terminal version is
+        // the current SCHEMA_VERSION (57 after T16 entity_minhash_bands).
+        assert_eq!(uv, 57);
     }
 
     #[tokio::test]
@@ -35302,9 +35714,144 @@ pub(crate) mod tests {
         let mut vrows = conn.query("PRAGMA user_version", ()).await.unwrap();
         let uv: i64 = vrows.next().await.unwrap().unwrap().get(0).unwrap();
         assert_eq!(
-            uv, 56,
-            "user_version restored to 56 after idempotent re-run"
+            uv, 57,
+            "user_version restored to current terminal version after idempotent re-run"
         );
+    }
+
+    // -- T16 migration 57: entity_minhash_bands --
+
+    #[tokio::test]
+    async fn migration_57_creates_band_table() {
+        let (db, _dir) = test_db().await;
+        let conn = db.conn.lock().await;
+        let mut rows = conn
+            .query(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='entity_minhash_bands'",
+                (),
+            )
+            .await
+            .unwrap();
+        let present: i64 = rows.next().await.unwrap().unwrap().get(0).unwrap();
+        assert_eq!(present, 1, "entity_minhash_bands table should exist");
+        drop(rows);
+        let mut irows = conn
+            .query(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='index' AND name='idx_minhash_band_key'",
+                (),
+            )
+            .await
+            .unwrap();
+        let idx: i64 = irows.next().await.unwrap().unwrap().get(0).unwrap();
+        assert_eq!(idx, 1, "idx_minhash_band_key should exist");
+        drop(irows);
+        let mut vrows = conn.query("PRAGMA user_version", ()).await.unwrap();
+        let uv: i64 = vrows.next().await.unwrap().unwrap().get(0).unwrap();
+        assert_eq!(uv as u32, crate::db::SCHEMA_VERSION);
+        assert_eq!(uv, 57);
+    }
+
+    #[tokio::test]
+    async fn migration_57_idempotent() {
+        let (db, _dir) = test_db().await;
+        {
+            let conn = db.conn.lock().await;
+            conn.execute("PRAGMA user_version = 56", ()).await.unwrap();
+        }
+        db.run_migrations(&crate::events::NoopEmitter)
+            .await
+            .expect("re-run migrations idempotent");
+        let conn = db.conn.lock().await;
+        let mut vrows = conn.query("PRAGMA user_version", ()).await.unwrap();
+        let uv: i64 = vrows.next().await.unwrap().unwrap().get(0).unwrap();
+        assert_eq!(
+            uv, 57,
+            "user_version restored to 57 after idempotent re-run"
+        );
+    }
+
+    #[tokio::test]
+    async fn store_and_query_minhash_bands_roundtrip() {
+        let (db, _dir) = test_db().await;
+        let eid = db
+            .store_entity("PostgreSQL", "database", None, Some("test"), None)
+            .await
+            .unwrap();
+        let bands = crate::retrieval::dedup::name_band_keys("PostgreSQL");
+        db.store_entity_minhash_bands(&eid, &bands).await.unwrap();
+        // Query with the same bands returns the entity.
+        let hits = db.query_entities_by_band(&bands).await.unwrap();
+        assert!(
+            hits.contains(&eid),
+            "stored entity must be found by its own bands"
+        );
+        // Query with a single overlapping band still returns it.
+        let one = db.query_entities_by_band(&bands[..1]).await.unwrap();
+        assert!(one.contains(&eid), "single overlapping band must hit");
+    }
+
+    #[tokio::test]
+    async fn query_entities_by_band_no_match_empty() {
+        let (db, _dir) = test_db().await;
+        let eid = db
+            .store_entity("PostgreSQL", "database", None, Some("test"), None)
+            .await
+            .unwrap();
+        let bands = crate::retrieval::dedup::name_band_keys("PostgreSQL");
+        db.store_entity_minhash_bands(&eid, &bands).await.unwrap();
+        // Disjoint synthetic band keys: must return empty.
+        let disjoint: Vec<u64> = vec![1, 2, 3];
+        let hits = db.query_entities_by_band(&disjoint).await.unwrap();
+        assert!(hits.is_empty(), "disjoint bands must return empty Vec");
+        // Empty input returns empty.
+        let none = db.query_entities_by_band(&[]).await.unwrap();
+        assert!(none.is_empty());
+    }
+
+    #[tokio::test]
+    async fn delete_entity_minhash_bands_removes_rows() {
+        let (db, _dir) = test_db().await;
+        let eid = db
+            .store_entity("PostgreSQL", "database", None, Some("test"), None)
+            .await
+            .unwrap();
+        let bands = crate::retrieval::dedup::name_band_keys("PostgreSQL");
+        db.store_entity_minhash_bands(&eid, &bands).await.unwrap();
+        db.delete_entity_minhash_bands(&eid).await.unwrap();
+        let hits = db.query_entities_by_band(&bands).await.unwrap();
+        assert!(
+            !hits.contains(&eid),
+            "deleted entity must not be found by its bands"
+        );
+    }
+
+    #[tokio::test]
+    async fn entity_minhash_enabled_treats_zero_and_unset_as_disabled() {
+        for value in [None, Some("0"), Some("false"), Some("no"), Some("")] {
+            let got = temp_env::async_with_vars([("ORIGIN_ENABLE_ENTITY_MINHASH", value)], async {
+                entity_minhash_enabled()
+            })
+            .await;
+            assert!(
+                !got,
+                "ORIGIN_ENABLE_ENTITY_MINHASH={value:?} must leave cascade disabled"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn entity_minhash_enabled_accepts_truthy_synonyms() {
+        for value in ["1", "true", "YES", "True"] {
+            let got =
+                temp_env::async_with_vars([("ORIGIN_ENABLE_ENTITY_MINHASH", Some(value))], async {
+                    entity_minhash_enabled()
+                })
+                .await;
+            assert!(
+                got,
+                "ORIGIN_ENABLE_ENTITY_MINHASH={value} must enable cascade"
+            );
+        }
     }
 
     // -- Phase 3: co-write inside upsert_documents --
