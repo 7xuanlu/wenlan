@@ -11,6 +11,7 @@ pub(crate) mod fact_channel;
 pub(crate) mod fts_query;
 pub(crate) mod hard_filters;
 pub(crate) mod integrity;
+pub(crate) mod prf;
 pub(crate) mod query_intent;
 pub(crate) mod resolve;
 pub(crate) mod session_diversity;
