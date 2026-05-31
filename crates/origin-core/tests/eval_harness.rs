@@ -706,6 +706,83 @@ async fn graph_gate_ab_locomo() {
     );
 }
 
+/// T12 FTS-hardening A/B on BOTH benches (retrieval-only). Hardening only changes
+/// special-char/overlong queries (absent from clean LoCoMo/LME), so the expected
+/// result is delta about 0 — this confirms no-regression on clean-query benchmarks.
+#[tokio::test]
+#[ignore = "needs cached scenario DBs; retrieval-only, no GPU"]
+async fn fts_hardening_ab_dualbench() {
+    use origin_core::eval::locomo::run_locomo_eval_from_db;
+    use origin_core::eval::longmemeval::run_longmemeval_eval_from_db;
+    let root = resolve_scenario_db_root_from_harness();
+
+    let lo_dir = root.join("locomo_v1");
+    if lo_dir.join("origin_memory.db").exists() {
+        let fx = eval_root().join("data/locomo10.json");
+        if fx.exists() {
+            let db = origin_core::db::MemoryDB::new(
+                &lo_dir,
+                std::sync::Arc::new(origin_core::events::NoopEmitter),
+            )
+            .await
+            .unwrap();
+            let off = temp_env::async_with_vars(
+                [("ORIGIN_ENABLE_FTS_HARDENING", None::<&str>)],
+                run_locomo_eval_from_db(&db, &fx),
+            )
+            .await
+            .unwrap();
+            let on = temp_env::async_with_vars(
+                [("ORIGIN_ENABLE_FTS_HARDENING", Some("1"))],
+                run_locomo_eval_from_db(&db, &fx),
+            )
+            .await
+            .unwrap();
+            println!(
+                "[FTS A/B LoCoMo] q={} ndcg@10 off={:.4} on={:.4} d={:+.4} | recall@5 d={:+.4}",
+                off.total_questions,
+                off.aggregate_ndcg_at_10,
+                on.aggregate_ndcg_at_10,
+                on.aggregate_ndcg_at_10 - off.aggregate_ndcg_at_10,
+                on.aggregate_recall_at_5 - off.aggregate_recall_at_5
+            );
+        }
+    }
+
+    let lme_dir = root.join("lme_v1");
+    if lme_dir.join("origin_memory.db").exists() {
+        let fx = eval_root().join("data/longmemeval_oracle.json");
+        if fx.exists() {
+            let db = origin_core::db::MemoryDB::new(
+                &lme_dir,
+                std::sync::Arc::new(origin_core::events::NoopEmitter),
+            )
+            .await
+            .unwrap();
+            let off = temp_env::async_with_vars(
+                [("ORIGIN_ENABLE_FTS_HARDENING", None::<&str>)],
+                run_longmemeval_eval_from_db(&db, &fx),
+            )
+            .await
+            .unwrap();
+            let on = temp_env::async_with_vars(
+                [("ORIGIN_ENABLE_FTS_HARDENING", Some("1"))],
+                run_longmemeval_eval_from_db(&db, &fx),
+            )
+            .await
+            .unwrap();
+            println!(
+                "[FTS A/B LME] q={} ndcg@10 off={:.4} on={:.4} d={:+.4} | recall@5 d={:+.4}",
+                off.total_questions,
+                off.aggregate_ndcg_at_10,
+                on.aggregate_ndcg_at_10,
+                on.aggregate_ndcg_at_10 - off.aggregate_ndcg_at_10,
+                on.aggregate_recall_at_5 - off.aggregate_recall_at_5
+            );
+        }
+    }
+}
+
 /// T3 graph-gate A/B experiment on LongMemEval (retrieval-only, no GPU LLM).
 /// Dual-bench companion to `graph_gate_ab_locomo` so T3 is validated on BOTH
 /// metrics, not a partial view.
