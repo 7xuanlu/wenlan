@@ -13,6 +13,7 @@ pub mod knowledge_routes;
 pub mod memory_routes;
 pub mod onboarding_routes;
 pub mod refinery_routes;
+pub mod reflection_debounce;
 pub mod router;
 pub mod routes;
 pub mod scheduler;

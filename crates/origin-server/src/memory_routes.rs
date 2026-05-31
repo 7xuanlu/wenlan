@@ -737,7 +737,14 @@ pub async fn handle_store_memory(
         let agent_supplied_memory_type = caller_supplied_memory_type;
         let agent_supplied_profile_alias = caller_supplied_a_profile_alias;
         let agent_supplied_structured_fields = caller_supplied_structured_fields;
-        tokio::spawn(async move {
+        // Deferred-enrichment body, parameterised on a cooperative-cancel flag.
+        // `cancel = None` (the default-OFF path) keeps every step running to
+        // completion exactly as before. When debounced reflection is enabled,
+        // the debouncer passes `Some(flag)` and flips it on a newer same-agent
+        // write so this body short-circuits at the next clean step boundary.
+        let run_reflection = move |cancel: Option<
+            std::sync::Arc<std::sync::atomic::AtomicBool>,
+        >| async move {
             // Snapshot everything we need, then drop the guard.
             let (db, llm, prompts, refinery, distillation, knowledge_path) = {
                 let s = state_clone.read().await;
@@ -916,6 +923,7 @@ pub async fn handle_store_memory(
                 &refinery,
                 &distillation,
                 knowledge_path.as_deref(),
+                cancel.as_deref(),
             )
             .await
             {
@@ -965,7 +973,34 @@ pub async fn handle_store_memory(
                     }
                 }
             }
-        });
+        };
+
+        // Dispatch: opt-in debounced reflection vs. verbatim detached spawn.
+        //
+        // Default OFF (`ORIGIN_ENABLE_REFLECTION_DEBOUNCE` unset/falsey): spawn
+        // immediately with `cancel = None` — byte-identical to the pre-T22 path
+        // (no debouncer touched, no coalescing, every store gets its own task).
+        //
+        // ON: route through the per-agent `ReflectionDebouncer`. A burst of
+        // rapid same-agent stores collapses to a single reflection of the last
+        // write — earlier in-flight reflections are cancelled at a clean step
+        // boundary, never dropped (the latest always runs). Snapshot the
+        // debouncer handle + window from the read guard, then DROP the guard
+        // before scheduling so no RwLock guard is held across the spawn/await.
+        if origin_core::db::reflection_debounce_enabled() {
+            let (debouncer, window) = {
+                let s = state.read().await;
+                (
+                    s.reflection_debouncer.clone(),
+                    std::time::Duration::from_secs(s.tuning.refinery.reflection_debounce_secs),
+                )
+            };
+            debouncer.schedule(&resolved_agent, window, move |flag| {
+                run_reflection(Some(flag))
+            });
+        } else {
+            tokio::spawn(run_reflection(None));
+        }
     }
 
     // Fire-once onboarding milestone checks (ingest side).
