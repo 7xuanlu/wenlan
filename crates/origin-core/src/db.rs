@@ -27,7 +27,7 @@ pub const EMBEDDING_DIM: usize = 768;
 
 /// Current DB schema version (highest `PRAGMA user_version` applied by `migrate()`).
 /// Bump this whenever a new migration lands. Used as an eval cache invalidation key.
-pub const SCHEMA_VERSION: u32 = 58;
+pub const SCHEMA_VERSION: u32 = 59;
 
 /// Shared embedder reference. Pass to [`MemoryDB::new_with_shared_embedder`] to
 /// reuse a single embedder across many `MemoryDB` instances. Created via
@@ -422,6 +422,27 @@ pub fn compute_rerank_fetch_pool(
 /// the var to a truthy value; any other value or unset = disabled.
 pub fn page_channel_enabled() -> bool {
     std::env::var("ORIGIN_ENABLE_PAGE_CHANNEL")
+        .ok()
+        .map(|v| matches!(v.trim().to_ascii_lowercase().as_str(), "1" | "true" | "yes"))
+        .unwrap_or(false)
+}
+
+/// True iff `ORIGIN_ENABLE_GLOBAL_PRELUDE` is set to a truthy value
+/// (`1`, `true`, or `yes`, case-insensitive). T18 hierarchical global-context
+/// prelude is OPT-IN, default OFF (ship-dark): unset or a falsey value
+/// (`0`/`false`/`no`/"") leaves both the refinery build path and
+/// [`MemoryDB::search_memory_cross_rerank`] byte-identical to pre-T18 (no
+/// summary build, no `source="summary"` rows prepended, no extra read query).
+///
+/// When enabled, the refinery's `SummaryRollup` phase builds per-bucket +
+/// root `summary_nodes`, and the read path prepends them as a corpus-overview
+/// prelude (excluded from the reranker candidate pool and from positions
+/// `[0, limit)` of the gold-id window). All call sites (build-phase guard,
+/// read gate, production `## Corpus Overview` section, any future eval tag)
+/// MUST share this helper so the env var cannot disagree between production and
+/// eval (which would make baseline filenames lie). Mirrors [`page_channel_enabled`].
+pub fn global_prelude_enabled() -> bool {
+    std::env::var("ORIGIN_ENABLE_GLOBAL_PRELUDE")
         .ok()
         .map(|v| matches!(v.trim().to_ascii_lowercase().as_str(), "1" | "true" | "yes"))
         .unwrap_or(false)
@@ -913,6 +934,20 @@ pub struct PageSourceIndex {
     pub page_id: String,
     pub page_title: String,
     pub source_set: std::collections::HashSet<String>,
+}
+
+/// A T18 summary node loaded for the read-time global-context prelude.
+/// `level=0` is a per-bucket rollup (keyed on `community_id`); `level=1` is the
+/// single root rollup over all buckets.
+#[derive(Debug, Clone)]
+pub struct SummaryNode {
+    pub id: String,
+    pub level: i64,
+    pub bucket_key: Option<String>,
+    pub title: String,
+    pub body: String,
+    pub source_count: i64,
+    pub generated_at: i64,
 }
 
 /// Same Jaccard scoring as `find_best_overlapping_page` but against a
@@ -5452,6 +5487,84 @@ impl MemoryDB {
                     .map_err(|e| OriginError::VectorDb(format!("m58 bump: {e}")))?;
                 log::info!("[migration] Migration 58 applied: child_vectors table + idx_child_vectors_parent + child_vectors_vec_idx (T15a fact channel)");
             }
+
+            // Migration 59: T18 hierarchical global-context prelude tables.
+            // `summary_nodes` holds per-bucket (level=0) + root (level=1) rollup
+            // summaries; `summary_node_sources` records the provenance memory
+            // ids each node was built from (for source-expanded coverage credit
+            // + the space-filter overlap gate). FTS5 + DiskANN mirror the pages
+            // channel. Shipped dark — the build/read paths are gated behind
+            // `global_prelude_enabled()`, so an empty table is the default.
+            if version < 59 {
+                let conn = self.conn.lock().await;
+                conn.execute_batch(
+                    "
+                    CREATE TABLE IF NOT EXISTS summary_nodes (
+                        id TEXT PRIMARY KEY,
+                        level INTEGER NOT NULL,
+                        bucket_key TEXT,
+                        title TEXT NOT NULL,
+                        body TEXT NOT NULL,
+                        embedding F32_BLOB(768),
+                        source_count INTEGER NOT NULL DEFAULT 0,
+                        generated_at INTEGER NOT NULL,
+                        status TEXT NOT NULL DEFAULT 'active'
+                    );
+                    CREATE TABLE IF NOT EXISTS summary_node_sources (
+                        node_id TEXT NOT NULL REFERENCES summary_nodes(id) ON DELETE CASCADE,
+                        memory_source_id TEXT NOT NULL,
+                        PRIMARY KEY (node_id, memory_source_id)
+                    );
+                    CREATE INDEX IF NOT EXISTS idx_summary_nodes_level ON summary_nodes(level);
+                    CREATE INDEX IF NOT EXISTS idx_summary_node_sources_memory
+                        ON summary_node_sources(memory_source_id);
+                    ",
+                )
+                .await
+                .map_err(|e| OriginError::VectorDb(format!("m59 tables: {e}")))?;
+
+                // FTS5 contentless mirror + triggers (copied from the pages FTS
+                // block). IF NOT EXISTS so a re-run is idempotent.
+                conn.execute_batch(
+                    "
+                    CREATE VIRTUAL TABLE IF NOT EXISTS summary_nodes_fts USING fts5(
+                        title, body, content='summary_nodes', content_rowid='rowid'
+                    );
+                    CREATE TRIGGER IF NOT EXISTS summary_nodes_fts_insert AFTER INSERT ON summary_nodes BEGIN
+                        INSERT INTO summary_nodes_fts(rowid, title, body)
+                        VALUES (NEW.rowid, NEW.title, NEW.body);
+                    END;
+                    CREATE TRIGGER IF NOT EXISTS summary_nodes_fts_delete AFTER DELETE ON summary_nodes BEGIN
+                        INSERT INTO summary_nodes_fts(summary_nodes_fts, rowid, title, body)
+                        VALUES ('delete', OLD.rowid, OLD.title, OLD.body);
+                    END;
+                    CREATE TRIGGER IF NOT EXISTS summary_nodes_fts_update AFTER UPDATE OF title, body ON summary_nodes BEGIN
+                        INSERT INTO summary_nodes_fts(summary_nodes_fts, rowid, title, body)
+                        VALUES ('delete', OLD.rowid, OLD.title, OLD.body);
+                        INSERT INTO summary_nodes_fts(rowid, title, body)
+                        VALUES (NEW.rowid, NEW.title, NEW.body);
+                    END;
+                    ",
+                )
+                .await
+                .map_err(|e| OriginError::VectorDb(format!("m59 fts: {e}")))?;
+
+                // DiskANN vector index OUTSIDE any transaction (mirror m58 + m46
+                // Phase L). IF NOT EXISTS so a partial-apply re-run is safe.
+                conn.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_summary_nodes_embedding ON summary_nodes (
+                        libsql_vector_idx(embedding, 'metric=cosine', 'compress_neighbors=float8', 'max_neighbors=32')
+                    )",
+                    (),
+                )
+                .await
+                .map_err(|e| OriginError::VectorDb(format!("m59 vec idx: {e}")))?;
+
+                conn.execute("PRAGMA user_version = 59", ())
+                    .await
+                    .map_err(|e| OriginError::VectorDb(format!("m59 bump: {e}")))?;
+                log::info!("[migration] Migration 59 applied: summary_nodes + summary_node_sources + summary_nodes_fts + idx_summary_nodes_embedding (T18 global prelude)");
+            }
         }
 
         Ok(())
@@ -8615,6 +8728,7 @@ impl MemoryDB {
             std::env::var("RERANK_POOL_FLOOR").ok().as_deref(),
         );
         let page_channel_enabled = page_channel_enabled();
+        let global_prelude_enabled = global_prelude_enabled();
 
         let memory_results = self
             .search_memory(
@@ -8686,6 +8800,54 @@ impl MemoryDB {
             filtered
         } else {
             page_results
+        };
+
+        // T18 global-context prelude (opt-in, ship-dark). Fetch summary nodes
+        // BEFORE the rerank but keep them OUT of the score_map/rerank pool and
+        // out of positions [0, limit): summaries carry no gold leaf id, so
+        // letting them compete is the exact regression that forced pages from
+        // compete -> partition. They ride a prepend instead (see below).
+        // Log-and-degrade on failure (never silent-zero the memory pool).
+        let summary_nodes: Vec<SummaryNode> = if global_prelude_enabled {
+            match self
+                .search_summary_nodes(query, crate::refinery::summary::bucket_k())
+                .await
+            {
+                Ok(v) => v,
+                Err(e) => {
+                    log::warn!("[memory_db] global prelude degraded: {e}; continuing");
+                    Vec::new()
+                }
+            }
+        } else {
+            Vec::new()
+        };
+        // Space-filter overlap gate (mirrors the page gate above): a summary
+        // node surfaces iff >=1 of its provenance memories survived the
+        // memory-side filter. Without this, a root spanning all buckets could
+        // leak cross-space when filters are active.
+        let summary_nodes: Vec<SummaryNode> = if filters_active && !summary_nodes.is_empty() {
+            let allowed_memory_ids: std::collections::HashSet<String> =
+                memory_results.iter().map(|r| r.source_id.clone()).collect();
+            let mut filtered = Vec::with_capacity(summary_nodes.len());
+            for node in summary_nodes {
+                let sources = match self.get_summary_node_sources(&node.id).await {
+                    Ok(v) => v,
+                    Err(e) => {
+                        log::warn!(
+                            "[memory_db] summary_node_sources lookup failed for {}: {e}; dropping",
+                            node.id
+                        );
+                        continue;
+                    }
+                };
+                if sources.iter().any(|s| allowed_memory_ids.contains(s)) {
+                    filtered.push(node);
+                }
+            }
+            filtered
+        } else {
+            summary_nodes
         };
 
         // T2 episode-channel (opt-in 5th RRF stream). Log-and-degrade on
@@ -8894,10 +9056,24 @@ impl MemoryDB {
             );
         }
         results.truncate(limit);
+        // T18: PREPEND the global-context prelude. Summary rows lead the
+        // output so production consumers see corpus orientation first; they
+        // were never added to the score_map/rerank pool above (they carry no
+        // gold leaf id), so this prepend cannot displace a memory inside the
+        // reranked gold-id window. `summary_nodes` is empty unless the flag is
+        // on, so the default path is byte-identical (no prepend, no reorder).
+        let prelude_rows: Vec<SearchResult> = summary_nodes
+            .into_iter()
+            .map(Self::search_result_from_summary)
+            .collect();
+        let mut out: Vec<SearchResult> =
+            Vec::with_capacity(prelude_rows.len() + results.len() + page_results.len());
+        out.extend(prelude_rows);
+        out.extend(results);
         // Append top-K pages after the memory limit. K = configured pool
         // size (already capped upstream by page_channel_limit()).
-        results.extend(page_results);
-        Ok(results)
+        out.extend(page_results);
+        Ok(out)
     }
 
     /// Hybrid search with LLM-based query expansion BEFORE search.
@@ -10167,6 +10343,330 @@ impl MemoryDB {
             source_text: None,
             raw_score: page.relevance_score,
             version: page.version,
+            pending_revision: false,
+            merged_from: None,
+            last_delta_summary: None,
+        }
+    }
+
+    // ==================== T18 summary_nodes (global prelude) ====================
+
+    /// Truncate `body` to a conservative BGE-512-token window (char-based,
+    /// matching the codebase idiom) and embed it. Keeps the full body for
+    /// display; only the embedded text is truncated (RISK 3 in T18 plan).
+    pub fn embed_for_summary(&self, body: &str) -> Result<Vec<f32>, OriginError> {
+        // ~2000 chars is a conservative floor for the 512-token BGE window.
+        let truncated: String = body.chars().take(2000).collect();
+        self.get_or_compute_embedding(&truncated)
+    }
+
+    /// Load eligible memories grouped by `entities.community_id` for the T18
+    /// summary-rollup build. Mirrors the distillation cluster-fetch filter
+    /// (active, non-recap, non-archived, embedded). Memories with no community
+    /// (NULL `community_id`) are skipped — they can't seed a content-derived
+    /// bucket. Returns `(community_id, members)` pairs.
+    pub async fn load_summary_buckets(
+        &self,
+    ) -> Result<Vec<(u32, Vec<crate::refinery::summary::SummaryMember>)>, OriginError> {
+        use crate::refinery::summary::SummaryMember;
+        let conn = self.conn.lock().await;
+        let mut rows = conn
+            .query(
+                "SELECT m.source_id, m.title, m.content, e.community_id \
+                 FROM memories m \
+                 JOIN entities e ON m.entity_id = e.id \
+                 WHERE m.source = 'memory' AND m.chunk_index = 0 \
+                   AND m.is_recap = 0 \
+                   AND m.supersede_mode <> 'archive' \
+                   AND m.source_id NOT LIKE 'merged_%' \
+                   AND m.source_id NOT LIKE 'recap_%' \
+                   AND m.embedding IS NOT NULL \
+                   AND e.community_id IS NOT NULL \
+                 ORDER BY e.community_id, m.last_modified DESC",
+                (),
+            )
+            .await
+            .map_err(|e| OriginError::VectorDb(format!("load_summary_buckets: {e}")))?;
+
+        let mut groups: std::collections::BTreeMap<u32, Vec<SummaryMember>> =
+            std::collections::BTreeMap::new();
+        while let Some(row) = rows
+            .next()
+            .await
+            .map_err(|e| OriginError::VectorDb(e.to_string()))?
+        {
+            let source_id: String = row
+                .get(0)
+                .map_err(|e| OriginError::VectorDb(e.to_string()))?;
+            let title: String = row.get(1).unwrap_or_default();
+            let content: String = row
+                .get(2)
+                .map_err(|e| OriginError::VectorDb(e.to_string()))?;
+            let community_id: u32 = match row.get::<u32>(3) {
+                Ok(c) => c,
+                Err(_) => continue,
+            };
+            groups.entry(community_id).or_default().push(SummaryMember {
+                source_id,
+                title,
+                content,
+            });
+        }
+        drop(rows);
+        drop(conn);
+        Ok(groups.into_iter().collect())
+    }
+
+    /// Delete all summary nodes (ON DELETE CASCADE wipes summary_node_sources).
+    /// Used by the rebuild path for a clean delete+reinsert.
+    pub async fn clear_summary_nodes(&self) -> Result<(), OriginError> {
+        let conn = self.conn.lock().await;
+        conn.execute("DELETE FROM summary_nodes", ())
+            .await
+            .map_err(|e| OriginError::VectorDb(format!("clear_summary_nodes: {e}")))?;
+        Ok(())
+    }
+
+    /// Insert one summary node + its provenance source rows. Wraps the multi-row
+    /// source insert in BEGIN/COMMIT (batch-SQL convention).
+    #[allow(clippy::too_many_arguments)]
+    pub async fn insert_summary_node(
+        &self,
+        id: &str,
+        level: i64,
+        bucket_key: Option<&str>,
+        title: &str,
+        body: &str,
+        embedding: &[f32],
+        source_count: i64,
+        generated_at: i64,
+        sources: &[String],
+    ) -> Result<(), OriginError> {
+        let vec_str = Self::vec_to_sql(embedding);
+        let conn = self.conn.lock().await;
+        conn.execute(
+            "INSERT OR REPLACE INTO summary_nodes \
+             (id, level, bucket_key, title, body, embedding, source_count, generated_at, status) \
+             VALUES (?1, ?2, ?3, ?4, ?5, vector32(?6), ?7, ?8, 'active')",
+            libsql::params![
+                id.to_string(),
+                level,
+                bucket_key.map(|s| s.to_string()),
+                title.to_string(),
+                body.to_string(),
+                vec_str,
+                source_count,
+                generated_at
+            ],
+        )
+        .await
+        .map_err(|e| OriginError::VectorDb(format!("insert_summary_node: {e}")))?;
+
+        if !sources.is_empty() {
+            conn.execute("BEGIN", ()).await.map_err(|e| {
+                OriginError::VectorDb(format!("insert_summary_node srcs begin: {e}"))
+            })?;
+            for src in sources {
+                conn.execute(
+                    "INSERT OR IGNORE INTO summary_node_sources (node_id, memory_source_id) \
+                     VALUES (?1, ?2)",
+                    libsql::params![id.to_string(), src.clone()],
+                )
+                .await
+                .map_err(|e| OriginError::VectorDb(format!("insert_summary_node src: {e}")))?;
+            }
+            conn.execute("COMMIT", ()).await.map_err(|e| {
+                OriginError::VectorDb(format!("insert_summary_node srcs commit: {e}"))
+            })?;
+        }
+        Ok(())
+    }
+
+    /// Provenance source ids a summary node was built from. Mirrors
+    /// `get_page_sources` — feeds source-expanded coverage credit + the
+    /// space-filter overlap gate.
+    pub async fn get_summary_node_sources(
+        &self,
+        node_id: &str,
+    ) -> Result<Vec<String>, OriginError> {
+        let conn = self.conn.lock().await;
+        let mut rows = conn
+            .query(
+                "SELECT memory_source_id FROM summary_node_sources WHERE node_id = ?1",
+                libsql::params![node_id.to_string()],
+            )
+            .await
+            .map_err(|e| OriginError::VectorDb(format!("get_summary_node_sources: {e}")))?;
+        let mut out = Vec::new();
+        while let Some(row) = rows
+            .next()
+            .await
+            .map_err(|e| OriginError::VectorDb(e.to_string()))?
+        {
+            out.push(
+                row.get::<String>(0)
+                    .map_err(|e| OriginError::VectorDb(e.to_string()))?,
+            );
+        }
+        Ok(out)
+    }
+
+    /// Retrieve summary nodes for the read-time prelude. ALWAYS returns the
+    /// single `level=1` root node (not vector-gated), plus up to `k` vector- +
+    /// FTS-matched `level=0` bucket nodes (RRF-merged), root first. Empty table
+    /// returns `Vec::new()` and never errors (graceful-degrade contract).
+    pub async fn search_summary_nodes(
+        &self,
+        query: &str,
+        k: usize,
+    ) -> Result<Vec<SummaryNode>, OriginError> {
+        let embedding = self.get_or_compute_embedding(query)?;
+        let vec_str = Self::vec_to_sql(&embedding);
+        let fetch_limit = (k.max(1) * 3) as i64;
+
+        let conn = self.conn.lock().await;
+
+        let select = "s.id, s.level, s.bucket_key, s.title, s.body, s.source_count, s.generated_at";
+
+        // Root node (always included, not vector-gated).
+        let mut root: Option<SummaryNode> = None;
+        if let Ok(mut rows) = conn
+            .query(
+                &format!(
+                    "SELECT {select} FROM summary_nodes s \
+                     WHERE s.level = 1 AND s.status = 'active' LIMIT 1"
+                ),
+                (),
+            )
+            .await
+        {
+            if let Ok(Some(row)) = rows.next().await {
+                root = Self::row_to_summary_node(&row).ok();
+            }
+        }
+
+        // Vector-matched bucket nodes.
+        let mut ranked: std::collections::HashMap<String, (f32, SummaryNode)> =
+            std::collections::HashMap::new();
+        let vec_sql = format!(
+            "SELECT {select}, vector_distance_cos(s.embedding, vector32(?1)) AS dist \
+             FROM vector_top_k('idx_summary_nodes_embedding', vector32(?1), ?2) AS vt \
+             JOIN summary_nodes s ON s.rowid = vt.id \
+             WHERE s.level = 0 AND s.status = 'active'"
+        );
+        if let Ok(mut rows) = conn
+            .query(&vec_sql, libsql::params![vec_str.clone(), fetch_limit])
+            .await
+        {
+            let mut rank = 0usize;
+            while let Ok(Some(row)) = rows.next().await {
+                if let Ok(node) = Self::row_to_summary_node(&row) {
+                    let rrf = 1.0 / (60.0 + rank as f32);
+                    ranked.entry(node.id.clone()).or_insert((rrf, node));
+                    rank += 1;
+                }
+            }
+        }
+
+        // FTS-matched bucket nodes (RRF-merged with vector).
+        use crate::retrieval::fts_query::sanitize_fts_query;
+        let fts_q = sanitize_fts_query(query);
+        let fts_sql = format!(
+            "SELECT {select} FROM summary_nodes s \
+             JOIN summary_nodes_fts f ON s.rowid = f.rowid \
+             WHERE summary_nodes_fts MATCH ?1 AND s.level = 0 AND s.status = 'active' \
+             ORDER BY rank LIMIT ?2"
+        );
+        if let Ok(mut rows) = conn
+            .query(&fts_sql, libsql::params![fts_q, fetch_limit])
+            .await
+        {
+            let mut rank = 0usize;
+            while let Ok(Some(row)) = rows.next().await {
+                if let Ok(node) = Self::row_to_summary_node(&row) {
+                    let rrf = 1.0 / (60.0 + rank as f32);
+                    ranked
+                        .entry(node.id.clone())
+                        .and_modify(|(s, _)| *s += rrf)
+                        .or_insert((rrf, node));
+                    rank += 1;
+                }
+            }
+        }
+        drop(conn);
+
+        let mut buckets: Vec<(f32, SummaryNode)> = ranked.into_values().collect();
+        buckets.sort_by(|a, b| {
+            b.0.partial_cmp(&a.0)
+                .unwrap_or(std::cmp::Ordering::Equal)
+                .then_with(|| a.1.id.cmp(&b.1.id))
+        });
+        buckets.truncate(k);
+
+        let mut out: Vec<SummaryNode> = Vec::with_capacity(buckets.len() + 1);
+        if let Some(r) = root {
+            out.push(r);
+        }
+        out.extend(buckets.into_iter().map(|(_, n)| n));
+        Ok(out)
+    }
+
+    fn row_to_summary_node(row: &libsql::Row) -> Result<SummaryNode, OriginError> {
+        Ok(SummaryNode {
+            id: row
+                .get(0)
+                .map_err(|e| OriginError::VectorDb(e.to_string()))?,
+            level: row
+                .get(1)
+                .map_err(|e| OriginError::VectorDb(e.to_string()))?,
+            bucket_key: row.get(2).unwrap_or(None),
+            title: row
+                .get(3)
+                .map_err(|e| OriginError::VectorDb(e.to_string()))?,
+            body: row
+                .get(4)
+                .map_err(|e| OriginError::VectorDb(e.to_string()))?,
+            source_count: row.get(5).unwrap_or(0),
+            generated_at: row.get(6).unwrap_or(0),
+        })
+    }
+
+    /// Build a `SearchResult` from a summary node. `source="summary"`, score
+    /// zeroed (mirrors `search_result_from_page` — summary rows carry no RRF
+    /// score; they ride the prelude, never the rerank pool).
+    fn search_result_from_summary(node: SummaryNode) -> SearchResult {
+        SearchResult {
+            id: node.id.clone(),
+            content: node.body,
+            source: "summary".to_string(),
+            source_id: node.id,
+            title: node.title,
+            url: None,
+            chunk_index: 0,
+            last_modified: node.generated_at,
+            score: 0.0,
+            chunk_type: None,
+            language: None,
+            semantic_unit: None,
+            memory_type: None,
+            space: None,
+            source_agent: None,
+            confidence: None,
+            confirmed: None,
+            stability: None,
+            supersedes: None,
+            summary: None,
+            entity_id: None,
+            entity_name: None,
+            quality: None,
+            importance: None,
+            is_archived: false,
+            is_recap: false,
+            structured_fields: None,
+            retrieval_cue: None,
+            source_text: None,
+            raw_score: 0.0,
+            version: 1,
             pending_revision: false,
             merged_from: None,
             last_delta_summary: None,
@@ -36273,6 +36773,517 @@ pub(crate) mod tests {
         }
     }
 
+    // ── T18: hierarchical global-context prelude (summary_nodes) ──────────────
+
+    /// Seed helper: insert a summary node directly (read-path tests don't need
+    /// the full memory->entity->community build).
+    async fn seed_summary_node(
+        db: &MemoryDB,
+        id: &str,
+        level: i64,
+        bucket_key: Option<&str>,
+        title: &str,
+        body: &str,
+        sources: &[&str],
+    ) {
+        let emb = db.embed_for_summary(body).unwrap();
+        let owned: Vec<String> = sources.iter().map(|s| s.to_string()).collect();
+        db.insert_summary_node(
+            id,
+            level,
+            bucket_key,
+            title,
+            body,
+            &emb,
+            owned.len() as i64,
+            chrono::Utc::now().timestamp(),
+            &owned,
+        )
+        .await
+        .unwrap();
+    }
+
+    /// Migration 59 creates summary_nodes + summary_node_sources with the
+    /// expected columns.
+    #[tokio::test]
+    async fn test_migration_59_creates_summary_nodes_table() {
+        let (db, _tmp) = test_db().await;
+        let conn = db.conn.lock().await;
+        let mut rows = conn.query("PRAGMA user_version", ()).await.unwrap();
+        let v: i64 = rows.next().await.unwrap().unwrap().get(0).unwrap();
+        assert!(v >= 59, "user_version must be >= 59, got {v}");
+        drop(rows);
+        // Tables exist.
+        conn.query("SELECT id, level, bucket_key, title, body, source_count, generated_at, status FROM summary_nodes LIMIT 0", ())
+            .await
+            .expect("summary_nodes columns must exist");
+        conn.query(
+            "SELECT node_id, memory_source_id FROM summary_node_sources LIMIT 0",
+            (),
+        )
+        .await
+        .expect("summary_node_sources columns must exist");
+    }
+
+    /// Migration 59 creates the FTS table + DiskANN vector index (mirrors the
+    /// page-channel index assertion).
+    #[tokio::test]
+    async fn test_migration_59_creates_summary_fts_and_vector_index() {
+        let (db, _tmp) = test_db().await;
+        let conn = db.conn.lock().await;
+        for (kind, name) in [
+            ("table", "summary_nodes_fts"),
+            ("index", "idx_summary_nodes_embedding"),
+        ] {
+            let mut rows = conn
+                .query(
+                    "SELECT COUNT(*) FROM sqlite_master WHERE type=?1 AND name=?2",
+                    libsql::params![kind, name],
+                )
+                .await
+                .unwrap();
+            let c: i64 = rows.next().await.unwrap().unwrap().get(0).unwrap();
+            assert_eq!(c, 1, "{kind} {name} must exist after migration 59");
+        }
+    }
+
+    /// Running migrations twice does not error (idempotency probe — mirror m50).
+    #[tokio::test]
+    async fn test_migration_59_idempotent() {
+        let (db, _tmp) = test_db().await;
+        // Roll user_version back to 58 so migration 59 re-fires on next run.
+        {
+            let conn = db.conn.lock().await;
+            conn.execute("PRAGMA user_version = 58", ()).await.unwrap();
+        }
+        db.run_migrations(&crate::events::NoopEmitter)
+            .await
+            .unwrap();
+        let conn = db.conn.lock().await;
+        let mut rows = conn.query("PRAGMA user_version", ()).await.unwrap();
+        let v: i64 = rows.next().await.unwrap().unwrap().get(0).unwrap();
+        assert!(
+            v >= 59,
+            "user_version restored to >= 59 after idempotent re-run, got {v}"
+        );
+    }
+
+    /// search_summary_nodes returns root ALWAYS + <=k vector-matched buckets.
+    #[tokio::test]
+    async fn test_search_summary_nodes_returns_root_plus_top_buckets() {
+        let (db, _tmp) = test_db().await;
+        seed_summary_node(
+            &db,
+            "sum_root",
+            1,
+            None,
+            "Corpus Overview",
+            "overview of everything",
+            &["m1", "m2", "m3"],
+        )
+        .await;
+        seed_summary_node(
+            &db,
+            "sum_b_1",
+            0,
+            Some("1"),
+            "Rust",
+            "rust systems programming memory safety",
+            &["m1"],
+        )
+        .await;
+        seed_summary_node(
+            &db,
+            "sum_b_2",
+            0,
+            Some("2"),
+            "Cooking",
+            "recipes pasta sauces",
+            &["m2"],
+        )
+        .await;
+        seed_summary_node(
+            &db,
+            "sum_b_3",
+            0,
+            Some("3"),
+            "Travel",
+            "trips japan flights",
+            &["m3"],
+        )
+        .await;
+
+        let nodes = db
+            .search_summary_nodes("rust programming", 2)
+            .await
+            .unwrap();
+        // Root always present regardless of vector distance.
+        assert!(
+            nodes.iter().any(|n| n.id == "sum_root" && n.level == 1),
+            "root must always be returned"
+        );
+        // At most k buckets.
+        let buckets = nodes.iter().filter(|n| n.level == 0).count();
+        assert!(buckets <= 2, "at most k=2 buckets, got {buckets}");
+    }
+
+    /// Empty table returns Vec::new(), never errors.
+    #[tokio::test]
+    async fn test_search_summary_nodes_empty_when_no_nodes() {
+        let (db, _tmp) = test_db().await;
+        let nodes = db.search_summary_nodes("anything", 3).await.unwrap();
+        assert!(
+            nodes.is_empty(),
+            "empty summary table must return empty vec"
+        );
+    }
+
+    /// FLAG-OFF BYTE-IDENTITY: with the flag unset, search_memory_cross_rerank
+    /// output is identical (id+score order) whether or not summary nodes exist
+    /// in the table — the dark-ship guarantee.
+    #[tokio::test]
+    async fn test_global_prelude_disabled_by_default_byte_identical() {
+        let (db, _tmp) = test_db().await;
+        db.upsert_documents(vec![
+            make_memory_doc(
+                "m_a",
+                "rust systems programming memory safety",
+                "fact",
+                "work",
+                "claude-code",
+            ),
+            make_memory_doc(
+                "m_b",
+                "ownership and borrowing in rust",
+                "fact",
+                "work",
+                "claude-code",
+            ),
+        ])
+        .await
+        .unwrap();
+        // Seed summary nodes that WOULD be prepended if the flag were on.
+        seed_summary_node(
+            &db,
+            "sum_root",
+            1,
+            None,
+            "Overview",
+            "rust corpus overview body text",
+            &["m_a", "m_b"],
+        )
+        .await;
+        seed_summary_node(
+            &db,
+            "sum_b_1",
+            0,
+            Some("1"),
+            "Rust",
+            "rust systems programming memory safety topics",
+            &["m_a", "m_b"],
+        )
+        .await;
+
+        let baseline =
+            temp_env::async_with_vars([("ORIGIN_ENABLE_GLOBAL_PRELUDE", None::<&str>)], async {
+                db.search_memory_cross_rerank("rust programming", 10, None, None, None, None)
+                    .await
+                    .unwrap()
+            })
+            .await;
+        // No summary rows in the default-OFF output.
+        assert!(
+            baseline.iter().all(|r| r.source != "summary"),
+            "flag-OFF must yield zero source=summary rows, got {:?}",
+            baseline
+                .iter()
+                .map(|r| (&r.id, &r.source))
+                .collect::<Vec<_>>()
+        );
+
+        // Run again with flag explicitly "0" — must be byte-identical (id+score).
+        let zero =
+            temp_env::async_with_vars([("ORIGIN_ENABLE_GLOBAL_PRELUDE", Some("0"))], async {
+                db.search_memory_cross_rerank("rust programming", 10, None, None, None, None)
+                    .await
+                    .unwrap()
+            })
+            .await;
+        // Byte-identity = same id ORDER (the load-bearing invariant). Scores
+        // are compared with an epsilon: the BGE embedder + DiskANN accumulate
+        // float ops non-deterministically at the 7th decimal across separate
+        // invocations, which is unrelated to the prelude flag (both runs have
+        // it off). The flag-OFF guarantee is "no summary rows, no reorder".
+        let order_a: Vec<&str> = baseline.iter().map(|r| r.id.as_str()).collect();
+        let order_b: Vec<&str> = zero.iter().map(|r| r.id.as_str()).collect();
+        assert_eq!(
+            order_a, order_b,
+            "flag unset vs 0 must yield identical id order"
+        );
+        assert_eq!(baseline.len(), zero.len(), "same row count");
+        for (a, b) in baseline.iter().zip(zero.iter()) {
+            assert_eq!(a.source, b.source, "same source per position");
+            assert!(
+                (a.score - b.score).abs() < 1e-4,
+                "score within epsilon for {}: {} vs {}",
+                a.id,
+                a.score,
+                b.score
+            );
+        }
+    }
+
+    /// FLAG-ON PREPEND: with the flag on, summary rows appear at the FRONT.
+    #[tokio::test]
+    async fn test_global_prelude_enabled_prepends_summary_rows() {
+        let (db, _tmp) = test_db().await;
+        db.upsert_documents(vec![make_memory_doc(
+            "m_a",
+            "rust systems programming memory safety",
+            "fact",
+            "work",
+            "claude-code",
+        )])
+        .await
+        .unwrap();
+        seed_summary_node(
+            &db,
+            "sum_root",
+            1,
+            None,
+            "Overview",
+            "rust corpus overview body",
+            &["m_a"],
+        )
+        .await;
+        seed_summary_node(
+            &db,
+            "sum_b_1",
+            0,
+            Some("1"),
+            "Rust",
+            "rust systems programming memory safety",
+            &["m_a"],
+        )
+        .await;
+
+        let hits =
+            temp_env::async_with_vars([("ORIGIN_ENABLE_GLOBAL_PRELUDE", Some("1"))], async {
+                db.search_memory_cross_rerank("rust programming", 10, None, None, None, None)
+                    .await
+                    .unwrap()
+            })
+            .await;
+        assert!(!hits.is_empty(), "expected hits");
+        assert_eq!(
+            hits[0].source, "summary",
+            "first row must be a summary prelude row, got {:?}",
+            hits[0].source
+        );
+        assert!(
+            hits.iter()
+                .any(|r| r.source == "summary" && r.id == "sum_root"),
+            "root must be present"
+        );
+    }
+
+    /// Summary rows must NOT enter the reranker candidate list.
+    #[tokio::test]
+    async fn test_global_prelude_summary_rows_excluded_from_rerank() {
+        use crate::reranker::Reranker;
+        use std::sync::{Arc, Mutex};
+
+        struct RecordingReranker {
+            seen: Arc<Mutex<Vec<String>>>,
+        }
+        impl Reranker for RecordingReranker {
+            fn rerank(
+                &self,
+                _q: &str,
+                candidates: &[(String, String)],
+            ) -> Result<Vec<(String, f32)>, OriginError> {
+                let mut s = self.seen.lock().unwrap();
+                for (id, _) in candidates {
+                    s.push(id.clone());
+                }
+                // Keep original order (return empty so caller keeps order).
+                Ok(Vec::new())
+            }
+            fn model_id(&self) -> &str {
+                "recording-test"
+            }
+        }
+
+        let (db, _tmp) = test_db().await;
+        db.upsert_documents(vec![make_memory_doc(
+            "m_a",
+            "rust systems programming memory safety",
+            "fact",
+            "work",
+            "claude-code",
+        )])
+        .await
+        .unwrap();
+        seed_summary_node(
+            &db,
+            "sum_root",
+            1,
+            None,
+            "Overview",
+            "rust corpus overview body",
+            &["m_a"],
+        )
+        .await;
+        seed_summary_node(
+            &db,
+            "sum_b_1",
+            0,
+            Some("1"),
+            "Rust",
+            "rust systems programming memory safety",
+            &["m_a"],
+        )
+        .await;
+
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let reranker: Arc<dyn Reranker> = Arc::new(RecordingReranker { seen: seen.clone() });
+        let _ = temp_env::async_with_vars([("ORIGIN_ENABLE_GLOBAL_PRELUDE", Some("1"))], async {
+            db.search_memory_cross_rerank("rust programming", 10, None, None, None, Some(reranker))
+                .await
+                .unwrap()
+        })
+        .await;
+        let candidate_ids = seen.lock().unwrap();
+        assert!(
+            candidate_ids.iter().all(|id| !id.starts_with("sum_")),
+            "no summary node may enter the rerank candidate list, saw {:?}",
+            *candidate_ids
+        );
+    }
+
+    /// Truthy synonyms enable; 0/false/unset disable.
+    #[tokio::test]
+    async fn test_global_prelude_truthy_synonyms() {
+        let (db, _tmp) = test_db().await;
+        db.upsert_documents(vec![make_memory_doc(
+            "m_a",
+            "rust systems programming",
+            "fact",
+            "work",
+            "claude-code",
+        )])
+        .await
+        .unwrap();
+        seed_summary_node(
+            &db,
+            "sum_root",
+            1,
+            None,
+            "Overview",
+            "rust corpus overview body",
+            &["m_a"],
+        )
+        .await;
+        seed_summary_node(
+            &db,
+            "sum_b_1",
+            0,
+            Some("1"),
+            "Rust",
+            "rust systems programming topics",
+            &["m_a"],
+        )
+        .await;
+
+        for value in ["1", "true", "YES", "True"] {
+            let hits =
+                temp_env::async_with_vars([("ORIGIN_ENABLE_GLOBAL_PRELUDE", Some(value))], async {
+                    db.search_memory_cross_rerank("rust", 10, None, None, None, None)
+                        .await
+                        .unwrap()
+                })
+                .await;
+            assert!(
+                hits.iter().any(|r| r.source == "summary"),
+                "{value} must enable prelude"
+            );
+        }
+        for value in ["0", "false", ""] {
+            let hits =
+                temp_env::async_with_vars([("ORIGIN_ENABLE_GLOBAL_PRELUDE", Some(value))], async {
+                    db.search_memory_cross_rerank("rust", 10, None, None, None, None)
+                        .await
+                        .unwrap()
+                })
+                .await;
+            assert!(
+                hits.iter().all(|r| r.source != "summary"),
+                "{value:?} must disable prelude"
+            );
+        }
+    }
+
+    /// Space-filter: a root spanning all buckets is dropped when filters are
+    /// active and none of its sources overlap the filtered memory set.
+    #[tokio::test]
+    async fn test_global_prelude_summary_rows_respect_space_filter() {
+        let (db, _tmp) = test_db().await;
+        // A work memory and a personal memory.
+        db.upsert_documents(vec![
+            make_memory_doc(
+                "m_work",
+                "rust systems programming at work",
+                "fact",
+                "work",
+                "claude-code",
+            ),
+            make_memory_doc(
+                "m_personal",
+                "personal cooking notes",
+                "fact",
+                "personal",
+                "claude-code",
+            ),
+        ])
+        .await
+        .unwrap();
+        // A summary whose sources are ONLY the personal memory.
+        seed_summary_node(
+            &db,
+            "sum_root",
+            1,
+            None,
+            "Overview",
+            "rust corpus overview body",
+            &["m_personal"],
+        )
+        .await;
+        seed_summary_node(
+            &db,
+            "sum_b_1",
+            0,
+            Some("1"),
+            "Personal",
+            "personal cooking topics",
+            &["m_personal"],
+        )
+        .await;
+
+        // Query with space="work" filter active: personal-sourced summary must be dropped.
+        let hits =
+            temp_env::async_with_vars([("ORIGIN_ENABLE_GLOBAL_PRELUDE", Some("1"))], async {
+                db.search_memory_cross_rerank("rust", 10, None, Some("work"), None, None)
+                    .await
+                    .unwrap()
+            })
+            .await;
+        assert!(
+            hits.iter().all(|r| r.source != "summary"),
+            "personal-sourced summary must be gated out under space=work, got {:?}",
+            hits.iter().map(|r| (&r.id, &r.source)).collect::<Vec<_>>()
+        );
+    }
+
     // ── T12: FTS recall hardening integration tests ──────────────────────────
 
     /// Regression guard: with hardening OFF (default), the behavior of
@@ -37656,8 +38667,8 @@ pub(crate) mod tests {
         let uv: i64 = vrows.next().await.unwrap().unwrap().get(0).unwrap();
         assert_eq!(uv as u32, crate::db::SCHEMA_VERSION);
         // test_db() runs the full migration ladder, so the terminal version is
-        // the current SCHEMA_VERSION (57 after T16 entity_minhash_bands).
-        assert_eq!(uv, 58);
+        // the current SCHEMA_VERSION (59 after T18 summary_nodes).
+        assert_eq!(uv, 59);
     }
 
     #[tokio::test]
@@ -37674,7 +38685,7 @@ pub(crate) mod tests {
         let mut vrows = conn.query("PRAGMA user_version", ()).await.unwrap();
         let uv: i64 = vrows.next().await.unwrap().unwrap().get(0).unwrap();
         assert_eq!(
-            uv, 58,
+            uv, 59,
             "user_version restored to current terminal version after idempotent re-run"
         );
     }
@@ -37708,7 +38719,7 @@ pub(crate) mod tests {
         let mut vrows = conn.query("PRAGMA user_version", ()).await.unwrap();
         let uv: i64 = vrows.next().await.unwrap().unwrap().get(0).unwrap();
         assert_eq!(uv as u32, crate::db::SCHEMA_VERSION);
-        assert_eq!(uv, 58);
+        assert_eq!(uv, 59);
     }
 
     #[tokio::test]
@@ -37725,8 +38736,8 @@ pub(crate) mod tests {
         let mut vrows = conn.query("PRAGMA user_version", ()).await.unwrap();
         let uv: i64 = vrows.next().await.unwrap().unwrap().get(0).unwrap();
         assert_eq!(
-            uv, 58,
-            "user_version restored to 57 after idempotent re-run"
+            uv, 59,
+            "user_version restored to current terminal version after idempotent re-run"
         );
     }
 
@@ -37773,7 +38784,7 @@ pub(crate) mod tests {
         let mut vrows = conn.query("PRAGMA user_version", ()).await.unwrap();
         let uv: i64 = vrows.next().await.unwrap().unwrap().get(0).unwrap();
         assert_eq!(uv as u32, crate::db::SCHEMA_VERSION);
-        assert_eq!(uv, 58, "terminal version is 58 after T15a child_vectors");
+        assert_eq!(uv, 59, "terminal version is 59 after T18 summary_nodes");
     }
 
     #[tokio::test]
@@ -37790,8 +38801,8 @@ pub(crate) mod tests {
         let mut vrows = conn.query("PRAGMA user_version", ()).await.unwrap();
         let uv: i64 = vrows.next().await.unwrap().unwrap().get(0).unwrap();
         assert_eq!(
-            uv, 58,
-            "user_version restored to 58 after idempotent re-run"
+            uv, 59,
+            "user_version restored to current terminal version after idempotent re-run"
         );
 
         // Table still present (CREATE IF NOT EXISTS did not error on re-run).

@@ -5,6 +5,8 @@ pub(crate) use helpers::*;
 mod phase;
 pub use phase::Phase;
 
+pub(crate) mod summary;
+
 // Re-export distillation functions from `synthesis::distill` to preserve the
 // public API path `origin_core::refinery::{distill_pages, deep_distill_pages,
 // deep_distill_single}`. These callers live in origin-server, eval modules, and
@@ -64,6 +66,7 @@ impl TriggerKind {
                 phase,
                 Phase::CommunityDetection
                     | Phase::Emergence
+                    | Phase::SummaryRollup
                     | Phase::ReDistill
                     | Phase::DecisionLogs
             ),
@@ -490,6 +493,25 @@ pub async fn run_periodic_steep_with_api(
         })
         .await;
         distilled = phase.items_processed as u32;
+        phases.push(phase);
+    }
+
+    // Phase 6a2: Summary rollup (T18 hierarchical global-context prelude).
+    // Ship-dark: the entire build is gated behind `global_prelude_enabled()`
+    // so an unset flag means zero build cost. Sequenced after Emergence so the
+    // community grouping the buckets key on is fresh. Degrades to a
+    // deterministic template when no LLM is available (no silent-zero).
+    if trigger.runs_phase(Phase::SummaryRollup) && crate::db::global_prelude_enabled() {
+        let phase = run_phase(Phase::SummaryRollup, || async {
+            let count =
+                summary::build_summary_nodes(db_ref, compile_llm.map(|a| a.as_ref())).await?;
+            Ok(PhaseOutput {
+                items_processed: count,
+                nudge: Nudge::Silent,
+                headline: None,
+            })
+        })
+        .await;
         phases.push(phase);
     }
 
