@@ -5,9 +5,8 @@
 //! This module ships the yesterday/today/tomorrow patterns; Tasks 7-8 add
 //! week/month/year, weekday, N-ago, quarter, and since patterns.
 //
-// The module is pub(crate) for Plan A. Plan B promotes it and wires extract_cue
-// into the composite scorer; until then the query-side helpers are stubs.
-#![allow(dead_code)]
+// `extract_cue` is wired into `db::search_memory_temporal` (T4a).
+// `extract_cue_for_content` is called from migration 55 backfill.
 
 use chrono::{DateTime, Datelike, Duration, NaiveDate, TimeZone, Utc, Weekday};
 use regex::Regex;

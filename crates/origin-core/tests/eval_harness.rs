@@ -4696,3 +4696,113 @@ async fn smoke_tool_use_judge_returns_structured_verdict() {
         "Paris->France obvious-correct judgment should be 1"
     );
 }
+
+/// T4a temporal-filter A/B on LongMemEval (retrieval-only, no GPU LLM, no judge).
+///
+/// The runner `run_longmemeval_eval_temporal` self-seeds a fresh ephemeral DB per
+/// question from the fixture, stamps `event_date` from `haystack_dates`, then
+/// retrieves via `search_memory_temporal(.., now=question_date)`.
+///
+/// `ORIGIN_ENABLE_TEMPORAL_FILTER` controls whether the hard temporal filter
+/// activates on High-confidence temporal cues. This A/B measures:
+///   OFF (None)  -- temporal search path with filter disabled (plain search)
+///   ON  ("1")   -- temporal search path with hard filter enabled
+///
+/// Respects `EVAL_LME_LIMIT` for fast iteration (e.g. EVAL_LME_LIMIT=30).
+/// Single-run scaffold -- N>=3 for any headline per AGENTS.md Eval Citation Discipline.
+#[tokio::test]
+#[ignore = "self-seeds from fixture; retrieval-only, no GPU; set ORIGIN_EVAL_ROOT + EVAL_LME_LIMIT"]
+async fn temporal_filter_ab_lme() {
+    use origin_core::eval::longmemeval::run_longmemeval_eval_temporal;
+
+    let fixture = eval_root().join("data/longmemeval_oracle.json");
+    if !fixture.exists() {
+        println!(
+            "SKIP: longmemeval_oracle.json not found at {}",
+            fixture.display()
+        );
+        return;
+    }
+
+    println!(
+        "=== T4a TEMPORAL-FILTER A/B (LongMemEval, search_memory_temporal, retrieval-only) ==="
+    );
+    println!("fixture: {}", fixture.display());
+
+    let off = temp_env::async_with_vars(
+        [("ORIGIN_ENABLE_TEMPORAL_FILTER", None::<&str>)],
+        run_longmemeval_eval_temporal(&fixture),
+    )
+    .await
+    .expect("temporal eval OFF failed");
+
+    let on = temp_env::async_with_vars(
+        [("ORIGIN_ENABLE_TEMPORAL_FILTER", Some("1"))],
+        run_longmemeval_eval_temporal(&fixture),
+    )
+    .await
+    .expect("temporal eval ON failed");
+
+    println!("questions evaluated: {}", off.total_questions);
+    println!(
+        "FILTER OFF: ndcg@10={:.4} recall@5={:.4} mrr={:.4} hit@1={:.4}",
+        off.aggregate_ndcg_at_10,
+        off.aggregate_recall_at_5,
+        off.aggregate_mrr,
+        off.aggregate_hit_rate_at_1,
+    );
+    println!(
+        "FILTER ON:  ndcg@10={:.4} recall@5={:.4} mrr={:.4} hit@1={:.4}",
+        on.aggregate_ndcg_at_10,
+        on.aggregate_recall_at_5,
+        on.aggregate_mrr,
+        on.aggregate_hit_rate_at_1,
+    );
+    println!(
+        "DELTA (on-off): ndcg@10={:+.4} recall@5={:+.4} mrr={:+.4} hit@1={:+.4}",
+        on.aggregate_ndcg_at_10 - off.aggregate_ndcg_at_10,
+        on.aggregate_recall_at_5 - off.aggregate_recall_at_5,
+        on.aggregate_mrr - off.aggregate_mrr,
+        on.aggregate_hit_rate_at_1 - off.aggregate_hit_rate_at_1,
+    );
+
+    // Per-category breakdown -- print temporal-reasoning bucket specifically
+    println!("\n--- Per-category breakdown (OFF) ---");
+    for cat in &off.per_category {
+        println!(
+            "  {:30} n={:3}  ndcg@10={:.4}  recall@5={:.4}  mrr={:.4}",
+            cat.question_type, cat.count, cat.ndcg_at_10, cat.recall_at_5, cat.mrr
+        );
+    }
+    println!("--- Per-category breakdown (ON) ---");
+    for cat in &on.per_category {
+        println!(
+            "  {:30} n={:3}  ndcg@10={:.4}  recall@5={:.4}  mrr={:.4}",
+            cat.question_type, cat.count, cat.ndcg_at_10, cat.recall_at_5, cat.mrr
+        );
+    }
+
+    // Targeted temporal-reasoning delta
+    let tr_off = off
+        .per_category
+        .iter()
+        .find(|c| c.question_type == "temporal-reasoning");
+    let tr_on = on
+        .per_category
+        .iter()
+        .find(|c| c.question_type == "temporal-reasoning");
+    match (tr_off, tr_on) {
+        (Some(o), Some(n)) => {
+            println!(
+                "\n>>> temporal-reasoning bucket (n={}): ndcg@10 OFF={:.4} ON={:.4} d={:+.4} | recall@5 OFF={:.4} ON={:.4} d={:+.4} | mrr OFF={:.4} ON={:.4} d={:+.4}",
+                o.count,
+                o.ndcg_at_10, n.ndcg_at_10, n.ndcg_at_10 - o.ndcg_at_10,
+                o.recall_at_5, n.recall_at_5, n.recall_at_5 - o.recall_at_5,
+                o.mrr, n.mrr, n.mrr - o.mrr,
+            );
+        }
+        _ => {
+            println!("\n>>> temporal-reasoning bucket: not present in per_category (may be absent at this EVAL_LME_LIMIT)");
+        }
+    }
+}

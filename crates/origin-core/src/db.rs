@@ -442,6 +442,24 @@ pub fn graph_gate_enabled() -> bool {
         .unwrap_or(false)
 }
 
+/// True iff `ORIGIN_ENABLE_TEMPORAL_FILTER` is set to a truthy value
+/// (`1`, `true`, or `yes`, case-insensitive). The temporal filter is OPT-IN:
+/// unset or a falsey value leaves it disabled (dark by default).
+///
+/// When enabled, [`MemoryDB::search_memory_temporal`] will extract a temporal
+/// cue from the query via [`crate::temporal_query::extract_cue`] and, if the
+/// cue has `High` confidence, inject a parameterized `event_date BETWEEN ? AND ?
+/// OR event_date IS NULL` clause into the search filter cascade.
+///
+/// All call sites MUST share this helper so the env var cannot disagree between
+/// production and eval.
+pub fn temporal_filter_enabled() -> bool {
+    std::env::var("ORIGIN_ENABLE_TEMPORAL_FILTER")
+        .ok()
+        .map(|v| matches!(v.trim().to_ascii_lowercase().as_str(), "1" | "true" | "yes"))
+        .unwrap_or(false)
+}
+
 /// True iff `ORIGIN_MAGNITUDE_FUSION` is set to a truthy value
 /// (`1`, `true`, or `yes`, case-insensitive). OPT-IN: when unset or falsey,
 /// `search_memory`'s FTS channel keeps the legacy rank-only RRF term
@@ -6855,6 +6873,8 @@ impl MemoryDB {
     }
 
     /// Hybrid search (vector + FTS + RRF) with memory-specific filters.
+    ///
+    /// For query-side temporal filtering, use [`search_memory_temporal`] instead.
     #[allow(clippy::too_many_arguments)]
     pub async fn search_memory(
         &self,
@@ -6863,6 +6883,35 @@ impl MemoryDB {
         memory_type: Option<&str>,
         space: Option<&str>,
         source_agent: Option<&str>,
+        confirmation_boost: Option<f32>,
+        recap_penalty: Option<f32>,
+        scoring: Option<&crate::tuning::SearchScoringConfig>,
+    ) -> Result<Vec<SearchResult>, OriginError> {
+        self.search_memory_with_cue(
+            query,
+            limit,
+            memory_type,
+            space,
+            source_agent,
+            None, // temporal_cue: None -> no temporal hard filter
+            confirmation_boost,
+            recap_penalty,
+            scoring,
+        )
+        .await
+    }
+
+    /// Inner search implementation shared by `search_memory` and `search_memory_temporal`.
+    /// The `temporal_cue` argument injects a parameterized event_date filter when `Some`.
+    #[allow(clippy::too_many_arguments)]
+    async fn search_memory_with_cue(
+        &self,
+        query: &str,
+        limit: usize,
+        memory_type: Option<&str>,
+        space: Option<&str>,
+        source_agent: Option<&str>,
+        temporal_cue: Option<crate::temporal_query::DateRange>,
         confirmation_boost: Option<f32>,
         recap_penalty: Option<f32>,
         scoring: Option<&crate::tuning::SearchScoringConfig>,
@@ -6919,6 +6968,18 @@ impl MemoryDB {
         if let Some(sa) = source_agent {
             filter_conditions.push("c.source_agent = ?".to_string());
             filter_values.push(libsql::Value::Text(sa.to_string()));
+        }
+
+        // Temporal hard-filter (T4a): inject as parameterized ? placeholders.
+        // `temporal_cue` is `Some(DateRange)` only when the caller has already
+        // verified High confidence (see `search_memory_temporal`). Low-confidence
+        // cues are filtered out upstream; this block is unconditional when Some.
+        // OR event_date IS NULL is load-bearing: undated memories are never filtered out.
+        if let Some(cue) = temporal_cue {
+            filter_conditions
+                .push("(c.event_date BETWEEN ? AND ? OR c.event_date IS NULL)".to_string());
+            filter_values.push(libsql::Value::Integer(cue.start));
+            filter_values.push(libsql::Value::Integer(cue.end));
         }
 
         // Supersedes exclusion: only hide memories superseded with mode='hide'.
@@ -7424,6 +7485,83 @@ impl MemoryDB {
         }
 
         Ok(final_results)
+    }
+    /// Hybrid search with query-side temporal cue wiring (T4a).
+    ///
+    /// Wraps [`search_memory_with_cue`] with an optional temporal hard-filter:
+    ///
+    /// - `ORIGIN_ENABLE_TEMPORAL_FILTER` unset/falsey -> delegates to plain
+    ///   [`search_memory`] (byte-identical, dark by default).
+    /// - Query has no temporal pattern -> plain delegation (cue = None).
+    /// - Cue has `Low` confidence (e.g. "last week" at week boundary) ->
+    ///   plain delegation (no hard filter; soft-scoring reserved for future work).
+    /// - Cue has `High` confidence -> injects a parameterized
+    ///   `(event_date BETWEEN ? AND ? OR event_date IS NULL)` into the filter
+    ///   cascade.
+    ///
+    /// **Clock injection**: the `now` parameter is mandatory. Never call
+    /// `Utc::now()` inside this function (ensures deterministic tests and
+    /// reproducible eval runs).
+    ///
+    /// # LoCoMo note
+    /// LoCoMo has no reliable absolute dates (only session_num), so a LoCoMo
+    /// temporal eval runner is not provided. Temporal evaluation on LoCoMo
+    /// requires synthetic date assignment, which risks fabricating the signal.
+    ///
+    /// # Tuning params not yet exposed
+    /// `confirmation_boost`, `recap_penalty`, and `scoring` are intentionally
+    /// hardcoded to `None` on BOTH the flag-on and flag-off delegation paths
+    /// (sufficient for the eval-only caller today). The future routes/MCP wiring
+    /// task MUST thread these through from the caller — otherwise temporal search
+    /// would silently rank differently from non-temporal `search_memory` whenever
+    /// a caller passes custom tuning.
+    pub async fn search_memory_temporal(
+        &self,
+        query: &str,
+        limit: usize,
+        memory_type: Option<&str>,
+        space: Option<&str>,
+        source_agent: Option<&str>,
+        now: chrono::DateTime<chrono::Utc>,
+    ) -> Result<Vec<SearchResult>, OriginError> {
+        // Gate: flag off -> plain search (byte-identical to search_memory)
+        if !temporal_filter_enabled() {
+            return self
+                .search_memory(
+                    query,
+                    limit,
+                    memory_type,
+                    space,
+                    source_agent,
+                    None,
+                    None,
+                    None,
+                )
+                .await;
+        }
+
+        // Extract temporal cue. None or Low confidence -> degrade to plain search.
+        use crate::temporal_query::{extract_cue, CueConfidence};
+        let high_conf_cue = extract_cue(query, now).and_then(|c| {
+            if c.confidence == CueConfidence::High {
+                Some(c.range)
+            } else {
+                None // Low confidence: no hard filter (soft-scoring is future work)
+            }
+        });
+
+        self.search_memory_with_cue(
+            query,
+            limit,
+            memory_type,
+            space,
+            source_agent,
+            high_conf_cue,
+            None, // confirmation_boost
+            None, // recap_penalty
+            None, // scoring
+        )
+        .await
     }
 
     /// Hybrid search with graph augmentation and optional LLM reranking.
@@ -32881,6 +33019,279 @@ pub(crate) mod tests {
             "flag ON: confirmed memory must still outrank equal-base unconfirmed \
              (multiplier stack intact); confirmed={confirmed_score} \
              unconfirmed={unconfirmed_score}"
+        );
+    }
+
+    // ==================== T4a: search_memory_temporal ====================
+
+    /// Helper: seed a memory with a specific event_date (Unix seconds) via direct SQL.
+    async fn seed_memory_with_event_date(
+        db: &MemoryDB,
+        source_id: &str,
+        content: &str,
+        event_date: Option<i64>,
+    ) {
+        let docs = vec![RawDocument {
+            source: "memory".to_string(),
+            source_id: source_id.to_string(),
+            title: format!("mem-{source_id}"),
+            content: content.to_string(),
+            last_modified: 0,
+            memory_type: Some("fact".to_string()),
+            space: Some("test".to_string()),
+            source_agent: Some("test-agent".to_string()),
+            ..Default::default()
+        }];
+        db.upsert_documents(docs).await.unwrap();
+        if let Some(ts) = event_date {
+            let conn = db.conn.lock().await;
+            conn.execute(
+                "UPDATE memories SET event_date = ? WHERE source_id = ?",
+                libsql::params![ts, source_id],
+            )
+            .await
+            .unwrap();
+        }
+    }
+
+    /// [T4a] seed 3 memories w/ identical text but distinct event_date;
+    /// 'yesterday' cue + fixed `now`; assert in-range AND NULL returned, out-of-range excluded.
+    #[tokio::test]
+    async fn test_temporal_scoped_search_filters_by_event_date() {
+        let (db, _dir) = test_db().await;
+        // Fixed "now" = 2026-05-27T12:00:00Z
+        // "yesterday" window: 2026-05-26 00:00:00Z .. 2026-05-26 23:59:59Z
+        // Inside:  2026-05-26T06:00:00Z = 1_779_775_200
+        // Outside: 2026-05-24T06:00:00Z = 1_779_602_400
+        let now: chrono::DateTime<chrono::Utc> = "2026-05-27T12:00:00Z".parse().unwrap();
+        // Use distinct content to avoid near-duplicate dedup (Jaccard > 0.92).
+        // All still match the temporal query text.
+        seed_memory_with_event_date(
+            &db,
+            "mem_in_range",
+            "yesterday we decided to use database retrieval indexing approach A",
+            Some(1_779_775_200),
+        )
+        .await;
+        seed_memory_with_event_date(
+            &db,
+            "mem_out_range",
+            "yesterday we considered switching the database retrieval strategy B",
+            Some(1_779_602_400),
+        )
+        .await;
+        seed_memory_with_event_date(
+            &db,
+            "mem_null_date",
+            "yesterday the database retrieval evaluation results were reviewed C",
+            None,
+        )
+        .await;
+
+        let results =
+            temp_env::async_with_vars([("ORIGIN_ENABLE_TEMPORAL_FILTER", Some("1"))], async {
+                db.search_memory_temporal(
+                    "what database decision did I make yesterday",
+                    10,
+                    None,
+                    None,
+                    None,
+                    now,
+                )
+                .await
+                .unwrap()
+            })
+            .await;
+
+        let ids: Vec<&str> = results.iter().map(|r| r.source_id.as_str()).collect();
+        assert!(
+            ids.contains(&"mem_in_range"),
+            "in-range memory must be returned; got {ids:?}"
+        );
+        assert!(
+            ids.contains(&"mem_null_date"),
+            "NULL-date memory must be returned (OR IS NULL clause); got {ids:?}"
+        );
+        assert!(
+            !ids.contains(&"mem_out_range"),
+            "out-of-range memory must be excluded; got {ids:?}"
+        );
+    }
+
+    /// [T4a] Non-temporal query -> results identical to plain search_memory.
+    #[tokio::test]
+    async fn test_temporal_scoped_search_no_cue_is_noop() {
+        let (db, _dir) = test_db().await;
+        let now: chrono::DateTime<chrono::Utc> = "2026-05-27T12:00:00Z".parse().unwrap();
+        // DISTINCT content so near-duplicate dedup (Jaccard > 0.92) does NOT collapse
+        // them — both must survive into results for the no-op comparison to be meaningful.
+        seed_memory_with_event_date(
+            &db,
+            "noop_mem_a",
+            "database retrieval system architecture postgres",
+            Some(1_779_775_200),
+        )
+        .await;
+        seed_memory_with_event_date(
+            &db,
+            "noop_mem_b",
+            "database storage engine indexing libsql",
+            Some(1_779_602_400),
+        )
+        .await;
+
+        let temporal_results =
+            temp_env::async_with_vars([("ORIGIN_ENABLE_TEMPORAL_FILTER", Some("1"))], async {
+                db.search_memory_temporal("what database did I pick", 10, None, None, None, now)
+                    .await
+                    .unwrap()
+            })
+            .await;
+
+        let plain_results = db
+            .search_memory(
+                "what database did I pick",
+                10,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+
+        let temporal_ids: Vec<&str> = temporal_results
+            .iter()
+            .map(|r| r.source_id.as_str())
+            .collect();
+        let plain_ids: Vec<&str> = plain_results.iter().map(|r| r.source_id.as_str()).collect();
+
+        // Both distinct memories must survive (guards against the temporal path
+        // wrongly dropping them, which a hollow assert_eq! of two 1-element lists
+        // would not catch).
+        assert!(
+            temporal_ids.len() >= 2,
+            "both distinct memories must survive into results; got {temporal_ids:?}"
+        );
+        assert!(
+            temporal_ids.contains(&"noop_mem_a") && temporal_ids.contains(&"noop_mem_b"),
+            "both noop_mem_a and noop_mem_b must appear; got {temporal_ids:?}"
+        );
+
+        assert_eq!(
+            temporal_ids, plain_ids,
+            "no-cue temporal search must return identical result order as plain search_memory"
+        );
+    }
+
+    /// [T4a] Low-confidence cue -> out-of-range NOT excluded (no hard filter on Low).
+    #[tokio::test]
+    async fn test_temporal_scoped_low_confidence_cue_not_hard_filtered() {
+        use chrono::{Datelike, Weekday};
+        let (db, _dir) = test_db().await;
+        // "last week" at Sunday 23:59 is Low confidence per temporal_query.rs week-boundary logic
+        let now: chrono::DateTime<chrono::Utc> = "2026-05-31T23:59:00Z".parse().unwrap();
+        assert_eq!(
+            now.weekday(),
+            Weekday::Sun,
+            "fixture requires now=Sunday for Low-confidence last-week cue"
+        );
+        let text = "last week sprint planning meeting";
+        // event_date clearly outside any plausible "last week" window (>30 days before now)
+        seed_memory_with_event_date(&db, "low_conf_out", text, Some(1_746_057_600)).await;
+
+        let results =
+            temp_env::async_with_vars([("ORIGIN_ENABLE_TEMPORAL_FILTER", Some("1"))], async {
+                db.search_memory_temporal(
+                    "what happened last week in sprint planning",
+                    10,
+                    None,
+                    None,
+                    None,
+                    now,
+                )
+                .await
+                .unwrap()
+            })
+            .await;
+
+        let ids: Vec<&str> = results.iter().map(|r| r.source_id.as_str()).collect();
+        assert!(
+            ids.contains(&"low_conf_out"),
+            "Low-confidence cue must NOT exclude out-of-range memory; got {ids:?}"
+        );
+    }
+
+    /// [T4a] Flag unset -> out-of-range returned; flag set -> excluded.
+    #[tokio::test]
+    async fn test_temporal_scoped_search_disabled_by_default_flag() {
+        let (db, _dir) = test_db().await;
+        let now: chrono::DateTime<chrono::Utc> = "2026-05-27T12:00:00Z".parse().unwrap();
+        let text = "yesterday architecture decision database";
+        // Outside "yesterday" window (2026-05-24T06:00:00Z = 2 days out)
+        seed_memory_with_event_date(&db, "flag_out", text, Some(1_779_602_400)).await;
+
+        // Flag unset -> filter off -> out-of-range memory returned
+        let off_results =
+            temp_env::async_with_vars([("ORIGIN_ENABLE_TEMPORAL_FILTER", None::<&str>)], async {
+                db.search_memory_temporal(
+                    "what database architecture did I decide yesterday",
+                    10,
+                    None,
+                    None,
+                    None,
+                    now,
+                )
+                .await
+                .unwrap()
+            })
+            .await;
+        let off_ids: Vec<&str> = off_results.iter().map(|r| r.source_id.as_str()).collect();
+        assert!(
+            off_ids.contains(&"flag_out"),
+            "TEMPORAL_FILTER unset -> no filter; out-of-range must be returned; got {off_ids:?}"
+        );
+
+        // Flag set -> filter on -> out-of-range memory excluded
+        let on_results =
+            temp_env::async_with_vars([("ORIGIN_ENABLE_TEMPORAL_FILTER", Some("1"))], async {
+                db.search_memory_temporal(
+                    "what database architecture did I decide yesterday",
+                    10,
+                    None,
+                    None,
+                    None,
+                    now,
+                )
+                .await
+                .unwrap()
+            })
+            .await;
+        let on_ids: Vec<&str> = on_results.iter().map(|r| r.source_id.as_str()).collect();
+        assert!(
+            !on_ids.contains(&"flag_out"),
+            "TEMPORAL_FILTER=1 -> out-of-range must be excluded; got {on_ids:?}"
+        );
+    }
+
+    /// [T4a] Empty DB + temporal query -> Ok(vec![]), no panic.
+    #[tokio::test]
+    async fn test_temporal_scoped_search_graceful_on_empty_db() {
+        let (db, _dir) = test_db().await;
+        let now: chrono::DateTime<chrono::Utc> = "2026-05-27T12:00:00Z".parse().unwrap();
+
+        let results =
+            temp_env::async_with_vars([("ORIGIN_ENABLE_TEMPORAL_FILTER", Some("1"))], async {
+                db.search_memory_temporal("what happened yesterday", 10, None, None, None, now)
+                    .await
+            })
+            .await;
+        assert!(results.is_ok(), "empty DB must return Ok; got {results:?}");
+        assert!(
+            results.unwrap().is_empty(),
+            "empty DB must return empty vec"
         );
     }
 }
