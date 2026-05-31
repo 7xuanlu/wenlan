@@ -706,6 +706,85 @@ async fn graph_gate_ab_locomo() {
     );
 }
 
+/// T13 magnitude-fusion A/B on BOTH benches (retrieval-only). Unlike T3/T12, this
+/// changes FTS scoring for EVERY query with FTS hits, so a real (non-zero) delta
+/// is expected. Single-run scaffold — N≥3 for any headline.
+#[tokio::test]
+#[ignore = "needs cached scenario DBs; retrieval-only, no GPU"]
+async fn magnitude_fusion_ab_dualbench() {
+    use origin_core::eval::locomo::run_locomo_eval_from_db;
+    use origin_core::eval::longmemeval::run_longmemeval_eval_from_db;
+    let root = resolve_scenario_db_root_from_harness();
+
+    let lo_dir = root.join("locomo_v1");
+    if lo_dir.join("origin_memory.db").exists() {
+        let fx = eval_root().join("data/locomo10.json");
+        if fx.exists() {
+            let db = origin_core::db::MemoryDB::new(
+                &lo_dir,
+                std::sync::Arc::new(origin_core::events::NoopEmitter),
+            )
+            .await
+            .unwrap();
+            let off = temp_env::async_with_vars(
+                [("ORIGIN_MAGNITUDE_FUSION", None::<&str>)],
+                run_locomo_eval_from_db(&db, &fx),
+            )
+            .await
+            .unwrap();
+            let on = temp_env::async_with_vars(
+                [("ORIGIN_MAGNITUDE_FUSION", Some("1"))],
+                run_locomo_eval_from_db(&db, &fx),
+            )
+            .await
+            .unwrap();
+            println!(
+                "[MAGFUSION A/B LoCoMo] q={} ndcg@10 off={:.4} on={:.4} d={:+.4} | recall@5 d={:+.4} | mrr d={:+.4}",
+                off.total_questions,
+                off.aggregate_ndcg_at_10,
+                on.aggregate_ndcg_at_10,
+                on.aggregate_ndcg_at_10 - off.aggregate_ndcg_at_10,
+                on.aggregate_recall_at_5 - off.aggregate_recall_at_5,
+                on.aggregate_mrr - off.aggregate_mrr
+            );
+        }
+    }
+
+    let lme_dir = root.join("lme_v1");
+    if lme_dir.join("origin_memory.db").exists() {
+        let fx = eval_root().join("data/longmemeval_oracle.json");
+        if fx.exists() {
+            let db = origin_core::db::MemoryDB::new(
+                &lme_dir,
+                std::sync::Arc::new(origin_core::events::NoopEmitter),
+            )
+            .await
+            .unwrap();
+            let off = temp_env::async_with_vars(
+                [("ORIGIN_MAGNITUDE_FUSION", None::<&str>)],
+                run_longmemeval_eval_from_db(&db, &fx),
+            )
+            .await
+            .unwrap();
+            let on = temp_env::async_with_vars(
+                [("ORIGIN_MAGNITUDE_FUSION", Some("1"))],
+                run_longmemeval_eval_from_db(&db, &fx),
+            )
+            .await
+            .unwrap();
+            println!(
+                "[MAGFUSION A/B LME] q={} ndcg@10 off={:.4} on={:.4} d={:+.4} | recall@5 d={:+.4} | mrr d={:+.4}",
+                off.total_questions,
+                off.aggregate_ndcg_at_10,
+                on.aggregate_ndcg_at_10,
+                on.aggregate_ndcg_at_10 - off.aggregate_ndcg_at_10,
+                on.aggregate_recall_at_5 - off.aggregate_recall_at_5,
+                on.aggregate_mrr - off.aggregate_mrr
+            );
+        }
+    }
+}
+
 /// T12 FTS-hardening A/B on BOTH benches (retrieval-only). Hardening only changes
 /// special-char/overlong queries (absent from clean LoCoMo/LME), so the expected
 /// result is delta about 0 — this confirms no-regression on clean-query benchmarks.
