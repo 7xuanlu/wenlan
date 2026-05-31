@@ -442,6 +442,79 @@ pub fn graph_gate_enabled() -> bool {
         .unwrap_or(false)
 }
 
+/// True iff `ORIGIN_MAGNITUDE_FUSION` is set to a truthy value
+/// (`1`, `true`, or `yes`, case-insensitive). OPT-IN: when unset or falsey,
+/// `search_memory`'s FTS channel keeps the legacy rank-only RRF term
+/// `fts_weight/(rrf_k+rank)` (byte-identical default behavior).
+///
+/// When enabled, the FTS channel preserves BM25 magnitude: the raw-negative
+/// FTS5 bm25 captured into `SearchResult::score` is negated, min-max normalized
+/// across the FTS result set, and contributed as `fts_weight * norm / rrf_k`. The
+/// constant-`rrf_k` divisor scale-matches the vector channel (max `1.0/rrf_k`) so
+/// the FTS channel keeps the same relative weight the rank-only term gave it (max
+/// `fts_weight/rrf_k`) instead of overwhelming vector, while the normalized
+/// magnitude differentiates strong vs weak matches. This fixes the discard
+/// asymmetry where the vector channel already weights by cosine magnitude but the
+/// FTS channel threw its bm25 magnitude away.
+///
+/// Used by `search_memory` to gate the fusion branch and by the eval harness
+/// (locomo + longmemeval) to tag baseline JSON artifacts with their
+/// magfusion-ON/OFF variant. Both sites MUST share this helper so an
+/// `ORIGIN_MAGNITUDE_FUSION` setting can't disagree between production and eval
+/// (which would make baseline filenames lie — see AGENTS.md Eval Citation
+/// Discipline).
+///
+/// Note: min-max is PER-QUERY, so absolute fused scores are not comparable
+/// across queries (fine for single-query ranking; a future cross-query
+/// score_threshold would need a different normalization).
+pub fn magnitude_fusion_enabled() -> bool {
+    std::env::var("ORIGIN_MAGNITUDE_FUSION")
+        .ok()
+        .map(|v| matches!(v.trim().to_ascii_lowercase().as_str(), "1" | "true" | "yes"))
+        .unwrap_or(false)
+}
+
+/// Sign-correct a raw FTS5 bm25 score into a non-negative magnitude.
+///
+/// THE #1 FOOTGUN: production `search_memory` captures the RAW NEGATIVE FTS5
+/// bm25 into `SearchResult::score` (`rank as f32`, NOT negated — unlike
+/// `fts_only_search`, which negates at capture). FTS5 bm25 is negative and a
+/// STRONGER match is MORE negative, so we must negate FIRST: a stronger match
+/// becomes a LARGER positive magnitude. Skipping the negate inverts the channel
+/// and sinks strong matches. The `.max(0.0)` guards the rare non-negative bm25.
+///
+/// Unit-tested directly (`fts_magnitude_sign_is_monotonic`) so the sign is
+/// pinned independent of the vector channel, which co-varies with FTS in
+/// integration and can mask an inversion.
+#[inline]
+fn fts_magnitude(raw_bm25: f32) -> f32 {
+    (-raw_bm25).max(0.0)
+}
+
+/// Min-max normalize a slice of (already sign-corrected, non-negative) FTS
+/// magnitudes into `[0.0, 1.0]`. Used by the `ORIGIN_MAGNITUDE_FUSION` path in
+/// `search_memory`.
+///
+/// Guards: empty → empty; a single element or an all-equal set (`max - min`
+/// below `eps`) → all `1.0` (mirrors the POC guard
+/// `if fts_max > 0.0 { fts_max } else { 1.0 }` in `vector_plus_fts_search`).
+/// Never emits NaN/inf.
+fn normalize_fts_magnitudes(scores: &[f32]) -> Vec<f32> {
+    if scores.is_empty() {
+        return Vec::new();
+    }
+    let min = scores.iter().copied().fold(f32::INFINITY, f32::min);
+    let max = scores.iter().copied().fold(f32::NEG_INFINITY, f32::max);
+    let range = max - min;
+    const EPS: f32 = 1e-6;
+    if range > EPS {
+        scores.iter().map(|&s| (s - min) / range).collect()
+    } else {
+        // Single element or all-equal: no spread to normalize → treat as full.
+        vec![1.0; scores.len()]
+    }
+}
+
 /// Bigram Jaccard similarity between two strings (0.0–1.0).
 /// Used for content-based deduplication in search results.
 fn bigram_jaccard(a: &str, b: &str) -> f64 {
@@ -7032,10 +7105,33 @@ impl MemoryDB {
         // negatives that share surface terms but are semantically wrong.
         let fts_weight = scoring.map(|s| s.fts_weight).unwrap_or(0.2);
 
-        for (rank, result) in fts_results.into_iter().enumerate() {
-            let rrf_score = fts_weight / (rrf_k + rank as f32);
-            *score_map.entry(result.id.clone()).or_default() += rrf_score;
-            result_map.entry(result.id.clone()).or_insert(result);
+        if magnitude_fusion_enabled() {
+            // Magnitude-preserving FTS fusion (ORIGIN_MAGNITUDE_FUSION).
+            // FOOTGUN: `result.score` here holds the RAW NEGATIVE FTS5 bm25
+            // (captured as `rank as f32`, NOT negated like fts_only_search).
+            // Negate FIRST so a stronger match (more-negative raw bm25) becomes
+            // a larger positive magnitude; skipping the negate would invert the
+            // channel and sink strong matches.
+            let mags: Vec<f32> = fts_results.iter().map(|r| fts_magnitude(r.score)).collect();
+            let norms = normalize_fts_magnitudes(&mags);
+            for (result, norm) in fts_results.into_iter().zip(norms) {
+                // Scale the normalized bm25 magnitude to the vector channel's
+                // range by dividing by the CONSTANT rrf_k (not rrf_k+rank — rank
+                // already correlates with magnitude, so dividing by it too would
+                // double-count and neuter the magnitude signal). Max contribution
+                // `fts_weight/rrf_k` equals the rank-only term's max, preserving
+                // the FTS/vector scale balance (vector max `1.0/rrf_k`) while the
+                // normalized magnitude differentiates strong vs weak matches.
+                let rrf_score = fts_weight * norm / rrf_k;
+                *score_map.entry(result.id.clone()).or_default() += rrf_score;
+                result_map.entry(result.id.clone()).or_insert(result);
+            }
+        } else {
+            for (rank, result) in fts_results.into_iter().enumerate() {
+                let rrf_score = fts_weight / (rrf_k + rank as f32);
+                *score_map.entry(result.id.clone()).or_default() += rrf_score;
+                result_map.entry(result.id.clone()).or_insert(result);
+            }
         }
 
         // Collect source_ids that are superseded by archive-mode memories
@@ -7278,6 +7374,10 @@ impl MemoryDB {
         // even when it's irrelevant garbage. Instead, divide by the theoretical best-case RRF
         // score so genuinely good matches score high and poor matches score low.
         {
+            // Theoretical best-case base score: vector best `1.0/rrf_k` (similarity
+            // 1.0 at rank 0) + FTS best `fts_weight/rrf_k` (norm 1.0 at rank 0).
+            // Magnitude fusion keeps the FTS rank divisor, so this ceiling holds
+            // for both flag states — no saturation, byte-identical when OFF.
             let theoretical_max_rrf = (1.0 + fts_weight) / rrf_k;
             let eff_confirm = scoring.map(|s| s.confirmation_boost).unwrap_or(2.5);
             let eff_space = scoring.map(|s| s.domain_boost).unwrap_or(1.5);
@@ -32378,6 +32478,409 @@ pub(crate) mod tests {
             results.iter().any(|r| r.content.contains("xylophoneZZZ9")),
             "eligibility-gated OR: rare token memory must surface; got {:?}",
             results.iter().map(|r| &r.content).collect::<Vec<_>>()
+        );
+    }
+
+    // ── T13: Magnitude-preserving FTS score fusion ───────────────────────────
+
+    /// Test 1 (merge gate): with `ORIGIN_MAGNITUDE_FUSION` UNSET vs explicitly
+    /// `"0"`, `search_memory` must return byte-identical ordering AND scores.
+    /// This is the structural defense against the silent-regression class that
+    /// closed PR #147 — the default path must be untouched.
+    #[tokio::test]
+    async fn magnitude_fusion_default_off_is_byte_identical() {
+        let (db, _tmp) = test_db().await;
+        db.upsert_documents(vec![
+            make_memory_doc(
+                "m_fusion_a",
+                "rust programming language memory safety systems",
+                "fact",
+                "work",
+                "claude-code",
+            ),
+            make_memory_doc(
+                "m_fusion_b",
+                "rust async tokio runtime programming concurrency",
+                "fact",
+                "work",
+                "claude-code",
+            ),
+            make_memory_doc(
+                "m_fusion_c",
+                "python scripting data analysis pandas",
+                "fact",
+                "work",
+                "claude-code",
+            ),
+        ])
+        .await
+        .unwrap();
+
+        // Unset flag (default path).
+        let unset = temp_env::async_with_vars([("ORIGIN_MAGNITUDE_FUSION", None::<&str>)], async {
+            db.search_memory("rust programming", 10, None, None, None, None, None, None)
+                .await
+                .unwrap()
+        })
+        .await;
+
+        // Explicit "0" (falsy → same default path).
+        let zero = temp_env::async_with_vars([("ORIGIN_MAGNITUDE_FUSION", Some("0"))], async {
+            db.search_memory("rust programming", 10, None, None, None, None, None, None)
+                .await
+                .unwrap()
+        })
+        .await;
+
+        assert_eq!(
+            unset.len(),
+            zero.len(),
+            "unset vs =0 must return the same number of results"
+        );
+        let unset_pairs: Vec<(String, f32)> =
+            unset.iter().map(|r| (r.id.clone(), r.score)).collect();
+        let zero_pairs: Vec<(String, f32)> = zero.iter().map(|r| (r.id.clone(), r.score)).collect();
+        assert_eq!(
+            unset_pairs, zero_pairs,
+            "ORIGIN_MAGNITUDE_FUSION unset vs =0 must be byte-identical (id + score), \
+             got unset={unset_pairs:?} zero={zero_pairs:?}"
+        );
+    }
+
+    /// Test 2 (core win — magnitude preserved within the FTS weight budget):
+    /// two memories that BOTH FTS-match the query but with different BM25
+    /// magnitudes. The magnitude-fusion design is scale-balanced — the FTS term
+    /// max is `fts_weight/rrf_k`, the SAME as the rank-only term — so this is NOT
+    /// "FTS dominates"; it's "the FTS channel's internal magnitude signal
+    /// differentiates strong vs weak". With the flag OFF, the rank-only term
+    /// `fts_weight/(rrf_k+rank)` barely separates them (rrf_k=60 >> rank, so
+    /// rank 0 vs 1 differ by only `fts_weight/rrf_k² ≈ 5e-5`). With the flag ON,
+    /// min-max normalization spreads them across `[0, fts_weight/rrf_k]`: the
+    /// bm25-max memory keeps `fts_weight/rrf_k` (norm 1.0) while the bm25-min
+    /// memory drops toward 0 (norm 0.0). So the strong-vs-weak margin WIDENS.
+    ///
+    /// Scenario: single-term query so BOTH docs AND-match (the AND→OR fallback
+    /// only fires when AND returns zero rows, so multi-term queries where only
+    /// the strong doc matches all terms would leave the weak doc out of FTS
+    /// entirely — a single FTS hit normalizes to `[1.0]`, which is identical to
+    /// the rank-0 term and shows no effect). BM25 separates them by term
+    /// frequency + length normalization: strong is short with the term repeated
+    /// (high bm25); weak is long with the term once (low bm25). Both memories
+    /// share `fact`/`work`/`claude-code`/confidence so the multiplier stack
+    /// applies equally and does not confound the comparison.
+    #[tokio::test]
+    async fn magnitude_fusion_on_preserves_bm25_magnitude() {
+        let (db, _tmp) = test_db().await;
+        db.upsert_documents(vec![
+            make_memory_doc(
+                "m_strong",
+                "obsidian obsidian obsidian obsidian volcanic glass",
+                "fact",
+                "work",
+                "claude-code",
+            ),
+            make_memory_doc(
+                "m_weak",
+                "obsidian appears a single time within this deliberately much longer \
+                 passage of otherwise unrelated filler words about cooking gardening \
+                 travel weather and assorted trivia",
+                "fact",
+                "work",
+                "claude-code",
+            ),
+        ])
+        .await
+        .unwrap();
+
+        let score_of = |hits: &[SearchResult], id: &str| -> f32 {
+            hits.iter()
+                .find(|r| r.source_id == id)
+                .map(|r| r.score)
+                .unwrap_or(0.0)
+        };
+
+        let query = "obsidian";
+        let off = temp_env::async_with_vars([("ORIGIN_MAGNITUDE_FUSION", None::<&str>)], async {
+            db.search_memory(query, 10, None, None, None, None, None, None)
+                .await
+                .unwrap()
+        })
+        .await;
+        let on = temp_env::async_with_vars([("ORIGIN_MAGNITUDE_FUSION", Some("1"))], async {
+            db.search_memory(query, 10, None, None, None, None, None, None)
+                .await
+                .unwrap()
+        })
+        .await;
+
+        // Sanity: both memories must be present in both result sets (both are
+        // FTS hits) or the comparison is meaningless.
+        assert!(
+            score_of(&off, "m_strong") > 0.0 && score_of(&off, "m_weak") > 0.0,
+            "both memories must surface (OFF); got {:?}",
+            off.iter()
+                .map(|r| (&r.source_id, r.score))
+                .collect::<Vec<_>>()
+        );
+        assert!(
+            score_of(&on, "m_strong") > 0.0 && score_of(&on, "m_weak") > 0.0,
+            "both memories must surface (ON); got {:?}",
+            on.iter()
+                .map(|r| (&r.source_id, r.score))
+                .collect::<Vec<_>>()
+        );
+
+        let off_margin = score_of(&off, "m_strong") - score_of(&off, "m_weak");
+        let on_margin = score_of(&on, "m_strong") - score_of(&on, "m_weak");
+
+        // The magnitude-preserving channel widens the strong-vs-weak gap relative
+        // to the rank-only OFF path. (Deterministic: BM25 magnitudes are fixed by
+        // the seed text, so the margins are bit-stable run to run.)
+        assert!(
+            on_margin > off_margin,
+            "flag ON must widen strong-vs-weak margin: on_margin={on_margin} \
+             off_margin={off_margin} (off strong={} weak={}, on strong={} weak={})",
+            score_of(&off, "m_strong"),
+            score_of(&off, "m_weak"),
+            score_of(&on, "m_strong"),
+            score_of(&on, "m_weak"),
+        );
+        // Ordering is preserved: the stronger BM25 match still outranks the weak
+        // one with the flag ON (the channel is not inverted, and the scale-
+        // balanced FTS term does not flip the vector-consistent ordering).
+        assert!(
+            score_of(&on, "m_strong") > score_of(&on, "m_weak"),
+            "flag ON: strong BM25 match must outscore weak match"
+        );
+    }
+
+    /// Test 3 (sign handling — INTEGRATION smoke): a strong multi-term FTS match
+    /// ranks ABOVE a weak single-term one with the flag ON, and every final
+    /// score stays finite and non-negative. The vector channel co-varies with
+    /// FTS in `search_memory`, so this integration ordering cannot by itself
+    /// isolate a sign inversion — `fts_magnitude_sign_is_monotonic` is the
+    /// load-bearing unit guard for the negate. This test documents the intended
+    /// end-to-end behavior and guards finiteness on the magnitude path.
+    #[tokio::test]
+    async fn magnitude_fusion_on_handles_negative_bm25_sign() {
+        let (db, _tmp) = test_db().await;
+        db.upsert_documents(vec![
+            make_memory_doc(
+                "m_sign_strong",
+                "quartzite sandstone metaquartzite orthoquartzite metamorphic",
+                "fact",
+                "work",
+                "claude-code",
+            ),
+            make_memory_doc(
+                "m_sign_weak",
+                "quartzite mentioned once amid unrelated cooking recipe filler today",
+                "fact",
+                "work",
+                "claude-code",
+            ),
+        ])
+        .await
+        .unwrap();
+
+        let query = "quartzite sandstone metaquartzite orthoquartzite";
+        let on = temp_env::async_with_vars([("ORIGIN_MAGNITUDE_FUSION", Some("1"))], async {
+            db.search_memory(query, 10, None, None, None, None, None, None)
+                .await
+                .unwrap()
+        })
+        .await;
+
+        // Strong match ranks ABOVE the weak one; if the negate were skipped, the
+        // raw-negative bm25 would invert the channel (the unit test pins this).
+        let strong_idx = on.iter().position(|r| r.source_id == "m_sign_strong");
+        let weak_idx = on.iter().position(|r| r.source_id == "m_sign_weak");
+        assert!(
+            strong_idx.is_some() && weak_idx.is_some(),
+            "both sign-test memories must surface; got {:?}",
+            on.iter().map(|r| &r.source_id).collect::<Vec<_>>()
+        );
+        assert!(
+            strong_idx.unwrap() < weak_idx.unwrap(),
+            "flag ON: strong FTS match must rank ABOVE weak (sign not inverted); \
+             order={:?}",
+            on.iter()
+                .map(|r| (&r.source_id, r.score))
+                .collect::<Vec<_>>()
+        );
+        for r in &on {
+            assert!(
+                r.score.is_finite() && r.score >= 0.0,
+                "all final scores must be finite and non-negative; got {} for {}",
+                r.score,
+                r.source_id
+            );
+        }
+    }
+
+    /// Test 4a: zero FTS hits with the flag ON — no panic, vector-only results
+    /// returned, all scores finite (no div-by-zero / NaN from the normalizer).
+    #[tokio::test]
+    async fn magnitude_fusion_on_zero_fts_hits_no_panic() {
+        let (db, _tmp) = test_db().await;
+        db.upsert_documents(vec![make_memory_doc(
+            "m_novec",
+            "neural network embeddings semantic similarity retrieval",
+            "fact",
+            "work",
+            "claude-code",
+        )])
+        .await
+        .unwrap();
+
+        // A query whose tokens do not lexically match the seeded content, so the
+        // FTS channel returns zero rows; the vector channel still fires.
+        let result = temp_env::async_with_vars([("ORIGIN_MAGNITUDE_FUSION", Some("1"))], async {
+            db.search_memory(
+                "qwertyuiop zxcvbnm asdfghjkl",
+                10,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+            )
+            .await
+        })
+        .await;
+        assert!(
+            result.is_ok(),
+            "zero-FTS query must not error; got {result:?}"
+        );
+        for r in result.unwrap() {
+            assert!(
+                r.score.is_finite(),
+                "all scores finite on zero-FTS path; got {} for {}",
+                r.score,
+                r.id
+            );
+        }
+    }
+
+    /// Test 4b: unit-test `normalize_fts_magnitudes` directly — empty → empty,
+    /// single → [1.0], all-equal → all 1.0, and never NaN/inf.
+    #[test]
+    fn normalize_fts_magnitudes_guards() {
+        // Empty → empty.
+        assert!(normalize_fts_magnitudes(&[]).is_empty());
+
+        // Single → [1.0] (min == max guard, matches POC `fts_max>0 {..} else {1.0}`).
+        let single = normalize_fts_magnitudes(&[7.5]);
+        assert_eq!(single.len(), 1);
+        assert_eq!(single[0], 1.0);
+
+        // All-equal → all 1.0 (max - min == 0 guard).
+        let equal = normalize_fts_magnitudes(&[3.0, 3.0, 3.0]);
+        assert_eq!(equal, vec![1.0, 1.0, 1.0]);
+
+        // Distinct values → min maps to 0.0, max maps to 1.0, monotone.
+        let distinct = normalize_fts_magnitudes(&[1.0, 3.0, 5.0]);
+        assert_eq!(distinct.len(), 3);
+        assert!((distinct[0] - 0.0).abs() < 1e-6);
+        assert!((distinct[2] - 1.0).abs() < 1e-6);
+        assert!(distinct[1] > distinct[0] && distinct[1] < distinct[2]);
+
+        // No NaN / inf anywhere.
+        for v in normalize_fts_magnitudes(&[0.0, 100.0, 50.0, 0.0]) {
+            assert!(v.is_finite(), "normalizer must never emit NaN/inf; got {v}");
+        }
+    }
+
+    /// Test 3 (THE #1 footgun — sign handling, load-bearing, UNIT level): the
+    /// raw FTS5 bm25 stored in `SearchResult::score` is NEGATIVE and a stronger
+    /// match is MORE negative. `fts_magnitude` must negate so a stronger match
+    /// yields a LARGER positive magnitude. This pins the sign independent of the
+    /// vector channel, which co-varies with FTS in integration and can mask an
+    /// inversion. If the negate is dropped (`raw.max(0.0)`) or the raw-negative
+    /// value flows into the normalizer un-negated, this test fails.
+    #[test]
+    fn fts_magnitude_sign_is_monotonic() {
+        // Stronger FTS match → more-negative raw bm25.
+        let strong_raw = -9.0_f32;
+        let weak_raw = -2.0_f32;
+
+        let strong_mag = fts_magnitude(strong_raw);
+        let weak_mag = fts_magnitude(weak_raw);
+
+        // Negated magnitudes are positive and ordered strong > weak.
+        assert!(
+            strong_mag > 0.0 && weak_mag > 0.0,
+            "magnitudes must be positive"
+        );
+        assert!(
+            strong_mag > weak_mag,
+            "stronger (more-negative raw) match must yield LARGER magnitude; \
+             strong_mag={strong_mag} weak_mag={weak_mag}"
+        );
+        assert_eq!(strong_mag, 9.0);
+        assert_eq!(weak_mag, 2.0);
+
+        // After min-max, the strong match maps to the top of [0,1], the weak to
+        // the bottom — the channel is NOT inverted.
+        let norms = normalize_fts_magnitudes(&[strong_mag, weak_mag]);
+        assert_eq!(norms, vec![1.0, 0.0]);
+
+        // Rare non-negative bm25 clamps to 0.0 (no negative magnitude leaks).
+        assert_eq!(fts_magnitude(1.5), 0.0);
+    }
+
+    /// Test 5 (multiplier stack intact): with the flag ON, the downstream
+    /// confidence / archive multipliers still apply — a confirmed memory still
+    /// outranks an equal-base unconfirmed one.
+    #[tokio::test]
+    async fn magnitude_fusion_on_multiplier_stack_intact() {
+        let (db, _tmp) = test_db().await;
+        // Two memories matching the query equally on the FTS keywords but with
+        // distinct filler so the near-duplicate dedup (Jaccard > 0.92) does not
+        // drop one. One is confirmed, one is not — the confirmation boost in the
+        // multiplier stack must still order confirmed above unconfirmed.
+        let mut confirmed = make_memory_doc(
+            "m_confirmed",
+            "feldspar mineral notes alpha beta gamma delta epsilon",
+            "fact",
+            "work",
+            "claude-code",
+        );
+        confirmed.confirmed = Some(true);
+        let unconfirmed = make_memory_doc(
+            "m_unconfirmed",
+            "feldspar mineral notes omega sigma tau upsilon phi chi",
+            "fact",
+            "work",
+            "claude-code",
+        );
+        db.upsert_documents(vec![confirmed, unconfirmed])
+            .await
+            .unwrap();
+
+        let on = temp_env::async_with_vars([("ORIGIN_MAGNITUDE_FUSION", Some("1"))], async {
+            db.search_memory("feldspar mineral", 10, None, None, None, None, None, None)
+                .await
+                .unwrap()
+        })
+        .await;
+
+        let confirmed_score = on
+            .iter()
+            .find(|r| r.source_id == "m_confirmed")
+            .map(|r| r.score)
+            .expect("confirmed memory must surface");
+        let unconfirmed_score = on
+            .iter()
+            .find(|r| r.source_id == "m_unconfirmed")
+            .map(|r| r.score)
+            .expect("unconfirmed memory must surface");
+        assert!(
+            confirmed_score > unconfirmed_score,
+            "flag ON: confirmed memory must still outrank equal-base unconfirmed \
+             (multiplier stack intact); confirmed={confirmed_score} \
+             unconfirmed={unconfirmed_score}"
         );
     }
 }

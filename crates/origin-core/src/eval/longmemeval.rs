@@ -1157,20 +1157,29 @@ pub async fn run_longmemeval_eval_cross_rerank_from_db(
         coverage,
     };
 
-    // Branch variant_tag on ORIGIN_ENABLE_PAGE_CHANNEL so page-ON and page-OFF
-    // produce distinct baseline filenames (comparable_hash uses the variant string).
+    // Branch variant_tag on ORIGIN_ENABLE_PAGE_CHANNEL + ORIGIN_MAGNITUDE_FUSION
+    // so each variant produces distinct baseline filenames (comparable_hash uses
+    // the variant string). magfusion appends `_magfusion` when enabled.
     let page_channel_state = if crate::db::page_channel_enabled() {
         "on"
     } else {
         "off"
     };
-    let variant_tag = if page_channel_state == "off" {
-        "cross_rerank_v2_no_pages"
+    let magfusion_state = if crate::db::magnitude_fusion_enabled() {
+        "on"
     } else {
-        "cross_rerank_v2_pages"
+        "off"
     };
+    let mut variant_tag = if page_channel_state == "off" {
+        "cross_rerank_v2_no_pages".to_string()
+    } else {
+        "cross_rerank_v2_pages".to_string()
+    };
+    if magfusion_state == "on" {
+        variant_tag.push_str("_magfusion");
+    }
     let mut env_stamp = build_lme_env(
-        variant_tag,
+        &variant_tag,
         path,
         "search_memory_with_reranker",
         "cross-encoder",
@@ -1180,6 +1189,9 @@ pub async fn run_longmemeval_eval_cross_rerank_from_db(
     env_stamp
         .flags
         .push(format!("page_channel={}", page_channel_state));
+    env_stamp
+        .flags
+        .push(format!("magnitude_fusion={}", magfusion_state));
     env_stamp.flags.push("scenario_db=consolidated".to_string());
     report.env = Some(env_stamp);
     Ok(report)
