@@ -851,11 +851,21 @@ pub fn parse_classify_response(raw: &str) -> Option<crate::classify::Classificat
         .map(|s| s.to_lowercase())
         .filter(|s| matches!(s.as_str(), "low" | "medium" | "high"));
 
+    // T8 salience prior. Defensive parse: a JSON NUMBER is clamped to [1, 10]
+    // (out-of-range numbers are a miscalibrated-but-real signal). Absent / null /
+    // non-numeric (string, array, object) -> None. NEVER default to a number
+    // (the silent-data-loss class behind the lost-5901-memories incident).
+    let importance = val
+        .get("importance")
+        .and_then(|v| v.as_u64())
+        .map(|n| n.clamp(1, 10) as u8);
+
     Some(crate::classify::ClassificationResult {
         memory_type,
         space,
         tags,
         quality,
+        importance,
     })
 }
 
@@ -1543,6 +1553,51 @@ mod tests {
     #[test]
     fn test_parse_classify_response_invalid() {
         assert!(parse_classify_response("not json at all").is_none());
+    }
+
+    // --- T8 importance parse (L2 tests) ---
+
+    #[test]
+    fn parse_classify_extracts_importance() {
+        let c = parse_classify_response(
+            r#"{"memory_type": "fact", "domain": "x", "tags": [], "importance": 8}"#,
+        )
+        .unwrap();
+        assert_eq!(c.importance, Some(8));
+    }
+
+    #[test]
+    fn parse_classify_importance_clamps() {
+        // >10 clamps to 10.
+        let hi =
+            parse_classify_response(r#"{"memory_type": "fact", "tags": [], "importance": 99}"#)
+                .unwrap();
+        assert_eq!(hi.importance, Some(10));
+        // 0 is below the [1,10] band -> clamps to 1 (a present number is a real,
+        // if miscalibrated, signal). Only non-numeric / absent values stay None.
+        let lo = parse_classify_response(r#"{"memory_type": "fact", "tags": [], "importance": 0}"#)
+            .unwrap();
+        assert_eq!(lo.importance, Some(1));
+    }
+
+    #[test]
+    fn parse_classify_importance_absent_is_none() {
+        // No importance key -> None (NEVER a default number).
+        let c = parse_classify_response(r#"{"memory_type": "fact", "tags": []}"#).unwrap();
+        assert_eq!(c.importance, None);
+    }
+
+    #[test]
+    fn parse_classify_importance_malformed_is_none() {
+        // String, null, and array all -> None, no error (silent-zero-class guard).
+        for body in [
+            r#"{"memory_type": "fact", "tags": [], "importance": "high"}"#,
+            r#"{"memory_type": "fact", "tags": [], "importance": null}"#,
+            r#"{"memory_type": "fact", "tags": [], "importance": []}"#,
+        ] {
+            let c = parse_classify_response(body).unwrap();
+            assert_eq!(c.importance, None, "body={body}");
+        }
     }
 
     #[test]

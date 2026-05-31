@@ -43,6 +43,10 @@ pub struct SearchResult {
     pub entity_name: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub quality: Option<String>,
+    /// T8 salience prior: per-memory importance 1-10 (NULL = unrated). Read into
+    /// the ranking formula only when `ORIGIN_ENABLE_SALIENCE_PRIOR` is on.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub importance: Option<u8>,
     #[serde(default)]
     pub is_archived: bool,
     #[serde(default)]

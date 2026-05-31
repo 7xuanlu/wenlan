@@ -173,6 +173,9 @@ pub struct RawDocument {
     /// Quality assessment: "low", "medium", "high" (NULL = unassessed)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub quality: Option<String>,
+    /// T8 salience prior: importance rating 1-10 (LLM-assigned), NULL = unrated.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub importance: Option<u8>,
     /// Whether this memory is a recap/summary of other memories
     #[serde(default)]
     pub is_recap: bool,
@@ -223,6 +226,7 @@ impl Default for RawDocument {
             pending_revision: false,
             entity_id: None,
             quality: None,
+            importance: None,
             is_recap: false,
             enrichment_status: "raw".to_string(),
             supersede_mode: "hide".to_string(),

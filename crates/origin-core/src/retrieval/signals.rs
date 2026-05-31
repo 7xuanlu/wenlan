@@ -52,6 +52,30 @@ pub(crate) fn temporal_proximity(query_date: i64, event_date: Option<i64>, sigma
     }
 }
 
+/// T8 salience prior multiplier. Maps a per-memory `importance` rating (1-10,
+/// LLM-assigned at write time) to a multiplicative ranking factor in
+/// `[floor, ceil]`.
+///
+/// - `None` short-circuits to exactly `1.0` (neutral) — NOT the band midpoint —
+///   so cold-start rows with no importance never move in ranking. This is the
+///   load-bearing safety property: the band default `[0.85, 1.15]` straddles 1.0
+///   but its midpoint is 1.0 only by coincidence; relying on it would silently
+///   demote/boost un-rated rows. The explicit short-circuit guarantees neutrality.
+/// - `Some(i)` clamps `i` to `[1, 10]`, then linearly maps `1 -> floor`,
+///   `10 -> ceil`. Strictly monotone in `i`. Never panics.
+///
+/// Plain `pub(crate) fn` matching the other signal helpers; wired into the
+/// `search_memory` ranking closure behind `db::salience_prior_enabled()`.
+pub(crate) fn salience_multiplier(importance: Option<u8>, floor: f64, ceil: f64) -> f64 {
+    match importance {
+        None => 1.0,
+        Some(i) => {
+            let i = i.clamp(1, 10) as f64;
+            floor + (i - 1.0) / 9.0 * (ceil - floor)
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // T9 — Wide-pool-seeded graph expansion helpers
 // ---------------------------------------------------------------------------
@@ -345,6 +369,58 @@ mod tests {
         assert_eq!(parse_seed_top_k(Some("100")), 50);
         assert_eq!(parse_seed_top_k(Some("0")), 10);
         assert_eq!(parse_seed_top_k(Some("bad")), 10);
+    }
+
+    // ---------------------------------------------------------------------------
+    // T8 — salience prior multiplier (L1 tests)
+    // ---------------------------------------------------------------------------
+
+    #[test]
+    fn salience_none_is_neutral() {
+        // None short-circuits to exactly 1.0, NOT the band midpoint.
+        assert_eq!(salience_multiplier(None, 0.85, 1.15), 1.0);
+    }
+
+    #[test]
+    fn salience_max_is_ceil() {
+        assert!((salience_multiplier(Some(10), 0.85, 1.15) - 1.15).abs() < 1e-6);
+    }
+
+    #[test]
+    fn salience_min_is_floor() {
+        assert!((salience_multiplier(Some(1), 0.85, 1.15) - 0.85).abs() < 1e-6);
+    }
+
+    #[test]
+    fn salience_mid_near_one() {
+        // importance 5 and 6 straddle the band center; both within ~0.05 of 1.0.
+        let m5 = salience_multiplier(Some(5), 0.85, 1.15);
+        let m6 = salience_multiplier(Some(6), 0.85, 1.15);
+        assert!((m5 - 1.0).abs() < 0.05, "m5={m5}");
+        assert!((m6 - 1.0).abs() < 0.05, "m6={m6}");
+        // 5 is just below 1.0, 6 just above.
+        assert!(m5 < 1.0 && m6 > 1.0, "m5={m5} m6={m6}");
+    }
+
+    #[test]
+    fn salience_monotone() {
+        let a = salience_multiplier(Some(1), 0.85, 1.15);
+        let b = salience_multiplier(Some(5), 0.85, 1.15);
+        let c = salience_multiplier(Some(10), 0.85, 1.15);
+        assert!(a < b, "1 < 5: {a} < {b}");
+        assert!(b < c, "5 < 10: {b} < {c}");
+    }
+
+    #[test]
+    fn salience_clamps_out_of_range() {
+        // 0 clamps to floor (treated as 1), >10 clamps to ceil (treated as 10).
+        assert!((salience_multiplier(Some(0), 0.85, 1.15) - 0.85).abs() < 1e-6);
+        assert!((salience_multiplier(Some(255), 0.85, 1.15) - 1.15).abs() < 1e-6);
+        // never panics, always within [floor, ceil].
+        for i in 0u8..=255 {
+            let m = salience_multiplier(Some(i), 0.85, 1.15);
+            assert!((0.85..=1.15).contains(&m), "i={i} m={m}");
+        }
     }
 
     #[test]

@@ -1267,6 +1267,14 @@ pub async fn run_locomo_eval_cross_rerank_from_db(
     } else {
         "off"
     };
+    // T8: append __salience suffix when ORIGIN_ENABLE_SALIENCE_PRIOR is on, so
+    // salience-ON and salience-OFF baselines get distinct baseline filenames.
+    let salience_state = if crate::db::salience_prior_enabled() {
+        variant_tag.push_str("__salience");
+        "on"
+    } else {
+        "off"
+    };
     let mut env_stamp = build_locomo_env(
         &variant_tag,
         path,
@@ -1289,6 +1297,9 @@ pub async fn run_locomo_eval_cross_rerank_from_db(
     env_stamp
         .flags
         .push(format!("query_intent={}", query_intent_state));
+    env_stamp
+        .flags
+        .push(format!("salience_prior={}", salience_state));
     env_stamp.flags.push("scenario_db=consolidated".to_string());
     report.env = Some(env_stamp);
     Ok(report)

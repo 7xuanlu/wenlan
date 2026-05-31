@@ -129,6 +129,12 @@ fn d_03_f32() -> f32 {
 fn d_60_f32() -> f32 {
     60.0
 }
+fn d_085_f32() -> f32 {
+    0.85
+}
+fn d_115_f32() -> f32 {
+    1.15
+}
 fn d_02_f32() -> f32 {
     0.2
 }
@@ -468,6 +474,12 @@ pub struct SearchScoringConfig {
     /// keyword-matching noise that can overpower semantic similarity.
     #[serde(default = "d_02_f32")]
     pub fts_weight: f32,
+    /// T8 salience prior band floor: importance=1 maps to this multiplier.
+    #[serde(default = "d_085_f32")]
+    pub salience_floor: f32,
+    /// T8 salience prior band ceil: importance=10 maps to this multiplier.
+    #[serde(default = "d_115_f32")]
+    pub salience_ceil: f32,
 }
 
 // Remaining manual Default impls for sub-configs with serde default helpers.
@@ -577,6 +589,8 @@ impl Default for SearchScoringConfig {
             rrf_k: 60.0,
             domain_boost: 1.5,
             fts_weight: 0.5,
+            salience_floor: 0.85,
+            salience_ceil: 1.15,
         }
     }
 }
