@@ -64,6 +64,7 @@ fn alpha_search_result() -> SearchResult {
         entity_id: None,
         entity_name: None,
         quality: None,
+        importance: None,
         is_archived: false,
         is_recap: false,
         structured_fields: None,

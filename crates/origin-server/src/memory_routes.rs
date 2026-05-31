@@ -455,6 +455,7 @@ pub async fn handle_store_memory(
         pending_revision,
         entity_id: resolved_entity_id.clone(),
         quality: classified_quality.clone(),
+        importance: None,
         is_recap: false,
         enrichment_status: "raw".to_string(),
         supersede_mode,
@@ -758,6 +759,7 @@ pub async fn handle_store_memory(
             let mut final_domain = initial_domain.clone();
             let mut final_supersede_mode = initial_supersede_mode.clone();
             let mut final_quality: Option<String> = None;
+            let mut final_importance: Option<u8> = None;
             let mut final_structured_fields: Option<String> = initial_structured_fields.clone();
             let mut final_retrieval_cue: Option<String> = None;
             let mut final_event_date: Option<i64> = None;
@@ -807,6 +809,7 @@ pub async fn handle_store_memory(
                                 final_domain = c.space;
                             }
                             final_quality = c.quality;
+                            final_importance = c.importance;
                             classified_tags_async = c.tags;
                         }
                     }
@@ -870,6 +873,7 @@ pub async fn handle_store_memory(
                         final_retrieval_cue.as_deref(),
                         final_event_date,
                         final_event_end,
+                        final_importance,
                     )
                     .await
                 {
@@ -3876,6 +3880,7 @@ mod partition_pages_tests {
             entity_id: None,
             entity_name: None,
             quality: None,
+            importance: None,
             is_archived: false,
             is_recap: false,
             structured_fields: None,

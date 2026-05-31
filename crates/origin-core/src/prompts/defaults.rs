@@ -13,23 +13,25 @@ tags are 2-4 semantic keywords (lowercase)";
 
 pub(crate) const CLASSIFY_MEMORY_QUALITY: &str = "\
 Classify this memory. Respond with ONLY valid JSON:\n\
-{\"memory_type\": \"...\", \"domain\": \"...\", \"tags\": [\"...\", \"...\"], \"quality\": \"...\"}\n\n\
+{\"memory_type\": \"...\", \"domain\": \"...\", \"tags\": [\"...\", \"...\"], \"quality\": \"...\", \"importance\": <1-10>}\n\n\
 memory_type must be one of: identity, preference, decision, lesson, gotcha, fact\n\
 - decision: a choice was made between alternatives, or a direction was chosen with rationale (e.g. \"switched from X to Y because...\", \"chose to use X over Y\")\n\
 - fact: objective knowledge without a choice (e.g. \"X supports feature Y\", \"the API returns JSON\")\n\
 domain is a short topic label (1-3 words, lowercase)\n\
 tags are 2-4 semantic keywords (lowercase)\n\
-quality is low (vague/trivial), medium (useful), or high (specific+actionable)";
+quality is low (vague/trivial), medium (useful), or high (specific+actionable)\n\
+importance is 1-10: 1 = purely mundane/derivable, 10 = identity-defining or a major decision";
 
 pub(crate) const CLASSIFY_MEMORY_QUALITY_STRICT: &str = "\
 Classify this memory. Respond with ONLY valid JSON:\n\
-{\"memory_type\": \"...\", \"domain\": \"...\", \"tags\": [\"...\", \"...\"], \"quality\": \"...\"}\n\n\
+{\"memory_type\": \"...\", \"domain\": \"...\", \"tags\": [\"...\", \"...\"], \"quality\": \"...\", \"importance\": <1-10>}\n\n\
 memory_type must be one of: identity, preference, decision, lesson, gotcha, fact\n\
 - decision: a choice was made between alternatives, or a direction was chosen with rationale (e.g. \"switched from X to Y because...\", \"chose to use X over Y\")\n\
 - fact: objective knowledge without a choice (e.g. \"X supports feature Y\", \"the API returns JSON\")\n\
 domain is a short topic label (1-3 words, lowercase)\n\
 tags are 2-4 semantic keywords (lowercase)\n\
-quality must be one of: low, medium, high (how specific and actionable is this memory?)";
+quality must be one of: low, medium, high (how specific and actionable is this memory?)\n\
+importance must be an integer 1-10: 1 = purely mundane/derivable, 10 = identity-defining or a major decision";
 
 // Used by llm_formatter in the app crate; referenced again once llm_formatter
 // moves into origin-core in a later phase.

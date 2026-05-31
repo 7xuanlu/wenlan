@@ -663,6 +663,7 @@ mod tests {
             pending_revision: false,
             entity_id: None,
             quality: None,
+            importance: None,
             is_recap: false,
             enrichment_status: "raw".to_string(),
             supersede_mode: "hide".to_string(),

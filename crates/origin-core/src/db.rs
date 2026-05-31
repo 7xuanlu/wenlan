@@ -27,7 +27,7 @@ pub const EMBEDDING_DIM: usize = 768;
 
 /// Current DB schema version (highest `PRAGMA user_version` applied by `migrate()`).
 /// Bump this whenever a new migration lands. Used as an eval cache invalidation key.
-pub const SCHEMA_VERSION: u32 = 54;
+pub const SCHEMA_VERSION: u32 = 55;
 
 /// Shared embedder reference. Pass to [`MemoryDB::new_with_shared_embedder`] to
 /// reuse a single embedder across many `MemoryDB` instances. Created via
@@ -427,17 +427,27 @@ pub fn page_channel_enabled() -> bool {
         .unwrap_or(false)
 }
 
+/// True iff `ORIGIN_ENABLE_SALIENCE_PRIOR` is set to a truthy value
+/// (`1`, `true`, or `yes`, case-insensitive). T8 salience prior is OPT-IN:
+/// when unset or falsey, the ranking formula forces `salience_mult` to `1.0`,
+/// so output is byte-identical to pre-T8. "Write-always, rank-gated": the
+/// importance column backfills passively while this flag is off; only the READ
+/// into ranking is gated. Mirrors [`page_channel_enabled`] (truthy-only parse).
+pub fn salience_prior_enabled() -> bool {
+    std::env::var("ORIGIN_ENABLE_SALIENCE_PRIOR")
+        .ok()
+        .map(|v| matches!(v.trim().to_ascii_lowercase().as_str(), "1" | "true" | "yes"))
+        .unwrap_or(false)
+}
+
 /// True iff `ORIGIN_ENABLE_SESSION_DIVERSITY` is set to a truthy value
 /// (`1`, `true`, or `yes`, case-insensitive).  OPT-IN, default OFF: when
 /// unset or falsey, [`MemoryDB::search_memory_cross_rerank`] output is
 /// byte-identical to pre-T20 behaviour (regression guard tests #13/#14).
 ///
-/// Enables the per-session diversification cap in T20 so that a single
-/// LME conversation session cannot monopolise the top-`limit` results.
 /// Production source_ids (`mem_*`) return `None` from
 /// `retrieval::session_diversity::session_key` and are never counted
-/// against the cap — safe to enable in production without side-effects
-/// until a real session column ships.
+/// against the cap — safe to enable in production until a real session column ships.
 pub fn session_diversity_enabled() -> bool {
     std::env::var("ORIGIN_ENABLE_SESSION_DIVERSITY")
         .ok()
@@ -453,7 +463,6 @@ fn session_diversity_max() -> usize {
         .and_then(|v| v.trim().parse().ok())
         .unwrap_or(3)
 }
-
 /// True iff `ORIGIN_ENABLE_GRAPH_GATE` is set to a truthy value
 /// (`1`, `true`, or `yes`, case-insensitive). OPT-IN: when unset or falsey,
 /// `augment_with_graph` runs unconditionally (legacy behavior, byte-identical).
@@ -5153,6 +5162,46 @@ impl MemoryDB {
                     .map_err(|e| OriginError::VectorDb(format!("m54 bump: {e}")))?;
                 log::info!("[migration] Migration 54 applied: memory_entities junction table");
             }
+
+            // Migration 55: T8 salience prior. Add the per-memory importance
+            // column (1-10, LLM-assigned at write time; NULL = unrated). Additive
+            // and non-destructive: existing rows keep NULL, which the ranking
+            // formula reads as a neutral 1.0 multiplier (cold-start neutrality).
+            if version < 55 {
+                let conn = self.conn.lock().await;
+                // Idempotency probe (mirrors m52): if importance already exists
+                // (e.g. a test rolled user_version back), skip the ALTER and just
+                // bump the version.
+                let already_added: bool = {
+                    let mut rows = conn
+                        .query(
+                            "SELECT COUNT(*) FROM pragma_table_info('memories') WHERE name = 'importance'",
+                            (),
+                        )
+                        .await
+                        .map_err(|e| OriginError::VectorDb(format!("m55 probe: {e}")))?;
+                    match rows.next().await {
+                        Ok(Some(row)) => row.get::<i64>(0).unwrap_or(0) > 0,
+                        _ => false,
+                    }
+                };
+                if already_added {
+                    conn.execute("PRAGMA user_version = 55", ())
+                        .await
+                        .map_err(|e| {
+                            OriginError::VectorDb(format!("m55 bump (already done): {e}"))
+                        })?;
+                    log::info!("[migration] Migration 55 skipped (already applied): bumped user_version to 55");
+                } else {
+                    conn.execute("ALTER TABLE memories ADD COLUMN importance INTEGER", ())
+                        .await
+                        .map_err(|e| OriginError::VectorDb(format!("m55 add importance: {e}")))?;
+                    conn.execute("PRAGMA user_version = 55", ())
+                        .await
+                        .map_err(|e| OriginError::VectorDb(format!("m55 bump: {e}")))?;
+                    log::info!("[migration] Migration 55 applied: memories.importance column (T8 salience prior)");
+                }
+            }
         }
 
         Ok(())
@@ -6285,7 +6334,9 @@ impl MemoryDB {
     /// 16=source_agent, 17=confidence, 18=confirmed, 19=stability, 20=supersedes,
     /// 21=entity_id, 22=quality, 23=is_recap, 24=supersede_mode,
     /// 25=structured_fields, 26=retrieval_cue, 27=source_text,
-    /// 28=version, 29=pending_revision, 30=score/distance/rank
+    /// 28=version, 29=pending_revision, 30=score/distance/rank,
+    /// 31=importance (T8 salience prior — APPENDED LAST so indices 0-30 and every
+    ///   `row.get(30)` score read stay byte-identical; never insert before 30).
     fn row_to_search_result(row: &libsql::Row, score: f32) -> Result<SearchResult, OriginError> {
         let source_id: String = row
             .get::<String>(3)
@@ -6331,6 +6382,7 @@ impl MemoryDB {
             entity_id: row.get::<Option<String>>(21).unwrap_or(None),
             entity_name: None, // Populated separately via entity lookup
             quality: row.get::<Option<String>>(22).unwrap_or(None),
+            importance: row.get::<Option<i64>>(31).unwrap_or(None).map(|v| v as u8),
             is_recap: row
                 .get::<Option<i64>>(23)
                 .unwrap_or(None)
@@ -6387,6 +6439,7 @@ impl MemoryDB {
             #[allow(dead_code)]
             enrichment_status: String,
             quality: Option<String>,
+            importance: Option<u8>,
             is_recap: bool,
             supersede_mode: String,
             structured_fields: Option<String>,
@@ -6472,6 +6525,7 @@ impl MemoryDB {
                     entity_id: doc.entity_id.clone(),
                     enrichment_status: doc.enrichment_status.clone(),
                     quality: doc.quality.clone(),
+                    importance: doc.importance,
                     is_recap: doc.is_recap,
                     supersede_mode: doc.supersede_mode.clone(),
                     structured_fields: doc.structured_fields.clone(),
@@ -6574,6 +6628,10 @@ impl MemoryDB {
                 .unwrap_or(libsql::Value::Null);
             let quality_val: libsql::Value =
                 row.quality.map(|s| s.into()).unwrap_or(libsql::Value::Null);
+            let importance_val: libsql::Value = row
+                .importance
+                .map(|v| (v as i64).into())
+                .unwrap_or(libsql::Value::Null);
             let is_recap_val: i64 = if row.is_recap { 1 } else { 0 };
             let structured_fields_val: libsql::Value = row
                 .structured_fields
@@ -6595,12 +6653,12 @@ impl MemoryDB {
                     stability, supersedes, pending_revision, word_count,
                     entity_id, enrichment_status, quality, is_recap, supersede_mode,
                     structured_fields, retrieval_cue, source_text,
-                    embedding, created_at)
+                    embedding, created_at, importance)
                  VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15,
                     ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23,
                     ?24, ?25, ?26, ?27, ?28,
                     ?29, ?30, ?31,
-                    vector32(?32), ?33)",
+                    vector32(?32), ?33, ?34)",
                 libsql::params![
                     row.id,
                     row.content,
@@ -6634,7 +6692,8 @@ impl MemoryDB {
                     retrieval_cue_val,
                     source_text_val,
                     vec_str,
-                    row.last_modified // created_at = last_modified at insert time
+                    row.last_modified, // created_at = last_modified at insert time
+                    importance_val
                 ],
             )
             .await
@@ -6737,7 +6796,8 @@ impl MemoryDB {
                         c.entity_id, c.quality, c.is_recap, c.supersede_mode,
                         c.structured_fields, c.retrieval_cue, c.source_text,
                         c.version, c.pending_revision,
-                        vector_distance_cos(c.embedding, vector32(?1))
+                        vector_distance_cos(c.embedding, vector32(?1)),
+                        c.importance
                  FROM vector_top_k('memories_vec_idx', vector32(?1), ?2) AS vt
                  JOIN memories c ON c.rowid = vt.id
                  WHERE 1=1 {} {}",
@@ -6806,7 +6866,8 @@ impl MemoryDB {
                         c.entity_id, c.quality, c.is_recap, c.supersede_mode,
                         c.structured_fields, c.retrieval_cue, c.source_text,
                         c.version, c.pending_revision,
-                        fts.rank
+                        fts.rank,
+                        c.importance
                  FROM memories_fts fts
                  JOIN memories c ON fts.rowid = c.rowid
                  WHERE memories_fts MATCH ?1 {} {}
@@ -7065,7 +7126,8 @@ impl MemoryDB {
                         c.entity_id, c.quality, c.is_recap, c.supersede_mode,
                         c.structured_fields, c.retrieval_cue, c.source_text,
                         c.version, c.pending_revision,
-                        vector_distance_cos(c.embedding, vector32(?1))
+                        vector_distance_cos(c.embedding, vector32(?1)),
+                        c.importance
                  FROM vector_top_k('memories_vec_idx', vector32(?1), ?2) AS vt
                  JOIN memories c ON c.rowid = vt.id
                  WHERE 1=1 {} {}",
@@ -7125,7 +7187,8 @@ impl MemoryDB {
                         c.entity_id, c.quality, c.is_recap, c.supersede_mode,
                         c.structured_fields, c.retrieval_cue, c.source_text,
                         c.version, c.pending_revision,
-                        fts.rank
+                        fts.rank,
+                        c.importance
                  FROM memories_fts fts
                  JOIN memories c ON fts.rowid = c.rowid
                  WHERE memories_fts MATCH ?1 {} {}
@@ -7330,8 +7393,26 @@ impl MemoryDB {
                     1.0
                 };
 
-                r.score =
-                    rrf * conf * recency * quality_mult * confirm_mult * recap_mult * space_mult;
+                // T8 salience prior (opt-in, rank-gated). Flag OFF -> forced 1.0
+                // so the formula below is byte-identical to pre-T8. Flag ON ->
+                // None importance still maps to 1.0 (cold-start neutrality), so
+                // NULL-importance corpora are unaffected even with the flag on.
+                let salience_mult = if salience_prior_enabled() {
+                    let floor = scoring.map(|s| s.salience_floor).unwrap_or(0.85) as f64;
+                    let ceil = scoring.map(|s| s.salience_ceil).unwrap_or(1.15) as f64;
+                    crate::retrieval::signals::salience_multiplier(r.importance, floor, ceil) as f32
+                } else {
+                    1.0
+                };
+
+                r.score = rrf
+                    * conf
+                    * recency
+                    * quality_mult
+                    * confirm_mult
+                    * recap_mult
+                    * space_mult
+                    * salience_mult;
 
                 // Mark archived decisions (superseded with mode='archive')
                 if archived_ids.contains(&r.source_id) {
@@ -8530,7 +8611,8 @@ impl MemoryDB {
                         c.entity_id, c.quality, c.is_recap, c.supersede_mode,
                         c.structured_fields, c.retrieval_cue, c.source_text,
                         c.version, c.pending_revision,
-                        vector_distance_cos(c.embedding, vector32(?1))
+                        vector_distance_cos(c.embedding, vector32(?1)),
+                        c.importance
                  FROM vector_top_k('memories_vec_idx', vector32(?1), ?2) AS vt
                  JOIN memories c ON c.rowid = vt.id
                  WHERE c.pending_revision = 0 AND c.space = ?3"
@@ -8550,7 +8632,8 @@ impl MemoryDB {
                         c.entity_id, c.quality, c.is_recap, c.supersede_mode,
                         c.structured_fields, c.retrieval_cue, c.source_text,
                         c.version, c.pending_revision,
-                        vector_distance_cos(c.embedding, vector32(?1))
+                        vector_distance_cos(c.embedding, vector32(?1)),
+                        c.importance
                  FROM vector_top_k('memories_vec_idx', vector32(?1), ?2) AS vt
                  JOIN memories c ON c.rowid = vt.id
                  WHERE c.pending_revision = 0"
@@ -8622,7 +8705,8 @@ impl MemoryDB {
                     c.entity_id, c.quality, c.is_recap, c.supersede_mode,
                     c.structured_fields, c.retrieval_cue, c.source_text,
                     c.version, c.pending_revision,
-                    fts.rank
+                    fts.rank,
+                    c.importance
              FROM memories_fts fts
              JOIN memories c ON fts.rowid = c.rowid
              WHERE memories_fts MATCH ?1
@@ -8919,6 +9003,7 @@ impl MemoryDB {
                 entity_id: None,
                 entity_name: Some(entity_name),
                 quality: None,
+                importance: None,
                 is_archived: false,
                 is_recap: false,
                 structured_fields: None,
@@ -8982,6 +9067,7 @@ impl MemoryDB {
             entity_id: page.entity_id,
             entity_name: None,
             quality: None,
+            importance: None,
             is_archived: false,
             is_recap: false,
             structured_fields: None,
@@ -15121,6 +15207,7 @@ impl MemoryDB {
     /// across all chunks for row-level metadata (memory_type/space/quality/
     /// supersede_mode), one targeted at chunk_index=0 for extraction fields.
     #[allow(clippy::too_many_arguments)]
+    #[allow(clippy::too_many_arguments)]
     pub async fn apply_enrichment(
         &self,
         source_id: &str,
@@ -15132,8 +15219,14 @@ impl MemoryDB {
         retrieval_cue: Option<&str>,
         event_date: Option<i64>,
         event_end: Option<i64>,
+        importance: Option<u8>,
     ) -> Result<(), OriginError> {
         let conn = self.conn.lock().await;
+        // T8 salience prior: write-always. COALESCE preserves any value set at
+        // INSERT time; None leaves the column untouched (NULL stays NULL).
+        let importance_val: libsql::Value = importance
+            .map(|v| libsql::Value::Integer(v as i64))
+            .unwrap_or(libsql::Value::Null);
         // Row-level metadata — mirrored across all chunks. `COALESCE(?, col)`
         // keeps the existing column when the caller passes `None`, so agents
         // that supplied e.g. a space at store time don't get it overwritten.
@@ -15142,9 +15235,17 @@ impl MemoryDB {
                 memory_type = ?1,
                 space = COALESCE(?2, space),
                 quality = COALESCE(?3, quality),
-                supersede_mode = ?4
+                supersede_mode = ?4,
+                importance = COALESCE(?6, importance)
              WHERE source_id = ?5",
-            libsql::params![memory_type, space, quality, supersede_mode, source_id],
+            libsql::params![
+                memory_type,
+                space,
+                quality,
+                supersede_mode,
+                source_id,
+                importance_val
+            ],
         )
         .await
         .map_err(|e| OriginError::VectorDb(format!("apply_enrichment: {}", e)))?;
@@ -20542,6 +20643,433 @@ pub(crate) mod tests {
         }
     }
 
+    // =====================================================================
+    // T8 — salience prior (L3 migration + L4 ranking + L5 env gate) tests
+    // =====================================================================
+
+    #[tokio::test]
+    async fn migration_55_adds_importance_column() {
+        let (db, _dir) = test_db().await;
+        let conn = db.conn.lock().await;
+        // importance column present.
+        let mut rows = conn
+            .query(
+                "SELECT COUNT(*) FROM pragma_table_info('memories') WHERE name = 'importance'",
+                (),
+            )
+            .await
+            .unwrap();
+        let present: i64 = rows.next().await.unwrap().unwrap().get(0).unwrap();
+        assert_eq!(present, 1, "importance column should exist");
+        // user_version bumped to current SCHEMA_VERSION.
+        let mut vrows = conn.query("PRAGMA user_version", ()).await.unwrap();
+        let uv: i64 = vrows.next().await.unwrap().unwrap().get(0).unwrap();
+        assert_eq!(uv as u32, crate::db::SCHEMA_VERSION);
+        assert_eq!(uv, 55);
+    }
+
+    #[tokio::test]
+    async fn migration_55_idempotent() {
+        let (db, _dir) = test_db().await;
+        // Roll user_version back and re-run migrations: must not error even though
+        // the importance column already exists (mirrors m52 idempotency probe).
+        {
+            let conn = db.conn.lock().await;
+            conn.execute("PRAGMA user_version = 54", ()).await.unwrap();
+        }
+        db.run_migrations(&crate::events::NoopEmitter)
+            .await
+            .expect("re-run migrations idempotent");
+        let conn = db.conn.lock().await;
+        let mut vrows = conn.query("PRAGMA user_version", ()).await.unwrap();
+        let uv: i64 = vrows.next().await.unwrap().unwrap().get(0).unwrap();
+        assert_eq!(
+            uv, 55,
+            "user_version restored to 55 after idempotent re-run"
+        );
+    }
+
+    #[tokio::test]
+    async fn store_persists_importance() {
+        let (db, _dir) = test_db().await;
+        db.upsert_documents(vec![make_memory_doc(
+            "imp7",
+            "Some content about distributed systems and consensus",
+            "fact",
+            "tech",
+            "claude",
+        )])
+        .await
+        .unwrap();
+        // Seed importance directly (no classifier in unit test) then read back.
+        {
+            let conn = db.conn.lock().await;
+            conn.execute(
+                "UPDATE memories SET importance = 7 WHERE source_id = 'imp7'",
+                libsql::params![],
+            )
+            .await
+            .unwrap();
+            let mut rows = conn
+                .query(
+                    "SELECT importance FROM memories WHERE source_id = 'imp7'",
+                    (),
+                )
+                .await
+                .unwrap();
+            let imp: Option<i64> = rows.next().await.unwrap().unwrap().get(0).unwrap();
+            assert_eq!(imp, Some(7));
+        }
+    }
+
+    #[tokio::test]
+    async fn store_null_importance_default() {
+        let (db, _dir) = test_db().await;
+        db.upsert_documents(vec![make_memory_doc(
+            "impnull",
+            "Content without any importance assigned at write time",
+            "fact",
+            "tech",
+            "claude",
+        )])
+        .await
+        .unwrap();
+        let conn = db.conn.lock().await;
+        let mut rows = conn
+            .query(
+                "SELECT importance FROM memories WHERE source_id = 'impnull'",
+                (),
+            )
+            .await
+            .unwrap();
+        let imp: Option<i64> = rows.next().await.unwrap().unwrap().get(0).unwrap();
+        assert_eq!(imp, None, "importance should be NULL when never assigned");
+    }
+
+    /// L4 CORRUPTION NET: after appending c.importance to the SELECT projections,
+    /// a known memory must still round-trip EVERY field. If any row.get(N) offset
+    /// shifted, quality/stability/confidence/version/source_text would corrupt.
+    #[tokio::test]
+    async fn salience_does_not_corrupt_columns() {
+        let (db, _dir) = test_db().await;
+        let mut doc = make_memory_doc(
+            "corrupt_net",
+            "Postgres uses MVCC for concurrency control in transactional workloads",
+            "fact",
+            "databases",
+            "claude",
+        );
+        doc.confidence = Some(0.83);
+        doc.stability = Some("learned".to_string());
+        doc.quality = Some("high".to_string());
+        doc.source_text = Some("ORIGINAL SOURCE TEXT MARKER".to_string());
+        db.upsert_documents(vec![doc]).await.unwrap();
+        // Also set importance so the new column carries a non-NULL value.
+        {
+            let conn = db.conn.lock().await;
+            conn.execute(
+                "UPDATE memories SET importance = 9 WHERE source_id = 'corrupt_net'",
+                libsql::params![],
+            )
+            .await
+            .unwrap();
+        }
+
+        let results = db
+            .search_memory(
+                "Postgres MVCC concurrency control transactional",
+                10,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+        let r = results
+            .iter()
+            .find(|r| r.source_id == "corrupt_net")
+            .expect("corrupt_net memory should be retrievable");
+
+        // Every positional field must round-trip unchanged (index-drift net).
+        assert_eq!(r.quality.as_deref(), Some("high"), "quality (idx 22)");
+        assert_eq!(
+            r.stability.as_deref(),
+            Some("learned"),
+            "stability (idx 19)"
+        );
+        assert_eq!(r.version, 1, "version (idx 28)");
+        assert!(!r.pending_revision, "pending_revision (idx 29)");
+        assert_eq!(
+            r.source_text.as_deref(),
+            Some("ORIGINAL SOURCE TEXT MARKER"),
+            "source_text (idx 27)",
+        );
+        let conf = r.confidence.expect("confidence (idx 17) present");
+        assert!((conf - 0.83).abs() < 1e-4, "confidence = {conf}");
+        assert!(r.space.as_deref() == Some("databases"), "space (idx 15)");
+        assert!(
+            r.memory_type.as_deref() == Some("fact"),
+            "memory_type (idx 14)"
+        );
+        // score (idx 30) is sane (non-zero, finite).
+        assert!(
+            r.score.is_finite() && r.score > 0.0,
+            "score (idx 30) = {}",
+            r.score
+        );
+        // importance (idx 31) round-trips — completes the corruption net.
+        assert_eq!(r.importance, Some(9), "importance (idx 31)");
+    }
+
+    #[tokio::test]
+    async fn salience_reorders_when_flag_on() {
+        let (db, _dir) = test_db().await;
+        let doc_a = make_memory_doc(
+            "sal_a",
+            "Kubernetes orchestrates containers in production clusters for scalable workloads",
+            "fact",
+            "devops",
+            "claude",
+        );
+        let doc_b = make_memory_doc(
+            "sal_b",
+            "Kubernetes orchestrates containers in staging clusters for development workloads",
+            "fact",
+            "devops",
+            "claude",
+        );
+        db.upsert_documents(vec![doc_a, doc_b]).await.unwrap();
+        {
+            let conn = db.conn.lock().await;
+            conn.execute(
+                "UPDATE memories SET importance = 10 WHERE source_id = 'sal_a'",
+                libsql::params![],
+            )
+            .await
+            .unwrap();
+            conn.execute(
+                "UPDATE memories SET importance = 1 WHERE source_id = 'sal_b'",
+                libsql::params![],
+            )
+            .await
+            .unwrap();
+        }
+        let results =
+            temp_env::async_with_vars([("ORIGIN_ENABLE_SALIENCE_PRIOR", Some("1"))], async {
+                db.search_memory(
+                    "Kubernetes container orchestration",
+                    10,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                )
+                .await
+                .unwrap()
+            })
+            .await;
+        let a = results.iter().find(|r| r.source_id == "sal_a");
+        let b = results.iter().find(|r| r.source_id == "sal_b");
+        if let (Some(a), Some(b)) = (a, b) {
+            assert!(
+                a.score > b.score,
+                "importance=10 ({}) should outrank importance=1 ({})",
+                a.score,
+                b.score,
+            );
+        } else {
+            panic!("both sal_a and sal_b should be retrievable");
+        }
+    }
+
+    #[tokio::test]
+    async fn salience_inert_when_flag_off() {
+        let (db, _dir) = test_db().await;
+        let doc_a = make_memory_doc(
+            "inert_a",
+            "Kubernetes orchestrates containers in production clusters for scalable workloads",
+            "fact",
+            "devops",
+            "claude",
+        );
+        let doc_b = make_memory_doc(
+            "inert_b",
+            "Kubernetes orchestrates containers in staging clusters for development workloads",
+            "fact",
+            "devops",
+            "claude",
+        );
+        db.upsert_documents(vec![doc_a, doc_b]).await.unwrap();
+        {
+            let conn = db.conn.lock().await;
+            conn.execute(
+                "UPDATE memories SET importance = 10 WHERE source_id = 'inert_a'",
+                libsql::params![],
+            )
+            .await
+            .unwrap();
+            conn.execute(
+                "UPDATE memories SET importance = 1 WHERE source_id = 'inert_b'",
+                libsql::params![],
+            )
+            .await
+            .unwrap();
+        }
+        // Baseline: flag explicitly unset.
+        let baseline =
+            temp_env::async_with_vars([("ORIGIN_ENABLE_SALIENCE_PRIOR", None::<&str>)], async {
+                db.search_memory(
+                    "Kubernetes container orchestration",
+                    10,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                )
+                .await
+                .unwrap()
+            })
+            .await;
+        let base_a = baseline
+            .iter()
+            .find(|r| r.source_id == "inert_a")
+            .map(|r| r.score);
+        let base_b = baseline
+            .iter()
+            .find(|r| r.source_id == "inert_b")
+            .map(|r| r.score);
+        // With the flag OFF, importance must not influence scores: re-running with
+        // flag OFF a second time is identical, and the high-importance row is NOT
+        // boosted above what the base formula produces.
+        let again =
+            temp_env::async_with_vars([("ORIGIN_ENABLE_SALIENCE_PRIOR", Some("0"))], async {
+                db.search_memory(
+                    "Kubernetes container orchestration",
+                    10,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                )
+                .await
+                .unwrap()
+            })
+            .await;
+        let again_a = again
+            .iter()
+            .find(|r| r.source_id == "inert_a")
+            .map(|r| r.score);
+        let again_b = again
+            .iter()
+            .find(|r| r.source_id == "inert_b")
+            .map(|r| r.score);
+        assert_eq!(base_a, again_a, "flag OFF must be deterministic (a)");
+        assert_eq!(base_b, again_b, "flag OFF must be deterministic (b)");
+    }
+
+    /// L4 cold-start neutrality: all importance NULL + flag ON must produce the
+    /// SAME ranking as flag OFF (salience_mult forced to 1.0 by None short-circuit).
+    #[tokio::test]
+    async fn salience_null_rows_unchanged() {
+        let (db, _dir) = test_db().await;
+        let doc_a = make_memory_doc(
+            "null_a",
+            "Kubernetes orchestrates containers in production clusters for scalable workloads",
+            "fact",
+            "devops",
+            "claude",
+        );
+        let doc_b = make_memory_doc(
+            "null_b",
+            "Kubernetes orchestrates containers in staging clusters for development workloads",
+            "fact",
+            "devops",
+            "claude",
+        );
+        db.upsert_documents(vec![doc_a, doc_b]).await.unwrap();
+        // No importance set -> all NULL.
+        let off =
+            temp_env::async_with_vars([("ORIGIN_ENABLE_SALIENCE_PRIOR", None::<&str>)], async {
+                db.search_memory(
+                    "Kubernetes container orchestration",
+                    10,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                )
+                .await
+                .unwrap()
+            })
+            .await;
+        let on = temp_env::async_with_vars([("ORIGIN_ENABLE_SALIENCE_PRIOR", Some("1"))], async {
+            db.search_memory(
+                "Kubernetes container orchestration",
+                10,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+            )
+            .await
+            .unwrap()
+        })
+        .await;
+        assert_eq!(off.len(), on.len(), "result count identical");
+        for (o, n) in off.iter().zip(on.iter()) {
+            assert_eq!(
+                o.source_id, n.source_id,
+                "ordering identical (NULL cold-start)"
+            );
+            assert!(
+                (o.score - n.score).abs() < 1e-6,
+                "score identical for {}: off={} on={}",
+                o.source_id,
+                o.score,
+                n.score,
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn salience_prior_enabled_reads_env() {
+        for val in &["1", "true", "yes"] {
+            let got =
+                temp_env::async_with_vars([("ORIGIN_ENABLE_SALIENCE_PRIOR", Some(*val))], async {
+                    crate::db::salience_prior_enabled()
+                })
+                .await;
+            assert!(got, "expected true for {val}");
+        }
+        for val in &["0", "false", "no", ""] {
+            let got =
+                temp_env::async_with_vars([("ORIGIN_ENABLE_SALIENCE_PRIOR", Some(*val))], async {
+                    crate::db::salience_prior_enabled()
+                })
+                .await;
+            assert!(!got, "expected false for {val}");
+        }
+        let unset =
+            temp_env::async_with_vars([("ORIGIN_ENABLE_SALIENCE_PRIOR", None::<&str>)], async {
+                crate::db::salience_prior_enabled()
+            })
+            .await;
+        assert!(!unset, "expected false when unset");
+    }
+
     #[tokio::test]
     async fn test_normalize_type_filter() {
         assert_eq!(MemoryDB::normalize_type_filter("correction"), "fact");
@@ -25054,6 +25582,7 @@ pub(crate) mod tests {
             "hide",
             Some(r#"{"preference":"dark mode","applies_when":"editors"}"#),
             Some("What editor theme does Alice use?"),
+            None,
             None,
             None,
         )
@@ -32263,6 +32792,7 @@ pub(crate) mod tests {
             None,
             Some(1779667200i64), // event_date
             Some(1779753599i64), // event_end
+            None,
         )
         .await
         .unwrap();
