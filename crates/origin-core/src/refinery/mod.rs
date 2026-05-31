@@ -78,6 +78,7 @@ impl TriggerKind {
                     | Phase::Reembed
                     | Phase::EntityExtraction
                     | Phase::PruneRejections
+                    | Phase::Evict
                     | Phase::KgRethink
             ),
         }
@@ -614,6 +615,35 @@ pub async fn run_periodic_steep_with_api(
             let (nudge, headline) = classify_backfill(count);
             Ok(PhaseOutput {
                 items_processed: count,
+                nudge,
+                headline,
+            })
+        })
+        .await;
+        phases.push(phase);
+    }
+
+    // Phase 9: Evict — T21 Stage 1 archive-not-delete soft eviction. Double
+    // gated: the trigger must include Evict (Backstop/Daily only) AND the
+    // ORIGIN_ENABLE_EVICTION env flag must be truthy. Default OFF = no phase,
+    // no archiving, byte-identical to current unbounded-append behavior.
+    // Placed AFTER the Decay block so Evict reads freshly-decayed
+    // effective_confidence within the same cycle. Failures degrade silently
+    // (run_phase captures the error into PhaseResult) — they never crash the
+    // cycle. Event surfacing flows through PhaseResult nudge/headline; MemoryDB
+    // has no emitter.
+    if trigger.runs_phase(Phase::Evict) && crate::db::eviction_enabled() {
+        let phase = run_phase(Phase::Evict, || async {
+            let report = db_ref
+                .evict_stale(&crate::tuning::EvictionConfig::default())
+                .await?;
+            log::info!(
+                "[refinery] evict: archived {} stale memories",
+                report.archived
+            );
+            let (nudge, headline) = classify_backfill(report.archived);
+            Ok(PhaseOutput {
+                items_processed: report.archived,
                 nudge,
                 headline,
             })
@@ -1197,6 +1227,7 @@ mod tests {
         assert!(!t.runs_phase(Phase::CommunityDetection));
         assert!(!t.runs_phase(Phase::DecisionLogs));
         assert!(!t.runs_phase(Phase::PruneRejections));
+        assert!(!t.runs_phase(Phase::Evict));
     }
 
     #[test]
@@ -1215,6 +1246,7 @@ mod tests {
         assert!(!t.runs_phase(Phase::Reembed));
         assert!(!t.runs_phase(Phase::EntityExtraction));
         assert!(!t.runs_phase(Phase::PruneRejections));
+        assert!(!t.runs_phase(Phase::Evict));
     }
 
     #[test]
@@ -1226,6 +1258,7 @@ mod tests {
         assert!(t.runs_phase(Phase::Reembed));
         assert!(t.runs_phase(Phase::EntityExtraction));
         assert!(t.runs_phase(Phase::PruneRejections));
+        assert!(t.runs_phase(Phase::Evict));
         // Should NOT run synthesis or burst phases
         assert!(!t.runs_phase(Phase::Recaps));
         assert!(!t.runs_phase(Phase::Emergence));
@@ -1381,6 +1414,94 @@ mod tests {
         assert!(
             !phase_names.contains(&"prune_rejections"),
             "BurstEnd should NOT run prune_rejections, got {:?}",
+            phase_names
+        );
+    }
+
+    // ── T21 Eviction phase wiring (B1-B3) ────────────────────────────────────
+
+    // B1 — with ORIGIN_ENABLE_EVICTION=1, Backstop runs 'evict' as a phase.
+    #[tokio::test]
+    async fn test_evict_runs_as_phase_when_enabled() {
+        let (db, _dir) = test_db().await;
+        let result = temp_env::async_with_vars([("ORIGIN_ENABLE_EVICTION", Some("1"))], async {
+            run_periodic_steep_with_api(
+                &db,
+                None,
+                None,
+                None,
+                &PromptRegistry::default(),
+                &crate::tuning::RefineryConfig::default(),
+                &crate::tuning::ConfidenceConfig::default(),
+                &crate::tuning::DistillationConfig::default(),
+                TriggerKind::Backstop,
+            )
+            .await
+            .unwrap()
+        })
+        .await;
+        let phase_names: Vec<&str> = result.phases.iter().map(|p| p.name.as_str()).collect();
+        assert!(
+            phase_names.contains(&"evict"),
+            "ORIGIN_ENABLE_EVICTION=1 Backstop should run 'evict', got {:?}",
+            phase_names
+        );
+    }
+
+    // B2 — with the flag unset, 'evict' never appears (default-OFF contract,
+    // double-gated by trigger membership AND env flag).
+    #[tokio::test]
+    async fn test_evict_absent_when_flag_unset() {
+        let (db, _dir) = test_db().await;
+        let result = temp_env::async_with_vars([("ORIGIN_ENABLE_EVICTION", None::<&str>)], async {
+            run_periodic_steep_with_api(
+                &db,
+                None,
+                None,
+                None,
+                &PromptRegistry::default(),
+                &crate::tuning::RefineryConfig::default(),
+                &crate::tuning::ConfidenceConfig::default(),
+                &crate::tuning::DistillationConfig::default(),
+                TriggerKind::Backstop,
+            )
+            .await
+            .unwrap()
+        })
+        .await;
+        let phase_names: Vec<&str> = result.phases.iter().map(|p| p.name.as_str()).collect();
+        assert!(
+            !phase_names.contains(&"evict"),
+            "flag unset must keep 'evict' absent even on Backstop, got {:?}",
+            phase_names
+        );
+    }
+
+    // B3 — even with the flag ON, BurstEnd never runs 'evict' (maintenance
+    // belongs on Backstop/Daily only, like PruneRejections).
+    #[tokio::test]
+    async fn test_evict_not_run_on_burstend() {
+        let (db, _dir) = test_db().await;
+        let result = temp_env::async_with_vars([("ORIGIN_ENABLE_EVICTION", Some("1"))], async {
+            run_periodic_steep_with_api(
+                &db,
+                None,
+                None,
+                None,
+                &PromptRegistry::default(),
+                &crate::tuning::RefineryConfig::default(),
+                &crate::tuning::ConfidenceConfig::default(),
+                &crate::tuning::DistillationConfig::default(),
+                TriggerKind::BurstEnd,
+            )
+            .await
+            .unwrap()
+        })
+        .await;
+        let phase_names: Vec<&str> = result.phases.iter().map(|p| p.name.as_str()).collect();
+        assert!(
+            !phase_names.contains(&"evict"),
+            "BurstEnd must NOT run 'evict' even with flag ON, got {:?}",
             phase_names
         );
     }

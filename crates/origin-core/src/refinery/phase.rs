@@ -20,6 +20,7 @@ pub enum Phase {
     RefinementQueue,
     DecisionLogs,
     PruneRejections,
+    Evict,
     KgRethink,
 }
 
@@ -39,6 +40,7 @@ impl Phase {
         Phase::RefinementQueue,
         Phase::DecisionLogs,
         Phase::PruneRejections,
+        Phase::Evict,
         Phase::KgRethink,
     ];
 
@@ -59,6 +61,7 @@ impl Phase {
             Phase::RefinementQueue => "refinement_queue",
             Phase::DecisionLogs => "decision_logs",
             Phase::PruneRejections => "prune_rejections",
+            Phase::Evict => "evict",
             Phase::KgRethink => "kg_rethink",
         }
     }
