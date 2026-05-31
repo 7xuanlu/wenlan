@@ -1178,6 +1178,18 @@ pub async fn run_longmemeval_eval_cross_rerank_from_db(
     if magfusion_state == "on" {
         variant_tag.push_str("_magfusion");
     }
+    // T9: append __graph_seed_d{depth} suffix when ORIGIN_ENABLE_GRAPH_SEED is on.
+    let graph_seed_depth = if crate::db::graph_seed_enabled() {
+        let depth = crate::retrieval::signals::parse_hop_depth(
+            std::env::var("ORIGIN_GRAPH_HOP_DEPTH").ok().as_deref(),
+        );
+        Some(depth)
+    } else {
+        None
+    };
+    if let Some(depth) = graph_seed_depth {
+        variant_tag.push_str(&format!("__graph_seed_d{}", depth));
+    }
     let mut env_stamp = build_lme_env(
         &variant_tag,
         path,
@@ -1192,6 +1204,11 @@ pub async fn run_longmemeval_eval_cross_rerank_from_db(
     env_stamp
         .flags
         .push(format!("magnitude_fusion={}", magfusion_state));
+    if let Some(depth) = graph_seed_depth {
+        env_stamp.flags.push(format!("graph_seed=on_d{}", depth));
+    } else {
+        env_stamp.flags.push("graph_seed=off".to_string());
+    }
     env_stamp.flags.push("scenario_db=consolidated".to_string());
     report.env = Some(env_stamp);
     Ok(report)

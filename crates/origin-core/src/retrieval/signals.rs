@@ -52,6 +52,72 @@ pub(crate) fn temporal_proximity(query_date: i64, event_date: Option<i64>, sigma
     }
 }
 
+// ---------------------------------------------------------------------------
+// T9 — Wide-pool-seeded graph expansion helpers
+// ---------------------------------------------------------------------------
+
+/// Parse `ORIGIN_GRAPH_HOP_DEPTH` → usize in [0, 3]. Default 1 on unset or parse failure.
+pub(crate) fn parse_hop_depth(val: Option<&str>) -> usize {
+    let raw = match val {
+        Some(s) => s,
+        None => return 1,
+    };
+    match raw.trim().parse::<isize>() {
+        Ok(n) if n >= 0 => (n as usize).min(3),
+        _ => 1,
+    }
+}
+
+/// Parse `ORIGIN_GRAPH_SEED_TOP_K` → usize in [1, 50]. Default 10 on unset or parse failure.
+pub(crate) fn parse_seed_top_k(val: Option<&str>) -> usize {
+    let raw = match val {
+        Some(s) => s,
+        None => return 10,
+    };
+    match raw.trim().parse::<isize>() {
+        Ok(n) if n >= 1 => (n as usize).min(50),
+        _ => 10,
+    }
+}
+
+/// Parse `ORIGIN_GRAPH_FRONTIER_CAP` → usize in [1, 512]. Default 64 on unset or parse failure.
+pub(crate) fn parse_frontier_cap(val: Option<&str>) -> usize {
+    let raw = match val {
+        Some(s) => s,
+        None => return 64,
+    };
+    match raw.trim().parse::<isize>() {
+        Ok(n) if n >= 1 => (n as usize).min(512),
+        _ => 64,
+    }
+}
+
+/// Dedup entity IDs by best (lowest) rank, sort ascending by rank, truncate to `top_k`.
+///
+/// Input: `(entity_id, rank)` pairs from the wide pool (rank = enumeration index).
+/// Multiple entries for the same entity keep only the lowest rank (best position).
+/// Empty pool → empty result (no panic).
+pub(crate) fn seed_entities_by_rank(pool: &[(String, usize)], top_k: usize) -> Vec<String> {
+    if pool.is_empty() || top_k == 0 {
+        return Vec::new();
+    }
+    // dedup by best (lowest) rank
+    let mut best: std::collections::HashMap<&str, usize> = std::collections::HashMap::new();
+    for (id, rank) in pool {
+        let entry = best.entry(id.as_str()).or_insert(*rank);
+        if *rank < *entry {
+            *entry = *rank;
+        }
+    }
+    let mut sorted: Vec<(&str, usize)> = best.into_iter().collect();
+    sorted.sort_by_key(|(_, rank)| *rank);
+    sorted
+        .into_iter()
+        .take(top_k)
+        .map(|(id, _)| id.to_string())
+        .collect()
+}
+
 /// Capitalized words that commonly start a query but are NOT entity anchors
 /// (question words, articles, pronouns, common verbs). Compared lowercased.
 const NON_ENTITY_CAP_WORDS: &[&str] = &[
@@ -220,5 +286,81 @@ mod tests {
     #[test]
     fn entity_anchor_false_on_all_lowercase() {
         assert!(!query_has_entity_anchor("what is the database password"));
+    }
+
+    // ---------------------------------------------------------------------------
+    // T9 pure-helper tests (no DB needed)
+    // ---------------------------------------------------------------------------
+
+    #[test]
+    fn graph_seed_top_k_ranks_by_carrier_rank() {
+        let pool = vec![
+            ("a".to_string(), 5usize),
+            ("b".to_string(), 1usize),
+            ("a".to_string(), 0usize),
+            ("c".to_string(), 3usize),
+        ];
+        let result = seed_entities_by_rank(&pool, 2);
+        assert_eq!(result, vec!["a".to_string(), "b".to_string()]);
+    }
+
+    #[test]
+    fn graph_seed_top_k_empty_pool_is_empty() {
+        assert!(seed_entities_by_rank(&[], 10).is_empty());
+    }
+
+    #[test]
+    fn graph_seed_top_k_truncates_to_k() {
+        let pool: Vec<(String, usize)> = (0..20).map(|i| (format!("e{}", i), i)).collect();
+        let result = seed_entities_by_rank(&pool, 5);
+        assert_eq!(result.len(), 5);
+        assert_eq!(result[0], "e0");
+        assert_eq!(result[4], "e4");
+    }
+
+    #[test]
+    fn graph_hop_depth_parse_clamps() {
+        assert_eq!(parse_hop_depth(None), 1);
+        assert_eq!(parse_hop_depth(Some("0")), 0);
+        assert_eq!(parse_hop_depth(Some("2")), 2);
+        assert_eq!(parse_hop_depth(Some("3")), 3);
+        assert_eq!(parse_hop_depth(Some("99")), 3);
+        assert_eq!(parse_hop_depth(Some("-1")), 1);
+        assert_eq!(parse_hop_depth(Some("abc")), 1);
+    }
+
+    #[test]
+    fn graph_frontier_cap_parse_defaults() {
+        assert_eq!(parse_frontier_cap(None), 64);
+        assert_eq!(parse_frontier_cap(Some("16")), 16);
+        assert_eq!(parse_frontier_cap(Some("999")), 512);
+        assert_eq!(parse_frontier_cap(Some("0")), 64);
+        assert_eq!(parse_frontier_cap(Some("bad")), 64);
+    }
+
+    #[test]
+    fn graph_seed_top_k_parse_defaults() {
+        assert_eq!(parse_seed_top_k(None), 10);
+        assert_eq!(parse_seed_top_k(Some("5")), 5);
+        assert_eq!(parse_seed_top_k(Some("100")), 50);
+        assert_eq!(parse_seed_top_k(Some("0")), 10);
+        assert_eq!(parse_seed_top_k(Some("bad")), 10);
+    }
+
+    #[test]
+    fn graph_seed_enabled_truthy_table() {
+        for val in &["1", "true", "yes"] {
+            std::env::set_var("ORIGIN_ENABLE_GRAPH_SEED", val);
+            assert!(crate::db::graph_seed_enabled(), "expected true for {val}");
+        }
+        for val in &["0", "false", ""] {
+            std::env::set_var("ORIGIN_ENABLE_GRAPH_SEED", val);
+            assert!(!crate::db::graph_seed_enabled(), "expected false for {val}");
+        }
+        std::env::remove_var("ORIGIN_ENABLE_GRAPH_SEED");
+        assert!(
+            !crate::db::graph_seed_enabled(),
+            "expected false when unset"
+        );
     }
 }
