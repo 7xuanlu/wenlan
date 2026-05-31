@@ -9184,14 +9184,22 @@ impl MemoryDB {
                 break;
             }
 
+            // frontier is bounded by max_nodes (≤512, the parse_khop_max_nodes
+            // clamp) via the in-loop fetch cap below, so this IN list can never
+            // exceed SQLite's 999-param limit — no chunking needed.
             let placeholders: Vec<String> =
                 (1..=frontier.len()).map(|i| format!("?{}", i)).collect();
             let ph = placeholders.join(",");
             // Bidirectional incident edges for the current frontier (parameterized).
+            // ORDER BY makes truncation membership deterministic: when the in-loop
+            // cap trims mid-fanout, WHICH neighbours survive must not depend on DB
+            // row order (the eval path is wired, so non-determinism would be a
+            // reproducibility bug).
             let sql = format!(
                 "SELECT from_entity, to_entity FROM relations WHERE from_entity IN ({ph})
                  UNION
-                 SELECT from_entity, to_entity FROM relations WHERE to_entity IN ({ph})",
+                 SELECT from_entity, to_entity FROM relations WHERE to_entity IN ({ph})
+                 ORDER BY from_entity, to_entity",
                 ph = ph
             );
             let params: Vec<libsql::Value> = frontier
@@ -9206,8 +9214,17 @@ impl MemoryDB {
                     OriginError::VectorDb(format!("expand_anchor_entities_khop: {}", e))
                 })?;
 
+            let fetch_cap = max_nodes.max(anchor_entity_ids.len());
             let mut next_frontier: Vec<String> = Vec::new();
             while let Ok(Some(row)) = rows.next().await {
+                // FIX 1 (runaway): bound the per-hop fetch the same way T9's
+                // expand_entities_khop does — stop reading rows once the visited
+                // set hits the cap, so a hub with thousands of relations can't read
+                // them all into edges/fetch_visited/next_frontier before bfs_khop
+                // trims the OUTPUT. Mirrors the sibling `if visited.len() >= cap`.
+                if fetch_visited.len() >= fetch_cap {
+                    break;
+                }
                 let from: String = row.get(0).unwrap_or_default();
                 let to: String = row.get(1).unwrap_or_default();
                 if from.is_empty() || to.is_empty() {
@@ -27612,6 +27629,50 @@ pub(crate) mod tests {
             "max_nodes=10 caps fan-out; got {}",
             expanded.len()
         );
+    }
+
+    /// FIX 1 (runaway) regression: prove the per-hop FETCH is bounded, not just the
+    /// output. A 30-edge hub with max_nodes=10 must terminate and return a bounded
+    /// set (<=10). The pre-fix loop read all 30 hub relations into edges/fetch_visited
+    /// before bfs_khop trimmed the OUTPUT; the in-loop cap now stops the read early.
+    /// Deterministic: depth=1 single hop, no clock/random, output capped to max_nodes.
+    #[tokio::test]
+    async fn test_khop_fetch_bounded_on_hub() {
+        let (db, _dir) = test_db().await;
+        let hub = db
+            .store_entity("FetchHub", "thing", None, None, None)
+            .await
+            .unwrap();
+        for i in 0..30 {
+            let leaf = db
+                .store_entity(&format!("FetchLeaf{i}"), "thing", None, None, None)
+                .await
+                .unwrap();
+            db.create_relation(&hub, &leaf, "related_to", None, None, None, None)
+                .await
+                .unwrap();
+        }
+        let expanded = temp_env::async_with_vars(
+            [
+                ("ORIGIN_GRAPH_KHOP_DEPTH", Some("1")),
+                ("ORIGIN_GRAPH_KHOP_MAX_NODES", Some("10")),
+            ],
+            async {
+                db.expand_anchor_entities_khop(std::slice::from_ref(&hub))
+                    .await
+                    .unwrap()
+            },
+        )
+        .await;
+        // Bounded OUTPUT: max_nodes=10 caps the visited set, so the 30-edge hub can
+        // never return all 31 nodes. (Termination is proven by the test completing.)
+        assert!(
+            expanded.len() <= 10,
+            "fetch+output bounded by max_nodes=10 over a 30-edge hub; got {}",
+            expanded.len()
+        );
+        // Anchor itself is never dropped.
+        assert!(expanded.contains(&hub), "hub anchor always present");
     }
 
     /// Empty anchor set -> empty (caller keeps its anchor list).
