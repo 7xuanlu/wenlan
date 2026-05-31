@@ -1,0 +1,54 @@
+# app/eval/kg_fixtures/seed_entity_dedup.toml
+#
+# T16 entity-dedup ground truth. Each [[case]] is a pair of entity names with a
+# `should_merge` verdict. The deterministic MinHash/LSH cascade
+# (char-shingle trigram Jaccard >= 0.9 + same-type guard) is scored against
+# these labels. String-match only, NO LLM judge (extends the PR #149
+# kg_faithfulness convention).
+#
+# SHOULD-merge: near-duplicate spellings of the same entity.
+# SHOULD-NOT:   distinct entities that happen to share characters.
+description = "Entity near-dedup ground truth for the MinHash/LSH cascade (T16)."
+
+# ── SHOULD-merge: surface/spelling variants of one entity ────────────────────
+
+# PostgreSQL/Postgres is a genuine near-dup but only ~0.75 trigram Jaccard
+# (the "SQL" suffix drops several trigrams), BELOW the precision-first 0.9
+# auto-merge threshold. It is labeled should_merge=true so the bench honestly
+# reports it as a recall miss for the strict-threshold auto-merge cascade; the
+# kg_quality band-collision pass routes it to human-review instead.
+[[case]]
+name_a = "PostgreSQL"
+name_b = "Postgres"
+entity_type = "database"
+should_merge = true
+
+[[case]]
+name_a = "Backend Team"
+name_b = "Backend Teams"
+entity_type = "team"
+should_merge = true
+
+# ── SHOULD-NOT: distinct entities (precision guards) ─────────────────────────
+
+# Short acronyms that are anagrams: the entropy gate must punt these, and even
+# if compared they must not merge.
+[[case]]
+name_a = "AAN"
+name_b = "ANA"
+entity_type = "organization"
+should_merge = false
+
+# Same prefix, different project: high overlap on "Project " but distinct.
+[[case]]
+name_a = "Project Alpha"
+name_b = "Project Beta"
+entity_type = "project"
+should_merge = false
+
+# Two unrelated libraries that share a leading letter only.
+[[case]]
+name_a = "React"
+name_b = "Redux"
+entity_type = "library"
+should_merge = false

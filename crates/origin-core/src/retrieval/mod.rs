@@ -6,6 +6,7 @@
 //! these helpers without importing the composite scoring orchestrator.
 
 pub(crate) mod decompose;
+pub(crate) mod dedup;
 pub(crate) mod fts_query;
 pub(crate) mod hard_filters;
 pub(crate) mod query_intent;

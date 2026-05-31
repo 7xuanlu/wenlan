@@ -98,6 +98,23 @@ pub async fn create_entity(
         });
     }
 
+    // Step 2.5: deterministic MinHash/LSH near-dedup (T16, opt-in).
+    // Catches char-level near-dups like "PostgreSQL"/"Postgres" that exact-name
+    // match misses and that the vector step may also miss. Gated behind
+    // ORIGIN_ENABLE_ENTITY_MINHASH; the entropy gate inside
+    // minhash_resolve_candidate punts short/low-entropy names to the vector
+    // step. Same-type-only; auto-merge requires exact Jaccard >= 0.9.
+    if crate::db::entity_minhash_enabled() {
+        if let Some(cand_id) = db.minhash_resolve_candidate(name, entity_type).await? {
+            let _ = db.add_entity_alias(&name_lower, &cand_id, "minhash").await;
+            return Ok(WriteResult {
+                id: cand_id,
+                warnings: vec![],
+                wrote: false,
+            });
+        }
+    }
+
     // Step 3: Vector similarity (distance < 0.1 => sim > 0.9)
     let vec_results = db.search_entities_by_vector(name, 1).await?;
     if let Some(result) = vec_results.first() {
@@ -123,6 +140,15 @@ pub async fn create_entity(
             req.confidence,
         )
         .await?;
+
+    // T16: index the new entity's LSH bands so future high-entropy names can
+    // find it via Step 2.5. Only fires when the flag is on; the helper skips
+    // short/low-entropy names so the band table stays small. Best-effort.
+    if crate::db::entity_minhash_enabled() {
+        if let Err(e) = db.index_entity_minhash_if_eligible(&id, name).await {
+            log::warn!("[create_entity] minhash band index failed for {id}: {e}");
+        }
+    }
 
     // Post-write enrichment (LLM-free, non-blocking)
     let mut warnings: Vec<String> = Vec::new();
@@ -1836,5 +1862,208 @@ mod tests {
             result.wrote,
             "wrote=true even with no rows matched (best-effort signal per §3 caveat)"
         );
+    }
+
+    // ── T16: MinHash/LSH entity near-dedup cascade (Step 2.5) ────────────────
+    //
+    // Test pair "Vorpalblade Jabberwock Inc" / "Vorpalblade Jabberwock Ino" is chosen so the char-trigram
+    // Jaccard is >= 0.9 (MinHash auto-merges) while the BGE vector distance is
+    // ~0.13 (> 0.1, so the existing vector step does NOT merge them). That
+    // separation is what lets the flag-OFF noop test prove byte-identity:
+    // without MinHash these stay two distinct entities.
+
+    fn entity_req(name: &str, etype: &str) -> CreateEntityRequest {
+        CreateEntityRequest {
+            name: name.to_string(),
+            entity_type: etype.to_string(),
+            space: None,
+            source_agent: Some("test".to_string()),
+            confidence: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn create_entity_minhash_merges_abbreviation() {
+        temp_env::async_with_vars([("ORIGIN_ENABLE_ENTITY_MINHASH", Some("1"))], async {
+            let (db, _dir) = test_db().await;
+            let first = create_entity(
+                &db,
+                entity_req("Vorpalblade Jabberwock Inc", "project"),
+                "test",
+            )
+            .await
+            .unwrap();
+            let second = create_entity(
+                &db,
+                entity_req("Vorpalblade Jabberwock Ino", "project"),
+                "test",
+            )
+            .await
+            .unwrap();
+            assert_eq!(
+                first.id, second.id,
+                "near-dup must resolve to the first entity id"
+            );
+            assert!(
+                !second.wrote,
+                "resolved-existing must not write a new entity"
+            );
+            // A "minhash" alias must have been recorded for the second name.
+            let resolved = db
+                .resolve_entity_by_alias(&"Vorpalblade Jabberwock Ino".to_lowercase())
+                .await
+                .unwrap();
+            assert_eq!(resolved, Some(first.id));
+        })
+        .await;
+    }
+
+    #[tokio::test]
+    async fn create_entity_minhash_respects_type_guard() {
+        temp_env::async_with_vars([("ORIGIN_ENABLE_ENTITY_MINHASH", Some("1"))], async {
+            let (db, _dir) = test_db().await;
+            let first = create_entity(
+                &db,
+                entity_req("Vorpalblade Jabberwock Inc", "project"),
+                "test",
+            )
+            .await
+            .unwrap();
+            // Same near-dup name but a DIFFERENT entity type must not auto-merge.
+            let second = create_entity(
+                &db,
+                entity_req("Vorpalblade Jabberwock Ino", "person"),
+                "test",
+            )
+            .await
+            .unwrap();
+            assert_ne!(
+                first.id, second.id,
+                "cross-type near-dup must NOT auto-merge (same-type guard)"
+            );
+            assert!(second.wrote, "a new entity should have been created");
+        })
+        .await;
+    }
+
+    #[tokio::test]
+    async fn create_entity_minhash_short_name_skips_fuzzy() {
+        temp_env::async_with_vars([("ORIGIN_ENABLE_ENTITY_MINHASH", Some("1"))], async {
+            let (db, _dir) = test_db().await;
+            // "API"/"APIs" are below the entropy gate, so Step 2.5 must punt them
+            // to the vector step and never record a "minhash" alias.
+            let _ = create_entity(&db, entity_req("API", "concept"), "test")
+                .await
+                .unwrap();
+            let _ = create_entity(&db, entity_req("APIs", "concept"), "test")
+                .await
+                .unwrap();
+            // No band rows are written for low-entropy names, regardless of how
+            // the vector step resolved them.
+            let conn = db.conn.lock().await;
+            let mut rows = conn
+                .query("SELECT COUNT(*) FROM entity_minhash_bands", ())
+                .await
+                .unwrap();
+            let band_count: i64 = rows.next().await.unwrap().unwrap().get(0).unwrap();
+            assert_eq!(
+                band_count, 0,
+                "low-entropy names must not be indexed into entity_minhash_bands"
+            );
+            drop(rows);
+            let mut arows = conn
+                .query(
+                    "SELECT COUNT(*) FROM entity_aliases WHERE source = 'minhash'",
+                    (),
+                )
+                .await
+                .unwrap();
+            let minhash_aliases: i64 = arows.next().await.unwrap().unwrap().get(0).unwrap();
+            assert_eq!(
+                minhash_aliases, 0,
+                "short names must not produce a minhash alias"
+            );
+        })
+        .await;
+    }
+
+    #[tokio::test]
+    async fn create_entity_minhash_disabled_is_noop() {
+        // CRITICAL regression guard: with the flag OFF, the near-dup pair must
+        // stay TWO separate entities (vector distance ~0.13 > 0.1 so the vector
+        // step does not merge them), and NO minhash alias / band row is written.
+        temp_env::async_with_vars([("ORIGIN_ENABLE_ENTITY_MINHASH", None::<&str>)], async {
+            let (db, _dir) = test_db().await;
+            let first = create_entity(
+                &db,
+                entity_req("Vorpalblade Jabberwock Inc", "project"),
+                "test",
+            )
+            .await
+            .unwrap();
+            let second = create_entity(
+                &db,
+                entity_req("Vorpalblade Jabberwock Ino", "project"),
+                "test",
+            )
+            .await
+            .unwrap();
+            assert_ne!(
+                first.id, second.id,
+                "flag OFF must leave near-dups as distinct entities (byte-identity)"
+            );
+            assert!(second.wrote, "flag OFF must create a second entity");
+            let conn = db.conn.lock().await;
+            let mut rows = conn
+                .query("SELECT COUNT(*) FROM entity_minhash_bands", ())
+                .await
+                .unwrap();
+            let band_count: i64 = rows.next().await.unwrap().unwrap().get(0).unwrap();
+            assert_eq!(band_count, 0, "flag OFF must write zero band rows");
+            drop(rows);
+            let mut arows = conn
+                .query(
+                    "SELECT COUNT(*) FROM entity_aliases WHERE source = 'minhash'",
+                    (),
+                )
+                .await
+                .unwrap();
+            let minhash_aliases: i64 = arows.next().await.unwrap().unwrap().get(0).unwrap();
+            assert_eq!(
+                minhash_aliases, 0,
+                "flag OFF must write zero minhash aliases"
+            );
+        })
+        .await;
+    }
+
+    #[tokio::test]
+    async fn resolve_entity_bulk_minhash_mirrors_create_entity() {
+        use crate::extract::ExtractedEntity;
+        use std::collections::HashMap;
+        temp_env::async_with_vars([("ORIGIN_ENABLE_ENTITY_MINHASH", Some("1"))], async {
+            let (db, _dir) = test_db().await;
+            let mut cache: HashMap<String, String> = HashMap::new();
+            let e1 = ExtractedEntity {
+                name: "Vorpalblade Jabberwock Inc".to_string(),
+                entity_type: "project".to_string(),
+            };
+            let (id1, new1) = crate::importer::resolve_entity_bulk(&db, &mut cache, &e1, "test")
+                .await
+                .unwrap();
+            assert!(new1, "first bulk entity is newly created");
+            // Fresh cache so the in-batch shortcut does not mask Step 2.5.
+            let mut cache2: HashMap<String, String> = HashMap::new();
+            let e2 = ExtractedEntity {
+                name: "Vorpalblade Jabberwock Ino".to_string(),
+                entity_type: "project".to_string(),
+            };
+            let (id2, new2) = crate::importer::resolve_entity_bulk(&db, &mut cache2, &e2, "test")
+                .await
+                .unwrap();
+            assert_eq!(id1, id2, "bulk path must mirror create_entity merge");
+            assert!(!new2, "bulk near-dup must resolve to existing, not create");
+        })
+        .await;
     }
 }
