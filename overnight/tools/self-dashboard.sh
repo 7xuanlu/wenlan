@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# self-dashboard.sh — a weekly mirror for a solo builder.
+# self-dashboard.sh - a weekly mirror for a solo builder.
 # Shows where effort ACTUALLY went, and the one ratio that matters: inward vs outward.
 # Run from the repo root: bash overnight/tools/self-dashboard.sh [days]
 # Default window: 7 days.

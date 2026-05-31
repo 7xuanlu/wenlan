@@ -1,4 +1,4 @@
-# Origin (useorigin.app / 7xuanlu) — Public Footprint & Traction Scorecard
+# Origin (useorigin.app / 7xuanlu) - Public Footprint & Traction Scorecard
 
 Investigation date: 2026-05-31. Goal: an honest, evidence-based read on external traction.
 Hypothesis going in was "almost none." The data supports that.
@@ -10,10 +10,10 @@ Every number below is tagged. [VERIFIED url] = pulled from a fetched source.
 
 There are two unrelated "Origin"s and they collide hard in search:
 
-- **useorigin.com** — a well-funded, SEC-regulated AI financial advisor (budgeting app,
+- **useorigin.com** - a well-funded, SEC-regulated AI financial advisor (budgeting app,
   iOS/Android, press on Yahoo Finance). NOT this project. It owns the "Origin" namespace
   on Google. [VERIFIED https://finance.yahoo.com/news/origin-unveils-first-ai-financial-140000884.html]
-- **useorigin.app** — this project. A solo local-first AI-memory daemon by 7xuanlu.
+- **useorigin.app** - this project. A solo local-first AI-memory daemon by 7xuanlu.
 
 Almost every "Origin" search result is the financial-advisor company. The memory project
 surfaces only via its own GitHub repo and auto-generated package-aggregator pages. That
@@ -30,9 +30,9 @@ namespace collision is itself a discoverability problem for this project. [OPINI
 | GitHub `7xuanlu/origin` | Repo age | created 2026-04-19 (~6 weeks) | [VERIFIED github API created_at] |
 | GitHub `7xuanlu/origin` | External issue authors | **1** (kiluazen / "kushal", issue #194) | [VERIFIED github list_issues; all others authored by 7xuanlu] |
 | GitHub `7xuanlu/origin` | Total open issues by non-owner | 1 of 4 listed | [VERIFIED github list_issues] |
-| GitHub `7xuanlu/origin` | Commit authors (last 100 commits) | **1** — 100/100 are 7xuanlu | [VERIFIED github list_commits, tallied] |
+| GitHub `7xuanlu/origin` | Commit authors (last 100 commits) | **1** - 100/100 are 7xuanlu | [VERIFIED github list_commits, tallied] |
 | GitHub `7xuanlu/origin` | Releases shipped | 18 tags v0.1.0 → v0.7.0 | [VERIFIED github list_releases] |
-| GitHub `7xuanlu/origin` | Release binary download counts | not retrievable via tools used | [INFERRED — assets array not exposed; see gaps] |
+| GitHub `7xuanlu/origin` | Release binary download counts | not retrievable via tools used | [INFERRED - assets array not exposed; see gaps] |
 | GitHub `7xuanlu/origin-mcp` | Stars / state | **1 star, archived** | [VERIFIED github API repo search] |
 | GitHub `7xuanlu/origin-app` | Stars | **0** (created 2026-05-07) | [VERIFIED github API] |
 | GitHub `7xuanlu/origin-website` | Stars | **0** | [VERIFIED github API] |
@@ -42,17 +42,17 @@ namespace collision is itself a discoverability problem for this project. [OPINI
 | npm `origin-mcp` | First publish | 2026-04-19 | [VERIFIED registry.npmjs.org] |
 | npm `origin-mcp` | Latest publish | 2026-05-25 (v0.7.0) | [VERIFIED registry.npmjs.org] |
 | npm `origin-mcp` | Sole maintainer | h164654156465@gmail.com (the project owner) | [VERIFIED registry.npmjs.org] |
-| npm `origin-mcp` | Weekly/monthly downloads | **NOT OBTAINED** — api.npmjs.org blocked in this env | [see gaps — no number, not fabricated] |
-| npm `@7xuanlu/origin` | Download stats | **NOT OBTAINED** — api blocked | [see gaps] |
-| useorigin.app | Site content / funnel | **NOT OBTAINED** — 403 on fetch, no search snippets | [see gaps] |
-| Hacker News | Posts mentioning origin-mcp / useorigin / 7xuanlu | **0** | [VERIFIED hn.algolia search + site:news.ycombinator.com search — only unrelated memory-MCP projects returned] |
-| Reddit | Mentions | **0 found** | [VERIFIED WebSearch — no reddit results for this project] |
+| npm `origin-mcp` | Weekly/monthly downloads | **NOT OBTAINED** - api.npmjs.org blocked in this env | [see gaps - no number, not fabricated] |
+| npm `@7xuanlu/origin` | Download stats | **NOT OBTAINED** - api blocked | [see gaps] |
+| useorigin.app | Site content / funnel | **NOT OBTAINED** - 403 on fetch, no search snippets | [see gaps] |
+| Hacker News | Posts mentioning origin-mcp / useorigin / 7xuanlu | **0** | [VERIFIED hn.algolia search + site:news.ycombinator.com search - only unrelated memory-MCP projects returned] |
+| Reddit | Mentions | **0 found** | [VERIFIED WebSearch - no reddit results for this project] |
 | Product Hunt | Listing | **0 found** | [VERIFIED WebSearch] |
 | Lobsters | Mentions | **0 found** | [VERIFIED WebSearch] |
-| X / Twitter | Mentions | **0 found** | [VERIFIED WebSearch — none surfaced] |
-| News / blogs (independent) | Coverage | **0** | [VERIFIED WebSearch — only the unrelated useorigin.com financial company] |
-| Auto-aggregator listings | Presence | lib.rs/crates/origin-mcp, mcpmarket.cn | [VERIFIED WebSearch — mirror pages, not traction] |
-| YouTube demo youtu.be/k37gjWVPHwI | View count | **NOT OBTAINED** — 403 on fetch | [see gaps] |
+| X / Twitter | Mentions | **0 found** | [VERIFIED WebSearch - none surfaced] |
+| News / blogs (independent) | Coverage | **0** | [VERIFIED WebSearch - only the unrelated useorigin.com financial company] |
+| Auto-aggregator listings | Presence | lib.rs/crates/origin-mcp, mcpmarket.cn | [VERIFIED WebSearch - mirror pages, not traction] |
+| YouTube demo youtu.be/k37gjWVPHwI | View count | **NOT OBTAINED** - 403 on fetch | [see gaps] |
 
 ## What could not be measured (honest gaps, no guessing)
 
@@ -77,7 +77,7 @@ external footprint is at or near zero:
 1. **It is a solo project.** 100 of the last 100 commits are 7xuanlu's. The npm maintainer is
    the owner's personal Gmail. No co-maintainers, no external committers. [VERIFIED]
 
-2. **One external human has engaged with the repo at all** — GitHub user `kiluazen` filed a
+2. **One external human has engaged with the repo at all** - GitHub user `kiluazen` filed a
    single thoughtful design issue (#194) comparing Origin's provenance model to another project.
    That is the entire externally-sourced issue traffic. Every other issue is the author talking
    to himself (roadmap/bug notes). [VERIFIED]

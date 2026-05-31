@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# competitor-radar — weekly scan for new/rising local-first AI-memory tools for coding agents.
+# competitor-radar - weekly scan for new/rising local-first AI-memory tools for coding agents.
 # Why: the lane is crowded (sverklo 70*, ghost, n2n, pebble, vibemem...). You were blindsided by
 # how contested this is. This makes the surprise impossible: it tells you, every week, who is new
 # and who is rising, so you compete or differentiate on facts, not vibes.
@@ -42,7 +42,7 @@ done
 DATE="$(date +%Y-%m-%d)"
 SELF="7xuanlu/origin"
 {
-  echo "# Competitor radar — ${DATE}"
+  echo "# Competitor radar - ${DATE}"
   echo
   echo "| Repo | Stars | Lang | Updated | What it claims |"
   echo "|---|---:|---|---|---|"

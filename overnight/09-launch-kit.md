@@ -1,4 +1,4 @@
-# Launch Kit — ready-to-post distribution assets
+# Launch Kit - ready-to-post distribution assets
 
 Purpose: remove the activation energy from the outward work he avoids. These are drafts to edit and post, not
 advice to "consider launching." Grounded in the verified wedge (04-landscape) and footprint (03). His
@@ -10,7 +10,7 @@ and say so in public. A half-day fix protects the whole launch.
 
 ---
 
-## Asset A — Show HN post (the product wedge)
+## Asset A - Show HN post (the product wedge)
 
 **Title options (pick one, keep it concrete and honest):**
 - `Show HN: Origin – on-device AI memory for Claude Code, with source-cited, git-versioned pages`
@@ -57,11 +57,11 @@ is a known HN-resonant move and doubles as the user-validation question he has n
 
 VERIFY: install commands match README exactly [VERIFIED README quickstart]. The 422-on-unsourced and
 git-versioning claims match README differentiators #1, #3, #4 [VERIFIED README]. Differentiator #2 (review)
-claim is gated behind the #92 fix — DO NOT make the review claim until #92 ships. Flagged inline.
+claim is gated behind the #92 fix - DO NOT make the review claim until #92 ships. Flagged inline.
 
 ---
 
-## Asset B — The field guide (bet #1, the researcher path)
+## Asset B - The field guide (bet #1, the researcher path)
 
 Working title: **"What AI memory benchmarks actually measure, and what they hide"**
 
@@ -87,13 +87,13 @@ The essay sells the product without pitching it.
 
 VERIFY: every claim in the guide must come from his own repo or a cited paper. The adversarial-cat-5 and
 single-run/schema-version points are [VERIFIED present in AGENTS.md "Eval Citation Discipline"]. Do not publish
-any headline accuracy number for Origin itself until it passes his own N>=3 gate — the guide's credibility
+any headline accuracy number for Origin itself until it passes his own N>=3 gate - the guide's credibility
 depends on him following the rule he is preaching. This is a feature: the guide can say "I won't quote you a
 single-run number, here's why" and that IS the differentiator.
 
 ---
 
-## Asset C — r/LocalLLaMA post (the ICP's home turf)
+## Asset C - r/LocalLLaMA post (the ICP's home turf)
 
 04-landscape names the ICP's hangout. This subreddit rewards local-first, anti-cloud, runs-on-my-hardware.
 
@@ -122,7 +122,7 @@ key") [VERIFIED]. Qwen-for-distillation is opt-in [VERIFIED AGENTS.md stack].
 
 ---
 
-## Asset D — Warm outreach to the one engaged human + adjacent community
+## Asset D - Warm outreach to the one engaged human + adjacent community
 
 03/08 footprint: exactly one external person engaged (kiluazen, issue #194), and he referenced
 `yologdev/yopedia`, a repo in the same provenance/memory space. That is not nothing. That is the seed of a

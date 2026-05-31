@@ -12,7 +12,7 @@ This document is the procedure to GET the number. It contains no benchmark numbe
 
 The LoCoMo runner does NOT compute an LLM-judged QA accuracy today. The field is a placeholder:
 
-> `qa_accuracy: Option<f64>` ... "Currently None — requires an LLM to generate answers"
+> `qa_accuracy: Option<f64>` ... "Currently None - requires an LLM to generate answers"
 > [VERIFIED `crates/origin-core/src/eval/locomo.rs:321-323`]
 
 What it DOES compute and serialize is retrieval quality. The primary headline metric is
@@ -46,7 +46,7 @@ Why base, not reranked / expanded / cross-rerank:
   class to the receipt and a model-availability dependency. Defensible later, not for the first
   honest headline.
 - **Cross-rerank downloads ~600MB** and pins `ORIGIN_ENABLE_PAGE_CHANNEL=None`
-  [VERIFIED `crates/origin-core/tests/eval_harness.rs:542-562`] — more caveats, not fewer.
+  [VERIFIED `crates/origin-core/tests/eval_harness.rs:542-562`] - more caveats, not fewer.
 - **LongMemEval** is a valid alternative (`save_longmemeval_baseline`,
   [VERIFIED `eval_harness.rs:446-463`]) but its fixture file (`longmemeval_oracle.json`) and the
   larger question set make it the slower, second number. Lead with LoCoMo base, add LongMemEval
@@ -196,7 +196,7 @@ python3 scripts/headline-stats.py "$EVAL_BASELINES_DIR"/headline_runs/run_*.json
 ```
 
 This is the multi-run aggregation AGENTS.md calls the "P1.5 protocol (mean ± stddev over >=3
-runs, ideally 10)". Note: the in-repo `compare-baselines` tool does NOT aggregate runs — it has
+runs, ideally 10)". Note: the in-repo `compare-baselines` tool does NOT aggregate runs - it has
 only `diff` and `paired-mcnemar` subcommands
 [VERIFIED `crates/origin-core/src/bin/compare_baselines.rs:46-68`], and it explicitly tells you
 to "Use the P1.5 multi-run protocol" for statistical comparison
@@ -225,8 +225,8 @@ rule. All are emitted automatically into the baseline JSON and surfaced by the s
 Single-run rule: because each base run sets `is_single_run = true` (n_runs == 1), any ONE JSON is
 NOT externally citable [VERIFIED `locomo.rs:585`; AGENTS.md "Single-run rule"]. The citable object
 is the aggregate over K>=3, which is what your stats script produces. Tag the committed snapshot
-with its methodology inline per AGENTS.md "Commit policy — snapshot, not history" (commit the
-curated headline value + repro command to a results doc; do NOT commit the per-run series — those
+with its methodology inline per AGENTS.md "Commit policy - snapshot, not history" (commit the
+curated headline value + repro command to a results doc; do NOT commit the per-run series - those
 stay in the gitignored `$EVAL_BASELINES_DIR`).
 
 ---
@@ -245,7 +245,7 @@ EVAL_LOCOMO_LIMIT=2 cargo test -p origin-core --test eval_harness \
 
 Expect `aggregate_ndcg_at_10 > 0.0` and a sane terminal table. The harness already asserts NDCG
 is positive in its non-ignored smoke test [VERIFIED `eval_harness.rs:127`]. If the subset run is
-sane, drop the limit and run the full K-run loop from section 2c. Never cite a limited run — the
+sane, drop the limit and run the full K-run loop from section 2c. Never cite a limited run - the
 fixture is truncated, so the fixture_revision no longer reflects the full benchmark.
 
 ---
@@ -266,7 +266,7 @@ Honest-phrasing notes:
 - Say **NDCG@10**, not "accuracy". There is no QA-accuracy number yet (`qa_accuracy = None`).
 - Always carry **n=K** and **+/- stddev**. A bare percentage is the single-run violation.
 - If you later run reranked/expanded, you must change the provider-class clause to name
-  Qwen3.5-9B and re-stamp the cost receipt — those variants are not free.
+  Qwen3.5-9B and re-stamp the cost receipt - those variants are not free.
 
 ---
 

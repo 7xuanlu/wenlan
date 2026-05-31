@@ -1,4 +1,4 @@
-# START HERE — the honest read, and the one decision
+# START HERE - the honest read, and the one decision
 
 This is the top of the overnight kit. Read this first. Everything else is evidence behind it. Files are
 numbered; each ends with a VERIFICATION block so you can check the work, not trust it.
@@ -46,7 +46,7 @@ for the inward things.
 
 You keep choosing a third option: tune the product more. Stop. The two real options:
 
-**Option A — Become the researcher in this category (recommended).**
+**Option A - Become the researcher in this category (recommended).**
 You sit on rigorous LoCoMo/LongMemEval experience and written citation discipline in a category full of
 vendors quoting cherry-picked single numbers. That is a rare, defensible position with no direct competitor.
 The field guide is already drafted (10-field-guide.md, 2205 words, publishable). This attacks your real
@@ -56,7 +56,7 @@ or memory-infra company, where your weaknesses are off the critical path and you
 description almost word-for-word. [10, 15, 06-bet-1]
 First move: publish the field guide this week. Show HN it as a guide, not a product.
 
-**Option B — Ship the product to 20 real humans and watch them use it.**
+**Option B - Ship the product to 20 real humans and watch them use it.**
 If you still want the product, the move is not more retrieval tuning. It is: spend a half-day closing the
 last /review gaps, then put it in front of 20 people from r/LocalLLaMA and the Claude Code community and
 watch where they quit. Reply to issue #194 first (a real human asked you a real question days ago; it is

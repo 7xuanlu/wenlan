@@ -86,7 +86,7 @@ Why this is the wedge and not the others:
 - **Git versioning is a developer-native superpower nobody ships.** Memory as a git repo means `git diff`, `git blame`, branches, rollback on your knowledge. Anthropic's own long-agent guidance even references git-based recovery, but the memory tool itself stores opaque files. Origin makes the git repo the product. [VERIFIED https://platform.claude.com/docs/en/agents-and-tools/tool-use/memory-tool]
 - **Local-first is the privacy and ownership moat the funded players structurally can't copy.** Their business model needs your data in their cloud. Origin's does not.
 
-One sentence: Origin is the only tool that makes your AI's memory a **local git repo of source-cited, human-reviewed wiki pages** — auditable memory you own, native to Claude Code.
+One sentence: Origin is the only tool that makes your AI's memory a **local git repo of source-cited, human-reviewed wiki pages** - auditable memory you own, native to Claude Code.
 
 The wedge is narrow on purpose. Do not chase "memory API for all agents." Win "trustworthy local memory for Claude Code power users," then widen.
 
@@ -123,7 +123,7 @@ The anti-ICP (do not target first): enterprises wanting a hosted memory API (tha
 
 Partly already happening. Anthropic shipped automatic memory for Claude Pro/Max (Oct 2025), the client-side memory tool (`memory_20250818`), and cross-session memory for Managed Agents (public beta Apr 2026). [VERIFIED https://www.macrumors.com/2025/10/23/anthropic-automatic-memory-claude/] [VERIFIED https://www.edtechinnovationhub.com/news/anthropic-brings-persistent-memory-to-claude-managed-agents-in-public-beta] [VERIFIED https://platform.claude.com/docs/en/agents-and-tools/tool-use/memory-tool] The threat is real and live, not hypothetical.
 
-The bear case [OPINION]: If Anthropic makes Claude Code remember your project across sessions for free, "remember my context" — the table-stakes feature — is commoditized. The dozen memory MCP servers in section 2 are most exposed. Origin's "never re-explain your project" pitch gets weaker.
+The bear case [OPINION]: If Anthropic makes Claude Code remember your project across sessions for free, "remember my context" - the table-stakes feature - is commoditized. The dozen memory MCP servers in section 2 are most exposed. Origin's "never re-explain your project" pitch gets weaker.
 
 Why Origin survives anyway [OPINION]:
 - **Anthropic's memory tool stores opaque files Claude manages, with no provenance, no review gate, no git surface.** The docs describe view/create/str_replace/delete on a `/memories` directory. It is a scratchpad for the agent, not an auditable, human-curated, source-cited knowledge base. [VERIFIED https://platform.claude.com/docs/en/agents-and-tools/tool-use/memory-tool] Origin's differentiation is precisely the layer Anthropic is unlikely to build: human trust, provenance, versioning.

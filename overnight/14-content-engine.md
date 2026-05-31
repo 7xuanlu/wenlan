@@ -14,7 +14,7 @@ Two people turned ongoing work into a compounding audience. Both methods are che
 
 **Simon Willison (simonw).** His rule: write about what you learn and what you build, neither of which needs a novel insight. He keeps a dedicated TIL ("Today I Learned") blog with 576+ short posts, each one a thing he figured out that day, often just a few paragraphs. The byproduct: deep searchable notes on everything, and a name that ranks. [VERIFIED https://til.simonwillison.net/] [VERIFIED https://simonwillison.net/] His own advice on what to blog about: TILs and project write-ups. [VERIFIED https://writethatblog.substack.com/p/simon-willison-on-technical-blogging] The TIL repo is public and mechanical. [VERIFIED https://github.com/simonw/til]
 
-**swyx (Learn in Public).** His rule: "Find something you can't stop thinking about and know it better than anyone, and share everything you learn along the way." And: "Pick up what they put down" — answer the open questions more senior people leave lying around. [VERIFIED https://www.swyx.io/learn-in-public] [VERIFIED https://www.swyx.io/puwtpd]
+**swyx (Learn in Public).** His rule: "Find something you can't stop thinking about and know it better than anyone, and share everything you learn along the way." And: "Pick up what they put down" - answer the open questions more senior people leave lying around. [VERIFIED https://www.swyx.io/learn-in-public] [VERIFIED https://www.swyx.io/puwtpd]
 
 The shared mechanic: **the work is the content.** You do not invent a topic. You narrate what you were already doing. That is the entire trick, and it is exactly the trick a rigor-heavy solo dev with 314 unmined commits should run. [OPINION]
 
@@ -22,7 +22,7 @@ The shared mechanic: **the work is the content.** You do not invent a topic. You
 
 ## 1. The loop: "Commit to Post" (under 30 min/week)
 
-A named, weekly cadence that piggybacks on work he already does. His commit messages average 27 lines of body (per `01-diagnosis.md`) and his `/handoff` skill already writes a narrative session log to `~/.origin/sessions/` plus a status file. [VERIFIED `plugin/skills/handoff/SKILL.md` — "Writes a narrative session log to ~/.origin/sessions/"] Those are first drafts he is throwing away. The loop reuses them.
+A named, weekly cadence that piggybacks on work he already does. His commit messages average 27 lines of body (per `01-diagnosis.md`) and his `/handoff` skill already writes a narrative session log to `~/.origin/sessions/` plus a status file. [VERIFIED `plugin/skills/handoff/SKILL.md` - "Writes a narrative session log to ~/.origin/sessions/"] Those are first drafts he is throwing away. The loop reuses them.
 
 **Weekly (pick ONE, ~25 min):**
 
@@ -47,7 +47,7 @@ A named, weekly cadence that piggybacks on work he already does. His commit mess
 
 12 posts. Every one cites a real commit SHA or file, verified with `git`. Mix of TIL and opinion. Two-plus feed Bet 1 (memory-benchmark honesty). Roughly 3 posts/week; he ships the TILs and batches the opinion pieces.
 
-### Week 1 — the systems bugs (warm up, pure TIL, lowest risk)
+### Week 1 - the systems bugs (warm up, pure TIL, lowest risk)
 
 **1. "A file lock for a race that only happens when your test runner forks."** [TIL]
 Angle: `cargo nextest` forks a process per test; three processes raced on the shared FastEmbed model cache and one randomly failed to load `model_optimized.onnx`. Fix: an OS-level exclusive file lock (`std::File::lock`, stable since 1.89) outside the process-local mutex. The general lesson: a `std::sync::Mutex` protects within a process, not across forked ones.
@@ -61,7 +61,7 @@ Cite: commits `226ae8d` (#129), `7236eeb` (#131), `39a600d` (#136), `crates/orig
 Angle: how `search_memory` combines a `F32_BLOB(768)` vector column, an FTS5 virtual table kept in sync by triggers, and RRF to merge the two ranked lists, all in Turso's libSQL with no external vector DB. Includes the detail that standard RRF `1/(k+rank)` "barely differentiates in small pools" so he tuned it.
 Cite: `crates/origin-core/src/db.rs:6755` (`search_memory`, doc comment "Hybrid search (vector + FTS + RRF)") and `:6965` (the RRF small-pool note). [VERIFIED `grep -n` in db.rs]
 
-### Week 2 — cross-platform and hardware reality (TIL, broad appeal)
+### Week 2 - cross-platform and hardware reality (TIL, broad appeal)
 
 **4. "Shipping a Rust daemon on Windows without writing a Windows Service."** [TIL/opinion]
 Angle: origin-server is a plain console app. Under `sc.exe` + the Windows Service Control Protocol it times out at 30s because it has no service dispatcher. The escape: register a per-user Task Scheduler ONLOGON task via `schtasks.exe` and short-circuit the service-manager path entirely. Concrete, rarely-written-up, ranks well.
@@ -71,17 +71,17 @@ Cite: commit `ed9b96f` (#162), and `AGENTS.md` cross-platform table. [VERIFIED `
 Angle: on macOS Tahoe 26.x, Metal context creation can fail even though native Metal is fine. Instead of crashing, probe Metal context creation first; if it fails, log and run without the LLM. The lesson: on-device inference needs a graceful-degradation probe, not an assumption.
 Cite: `crates/origin-core/src/engine.rs:163` (the probe doc comment "Used by the auto-degrade pattern") and `:483`. [VERIFIED `grep -n` in engine.rs] AGENTS.md "Metal/ggml on macOS Tahoe" note. [VERIFIED]
 
-**6. "I wrote 432 lines of rules to keep my AI coding agent honest. Here they are."** [OPINION — feeds Bet 2]
+**6. "I wrote 432 lines of rules to keep my AI coding agent honest. Here they are."** [OPINION - feeds Bet 2]
 Angle: the AGENTS.md discipline as a public artifact. The L1-L8 test taxonomy, "verify before claiming done," "surgical changes," clone-before-await. Frame per Bet 2: the methodology is the asset. This is the post that tests whether the process work has an audience.
 Cite: `AGENTS.md` (the whole file), `01-diagnosis.md` section 8. [VERIFIED file exists, 432 lines]
 
-### Week 3 — memory-benchmark honesty (Bet 1 core, the high-travel pieces)
+### Week 3 - memory-benchmark honesty (Bet 1 core, the high-travel pieces)
 
-**7. "What LoCoMo and LongMemEval don't tell you about AI memory."** [OPINION — Bet 1, flagship]
+**7. "What LoCoMo and LongMemEval don't tell you about AI memory."** [OPINION - Bet 1, flagship]
 Angle: the independent, no-vendor-axe teardown. He built citation discipline INTO his harness: a single-run rule (never cite a single-run number externally), a schema-version rule (refuse cross-schema comparisons, exit code 2), receipt-only claims (no "+X%" without N≥3 + stddev). The whole category quotes cherry-picked single numbers. He refuses to. That refusal is the post.
 Cite: `AGENTS.md` "Eval Citation Discipline" section, `crates/origin-core/src/eval/AGENTS.md`, `docs/eval/README.md`. [VERIFIED files exist] Contrast with Mem0's "+26% accuracy" headline. [VERIFIED https://mem0.ai/blog/state-of-ai-agent-memory-2026]
 
-**8. "My retrieval tuning regressed the benchmark. I'm publishing it anyway."** [OPINION — Bet 1, the honesty flex]
+**8. "My retrieval tuning regressed the benchmark. I'm publishing it anyway."** [OPINION - Bet 1, the honesty flex]
 Angle: he added a page-channel as a 4th RRF stream and his own eval said it regressed both benchmarks ("Phase 2 evals at PAGE_CHANNEL_LIMIT=10 regressed both benchmarks"). Most builders bury that. Publishing the negative result, with the per-case reasoning, is the rarest and most trust-building thing in this category. Directly executes Bet 3's "publish findings that may undercut your own product."
 Cite: commit `7d16b41` (#203), and the regression bodies quoted in `01-diagnosis.md` section 7. [VERIFIED `git show 7d16b41`]
 
@@ -89,9 +89,9 @@ Cite: commit `7d16b41` (#203), and the regression bodies quoted in `01-diagnosis
 Angle: a single embedding of "what did X say about Y after Z happened" gets dominated by one clause's vocabulary, drowning memories that satisfy the others. Fix: `search_memory_decomposed` splits the query into independent factual subqueries via the LLM, searches each, RRF-merges. Distinct from query expansion (which paraphrases one clause). Graceful fallback to single-query search if the LLM is absent.
 Cite: commit `25e573a` (#214), `crates/origin-core/src/retrieval/`. [VERIFIED `git show 25e573a`]
 
-### Week 4 — the wedge and synthesis (project + opinion, ties to product)
+### Week 4 - the wedge and synthesis (project + opinion, ties to product)
 
-**10. "Memory you can git diff: provenance-enforced, source-cited, on your machine."** [OPINION/project — the wedge from 04-landscape.md]
+**10. "Memory you can git diff: provenance-enforced, source-cited, on your machine."** [OPINION/project - the wedge from 04-landscape.md]
 Angle: the landscape teardown's central claim. Every funded competitor auto-writes opaque blobs to a cloud. Origin makes every remembered fact link to its source, gates it behind human review, and stores the whole thing as a git repo you can `git diff`. The empty quadrant: local-first AND provenance AND human-curated AND git-versioned.
 Cite: `04-landscape.md` sections 3-4, `crates/origin-core/src/pages.rs` (source-backed pages), `plugin/skills/handoff/SKILL.md` (the capture ritual). [VERIFIED files exist]
 
@@ -99,7 +99,7 @@ Cite: `04-landscape.md` sections 3-4, `crates/origin-core/src/pages.rs` (source-
 Angle: concurrent `/api/memory/store` calls each trigger an expensive classify+extract. The ingest batcher folds the quality gate inline and coalesces requests so the LLM work happens once, then passes the enrichment + hint back through the response.
 Cite: `crates/origin-server/src/ingest_batcher.rs`, AGENTS.md module table entry. [VERIFIED file referenced in AGENTS.md]
 
-**12. "Six weeks, 314 commits, zero readers: a build-in-public starting line."** [OPINION — the meta-post, swyx-style]
+**12. "Six weeks, 314 commits, zero readers: a build-in-public starting line."** [OPINION - the meta-post, swyx-style]
 Angle: the honest origin story. He built rigorously and in private and got no distribution. This post is him starting to learn in public, naming the loop above, and committing to it. swyx's "share everything you learn along the way" as a public promise. Pins the series and gives people a reason to follow.
 Cite: the repo itself, `git rev-list --count HEAD` = 314 (per `01-diagnosis.md`). [VERIFIED count in 01-diagnosis.md]
 

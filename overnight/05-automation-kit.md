@@ -710,8 +710,8 @@ Effort = time to wire + risk of breaking flow. Leverage = toil removed per week,
 
 ## TOP 3 TO BUILD FIRST
 
-1. **`/release-check`** — kills version-drift + accidental-minor-bump, the dominant release.yml pain. Lowest effort, immediate.
-2. **`/pr-hygiene`** — runs CI's gates locally; every catch is a saved CI cycle. Biggest dent in ci.yml thrash.
-3. **Eval-citation commit guard (hook 1b)** — mechanizes the only purely-manual discipline (single-run rule) at the exact moment it gets violated.
+1. **`/release-check`** - kills version-drift + accidental-minor-bump, the dominant release.yml pain. Lowest effort, immediate.
+2. **`/pr-hygiene`** - runs CI's gates locally; every catch is a saved CI cycle. Biggest dent in ci.yml thrash.
+3. **Eval-citation commit guard (hook 1b)** - mechanizes the only purely-manual discipline (single-run rule) at the exact moment it gets violated.
 
 Build 1 and 2 first (shell-only, zero risk). Add 3 once, tune its regex against one real false-positive, then leave it running.

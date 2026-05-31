@@ -17,7 +17,7 @@ Read those two facts together. You are competing head-on with a funded, distribu
 
 ## Bet 1 (category a: radical repositioning of the SAME tech)
 
-**Reposition Origin from "AI memory tool" to "the audit log and provenance layer for AI agents" — sell trust and traceability, not recall.**
+**Reposition Origin from "AI memory tool" to "the audit log and provenance layer for AI agents" - sell trust and traceability, not recall.**
 
 **Thesis (why 10x not 10%).** Everyone is building memory. Almost nobody is building the boring compliance-grade layer underneath: who wrote this fact, from what source, when, with what confidence, and can I diff it. Your repo already has provenance, git-versioned artifacts, and local-first storage. That is not a memory feature. That is an *audit* feature. The buyers for audit are different (security, compliance, platform teams), they have budget, and they cannot use a SaaS that ships their data to a vendor. Local-first stops being a nerd preference and becomes the entire value prop. Memory is a 10% improvement in a crowded field. "The agent's actions are provenance-tracked and replayable on-device" is a 10x reframe into an empty field.
 
@@ -65,7 +65,7 @@ Read those two facts together. You are competing head-on with a funded, distribu
 
 ## Bet 4 (category d: an absurdly specific wedge)
 
-**Narrow Origin all the way down to one wedge: persistent, provenance-tracked memory for a single coding agent (Claude Code) inside one workflow — "never re-explain your codebase to your agent twice."**
+**Narrow Origin all the way down to one wedge: persistent, provenance-tracked memory for a single coding agent (Claude Code) inside one workflow - "never re-explain your codebase to your agent twice."**
 
 **Thesis (why 10x not 10%).** "AI memory layer for everything" competes with Mem0 and loses. "The thing that remembers your architecture decisions, your gotchas, and your AGENTS.md conventions across Claude Code sessions, locally, with git-versioned provenance" is a knife. You already ship a Claude Code plugin and an MCP server. The pain is real and specific: agents forget the project's conventions every session and re-derive (often wrongly) what you already told them. Your own CLAUDE.md/AGENTS.md system is proof you feel this pain. A wedge this narrow can own a niche entirely, and niche-owned beats category-also-ran. 10x is being THE answer for one job, not the 15th answer for all jobs.
 

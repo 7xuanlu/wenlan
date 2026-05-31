@@ -83,10 +83,10 @@ The single largest churned artifact in the entire repo is a benchmark dataset. [
 
 The clearest evidence of a perfectionism loop is `release.yml` on 2026-05-24. In a single day [VERIFIED `git log --date=short -- .github/workflows/release.yml`]:
 
-- `#163` fix(ci): release.yml — publish-crates correctness + Homebrew tap
+- `#163` fix(ci): release.yml - publish-crates correctness + Homebrew tap
 - `#167` fix(ci): close 4 multi-target gaps in release.yml
-- `#168` fix(ci): release.yml **second pass** — drop mac x86, inline Cross.toml, bundle DLL
-- `#170` fix(ci): release.yml **third pass** — libssl-dev in cross container, ort DLL from MS
+- `#168` fix(ci): release.yml **second pass** - drop mac x86, inline Cross.toml, bundle DLL
+- `#170` fix(ci): release.yml **third pass** - libssl-dev in cross container, ort DLL from MS
 - then `#173`, `#179` fix(deps) vendored OpenSSL twice
 - then `#182`, `#184`, `#185` more ci perf/fix
 

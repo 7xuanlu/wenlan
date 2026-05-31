@@ -12,11 +12,11 @@ file:line I actually read.
 
 ---
 
-## DELIVERABLE 1 — /review fix plan
+## DELIVERABLE 1 - /review fix plan
 
 ### Per-bug verification against current code
 
-#### Bug 1 — MCP `list_pending_impl` GETs against a POST route; stale `/// GET` doc
+#### Bug 1 - MCP `list_pending_impl` GETs against a POST route; stale `/// GET` doc
 **Status: FIXED (mechanics) / PARTIAL (semantics).**
 
 - `list_pending_impl` now POSTs, not GETs: it builds a `ListMemoriesRequest`
@@ -33,7 +33,7 @@ semantics**: `list_pending` targets `confirmed=false` (the ~1050-row legacy
 unconfirmed bucket), NOT `pending_revision=1`. That is the bug-5 collision, not
 bug 1. Bug 1 itself: **FIXED.**
 
-#### Bug 2 — `list_filtered` has no `confirmed` parameter
+#### Bug 2 - `list_filtered` has no `confirmed` parameter
 **Status: FIXED.**
 
 - `list_filtered` is now a thin shim delegating to `list_filtered_confirmed`
@@ -47,7 +47,7 @@ bug 1. Bug 1 itself: **FIXED.**
 
 The `confirmed=false` filter is honored, not silently ignored. **FIXED.**
 
-#### Bug 3 — no daemon list-pending-revisions route exists
+#### Bug 3 - no daemon list-pending-revisions route exists
 **Status: FIXED.**
 
 - `GET /api/memory/pending-revisions` is registered.
@@ -64,7 +64,7 @@ The per-id route `GET /api/memory/pending-revision/{source_id}` also still
 exists alongside it. [VERIFIED crates/origin-server/src/router.rs:438-439]
 **FIXED.**
 
-#### Bug 4 — accept/dismiss handlers exist but are unrouted
+#### Bug 4 - accept/dismiss handlers exist but are unrouted
 **Status: FIXED.**
 
 - `POST /api/memory/revision/{id}/accept` -> `handle_accept_revision`.
@@ -83,7 +83,7 @@ memory being revised), confirmed by the wrapper building
 `format!("/api/memory/revision/{}/accept", req.target_source_id)`.
 [VERIFIED crates/origin-mcp/src/tools.rs:1503] **FIXED.**
 
-#### Bug 5 — two pending semantics collide; doc/tool don't say which /review targets
+#### Bug 5 - two pending semantics collide; doc/tool don't say which /review targets
 **Status: STILL TRUE (this is the live bug).**
 
 Both buckets exist and both are reachable, but nothing reconciles them for the
@@ -109,21 +109,21 @@ semantic boundary is real and load-bearing; it just is not written down.
 **STILL TRUE as a documentation/clarity gap.** The routing/code half of bug 5 is
 resolved.
 
-#### Bug 6 — edit flow is non-atomic (capture supersedes=old, then forget old)
+#### Bug 6 - edit flow is non-atomic (capture supersedes=old, then forget old)
 **Status: STILL TRUE.**
 
 - SKILL.md still prescribes the two-write edit:
   "edit (`capture` with `supersedes=<old_id>` then `forget(old_id)`)".
   [VERIFIED plugin/skills/review/SKILL.md:37-38]
 - No atomic supersede endpoint exists. `grep` for `atomic` in router.rs returns
-  nothing. [VERIFIED crates/origin-server/src/router.rs — no match]
+  nothing. [VERIFIED crates/origin-server/src/router.rs - no match]
 - The store handler does resolve `supersedes` server-side (agent-declared takes
   priority, else topic-match auto-set).
   [VERIFIED crates/origin-server/src/memory_routes.rs:411-425] But that is a
   single store; the skill's *edit* path is still capture-then-forget, two HTTP
   round trips, both rows live in between. **STILL TRUE.**
 
-#### Bug 7 — list response lacks content, forcing N+1 lookups
+#### Bug 7 - list response lacks content, forcing N+1 lookups
 **Status: FIXED.**
 
 - `IndexedFileInfo` now carries `content: String`, documented as "Populated by
@@ -157,7 +157,7 @@ One round trip renders a review for both buckets. **FIXED.**
 The end-to-end flow already works over HTTP and typed MCP wrappers. The
 remaining work is small. Do it in this order.
 
-**Step 1 — SKILL.md: document the two buckets (closes bug 5, doc half).**
+**Step 1 - SKILL.md: document the two buckets (closes bug 5, doc half).**
 File: `plugin/skills/review/SKILL.md`. Add a short "Two buckets" subsection
 under "Scoped invocation" that states plainly:
 
@@ -173,14 +173,14 @@ This is the highest-value, lowest-risk change. Pure doc. Edit the plugin
 source, not the cache copy at `~/.claude/plugins/cache/...`
 (#92 reference, [VERIFIED issue #92 body fix-step 6]).
 
-**Step 2 — MCP tool descriptions: align the wording (closes bug 5, tool half).**
+**Step 2 - MCP tool descriptions: align the wording (closes bug 5, tool half).**
 File: `crates/origin-mcp/src/tools.rs`. Tighten the `list_pending` description
 at line 2182 to say "first-approval captures (`confirmed=false`)" and
 cross-reference: "for proposed *revisions* to existing memories use
 `list_pending_revisions`." The `list_pending_revisions` description at 2310 is
 already accurate; leave it. Surgical, two string edits.
 
-**Step 3 — Atomic supersede endpoint (closes bug 6).** This is the only real
+**Step 3 - Atomic supersede endpoint (closes bug 6).** This is the only real
 code addition. Minimal, idiomatic to the codebase.
 
 - **db method.** `crates/origin-core/src/db.rs`. Add
@@ -208,14 +208,14 @@ code addition. Minimal, idiomatic to the codebase.
   rule).
 - **MCP wrapper.** `crates/origin-mcp/src/tools.rs`. Add `edit_memory_impl`
   (or extend `capture`) that POSTs `/api/memory/{id}/supersede` and
-  **typed-deserializes** `SupersedeResponse` from `origin-types` — never
+  **typed-deserializes** `SupersedeResponse` from `origin-types` - never
   `serde_json::Value`, per the convention at AGENTS.md and mirrored by
   `accept_revision_impl` (tools.rs:1503-1514). Block it on HTTP transport like
   the other write wrappers (tools.rs:1496-1502).
 - **SKILL.md.** Replace the two-write edit line (SKILL.md:37-38) with a single
   `edit` verb that calls the new tool.
 
-**Step 4 (optional, defer) — gate the supersede behind a confirmation.** The
+**Step 4 (optional, defer) - gate the supersede behind a confirmation.** The
 existing review flow is read-only until the user acts (SKILL.md:62). Keep that
 property: the new supersede is a write, so the skill must require explicit user
 confirmation before calling it, same as `forget`.
@@ -249,7 +249,7 @@ confirmation before calling it, same as `forget`.
 
 ---
 
-## DELIVERABLE 2 — review-curation benchmark
+## DELIVERABLE 2 - review-curation benchmark
 
 ### Why
 

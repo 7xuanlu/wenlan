@@ -27,7 +27,7 @@ These are the rules the agent applies to every change. They come first because t
 - **Challenge assumptions.** Do not follow user framing uncritically. If multiple interpretations exist, present them rather than pick silently. Push back when the approach is wrong.
 - **Verify before claiming done.** Run tests, check the build, confirm behavior. Evidence before assertions.
 
-`[VERIFIED AGENTS.md section: "Design Philosophy"]` — these eight rules are lifted verbatim from the source file's Karpathy-derived philosophy block. They are project-agnostic and copy as-is.
+`[VERIFIED AGENTS.md section: "Design Philosophy"]` - these eight rules are lifted verbatim from the source file's Karpathy-derived philosophy block. They are project-agnostic and copy as-is.
 
 ---
 
@@ -56,7 +56,7 @@ State plainly what the hooks do, so the agent knows what will run before its com
 
 > Pre-commit auto-formats and runs the linter on changed packages. Pre-push runs the full linter plus the fast test suite.
 
-`[VERIFIED AGENTS.md section: "Build & Dev Commands" and "Git hooks (auto-activated)"]` — the source file lists exact commands and states what each hook does. Keep the structure, swap the commands.
+`[VERIFIED AGENTS.md section: "Build & Dev Commands" and "Git hooks (auto-activated)"]` - the source file lists exact commands and states what each hook does. Keep the structure, swap the commands.
 
 ---
 
@@ -85,7 +85,7 @@ Rules that fall out of the model:
 - **A local gate that CI does not mirror is friction without protection.** If pre-push enforces something CI never checks, the gate only slows the author. Either CI mirrors it, or it moves to L5/L7.
 - **State what does NOT run in CI and why.** Hardware-bound, paid-API, and desktop/platform-specific suites are explicitly excluded so nobody assumes CI covered them. Mark them `[ignore]`/skipped so they cannot run by accident.
 
-`[VERIFIED AGENTS.md section: "Local vs CI test responsibilities", "What does NOT run in CI and why", "Why pre-push doesn't run coverage"]` — the three-question rule, the L1-L8 table, and the no-rotting-gates reasoning are lifted directly. Renumber or collapse layers your project does not have; keep the three questions, they are the reusable engine. Full framework in `docs/test-layers.md`.
+`[VERIFIED AGENTS.md section: "Local vs CI test responsibilities", "What does NOT run in CI and why", "Why pre-push doesn't run coverage"]` - the three-question rule, the L1-L8 table, and the no-rotting-gates reasoning are lifted directly. Renumber or collapse layers your project does not have; keep the three questions, they are the reusable engine. Full framework in `docs/test-layers.md`.
 
 ---
 
@@ -100,7 +100,7 @@ Any number you report (in a README, a PR description, a blog post, a deck, an is
 - **Layer attribution.** Public numbers must say which test layer (L1/L2/L3/...) produced them. No cross-layer averages without explicit weighting.
 - **Commit policy: snapshot, not history.** Metric values MAY be committed to git as a curated, environment-stamped snapshot (the current headline numbers), overwritten per release, each value carrying its methodology inline (model, dataset, run count, repro command). Do NOT commit a per-run history series, and keep raw per-run artifacts gitignored; they are reproduced by re-running, not stored as source.
 
-`[VERIFIED AGENTS.md section: "Conventions > Eval Citation Discipline"]` — all six rules map one-to-one to the source file's bullets (Single-run, Schema-version, Receipt-only, Per-case visibility, Layer attribution, Commit policy). Standalone guide in `docs/eval-citation-discipline.md`.
+`[VERIFIED AGENTS.md section: "Conventions > Eval Citation Discipline"]` - all six rules map one-to-one to the source file's bullets (Single-run, Schema-version, Receipt-only, Per-case visibility, Layer attribution, Commit policy). Standalone guide in `docs/eval-citation-discipline.md`.
 
 ---
 
@@ -113,7 +113,7 @@ State the dependency rules that keep packages from rotting into a ball of mud. T
 - **Do not add business logic to `<THIN LAYER, e.g. HTTP/CLI layer>`.** That layer does framing/transport only; it calls into the core with plain values.
 - **`<BOUNDARY-CROSSING CODE>` deserializes into typed structs, never an untyped blob.** Typed deserialization fails loud on shape drift; untyped silently passes whatever it gets.
 
-`[VERIFIED AGENTS.md section: "Conventions > Crate boundaries"]` — the "no-framework-in-core, verify by grep," "keep shared types light," "no logic in the thin layer," and "typed deserialization at boundaries" rules are generalized from the source file's crate-boundary bullets. Each rule keeps its proof command; that is what makes it enforceable rather than aspirational.
+`[VERIFIED AGENTS.md section: "Conventions > Crate boundaries"]` - the "no-framework-in-core, verify by grep," "keep shared types light," "no logic in the thin layer," and "typed deserialization at boundaries" rules are generalized from the source file's crate-boundary bullets. Each rule keeps its proof command; that is what makes it enforceable rather than aspirational.
 
 ---
 
@@ -126,7 +126,7 @@ Examples of the shape (from the source project; replace with yours):
 - **Never hold a lock guard across an `await`/blocking call.** Snapshot what you need into a scoped block that ends before the slow call, then call with the cloned values.
 - **`<X>` is the single writer.** Only one component touches the data store directly; everything else goes through its API.
 
-`[VERIFIED AGENTS.md section: "Conventions > Async and locking"]` — generalized. Drop this whole section if your project has no shared-resource hazards; do not invent rules to fill it.
+`[VERIFIED AGENTS.md section: "Conventions > Async and locking"]` - generalized. Drop this whole section if your project has no shared-resource hazards; do not invent rules to fill it.
 
 ---
 
@@ -140,7 +140,7 @@ Examples of the shape:
 - **Distinguish null from empty.** Store an absent value as NULL, not an empty string, so `IS NULL` filters work.
 - **Encoding safety.** `<Your language's string/byte-index footgun and the safe idiom.>`
 
-`[VERIFIED AGENTS.md section: "Conventions > SQL, strings, data"]` — generalized from the source file's SQL/string/data bullets. Keep only the ones your stack can actually trip on.
+`[VERIFIED AGENTS.md section: "Conventions > SQL, strings, data"]` - generalized from the source file's SQL/string/data bullets. Keep only the ones your stack can actually trip on.
 
 ---
 
@@ -162,7 +162,7 @@ Squash-merge bundles a PR's commits into one new commit on the main branch with 
 
 Run this hygiene pass on a schedule (roughly weekly, or whenever the worktree list gets long).
 
-`[VERIFIED AGENTS.md section: "Worktree cleanup after squash-merge"]` — lifted and de-Rust-ified. The SHA-lies trap and the force-delete reason are the load-bearing insights; keep them.
+`[VERIFIED AGENTS.md section: "Worktree cleanup after squash-merge"]` - lifted and de-Rust-ified. The SHA-lies trap and the force-delete reason are the load-bearing insights; keep them.
 
 ---
 
@@ -174,7 +174,7 @@ Run this hygiene pass on a schedule (roughly weekly, or whenever the worktree li
 - **Squash-merge commit messages matter.** The squash commit message often defaults to the PR title. Review PR titles before merging so the release automation reads the bump you intend.
 - **List the version files that must stay in sync** and how they are kept in sync.
 
-`[VERIFIED AGENTS.md section: "Releasing", "Release pipeline gotchas (learned the hard way)"]` — the reusable core is "prefixes control bumps, squash titles become commit messages, keep version files in sync." The specific tool is yours to fill in.
+`[VERIFIED AGENTS.md section: "Releasing", "Release pipeline gotchas (learned the hard way)"]` - the reusable core is "prefixes control bumps, squash titles become commit messages, keep version files in sync." The specific tool is yours to fill in.
 
 ---
 

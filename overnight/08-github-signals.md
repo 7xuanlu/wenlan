@@ -20,11 +20,11 @@ These are ground-truth from the GitHub API, not web scraping. Pulled 2026-05-31.
 ## Issues: near-zero external engagement
 
 `list_issues` returns **totalCount: 4** open issues. Breakdown:
-- #194 — external user `kiluazen` (kushal), a thoughtful per-claim-provenance design question. The ONLY
+- #194 - external user `kiluazen` (kushal), a thoughtful per-claim-provenance design question. The ONLY
   substantive external technical engagement in the tracker. [VERIFIED github list_issues]
-- #92 — self-authored. `/review` skill broken end-to-end.
-- #79 — self-authored. handoff per-project isolation feature.
-- #1  — self-authored. demo clips.
+- #92 - self-authored. `/review` skill broken end-to-end.
+- #79 - self-authored. handoff per-project isolation feature.
+- #1  - self-authored. demo clips.
 
 So: one engaged external person. That matches the "almost no traction" hypothesis. [VERIFIED]
 
@@ -46,8 +46,8 @@ He wrote a 7-bug, 6-step fix plan with exact file:line citations. Then, per the 
 weeks (#202-#214) went to retrieval micro-tuning: page-channel RRF, graph-activation gates, query
 decomposition. [VERIFIED git log + issue #92]
 
-Read that sequence again. A CORE USER-FACING VERB of his product — the "review before trust" feature that
-the README sells as differentiator #2 — has been broken for over two weeks. He diagnosed it in surgical
+Read that sequence again. A CORE USER-FACING VERB of his product - the "review before trust" feature that
+the README sells as differentiator #2 - has been broken for over two weeks. He diagnosed it in surgical
 detail. Then he chose to build a fourth retrieval-ranking variant instead of fixing it.
 
 This is the thesis in one data point: he reaches for the rigorous, inward, measurable work (retrieval evals)

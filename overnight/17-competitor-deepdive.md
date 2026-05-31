@@ -12,9 +12,9 @@ Verification tags: [VERIFIED url] = pulled from a fetched page or the API. [INFE
 
 The category splits into three layers. Origin sits in the middle layer.
 
-- **Layer A — Memory infrastructure (huge, generic, not coding-specific):** mem0, the official MCP memory server. Thousands to tens of thousands of stars. Not direct competitors; they are upstream primitives.
-- **Layer B — Coding-agent memory (Origin's lane):** sverklo, agentmemory, ghost, n2n-memory, pebble, contextforge, letta-code. This is the contested ground.
-- **Layer C — Code intelligence (adjacent, retrieval-not-memory):** roam-code, GitNexus, CodeGraph. Symbol graphs over the codebase, not memory of agent work. Sverklo straddles B and C.
+- **Layer A - Memory infrastructure (huge, generic, not coding-specific):** mem0, the official MCP memory server. Thousands to tens of thousands of stars. Not direct competitors; they are upstream primitives.
+- **Layer B - Coding-agent memory (Origin's lane):** sverklo, agentmemory, ghost, n2n-memory, pebble, contextforge, letta-code. This is the contested ground.
+- **Layer C - Code intelligence (adjacent, retrieval-not-memory):** roam-code, GitNexus, CodeGraph. Symbol graphs over the codebase, not memory of agent work. Sverklo straddles B and C.
 
 ### Competitor table
 
@@ -121,7 +121,7 @@ Capability x competitor. "Yes" requires a verified feature claim. Origin's colum
 
 ### Cells only Origin occupies [VERIFIED]
 
-1. **Enforced provenance at write time** — daemon rejects unsourced pages. No other repo gates synthesis on citations. [VERIFIED https://github.com/7xuanlu/origin]
+1. **Enforced provenance at write time** - daemon rejects unsourced pages. No other repo gates synthesis on citations. [VERIFIED https://github.com/7xuanlu/origin]
 2. **Distilled source-cited wiki pages as first-class retrieval objects** with revision state and stale-reason tracking. Closest is sverklo `prune` and pebble consolidation, but neither produces cited, refreshable pages that feed retrieval. [VERIFIED]
 
 Bonus near-unique: **standard-benchmark eval discipline**. Origin is the only one in the lane citing LoCoMo/LongMemEval. agentmemory claims benchmark superiority but against an unverified bespoke harness. [VERIFIED + INFERRED]
