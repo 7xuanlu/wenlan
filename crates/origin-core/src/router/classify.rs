@@ -15,7 +15,7 @@ pub struct QueryClassification {
 
 /// Temporal phrases that signal a need for graph-backed temporal traversal.
 /// Uses multi-word phrases to reduce false positives (e.g. "before" alone is too broad).
-const TEMPORAL_KEYWORDS: &[&str] = &[
+pub(crate) const TEMPORAL_KEYWORDS: &[&str] = &[
     "recently",
     "what changed",
     "history of",
@@ -35,7 +35,7 @@ const TEMPORAL_KEYWORDS: &[&str] = &[
 
 /// Relational phrases that signal a need for graph-backed entity traversal.
 /// Uses multi-word phrases to avoid false positives on common words like "between".
-const RELATIONAL_KEYWORDS: &[&str] = &[
+pub(crate) const RELATIONAL_KEYWORDS: &[&str] = &[
     "relationship between",
     "relate to",
     "who works",

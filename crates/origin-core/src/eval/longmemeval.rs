@@ -1190,6 +1190,13 @@ pub async fn run_longmemeval_eval_cross_rerank_from_db(
     if let Some(depth) = graph_seed_depth {
         variant_tag.push_str(&format!("__graph_seed_d{}", depth));
     }
+    // T19: append __query_intent suffix when ORIGIN_ENABLE_QUERY_INTENT is on.
+    let query_intent_state = if crate::retrieval::query_intent::query_intent_enabled() {
+        variant_tag.push_str("__query_intent");
+        "on"
+    } else {
+        "off"
+    };
     let mut env_stamp = build_lme_env(
         &variant_tag,
         path,
@@ -1209,6 +1216,9 @@ pub async fn run_longmemeval_eval_cross_rerank_from_db(
     } else {
         env_stamp.flags.push("graph_seed=off".to_string());
     }
+    env_stamp
+        .flags
+        .push(format!("query_intent={}", query_intent_state));
     env_stamp.flags.push("scenario_db=consolidated".to_string());
     report.env = Some(env_stamp);
     Ok(report)
