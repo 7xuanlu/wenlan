@@ -10,11 +10,20 @@
 //! The whole build path is gated behind [`crate::db::global_prelude_enabled`]
 //! so a disabled flag means zero build cost and a byte-identical read path.
 //!
+//! The LLM-generated body is not trusted blindly: before a summary node is
+//! written, the candidate body is gated behind a lexical content-token overlap
+//! floor (default 0.5, matching the page-distillation faithfulness bench) against
+//! the union of its source members. A body that falls below the floor degrades to
+//! the deterministic template rather than shipping unverified prose into the
+//! always-prepended `## Corpus Overview` prelude. The check is lexical, not
+//! semantic (a paraphrased-but-faithful body can fall to the template), mirroring
+//! the `eval::page_faithfulness` scope limit.
+//!
 //! This module holds the pure (DB-free) build helpers so they unit-test without
 //! a libSQL connection: the deterministic template fallback, the min-members
-//! gate, and the root-provenance union. The DB-touching orchestration
-//! (`build_summary_nodes`) lives below and is exercised via the integration
-//! tests in `db.rs`.
+//! gate, the content-overlap floor, and the root-provenance union. The DB-touching
+//! orchestration (`build_summary_nodes`) lives below and is exercised via the
+//! integration tests in `db.rs`.
 
 use crate::db::MemoryDB;
 use crate::llm_provider::{LlmProvider, LlmRequest};
@@ -153,6 +162,55 @@ pub fn sanitize_llm_body(raw: &str) -> Option<String> {
     Some(cleaned.to_string())
 }
 
+/// Minimum fraction of a candidate body's content-tokens that must appear in the
+/// union of its source members before the LLM body is trusted over the template.
+/// Mirrors the 50% content-token floor documented for the parallel
+/// page-distillation faithfulness bench (see AGENTS.md "Page-distillation
+/// faithfulness bench"). Lexical, not semantic: a paraphrased-but-faithful body
+/// can fall below the floor (it degrades to the template, never to an empty node).
+pub const BODY_OVERLAP_FLOOR: f64 = 0.5;
+
+/// Stopwords stripped before content-token overlap scoring. Mirrors the list in
+/// `eval::page_faithfulness` so the prelude floor and the page bench share one
+/// notion of "content token".
+const STOPWORDS: &[&str] = &[
+    "with", "from", "that", "this", "these", "those", "have", "been", "will", "would", "could",
+    "should", "their", "there", "where", "when", "what", "which", "while", "about", "after",
+    "before", "between", "into", "over", "under", "very", "more", "most", "some", "such", "than",
+    "then", "they", "them", "your", "yours",
+];
+
+/// Content-bearing tokens: lowercased alphanumeric words of length >= 4, minus
+/// stopwords. Lifted from `eval::page_faithfulness::content_tokens` so the
+/// production prelude path does not depend on the eval (benchmark) module.
+fn content_tokens(text: &str) -> Vec<String> {
+    text.split(|c: char| !c.is_alphanumeric())
+        .map(|t| t.to_ascii_lowercase())
+        .filter(|t| t.len() >= 4 && !STOPWORDS.contains(&t.as_str()))
+        .collect()
+}
+
+/// Fraction of `body`'s content-tokens that also appear in `source` (the union
+/// of member texts). A body with no content-tokens (pure punctuation / all
+/// stopwords) is vacuously grounded (returns 1.0) so it never spuriously fails
+/// the floor — `sanitize_llm_body` already rejects too-short bodies upstream.
+fn body_overlap_fraction(body: &str, source: &str) -> f64 {
+    let toks = content_tokens(body);
+    if toks.is_empty() {
+        return 1.0;
+    }
+    let source_toks: BTreeSet<String> = content_tokens(source).into_iter().collect();
+    let hits = toks.iter().filter(|t| source_toks.contains(*t)).count();
+    hits as f64 / toks.len() as f64
+}
+
+/// True iff `body` is lexically grounded in `source` at or above
+/// [`BODY_OVERLAP_FLOOR`]. Used to gate an LLM-produced summary body against the
+/// union of its member source texts before trusting it over the template.
+pub fn body_meets_overlap_floor(body: &str, source: &str) -> bool {
+    body_overlap_fraction(body, source) >= BODY_OVERLAP_FLOOR
+}
+
 /// Orchestrates the T18 build: group eligible memories by `community_id`,
 /// summarize qualifying buckets, then summarize the buckets into one root.
 /// Writes `summary_nodes` + `summary_node_sources`. Returns the number of nodes
@@ -277,11 +335,26 @@ async fn summarize_bucket(
         label: Some("summary_bucket".into()),
         timeout_secs: None,
     };
+    // Union of member source texts (titles + content) the body must be grounded in.
+    let member_source: String = members
+        .iter()
+        .map(|m| format!("{} {}", m.title, m.content))
+        .collect::<Vec<_>>()
+        .join("\n");
     // Wrap in a timeout so a hung provider degrades to the template rather than
     // stalling the refinery (no silent-zero: failure -> deterministic body).
     match tokio::time::timeout(std::time::Duration::from_secs(15), llm.generate(req)).await {
         Ok(Ok(raw)) => match sanitize_llm_body(&raw) {
-            Some(body) => (tmpl_title, body),
+            // Gate the LLM body behind a content-overlap floor against the member
+            // source texts; reject hallucinated prose and fall back to the template.
+            Some(body) if body_meets_overlap_floor(&body, &member_source) => (tmpl_title, body),
+            Some(_) => {
+                log::debug!(
+                    "[summary] bucket LLM body below overlap floor ({}); using template",
+                    BODY_OVERLAP_FLOOR
+                );
+                (tmpl_title, tmpl_body)
+            }
             None => (tmpl_title, tmpl_body),
         },
         Ok(Err(e)) => {
@@ -323,9 +396,21 @@ async fn summarize_root(
         label: Some("summary_root".into()),
         timeout_secs: None,
     };
+    // Union of bucket titles the root body must be grounded in (the root is
+    // prompted only on these titles, so they are its source members).
+    let root_source: String = bucket_titles.join("\n");
     match tokio::time::timeout(std::time::Duration::from_secs(15), llm.generate(req)).await {
         Ok(Ok(raw)) => match sanitize_llm_body(&raw) {
-            Some(body) => (tmpl_title, body),
+            // Gate the LLM body behind a content-overlap floor against the bucket
+            // titles; reject hallucinated prose and fall back to the template.
+            Some(body) if body_meets_overlap_floor(&body, &root_source) => (tmpl_title, body),
+            Some(_) => {
+                log::debug!(
+                    "[summary] root LLM body below overlap floor ({}); using template",
+                    BODY_OVERLAP_FLOOR
+                );
+                (tmpl_title, tmpl_body)
+            }
             None => (tmpl_title, tmpl_body),
         },
         Ok(Err(e)) => {
@@ -426,5 +511,70 @@ mod tests {
         assert!(b.contains("Rust") && b.contains("Cooking"));
         let (et, eb) = assemble_root_template(&[]);
         assert!(et.is_empty() && eb.is_empty());
+    }
+
+    /// A candidate LLM body whose content-tokens are absent from the member
+    /// source texts falls below the overlap floor, so the gated path keeps the
+    /// deterministic template body (hallucination guard).
+    #[test]
+    fn summary_body_below_overlap_floor_falls_back_to_template() {
+        let members = vec![
+            member("m1", "Rust ownership", "borrow checker enforces moves"),
+            member("m2", "Rust lifetimes", "elision rules"),
+        ];
+        let (_tmpl_title, tmpl_body) = assemble_summary_template(&members);
+        let member_source: String = members
+            .iter()
+            .map(|m| format!("{} {}", m.title, m.content))
+            .collect::<Vec<_>>()
+            .join("\n");
+        // Hallucinated body: real prose, passes sanitize, but none of its content
+        // tokens appear in the members.
+        let candidate = "Photosynthesis converts sunlight into glucose inside chloroplasts.";
+        assert!(
+            sanitize_llm_body(candidate).is_some(),
+            "candidate must survive sanitize so the overlap floor is what rejects it"
+        );
+        assert!(
+            !body_meets_overlap_floor(candidate, &member_source),
+            "candidate with no member content-tokens must fail the floor"
+        );
+        let chosen = if body_meets_overlap_floor(candidate, &member_source) {
+            candidate.to_string()
+        } else {
+            tmpl_body.clone()
+        };
+        assert_eq!(chosen, tmpl_body);
+    }
+
+    /// A candidate LLM body whose content-tokens are mostly drawn from the member
+    /// source texts clears the overlap floor, so the gated path keeps the LLM body.
+    #[test]
+    fn summary_body_above_overlap_floor_is_kept() {
+        let members = vec![
+            member("m1", "Rust ownership", "borrow checker enforces moves"),
+            member("m2", "Rust lifetimes", "elision rules govern references"),
+        ];
+        let (_tmpl_title, tmpl_body) = assemble_summary_template(&members);
+        let member_source: String = members
+            .iter()
+            .map(|m| format!("{} {}", m.title, m.content))
+            .collect::<Vec<_>>()
+            .join("\n");
+        // Faithful body: every content token is drawn from the members.
+        let candidate =
+            "Rust ownership and lifetimes: the borrow checker enforces moves and elision rules.";
+        assert!(sanitize_llm_body(candidate).is_some());
+        assert!(
+            body_meets_overlap_floor(candidate, &member_source),
+            "candidate built from member tokens must clear the floor"
+        );
+        let chosen = if body_meets_overlap_floor(candidate, &member_source) {
+            candidate.to_string()
+        } else {
+            tmpl_body.clone()
+        };
+        assert_eq!(chosen, candidate);
+        assert_ne!(chosen, tmpl_body);
     }
 }
