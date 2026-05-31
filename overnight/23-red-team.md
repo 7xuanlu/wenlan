@@ -41,7 +41,7 @@ marketing-amplified noise at the top of the table, they are marketing-amplified 
 and "13th by stars" measures who posted to the right subreddit, not who built the better product or has
 users. The honest version of 16's claim is: "Origin has not been promoted, so it has few stars." That is a
 distribution finding, not a competitive-position finding, and it is the *same* finding as "he never
-launched" — counted twice.
+launched" - counted twice.
 
 ### 1.2 The "feeding frenzy" rests on one broad query with default relevance sort, and the count is fragile
 
@@ -53,14 +53,14 @@ launched" — counted twice.
 That hedge is buried under a much louder claim ("it is worse than crowded... a feeding frenzy", 16 line 58).
 I re-ran a *narrower* query this session, `persistent memory claude code mcp local git`, sorted by stars:
 total_count = 2, both repos at **0 stars**, and one of them (vibemem) had its last commit on
-2026-02-24 — a single day of activity, effectively abandoned. [VERIFIED github search_repositories
+2026-02-24 - a single day of activity, effectively abandoned. [VERIFIED github search_repositories
 2026-05-31, perPage 15, sort stars] Widen a word and you get a frenzy; narrow a word and you get a graveyard
 of dead 0-star repos. The "15+ competitors" number is an artifact of query breadth, not a stable fact about
 the market. A category where most entrants are 0-star, single-commit, or abandoned is not a feeding frenzy.
 It is a land rush where almost everyone has already quit. That reading supports "nobody has won this yet, the
 lane is wide open" at least as well as it supports "you are too late."
 
-### 1.3 npm/download numbers were never obtained — the one metric that would settle "does anyone use these"
+### 1.3 npm/download numbers were never obtained - the one metric that would settle "does anyone use these"
 
 The kit repeatedly contrasts Origin's daemon-install friction against npx competitors and infers Origin
 loses the casual try (16 line 39; 17 line 131). But it never pulls a single npm weekly-download number for
@@ -79,7 +79,7 @@ an adoption asymmetry it never measured.
 
 "Deduped by eye" plus "directional" does not support the precision the rest of the kit then quotes: "43-46%"
 (00 line 24), "71% inward" last 7 days (00, 21). A keyword classifier cannot tell a `fix:` that unblocks a
-user from a `fix:` that chases a green CI badge — and for a solo dev pre-launch, *all* infrastructure is
+user from a `fix:` that chases a green CI badge - and for a solo dev pre-launch, *all* infrastructure is
 arguably product work, because the product does not exist until it installs and runs. Labeling cross-platform
 install, release pipeline, and Docker as "inward / not user-facing" (01 lines 45, 50) bakes the conclusion
 into the measurement: it assumes distribution plumbing is avoidance, when for a tool you intend to ship it
@@ -92,7 +92,7 @@ life-direction decision, which is what 00 and 15 make it.
 
 > 15 (line 72): "the file reads like it was derived from forums and competitor pages, not conversations."
 
-So the YELLOW verdict on provenance — "users are not asking for it" (12 line 18, line 42) — is an *absence of
+So the YELLOW verdict on provenance - "users are not asking for it" (12 line 18, line 42) - is an *absence of
 evidence* from a search, not evidence of absence from talking to anyone. "No evidence found of a solo dev
 saying 'I won't use AI memory unless every fact is source-cited'" (12 line 42) is exactly the kind of
 proposition you cannot resolve by searching; people do not post the feature requests they have not yet
@@ -105,8 +105,8 @@ diagnoses.
 08 carries a prominent correction (lines 5-18): 5 of 7 bugs in the /review flow are fixed, routes registered,
 MCP wrapper correct. Good. But 00 (line 38) and 09 (line 9) still lead with the punchy "broken end-to-end"
 energy ("you fixed 5 of 7 backend bugs... then left the docs-sync... undone"; "do not Show HN a product whose
-README differentiator #2 is broken end-to-end"). The narrower truth — two minor finishing gaps remain, docs
-sync and a non-atomic edit — is a half-day of polish, not evidence of a character flaw. The kit's top-level
+README differentiator #2 is broken end-to-end"). The narrower truth - two minor finishing gaps remain, docs
+sync and a non-atomic edit - is a half-day of polish, not evidence of a character flaw. The kit's top-level
 memo inherits the original overstatement's emotional charge after the body retracted its substance.
 
 ---
@@ -118,15 +118,15 @@ it everywhere else. Here is the strongest honest case it does *not* make.
 
 ### 2.1 A crowded category is a validated category. The kit treats density as disqualifying; it is the opposite
 
-The kit's loudest evidence against the product — 15+ memory repos, mem0 at $24M and 57k stars (06 line 9; 12
-line 28) — is also the strongest evidence the problem is real and people will pay to solve it. mem0 raising
+The kit's loudest evidence against the product - 15+ memory repos, mem0 at $24M and 57k stars (06 line 9; 12
+line 28) - is also the strongest evidence the problem is real and people will pay to solve it. mem0 raising
 $24M and being picked as the *exclusive* memory provider for the AWS Agent SDK [VERIFIED
 https://techcrunch.com/2025/10/28/mem0-raises-24m-from-yc-peak-xv-and-basis-set-to-build-the-memory-layer-for-ai-apps/]
 is the kit's argument for *fear*. Reframed correctly, it is market validation a solo founder normally pays
 dearly to get: someone with real capital and real diligence confirmed the category. Categories with one
 funded leader and a long tail of sub-100-star experiments are *normal early markets*, not saturated ones. Git
 hosting had SourceForge; Dropbox shipped into "rsync exists." "It already exists" is the single most common
-wrong reason to not build. The kit cites YC's "42% die of no market need" (00 line 43) as a reason to pivot —
+wrong reason to not build. The kit cites YC's "42% die of no market need" (00 line 43) as a reason to pivot -
 but a crowded category is the one place "no market need" is *least* likely to be the failure mode.
 
 ### 2.2 Provenance is a bet that gets stronger as agent autonomy rises, and the timing window is now
@@ -138,7 +138,7 @@ the *underlying* failure is real and worsening:
 > 32, citing https://dev.to/ac12644/...)
 
 As agents get more autonomous and write more of their own memory unsupervised, "can I trust what the agent
-remembered, and trace it" moves from a builder's nicety to a felt pain — the same arc "type safety" and
+remembered, and trace it" moves from a builder's nicety to a felt pain - the same arc "type safety" and
 "observability" walked from niche to default. A feature users do not yet ask for, attached to a problem that
 is provably growing, is the textbook definition of a *non-consensus correct* bet. The kit calls this "you
 could be 18 months early" (06 line 30) and files it as a risk. For a solo builder with no burn rate and a day
@@ -150,7 +150,7 @@ moat the kit waves away.
 ### 2.3 Six weeks is nothing. The kit's own benchmark heroes took years
 
 00 frames six weeks as damning ("six weeks of work... zero users"). The trajectory file (15 line 122) then
-cites Simon Willison, whose influence came from "consistency over years." swyx, Levels, Pieter Levels — every
+cites Simon Willison, whose influence came from "consistency over years." swyx, Levels, Pieter Levels - every
 solo-builder exemplar the kit invokes built audience and traction over *years*, frequently across multiple
 failed projects. Holding a six-week-old nights-and-weekends project to "where are your users" is a standard
 the kit's own role models would all have failed at week six. Nikita Bier's advice, which the builder-benchmark
@@ -173,8 +173,8 @@ This is the steelman's core. Every "inward" finding in the kit reduces to one fa
 strangers even once.** Not "he shipped and it failed." He has *never run the experiment.* You cannot conclude
 the product can't win from a dataset that contains zero launch attempts. The correct response to "I have a
 differentiated product and have never told anyone about it" is "launch it once and read the result," not
-"pivot careers." The kit's Option B is literally this — fix two docs, post to HN and r/LocalLLaMA, watch 20
-people — and it is a half-day plus a week. The pivot recommendation (Option A, become the researcher) is a
+"pivot careers." The kit's Option B is literally this - fix two docs, post to HN and r/LocalLLaMA, watch 20
+people - and it is a half-day plus a week. The pivot recommendation (Option A, become the researcher) is a
 *bigger, slower, less reversible* bet than the experiment that would actually generate the missing data. You
 do not need to decide between product and research before you have a single data point from a launch. The kit
 inverts the option value: it recommends the irreversible identity change *before* running the cheap reversible
@@ -215,14 +215,14 @@ him keep avoiding the one scary thing by always having a "more strategic" altern
 01 (line 178) and 08 frame the eval discipline as "the most sophisticated form of avoidance." 15 (Rank 1) and
 06 (Bet 2) frame the *same* discipline as his single most valuable, most marketable, rarest asset that maps
 "one-to-one onto the job description" at Anthropic. So the rigor is simultaneously the disease and the cure.
-The kit never resolves which. The resolution it gestures at — "aim the rigor outward" (21 line 62) — is a
+The kit never resolves which. The resolution it gestures at - "aim the rigor outward" (21 line 62) - is a
 real answer, but it means the problem was never the rigor. It was the lack of a launch. Which collapses back
 to section 2.5: the diagnosis is "never shipped once," and everything else is narrative around that.
 
 ### 3.4 The kit pathologizes shipping releases nobody downloads, while recommending he write essays nobody reads (yet)
 
 21 item 5: "STOP shipping releases nobody is waiting for." But 06 Bet 3 and the field guide ask him to publish
-essays into the same void — no audience, no readers waiting. By the kit's own logic, an unread essay is
+essays into the same void - no audience, no readers waiting. By the kit's own logic, an unread essay is
 "polishing a storefront on an empty street" (21 line 28) exactly as much as an undownloaded release. The kit
 exempts the writing path from the standard it holds the product path to, because writing is the recommended
 option. That is motivated reasoning.
@@ -238,7 +238,7 @@ error of judgment. The pivot has at least four real downsides it underweights.
 
 The entire case against the product is "no distribution." Writing does not solve distribution; it *relocates*
 it. The graveyard of dead technical blogs is larger than the graveyard of dead repos. 06 Bet 3's kill
-criterion is "front page of HN OR 10k views OR 200 followers in a week" — and the base rate of a first-time
+criterion is "front page of HN OR 10k views OR 200 followers in a week" - and the base rate of a first-time
 author hitting any of those on a first post is low. The kit cites Simon Willison (15 line 122) as the model,
 then quotes the part that dooms the quick win: "consistency over *years*." If distribution is his weakness,
 moving to a medium where distribution is *even more* winner-take-all and slower-compounding is not obviously
@@ -247,8 +247,8 @@ constraint* (getting strangers to care) is identical.
 
 ### 4.2 A half-finished pivot is strictly worse than a finished product
 
-Right now he has a real, working, differentiated artifact. If he half-pivots — writes two essays, neither
-lands, gets discouraged — he ends with a stalled product AND a stalled writing habit AND the sunk
+Right now he has a real, working, differentiated artifact. If he half-pivots - writes two essays, neither
+lands, gets discouraged - he ends with a stalled product AND a stalled writing habit AND the sunk
 six weeks reframed as wasted. The product at least *exists and runs*. The kit's framing risks talking him out
 of a finished asset and into an unfinished identity. The most likely failure mode of "become a writer" for a
 rigor-loving, inward, distribution-averse person is not "becomes Simon Willison." It is "writes three posts,
@@ -261,7 +261,7 @@ with a reader in mind." The kit recommends, as the highest-conviction move, that
 *one skill it has zero positive evidence he has.* It has abundant evidence he can build (125k lines of working
 Rust, a real eval harness). It has none that he can write for an audience. Recommending the unevidenced skill
 over the demonstrated one, and calling it "low downside," is backwards. The internal docs being excellent (15
-line 88) is not evidence — internal rigor and audience-grabbing prose are different muscles, as the kit itself
+line 88) is not evidence - internal rigor and audience-grabbing prose are different muscles, as the kit itself
 says.
 
 ### 4.4 The research-engineer job path is gated on Python he does not have, and on a hiring market the kit romanticizes
@@ -302,13 +302,13 @@ identity change*. The kit had this in hand and flinched past it. Concretely:
 **Do Option B, now, as one bounded experiment. Do not pre-commit to a pivot.**
 
 - This week: spend the half-day closing the two real /review gaps (docs sync, atomic edit), reply to issue
-  #194 (a real human, waiting — this is non-negotiable and the kit is right about it), and launch *once* to
+  #194 (a real human, waiting - this is non-negotiable and the kit is right about it), and launch *once* to
   r/LocalLLaMA, r/ClaudeAI, and the Claude Code community. Lead with composition + provenance + "git diff your
   agent's memory," which 16 correctly identifies as the only un-copied headline.
 - Set a real kill/continue gate *before* posting: e.g. "if 20 installs and 3 unsolicited 'I'd keep this on'
   in two weeks, continue the product; if total silence after two honest launches, then reassess." This makes
   the launch a falsifiable test, which is the kit's own stated value (00 line 77).
-- Publish the field guide too — but as a *distribution channel for the product*, not as a career pivot. It is
+- Publish the field guide too - but as a *distribution channel for the product*, not as a career pivot. It is
   a cheap, high-rigor asset that costs a few days and either drives qualified traffic or does not. Run it as
   an experiment with the same kind of kill criterion, not as a new identity.
 - Treat the lab-job path as a *fallback that improves automatically* every time he ships and writes in public.
