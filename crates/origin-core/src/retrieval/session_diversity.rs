@@ -161,6 +161,7 @@ mod tests {
             supersedes: None,
             summary: None,
             entity_id: None,
+            importance: None,
             entity_name: None,
             quality: None,
             is_archived: false,
