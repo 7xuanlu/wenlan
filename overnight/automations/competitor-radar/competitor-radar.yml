@@ -1,0 +1,38 @@
+# .github/workflows/competitor-radar.yml
+# Weekly scan of the local-first AI-memory lane. Opens/updates a tracking issue so you see
+# new and rising competitors without thinking about it. Read-only: it never touches code.
+name: competitor-radar
+
+on:
+  schedule:
+    - cron: "0 16 * * 1"   # Mondays 16:00 UTC (~8-9am PT). Adjust to taste.
+  workflow_dispatch: {}      # also run on demand from the Actions tab
+
+permissions:
+  issues: write              # to post the weekly snapshot as an issue comment
+  contents: read
+
+jobs:
+  radar:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run radar
+        id: radar
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          chmod +x overnight/automations/competitor-radar/radar.sh
+          bash overnight/automations/competitor-radar/radar.sh > radar-out.md
+          cat radar-out.md
+      - name: Post snapshot to tracking issue
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # Find or create a pinned tracking issue titled "Competitor radar".
+          num="$(gh issue list --search 'Competitor radar in:title' --state open --json number --jq '.[0].number' 2>/dev/null || true)"
+          if [ -z "$num" ] || [ "$num" = "null" ]; then
+            gh issue create --title "Competitor radar" --body-file radar-out.md
+          else
+            gh issue comment "$num" --body-file radar-out.md
+          fi
