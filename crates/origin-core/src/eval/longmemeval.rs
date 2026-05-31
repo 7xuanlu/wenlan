@@ -1205,6 +1205,14 @@ pub async fn run_longmemeval_eval_cross_rerank_from_db(
     } else {
         "off"
     };
+    // T2: append __episode suffix when ORIGIN_ENABLE_EPISODE_CHANNEL is on, so
+    // episode-ON and episode-OFF baselines get distinct baseline filenames.
+    let episode_state = if crate::db::episode_channel_enabled() {
+        variant_tag.push_str("__episode");
+        "on"
+    } else {
+        "off"
+    };
     let mut env_stamp = build_lme_env(
         &variant_tag,
         path,
@@ -1230,6 +1238,9 @@ pub async fn run_longmemeval_eval_cross_rerank_from_db(
     env_stamp
         .flags
         .push(format!("salience_prior={}", salience_state));
+    env_stamp
+        .flags
+        .push(format!("episode_channel={}", episode_state));
     env_stamp.flags.push("scenario_db=consolidated".to_string());
     report.env = Some(env_stamp);
     Ok(report)

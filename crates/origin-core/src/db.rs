@@ -27,7 +27,7 @@ pub const EMBEDDING_DIM: usize = 768;
 
 /// Current DB schema version (highest `PRAGMA user_version` applied by `migrate()`).
 /// Bump this whenever a new migration lands. Used as an eval cache invalidation key.
-pub const SCHEMA_VERSION: u32 = 55;
+pub const SCHEMA_VERSION: u32 = 56;
 
 /// Shared embedder reference. Pass to [`MemoryDB::new_with_shared_embedder`] to
 /// reuse a single embedder across many `MemoryDB` instances. Created via
@@ -425,6 +425,37 @@ pub fn page_channel_enabled() -> bool {
         .ok()
         .map(|v| matches!(v.trim().to_ascii_lowercase().as_str(), "1" | "true" | "yes"))
         .unwrap_or(false)
+}
+
+/// True iff `ORIGIN_ENABLE_EPISODE_CHANNEL` is set to a truthy value
+/// (`1`, `true`, or `yes`, case-insensitive). The episode-channel is OPT-IN
+/// (master write+read switch): unset or a falsey value (`0`/`false`/`no`/"")
+/// leaves it disabled, so behaviour is byte-identical to pre-T2.
+///
+/// When enabled, `upsert_documents` co-writes a verbatim "episode" row beside
+/// each distilled `source='memory'` fact, and
+/// [`MemoryDB::search_memory_cross_rerank`] injects those episodes as a 5th RRF
+/// stream. The eval harness reads this same helper so an
+/// `ORIGIN_ENABLE_EPISODE_CHANNEL` setting can't disagree between production and
+/// eval (which would make baseline filenames lie). Mirrors
+/// [`page_channel_enabled`] (truthy-only parse).
+pub fn episode_channel_enabled() -> bool {
+    std::env::var("ORIGIN_ENABLE_EPISODE_CHANNEL")
+        .ok()
+        .map(|v| matches!(v.trim().to_ascii_lowercase().as_str(), "1" | "true" | "yes"))
+        .unwrap_or(false)
+}
+
+/// Minimum verbatim word count for an episode co-write. Short turns ("ok",
+/// "loves rust") carry no retrieval signal that the distilled fact doesn't
+/// already cover, so they're skipped to keep the corpus-doubling cost bounded.
+/// Override with `ORIGIN_EPISODE_WORD_GATE` (default 8). Mirrors the
+/// env-override pattern used by the page/session limits.
+fn episode_word_gate() -> usize {
+    std::env::var("ORIGIN_EPISODE_WORD_GATE")
+        .ok()
+        .and_then(|s| s.trim().parse().ok())
+        .unwrap_or(8)
 }
 
 /// True iff `ORIGIN_ENABLE_SALIENCE_PRIOR` is set to a truthy value
@@ -5202,6 +5233,52 @@ impl MemoryDB {
                     log::info!("[migration] Migration 55 applied: memories.importance column (T8 salience prior)");
                 }
             }
+
+            // Migration 56: T2 dual-granularity episode-channel. Add the
+            // per-row `episode_of` pointer (TEXT, nullable; NULL for every
+            // ordinary memory row). When `ORIGIN_ENABLE_EPISODE_CHANNEL` is on,
+            // `upsert_documents` co-writes a verbatim `source='episode'` row
+            // whose `episode_of` carries the parent fact source_id. Additive and
+            // non-destructive: no backfill, existing rows keep NULL.
+            if version < 56 {
+                let conn = self.conn.lock().await;
+                // Idempotency probe (mirrors m55): if episode_of already exists
+                // (e.g. a test rolled user_version back), skip the ALTER and just
+                // create the index + bump the version.
+                let already_added: bool = {
+                    let mut rows = conn
+                        .query(
+                            "SELECT COUNT(*) FROM pragma_table_info('memories') WHERE name = 'episode_of'",
+                            (),
+                        )
+                        .await
+                        .map_err(|e| OriginError::VectorDb(format!("m56 probe: {e}")))?;
+                    match rows.next().await {
+                        Ok(Some(row)) => row.get::<i64>(0).unwrap_or(0) > 0,
+                        _ => false,
+                    }
+                };
+                if !already_added {
+                    conn.execute("ALTER TABLE memories ADD COLUMN episode_of TEXT", ())
+                        .await
+                        .map_err(|e| OriginError::VectorDb(format!("m56 add episode_of: {e}")))?;
+                }
+                // Partial index over the episode tier (cheap; only episode rows).
+                conn.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_memories_episode ON memories(source) WHERE source = 'episode'",
+                    (),
+                )
+                .await
+                .map_err(|e| OriginError::VectorDb(format!("m56 index: {e}")))?;
+                conn.execute("PRAGMA user_version = 56", ())
+                    .await
+                    .map_err(|e| OriginError::VectorDb(format!("m56 bump: {e}")))?;
+                if already_added {
+                    log::info!("[migration] Migration 56 skipped (episode_of already present): bumped user_version to 56");
+                } else {
+                    log::info!("[migration] Migration 56 applied: memories.episode_of column + idx_memories_episode (T2 episode channel)");
+                }
+            }
         }
 
         Ok(())
@@ -5565,7 +5642,7 @@ impl MemoryDB {
                 }
                 "delete" => {
                     conn.execute(
-                        "DELETE FROM memories WHERE space = ?1 AND source = 'memory'",
+                        "DELETE FROM memories WHERE space = ?1 AND source IN ('memory','episode')",
                         libsql::params![name],
                     )
                     .await
@@ -6445,6 +6522,9 @@ impl MemoryDB {
             structured_fields: Option<String>,
             retrieval_cue: Option<String>,
             source_text: Option<String>,
+            // T2: parent fact source_id for a verbatim `source='episode'` row;
+            // None for every ordinary memory row.
+            episode_of: Option<String>,
         }
 
         let mut memory_rows: Vec<MemoryRow> = Vec::new();
@@ -6535,8 +6615,89 @@ impl MemoryDB {
                     source_text: derived_source_text
                         .clone()
                         .or_else(|| doc.source_text.clone()),
+                    // Ordinary memory rows are never episodes.
+                    episode_of: None,
                 });
             }
+        }
+
+        // T2 episode co-write (write-side opt-in, default OFF). For each
+        // distilled `source='memory'` doc whose VERBATIM turn clears the word
+        // gate, push an extra `source='episode'` row carrying the raw text so a
+        // query needing the literal answer token (which distillation abstracted
+        // away) can still retrieve it via the 5th RRF stream. The episode shares
+        // the parent fact's source_id (option A) so eval credit flows through the
+        // existing recall_at_k with no metrics change. Bypasses the chunker (one
+        // verbatim unit, chunk_index=0) and the server-side quality gate by
+        // construction (this is core, shared by eval + prod). Never recurses: an
+        // incoming `source='episode'` doc is skipped.
+        if episode_channel_enabled() {
+            let word_gate = episode_word_gate();
+            let mut episode_rows: Vec<MemoryRow> = Vec::new();
+            let mut episode_texts: Vec<String> = Vec::new();
+            for doc in &docs {
+                if doc.source != "memory" {
+                    continue;
+                }
+                // Verbatim text: prefer the original turn (source_text) over the
+                // possibly-rewritten distilled content.
+                let verbatim = doc.source_text.as_deref().unwrap_or(&doc.content);
+                let verbatim = redact_pii(verbatim);
+                if verbatim.split_whitespace().count() < word_gate {
+                    continue;
+                }
+                let mut hasher = Sha256::new();
+                hasher.update(format!("episode:{}:0", doc.source_id).as_bytes());
+                let hash = format!("{:x}", hasher.finalize());
+                let episode_id = hash[..16].to_string();
+                // Replace any stale episode for this source_id on re-upsert.
+                source_ids_to_delete.insert(("episode".to_string(), doc.source_id.clone()));
+                episode_texts.push(verbatim.clone());
+                episode_rows.push(MemoryRow {
+                    id: episode_id,
+                    content: verbatim,
+                    source: "episode".to_string(),
+                    source_id: doc.source_id.clone(),
+                    title: doc.title.clone(),
+                    summary: None,
+                    url: None,
+                    chunk_index: 0,
+                    last_modified: doc.last_modified,
+                    chunk_type: "text".to_string(),
+                    language: None,
+                    byte_start: None,
+                    byte_end: None,
+                    semantic_unit: None,
+                    memory_type: doc.memory_type.clone(),
+                    space: doc.space.clone(),
+                    source_agent: doc.source_agent.clone(),
+                    confidence: doc.confidence,
+                    confirmed: doc.confirmed,
+                    stability: doc.stability.clone(),
+                    supersedes: None,
+                    pending_revision: doc.pending_revision,
+                    word_count: doc
+                        .source_text
+                        .as_deref()
+                        .unwrap_or(&doc.content)
+                        .split_whitespace()
+                        .count() as i64,
+                    entity_id: None,
+                    enrichment_status: doc.enrichment_status.clone(),
+                    quality: None,
+                    importance: None,
+                    is_recap: false,
+                    supersede_mode: doc.supersede_mode.clone(),
+                    structured_fields: None,
+                    retrieval_cue: None,
+                    source_text: None,
+                    episode_of: Some(doc.source_id.clone()),
+                });
+            }
+            // Append after the fact rows so chunk_texts stays index-aligned with
+            // memory_rows for the batch-embed zip below.
+            memory_rows.extend(episode_rows);
+            chunk_texts.extend(episode_texts);
         }
 
         if memory_rows.is_empty() {
@@ -6645,6 +6806,10 @@ impl MemoryDB {
                 .source_text
                 .map(|s| s.into())
                 .unwrap_or(libsql::Value::Null);
+            let episode_of_val: libsql::Value = row
+                .episode_of
+                .map(|s| s.into())
+                .unwrap_or(libsql::Value::Null);
 
             conn.execute(
                 "INSERT INTO memories (id, content, source, source_id, title, summary, url,
@@ -6653,12 +6818,12 @@ impl MemoryDB {
                     stability, supersedes, pending_revision, word_count,
                     entity_id, enrichment_status, quality, is_recap, supersede_mode,
                     structured_fields, retrieval_cue, source_text,
-                    embedding, created_at, importance)
+                    embedding, created_at, importance, episode_of)
                  VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15,
                     ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23,
                     ?24, ?25, ?26, ?27, ?28,
                     ?29, ?30, ?31,
-                    vector32(?32), ?33, ?34)",
+                    vector32(?32), ?33, ?34, ?35)",
                 libsql::params![
                     row.id,
                     row.content,
@@ -6693,7 +6858,8 @@ impl MemoryDB {
                     source_text_val,
                     vec_str,
                     row.last_modified, // created_at = last_modified at insert time
-                    importance_val
+                    importance_val,
+                    episode_of_val
                 ],
             )
             .await
@@ -7071,6 +7237,15 @@ impl MemoryDB {
             filter_conditions.push("c.source_agent = ?".to_string());
             filter_values.push(libsql::Value::Text(sa.to_string()));
         }
+
+        // T2 base-channel exclusion: verbatim `source='episode'` rows must NEVER
+        // leak into the base vector+FTS memory channel. They are surfaced ONLY
+        // via the opt-in 5th RRF stream in `search_memory_cross_rerank`. This
+        // predicate carries no `?` placeholder, so it does not disturb the
+        // positional renumbering below, and it is shared by BOTH the vector and
+        // FTS sub-queries (filter_conditions feeds both). Always on (write-side
+        // opt-in already gates whether any episode rows exist at all).
+        filter_conditions.push("c.source != 'episode'".to_string());
 
         // Temporal hard-filter (T4a): inject as parameterized ? placeholders.
         // `temporal_cue` is `Some(DateRange)` only when the caller has already
@@ -7873,6 +8048,23 @@ impl MemoryDB {
             .unwrap_or(Self::PAGE_CHANNEL_LIMIT_DEFAULT)
     }
 
+    /// Default episode-channel pool size. Mirrors `PAGE_CHANNEL_LIMIT_DEFAULT`
+    /// (3) for the same reason: a small pool keeps verbatim episodes from
+    /// displacing distilled facts inside the cross-encoder rerank top-N. Override
+    /// at runtime with `ORIGIN_EPISODE_CHANNEL_LIMIT=<N>`. The channel is opt-in;
+    /// set `ORIGIN_ENABLE_EPISODE_CHANNEL=1` to enable.
+    const EPISODE_CHANNEL_LIMIT_DEFAULT: usize = 3;
+
+    /// Resolve the episode-channel pool size at call time. Env override lets the
+    /// eval harness sweep tuning values without recompile (mirrors
+    /// `page_channel_limit`).
+    fn episode_channel_limit() -> usize {
+        std::env::var("ORIGIN_EPISODE_CHANNEL_LIMIT")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(Self::EPISODE_CHANNEL_LIMIT_DEFAULT)
+    }
+
     /// Max subqueries (including the original) for `search_memory_decomposed`.
     /// Env override `ORIGIN_QUERY_DECOMP_MAX_SUBQUERIES` lets the eval harness
     /// sweep the cap without recompile. Default 4 matches Cognee's CoT max_iter.
@@ -7884,6 +8076,125 @@ impl MemoryDB {
             .and_then(|s| s.parse().ok())
             .filter(|&n| n >= 1)
             .unwrap_or(Self::QUERY_DECOMP_MAX_DEFAULT)
+    }
+
+    /// Hybrid search over the verbatim `source='episode'` tier (T2).
+    ///
+    /// Clones the `search_memory` vector+FTS+RRF shape but scopes BOTH
+    /// sub-queries to `c.source = 'episode'` and returns `Vec<SearchResult>` via
+    /// `row_to_search_result` (episodes live in the memories table, not a
+    /// separate one like pages). Used only as the opt-in 5th RRF stream inside
+    /// `search_memory_cross_rerank`; episodes are excluded from the base channel
+    /// by construction (see the `c.source != 'episode'` predicate in
+    /// `search_memory_with_cue`).
+    pub async fn search_episodes(
+        &self,
+        query: &str,
+        limit: usize,
+    ) -> Result<Vec<SearchResult>, OriginError> {
+        let embedding = self.get_or_compute_embedding(query)?;
+        let vec_str = Self::vec_to_sql(&embedding);
+        let fetch_limit = (limit * 3) as i64;
+
+        let conn = self.conn.lock().await;
+
+        // --- Vector search (episode-scoped) ---
+        let mut vector_results: Vec<SearchResult> = Vec::new();
+        {
+            let sql =
+                "SELECT c.id, c.content, c.source, c.source_id, c.title, c.summary, c.url, c.chunk_index, c.last_modified, c.chunk_type, c.language, c.byte_start, c.byte_end, c.semantic_unit, c.memory_type, c.space, c.source_agent, c.confidence, c.confirmed, c.stability, c.supersedes, c.entity_id, c.quality, c.is_recap, c.supersede_mode, c.structured_fields, c.retrieval_cue, c.source_text, c.version, c.pending_revision,
+                        vector_distance_cos(c.embedding, vector32(?1)),
+                        c.importance
+                 FROM vector_top_k('memories_vec_idx', vector32(?1), ?2) AS vt
+                 JOIN memories c ON c.rowid = vt.id
+                 WHERE c.source = 'episode'";
+            match conn
+                .query(sql, libsql::params![vec_str.clone(), fetch_limit])
+                .await
+            {
+                Ok(mut rows) => {
+                    while let Ok(Some(row)) = rows.next().await {
+                        let distance: f64 = row.get(30).unwrap_or(1.0);
+                        if let Ok(result) = Self::row_to_search_result(&row, distance as f32) {
+                            vector_results.push(result);
+                        }
+                    }
+                }
+                Err(e) => {
+                    log::warn!("[memory_db] episode vector search failed: {}", e);
+                }
+            }
+        }
+
+        // --- FTS search (episode-scoped) ---
+        let mut fts_results: Vec<SearchResult> = Vec::new();
+        {
+            let fts_sql =
+                "SELECT c.id, c.content, c.source, c.source_id, c.title, c.summary, c.url, c.chunk_index, c.last_modified, c.chunk_type, c.language, c.byte_start, c.byte_end, c.semantic_unit, c.memory_type, c.space, c.source_agent, c.confidence, c.confirmed, c.stability, c.supersedes, c.entity_id, c.quality, c.is_recap, c.supersede_mode, c.structured_fields, c.retrieval_cue, c.source_text, c.version, c.pending_revision,
+                        fts.rank,
+                        c.importance
+                 FROM memories_fts fts
+                 JOIN memories c ON fts.rowid = c.rowid
+                 WHERE memories_fts MATCH ?1 AND c.source = 'episode'
+                 ORDER BY fts.rank
+                 LIMIT ?2";
+            let fts_queries: Vec<String> = vec![query.to_string(), Self::fts_or_query(query)];
+            for fts_query in &fts_queries {
+                match conn
+                    .query(fts_sql, libsql::params![fts_query.clone(), fetch_limit])
+                    .await
+                {
+                    Ok(mut rows) => {
+                        while let Ok(Some(row)) = rows.next().await {
+                            let rank: f64 = row.get(30).unwrap_or(0.0);
+                            if let Ok(result) = Self::row_to_search_result(&row, rank as f32) {
+                                fts_results.push(result);
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        log::warn!("[memory_db] episode FTS search failed: {}", e);
+                    }
+                }
+                if !fts_results.is_empty() {
+                    break;
+                }
+            }
+        }
+        drop(conn);
+
+        // --- RRF fusion (distance-weighted vector + rank FTS) ---
+        let rrf_k = 60.0f32;
+        let fts_weight = 0.2f32;
+        let mut score_map: HashMap<String, f32> = HashMap::new();
+        let mut result_map: HashMap<String, SearchResult> = HashMap::new();
+        for (rank, result) in vector_results.into_iter().enumerate() {
+            let similarity = (1.0 - result.score).max(0.01);
+            let rrf_score = similarity / (rrf_k + rank as f32);
+            *score_map.entry(result.id.clone()).or_default() += rrf_score;
+            result_map.entry(result.id.clone()).or_insert(result);
+        }
+        for (rank, result) in fts_results.into_iter().enumerate() {
+            let rrf_score = fts_weight / (rrf_k + rank as f32);
+            *score_map.entry(result.id.clone()).or_default() += rrf_score;
+            result_map.entry(result.id.clone()).or_insert(result);
+        }
+
+        let mut results: Vec<SearchResult> = result_map
+            .into_values()
+            .map(|mut r| {
+                r.score = *score_map.get(&r.id).unwrap_or(&0.0);
+                r
+            })
+            .collect();
+        results.sort_by(|a, b| {
+            b.score
+                .partial_cmp(&a.score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+                .then_with(|| a.source_id.cmp(&b.source_id))
+        });
+        results.truncate(limit);
+        Ok(results)
     }
 
     /// Hybrid search with reranker-trait reranking.
@@ -7995,6 +8306,38 @@ impl MemoryDB {
             page_results
         };
 
+        // T2 episode-channel (opt-in 5th RRF stream). Log-and-degrade on
+        // failure, mirroring the page-channel fallback above.
+        let episode_results: Vec<SearchResult> = if episode_channel_enabled() {
+            match self
+                .search_episodes(query, Self::episode_channel_limit())
+                .await
+            {
+                Ok(v) => v,
+                Err(e) => {
+                    log::warn!("[memory_db] episode channel degraded: {e}; continuing");
+                    Vec::new()
+                }
+            }
+        } else {
+            Vec::new()
+        };
+        // Space/filter passthrough guard for episodes (mirrors the page guard).
+        // Episodes bypass the base-channel space filter by construction, so an
+        // explicit gate is required: under option A an episode shares its parent
+        // fact's source_id, so it surfaces iff that source_id survived the
+        // memory-side filter. Prevents cross-space episode disclosure.
+        let episode_results: Vec<SearchResult> = if filters_active && !episode_results.is_empty() {
+            let allowed_memory_ids: std::collections::HashSet<String> =
+                memory_results.iter().map(|r| r.source_id.clone()).collect();
+            episode_results
+                .into_iter()
+                .filter(|r| allowed_memory_ids.contains(&r.source_id))
+                .collect()
+        } else {
+            episode_results
+        };
+
         // Two-stage RRF merge — mirrors augment_with_graph (db.rs:7619-7644).
         // Memory r.score SEEDS the merged score_map; page rows contribute only
         // 1/(60+rank) RRF mass on top. `search_result_from_page` zeros page
@@ -8013,6 +8356,17 @@ impl MemoryDB {
         for (rank, page) in page_results.into_iter().enumerate() {
             let rrf_score = cw_page.page * 1.0 / (60.0 + rank as f32);
             let r = Self::search_result_from_page(page);
+            *score_map.entry(r.id.clone()).or_default() += rrf_score;
+            result_map.entry(r.id.clone()).or_insert(r);
+        }
+
+        // T2: episodes contribute RRF mass on top of the merged map exactly like
+        // pages (1/(60+rank)). r.source is already "episode" from search_episodes,
+        // so they ride inline through the rerank + truncate below.
+        for (rank, episode) in episode_results.into_iter().enumerate() {
+            let rrf_score = 1.0 / (60.0 + rank as f32);
+            let mut r = episode;
+            r.score = 0.0;
             *score_map.entry(r.id.clone()).or_default() += rrf_score;
             result_map.entry(r.id.clone()).or_insert(r);
         }
@@ -9205,7 +9559,10 @@ impl MemoryDB {
     pub async fn count(&self) -> Result<u64, OriginError> {
         let conn = self.conn.lock().await;
         let mut rows = conn
-            .query("SELECT COUNT(*) FROM memories", ())
+            .query(
+                "SELECT COUNT(*) FROM memories WHERE source != 'episode'",
+                (),
+            )
             .await
             .map_err(|e| OriginError::VectorDb(format!("count: {}", e)))?;
 
@@ -9228,6 +9585,7 @@ impl MemoryDB {
                         MAX(memory_type), MAX(space), MAX(source_agent),
                         MAX(CAST(confidence AS REAL)), MAX(confirmed), MAX(pinned)
                  FROM memories
+                 WHERE source != 'episode'
                  GROUP BY source_id
                  ORDER BY MAX(last_modified) DESC",
                 (),
@@ -9379,7 +9737,7 @@ impl MemoryDB {
         // Match on source_id (the external identifier passed from API routes)
         // and chunk_index = 0 (primary chunk holds the canonical content).
         conn.execute(
-            "UPDATE memories SET content = ?1, embedding = vector32(?2) WHERE source_id = ?3 AND chunk_index = 0",
+            "UPDATE memories SET content = ?1, embedding = vector32(?2) WHERE source_id = ?3 AND chunk_index = 0 AND source != 'episode'",
             libsql::params![new_content.to_string(), vec_str, id.to_string()],
         )
         .await
@@ -9634,6 +9992,7 @@ impl MemoryDB {
                     MAX(changelog) as changelog
              FROM memories
              WHERE pending_revision = 0
+               AND source != 'episode'
                AND source_id = ?1
              GROUP BY source_id";
 
@@ -9729,6 +10088,7 @@ impl MemoryDB {
                 MAX(changelog) as changelog
              FROM memories
              WHERE pending_revision = 0
+               AND source != 'episode'
                AND source_id IN ({placeholders})
              GROUP BY source_id"
         );
@@ -10079,6 +10439,8 @@ impl MemoryDB {
 
         // Exclude superseded memories and pending revisions
         conditions.push("pending_revision = 0".to_string());
+        // T2: never list verbatim episode rows in the filtered file view.
+        conditions.push("source != 'episode'".to_string());
         conditions.push("source_id NOT IN (SELECT supersedes FROM memories WHERE supersedes IS NOT NULL AND pending_revision = 0 AND source = 'memory' GROUP BY supersedes)".to_string());
 
         let where_clause = if conditions.is_empty() {
@@ -11013,7 +11375,7 @@ impl MemoryDB {
         let conn = self.conn.lock().await;
         let mut rows = conn
             .query(
-                "SELECT 1 FROM memories WHERE space = ?1 LIMIT 1",
+                "SELECT 1 FROM memories WHERE space = ?1 AND source != 'episode' LIMIT 1",
                 libsql::params![space],
             )
             .await
@@ -11149,7 +11511,7 @@ impl MemoryDB {
                 let mut rows = conn
                     .query(
                         "SELECT source_id, content FROM memories \
-                         WHERE chunk_index = 0 \
+                         WHERE source != 'episode' AND chunk_index = 0 \
                            AND entity_id IS NULL \
                            AND source_id NOT IN (SELECT memory_id FROM memory_entities) \
                          ORDER BY source_id \
@@ -11306,7 +11668,7 @@ impl MemoryDB {
         let mut rows = conn
             .query(
                 "SELECT source_id, content FROM memories
-                 WHERE (entity_id IS NULL)
+                 WHERE source != 'episode' AND (entity_id IS NULL)
                    AND content IS NOT NULL AND content != ''
                  ORDER BY last_modified DESC
                  LIMIT ?1",
@@ -15709,9 +16071,9 @@ impl MemoryDB {
                 let snippet_sql = format!(
                     "SELECT m.source_id, COALESCE(m.title, ''), COALESCE(m.content, '') \
                      FROM memories m \
-                     WHERE m.source_id IN ({placeholders}) \
+                     WHERE m.source != 'episode' AND m.source_id IN ({placeholders}) \
                        AND m.chunk_index = ( \
-                           SELECT MIN(chunk_index) FROM memories m2 WHERE m2.source_id = m.source_id \
+                           SELECT MIN(chunk_index) FROM memories m2 WHERE m2.source != 'episode' AND m2.source_id = m.source_id \
                        )"
                 );
                 let snippet_params: Vec<libsql::Value> = ids
@@ -16132,7 +16494,7 @@ impl MemoryDB {
                             .join(", ");
                         let sql = format!(
                             "SELECT COUNT(*) FROM memories \
-                             WHERE source_id IN ({}) AND created_at >= ?1",
+                             WHERE source != 'episode' AND source_id IN ({}) AND created_at >= ?1",
                             placeholders
                         );
                         let mut params: Vec<libsql::Value> =
@@ -17130,7 +17492,7 @@ impl MemoryDB {
             .collect::<Vec<_>>()
             .join(",");
         let sql = format!(
-            "SELECT source_id, content FROM memories WHERE source_id IN ({}) AND chunk_index = 0 \
+            "SELECT source_id, content FROM memories WHERE source != 'episode' AND source_id IN ({}) AND chunk_index = 0 \
              AND source_id NOT IN (\
                  SELECT supersedes FROM memories \
                  WHERE supersedes IS NOT NULL AND pending_revision = 0 \
@@ -18085,7 +18447,7 @@ impl MemoryDB {
         let conn = self.conn.lock().await;
         let rows_affected = conn
             .execute(
-                "DELETE FROM page_sources WHERE memory_source_id NOT IN (SELECT DISTINCT source_id FROM memories)",
+                "DELETE FROM page_sources WHERE memory_source_id NOT IN (SELECT DISTINCT source_id FROM memories WHERE source != 'episode')",
                 (),
             )
             .await
@@ -18359,7 +18721,7 @@ impl MemoryDB {
                             COALESCE(created_at, last_modified),
                             COALESCE(version, 1), COALESCE(changelog, '[]')
                      FROM memories
-                     WHERE source_id = ?1 AND chunk_index = 0
+                     WHERE source != 'episode' AND source_id = ?1 AND chunk_index = 0
                      LIMIT 1",
                     libsql::params![source_id],
                 )
@@ -18457,7 +18819,7 @@ impl MemoryDB {
                 .map_err(|e| OriginError::VectorDb(format!("upsert_in_place BEGIN: {e}")))?;
 
             conn.execute(
-                "DELETE FROM memories WHERE source_id = ?1",
+                "DELETE FROM memories WHERE source_id = ?1 AND source != 'episode'",
                 libsql::params![source_id],
             )
             .await
@@ -19270,7 +19632,7 @@ impl MemoryDB {
             WITH RECURSIVE chain(source_id, depth) AS (
                 SELECT source_id, 0
                 FROM memories
-                WHERE source_id = ?1 AND chunk_index = 0
+                WHERE source != 'episode' AND source_id = ?1 AND chunk_index = 0
                 UNION ALL
                 SELECT m.supersedes, c.depth + 1
                 FROM memories m
@@ -20665,7 +21027,7 @@ pub(crate) mod tests {
         let mut vrows = conn.query("PRAGMA user_version", ()).await.unwrap();
         let uv: i64 = vrows.next().await.unwrap().unwrap().get(0).unwrap();
         assert_eq!(uv as u32, crate::db::SCHEMA_VERSION);
-        assert_eq!(uv, 55);
+        assert!(uv >= 55, "importance column lands at or after migration 55");
     }
 
     #[tokio::test]
@@ -20684,8 +21046,9 @@ pub(crate) mod tests {
         let mut vrows = conn.query("PRAGMA user_version", ()).await.unwrap();
         let uv: i64 = vrows.next().await.unwrap().unwrap().get(0).unwrap();
         assert_eq!(
-            uv, 55,
-            "user_version restored to 55 after idempotent re-run"
+            uv as u32,
+            crate::db::SCHEMA_VERSION,
+            "user_version restored to current SCHEMA_VERSION after idempotent re-run"
         );
     }
 
@@ -34788,6 +35151,741 @@ pub(crate) mod tests {
             flag_off.iter().map(|r| &r.source_id).collect::<Vec<_>>(),
             flag_on.iter().map(|r| &r.source_id).collect::<Vec<_>>(),
             "mem_* ids: flag ON must not change order vs flag OFF"
+        );
+    }
+
+    // =====================================================================
+    // T2 — dual-granularity episode-channel tests
+    //   Phase 0: env-flag + limit helpers
+    //   Phase 1: migration 56 (episode_of column + index)
+    //   Phase 2: base-channel exclusion
+    //   Phase 3: co-write inside upsert_documents (write-side opt-in)
+    //   Phase 4: search_episodes
+    //   Phase 5: 5th RRF stream in search_memory_cross_rerank
+    // =====================================================================
+
+    /// Count rows by `source` in the memories table (test helper).
+    async fn count_by_source(db: &MemoryDB, source: &str) -> i64 {
+        let conn = db.conn.lock().await;
+        let mut rows = conn
+            .query(
+                "SELECT COUNT(*) FROM memories WHERE source = ?1",
+                libsql::params![source],
+            )
+            .await
+            .unwrap();
+        rows.next().await.unwrap().unwrap().get(0).unwrap()
+    }
+
+    // -- Phase 0: env-flag truthy parse --
+
+    #[tokio::test]
+    async fn episode_channel_enabled_treats_zero_and_unset_as_disabled() {
+        for value in [None, Some("0"), Some("false"), Some("no"), Some("")] {
+            let got =
+                temp_env::async_with_vars([("ORIGIN_ENABLE_EPISODE_CHANNEL", value)], async {
+                    episode_channel_enabled()
+                })
+                .await;
+            assert!(
+                !got,
+                "ORIGIN_ENABLE_EPISODE_CHANNEL={value:?} must leave channel disabled"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn episode_channel_enabled_accepts_truthy_synonyms() {
+        for value in ["1", "true", "YES", "True"] {
+            let got = temp_env::async_with_vars(
+                [("ORIGIN_ENABLE_EPISODE_CHANNEL", Some(value))],
+                async { episode_channel_enabled() },
+            )
+            .await;
+            assert!(
+                got,
+                "ORIGIN_ENABLE_EPISODE_CHANNEL={value} must enable channel"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn episode_channel_limit_default_and_override() {
+        let default =
+            temp_env::async_with_vars([("ORIGIN_EPISODE_CHANNEL_LIMIT", None::<&str>)], async {
+                MemoryDB::episode_channel_limit()
+            })
+            .await;
+        assert_eq!(default, 3, "default episode channel limit is 3");
+
+        let overridden =
+            temp_env::async_with_vars([("ORIGIN_EPISODE_CHANNEL_LIMIT", Some("7"))], async {
+                MemoryDB::episode_channel_limit()
+            })
+            .await;
+        assert_eq!(overridden, 7, "override parses");
+    }
+
+    // -- Phase 1: migration 56 --
+
+    #[tokio::test]
+    async fn migration_56_adds_episode_of_column_and_index() {
+        let (db, _dir) = test_db().await;
+        let conn = db.conn.lock().await;
+        let mut rows = conn
+            .query(
+                "SELECT COUNT(*) FROM pragma_table_info('memories') WHERE name = 'episode_of'",
+                (),
+            )
+            .await
+            .unwrap();
+        let present: i64 = rows.next().await.unwrap().unwrap().get(0).unwrap();
+        assert_eq!(present, 1, "episode_of column should exist");
+
+        let mut irows = conn
+            .query(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='index' AND name='idx_memories_episode'",
+                (),
+            )
+            .await
+            .unwrap();
+        let idx: i64 = irows.next().await.unwrap().unwrap().get(0).unwrap();
+        assert_eq!(idx, 1, "idx_memories_episode should exist");
+
+        let mut vrows = conn.query("PRAGMA user_version", ()).await.unwrap();
+        let uv: i64 = vrows.next().await.unwrap().unwrap().get(0).unwrap();
+        assert_eq!(uv as u32, crate::db::SCHEMA_VERSION);
+        assert_eq!(uv, 56);
+    }
+
+    #[tokio::test]
+    async fn migration_56_idempotent() {
+        let (db, _dir) = test_db().await;
+        {
+            let conn = db.conn.lock().await;
+            conn.execute("PRAGMA user_version = 55", ()).await.unwrap();
+        }
+        db.run_migrations(&crate::events::NoopEmitter)
+            .await
+            .expect("re-run migrations idempotent");
+        let conn = db.conn.lock().await;
+        let mut vrows = conn.query("PRAGMA user_version", ()).await.unwrap();
+        let uv: i64 = vrows.next().await.unwrap().unwrap().get(0).unwrap();
+        assert_eq!(
+            uv, 56,
+            "user_version restored to 56 after idempotent re-run"
+        );
+    }
+
+    // -- Phase 3: co-write inside upsert_documents --
+
+    #[tokio::test]
+    async fn episode_cowrite_happy_path() {
+        let (db, _dir) = test_db().await;
+        temp_env::async_with_vars([("ORIGIN_ENABLE_EPISODE_CHANNEL", Some("1"))], async {
+            db.upsert_documents(vec![make_memory_doc(
+                "fact_1",
+                "the user prefers dark mode in every editor they use daily",
+                "fact",
+                "work",
+                "claude-code",
+            )])
+            .await
+            .unwrap();
+        })
+        .await;
+
+        let conn = db.conn.lock().await;
+        let mut rows = conn
+            .query(
+                "SELECT content, episode_of, embedding IS NOT NULL FROM memories WHERE source = 'episode'",
+                (),
+            )
+            .await
+            .unwrap();
+        let row = rows.next().await.unwrap().expect("one episode row");
+        let content: String = row.get(0).unwrap();
+        let episode_of: String = row.get(1).unwrap();
+        let has_embedding: i64 = row.get(2).unwrap();
+        assert_eq!(
+            content,
+            "the user prefers dark mode in every editor they use daily"
+        );
+        assert_eq!(episode_of, "fact_1");
+        assert_eq!(
+            has_embedding, 1,
+            "episode row should have a non-null embedding"
+        );
+        drop(conn);
+
+        let conn = db.conn.lock().await;
+        let mut frows = conn
+            .query(
+                "SELECT COUNT(*) FROM memories c JOIN memories_fts f ON c.rowid = f.rowid \
+                 WHERE c.source = 'episode' AND memories_fts MATCH 'dark'",
+                (),
+            )
+            .await
+            .unwrap();
+        let fts_present: i64 = frows.next().await.unwrap().unwrap().get(0).unwrap();
+        assert!(fts_present >= 1, "episode row indexed in memories_fts");
+    }
+
+    #[tokio::test]
+    async fn episode_word_gate_excludes_short_turns() {
+        let (db, _dir) = test_db().await;
+        temp_env::async_with_vars([("ORIGIN_ENABLE_EPISODE_CHANNEL", Some("1"))], async {
+            db.upsert_documents(vec![make_memory_doc(
+                "short_1",
+                "loves rust",
+                "fact",
+                "work",
+                "claude-code",
+            )])
+            .await
+            .unwrap();
+        })
+        .await;
+        assert_eq!(
+            count_by_source(&db, "episode").await,
+            0,
+            "a 2-word doc must not spawn an episode row"
+        );
+    }
+
+    #[tokio::test]
+    async fn episode_flag_off_writes_no_episode_and_keeps_corpus_size() {
+        let (db, _dir) = test_db().await;
+        temp_env::async_with_vars([("ORIGIN_ENABLE_EPISODE_CHANNEL", None::<&str>)], async {
+            db.upsert_documents(vec![make_memory_doc(
+                "fact_off",
+                "the user prefers tabs over spaces for indentation in their code",
+                "fact",
+                "work",
+                "claude-code",
+            )])
+            .await
+            .unwrap();
+        })
+        .await;
+        assert_eq!(
+            count_by_source(&db, "episode").await,
+            0,
+            "flag OFF: no episode rows written"
+        );
+        assert_eq!(
+            count_by_source(&db, "memory").await,
+            1,
+            "flag OFF: corpus size unchanged (no doubling)"
+        );
+    }
+
+    #[tokio::test]
+    async fn episode_prefers_source_text_over_rewritten_content() {
+        let (db, _dir) = test_db().await;
+        let mut doc = make_memory_doc(
+            "fact_st",
+            "user likes dark mode",
+            "fact",
+            "work",
+            "claude-code",
+        );
+        doc.source_text = Some(
+            "honestly i always switch every single app over to a dark theme right away".to_string(),
+        );
+        temp_env::async_with_vars([("ORIGIN_ENABLE_EPISODE_CHANNEL", Some("1"))], async {
+            db.upsert_documents(vec![doc]).await.unwrap();
+        })
+        .await;
+        let conn = db.conn.lock().await;
+        let mut rows = conn
+            .query("SELECT content FROM memories WHERE source = 'episode'", ())
+            .await
+            .unwrap();
+        let content: String = rows.next().await.unwrap().unwrap().get(0).unwrap();
+        assert_eq!(
+            content, "honestly i always switch every single app over to a dark theme right away",
+            "episode content uses verbatim source_text, not the rewritten content"
+        );
+    }
+
+    #[tokio::test]
+    async fn episode_doc_does_not_recurse() {
+        let (db, _dir) = test_db().await;
+        let mut doc = make_memory_doc(
+            "ep_in",
+            "this is already an episode turn with plenty of words in it",
+            "fact",
+            "work",
+            "claude-code",
+        );
+        doc.source = "episode".to_string();
+        temp_env::async_with_vars([("ORIGIN_ENABLE_EPISODE_CHANNEL", Some("1"))], async {
+            db.upsert_documents(vec![doc]).await.unwrap();
+        })
+        .await;
+        assert_eq!(
+            count_by_source(&db, "episode").await,
+            1,
+            "one incoming episode doc stays one row (no recursive episode)"
+        );
+    }
+
+    #[tokio::test]
+    async fn episode_and_fact_both_present_after_single_upsert() {
+        let (db, _dir) = test_db().await;
+        temp_env::async_with_vars([("ORIGIN_ENABLE_EPISODE_CHANNEL", Some("1"))], async {
+            db.upsert_documents(vec![make_memory_doc(
+                "fact_atomic",
+                "the user runs all their evals on a metal gpu attached to the laptop",
+                "fact",
+                "work",
+                "claude-code",
+            )])
+            .await
+            .unwrap();
+        })
+        .await;
+        assert_eq!(count_by_source(&db, "memory").await, 1, "fact row present");
+        assert_eq!(
+            count_by_source(&db, "episode").await,
+            1,
+            "episode row present"
+        );
+    }
+
+    #[tokio::test]
+    async fn episode_round_trips_importance_null() {
+        let (db, _dir) = test_db().await;
+        temp_env::async_with_vars([("ORIGIN_ENABLE_EPISODE_CHANNEL", Some("1"))], async {
+            db.upsert_documents(vec![make_memory_doc(
+                "fact_imp",
+                "the user keeps every benchmark baseline json gitignored in the cache dir",
+                "fact",
+                "work",
+                "claude-code",
+            )])
+            .await
+            .unwrap();
+        })
+        .await;
+        let conn = db.conn.lock().await;
+        let mut rows = conn
+            .query(
+                "SELECT importance FROM memories WHERE source = 'episode'",
+                (),
+            )
+            .await
+            .unwrap();
+        let imp: Option<i64> = rows.next().await.unwrap().unwrap().get(0).unwrap();
+        assert_eq!(imp, None, "episode importance is NULL (neutral)");
+    }
+
+    #[tokio::test]
+    async fn episode_reupsert_does_not_orphan_duplicates() {
+        let (db, _dir) = test_db().await;
+        temp_env::async_with_vars([("ORIGIN_ENABLE_EPISODE_CHANNEL", Some("1"))], async {
+            for _ in 0..2 {
+                db.upsert_documents(vec![make_memory_doc(
+                    "fact_re",
+                    "the user prefers conventional commits and squash merges on every pr",
+                    "fact",
+                    "work",
+                    "claude-code",
+                )])
+                .await
+                .unwrap();
+            }
+        })
+        .await;
+        assert_eq!(
+            count_by_source(&db, "episode").await,
+            1,
+            "re-upsert replaces the episode row, no duplicate"
+        );
+    }
+
+    // -- Phase 2: base-channel exclusion --
+
+    #[tokio::test]
+    async fn search_memory_excludes_episode_rows() {
+        let (db, _dir) = test_db().await;
+        temp_env::async_with_vars([("ORIGIN_ENABLE_EPISODE_CHANNEL", Some("1"))], async {
+            db.upsert_documents(vec![
+                make_memory_doc(
+                    "fact_a",
+                    "the user prefers kubernetes for container orchestration at scale",
+                    "fact",
+                    "work",
+                    "claude-code",
+                ),
+                make_memory_doc(
+                    "fact_b",
+                    "the user runs kubernetes clusters across three cloud regions daily",
+                    "fact",
+                    "work",
+                    "claude-code",
+                ),
+            ])
+            .await
+            .unwrap();
+        })
+        .await;
+        assert_eq!(
+            count_by_source(&db, "episode").await,
+            2,
+            "two episodes seeded"
+        );
+
+        let results = db
+            .search_memory(
+                "kubernetes orchestration",
+                10,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+        assert!(
+            results.iter().all(|r| r.source != "episode"),
+            "base search_memory must exclude episode rows, got: {:?}",
+            results
+                .iter()
+                .map(|r| (&r.id, &r.source))
+                .collect::<Vec<_>>()
+        );
+        assert!(
+            !results.is_empty(),
+            "base search still returns the memory rows"
+        );
+    }
+
+    // -- Phase 4: search_episodes --
+
+    #[tokio::test]
+    async fn search_episodes_returns_only_episode_rows() {
+        let (db, _dir) = test_db().await;
+        temp_env::async_with_vars([("ORIGIN_ENABLE_EPISODE_CHANNEL", Some("1"))], async {
+            db.upsert_documents(vec![make_memory_doc(
+                "fact_se",
+                "the user debugged a gnarly async deadlock in the libsql connection pool",
+                "fact",
+                "work",
+                "claude-code",
+            )])
+            .await
+            .unwrap();
+        })
+        .await;
+        let episodes = db.search_episodes("async deadlock", 5).await.unwrap();
+        assert!(
+            !episodes.is_empty(),
+            "search_episodes finds the seeded episode"
+        );
+        assert!(
+            episodes.iter().all(|r| r.source == "episode"),
+            "search_episodes returns ONLY episode rows"
+        );
+    }
+
+    #[tokio::test]
+    async fn search_episodes_respects_limit() {
+        let (db, _dir) = test_db().await;
+        temp_env::async_with_vars([("ORIGIN_ENABLE_EPISODE_CHANNEL", Some("1"))], async {
+            for i in 0..5 {
+                db.upsert_documents(vec![make_memory_doc(
+                    &format!("fact_lim_{i}"),
+                    "the user discussed retrieval ranking and reciprocal rank fusion details",
+                    "fact",
+                    "work",
+                    "claude-code",
+                )])
+                .await
+                .unwrap();
+            }
+        })
+        .await;
+        let episodes = db
+            .search_episodes("retrieval ranking fusion", 2)
+            .await
+            .unwrap();
+        assert!(episodes.len() <= 2, "search_episodes respects the limit");
+    }
+
+    // -- Phase 5: 5th RRF stream in search_memory_cross_rerank --
+
+    #[tokio::test]
+    async fn episode_5th_stream_surfaces_when_flag_on() {
+        let (db, _dir) = test_db().await;
+        temp_env::async_with_vars([("ORIGIN_ENABLE_EPISODE_CHANNEL", Some("1"))], async {
+            db.upsert_documents(vec![make_memory_doc(
+                "fact_5th",
+                "the user shipped a verbatim episode storage tier for their memory layer",
+                "fact",
+                "work",
+                "claude-code",
+            )])
+            .await
+            .unwrap();
+            let hits = db
+                .search_memory_cross_rerank(
+                    "verbatim episode storage tier",
+                    10,
+                    None,
+                    None,
+                    None,
+                    None,
+                )
+                .await
+                .unwrap();
+            assert!(
+                hits.iter().any(|r| r.source == "episode"),
+                "episode channel ON must surface an episode row, got: {:?}",
+                hits.iter().map(|r| (&r.id, &r.source)).collect::<Vec<_>>()
+            );
+        })
+        .await;
+    }
+
+    #[tokio::test]
+    async fn episode_5th_stream_absent_when_flag_off() {
+        let (db, _dir) = test_db().await;
+        temp_env::async_with_vars([("ORIGIN_ENABLE_EPISODE_CHANNEL", Some("1"))], async {
+            db.upsert_documents(vec![make_memory_doc(
+                "fact_off5",
+                "the user shipped a verbatim episode storage tier for their memory layer",
+                "fact",
+                "work",
+                "claude-code",
+            )])
+            .await
+            .unwrap();
+        })
+        .await;
+        let hits =
+            temp_env::async_with_vars([("ORIGIN_ENABLE_EPISODE_CHANNEL", None::<&str>)], async {
+                db.search_memory_cross_rerank(
+                    "verbatim episode storage tier",
+                    10,
+                    None,
+                    None,
+                    None,
+                    None,
+                )
+                .await
+                .unwrap()
+            })
+            .await;
+        assert!(
+            hits.iter().all(|r| r.source != "episode"),
+            "episode channel OFF must not surface episode rows, got: {:?}",
+            hits.iter().map(|r| (&r.id, &r.source)).collect::<Vec<_>>()
+        );
+    }
+
+    #[tokio::test]
+    async fn episode_and_page_channels_compose() {
+        let (db, _dir) = test_db().await;
+        let now = chrono::Utc::now().to_rfc3339();
+        db.insert_page(
+            "page_compose",
+            "compose ranking title",
+            Some("compose ranking summary"),
+            "compose ranking body content about retrieval fusion",
+            None,
+            None,
+            &[],
+            &now,
+        )
+        .await
+        .unwrap();
+        temp_env::async_with_vars([("ORIGIN_ENABLE_EPISODE_CHANNEL", Some("1"))], async {
+            db.upsert_documents(vec![make_memory_doc(
+                "fact_compose",
+                "the user cares about retrieval fusion and ranking composition behaviour",
+                "fact",
+                "work",
+                "claude-code",
+            )])
+            .await
+            .unwrap();
+        })
+        .await;
+        let hits = temp_env::async_with_vars(
+            [
+                ("ORIGIN_ENABLE_EPISODE_CHANNEL", Some("1")),
+                ("ORIGIN_ENABLE_PAGE_CHANNEL", Some("1")),
+            ],
+            async {
+                db.search_memory_cross_rerank(
+                    "compose ranking retrieval fusion",
+                    10,
+                    None,
+                    None,
+                    None,
+                    None,
+                )
+                .await
+                .unwrap()
+            },
+        )
+        .await;
+        assert!(
+            hits.iter().any(|r| r.source == "page"),
+            "page channel still present when composed with episode channel"
+        );
+        assert!(
+            hits.iter().any(|r| r.source == "episode"),
+            "episode channel present when composed with page channel"
+        );
+    }
+
+    #[tokio::test]
+    async fn episode_space_leak_guard() {
+        let (db, _dir) = test_db().await;
+        temp_env::async_with_vars([("ORIGIN_ENABLE_EPISODE_CHANNEL", Some("1"))], async {
+            db.upsert_documents(vec![make_memory_doc(
+                "fact_personal",
+                "the user keeps their secret diary passphrase rotated every quarter reliably",
+                "fact",
+                "personal",
+                "claude-code",
+            )])
+            .await
+            .unwrap();
+        })
+        .await;
+        let hits =
+            temp_env::async_with_vars([("ORIGIN_ENABLE_EPISODE_CHANNEL", Some("1"))], async {
+                db.search_memory_cross_rerank(
+                    "diary passphrase rotated quarter",
+                    10,
+                    None,
+                    Some("work"),
+                    None,
+                    None,
+                )
+                .await
+                .unwrap()
+            })
+            .await;
+        assert!(
+            hits.iter().all(|r| r.source != "episode"),
+            "space-filtered recall must not leak a cross-space episode, got: {:?}",
+            hits.iter().map(|r| (&r.id, &r.source)).collect::<Vec<_>>()
+        );
+    }
+
+    // -- Adversarial regression: option-A shared source_id write-path leaks --
+
+    #[tokio::test]
+    async fn episode_survives_in_place_edit() {
+        // CRITICAL-1 (upsert_memory_in_place DELETE) + CRITICAL-2 (update_memory
+        // UPDATE) both key on source_id; under option A the episode shares the
+        // parent fact's source_id, so without a `source != 'episode'` guard an
+        // in-place edit would delete/overwrite the verbatim episode. Guard it.
+        let verbatim = "honestly i always switch every single app over to a dark theme right away";
+        let (db, _dir) = test_db().await;
+        temp_env::async_with_vars([("ORIGIN_ENABLE_EPISODE_CHANNEL", Some("1"))], async {
+            let mut doc = make_memory_doc(
+                "fact_edit",
+                "user likes dark mode",
+                "fact",
+                "work",
+                "claude-code",
+            );
+            doc.source_text = Some(verbatim.to_string());
+            db.upsert_documents(vec![doc]).await.unwrap();
+        })
+        .await;
+        // Sanity: one episode with the verbatim content exists.
+        assert_eq!(count_by_source(&db, "episode").await, 1, "episode seeded");
+
+        // --- CRITICAL-2: update_memory edits the fact content (chunk_index 0). ---
+        db.update_memory(
+            "fact_edit",
+            "user strongly prefers dark mode in all editors",
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            count_by_source(&db, "episode").await,
+            1,
+            "update_memory must not delete the episode row"
+        );
+        // Episode verbatim content unchanged + still retrievable.
+        let eps =
+            temp_env::async_with_vars([("ORIGIN_ENABLE_EPISODE_CHANNEL", Some("1"))], async {
+                db.search_episodes("dark theme right away", 5)
+                    .await
+                    .unwrap()
+            })
+            .await;
+        let ep = eps
+            .iter()
+            .find(|r| r.source_id == "fact_edit")
+            .expect("episode still retrievable after update_memory");
+        assert_eq!(
+            ep.content, verbatim,
+            "episode verbatim content must be untouched by update_memory"
+        );
+
+        // --- CRITICAL-1: upsert_memory_in_place edits the fact again. ---
+        let new_content = "user prefers a dark theme everywhere, set the moment an app opens";
+        let embedding = db
+            .generate_embeddings(&[new_content.to_string()])
+            .unwrap()
+            .into_iter()
+            .next()
+            .unwrap();
+        db.upsert_memory_in_place(
+            "fact_edit",
+            new_content,
+            &embedding,
+            Some("claude-code"),
+            None,
+            50,
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            count_by_source(&db, "episode").await,
+            1,
+            "upsert_memory_in_place must not delete the episode row"
+        );
+        let eps2 =
+            temp_env::async_with_vars([("ORIGIN_ENABLE_EPISODE_CHANNEL", Some("1"))], async {
+                db.search_episodes("dark theme right away", 5)
+                    .await
+                    .unwrap()
+            })
+            .await;
+        let ep2 = eps2
+            .iter()
+            .find(|r| r.source_id == "fact_edit")
+            .expect("episode survives upsert_memory_in_place");
+        assert_eq!(
+            ep2.content, verbatim,
+            "episode verbatim content survives upsert_memory_in_place"
+        );
+
+        // The fact row itself reflects the latest edit.
+        let conn = db.conn.lock().await;
+        let mut rows = conn
+            .query(
+                "SELECT content FROM memories WHERE source = 'memory' AND source_id = 'fact_edit' AND chunk_index = 0",
+                (),
+            )
+            .await
+            .unwrap();
+        let fact_content: String = rows.next().await.unwrap().unwrap().get(0).unwrap();
+        assert_eq!(
+            fact_content, new_content,
+            "fact row reflects the in-place edit"
         );
     }
 }
