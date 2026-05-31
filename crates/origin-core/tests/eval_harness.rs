@@ -785,6 +785,110 @@ async fn magnitude_fusion_ab_dualbench() {
     }
 }
 
+/// T9 wide-pool-seeded graph-expansion A/B on BOTH benches (retrieval-only).
+/// Measurement vehicle is coverage_recall (NDCG is neutral-by-construction —
+/// KG observation rows are stripped from user output, only the RRF boost survives,
+/// so reordering of the surviving chunks is the only NDCG signal). The graph-seed
+/// expands the entity set used for the KG-RRF boost, which can pull more source
+/// chunks into coverage. Toggles `ORIGIN_ENABLE_GRAPH_SEED` OFF vs ON over the
+/// cached scenario DBs. Single-run scaffold — N≥3 for any headline claim.
+#[tokio::test]
+#[ignore = "needs cached scenario DBs; retrieval-only, no GPU"]
+async fn graph_seed_ab_dualbench() {
+    use origin_core::eval::locomo::run_locomo_eval_from_db;
+    use origin_core::eval::longmemeval::run_longmemeval_eval_from_db;
+    let root = resolve_scenario_db_root_from_harness();
+
+    // coverage_recall blind field (the T9 measurement vehicle)
+    let lo_cov = |r: &origin_core::eval::locomo::LocomoReport| {
+        r.coverage.as_ref().map(|c| c.blind).unwrap_or(0.0)
+    };
+    let lme_cov = |r: &origin_core::eval::longmemeval::LongMemEvalReport| {
+        r.coverage.as_ref().map(|c| c.blind).unwrap_or(0.0)
+    };
+
+    let lo_dir = root.join("locomo_v1");
+    if lo_dir.join("origin_memory.db").exists() {
+        let fx = eval_root().join("data/locomo10.json");
+        if fx.exists() {
+            let db = origin_core::db::MemoryDB::new(
+                &lo_dir,
+                std::sync::Arc::new(origin_core::events::NoopEmitter),
+            )
+            .await
+            .unwrap();
+            let off = temp_env::async_with_vars(
+                [("ORIGIN_ENABLE_GRAPH_SEED", None::<&str>)],
+                run_locomo_eval_from_db(&db, &fx),
+            )
+            .await
+            .unwrap();
+            let on = temp_env::async_with_vars(
+                [("ORIGIN_ENABLE_GRAPH_SEED", Some("1"))],
+                run_locomo_eval_from_db(&db, &fx),
+            )
+            .await
+            .unwrap();
+            println!(
+                "[GRAPH-SEED A/B LoCoMo] q={} | cov_blind off={:.4} on={:.4} d={:+.4} | ndcg@10 off={:.4} on={:.4} d={:+.4}",
+                off.total_questions,
+                lo_cov(&off),
+                lo_cov(&on),
+                lo_cov(&on) - lo_cov(&off),
+                off.aggregate_ndcg_at_10,
+                on.aggregate_ndcg_at_10,
+                on.aggregate_ndcg_at_10 - off.aggregate_ndcg_at_10,
+            );
+        } else {
+            println!("SKIP LoCoMo: locomo10.json not found at {}", fx.display());
+        }
+    } else {
+        println!("SKIP LoCoMo: no seeded DB at {}", lo_dir.display());
+    }
+
+    let lme_dir = root.join("lme_v1");
+    if lme_dir.join("origin_memory.db").exists() {
+        let fx = eval_root().join("data/longmemeval_oracle.json");
+        if fx.exists() {
+            let db = origin_core::db::MemoryDB::new(
+                &lme_dir,
+                std::sync::Arc::new(origin_core::events::NoopEmitter),
+            )
+            .await
+            .unwrap();
+            let off = temp_env::async_with_vars(
+                [("ORIGIN_ENABLE_GRAPH_SEED", None::<&str>)],
+                run_longmemeval_eval_from_db(&db, &fx),
+            )
+            .await
+            .unwrap();
+            let on = temp_env::async_with_vars(
+                [("ORIGIN_ENABLE_GRAPH_SEED", Some("1"))],
+                run_longmemeval_eval_from_db(&db, &fx),
+            )
+            .await
+            .unwrap();
+            println!(
+                "[GRAPH-SEED A/B LME] q={} | cov_blind off={:.4} on={:.4} d={:+.4} | ndcg@10 off={:.4} on={:.4} d={:+.4}",
+                off.total_questions,
+                lme_cov(&off),
+                lme_cov(&on),
+                lme_cov(&on) - lme_cov(&off),
+                off.aggregate_ndcg_at_10,
+                on.aggregate_ndcg_at_10,
+                on.aggregate_ndcg_at_10 - off.aggregate_ndcg_at_10,
+            );
+        } else {
+            println!(
+                "SKIP LME: longmemeval_oracle.json not found at {}",
+                fx.display()
+            );
+        }
+    } else {
+        println!("SKIP LME: no seeded DB at {}", lme_dir.display());
+    }
+}
+
 /// T12 FTS-hardening A/B on BOTH benches (retrieval-only). Hardening only changes
 /// special-char/overlong queries (absent from clean LoCoMo/LME), so the expected
 /// result is delta about 0 — this confirms no-regression on clean-query benchmarks.

@@ -442,6 +442,20 @@ pub fn graph_gate_enabled() -> bool {
         .unwrap_or(false)
 }
 
+/// True iff `ORIGIN_ENABLE_GRAPH_SEED` is set to a truthy value
+/// (`1`, `true`, or `yes`, case-insensitive). T9 wide-pool-seeded graph expansion.
+/// OPT-IN: unset or falsey leaves `augment_with_graph` using the existing
+/// query-anchor seed (byte-identical to pre-T9). When enabled, the seeded variant
+/// seeds from the wide candidate pool entity provenance + k-hop BFS.
+/// Controls: `ORIGIN_GRAPH_HOP_DEPTH` (default 1), `ORIGIN_GRAPH_SEED_TOP_K` (default 10),
+/// `ORIGIN_GRAPH_FRONTIER_CAP` (default 64).
+pub fn graph_seed_enabled() -> bool {
+    std::env::var("ORIGIN_ENABLE_GRAPH_SEED")
+        .ok()
+        .map(|v| matches!(v.trim().to_ascii_lowercase().as_str(), "1" | "true" | "yes"))
+        .unwrap_or(false)
+}
+
 /// True iff `ORIGIN_ENABLE_TEMPORAL_FILTER` is set to a truthy value
 /// (`1`, `true`, or `yes`, case-insensitive). The temporal filter is OPT-IN:
 /// unset or a falsey value leaves it disabled (dark by default).
@@ -7308,13 +7322,45 @@ impl MemoryDB {
 
         // --- Graph augmentation (knowledge graph as third RRF signal) ---
         // Drop the conn lock first — augment_with_graph acquires it internally.
+        //
+        // T9: harvest (entity_id, rank) from the WIDE pre-truncate pool BEFORE dropping
+        // the lock (final_results here is the limit*3 scored pool). rank = enumeration
+        // index. Used by augment_with_graph_seeded when ORIGIN_ENABLE_GRAPH_SEED=1.
+        let pool_entity_ids: Vec<String> = final_results
+            .iter()
+            .filter_map(|r| r.entity_id.clone())
+            .collect();
         drop(conn);
         // Graph gate (ORIGIN_ENABLE_GRAPH_GATE, opt-in): when enabled, skip the
         // graph hop for queries that warrant no traversal (no relational/temporal
         // phrasing, no entity anchor). When the gate is off, always augment —
         // behavior is byte-identical to before this gate existed.
         if !graph_gate_enabled() || crate::retrieval::signals::query_warrants_graph(query) {
-            final_results = self.augment_with_graph(query, final_results, limit).await?;
+            // T9: pool-seeded variant (ORIGIN_ENABLE_GRAPH_SEED, opt-in, default OFF).
+            // When ON + pool has entity ids: seed BFS from pool provenance instead of
+            // a fresh query-anchored search_entities_by_vector call.
+            // Graceful log-and-degrade: on Err, warn + fall back to query-anchor.
+            if graph_seed_enabled() && !pool_entity_ids.is_empty() {
+                let seeded_result = self
+                    .augment_with_graph_seeded(query, final_results, &pool_entity_ids, limit)
+                    .await;
+                match seeded_result {
+                    Ok(augmented) => {
+                        final_results = augmented;
+                    }
+                    Err(e) => {
+                        log::warn!(
+                            "[search_memory] T9 seeded graph augmentation failed: {}; falling back to query-anchor",
+                            e
+                        );
+                        // final_results was moved; augment_with_graph with empty results
+                        // so score boosts still flow (query-anchor picks up entities).
+                        final_results = self.augment_with_graph(query, vec![], limit).await?;
+                    }
+                }
+            } else {
+                final_results = self.augment_with_graph(query, final_results, limit).await?;
+            }
         }
 
         // Deduplicate: keep only the best-scoring chunk per source document.
@@ -8202,6 +8248,193 @@ impl MemoryDB {
             results.into_iter().map(|r| (r.id.clone(), r)).collect();
 
         // Merge graph observations as third RRF signal
+        for (rank, result) in graph_results.into_iter().enumerate() {
+            let rrf_score = 1.0 / (60.0 + rank as f32);
+            *score_map.entry(result.id.clone()).or_default() += rrf_score;
+            result_map.entry(result.id.clone()).or_insert(result);
+        }
+
+        let mut merged: Vec<SearchResult> = result_map
+            .into_values()
+            .map(|mut r| {
+                r.score = *score_map.get(&r.id).unwrap_or(&0.0);
+                r
+            })
+            .collect();
+        merged.sort_by(|a, b| {
+            b.score
+                .partial_cmp(&a.score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+                .then_with(|| a.source_id.cmp(&b.source_id))
+        });
+        Ok(merged)
+    }
+
+    // ---------------------------------------------------------------------------
+    // T9: k-hop BFS entity expansion
+    // ---------------------------------------------------------------------------
+
+    /// BFS over the entity-relation graph up to `depth` hops from `seed_ids`.
+    ///
+    /// depth=0 or empty seeds → returns deduped seeds only.
+    /// Each hop follows relations in BOTH directions (`from_entity` and `to_entity`)
+    /// mirroring the bidirectional UNION-ALL at the single-entity get_entity_detail.
+    /// Expansion is bounded by `frontier_cap`: once `visited.len() >= frontier_cap`,
+    /// the frontier is sorted (deterministic) and truncated before breaking.
+    ///
+    /// Single conn lock is held across the bounded BFS loop (depth ≤ 3, small).
+    /// No non-libsql `.await` is called inside the lock.
+    async fn expand_entities_khop(
+        &self,
+        seed_ids: &[String],
+        depth: usize,
+        frontier_cap: usize,
+    ) -> Result<Vec<String>, OriginError> {
+        if seed_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let mut visited: std::collections::HashSet<String> = seed_ids.iter().cloned().collect();
+
+        if depth == 0 {
+            let mut out: Vec<String> = visited.into_iter().collect();
+            out.sort();
+            return Ok(out);
+        }
+
+        let conn = self.conn.lock().await;
+        let mut frontier: Vec<String> = seed_ids.to_vec();
+
+        for _hop in 0..depth {
+            if frontier.is_empty() {
+                break;
+            }
+
+            // Build parameterised IN clause for the current frontier
+            let placeholders: Vec<String> =
+                (1..=frontier.len()).map(|i| format!("?{}", i)).collect();
+            let ph = placeholders.join(",");
+
+            // Bidirectional: outgoing (from_entity IN frontier) + incoming (to_entity IN frontier)
+            let sql = format!(
+                "SELECT to_entity FROM relations WHERE from_entity IN ({ph})
+                 UNION
+                 SELECT from_entity FROM relations WHERE to_entity IN ({ph})",
+                ph = ph
+            );
+
+            let params: Vec<libsql::Value> = frontier
+                .iter()
+                .map(|id| libsql::Value::Text(id.clone()))
+                .collect();
+
+            let mut rows = conn
+                .query(&sql, libsql::params_from_iter(params))
+                .await
+                .map_err(|e| OriginError::VectorDb(format!("expand_entities_khop: {}", e)))?;
+
+            let mut next_frontier: Vec<String> = Vec::new();
+            while let Ok(Some(row)) = rows.next().await {
+                let eid: String = row.get(0).unwrap_or_default();
+                if !eid.is_empty() && !visited.contains(&eid) {
+                    visited.insert(eid.clone());
+                    next_frontier.push(eid);
+                    if visited.len() >= frontier_cap {
+                        break;
+                    }
+                }
+            }
+
+            if visited.len() >= frontier_cap {
+                // Sort for determinism before truncating
+                let mut all: Vec<String> = visited.into_iter().collect();
+                all.sort();
+                all.truncate(frontier_cap);
+                return Ok(all);
+            }
+
+            frontier = next_frontier;
+        }
+
+        drop(conn);
+
+        let mut out: Vec<String> = visited.into_iter().collect();
+        out.sort();
+        Ok(out)
+    }
+
+    // ---------------------------------------------------------------------------
+    // T9: pool-seeded RRF augmentation
+    // ---------------------------------------------------------------------------
+
+    /// Wide-pool-seeded graph augmentation. Seeds graph BFS from `seed_entity_ids`
+    /// (the candidate pool's entity provenance) instead of a fresh query-anchored
+    /// `search_entities_by_vector(query, 5)` call.
+    ///
+    /// If `seed_entity_ids` is empty, delegates to [`Self::augment_with_graph`]
+    /// (query-anchor fallback, never-worse-than-today guarantee).
+    ///
+    /// BFS depth and cap are read from env: `ORIGIN_GRAPH_HOP_DEPTH` (default 1),
+    /// `ORIGIN_GRAPH_SEED_TOP_K` (default 10), `ORIGIN_GRAPH_FRONTIER_CAP` (default 64).
+    ///
+    /// RRF merge is byte-identical to `augment_with_graph`: seed score_map from
+    /// existing results, then += 1/(60+rank) per graph row via `entry().or_default()` +
+    /// `or_insert` (no double-count guard matches db.rs `augment_with_graph` verbatim).
+    pub async fn augment_with_graph_seeded(
+        &self,
+        query: &str,
+        results: Vec<SearchResult>,
+        seed_entity_ids: &[String],
+        limit: usize,
+    ) -> Result<Vec<SearchResult>, OriginError> {
+        // Empty seeds → fall back to existing query-anchor path
+        if seed_entity_ids.is_empty() {
+            return self.augment_with_graph(query, results, limit).await;
+        }
+
+        // Read tuning env vars
+        let depth = crate::retrieval::signals::parse_hop_depth(
+            std::env::var("ORIGIN_GRAPH_HOP_DEPTH").ok().as_deref(),
+        );
+        let top_k = crate::retrieval::signals::parse_seed_top_k(
+            std::env::var("ORIGIN_GRAPH_SEED_TOP_K").ok().as_deref(),
+        );
+        let frontier_cap = crate::retrieval::signals::parse_frontier_cap(
+            std::env::var("ORIGIN_GRAPH_FRONTIER_CAP").ok().as_deref(),
+        );
+
+        // Build (entity_id, rank) pairs from the provided seed list (already ranked)
+        let pool_pairs: Vec<(String, usize)> = seed_entity_ids
+            .iter()
+            .enumerate()
+            .map(|(rank, id)| (id.clone(), rank))
+            .collect();
+        let seeds = crate::retrieval::signals::seed_entities_by_rank(&pool_pairs, top_k);
+
+        // BFS to expand seed set
+        let expanded = match self.expand_entities_khop(&seeds, depth, frontier_cap).await {
+            Ok(ids) => ids,
+            Err(e) => {
+                log::warn!(
+                    "[augment_seeded] expand_entities_khop failed: {}; using raw seeds",
+                    e
+                );
+                seeds
+            }
+        };
+
+        // Fetch observations for expanded entity set
+        let graph_results = match self.get_observations_for_entities(&expanded, limit).await {
+            Ok(r) if !r.is_empty() => r,
+            _ => return Ok(results),
+        };
+
+        // RRF merge (verbatim from augment_with_graph — preserves byte-identical semantics)
+        let mut score_map: HashMap<String, f32> =
+            results.iter().map(|r| (r.id.clone(), r.score)).collect();
+        let mut result_map: HashMap<String, SearchResult> =
+            results.into_iter().map(|r| (r.id.clone(), r)).collect();
+
         for (rank, result) in graph_results.into_iter().enumerate() {
             let rrf_score = 1.0 / (60.0 + rank as f32);
             *score_map.entry(result.id.clone()).or_default() += rrf_score;
@@ -24988,6 +25221,284 @@ pub(crate) mod tests {
             .unwrap();
         assert!(!augmented.is_empty(), "should include graph observations");
         assert!(augmented.iter().any(|r| r.source == "knowledge_graph"));
+    }
+    // ==================== T9: wide-pool-seeded graph expansion ====================
+
+    /// Verify expand_entities_khop depth=1 gives neighbors, depth=0 gives seeds only.
+    #[tokio::test]
+    async fn test_expand_entities_khop_depth1_is_neighbor_parity() {
+        let (db, _dir) = test_db().await;
+        let e1 = db
+            .store_entity("E1", "thing", None, None, None)
+            .await
+            .unwrap();
+        let e2 = db
+            .store_entity("E2", "thing", None, None, None)
+            .await
+            .unwrap();
+        db.create_relation(&e1, &e2, "related_to", None, None, None, None)
+            .await
+            .unwrap();
+
+        let depth0 = db
+            .expand_entities_khop(std::slice::from_ref(&e1), 0, 64)
+            .await
+            .unwrap();
+        assert_eq!(depth0, vec![e1.clone()], "depth=0 returns seeds unchanged");
+
+        let depth1 = db
+            .expand_entities_khop(std::slice::from_ref(&e1), 1, 64)
+            .await
+            .unwrap();
+        let mut d1 = depth1.clone();
+        d1.sort();
+        let mut expected = vec![e1.clone(), e2.clone()];
+        expected.sort();
+        assert_eq!(d1, expected, "depth=1 should reach E2 via relation");
+    }
+
+    /// Verify two-hop BFS reaches E3 at depth=2 but NOT at depth=1.
+    #[tokio::test]
+    async fn test_expand_entities_khop_depth2_reaches_two_hop() {
+        let (db, _dir) = test_db().await;
+        let e1 = db
+            .store_entity("ChainA", "thing", None, None, None)
+            .await
+            .unwrap();
+        let e2 = db
+            .store_entity("ChainB", "thing", None, None, None)
+            .await
+            .unwrap();
+        let e3 = db
+            .store_entity("ChainC", "thing", None, None, None)
+            .await
+            .unwrap();
+        db.create_relation(&e1, &e2, "related_to", None, None, None, None)
+            .await
+            .unwrap();
+        db.create_relation(&e2, &e3, "related_to", None, None, None, None)
+            .await
+            .unwrap();
+
+        let depth1 = db
+            .expand_entities_khop(std::slice::from_ref(&e1), 1, 64)
+            .await
+            .unwrap();
+        assert!(depth1.contains(&e1), "depth=1 must include seed");
+        assert!(depth1.contains(&e2), "depth=1 must include e2");
+        assert!(
+            !depth1.contains(&e3),
+            "depth=1 must NOT include e3 (two hops away)"
+        );
+
+        let depth2 = db
+            .expand_entities_khop(std::slice::from_ref(&e1), 2, 64)
+            .await
+            .unwrap();
+        assert!(depth2.contains(&e3), "depth=2 must reach e3");
+    }
+
+    /// Verify BFS is bidirectional (follows both from→to and to→from relations).
+    #[tokio::test]
+    async fn test_expand_entities_khop_bidirectional() {
+        let (db, _dir) = test_db().await;
+        let e1 = db
+            .store_entity("BiA", "thing", None, None, None)
+            .await
+            .unwrap();
+        let e2 = db
+            .store_entity("BiB", "thing", None, None, None)
+            .await
+            .unwrap();
+        // relation stored from e2 → e1 (reversed)
+        db.create_relation(&e2, &e1, "related_to", None, None, None, None)
+            .await
+            .unwrap();
+
+        let result = db
+            .expand_entities_khop(std::slice::from_ref(&e1), 1, 64)
+            .await
+            .unwrap();
+        assert!(
+            result.contains(&e2),
+            "must follow incoming relation (bidirectional)"
+        );
+    }
+
+    /// Verify empty seed returns empty.
+    #[tokio::test]
+    async fn test_expand_entities_khop_empty_seed_returns_empty() {
+        let (db, _dir) = test_db().await;
+        let result = db.expand_entities_khop(&[], 1, 64).await.unwrap();
+        assert!(result.is_empty());
+    }
+
+    /// Verify frontier_cap bounds fan-out on a star graph.
+    #[tokio::test]
+    async fn test_expand_entities_khop_respects_frontier_cap() {
+        let (db, _dir) = test_db().await;
+        let center = db
+            .store_entity("StarCenter", "thing", None, None, None)
+            .await
+            .unwrap();
+        // Create 30 leaf entities and connect them to center
+        for i in 0..30 {
+            let leaf = db
+                .store_entity(&format!("Leaf{}", i), "thing", None, None, None)
+                .await
+                .unwrap();
+            db.create_relation(&center, &leaf, "related_to", None, None, None, None)
+                .await
+                .unwrap();
+        }
+        let result = db
+            .expand_entities_khop(std::slice::from_ref(&center), 1, 16)
+            .await
+            .unwrap();
+        assert!(
+            result.len() <= 17,
+            "frontier_cap=16 => at most 17 entities (center + 16 leaves)"
+        );
+    }
+
+    /// Empty seeds → augment_with_graph_seeded delegates to query-anchor (fallback guarantee).
+    #[tokio::test]
+    async fn test_augment_seeded_falls_back_to_query_anchor_on_empty_seeds() {
+        let (db, _dir) = test_db().await;
+        let eid = db
+            .store_entity("Rust", "technology", None, None, None)
+            .await
+            .unwrap();
+        db.add_observation(&eid, "Rust is memory-safe", Some("test"), None)
+            .await
+            .unwrap();
+
+        let results: Vec<SearchResult> = vec![];
+        // With empty seed_entity_ids, must delegate to augment_with_graph (query-anchor)
+        let seeded = db
+            .augment_with_graph_seeded("Rust programming", results.clone(), &[], 10)
+            .await
+            .unwrap();
+        let unseeded = db
+            .augment_with_graph("Rust programming", results, 10)
+            .await
+            .unwrap();
+
+        // Both should return the same KG observation (Rust entity found by vector search)
+        assert_eq!(
+            seeded.len(),
+            unseeded.len(),
+            "empty seeds must match query-anchor output"
+        );
+    }
+
+    /// Pool-seeded variant picks up entity from pool provenance, not query anchor.
+    #[tokio::test]
+    async fn test_augment_seeded_uses_pool_provenance_when_present() {
+        let (db, _dir) = test_db().await;
+        // E_rust: in pool, has observation
+        let e_rust = db
+            .store_entity("RustLang", "technology", None, None, None)
+            .await
+            .unwrap();
+        db.add_observation(
+            &e_rust,
+            "RustLang observation via pool seed",
+            Some("test"),
+            None,
+        )
+        .await
+        .unwrap();
+
+        // Call with explicit seed [e_rust] — skip the query-anchor search entirely
+        let results: Vec<SearchResult> = vec![];
+        let augmented = db
+            .augment_with_graph_seeded(
+                "unrelated query text xyz",
+                results,
+                std::slice::from_ref(&e_rust),
+                10,
+            )
+            .await
+            .unwrap();
+
+        assert!(
+            augmented.iter().any(|r| r.source == "knowledge_graph"),
+            "should surface RustLang observation from pool seed"
+        );
+    }
+
+    /// RRF no double-count: observation already in pool gets merged score, not doubled.
+    #[tokio::test]
+    async fn test_seeded_rrf_no_double_count() {
+        let (db, _dir) = test_db().await;
+        let eid = db
+            .store_entity("RrfCheck", "thing", None, None, None)
+            .await
+            .unwrap();
+        db.add_observation(
+            &eid,
+            "observation content for rrf check",
+            Some("test"),
+            None,
+        )
+        .await
+        .unwrap();
+
+        // Add the observation as a result in the initial pool too
+        let obs_results = db
+            .get_observations_for_entities(std::slice::from_ref(&eid), 10)
+            .await
+            .unwrap();
+        assert!(!obs_results.is_empty());
+
+        // Run seeded with seeds = [eid]
+        let augmented = db
+            .augment_with_graph_seeded("any query", obs_results, &[eid], 10)
+            .await
+            .unwrap();
+        // Each observation id appears exactly once
+        let ids: Vec<&str> = augmented.iter().map(|r| r.id.as_str()).collect();
+        let unique: std::collections::HashSet<&str> = ids.iter().cloned().collect();
+        assert_eq!(
+            ids.len(),
+            unique.len(),
+            "no duplicate observation ids after RRF merge"
+        );
+    }
+
+    /// Dark-ship: with ORIGIN_ENABLE_GRAPH_SEED unset, search_memory is byte-identical.
+    #[tokio::test]
+    async fn test_search_memory_seeded_flag_off_is_identical() {
+        let (db, _dir) = test_db().await;
+        let doc = crate::sources::RawDocument {
+            source: "memory".into(),
+            source_id: "seed_dark_test_1".into(),
+            title: "Rust programming language".into(),
+            content: "Rust is a systems programming language".into(),
+            last_modified: chrono::Utc::now().timestamp(),
+            memory_type: Some("fact".into()),
+            ..Default::default()
+        };
+        db.upsert_documents(vec![doc]).await.unwrap();
+        let eid = db
+            .store_entity("Rust", "technology", None, None, None)
+            .await
+            .unwrap();
+        db.add_observation(&eid, "Rust has no GC", Some("test"), None)
+            .await
+            .unwrap();
+
+        // With flag OFF, output must be identical to pre-T9 path
+        std::env::remove_var("ORIGIN_ENABLE_GRAPH_SEED");
+        let results = db
+            .search_memory("Rust programming", 10, None, None, None, None, None, None)
+            .await
+            .unwrap();
+        assert!(
+            results.iter().all(|r| r.source != "knowledge_graph"),
+            "KG rows must be stripped"
+        );
     }
 
     // ==================== search_memory graph augmentation ====================
