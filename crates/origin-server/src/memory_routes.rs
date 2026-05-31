@@ -821,7 +821,7 @@ pub async fn handle_store_memory(
                         }
                     }
                     Ok(Err(e)) => tracing::warn!("[store_memory async] classify failed: {e}"),
-                    Err(_) => tracing::warn!("[store_memory async] classify timed out after 5s"),
+                    Err(_) => tracing::warn!("[store_memory async] classify timed out after 30s"),
                 }
 
                 // Extract structured fields — only if the agent didn't supply them.
@@ -863,7 +863,7 @@ pub async fn handle_store_memory(
                             tracing::warn!("[store_memory async] extract failed: {e}")
                         }
                         Err(_) => {
-                            tracing::warn!("[store_memory async] extract timed out after 5s")
+                            tracing::warn!("[store_memory async] extract timed out after 30s")
                         }
                     }
                 }

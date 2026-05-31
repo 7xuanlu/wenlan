@@ -26,9 +26,15 @@
 //! and enriches the same agent's freshly-written rows.
 //!
 //! Anti-starvation: a never-settling writer that reschedules the same key
-//! forever would never reflect. After [`MAX_CANCELLATIONS`] consecutive
-//! cancellations the next `schedule` lets the in-flight reflection run to
-//! completion (force-run) so reflection makes progress under sustained load.
+//! forever would never reflect. Only **in-flight** cancellations count toward
+//! the streak (a pre-delay abort cancelled work that never ran, so it must not
+//! push the key toward a force-run). After [`MAX_CANCELLATIONS`] consecutive
+//! in-flight cancellations the next `schedule` force-runs: it still stops the
+//! prior task first (abort if it never started, cooperative-cancel if it is
+//! in-flight) so the prior and the freshly-spawned task never enrich
+//! concurrently — exactly the latest write enriches — then resets the streak so
+//! the fresh task is not itself immediately starved. Reflection makes progress
+//! under sustained load without ever double-enriching.
 //!
 //! This struct lives in `origin-server` (the detached-spawn owner). The
 //! cancellation *signal* it produces (`Arc<AtomicBool>`) is passed into
@@ -105,14 +111,27 @@ impl ReflectionDebouncer {
         let prior_count = {
             let mut slots = self.slots.lock().unwrap();
             if let Some(prev) = slots.remove(key) {
+                // Did the prior task actually start running its work (in-flight),
+                // or is it still inside its pre-delay `sleep`? This gates both
+                // how we cancel it and whether it counts toward the streak.
+                let prev_started = prev.started.load(Ordering::SeqCst);
                 if prev.cancellations >= MAX_CANCELLATIONS {
-                    // Anti-starvation force-run: do NOT signal cancel and do NOT
-                    // abort — let the in-flight reflection finish on its own.
-                    // (Its JoinHandle is dropped/detached; the task completes and
-                    // self-cleans, but since we just removed its map entry it
-                    // simply finds no entry to remove.) Reset the streak so the
-                    // freshly-scheduled work below is not itself starved next.
-                    drop(prev);
+                    // Anti-starvation force-run: the latest write must win, but we
+                    // MUST stop the prior task first — otherwise the prior and the
+                    // freshly-spawned task both run `run_post_ingest_enrichment`
+                    // concurrently and race on overlapping page writes
+                    // (grow_page/update_page). If the prior never started, abort
+                    // it (safe — it ran nothing). If it is in-flight, signal
+                    // cooperative cancel so it stops at its next clean checkpoint
+                    // (never hard-abort a started task — that risks a half-write).
+                    // Either way exactly the latest enrichment runs. Reset the
+                    // streak so the freshly-scheduled work below is not itself
+                    // starved next.
+                    if prev_started {
+                        prev.cancel.store(true, Ordering::SeqCst);
+                    } else {
+                        prev.handle.abort();
+                    }
                     0
                 } else {
                     // Always signal cooperative cancel (covers the in-flight
@@ -120,11 +139,20 @@ impl ReflectionDebouncer {
                     // task is still inside its debounce `sleep`. Aborting a
                     // started task could kill it mid-step; the flag handles that
                     // case at a clean boundary instead.
-                    prev.cancel.store(true, Ordering::Relaxed);
-                    if !prev.started.load(Ordering::Relaxed) {
+                    prev.cancel.store(true, Ordering::SeqCst);
+                    if !prev_started {
                         prev.handle.abort();
                     }
-                    prev.cancellations + 1
+                    // Only count an in-flight cancellation toward the
+                    // anti-starvation ceiling. A pre-delay abort cancelled work
+                    // that never ran, so it must not push the key toward a
+                    // force-run (that would let a bursty-but-quick writer trip the
+                    // ceiling without any reflection ever having started).
+                    if prev_started {
+                        prev.cancellations + 1
+                    } else {
+                        prev.cancellations
+                    }
                 }
             } else {
                 0
@@ -140,7 +168,7 @@ impl ReflectionDebouncer {
             tokio::time::sleep(delay).await;
             // A newer schedule that arrived during the sleep either aborted us
             // (we never reach here) or set the cancel flag — bail before work.
-            if cancel_for_task.load(Ordering::Relaxed) {
+            if cancel_for_task.load(Ordering::SeqCst) {
                 return;
             }
             // Mark started BEFORE running work: from here a concurrent reschedule
@@ -150,7 +178,7 @@ impl ReflectionDebouncer {
             // it true, abort still only fires at the next `.await` inside work,
             // where the very first checkpoint reads the (now-set) cancel flag and
             // returns early anyway. Either way no step is half-applied.
-            started_for_task.store(true, Ordering::Relaxed);
+            started_for_task.store(true, Ordering::SeqCst);
             work(cancel_for_task.clone()).await;
 
             // Self-cleanup: drop our own slot if it is still ours (a newer
@@ -180,6 +208,17 @@ impl ReflectionDebouncer {
     #[cfg(test)]
     pub fn live_keys(&self) -> usize {
         self.slots.lock().unwrap().len()
+    }
+
+    /// Current consecutive-cancellation streak for `key`, or `None` if the key
+    /// has no live slot. Test hook for the anti-starvation ceiling reset.
+    #[cfg(test)]
+    pub fn cancellations_for(&self, key: &str) -> Option<u32> {
+        self.slots
+            .lock()
+            .unwrap()
+            .get(key)
+            .map(|slot| slot.cancellations)
     }
 }
 
@@ -261,7 +300,7 @@ mod tests {
             let oc = oc.clone();
             async move {
                 for _ in 0..200 {
-                    if cancel.load(Ordering::Relaxed) {
+                    if cancel.load(Ordering::SeqCst) {
                         oc.fetch_add(1, Ordering::Relaxed);
                         return; // bail early — cooperative cancellation
                     }
@@ -333,37 +372,182 @@ mod tests {
     async fn test_max_deferral_ceiling_forces_run() {
         let deb = ReflectionDebouncer::new();
         let runs = Arc::new(AtomicUsize::new(0));
+        // Peak number of work bodies running their loop simultaneously. The
+        // force-run path must stop the prior before the new one completes, so no
+        // two reflections ever run to completion concurrently (the write-write
+        // race FIX 1 closes). A brief cooperative-cancel overlap is fine; what
+        // must hold is that exactly one COMPLETES.
+        let in_work = Arc::new(AtomicUsize::new(0));
+        let peak_streak = Arc::new(AtomicUsize::new(0));
 
         // Each scheduled work starts after a short delay and then runs long
-        // enough to still be in-flight while we hammer reschedules. Each
-        // reschedule normally signals cancel to the in-flight one — but after
-        // MAX_CANCELLATIONS the ceiling must let an in-flight reflection run to
-        // completion (force-run path), so `runs` reaches >= 1.
+        // enough to still be in-flight while we hammer reschedules, so every
+        // cancellation is an *in-flight* cancel and counts toward the ceiling.
         for _ in 0..(MAX_CANCELLATIONS + 2) {
             let r = runs.clone();
+            let iw = in_work.clone();
             deb.schedule("agentA", Duration::from_millis(5), move |cancel| {
                 let r = r.clone();
+                let iw = iw.clone();
                 async move {
+                    iw.fetch_add(1, Ordering::SeqCst);
                     // Long-running work that respects cancellation.
                     for _ in 0..100 {
-                        if cancel.load(Ordering::Relaxed) {
+                        if cancel.load(Ordering::SeqCst) {
+                            iw.fetch_sub(1, Ordering::SeqCst);
                             return;
                         }
                         tokio::time::sleep(Duration::from_millis(3)).await;
                     }
-                    r.fetch_add(1, Ordering::Relaxed);
+                    iw.fetch_sub(1, Ordering::SeqCst);
+                    r.fetch_add(1, Ordering::SeqCst);
                 }
             });
             // Let each work item start (past its 5ms delay) before the next
             // reschedule, so we drive the in-flight cancel/ceiling path.
             settle(15).await;
+            // Track how high the in-flight cancellation streak climbed. With
+            // every prior in-flight it must reach exactly MAX_CANCELLATIONS just
+            // before the force-run fires.
+            if let Some(c) = deb.cancellations_for("agentA") {
+                let c = c as usize;
+                let mut cur = peak_streak.load(Ordering::SeqCst);
+                while c > cur {
+                    match peak_streak.compare_exchange(cur, c, Ordering::SeqCst, Ordering::SeqCst) {
+                        Ok(_) => break,
+                        Err(observed) => cur = observed,
+                    }
+                }
+            }
         }
 
+        // The streak must have climbed to exactly the ceiling before the
+        // force-run reset it — proving the anti-starvation bound is real, not
+        // an off-by-one that fires early or never.
+        assert_eq!(
+            peak_streak.load(Ordering::SeqCst),
+            MAX_CANCELLATIONS as usize,
+            "in-flight cancellation streak must reach MAX_CANCELLATIONS before force-run"
+        );
+        // Force-run resets the streak to 0 so the freshly-spawned task is not
+        // itself immediately starved.
+        assert_eq!(
+            deb.cancellations_for("agentA"),
+            Some(0),
+            "force-run must reset the cancellation streak to 0"
+        );
+
         settle(500).await;
-        assert!(
-            runs.load(Ordering::Relaxed) >= 1,
-            "after MAX_CANCELLATIONS a reflection must be force-run to completion, got {}",
-            runs.load(Ordering::Relaxed)
+        // Exactly one reflection completes: the final force-run cancelled the
+        // prior in-flight task, so the prior and the freshly-spawned task never
+        // both finish enrichment (no concurrent double-enrichment / page race).
+        assert_eq!(
+            runs.load(Ordering::SeqCst),
+            1,
+            "exactly one reflection must complete after a force-run, got {}",
+            runs.load(Ordering::SeqCst)
+        );
+        // No work body is left running, and the slot is cleaned up.
+        assert_eq!(
+            in_work.load(Ordering::SeqCst),
+            0,
+            "no work body may still be in-flight after settle"
+        );
+        assert_eq!(
+            deb.live_keys(),
+            0,
+            "the completed force-run slot must be cleaned up"
+        );
+    }
+
+    /// FIX 1 focused: a force-run must stop the prior task (cancel if in-flight,
+    /// abort if pre-delay) before the latest task runs, so the prior and the new
+    /// task never enrich concurrently. Exactly one work body completes, and the
+    /// prior observes cancellation.
+    #[tokio::test]
+    async fn test_force_run_cancels_prior_only_latest_completes() {
+        let deb = ReflectionDebouncer::new();
+        let completed = Arc::new(AtomicUsize::new(0));
+        let prior_observed_cancel = Arc::new(AtomicUsize::new(0));
+
+        // Prime the streak to the ceiling with in-flight cancels so the NEXT
+        // schedule takes the force-run path. The first schedule has no prior to
+        // cancel (no bump), so reaching a streak of MAX_CANCELLATIONS needs
+        // MAX_CANCELLATIONS + 1 schedules.
+        for _ in 0..=MAX_CANCELLATIONS {
+            deb.schedule(
+                "agentA",
+                Duration::from_millis(5),
+                move |cancel| async move {
+                    for _ in 0..100 {
+                        if cancel.load(Ordering::SeqCst) {
+                            return;
+                        }
+                        tokio::time::sleep(Duration::from_millis(3)).await;
+                    }
+                },
+            );
+            settle(15).await;
+        }
+        assert_eq!(
+            deb.cancellations_for("agentA"),
+            Some(MAX_CANCELLATIONS),
+            "streak must sit at the ceiling so the next schedule force-runs"
+        );
+
+        // This in-flight "prior" is the one the upcoming force-run must stop. It
+        // records whether it observed the cooperative-cancel flag.
+        let po = prior_observed_cancel.clone();
+        let cmp = completed.clone();
+        deb.schedule("agentA", Duration::from_millis(5), move |cancel| {
+            let po = po.clone();
+            let cmp = cmp.clone();
+            async move {
+                for _ in 0..100 {
+                    if cancel.load(Ordering::SeqCst) {
+                        po.fetch_add(1, Ordering::SeqCst);
+                        return; // cancelled — must NOT count as completed
+                    }
+                    tokio::time::sleep(Duration::from_millis(3)).await;
+                }
+                cmp.fetch_add(1, Ordering::SeqCst);
+            }
+        });
+        // Let this prior start running (in-flight) before the force-run lands.
+        settle(15).await;
+
+        // Force-run: streak is at the ceiling, the prior above is in-flight, so
+        // schedule() must flip the prior's cancel flag (not abort it) and spawn
+        // this latest task, which runs to completion uncontested.
+        let cmp2 = completed.clone();
+        deb.schedule("agentA", Duration::from_millis(5), move |cancel| {
+            let cmp2 = cmp2.clone();
+            async move {
+                for _ in 0..100 {
+                    if cancel.load(Ordering::SeqCst) {
+                        return;
+                    }
+                    tokio::time::sleep(Duration::from_millis(3)).await;
+                }
+                cmp2.fetch_add(1, Ordering::SeqCst);
+            }
+        });
+
+        settle(600).await;
+        assert_eq!(
+            prior_observed_cancel.load(Ordering::SeqCst),
+            1,
+            "force-run must cooperatively cancel the in-flight prior task"
+        );
+        assert_eq!(
+            completed.load(Ordering::SeqCst),
+            1,
+            "exactly one (the latest) reflection may complete; the cancelled prior must not"
+        );
+        assert_eq!(
+            deb.cancellations_for("agentA"),
+            None,
+            "after both tasks settle the force-run slot must be cleaned up"
         );
     }
 

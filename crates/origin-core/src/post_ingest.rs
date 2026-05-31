@@ -47,7 +47,7 @@ pub(crate) enum TitleEnrichResult {
 /// supersedes this one mid-burst. Checked only BETWEEN best-effort steps so a
 /// step is never half-applied (clean-boundary cancellation).
 fn is_cancelled(cancel: Option<&AtomicBool>) -> bool {
-    cancel.map(|c| c.load(Ordering::Relaxed)).unwrap_or(false)
+    cancel.map(|c| c.load(Ordering::SeqCst)).unwrap_or(false)
 }
 
 /// Run post-ingest enrichment (async, non-blocking).
@@ -1070,7 +1070,7 @@ mod tests {
         for _ in 0..2000 {
             let steps = db.get_enrichment_steps("mem_t22_midway").await.unwrap();
             if steps.iter().any(|s| s.step == "entity_link") {
-                cancel.store(true, Ordering::Relaxed);
+                cancel.store(true, Ordering::SeqCst);
                 break;
             }
             tokio::task::yield_now().await;
