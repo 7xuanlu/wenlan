@@ -921,6 +921,50 @@ pub async fn handle_store_memory(
             {
                 tracing::warn!("[store_memory] post-ingest enrichment failed: {e}");
             }
+
+            // Phase 3 (T14): dual-pool dedup + contradiction resolution.
+            //
+            // Behind `ORIGIN_ENABLE_DUAL_POOL_RESOLVE` (default OFF -> this is a
+            // no-op and the write path is byte-identical). Runs LAST in this
+            // already-spawned task so the `event_date` Phase 1 wrote is visible
+            // for bidirectional temporal expiry. The `state_clone` read guard was
+            // dropped above (line ~755) before any `.await`; `db` + `llm` are the
+            // Arc clones snapshotted there, so no RwLock guard is held across the
+            // `.await` below. Best-effort: log-and-degrade, never blocks the
+            // store ACK (the HTTP 200 already returned before this task ran).
+            if origin_core::db::dual_pool_resolve_enabled() {
+                let resolve_emitter: std::sync::Arc<dyn origin_core::events::EventEmitter> =
+                    std::sync::Arc::new(origin_core::events::NoopEmitter);
+                match origin_core::synthesis::refinement_queue::resolve_dual_pool(
+                    &db,
+                    &source_id_clone,
+                    llm.as_ref(),
+                    &prompts,
+                    &resolve_emitter,
+                )
+                .await
+                {
+                    Ok(outcome) => {
+                        if !outcome.invalidated.is_empty()
+                            || outcome.expired_incoming
+                            || !outcome.flagged_for_review.is_empty()
+                            || !outcome.dedup_proposals.is_empty()
+                        {
+                            tracing::info!(
+                                "[store_memory] dual-pool resolve: invalidated={:?} \
+                                 expired_incoming={} flagged={:?} dedup_proposals={}",
+                                outcome.invalidated,
+                                outcome.expired_incoming,
+                                outcome.flagged_for_review,
+                                outcome.dedup_proposals.len(),
+                            );
+                        }
+                    }
+                    Err(e) => {
+                        tracing::warn!("[store_memory] dual-pool resolve failed: {e}");
+                    }
+                }
+            }
         });
     }
 
