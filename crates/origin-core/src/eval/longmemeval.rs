@@ -1447,6 +1447,188 @@ pub async fn run_longmemeval_eval_expanded(
 }
 
 // ---------------------------------------------------------------------------
+// T4a eval runner — temporal filter with haystack_dates event_date seeding
+// ---------------------------------------------------------------------------
+
+/// Parse LongMemEval date string "YYYY/MM/DD (DDD) HH:MM" to a UTC DateTime.
+///
+/// Returns `None` on malformed input so the runner degrades gracefully.
+fn parse_lme_date(s: &str) -> Option<chrono::DateTime<chrono::Utc>> {
+    // Format: "2023/04/10 (Mon) 23:07"
+    // We strip the weekday parenthetical and parse the rest.
+    let s = s.trim();
+    // Find the part before " (" and after ") "
+    let without_weekday = if let (Some(a), Some(b)) = (s.find(" ("), s.rfind(") ")) {
+        format!("{} {}", &s[..a], &s[b + 2..])
+    } else {
+        s.to_string()
+    };
+    // without_weekday is now "YYYY/MM/DD HH:MM"
+    chrono::NaiveDateTime::parse_from_str(&without_weekday, "%Y/%m/%d %H:%M")
+        .ok()
+        .map(|dt| chrono::DateTime::<chrono::Utc>::from_naive_utc_and_offset(dt, chrono::Utc))
+}
+
+/// LongMemEval temporal eval runner (T4a).
+///
+/// Clones `run_longmemeval_eval_expanded` but adds two T4a-specific steps:
+///
+/// 1. **Event-date seeding**: after `upsert_documents`, each seeded memory is
+///    stamped with the Unix timestamp of its session's `haystack_dates` entry
+///    via a direct `UPDATE memories SET event_date=? WHERE source_id=?` on the
+///    connection. Without this, every `event_date` is NULL and the temporal
+///    hard-filter is a guaranteed no-op (all memories pass the `OR IS NULL`
+///    branch).
+///
+/// 2. **Temporal search**: calls `search_memory_temporal` with
+///    `now = parse(sample.question_date)` — NOT `Utc::now()` — so the cue
+///    window aligns with the fixture clock.
+///
+/// # LoCoMo note
+/// LoCoMo has no reliable absolute dates (only session_num), so a LoCoMo
+/// temporal runner is not provided. Temporal eval on LoCoMo would require
+/// synthetic date assignment, which risks fabricating the measured signal.
+///
+/// # Citation discipline
+/// First runs are single-run scaffolds (`is_single_run = true`). Do NOT cite
+/// accuracy numbers without N>=3 + stddev per AGENTS.md Eval Citation Discipline.
+#[allow(dead_code)] // L7 manual, GPU-requiring eval; not wired to CI
+pub async fn run_longmemeval_eval_temporal(path: &Path) -> Result<LongMemEvalReport, OriginError> {
+    let mut samples = load_longmemeval(path)?;
+    apply_lme_limit(&mut samples);
+    let mut all_scores: Vec<(String, f64, f64, f64, f64, f64)> = Vec::new();
+    let mut per_case: Vec<crate::eval::report::CaseResult> = Vec::new();
+    let mut total_memories: usize = 0;
+
+    for sample in &samples {
+        let memories = extract_memories(sample);
+
+        // Create ephemeral DB for this question
+        let tmp = tempfile::tempdir().map_err(|e| OriginError::Generic(format!("tempdir: {e}")))?;
+        let db = MemoryDB::new(tmp.path(), std::sync::Arc::new(crate::events::NoopEmitter)).await?;
+
+        // Seed all extracted memories (same as run_longmemeval_eval_expanded)
+        let docs: Vec<RawDocument> = memories
+            .iter()
+            .map(|mem| {
+                let memory_type = match sample.question_type.as_str() {
+                    "single-session-preference" => "preference",
+                    _ => "fact",
+                };
+                RawDocument {
+                    content: mem.content.clone(),
+                    source_id: memory_source_id(&mem.question_id, mem.session_idx, mem.turn_idx),
+                    source: "memory".to_string(),
+                    title: format!("{} session {}", mem.role, mem.session_idx),
+                    memory_type: Some(memory_type.to_string()),
+                    space: Some("conversation".to_string()),
+                    last_modified: chrono::Utc::now().timestamp(),
+                    ..Default::default()
+                }
+            })
+            .collect();
+        total_memories += docs.len();
+        db.upsert_documents(docs).await?;
+
+        // T4a: stamp event_date from haystack_dates (parallel to sessions/memories).
+        // Without this, every event_date is NULL and the temporal filter is a no-op.
+        {
+            let conn = db.conn.lock().await;
+            for mem in &memories {
+                // haystack_dates is parallel to haystack_session_ids
+                // (one date per session, indexed by session_idx)
+                if let Some(date_str) = sample.haystack_dates.get(mem.session_idx) {
+                    if let Some(ts) = parse_lme_date(date_str).map(|d| d.timestamp()) {
+                        let sid = memory_source_id(&mem.question_id, mem.session_idx, mem.turn_idx);
+                        let _ = conn
+                            .execute(
+                                "UPDATE memories SET event_date = ? WHERE source_id = ?",
+                                libsql::params![ts, sid.as_str()],
+                            )
+                            .await;
+                    }
+                }
+            }
+        }
+
+        // Build relevance judgments
+        let relevant_source_ids: HashSet<String> = memories
+            .iter()
+            .filter(|m| m.has_answer)
+            .map(|m| memory_source_id(&m.question_id, m.session_idx, m.turn_idx))
+            .collect();
+
+        if relevant_source_ids.is_empty() {
+            continue;
+        }
+
+        // T4a: parse question_date as `now` so the cue window aligns with fixture clock.
+        // Fall back to Utc::now() only if the date is unparseable (degraded mode).
+        let now = parse_lme_date(&sample.question_date).unwrap_or_else(chrono::Utc::now);
+
+        // T4a: use search_memory_temporal with ORIGIN_ENABLE_TEMPORAL_FILTER=1
+        let results = db
+            .search_memory_temporal(&sample.question, 10, None, None, None, now)
+            .await?;
+
+        let result_ids: Vec<&str> = results.iter().map(|r| r.source_id.as_str()).collect();
+        let grades: HashMap<&str, u8> = result_ids
+            .iter()
+            .map(|id| (*id, u8::from(relevant_source_ids.contains(*id))))
+            .collect();
+        let relevant_set: HashSet<&str> = relevant_source_ids.iter().map(|s| s.as_str()).collect();
+
+        let ndcg_10 = metrics::ndcg_at_k(&result_ids, &grades, 10);
+        let ndcg_5 = metrics::ndcg_at_k(&result_ids, &grades, 5);
+        let mrr_val = metrics::mrr(&result_ids, &relevant_set);
+        let recall_5 = metrics::recall_at_k(&result_ids, &relevant_set, 5);
+        let hr_1 = metrics::hit_rate_at_k(&result_ids, &relevant_set, 1);
+
+        all_scores.push((
+            sample.question_type.clone(),
+            ndcg_5,
+            ndcg_10,
+            mrr_val,
+            recall_5,
+            hr_1,
+        ));
+        per_case.push(build_lme_case_result(
+            &sample.question,
+            &sample.question_type,
+            ndcg_5,
+            ndcg_10,
+            mrr_val,
+            recall_5,
+            hr_1,
+        ));
+    }
+
+    let per_category = aggregate_by_category(&all_scores);
+    let mut report = LongMemEvalReport {
+        aggregate_ndcg_at_10: avg_field(&all_scores, |s| s.2),
+        aggregate_mrr: avg_field(&all_scores, |s| s.3),
+        aggregate_recall_at_5: avg_field(&all_scores, |s| s.4),
+        aggregate_hit_rate_at_1: avg_field(&all_scores, |s| s.5),
+        total_questions: all_scores.len(),
+        total_memories,
+        per_category,
+        baseline: None,
+        env: None,
+        per_case,
+        coverage: None,
+    };
+    report.env = Some(build_lme_env(
+        "temporal",
+        path,
+        "search_memory_temporal",
+        "none", // no LLM provider (no query expansion)
+        "none",
+        None,
+    ));
+    Ok(report)
+}
+
+// ---------------------------------------------------------------------------
 // Gated benchmark runner — clean / noisy / gated comparison
 // ---------------------------------------------------------------------------
 
