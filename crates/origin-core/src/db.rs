@@ -9037,6 +9037,168 @@ impl MemoryDB {
         Ok(merged)
     }
 
+    /// Hybrid search with **pseudo-relevance feedback** (PRF): iterate by
+    /// drafting a short answer from the current top-K retrieved snippets and
+    /// feeding that draft back as the next retrieval query, RRF-merging each
+    /// round's pool until the candidate set converges (no new ids) or the
+    /// `ORIGIN_PRF_ROUNDS` budget (default 0, clamp <= 4) is exhausted.
+    ///
+    /// The original literal query is always RRF round 0, which weights the
+    /// literal query as one equal RRF stream; a strong off-topic draft answer
+    /// can still displace mid-rank literal hits — this is recall expansion, not
+    /// a protection guarantee. Distinct from `search_memory_expanded`
+    /// (paraphrases the literal query up front, no draft, no loop): PRF reads
+    /// the retrieved *content*, drafts an answer, and iterates.
+    ///
+    /// Graceful degradation: `ORIGIN_PRF_ROUNDS=0`/unset, `llm.is_none()`, an
+    /// LLM timeout/error, or a blank draft all fall back to the round-0 pool,
+    /// never an error. When dark (rounds 0) the output is id-order-identical to
+    /// a plain `search_memory` (scores are re-derived as `1/(60+rank)`;
+    /// raw_score is not preserved). Each LLM call is wrapped in a 10s
+    /// `tokio::time::timeout` (mirrors `search_memory_expanded`).
+    pub async fn search_memory_prf(
+        &self,
+        query: &str,
+        limit: usize,
+        memory_type: Option<&str>,
+        space: Option<&str>,
+        source_agent: Option<&str>,
+        llm: Option<Arc<dyn crate::llm_provider::LlmProvider>>,
+    ) -> Result<Vec<SearchResult>, OriginError> {
+        use crate::retrieval::prf;
+
+        let rounds = prf::prf_rounds();
+        let fetch_pool = limit * 2;
+
+        // Round 0: the literal query is always the first RRF stream.
+        let round0 = self
+            .search_memory(
+                query,
+                fetch_pool,
+                memory_type,
+                space,
+                source_agent,
+                None,
+                None,
+                None,
+            )
+            .await?;
+        let mut seen = prf::candidate_set(&round0);
+        let mut acc: Vec<Vec<SearchResult>> = vec![round0];
+
+        // Only iterate when both a round budget and an LLM are present. Without
+        // either, PRF is exactly a plain (pool-widened) search of the literal
+        // query — the round-0 stream merged through RRF below.
+        if rounds > 0 {
+            if let Some(ref llm) = llm {
+                for _ in 0..rounds {
+                    // Feedback comes from the round-0 literal-query pool (the
+                    // highest-quality anchor). A fixed-string draft therefore
+                    // converges after one feedback round.
+                    let snippets = prf::feedback_snippets(&acc[0], 5, 200);
+                    if snippets.is_empty() {
+                        break;
+                    }
+                    let req = prf::draft_answer_request(query, &snippets);
+                    let draft_result =
+                        tokio::time::timeout(std::time::Duration::from_secs(10), llm.generate(req))
+                            .await;
+                    let draft = match draft_result {
+                        Ok(Ok(text)) if !text.trim().is_empty() => text,
+                        Ok(Ok(_)) => {
+                            log::warn!("[memory_db] prf: blank draft, stopping (best-so-far)");
+                            break;
+                        }
+                        Ok(Err(e)) => {
+                            log::warn!("[memory_db] prf draft LLM failed: {e}");
+                            break;
+                        }
+                        Err(_) => {
+                            log::warn!("[memory_db] prf draft timed out");
+                            break;
+                        }
+                    };
+
+                    // Retrieve with the draft answer as the next query. A failed
+                    // search is logged and the loop stops with best-so-far.
+                    match self
+                        .search_memory(
+                            &draft,
+                            fetch_pool,
+                            memory_type,
+                            space,
+                            source_agent,
+                            None,
+                            None,
+                            None,
+                        )
+                        .await
+                    {
+                        Ok(hits) => {
+                            let cur = prf::candidate_set(&hits);
+                            acc.push(hits);
+                            if prf::converged(&seen, &cur) {
+                                break;
+                            }
+                            seen.extend(cur);
+                        }
+                        Err(e) => {
+                            log::warn!("[memory_db] prf feedback search failed: {e}");
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+
+        // If round 0 somehow produced nothing AND no feedback rounds ran, fall
+        // back to a plain search on the original query (mirrors expanded).
+        if acc.iter().all(|r| r.is_empty()) {
+            return self
+                .search_memory(
+                    query,
+                    limit,
+                    memory_type,
+                    space,
+                    source_agent,
+                    None,
+                    None,
+                    None,
+                )
+                .await;
+        }
+
+        // RRF merge — verbatim block (mirrors search_memory_expanded /
+        // search_memory_decomposed): each round contributes one equal-weight
+        // stream scored 1/(60 + rank), deduped on result.id.
+        let mut score_map: HashMap<String, f32> = HashMap::new();
+        let mut result_map: HashMap<String, SearchResult> = HashMap::new();
+
+        for ranked in acc {
+            for (rank, result) in ranked.into_iter().enumerate() {
+                let rrf_score = 1.0 / (60.0 + rank as f32);
+                *score_map.entry(result.id.clone()).or_default() += rrf_score;
+                result_map.entry(result.id.clone()).or_insert(result);
+            }
+        }
+
+        let mut merged: Vec<SearchResult> = result_map
+            .into_values()
+            .map(|mut r| {
+                r.score = *score_map.get(&r.id).unwrap_or(&0.0);
+                r
+            })
+            .collect();
+        merged.sort_by(|a, b| {
+            b.score
+                .partial_cmp(&a.score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+
+        merged.truncate(limit);
+        Ok(merged)
+    }
+
     /// Hybrid search with LLM query *decomposition* BEFORE search.
     ///
     /// Splits a compositional query into independent factual subqueries
@@ -22057,6 +22219,478 @@ pub(crate) mod tests {
                 .iter()
                 .all(|r| r.source_agent.as_deref() == Some("claude-code")),
             "all results should have source_agent=claude-code"
+        );
+    }
+
+    #[tokio::test]
+    async fn diag2_merges() {
+        let (db, _dir) = test_db().await;
+        db.upsert_documents(vec![
+            make_memory_doc(
+                "q1",
+                "astronomy telescope observation distant galaxies nebula",
+                "fact",
+                "work",
+                "a",
+            ),
+            make_memory_doc(
+                "d1",
+                "astronomy telescope mirror aperture focal length optics",
+                "fact",
+                "work",
+                "a",
+            ),
+            make_memory_doc(
+                "d2",
+                "galaxies spiral elliptical cosmology redshift expansion",
+                "fact",
+                "work",
+                "a",
+            ),
+            make_memory_doc(
+                "d3",
+                "telescope mount tracking equatorial astronomy imaging",
+                "fact",
+                "work",
+                "a",
+            ),
+            make_memory_doc(
+                "d4",
+                "observation distant stars galaxies astronomy spectroscopy",
+                "fact",
+                "work",
+                "a",
+            ),
+            make_memory_doc(
+                "e",
+                "photosynthesis chloroplast biology cellular respiration enzyme",
+                "fact",
+                "work",
+                "a",
+            ),
+        ])
+        .await
+        .unwrap();
+        for lim in [3usize, 4, 5] {
+            let p = db
+                .search_memory(
+                    "astronomy telescope galaxies",
+                    lim,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                )
+                .await
+                .unwrap();
+            eprintln!(
+                "DIAG2 plain lim={} -> {:?}",
+                lim,
+                p.iter().map(|r| r.source_id.clone()).collect::<Vec<_>>()
+            );
+        }
+        let d = db
+            .search_memory(
+                "photosynthesis chloroplast biology cellular respiration enzyme",
+                10,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+        eprintln!(
+            "DIAG2 draft -> {:?}",
+            d.iter().map(|r| r.source_id.clone()).collect::<Vec<_>>()
+        );
+    }
+
+    // ==================== search_memory_prf (T6: pseudo-relevance feedback) ====================
+
+    // PRF tests read the process-global `ORIGIN_PRF_ROUNDS` via `prf_rounds()`.
+    // `temp_env::async_with_vars` mutates that global, so two PRF tests running
+    // concurrently can corrupt each other's flag mid-`.await`. Serialize them on
+    // a process-local async lock so the flag is stable across each test's awaits
+    // (a `tokio::sync::Mutex` avoids the `await_holding_lock` lint that a
+    // `std::sync::Mutex` would trip).
+    static PRF_ENV_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+    #[tokio::test]
+    async fn search_memory_prf_zero_rounds_equals_plain_search() {
+        let _serial = PRF_ENV_LOCK.lock().await;
+        let (db, _dir) = test_db().await;
+        db.upsert_documents(vec![
+            make_memory_doc(
+                "m1",
+                "Favorite color is blue for UI elements",
+                "preference",
+                "personal",
+                "claude-code",
+            ),
+            make_memory_doc(
+                "m2",
+                "Project deadline is next Friday for release",
+                "fact",
+                "work",
+                "chatgpt",
+            ),
+            make_memory_doc(
+                "m3",
+                "The database uses libSQL with vector search",
+                "fact",
+                "work",
+                "cursor",
+            ),
+        ])
+        .await
+        .unwrap();
+
+        let llm: Arc<dyn crate::llm_provider::LlmProvider> =
+            Arc::new(crate::llm_provider::MockProvider::new("a draft answer"));
+
+        let (prf, plain) =
+            temp_env::async_with_vars([("ORIGIN_PRF_ROUNDS", None::<&str>)], async {
+                let prf = db
+                    .search_memory_prf("color blue", 10, None, None, None, Some(llm.clone()))
+                    .await
+                    .unwrap();
+                let plain = db
+                    .search_memory("color blue", 10, None, None, None, None, None, None)
+                    .await
+                    .unwrap();
+                (prf, plain)
+            })
+            .await;
+
+        let prf_ids: Vec<&str> = prf.iter().map(|r| r.id.as_str()).collect();
+        let plain_ids: Vec<&str> = plain.iter().map(|r| r.id.as_str()).collect();
+        assert_eq!(
+            prf_ids, plain_ids,
+            "ROUNDS unset must be byte-identical (same ids, same order) to plain search"
+        );
+    }
+
+    #[tokio::test]
+    async fn search_memory_prf_no_llm_degrades_to_plain() {
+        let _serial = PRF_ENV_LOCK.lock().await;
+        let (db, _dir) = test_db().await;
+        db.upsert_documents(vec![
+            make_memory_doc(
+                "m1",
+                "Favorite color is blue for UI elements",
+                "preference",
+                "personal",
+                "claude-code",
+            ),
+            make_memory_doc(
+                "m2",
+                "Project deadline is next Friday for release",
+                "fact",
+                "work",
+                "chatgpt",
+            ),
+        ])
+        .await
+        .unwrap();
+
+        let (prf, plain) = temp_env::async_with_vars([("ORIGIN_PRF_ROUNDS", Some("2"))], async {
+            let prf = db
+                .search_memory_prf("color blue", 10, None, None, None, None)
+                .await
+                .unwrap();
+            let plain = db
+                .search_memory("color blue", 10, None, None, None, None, None, None)
+                .await
+                .unwrap();
+            (prf, plain)
+        })
+        .await;
+
+        let prf_ids: Vec<&str> = prf.iter().map(|r| r.id.as_str()).collect();
+        let plain_ids: Vec<&str> = plain.iter().map(|r| r.id.as_str()).collect();
+        assert_eq!(
+            prf_ids, plain_ids,
+            "llm=None must degrade to plain search even with ROUNDS=2"
+        );
+    }
+
+    #[tokio::test]
+    async fn search_memory_prf_llm_unavailable_degrades() {
+        let _serial = PRF_ENV_LOCK.lock().await;
+        let (db, _dir) = test_db().await;
+        db.upsert_documents(vec![
+            make_memory_doc(
+                "m1",
+                "Favorite color is blue for UI elements",
+                "preference",
+                "personal",
+                "claude-code",
+            ),
+            make_memory_doc(
+                "m2",
+                "Project deadline is next Friday for release",
+                "fact",
+                "work",
+                "chatgpt",
+            ),
+        ])
+        .await
+        .unwrap();
+
+        let llm: Arc<dyn crate::llm_provider::LlmProvider> =
+            Arc::new(crate::llm_provider::MockProvider::unavailable());
+
+        let (prf, plain) = temp_env::async_with_vars([("ORIGIN_PRF_ROUNDS", Some("2"))], async {
+            let prf = db
+                .search_memory_prf("color blue", 10, None, None, None, Some(llm.clone()))
+                .await
+                .unwrap();
+            let plain = db
+                .search_memory("color blue", 10, None, None, None, None, None, None)
+                .await
+                .unwrap();
+            (prf, plain)
+        })
+        .await;
+
+        // Every draft returns NotAvailable -> round-0 list survives, loop breaks,
+        // no panic, result equals plain search (log-and-degrade).
+        let prf_ids: Vec<&str> = prf.iter().map(|r| r.id.as_str()).collect();
+        let plain_ids: Vec<&str> = plain.iter().map(|r| r.id.as_str()).collect();
+        assert_eq!(
+            prf_ids, plain_ids,
+            "unavailable LLM must degrade to plain search, round-0 survives"
+        );
+    }
+
+    #[tokio::test]
+    async fn search_memory_prf_original_query_floor() {
+        let _serial = PRF_ENV_LOCK.lock().await;
+        let (db, _dir) = test_db().await;
+        // D is a strong literal match for the query.
+        db.upsert_documents(vec![
+            make_memory_doc(
+                "dq",
+                "quantum entanglement physics experiment results",
+                "fact",
+                "work",
+                "claude-code",
+            ),
+            make_memory_doc(
+                "o1",
+                "grocery shopping list for the weekend",
+                "fact",
+                "personal",
+                "chatgpt",
+            ),
+            make_memory_doc(
+                "o2",
+                "car maintenance schedule oil change",
+                "fact",
+                "personal",
+                "cursor",
+            ),
+        ])
+        .await
+        .unwrap();
+
+        // Off-topic draft: should NOT displace the literal hit D (round-0 floor).
+        let llm: Arc<dyn crate::llm_provider::LlmProvider> = Arc::new(
+            crate::llm_provider::MockProvider::new("grocery shopping car maintenance weekend"),
+        );
+
+        let prf = temp_env::async_with_vars([("ORIGIN_PRF_ROUNDS", Some("1"))], async {
+            db.search_memory_prf(
+                "quantum entanglement physics",
+                10,
+                None,
+                None,
+                None,
+                Some(llm.clone()),
+            )
+            .await
+            .unwrap()
+        })
+        .await;
+
+        let ids: Vec<&str> = prf.iter().map(|r| r.source_id.as_str()).collect();
+        assert!(
+            ids.contains(&"dq"),
+            "literal hit D must survive an off-topic draft (round-0 1/(60+rank) floor); got {:?}",
+            ids
+        );
+    }
+
+    #[tokio::test]
+    async fn search_memory_prf_converges_early() {
+        let _serial = PRF_ENV_LOCK.lock().await;
+        let (db, _dir) = test_db().await;
+        db.upsert_documents(vec![
+            make_memory_doc(
+                "m1",
+                "Favorite color is blue for UI elements",
+                "preference",
+                "personal",
+                "claude-code",
+            ),
+            make_memory_doc(
+                "m2",
+                "Project deadline is next Friday for release",
+                "fact",
+                "work",
+                "chatgpt",
+            ),
+            make_memory_doc(
+                "m3",
+                "The database uses libSQL with vector search",
+                "fact",
+                "work",
+                "cursor",
+            ),
+        ])
+        .await
+        .unwrap();
+
+        // Fixed draft every call. The draft search returns the same id-set as the
+        // round-0 pool (small corpus), so the first feedback round already
+        // converges (`cur.is_subset(seen)`) and the loop breaks -- ROUNDS=3
+        // accumulates the same streams as ROUNDS=1.
+        let llm: Arc<dyn crate::llm_provider::LlmProvider> = Arc::new(
+            crate::llm_provider::MockProvider::new("database libSQL vector search"),
+        );
+
+        let three = temp_env::async_with_vars([("ORIGIN_PRF_ROUNDS", Some("3"))], async {
+            db.search_memory_prf("color blue", 10, None, None, None, Some(llm.clone()))
+                .await
+                .unwrap()
+        })
+        .await;
+        let one = temp_env::async_with_vars([("ORIGIN_PRF_ROUNDS", Some("1"))], async {
+            db.search_memory_prf("color blue", 10, None, None, None, Some(llm.clone()))
+                .await
+                .unwrap()
+        })
+        .await;
+
+        // Convergence guarantees the same candidate SET regardless of round
+        // budget. Compare as sets: with two RRF streams some docs tie on summed
+        // 1/(60+rank) score, and `HashMap::into_values()` iteration order makes
+        // the final order of tied docs non-deterministic run-to-run -- an
+        // ordered-vec assertion would be flaky. The set is the real invariant.
+        let three_ids: std::collections::HashSet<&str> =
+            three.iter().map(|r| r.id.as_str()).collect();
+        let one_ids: std::collections::HashSet<&str> = one.iter().map(|r| r.id.as_str()).collect();
+        assert_eq!(
+            three_ids, one_ids,
+            "fixed-draft ROUNDS=3 must converge to the same candidate set as ROUNDS=1"
+        );
+    }
+
+    #[tokio::test]
+    async fn search_memory_prf_merges_feedback_hits() {
+        let _serial = PRF_ENV_LOCK.lock().await;
+        let (db, _dir) = test_db().await;
+        // Query matches q1 + 4 astronomy distractors. E (biology) matches the
+        // DRAFT text only -- it is NOT in the literal-query top-`limit`.
+        db.upsert_documents(vec![
+            make_memory_doc(
+                "q1",
+                "astronomy telescope observation distant galaxies nebula",
+                "fact",
+                "work",
+                "a",
+            ),
+            make_memory_doc(
+                "d1",
+                "astronomy telescope mirror aperture focal length optics",
+                "fact",
+                "work",
+                "a",
+            ),
+            make_memory_doc(
+                "d2",
+                "galaxies spiral elliptical cosmology redshift expansion",
+                "fact",
+                "work",
+                "a",
+            ),
+            make_memory_doc(
+                "d3",
+                "telescope mount tracking equatorial astronomy imaging",
+                "fact",
+                "work",
+                "a",
+            ),
+            make_memory_doc(
+                "d4",
+                "observation distant stars galaxies astronomy spectroscopy",
+                "fact",
+                "work",
+                "a",
+            ),
+            make_memory_doc(
+                "e",
+                "photosynthesis chloroplast biology cellular respiration enzyme",
+                "fact",
+                "work",
+                "a",
+            ),
+        ])
+        .await
+        .unwrap();
+
+        // Draft = E's exact text -> draft retrieval ranks E #1, pulling it into
+        // the merged top-`limit` that the literal query alone excludes.
+        let llm: Arc<dyn crate::llm_provider::LlmProvider> =
+            Arc::new(crate::llm_provider::MockProvider::new(
+                "photosynthesis chloroplast biology cellular respiration enzyme",
+            ));
+
+        let (prf, plain) = temp_env::async_with_vars([("ORIGIN_PRF_ROUNDS", Some("1"))], async {
+            let prf = db
+                .search_memory_prf(
+                    "astronomy telescope galaxies",
+                    4,
+                    None,
+                    None,
+                    None,
+                    Some(llm.clone()),
+                )
+                .await
+                .unwrap();
+            let plain = db
+                .search_memory(
+                    "astronomy telescope galaxies",
+                    4,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                )
+                .await
+                .unwrap();
+            (prf, plain)
+        })
+        .await;
+
+        let prf_sids: Vec<&str> = prf.iter().map(|r| r.source_id.as_str()).collect();
+        let plain_sids: Vec<&str> = plain.iter().map(|r| r.source_id.as_str()).collect();
+        assert!(
+            prf_sids.contains(&"e"),
+            "feedback-only doc E must appear in PRF output; got {:?}",
+            prf_sids
+        );
+        assert!(
+            !plain_sids.contains(&"e"),
+            "feedback-only doc E must be ABSENT from plain search (recall expansion); got {:?}",
+            plain_sids
         );
     }
 
