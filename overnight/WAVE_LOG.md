@@ -35,12 +35,13 @@ ship an ugly wedge first, get users, then apply rigor to real pain. He front-loa
 (evals, CI, SEO, process) and skipped validation + distribution. His own core verb (/review) is broken while
 he tunes a 4th retrieval variant. The strength (rigor) is real; it is just aimed inward.
 
-**The single move, sharpened:** Pick ONE of two paths this week, not both. (a) SHIP the wedge - fix /review,
-then Show HN the provenance + git-versioned Claude Code memory angle to 20 users. (b) BECOME THE
-RESEARCHER - publish one brutally honest field guide to what AI-memory benchmarks actually measure, using his
-real eval rigor, to build the audience he lacks. Both attack distribution (his bottleneck) with rigor (his
-strength). (b) has lower downside and plays to his proven edge; (a) validates the product. Do not tune
-retrieval again until one of these ships.
+**The single move, sharpened [SUPERSEDED by the FINAL above - kept to show the thinking evolve]:** My
+mid-run framing was "pick (a) ship or (b) become the researcher, (b) has lower downside." The Wave 5 red-team
+showed (b)-first is partly more hiding, and that you cannot judge the product without one launch. The FINAL
+move at the top of this block (launch once, B-first, with a pre-set gate, field guide as the vehicle)
+replaces this. Keeping the older text visible on purpose: the run changed its mind on evidence, twice, and
+hiding that would betray the whole point. The one constant across every version: do not tune retrieval again
+until something reaches a stranger.
 
 **Evidence so far (raw, pre-verification):**
 - 314 commits / 38 active days (Apr 19 – May 30, 2026). Avg ~8 commits/active day. Real intensity.

@@ -101,7 +101,11 @@ public, falsifiable bet this week with a real chance of failing in front of peop
   automations/) · 06 contrarian bets · 07 onboarding audit · 08 github signals (+ correction) · 09 launch kit ·
   10 field guide (the durable asset) · 12 wedge validation · 13 review fix plan + benchmark · 14 content engine ·
   15 skill-gap + trajectory · 16 competitive reality · 17 competitor deep-dive · 18 launch playbook ·
-  tools/self-dashboard.sh (run it weekly) · WAVE_LOG.md (full provenance of this run).
+  20 citable-number protocol · 21 stop-doing list · 22 research-engineer path · 23 red-team (read this, it
+  argues against the rest) · 24 the 14-day launch runbook (the do-this-Monday capstone) ·
+  agent-rigor/ (productize-the-process scaffold) ·
+  automations/ (release-check + pr-hygiene skills, eval-citation hook, competitor-radar, weekly-review) ·
+  tools/self-dashboard.sh (run it weekly) · WAVE_LOG.md (full provenance + two logged self-corrections).
 
 ## VERIFICATION of this memo
 - Every bullet links to a numbered file whose claims carry source URLs or file:line citations. No number here
