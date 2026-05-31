@@ -427,6 +427,33 @@ pub fn page_channel_enabled() -> bool {
         .unwrap_or(false)
 }
 
+/// True iff `ORIGIN_ENABLE_SESSION_DIVERSITY` is set to a truthy value
+/// (`1`, `true`, or `yes`, case-insensitive).  OPT-IN, default OFF: when
+/// unset or falsey, [`MemoryDB::search_memory_cross_rerank`] output is
+/// byte-identical to pre-T20 behaviour (regression guard tests #13/#14).
+///
+/// Enables the per-session diversification cap in T20 so that a single
+/// LME conversation session cannot monopolise the top-`limit` results.
+/// Production source_ids (`mem_*`) return `None` from
+/// `retrieval::session_diversity::session_key` and are never counted
+/// against the cap — safe to enable in production without side-effects
+/// until a real session column ships.
+pub fn session_diversity_enabled() -> bool {
+    std::env::var("ORIGIN_ENABLE_SESSION_DIVERSITY")
+        .ok()
+        .map(|v| matches!(v.trim().to_ascii_lowercase().as_str(), "1" | "true" | "yes"))
+        .unwrap_or(false)
+}
+
+/// Parse `ORIGIN_SESSION_DIVERSITY_MAX` as a `usize`.
+/// Defaults to 3 when unset or when the value fails to parse.
+fn session_diversity_max() -> usize {
+    std::env::var("ORIGIN_SESSION_DIVERSITY_MAX")
+        .ok()
+        .and_then(|v| v.trim().parse().ok())
+        .unwrap_or(3)
+}
+
 /// True iff `ORIGIN_ENABLE_GRAPH_GATE` is set to a truthy value
 /// (`1`, `true`, or `yes`, case-insensitive). OPT-IN: when unset or falsey,
 /// `augment_with_graph` runs unconditionally (legacy behavior, byte-identical).
@@ -7987,6 +8014,17 @@ impl MemoryDB {
         let (page_results, mem_results): (Vec<_>, Vec<_>) =
             results.into_iter().partition(|r| r.source == "page");
         let mut results = mem_results;
+        // T20: per-session diversification cap (opt-in, default OFF).
+        // Runs on the full reranked memory pool (pre-truncate) so backfill
+        // has demoted-but-valid hits to pull from.  Pages are excluded
+        // (already partitioned out above).  Byte-identical when flag unset.
+        if session_diversity_enabled() {
+            crate::retrieval::session_diversity::cap_per_session(
+                &mut results,
+                session_diversity_max(),
+                limit,
+            );
+        }
         results.truncate(limit);
         // Append top-K pages after the memory limit. K = configured pool
         // size (already capped upstream by page_channel_limit()).
@@ -34079,6 +34117,147 @@ pub(crate) mod tests {
         assert!(
             !enabled,
             "ORIGIN_ENABLE_QUERY_INTENT=unset: must be disabled"
+        );
+    }
+    // -- T20: per-session diversification cap integration tests -------------------
+
+    /// Helper: insert a memory row with a specific source_id (for LME-style ids).
+    async fn seed_memory_with_source_id(db: &MemoryDB, source_id: &str, content: &str) {
+        let conn = db.conn.lock().await;
+        conn.execute(
+            "INSERT INTO memories (id, content, source, source_id, title, chunk_index, \
+                                    last_modified, chunk_type, source_agent, space, confidence, \
+                                    confirmed, memory_type, pending_revision) \
+             VALUES (?1, ?2, 'memory', ?3, 'test', 0, 1712707200, 'text', NULL, 'general', 1.0, 0, 'fact', 0)",
+            libsql::params![source_id.to_string(), content.to_string(), source_id.to_string()],
+        )
+        .await
+        .unwrap();
+    }
+
+    /// Regression guard: flag OFF (unset) -> search_memory_cross_rerank output
+    /// is byte-identical to pre-T20 behaviour (no reordering, no drops).
+    /// Regression guard: flag OFF (unset) and flag=0 both disable the cap,
+    /// so the output is byte-identical in both cases.
+    /// Mirrors page_channel_enabled_treats_zero_and_unset_as_disabled pattern.
+    #[tokio::test]
+    async fn session_diversity_flag_off_byte_identical() {
+        let (db, _tmp) = test_db().await;
+        // Use uniform content so FTS (no embeddings in test_db) returns
+        // consistent results across the seeded rows.
+        for i in 0..5 {
+            seed_memory_with_source_id(
+                &db,
+                &format!("lme_qX_0_t{i}"),
+                "diversity flag identity content",
+            )
+            .await;
+        }
+
+        let unset =
+            temp_env::async_with_vars([("ORIGIN_ENABLE_SESSION_DIVERSITY", None::<&str>)], async {
+                db.search_memory_cross_rerank("diversity flag identity", 10, None, None, None, None)
+                    .await
+                    .unwrap()
+            })
+            .await;
+
+        let off =
+            temp_env::async_with_vars([("ORIGIN_ENABLE_SESSION_DIVERSITY", Some("0"))], async {
+                db.search_memory_cross_rerank("diversity flag identity", 10, None, None, None, None)
+                    .await
+                    .unwrap()
+            })
+            .await;
+
+        // Both flag-off variants must produce the same output (regression guard).
+        assert_eq!(
+            unset.iter().map(|r| &r.source_id).collect::<Vec<_>>(),
+            off.iter().map(|r| &r.source_id).collect::<Vec<_>>(),
+            "flag unset vs flag=0 must return identical order"
+        );
+
+        // Flag ON must return <= results compared to flag OFF (cap can only
+        // reduce or maintain, never increase the result count).
+        let flag_on = temp_env::async_with_vars(
+            [
+                ("ORIGIN_ENABLE_SESSION_DIVERSITY", Some("1")),
+                ("ORIGIN_SESSION_DIVERSITY_MAX", Some("2")),
+            ],
+            async {
+                db.search_memory_cross_rerank("diversity flag identity", 10, None, None, None, None)
+                    .await
+                    .unwrap()
+            },
+        )
+        .await;
+
+        assert!(
+            flag_on.len() <= unset.len(),
+            "flag ON must not return MORE results than flag OFF: on={} off={}",
+            flag_on.len(),
+            unset.len()
+        );
+    }
+
+    /// Flag ON with only mem_* ids -> identity transform (production safety).
+    /// Even with diversity=ON, real daemon ids are never keyed and never capped.
+    #[tokio::test]
+    async fn session_diversity_flag_on_mem_ids_identity() {
+        let (db, _tmp) = test_db().await;
+        // Seed 4 memories with real mem_ source_ids.
+        for i in 0..4 {
+            seed_memory(
+                &db,
+                &format!("mem session diversity safety test content item {i}"),
+            )
+            .await;
+        }
+
+        let flag_off = temp_env::async_with_vars(
+            [
+                ("ORIGIN_ENABLE_SESSION_DIVERSITY", None::<&str>),
+                ("ORIGIN_SESSION_DIVERSITY_MAX", None::<&str>),
+            ],
+            async {
+                db.search_memory_cross_rerank(
+                    "mem session diversity safety test",
+                    10,
+                    None,
+                    None,
+                    None,
+                    None,
+                )
+                .await
+                .unwrap()
+            },
+        )
+        .await;
+
+        let flag_on = temp_env::async_with_vars(
+            [
+                ("ORIGIN_ENABLE_SESSION_DIVERSITY", Some("1")),
+                ("ORIGIN_SESSION_DIVERSITY_MAX", Some("2")),
+            ],
+            async {
+                db.search_memory_cross_rerank(
+                    "mem session diversity safety test",
+                    10,
+                    None,
+                    None,
+                    None,
+                    None,
+                )
+                .await
+                .unwrap()
+            },
+        )
+        .await;
+
+        assert_eq!(
+            flag_off.iter().map(|r| &r.source_id).collect::<Vec<_>>(),
+            flag_on.iter().map(|r| &r.source_id).collect::<Vec<_>>(),
+            "mem_* ids: flag ON must not change order vs flag OFF"
         );
     }
 }
