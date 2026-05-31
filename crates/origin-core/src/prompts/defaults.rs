@@ -66,6 +66,20 @@ Compare two memories. Respond with exactly one of:\n\
 - CONTRADICTS: <brief explanation>\n\
 - SUPERSEDES: <merged version combining both>";
 
+pub(crate) const RESOLVE_DUAL_POOL: &str = "\
+You resolve an incoming memory against existing memories. You receive a numbered\n\
+candidate list split into two ranges:\n\
+- DUPLICATES range: near-identical restatements of the incoming memory.\n\
+- CONFLICTS range: same topic/entity but possibly-contradicting claims.\n\
+Decide, per candidate index:\n\
+- duplicates: indices that say the SAME thing as the incoming memory.\n\
+- invalidates: indices from the CONFLICTS range whose claim is mutually\n\
+  exclusive with the incoming memory (only one can be true).\n\
+Rules: use ONLY the integer indices shown. Never invent an index. A candidate\n\
+is a duplicate OR an invalidation, never both. If unsure, omit the index.\n\
+Respond with ONLY this JSON object, no prose, no markdown:\n\
+{\"duplicates\":[],\"invalidates\":[]}";
+
 pub(crate) const SUMMARIZE_DECISIONS: &str = "\
 You summarize a set of decisions made by one person.\n\
 State the key decisions as one concise sentence. If no coherent theme, respond: null";

@@ -427,6 +427,23 @@ pub fn page_channel_enabled() -> bool {
         .unwrap_or(false)
 }
 
+/// True iff `ORIGIN_ENABLE_DUAL_POOL_RESOLVE` is set to a truthy value
+/// (`1`, `true`, or `yes`, case-insensitive). When enabled, `handle_store_memory`
+/// resolves each incoming memory against two candidate pools (near-duplicates +
+/// possibly-contradicting same-entity/domain rows) in a single LLM call and acts
+/// on the result: invalidations soft-suppress the older side (bidirectional
+/// temporal expiry), duplicates file a consolidation proposal.
+///
+/// Default OFF: unset or any falsey value (`0`/`false`/`no`/`""`) leaves the
+/// write path byte-identical (no extra vector query, no LLM call, no mutation).
+/// Truthy-only parse, mirrors [`page_channel_enabled`].
+pub fn dual_pool_resolve_enabled() -> bool {
+    std::env::var("ORIGIN_ENABLE_DUAL_POOL_RESOLVE")
+        .ok()
+        .map(|v| matches!(v.trim().to_ascii_lowercase().as_str(), "1" | "true" | "yes"))
+        .unwrap_or(false)
+}
+
 /// True iff `ORIGIN_ENABLE_TEMPORAL_GROUNDING` is set to a truthy value
 /// (`1`, `true`, or `yes`, case-insensitive). When enabled, `upsert_documents`
 /// deterministically rewrites relative date phrases in memory prose to include
@@ -18812,6 +18829,310 @@ impl MemoryDB {
         }
     }
 
+    /// Build the two candidate pools for T14 dual-pool resolution.
+    ///
+    /// Pool A: near-duplicates by vector cosine >= `cfg.pool_a_cosine_threshold`.
+    /// Pool B: same-entity-OR-same-domain rows that pass
+    /// `contradiction::fields_may_contradict`, with Pool-A overlaps subtracted so
+    /// the two pools are disjoint. Combined size is capped at `cfg.combined_cap`
+    /// (Pool A keeps priority; Pool B fills the remainder).
+    ///
+    /// Only confirmed, non-pending, non-recap `source='memory'` rows are
+    /// considered, and the incoming memory itself is excluded. All SQL is
+    /// parameterized.
+    pub(crate) async fn build_resolution_pools(
+        &self,
+        incoming: &crate::retrieval::resolve::IncomingMemory,
+        cfg: crate::retrieval::resolve::ResolutionConfig,
+    ) -> Result<
+        (
+            Vec<crate::retrieval::resolve::Candidate>,
+            Vec<crate::retrieval::resolve::Candidate>,
+        ),
+        OriginError,
+    > {
+        use crate::retrieval::resolve::Candidate;
+        use std::collections::HashSet;
+
+        // Fetch a bounded set of recent confirmed memories with everything the
+        // pool builder + applier need. Cap the scan generously (4x the combined
+        // cap) so cosine ranking has headroom before we trim to the final cap.
+        let scan_limit = (cfg.combined_cap.max(1) * 4) as i64;
+
+        let conn = self.conn.lock().await;
+        let sql = "SELECT source_id, content, structured_fields, memory_type, space, \
+                          entity_id, embedding, event_date, created_at, pinned, stability \
+                   FROM memories \
+                   WHERE chunk_index = 0 AND source = 'memory' AND confirmed = 1 \
+                         AND pending_revision = 0 AND COALESCE(is_recap, 0) = 0 \
+                         AND source_id != ?1 \
+                   ORDER BY \
+                     CASE WHEN entity_id IS NOT NULL AND entity_id = ?2 THEN 0 \
+                          WHEN space IS NOT NULL AND space = ?3 THEN 1 \
+                          ELSE 2 END, \
+                     last_modified DESC \
+                   LIMIT ?4";
+
+        struct Row {
+            cand: Candidate,
+            structured_fields: Option<String>,
+            memory_type: String,
+            domain: Option<String>,
+            entity_id: Option<String>,
+            embedding: Vec<f32>,
+        }
+
+        let mut rows = conn
+            .query(
+                sql,
+                libsql::params![
+                    incoming.source_id.clone(),
+                    incoming.entity_id.clone().unwrap_or_default(),
+                    incoming.domain.clone().unwrap_or_default(),
+                    scan_limit
+                ],
+            )
+            .await
+            .map_err(|e| OriginError::VectorDb(format!("build_resolution_pools query: {e}")))?;
+
+        let mut fetched: Vec<Row> = Vec::new();
+        while let Some(row) = rows
+            .next()
+            .await
+            .map_err(|e| OriginError::VectorDb(e.to_string()))?
+        {
+            let source_id: String = row
+                .get(0)
+                .map_err(|e| OriginError::VectorDb(format!("resolve src_id: {e}")))?;
+            let content: String = row.get::<String>(1).unwrap_or_default();
+            let structured_fields: Option<String> = row.get::<Option<String>>(2).unwrap_or(None);
+            let memory_type: String = row
+                .get::<Option<String>>(3)
+                .unwrap_or(None)
+                .unwrap_or_default();
+            let domain: Option<String> = row.get::<Option<String>>(4).unwrap_or(None);
+            let entity_id: Option<String> = row.get::<Option<String>>(5).unwrap_or(None);
+            let embedding: Vec<f32> = row
+                .get::<Vec<u8>>(6)
+                .unwrap_or_default()
+                .chunks_exact(4)
+                .map(|b| f32::from_le_bytes([b[0], b[1], b[2], b[3]]))
+                .collect();
+            let event_date: Option<i64> = row.get::<Option<i64>>(7).unwrap_or(None);
+            let created_at: i64 = row.get::<Option<i64>>(8).unwrap_or(None).unwrap_or(0);
+            let pinned: bool = row.get::<i64>(9).unwrap_or(0) != 0;
+            let stability: String = row
+                .get::<Option<String>>(10)
+                .unwrap_or(None)
+                .unwrap_or_else(|| "new".to_string());
+
+            fetched.push(Row {
+                cand: Candidate {
+                    source_id,
+                    content,
+                    event_date,
+                    created_at,
+                    pinned,
+                    stability,
+                },
+                structured_fields,
+                memory_type,
+                domain,
+                entity_id,
+                embedding,
+            });
+        }
+        drop(rows);
+        drop(conn);
+
+        // --- Pool A: near-duplicates by cosine ---
+        let mut scored: Vec<(usize, f64)> = fetched
+            .iter()
+            .enumerate()
+            .map(|(i, r)| {
+                (
+                    i,
+                    crate::topic_match::cosine_similarity(&incoming.embedding, &r.embedding),
+                )
+            })
+            .filter(|(_, sim)| *sim >= cfg.pool_a_cosine_threshold)
+            .collect();
+        scored.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+
+        let mut pool_a: Vec<Candidate> = Vec::new();
+        let mut pool_a_ids: HashSet<String> = HashSet::new();
+        for (i, _sim) in &scored {
+            if pool_a.len() >= cfg.combined_cap {
+                break;
+            }
+            let r = &fetched[*i];
+            pool_a_ids.insert(r.cand.source_id.clone());
+            pool_a.push(r.cand.clone());
+        }
+
+        // --- Pool B: same-entity-OR-same-domain field-contradiction candidates ---
+        let inc_fields = incoming.structured_fields.as_deref().unwrap_or("{}");
+        let mut raw_b: Vec<Candidate> = Vec::new();
+        for r in &fetched {
+            // Same entity OR same domain as the incoming memory.
+            let same_entity = match (incoming.entity_id.as_deref(), r.entity_id.as_deref()) {
+                (Some(a), Some(b)) => a == b,
+                _ => false,
+            };
+            let same_domain = match (incoming.domain.as_deref(), r.domain.as_deref()) {
+                (Some(a), Some(b)) => a.eq_ignore_ascii_case(b),
+                _ => false,
+            };
+            if !same_entity && !same_domain {
+                continue;
+            }
+            // Same memory_type required for fields_may_contradict to compare like-for-like.
+            if r.memory_type != incoming.memory_type {
+                continue;
+            }
+            let ex_fields = r.structured_fields.as_deref().unwrap_or("{}");
+            if crate::contradiction::fields_may_contradict(
+                &incoming.memory_type,
+                ex_fields,
+                inc_fields,
+            ) {
+                raw_b.push(r.cand.clone());
+            }
+        }
+
+        // Disjoint by construction: drop any Pool-B row already in Pool A.
+        let mut pool_b = crate::retrieval::resolve::subtract_pool_a(&pool_a_ids, raw_b);
+
+        // Enforce the combined cap: Pool A keeps priority, Pool B fills remainder.
+        let remaining = cfg.combined_cap.saturating_sub(pool_a.len());
+        if pool_b.len() > remaining {
+            pool_b.truncate(remaining);
+        }
+
+        Ok((pool_a, pool_b))
+    }
+
+    /// Soft-suppress `existing_id` because `incoming_id` (newer valid-time) wins.
+    /// Sets `incoming.supersedes = existing_id` (revision linkage) and
+    /// `existing.confirmed = 0` (soft-suppress; NEVER deleted). Reuses the
+    /// canonical soft-suppress semantics from `upsert_documents`. Best-effort
+    /// per-statement so a partial failure can't corrupt one side silently;
+    /// returns the first hard error.
+    pub(crate) async fn resolve_supersede_existing(
+        &self,
+        incoming_id: &str,
+        existing_id: &str,
+    ) -> Result<(), OriginError> {
+        let conn = self.conn.lock().await;
+        conn.execute(
+            "UPDATE memories SET supersedes = ?1 WHERE source_id = ?2 AND source = 'memory'",
+            libsql::params![existing_id, incoming_id],
+        )
+        .await
+        .map_err(|e| OriginError::VectorDb(format!("resolve_supersede_existing link: {e}")))?;
+        conn.execute(
+            "UPDATE memories SET confirmed = 0 WHERE source_id = ?1 AND source = 'memory'",
+            libsql::params![existing_id],
+        )
+        .await
+        .map_err(|e| OriginError::VectorDb(format!("resolve_supersede_existing suppress: {e}")))?;
+        Ok(())
+    }
+
+    /// Soft-suppress the INCOMING memory because an existing memory has a
+    /// strictly-later valid-time (out-of-order backfill). Sets
+    /// `incoming.supersedes = existing_id` (so the incoming is linked as a
+    /// revision-of the survivor) and `incoming.confirmed = 0`. The existing
+    /// memory is left untouched. NEVER deletes.
+    pub(crate) async fn resolve_expire_incoming(
+        &self,
+        incoming_id: &str,
+        existing_id: &str,
+    ) -> Result<(), OriginError> {
+        let conn = self.conn.lock().await;
+        conn.execute(
+            "UPDATE memories SET supersedes = ?1, confirmed = 0 \
+             WHERE source_id = ?2 AND source = 'memory'",
+            libsql::params![existing_id, incoming_id],
+        )
+        .await
+        .map_err(|e| OriginError::VectorDb(format!("resolve_expire_incoming: {e}")))?;
+        Ok(())
+    }
+
+    /// Read the metadata `build_resolution_pools` + the resolver need about a
+    /// single memory by `source_id`. Returns `None` when the row is absent.
+    pub(crate) async fn get_incoming_for_resolution(
+        &self,
+        source_id: &str,
+    ) -> Result<Option<crate::retrieval::resolve::IncomingMemory>, OriginError> {
+        let conn = self.conn.lock().await;
+        let mut rows = conn
+            .query(
+                "SELECT content, embedding, entity_id, space, memory_type, \
+                        structured_fields, event_date, created_at \
+                 FROM memories WHERE source_id = ?1 AND chunk_index = 0 AND source = 'memory' LIMIT 1",
+                libsql::params![source_id],
+            )
+            .await
+            .map_err(|e| OriginError::VectorDb(format!("get_incoming_for_resolution: {e}")))?;
+        let Some(row) = rows
+            .next()
+            .await
+            .map_err(|e| OriginError::VectorDb(e.to_string()))?
+        else {
+            return Ok(None);
+        };
+        let content: String = row.get::<String>(0).unwrap_or_default();
+        let embedding: Vec<f32> = row
+            .get::<Vec<u8>>(1)
+            .unwrap_or_default()
+            .chunks_exact(4)
+            .map(|b| f32::from_le_bytes([b[0], b[1], b[2], b[3]]))
+            .collect();
+        let entity_id: Option<String> = row.get::<Option<String>>(2).unwrap_or(None);
+        let domain: Option<String> = row.get::<Option<String>>(3).unwrap_or(None);
+        let memory_type: String = row
+            .get::<Option<String>>(4)
+            .unwrap_or(None)
+            .unwrap_or_default();
+        let structured_fields: Option<String> = row.get::<Option<String>>(5).unwrap_or(None);
+        let event_date: Option<i64> = row.get::<Option<i64>>(6).unwrap_or(None);
+        let created_at: i64 = row.get::<Option<i64>>(7).unwrap_or(None).unwrap_or(0);
+        Ok(Some(crate::retrieval::resolve::IncomingMemory {
+            source_id: source_id.to_string(),
+            content,
+            embedding,
+            entity_id,
+            domain,
+            memory_type,
+            structured_fields,
+            event_date,
+            created_at,
+        }))
+    }
+
+    /// Link the incoming memory as a pending revision of a PROTECTED existing
+    /// memory: sets `incoming.supersedes = existing_id` and
+    /// `incoming.pending_revision = 1`. The existing (protected) memory is left
+    /// untouched and stays `confirmed = 1` — a human approves via /brief.
+    /// Mirrors the protected-topic-match path in `memory_routes.rs`.
+    pub(crate) async fn resolve_link_pending_revision(
+        &self,
+        incoming_id: &str,
+        existing_id: &str,
+    ) -> Result<(), OriginError> {
+        let conn = self.conn.lock().await;
+        conn.execute(
+            "UPDATE memories SET supersedes = ?1, pending_revision = 1 \
+             WHERE source_id = ?2 AND source = 'memory'",
+            libsql::params![existing_id, incoming_id],
+        )
+        .await
+        .map_err(|e| OriginError::VectorDb(format!("resolve_link_pending_revision: {e}")))?;
+        Ok(())
+    }
+
     /// Mark a page as stale with a specific reason.
     pub async fn set_page_stale(&self, page_id: &str, reason: &str) -> Result<(), OriginError> {
         let conn = self.conn.lock().await;
@@ -21763,6 +22084,32 @@ pub(crate) mod tests {
         let unset =
             temp_env::async_with_vars([("ORIGIN_ENABLE_SALIENCE_PRIOR", None::<&str>)], async {
                 crate::db::salience_prior_enabled()
+            })
+            .await;
+        assert!(!unset, "expected false when unset");
+    }
+
+    #[tokio::test]
+    async fn dual_pool_resolve_enabled_truthy_parse() {
+        for val in &["1", "true", "yes", "TRUE", "Yes"] {
+            let got = temp_env::async_with_vars(
+                [("ORIGIN_ENABLE_DUAL_POOL_RESOLVE", Some(*val))],
+                async { crate::db::dual_pool_resolve_enabled() },
+            )
+            .await;
+            assert!(got, "expected true for {val}");
+        }
+        for val in &["0", "false", "no", ""] {
+            let got = temp_env::async_with_vars(
+                [("ORIGIN_ENABLE_DUAL_POOL_RESOLVE", Some(*val))],
+                async { crate::db::dual_pool_resolve_enabled() },
+            )
+            .await;
+            assert!(!got, "expected false for {val}");
+        }
+        let unset =
+            temp_env::async_with_vars([("ORIGIN_ENABLE_DUAL_POOL_RESOLVE", None::<&str>)], async {
+                crate::db::dual_pool_resolve_enabled()
             })
             .await;
         assert!(!unset, "expected false when unset");

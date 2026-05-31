@@ -15,6 +15,7 @@ pub struct PromptRegistry {
     pub classify_screen: String,
     pub merge_memories: String,
     pub detect_contradiction: String,
+    pub resolve_dual_pool: String,
     pub summarize_decisions: String,
     pub detect_pattern: String,
     pub narrative: String,
@@ -43,6 +44,7 @@ impl Default for PromptRegistry {
             classify_screen: defaults::CLASSIFY_SCREEN.to_string(),
             merge_memories: defaults::MERGE_MEMORIES.to_string(),
             detect_contradiction: defaults::DETECT_CONTRADICTION.to_string(),
+            resolve_dual_pool: defaults::RESOLVE_DUAL_POOL.to_string(),
             summarize_decisions: defaults::SUMMARIZE_DECISIONS.to_string(),
             detect_pattern: defaults::DETECT_PATTERN.to_string(),
             narrative: defaults::NARRATIVE.to_string(),
@@ -80,6 +82,7 @@ impl PromptRegistry {
             ("classify_screen", &mut reg.classify_screen),
             ("merge_memories", &mut reg.merge_memories),
             ("detect_contradiction", &mut reg.detect_contradiction),
+            ("resolve_dual_pool", &mut reg.resolve_dual_pool),
             ("summarize_decisions", &mut reg.summarize_decisions),
             ("detect_pattern", &mut reg.detect_pattern),
             ("narrative", &mut reg.narrative),
@@ -170,6 +173,7 @@ mod tests {
         assert!(!reg.classify_screen.is_empty());
         assert!(!reg.merge_memories.is_empty());
         assert!(!reg.detect_contradiction.is_empty());
+        assert!(!reg.resolve_dual_pool.is_empty());
         assert!(!reg.summarize_decisions.is_empty());
         assert!(!reg.detect_pattern.is_empty());
         assert!(!reg.narrative.is_empty());
