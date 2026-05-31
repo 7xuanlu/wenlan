@@ -7428,6 +7428,19 @@ impl MemoryDB {
             .unwrap_or(Self::PAGE_CHANNEL_LIMIT_DEFAULT)
     }
 
+    /// Max subqueries (including the original) for `search_memory_decomposed`.
+    /// Env override `ORIGIN_QUERY_DECOMP_MAX_SUBQUERIES` lets the eval harness
+    /// sweep the cap without recompile. Default 4 matches Cognee's CoT max_iter.
+    const QUERY_DECOMP_MAX_DEFAULT: usize = 4;
+
+    fn query_decomp_max_subqueries() -> usize {
+        std::env::var("ORIGIN_QUERY_DECOMP_MAX_SUBQUERIES")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .filter(|&n| n >= 1)
+            .unwrap_or(Self::QUERY_DECOMP_MAX_DEFAULT)
+    }
+
     /// Hybrid search with reranker-trait reranking.
     ///
     /// Equivalent to `search_memory_llm_rerank` but takes a [`Reranker`] trait
@@ -7775,6 +7788,98 @@ impl MemoryDB {
                 .unwrap_or(std::cmp::Ordering::Equal)
         });
 
+        merged.truncate(limit);
+        Ok(merged)
+    }
+
+    /// Hybrid search with LLM query *decomposition* BEFORE search.
+    ///
+    /// Splits a compositional query into independent factual subqueries
+    /// (`retrieval::decompose`), runs `search_memory` per subquery, and RRF-merges
+    /// the pools. Unlike `search_memory_expanded` (paraphrases of one clause), each
+    /// stream is a DISTINCT clause, so a memory satisfying clause B is not drowned
+    /// by vocabulary variants of clause A. The original full query is always the
+    /// first stream, so the worst case degrades to a plain single-query search.
+    /// Graceful degradation: no LLM / parse failure / all-subquery-search failure
+    /// falls back to `search_memory(query, ...)`.
+    pub async fn search_memory_decomposed(
+        &self,
+        query: &str,
+        limit: usize,
+        memory_type: Option<&str>,
+        space: Option<&str>,
+        source_agent: Option<&str>,
+        llm: Option<Arc<dyn crate::llm_provider::LlmProvider>>,
+    ) -> Result<Vec<SearchResult>, OriginError> {
+        let queries = crate::retrieval::decompose::decompose_query(
+            llm.as_ref(),
+            query,
+            Self::query_decomp_max_subqueries(),
+        )
+        .await;
+
+        let fetch_pool = limit * 2;
+        let mut all_ranked: Vec<Vec<SearchResult>> = Vec::with_capacity(queries.len());
+        for q in &queries {
+            match self
+                .search_memory(
+                    q,
+                    fetch_pool,
+                    memory_type,
+                    space,
+                    source_agent,
+                    None,
+                    None,
+                    None,
+                )
+                .await
+            {
+                Ok(results) => all_ranked.push(results),
+                Err(e) => {
+                    log::warn!("[memory_db] decompose search failed for subquery '{q}': {e}");
+                }
+            }
+        }
+
+        // If every subquery search failed, fall back to a plain search.
+        if all_ranked.is_empty() {
+            return self
+                .search_memory(
+                    query,
+                    limit,
+                    memory_type,
+                    space,
+                    source_agent,
+                    None,
+                    None,
+                    None,
+                )
+                .await;
+        }
+
+        // RRF merge — each subquery contributes one equal-weight stream.
+        let mut score_map: HashMap<String, f32> = HashMap::new();
+        let mut result_map: HashMap<String, SearchResult> = HashMap::new();
+        for ranked in all_ranked {
+            for (rank, result) in ranked.into_iter().enumerate() {
+                let rrf_score = 1.0 / (60.0 + rank as f32);
+                *score_map.entry(result.id.clone()).or_default() += rrf_score;
+                result_map.entry(result.id.clone()).or_insert(result);
+            }
+        }
+
+        let mut merged: Vec<SearchResult> = result_map
+            .into_values()
+            .map(|mut r| {
+                r.score = *score_map.get(&r.id).unwrap_or(&0.0);
+                r
+            })
+            .collect();
+        merged.sort_by(|a, b| {
+            b.score
+                .partial_cmp(&a.score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
         merged.truncate(limit);
         Ok(merged)
     }
