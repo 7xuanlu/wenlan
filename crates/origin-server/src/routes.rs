@@ -370,6 +370,31 @@ pub async fn handle_chat_context(
             Vec::new()
         };
 
+    // T18 global-context prelude (opt-in, ship-dark). Read-only: surfaces the
+    // pre-built summary_nodes as a `## Corpus Overview` section. The build path
+    // is the refinery's SummaryRollup phase; here we only read. Honors the
+    // space filter via the source-overlap gate (a summary surfaces iff >=1 of
+    // its provenance memories survived the memory-side filter). Empty/absent
+    // unless ORIGIN_ENABLE_GLOBAL_PRELUDE is on, so the default response shape
+    // is byte-identical to pre-T18.
+    let corpus_overview: Vec<String> = if origin_core::db::global_prelude_enabled() {
+        let nodes = db.search_summary_nodes(query, 3).await.unwrap_or_default();
+        let mut out = Vec::new();
+        for node in nodes {
+            // Source-overlap gate when a space filter is active.
+            if space_filter.is_some() {
+                match db.get_summary_node_sources(&node.id).await {
+                    Ok(srcs) if srcs.iter().any(|s| search_source_ids.contains(s)) => {}
+                    _ => continue,
+                }
+            }
+            out.push(format!("**{}**: {}", node.title, node.body));
+        }
+        out
+    } else {
+        Vec::new()
+    };
+
     let narrative = db
         .get_cached_narrative()
         .await
@@ -459,6 +484,14 @@ pub async fn handle_chat_context(
         let mut sec = String::from("## Corrections\n");
         for item in &corrections {
             sec.push_str(&format!("- {}\n", item));
+        }
+        sections.push(sec);
+    }
+
+    if !corpus_overview.is_empty() {
+        let mut sec = String::from("## Corpus Overview\n");
+        for item in &corpus_overview {
+            sec.push_str(&format!("{}\n\n", item));
         }
         sections.push(sec);
     }

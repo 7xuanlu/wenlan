@@ -113,8 +113,8 @@ pub fn hit_rate_at_k(ranked_ids: &[&str], relevant_ids: &HashSet<&str>, k: usize
 /// Source-coverage set for set-based recall over a retrieved bundle.
 ///
 /// Each retrieved unit contributes the source-memory ids it "covers": a
-/// `"page"` unit expands to its `page_sources` ids (provenance expansion,
-/// the HippoRAG / LongMemEval key-value pattern), and every other unit
+/// `"page"` or `"summary"` unit expands to its `page_sources` ids (provenance
+/// expansion, the HippoRAG / LongMemEval key-value pattern), and every other unit
 /// contributes its own id. The result is a set, so a gold id is covered at
 /// most once no matter how many units point to it — that is what structurally
 /// prevents the double-count a positional metric would suffer when a
@@ -130,7 +130,13 @@ pub fn build_coverage_set(
 ) -> HashSet<String> {
     let mut covered = HashSet::new();
     for (source, id) in units {
-        if *source == "page" {
+        // Provenance-expanded units (pages + T18 summary nodes) earn coverage
+        // credit ONLY via the gold leaf ids they bring, never their own id.
+        // Both look up the same `page_sources` provenance map (page ids and
+        // summary ids share the keyspace at the call site). A unit absent from
+        // the map contributes only its own id, which will not match a
+        // memory-keyed gold id.
+        if *source == "page" || *source == "summary" {
             match page_sources.get(id) {
                 Some(srcs) if !srcs.is_empty() => {
                     for s in srcs {
@@ -562,6 +568,31 @@ mod tests {
         let ps: HashMap<&str, Vec<&str>> = HashMap::new();
         let cov = build_coverage_set(&units, &ps);
         assert_eq!(cov, sset(&["p1"]));
+    }
+
+    /// T18: a ("summary","sum_1") unit with sources sum_1->[m1,m2] expands to
+    /// {m1,m2} NOT {sum_1} -- same anti-double-count guarantee as pages.
+    #[test]
+    fn coverage_set_summary_expands_to_sources_not_own_id() {
+        let units = vec![("memory", "m0"), ("summary", "sum_1")];
+        let mut ps = HashMap::new();
+        ps.insert("sum_1", vec!["m1", "m2"]);
+        let cov = build_coverage_set(&units, &ps);
+        assert_eq!(cov, sset(&["m0", "m1", "m2"]));
+        assert!(
+            !cov.contains("sum_1"),
+            "summary own id must NOT be credited"
+        );
+    }
+
+    /// T18: a summary id absent from the sources map contributes only its own
+    /// id (which won't match memory-keyed gold), exactly like the page fallback.
+    #[test]
+    fn coverage_set_summary_no_sources_contributes_own_id() {
+        let units = vec![("summary", "sum_root")];
+        let ps: HashMap<&str, Vec<&str>> = HashMap::new();
+        let cov = build_coverage_set(&units, &ps);
+        assert_eq!(cov, sset(&["sum_root"]));
     }
 
     #[test]
