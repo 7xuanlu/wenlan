@@ -427,6 +427,23 @@ pub fn page_channel_enabled() -> bool {
         .unwrap_or(false)
 }
 
+/// True iff `ORIGIN_ENABLE_TEMPORAL_GROUNDING` is set to a truthy value
+/// (`1`, `true`, or `yes`, case-insensitive). When enabled, `upsert_documents`
+/// deterministically rewrites relative date phrases in memory prose to include
+/// absolute dates, anchored to the memory's `last_modified` (observation date),
+/// **before** embedding and INSERT. This makes the embedder and FTS index see
+/// grounded text so temporal queries can match literal dates.
+///
+/// Default OFF: unset or any falsey value (`0`/`false`/`no`/`""`) leaves the
+/// write path byte-identical to pre-T11. Truthy-only parse, mirrors
+/// [`page_channel_enabled`].
+pub fn temporal_grounding_enabled() -> bool {
+    std::env::var("ORIGIN_ENABLE_TEMPORAL_GROUNDING")
+        .ok()
+        .map(|v| matches!(v.trim().to_ascii_lowercase().as_str(), "1" | "true" | "yes"))
+        .unwrap_or(false)
+}
+
 /// True iff `ORIGIN_ENABLE_EPISODE_CHANNEL` is set to a truthy value
 /// (`1`, `true`, or `yes`, case-insensitive). The episode-channel is OPT-IN
 /// (master write+read switch): unset or a falsey value (`0`/`false`/`no`/"")
@@ -6535,12 +6552,25 @@ impl MemoryDB {
             let content = redact_pii(&doc.content);
             let metadata = doc.metadata.clone();
 
+            // T11: write-time temporal grounding (deterministic prose grounder).
+            // When ORIGIN_ENABLE_TEMPORAL_GROUNDING is set, relative date phrases
+            // (yesterday/today/tomorrow) in the prose are rewritten to include
+            // absolute dates anchored to last_modified (the observation date),
+            // BEFORE chunking, embedding, and INSERT. Flag OFF = byte-identical.
+            let grounded_content = if temporal_grounding_enabled() {
+                let obs_dt = chrono::DateTime::from_timestamp(doc.last_modified, 0)
+                    .unwrap_or_else(chrono::Utc::now);
+                crate::temporal_query::ground_relative_dates(&content, obs_dt)
+            } else {
+                content.clone()
+            };
+
             // Content is always the original natural language prose.
             // structured_fields JSON holds the structured representation for display.
             // (Previously this flattened structured_fields into pipe-delimited content
             // and saved original to source_text — that caused redundant storage and
             // made content worse for display, FTS, and embedding.)
-            let (final_content, derived_source_text) = (content.clone(), None::<String>);
+            let (final_content, derived_source_text) = (grounded_content, None::<String>);
 
             let chunks = self
                 .chunker
@@ -35886,6 +35916,120 @@ pub(crate) mod tests {
         assert_eq!(
             fact_content, new_content,
             "fact row reflects the in-place edit"
+        );
+    }
+    // -- T11: temporal_grounding_enabled + store-seam integration tests ----------
+
+    /// Truthy-parse coverage for ORIGIN_ENABLE_TEMPORAL_GROUNDING.
+    /// Mirrors page_channel_enabled_accepts_truthy_synonyms pattern.
+    #[tokio::test]
+    async fn temporal_grounding_enabled_truthy_synonyms() {
+        for value in ["1", "true", "yes", "TRUE", "YES", "True"] {
+            let enabled = temp_env::async_with_vars(
+                [("ORIGIN_ENABLE_TEMPORAL_GROUNDING", Some(value))],
+                async { temporal_grounding_enabled() },
+            )
+            .await;
+            assert!(
+                enabled,
+                "ORIGIN_ENABLE_TEMPORAL_GROUNDING={value}: must be truthy"
+            );
+        }
+        for value in ["0", "false", "no", "", "off"] {
+            let enabled = temp_env::async_with_vars(
+                [("ORIGIN_ENABLE_TEMPORAL_GROUNDING", Some(value))],
+                async { temporal_grounding_enabled() },
+            )
+            .await;
+            assert!(
+                !enabled,
+                "ORIGIN_ENABLE_TEMPORAL_GROUNDING={value}: must be falsey"
+            );
+        }
+        // Unset = disabled.
+        let enabled = temp_env::async_with_vars(
+            [("ORIGIN_ENABLE_TEMPORAL_GROUNDING", None::<&str>)],
+            async { temporal_grounding_enabled() },
+        )
+        .await;
+        assert!(
+            !enabled,
+            "ORIGIN_ENABLE_TEMPORAL_GROUNDING unset must be disabled"
+        );
+    }
+
+    /// Flag OFF (unset): stored content is byte-identical to the input.
+    #[tokio::test]
+    async fn temporal_grounding_flag_off_content_byte_identical() {
+        let (db, _tmp) = test_db().await;
+        let raw_content = "I met her yesterday and the review is tomorrow";
+
+        temp_env::async_with_vars(
+            [("ORIGIN_ENABLE_TEMPORAL_GROUNDING", None::<&str>)],
+            async {
+                db.upsert_documents(vec![make_memory_doc(
+                    "tg_off_mem",
+                    raw_content,
+                    "fact",
+                    "work",
+                    "claude",
+                )])
+                .await
+                .unwrap();
+            },
+        )
+        .await;
+
+        let conn = db.conn.lock().await;
+        let mut rows = conn
+            .query(
+                "SELECT content FROM memories WHERE source_id = 'tg_off_mem' AND chunk_index = 0",
+                (),
+            )
+            .await
+            .unwrap();
+        let stored: String = rows.next().await.unwrap().unwrap().get(0).unwrap();
+        assert_eq!(
+            stored, raw_content,
+            "flag-OFF: stored content must be byte-identical to input"
+        );
+    }
+
+    /// Flag ON: stored content carries absolute dates grounded to last_modified.
+    #[tokio::test]
+    async fn temporal_grounding_flag_on_stored_content_carries_absolute_date() {
+        let (db, _tmp) = test_db().await;
+
+        // Fixed observation timestamp: 2026-05-01T00:00:00Z = 1777593600
+        let observation_ts: i64 = 1_777_593_600;
+        let mut doc = make_memory_doc(
+            "tg_on_mem",
+            "I shipped the parser yesterday",
+            "fact",
+            "work",
+            "claude",
+        );
+        doc.last_modified = observation_ts;
+
+        temp_env::async_with_vars([("ORIGIN_ENABLE_TEMPORAL_GROUNDING", Some("1"))], async {
+            db.upsert_documents(vec![doc]).await.unwrap();
+        })
+        .await;
+
+        let conn = db.conn.lock().await;
+        let mut rows = conn
+            .query(
+                "SELECT content FROM memories WHERE source_id = 'tg_on_mem' AND chunk_index = 0",
+                (),
+            )
+            .await
+            .unwrap();
+        let stored: String = rows.next().await.unwrap().unwrap().get(0).unwrap();
+        // Grounded to 2026-04-30 (yesterday relative to 2026-05-01).
+        assert!(
+            stored.contains("yesterday (2026-04-30)"),
+            "flag-ON: stored content must carry grounded date 2026-04-30, got {:?}",
+            stored
         );
     }
 }
