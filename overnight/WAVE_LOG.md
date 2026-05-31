@@ -12,14 +12,17 @@ polishing a memory engine almost nobody is using yet - the bottleneck is not rig
 choosing inward-facing work (eval tuning, CI, SEO copy) over the terrifying outward-facing work of
 putting the thing in front of users and finding a wedge.
 
-**Highest-leverage move right now (REVISED after Wave 2 evidence):** Lead with the RESEARCHER path, not a
-cold product launch. The product wedge is contested: "local-first + git + Claude Code memory" is a crowded
-category with 6+ free entrants, and one (sverklo, 70 stars) has 2x Origin's stars with lower install friction.
-Origin's only un-copied ground is provenance + source-cited wiki-page composition, which is also the pillar
-with the weakest user demand (wedge validation: YELLOW). So: publish the honest AI-memory-benchmark field
-guide (already drafted, 10-field-guide.md) to build the audience he lacks, using the rigor that is his real
-edge. Let the writing pull attention to the product. Fixing the product's last gaps (review docs-sync) is a
-half-day, not the headline.
+**Highest-leverage move (FINAL, after a Wave 5 red-team flipped my Wave 2 take):** LAUNCH ONCE, FIRST. I
+initially said "lead with the researcher path." The red-team (23) caught the flaw, honestly: writing essays
+alone is ALSO safe, solo, low-exposure work. By the kit's own frame, the pivot to "researcher" can be the
+same hiding in a smarter outfit. The one move that actually exposes him to strangers who can reject him is
+shipping the product to 20 people. And you cannot conclude "the product can't win" from a dataset with zero
+launches. So: fix /review (half a day, mostly done), reply to #194, launch ONCE to r/LocalLLaMA + Show HN
+with a kill/continue gate set in writing beforehand. Use the field guide (already drafted) as the
+distribution vehicle for that launch, not as a replacement identity. Keep the research-engineer path as a
+fallback the launch strengthens either way. Decide from launch data, not from this memo. The product wedge is
+contested (15+ free rivals, Origin ranks ~13th by stars), so lead the launch with the one un-copied thing:
+composition + enforced provenance, not "git-versioned local memory."
 
 **CORRECTION on a Wave 1 claim:** I earlier called his /review verb "broken end-to-end." Verified false now:
 5 of 7 bugs in issue #92 are fixed in current code (router.rs:109,113,434; tools.rs:916,1616). He did the
@@ -240,3 +243,49 @@ VERIFICATION:
   flagged not fabricated.
 - Landscape funding figures: agent tagged each [VERIFIED url]; not independently re-checked this wave (queued).
 - #92 finding: read directly from GitHub MCP issue body. PASS, primary source.
+
+WAVE 5 COMPLETIONS:
+- 22-research-engineer-path.md - 11 sourced role targets in 3 tiers (eval-labs: Anthropic Model Evaluations,
+  Zep Applied RE, Letta Founding RE; memory startups: Mem0, Supermemory, Cognee; Rust-infra hedges:
+  Turso/libSQL, Modal, Baseten, LanceDB). Top-3 proof artifacts ALL reuse already-drafted kit work (field
+  guide 10 + citable-number 20 + content engine 14). Honest weakness audit (no papers discounted by RE roles;
+  no production-at-scale is the one expensive gap). Job-board URLs 403'd direct fetch, tagged accordingly.
+- 23-red-team.md - adversarial review of THIS kit. Strongest objection: the kit nearly recommended the
+  comfortable path (more solo writing) believing it was the brave one; launching to 20 strangers is the
+  actually-scary move; you cannot conclude a product can't win from zero launches. Named real methodological
+  overreaches: stars-as-traction, single-query radar fragility, npm never pulled, keyword-classifier inward%,
+  zero user interviews. Fairest synthesis: launch once, cheap + reversible, with a pre-set gate; field guide
+  as distribution not identity; lab path as fallback. THIS FLIPPED the top recommendation to B-first.
+- 00-START-HERE.md decision section REWRITTEN to lead with B-first and to surface the red-team's objection at
+  the top, not bury it. Intellectual honesty over a tidy thesis.
+- automations/weekly-review/ (operator) - weekly self-review routine (script + scheduled-session prompt).
+  RAN LIVE end to end (dashboard 71% inward + live radar). Drafts a Gmail (draft-only, no send) with the
+  week's mirror and one outward task; explicitly refuses to suggest "tune retrieval."
+
+OPERATOR VERIFICATIONS THIS WAVE:
+- mem0 funding: independently web-verified $24M (Series A, Oct 28 2025, YC/Peak XV/Basis Set). Landscape
+  file's number correct. PASS. [VERIFIED techcrunch.com/2025/10/28]
+- Whole kit: stripped em-dashes globally (house style), re-ran bash -n on all scripts + jq on all JSON +
+  re-tested the eval-citation hook (deny/allow) after the edit. PASS.
+- Self-correction logged: my Wave 2 "researcher-path first" recommendation was wrong; the red-team improved
+  it; START-HERE now reflects B-first. This is the second logged reversal of the run (first was #92). The
+  run argued with itself and changed its mind twice on evidence. That is the point.
+
+WAVE 5 STATUS: COMPLETE.
+
+---
+
+## RUN CLOSE-OUT
+
+Artifacts: 38 files under overnight/ (24 prose docs, a working self-dashboard, an installable automation set
+with an executed hook, a competitor radar that ran live, a weekly-review routine, an agent-rigor scaffold).
+~5,500 lines. Draft PR #217 open, docs-only, no product code touched (verified).
+
+Two honest reversals logged in the open (#92 "broken" overstatement; researcher-path-first recommendation).
+Methodological caveats named by the red-team are kept in 23, not hidden. Every external number that mattered
+was cross-checked (mem0 funding, Zep three-way LoCoMo dispute, competitor stars via live API).
+
+The single sentence: he has world-class rigor pointed inward at a contested product almost nobody has tried;
+the unlock is not more rigor, it is one launch to strangers this week with a kill/continue gate, using the
+already-drafted field guide as the distribution vehicle and the research-engineer path as the fallback that a
+launch strengthens either way.

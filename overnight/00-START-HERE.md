@@ -64,9 +64,28 @@ still unanswered). Lead with composition + provenance, NOT "git-versioned local 
 "me too" against sverklo). [09, 16, 18]
 First move: reply to #194, fix /review docs, draft the Show HN.
 
-My honest bet: **A first, then B into warmed air.** A is lower-downside, plays to your proven edge, builds
-the audience B needs, and keeps a door open to a high-leverage role even if the product stays small. B alone,
-launched cold into a crowded lane, is the higher-variance play.
+My first take was "A first, then B." A red-team pass (23-red-team.md) changed my mind, and the correction is
+important enough to put at the top: **do B first.** Here is the argument, because it is better than my
+original one.
+
+The whole kit says you hide in safe, solo, measurable, low-exposure work. Now look honestly at Option A.
+Writing essays alone, building a research reputation alone, reading job descriptions: that is ALSO safe,
+solo, and low-exposure. The pivot to "researcher" can be the same hiding wearing a smarter outfit. The one
+thing in this whole document that actually exposes you to strangers who can reject you is Option B: put the
+product in front of 20 people and watch them quit. That is the brave move. The kit almost recommended the
+comfortable path while calling it the bold one.
+
+Also, intellectually, you cannot conclude "the product can't win" from a dataset that contains zero launches.
+Every inward finding here reduces to one fact: you have never shipped to strangers, not once. Get that one
+data point before any irreversible pivot.
+
+So: **B first, as a cheap reversible experiment with a kill/continue gate set in advance.** Fix /review
+(half a day, mostly done per 13), reply to #194, launch once to r/LocalLLaMA + Show HN. Use the field guide
+(A) as the distribution vehicle for that launch, not as a replacement identity. Keep the research-engineer
+path as a fallback that the launch strengthens either way (a launched product plus a published guide is a
+better job artifact than either alone). Decide what to do next from the launch data, not from this memo.
+Set the gate now, in writing, before you launch: e.g. "if 14 days post-launch I have under X installs and
+under Y real conversations, I stop building and pivot to the research path." Pick X and Y today.
 
 ## The thing you are avoiding (say it plainly)
 
