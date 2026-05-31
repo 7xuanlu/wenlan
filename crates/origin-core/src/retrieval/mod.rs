@@ -8,4 +8,5 @@
 pub(crate) mod decompose;
 pub(crate) mod fts_query;
 pub(crate) mod hard_filters;
+pub(crate) mod query_intent;
 pub(crate) mod signals;

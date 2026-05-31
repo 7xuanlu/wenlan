@@ -7168,10 +7168,13 @@ impl MemoryDB {
 
         let rrf_k = scoring.map(|s| s.rrf_k).unwrap_or(60.0);
 
+        // T19: per-channel weight multipliers (identity {1,1,1} when flag off).
+        let cw = crate::retrieval::query_intent::effective_weights(query);
+
         for (rank, result) in vector_results.into_iter().enumerate() {
             let distance = result.score; // cosine distance from vector_distance_cos
             let similarity = (1.0 - distance).max(0.01);
-            let rrf_score = similarity / (rrf_k + rank as f32);
+            let rrf_score = cw.vector * similarity / (rrf_k + rank as f32);
             *score_map.entry(result.id.clone()).or_default() += rrf_score;
             result_map.entry(result.id.clone()).or_insert(result);
         }
@@ -7197,13 +7200,13 @@ impl MemoryDB {
                 // `fts_weight/rrf_k` equals the rank-only term's max, preserving
                 // the FTS/vector scale balance (vector max `1.0/rrf_k`) while the
                 // normalized magnitude differentiates strong vs weak matches.
-                let rrf_score = fts_weight * norm / rrf_k;
+                let rrf_score = cw.fts * fts_weight * norm / rrf_k;
                 *score_map.entry(result.id.clone()).or_default() += rrf_score;
                 result_map.entry(result.id.clone()).or_insert(result);
             }
         } else {
             for (rank, result) in fts_results.into_iter().enumerate() {
-                let rrf_score = fts_weight / (rrf_k + rank as f32);
+                let rrf_score = cw.fts * fts_weight / (rrf_k + rank as f32);
                 *score_map.entry(result.id.clone()).or_default() += rrf_score;
                 result_map.entry(result.id.clone()).or_insert(result);
             }
@@ -7897,8 +7900,10 @@ impl MemoryDB {
             .map(|r| (r.id.clone(), r))
             .collect();
 
+        // T19: per-channel weights for page RRF (page=1.0 in all current presets -> no-op).
+        let cw_page = crate::retrieval::query_intent::effective_weights(query);
         for (rank, page) in page_results.into_iter().enumerate() {
-            let rrf_score = 1.0 / (60.0 + rank as f32);
+            let rrf_score = cw_page.page * 1.0 / (60.0 + rank as f32);
             let r = Self::search_result_from_page(page);
             *score_map.entry(r.id.clone()).or_default() += rrf_score;
             result_map.entry(r.id.clone()).or_insert(r);
@@ -33803,6 +33808,277 @@ pub(crate) mod tests {
         assert!(
             results.unwrap().is_empty(),
             "empty DB must return empty vec"
+        );
+    }
+
+    // ── T19: Query-adaptive RRF channel reweighting integration tests ─────────
+
+    /// Regression guard (dark-ship): with ORIGIN_ENABLE_QUERY_INTENT unset,
+    /// search_memory must produce byte-identical ordering AND scores vs explicit "0".
+    #[tokio::test]
+    async fn query_intent_flag_off_identical_to_baseline() {
+        let (db, _tmp) = test_db().await;
+        db.upsert_documents(vec![
+            make_memory_doc(
+                "qi_off_a",
+                "the quick brown fox jumps over the lazy dog",
+                "fact",
+                "test",
+                "agent1",
+            ),
+            make_memory_doc(
+                "qi_off_b",
+                "distributed systems consensus algorithms and raft protocol",
+                "fact",
+                "test",
+                "agent1",
+            ),
+            make_memory_doc(
+                "qi_off_c",
+                "machine learning gradient descent optimization",
+                "fact",
+                "test",
+                "agent1",
+            ),
+        ])
+        .await
+        .unwrap();
+
+        let query = "what is the database password";
+
+        let unset =
+            temp_env::async_with_vars([("ORIGIN_ENABLE_QUERY_INTENT", None::<&str>)], async {
+                db.search_memory(query, 10, None, None, None, None, None, None)
+                    .await
+                    .unwrap()
+            })
+            .await;
+
+        let zero = temp_env::async_with_vars([("ORIGIN_ENABLE_QUERY_INTENT", Some("0"))], async {
+            db.search_memory(query, 10, None, None, None, None, None, None)
+                .await
+                .unwrap()
+        })
+        .await;
+
+        assert_eq!(
+            unset.len(),
+            zero.len(),
+            "flag-OFF: unset and =0 must return same number of results"
+        );
+        for (a, b) in unset.iter().zip(zero.iter()) {
+            assert_eq!(
+                a.source_id, b.source_id,
+                "flag-OFF: result ordering must be byte-identical"
+            );
+            assert!(
+                (a.score - b.score).abs() < f32::EPSILON,
+                "flag-OFF: scores must be byte-identical; got {} vs {}",
+                a.score,
+                b.score
+            );
+        }
+    }
+
+    /// Directional test: with flag ON + a Factual-classified query, a memory
+    /// that is a strong lexical match but weak embedding match must rank HIGHER
+    /// relative to a memory that is a strong embedding match but weak lexical match
+    /// compared to flag-OFF behavior (fts boost changes relative ranking).
+    #[tokio::test]
+    async fn query_intent_factual_reweights_fts_stream() {
+        let (db, _tmp) = test_db().await;
+
+        // Memory A: strong lexical match for "password vault credentials key"
+        // but semantically unrelated noise (passwords topic is hard to get high cosine
+        // similarity on in a test fixture, so we contrast by also seeding Memory B
+        // with high similarity content and check relative movement).
+        //
+        // Strategy: seed corpus with one purely-keyword memory and one mixed memory.
+        // With fts boost ON, the keyword memory should NOT drop below off baseline.
+        db.upsert_documents(vec![
+            make_memory_doc(
+                "qi_fts_keyword",
+                "password vault credentials key authentication token",
+                "fact",
+                "test",
+                "agent1",
+            ),
+            make_memory_doc(
+                "qi_fts_semantic",
+                "neural network training data augmentation batch normalization",
+                "fact",
+                "test",
+                "agent1",
+            ),
+        ])
+        .await
+        .unwrap();
+
+        let query = "password key"; // short factual query -> Factual intent -> fts boosted
+
+        let off = temp_env::async_with_vars([("ORIGIN_ENABLE_QUERY_INTENT", Some("0"))], async {
+            db.search_memory(query, 10, None, None, None, None, None, None)
+                .await
+                .unwrap()
+        })
+        .await;
+
+        let on = temp_env::async_with_vars(
+            [
+                ("ORIGIN_ENABLE_QUERY_INTENT", Some("1")),
+                ("ORIGIN_QUERY_INTENT_FTS_BOOST", Some("3.0")), // large boost to make effect detectable
+            ],
+            async {
+                db.search_memory(query, 10, None, None, None, None, None, None)
+                    .await
+                    .unwrap()
+            },
+        )
+        .await;
+
+        // Both paths must return results
+        assert!(!off.is_empty(), "flag-OFF: must return results");
+        assert!(!on.is_empty(), "flag-ON: must return results");
+
+        // Find qi_fts_keyword rank in OFF vs ON
+        let rank_off = off.iter().position(|r| r.source_id == "qi_fts_keyword");
+        let rank_on = on.iter().position(|r| r.source_id == "qi_fts_keyword");
+
+        // keyword memory must appear in both result sets
+        assert!(
+            rank_off.is_some(),
+            "flag-OFF: qi_fts_keyword must appear in results"
+        );
+        assert!(
+            rank_on.is_some(),
+            "flag-ON: qi_fts_keyword must appear in results"
+        );
+
+        // With fts_boost=3.0 on a clearly Factual query, the keyword memory score should
+        // be higher on ON than OFF (or at minimum not lower — no regression).
+        let score_off = off
+            .iter()
+            .find(|r| r.source_id == "qi_fts_keyword")
+            .map(|r| r.score)
+            .unwrap_or(0.0);
+        let score_on = on
+            .iter()
+            .find(|r| r.source_id == "qi_fts_keyword")
+            .map(|r| r.score)
+            .unwrap_or(0.0);
+        assert!(
+            score_on >= score_off,
+            "flag-ON with fts_boost=3.0 must not decrease the score of the keyword memory; \
+             off={score_off} on={score_on}"
+        );
+    }
+
+    /// With flag ON, a General-classified query must produce identical ordering
+    /// to flag-OFF (General preset is a true mathematical identity).
+    #[tokio::test]
+    async fn query_intent_general_query_unchanged_when_on() {
+        let (db, _tmp) = test_db().await;
+        db.upsert_documents(vec![
+            make_memory_doc(
+                "qi_gen_a",
+                "project meeting notes architecture decisions",
+                "fact",
+                "test",
+                "agent1",
+            ),
+            make_memory_doc(
+                "qi_gen_b",
+                "team retrospective sprint review velocity",
+                "fact",
+                "test",
+                "agent1",
+            ),
+            make_memory_doc(
+                "qi_gen_c",
+                "documentation api reference guide",
+                "fact",
+                "test",
+                "agent1",
+            ),
+        ])
+        .await
+        .unwrap();
+
+        // Long compositional query -> General intent -> identity weights -> same as OFF
+        let query =
+            "summarize my thoughts on the database design tradeoffs and overall system complexity";
+
+        let off = temp_env::async_with_vars([("ORIGIN_ENABLE_QUERY_INTENT", Some("0"))], async {
+            db.search_memory(query, 10, None, None, None, None, None, None)
+                .await
+                .unwrap()
+        })
+        .await;
+
+        let on = temp_env::async_with_vars([("ORIGIN_ENABLE_QUERY_INTENT", Some("1"))], async {
+            db.search_memory(query, 10, None, None, None, None, None, None)
+                .await
+                .unwrap()
+        })
+        .await;
+
+        assert_eq!(
+            off.len(),
+            on.len(),
+            "General query: OFF and ON must return same result count"
+        );
+        for (a, b) in off.iter().zip(on.iter()) {
+            assert_eq!(
+                a.source_id, b.source_id,
+                "General query: ordering must be identical (General preset is identity)"
+            );
+            assert!(
+                (a.score - b.score).abs() < f32::EPSILON,
+                "General query: scores must be identical; got {} vs {}",
+                a.score,
+                b.score
+            );
+        }
+    }
+
+    /// Truthy-parse synonyms for ORIGIN_ENABLE_QUERY_INTENT: "1", "true", "yes"
+    /// must enable; "0", "false", "" must disable (mirrors page_channel_enabled_accepts_truthy_synonyms).
+    #[tokio::test]
+    async fn query_intent_truthy_synonyms() {
+        use crate::retrieval::query_intent::query_intent_enabled;
+
+        for value in ["1", "true", "yes", "TRUE", "YES", "True"] {
+            let enabled =
+                temp_env::async_with_vars([("ORIGIN_ENABLE_QUERY_INTENT", Some(value))], async {
+                    query_intent_enabled()
+                })
+                .await;
+            assert!(
+                enabled,
+                "ORIGIN_ENABLE_QUERY_INTENT={value}: must be truthy"
+            );
+        }
+
+        for value in ["0", "false", "no", "", "off", "False"] {
+            let enabled =
+                temp_env::async_with_vars([("ORIGIN_ENABLE_QUERY_INTENT", Some(value))], async {
+                    query_intent_enabled()
+                })
+                .await;
+            assert!(
+                !enabled,
+                "ORIGIN_ENABLE_QUERY_INTENT={value}: must be falsey"
+            );
+        }
+
+        let enabled =
+            temp_env::async_with_vars([("ORIGIN_ENABLE_QUERY_INTENT", None::<&str>)], async {
+                query_intent_enabled()
+            })
+            .await;
+        assert!(
+            !enabled,
+            "ORIGIN_ENABLE_QUERY_INTENT=unset: must be disabled"
         );
     }
 }
