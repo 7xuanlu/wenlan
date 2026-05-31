@@ -594,6 +594,28 @@ pub fn temporal_filter_enabled() -> bool {
         .unwrap_or(false)
 }
 
+/// True iff `ORIGIN_ENABLE_GRAPH_KHOP` is set to a truthy value
+/// (`1`, `true`, or `yes`, case-insensitive). T4b k-hop entity-graph traversal.
+///
+/// OPT-IN, default OFF: when unset or falsey, [`MemoryDB::augment_with_graph`]
+/// uses the query-anchored top entities verbatim (single-hop observations only),
+/// byte-identical to the pre-T4b path. When enabled, those anchor entities are
+/// expanded up to `ORIGIN_GRAPH_KHOP_DEPTH` hops (default 1 == single-hop parity)
+/// over the entity->relation->entity graph, bounded by `ORIGIN_GRAPH_KHOP_MAX_NODES`
+/// (default 25) and a cycle-safe visited set, before observations are fetched.
+///
+/// Composes with the T3 graph-gate (`ORIGIN_ENABLE_GRAPH_GATE`) and T9 pool-seed
+/// (`ORIGIN_ENABLE_GRAPH_SEED`): the gate still decides WHETHER `augment_with_graph`
+/// fires; this flag only changes the breadth of the anchor expansion inside it.
+/// Truthy-only parse, mirrors [`page_channel_enabled`], so production and eval
+/// cannot disagree on the flag.
+pub fn khop_traversal_enabled() -> bool {
+    std::env::var("ORIGIN_ENABLE_GRAPH_KHOP")
+        .ok()
+        .map(|v| matches!(v.trim().to_ascii_lowercase().as_str(), "1" | "true" | "yes"))
+        .unwrap_or(false)
+}
+
 /// True iff `ORIGIN_MAGNITUDE_FUSION` is set to a truthy value
 /// (`1`, `true`, or `yes`, case-insensitive). OPT-IN: when unset or falsey,
 /// `search_memory`'s FTS channel keeps the legacy rank-only RRF term
@@ -9269,6 +9291,123 @@ impl MemoryDB {
         Ok(merged)
     }
 
+    /// T4b: expand a set of anchor entity ids to the bounded, cycle-safe k-hop
+    /// neighbourhood over the `relations` graph.
+    ///
+    /// Depth is read from `ORIGIN_GRAPH_KHOP_DEPTH` (default 1 == single-hop
+    /// parity) and the total expanded-node cap from `ORIGIN_GRAPH_KHOP_MAX_NODES`
+    /// (default 25). Edges are collected per hop with parameterized `IN (?, ...)`
+    /// queries (BOTH directions, mirroring `expand_entities_khop`), then handed to
+    /// the pure [`crate::retrieval::traversal::bfs_khop`] which enforces the depth
+    /// limit, the node cap, and cycle termination via a visited set. The pure
+    /// function is the canonical bound; the per-hop fetch is just edge collection.
+    ///
+    /// Returns the deduped, sorted expanded id set (always a superset of the
+    /// non-empty seeds). Empty seeds -> empty (caller keeps the anchor set).
+    async fn expand_anchor_entities_khop(
+        &self,
+        anchor_entity_ids: &[String],
+    ) -> Result<Vec<String>, OriginError> {
+        use crate::retrieval::traversal::{
+            bfs_khop, build_adjacency, parse_khop_depth, parse_khop_max_nodes,
+        };
+
+        if anchor_entity_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let max_hops = parse_khop_depth(std::env::var("ORIGIN_GRAPH_KHOP_DEPTH").ok().as_deref());
+        let max_nodes =
+            parse_khop_max_nodes(std::env::var("ORIGIN_GRAPH_KHOP_MAX_NODES").ok().as_deref());
+
+        // depth 0 -> no expansion; return deduped seeds via the pure fn (no SQL).
+        if max_hops == 0 {
+            return Ok(bfs_khop(
+                &Default::default(),
+                anchor_entity_ids,
+                0,
+                max_nodes,
+            ));
+        }
+
+        let conn = self.conn.lock().await;
+
+        // Collect edges incident to the bounded frontier, hop by hop. A fetch-side
+        // visited set keeps us from re-querying nodes (and bounds total work); the
+        // authoritative depth/cap/cycle bound is bfs_khop over the collected edges.
+        let mut edges: Vec<(String, String)> = Vec::new();
+        let mut fetch_visited: std::collections::HashSet<String> =
+            anchor_entity_ids.iter().cloned().collect();
+        let mut frontier: Vec<String> = anchor_entity_ids.to_vec();
+
+        for _hop in 0..max_hops {
+            if frontier.is_empty() || fetch_visited.len() >= max_nodes.max(anchor_entity_ids.len())
+            {
+                break;
+            }
+
+            // frontier is bounded by max_nodes (≤512, the parse_khop_max_nodes
+            // clamp) via the in-loop fetch cap below, so this IN list can never
+            // exceed SQLite's 999-param limit — no chunking needed.
+            let placeholders: Vec<String> =
+                (1..=frontier.len()).map(|i| format!("?{}", i)).collect();
+            let ph = placeholders.join(",");
+            // Bidirectional incident edges for the current frontier (parameterized).
+            // ORDER BY makes truncation membership deterministic: when the in-loop
+            // cap trims mid-fanout, WHICH neighbours survive must not depend on DB
+            // row order (the eval path is wired, so non-determinism would be a
+            // reproducibility bug).
+            let sql = format!(
+                "SELECT from_entity, to_entity FROM relations WHERE from_entity IN ({ph})
+                 UNION
+                 SELECT from_entity, to_entity FROM relations WHERE to_entity IN ({ph})
+                 ORDER BY from_entity, to_entity",
+                ph = ph
+            );
+            let params: Vec<libsql::Value> = frontier
+                .iter()
+                .map(|id| libsql::Value::Text(id.clone()))
+                .collect();
+
+            let mut rows = conn
+                .query(&sql, libsql::params_from_iter(params))
+                .await
+                .map_err(|e| {
+                    OriginError::VectorDb(format!("expand_anchor_entities_khop: {}", e))
+                })?;
+
+            let fetch_cap = max_nodes.max(anchor_entity_ids.len());
+            let mut next_frontier: Vec<String> = Vec::new();
+            while let Ok(Some(row)) = rows.next().await {
+                // FIX 1 (runaway): bound the per-hop fetch the same way T9's
+                // expand_entities_khop does — stop reading rows once the visited
+                // set hits the cap, so a hub with thousands of relations can't read
+                // them all into edges/fetch_visited/next_frontier before bfs_khop
+                // trims the OUTPUT. Mirrors the sibling `if visited.len() >= cap`.
+                if fetch_visited.len() >= fetch_cap {
+                    break;
+                }
+                let from: String = row.get(0).unwrap_or_default();
+                let to: String = row.get(1).unwrap_or_default();
+                if from.is_empty() || to.is_empty() {
+                    continue;
+                }
+                edges.push((from.clone(), to.clone()));
+                for nb in [from, to] {
+                    if fetch_visited.insert(nb.clone()) {
+                        next_frontier.push(nb);
+                    }
+                }
+            }
+            frontier = next_frontier;
+        }
+
+        drop(conn);
+
+        let adjacency = build_adjacency(&edges);
+        Ok(bfs_khop(&adjacency, anchor_entity_ids, max_hops, max_nodes))
+    }
+
     /// Augment search results with knowledge graph observations via RRF merge.
     /// Graph observations boost scores of related memories but are stripped from
     /// final output by search_memory (KG is internal scaffolding, not user-facing).
@@ -9285,7 +9424,33 @@ impl MemoryDB {
         };
 
         let entity_ids: Vec<String> = entity_hits.iter().map(|r| r.entity.id.clone()).collect();
-        let graph_results = match self.get_observations_for_entities(&entity_ids, limit).await {
+
+        // T4b: k-hop entity-graph traversal (ORIGIN_ENABLE_GRAPH_KHOP, opt-in,
+        // default OFF). When ON, expand the query-anchored entities up to
+        // ORIGIN_GRAPH_KHOP_DEPTH hops (default 1) over the relation graph,
+        // bounded + cycle-safe, then fetch observations for the expanded set.
+        // When OFF, use entity_ids verbatim -> byte-identical single-hop path.
+        // Log-and-degrade: a traversal Err falls back to the anchor set.
+        let observation_seed_ids: Vec<String> = if khop_traversal_enabled() {
+            match self.expand_anchor_entities_khop(&entity_ids).await {
+                Ok(expanded) if !expanded.is_empty() => expanded,
+                Ok(_) => entity_ids.clone(),
+                Err(e) => {
+                    log::warn!(
+                        "[augment_with_graph] T4b k-hop traversal failed: {}; using anchor entities",
+                        e
+                    );
+                    entity_ids.clone()
+                }
+            }
+        } else {
+            entity_ids.clone()
+        };
+
+        let graph_results = match self
+            .get_observations_for_entities(&observation_seed_ids, limit)
+            .await
+        {
             Ok(r) if !r.is_empty() => r,
             _ => return Ok(results),
         };
@@ -27952,6 +28117,336 @@ pub(crate) mod tests {
         assert!(!augmented.is_empty(), "should include graph observations");
         assert!(augmented.iter().any(|r| r.source == "knowledge_graph"));
     }
+
+    // ==================== T4b: k-hop entity-graph traversal ====================
+
+    /// expand_anchor_entities_khop at depth=2 reaches a 2-hop entity (A->B->C)
+    /// and never reaches a disconnected entity (D).
+    #[tokio::test]
+    async fn test_khop_expand_two_hop_reaches_chain() {
+        let (db, _dir) = test_db().await;
+        let a = db
+            .store_entity("KhopA", "thing", None, None, None)
+            .await
+            .unwrap();
+        let b = db
+            .store_entity("KhopB", "thing", None, None, None)
+            .await
+            .unwrap();
+        let c = db
+            .store_entity("KhopC", "thing", None, None, None)
+            .await
+            .unwrap();
+        let d = db
+            .store_entity("KhopD", "thing", None, None, None)
+            .await
+            .unwrap();
+        db.create_relation(&a, &b, "related_to", None, None, None, None)
+            .await
+            .unwrap();
+        db.create_relation(&b, &c, "related_to", None, None, None, None)
+            .await
+            .unwrap();
+
+        let expanded = temp_env::async_with_vars([("ORIGIN_GRAPH_KHOP_DEPTH", Some("2"))], async {
+            db.expand_anchor_entities_khop(std::slice::from_ref(&a))
+                .await
+                .unwrap()
+        })
+        .await;
+        assert!(expanded.contains(&a), "seed A always present");
+        assert!(expanded.contains(&b), "B is 1 hop");
+        assert!(expanded.contains(&c), "C is 2 hops, reachable at depth=2");
+        assert!(!expanded.contains(&d), "disconnected D must not be reached");
+    }
+
+    /// expand_anchor_entities_khop at depth=1 stops at B; C (2 hops) excluded.
+    #[tokio::test]
+    async fn test_khop_expand_depth_one_excludes_two_hop() {
+        let (db, _dir) = test_db().await;
+        let a = db
+            .store_entity("D1A", "thing", None, None, None)
+            .await
+            .unwrap();
+        let b = db
+            .store_entity("D1B", "thing", None, None, None)
+            .await
+            .unwrap();
+        let c = db
+            .store_entity("D1C", "thing", None, None, None)
+            .await
+            .unwrap();
+        db.create_relation(&a, &b, "related_to", None, None, None, None)
+            .await
+            .unwrap();
+        db.create_relation(&b, &c, "related_to", None, None, None, None)
+            .await
+            .unwrap();
+
+        let expanded = temp_env::async_with_vars([("ORIGIN_GRAPH_KHOP_DEPTH", Some("1"))], async {
+            db.expand_anchor_entities_khop(std::slice::from_ref(&a))
+                .await
+                .unwrap()
+        })
+        .await;
+        assert!(expanded.contains(&b), "B is 1 hop");
+        assert!(!expanded.contains(&c), "C is 2 hops, excluded at depth=1");
+    }
+
+    /// CYCLE TERMINATION through the DB path: relation cycle A->B->A must terminate
+    /// (test completing proves no infinite loop) and dedup to A and B only.
+    #[tokio::test]
+    async fn test_khop_expand_cycle_terminates_via_db() {
+        let (db, _dir) = test_db().await;
+        let a = db
+            .store_entity("CycA", "thing", None, None, None)
+            .await
+            .unwrap();
+        let b = db
+            .store_entity("CycB", "thing", None, None, None)
+            .await
+            .unwrap();
+        db.create_relation(&a, &b, "related_to", None, None, None, None)
+            .await
+            .unwrap();
+        db.create_relation(&b, &a, "related_to", None, None, None, None)
+            .await
+            .unwrap();
+
+        let expanded = temp_env::async_with_vars([("ORIGIN_GRAPH_KHOP_DEPTH", Some("3"))], async {
+            db.expand_anchor_entities_khop(std::slice::from_ref(&a))
+                .await
+                .unwrap()
+        })
+        .await;
+        let mut got = expanded.clone();
+        got.sort();
+        let mut want = vec![a.clone(), b.clone()];
+        want.sort();
+        assert_eq!(
+            got, want,
+            "cycle dedups to exactly A and B, no infinite loop"
+        );
+    }
+
+    /// Hub fan-out is capped by ORIGIN_GRAPH_KHOP_MAX_NODES.
+    #[tokio::test]
+    async fn test_khop_expand_respects_max_nodes() {
+        let (db, _dir) = test_db().await;
+        let hub = db
+            .store_entity("HubCenter", "thing", None, None, None)
+            .await
+            .unwrap();
+        for i in 0..30 {
+            let leaf = db
+                .store_entity(&format!("HubLeaf{i}"), "thing", None, None, None)
+                .await
+                .unwrap();
+            db.create_relation(&hub, &leaf, "related_to", None, None, None, None)
+                .await
+                .unwrap();
+        }
+        let expanded = temp_env::async_with_vars(
+            [
+                ("ORIGIN_GRAPH_KHOP_DEPTH", Some("1")),
+                ("ORIGIN_GRAPH_KHOP_MAX_NODES", Some("10")),
+            ],
+            async {
+                db.expand_anchor_entities_khop(std::slice::from_ref(&hub))
+                    .await
+                    .unwrap()
+            },
+        )
+        .await;
+        assert!(
+            expanded.len() <= 10,
+            "max_nodes=10 caps fan-out; got {}",
+            expanded.len()
+        );
+    }
+
+    /// FIX 1 (runaway) regression: prove the per-hop FETCH is bounded, not just the
+    /// output. A 30-edge hub with max_nodes=10 must terminate and return a bounded
+    /// set (<=10). The pre-fix loop read all 30 hub relations into edges/fetch_visited
+    /// before bfs_khop trimmed the OUTPUT; the in-loop cap now stops the read early.
+    /// Deterministic: depth=1 single hop, no clock/random, output capped to max_nodes.
+    #[tokio::test]
+    async fn test_khop_fetch_bounded_on_hub() {
+        let (db, _dir) = test_db().await;
+        let hub = db
+            .store_entity("FetchHub", "thing", None, None, None)
+            .await
+            .unwrap();
+        for i in 0..30 {
+            let leaf = db
+                .store_entity(&format!("FetchLeaf{i}"), "thing", None, None, None)
+                .await
+                .unwrap();
+            db.create_relation(&hub, &leaf, "related_to", None, None, None, None)
+                .await
+                .unwrap();
+        }
+        let expanded = temp_env::async_with_vars(
+            [
+                ("ORIGIN_GRAPH_KHOP_DEPTH", Some("1")),
+                ("ORIGIN_GRAPH_KHOP_MAX_NODES", Some("10")),
+            ],
+            async {
+                db.expand_anchor_entities_khop(std::slice::from_ref(&hub))
+                    .await
+                    .unwrap()
+            },
+        )
+        .await;
+        // Bounded OUTPUT: max_nodes=10 caps the visited set, so the 30-edge hub can
+        // never return all 31 nodes. (Termination is proven by the test completing.)
+        assert!(
+            expanded.len() <= 10,
+            "fetch+output bounded by max_nodes=10 over a 30-edge hub; got {}",
+            expanded.len()
+        );
+        // Anchor itself is never dropped.
+        assert!(expanded.contains(&hub), "hub anchor always present");
+    }
+
+    /// Empty anchor set -> empty (caller keeps its anchor list).
+    #[tokio::test]
+    async fn test_khop_expand_empty_anchor_is_empty() {
+        let (db, _dir) = test_db().await;
+        let expanded = db.expand_anchor_entities_khop(&[]).await.unwrap();
+        assert!(expanded.is_empty());
+    }
+
+    /// FLAG-OFF BYTE-IDENTITY: augment_with_graph with ORIGIN_ENABLE_GRAPH_KHOP
+    /// unset must be byte-identical to the flag ON at depth=0 (no expansion). The
+    /// OFF path uses the anchor entity set verbatim; depth=0 expansion returns the
+    /// deduped anchors unchanged, so the two outputs (ids + ordering + scores) match.
+    /// Locks dark-by-default: the wired k-hop branch adds nothing when not expanding.
+    #[tokio::test]
+    async fn test_augment_with_graph_khop_off_equals_depth_zero() {
+        let (db, _dir) = test_db().await;
+        let a = db
+            .store_entity("Postgres", "technology", None, None, None)
+            .await
+            .unwrap();
+        let b = db
+            .store_entity("MidNode", "thing", None, None, None)
+            .await
+            .unwrap();
+        db.create_relation(&a, &b, "related_to", None, None, None, None)
+            .await
+            .unwrap();
+        db.add_observation(&a, "Postgres is a relational database", Some("test"), None)
+            .await
+            .unwrap();
+        db.add_observation(&b, "MidNode observation alpha", Some("test"), None)
+            .await
+            .unwrap();
+
+        let off = temp_env::async_with_vars([("ORIGIN_ENABLE_GRAPH_KHOP", None::<&str>)], async {
+            db.augment_with_graph("Postgres", vec![], 25).await.unwrap()
+        })
+        .await;
+        let on_d0 = temp_env::async_with_vars(
+            [
+                ("ORIGIN_ENABLE_GRAPH_KHOP", Some("1")),
+                ("ORIGIN_GRAPH_KHOP_DEPTH", Some("0")),
+            ],
+            async { db.augment_with_graph("Postgres", vec![], 25).await.unwrap() },
+        )
+        .await;
+
+        let off_ids: Vec<(String, f32)> = off.iter().map(|r| (r.id.clone(), r.score)).collect();
+        let on_ids: Vec<(String, f32)> = on_d0.iter().map(|r| (r.id.clone(), r.score)).collect();
+        assert_eq!(
+            off_ids, on_ids,
+            "flag OFF must equal flag-ON-depth-0 (byte-identical, dark-by-default)"
+        );
+    }
+
+    /// k-hop ON (depth=2) surfaces a 2-hop entity's observation that single-hop
+    /// would miss, and never drops the anchor observations (ON output is a superset
+    /// of OFF). Proves the wired path actually reaches the k-hop observation.
+    #[tokio::test]
+    async fn test_augment_with_graph_khop_surfaces_two_hop_observation() {
+        let (db, _dir) = test_db().await;
+        let a = db
+            .store_entity("Kubernetes", "technology", None, None, None)
+            .await
+            .unwrap();
+        let mid = db
+            .store_entity("KMid", "thing", None, None, None)
+            .await
+            .unwrap();
+        let far = db
+            .store_entity("KFar", "thing", None, None, None)
+            .await
+            .unwrap();
+        db.create_relation(&a, &mid, "related_to", None, None, None, None)
+            .await
+            .unwrap();
+        db.create_relation(&mid, &far, "related_to", None, None, None, None)
+            .await
+            .unwrap();
+        db.add_observation(&a, "Kubernetes orchestrates containers", Some("test"), None)
+            .await
+            .unwrap();
+        let far_marker = "ZZZ_KHOP_FAR_MARKER zebra quasar octopus";
+        db.add_observation(&far, far_marker, Some("test"), None)
+            .await
+            .unwrap();
+
+        // Anchor on the 2-hop entity directly so the traversal target is deterministic,
+        // independent of how vector-anchor ranking orders a tiny test corpus.
+        let expanded = temp_env::async_with_vars([("ORIGIN_GRAPH_KHOP_DEPTH", Some("2"))], async {
+            db.expand_anchor_entities_khop(std::slice::from_ref(&a))
+                .await
+                .unwrap()
+        })
+        .await;
+        assert!(
+            expanded.contains(&far),
+            "depth=2 traversal from the anchor reaches the 2-hop entity"
+        );
+
+        // And the observation join over the expanded set returns the far marker.
+        let obs = db
+            .get_observations_for_entities(&expanded, 25)
+            .await
+            .unwrap();
+        assert!(
+            obs.iter()
+                .any(|r| r.content.contains("ZZZ_KHOP_FAR_MARKER")),
+            "expanded-set observation join surfaces the 2-hop marker"
+        );
+
+        // Full augment ON must be a superset of augment OFF (never drops anchors).
+        let off = temp_env::async_with_vars([("ORIGIN_ENABLE_GRAPH_KHOP", None::<&str>)], async {
+            db.augment_with_graph("Kubernetes", vec![], 25)
+                .await
+                .unwrap()
+        })
+        .await;
+        let on = temp_env::async_with_vars(
+            [
+                ("ORIGIN_ENABLE_GRAPH_KHOP", Some("1")),
+                ("ORIGIN_GRAPH_KHOP_DEPTH", Some("2")),
+            ],
+            async {
+                db.augment_with_graph("Kubernetes", vec![], 25)
+                    .await
+                    .unwrap()
+            },
+        )
+        .await;
+        let off_ids: std::collections::HashSet<String> = off.iter().map(|r| r.id.clone()).collect();
+        let on_ids: std::collections::HashSet<String> = on.iter().map(|r| r.id.clone()).collect();
+        assert!(
+            off_ids.is_subset(&on_ids),
+            "k-hop ON must not drop any observation the single-hop path returned"
+        );
+    }
+
     // ==================== T9: wide-pool-seeded graph expansion ====================
 
     /// Verify expand_entities_khop depth=1 gives neighbors, depth=0 gives seeds only.

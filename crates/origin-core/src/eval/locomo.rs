@@ -1260,6 +1260,20 @@ pub async fn run_locomo_eval_cross_rerank_from_db(
     if let Some(depth) = graph_seed_depth {
         variant_tag.push_str(&format!("__graph_seed_d{}", depth));
     }
+    // T4b: append __graph_khop_d{depth} suffix when ORIGIN_ENABLE_GRAPH_KHOP is on.
+    // Honest config stamp: this runner calls search_memory_cross_rerank ->
+    // augment_with_graph, where the k-hop expansion lives, so the flag genuinely
+    // changes the retrieval path. No accuracy claim is encoded by the tag.
+    let graph_khop_depth = if crate::db::khop_traversal_enabled() {
+        Some(crate::retrieval::traversal::parse_khop_depth(
+            std::env::var("ORIGIN_GRAPH_KHOP_DEPTH").ok().as_deref(),
+        ))
+    } else {
+        None
+    };
+    if let Some(depth) = graph_khop_depth {
+        variant_tag.push_str(&format!("__graph_khop_d{}", depth));
+    }
     // T19: append __query_intent suffix when ORIGIN_ENABLE_QUERY_INTENT is on.
     let query_intent_state = if crate::retrieval::query_intent::query_intent_enabled() {
         variant_tag.push_str("__query_intent");
@@ -1309,6 +1323,11 @@ pub async fn run_locomo_eval_cross_rerank_from_db(
         env_stamp.flags.push(format!("graph_seed=on_d{}", depth));
     } else {
         env_stamp.flags.push("graph_seed=off".to_string());
+    }
+    if let Some(depth) = graph_khop_depth {
+        env_stamp.flags.push(format!("graph_khop=on_d{}", depth));
+    } else {
+        env_stamp.flags.push("graph_khop=off".to_string());
     }
     env_stamp
         .flags
