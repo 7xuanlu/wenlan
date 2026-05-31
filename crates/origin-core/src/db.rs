@@ -16067,6 +16067,9 @@ impl MemoryDB {
         merged_content: &str,
         title: Option<&str>,
     ) -> Result<String, OriginError> {
+        // TODO(T17): shrink-guard deferred -- apply_merge_by_tier passes only source_ids+merged_content
+        // (no source bodies); a shrink-guard here needs an extra DB read. Unblock when T14 adds a
+        // production caller that carries source bodies through the call chain.
         // Get metadata from the first source memory
         let conn = self.conn.lock().await;
         let mut rows = conn.query(
@@ -19004,6 +19007,8 @@ impl MemoryDB {
     /// Preserves: title, source, source_id, memory_type, domain, entity_id, confirmed,
     /// stability, quality, structured_fields, created_at, and all other metadata.
     /// Updates: content, embedding, version, changelog, last_modified, word_count.
+    // TODO(T17): shrink-guard deferred -- upsert_memory_in_place has only #[cfg(test)]
+    // callers (db.rs tests). No production shrink-guard needed until a production caller appears.
     pub async fn upsert_memory_in_place(
         &self,
         source_id: &str,

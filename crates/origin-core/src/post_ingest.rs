@@ -573,6 +573,23 @@ pub(crate) async fn grow_page(
         return Ok(false);
     }
 
+    // Shrink-guard pre-check (T17): early-exit before calling update_page.
+    // update_page has its own shrink-guard backstop, but this early-exit
+    // preserves the Ok(false) contract (skipped-growth) rather than Err.
+    // Matches the is_empty() early-return contract at line 572.
+    if let Some(threshold) = crate::post_write::merge_shrink_threshold() {
+        if !crate::retrieval::integrity::body_shrink_ok(&page.content, updated, threshold) {
+            log::warn!(
+                "[grow_page] shrink-guard skipped growth for page {}: new body ({} chars) < {}% of old ({} chars)",
+                page.id,
+                updated.chars().count(),
+                (threshold * 100.0) as u32,
+                page.content.chars().count(),
+            );
+            return Ok(false);
+        }
+    }
+
     // Update page with new content + add source memory
     let mut source_ids = page.source_memory_ids.clone();
     if !source_ids.contains(&source_id.to_string()) {

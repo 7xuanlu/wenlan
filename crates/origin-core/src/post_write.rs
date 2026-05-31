@@ -565,6 +565,26 @@ fn skip_hallucination_guard(edited_by: &str) -> bool {
     )
 }
 
+/// True iff edited_by names an LLM-rewrite path checked by the shrink-guard.
+/// Inverse-intent twin of skip_hallucination_guard -- same match arms.
+/// Do NOT merge: skip_hallucination_guard skips; is_llm_rewrite enables.
+fn is_llm_rewrite(edited_by: &str) -> bool {
+    matches!(
+        edited_by,
+        "distill" | "re_distill" | "page_growth" | "refinery_merge"
+    )
+}
+
+/// Parse ORIGIN_MERGE_SHRINK_GUARD env var as f64 threshold.
+/// Returns Some(t) when set to a valid float; None when unset/unparseable
+/// (guard OFF = byte-identical behavior to pre-T17).
+/// Mirrors page_channel_enabled() env-read discipline in db.rs.
+pub(crate) fn merge_shrink_threshold() -> Option<f64> {
+    std::env::var("ORIGIN_MERGE_SHRINK_GUARD")
+        .ok()
+        .and_then(|v| v.trim().parse::<f64>().ok())
+}
+
 /// Update a distilled wiki page. Canonical entry for all page-update paths:
 /// daemon-internal distillation, refinery re-distill, fs watcher, and
 /// future agent-HTTP routes.
@@ -622,6 +642,32 @@ pub async fn update_page(
         .ok_or_else(|| OriginError::Validation(format!("page '{page_id}' does not exist")))?;
     let current_version = current.version;
     let new_version = current_version + 1;
+
+    // Shrink-guard (T17): opt-in via ORIGIN_MERGE_SHRINK_GUARD=<f64>.
+    // OFF by default: unset/unparseable = None = zero regression.
+    // Only fires for LLM-rewrite edited_by; human edits are never blocked.
+    // Placed AFTER current page load (needs old body), BEFORE early-return.
+    // NOT inside the skip_hallucination_guard block: that skips page_growth/re_distill.
+    if is_llm_rewrite(edited_by) {
+        if let Some(threshold) = merge_shrink_threshold() {
+            if !crate::retrieval::integrity::body_shrink_ok(
+                &current.content,
+                &req.content,
+                threshold,
+            ) {
+                log::warn!(
+                    "[update_page] shrink-guard rejected {edited_by} on {page_id}: new body ({} chars) < {}% of old ({} chars)",
+                    req.content.chars().count(),
+                    (threshold * 100.0) as u32,
+                    current.content.chars().count(),
+                );
+                return Err(OriginError::Validation(format!(
+                    "page body shrank below {:.0}% of original (shrink-guard); update rejected",
+                    threshold * 100.0
+                )));
+            }
+        }
+    }
 
     let source_refs: Vec<&str> = req.source_memory_ids.iter().map(|s| s.as_str()).collect();
 
@@ -799,6 +845,18 @@ mod tests {
     use super::*;
     use crate::events::NoopEmitter;
     use std::sync::Arc;
+
+    // Serialize env-var-sensitive tests to avoid races.
+    // Uses tokio::sync::Mutex so the guard can safely span .await points.
+    async fn env_lock() -> tokio::sync::MutexGuard<'static, ()> {
+        static ENV_MUTEX: tokio::sync::OnceCell<tokio::sync::Mutex<()>> =
+            tokio::sync::OnceCell::const_new();
+        ENV_MUTEX
+            .get_or_init(|| async { tokio::sync::Mutex::new(()) })
+            .await
+            .lock()
+            .await
+    }
 
     async fn test_db() -> (MemoryDB, tempfile::TempDir) {
         let dir = tempfile::tempdir().unwrap();
@@ -2065,5 +2123,178 @@ mod tests {
             assert!(!new2, "bulk near-dup must resolve to existing, not create");
         })
         .await;
+    }
+
+    // Integration tests: update_page shrink-guard
+
+    #[tokio::test]
+    async fn update_page_shrink_guard_rejects_truncation() {
+        let _lock = env_lock().await;
+        // Guard ON + LLM-rewrite caller + body shrinks below threshold -> Err + DB unchanged
+        std::env::set_var("ORIGIN_MERGE_SHRINK_GUARD", "0.7");
+        let (db, _dir) = test_db().await;
+        let mem_id = "mem-sg-reject";
+        // 100-char body
+        let old_body = "a".repeat(100);
+        seed_memory(&db, mem_id, &old_body).await;
+        let page_id = seed_page(&db, mem_id, &old_body).await;
+
+        // New body is only 60 chars: 60 < 100 * 0.7 = 70 -> should reject
+        let short_body = "a".repeat(60);
+        let req = UpdatePageRequest {
+            content: short_body,
+            source_memory_ids: vec![mem_id.to_string()],
+        };
+        let result = update_page(&db, &page_id, req, "distill", false, None).await;
+        assert!(
+            matches!(result, Err(OriginError::Validation(_))),
+            "shrink-guard must reject truncated LLM rewrite"
+        );
+
+        // DB must still have the ORIGINAL body
+        let page = db.get_page(&page_id).await.unwrap().unwrap();
+        assert_eq!(
+            page.content,
+            "a".repeat(100),
+            "body must be unchanged after rejection"
+        );
+        assert_eq!(page.version, 1, "version must not bump on rejection");
+        std::env::remove_var("ORIGIN_MERGE_SHRINK_GUARD");
+    }
+
+    #[tokio::test]
+    async fn update_page_shrink_guard_allows_growth() {
+        let _lock = env_lock().await;
+        // Guard ON + LLM-rewrite caller + body grows -> Ok
+        std::env::set_var("ORIGIN_MERGE_SHRINK_GUARD", "0.7");
+        let (db, _dir) = test_db().await;
+        let mem_id = "mem-sg-grow";
+        let old_body = "a".repeat(50);
+        seed_memory(&db, mem_id, &old_body).await;
+        let page_id = seed_page(&db, mem_id, &old_body).await;
+
+        let long_body = "a".repeat(200);
+        let req = UpdatePageRequest {
+            content: long_body.clone(),
+            source_memory_ids: vec![mem_id.to_string()],
+        };
+        let result = update_page(&db, &page_id, req, "page_growth", false, None).await;
+        assert!(result.is_ok(), "shrink-guard must allow growing body");
+        let page = db.get_page(&page_id).await.unwrap().unwrap();
+        assert_eq!(page.content, long_body);
+        std::env::remove_var("ORIGIN_MERGE_SHRINK_GUARD");
+    }
+
+    #[tokio::test]
+    async fn update_page_shrink_guard_off_by_default() {
+        let _lock = env_lock().await;
+        // Guard UNSET: even extreme truncation must succeed (zero regression)
+        std::env::remove_var("ORIGIN_MERGE_SHRINK_GUARD");
+        let (db, _dir) = test_db().await;
+        let mem_id = "mem-sg-off";
+        let old_body = "a".repeat(100);
+        seed_memory(&db, mem_id, &old_body).await;
+        let page_id = seed_page(&db, mem_id, &old_body).await;
+
+        let tiny_body = "a".repeat(5); // 5 < 100 * 0.7 = 70, would fail if guard were ON
+        let req = UpdatePageRequest {
+            content: tiny_body.clone(),
+            source_memory_ids: vec![mem_id.to_string()],
+        };
+        let result = update_page(&db, &page_id, req, "distill", false, None)
+            .await
+            .unwrap();
+        assert!(result.wrote, "guard OFF must allow any size update");
+        let page = db.get_page(&page_id).await.unwrap().unwrap();
+        assert_eq!(
+            page.content, tiny_body,
+            "content must update when guard is OFF"
+        );
+    }
+
+    #[tokio::test]
+    async fn update_page_shrink_guard_skips_human_edits() {
+        let _lock = env_lock().await;
+        // Guard ON + human edited_by: guard never fires, update goes through
+        std::env::set_var("ORIGIN_MERGE_SHRINK_GUARD", "0.7");
+        let (db, _dir) = test_db().await;
+        let mem_id = "mem-sg-human";
+        let old_body = "a".repeat(100);
+        seed_memory(&db, mem_id, &old_body).await;
+        let page_id = seed_page(&db, mem_id, &old_body).await;
+
+        // 5 chars: would fail guard if LLM rewrite, but "manual_edit" is human
+        let tiny_body = "a".repeat(5);
+        let req = UpdatePageRequest {
+            content: tiny_body.clone(),
+            source_memory_ids: vec![mem_id.to_string()],
+        };
+        // manual_edit bypasses hallucination guard AND is NOT an LLM rewrite
+        // so shrink-guard must NOT fire even though the body shrinks drastically
+        // (hallucination guard WILL fire for manual_edit -- seed with real-ish content)
+        // Actually manual_edit triggers hallucination guard, so use fs_edit instead
+        let result = update_page(&db, &page_id, req, "fs_edit", false, None).await;
+        // fs_edit IS guarded by hallucination guard and will likely fail cos-sim check.
+        // The key assertion: if it fails, it must NOT be a shrink-guard Validation error.
+        // If it succeeds, the body must be updated.
+        match result {
+            Ok(wr) => {
+                // Succeeded: body updated (hallucination guard passed)
+                if wr.wrote {
+                    let page = db.get_page(&page_id).await.unwrap().unwrap();
+                    assert_eq!(page.content, tiny_body);
+                }
+            }
+            Err(OriginError::Validation(msg)) => {
+                // Hallucination guard may reject: ensure it is NOT a shrink-guard message
+                assert!(
+                    !msg.contains("shrink-guard"),
+                    "human edit must not be rejected by shrink-guard; got: {msg}"
+                );
+            }
+            Err(e) => panic!("unexpected error: {e:?}"),
+        }
+        std::env::remove_var("ORIGIN_MERGE_SHRINK_GUARD");
+    }
+
+    // merge_shrink_threshold parse tests
+
+    #[test]
+    fn merge_shrink_threshold_unset_returns_none() {
+        std::env::remove_var("ORIGIN_MERGE_SHRINK_GUARD");
+        assert!(merge_shrink_threshold().is_none());
+    }
+
+    #[test]
+    fn merge_shrink_threshold_valid_float() {
+        std::env::set_var("ORIGIN_MERGE_SHRINK_GUARD", "0.7");
+        assert_eq!(merge_shrink_threshold(), Some(0.7));
+        std::env::remove_var("ORIGIN_MERGE_SHRINK_GUARD");
+    }
+
+    #[test]
+    fn merge_shrink_threshold_garbage_returns_none() {
+        std::env::set_var("ORIGIN_MERGE_SHRINK_GUARD", "garbage");
+        assert!(merge_shrink_threshold().is_none());
+        std::env::remove_var("ORIGIN_MERGE_SHRINK_GUARD");
+    }
+
+    // is_llm_rewrite tests
+
+    #[test]
+    fn is_llm_rewrite_distill_true() {
+        assert!(is_llm_rewrite("distill"));
+        assert!(is_llm_rewrite("re_distill"));
+        assert!(is_llm_rewrite("page_growth"));
+        assert!(is_llm_rewrite("refinery_merge"));
+    }
+
+    #[test]
+    fn is_llm_rewrite_user_false() {
+        assert!(!is_llm_rewrite("user"));
+        assert!(!is_llm_rewrite("manual_edit"));
+        assert!(!is_llm_rewrite("fs_edit"));
+        assert!(!is_llm_rewrite("api"));
+        assert!(!is_llm_rewrite(""));
     }
 }
