@@ -333,6 +333,102 @@ pub fn extract_cue(query: &str, now: DateTime<Utc>) -> Option<ExtractedCue> {
     None
 }
 
+/// Rewrite relative date phrases in stored memory prose to include absolute dates.
+///
+/// This is the deterministic write-time prose grounder for T11. It is called at
+/// store time (inside `upsert_documents`) when `ORIGIN_ENABLE_TEMPORAL_GROUNDING`
+/// is set to a truthy value, **before** the content is embedded or inserted into
+/// the database, so the embedder and FTS index both see the grounded text.
+///
+/// ## Contract
+///
+/// - **APPEND, not replace**: `"met her yesterday"` -> `"met her yesterday (2026-04-30)"`.
+///   The original phrasing is preserved, making idempotency trivial.
+/// - **IDEMPOTENT**: if a phrase is already followed by `(YYYY-MM-DD)` it is
+///   skipped. Running `ground_relative_dates` twice produces the same output.
+/// - **Observation-anchored**: the reference clock is `observation_date`, which is
+///   the memory's `last_modified` timestamp. For realtime ingest, `last_modified`
+///   is set to `Utc::now()` at request time, so it ≈ the event time and grounding
+///   is event-accurate. For delayed / backfill / import ingest, `last_modified` is
+///   the IMPORT time, not the time the event was originally written, so "yesterday"
+///   anchors to import time — grounding is only event-accurate for realtime
+///   capture. A true event-clock would need a separate `event_timestamp` field on
+///   `RawDocument` (follow-up).
+/// - **Safe subset only (v1)**: only `yesterday`, `today`, and `tomorrow` are
+///   grounded. Vague anaphors like "recently" or "last week" are NOT grounded —
+///   they carry too much ambiguity to produce a correct absolute date without
+///   additional context.
+/// - **Possessive-safe**: a match immediately followed by an apostrophe
+///   (`today's meeting`) is skipped — `\b` fires before the `'`, so grounding it
+///   would corrupt the prose into `today (2026-05-01)'s meeting`. The Rust `regex`
+///   crate has no lookahead, so this is handled in code by inspecting the char
+///   after the match.
+/// - **UTF-8 safe**: uses regex match offsets on validated UTF-8 text; no raw
+///   byte-slicing outside of regex-returned boundaries.
+///
+/// ## Deferred (T11 follow-ups)
+///
+/// - Grounding `last week`, `last month`, N-ago, and explicit quarters.
+/// - LLM-prompt `{observation_date}` injection (T11 steps 2-3).
+/// - Server dead-module swap (T11 step 6).
+/// - Eval seed-date plumbing (T11 step 7).
+pub(crate) fn ground_relative_dates(content: &str, observation_date: DateTime<Utc>) -> String {
+    let today = observation_date.date_naive();
+
+    // RE_ALREADY_GROUNDED: detect whether the text immediately after a match
+    // is already an absolute date annotation `(YYYY-MM-DD)` — the idempotency
+    // guard. Defined as a module-level LazyLock so it compiles once.
+    static RE_ALREADY_GROUNDED: LazyLock<Regex> =
+        LazyLock::new(|| Regex::new(r"^\s*\(\d{4}-\d{2}-\d{2}\)").unwrap());
+
+    // Collect (start, end, replacement) patches, applied in reverse byte order
+    // so earlier offsets remain valid after each splice.
+    let mut patches: Vec<(usize, usize, String)> = Vec::new();
+
+    // Safe anchorable set (v1): yesterday / today / tomorrow only.
+    // Vague phrases ("recently", "last week") deferred to v2.
+    let candidates: &[(&LazyLock<Regex>, chrono::NaiveDate)] = &[
+        (&RE_YESTERDAY, today - Duration::days(1)),
+        (&RE_TODAY, today),
+        (&RE_TOMORROW, today + Duration::days(1)),
+    ];
+
+    for (re, date) in candidates {
+        for m in re.find_iter(content) {
+            let after = &content[m.end()..];
+            // Possessive-safe: \b fires before an apostrophe because ' is not
+            // an ASCII word char, so "today's" matches "today". Grounding it would
+            // corrupt prose into "today (2026-05-01)'s meeting". The Rust regex crate
+            // has no lookahead, so skip the occurrence in code when the next char is
+            // an apostrophe (straight or typographic).
+            if matches!(after.chars().next(), Some('\'') | Some('\u{2019}')) {
+                continue;
+            }
+            // Idempotency: skip if the match is already followed by (YYYY-MM-DD).
+            if RE_ALREADY_GROUNDED.is_match(after) {
+                continue;
+            }
+            // Append the absolute date in parentheses, preserving original text.
+            let replacement = format!("{} ({})", m.as_str(), date.format("%Y-%m-%d"));
+            patches.push((m.start(), m.end(), replacement));
+        }
+    }
+
+    if patches.is_empty() {
+        return content.to_owned();
+    }
+
+    // Sort descending by start offset so back-to-front splicing keeps earlier
+    // offsets valid.
+    patches.sort_by_key(|p| std::cmp::Reverse(p.0));
+
+    let mut result = content.to_owned();
+    for (start, end, replacement) in patches {
+        result.replace_range(start..end, &replacement);
+    }
+    result
+}
+
 /// Extract a temporal cue from memory *content* for ingest backfill.
 ///
 /// Unlike [`extract_cue`] (designed for search queries), this function only
@@ -530,5 +626,205 @@ mod tests {
         let now = Utc::now();
         // Implementation may return None OR a valid range; must not panic.
         let _ = extract_cue("from March to January", now);
+    }
+
+    // ── T11: ground_relative_dates unit tests ──────────────────────────────────
+
+    #[test]
+    fn ground_yesterday_appends_absolute() {
+        let obs = "2026-05-01T12:00:00Z".parse::<DateTime<Utc>>().unwrap();
+        let result = ground_relative_dates("met her yesterday", obs);
+        assert!(
+            result.contains("yesterday (2026-04-30)"),
+            "expected yesterday (2026-04-30) in {:?}",
+            result
+        );
+    }
+
+    #[test]
+    fn ground_today_appends_absolute() {
+        let obs = "2026-05-01T12:00:00Z".parse::<DateTime<Utc>>().unwrap();
+        let result = ground_relative_dates("shipped today", obs);
+        assert!(
+            result.contains("today (2026-05-01)"),
+            "expected today (2026-05-01) in {:?}",
+            result
+        );
+    }
+
+    #[test]
+    fn ground_tomorrow_appends_absolute() {
+        let obs = "2026-05-01T12:00:00Z".parse::<DateTime<Utc>>().unwrap();
+        let result = ground_relative_dates("meeting tomorrow", obs);
+        assert!(
+            result.contains("tomorrow (2026-05-02)"),
+            "expected tomorrow (2026-05-02) in {:?}",
+            result
+        );
+    }
+
+    /// Grounder uses observation_date not Utc::now() as the reference clock.
+    #[test]
+    fn ground_anchors_to_observation_not_now() {
+        let obs = "2026-01-15T00:00:00Z".parse::<DateTime<Utc>>().unwrap();
+        let result = ground_relative_dates("I met him yesterday", obs);
+        // Must anchor to 2026-01-14 (obs - 1 day), not the system date.
+        assert!(
+            result.contains("yesterday (2026-01-14)"),
+            "expected yesterday (2026-01-14) anchored to obs date, got {:?}",
+            result
+        );
+        let todays_date = Utc::now().date_naive().format("%Y-%m-%d").to_string();
+        if todays_date != "2026-01-14" {
+            // If system date differs from 2026-01-14, it must NOT appear.
+            let wrong = format!("yesterday ({})", todays_date);
+            assert!(
+                !result.contains(&wrong),
+                "grounder must NOT use Utc::now(); found today's date in {:?}",
+                result
+            );
+        }
+    }
+
+    #[test]
+    fn ground_idempotent() {
+        let obs = "2026-05-01T00:00:00Z".parse::<DateTime<Utc>>().unwrap();
+        let inputs = [
+            "met her yesterday",
+            "delivered today",
+            "meeting tomorrow",
+            "no temporal phrase here",
+        ];
+        for input in &inputs {
+            let once = ground_relative_dates(input, obs);
+            let twice = ground_relative_dates(&once, obs);
+            assert_eq!(
+                once, twice,
+                "ground_relative_dates must be idempotent for input {:?}",
+                input
+            );
+        }
+    }
+
+    #[test]
+    fn ground_no_relative_phrase_unchanged() {
+        let obs = "2026-05-01T00:00:00Z".parse::<DateTime<Utc>>().unwrap();
+        let content = "the database password is hunter2";
+        let result = ground_relative_dates(content, obs);
+        assert_eq!(
+            result, content,
+            "non-temporal content must be byte-identical"
+        );
+    }
+
+    #[test]
+    fn ground_vague_phrase_not_grounded_v1() {
+        let obs = "2026-05-01T00:00:00Z".parse::<DateTime<Utc>>().unwrap();
+        for phrase in &["recently", "last week", "a while ago", "sometime ago"] {
+            let result = ground_relative_dates(phrase, obs);
+            assert_eq!(
+                &result, phrase,
+                "vague phrase {:?} must not be grounded in v1",
+                phrase
+            );
+        }
+    }
+
+    /// Non-ASCII content (emoji, CJK) must not panic; the temporal phrase is still grounded.
+    #[test]
+    fn ground_utf8_no_panic() {
+        let obs = "2026-05-01T00:00:00Z".parse::<DateTime<Utc>>().unwrap();
+        // Multibyte chars around "yesterday" exercise UTF-8 boundary safety.
+        let content = "\u{65E5}\u{672C}\u{8A9E}\u{30C6}\u{30B9}\u{30C8} shipped yesterday in \u{6771}\u{4EAC}";
+        let result = ground_relative_dates(content, obs);
+        assert!(
+            result.contains("yesterday (2026-04-30)"),
+            "expected yesterday grounded in multibyte content, got {:?}",
+            result
+        );
+        assert!(result.contains('\u{6771}'), "CJK text must be preserved");
+    }
+
+    #[test]
+    fn ground_empty_and_whitespace_unchanged() {
+        let obs = "2026-05-01T00:00:00Z".parse::<DateTime<Utc>>().unwrap();
+        assert_eq!(ground_relative_dates("", obs), "");
+        assert_eq!(ground_relative_dates("   ", obs), "   ");
+    }
+
+    #[test]
+    fn ground_multiple_phrases_in_one_string() {
+        let obs = "2026-05-01T12:00:00Z".parse::<DateTime<Utc>>().unwrap();
+        let content = "I met her yesterday and the demo is tomorrow";
+        let result = ground_relative_dates(content, obs);
+        assert!(
+            result.contains("yesterday (2026-04-30)"),
+            "yesterday not grounded in {:?}",
+            result
+        );
+        assert!(
+            result.contains("tomorrow (2026-05-02)"),
+            "tomorrow not grounded in {:?}",
+            result
+        );
+    }
+
+    /// Possessive forms ("today's", "yesterday's", "tomorrow's") must NOT be
+    /// grounded — `\b` fires before the apostrophe, so grounding would corrupt
+    /// the prose into "today (2026-05-01)'s meeting".
+    #[test]
+    fn ground_possessive_not_grounded() {
+        let obs = "2026-05-01T12:00:00Z".parse::<DateTime<Utc>>().unwrap();
+        for phrase in &[
+            "today's meeting",
+            "yesterday's standup",
+            "tomorrow's deadline",
+        ] {
+            let result = ground_relative_dates(phrase, obs);
+            assert_eq!(
+                &result, phrase,
+                "possessive {:?} must not be grounded",
+                phrase
+            );
+        }
+    }
+
+    /// Typographic apostrophe (U+2019) possessive must also be skipped.
+    #[test]
+    fn ground_typographic_possessive_not_grounded() {
+        let obs = "2026-05-01T12:00:00Z".parse::<DateTime<Utc>>().unwrap();
+        let phrase = "today\u{2019}s meeting";
+        let result = ground_relative_dates(phrase, obs);
+        assert_eq!(
+            result, phrase,
+            "typographic possessive must not be grounded"
+        );
+    }
+
+    /// Non-possessive trailing chars (period, comma, space, end-of-string) MUST
+    /// still ground — the possessive skip must not over-match.
+    #[test]
+    fn ground_non_possessive_trailing_still_grounds() {
+        let obs = "2026-05-01T12:00:00Z".parse::<DateTime<Utc>>().unwrap();
+        // trailing period
+        assert!(
+            ground_relative_dates("shipped today.", obs).contains("today (2026-05-01)."),
+            "trailing period must still ground"
+        );
+        // trailing comma
+        assert!(
+            ground_relative_dates("today, we shipped", obs).contains("today (2026-05-01),"),
+            "trailing comma must still ground"
+        );
+        // trailing space
+        assert!(
+            ground_relative_dates("today we shipped", obs).contains("today (2026-05-01) we"),
+            "trailing space must still ground"
+        );
+        // end of string
+        assert!(
+            ground_relative_dates("we shipped today", obs).contains("today (2026-05-01)"),
+            "end-of-string must still ground"
+        );
     }
 }
