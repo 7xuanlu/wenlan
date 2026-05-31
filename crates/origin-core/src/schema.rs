@@ -150,6 +150,40 @@ pub fn flatten_structured_fields(json_str: &str) -> Option<String> {
     )
 }
 
+/// Split structured_fields JSON into one "key: value" string per scalar field
+/// (T15a fact-channel producer). Sibling of [`flatten_structured_fields`]: same
+/// serde parse, same scalar-coercion filter (non-empty String / Bool / Number),
+/// same key-sort for determinism, but emits ONE child string per field instead
+/// of a single pipe-joined line.
+///
+/// Returns `vec![]` (never a panic, never `vec![""]`) when the JSON is invalid,
+/// empty, or carries no coercible scalar fields. Empty-string values are
+/// filtered exactly like `flatten_structured_fields` (the PR-#147 silent-zero
+/// guard class).
+pub fn split_structured_fields_to_facts(json_str: &str) -> Vec<String> {
+    let map: serde_json::Map<String, serde_json::Value> = match serde_json::from_str(json_str) {
+        Ok(m) => m,
+        Err(_) => return Vec::new(),
+    };
+    let mut pairs: Vec<(String, String)> = map
+        .into_iter()
+        .filter_map(|(k, v)| {
+            let val = match v {
+                serde_json::Value::String(s) if !s.is_empty() => s,
+                serde_json::Value::Bool(b) => b.to_string(),
+                serde_json::Value::Number(n) => n.to_string(),
+                _ => return None,
+            };
+            Some((k, val))
+        })
+        .collect();
+    pairs.sort_by(|a, b| a.0.cmp(&b.0));
+    pairs
+        .into_iter()
+        .map(|(k, v)| format!("{}: {}", k, v))
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -335,5 +369,49 @@ mod tests {
         assert!(s.optional.contains(&"alternatives_considered"));
         assert!(s.optional.contains(&"date"));
         assert!(s.optional.contains(&"reversible"));
+    }
+
+    // ── T15a: split_structured_fields_to_facts ────────────────────────────────
+
+    #[test]
+    fn split_structured_fields_empty_returns_empty() {
+        assert_eq!(split_structured_fields_to_facts("{}"), Vec::<String>::new());
+        assert_eq!(
+            split_structured_fields_to_facts("not json"),
+            Vec::<String>::new()
+        );
+        assert_eq!(split_structured_fields_to_facts(""), Vec::<String>::new());
+        // An object with only non-coercible values yields no children.
+        assert_eq!(
+            split_structured_fields_to_facts("{\"a\":null,\"b\":[1,2]}"),
+            Vec::<String>::new()
+        );
+    }
+
+    #[test]
+    fn split_structured_fields_one_per_field() {
+        // Two scalar fields -> exactly two children, key-sorted.
+        let out = split_structured_fields_to_facts("{\"date\":\"2024-03-01\",\"city\":\"Tokyo\"}");
+        assert_eq!(
+            out,
+            vec!["city: Tokyo".to_string(), "date: 2024-03-01".to_string()]
+        );
+    }
+
+    #[test]
+    fn split_structured_fields_stringifies_non_string_scalars() {
+        // Bool + Number coerced like flatten_structured_fields.
+        let out = split_structured_fields_to_facts("{\"active\":true,\"count\":3}");
+        assert_eq!(
+            out,
+            vec!["active: true".to_string(), "count: 3".to_string()]
+        );
+    }
+
+    #[test]
+    fn split_structured_fields_skips_empty_values() {
+        // Empty-string value filtered; only the non-empty field survives.
+        let out = split_structured_fields_to_facts("{\"a\":\"\",\"b\":\"x\"}");
+        assert_eq!(out, vec!["b: x".to_string()]);
     }
 }
