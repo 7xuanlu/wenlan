@@ -427,6 +427,21 @@ pub fn page_channel_enabled() -> bool {
         .unwrap_or(false)
 }
 
+/// True iff `ORIGIN_ENABLE_GRAPH_GATE` is set to a truthy value
+/// (`1`, `true`, or `yes`, case-insensitive). OPT-IN: when unset or falsey,
+/// `augment_with_graph` runs unconditionally (legacy behavior, byte-identical).
+/// When enabled, the graph hop is skipped for queries that don't warrant it —
+/// no relational/temporal phrasing and no entity anchor — saving a second
+/// entity-vector embedding + DiskANN k-NN + observation join on single-fact
+/// lookups. See [`crate::retrieval::signals::query_warrants_graph`]. The gate is
+/// strictly a cost/noise saver: ambiguous queries still augment.
+pub fn graph_gate_enabled() -> bool {
+    std::env::var("ORIGIN_ENABLE_GRAPH_GATE")
+        .ok()
+        .map(|v| matches!(v.trim().to_ascii_lowercase().as_str(), "1" | "true" | "yes"))
+        .unwrap_or(false)
+}
+
 /// Bigram Jaccard similarity between two strings (0.0–1.0).
 /// Used for content-based deduplication in search results.
 fn bigram_jaccard(a: &str, b: &str) -> f64 {
@@ -7087,7 +7102,13 @@ impl MemoryDB {
         // --- Graph augmentation (knowledge graph as third RRF signal) ---
         // Drop the conn lock first — augment_with_graph acquires it internally.
         drop(conn);
-        final_results = self.augment_with_graph(query, final_results, limit).await?;
+        // Graph gate (ORIGIN_ENABLE_GRAPH_GATE, opt-in): when enabled, skip the
+        // graph hop for queries that warrant no traversal (no relational/temporal
+        // phrasing, no entity anchor). When the gate is off, always augment —
+        // behavior is byte-identical to before this gate existed.
+        if !graph_gate_enabled() || crate::retrieval::signals::query_warrants_graph(query) {
+            final_results = self.augment_with_graph(query, final_results, limit).await?;
+        }
 
         // Deduplicate: keep only the best-scoring chunk per source document.
         // This prevents recap entries and multi-chunk documents from flooding results.
