@@ -6640,6 +6640,11 @@ impl MemoryDB {
         // --- FTS search ---
         let mut fts_results: Vec<SearchResult> = Vec::new();
         {
+            use crate::retrieval::fts_query::{
+                build_relaxed_or, fts_length_exceeded, fts_recall_hardening_enabled,
+                sanitize_fts_query, stopwords,
+            };
+
             // Renumber placeholders: ?1 = query, ?2 = fetch_limit, ?3.. = filters.
             let mut fts_where_parts: Vec<String> = Vec::new();
             let mut param_idx = 3usize;
@@ -6678,23 +6683,47 @@ impl MemoryDB {
                 supersedes_exclusion, fts_extra
             );
 
-            let mut params: Vec<libsql::Value> = vec![
-                libsql::Value::Text(query.to_string()),
-                libsql::Value::Integer(fetch_limit),
-            ];
-            params.extend(filter_values.clone());
+            // Build the list of FTS queries to try. Flag OFF: the legacy single
+            // AND query (search() never had an OR fallback). Flag ON: sanitized
+            // AND + eligibility-gated relaxed-OR; overlong queries (>128 tokens)
+            // skip the FTS block so RRF degrades to vector-only by construction.
+            let fts_queries: Vec<String> = if fts_recall_hardening_enabled() {
+                if fts_length_exceeded(query, 128) {
+                    vec![] // skip FTS; vector-only path
+                } else {
+                    let mut v = vec![sanitize_fts_query(query)];
+                    if let Some(or) = build_relaxed_or(query, stopwords()) {
+                        v.push(or);
+                    }
+                    v
+                }
+            } else {
+                // Flag OFF: exact legacy path (byte-identical)
+                vec![query.to_string()]
+            };
 
-            match conn.query(&fts_sql, params).await {
-                Ok(mut rows) => {
-                    while let Ok(Some(row)) = rows.next().await {
-                        let rank: f64 = row.get(30).unwrap_or(0.0);
-                        if let Ok(result) = Self::row_to_search_result(&row, rank as f32) {
-                            fts_results.push(result);
+            for fts_query in &fts_queries {
+                let mut params: Vec<libsql::Value> = vec![
+                    libsql::Value::Text(fts_query.clone()),
+                    libsql::Value::Integer(fetch_limit),
+                ];
+                params.extend(filter_values.clone());
+
+                match conn.query(&fts_sql, params).await {
+                    Ok(mut rows) => {
+                        while let Ok(Some(row)) = rows.next().await {
+                            let rank: f64 = row.get(30).unwrap_or(0.0);
+                            if let Ok(result) = Self::row_to_search_result(&row, rank as f32) {
+                                fts_results.push(result);
+                            }
                         }
                     }
+                    Err(e) => {
+                        log::warn!("[memory_db] FTS search failed: {}", e);
+                    }
                 }
-                Err(e) => {
-                    log::warn!("[memory_db] FTS search failed: {}", e);
+                if !fts_results.is_empty() {
+                    break; // AND matched; skip relaxed-OR fallback
                 }
             }
         }
@@ -6933,7 +6962,28 @@ impl MemoryDB {
             // Try AND matching first (implicit FTS5 default), fall back to OR
             // if no results. OR matching broadens recall for multi-word queries
             // where no single document contains all terms.
-            let fts_queries = vec![query.to_string(), Self::fts_or_query(query)];
+            //
+            // When hardening is enabled: sanitize to neutralize FTS5 operators;
+            // skip the FTS block entirely for overlong queries (>128 tokens) so
+            // RRF degrades to vector-only by construction.
+            use crate::retrieval::fts_query::{
+                build_relaxed_or, fts_length_exceeded, fts_recall_hardening_enabled,
+                sanitize_fts_query, stopwords,
+            };
+            let fts_queries: Vec<String> = if fts_recall_hardening_enabled() {
+                if fts_length_exceeded(query, 128) {
+                    vec![] // skip FTS; vector-only path
+                } else {
+                    let mut v = vec![sanitize_fts_query(query)];
+                    if let Some(or) = build_relaxed_or(query, stopwords()) {
+                        v.push(or);
+                    }
+                    v
+                }
+            } else {
+                // Flag OFF: exact legacy path (byte-identical)
+                vec![query.to_string(), Self::fts_or_query(query)]
+            };
 
             for fts_query in &fts_queries {
                 let mut params: Vec<libsql::Value> = vec![
@@ -8068,8 +8118,27 @@ impl MemoryDB {
             space_clause
         );
 
-        // AND match first, fall back to OR for multi-word queries
-        let fts_queries = vec![query.to_string(), Self::fts_or_query(query)];
+        // AND match first, fall back to OR for multi-word queries.
+        // When hardening is enabled: sanitize query + eligibility-gated relaxed-OR;
+        // skip entirely for overlong queries (>128 tokens).
+        use crate::retrieval::fts_query::{
+            build_relaxed_or, fts_length_exceeded, fts_recall_hardening_enabled,
+            sanitize_fts_query, stopwords,
+        };
+        let fts_queries: Vec<String> = if fts_recall_hardening_enabled() {
+            if fts_length_exceeded(query, 128) {
+                vec![] // skip FTS; return empty (eval-only path, vector not available here)
+            } else {
+                let mut v = vec![sanitize_fts_query(query)];
+                if let Some(or) = build_relaxed_or(query, stopwords()) {
+                    v.push(or);
+                }
+                v
+            }
+        } else {
+            // Flag OFF: exact legacy path (byte-identical)
+            vec![query.to_string(), Self::fts_or_query(query)]
+        };
         let mut results: Vec<SearchResult> = Vec::new();
 
         for fts_query in &fts_queries {
@@ -16960,7 +17029,22 @@ impl MemoryDB {
              ORDER BY rank LIMIT ?2",
             concept_select,
         );
-        let fts_queries = vec![query.to_string(), Self::fts_or_query(query)];
+        // search_pages: sanitize-only when hardening enabled (no relaxed-OR for pages).
+        use crate::retrieval::fts_query::{
+            fts_length_exceeded, fts_recall_hardening_enabled, sanitize_fts_query,
+        };
+        let fts_queries: Vec<String> = if fts_recall_hardening_enabled() {
+            if fts_length_exceeded(query, 128) {
+                vec![] // skip FTS; vector-only path
+            } else {
+                // Sanitize-only: a relaxed-OR fallback here would re-introduce the
+                // unsanitized operator-error the hardening exists to remove.
+                vec![sanitize_fts_query(query)]
+            }
+        } else {
+            // Flag OFF: exact legacy path (byte-identical)
+            vec![query.to_string(), Self::fts_or_query(query)]
+        };
         for fts_q in &fts_queries {
             let fts_result = if let Some(pt) = page_type {
                 conn.query(
@@ -32102,5 +32186,198 @@ pub(crate) mod tests {
                 hits.iter().map(|r| (&r.id, &r.source)).collect::<Vec<_>>()
             );
         }
+    }
+
+    // ── T12: FTS recall hardening integration tests ──────────────────────────
+
+    /// Regression guard: with hardening OFF (default), the behavior of
+    /// `search_memory` must be byte-identical to pre-T12 — a clean query
+    /// ("rust programming") still surfaces the seeded memory.
+    #[tokio::test]
+    async fn fts_hardening_off_preserves_exact_current_behavior() {
+        let (db, _tmp) = test_db().await;
+        db.upsert_documents(vec![make_memory_doc(
+            "m_rust_prog",
+            "rust programming language systems memory safety",
+            "fact",
+            "work",
+            "claude-code",
+        )])
+        .await
+        .unwrap();
+
+        // Unset flag → legacy path
+        let results =
+            temp_env::async_with_vars([("ORIGIN_ENABLE_FTS_HARDENING", None::<&str>)], async {
+                db.search_memory("rust programming", 10, None, None, None, None, None, None)
+                    .await
+                    .unwrap()
+            })
+            .await;
+        assert!(
+            !results.is_empty(),
+            "flag-OFF: search_memory must return results for clean query"
+        );
+        assert!(
+            results.iter().any(|r| r.content.contains("rust")),
+            "flag-OFF: seeded rust memory must appear; got {:?}",
+            results.iter().map(|r| &r.content).collect::<Vec<_>>()
+        );
+
+        // Flag ON must also surface the same hit (no regression)
+        let results_on =
+            temp_env::async_with_vars([("ORIGIN_ENABLE_FTS_HARDENING", Some("1"))], async {
+                db.search_memory("rust programming", 10, None, None, None, None, None, None)
+                    .await
+                    .unwrap()
+            })
+            .await;
+        assert!(
+            results_on.iter().any(|r| r.content.contains("rust")),
+            "flag-ON: clean query must still surface the seeded memory (silent-zero guard); got {:?}",
+            results_on.iter().map(|r| &r.content).collect::<Vec<_>>()
+        );
+    }
+
+    /// With hardening ON, a query containing special FTS5 chars (parens) must
+    /// return Ok results without surfacing an FTS error, and the FTS channel
+    /// contributes hits containing the rare lexical token.
+    #[tokio::test]
+    async fn fts_hardening_on_handles_special_char_query_without_error() {
+        let (db, _tmp) = test_db().await;
+        // Seed a memory with a rare, highly-distinctive token
+        db.upsert_documents(vec![make_memory_doc(
+            "m_libsql_unique",
+            "libsqlXYZ7 database (libSQL) engine backend storage",
+            "fact",
+            "work",
+            "claude-code",
+        )])
+        .await
+        .unwrap();
+
+        // This query contains parens — FTS5 would normally error on it
+        let query = "the libsqlXYZ7 (libSQL)";
+
+        // Flag OFF: FTS branch errors, returns Ok but FTS may contribute 0 rows
+        let _results_off =
+            temp_env::async_with_vars([("ORIGIN_ENABLE_FTS_HARDENING", None::<&str>)], async {
+                db.search_memory(query, 10, None, None, None, None, None, None)
+                    .await
+                    .unwrap() // must not panic/error regardless
+            })
+            .await;
+
+        // Flag ON: sanitize_fts_query neutralizes parens, FTS channel fires
+        let results_on =
+            temp_env::async_with_vars([("ORIGIN_ENABLE_FTS_HARDENING", Some("1"))], async {
+                db.search_memory(query, 10, None, None, None, None, None, None)
+                    .await
+                    .unwrap()
+            })
+            .await;
+        // The rare token "libsqlXYZ7" is distinctive enough that the seeded
+        // memory must appear via FTS (and/or vector)
+        assert!(
+            results_on.iter().any(|r| r.content.contains("libsqlXYZ7")),
+            "flag-ON: special-char query must surface the seeded memory; got {:?}",
+            results_on.iter().map(|r| &r.content).collect::<Vec<_>>()
+        );
+    }
+
+    /// With hardening ON, an overlong query (>128 tokens) must succeed (Ok)
+    /// and return non-empty results via the vector-only path; no panic or error.
+    #[tokio::test]
+    async fn fts_hardening_on_skips_fts_for_overlong_query() {
+        let (db, _tmp) = test_db().await;
+        db.upsert_documents(vec![make_memory_doc(
+            "m_overlong",
+            "overlong query graceful degradation vector fallback memory",
+            "fact",
+            "work",
+            "claude-code",
+        )])
+        .await
+        .unwrap();
+
+        // Build a >128-token query; include the rare token at position 0 so
+        // vector similarity can still find it even without FTS.
+        let mut tokens: Vec<String> = vec!["overlong".to_string()];
+        for i in 0..130 {
+            tokens.push(format!("padding{i}"));
+        }
+        let long_query = tokens.join(" ");
+        assert!(
+            long_query.split_whitespace().count() > 128,
+            "test setup: query must exceed 128 tokens"
+        );
+
+        let result =
+            temp_env::async_with_vars([("ORIGIN_ENABLE_FTS_HARDENING", Some("1"))], async {
+                db.search_memory(&long_query, 10, None, None, None, None, None, None)
+                    .await
+            })
+            .await;
+        assert!(
+            result.is_ok(),
+            "overlong query must not error; got {:?}",
+            result
+        );
+        // Vector path should still find the seeded memory
+        let hits = result.unwrap();
+        assert!(
+            hits.iter().any(|r| r.content.contains("overlong")),
+            "overlong query: vector path must surface the seeded memory; got {:?}",
+            hits.iter().map(|r| &r.content).collect::<Vec<_>>()
+        );
+    }
+
+    /// With hardening ON, a mostly-stopword query does NOT flood results via
+    /// OR-joined stopwords. The relaxed-OR eligibility gate (<2 content
+    /// survivors → None) prevents stopword-noise OR matches.
+    #[tokio::test]
+    async fn fts_hardening_relaxed_or_is_eligibility_gated() {
+        let (db, _tmp) = test_db().await;
+        // Seed one memory with a rare token
+        db.upsert_documents(vec![make_memory_doc(
+            "m_rare_xylophone",
+            "xylophoneZZZ9 instrument music wooden percussion",
+            "fact",
+            "work",
+            "claude-code",
+        )])
+        .await
+        .unwrap();
+        // Seed a bunch of other memories to act as potential false positives
+        for i in 0..5 {
+            db.upsert_documents(vec![make_memory_doc(
+                &format!("m_noise_{i}"),
+                &format!("noise memory number {i} unrelated content filler"),
+                "fact",
+                "work",
+                "claude-code",
+            )])
+            .await
+            .unwrap();
+        }
+
+        // "what is the xylophoneZZZ9" — what/is/the are stopwords; only one
+        // content token survives → relaxed-OR must NOT fire (None), so no
+        // stopword-OR flood; the rare memory surfaces via AND match or vector.
+        let query = "what is the xylophoneZZZ9";
+
+        let results =
+            temp_env::async_with_vars([("ORIGIN_ENABLE_FTS_HARDENING", Some("1"))], async {
+                db.search_memory(query, 10, None, None, None, None, None, None)
+                    .await
+                    .unwrap()
+            })
+            .await;
+        // The rare memory should rank at or near the top
+        assert!(
+            results.iter().any(|r| r.content.contains("xylophoneZZZ9")),
+            "eligibility-gated OR: rare token memory must surface; got {:?}",
+            results.iter().map(|r| &r.content).collect::<Vec<_>>()
+        );
     }
 }
