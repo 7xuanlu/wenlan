@@ -8,6 +8,7 @@
 [![npm: origin-mcp](https://img.shields.io/npm/v/origin-mcp?label=origin-mcp)](https://www.npmjs.com/package/origin-mcp)
 [![MCP Server](https://img.shields.io/badge/MCP-server-blue)](https://modelcontextprotocol.io)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](#license)
+[![SafeSkill 77/100](https://img.shields.io/badge/SafeSkill-77%2F100_Passes%20with%20Notes-yellow)](https://safeskill.dev/scan/7xuanlu-origin)
 
 <p align="center">
   <img alt="macOS" src="https://img.shields.io/badge/macOS-arm64%20%7C%20x64-A2AAAD?logo=apple&logoColor=white">
