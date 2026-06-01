@@ -591,6 +591,24 @@ pub fn dual_pool_resolve_enabled() -> bool {
         .unwrap_or(false)
 }
 
+/// True iff `ORIGIN_ENABLE_REFLECTION_DEBOUNCE` is set to a truthy value
+/// (`1`, `true`, or `yes`, case-insensitive). When enabled, `handle_store_memory`
+/// routes its deferred post-ingest enrichment through a per-agent debouncer
+/// (`origin_server::reflection_debounce::ReflectionDebouncer`) so a burst of
+/// rapid same-agent stores coalesces to a single reflection of the last write
+/// instead of N overlapping enrichment tasks.
+///
+/// Default OFF: unset or any falsey value (`0`/`false`/`no`/`""`) leaves the
+/// write path byte-identical — the existing detached `tokio::spawn` runs
+/// verbatim with `cancel = None`, no debouncer consulted. Truthy-only parse,
+/// mirrors [`page_channel_enabled`].
+pub fn reflection_debounce_enabled() -> bool {
+    std::env::var("ORIGIN_ENABLE_REFLECTION_DEBOUNCE")
+        .ok()
+        .map(|v| matches!(v.trim().to_ascii_lowercase().as_str(), "1" | "true" | "yes"))
+        .unwrap_or(false)
+}
+
 /// True iff `ORIGIN_ENABLE_TEMPORAL_GROUNDING` is set to a truthy value
 /// (`1`, `true`, or `yes`, case-insensitive). When enabled, `upsert_documents`
 /// deterministically rewrites relative date phrases in memory prose to include
@@ -24159,6 +24177,32 @@ pub(crate) mod tests {
                 crate::db::dual_pool_resolve_enabled()
             })
             .await;
+        assert!(!unset, "expected false when unset");
+    }
+
+    #[tokio::test]
+    async fn reflection_debounce_enabled_truthy_parse() {
+        for val in &["1", "true", "yes", "TRUE", "Yes"] {
+            let got = temp_env::async_with_vars(
+                [("ORIGIN_ENABLE_REFLECTION_DEBOUNCE", Some(*val))],
+                async { crate::db::reflection_debounce_enabled() },
+            )
+            .await;
+            assert!(got, "expected true for {val}");
+        }
+        for val in &["0", "false", "no", ""] {
+            let got = temp_env::async_with_vars(
+                [("ORIGIN_ENABLE_REFLECTION_DEBOUNCE", Some(*val))],
+                async { crate::db::reflection_debounce_enabled() },
+            )
+            .await;
+            assert!(!got, "expected false for {val}");
+        }
+        let unset = temp_env::async_with_vars(
+            [("ORIGIN_ENABLE_REFLECTION_DEBOUNCE", None::<&str>)],
+            async { crate::db::reflection_debounce_enabled() },
+        )
+        .await;
         assert!(!unset, "expected false when unset");
     }
 

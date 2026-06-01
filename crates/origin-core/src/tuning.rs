@@ -293,6 +293,14 @@ pub struct RefineryConfig {
     pub consolidation_batch_size: usize,
     #[serde(default = "d_30_i64")]
     pub batch_window_secs: i64,
+    /// Debounce window (seconds) for background reflection coalescing. When
+    /// `ORIGIN_ENABLE_REFLECTION_DEBOUNCE` is truthy, per-agent mid-burst
+    /// enrichment spawns inside this window are cancelled/coalesced so only the
+    /// latest write triggers a reflection. Inert when the flag is unset/0.
+    /// Default 5s (mirrors the page-channel opt-in precedent — feature is OFF
+    /// by default, so this value only matters once an operator opts in).
+    #[serde(default = "d_5_u64")]
+    pub reflection_debounce_secs: u64,
     #[serde(default = "d_168_u64")]
     pub kg_rethink_interval_hours: u64,
     #[serde(default = "d_5_usize")]
@@ -552,6 +560,7 @@ impl Default for RefineryConfig {
             consolidation_confidence_threshold: d_03(),
             consolidation_batch_size: d_10_usize(),
             batch_window_secs: d_30_i64(),
+            reflection_debounce_secs: d_5_u64(),
             kg_rethink_interval_hours: d_168_u64(),
             entity_backfill_batch_size: d_5_usize(),
             topic_match: TopicMatchConfig::default(),
@@ -722,6 +731,7 @@ mod tests {
         assert_eq!(cfg.refinery.consolidation_batch_size, 10);
         assert_eq!(cfg.refinery.batch_window_secs, 30);
         assert_eq!(cfg.refinery.kg_rethink_interval_hours, 168);
+        assert_eq!(cfg.refinery.reflection_debounce_secs, 5);
         // Narrative
         assert_eq!(cfg.narrative.stale_secs, 86400);
         assert_eq!(cfg.narrative.max_memories, 12);
