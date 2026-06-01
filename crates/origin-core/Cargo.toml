@@ -84,3 +84,6 @@ required-features = ["eval-harness"]
 
 [dev-dependencies]
 temp-env = { version = "0.3", features = ["async_closure"] }
+# test-util enables tokio::test(start_paused) for deterministic timeout tests
+# (the `full` feature deliberately excludes test-util). Test-only.
+tokio = { workspace = true, features = ["test-util"] }

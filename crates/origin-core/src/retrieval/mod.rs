@@ -15,6 +15,7 @@ pub(crate) mod integrity;
 pub(crate) mod prf;
 pub(crate) mod query_intent;
 pub(crate) mod resolve;
+pub(crate) mod route;
 pub(crate) mod session_diversity;
 pub(crate) mod signals;
 pub(crate) mod traversal;
