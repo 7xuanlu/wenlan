@@ -9021,16 +9021,18 @@ impl MemoryDB {
     /// round's pool until the candidate set converges (no new ids) or the
     /// `ORIGIN_PRF_ROUNDS` budget (default 0, clamp <= 4) is exhausted.
     ///
-    /// The original literal query is always RRF round 0, so its `1/(60+rank)`
-    /// floor protects literal hits even when a hallucinated draft drifts
-    /// off-topic. Distinct from `search_memory_expanded` (paraphrases the
-    /// literal query up front, no draft, no loop): PRF reads the retrieved
-    /// *content*, drafts an answer, and iterates.
+    /// The original literal query is always RRF round 0, which weights the
+    /// literal query as one equal RRF stream; a strong off-topic draft answer
+    /// can still displace mid-rank literal hits — this is recall expansion, not
+    /// a protection guarantee. Distinct from `search_memory_expanded`
+    /// (paraphrases the literal query up front, no draft, no loop): PRF reads
+    /// the retrieved *content*, drafts an answer, and iterates.
     ///
     /// Graceful degradation: `ORIGIN_PRF_ROUNDS=0`/unset, `llm.is_none()`, an
     /// LLM timeout/error, or a blank draft all fall back to the round-0 pool,
-    /// never an error. When dark (rounds 0) the output is byte-identical to a
-    /// plain `search_memory`. Each LLM call is wrapped in a 10s
+    /// never an error. When dark (rounds 0) the output is id-order-identical to
+    /// a plain `search_memory` (scores are re-derived as `1/(60+rank)`;
+    /// raw_score is not preserved). Each LLM call is wrapped in a 10s
     /// `tokio::time::timeout` (mirrors `search_memory_expanded`).
     pub async fn search_memory_prf(
         &self,

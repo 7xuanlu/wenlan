@@ -4,8 +4,9 @@
 //! PRF generates a short *draft answer* from the current top-K retrieved
 //! snippets, then feeds that draft back as the next retrieval query and
 //! RRF-merges the new pool into the accumulated candidate set. The original
-//! literal query is always RRF round 0, so its `1/(60+rank)` floor protects
-//! literal hits even when a hallucinated draft drifts off-topic.
+//! literal query is always RRF round 0, which weights the literal query as one
+//! equal RRF stream; a strong off-topic draft answer can still displace
+//! mid-rank literal hits — this is recall expansion, not a protection guarantee.
 //!
 //! Distinct from query *expansion* (`search_memory_expanded`): expansion
 //! paraphrases the literal query up front with no draft answer and no loop.
@@ -29,8 +30,10 @@ const PRF_SYSTEM_PROMPT: &str = "Using ONLY the context below, write a 1-2 sente
 /// Resolve the PRF round budget from `ORIGIN_PRF_ROUNDS`.
 ///
 /// Default `0` (unset, empty, or unparseable) — when `0` the caller skips the
-/// feedback loop entirely and `search_memory_prf` is byte-identical to a plain
-/// `search_memory`. Parsed values are clamped to `<= PRF_ROUNDS_MAX` so an
+/// feedback loop entirely and `search_memory_prf` is id-order-identical to a
+/// plain `search_memory` when rounds==0 (scores are re-derived as
+/// `1/(60+rank)`; raw_score is not preserved). Parsed values are clamped to
+/// `<= PRF_ROUNDS_MAX` so an
 /// operator typo cannot blow up latency/cost. Parse failure is the default,
 /// never a panic (mirrors `db::page_channel_limit`'s parse-with-default).
 pub(crate) fn prf_rounds() -> usize {
