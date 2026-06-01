@@ -6,6 +6,7 @@
 //! these helpers without importing the composite scoring orchestrator.
 
 pub(crate) mod compress;
+pub(crate) mod cot;
 pub(crate) mod decompose;
 pub(crate) mod dedup;
 pub(crate) mod fact_channel;
@@ -15,6 +16,7 @@ pub(crate) mod integrity;
 pub(crate) mod prf;
 pub(crate) mod query_intent;
 pub(crate) mod resolve;
+pub(crate) mod route;
 pub(crate) mod session_diversity;
 pub(crate) mod signals;
 pub(crate) mod traversal;
