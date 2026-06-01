@@ -5,6 +5,7 @@
 //! Moved out of `composite/` in PR-A so the legacy retrieval path can use
 //! these helpers without importing the composite scoring orchestrator.
 
+pub(crate) mod compress;
 pub(crate) mod cot;
 pub(crate) mod decompose;
 pub(crate) mod dedup;
