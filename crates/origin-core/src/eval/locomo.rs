@@ -1260,6 +1260,20 @@ pub async fn run_locomo_eval_cross_rerank_from_db(
     if let Some(depth) = graph_seed_depth {
         variant_tag.push_str(&format!("__graph_seed_d{}", depth));
     }
+    // T4b: append __graph_khop_d{depth} suffix when ORIGIN_ENABLE_GRAPH_KHOP is on.
+    // Honest config stamp: this runner calls search_memory_cross_rerank ->
+    // augment_with_graph, where the k-hop expansion lives, so the flag genuinely
+    // changes the retrieval path. No accuracy claim is encoded by the tag.
+    let graph_khop_depth = if crate::db::khop_traversal_enabled() {
+        Some(crate::retrieval::traversal::parse_khop_depth(
+            std::env::var("ORIGIN_GRAPH_KHOP_DEPTH").ok().as_deref(),
+        ))
+    } else {
+        None
+    };
+    if let Some(depth) = graph_khop_depth {
+        variant_tag.push_str(&format!("__graph_khop_d{}", depth));
+    }
     // T19: append __query_intent suffix when ORIGIN_ENABLE_QUERY_INTENT is on.
     let query_intent_state = if crate::retrieval::query_intent::query_intent_enabled() {
         variant_tag.push_str("__query_intent");
@@ -1283,12 +1297,10 @@ pub async fn run_locomo_eval_cross_rerank_from_db(
     } else {
         "off"
     };
-    // T10: append __compress suffix when ORIGIN_ENABLE_CONTEXT_COMPRESS is on,
-    // so compress-ON and compress-OFF baselines get distinct filenames (shared
-    // env helper keeps eval + production honest -- AGENTS.md Eval Citation
-    // Discipline).
-    let compress_state = if crate::retrieval::compress::context_compress_enabled() {
-        variant_tag.push_str("__compress");
+    // T15a: append __fact suffix when ORIGIN_ENABLE_FACT_CHANNEL is on, so
+    // fact-ON and fact-OFF baselines get distinct baseline filenames.
+    let fact_state = if crate::retrieval::fact_channel::fact_channel_enabled() {
+        variant_tag.push_str("__fact");
         "on"
     } else {
         "off"
@@ -1312,6 +1324,11 @@ pub async fn run_locomo_eval_cross_rerank_from_db(
     } else {
         env_stamp.flags.push("graph_seed=off".to_string());
     }
+    if let Some(depth) = graph_khop_depth {
+        env_stamp.flags.push(format!("graph_khop=on_d{}", depth));
+    } else {
+        env_stamp.flags.push("graph_khop=off".to_string());
+    }
     env_stamp
         .flags
         .push(format!("query_intent={}", query_intent_state));
@@ -1321,9 +1338,7 @@ pub async fn run_locomo_eval_cross_rerank_from_db(
     env_stamp
         .flags
         .push(format!("episode_channel={}", episode_state));
-    env_stamp
-        .flags
-        .push(format!("context_compress={}", compress_state));
+    env_stamp.flags.push(format!("fact_channel={}", fact_state));
     env_stamp.flags.push("scenario_db=consolidated".to_string());
     report.env = Some(env_stamp);
     Ok(report)
@@ -1618,6 +1633,166 @@ pub async fn run_locomo_eval_expanded(
         &llm.model_id(),
         None,
     ));
+    Ok(report)
+}
+
+// ---------------------------------------------------------------------------
+// PRF benchmark runner -- same as run_locomo_eval but uses search_memory_prf
+// ---------------------------------------------------------------------------
+
+/// Same seeding/scoring logic as `run_locomo_eval`, but retrieval uses
+/// `search_memory_prf` (T6 pseudo-relevance feedback): draft an answer from the
+/// top-K retrieved, feed it back as the next query, RRF-merge until convergence.
+/// The round budget is read from `ORIGIN_PRF_ROUNDS` (default 0 = plain search);
+/// the value is stamped into `env.flags` for exact reproducibility.
+///
+/// `#[ignore]`d L7-manual (GPU + Qwen). Validate by `cargo check`; no headline
+/// number is claimed without N>=3 runs + mean±stddev (AGENTS.md Single-run rule).
+pub async fn run_locomo_eval_prf(
+    path: &Path,
+    llm: std::sync::Arc<dyn crate::llm_provider::LlmProvider>,
+) -> Result<LocomoReport, OriginError> {
+    let mut samples = load_locomo(path)?;
+    apply_locomo_limit(&mut samples);
+    let mut conversations = Vec::new();
+    // (category, ndcg_5, ndcg_10, mrr, recall_5, hit_rate_1)
+    let mut all_scores: Vec<(u8, f64, f64, f64, f64, f64)> = Vec::new();
+    let mut per_case: Vec<crate::eval::report::CaseResult> = Vec::new();
+
+    for sample in &samples {
+        let memories = extract_observations(sample);
+
+        // Create ephemeral DB for this conversation
+        let tmp = tempfile::tempdir().map_err(|e| OriginError::Generic(format!("tempdir: {e}")))?;
+        let db = MemoryDB::new(tmp.path(), std::sync::Arc::new(crate::events::NoopEmitter)).await?;
+
+        // Seed all observations as memories
+        let docs: Vec<RawDocument> = memories
+            .iter()
+            .enumerate()
+            .map(|(i, mem)| RawDocument {
+                content: mem.content.clone(),
+                source_id: format!("locomo_{}_obs_{}", sample.sample_id, i),
+                source: "memory".to_string(),
+                title: format!("{} session {}", mem.speaker, mem.session_num),
+                memory_type: Some("fact".to_string()),
+                space: Some("conversation".to_string()),
+                last_modified: chrono::Utc::now().timestamp(),
+                ..Default::default()
+            })
+            .collect();
+        db.upsert_documents(docs).await?;
+
+        // Map dia_id to source_id for relevance judgments
+        let dia_to_source: HashMap<String, String> = memories
+            .iter()
+            .enumerate()
+            .map(|(i, m)| {
+                (
+                    m.dia_id.clone(),
+                    format!("locomo_{}_obs_{}", sample.sample_id, i),
+                )
+            })
+            .collect();
+
+        let mut conv_scores: Vec<(u8, f64, f64, f64, f64, f64)> = Vec::new();
+
+        for qa in &sample.qa {
+            if qa.category == 5 {
+                continue;
+            }
+
+            let results = db
+                .search_memory_prf(&qa.question, 10, None, None, None, Some(llm.clone()))
+                .await?;
+
+            // Build relevance judgments: evidence dia_ids -> source_ids = relevant
+            let relevant_ids: HashSet<String> = qa
+                .evidence
+                .iter()
+                .filter_map(|did| dia_to_source.get(did).cloned())
+                .collect();
+
+            if relevant_ids.is_empty() {
+                continue; // Skip if no mappable evidence
+            }
+
+            let result_ids: Vec<&str> = results.iter().map(|r| r.source_id.as_str()).collect();
+
+            // Binary relevance: 1 if in evidence set, 0 otherwise
+            let grades: HashMap<&str, u8> = result_ids
+                .iter()
+                .map(|id| (*id, if relevant_ids.contains(*id) { 1 } else { 0 }))
+                .collect();
+
+            let relevant_set: HashSet<&str> = relevant_ids.iter().map(|s| s.as_str()).collect();
+
+            let ndcg_10 = metrics::ndcg_at_k(&result_ids, &grades, 10);
+            let ndcg_5 = metrics::ndcg_at_k(&result_ids, &grades, 5);
+            let mrr_val = metrics::mrr(&result_ids, &relevant_set);
+            let recall_5 = metrics::recall_at_k(&result_ids, &relevant_set, 5);
+            let hr_1 = metrics::hit_rate_at_k(&result_ids, &relevant_set, 1);
+
+            conv_scores.push((qa.category, ndcg_5, ndcg_10, mrr_val, recall_5, hr_1));
+            all_scores.push((qa.category, ndcg_5, ndcg_10, mrr_val, recall_5, hr_1));
+            per_case.push(build_locomo_case_result(
+                &qa.question,
+                qa.category,
+                ndcg_5,
+                ndcg_10,
+                mrr_val,
+                recall_5,
+                hr_1,
+            ));
+        }
+
+        // Per-category for this conversation
+        let per_cat = aggregate_by_category(&conv_scores);
+
+        let n = conv_scores.len();
+        conversations.push(LocomoConversationResult {
+            sample_id: sample.sample_id.clone(),
+            memories_seeded: memories.len(),
+            questions_evaluated: n,
+            overall_ndcg_at_10: avg_field(&conv_scores, |s| s.2),
+            overall_mrr: avg_field(&conv_scores, |s| s.3),
+            overall_recall_at_5: avg_field(&conv_scores, |s| s.4),
+            per_category: per_cat,
+        });
+    }
+
+    // Global aggregates
+    let per_cat_agg = aggregate_by_category(&all_scores);
+
+    let mut report = LocomoReport {
+        conversations,
+        aggregate_ndcg_at_10: avg_field(&all_scores, |s| s.2),
+        aggregate_mrr: avg_field(&all_scores, |s| s.3),
+        aggregate_recall_at_5: avg_field(&all_scores, |s| s.4),
+        aggregate_hit_rate_at_1: avg_field(&all_scores, |s| s.5),
+        total_questions: all_scores.len(),
+        total_memories: samples.iter().map(|s| extract_observations(s).len()).sum(),
+        per_category_aggregate: per_cat_agg,
+        qa_accuracy: None,
+        baseline: None,
+        env: None,
+        per_case,
+        coverage: None,
+    };
+    let mut env_stamp = build_locomo_env(
+        "prf",
+        path,
+        "search_memory_prf",
+        llm.kind(),
+        &llm.model_id(),
+        None,
+    );
+    // Stamp the round budget so PRF-N baselines are distinguishable + reproducible.
+    env_stamp.flags.push(format!(
+        "prf_rounds={}",
+        crate::retrieval::prf::prf_rounds()
+    ));
+    report.env = Some(env_stamp);
     Ok(report)
 }
 

@@ -20,6 +20,15 @@
 //! bundle unchanged. The compressed bundle is only substituted on a non-empty
 //! trimmed success. Mirrors the `search_memory_expanded` LLM-call + timeout +
 //! parse + degrade skeleton. UTF-8 safe: never byte-indexes the bundle.
+//!
+//! # Faithfulness
+//! Faithfulness is enforced by the `COMPRESS_CONTEXT` prompt ONLY. There is NO
+//! runtime faithfulness gate — the `page_faithfulness` scorer is a test-time
+//! regression check, not a production guard. A long bundle can hit
+//! `max_output_tokens` and return a truncated body with no detection; the
+//! non-empty-output check guards against silent-zero, not against dropped or
+//! invented content. Do NOT enable this beyond eval until a runtime
+//! length/coverage floor is added.
 
 use crate::llm_provider::{LlmProvider, LlmRequest};
 use crate::tuning::ContextCompressConfig;

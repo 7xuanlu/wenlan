@@ -177,6 +177,12 @@ fn d_1024_u32() -> u32 {
 fn d_15_u64() -> u64 {
     15
 }
+fn d_90_i64() -> i64 {
+    90
+}
+fn d_01_f64() -> f64 {
+    0.1
+}
 
 // ---- TuningConfig ----
 
@@ -298,6 +304,14 @@ pub struct RefineryConfig {
     pub consolidation_batch_size: usize,
     #[serde(default = "d_30_i64")]
     pub batch_window_secs: i64,
+    /// Debounce window (seconds) for background reflection coalescing. When
+    /// `ORIGIN_ENABLE_REFLECTION_DEBOUNCE` is truthy, per-agent mid-burst
+    /// enrichment spawns inside this window are cancelled/coalesced so only the
+    /// latest write triggers a reflection. Inert when the flag is unset/0.
+    /// Default 5s (mirrors the page-channel opt-in precedent — feature is OFF
+    /// by default, so this value only matters once an operator opts in).
+    #[serde(default = "d_5_u64")]
+    pub reflection_debounce_secs: u64,
     #[serde(default = "d_168_u64")]
     pub kg_rethink_interval_hours: u64,
     #[serde(default = "d_5_usize")]
@@ -469,6 +483,34 @@ pub struct ConfidenceConfig {
     pub untrusted_weight: f32,
 }
 
+/// T21 Stage 1 — archive-not-delete soft eviction policy.
+///
+/// Controls which stale, low-value memories the refinery's `evict` phase
+/// flips to `supersede_mode='archive'` (recoverable, never hard-deleted).
+/// All gates are conservative and the feature is opt-in via
+/// `ORIGIN_ENABLE_EVICTION`; see [`crate::db::eviction_enabled`].
+#[derive(Debug, Clone, Deserialize)]
+pub struct EvictionConfig {
+    /// A memory is only eligible once its `last_accessed` is at least this many
+    /// days in the past. Guards against archiving fresh-but-low-confidence rows.
+    #[serde(default = "d_90_i64")]
+    pub min_age_days: i64,
+    /// A memory is only eligible when its `effective_confidence` is strictly
+    /// below this floor. `effective_confidence` already folds confidence ×
+    /// recency × access via the decay phase, so it acts as the salience proxy.
+    #[serde(default = "d_01_f64")]
+    pub evict_confidence_floor: f64,
+    /// Optional per-space cap: when a space holds more non-immune memories than
+    /// this, the lowest-`effective_confidence` overflow is archived even if it
+    /// would otherwise pass the floor. `None` disables the cap.
+    #[serde(default)]
+    pub per_space_cap: Option<usize>,
+    /// Forward-compat for Stage 2 (hard-delete + consolidation). In Stage 1 this
+    /// is a no-op: archiving IS recovery, so nothing is ever hard-deleted.
+    #[serde(default = "d_true")]
+    pub recover_before_delete: bool,
+}
+
 #[derive(Debug, Clone, Deserialize)]
 pub struct PackagerConfig {
     #[serde(default = "d_600")]
@@ -557,6 +599,7 @@ impl Default for RefineryConfig {
             consolidation_confidence_threshold: d_03(),
             consolidation_batch_size: d_10_usize(),
             batch_window_secs: d_30_i64(),
+            reflection_debounce_secs: d_5_u64(),
             kg_rethink_interval_hours: d_168_u64(),
             entity_backfill_batch_size: d_5_usize(),
             topic_match: TopicMatchConfig::default(),
@@ -594,6 +637,16 @@ impl Default for ConfidenceConfig {
             full_trust_weight: d_10_f32(),
             review_trust_weight: d_07_f32(),
             untrusted_weight: d_04_f32(),
+        }
+    }
+}
+impl Default for EvictionConfig {
+    fn default() -> Self {
+        Self {
+            min_age_days: d_90_i64(),
+            evict_confidence_floor: d_01_f64(),
+            per_space_cap: None,
+            recover_before_delete: d_true(),
         }
     }
 }
@@ -717,6 +770,7 @@ mod tests {
         assert_eq!(cfg.refinery.consolidation_batch_size, 10);
         assert_eq!(cfg.refinery.batch_window_secs, 30);
         assert_eq!(cfg.refinery.kg_rethink_interval_hours, 168);
+        assert_eq!(cfg.refinery.reflection_debounce_secs, 5);
         // Narrative
         assert_eq!(cfg.narrative.stale_secs, 86400);
         assert_eq!(cfg.narrative.max_memories, 12);
@@ -860,5 +914,29 @@ score_threshold = 0.25
         assert_eq!(cfg.compress.min_chars, 600);
         assert_eq!(cfg.compress.max_output_tokens, 1024);
         assert_eq!(cfg.compress.timeout_secs, 15);
+    }
+
+    // T21 C1 — EvictionConfig defaults + serde-default deserialization.
+    #[test]
+    fn test_eviction_config_defaults() {
+        let cfg = EvictionConfig::default();
+        assert_eq!(cfg.min_age_days, 90);
+        assert!((cfg.evict_confidence_floor - 0.1).abs() < f64::EPSILON);
+        assert_eq!(cfg.per_space_cap, None);
+        assert!(cfg.recover_before_delete);
+    }
+
+    // T21 C1 — an absent config block must deserialize to the same defaults,
+    // proving every field carries #[serde(default = ...)] (mirror
+    // test_eval_config_defaults).
+    #[test]
+    fn test_eviction_config_empty_block_is_defaults() {
+        // Mirror test_gate_config_defaults: an absent config block ("{}")
+        // must deserialize to defaults, proving every field is #[serde(default)].
+        let cfg: EvictionConfig = serde_json::from_str("{}").unwrap();
+        assert_eq!(cfg.min_age_days, 90);
+        assert!((cfg.evict_confidence_floor - 0.1).abs() < f64::EPSILON);
+        assert_eq!(cfg.per_space_cap, None);
+        assert!(cfg.recover_before_delete);
     }
 }
