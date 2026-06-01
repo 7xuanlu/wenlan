@@ -657,6 +657,7 @@ async fn run_lifecycle_phases(
             &refinery_cfg,
             &distillation_cfg,
             None, // knowledge_path — eval should not write to knowledge directory
+            None, // cancel — eval runs enrichment to completion (no debounce)
         )
         .await;
     }

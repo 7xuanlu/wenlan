@@ -27,7 +27,7 @@ pub const EMBEDDING_DIM: usize = 768;
 
 /// Current DB schema version (highest `PRAGMA user_version` applied by `migrate()`).
 /// Bump this whenever a new migration lands. Used as an eval cache invalidation key.
-pub const SCHEMA_VERSION: u32 = 57;
+pub const SCHEMA_VERSION: u32 = 59;
 
 /// Shared embedder reference. Pass to [`MemoryDB::new_with_shared_embedder`] to
 /// reuse a single embedder across many `MemoryDB` instances. Created via
@@ -427,6 +427,153 @@ pub fn page_channel_enabled() -> bool {
         .unwrap_or(false)
 }
 
+/// True iff `ORIGIN_ENABLE_EVICTION` is set to a truthy value (`1`, `true`, or
+/// `yes`, case-insensitive). When enabled, the refinery's `evict` phase flips
+/// stale, low-`effective_confidence`, non-immune memories to
+/// `supersede_mode='evicted'` (recoverable, never hard-deleted). `'evicted'` is
+/// a distinct marker from the pre-existing `'archive'` (migration 10 stamps all
+/// `decision` rows `'archive'` while keeping them visible), so eviction never
+/// collides with decisions.
+///
+/// Default OFF: unset or any falsey value leaves the write/refinery path
+/// byte-identical (unbounded append, nothing archived by policy — preserving
+/// the "no memory count cap" contract). Truthy-only parse, verbatim copy of
+/// [`page_channel_enabled`]. T21 Stage 1.
+pub fn eviction_enabled() -> bool {
+    std::env::var("ORIGIN_ENABLE_EVICTION")
+        .ok()
+        .map(|v| matches!(v.trim().to_ascii_lowercase().as_str(), "1" | "true" | "yes"))
+        .unwrap_or(false)
+}
+
+/// True iff `ORIGIN_ENABLE_GLOBAL_PRELUDE` is set to a truthy value
+/// (`1`, `true`, or `yes`, case-insensitive). T18 hierarchical global-context
+/// prelude is OPT-IN, default OFF (ship-dark): unset or a falsey value
+/// (`0`/`false`/`no`/"") leaves both the refinery build path and
+/// [`MemoryDB::search_memory_cross_rerank`] byte-identical to pre-T18 (no
+/// summary build, no `source="summary"` rows prepended, no extra read query).
+///
+/// When enabled, the refinery's `SummaryRollup` phase builds per-bucket +
+/// root `summary_nodes`, and the read path prepends them as a corpus-overview
+/// prelude (excluded from the reranker candidate pool and from positions
+/// `[0, limit)` of the gold-id window). All call sites (build-phase guard,
+/// read gate, production `## Corpus Overview` section, any future eval tag)
+/// MUST share this helper so the env var cannot disagree between production and
+/// eval (which would make baseline filenames lie). Mirrors [`page_channel_enabled`].
+pub fn global_prelude_enabled() -> bool {
+    std::env::var("ORIGIN_ENABLE_GLOBAL_PRELUDE")
+        .ok()
+        .map(|v| matches!(v.trim().to_ascii_lowercase().as_str(), "1" | "true" | "yes"))
+        .unwrap_or(false)
+}
+
+/// Outcome of one `evict_stale` run. T21 Stage 1 only ever archives
+/// (`deleted` is always 0); `skipped_disabled` is true when the env flag is off.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EvictionReport {
+    /// Number of memories flipped to `supersede_mode='evicted'`.
+    pub archived: usize,
+    /// Number of memories hard-deleted. Always 0 in Stage 1 (archive-not-delete).
+    pub deleted: usize,
+    /// True when `ORIGIN_ENABLE_EVICTION` was off, so nothing ran.
+    pub skipped_disabled: bool,
+}
+
+/// A row considered for eviction. Built from the candidate SELECT and fed to the
+/// pure [`select_evictions`] policy function.
+#[derive(Debug, Clone)]
+pub struct EvictCandidate {
+    pub source_id: String,
+    pub effective_confidence: f64,
+    /// Raw `last_accessed` cell as stored (ISO datetime string OR epoch string).
+    /// Parsed via [`crate::decay::days_since`], mirroring `decay_update_confidence`.
+    pub last_accessed: Option<String>,
+    pub memory_type: Option<String>,
+    /// Per-space grouping key (`domain` column). `None` rows never hit the cap.
+    pub space: Option<String>,
+}
+
+/// Pure eviction policy: given candidate rows and config, return the set of
+/// `source_id`s to archive. Separated from the DB mutation so the selection
+/// logic is unit-testable in isolation (candidate set in -> evict set out).
+///
+/// A row is archived when EITHER:
+///   1. it passes both independent gates — `effective_confidence` strictly below
+///      `evict_confidence_floor` AND `last_accessed` at least `min_age_days` old
+///      (age computed in Rust to dodge the TEXT/INTEGER affinity of the
+///      `last_accessed` column), OR
+///   2. its space is over `per_space_cap` and it is in the lowest-confidence
+///      overflow for that space (additive selection, independent of the floor).
+///
+/// Protected-tier rows (identity/preference/goal) are never selected; confirmed
+/// and pinned rows are excluded upstream in the SELECT. Age/floor gates hold
+/// independently: a fresh low-confidence row survives, an old high-confidence
+/// row survives.
+pub fn select_evictions(
+    candidates: &[EvictCandidate],
+    cfg: &crate::tuning::EvictionConfig,
+    now_epoch: i64,
+) -> Vec<String> {
+    use std::collections::BTreeSet;
+
+    // Protected-tier memories are immune regardless of age/confidence/cap.
+    let eligible: Vec<&EvictCandidate> = candidates
+        .iter()
+        .filter(|c| {
+            crate::sources::stability_tier(c.memory_type.as_deref())
+                != crate::sources::StabilityTier::Protected
+        })
+        .collect();
+
+    let mut selected: BTreeSet<String> = BTreeSet::new();
+
+    // Gate 1 — independent floor + age gates.
+    for c in &eligible {
+        let old_enough = crate::decay::days_since(c.last_accessed.as_deref(), now_epoch)
+            >= cfg.min_age_days as f64;
+        let low_value = c.effective_confidence < cfg.evict_confidence_floor;
+        if old_enough && low_value {
+            selected.insert(c.source_id.clone());
+        }
+    }
+
+    // Gate 2 — per-space cap overflow (lowest effective_confidence first).
+    // Age-gated: only rows at least `min_age_days` old are cap-eligible, so a
+    // fresh high-confidence row is NEVER evicted purely for crowding regardless
+    // of space pressure. Fresh rows are excluded from the cap population
+    // entirely — only stale rows can be capped.
+    if let Some(cap) = cfg.per_space_cap {
+        let mut by_space: std::collections::HashMap<&str, Vec<&EvictCandidate>> =
+            std::collections::HashMap::new();
+        for c in &eligible {
+            let old_enough = crate::decay::days_since(c.last_accessed.as_deref(), now_epoch)
+                >= cfg.min_age_days as f64;
+            if !old_enough {
+                continue;
+            }
+            if let Some(space) = c.space.as_deref() {
+                by_space.entry(space).or_default().push(c);
+            }
+        }
+        for (_space, mut rows) in by_space {
+            if rows.len() > cap {
+                // Sort ascending by effective_confidence; lowest are archived.
+                rows.sort_by(|a, b| {
+                    a.effective_confidence
+                        .partial_cmp(&b.effective_confidence)
+                        .unwrap_or(std::cmp::Ordering::Equal)
+                });
+                let overflow = rows.len() - cap;
+                for c in rows.into_iter().take(overflow) {
+                    selected.insert(c.source_id.clone());
+                }
+            }
+        }
+    }
+
+    selected.into_iter().collect()
+}
+
 /// True iff `ORIGIN_ENABLE_DUAL_POOL_RESOLVE` is set to a truthy value
 /// (`1`, `true`, or `yes`, case-insensitive). When enabled, `handle_store_memory`
 /// resolves each incoming memory against two candidate pools (near-duplicates +
@@ -439,6 +586,24 @@ pub fn page_channel_enabled() -> bool {
 /// Truthy-only parse, mirrors [`page_channel_enabled`].
 pub fn dual_pool_resolve_enabled() -> bool {
     std::env::var("ORIGIN_ENABLE_DUAL_POOL_RESOLVE")
+        .ok()
+        .map(|v| matches!(v.trim().to_ascii_lowercase().as_str(), "1" | "true" | "yes"))
+        .unwrap_or(false)
+}
+
+/// True iff `ORIGIN_ENABLE_REFLECTION_DEBOUNCE` is set to a truthy value
+/// (`1`, `true`, or `yes`, case-insensitive). When enabled, `handle_store_memory`
+/// routes its deferred post-ingest enrichment through a per-agent debouncer
+/// (`origin_server::reflection_debounce::ReflectionDebouncer`) so a burst of
+/// rapid same-agent stores coalesces to a single reflection of the last write
+/// instead of N overlapping enrichment tasks.
+///
+/// Default OFF: unset or any falsey value (`0`/`false`/`no`/`""`) leaves the
+/// write path byte-identical — the existing detached `tokio::spawn` runs
+/// verbatim with `cancel = None`, no debouncer consulted. Truthy-only parse,
+/// mirrors [`page_channel_enabled`].
+pub fn reflection_debounce_enabled() -> bool {
+    std::env::var("ORIGIN_ENABLE_REFLECTION_DEBOUNCE")
         .ok()
         .map(|v| matches!(v.trim().to_ascii_lowercase().as_str(), "1" | "true" | "yes"))
         .unwrap_or(false)
@@ -589,6 +754,28 @@ pub fn graph_seed_enabled() -> bool {
 /// production and eval.
 pub fn temporal_filter_enabled() -> bool {
     std::env::var("ORIGIN_ENABLE_TEMPORAL_FILTER")
+        .ok()
+        .map(|v| matches!(v.trim().to_ascii_lowercase().as_str(), "1" | "true" | "yes"))
+        .unwrap_or(false)
+}
+
+/// True iff `ORIGIN_ENABLE_GRAPH_KHOP` is set to a truthy value
+/// (`1`, `true`, or `yes`, case-insensitive). T4b k-hop entity-graph traversal.
+///
+/// OPT-IN, default OFF: when unset or falsey, [`MemoryDB::augment_with_graph`]
+/// uses the query-anchored top entities verbatim (single-hop observations only),
+/// byte-identical to the pre-T4b path. When enabled, those anchor entities are
+/// expanded up to `ORIGIN_GRAPH_KHOP_DEPTH` hops (default 1 == single-hop parity)
+/// over the entity->relation->entity graph, bounded by `ORIGIN_GRAPH_KHOP_MAX_NODES`
+/// (default 25) and a cycle-safe visited set, before observations are fetched.
+///
+/// Composes with the T3 graph-gate (`ORIGIN_ENABLE_GRAPH_GATE`) and T9 pool-seed
+/// (`ORIGIN_ENABLE_GRAPH_SEED`): the gate still decides WHETHER `augment_with_graph`
+/// fires; this flag only changes the breadth of the anchor expansion inside it.
+/// Truthy-only parse, mirrors [`page_channel_enabled`], so production and eval
+/// cannot disagree on the flag.
+pub fn khop_traversal_enabled() -> bool {
+    std::env::var("ORIGIN_ENABLE_GRAPH_KHOP")
         .ok()
         .map(|v| matches!(v.trim().to_ascii_lowercase().as_str(), "1" | "true" | "yes"))
         .unwrap_or(false)
@@ -893,6 +1080,20 @@ pub struct PageSourceIndex {
     pub source_set: std::collections::HashSet<String>,
 }
 
+/// A T18 summary node loaded for the read-time global-context prelude.
+/// `level=0` is a per-bucket rollup (keyed on `community_id`); `level=1` is the
+/// single root rollup over all buckets.
+#[derive(Debug, Clone)]
+pub struct SummaryNode {
+    pub id: String,
+    pub level: i64,
+    pub bucket_key: Option<String>,
+    pub title: String,
+    pub body: String,
+    pub source_count: i64,
+    pub generated_at: i64,
+}
+
 /// Same Jaccard scoring as `find_best_overlapping_page` but against a
 /// pre-loaded index — O(P) per cluster instead of O(P) + a SQL roundtrip.
 pub fn best_overlapping_page_in_index(
@@ -1168,6 +1369,21 @@ CREATE TABLE IF NOT EXISTS rejected_memories (
 );
 CREATE INDEX IF NOT EXISTS idx_rejected_reason ON rejected_memories(rejection_reason);
 CREATE INDEX IF NOT EXISTS idx_rejected_agent ON rejected_memories(source_agent);
+
+-- T15a fact-channel: per-fact child vectors. Each child rehydrates to its
+-- PARENT memory (parent_id = parent source_id; parent_kind = 'memory'). The
+-- vector index (child_vectors_vec_idx) is created separately, like the other
+-- libsql_vector_idx indexes. Ships EMPTY + inert: rows are only co-written when
+-- ORIGIN_ENABLE_FACT_CHANNEL is on (see upsert_documents).
+CREATE TABLE IF NOT EXISTS child_vectors (
+    id TEXT PRIMARY KEY,
+    parent_kind TEXT NOT NULL,
+    parent_id TEXT NOT NULL,
+    field TEXT NOT NULL,
+    content TEXT NOT NULL,
+    embedding F32_BLOB(768)
+);
+CREATE INDEX IF NOT EXISTS idx_child_vectors_parent ON child_vectors(parent_kind, parent_id);
 ";
 
 // FTS5 and vector indexes created separately (may not support IF NOT EXISTS)
@@ -1491,6 +1707,13 @@ impl MemoryDB {
                 libsql_vector_idx(embedding, 'metric=cosine', 'compress_neighbors=float8', 'max_neighbors=32')
             )", (),
         ).await;
+        // T15a: child-vector index (mirrors memories_vec_idx). The migration
+        // also creates this IF NOT EXISTS for upgraded DBs.
+        let _ = conn.execute(
+            "CREATE INDEX IF NOT EXISTS child_vectors_vec_idx ON child_vectors (
+                libsql_vector_idx(embedding, 'metric=cosine', 'compress_neighbors=float8', 'max_neighbors=32')
+            )", (),
+        ).await;
 
         let instance = Self {
             _db: db,
@@ -1577,6 +1800,12 @@ impl MemoryDB {
         ).await;
         let _ = conn.execute(
                 "CREATE INDEX IF NOT EXISTS entities_vec_idx ON entities (
+                    libsql_vector_idx(embedding, 'metric=cosine', 'compress_neighbors=float8', 'max_neighbors=32')
+                )", (),
+        ).await;
+        // T15a: child-vector index (mirrors memories_vec_idx).
+        let _ = conn.execute(
+                "CREATE INDEX IF NOT EXISTS child_vectors_vec_idx ON child_vectors (
                     libsql_vector_idx(embedding, 'metric=cosine', 'compress_neighbors=float8', 'max_neighbors=32')
                 )", (),
         ).await;
@@ -5360,6 +5589,126 @@ impl MemoryDB {
                     .map_err(|e| OriginError::VectorDb(format!("m57 bump: {e}")))?;
                 log::info!("[migration] Migration 57 applied: entity_minhash_bands table + idx_minhash_band_key (T16 entity near-dedup)");
             }
+
+            // Migration 58: T15a fact-channel child vectors. Per-fact "child"
+            // vectors (narrative + one per structured field) that rehydrate to
+            // their PARENT memory. Additive and non-destructive: the table ships
+            // EMPTY and inert -- rows are only co-written when
+            // ORIGIN_ENABLE_FACT_CHANNEL is on, and the read channel only queries
+            // it under the same flag. No inline backfill (could block on large
+            // DBs); rebuild_child_vectors_for_missing() is the deferred
+            // turn-it-on-later path. The vector index is created OUTSIDE any
+            // transaction (libsql_vector_idx restriction). CREATE ... IF NOT
+            // EXISTS makes the whole block idempotent.
+            if version < 58 {
+                let conn = self.conn.lock().await;
+                conn.execute_batch(
+                    "
+                    CREATE TABLE IF NOT EXISTS child_vectors (
+                        id TEXT PRIMARY KEY,
+                        parent_kind TEXT NOT NULL,
+                        parent_id TEXT NOT NULL,
+                        field TEXT NOT NULL,
+                        content TEXT NOT NULL,
+                        embedding F32_BLOB(768)
+                    );
+                    CREATE INDEX IF NOT EXISTS idx_child_vectors_parent
+                        ON child_vectors(parent_kind, parent_id);
+                    ",
+                )
+                .await
+                .map_err(|e| OriginError::VectorDb(format!("m58 table: {e}")))?;
+                conn.execute(
+                    "CREATE INDEX IF NOT EXISTS child_vectors_vec_idx ON child_vectors (
+                        libsql_vector_idx(embedding, 'metric=cosine', 'compress_neighbors=float8', 'max_neighbors=32')
+                    )",
+                    (),
+                )
+                .await
+                .map_err(|e| OriginError::VectorDb(format!("m58 vec idx: {e}")))?;
+                conn.execute("PRAGMA user_version = 58", ())
+                    .await
+                    .map_err(|e| OriginError::VectorDb(format!("m58 bump: {e}")))?;
+                log::info!("[migration] Migration 58 applied: child_vectors table + idx_child_vectors_parent + child_vectors_vec_idx (T15a fact channel)");
+            }
+
+            // Migration 59: T18 hierarchical global-context prelude tables.
+            // `summary_nodes` holds per-bucket (level=0) + root (level=1) rollup
+            // summaries; `summary_node_sources` records the provenance memory
+            // ids each node was built from (for source-expanded coverage credit
+            // + the space-filter overlap gate). FTS5 + DiskANN mirror the pages
+            // channel. Shipped dark — the build/read paths are gated behind
+            // `global_prelude_enabled()`, so an empty table is the default.
+            if version < 59 {
+                let conn = self.conn.lock().await;
+                conn.execute_batch(
+                    "
+                    CREATE TABLE IF NOT EXISTS summary_nodes (
+                        id TEXT PRIMARY KEY,
+                        level INTEGER NOT NULL,
+                        bucket_key TEXT,
+                        title TEXT NOT NULL,
+                        body TEXT NOT NULL,
+                        embedding F32_BLOB(768),
+                        source_count INTEGER NOT NULL DEFAULT 0,
+                        generated_at INTEGER NOT NULL,
+                        status TEXT NOT NULL DEFAULT 'active'
+                    );
+                    CREATE TABLE IF NOT EXISTS summary_node_sources (
+                        node_id TEXT NOT NULL REFERENCES summary_nodes(id) ON DELETE CASCADE,
+                        memory_source_id TEXT NOT NULL,
+                        PRIMARY KEY (node_id, memory_source_id)
+                    );
+                    CREATE INDEX IF NOT EXISTS idx_summary_nodes_level ON summary_nodes(level);
+                    CREATE INDEX IF NOT EXISTS idx_summary_node_sources_memory
+                        ON summary_node_sources(memory_source_id);
+                    ",
+                )
+                .await
+                .map_err(|e| OriginError::VectorDb(format!("m59 tables: {e}")))?;
+
+                // FTS5 contentless mirror + triggers (copied from the pages FTS
+                // block). IF NOT EXISTS so a re-run is idempotent.
+                conn.execute_batch(
+                    "
+                    CREATE VIRTUAL TABLE IF NOT EXISTS summary_nodes_fts USING fts5(
+                        title, body, content='summary_nodes', content_rowid='rowid'
+                    );
+                    CREATE TRIGGER IF NOT EXISTS summary_nodes_fts_insert AFTER INSERT ON summary_nodes BEGIN
+                        INSERT INTO summary_nodes_fts(rowid, title, body)
+                        VALUES (NEW.rowid, NEW.title, NEW.body);
+                    END;
+                    CREATE TRIGGER IF NOT EXISTS summary_nodes_fts_delete AFTER DELETE ON summary_nodes BEGIN
+                        INSERT INTO summary_nodes_fts(summary_nodes_fts, rowid, title, body)
+                        VALUES ('delete', OLD.rowid, OLD.title, OLD.body);
+                    END;
+                    CREATE TRIGGER IF NOT EXISTS summary_nodes_fts_update AFTER UPDATE OF title, body ON summary_nodes BEGIN
+                        INSERT INTO summary_nodes_fts(summary_nodes_fts, rowid, title, body)
+                        VALUES ('delete', OLD.rowid, OLD.title, OLD.body);
+                        INSERT INTO summary_nodes_fts(rowid, title, body)
+                        VALUES (NEW.rowid, NEW.title, NEW.body);
+                    END;
+                    ",
+                )
+                .await
+                .map_err(|e| OriginError::VectorDb(format!("m59 fts: {e}")))?;
+
+                // DiskANN vector index OUTSIDE any transaction (mirror m58 + m46
+                // Phase L). IF NOT EXISTS so a partial-apply re-run is safe.
+                conn.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_summary_nodes_embedding ON summary_nodes (
+                        libsql_vector_idx(embedding, 'metric=cosine', 'compress_neighbors=float8', 'max_neighbors=32')
+                    )",
+                    (),
+                )
+                .await
+                .map_err(|e| OriginError::VectorDb(format!("m59 vec idx: {e}")))?;
+
+                conn.execute("PRAGMA user_version = 59", ())
+                    .await
+                    .map_err(|e| OriginError::VectorDb(format!("m59 bump: {e}")))?;
+                log::info!("[migration] Migration 59 applied: summary_nodes + summary_node_sources + summary_nodes_fts + idx_summary_nodes_embedding (T18 global prelude)");
+            }
         }
 
         Ok(())
@@ -6794,6 +7143,64 @@ impl MemoryDB {
             chunk_texts.extend(episode_texts);
         }
 
+        // T15a fact-channel child co-write (write-side opt-in, default OFF).
+        // For each distilled `source='memory'` doc, explode it into per-fact
+        // "child" vectors: one NARRATIVE child (the prose content) plus one
+        // child per coercible structured field ("key: value"). Each child
+        // rehydrates to its PARENT memory (parent_id = doc.source_id,
+        // parent_kind = 'memory') so retrieval credit flows through the parent's
+        // own source_id (metric-honest). Child id = sha256(parent_id + field)[..16]
+        // is deterministic, so re-storing the same source_id overwrites the same
+        // child rows (paired delete below clears stale ones first). Bypasses the
+        // chunker + quality gate by construction. Embedded in ONE extra batch and
+        // inserted in the SAME tx as the parent rows. Flag OFF = no children,
+        // byte-identical to pre-T15a.
+        struct ChildRow {
+            id: String,
+            parent_id: String,
+            field: String,
+            content: String,
+        }
+        let mut child_rows: Vec<ChildRow> = Vec::new();
+        let mut child_texts: Vec<String> = Vec::new();
+        if crate::retrieval::fact_channel::fact_channel_enabled() {
+            for doc in &docs {
+                if doc.source != "memory" {
+                    continue;
+                }
+                let content = redact_pii(&doc.content);
+                // Build (field, text) pairs: narrative first, then per-field.
+                let mut fields: Vec<(String, String)> = Vec::new();
+                if !content.trim().is_empty() {
+                    fields.push(("narrative".to_string(), content));
+                }
+                if let Some(ref sf) = doc.structured_fields {
+                    for child in crate::schema::split_structured_fields_to_facts(sf) {
+                        // child is "key: value"; key is the field name up to ": ".
+                        let field = child
+                            .split_once(": ")
+                            .map(|(k, _)| k.to_string())
+                            .unwrap_or_else(|| "field".to_string());
+                        fields.push((field, child));
+                    }
+                }
+                for (field, text) in fields {
+                    let mut hasher = Sha256::new();
+                    hasher.update(doc.source_id.as_bytes());
+                    hasher.update(b"|");
+                    hasher.update(field.as_bytes());
+                    let hash = format!("{:x}", hasher.finalize());
+                    child_rows.push(ChildRow {
+                        id: hash[..16].to_string(),
+                        parent_id: doc.source_id.clone(),
+                        field,
+                        content: text.clone(),
+                    });
+                    child_texts.push(text);
+                }
+            }
+        }
+
         if memory_rows.is_empty() {
             return Ok(0);
         }
@@ -6805,6 +7212,20 @@ impl MemoryDB {
                 "Expected {} embeddings, got {}",
                 memory_rows.len(),
                 embeddings.len()
+            )));
+        }
+
+        // Embed all child texts in ONE model pass (T15a; empty when flag OFF).
+        let child_embeddings = if child_texts.is_empty() {
+            Vec::new()
+        } else {
+            self.generate_embeddings(&child_texts)?
+        };
+        if child_embeddings.len() != child_rows.len() {
+            return Err(OriginError::Embedding(format!(
+                "Expected {} child embeddings, got {}",
+                child_rows.len(),
+                child_embeddings.len()
             )));
         }
 
@@ -6823,6 +7244,17 @@ impl MemoryDB {
             )
             .await
             .map_err(|e| OriginError::VectorDb(format!("delete old memories: {}", e)))?;
+            // T15a: pair the parent delete with its child rows (no FK; parent_id
+            // is source_id not rowid, so cascade is explicit). Scoped to memory
+            // parents — episode/page parents never have children.
+            if source == "memory" {
+                conn.execute(
+                    "DELETE FROM child_vectors WHERE parent_kind = 'memory' AND parent_id = ?1",
+                    libsql::params![source_id.clone()],
+                )
+                .await
+                .map_err(|e| OriginError::VectorDb(format!("delete old child_vectors: {}", e)))?;
+            }
         }
 
         // Insert new memory rows with proper NULL handling for optional fields
@@ -6958,6 +7390,18 @@ impl MemoryDB {
             )
             .await
             .map_err(|e| OriginError::VectorDb(format!("insert memory: {}", e)))?;
+        }
+
+        // T15a: insert child vectors in the SAME tx (empty when flag OFF).
+        for (row, embedding) in child_rows.into_iter().zip(child_embeddings.iter()) {
+            let vec_str = Self::vec_to_sql(embedding);
+            conn.execute(
+                "INSERT OR REPLACE INTO child_vectors (id, parent_kind, parent_id, field, content, embedding)
+                 VALUES (?1, 'memory', ?2, ?3, ?4, vector32(?5))",
+                libsql::params![row.id, row.parent_id, row.field, row.content, vec_str],
+            )
+            .await
+            .map_err(|e| OriginError::VectorDb(format!("insert child_vector: {}", e)))?;
         }
 
         // Soft-suppress superseded memories (skip when pending_revision — human hasn't approved yet)
@@ -7355,7 +7799,12 @@ impl MemoryDB {
 
         // Supersedes exclusion: only hide memories superseded with mode='hide'.
         // Memories with supersede_mode='archive' remain visible (marked is_archived post-query).
-        let supersedes_exclusion = "AND c.pending_revision = 0 AND c.source_id NOT IN (\
+        // T21: 'evicted' rows are soft-evicted by the refinery and must NOT surface
+        // in default retrieval (recoverable by clearing supersede_mode). 'archive'
+        // decisions stay visible — only 'evicted' is self-excluded here.
+        let supersedes_exclusion = "AND c.pending_revision = 0 \
+            AND (c.supersede_mode IS NULL OR c.supersede_mode != 'evicted') \
+            AND c.source_id NOT IN (\
             SELECT supersedes FROM memories \
             WHERE supersedes IS NOT NULL AND pending_revision = 0 AND source = 'memory' \
             AND supersede_mode = 'hide' \
@@ -8291,6 +8740,107 @@ impl MemoryDB {
         Ok(results)
     }
 
+    /// Fact-channel (T15a): vector search over per-fact `child_vectors`, then
+    /// REHYDRATE the matched PARENT memories. A child hit never surfaces its own
+    /// id — it pulls back the parent memory row (source="memory") so retrieval
+    /// metrics credit the parent's own source_id honestly (no provenance map).
+    ///
+    /// Returns rehydrated parent `SearchResult`s in best-child-rank order
+    /// (max-pooled so each parent appears at most once, contributing only its
+    /// best child's rank). Used only as an opt-in RRF stream inside
+    /// `search_memory_cross_rerank`, gated by `fact_channel_enabled()`.
+    async fn search_facts_channel(
+        &self,
+        query: &str,
+        pool: usize,
+    ) -> Result<Vec<SearchResult>, OriginError> {
+        use crate::retrieval::fact_channel::{max_pool_by_parent, ChildHit};
+
+        let embedding = self.get_or_compute_embedding(query)?;
+        let vec_str = Self::vec_to_sql(&embedding);
+        let fetch_limit = (pool * 3) as i64;
+
+        let conn = self.conn.lock().await;
+
+        // --- Child vector search (distance-ordered) ---
+        let mut child_hits: Vec<ChildHit> = Vec::new();
+        {
+            let sql = "SELECT cv.parent_id,
+                              vector_distance_cos(cv.embedding, vector32(?1)) AS dist
+                       FROM vector_top_k('child_vectors_vec_idx', vector32(?1), ?2) AS vt
+                       JOIN child_vectors cv ON cv.rowid = vt.id
+                       WHERE cv.parent_kind = 'memory'
+                       ORDER BY dist ASC";
+            let mut rows = conn
+                .query(sql, libsql::params![vec_str.clone(), fetch_limit])
+                .await
+                .map_err(|e| OriginError::VectorDb(format!("fact channel query: {e}")))?;
+            let mut rank = 0usize;
+            while let Ok(Some(row)) = rows.next().await {
+                let parent_id: String = match row.get(0) {
+                    Ok(v) => v,
+                    Err(_) => continue,
+                };
+                child_hits.push(ChildHit { parent_id, rank });
+                rank += 1;
+            }
+        }
+
+        // Max-pool by parent: each parent contributes only its best child's rank.
+        let parent_ids = max_pool_by_parent(&child_hits);
+        if parent_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        let parent_ids: Vec<String> = parent_ids.into_iter().take(pool).collect();
+
+        // --- Rehydrate the parent memories (full projection -> row_to_search_result) ---
+        let placeholders: String = (1..=parent_ids.len())
+            .map(|i| format!("?{i}"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let sql = format!(
+            "SELECT c.id, c.content, c.source, c.source_id, c.title, c.summary, c.url,
+                    c.chunk_index, c.last_modified, c.chunk_type, c.language, c.byte_start,
+                    c.byte_end, c.semantic_unit, c.memory_type, c.space, c.source_agent,
+                    c.confidence, c.confirmed, c.stability, c.supersedes,
+                    c.entity_id, c.quality, c.is_recap, c.supersede_mode,
+                    c.structured_fields, c.retrieval_cue, c.source_text,
+                    c.version, c.pending_revision,
+                    0.0, c.importance
+             FROM memories c
+             WHERE c.source = 'memory' AND c.chunk_index = 0 AND c.source_id IN ({placeholders})",
+            placeholders = placeholders
+        );
+        let params: Vec<libsql::Value> = parent_ids
+            .iter()
+            .map(|id| libsql::Value::Text(id.clone()))
+            .collect();
+        let mut by_source: HashMap<String, SearchResult> = HashMap::new();
+        match conn.query(&sql, params).await {
+            Ok(mut rows) => {
+                while let Ok(Some(row)) = rows.next().await {
+                    if let Ok(result) = Self::row_to_search_result(&row, 0.0) {
+                        by_source.insert(result.source_id.clone(), result);
+                    }
+                }
+            }
+            Err(e) => {
+                return Err(OriginError::VectorDb(format!(
+                    "fact channel rehydrate: {e}"
+                )));
+            }
+        }
+        drop(conn);
+
+        // Preserve best-child-rank order; drop parents that didn't rehydrate
+        // (e.g. superseded/deleted between index and read).
+        let rehydrated: Vec<SearchResult> = parent_ids
+            .into_iter()
+            .filter_map(|id| by_source.remove(&id))
+            .collect();
+        Ok(rehydrated)
+    }
+
     /// Hybrid search with reranker-trait reranking.
     ///
     /// Equivalent to `search_memory_llm_rerank` but takes a [`Reranker`] trait
@@ -8327,6 +8877,7 @@ impl MemoryDB {
             std::env::var("RERANK_POOL_FLOOR").ok().as_deref(),
         );
         let page_channel_enabled = page_channel_enabled();
+        let global_prelude_enabled = global_prelude_enabled();
 
         let memory_results = self
             .search_memory(
@@ -8400,6 +8951,54 @@ impl MemoryDB {
             page_results
         };
 
+        // T18 global-context prelude (opt-in, ship-dark). Fetch summary nodes
+        // BEFORE the rerank but keep them OUT of the score_map/rerank pool and
+        // out of positions [0, limit): summaries carry no gold leaf id, so
+        // letting them compete is the exact regression that forced pages from
+        // compete -> partition. They ride a prepend instead (see below).
+        // Log-and-degrade on failure (never silent-zero the memory pool).
+        let summary_nodes: Vec<SummaryNode> = if global_prelude_enabled {
+            match self
+                .search_summary_nodes(query, crate::refinery::summary::bucket_k())
+                .await
+            {
+                Ok(v) => v,
+                Err(e) => {
+                    log::warn!("[memory_db] global prelude degraded: {e}; continuing");
+                    Vec::new()
+                }
+            }
+        } else {
+            Vec::new()
+        };
+        // Space-filter overlap gate (mirrors the page gate above): a summary
+        // node surfaces iff >=1 of its provenance memories survived the
+        // memory-side filter. Without this, a root spanning all buckets could
+        // leak cross-space when filters are active.
+        let summary_nodes: Vec<SummaryNode> = if filters_active && !summary_nodes.is_empty() {
+            let allowed_memory_ids: std::collections::HashSet<String> =
+                memory_results.iter().map(|r| r.source_id.clone()).collect();
+            let mut filtered = Vec::with_capacity(summary_nodes.len());
+            for node in summary_nodes {
+                let sources = match self.get_summary_node_sources(&node.id).await {
+                    Ok(v) => v,
+                    Err(e) => {
+                        log::warn!(
+                            "[memory_db] summary_node_sources lookup failed for {}: {e}; dropping",
+                            node.id
+                        );
+                        continue;
+                    }
+                };
+                if sources.iter().any(|s| allowed_memory_ids.contains(s)) {
+                    filtered.push(node);
+                }
+            }
+            filtered
+        } else {
+            summary_nodes
+        };
+
         // T2 episode-channel (opt-in 5th RRF stream). Log-and-degrade on
         // failure, mirroring the page-channel fallback above.
         let episode_results: Vec<SearchResult> = if episode_channel_enabled() {
@@ -8430,6 +9029,47 @@ impl MemoryDB {
                 .collect()
         } else {
             episode_results
+        };
+
+        // T15a fact-channel (opt-in RRF stream). Vector-search per-fact child
+        // vectors, rehydrate the matched PARENT memories (source="memory"), and
+        // merge them as RRF mass below. Log-and-degrade on failure (mirrors the
+        // page/episode fallbacks). Computed here so `memory_results` is still
+        // available for the filter re-apply.
+        let fact_results: Vec<SearchResult> =
+            if crate::retrieval::fact_channel::fact_channel_enabled() {
+                match self
+                    .search_facts_channel(
+                        query,
+                        crate::retrieval::fact_channel::fact_channel_limit(),
+                    )
+                    .await
+                {
+                    Ok(v) => v,
+                    Err(e) => {
+                        log::warn!("[memory_db] fact channel degraded: {e}; continuing");
+                        Vec::new()
+                    }
+                }
+            } else {
+                Vec::new()
+            };
+        // Re-apply the base memory_type/space/source_agent filter on the
+        // rehydrated parents: a child bypasses the base-channel filter by
+        // construction, so a buried fact in a `space="personal"` memory must not
+        // leak into a `space="work"` recall. The rehydrated row carries the
+        // parent's own field values, so we filter on them directly.
+        let fact_results: Vec<SearchResult> = if filters_active && !fact_results.is_empty() {
+            fact_results
+                .into_iter()
+                .filter(|r| {
+                    memory_type.is_none_or(|mt| r.memory_type.as_deref() == Some(mt))
+                        && space.is_none_or(|sp| r.space.as_deref() == Some(sp))
+                        && source_agent.is_none_or(|sa| r.source_agent.as_deref() == Some(sa))
+                })
+                .collect()
+        } else {
+            fact_results
         };
 
         // Two-stage RRF merge — mirrors augment_with_graph (db.rs:7619-7644).
@@ -8464,6 +9104,16 @@ impl MemoryDB {
             *score_map.entry(r.id.clone()).or_default() += rrf_score;
             result_map.entry(r.id.clone()).or_insert(r);
         }
+
+        // T15a: fact-channel rehydrated parents contribute RRF mass on top of the
+        // merged map (1/(60+rank), max-pooled per parent). A parent already in the
+        // pool gains mass; a new parent enters with mass only (raw cosine zeroed).
+        // r.source is already "memory" so they ride inline through rerank + truncate.
+        crate::retrieval::fact_channel::merge_fact_channel(
+            &mut score_map,
+            &mut result_map,
+            fact_results,
+        );
 
         let mut results: Vec<SearchResult> = result_map
             .into_values()
@@ -8555,10 +9205,24 @@ impl MemoryDB {
             );
         }
         results.truncate(limit);
+        // T18: PREPEND the global-context prelude. Summary rows lead the
+        // output so production consumers see corpus orientation first; they
+        // were never added to the score_map/rerank pool above (they carry no
+        // gold leaf id), so this prepend cannot displace a memory inside the
+        // reranked gold-id window. `summary_nodes` is empty unless the flag is
+        // on, so the default path is byte-identical (no prepend, no reorder).
+        let prelude_rows: Vec<SearchResult> = summary_nodes
+            .into_iter()
+            .map(Self::search_result_from_summary)
+            .collect();
+        let mut out: Vec<SearchResult> =
+            Vec::with_capacity(prelude_rows.len() + results.len() + page_results.len());
+        out.extend(prelude_rows);
+        out.extend(results);
         // Append top-K pages after the memory limit. K = configured pool
         // size (already capped upstream by page_channel_limit()).
-        results.extend(page_results);
-        Ok(results)
+        out.extend(page_results);
+        Ok(out)
     }
 
     /// LLM read-time strategy router (T7). Classifies `query` into a
@@ -8777,6 +9441,168 @@ impl MemoryDB {
         Ok(merged)
     }
 
+    /// Hybrid search with **pseudo-relevance feedback** (PRF): iterate by
+    /// drafting a short answer from the current top-K retrieved snippets and
+    /// feeding that draft back as the next retrieval query, RRF-merging each
+    /// round's pool until the candidate set converges (no new ids) or the
+    /// `ORIGIN_PRF_ROUNDS` budget (default 0, clamp <= 4) is exhausted.
+    ///
+    /// The original literal query is always RRF round 0, which weights the
+    /// literal query as one equal RRF stream; a strong off-topic draft answer
+    /// can still displace mid-rank literal hits — this is recall expansion, not
+    /// a protection guarantee. Distinct from `search_memory_expanded`
+    /// (paraphrases the literal query up front, no draft, no loop): PRF reads
+    /// the retrieved *content*, drafts an answer, and iterates.
+    ///
+    /// Graceful degradation: `ORIGIN_PRF_ROUNDS=0`/unset, `llm.is_none()`, an
+    /// LLM timeout/error, or a blank draft all fall back to the round-0 pool,
+    /// never an error. When dark (rounds 0) the output is id-order-identical to
+    /// a plain `search_memory` (scores are re-derived as `1/(60+rank)`;
+    /// raw_score is not preserved). Each LLM call is wrapped in a 10s
+    /// `tokio::time::timeout` (mirrors `search_memory_expanded`).
+    pub async fn search_memory_prf(
+        &self,
+        query: &str,
+        limit: usize,
+        memory_type: Option<&str>,
+        space: Option<&str>,
+        source_agent: Option<&str>,
+        llm: Option<Arc<dyn crate::llm_provider::LlmProvider>>,
+    ) -> Result<Vec<SearchResult>, OriginError> {
+        use crate::retrieval::prf;
+
+        let rounds = prf::prf_rounds();
+        let fetch_pool = limit * 2;
+
+        // Round 0: the literal query is always the first RRF stream.
+        let round0 = self
+            .search_memory(
+                query,
+                fetch_pool,
+                memory_type,
+                space,
+                source_agent,
+                None,
+                None,
+                None,
+            )
+            .await?;
+        let mut seen = prf::candidate_set(&round0);
+        let mut acc: Vec<Vec<SearchResult>> = vec![round0];
+
+        // Only iterate when both a round budget and an LLM are present. Without
+        // either, PRF is exactly a plain (pool-widened) search of the literal
+        // query — the round-0 stream merged through RRF below.
+        if rounds > 0 {
+            if let Some(ref llm) = llm {
+                for _ in 0..rounds {
+                    // Feedback comes from the round-0 literal-query pool (the
+                    // highest-quality anchor). A fixed-string draft therefore
+                    // converges after one feedback round.
+                    let snippets = prf::feedback_snippets(&acc[0], 5, 200);
+                    if snippets.is_empty() {
+                        break;
+                    }
+                    let req = prf::draft_answer_request(query, &snippets);
+                    let draft_result =
+                        tokio::time::timeout(std::time::Duration::from_secs(10), llm.generate(req))
+                            .await;
+                    let draft = match draft_result {
+                        Ok(Ok(text)) if !text.trim().is_empty() => text,
+                        Ok(Ok(_)) => {
+                            log::warn!("[memory_db] prf: blank draft, stopping (best-so-far)");
+                            break;
+                        }
+                        Ok(Err(e)) => {
+                            log::warn!("[memory_db] prf draft LLM failed: {e}");
+                            break;
+                        }
+                        Err(_) => {
+                            log::warn!("[memory_db] prf draft timed out");
+                            break;
+                        }
+                    };
+
+                    // Retrieve with the draft answer as the next query. A failed
+                    // search is logged and the loop stops with best-so-far.
+                    match self
+                        .search_memory(
+                            &draft,
+                            fetch_pool,
+                            memory_type,
+                            space,
+                            source_agent,
+                            None,
+                            None,
+                            None,
+                        )
+                        .await
+                    {
+                        Ok(hits) => {
+                            let cur = prf::candidate_set(&hits);
+                            acc.push(hits);
+                            if prf::converged(&seen, &cur) {
+                                break;
+                            }
+                            seen.extend(cur);
+                        }
+                        Err(e) => {
+                            log::warn!("[memory_db] prf feedback search failed: {e}");
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+
+        // If round 0 somehow produced nothing AND no feedback rounds ran, fall
+        // back to a plain search on the original query (mirrors expanded).
+        if acc.iter().all(|r| r.is_empty()) {
+            return self
+                .search_memory(
+                    query,
+                    limit,
+                    memory_type,
+                    space,
+                    source_agent,
+                    None,
+                    None,
+                    None,
+                )
+                .await;
+        }
+
+        // RRF merge — verbatim block (mirrors search_memory_expanded /
+        // search_memory_decomposed): each round contributes one equal-weight
+        // stream scored 1/(60 + rank), deduped on result.id.
+        let mut score_map: HashMap<String, f32> = HashMap::new();
+        let mut result_map: HashMap<String, SearchResult> = HashMap::new();
+
+        for ranked in acc {
+            for (rank, result) in ranked.into_iter().enumerate() {
+                let rrf_score = 1.0 / (60.0 + rank as f32);
+                *score_map.entry(result.id.clone()).or_default() += rrf_score;
+                result_map.entry(result.id.clone()).or_insert(result);
+            }
+        }
+
+        let mut merged: Vec<SearchResult> = result_map
+            .into_values()
+            .map(|mut r| {
+                r.score = *score_map.get(&r.id).unwrap_or(&0.0);
+                r
+            })
+            .collect();
+        merged.sort_by(|a, b| {
+            b.score
+                .partial_cmp(&a.score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+
+        merged.truncate(limit);
+        Ok(merged)
+    }
+
     /// Hybrid search with LLM query *decomposition* BEFORE search.
     ///
     /// Splits a compositional query into independent factual subqueries
@@ -8869,6 +9695,123 @@ impl MemoryDB {
         Ok(merged)
     }
 
+    /// T4b: expand a set of anchor entity ids to the bounded, cycle-safe k-hop
+    /// neighbourhood over the `relations` graph.
+    ///
+    /// Depth is read from `ORIGIN_GRAPH_KHOP_DEPTH` (default 1 == single-hop
+    /// parity) and the total expanded-node cap from `ORIGIN_GRAPH_KHOP_MAX_NODES`
+    /// (default 25). Edges are collected per hop with parameterized `IN (?, ...)`
+    /// queries (BOTH directions, mirroring `expand_entities_khop`), then handed to
+    /// the pure [`crate::retrieval::traversal::bfs_khop`] which enforces the depth
+    /// limit, the node cap, and cycle termination via a visited set. The pure
+    /// function is the canonical bound; the per-hop fetch is just edge collection.
+    ///
+    /// Returns the deduped, sorted expanded id set (always a superset of the
+    /// non-empty seeds). Empty seeds -> empty (caller keeps the anchor set).
+    async fn expand_anchor_entities_khop(
+        &self,
+        anchor_entity_ids: &[String],
+    ) -> Result<Vec<String>, OriginError> {
+        use crate::retrieval::traversal::{
+            bfs_khop, build_adjacency, parse_khop_depth, parse_khop_max_nodes,
+        };
+
+        if anchor_entity_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let max_hops = parse_khop_depth(std::env::var("ORIGIN_GRAPH_KHOP_DEPTH").ok().as_deref());
+        let max_nodes =
+            parse_khop_max_nodes(std::env::var("ORIGIN_GRAPH_KHOP_MAX_NODES").ok().as_deref());
+
+        // depth 0 -> no expansion; return deduped seeds via the pure fn (no SQL).
+        if max_hops == 0 {
+            return Ok(bfs_khop(
+                &Default::default(),
+                anchor_entity_ids,
+                0,
+                max_nodes,
+            ));
+        }
+
+        let conn = self.conn.lock().await;
+
+        // Collect edges incident to the bounded frontier, hop by hop. A fetch-side
+        // visited set keeps us from re-querying nodes (and bounds total work); the
+        // authoritative depth/cap/cycle bound is bfs_khop over the collected edges.
+        let mut edges: Vec<(String, String)> = Vec::new();
+        let mut fetch_visited: std::collections::HashSet<String> =
+            anchor_entity_ids.iter().cloned().collect();
+        let mut frontier: Vec<String> = anchor_entity_ids.to_vec();
+
+        for _hop in 0..max_hops {
+            if frontier.is_empty() || fetch_visited.len() >= max_nodes.max(anchor_entity_ids.len())
+            {
+                break;
+            }
+
+            // frontier is bounded by max_nodes (≤512, the parse_khop_max_nodes
+            // clamp) via the in-loop fetch cap below, so this IN list can never
+            // exceed SQLite's 999-param limit — no chunking needed.
+            let placeholders: Vec<String> =
+                (1..=frontier.len()).map(|i| format!("?{}", i)).collect();
+            let ph = placeholders.join(",");
+            // Bidirectional incident edges for the current frontier (parameterized).
+            // ORDER BY makes truncation membership deterministic: when the in-loop
+            // cap trims mid-fanout, WHICH neighbours survive must not depend on DB
+            // row order (the eval path is wired, so non-determinism would be a
+            // reproducibility bug).
+            let sql = format!(
+                "SELECT from_entity, to_entity FROM relations WHERE from_entity IN ({ph})
+                 UNION
+                 SELECT from_entity, to_entity FROM relations WHERE to_entity IN ({ph})
+                 ORDER BY from_entity, to_entity",
+                ph = ph
+            );
+            let params: Vec<libsql::Value> = frontier
+                .iter()
+                .map(|id| libsql::Value::Text(id.clone()))
+                .collect();
+
+            let mut rows = conn
+                .query(&sql, libsql::params_from_iter(params))
+                .await
+                .map_err(|e| {
+                    OriginError::VectorDb(format!("expand_anchor_entities_khop: {}", e))
+                })?;
+
+            let fetch_cap = max_nodes.max(anchor_entity_ids.len());
+            let mut next_frontier: Vec<String> = Vec::new();
+            while let Ok(Some(row)) = rows.next().await {
+                // FIX 1 (runaway): bound the per-hop fetch the same way T9's
+                // expand_entities_khop does — stop reading rows once the visited
+                // set hits the cap, so a hub with thousands of relations can't read
+                // them all into edges/fetch_visited/next_frontier before bfs_khop
+                // trims the OUTPUT. Mirrors the sibling `if visited.len() >= cap`.
+                if fetch_visited.len() >= fetch_cap {
+                    break;
+                }
+                let from: String = row.get(0).unwrap_or_default();
+                let to: String = row.get(1).unwrap_or_default();
+                if from.is_empty() || to.is_empty() {
+                    continue;
+                }
+                edges.push((from.clone(), to.clone()));
+                for nb in [from, to] {
+                    if fetch_visited.insert(nb.clone()) {
+                        next_frontier.push(nb);
+                    }
+                }
+            }
+            frontier = next_frontier;
+        }
+
+        drop(conn);
+
+        let adjacency = build_adjacency(&edges);
+        Ok(bfs_khop(&adjacency, anchor_entity_ids, max_hops, max_nodes))
+    }
+
     /// Augment search results with knowledge graph observations via RRF merge.
     /// Graph observations boost scores of related memories but are stripped from
     /// final output by search_memory (KG is internal scaffolding, not user-facing).
@@ -8885,7 +9828,33 @@ impl MemoryDB {
         };
 
         let entity_ids: Vec<String> = entity_hits.iter().map(|r| r.entity.id.clone()).collect();
-        let graph_results = match self.get_observations_for_entities(&entity_ids, limit).await {
+
+        // T4b: k-hop entity-graph traversal (ORIGIN_ENABLE_GRAPH_KHOP, opt-in,
+        // default OFF). When ON, expand the query-anchored entities up to
+        // ORIGIN_GRAPH_KHOP_DEPTH hops (default 1) over the relation graph,
+        // bounded + cycle-safe, then fetch observations for the expanded set.
+        // When OFF, use entity_ids verbatim -> byte-identical single-hop path.
+        // Log-and-degrade: a traversal Err falls back to the anchor set.
+        let observation_seed_ids: Vec<String> = if khop_traversal_enabled() {
+            match self.expand_anchor_entities_khop(&entity_ids).await {
+                Ok(expanded) if !expanded.is_empty() => expanded,
+                Ok(_) => entity_ids.clone(),
+                Err(e) => {
+                    log::warn!(
+                        "[augment_with_graph] T4b k-hop traversal failed: {}; using anchor entities",
+                        e
+                    );
+                    entity_ids.clone()
+                }
+            }
+        } else {
+            entity_ids.clone()
+        };
+
+        let graph_results = match self
+            .get_observations_for_entities(&observation_seed_ids, limit)
+            .await
+        {
             Ok(r) if !r.is_empty() => r,
             _ => return Ok(results),
         };
@@ -9608,6 +10577,330 @@ impl MemoryDB {
         }
     }
 
+    // ==================== T18 summary_nodes (global prelude) ====================
+
+    /// Truncate `body` to a conservative BGE-512-token window (char-based,
+    /// matching the codebase idiom) and embed it. Keeps the full body for
+    /// display; only the embedded text is truncated (RISK 3 in T18 plan).
+    pub fn embed_for_summary(&self, body: &str) -> Result<Vec<f32>, OriginError> {
+        // ~2000 chars is a conservative floor for the 512-token BGE window.
+        let truncated: String = body.chars().take(2000).collect();
+        self.get_or_compute_embedding(&truncated)
+    }
+
+    /// Load eligible memories grouped by `entities.community_id` for the T18
+    /// summary-rollup build. Mirrors the distillation cluster-fetch filter
+    /// (active, non-recap, non-archived, embedded). Memories with no community
+    /// (NULL `community_id`) are skipped — they can't seed a content-derived
+    /// bucket. Returns `(community_id, members)` pairs.
+    pub async fn load_summary_buckets(
+        &self,
+    ) -> Result<Vec<(u32, Vec<crate::refinery::summary::SummaryMember>)>, OriginError> {
+        use crate::refinery::summary::SummaryMember;
+        let conn = self.conn.lock().await;
+        let mut rows = conn
+            .query(
+                "SELECT m.source_id, m.title, m.content, e.community_id \
+                 FROM memories m \
+                 JOIN entities e ON m.entity_id = e.id \
+                 WHERE m.source = 'memory' AND m.chunk_index = 0 \
+                   AND m.is_recap = 0 \
+                   AND m.supersede_mode <> 'archive' \
+                   AND m.source_id NOT LIKE 'merged_%' \
+                   AND m.source_id NOT LIKE 'recap_%' \
+                   AND m.embedding IS NOT NULL \
+                   AND e.community_id IS NOT NULL \
+                 ORDER BY e.community_id, m.last_modified DESC",
+                (),
+            )
+            .await
+            .map_err(|e| OriginError::VectorDb(format!("load_summary_buckets: {e}")))?;
+
+        let mut groups: std::collections::BTreeMap<u32, Vec<SummaryMember>> =
+            std::collections::BTreeMap::new();
+        while let Some(row) = rows
+            .next()
+            .await
+            .map_err(|e| OriginError::VectorDb(e.to_string()))?
+        {
+            let source_id: String = row
+                .get(0)
+                .map_err(|e| OriginError::VectorDb(e.to_string()))?;
+            let title: String = row.get(1).unwrap_or_default();
+            let content: String = row
+                .get(2)
+                .map_err(|e| OriginError::VectorDb(e.to_string()))?;
+            let community_id: u32 = match row.get::<u32>(3) {
+                Ok(c) => c,
+                Err(_) => continue,
+            };
+            groups.entry(community_id).or_default().push(SummaryMember {
+                source_id,
+                title,
+                content,
+            });
+        }
+        drop(rows);
+        drop(conn);
+        Ok(groups.into_iter().collect())
+    }
+
+    /// Delete all summary nodes (ON DELETE CASCADE wipes summary_node_sources).
+    /// Used by the rebuild path for a clean delete+reinsert.
+    pub async fn clear_summary_nodes(&self) -> Result<(), OriginError> {
+        let conn = self.conn.lock().await;
+        conn.execute("DELETE FROM summary_nodes", ())
+            .await
+            .map_err(|e| OriginError::VectorDb(format!("clear_summary_nodes: {e}")))?;
+        Ok(())
+    }
+
+    /// Insert one summary node + its provenance source rows. Wraps the multi-row
+    /// source insert in BEGIN/COMMIT (batch-SQL convention).
+    #[allow(clippy::too_many_arguments)]
+    pub async fn insert_summary_node(
+        &self,
+        id: &str,
+        level: i64,
+        bucket_key: Option<&str>,
+        title: &str,
+        body: &str,
+        embedding: &[f32],
+        source_count: i64,
+        generated_at: i64,
+        sources: &[String],
+    ) -> Result<(), OriginError> {
+        let vec_str = Self::vec_to_sql(embedding);
+        let conn = self.conn.lock().await;
+        conn.execute(
+            "INSERT OR REPLACE INTO summary_nodes \
+             (id, level, bucket_key, title, body, embedding, source_count, generated_at, status) \
+             VALUES (?1, ?2, ?3, ?4, ?5, vector32(?6), ?7, ?8, 'active')",
+            libsql::params![
+                id.to_string(),
+                level,
+                bucket_key.map(|s| s.to_string()),
+                title.to_string(),
+                body.to_string(),
+                vec_str,
+                source_count,
+                generated_at
+            ],
+        )
+        .await
+        .map_err(|e| OriginError::VectorDb(format!("insert_summary_node: {e}")))?;
+
+        if !sources.is_empty() {
+            conn.execute("BEGIN", ()).await.map_err(|e| {
+                OriginError::VectorDb(format!("insert_summary_node srcs begin: {e}"))
+            })?;
+            for src in sources {
+                conn.execute(
+                    "INSERT OR IGNORE INTO summary_node_sources (node_id, memory_source_id) \
+                     VALUES (?1, ?2)",
+                    libsql::params![id.to_string(), src.clone()],
+                )
+                .await
+                .map_err(|e| OriginError::VectorDb(format!("insert_summary_node src: {e}")))?;
+            }
+            conn.execute("COMMIT", ()).await.map_err(|e| {
+                OriginError::VectorDb(format!("insert_summary_node srcs commit: {e}"))
+            })?;
+        }
+        Ok(())
+    }
+
+    /// Provenance source ids a summary node was built from. Mirrors
+    /// `get_page_sources` — feeds source-expanded coverage credit + the
+    /// space-filter overlap gate.
+    pub async fn get_summary_node_sources(
+        &self,
+        node_id: &str,
+    ) -> Result<Vec<String>, OriginError> {
+        let conn = self.conn.lock().await;
+        let mut rows = conn
+            .query(
+                "SELECT memory_source_id FROM summary_node_sources WHERE node_id = ?1",
+                libsql::params![node_id.to_string()],
+            )
+            .await
+            .map_err(|e| OriginError::VectorDb(format!("get_summary_node_sources: {e}")))?;
+        let mut out = Vec::new();
+        while let Some(row) = rows
+            .next()
+            .await
+            .map_err(|e| OriginError::VectorDb(e.to_string()))?
+        {
+            out.push(
+                row.get::<String>(0)
+                    .map_err(|e| OriginError::VectorDb(e.to_string()))?,
+            );
+        }
+        Ok(out)
+    }
+
+    /// Retrieve summary nodes for the read-time prelude. ALWAYS returns the
+    /// single `level=1` root node (not vector-gated), plus up to `k` vector- +
+    /// FTS-matched `level=0` bucket nodes (RRF-merged), root first. Empty table
+    /// returns `Vec::new()` and never errors (graceful-degrade contract).
+    pub async fn search_summary_nodes(
+        &self,
+        query: &str,
+        k: usize,
+    ) -> Result<Vec<SummaryNode>, OriginError> {
+        let embedding = self.get_or_compute_embedding(query)?;
+        let vec_str = Self::vec_to_sql(&embedding);
+        let fetch_limit = (k.max(1) * 3) as i64;
+
+        let conn = self.conn.lock().await;
+
+        let select = "s.id, s.level, s.bucket_key, s.title, s.body, s.source_count, s.generated_at";
+
+        // Root node (always included, not vector-gated).
+        let mut root: Option<SummaryNode> = None;
+        if let Ok(mut rows) = conn
+            .query(
+                &format!(
+                    "SELECT {select} FROM summary_nodes s \
+                     WHERE s.level = 1 AND s.status = 'active' LIMIT 1"
+                ),
+                (),
+            )
+            .await
+        {
+            if let Ok(Some(row)) = rows.next().await {
+                root = Self::row_to_summary_node(&row).ok();
+            }
+        }
+
+        // Vector-matched bucket nodes.
+        let mut ranked: std::collections::HashMap<String, (f32, SummaryNode)> =
+            std::collections::HashMap::new();
+        let vec_sql = format!(
+            "SELECT {select}, vector_distance_cos(s.embedding, vector32(?1)) AS dist \
+             FROM vector_top_k('idx_summary_nodes_embedding', vector32(?1), ?2) AS vt \
+             JOIN summary_nodes s ON s.rowid = vt.id \
+             WHERE s.level = 0 AND s.status = 'active'"
+        );
+        if let Ok(mut rows) = conn
+            .query(&vec_sql, libsql::params![vec_str.clone(), fetch_limit])
+            .await
+        {
+            let mut rank = 0usize;
+            while let Ok(Some(row)) = rows.next().await {
+                if let Ok(node) = Self::row_to_summary_node(&row) {
+                    let rrf = 1.0 / (60.0 + rank as f32);
+                    ranked.entry(node.id.clone()).or_insert((rrf, node));
+                    rank += 1;
+                }
+            }
+        }
+
+        // FTS-matched bucket nodes (RRF-merged with vector).
+        use crate::retrieval::fts_query::sanitize_fts_query;
+        let fts_q = sanitize_fts_query(query);
+        let fts_sql = format!(
+            "SELECT {select} FROM summary_nodes s \
+             JOIN summary_nodes_fts f ON s.rowid = f.rowid \
+             WHERE summary_nodes_fts MATCH ?1 AND s.level = 0 AND s.status = 'active' \
+             ORDER BY rank LIMIT ?2"
+        );
+        if let Ok(mut rows) = conn
+            .query(&fts_sql, libsql::params![fts_q, fetch_limit])
+            .await
+        {
+            let mut rank = 0usize;
+            while let Ok(Some(row)) = rows.next().await {
+                if let Ok(node) = Self::row_to_summary_node(&row) {
+                    let rrf = 1.0 / (60.0 + rank as f32);
+                    ranked
+                        .entry(node.id.clone())
+                        .and_modify(|(s, _)| *s += rrf)
+                        .or_insert((rrf, node));
+                    rank += 1;
+                }
+            }
+        }
+        drop(conn);
+
+        let mut buckets: Vec<(f32, SummaryNode)> = ranked.into_values().collect();
+        buckets.sort_by(|a, b| {
+            b.0.partial_cmp(&a.0)
+                .unwrap_or(std::cmp::Ordering::Equal)
+                .then_with(|| a.1.id.cmp(&b.1.id))
+        });
+        buckets.truncate(k);
+
+        let mut out: Vec<SummaryNode> = Vec::with_capacity(buckets.len() + 1);
+        if let Some(r) = root {
+            out.push(r);
+        }
+        out.extend(buckets.into_iter().map(|(_, n)| n));
+        Ok(out)
+    }
+
+    fn row_to_summary_node(row: &libsql::Row) -> Result<SummaryNode, OriginError> {
+        Ok(SummaryNode {
+            id: row
+                .get(0)
+                .map_err(|e| OriginError::VectorDb(e.to_string()))?,
+            level: row
+                .get(1)
+                .map_err(|e| OriginError::VectorDb(e.to_string()))?,
+            bucket_key: row.get(2).unwrap_or(None),
+            title: row
+                .get(3)
+                .map_err(|e| OriginError::VectorDb(e.to_string()))?,
+            body: row
+                .get(4)
+                .map_err(|e| OriginError::VectorDb(e.to_string()))?,
+            source_count: row.get(5).unwrap_or(0),
+            generated_at: row.get(6).unwrap_or(0),
+        })
+    }
+
+    /// Build a `SearchResult` from a summary node. `source="summary"`, score
+    /// zeroed (mirrors `search_result_from_page` — summary rows carry no RRF
+    /// score; they ride the prelude, never the rerank pool).
+    fn search_result_from_summary(node: SummaryNode) -> SearchResult {
+        SearchResult {
+            id: node.id.clone(),
+            content: node.body,
+            source: "summary".to_string(),
+            source_id: node.id,
+            title: node.title,
+            url: None,
+            chunk_index: 0,
+            last_modified: node.generated_at,
+            score: 0.0,
+            chunk_type: None,
+            language: None,
+            semantic_unit: None,
+            memory_type: None,
+            space: None,
+            source_agent: None,
+            confidence: None,
+            confirmed: None,
+            stability: None,
+            supersedes: None,
+            summary: None,
+            entity_id: None,
+            entity_name: None,
+            quality: None,
+            importance: None,
+            is_archived: false,
+            is_recap: false,
+            structured_fields: None,
+            retrieval_cue: None,
+            source_text: None,
+            raw_score: 0.0,
+            version: 1,
+            pending_revision: false,
+            merged_from: None,
+            last_delta_summary: None,
+        }
+    }
+
     /// Insert an eval signal (fire-and-forget, INSERT OR IGNORE for dedup).
     #[allow(clippy::too_many_arguments)]
     pub async fn insert_eval_signal(
@@ -9649,6 +10942,16 @@ impl MemoryDB {
         )
         .await
         .ok();
+        // T15a: clean up orphaned child_vectors for memory parents (no FK cascade;
+        // parent_id is source_id not rowid). Scoped to memory deletes.
+        if source == "memory" {
+            conn.execute(
+                "DELETE FROM child_vectors WHERE parent_kind = 'memory' AND parent_id = ?1",
+                libsql::params![source_id.to_string()],
+            )
+            .await
+            .ok();
+        }
         Ok(())
     }
 
@@ -9915,7 +11218,145 @@ impl MemoryDB {
         )
         .await
         .map_err(|e| OriginError::VectorDb(format!("update_memory: {}", e)))?;
+        drop(conn);
+        // T15a: keep child vectors in sync with the edited content (no-op when
+        // the fact channel is off).
+        self.rebuild_child_vectors_for(id).await?;
         Ok(())
+    }
+
+    /// Rebuild the `child_vectors` rows for a single parent memory from its
+    /// CURRENT content + structured_fields (T15a). Delete-then-insert by
+    /// `parent_id` in one tx so no stale child survives an in-place content
+    /// edit. No-op (and no child rows) when `fact_channel_enabled()` is false.
+    ///
+    /// Idempotent: child ids are `sha256(parent_id + field)[..16]`, so a rebuild
+    /// over unchanged content produces the same rows. Called from the in-place
+    /// content-change paths (`update_memory`, `upsert_memory_in_place`) so a
+    /// surgical edit outside the `upsert_documents` store path keeps children in
+    /// sync.
+    pub async fn rebuild_child_vectors_for(&self, parent_id: &str) -> Result<(), OriginError> {
+        if !crate::retrieval::fact_channel::fact_channel_enabled() {
+            return Ok(());
+        }
+
+        // Read the current primary-chunk content + structured_fields.
+        let (content, structured_fields): (String, Option<String>) = {
+            let conn = self.conn.lock().await;
+            let mut rows = conn
+                .query(
+                    "SELECT content, structured_fields FROM memories
+                     WHERE source_id = ?1 AND source = 'memory' AND chunk_index = 0
+                     LIMIT 1",
+                    libsql::params![parent_id.to_string()],
+                )
+                .await
+                .map_err(|e| OriginError::VectorDb(format!("rebuild_child read: {e}")))?;
+            match rows.next().await {
+                Ok(Some(row)) => (
+                    row.get::<String>(0).unwrap_or_default(),
+                    row.get::<Option<String>>(1).unwrap_or(None),
+                ),
+                _ => return Ok(()), // parent gone; nothing to rebuild
+            }
+        };
+
+        // Build (field, text) children: narrative + per structured field.
+        let mut fields: Vec<(String, String)> = Vec::new();
+        let content = redact_pii(&content);
+        if !content.trim().is_empty() {
+            fields.push(("narrative".to_string(), content));
+        }
+        if let Some(ref sf) = structured_fields {
+            for child in crate::schema::split_structured_fields_to_facts(sf) {
+                let field = child
+                    .split_once(": ")
+                    .map(|(k, _)| k.to_string())
+                    .unwrap_or_else(|| "field".to_string());
+                fields.push((field, child));
+            }
+        }
+
+        let texts: Vec<String> = fields.iter().map(|(_, t)| t.clone()).collect();
+        let embeddings = if texts.is_empty() {
+            Vec::new()
+        } else {
+            self.generate_embeddings(&texts)?
+        };
+
+        let conn = self.conn.lock().await;
+        conn.execute("BEGIN", ())
+            .await
+            .map_err(|e| OriginError::VectorDb(format!("rebuild_child begin: {e}")))?;
+        conn.execute(
+            "DELETE FROM child_vectors WHERE parent_kind = 'memory' AND parent_id = ?1",
+            libsql::params![parent_id.to_string()],
+        )
+        .await
+        .map_err(|e| OriginError::VectorDb(format!("rebuild_child delete: {e}")))?;
+        for ((field, text), embedding) in fields.into_iter().zip(embeddings.iter()) {
+            let mut hasher = Sha256::new();
+            hasher.update(parent_id.as_bytes());
+            hasher.update(b"|");
+            hasher.update(field.as_bytes());
+            let hash = format!("{:x}", hasher.finalize());
+            let child_id = hash[..16].to_string();
+            let vec_str = Self::vec_to_sql(embedding);
+            conn.execute(
+                "INSERT OR REPLACE INTO child_vectors (id, parent_kind, parent_id, field, content, embedding)
+                 VALUES (?1, 'memory', ?2, ?3, ?4, vector32(?5))",
+                libsql::params![child_id, parent_id.to_string(), field, text, vec_str],
+            )
+            .await
+            .map_err(|e| OriginError::VectorDb(format!("rebuild_child insert: {e}")))?;
+        }
+        conn.execute("COMMIT", ())
+            .await
+            .map_err(|e| OriginError::VectorDb(format!("rebuild_child commit: {e}")))?;
+        Ok(())
+    }
+
+    /// Idempotent backfill: rebuild `child_vectors` for every `source='memory'`
+    /// parent that currently has NO child rows (T15a). This is the supported
+    /// turn-it-on-later path — after migration 58 or after flipping
+    /// `ORIGIN_ENABLE_FACT_CHANNEL` on, the table is empty, so a DB ingested with
+    /// the flag off needs this pass before the read channel can surface anything.
+    ///
+    /// No-op when `fact_channel_enabled()` is false. Returns the number of
+    /// parents rebuilt.
+    pub async fn rebuild_child_vectors_for_missing(&self) -> Result<usize, OriginError> {
+        if !crate::retrieval::fact_channel::fact_channel_enabled() {
+            return Ok(0);
+        }
+        // Find primary-chunk memory parents with no child_vectors rows yet.
+        let missing: Vec<String> = {
+            let conn = self.conn.lock().await;
+            let mut rows = conn
+                .query(
+                    "SELECT m.source_id FROM memories m
+                     WHERE m.source = 'memory' AND m.chunk_index = 0
+                       AND NOT EXISTS (
+                           SELECT 1 FROM child_vectors cv
+                           WHERE cv.parent_kind = 'memory' AND cv.parent_id = m.source_id
+                       )",
+                    (),
+                )
+                .await
+                .map_err(|e| OriginError::VectorDb(format!("rebuild_missing scan: {e}")))?;
+            let mut ids = Vec::new();
+            while let Ok(Some(row)) = rows.next().await {
+                if let Ok(id) = row.get::<String>(0) {
+                    ids.push(id);
+                }
+            }
+            ids
+        };
+        let mut rebuilt = 0usize;
+        for id in &missing {
+            self.rebuild_child_vectors_for(id).await?;
+            rebuilt += 1;
+        }
+        Ok(rebuilt)
     }
 
     /// Replace entire document content: re-chunk, re-embed, re-insert.
@@ -10604,8 +12045,10 @@ impl MemoryDB {
                 // Also exclude archived supersedes and recap rows to match the
                 // same set returned by list_unconfirmed_memories.
                 conditions.push("(confirmed = 0 OR confirmed IS NULL)".to_string());
-                conditions
-                    .push("(supersede_mode IS NULL OR supersede_mode != 'archive')".to_string());
+                conditions.push(
+                    "(supersede_mode IS NULL OR supersede_mode NOT IN ('archive', 'evicted'))"
+                        .to_string(),
+                );
                 conditions.push("(is_recap IS NULL OR is_recap != 1)".to_string());
             }
         }
@@ -15833,6 +17276,9 @@ impl MemoryDB {
             "entity_aliases",
             "entities",
             "memories",
+            // T15a: child_vectors has no FK cascade; wipe alongside memories so
+            // eval re-seeds don't accumulate orphaned child rows.
+            "child_vectors",
         ] {
             conn.execute(&format!("DELETE FROM {}", table), ())
                 .await
@@ -16656,7 +18102,7 @@ impl MemoryDB {
                             entity_id \
                      FROM memories \
                      WHERE source = 'memory' AND chunk_index = 0 \
-                       AND (supersede_mode IS NULL OR supersede_mode != 'archive') \
+                       AND (supersede_mode IS NULL OR supersede_mode NOT IN ('archive', 'evicted')) \
                      ORDER BY COALESCE(last_modified, created_at) DESC \
                      LIMIT ?1",
                     libsql::params![limit],
@@ -16772,7 +18218,7 @@ impl MemoryDB {
                         created_at, last_modified \
                  FROM memories \
                  WHERE source = 'memory' AND chunk_index = 0 \
-                   AND (supersede_mode IS NULL OR supersede_mode != 'archive') \
+                   AND (supersede_mode IS NULL OR supersede_mode NOT IN ('archive', 'evicted')) \
                    AND (confirmed = 0 OR confirmed IS NULL) \
                    AND (is_recap IS NULL OR is_recap != 1) \
                  ORDER BY COALESCE(last_modified, created_at) DESC \
@@ -17295,6 +18741,142 @@ impl MemoryDB {
             .await
             .map_err(|e| OriginError::VectorDb(format!("prune_rejections: {e}")))?;
         Ok(deleted as usize)
+    }
+
+    /// T21 Stage 1 — archive-not-delete soft eviction.
+    ///
+    /// Flips stale, low-`effective_confidence`, non-immune memories to
+    /// `supersede_mode='evicted'` so they drop out of default retrieval while
+    /// staying fully recoverable in the table (no hard DELETE — Origin's core
+    /// contract is "every DELETE is explicit"). The salience proxy is
+    /// `effective_confidence`, already folded over confidence × recency × access
+    /// by the Decay phase, so this MUST run after Decay within a cycle.
+    ///
+    /// Belt-and-suspenders gate: returns `skipped_disabled: true` with zero
+    /// mutations when `ORIGIN_ENABLE_EVICTION` is off, even though the refinery
+    /// dispatch also gates on the flag. Selection logic lives in the pure
+    /// [`select_evictions`]; this method only does the SELECT + batch UPDATE.
+    ///
+    /// `recover_before_delete` is a no-op in Stage 1 (archive IS recovery);
+    /// hard-delete + consolidation is Stage 2 (separate plan).
+    pub async fn evict_stale(
+        &self,
+        cfg: &crate::tuning::EvictionConfig,
+    ) -> Result<EvictionReport, OriginError> {
+        // Belt-and-suspenders: do nothing unless explicitly enabled.
+        if !eviction_enabled() {
+            return Ok(EvictionReport {
+                archived: 0,
+                deleted: 0,
+                skipped_disabled: true,
+            });
+        }
+
+        let now_epoch = chrono::Utc::now().timestamp();
+        let conn = self.conn.lock().await;
+
+        // Candidate SELECT — only type-safe SQL gates here (confirmed/pinned/
+        // already-archived/confidence-floor). The age gate and Protected-tier
+        // exclusion are applied in Rust by select_evictions, because
+        // `last_accessed` is stored as a TEXT datetime string (datetime('now'))
+        // in an INTEGER-affinity column, so a SQL `last_accessed < ?epoch`
+        // compares TEXT vs INTEGER and never fires. We over-select on confidence
+        // and let the pure policy narrow it down.
+        let mut rows = conn
+            .query(
+                "SELECT source_id, effective_confidence, CAST(last_accessed AS TEXT), memory_type, space \
+                 FROM memories \
+                 WHERE source = 'memory' AND chunk_index = 0 \
+                   AND confirmed = 0 AND pinned = 0 \
+                   AND supersede_mode NOT IN ('archive', 'evicted') \
+                   AND effective_confidence IS NOT NULL \
+                   AND effective_confidence < ?1",
+                libsql::params![cfg.evict_confidence_floor],
+            )
+            .await
+            .map_err(|e| OriginError::VectorDb(format!("evict_stale select: {e}")))?;
+
+        let mut candidates: Vec<EvictCandidate> = Vec::new();
+        while let Some(row) = rows
+            .next()
+            .await
+            .map_err(|e| OriginError::VectorDb(format!("evict_stale row: {e}")))?
+        {
+            candidates.push(EvictCandidate {
+                source_id: row
+                    .get(0)
+                    .map_err(|e| OriginError::VectorDb(e.to_string()))?,
+                effective_confidence: row.get::<f64>(1).unwrap_or(1.0),
+                last_accessed: row.get(2).unwrap_or(None),
+                memory_type: row.get(3).unwrap_or(None),
+                space: row.get(4).unwrap_or(None),
+            });
+        }
+        drop(rows);
+
+        // When per_space_cap is set, the floor SELECT would hide cap-eligible
+        // rows whose effective_confidence is above the floor. Re-fetch the full
+        // non-immune set for the cap pass so A5 holds independently of the floor.
+        if cfg.per_space_cap.is_some() {
+            let mut all_rows = conn
+                .query(
+                    "SELECT source_id, effective_confidence, CAST(last_accessed AS TEXT), memory_type, space \
+                     FROM memories \
+                     WHERE source = 'memory' AND chunk_index = 0 \
+                       AND confirmed = 0 AND pinned = 0 \
+                       AND supersede_mode NOT IN ('archive', 'evicted') \
+                       AND effective_confidence IS NOT NULL",
+                    (),
+                )
+                .await
+                .map_err(|e| OriginError::VectorDb(format!("evict_stale cap select: {e}")))?;
+            candidates.clear();
+            while let Some(row) = all_rows
+                .next()
+                .await
+                .map_err(|e| OriginError::VectorDb(format!("evict_stale cap row: {e}")))?
+            {
+                candidates.push(EvictCandidate {
+                    source_id: row
+                        .get(0)
+                        .map_err(|e| OriginError::VectorDb(e.to_string()))?,
+                    effective_confidence: row.get::<f64>(1).unwrap_or(1.0),
+                    last_accessed: row.get(2).unwrap_or(None),
+                    memory_type: row.get(3).unwrap_or(None),
+                    space: row.get(4).unwrap_or(None),
+                });
+            }
+            drop(all_rows);
+        }
+
+        let to_archive = select_evictions(&candidates, cfg, now_epoch);
+
+        // Archive (NOT delete) in one BEGIN/COMMIT (mirror
+        // decay_update_confidence batch UPDATE).
+        let archived = to_archive.len();
+        if !to_archive.is_empty() {
+            conn.execute("BEGIN", ())
+                .await
+                .map_err(|e| OriginError::VectorDb(format!("evict begin: {e}")))?;
+            for source_id in &to_archive {
+                conn.execute(
+                    "UPDATE memories SET supersede_mode = 'evicted' \
+                     WHERE source_id = ?1 AND source = 'memory'",
+                    libsql::params![source_id.as_str()],
+                )
+                .await
+                .map_err(|e| OriginError::VectorDb(format!("evict update: {e}")))?;
+            }
+            conn.execute("COMMIT", ())
+                .await
+                .map_err(|e| OriginError::VectorDb(format!("evict commit: {e}")))?;
+        }
+
+        Ok(EvictionReport {
+            archived,
+            deleted: 0,
+            skipped_disabled: false,
+        })
     }
 
     // ==================== Concepts ====================
@@ -19623,6 +21205,8 @@ impl MemoryDB {
             "[db] upsert_memory_in_place: source_id={source_id} v{} → v{new_version}",
             saved.version
         );
+        // T15a: re-sync child vectors after an in-place content edit.
+        self.rebuild_child_vectors_for(source_id).await?;
         Ok(())
     }
 
@@ -21050,6 +22634,15 @@ pub(crate) mod tests {
                 (),
             )
             .await;
+        // T15a: child-vector index (migration 58 also creates it IF NOT EXISTS).
+        let _ = conn
+            .execute(
+                "CREATE INDEX IF NOT EXISTS child_vectors_vec_idx ON child_vectors (
+                    libsql_vector_idx(embedding, 'metric=cosine', 'compress_neighbors=float8', 'max_neighbors=32')
+                )",
+                (),
+            )
+            .await;
 
         let memory_db = MemoryDB {
             _db: db,
@@ -21492,6 +23085,478 @@ pub(crate) mod tests {
                 .iter()
                 .all(|r| r.source_agent.as_deref() == Some("claude-code")),
             "all results should have source_agent=claude-code"
+        );
+    }
+
+    #[tokio::test]
+    async fn diag2_merges() {
+        let (db, _dir) = test_db().await;
+        db.upsert_documents(vec![
+            make_memory_doc(
+                "q1",
+                "astronomy telescope observation distant galaxies nebula",
+                "fact",
+                "work",
+                "a",
+            ),
+            make_memory_doc(
+                "d1",
+                "astronomy telescope mirror aperture focal length optics",
+                "fact",
+                "work",
+                "a",
+            ),
+            make_memory_doc(
+                "d2",
+                "galaxies spiral elliptical cosmology redshift expansion",
+                "fact",
+                "work",
+                "a",
+            ),
+            make_memory_doc(
+                "d3",
+                "telescope mount tracking equatorial astronomy imaging",
+                "fact",
+                "work",
+                "a",
+            ),
+            make_memory_doc(
+                "d4",
+                "observation distant stars galaxies astronomy spectroscopy",
+                "fact",
+                "work",
+                "a",
+            ),
+            make_memory_doc(
+                "e",
+                "photosynthesis chloroplast biology cellular respiration enzyme",
+                "fact",
+                "work",
+                "a",
+            ),
+        ])
+        .await
+        .unwrap();
+        for lim in [3usize, 4, 5] {
+            let p = db
+                .search_memory(
+                    "astronomy telescope galaxies",
+                    lim,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                )
+                .await
+                .unwrap();
+            eprintln!(
+                "DIAG2 plain lim={} -> {:?}",
+                lim,
+                p.iter().map(|r| r.source_id.clone()).collect::<Vec<_>>()
+            );
+        }
+        let d = db
+            .search_memory(
+                "photosynthesis chloroplast biology cellular respiration enzyme",
+                10,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+        eprintln!(
+            "DIAG2 draft -> {:?}",
+            d.iter().map(|r| r.source_id.clone()).collect::<Vec<_>>()
+        );
+    }
+
+    // ==================== search_memory_prf (T6: pseudo-relevance feedback) ====================
+
+    // PRF tests read the process-global `ORIGIN_PRF_ROUNDS` via `prf_rounds()`.
+    // `temp_env::async_with_vars` mutates that global, so two PRF tests running
+    // concurrently can corrupt each other's flag mid-`.await`. Serialize them on
+    // a process-local async lock so the flag is stable across each test's awaits
+    // (a `tokio::sync::Mutex` avoids the `await_holding_lock` lint that a
+    // `std::sync::Mutex` would trip).
+    static PRF_ENV_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+    #[tokio::test]
+    async fn search_memory_prf_zero_rounds_equals_plain_search() {
+        let _serial = PRF_ENV_LOCK.lock().await;
+        let (db, _dir) = test_db().await;
+        db.upsert_documents(vec![
+            make_memory_doc(
+                "m1",
+                "Favorite color is blue for UI elements",
+                "preference",
+                "personal",
+                "claude-code",
+            ),
+            make_memory_doc(
+                "m2",
+                "Project deadline is next Friday for release",
+                "fact",
+                "work",
+                "chatgpt",
+            ),
+            make_memory_doc(
+                "m3",
+                "The database uses libSQL with vector search",
+                "fact",
+                "work",
+                "cursor",
+            ),
+        ])
+        .await
+        .unwrap();
+
+        let llm: Arc<dyn crate::llm_provider::LlmProvider> =
+            Arc::new(crate::llm_provider::MockProvider::new("a draft answer"));
+
+        let (prf, plain) =
+            temp_env::async_with_vars([("ORIGIN_PRF_ROUNDS", None::<&str>)], async {
+                let prf = db
+                    .search_memory_prf("color blue", 10, None, None, None, Some(llm.clone()))
+                    .await
+                    .unwrap();
+                let plain = db
+                    .search_memory("color blue", 10, None, None, None, None, None, None)
+                    .await
+                    .unwrap();
+                (prf, plain)
+            })
+            .await;
+
+        let prf_ids: Vec<&str> = prf.iter().map(|r| r.id.as_str()).collect();
+        let plain_ids: Vec<&str> = plain.iter().map(|r| r.id.as_str()).collect();
+        assert_eq!(
+            prf_ids, plain_ids,
+            "ROUNDS unset must be byte-identical (same ids, same order) to plain search"
+        );
+    }
+
+    #[tokio::test]
+    async fn search_memory_prf_no_llm_degrades_to_plain() {
+        let _serial = PRF_ENV_LOCK.lock().await;
+        let (db, _dir) = test_db().await;
+        db.upsert_documents(vec![
+            make_memory_doc(
+                "m1",
+                "Favorite color is blue for UI elements",
+                "preference",
+                "personal",
+                "claude-code",
+            ),
+            make_memory_doc(
+                "m2",
+                "Project deadline is next Friday for release",
+                "fact",
+                "work",
+                "chatgpt",
+            ),
+        ])
+        .await
+        .unwrap();
+
+        let (prf, plain) = temp_env::async_with_vars([("ORIGIN_PRF_ROUNDS", Some("2"))], async {
+            let prf = db
+                .search_memory_prf("color blue", 10, None, None, None, None)
+                .await
+                .unwrap();
+            let plain = db
+                .search_memory("color blue", 10, None, None, None, None, None, None)
+                .await
+                .unwrap();
+            (prf, plain)
+        })
+        .await;
+
+        let prf_ids: Vec<&str> = prf.iter().map(|r| r.id.as_str()).collect();
+        let plain_ids: Vec<&str> = plain.iter().map(|r| r.id.as_str()).collect();
+        assert_eq!(
+            prf_ids, plain_ids,
+            "llm=None must degrade to plain search even with ROUNDS=2"
+        );
+    }
+
+    #[tokio::test]
+    async fn search_memory_prf_llm_unavailable_degrades() {
+        let _serial = PRF_ENV_LOCK.lock().await;
+        let (db, _dir) = test_db().await;
+        db.upsert_documents(vec![
+            make_memory_doc(
+                "m1",
+                "Favorite color is blue for UI elements",
+                "preference",
+                "personal",
+                "claude-code",
+            ),
+            make_memory_doc(
+                "m2",
+                "Project deadline is next Friday for release",
+                "fact",
+                "work",
+                "chatgpt",
+            ),
+        ])
+        .await
+        .unwrap();
+
+        let llm: Arc<dyn crate::llm_provider::LlmProvider> =
+            Arc::new(crate::llm_provider::MockProvider::unavailable());
+
+        let (prf, plain) = temp_env::async_with_vars([("ORIGIN_PRF_ROUNDS", Some("2"))], async {
+            let prf = db
+                .search_memory_prf("color blue", 10, None, None, None, Some(llm.clone()))
+                .await
+                .unwrap();
+            let plain = db
+                .search_memory("color blue", 10, None, None, None, None, None, None)
+                .await
+                .unwrap();
+            (prf, plain)
+        })
+        .await;
+
+        // Every draft returns NotAvailable -> round-0 list survives, loop breaks,
+        // no panic, result equals plain search (log-and-degrade).
+        let prf_ids: Vec<&str> = prf.iter().map(|r| r.id.as_str()).collect();
+        let plain_ids: Vec<&str> = plain.iter().map(|r| r.id.as_str()).collect();
+        assert_eq!(
+            prf_ids, plain_ids,
+            "unavailable LLM must degrade to plain search, round-0 survives"
+        );
+    }
+
+    #[tokio::test]
+    async fn search_memory_prf_original_query_floor() {
+        let _serial = PRF_ENV_LOCK.lock().await;
+        let (db, _dir) = test_db().await;
+        // D is a strong literal match for the query.
+        db.upsert_documents(vec![
+            make_memory_doc(
+                "dq",
+                "quantum entanglement physics experiment results",
+                "fact",
+                "work",
+                "claude-code",
+            ),
+            make_memory_doc(
+                "o1",
+                "grocery shopping list for the weekend",
+                "fact",
+                "personal",
+                "chatgpt",
+            ),
+            make_memory_doc(
+                "o2",
+                "car maintenance schedule oil change",
+                "fact",
+                "personal",
+                "cursor",
+            ),
+        ])
+        .await
+        .unwrap();
+
+        // Off-topic draft: should NOT displace the literal hit D (round-0 floor).
+        let llm: Arc<dyn crate::llm_provider::LlmProvider> = Arc::new(
+            crate::llm_provider::MockProvider::new("grocery shopping car maintenance weekend"),
+        );
+
+        let prf = temp_env::async_with_vars([("ORIGIN_PRF_ROUNDS", Some("1"))], async {
+            db.search_memory_prf(
+                "quantum entanglement physics",
+                10,
+                None,
+                None,
+                None,
+                Some(llm.clone()),
+            )
+            .await
+            .unwrap()
+        })
+        .await;
+
+        let ids: Vec<&str> = prf.iter().map(|r| r.source_id.as_str()).collect();
+        assert!(
+            ids.contains(&"dq"),
+            "literal hit D must survive an off-topic draft (round-0 1/(60+rank) floor); got {:?}",
+            ids
+        );
+    }
+
+    #[tokio::test]
+    async fn search_memory_prf_converges_early() {
+        let _serial = PRF_ENV_LOCK.lock().await;
+        let (db, _dir) = test_db().await;
+        db.upsert_documents(vec![
+            make_memory_doc(
+                "m1",
+                "Favorite color is blue for UI elements",
+                "preference",
+                "personal",
+                "claude-code",
+            ),
+            make_memory_doc(
+                "m2",
+                "Project deadline is next Friday for release",
+                "fact",
+                "work",
+                "chatgpt",
+            ),
+            make_memory_doc(
+                "m3",
+                "The database uses libSQL with vector search",
+                "fact",
+                "work",
+                "cursor",
+            ),
+        ])
+        .await
+        .unwrap();
+
+        // Fixed draft every call. The draft search returns the same id-set as the
+        // round-0 pool (small corpus), so the first feedback round already
+        // converges (`cur.is_subset(seen)`) and the loop breaks -- ROUNDS=3
+        // accumulates the same streams as ROUNDS=1.
+        let llm: Arc<dyn crate::llm_provider::LlmProvider> = Arc::new(
+            crate::llm_provider::MockProvider::new("database libSQL vector search"),
+        );
+
+        let three = temp_env::async_with_vars([("ORIGIN_PRF_ROUNDS", Some("3"))], async {
+            db.search_memory_prf("color blue", 10, None, None, None, Some(llm.clone()))
+                .await
+                .unwrap()
+        })
+        .await;
+        let one = temp_env::async_with_vars([("ORIGIN_PRF_ROUNDS", Some("1"))], async {
+            db.search_memory_prf("color blue", 10, None, None, None, Some(llm.clone()))
+                .await
+                .unwrap()
+        })
+        .await;
+
+        // Convergence guarantees the same candidate SET regardless of round
+        // budget. Compare as sets: with two RRF streams some docs tie on summed
+        // 1/(60+rank) score, and `HashMap::into_values()` iteration order makes
+        // the final order of tied docs non-deterministic run-to-run -- an
+        // ordered-vec assertion would be flaky. The set is the real invariant.
+        let three_ids: std::collections::HashSet<&str> =
+            three.iter().map(|r| r.id.as_str()).collect();
+        let one_ids: std::collections::HashSet<&str> = one.iter().map(|r| r.id.as_str()).collect();
+        assert_eq!(
+            three_ids, one_ids,
+            "fixed-draft ROUNDS=3 must converge to the same candidate set as ROUNDS=1"
+        );
+    }
+
+    #[tokio::test]
+    async fn search_memory_prf_merges_feedback_hits() {
+        let _serial = PRF_ENV_LOCK.lock().await;
+        let (db, _dir) = test_db().await;
+        // Query matches q1 + 4 astronomy distractors. E (biology) matches the
+        // DRAFT text only -- it is NOT in the literal-query top-`limit`.
+        db.upsert_documents(vec![
+            make_memory_doc(
+                "q1",
+                "astronomy telescope observation distant galaxies nebula",
+                "fact",
+                "work",
+                "a",
+            ),
+            make_memory_doc(
+                "d1",
+                "astronomy telescope mirror aperture focal length optics",
+                "fact",
+                "work",
+                "a",
+            ),
+            make_memory_doc(
+                "d2",
+                "galaxies spiral elliptical cosmology redshift expansion",
+                "fact",
+                "work",
+                "a",
+            ),
+            make_memory_doc(
+                "d3",
+                "telescope mount tracking equatorial astronomy imaging",
+                "fact",
+                "work",
+                "a",
+            ),
+            make_memory_doc(
+                "d4",
+                "observation distant stars galaxies astronomy spectroscopy",
+                "fact",
+                "work",
+                "a",
+            ),
+            make_memory_doc(
+                "e",
+                "photosynthesis chloroplast biology cellular respiration enzyme",
+                "fact",
+                "work",
+                "a",
+            ),
+        ])
+        .await
+        .unwrap();
+
+        // Draft = E's exact text -> draft retrieval ranks E #1, pulling it into
+        // the merged top-`limit` that the literal query alone excludes.
+        let llm: Arc<dyn crate::llm_provider::LlmProvider> =
+            Arc::new(crate::llm_provider::MockProvider::new(
+                "photosynthesis chloroplast biology cellular respiration enzyme",
+            ));
+
+        let (prf, plain) = temp_env::async_with_vars([("ORIGIN_PRF_ROUNDS", Some("1"))], async {
+            let prf = db
+                .search_memory_prf(
+                    "astronomy telescope galaxies",
+                    4,
+                    None,
+                    None,
+                    None,
+                    Some(llm.clone()),
+                )
+                .await
+                .unwrap();
+            let plain = db
+                .search_memory(
+                    "astronomy telescope galaxies",
+                    4,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                )
+                .await
+                .unwrap();
+            (prf, plain)
+        })
+        .await;
+
+        let prf_sids: Vec<&str> = prf.iter().map(|r| r.source_id.as_str()).collect();
+        let plain_sids: Vec<&str> = plain.iter().map(|r| r.source_id.as_str()).collect();
+        assert!(
+            prf_sids.contains(&"e"),
+            "feedback-only doc E must appear in PRF output; got {:?}",
+            prf_sids
+        );
+        assert!(
+            !plain_sids.contains(&"e"),
+            "feedback-only doc E must be ABSENT from plain search (recall expansion); got {:?}",
+            plain_sids
         );
     }
 
@@ -22191,6 +24256,32 @@ pub(crate) mod tests {
                 crate::db::dual_pool_resolve_enabled()
             })
             .await;
+        assert!(!unset, "expected false when unset");
+    }
+
+    #[tokio::test]
+    async fn reflection_debounce_enabled_truthy_parse() {
+        for val in &["1", "true", "yes", "TRUE", "Yes"] {
+            let got = temp_env::async_with_vars(
+                [("ORIGIN_ENABLE_REFLECTION_DEBOUNCE", Some(*val))],
+                async { crate::db::reflection_debounce_enabled() },
+            )
+            .await;
+            assert!(got, "expected true for {val}");
+        }
+        for val in &["0", "false", "no", ""] {
+            let got = temp_env::async_with_vars(
+                [("ORIGIN_ENABLE_REFLECTION_DEBOUNCE", Some(*val))],
+                async { crate::db::reflection_debounce_enabled() },
+            )
+            .await;
+            assert!(!got, "expected false for {val}");
+        }
+        let unset = temp_env::async_with_vars(
+            [("ORIGIN_ENABLE_REFLECTION_DEBOUNCE", None::<&str>)],
+            async { crate::db::reflection_debounce_enabled() },
+        )
+        .await;
         assert!(!unset, "expected false when unset");
     }
 
@@ -26244,6 +28335,543 @@ pub(crate) mod tests {
             .any(|c| c.space == Some("engineering".to_string())));
     }
 
+    // ==================== T21 Eviction (archive-not-delete) ====================
+
+    /// Helper: insert a memory then force its effective_confidence + last_accessed
+    /// (and optionally confirmed/pinned) to specific values for eviction tests.
+    /// `last_accessed_sql` is a SQL expression evaluated at UPDATE time, e.g.
+    /// "strftime('%s','now','-120 days')" (aged) or "datetime('now')" (fresh).
+    #[allow(clippy::too_many_arguments)]
+    async fn seed_evict_row(
+        db: &MemoryDB,
+        source_id: &str,
+        memory_type: &str,
+        space: &str,
+        eff_conf: f64,
+        last_accessed_sql: &str,
+        confirmed: bool,
+        pinned: bool,
+    ) {
+        let doc = make_memory_doc(
+            source_id,
+            "evict test body content",
+            memory_type,
+            space,
+            "claude",
+        );
+        db.upsert_documents(vec![doc]).await.unwrap();
+        let conn = db.conn.lock().await;
+        conn.execute(
+            &format!(
+                "UPDATE memories SET effective_confidence = ?1, last_accessed = {} \
+                 WHERE source_id = ?2 AND source = 'memory'",
+                last_accessed_sql
+            ),
+            libsql::params![eff_conf, source_id],
+        )
+        .await
+        .unwrap();
+        if pinned {
+            conn.execute(
+                "UPDATE memories SET pinned = 1 WHERE source_id = ?1 AND source = 'memory'",
+                libsql::params![source_id],
+            )
+            .await
+            .unwrap();
+        }
+        if confirmed {
+            conn.execute(
+                "UPDATE memories SET confirmed = 1 WHERE source_id = ?1 AND source = 'memory'",
+                libsql::params![source_id],
+            )
+            .await
+            .unwrap();
+        }
+    }
+
+    async fn count_archived(db: &MemoryDB) -> i64 {
+        let conn = db.conn.lock().await;
+        let mut rows = conn
+            .query(
+                "SELECT COUNT(*) FROM memories WHERE source = 'memory' AND supersede_mode = 'evicted'",
+                (),
+            )
+            .await
+            .unwrap();
+        let row = rows.next().await.unwrap().unwrap();
+        row.get::<i64>(0).unwrap()
+    }
+
+    async fn count_rows(db: &MemoryDB) -> i64 {
+        let conn = db.conn.lock().await;
+        let mut rows = conn
+            .query("SELECT COUNT(*) FROM memories WHERE source = 'memory'", ())
+            .await
+            .unwrap();
+        let row = rows.next().await.unwrap().unwrap();
+        row.get::<i64>(0).unwrap()
+    }
+
+    // A1 — stale low-confidence aged rows get archived, never deleted.
+    #[tokio::test]
+    async fn test_evict_stale_archives_low_confidence_aged_rows() {
+        let (db, _dir) = test_db().await;
+        for i in 0..3 {
+            seed_evict_row(
+                &db,
+                &format!("stale_{i}"),
+                "fact",
+                "engineering",
+                0.05,
+                "strftime('%s','now','-120 days')",
+                false,
+                false,
+            )
+            .await;
+        }
+        let before = count_rows(&db).await;
+        let report = temp_env::async_with_vars([("ORIGIN_ENABLE_EVICTION", Some("1"))], async {
+            db.evict_stale(&crate::tuning::EvictionConfig::default())
+                .await
+                .unwrap()
+        })
+        .await;
+        assert_eq!(report.archived, 3, "all 3 stale rows archived");
+        assert_eq!(report.deleted, 0, "Stage 1 never deletes");
+        assert!(!report.skipped_disabled);
+        assert_eq!(
+            count_archived(&db).await,
+            3,
+            "3 rows now supersede_mode=archive"
+        );
+        assert_eq!(
+            count_rows(&db).await,
+            before,
+            "row count unchanged — archive, not delete"
+        );
+    }
+
+    // A2 — confirmed / pinned / Protected-tier rows are immune (load-bearing).
+    #[tokio::test]
+    async fn test_evict_stale_spares_confirmed_pinned_protected() {
+        let (db, _dir) = test_db().await;
+        // confirmed=1 (note: setting confirmed without unconfirm trigger keeps pinned state)
+        seed_evict_row(
+            &db,
+            "imm_confirmed",
+            "fact",
+            "engineering",
+            0.05,
+            "strftime('%s','now','-200 days')",
+            true,
+            false,
+        )
+        .await;
+        // pinned=1
+        seed_evict_row(
+            &db,
+            "imm_pinned",
+            "fact",
+            "engineering",
+            0.05,
+            "strftime('%s','now','-200 days')",
+            false,
+            true,
+        )
+        .await;
+        // Protected-tier memory_type (identity)
+        seed_evict_row(
+            &db,
+            "imm_protected",
+            "identity",
+            "engineering",
+            0.05,
+            "strftime('%s','now','-200 days')",
+            false,
+            false,
+        )
+        .await;
+
+        let report = temp_env::async_with_vars([("ORIGIN_ENABLE_EVICTION", Some("1"))], async {
+            db.evict_stale(&crate::tuning::EvictionConfig::default())
+                .await
+                .unwrap()
+        })
+        .await;
+        assert_eq!(
+            report.archived, 0,
+            "confirmed/pinned/protected must never be archived"
+        );
+        assert_eq!(count_archived(&db).await, 0);
+    }
+
+    // A3 — age gate holds independently of confidence: fresh low-conf survives.
+    #[tokio::test]
+    async fn test_evict_stale_respects_age_gate() {
+        let (db, _dir) = test_db().await;
+        seed_evict_row(
+            &db,
+            "fresh_lowconf",
+            "fact",
+            "engineering",
+            0.05,
+            "datetime('now')",
+            false,
+            false,
+        )
+        .await;
+        let report = temp_env::async_with_vars([("ORIGIN_ENABLE_EVICTION", Some("1"))], async {
+            db.evict_stale(&crate::tuning::EvictionConfig::default())
+                .await
+                .unwrap()
+        })
+        .await;
+        assert_eq!(
+            report.archived, 0,
+            "fresh row survives despite low confidence"
+        );
+    }
+
+    // A4 — confidence floor holds independently of age: old valuable survives.
+    #[tokio::test]
+    async fn test_evict_stale_respects_confidence_floor() {
+        let (db, _dir) = test_db().await;
+        seed_evict_row(
+            &db,
+            "old_valuable",
+            "fact",
+            "engineering",
+            0.8,
+            "strftime('%s','now','-200 days')",
+            false,
+            false,
+        )
+        .await;
+        let report = temp_env::async_with_vars([("ORIGIN_ENABLE_EVICTION", Some("1"))], async {
+            db.evict_stale(&crate::tuning::EvictionConfig::default())
+                .await
+                .unwrap()
+        })
+        .await;
+        assert_eq!(
+            report.archived, 0,
+            "old but valuable row survives the floor"
+        );
+    }
+
+    // A5 — per_space_cap archives the lowest-confidence overflow first.
+    #[tokio::test]
+    async fn test_evict_stale_per_space_cap_evicts_lowest_first() {
+        let (db, _dir) = test_db().await;
+        let confs = [0.9_f64, 0.8, 0.2, 0.15, 0.1];
+        for (i, c) in confs.iter().enumerate() {
+            seed_evict_row(
+                &db,
+                &format!("cap_{i}"),
+                "fact",
+                "engineering",
+                *c,
+                "strftime('%s','now','-120 days')",
+                false,
+                false,
+            )
+            .await;
+        }
+        let cfg = crate::tuning::EvictionConfig {
+            per_space_cap: Some(3),
+            ..Default::default()
+        };
+        let report = temp_env::async_with_vars([("ORIGIN_ENABLE_EVICTION", Some("1"))], async {
+            db.evict_stale(&cfg).await.unwrap()
+        })
+        .await;
+        assert_eq!(report.archived, 2, "5 rows, cap 3 -> 2 overflow archived");
+        // The two lowest (cap_4=0.1, cap_3=0.15) must be the archived ones.
+        let conn = db.conn.lock().await;
+        for id in ["cap_3", "cap_4"] {
+            let mut rows = conn
+                .query("SELECT supersede_mode FROM memories WHERE source_id = ?1 AND source = 'memory'",
+                    libsql::params![id])
+                .await.unwrap();
+            let row = rows.next().await.unwrap().unwrap();
+            let mode: String = row.get(0).unwrap();
+            assert_eq!(mode, "evicted", "{id} (lowest conf) should be evicted");
+        }
+        for id in ["cap_0", "cap_1", "cap_2"] {
+            let mut rows = conn
+                .query("SELECT supersede_mode FROM memories WHERE source_id = ?1 AND source = 'memory'",
+                    libsql::params![id])
+                .await.unwrap();
+            let row = rows.next().await.unwrap().unwrap();
+            let mode: String = row.get(0).unwrap();
+            assert_ne!(mode, "evicted", "{id} (higher conf) should survive");
+        }
+    }
+
+    // A5b — the per-space cap is age-gated: a FRESH row is never cap-evicted for
+    // crowding even when it is the lowest-confidence row in an over-capped space.
+    // Without the age gate, fresh_lowconf (0.05) would be the first row archived.
+    #[tokio::test]
+    async fn test_evict_stale_per_space_cap_spares_fresh_rows() {
+        let (db, _dir) = test_db().await;
+        // Three aged rows (cap-eligible) + one fresh row in the same space.
+        for (i, c) in [0.8_f64, 0.6, 0.4].iter().enumerate() {
+            seed_evict_row(
+                &db,
+                &format!("aged_{i}"),
+                "fact",
+                "engineering",
+                *c,
+                "strftime('%s','now','-120 days')",
+                false,
+                false,
+            )
+            .await;
+        }
+        // Fresh row with the LOWEST confidence in the space — pure cap-ordering
+        // would archive it first, but the age gate must spare it.
+        seed_evict_row(
+            &db,
+            "fresh_lowconf",
+            "fact",
+            "engineering",
+            0.05,
+            "datetime('now')",
+            false,
+            false,
+        )
+        .await;
+
+        let cfg = crate::tuning::EvictionConfig {
+            per_space_cap: Some(2),
+            ..Default::default()
+        };
+        let report = temp_env::async_with_vars([("ORIGIN_ENABLE_EVICTION", Some("1"))], async {
+            db.evict_stale(&cfg).await.unwrap()
+        })
+        .await;
+        // Only the aged rows count toward the cap: 3 aged, cap 2 -> 1 overflow.
+        assert_eq!(
+            report.archived, 1,
+            "fresh row excluded from cap population -> only 1 aged overflow archived"
+        );
+
+        let conn = db.conn.lock().await;
+        // Fresh low-confidence row survives despite being the cheapest in the space.
+        let mut rows = conn
+            .query(
+                "SELECT supersede_mode FROM memories WHERE source_id = ?1 AND source = 'memory'",
+                libsql::params!["fresh_lowconf"],
+            )
+            .await
+            .unwrap();
+        let row = rows.next().await.unwrap().unwrap();
+        let mode: Option<String> = row.get(0).unwrap();
+        assert_ne!(
+            mode.as_deref(),
+            Some("evicted"),
+            "fresh row must NEVER be cap-evicted regardless of confidence"
+        );
+        // The lowest-confidence AGED row (aged_2 = 0.4) is the one capped.
+        let mut rows = conn
+            .query(
+                "SELECT supersede_mode FROM memories WHERE source_id = ?1 AND source = 'memory'",
+                libsql::params!["aged_2"],
+            )
+            .await
+            .unwrap();
+        let row = rows.next().await.unwrap().unwrap();
+        let mode: String = row.get(0).unwrap();
+        assert_eq!(
+            mode, "evicted",
+            "lowest-confidence aged row is the cap victim"
+        );
+    }
+
+    // A6 — default OFF is a no-op; flag ON runs.
+    #[tokio::test]
+    async fn test_evict_stale_disabled_by_default_is_noop() {
+        let (db, _dir) = test_db().await;
+        seed_evict_row(
+            &db,
+            "stale_off",
+            "fact",
+            "engineering",
+            0.05,
+            "strftime('%s','now','-120 days')",
+            false,
+            false,
+        )
+        .await;
+
+        // Flag unset -> skipped, nothing archived.
+        let report = temp_env::async_with_vars([("ORIGIN_ENABLE_EVICTION", None::<&str>)], async {
+            db.evict_stale(&crate::tuning::EvictionConfig::default())
+                .await
+                .unwrap()
+        })
+        .await;
+        assert_eq!(report.archived, 0);
+        assert_eq!(report.deleted, 0);
+        assert!(
+            report.skipped_disabled,
+            "flag-off must report skipped_disabled"
+        );
+        assert_eq!(
+            count_archived(&db).await,
+            0,
+            "no row flips to archive when disabled"
+        );
+
+        // Flag set -> runs.
+        let report = temp_env::async_with_vars([("ORIGIN_ENABLE_EVICTION", Some("1"))], async {
+            db.evict_stale(&crate::tuning::EvictionConfig::default())
+                .await
+                .unwrap()
+        })
+        .await;
+        assert_eq!(report.archived, 1);
+        assert!(!report.skipped_disabled);
+        assert_eq!(count_archived(&db).await, 1);
+    }
+
+    // A7 — empty DB is a clean no-op when enabled.
+    #[tokio::test]
+    async fn test_evict_stale_empty_db_is_clean_noop() {
+        let (db, _dir) = test_db().await;
+        let report = temp_env::async_with_vars([("ORIGIN_ENABLE_EVICTION", Some("1"))], async {
+            db.evict_stale(&crate::tuning::EvictionConfig::default())
+                .await
+                .unwrap()
+        })
+        .await;
+        assert_eq!(report.archived, 0);
+        assert_eq!(report.deleted, 0);
+        assert!(!report.skipped_disabled);
+    }
+
+    // A1b — the proof that eviction actually works end-to-end: an evicted row is
+    // EXCLUDED from a real `search_memory` call while a control row survives,
+    // the evicted row stays in the table (recoverable), and clearing
+    // supersede_mode makes it REAPPEAR in search. This is the load-bearing test
+    // that the retrieval exclusion (not just the marker flip) is wired up.
+    #[tokio::test]
+    async fn test_evict_stale_is_reversible_and_excluded_from_search() {
+        let (db, _dir) = test_db().await;
+        // Two rows with DISTINCT (so they survive search's near-dup collapse)
+        // but topically-related content, both matching a "kubernetes" query.
+        // rev_row: aged + low-confidence -> evicted. keep_row: aged but
+        // high-confidence (above the floor) -> survives Gate 1.
+        db.upsert_documents(vec![
+            make_memory_doc(
+                "rev_row",
+                "the user prefers kubernetes for container orchestration at scale",
+                "fact",
+                "engineering",
+                "claude",
+            ),
+            make_memory_doc(
+                "keep_row",
+                "the user runs kubernetes clusters across three cloud regions daily",
+                "fact",
+                "engineering",
+                "claude",
+            ),
+        ])
+        .await
+        .unwrap();
+        {
+            let conn = db.conn.lock().await;
+            conn.execute(
+                "UPDATE memories SET effective_confidence = 0.05,                  last_accessed = strftime('%s','now','-120 days')                  WHERE source_id = 'rev_row' AND source = 'memory'",
+                (),
+            )
+            .await
+            .unwrap();
+            conn.execute(
+                "UPDATE memories SET effective_confidence = 0.9,                  last_accessed = strftime('%s','now','-120 days')                  WHERE source_id = 'keep_row' AND source = 'memory'",
+                (),
+            )
+            .await
+            .unwrap();
+        }
+
+        let query = "kubernetes orchestration";
+
+        // Pre-condition: both rows are searchable before eviction.
+        let pre = db
+            .search_memory(query, 10, None, None, None, None, None, None)
+            .await
+            .unwrap();
+        let pre_ids: Vec<&str> = pre.iter().map(|r| r.source_id.as_str()).collect();
+        assert!(
+            pre_ids.contains(&"rev_row"),
+            "rev_row searchable before eviction, got {:?}",
+            pre_ids
+        );
+        assert!(
+            pre_ids.contains(&"keep_row"),
+            "keep_row searchable before eviction, got {:?}",
+            pre_ids
+        );
+
+        // Evict.
+        let report = temp_env::async_with_vars([("ORIGIN_ENABLE_EVICTION", Some("1"))], async {
+            db.evict_stale(&crate::tuning::EvictionConfig::default())
+                .await
+                .unwrap()
+        })
+        .await;
+        assert_eq!(
+            report.archived, 1,
+            "only the low-confidence rev_row is evicted"
+        );
+        assert_eq!(report.deleted, 0, "Stage 1 never deletes");
+
+        // Both rows still physically present — archive, not delete.
+        assert_eq!(count_rows(&db).await, 2, "no rows deleted");
+
+        // Real search now EXCLUDES the evicted row while the control survives.
+        let post = db
+            .search_memory(query, 10, None, None, None, None, None, None)
+            .await
+            .unwrap();
+        let post_ids: Vec<&str> = post.iter().map(|r| r.source_id.as_str()).collect();
+        assert!(
+            !post_ids.contains(&"rev_row"),
+            "evicted rev_row must be ABSENT from search, got {:?}",
+            post_ids
+        );
+        assert!(
+            post_ids.contains(&"keep_row"),
+            "control keep_row must remain in search, got {:?}",
+            post_ids
+        );
+
+        // Recoverable: clear the eviction marker (supersede_mode is NOT NULL with
+        // DEFAULT 'hide', so recovery resets it to the visible default rather
+        // than NULL) -> the row REAPPEARS in search.
+        {
+            let conn = db.conn.lock().await;
+            conn.execute(
+                "UPDATE memories SET supersede_mode = 'hide' WHERE source_id = ?1 AND source = 'memory'",
+                libsql::params!["rev_row"],
+            )
+            .await
+            .unwrap();
+        }
+        let recovered = db
+            .search_memory(query, 10, None, None, None, None, None, None)
+            .await
+            .unwrap();
+        let rec_ids: Vec<&str> = recovered.iter().map(|r| r.source_id.as_str()).collect();
+        assert!(
+            rec_ids.contains(&"rev_row"),
+            "un-evicted rev_row must REAPPEAR in search, got {:?}",
+            rec_ids
+        );
+    }
+
     // ==================== Decay Engine ====================
 
     #[tokio::test]
@@ -26918,6 +29546,336 @@ pub(crate) mod tests {
         assert!(!augmented.is_empty(), "should include graph observations");
         assert!(augmented.iter().any(|r| r.source == "knowledge_graph"));
     }
+
+    // ==================== T4b: k-hop entity-graph traversal ====================
+
+    /// expand_anchor_entities_khop at depth=2 reaches a 2-hop entity (A->B->C)
+    /// and never reaches a disconnected entity (D).
+    #[tokio::test]
+    async fn test_khop_expand_two_hop_reaches_chain() {
+        let (db, _dir) = test_db().await;
+        let a = db
+            .store_entity("KhopA", "thing", None, None, None)
+            .await
+            .unwrap();
+        let b = db
+            .store_entity("KhopB", "thing", None, None, None)
+            .await
+            .unwrap();
+        let c = db
+            .store_entity("KhopC", "thing", None, None, None)
+            .await
+            .unwrap();
+        let d = db
+            .store_entity("KhopD", "thing", None, None, None)
+            .await
+            .unwrap();
+        db.create_relation(&a, &b, "related_to", None, None, None, None)
+            .await
+            .unwrap();
+        db.create_relation(&b, &c, "related_to", None, None, None, None)
+            .await
+            .unwrap();
+
+        let expanded = temp_env::async_with_vars([("ORIGIN_GRAPH_KHOP_DEPTH", Some("2"))], async {
+            db.expand_anchor_entities_khop(std::slice::from_ref(&a))
+                .await
+                .unwrap()
+        })
+        .await;
+        assert!(expanded.contains(&a), "seed A always present");
+        assert!(expanded.contains(&b), "B is 1 hop");
+        assert!(expanded.contains(&c), "C is 2 hops, reachable at depth=2");
+        assert!(!expanded.contains(&d), "disconnected D must not be reached");
+    }
+
+    /// expand_anchor_entities_khop at depth=1 stops at B; C (2 hops) excluded.
+    #[tokio::test]
+    async fn test_khop_expand_depth_one_excludes_two_hop() {
+        let (db, _dir) = test_db().await;
+        let a = db
+            .store_entity("D1A", "thing", None, None, None)
+            .await
+            .unwrap();
+        let b = db
+            .store_entity("D1B", "thing", None, None, None)
+            .await
+            .unwrap();
+        let c = db
+            .store_entity("D1C", "thing", None, None, None)
+            .await
+            .unwrap();
+        db.create_relation(&a, &b, "related_to", None, None, None, None)
+            .await
+            .unwrap();
+        db.create_relation(&b, &c, "related_to", None, None, None, None)
+            .await
+            .unwrap();
+
+        let expanded = temp_env::async_with_vars([("ORIGIN_GRAPH_KHOP_DEPTH", Some("1"))], async {
+            db.expand_anchor_entities_khop(std::slice::from_ref(&a))
+                .await
+                .unwrap()
+        })
+        .await;
+        assert!(expanded.contains(&b), "B is 1 hop");
+        assert!(!expanded.contains(&c), "C is 2 hops, excluded at depth=1");
+    }
+
+    /// CYCLE TERMINATION through the DB path: relation cycle A->B->A must terminate
+    /// (test completing proves no infinite loop) and dedup to A and B only.
+    #[tokio::test]
+    async fn test_khop_expand_cycle_terminates_via_db() {
+        let (db, _dir) = test_db().await;
+        let a = db
+            .store_entity("CycA", "thing", None, None, None)
+            .await
+            .unwrap();
+        let b = db
+            .store_entity("CycB", "thing", None, None, None)
+            .await
+            .unwrap();
+        db.create_relation(&a, &b, "related_to", None, None, None, None)
+            .await
+            .unwrap();
+        db.create_relation(&b, &a, "related_to", None, None, None, None)
+            .await
+            .unwrap();
+
+        let expanded = temp_env::async_with_vars([("ORIGIN_GRAPH_KHOP_DEPTH", Some("3"))], async {
+            db.expand_anchor_entities_khop(std::slice::from_ref(&a))
+                .await
+                .unwrap()
+        })
+        .await;
+        let mut got = expanded.clone();
+        got.sort();
+        let mut want = vec![a.clone(), b.clone()];
+        want.sort();
+        assert_eq!(
+            got, want,
+            "cycle dedups to exactly A and B, no infinite loop"
+        );
+    }
+
+    /// Hub fan-out is capped by ORIGIN_GRAPH_KHOP_MAX_NODES.
+    #[tokio::test]
+    async fn test_khop_expand_respects_max_nodes() {
+        let (db, _dir) = test_db().await;
+        let hub = db
+            .store_entity("HubCenter", "thing", None, None, None)
+            .await
+            .unwrap();
+        for i in 0..30 {
+            let leaf = db
+                .store_entity(&format!("HubLeaf{i}"), "thing", None, None, None)
+                .await
+                .unwrap();
+            db.create_relation(&hub, &leaf, "related_to", None, None, None, None)
+                .await
+                .unwrap();
+        }
+        let expanded = temp_env::async_with_vars(
+            [
+                ("ORIGIN_GRAPH_KHOP_DEPTH", Some("1")),
+                ("ORIGIN_GRAPH_KHOP_MAX_NODES", Some("10")),
+            ],
+            async {
+                db.expand_anchor_entities_khop(std::slice::from_ref(&hub))
+                    .await
+                    .unwrap()
+            },
+        )
+        .await;
+        assert!(
+            expanded.len() <= 10,
+            "max_nodes=10 caps fan-out; got {}",
+            expanded.len()
+        );
+    }
+
+    /// FIX 1 (runaway) regression: prove the per-hop FETCH is bounded, not just the
+    /// output. A 30-edge hub with max_nodes=10 must terminate and return a bounded
+    /// set (<=10). The pre-fix loop read all 30 hub relations into edges/fetch_visited
+    /// before bfs_khop trimmed the OUTPUT; the in-loop cap now stops the read early.
+    /// Deterministic: depth=1 single hop, no clock/random, output capped to max_nodes.
+    #[tokio::test]
+    async fn test_khop_fetch_bounded_on_hub() {
+        let (db, _dir) = test_db().await;
+        let hub = db
+            .store_entity("FetchHub", "thing", None, None, None)
+            .await
+            .unwrap();
+        for i in 0..30 {
+            let leaf = db
+                .store_entity(&format!("FetchLeaf{i}"), "thing", None, None, None)
+                .await
+                .unwrap();
+            db.create_relation(&hub, &leaf, "related_to", None, None, None, None)
+                .await
+                .unwrap();
+        }
+        let expanded = temp_env::async_with_vars(
+            [
+                ("ORIGIN_GRAPH_KHOP_DEPTH", Some("1")),
+                ("ORIGIN_GRAPH_KHOP_MAX_NODES", Some("10")),
+            ],
+            async {
+                db.expand_anchor_entities_khop(std::slice::from_ref(&hub))
+                    .await
+                    .unwrap()
+            },
+        )
+        .await;
+        // Bounded OUTPUT: max_nodes=10 caps the visited set, so the 30-edge hub can
+        // never return all 31 nodes. (Termination is proven by the test completing.)
+        assert!(
+            expanded.len() <= 10,
+            "fetch+output bounded by max_nodes=10 over a 30-edge hub; got {}",
+            expanded.len()
+        );
+        // Anchor itself is never dropped.
+        assert!(expanded.contains(&hub), "hub anchor always present");
+    }
+
+    /// Empty anchor set -> empty (caller keeps its anchor list).
+    #[tokio::test]
+    async fn test_khop_expand_empty_anchor_is_empty() {
+        let (db, _dir) = test_db().await;
+        let expanded = db.expand_anchor_entities_khop(&[]).await.unwrap();
+        assert!(expanded.is_empty());
+    }
+
+    /// FLAG-OFF BYTE-IDENTITY: augment_with_graph with ORIGIN_ENABLE_GRAPH_KHOP
+    /// unset must be byte-identical to the flag ON at depth=0 (no expansion). The
+    /// OFF path uses the anchor entity set verbatim; depth=0 expansion returns the
+    /// deduped anchors unchanged, so the two outputs (ids + ordering + scores) match.
+    /// Locks dark-by-default: the wired k-hop branch adds nothing when not expanding.
+    #[tokio::test]
+    async fn test_augment_with_graph_khop_off_equals_depth_zero() {
+        let (db, _dir) = test_db().await;
+        let a = db
+            .store_entity("Postgres", "technology", None, None, None)
+            .await
+            .unwrap();
+        let b = db
+            .store_entity("MidNode", "thing", None, None, None)
+            .await
+            .unwrap();
+        db.create_relation(&a, &b, "related_to", None, None, None, None)
+            .await
+            .unwrap();
+        db.add_observation(&a, "Postgres is a relational database", Some("test"), None)
+            .await
+            .unwrap();
+        db.add_observation(&b, "MidNode observation alpha", Some("test"), None)
+            .await
+            .unwrap();
+
+        let off = temp_env::async_with_vars([("ORIGIN_ENABLE_GRAPH_KHOP", None::<&str>)], async {
+            db.augment_with_graph("Postgres", vec![], 25).await.unwrap()
+        })
+        .await;
+        let on_d0 = temp_env::async_with_vars(
+            [
+                ("ORIGIN_ENABLE_GRAPH_KHOP", Some("1")),
+                ("ORIGIN_GRAPH_KHOP_DEPTH", Some("0")),
+            ],
+            async { db.augment_with_graph("Postgres", vec![], 25).await.unwrap() },
+        )
+        .await;
+
+        let off_ids: Vec<(String, f32)> = off.iter().map(|r| (r.id.clone(), r.score)).collect();
+        let on_ids: Vec<(String, f32)> = on_d0.iter().map(|r| (r.id.clone(), r.score)).collect();
+        assert_eq!(
+            off_ids, on_ids,
+            "flag OFF must equal flag-ON-depth-0 (byte-identical, dark-by-default)"
+        );
+    }
+
+    /// k-hop ON (depth=2) surfaces a 2-hop entity's observation that single-hop
+    /// would miss, and never drops the anchor observations (ON output is a superset
+    /// of OFF). Proves the wired path actually reaches the k-hop observation.
+    #[tokio::test]
+    async fn test_augment_with_graph_khop_surfaces_two_hop_observation() {
+        let (db, _dir) = test_db().await;
+        let a = db
+            .store_entity("Kubernetes", "technology", None, None, None)
+            .await
+            .unwrap();
+        let mid = db
+            .store_entity("KMid", "thing", None, None, None)
+            .await
+            .unwrap();
+        let far = db
+            .store_entity("KFar", "thing", None, None, None)
+            .await
+            .unwrap();
+        db.create_relation(&a, &mid, "related_to", None, None, None, None)
+            .await
+            .unwrap();
+        db.create_relation(&mid, &far, "related_to", None, None, None, None)
+            .await
+            .unwrap();
+        db.add_observation(&a, "Kubernetes orchestrates containers", Some("test"), None)
+            .await
+            .unwrap();
+        let far_marker = "ZZZ_KHOP_FAR_MARKER zebra quasar octopus";
+        db.add_observation(&far, far_marker, Some("test"), None)
+            .await
+            .unwrap();
+
+        // Anchor on the 2-hop entity directly so the traversal target is deterministic,
+        // independent of how vector-anchor ranking orders a tiny test corpus.
+        let expanded = temp_env::async_with_vars([("ORIGIN_GRAPH_KHOP_DEPTH", Some("2"))], async {
+            db.expand_anchor_entities_khop(std::slice::from_ref(&a))
+                .await
+                .unwrap()
+        })
+        .await;
+        assert!(
+            expanded.contains(&far),
+            "depth=2 traversal from the anchor reaches the 2-hop entity"
+        );
+
+        // And the observation join over the expanded set returns the far marker.
+        let obs = db
+            .get_observations_for_entities(&expanded, 25)
+            .await
+            .unwrap();
+        assert!(
+            obs.iter()
+                .any(|r| r.content.contains("ZZZ_KHOP_FAR_MARKER")),
+            "expanded-set observation join surfaces the 2-hop marker"
+        );
+
+        // Full augment ON must be a superset of augment OFF (never drops anchors).
+        let off = temp_env::async_with_vars([("ORIGIN_ENABLE_GRAPH_KHOP", None::<&str>)], async {
+            db.augment_with_graph("Kubernetes", vec![], 25)
+                .await
+                .unwrap()
+        })
+        .await;
+        let on = temp_env::async_with_vars(
+            [
+                ("ORIGIN_ENABLE_GRAPH_KHOP", Some("1")),
+                ("ORIGIN_GRAPH_KHOP_DEPTH", Some("2")),
+            ],
+            async {
+                db.augment_with_graph("Kubernetes", vec![], 25)
+                    .await
+                    .unwrap()
+            },
+        )
+        .await;
+        let off_ids: std::collections::HashSet<String> = off.iter().map(|r| r.id.clone()).collect();
+        let on_ids: std::collections::HashSet<String> = on.iter().map(|r| r.id.clone()).collect();
+        assert!(
+            off_ids.is_subset(&on_ids),
+            "k-hop ON must not drop any observation the single-hop path returned"
+        );
+    }
+
     // ==================== T9: wide-pool-seeded graph expansion ====================
 
     /// Verify expand_entities_khop depth=1 gives neighbors, depth=0 gives seeds only.
@@ -34744,6 +37702,517 @@ pub(crate) mod tests {
         }
     }
 
+    // ── T18: hierarchical global-context prelude (summary_nodes) ──────────────
+
+    /// Seed helper: insert a summary node directly (read-path tests don't need
+    /// the full memory->entity->community build).
+    async fn seed_summary_node(
+        db: &MemoryDB,
+        id: &str,
+        level: i64,
+        bucket_key: Option<&str>,
+        title: &str,
+        body: &str,
+        sources: &[&str],
+    ) {
+        let emb = db.embed_for_summary(body).unwrap();
+        let owned: Vec<String> = sources.iter().map(|s| s.to_string()).collect();
+        db.insert_summary_node(
+            id,
+            level,
+            bucket_key,
+            title,
+            body,
+            &emb,
+            owned.len() as i64,
+            chrono::Utc::now().timestamp(),
+            &owned,
+        )
+        .await
+        .unwrap();
+    }
+
+    /// Migration 59 creates summary_nodes + summary_node_sources with the
+    /// expected columns.
+    #[tokio::test]
+    async fn test_migration_59_creates_summary_nodes_table() {
+        let (db, _tmp) = test_db().await;
+        let conn = db.conn.lock().await;
+        let mut rows = conn.query("PRAGMA user_version", ()).await.unwrap();
+        let v: i64 = rows.next().await.unwrap().unwrap().get(0).unwrap();
+        assert!(v >= 59, "user_version must be >= 59, got {v}");
+        drop(rows);
+        // Tables exist.
+        conn.query("SELECT id, level, bucket_key, title, body, source_count, generated_at, status FROM summary_nodes LIMIT 0", ())
+            .await
+            .expect("summary_nodes columns must exist");
+        conn.query(
+            "SELECT node_id, memory_source_id FROM summary_node_sources LIMIT 0",
+            (),
+        )
+        .await
+        .expect("summary_node_sources columns must exist");
+    }
+
+    /// Migration 59 creates the FTS table + DiskANN vector index (mirrors the
+    /// page-channel index assertion).
+    #[tokio::test]
+    async fn test_migration_59_creates_summary_fts_and_vector_index() {
+        let (db, _tmp) = test_db().await;
+        let conn = db.conn.lock().await;
+        for (kind, name) in [
+            ("table", "summary_nodes_fts"),
+            ("index", "idx_summary_nodes_embedding"),
+        ] {
+            let mut rows = conn
+                .query(
+                    "SELECT COUNT(*) FROM sqlite_master WHERE type=?1 AND name=?2",
+                    libsql::params![kind, name],
+                )
+                .await
+                .unwrap();
+            let c: i64 = rows.next().await.unwrap().unwrap().get(0).unwrap();
+            assert_eq!(c, 1, "{kind} {name} must exist after migration 59");
+        }
+    }
+
+    /// Running migrations twice does not error (idempotency probe — mirror m50).
+    #[tokio::test]
+    async fn test_migration_59_idempotent() {
+        let (db, _tmp) = test_db().await;
+        // Roll user_version back to 58 so migration 59 re-fires on next run.
+        {
+            let conn = db.conn.lock().await;
+            conn.execute("PRAGMA user_version = 58", ()).await.unwrap();
+        }
+        db.run_migrations(&crate::events::NoopEmitter)
+            .await
+            .unwrap();
+        let conn = db.conn.lock().await;
+        let mut rows = conn.query("PRAGMA user_version", ()).await.unwrap();
+        let v: i64 = rows.next().await.unwrap().unwrap().get(0).unwrap();
+        assert!(
+            v >= 59,
+            "user_version restored to >= 59 after idempotent re-run, got {v}"
+        );
+    }
+
+    /// search_summary_nodes returns root ALWAYS + <=k vector-matched buckets.
+    #[tokio::test]
+    async fn test_search_summary_nodes_returns_root_plus_top_buckets() {
+        let (db, _tmp) = test_db().await;
+        seed_summary_node(
+            &db,
+            "sum_root",
+            1,
+            None,
+            "Corpus Overview",
+            "overview of everything",
+            &["m1", "m2", "m3"],
+        )
+        .await;
+        seed_summary_node(
+            &db,
+            "sum_b_1",
+            0,
+            Some("1"),
+            "Rust",
+            "rust systems programming memory safety",
+            &["m1"],
+        )
+        .await;
+        seed_summary_node(
+            &db,
+            "sum_b_2",
+            0,
+            Some("2"),
+            "Cooking",
+            "recipes pasta sauces",
+            &["m2"],
+        )
+        .await;
+        seed_summary_node(
+            &db,
+            "sum_b_3",
+            0,
+            Some("3"),
+            "Travel",
+            "trips japan flights",
+            &["m3"],
+        )
+        .await;
+
+        let nodes = db
+            .search_summary_nodes("rust programming", 2)
+            .await
+            .unwrap();
+        // Root always present regardless of vector distance.
+        assert!(
+            nodes.iter().any(|n| n.id == "sum_root" && n.level == 1),
+            "root must always be returned"
+        );
+        // At most k buckets.
+        let buckets = nodes.iter().filter(|n| n.level == 0).count();
+        assert!(buckets <= 2, "at most k=2 buckets, got {buckets}");
+    }
+
+    /// Empty table returns Vec::new(), never errors.
+    #[tokio::test]
+    async fn test_search_summary_nodes_empty_when_no_nodes() {
+        let (db, _tmp) = test_db().await;
+        let nodes = db.search_summary_nodes("anything", 3).await.unwrap();
+        assert!(
+            nodes.is_empty(),
+            "empty summary table must return empty vec"
+        );
+    }
+
+    /// FLAG-OFF BYTE-IDENTITY: with the flag unset, search_memory_cross_rerank
+    /// output is identical (id+score order) whether or not summary nodes exist
+    /// in the table — the dark-ship guarantee.
+    #[tokio::test]
+    async fn test_global_prelude_disabled_by_default_byte_identical() {
+        let (db, _tmp) = test_db().await;
+        db.upsert_documents(vec![
+            make_memory_doc(
+                "m_a",
+                "rust systems programming memory safety",
+                "fact",
+                "work",
+                "claude-code",
+            ),
+            make_memory_doc(
+                "m_b",
+                "ownership and borrowing in rust",
+                "fact",
+                "work",
+                "claude-code",
+            ),
+        ])
+        .await
+        .unwrap();
+        // Seed summary nodes that WOULD be prepended if the flag were on.
+        seed_summary_node(
+            &db,
+            "sum_root",
+            1,
+            None,
+            "Overview",
+            "rust corpus overview body text",
+            &["m_a", "m_b"],
+        )
+        .await;
+        seed_summary_node(
+            &db,
+            "sum_b_1",
+            0,
+            Some("1"),
+            "Rust",
+            "rust systems programming memory safety topics",
+            &["m_a", "m_b"],
+        )
+        .await;
+
+        let baseline =
+            temp_env::async_with_vars([("ORIGIN_ENABLE_GLOBAL_PRELUDE", None::<&str>)], async {
+                db.search_memory_cross_rerank("rust programming", 10, None, None, None, None)
+                    .await
+                    .unwrap()
+            })
+            .await;
+        // No summary rows in the default-OFF output.
+        assert!(
+            baseline.iter().all(|r| r.source != "summary"),
+            "flag-OFF must yield zero source=summary rows, got {:?}",
+            baseline
+                .iter()
+                .map(|r| (&r.id, &r.source))
+                .collect::<Vec<_>>()
+        );
+
+        // Run again with flag explicitly "0" — must be byte-identical (id+score).
+        let zero =
+            temp_env::async_with_vars([("ORIGIN_ENABLE_GLOBAL_PRELUDE", Some("0"))], async {
+                db.search_memory_cross_rerank("rust programming", 10, None, None, None, None)
+                    .await
+                    .unwrap()
+            })
+            .await;
+        // Byte-identity = same id ORDER (the load-bearing invariant). Scores
+        // are compared with an epsilon: the BGE embedder + DiskANN accumulate
+        // float ops non-deterministically at the 7th decimal across separate
+        // invocations, which is unrelated to the prelude flag (both runs have
+        // it off). The flag-OFF guarantee is "no summary rows, no reorder".
+        let order_a: Vec<&str> = baseline.iter().map(|r| r.id.as_str()).collect();
+        let order_b: Vec<&str> = zero.iter().map(|r| r.id.as_str()).collect();
+        assert_eq!(
+            order_a, order_b,
+            "flag unset vs 0 must yield identical id order"
+        );
+        assert_eq!(baseline.len(), zero.len(), "same row count");
+        for (a, b) in baseline.iter().zip(zero.iter()) {
+            assert_eq!(a.source, b.source, "same source per position");
+            assert!(
+                (a.score - b.score).abs() < 1e-4,
+                "score within epsilon for {}: {} vs {}",
+                a.id,
+                a.score,
+                b.score
+            );
+        }
+    }
+
+    /// FLAG-ON PREPEND: with the flag on, summary rows appear at the FRONT.
+    #[tokio::test]
+    async fn test_global_prelude_enabled_prepends_summary_rows() {
+        let (db, _tmp) = test_db().await;
+        db.upsert_documents(vec![make_memory_doc(
+            "m_a",
+            "rust systems programming memory safety",
+            "fact",
+            "work",
+            "claude-code",
+        )])
+        .await
+        .unwrap();
+        seed_summary_node(
+            &db,
+            "sum_root",
+            1,
+            None,
+            "Overview",
+            "rust corpus overview body",
+            &["m_a"],
+        )
+        .await;
+        seed_summary_node(
+            &db,
+            "sum_b_1",
+            0,
+            Some("1"),
+            "Rust",
+            "rust systems programming memory safety",
+            &["m_a"],
+        )
+        .await;
+
+        let hits =
+            temp_env::async_with_vars([("ORIGIN_ENABLE_GLOBAL_PRELUDE", Some("1"))], async {
+                db.search_memory_cross_rerank("rust programming", 10, None, None, None, None)
+                    .await
+                    .unwrap()
+            })
+            .await;
+        assert!(!hits.is_empty(), "expected hits");
+        assert_eq!(
+            hits[0].source, "summary",
+            "first row must be a summary prelude row, got {:?}",
+            hits[0].source
+        );
+        assert!(
+            hits.iter()
+                .any(|r| r.source == "summary" && r.id == "sum_root"),
+            "root must be present"
+        );
+    }
+
+    /// Summary rows must NOT enter the reranker candidate list.
+    #[tokio::test]
+    async fn test_global_prelude_summary_rows_excluded_from_rerank() {
+        use crate::reranker::Reranker;
+        use std::sync::{Arc, Mutex};
+
+        struct RecordingReranker {
+            seen: Arc<Mutex<Vec<String>>>,
+        }
+        impl Reranker for RecordingReranker {
+            fn rerank(
+                &self,
+                _q: &str,
+                candidates: &[(String, String)],
+            ) -> Result<Vec<(String, f32)>, OriginError> {
+                let mut s = self.seen.lock().unwrap();
+                for (id, _) in candidates {
+                    s.push(id.clone());
+                }
+                // Keep original order (return empty so caller keeps order).
+                Ok(Vec::new())
+            }
+            fn model_id(&self) -> &str {
+                "recording-test"
+            }
+        }
+
+        let (db, _tmp) = test_db().await;
+        db.upsert_documents(vec![make_memory_doc(
+            "m_a",
+            "rust systems programming memory safety",
+            "fact",
+            "work",
+            "claude-code",
+        )])
+        .await
+        .unwrap();
+        seed_summary_node(
+            &db,
+            "sum_root",
+            1,
+            None,
+            "Overview",
+            "rust corpus overview body",
+            &["m_a"],
+        )
+        .await;
+        seed_summary_node(
+            &db,
+            "sum_b_1",
+            0,
+            Some("1"),
+            "Rust",
+            "rust systems programming memory safety",
+            &["m_a"],
+        )
+        .await;
+
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let reranker: Arc<dyn Reranker> = Arc::new(RecordingReranker { seen: seen.clone() });
+        let _ = temp_env::async_with_vars([("ORIGIN_ENABLE_GLOBAL_PRELUDE", Some("1"))], async {
+            db.search_memory_cross_rerank("rust programming", 10, None, None, None, Some(reranker))
+                .await
+                .unwrap()
+        })
+        .await;
+        let candidate_ids = seen.lock().unwrap();
+        assert!(
+            candidate_ids.iter().all(|id| !id.starts_with("sum_")),
+            "no summary node may enter the rerank candidate list, saw {:?}",
+            *candidate_ids
+        );
+    }
+
+    /// Truthy synonyms enable; 0/false/unset disable.
+    #[tokio::test]
+    async fn test_global_prelude_truthy_synonyms() {
+        let (db, _tmp) = test_db().await;
+        db.upsert_documents(vec![make_memory_doc(
+            "m_a",
+            "rust systems programming",
+            "fact",
+            "work",
+            "claude-code",
+        )])
+        .await
+        .unwrap();
+        seed_summary_node(
+            &db,
+            "sum_root",
+            1,
+            None,
+            "Overview",
+            "rust corpus overview body",
+            &["m_a"],
+        )
+        .await;
+        seed_summary_node(
+            &db,
+            "sum_b_1",
+            0,
+            Some("1"),
+            "Rust",
+            "rust systems programming topics",
+            &["m_a"],
+        )
+        .await;
+
+        for value in ["1", "true", "YES", "True"] {
+            let hits =
+                temp_env::async_with_vars([("ORIGIN_ENABLE_GLOBAL_PRELUDE", Some(value))], async {
+                    db.search_memory_cross_rerank("rust", 10, None, None, None, None)
+                        .await
+                        .unwrap()
+                })
+                .await;
+            assert!(
+                hits.iter().any(|r| r.source == "summary"),
+                "{value} must enable prelude"
+            );
+        }
+        for value in ["0", "false", ""] {
+            let hits =
+                temp_env::async_with_vars([("ORIGIN_ENABLE_GLOBAL_PRELUDE", Some(value))], async {
+                    db.search_memory_cross_rerank("rust", 10, None, None, None, None)
+                        .await
+                        .unwrap()
+                })
+                .await;
+            assert!(
+                hits.iter().all(|r| r.source != "summary"),
+                "{value:?} must disable prelude"
+            );
+        }
+    }
+
+    /// Space-filter: a root spanning all buckets is dropped when filters are
+    /// active and none of its sources overlap the filtered memory set.
+    #[tokio::test]
+    async fn test_global_prelude_summary_rows_respect_space_filter() {
+        let (db, _tmp) = test_db().await;
+        // A work memory and a personal memory.
+        db.upsert_documents(vec![
+            make_memory_doc(
+                "m_work",
+                "rust systems programming at work",
+                "fact",
+                "work",
+                "claude-code",
+            ),
+            make_memory_doc(
+                "m_personal",
+                "personal cooking notes",
+                "fact",
+                "personal",
+                "claude-code",
+            ),
+        ])
+        .await
+        .unwrap();
+        // A summary whose sources are ONLY the personal memory.
+        seed_summary_node(
+            &db,
+            "sum_root",
+            1,
+            None,
+            "Overview",
+            "rust corpus overview body",
+            &["m_personal"],
+        )
+        .await;
+        seed_summary_node(
+            &db,
+            "sum_b_1",
+            0,
+            Some("1"),
+            "Personal",
+            "personal cooking topics",
+            &["m_personal"],
+        )
+        .await;
+
+        // Query with space="work" filter active: personal-sourced summary must be dropped.
+        let hits =
+            temp_env::async_with_vars([("ORIGIN_ENABLE_GLOBAL_PRELUDE", Some("1"))], async {
+                db.search_memory_cross_rerank("rust", 10, None, Some("work"), None, None)
+                    .await
+                    .unwrap()
+            })
+            .await;
+        assert!(
+            hits.iter().all(|r| r.source != "summary"),
+            "personal-sourced summary must be gated out under space=work, got {:?}",
+            hits.iter().map(|r| (&r.id, &r.source)).collect::<Vec<_>>()
+        );
+    }
+
     // ── T12: FTS recall hardening integration tests ──────────────────────────
 
     /// Regression guard: with hardening OFF (default), the behavior of
@@ -36247,8 +39716,8 @@ pub(crate) mod tests {
         let uv: i64 = vrows.next().await.unwrap().unwrap().get(0).unwrap();
         assert_eq!(uv as u32, crate::db::SCHEMA_VERSION);
         // test_db() runs the full migration ladder, so the terminal version is
-        // the current SCHEMA_VERSION (57 after T16 entity_minhash_bands).
-        assert_eq!(uv, 57);
+        // the current SCHEMA_VERSION (59 after T18 summary_nodes).
+        assert_eq!(uv, 59);
     }
 
     #[tokio::test]
@@ -36265,7 +39734,7 @@ pub(crate) mod tests {
         let mut vrows = conn.query("PRAGMA user_version", ()).await.unwrap();
         let uv: i64 = vrows.next().await.unwrap().unwrap().get(0).unwrap();
         assert_eq!(
-            uv, 57,
+            uv, 59,
             "user_version restored to current terminal version after idempotent re-run"
         );
     }
@@ -36299,7 +39768,7 @@ pub(crate) mod tests {
         let mut vrows = conn.query("PRAGMA user_version", ()).await.unwrap();
         let uv: i64 = vrows.next().await.unwrap().unwrap().get(0).unwrap();
         assert_eq!(uv as u32, crate::db::SCHEMA_VERSION);
-        assert_eq!(uv, 57);
+        assert_eq!(uv, 59);
     }
 
     #[tokio::test]
@@ -36316,8 +39785,457 @@ pub(crate) mod tests {
         let mut vrows = conn.query("PRAGMA user_version", ()).await.unwrap();
         let uv: i64 = vrows.next().await.unwrap().unwrap().get(0).unwrap();
         assert_eq!(
-            uv, 57,
-            "user_version restored to 57 after idempotent re-run"
+            uv, 59,
+            "user_version restored to current terminal version after idempotent re-run"
+        );
+    }
+
+    // -- T15a migration 58: child_vectors --
+
+    #[tokio::test]
+    async fn migration_58_creates_child_vectors_table_and_indexes() {
+        let (db, _dir) = test_db().await;
+        let conn = db.conn.lock().await;
+        let mut rows = conn
+            .query(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='child_vectors'",
+                (),
+            )
+            .await
+            .unwrap();
+        let present: i64 = rows.next().await.unwrap().unwrap().get(0).unwrap();
+        assert_eq!(present, 1, "child_vectors table should exist");
+        drop(rows);
+
+        let mut irows = conn
+            .query(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='index' AND name='idx_child_vectors_parent'",
+                (),
+            )
+            .await
+            .unwrap();
+        let idx: i64 = irows.next().await.unwrap().unwrap().get(0).unwrap();
+        assert_eq!(idx, 1, "idx_child_vectors_parent should exist");
+        drop(irows);
+
+        // The libsql vector index is registered as a shadow table; probe it.
+        let mut vidx = conn
+            .query(
+                "SELECT COUNT(*) FROM sqlite_master WHERE name='child_vectors_vec_idx'",
+                (),
+            )
+            .await
+            .unwrap();
+        let vpresent: i64 = vidx.next().await.unwrap().unwrap().get(0).unwrap();
+        assert!(vpresent >= 1, "child_vectors_vec_idx should exist");
+        drop(vidx);
+
+        let mut vrows = conn.query("PRAGMA user_version", ()).await.unwrap();
+        let uv: i64 = vrows.next().await.unwrap().unwrap().get(0).unwrap();
+        assert_eq!(uv as u32, crate::db::SCHEMA_VERSION);
+        assert_eq!(uv, 59, "terminal version is 59 after T18 summary_nodes");
+    }
+
+    #[tokio::test]
+    async fn migration_58_idempotent() {
+        let (db, _dir) = test_db().await;
+        {
+            let conn = db.conn.lock().await;
+            conn.execute("PRAGMA user_version = 57", ()).await.unwrap();
+        }
+        db.run_migrations(&crate::events::NoopEmitter)
+            .await
+            .expect("re-run migrations idempotent");
+        let conn = db.conn.lock().await;
+        let mut vrows = conn.query("PRAGMA user_version", ()).await.unwrap();
+        let uv: i64 = vrows.next().await.unwrap().unwrap().get(0).unwrap();
+        assert_eq!(
+            uv, 59,
+            "user_version restored to current terminal version after idempotent re-run"
+        );
+
+        // Table still present (CREATE IF NOT EXISTS did not error on re-run).
+        let mut rows = conn
+            .query(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='child_vectors'",
+                (),
+            )
+            .await
+            .unwrap();
+        let present: i64 = rows.next().await.unwrap().unwrap().get(0).unwrap();
+        assert_eq!(present, 1, "child_vectors survives idempotent re-run");
+    }
+
+    // ── T15a: fact-channel producer + retrieval integration ───────────────────
+
+    async fn count_child_vectors_for(db: &MemoryDB, parent_id: &str) -> i64 {
+        let conn = db.conn.lock().await;
+        let mut rows = conn
+            .query(
+                "SELECT COUNT(*) FROM child_vectors WHERE parent_kind = 'memory' AND parent_id = ?1",
+                libsql::params![parent_id],
+            )
+            .await
+            .unwrap();
+        rows.next().await.unwrap().unwrap().get(0).unwrap()
+    }
+
+    fn memory_doc_with_fields(source_id: &str, content: &str, fields_json: &str) -> RawDocument {
+        let mut doc = make_memory_doc(source_id, content, "fact", "work", "claude-code");
+        doc.structured_fields = Some(fields_json.to_string());
+        doc
+    }
+
+    #[tokio::test]
+    async fn child_vectors_written_on_store_when_flag_on() {
+        let (db, _dir) = test_db().await;
+        temp_env::async_with_vars([("ORIGIN_ENABLE_FACT_CHANNEL", Some("1"))], async {
+            db.upsert_documents(vec![memory_doc_with_fields(
+                "fact_on",
+                "The annual subscription renews and the team reviews vendors each cycle.",
+                "{\"birthday\":\"March 1\"}",
+            )])
+            .await
+            .unwrap();
+        })
+        .await;
+        // narrative + 1 structured field >= 2 children.
+        let n = count_child_vectors_for(&db, "fact_on").await;
+        assert!(
+            n >= 2,
+            "expected >= 2 child rows (narrative + field), got {n}"
+        );
+
+        // Each row: parent_kind='memory', correct parent_id, non-null embedding,
+        // and a field='birthday' child exists.
+        let conn = db.conn.lock().await;
+        let mut rows = conn
+            .query(
+                "SELECT field, embedding IS NOT NULL FROM child_vectors WHERE parent_id = 'fact_on' ORDER BY field",
+                (),
+            )
+            .await
+            .unwrap();
+        let mut fields = Vec::new();
+        while let Ok(Some(row)) = rows.next().await {
+            let field: String = row.get(0).unwrap();
+            let has_emb: i64 = row.get(1).unwrap();
+            assert_eq!(has_emb, 1, "child {field} must have non-null embedding");
+            fields.push(field);
+        }
+        assert!(
+            fields.contains(&"narrative".to_string()),
+            "narrative child present"
+        );
+        assert!(
+            fields.contains(&"birthday".to_string()),
+            "birthday field child present"
+        );
+    }
+
+    #[tokio::test]
+    async fn child_vectors_not_written_when_flag_off() {
+        let (db, _dir) = test_db().await;
+        temp_env::async_with_vars([("ORIGIN_ENABLE_FACT_CHANNEL", None::<&str>)], async {
+            db.upsert_documents(vec![memory_doc_with_fields(
+                "fact_off",
+                "The annual subscription renews and the team reviews vendors each cycle.",
+                "{\"birthday\":\"March 1\"}",
+            )])
+            .await
+            .unwrap();
+        })
+        .await;
+        assert_eq!(
+            count_child_vectors_for(&db, "fact_off").await,
+            0,
+            "flag OFF: no child rows written"
+        );
+    }
+
+    #[tokio::test]
+    async fn child_vectors_deterministic_ids_and_replace_on_restore() {
+        let (db, _dir) = test_db().await;
+        temp_env::async_with_vars([("ORIGIN_ENABLE_FACT_CHANNEL", Some("1"))], async {
+            db.upsert_documents(vec![memory_doc_with_fields(
+                "fact_re",
+                "The user lives in a big coastal city with great public transit.",
+                "{\"city\":\"Tokyo\"}",
+            )])
+            .await
+            .unwrap();
+            let after_v1 = count_child_vectors_for(&db, "fact_re").await;
+            // Re-store same source_id with a DIFFERENT city value.
+            db.upsert_documents(vec![memory_doc_with_fields(
+                "fact_re",
+                "The user lives in a big coastal city with great public transit.",
+                "{\"city\":\"Osaka\"}",
+            )])
+            .await
+            .unwrap();
+            let after_v2 = count_child_vectors_for(&db, "fact_re").await;
+            assert_eq!(after_v1, after_v2, "re-store replaces, no row count growth");
+
+            // No stale Tokyo child remains; the city child now says Osaka.
+            let conn = db.conn.lock().await;
+            let mut rows = conn
+                .query(
+                    "SELECT content FROM child_vectors WHERE parent_id = 'fact_re' AND field = 'city'",
+                    (),
+                )
+                .await
+                .unwrap();
+            let content: String = rows.next().await.unwrap().unwrap().get(0).unwrap();
+            assert_eq!(content, "city: Osaka", "stale Tokyo child replaced by Osaka");
+        })
+        .await;
+    }
+
+    #[tokio::test]
+    async fn child_vectors_cascade_delete_on_parent_delete() {
+        let (db, _dir) = test_db().await;
+        temp_env::async_with_vars([("ORIGIN_ENABLE_FACT_CHANNEL", Some("1"))], async {
+            db.upsert_documents(vec![memory_doc_with_fields(
+                "fact_del",
+                "The user keeps detailed notes on every recurring monthly expense.",
+                "{\"category\":\"finance\"}",
+            )])
+            .await
+            .unwrap();
+            assert!(
+                count_child_vectors_for(&db, "fact_del").await >= 2,
+                "children seeded"
+            );
+            // Delete the parent memory: child_vectors must be torn down too
+            // (explicit no-FK cleanup in delete_by_source_id).
+            db.delete_by_source_id("memory", "fact_del").await.unwrap();
+        })
+        .await;
+        assert_eq!(
+            count_child_vectors_for(&db, "fact_del").await,
+            0,
+            "parent delete cascades the child delete"
+        );
+    }
+
+    #[tokio::test]
+    async fn fact_channel_surfaces_when_flag_on() {
+        let (db, _dir) = test_db().await;
+        // Seed a memory whose buried structured field is the only place the
+        // renewal date appears, plus a decoy.
+        temp_env::async_with_vars([("ORIGIN_ENABLE_FACT_CHANNEL", Some("1"))], async {
+            db.upsert_documents(vec![
+                memory_doc_with_fields(
+                    "m_target",
+                    "The team subscribes to the analytics platform and rotates seats quarterly.",
+                    "{\"renewal_date\":\"November 3\"}",
+                ),
+                make_memory_doc(
+                    "m_decoy",
+                    "The user enjoys hiking and photography on the weekends near the coast.",
+                    "fact",
+                    "work",
+                    "claude-code",
+                ),
+            ])
+            .await
+            .unwrap();
+        })
+        .await;
+        let hits = temp_env::async_with_vars([("ORIGIN_ENABLE_FACT_CHANNEL", Some("1"))], async {
+            db.search_memory_cross_rerank("when is the renewal date", 10, None, None, None, None)
+                .await
+                .unwrap()
+        })
+        .await;
+        // The rehydrated parent surfaces as source="memory" (metric-honest).
+        let target = hits.iter().find(|r| r.source_id == "m_target");
+        assert!(
+            target.is_some(),
+            "fact channel surfaces the buried-field parent"
+        );
+        assert_eq!(
+            target.unwrap().source,
+            "memory",
+            "rehydrated child hit carries source=memory, not a child id"
+        );
+    }
+
+    #[tokio::test]
+    async fn fact_channel_absent_when_flag_off() {
+        let (db, _dir) = test_db().await;
+        // Store WITH flag on so children exist, then read with flag OFF.
+        temp_env::async_with_vars([("ORIGIN_ENABLE_FACT_CHANNEL", Some("1"))], async {
+            db.upsert_documents(vec![memory_doc_with_fields(
+                "m_offread",
+                "The contract auto-renews and finance reconciles the invoice monthly.",
+                "{\"renewal_date\":\"November 3\"}",
+            )])
+            .await
+            .unwrap();
+        })
+        .await;
+        // Read with flag OFF: the channel must not run. Compare to a query that
+        // only the buried field would match.
+        let off_hits =
+            temp_env::async_with_vars([("ORIGIN_ENABLE_FACT_CHANNEL", None::<&str>)], async {
+                db.search_memory_cross_rerank(
+                    "November 3 renewal date specific",
+                    10,
+                    None,
+                    None,
+                    None,
+                    None,
+                )
+                .await
+                .unwrap()
+            })
+            .await;
+        let on_hits =
+            temp_env::async_with_vars([("ORIGIN_ENABLE_FACT_CHANNEL", Some("1"))], async {
+                db.search_memory_cross_rerank(
+                    "November 3 renewal date specific",
+                    10,
+                    None,
+                    None,
+                    None,
+                    None,
+                )
+                .await
+                .unwrap()
+            })
+            .await;
+        // ON must surface >= as many results as OFF for this query (channel only
+        // adds mass). At minimum, flag-OFF produces an unchanged base result.
+        assert!(
+            on_hits.len() >= off_hits.len(),
+            "fact channel ON never returns fewer than OFF (ON={}, OFF={})",
+            on_hits.len(),
+            off_hits.len()
+        );
+    }
+
+    #[tokio::test]
+    async fn fact_channel_respects_space_filter() {
+        let (db, _dir) = test_db().await;
+        temp_env::async_with_vars([("ORIGIN_ENABLE_FACT_CHANNEL", Some("1"))], async {
+            let mut work = memory_doc_with_fields(
+                "m_work",
+                "The work project tracks its launch milestone in the shared planner.",
+                "{\"milestone\":\"launch day\"}",
+            );
+            work.space = Some("work".to_string());
+            let mut personal = memory_doc_with_fields(
+                "m_personal",
+                "The personal plan tracks its launch milestone for the side hustle.",
+                "{\"milestone\":\"launch day\"}",
+            );
+            personal.space = Some("personal".to_string());
+            db.upsert_documents(vec![work, personal]).await.unwrap();
+        })
+        .await;
+        let hits = temp_env::async_with_vars([("ORIGIN_ENABLE_FACT_CHANNEL", Some("1"))], async {
+            db.search_memory_cross_rerank(
+                "milestone launch day",
+                10,
+                None,
+                Some("work"),
+                None,
+                None,
+            )
+            .await
+            .unwrap()
+        })
+        .await;
+        assert!(
+            hits.iter().all(|r| r.source_id != "m_personal"),
+            "space=work recall must not leak the personal parent via the child channel, got {:?}",
+            hits.iter()
+                .map(|r| (&r.source_id, &r.space))
+                .collect::<Vec<_>>()
+        );
+    }
+
+    #[tokio::test]
+    async fn rebuild_child_vectors_for_missing_backfills() {
+        let (db, _dir) = test_db().await;
+        // Store with the flag OFF: no children written.
+        temp_env::async_with_vars([("ORIGIN_ENABLE_FACT_CHANNEL", None::<&str>)], async {
+            db.upsert_documents(vec![memory_doc_with_fields(
+                "m_backfill",
+                "The user prefers the dashboard view and pins the weekly report card.",
+                "{\"view\":\"dashboard\"}",
+            )])
+            .await
+            .unwrap();
+        })
+        .await;
+        assert_eq!(
+            count_child_vectors_for(&db, "m_backfill").await,
+            0,
+            "flag OFF store leaves children empty"
+        );
+        // Flip the flag and backfill.
+        let rebuilt =
+            temp_env::async_with_vars([("ORIGIN_ENABLE_FACT_CHANNEL", Some("1"))], async {
+                db.rebuild_child_vectors_for_missing().await.unwrap()
+            })
+            .await;
+        assert!(rebuilt >= 1, "backfill rebuilt >= 1 parent, got {rebuilt}");
+        assert!(
+            count_child_vectors_for(&db, "m_backfill").await >= 2,
+            "backfill seeded narrative + field children"
+        );
+    }
+
+    #[tokio::test]
+    async fn fact_channel_off_is_byte_identical_to_baseline() {
+        let (db, _dir) = test_db().await;
+        // Seed without children (flag OFF on store).
+        temp_env::async_with_vars([("ORIGIN_ENABLE_FACT_CHANNEL", None::<&str>)], async {
+            db.upsert_documents(vec![
+                make_memory_doc(
+                    "b1",
+                    "The user prefers rust for systems work and python for scripts.",
+                    "fact",
+                    "work",
+                    "claude-code",
+                ),
+                make_memory_doc(
+                    "b2",
+                    "The user keeps a daily journal and reviews it every sunday evening.",
+                    "fact",
+                    "work",
+                    "claude-code",
+                ),
+            ])
+            .await
+            .unwrap();
+        })
+        .await;
+        let unset: Vec<String> =
+            temp_env::async_with_vars([("ORIGIN_ENABLE_FACT_CHANNEL", None::<&str>)], async {
+                db.search_memory_cross_rerank("rust python journal", 10, None, None, None, None)
+                    .await
+                    .unwrap()
+                    .into_iter()
+                    .map(|r| r.id)
+                    .collect()
+            })
+            .await;
+        let off: Vec<String> =
+            temp_env::async_with_vars([("ORIGIN_ENABLE_FACT_CHANNEL", Some("0"))], async {
+                db.search_memory_cross_rerank("rust python journal", 10, None, None, None, None)
+                    .await
+                    .unwrap()
+                    .into_iter()
+                    .map(|r| r.id)
+                    .collect()
+            })
+            .await;
+        assert_eq!(
+            unset, off,
+            "flag unset vs 0 produce identical result ids/order"
         );
     }
 

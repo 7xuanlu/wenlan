@@ -2,6 +2,7 @@
 //! Server state — shared application state for the standalone HTTP daemon.
 
 use crate::ingest_batcher::IngestBatcher;
+use crate::reflection_debounce::ReflectionDebouncer;
 use crate::scheduler::WriteSignal;
 use origin_core::access_tracker::AccessTracker;
 use origin_core::db::MemoryDB;
@@ -50,6 +51,10 @@ pub struct ServerState {
     pub watch_paths: Vec<PathBuf>,
     /// Write-event tracker for the event-driven steep scheduler.
     pub write_signal: WriteSignal,
+    /// Per-agent debouncer for background reflection (T22). Coalesces
+    /// mid-burst enrichment spawns when `ORIGIN_ENABLE_REFLECTION_DEBOUNCE`
+    /// is truthy; inert (never consulted) when the flag is unset/0.
+    pub reflection_debouncer: ReflectionDebouncer,
     /// Coalescing batcher for concurrent `/api/memory/store` calls. Groups
     /// requests that arrive within a short window into a single batched
     /// upsert (one FastEmbed call, one libSQL transaction) instead of N
@@ -74,6 +79,7 @@ impl Default for ServerState {
             quality_gate: QualityGate::new(origin_core::tuning::GateConfig::default()),
             watch_paths: Vec::new(),
             write_signal: WriteSignal::new(),
+            reflection_debouncer: ReflectionDebouncer::new(),
             ingest_batcher: None,
         }
     }
