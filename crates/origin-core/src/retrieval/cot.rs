@@ -134,10 +134,12 @@ pub(crate) fn build_validation_prompt(query: &str, draft: &str, context: &str) -
 ///
 /// Verbatim Reciprocal Rank Fusion block lifted from
 /// `search_memory_cross_rerank` (`1/(60+rank)` accumulation, dedup by `id`,
-/// seed the first list's `score` then add RRF mass). The first list in `lists`
-/// is the round-0 pool and SEEDS the score map (preserving its multiplied
-/// score), so a high-rank round-0 hit stays above a low-rank round-1-only hit
-/// (round-0 floor invariant). Later lists contribute only `1/(60+rank)`.
+/// seed the first list's `score` then add RRF mass). round-0 hits are seeded
+/// into the merged pool with an additive RRF floor; final ordering is
+/// determined by the cross-encoder rerank that runs after merge when a
+/// reranker is present. The floor guards against round-0 hits being dropped,
+/// not against re-ranking below later-round hits. Later lists contribute only
+/// `1/(60+rank)`.
 pub(crate) fn merge_pools(lists: Vec<Vec<SearchResult>>) -> Vec<SearchResult> {
     let mut score_map: HashMap<String, f32> = HashMap::new();
     let mut result_map: HashMap<String, SearchResult> = HashMap::new();
@@ -145,7 +147,10 @@ pub(crate) fn merge_pools(lists: Vec<Vec<SearchResult>>) -> Vec<SearchResult> {
     let mut first = true;
     for ranked in lists {
         if first {
-            // Seed from the round-0 pool: keep its multiplied score, add RRF mass.
+            // Seed from the round-0 pool with an additive RRF floor: keep its
+            // multiplied score, add RRF mass. The floor guards against round-0
+            // hits being dropped, not against re-ranking below later-round hits;
+            // the cross-encoder rerank after merge determines final order.
             for (rank, r) in ranked.into_iter().enumerate() {
                 let rrf_score = 1.0 / (60.0 + rank as f32);
                 *score_map.entry(r.id.clone()).or_default() += r.score + rrf_score;
