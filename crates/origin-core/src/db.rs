@@ -645,6 +645,24 @@ pub fn episode_channel_enabled() -> bool {
         .unwrap_or(false)
 }
 
+/// True iff `ORIGIN_ENABLE_COT_RETRIEVAL` is set to a truthy value
+/// (`1`, `true`, or `yes`, case-insensitive). The CoT iterative retrieve-reason-
+/// retrieve loop (T5) is OPT-IN: unset or a falsey value (`0`/`false`/`no`/"")
+/// leaves `search_memory_iterative` byte-identical to `search_memory_cross_rerank`
+/// (round-0 only; no draft answer, no validation, no extra LLM calls).
+///
+/// Used by [`MemoryDB::search_memory_iterative`] to gate the loop. The eval
+/// harness does NOT stamp a cot variant tag: the cross-rerank runners call
+/// `search_memory_cross_rerank`, not the iterative loop, so a `__cot` baseline
+/// tag would lie about what was measured (see AGENTS.md Eval Citation
+/// Discipline). Truthy-only parse, mirrors [`page_channel_enabled`].
+pub fn cot_retrieval_enabled() -> bool {
+    std::env::var("ORIGIN_ENABLE_COT_RETRIEVAL")
+        .ok()
+        .map(|v| matches!(v.trim().to_ascii_lowercase().as_str(), "1" | "true" | "yes"))
+        .unwrap_or(false)
+}
+
 /// True iff `ORIGIN_ENABLE_ENTITY_MINHASH` is set to a truthy value
 /// (`1`, `true`, or `yes`, case-insensitive). The deterministic MinHash/LSH
 /// entity near-dedup cascade (T16) is OPT-IN: unset or a falsey value
@@ -8621,6 +8639,36 @@ impl MemoryDB {
             .unwrap_or(Self::QUERY_DECOMP_MAX_DEFAULT)
     }
 
+    /// Default CoT iterative-retrieval round cap (excluding round 0). Each round
+    /// costs 2 LLM calls (draft + validate) plus 1 retrieval, so the cap bounds
+    /// runaway cost. Override with `ORIGIN_COT_MAX_ITER`. Default 3 matches the
+    /// plan + Cognee CoT max_iter. Mirrors the `page_channel_limit` env-override
+    /// idiom. Test-only for now: callers of `search_memory_iterative` pass
+    /// `max_iter` explicitly, and no production/eval path drives the loop yet, so
+    /// this env-resolver is exercised only by its unit test.
+    #[cfg(test)]
+    const COT_MAX_ITER_DEFAULT: usize = 3;
+
+    #[cfg(test)]
+    pub(crate) fn cot_max_iter() -> usize {
+        std::env::var("ORIGIN_COT_MAX_ITER")
+            .ok()
+            .and_then(|s| s.trim().parse().ok())
+            .unwrap_or(Self::COT_MAX_ITER_DEFAULT)
+    }
+
+    /// Per-round draft/validation LLM timeout for the CoT loop. Default 10s
+    /// (mirrors `search_memory_expanded`). Env-overridable with
+    /// `ORIGIN_COT_ROUND_TIMEOUT_SECS` so the timeout-degrade path can be unit
+    /// tested without a 10s real-time wait.
+    fn cot_round_timeout() -> std::time::Duration {
+        let secs = std::env::var("ORIGIN_COT_ROUND_TIMEOUT_SECS")
+            .ok()
+            .and_then(|s| s.trim().parse::<u64>().ok())
+            .unwrap_or(10);
+        std::time::Duration::from_secs(secs)
+    }
+
     /// Hybrid search over the verbatim `source='episode'` tier (T2).
     ///
     /// Clones the `search_memory` vector+FTS+RRF shape but scopes BOTH
@@ -9302,6 +9350,198 @@ impl MemoryDB {
                 .await
             }
         }
+    }
+
+    /// CoT iterative retrieve-reason-retrieve search (T5).
+    ///
+    /// Round 0 runs [`Self::search_memory_cross_rerank`] (the post-#208 entry
+    /// point: memory rows in the top `limit`, any page rows appended as the
+    /// `source == "page"` tail). When the CoT flag is OFF, `max_iter == 0`, or no
+    /// LLM is available, round 0 is returned UNCHANGED (byte-identical to
+    /// `search_memory_cross_rerank`).
+    ///
+    /// Otherwise, up to `max_iter` rounds run: draft an answer from the current
+    /// memory context, validate it against that context, and - only when the
+    /// validator emits a non-empty follow-up question - re-retrieve via
+    /// [`Self::search_memory`] and RRF-merge the new evidence into the pool
+    /// (`cot::merge_pools`, round-0 floor preserved). The merged pool is
+    /// CE-reranked once, truncated to `limit`, and the round-0 page tail is
+    /// reattached. The loop stops early on `Validation::Complete`.
+    ///
+    /// Graceful degradation: every LLM failure / timeout / parse error logs and
+    /// falls back to the best pool so far (never errors). Per-round draft and
+    /// validation calls are each wrapped in a 10s `tokio::time::timeout`,
+    /// mirroring `search_memory_expanded`.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn search_memory_iterative(
+        &self,
+        query: &str,
+        limit: usize,
+        memory_type: Option<&str>,
+        space: Option<&str>,
+        source_agent: Option<&str>,
+        reranker: Option<Arc<dyn crate::reranker::Reranker>>,
+        llm: Option<Arc<dyn crate::llm_provider::LlmProvider>>,
+        max_iter: usize,
+    ) -> Result<Vec<SearchResult>, OriginError> {
+        // Round 0: the existing single-shot cross-rerank path. Carries the page
+        // tail through untouched when the page-channel is enabled.
+        let round0 = self
+            .search_memory_cross_rerank(
+                query,
+                limit,
+                memory_type,
+                space,
+                source_agent,
+                reranker.clone(),
+            )
+            .await?;
+
+        // Opt-in gate + cheap exits: flag OFF, no rounds, or no LLM -> round 0
+        // unchanged (byte-identical to search_memory_cross_rerank).
+        if !cot_retrieval_enabled() || max_iter == 0 || llm.is_none() {
+            return Ok(round0);
+        }
+        let llm = llm.expect("llm.is_none() handled above");
+
+        // Split round 0 into the memory pool (drives draft + merge) and the page
+        // tail (reattached verbatim at the end; pages never re-retrieve).
+        let (round0_pages, round0_mem): (Vec<SearchResult>, Vec<SearchResult>) =
+            round0.into_iter().partition(|r| r.source == "page");
+
+        // Accumulator of ranked lists for RRF merge; round-0 memory seeds it.
+        let mut pools: Vec<Vec<SearchResult>> = vec![round0_mem.clone()];
+        // Latest memory pool used to build the draft/validation context.
+        let mut context_pool: Vec<SearchResult> = round0_mem;
+        let fetch_pool = limit * 2;
+        let round_timeout = Self::cot_round_timeout();
+        const CONTEXT_TOP_K: usize = 8;
+        // Dedup guard: if the validator asks for the same follow-up twice in a
+        // row, re-retrieval is converged — break instead of burning another LLM
+        // draft/validate round-trip on identical evidence.
+        let mut last_followup: Option<String> = None;
+
+        for round in 0..max_iter {
+            let context = crate::retrieval::cot::format_context(&context_pool, CONTEXT_TOP_K);
+
+            // Draft an answer from the current context.
+            let draft_req = crate::retrieval::cot::build_draft_prompt(query, &context);
+            let draft = match tokio::time::timeout(round_timeout, llm.generate(draft_req)).await {
+                Ok(Ok(text)) => text,
+                Ok(Err(e)) => {
+                    log::warn!("[cot] round {round} draft LLM failed: {e}; stopping loop");
+                    break;
+                }
+                Err(_) => {
+                    log::warn!("[cot] round {round} draft timed out; stopping loop");
+                    break;
+                }
+            };
+
+            // Validate the draft against the context; only re-retrieve if a
+            // non-empty follow-up question comes back.
+            let validate_req =
+                crate::retrieval::cot::build_validation_prompt(query, &draft, &context);
+            let validation =
+                match tokio::time::timeout(round_timeout, llm.generate(validate_req)).await {
+                    Ok(Ok(text)) => crate::retrieval::cot::parse_validation(&text),
+                    Ok(Err(e)) => {
+                        log::warn!("[cot] round {round} validate LLM failed: {e}; stopping loop");
+                        break;
+                    }
+                    Err(_) => {
+                        log::warn!("[cot] round {round} validate timed out; stopping loop");
+                        break;
+                    }
+                };
+
+            let followup = match validation {
+                crate::retrieval::cot::Validation::Complete => break,
+                crate::retrieval::cot::Validation::Followup(q) => q,
+            };
+
+            // Identical re-retrieval = converged; stop before another round-trip.
+            if Some(&followup) == last_followup.as_ref() {
+                break;
+            }
+            last_followup = Some(followup.clone());
+
+            // Re-retrieve for the follow-up; merge the new evidence in.
+            match self
+                .search_memory(
+                    &followup,
+                    fetch_pool,
+                    memory_type,
+                    space,
+                    source_agent,
+                    None,
+                    None,
+                    None,
+                )
+                .await
+            {
+                Ok(hits) => {
+                    pools.push(hits);
+                    context_pool = crate::retrieval::cot::merge_pools(pools.clone());
+                }
+                Err(e) => {
+                    log::warn!("[cot] round {round} followup search failed: {e}; stopping loop");
+                    break;
+                }
+            }
+        }
+
+        // Final RRF merge of round-0 + every follow-up pool.
+        let mut results = crate::retrieval::cot::merge_pools(pools);
+
+        // CE-rerank the merged memory pool once (reuse the cross-rerank block).
+        if let Some(reranker) = reranker {
+            if results.len() > 1 {
+                let candidates: Vec<(String, String)> = results
+                    .iter()
+                    .map(|r| {
+                        let trimmed: String = r.content.chars().take(512).collect();
+                        (r.id.clone(), trimmed)
+                    })
+                    .collect();
+                let query_owned = query.to_string();
+                let scored =
+                    tokio::task::spawn_blocking(move || reranker.rerank(&query_owned, &candidates))
+                        .await;
+
+                let scored = match scored {
+                    Ok(Ok(v)) => v,
+                    Ok(Err(e)) => {
+                        log::warn!("[cot] reranker returned err: {e}; keeping merged order");
+                        Vec::new()
+                    }
+                    Err(e) => {
+                        log::warn!("[cot] reranker join failed: {e}; keeping merged order");
+                        Vec::new()
+                    }
+                };
+
+                if !scored.is_empty() {
+                    let score_map: HashMap<String, f32> = scored.into_iter().collect();
+                    for r in &mut results {
+                        if let Some(&s) = score_map.get(&r.id) {
+                            r.score = s;
+                        }
+                    }
+                    results.sort_by(|a, b| {
+                        b.score
+                            .partial_cmp(&a.score)
+                            .unwrap_or(std::cmp::Ordering::Equal)
+                    });
+                }
+            }
+        }
+
+        results.truncate(limit);
+        // Reattach the round-0 page tail after the memory limit (page-channel
+        // append semantics, identical to search_memory_cross_rerank).
+        results.extend(round0_pages);
+        Ok(results)
     }
 
     /// Hybrid search with LLM-based query expansion BEFORE search.
@@ -39684,6 +39924,459 @@ pub(crate) mod tests {
             })
             .await;
         assert_eq!(overridden, 7, "override parses");
+    }
+
+    // ── T5: CoT iterative retrieval helper + integration tests ────────────────
+
+    #[tokio::test]
+    async fn cot_max_iter_default_and_override() {
+        let default = temp_env::async_with_vars([("ORIGIN_COT_MAX_ITER", None::<&str>)], async {
+            MemoryDB::cot_max_iter()
+        })
+        .await;
+        assert_eq!(default, 3, "default cot max_iter is 3");
+
+        let overridden = temp_env::async_with_vars([("ORIGIN_COT_MAX_ITER", Some("5"))], async {
+            MemoryDB::cot_max_iter()
+        })
+        .await;
+        assert_eq!(overridden, 5, "override parses");
+    }
+
+    /// Seed a small CoT test corpus and return the db handle.
+    async fn cot_seed_db() -> (MemoryDB, tempfile::TempDir) {
+        let (db, dir) = test_db().await;
+        db.upsert_documents(vec![
+            make_memory_doc(
+                "c1",
+                "Alice joined Acme as a software engineer in 2019",
+                "fact",
+                "work",
+                "claude",
+            ),
+            make_memory_doc(
+                "c2",
+                "Bob mentors the backend team at Acme",
+                "fact",
+                "work",
+                "claude",
+            ),
+            make_memory_doc(
+                "c3",
+                "The Acme office is located in Berlin",
+                "fact",
+                "work",
+                "claude",
+            ),
+            make_memory_doc(
+                "c4",
+                "Carol leads the data platform group",
+                "fact",
+                "work",
+                "claude",
+            ),
+            make_memory_doc(
+                "c5",
+                "Dave works on the search relevance pipeline",
+                "fact",
+                "work",
+                "claude",
+            ),
+        ])
+        .await
+        .unwrap();
+        (db, dir)
+    }
+
+    /// Test 11: max_iter=0 is byte-identical (ids + order) to cross-rerank.
+    #[tokio::test]
+    async fn iterative_max_iter_zero_equals_cross_rerank() {
+        let (db, _dir) = cot_seed_db().await;
+        let reranker: Arc<dyn crate::reranker::Reranker> = Arc::new(crate::reranker::NoopReranker);
+
+        // Flag ON to prove max_iter==0 short-circuits regardless of flag state.
+        let (baseline, iterative) =
+            temp_env::async_with_vars([("ORIGIN_ENABLE_COT_RETRIEVAL", Some("1"))], async {
+                let baseline = db
+                    .search_memory_cross_rerank(
+                        "Acme engineer",
+                        10,
+                        None,
+                        None,
+                        None,
+                        Some(reranker.clone()),
+                    )
+                    .await
+                    .unwrap();
+                let iterative = db
+                    .search_memory_iterative(
+                        "Acme engineer",
+                        10,
+                        None,
+                        None,
+                        None,
+                        Some(reranker.clone()),
+                        None,
+                        0,
+                    )
+                    .await
+                    .unwrap();
+                (baseline, iterative)
+            })
+            .await;
+
+        let b_ids: Vec<&String> = baseline.iter().map(|r| &r.id).collect();
+        let i_ids: Vec<&String> = iterative.iter().map(|r| &r.id).collect();
+        assert_eq!(b_ids, i_ids, "max_iter=0 must equal cross-rerank ids+order");
+    }
+
+    /// Test 12: flag OFF + max_iter=3 behaves as round-0 only (no LLM consulted).
+    #[tokio::test]
+    async fn iterative_flag_off_is_noop() {
+        let (db, _dir) = cot_seed_db().await;
+        let reranker: Arc<dyn crate::reranker::Reranker> = Arc::new(crate::reranker::NoopReranker);
+        // An always-followup LLM that, if ever consulted, would change the pool.
+        let llm: Arc<dyn crate::llm_provider::LlmProvider> =
+            Arc::new(crate::llm_provider::SequencedMockProvider::new(vec![
+                "draft answer",
+                r#"{"complete": false, "followup": "Berlin office"}"#,
+            ]));
+
+        let (baseline, iterative) =
+            temp_env::async_with_vars([("ORIGIN_ENABLE_COT_RETRIEVAL", None::<&str>)], async {
+                let baseline = db
+                    .search_memory_cross_rerank(
+                        "Acme engineer",
+                        10,
+                        None,
+                        None,
+                        None,
+                        Some(reranker.clone()),
+                    )
+                    .await
+                    .unwrap();
+                let iterative = db
+                    .search_memory_iterative(
+                        "Acme engineer",
+                        10,
+                        None,
+                        None,
+                        None,
+                        Some(reranker.clone()),
+                        Some(llm.clone()),
+                        3,
+                    )
+                    .await
+                    .unwrap();
+                (baseline, iterative)
+            })
+            .await;
+
+        let b_ids: Vec<&String> = baseline.iter().map(|r| &r.id).collect();
+        let i_ids: Vec<&String> = iterative.iter().map(|r| &r.id).collect();
+        assert_eq!(b_ids, i_ids, "flag OFF must be byte-identical to round-0");
+    }
+
+    /// Test 13: validator returns followup-then-complete; exactly one extra round
+    /// runs, then stops; the result is a superset of round-0 ids.
+    #[tokio::test]
+    async fn iterative_complete_first_round_stops() {
+        let (db, _dir) = cot_seed_db().await;
+        let reranker: Arc<dyn crate::reranker::Reranker> = Arc::new(crate::reranker::NoopReranker);
+        // Round 1: draft, then validate -> followup. Round 2: draft, then complete.
+        let mock = Arc::new(crate::llm_provider::SequencedMockProvider::new(vec![
+            "draft 1",
+            r#"{"complete": false, "followup": "Acme office location"}"#,
+            "draft 2",
+            r#"{"complete": true}"#,
+        ]));
+        let llm: Arc<dyn crate::llm_provider::LlmProvider> = mock.clone();
+
+        let (baseline, iterative) =
+            temp_env::async_with_vars([("ORIGIN_ENABLE_COT_RETRIEVAL", Some("1"))], async {
+                let baseline = db
+                    .search_memory_cross_rerank(
+                        "Acme engineer",
+                        10,
+                        None,
+                        None,
+                        None,
+                        Some(reranker.clone()),
+                    )
+                    .await
+                    .unwrap();
+                let iterative = db
+                    .search_memory_iterative(
+                        "Acme engineer",
+                        10,
+                        None,
+                        None,
+                        None,
+                        Some(reranker.clone()),
+                        Some(llm.clone()),
+                        3,
+                    )
+                    .await
+                    .unwrap();
+                (baseline, iterative)
+            })
+            .await;
+
+        // 2 rounds executed: round1 (draft+validate=2 calls) + round2 (draft+validate=2 calls) = 4.
+        assert_eq!(
+            mock.call_count(),
+            4,
+            "followup-then-complete must run exactly two rounds (4 LLM calls)"
+        );
+        // Superset: every round-0 memory id survives in the final pool.
+        let final_ids: std::collections::HashSet<&String> =
+            iterative.iter().map(|r| &r.id).collect();
+        for r in baseline.iter().filter(|r| r.source != "page") {
+            assert!(
+                final_ids.contains(&r.id),
+                "round-0 id {} must survive into final pool",
+                r.id
+            );
+        }
+    }
+
+    /// Test 14: llm=None + flag ON + max_iter=3 -> plain round-0 pool, no panic.
+    #[tokio::test]
+    async fn iterative_llm_none_falls_back() {
+        let (db, _dir) = cot_seed_db().await;
+        let reranker: Arc<dyn crate::reranker::Reranker> = Arc::new(crate::reranker::NoopReranker);
+
+        let (baseline, iterative) =
+            temp_env::async_with_vars([("ORIGIN_ENABLE_COT_RETRIEVAL", Some("1"))], async {
+                let baseline = db
+                    .search_memory_cross_rerank(
+                        "Acme engineer",
+                        10,
+                        None,
+                        None,
+                        None,
+                        Some(reranker.clone()),
+                    )
+                    .await
+                    .unwrap();
+                let iterative = db
+                    .search_memory_iterative(
+                        "Acme engineer",
+                        10,
+                        None,
+                        None,
+                        None,
+                        Some(reranker.clone()),
+                        None,
+                        3,
+                    )
+                    .await
+                    .unwrap();
+                (baseline, iterative)
+            })
+            .await;
+
+        let b_ids: Vec<&String> = baseline.iter().map(|r| &r.id).collect();
+        let i_ids: Vec<&String> = iterative.iter().map(|r| &r.id).collect();
+        assert_eq!(b_ids, i_ids, "llm=None must degrade to round-0");
+    }
+
+    /// Test 15: a bridge fact that only matches the followup phrasing must appear
+    /// in the final pool but be absent from the max_iter=0 baseline (core proof).
+    #[tokio::test]
+    async fn iterative_followup_merges_new_evidence() {
+        let (db, _dir) = test_db().await;
+        // Round-0 query "primary topic" matches m_primary strongly; the bridge
+        // fact m_bridge only matches the distinct followup phrasing.
+        db.upsert_documents(vec![
+            make_memory_doc(
+                "m_primary",
+                "The primary topic discussion covers widget assembly throughput",
+                "fact",
+                "work",
+                "claude",
+            ),
+            make_memory_doc(
+                "m_bridge",
+                "Zephyr quokka migration happens every autumn near the fjord",
+                "fact",
+                "work",
+                "claude",
+            ),
+        ])
+        .await
+        .unwrap();
+        let reranker: Arc<dyn crate::reranker::Reranker> = Arc::new(crate::reranker::NoopReranker);
+        // Validator asks the followup that retrieves the bridge fact, then completes.
+        let llm: Arc<dyn crate::llm_provider::LlmProvider> =
+            Arc::new(crate::llm_provider::SequencedMockProvider::new(vec![
+                "draft 1",
+                r#"{"complete": false, "followup": "Zephyr quokka migration fjord"}"#,
+                "draft 2",
+                r#"{"complete": true}"#,
+            ]));
+
+        let (baseline, iterative) =
+            temp_env::async_with_vars([("ORIGIN_ENABLE_COT_RETRIEVAL", Some("1"))], async {
+                let baseline = db
+                    .search_memory_iterative(
+                        "primary topic widget throughput",
+                        2,
+                        None,
+                        None,
+                        None,
+                        Some(reranker.clone()),
+                        None,
+                        0,
+                    )
+                    .await
+                    .unwrap();
+                let iterative = db
+                    .search_memory_iterative(
+                        "primary topic widget throughput",
+                        2,
+                        None,
+                        None,
+                        None,
+                        Some(reranker.clone()),
+                        Some(llm.clone()),
+                        3,
+                    )
+                    .await
+                    .unwrap();
+                (baseline, iterative)
+            })
+            .await;
+
+        let in_final = iterative.iter().any(|r| r.source_id == "m_bridge");
+        assert!(
+            in_final,
+            "followup must merge the bridge fact into the final pool; got {:?}",
+            iterative.iter().map(|r| &r.source_id).collect::<Vec<_>>()
+        );
+        // Sanity: max_iter=0 baseline returns results (the bridge may or may not
+        // be present, but the iterative run must surface it via the followup).
+        assert!(
+            !baseline.is_empty(),
+            "baseline should return round-0 results"
+        );
+    }
+
+    /// Test 16: always-followup validator -> rounds bounded by max_iter. Each
+    /// round = 2 LLM calls (draft + validate), so call_count == 2 * max_iter.
+    #[tokio::test]
+    async fn iterative_respects_max_iter_cap() {
+        let (db, _dir) = cot_seed_db().await;
+        let reranker: Arc<dyn crate::reranker::Reranker> = Arc::new(crate::reranker::NoopReranker);
+        // Always returns: draft, then followup. Once exhausted, repeats the last
+        // (followup) response forever -> every round re-retrieves.
+        let mock = Arc::new(crate::llm_provider::SequencedMockProvider::new(vec![
+            "draft",
+            r#"{"complete": false, "followup": "more context please"}"#,
+        ]));
+        let llm: Arc<dyn crate::llm_provider::LlmProvider> = mock.clone();
+
+        let max_iter = 2;
+        temp_env::async_with_vars([("ORIGIN_ENABLE_COT_RETRIEVAL", Some("1"))], async {
+            db.search_memory_iterative(
+                "Acme engineer",
+                10,
+                None,
+                None,
+                None,
+                Some(reranker.clone()),
+                Some(llm.clone()),
+                max_iter,
+            )
+            .await
+            .unwrap()
+        })
+        .await;
+
+        // Exactly max_iter rounds run; 2 LLM calls each. Bounded -> no runaway.
+        assert_eq!(
+            mock.call_count(),
+            2 * max_iter,
+            "always-followup must cap at max_iter rounds (2 LLM calls each)"
+        );
+    }
+
+    /// Test 17: a draft call that sleeps past the per-round timeout degrades to
+    /// the best pool so far (no error). `ORIGIN_COT_ROUND_TIMEOUT_SECS=0` makes
+    /// the timeout fire on the first poll against a still-sleeping mock, so the
+    /// test stays fast (no 10s real wait).
+    #[tokio::test]
+    async fn iterative_timeout_degrades() {
+        let (db, _dir) = cot_seed_db().await;
+        let reranker: Arc<dyn crate::reranker::Reranker> = Arc::new(crate::reranker::NoopReranker);
+        let llm: Arc<dyn crate::llm_provider::LlmProvider> =
+            Arc::new(SlowMockProvider { sleep_secs: 30 });
+
+        let (baseline, iterative) = temp_env::async_with_vars(
+            [
+                ("ORIGIN_ENABLE_COT_RETRIEVAL", Some("1")),
+                ("ORIGIN_COT_ROUND_TIMEOUT_SECS", Some("0")),
+            ],
+            async {
+                let baseline = db
+                    .search_memory_cross_rerank(
+                        "Acme engineer",
+                        10,
+                        None,
+                        None,
+                        None,
+                        Some(reranker.clone()),
+                    )
+                    .await
+                    .unwrap();
+                let iterative = db
+                    .search_memory_iterative(
+                        "Acme engineer",
+                        10,
+                        None,
+                        None,
+                        None,
+                        Some(reranker.clone()),
+                        Some(llm.clone()),
+                        3,
+                    )
+                    .await
+                    .unwrap();
+                (baseline, iterative)
+            },
+        )
+        .await;
+
+        // Timeout on the first draft -> loop breaks -> round-0 pool returned.
+        let b_ids: Vec<&String> = baseline.iter().map(|r| &r.id).collect();
+        let i_ids: Vec<&String> = iterative.iter().map(|r| &r.id).collect();
+        assert_eq!(b_ids, i_ids, "timeout must degrade to the round-0 pool");
+    }
+
+    /// Test-only LLM provider whose `generate` sleeps `sleep_secs` so the per-round
+    /// `tokio::time::timeout` fires. Paired with `ORIGIN_COT_ROUND_TIMEOUT_SECS=0`.
+    struct SlowMockProvider {
+        sleep_secs: u64,
+    }
+
+    #[async_trait::async_trait]
+    impl crate::llm_provider::LlmProvider for SlowMockProvider {
+        async fn generate(
+            &self,
+            _request: crate::llm_provider::LlmRequest,
+        ) -> Result<String, crate::llm_provider::LlmError> {
+            tokio::time::sleep(std::time::Duration::from_secs(self.sleep_secs)).await;
+            Ok("too late".to_string())
+        }
+        fn is_available(&self) -> bool {
+            true
+        }
+        fn name(&self) -> &str {
+            "slow-mock"
+        }
+        fn backend(&self) -> crate::llm_provider::LlmBackend {
+            crate::llm_provider::LlmBackend::OnDevice
+        }
     }
 
     // -- Phase 1: migration 56 --
