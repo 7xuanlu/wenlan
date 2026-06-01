@@ -1213,6 +1213,15 @@ pub async fn run_longmemeval_eval_cross_rerank_from_db(
     } else {
         "off"
     };
+    // T5: append __cot suffix when ORIGIN_ENABLE_COT_RETRIEVAL is on, so
+    // cot-ON and cot-OFF baselines get distinct baseline filenames. The flag is
+    // shared with production (db::cot_retrieval_enabled) so filenames cannot lie.
+    let cot_state = if crate::db::cot_retrieval_enabled() {
+        variant_tag.push_str("__cot");
+        "on"
+    } else {
+        "off"
+    };
     let mut env_stamp = build_lme_env(
         &variant_tag,
         path,
@@ -1241,6 +1250,12 @@ pub async fn run_longmemeval_eval_cross_rerank_from_db(
     env_stamp
         .flags
         .push(format!("episode_channel={}", episode_state));
+    env_stamp.flags.push(format!("cot_retrieval={}", cot_state));
+    if cot_state == "on" {
+        env_stamp
+            .flags
+            .push(format!("cot_max_iter={}", MemoryDB::cot_max_iter()));
+    }
     env_stamp.flags.push("scenario_db=consolidated".to_string());
     report.env = Some(env_stamp);
     Ok(report)
