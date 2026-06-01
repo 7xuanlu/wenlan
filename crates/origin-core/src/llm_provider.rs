@@ -1282,6 +1282,62 @@ impl LlmProvider for MockProvider {
     }
 }
 
+/// Test provider that returns a DISTINCT response per call, advancing a cursor.
+///
+/// `MockProvider` returns one fixed response forever, which can't exercise the
+/// CoT retrieve-reason-retrieve loop (draft round 0, validate -> followup, draft
+/// round 1, validate -> complete) where each round needs a different LLM output.
+/// `SequencedMockProvider` yields `responses[i]` on the i-th call; once exhausted
+/// it repeats the LAST response (so an always-followup sequence drives the
+/// max_iter cap test). Counts total calls for the runaway-cost guard test.
+#[cfg(test)]
+pub struct SequencedMockProvider {
+    responses: Vec<String>,
+    cursor: std::sync::atomic::AtomicUsize,
+}
+
+#[cfg(test)]
+impl SequencedMockProvider {
+    pub fn new(responses: Vec<&str>) -> Self {
+        Self {
+            responses: responses.into_iter().map(|s| s.to_string()).collect(),
+            cursor: std::sync::atomic::AtomicUsize::new(0),
+        }
+    }
+
+    /// Total number of `generate` calls served so far.
+    pub fn call_count(&self) -> usize {
+        self.cursor.load(std::sync::atomic::Ordering::SeqCst)
+    }
+}
+
+#[cfg(test)]
+#[async_trait]
+impl LlmProvider for SequencedMockProvider {
+    async fn generate(&self, _request: LlmRequest) -> Result<String, LlmError> {
+        let i = self
+            .cursor
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        if self.responses.is_empty() {
+            return Err(LlmError::NotAvailable);
+        }
+        let idx = i.min(self.responses.len() - 1);
+        Ok(self.responses[idx].clone())
+    }
+    fn is_available(&self) -> bool {
+        true
+    }
+    fn name(&self) -> &str {
+        "sequenced-mock"
+    }
+    fn backend(&self) -> LlmBackend {
+        LlmBackend::OnDevice
+    }
+    fn kind(&self) -> &'static str {
+        "mock"
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
