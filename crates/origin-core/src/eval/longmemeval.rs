@@ -1213,6 +1213,15 @@ pub async fn run_longmemeval_eval_cross_rerank_from_db(
     } else {
         "off"
     };
+    // T7: append __route suffix when ORIGIN_LLM_ROUTE is on, so route-ON and
+    // route-OFF baselines get distinct baseline filenames. Eval runs force the
+    // keyword fallback (llm=None) for reproducibility; this only tags the file.
+    let route_state = if crate::retrieval::route::route_enabled() {
+        variant_tag.push_str("__route");
+        "on"
+    } else {
+        "off"
+    };
     let mut env_stamp = build_lme_env(
         &variant_tag,
         path,
@@ -1241,6 +1250,7 @@ pub async fn run_longmemeval_eval_cross_rerank_from_db(
     env_stamp
         .flags
         .push(format!("episode_channel={}", episode_state));
+    env_stamp.flags.push(format!("route={}", route_state));
     env_stamp.flags.push("scenario_db=consolidated".to_string());
     report.env = Some(env_stamp);
     Ok(report)

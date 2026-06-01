@@ -8561,6 +8561,85 @@ impl MemoryDB {
         Ok(results)
     }
 
+    /// LLM read-time strategy router (T7). Classifies `query` into a
+    /// [`crate::retrieval::route::RetrievalStrategy`] and dispatches to the
+    /// matching already-built search method. Opt-in via `ORIGIN_LLM_ROUTE`.
+    ///
+    /// When the flag is unset/falsey ([`crate::retrieval::route::route_enabled`]
+    /// is false) this delegates straight to [`Self::search_memory_cross_rerank`]
+    /// with zero extra work, so the default path is byte-identical to pre-T7.
+    ///
+    /// Graceful degradation is total: the classifier itself collapses any LLM
+    /// timeout / error / malformed-or-unknown output to `PlainRag` (see
+    /// `route::classify_strategy`), so a routed call can never error or panic
+    /// where a plain call would have succeeded.
+    ///
+    /// Strategy -> method:
+    /// - `PlainRag` / `GraphCompletion` -> `search_memory_cross_rerank` (graph
+    ///   augmentation already runs inside `search_memory`, so until graph is
+    ///   independently gated these share the plain path — no speculative branch).
+    /// - `Expanded` -> `search_memory_expanded` (LLM query expansion).
+    /// - `TemporalScoped` -> `search_memory_temporal` (T4 temporal-window scope).
+    #[allow(clippy::too_many_arguments)]
+    pub async fn search_memory_routed(
+        &self,
+        query: &str,
+        limit: usize,
+        memory_type: Option<&str>,
+        space: Option<&str>,
+        source_agent: Option<&str>,
+        llm: Option<Arc<dyn crate::llm_provider::LlmProvider>>,
+        reranker: Option<Arc<dyn crate::reranker::Reranker>>,
+    ) -> Result<Vec<SearchResult>, OriginError> {
+        // Dark-by-default: flag off -> straight delegation, zero new cost.
+        if !crate::retrieval::route::route_enabled() {
+            return self
+                .search_memory_cross_rerank(
+                    query,
+                    limit,
+                    memory_type,
+                    space,
+                    source_agent,
+                    reranker,
+                )
+                .await;
+        }
+
+        use crate::retrieval::route::{classify_strategy, RetrievalStrategy};
+        let strategy = classify_strategy(query, llm.clone()).await;
+        match strategy {
+            // Graph augmentation already runs in-pipeline inside search_memory,
+            // so GraphCompletion shares the plain cross-rerank path until graph
+            // is independently gated (T3). No speculative branch.
+            RetrievalStrategy::PlainRag | RetrievalStrategy::GraphCompletion => {
+                self.search_memory_cross_rerank(
+                    query,
+                    limit,
+                    memory_type,
+                    space,
+                    source_agent,
+                    reranker,
+                )
+                .await
+            }
+            RetrievalStrategy::Expanded => {
+                self.search_memory_expanded(query, limit, memory_type, space, source_agent, llm)
+                    .await
+            }
+            RetrievalStrategy::TemporalScoped => {
+                self.search_memory_temporal(
+                    query,
+                    limit,
+                    memory_type,
+                    space,
+                    source_agent,
+                    chrono::Utc::now(),
+                )
+                .await
+            }
+        }
+    }
+
     /// Hybrid search with LLM-based query expansion BEFORE search.
     /// Generates 2-3 alternative phrasings of the query, runs search_memory for each,
     /// then merges all result sets via RRF. Falls back to plain search_memory if LLM
@@ -35943,6 +36022,126 @@ pub(crate) mod tests {
             flag_off.iter().map(|r| &r.source_id).collect::<Vec<_>>(),
             flag_on.iter().map(|r| &r.source_id).collect::<Vec<_>>(),
             "mem_* ids: flag ON must not change order vs flag OFF"
+        );
+    }
+
+    // =====================================================================
+    // T7 — LLM read-time strategy router (search_memory_routed) tests
+    // =====================================================================
+
+    /// SINGLE MOST IMPORTANT regression guard: with ORIGIN_LLM_ROUTE off
+    /// (unset AND =0), search_memory_routed returns byte-identical results to
+    /// search_memory_cross_rerank — the zero-regression default path.
+    /// Mirrors page_channel_enabled_treats_zero_and_unset_as_disabled.
+    #[tokio::test]
+    async fn search_memory_routed_plainrag_equals_with_reranker() {
+        let (db, _tmp) = test_db().await;
+        for i in 0..5 {
+            seed_memory_with_source_id(
+                &db,
+                &format!("mem_routed_identity_{i}"),
+                "routed identity content shared across rows",
+            )
+            .await;
+        }
+
+        // Baseline: the plain cross-rerank path (no reranker, no LLM).
+        let baseline = db
+            .search_memory_cross_rerank("routed identity content", 10, None, None, None, None)
+            .await
+            .unwrap();
+
+        for flag in [None::<&str>, Some("0"), Some("false")] {
+            let routed = temp_env::async_with_vars([("ORIGIN_LLM_ROUTE", flag)], async {
+                db.search_memory_routed(
+                    "routed identity content",
+                    10,
+                    None,
+                    None,
+                    None,
+                    None, // llm
+                    None, // reranker
+                )
+                .await
+                .unwrap()
+            })
+            .await;
+
+            assert_eq!(
+                routed.iter().map(|r| &r.source_id).collect::<Vec<_>>(),
+                baseline.iter().map(|r| &r.source_id).collect::<Vec<_>>(),
+                "ORIGIN_LLM_ROUTE={flag:?} must be byte-identical to search_memory_cross_rerank (order)"
+            );
+            assert_eq!(
+                routed.iter().map(|r| r.score).collect::<Vec<_>>(),
+                baseline.iter().map(|r| r.score).collect::<Vec<_>>(),
+                "ORIGIN_LLM_ROUTE={flag:?} must be byte-identical to search_memory_cross_rerank (scores)"
+            );
+        }
+    }
+
+    /// With ORIGIN_LLM_ROUTE on but llm=None, classification falls back to the
+    /// deterministic keyword path and dispatch never errors/panics. A plain
+    /// factual query routes to PlainRag (cross-rerank) and returns results.
+    #[tokio::test]
+    async fn search_memory_routed_llm_none_uses_keyword() {
+        let (db, _tmp) = test_db().await;
+        for i in 0..4 {
+            seed_memory_with_source_id(
+                &db,
+                &format!("mem_routed_keyword_{i}"),
+                "keyword path database password content",
+            )
+            .await;
+        }
+
+        let results = temp_env::async_with_vars([("ORIGIN_LLM_ROUTE", Some("1"))], async {
+            db.search_memory_routed(
+                "database password",
+                10,
+                None,
+                None,
+                None,
+                None, // llm absent -> keyword fallback -> PlainRag
+                None, // reranker
+            )
+            .await
+            .unwrap()
+        })
+        .await;
+
+        assert!(
+            !results.is_empty(),
+            "keyword-driven PlainRag dispatch should return results"
+        );
+    }
+
+    /// With ORIGIN_LLM_ROUTE on, llm=None, and a temporal query, the keyword
+    /// fallback selects TemporalScoped, which dispatches to
+    /// search_memory_temporal. Without ORIGIN_ENABLE_TEMPORAL_FILTER that method
+    /// degrades to plain search, so the call still succeeds and never panics.
+    #[tokio::test]
+    async fn search_memory_routed_temporal_keyword_dispatches_cleanly() {
+        let (db, _tmp) = test_db().await;
+        for i in 0..3 {
+            seed_memory_with_source_id(
+                &db,
+                &format!("mem_routed_temporal_{i}"),
+                "what changed last week temporal content",
+            )
+            .await;
+        }
+
+        let results = temp_env::async_with_vars([("ORIGIN_LLM_ROUTE", Some("1"))], async {
+            db.search_memory_routed("what changed last week", 10, None, None, None, None, None)
+                .await
+                .unwrap()
+        })
+        .await;
+
+        assert!(
+            !results.is_empty(),
+            "temporal keyword dispatch should return results (degrades to plain search)"
         );
     }
 
