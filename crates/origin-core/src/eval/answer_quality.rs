@@ -410,7 +410,14 @@ pub async fn run_e2e_locomo_eval(
     let samples = load_locomo(locomo_path)?;
 
     // Accumulators: (answer_score, context_tokens, answer_len)
-    let approach_keys = ["origin", "full_replay", "no_context"];
+    // T10: the `origin_compressed` approach is appended only when the master
+    // env gate is on, so a flag-OFF run is byte-identical to today's report.
+    let compress_on = crate::retrieval::compress::context_compress_enabled();
+    let approach_keys: Vec<&str> = if compress_on {
+        vec!["origin", "origin_compressed", "full_replay", "no_context"]
+    } else {
+        vec!["origin", "full_replay", "no_context"]
+    };
     let mut scores: std::collections::HashMap<&str, Vec<f64>> =
         approach_keys.iter().map(|k| (*k, Vec::new())).collect();
     let mut ctx_tokens: std::collections::HashMap<&str, Vec<f64>> =
@@ -577,6 +584,61 @@ pub async fn run_e2e_locomo_eval(
                 }
                 Err(e) => {
                     log::warn!("[e2e_locomo] origin approach failed: {e}");
+                }
+            }
+
+            // ---- T10: Origin-compressed approach (env-gated) ----
+            if compress_on {
+                // Env flag is the master gate; force the tuning `enabled`
+                // knob on so the env-gated eval actually compresses (other
+                // knobs keep their tuning defaults).
+                let mut cfg = crate::retrieval::compress::CompressConfig::from(
+                    &crate::tuning::ContextCompressConfig::default(),
+                );
+                cfg.enabled = true;
+                let registry = crate::prompts::PromptRegistry::default();
+                let compressed = crate::retrieval::compress::compress_context(
+                    &origin_context,
+                    &qa.question,
+                    Some(llm_provider.clone()),
+                    &registry.compress_context,
+                    &cfg,
+                )
+                .await;
+                let compressed_ctx_tokens = count_tokens(&compressed);
+                let compressed_request = LlmRequest {
+                    system_prompt: Some(system_prompt.clone()),
+                    user_prompt: format!("Context:\n{}\n\nQuestion: {}", compressed, qa.question),
+                    max_tokens: 200,
+                    temperature: 0.1,
+                    label: Some("e2e_locomo_origin_compressed".to_string()),
+                    timeout_secs: None,
+                };
+                match llm_provider.generate(compressed_request).await {
+                    Ok(raw_answer) => {
+                        let answer = strip_think_tags(&raw_answer);
+                        let score = score_answer_against_ground_truth(&answer, &ground_truth);
+                        scores.get_mut("origin_compressed").unwrap().push(score);
+                        ctx_tokens
+                            .get_mut("origin_compressed")
+                            .unwrap()
+                            .push(compressed_ctx_tokens as f64);
+                        ans_lens
+                            .get_mut("origin_compressed")
+                            .unwrap()
+                            .push(answer.len() as f64);
+                        judgment_tuples.push(JudgmentTuple {
+                            question: qa.question.clone(),
+                            ground_truth: ground_truth.clone(),
+                            approach: "origin_compressed".to_string(),
+                            answer,
+                            context_tokens: compressed_ctx_tokens,
+                            category: String::new(),
+                        });
+                    }
+                    Err(e) => {
+                        log::warn!("[e2e_locomo] origin_compressed approach failed: {e}");
+                    }
                 }
             }
 

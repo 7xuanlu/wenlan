@@ -1283,6 +1283,16 @@ pub async fn run_locomo_eval_cross_rerank_from_db(
     } else {
         "off"
     };
+    // T10: append __compress suffix when ORIGIN_ENABLE_CONTEXT_COMPRESS is on,
+    // so compress-ON and compress-OFF baselines get distinct filenames (shared
+    // env helper keeps eval + production honest -- AGENTS.md Eval Citation
+    // Discipline).
+    let compress_state = if crate::retrieval::compress::context_compress_enabled() {
+        variant_tag.push_str("__compress");
+        "on"
+    } else {
+        "off"
+    };
     let mut env_stamp = build_locomo_env(
         &variant_tag,
         path,
@@ -1311,6 +1321,9 @@ pub async fn run_locomo_eval_cross_rerank_from_db(
     env_stamp
         .flags
         .push(format!("episode_channel={}", episode_state));
+    env_stamp
+        .flags
+        .push(format!("context_compress={}", compress_state));
     env_stamp.flags.push("scenario_db=consolidated".to_string());
     report.env = Some(env_stamp);
     Ok(report)

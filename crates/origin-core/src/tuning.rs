@@ -168,6 +168,15 @@ fn d_30_i64() -> i64 {
 fn d_168_u64() -> u64 {
     168
 }
+fn d_600_usize() -> usize {
+    600
+}
+fn d_1024_u32() -> u32 {
+    1024
+}
+fn d_15_u64() -> u64 {
+    15
+}
 
 // ---- TuningConfig ----
 
@@ -187,6 +196,8 @@ pub struct TuningConfig {
     pub distillation: DistillationConfig,
     #[serde(default)]
     pub gate: GateConfig,
+    #[serde(default)]
+    pub compress: ContextCompressConfig,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -382,6 +393,34 @@ impl Default for GateConfig {
             noise_patterns_enabled: true,
             credential_check_enabled: true,
             log_rejections: true,
+        }
+    }
+}
+
+/// Read-time context compression (T10, gap C6). Master enable is the env
+/// flag `ORIGIN_ENABLE_CONTEXT_COMPRESS` (see
+/// [`crate::retrieval::compress::context_compress_enabled`]); these fields are
+/// the knobs read once that gate is open. Default OFF -> byte-identical to
+/// today's verbatim bundle.
+#[derive(Debug, Clone, Deserialize)]
+pub struct ContextCompressConfig {
+    #[serde(default = "d_false")]
+    pub enabled: bool,
+    #[serde(default = "d_600_usize")]
+    pub min_chars: usize,
+    #[serde(default = "d_1024_u32")]
+    pub max_output_tokens: u32,
+    #[serde(default = "d_15_u64")]
+    pub timeout_secs: u64,
+}
+
+impl Default for ContextCompressConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            min_chars: 600,
+            max_output_tokens: 1024,
+            timeout_secs: 15,
         }
     }
 }
@@ -798,5 +837,28 @@ score_threshold = 0.25
     fn distillation_config_default_concept_min_overlap() {
         let cfg = DistillationConfig::default();
         assert_eq!(cfg.page_min_overlap, 2);
+    }
+
+    // -- T10: context-compression tuning defaults + override --
+    #[test]
+    fn tuning_default_compress_disabled() {
+        let cfg = TuningConfig::default();
+        assert!(!cfg.compress.enabled);
+        assert_eq!(cfg.compress.min_chars, 600);
+        assert_eq!(cfg.compress.max_output_tokens, 1024);
+        assert_eq!(cfg.compress.timeout_secs, 15);
+    }
+
+    #[test]
+    fn tuning_load_compress_override() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("intelligence.toml");
+        std::fs::write(&path, "[compress]\nenabled = true\n").unwrap();
+        let cfg = TuningConfig::load(&path);
+        // Overridden field flips; the rest keep defaults.
+        assert!(cfg.compress.enabled);
+        assert_eq!(cfg.compress.min_chars, 600);
+        assert_eq!(cfg.compress.max_output_tokens, 1024);
+        assert_eq!(cfg.compress.timeout_secs, 15);
     }
 }

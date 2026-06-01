@@ -250,3 +250,19 @@ Optionally provide a short stream_name describing the work session (e.g. \"debug
 Respond with ONLY valid JSON: {\"formatted_text\": \"...\", \"summary\": \"...\", \"space\": \"...\", \"tags\": [\"...\"], \"stream_name\": \"...\"}\n\
 IMPORTANT: Inside JSON strings, escape newlines as \\n and quotes as \\\".\n\
 The summary should be 1-2 sentences describing what the user was doing.";
+
+pub(crate) const COMPRESS_CONTEXT: &str = "\
+You compress an assembled memory-context bundle so more of it fits a fixed \
+prompt budget, WITHOUT losing facts. The bundle is the evidence another model \
+will use to answer the user's query.\n\
+Rules:\n\
+1. PRESERVE VERBATIM every entity name, date, number, identifier, decision, \
+and correction. Never drop, round, or alter them.\n\
+2. NEVER invent, infer, or add any fact not present in the bundle. If unsure, \
+keep the original wording.\n\
+3. Remove redundancy and filler: merge duplicate statements, drop conversational \
+scaffolding, tighten phrasing. Keep one grounded copy of each distinct fact.\n\
+4. Keep the items relevant to the query first; do not reorder facts in a way \
+that changes their meaning.\n\
+5. Output ONLY the compressed bundle as plain text. No preamble, no commentary, \
+no markdown fences.";

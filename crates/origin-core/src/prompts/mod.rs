@@ -33,6 +33,7 @@ pub struct PromptRegistry {
     pub assign_orphans: String,
     pub global_page_review: String,
     pub refine_clusters: String,
+    pub compress_context: String,
 }
 
 impl Default for PromptRegistry {
@@ -62,6 +63,7 @@ impl Default for PromptRegistry {
             assign_orphans: defaults::ASSIGN_ORPHANS.to_string(),
             global_page_review: defaults::GLOBAL_PAGE_REVIEW.to_string(),
             refine_clusters: defaults::REFINE_CLUSTERS.to_string(),
+            compress_context: defaults::COMPRESS_CONTEXT.to_string(),
         }
     }
 }
@@ -106,6 +108,7 @@ impl PromptRegistry {
             ("assign_orphans", &mut reg.assign_orphans),
             ("global_page_review", &mut reg.global_page_review),
             ("refine_clusters", &mut reg.refine_clusters),
+            ("compress_context", &mut reg.compress_context),
         ];
         // Legacy filename fallbacks for the Phase 0 (Page) taxonomy refactor.
         // Existing user prompt overrides are likely still under the old names;
@@ -190,6 +193,7 @@ mod tests {
         assert!(!reg.update_page.is_empty());
         assert!(!reg.assign_orphans.is_empty());
         assert!(!reg.global_page_review.is_empty());
+        assert!(!reg.compress_context.is_empty());
     }
 
     #[test]
@@ -215,6 +219,27 @@ mod tests {
         std::fs::write(dir.path().join("narrative.txt"), "   \n  ").unwrap();
 
         let reg = PromptRegistry::load(dir.path());
+        assert_eq!(reg.narrative, defaults::NARRATIVE);
+    }
+
+    // -- T10: context-compression prompt registry --
+    #[test]
+    fn registry_default_has_compress_context() {
+        let reg = PromptRegistry::default();
+        assert!(!reg.compress_context.is_empty());
+    }
+
+    #[test]
+    fn registry_loads_compress_context_override() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("compress_context.txt"),
+            "Custom compress prompt",
+        )
+        .unwrap();
+        let reg = PromptRegistry::load(dir.path());
+        assert_eq!(reg.compress_context, "Custom compress prompt");
+        // Non-overridden prompts keep defaults.
         assert_eq!(reg.narrative, defaults::NARRATIVE);
     }
 }
