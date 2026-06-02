@@ -119,17 +119,22 @@ def bootstrap_ci_mean(values, B=10000, alpha=0.05):
 
 
 def percentile(sorted_vals, p):
+    """Nearest-rank percentile matching the production Rust estimator in
+    crates/origin-core/src/eval/latency.rs::latency_summary (the source of truth
+    for P50/P99): floor each sample to integer milliseconds, sort, then pick
+    index ``(n*p - 1) // 100`` (saturating at 0).
+
+    Deliberately NOT linear interpolation. Using the SAME estimator as
+    latency.rs lets this paired report's P50/P99 reconcile with the baseline
+    EvalReport.latency numbers instead of diverging on identical samples — the
+    old linear-interp put P99 strictly below the max at small n (e.g. n=20)
+    while latency.rs returns the max."""
     if not sorted_vals:
         return float("nan")
-    if len(sorted_vals) == 1:
-        return sorted_vals[0]
-    idx = p / 100.0 * (len(sorted_vals) - 1)
-    lo = int(math.floor(idx))
-    hi = int(math.ceil(idx))
-    if lo == hi:
-        return sorted_vals[lo]
-    frac = idx - lo
-    return sorted_vals[lo] * (1 - frac) + sorted_vals[hi] * frac
+    vals_ms = sorted(int(v) for v in sorted_vals)  # floor to int ms, as latency.rs
+    n = len(vals_ms)
+    idx = max(0, n * p - 1) // 100
+    return vals_ms[min(idx, n - 1)]
 
 
 def benjamini_hochberg(pvals, q=0.10):

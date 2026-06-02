@@ -81,3 +81,7 @@ src-tauri/
 # Local override for the plugin's MCP runner — typically a symlink to a
 # dev-built origin-mcp binary. See plugin/bin/origin-mcp-runner.sh.
 plugin/bin/origin-mcp.local
+
+# Python bytecode (analyze_paired.py + tests)
+__pycache__/
+*.pyc
