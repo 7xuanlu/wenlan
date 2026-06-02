@@ -212,6 +212,7 @@ mod tests {
             entity_name: None,
             quality: None,
             importance: None,
+            event_date: None,
             is_archived: false,
             is_recap: false,
             structured_fields: None,
