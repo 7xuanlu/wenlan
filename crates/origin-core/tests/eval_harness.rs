@@ -1278,6 +1278,282 @@ async fn graph_gate_ab_lme() {
     );
 }
 
+// ===========================================================================
+// PAIRED A/B EMITTER (validation apparatus v2)
+// ===========================================================================
+//
+// Emits one JSONL file per (feature, bench) under $EVAL_OUT, one line per query
+// per flag arm, with per-query NDCG@10 / recall@5 / MRR + a wall-clock retrieval
+// latency. The aggregate `*_ab_*` tests above are kept intact; this test exposes
+// the per-query data they discard so `analyze_paired.py` can run a paired
+// Wilcoxon / bootstrap (variance from across-queries, not across-runs).
+//
+// Run (unsandboxed, against the SNAPSHOT DBs so the seeds stay pristine):
+//   ORIGIN_EVAL_ROOT=/Users/lucian/Repos/origin/app/eval \
+//   SCENARIO_DB_ROOT=~/.cache/origin-eval/scenario_snapshot \
+//   EVAL_OUT=/tmp/eval_paired \
+//     cargo test -p origin-core --features eval-harness --test eval_harness -- \
+//     --ignored --nocapture --test-threads=1 paired_ab_emit
+//
+// Filter to one feature for a smoke run with $EVAL_PAIRED_ONLY (comma list),
+// e.g. EVAL_PAIRED_ONLY=fts_hardening.
+
+/// Resolve the per-query JSONL output directory ($EVAL_OUT, default a fresh
+/// tmp dir). Created if missing.
+fn paired_out_dir() -> std::path::PathBuf {
+    let dir = std::env::var("EVAL_OUT")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|_| std::env::temp_dir().join("eval_paired"));
+    std::fs::create_dir_all(&dir).expect("create EVAL_OUT dir");
+    dir
+}
+
+/// Append per-query rows to `$EVAL_OUT/<feature>_<bench>.jsonl`.
+fn write_paired_rows(feature: &str, bench: &str, rows: &[origin_core::eval::paired::PerQueryRow]) {
+    use std::io::Write;
+    let path = paired_out_dir().join(format!("{feature}_{bench}.jsonl"));
+    let mut f = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&path)
+        .expect("open jsonl");
+    for r in rows {
+        let line = serde_json::to_string(r).expect("serialize PerQueryRow");
+        writeln!(f, "{line}").expect("write jsonl line");
+    }
+    println!("[paired] wrote {} rows -> {}", rows.len(), path.display());
+}
+
+fn paired_feature_selected(feature: &str) -> bool {
+    match std::env::var("EVAL_PAIRED_ONLY") {
+        Ok(only) => only.split(',').map(|s| s.trim()).any(|s| s == feature),
+        Err(_) => true,
+    }
+}
+
+/// Run one cached-DB feature on both benches (LoCoMo + LME via `search_memory`),
+/// OFF then ON, emitting per-query JSONL for each arm.
+async fn paired_run_cached_feature(feature: &str, flag: &str) {
+    use origin_core::eval::locomo::run_locomo_eval_from_db_collect;
+    use origin_core::eval::longmemeval::run_longmemeval_eval_from_db_collect;
+    let root = resolve_scenario_db_root_from_harness();
+
+    // -- LoCoMo --
+    let lo_dir = root.join("locomo_v1");
+    let lo_fx = eval_root().join("data/locomo10.json");
+    if lo_dir.join("origin_memory.db").exists() && lo_fx.exists() {
+        let db = origin_core::db::MemoryDB::new(
+            &lo_dir,
+            std::sync::Arc::new(origin_core::events::NoopEmitter),
+        )
+        .await
+        .expect("open locomo_v1 snapshot DB");
+        for (state, val) in [("off", None::<&str>), ("on", Some("1"))] {
+            let rows = temp_env::async_with_vars(
+                [(flag, val)],
+                run_locomo_eval_from_db_collect(&db, &lo_fx, feature, state),
+            )
+            .await
+            .expect("locomo collect");
+            write_paired_rows(feature, "locomo", &rows);
+        }
+    } else {
+        println!(
+            "[paired:{feature}] SKIP LoCoMo (db {} fixture {})",
+            lo_dir.join("origin_memory.db").exists(),
+            lo_fx.exists()
+        );
+    }
+
+    // -- LME --
+    let lme_dir = root.join("lme_v1");
+    let lme_fx = eval_root().join("data/longmemeval_oracle.json");
+    if lme_dir.join("origin_memory.db").exists() && lme_fx.exists() {
+        let db = origin_core::db::MemoryDB::new(
+            &lme_dir,
+            std::sync::Arc::new(origin_core::events::NoopEmitter),
+        )
+        .await
+        .expect("open lme_v1 snapshot DB");
+        for (state, val) in [("off", None::<&str>), ("on", Some("1"))] {
+            let rows = temp_env::async_with_vars(
+                [(flag, val)],
+                run_longmemeval_eval_from_db_collect(&db, &lme_fx, feature, state),
+            )
+            .await
+            .expect("lme collect");
+            write_paired_rows(feature, "lme", &rows);
+        }
+    } else {
+        println!(
+            "[paired:{feature}] SKIP LME (db {} fixture {})",
+            lme_dir.join("origin_memory.db").exists(),
+            lme_fx.exists()
+        );
+    }
+}
+
+/// Umbrella test: emit per-query paired JSONL for the 7 Track-A features.
+///
+/// Track-A cached-DB features (`search_memory` path): T3 graph-gate, T9 graph-seed,
+/// T12 fts-hardening, T13 magnitude-fusion, T19 query-intent, T20 session-diversity.
+/// Plus T4a temporal-filter (SELF-SEEDS — tagged re-seed; runs only on LME).
+///
+/// NOTE on T20 session-diversity: its cap is wired into the CROSS-RERANK path,
+/// not the base `search_memory` path, so the `search_memory` collector will show
+/// a zero delta for it. It is included here for completeness of the cached-DB
+/// sweep; a non-zero T20 measurement needs a cross-rerank collector (GPU). The
+/// analyzer will correctly report n_touched=0 for T20 on this path.
+#[tokio::test]
+#[ignore = "needs cached scenario DBs (use SNAPSHOT copies); retrieval-only, no GPU. Set ORIGIN_EVAL_ROOT + SCENARIO_DB_ROOT + EVAL_OUT"]
+async fn paired_ab_emit() {
+    println!("=== PAIRED A/B EMIT (apparatus v2) ===");
+    println!("EVAL_OUT = {}", paired_out_dir().display());
+
+    // (feature_tag, env_flag) for the cached-DB / search_memory features.
+    let cached: [(&str, &str); 6] = [
+        ("graph_gate", "ORIGIN_ENABLE_GRAPH_GATE"),
+        ("graph_seed", "ORIGIN_ENABLE_GRAPH_SEED"),
+        ("fts_hardening", "ORIGIN_ENABLE_FTS_HARDENING"),
+        ("magnitude_fusion", "ORIGIN_MAGNITUDE_FUSION"),
+        ("query_intent", "ORIGIN_ENABLE_QUERY_INTENT"),
+        ("session_diversity", "ORIGIN_ENABLE_SESSION_DIVERSITY"),
+    ];
+    for (feature, flag) in cached {
+        if !paired_feature_selected(feature) {
+            continue;
+        }
+        println!("--- feature {feature} (flag {flag}) ---");
+        paired_run_cached_feature(feature, flag).await;
+    }
+
+    // T4a temporal-filter: self-seeds, LME only, search_memory_temporal path.
+    if paired_feature_selected("temporal_filter") {
+        use origin_core::eval::longmemeval::run_longmemeval_eval_temporal_collect;
+        println!("--- feature temporal_filter (flag ORIGIN_ENABLE_TEMPORAL_FILTER) [RE-SEED] ---");
+        let lme_fx = eval_root().join("data/longmemeval_oracle.json");
+        if lme_fx.exists() {
+            for (state, val) in [("off", None::<&str>), ("on", Some("1"))] {
+                let rows = temp_env::async_with_vars(
+                    [("ORIGIN_ENABLE_TEMPORAL_FILTER", val)],
+                    run_longmemeval_eval_temporal_collect(&lme_fx, "temporal_filter", state),
+                )
+                .await
+                .expect("temporal collect");
+                write_paired_rows("temporal_filter", "lme", &rows);
+            }
+        } else {
+            println!("[paired:temporal_filter] SKIP LME (fixture missing)");
+        }
+    }
+
+    // T4a temporal-soft-boost: self-seeds, LME only, search_memory_temporal path.
+    // OFF arm = plain baseline (no temporal flag); ON arm = binary in-window score boost.
+    if paired_feature_selected("temporal_soft_boost") {
+        use origin_core::eval::longmemeval::run_longmemeval_eval_temporal_collect;
+        println!("--- feature temporal_soft_boost (flag ORIGIN_ENABLE_TEMPORAL_SOFT_BOOST) [RE-SEED] ---");
+        let lme_fx = eval_root().join("data/longmemeval_oracle.json");
+        if lme_fx.exists() {
+            for (state, val) in [("off", None::<&str>), ("on", Some("1"))] {
+                let rows = temp_env::async_with_vars(
+                    [("ORIGIN_ENABLE_TEMPORAL_SOFT_BOOST", val)],
+                    run_longmemeval_eval_temporal_collect(&lme_fx, "temporal_soft_boost", state),
+                )
+                .await
+                .expect("temporal soft-boost collect");
+                write_paired_rows("temporal_soft_boost", "lme", &rows);
+            }
+        } else {
+            println!("[paired:temporal_soft_boost] SKIP LME (fixture missing)");
+        }
+    }
+
+    println!(
+        "=== PAIRED A/B EMIT done -> run analyze_paired.py on {} ===",
+        paired_out_dir().display()
+    );
+}
+
+/// Paired base-vs-cross-encoder emitter (LME). Measures whether the cross-encoder
+/// reranker improves retrieval over the base `search_memory` path on the SAME
+/// queries + SAME snapshot DB.
+///
+/// OFF arm = base `search_memory` (the `run_longmemeval_eval_from_db_collect`
+/// path). ON arm = `search_memory_cross_rerank` (CE rescoring over the widened
+/// pool). Both write to `$EVAL_OUT/cross_rerank_lme.jsonl`; `analyze_paired.py`
+/// joins by `query_id` and runs the paired Wilcoxon / bootstrap.
+///
+/// First run downloads the BGE-reranker-v2-m3 weights (~600MB) from HuggingFace
+/// and runs on CPU (fastembed ONNX). Pin the subset with `EVAL_LME_LIMIT`.
+///
+/// Run (unsandboxed, against the SNAPSHOT DB so the seed stays pristine):
+///   ORIGIN_EVAL_ROOT=/Users/lucian/Repos/origin/app/eval \
+///   SCENARIO_DB_ROOT=~/.cache/origin-eval/scenario_snapshot \
+///   EVAL_OUT=~/.cache/origin-eval/reranker_out EVAL_LME_LIMIT=50 \
+///     cargo test -p origin-core --features eval-harness --test eval_harness -- \
+///     --ignored --nocapture --test-threads=1 paired_cross_rerank_emit
+#[tokio::test]
+#[ignore = "downloads ~600MB CE model (CPU); needs cached scenario SNAPSHOT DB. Set ORIGIN_EVAL_ROOT + SCENARIO_DB_ROOT + EVAL_OUT"]
+async fn paired_cross_rerank_emit() {
+    use origin_core::eval::longmemeval::{
+        run_longmemeval_eval_cross_rerank_from_db_collect, run_longmemeval_eval_from_db_collect,
+    };
+    println!("=== PAIRED CROSS-RERANK EMIT (base vs cross_rerank) ===");
+    println!("EVAL_OUT = {}", paired_out_dir().display());
+
+    let lme_dir = resolve_scenario_db_root_from_harness().join("lme_v1");
+    let lme_fx = eval_root().join("data/longmemeval_oracle.json");
+    if !lme_dir.join("origin_memory.db").exists() || !lme_fx.exists() {
+        println!(
+            "[paired:cross_rerank] SKIP LME (db {} fixture {})",
+            lme_dir.join("origin_memory.db").exists(),
+            lme_fx.exists()
+        );
+        return;
+    }
+
+    let db = origin_core::db::MemoryDB::new(
+        &lme_dir,
+        std::sync::Arc::new(origin_core::events::NoopEmitter),
+    )
+    .await
+    .expect("open lme_v1 snapshot DB");
+
+    // OFF arm: base search_memory.
+    let off_rows = run_longmemeval_eval_from_db_collect(&db, &lme_fx, "cross_rerank", "off")
+        .await
+        .expect("base collect");
+    write_paired_rows("cross_rerank", "lme", &off_rows);
+    println!("[paired:cross_rerank] OFF (base) rows = {}", off_rows.len());
+
+    // ON arm: cross-encoder rerank. First construction downloads ~600MB + runs on CPU.
+    let reranker = origin_core::reranker::init_cross_encoder_reranker(None)
+        .expect("init_cross_encoder_reranker failed (downloads ~600MB on first run)");
+    println!(
+        "[paired:cross_rerank] CE model = {} (CPU)",
+        reranker.model_id()
+    );
+    let on_rows = run_longmemeval_eval_cross_rerank_from_db_collect(
+        &db,
+        &lme_fx,
+        reranker,
+        "cross_rerank",
+        "on",
+    )
+    .await
+    .expect("cross_rerank collect");
+    write_paired_rows("cross_rerank", "lme", &on_rows);
+    println!(
+        "[paired:cross_rerank] ON (cross_rerank) rows = {}",
+        on_rows.len()
+    );
+
+    println!(
+        "=== done -> python3 analyze_paired.py --dir {} ===",
+        paired_out_dir().display()
+    );
+}
+
 /// PR-B page-channel ON baseline (LoCoMo).
 ///
 /// Uses the pre-seeded consolidated scenario DB at

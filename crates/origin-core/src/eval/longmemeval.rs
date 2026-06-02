@@ -1014,6 +1014,22 @@ pub async fn run_longmemeval_eval_cross_rerank_from_db(
     path: &Path,
     reranker: std::sync::Arc<dyn crate::reranker::Reranker>,
 ) -> Result<LongMemEvalReport, OriginError> {
+    // Reproducibility: pin the ungated rerank-pool tuning knobs read raw at
+    // db.rs:8922-8926 (search_memory_cross_rerank) to their production defaults
+    // (compute_rerank_fetch_pool: multiplier=1, floor=10) when unset, so two
+    // cross-rerank baselines with identical env stamps can't silently measure
+    // different pool depths. --test-threads=1 makes process-global set_var safe.
+    if std::env::var_os("RERANK_POOL_MULTIPLIER").is_none() {
+        std::env::set_var("RERANK_POOL_MULTIPLIER", "1");
+    }
+    if std::env::var_os("RERANK_POOL_FLOOR").is_none() {
+        std::env::set_var("RERANK_POOL_FLOOR", "10");
+    }
+    // Threat-2 guard: assert summary_nodes is empty so an accidental future
+    // populate fails loud here instead of silently demoting gold memories via
+    // the global-prelude prepend at db.rs:9268. A missing table reads as zero.
+    crate::eval::paired::assert_summary_nodes_empty(db).await;
+
     let mut samples = load_longmemeval(path)?;
     apply_lme_limit(&mut samples);
     // (question_type, ndcg_5, ndcg_10, mrr, recall_5, hit_rate_1)
@@ -1269,6 +1285,17 @@ pub async fn run_longmemeval_eval_cross_rerank_from_db(
         .flags
         .push(format!("episode_channel={}", episode_state));
     env_stamp.flags.push(format!("fact_channel={}", fact_state));
+    // Record the (now-pinned) rerank-pool knobs so a non-default depth carries
+    // into the env stamp / baseline filename instead of being invisible.
+    env_stamp.flags.push(format!(
+        "rerank_pool=mult{}_floor{}",
+        std::env::var("RERANK_POOL_MULTIPLIER")
+            .as_deref()
+            .unwrap_or("1"),
+        std::env::var("RERANK_POOL_FLOOR")
+            .as_deref()
+            .unwrap_or("10"),
+    ));
     env_stamp.flags.push("scenario_db=consolidated".to_string());
     report.env = Some(env_stamp);
     Ok(report)
@@ -1387,6 +1414,151 @@ pub async fn run_longmemeval_eval_from_db(
     env_stamp.flags.push("scenario_db=consolidated".to_string());
     report.env = Some(env_stamp);
     Ok(report)
+}
+
+// ---------------------------------------------------------------------------
+// Per-query collector (paired A/B apparatus v2)
+// ---------------------------------------------------------------------------
+
+/// Per-query variant of [`run_longmemeval_eval_from_db`]. Identical retrieval +
+/// scoring, but emits one [`PerQueryRow`] per evaluated question (with a
+/// wall-clock latency for the `search_memory` call) instead of aggregating.
+pub async fn run_longmemeval_eval_from_db_collect(
+    db: &MemoryDB,
+    path: &Path,
+    feature: &str,
+    flag_state: &str,
+) -> Result<Vec<crate::eval::paired::PerQueryRow>, OriginError> {
+    use crate::eval::paired::PerQueryRow;
+    use std::time::Instant;
+
+    let mut samples = load_longmemeval(path)?;
+    apply_lme_limit(&mut samples);
+    let gate_on = crate::db::graph_gate_enabled();
+    let mut rows: Vec<PerQueryRow> = Vec::new();
+
+    for sample in &samples {
+        let memories = extract_memories(sample);
+        let relevant_source_ids: HashSet<String> = memories
+            .iter()
+            .filter(|m| m.has_answer)
+            .map(|m| memory_source_id(&m.question_id, m.session_idx, m.turn_idx))
+            .collect();
+        if relevant_source_ids.is_empty() {
+            continue;
+        }
+
+        let graph_skipped =
+            gate_on && !crate::retrieval::signals::query_warrants_graph(&sample.question);
+
+        let t0 = Instant::now();
+        let results = db
+            .search_memory(&sample.question, 10, None, None, None, None, None, None)
+            .await?;
+        let latency_ms = t0.elapsed().as_secs_f64() * 1000.0;
+
+        let result_ids: Vec<&str> = results.iter().map(|r| r.source_id.as_str()).collect();
+        let grades: HashMap<&str, u8> = result_ids
+            .iter()
+            .map(|id| (*id, u8::from(relevant_source_ids.contains(*id))))
+            .collect();
+        let relevant_set: HashSet<&str> = relevant_source_ids.iter().map(|s| s.as_str()).collect();
+
+        rows.push(PerQueryRow {
+            feature: feature.to_string(),
+            bench: "lme".to_string(),
+            flag_state: flag_state.to_string(),
+            query_id: sample.question_id.clone(),
+            category: sample.question_type.clone(),
+            ndcg10: metrics::ndcg_at_k(&result_ids, &grades, 10),
+            recall5: metrics::recall_at_k(&result_ids, &relevant_set, 5),
+            mrr: metrics::mrr(&result_ids, &relevant_set),
+            latency_ms,
+            graph_skipped: if gate_on { Some(graph_skipped) } else { None },
+            temporal_touched: None,
+        });
+    }
+
+    Ok(rows)
+}
+
+/// Cross-encoder variant of [`run_longmemeval_eval_from_db_collect`]. Identical
+/// query set + relevance judgments + scoring, but retrieval goes through
+/// `search_memory_cross_rerank` (CE rescoring over the widened pool) instead of
+/// the base `search_memory` path. Pairs OFF (base collector) against ON (this
+/// one) on the same snapshot DB to measure whether the cross-encoder helps.
+///
+/// Pins the ungated rerank-pool knobs (multiplier=1, floor=10) when unset, same
+/// as `run_longmemeval_eval_cross_rerank_from_db`, so the CE pool depth is
+/// reproducible. `--test-threads=1` makes the process-global set_var safe.
+pub async fn run_longmemeval_eval_cross_rerank_from_db_collect(
+    db: &MemoryDB,
+    path: &Path,
+    reranker: std::sync::Arc<dyn crate::reranker::Reranker>,
+    feature: &str,
+    flag_state: &str,
+) -> Result<Vec<crate::eval::paired::PerQueryRow>, OriginError> {
+    use crate::eval::paired::PerQueryRow;
+    use std::time::Instant;
+
+    if std::env::var_os("RERANK_POOL_MULTIPLIER").is_none() {
+        std::env::set_var("RERANK_POOL_MULTIPLIER", "1");
+    }
+    if std::env::var_os("RERANK_POOL_FLOOR").is_none() {
+        std::env::set_var("RERANK_POOL_FLOOR", "10");
+    }
+
+    let mut samples = load_longmemeval(path)?;
+    apply_lme_limit(&mut samples);
+    let mut rows: Vec<PerQueryRow> = Vec::new();
+
+    for sample in &samples {
+        let memories = extract_memories(sample);
+        let relevant_source_ids: HashSet<String> = memories
+            .iter()
+            .filter(|m| m.has_answer)
+            .map(|m| memory_source_id(&m.question_id, m.session_idx, m.turn_idx))
+            .collect();
+        if relevant_source_ids.is_empty() {
+            continue;
+        }
+
+        let t0 = Instant::now();
+        let results = db
+            .search_memory_cross_rerank(
+                &sample.question,
+                10,
+                None,
+                None,
+                None,
+                Some(reranker.clone()),
+            )
+            .await?;
+        let latency_ms = t0.elapsed().as_secs_f64() * 1000.0;
+
+        let result_ids: Vec<&str> = results.iter().map(|r| r.source_id.as_str()).collect();
+        let grades: HashMap<&str, u8> = result_ids
+            .iter()
+            .map(|id| (*id, u8::from(relevant_source_ids.contains(*id))))
+            .collect();
+        let relevant_set: HashSet<&str> = relevant_source_ids.iter().map(|s| s.as_str()).collect();
+
+        rows.push(PerQueryRow {
+            feature: feature.to_string(),
+            bench: "lme".to_string(),
+            flag_state: flag_state.to_string(),
+            query_id: sample.question_id.clone(),
+            category: sample.question_type.clone(),
+            ndcg10: metrics::ndcg_at_k(&result_ids, &grades, 10),
+            recall5: metrics::recall_at_k(&result_ids, &relevant_set, 5),
+            mrr: metrics::mrr(&result_ids, &relevant_set),
+            latency_ms,
+            graph_skipped: None,
+            temporal_touched: None,
+        });
+    }
+
+    Ok(rows)
 }
 
 // ---------------------------------------------------------------------------
@@ -1848,6 +2020,118 @@ pub async fn run_longmemeval_eval_temporal(path: &Path) -> Result<LongMemEvalRep
         None,
     ));
     Ok(report)
+}
+
+/// Per-query variant of [`run_longmemeval_eval_temporal`] (T4a). SELF-SEEDS a
+/// fresh ephemeral DB per question (stamps `event_date`), so unlike the cached-DB
+/// collectors this re-runs the write path — runs are reproducible only insofar as
+/// the seeding is deterministic. Emits one [`PerQueryRow`] per question with a
+/// wall-clock latency for the `search_memory_temporal` call.
+pub async fn run_longmemeval_eval_temporal_collect(
+    path: &Path,
+    feature: &str,
+    flag_state: &str,
+) -> Result<Vec<crate::eval::paired::PerQueryRow>, OriginError> {
+    use crate::eval::paired::PerQueryRow;
+    use std::time::Instant;
+
+    let mut samples = load_longmemeval(path)?;
+    apply_lme_limit(&mut samples);
+    let mut rows: Vec<PerQueryRow> = Vec::new();
+
+    for sample in &samples {
+        let memories = extract_memories(sample);
+
+        let tmp = tempfile::tempdir().map_err(|e| OriginError::Generic(format!("tempdir: {e}")))?;
+        let db = MemoryDB::new(tmp.path(), std::sync::Arc::new(crate::events::NoopEmitter)).await?;
+
+        let docs: Vec<RawDocument> = memories
+            .iter()
+            .map(|mem| {
+                let memory_type = match sample.question_type.as_str() {
+                    "single-session-preference" => "preference",
+                    _ => "fact",
+                };
+                RawDocument {
+                    content: mem.content.clone(),
+                    source_id: memory_source_id(&mem.question_id, mem.session_idx, mem.turn_idx),
+                    source: "memory".to_string(),
+                    title: format!("{} session {}", mem.role, mem.session_idx),
+                    memory_type: Some(memory_type.to_string()),
+                    space: Some("conversation".to_string()),
+                    last_modified: chrono::Utc::now().timestamp(),
+                    ..Default::default()
+                }
+            })
+            .collect();
+        db.upsert_documents(docs).await?;
+
+        {
+            let conn = db.conn.lock().await;
+            for mem in &memories {
+                if let Some(date_str) = sample.haystack_dates.get(mem.session_idx) {
+                    if let Some(ts) = parse_lme_date(date_str).map(|d| d.timestamp()) {
+                        let sid = memory_source_id(&mem.question_id, mem.session_idx, mem.turn_idx);
+                        let _ = conn
+                            .execute(
+                                "UPDATE memories SET event_date = ? WHERE source_id = ?",
+                                libsql::params![ts, sid.as_str()],
+                            )
+                            .await;
+                    }
+                }
+            }
+        }
+
+        let relevant_source_ids: HashSet<String> = memories
+            .iter()
+            .filter(|m| m.has_answer)
+            .map(|m| memory_source_id(&m.question_id, m.session_idx, m.turn_idx))
+            .collect();
+        if relevant_source_ids.is_empty() {
+            continue;
+        }
+
+        let now = parse_lme_date(&sample.question_date).unwrap_or_else(chrono::Utc::now);
+
+        // T4a per-touched: did a high-confidence temporal cue actually fire for
+        // this query? Mirrors the gate in search_memory_temporal (db.rs:8438):
+        // only a High-confidence cue engages the hard temporal filter; None/Low
+        // degrade to plain search and leave this query a no-op. Lets the analyzer
+        // isolate the ~3.4% of queries the feature truly touches.
+        let cue_fired = crate::temporal_query::extract_cue(&sample.question, now)
+            .map(|c| c.confidence == crate::temporal_query::CueConfidence::High)
+            .unwrap_or(false);
+
+        let t0 = Instant::now();
+        let results = db
+            .search_memory_temporal(&sample.question, 10, None, None, None, now)
+            .await?;
+        let latency_ms = t0.elapsed().as_secs_f64() * 1000.0;
+
+        let result_ids: Vec<&str> = results.iter().map(|r| r.source_id.as_str()).collect();
+        let grades: HashMap<&str, u8> = result_ids
+            .iter()
+            .map(|id| (*id, u8::from(relevant_source_ids.contains(*id))))
+            .collect();
+        let relevant_set: HashSet<&str> = relevant_source_ids.iter().map(|s| s.as_str()).collect();
+
+        rows.push(PerQueryRow {
+            feature: feature.to_string(),
+            bench: "lme".to_string(),
+            flag_state: flag_state.to_string(),
+            query_id: sample.question_id.clone(),
+            category: sample.question_type.clone(),
+            ndcg10: metrics::ndcg_at_k(&result_ids, &grades, 10),
+            recall5: metrics::recall_at_k(&result_ids, &relevant_set, 5),
+            mrr: metrics::mrr(&result_ids, &relevant_set),
+            latency_ms,
+            graph_skipped: None,
+            temporal_touched: Some(cue_fired),
+        });
+    }
+
+    Ok(rows)
 }
 
 // ---------------------------------------------------------------------------
