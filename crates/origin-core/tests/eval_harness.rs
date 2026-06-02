@@ -4907,6 +4907,28 @@ async fn run_page_faithfulness_smoke() {
             marker, c.case_id, c.faithfulness, c.expected_min
         );
     }
+
+    // Guard against the print-only false-green: known hallucination
+    // negative-controls (seed_hallucinations.toml, id prefix `page_halluc`,
+    // floor 0.99 — "the scorer SHOULD flag these as below threshold") MUST be
+    // flagged. Asserting ONLY the negative controls (not positive fixtures)
+    // keeps the canary non-flaky despite the lexical scorer's known
+    // paraphrase-misses on faithful pages.
+    let mut negative_controls = 0usize;
+    for c in &report.per_case {
+        if c.case_id.starts_with("page_halluc") {
+            negative_controls += 1;
+            assert!(
+                !c.meets_threshold(),
+                "negative-control {} scored {:.2} >= floor {:.2} — scorer FAILED to flag a hallucinated page",
+                c.case_id, c.faithfulness, c.expected_min
+            );
+        }
+    }
+    assert!(
+        negative_controls > 0,
+        "no `page_halluc` negative-control fixtures found — check app/eval/page_fixtures/seed_hallucinations.toml is present"
+    );
 }
 
 #[tokio::test]
