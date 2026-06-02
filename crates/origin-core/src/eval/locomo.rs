@@ -1068,6 +1068,22 @@ pub async fn run_locomo_eval_cross_rerank_from_db(
     path: &Path,
     reranker: std::sync::Arc<dyn crate::reranker::Reranker>,
 ) -> Result<LocomoReport, OriginError> {
+    // Reproducibility: pin the ungated rerank-pool tuning knobs read raw at
+    // db.rs:8922-8926 (search_memory_cross_rerank) to their production defaults
+    // (compute_rerank_fetch_pool: multiplier=1, floor=10) when unset, so two
+    // cross-rerank baselines with identical env stamps can't silently measure
+    // different pool depths. --test-threads=1 makes process-global set_var safe.
+    if std::env::var_os("RERANK_POOL_MULTIPLIER").is_none() {
+        std::env::set_var("RERANK_POOL_MULTIPLIER", "1");
+    }
+    if std::env::var_os("RERANK_POOL_FLOOR").is_none() {
+        std::env::set_var("RERANK_POOL_FLOOR", "10");
+    }
+    // Threat-2 guard: assert summary_nodes is empty so an accidental future
+    // populate fails loud here instead of silently demoting gold memories via
+    // the global-prelude prepend at db.rs:9268. A missing table reads as zero.
+    crate::eval::paired::assert_summary_nodes_empty(db).await;
+
     let mut samples = load_locomo(path)?;
     apply_locomo_limit(&mut samples);
     let mut conversations = Vec::new();
@@ -1339,9 +1355,105 @@ pub async fn run_locomo_eval_cross_rerank_from_db(
         .flags
         .push(format!("episode_channel={}", episode_state));
     env_stamp.flags.push(format!("fact_channel={}", fact_state));
+    // Record the (now-pinned) rerank-pool knobs so a non-default depth carries
+    // into the env stamp / baseline filename instead of being invisible.
+    env_stamp.flags.push(format!(
+        "rerank_pool=mult{}_floor{}",
+        std::env::var("RERANK_POOL_MULTIPLIER")
+            .as_deref()
+            .unwrap_or("1"),
+        std::env::var("RERANK_POOL_FLOOR")
+            .as_deref()
+            .unwrap_or("10"),
+    ));
     env_stamp.flags.push("scenario_db=consolidated".to_string());
     report.env = Some(env_stamp);
     Ok(report)
+}
+
+// ---------------------------------------------------------------------------
+// Per-query collector (paired A/B apparatus v2)
+// ---------------------------------------------------------------------------
+
+/// Per-query variant of [`run_locomo_eval_from_db`]. Identical retrieval +
+/// scoring, but emits one [`PerQueryRow`] per evaluated question (with a
+/// wall-clock latency for the `search_memory` call) instead of aggregating.
+///
+/// `feature` / `flag_state` are stamped onto each row for the downstream
+/// paired analyzer. The graph-gate skip decision is recorded per-query so the
+/// T3 "skip work, no recall regression" metric is recoverable.
+pub async fn run_locomo_eval_from_db_collect(
+    db: &MemoryDB,
+    path: &Path,
+    feature: &str,
+    flag_state: &str,
+) -> Result<Vec<crate::eval::paired::PerQueryRow>, OriginError> {
+    use crate::eval::paired::PerQueryRow;
+    use std::time::Instant;
+
+    let mut samples = load_locomo(path)?;
+    apply_locomo_limit(&mut samples);
+    let gate_on = crate::db::graph_gate_enabled();
+    let mut rows: Vec<PerQueryRow> = Vec::new();
+
+    for sample in &samples {
+        let memories = extract_observations(sample);
+        let dia_to_source: HashMap<String, String> = memories
+            .iter()
+            .enumerate()
+            .map(|(i, m)| {
+                (
+                    m.dia_id.clone(),
+                    format!("locomo_{}_obs_{}", sample.sample_id, i),
+                )
+            })
+            .collect();
+
+        for (q_idx, qa) in sample.qa.iter().enumerate() {
+            if qa.category == 5 {
+                continue;
+            }
+            let graph_skipped =
+                gate_on && !crate::retrieval::signals::query_warrants_graph(&qa.question);
+
+            let t0 = Instant::now();
+            let results = db
+                .search_memory(&qa.question, 10, None, None, None, None, None, None)
+                .await?;
+            let latency_ms = t0.elapsed().as_secs_f64() * 1000.0;
+
+            let relevant_ids: HashSet<String> = qa
+                .evidence
+                .iter()
+                .filter_map(|did| dia_to_source.get(did).cloned())
+                .collect();
+            if relevant_ids.is_empty() {
+                continue;
+            }
+            let result_ids: Vec<&str> = results.iter().map(|r| r.source_id.as_str()).collect();
+            let grades: HashMap<&str, u8> = result_ids
+                .iter()
+                .map(|id| (*id, if relevant_ids.contains(*id) { 1 } else { 0 }))
+                .collect();
+            let relevant_set: HashSet<&str> = relevant_ids.iter().map(|s| s.as_str()).collect();
+
+            rows.push(PerQueryRow {
+                feature: feature.to_string(),
+                bench: "locomo".to_string(),
+                flag_state: flag_state.to_string(),
+                query_id: format!("{}#q{}", sample.sample_id, q_idx),
+                category: qa.category.to_string(),
+                ndcg10: metrics::ndcg_at_k(&result_ids, &grades, 10),
+                recall5: metrics::recall_at_k(&result_ids, &relevant_set, 5),
+                mrr: metrics::mrr(&result_ids, &relevant_set),
+                latency_ms,
+                graph_skipped: if gate_on { Some(graph_skipped) } else { None },
+                temporal_touched: None,
+            });
+        }
+    }
+
+    Ok(rows)
 }
 
 // ---------------------------------------------------------------------------
