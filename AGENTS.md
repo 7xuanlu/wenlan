@@ -430,3 +430,8 @@ Run this hygiene pass roughly once a week or whenever `git worktree list` exceed
 ### Retrieval helpers location (PR-A, 2026-05-27)
 
 `crates/origin-core/src/retrieval/` is the canonical home for retrieval helpers (`hard_filters`, `signals`). The old `composite/` namespace was deleted along with the dead `CompositeWeights` scaffolding when PR #200 closed. Future retrieval-channel additions (page-channel in PR-B, etc.) live in `retrieval/`.
+
+### Retrieval env flags
+
+- `ORIGIN_ENABLE_TEMPORAL_SOFT_BOOST` — opt-in (default OFF). Multiplicatively BOOSTS in-window dated memories by `(1 + ORIGIN_TEMPORAL_BONUS)` while leaving outside-window / undated / no-cue rows neutral (×1.0, never dropped). Gentler successor to the `ORIGIN_ENABLE_TEMPORAL_FILTER` hard filter; the two are mutually exclusive (soft takes precedence when both are set).
+- `ORIGIN_TEMPORAL_BONUS` — additive bonus for the soft boost (default `0.5`). Clamped non-negative: a negative or non-finite value falls back to neutral (`0.0`) / the default so the boost can only lift a row, never demote it.

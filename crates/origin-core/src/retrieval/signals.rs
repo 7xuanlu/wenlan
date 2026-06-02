@@ -76,6 +76,29 @@ pub(crate) fn salience_multiplier(importance: Option<u8>, floor: f64, ceil: f64)
     }
 }
 
+/// Temporal SOFT-boost multiplier: binary in-window boost.
+///
+/// Returns `1.0 + bonus` when `event_date` is `Some(t)` and `t` falls inside the
+/// inclusive parsed query window `[window_start, window_end]`; returns `1.0`
+/// (neutral) for outside-window dated memories AND for `None` (undated) rows.
+/// The result is NEVER less than `1.0`, so a memory can only be lifted, never
+/// demoted or excluded — the load-bearing safety property of the soft boost
+/// (cf. the T4a hard filter, which dropped outside-window rows entirely).
+///
+/// Plain `pub(crate) fn` matching the other signal helpers; wired into the
+/// `search_memory` ranking closure behind `db::temporal_soft_boost_enabled()`.
+pub(crate) fn temporal_interval_boost(
+    event_date: Option<i64>,
+    window_start: i64,
+    window_end: i64,
+    bonus: f64,
+) -> f64 {
+    match event_date {
+        Some(d) if (window_start..=window_end).contains(&d) => 1.0 + bonus,
+        _ => 1.0,
+    }
+}
+
 // ---------------------------------------------------------------------------
 // T9 — Wide-pool-seeded graph expansion helpers
 // ---------------------------------------------------------------------------
@@ -420,6 +443,72 @@ mod tests {
         for i in 0u8..=255 {
             let m = salience_multiplier(Some(i), 0.85, 1.15);
             assert!((0.85..=1.15).contains(&m), "i={i} m={m}");
+        }
+    }
+
+    // ---------------------------------------------------------------------------
+    // Temporal SOFT-boost — binary in-window boost multiplier (L1 unit test)
+    // ---------------------------------------------------------------------------
+
+    /// In-window dated event -> `1.0 + bonus`; outside-window -> `1.0`;
+    /// `None` (undated) -> `1.0`. Result is NEVER < 1.0 for any input — the
+    /// soft boost only lifts, never demotes or excludes.
+    ///
+    /// RED until impl: the stub returns 1.0 even for in-window dates, so the
+    /// in-window assertion (`1.0 + bonus`) fails.
+    #[test]
+    fn temporal_interval_boost_unit() {
+        let start = 1_779_724_800; // 2026-05-26 00:00:00Z (window low)
+        let end = 1_779_811_199; // 2026-05-26 23:59:59Z (window high)
+        let bonus = 0.5;
+
+        // In-window dated event -> boosted.
+        let in_window = temporal_interval_boost(Some(1_779_775_200), start, end, bonus);
+        assert!(
+            (in_window - (1.0 + bonus)).abs() < 1e-9,
+            "in-window event must be boosted to 1.0 + bonus; got {in_window}"
+        );
+
+        // Inclusive boundaries are in-window.
+        assert!(
+            (temporal_interval_boost(Some(start), start, end, bonus) - (1.0 + bonus)).abs() < 1e-9,
+            "lower boundary must be in-window"
+        );
+        assert!(
+            (temporal_interval_boost(Some(end), start, end, bonus) - (1.0 + bonus)).abs() < 1e-9,
+            "upper boundary must be in-window"
+        );
+
+        // Outside-window dated event -> neutral 1.0.
+        assert_eq!(
+            temporal_interval_boost(Some(1_779_602_400), start, end, bonus),
+            1.0,
+            "outside-window event must be neutral (1.0)"
+        );
+
+        // Undated (None) -> neutral 1.0.
+        assert_eq!(
+            temporal_interval_boost(None, start, end, bonus),
+            1.0,
+            "undated (None) event must be neutral (1.0)"
+        );
+
+        // Safety invariant: NEVER < 1.0 for any input (sampled across the line).
+        for ed in [
+            None,
+            Some(i64::MIN),
+            Some(start - 1),
+            Some(start),
+            Some(1_779_775_200),
+            Some(end),
+            Some(end + 1),
+            Some(i64::MAX),
+        ] {
+            let m = temporal_interval_boost(ed, start, end, bonus);
+            assert!(
+                m >= 1.0,
+                "multiplier must never drop below 1.0; ed={ed:?} m={m}"
+            );
         }
     }
 

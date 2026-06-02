@@ -777,6 +777,50 @@ pub fn temporal_filter_enabled() -> bool {
         .unwrap_or(false)
 }
 
+/// True iff `ORIGIN_ENABLE_TEMPORAL_SOFT_BOOST` is set to a truthy value
+/// (`1`, `true`, or `yes`, case-insensitive). OPT-IN, default OFF.
+///
+/// The temporal SOFT boost is the gentler successor to the T4a hard filter:
+/// instead of EXCLUDING memories outside the parsed temporal window, it
+/// multiplicatively BOOSTS in-window dated memories by `(1 + temporal_bonus())`
+/// while leaving outside-window / undated / no-cue rows neutral (× 1.0, never
+/// dropped). When unset or falsey, ranking is byte-identical to plain
+/// `search_memory`. Mirrors [`salience_prior_enabled`] (truthy-only parse) so
+/// production and eval cannot disagree on the flag.
+pub fn temporal_soft_boost_enabled() -> bool {
+    std::env::var("ORIGIN_ENABLE_TEMPORAL_SOFT_BOOST")
+        .ok()
+        .map(|v| matches!(v.trim().to_ascii_lowercase().as_str(), "1" | "true" | "yes"))
+        .unwrap_or(false)
+}
+
+/// Parse `ORIGIN_TEMPORAL_BONUS` as an `f64`. Defaults to `0.5` when unset, when
+/// the value fails to parse, or when it is non-finite (NaN / ±inf). The parsed
+/// value is clamped with `.max(0.0)` so a negative configuration becomes `0.0`
+/// (neutral, no boost). This is the load-bearing safety clamp: a negative bonus
+/// would make `temporal_interval_boost` return `1 + bonus < 1.0`, demoting or
+/// excluding in-window rows and breaking the soft boost's "never < 1.0"
+/// invariant. Mirrors the clamping discipline of
+/// [`crate::retrieval::signals::salience_multiplier`].
+///
+/// This is the additive bonus applied to in-window dated memories: their score
+/// is multiplied by `1 + bonus`.
+pub fn temporal_bonus() -> f64 {
+    match std::env::var("ORIGIN_TEMPORAL_BONUS") {
+        Ok(raw) => match raw.trim().parse::<f64>() {
+            Ok(v) if v.is_finite() => v.max(0.0),
+            _ => {
+                log::warn!(
+                    "[memory_db] ORIGIN_TEMPORAL_BONUS={:?} is not a finite number; using default 0.5",
+                    raw
+                );
+                0.5
+            }
+        },
+        Err(_) => 0.5,
+    }
+}
+
 /// True iff `ORIGIN_ENABLE_GRAPH_KHOP` is set to a truthy value
 /// (`1`, `true`, or `yes`, case-insensitive). T4b k-hop entity-graph traversal.
 ///
@@ -6908,6 +6952,7 @@ impl MemoryDB {
             entity_name: None, // Populated separately via entity lookup
             quality: row.get::<Option<String>>(22).unwrap_or(None),
             importance: row.get::<Option<i64>>(31).unwrap_or(None).map(|v| v as u8),
+            event_date: row.get::<Option<i64>>(32).unwrap_or(None),
             is_recap: row
                 .get::<Option<i64>>(23)
                 .unwrap_or(None)
@@ -7806,13 +7851,21 @@ impl MemoryDB {
         // Temporal hard-filter (T4a): inject as parameterized ? placeholders.
         // `temporal_cue` is `Some(DateRange)` only when the caller has already
         // verified High confidence (see `search_memory_temporal`). Low-confidence
-        // cues are filtered out upstream; this block is unconditional when Some.
+        // cues are filtered out upstream.
         // OR event_date IS NULL is load-bearing: undated memories are never filtered out.
-        if let Some(cue) = temporal_cue {
-            filter_conditions
-                .push("(c.event_date BETWEEN ? AND ? OR c.event_date IS NULL)".to_string());
-            filter_values.push(libsql::Value::Integer(cue.start));
-            filter_values.push(libsql::Value::Integer(cue.end));
+        //
+        // Soft boost takes precedence: when `temporal_soft_boost_enabled()`, the
+        // hard window filter is SKIPPED so out-of-window rows survive (the soft
+        // boost handles temporality by lifting in-window rows, never excluding).
+        // The hard filter remains available under its own flag for the
+        // explicit-date opt-in, mutually exclusive with soft.
+        if temporal_filter_enabled() && !temporal_soft_boost_enabled() {
+            if let Some(cue) = temporal_cue {
+                filter_conditions
+                    .push("(c.event_date BETWEEN ? AND ? OR c.event_date IS NULL)".to_string());
+                filter_values.push(libsql::Value::Integer(cue.start));
+                filter_values.push(libsql::Value::Integer(cue.end));
+            }
         }
 
         // Supersedes exclusion: only hide memories superseded with mode='hide'.
@@ -7863,7 +7916,7 @@ impl MemoryDB {
                         c.structured_fields, c.retrieval_cue, c.source_text,
                         c.version, c.pending_revision,
                         vector_distance_cos(c.embedding, vector32(?1)),
-                        c.importance
+                        c.importance, c.event_date
                  FROM vector_top_k('memories_vec_idx', vector32(?1), ?2) AS vt
                  JOIN memories c ON c.rowid = vt.id
                  WHERE 1=1 {} {}",
@@ -7924,7 +7977,7 @@ impl MemoryDB {
                         c.structured_fields, c.retrieval_cue, c.source_text,
                         c.version, c.pending_revision,
                         fts.rank,
-                        c.importance
+                        c.importance, c.event_date
                  FROM memories_fts fts
                  JOIN memories c ON fts.rowid = c.rowid
                  WHERE memories_fts MATCH ?1 {} {}
@@ -8055,6 +8108,19 @@ impl MemoryDB {
 
         let now = chrono::Utc::now().timestamp();
 
+        // Temporal SOFT boost (opt-in): when ORIGIN_ENABLE_TEMPORAL_SOFT_BOOST is on
+        // AND a High-confidence cue produced a window, derive the inclusive
+        // [start, end] range. In-window dated rows are lifted by (1 + bonus) in the
+        // scoring closure; outside-window / undated / no-cue rows stay neutral and
+        // are never excluded (the hard filter is skipped on this path). Flag off OR
+        // no cue -> None -> the boost multiplier is forced 1.0 (byte-identical).
+        let temporal_window: Option<(i64, i64)> = if temporal_soft_boost_enabled() {
+            temporal_cue.map(|cue| (cue.start, cue.end))
+        } else {
+            None
+        };
+        let temporal_bonus_val = temporal_bonus();
+
         // Space boost: collect unique spaces from results, check if query mentions any.
         // If it does, results matching that space get a 1.5x boost.
         let query_lower = query.to_lowercase();
@@ -8141,6 +8207,19 @@ impl MemoryDB {
                     1.0
                 };
 
+                // Temporal SOFT boost (opt-in, binary in-window). No window (flag
+                // off OR no cue) -> forced 1.0 (byte-identical). In-window dated row
+                // -> (1 + bonus); outside-window / undated -> 1.0 (never demoted).
+                let temporal_mult = match temporal_window {
+                    Some((ws, we)) => crate::retrieval::signals::temporal_interval_boost(
+                        r.event_date,
+                        ws,
+                        we,
+                        temporal_bonus_val,
+                    ) as f32,
+                    None => 1.0,
+                };
+
                 r.score = rrf
                     * conf
                     * recency
@@ -8148,7 +8227,8 @@ impl MemoryDB {
                     * confirm_mult
                     * recap_mult
                     * space_mult
-                    * salience_mult;
+                    * salience_mult
+                    * temporal_mult;
 
                 // Mark archived decisions (superseded with mode='archive')
                 if archived_ids.contains(&r.source_id) {
@@ -8417,8 +8497,11 @@ impl MemoryDB {
         source_agent: Option<&str>,
         now: chrono::DateTime<chrono::Utc>,
     ) -> Result<Vec<SearchResult>, OriginError> {
-        // Gate: flag off -> plain search (byte-identical to search_memory)
-        if !temporal_filter_enabled() {
+        // Gate: both temporal flags off -> plain search (byte-identical to
+        // search_memory). The cue path runs when EITHER the hard filter
+        // (T4a) OR the soft boost is enabled; the two are mutually exclusive
+        // inside `search_memory_with_cue` (soft takes precedence).
+        if !temporal_filter_enabled() && !temporal_soft_boost_enabled() {
             return self
                 .search_memory(
                     query,
@@ -10740,6 +10823,7 @@ impl MemoryDB {
                 entity_name: Some(entity_name),
                 quality: None,
                 importance: None,
+                event_date: None,
                 is_archived: false,
                 is_recap: false,
                 structured_fields: None,
@@ -10804,6 +10888,7 @@ impl MemoryDB {
             entity_name: None,
             quality: None,
             importance: None,
+            event_date: None,
             is_archived: false,
             is_recap: false,
             structured_fields: None,
@@ -11128,6 +11213,7 @@ impl MemoryDB {
             entity_name: None,
             quality: None,
             importance: None,
+            event_date: None,
             is_archived: false,
             is_recap: false,
             structured_fields: None,
@@ -24167,11 +24253,12 @@ pub(crate) mod tests {
         doc.quality = Some("high".to_string());
         doc.source_text = Some("ORIGINAL SOURCE TEXT MARKER".to_string());
         db.upsert_documents(vec![doc]).await.unwrap();
-        // Also set importance so the new column carries a non-NULL value.
+        // Also set importance + event_date so the trailing columns carry non-NULL
+        // values (event_date is the last projected column, idx 32).
         {
             let conn = db.conn.lock().await;
             conn.execute(
-                "UPDATE memories SET importance = 9 WHERE source_id = 'corrupt_net'",
+                "UPDATE memories SET importance = 9, event_date = 1779602400 WHERE source_id = 'corrupt_net'",
                 libsql::params![],
             )
             .await
@@ -24225,6 +24312,12 @@ pub(crate) mod tests {
         );
         // importance (idx 31) round-trips — completes the corruption net.
         assert_eq!(r.importance, Some(9), "importance (idx 31)");
+        // event_date (idx 32) round-trips — pins the trailing-column alignment.
+        assert_eq!(
+            r.event_date,
+            Some(1_779_602_400),
+            "event_date (idx 32) round-trips"
+        );
     }
 
     #[tokio::test]
@@ -39320,6 +39413,378 @@ pub(crate) mod tests {
             results.unwrap().is_empty(),
             "empty DB must return empty vec"
         );
+    }
+
+    // ==================== Temporal SOFT-boost (binary in-window) ====================
+    //
+    // SOFT default = binary in-window boost: a memory whose event_date falls inside
+    // the parsed query window is multiplied by (1 + bonus); outside-window, undated,
+    // and no-cue rows stay neutral (× 1.0) and are NEVER excluded. This contrasts
+    // with the T4a HARD filter, which DROPS outside-window rows. Driven (eventually)
+    // through `search_memory_temporal` behind `ORIGIN_ENABLE_TEMPORAL_SOFT_BOOST`.
+    //
+    // Fixtures reuse the T4a "yesterday" window: now = 2026-05-27T12:00:00Z, so
+    // "yesterday" = 2026-05-26. In-window ts 1_779_775_200 (2026-05-26T06:00:00Z);
+    // out-of-window ts 1_779_602_400 (2026-05-24T06:00:00Z).
+
+    /// THE load-bearer. A gold memory dated OUTSIDE the parsed "yesterday" window
+    /// must STILL be returned under the soft boost (never excluded) AND rank no
+    /// worse than under plain `search_memory`. RED now: with the temporal flag on,
+    /// the unconditional T4a hard filter excludes the out-of-window gold entirely.
+    /// GREEN after impl: the hard filter is gated to explicit-date cues only (a
+    /// relative "yesterday" cue no longer hard-filters), and the soft boost keeps
+    /// the gold present at neutral weight.
+    #[tokio::test]
+    async fn temporal_soft_boost_wrong_window_never_drops_gold() {
+        let (db, _dir) = test_db().await;
+        let now: chrono::DateTime<chrono::Utc> = "2026-05-27T12:00:00Z".parse().unwrap();
+
+        // Gold: the answer-bearing memory, but dated 2 days before the window.
+        seed_memory_with_event_date(
+            &db,
+            "soft_gold_out",
+            "yesterday we finalized the database retrieval indexing approach gold answer",
+            Some(1_779_602_400),
+        )
+        .await;
+        // In-window noise on the same topic (distinct text to dodge dedup).
+        seed_memory_with_event_date(
+            &db,
+            "soft_noise_in",
+            "yesterday we reviewed the database retrieval strategy alternative noise",
+            Some(1_779_775_200),
+        )
+        .await;
+
+        let query = "what database retrieval decision did I make yesterday";
+
+        // Plain baseline (no temporal flags): gold is present; capture its score.
+        let plain = db
+            .search_memory(query, 10, None, None, None, None, None, None)
+            .await
+            .unwrap();
+        let plain_ids: Vec<&str> = plain.iter().map(|r| r.source_id.as_str()).collect();
+        let plain_gold_score = plain
+            .iter()
+            .find(|r| r.source_id == "soft_gold_out")
+            .expect("gold must be present in plain search baseline")
+            .score;
+
+        // Soft boost ON. Temporal filter flag also ON so the test is meaningful:
+        // RED now because the hard filter (still unconditional under the filter
+        // flag) drops the out-of-window gold; GREEN once the hard filter is gated
+        // to explicit dates and the soft boost runs.
+        let boosted = temp_env::async_with_vars(
+            [
+                ("ORIGIN_ENABLE_TEMPORAL_FILTER", Some("1")),
+                ("ORIGIN_ENABLE_TEMPORAL_SOFT_BOOST", Some("1")),
+            ],
+            async {
+                db.search_memory_temporal(query, 10, None, None, None, now)
+                    .await
+                    .unwrap()
+            },
+        )
+        .await;
+        let boosted_ids: Vec<&str> = boosted.iter().map(|r| r.source_id.as_str()).collect();
+
+        assert!(
+            boosted_ids.contains(&"soft_gold_out"),
+            "soft boost must NEVER drop the out-of-window gold; got {boosted_ids:?}"
+        );
+        // Structural no-touch proof: the out-of-window gold sits OUTSIDE the parsed
+        // window, so the soft path applies temporal_interval_boost = ×1.0 to it.
+        // Every other ranking multiplier is identical between plain `search_memory`
+        // and the soft `search_memory_temporal` closure, so the gold's score under
+        // the soft boost must EQUAL its plain score exactly — direct evidence that
+        // the soft path neither demotes nor excludes the out-of-window row (a
+        // fixture-independent guarantee, unlike comparing ranks).
+        let boosted_gold_score = boosted
+            .iter()
+            .find(|r| r.source_id == "soft_gold_out")
+            .expect("gold must still be present under soft boost")
+            .score;
+        assert!(
+            (boosted_gold_score - plain_gold_score).abs() < 1e-6,
+            "out-of-window gold score must be unchanged by soft boost (×1.0): \
+             plain={plain_gold_score} soft={boosted_gold_score}; \
+             boosted={boosted_ids:?} plain={plain_ids:?}"
+        );
+    }
+
+    /// A dated in-window candidate's score is STRICTLY lifted by the soft boost
+    /// (the boost helps). Comparing score (not rank) is load-bearing: with only
+    /// one in-window survivor, rank would be trivially stable even with an inert
+    /// boost. RED now: the stub multiplier is 1.0, so the in-window row's score is
+    /// unchanged (== plain). GREEN after impl: the in-window row gets × (1 + bonus),
+    /// so its score strictly exceeds its plain score.
+    #[tokio::test]
+    async fn temporal_soft_boost_in_window_boosted() {
+        let (db, _dir) = test_db().await;
+        let now: chrono::DateTime<chrono::Utc> = "2026-05-27T12:00:00Z".parse().unwrap();
+
+        // In-window dated candidate (the row the boost should lift). Seed via
+        // `make_memory_doc` (recent `last_modified` -> recency ~1.0 -> NONZERO
+        // score) rather than `seed_memory_with_event_date` (which hardcodes
+        // `last_modified: 0`, decaying recency to ~0 and zeroing the score, making
+        // the ×(1+bonus) lift unobservable). A second in-window row gives the RRF a
+        // non-degenerate pool. event_date is set via direct SQL after upsert.
+        db.upsert_documents(vec![
+            make_memory_doc(
+                "boost_in",
+                "database retrieval indexing plan picked in the window yesterday",
+                "fact",
+                "test",
+                "test-agent",
+            ),
+            make_memory_doc(
+                "boost_in2",
+                "database retrieval ranking plan approved also in the window yesterday",
+                "fact",
+                "test",
+                "test-agent",
+            ),
+        ])
+        .await
+        .unwrap();
+        {
+            let conn = db.conn.lock().await;
+            conn.execute(
+                "UPDATE memories SET event_date = 1779775200 WHERE source_id IN ('boost_in', 'boost_in2')",
+                libsql::params![],
+            )
+            .await
+            .unwrap();
+        }
+
+        let query = "what database retrieval plan did I pick yesterday";
+
+        let plain = db
+            .search_memory(query, 10, None, None, None, None, None, None)
+            .await
+            .unwrap();
+        let plain_score = plain
+            .iter()
+            .find(|r| r.source_id == "boost_in")
+            .map(|r| r.score)
+            .expect("in-window candidate must be present in plain baseline");
+        assert!(
+            plain_score > 0.0,
+            "fixture sanity: plain score must be nonzero so the boost lift is observable; got {plain_score}"
+        );
+
+        let boosted = temp_env::async_with_vars(
+            [
+                ("ORIGIN_ENABLE_TEMPORAL_FILTER", Some("1")),
+                ("ORIGIN_ENABLE_TEMPORAL_SOFT_BOOST", Some("1")),
+            ],
+            async {
+                db.search_memory_temporal(query, 10, None, None, None, now)
+                    .await
+                    .unwrap()
+            },
+        )
+        .await;
+        let boosted_score = boosted
+            .iter()
+            .find(|r| r.source_id == "boost_in")
+            .map(|r| r.score)
+            .expect("in-window candidate must be present under soft boost");
+
+        assert!(
+            boosted_score > plain_score,
+            "in-window candidate score under soft boost ({boosted_score}) must STRICTLY \
+             exceed its plain score ({plain_score}) — the boost must lift it"
+        );
+    }
+
+    /// Neutrality guard: an event_date=None candidate's score under the soft boost
+    /// equals its plain `search_memory` score (multiplier exactly 1.0). Should PASS
+    /// even with the stub (always 1.0) — guards against the boost ever touching
+    /// undated rows.
+    #[tokio::test]
+    async fn temporal_soft_boost_undated_is_neutral() {
+        let (db, _dir) = test_db().await;
+        let now: chrono::DateTime<chrono::Utc> = "2026-05-27T12:00:00Z".parse().unwrap();
+
+        // Undated candidate (event_date = None) + one dated row so the query still
+        // has temporal context to parse.
+        seed_memory_with_event_date(
+            &db,
+            "neutral_undated",
+            "the database retrieval indexing configuration notes undated",
+            None,
+        )
+        .await;
+        seed_memory_with_event_date(
+            &db,
+            "neutral_dated",
+            "yesterday the database retrieval evaluation summary dated row",
+            Some(1_779_775_200),
+        )
+        .await;
+
+        let query = "what database retrieval config did I note yesterday";
+
+        let plain = db
+            .search_memory(query, 10, None, None, None, None, None, None)
+            .await
+            .unwrap();
+        let plain_score = plain
+            .iter()
+            .find(|r| r.source_id == "neutral_undated")
+            .map(|r| r.score)
+            .expect("undated candidate must be present in plain baseline");
+
+        let boosted =
+            temp_env::async_with_vars([("ORIGIN_ENABLE_TEMPORAL_SOFT_BOOST", Some("1"))], async {
+                db.search_memory_temporal(query, 10, None, None, None, now)
+                    .await
+                    .unwrap()
+            })
+            .await;
+        let boosted_score = boosted
+            .iter()
+            .find(|r| r.source_id == "neutral_undated")
+            .map(|r| r.score)
+            .expect("undated candidate must be present under soft boost");
+
+        assert_eq!(
+            plain_score, boosted_score,
+            "undated row score must be unchanged by the soft boost (multiplier 1.0)"
+        );
+    }
+
+    /// Flag UNSET -> ordering equals plain `search_memory` (dark-ship guard).
+    /// Should PASS now: with the soft-boost flag unset and the filter flag unset,
+    /// `search_memory_temporal` degrades to plain search.
+    #[tokio::test]
+    async fn temporal_soft_boost_flag_off_byte_identical() {
+        let (db, _dir) = test_db().await;
+        let now: chrono::DateTime<chrono::Utc> = "2026-05-27T12:00:00Z".parse().unwrap();
+
+        seed_memory_with_event_date(
+            &db,
+            "off_a",
+            "yesterday we set up the database retrieval indexing pipeline alpha",
+            Some(1_779_775_200),
+        )
+        .await;
+        seed_memory_with_event_date(
+            &db,
+            "off_b",
+            "yesterday we tuned the database retrieval ranking weights beta",
+            Some(1_779_602_400),
+        )
+        .await;
+
+        let query = "what database retrieval work did I do yesterday";
+
+        let plain = db
+            .search_memory(query, 10, None, None, None, None, None, None)
+            .await
+            .unwrap();
+        let plain_ids: Vec<&str> = plain.iter().map(|r| r.source_id.as_str()).collect();
+
+        let off = temp_env::async_with_vars(
+            [
+                ("ORIGIN_ENABLE_TEMPORAL_FILTER", None::<&str>),
+                ("ORIGIN_ENABLE_TEMPORAL_SOFT_BOOST", None::<&str>),
+            ],
+            async {
+                db.search_memory_temporal(query, 10, None, None, None, now)
+                    .await
+                    .unwrap()
+            },
+        )
+        .await;
+        let off_ids: Vec<&str> = off.iter().map(|r| r.source_id.as_str()).collect();
+
+        assert_eq!(
+            off_ids, plain_ids,
+            "soft-boost flag OFF must return identical ordering to plain search_memory"
+        );
+    }
+
+    /// A query with NO temporal cue -> every multiplier 1.0, ordering == plain
+    /// search, even with the soft-boost flag ON. Should PASS now: no cue means no
+    /// window, so nothing to boost.
+    #[tokio::test]
+    async fn temporal_soft_boost_no_cue_noop() {
+        let (db, _dir) = test_db().await;
+        let now: chrono::DateTime<chrono::Utc> = "2026-05-27T12:00:00Z".parse().unwrap();
+
+        // Distinct content so dedup does not collapse the two rows.
+        seed_memory_with_event_date(
+            &db,
+            "nocue_a",
+            "database retrieval system architecture postgres design",
+            Some(1_779_775_200),
+        )
+        .await;
+        seed_memory_with_event_date(
+            &db,
+            "nocue_b",
+            "database storage engine indexing libsql internals",
+            Some(1_779_602_400),
+        )
+        .await;
+
+        // No temporal phrasing in the query -> extract_cue returns None.
+        let query = "what database did I pick";
+
+        let plain = db
+            .search_memory(query, 10, None, None, None, None, None, None)
+            .await
+            .unwrap();
+        let plain_ids: Vec<&str> = plain.iter().map(|r| r.source_id.as_str()).collect();
+
+        let boosted = temp_env::async_with_vars(
+            [
+                ("ORIGIN_ENABLE_TEMPORAL_FILTER", Some("1")),
+                ("ORIGIN_ENABLE_TEMPORAL_SOFT_BOOST", Some("1")),
+            ],
+            async {
+                db.search_memory_temporal(query, 10, None, None, None, now)
+                    .await
+                    .unwrap()
+            },
+        )
+        .await;
+        let boosted_ids: Vec<&str> = boosted.iter().map(|r| r.source_id.as_str()).collect();
+
+        assert_eq!(
+            boosted_ids, plain_ids,
+            "no-cue query must be a no-op under the soft boost (ordering == plain search)"
+        );
+    }
+
+    /// Safety clamp on `ORIGIN_TEMPORAL_BONUS`: a negative value must clamp to 0.0
+    /// (neutral, no boost) — never below, which would make
+    /// `temporal_interval_boost` return `< 1.0` and demote/exclude in-window rows,
+    /// breaking the soft boost's "never < 1.0" invariant. Non-finite values
+    /// (NaN / inf) fall back to the 0.5 default. A valid value passes through.
+    #[tokio::test]
+    async fn temporal_bonus_clamped_non_negative() {
+        let neg = temp_env::async_with_vars([("ORIGIN_TEMPORAL_BONUS", Some("-1"))], async {
+            crate::db::temporal_bonus()
+        })
+        .await;
+        assert_eq!(neg, 0.0, "negative bonus must clamp to 0.0");
+
+        for bad in &["nan", "inf"] {
+            let got = temp_env::async_with_vars([("ORIGIN_TEMPORAL_BONUS", Some(*bad))], async {
+                crate::db::temporal_bonus()
+            })
+            .await;
+            assert_eq!(got, 0.5, "non-finite {bad:?} must fall back to default 0.5");
+        }
+
+        let valid = temp_env::async_with_vars([("ORIGIN_TEMPORAL_BONUS", Some("0.25"))], async {
+            crate::db::temporal_bonus()
+        })
+        .await;
+        assert_eq!(valid, 0.25, "valid value must pass through");
     }
 
     // ── T19: Query-adaptive RRF channel reweighting integration tests ─────────

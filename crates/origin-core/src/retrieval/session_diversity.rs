@@ -162,6 +162,7 @@ mod tests {
             summary: None,
             entity_id: None,
             importance: None,
+            event_date: None,
             entity_name: None,
             quality: None,
             is_archived: false,
