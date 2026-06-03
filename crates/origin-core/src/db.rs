@@ -17666,6 +17666,43 @@ impl MemoryDB {
         Ok(results)
     }
 
+    /// Memories that still need Phase-1 classification (importance / event_date /
+    /// quality / structured_fields / retrieval_cue not yet applied by
+    /// `apply_enrichment`). Filters on `importance IS NULL` as the resumable gap
+    /// predicate: a fresh seed selects every memory, a partially-classified DB
+    /// selects only the gaps (the Tier-2 additive-backfill case in the eval
+    /// re-seed). `is_recap = 0` skips synthesized recap rows. Returns
+    /// `(source_id, content)` for the primary chunk only.
+    pub async fn get_memories_needing_classification(
+        &self,
+    ) -> Result<Vec<(String, String)>, OriginError> {
+        let conn = self.conn.lock().await;
+        let mut rows = conn
+            .query(
+                "SELECT source_id, content FROM memories
+                 WHERE source = 'memory'
+                   AND chunk_index = 0
+                   AND is_recap = 0
+                   AND importance IS NULL",
+                (),
+            )
+            .await
+            .map_err(|e| OriginError::VectorDb(format!("classification query: {e}")))?;
+        let mut results = Vec::new();
+        while let Some(row) = rows
+            .next()
+            .await
+            .map_err(|e| OriginError::VectorDb(e.to_string()))?
+        {
+            let source_id: String = row
+                .get(0)
+                .map_err(|e| OriginError::VectorDb(e.to_string()))?;
+            let content: String = row.get::<String>(1).unwrap_or_default();
+            results.push((source_id, content));
+        }
+        Ok(results)
+    }
+
     /// Get memories that have no entity_id link (for reweave phase).
     pub async fn get_unlinked_memories(
         &self,

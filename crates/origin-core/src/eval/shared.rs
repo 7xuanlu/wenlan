@@ -1746,6 +1746,96 @@ pub async fn run_title_enrichment_for_eval(
     Ok(updated)
 }
 
+/// Backfill Phase-1 classification onto seeded memories by running the SHARED
+/// `ingest::run_classification_enrichment` per memory with bounded concurrency.
+///
+/// This is the pass the eval seed previously LACKED. It writes importance (T8
+/// salience), event_date (T11/T20 temporal), quality, structured_fields, and
+/// retrieval_cue — the exact write-time signals the old `enrich_db_for_eval`
+/// shortcut (entity + title + page only) never produced, which is why those
+/// feature flags shipped merged-but-inert. Running the same `ingest` fn the
+/// daemon store path runs keeps the eval seed and production in lockstep
+/// (Google "Rules of ML", Rule #32).
+///
+/// Resumable: only memories with `importance IS NULL` are processed, so a fresh
+/// seed classifies everything and a partially-classified DB fills only the gaps
+/// (the Tier-2 additive-backfill case).
+///
+/// Uses the on-device / CLI `llm` per memory (2 calls each: classify + extract).
+/// Free but slow at LME scale, like the sibling entity/title passes. The
+/// Anthropic Batch API variant — one batched request set instead of ~12k live
+/// calls — is a deliberate follow-up; `EVAL_ENRICHMENT=cloud` seeds currently get
+/// entity/title/page via batch but would get classification through this
+/// per-memory path. Track the batch-classify port separately before relying on
+/// cloud-mode classification at scale.
+///
+/// Returns the count of memories processed.
+pub async fn run_classification_for_eval_concurrent(
+    db: &MemoryDB,
+    llm: &Arc<dyn crate::llm_provider::LlmProvider>,
+    concurrency: usize,
+) -> Result<usize, OriginError> {
+    use crate::prompts::PromptRegistry;
+    use futures::StreamExt;
+
+    let candidates = db.get_memories_needing_classification().await?;
+    let total = candidates.len();
+    if total == 0 {
+        return Ok(0);
+    }
+    let prompts = Arc::new(PromptRegistry::load(&PromptRegistry::override_dir()));
+    let t0 = std::time::Instant::now();
+    let counter = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+
+    let results: Vec<_> = futures::stream::iter(candidates.into_iter().map(
+        |(source_id, content)| {
+            let llm = llm.clone();
+            let prompts = prompts.clone();
+            let counter = counter.clone();
+            async move {
+                // Default opts: no agent overrides, placeholder type "fact" — the
+                // classifier resolves the concrete type/domain/quality/importance
+                // and the extractor resolves event_date/structured_fields/cue,
+                // exactly as the production store path does for an un-typed capture.
+                let opts = crate::ingest::EnrichmentOpts {
+                    initial_memory_type: "fact".to_string(),
+                    initial_domain: None,
+                    initial_supersede_mode: "hide".to_string(),
+                    initial_structured_fields: None,
+                    agent_supplied_memory_type: false,
+                    agent_supplied_profile_alias: false,
+                    agent_supplied_structured_fields: false,
+                };
+                let outcome = crate::ingest::run_classification_enrichment(
+                    db, &source_id, &content, &llm, &prompts, &opts,
+                )
+                .await;
+                let n = counter.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
+                if n.is_multiple_of(50) {
+                    let elapsed = t0.elapsed().as_secs_f64();
+                    let rate = n as f64 / elapsed.max(0.001);
+                    let eta = (total - n) as f64 / rate.max(0.001);
+                    eprintln!(
+                        "[enrich] phase=classify processed={}/{} elapsed={:.0}s rate={:.1}/s eta={:.0}s",
+                        n, total, elapsed, rate, eta,
+                    );
+                }
+                outcome
+            }
+        },
+    ))
+    .buffer_unordered(concurrency.max(1))
+    .collect()
+    .await;
+
+    let processed = results.len();
+    eprintln!(
+        "    [classify_local] {}/{} memories classified",
+        processed, total
+    );
+    Ok(processed)
+}
+
 /// On-device enrichment via production code paths. Mirrors production exactly:
 /// `refinery::extract_entities_from_memories` → `post_ingest::enrich_title` per memory →
 /// `refinery::distill_pages`. Free but slow (Qwen3-4B serial ≈ several hours at LME scale).
@@ -1785,6 +1875,15 @@ pub async fn enrich_db_for_eval_local(
         "    [enrich_local] concurrency={} batch_size={}",
         concurrency, batch_size
     );
+
+    // Phase 1 (classification) FIRST: write importance / event_date / quality /
+    // structured_fields / retrieval_cue via the shared `ingest` canonical pass,
+    // matching the production order where Phase 1 precedes the entity/title/page
+    // passes. The legacy shortcut skipped this entirely — without it the T8
+    // (salience), T11/T20 (temporal), and T15 (fact-channel) flags read empty
+    // columns and ship merged-but-inert.
+    let classified = run_classification_for_eval_concurrent(db, llm, concurrency).await?;
+    eprintln!("    [enrich_local] {classified} memories classified (Phase 1)");
 
     let entities = if batch_size > 1 {
         run_entity_extraction_for_eval_batched(db, llm, batch_size).await?
@@ -2158,5 +2257,81 @@ mod tests {
         write_cache_env_stamp(&path, &want);
         let got: ScenarioCacheEnv = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
         assert_eq!(got, want);
+    }
+
+    /// The eval classification pass must close the gap the legacy shortcut left:
+    /// run the shared `ingest::run_classification_enrichment` over seeded memories
+    /// and backfill `importance` (T8) + `event_date` (T11/T20) + the refined type,
+    /// so `get_memories_needing_classification` empties out afterward.
+    #[tokio::test]
+    async fn classification_pass_backfills_importance_via_shared_ingest() {
+        use crate::llm_provider::{LlmProvider, SequencedMockProvider};
+        use crate::sources::RawDocument;
+
+        let dir = tempfile::TempDir::new().unwrap();
+        let db = MemoryDB::new(
+            dir.path().join("test.db").as_path(),
+            Arc::new(crate::events::NoopEmitter),
+        )
+        .await
+        .unwrap();
+
+        let source_id = "mem_eval_classify_1";
+        let content = "Moved the launch review to 2026-02-10 since the demo slipped a week.";
+        let doc = RawDocument {
+            source: "memory".to_string(),
+            source_id: source_id.to_string(),
+            title: content.chars().take(40).collect(),
+            summary: None,
+            content: content.to_string(),
+            url: None,
+            last_modified: chrono::Utc::now().timestamp(),
+            metadata: std::collections::HashMap::new(),
+            memory_type: Some("fact".to_string()),
+            space: None,
+            source_agent: Some("test".to_string()),
+            confidence: Some(0.7),
+            confirmed: Some(false),
+            stability: Some("new".to_string()),
+            supersedes: None,
+            pending_revision: false,
+            entity_id: None,
+            quality: None,
+            importance: None,
+            is_recap: false,
+            enrichment_status: "raw".to_string(),
+            supersede_mode: "hide".to_string(),
+            structured_fields: None,
+            retrieval_cue: None,
+            source_text: None,
+        };
+        db.upsert_documents(vec![doc]).await.unwrap();
+
+        // Before: the memory needs classification (importance IS NULL).
+        let before = db.get_memories_needing_classification().await.unwrap();
+        assert_eq!(before.len(), 1);
+
+        // classify call (idx 0) then extract call (idx 1).
+        let llm: Arc<dyn LlmProvider> = Arc::new(SequencedMockProvider::new(vec![
+            r#"{"memory_type":"decision","domain":"work","quality":"high","importance":6,"tags":["launch"]}"#,
+            r#"{"event_date":"2026-02-10","retrieval_cue":"launch review reschedule"}"#,
+        ]));
+
+        let n = run_classification_for_eval_concurrent(&db, &llm, 1)
+            .await
+            .unwrap();
+        assert_eq!(n, 1);
+
+        // After: importance is set, so the memory drops out of the gap query.
+        let after = db.get_memories_needing_classification().await.unwrap();
+        assert!(
+            after.is_empty(),
+            "importance should be backfilled, still pending: {after:?}"
+        );
+
+        // The refined memory_type + domain were persisted via apply_enrichment.
+        let (mt, space) = db.get_memory_classification(source_id).await.unwrap();
+        assert_eq!(mt.as_deref(), Some("decision"));
+        assert_eq!(space.as_deref(), Some("work"));
     }
 }
