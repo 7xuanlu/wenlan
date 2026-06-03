@@ -1393,31 +1393,115 @@ async fn paired_run_cached_feature(feature: &str, flag: &str) {
     }
 }
 
-/// Umbrella test: emit per-query paired JSONL for the 7 Track-A features.
+/// Run one cached-DB feature on both benches through the CROSS-RERANK read path
+/// (`search_memory_cross_rerank`, where the page / episode / fact / global-prelude
+/// channels live), OFF then ON, emitting per-query JSONL for each arm.
 ///
-/// Track-A cached-DB features (`search_memory` path): T3 graph-gate, T9 graph-seed,
-/// T12 fts-hardening, T13 magnitude-fusion, T19 query-intent, T20 session-diversity.
-/// Plus T4a temporal-filter (SELF-SEEDS — tagged re-seed; runs only on LME).
+/// A CE-path flag flipped on the base `search_memory` collector reads a zero delta
+/// because that read never touches the channel — this routes it correctly so the
+/// flag's effect is actually measurable.
+async fn paired_run_cached_feature_cross_rerank(
+    feature: &str,
+    flag: &str,
+    reranker: std::sync::Arc<dyn origin_core::reranker::Reranker>,
+) {
+    use origin_core::eval::locomo::run_locomo_eval_cross_rerank_from_db_collect;
+    use origin_core::eval::longmemeval::run_longmemeval_eval_cross_rerank_from_db_collect;
+    let root = resolve_scenario_db_root_from_harness();
+
+    // -- LoCoMo --
+    let lo_dir = root.join("locomo_v1");
+    let lo_fx = eval_root().join("data/locomo10.json");
+    if lo_dir.join("origin_memory.db").exists() && lo_fx.exists() {
+        let db = origin_core::db::MemoryDB::new(
+            &lo_dir,
+            std::sync::Arc::new(origin_core::events::NoopEmitter),
+        )
+        .await
+        .expect("open locomo_v1 snapshot DB");
+        for (state, val) in [("off", None::<&str>), ("on", Some("1"))] {
+            let rows = temp_env::async_with_vars(
+                [(flag, val)],
+                run_locomo_eval_cross_rerank_from_db_collect(
+                    &db,
+                    &lo_fx,
+                    reranker.clone(),
+                    feature,
+                    state,
+                ),
+            )
+            .await
+            .expect("locomo CE collect");
+            write_paired_rows(feature, "locomo", &rows);
+        }
+    } else {
+        println!(
+            "[paired:{feature}] SKIP LoCoMo (db {} fixture {})",
+            lo_dir.join("origin_memory.db").exists(),
+            lo_fx.exists()
+        );
+    }
+
+    // -- LME --
+    let lme_dir = root.join("lme_v1");
+    let lme_fx = eval_root().join("data/longmemeval_oracle.json");
+    if lme_dir.join("origin_memory.db").exists() && lme_fx.exists() {
+        let db = origin_core::db::MemoryDB::new(
+            &lme_dir,
+            std::sync::Arc::new(origin_core::events::NoopEmitter),
+        )
+        .await
+        .expect("open lme_v1 snapshot DB");
+        for (state, val) in [("off", None::<&str>), ("on", Some("1"))] {
+            let rows = temp_env::async_with_vars(
+                [(flag, val)],
+                run_longmemeval_eval_cross_rerank_from_db_collect(
+                    &db,
+                    &lme_fx,
+                    reranker.clone(),
+                    feature,
+                    state,
+                ),
+            )
+            .await
+            .expect("lme CE collect");
+            write_paired_rows(feature, "lme", &rows);
+        }
+    } else {
+        println!(
+            "[paired:{feature}] SKIP LME (db {} fixture {})",
+            lme_dir.join("origin_memory.db").exists(),
+            lme_fx.exists()
+        );
+    }
+}
+
+/// Umbrella test: emit per-query paired JSONL for the Track-A features.
 ///
-/// NOTE on T20 session-diversity: its cap is wired into the CROSS-RERANK path,
-/// not the base `search_memory` path, so the `search_memory` collector will show
-/// a zero delta for it. It is included here for completeness of the cached-DB
-/// sweep; a non-zero T20 measurement needs a cross-rerank collector (GPU). The
-/// analyzer will correctly report n_touched=0 for T20 on this path.
+/// Base `search_memory`-path features: T3 graph-gate, T9 graph-seed, T12
+/// fts-hardening, T13 magnitude-fusion, T19 query-intent. Plus T4a
+/// temporal-filter + temporal-soft-boost (SELF-SEED — tagged re-seed; LME only).
+///
+/// CROSS-RERANK-path features — page / episode / fact / global-prelude channels +
+/// T20 session-diversity — are routed through
+/// `paired_run_cached_feature_cross_rerank` so their flag deltas are measurable.
+/// Flipping a CE-path flag on the base `search_memory` collector reads a zero
+/// delta because that read never touches the channel (the prior T20 trap). The
+/// CE arm builds the BGE-reranker-v2-m3 weights (~600MB on first run) and only
+/// when at least one CE feature is selected, so base-only smoke runs stay light.
 #[tokio::test]
 #[ignore = "needs cached scenario DBs (use SNAPSHOT copies); retrieval-only, no GPU. Set ORIGIN_EVAL_ROOT + SCENARIO_DB_ROOT + EVAL_OUT"]
 async fn paired_ab_emit() {
     println!("=== PAIRED A/B EMIT (apparatus v2) ===");
     println!("EVAL_OUT = {}", paired_out_dir().display());
 
-    // (feature_tag, env_flag) for the cached-DB / search_memory features.
-    let cached: [(&str, &str); 6] = [
+    // (feature_tag, env_flag) for the cached-DB / base `search_memory` features.
+    let cached: [(&str, &str); 5] = [
         ("graph_gate", "ORIGIN_ENABLE_GRAPH_GATE"),
         ("graph_seed", "ORIGIN_ENABLE_GRAPH_SEED"),
         ("fts_hardening", "ORIGIN_ENABLE_FTS_HARDENING"),
         ("magnitude_fusion", "ORIGIN_MAGNITUDE_FUSION"),
         ("query_intent", "ORIGIN_ENABLE_QUERY_INTENT"),
-        ("session_diversity", "ORIGIN_ENABLE_SESSION_DIVERSITY"),
     ];
     for (feature, flag) in cached {
         if !paired_feature_selected(feature) {
@@ -1425,6 +1509,30 @@ async fn paired_ab_emit() {
         }
         println!("--- feature {feature} (flag {flag}) ---");
         paired_run_cached_feature(feature, flag).await;
+    }
+
+    // CE-path features: page / episode / fact / global-prelude channels live in
+    // `search_memory_cross_rerank`, not the base path. Route them through the
+    // cross-rerank collectors so a flag flip produces a real delta. Build the
+    // reranker ONCE and only when a CE feature is selected (the BGE-reranker-v2-m3
+    // weights are ~600MB on first download), so base-only smoke runs stay light.
+    let ce: [(&str, &str); 5] = [
+        ("page_channel", "ORIGIN_ENABLE_PAGE_CHANNEL"),
+        ("episode_channel", "ORIGIN_ENABLE_EPISODE_CHANNEL"),
+        ("fact_channel", "ORIGIN_ENABLE_FACT_CHANNEL"),
+        ("global_prelude", "ORIGIN_ENABLE_GLOBAL_PRELUDE"),
+        ("session_diversity", "ORIGIN_ENABLE_SESSION_DIVERSITY"),
+    ];
+    if ce.iter().any(|(f, _)| paired_feature_selected(f)) {
+        let reranker = origin_core::reranker::init_cross_encoder_reranker(None)
+            .expect("init_cross_encoder_reranker failed (downloads ~600MB on first run)");
+        for (feature, flag) in ce {
+            if !paired_feature_selected(feature) {
+                continue;
+            }
+            println!("--- feature {feature} (flag {flag}) [CROSS-RERANK path] ---");
+            paired_run_cached_feature_cross_rerank(feature, flag, reranker.clone()).await;
+        }
     }
 
     // T4a temporal-filter: self-seeds, LME only, search_memory_temporal path.

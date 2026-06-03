@@ -1456,6 +1456,104 @@ pub async fn run_locomo_eval_from_db_collect(
     Ok(rows)
 }
 
+/// Cross-encoder variant of [`run_locomo_eval_from_db_collect`]. Identical query
+/// set + relevance judgments + scoring, but retrieval goes through
+/// `search_memory_cross_rerank` (CE rescoring over the widened pool, where the
+/// page / episode / fact / global-prelude channels live) instead of the base
+/// `search_memory` path. Pairs OFF (base collector) against ON (this one) on the
+/// same snapshot DB so a CE-path feature flag's delta is actually measurable —
+/// flipping a CE-path flag on the base collector reads zero, because the base
+/// read never touches that channel (the documented T20 session-diversity trap).
+///
+/// Pins the ungated rerank-pool knobs (multiplier=1, floor=10) when unset, same
+/// as `run_locomo_eval_cross_rerank_from_db`, so the CE pool depth is
+/// reproducible. `--test-threads=1` makes the process-global set_var safe.
+pub async fn run_locomo_eval_cross_rerank_from_db_collect(
+    db: &MemoryDB,
+    path: &Path,
+    reranker: std::sync::Arc<dyn crate::reranker::Reranker>,
+    feature: &str,
+    flag_state: &str,
+) -> Result<Vec<crate::eval::paired::PerQueryRow>, OriginError> {
+    use crate::eval::paired::PerQueryRow;
+    use std::time::Instant;
+
+    if std::env::var_os("RERANK_POOL_MULTIPLIER").is_none() {
+        std::env::set_var("RERANK_POOL_MULTIPLIER", "1");
+    }
+    if std::env::var_os("RERANK_POOL_FLOOR").is_none() {
+        std::env::set_var("RERANK_POOL_FLOOR", "10");
+    }
+
+    let mut samples = load_locomo(path)?;
+    apply_locomo_limit(&mut samples);
+    let mut rows: Vec<PerQueryRow> = Vec::new();
+
+    for sample in &samples {
+        let memories = extract_observations(sample);
+        let dia_to_source: HashMap<String, String> = memories
+            .iter()
+            .enumerate()
+            .map(|(i, m)| {
+                (
+                    m.dia_id.clone(),
+                    format!("locomo_{}_obs_{}", sample.sample_id, i),
+                )
+            })
+            .collect();
+
+        for (q_idx, qa) in sample.qa.iter().enumerate() {
+            if qa.category == 5 {
+                continue;
+            }
+
+            let t0 = Instant::now();
+            let results = db
+                .search_memory_cross_rerank(
+                    &qa.question,
+                    10,
+                    None,
+                    None,
+                    None,
+                    Some(reranker.clone()),
+                )
+                .await?;
+            let latency_ms = t0.elapsed().as_secs_f64() * 1000.0;
+
+            let relevant_ids: HashSet<String> = qa
+                .evidence
+                .iter()
+                .filter_map(|did| dia_to_source.get(did).cloned())
+                .collect();
+            if relevant_ids.is_empty() {
+                continue;
+            }
+            let result_ids: Vec<&str> = results.iter().map(|r| r.source_id.as_str()).collect();
+            let grades: HashMap<&str, u8> = result_ids
+                .iter()
+                .map(|id| (*id, if relevant_ids.contains(*id) { 1 } else { 0 }))
+                .collect();
+            let relevant_set: HashSet<&str> = relevant_ids.iter().map(|s| s.as_str()).collect();
+
+            rows.push(PerQueryRow {
+                feature: feature.to_string(),
+                bench: "locomo".to_string(),
+                flag_state: flag_state.to_string(),
+                query_id: format!("{}#q{}", sample.sample_id, q_idx),
+                category: qa.category.to_string(),
+                ndcg10: metrics::ndcg_at_k(&result_ids, &grades, 10),
+                recall5: metrics::recall_at_k(&result_ids, &relevant_set, 5),
+                mrr: metrics::mrr(&result_ids, &relevant_set),
+                latency_ms,
+                graph_skipped: None,
+                temporal_touched: None,
+            });
+        }
+    }
+
+    Ok(rows)
+}
+
 // ---------------------------------------------------------------------------
 /// Retrieval eval over a pre-seeded DB using the base `search_memory` path
 /// (vector + FTS + RRF + graph augmentation) — the path the graph gate
