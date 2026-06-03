@@ -166,6 +166,50 @@ fn parse_session_num(key: &str) -> Option<usize> {
     num_str.parse().ok()
 }
 
+/// Parse a LoCoMo `session_N_date_time` value into a day-granular unix timestamp
+/// (midnight UTC of that date). Input looks like `"1:56 pm on 8 May, 2023"`; only
+/// the date part after `" on "` is used — time-of-day is dropped because temporal
+/// matching is day-level.
+fn parse_locomo_date(s: &str) -> Option<i64> {
+    let date_part = s.split(" on ").nth(1).unwrap_or(s).trim();
+    let nd = chrono::NaiveDate::parse_from_str(date_part, "%d %B, %Y").ok()?;
+    Some(nd.and_hms_opt(0, 0, 0)?.and_utc().timestamp())
+}
+
+/// Build a `{source_id -> event_date(unix seconds)}` map from LoCoMo session
+/// metadata, for eval-seed `event_date` injection (T11/T20 temporal).
+///
+/// LoCoMo observation TEXT is date-stripped, so classify-from-text recovers no
+/// `event_date`; the date lives only in `conversation["session_N_date_time"]`.
+/// `source_id` mirrors the seed builder exactly: `locomo_<sample_id>_obs_<i>`
+/// where `i` is the enumerate index over [`extract_observations`].
+pub fn event_date_map(samples: &[LocomoSample]) -> HashMap<String, i64> {
+    let mut map = HashMap::new();
+    for sample in samples {
+        // session_num -> ts, parsed from the `session_N_date_time` conversation keys.
+        let mut session_ts: HashMap<usize, i64> = HashMap::new();
+        if let Some(conv) = sample.conversation.as_object() {
+            for (k, v) in conv {
+                let parsed = k
+                    .strip_prefix("session_")
+                    .and_then(|r| r.strip_suffix("_date_time"))
+                    .and_then(|r| r.parse::<usize>().ok());
+                if let (Some(n), Some(s)) = (parsed, v.as_str()) {
+                    if let Some(ts) = parse_locomo_date(s) {
+                        session_ts.insert(n, ts);
+                    }
+                }
+            }
+        }
+        for (i, mem) in extract_observations(sample).iter().enumerate() {
+            if let Some(&ts) = session_ts.get(&mem.session_num) {
+                map.insert(format!("locomo_{}_obs_{}", sample.sample_id, i), ts);
+            }
+        }
+    }
+    map
+}
+
 // ---------------------------------------------------------------------------
 // Conversion to eval cases
 // ---------------------------------------------------------------------------
@@ -2761,6 +2805,28 @@ mod tests {
         let mut samples = mock_samples(5);
         apply_limit_from_env(&mut samples, var, "locomo", "conversations");
         assert_eq!(samples.len(), 5, "unset env var must leave samples intact");
+    }
+
+    #[test]
+    fn locomo_event_date_map_parses_session_dates_to_source_ids() {
+        let sample: LocomoSample = serde_json::from_value(serde_json::json!({
+            "sample_id": "conv-test",
+            "conversation": { "session_1_date_time": "1:56 pm on 8 May, 2023" },
+            "qa": [],
+            "observation": {
+                "session_1_observation": { "Alice": [["Alice likes tea", "D1:1"]] }
+            }
+        }))
+        .unwrap();
+        let map = event_date_map(&[sample]);
+        let expected = chrono::NaiveDate::from_ymd_opt(2023, 5, 8)
+            .unwrap()
+            .and_hms_opt(0, 0, 0)
+            .unwrap()
+            .and_utc()
+            .timestamp();
+        // source_id mirrors the seed builder: locomo_<sample>_obs_<enumerate-index>.
+        assert_eq!(map.get("locomo_conv-test_obs_0"), Some(&expected));
     }
 
     #[test]

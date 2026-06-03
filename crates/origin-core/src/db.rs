@@ -17703,6 +17703,42 @@ impl MemoryDB {
         Ok(results)
     }
 
+    /// Set `event_date` (unix seconds) for memories by `source_id`, in one
+    /// transaction. Returns the number of rows updated.
+    ///
+    /// Used by the eval seed to inject session-metadata dates (T11/T20 temporal)
+    /// that classify-from-text cannot recover — LoCoMo/LME observation text is
+    /// date-stripped, so the date is only available from dataset session metadata.
+    /// Non-destructive: only touches the named `source_id`s; unrelated rows and
+    /// the wipe path are untouched.
+    pub async fn set_event_dates_by_source_id(
+        &self,
+        updates: &[(String, i64)],
+    ) -> Result<usize, OriginError> {
+        if updates.is_empty() {
+            return Ok(0);
+        }
+        let conn = self.conn.lock().await;
+        conn.execute("BEGIN", ())
+            .await
+            .map_err(|e| OriginError::VectorDb(format!("set_event_dates begin: {e}")))?;
+        let mut updated = 0usize;
+        for (source_id, ts) in updates {
+            let n = conn
+                .execute(
+                    "UPDATE memories SET event_date = ?1 WHERE source_id = ?2",
+                    libsql::params![*ts, source_id.as_str()],
+                )
+                .await
+                .map_err(|e| OriginError::VectorDb(format!("set_event_dates update: {e}")))?;
+            updated += n as usize;
+        }
+        conn.execute("COMMIT", ())
+            .await
+            .map_err(|e| OriginError::VectorDb(format!("set_event_dates commit: {e}")))?;
+        Ok(updated)
+    }
+
     /// Get memories that have no entity_id link (for reweave phase).
     pub async fn get_unlinked_memories(
         &self,
@@ -39209,6 +39245,45 @@ pub(crate) mod tests {
             .await
             .unwrap();
         }
+    }
+
+    /// `set_event_dates_by_source_id` writes only the named rows; others stay NULL.
+    #[tokio::test]
+    async fn set_event_dates_by_source_id_updates_only_named_rows() {
+        let (db, _dir) = test_db().await;
+        seed_memory_with_event_date(&db, "ev_named", "alpha fact about databases", None).await;
+        seed_memory_with_event_date(&db, "ev_other", "beta fact about networking", None).await;
+
+        let n = db
+            .set_event_dates_by_source_id(&[("ev_named".to_string(), 1_779_602_400)])
+            .await
+            .unwrap();
+        assert_eq!(n, 1, "exactly one named row updated");
+
+        let conn = db.conn.lock().await;
+        let mut rows = conn
+            .query(
+                "SELECT event_date FROM memories WHERE source_id = 'ev_named' AND chunk_index = 0",
+                (),
+            )
+            .await
+            .unwrap();
+        let r = rows.next().await.unwrap().unwrap();
+        assert_eq!(
+            r.get::<i64>(0).unwrap(),
+            1_779_602_400,
+            "named row got the injected date"
+        );
+
+        let mut rows2 = conn
+            .query(
+                "SELECT COUNT(*) FROM memories WHERE source_id = 'ev_other' AND event_date IS NULL",
+                (),
+            )
+            .await
+            .unwrap();
+        let r2 = rows2.next().await.unwrap().unwrap();
+        assert_eq!(r2.get::<i64>(0).unwrap(), 1, "unnamed row stays NULL");
     }
 
     /// [T4a] seed 3 memories w/ identical text but distinct event_date;

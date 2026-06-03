@@ -1209,6 +1209,71 @@ async fn fts_hardening_ab_dualbench() {
     }
 }
 
+/// STEP 7 (a2): inject `event_date` from dataset session metadata into the cached
+/// seed DBs (locomo_v1 + lme_v1). GPU-FREE — classify-from-text cannot recover
+/// these dates because the observation/turn text is date-stripped; the per-session
+/// date lives only in dataset metadata. Run this BEFORE the on-device classify
+/// backfill so the temporal channel (T11/T20) has data. Non-destructive: only fills
+/// the `event_date` column for matching `source_id`s.
+///
+/// ```bash
+/// cargo test -p origin-core --features eval-harness --test eval_harness \
+///   seed_inject_event_dates -- --ignored --nocapture
+/// ```
+#[tokio::test]
+#[ignore]
+async fn seed_inject_event_dates() {
+    use origin_core::eval::{locomo, longmemeval};
+
+    let root = resolve_scenario_db_root_from_harness();
+    let emitter = || std::sync::Arc::new(origin_core::events::NoopEmitter);
+
+    // --- LoCoMo ---
+    let lc_dir = root.join("locomo_v1");
+    let lc_fixture = eval_root().join("data/locomo10.json");
+    if lc_dir.join("origin_memory.db").exists() && lc_fixture.exists() {
+        let samples = locomo::load_locomo(&lc_fixture).expect("load locomo");
+        let updates: Vec<(String, i64)> = locomo::event_date_map(&samples).into_iter().collect();
+        let db = origin_core::db::MemoryDB::new(&lc_dir, emitter())
+            .await
+            .expect("open locomo_v1");
+        let n = db
+            .set_event_dates_by_source_id(&updates)
+            .await
+            .expect("inject locomo event_dates");
+        eprintln!(
+            "[inject] locomo_v1: {} source_ids mapped -> {} rows updated",
+            updates.len(),
+            n
+        );
+    } else {
+        eprintln!("SKIP locomo: missing seed DB or fixture");
+    }
+
+    // --- LongMemEval ---
+    let lme_dir = root.join("lme_v1");
+    let lme_fixture = eval_root().join("data/longmemeval_oracle.json");
+    if lme_dir.join("origin_memory.db").exists() && lme_fixture.exists() {
+        let samples = longmemeval::load_longmemeval(&lme_fixture).expect("load lme");
+        let updates: Vec<(String, i64)> =
+            longmemeval::event_date_map(&samples).into_iter().collect();
+        let db = origin_core::db::MemoryDB::new(&lme_dir, emitter())
+            .await
+            .expect("open lme_v1");
+        let n = db
+            .set_event_dates_by_source_id(&updates)
+            .await
+            .expect("inject lme event_dates");
+        eprintln!(
+            "[inject] lme_v1: {} source_ids mapped -> {} rows updated",
+            updates.len(),
+            n
+        );
+    } else {
+        eprintln!("SKIP lme: missing seed DB or fixture");
+    }
+}
+
 /// T3 graph-gate A/B experiment on LongMemEval (retrieval-only, no GPU LLM).
 /// Dual-bench companion to `graph_gate_ab_locomo` so T3 is validated on BOTH
 /// metrics, not a partial view.
