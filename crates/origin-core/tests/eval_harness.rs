@@ -3493,9 +3493,19 @@ async fn measure_classify_only_rate() {
     assert!(!obs.is_empty(), "no observations loaded");
 
     let shared_embedder = eval_shared_embedder();
+    // Persist to MEASURE_CLASSIFY_DB_OUT for post-run SQL shape inspection; else
+    // throwaway tempdir (auto-cleaned). `tmp` stays in scope either way.
     let tmp = tempfile::tempdir().unwrap();
+    let db_dir = match std::env::var("MEASURE_CLASSIFY_DB_OUT") {
+        Ok(out) => {
+            std::fs::create_dir_all(&out).ok();
+            std::path::PathBuf::from(out)
+        }
+        Err(_) => tmp.path().to_path_buf(),
+    };
+    eprintln!("[measure-classify] db_dir = {}", db_dir.display());
     let db = origin_core::db::MemoryDB::new_with_shared_embedder(
-        tmp.path(),
+        &db_dir,
         Arc::new(origin_core::events::NoopEmitter),
         shared_embedder,
     )
