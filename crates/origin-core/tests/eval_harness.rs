@@ -1028,6 +1028,118 @@ async fn query_intent_ab_dualbench() {
     }
 }
 
+/// STEP 7 cheap combined A/B: the two filled-data flags that engage the no-GPU
+/// base `search_memory` path, toggled TOGETHER OFF vs ON over the cached scenario
+/// DBs. `ORIGIN_ENABLE_SALIENCE_PRIOR` reads the backfilled `importance`;
+/// `ORIGIN_ENABLE_TEMPORAL_SOFT_BOOST` reads the injected `event_date`. Combined
+/// (not per-flag) by design — a directional gate before the expensive per-flag
+/// grid. Retrieval-only, no GPU. The other reseed-unblocked flags (FACT_CHANNEL,
+/// EPISODE_CHANNEL, SESSION_DIVERSITY) live on the cross-rerank path and need a
+/// separate GPU A/B. Single-run scaffold — N≥3 for any headline claim.
+///
+/// ```bash
+/// cargo test -p origin-core --features eval-harness --test eval_harness \
+///   data_flags_ab_dualbench -- --ignored --nocapture
+/// ```
+#[tokio::test]
+#[ignore = "needs cached scenario DBs; retrieval-only, no GPU"]
+async fn data_flags_ab_dualbench() {
+    use origin_core::eval::locomo::run_locomo_eval_from_db;
+    use origin_core::eval::longmemeval::run_longmemeval_eval_from_db;
+    let root = resolve_scenario_db_root_from_harness();
+
+    let on_vars = [
+        ("ORIGIN_ENABLE_SALIENCE_PRIOR", Some("1")),
+        ("ORIGIN_ENABLE_TEMPORAL_SOFT_BOOST", Some("1")),
+    ];
+    let off_vars = [
+        ("ORIGIN_ENABLE_SALIENCE_PRIOR", None::<&str>),
+        ("ORIGIN_ENABLE_TEMPORAL_SOFT_BOOST", None::<&str>),
+    ];
+
+    let lo_cov = |r: &origin_core::eval::locomo::LocomoReport| {
+        r.coverage.as_ref().map(|c| c.blind).unwrap_or(0.0)
+    };
+    let lme_cov = |r: &origin_core::eval::longmemeval::LongMemEvalReport| {
+        r.coverage.as_ref().map(|c| c.blind).unwrap_or(0.0)
+    };
+
+    let lo_dir = root.join("locomo_v1");
+    if lo_dir.join("origin_memory.db").exists() {
+        let fx = eval_root().join("data/locomo10.json");
+        if fx.exists() {
+            let db = origin_core::db::MemoryDB::new(
+                &lo_dir,
+                std::sync::Arc::new(origin_core::events::NoopEmitter),
+            )
+            .await
+            .unwrap();
+            let off = temp_env::async_with_vars(off_vars, run_locomo_eval_from_db(&db, &fx))
+                .await
+                .unwrap();
+            let on = temp_env::async_with_vars(on_vars, run_locomo_eval_from_db(&db, &fx))
+                .await
+                .unwrap();
+            println!(
+                "[DATA-FLAGS A/B LoCoMo] q={} | ndcg@10 off={:.4} on={:.4} d={:+.4} | recall@5 off={:.4} on={:.4} d={:+.4} | cov_blind off={:.4} on={:.4} d={:+.4}",
+                off.total_questions,
+                off.aggregate_ndcg_at_10,
+                on.aggregate_ndcg_at_10,
+                on.aggregate_ndcg_at_10 - off.aggregate_ndcg_at_10,
+                off.aggregate_recall_at_5,
+                on.aggregate_recall_at_5,
+                on.aggregate_recall_at_5 - off.aggregate_recall_at_5,
+                lo_cov(&off),
+                lo_cov(&on),
+                lo_cov(&on) - lo_cov(&off),
+            );
+        } else {
+            println!("SKIP LoCoMo: locomo10.json not found at {}", fx.display());
+        }
+    } else {
+        println!("SKIP LoCoMo: no seeded DB at {}", lo_dir.display());
+    }
+
+    let lme_dir = root.join("lme_v1");
+    if lme_dir.join("origin_memory.db").exists() {
+        let fx = eval_root().join("data/longmemeval_oracle.json");
+        if fx.exists() {
+            let db = origin_core::db::MemoryDB::new(
+                &lme_dir,
+                std::sync::Arc::new(origin_core::events::NoopEmitter),
+            )
+            .await
+            .unwrap();
+            let off = temp_env::async_with_vars(off_vars, run_longmemeval_eval_from_db(&db, &fx))
+                .await
+                .unwrap();
+            let on = temp_env::async_with_vars(on_vars, run_longmemeval_eval_from_db(&db, &fx))
+                .await
+                .unwrap();
+            println!(
+                "[DATA-FLAGS A/B LME] q={} | ndcg@10 off={:.4} on={:.4} d={:+.4} | recall@5 off={:.4} on={:.4} d={:+.4} | cov_blind off={:.4} on={:.4} d={:+.4}",
+                off.total_questions,
+                off.aggregate_ndcg_at_10,
+                on.aggregate_ndcg_at_10,
+                on.aggregate_ndcg_at_10 - off.aggregate_ndcg_at_10,
+                off.aggregate_recall_at_5,
+                on.aggregate_recall_at_5,
+                on.aggregate_recall_at_5 - off.aggregate_recall_at_5,
+                lme_cov(&off),
+                lme_cov(&on),
+                lme_cov(&on) - lme_cov(&off),
+            );
+        } else {
+            println!(
+                "SKIP LME: longmemeval_oracle.json not found at {}",
+                fx.display()
+            );
+        }
+    } else {
+        println!("SKIP LME: no seeded DB at {}", lme_dir.display());
+    }
+}
+
 /// T9 wide-pool-seeded graph-expansion A/B on BOTH benches (retrieval-only).
 /// Measurement vehicle is coverage_recall (NDCG is neutral-by-construction —
 /// KG observation rows are stripped from user output, only the RRF boost survives,
