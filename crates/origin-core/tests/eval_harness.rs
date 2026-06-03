@@ -3440,6 +3440,146 @@ async fn smoke_per_scenario_locomo() {
     );
 }
 
+/// STEP 6 measurement: isolated classify-ONLY rate for the STEP 7 additive backfill.
+///
+/// Classification is orthogonal to entity/title/page enrichment (it reads `content`,
+/// writes `importance`/`event_date`/`quality`), so seeding N docs and timing
+/// `run_classification_for_eval_concurrent` alone yields the exact per-memory rate the
+/// STEP 7 snapshot path pays when backfilling the existing entity/title/page-enriched
+/// seeds (which are all `importance IS NULL`). No entity/title/distill passes needed.
+///
+/// On-device Qwen3-4B (free, Metal). Isolated tempdir (no cache pollution).
+///
+/// ```bash
+/// MEASURE_CLASSIFY_N=30 EVAL_ENRICHMENT_CONCURRENCY=8 ORIGIN_LLM_PARALLEL_SEQS=8 \
+///   cargo test -p origin-core --features eval-harness --test eval_harness \
+///   measure_classify_only_rate -- --ignored --nocapture
+/// ```
+#[tokio::test]
+#[ignore]
+async fn measure_classify_only_rate() {
+    use origin_core::eval::locomo::{extract_observations, load_locomo};
+    use origin_core::eval::shared::{eval_shared_embedder, run_classification_for_eval_concurrent};
+    use origin_core::llm_provider::OnDeviceProvider;
+    use origin_core::sources::RawDocument;
+    use std::sync::Arc;
+
+    let locomo_path = eval_root().join("data/locomo10.json");
+    if !locomo_path.exists() {
+        eprintln!("SKIP: locomo10.json not found at {:?}", locomo_path);
+        return;
+    }
+
+    let n: usize = std::env::var("MEASURE_CLASSIFY_N")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(30);
+    let concurrency: usize = std::env::var("EVAL_ENRICHMENT_CONCURRENCY")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(1);
+
+    // Gather N observations across samples (content only — classify ignores titles/entities).
+    let samples = load_locomo(&locomo_path).unwrap();
+    let mut obs: Vec<String> = Vec::new();
+    'outer: for s in &samples {
+        for o in extract_observations(s) {
+            obs.push(o.content.clone());
+            if obs.len() >= n {
+                break 'outer;
+            }
+        }
+    }
+    assert!(!obs.is_empty(), "no observations loaded");
+
+    let shared_embedder = eval_shared_embedder();
+    let tmp = tempfile::tempdir().unwrap();
+    let db = origin_core::db::MemoryDB::new_with_shared_embedder(
+        tmp.path(),
+        Arc::new(origin_core::events::NoopEmitter),
+        shared_embedder,
+    )
+    .await
+    .unwrap();
+
+    let docs: Vec<RawDocument> = obs
+        .iter()
+        .enumerate()
+        .map(|(i, c)| RawDocument {
+            content: c.clone(),
+            source_id: format!("classify_probe_obs_{}", i),
+            source: "memory".to_string(),
+            title: format!("probe {}", i),
+            memory_type: Some("fact".to_string()),
+            space: Some("conversation".to_string()),
+            last_modified: chrono::Utc::now().timestamp(),
+            ..Default::default()
+        })
+        .collect();
+    db.upsert_documents(docs).await.unwrap();
+
+    // PRE-condition: every seeded memory is unclassified (importance IS NULL).
+    let pre = db
+        .get_memories_needing_classification()
+        .await
+        .unwrap()
+        .len();
+    assert_eq!(
+        pre,
+        obs.len(),
+        "all seeded mems should be unclassified pre-run ({}/{})",
+        pre,
+        obs.len()
+    );
+
+    let llm: Arc<dyn origin_core::llm_provider::LlmProvider> = match OnDeviceProvider::new() {
+        Ok(p) => Arc::new(p),
+        Err(e) => {
+            eprintln!("SKIP: on-device init failed: {e}");
+            return;
+        }
+    };
+
+    let t0 = std::time::Instant::now();
+    let processed = run_classification_for_eval_concurrent(&db, &llm, concurrency)
+        .await
+        .unwrap();
+    let elapsed = t0.elapsed().as_secs_f64();
+
+    // POST-condition: classify populated importance for every memory.
+    let post = db
+        .get_memories_needing_classification()
+        .await
+        .unwrap()
+        .len();
+    assert_eq!(
+        post, 0,
+        "all mems should be classified post-run ({post} remain)"
+    );
+    assert_eq!(processed, obs.len(), "processed count mismatch");
+
+    let rate = elapsed / obs.len() as f64;
+    eprintln!("\n=== classify-only rate (concurrency={concurrency}) ===");
+    eprintln!(
+        "  N={} processed={} elapsed={:.1}s  =>  {:.2}s/mem",
+        obs.len(),
+        processed,
+        elapsed,
+        rate
+    );
+    eprintln!(
+        "  STEP 7 corpus 8064 mems => {:.0}s = {:.1} min = {:.2} h",
+        8064.0 * rate,
+        8064.0 * rate / 60.0,
+        8064.0 * rate / 3600.0
+    );
+    eprintln!(
+        "    LME 5533 => {:.2} h ;  LoCoMo 2531 => {:.2} h",
+        5533.0 * rate / 3600.0,
+        2531.0 * rate / 3600.0
+    );
+}
+
 /// End-to-end smoke that verifies EVAL_BASELINES_DIR wires through to a real
 /// DB-open code path. Builds the scenario path via the helper + `scenario_db_dir`,
 /// opens a `MemoryDB` at that path, and asserts the DB file lands where expected.
