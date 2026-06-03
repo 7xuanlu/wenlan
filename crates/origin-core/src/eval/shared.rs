@@ -749,11 +749,63 @@ where
     let enriched = db.enriched_memory_count().await.unwrap_or(0);
 
     if mem_count > 0 && enriched == mem_count {
-        log::info!(
-            "[scenario_db] cache hit: {} ({} memories, all enriched)",
-            db_dir.display(),
-            mem_count
-        );
+        // Entity/title/page enrichment is complete (`enriched_memory_count` tracks
+        // that marker). But a DB seeded before the Phase-1 classification pass
+        // existed — or a partially-backfilled one — can still lack importance /
+        // event_date / quality, so the T8 (salience), T11/T20 (temporal), and T15
+        // (fact-channel) flags would read empty columns on a cache hit and ship
+        // merged-but-inert. Additively backfill the gap rather than treat the
+        // cache as complete.
+        //
+        // This is NON-DESTRUCTIVE: `get_memories_needing_classification` filters
+        // `importance IS NULL`, so the pass only touches un-classified rows and is
+        // a no-op once complete (resumable). It never wipes — the wipe path below
+        // is untouched.
+        let needs_class = db
+            .get_memories_needing_classification()
+            .await
+            .map(|v| v.len())
+            .unwrap_or(0);
+        if needs_class > 0 {
+            match enrichment {
+                EnrichmentMode::OnDevice(llm) => {
+                    log::warn!(
+                        "[scenario_db] cache hit at {} but {} memories lack Phase-1 \
+                         classification — additively backfilling (resumable)",
+                        db_dir.display(),
+                        needs_class
+                    );
+                    let concurrency: usize = std::env::var("EVAL_ENRICHMENT_CONCURRENCY")
+                        .ok()
+                        .and_then(|s| s.parse().ok())
+                        .unwrap_or(1);
+                    let n = run_classification_for_eval_concurrent(&db, llm, concurrency).await?;
+                    log::info!(
+                        "[scenario_db] backfilled Phase-1 classification for {n} memories at {}",
+                        db_dir.display()
+                    );
+                }
+                _ => {
+                    // BatchApi / Cli classify backfill is the deferred batch-classify
+                    // port (see `run_classification_for_eval_concurrent` docs). Fail
+                    // loud rather than silently shipping a classification-starved cache.
+                    log::warn!(
+                        "[scenario_db] cache hit at {} but {} memories lack Phase-1 \
+                         classification; enrichment mode is not OnDevice so the batch-classify \
+                         backfill is not yet wired — classification-dependent flags \
+                         (T8/T11/T20/T15) will read EMPTY on this cache",
+                        db_dir.display(),
+                        needs_class
+                    );
+                }
+            }
+        } else {
+            log::info!(
+                "[scenario_db] cache hit: {} ({} memories, all enriched + classified)",
+                db_dir.display(),
+                mem_count
+            );
+        }
         // Stamp on cache hit too, in case an older run seeded the DB before
         // cache_env.json existed.
         write_cache_env_stamp(&cache_env_path, &want);
@@ -2333,5 +2385,100 @@ mod tests {
         let (mt, space) = db.get_memory_classification(source_id).await.unwrap();
         assert_eq!(mt.as_deref(), Some("decision"));
         assert_eq!(space.as_deref(), Some("work"));
+    }
+
+    /// STEP 5 contract test: a cached scenario DB that is entity/title-enriched
+    /// (`enriched == mem_count`) but was seeded BEFORE the Phase-1 classification
+    /// pass existed must NOT be treated as a complete cache hit. `open_or_seed_
+    /// scenario_db` must detect the missing classification and additively backfill
+    /// it (non-destructive, resumable) rather than silently ship importance-NULL
+    /// rows that starve the T8/T11/T20/T15 flags.
+    #[tokio::test]
+    async fn cache_hit_backfills_missing_classification() {
+        use crate::llm_provider::{LlmProvider, SequencedMockProvider};
+        use crate::sources::RawDocument;
+
+        let dir = tempfile::TempDir::new().unwrap();
+        let emb = eval_shared_embedder();
+
+        let source_id = "mem_step5_cache_1";
+        let content = "Picked Postgres over Mongo on 2026-03-01 for the billing service.";
+        let doc = RawDocument {
+            source: "memory".to_string(),
+            source_id: source_id.to_string(),
+            title: content.chars().take(40).collect(),
+            summary: None,
+            content: content.to_string(),
+            url: None,
+            last_modified: chrono::Utc::now().timestamp(),
+            metadata: std::collections::HashMap::new(),
+            memory_type: Some("fact".to_string()),
+            space: None,
+            source_agent: Some("test".to_string()),
+            confidence: Some(0.7),
+            confirmed: Some(false),
+            stability: Some("new".to_string()),
+            supersedes: None,
+            pending_revision: false,
+            entity_id: None,
+            quality: None,
+            importance: None,
+            is_recap: false,
+            enrichment_status: "raw".to_string(),
+            supersede_mode: "hide".to_string(),
+            structured_fields: None,
+            retrieval_cue: None,
+            source_text: None,
+        };
+
+        // Build the "pre-classification cache" state: seed + mark enriched (the
+        // entity/title marker) but leave importance NULL, and stamp cache_env so
+        // the re-open is a stamp-match cache hit (not a wipe).
+        {
+            let db = MemoryDB::new_with_shared_embedder(
+                dir.path(),
+                Arc::new(crate::events::NoopEmitter),
+                emb.clone(),
+            )
+            .await
+            .unwrap();
+            db.upsert_documents(vec![doc]).await.unwrap();
+            db.mark_all_memories_enriched_for_eval().await.unwrap();
+            assert_eq!(db.memory_count().await.unwrap(), 1);
+            assert_eq!(db.enriched_memory_count().await.unwrap(), 1);
+            // Importance is NULL -> classification is incomplete.
+            assert_eq!(
+                db.get_memories_needing_classification()
+                    .await
+                    .unwrap()
+                    .len(),
+                1
+            );
+            write_cache_env_stamp(&dir.path().join("cache_env.json"), &current_cache_env());
+        }
+
+        // Re-open via the cache path with an OnDevice mock (classify then extract).
+        let llm: Arc<dyn LlmProvider> = Arc::new(SequencedMockProvider::new(vec![
+            r#"{"memory_type":"decision","domain":"infra","quality":"high","importance":7,"tags":["db"]}"#,
+            r#"{"event_date":"2026-03-01","retrieval_cue":"db choice billing"}"#,
+        ]));
+        let mode = EnrichmentMode::OnDevice(llm);
+
+        // Empty seed closure: it's a cache hit, so no re-seed should occur.
+        let db = open_or_seed_scenario_db(dir.path(), emb.clone(), || vec![], &mode)
+            .await
+            .unwrap();
+
+        // The cache-hit path backfilled classification: no gap remains, and the
+        // refined type landed on the row.
+        assert!(
+            db.get_memories_needing_classification()
+                .await
+                .unwrap()
+                .is_empty(),
+            "cache-hit backfill should have classified the memory"
+        );
+        let (mt, _space) = db.get_memory_classification(source_id).await.unwrap();
+        assert_eq!(mt.as_deref(), Some("decision"));
     }
 }
