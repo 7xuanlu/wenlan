@@ -1274,6 +1274,80 @@ async fn seed_inject_event_dates() {
     }
 }
 
+/// STEP 7: on-device classify backfill on the pooled seed DBs (locomo_v1 + lme_v1).
+/// Populates importance/quality/structured_fields/memory_type/retrieval_cue for the
+/// ~8064 memories that are `importance IS NULL` (the seeds predate the Phase-1
+/// classification pass). ~4.3h on Metal at concurrency=8. Run AFTER
+/// `seed_inject_event_dates` — classify's `event_date` write is COALESCE, so an
+/// injected date survives (extract returns None for date-stripped text).
+///
+/// ```bash
+/// EVAL_ENRICHMENT_CONCURRENCY=8 ORIGIN_LLM_PARALLEL_SEQS=8 \
+///   cargo test -p origin-core --features eval-harness --test eval_harness \
+///   seed_backfill_classify -- --ignored --nocapture
+/// ```
+#[tokio::test]
+#[ignore]
+async fn seed_backfill_classify() {
+    use origin_core::eval::shared::run_classification_for_eval_concurrent;
+    use origin_core::llm_provider::OnDeviceProvider;
+    use std::sync::Arc;
+
+    let concurrency: usize = std::env::var("EVAL_ENRICHMENT_CONCURRENCY")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(8);
+    let root = resolve_scenario_db_root_from_harness();
+
+    let llm: Arc<dyn origin_core::llm_provider::LlmProvider> = match OnDeviceProvider::new() {
+        Ok(p) => Arc::new(p),
+        Err(e) => {
+            eprintln!("SKIP: on-device init failed: {e}");
+            return;
+        }
+    };
+
+    let overall = std::time::Instant::now();
+    for seed in ["locomo_v1", "lme_v1"] {
+        let dir = root.join(seed);
+        if !dir.join("origin_memory.db").exists() {
+            eprintln!("SKIP {seed}: no seed DB at {}", dir.display());
+            continue;
+        }
+        let db = origin_core::db::MemoryDB::new(&dir, Arc::new(origin_core::events::NoopEmitter))
+            .await
+            .expect("open pooled seed DB");
+        let before = db
+            .get_memories_needing_classification()
+            .await
+            .unwrap()
+            .len();
+        eprintln!(
+            "[backfill] {seed}: {before} memories need classification (concurrency={concurrency})"
+        );
+        let t0 = std::time::Instant::now();
+        let n = run_classification_for_eval_concurrent(&db, &llm, concurrency)
+            .await
+            .expect("classify backfill");
+        let elapsed = t0.elapsed().as_secs_f64();
+        let after = db
+            .get_memories_needing_classification()
+            .await
+            .unwrap()
+            .len();
+        eprintln!(
+            "[backfill] {seed}: classified {n} in {:.0}s ({:.2}s/mem); remaining unclassified={after}",
+            elapsed,
+            elapsed / (n.max(1) as f64)
+        );
+    }
+    eprintln!(
+        "[backfill] DONE both seeds in {:.0}s ({:.2}h)",
+        overall.elapsed().as_secs_f64(),
+        overall.elapsed().as_secs_f64() / 3600.0
+    );
+}
+
 /// T3 graph-gate A/B experiment on LongMemEval (retrieval-only, no GPU LLM).
 /// Dual-bench companion to `graph_gate_ab_locomo` so T3 is validated on BOTH
 /// metrics, not a partial view.
