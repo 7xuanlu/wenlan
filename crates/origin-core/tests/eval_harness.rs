@@ -1348,6 +1348,45 @@ async fn seed_backfill_classify() {
     );
 }
 
+/// STEP 7 (T2): backfill verbatim `source='episode'` rows into the cached seed
+/// DBs (locomo_v1 + lme_v1) so the episode channel (`ORIGIN_ENABLE_EPISODE_CHANNEL`)
+/// has data to measure. GPU-FREE — only FastEmbed (deterministic), no LLM. Derives
+/// each episode through the same `derive_episode` helper the write-path co-write
+/// uses (no skew). Byte-identical to a fresh flag-on ingest for single-chunk
+/// parents (all of locomo_v1); multi-chunk lme parents (~4.5%) capture the first
+/// chunk only (see `backfill_episodes` doc). Non-destructive + idempotent
+/// (deterministic ids + paired delete). The base channel excludes
+/// `source='episode'`, so existing baselines are unaffected until the read flag
+/// is turned on.
+///
+/// ```bash
+/// cargo test -p origin-core --features eval-harness --test eval_harness \
+///   seed_backfill_episodes -- --ignored --nocapture
+/// ```
+#[tokio::test]
+#[ignore]
+async fn seed_backfill_episodes() {
+    use std::sync::Arc;
+
+    let root = resolve_scenario_db_root_from_harness();
+    for seed in ["locomo_v1", "lme_v1"] {
+        let dir = root.join(seed);
+        if !dir.join("origin_memory.db").exists() {
+            eprintln!("SKIP {seed}: no seed DB at {}", dir.display());
+            continue;
+        }
+        let db = origin_core::db::MemoryDB::new(&dir, Arc::new(origin_core::events::NoopEmitter))
+            .await
+            .expect("open pooled seed DB");
+        let t0 = std::time::Instant::now();
+        let n = db.backfill_episodes().await.expect("backfill episodes");
+        eprintln!(
+            "[episodes] {seed}: wrote {n} episode rows in {:.1}s",
+            t0.elapsed().as_secs_f64()
+        );
+    }
+}
+
 /// T3 graph-gate A/B experiment on LongMemEval (retrieval-only, no GPU LLM).
 /// Dual-bench companion to `graph_gate_ab_locomo` so T3 is validated on BOTH
 /// metrics, not a partial view.
