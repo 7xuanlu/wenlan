@@ -63,6 +63,173 @@ pub struct EnrichmentOutcome {
     pub final_event_end: Option<i64>,
 }
 
+/// Phase 1 of the canonical enrichment, in isolation: LLM classify + extract +
+/// `apply_enrichment` + auto-create-space + tags. Returns the resolved
+/// classification (also written to the row via `apply_enrichment`).
+///
+/// This is the reusable unit. `run_canonical_enrichment` calls it as its Phase 1
+/// (when an LLM is present); the eval seed pipeline calls it directly to backfill
+/// importance/event_date/quality/structured_fields/retrieval_cue onto
+/// already-upserted memories WITHOUT re-running the bulk entity/title/page passes
+/// that the eval pipeline owns via its scale-optimized batched variants. Sharing
+/// this exact pass is what keeps the eval seed and production in lockstep (Google
+/// "Rules of ML", Rule #32) instead of the eval shortcut silently lacking the
+/// classify/extract signals.
+///
+/// `llm` is non-optional here by construction — Phase 1 only ran inside the
+/// `if let Some(llm)` guard in the original server task. Callers with no LLM skip
+/// this entirely. Log-and-degrade at every step; never propagates an error.
+pub async fn run_classification_enrichment(
+    db: &MemoryDB,
+    source_id: &str,
+    content: &str,
+    llm: &Arc<dyn LlmProvider>,
+    prompts: &PromptRegistry,
+    opts: &EnrichmentOpts,
+) -> EnrichmentOutcome {
+    let mut final_memory_type = opts.initial_memory_type.clone();
+    let mut final_domain = opts.initial_domain.clone();
+    let mut final_supersede_mode = opts.initial_supersede_mode.clone();
+    let mut final_quality: Option<String> = None;
+    let mut final_importance: Option<u8> = None;
+    let mut final_structured_fields: Option<String> = opts.initial_structured_fields.clone();
+    let mut final_retrieval_cue: Option<String> = None;
+    let mut final_event_date: Option<i64> = None;
+    let mut final_event_end: Option<i64> = None;
+    let mut classified_tags: Vec<String> = Vec::new();
+
+    // Classify. Agent-supplied memory_type stays authoritative unless they passed
+    // a profile alias (in which case we take the classifier's concrete subtype).
+    // Other fields — domain/quality/tags — come from classify regardless.
+    let truncated: String = content.chars().take(1000).collect();
+    // 30s matches `OnDeviceProvider::generate`'s own timeout. 5s was too
+    // aggressive under a burst: when 10 concurrent stores each fire classify +
+    // extract, the 10th call's turn at the single LLM worker lands at ~30s.
+    match tokio::time::timeout(
+        std::time::Duration::from_secs(30),
+        llm.generate(crate::llm_provider::LlmRequest {
+            system_prompt: Some(prompts.classify_memory_quality.clone()),
+            user_prompt: truncated,
+            max_tokens: 128,
+            temperature: 0.1,
+            label: None,
+            timeout_secs: None,
+        }),
+    )
+    .await
+    {
+        Ok(Ok(output)) => {
+            if let Some(c) = crate::llm_provider::parse_classify_response(&output) {
+                if !opts.agent_supplied_memory_type || opts.agent_supplied_profile_alias {
+                    final_memory_type = c.memory_type.clone();
+                    // Recompute supersede_mode for the refined type.
+                    final_supersede_mode = if final_memory_type == "decision" {
+                        "archive".to_string()
+                    } else {
+                        "hide".to_string()
+                    };
+                }
+                if final_domain.is_none() {
+                    final_domain = c.space;
+                }
+                final_quality = c.quality;
+                final_importance = c.importance;
+                classified_tags = c.tags;
+            }
+        }
+        Ok(Err(e)) => log::warn!("[ingest] classify failed: {e}"),
+        Err(_) => log::warn!("[ingest] classify timed out after 30s"),
+    }
+
+    // Extract structured fields — only if the agent didn't supply them.
+    if !opts.agent_supplied_structured_fields {
+        let prompt = crate::memory_schema::extraction_prompt_with_template(
+            &final_memory_type,
+            &prompts.extract_structured_fields,
+        );
+        let truncated: String = content.chars().take(1500).collect();
+        // Same reasoning as the classify timeout above — 30s is the provider's
+        // own cap; defense-in-depth so a stalled extract doesn't hang this task.
+        match tokio::time::timeout(
+            std::time::Duration::from_secs(30),
+            llm.generate(crate::llm_provider::LlmRequest {
+                system_prompt: Some(prompt),
+                user_prompt: truncated,
+                max_tokens: 256,
+                temperature: 0.1,
+                label: None,
+                timeout_secs: None,
+            }),
+        )
+        .await
+        {
+            Ok(Ok(output)) => {
+                let extracted = crate::llm_provider::parse_extraction_response(&output);
+                final_event_date = extracted.event_date;
+                final_event_end = extracted.event_end;
+                if let Some(f) = extracted.structured_fields {
+                    final_structured_fields = Some(f);
+                }
+                if let Some(c) = extracted.retrieval_cue {
+                    final_retrieval_cue = Some(c);
+                }
+            }
+            Ok(Err(e)) => log::warn!("[ingest] extract failed: {e}"),
+            Err(_) => log::warn!("[ingest] extract timed out after 30s"),
+        }
+    }
+
+    // Apply the refined classification to the stored memory.
+    if let Err(e) = db
+        .apply_enrichment(
+            source_id,
+            &final_memory_type,
+            final_domain.as_deref(),
+            final_quality.as_deref(),
+            &final_supersede_mode,
+            final_structured_fields.as_deref(),
+            final_retrieval_cue.as_deref(),
+            final_event_date,
+            final_event_end,
+            final_importance,
+        )
+        .await
+    {
+        log::warn!("[ingest] apply_enrichment failed: {e}");
+    }
+
+    // Auto-create a space for the classified domain if one came back from
+    // classify and the sync path didn't already see it.
+    if let Some(ref domain) = final_domain {
+        if opts.initial_domain.as_deref() != Some(domain.as_str()) {
+            if let Err(e) = db.auto_create_space_if_needed(domain).await {
+                log::warn!("[ingest] auto-create space failed: {e}");
+            }
+        }
+    }
+
+    // Write tags to MemoryDB.
+    if !classified_tags.is_empty() {
+        if let Err(e) = db
+            .set_document_tags("memory", source_id, classified_tags)
+            .await
+        {
+            log::warn!("[ingest] set_document_tags failed: {e}");
+        }
+    }
+
+    EnrichmentOutcome {
+        final_memory_type,
+        final_domain,
+        final_quality,
+        final_importance,
+        final_structured_fields,
+        final_retrieval_cue,
+        final_event_date,
+        final_event_end,
+    }
+}
+
 /// Run the canonical post-store enrichment for a single already-upserted memory.
 ///
 /// Behaviour is log-and-degrade at every step (an LLM/DB error warns and the
@@ -89,141 +256,27 @@ pub async fn run_canonical_enrichment(
     opts: &EnrichmentOpts,
     cancel: Option<&AtomicBool>,
 ) -> EnrichmentOutcome {
-    // Phase 1: deferred classify + extract + apply_enrichment + tags.
-    let mut final_memory_type = opts.initial_memory_type.clone();
-    let mut final_domain = opts.initial_domain.clone();
-    let mut final_supersede_mode = opts.initial_supersede_mode.clone();
-    let mut final_quality: Option<String> = None;
-    let mut final_importance: Option<u8> = None;
-    let mut final_structured_fields: Option<String> = opts.initial_structured_fields.clone();
-    let mut final_retrieval_cue: Option<String> = None;
-    let mut final_event_date: Option<i64> = None;
-    let mut final_event_end: Option<i64> = None;
-    let mut classified_tags: Vec<String> = Vec::new();
-
-    if let Some(llm) = llm {
-        // Classify. Agent-supplied memory_type stays authoritative unless they
-        // passed a profile alias (in which case we take the classifier's
-        // concrete subtype). Other fields — domain/quality/tags — come from
-        // classify regardless.
-        let truncated: String = content.chars().take(1000).collect();
-        // 30s matches `OnDeviceProvider::generate`'s own timeout. 5s was too
-        // aggressive under a burst: when 10 concurrent stores each fire classify
-        // + extract, the 10th call's turn at the single LLM worker lands at ~30s.
-        match tokio::time::timeout(
-            std::time::Duration::from_secs(30),
-            llm.generate(crate::llm_provider::LlmRequest {
-                system_prompt: Some(prompts.classify_memory_quality.clone()),
-                user_prompt: truncated,
-                max_tokens: 128,
-                temperature: 0.1,
-                label: None,
-                timeout_secs: None,
-            }),
-        )
-        .await
-        {
-            Ok(Ok(output)) => {
-                if let Some(c) = crate::llm_provider::parse_classify_response(&output) {
-                    if !opts.agent_supplied_memory_type || opts.agent_supplied_profile_alias {
-                        final_memory_type = c.memory_type.clone();
-                        // Recompute supersede_mode for the refined type.
-                        final_supersede_mode = if final_memory_type == "decision" {
-                            "archive".to_string()
-                        } else {
-                            "hide".to_string()
-                        };
-                    }
-                    if final_domain.is_none() {
-                        final_domain = c.space;
-                    }
-                    final_quality = c.quality;
-                    final_importance = c.importance;
-                    classified_tags = c.tags;
-                }
-            }
-            Ok(Err(e)) => log::warn!("[ingest] classify failed: {e}"),
-            Err(_) => log::warn!("[ingest] classify timed out after 30s"),
+    // Phase 1: classify + extract + apply_enrichment + tags. Runs only when an
+    // LLM is available; the no-LLM path leaves the classification at the sync
+    // placeholder (initial_*). Extracted into `run_classification_enrichment`
+    // so the eval seed can reuse exactly this pass — additively, over
+    // already-upserted rows — without re-running the bulk entity/title/page
+    // passes its scale-optimized pipeline already owns.
+    let outcome = match llm {
+        Some(llm) => {
+            run_classification_enrichment(db, source_id, content, llm, prompts, opts).await
         }
-
-        // Extract structured fields — only if the agent didn't supply them.
-        if !opts.agent_supplied_structured_fields {
-            let prompt = crate::memory_schema::extraction_prompt_with_template(
-                &final_memory_type,
-                &prompts.extract_structured_fields,
-            );
-            let truncated: String = content.chars().take(1500).collect();
-            // Same reasoning as the classify timeout above — 30s is the
-            // provider's own cap; defense-in-depth so a stalled extract doesn't
-            // hang this task.
-            match tokio::time::timeout(
-                std::time::Duration::from_secs(30),
-                llm.generate(crate::llm_provider::LlmRequest {
-                    system_prompt: Some(prompt),
-                    user_prompt: truncated,
-                    max_tokens: 256,
-                    temperature: 0.1,
-                    label: None,
-                    timeout_secs: None,
-                }),
-            )
-            .await
-            {
-                Ok(Ok(output)) => {
-                    let extracted = crate::llm_provider::parse_extraction_response(&output);
-                    final_event_date = extracted.event_date;
-                    final_event_end = extracted.event_end;
-                    if let Some(f) = extracted.structured_fields {
-                        final_structured_fields = Some(f);
-                    }
-                    if let Some(c) = extracted.retrieval_cue {
-                        final_retrieval_cue = Some(c);
-                    }
-                }
-                Ok(Err(e)) => log::warn!("[ingest] extract failed: {e}"),
-                Err(_) => log::warn!("[ingest] extract timed out after 30s"),
-            }
-        }
-
-        // Apply the refined classification to the stored memory.
-        if let Err(e) = db
-            .apply_enrichment(
-                source_id,
-                &final_memory_type,
-                final_domain.as_deref(),
-                final_quality.as_deref(),
-                &final_supersede_mode,
-                final_structured_fields.as_deref(),
-                final_retrieval_cue.as_deref(),
-                final_event_date,
-                final_event_end,
-                final_importance,
-            )
-            .await
-        {
-            log::warn!("[ingest] apply_enrichment failed: {e}");
-        }
-
-        // Auto-create a space for the classified domain if one came back from
-        // classify and the sync path didn't already see it.
-        if let Some(ref domain) = final_domain {
-            if opts.initial_domain.as_deref() != Some(domain.as_str()) {
-                if let Err(e) = db.auto_create_space_if_needed(domain).await {
-                    log::warn!("[ingest] auto-create space failed: {e}");
-                }
-            }
-        }
-
-        // Write tags to MemoryDB.
-        if !classified_tags.is_empty() {
-            if let Err(e) = db
-                .set_document_tags("memory", source_id, classified_tags)
-                .await
-            {
-                log::warn!("[ingest] set_document_tags failed: {e}");
-            }
-        }
-    }
+        None => EnrichmentOutcome {
+            final_memory_type: opts.initial_memory_type.clone(),
+            final_domain: opts.initial_domain.clone(),
+            final_quality: None,
+            final_importance: None,
+            final_structured_fields: opts.initial_structured_fields.clone(),
+            final_retrieval_cue: None,
+            final_event_date: None,
+            final_event_end: None,
+        },
+    };
 
     // Phase 2: existing post-ingest enrichment (entity linking, title
     // enrichment, page growth). Runs with the enriched fields Phase 1 produced.
@@ -232,9 +285,9 @@ pub async fn run_canonical_enrichment(
         source_id,
         content,
         entity_id,
-        Some(final_memory_type.as_str()),
-        final_domain.as_deref(),
-        final_structured_fields.as_deref(),
+        Some(outcome.final_memory_type.as_str()),
+        outcome.final_domain.as_deref(),
+        outcome.final_structured_fields.as_deref(),
         llm,
         prompts,
         refinery,
@@ -283,16 +336,7 @@ pub async fn run_canonical_enrichment(
         }
     }
 
-    EnrichmentOutcome {
-        final_memory_type,
-        final_domain,
-        final_quality,
-        final_importance,
-        final_structured_fields,
-        final_retrieval_cue,
-        final_event_date,
-        final_event_end,
-    }
+    outcome
 }
 
 #[cfg(test)]
