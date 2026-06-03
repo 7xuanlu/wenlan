@@ -742,238 +742,54 @@ pub async fn handle_store_memory(
         // completion exactly as before. When debounced reflection is enabled,
         // the debouncer passes `Some(flag)` and flips it on a newer same-agent
         // write so this body short-circuits at the next clean step boundary.
-        let run_reflection = move |cancel: Option<
-            std::sync::Arc<std::sync::atomic::AtomicBool>,
-        >| async move {
-            // Snapshot everything we need, then drop the guard.
-            let (db, llm, prompts, refinery, distillation, knowledge_path) = {
-                let s = state_clone.read().await;
-                let Some(db) = s.db.clone() else {
-                    return;
+        let run_reflection =
+            move |cancel: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>| async move {
+                // Snapshot everything we need, then drop the guard.
+                let (db, llm, prompts, refinery, distillation, knowledge_path) = {
+                    let s = state_clone.read().await;
+                    let Some(db) = s.db.clone() else {
+                        return;
+                    };
+                    (
+                        db,
+                        s.llm.clone(),
+                        s.prompts.clone(),
+                        s.tuning.refinery.clone(),
+                        s.tuning.distillation.clone(),
+                        Some(origin_core::config::load_config().knowledge_path_or_default()),
+                    )
+                }; // read guard dropped here — writers may proceed
+
+                // Canonical post-store enrichment (Phase 1 classify/extract/
+                // apply_enrichment/tags + Phase 2 post-ingest + Phase 3 dual-pool)
+                // now lives in `origin_core::ingest` so the daemon, the eval seed
+                // pipeline, and the importer all enrich through ONE path. The
+                // snapshot above dropped the read guard; everything below operates on
+                // the cloned Arcs, so no RwLock guard is held across `.await`.
+                let opts = origin_core::ingest::EnrichmentOpts {
+                    initial_memory_type: initial_memory_type.clone(),
+                    initial_domain: initial_domain.clone(),
+                    initial_supersede_mode: initial_supersede_mode.clone(),
+                    initial_structured_fields: initial_structured_fields.clone(),
+                    agent_supplied_memory_type,
+                    agent_supplied_profile_alias,
+                    agent_supplied_structured_fields,
                 };
-                (
-                    db,
-                    s.llm.clone(),
-                    s.prompts.clone(),
-                    s.tuning.refinery.clone(),
-                    s.tuning.distillation.clone(),
-                    Some(origin_core::config::load_config().knowledge_path_or_default()),
-                )
-            }; // read guard dropped here — writers may proceed
-
-            // Phase 1: deferred classify + extract + apply_enrichment + tags.
-            let mut final_memory_type = initial_memory_type.clone();
-            let mut final_domain = initial_domain.clone();
-            let mut final_supersede_mode = initial_supersede_mode.clone();
-            let mut final_quality: Option<String> = None;
-            let mut final_importance: Option<u8> = None;
-            let mut final_structured_fields: Option<String> = initial_structured_fields.clone();
-            let mut final_retrieval_cue: Option<String> = None;
-            let mut final_event_date: Option<i64> = None;
-            let mut final_event_end: Option<i64> = None;
-            let mut classified_tags_async: Vec<String> = Vec::new();
-
-            if let Some(ref llm) = llm {
-                // Classify. Agent-supplied memory_type stays authoritative
-                // unless they passed a profile alias (in which case we take
-                // the classifier's concrete subtype). Other fields —
-                // domain/quality/tags — come from classify regardless.
-                let truncated: String = content_clone.chars().take(1000).collect();
-                // 30s matches `OnDeviceProvider::generate`'s own timeout at
-                // llm_provider.rs:210. 5s was too aggressive under a burst:
-                // when 10 concurrent MCP `remember` calls each fire classify
-                // + extract, the 10th call's turn at the single LLM worker
-                // lands at ~30s — with a 5s limit, 8 of 10 memories stayed
-                // at placeholder "fact" forever. 30s lets the full burst
-                // clear; anything beyond that is a real LLM stall and
-                // reverts to the placeholder gracefully.
-                match tokio::time::timeout(
-                    std::time::Duration::from_secs(30),
-                    llm.generate(origin_core::llm_provider::LlmRequest {
-                        system_prompt: Some(prompts.classify_memory_quality.clone()),
-                        user_prompt: truncated,
-                        max_tokens: 128,
-                        temperature: 0.1,
-                        label: None,
-                        timeout_secs: None,
-                    }),
-                )
-                .await
-                {
-                    Ok(Ok(output)) => {
-                        if let Some(c) = origin_core::llm_provider::parse_classify_response(&output)
-                        {
-                            if !agent_supplied_memory_type || agent_supplied_profile_alias {
-                                final_memory_type = c.memory_type.clone();
-                                // Recompute supersede_mode for the refined type.
-                                final_supersede_mode = if final_memory_type == "decision" {
-                                    "archive".to_string()
-                                } else {
-                                    "hide".to_string()
-                                };
-                            }
-                            if final_domain.is_none() {
-                                final_domain = c.space;
-                            }
-                            final_quality = c.quality;
-                            final_importance = c.importance;
-                            classified_tags_async = c.tags;
-                        }
-                    }
-                    Ok(Err(e)) => tracing::warn!("[store_memory async] classify failed: {e}"),
-                    Err(_) => tracing::warn!("[store_memory async] classify timed out after 30s"),
-                }
-
-                // Extract structured fields — only if the agent didn't supply them.
-                if !agent_supplied_structured_fields {
-                    let prompt = origin_core::memory_schema::extraction_prompt_with_template(
-                        &final_memory_type,
-                        &prompts.extract_structured_fields,
-                    );
-                    let truncated: String = content_clone.chars().take(1500).collect();
-                    // Same reasoning as the classify timeout above — 30s
-                    // is the provider's own cap; this is defense-in-depth
-                    // so a stalled extract doesn't hang the post_ingest task.
-                    match tokio::time::timeout(
-                        std::time::Duration::from_secs(30),
-                        llm.generate(origin_core::llm_provider::LlmRequest {
-                            system_prompt: Some(prompt),
-                            user_prompt: truncated,
-                            max_tokens: 256,
-                            temperature: 0.1,
-                            label: None,
-                            timeout_secs: None,
-                        }),
-                    )
-                    .await
-                    {
-                        Ok(Ok(output)) => {
-                            let extracted =
-                                origin_core::llm_provider::parse_extraction_response(&output);
-                            final_event_date = extracted.event_date;
-                            final_event_end = extracted.event_end;
-                            if let Some(f) = extracted.structured_fields {
-                                final_structured_fields = Some(f);
-                            }
-                            if let Some(c) = extracted.retrieval_cue {
-                                final_retrieval_cue = Some(c);
-                            }
-                        }
-                        Ok(Err(e)) => {
-                            tracing::warn!("[store_memory async] extract failed: {e}")
-                        }
-                        Err(_) => {
-                            tracing::warn!("[store_memory async] extract timed out after 30s")
-                        }
-                    }
-                }
-
-                // Apply the refined classification to the stored memory.
-                if let Err(e) = db
-                    .apply_enrichment(
-                        &source_id_clone,
-                        &final_memory_type,
-                        final_domain.as_deref(),
-                        final_quality.as_deref(),
-                        &final_supersede_mode,
-                        final_structured_fields.as_deref(),
-                        final_retrieval_cue.as_deref(),
-                        final_event_date,
-                        final_event_end,
-                        final_importance,
-                    )
-                    .await
-                {
-                    tracing::warn!("[store_memory async] apply_enrichment failed: {e}");
-                }
-
-                // Auto-create a space for the classified domain if one came
-                // back from classify and the sync path didn't already see it.
-                if let Some(ref domain) = final_domain {
-                    if initial_domain.as_deref() != Some(domain.as_str()) {
-                        if let Err(e) = db.auto_create_space_if_needed(domain).await {
-                            tracing::warn!("[store_memory async] auto-create space failed: {e}");
-                        }
-                    }
-                }
-
-                // Write tags to MemoryDB.
-                if !classified_tags_async.is_empty() {
-                    if let Err(e) = db
-                        .set_document_tags("memory", &source_id_clone, classified_tags_async)
-                        .await
-                    {
-                        tracing::warn!("[store_memory async] set_document_tags failed: {e}");
-                    }
-                }
-            }
-
-            // Phase 2: existing post-ingest enrichment (entity linking,
-            // title enrichment, page growth).
-            if let Err(e) = origin_core::post_ingest::run_post_ingest_enrichment(
-                &db,
-                &source_id_clone,
-                &content_clone,
-                entity_id_clone.as_deref(),
-                Some(final_memory_type.as_str()),
-                final_domain.as_deref(),
-                final_structured_fields.as_deref(),
-                llm.as_ref(),
-                &prompts,
-                &refinery,
-                &distillation,
-                knowledge_path.as_deref(),
-                cancel.as_deref(),
-            )
-            .await
-            {
-                tracing::warn!("[store_memory] post-ingest enrichment failed: {e}");
-            }
-
-            // Phase 3 (T14): dual-pool dedup + contradiction resolution.
-            //
-            // Behind `ORIGIN_ENABLE_DUAL_POOL_RESOLVE` (default OFF -> this is a
-            // no-op and the write path is byte-identical). Runs LAST in this
-            // already-spawned task so the `event_date` Phase 1 wrote is visible
-            // for bidirectional temporal expiry. The `state_clone` read guard was
-            // dropped above (line ~755) before any `.await`; `db` + `llm` are the
-            // Arc clones snapshotted there, so no RwLock guard is held across the
-            // `.await` below. Best-effort: log-and-degrade, never blocks the
-            // store ACK (the HTTP 200 already returned before this task ran).
-            if origin_core::db::dual_pool_resolve_enabled() {
-                let resolve_emitter: std::sync::Arc<dyn origin_core::events::EventEmitter> =
-                    std::sync::Arc::new(origin_core::events::NoopEmitter);
-                match origin_core::synthesis::refinement_queue::resolve_dual_pool(
+                origin_core::ingest::run_canonical_enrichment(
                     &db,
                     &source_id_clone,
+                    &content_clone,
+                    entity_id_clone.as_deref(),
                     llm.as_ref(),
                     &prompts,
-                    &resolve_emitter,
+                    &refinery,
+                    &distillation,
+                    knowledge_path.as_deref(),
+                    &opts,
+                    cancel.as_deref(),
                 )
-                .await
-                {
-                    Ok(outcome) => {
-                        if !outcome.invalidated.is_empty()
-                            || outcome.expired_incoming
-                            || !outcome.flagged_for_review.is_empty()
-                            || !outcome.dedup_proposals.is_empty()
-                        {
-                            tracing::info!(
-                                "[store_memory] dual-pool resolve: invalidated={:?} \
-                                 expired_incoming={} flagged={:?} dedup_proposals={}",
-                                outcome.invalidated,
-                                outcome.expired_incoming,
-                                outcome.flagged_for_review,
-                                outcome.dedup_proposals.len(),
-                            );
-                        }
-                    }
-                    Err(e) => {
-                        tracing::warn!("[store_memory] dual-pool resolve failed: {e}");
-                    }
-                }
-            }
-        };
+                .await;
+            };
 
         // Dispatch: opt-in debounced reflection vs. verbatim detached spawn.
         //
