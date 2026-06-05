@@ -130,12 +130,12 @@ Origin runs across several layers. The split is driven by three questions: **(1)
 
 ### Why pre-push doesn't run coverage
 
-Earlier versions of `.githooks/pre-push` enforced a 90% `cargo llvm-cov` gate. That violated the principles above:
-- **Slow:** instrumented rebuild took 5-15min and overloaded memory.
-- **Not mirrored in CI:** the main `ci.yml` lane doesn't run coverage at all, so the gate added local friction without upstream protection.
-- **Percentage gates rot:** any new untestable surface drops the percentage and forces busywork.
+Tried 90% `cargo llvm-cov` gate in pre-push, removed because:
+- **Slow:** instrumented rebuild 5-15min, memory pressure.
+- **Not mirrored in CI:** `ci.yml` has no coverage gate, so local-only friction.
+- **Percentage gates rot:** new untestable surface forces busywork.
 
-The current pre-push runs only clippy + non-instrumented tests. Coverage is L5 (informational on PR) or L7 (manual command on laptop).
+Pre-push now runs clippy + non-instrumented tests only. Coverage = L5 (PR, informational) or L7 (manual).
 
 ### Eval baselines cache
 
@@ -298,67 +298,12 @@ All data flows through the daemon's HTTP API. The desktop app, CLI, and MCP clie
   - Profile & Agents: `/api/profile`, `/api/agents`, `/api/agents/{name}`
   - WebSocket: `/ws/updates`
 
-## Key Modules — origin-core (`crates/origin-core/src/`)
+## Key Modules
 
-All business logic lives here. No tauri, no axum. Framework-agnostic.
+Per-crate module tables live in subtree `AGENTS.md` files (loaded when an agent works under that crate, per the agents.md hierarchical-instruction convention):
 
-| Module | Purpose |
-|---|---|
-| `db.rs` | `MemoryDB` — libSQL storage, vectors, chunks, hybrid search, embeddings, knowledge graph, migrations. Three search methods: `search_memory` (embedding+FTS+RRF), `search_memory_reranked` (+ LLM reranking after), `search_memory_expanded` (+ LLM query expansion before). Uses `EventEmitter` trait for UI notifications (no tauri). |
-| `events.rs` | `EventEmitter` trait and `NoopEmitter` |
-| `engine.rs` | `LlmEngine` — llama-cpp-2 wrapper, model download, inference loop, format helpers |
-| `classify.rs` | Memory/profile classification via `LlmEngine` |
-| `extract.rs` | Knowledge-graph extraction (entities, relations) via `LlmEngine` |
-| `rerank.rs` | LLM reranker |
-| `merge.rs` | Memory merging, pattern extraction, contradiction detection |
-| `llm_provider.rs` | `LlmProvider` trait + `ApiProvider` (Anthropic API) + `OnDeviceProvider` shim |
-| `llm_classifier.rs` | Higher-level classification orchestration |
-| `refinery.rs` | Distill-cycle orchestration, dedup, auto-linking, consolidation |
-| `post_ingest.rs` | Post-ingest enrichment (dedup check, entity linking, title enrich, recap, page growth) |
-| `pages.rs` | Type definitions for the `Page` struct (synthesized wiki entries distilled from memory clusters). Actual clustering + distillation live in `db.rs` + `refinery.rs`. SQL tables are `pages`/`page_sources` (renamed from `concepts`/`concept_sources` in migration 46). |
-| `spaces.rs` | Spaces / tag store |
-| `narrative.rs` | Profile narrative assembly (editorial prose) |
-| `briefing.rs` | Daily briefing assembly |
-| `working_memory.rs` | Working memory builder |
-| `access_tracker.rs` | Memory access counts + time decay |
-| `contradiction.rs` | Contradiction detection |
-| `context_packager.rs` | Context bundle → prompt packaging |
-| `importer.rs` | File importer pipeline |
-| `quality_gate.rs` | Pre-store quality gate |
-| `tuning.rs` | Tuning config (distill cycles, distillation, weights) |
-| `schema.rs` | Memory schema definitions (formerly `memory_schema.rs`) |
-| `prompts/` | Prompt registry (defaults + override dir loader) |
-| `chunker/` | Code-aware, Markdown-aware, fixed-size chunking |
-| `sources/` | `RawDocument`, file watchers, Obsidian importer. `RawDocument` and related types re-exported from `origin-types`. |
-| `privacy.rs` | PII redaction |
-| `router/classify.rs`, `content_score.rs` | Smart router scoring helpers (non-tauri parts) |
-| `config.rs` | Persistent config at `dirs::data_local_dir()/origin/config.json` (on macOS, `~/Library/Application Support/origin/config.json`) |
-| `export/` | Markdown/JSON/zip/PDF exporters |
-| `eval/` | Benchmark harness: LoCoMo, LongMemEval. Each benchmark has base (embedding-only), reranked (LLM rescores after search), and expanded (LLM query expansion before search) variants. Baselines under `EVAL_BASELINES_DIR` (gitignored). |
-| `state.rs` | `CoreState` — shared state struct used by origin-server |
-
-## Key Modules — origin-server (`crates/origin-server/src/`)
-
-HTTP daemon — owns the Axum router + all routes. All handlers operate on `Arc<RwLock<ServerState>>` where `ServerState.db: Option<Arc<MemoryDB>>`.
-
-| Module | Purpose |
-|---|---|
-| `main.rs` | Binary entry — daemon startup plus internal maintenance commands, tracing init, port binding with existing-daemon fallback, `MemoryDB::new`, LLM provider init, background tasks, `axum::serve` |
-| `state.rs` | `ServerState` struct with `db: Option<Arc<MemoryDB>>`, `llm`, `prompts`, `tuning`, `quality_gate`, `space_store`, `access_tracker`, `llm_processing_ids`, `watch_paths`. `SharedState = Arc<RwLock<ServerState>>` |
-| `router.rs` | `build_router(state) -> axum::Router` — all route registrations |
-| `routes.rs` | General endpoints: health, search, context, chat-context, status, profile/agents |
-| `memory_routes.rs` | Memory CRUD, knowledge graph, classification, entities, pages |
-| `ingest_routes.rs` | `/api/ingest/*` — text, webpage, memory |
-| `ingest_batcher.rs` | Request-level coalescer for concurrent `/api/memory/store` — folds QualityGate in-line; async classify/extract; passes enrichment + hint through in the response |
-| `knowledge_routes.rs` | Entity/relation/observation read paths + knowledge-graph queries |
-| `source_routes.rs` | Source registry endpoints |
-| `import_routes.rs` | Bulk import endpoints |
-| `config_routes.rs` | Config read/write endpoints |
-| `onboarding_routes.rs` | First-run wizard / milestone state |
-| `scheduler.rs` | Background periodic tasks (distill cycles, distillation, etc.) |
-| `websocket.rs` | `/ws/updates` |
-| `error.rs` | `ServerError` + axum `IntoResponse` impl |
-| `resources/com.origin.server.plist` | launchd plist template (embedded via `include_str!`) |
+- `crates/origin-core/AGENTS.md` — all business logic (db, engine, classify, extract, rerank, refinery, pages, eval, ...).
+- `crates/origin-server/AGENTS.md` — HTTP daemon (router, routes, state, ingest_batcher, scheduler, ...).
 
 ## Key Modules — origin (CLI, `crates/origin-cli/src/`)
 
@@ -368,14 +313,7 @@ The `origin` binary — a thin reqwest-based CLI for the daemon's HTTP API. Subc
 
 ### Eval Citation Discipline
 
-Numbers from `~/.cache/origin-eval/baselines/` carry guardrails that MUST be honored when citing them externally (Reddit, HN, Karpathy gist, vendor decks, README, blog).
-
-- **Single-run rule.** Any baseline with `env.is_single_run = true` MUST NOT be cited externally. Internal team references are fine but must be flagged "single-run, treat as scaffold." Full citation requires the P1.5 multi-run protocol (mean ± stddev over ≥3 runs, ideally 10).
-- **Schema-version rule.** Cross-`env.schema_version` comparisons are refused by `compare-baselines` (exit code 2). Public claims that compare numbers across schema versions MUST regenerate both sides via current `save_*_baseline` tests.
-- **Receipt-only rule (extends cost-receipt).** Regression thresholds, latency claims, accuracy improvements must have a measured-stddev or N≥3-run backing. No "improved X%" or "regressed Y%" without `compare-baselines` output AND multi-run inputs.
-- **Per-case visibility.** Aggregate accuracy claims must include per-case breakdown when available. Headline-only numbers hide regressions (LoCoMo adversarial-cat-5 contamination is the canonical trap; see `feature/eval-semantic-gaps` discussion).
-- **Layer attribution.** Public numbers must specify L1 / L2 / L3 / L4. No cross-layer averages without explicit weighting.
-- **Commit policy — snapshot, not history.** Metric *values* MAY be committed to git as a **curated, env-stamped snapshot** (the current headline numbers) in a results doc or README section, overwritten per release. Each committed value carries its methodology inline (model, dataset, run count, repro command); single-run results are tagged "scaffold" and headline/external claims still require the Single-run + Receipt-only gates above (N≥3 + stddev). Do **not** commit a per-run *history series* — that is what the gitignored `append_history` file is for. Raw per-run baseline JSONs under `~/.cache/origin-eval/baselines/` stay **gitignored** (artifacts, reproduced by re-running, not source). The repo is Apache-2.0; the older blanket "never commit numbers to git" rule is retired in favor of this snapshot policy.
+See `app/eval/AGENTS.md` "eval citation discipline" section for the full rules (single-run, schema-version, receipt-only, per-case visibility, layer attribution, commit policy). External-facing numbers MUST satisfy those rules.
 
 ### Crate boundaries
 - **origin-core must have NO tauri or axum dependencies.** Verify with `grep -rn "use tauri\|use axum" crates/origin-core/src/` — expect zero hits. Any event emission goes through the `EventEmitter` trait.
