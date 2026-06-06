@@ -2516,6 +2516,94 @@ async fn paired_run_cached_feature_cross_rerank(
     }
 }
 
+/// Like `paired_run_cached_feature_cross_rerank`, but the two arms set the SAME
+/// flag to DIFFERENT values (`off_val` then `on_val`) rather than unset-vs-"1".
+///
+/// Needed for `RERANK_POOL_FLOOR` (the rerank window): the A/B is 10 vs 50, not
+/// off vs on. Passing an explicit `off_val` (e.g. `Some("10")`) is deliberate —
+/// the LoCoMo/LME cross_rerank collectors default `RERANK_POOL_FLOOR` to "10"
+/// via an unscoped `set_var` when it is unset (longmemeval.rs:1536), which would
+/// otherwise LEAK past a `None` arm and silently pin the next bench to 10. With
+/// both arms passing a concrete value through `temp_env`, the var is always
+/// present, that internal default never fires, and each scope restores cleanly.
+async fn paired_run_cached_feature_cross_rerank_vals(
+    feature: &str,
+    flag: &str,
+    off_val: Option<&str>,
+    on_val: Option<&str>,
+    reranker: std::sync::Arc<dyn origin_core::reranker::Reranker>,
+) {
+    use origin_core::eval::locomo::run_locomo_eval_cross_rerank_from_db_collect;
+    use origin_core::eval::longmemeval::run_longmemeval_eval_cross_rerank_from_db_collect;
+    let root = resolve_scenario_db_root_from_harness();
+
+    // -- LoCoMo --
+    let lo_dir = root.join("locomo_v1");
+    let lo_fx = eval_root().join("data/locomo10.json");
+    if lo_dir.join("origin_memory.db").exists() && lo_fx.exists() {
+        let db = origin_core::db::MemoryDB::new(
+            &lo_dir,
+            std::sync::Arc::new(origin_core::events::NoopEmitter),
+        )
+        .await
+        .expect("open locomo_v1 snapshot DB");
+        for (state, val) in [("off", off_val), ("on", on_val)] {
+            let rows = temp_env::async_with_vars(
+                [(flag, val)],
+                run_locomo_eval_cross_rerank_from_db_collect(
+                    &db,
+                    &lo_fx,
+                    reranker.clone(),
+                    feature,
+                    state,
+                ),
+            )
+            .await
+            .expect("locomo CE collect");
+            write_paired_rows(feature, "locomo", &rows);
+        }
+    } else {
+        println!(
+            "[paired:{feature}] SKIP LoCoMo (db {} fixture {})",
+            lo_dir.join("origin_memory.db").exists(),
+            lo_fx.exists()
+        );
+    }
+
+    // -- LME --
+    let lme_dir = root.join("lme_v1");
+    let lme_fx = eval_root().join("data/longmemeval_oracle.json");
+    if lme_dir.join("origin_memory.db").exists() && lme_fx.exists() {
+        let db = origin_core::db::MemoryDB::new(
+            &lme_dir,
+            std::sync::Arc::new(origin_core::events::NoopEmitter),
+        )
+        .await
+        .expect("open lme_v1 snapshot DB");
+        for (state, val) in [("off", off_val), ("on", on_val)] {
+            let rows = temp_env::async_with_vars(
+                [(flag, val)],
+                run_longmemeval_eval_cross_rerank_from_db_collect(
+                    &db,
+                    &lme_fx,
+                    reranker.clone(),
+                    feature,
+                    state,
+                ),
+            )
+            .await
+            .expect("lme CE collect");
+            write_paired_rows(feature, "lme", &rows);
+        }
+    } else {
+        println!(
+            "[paired:{feature}] SKIP LME (db {} fixture {})",
+            lme_dir.join("origin_memory.db").exists(),
+            lme_fx.exists()
+        );
+    }
+}
+
 /// Umbrella test: emit per-query paired JSONL for the Track-A features.
 ///
 /// Base `search_memory`-path features: T3 graph-gate, T9 graph-seed, T12
@@ -2843,6 +2931,77 @@ async fn rerank_blend_paired_ab() {
         "rerank_blend_aa",
         "ORIGIN_ENABLE_RERANK_BLEND",
         None,
+        reranker.clone(),
+    )
+    .await;
+
+    println!(
+        "=== done -> python3 analyze_paired.py --dir {} ===",
+        paired_out_dir().display()
+    );
+}
+
+/// Paired A/B emitter for `RERANK_POOL_FLOOR` (rerank window: 10 vs 50).
+///
+/// The fetch-pool floor controls how many candidates the cross-encoder rescores
+/// before truncation to `limit` (`compute_rerank_fetch_pool`, db.rs:~397). EXP3
+/// (n=50/cat scaffold) showed widening 10→50 lifts recall@5 ~+10-12pp on LME and
+/// ~+2pp on LoCoMo — but n=50 hit only 2-3 of 10 conversations, so the magnitude
+/// is unreliable. This re-runs the A/B over the FULL fixture through the trusted
+/// paired apparatus (v2) for a citable, per-category, A/A-controlled answer.
+///
+/// Determinism note: retrieval recall@5 / ndcg@10 at a fixed window are
+/// DETERMINISTIC (CE forward pass + RRF + cached embeddings — no sampling), so a
+/// single full-fixture run is sufficient for the recall verdict; the A/A control
+/// (window 10 vs 10) proves it by reading ~zero delta. The N≥3 mean±stddev gate
+/// from task #9 applies to STOCHASTIC LLM-judge answer accuracy, not this
+/// deterministic retrieval metric. Latency (gate (a), default-on viability) is
+/// measured separately and gates only the Phase-2 routing flip, not the window.
+///
+/// Emits per-query JSONL for both benches:
+///   - `rerank_window_locomo.jsonl` / `rerank_window_lme.jsonl` — A/B:
+///     OFF arm = pool floor 10 (current default), ON arm = pool floor 50.
+///   - `rerank_window_aa_locomo.jsonl` / `rerank_window_aa_lme.jsonl` — A/A
+///     no-op control: pool floor 10 on BOTH arms. Analyzer must read ~zero delta.
+///
+/// First run downloads the BGE-reranker-v2-m3 weights (~600MB) and runs on CPU.
+///
+/// Run (unsandboxed, against the SNAPSHOT DBs so the seeds stay pristine):
+///   ORIGIN_EVAL_ROOT=/Users/lucian/Repos/origin/app/eval \
+///   SCENARIO_DB_ROOT=~/.cache/origin-eval/scenario_snapshot \
+///   EVAL_OUT=~/.cache/origin-eval/rerank_window_out \
+///     cargo test -p origin-core --features eval-harness --test eval_harness \
+///     rerank_window_paired_ab -- --ignored --nocapture --test-threads=1
+#[tokio::test]
+#[ignore = "downloads ~600MB CE model (CPU); needs cached scenario SNAPSHOT DB. Set ORIGIN_EVAL_ROOT + SCENARIO_DB_ROOT + EVAL_OUT"]
+async fn rerank_window_paired_ab() {
+    println!("=== RERANK-WINDOW PAIRED A/B (pool floor 10 vs 50) ===");
+    println!("EVAL_OUT = {}", paired_out_dir().display());
+
+    // Build the CE reranker ONCE (shared across the A/B and A/A arms). First
+    // construction downloads ~600MB BGE-reranker-v2-m3 from HuggingFace + runs
+    // on CPU (fastembed ONNX).
+    let reranker = origin_core::reranker::init_cross_encoder_reranker(None)
+        .expect("init_cross_encoder_reranker failed (downloads ~600MB on first run)");
+    println!("CE model = {} (CPU)", reranker.model_id());
+
+    // A/B arm: pool floor 10 (current default) vs 50 (widened, peer norm).
+    println!("--- feature rerank_window (flag RERANK_POOL_FLOOR) [A/B 10 vs 50] ---");
+    paired_run_cached_feature_cross_rerank_vals(
+        "rerank_window",
+        "RERANK_POOL_FLOOR",
+        Some("10"),
+        Some("50"),
+        reranker.clone(),
+    )
+    .await;
+
+    // A/A control: pool floor 10 on BOTH arms. Must read ~zero delta.
+    println!("--- feature rerank_window_aa (A/A no-op control: 10 vs 10) ---");
+    paired_run_cached_feature_cross_rerank_control(
+        "rerank_window_aa",
+        "RERANK_POOL_FLOOR",
+        Some("10"),
         reranker.clone(),
     )
     .await;
