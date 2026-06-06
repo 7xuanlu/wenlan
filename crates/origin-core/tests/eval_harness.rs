@@ -2702,6 +2702,157 @@ async fn paired_cross_rerank_emit() {
     );
 }
 
+/// Run both benches through the CROSS-RERANK read path with BOTH flag arms
+/// pinned to the SAME value (`flag_val`), but tagged as the `off` then `on`
+/// arms. Used for the A/A no-op control: OFF-vs-OFF must read ~zero per-query
+/// delta through `analyze_paired.py`, proving the apparatus does not fabricate
+/// signal. `feature` should differ from the real A/B feature so the JSONL
+/// files don't collide (e.g. `rerank_blend_aa`).
+async fn paired_run_cached_feature_cross_rerank_control(
+    feature: &str,
+    flag: &str,
+    flag_val: Option<&str>,
+    reranker: std::sync::Arc<dyn origin_core::reranker::Reranker>,
+) {
+    use origin_core::eval::locomo::run_locomo_eval_cross_rerank_from_db_collect;
+    use origin_core::eval::longmemeval::run_longmemeval_eval_cross_rerank_from_db_collect;
+    let root = resolve_scenario_db_root_from_harness();
+
+    // -- LoCoMo --
+    let lo_dir = root.join("locomo_v1");
+    let lo_fx = eval_root().join("data/locomo10.json");
+    if lo_dir.join("origin_memory.db").exists() && lo_fx.exists() {
+        let db = origin_core::db::MemoryDB::new(
+            &lo_dir,
+            std::sync::Arc::new(origin_core::events::NoopEmitter),
+        )
+        .await
+        .expect("open locomo_v1 snapshot DB");
+        for state in ["off", "on"] {
+            let rows = temp_env::async_with_vars(
+                [(flag, flag_val)],
+                run_locomo_eval_cross_rerank_from_db_collect(
+                    &db,
+                    &lo_fx,
+                    reranker.clone(),
+                    feature,
+                    state,
+                ),
+            )
+            .await
+            .expect("locomo CE collect (control)");
+            write_paired_rows(feature, "locomo", &rows);
+        }
+    } else {
+        println!(
+            "[paired:{feature}] SKIP LoCoMo (db {} fixture {})",
+            lo_dir.join("origin_memory.db").exists(),
+            lo_fx.exists()
+        );
+    }
+
+    // -- LME --
+    let lme_dir = root.join("lme_v1");
+    let lme_fx = eval_root().join("data/longmemeval_oracle.json");
+    if lme_dir.join("origin_memory.db").exists() && lme_fx.exists() {
+        let db = origin_core::db::MemoryDB::new(
+            &lme_dir,
+            std::sync::Arc::new(origin_core::events::NoopEmitter),
+        )
+        .await
+        .expect("open lme_v1 snapshot DB");
+        for state in ["off", "on"] {
+            let rows = temp_env::async_with_vars(
+                [(flag, flag_val)],
+                run_longmemeval_eval_cross_rerank_from_db_collect(
+                    &db,
+                    &lme_fx,
+                    reranker.clone(),
+                    feature,
+                    state,
+                ),
+            )
+            .await
+            .expect("lme CE collect (control)");
+            write_paired_rows(feature, "lme", &rows);
+        }
+    } else {
+        println!(
+            "[paired:{feature}] SKIP LME (db {} fixture {})",
+            lme_dir.join("origin_memory.db").exists(),
+            lme_fx.exists()
+        );
+    }
+}
+
+/// Paired A/B emitter for `ORIGIN_ENABLE_RERANK_BLEND` (blend vs replace).
+///
+/// The flag ONLY affects the cross_rerank path: when ON, the CE logit is
+/// BLENDED with the boosted-RRF score (`α·σ(CE)+(1−α)·norm(WRRF)`) instead of
+/// REPLACING it. The blend helpers live in
+/// `crates/origin-core/src/retrieval/blend.rs`; the wiring is in
+/// `search_memory_cross_rerank` (`crates/origin-core/src/db.rs:~9329`). A flag
+/// flipped on the base `search_memory` collector reads a zero delta because
+/// that read never reaches the CE rescoring, so this routes BOTH benches
+/// through `run_*_eval_cross_rerank_from_db_collect` where the blend lives.
+///
+/// Emits per-query JSONL for both benches (LoCoMo + LME):
+///   - `rerank_blend_locomo.jsonl` / `rerank_blend_lme.jsonl` — A/B:
+///     OFF arm = replace (flag unset), ON arm = blend (flag=1).
+///   - `rerank_blend_aa_locomo.jsonl` / `rerank_blend_aa_lme.jsonl` — A/A
+///     no-op control: SAME arm twice (OFF/OFF, flag unset both times). The
+///     analyzer must read ~zero delta here, proving the harness isn't
+///     fabricating signal from re-running a deterministic collector.
+///
+/// First run downloads the BGE-reranker-v2-m3 weights (~600MB) and runs on CPU
+/// (fastembed ONNX). Honor `EVAL_LOCOMO_LIMIT` / `EVAL_LME_LIMIT` for subset
+/// smoke runs.
+///
+/// Run (unsandboxed, against the SNAPSHOT DBs so the seeds stay pristine):
+///   EVAL_LOCOMO_LIMIT=20 EVAL_LME_LIMIT=20 \
+///   ORIGIN_EVAL_ROOT=/Users/lucian/Repos/origin/app/eval \
+///   SCENARIO_DB_ROOT=~/.cache/origin-eval/scenario_snapshot \
+///   EVAL_OUT=~/.cache/origin-eval/rerank_blend_out \
+///     cargo test -p origin-core --test eval_harness rerank_blend_paired_ab -- \
+///     --ignored --nocapture --test-threads=1
+#[tokio::test]
+#[ignore = "downloads ~600MB CE model (CPU); needs cached scenario SNAPSHOT DB. Set ORIGIN_EVAL_ROOT + SCENARIO_DB_ROOT + EVAL_OUT"]
+async fn rerank_blend_paired_ab() {
+    println!("=== RERANK-BLEND PAIRED A/B (blend vs replace) ===");
+    println!("EVAL_OUT = {}", paired_out_dir().display());
+
+    // Build the CE reranker ONCE (shared across the A/B and A/A arms). First
+    // construction downloads ~600MB BGE-reranker-v2-m3 from HuggingFace + runs
+    // on CPU (fastembed ONNX).
+    let reranker = origin_core::reranker::init_cross_encoder_reranker(None)
+        .expect("init_cross_encoder_reranker failed (downloads ~600MB on first run)");
+    println!("CE model = {} (CPU)", reranker.model_id());
+
+    // A/B arm: OFF (replace, flag unset) vs ON (blend, flag=1).
+    println!("--- feature rerank_blend (flag ORIGIN_ENABLE_RERANK_BLEND) [A/B] ---");
+    paired_run_cached_feature_cross_rerank(
+        "rerank_blend",
+        "ORIGIN_ENABLE_RERANK_BLEND",
+        reranker.clone(),
+    )
+    .await;
+
+    // A/A control: OFF vs OFF (flag unset on BOTH arms). Must read ~zero delta.
+    println!("--- feature rerank_blend_aa (A/A no-op control: OFF vs OFF) ---");
+    paired_run_cached_feature_cross_rerank_control(
+        "rerank_blend_aa",
+        "ORIGIN_ENABLE_RERANK_BLEND",
+        None,
+        reranker.clone(),
+    )
+    .await;
+
+    println!(
+        "=== done -> python3 analyze_paired.py --dir {} ===",
+        paired_out_dir().display()
+    );
+}
+
 /// PR-B page-channel ON baseline (LoCoMo).
 ///
 /// Uses the pre-seeded consolidated scenario DB at
