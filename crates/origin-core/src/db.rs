@@ -9325,10 +9325,25 @@ impl MemoryDB {
                 };
 
                 if !scored.is_empty() {
-                    let score_map: HashMap<String, f32> = scored.into_iter().collect();
-                    for r in &mut results {
-                        if let Some(&s) = score_map.get(&r.id) {
-                            r.score = s;
+                    let ce_map: HashMap<String, f32> = scored.into_iter().collect();
+                    if crate::retrieval::blend::rerank_blend_enabled() {
+                        let alpha = crate::retrieval::blend::alpha_for_query(query);
+                        // priors = boosted-RRF scores currently on results (set ~db.rs:9287)
+                        let priors: Vec<f32> = results.iter().map(|r| r.score).collect();
+                        let norm = crate::retrieval::blend::minmax_normalize(&priors);
+                        for (i, r) in results.iter_mut().enumerate() {
+                            r.score = match ce_map.get(&r.id) {
+                                Some(&ce) => {
+                                    crate::retrieval::blend::blend_score(ce, norm[i], alpha)
+                                }
+                                None => (1.0 - alpha) * norm[i],
+                            };
+                        }
+                    } else {
+                        for r in &mut results {
+                            if let Some(&s) = ce_map.get(&r.id) {
+                                r.score = s;
+                            }
                         }
                     }
                     results.sort_by(|a, b| {
@@ -28096,8 +28111,17 @@ pub(crate) mod tests {
         );
     }
 
+    // Tests that read `rerank_blend_enabled()` (via `search_memory_cross_rerank` /
+    // `search_memory_iterative`) share the process-global `ORIGIN_ENABLE_RERANK_BLEND`
+    // env. `temp_env::async_with_vars` mutates that global, so the blend writer below
+    // can flip a concurrent REPLACE-asserting test onto the blend path mid-`.await`.
+    // Serialize every such test on this process-local async lock (mirrors
+    // `PRF_ENV_LOCK` at db.rs:23826) so the flag is stable across each test's awaits.
+    static RERANK_BLEND_ENV_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
     #[tokio::test]
     async fn test_search_memory_cross_rerank_noop_passthrough() {
+        let _serial = RERANK_BLEND_ENV_LOCK.lock().await;
         let (db, _dir) = test_db().await;
         db.upsert_documents(vec![
             make_memory_doc(
@@ -28138,6 +28162,79 @@ pub(crate) mod tests {
         assert_eq!(
             results[0].score, 0.0,
             "NoopReranker should rewrite all scores to 0.0"
+        );
+    }
+
+    /// When ORIGIN_ENABLE_RERANK_BLEND=1, the blend retains the (1-α)·normalized-RRF
+    /// term from the boosted-RRF priors. Because the priors differ across candidates
+    /// (different embedding similarities), not all blend scores collapse to equal values
+    /// the way the legacy REPLACE path does (which writes CE logit 0.0 for all via
+    /// NoopReranker). At least one adjacent pair must differ by > 1e-4.
+    #[tokio::test]
+    async fn test_search_memory_cross_rerank_blend_preserves_rrf_ordering() {
+        let _serial = RERANK_BLEND_ENV_LOCK.lock().await;
+        let (db, _dir) = test_db().await;
+        // Store 3 memories with different semantic distances from the query
+        // "Rust programming language features" so their RRF scores differ.
+        db.upsert_documents(vec![
+            make_memory_doc(
+                "b1",
+                "Rust programming language features include ownership and borrowing for memory safety",
+                "fact",
+                "software",
+                "claude",
+            ),
+            make_memory_doc(
+                "b2",
+                "Cargo is the Rust package manager and build system",
+                "fact",
+                "software",
+                "claude",
+            ),
+            make_memory_doc(
+                "b3",
+                "I enjoy cooking pasta and making Italian food at home on weekends",
+                "preference",
+                "personal",
+                "claude",
+            ),
+        ])
+        .await
+        .unwrap();
+
+        let reranker: Arc<dyn crate::reranker::Reranker> = Arc::new(crate::reranker::NoopReranker);
+        // With blend ON: blend_score = alpha * sigmoid(0.0) + (1-alpha) * norm_rrf[i]
+        //   = alpha * 0.5 + (1-alpha) * norm_rrf[i]
+        // Because norm_rrf values differ (Rust docs rank higher vs cooking), scores differ.
+        // With legacy REPLACE: all scores = 0.0, all equal.
+        let results =
+            temp_env::async_with_vars([("ORIGIN_ENABLE_RERANK_BLEND", Some("1"))], async {
+                db.search_memory_cross_rerank(
+                    "Rust programming language features",
+                    10,
+                    None,
+                    None,
+                    None,
+                    Some(reranker),
+                )
+                .await
+                .unwrap()
+            })
+            .await;
+
+        assert!(
+            results.len() >= 2,
+            "need at least 2 results to check ordering diversity; got {}",
+            results.len()
+        );
+        // At least one adjacent pair must differ — blend must NOT collapse all scores.
+        let any_differ = results
+            .windows(2)
+            .any(|w| (w[0].score - w[1].score).abs() > 1e-4);
+        assert!(
+            any_differ,
+            "blend mode collapsed all scores to equal — RRF prior not retained. scores: {:?}",
+            results.iter().map(|r| r.score).collect::<Vec<_>>()
         );
     }
 
@@ -40793,6 +40890,7 @@ pub(crate) mod tests {
     /// Test 11: max_iter=0 is byte-identical (ids + order) to cross-rerank.
     #[tokio::test]
     async fn iterative_max_iter_zero_equals_cross_rerank() {
+        let _serial = RERANK_BLEND_ENV_LOCK.lock().await;
         let (db, _dir) = cot_seed_db().await;
         let reranker: Arc<dyn crate::reranker::Reranker> = Arc::new(crate::reranker::NoopReranker);
 
@@ -40835,6 +40933,7 @@ pub(crate) mod tests {
     /// Test 12: flag OFF + max_iter=3 behaves as round-0 only (no LLM consulted).
     #[tokio::test]
     async fn iterative_flag_off_is_noop() {
+        let _serial = RERANK_BLEND_ENV_LOCK.lock().await;
         let (db, _dir) = cot_seed_db().await;
         let reranker: Arc<dyn crate::reranker::Reranker> = Arc::new(crate::reranker::NoopReranker);
         // An always-followup LLM that, if ever consulted, would change the pool.
@@ -40883,6 +40982,7 @@ pub(crate) mod tests {
     /// runs, then stops; the result is a superset of round-0 ids.
     #[tokio::test]
     async fn iterative_complete_first_round_stops() {
+        let _serial = RERANK_BLEND_ENV_LOCK.lock().await;
         let (db, _dir) = cot_seed_db().await;
         let reranker: Arc<dyn crate::reranker::Reranker> = Arc::new(crate::reranker::NoopReranker);
         // Round 1: draft, then validate -> followup. Round 2: draft, then complete.
@@ -40945,6 +41045,7 @@ pub(crate) mod tests {
     /// Test 14: llm=None + flag ON + max_iter=3 -> plain round-0 pool, no panic.
     #[tokio::test]
     async fn iterative_llm_none_falls_back() {
+        let _serial = RERANK_BLEND_ENV_LOCK.lock().await;
         let (db, _dir) = cot_seed_db().await;
         let reranker: Arc<dyn crate::reranker::Reranker> = Arc::new(crate::reranker::NoopReranker);
 
@@ -40987,6 +41088,7 @@ pub(crate) mod tests {
     /// in the final pool but be absent from the max_iter=0 baseline (core proof).
     #[tokio::test]
     async fn iterative_followup_merges_new_evidence() {
+        let _serial = RERANK_BLEND_ENV_LOCK.lock().await;
         let (db, _dir) = test_db().await;
         // Round-0 query "primary topic" matches m_primary strongly; the bridge
         // fact m_bridge only matches the distinct followup phrasing.
@@ -41068,6 +41170,7 @@ pub(crate) mod tests {
     /// round = 2 LLM calls (draft + validate), so call_count == 2 * max_iter.
     #[tokio::test]
     async fn iterative_respects_max_iter_cap() {
+        let _serial = RERANK_BLEND_ENV_LOCK.lock().await;
         let (db, _dir) = cot_seed_db().await;
         let reranker: Arc<dyn crate::reranker::Reranker> = Arc::new(crate::reranker::NoopReranker);
         // Always returns: draft, then followup. Once exhausted, repeats the last
@@ -41109,6 +41212,7 @@ pub(crate) mod tests {
     /// test stays fast (no 10s real wait).
     #[tokio::test]
     async fn iterative_timeout_degrades() {
+        let _serial = RERANK_BLEND_ENV_LOCK.lock().await;
         let (db, _dir) = cot_seed_db().await;
         let reranker: Arc<dyn crate::reranker::Reranker> = Arc::new(crate::reranker::NoopReranker);
         let llm: Arc<dyn crate::llm_provider::LlmProvider> =
