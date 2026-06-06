@@ -163,7 +163,14 @@ cargo test -p origin-core --test cached_scenario_db_check -- --ignored --nocaptu
 
 ## eval citation discipline
 
-For the full citation rules (single-run rule, schema-version rule, receipt-only rule, per-case visibility, layer attribution), see the **"### Eval Citation Discipline"** section in root `AGENTS.md`. Do not cite external-facing numbers without satisfying those rules.
+Numbers from `~/.cache/origin-eval/baselines/` carry guardrails that MUST be honored when citing them externally (Reddit, HN, Karpathy gist, vendor decks, README, blog).
+
+- **Single-run rule.** Any baseline with `env.is_single_run = true` MUST NOT be cited externally. Internal team references are fine but must be flagged "single-run, treat as scaffold." Full citation requires the P1.5 multi-run protocol (mean ± stddev over ≥3 runs, ideally 10).
+- **Schema-version rule.** Cross-`env.schema_version` comparisons are refused by `compare-baselines` (exit code 2). Public claims that compare numbers across schema versions MUST regenerate both sides via current `save_*_baseline` tests.
+- **Receipt-only rule (extends cost-receipt).** Regression thresholds, latency claims, accuracy improvements must have a measured-stddev or N≥3-run backing. No "improved X%" or "regressed Y%" without `compare-baselines` output AND multi-run inputs.
+- **Per-case visibility.** Aggregate accuracy claims must include per-case breakdown when available. Headline-only numbers hide regressions (LoCoMo adversarial-cat-5 contamination is the canonical trap; see `feature/eval-semantic-gaps` discussion).
+- **Layer attribution.** Public numbers must specify L1 / L2 / L3 / L4. No cross-layer averages without explicit weighting.
+- **Commit policy — snapshot, not history.** Metric *values* MAY be committed to git as a **curated, env-stamped snapshot** (the current headline numbers) in a results doc or README section, overwritten per release. Each committed value carries its methodology inline (model, dataset, run count, repro command); single-run results are tagged "scaffold" and headline/external claims still require the Single-run + Receipt-only gates above (N≥3 + stddev). Do **not** commit a per-run *history series* — that is what the gitignored `append_history` file is for. Raw per-run baseline JSONs under `~/.cache/origin-eval/baselines/` stay **gitignored** (artifacts, reproduced by re-running, not source). The repo is Apache-2.0; the older blanket "never commit numbers to git" rule is retired in favor of this snapshot policy.
 
 ---
 
