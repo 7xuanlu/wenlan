@@ -4,7 +4,12 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "MCP server for Origin — personal agent memory layer"
+description = "MCP server for Origin, the local-first personal agent memory layer"
+homepage = "https://useorigin.app"
+documentation = "https://docs.rs/origin-mcp"
+readme = "README.md"
+keywords = ["memory", "mcp", "agent", "claude", "origin"]
+categories = ["development-tools", "command-line-utilities"]
 
 [lib]
 name = "origin_mcp"
