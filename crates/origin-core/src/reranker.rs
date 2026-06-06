@@ -84,6 +84,70 @@ impl CrossEncoderReranker {
             model_id,
         })
     }
+
+    /// Bring-your-own reranker: load an ONNX cross-encoder + tokenizer from a
+    /// local directory, bypassing fastembed's hf-hub downloader (which cannot
+    /// fetch Xet-backed model files — e.g. jinaai/jina-reranker-v1-turbo-en).
+    /// The directory must hold `model.onnx`, `tokenizer.json`, `config.json`,
+    /// `special_tokens_map.json`, `tokenizer_config.json`. `model_id` is stamped
+    /// verbatim (the user-defined path has no model enum) so eval baselines stay
+    /// honest about which weights produced them.
+    ///
+    /// Probes once at init: a cross-encoder whose ONNX output is not named
+    /// `logits` yields EMPTY scores, which would silently degrade to a
+    /// no-op passthrough. We rerank a trivial probe and refuse to load on an
+    /// empty result, so a wiring slip fails LOUD here rather than as a
+    /// mysteriously-flat A/B.
+    pub fn try_new_user_defined(
+        onnx_dir: &std::path::Path,
+        model_id: impl Into<String>,
+    ) -> Result<Self, OriginError> {
+        let read = |name: &str| -> Result<Vec<u8>, OriginError> {
+            std::fs::read(onnx_dir.join(name))
+                .map_err(|e| OriginError::Llm(format!("BYO reranker: read {name}: {e}")))
+        };
+        let onnx_path = onnx_dir.join("model.onnx");
+        if !onnx_path.exists() {
+            return Err(OriginError::Llm(format!(
+                "BYO reranker: model.onnx missing in {}",
+                onnx_dir.display()
+            )));
+        }
+        let tokenizer_files = fastembed::TokenizerFiles {
+            tokenizer_file: read("tokenizer.json")?,
+            config_file: read("config.json")?,
+            special_tokens_map_file: read("special_tokens_map.json")?,
+            tokenizer_config_file: read("tokenizer_config.json")?,
+        };
+        let model = fastembed::UserDefinedRerankingModel::new(
+            fastembed::OnnxSource::File(onnx_path),
+            tokenizer_files,
+        );
+        let inner = fastembed::TextRerank::try_new_from_user_defined(
+            model,
+            fastembed::RerankInitOptionsUserDefined::default(),
+        )
+        .map_err(|e| OriginError::Llm(format!("BYO reranker init: {e}")))?;
+        let reranker = Self {
+            inner: Mutex::new(inner),
+            model_id: model_id.into(),
+        };
+        let probe = reranker.rerank(
+            "probe query",
+            &[
+                ("hit".to_string(), "probe query exact match".to_string()),
+                ("miss".to_string(), "an unrelated sentence".to_string()),
+            ],
+        )?;
+        if probe.is_empty() {
+            return Err(OriginError::Llm(
+                "BYO reranker produced no scores on a probe (likely an ONNX output-name \
+                 mismatch — fastembed reads the 'logits' output); refusing to load"
+                    .to_string(),
+            ));
+        }
+        Ok(reranker)
+    }
 }
 
 impl Reranker for CrossEncoderReranker {
@@ -124,24 +188,60 @@ impl Reranker for CrossEncoderReranker {
     }
 }
 
-/// Construct the default cross-encoder reranker and return it as a trait object.
-///
-/// Picks `BGERerankerV2M3` as the default — the larger, multilingual model that
+/// Resolve the cross-encoder model from `ORIGIN_RERANKER_MODEL`. Default (unset
+/// or unrecognized) is `BGERerankerV2M3` — the larger multilingual model that
 /// SuperLocalMemory's V3.3 ablation cited as the single largest contributor to
-/// their retrieval stack. Pass `cache_dir` aligned with the embedder cache so
-/// the ~600MB weights download once and stay reusable across processes.
+/// their retrieval stack — so production behaviour is unchanged.
 ///
-/// `JINARerankerV1TurboEn` is the smaller / faster alternative worth a sweep
-/// for CPU-only Linux + Windows once the benchmark harness selects between
-/// quality and latency.
+/// `turbo` selects `JINARerankerV1TurboEn` (~37M params vs BGE-v2-m3's ~568M,
+/// English-only): far faster on CPU, for eval A/B sweeps and CPU-only Linux +
+/// Windows deployments where the 568M model would dominate latency. `bge-base`
+/// selects the mid-size `BGERerankerBase`. The chosen model_id is stamped into
+/// the reranker so eval baselines stay honest about which reranker produced them.
+fn reranker_model_from_env() -> fastembed::RerankerModel {
+    use fastembed::RerankerModel::{BGERerankerBase, BGERerankerV2M3, JINARerankerV1TurboEn};
+    let raw = std::env::var("ORIGIN_RERANKER_MODEL").unwrap_or_default();
+    match raw.trim().to_ascii_lowercase().as_str() {
+        "turbo" | "jina-turbo" | "jina" => JINARerankerV1TurboEn,
+        "bge-base" => BGERerankerBase,
+        "" | "bge" | "bge-v2-m3" => BGERerankerV2M3,
+        other => {
+            log::warn!("[reranker] unknown ORIGIN_RERANKER_MODEL={other:?}; using BGERerankerV2M3");
+            BGERerankerV2M3
+        }
+    }
+}
+
+/// Construct the cross-encoder reranker and return it as a trait object.
+///
+/// Model is selected by [`reranker_model_from_env`] — defaults to
+/// `BGERerankerV2M3`. Pass `cache_dir` aligned with the embedder cache so the
+/// weights download once and stay reusable across processes.
 ///
 /// Not called in any default-running test — first construction downloads the
-/// model weights (~600MB). Callers must opt in (daemon startup, `--ignored`
-/// tests, manual eval runs).
+/// model weights. Callers must opt in (daemon startup, `--ignored` tests,
+/// manual eval runs).
 pub fn init_cross_encoder_reranker(
     cache_dir: Option<std::path::PathBuf>,
 ) -> Result<Arc<dyn Reranker>, OriginError> {
-    let inner = CrossEncoderReranker::try_new(fastembed::RerankerModel::BGERerankerV2M3, cache_dir)
+    // BYO opt-in: load a local ONNX cross-encoder from ORIGIN_RERANKER_ONNX_DIR,
+    // bypassing the hf-hub downloader for Xet-backed models it can't fetch. Unset
+    // (the production default) keeps the enum download path below.
+    if let Ok(dir) = std::env::var("ORIGIN_RERANKER_ONNX_DIR") {
+        let dir = std::path::PathBuf::from(dir);
+        let model_id = std::env::var("ORIGIN_RERANKER_MODEL_ID").unwrap_or_else(|_| {
+            dir.file_name()
+                .map(|s| s.to_string_lossy().into_owned())
+                .unwrap_or_else(|| "user-defined".to_string())
+        });
+        let inner = CrossEncoderReranker::try_new_user_defined(&dir, model_id)
+            .map_err(|e| OriginError::Llm(format!("init_cross_encoder_reranker (BYO): {e}")))?;
+        log::info!("[reranker] loaded BYO model_id={}", inner.model_id());
+        return Ok(Arc::new(inner) as Arc<dyn Reranker>);
+    }
+    let model = reranker_model_from_env();
+    log::info!("[reranker] loading enum model {model:?} (download path)");
+    let inner = CrossEncoderReranker::try_new(model, cache_dir)
         .map_err(|e| OriginError::Llm(format!("init_cross_encoder_reranker: {e}")))?;
     Ok(Arc::new(inner) as Arc<dyn Reranker>)
 }
@@ -182,6 +282,41 @@ mod tests {
     #[test]
     fn trait_object_safe() {
         let _r: Box<dyn Reranker> = Box::new(NoopReranker);
+    }
+
+    #[test]
+    fn reranker_model_env_default_is_bge_v2m3() {
+        temp_env::with_var("ORIGIN_RERANKER_MODEL", None::<&str>, || {
+            assert!(matches!(
+                reranker_model_from_env(),
+                fastembed::RerankerModel::BGERerankerV2M3
+            ));
+        });
+    }
+
+    #[test]
+    fn reranker_model_env_turbo_selects_jina() {
+        for v in ["turbo", "jina-turbo", "JINA", "Turbo"] {
+            temp_env::with_var("ORIGIN_RERANKER_MODEL", Some(v), || {
+                assert!(
+                    matches!(
+                        reranker_model_from_env(),
+                        fastembed::RerankerModel::JINARerankerV1TurboEn
+                    ),
+                    "value {v:?} should select the turbo model"
+                );
+            });
+        }
+    }
+
+    #[test]
+    fn reranker_model_env_unknown_falls_back_to_bge() {
+        temp_env::with_var("ORIGIN_RERANKER_MODEL", Some("nonsense"), || {
+            assert!(matches!(
+                reranker_model_from_env(),
+                fastembed::RerankerModel::BGERerankerV2M3
+            ));
+        });
     }
 
     /// Smoke test for the real cross-encoder model. `#[ignore]` because the

@@ -166,6 +166,50 @@ fn parse_session_num(key: &str) -> Option<usize> {
     num_str.parse().ok()
 }
 
+/// Parse a LoCoMo `session_N_date_time` value into a day-granular unix timestamp
+/// (midnight UTC of that date). Input looks like `"1:56 pm on 8 May, 2023"`; only
+/// the date part after `" on "` is used — time-of-day is dropped because temporal
+/// matching is day-level.
+fn parse_locomo_date(s: &str) -> Option<i64> {
+    let date_part = s.split(" on ").nth(1).unwrap_or(s).trim();
+    let nd = chrono::NaiveDate::parse_from_str(date_part, "%d %B, %Y").ok()?;
+    Some(nd.and_hms_opt(0, 0, 0)?.and_utc().timestamp())
+}
+
+/// Build a `{source_id -> event_date(unix seconds)}` map from LoCoMo session
+/// metadata, for eval-seed `event_date` injection (T11/T20 temporal).
+///
+/// LoCoMo observation TEXT is date-stripped, so classify-from-text recovers no
+/// `event_date`; the date lives only in `conversation["session_N_date_time"]`.
+/// `source_id` mirrors the seed builder exactly: `locomo_<sample_id>_obs_<i>`
+/// where `i` is the enumerate index over [`extract_observations`].
+pub fn event_date_map(samples: &[LocomoSample]) -> HashMap<String, i64> {
+    let mut map = HashMap::new();
+    for sample in samples {
+        // session_num -> ts, parsed from the `session_N_date_time` conversation keys.
+        let mut session_ts: HashMap<usize, i64> = HashMap::new();
+        if let Some(conv) = sample.conversation.as_object() {
+            for (k, v) in conv {
+                let parsed = k
+                    .strip_prefix("session_")
+                    .and_then(|r| r.strip_suffix("_date_time"))
+                    .and_then(|r| r.parse::<usize>().ok());
+                if let (Some(n), Some(s)) = (parsed, v.as_str()) {
+                    if let Some(ts) = parse_locomo_date(s) {
+                        session_ts.insert(n, ts);
+                    }
+                }
+            }
+        }
+        for (i, mem) in extract_observations(sample).iter().enumerate() {
+            if let Some(&ts) = session_ts.get(&mem.session_num) {
+                map.insert(format!("locomo_{}_obs_{}", sample.sample_id, i), ts);
+            }
+        }
+    }
+    map
+}
+
 // ---------------------------------------------------------------------------
 // Conversion to eval cases
 // ---------------------------------------------------------------------------
@@ -1456,6 +1500,104 @@ pub async fn run_locomo_eval_from_db_collect(
     Ok(rows)
 }
 
+/// Cross-encoder variant of [`run_locomo_eval_from_db_collect`]. Identical query
+/// set + relevance judgments + scoring, but retrieval goes through
+/// `search_memory_cross_rerank` (CE rescoring over the widened pool, where the
+/// page / episode / fact / global-prelude channels live) instead of the base
+/// `search_memory` path. Pairs OFF (base collector) against ON (this one) on the
+/// same snapshot DB so a CE-path feature flag's delta is actually measurable —
+/// flipping a CE-path flag on the base collector reads zero, because the base
+/// read never touches that channel (the documented T20 session-diversity trap).
+///
+/// Pins the ungated rerank-pool knobs (multiplier=1, floor=10) when unset, same
+/// as `run_locomo_eval_cross_rerank_from_db`, so the CE pool depth is
+/// reproducible. `--test-threads=1` makes the process-global set_var safe.
+pub async fn run_locomo_eval_cross_rerank_from_db_collect(
+    db: &MemoryDB,
+    path: &Path,
+    reranker: std::sync::Arc<dyn crate::reranker::Reranker>,
+    feature: &str,
+    flag_state: &str,
+) -> Result<Vec<crate::eval::paired::PerQueryRow>, OriginError> {
+    use crate::eval::paired::PerQueryRow;
+    use std::time::Instant;
+
+    if std::env::var_os("RERANK_POOL_MULTIPLIER").is_none() {
+        std::env::set_var("RERANK_POOL_MULTIPLIER", "1");
+    }
+    if std::env::var_os("RERANK_POOL_FLOOR").is_none() {
+        std::env::set_var("RERANK_POOL_FLOOR", "10");
+    }
+
+    let mut samples = load_locomo(path)?;
+    apply_locomo_limit(&mut samples);
+    let mut rows: Vec<PerQueryRow> = Vec::new();
+
+    for sample in &samples {
+        let memories = extract_observations(sample);
+        let dia_to_source: HashMap<String, String> = memories
+            .iter()
+            .enumerate()
+            .map(|(i, m)| {
+                (
+                    m.dia_id.clone(),
+                    format!("locomo_{}_obs_{}", sample.sample_id, i),
+                )
+            })
+            .collect();
+
+        for (q_idx, qa) in sample.qa.iter().enumerate() {
+            if qa.category == 5 {
+                continue;
+            }
+
+            let t0 = Instant::now();
+            let results = db
+                .search_memory_cross_rerank(
+                    &qa.question,
+                    10,
+                    None,
+                    None,
+                    None,
+                    Some(reranker.clone()),
+                )
+                .await?;
+            let latency_ms = t0.elapsed().as_secs_f64() * 1000.0;
+
+            let relevant_ids: HashSet<String> = qa
+                .evidence
+                .iter()
+                .filter_map(|did| dia_to_source.get(did).cloned())
+                .collect();
+            if relevant_ids.is_empty() {
+                continue;
+            }
+            let result_ids: Vec<&str> = results.iter().map(|r| r.source_id.as_str()).collect();
+            let grades: HashMap<&str, u8> = result_ids
+                .iter()
+                .map(|id| (*id, if relevant_ids.contains(*id) { 1 } else { 0 }))
+                .collect();
+            let relevant_set: HashSet<&str> = relevant_ids.iter().map(|s| s.as_str()).collect();
+
+            rows.push(PerQueryRow {
+                feature: feature.to_string(),
+                bench: "locomo".to_string(),
+                flag_state: flag_state.to_string(),
+                query_id: format!("{}#q{}", sample.sample_id, q_idx),
+                category: qa.category.to_string(),
+                ndcg10: metrics::ndcg_at_k(&result_ids, &grades, 10),
+                recall5: metrics::recall_at_k(&result_ids, &relevant_set, 5),
+                mrr: metrics::mrr(&result_ids, &relevant_set),
+                latency_ms,
+                graph_skipped: None,
+                temporal_touched: None,
+            });
+        }
+    }
+
+    Ok(rows)
+}
+
 // ---------------------------------------------------------------------------
 /// Retrieval eval over a pre-seeded DB using the base `search_memory` path
 /// (vector + FTS + RRF + graph augmentation) — the path the graph gate
@@ -2663,6 +2805,28 @@ mod tests {
         let mut samples = mock_samples(5);
         apply_limit_from_env(&mut samples, var, "locomo", "conversations");
         assert_eq!(samples.len(), 5, "unset env var must leave samples intact");
+    }
+
+    #[test]
+    fn locomo_event_date_map_parses_session_dates_to_source_ids() {
+        let sample: LocomoSample = serde_json::from_value(serde_json::json!({
+            "sample_id": "conv-test",
+            "conversation": { "session_1_date_time": "1:56 pm on 8 May, 2023" },
+            "qa": [],
+            "observation": {
+                "session_1_observation": { "Alice": [["Alice likes tea", "D1:1"]] }
+            }
+        }))
+        .unwrap();
+        let map = event_date_map(&[sample]);
+        let expected = chrono::NaiveDate::from_ymd_opt(2023, 5, 8)
+            .unwrap()
+            .and_hms_opt(0, 0, 0)
+            .unwrap()
+            .and_utc()
+            .timestamp();
+        // source_id mirrors the seed builder: locomo_<sample>_obs_<enumerate-index>.
+        assert_eq!(map.get("locomo_conv-test_obs_0"), Some(&expected));
     }
 
     #[test]

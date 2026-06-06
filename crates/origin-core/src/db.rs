@@ -694,6 +694,47 @@ fn episode_word_gate() -> usize {
         .unwrap_or(8)
 }
 
+/// Outcome of [`derive_episode`]: the deterministic id, the redacted verbatim
+/// text (used as both the stored `content` and the embed input), and its word
+/// count.
+pub(crate) struct EpisodeDerivation {
+    pub episode_id: String,
+    pub verbatim: String,
+    pub word_count: i64,
+}
+
+/// The canonical verbatim-episode derivation shared by the write-path co-write
+/// in [`MemoryDB::upsert_documents`] and the additive
+/// [`MemoryDB::backfill_episodes`] seed pass. Centralising the four drift-prone
+/// decisions — verbatim selection (`source_text` over `content`), PII redaction,
+/// the word gate, and the deterministic `sha256("episode:{source_id}:0")[..16]`
+/// id — keeps the two paths from disagreeing (AGENTS.md training-serving skew,
+/// Google Rules of ML #32). Returns `None` when the redacted verbatim turn is
+/// below `word_gate` words (short turns carry no signal the distilled fact
+/// lacks). The seed path never sets `source_text`, so `content` is the verbatim
+/// in both the co-write and the backfill — a backfilled seed is byte-identical
+/// to a fresh `ORIGIN_ENABLE_EPISODE_CHANNEL=1` ingest.
+pub(crate) fn derive_episode(
+    source_id: &str,
+    source_text: Option<&str>,
+    content: &str,
+    word_gate: usize,
+) -> Option<EpisodeDerivation> {
+    let verbatim = redact_pii(source_text.unwrap_or(content));
+    let word_count = verbatim.split_whitespace().count();
+    if word_count < word_gate {
+        return None;
+    }
+    let mut hasher = Sha256::new();
+    hasher.update(format!("episode:{source_id}:0").as_bytes());
+    let hash = format!("{:x}", hasher.finalize());
+    Some(EpisodeDerivation {
+        episode_id: hash[..16].to_string(),
+        verbatim,
+        word_count: word_count as i64,
+    })
+}
+
 /// True iff `ORIGIN_ENABLE_SALIENCE_PRIOR` is set to a truthy value
 /// (`1`, `true`, or `yes`, case-insensitive). T8 salience prior is OPT-IN:
 /// when unset or falsey, the ranking formula forces `salience_mult` to `1.0`,
@@ -7145,23 +7186,22 @@ impl MemoryDB {
                 if doc.source != "memory" {
                     continue;
                 }
-                // Verbatim text: prefer the original turn (source_text) over the
-                // possibly-rewritten distilled content.
-                let verbatim = doc.source_text.as_deref().unwrap_or(&doc.content);
-                let verbatim = redact_pii(verbatim);
-                if verbatim.split_whitespace().count() < word_gate {
+                // Verbatim episode derivation (shared with `backfill_episodes`
+                // so the write path and the seed backfill cannot drift).
+                let Some(ep) = derive_episode(
+                    &doc.source_id,
+                    doc.source_text.as_deref(),
+                    &doc.content,
+                    word_gate,
+                ) else {
                     continue;
-                }
-                let mut hasher = Sha256::new();
-                hasher.update(format!("episode:{}:0", doc.source_id).as_bytes());
-                let hash = format!("{:x}", hasher.finalize());
-                let episode_id = hash[..16].to_string();
+                };
                 // Replace any stale episode for this source_id on re-upsert.
                 source_ids_to_delete.insert(("episode".to_string(), doc.source_id.clone()));
-                episode_texts.push(verbatim.clone());
+                episode_texts.push(ep.verbatim.clone());
                 episode_rows.push(MemoryRow {
-                    id: episode_id,
-                    content: verbatim,
+                    id: ep.episode_id,
+                    content: ep.verbatim,
                     source: "episode".to_string(),
                     source_id: doc.source_id.clone(),
                     title: doc.title.clone(),
@@ -7182,12 +7222,7 @@ impl MemoryDB {
                     stability: doc.stability.clone(),
                     supersedes: None,
                     pending_revision: doc.pending_revision,
-                    word_count: doc
-                        .source_text
-                        .as_deref()
-                        .unwrap_or(&doc.content)
-                        .split_whitespace()
-                        .count() as i64,
+                    word_count: ep.word_count,
                     entity_id: None,
                     enrichment_status: doc.enrichment_status.clone(),
                     quality: None,
@@ -9290,10 +9325,25 @@ impl MemoryDB {
                 };
 
                 if !scored.is_empty() {
-                    let score_map: HashMap<String, f32> = scored.into_iter().collect();
-                    for r in &mut results {
-                        if let Some(&s) = score_map.get(&r.id) {
-                            r.score = s;
+                    let ce_map: HashMap<String, f32> = scored.into_iter().collect();
+                    if crate::retrieval::blend::rerank_blend_enabled() {
+                        let alpha = crate::retrieval::blend::alpha_for_query(query);
+                        // priors = boosted-RRF scores currently on results (set ~db.rs:9287)
+                        let priors: Vec<f32> = results.iter().map(|r| r.score).collect();
+                        let norm = crate::retrieval::blend::minmax_normalize(&priors);
+                        for (i, r) in results.iter_mut().enumerate() {
+                            r.score = match ce_map.get(&r.id) {
+                                Some(&ce) => {
+                                    crate::retrieval::blend::blend_score(ce, norm[i], alpha)
+                                }
+                                None => (1.0 - alpha) * norm[i],
+                            };
+                        }
+                    } else {
+                        for r in &mut results {
+                            if let Some(&s) = ce_map.get(&r.id) {
+                                r.score = s;
+                            }
                         }
                     }
                     results.sort_by(|a, b| {
@@ -17664,6 +17714,269 @@ impl MemoryDB {
             results.push((source_id, content));
         }
         Ok(results)
+    }
+
+    /// Memories that still need Phase-1 classification (importance / event_date /
+    /// quality / structured_fields / retrieval_cue not yet applied by
+    /// `apply_enrichment`). Filters on `importance IS NULL` as the resumable gap
+    /// predicate: a fresh seed selects every memory, a partially-classified DB
+    /// selects only the gaps (the Tier-2 additive-backfill case in the eval
+    /// re-seed). `is_recap = 0` skips synthesized recap rows. Returns
+    /// `(source_id, content)` for the primary chunk only.
+    pub async fn get_memories_needing_classification(
+        &self,
+    ) -> Result<Vec<(String, String)>, OriginError> {
+        let conn = self.conn.lock().await;
+        let mut rows = conn
+            .query(
+                "SELECT source_id, content FROM memories
+                 WHERE source = 'memory'
+                   AND chunk_index = 0
+                   AND is_recap = 0
+                   AND importance IS NULL",
+                (),
+            )
+            .await
+            .map_err(|e| OriginError::VectorDb(format!("classification query: {e}")))?;
+        let mut results = Vec::new();
+        while let Some(row) = rows
+            .next()
+            .await
+            .map_err(|e| OriginError::VectorDb(e.to_string()))?
+        {
+            let source_id: String = row
+                .get(0)
+                .map_err(|e| OriginError::VectorDb(e.to_string()))?;
+            let content: String = row.get::<String>(1).unwrap_or_default();
+            results.push((source_id, content));
+        }
+        Ok(results)
+    }
+
+    /// Set `event_date` (unix seconds) for memories by `source_id`, in one
+    /// transaction. Returns the number of rows updated.
+    ///
+    /// Used by the eval seed to inject session-metadata dates (T11/T20 temporal)
+    /// that classify-from-text cannot recover — LoCoMo/LME observation text is
+    /// date-stripped, so the date is only available from dataset session metadata.
+    /// Non-destructive: only touches the named `source_id`s; unrelated rows and
+    /// the wipe path are untouched.
+    pub async fn set_event_dates_by_source_id(
+        &self,
+        updates: &[(String, i64)],
+    ) -> Result<usize, OriginError> {
+        if updates.is_empty() {
+            return Ok(0);
+        }
+        let conn = self.conn.lock().await;
+        conn.execute("BEGIN", ())
+            .await
+            .map_err(|e| OriginError::VectorDb(format!("set_event_dates begin: {e}")))?;
+        let mut updated = 0usize;
+        for (source_id, ts) in updates {
+            let n = conn
+                .execute(
+                    "UPDATE memories SET event_date = ?1 WHERE source_id = ?2",
+                    libsql::params![*ts, source_id.as_str()],
+                )
+                .await
+                .map_err(|e| OriginError::VectorDb(format!("set_event_dates update: {e}")))?;
+            updated += n as usize;
+        }
+        conn.execute("COMMIT", ())
+            .await
+            .map_err(|e| OriginError::VectorDb(format!("set_event_dates commit: {e}")))?;
+        Ok(updated)
+    }
+
+    /// Additively backfill verbatim `source='episode'` rows for every existing
+    /// `source='memory'` parent that clears the word gate, WITHOUT re-ingesting.
+    ///
+    /// Seed-time counterpart to the write-path episode co-write in
+    /// [`Self::upsert_documents`]: both derive the episode through the shared
+    /// [`derive_episode`] helper (no training-serving skew). Embeds with the same
+    /// `generate_embeddings` call the write path uses, so vectors match.
+    /// Non-destructive: existing episodes for a parent are replaced (deterministic
+    /// id), ordinary rows untouched; the base channel excludes `source='episode'`
+    /// so a flag-OFF read is unaffected by their existence.
+    ///
+    /// One episode per parent, keyed on the `chunk_index = 0` row. For
+    /// single-chunk memories (all of `locomo_v1`) this equals the full turn, so
+    /// the backfilled episode is byte-identical to a fresh
+    /// `ORIGIN_ENABLE_EPISODE_CHANNEL=1` ingest. Multi-chunk parents
+    /// (~4.5% of `lme_v1`, long turns split by the 512-char/64-overlap chunker)
+    /// capture only the first chunk — conservative (later chunks remain in the
+    /// base channel); full-verbatim-from-dataset (like `event_date`) is a fidelity
+    /// follow-up. Returns the number of episode rows written. Idempotent:
+    /// re-running yields the same set (paired delete + deterministic ids).
+    pub async fn backfill_episodes(&self) -> Result<usize, OriginError> {
+        struct EpisodeParent {
+            source_id: String,
+            source_text: Option<String>,
+            content: String,
+            title: String,
+            memory_type: Option<String>,
+            space: Option<String>,
+            source_agent: Option<String>,
+            confidence: Option<f64>,
+            confirmed: Option<i64>,
+            stability: Option<String>,
+            pending_revision: i64,
+            last_modified: i64,
+            supersede_mode: String,
+        }
+
+        let word_gate = episode_word_gate();
+
+        // 1. Read parents (chunk_index = 0: one row per source_id, matching the
+        //    co-write's one-episode-per-doc shape).
+        let parents: Vec<EpisodeParent> = {
+            let conn = self.conn.lock().await;
+            let mut rows = conn
+                .query(
+                    "SELECT source_id, source_text, content, title, memory_type, space,
+                            source_agent, confidence, confirmed, stability, pending_revision,
+                            last_modified, supersede_mode
+                     FROM memories
+                     WHERE source = 'memory' AND chunk_index = 0",
+                    (),
+                )
+                .await
+                .map_err(|e| OriginError::VectorDb(format!("backfill_episodes select: {e}")))?;
+            let mut out = Vec::new();
+            while let Some(r) = rows
+                .next()
+                .await
+                .map_err(|e| OriginError::VectorDb(format!("backfill_episodes row: {e}")))?
+            {
+                out.push(EpisodeParent {
+                    source_id: r.get::<String>(0).unwrap_or_default(),
+                    source_text: r.get::<Option<String>>(1).unwrap_or(None),
+                    content: r.get::<String>(2).unwrap_or_default(),
+                    title: r
+                        .get::<Option<String>>(3)
+                        .unwrap_or(None)
+                        .unwrap_or_default(),
+                    memory_type: r.get::<Option<String>>(4).unwrap_or(None),
+                    space: r.get::<Option<String>>(5).unwrap_or(None),
+                    source_agent: r.get::<Option<String>>(6).unwrap_or(None),
+                    confidence: r.get::<Option<f64>>(7).unwrap_or(None),
+                    confirmed: r.get::<Option<i64>>(8).unwrap_or(None),
+                    stability: r.get::<Option<String>>(9).unwrap_or(None),
+                    pending_revision: r.get::<Option<i64>>(10).unwrap_or(None).unwrap_or(0),
+                    last_modified: r.get::<Option<i64>>(11).unwrap_or(None).unwrap_or(0),
+                    supersede_mode: r
+                        .get::<Option<String>>(12)
+                        .unwrap_or(None)
+                        .unwrap_or_else(|| "hide".to_string()),
+                });
+            }
+            out
+        };
+
+        // 2. Derive episodes for parents clearing the gate.
+        let pending: Vec<(EpisodeDerivation, EpisodeParent)> = parents
+            .into_iter()
+            .filter_map(|p| {
+                derive_episode(
+                    &p.source_id,
+                    p.source_text.as_deref(),
+                    &p.content,
+                    word_gate,
+                )
+                .map(|ep| (ep, p))
+            })
+            .collect();
+        if pending.is_empty() {
+            return Ok(0);
+        }
+
+        // 3. Bounded batches: embed off the conn lock, then paired-delete + insert
+        //    in a transaction (mirrors the write path's INSERT column set).
+        let mut written = 0usize;
+        for chunk in pending.chunks(256) {
+            let texts: Vec<String> = chunk.iter().map(|(ep, _)| ep.verbatim.clone()).collect();
+            let embeddings = self.generate_embeddings(&texts)?;
+
+            let conn = self.conn.lock().await;
+            conn.execute("BEGIN", ())
+                .await
+                .map_err(|e| OriginError::VectorDb(format!("backfill_episodes begin: {e}")))?;
+            let res: Result<usize, OriginError> = async {
+                let opt_text = |o: &Option<String>| -> libsql::Value {
+                    o.clone().map(Into::into).unwrap_or(libsql::Value::Null)
+                };
+                let mut n = 0usize;
+                for ((ep, p), emb) in chunk.iter().zip(embeddings.iter()) {
+                    conn.execute(
+                        "DELETE FROM memories WHERE source = 'episode' AND source_id = ?1",
+                        libsql::params![p.source_id.as_str()],
+                    )
+                    .await
+                    .map_err(|e| OriginError::VectorDb(format!("backfill_episodes delete: {e}")))?;
+
+                    let vec_str = Self::vec_to_sql(emb);
+                    let confidence_val: libsql::Value =
+                        p.confidence.map(Into::into).unwrap_or(libsql::Value::Null);
+                    let confirmed_val: libsql::Value =
+                        p.confirmed.map(Into::into).unwrap_or(libsql::Value::Null);
+                    conn.execute(
+                        "INSERT INTO memories (id, content, source, source_id, title, summary, url,
+                            chunk_index, last_modified, chunk_type, language, byte_start, byte_end,
+                            semantic_unit, memory_type, space, source_agent, confidence, confirmed,
+                            stability, supersedes, pending_revision, word_count,
+                            entity_id, enrichment_status, quality, is_recap, supersede_mode,
+                            structured_fields, retrieval_cue, source_text,
+                            embedding, created_at, importance, episode_of)
+                         VALUES (?1, ?2, 'episode', ?3, ?4, NULL, NULL,
+                            0, ?5, 'text', NULL, NULL, NULL,
+                            NULL, ?6, ?7, ?8, ?9, ?10,
+                            ?11, NULL, ?12, ?13,
+                            NULL, 'legacy', NULL, 0, ?14,
+                            NULL, NULL, NULL,
+                            vector32(?15), ?16, NULL, ?17)",
+                        libsql::params![
+                            ep.episode_id.as_str(),
+                            ep.verbatim.as_str(),
+                            p.source_id.as_str(),
+                            p.title.as_str(),
+                            p.last_modified,
+                            opt_text(&p.memory_type),
+                            opt_text(&p.space),
+                            opt_text(&p.source_agent),
+                            confidence_val,
+                            confirmed_val,
+                            opt_text(&p.stability),
+                            p.pending_revision,
+                            ep.word_count,
+                            p.supersede_mode.as_str(),
+                            vec_str,
+                            p.last_modified,
+                            p.source_id.as_str()
+                        ],
+                    )
+                    .await
+                    .map_err(|e| OriginError::VectorDb(format!("backfill_episodes insert: {e}")))?;
+                    n += 1;
+                }
+                Ok(n)
+            }
+            .await;
+            match res {
+                Ok(n) => {
+                    conn.execute("COMMIT", ()).await.map_err(|e| {
+                        OriginError::VectorDb(format!("backfill_episodes commit: {e}"))
+                    })?;
+                    written += n;
+                }
+                Err(e) => {
+                    let _ = conn.execute("ROLLBACK", ()).await;
+                    return Err(e);
+                }
+            }
+            drop(conn);
+        }
+        Ok(written)
     }
 
     /// Get memories that have no entity_id link (for reweave phase).
@@ -27798,8 +28111,17 @@ pub(crate) mod tests {
         );
     }
 
+    // Tests that read `rerank_blend_enabled()` (via `search_memory_cross_rerank` /
+    // `search_memory_iterative`) share the process-global `ORIGIN_ENABLE_RERANK_BLEND`
+    // env. `temp_env::async_with_vars` mutates that global, so the blend writer below
+    // can flip a concurrent REPLACE-asserting test onto the blend path mid-`.await`.
+    // Serialize every such test on this process-local async lock (mirrors
+    // `PRF_ENV_LOCK` at db.rs:23826) so the flag is stable across each test's awaits.
+    static RERANK_BLEND_ENV_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
     #[tokio::test]
     async fn test_search_memory_cross_rerank_noop_passthrough() {
+        let _serial = RERANK_BLEND_ENV_LOCK.lock().await;
         let (db, _dir) = test_db().await;
         db.upsert_documents(vec![
             make_memory_doc(
@@ -27840,6 +28162,79 @@ pub(crate) mod tests {
         assert_eq!(
             results[0].score, 0.0,
             "NoopReranker should rewrite all scores to 0.0"
+        );
+    }
+
+    /// When ORIGIN_ENABLE_RERANK_BLEND=1, the blend retains the (1-α)·normalized-RRF
+    /// term from the boosted-RRF priors. Because the priors differ across candidates
+    /// (different embedding similarities), not all blend scores collapse to equal values
+    /// the way the legacy REPLACE path does (which writes CE logit 0.0 for all via
+    /// NoopReranker). At least one adjacent pair must differ by > 1e-4.
+    #[tokio::test]
+    async fn test_search_memory_cross_rerank_blend_preserves_rrf_ordering() {
+        let _serial = RERANK_BLEND_ENV_LOCK.lock().await;
+        let (db, _dir) = test_db().await;
+        // Store 3 memories with different semantic distances from the query
+        // "Rust programming language features" so their RRF scores differ.
+        db.upsert_documents(vec![
+            make_memory_doc(
+                "b1",
+                "Rust programming language features include ownership and borrowing for memory safety",
+                "fact",
+                "software",
+                "claude",
+            ),
+            make_memory_doc(
+                "b2",
+                "Cargo is the Rust package manager and build system",
+                "fact",
+                "software",
+                "claude",
+            ),
+            make_memory_doc(
+                "b3",
+                "I enjoy cooking pasta and making Italian food at home on weekends",
+                "preference",
+                "personal",
+                "claude",
+            ),
+        ])
+        .await
+        .unwrap();
+
+        let reranker: Arc<dyn crate::reranker::Reranker> = Arc::new(crate::reranker::NoopReranker);
+        // With blend ON: blend_score = alpha * sigmoid(0.0) + (1-alpha) * norm_rrf[i]
+        //   = alpha * 0.5 + (1-alpha) * norm_rrf[i]
+        // Because norm_rrf values differ (Rust docs rank higher vs cooking), scores differ.
+        // With legacy REPLACE: all scores = 0.0, all equal.
+        let results =
+            temp_env::async_with_vars([("ORIGIN_ENABLE_RERANK_BLEND", Some("1"))], async {
+                db.search_memory_cross_rerank(
+                    "Rust programming language features",
+                    10,
+                    None,
+                    None,
+                    None,
+                    Some(reranker),
+                )
+                .await
+                .unwrap()
+            })
+            .await;
+
+        assert!(
+            results.len() >= 2,
+            "need at least 2 results to check ordering diversity; got {}",
+            results.len()
+        );
+        // At least one adjacent pair must differ — blend must NOT collapse all scores.
+        let any_differ = results
+            .windows(2)
+            .any(|w| (w[0].score - w[1].score).abs() > 1e-4);
+        assert!(
+            any_differ,
+            "blend mode collapsed all scores to equal — RRF prior not retained. scores: {:?}",
+            results.iter().map(|r| r.score).collect::<Vec<_>>()
         );
     }
 
@@ -39174,6 +39569,45 @@ pub(crate) mod tests {
         }
     }
 
+    /// `set_event_dates_by_source_id` writes only the named rows; others stay NULL.
+    #[tokio::test]
+    async fn set_event_dates_by_source_id_updates_only_named_rows() {
+        let (db, _dir) = test_db().await;
+        seed_memory_with_event_date(&db, "ev_named", "alpha fact about databases", None).await;
+        seed_memory_with_event_date(&db, "ev_other", "beta fact about networking", None).await;
+
+        let n = db
+            .set_event_dates_by_source_id(&[("ev_named".to_string(), 1_779_602_400)])
+            .await
+            .unwrap();
+        assert_eq!(n, 1, "exactly one named row updated");
+
+        let conn = db.conn.lock().await;
+        let mut rows = conn
+            .query(
+                "SELECT event_date FROM memories WHERE source_id = 'ev_named' AND chunk_index = 0",
+                (),
+            )
+            .await
+            .unwrap();
+        let r = rows.next().await.unwrap().unwrap();
+        assert_eq!(
+            r.get::<i64>(0).unwrap(),
+            1_779_602_400,
+            "named row got the injected date"
+        );
+
+        let mut rows2 = conn
+            .query(
+                "SELECT COUNT(*) FROM memories WHERE source_id = 'ev_other' AND event_date IS NULL",
+                (),
+            )
+            .await
+            .unwrap();
+        let r2 = rows2.next().await.unwrap().unwrap();
+        assert_eq!(r2.get::<i64>(0).unwrap(), 1, "unnamed row stays NULL");
+    }
+
     /// [T4a] seed 3 memories w/ identical text but distinct event_date;
     /// 'yesterday' cue + fixed `now`; assert in-range AND NULL returned, out-of-range excluded.
     #[tokio::test]
@@ -40456,6 +40890,7 @@ pub(crate) mod tests {
     /// Test 11: max_iter=0 is byte-identical (ids + order) to cross-rerank.
     #[tokio::test]
     async fn iterative_max_iter_zero_equals_cross_rerank() {
+        let _serial = RERANK_BLEND_ENV_LOCK.lock().await;
         let (db, _dir) = cot_seed_db().await;
         let reranker: Arc<dyn crate::reranker::Reranker> = Arc::new(crate::reranker::NoopReranker);
 
@@ -40498,6 +40933,7 @@ pub(crate) mod tests {
     /// Test 12: flag OFF + max_iter=3 behaves as round-0 only (no LLM consulted).
     #[tokio::test]
     async fn iterative_flag_off_is_noop() {
+        let _serial = RERANK_BLEND_ENV_LOCK.lock().await;
         let (db, _dir) = cot_seed_db().await;
         let reranker: Arc<dyn crate::reranker::Reranker> = Arc::new(crate::reranker::NoopReranker);
         // An always-followup LLM that, if ever consulted, would change the pool.
@@ -40546,6 +40982,7 @@ pub(crate) mod tests {
     /// runs, then stops; the result is a superset of round-0 ids.
     #[tokio::test]
     async fn iterative_complete_first_round_stops() {
+        let _serial = RERANK_BLEND_ENV_LOCK.lock().await;
         let (db, _dir) = cot_seed_db().await;
         let reranker: Arc<dyn crate::reranker::Reranker> = Arc::new(crate::reranker::NoopReranker);
         // Round 1: draft, then validate -> followup. Round 2: draft, then complete.
@@ -40608,6 +41045,7 @@ pub(crate) mod tests {
     /// Test 14: llm=None + flag ON + max_iter=3 -> plain round-0 pool, no panic.
     #[tokio::test]
     async fn iterative_llm_none_falls_back() {
+        let _serial = RERANK_BLEND_ENV_LOCK.lock().await;
         let (db, _dir) = cot_seed_db().await;
         let reranker: Arc<dyn crate::reranker::Reranker> = Arc::new(crate::reranker::NoopReranker);
 
@@ -40650,6 +41088,7 @@ pub(crate) mod tests {
     /// in the final pool but be absent from the max_iter=0 baseline (core proof).
     #[tokio::test]
     async fn iterative_followup_merges_new_evidence() {
+        let _serial = RERANK_BLEND_ENV_LOCK.lock().await;
         let (db, _dir) = test_db().await;
         // Round-0 query "primary topic" matches m_primary strongly; the bridge
         // fact m_bridge only matches the distinct followup phrasing.
@@ -40731,6 +41170,7 @@ pub(crate) mod tests {
     /// round = 2 LLM calls (draft + validate), so call_count == 2 * max_iter.
     #[tokio::test]
     async fn iterative_respects_max_iter_cap() {
+        let _serial = RERANK_BLEND_ENV_LOCK.lock().await;
         let (db, _dir) = cot_seed_db().await;
         let reranker: Arc<dyn crate::reranker::Reranker> = Arc::new(crate::reranker::NoopReranker);
         // Always returns: draft, then followup. Once exhausted, repeats the last
@@ -40772,6 +41212,7 @@ pub(crate) mod tests {
     /// test stays fast (no 10s real wait).
     #[tokio::test]
     async fn iterative_timeout_degrades() {
+        let _serial = RERANK_BLEND_ENV_LOCK.lock().await;
         let (db, _dir) = cot_seed_db().await;
         let reranker: Arc<dyn crate::reranker::Reranker> = Arc::new(crate::reranker::NoopReranker);
         let llm: Arc<dyn crate::llm_provider::LlmProvider> =
@@ -41581,6 +42022,197 @@ pub(crate) mod tests {
             count_by_source(&db, "memory").await,
             1,
             "flag OFF: corpus size unchanged (no doubling)"
+        );
+    }
+
+    // -- derive_episode helper (shared by co-write + backfill) --
+
+    #[test]
+    fn derive_episode_below_word_gate_returns_none() {
+        assert!(derive_episode("s1", None, "loves rust", 8).is_none());
+    }
+
+    #[test]
+    fn derive_episode_deterministic_id_and_verbatim_from_content() {
+        let content = "the user prefers dark mode in every editor they use daily";
+        let ep = derive_episode("fact_1", None, content, 8).expect("clears gate");
+        let mut h = Sha256::new();
+        h.update(b"episode:fact_1:0");
+        let expect_id = format!("{:x}", h.finalize())[..16].to_string();
+        assert_eq!(ep.episode_id, expect_id);
+        assert_eq!(ep.verbatim, content);
+        assert_eq!(ep.word_count, 11);
+    }
+
+    #[test]
+    fn derive_episode_prefers_source_text_over_content() {
+        let ep = derive_episode(
+            "s2",
+            Some("honestly i always switch every single app to dark"),
+            "user likes dark mode",
+            3,
+        )
+        .expect("clears gate");
+        assert_eq!(
+            ep.verbatim,
+            "honestly i always switch every single app to dark"
+        );
+    }
+
+    // -- backfill_episodes (additive seed-time episode population) --
+
+    #[tokio::test]
+    async fn backfill_episodes_creates_rows_only_for_gated_parents() {
+        let (db, _dir) = test_db().await;
+        // Flag OFF -> upsert writes NO episodes; backfill must create them.
+        temp_env::async_with_vars([("ORIGIN_ENABLE_EPISODE_CHANNEL", None::<&str>)], async {
+            db.upsert_documents(vec![
+                make_memory_doc(
+                    "p_long",
+                    "the user prefers dark mode in every editor they use daily",
+                    "fact",
+                    "work",
+                    "claude-code",
+                ),
+                make_memory_doc("p_short", "loves rust", "fact", "work", "claude-code"),
+            ])
+            .await
+            .unwrap();
+        })
+        .await;
+        assert_eq!(
+            count_by_source(&db, "episode").await,
+            0,
+            "no episodes pre-backfill"
+        );
+
+        let n = db.backfill_episodes().await.unwrap();
+        assert_eq!(n, 1, "only the gated parent spawns an episode");
+        assert_eq!(count_by_source(&db, "episode").await, 1);
+
+        let conn = db.conn.lock().await;
+        let mut rows = conn
+            .query(
+                "SELECT episode_of, embedding IS NOT NULL FROM memories WHERE source = 'episode'",
+                (),
+            )
+            .await
+            .unwrap();
+        let row = rows.next().await.unwrap().expect("one episode");
+        let episode_of: String = row.get(0).unwrap();
+        let has_emb: i64 = row.get(1).unwrap();
+        assert_eq!(episode_of, "p_long");
+        assert_eq!(has_emb, 1, "backfilled episode embedded");
+        drop(conn);
+
+        let conn = db.conn.lock().await;
+        let mut f = conn
+            .query(
+                "SELECT COUNT(*) FROM memories c JOIN memories_fts f ON c.rowid = f.rowid \
+                 WHERE c.source = 'episode' AND memories_fts MATCH 'dark'",
+                (),
+            )
+            .await
+            .unwrap();
+        let present: i64 = f.next().await.unwrap().unwrap().get(0).unwrap();
+        assert!(
+            present >= 1,
+            "backfilled episode indexed in FTS via trigger"
+        );
+    }
+
+    #[tokio::test]
+    async fn backfill_episodes_is_idempotent() {
+        let (db, _dir) = test_db().await;
+        temp_env::async_with_vars([("ORIGIN_ENABLE_EPISODE_CHANNEL", None::<&str>)], async {
+            db.upsert_documents(vec![make_memory_doc(
+                "p1",
+                "the user prefers dark mode in every editor they use daily",
+                "fact",
+                "work",
+                "claude-code",
+            )])
+            .await
+            .unwrap();
+        })
+        .await;
+        assert_eq!(db.backfill_episodes().await.unwrap(), 1);
+        assert_eq!(
+            db.backfill_episodes().await.unwrap(),
+            1,
+            "re-run replaces, no duplicate"
+        );
+        assert_eq!(count_by_source(&db, "episode").await, 1);
+    }
+
+    #[tokio::test]
+    async fn backfill_episodes_matches_cowrite_parity() {
+        // DB A: flag-ON co-write. DB B: flag-OFF + backfill. Episode id, content,
+        // and episode_of must be byte-identical (proves no training-serving skew).
+        let content = "the user prefers dark mode in every editor they use daily";
+        let (db_a, _a) = test_db().await;
+        temp_env::async_with_vars([("ORIGIN_ENABLE_EPISODE_CHANNEL", Some("1"))], async {
+            db_a.upsert_documents(vec![make_memory_doc(
+                "fp",
+                content,
+                "fact",
+                "work",
+                "claude-code",
+            )])
+            .await
+            .unwrap();
+        })
+        .await;
+        let (db_b, _b) = test_db().await;
+        temp_env::async_with_vars([("ORIGIN_ENABLE_EPISODE_CHANNEL", None::<&str>)], async {
+            db_b.upsert_documents(vec![make_memory_doc(
+                "fp",
+                content,
+                "fact",
+                "work",
+                "claude-code",
+            )])
+            .await
+            .unwrap();
+        })
+        .await;
+        db_b.backfill_episodes().await.unwrap();
+
+        let conn_a = db_a.conn.lock().await;
+        let mut ra = conn_a
+            .query(
+                "SELECT id, content, episode_of FROM memories WHERE source = 'episode'",
+                (),
+            )
+            .await
+            .unwrap();
+        let row_a = ra.next().await.unwrap().expect("episode A");
+        let a: (String, String, String) = (
+            row_a.get(0).unwrap(),
+            row_a.get(1).unwrap(),
+            row_a.get(2).unwrap(),
+        );
+        drop(conn_a);
+
+        let conn_b = db_b.conn.lock().await;
+        let mut rb = conn_b
+            .query(
+                "SELECT id, content, episode_of FROM memories WHERE source = 'episode'",
+                (),
+            )
+            .await
+            .unwrap();
+        let row_b = rb.next().await.unwrap().expect("episode B");
+        let b: (String, String, String) = (
+            row_b.get(0).unwrap(),
+            row_b.get(1).unwrap(),
+            row_b.get(2).unwrap(),
+        );
+        drop(conn_b);
+
+        assert_eq!(
+            a, b,
+            "backfill produces byte-identical episode to flag-on co-write"
         );
     }
 

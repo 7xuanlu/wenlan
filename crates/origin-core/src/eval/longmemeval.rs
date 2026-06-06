@@ -166,6 +166,35 @@ fn memory_source_id(question_id: &str, session_idx: usize, turn_idx: usize) -> S
     format!("lme_{}_{}_t{}", question_id, session_idx, turn_idx)
 }
 
+/// Build a `{source_id -> event_date(unix seconds)}` map from LongMemEval session
+/// metadata, for eval-seed `event_date` injection (T11/T20 temporal).
+///
+/// Turn TEXT carries no date, so classify-from-text recovers no `event_date`; the
+/// per-session date lives in `haystack_dates`, parallel to `haystack_session_ids`.
+/// Reuses the module's existing [`parse_lme_date`] and truncates to midnight UTC
+/// (day-level matching). `source_id` mirrors the seed builder via [`memory_source_id`].
+pub fn event_date_map(samples: &[LongMemEvalSample]) -> HashMap<String, i64> {
+    let mut map = HashMap::new();
+    for sample in samples {
+        for mem in extract_memories(sample) {
+            let Some(date_str) = sample.haystack_dates.get(mem.session_idx) else {
+                continue;
+            };
+            let Some(dt) = parse_lme_date(date_str) else {
+                continue;
+            };
+            let Some(midnight) = dt.date_naive().and_hms_opt(0, 0, 0) else {
+                continue;
+            };
+            map.insert(
+                memory_source_id(&mem.question_id, mem.session_idx, mem.turn_idx),
+                midnight.and_utc().timestamp(),
+            );
+        }
+    }
+    map
+}
+
 // ---------------------------------------------------------------------------
 // Conversion to eval cases
 // ---------------------------------------------------------------------------
@@ -2873,5 +2902,30 @@ mod tests {
         let mut samples = mock_samples(4);
         apply_limit_from_env(&mut samples, var, "longmemeval", "questions");
         assert_eq!(samples.len(), 4, "unset env var must leave samples intact");
+    }
+
+    #[test]
+    fn lme_event_date_map_parses_haystack_dates_to_source_ids() {
+        let sample: LongMemEvalSample = serde_json::from_value(serde_json::json!({
+            "question_id": "q1",
+            "question_type": "temporal-reasoning",
+            "question": "when?",
+            "answer": "x",
+            "question_date": "2023/04/10 (Mon) 23:07",
+            "haystack_dates": ["2023/04/10 (Mon) 17:50"],
+            "haystack_session_ids": ["s0"],
+            "haystack_sessions": [[{ "role": "user", "content": "hi", "has_answer": false }]],
+            "answer_session_ids": []
+        }))
+        .unwrap();
+        let map = event_date_map(&[sample]);
+        let expected = chrono::NaiveDate::from_ymd_opt(2023, 4, 10)
+            .unwrap()
+            .and_hms_opt(0, 0, 0)
+            .unwrap()
+            .and_utc()
+            .timestamp();
+        // source_id mirrors the seed builder via memory_source_id: lme_<qid>_<sidx>_t<tidx>.
+        assert_eq!(map.get("lme_q1_0_t0"), Some(&expected));
     }
 }

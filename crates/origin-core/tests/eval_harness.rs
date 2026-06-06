@@ -1028,6 +1028,868 @@ async fn query_intent_ab_dualbench() {
     }
 }
 
+/// STEP 7 cheap combined A/B: the two filled-data flags that engage the no-GPU
+/// base `search_memory` path, toggled TOGETHER OFF vs ON over the cached scenario
+/// DBs. `ORIGIN_ENABLE_SALIENCE_PRIOR` reads the backfilled `importance`;
+/// `ORIGIN_ENABLE_TEMPORAL_SOFT_BOOST` reads the injected `event_date`. Combined
+/// (not per-flag) by design — a directional gate before the expensive per-flag
+/// grid. Retrieval-only, no GPU. The other reseed-unblocked flags (FACT_CHANNEL,
+/// EPISODE_CHANNEL, SESSION_DIVERSITY) live on the cross-rerank path and need a
+/// separate GPU A/B. Single-run scaffold — N≥3 for any headline claim.
+///
+/// ```bash
+/// cargo test -p origin-core --features eval-harness --test eval_harness \
+///   data_flags_ab_dualbench -- --ignored --nocapture
+/// ```
+#[tokio::test]
+#[ignore = "needs cached scenario DBs; retrieval-only, no GPU"]
+async fn data_flags_ab_dualbench() {
+    use origin_core::eval::locomo::run_locomo_eval_from_db;
+    use origin_core::eval::longmemeval::run_longmemeval_eval_from_db;
+    let root = resolve_scenario_db_root_from_harness();
+
+    let on_vars = [
+        ("ORIGIN_ENABLE_SALIENCE_PRIOR", Some("1")),
+        ("ORIGIN_ENABLE_TEMPORAL_SOFT_BOOST", Some("1")),
+    ];
+    let off_vars = [
+        ("ORIGIN_ENABLE_SALIENCE_PRIOR", None::<&str>),
+        ("ORIGIN_ENABLE_TEMPORAL_SOFT_BOOST", None::<&str>),
+    ];
+
+    let lo_cov = |r: &origin_core::eval::locomo::LocomoReport| {
+        r.coverage.as_ref().map(|c| c.blind).unwrap_or(0.0)
+    };
+    let lme_cov = |r: &origin_core::eval::longmemeval::LongMemEvalReport| {
+        r.coverage.as_ref().map(|c| c.blind).unwrap_or(0.0)
+    };
+
+    let lo_dir = root.join("locomo_v1");
+    if lo_dir.join("origin_memory.db").exists() {
+        let fx = eval_root().join("data/locomo10.json");
+        if fx.exists() {
+            let db = origin_core::db::MemoryDB::new(
+                &lo_dir,
+                std::sync::Arc::new(origin_core::events::NoopEmitter),
+            )
+            .await
+            .unwrap();
+            let off = temp_env::async_with_vars(off_vars, run_locomo_eval_from_db(&db, &fx))
+                .await
+                .unwrap();
+            let on = temp_env::async_with_vars(on_vars, run_locomo_eval_from_db(&db, &fx))
+                .await
+                .unwrap();
+            println!(
+                "[DATA-FLAGS A/B LoCoMo] q={} | ndcg@10 off={:.4} on={:.4} d={:+.4} | recall@5 off={:.4} on={:.4} d={:+.4} | cov_blind off={:.4} on={:.4} d={:+.4}",
+                off.total_questions,
+                off.aggregate_ndcg_at_10,
+                on.aggregate_ndcg_at_10,
+                on.aggregate_ndcg_at_10 - off.aggregate_ndcg_at_10,
+                off.aggregate_recall_at_5,
+                on.aggregate_recall_at_5,
+                on.aggregate_recall_at_5 - off.aggregate_recall_at_5,
+                lo_cov(&off),
+                lo_cov(&on),
+                lo_cov(&on) - lo_cov(&off),
+            );
+        } else {
+            println!("SKIP LoCoMo: locomo10.json not found at {}", fx.display());
+        }
+    } else {
+        println!("SKIP LoCoMo: no seeded DB at {}", lo_dir.display());
+    }
+
+    let lme_dir = root.join("lme_v1");
+    if lme_dir.join("origin_memory.db").exists() {
+        let fx = eval_root().join("data/longmemeval_oracle.json");
+        if fx.exists() {
+            let db = origin_core::db::MemoryDB::new(
+                &lme_dir,
+                std::sync::Arc::new(origin_core::events::NoopEmitter),
+            )
+            .await
+            .unwrap();
+            let off = temp_env::async_with_vars(off_vars, run_longmemeval_eval_from_db(&db, &fx))
+                .await
+                .unwrap();
+            let on = temp_env::async_with_vars(on_vars, run_longmemeval_eval_from_db(&db, &fx))
+                .await
+                .unwrap();
+            println!(
+                "[DATA-FLAGS A/B LME] q={} | ndcg@10 off={:.4} on={:.4} d={:+.4} | recall@5 off={:.4} on={:.4} d={:+.4} | cov_blind off={:.4} on={:.4} d={:+.4}",
+                off.total_questions,
+                off.aggregate_ndcg_at_10,
+                on.aggregate_ndcg_at_10,
+                on.aggregate_ndcg_at_10 - off.aggregate_ndcg_at_10,
+                off.aggregate_recall_at_5,
+                on.aggregate_recall_at_5,
+                on.aggregate_recall_at_5 - off.aggregate_recall_at_5,
+                lme_cov(&off),
+                lme_cov(&on),
+                lme_cov(&on) - lme_cov(&off),
+            );
+        } else {
+            println!(
+                "SKIP LME: longmemeval_oracle.json not found at {}",
+                fx.display()
+            );
+        }
+    } else {
+        println!("SKIP LME: no seeded DB at {}", lme_dir.display());
+    }
+}
+
+// --- STEP 8 per-flag screen helpers (no new dep) ---
+
+/// Deterministic seeded sample of `k` distinct indices from `0..n`.
+///
+/// Partial Fisher-Yates driven by a SplitMix-ish LCG so we get a seeded random
+/// draw WITHOUT pulling a `rand` dev-dep. Same seed -> same set (reproducible);
+/// different seeds -> almost surely different sets (sampling variance). Returns
+/// `min(k, n)` indices. The eval pipeline itself stays deterministic
+/// (`paired.rs` asserts no RNG); the ONLY variance source for a retrieval
+/// metric is WHICH questions you draw, which is exactly what this seeds.
+fn seeded_sample(n: usize, k: usize, seed: u64) -> Vec<usize> {
+    let k = k.min(n);
+    let mut idx: Vec<usize> = (0..n).collect();
+    let mut state = seed
+        .wrapping_mul(6364136223846793005)
+        .wrapping_add(1442695040888963407);
+    for i in 0..k {
+        state = state
+            .wrapping_mul(6364136223846793005)
+            .wrapping_add(1442695040888963407);
+        let j = i + (state >> 33) as usize % (n - i);
+        idx.swap(i, j);
+    }
+    idx.truncate(k);
+    idx
+}
+
+/// Write a `k`-element seeded subset of the top-level JSON array at `src` to a
+/// temp file. Returns `(TempDir, path)` — keep the `TempDir` alive while the
+/// runner reads the path. Both LoCoMo (`locomo10.json`) and LME
+/// (`longmemeval_oracle.json`) are top-level arrays, so element-slicing yields
+/// a valid subset fixture (subset of QUESTIONS; the DB corpus stays full).
+fn write_json_subset(
+    src: &std::path::Path,
+    k: usize,
+    seed: u64,
+) -> (tempfile::TempDir, std::path::PathBuf) {
+    let data = std::fs::read_to_string(src).expect("read fixture json");
+    let arr: Vec<serde_json::Value> =
+        serde_json::from_str(&data).expect("fixture json is a top-level array");
+    let picks = seeded_sample(arr.len(), k, seed);
+    let subset: Vec<&serde_json::Value> = picks.iter().map(|&i| &arr[i]).collect();
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("subset.json");
+    std::fs::write(&path, serde_json::to_string(&subset).unwrap()).unwrap();
+    (dir, path)
+}
+
+/// Population mean + (population) stddev of a small sample.
+fn mean_std(xs: &[f64]) -> (f64, f64) {
+    if xs.is_empty() {
+        return (0.0, 0.0);
+    }
+    let n = xs.len() as f64;
+    let m = xs.iter().sum::<f64>() / n;
+    let var = xs.iter().map(|x| (x - m).powi(2)).sum::<f64>() / n;
+    (m, var.sqrt())
+}
+
+#[test]
+fn seeded_sample_deterministic_distinct_bounded() {
+    let a = seeded_sample(500, 60, 7);
+    let b = seeded_sample(500, 60, 7);
+    assert_eq!(a, b, "same seed must reproduce the same draw");
+    assert_eq!(a.len(), 60);
+    let set: std::collections::HashSet<_> = a.iter().copied().collect();
+    assert_eq!(set.len(), 60, "indices must be distinct");
+    assert!(a.iter().all(|&i| i < 500), "indices must be in range");
+}
+
+#[test]
+fn seeded_sample_varies_by_seed() {
+    assert_ne!(seeded_sample(500, 60, 1), seeded_sample(500, 60, 2));
+}
+
+#[test]
+fn seeded_sample_caps_at_n() {
+    let a = seeded_sample(10, 50, 3);
+    assert_eq!(a.len(), 10);
+    let set: std::collections::HashSet<_> = a.iter().copied().collect();
+    assert_eq!(
+        set.len(),
+        10,
+        "small population yields all distinct indices"
+    );
+}
+
+#[test]
+fn mean_std_matches_hand_calc() {
+    let (m, s) = mean_std(&[1.0, 2.0, 3.0]);
+    assert!((m - 2.0).abs() < 1e-9);
+    assert!((s - (2.0f64 / 3.0).sqrt()).abs() < 1e-9);
+}
+
+/// STEP 8 per-flag screen: isolate each no-GPU base-path reseed flag ON vs an
+/// all-OFF baseline, across 3 seeded random question draws, paired on the same
+/// subset. Reports per-flag ndcg@10 + recall@5 delta mean +/- stddev per bench.
+///
+/// WHY per-flag (vs `data_flags_ab_dualbench` which toggles a bundle): a bundled
+/// A/B can't attribute WHICH flag moved the metric. This screens each flag's
+/// marginal contribution over the all-off baseline so we can keep/park them one
+/// by one. After the screen, the kept SET still needs a combined re-confirm
+/// (one-by-one misses interactions).
+///
+/// WHY 3 draws (not 3 reruns): the retrieval pipeline is deterministic
+/// (`paired.rs` asserts no RNG), so 3 reruns of the same subset give 3 identical
+/// numbers. The only variance source is which questions you sample, so N=3 means
+/// 3 seeded draws -> a mini sampling-bootstrap of the per-flag delta.
+///
+/// Scaffold, sign-level only. LoCoMo population is just 10 conversations, so the
+/// K=7 draws overlap heavily -> the stddev UNDERSTATES true variance; trust the
+/// SIGN of the mean, not the magnitude. A citable claim needs N>=3 full-fixture
+/// runs per the Eval Citation Discipline.
+///
+/// ```bash
+/// ORIGIN_EVAL_ROOT=/Users/lucian/Repos/origin/app/eval \
+/// SCENARIO_DB_ROOT=~/.cache/origin-eval/scenario_seeded \
+/// cargo test -p origin-core --features eval-harness --test eval_harness \
+///   data_flags_perflag_screen -- --ignored --nocapture
+/// ```
+#[tokio::test]
+#[ignore = "needs cached scenario DBs + raw dataset json (ORIGIN_EVAL_ROOT); retrieval-only, no GPU"]
+async fn data_flags_perflag_screen() {
+    use origin_core::eval::locomo::run_locomo_eval_from_db;
+    use origin_core::eval::longmemeval::run_longmemeval_eval_from_db;
+
+    let root = resolve_scenario_db_root_from_harness();
+    // (display name, env var) — all on the no-GPU `search_memory` base path.
+    let flags = [
+        ("salience", "ORIGIN_ENABLE_SALIENCE_PRIOR"),
+        ("temporal_soft", "ORIGIN_ENABLE_TEMPORAL_SOFT_BOOST"),
+        ("temporal_ground", "ORIGIN_ENABLE_TEMPORAL_GROUNDING"),
+        ("temporal_filter", "ORIGIN_ENABLE_TEMPORAL_FILTER"),
+    ];
+    let all_off: Vec<(&str, Option<&str>)> = flags.iter().map(|(_, e)| (*e, None)).collect();
+    let draws = [11u64, 23, 37];
+
+    // LoCoMo: 10 conversations -> K=7 per draw (heavy overlap; sign only).
+    let lo_dir = root.join("locomo_v1");
+    let lo_fx = eval_root().join("data/locomo10.json");
+    if lo_dir.join("origin_memory.db").exists() && lo_fx.exists() {
+        let db = origin_core::db::MemoryDB::new(
+            &lo_dir,
+            std::sync::Arc::new(origin_core::events::NoopEmitter),
+        )
+        .await
+        .unwrap();
+        let mut d_ndcg: std::collections::HashMap<&str, Vec<f64>> =
+            flags.iter().map(|(n, _)| (*n, Vec::new())).collect();
+        let mut d_recall: std::collections::HashMap<&str, Vec<f64>> =
+            flags.iter().map(|(n, _)| (*n, Vec::new())).collect();
+        for &seed in &draws {
+            let (_guard, sub) = write_json_subset(&lo_fx, 7, seed);
+            let off =
+                temp_env::async_with_vars(all_off.clone(), run_locomo_eval_from_db(&db, &sub))
+                    .await
+                    .unwrap();
+            for (name, env) in flags {
+                let mut on_vars = all_off.clone();
+                for v in on_vars.iter_mut() {
+                    if v.0 == env {
+                        v.1 = Some("1");
+                    }
+                }
+                let on = temp_env::async_with_vars(on_vars, run_locomo_eval_from_db(&db, &sub))
+                    .await
+                    .unwrap();
+                d_ndcg
+                    .get_mut(name)
+                    .unwrap()
+                    .push(on.aggregate_ndcg_at_10 - off.aggregate_ndcg_at_10);
+                d_recall
+                    .get_mut(name)
+                    .unwrap()
+                    .push(on.aggregate_recall_at_5 - off.aggregate_recall_at_5);
+            }
+        }
+        println!("[PERFLAG-SCREEN LoCoMo | K=7/10 conv x 3 draws | baseline=all-off]");
+        for (name, _) in flags {
+            let (mn, sn) = mean_std(&d_ndcg[name]);
+            let (mr, sr) = mean_std(&d_recall[name]);
+            println!("  {name:<16} ndcg@10 d={mn:+.4} sd={sn:.4} | recall@5 d={mr:+.4} sd={sr:.4}");
+        }
+    } else {
+        println!(
+            "SKIP LoCoMo perflag: missing db {} or fixture {}",
+            lo_dir.display(),
+            lo_fx.display()
+        );
+    }
+
+    // LME: 500 questions -> K=60 per draw (low overlap; real draw diversity).
+    let lme_dir = root.join("lme_v1");
+    let lme_fx = eval_root().join("data/longmemeval_oracle.json");
+    if lme_dir.join("origin_memory.db").exists() && lme_fx.exists() {
+        let db = origin_core::db::MemoryDB::new(
+            &lme_dir,
+            std::sync::Arc::new(origin_core::events::NoopEmitter),
+        )
+        .await
+        .unwrap();
+        let mut d_ndcg: std::collections::HashMap<&str, Vec<f64>> =
+            flags.iter().map(|(n, _)| (*n, Vec::new())).collect();
+        let mut d_recall: std::collections::HashMap<&str, Vec<f64>> =
+            flags.iter().map(|(n, _)| (*n, Vec::new())).collect();
+        for &seed in &draws {
+            let (_guard, sub) = write_json_subset(&lme_fx, 60, seed);
+            let off =
+                temp_env::async_with_vars(all_off.clone(), run_longmemeval_eval_from_db(&db, &sub))
+                    .await
+                    .unwrap();
+            for (name, env) in flags {
+                let mut on_vars = all_off.clone();
+                for v in on_vars.iter_mut() {
+                    if v.0 == env {
+                        v.1 = Some("1");
+                    }
+                }
+                let on =
+                    temp_env::async_with_vars(on_vars, run_longmemeval_eval_from_db(&db, &sub))
+                        .await
+                        .unwrap();
+                d_ndcg
+                    .get_mut(name)
+                    .unwrap()
+                    .push(on.aggregate_ndcg_at_10 - off.aggregate_ndcg_at_10);
+                d_recall
+                    .get_mut(name)
+                    .unwrap()
+                    .push(on.aggregate_recall_at_5 - off.aggregate_recall_at_5);
+            }
+        }
+        println!("[PERFLAG-SCREEN LME | K=60/500 q x 3 draws | baseline=all-off]");
+        for (name, _) in flags {
+            let (mn, sn) = mean_std(&d_ndcg[name]);
+            let (mr, sr) = mean_std(&d_recall[name]);
+            println!("  {name:<16} ndcg@10 d={mn:+.4} sd={sn:.4} | recall@5 d={mr:+.4} sd={sr:.4}");
+        }
+    } else {
+        println!(
+            "SKIP LME perflag: missing db {} or fixture {}",
+            lme_dir.display(),
+            lme_fx.display()
+        );
+    }
+}
+
+// --- STEP 8b temporal-subset screen helpers ---
+
+/// Keep only temporal-category questions. LoCoMo: filter each conversation's
+/// `qa` to `category == 2` (the temporal class; 1=multi-hop, 3=open, 4=single,
+/// 5=adversarial) and drop conversations left with none. LME: keep only
+/// array elements whose `question_type == "temporal-reasoning"`.
+///
+/// WHY: the temporal soft-boost is query-cue-gated (`db.rs:8151` forces ×1.0
+/// when the query has no parsed `temporal_cue`), so an aggregate screen washes
+/// it out — most questions carry no time cue. Restricting to temporal questions
+/// is the only fair test of whether the flag helps the queries it's built for.
+fn filter_temporal(arr: Vec<serde_json::Value>, bench: &str) -> Vec<serde_json::Value> {
+    if bench == "locomo" {
+        arr.into_iter()
+            .filter_map(|mut conv| {
+                let keep: Vec<serde_json::Value> = conv
+                    .get("qa")?
+                    .as_array()?
+                    .iter()
+                    .filter(|q| q.get("category").and_then(|c| c.as_u64()) == Some(2))
+                    .cloned()
+                    .collect();
+                if keep.is_empty() {
+                    return None;
+                }
+                conv["qa"] = serde_json::Value::Array(keep);
+                Some(conv)
+            })
+            .collect()
+    } else {
+        arr.into_iter()
+            .filter(|q| {
+                q.get("question_type").and_then(|t| t.as_str()) == Some("temporal-reasoning")
+            })
+            .collect()
+    }
+}
+
+/// Temporal-only sibling of [`write_json_subset`]: filter to temporal questions
+/// first, then take a `k`-element seeded draw.
+fn write_temporal_subset(
+    src: &std::path::Path,
+    bench: &str,
+    k: usize,
+    seed: u64,
+) -> (tempfile::TempDir, std::path::PathBuf) {
+    let data = std::fs::read_to_string(src).expect("read fixture json");
+    let arr: Vec<serde_json::Value> =
+        serde_json::from_str(&data).expect("fixture json is a top-level array");
+    let arr = filter_temporal(arr, bench);
+    let picks = seeded_sample(arr.len(), k, seed);
+    let subset: Vec<&serde_json::Value> = picks.iter().map(|&i| &arr[i]).collect();
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("subset.json");
+    std::fs::write(&path, serde_json::to_string(&subset).unwrap()).unwrap();
+    (dir, path)
+}
+
+#[test]
+fn filter_temporal_locomo_keeps_only_cat2() {
+    let arr: Vec<serde_json::Value> = serde_json::from_str(
+        r#"[{"qa":[{"category":2,"question":"a"},{"category":4,"question":"b"}]},
+            {"qa":[{"category":1,"question":"c"}]}]"#,
+    )
+    .unwrap();
+    let out = filter_temporal(arr, "locomo");
+    assert_eq!(out.len(), 1, "conversation with no cat2 must be dropped");
+    assert_eq!(out[0]["qa"].as_array().unwrap().len(), 1, "only cat2 kept");
+    assert_eq!(out[0]["qa"][0]["category"], 2);
+}
+
+#[test]
+fn filter_temporal_lme_keeps_only_temporal_reasoning() {
+    let arr: Vec<serde_json::Value> = serde_json::from_str(
+        r#"[{"question_type":"temporal-reasoning","question":"a"},
+            {"question_type":"multi-session","question":"b"}]"#,
+    )
+    .unwrap();
+    let out = filter_temporal(arr, "lme");
+    assert_eq!(out.len(), 1);
+    assert_eq!(out[0]["question_type"], "temporal-reasoning");
+}
+
+/// STEP 8b temporal-subset screen: the FAIR test for the temporal flags. Same
+/// per-flag / 3-seeded-draw / paired design as `data_flags_perflag_screen`, but
+/// restricted to temporal-category questions (LoCoMo cat-2, LME
+/// temporal-reasoning) so the cue-gated boost actually has cues to fire on.
+///
+/// Scaffold, sign-level. LoCoMo still only 10 conversations (K=7 overlap) — but
+/// now each contributes ~32 temporal qa, so per-draw question count is healthy.
+/// LME has 133 temporal questions -> K=60 gives real draw diversity.
+///
+/// ```bash
+/// ORIGIN_EVAL_ROOT=/Users/lucian/Repos/origin/app/eval \
+/// SCENARIO_DB_ROOT=~/.cache/origin-eval/scenario_seeded \
+/// cargo test -p origin-core --features eval-harness --test eval_harness \
+///   data_flags_temporal_subset_screen -- --ignored --nocapture
+/// ```
+#[tokio::test]
+#[ignore = "needs cached scenario DBs + raw dataset json (ORIGIN_EVAL_ROOT); retrieval-only, no GPU"]
+async fn data_flags_temporal_subset_screen() {
+    use origin_core::eval::locomo::run_locomo_eval_from_db;
+    use origin_core::eval::longmemeval::run_longmemeval_eval_from_db;
+
+    let root = resolve_scenario_db_root_from_harness();
+    let flags = [
+        ("temporal_soft", "ORIGIN_ENABLE_TEMPORAL_SOFT_BOOST"),
+        ("temporal_ground", "ORIGIN_ENABLE_TEMPORAL_GROUNDING"),
+        ("temporal_filter", "ORIGIN_ENABLE_TEMPORAL_FILTER"),
+    ];
+    let all_off: Vec<(&str, Option<&str>)> = flags.iter().map(|(_, e)| (*e, None)).collect();
+    let draws = [11u64, 23, 37];
+
+    let lo_dir = root.join("locomo_v1");
+    let lo_fx = eval_root().join("data/locomo10.json");
+    if lo_dir.join("origin_memory.db").exists() && lo_fx.exists() {
+        let db = origin_core::db::MemoryDB::new(
+            &lo_dir,
+            std::sync::Arc::new(origin_core::events::NoopEmitter),
+        )
+        .await
+        .unwrap();
+        let mut d_ndcg: std::collections::HashMap<&str, Vec<f64>> =
+            flags.iter().map(|(n, _)| (*n, Vec::new())).collect();
+        let mut d_recall: std::collections::HashMap<&str, Vec<f64>> =
+            flags.iter().map(|(n, _)| (*n, Vec::new())).collect();
+        for &seed in &draws {
+            let (_guard, sub) = write_temporal_subset(&lo_fx, "locomo", 7, seed);
+            let off =
+                temp_env::async_with_vars(all_off.clone(), run_locomo_eval_from_db(&db, &sub))
+                    .await
+                    .unwrap();
+            for (name, env) in flags {
+                let mut on_vars = all_off.clone();
+                for v in on_vars.iter_mut() {
+                    if v.0 == env {
+                        v.1 = Some("1");
+                    }
+                }
+                let on = temp_env::async_with_vars(on_vars, run_locomo_eval_from_db(&db, &sub))
+                    .await
+                    .unwrap();
+                d_ndcg
+                    .get_mut(name)
+                    .unwrap()
+                    .push(on.aggregate_ndcg_at_10 - off.aggregate_ndcg_at_10);
+                d_recall
+                    .get_mut(name)
+                    .unwrap()
+                    .push(on.aggregate_recall_at_5 - off.aggregate_recall_at_5);
+            }
+        }
+        println!("[TEMPORAL-SUBSET LoCoMo cat-2 | K=7/10 conv x 3 draws | baseline=all-off]");
+        for (name, _) in flags {
+            let (mn, sn) = mean_std(&d_ndcg[name]);
+            let (mr, sr) = mean_std(&d_recall[name]);
+            println!("  {name:<16} ndcg@10 d={mn:+.4} sd={sn:.4} | recall@5 d={mr:+.4} sd={sr:.4}");
+        }
+    } else {
+        println!(
+            "SKIP LoCoMo temporal-subset: missing db {} or fixture {}",
+            lo_dir.display(),
+            lo_fx.display()
+        );
+    }
+
+    let lme_dir = root.join("lme_v1");
+    let lme_fx = eval_root().join("data/longmemeval_oracle.json");
+    if lme_dir.join("origin_memory.db").exists() && lme_fx.exists() {
+        let db = origin_core::db::MemoryDB::new(
+            &lme_dir,
+            std::sync::Arc::new(origin_core::events::NoopEmitter),
+        )
+        .await
+        .unwrap();
+        let mut d_ndcg: std::collections::HashMap<&str, Vec<f64>> =
+            flags.iter().map(|(n, _)| (*n, Vec::new())).collect();
+        let mut d_recall: std::collections::HashMap<&str, Vec<f64>> =
+            flags.iter().map(|(n, _)| (*n, Vec::new())).collect();
+        for &seed in &draws {
+            let (_guard, sub) = write_temporal_subset(&lme_fx, "lme", 60, seed);
+            let off =
+                temp_env::async_with_vars(all_off.clone(), run_longmemeval_eval_from_db(&db, &sub))
+                    .await
+                    .unwrap();
+            for (name, env) in flags {
+                let mut on_vars = all_off.clone();
+                for v in on_vars.iter_mut() {
+                    if v.0 == env {
+                        v.1 = Some("1");
+                    }
+                }
+                let on =
+                    temp_env::async_with_vars(on_vars, run_longmemeval_eval_from_db(&db, &sub))
+                        .await
+                        .unwrap();
+                d_ndcg
+                    .get_mut(name)
+                    .unwrap()
+                    .push(on.aggregate_ndcg_at_10 - off.aggregate_ndcg_at_10);
+                d_recall
+                    .get_mut(name)
+                    .unwrap()
+                    .push(on.aggregate_recall_at_5 - off.aggregate_recall_at_5);
+            }
+        }
+        println!(
+            "[TEMPORAL-SUBSET LME temporal-reasoning | K=60/133 q x 3 draws | baseline=all-off]"
+        );
+        for (name, _) in flags {
+            let (mn, sn) = mean_std(&d_ndcg[name]);
+            let (mr, sr) = mean_std(&d_recall[name]);
+            println!("  {name:<16} ndcg@10 d={mn:+.4} sd={sn:.4} | recall@5 d={mr:+.4} sd={sr:.4}");
+        }
+    } else {
+        println!(
+            "SKIP LME temporal-subset: missing db {} or fixture {}",
+            lme_dir.display(),
+            lme_fx.display()
+        );
+    }
+}
+
+/// STEP 9 reranker model A/B: compare the shippable native cross-encoders on
+/// Origin's own eval to answer "which reranker to use." Candidates (all Apache/MIT,
+/// all fastembed cross-encoders): bge-reranker-v2-m3 (current, 0.6B), bge-reranker-base
+/// (0.3B, half size), jina-reranker-v1-turbo-en (37.8M). Non-commercial (jina-v2/v3)
+/// and no-ONNX (mxbai/Qwen3) candidates are excluded — see the reranker survey.
+///
+/// Design: paired over 3 seeded draws, channels forced OFF (production default) so
+/// ONLY the reranker model varies. A NO-OP CONTROL — bge-v2-m3 run a second time —
+/// calibrates the pipeline noise floor; a "model A != model B" claim is only real
+/// if the gap exceeds |bge-v2-m3 - bge-v2-m3#noise|. (This control is the lesson
+/// from the temporal screen: without it, HashMap tie-break noise reads as signal.)
+///
+/// Each model is loaded BYO via `ORIGIN_RERANKER_ONNX_DIR` (curled into
+/// `~/.cache/origin-eval/rerankers/<name>/`) to dodge the Xet enum-download failure.
+/// Scaffold, sign-level. CPU cross-encoder — slow; run watched.
+///
+/// ```bash
+/// ORIGIN_EVAL_ROOT=/Users/lucian/Repos/origin/app/eval \
+/// SCENARIO_DB_ROOT=~/.cache/origin-eval/scenario_seeded \
+/// cargo test -p origin-core --features eval-harness --test eval_harness \
+///   reranker_model_ab -- --ignored --nocapture
+/// ```
+#[tokio::test]
+#[ignore = "needs cached scenario DBs + raw dataset json + BYO reranker ONNX dirs; CPU cross-encoder, slow"]
+async fn reranker_model_ab() {
+    use origin_core::eval::locomo::run_locomo_eval_cross_rerank_from_db;
+
+    let root = resolve_scenario_db_root_from_harness();
+    let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
+    let rr_base = format!("{home}/.cache/origin-eval/rerankers");
+    // (label, onnx_dir). Two bge-v2-m3 entries: the 2nd ("#noise") is the no-op
+    // control — same model, same draws -> any delta is pipeline noise.
+    // turbo first (fastest) for quick feedback that the pipeline works + a timing
+    // anchor before the slow bge-v2-m3 arms.
+    let models = [
+        ("jina-turbo", format!("{rr_base}/jina-turbo")),
+        ("bge-base", format!("{rr_base}/bge-base")),
+        ("bge-v2-m3", format!("{rr_base}/bge-v2-m3")),
+        ("bge-v2-m3#noise", format!("{rr_base}/bge-v2-m3")),
+    ];
+    // Force every opt-in channel/reseed flag OFF (production default) so only the
+    // reranker model varies across arms.
+    let chan_off: Vec<(&str, Option<&str>)> = vec![
+        ("ORIGIN_ENABLE_PAGE_CHANNEL", None),
+        ("ORIGIN_ENABLE_EPISODE_CHANNEL", None),
+        ("ORIGIN_ENABLE_FACT_CHANNEL", None),
+        ("ORIGIN_ENABLE_SESSION_DIVERSITY", None),
+        ("ORIGIN_ENABLE_SALIENCE_PRIOR", None),
+        ("ORIGIN_ENABLE_TEMPORAL_SOFT_BOOST", None),
+        ("ORIGIN_ENABLE_TEMPORAL_FILTER", None),
+        ("ORIGIN_ENABLE_TEMPORAL_GROUNDING", None),
+        ("ORIGIN_ENABLE_GRAPH_GATE", None),
+        ("ORIGIN_ENABLE_GRAPH_SEED", None),
+        ("ORIGIN_ENABLE_GRAPH_KHOP", None),
+        ("ORIGIN_ENABLE_QUERY_INTENT", None),
+        ("ORIGIN_ENABLE_COT_RETRIEVAL", None),
+        ("ORIGIN_ENABLE_GLOBAL_PRELUDE", None),
+    ];
+    // K (conversations per draw) + draws (seeds) are env-tunable so the slow CPU
+    // cross-encoder run can be scoped/scaled without a 20-min recompile. LoCoMo has
+    // only 10 conversations, so K must be < 10 for draw diversity. Defaults are
+    // deliberately tiny — bump via RERANK_AB_K / RERANK_AB_DRAWS once timing is known.
+    let k: usize = std::env::var("RERANK_AB_K")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(2);
+    let draws: Vec<u64> = std::env::var("RERANK_AB_DRAWS")
+        .ok()
+        .map(|s| s.split(',').filter_map(|x| x.trim().parse().ok()).collect())
+        .unwrap_or_else(|| vec![11, 23]);
+
+    let lo_dir = root.join("locomo_v1");
+    let lo_fx = eval_root().join("data/locomo10.json");
+    if !(lo_dir.join("origin_memory.db").exists() && lo_fx.exists()) {
+        println!(
+            "SKIP reranker-ab: missing db {} or fixture {}",
+            lo_dir.display(),
+            lo_fx.display()
+        );
+        return;
+    }
+    let db = origin_core::db::MemoryDB::new(
+        &lo_dir,
+        std::sync::Arc::new(origin_core::events::NoopEmitter),
+    )
+    .await
+    .unwrap();
+
+    let mut ndcg: std::collections::HashMap<&str, Vec<f64>> =
+        models.iter().map(|(n, _)| (*n, Vec::new())).collect();
+    let mut recall: std::collections::HashMap<&str, Vec<f64>> =
+        models.iter().map(|(n, _)| (*n, Vec::new())).collect();
+
+    for (label, dir) in &models {
+        if !std::path::Path::new(dir).join("model.onnx").exists() {
+            println!("SKIP {label}: no model.onnx at {dir}");
+            continue;
+        }
+        for &seed in &draws {
+            let (_guard, sub) = write_json_subset(&lo_fx, k, seed);
+            eprintln!("[start] {label} seed={seed} k={k}");
+            let mut vars = chan_off.clone();
+            vars.push(("ORIGIN_RERANKER_ONNX_DIR", Some(dir.as_str())));
+            vars.push(("ORIGIN_RERANKER_MODEL_ID", Some(label)));
+            let report = temp_env::async_with_vars(vars, async {
+                let reranker = origin_core::reranker::init_cross_encoder_reranker(None)
+                    .expect("init_cross_encoder_reranker (BYO) failed");
+                run_locomo_eval_cross_rerank_from_db(&db, &sub, reranker).await
+            })
+            .await
+            .unwrap();
+            ndcg.get_mut(label)
+                .unwrap()
+                .push(report.aggregate_ndcg_at_10);
+            recall
+                .get_mut(label)
+                .unwrap()
+                .push(report.aggregate_recall_at_5);
+            println!(
+                "  [run] {label:<16} seed={seed} ndcg@10={:.4} recall@5={:.4}",
+                report.aggregate_ndcg_at_10, report.aggregate_recall_at_5
+            );
+        }
+    }
+
+    println!(
+        "[RERANKER-AB LoCoMo | K={k} x {} draws | channels OFF | abs metrics]",
+        draws.len()
+    );
+    for (label, _) in &models {
+        let (mn, sn) = mean_std(&ndcg[label]);
+        let (mr, sr) = mean_std(&recall[label]);
+        println!("  {label:<16} ndcg@10={mn:.4}±{sn:.4} | recall@5={mr:.4}±{sr:.4}");
+    }
+    // Noise floor: |bge-v2-m3 - bge-v2-m3#noise| (same model twice). A model
+    // difference must exceed this to count as signal.
+    if !ndcg["bge-v2-m3"].is_empty() && !ndcg["bge-v2-m3#noise"].is_empty() {
+        let (m0, _) = mean_std(&ndcg["bge-v2-m3"]);
+        let (m1, _) = mean_std(&ndcg["bge-v2-m3#noise"]);
+        let (r0, _) = mean_std(&recall["bge-v2-m3"]);
+        let (r1, _) = mean_std(&recall["bge-v2-m3#noise"]);
+        println!(
+            "[RERANKER-AB NOISE FLOOR] ndcg@10={:.4} recall@5={:.4} (same-model run-to-run)",
+            (m0 - m1).abs(),
+            (r0 - r1).abs()
+        );
+    }
+}
+
+/// STEP 7 GPU combined A/B: the three filled-data flags that engage the
+/// cross-rerank path, toggled TOGETHER OFF vs ON over the cached scenario DBs.
+/// `ORIGIN_ENABLE_EPISODE_CHANNEL` (5th RRF stream, reads backfilled episode
+/// rows), `ORIGIN_ENABLE_FACT_CHANNEL` (reads backfilled `structured_fields`),
+/// and `ORIGIN_ENABLE_SESSION_DIVERSITY` (reads injected `event_date`). Combined
+/// directional gate (parallel to `data_flags_ab_dualbench` on the no-GPU path);
+/// per-flag attribution follows if this moves. Needs Metal GPU (cross-encoder
+/// reranker, downloads ~600MB on first run) + cached scenario DBs. Run unsandboxed.
+/// Single-run scaffold — N≥3 for any headline claim.
+///
+/// ```bash
+/// cargo test -p origin-core --features eval-harness --test eval_harness \
+///   cross_rerank_data_flags_ab_dualbench -- --ignored --nocapture
+/// ```
+#[tokio::test]
+#[ignore = "needs Metal GPU (cross-encoder) + cached scenario DBs"]
+async fn cross_rerank_data_flags_ab_dualbench() {
+    use origin_core::eval::locomo::run_locomo_eval_cross_rerank_from_db;
+    use origin_core::eval::longmemeval::run_longmemeval_eval_cross_rerank_from_db;
+    let root = resolve_scenario_db_root_from_harness();
+
+    let on_vars = [
+        ("ORIGIN_ENABLE_EPISODE_CHANNEL", Some("1")),
+        ("ORIGIN_ENABLE_FACT_CHANNEL", Some("1")),
+        ("ORIGIN_ENABLE_SESSION_DIVERSITY", Some("1")),
+    ];
+    let off_vars = [
+        ("ORIGIN_ENABLE_EPISODE_CHANNEL", None::<&str>),
+        ("ORIGIN_ENABLE_FACT_CHANNEL", None::<&str>),
+        ("ORIGIN_ENABLE_SESSION_DIVERSITY", None::<&str>),
+    ];
+
+    let lo_cov = |r: &origin_core::eval::locomo::LocomoReport| {
+        r.coverage.as_ref().map(|c| c.blind).unwrap_or(0.0)
+    };
+    let lme_cov = |r: &origin_core::eval::longmemeval::LongMemEvalReport| {
+        r.coverage.as_ref().map(|c| c.blind).unwrap_or(0.0)
+    };
+
+    let lo_dir = root.join("locomo_v1");
+    if lo_dir.join("origin_memory.db").exists() {
+        let fx = eval_root().join("data/locomo10.json");
+        if fx.exists() {
+            let db = origin_core::db::MemoryDB::new(
+                &lo_dir,
+                std::sync::Arc::new(origin_core::events::NoopEmitter),
+            )
+            .await
+            .unwrap();
+            let reranker = origin_core::reranker::init_cross_encoder_reranker(None)
+                .expect("init_cross_encoder_reranker failed (downloads ~600MB on first run)");
+            let off = temp_env::async_with_vars(
+                off_vars,
+                run_locomo_eval_cross_rerank_from_db(&db, &fx, reranker.clone()),
+            )
+            .await
+            .unwrap();
+            let on = temp_env::async_with_vars(
+                on_vars,
+                run_locomo_eval_cross_rerank_from_db(&db, &fx, reranker.clone()),
+            )
+            .await
+            .unwrap();
+            println!(
+                "[XR DATA-FLAGS A/B LoCoMo] q={} | ndcg@10 off={:.4} on={:.4} d={:+.4} | recall@5 off={:.4} on={:.4} d={:+.4} | cov_blind off={:.4} on={:.4} d={:+.4}",
+                off.total_questions,
+                off.aggregate_ndcg_at_10,
+                on.aggregate_ndcg_at_10,
+                on.aggregate_ndcg_at_10 - off.aggregate_ndcg_at_10,
+                off.aggregate_recall_at_5,
+                on.aggregate_recall_at_5,
+                on.aggregate_recall_at_5 - off.aggregate_recall_at_5,
+                lo_cov(&off),
+                lo_cov(&on),
+                lo_cov(&on) - lo_cov(&off),
+            );
+        } else {
+            println!("SKIP LoCoMo: locomo10.json not found at {}", fx.display());
+        }
+    } else {
+        println!("SKIP LoCoMo: no seeded DB at {}", lo_dir.display());
+    }
+
+    let lme_dir = root.join("lme_v1");
+    if lme_dir.join("origin_memory.db").exists() {
+        let fx = eval_root().join("data/longmemeval_oracle.json");
+        if fx.exists() {
+            let db = origin_core::db::MemoryDB::new(
+                &lme_dir,
+                std::sync::Arc::new(origin_core::events::NoopEmitter),
+            )
+            .await
+            .unwrap();
+            let reranker = origin_core::reranker::init_cross_encoder_reranker(None)
+                .expect("init_cross_encoder_reranker failed (downloads ~600MB on first run)");
+            let off = temp_env::async_with_vars(
+                off_vars,
+                run_longmemeval_eval_cross_rerank_from_db(&db, &fx, reranker.clone()),
+            )
+            .await
+            .unwrap();
+            let on = temp_env::async_with_vars(
+                on_vars,
+                run_longmemeval_eval_cross_rerank_from_db(&db, &fx, reranker.clone()),
+            )
+            .await
+            .unwrap();
+            println!(
+                "[XR DATA-FLAGS A/B LME] q={} | ndcg@10 off={:.4} on={:.4} d={:+.4} | recall@5 off={:.4} on={:.4} d={:+.4} | cov_blind off={:.4} on={:.4} d={:+.4}",
+                off.total_questions,
+                off.aggregate_ndcg_at_10,
+                on.aggregate_ndcg_at_10,
+                on.aggregate_ndcg_at_10 - off.aggregate_ndcg_at_10,
+                off.aggregate_recall_at_5,
+                on.aggregate_recall_at_5,
+                on.aggregate_recall_at_5 - off.aggregate_recall_at_5,
+                lme_cov(&off),
+                lme_cov(&on),
+                lme_cov(&on) - lme_cov(&off),
+            );
+        } else {
+            println!(
+                "SKIP LME: longmemeval_oracle.json not found at {}",
+                fx.display()
+            );
+        }
+    } else {
+        println!("SKIP LME: no seeded DB at {}", lme_dir.display());
+    }
+}
+
 /// T9 wide-pool-seeded graph-expansion A/B on BOTH benches (retrieval-only).
 /// Measurement vehicle is coverage_recall (NDCG is neutral-by-construction —
 /// KG observation rows are stripped from user output, only the RRF boost survives,
@@ -1206,6 +2068,184 @@ async fn fts_hardening_ab_dualbench() {
                 on.aggregate_recall_at_5 - off.aggregate_recall_at_5
             );
         }
+    }
+}
+
+/// STEP 7 (a2): inject `event_date` from dataset session metadata into the cached
+/// seed DBs (locomo_v1 + lme_v1). GPU-FREE — classify-from-text cannot recover
+/// these dates because the observation/turn text is date-stripped; the per-session
+/// date lives only in dataset metadata. Run this BEFORE the on-device classify
+/// backfill so the temporal channel (T11/T20) has data. Non-destructive: only fills
+/// the `event_date` column for matching `source_id`s.
+///
+/// ```bash
+/// cargo test -p origin-core --features eval-harness --test eval_harness \
+///   seed_inject_event_dates -- --ignored --nocapture
+/// ```
+#[tokio::test]
+#[ignore]
+async fn seed_inject_event_dates() {
+    use origin_core::eval::{locomo, longmemeval};
+
+    let root = resolve_scenario_db_root_from_harness();
+    let emitter = || std::sync::Arc::new(origin_core::events::NoopEmitter);
+
+    // --- LoCoMo ---
+    let lc_dir = root.join("locomo_v1");
+    let lc_fixture = eval_root().join("data/locomo10.json");
+    if lc_dir.join("origin_memory.db").exists() && lc_fixture.exists() {
+        let samples = locomo::load_locomo(&lc_fixture).expect("load locomo");
+        let updates: Vec<(String, i64)> = locomo::event_date_map(&samples).into_iter().collect();
+        let db = origin_core::db::MemoryDB::new(&lc_dir, emitter())
+            .await
+            .expect("open locomo_v1");
+        let n = db
+            .set_event_dates_by_source_id(&updates)
+            .await
+            .expect("inject locomo event_dates");
+        eprintln!(
+            "[inject] locomo_v1: {} source_ids mapped -> {} rows updated",
+            updates.len(),
+            n
+        );
+    } else {
+        eprintln!("SKIP locomo: missing seed DB or fixture");
+    }
+
+    // --- LongMemEval ---
+    let lme_dir = root.join("lme_v1");
+    let lme_fixture = eval_root().join("data/longmemeval_oracle.json");
+    if lme_dir.join("origin_memory.db").exists() && lme_fixture.exists() {
+        let samples = longmemeval::load_longmemeval(&lme_fixture).expect("load lme");
+        let updates: Vec<(String, i64)> =
+            longmemeval::event_date_map(&samples).into_iter().collect();
+        let db = origin_core::db::MemoryDB::new(&lme_dir, emitter())
+            .await
+            .expect("open lme_v1");
+        let n = db
+            .set_event_dates_by_source_id(&updates)
+            .await
+            .expect("inject lme event_dates");
+        eprintln!(
+            "[inject] lme_v1: {} source_ids mapped -> {} rows updated",
+            updates.len(),
+            n
+        );
+    } else {
+        eprintln!("SKIP lme: missing seed DB or fixture");
+    }
+}
+
+/// STEP 7: on-device classify backfill on the pooled seed DBs (locomo_v1 + lme_v1).
+/// Populates importance/quality/structured_fields/memory_type/retrieval_cue for the
+/// ~8064 memories that are `importance IS NULL` (the seeds predate the Phase-1
+/// classification pass). ~4.3h on Metal at concurrency=8. Run AFTER
+/// `seed_inject_event_dates` — classify's `event_date` write is COALESCE, so an
+/// injected date survives (extract returns None for date-stripped text).
+///
+/// ```bash
+/// EVAL_ENRICHMENT_CONCURRENCY=8 ORIGIN_LLM_PARALLEL_SEQS=8 \
+///   cargo test -p origin-core --features eval-harness --test eval_harness \
+///   seed_backfill_classify -- --ignored --nocapture
+/// ```
+#[tokio::test]
+#[ignore]
+async fn seed_backfill_classify() {
+    use origin_core::eval::shared::run_classification_for_eval_concurrent;
+    use origin_core::llm_provider::OnDeviceProvider;
+    use std::sync::Arc;
+
+    let concurrency: usize = std::env::var("EVAL_ENRICHMENT_CONCURRENCY")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(8);
+    let root = resolve_scenario_db_root_from_harness();
+
+    let llm: Arc<dyn origin_core::llm_provider::LlmProvider> = match OnDeviceProvider::new() {
+        Ok(p) => Arc::new(p),
+        Err(e) => {
+            eprintln!("SKIP: on-device init failed: {e}");
+            return;
+        }
+    };
+
+    let overall = std::time::Instant::now();
+    for seed in ["locomo_v1", "lme_v1"] {
+        let dir = root.join(seed);
+        if !dir.join("origin_memory.db").exists() {
+            eprintln!("SKIP {seed}: no seed DB at {}", dir.display());
+            continue;
+        }
+        let db = origin_core::db::MemoryDB::new(&dir, Arc::new(origin_core::events::NoopEmitter))
+            .await
+            .expect("open pooled seed DB");
+        let before = db
+            .get_memories_needing_classification()
+            .await
+            .unwrap()
+            .len();
+        eprintln!(
+            "[backfill] {seed}: {before} memories need classification (concurrency={concurrency})"
+        );
+        let t0 = std::time::Instant::now();
+        let n = run_classification_for_eval_concurrent(&db, &llm, concurrency)
+            .await
+            .expect("classify backfill");
+        let elapsed = t0.elapsed().as_secs_f64();
+        let after = db
+            .get_memories_needing_classification()
+            .await
+            .unwrap()
+            .len();
+        eprintln!(
+            "[backfill] {seed}: classified {n} in {:.0}s ({:.2}s/mem); remaining unclassified={after}",
+            elapsed,
+            elapsed / (n.max(1) as f64)
+        );
+    }
+    eprintln!(
+        "[backfill] DONE both seeds in {:.0}s ({:.2}h)",
+        overall.elapsed().as_secs_f64(),
+        overall.elapsed().as_secs_f64() / 3600.0
+    );
+}
+
+/// STEP 7 (T2): backfill verbatim `source='episode'` rows into the cached seed
+/// DBs (locomo_v1 + lme_v1) so the episode channel (`ORIGIN_ENABLE_EPISODE_CHANNEL`)
+/// has data to measure. GPU-FREE — only FastEmbed (deterministic), no LLM. Derives
+/// each episode through the same `derive_episode` helper the write-path co-write
+/// uses (no skew). Byte-identical to a fresh flag-on ingest for single-chunk
+/// parents (all of locomo_v1); multi-chunk lme parents (~4.5%) capture the first
+/// chunk only (see `backfill_episodes` doc). Non-destructive + idempotent
+/// (deterministic ids + paired delete). The base channel excludes
+/// `source='episode'`, so existing baselines are unaffected until the read flag
+/// is turned on.
+///
+/// ```bash
+/// cargo test -p origin-core --features eval-harness --test eval_harness \
+///   seed_backfill_episodes -- --ignored --nocapture
+/// ```
+#[tokio::test]
+#[ignore]
+async fn seed_backfill_episodes() {
+    use std::sync::Arc;
+
+    let root = resolve_scenario_db_root_from_harness();
+    for seed in ["locomo_v1", "lme_v1"] {
+        let dir = root.join(seed);
+        if !dir.join("origin_memory.db").exists() {
+            eprintln!("SKIP {seed}: no seed DB at {}", dir.display());
+            continue;
+        }
+        let db = origin_core::db::MemoryDB::new(&dir, Arc::new(origin_core::events::NoopEmitter))
+            .await
+            .expect("open pooled seed DB");
+        let t0 = std::time::Instant::now();
+        let n = db.backfill_episodes().await.expect("backfill episodes");
+        eprintln!(
+            "[episodes] {seed}: wrote {n} episode rows in {:.1}s",
+            t0.elapsed().as_secs_f64()
+        );
     }
 }
 
@@ -1393,31 +2433,203 @@ async fn paired_run_cached_feature(feature: &str, flag: &str) {
     }
 }
 
-/// Umbrella test: emit per-query paired JSONL for the 7 Track-A features.
+/// Run one cached-DB feature on both benches through the CROSS-RERANK read path
+/// (`search_memory_cross_rerank`, where the page / episode / fact / global-prelude
+/// channels live), OFF then ON, emitting per-query JSONL for each arm.
 ///
-/// Track-A cached-DB features (`search_memory` path): T3 graph-gate, T9 graph-seed,
-/// T12 fts-hardening, T13 magnitude-fusion, T19 query-intent, T20 session-diversity.
-/// Plus T4a temporal-filter (SELF-SEEDS — tagged re-seed; runs only on LME).
+/// A CE-path flag flipped on the base `search_memory` collector reads a zero delta
+/// because that read never touches the channel — this routes it correctly so the
+/// flag's effect is actually measurable.
+async fn paired_run_cached_feature_cross_rerank(
+    feature: &str,
+    flag: &str,
+    reranker: std::sync::Arc<dyn origin_core::reranker::Reranker>,
+) {
+    use origin_core::eval::locomo::run_locomo_eval_cross_rerank_from_db_collect;
+    use origin_core::eval::longmemeval::run_longmemeval_eval_cross_rerank_from_db_collect;
+    let root = resolve_scenario_db_root_from_harness();
+
+    // -- LoCoMo --
+    let lo_dir = root.join("locomo_v1");
+    let lo_fx = eval_root().join("data/locomo10.json");
+    if lo_dir.join("origin_memory.db").exists() && lo_fx.exists() {
+        let db = origin_core::db::MemoryDB::new(
+            &lo_dir,
+            std::sync::Arc::new(origin_core::events::NoopEmitter),
+        )
+        .await
+        .expect("open locomo_v1 snapshot DB");
+        for (state, val) in [("off", None::<&str>), ("on", Some("1"))] {
+            let rows = temp_env::async_with_vars(
+                [(flag, val)],
+                run_locomo_eval_cross_rerank_from_db_collect(
+                    &db,
+                    &lo_fx,
+                    reranker.clone(),
+                    feature,
+                    state,
+                ),
+            )
+            .await
+            .expect("locomo CE collect");
+            write_paired_rows(feature, "locomo", &rows);
+        }
+    } else {
+        println!(
+            "[paired:{feature}] SKIP LoCoMo (db {} fixture {})",
+            lo_dir.join("origin_memory.db").exists(),
+            lo_fx.exists()
+        );
+    }
+
+    // -- LME --
+    let lme_dir = root.join("lme_v1");
+    let lme_fx = eval_root().join("data/longmemeval_oracle.json");
+    if lme_dir.join("origin_memory.db").exists() && lme_fx.exists() {
+        let db = origin_core::db::MemoryDB::new(
+            &lme_dir,
+            std::sync::Arc::new(origin_core::events::NoopEmitter),
+        )
+        .await
+        .expect("open lme_v1 snapshot DB");
+        for (state, val) in [("off", None::<&str>), ("on", Some("1"))] {
+            let rows = temp_env::async_with_vars(
+                [(flag, val)],
+                run_longmemeval_eval_cross_rerank_from_db_collect(
+                    &db,
+                    &lme_fx,
+                    reranker.clone(),
+                    feature,
+                    state,
+                ),
+            )
+            .await
+            .expect("lme CE collect");
+            write_paired_rows(feature, "lme", &rows);
+        }
+    } else {
+        println!(
+            "[paired:{feature}] SKIP LME (db {} fixture {})",
+            lme_dir.join("origin_memory.db").exists(),
+            lme_fx.exists()
+        );
+    }
+}
+
+/// Like `paired_run_cached_feature_cross_rerank`, but the two arms set the SAME
+/// flag to DIFFERENT values (`off_val` then `on_val`) rather than unset-vs-"1".
 ///
-/// NOTE on T20 session-diversity: its cap is wired into the CROSS-RERANK path,
-/// not the base `search_memory` path, so the `search_memory` collector will show
-/// a zero delta for it. It is included here for completeness of the cached-DB
-/// sweep; a non-zero T20 measurement needs a cross-rerank collector (GPU). The
-/// analyzer will correctly report n_touched=0 for T20 on this path.
+/// Needed for `RERANK_POOL_FLOOR` (the rerank window): the A/B is 10 vs 50, not
+/// off vs on. Passing an explicit `off_val` (e.g. `Some("10")`) is deliberate —
+/// the LoCoMo/LME cross_rerank collectors default `RERANK_POOL_FLOOR` to "10"
+/// via an unscoped `set_var` when it is unset (longmemeval.rs:1536), which would
+/// otherwise LEAK past a `None` arm and silently pin the next bench to 10. With
+/// both arms passing a concrete value through `temp_env`, the var is always
+/// present, that internal default never fires, and each scope restores cleanly.
+async fn paired_run_cached_feature_cross_rerank_vals(
+    feature: &str,
+    flag: &str,
+    off_val: Option<&str>,
+    on_val: Option<&str>,
+    reranker: std::sync::Arc<dyn origin_core::reranker::Reranker>,
+) {
+    use origin_core::eval::locomo::run_locomo_eval_cross_rerank_from_db_collect;
+    use origin_core::eval::longmemeval::run_longmemeval_eval_cross_rerank_from_db_collect;
+    let root = resolve_scenario_db_root_from_harness();
+
+    // -- LoCoMo --
+    let lo_dir = root.join("locomo_v1");
+    let lo_fx = eval_root().join("data/locomo10.json");
+    if lo_dir.join("origin_memory.db").exists() && lo_fx.exists() {
+        let db = origin_core::db::MemoryDB::new(
+            &lo_dir,
+            std::sync::Arc::new(origin_core::events::NoopEmitter),
+        )
+        .await
+        .expect("open locomo_v1 snapshot DB");
+        for (state, val) in [("off", off_val), ("on", on_val)] {
+            let rows = temp_env::async_with_vars(
+                [(flag, val)],
+                run_locomo_eval_cross_rerank_from_db_collect(
+                    &db,
+                    &lo_fx,
+                    reranker.clone(),
+                    feature,
+                    state,
+                ),
+            )
+            .await
+            .expect("locomo CE collect");
+            write_paired_rows(feature, "locomo", &rows);
+        }
+    } else {
+        println!(
+            "[paired:{feature}] SKIP LoCoMo (db {} fixture {})",
+            lo_dir.join("origin_memory.db").exists(),
+            lo_fx.exists()
+        );
+    }
+
+    // -- LME --
+    let lme_dir = root.join("lme_v1");
+    let lme_fx = eval_root().join("data/longmemeval_oracle.json");
+    if lme_dir.join("origin_memory.db").exists() && lme_fx.exists() {
+        let db = origin_core::db::MemoryDB::new(
+            &lme_dir,
+            std::sync::Arc::new(origin_core::events::NoopEmitter),
+        )
+        .await
+        .expect("open lme_v1 snapshot DB");
+        for (state, val) in [("off", off_val), ("on", on_val)] {
+            let rows = temp_env::async_with_vars(
+                [(flag, val)],
+                run_longmemeval_eval_cross_rerank_from_db_collect(
+                    &db,
+                    &lme_fx,
+                    reranker.clone(),
+                    feature,
+                    state,
+                ),
+            )
+            .await
+            .expect("lme CE collect");
+            write_paired_rows(feature, "lme", &rows);
+        }
+    } else {
+        println!(
+            "[paired:{feature}] SKIP LME (db {} fixture {})",
+            lme_dir.join("origin_memory.db").exists(),
+            lme_fx.exists()
+        );
+    }
+}
+
+/// Umbrella test: emit per-query paired JSONL for the Track-A features.
+///
+/// Base `search_memory`-path features: T3 graph-gate, T9 graph-seed, T12
+/// fts-hardening, T13 magnitude-fusion, T19 query-intent. Plus T4a
+/// temporal-filter + temporal-soft-boost (SELF-SEED — tagged re-seed; LME only).
+///
+/// CROSS-RERANK-path features — page / episode / fact / global-prelude channels +
+/// T20 session-diversity — are routed through
+/// `paired_run_cached_feature_cross_rerank` so their flag deltas are measurable.
+/// Flipping a CE-path flag on the base `search_memory` collector reads a zero
+/// delta because that read never touches the channel (the prior T20 trap). The
+/// CE arm builds the BGE-reranker-v2-m3 weights (~600MB on first run) and only
+/// when at least one CE feature is selected, so base-only smoke runs stay light.
 #[tokio::test]
 #[ignore = "needs cached scenario DBs (use SNAPSHOT copies); retrieval-only, no GPU. Set ORIGIN_EVAL_ROOT + SCENARIO_DB_ROOT + EVAL_OUT"]
 async fn paired_ab_emit() {
     println!("=== PAIRED A/B EMIT (apparatus v2) ===");
     println!("EVAL_OUT = {}", paired_out_dir().display());
 
-    // (feature_tag, env_flag) for the cached-DB / search_memory features.
-    let cached: [(&str, &str); 6] = [
+    // (feature_tag, env_flag) for the cached-DB / base `search_memory` features.
+    let cached: [(&str, &str); 5] = [
         ("graph_gate", "ORIGIN_ENABLE_GRAPH_GATE"),
         ("graph_seed", "ORIGIN_ENABLE_GRAPH_SEED"),
         ("fts_hardening", "ORIGIN_ENABLE_FTS_HARDENING"),
         ("magnitude_fusion", "ORIGIN_MAGNITUDE_FUSION"),
         ("query_intent", "ORIGIN_ENABLE_QUERY_INTENT"),
-        ("session_diversity", "ORIGIN_ENABLE_SESSION_DIVERSITY"),
     ];
     for (feature, flag) in cached {
         if !paired_feature_selected(feature) {
@@ -1425,6 +2637,30 @@ async fn paired_ab_emit() {
         }
         println!("--- feature {feature} (flag {flag}) ---");
         paired_run_cached_feature(feature, flag).await;
+    }
+
+    // CE-path features: page / episode / fact / global-prelude channels live in
+    // `search_memory_cross_rerank`, not the base path. Route them through the
+    // cross-rerank collectors so a flag flip produces a real delta. Build the
+    // reranker ONCE and only when a CE feature is selected (the BGE-reranker-v2-m3
+    // weights are ~600MB on first download), so base-only smoke runs stay light.
+    let ce: [(&str, &str); 5] = [
+        ("page_channel", "ORIGIN_ENABLE_PAGE_CHANNEL"),
+        ("episode_channel", "ORIGIN_ENABLE_EPISODE_CHANNEL"),
+        ("fact_channel", "ORIGIN_ENABLE_FACT_CHANNEL"),
+        ("global_prelude", "ORIGIN_ENABLE_GLOBAL_PRELUDE"),
+        ("session_diversity", "ORIGIN_ENABLE_SESSION_DIVERSITY"),
+    ];
+    if ce.iter().any(|(f, _)| paired_feature_selected(f)) {
+        let reranker = origin_core::reranker::init_cross_encoder_reranker(None)
+            .expect("init_cross_encoder_reranker failed (downloads ~600MB on first run)");
+        for (feature, flag) in ce {
+            if !paired_feature_selected(feature) {
+                continue;
+            }
+            println!("--- feature {feature} (flag {flag}) [CROSS-RERANK path] ---");
+            paired_run_cached_feature_cross_rerank(feature, flag, reranker.clone()).await;
+        }
     }
 
     // T4a temporal-filter: self-seeds, LME only, search_memory_temporal path.
@@ -1547,6 +2783,290 @@ async fn paired_cross_rerank_emit() {
         "[paired:cross_rerank] ON (cross_rerank) rows = {}",
         on_rows.len()
     );
+
+    println!(
+        "=== done -> python3 analyze_paired.py --dir {} ===",
+        paired_out_dir().display()
+    );
+}
+
+/// Run both benches through the CROSS-RERANK read path with BOTH flag arms
+/// pinned to the SAME value (`flag_val`), but tagged as the `off` then `on`
+/// arms. Used for the A/A no-op control: OFF-vs-OFF must read ~zero per-query
+/// delta through `analyze_paired.py`, proving the apparatus does not fabricate
+/// signal. `feature` should differ from the real A/B feature so the JSONL
+/// files don't collide (e.g. `rerank_blend_aa`).
+async fn paired_run_cached_feature_cross_rerank_control(
+    feature: &str,
+    flag: &str,
+    flag_val: Option<&str>,
+    reranker: std::sync::Arc<dyn origin_core::reranker::Reranker>,
+) {
+    use origin_core::eval::locomo::run_locomo_eval_cross_rerank_from_db_collect;
+    use origin_core::eval::longmemeval::run_longmemeval_eval_cross_rerank_from_db_collect;
+    let root = resolve_scenario_db_root_from_harness();
+
+    // -- LoCoMo --
+    let lo_dir = root.join("locomo_v1");
+    let lo_fx = eval_root().join("data/locomo10.json");
+    if lo_dir.join("origin_memory.db").exists() && lo_fx.exists() {
+        let db = origin_core::db::MemoryDB::new(
+            &lo_dir,
+            std::sync::Arc::new(origin_core::events::NoopEmitter),
+        )
+        .await
+        .expect("open locomo_v1 snapshot DB");
+        for state in ["off", "on"] {
+            let rows = temp_env::async_with_vars(
+                [(flag, flag_val)],
+                run_locomo_eval_cross_rerank_from_db_collect(
+                    &db,
+                    &lo_fx,
+                    reranker.clone(),
+                    feature,
+                    state,
+                ),
+            )
+            .await
+            .expect("locomo CE collect (control)");
+            write_paired_rows(feature, "locomo", &rows);
+        }
+    } else {
+        println!(
+            "[paired:{feature}] SKIP LoCoMo (db {} fixture {})",
+            lo_dir.join("origin_memory.db").exists(),
+            lo_fx.exists()
+        );
+    }
+
+    // -- LME --
+    let lme_dir = root.join("lme_v1");
+    let lme_fx = eval_root().join("data/longmemeval_oracle.json");
+    if lme_dir.join("origin_memory.db").exists() && lme_fx.exists() {
+        let db = origin_core::db::MemoryDB::new(
+            &lme_dir,
+            std::sync::Arc::new(origin_core::events::NoopEmitter),
+        )
+        .await
+        .expect("open lme_v1 snapshot DB");
+        for state in ["off", "on"] {
+            let rows = temp_env::async_with_vars(
+                [(flag, flag_val)],
+                run_longmemeval_eval_cross_rerank_from_db_collect(
+                    &db,
+                    &lme_fx,
+                    reranker.clone(),
+                    feature,
+                    state,
+                ),
+            )
+            .await
+            .expect("lme CE collect (control)");
+            write_paired_rows(feature, "lme", &rows);
+        }
+    } else {
+        println!(
+            "[paired:{feature}] SKIP LME (db {} fixture {})",
+            lme_dir.join("origin_memory.db").exists(),
+            lme_fx.exists()
+        );
+    }
+}
+
+/// Paired A/B emitter for `ORIGIN_ENABLE_RERANK_BLEND` (blend vs replace).
+///
+/// The flag ONLY affects the cross_rerank path: when ON, the CE logit is
+/// BLENDED with the boosted-RRF score (`α·σ(CE)+(1−α)·norm(WRRF)`) instead of
+/// REPLACING it. The blend helpers live in
+/// `crates/origin-core/src/retrieval/blend.rs`; the wiring is in
+/// `search_memory_cross_rerank` (`crates/origin-core/src/db.rs:~9329`). A flag
+/// flipped on the base `search_memory` collector reads a zero delta because
+/// that read never reaches the CE rescoring, so this routes BOTH benches
+/// through `run_*_eval_cross_rerank_from_db_collect` where the blend lives.
+///
+/// Emits per-query JSONL for both benches (LoCoMo + LME):
+///   - `rerank_blend_locomo.jsonl` / `rerank_blend_lme.jsonl` — A/B:
+///     OFF arm = replace (flag unset), ON arm = blend (flag=1).
+///   - `rerank_blend_aa_locomo.jsonl` / `rerank_blend_aa_lme.jsonl` — A/A
+///     no-op control: SAME arm twice (OFF/OFF, flag unset both times). The
+///     analyzer must read ~zero delta here, proving the harness isn't
+///     fabricating signal from re-running a deterministic collector.
+///
+/// First run downloads the BGE-reranker-v2-m3 weights (~600MB) and runs on CPU
+/// (fastembed ONNX). Honor `EVAL_LOCOMO_LIMIT` / `EVAL_LME_LIMIT` for subset
+/// smoke runs.
+///
+/// Run (unsandboxed, against the SNAPSHOT DBs so the seeds stay pristine):
+///   EVAL_LOCOMO_LIMIT=20 EVAL_LME_LIMIT=20 \
+///   ORIGIN_EVAL_ROOT=/Users/lucian/Repos/origin/app/eval \
+///   SCENARIO_DB_ROOT=~/.cache/origin-eval/scenario_snapshot \
+///   EVAL_OUT=~/.cache/origin-eval/rerank_blend_out \
+///     cargo test -p origin-core --test eval_harness rerank_blend_paired_ab -- \
+///     --ignored --nocapture --test-threads=1
+#[tokio::test]
+#[ignore = "downloads ~600MB CE model (CPU); needs cached scenario SNAPSHOT DB. Set ORIGIN_EVAL_ROOT + SCENARIO_DB_ROOT + EVAL_OUT"]
+async fn rerank_blend_paired_ab() {
+    println!("=== RERANK-BLEND PAIRED A/B (blend vs replace) ===");
+    println!("EVAL_OUT = {}", paired_out_dir().display());
+
+    // Build the CE reranker ONCE (shared across the A/B and A/A arms). First
+    // construction downloads ~600MB BGE-reranker-v2-m3 from HuggingFace + runs
+    // on CPU (fastembed ONNX).
+    let reranker = origin_core::reranker::init_cross_encoder_reranker(None)
+        .expect("init_cross_encoder_reranker failed (downloads ~600MB on first run)");
+    println!("CE model = {} (CPU)", reranker.model_id());
+
+    // A/B arm: OFF (replace, flag unset) vs ON (blend, flag=1).
+    println!("--- feature rerank_blend (flag ORIGIN_ENABLE_RERANK_BLEND) [A/B] ---");
+    paired_run_cached_feature_cross_rerank(
+        "rerank_blend",
+        "ORIGIN_ENABLE_RERANK_BLEND",
+        reranker.clone(),
+    )
+    .await;
+
+    // A/A control: OFF vs OFF (flag unset on BOTH arms). Must read ~zero delta.
+    println!("--- feature rerank_blend_aa (A/A no-op control: OFF vs OFF) ---");
+    paired_run_cached_feature_cross_rerank_control(
+        "rerank_blend_aa",
+        "ORIGIN_ENABLE_RERANK_BLEND",
+        None,
+        reranker.clone(),
+    )
+    .await;
+
+    println!(
+        "=== done -> python3 analyze_paired.py --dir {} ===",
+        paired_out_dir().display()
+    );
+}
+
+/// Paired A/B emitter for `RERANK_POOL_FLOOR` (rerank window: 10 vs 50).
+///
+/// The fetch-pool floor controls how many candidates the cross-encoder rescores
+/// before truncation to `limit` (`compute_rerank_fetch_pool`, db.rs:~397). EXP3
+/// (n=50/cat scaffold) showed widening 10→50 lifts recall@5 ~+10-12pp on LME and
+/// ~+2pp on LoCoMo — but n=50 hit only 2-3 of 10 conversations, so the magnitude
+/// is unreliable. This re-runs the A/B over the FULL fixture through the trusted
+/// paired apparatus (v2) for a citable, per-category, A/A-controlled answer.
+///
+/// Determinism note: retrieval recall@5 / ndcg@10 at a fixed window are
+/// DETERMINISTIC (CE forward pass + RRF + cached embeddings — no sampling), so a
+/// single full-fixture run is sufficient for the recall verdict; the A/A control
+/// (window 10 vs 10) proves it by reading ~zero delta. The N≥3 mean±stddev gate
+/// from task #9 applies to STOCHASTIC LLM-judge answer accuracy, not this
+/// deterministic retrieval metric. Latency (gate (a), default-on viability) is
+/// measured separately and gates only the Phase-2 routing flip, not the window.
+///
+/// Emits per-query JSONL for both benches:
+///   - `rerank_window_locomo.jsonl` / `rerank_window_lme.jsonl` — A/B:
+///     OFF arm = pool floor 10 (current default), ON arm = pool floor 50.
+///   - `rerank_window_aa_locomo.jsonl` / `rerank_window_aa_lme.jsonl` — A/A
+///     no-op control: pool floor 10 on BOTH arms. Analyzer must read ~zero delta.
+///
+/// First run downloads the BGE-reranker-v2-m3 weights (~600MB) and runs on CPU.
+///
+/// Run (unsandboxed, against the SNAPSHOT DBs so the seeds stay pristine):
+///   ORIGIN_EVAL_ROOT=/Users/lucian/Repos/origin/app/eval \
+///   SCENARIO_DB_ROOT=~/.cache/origin-eval/scenario_snapshot \
+///   EVAL_OUT=~/.cache/origin-eval/rerank_window_out \
+///     cargo test -p origin-core --features eval-harness --test eval_harness \
+///     rerank_window_paired_ab -- --ignored --nocapture --test-threads=1
+#[tokio::test]
+#[ignore = "downloads ~600MB CE model (CPU); needs cached scenario SNAPSHOT DB. Set ORIGIN_EVAL_ROOT + SCENARIO_DB_ROOT + EVAL_OUT"]
+async fn rerank_window_paired_ab() {
+    println!("=== RERANK-WINDOW PAIRED A/B (pool floor 10 vs 50) ===");
+    println!("EVAL_OUT = {}", paired_out_dir().display());
+
+    // Build the CE reranker ONCE (shared across the A/B and A/A arms). First
+    // construction downloads ~600MB BGE-reranker-v2-m3 from HuggingFace + runs
+    // on CPU (fastembed ONNX).
+    let reranker = origin_core::reranker::init_cross_encoder_reranker(None)
+        .expect("init_cross_encoder_reranker failed (downloads ~600MB on first run)");
+    println!("CE model = {} (CPU)", reranker.model_id());
+
+    // A/B arm: pool floor 10 (current default) vs 50 (widened, peer norm).
+    println!("--- feature rerank_window (flag RERANK_POOL_FLOOR) [A/B 10 vs 50] ---");
+    paired_run_cached_feature_cross_rerank_vals(
+        "rerank_window",
+        "RERANK_POOL_FLOOR",
+        Some("10"),
+        Some("50"),
+        reranker.clone(),
+    )
+    .await;
+
+    // A/A control: pool floor 10 on BOTH arms. Must read ~zero delta.
+    println!("--- feature rerank_window_aa (A/A no-op control: 10 vs 10) ---");
+    paired_run_cached_feature_cross_rerank_control(
+        "rerank_window_aa",
+        "RERANK_POOL_FLOOR",
+        Some("10"),
+        reranker.clone(),
+    )
+    .await;
+
+    println!(
+        "=== done -> python3 analyze_paired.py --dir {} ===",
+        paired_out_dir().display()
+    );
+}
+
+/// Knee sweep for `RERANK_POOL_FLOOR`: intermediate windows 20 and 30 vs the
+/// 10 baseline. Follows up `rerank_window_paired_ab`, which proved 10→50 is a
+/// real recall win (LME ndcg +0.052, BH-sig) but latency-prohibitive as a
+/// default (P99 +9.8s on CPU). Recall gain is sublinear and latency ~linear in
+/// pool size, so the knee — the smallest window capturing most of the +0.052 at
+/// an acceptable P99 — likely sits at 20 or 30. This measures both rather than
+/// estimating from the 10/50 endpoints.
+///
+/// No A/A arm: determinism was already established by `rerank_window_paired_ab`
+/// (LoCoMo A/A = 0.0000 exact; LME A/A +0.0014 noise floor). Re-running it would
+/// only burn ~2h. The 10-baseline arm is recomputed within each feature so the
+/// per-query pairing stays within-run.
+///
+/// Emits `rerank_w20_{locomo,lme}.jsonl` (10 vs 20) and
+/// `rerank_w30_{locomo,lme}.jsonl` (10 vs 30). Feed all of EVAL_OUT (this run +
+/// the prior 10/50 run, if pointed at the same dir) to analyze_paired.py for the
+/// full 10/20/30/50 recall+latency curve.
+///
+/// Run (unsandboxed, against the SNAPSHOT DBs so the seeds stay pristine):
+///   ORIGIN_EVAL_ROOT=/Users/lucian/Repos/origin/app/eval \
+///   SCENARIO_DB_ROOT=~/.cache/origin-eval/scenario_snapshot \
+///   EVAL_OUT=~/.cache/origin-eval/rerank_window_knee_out \
+///     cargo test -p origin-core --features eval-harness --test eval_harness \
+///     rerank_window_knee_sweep -- --ignored --nocapture --test-threads=1
+#[tokio::test]
+#[ignore = "downloads ~600MB CE model (CPU); needs cached scenario SNAPSHOT DB. Set ORIGIN_EVAL_ROOT + SCENARIO_DB_ROOT + EVAL_OUT"]
+async fn rerank_window_knee_sweep() {
+    println!("=== RERANK-WINDOW KNEE SWEEP (pool floor 10 vs 20, 10 vs 30) ===");
+    println!("EVAL_OUT = {}", paired_out_dir().display());
+
+    let reranker = origin_core::reranker::init_cross_encoder_reranker(None)
+        .expect("init_cross_encoder_reranker failed (downloads ~600MB on first run)");
+    println!("CE model = {} (CPU)", reranker.model_id());
+
+    // A/B arm: pool floor 10 (current default) vs 20.
+    println!("--- feature rerank_w20 (flag RERANK_POOL_FLOOR) [A/B 10 vs 20] ---");
+    paired_run_cached_feature_cross_rerank_vals(
+        "rerank_w20",
+        "RERANK_POOL_FLOOR",
+        Some("10"),
+        Some("20"),
+        reranker.clone(),
+    )
+    .await;
+
+    // A/B arm: pool floor 10 (current default) vs 30.
+    println!("--- feature rerank_w30 (flag RERANK_POOL_FLOOR) [A/B 10 vs 30] ---");
+    paired_run_cached_feature_cross_rerank_vals(
+        "rerank_w30",
+        "RERANK_POOL_FLOOR",
+        Some("10"),
+        Some("30"),
+        reranker.clone(),
+    )
+    .await;
 
     println!(
         "=== done -> python3 analyze_paired.py --dir {} ===",
@@ -3329,6 +4849,156 @@ async fn smoke_per_scenario_locomo() {
         mean_per_mem_sec,
         full_locomo_estimate_min,
         full_locomo_estimate_min / 60.0,
+    );
+}
+
+/// STEP 6 measurement: isolated classify-ONLY rate for the STEP 7 additive backfill.
+///
+/// Classification is orthogonal to entity/title/page enrichment (it reads `content`,
+/// writes `importance`/`event_date`/`quality`), so seeding N docs and timing
+/// `run_classification_for_eval_concurrent` alone yields the exact per-memory rate the
+/// STEP 7 snapshot path pays when backfilling the existing entity/title/page-enriched
+/// seeds (which are all `importance IS NULL`). No entity/title/distill passes needed.
+///
+/// On-device Qwen3-4B (free, Metal). Isolated tempdir (no cache pollution).
+///
+/// ```bash
+/// MEASURE_CLASSIFY_N=30 EVAL_ENRICHMENT_CONCURRENCY=8 ORIGIN_LLM_PARALLEL_SEQS=8 \
+///   cargo test -p origin-core --features eval-harness --test eval_harness \
+///   measure_classify_only_rate -- --ignored --nocapture
+/// ```
+#[tokio::test]
+#[ignore]
+async fn measure_classify_only_rate() {
+    use origin_core::eval::locomo::{extract_observations, load_locomo};
+    use origin_core::eval::shared::{eval_shared_embedder, run_classification_for_eval_concurrent};
+    use origin_core::llm_provider::OnDeviceProvider;
+    use origin_core::sources::RawDocument;
+    use std::sync::Arc;
+
+    let locomo_path = eval_root().join("data/locomo10.json");
+    if !locomo_path.exists() {
+        eprintln!("SKIP: locomo10.json not found at {:?}", locomo_path);
+        return;
+    }
+
+    let n: usize = std::env::var("MEASURE_CLASSIFY_N")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(30);
+    let concurrency: usize = std::env::var("EVAL_ENRICHMENT_CONCURRENCY")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(1);
+
+    // Gather N observations across samples (content only — classify ignores titles/entities).
+    let samples = load_locomo(&locomo_path).unwrap();
+    let mut obs: Vec<String> = Vec::new();
+    'outer: for s in &samples {
+        for o in extract_observations(s) {
+            obs.push(o.content.clone());
+            if obs.len() >= n {
+                break 'outer;
+            }
+        }
+    }
+    assert!(!obs.is_empty(), "no observations loaded");
+
+    let shared_embedder = eval_shared_embedder();
+    // Persist to MEASURE_CLASSIFY_DB_OUT for post-run SQL shape inspection; else
+    // throwaway tempdir (auto-cleaned). `tmp` stays in scope either way.
+    let tmp = tempfile::tempdir().unwrap();
+    let db_dir = match std::env::var("MEASURE_CLASSIFY_DB_OUT") {
+        Ok(out) => {
+            std::fs::create_dir_all(&out).ok();
+            std::path::PathBuf::from(out)
+        }
+        Err(_) => tmp.path().to_path_buf(),
+    };
+    eprintln!("[measure-classify] db_dir = {}", db_dir.display());
+    let db = origin_core::db::MemoryDB::new_with_shared_embedder(
+        &db_dir,
+        Arc::new(origin_core::events::NoopEmitter),
+        shared_embedder,
+    )
+    .await
+    .unwrap();
+
+    let docs: Vec<RawDocument> = obs
+        .iter()
+        .enumerate()
+        .map(|(i, c)| RawDocument {
+            content: c.clone(),
+            source_id: format!("classify_probe_obs_{}", i),
+            source: "memory".to_string(),
+            title: format!("probe {}", i),
+            memory_type: Some("fact".to_string()),
+            space: Some("conversation".to_string()),
+            last_modified: chrono::Utc::now().timestamp(),
+            ..Default::default()
+        })
+        .collect();
+    db.upsert_documents(docs).await.unwrap();
+
+    // PRE-condition: every seeded memory is unclassified (importance IS NULL).
+    let pre = db
+        .get_memories_needing_classification()
+        .await
+        .unwrap()
+        .len();
+    assert_eq!(
+        pre,
+        obs.len(),
+        "all seeded mems should be unclassified pre-run ({}/{})",
+        pre,
+        obs.len()
+    );
+
+    let llm: Arc<dyn origin_core::llm_provider::LlmProvider> = match OnDeviceProvider::new() {
+        Ok(p) => Arc::new(p),
+        Err(e) => {
+            eprintln!("SKIP: on-device init failed: {e}");
+            return;
+        }
+    };
+
+    let t0 = std::time::Instant::now();
+    let processed = run_classification_for_eval_concurrent(&db, &llm, concurrency)
+        .await
+        .unwrap();
+    let elapsed = t0.elapsed().as_secs_f64();
+
+    // POST-condition: classify populated importance for every memory.
+    let post = db
+        .get_memories_needing_classification()
+        .await
+        .unwrap()
+        .len();
+    assert_eq!(
+        post, 0,
+        "all mems should be classified post-run ({post} remain)"
+    );
+    assert_eq!(processed, obs.len(), "processed count mismatch");
+
+    let rate = elapsed / obs.len() as f64;
+    eprintln!("\n=== classify-only rate (concurrency={concurrency}) ===");
+    eprintln!(
+        "  N={} processed={} elapsed={:.1}s  =>  {:.2}s/mem",
+        obs.len(),
+        processed,
+        elapsed,
+        rate
+    );
+    eprintln!(
+        "  STEP 7 corpus 8064 mems => {:.0}s = {:.1} min = {:.2} h",
+        8064.0 * rate,
+        8064.0 * rate / 60.0,
+        8064.0 * rate / 3600.0
+    );
+    eprintln!(
+        "    LME 5533 => {:.2} h ;  LoCoMo 2531 => {:.2} h",
+        5533.0 * rate / 3600.0,
+        2531.0 * rate / 3600.0
     );
 }
 
