@@ -3012,6 +3012,68 @@ async fn rerank_window_paired_ab() {
     );
 }
 
+/// Knee sweep for `RERANK_POOL_FLOOR`: intermediate windows 20 and 30 vs the
+/// 10 baseline. Follows up `rerank_window_paired_ab`, which proved 10→50 is a
+/// real recall win (LME ndcg +0.052, BH-sig) but latency-prohibitive as a
+/// default (P99 +9.8s on CPU). Recall gain is sublinear and latency ~linear in
+/// pool size, so the knee — the smallest window capturing most of the +0.052 at
+/// an acceptable P99 — likely sits at 20 or 30. This measures both rather than
+/// estimating from the 10/50 endpoints.
+///
+/// No A/A arm: determinism was already established by `rerank_window_paired_ab`
+/// (LoCoMo A/A = 0.0000 exact; LME A/A +0.0014 noise floor). Re-running it would
+/// only burn ~2h. The 10-baseline arm is recomputed within each feature so the
+/// per-query pairing stays within-run.
+///
+/// Emits `rerank_w20_{locomo,lme}.jsonl` (10 vs 20) and
+/// `rerank_w30_{locomo,lme}.jsonl` (10 vs 30). Feed all of EVAL_OUT (this run +
+/// the prior 10/50 run, if pointed at the same dir) to analyze_paired.py for the
+/// full 10/20/30/50 recall+latency curve.
+///
+/// Run (unsandboxed, against the SNAPSHOT DBs so the seeds stay pristine):
+///   ORIGIN_EVAL_ROOT=/Users/lucian/Repos/origin/app/eval \
+///   SCENARIO_DB_ROOT=~/.cache/origin-eval/scenario_snapshot \
+///   EVAL_OUT=~/.cache/origin-eval/rerank_window_knee_out \
+///     cargo test -p origin-core --features eval-harness --test eval_harness \
+///     rerank_window_knee_sweep -- --ignored --nocapture --test-threads=1
+#[tokio::test]
+#[ignore = "downloads ~600MB CE model (CPU); needs cached scenario SNAPSHOT DB. Set ORIGIN_EVAL_ROOT + SCENARIO_DB_ROOT + EVAL_OUT"]
+async fn rerank_window_knee_sweep() {
+    println!("=== RERANK-WINDOW KNEE SWEEP (pool floor 10 vs 20, 10 vs 30) ===");
+    println!("EVAL_OUT = {}", paired_out_dir().display());
+
+    let reranker = origin_core::reranker::init_cross_encoder_reranker(None)
+        .expect("init_cross_encoder_reranker failed (downloads ~600MB on first run)");
+    println!("CE model = {} (CPU)", reranker.model_id());
+
+    // A/B arm: pool floor 10 (current default) vs 20.
+    println!("--- feature rerank_w20 (flag RERANK_POOL_FLOOR) [A/B 10 vs 20] ---");
+    paired_run_cached_feature_cross_rerank_vals(
+        "rerank_w20",
+        "RERANK_POOL_FLOOR",
+        Some("10"),
+        Some("20"),
+        reranker.clone(),
+    )
+    .await;
+
+    // A/B arm: pool floor 10 (current default) vs 30.
+    println!("--- feature rerank_w30 (flag RERANK_POOL_FLOOR) [A/B 10 vs 30] ---");
+    paired_run_cached_feature_cross_rerank_vals(
+        "rerank_w30",
+        "RERANK_POOL_FLOOR",
+        Some("10"),
+        Some("30"),
+        reranker.clone(),
+    )
+    .await;
+
+    println!(
+        "=== done -> python3 analyze_paired.py --dir {} ===",
+        paired_out_dir().display()
+    );
+}
+
 /// PR-B page-channel ON baseline (LoCoMo).
 ///
 /// Uses the pre-seeded consolidated scenario DB at
