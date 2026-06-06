@@ -144,7 +144,110 @@ pub async fn find_merge_candidates(db: &MemoryDB) -> Result<usize, OriginError> 
         // Each group with N > 1 yields N-1 merge candidates.
         count += (cnt.saturating_sub(1)) as usize;
     }
+    drop(rows);
+    drop(conn);
+
+    // T16: surface MinHash/LSH band collisions into the human-review queue.
+    // Opt-in (ORIGIN_ENABLE_ENTITY_MINHASH). These are the *borderline* pairs
+    // the auto-merge cascade deliberately leaves alone: exact Jaccard in
+    // [0.85, 0.9), or a same/near match across DIFFERENT entity types. They are
+    // enqueued as `entity_merge` proposals tagged `minhash_jaccard`, never
+    // auto-merged.
+    if crate::db::entity_minhash_enabled() {
+        count += surface_minhash_merge_candidates(db).await?;
+    }
     Ok(count)
+}
+
+/// Scan high-entropy entity names for LSH band collisions and enqueue the
+/// borderline pairs (Jaccard in [0.85, 0.9), or cross-type) into the
+/// human-review refinement queue. Returns the number of proposals enqueued.
+async fn surface_minhash_merge_candidates(db: &MemoryDB) -> Result<usize, OriginError> {
+    use crate::retrieval::dedup;
+    use std::collections::HashMap;
+
+    // Pull every entity once (id, name, entity_type).
+    let entities: Vec<(String, String, String)> = {
+        let conn = db.conn.lock().await;
+        let mut rows = conn
+            .query("SELECT id, name, entity_type FROM entities", ())
+            .await
+            .map_err(|e| OriginError::VectorDb(format!("minhash candidates scan: {e}")))?;
+        let mut out = Vec::new();
+        while let Some(row) = rows
+            .next()
+            .await
+            .map_err(|e| OriginError::VectorDb(format!("minhash candidates row: {e}")))?
+        {
+            let id: String = row.get(0).unwrap_or_default();
+            let name: String = row.get(1).unwrap_or_default();
+            let etype: String = row.get(2).unwrap_or_default();
+            if dedup::has_high_entropy(&name) {
+                out.push((id, name, etype));
+            }
+        }
+        out
+    };
+
+    // Bucket entity indices by band key.
+    let mut buckets: HashMap<u64, Vec<usize>> = HashMap::new();
+    for (i, (_, name, _)) in entities.iter().enumerate() {
+        for key in dedup::name_band_keys(name) {
+            buckets.entry(key).or_default().push(i);
+        }
+    }
+
+    // Examine each colliding pair once.
+    let mut seen: std::collections::HashSet<(usize, usize)> = std::collections::HashSet::new();
+    let mut enqueued = 0usize;
+    for idxs in buckets.values() {
+        for a in 0..idxs.len() {
+            for b in (a + 1)..idxs.len() {
+                let (i, j) = (idxs[a].min(idxs[b]), idxs[a].max(idxs[b]));
+                if i == j || !seen.insert((i, j)) {
+                    continue;
+                }
+                let (ref id_i, ref name_i, ref type_i) = entities[i];
+                let (ref id_j, ref name_j, ref type_j) = entities[j];
+                let jac = dedup::name_jaccard(name_i, name_j);
+                let same_type = type_i.eq_ignore_ascii_case(type_j);
+                // Human-review band: borderline similarity, OR a cross-type
+                // collision the auto-merge guard would have skipped. Anything
+                // at/above the auto-merge threshold with the SAME type is left
+                // to the write-path cascade and is not re-queued here.
+                let borderline = (0.85..dedup::FUZZY_JACCARD_THRESHOLD).contains(&jac);
+                let cross_type_match = !same_type && jac >= 0.85;
+                if !(borderline || cross_type_match) {
+                    continue;
+                }
+                let i_len = id_i.len().min(8);
+                let j_len = id_j.len().min(8);
+                let proposal_id = format!("minhash_{}_{}", &id_i[..i_len], &id_j[..j_len]);
+                let payload = serde_json::json!({
+                    "existing_id": id_i,
+                    "new_id": id_j,
+                    "jaccard": jac,
+                    "same_type": same_type,
+                    "provenance": "minhash_jaccard",
+                })
+                .to_string();
+                if db
+                    .insert_refinement_proposal(
+                        &proposal_id,
+                        "entity_merge",
+                        &[id_i.clone(), id_j.clone()],
+                        Some(&payload),
+                        jac,
+                    )
+                    .await
+                    .is_ok()
+                {
+                    enqueued += 1;
+                }
+            }
+        }
+    }
+    Ok(enqueued)
 }
 
 /// Normalize relations whose type isn't canonical in the vocabulary.
@@ -977,5 +1080,68 @@ mod tests {
                 "source_memory_id should be mem_789 after higher-confidence upsert"
             );
         }
+    }
+
+    // ── T16: MinHash band-collision surfacing into the human-review queue ────
+
+    #[tokio::test]
+    async fn find_merge_candidates_surfaces_band_near_dups() {
+        temp_env::async_with_vars([("ORIGIN_ENABLE_ENTITY_MINHASH", Some("1"))], async {
+            let (db, _dir) = test_db().await;
+            // "Glorptech"/"Glorptechs": high-entropy, share an LSH band, exact
+            // Jaccard ~0.875 in [0.85, 0.9) -> borderline -> human-review only.
+            let jac = crate::retrieval::dedup::name_jaccard("Glorptech", "Glorptechs");
+            assert!(
+                (0.85..0.9).contains(&jac),
+                "fixture pair must sit in the borderline band, got {jac}"
+            );
+            let id1 = db
+                .store_entity("Glorptech", "project", None, Some("t"), None)
+                .await
+                .unwrap();
+            let id2 = db
+                .store_entity("Glorptechs", "project", None, Some("t"), None)
+                .await
+                .unwrap();
+            // Both still exist (NOT auto-merged).
+            assert!(db.get_entity_name_type(&id1).await.unwrap().is_some());
+            assert!(db.get_entity_name_type(&id2).await.unwrap().is_some());
+
+            let enqueued = find_merge_candidates(&db).await.unwrap();
+            assert!(enqueued >= 1, "borderline band collision must be counted");
+
+            let pending = db.get_pending_refinements().await.unwrap();
+            let proposal = pending
+                .iter()
+                .find(|p| p.action == "entity_merge" && p.id.starts_with("minhash_"))
+                .expect("a minhash entity_merge proposal must be queued");
+            let payload = proposal.payload.as_ref().expect("proposal payload");
+            assert!(
+                payload.contains("minhash_jaccard"),
+                "proposal must carry minhash_jaccard provenance, got: {payload}"
+            );
+        })
+        .await;
+    }
+
+    #[tokio::test]
+    async fn find_merge_candidates_minhash_off_no_band_proposals() {
+        // Flag OFF: the band-collision pass must not run at all.
+        temp_env::async_with_vars([("ORIGIN_ENABLE_ENTITY_MINHASH", None::<&str>)], async {
+            let (db, _dir) = test_db().await;
+            db.store_entity("Glorptech", "project", None, Some("t"), None)
+                .await
+                .unwrap();
+            db.store_entity("Glorptechs", "project", None, Some("t"), None)
+                .await
+                .unwrap();
+            find_merge_candidates(&db).await.unwrap();
+            let pending = db.get_pending_refinements().await.unwrap();
+            assert!(
+                !pending.iter().any(|p| p.id.starts_with("minhash_")),
+                "flag OFF must enqueue no minhash proposals"
+            );
+        })
+        .await;
     }
 }

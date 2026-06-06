@@ -8,20 +8,27 @@ pub mod shared;
 
 pub mod answer_quality;
 pub mod context_path;
+pub mod cost;
+pub mod entity_dedup;
 pub mod fixtures;
 pub mod gen;
 pub mod kg_faithfulness;
 pub mod kg_faithfulness_llm;
 pub mod latency;
+pub mod layer;
 pub mod lifecycle;
 pub mod locomo;
 pub mod longmemeval;
 pub mod metrics;
 pub mod page_faithfulness;
+pub mod paired;
 pub mod pipeline;
 pub mod report;
 pub mod retrieval;
 pub mod runner;
 pub mod signals;
+pub mod wall_clock;
+pub use layer::EvalLayer;
+
 /// Backward-compat alias: old code using `eval::token_efficiency::*` still works.
 pub use retrieval as token_efficiency;

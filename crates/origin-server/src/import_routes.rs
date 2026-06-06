@@ -284,6 +284,7 @@ pub async fn handle_chat_export_import(
                         let mut memory_type = "fact".to_string();
                         let mut domain: Option<String> = None;
                         let mut quality: Option<String> = None;
+                        let mut importance: Option<u8> = None;
 
                         if let Some(ref llm) = llm_inner {
                             let truncated: String = content.chars().take(1000).collect();
@@ -307,6 +308,7 @@ pub async fn handle_chat_export_import(
                                         memory_type = c.memory_type;
                                         domain = c.space;
                                         quality = c.quality;
+                                        importance = c.importance;
                                     }
                                 }
                                 Ok(Err(e)) => {
@@ -337,6 +339,9 @@ pub async fn handle_chat_export_import(
                                 supersede_mode,
                                 None,
                                 None,
+                                None,
+                                None,
+                                importance,
                             )
                             .await
                         {
@@ -360,6 +365,7 @@ pub async fn handle_chat_export_import(
                             &tuning.refinery,
                             &tuning.distillation,
                             knowledge_path.as_deref(),
+                            None, // cancel — bulk import is not debounced
                         )
                         .await
                         {

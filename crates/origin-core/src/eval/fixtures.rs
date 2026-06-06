@@ -14,6 +14,41 @@ pub fn fixture_revision_hash(path: &Path) -> Result<String, std::io::Error> {
     Ok(hex::encode(h.finalize())[..16].to_string())
 }
 
+/// Hash a directory of TOML fixtures into a stable 16-char hex digest.
+///
+/// Sorts files by path, hashes each file's content individually, then
+/// concatenates the per-file hashes (with separators) and hashes the
+/// concatenation. Stable across filesystem ordering and platforms.
+pub fn fixture_set_hash(dir: &std::path::Path) -> anyhow::Result<String> {
+    let mut entries: Vec<_> = std::fs::read_dir(dir)?
+        .filter_map(|r| r.ok())
+        .filter(|e| {
+            e.file_type().map(|t| t.is_file()).unwrap_or(false)
+                && e.path().extension().and_then(|s| s.to_str()) == Some("toml")
+        })
+        .collect();
+    entries.sort_by_key(|e| e.path());
+
+    let mut outer = Sha256::new();
+    for entry in entries {
+        let path = entry.path();
+        let name = path
+            .file_name()
+            .and_then(|s| s.to_str())
+            .ok_or_else(|| anyhow::anyhow!("non-UTF-8 path: {:?}", path))?;
+        let bytes = std::fs::read(&path)?;
+        let mut inner = Sha256::new();
+        inner.update(&bytes);
+        let inner_hex = format!("{:x}", inner.finalize());
+        outer.update(name.as_bytes());
+        outer.update(b":");
+        outer.update(inner_hex.as_bytes());
+        outer.update(b"\n");
+    }
+    let hex = format!("{:x}", outer.finalize());
+    Ok(hex.chars().take(16).collect())
+}
+
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct FixtureFile {
     pub cases: Vec<EvalCase>,
@@ -415,5 +450,41 @@ relevance = 3
                 );
             }
         }
+    }
+
+    #[test]
+    fn fixture_set_hash_stable_across_invocations() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("a.toml"), "kind = \"fact\"\n").unwrap();
+        std::fs::write(dir.path().join("b.toml"), "kind = \"preference\"\n").unwrap();
+        let h1 = fixture_set_hash(dir.path()).unwrap();
+        let h2 = fixture_set_hash(dir.path()).unwrap();
+        assert_eq!(h1, h2);
+        assert_eq!(h1.len(), 16, "expected sha256[..16] hex");
+    }
+
+    #[test]
+    fn fixture_set_hash_changes_when_file_changes() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("a.toml"), "kind = \"fact\"\n").unwrap();
+        let h1 = fixture_set_hash(dir.path()).unwrap();
+        std::fs::write(dir.path().join("a.toml"), "kind = \"preference\"\n").unwrap();
+        let h2 = fixture_set_hash(dir.path()).unwrap();
+        assert_ne!(h1, h2);
+    }
+
+    #[test]
+    fn fixture_set_hash_ignores_file_ordering() {
+        let dir1 = tempfile::tempdir().unwrap();
+        std::fs::write(dir1.path().join("a.toml"), "x = 1\n").unwrap();
+        std::fs::write(dir1.path().join("b.toml"), "y = 2\n").unwrap();
+        let dir2 = tempfile::tempdir().unwrap();
+        // Write in reverse order
+        std::fs::write(dir2.path().join("b.toml"), "y = 2\n").unwrap();
+        std::fs::write(dir2.path().join("a.toml"), "x = 1\n").unwrap();
+        assert_eq!(
+            fixture_set_hash(dir1.path()).unwrap(),
+            fixture_set_hash(dir2.path()).unwrap()
+        );
     }
 }

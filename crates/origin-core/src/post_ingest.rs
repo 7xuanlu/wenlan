@@ -27,6 +27,7 @@ use crate::error::OriginError;
 use crate::llm_provider::LlmProvider;
 use crate::prompts::PromptRegistry;
 use origin_types::requests::UpdatePageRequest;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 /// Result of the title enrichment step.
@@ -40,8 +41,23 @@ pub(crate) enum TitleEnrichResult {
     LlmRejected,
 }
 
+/// True iff the caller has signalled cancellation. `None` (the default-OFF
+/// path) is never cancelled, so the flag is fully inert unless an operator
+/// opts into `ORIGIN_ENABLE_REFLECTION_DEBOUNCE` and a newer same-agent write
+/// supersedes this one mid-burst. Checked only BETWEEN best-effort steps so a
+/// step is never half-applied (clean-boundary cancellation).
+fn is_cancelled(cancel: Option<&AtomicBool>) -> bool {
+    cancel.map(|c| c.load(Ordering::SeqCst)).unwrap_or(false)
+}
+
 /// Run post-ingest enrichment (async, non-blocking).
 /// Called after store_memory fast track returns.
+///
+/// `cancel` is an opt-in cooperative-cancellation signal (T22 debounced
+/// reflection). When `Some` and flipped to `true` by a newer same-agent write,
+/// enrichment returns early at the next clean step boundary. `None` (the
+/// default) keeps the path byte-identical to pre-T22 behaviour — every step
+/// runs to completion.
 #[allow(clippy::too_many_arguments)]
 pub async fn run_post_ingest_enrichment(
     db: &MemoryDB,
@@ -56,8 +72,15 @@ pub async fn run_post_ingest_enrichment(
     tuning: &crate::tuning::RefineryConfig,
     distillation: &crate::tuning::DistillationConfig,
     knowledge_path: Option<&std::path::Path>,
+    cancel: Option<&AtomicBool>,
 ) -> Result<(), OriginError> {
     log::info!("[post_ingest] enriching {source_id}");
+
+    // Checkpoint 0: bail before any work if a newer write already superseded us.
+    if is_cancelled(cancel) {
+        log::info!("[post_ingest] {source_id}: cancelled before first step");
+        return Ok(());
+    }
 
     // 1. Entity auto-linking (only if not already linked)
     if entity_id.is_none() {
@@ -83,6 +106,11 @@ pub async fn run_post_ingest_enrichment(
         db.record_enrichment_step(source_id, "entity_link", "skipped", None)
             .await
             .ok();
+    }
+
+    if is_cancelled(cancel) {
+        log::info!("[post_ingest] {source_id}: cancelled after entity_link");
+        return Ok(());
     }
 
     // 2b. Store-time entity extraction with time-windowed batching
@@ -202,6 +230,11 @@ pub async fn run_post_ingest_enrichment(
             .ok();
     }
 
+    if is_cancelled(cancel) {
+        log::info!("[post_ingest] {source_id}: cancelled after entity_extract");
+        return Ok(());
+    }
+
     // 3. Concept contradiction check — flag related concepts for re-distill if new memory contradicts
     match check_page_contradiction(db, source_id, content).await {
         Ok(n) if n > 0 => {
@@ -246,6 +279,11 @@ pub async fn run_post_ingest_enrichment(
             .await
             .ok();
         }
+    }
+
+    if is_cancelled(cancel) {
+        log::info!("[post_ingest] {source_id}: cancelled before title_enrich");
+        return Ok(());
     }
 
     // 5. Title enrichment — generate short topic title if current title is a truncation
@@ -295,6 +333,11 @@ pub async fn run_post_ingest_enrichment(
     // scheduler (BurstEnd trigger) at the natural end of agent work sessions,
     // not on every write. generate_recaps_public remains in refinery's public
     // API for standalone core consumers. See 2026-04-12-event-driven-steep-triggers.
+
+    if is_cancelled(cancel) {
+        log::info!("[post_ingest] {source_id}: cancelled before page_growth");
+        return Ok(());
+    }
 
     // 7. Concept growth — update matching page with new memory
     match grow_page(
@@ -573,6 +616,23 @@ pub(crate) async fn grow_page(
         return Ok(false);
     }
 
+    // Shrink-guard pre-check (T17): early-exit before calling update_page.
+    // update_page has its own shrink-guard backstop, but this early-exit
+    // preserves the Ok(false) contract (skipped-growth) rather than Err.
+    // Matches the is_empty() early-return contract at line 572.
+    if let Some(threshold) = crate::post_write::merge_shrink_threshold() {
+        if !crate::retrieval::integrity::body_shrink_ok(&page.content, updated, threshold) {
+            log::warn!(
+                "[grow_page] shrink-guard skipped growth for page {}: new body ({} chars) < {}% of old ({} chars)",
+                page.id,
+                updated.chars().count(),
+                (threshold * 100.0) as u32,
+                page.content.chars().count(),
+            );
+            return Ok(false);
+        }
+    }
+
     // Update page with new content + add source memory
     let mut source_ids = page.source_memory_ids.clone();
     if !source_ids.contains(&source_id.to_string()) {
@@ -663,6 +723,7 @@ mod tests {
             pending_revision: false,
             entity_id: None,
             quality: None,
+            importance: None,
             is_recap: false,
             enrichment_status: "raw".to_string(),
             supersede_mode: "hide".to_string(),
@@ -711,6 +772,7 @@ mod tests {
             &crate::tuning::RefineryConfig::default(),
             &crate::tuning::DistillationConfig::default(),
             None,
+            None, // cancel — T22, inert
         )
         .await
         .unwrap();
@@ -739,6 +801,7 @@ mod tests {
             &crate::tuning::RefineryConfig::default(),
             &crate::tuning::DistillationConfig::default(),
             None,
+            None, // cancel — T22, inert
         )
         .await
         .unwrap();
@@ -866,6 +929,218 @@ mod tests {
         assert_eq!(cursor_ids, vec!["mem_iso_cursor"]);
     }
 
+    // ---- T22: cooperative-cancellation (debounced reflection) ----
+
+    /// Default-OFF guarantee, expressed at the core boundary: passing a cancel
+    /// flag that is `false` must be inert — every enrichment step still runs.
+    #[tokio::test]
+    async fn test_enrichment_runs_all_steps_when_not_cancelled() {
+        let (db, _dir) = test_db().await;
+        let doc = make_doc("mem_t22_inert", "The capital of France is Paris");
+        db.upsert_documents(vec![doc]).await.unwrap();
+
+        let cancel = std::sync::Arc::new(AtomicBool::new(false));
+        run_post_ingest_enrichment(
+            &db,
+            "mem_t22_inert",
+            "The capital of France is Paris",
+            None,
+            Some("fact"),
+            None,
+            None,
+            None,
+            &crate::prompts::PromptRegistry::default(),
+            &crate::tuning::RefineryConfig::default(),
+            &crate::tuning::DistillationConfig::default(),
+            None,
+            Some(cancel.as_ref()),
+        )
+        .await
+        .unwrap();
+
+        let steps = db.get_enrichment_steps("mem_t22_inert").await.unwrap();
+        let names: std::collections::HashSet<&str> =
+            steps.iter().map(|s| s.step.as_str()).collect();
+        // Same step coverage as the no-cancel path (test_enrichment_records_per_step_outcomes).
+        assert!(
+            names.contains("entity_link"),
+            "entity_link must run when cancel=false"
+        );
+        assert!(
+            names.contains("entity_extract"),
+            "entity_extract must run when cancel=false"
+        );
+        assert!(
+            names.contains("title_enrich"),
+            "title_enrich must run when cancel=false"
+        );
+        assert!(
+            names.contains("page_growth"),
+            "page_growth must run when cancel=false"
+        );
+    }
+
+    /// Cancelled before the first step → return Ok(()) with NO steps written.
+    #[tokio::test]
+    async fn test_enrichment_early_returns_when_cancelled_before_first_step() {
+        let (db, _dir) = test_db().await;
+        let doc = make_doc("mem_t22_precancel", "The capital of France is Paris");
+        db.upsert_documents(vec![doc]).await.unwrap();
+
+        let cancel = std::sync::Arc::new(AtomicBool::new(true));
+        run_post_ingest_enrichment(
+            &db,
+            "mem_t22_precancel",
+            "The capital of France is Paris",
+            None,
+            Some("fact"),
+            None,
+            None,
+            None,
+            &crate::prompts::PromptRegistry::default(),
+            &crate::tuning::RefineryConfig::default(),
+            &crate::tuning::DistillationConfig::default(),
+            None,
+            Some(cancel.as_ref()),
+        )
+        .await
+        .unwrap();
+
+        let steps = db.get_enrichment_steps("mem_t22_precancel").await.unwrap();
+        assert!(
+            steps.is_empty(),
+            "no enrichment steps must be written when cancelled before the first step, got {steps:?}"
+        );
+    }
+
+    /// Cancel concurrently with enrichment: whatever steps did run must form a
+    /// clean contiguous PREFIX of the canonical step sequence, never a step that
+    /// was half-applied or a later step that ran after an earlier one was
+    /// skipped. This proves the `is_cancelled` checkpoints cut only at clean
+    /// boundaries between whole steps (combined with the cancelled-before-first
+    /// test, which is the empty-prefix case, and the not-cancelled test, which
+    /// is the full-prefix case).
+    ///
+    /// The exact cut point depends on the scheduler race (the no-LLM path is
+    /// fast), so we assert the invariant that must hold for EVERY cut point
+    /// rather than a fixed one. Run on a multi-thread runtime so the flipper and
+    /// the enrichment make progress in parallel.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn test_enrichment_cancel_midway_preserves_committed_steps() {
+        // Canonical order steps are recorded in for the no-LLM path.
+        const CANON: [&str; 6] = [
+            "entity_link",
+            "entity_extract",
+            "page_contradiction",
+            "entity_suggestion",
+            "title_enrich",
+            "page_growth",
+        ];
+
+        let (db, _dir) = test_db().await;
+        let doc = make_doc("mem_t22_midway", "The capital of France is Paris");
+        db.upsert_documents(vec![doc]).await.unwrap();
+        let db = std::sync::Arc::new(db);
+
+        let cancel = std::sync::Arc::new(AtomicBool::new(false));
+        let cancel_task = cancel.clone();
+        let db_task = db.clone();
+        let handle = tokio::spawn(async move {
+            run_post_ingest_enrichment(
+                &db_task,
+                "mem_t22_midway",
+                "The capital of France is Paris",
+                None,
+                Some("fact"),
+                None,
+                None,
+                None,
+                &crate::prompts::PromptRegistry::default(),
+                &crate::tuning::RefineryConfig::default(),
+                &crate::tuning::DistillationConfig::default(),
+                None,
+                Some(cancel_task.as_ref()),
+            )
+            .await
+            .unwrap();
+        });
+
+        // Flip cancel the moment the first step is observed, then let the rest
+        // settle. Bounded spin so a logic bug can't hang the test.
+        for _ in 0..2000 {
+            let steps = db.get_enrichment_steps("mem_t22_midway").await.unwrap();
+            if steps.iter().any(|s| s.step == "entity_link") {
+                cancel.store(true, Ordering::SeqCst);
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+        handle.await.unwrap();
+
+        let steps = db.get_enrichment_steps("mem_t22_midway").await.unwrap();
+        let names: std::collections::HashSet<&str> =
+            steps.iter().map(|s| s.step.as_str()).collect();
+
+        // Invariant 1: the recorded steps are exactly the first K of CANON for
+        // some K — a contiguous prefix. No later step ever ran while an earlier
+        // one was skipped (that would mean a checkpoint failed to cut cleanly).
+        let k = CANON.iter().take_while(|s| names.contains(**s)).count();
+        for (i, step) in CANON.iter().enumerate() {
+            let present = names.contains(*step);
+            let expected = i < k;
+            assert_eq!(
+                present, expected,
+                "step {step:?} present={present} but prefix length is {k}: recorded steps must be a contiguous prefix of the canonical order, got {names:?}"
+            );
+        }
+        // Invariant 2: every recorded step is complete (has a non-empty status),
+        // i.e. no step was half-written when cancellation hit.
+        for st in &steps {
+            assert!(
+                !st.status.is_empty(),
+                "step {:?} was recorded without a status — a half-written step",
+                st.step
+            );
+        }
+    }
+
+    /// The memory row stored synchronously before enrichment must remain
+    /// retrievable after a cancelled enrichment — cancellation only delays
+    /// enrichment, it never drops data.
+    #[tokio::test]
+    async fn test_memory_row_intact_after_cancel() {
+        let (db, _dir) = test_db().await;
+        let doc = make_doc("mem_t22_rowintact", "Tokyo is the capital of Japan");
+        db.upsert_documents(vec![doc]).await.unwrap();
+
+        let cancel = std::sync::Arc::new(AtomicBool::new(true));
+        run_post_ingest_enrichment(
+            &db,
+            "mem_t22_rowintact",
+            "Tokyo is the capital of Japan",
+            None,
+            Some("fact"),
+            None,
+            None,
+            None,
+            &crate::prompts::PromptRegistry::default(),
+            &crate::tuning::RefineryConfig::default(),
+            &crate::tuning::DistillationConfig::default(),
+            None,
+            Some(cancel.as_ref()),
+        )
+        .await
+        .unwrap();
+
+        // Row still present and retrievable despite the cancelled enrichment.
+        let items = db.list_memories(None, None, None, None, 10).await.unwrap();
+        let row = items.iter().find(|i| i.source_id == "mem_t22_rowintact");
+        assert!(
+            row.is_some(),
+            "the stored memory row must survive a cancelled enrichment"
+        );
+    }
+
     #[tokio::test]
     async fn test_enrichment_honesty_end_to_end() {
         let (db, _dir) = test_db().await;
@@ -886,6 +1161,7 @@ mod tests {
             &crate::tuning::RefineryConfig::default(),
             &crate::tuning::DistillationConfig::default(),
             None,
+            None, // cancel — T22, inert
         )
         .await
         .unwrap();

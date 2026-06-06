@@ -126,6 +126,12 @@ async fn run_daemon() -> anyhow::Result<()> {
     let db_arc = Arc::new(db);
     server_state.db = Some(db_arc.clone());
 
+    // Run migration-55 backfill (event_date regex Pass A + memory_entities Pass B)
+    // before the HTTP listener binds so no ingest races the backfill. Idempotent.
+    db_arc.run_migration_55().await.map_err(|e| {
+        anyhow::anyhow!("running migration 55 (event_date + memory_entities backfill): {e}")
+    })?;
+
     // Consolidate user-facing assets under ~/.origin/.
     // - Ensure ~/.origin/{pages, sessions, sessions/_status} exist
     // - Symlink ~/.origin/db -> <data_dir> (cosmetic alias; DB stays at
@@ -405,6 +411,40 @@ async fn run_daemon() -> anyhow::Result<()> {
         }
     }
 
+    // Initialize cross-encoder reranker. Opt-in via `ORIGIN_RERANKER_ENABLED=1`
+    // because first construction downloads ~600MB of model weights. Reuses the
+    // embedder's FastEmbed cache directory so the download is shared with the
+    // BGE embedder. Failure is non-fatal: search falls back to embedding+FTS
+    // ordering with no rerank pass.
+    if std::env::var("ORIGIN_RERANKER_ENABLED").as_deref() == Ok("1") {
+        let cache_dir = origin_core::db::resolve_fastembed_cache_dir(&data_dir);
+        let init_result = tokio::task::spawn_blocking(move || {
+            origin_core::reranker::init_cross_encoder_reranker(cache_dir)
+        })
+        .await;
+        match init_result {
+            Ok(Ok(reranker)) => {
+                tracing::info!(
+                    "[reranker] cross-encoder initialized (model={})",
+                    reranker.model_id()
+                );
+                server_state.reranker = Some(reranker);
+            }
+            Ok(Err(e)) => {
+                tracing::warn!("[reranker] init failed, falling back to embedding+FTS only: {e}");
+            }
+            Err(e) => {
+                tracing::warn!(
+                    "[reranker] init join failed, falling back to embedding+FTS only: {e}"
+                );
+            }
+        }
+    } else {
+        tracing::info!(
+            "[reranker] ORIGIN_RERANKER_ENABLED!=1, skipping cross-encoder init (set =1 to enable)"
+        );
+    }
+
     // Import any legacy tag data from the pre-PR-B2 spaces.db file.
     if let Some(ref db_arc) = server_state.db {
         match origin_core::spaces::import_legacy_tags(db_arc).await {
@@ -539,10 +579,7 @@ async fn run_daemon() -> anyhow::Result<()> {
     // Bind
     let addr = resolve_bind_addr(port);
     let listener = match tokio::net::TcpListener::bind(&addr).await {
-        Ok(l) => {
-            tracing::info!("Listening on http://{}", addr);
-            l
-        }
+        Ok(l) => l,
         Err(e) => {
             // Check if existing daemon is healthy
             tracing::warn!("Failed to bind {}: {}", addr, e);
@@ -575,6 +612,27 @@ async fn run_daemon() -> anyhow::Result<()> {
             }
         }
     };
+
+    // Advertise the bound port before accepting requests.
+    // `addr` may be `127.0.0.1:0`; `local_addr()` gives the real ephemeral port.
+    let local_addr = listener.local_addr()?;
+    tracing::info!("Listening on http://{}", local_addr);
+
+    // Eval harness reads this stdout line to discover the bound port even when
+    // ORIGIN_BIND_ADDR=127.0.0.1:0. Format MUST stay stable — see
+    // crates/origin-core/src/eval/http_harness.rs in the P2 plan.
+    println!("ORIGIN_LISTENING_ON={}", local_addr);
+    use std::io::Write;
+    let _ = std::io::stdout().flush();
+
+    // Alternate signal: write the port to a file if ORIGIN_PORT_FILE is set.
+    // Eval harness uses this when stdout is captured by tracing-appender.
+    if let Ok(port_file) = std::env::var("ORIGIN_PORT_FILE") {
+        if let Err(e) = std::fs::write(&port_file, local_addr.port().to_string()) {
+            tracing::error!("failed to write ORIGIN_PORT_FILE={}: {}", port_file, e);
+            return Err(anyhow::anyhow!("ORIGIN_PORT_FILE write failed: {}", e));
+        }
+    }
 
     // Serve
     axum::serve(listener, app).await?;

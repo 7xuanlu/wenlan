@@ -27,9 +27,9 @@
 
 **Your next AI session should pick up the context you built, not lose it in chat history.**
 
-Origin gives your daily AI workflow one local home: memory your agents can recall, wiki pages you can read, and source-backed context that captures, distills, and versions decisions, lessons, and project context across chats, projects, and time.
+Origin gives AI work one local home: decisions, lessons, gotchas, and project context are captured in flow, distilled into source-backed wiki pages, and brought back as retrieval context across chats, projects, and time.
 
-Your agent reads searchable memory, graph context, and hybrid retrieval. You read Markdown artifacts under `~/.origin/`. Same store, two surfaces.
+Agents query the same store through atomic memories, distilled pages, graph context, and hybrid retrieval. You read the Markdown artifacts under `~/.origin/`. Same source-backed store, two surfaces.
 
 [![Watch the Origin demo](./docs/assets/demo-preview.gif)](https://youtu.be/k37gjWVPHwI)
 
@@ -37,24 +37,15 @@ Your agent reads searchable memory, graph context, and hybrid retrieval. You rea
 
 ## What makes Origin distinct
 
-1. **Composition, not just storage.** Memories distill into pages. Sessions track workflow. An entity graph links people, projects, tools, and relations. Recall pulls vector hits, FTS hits, and graph neighbors together. Keyword search alone misses the connections. ~30 MCP tools across one daemon, not 100+ skills bolted on.
-2. **Real git versioning.** Every memory write is a `git commit` in `~/.origin/.git/`. Inspect with `git log`. Revert with `git checkout`. Branch and blame as needed.
-  ```text
-   $ cd ~/.origin && git log --oneline -5
+1. **Composition, not just storage.** Origin does not stop at chat-memory snippets. Captures cluster into source-backed wiki pages, and those pages feed retrieval alongside atomic memories, FTS, vectors, and graph neighbors.
+2. **Review before trust.** Low-confidence captures and contradictions surface for review when they happen, instead of silently entering context. Supersession chains and protected-memory conflicts stay visible.
+3. **Mandatory, refreshable provenance.** Wiki pages cite source memory IDs, carry `stale_reasons` and `revision_state`, and refresh through `/distill` or opt-in self-evolving background cycles when you add a local model or API key. The daemon refuses unsourced pages instead of letting hallucinated summaries enter the store.
+4. **Real git versioning.** Memory, page, and session writes commit into `~/.origin/.git/`, so you can inspect, diff, revert, branch, or symlink the Markdown artifacts into Obsidian.
+   ```text
    a1b2c3d page: embedding-retrieval refreshed (4 sources)
    9f8e7d6 session: handoff embedding-work
-   5a4b3c2 capture: fact mem_def456
-   8d7c6b5 capture: decision mem_abc123
-   3e2f1a0 init: origin v0.6.1
-  ```
-3. **Mandatory, refreshable provenance.** Wiki pages cite source memory IDs. The daemon rejects pages with empty `source_memory_ids` (HTTP 422). Pages aren't write-once: each carries `stale_reasons` and `revision_state`. `/distill` re-runs and background cycles refresh them as new memories arrive, without losing the citation chain.
-  ```bash
-   $ curl -X POST http://127.0.0.1:7878/pages \
-       -d '{"title":"X","content":"Y","source_memory_ids":[]}'
-   HTTP/1.1 422 Unprocessable Entity
-   {"error":"source_memory_ids cannot be empty"}
-  ```
-4. **Auditable memory.** Low-confidence captures and contradictions surface for review when they happen, instead of silently entering context. Supersession chains and protected-memory conflicts stay visible. Audit when you want, trust the defaults when you don't.
+   5a4b3c2 capture: decision mem_abc123
+   ```
 
 ---
 
@@ -147,15 +138,17 @@ which layer chose the active space.
 
 ## Evaluation
 
-**Hybrid retrieval, transparent eval.** BGE-Base-EN-v1.5-Q + FTS5 + Reciprocal Rank Fusion. Recall@5 = 88% on LongMemEval (oracle, 500 Q), 67% on LoCoMo. ~168 tokens per recall query. Eval harness at [`crates/origin-core/src/eval/`](crates/origin-core/src/eval/). Run it yourself.
+**Hybrid retrieval, transparent eval.** BGE-Base-EN-v1.5-Q + FTS5 + Reciprocal Rank Fusion; local BGE-Reranker-V2-M3 cross-encoder rerank is the latest shipped path when enabled. The table below is retrieval-only, not end-to-end answer quality. ~168 tokens per recall query. Eval harness at [`crates/origin-core/src/eval/`](crates/origin-core/src/eval/). Run it yourself.
 
 Update workflow in [docs/eval](docs/eval/README.md).
 
 
-| Benchmark                   | Recall@5 | MRR   | NDCG@10 |
-| --------------------------- | -------- | ----- | ------- |
-| LongMemEval (oracle, 500 Q) | 88.0%    | 74.2% | 79.0%   |
-| LoCoMo (locomo10)           | 67.3%    | 58.9% | 64.0%   |
+<!-- EVAL_SNAPSHOT_START -->
+| Benchmark | Recall@5 | MRR | NDCG@10 |
+|---|---:|---:|---:|
+| LongMemEval (oracle, 500 Q) | 93.6% | 0.857 | 0.883 |
+| LoCoMo (locomo10) | 70.0% | 0.647 | 0.684 |
+<!-- EVAL_SNAPSHOT_END -->
 
 
 ---

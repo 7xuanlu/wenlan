@@ -90,6 +90,38 @@ pub fn load_longmemeval(path: &Path) -> Result<Vec<LongMemEvalSample>, OriginErr
     Ok(samples)
 }
 
+/// Truncate the loaded LongMemEval samples in place if `EVAL_LME_LIMIT` is set
+/// to a positive integer. Used by every `run_longmemeval_eval*` variant so a
+/// developer can run a small pre-flight subset (~30min) before committing
+/// to a full multi-hour run.
+fn apply_lme_limit(samples: &mut Vec<LongMemEvalSample>) {
+    apply_limit_from_env(samples, "EVAL_LME_LIMIT", "longmemeval", "questions");
+}
+
+/// Shared helper for `apply_lme_limit`. Parameterized on the env var name so
+/// unit tests can exercise the behavior without racing the production var.
+fn apply_limit_from_env<T>(samples: &mut Vec<T>, env_var: &str, bench_tag: &str, unit_label: &str) {
+    let Some(limit) = std::env::var(env_var)
+        .ok()
+        .and_then(|v| v.parse::<usize>().ok())
+    else {
+        return;
+    };
+    let total = samples.len();
+    if limit < total {
+        samples.truncate(limit);
+        log::warn!(
+            "[eval/{}] {}={} active -- running on {} of {} {}",
+            bench_tag,
+            env_var,
+            limit,
+            samples.len(),
+            total,
+            unit_label
+        );
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Memory extraction
 // ---------------------------------------------------------------------------
@@ -132,6 +164,35 @@ pub fn extract_memories(sample: &LongMemEvalSample) -> Vec<LongMemEvalMemory> {
 /// Build a source_id for a memory extracted from a LongMemEval turn.
 fn memory_source_id(question_id: &str, session_idx: usize, turn_idx: usize) -> String {
     format!("lme_{}_{}_t{}", question_id, session_idx, turn_idx)
+}
+
+/// Build a `{source_id -> event_date(unix seconds)}` map from LongMemEval session
+/// metadata, for eval-seed `event_date` injection (T11/T20 temporal).
+///
+/// Turn TEXT carries no date, so classify-from-text recovers no `event_date`; the
+/// per-session date lives in `haystack_dates`, parallel to `haystack_session_ids`.
+/// Reuses the module's existing [`parse_lme_date`] and truncates to midnight UTC
+/// (day-level matching). `source_id` mirrors the seed builder via [`memory_source_id`].
+pub fn event_date_map(samples: &[LongMemEvalSample]) -> HashMap<String, i64> {
+    let mut map = HashMap::new();
+    for sample in samples {
+        for mem in extract_memories(sample) {
+            let Some(date_str) = sample.haystack_dates.get(mem.session_idx) else {
+                continue;
+            };
+            let Some(dt) = parse_lme_date(date_str) else {
+                continue;
+            };
+            let Some(midnight) = dt.date_naive().and_hms_opt(0, 0, 0) else {
+                continue;
+            };
+            map.insert(
+                memory_source_id(&mem.question_id, mem.session_idx, mem.turn_idx),
+                midnight.and_utc().timestamp(),
+            );
+        }
+    }
+    map
 }
 
 // ---------------------------------------------------------------------------
@@ -222,6 +283,33 @@ pub fn category_name(question_type: &str) -> &'static str {
     }
 }
 
+/// Build a `CaseResult` for one LongMemEval QA sample. Metrics not computed by
+/// the LME runner (map_at_10, precision_at_3, negatives) are zero-filled.
+#[allow(clippy::too_many_arguments)]
+fn build_lme_case_result(
+    question: &str,
+    question_type: &str,
+    ndcg_5: f64,
+    ndcg_10: f64,
+    mrr_val: f64,
+    recall_5: f64,
+    hr_1: f64,
+) -> crate::eval::report::CaseResult {
+    crate::eval::report::CaseResult {
+        query: question.to_string(),
+        ndcg_at_10: ndcg_10,
+        ndcg_at_5: ndcg_5,
+        map_at_10: 0.0,
+        mrr: mrr_val,
+        recall_at_5: recall_5,
+        hit_rate_at_1: hr_1,
+        precision_at_3: 0.0,
+        negative_leakage: 0,
+        neg_above_relevant: 0,
+        category: Some(category_name(question_type).to_string()),
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Benchmark result structs
 // ---------------------------------------------------------------------------
@@ -234,6 +322,8 @@ pub struct LongMemEvalBaseline {
     pub recall_at_5: f64,
     pub hit_rate_at_1: f64,
     pub per_category: Vec<crate::eval::report::CategoryBaseline>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub coverage: Option<crate::eval::report::CoverageRecall>,
 }
 
 /// Per-category results.
@@ -265,6 +355,14 @@ pub struct LongMemEvalReport {
     /// Run environment capture (schema v1).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub env: Option<crate::eval::report::ReportEnv>,
+    /// Per-question results for paired comparison (McNemar etc.).
+    /// Populated by each runner variant; empty by default for back-compat.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub per_case: Vec<crate::eval::report::CaseResult>,
+    /// Source-expanded coverage recall (page-channel `_from_db` runner only;
+    /// None elsewhere). See [`crate::eval::report::CoverageRecall`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub coverage: Option<crate::eval::report::CoverageRecall>,
 }
 
 impl LongMemEvalReport {
@@ -292,6 +390,15 @@ impl LongMemEvalReport {
             "  Hit Rate@1:  {:.4}\n",
             self.aggregate_hit_rate_at_1
         ));
+
+        if let Some(ref cov) = self.coverage {
+            out.push_str(&format!(
+                "  Coverage recall (set-based, page-source-expanded):\n    blind:    {:.4}\n    expanded: {:.4}\n    delta:    {:+.4}  <- page contribution\n",
+                cov.blind,
+                cov.expanded,
+                cov.expanded - cov.blind
+            ));
+        }
 
         if let Some(ref b) = self.baseline {
             out.push_str("\nBaseline comparison:\n");
@@ -366,6 +473,7 @@ impl LongMemEvalReport {
             recall_at_5: self.aggregate_recall_at_5,
             hit_rate_at_1: self.aggregate_hit_rate_at_1,
             per_category,
+            coverage: self.coverage.clone(),
         };
         let json = serde_json::to_string_pretty(&baseline).map_err(std::io::Error::other)?;
         std::fs::write(path, json)
@@ -381,6 +489,119 @@ impl LongMemEvalReport {
     /// Falls back to base + ".json" if env is missing (back-compat).
     pub fn baseline_filename(&self, base: &str) -> String {
         crate::eval::report::encode_baseline_filename(self.env.as_ref(), base)
+    }
+
+    /// Project this LongMemEvalReport onto the flat `EvalReport` shape so the
+    /// P0b layered baseline path (`save_full_report`) can consume it.
+    ///
+    /// Same mapping policy as `LocomoReport::to_eval_report` — only metrics
+    /// surfaced by the LongMemEval runner are populated; the rest are
+    /// zero-filled, and per-case data stays on the strongly-typed report.
+    pub fn to_eval_report(&self) -> crate::eval::report::EvalReport {
+        let search_mode = self
+            .env
+            .as_ref()
+            .map(|e| e.retrieval_method.clone())
+            .unwrap_or_else(|| "longmemeval".to_string());
+        crate::eval::report::EvalReport {
+            fixture_count: self.total_questions,
+            file_count: 1,
+            search_mode,
+            ndcg_at_10: self.aggregate_ndcg_at_10,
+            ndcg_at_5: 0.0,
+            map_at_5: 0.0,
+            map_at_10: 0.0,
+            mrr: self.aggregate_mrr,
+            recall_at_1: 0.0,
+            recall_at_3: 0.0,
+            recall_at_5: self.aggregate_recall_at_5,
+            hit_rate_at_1: self.aggregate_hit_rate_at_1,
+            hit_rate_at_3: 0.0,
+            precision_at_3: 0.0,
+            precision_at_5: 0.0,
+            neg_above_relevant: 0,
+            total_negatives: 0,
+            negative_leakage: 0,
+            gate_content_filtered: 0,
+            gate_novelty_filtered: 0,
+            empty_set_count: 0,
+            empty_set_false_confidence: None,
+            score_gap: None,
+            temporal_ordering_total: 0,
+            temporal_ordering_correct: 0,
+            temporal_ordering_rate: None,
+            baseline: None,
+            per_case: self.per_case.clone(),
+            env: self.env.clone(),
+            latency: None,
+            total_scenarios: self.total_questions,
+            skipped_scenarios: Vec::new(),
+            enrichment_failures: 0,
+            truncated_reason: None,
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// ReportEnv builder
+// ---------------------------------------------------------------------------
+
+/// Build a `ReportEnv` for a LongMemEval runner variant.
+///
+/// Fills both the legacy 9 fields (needed by `encode_baseline_filename`) and
+/// the new P0a additive fields. The `llm_provider_class` / `llm_model` legacy
+/// fields and the new P0a fields carry the same information so both views of
+/// the data stay consistent.
+fn build_lme_env(
+    variant: &str,
+    path: &std::path::Path,
+    retrieval_method: &str,
+    llm_provider_class: &str,
+    llm_model: &str,
+    judge_model: Option<String>,
+) -> crate::eval::report::ReportEnv {
+    let fixture_revision =
+        crate::eval::fixtures::fixture_revision_hash(path).unwrap_or_else(|_| "unknown".into());
+    let n_runs: u32 = 1;
+    let run_id = Some(format!(
+        "run_{}",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos()
+    ));
+    let now = chrono::Utc::now();
+    let timestamp_utc = Some(now.to_rfc3339());
+    crate::eval::report::ReportEnv {
+        // Legacy fields (needed by encode_baseline_filename and existing callers)
+        fixture_revision,
+        embedder_model: "BGE-Base-EN-v1.5-Q".into(),
+        embedder_revision: "768d".into(),
+        retrieval_method: retrieval_method.to_string(),
+        llm_provider_class: llm_provider_class.to_string(),
+        llm_model: llm_model.to_string(),
+        judge_model: judge_model.clone(),
+        origin_version: env!("CARGO_PKG_VERSION").into(),
+        eval_timestamp_unix: now.timestamp(),
+        // P0a additive fields
+        layer: Some(crate::eval::EvalLayer::L1Db),
+        task: Some("lme".to_string()),
+        variant: Some(variant.to_string()),
+        embed_dim: Some(768),
+        similarity_fn_name: "cosine".to_string(),
+        judge_model_id: judge_model,
+        mcp_schema_hash: None,
+        skill_prompt_hash: None,
+        schema_version: 1,
+        schema_db_version: Some(crate::db::SCHEMA_VERSION),
+        migrations_hash: option_env!("ORIGIN_MIGRATIONS_HASH").map(String::from),
+        n_runs,
+        is_single_run: n_runs == 1,
+        run_id,
+        timestamp_utc,
+        git_sha: option_env!("ORIGIN_GIT_SHA").map(String::from),
+        warmup_iterations: 0,
+        ..Default::default()
     }
 }
 
@@ -404,9 +625,11 @@ const CATEGORY_ORDER: &[&str] = &[
 /// 3. Search with the question, score against evidence turns
 /// 4. Aggregate per-category and overall metrics
 pub async fn run_longmemeval_eval(path: &Path) -> Result<LongMemEvalReport, OriginError> {
-    let samples = load_longmemeval(path)?;
+    let mut samples = load_longmemeval(path)?;
+    apply_lme_limit(&mut samples);
     // (question_type, ndcg_5, ndcg_10, mrr, recall_5, hit_rate_1)
     let mut all_scores: Vec<(String, f64, f64, f64, f64, f64)> = Vec::new();
+    let mut per_case: Vec<crate::eval::report::CaseResult> = Vec::new();
     let mut total_memories: usize = 0;
 
     for sample in &samples {
@@ -488,6 +711,15 @@ pub async fn run_longmemeval_eval(path: &Path) -> Result<LongMemEvalReport, Orig
             recall_5,
             hr_1,
         ));
+        per_case.push(build_lme_case_result(
+            &sample.question,
+            &sample.question_type,
+            ndcg_5,
+            ndcg_10,
+            mrr_val,
+            recall_5,
+            hr_1,
+        ));
     }
 
     // Aggregate
@@ -503,35 +735,36 @@ pub async fn run_longmemeval_eval(path: &Path) -> Result<LongMemEvalReport, Orig
         per_category,
         baseline: None,
         env: None,
+        per_case,
+        coverage: None,
     };
-    report.env = Some(crate::eval::report::ReportEnv {
-        fixture_revision: crate::eval::fixtures::fixture_revision_hash(path)
-            .unwrap_or_else(|_| "unknown".into()),
-        embedder_model: "BGE-Base-EN-v1.5-Q".into(),
-        embedder_revision: "768d".into(),
-        retrieval_method: "search_memory".into(),
-        llm_provider_class: "none".into(),
-        llm_model: "none".into(),
-        judge_model: None,
-        origin_version: env!("CARGO_PKG_VERSION").into(),
-        eval_timestamp_unix: chrono::Utc::now().timestamp(),
-    });
+    report.env = Some(build_lme_env(
+        "base",
+        path,
+        "search_memory",
+        "none",
+        "none",
+        None,
+    ));
     Ok(report)
 }
 
 // ---------------------------------------------------------------------------
-// Reranked benchmark runner — same as run_longmemeval_eval but uses search_memory_reranked
+// Reranked benchmark runner — same as run_longmemeval_eval but uses search_memory_llm_rerank
 // ---------------------------------------------------------------------------
 
 /// Same seeding/scoring logic as `run_longmemeval_eval`, but retrieval uses
-/// `search_memory_reranked` with the supplied LLM for per-query reranking.
+/// `search_memory_llm_rerank` with the supplied LLM for per-query reranking.
+#[allow(deprecated)] // search_memory_llm_rerank retained for eval baseline lineage
 pub async fn run_longmemeval_eval_reranked(
     path: &Path,
     llm: std::sync::Arc<dyn crate::llm_provider::LlmProvider>,
 ) -> Result<LongMemEvalReport, OriginError> {
-    let samples = load_longmemeval(path)?;
+    let mut samples = load_longmemeval(path)?;
+    apply_lme_limit(&mut samples);
     // (question_type, ndcg_5, ndcg_10, mrr, recall_5, hit_rate_1)
     let mut all_scores: Vec<(String, f64, f64, f64, f64, f64)> = Vec::new();
+    let mut per_case: Vec<crate::eval::report::CaseResult> = Vec::new();
     let mut total_memories: usize = 0;
 
     for sample in &samples {
@@ -577,7 +810,7 @@ pub async fn run_longmemeval_eval_reranked(
 
         // Search with reranking
         let results = db
-            .search_memory_reranked(&sample.question, 10, None, None, None, Some(llm.clone()))
+            .search_memory_llm_rerank(&sample.question, 10, None, None, None, Some(llm.clone()))
             .await?;
 
         let result_ids: Vec<&str> = results.iter().map(|r| r.source_id.as_str()).collect();
@@ -613,6 +846,15 @@ pub async fn run_longmemeval_eval_reranked(
             recall_5,
             hr_1,
         ));
+        per_case.push(build_lme_case_result(
+            &sample.question,
+            &sample.question_type,
+            ndcg_5,
+            ndcg_10,
+            mrr_val,
+            recall_5,
+            hr_1,
+        ));
     }
 
     // Aggregate
@@ -628,20 +870,724 @@ pub async fn run_longmemeval_eval_reranked(
         per_category,
         baseline: None,
         env: None,
+        per_case,
+        coverage: None,
     };
-    report.env = Some(crate::eval::report::ReportEnv {
-        fixture_revision: crate::eval::fixtures::fixture_revision_hash(path)
-            .unwrap_or_else(|_| "unknown".into()),
-        embedder_model: "BGE-Base-EN-v1.5-Q".into(),
-        embedder_revision: "768d".into(),
-        retrieval_method: "search_memory_reranked".into(),
-        llm_provider_class: llm.kind().into(),
-        llm_model: llm.model_id(),
-        judge_model: None,
-        origin_version: env!("CARGO_PKG_VERSION").into(),
-        eval_timestamp_unix: chrono::Utc::now().timestamp(),
-    });
+    report.env = Some(build_lme_env(
+        "reranked",
+        path,
+        "search_memory_reranked",
+        llm.kind(),
+        &llm.model_id(),
+        None,
+    ));
     Ok(report)
+}
+
+// ---------------------------------------------------------------------------
+// Cross-encoder rerank benchmark runner — same as run_longmemeval_eval_reranked
+// but swaps the LLM reranker for a cross-encoder model (fastembed TextRerank).
+// ---------------------------------------------------------------------------
+
+/// Same seeding/scoring logic as `run_longmemeval_eval_reranked`, but retrieval
+/// uses `search_memory_cross_rerank` driven by a cross-encoder reranker
+/// (typically `BGERerankerV2M3`). Lets the eval sweep compare LLM-as-judge
+/// reranking against a purpose-built cross-encoder on identical fixtures.
+pub async fn run_longmemeval_eval_cross_rerank(
+    path: &Path,
+    reranker: std::sync::Arc<dyn crate::reranker::Reranker>,
+) -> Result<LongMemEvalReport, OriginError> {
+    let mut samples = load_longmemeval(path)?;
+    apply_lme_limit(&mut samples);
+    // (question_type, ndcg_5, ndcg_10, mrr, recall_5, hit_rate_1)
+    let mut all_scores: Vec<(String, f64, f64, f64, f64, f64)> = Vec::new();
+    let mut per_case: Vec<crate::eval::report::CaseResult> = Vec::new();
+    let mut total_memories: usize = 0;
+
+    for sample in &samples {
+        let memories = extract_memories(sample);
+
+        let tmp = tempfile::tempdir().map_err(|e| OriginError::Generic(format!("tempdir: {e}")))?;
+        let db = MemoryDB::new(tmp.path(), std::sync::Arc::new(crate::events::NoopEmitter)).await?;
+
+        let docs: Vec<RawDocument> = memories
+            .iter()
+            .map(|mem| {
+                let memory_type = match sample.question_type.as_str() {
+                    "single-session-preference" => "preference",
+                    _ => "fact",
+                };
+                RawDocument {
+                    content: mem.content.clone(),
+                    source_id: memory_source_id(&mem.question_id, mem.session_idx, mem.turn_idx),
+                    source: "memory".to_string(),
+                    title: format!("{} session {}", mem.role, mem.session_idx),
+                    memory_type: Some(memory_type.to_string()),
+                    space: Some("conversation".to_string()),
+                    last_modified: chrono::Utc::now().timestamp(),
+                    ..Default::default()
+                }
+            })
+            .collect();
+        total_memories += docs.len();
+        db.upsert_documents(docs).await?;
+
+        let relevant_source_ids: HashSet<String> = memories
+            .iter()
+            .filter(|m| m.has_answer)
+            .map(|m| memory_source_id(&m.question_id, m.session_idx, m.turn_idx))
+            .collect();
+
+        if relevant_source_ids.is_empty() {
+            continue;
+        }
+
+        let results = db
+            .search_memory_cross_rerank(
+                &sample.question,
+                10,
+                None,
+                None,
+                None,
+                Some(reranker.clone()),
+            )
+            .await?;
+
+        let result_ids: Vec<&str> = results.iter().map(|r| r.source_id.as_str()).collect();
+
+        let grades: HashMap<&str, u8> = result_ids
+            .iter()
+            .map(|id| {
+                (
+                    *id,
+                    if relevant_source_ids.contains(*id) {
+                        1
+                    } else {
+                        0
+                    },
+                )
+            })
+            .collect();
+
+        let relevant_set: HashSet<&str> = relevant_source_ids.iter().map(|s| s.as_str()).collect();
+
+        let ndcg_10 = metrics::ndcg_at_k(&result_ids, &grades, 10);
+        let ndcg_5 = metrics::ndcg_at_k(&result_ids, &grades, 5);
+        let mrr_val = metrics::mrr(&result_ids, &relevant_set);
+        let recall_5 = metrics::recall_at_k(&result_ids, &relevant_set, 5);
+        let hr_1 = metrics::hit_rate_at_k(&result_ids, &relevant_set, 1);
+
+        all_scores.push((
+            sample.question_type.clone(),
+            ndcg_5,
+            ndcg_10,
+            mrr_val,
+            recall_5,
+            hr_1,
+        ));
+        per_case.push(build_lme_case_result(
+            &sample.question,
+            &sample.question_type,
+            ndcg_5,
+            ndcg_10,
+            mrr_val,
+            recall_5,
+            hr_1,
+        ));
+    }
+
+    let per_category = aggregate_by_category(&all_scores);
+
+    let mut report = LongMemEvalReport {
+        aggregate_ndcg_at_10: avg_field(&all_scores, |s| s.2),
+        aggregate_mrr: avg_field(&all_scores, |s| s.3),
+        aggregate_recall_at_5: avg_field(&all_scores, |s| s.4),
+        aggregate_hit_rate_at_1: avg_field(&all_scores, |s| s.5),
+        total_questions: all_scores.len(),
+        total_memories,
+        per_category,
+        baseline: None,
+        env: None,
+        per_case,
+        coverage: None,
+    };
+    report.env = Some(build_lme_env(
+        "cross_rerank",
+        path,
+        "search_memory_with_reranker",
+        "cross-encoder",
+        &format!("cross-encoder:{}", reranker.model_id()),
+        None,
+    ));
+    Ok(report)
+}
+
+// ---------------------------------------------------------------------------
+// Cross-encoder rerank runner against a pre-seeded consolidated DB (PR-B)
+// ---------------------------------------------------------------------------
+
+/// Like `run_longmemeval_eval_cross_rerank`, but scores against a PRE-SEEDED
+/// consolidated scenario DB (no per-question ephemeral DB, no ingest).
+/// Used by PR-B's page-channel eval to surface distilled pages that the
+/// fullpipeline harness wrote into the cache.
+///
+/// `db` MUST already contain memories with `source_id` formatted as
+/// `lme_<question_id>_<session_idx>_t<turn_idx>` (matches the
+/// `memory_source_id` function used by the LME ephemeral seed path and
+/// the fullpipeline harness).
+/// Page-channel ON/OFF is controlled by the caller via the
+/// `ORIGIN_ENABLE_PAGE_CHANNEL` env var (read inside
+/// `search_memory_cross_rerank`).
+pub async fn run_longmemeval_eval_cross_rerank_from_db(
+    db: &MemoryDB,
+    path: &Path,
+    reranker: std::sync::Arc<dyn crate::reranker::Reranker>,
+) -> Result<LongMemEvalReport, OriginError> {
+    // Reproducibility: pin the ungated rerank-pool tuning knobs read raw at
+    // db.rs:8922-8926 (search_memory_cross_rerank) to their production defaults
+    // (compute_rerank_fetch_pool: multiplier=1, floor=10) when unset, so two
+    // cross-rerank baselines with identical env stamps can't silently measure
+    // different pool depths. --test-threads=1 makes process-global set_var safe.
+    if std::env::var_os("RERANK_POOL_MULTIPLIER").is_none() {
+        std::env::set_var("RERANK_POOL_MULTIPLIER", "1");
+    }
+    if std::env::var_os("RERANK_POOL_FLOOR").is_none() {
+        std::env::set_var("RERANK_POOL_FLOOR", "10");
+    }
+    // Threat-2 guard: assert summary_nodes is empty so an accidental future
+    // populate fails loud here instead of silently demoting gold memories via
+    // the global-prelude prepend at db.rs:9268. A missing table reads as zero.
+    crate::eval::paired::assert_summary_nodes_empty(db).await;
+
+    let mut samples = load_longmemeval(path)?;
+    apply_lme_limit(&mut samples);
+    // (question_type, ndcg_5, ndcg_10, mrr, recall_5, hit_rate_1)
+    let mut all_scores: Vec<(String, f64, f64, f64, f64, f64)> = Vec::new();
+    let mut per_case: Vec<crate::eval::report::CaseResult> = Vec::new();
+    let mut total_memories: usize = 0;
+    let mut cov_blind_acc: Vec<f64> = Vec::new();
+    let mut cov_expanded_acc: Vec<f64> = Vec::new();
+
+    for sample in &samples {
+        let memories = extract_memories(sample);
+        total_memories += memories.len();
+
+        // Build relevance judgments: has_answer turns are relevant.
+        // source_id format matches both the ephemeral seed and fullpipeline harness.
+        let relevant_source_ids: HashSet<String> = memories
+            .iter()
+            .filter(|m| m.has_answer)
+            .map(|m| memory_source_id(&m.question_id, m.session_idx, m.turn_idx))
+            .collect();
+
+        if relevant_source_ids.is_empty() {
+            continue;
+        }
+
+        let results = db
+            .search_memory_cross_rerank(
+                &sample.question,
+                10,
+                None,
+                None,
+                None,
+                Some(reranker.clone()),
+            )
+            .await?;
+
+        let result_ids: Vec<&str> = results.iter().map(|r| r.source_id.as_str()).collect();
+
+        let grades: HashMap<&str, u8> = result_ids
+            .iter()
+            .map(|id| {
+                (
+                    *id,
+                    if relevant_source_ids.contains(*id) {
+                        1
+                    } else {
+                        0
+                    },
+                )
+            })
+            .collect();
+
+        let relevant_set: HashSet<&str> = relevant_source_ids.iter().map(|s| s.as_str()).collect();
+
+        let ndcg_10 = metrics::ndcg_at_k(&result_ids, &grades, 10);
+        let ndcg_5 = metrics::ndcg_at_k(&result_ids, &grades, 5);
+        let mrr_val = metrics::mrr(&result_ids, &relevant_set);
+        let recall_5 = metrics::recall_at_k(&result_ids, &relevant_set, 5);
+        let hr_1 = metrics::hit_rate_at_k(&result_ids, &relevant_set, 1);
+
+        all_scores.push((
+            sample.question_type.clone(),
+            ndcg_5,
+            ndcg_10,
+            mrr_val,
+            recall_5,
+            hr_1,
+        ));
+        per_case.push(build_lme_case_result(
+            &sample.question,
+            &sample.question_type,
+            ndcg_5,
+            ndcg_10,
+            mrr_val,
+            recall_5,
+            hr_1,
+        ));
+
+        // Source-expanded coverage recall (page provenance, eval-only).
+        // Pages contribute the memory source ids they were distilled from;
+        // memories contribute their own id. Set-based + deduped so a gold
+        // id counts once (no double-count). Reads the full result bundle
+        // (memories in [0..limit] + appended pages) — pages ride after the
+        // limit by the iter2 partition.
+        let page_src_owned: Vec<(String, Vec<String>)> = {
+            let mut v = Vec::new();
+            for r in &results {
+                if r.source == "page" {
+                    let srcs: Vec<String> = db
+                        .get_page_sources(&r.source_id)
+                        .await
+                        .unwrap_or_default()
+                        .into_iter()
+                        .map(|ps| ps.memory_source_id)
+                        .collect();
+                    v.push((r.source_id.clone(), srcs));
+                }
+            }
+            v
+        };
+        let page_sources_map: HashMap<&str, Vec<&str>> = page_src_owned
+            .iter()
+            .map(|(pid, srcs)| (pid.as_str(), srcs.iter().map(|s| s.as_str()).collect()))
+            .collect();
+        let units: Vec<(&str, &str)> = results
+            .iter()
+            .map(|r| (r.source.as_str(), r.source_id.as_str()))
+            .collect();
+        let cov_blind = metrics::coverage_recall(
+            &metrics::build_coverage_set(&units, &HashMap::new()),
+            &relevant_set,
+        );
+        let cov_expanded = metrics::coverage_recall(
+            &metrics::build_coverage_set(&units, &page_sources_map),
+            &relevant_set,
+        );
+        cov_blind_acc.push(cov_blind);
+        cov_expanded_acc.push(cov_expanded);
+    }
+
+    let per_category = aggregate_by_category(&all_scores);
+    let coverage = if cov_blind_acc.is_empty() {
+        None
+    } else {
+        Some(crate::eval::report::CoverageRecall {
+            blind: cov_blind_acc.iter().sum::<f64>() / cov_blind_acc.len() as f64,
+            expanded: cov_expanded_acc.iter().sum::<f64>() / cov_expanded_acc.len() as f64,
+        })
+    };
+    let mut report = LongMemEvalReport {
+        aggregate_ndcg_at_10: avg_field(&all_scores, |s| s.2),
+        aggregate_mrr: avg_field(&all_scores, |s| s.3),
+        aggregate_recall_at_5: avg_field(&all_scores, |s| s.4),
+        aggregate_hit_rate_at_1: avg_field(&all_scores, |s| s.5),
+        total_questions: all_scores.len(),
+        total_memories,
+        per_category,
+        baseline: None,
+        env: None,
+        per_case,
+        coverage,
+    };
+
+    // Branch variant_tag on ORIGIN_ENABLE_PAGE_CHANNEL + ORIGIN_MAGNITUDE_FUSION
+    // so each variant produces distinct baseline filenames (comparable_hash uses
+    // the variant string). magfusion appends `_magfusion` when enabled.
+    let page_channel_state = if crate::db::page_channel_enabled() {
+        "on"
+    } else {
+        "off"
+    };
+    let magfusion_state = if crate::db::magnitude_fusion_enabled() {
+        "on"
+    } else {
+        "off"
+    };
+    let mut variant_tag = if page_channel_state == "off" {
+        "cross_rerank_v2_no_pages".to_string()
+    } else {
+        "cross_rerank_v2_pages".to_string()
+    };
+    if magfusion_state == "on" {
+        variant_tag.push_str("_magfusion");
+    }
+    // T9: append __graph_seed_d{depth} suffix when ORIGIN_ENABLE_GRAPH_SEED is on.
+    let graph_seed_depth = if crate::db::graph_seed_enabled() {
+        let depth = crate::retrieval::signals::parse_hop_depth(
+            std::env::var("ORIGIN_GRAPH_HOP_DEPTH").ok().as_deref(),
+        );
+        Some(depth)
+    } else {
+        None
+    };
+    if let Some(depth) = graph_seed_depth {
+        variant_tag.push_str(&format!("__graph_seed_d{}", depth));
+    }
+    // T4b: append __graph_khop_d{depth} suffix when ORIGIN_ENABLE_GRAPH_KHOP is on.
+    // Honest config stamp: this runner calls search_memory_cross_rerank ->
+    // augment_with_graph, where the k-hop expansion lives, so the flag genuinely
+    // changes the retrieval path. No accuracy claim is encoded by the tag.
+    let graph_khop_depth = if crate::db::khop_traversal_enabled() {
+        Some(crate::retrieval::traversal::parse_khop_depth(
+            std::env::var("ORIGIN_GRAPH_KHOP_DEPTH").ok().as_deref(),
+        ))
+    } else {
+        None
+    };
+    if let Some(depth) = graph_khop_depth {
+        variant_tag.push_str(&format!("__graph_khop_d{}", depth));
+    }
+    // T19: append __query_intent suffix when ORIGIN_ENABLE_QUERY_INTENT is on.
+    let query_intent_state = if crate::retrieval::query_intent::query_intent_enabled() {
+        variant_tag.push_str("__query_intent");
+        "on"
+    } else {
+        "off"
+    };
+    // T8: append __salience suffix when ORIGIN_ENABLE_SALIENCE_PRIOR is on, so
+    // salience-ON and salience-OFF baselines get distinct baseline filenames.
+    let salience_state = if crate::db::salience_prior_enabled() {
+        variant_tag.push_str("__salience");
+        "on"
+    } else {
+        "off"
+    };
+    // T2: append __episode suffix when ORIGIN_ENABLE_EPISODE_CHANNEL is on, so
+    // episode-ON and episode-OFF baselines get distinct baseline filenames.
+    let episode_state = if crate::db::episode_channel_enabled() {
+        variant_tag.push_str("__episode");
+        "on"
+    } else {
+        "off"
+    };
+    // T15a: append __fact suffix when ORIGIN_ENABLE_FACT_CHANNEL is on, so
+    // fact-ON and fact-OFF baselines get distinct baseline filenames.
+    let fact_state = if crate::retrieval::fact_channel::fact_channel_enabled() {
+        variant_tag.push_str("__fact");
+        "on"
+    } else {
+        "off"
+    };
+    let mut env_stamp = build_lme_env(
+        &variant_tag,
+        path,
+        "search_memory_with_reranker",
+        "cross-encoder",
+        &format!("cross-encoder:{}", reranker.model_id()),
+        None,
+    );
+    env_stamp
+        .flags
+        .push(format!("page_channel={}", page_channel_state));
+    env_stamp
+        .flags
+        .push(format!("magnitude_fusion={}", magfusion_state));
+    if let Some(depth) = graph_seed_depth {
+        env_stamp.flags.push(format!("graph_seed=on_d{}", depth));
+    } else {
+        env_stamp.flags.push("graph_seed=off".to_string());
+    }
+    if let Some(depth) = graph_khop_depth {
+        env_stamp.flags.push(format!("graph_khop=on_d{}", depth));
+    } else {
+        env_stamp.flags.push("graph_khop=off".to_string());
+    }
+    env_stamp
+        .flags
+        .push(format!("query_intent={}", query_intent_state));
+    env_stamp
+        .flags
+        .push(format!("salience_prior={}", salience_state));
+    env_stamp
+        .flags
+        .push(format!("episode_channel={}", episode_state));
+    env_stamp.flags.push(format!("fact_channel={}", fact_state));
+    // Record the (now-pinned) rerank-pool knobs so a non-default depth carries
+    // into the env stamp / baseline filename instead of being invisible.
+    env_stamp.flags.push(format!(
+        "rerank_pool=mult{}_floor{}",
+        std::env::var("RERANK_POOL_MULTIPLIER")
+            .as_deref()
+            .unwrap_or("1"),
+        std::env::var("RERANK_POOL_FLOOR")
+            .as_deref()
+            .unwrap_or("10"),
+    ));
+    env_stamp.flags.push("scenario_db=consolidated".to_string());
+    report.env = Some(env_stamp);
+    Ok(report)
+}
+
+/// Retrieval eval over a pre-seeded DB using the base `search_memory` path
+/// (vector + FTS + RRF + graph augmentation) — the path the graph gate acts on.
+/// Mirrors `run_longmemeval_eval_cross_rerank_from_db` minus the cross-encoder/
+/// page channel. Reports the graph-gate skip rate (queries that bypass graph)
+/// when `ORIGIN_ENABLE_GRAPH_GATE` is on. Used for the T3 graph-gate A/B.
+pub async fn run_longmemeval_eval_from_db(
+    db: &MemoryDB,
+    path: &Path,
+) -> Result<LongMemEvalReport, OriginError> {
+    let mut samples = load_longmemeval(path)?;
+    apply_lme_limit(&mut samples);
+    let mut all_scores: Vec<(String, f64, f64, f64, f64, f64)> = Vec::new();
+    let mut total_memories: usize = 0;
+    let mut cov_acc: Vec<f64> = Vec::new();
+    let gate_on = crate::db::graph_gate_enabled();
+    let (mut gate_skipped, mut gate_total) = (0usize, 0usize);
+
+    for sample in &samples {
+        let memories = extract_memories(sample);
+        total_memories += memories.len();
+        let relevant_source_ids: HashSet<String> = memories
+            .iter()
+            .filter(|m| m.has_answer)
+            .map(|m| memory_source_id(&m.question_id, m.session_idx, m.turn_idx))
+            .collect();
+        if relevant_source_ids.is_empty() {
+            continue;
+        }
+
+        gate_total += 1;
+        if gate_on && !crate::retrieval::signals::query_warrants_graph(&sample.question) {
+            gate_skipped += 1;
+        }
+        let results = db
+            .search_memory(&sample.question, 10, None, None, None, None, None, None)
+            .await?;
+
+        let result_ids: Vec<&str> = results.iter().map(|r| r.source_id.as_str()).collect();
+        let grades: HashMap<&str, u8> = result_ids
+            .iter()
+            .map(|id| (*id, u8::from(relevant_source_ids.contains(*id))))
+            .collect();
+        let relevant_set: HashSet<&str> = relevant_source_ids.iter().map(|s| s.as_str()).collect();
+
+        let ndcg_10 = metrics::ndcg_at_k(&result_ids, &grades, 10);
+        let ndcg_5 = metrics::ndcg_at_k(&result_ids, &grades, 5);
+        let mrr_val = metrics::mrr(&result_ids, &relevant_set);
+        let recall_5 = metrics::recall_at_k(&result_ids, &relevant_set, 5);
+        let hr_1 = metrics::hit_rate_at_k(&result_ids, &relevant_set, 1);
+        all_scores.push((
+            sample.question_type.clone(),
+            ndcg_5,
+            ndcg_10,
+            mrr_val,
+            recall_5,
+            hr_1,
+        ));
+
+        let units: Vec<(&str, &str)> = results
+            .iter()
+            .map(|r| (r.source.as_str(), r.source_id.as_str()))
+            .collect();
+        cov_acc.push(metrics::coverage_recall(
+            &metrics::build_coverage_set(&units, &HashMap::new()),
+            &relevant_set,
+        ));
+    }
+    if gate_on {
+        eprintln!(
+            "[lme] graph-gate skipped {gate_skipped}/{gate_total} queries ({:.1}%)",
+            100.0 * gate_skipped as f64 / gate_total.max(1) as f64
+        );
+    }
+
+    let per_category = aggregate_by_category(&all_scores);
+    let coverage = if cov_acc.is_empty() {
+        None
+    } else {
+        Some(crate::eval::report::CoverageRecall {
+            blind: cov_acc.iter().sum::<f64>() / cov_acc.len() as f64,
+            expanded: cov_acc.iter().sum::<f64>() / cov_acc.len() as f64,
+        })
+    };
+    let mut report = LongMemEvalReport {
+        aggregate_ndcg_at_10: avg_field(&all_scores, |s| s.2),
+        aggregate_mrr: avg_field(&all_scores, |s| s.3),
+        aggregate_recall_at_5: avg_field(&all_scores, |s| s.4),
+        aggregate_hit_rate_at_1: avg_field(&all_scores, |s| s.5),
+        total_questions: all_scores.len(),
+        total_memories,
+        per_category,
+        baseline: None,
+        env: None,
+        per_case: Vec::new(),
+        coverage,
+    };
+    let graph_gate = if gate_on { "on" } else { "off" };
+    let mut env_stamp = build_lme_env(
+        if gate_on {
+            "search_memory_gate_on"
+        } else {
+            "search_memory_gate_off"
+        },
+        path,
+        "search_memory",
+        "none",
+        "none",
+        None,
+    );
+    env_stamp.flags.push(format!("graph_gate={graph_gate}"));
+    env_stamp.flags.push("scenario_db=consolidated".to_string());
+    report.env = Some(env_stamp);
+    Ok(report)
+}
+
+// ---------------------------------------------------------------------------
+// Per-query collector (paired A/B apparatus v2)
+// ---------------------------------------------------------------------------
+
+/// Per-query variant of [`run_longmemeval_eval_from_db`]. Identical retrieval +
+/// scoring, but emits one [`PerQueryRow`] per evaluated question (with a
+/// wall-clock latency for the `search_memory` call) instead of aggregating.
+pub async fn run_longmemeval_eval_from_db_collect(
+    db: &MemoryDB,
+    path: &Path,
+    feature: &str,
+    flag_state: &str,
+) -> Result<Vec<crate::eval::paired::PerQueryRow>, OriginError> {
+    use crate::eval::paired::PerQueryRow;
+    use std::time::Instant;
+
+    let mut samples = load_longmemeval(path)?;
+    apply_lme_limit(&mut samples);
+    let gate_on = crate::db::graph_gate_enabled();
+    let mut rows: Vec<PerQueryRow> = Vec::new();
+
+    for sample in &samples {
+        let memories = extract_memories(sample);
+        let relevant_source_ids: HashSet<String> = memories
+            .iter()
+            .filter(|m| m.has_answer)
+            .map(|m| memory_source_id(&m.question_id, m.session_idx, m.turn_idx))
+            .collect();
+        if relevant_source_ids.is_empty() {
+            continue;
+        }
+
+        let graph_skipped =
+            gate_on && !crate::retrieval::signals::query_warrants_graph(&sample.question);
+
+        let t0 = Instant::now();
+        let results = db
+            .search_memory(&sample.question, 10, None, None, None, None, None, None)
+            .await?;
+        let latency_ms = t0.elapsed().as_secs_f64() * 1000.0;
+
+        let result_ids: Vec<&str> = results.iter().map(|r| r.source_id.as_str()).collect();
+        let grades: HashMap<&str, u8> = result_ids
+            .iter()
+            .map(|id| (*id, u8::from(relevant_source_ids.contains(*id))))
+            .collect();
+        let relevant_set: HashSet<&str> = relevant_source_ids.iter().map(|s| s.as_str()).collect();
+
+        rows.push(PerQueryRow {
+            feature: feature.to_string(),
+            bench: "lme".to_string(),
+            flag_state: flag_state.to_string(),
+            query_id: sample.question_id.clone(),
+            category: sample.question_type.clone(),
+            ndcg10: metrics::ndcg_at_k(&result_ids, &grades, 10),
+            recall5: metrics::recall_at_k(&result_ids, &relevant_set, 5),
+            mrr: metrics::mrr(&result_ids, &relevant_set),
+            latency_ms,
+            graph_skipped: if gate_on { Some(graph_skipped) } else { None },
+            temporal_touched: None,
+        });
+    }
+
+    Ok(rows)
+}
+
+/// Cross-encoder variant of [`run_longmemeval_eval_from_db_collect`]. Identical
+/// query set + relevance judgments + scoring, but retrieval goes through
+/// `search_memory_cross_rerank` (CE rescoring over the widened pool) instead of
+/// the base `search_memory` path. Pairs OFF (base collector) against ON (this
+/// one) on the same snapshot DB to measure whether the cross-encoder helps.
+///
+/// Pins the ungated rerank-pool knobs (multiplier=1, floor=10) when unset, same
+/// as `run_longmemeval_eval_cross_rerank_from_db`, so the CE pool depth is
+/// reproducible. `--test-threads=1` makes the process-global set_var safe.
+pub async fn run_longmemeval_eval_cross_rerank_from_db_collect(
+    db: &MemoryDB,
+    path: &Path,
+    reranker: std::sync::Arc<dyn crate::reranker::Reranker>,
+    feature: &str,
+    flag_state: &str,
+) -> Result<Vec<crate::eval::paired::PerQueryRow>, OriginError> {
+    use crate::eval::paired::PerQueryRow;
+    use std::time::Instant;
+
+    if std::env::var_os("RERANK_POOL_MULTIPLIER").is_none() {
+        std::env::set_var("RERANK_POOL_MULTIPLIER", "1");
+    }
+    if std::env::var_os("RERANK_POOL_FLOOR").is_none() {
+        std::env::set_var("RERANK_POOL_FLOOR", "10");
+    }
+
+    let mut samples = load_longmemeval(path)?;
+    apply_lme_limit(&mut samples);
+    let mut rows: Vec<PerQueryRow> = Vec::new();
+
+    for sample in &samples {
+        let memories = extract_memories(sample);
+        let relevant_source_ids: HashSet<String> = memories
+            .iter()
+            .filter(|m| m.has_answer)
+            .map(|m| memory_source_id(&m.question_id, m.session_idx, m.turn_idx))
+            .collect();
+        if relevant_source_ids.is_empty() {
+            continue;
+        }
+
+        let t0 = Instant::now();
+        let results = db
+            .search_memory_cross_rerank(
+                &sample.question,
+                10,
+                None,
+                None,
+                None,
+                Some(reranker.clone()),
+            )
+            .await?;
+        let latency_ms = t0.elapsed().as_secs_f64() * 1000.0;
+
+        let result_ids: Vec<&str> = results.iter().map(|r| r.source_id.as_str()).collect();
+        let grades: HashMap<&str, u8> = result_ids
+            .iter()
+            .map(|id| (*id, u8::from(relevant_source_ids.contains(*id))))
+            .collect();
+        let relevant_set: HashSet<&str> = relevant_source_ids.iter().map(|s| s.as_str()).collect();
+
+        rows.push(PerQueryRow {
+            feature: feature.to_string(),
+            bench: "lme".to_string(),
+            flag_state: flag_state.to_string(),
+            query_id: sample.question_id.clone(),
+            category: sample.question_type.clone(),
+            ndcg10: metrics::ndcg_at_k(&result_ids, &grades, 10),
+            recall5: metrics::recall_at_k(&result_ids, &relevant_set, 5),
+            mrr: metrics::mrr(&result_ids, &relevant_set),
+            latency_ms,
+            graph_skipped: None,
+            temporal_touched: None,
+        });
+    }
+
+    Ok(rows)
 }
 
 // ---------------------------------------------------------------------------
@@ -654,9 +1600,11 @@ pub async fn run_longmemeval_eval_expanded(
     path: &Path,
     llm: std::sync::Arc<dyn crate::llm_provider::LlmProvider>,
 ) -> Result<LongMemEvalReport, OriginError> {
-    let samples = load_longmemeval(path)?;
+    let mut samples = load_longmemeval(path)?;
+    apply_lme_limit(&mut samples);
     // (question_type, ndcg_5, ndcg_10, mrr, recall_5, hit_rate_1)
     let mut all_scores: Vec<(String, f64, f64, f64, f64, f64)> = Vec::new();
+    let mut per_case: Vec<crate::eval::report::CaseResult> = Vec::new();
     let mut total_memories: usize = 0;
 
     for sample in &samples {
@@ -738,6 +1686,15 @@ pub async fn run_longmemeval_eval_expanded(
             recall_5,
             hr_1,
         ));
+        per_case.push(build_lme_case_result(
+            &sample.question,
+            &sample.question_type,
+            ndcg_5,
+            ndcg_10,
+            mrr_val,
+            recall_5,
+            hr_1,
+        ));
     }
 
     // Aggregate
@@ -753,20 +1710,457 @@ pub async fn run_longmemeval_eval_expanded(
         per_category,
         baseline: None,
         env: None,
+        per_case,
+        coverage: None,
     };
-    report.env = Some(crate::eval::report::ReportEnv {
-        fixture_revision: crate::eval::fixtures::fixture_revision_hash(path)
-            .unwrap_or_else(|_| "unknown".into()),
-        embedder_model: "BGE-Base-EN-v1.5-Q".into(),
-        embedder_revision: "768d".into(),
-        retrieval_method: "search_memory_expanded".into(),
-        llm_provider_class: llm.kind().into(),
-        llm_model: llm.model_id(),
-        judge_model: None,
-        origin_version: env!("CARGO_PKG_VERSION").into(),
-        eval_timestamp_unix: chrono::Utc::now().timestamp(),
-    });
+    report.env = Some(build_lme_env(
+        "expanded",
+        path,
+        "search_memory_expanded",
+        llm.kind(),
+        &llm.model_id(),
+        None,
+    ));
     Ok(report)
+}
+
+// ---------------------------------------------------------------------------
+// PRF benchmark runner -- same as run_longmemeval_eval but uses search_memory_prf
+// ---------------------------------------------------------------------------
+
+/// Same seeding/scoring logic as `run_longmemeval_eval`, but retrieval uses
+/// `search_memory_prf` (T6 pseudo-relevance feedback): draft an answer from the
+/// top-K retrieved, feed it back as the next query, RRF-merge until convergence.
+/// The round budget is read from `ORIGIN_PRF_ROUNDS` (default 0 = plain search)
+/// and stamped into `env.flags` for reproducibility.
+///
+/// `#[ignore]`d L7-manual (GPU + Qwen). Validate by `cargo check`; no headline
+/// number is claimed without N>=3 runs + mean±stddev (AGENTS.md Single-run rule).
+pub async fn run_longmemeval_eval_prf(
+    path: &Path,
+    llm: std::sync::Arc<dyn crate::llm_provider::LlmProvider>,
+) -> Result<LongMemEvalReport, OriginError> {
+    let mut samples = load_longmemeval(path)?;
+    apply_lme_limit(&mut samples);
+    // (question_type, ndcg_5, ndcg_10, mrr, recall_5, hit_rate_1)
+    let mut all_scores: Vec<(String, f64, f64, f64, f64, f64)> = Vec::new();
+    let mut per_case: Vec<crate::eval::report::CaseResult> = Vec::new();
+    let mut total_memories: usize = 0;
+
+    for sample in &samples {
+        let memories = extract_memories(sample);
+
+        // Create ephemeral DB for this question
+        let tmp = tempfile::tempdir().map_err(|e| OriginError::Generic(format!("tempdir: {e}")))?;
+        let db = MemoryDB::new(tmp.path(), std::sync::Arc::new(crate::events::NoopEmitter)).await?;
+
+        // Seed all extracted memories
+        let docs: Vec<RawDocument> = memories
+            .iter()
+            .map(|mem| {
+                let memory_type = match sample.question_type.as_str() {
+                    "single-session-preference" => "preference",
+                    _ => "fact",
+                };
+                RawDocument {
+                    content: mem.content.clone(),
+                    source_id: memory_source_id(&mem.question_id, mem.session_idx, mem.turn_idx),
+                    source: "memory".to_string(),
+                    title: format!("{} session {}", mem.role, mem.session_idx),
+                    memory_type: Some(memory_type.to_string()),
+                    space: Some("conversation".to_string()),
+                    last_modified: chrono::Utc::now().timestamp(),
+                    ..Default::default()
+                }
+            })
+            .collect();
+        total_memories += docs.len();
+        db.upsert_documents(docs).await?;
+
+        // Build relevance judgments: has_answer turns are relevant
+        let relevant_source_ids: HashSet<String> = memories
+            .iter()
+            .filter(|m| m.has_answer)
+            .map(|m| memory_source_id(&m.question_id, m.session_idx, m.turn_idx))
+            .collect();
+
+        if relevant_source_ids.is_empty() {
+            continue; // Skip if no evidence turns
+        }
+
+        // Search with pseudo-relevance feedback
+        let results = db
+            .search_memory_prf(&sample.question, 10, None, None, None, Some(llm.clone()))
+            .await?;
+
+        let result_ids: Vec<&str> = results.iter().map(|r| r.source_id.as_str()).collect();
+
+        // Binary relevance grades
+        let grades: HashMap<&str, u8> = result_ids
+            .iter()
+            .map(|id| {
+                (
+                    *id,
+                    if relevant_source_ids.contains(*id) {
+                        1
+                    } else {
+                        0
+                    },
+                )
+            })
+            .collect();
+
+        let relevant_set: HashSet<&str> = relevant_source_ids.iter().map(|s| s.as_str()).collect();
+
+        let ndcg_10 = metrics::ndcg_at_k(&result_ids, &grades, 10);
+        let ndcg_5 = metrics::ndcg_at_k(&result_ids, &grades, 5);
+        let mrr_val = metrics::mrr(&result_ids, &relevant_set);
+        let recall_5 = metrics::recall_at_k(&result_ids, &relevant_set, 5);
+        let hr_1 = metrics::hit_rate_at_k(&result_ids, &relevant_set, 1);
+
+        all_scores.push((
+            sample.question_type.clone(),
+            ndcg_5,
+            ndcg_10,
+            mrr_val,
+            recall_5,
+            hr_1,
+        ));
+        per_case.push(build_lme_case_result(
+            &sample.question,
+            &sample.question_type,
+            ndcg_5,
+            ndcg_10,
+            mrr_val,
+            recall_5,
+            hr_1,
+        ));
+    }
+
+    // Aggregate
+    let per_category = aggregate_by_category(&all_scores);
+
+    let mut report = LongMemEvalReport {
+        aggregate_ndcg_at_10: avg_field(&all_scores, |s| s.2),
+        aggregate_mrr: avg_field(&all_scores, |s| s.3),
+        aggregate_recall_at_5: avg_field(&all_scores, |s| s.4),
+        aggregate_hit_rate_at_1: avg_field(&all_scores, |s| s.5),
+        total_questions: all_scores.len(),
+        total_memories,
+        per_category,
+        baseline: None,
+        env: None,
+        per_case,
+        coverage: None,
+    };
+    let mut env_stamp = build_lme_env(
+        "prf",
+        path,
+        "search_memory_prf",
+        llm.kind(),
+        &llm.model_id(),
+        None,
+    );
+    env_stamp.flags.push(format!(
+        "prf_rounds={}",
+        crate::retrieval::prf::prf_rounds()
+    ));
+    report.env = Some(env_stamp);
+    Ok(report)
+}
+
+// ---------------------------------------------------------------------------
+// T4a eval runner — temporal filter with haystack_dates event_date seeding
+// ---------------------------------------------------------------------------
+
+/// Parse LongMemEval date string "YYYY/MM/DD (DDD) HH:MM" to a UTC DateTime.
+///
+/// Returns `None` on malformed input so the runner degrades gracefully.
+fn parse_lme_date(s: &str) -> Option<chrono::DateTime<chrono::Utc>> {
+    // Format: "2023/04/10 (Mon) 23:07"
+    // We strip the weekday parenthetical and parse the rest.
+    let s = s.trim();
+    // Find the part before " (" and after ") "
+    let without_weekday = if let (Some(a), Some(b)) = (s.find(" ("), s.rfind(") ")) {
+        format!("{} {}", &s[..a], &s[b + 2..])
+    } else {
+        s.to_string()
+    };
+    // without_weekday is now "YYYY/MM/DD HH:MM"
+    chrono::NaiveDateTime::parse_from_str(&without_weekday, "%Y/%m/%d %H:%M")
+        .ok()
+        .map(|dt| chrono::DateTime::<chrono::Utc>::from_naive_utc_and_offset(dt, chrono::Utc))
+}
+
+/// LongMemEval temporal eval runner (T4a).
+///
+/// Clones `run_longmemeval_eval_expanded` but adds two T4a-specific steps:
+///
+/// 1. **Event-date seeding**: after `upsert_documents`, each seeded memory is
+///    stamped with the Unix timestamp of its session's `haystack_dates` entry
+///    via a direct `UPDATE memories SET event_date=? WHERE source_id=?` on the
+///    connection. Without this, every `event_date` is NULL and the temporal
+///    hard-filter is a guaranteed no-op (all memories pass the `OR IS NULL`
+///    branch).
+///
+/// 2. **Temporal search**: calls `search_memory_temporal` with
+///    `now = parse(sample.question_date)` — NOT `Utc::now()` — so the cue
+///    window aligns with the fixture clock.
+///
+/// # LoCoMo note
+/// LoCoMo has no reliable absolute dates (only session_num), so a LoCoMo
+/// temporal runner is not provided. Temporal eval on LoCoMo would require
+/// synthetic date assignment, which risks fabricating the measured signal.
+///
+/// # Citation discipline
+/// First runs are single-run scaffolds (`is_single_run = true`). Do NOT cite
+/// accuracy numbers without N>=3 + stddev per AGENTS.md Eval Citation Discipline.
+#[allow(dead_code)] // L7 manual, GPU-requiring eval; not wired to CI
+pub async fn run_longmemeval_eval_temporal(path: &Path) -> Result<LongMemEvalReport, OriginError> {
+    let mut samples = load_longmemeval(path)?;
+    apply_lme_limit(&mut samples);
+    let mut all_scores: Vec<(String, f64, f64, f64, f64, f64)> = Vec::new();
+    let mut per_case: Vec<crate::eval::report::CaseResult> = Vec::new();
+    let mut total_memories: usize = 0;
+
+    for sample in &samples {
+        let memories = extract_memories(sample);
+
+        // Create ephemeral DB for this question
+        let tmp = tempfile::tempdir().map_err(|e| OriginError::Generic(format!("tempdir: {e}")))?;
+        let db = MemoryDB::new(tmp.path(), std::sync::Arc::new(crate::events::NoopEmitter)).await?;
+
+        // Seed all extracted memories (same as run_longmemeval_eval_expanded)
+        let docs: Vec<RawDocument> = memories
+            .iter()
+            .map(|mem| {
+                let memory_type = match sample.question_type.as_str() {
+                    "single-session-preference" => "preference",
+                    _ => "fact",
+                };
+                RawDocument {
+                    content: mem.content.clone(),
+                    source_id: memory_source_id(&mem.question_id, mem.session_idx, mem.turn_idx),
+                    source: "memory".to_string(),
+                    title: format!("{} session {}", mem.role, mem.session_idx),
+                    memory_type: Some(memory_type.to_string()),
+                    space: Some("conversation".to_string()),
+                    last_modified: chrono::Utc::now().timestamp(),
+                    ..Default::default()
+                }
+            })
+            .collect();
+        total_memories += docs.len();
+        db.upsert_documents(docs).await?;
+
+        // T4a: stamp event_date from haystack_dates (parallel to sessions/memories).
+        // Without this, every event_date is NULL and the temporal filter is a no-op.
+        {
+            let conn = db.conn.lock().await;
+            for mem in &memories {
+                // haystack_dates is parallel to haystack_session_ids
+                // (one date per session, indexed by session_idx)
+                if let Some(date_str) = sample.haystack_dates.get(mem.session_idx) {
+                    if let Some(ts) = parse_lme_date(date_str).map(|d| d.timestamp()) {
+                        let sid = memory_source_id(&mem.question_id, mem.session_idx, mem.turn_idx);
+                        let _ = conn
+                            .execute(
+                                "UPDATE memories SET event_date = ? WHERE source_id = ?",
+                                libsql::params![ts, sid.as_str()],
+                            )
+                            .await;
+                    }
+                }
+            }
+        }
+
+        // Build relevance judgments
+        let relevant_source_ids: HashSet<String> = memories
+            .iter()
+            .filter(|m| m.has_answer)
+            .map(|m| memory_source_id(&m.question_id, m.session_idx, m.turn_idx))
+            .collect();
+
+        if relevant_source_ids.is_empty() {
+            continue;
+        }
+
+        // T4a: parse question_date as `now` so the cue window aligns with fixture clock.
+        // Fall back to Utc::now() only if the date is unparseable (degraded mode).
+        let now = parse_lme_date(&sample.question_date).unwrap_or_else(chrono::Utc::now);
+
+        // T4a: use search_memory_temporal with ORIGIN_ENABLE_TEMPORAL_FILTER=1
+        let results = db
+            .search_memory_temporal(&sample.question, 10, None, None, None, now)
+            .await?;
+
+        let result_ids: Vec<&str> = results.iter().map(|r| r.source_id.as_str()).collect();
+        let grades: HashMap<&str, u8> = result_ids
+            .iter()
+            .map(|id| (*id, u8::from(relevant_source_ids.contains(*id))))
+            .collect();
+        let relevant_set: HashSet<&str> = relevant_source_ids.iter().map(|s| s.as_str()).collect();
+
+        let ndcg_10 = metrics::ndcg_at_k(&result_ids, &grades, 10);
+        let ndcg_5 = metrics::ndcg_at_k(&result_ids, &grades, 5);
+        let mrr_val = metrics::mrr(&result_ids, &relevant_set);
+        let recall_5 = metrics::recall_at_k(&result_ids, &relevant_set, 5);
+        let hr_1 = metrics::hit_rate_at_k(&result_ids, &relevant_set, 1);
+
+        all_scores.push((
+            sample.question_type.clone(),
+            ndcg_5,
+            ndcg_10,
+            mrr_val,
+            recall_5,
+            hr_1,
+        ));
+        per_case.push(build_lme_case_result(
+            &sample.question,
+            &sample.question_type,
+            ndcg_5,
+            ndcg_10,
+            mrr_val,
+            recall_5,
+            hr_1,
+        ));
+    }
+
+    let per_category = aggregate_by_category(&all_scores);
+    let mut report = LongMemEvalReport {
+        aggregate_ndcg_at_10: avg_field(&all_scores, |s| s.2),
+        aggregate_mrr: avg_field(&all_scores, |s| s.3),
+        aggregate_recall_at_5: avg_field(&all_scores, |s| s.4),
+        aggregate_hit_rate_at_1: avg_field(&all_scores, |s| s.5),
+        total_questions: all_scores.len(),
+        total_memories,
+        per_category,
+        baseline: None,
+        env: None,
+        per_case,
+        coverage: None,
+    };
+    report.env = Some(build_lme_env(
+        "temporal",
+        path,
+        "search_memory_temporal",
+        "none", // no LLM provider (no query expansion)
+        "none",
+        None,
+    ));
+    Ok(report)
+}
+
+/// Per-query variant of [`run_longmemeval_eval_temporal`] (T4a). SELF-SEEDS a
+/// fresh ephemeral DB per question (stamps `event_date`), so unlike the cached-DB
+/// collectors this re-runs the write path — runs are reproducible only insofar as
+/// the seeding is deterministic. Emits one [`PerQueryRow`] per question with a
+/// wall-clock latency for the `search_memory_temporal` call.
+pub async fn run_longmemeval_eval_temporal_collect(
+    path: &Path,
+    feature: &str,
+    flag_state: &str,
+) -> Result<Vec<crate::eval::paired::PerQueryRow>, OriginError> {
+    use crate::eval::paired::PerQueryRow;
+    use std::time::Instant;
+
+    let mut samples = load_longmemeval(path)?;
+    apply_lme_limit(&mut samples);
+    let mut rows: Vec<PerQueryRow> = Vec::new();
+
+    for sample in &samples {
+        let memories = extract_memories(sample);
+
+        let tmp = tempfile::tempdir().map_err(|e| OriginError::Generic(format!("tempdir: {e}")))?;
+        let db = MemoryDB::new(tmp.path(), std::sync::Arc::new(crate::events::NoopEmitter)).await?;
+
+        let docs: Vec<RawDocument> = memories
+            .iter()
+            .map(|mem| {
+                let memory_type = match sample.question_type.as_str() {
+                    "single-session-preference" => "preference",
+                    _ => "fact",
+                };
+                RawDocument {
+                    content: mem.content.clone(),
+                    source_id: memory_source_id(&mem.question_id, mem.session_idx, mem.turn_idx),
+                    source: "memory".to_string(),
+                    title: format!("{} session {}", mem.role, mem.session_idx),
+                    memory_type: Some(memory_type.to_string()),
+                    space: Some("conversation".to_string()),
+                    last_modified: chrono::Utc::now().timestamp(),
+                    ..Default::default()
+                }
+            })
+            .collect();
+        db.upsert_documents(docs).await?;
+
+        {
+            let conn = db.conn.lock().await;
+            for mem in &memories {
+                if let Some(date_str) = sample.haystack_dates.get(mem.session_idx) {
+                    if let Some(ts) = parse_lme_date(date_str).map(|d| d.timestamp()) {
+                        let sid = memory_source_id(&mem.question_id, mem.session_idx, mem.turn_idx);
+                        let _ = conn
+                            .execute(
+                                "UPDATE memories SET event_date = ? WHERE source_id = ?",
+                                libsql::params![ts, sid.as_str()],
+                            )
+                            .await;
+                    }
+                }
+            }
+        }
+
+        let relevant_source_ids: HashSet<String> = memories
+            .iter()
+            .filter(|m| m.has_answer)
+            .map(|m| memory_source_id(&m.question_id, m.session_idx, m.turn_idx))
+            .collect();
+        if relevant_source_ids.is_empty() {
+            continue;
+        }
+
+        let now = parse_lme_date(&sample.question_date).unwrap_or_else(chrono::Utc::now);
+
+        // T4a per-touched: did a high-confidence temporal cue actually fire for
+        // this query? Mirrors the gate in search_memory_temporal (db.rs:8438):
+        // only a High-confidence cue engages the hard temporal filter; None/Low
+        // degrade to plain search and leave this query a no-op. Lets the analyzer
+        // isolate the ~3.4% of queries the feature truly touches.
+        let cue_fired = crate::temporal_query::extract_cue(&sample.question, now)
+            .map(|c| c.confidence == crate::temporal_query::CueConfidence::High)
+            .unwrap_or(false);
+
+        let t0 = Instant::now();
+        let results = db
+            .search_memory_temporal(&sample.question, 10, None, None, None, now)
+            .await?;
+        let latency_ms = t0.elapsed().as_secs_f64() * 1000.0;
+
+        let result_ids: Vec<&str> = results.iter().map(|r| r.source_id.as_str()).collect();
+        let grades: HashMap<&str, u8> = result_ids
+            .iter()
+            .map(|id| (*id, u8::from(relevant_source_ids.contains(*id))))
+            .collect();
+        let relevant_set: HashSet<&str> = relevant_source_ids.iter().map(|s| s.as_str()).collect();
+
+        rows.push(PerQueryRow {
+            feature: feature.to_string(),
+            bench: "lme".to_string(),
+            flag_state: flag_state.to_string(),
+            query_id: sample.question_id.clone(),
+            category: sample.question_type.clone(),
+            ndcg10: metrics::ndcg_at_k(&result_ids, &grades, 10),
+            recall5: metrics::recall_at_k(&result_ids, &relevant_set, 5),
+            mrr: metrics::mrr(&result_ids, &relevant_set),
+            latency_ms,
+            graph_skipped: None,
+            temporal_touched: Some(cue_fired),
+        });
+    }
+
+    Ok(rows)
 }
 
 // ---------------------------------------------------------------------------
@@ -889,8 +2283,10 @@ pub async fn run_longmemeval_eval_with_gate(
     path: &Path,
     mode: LongMemEvalGateMode,
 ) -> Result<LongMemEvalReport, OriginError> {
-    let samples = load_longmemeval(path)?;
+    let mut samples = load_longmemeval(path)?;
+    apply_lme_limit(&mut samples);
     let mut all_scores: Vec<(String, f64, f64, f64, f64, f64)> = Vec::new();
+    let mut per_case: Vec<crate::eval::report::CaseResult> = Vec::new();
     let mut total_memories_inserted: usize = 0;
 
     let gate = match mode {
@@ -1008,6 +2404,15 @@ pub async fn run_longmemeval_eval_with_gate(
             recall_5,
             hr_1,
         ));
+        per_case.push(build_lme_case_result(
+            &sample.question,
+            &sample.question_type,
+            ndcg_5,
+            ndcg_10,
+            mrr_val,
+            recall_5,
+            hr_1,
+        ));
     }
 
     // Aggregate
@@ -1023,19 +2428,17 @@ pub async fn run_longmemeval_eval_with_gate(
         per_category,
         baseline: None,
         env: None,
+        per_case,
+        coverage: None,
     };
-    report.env = Some(crate::eval::report::ReportEnv {
-        fixture_revision: crate::eval::fixtures::fixture_revision_hash(path)
-            .unwrap_or_else(|_| "unknown".into()),
-        embedder_model: "BGE-Base-EN-v1.5-Q".into(),
-        embedder_revision: "768d".into(),
-        retrieval_method: "search_memory".into(),
-        llm_provider_class: "none".into(),
-        llm_model: "none".into(),
-        judge_model: None,
-        origin_version: env!("CARGO_PKG_VERSION").into(),
-        eval_timestamp_unix: chrono::Utc::now().timestamp(),
-    });
+    report.env = Some(build_lme_env(
+        "gated",
+        path,
+        "search_memory",
+        "none",
+        "none",
+        None,
+    ));
     Ok(report)
 }
 
@@ -1347,6 +2750,8 @@ mod tests {
             }],
             baseline: None,
             env: None,
+            per_case: vec![],
+            coverage: None,
         };
         let text = report.to_terminal();
         assert!(text.contains("LongMemEval Benchmark"));
@@ -1391,6 +2796,8 @@ mod tests {
             ],
             baseline: None,
             env: None,
+            per_case: vec![],
+            coverage: None,
         };
 
         report.save_baseline(&path).unwrap();
@@ -1439,8 +2846,11 @@ mod tests {
                     mrr: 0.550,
                     recall_at_5: 0.650,
                 }],
+                coverage: None,
             }),
             env: None,
+            per_case: vec![],
+            coverage: None,
         };
 
         let text = report.to_terminal();
@@ -1448,5 +2858,74 @@ mod tests {
         assert!(text.contains("Baseline comparison:"));
         assert!(text.contains("->"));
         assert!(text.contains("single-session-user"));
+    }
+
+    /// Build a vec of `n` minimal `LongMemEvalSample`s for env-limit tests.
+    fn mock_samples(n: usize) -> Vec<LongMemEvalSample> {
+        (0..n)
+            .map(|i| {
+                let json = format!(
+                    r#"{{
+                        "question_id": "mock-{i}",
+                        "question_type": "single-session-user",
+                        "question": "q?",
+                        "answer": "a",
+                        "question_date": "2023/04/10 (Mon) 23:07",
+                        "haystack_dates": [],
+                        "haystack_session_ids": [],
+                        "haystack_sessions": [],
+                        "answer_session_ids": []
+                    }}"#
+                );
+                serde_json::from_str::<LongMemEvalSample>(&json).unwrap()
+            })
+            .collect()
+    }
+
+    #[test]
+    fn eval_lme_limit_truncates_when_set() {
+        // Unique env var name so the test doesn't race the real EVAL_LME_LIMIT.
+        let var = "EVAL_LME_LIMIT_TEST_TRUNCATE";
+        let mut samples = mock_samples(8);
+        std::env::set_var(var, "3");
+        apply_limit_from_env(&mut samples, var, "longmemeval", "questions");
+        std::env::remove_var(var);
+        assert_eq!(samples.len(), 3, "limit=3 should truncate 8 down to 3");
+        assert_eq!(samples[0].question_id, "mock-0");
+        assert_eq!(samples[2].question_id, "mock-2");
+    }
+
+    #[test]
+    fn eval_lme_limit_no_op_when_unset() {
+        let var = "EVAL_LME_LIMIT_TEST_NOOP";
+        std::env::remove_var(var);
+        let mut samples = mock_samples(4);
+        apply_limit_from_env(&mut samples, var, "longmemeval", "questions");
+        assert_eq!(samples.len(), 4, "unset env var must leave samples intact");
+    }
+
+    #[test]
+    fn lme_event_date_map_parses_haystack_dates_to_source_ids() {
+        let sample: LongMemEvalSample = serde_json::from_value(serde_json::json!({
+            "question_id": "q1",
+            "question_type": "temporal-reasoning",
+            "question": "when?",
+            "answer": "x",
+            "question_date": "2023/04/10 (Mon) 23:07",
+            "haystack_dates": ["2023/04/10 (Mon) 17:50"],
+            "haystack_session_ids": ["s0"],
+            "haystack_sessions": [[{ "role": "user", "content": "hi", "has_answer": false }]],
+            "answer_session_ids": []
+        }))
+        .unwrap();
+        let map = event_date_map(&[sample]);
+        let expected = chrono::NaiveDate::from_ymd_opt(2023, 4, 10)
+            .unwrap()
+            .and_hms_opt(0, 0, 0)
+            .unwrap()
+            .and_utc()
+            .timestamp();
+        // source_id mirrors the seed builder via memory_source_id: lme_<qid>_<sidx>_t<tidx>.
+        assert_eq!(map.get("lme_q1_0_t0"), Some(&expected));
     }
 }

@@ -98,6 +98,23 @@ pub async fn create_entity(
         });
     }
 
+    // Step 2.5: deterministic MinHash/LSH near-dedup (T16, opt-in).
+    // Catches char-level near-dups like "PostgreSQL"/"Postgres" that exact-name
+    // match misses and that the vector step may also miss. Gated behind
+    // ORIGIN_ENABLE_ENTITY_MINHASH; the entropy gate inside
+    // minhash_resolve_candidate punts short/low-entropy names to the vector
+    // step. Same-type-only; auto-merge requires exact Jaccard >= 0.9.
+    if crate::db::entity_minhash_enabled() {
+        if let Some(cand_id) = db.minhash_resolve_candidate(name, entity_type).await? {
+            let _ = db.add_entity_alias(&name_lower, &cand_id, "minhash").await;
+            return Ok(WriteResult {
+                id: cand_id,
+                warnings: vec![],
+                wrote: false,
+            });
+        }
+    }
+
     // Step 3: Vector similarity (distance < 0.1 => sim > 0.9)
     let vec_results = db.search_entities_by_vector(name, 1).await?;
     if let Some(result) = vec_results.first() {
@@ -123,6 +140,15 @@ pub async fn create_entity(
             req.confidence,
         )
         .await?;
+
+    // T16: index the new entity's LSH bands so future high-entropy names can
+    // find it via Step 2.5. Only fires when the flag is on; the helper skips
+    // short/low-entropy names so the band table stays small. Best-effort.
+    if crate::db::entity_minhash_enabled() {
+        if let Err(e) = db.index_entity_minhash_if_eligible(&id, name).await {
+            log::warn!("[create_entity] minhash band index failed for {id}: {e}");
+        }
+    }
 
     // Post-write enrichment (LLM-free, non-blocking)
     let mut warnings: Vec<String> = Vec::new();
@@ -539,6 +565,26 @@ fn skip_hallucination_guard(edited_by: &str) -> bool {
     )
 }
 
+/// True iff edited_by names an LLM-rewrite path checked by the shrink-guard.
+/// Inverse-intent twin of skip_hallucination_guard -- same match arms.
+/// Do NOT merge: skip_hallucination_guard skips; is_llm_rewrite enables.
+fn is_llm_rewrite(edited_by: &str) -> bool {
+    matches!(
+        edited_by,
+        "distill" | "re_distill" | "page_growth" | "refinery_merge"
+    )
+}
+
+/// Parse ORIGIN_MERGE_SHRINK_GUARD env var as f64 threshold.
+/// Returns Some(t) when set to a valid float; None when unset/unparseable
+/// (guard OFF = byte-identical behavior to pre-T17).
+/// Mirrors page_channel_enabled() env-read discipline in db.rs.
+pub(crate) fn merge_shrink_threshold() -> Option<f64> {
+    std::env::var("ORIGIN_MERGE_SHRINK_GUARD")
+        .ok()
+        .and_then(|v| v.trim().parse::<f64>().ok())
+}
+
 /// Update a distilled wiki page. Canonical entry for all page-update paths:
 /// daemon-internal distillation, refinery re-distill, fs watcher, and
 /// future agent-HTTP routes.
@@ -596,6 +642,32 @@ pub async fn update_page(
         .ok_or_else(|| OriginError::Validation(format!("page '{page_id}' does not exist")))?;
     let current_version = current.version;
     let new_version = current_version + 1;
+
+    // Shrink-guard (T17): opt-in via ORIGIN_MERGE_SHRINK_GUARD=<f64>.
+    // OFF by default: unset/unparseable = None = zero regression.
+    // Only fires for LLM-rewrite edited_by; human edits are never blocked.
+    // Placed AFTER current page load (needs old body), BEFORE early-return.
+    // NOT inside the skip_hallucination_guard block: that skips page_growth/re_distill.
+    if is_llm_rewrite(edited_by) {
+        if let Some(threshold) = merge_shrink_threshold() {
+            if !crate::retrieval::integrity::body_shrink_ok(
+                &current.content,
+                &req.content,
+                threshold,
+            ) {
+                log::warn!(
+                    "[update_page] shrink-guard rejected {edited_by} on {page_id}: new body ({} chars) < {}% of old ({} chars)",
+                    req.content.chars().count(),
+                    (threshold * 100.0) as u32,
+                    current.content.chars().count(),
+                );
+                return Err(OriginError::Validation(format!(
+                    "page body shrank below {:.0}% of original (shrink-guard); update rejected",
+                    threshold * 100.0
+                )));
+            }
+        }
+    }
 
     let source_refs: Vec<&str> = req.source_memory_ids.iter().map(|s| s.as_str()).collect();
 
@@ -773,6 +845,18 @@ mod tests {
     use super::*;
     use crate::events::NoopEmitter;
     use std::sync::Arc;
+
+    // Serialize env-var-sensitive tests to avoid races.
+    // Uses tokio::sync::Mutex so the guard can safely span .await points.
+    async fn env_lock() -> tokio::sync::MutexGuard<'static, ()> {
+        static ENV_MUTEX: tokio::sync::OnceCell<tokio::sync::Mutex<()>> =
+            tokio::sync::OnceCell::const_new();
+        ENV_MUTEX
+            .get_or_init(|| async { tokio::sync::Mutex::new(()) })
+            .await
+            .lock()
+            .await
+    }
 
     async fn test_db() -> (MemoryDB, tempfile::TempDir) {
         let dir = tempfile::tempdir().unwrap();
@@ -1836,5 +1920,381 @@ mod tests {
             result.wrote,
             "wrote=true even with no rows matched (best-effort signal per §3 caveat)"
         );
+    }
+
+    // ── T16: MinHash/LSH entity near-dedup cascade (Step 2.5) ────────────────
+    //
+    // Test pair "Vorpalblade Jabberwock Inc" / "Vorpalblade Jabberwock Ino" is chosen so the char-trigram
+    // Jaccard is >= 0.9 (MinHash auto-merges) while the BGE vector distance is
+    // ~0.13 (> 0.1, so the existing vector step does NOT merge them). That
+    // separation is what lets the flag-OFF noop test prove byte-identity:
+    // without MinHash these stay two distinct entities.
+
+    fn entity_req(name: &str, etype: &str) -> CreateEntityRequest {
+        CreateEntityRequest {
+            name: name.to_string(),
+            entity_type: etype.to_string(),
+            space: None,
+            source_agent: Some("test".to_string()),
+            confidence: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn create_entity_minhash_merges_abbreviation() {
+        temp_env::async_with_vars([("ORIGIN_ENABLE_ENTITY_MINHASH", Some("1"))], async {
+            let (db, _dir) = test_db().await;
+            let first = create_entity(
+                &db,
+                entity_req("Vorpalblade Jabberwock Inc", "project"),
+                "test",
+            )
+            .await
+            .unwrap();
+            let second = create_entity(
+                &db,
+                entity_req("Vorpalblade Jabberwock Ino", "project"),
+                "test",
+            )
+            .await
+            .unwrap();
+            assert_eq!(
+                first.id, second.id,
+                "near-dup must resolve to the first entity id"
+            );
+            assert!(
+                !second.wrote,
+                "resolved-existing must not write a new entity"
+            );
+            // A "minhash" alias must have been recorded for the second name.
+            let resolved = db
+                .resolve_entity_by_alias(&"Vorpalblade Jabberwock Ino".to_lowercase())
+                .await
+                .unwrap();
+            assert_eq!(resolved, Some(first.id));
+        })
+        .await;
+    }
+
+    #[tokio::test]
+    async fn create_entity_minhash_respects_type_guard() {
+        temp_env::async_with_vars([("ORIGIN_ENABLE_ENTITY_MINHASH", Some("1"))], async {
+            let (db, _dir) = test_db().await;
+            let first = create_entity(
+                &db,
+                entity_req("Vorpalblade Jabberwock Inc", "project"),
+                "test",
+            )
+            .await
+            .unwrap();
+            // Same near-dup name but a DIFFERENT entity type must not auto-merge.
+            let second = create_entity(
+                &db,
+                entity_req("Vorpalblade Jabberwock Ino", "person"),
+                "test",
+            )
+            .await
+            .unwrap();
+            assert_ne!(
+                first.id, second.id,
+                "cross-type near-dup must NOT auto-merge (same-type guard)"
+            );
+            assert!(second.wrote, "a new entity should have been created");
+        })
+        .await;
+    }
+
+    #[tokio::test]
+    async fn create_entity_minhash_short_name_skips_fuzzy() {
+        temp_env::async_with_vars([("ORIGIN_ENABLE_ENTITY_MINHASH", Some("1"))], async {
+            let (db, _dir) = test_db().await;
+            // "API"/"APIs" are below the entropy gate, so Step 2.5 must punt them
+            // to the vector step and never record a "minhash" alias.
+            let _ = create_entity(&db, entity_req("API", "concept"), "test")
+                .await
+                .unwrap();
+            let _ = create_entity(&db, entity_req("APIs", "concept"), "test")
+                .await
+                .unwrap();
+            // No band rows are written for low-entropy names, regardless of how
+            // the vector step resolved them.
+            let conn = db.conn.lock().await;
+            let mut rows = conn
+                .query("SELECT COUNT(*) FROM entity_minhash_bands", ())
+                .await
+                .unwrap();
+            let band_count: i64 = rows.next().await.unwrap().unwrap().get(0).unwrap();
+            assert_eq!(
+                band_count, 0,
+                "low-entropy names must not be indexed into entity_minhash_bands"
+            );
+            drop(rows);
+            let mut arows = conn
+                .query(
+                    "SELECT COUNT(*) FROM entity_aliases WHERE source = 'minhash'",
+                    (),
+                )
+                .await
+                .unwrap();
+            let minhash_aliases: i64 = arows.next().await.unwrap().unwrap().get(0).unwrap();
+            assert_eq!(
+                minhash_aliases, 0,
+                "short names must not produce a minhash alias"
+            );
+        })
+        .await;
+    }
+
+    #[tokio::test]
+    async fn create_entity_minhash_disabled_is_noop() {
+        // CRITICAL regression guard: with the flag OFF, the near-dup pair must
+        // stay TWO separate entities (vector distance ~0.13 > 0.1 so the vector
+        // step does not merge them), and NO minhash alias / band row is written.
+        temp_env::async_with_vars([("ORIGIN_ENABLE_ENTITY_MINHASH", None::<&str>)], async {
+            let (db, _dir) = test_db().await;
+            let first = create_entity(
+                &db,
+                entity_req("Vorpalblade Jabberwock Inc", "project"),
+                "test",
+            )
+            .await
+            .unwrap();
+            let second = create_entity(
+                &db,
+                entity_req("Vorpalblade Jabberwock Ino", "project"),
+                "test",
+            )
+            .await
+            .unwrap();
+            assert_ne!(
+                first.id, second.id,
+                "flag OFF must leave near-dups as distinct entities (byte-identity)"
+            );
+            assert!(second.wrote, "flag OFF must create a second entity");
+            let conn = db.conn.lock().await;
+            let mut rows = conn
+                .query("SELECT COUNT(*) FROM entity_minhash_bands", ())
+                .await
+                .unwrap();
+            let band_count: i64 = rows.next().await.unwrap().unwrap().get(0).unwrap();
+            assert_eq!(band_count, 0, "flag OFF must write zero band rows");
+            drop(rows);
+            let mut arows = conn
+                .query(
+                    "SELECT COUNT(*) FROM entity_aliases WHERE source = 'minhash'",
+                    (),
+                )
+                .await
+                .unwrap();
+            let minhash_aliases: i64 = arows.next().await.unwrap().unwrap().get(0).unwrap();
+            assert_eq!(
+                minhash_aliases, 0,
+                "flag OFF must write zero minhash aliases"
+            );
+        })
+        .await;
+    }
+
+    #[tokio::test]
+    async fn resolve_entity_bulk_minhash_mirrors_create_entity() {
+        use crate::extract::ExtractedEntity;
+        use std::collections::HashMap;
+        temp_env::async_with_vars([("ORIGIN_ENABLE_ENTITY_MINHASH", Some("1"))], async {
+            let (db, _dir) = test_db().await;
+            let mut cache: HashMap<String, String> = HashMap::new();
+            let e1 = ExtractedEntity {
+                name: "Vorpalblade Jabberwock Inc".to_string(),
+                entity_type: "project".to_string(),
+            };
+            let (id1, new1) = crate::importer::resolve_entity_bulk(&db, &mut cache, &e1, "test")
+                .await
+                .unwrap();
+            assert!(new1, "first bulk entity is newly created");
+            // Fresh cache so the in-batch shortcut does not mask Step 2.5.
+            let mut cache2: HashMap<String, String> = HashMap::new();
+            let e2 = ExtractedEntity {
+                name: "Vorpalblade Jabberwock Ino".to_string(),
+                entity_type: "project".to_string(),
+            };
+            let (id2, new2) = crate::importer::resolve_entity_bulk(&db, &mut cache2, &e2, "test")
+                .await
+                .unwrap();
+            assert_eq!(id1, id2, "bulk path must mirror create_entity merge");
+            assert!(!new2, "bulk near-dup must resolve to existing, not create");
+        })
+        .await;
+    }
+
+    // Integration tests: update_page shrink-guard
+
+    #[tokio::test]
+    async fn update_page_shrink_guard_rejects_truncation() {
+        let _lock = env_lock().await;
+        // Guard ON + LLM-rewrite caller + body shrinks below threshold -> Err + DB unchanged
+        std::env::set_var("ORIGIN_MERGE_SHRINK_GUARD", "0.7");
+        let (db, _dir) = test_db().await;
+        let mem_id = "mem-sg-reject";
+        // 100-char body
+        let old_body = "a".repeat(100);
+        seed_memory(&db, mem_id, &old_body).await;
+        let page_id = seed_page(&db, mem_id, &old_body).await;
+
+        // New body is only 60 chars: 60 < 100 * 0.7 = 70 -> should reject
+        let short_body = "a".repeat(60);
+        let req = UpdatePageRequest {
+            content: short_body,
+            source_memory_ids: vec![mem_id.to_string()],
+        };
+        let result = update_page(&db, &page_id, req, "distill", false, None).await;
+        assert!(
+            matches!(result, Err(OriginError::Validation(_))),
+            "shrink-guard must reject truncated LLM rewrite"
+        );
+
+        // DB must still have the ORIGINAL body
+        let page = db.get_page(&page_id).await.unwrap().unwrap();
+        assert_eq!(
+            page.content,
+            "a".repeat(100),
+            "body must be unchanged after rejection"
+        );
+        assert_eq!(page.version, 1, "version must not bump on rejection");
+        std::env::remove_var("ORIGIN_MERGE_SHRINK_GUARD");
+    }
+
+    #[tokio::test]
+    async fn update_page_shrink_guard_allows_growth() {
+        let _lock = env_lock().await;
+        // Guard ON + LLM-rewrite caller + body grows -> Ok
+        std::env::set_var("ORIGIN_MERGE_SHRINK_GUARD", "0.7");
+        let (db, _dir) = test_db().await;
+        let mem_id = "mem-sg-grow";
+        let old_body = "a".repeat(50);
+        seed_memory(&db, mem_id, &old_body).await;
+        let page_id = seed_page(&db, mem_id, &old_body).await;
+
+        let long_body = "a".repeat(200);
+        let req = UpdatePageRequest {
+            content: long_body.clone(),
+            source_memory_ids: vec![mem_id.to_string()],
+        };
+        let result = update_page(&db, &page_id, req, "page_growth", false, None).await;
+        assert!(result.is_ok(), "shrink-guard must allow growing body");
+        let page = db.get_page(&page_id).await.unwrap().unwrap();
+        assert_eq!(page.content, long_body);
+        std::env::remove_var("ORIGIN_MERGE_SHRINK_GUARD");
+    }
+
+    #[tokio::test]
+    async fn update_page_shrink_guard_off_by_default() {
+        let _lock = env_lock().await;
+        // Guard UNSET: even extreme truncation must succeed (zero regression)
+        std::env::remove_var("ORIGIN_MERGE_SHRINK_GUARD");
+        let (db, _dir) = test_db().await;
+        let mem_id = "mem-sg-off";
+        let old_body = "a".repeat(100);
+        seed_memory(&db, mem_id, &old_body).await;
+        let page_id = seed_page(&db, mem_id, &old_body).await;
+
+        let tiny_body = "a".repeat(5); // 5 < 100 * 0.7 = 70, would fail if guard were ON
+        let req = UpdatePageRequest {
+            content: tiny_body.clone(),
+            source_memory_ids: vec![mem_id.to_string()],
+        };
+        let result = update_page(&db, &page_id, req, "distill", false, None)
+            .await
+            .unwrap();
+        assert!(result.wrote, "guard OFF must allow any size update");
+        let page = db.get_page(&page_id).await.unwrap().unwrap();
+        assert_eq!(
+            page.content, tiny_body,
+            "content must update when guard is OFF"
+        );
+    }
+
+    #[tokio::test]
+    async fn update_page_shrink_guard_skips_human_edits() {
+        let _lock = env_lock().await;
+        // Guard ON + human edited_by: guard never fires, update goes through
+        std::env::set_var("ORIGIN_MERGE_SHRINK_GUARD", "0.7");
+        let (db, _dir) = test_db().await;
+        let mem_id = "mem-sg-human";
+        let old_body = "a".repeat(100);
+        seed_memory(&db, mem_id, &old_body).await;
+        let page_id = seed_page(&db, mem_id, &old_body).await;
+
+        // 5 chars: would fail guard if LLM rewrite, but "manual_edit" is human
+        let tiny_body = "a".repeat(5);
+        let req = UpdatePageRequest {
+            content: tiny_body.clone(),
+            source_memory_ids: vec![mem_id.to_string()],
+        };
+        // manual_edit bypasses hallucination guard AND is NOT an LLM rewrite
+        // so shrink-guard must NOT fire even though the body shrinks drastically
+        // (hallucination guard WILL fire for manual_edit -- seed with real-ish content)
+        // Actually manual_edit triggers hallucination guard, so use fs_edit instead
+        let result = update_page(&db, &page_id, req, "fs_edit", false, None).await;
+        // fs_edit IS guarded by hallucination guard and will likely fail cos-sim check.
+        // The key assertion: if it fails, it must NOT be a shrink-guard Validation error.
+        // If it succeeds, the body must be updated.
+        match result {
+            Ok(wr) => {
+                // Succeeded: body updated (hallucination guard passed)
+                if wr.wrote {
+                    let page = db.get_page(&page_id).await.unwrap().unwrap();
+                    assert_eq!(page.content, tiny_body);
+                }
+            }
+            Err(OriginError::Validation(msg)) => {
+                // Hallucination guard may reject: ensure it is NOT a shrink-guard message
+                assert!(
+                    !msg.contains("shrink-guard"),
+                    "human edit must not be rejected by shrink-guard; got: {msg}"
+                );
+            }
+            Err(e) => panic!("unexpected error: {e:?}"),
+        }
+        std::env::remove_var("ORIGIN_MERGE_SHRINK_GUARD");
+    }
+
+    // merge_shrink_threshold parse tests
+
+    #[test]
+    fn merge_shrink_threshold_unset_returns_none() {
+        std::env::remove_var("ORIGIN_MERGE_SHRINK_GUARD");
+        assert!(merge_shrink_threshold().is_none());
+    }
+
+    #[test]
+    fn merge_shrink_threshold_valid_float() {
+        std::env::set_var("ORIGIN_MERGE_SHRINK_GUARD", "0.7");
+        assert_eq!(merge_shrink_threshold(), Some(0.7));
+        std::env::remove_var("ORIGIN_MERGE_SHRINK_GUARD");
+    }
+
+    #[test]
+    fn merge_shrink_threshold_garbage_returns_none() {
+        std::env::set_var("ORIGIN_MERGE_SHRINK_GUARD", "garbage");
+        assert!(merge_shrink_threshold().is_none());
+        std::env::remove_var("ORIGIN_MERGE_SHRINK_GUARD");
+    }
+
+    // is_llm_rewrite tests
+
+    #[test]
+    fn is_llm_rewrite_distill_true() {
+        assert!(is_llm_rewrite("distill"));
+        assert!(is_llm_rewrite("re_distill"));
+        assert!(is_llm_rewrite("page_growth"));
+        assert!(is_llm_rewrite("refinery_merge"));
+    }
+
+    #[test]
+    fn is_llm_rewrite_user_false() {
+        assert!(!is_llm_rewrite("user"));
+        assert!(!is_llm_rewrite("manual_edit"));
+        assert!(!is_llm_rewrite("fs_edit"));
+        assert!(!is_llm_rewrite("api"));
+        assert!(!is_llm_rewrite(""));
     }
 }

@@ -4,6 +4,7 @@
 use crate::db::MemoryDB;
 use crate::error::OriginError;
 use crate::eval::fixtures::{load_fixtures, SeedMemory};
+use crate::eval::latency::LatencySummary;
 use crate::eval::metrics;
 use crate::eval::report::{CaseResult, EvalReport};
 use crate::quality_gate::QualityGate;
@@ -11,6 +12,7 @@ use crate::sources::RawDocument;
 use crate::tuning::{ConfidenceConfig, GateConfig, SearchScoringConfig};
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
+use std::time::Instant;
 
 /// Cosine similarity between two vectors (used for raw score comparison).
 fn raw_cosine_similarity(a: &[f32], b: &[f32]) -> f64 {
@@ -115,6 +117,7 @@ pub async fn run_eval(
     let mut empty_set_count = 0usize;
     let mut temporal_ordering_correct = 0usize;
     let mut temporal_ordering_total = 0usize;
+    let mut query_micros: Vec<u64> = Vec::new();
 
     let gate = if gate_mode != GateMode::Off {
         Some(QualityGate::new(GateConfig::default()))
@@ -206,6 +209,7 @@ pub async fn run_eval(
         let confirmation_boost = scoring.map(|s| s.confirmation_boost);
         let recap_penalty = scoring.map(|s| s.recap_penalty);
 
+        let t0 = Instant::now();
         let results = db
             .search_memory(
                 &case.query,
@@ -218,6 +222,7 @@ pub async fn run_eval(
                 scoring,
             )
             .await?;
+        query_micros.push(t0.elapsed().as_micros() as u64);
 
         let ranked_ids: Vec<&str> = results.iter().map(|r| r.source_id.as_str()).collect();
 
@@ -245,6 +250,7 @@ pub async fn run_eval(
                 precision_at_3: 0.0,
                 negative_leakage: 0,
                 neg_above_relevant: 0,
+                category: None,
             });
             continue;
         }
@@ -331,6 +337,7 @@ pub async fn run_eval(
             precision_at_3: case_p3,
             negative_leakage: case_neg,
             neg_above_relevant: case_neg_above,
+            category: None,
         });
     }
 
@@ -390,7 +397,11 @@ pub async fn run_eval(
         baseline: baseline_path.and_then(crate::eval::report::EvalReport::load_baseline),
         per_case: case_results,
         env: None,
-        latency: None,
+        latency: Some(LatencySummary::from_micros(&query_micros)),
+        total_scenarios: cases.len(),
+        skipped_scenarios: vec![],
+        enrichment_failures: 0,
+        truncated_reason: None,
     })
 }
 

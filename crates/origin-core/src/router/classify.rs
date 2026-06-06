@@ -15,7 +15,7 @@ pub struct QueryClassification {
 
 /// Temporal phrases that signal a need for graph-backed temporal traversal.
 /// Uses multi-word phrases to reduce false positives (e.g. "before" alone is too broad).
-const TEMPORAL_KEYWORDS: &[&str] = &[
+pub(crate) const TEMPORAL_KEYWORDS: &[&str] = &[
     "recently",
     "what changed",
     "history of",
@@ -35,9 +35,9 @@ const TEMPORAL_KEYWORDS: &[&str] = &[
 
 /// Relational phrases that signal a need for graph-backed entity traversal.
 /// Uses multi-word phrases to avoid false positives on common words like "between".
-const RELATIONAL_KEYWORDS: &[&str] = &[
+pub(crate) const RELATIONAL_KEYWORDS: &[&str] = &[
     "relationship between",
-    "how does.*relate",
+    "relate to",
     "who works",
     "who knows",
     "involved in",
@@ -116,6 +116,7 @@ mod tests {
     fn relational_keywords_trigger_graph() {
         let cases = [
             "What is the relationship between Alice and Bob?",
+            "How does Postgres relate to libSQL?",
             "Who works on the backend team?",
             "Who is involved in the launch?",
             "Who knows about the deployment process?",

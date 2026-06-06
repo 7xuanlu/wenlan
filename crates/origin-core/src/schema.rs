@@ -17,26 +17,37 @@ impl MemorySchema {
             "identity" => Self {
                 memory_type: "identity".into(),
                 required: vec!["claim"],
-                optional: vec!["evidence", "since"],
+                optional: vec!["evidence", "since", "event_date", "event_end"],
                 retrieval_cue_template: "Who is the user in terms of {claim}?".into(),
             },
             "preference" => Self {
                 memory_type: "preference".into(),
                 required: vec!["preference", "applies_when"],
-                optional: vec!["strength", "alternatives_rejected"],
+                optional: vec![
+                    "strength",
+                    "alternatives_rejected",
+                    "event_date",
+                    "event_end",
+                ],
                 retrieval_cue_template: "What does the user prefer regarding {preference}?".into(),
             },
             "decision" => Self {
                 memory_type: "decision".into(),
                 required: vec!["decision", "context"],
-                optional: vec!["alternatives_considered", "date", "reversible"],
+                optional: vec![
+                    "alternatives_considered",
+                    "date",
+                    "reversible",
+                    "event_date",
+                    "event_end",
+                ],
                 retrieval_cue_template: "What was decided about {decision} and why?".into(),
             },
             // Wildcard must be last — catches "fact", legacy "goal", and unknown types
             _ => Self {
                 memory_type: "fact".into(),
                 required: vec!["claim"],
-                optional: vec!["source", "verified", "domain"],
+                optional: vec!["source", "verified", "domain", "event_date", "event_end"],
                 retrieval_cue_template: "What do I know about {claim}?".into(),
             },
         }
@@ -137,6 +148,40 @@ pub fn flatten_structured_fields(json_str: &str) -> Option<String> {
             .collect::<Vec<_>>()
             .join(" | "),
     )
+}
+
+/// Split structured_fields JSON into one "key: value" string per scalar field
+/// (T15a fact-channel producer). Sibling of [`flatten_structured_fields`]: same
+/// serde parse, same scalar-coercion filter (non-empty String / Bool / Number),
+/// same key-sort for determinism, but emits ONE child string per field instead
+/// of a single pipe-joined line.
+///
+/// Returns `vec![]` (never a panic, never `vec![""]`) when the JSON is invalid,
+/// empty, or carries no coercible scalar fields. Empty-string values are
+/// filtered exactly like `flatten_structured_fields` (the PR-#147 silent-zero
+/// guard class).
+pub fn split_structured_fields_to_facts(json_str: &str) -> Vec<String> {
+    let map: serde_json::Map<String, serde_json::Value> = match serde_json::from_str(json_str) {
+        Ok(m) => m,
+        Err(_) => return Vec::new(),
+    };
+    let mut pairs: Vec<(String, String)> = map
+        .into_iter()
+        .filter_map(|(k, v)| {
+            let val = match v {
+                serde_json::Value::String(s) if !s.is_empty() => s,
+                serde_json::Value::Bool(b) => b.to_string(),
+                serde_json::Value::Number(n) => n.to_string(),
+                _ => return None,
+            };
+            Some((k, val))
+        })
+        .collect();
+    pairs.sort_by(|a, b| a.0.cmp(&b.0));
+    pairs
+        .into_iter()
+        .map(|(k, v)| format!("{}: {}", k, v))
+        .collect()
 }
 
 #[cfg(test)]
@@ -268,5 +313,105 @@ mod tests {
         let json = r#"{"claim":"A | B are both valid","source":"docs"}"#;
         let result = flatten_structured_fields(json).unwrap();
         assert!(result.contains("claim: A | B are both valid"));
+    }
+
+    #[test]
+    fn every_type_has_event_date_and_event_end_in_optional() {
+        // "fact", "lesson", "gotcha" all route through the _ wildcard arm
+        for ty in [
+            "identity",
+            "preference",
+            "decision",
+            "fact",
+            "lesson",
+            "gotcha",
+        ] {
+            let s = MemorySchema::for_type(ty);
+            assert!(
+                s.optional.contains(&"event_date"),
+                "{ty} missing event_date in optional"
+            );
+            assert!(
+                s.optional.contains(&"event_end"),
+                "{ty} missing event_end in optional"
+            );
+        }
+    }
+
+    #[test]
+    fn extract_prompt_contains_event_date_for_every_type() {
+        // Drift-guard: ensures that event_date and event_end survive the full
+        // render pipeline. The schema test above only checks the optional Vec;
+        // this test catches a dropped {optional} placeholder in the template.
+        for ty in [
+            "identity",
+            "preference",
+            "decision",
+            "fact",
+            "lesson",
+            "gotcha",
+        ] {
+            let rendered = extraction_prompt(ty);
+            assert!(
+                rendered.contains("event_date"),
+                "{ty} rendered EXTRACT prompt missing event_date"
+            );
+            assert!(
+                rendered.contains("event_end"),
+                "{ty} rendered EXTRACT prompt missing event_end"
+            );
+        }
+    }
+
+    #[test]
+    fn for_type_decision_retains_existing_optional_fields() {
+        let s = MemorySchema::for_type("decision");
+        assert!(s.optional.contains(&"alternatives_considered"));
+        assert!(s.optional.contains(&"date"));
+        assert!(s.optional.contains(&"reversible"));
+    }
+
+    // ── T15a: split_structured_fields_to_facts ────────────────────────────────
+
+    #[test]
+    fn split_structured_fields_empty_returns_empty() {
+        assert_eq!(split_structured_fields_to_facts("{}"), Vec::<String>::new());
+        assert_eq!(
+            split_structured_fields_to_facts("not json"),
+            Vec::<String>::new()
+        );
+        assert_eq!(split_structured_fields_to_facts(""), Vec::<String>::new());
+        // An object with only non-coercible values yields no children.
+        assert_eq!(
+            split_structured_fields_to_facts("{\"a\":null,\"b\":[1,2]}"),
+            Vec::<String>::new()
+        );
+    }
+
+    #[test]
+    fn split_structured_fields_one_per_field() {
+        // Two scalar fields -> exactly two children, key-sorted.
+        let out = split_structured_fields_to_facts("{\"date\":\"2024-03-01\",\"city\":\"Tokyo\"}");
+        assert_eq!(
+            out,
+            vec!["city: Tokyo".to_string(), "date: 2024-03-01".to_string()]
+        );
+    }
+
+    #[test]
+    fn split_structured_fields_stringifies_non_string_scalars() {
+        // Bool + Number coerced like flatten_structured_fields.
+        let out = split_structured_fields_to_facts("{\"active\":true,\"count\":3}");
+        assert_eq!(
+            out,
+            vec!["active: true".to_string(), "count: 3".to_string()]
+        );
+    }
+
+    #[test]
+    fn split_structured_fields_skips_empty_values() {
+        // Empty-string value filtered; only the non-empty field survives.
+        let out = split_structured_fields_to_facts("{\"a\":\"\",\"b\":\"x\"}");
+        assert_eq!(out, vec!["b: x".to_string()]);
     }
 }

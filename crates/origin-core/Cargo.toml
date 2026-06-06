@@ -9,6 +9,7 @@ description = "Core business logic for Origin — memory storage, retrieval, and
 [features]
 default = []
 closed-core-eval = []
+eval-harness = []
 
 [dependencies]
 origin-types = { workspace = true }
@@ -56,6 +57,7 @@ rusqlite = { version = "0.31", default-features = false }
 # tempfile is used from eval/ runners (non-test code paths) in addition to
 # the dev-dependency usage by other modules.
 tempfile = { workspace = true }
+fs2 = { workspace = true }
 
 # Benchmark binaries (model_benchmark, deep_distill, etc.)
 env_logger = "0.11"
@@ -72,5 +74,16 @@ llama-cpp-2 = { version = "0.1", features = ["metal", "sampler"] }
 [target.'cfg(not(target_os = "macos"))'.dependencies]
 llama-cpp-2 = { version = "0.1", features = ["sampler"] }
 
+[build-dependencies]
+sha2 = { workspace = true }
+
+[[bin]]
+name = "compare-baselines"
+path = "src/bin/compare_baselines.rs"
+required-features = ["eval-harness"]
+
 [dev-dependencies]
 temp-env = { version = "0.3", features = ["async_closure"] }
+# test-util enables tokio::test(start_paused) for deterministic timeout tests
+# (the `full` feature deliberately excludes test-util). Test-only.
+tokio = { workspace = true, features = ["test-util"] }

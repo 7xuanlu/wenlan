@@ -22,8 +22,10 @@ python3 scripts/update-readme-eval.py
 
 ## Notes
 
-- LongMemEval uses `Recall@5`, `MRR`, and `NDCG@10` as headline fields.
-- Keep `notes` concise, e.g. "pending reproducibility pass" or run metadata.
+- LongMemEval and LoCoMo use `Recall@5`, `MRR`, and `NDCG@10` as headline fields.
+- Current README numbers are retrieval-only, single-run local snapshots unless a reproducibility pass is explicitly documented.
+- Name the retrieval mode once in surrounding prose when all rows use the same mode.
+- Keep `notes` in the metrics JSON for maintainer-facing caveats and run metadata; the root README does not render them.
 
 ## Links
 

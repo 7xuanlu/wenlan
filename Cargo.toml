@@ -42,8 +42,15 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt", "tracing-log"] }
 log = "0.4"
 
-# HTTP
-reqwest = { version = "0.12", features = ["json"] }
+# HTTP — explicit rustls-tls everywhere. Default features pull native-tls,
+# which on Linux drags openssl-sys → system OpenSSL. cross-rs's container
+# ships an OpenSSL too old for openssl-sys 0.9.x, and vendored feature
+# propagation through transitive deps proved unreliable (see PR #173/#179
+# attempts). Dropping native-tls from the dep graph entirely removes
+# openssl-sys, which removes the whole problem. Per cross-rs issue #510
+# (Aug 2021): "look through your Cargo.lock for OpenSSL deps and switch
+# them to Rustls instead. Once that's done, everything should build."
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 axum = { version = "0.8", features = ["ws"] }
 tower = "0.5"
 tower-http = { version = "0.6", features = ["cors", "trace", "timeout"] }
@@ -54,7 +61,32 @@ hyper-util = { version = "0.1", features = ["tokio", "server-auto"] }
 libsql = { version = "0.9", default-features = false, features = ["core", "replication"] }
 
 # Embeddings & LLM
-fastembed = "5"
+# fastembed defaults are: hf-hub, hf-hub-native-tls, image-models,
+# ort-download-binaries-native-tls. Swap both TLS features to the rustls
+# variants to keep native-tls (and its openssl-sys transitive) out of the
+# dep graph. Keep `hf-hub` + `image-models` so the public surface stays
+# identical.
+fastembed = { version = "5", default-features = false, features = [
+    "hf-hub",
+    "hf-hub-rustls-tls",
+    "image-models",
+    # ort-download-binaries-native-tls (NOT the rustls variant) because the
+    # rustls variant didn't trigger ort-sys's prebuilt-onnxruntime download
+    # in cross (build failed with "could not find native static library
+    # onnxruntime"). native-tls drags openssl-sys back into the graph, but
+    # the workspace `openssl-sys = { features = ["vendored"] }` declaration
+    # below compiles OpenSSL from source so cross's stale system OpenSSL is
+    # irrelevant.
+    "ort-download-binaries-native-tls",
+] }
+
+# openssl-sys vendored — belt + suspenders. Even with fastembed swapped to
+# rustls features, hf-hub still drags native-tls into the dep graph via
+# Cargo feature unification (its `default-tls` feature is enabled by the
+# parent `reqwest` default features upstream). Declaring openssl-sys
+# directly with `vendored` forces it to compile OpenSSL from source so
+# the cross-rs Linux container's stale system OpenSSL is irrelevant.
+openssl-sys = { version = "0.9", features = ["vendored"] }
 
 # Utilities
 regex = "1"
@@ -74,3 +106,16 @@ serde_yaml = "0.9"
 sysinfo = "0.33"
 image = "0.25"
 toml = "0.8"
+fs2 = "0.4"
+
+# Release profile tuned for CI throughput. Default is `codegen-units = 1`
+# + no `lto`, optimized for runtime perf at the cost of long link times.
+# Origin's bottleneck is build time, not the last 5% of release-binary
+# perf. `codegen-units = 16` lets rustc fan out across cores; `lto =
+# "thin"` keeps the LTO pass cheap but still inlines hot paths. Net:
+# ~30-50% off link time on Linux/Windows, binary ~5-10% larger.
+[profile.release]
+codegen-units = 16
+lto = "thin"
+strip = "debuginfo"
+incremental = false

@@ -85,6 +85,8 @@ fn sample_search_result() -> SearchResult {
         entity_id: None,
         entity_name: None,
         quality: None,
+        importance: None,
+        event_date: None,
         is_archived: false,
         is_recap: false,
         structured_fields: None,
@@ -285,6 +287,7 @@ async fn t4_recall_roundtrip() {
     let response = SearchMemoryResponse {
         results: vec![sample_search_result()],
         took_ms: 10.0,
+        supplemental_pages: None,
     };
     Mock::given(method("POST"))
         .and(path("/api/memory/search"))
@@ -299,6 +302,7 @@ async fn t4_recall_roundtrip() {
             limit: None,
             memory_type: None,
             space: None,
+            rerank: None,
         })
         .await
         .expect("recall_impl failed");
@@ -516,6 +520,7 @@ async fn t9_recall_request_does_not_contain_entity() {
     let response = SearchMemoryResponse {
         results: vec![],
         took_ms: 1.0,
+        supplemental_pages: None,
     };
     Mock::given(method("POST"))
         .and(path("/api/memory/search"))
@@ -530,6 +535,7 @@ async fn t9_recall_request_does_not_contain_entity() {
             limit: None,
             memory_type: None,
             space: None,
+            rerank: None,
         })
         .await
         .expect("recall_impl failed");

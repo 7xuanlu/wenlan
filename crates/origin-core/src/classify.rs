@@ -30,6 +30,10 @@ pub struct ClassificationResult {
     /// Quality signal: "low", "medium", "high", or None (default)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub quality: Option<String>,
+    /// T8 salience prior: per-memory importance rating 1-10 (LLM-assigned at
+    /// write time), or None when absent/malformed. NEVER defaults to a number.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub importance: Option<u8>,
 }
 
 impl Default for ClassificationResult {
@@ -39,6 +43,7 @@ impl Default for ClassificationResult {
             space: None,
             tags: Vec::new(),
             quality: None,
+            importance: None,
         }
     }
 }
@@ -91,6 +96,7 @@ pub fn parse_classification_response(
                 space,
                 tags,
                 quality: None,
+                importance: None,
             }
         })
         .collect();
@@ -313,6 +319,7 @@ impl LlmEngine {
                     space,
                     tags,
                     quality: None,
+                    importance: None,
                 })
             }
             Err(e) => {
@@ -324,6 +331,7 @@ impl LlmEngine {
                         space: None,
                         tags: Vec::new(),
                         quality: None,
+                        importance: None,
                     })
             }
         }

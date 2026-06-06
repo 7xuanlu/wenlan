@@ -15,10 +15,12 @@ pub enum Phase {
     EntityExtraction,
     CommunityDetection,
     Emergence,
+    SummaryRollup,
     ReDistill,
     RefinementQueue,
     DecisionLogs,
     PruneRejections,
+    Evict,
     KgRethink,
 }
 
@@ -33,10 +35,12 @@ impl Phase {
         Phase::EntityExtraction,
         Phase::CommunityDetection,
         Phase::Emergence,
+        Phase::SummaryRollup,
         Phase::ReDistill,
         Phase::RefinementQueue,
         Phase::DecisionLogs,
         Phase::PruneRejections,
+        Phase::Evict,
         Phase::KgRethink,
     ];
 
@@ -52,10 +56,12 @@ impl Phase {
             Phase::EntityExtraction => "entity_extraction",
             Phase::CommunityDetection => "community_detection",
             Phase::Emergence => "emergence",
+            Phase::SummaryRollup => "summary_rollup",
             Phase::ReDistill => "re-distill",
             Phase::RefinementQueue => "refinement_queue",
             Phase::DecisionLogs => "decision_logs",
             Phase::PruneRejections => "prune_rejections",
+            Phase::Evict => "evict",
             Phase::KgRethink => "kg_rethink",
         }
     }

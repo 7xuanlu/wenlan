@@ -130,6 +130,11 @@ pub fn spawn_scheduler(shared: SharedState, write_signal: WriteSignal) {
         let mut last_backstop = Instant::now();
         let mut idle_fired = false;
         let mut last_poll_activity = Instant::now();
+        // Fire enrichment sweep every 30 min when an LLM provider is available.
+        const ENRICHMENT_SWEEP_INTERVAL: Duration = Duration::from_secs(30 * 60);
+        let mut last_enrichment_sweep = Instant::now()
+            .checked_sub(ENRICHMENT_SWEEP_INTERVAL)
+            .unwrap_or_else(Instant::now);
 
         // Load persisted daily timestamp from DB (survives restarts)
         let last_daily_epoch = load_last_daily(&shared).await;
@@ -322,6 +327,39 @@ pub fn spawn_scheduler(shared: SharedState, write_signal: WriteSignal) {
                 )
                 .await;
                 last_backstop = now;
+            }
+
+            // --- 5. Enrichment sweep: back-fill entity linkage for memories
+            //        ingested while the LLM was unavailable. ---
+            if now.duration_since(last_enrichment_sweep) >= ENRICHMENT_SWEEP_INTERVAL {
+                // Pick the best available LLM: prefer api_llm (cloud, reliable),
+                // fall back to on-device llm.
+                let sweep_llm = api_llm.as_ref().or(llm.as_ref()).cloned();
+                if let Some(provider) = sweep_llm {
+                    let db_ref = db.clone();
+                    let prompts_ref = prompts.clone();
+                    tokio::spawn(async move {
+                        let extract_fn = |content: String| {
+                            let p = provider.clone();
+                            let pr = prompts_ref.clone();
+                            let db2 = db_ref.clone();
+                            async move {
+                                origin_core::kg::entity_extraction::extract_entities_for_content(
+                                    &db2, &p, &pr, &content,
+                                )
+                                .await
+                            }
+                        };
+                        match db_ref.run_enrichment_sweep(extract_fn, 50).await {
+                            Ok(0) => {}
+                            Ok(n) => tracing::info!(
+                                "[scheduler] enrichment sweep processed {n} memories"
+                            ),
+                            Err(e) => tracing::warn!("[scheduler] enrichment sweep error: {e}"),
+                        }
+                    });
+                    last_enrichment_sweep = now;
+                }
             }
         }
     });

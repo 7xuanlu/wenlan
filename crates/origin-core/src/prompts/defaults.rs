@@ -13,23 +13,25 @@ tags are 2-4 semantic keywords (lowercase)";
 
 pub(crate) const CLASSIFY_MEMORY_QUALITY: &str = "\
 Classify this memory. Respond with ONLY valid JSON:\n\
-{\"memory_type\": \"...\", \"domain\": \"...\", \"tags\": [\"...\", \"...\"], \"quality\": \"...\"}\n\n\
+{\"memory_type\": \"...\", \"domain\": \"...\", \"tags\": [\"...\", \"...\"], \"quality\": \"...\", \"importance\": <1-10>}\n\n\
 memory_type must be one of: identity, preference, decision, lesson, gotcha, fact\n\
 - decision: a choice was made between alternatives, or a direction was chosen with rationale (e.g. \"switched from X to Y because...\", \"chose to use X over Y\")\n\
 - fact: objective knowledge without a choice (e.g. \"X supports feature Y\", \"the API returns JSON\")\n\
 domain is a short topic label (1-3 words, lowercase)\n\
 tags are 2-4 semantic keywords (lowercase)\n\
-quality is low (vague/trivial), medium (useful), or high (specific+actionable)";
+quality is low (vague/trivial), medium (useful), or high (specific+actionable)\n\
+importance is 1-10: 1 = purely mundane/derivable, 10 = identity-defining or a major decision";
 
 pub(crate) const CLASSIFY_MEMORY_QUALITY_STRICT: &str = "\
 Classify this memory. Respond with ONLY valid JSON:\n\
-{\"memory_type\": \"...\", \"domain\": \"...\", \"tags\": [\"...\", \"...\"], \"quality\": \"...\"}\n\n\
+{\"memory_type\": \"...\", \"domain\": \"...\", \"tags\": [\"...\", \"...\"], \"quality\": \"...\", \"importance\": <1-10>}\n\n\
 memory_type must be one of: identity, preference, decision, lesson, gotcha, fact\n\
 - decision: a choice was made between alternatives, or a direction was chosen with rationale (e.g. \"switched from X to Y because...\", \"chose to use X over Y\")\n\
 - fact: objective knowledge without a choice (e.g. \"X supports feature Y\", \"the API returns JSON\")\n\
 domain is a short topic label (1-3 words, lowercase)\n\
 tags are 2-4 semantic keywords (lowercase)\n\
-quality must be one of: low, medium, high (how specific and actionable is this memory?)";
+quality must be one of: low, medium, high (how specific and actionable is this memory?)\n\
+importance must be an integer 1-10: 1 = purely mundane/derivable, 10 = identity-defining or a major decision";
 
 // Used by llm_formatter in the app crate; referenced again once llm_formatter
 // moves into origin-core in a later phase.
@@ -63,6 +65,20 @@ Compare two memories. Respond with exactly one of:\n\
 - CONSISTENT (if they agree or are unrelated)\n\
 - CONTRADICTS: <brief explanation>\n\
 - SUPERSEDES: <merged version combining both>";
+
+pub(crate) const RESOLVE_DUAL_POOL: &str = "\
+You resolve an incoming memory against existing memories. You receive a numbered\n\
+candidate list split into two ranges:\n\
+- DUPLICATES range: near-identical restatements of the incoming memory.\n\
+- CONFLICTS range: same topic/entity but possibly-contradicting claims.\n\
+Decide, per candidate index:\n\
+- duplicates: indices that say the SAME thing as the incoming memory.\n\
+- invalidates: indices from the CONFLICTS range whose claim is mutually\n\
+  exclusive with the incoming memory (only one can be true).\n\
+Rules: use ONLY the integer indices shown. Never invent an index. A candidate\n\
+is a duplicate OR an invalidation, never both. If unsure, omit the index.\n\
+Respond with ONLY this JSON object, no prose, no markdown:\n\
+{\"duplicates\":[],\"invalidates\":[]}";
 
 pub(crate) const SUMMARIZE_DECISIONS: &str = "\
 You summarize a set of decisions made by one person.\n\
@@ -234,3 +250,19 @@ Optionally provide a short stream_name describing the work session (e.g. \"debug
 Respond with ONLY valid JSON: {\"formatted_text\": \"...\", \"summary\": \"...\", \"space\": \"...\", \"tags\": [\"...\"], \"stream_name\": \"...\"}\n\
 IMPORTANT: Inside JSON strings, escape newlines as \\n and quotes as \\\".\n\
 The summary should be 1-2 sentences describing what the user was doing.";
+
+pub(crate) const COMPRESS_CONTEXT: &str = "\
+You compress an assembled memory-context bundle so more of it fits a fixed \
+prompt budget, WITHOUT losing facts. The bundle is the evidence another model \
+will use to answer the user's query.\n\
+Rules:\n\
+1. PRESERVE VERBATIM every entity name, date, number, identifier, decision, \
+and correction. Never drop, round, or alter them.\n\
+2. NEVER invent, infer, or add any fact not present in the bundle. If unsure, \
+keep the original wording.\n\
+3. Remove redundancy and filler: merge duplicate statements, drop conversational \
+scaffolding, tighten phrasing. Keep one grounded copy of each distinct fact.\n\
+4. Keep the items relevant to the query first; do not reorder facts in a way \
+that changes their meaning.\n\
+5. Output ONLY the compressed bundle as plain text. No preamble, no commentary, \
+no markdown fences.";

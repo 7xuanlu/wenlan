@@ -120,7 +120,7 @@ Origin runs across several layers. The split is driven by three questions: **(1)
 | **L5 coverage on PR** | `cargo llvm-cov` on origin-core + origin-server only | GitHub (`coverage.yml`) | Every PR | ~10min | **No (informational)** |
 | **L6 main canary** | Embedding-only eval (`cargo test -p origin-core --lib eval::retrieval -- --ignored`) | GitHub (`ci.yml`) | Push to `main` | ~10min | No (post-merge) |
 | **L7 manual local** | `bash scripts/coverage.sh` (HTML coverage), GPU eval suite (`cargo test -- --ignored`), Anthropic batch judge (`ANTHROPIC_API_KEY=... cargo test ...`) | Your laptop | On demand | minutes-hours | No |
-| **L8 pre-release** | Full eval suite vs saved baseline. Record deltas in vault/memory **never git** (Apache-2.0 public-repo rule for daemon; treat numbers as private until you have signed-off baselines) | Your laptop | Per release | hours | Soft gate |
+| **L8 pre-release** | Full eval suite vs saved baseline. Commit a **curated, env-stamped snapshot** of headline numbers to a results doc/README (single-run tagged "scaffold"; headline claims need N≥3 + stddev). Raw per-run baselines + history series stay gitignored. See "Commit policy" under Eval Citation Discipline. | Your laptop | Per release | hours | Soft gate |
 
 ### What does NOT run in CI and why
 
@@ -130,12 +130,12 @@ Origin runs across several layers. The split is driven by three questions: **(1)
 
 ### Why pre-push doesn't run coverage
 
-Earlier versions of `.githooks/pre-push` enforced a 90% `cargo llvm-cov` gate. That violated the principles above:
-- **Slow:** instrumented rebuild took 5-15min and overloaded memory.
-- **Not mirrored in CI:** the main `ci.yml` lane doesn't run coverage at all, so the gate added local friction without upstream protection.
-- **Percentage gates rot:** any new untestable surface drops the percentage and forces busywork.
+Tried 90% `cargo llvm-cov` gate in pre-push, removed because:
+- **Slow:** instrumented rebuild 5-15min, memory pressure.
+- **Not mirrored in CI:** `ci.yml` has no coverage gate, so local-only friction.
+- **Percentage gates rot:** new untestable surface forces busywork.
 
-The current pre-push runs only clippy + non-instrumented tests. Coverage is L5 (informational on PR) or L7 (manual command on laptop).
+Pre-push now runs clippy + non-instrumented tests only. Coverage = L5 (PR, informational) or L7 (manual).
 
 ### Eval baselines cache
 
@@ -146,6 +146,16 @@ export EVAL_BASELINES_DIR=$HOME/.cache/origin-eval
 ```
 
 Path must be writable and local (network mounts not recommended). When set, also chains `EVAL_ENRICHMENT_CACHE_DIR` default to the same dir unless explicitly overridden. Migration: `bash scripts/migrate-eval-cache.sh <source-baselines>`.
+
+### Cached scenario DBs (page-channel + retrieval-only evals)
+
+The PR-B page-channel runners reuse the fullpipeline_*.db seeded DBs without re-ingesting. They live at `~/.cache/origin-eval/scenario_seeded/{locomo_v1,lme_v1}/origin_memory.db`. Repopulate via `bash scripts/seed-scenario-dbs.sh` from the repo root. The `cached_scenario_db_check.rs` integration test (L7 manual) verifies migration replay against current schema; it auto-resolves the root from `SCENARIO_DB_ROOT > EVAL_BASELINES_DIR/scenario_seeded > ~/.cache/origin-eval/scenario_seeded/`.
+
+For full eval discipline (fixture management, baseline layout, env vars, seed scripts, pre-flight checklist, runner conventions), see `app/eval/AGENTS.md` and `crates/origin-core/src/eval/AGENTS.md`. The subdir AGENTS.md files apply per the agents.md hierarchical-instruction convention when an agent is working under those subtrees.
+
+### Eval pre-flight subset
+
+Set `EVAL_LOCOMO_LIMIT=N` (or `EVAL_LME_LIMIT=N`) to truncate the fixture and run a small-subset eval (~30min) before committing to full 3h runs. Useful for verifying direction on new retrieval variants. Applies to every `run_locomo_eval*` / `run_longmemeval_eval*` variant. Unset (the default) runs the full fixture unchanged.
 
 ### TTL policy
 
@@ -288,67 +298,12 @@ All data flows through the daemon's HTTP API. The desktop app, CLI, and MCP clie
   - Profile & Agents: `/api/profile`, `/api/agents`, `/api/agents/{name}`
   - WebSocket: `/ws/updates`
 
-## Key Modules — origin-core (`crates/origin-core/src/`)
+## Key Modules
 
-All business logic lives here. No tauri, no axum. Framework-agnostic.
+Per-crate module tables live in subtree `AGENTS.md` files (loaded when an agent works under that crate, per the agents.md hierarchical-instruction convention):
 
-| Module | Purpose |
-|---|---|
-| `db.rs` | `MemoryDB` — libSQL storage, vectors, chunks, hybrid search, embeddings, knowledge graph, migrations. Three search methods: `search_memory` (embedding+FTS+RRF), `search_memory_reranked` (+ LLM reranking after), `search_memory_expanded` (+ LLM query expansion before). Uses `EventEmitter` trait for UI notifications (no tauri). |
-| `events.rs` | `EventEmitter` trait and `NoopEmitter` |
-| `engine.rs` | `LlmEngine` — llama-cpp-2 wrapper, model download, inference loop, format helpers |
-| `classify.rs` | Memory/profile classification via `LlmEngine` |
-| `extract.rs` | Knowledge-graph extraction (entities, relations) via `LlmEngine` |
-| `rerank.rs` | LLM reranker |
-| `merge.rs` | Memory merging, pattern extraction, contradiction detection |
-| `llm_provider.rs` | `LlmProvider` trait + `ApiProvider` (Anthropic API) + `OnDeviceProvider` shim |
-| `llm_classifier.rs` | Higher-level classification orchestration |
-| `refinery.rs` | Distill-cycle orchestration, dedup, auto-linking, consolidation |
-| `post_ingest.rs` | Post-ingest enrichment (dedup check, entity linking, title enrich, recap, page growth) |
-| `pages.rs` | Type definitions for the `Page` struct (synthesized wiki entries distilled from memory clusters). Actual clustering + distillation live in `db.rs` + `refinery.rs`. SQL tables are `pages`/`page_sources` (renamed from `concepts`/`concept_sources` in migration 46). |
-| `spaces.rs` | Spaces / tag store |
-| `narrative.rs` | Profile narrative assembly (editorial prose) |
-| `briefing.rs` | Daily briefing assembly |
-| `working_memory.rs` | Working memory builder |
-| `access_tracker.rs` | Memory access counts + time decay |
-| `contradiction.rs` | Contradiction detection |
-| `context_packager.rs` | Context bundle → prompt packaging |
-| `importer.rs` | File importer pipeline |
-| `quality_gate.rs` | Pre-store quality gate |
-| `tuning.rs` | Tuning config (distill cycles, distillation, weights) |
-| `schema.rs` | Memory schema definitions (formerly `memory_schema.rs`) |
-| `prompts/` | Prompt registry (defaults + override dir loader) |
-| `chunker/` | Code-aware, Markdown-aware, fixed-size chunking |
-| `sources/` | `RawDocument`, file watchers, Obsidian importer. `RawDocument` and related types re-exported from `origin-types`. |
-| `privacy.rs` | PII redaction |
-| `router/classify.rs`, `content_score.rs` | Smart router scoring helpers (non-tauri parts) |
-| `config.rs` | Persistent config at `dirs::data_local_dir()/origin/config.json` (on macOS, `~/Library/Application Support/origin/config.json`) |
-| `export/` | Markdown/JSON/zip/PDF exporters |
-| `eval/` | Benchmark harness: LoCoMo, LongMemEval. Each benchmark has base (embedding-only), reranked (LLM rescores after search), and expanded (LLM query expansion before search) variants. Baselines under `EVAL_BASELINES_DIR` (gitignored). |
-| `state.rs` | `CoreState` — shared state struct used by origin-server |
-
-## Key Modules — origin-server (`crates/origin-server/src/`)
-
-HTTP daemon — owns the Axum router + all routes. All handlers operate on `Arc<RwLock<ServerState>>` where `ServerState.db: Option<Arc<MemoryDB>>`.
-
-| Module | Purpose |
-|---|---|
-| `main.rs` | Binary entry — daemon startup plus internal maintenance commands, tracing init, port binding with existing-daemon fallback, `MemoryDB::new`, LLM provider init, background tasks, `axum::serve` |
-| `state.rs` | `ServerState` struct with `db: Option<Arc<MemoryDB>>`, `llm`, `prompts`, `tuning`, `quality_gate`, `space_store`, `access_tracker`, `llm_processing_ids`, `watch_paths`. `SharedState = Arc<RwLock<ServerState>>` |
-| `router.rs` | `build_router(state) -> axum::Router` — all route registrations |
-| `routes.rs` | General endpoints: health, search, context, chat-context, status, profile/agents |
-| `memory_routes.rs` | Memory CRUD, knowledge graph, classification, entities, pages |
-| `ingest_routes.rs` | `/api/ingest/*` — text, webpage, memory |
-| `ingest_batcher.rs` | Request-level coalescer for concurrent `/api/memory/store` — folds QualityGate in-line; async classify/extract; passes enrichment + hint through in the response |
-| `knowledge_routes.rs` | Entity/relation/observation read paths + knowledge-graph queries |
-| `source_routes.rs` | Source registry endpoints |
-| `import_routes.rs` | Bulk import endpoints |
-| `config_routes.rs` | Config read/write endpoints |
-| `onboarding_routes.rs` | First-run wizard / milestone state |
-| `scheduler.rs` | Background periodic tasks (distill cycles, distillation, etc.) |
-| `websocket.rs` | `/ws/updates` |
-| `error.rs` | `ServerError` + axum `IntoResponse` impl |
-| `resources/com.origin.server.plist` | launchd plist template (embedded via `include_str!`) |
+- `crates/origin-core/AGENTS.md` — all business logic (db, engine, classify, extract, rerank, refinery, pages, eval, ...).
+- `crates/origin-server/AGENTS.md` — HTTP daemon (router, routes, state, ingest_batcher, scheduler, ...).
 
 ## Key Modules — origin (CLI, `crates/origin-cli/src/`)
 
@@ -356,12 +311,21 @@ The `origin` binary — a thin reqwest-based CLI for the daemon's HTTP API. Subc
 
 ## Conventions
 
+### Eval Citation Discipline
+
+See `app/eval/AGENTS.md` "eval citation discipline" section for the full rules (single-run, schema-version, receipt-only, per-case visibility, layer attribution, commit policy). External-facing numbers MUST satisfy those rules.
+
 ### Crate boundaries
 - **origin-core must have NO tauri or axum dependencies.** Verify with `grep -rn "use tauri\|use axum" crates/origin-core/src/` — expect zero hits. Any event emission goes through the `EventEmitter` trait.
 - **origin-types must be lightweight.** Only serde + serde_json + anyhow. No chrono, no tokio, no heavy deps. These types are shared with `origin-mcp` (same workspace, Apache-2.0) and `origin-app` (AGPL-3.0 separate repo, consumes via crates.io), so adding heavy deps forces them downstream.
 - **Don't add business logic to origin-server.** Route handlers should call `origin-core` functions with state snapshots — the server's job is HTTP framing, not logic.
 - **Don't add new HTTP endpoints to the CLI.** Use existing daemon endpoints. If a CLI subcommand needs new data, add a daemon endpoint first.
 - **MCP wrappers in `origin-mcp` always typed-deserialize.** Every `_impl` method in `crates/origin-mcp/src/tools.rs` deserializes the daemon response into a typed wire struct from `origin-types` (e.g. `SearchPagesResponse { pages: Vec<Page> }`), never into `serde_json::Value`. Untyped responses silently emit whatever shape the daemon returns; typed deserialization fails loud on envelope-key drift. Mirror commit `4f545869` and PR #77.
+
+### Ingest-path parity (training-serving skew)
+- **All post-store enrichment goes through `origin_core::ingest::run_canonical_enrichment`.** It is the ONE shared path for classify + extract + `apply_enrichment` + tags (Phase 1), entity/title/page enrichment (Phase 2), and dual-pool dedup/contradiction resolution (Phase 3). The server `handle_store_memory`, the eval seed pipeline, and the importer all call it. Do NOT re-implement a subset of enrichment in any consumer.
+- **Why.** The eval seed used to re-implement a divergent subset (`enrich_db_for_eval` = entity + title + page only), so every new write-time feature (importance/T8, event_date/T11+T20, episode/T2, fact-channel/T15, dual-pool/T14, summary-nodes/T18) silently lagged in the eval path and shipped merged-but-inert, re-discovered as "starved" each eval cycle. Sharing the code makes seed-vs-production fidelity hold by construction. This is the standard fix for **training-serving skew** — Google "Rules of ML", Rule #32: *"Re-use code between your training pipeline and your serving pipeline whenever possible"* → *"eliminates a source of training-serving skew."* See also 12-Factor X (dev/prod parity) and the technical-debt framing (Cunningham, OOPSLA '92): the eval shortcut was debt never repaid.
+- **New write-time feature checklist.** Add it inside `run_canonical_enrichment` (not in a consumer), then add a seed-completeness assert — a contract test (Fowler, `ContractTest`) — so the seed cache fails loud when the feature's artifact is missing rather than silently absent. A flag merged without its artifact present in the seed is unmeasurable.
 
 ### Async and locking
 - **Never hold a `tokio::sync::RwLock` read or write guard across `.await`.** Holding a read guard during an LLM call (which can take seconds) blocks all writers. Pattern: snapshot what you need from the guard into a scoped block that ends before the await, then call the async function with the cloned values. See `crates/origin-server/src/memory_routes.rs` `handle_store_memory` for an example of the post-ingest enrichment pattern.
@@ -405,3 +369,12 @@ Run this hygiene pass roughly once a week or whenever `git worktree list` exceed
 - Crate names: `origin-types`, `origin-core`, `origin-server`, `origin` (CLI), `origin-mcp` — all in this workspace. The desktop app crate `origin-app` lives in [7xuanlu/origin-app](https://github.com/7xuanlu/origin-app).
 - **Licenses**: all five workspace crates (`origin-types`, `origin-core`, `origin-server`, `origin` CLI, `origin-mcp`) are **Apache-2.0** via workspace inheritance. The desktop app in `origin-app` is **AGPL-3.0-only** (separate repo).
 - `origin-mcp` is in-tree at `crates/origin-mcp/` (merged from the old `7xuanlu/origin-mcp` repo on 2026-05-09 via `git subtree`). It talks to the daemon via HTTP at runtime and is published to npm as a standalone binary (`npx -y origin-mcp`).
+
+### Retrieval helpers location (PR-A, 2026-05-27)
+
+`crates/origin-core/src/retrieval/` is the canonical home for retrieval helpers (`hard_filters`, `signals`). The old `composite/` namespace was deleted along with the dead `CompositeWeights` scaffolding when PR #200 closed. Future retrieval-channel additions (page-channel in PR-B, etc.) live in `retrieval/`.
+
+### Retrieval env flags
+
+- `ORIGIN_ENABLE_TEMPORAL_SOFT_BOOST` — opt-in (default OFF). Multiplicatively BOOSTS in-window dated memories by `(1 + ORIGIN_TEMPORAL_BONUS)` while leaving outside-window / undated / no-cue rows neutral (×1.0, never dropped). Gentler successor to the `ORIGIN_ENABLE_TEMPORAL_FILTER` hard filter; the two are mutually exclusive (soft takes precedence when both are set).
+- `ORIGIN_TEMPORAL_BONUS` — additive bonus for the soft boost (default `0.5`). Clamped non-negative: a negative or non-finite value falls back to neutral (`0.0`) / the default so the boost can only lift a row, never demote it.

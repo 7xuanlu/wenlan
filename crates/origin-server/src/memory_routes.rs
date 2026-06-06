@@ -455,6 +455,7 @@ pub async fn handle_store_memory(
         pending_revision,
         entity_id: resolved_entity_id.clone(),
         quality: classified_quality.clone(),
+        importance: None,
         is_recap: false,
         enrichment_status: "raw".to_string(),
         supersede_mode,
@@ -736,182 +737,86 @@ pub async fn handle_store_memory(
         let agent_supplied_memory_type = caller_supplied_memory_type;
         let agent_supplied_profile_alias = caller_supplied_a_profile_alias;
         let agent_supplied_structured_fields = caller_supplied_structured_fields;
-        tokio::spawn(async move {
-            // Snapshot everything we need, then drop the guard.
-            let (db, llm, prompts, refinery, distillation, knowledge_path) = {
-                let s = state_clone.read().await;
-                let Some(db) = s.db.clone() else {
-                    return;
+        // Deferred-enrichment body, parameterised on a cooperative-cancel flag.
+        // `cancel = None` (the default-OFF path) keeps every step running to
+        // completion exactly as before. When debounced reflection is enabled,
+        // the debouncer passes `Some(flag)` and flips it on a newer same-agent
+        // write so this body short-circuits at the next clean step boundary.
+        let run_reflection =
+            move |cancel: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>| async move {
+                // Snapshot everything we need, then drop the guard.
+                let (db, llm, prompts, refinery, distillation, knowledge_path) = {
+                    let s = state_clone.read().await;
+                    let Some(db) = s.db.clone() else {
+                        return;
+                    };
+                    (
+                        db,
+                        s.llm.clone(),
+                        s.prompts.clone(),
+                        s.tuning.refinery.clone(),
+                        s.tuning.distillation.clone(),
+                        Some(origin_core::config::load_config().knowledge_path_or_default()),
+                    )
+                }; // read guard dropped here — writers may proceed
+
+                // Canonical post-store enrichment (Phase 1 classify/extract/
+                // apply_enrichment/tags + Phase 2 post-ingest + Phase 3 dual-pool)
+                // now lives in `origin_core::ingest` so the daemon, the eval seed
+                // pipeline, and the importer all enrich through ONE path. The
+                // snapshot above dropped the read guard; everything below operates on
+                // the cloned Arcs, so no RwLock guard is held across `.await`.
+                let opts = origin_core::ingest::EnrichmentOpts {
+                    initial_memory_type: initial_memory_type.clone(),
+                    initial_domain: initial_domain.clone(),
+                    initial_supersede_mode: initial_supersede_mode.clone(),
+                    initial_structured_fields: initial_structured_fields.clone(),
+                    agent_supplied_memory_type,
+                    agent_supplied_profile_alias,
+                    agent_supplied_structured_fields,
                 };
+                origin_core::ingest::run_canonical_enrichment(
+                    &db,
+                    &source_id_clone,
+                    &content_clone,
+                    entity_id_clone.as_deref(),
+                    llm.as_ref(),
+                    &prompts,
+                    &refinery,
+                    &distillation,
+                    knowledge_path.as_deref(),
+                    &opts,
+                    cancel.as_deref(),
+                )
+                .await;
+            };
+
+        // Dispatch: opt-in debounced reflection vs. verbatim detached spawn.
+        //
+        // Default OFF (`ORIGIN_ENABLE_REFLECTION_DEBOUNCE` unset/falsey): spawn
+        // immediately with `cancel = None` — byte-identical to the pre-T22 path
+        // (no debouncer touched, no coalescing, every store gets its own task).
+        //
+        // ON: route through the per-agent `ReflectionDebouncer`. A burst of
+        // rapid same-agent stores collapses to a single reflection of the last
+        // write — earlier in-flight reflections are cancelled at a clean step
+        // boundary, never dropped (the latest always runs). Snapshot the
+        // debouncer handle + window from the read guard, then DROP the guard
+        // before scheduling so no RwLock guard is held across the spawn/await.
+        if origin_core::db::reflection_debounce_enabled() {
+            let (debouncer, window) = {
+                let s = state.read().await;
                 (
-                    db,
-                    s.llm.clone(),
-                    s.prompts.clone(),
-                    s.tuning.refinery.clone(),
-                    s.tuning.distillation.clone(),
-                    Some(origin_core::config::load_config().knowledge_path_or_default()),
+                    s.reflection_debouncer.clone(),
+                    std::time::Duration::from_secs(s.tuning.refinery.reflection_debounce_secs),
                 )
-            }; // read guard dropped here — writers may proceed
-
-            // Phase 1: deferred classify + extract + apply_enrichment + tags.
-            let mut final_memory_type = initial_memory_type.clone();
-            let mut final_domain = initial_domain.clone();
-            let mut final_supersede_mode = initial_supersede_mode.clone();
-            let mut final_quality: Option<String> = None;
-            let mut final_structured_fields: Option<String> = initial_structured_fields.clone();
-            let mut final_retrieval_cue: Option<String> = None;
-            let mut classified_tags_async: Vec<String> = Vec::new();
-
-            if let Some(ref llm) = llm {
-                // Classify. Agent-supplied memory_type stays authoritative
-                // unless they passed a profile alias (in which case we take
-                // the classifier's concrete subtype). Other fields —
-                // domain/quality/tags — come from classify regardless.
-                let truncated: String = content_clone.chars().take(1000).collect();
-                // 30s matches `OnDeviceProvider::generate`'s own timeout at
-                // llm_provider.rs:210. 5s was too aggressive under a burst:
-                // when 10 concurrent MCP `remember` calls each fire classify
-                // + extract, the 10th call's turn at the single LLM worker
-                // lands at ~30s — with a 5s limit, 8 of 10 memories stayed
-                // at placeholder "fact" forever. 30s lets the full burst
-                // clear; anything beyond that is a real LLM stall and
-                // reverts to the placeholder gracefully.
-                match tokio::time::timeout(
-                    std::time::Duration::from_secs(30),
-                    llm.generate(origin_core::llm_provider::LlmRequest {
-                        system_prompt: Some(prompts.classify_memory_quality.clone()),
-                        user_prompt: truncated,
-                        max_tokens: 128,
-                        temperature: 0.1,
-                        label: None,
-                        timeout_secs: None,
-                    }),
-                )
-                .await
-                {
-                    Ok(Ok(output)) => {
-                        if let Some(c) = origin_core::llm_provider::parse_classify_response(&output)
-                        {
-                            if !agent_supplied_memory_type || agent_supplied_profile_alias {
-                                final_memory_type = c.memory_type.clone();
-                                // Recompute supersede_mode for the refined type.
-                                final_supersede_mode = if final_memory_type == "decision" {
-                                    "archive".to_string()
-                                } else {
-                                    "hide".to_string()
-                                };
-                            }
-                            if final_domain.is_none() {
-                                final_domain = c.space;
-                            }
-                            final_quality = c.quality;
-                            classified_tags_async = c.tags;
-                        }
-                    }
-                    Ok(Err(e)) => tracing::warn!("[store_memory async] classify failed: {e}"),
-                    Err(_) => tracing::warn!("[store_memory async] classify timed out after 5s"),
-                }
-
-                // Extract structured fields — only if the agent didn't supply them.
-                if !agent_supplied_structured_fields {
-                    let prompt = origin_core::memory_schema::extraction_prompt_with_template(
-                        &final_memory_type,
-                        &prompts.extract_structured_fields,
-                    );
-                    let truncated: String = content_clone.chars().take(1500).collect();
-                    // Same reasoning as the classify timeout above — 30s
-                    // is the provider's own cap; this is defense-in-depth
-                    // so a stalled extract doesn't hang the post_ingest task.
-                    match tokio::time::timeout(
-                        std::time::Duration::from_secs(30),
-                        llm.generate(origin_core::llm_provider::LlmRequest {
-                            system_prompt: Some(prompt),
-                            user_prompt: truncated,
-                            max_tokens: 256,
-                            temperature: 0.1,
-                            label: None,
-                            timeout_secs: None,
-                        }),
-                    )
-                    .await
-                    {
-                        Ok(Ok(output)) => {
-                            let (fields, cue) =
-                                origin_core::llm_provider::parse_extraction_response(&output);
-                            if let Some(f) = fields {
-                                final_structured_fields = Some(f);
-                            }
-                            if let Some(c) = cue {
-                                final_retrieval_cue = Some(c);
-                            }
-                        }
-                        Ok(Err(e)) => {
-                            tracing::warn!("[store_memory async] extract failed: {e}")
-                        }
-                        Err(_) => {
-                            tracing::warn!("[store_memory async] extract timed out after 5s")
-                        }
-                    }
-                }
-
-                // Apply the refined classification to the stored memory.
-                if let Err(e) = db
-                    .apply_enrichment(
-                        &source_id_clone,
-                        &final_memory_type,
-                        final_domain.as_deref(),
-                        final_quality.as_deref(),
-                        &final_supersede_mode,
-                        final_structured_fields.as_deref(),
-                        final_retrieval_cue.as_deref(),
-                    )
-                    .await
-                {
-                    tracing::warn!("[store_memory async] apply_enrichment failed: {e}");
-                }
-
-                // Auto-create a space for the classified domain if one came
-                // back from classify and the sync path didn't already see it.
-                if let Some(ref domain) = final_domain {
-                    if initial_domain.as_deref() != Some(domain.as_str()) {
-                        if let Err(e) = db.auto_create_space_if_needed(domain).await {
-                            tracing::warn!("[store_memory async] auto-create space failed: {e}");
-                        }
-                    }
-                }
-
-                // Write tags to MemoryDB.
-                if !classified_tags_async.is_empty() {
-                    if let Err(e) = db
-                        .set_document_tags("memory", &source_id_clone, classified_tags_async)
-                        .await
-                    {
-                        tracing::warn!("[store_memory async] set_document_tags failed: {e}");
-                    }
-                }
-            }
-
-            // Phase 2: existing post-ingest enrichment (entity linking,
-            // title enrichment, page growth).
-            if let Err(e) = origin_core::post_ingest::run_post_ingest_enrichment(
-                &db,
-                &source_id_clone,
-                &content_clone,
-                entity_id_clone.as_deref(),
-                Some(final_memory_type.as_str()),
-                final_domain.as_deref(),
-                final_structured_fields.as_deref(),
-                llm.as_ref(),
-                &prompts,
-                &refinery,
-                &distillation,
-                knowledge_path.as_deref(),
-            )
-            .await
-            {
-                tracing::warn!("[store_memory] post-ingest enrichment failed: {e}");
-            }
-        });
+            };
+            debouncer.schedule(&resolved_agent, window, move |flag| {
+                run_reflection(Some(flag))
+            });
+        } else {
+            tokio::spawn(run_reflection(None));
+        }
     }
 
     // Fire-once onboarding milestone checks (ingest side).
@@ -1028,6 +933,23 @@ pub async fn handle_store_memory(
     }))
 }
 
+/// Splits a flat Vec<SearchResult> (as returned by `search_memory_cross_rerank`)
+/// into memory rows and page-channel rows.
+///
+/// Returns `(memory_rows, Some(page_rows))` when any page rows are present,
+/// or `(memory_rows, None)` when the slice contains no page rows.
+/// Pure function — no I/O, easy to unit-test.
+pub(crate) fn partition_search_pages(
+    rows: Vec<origin_types::memory::SearchResult>,
+) -> (
+    Vec<origin_types::memory::SearchResult>,
+    Option<Vec<origin_types::memory::SearchResult>>,
+) {
+    let (pages, memories): (Vec<_>, Vec<_>) = rows.into_iter().partition(|r| r.source == "page");
+    let supplemental = if pages.is_empty() { None } else { Some(pages) };
+    (memories, supplemental)
+}
+
 /// POST /api/memory/search
 pub async fn handle_search_memory(
     State(state): State<Arc<RwLock<ServerState>>>,
@@ -1041,28 +963,62 @@ pub async fn handle_search_memory(
     let start = std::time::Instant::now();
 
     let results = {
-        let s = state.read().await;
-        let db = s.db.as_ref().ok_or(ServerError::DbNotInitialized)?;
-        db.search_memory(
-            &req.query,
-            req.limit,
-            req.memory_type.as_deref(),
-            req.space.as_deref(),
-            req.source_agent.as_deref(),
-            None,
-            None,
-            None,
-        )
-        .await
-        .map_err(|e| ServerError::SearchFailed(e.to_string()))?
+        // Snapshot the Arcs we need before any await so we never hold the
+        // read guard across the search call (LLM reranker or model load can
+        // be slow; see AGENTS.md "Async and locking" guidance).
+        let (db, reranker) = {
+            let s = state.read().await;
+            let db = s.db.as_ref().ok_or(ServerError::DbNotInitialized)?.clone();
+            let reranker = s.reranker.clone();
+            (db, reranker)
+        };
+        if req.rerank {
+            if reranker.is_none() {
+                tracing::warn!(
+                    "[search] rerank=true requested but no reranker wired (set ORIGIN_RERANKER_ENABLED=1); falling back to plain hybrid search"
+                );
+            }
+            db.search_memory_cross_rerank(
+                &req.query,
+                req.limit,
+                req.memory_type.as_deref(),
+                req.space.as_deref(),
+                req.source_agent.as_deref(),
+                reranker,
+            )
+            .await
+            .map_err(|e| ServerError::SearchFailed(e.to_string()))?
+        } else {
+            db.search_memory(
+                &req.query,
+                req.limit,
+                req.memory_type.as_deref(),
+                req.space.as_deref(),
+                req.source_agent.as_deref(),
+                None,
+                None,
+                None,
+            )
+            .await
+            .map_err(|e| ServerError::SearchFailed(e.to_string()))?
+        }
     };
 
-    let source_ids: Vec<String> = results.iter().map(|r| r.source_id.clone()).collect();
+    // Filter to memory rows ONLY before access_log + agent_activity. Page-channel
+    // (PR-B) returns `source="page"` rows whose `source_id` (`page_*`) is NOT a
+    // valid memory id; persisting those into `access_log` or `agent_activity`
+    // breaks downstream analytics that resolve ids against the `memories` table
+    // (e.g. /api/retrievals/recent). See 2026-05-28 adversarial review.
+    let memory_source_ids: Vec<String> = results
+        .iter()
+        .filter(|r| r.source == "memory")
+        .map(|r| r.source_id.clone())
+        .collect();
     {
         let s = state.read().await;
-        s.access_tracker.record_accesses(&source_ids);
+        s.access_tracker.record_accesses(&memory_source_ids);
         if let Some(db) = s.db.as_ref() {
-            if let Err(e) = db.log_accesses(&source_ids).await {
+            if let Err(e) = db.log_accesses(&memory_source_ids).await {
                 tracing::warn!("Failed to log accesses: {}", e);
             }
         }
@@ -1081,7 +1037,13 @@ pub async fn handle_search_memory(
         let detail = format!("found {} results", results.len());
         if let Some(db) = s.db.as_ref() {
             if let Err(e) = db
-                .log_agent_activity(&agent, "search", &source_ids, Some(&req.query), &detail)
+                .log_agent_activity(
+                    &agent,
+                    "search",
+                    &memory_source_ids,
+                    Some(&req.query),
+                    &detail,
+                )
                 .await
             {
                 tracing::warn!("Failed to log agent activity: {}", e);
@@ -1090,7 +1052,12 @@ pub async fn handle_search_memory(
     }
 
     let took_ms = start.elapsed().as_secs_f64() * 1000.0;
-    Ok(Json(SearchMemoryResponse { results, took_ms }))
+    let (results, supplemental_pages) = partition_search_pages(results);
+    Ok(Json(SearchMemoryResponse {
+        results,
+        took_ms,
+        supplemental_pages,
+    }))
 }
 
 /// POST /api/memory/confirm/{source_id}
@@ -3672,6 +3639,201 @@ mod search_agent_attribution_tests {
                 .map(|a| (a.action.clone(), a.agent_name.clone()))
                 .collect::<Vec<_>>()
         );
+    }
+}
+
+/// Wiring tests for the `rerank` flag on `/api/memory/search`.
+///
+/// These verify that the handler reads `ServerState.reranker` and routes
+/// `rerank=true` through `search_memory_cross_rerank`. The `NoopReranker`
+/// stand-in keeps these fast and dependency-free — no model weights, no
+/// cross-encoder download. The rerank quality itself is covered by
+/// `origin_core::db::tests::test_search_memory_cross_rerank_*`.
+#[cfg(test)]
+mod search_rerank_tests {
+    use axum::body::Body;
+    use axum::http::{Request, StatusCode};
+    use std::sync::Arc;
+    use tokio::sync::RwLock;
+    use tower::ServiceExt;
+
+    use crate::state::ServerState;
+    use origin_core::reranker::{NoopReranker, Reranker};
+
+    async fn build_state(with_reranker: bool) -> (Arc<RwLock<ServerState>>, tempfile::TempDir) {
+        let tmp = tempfile::tempdir().expect("failed to create tempdir");
+        let emitter: Arc<dyn origin_core::events::EventEmitter> =
+            Arc::new(origin_core::events::NoopEmitter);
+        let db = origin_core::db::MemoryDB::new(tmp.path(), emitter)
+            .await
+            .expect("MemoryDB::new should succeed");
+        let reranker: Option<Arc<dyn Reranker>> = if with_reranker {
+            Some(Arc::new(NoopReranker))
+        } else {
+            None
+        };
+        let server_state = ServerState {
+            db: Some(Arc::new(db)),
+            reranker,
+            ..Default::default()
+        };
+        (Arc::new(RwLock::new(server_state)), tmp)
+    }
+
+    async fn search_response(
+        app: axum::Router,
+        body: &'static str,
+    ) -> origin_types::responses::SearchMemoryResponse {
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/memory/search")
+                    .header("content-type", "application/json")
+                    .body(Body::from(body))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK, "search should succeed");
+        let bytes = axum::body::to_bytes(resp.into_body(), 1_048_576)
+            .await
+            .unwrap();
+        serde_json::from_slice(&bytes).expect("parse SearchMemoryResponse")
+    }
+
+    #[tokio::test]
+    async fn rerank_true_with_noop_reranker_returns_same_shape_as_plain_search() {
+        // With reranker wired (NoopReranker) and an empty DB, both `rerank=true`
+        // and `rerank=false` return the same response shape (empty results,
+        // `took_ms` populated). This locks in: the handler doesn't fail when
+        // the reranker is consulted, and the response envelope is unchanged.
+        let (state, _tmp) = build_state(true).await;
+        let app = crate::router::build_router(state);
+
+        let plain = search_response(app.clone(), r#"{"query":"hello"}"#).await;
+        let reranked = search_response(app, r#"{"query":"hello","rerank":true}"#).await;
+
+        assert_eq!(plain.results.len(), reranked.results.len());
+        assert!(plain.took_ms >= 0.0);
+        assert!(reranked.took_ms >= 0.0);
+    }
+
+    #[tokio::test]
+    async fn rerank_true_without_reranker_falls_back_and_returns_ok() {
+        // When `rerank=true` is requested but no reranker is wired, the
+        // handler logs a warning and falls back to plain hybrid search
+        // rather than failing the request.
+        let (state, _tmp) = build_state(false).await;
+        let app = crate::router::build_router(state);
+
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/memory/search")
+                    .header("content-type", "application/json")
+                    .body(Body::from(r#"{"query":"hello","rerank":true}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            resp.status(),
+            StatusCode::OK,
+            "rerank=true without a wired reranker should fall back, not fail"
+        );
+    }
+}
+
+#[cfg(test)]
+mod partition_pages_tests {
+    use origin_types::memory::SearchResult;
+
+    fn make_result(source: &str, id: &str) -> SearchResult {
+        SearchResult {
+            id: id.to_string(),
+            content: "body".to_string(),
+            source: source.to_string(),
+            source_id: id.to_string(),
+            title: String::new(),
+            url: None,
+            chunk_index: 0,
+            last_modified: 0,
+            score: 1.0,
+            chunk_type: None,
+            language: None,
+            semantic_unit: None,
+            memory_type: None,
+            space: None,
+            source_agent: None,
+            confidence: None,
+            confirmed: None,
+            stability: None,
+            supersedes: None,
+            summary: None,
+            entity_id: None,
+            entity_name: None,
+            quality: None,
+            importance: None,
+            event_date: None,
+            is_archived: false,
+            is_recap: false,
+            structured_fields: None,
+            retrieval_cue: None,
+            source_text: None,
+            raw_score: 0.0,
+            version: 0,
+            pending_revision: false,
+            merged_from: None,
+            last_delta_summary: None,
+        }
+    }
+
+    /// No page rows — supplemental_pages must be None.
+    #[test]
+    fn no_pages_gives_none() {
+        let rows = vec![
+            make_result("memory", "mem_1"),
+            make_result("memory", "mem_2"),
+        ];
+        let (mems, pages) = super::partition_search_pages(rows);
+        assert_eq!(mems.len(), 2);
+        assert!(pages.is_none());
+    }
+
+    /// Mixed rows: page rows isolated, memory rows preserved, `results.len() <= limit`.
+    #[test]
+    fn page_rows_isolated_from_memory_rows() {
+        let rows = vec![
+            make_result("memory", "mem_1"),
+            make_result("page", "page_1"),
+            make_result("memory", "mem_2"),
+            make_result("page", "page_2"),
+        ];
+        let (mems, pages) = super::partition_search_pages(rows);
+        assert_eq!(mems.len(), 2, "memory rows");
+        assert!(mems.iter().all(|r| r.source == "memory"));
+        let pages = pages.expect("should have page rows");
+        assert_eq!(pages.len(), 2, "page rows");
+        assert!(pages.iter().all(|r| r.source == "page"));
+    }
+
+    /// All rows are pages — memories empty, supplemental Some.
+    #[test]
+    fn all_pages_no_memories() {
+        let rows = vec![make_result("page", "page_a"), make_result("page", "page_b")];
+        let (mems, pages) = super::partition_search_pages(rows);
+        assert!(mems.is_empty());
+        assert_eq!(pages.unwrap().len(), 2);
+    }
+
+    /// Empty input — both empty / None.
+    #[test]
+    fn empty_input() {
+        let (mems, pages) = super::partition_search_pages(vec![]);
+        assert!(mems.is_empty());
+        assert!(pages.is_none());
     }
 }
 
