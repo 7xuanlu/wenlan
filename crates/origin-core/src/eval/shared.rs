@@ -2465,7 +2465,7 @@ mod tests {
         let mode = EnrichmentMode::OnDevice(llm);
 
         // Empty seed closure: it's a cache hit, so no re-seed should occur.
-        let db = open_or_seed_scenario_db(dir.path(), emb.clone(), || vec![], &mode)
+        let db = open_or_seed_scenario_db(dir.path(), emb.clone(), Vec::new, &mode)
             .await
             .unwrap();
 

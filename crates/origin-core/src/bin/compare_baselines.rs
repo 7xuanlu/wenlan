@@ -30,7 +30,7 @@
 //!   2 — refused: inputs not comparable, or paired-mcnemar found no matched
 //!       per-case rows (likely both baselines pre-date the per-case wiring).
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use origin_core::eval::report::{
     comparable_env_hash, paired_mcnemar, EvalReport, PairedMcnemarReport,
@@ -79,14 +79,14 @@ fn print_usage() {
     );
 }
 
-fn load_report(path: &PathBuf) -> anyhow::Result<EvalReport> {
+fn load_report(path: &Path) -> anyhow::Result<EvalReport> {
     serde_json::from_slice(&std::fs::read(path)?)
         .map_err(|e| anyhow::anyhow!("failed to parse {}: {}", path.display(), e))
 }
 
 fn enforce_comparable(
-    before_path: &PathBuf,
-    after_path: &PathBuf,
+    before_path: &Path,
+    after_path: &Path,
     before: &EvalReport,
     after: &EvalReport,
 ) -> Option<()> {
