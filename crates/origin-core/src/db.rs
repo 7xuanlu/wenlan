@@ -13838,6 +13838,30 @@ impl MemoryDB {
         })
     }
 
+    /// Top-N entities by memory_entities degree, with their names. Eyeball aid.
+    pub async fn top_memory_entity_hubs(
+        &self,
+        n: usize,
+    ) -> Result<Vec<(i64, String)>, OriginError> {
+        let conn = self.conn.lock().await;
+        let mut rows = conn
+            .query(
+                "SELECT me.entity_id, COUNT(*) c, COALESCE(e.name, me.entity_id) nm \
+                 FROM memory_entities me LEFT JOIN entities e ON e.id = me.entity_id \
+                 GROUP BY me.entity_id ORDER BY c DESC LIMIT ?1",
+                libsql::params![n as i64],
+            )
+            .await
+            .map_err(|e| OriginError::VectorDb(format!("top_hubs: {e}")))?;
+        let mut out = Vec::new();
+        while let Ok(Some(row)) = rows.next().await {
+            let c: i64 = row.get(1).unwrap_or(0);
+            let nm: String = row.get(2).unwrap_or_default();
+            out.push((c, nm));
+        }
+        Ok(out)
+    }
+
     /// Walk memories that have no entity linkage and enrich them via `extract_fn`.
     ///
     /// Memories ingested while the LLM was unavailable have `entity_id IS NULL`

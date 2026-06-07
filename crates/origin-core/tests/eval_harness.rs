@@ -7346,3 +7346,110 @@ async fn query_intent_llm_probe() {
         paired_out_dir().display()
     );
 }
+
+/// TRACK 1 graph-substrate gate (#10). Copies the populated scenario_seeded
+/// locomo_v1 DB, runs the entity-linking sweep with the FINE primitive
+/// (`extract_entities_for_content`, NOT the speaker-level single-entity one),
+/// then prints the `memory_entities` degree distribution. Decides whether a
+/// fine entity->memory bridge exists (Option A viable) or it is still a
+/// speaker-pool hairball (graph-first insolvent).
+///
+/// Run (unsandboxed, GPU). Smoke first with a small cap, then full:
+///   SCENARIO_DB=$HOME/.cache/origin-eval/scenario_seeded/locomo_v1/origin_memory.db \
+///   GATE_MAX_MEMORIES=300 \
+///   CARGO_TARGET_DIR=/Users/lucian/Repos/origin/target \
+///     cargo test -p origin-core --features eval-harness --test eval_harness \
+///     graph_substrate_gate_locomo -- --ignored --nocapture --test-threads=1
+#[tokio::test]
+#[ignore = "needs local LLM + scenario_seeded DB; L7 manual. Set SCENARIO_DB"]
+async fn graph_substrate_gate_locomo() {
+    use std::sync::Arc;
+    let src = std::env::var("SCENARIO_DB").unwrap_or_else(|_| {
+        format!(
+            "{}/.cache/origin-eval/scenario_seeded/locomo_v1/origin_memory.db",
+            std::env::var("HOME").unwrap()
+        )
+    });
+    if !std::path::Path::new(&src).exists() {
+        println!("[gate] SKIP (missing {src})");
+        return;
+    }
+    // Work on a COPY -- never mutate the canonical seed.
+    let tmp = tempfile::tempdir().unwrap();
+    let dst = tmp.path().join("origin_memory.db");
+    std::fs::copy(&src, &dst).expect("copy seed");
+    let db = origin_core::db::MemoryDB::new(tmp.path(), Arc::new(origin_core::events::NoopEmitter))
+        .await
+        .expect("open seed copy");
+
+    let before = db.memory_entities_degree_stats().await.unwrap();
+    println!("[gate] BEFORE memory_entities: {before:?}");
+
+    let llm: Arc<dyn origin_core::llm_provider::LlmProvider> = Arc::new(
+        origin_core::llm_provider::OnDeviceProvider::new_with_model(Some("qwen3.5-9b")).unwrap(),
+    );
+    let prompts = origin_core::prompts::PromptRegistry::default();
+    let cap: Option<usize> = std::env::var("GATE_MAX_MEMORIES")
+        .ok()
+        .and_then(|v| v.parse().ok());
+
+    let processed = run_capped_fine_sweep(&db, &llm, &prompts, 32, cap).await;
+    println!("[gate] processed {processed} memories");
+
+    let after = db.memory_entities_degree_stats().await.unwrap();
+    println!("[gate] AFTER memory_entities: {after:?}");
+    print_top_hubs(&db, 20).await;
+    println!(
+        "[gate] DECISION INPUTS: p50={} p90={} max={} hubs>50={} memories_linked={}",
+        after.p50_memories_per_entity,
+        after.p90_memories_per_entity,
+        after.max_memories_per_entity,
+        after.entities_gt_50,
+        after.memories_linked
+    );
+}
+
+/// Run the enrichment sweep with the FINE entity primitive, optionally capped at
+/// `cap` memories total (for a fast smoke). Returns memories processed.
+async fn run_capped_fine_sweep(
+    db: &origin_core::db::MemoryDB,
+    llm: &std::sync::Arc<dyn origin_core::llm_provider::LlmProvider>,
+    prompts: &origin_core::prompts::PromptRegistry,
+    batch_size: usize,
+    cap: Option<usize>,
+) -> usize {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let seen = AtomicUsize::new(0);
+    let extract = |content: String| {
+        let llm = llm.clone();
+        let n = seen.fetch_add(1, Ordering::SeqCst) + 1;
+        let should_stop = matches!(cap, Some(c) if n > c);
+        async move {
+            // Cap reached: return no entities so the sweep links nothing further.
+            if should_stop {
+                return Ok::<Vec<String>, origin_core::error::OriginError>(Vec::new());
+            }
+            origin_core::kg::entity_extraction::extract_entities_for_content(
+                db, &llm, prompts, &content,
+            )
+            .await
+        }
+    };
+    db.run_enrichment_sweep(extract, batch_size)
+        .await
+        .unwrap_or(0)
+}
+
+/// Print the top-N hub entities (count, name) from memory_entities for eyeball
+/// classification (speaker pool vs concept bridge).
+async fn print_top_hubs(db: &origin_core::db::MemoryDB, n: usize) {
+    match db.top_memory_entity_hubs(n).await {
+        Ok(hubs) => {
+            println!("[gate] TOP-{n} hubs (count, name):");
+            for (c, name) in hubs {
+                println!("    {c:5}  {name}");
+            }
+        }
+        Err(e) => println!("[gate] top_hubs err: {e}"),
+    }
+}
