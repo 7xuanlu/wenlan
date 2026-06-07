@@ -96,6 +96,60 @@ pub fn related_frontmatter(related_titles: &[String]) -> String {
     format!("related: [{}]\n", quoted.join(", "))
 }
 
+use std::path::Path;
+
+/// Subdir under `knowledge_path` for read-only source stubs. The page_watcher
+/// scans only the top-level `.md` files, so this subdir is never synced back.
+pub const SOURCES_STUB_DIR: &str = "_sources";
+
+/// Map a (possibly unsafe, imported) memory id to a filesystem/wikilink-safe
+/// token. Stored ids are already safe `mem_*`; imported ids may carry
+/// path-hostile chars. Reversible: each distinct input maps to a distinct
+/// token (unsafe bytes are percent-style hex-escaped, never collapsed).
+pub fn sanitize_stub_id(id: &str) -> String {
+    let mut out = String::with_capacity(id.len());
+    for c in id.chars() {
+        if c.is_ascii_alphanumeric() || c == '_' || c == '-' {
+            out.push(c);
+        } else {
+            out.push('_');
+            for b in c.to_string().as_bytes() {
+                out.push_str(&format!("{b:02x}"));
+            }
+        }
+    }
+    out
+}
+
+/// Stub filename for a memory id, e.g. `mem_1.md`.
+pub fn stub_filename(id: &str) -> String {
+    format!("{}.md", sanitize_stub_id(id))
+}
+
+/// Project a read-only stub note for each cited memory id under
+/// `<knowledge_path>/_sources/`. Idempotent: rewrites the stub each call.
+pub fn project_stubs_for_page(
+    knowledge_path: &Path,
+    page_id: &str,
+    source_memory_ids: &[String],
+) -> std::io::Result<()> {
+    if source_memory_ids.is_empty() {
+        return Ok(());
+    }
+    let dir = knowledge_path.join(SOURCES_STUB_DIR);
+    std::fs::create_dir_all(&dir)?;
+    for id in source_memory_ids {
+        let path = dir.join(stub_filename(id));
+        let body = format!(
+            "---\ntitle: \"{id}\"\norigin_stub: {id}\n---\n\n\
+             This is a read-only source projection for memory `{id}`, cited by \
+             page `{page_id}`. Edit the memory in Origin, not this file.\n"
+        );
+        std::fs::write(&path, body)?;
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -191,5 +245,37 @@ mod tests {
             .and_then(|v| v.as_sequence())
             .expect("related seq");
         assert_eq!(related[0].as_str().unwrap(), "[[My \"Quoted\" Page]]");
+    }
+
+    #[test]
+    fn sanitize_stub_id_passes_safe_mem_ids() {
+        assert_eq!(sanitize_stub_id("mem_abc123"), "mem_abc123");
+        assert_eq!(sanitize_stub_id("mem_1"), "mem_1");
+    }
+
+    #[test]
+    fn sanitize_stub_id_escapes_unsafe_chars() {
+        // Imported ids may carry slashes/spaces/dots that break filenames.
+        let unsafe_id = "mem_a/b c.d";
+        let safe = sanitize_stub_id(unsafe_id);
+        assert!(!safe.contains('/'));
+        assert!(!safe.contains(' '));
+        // Reversible: distinct ids map to distinct safe names.
+        assert_ne!(sanitize_stub_id("mem_a/b"), sanitize_stub_id("mem_a-b"));
+    }
+
+    #[test]
+    fn project_stubs_writes_read_only_notes_under_sources_dir() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let ids = ["mem_1".to_string(), "mem_2".to_string()];
+        project_stubs_for_page(dir.path(), "page_a", &ids).unwrap();
+        let p1 = dir.path().join("_sources").join("mem_1.md");
+        let p2 = dir.path().join("_sources").join("mem_2.md");
+        assert!(p1.exists());
+        assert!(p2.exists());
+        let body = std::fs::read_to_string(&p1).unwrap();
+        // Stub identifies the memory and is marked a read-only projection.
+        assert!(body.contains("mem_1"));
+        assert!(body.contains("read-only"));
     }
 }

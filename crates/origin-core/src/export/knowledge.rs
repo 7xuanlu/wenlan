@@ -57,6 +57,15 @@ impl KnowledgeWriter {
         let content = render_markdown(page);
         std::fs::write(&file_path, &content)?;
 
+        // Project read-only source stubs so [[mem_*]] resolves in Obsidian.
+        if let Err(e) = crate::export::provenance::project_stubs_for_page(
+            &self.path,
+            &page.id,
+            &page.source_memory_ids,
+        ) {
+            log::warn!("[knowledge] stub projection failed for {}: {e}", page.id);
+        }
+
         state.pages.insert(
             page.id.clone(),
             PageFileState {
