@@ -164,11 +164,12 @@ async fn sync_one_file(
         return Ok(Outcome::SkippedDaemonAhead { page_id });
     }
 
-    // Trim trailing newlines on both sides — render_markdown emits a
-    // trailing `\n` and editors tend to add their own. Otherwise a no-op
-    // save would look like a real edit forever.
-    let body_norm = body.trim_end_matches('\n');
-    let db_norm = existing.content.trim_end_matches('\n');
+    // Strip the export-only delimiter Sources block from BOTH sides before
+    // the diff. The projected file always carries the generated block while
+    // Page.content never does; a raw compare would mark every page
+    // user_edited on the first tick and lock the refinery out.
+    let body_norm = crate::export::provenance::canonicalize_page_body(body);
+    let db_norm = crate::export::provenance::canonicalize_page_body(&existing.content);
     if body_norm == db_norm {
         return Ok(Outcome::Unchanged);
     }
@@ -177,7 +178,7 @@ async fn sync_one_file(
     // memory provenance. Sources change only via /distill refresh or
     // explicit POST.
     let req = origin_types::requests::UpdatePageRequest {
-        content: body_norm.to_string(),
+        content: body_norm.clone(),
         source_memory_ids: existing.source_memory_ids.clone(),
     };
     // Pass knowledge_path so update_page re-projects the md with the new
@@ -457,5 +458,52 @@ mod tests {
         let missing = std::path::PathBuf::from("/tmp/origin-page-watcher-nonexistent");
         let stats = sync_filesystem_edits(&db, &missing).await.unwrap();
         assert_eq!(stats, WatcherStats::default());
+    }
+
+    #[tokio::test]
+    async fn freshly_projected_page_is_unchanged_not_user_edited() {
+        let (db, _ddir) = fresh_db().await;
+        let knowledge_dir = TempDir::new().unwrap();
+        let page = sample_page("page_fresh", "Fresh Topic", "## Overview\nbody prose here");
+        let now = chrono::Utc::now().to_rfc3339();
+        db.insert_page(
+            &page.id,
+            &page.title,
+            None,
+            &page.content,
+            None,
+            None,
+            &["mem_seed"],
+            &now,
+        )
+        .await
+        .unwrap();
+        // Project via the live writer — the .md now carries the delimiter
+        // Sources block + sources: frontmatter that Page.content lacks.
+        let writer = KnowledgeWriter::new(knowledge_dir.path().to_path_buf());
+        writer.write_page(&page).unwrap();
+
+        // First watcher tick must see the projection as Unchanged, NOT a
+        // user edit — otherwise the refinery is locked out of every page.
+        let stats = sync_filesystem_edits(&db, knowledge_dir.path())
+            .await
+            .unwrap();
+        assert_eq!(
+            stats.applied, 0,
+            "fresh projection must not apply; got {:?}",
+            stats
+        );
+        assert_eq!(
+            stats.scanned, 1,
+            "exactly one md file should be scanned; got {:?}",
+            stats
+        );
+        assert_eq!(
+            stats.skipped_unchanged, 1,
+            "fresh projection must be skipped_unchanged; got {:?}",
+            stats
+        );
+        let p = db.get_page("page_fresh").await.unwrap().unwrap();
+        assert!(!p.user_edited);
     }
 }
