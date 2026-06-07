@@ -7427,7 +7427,17 @@ async fn run_capped_fine_sweep(
         if cap.is_some_and(|c| attempted.len() >= c) {
             break;
         }
-        let batch = db.unlinked_memories(batch_size).await.unwrap_or_default();
+        // Grow the fetch window past already-attempted (zero-entity) rows, which
+        // never leave the unlinked set and pile up at the source_id front. Without
+        // this, a front cluster of >= batch_size zero-entity rows would make every
+        // fetched row already-attempted -> fresh empty -> early break, under-counting
+        // links. attempted.len() >= the zero-entity-attempted count, so the window
+        // always surfaces >= batch_size fresh rows when any remain. O(n^2) queries
+        // total, fine for a one-shot L7 gate.
+        let batch = db
+            .unlinked_memories(batch_size + attempted.len())
+            .await
+            .unwrap_or_default();
         // Only rows we have not already attempted; if none are fresh, no further
         // progress is possible (the rest are zero-entity memories) -> stop.
         let fresh: Vec<(String, String)> = batch
@@ -7449,6 +7459,9 @@ async fn run_capped_fine_sweep(
             if !ents.is_empty() {
                 let refs: Vec<&str> = ents.iter().map(|s| s.as_str()).collect();
                 let _ = db.link_memory_entities(&sid, &refs).await;
+                // NB: we intentionally do NOT also set the legacy `entity_id` column
+                // (run_enrichment_sweep did) — the gate reads only the memory_entities
+                // junction, so the junction row alone is sufficient + correct here.
             }
             attempted.insert(sid);
         }
