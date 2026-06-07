@@ -171,6 +171,18 @@ async fn sync_one_file(
     let body_norm = crate::export::provenance::canonicalize_page_body(body);
     let db_norm = crate::export::provenance::canonicalize_page_body(&existing.content);
     if body_norm == db_norm {
+        // Canonicalized prose is identical, but the raw bytes may differ
+        // (user touched the protected Sources block). If so, re-project from
+        // DB truth so the file stops lying about its sources; otherwise it
+        // really is unchanged.
+        let raw_body = body.trim_end_matches('\n');
+        let fresh = crate::export::knowledge::render_markdown_for(&existing);
+        let (_, fresh_body) = obsidian::extract_frontmatter(&fresh);
+        if raw_body != fresh_body.trim_end_matches('\n') {
+            let writer =
+                crate::export::knowledge::KnowledgeWriter::new(knowledge_path.to_path_buf());
+            writer.write_page(&existing)?;
+        }
         return Ok(Outcome::Unchanged);
     }
 
@@ -561,6 +573,59 @@ mod tests {
             "no mem_* link rows should persist; got {:?}",
             links
         );
+    }
+
+    #[tokio::test]
+    async fn edited_sources_block_on_disk_is_reprojected_to_db_truth() {
+        use crate::export::provenance::{SOURCES_BLOCK_END, SOURCES_BLOCK_START};
+        let (db, _ddir) = fresh_db().await;
+        let knowledge_dir = TempDir::new().unwrap();
+        let mut page = sample_page("page_block", "Block Topic", "## Overview\ncanonical prose");
+        page.source_memory_ids = vec!["mem_real".to_string()];
+        let now = chrono::Utc::now().to_rfc3339();
+        db.insert_page(
+            "page_block",
+            &page.title,
+            None,
+            &page.content,
+            None,
+            None,
+            &["mem_real"],
+            &now,
+        )
+        .await
+        .unwrap();
+        let writer = KnowledgeWriter::new(knowledge_dir.path().to_path_buf());
+        writer.write_page(&page).unwrap();
+        let md_path = knowledge_dir
+            .path()
+            .join(writer.page_filename(&page.id).expect("state has file"));
+
+        // User tampers with ONLY the protected block (adds a fake source),
+        // leaving the canonicalized prose identical.
+        let projected = std::fs::read_to_string(&md_path).unwrap();
+        let tampered = projected.replace(
+            &format!("{SOURCES_BLOCK_START}\n## Sources\n- [[mem_real]]\n{SOURCES_BLOCK_END}"),
+            &format!("{SOURCES_BLOCK_START}\n## Sources\n- [[mem_real]]\n- [[mem_FAKE]]\n{SOURCES_BLOCK_END}"),
+        );
+        assert_ne!(
+            tampered, projected,
+            "replacement must have matched the block"
+        );
+        std::fs::write(&md_path, &tampered).unwrap();
+
+        let stats = sync_filesystem_edits(&db, knowledge_dir.path())
+            .await
+            .unwrap();
+        assert_eq!(stats.applied, 0); // canonicalized prose unchanged → not a user edit
+        let p = db.get_page("page_block").await.unwrap().unwrap();
+        assert!(!p.content.contains(SOURCES_BLOCK_START)); // DB stays canonical
+        assert!(!p.content.contains("mem_FAKE"));
+        assert!(!p.user_edited);
+        // The file on disk was re-projected from DB truth — fake source gone.
+        let after = std::fs::read_to_string(&md_path).unwrap();
+        assert!(!after.contains("mem_FAKE"));
+        assert!(after.contains("[[mem_real]]"));
     }
 
     /// Task 5: pure projection + watcher tick with NO user edit must produce

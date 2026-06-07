@@ -178,6 +178,14 @@ impl KnowledgeWriter {
     }
 }
 
+/// Public projection of a page's markdown (frontmatter + body + the delimiter
+/// Sources block), so callers outside this module (the watcher's
+/// protected-block re-projection check) can compute the canonical projection
+/// without duplicating it.
+pub fn render_markdown_for(page: &Page) -> String {
+    render_markdown(page)
+}
+
 fn render_markdown(page: &Page) -> String {
     use crate::export::provenance::{
         related_frontmatter, render_sources_block, sources_frontmatter, yaml_quoted,
