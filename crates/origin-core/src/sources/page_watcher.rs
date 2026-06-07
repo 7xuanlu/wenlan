@@ -178,7 +178,7 @@ async fn sync_one_file(
     // memory provenance. Sources change only via /distill refresh or
     // explicit POST.
     let req = origin_types::requests::UpdatePageRequest {
-        content: body_norm.clone(),
+        content: body_norm,
         source_memory_ids: existing.source_memory_ids.clone(),
     };
     // Pass knowledge_path so update_page re-projects the md with the new
@@ -505,5 +505,61 @@ mod tests {
         );
         let p = db.get_page("page_fresh").await.unwrap().unwrap();
         assert!(!p.user_edited);
+    }
+
+    #[tokio::test]
+    async fn genuine_prose_edit_with_block_present_applies_block_free() {
+        let (db, _ddir) = fresh_db().await;
+        let knowledge_dir = TempDir::new().unwrap();
+        let page = sample_page("page_edit", "Edit Topic", "## Overview\noriginal prose");
+        let now = chrono::Utc::now().to_rfc3339();
+        db.insert_page(
+            &page.id,
+            &page.title,
+            None,
+            &page.content,
+            None,
+            None,
+            &["mem_e"],
+            &now,
+        )
+        .await
+        .unwrap();
+        let writer = KnowledgeWriter::new(knowledge_dir.path().to_path_buf());
+        let fname = writer.write_page(&page).unwrap();
+        let md_path = knowledge_dir.path().join(&fname);
+
+        // The projected file has the Sources block. User edits the PROSE only,
+        // leaving the block intact.
+        let projected = std::fs::read_to_string(&md_path).unwrap();
+        let edited = projected.replace("original prose", "edited prose by the user");
+        assert_ne!(edited, projected, "prose replacement must have matched");
+        std::fs::write(&md_path, &edited).unwrap();
+
+        let stats = sync_filesystem_edits(&db, knowledge_dir.path())
+            .await
+            .unwrap();
+        assert_eq!(
+            stats.applied, 1,
+            "genuine prose edit must apply; got {:?}",
+            stats
+        );
+        let p = db.get_page("page_edit").await.unwrap().unwrap();
+        assert!(p.content.contains("edited prose by the user"));
+        assert!(
+            !p.content
+                .contains(crate::export::provenance::SOURCES_BLOCK_START),
+            "the generated block must NOT be persisted into Page.content"
+        );
+        assert!(p.user_edited, "a real prose edit flags user_edited");
+
+        // The block-free body means no `mem_*` rows reach the wikilink graph
+        // via replace_page_links.
+        let links = db.get_page_outbound_links("page_edit").await.unwrap();
+        assert!(
+            !links.iter().any(|l| l.label.starts_with("mem_")),
+            "no mem_* link rows should persist; got {:?}",
+            links
+        );
     }
 }
