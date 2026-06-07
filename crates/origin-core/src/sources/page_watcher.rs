@@ -562,4 +562,55 @@ mod tests {
             links
         );
     }
+
+    /// Task 5: pure projection + watcher tick with NO user edit must produce
+    /// zero `mem_*` page_link rows.  Distinct from Task 4's test, which edits
+    /// prose; here we never touch the file after `KnowledgeWriter::write_page`.
+    /// The on-disk file carries `[[mem_alpha]]`/`[[mem_beta]]` inside the
+    /// generated Sources block, but the canonicalized body written back to the
+    /// DB must never include them, so no `mem_*` link rows are ever created.
+    #[tokio::test]
+    async fn projecting_provenance_creates_no_mem_page_links_no_edit() {
+        let (db, _ddir) = fresh_db().await;
+        let knowledge_dir = TempDir::new().unwrap();
+        let page = sample_page(
+            "page_links",
+            "Links Topic",
+            "## Overview\nrefers to [[Real Topic]] but not memories",
+        );
+        let now = chrono::Utc::now().to_rfc3339();
+        db.insert_page(
+            "page_links",
+            &page.title,
+            None,
+            &page.content,
+            None,
+            None,
+            &["mem_alpha", "mem_beta"],
+            &now,
+        )
+        .await
+        .unwrap();
+        let writer = KnowledgeWriter::new(knowledge_dir.path().to_path_buf());
+        writer.write_page(&page).unwrap();
+
+        // Pure projection + a watcher tick with NO user edit. The on-disk file
+        // carries the Sources block (with [[mem_alpha]]/[[mem_beta]]), but the
+        // canonicalized body written to the DB must never include them, so no
+        // mem_* link rows are ever created.
+        sync_filesystem_edits(&db, knowledge_dir.path())
+            .await
+            .unwrap();
+
+        let links = db.get_page_outbound_links("page_links").await.unwrap();
+        let mem_links: Vec<_> = links
+            .iter()
+            .filter(|l| l.label.starts_with("mem_"))
+            .collect();
+        assert!(
+            mem_links.is_empty(),
+            "no page_links row may target a mem_* id; got {:?}",
+            mem_links.iter().map(|l| &l.label).collect::<Vec<_>>()
+        );
+    }
 }
