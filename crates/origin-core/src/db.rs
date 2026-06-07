@@ -13838,6 +13838,37 @@ impl MemoryDB {
         })
     }
 
+    /// Fetch up to `limit` memories that still have no entity linkage
+    /// (mirrors run_enrichment_sweep's filter). Used by the graph-substrate
+    /// gate harness to drive a bounded, attempted-tracking fine sweep.
+    pub async fn unlinked_memories(
+        &self,
+        limit: usize,
+    ) -> Result<Vec<(String, String)>, OriginError> {
+        let conn = self.conn.lock().await;
+        let mut rows = conn
+            .query(
+                "SELECT source_id, content FROM memories \
+                 WHERE source != 'episode' AND chunk_index = 0 \
+                   AND entity_id IS NULL \
+                   AND source_id NOT IN (SELECT memory_id FROM memory_entities) \
+                 ORDER BY source_id \
+                 LIMIT ?1",
+                libsql::params![limit as i64],
+            )
+            .await
+            .map_err(|e| OriginError::VectorDb(format!("unlinked_memories: {e}")))?;
+        let mut out = Vec::new();
+        while let Ok(Some(row)) = rows.next().await {
+            let sid: String = row.get(0).unwrap_or_default();
+            let content: String = row.get(1).unwrap_or_default();
+            if !sid.is_empty() {
+                out.push((sid, content));
+            }
+        }
+        Ok(out)
+    }
+
     /// Top-N entities by memory_entities degree, with their names. Eyeball aid.
     pub async fn top_memory_entity_hubs(
         &self,

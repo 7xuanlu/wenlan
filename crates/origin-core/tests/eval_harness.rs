@@ -7409,8 +7409,11 @@ async fn graph_substrate_gate_locomo() {
     );
 }
 
-/// Run the enrichment sweep with the FINE entity primitive, optionally capped at
-/// `cap` memories total (for a fast smoke). Returns memories processed.
+/// Run a bounded FINE entity-linking sweep over unlinked memories, optionally
+/// capped at `cap` memories. Tracks attempted source_ids so memories that
+/// yield zero entities do not get re-fetched forever (run_enrichment_sweep
+/// would infinite-loop on the fine primitive, which can return empty). Returns
+/// memories attempted.
 async fn run_capped_fine_sweep(
     db: &origin_core::db::MemoryDB,
     llm: &std::sync::Arc<dyn origin_core::llm_provider::LlmProvider>,
@@ -7418,26 +7421,39 @@ async fn run_capped_fine_sweep(
     batch_size: usize,
     cap: Option<usize>,
 ) -> usize {
-    use std::sync::atomic::{AtomicUsize, Ordering};
-    let seen = AtomicUsize::new(0);
-    let extract = |content: String| {
-        let llm = llm.clone();
-        let n = seen.fetch_add(1, Ordering::SeqCst) + 1;
-        let should_stop = matches!(cap, Some(c) if n > c);
-        async move {
-            // Cap reached: return no entities so the sweep links nothing further.
-            if should_stop {
-                return Ok::<Vec<String>, origin_core::error::OriginError>(Vec::new());
+    use std::collections::HashSet;
+    let mut attempted: HashSet<String> = HashSet::new();
+    loop {
+        if cap.is_some_and(|c| attempted.len() >= c) {
+            break;
+        }
+        let batch = db.unlinked_memories(batch_size).await.unwrap_or_default();
+        // Only rows we have not already attempted; if none are fresh, no further
+        // progress is possible (the rest are zero-entity memories) -> stop.
+        let fresh: Vec<(String, String)> = batch
+            .into_iter()
+            .filter(|(sid, _)| !attempted.contains(sid))
+            .collect();
+        if fresh.is_empty() {
+            break;
+        }
+        for (sid, content) in fresh {
+            if cap.is_some_and(|c| attempted.len() >= c) {
+                break;
             }
-            origin_core::kg::entity_extraction::extract_entities_for_content(
-                db, &llm, prompts, &content,
+            let ents = origin_core::kg::entity_extraction::extract_entities_for_content(
+                db, llm, prompts, &content,
             )
             .await
+            .unwrap_or_default();
+            if !ents.is_empty() {
+                let refs: Vec<&str> = ents.iter().map(|s| s.as_str()).collect();
+                let _ = db.link_memory_entities(&sid, &refs).await;
+            }
+            attempted.insert(sid);
         }
-    };
-    db.run_enrichment_sweep(extract, batch_size)
-        .await
-        .unwrap_or(0)
+    }
+    attempted.len()
 }
 
 /// Print the top-N hub entities (count, name) from memory_entities for eyeball
