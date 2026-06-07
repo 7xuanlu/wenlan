@@ -7352,6 +7352,8 @@ async fn query_intent_llm_probe() {
 /// arm "on"=temp 0.0. Graph gate identical (ORIGIN_ENABLE_GRAPH_GATE=1). Emits
 /// expand_temp_locomo.jsonl for analyze_paired.py.
 ///
+/// NOTE: write_paired_rows APPENDS — clear $EVAL_OUT between runs or rows double-count.
+///
 /// Run (unsandboxed, GPU):
 ///   ORIGIN_EVAL_ROOT=/Users/lucian/Repos/origin/app/eval \
 ///   EVAL_OUT=$HOME/.cache/origin-eval/expand_temp_out \
