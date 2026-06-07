@@ -66,6 +66,13 @@ impl KnowledgeWriter {
             log::warn!("[knowledge] stub projection failed for {}: {e}", page.id);
         }
 
+        // Manifest is a cosmetic projection index, updated load-modify-save
+        // without a lock. HTTP page-write handlers can run concurrently with
+        // scheduler distillation, so a lost update is possible — but the blast
+        // radius is one stub and it self-heals: a spuriously-GC'd stub for a
+        // live page is regenerated on that page's next write_page (project runs
+        // before this update), and a leaked orphan is reaped on the next GC. A
+        // real lock is a P2 concern, unjustified for a regenerable nav aid.
         let mut manifest = crate::export::provenance::StubManifest::load(&self.path);
         manifest.record(&page.id, &page.source_memory_ids);
         let _ = manifest.save(&self.path);

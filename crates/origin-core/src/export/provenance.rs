@@ -106,8 +106,9 @@ pub const SOURCES_STUB_DIR: &str = "_sources";
 
 /// Maps page_id → the memory ids that page currently cites. Persisted at
 /// `_sources/.manifest.json` so GC knows which stubs are still referenced
-/// across daemon restarts. Only `mem_*` stub files are ever GC'd; user files
-/// under `_sources/` are out of scope.
+/// across daemon restarts. Only `mem_*`-named stub files are ever GC'd;
+/// non-`mem_*` files under `_sources/` are out of scope (`_sources/` is a
+/// daemon-owned projection dir).
 #[derive(Debug, Default, Serialize, Deserialize)]
 pub struct StubManifest {
     pages: HashMap<String, Vec<String>>,
@@ -147,9 +148,11 @@ impl StubManifest {
     }
 }
 
-/// Delete `_sources/mem_*.md` stubs no longer cited by any page in `manifest`.
-/// Prefix-scoped to `mem_` (after sanitization): user-created files and the
-/// manifest itself are never touched.
+/// Deletes orphan `mem_*.md` stub files (those no longer cited by any page in
+/// `manifest`). Scope is the `mem_`-name prefix, NOT authorship: non-`mem_*`
+/// files — user notes and the `.manifest.json` — are never touched, but a file
+/// named `mem_*.md` under this daemon-owned dir is treated as a stub and is out
+/// of contract.
 pub fn gc_orphan_stubs(knowledge_path: &Path, manifest: &StubManifest) -> std::io::Result<()> {
     let dir = knowledge_path.join(SOURCES_STUB_DIR);
     if !dir.exists() {
@@ -166,7 +169,8 @@ pub fn gc_orphan_stubs(knowledge_path: &Path, manifest: &StubManifest) -> std::i
             Some(n) => n,
             None => continue,
         };
-        // Only ever GC sanitized mem_ stub files; leave user files + manifest.
+        // Scope by name, not authorship: only `mem_*.md` files are GC'd;
+        // non-`mem_*` files (user notes, the `.manifest.json`) are left alone.
         if !name.starts_with("mem_") || !name.ends_with(".md") {
             continue;
         }
