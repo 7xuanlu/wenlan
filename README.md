@@ -27,9 +27,11 @@
 
 **Your next AI session should pick up the context you built, not lose it in chat history.**
 
-Origin gives AI work one local home: decisions, lessons, gotchas, and project context are captured in flow, distilled into source-backed wiki pages, and brought back as retrieval context across chats, projects, and time.
+Origin is the single local home for your AI work artifacts: decisions, lessons, gotchas, project context. Captured in flow, distilled into source-backed wiki pages, recalled across chats, projects, and time.
 
-Agents query the same store through atomic memories, distilled pages, graph context, and hybrid retrieval. You read the Markdown artifacts under `~/.origin/`. Same source-backed store, two surfaces.
+A brief opens each session, a handoff closes it, so the thread carries forward instead of restarting.
+
+One store, every tool: Claude Code, Cursor, Codex, Claude Desktop, VS Code, and Gemini CLI query the same local daemon. Read the Markdown under `~/.origin/`, or symlink it into Obsidian for a graph view. Spaces keep work, personal, and client projects from bleeding together.
 
 [![Watch the Origin demo](./docs/assets/demo-preview.gif)](https://youtu.be/k37gjWVPHwI)
 
@@ -37,10 +39,10 @@ Agents query the same store through atomic memories, distilled pages, graph cont
 
 ## What makes Origin distinct
 
-1. **Composition, not just storage.** Origin does not stop at chat-memory snippets. Captures cluster into source-backed wiki pages, and those pages feed retrieval alongside atomic memories, FTS, vectors, and graph neighbors.
-2. **Review before trust.** Low-confidence captures and contradictions surface for review when they happen, instead of silently entering context. Supersession chains and protected-memory conflicts stay visible.
-3. **Mandatory, refreshable provenance.** Wiki pages cite source memory IDs, carry `stale_reasons` and `revision_state`, and refresh through `/distill` or opt-in self-evolving background cycles when you add a local model or API key. The daemon refuses unsourced pages instead of letting hallucinated summaries enter the store.
-4. **Real git versioning.** Memory, page, and session writes commit into `~/.origin/.git/`, so you can inspect, diff, revert, branch, or symlink the Markdown artifacts into Obsidian.
+1. **Compounds, not just storage.** Most memory tools hand back snippets. Origin clusters captures into source-backed wiki pages, and those pages feed retrieval alongside the atomic memories they came from.
+2. **One home, locked to none.** Every MCP client queries the same local daemon, so context built in one tool shows up in the next. Obsidian is one optional view you can symlink in, not where your work lives.
+3. **Review before trust.** Low-confidence captures and contradictions surface for review instead of silently entering context. Correct yourself once and Origin supersedes the old fact instead of serving both. Pages cite their source memory IDs, and the daemon refuses unsourced pages rather than letting hallucinated summaries in.
+4. **Real git versioning.** Memory, page, and session writes commit into `~/.origin/.git/`, so you can inspect, diff, revert, or branch the Markdown artifacts.
    ```text
    a1b2c3d page: embedding-retrieval refreshed (4 sources)
    9f8e7d6 session: handoff embedding-work
@@ -90,17 +92,36 @@ Then start with `~/.origin/bin/origin status`, `~/.origin/bin/origin recall <que
 
 ## How Origin works
 
-Origin follows the rhythm of an AI work session, with five verbs you use directly:
+The same loop runs every session: capture while you work, let the daemon refine between sessions, and return with the knowledge already in context.
+
+```text
+      ┌──────── loops back · /handoff closes each pass ─────────┐
+      ▼                                                         │
+┌─────┴─────┐    ┌─────────────┐    ┌────────────────┐    ┌─────┴─────┐
+│ CAPTURE   │    │ DAEMON      │    │ ONE STORE      │    │ RECALL +  │
+│  in flow  │ ─▶ │  refines    │ ─▶ │  (local)       │ ─▶ │  BRIEF    │
+│  /capture │    │  between    │    │  · memories    │    │  next     │
+│           │    │  sessions   │    │  · wiki pages  │    │  session  │
+│           │    │  dedup·link │    │  · graph       │    │  /recall  │
+│           │    │  /distill   │    │                │    │  /brief   │
+└───────────┘    └─────────────┘    └────────────────┘    └───────────┘
+   one local daemon · one store · every MCP client reads it
+   Claude Code · Cursor · Codex · Claude Desktop · VS Code · Gemini
+```
+
+Each pass leaves the store sharper. Captures that would sit as loose snippets elsewhere get deduped, linked to the people and projects they touch, and distilled into source-citing pages, so the next session brings back knowledge, not raw history. That is the compounding the loop is named for.
+
+These five verbs drive it:
 
 1. **Session starts.** `/brief [topic]` loads project status, identity, preferences, and topic-relevant memories so the agent walks in with context.
 2. **During work.** `/capture <thing>` saves a decision, lesson, gotcha, or project fact in flow. `/recall <query>` looks anything up.
 3. **Session ends.** `/handoff` writes what changed, what's still open, and where to continue, so the next run picks up cleanly.
 4. **Between sessions.** The daemon deduplicates overlapping captures and links related ideas in the background. `/distill` synthesizes wiki pages from clusters of related memories when you want a deliberate pass.
-5. **Next session.** `/brief` brings it all back in the Claude Code plugin. MCP-only clients call the `context` tool for the same underlying memory without replaying full chat history.
+5. **Next session.** `/brief` brings it back in the Claude Code plugin; MCP-only clients call the `context` tool for the same memory. Recall pulls the relevant slice, not your whole history, so the context window goes to the work.
 
 Full skill reference: [plugin/skills](plugin/skills/README.md).
 
-No cloud sync or telemetry by default. Local models and Anthropic keys are opt-in for automatic distill cycles.
+Works fully local with no API key, cloud account, or signup. Capture, recall, hybrid search, and graph context need nothing external; add a local model or API key only for automatic page distillation. No telemetry.
 
 ---
 
@@ -108,18 +129,18 @@ No cloud sync or telemetry by default. Local models and Anthropic keys are opt-i
 
 - **Atomic memory layer**: every capture is stored first as a typed memory with source agent, confidence, stability, and supersession metadata.
 - **Source-backed pages**: pages keep source memory IDs, stale reasons, and revision state so distillation can refresh them without losing provenance.
-- **Hybrid retrieval on libSQL**: memories, pages, FTS5 text search, vector embeddings, and graph context live in one local store your MCP clients can query.
-- **Knowledge graph context**: people, projects, tools, observations, and relations become retrievable context instead of isolated notes.
+- **Hybrid retrieval on libSQL**: memories, pages, FTS5 text, vector embeddings, and graph context in one local store your MCP clients can query, fused with reciprocal-rank fusion. An optional local cross-encoder reranker sharpens the top results.
+- **Connected recall**: people, projects, tools, and decisions come back linked, so a memory arrives with the context around it instead of alone.
 - **Distill cycles**: run `/distill` manually today, or add a local model/API key for background extraction, page refreshes, recaps, and richer graph links.
-- **Background enrichment and decay**: post-ingest passes link entities, enrich titles, grow matching pages, and update effective confidence based on memory type, access, and age.
-- **Review before trust**: low-confidence captures, pending revisions, protected-memory conflicts, contradictions, and supersession chains can surface instead of silently entering context.
+- **Stays fresh on its own**: background passes link entities, grow matching pages, and update each memory's effective confidence from type, access, and age, so recent and load-bearing memories surface while stale ones fade.
+- **Review before trust**: low-confidence captures, pending revisions, contradictions, and supersessions can surface instead of silently entering context.
 - **Explicit spaces**: tag memories, pages, and recalls with `space=work | personal | client-X` so a day-job capture never bleeds into a side-project brief. Auto-detected from the current repo or workspace when no space is set; overridable always.
-- **Local artifacts**: Markdown pages live in `~/.origin/pages/`, session logs and project status live under `~/.origin/sessions/`, and `~/.origin/` keeps local git history you can inspect, revert, or symlink into Obsidian.
+- **You own the data**: everything is plain Markdown under `~/.origin/`, versioned in git. Grep it, symlink it into Obsidian, or walk away with the files anytime. No lock-in.
 
-### Multi-bucket workflows
+### Spaces
 
-Memories belong to a **space** — a bucket like `origin`, `career`, or
-`ideas`. Set the active bucket per shell:
+Memories belong to a **space** like `origin`, `career`, or
+`ideas`. Set the active space per shell:
 
     ORIGIN_SPACE=career claude
 
@@ -192,21 +213,21 @@ Build details for the daemon, MCP server, CLI, and core crates live in the crate
 Longer-form writing on AI work memory and how Origin compares lives at [useorigin.app/learn](https://useorigin.app/learn):
 
 **Concepts**
-- [What is AI work memory?](https://useorigin.app/learn/ai-work-memory) — the shape of the problem Origin solves
-- [MCP memory server](https://useorigin.app/learn/mcp-memory-server) — how Origin exposes memory through the Model Context Protocol
-- [Local-first AI memory](https://useorigin.app/learn/local-first-ai-memory) — data, privacy, and control
-- [Markdown + local index](https://useorigin.app/learn/markdown-local-index-ai-memory) — the storage model
-- [AI agent handoff loop](https://useorigin.app/learn/ai-agent-handoff-loop) — session-end discipline that prevents context loss
+- [What is AI work memory?](https://useorigin.app/learn/ai-work-memory): the shape of the problem Origin solves
+- [MCP memory server](https://useorigin.app/learn/mcp-memory-server): how Origin exposes memory through the Model Context Protocol
+- [Local-first AI memory](https://useorigin.app/learn/local-first-ai-memory): data, privacy, and control
+- [Markdown + local index](https://useorigin.app/learn/markdown-local-index-ai-memory): the storage model
+- [AI agent handoff loop](https://useorigin.app/learn/ai-agent-handoff-loop): session-end discipline that prevents context loss
 
 **Comparisons**
-- [Origin vs Basic Memory](https://useorigin.app/learn/origin-vs-basic-memory) — Markdown knowledge base vs AI work-session memory
-- [Origin vs claude-mem](https://useorigin.app/learn/origin-vs-claude-mem) — observer-style Claude Code memory vs MCP-first cross-tool memory
-- [Origin vs Superlocal Memory](https://useorigin.app/learn/origin-vs-superlocal-memory) — includes the honest LoCoMo benchmark concession
+- [Origin vs Basic Memory](https://useorigin.app/learn/origin-vs-basic-memory): Markdown knowledge base vs AI work-session memory
+- [Origin vs claude-mem](https://useorigin.app/learn/origin-vs-claude-mem): observer-style Claude Code memory vs MCP-first cross-tool memory
+- [Origin vs Superlocal Memory](https://useorigin.app/learn/origin-vs-superlocal-memory): includes the honest LoCoMo benchmark concession
 
 **Docs**
-- [Get started](https://useorigin.app/docs/get-started) — install + verify the first local memory loop
-- [Daily workflow](https://useorigin.app/docs/daily-workflow) — capture, handoff, distill
-- [MCP clients](https://useorigin.app/docs/mcp-clients) — connect Claude Code, Cursor, Codex, Claude Desktop, Gemini CLI
+- [Get started](https://useorigin.app/docs/get-started): install + verify the first local memory loop
+- [Daily workflow](https://useorigin.app/docs/daily-workflow): capture, handoff, distill
+- [MCP clients](https://useorigin.app/docs/mcp-clients): connect Claude Code, Cursor, Codex, Claude Desktop, Gemini CLI
 
 ---
 
@@ -244,6 +265,7 @@ Peers:
 
 - [agentmemory](https://github.com/rohitg00/agentmemory). Agent-side memory framework.
 - [basic-memory](https://github.com/basicmachines-co/basic-memory). Local-first knowledge management for Claude.
+- [obsidian-mind](https://github.com/breferrari/obsidian-mind). Obsidian-native memory and review loop for coding agents.
 - [pro-workflow](https://github.com/rohitg00/pro-workflow). Claude Code productivity suite.
 - [mcp-memory-service](https://github.com/doobidoo/mcp-memory-service). Memory service for MCP.
 - [Memoria](https://github.com/matrixorigin/Memoria). "Git for AI Agent Memory" via Copy-on-Write.
