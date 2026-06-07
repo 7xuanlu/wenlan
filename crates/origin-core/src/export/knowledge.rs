@@ -179,6 +179,9 @@ impl KnowledgeWriter {
 }
 
 fn render_markdown(page: &Page) -> String {
+    use crate::export::provenance::{
+        related_frontmatter, render_sources_block, sources_frontmatter,
+    };
     let mut out = String::new();
 
     // Frontmatter
@@ -193,13 +196,37 @@ fn render_markdown(page: &Page) -> String {
     let modified_date: String = page.last_modified.chars().take(10).collect();
     out.push_str(&format!("created: {}\n", created_date));
     out.push_str(&format!("modified: {}\n", modified_date));
+    // Read-only provenance projection (one-way; the watcher never reads it back).
+    out.push_str(&sources_frontmatter(&page.source_memory_ids));
+    let related = related_page_titles(&page.content);
+    out.push_str(&related_frontmatter(&related));
     out.push_str("---\n\n");
 
     // Body with wikilinks
     out.push_str(&convert_links_to_wikilinks(&page.content));
-    out.push('\n');
+
+    // Export-only delimiter-wrapped Sources block, generated from DB truth.
+    let block = render_sources_block(&page.source_memory_ids);
+    if !block.is_empty() {
+        out.push_str("\n\n");
+        out.push_str(&block);
+    } else {
+        out.push('\n');
+    }
 
     out
+}
+
+/// Page-to-page wikilink targets in the body, for the read-only `related:`
+/// frontmatter. `mem_*` targets are excluded — those are provenance, not
+/// topic links.
+fn related_page_titles(content: &str) -> Vec<String> {
+    let wikified = convert_links_to_wikilinks(content);
+    crate::sources::obsidian::extract_wikilinks(&wikified)
+        .into_iter()
+        .map(|w| w.target)
+        .filter(|t| !t.starts_with("mem_"))
+        .collect()
 }
 
 #[cfg(test)]
@@ -383,5 +410,35 @@ mod tests {
         let path = writer.write_page(&page).unwrap();
         let content = std::fs::read_to_string(&path).unwrap();
         assert!(!content.contains("space:"));
+    }
+
+    #[test]
+    fn render_markdown_emits_sources_frontmatter_and_delimiter_block() {
+        let mut page = test_concept();
+        page.source_memory_ids = vec!["mem_1".to_string(), "mem_2".to_string()];
+        let md = render_markdown(&page);
+        // Read-only frontmatter property.
+        assert!(md.contains("sources: [\"[[mem_1]]\", \"[[mem_2]]\"]"));
+        // Delimiter-wrapped Sources block in the body.
+        assert!(md.contains(crate::export::provenance::SOURCES_BLOCK_START));
+        assert!(md.contains(crate::export::provenance::SOURCES_BLOCK_END));
+        assert!(md.contains("## Sources"));
+        // The projected body, run back through the canonicalizer, drops the
+        // generated block — the round-trip invariant the watcher relies on.
+        let (_, body) = crate::sources::obsidian::extract_frontmatter(&md);
+        let canon = crate::export::provenance::canonicalize_page_body(body);
+        assert!(!canon.contains(crate::export::provenance::SOURCES_BLOCK_START));
+        assert!(!canon.contains("## Sources"));
+        // Substring of test_concept()'s actual body text.
+        assert!(canon.contains("Rust uses ownership"));
+    }
+
+    #[test]
+    fn render_markdown_source_less_page_has_no_sources_artifacts() {
+        let mut page = test_concept();
+        page.source_memory_ids = vec![];
+        let md = render_markdown(&page);
+        assert!(!md.contains("sources:"));
+        assert!(!md.contains(crate::export::provenance::SOURCES_BLOCK_START));
     }
 }
