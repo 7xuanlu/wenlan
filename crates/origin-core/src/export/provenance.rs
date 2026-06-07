@@ -96,11 +96,86 @@ pub fn related_frontmatter(related_titles: &[String]) -> String {
     format!("related: [{}]\n", quoted.join(", "))
 }
 
+use serde::{Deserialize, Serialize};
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
 /// Subdir under `knowledge_path` for read-only source stubs. The page_watcher
 /// scans only the top-level `.md` files, so this subdir is never synced back.
 pub const SOURCES_STUB_DIR: &str = "_sources";
+
+/// Maps page_id → the memory ids that page currently cites. Persisted at
+/// `_sources/.manifest.json` so GC knows which stubs are still referenced
+/// across daemon restarts. Only `mem_*` stub files are ever GC'd; user files
+/// under `_sources/` are out of scope.
+#[derive(Debug, Default, Serialize, Deserialize)]
+pub struct StubManifest {
+    pages: HashMap<String, Vec<String>>,
+}
+
+impl StubManifest {
+    pub fn record(&mut self, page_id: &str, source_memory_ids: &[String]) {
+        if source_memory_ids.is_empty() {
+            self.pages.remove(page_id);
+        } else {
+            self.pages
+                .insert(page_id.to_string(), source_memory_ids.to_vec());
+        }
+    }
+
+    pub fn forget_page(&mut self, page_id: &str) {
+        self.pages.remove(page_id);
+    }
+
+    fn cited_ids(&self) -> HashSet<String> {
+        self.pages.values().flatten().cloned().collect()
+    }
+
+    pub fn load(knowledge_path: &Path) -> Self {
+        let p = knowledge_path.join(SOURCES_STUB_DIR).join(".manifest.json");
+        std::fs::read_to_string(&p)
+            .ok()
+            .and_then(|d| serde_json::from_str(&d).ok())
+            .unwrap_or_default()
+    }
+
+    pub fn save(&self, knowledge_path: &Path) -> std::io::Result<()> {
+        let dir = knowledge_path.join(SOURCES_STUB_DIR);
+        std::fs::create_dir_all(&dir)?;
+        let data = serde_json::to_string_pretty(self).unwrap_or_else(|_| "{}".into());
+        std::fs::write(dir.join(".manifest.json"), data)
+    }
+}
+
+/// Delete `_sources/mem_*.md` stubs no longer cited by any page in `manifest`.
+/// Prefix-scoped to `mem_` (after sanitization): user-created files and the
+/// manifest itself are never touched.
+pub fn gc_orphan_stubs(knowledge_path: &Path, manifest: &StubManifest) -> std::io::Result<()> {
+    let dir = knowledge_path.join(SOURCES_STUB_DIR);
+    if !dir.exists() {
+        return Ok(());
+    }
+    let cited: HashSet<String> = manifest
+        .cited_ids()
+        .iter()
+        .map(|id| stub_filename(id))
+        .collect();
+    for entry in std::fs::read_dir(&dir)?.flatten() {
+        let path = entry.path();
+        let name = match path.file_name().and_then(|n| n.to_str()) {
+            Some(n) => n,
+            None => continue,
+        };
+        // Only ever GC sanitized mem_ stub files; leave user files + manifest.
+        if !name.starts_with("mem_") || !name.ends_with(".md") {
+            continue;
+        }
+        if !cited.contains(name) {
+            let _ = std::fs::remove_file(&path);
+        }
+    }
+    Ok(())
+}
 
 /// Map a memory id to a filesystem/wikilink-safe token. Ids already matching
 /// `[A-Za-z0-9_-]+` (all stored Origin `mem_<uuid>` ids) pass through
@@ -284,5 +359,53 @@ mod tests {
         // Stub identifies the memory and is marked a read-only projection.
         assert!(body.contains("mem_1"));
         assert!(body.contains("read-only"));
+    }
+
+    #[test]
+    fn gc_removes_orphan_mem_stubs_keeps_still_cited() {
+        let dir = tempfile::TempDir::new().unwrap();
+        // page_a cites mem_1, mem_2; page_b cites mem_2.
+        let mut manifest = StubManifest::default();
+        manifest.record("page_a", &["mem_1".to_string(), "mem_2".to_string()]);
+        manifest.record("page_b", &["mem_2".to_string()]);
+        project_stubs_for_page(
+            dir.path(),
+            "page_a",
+            &["mem_1".to_string(), "mem_2".to_string()],
+        )
+        .unwrap();
+        project_stubs_for_page(dir.path(), "page_b", &["mem_2".to_string()]).unwrap();
+
+        // page_a re-projected, now citing only mem_1 → mem_2 still cited by page_b.
+        manifest.record("page_a", &["mem_1".to_string()]);
+        gc_orphan_stubs(dir.path(), &manifest).unwrap();
+        assert!(dir.path().join("_sources").join("mem_1.md").exists());
+        assert!(dir.path().join("_sources").join("mem_2.md").exists());
+
+        // page_b drops mem_2 entirely → mem_2 now orphan → GC removes it.
+        manifest.record("page_b", &[]);
+        gc_orphan_stubs(dir.path(), &manifest).unwrap();
+        assert!(dir.path().join("_sources").join("mem_1.md").exists());
+        assert!(!dir.path().join("_sources").join("mem_2.md").exists());
+    }
+
+    #[test]
+    fn gc_never_deletes_non_mem_files_under_sources() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let sources = dir.path().join("_sources");
+        std::fs::create_dir_all(&sources).unwrap();
+        // A user-created note under _sources/ that is not a mem_ stub.
+        std::fs::write(sources.join("my-research.md"), "user content").unwrap();
+        std::fs::write(sources.join("mem_orphan.md"), "stub").unwrap();
+        let manifest = StubManifest::default(); // nothing cited → mem_orphan is orphan
+        gc_orphan_stubs(dir.path(), &manifest).unwrap();
+        assert!(
+            sources.join("my-research.md").exists(),
+            "user file must survive"
+        );
+        assert!(
+            !sources.join("mem_orphan.md").exists(),
+            "orphan mem_ stub removed"
+        );
     }
 }

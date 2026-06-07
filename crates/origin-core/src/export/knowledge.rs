@@ -66,6 +66,11 @@ impl KnowledgeWriter {
             log::warn!("[knowledge] stub projection failed for {}: {e}", page.id);
         }
 
+        let mut manifest = crate::export::provenance::StubManifest::load(&self.path);
+        manifest.record(&page.id, &page.source_memory_ids);
+        let _ = manifest.save(&self.path);
+        let _ = crate::export::provenance::gc_orphan_stubs(&self.path, &manifest);
+
         state.pages.insert(
             page.id.clone(),
             PageFileState {
@@ -137,6 +142,11 @@ impl KnowledgeWriter {
                 std::fs::remove_file(&file_path)?;
             }
             self.save_state(&state)?;
+
+            let mut manifest = crate::export::provenance::StubManifest::load(&self.path);
+            manifest.forget_page(page_id);
+            let _ = manifest.save(&self.path);
+            let _ = crate::export::provenance::gc_orphan_stubs(&self.path, &manifest);
         }
 
         Ok(())
@@ -448,6 +458,20 @@ mod tests {
         assert!(!canon.contains("## Sources"));
         // Substring of test_concept()'s actual body text.
         assert!(canon.contains("Rust uses ownership"));
+    }
+
+    #[test]
+    fn stubs_resolve_then_gc_when_page_removed() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let writer = KnowledgeWriter::new(dir.path().to_path_buf());
+        let mut page = test_concept();
+        page.source_memory_ids = vec!["mem_x".to_string()];
+        writer.write_page(&page).unwrap();
+        let stub = dir.path().join("_sources").join("mem_x.md");
+        assert!(stub.exists(), "stub projected on write");
+
+        writer.remove_page(&page.id).unwrap();
+        assert!(!stub.exists(), "orphan stub GC'd on page removal");
     }
 
     #[test]
