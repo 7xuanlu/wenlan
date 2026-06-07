@@ -13850,9 +13850,14 @@ impl MemoryDB {
         })
     }
 
-    /// Fetch up to `limit` memories that still have no entity linkage
-    /// (mirrors run_enrichment_sweep's filter). Used by the graph-substrate
-    /// gate harness to drive a bounded, attempted-tracking fine sweep.
+    /// Fetch up to `limit` memories not yet in the `memory_entities` junction,
+    /// IGNORING the legacy 1:1 `entity_id` column. Used by the graph-substrate
+    /// gate harness: the seed's speaker pool already fills `entity_id` on ~all
+    /// memories (2520/2531 in locomo_v1), so a production-style `entity_id IS
+    /// NULL` filter would leave only the 11 stragglers. The gate must re-link
+    /// FINE entities into the junction for EVERY memory to measure the true
+    /// fine-entity degree distribution. (Production uses the separate
+    /// `get_unlinked_memories`; this method is gate-only.)
     pub async fn unlinked_memories(
         &self,
         limit: usize,
@@ -13862,7 +13867,6 @@ impl MemoryDB {
             .query(
                 "SELECT source_id, content FROM memories \
                  WHERE source != 'episode' AND chunk_index = 0 \
-                   AND entity_id IS NULL \
                    AND source_id NOT IN (SELECT memory_id FROM memory_entities) \
                  ORDER BY source_id \
                  LIMIT ?1",
