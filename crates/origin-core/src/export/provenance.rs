@@ -39,6 +39,14 @@ pub fn canonicalize_page_body(body: &str) -> String {
     out.trim_end().to_string()
 }
 
+/// Encode `s` as a YAML-safe double-quoted scalar. A JSON string literal is
+/// a valid YAML flow scalar, so serde_json handles quotes/backslashes/control
+/// chars correctly. Falls back to a naive quote only if JSON encoding fails
+/// (it never does for a String).
+fn yaml_quoted(s: &str) -> String {
+    serde_json::to_string(s).unwrap_or_else(|_| format!("\"{}\"", s.replace('"', "'")))
+}
+
 /// Render the export-only `## Sources` block from a page's cited memory ids.
 /// Returns the empty string when there are no sources (source-less pages get
 /// no block). The block is wrapped in the delimiters so the ingress
@@ -61,13 +69,16 @@ pub fn render_sources_block(source_memory_ids: &[String]) -> String {
 /// Render the read-only `sources:` frontmatter line (quoted wikilinks, which
 /// Obsidian requires for list properties). Empty string when no sources.
 /// PROJECTION-OUT ONLY — the watcher never reads this back.
+// ids are `mem_*`-shaped (no YAML-specials), but they still route through
+// `yaml_quoted` for uniform safety — unlike `related_frontmatter`, which takes
+// untrusted free-text titles where escaping is load-bearing.
 pub fn sources_frontmatter(source_memory_ids: &[String]) -> String {
     if source_memory_ids.is_empty() {
         return String::new();
     }
     let quoted: Vec<String> = source_memory_ids
         .iter()
-        .map(|id| format!("\"[[{id}]]\""))
+        .map(|id| yaml_quoted(&format!("[[{id}]]")))
         .collect();
     format!("sources: [{}]\n", quoted.join(", "))
 }
@@ -80,7 +91,7 @@ pub fn related_frontmatter(related_titles: &[String]) -> String {
     }
     let quoted: Vec<String> = related_titles
         .iter()
-        .map(|t| format!("\"[[{t}]]\""))
+        .map(|t| yaml_quoted(&format!("[[{t}]]")))
         .collect();
     format!("related: [{}]\n", quoted.join(", "))
 }
@@ -164,5 +175,21 @@ mod tests {
         let titles = ["Other Page".to_string()];
         let fm = related_frontmatter(&titles);
         assert_eq!(fm, "related: [\"[[Other Page]]\"]\n");
+    }
+
+    #[test]
+    fn related_frontmatter_escapes_titles_to_valid_yaml() {
+        let titles = ["My \"Quoted\" Page".to_string()];
+        let fm = related_frontmatter(&titles);
+        // The emitted frontmatter block must parse as valid YAML (no map collapse).
+        let yaml = format!("title: x\n{fm}");
+        let parsed: serde_yaml::Value = serde_yaml::from_str(&yaml)
+            .expect("frontmatter with a quote-bearing title must be valid YAML");
+        // And the related entry must round-trip to the original wikilink target.
+        let related = parsed
+            .get("related")
+            .and_then(|v| v.as_sequence())
+            .expect("related seq");
+        assert_eq!(related[0].as_str().unwrap(), "[[My \"Quoted\" Page]]");
     }
 }
