@@ -7347,6 +7347,75 @@ async fn query_intent_llm_probe() {
     );
 }
 
+/// TRACK 2: isolate the expansion temperature on the legacy path. Both arms run
+/// the legacy array-expansion (ORIGIN_ENABLE_INTENT_LLM unset); arm "off"=temp 0.3,
+/// arm "on"=temp 0.0. Graph gate identical (ORIGIN_ENABLE_GRAPH_GATE=1). Emits
+/// expand_temp_locomo.jsonl for analyze_paired.py.
+///
+/// Run (unsandboxed, GPU):
+///   ORIGIN_EVAL_ROOT=/Users/lucian/Repos/origin/app/eval \
+///   EVAL_OUT=$HOME/.cache/origin-eval/expand_temp_out \
+///   EVAL_LOCOMO_LIMIT=10 \
+///   CARGO_TARGET_DIR=/Users/lucian/Repos/origin/target \
+///     cargo test -p origin-core --features eval-harness --test eval_harness \
+///     expand_temp_isolation_probe -- --ignored --nocapture --test-threads=1
+///   python3 analyze_paired.py --dir $HOME/.cache/origin-eval/expand_temp_out
+#[tokio::test]
+#[ignore = "needs local LLM + LoCoMo fixture; L7 manual. Set ORIGIN_EVAL_ROOT + EVAL_OUT"]
+async fn expand_temp_isolation_probe() {
+    use std::sync::Arc;
+    println!("=== EXPAND-TEMP ISOLATION PROBE (temp0.3 vs temp0.0, legacy path) ===");
+    let lo_fx = eval_root().join("data/locomo10.json");
+    if !lo_fx.exists() {
+        println!("[expand_temp] SKIP (fixture {} missing)", lo_fx.display());
+        return;
+    }
+    let llm: Arc<dyn origin_core::llm_provider::LlmProvider> = Arc::new(
+        origin_core::llm_provider::OnDeviceProvider::new_with_model(Some("qwen3.5-9b")).unwrap(),
+    );
+
+    // Arm OFF = temp 0.3 (baseline). Intent flag UNSET in both arms.
+    let off_rows = temp_env::async_with_vars(
+        [
+            ("ORIGIN_ENABLE_GRAPH_GATE", Some("1")),
+            ("ORIGIN_ENABLE_INTENT_LLM", None::<&str>),
+            ("ORIGIN_EXPAND_TEMP", Some("0.3")),
+        ],
+        origin_core::eval::locomo::run_locomo_eval_expanded_intent_collect(
+            &lo_fx,
+            llm.clone(),
+            "expand_temp",
+            "off",
+        ),
+    )
+    .await
+    .expect("temp0.3 collect");
+
+    // Arm ON = temp 0.0.
+    let on_rows = temp_env::async_with_vars(
+        [
+            ("ORIGIN_ENABLE_GRAPH_GATE", Some("1")),
+            ("ORIGIN_ENABLE_INTENT_LLM", None::<&str>),
+            ("ORIGIN_EXPAND_TEMP", Some("0.0")),
+        ],
+        origin_core::eval::locomo::run_locomo_eval_expanded_intent_collect(
+            &lo_fx,
+            llm.clone(),
+            "expand_temp",
+            "on",
+        ),
+    )
+    .await
+    .expect("temp0.0 collect");
+
+    write_paired_rows("expand_temp", "locomo", &off_rows);
+    write_paired_rows("expand_temp", "locomo", &on_rows);
+    println!(
+        "=== done -> python3 analyze_paired.py --dir {} ===",
+        paired_out_dir().display()
+    );
+}
+
 /// TRACK 1 graph-substrate gate (#10). Copies the populated scenario_seeded
 /// locomo_v1 DB, runs the entity-linking sweep with the FINE primitive
 /// (`extract_entities_for_content`, NOT the speaker-level single-entity one),
