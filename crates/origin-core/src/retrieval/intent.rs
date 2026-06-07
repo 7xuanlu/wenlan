@@ -6,6 +6,7 @@
 //! `subqueries` field reuses the JSON-array contract of `decompose.rs`.
 
 use crate::temporal_query::DateRange;
+use std::sync::Arc;
 
 /// LLM-emitted query routing signals. All fields default to empty/false/None so
 /// a malformed sub-field can never discard a well-formed one (per-field tolerance).
@@ -66,6 +67,53 @@ pub fn parse_query_intent_llm(text: &str) -> Option<QueryIntentLlm> {
     })
 }
 
+const INTENT_SYSTEM_PROMPT: &str = "Analyze this memory search query. Output ONLY a JSON object with keys: \"expansions\" (array of 2-3 alternative phrasings), \"use_graph\" (true if the query needs relationships, multi-hop reasoning, \"how does X relate to Y\", or \"who ...\"; else false), \"entities\" (array of proper-noun anchors), \"temporal_window\" (object {\"start\":<epoch_seconds>,\"end\":<epoch_seconds>} if the query states a time, else null), \"subqueries\" (array of 2-3 atomic sub-questions if multi-hop, else []).";
+
+/// Emit query intent via the LLM. On timeout / error / unparseable object, fall
+/// back to the keyword `classify_query` gate for `use_graph` and an empty
+/// expansion set (original-query-only). Always returns a value.
+#[allow(dead_code)]
+pub async fn emit_query_intent_llm(
+    llm: &Arc<dyn crate::llm_provider::LlmProvider>,
+    query: &str,
+) -> QueryIntentLlm {
+    let fallback = || QueryIntentLlm {
+        use_graph: crate::router::classify::classify_query(query, "", "", false).use_graph,
+        ..Default::default()
+    };
+
+    let result = tokio::time::timeout(
+        std::time::Duration::from_secs(10),
+        llm.generate(crate::llm_provider::LlmRequest {
+            system_prompt: Some(INTENT_SYSTEM_PROMPT.to_string()),
+            user_prompt: query.to_string(),
+            max_tokens: 384,
+            temperature: 0.0,
+            label: Some("query_intent_llm".to_string()),
+            timeout_secs: None,
+        }),
+    )
+    .await;
+
+    match result {
+        Ok(Ok(output)) => match parse_query_intent_llm(&output) {
+            Some(intent) => intent,
+            None => {
+                log::warn!("[intent_llm] no JSON object in output; falling back to keyword gate");
+                fallback()
+            }
+        },
+        Ok(Err(e)) => {
+            log::warn!("[intent_llm] LLM failed: {e}; falling back to keyword gate");
+            fallback()
+        }
+        Err(_) => {
+            log::warn!("[intent_llm] timed out; falling back to keyword gate");
+            fallback()
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -116,5 +164,50 @@ mod tests {
         temp_env::with_vars([("ORIGIN_ENABLE_INTENT_LLM", None::<&str>)], || {
             assert!(!intent_llm_enabled());
         });
+    }
+
+    use crate::llm_provider::{LlmBackend, LlmError, LlmProvider, LlmRequest};
+    use std::sync::Arc;
+
+    struct MockLlm {
+        reply: String,
+    }
+    #[async_trait::async_trait]
+    impl LlmProvider for MockLlm {
+        async fn generate(&self, _r: LlmRequest) -> Result<String, LlmError> {
+            Ok(self.reply.clone())
+        }
+        fn is_available(&self) -> bool {
+            true
+        }
+        fn name(&self) -> &str {
+            "mock"
+        }
+        fn backend(&self) -> LlmBackend {
+            LlmBackend::OnDevice
+        }
+    }
+
+    #[tokio::test]
+    async fn emit_uses_llm_object_when_valid() {
+        let llm: Arc<dyn LlmProvider> = Arc::new(MockLlm {
+            reply: r#"{"expansions":["e1"],"use_graph":true}"#.into(),
+        });
+        // "what is libsql" trips no keyword gate, so use_graph=true can only come
+        // from the LLM object -> both assertions are load-bearing.
+        let intent = emit_query_intent_llm(&llm, "what is libsql").await;
+        assert!(intent.use_graph);
+        assert_eq!(intent.expansions, vec!["e1".to_string()]);
+    }
+
+    #[tokio::test]
+    async fn emit_falls_back_to_keyword_gate_on_garbage() {
+        let llm: Arc<dyn LlmProvider> = Arc::new(MockLlm {
+            reply: "no json".into(),
+        });
+        // "how does X relate to Y" trips the keyword RELATIONAL gate -> use_graph true.
+        let intent = emit_query_intent_llm(&llm, "how does Postgres relate to libSQL").await;
+        assert!(intent.use_graph, "fallback must use keyword classify_query");
+        assert!(intent.expansions.is_empty());
     }
 }
