@@ -13789,6 +13789,55 @@ impl MemoryDB {
         Ok(())
     }
 
+    /// Compute the `memory_entities` degree distribution in one pass.
+    pub async fn memory_entities_degree_stats(
+        &self,
+    ) -> Result<MemoryEntitiesDegreeStats, OriginError> {
+        let conn = self.conn.lock().await;
+        // Per-entity degree (memories linked), sorted ascending for percentiles.
+        let mut rows = conn
+            .query(
+                "SELECT COUNT(*) c FROM memory_entities GROUP BY entity_id ORDER BY c ASC",
+                (),
+            )
+            .await
+            .map_err(|e| OriginError::VectorDb(format!("degree_stats group: {e}")))?;
+        let mut degs: Vec<i64> = Vec::new();
+        while let Ok(Some(row)) = rows.next().await {
+            degs.push(row.get::<i64>(0).unwrap_or(0));
+        }
+        let edges: i64 = degs.iter().sum();
+        let distinct_entities = degs.len() as i64;
+        let pct = |a: &[i64], p: f64| -> i64 {
+            if a.is_empty() {
+                0
+            } else {
+                a[((a.len() as f64 * p) as usize).min(a.len() - 1)]
+            }
+        };
+        let memories_linked: i64 = conn
+            .query("SELECT COUNT(DISTINCT memory_id) FROM memory_entities", ())
+            .await
+            .map_err(|e| OriginError::VectorDb(format!("degree_stats memcount: {e}")))?
+            .next()
+            .await
+            .ok()
+            .flatten()
+            .and_then(|r| r.get::<i64>(0).ok())
+            .unwrap_or(0);
+        Ok(MemoryEntitiesDegreeStats {
+            edges,
+            distinct_entities,
+            memories_linked,
+            p50_memories_per_entity: pct(&degs, 0.5),
+            p90_memories_per_entity: pct(&degs, 0.9),
+            max_memories_per_entity: degs.last().copied().unwrap_or(0),
+            entities_gt_20: degs.iter().filter(|&&d| d > 20).count() as i64,
+            entities_gt_50: degs.iter().filter(|&&d| d > 50).count() as i64,
+            entities_gt_100: degs.iter().filter(|&&d| d > 100).count() as i64,
+        })
+    }
+
     /// Walk memories that have no entity linkage and enrich them via `extract_fn`.
     ///
     /// Memories ingested while the LLM was unavailable have `entity_id IS NULL`
@@ -23069,6 +23118,22 @@ pub(crate) fn append_changelog_entry(
 
     serde_json::to_string(&entries)
         .map_err(|e| crate::error::OriginError::VectorDb(format!("serialize changelog: {e}")))
+}
+
+/// Degree-distribution summary of the `memory_entities` junction. Used by the
+/// graph-substrate gate to decide whether the fine entity->memory link is a
+/// usable bridge or a speaker-pool hairball.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct MemoryEntitiesDegreeStats {
+    pub edges: i64,
+    pub distinct_entities: i64,
+    pub memories_linked: i64,
+    pub p50_memories_per_entity: i64,
+    pub p90_memories_per_entity: i64,
+    pub max_memories_per_entity: i64,
+    pub entities_gt_20: i64,
+    pub entities_gt_50: i64,
+    pub entities_gt_100: i64,
 }
 
 #[cfg(test)]
@@ -43019,5 +43084,37 @@ pub(crate) mod tests {
             assert!(!r.is_empty());
         })
         .await;
+    }
+
+    #[tokio::test]
+    async fn degree_stats_counts_links_and_hubs() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db_path = tmp.path().join("test.db");
+        let db = MemoryDB::new(&db_path, Arc::new(crate::events::NoopEmitter))
+            .await
+            .unwrap();
+        // Pre-insert entities to satisfy the entity_id FK.
+        {
+            let conn = db.conn.lock().await;
+            for eid in ["ent_hub", "ent_fine"] {
+                conn.execute(
+                    "INSERT INTO entities (id, name, entity_type, created_at, updated_at) VALUES (?, 'n', 'Topic', 0, 0)",
+                    [eid],
+                )
+                .await
+                .unwrap();
+            }
+        }
+        // 3 memories, 1 hub entity (linked to all 3) + 1 fine entity (linked to 1).
+        for sid in ["m1", "m2", "m3"] {
+            db.link_memory_entities(sid, &["ent_hub"]).await.unwrap();
+        }
+        db.link_memory_entities("m1", &["ent_fine"]).await.unwrap();
+        let s = db.memory_entities_degree_stats().await.unwrap();
+        assert_eq!(s.edges, 4);
+        assert_eq!(s.distinct_entities, 2);
+        assert_eq!(s.memories_linked, 3);
+        assert_eq!(s.max_memories_per_entity, 3); // ent_hub
+        assert_eq!(s.entities_gt_50, 0);
     }
 }
