@@ -102,10 +102,16 @@ use std::path::Path;
 /// scans only the top-level `.md` files, so this subdir is never synced back.
 pub const SOURCES_STUB_DIR: &str = "_sources";
 
-/// Map a (possibly unsafe, imported) memory id to a filesystem/wikilink-safe
-/// token. Stored ids are already safe `mem_*`; imported ids may carry
-/// path-hostile chars. Reversible: each distinct input maps to a distinct
-/// token (unsafe bytes are percent-style hex-escaped, never collapsed).
+/// Map a memory id to a filesystem/wikilink-safe token. Ids already matching
+/// `[A-Za-z0-9_-]+` (all stored Origin `mem_<uuid>` ids) pass through
+/// unchanged. Other chars are hex-escaped as `_XX`.
+/// NOTE: not collision-free for arbitrary input — because `_` is both the
+/// escape introducer and a passthrough char, `"mem_a/"` and a literal
+/// `"mem_a_2f"` both map to `"mem_a_2f"`. Safe for P1 (cited ids are always
+/// UUID-shaped `mem_*`). When imported ids (which may carry `/`, spaces, etc.)
+/// can become page sources in P2, make this injective then — e.g. append a
+/// deterministic hash for ids failing the safe-charset check — with a
+/// collision regression test. Tracked as a P2 follow-up.
 pub fn sanitize_stub_id(id: &str) -> String {
     let mut out = String::with_capacity(id.len());
     for c in id.chars() {
@@ -140,8 +146,9 @@ pub fn project_stubs_for_page(
     std::fs::create_dir_all(&dir)?;
     for id in source_memory_ids {
         let path = dir.join(stub_filename(id));
+        let quoted = yaml_quoted(id);
         let body = format!(
-            "---\ntitle: \"{id}\"\norigin_stub: {id}\n---\n\n\
+            "---\ntitle: {quoted}\norigin_stub: {quoted}\n---\n\n\
              This is a read-only source projection for memory `{id}`, cited by \
              page `{page_id}`. Edit the memory in Origin, not this file.\n"
         );
@@ -260,7 +267,7 @@ mod tests {
         let safe = sanitize_stub_id(unsafe_id);
         assert!(!safe.contains('/'));
         assert!(!safe.contains(' '));
-        // Reversible: distinct ids map to distinct safe names.
+        // Distinct safe-charset ids map distinctly.
         assert_ne!(sanitize_stub_id("mem_a/b"), sanitize_stub_id("mem_a-b"));
     }
 
