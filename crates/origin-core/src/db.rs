@@ -9732,52 +9732,76 @@ impl MemoryDB {
     ) -> Result<Vec<SearchResult>, OriginError> {
         // Build expanded query list starting with the original
         let mut queries: Vec<String> = vec![query.to_string()];
+        // graph_override: Some when the #15 intent emitter is active (deep path);
+        // None preserves the keyword gate per sub-query (legacy behavior).
+        let mut graph_override: Option<bool> = None;
 
         if let Some(ref llm) = llm {
-            let expand_result = tokio::time::timeout(
-                std::time::Duration::from_secs(10),
-                llm.generate(crate::llm_provider::LlmRequest {
-                    system_prompt: Some(
-                        "Rewrite this memory search query into 2-3 alternative phrasings that would match different vocabulary. Output ONLY a JSON array of strings.".into(),
-                    ),
-                    user_prompt: query.to_string(),
-                    max_tokens: 256,
-                    temperature: 0.3,
-                    label: None,
-                    timeout_secs: None,
-                }),
-            )
-            .await;
+            if crate::retrieval::intent::intent_llm_enabled() {
+                // #15 slice-1: emit the structured intent object; ride this one
+                // LLM call for both expansions and the use_graph routing signal.
+                let intent = crate::retrieval::intent::emit_query_intent_llm(llm, query).await;
+                let n_expansions = intent.expansions.len();
+                queries.extend(intent.expansions.into_iter().take(3));
+                graph_override = Some(intent.use_graph);
+                // temporal_window + subqueries are emitted but have no consumer this
+                // slice (parked for #13/#11); log for silver-label telemetry. The
+                // expansions count surfaces the empty-expansion rate for prompt tuning
+                // (a valid object with []-expansions is otherwise silent here).
+                log::info!(
+                    "[intent_llm] use_graph={} expansions={} temporal_window={:?} subqueries={}",
+                    intent.use_graph,
+                    n_expansions,
+                    intent.temporal_window,
+                    intent.subqueries.len()
+                );
+            } else {
+                // Legacy array-expansion path (flag OFF). Byte-identical to today.
+                let expand_result = tokio::time::timeout(
+                    std::time::Duration::from_secs(10),
+                    llm.generate(crate::llm_provider::LlmRequest {
+                        system_prompt: Some(
+                            "Rewrite this memory search query into 2-3 alternative phrasings that would match different vocabulary. Output ONLY a JSON array of strings.".into(),
+                        ),
+                        user_prompt: query.to_string(),
+                        max_tokens: 256,
+                        temperature: 0.3,
+                        label: None,
+                        timeout_secs: None,
+                    }),
+                )
+                .await;
 
-            match expand_result {
-                Ok(Ok(output)) => {
-                    // Extract JSON array from output
-                    let start_idx = output.find('[');
-                    let end_idx = output.rfind(']');
-                    if let (Some(si), Some(ei)) = (start_idx, end_idx) {
-                        if ei > si {
-                            let json_str = &output[si..=ei];
-                            match serde_json::from_str::<Vec<String>>(json_str) {
-                                Ok(expansions) if !expansions.is_empty() => {
-                                    queries.extend(expansions.into_iter().take(3));
-                                }
-                                Ok(_) => {
-                                    log::warn!("[memory_db] expand: empty expansion list, using original query only");
-                                }
-                                Err(e) => {
-                                    log::warn!("[memory_db] expand JSON parse failed: {e}");
+                match expand_result {
+                    Ok(Ok(output)) => {
+                        // Extract JSON array from output
+                        let start_idx = output.find('[');
+                        let end_idx = output.rfind(']');
+                        if let (Some(si), Some(ei)) = (start_idx, end_idx) {
+                            if ei > si {
+                                let json_str = &output[si..=ei];
+                                match serde_json::from_str::<Vec<String>>(json_str) {
+                                    Ok(expansions) if !expansions.is_empty() => {
+                                        queries.extend(expansions.into_iter().take(3));
+                                    }
+                                    Ok(_) => {
+                                        log::warn!("[memory_db] expand: empty expansion list, using original query only");
+                                    }
+                                    Err(e) => {
+                                        log::warn!("[memory_db] expand JSON parse failed: {e}");
+                                    }
                                 }
                             }
+                        } else {
+                            log::warn!("[memory_db] expand: no JSON array found in output");
                         }
-                    } else {
-                        log::warn!("[memory_db] expand: no JSON array found in output");
                     }
-                }
-                Ok(Err(e)) => {
-                    log::warn!("[memory_db] expand LLM failed: {e}");
-                }
-                Err(_) => {
-                    log::warn!("[memory_db] expand timed out");
+                    Ok(Err(e)) => {
+                        log::warn!("[memory_db] expand LLM failed: {e}");
+                    }
+                    Err(_) => {
+                        log::warn!("[memory_db] expand timed out");
+                    }
                 }
             }
         }
@@ -9789,15 +9813,17 @@ impl MemoryDB {
         let mut all_ranked: Vec<Vec<SearchResult>> = Vec::with_capacity(queries.len());
         for q in &queries {
             match self
-                .search_memory(
+                .search_memory_with_cue(
                     q,
                     fetch_pool,
                     memory_type,
                     space,
                     source_agent,
-                    None,
-                    None,
-                    None,
+                    None, // temporal_cue
+                    None, // confirmation_boost
+                    None, // recap_penalty
+                    None, // scoring
+                    graph_override,
                 )
                 .await
             {
@@ -9811,15 +9837,17 @@ impl MemoryDB {
         // If all searches failed, fall back to a plain search on the original query
         if all_ranked.is_empty() {
             return self
-                .search_memory(
+                .search_memory_with_cue(
                     query,
                     limit,
                     memory_type,
                     space,
                     source_agent,
-                    None,
-                    None,
-                    None,
+                    None, // temporal_cue
+                    None, // confirmation_boost
+                    None, // recap_penalty
+                    None, // scoring
+                    graph_override,
                 )
                 .await;
         }
@@ -42932,5 +42960,61 @@ pub(crate) mod tests {
             .unwrap();
         assert!(!off.is_empty() || off.is_empty()); // smoke: call shape compiles + runs
         assert!(!on.is_empty() || on.is_empty());
+    }
+
+    // ── expanded flag-OFF regression guard (#15 slice-1) ─────────────────────
+
+    #[tokio::test]
+    async fn expanded_flag_off_uses_array_path_no_panic() {
+        // Flag pinned OFF -> search_memory_expanded keeps the legacy array path.
+        // Mock LLM returns a JSON array; the expanded search must work + be non-empty.
+        struct ArrayLlm;
+        #[async_trait::async_trait]
+        impl crate::llm_provider::LlmProvider for ArrayLlm {
+            async fn generate(
+                &self,
+                _r: crate::llm_provider::LlmRequest,
+            ) -> Result<String, crate::llm_provider::LlmError> {
+                Ok(r#"["sqlite fork","libsql database"]"#.into())
+            }
+            fn is_available(&self) -> bool {
+                true
+            }
+            fn name(&self) -> &str {
+                "arr"
+            }
+            fn backend(&self) -> crate::llm_provider::LlmBackend {
+                crate::llm_provider::LlmBackend::OnDevice
+            }
+        }
+
+        // NOTE: this pins the flag to None (unset) only. A future flag-ON lib test
+        // mutating ORIGIN_ENABLE_INTENT_LLM truthy must serialize against other env
+        // tests via the process-local async lock pattern used by the PRF tests, since
+        // temp_env mutates a process-global across .await points.
+        temp_env::async_with_vars([("ORIGIN_ENABLE_INTENT_LLM", None::<&str>)], async {
+            let tmp = tempfile::tempdir().unwrap();
+            let db = MemoryDB::new(tmp.path(), std::sync::Arc::new(crate::events::NoopEmitter))
+                .await
+                .unwrap();
+            db.upsert_documents(vec![make_memory_doc(
+                "m_exp_flag_off",
+                "libSQL is a fork of SQLite",
+                "fact",
+                "s",
+                "claude-code",
+            )])
+            .await
+            .unwrap();
+
+            let llm: std::sync::Arc<dyn crate::llm_provider::LlmProvider> =
+                std::sync::Arc::new(ArrayLlm);
+            let r = db
+                .search_memory_expanded("what is libsql", 5, None, None, None, Some(llm))
+                .await
+                .unwrap();
+            assert!(!r.is_empty());
+        })
+        .await;
     }
 }
