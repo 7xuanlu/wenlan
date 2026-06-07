@@ -7266,3 +7266,75 @@ async fn temporal_oracle_probe() {
         paired_out_dir().display()
     );
 }
+
+/// #15 slice-1: paired A/B on the expanded deep path. Arm OFF = keyword gate
+/// (ORIGIN_ENABLE_GRAPH_GATE=1 so the recorded graph_skipped matches the realized
+/// routing; intent flag unset). Arm ON = LLM intent gate (ORIGIN_ENABLE_INTENT_LLM=1,
+/// graph gate also on). Both arms append to query_intent_llm_locomo.jsonl for
+/// analyze_paired.py. Needs a local GPU LLM (Qwen3.5-9B on Metal) + locomo10.json; L7 manual.
+///
+/// Run (unsandboxed, real GPU):
+///   ORIGIN_EVAL_ROOT=/Users/lucian/Repos/origin/app/eval \
+///   EVAL_OUT=$HOME/.cache/origin-eval/intent_llm_out \
+///   CARGO_TARGET_DIR=/Users/lucian/Repos/origin/target \
+///     cargo test -p origin-core --features eval-harness --test eval_harness \
+///     query_intent_llm_probe -- --ignored --nocapture --test-threads=1
+///   python3 analyze_paired.py --dir $HOME/.cache/origin-eval/intent_llm_out
+#[tokio::test]
+#[ignore = "needs local GPU LLM (Qwen3.5-9B) + locomo10.json; L7 manual. Set ORIGIN_EVAL_ROOT + EVAL_OUT"]
+async fn query_intent_llm_probe() {
+    use std::sync::Arc;
+    println!("=== QUERY-INTENT-LLM PROBE (intent-gate vs keyword-gate) ===");
+    println!("EVAL_OUT = {}", paired_out_dir().display());
+
+    let lo_fx = eval_root().join("data/locomo10.json");
+    if !lo_fx.exists() {
+        println!("SKIP: locomo10.json not found at {:?}", lo_fx);
+        return;
+    }
+    let llm: Arc<dyn origin_core::llm_provider::LlmProvider> = Arc::new(
+        origin_core::llm_provider::OnDeviceProvider::new_with_model(Some("qwen3.5-9b"))
+            .expect("OnDeviceProvider qwen3.5-9b init failed — check the model is downloaded + Metal is available"),
+    );
+
+    // Arm OFF: keyword gate. GRAPH_GATE=1 so graph_skipped reflects realized routing.
+    println!("--- arm OFF (keyword gate) ---");
+    let off_rows = temp_env::async_with_vars(
+        [
+            ("ORIGIN_ENABLE_GRAPH_GATE", Some("1")),
+            ("ORIGIN_ENABLE_INTENT_LLM", None::<&str>),
+        ],
+        origin_core::eval::locomo::run_locomo_eval_expanded_intent_collect(
+            &lo_fx,
+            llm.clone(),
+            "query_intent_llm",
+            "off",
+        ),
+    )
+    .await
+    .expect("keyword-gate collect");
+
+    // Arm ON: LLM intent gate.
+    println!("--- arm ON (intent-LLM gate) ---");
+    let on_rows = temp_env::async_with_vars(
+        [
+            ("ORIGIN_ENABLE_GRAPH_GATE", Some("1")),
+            ("ORIGIN_ENABLE_INTENT_LLM", Some("1")),
+        ],
+        origin_core::eval::locomo::run_locomo_eval_expanded_intent_collect(
+            &lo_fx,
+            llm.clone(),
+            "query_intent_llm",
+            "on",
+        ),
+    )
+    .await
+    .expect("intent-gate collect");
+
+    write_paired_rows("query_intent_llm", "locomo", &off_rows);
+    write_paired_rows("query_intent_llm", "locomo", &on_rows);
+    println!(
+        "=== done -> python3 analyze_paired.py --dir {} ===",
+        paired_out_dir().display()
+    );
+}
