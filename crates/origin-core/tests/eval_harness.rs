@@ -7273,6 +7273,14 @@ async fn temporal_oracle_probe() {
 /// graph gate also on). Both arms append to query_intent_llm_locomo.jsonl for
 /// analyze_paired.py. Needs a local GPU LLM (Qwen3.5-9B on Metal) + locomo10.json; L7 manual.
 ///
+/// CAVEAT (read before interpreting): the ON arm feeds the intent object's
+/// expansions into RRF while the OFF arm feeds the legacy array-rephrasing
+/// expansions, so this A/B contrasts the whole intent PIPELINE vs the legacy
+/// pipeline, not `use_graph` in isolation. A positive delta means "enable the
+/// intent pipeline"; to attribute it to routing alone, add a third arm
+/// (intent-expansions + keyword gate). Clear $EVAL_OUT between runs:
+/// write_paired_rows APPENDS, so re-running double-counts rows.
+///
 /// Run (unsandboxed, real GPU):
 ///   ORIGIN_EVAL_ROOT=/Users/lucian/Repos/origin/app/eval \
 ///   EVAL_OUT=$HOME/.cache/origin-eval/intent_llm_out \

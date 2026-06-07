@@ -9742,16 +9742,19 @@ impl MemoryDB {
                 // LLM call for both expansions and the use_graph routing signal.
                 let intent = crate::retrieval::intent::emit_query_intent_llm(llm, query).await;
                 let n_expansions = intent.expansions.len();
+                let n_entities = intent.entities.len();
                 queries.extend(intent.expansions.into_iter().take(3));
                 graph_override = Some(intent.use_graph);
-                // temporal_window + subqueries are emitted but have no consumer this
-                // slice (parked for #13/#11); log for silver-label telemetry. The
-                // expansions count surfaces the empty-expansion rate for prompt tuning
-                // (a valid object with []-expansions is otherwise silent here).
+                // entities/temporal_window/subqueries have no consumer this slice
+                // (parked: entities->#10, temporal_window->#13, subqueries->#11); all
+                // logged for silver-label telemetry. The expansions count surfaces the
+                // empty-expansion rate for prompt tuning (a valid object with
+                // []-expansions is otherwise silent here).
                 log::info!(
-                    "[intent_llm] use_graph={} expansions={} temporal_window={:?} subqueries={}",
+                    "[intent_llm] use_graph={} expansions={} entities={} temporal_window={:?} subqueries={}",
                     intent.use_graph,
                     n_expansions,
+                    n_entities,
                     intent.temporal_window,
                     intent.subqueries.len()
                 );
