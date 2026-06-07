@@ -29,9 +29,9 @@ pub fn intent_llm_enabled() -> bool {
         .unwrap_or(false)
 }
 
-/// Parse an intent object from possibly-prose LLM output. Returns `None` only
-/// when no JSON object is present; otherwise every field is read independently
-/// with a default fallback, reusing the engine's lenient object extractor.
+/// Parse an intent object from possibly-prose LLM output. Returns `None` when no
+/// JSON object can be parsed; otherwise every field is read independently with a
+/// default fallback, reusing the engine's lenient object extractor.
 #[allow(dead_code)]
 pub fn parse_query_intent_llm(text: &str) -> Option<QueryIntentLlm> {
     let json_str = crate::engine::extract_json(text)?;
@@ -112,7 +112,9 @@ mod tests {
 
     #[test]
     fn flag_off_by_default() {
-        // No env set in this test process: must be false.
-        assert!(!intent_llm_enabled());
+        // Pin the var unset (matches the crate's env-flag test convention).
+        temp_env::with_vars([("ORIGIN_ENABLE_INTENT_LLM", None::<&str>)], || {
+            assert!(!intent_llm_enabled());
+        });
     }
 }
