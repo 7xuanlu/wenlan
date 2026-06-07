@@ -7121,3 +7121,148 @@ async fn temporal_filter_ab_lme() {
         }
     }
 }
+
+// ---------------------------------------------------------------------------
+// Temporal oracle probe: 3-arm LoCoMo retrieval experiment
+// ---------------------------------------------------------------------------
+
+/// Inner runner for the temporal oracle probe.
+///
+/// Runs three arms over the seeded LoCoMo scenario DB and emits paired JSONL
+/// for two feature comparisons that `analyze_paired.py` can consume:
+///
+/// - `temporal_oracle_AB`: Baseline (off) vs ExtractCue (on)
+/// - `temporal_oracle_AC`: Baseline (off) vs Oracle (on)
+///
+/// The Baseline rows are cloned and labeled with the appropriate `feature`
+/// before writing so each pair file is self-consistent (the JSONL analyzer
+/// joins on `(bench, query_id)` within a single feature file, so the feature
+/// label must match across both arms of the same file).
+///
+/// The soft temporal boost env var (`ORIGIN_ENABLE_TEMPORAL_SOFT_BOOST=1`) is
+/// set via `temp_env::async_with_vars` for the ExtractCue and Oracle arms;
+/// the Baseline arm runs without it so the boost is the controlled variable.
+async fn run_temporal_oracle_probe(reranker: std::sync::Arc<dyn origin_core::reranker::Reranker>) {
+    use origin_core::eval::locomo::{run_locomo_eval_cross_rerank_temporal_collect, TemporalArm};
+
+    let root = resolve_scenario_db_root_from_harness();
+    let lo_dir = root.join("locomo_v1");
+    let lo_fx = eval_root().join("data/locomo10.json");
+
+    if !lo_dir.join("origin_memory.db").exists() || !lo_fx.exists() {
+        println!(
+            "[temporal_oracle_probe] SKIP LoCoMo (db={} fixture={})",
+            lo_dir.join("origin_memory.db").exists(),
+            lo_fx.exists()
+        );
+        return;
+    }
+
+    let db = origin_core::db::MemoryDB::new(
+        &lo_dir,
+        std::sync::Arc::new(origin_core::events::NoopEmitter),
+    )
+    .await
+    .expect("open locomo_v1 snapshot DB");
+
+    // --- Arm A: Baseline (no cue, boost env unset) ---
+    println!("--- arm Baseline (no cue, ORIGIN_ENABLE_TEMPORAL_SOFT_BOOST unset) ---");
+    let baseline_rows_ab = run_locomo_eval_cross_rerank_temporal_collect(
+        &db,
+        &lo_fx,
+        reranker.clone(),
+        "temporal_oracle_AB",
+        TemporalArm::Baseline,
+        "off",
+    )
+    .await
+    .expect("baseline collect for AB");
+
+    // Clone baseline rows for the AC feature (different feature label).
+    let baseline_rows_ac: Vec<_> = baseline_rows_ab
+        .iter()
+        .cloned()
+        .map(|mut r| {
+            r.feature = "temporal_oracle_AC".to_string();
+            r
+        })
+        .collect();
+
+    // --- Arm B: ExtractCue (soft boost ON) ---
+    println!("--- arm ExtractCue (ORIGIN_ENABLE_TEMPORAL_SOFT_BOOST=1) ---");
+    let extractcue_rows = temp_env::async_with_vars(
+        [("ORIGIN_ENABLE_TEMPORAL_SOFT_BOOST", Some("1"))],
+        run_locomo_eval_cross_rerank_temporal_collect(
+            &db,
+            &lo_fx,
+            reranker.clone(),
+            "temporal_oracle_AB",
+            TemporalArm::ExtractCue,
+            "on",
+        ),
+    )
+    .await
+    .expect("extractcue collect");
+
+    // --- Arm C: Oracle (soft boost ON) ---
+    println!("--- arm Oracle (ORIGIN_ENABLE_TEMPORAL_SOFT_BOOST=1) ---");
+    let oracle_rows = temp_env::async_with_vars(
+        [("ORIGIN_ENABLE_TEMPORAL_SOFT_BOOST", Some("1"))],
+        run_locomo_eval_cross_rerank_temporal_collect(
+            &db,
+            &lo_fx,
+            reranker.clone(),
+            "temporal_oracle_AC",
+            TemporalArm::Oracle,
+            "on",
+        ),
+    )
+    .await
+    .expect("oracle collect");
+
+    // --- Emit paired JSONL ---
+    // temporal_oracle_AB: Baseline(off) vs ExtractCue(on)
+    write_paired_rows("temporal_oracle_AB", "locomo", &baseline_rows_ab);
+    write_paired_rows("temporal_oracle_AB", "locomo", &extractcue_rows);
+
+    // temporal_oracle_AC: Baseline(off) vs Oracle(on)
+    write_paired_rows("temporal_oracle_AC", "locomo", &baseline_rows_ac);
+    write_paired_rows("temporal_oracle_AC", "locomo", &oracle_rows);
+}
+
+/// 3-arm temporal oracle probe for LoCoMo: Baseline vs ExtractCue vs Oracle.
+///
+/// Emits per-query JSONL for two paired comparisons:
+///   - `temporal_oracle_AB_locomo.jsonl`: Baseline (off) vs ExtractCue (on)
+///   - `temporal_oracle_AC_locomo.jsonl`: Baseline (off) vs Oracle (on)
+///
+/// The soft temporal boost (`ORIGIN_ENABLE_TEMPORAL_SOFT_BOOST=1`) is active
+/// for arms B and C; Baseline runs without it. Feed EVAL_OUT to
+/// `analyze_paired.py` to see per-query Δ for each arm pair.
+///
+/// Run (unsandboxed, against the SEEDED DBs — the snapshot has all-NULL
+/// event_date so the temporal boost would never fire there; the probe is
+/// read-only so the seeds stay intact):
+///
+///   ORIGIN_EVAL_ROOT=/Users/lucian/Repos/origin/app/eval \
+///   SCENARIO_DB_ROOT=~/.cache/origin-eval/scenario_seeded \
+///   EVAL_OUT=~/.cache/origin-eval/temporal_oracle_out \
+///     cargo test -p origin-core --features eval-harness --test eval_harness \
+///     temporal_oracle_probe -- --ignored --nocapture --test-threads=1
+#[tokio::test]
+#[ignore = "downloads ~600MB CE model (CPU); needs cached scenario seeded LoCoMo DB. Set ORIGIN_EVAL_ROOT + SCENARIO_DB_ROOT + EVAL_OUT"]
+async fn temporal_oracle_probe() {
+    println!("=== TEMPORAL ORACLE PROBE (3-arm: Baseline / ExtractCue / Oracle) ===");
+    println!("EVAL_OUT = {}", paired_out_dir().display());
+
+    let reranker = origin_core::reranker::init_cross_encoder_reranker(None)
+        .expect("init_cross_encoder_reranker failed (downloads ~600MB on first run)");
+    println!("CE model = {} (CPU)", reranker.model_id());
+
+    run_temporal_oracle_probe(reranker).await;
+
+    println!(
+        "=== done -> python3 analyze_paired.py --dir {} ===",
+        paired_out_dir().display()
+    );
+}

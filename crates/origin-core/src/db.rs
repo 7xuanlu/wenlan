@@ -9035,6 +9035,35 @@ impl MemoryDB {
         source_agent: Option<&str>,
         reranker: Option<Arc<dyn crate::reranker::Reranker>>,
     ) -> Result<Vec<SearchResult>, OriginError> {
+        self.search_memory_cross_rerank_cued(
+            query,
+            limit,
+            memory_type,
+            space,
+            source_agent,
+            None,
+            reranker,
+        )
+        .await
+    }
+
+    /// Like [`search_memory_cross_rerank`] but injects an optional temporal cue
+    /// into the base-pool retrieval step so the soft temporal boost applies when
+    /// `temporal_cue` is `Some` and `ORIGIN_ENABLE_TEMPORAL_SOFT_BOOST` is set.
+    ///
+    /// All existing callers are unaffected — they go through the thin delegator
+    /// above with `temporal_cue = None`.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn search_memory_cross_rerank_cued(
+        &self,
+        query: &str,
+        limit: usize,
+        memory_type: Option<&str>,
+        space: Option<&str>,
+        source_agent: Option<&str>,
+        temporal_cue: Option<crate::temporal_query::DateRange>,
+        reranker: Option<Arc<dyn crate::reranker::Reranker>>,
+    ) -> Result<Vec<SearchResult>, OriginError> {
         // Pool widening before cross-encoder rerank — env-overridable.
         // See `compute_rerank_fetch_pool` for the formula + rationale.
         let fetch_pool = compute_rerank_fetch_pool(
@@ -9046,12 +9075,13 @@ impl MemoryDB {
         let global_prelude_enabled = global_prelude_enabled();
 
         let memory_results = self
-            .search_memory(
+            .search_memory_with_cue(
                 query,
                 fetch_pool,
                 memory_type,
                 space,
                 source_agent,
+                temporal_cue,
                 None,
                 None,
                 None,

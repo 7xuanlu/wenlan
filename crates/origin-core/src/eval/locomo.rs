@@ -1599,6 +1599,197 @@ pub async fn run_locomo_eval_cross_rerank_from_db_collect(
 }
 
 // ---------------------------------------------------------------------------
+// Temporal oracle probe (3-arm: Baseline / ExtractCue / Oracle)
+// ---------------------------------------------------------------------------
+
+/// Which temporal cue strategy to apply per query in the temporal oracle probe.
+///
+/// - `Baseline`: no temporal cue — identical to the plain cross-rerank call.
+/// - `ExtractCue`: extract a cue from the question text, resolved against the
+///   conversation's own timeline (arm B). High-confidence cues only; others
+///   fall back to `None`.
+/// - `Oracle`: use the union window of the evidence observation dates (arm C).
+///   If none of the evidence observations have a known `event_date`, falls back
+///   to `None` (counted separately; behaves identically to Baseline for that QA).
+#[derive(Clone, Copy, Debug)]
+pub enum TemporalArm {
+    Baseline,
+    ExtractCue,
+    Oracle,
+}
+
+/// Collector for the 3-arm temporal oracle probe over a pre-seeded LoCoMo DB.
+///
+/// Mirrors [`run_locomo_eval_cross_rerank_from_db_collect`] verbatim for the
+/// relevance judgments, NDCG@10/recall@5/MRR scoring, and `PerQueryRow`
+/// construction. The only difference is how `temporal_cue` is computed per
+/// query, forwarded through [`crate::db::MemoryDB::search_memory_cross_rerank_cued`].
+///
+/// Counters printed to stdout (informational, not returned):
+/// - Arm B: QAs with no high-confidence cue (fall back to `None`).
+/// - Arm C: QAs where no evidence observation has a known `event_date`
+///   (fall back to `None`; behaviorally identical to Baseline for those QAs).
+#[allow(clippy::too_many_arguments)]
+pub async fn run_locomo_eval_cross_rerank_temporal_collect(
+    db: &MemoryDB,
+    path: &Path,
+    reranker: std::sync::Arc<dyn crate::reranker::Reranker>,
+    feature: &str,
+    arm: TemporalArm,
+    flag_state: &str,
+) -> Result<Vec<crate::eval::paired::PerQueryRow>, OriginError> {
+    use crate::eval::paired::PerQueryRow;
+    use crate::temporal_query::{extract_cue, CueConfidence};
+    use std::time::Instant;
+
+    if std::env::var_os("RERANK_POOL_MULTIPLIER").is_none() {
+        std::env::set_var("RERANK_POOL_MULTIPLIER", "1");
+    }
+    if std::env::var_os("RERANK_POOL_FLOOR").is_none() {
+        std::env::set_var("RERANK_POOL_FLOOR", "10");
+    }
+
+    let mut samples = load_locomo(path)?;
+    apply_locomo_limit(&mut samples);
+
+    // Build event_date_map once; used by both ExtractCue (for `now` pinning)
+    // and Oracle (for evidence window construction).
+    let edm = event_date_map(&samples);
+
+    let mut rows: Vec<PerQueryRow> = Vec::new();
+    let mut no_cue_count = 0usize;
+    let mut no_oracle_date_count = 0usize;
+
+    for sample in &samples {
+        let memories = extract_observations(sample);
+        let dia_to_source: HashMap<String, String> = memories
+            .iter()
+            .enumerate()
+            .map(|(i, m)| {
+                (
+                    m.dia_id.clone(),
+                    format!("locomo_{}_obs_{}", sample.sample_id, i),
+                )
+            })
+            .collect();
+
+        // Compute `now` for this sample: the latest known session date + 1 day,
+        // so relative cues like "last week" resolve against the conversation's
+        // own present rather than wall-clock 2026.
+        // If no dated observations exist for this sample, fall back to Utc::now().
+        let sample_source_ids: Vec<String> = memories
+            .iter()
+            .enumerate()
+            .map(|(i, _)| format!("locomo_{}_obs_{}", sample.sample_id, i))
+            .collect();
+        let max_session_ts: Option<i64> = sample_source_ids
+            .iter()
+            .filter_map(|sid| edm.get(sid).copied())
+            .max();
+        let sample_now = match max_session_ts {
+            Some(ts) => {
+                chrono::DateTime::from_timestamp(ts + 86400, 0).unwrap_or_else(chrono::Utc::now)
+            }
+            None => chrono::Utc::now(),
+        };
+
+        for (q_idx, qa) in sample.qa.iter().enumerate() {
+            if qa.category == 5 {
+                continue;
+            }
+
+            let temporal_cue: Option<crate::temporal_query::DateRange> = match arm {
+                TemporalArm::Baseline => None,
+
+                TemporalArm::ExtractCue => {
+                    let cue = extract_cue(&qa.question, sample_now)
+                        .filter(|c| c.confidence == CueConfidence::High)
+                        .map(|c| c.range);
+                    if cue.is_none() {
+                        no_cue_count += 1;
+                    }
+                    cue
+                }
+
+                TemporalArm::Oracle => {
+                    // Collect event_dates for all evidence observations.
+                    let dates: Vec<i64> = qa
+                        .evidence
+                        .iter()
+                        .filter_map(|did| dia_to_source.get(did))
+                        .filter_map(|sid| edm.get(sid).copied())
+                        .collect();
+                    if dates.is_empty() {
+                        no_oracle_date_count += 1;
+                        None
+                    } else {
+                        let start = *dates.iter().min().unwrap();
+                        let end = *dates.iter().max().unwrap();
+                        Some(crate::temporal_query::DateRange { start, end })
+                    }
+                }
+            };
+
+            let t0 = Instant::now();
+            let results = db
+                .search_memory_cross_rerank_cued(
+                    &qa.question,
+                    10,
+                    None,
+                    None,
+                    None,
+                    temporal_cue,
+                    Some(reranker.clone()),
+                )
+                .await?;
+            let latency_ms = t0.elapsed().as_secs_f64() * 1000.0;
+
+            let relevant_ids: HashSet<String> = qa
+                .evidence
+                .iter()
+                .filter_map(|did| dia_to_source.get(did).cloned())
+                .collect();
+            if relevant_ids.is_empty() {
+                continue;
+            }
+            let result_ids: Vec<&str> = results.iter().map(|r| r.source_id.as_str()).collect();
+            let grades: HashMap<&str, u8> = result_ids
+                .iter()
+                .map(|id| (*id, if relevant_ids.contains(*id) { 1 } else { 0 }))
+                .collect();
+            let relevant_set: HashSet<&str> = relevant_ids.iter().map(|s| s.as_str()).collect();
+
+            // temporal_touched: for arm B, record whether a high-confidence cue fired.
+            let temporal_touched = match arm {
+                TemporalArm::ExtractCue => Some(temporal_cue.is_some()),
+                _ => None,
+            };
+
+            rows.push(PerQueryRow {
+                feature: feature.to_string(),
+                bench: "locomo".to_string(),
+                flag_state: flag_state.to_string(),
+                query_id: format!("{}#q{}", sample.sample_id, q_idx),
+                category: qa.category.to_string(),
+                ndcg10: metrics::ndcg_at_k(&result_ids, &grades, 10),
+                recall5: metrics::recall_at_k(&result_ids, &relevant_set, 5),
+                mrr: metrics::mrr(&result_ids, &relevant_set),
+                latency_ms,
+                graph_skipped: None,
+                temporal_touched,
+            });
+        }
+    }
+
+    println!(
+        "[temporal_probe:{arm:?}] no_cue={no_cue_count} no_oracle_date={no_oracle_date_count} \
+         total_rows={}",
+        rows.len()
+    );
+    Ok(rows)
+}
+
+// ---------------------------------------------------------------------------
 /// Retrieval eval over a pre-seeded DB using the base `search_memory` path
 /// (vector + FTS + RRF + graph augmentation) — the path the graph gate
 /// (`ORIGIN_ENABLE_GRAPH_GATE`) acts on. Mirrors `run_locomo_eval_cross_rerank_from_db`
