@@ -39,6 +39,52 @@ pub fn canonicalize_page_body(body: &str) -> String {
     out.trim_end().to_string()
 }
 
+/// Render the export-only `## Sources` block from a page's cited memory ids.
+/// Returns the empty string when there are no sources (source-less pages get
+/// no block). The block is wrapped in the delimiters so the ingress
+/// canonicalizer can strip it exactly.
+pub fn render_sources_block(source_memory_ids: &[String]) -> String {
+    if source_memory_ids.is_empty() {
+        return String::new();
+    }
+    let mut out = String::new();
+    out.push_str(SOURCES_BLOCK_START);
+    out.push_str("\n## Sources\n");
+    for id in source_memory_ids {
+        out.push_str(&format!("- [[{id}]]\n"));
+    }
+    out.push_str(SOURCES_BLOCK_END);
+    out.push('\n');
+    out
+}
+
+/// Render the read-only `sources:` frontmatter line (quoted wikilinks, which
+/// Obsidian requires for list properties). Empty string when no sources.
+/// PROJECTION-OUT ONLY — the watcher never reads this back.
+pub fn sources_frontmatter(source_memory_ids: &[String]) -> String {
+    if source_memory_ids.is_empty() {
+        return String::new();
+    }
+    let quoted: Vec<String> = source_memory_ids
+        .iter()
+        .map(|id| format!("\"[[{id}]]\""))
+        .collect();
+    format!("sources: [{}]\n", quoted.join(", "))
+}
+
+/// Render the read-only `related:` frontmatter line from page→page wikilink
+/// targets. Empty string when there are none.
+pub fn related_frontmatter(related_titles: &[String]) -> String {
+    if related_titles.is_empty() {
+        return String::new();
+    }
+    let quoted: Vec<String> = related_titles
+        .iter()
+        .map(|t| format!("\"[[{t}]]\""))
+        .collect();
+    format!("related: [{}]\n", quoted.join(", "))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -79,5 +125,44 @@ mod tests {
             format!("head prose\n\n{SOURCES_BLOCK_START}\nx\n{SOURCES_BLOCK_END}\n\ntail prose");
         let canon = canonicalize_page_body(&body);
         assert_eq!(canon, "head prose\n\ntail prose");
+    }
+
+    #[test]
+    fn render_sources_block_is_delimiter_wrapped_and_canonicalizes_to_empty() {
+        let ids = ["mem_1".to_string(), "mem_2".to_string()];
+        let block = render_sources_block(&ids);
+        assert!(block.starts_with(SOURCES_BLOCK_START));
+        assert!(block.trim_end().ends_with(SOURCES_BLOCK_END));
+        assert!(block.contains("## Sources"));
+        assert!(block.contains("[[mem_1]]"));
+        assert!(block.contains("[[mem_2]]"));
+        // A body that is exactly the block canonicalizes to empty.
+        assert_eq!(canonicalize_page_body(&block), "");
+    }
+
+    #[test]
+    fn render_sources_block_empty_for_no_sources() {
+        let ids: [String; 0] = [];
+        assert_eq!(render_sources_block(&ids), String::new());
+    }
+
+    #[test]
+    fn sources_frontmatter_quotes_wikilinks() {
+        let ids = ["mem_1".to_string(), "mem_2".to_string()];
+        let fm = sources_frontmatter(&ids);
+        assert_eq!(fm, "sources: [\"[[mem_1]]\", \"[[mem_2]]\"]\n");
+    }
+
+    #[test]
+    fn sources_frontmatter_empty_emits_nothing() {
+        let ids: [String; 0] = [];
+        assert_eq!(sources_frontmatter(&ids), String::new());
+    }
+
+    #[test]
+    fn related_frontmatter_quotes_page_titles() {
+        let titles = ["Other Page".to_string()];
+        let fm = related_frontmatter(&titles);
+        assert_eq!(fm, "related: [\"[[Other Page]]\"]\n");
     }
 }
