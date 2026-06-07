@@ -467,6 +467,18 @@ pub fn global_prelude_enabled() -> bool {
         .unwrap_or(false)
 }
 
+/// Expansion temperature for the legacy `search_memory_expanded` paraphrase
+/// call. `ORIGIN_EXPAND_TEMP` overrides the historical 0.3 default (used by the
+/// Track-2 temperature-isolation A/B). Non-finite / negative / unparseable falls
+/// back to 0.3.
+pub fn expand_temperature() -> f32 {
+    std::env::var("ORIGIN_EXPAND_TEMP")
+        .ok()
+        .and_then(|v| v.trim().parse::<f32>().ok())
+        .filter(|t| t.is_finite() && *t >= 0.0)
+        .unwrap_or(0.3)
+}
+
 /// Outcome of one `evict_stale` run. T21 Stage 1 only ever archives
 /// (`deleted` is always 0); `skipped_disabled` is true when the env flag is off.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -9768,7 +9780,7 @@ impl MemoryDB {
                         ),
                         user_prompt: query.to_string(),
                         max_tokens: 256,
-                        temperature: 0.3,
+                        temperature: expand_temperature(),
                         label: None,
                         timeout_secs: None,
                     }),
@@ -43171,5 +43183,19 @@ pub(crate) mod tests {
         assert_eq!(s.memories_linked, 3);
         assert_eq!(s.max_memories_per_entity, 3); // ent_hub
         assert_eq!(s.entities_gt_50, 0);
+    }
+
+    #[test]
+    fn expand_temperature_reads_env_default_0_3() {
+        // Unset -> default 0.3 (guard so the test is order-independent).
+        temp_env::with_var("ORIGIN_EXPAND_TEMP", None::<&str>, || {
+            assert!((expand_temperature() - 0.3).abs() < 1e-6);
+        });
+        temp_env::with_var("ORIGIN_EXPAND_TEMP", Some("0.0"), || {
+            assert!(expand_temperature().abs() < 1e-6);
+        });
+        temp_env::with_var("ORIGIN_EXPAND_TEMP", Some("garbage"), || {
+            assert!((expand_temperature() - 0.3).abs() < 1e-6);
+        });
     }
 }
