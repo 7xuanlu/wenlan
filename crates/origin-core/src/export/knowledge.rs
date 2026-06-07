@@ -180,13 +180,13 @@ impl KnowledgeWriter {
 
 fn render_markdown(page: &Page) -> String {
     use crate::export::provenance::{
-        related_frontmatter, render_sources_block, sources_frontmatter,
+        related_frontmatter, render_sources_block, sources_frontmatter, yaml_quoted,
     };
     let mut out = String::new();
 
     // Frontmatter
     out.push_str("---\n");
-    out.push_str(&format!("title: \"{}\"\n", page.title));
+    out.push_str(&format!("title: {}\n", yaml_quoted(&page.title)));
     if let Some(ref space) = page.space {
         out.push_str(&format!("space: {}\n", space));
     }
@@ -440,5 +440,24 @@ mod tests {
         let md = render_markdown(&page);
         assert!(!md.contains("sources:"));
         assert!(!md.contains(crate::export::provenance::SOURCES_BLOCK_START));
+    }
+
+    #[test]
+    fn render_markdown_escapes_title_so_frontmatter_survives_quotes() {
+        let mut page = test_concept();
+        page.title = "The \"Real\" Architecture".to_string();
+        let md = render_markdown(&page);
+        let (fm, _body) = crate::sources::obsidian::extract_frontmatter(&md);
+        // Frontmatter must NOT have collapsed to empty: origin_id still parses.
+        assert_eq!(
+            fm.get_str("origin_id").as_deref(),
+            Some(page.id.as_str()),
+            "quote-bearing title collapsed the frontmatter map"
+        );
+        // And the title round-trips intact.
+        assert_eq!(
+            fm.get_str("title").as_deref(),
+            Some("The \"Real\" Architecture")
+        );
     }
 }

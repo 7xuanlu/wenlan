@@ -43,7 +43,7 @@ pub fn canonicalize_page_body(body: &str) -> String {
 /// a valid YAML flow scalar, so serde_json handles quotes/backslashes/control
 /// chars correctly. Falls back to a naive quote only if JSON encoding fails
 /// (it never does for a String).
-fn yaml_quoted(s: &str) -> String {
+pub(crate) fn yaml_quoted(s: &str) -> String {
     serde_json::to_string(s).unwrap_or_else(|_| format!("\"{}\"", s.replace('"', "'")))
 }
 
