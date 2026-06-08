@@ -3192,9 +3192,6 @@ pub async fn handle_update_page(
     db.update_page_content(&id, &req.content, &existing_refs, "manual_edit")
         .await
         .map_err(|e| ServerError::Internal(e.to_string()))?;
-    db.set_page_review_status(&id, "unconfirmed")
-        .await
-        .map_err(|e| ServerError::Internal(e.to_string()))?;
     Ok(Json(origin_types::responses::SuccessResponse { ok: true }))
 }
 

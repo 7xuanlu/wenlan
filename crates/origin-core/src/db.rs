@@ -20085,6 +20085,7 @@ impl MemoryDB {
                    last_compiled = ?3, \
                    last_modified = ?3, \
                    user_edited = CASE WHEN ?4 IN ('manual_edit', 'fs_edit') THEN 1 ELSE user_edited END, \
+                   review_status = CASE WHEN ?4 IN ('manual_edit', 'fs_edit') THEN 'unconfirmed' ELSE review_status END, \
                    changelog = ?6 \
                  WHERE id = ?5 \
                    AND stale_reason IS NOT NULL \
@@ -20097,6 +20098,7 @@ impl MemoryDB {
                    last_compiled = ?3, \
                    last_modified = ?3, \
                    user_edited = CASE WHEN ?4 IN ('manual_edit', 'fs_edit') THEN 1 ELSE user_edited END, \
+                   review_status = CASE WHEN ?4 IN ('manual_edit', 'fs_edit') THEN 'unconfirmed' ELSE review_status END, \
                    changelog = ?6 \
                  WHERE id = ?5"
             };
@@ -20114,7 +20116,8 @@ impl MemoryDB {
                    version = version + 1, \
                    last_compiled = ?3, \
                    last_modified = ?3, \
-                   user_edited = CASE WHEN ?4 IN ('manual_edit', 'fs_edit') THEN 1 ELSE user_edited END \
+                   user_edited = CASE WHEN ?4 IN ('manual_edit', 'fs_edit') THEN 1 ELSE user_edited END, \
+                   review_status = CASE WHEN ?4 IN ('manual_edit', 'fs_edit') THEN 'unconfirmed' ELSE review_status END \
                  WHERE id = ?5 \
                    AND stale_reason IS NOT NULL \
                    AND COALESCE(user_edited, 0) = 0"
@@ -20125,7 +20128,8 @@ impl MemoryDB {
                    version = version + 1, \
                    last_compiled = ?3, \
                    last_modified = ?3, \
-                   user_edited = CASE WHEN ?4 IN ('manual_edit', 'fs_edit') THEN 1 ELSE user_edited END \
+                   user_edited = CASE WHEN ?4 IN ('manual_edit', 'fs_edit') THEN 1 ELSE user_edited END, \
+                   review_status = CASE WHEN ?4 IN ('manual_edit', 'fs_edit') THEN 'unconfirmed' ELSE review_status END \
                  WHERE id = ?5"
             };
             conn.execute(
@@ -21445,6 +21449,7 @@ impl MemoryDB {
     }
 
     /// Remove page_sources rows where the referenced memory no longer exists.
+    /// Also mirrors the DELETE to page_evidence (dual-write contract).
     pub async fn cleanup_orphaned_page_sources(&self) -> Result<usize, OriginError> {
         let conn = self.conn.lock().await;
         let rows_affected = conn
@@ -21454,6 +21459,12 @@ impl MemoryDB {
             )
             .await
             .map_err(|e| OriginError::VectorDb(format!("cleanup_orphaned_page_sources: {e}")))?;
+        conn.execute(
+            "DELETE FROM page_evidence WHERE source_kind = 'memory' AND locator NOT IN (SELECT DISTINCT source_id FROM memories WHERE source != 'episode')",
+            (),
+        )
+        .await
+        .map_err(|e| OriginError::VectorDb(format!("cleanup_orphaned_page_evidence: {e}")))?;
         Ok(rows_affected as usize)
     }
 
@@ -34509,6 +34520,18 @@ pub(crate) mod tests {
             sources_after.len(),
             0,
             "orphan row should be gone after cleanup"
+        );
+
+        // FIX-1 guard: page_evidence must also have no 'memory' row for the orphaned memory.
+        let evidence_after = db.get_page_evidence("c_clean").await.unwrap();
+        let orphan_evidence: Vec<_> = evidence_after
+            .iter()
+            .filter(|e| e.source_kind == "memory")
+            .collect();
+        assert_eq!(
+            orphan_evidence.len(),
+            0,
+            "cleanup_orphaned_page_sources must mirror DELETE to page_evidence (dual-write contract)"
         );
     }
 

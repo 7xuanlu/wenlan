@@ -364,8 +364,13 @@ async fn scoped_matcher_excludes_user_edited_when_disallowed() {
     )
     .await
     .unwrap();
-    // Mark user_edited via the manual-edit path (sets user_edited=1, keeps review_status=confirmed).
+    // Mark user_edited via the manual-edit path (sets user_edited=1, demotes review_status to 'unconfirmed').
     db.update_page_content("page_ue", "edited body", &["mem_a"], "manual_edit")
+        .await
+        .unwrap();
+    // Restore review_status to 'confirmed' so the control below tests user_edited filtering,
+    // not review_status filtering (scoped_matcher only surfaces confirmed pages).
+    db.set_page_review_status("page_ue", "confirmed")
         .await
         .unwrap();
     let emb = db
@@ -379,7 +384,7 @@ async fn scoped_matcher_excludes_user_edited_when_disallowed() {
         .await
         .unwrap();
     assert_eq!(allowed.as_ref().map(|p| p.id.as_str()), Some("page_ue"),
-        "control: a confirmed in-workspace page must match when user_edited is allowed (else threshold/embedding is the problem, fix the test seed)");
+        "control: a confirmed in-workspace user_edited page must match when user_edited is allowed (else threshold/embedding is the problem, fix the test seed)");
 
     // TEST: with allow_user_edited=false, the SAME page is REFUSED.
     let refused = db
@@ -462,5 +467,39 @@ async fn scoped_matcher_never_crosses_workspace() {
         same.as_ref().map(|p| p.id.as_str()),
         Some("page_personal"),
         "control: the page must match within its own workspace"
+    );
+}
+
+#[tokio::test]
+async fn fs_edit_demotes_review_status_but_agent_refresh_does_not() {
+    let (db, _d) = make_db().await;
+    let now = chrono::Utc::now().to_rfc3339();
+    db.insert_page("page_fs", "T", Some("s"), "body", None, None, &[], &now)
+        .await
+        .unwrap();
+    assert_eq!(
+        db.get_page("page_fs").await.unwrap().unwrap().review_status,
+        "confirmed"
+    );
+    // fs_edit (markdown curation) demotes — same trust rule as manual_edit.
+    db.update_page_content("page_fs", "edited on disk", &[], "fs_edit")
+        .await
+        .unwrap();
+    assert_eq!(
+        db.get_page("page_fs").await.unwrap().unwrap().review_status,
+        "unconfirmed",
+        "fs_edit must demote"
+    );
+    // agent_refresh is a faithful re-synth — must NOT demote.
+    db.set_page_review_status("page_fs", "confirmed")
+        .await
+        .unwrap();
+    db.update_page_content("page_fs", "refreshed body", &[], "agent_refresh")
+        .await
+        .unwrap();
+    assert_eq!(
+        db.get_page("page_fs").await.unwrap().unwrap().review_status,
+        "confirmed",
+        "agent_refresh must NOT demote"
     );
 }
