@@ -555,6 +555,46 @@ async fn save_longmemeval_decomposed_baseline() {
     }
 }
 
+/// LME full-haystack ENRICHED retrieval A/B: per memory, generate retrieval_cue
+/// (production parity) + embed cue+content (fact-augmented keys). Compare
+/// per-category vs `save_longmemeval_baseline` (raw). Tests the training-serving
+/// skew fix — the eval seed catching up to what production retrieval already does.
+#[tokio::test]
+#[ignore]
+async fn save_longmemeval_enriched_baseline() {
+    use std::sync::Arc;
+    let rel =
+        std::env::var("LME_FIXTURE").unwrap_or_else(|_| "data/longmemeval_oracle.json".to_string());
+    let path = eval_root().join(&rel);
+    if !path.exists() {
+        println!("SKIP: {rel} not found");
+        return;
+    }
+    let llm: Arc<dyn origin_core::llm_provider::LlmProvider> = Arc::new(
+        origin_core::llm_provider::OnDeviceProvider::new_with_model(Some("qwen3.5-9b")).unwrap(),
+    );
+    let prompts = origin_core::prompts::PromptRegistry::default();
+    let report =
+        origin_core::eval::longmemeval::run_longmemeval_eval_enriched(&path, llm, &prompts)
+            .await
+            .unwrap();
+    println!(
+        "=== LME ENRICHED retrieval [{rel}] OVERALL ({}q, {}mem): ndcg@10={:.3} R@5={:.3} mrr={:.3} hit@1={:.3} ===",
+        report.total_questions,
+        report.total_memories,
+        report.aggregate_ndcg_at_10,
+        report.aggregate_recall_at_5,
+        report.aggregate_mrr,
+        report.aggregate_hit_rate_at_1
+    );
+    for c in &report.per_category {
+        println!(
+            "  {:28} n={:<4} ndcg@10={:.3} R@5={:.3} mrr={:.3} hit@1={:.3}",
+            c.question_type, c.count, c.ndcg_at_10, c.recall_at_5, c.mrr, c.hit_rate_at_1
+        );
+    }
+}
+
 #[tokio::test]
 #[ignore]
 async fn save_locomo_reranked_baseline() {

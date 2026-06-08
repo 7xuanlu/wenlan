@@ -2185,6 +2185,143 @@ pub async fn run_longmemeval_eval_decomposed(
     Ok(report)
 }
 
+/// LongMemEval retrieval with PRODUCTION-PARITY enrichment: per memory, run the
+/// extraction LLM call (same prompt as `ingest.rs`) to generate `retrieval_cue`,
+/// then embed `[cue + content]` (upsert_documents prepends the cue) — the
+/// fact-augmented keys the raw eval seed skips (training-serving skew). Isolates
+/// the enrichment lift vs the base (raw-content) runner. The peer +9.4%-recall
+/// lever that production already has but the eval never measured.
+pub async fn run_longmemeval_eval_enriched(
+    path: &Path,
+    llm: std::sync::Arc<dyn crate::llm_provider::LlmProvider>,
+    prompts: &crate::prompts::PromptRegistry,
+) -> Result<LongMemEvalReport, OriginError> {
+    let mut samples = load_longmemeval(path)?;
+    apply_lme_limit(&mut samples);
+    let mut all_scores: Vec<(String, f64, f64, f64, f64, f64)> = Vec::new();
+    let mut per_case: Vec<crate::eval::report::CaseResult> = Vec::new();
+    let mut total_memories: usize = 0;
+
+    for sample in &samples {
+        let memories = extract_memories(sample);
+        let tmp = tempfile::tempdir().map_err(|e| OriginError::Generic(format!("tempdir: {e}")))?;
+        let db = MemoryDB::new(tmp.path(), std::sync::Arc::new(crate::events::NoopEmitter)).await?;
+
+        let memory_type = match sample.question_type.as_str() {
+            "single-session-preference" => "preference",
+            _ => "fact",
+        };
+        let extract_prompt = crate::memory_schema::extraction_prompt_with_template(
+            memory_type,
+            &prompts.extract_structured_fields,
+        );
+
+        let mut docs: Vec<RawDocument> = Vec::with_capacity(memories.len());
+        for mem in &memories {
+            // Production-parity cue generation (mirrors the ingest.rs extract step).
+            let truncated: String = mem.content.chars().take(1500).collect();
+            let cue = match llm
+                .generate(crate::llm_provider::LlmRequest {
+                    system_prompt: Some(extract_prompt.clone()),
+                    user_prompt: truncated,
+                    max_tokens: 256,
+                    temperature: 0.1,
+                    label: None,
+                    timeout_secs: None,
+                })
+                .await
+            {
+                Ok(out) => crate::llm_provider::parse_extraction_response(&out).retrieval_cue,
+                Err(e) => {
+                    log::warn!("[enriched] cue gen failed: {e}");
+                    None
+                }
+            };
+            docs.push(RawDocument {
+                content: mem.content.clone(),
+                source_id: memory_source_id(&mem.question_id, mem.session_idx, mem.turn_idx),
+                source: "memory".to_string(),
+                title: format!("{} session {}", mem.role, mem.session_idx),
+                memory_type: Some(memory_type.to_string()),
+                space: Some("conversation".to_string()),
+                last_modified: chrono::Utc::now().timestamp(),
+                retrieval_cue: cue,
+                ..Default::default()
+            });
+        }
+        total_memories += docs.len();
+        db.upsert_documents(docs).await?;
+
+        let relevant_source_ids: HashSet<String> = memories
+            .iter()
+            .filter(|m| m.has_answer)
+            .map(|m| memory_source_id(&m.question_id, m.session_idx, m.turn_idx))
+            .collect();
+        if relevant_source_ids.is_empty() {
+            continue;
+        }
+
+        let results = db
+            .search_memory(&sample.question, 10, None, None, None, None, None, None)
+            .await?;
+
+        let result_ids: Vec<&str> = results.iter().map(|r| r.source_id.as_str()).collect();
+        let grades: HashMap<&str, u8> = result_ids
+            .iter()
+            .map(|id| (*id, u8::from(relevant_source_ids.contains(*id))))
+            .collect();
+        let relevant_set: HashSet<&str> = relevant_source_ids.iter().map(|s| s.as_str()).collect();
+
+        let ndcg_10 = metrics::ndcg_at_k(&result_ids, &grades, 10);
+        let ndcg_5 = metrics::ndcg_at_k(&result_ids, &grades, 5);
+        let mrr_val = metrics::mrr(&result_ids, &relevant_set);
+        let recall_5 = metrics::recall_at_k(&result_ids, &relevant_set, 5);
+        let hr_1 = metrics::hit_rate_at_k(&result_ids, &relevant_set, 1);
+
+        all_scores.push((
+            sample.question_type.clone(),
+            ndcg_5,
+            ndcg_10,
+            mrr_val,
+            recall_5,
+            hr_1,
+        ));
+        per_case.push(build_lme_case_result(
+            &sample.question,
+            &sample.question_type,
+            ndcg_5,
+            ndcg_10,
+            mrr_val,
+            recall_5,
+            hr_1,
+        ));
+    }
+
+    let per_category = aggregate_by_category(&all_scores);
+    let mut report = LongMemEvalReport {
+        aggregate_ndcg_at_10: avg_field(&all_scores, |s| s.2),
+        aggregate_mrr: avg_field(&all_scores, |s| s.3),
+        aggregate_recall_at_5: avg_field(&all_scores, |s| s.4),
+        aggregate_hit_rate_at_1: avg_field(&all_scores, |s| s.5),
+        total_questions: all_scores.len(),
+        total_memories,
+        per_category,
+        baseline: None,
+        env: None,
+        per_case,
+        coverage: None,
+    };
+    report.env = Some(build_lme_env(
+        "enriched",
+        path,
+        "search_memory+retrieval_cue",
+        "on-device",
+        "qwen3.5-9b",
+        None,
+    ));
+    Ok(report)
+}
+
 /// Per-query variant of [`run_longmemeval_eval_temporal`] (T4a). SELF-SEEDS a
 /// fresh ephemeral DB per question (stamps `event_date`), so unlike the cached-DB
 /// collectors this re-runs the write path — runs are reproducible only insofar as
