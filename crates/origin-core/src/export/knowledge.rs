@@ -498,14 +498,11 @@ mod tests {
         let (fm, _body) = crate::sources::obsidian::extract_frontmatter(&md);
         // Frontmatter must NOT have collapsed to empty: origin_id still parses.
         assert_eq!(
-            fm.get_str("origin_id").as_deref(),
+            fm.get_str("origin_id"),
             Some(page.id.as_str()),
             "quote-bearing title collapsed the frontmatter map"
         );
         // And the title round-trips intact.
-        assert_eq!(
-            fm.get_str("title").as_deref(),
-            Some("The \"Real\" Architecture")
-        );
+        assert_eq!(fm.get_str("title"), Some("The \"Real\" Architecture"));
     }
 }

@@ -678,4 +678,58 @@ mod tests {
             mem_links.iter().map(|l| &l.label).collect::<Vec<_>>()
         );
     }
+
+    #[tokio::test]
+    async fn full_provenance_round_trip_is_stable() {
+        use crate::export::provenance::SOURCES_BLOCK_START;
+        let (db, _ddir) = fresh_db().await;
+        let knowledge_dir = TempDir::new().unwrap();
+        let mut page = sample_page(
+            "page_rt",
+            "RT Topic",
+            "## Overview\nstable prose with [[Other]]",
+        );
+        page.source_memory_ids = vec!["mem_one".to_string(), "mem_two".to_string()];
+        let now = chrono::Utc::now().to_rfc3339();
+        db.insert_page(
+            "page_rt",
+            &page.title,
+            None,
+            &page.content,
+            None,
+            None,
+            &["mem_one", "mem_two"],
+            &now,
+        )
+        .await
+        .unwrap();
+        let writer = KnowledgeWriter::new(knowledge_dir.path().to_path_buf());
+        writer.write_page(&page).unwrap();
+
+        // Two consecutive ticks — both Unchanged, DB never gains the block.
+        for _ in 0..2 {
+            let stats = sync_filesystem_edits(&db, knowledge_dir.path())
+                .await
+                .unwrap();
+            assert_eq!(stats.applied, 0);
+            assert_eq!(stats.skipped_unchanged, 1);
+        }
+        let p = db.get_page("page_rt").await.unwrap().unwrap();
+        assert!(!p.content.contains(SOURCES_BLOCK_START));
+        assert!(!p.user_edited);
+        // Stubs resolve for both cited memories.
+        assert!(knowledge_dir
+            .path()
+            .join("_sources")
+            .join("mem_one.md")
+            .exists());
+        assert!(knowledge_dir
+            .path()
+            .join("_sources")
+            .join("mem_two.md")
+            .exists());
+        // No mem_* page_links.
+        let links = db.get_page_outbound_links("page_rt").await.unwrap();
+        assert!(links.iter().all(|l| !l.label.starts_with("mem_")));
+    }
 }
