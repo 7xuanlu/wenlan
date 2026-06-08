@@ -1051,6 +1051,33 @@ fn build_distillation_cluster(
     let entity_name = memories[indices[0]].entity_name.clone();
     let space = memories[indices[0]].space.clone();
     let estimated_tokens = contents.iter().map(|c| c.len() / 4 + 15).sum::<usize>() + 100;
+    // Mean-pool member embeddings into a cluster centroid so the scoped
+    // dedup matcher (find_matching_page_scoped) has a vector to compare.
+    // Skip dims only if every member embedding is empty.
+    let dim = memories[indices[0]].embedding.len();
+    let centroid_embedding = if dim == 0 {
+        None
+    } else {
+        let mut acc = vec![0.0f32; dim];
+        let mut n = 0usize;
+        for &i in indices {
+            let e = &memories[i].embedding;
+            if e.len() == dim {
+                for (a, v) in acc.iter_mut().zip(e.iter()) {
+                    *a += *v;
+                }
+                n += 1;
+            }
+        }
+        if n == 0 {
+            None
+        } else {
+            for a in acc.iter_mut() {
+                *a /= n as f32;
+            }
+            Some(acc)
+        }
+    };
     DistillationCluster {
         source_ids,
         contents,
@@ -1058,6 +1085,7 @@ fn build_distillation_cluster(
         entity_name,
         space,
         estimated_tokens,
+        centroid_embedding,
     }
 }
 
@@ -1159,6 +1187,7 @@ pub struct DistillationCluster {
     pub entity_name: Option<String>,
     pub space: Option<String>,
     pub estimated_tokens: usize,
+    pub centroid_embedding: Option<Vec<f32>>,
 }
 
 /// Returned by `find_best_overlapping_page`: the highest-Jaccard page match
@@ -43205,5 +43234,34 @@ pub(crate) mod tests {
             "flag-ON: stored content must carry grounded date 2026-04-30, got {:?}",
             stored
         );
+    }
+
+    #[test]
+    fn build_cluster_populates_centroid_embedding() {
+        let mems = vec![
+            ClusterMemRow {
+                source_id: "a".into(),
+                content: "x".into(),
+                entity_id: None,
+                entity_name: None,
+                community_id: None,
+                space: None,
+                embedding: vec![1.0, 0.0, 0.0],
+            },
+            ClusterMemRow {
+                source_id: "b".into(),
+                content: "y".into(),
+                entity_id: None,
+                entity_name: None,
+                community_id: None,
+                space: None,
+                embedding: vec![0.0, 1.0, 0.0],
+            },
+        ];
+        let c = build_distillation_cluster(&mems, &[0, 1]);
+        let centroid = c.centroid_embedding.expect("centroid populated");
+        assert_eq!(centroid.len(), 3);
+        assert!((centroid[0] - 0.5).abs() < 1e-6);
+        assert!((centroid[1] - 0.5).abs() < 1e-6);
     }
 }
