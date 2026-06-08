@@ -123,9 +123,9 @@ pub const SOURCES_STUB_DIR: &str = "_sources";
 
 /// Maps page_id → the memory ids that page currently cites. Persisted at
 /// `_sources/.manifest.json` so GC knows which stubs are still referenced
-/// across daemon restarts. Only `mem_*`-named stub files are ever GC'd;
-/// non-`mem_*` files under `_sources/` are out of scope (`_sources/` is a
-/// daemon-owned projection dir).
+/// across daemon restarts. GC reaps by the `origin_stub:` marker (see
+/// `gc_orphan_stubs`), so daemon stubs of any id shape (`mem_*`, `import_*`)
+/// are reaped when orphaned while unmarked user notes are spared.
 #[derive(Debug, Default, Serialize, Deserialize)]
 pub struct StubManifest {
     pages: HashMap<String, Vec<String>>,
@@ -165,11 +165,13 @@ impl StubManifest {
     }
 }
 
-/// Deletes orphan `mem_*.md` stub files (those no longer cited by any page in
-/// `manifest`). Scope is the `mem_`-name prefix, NOT authorship: non-`mem_*`
-/// files — user notes and the `.manifest.json` — are never touched, but a file
-/// named `mem_*.md` under this daemon-owned dir is treated as a stub and is out
-/// of contract.
+/// Deletes orphan daemon-written stub files (those no longer cited by any page
+/// in `manifest`). Scope is the `origin_stub:` MARKER, not the filename: a
+/// `.md` file under `_sources/` is reaped iff it carries the marker (so it is a
+/// daemon projection) AND its filename is not in the cited set. Files without
+/// the marker — user notes of ANY name, including one named `mem_*.md` — are
+/// never touched. Reaping by marker reaps `import_*` stubs too (whose names
+/// don't start with `mem_`), closing the leak the old name-prefix scope had.
 pub fn gc_orphan_stubs(knowledge_path: &Path, manifest: &StubManifest) -> std::io::Result<()> {
     let dir = knowledge_path.join(SOURCES_STUB_DIR);
     if !dir.exists() {
@@ -183,15 +185,24 @@ pub fn gc_orphan_stubs(knowledge_path: &Path, manifest: &StubManifest) -> std::i
     for entry in std::fs::read_dir(&dir)?.flatten() {
         let path = entry.path();
         let name = match path.file_name().and_then(|n| n.to_str()) {
-            Some(n) => n,
+            Some(n) => n.to_string(),
             None => continue,
         };
-        // Scope by name, not authorship: only `mem_*.md` files are GC'd;
-        // non-`mem_*` files (user notes, the `.manifest.json`) are left alone.
-        if !name.starts_with("mem_") || !name.ends_with(".md") {
+        // Skip non-`.md` files (e.g. the `.manifest.json` projection index).
+        if !name.ends_with(".md") {
             continue;
         }
-        if !cited.contains(name) {
+        // Still cited → keep.
+        if cited.contains(&name) {
+            continue;
+        }
+        // Only reap DAEMON-written stubs (carry the `origin_stub:` marker
+        // written by `project_stubs_for_page`). User notes under `_sources/`
+        // (any name) lack the marker and are spared.
+        let is_daemon_stub = std::fs::read_to_string(&path)
+            .map(|c| c.contains("origin_stub:"))
+            .unwrap_or(false);
+        if is_daemon_stub {
             let _ = std::fs::remove_file(&path);
         }
     }
@@ -447,22 +458,55 @@ mod tests {
     }
 
     #[test]
-    fn gc_never_deletes_non_mem_files_under_sources() {
+    fn gc_reaps_daemon_stubs_spares_user_files() {
         let dir = tempfile::TempDir::new().unwrap();
         let sources = dir.path().join("_sources");
-        std::fs::create_dir_all(&sources).unwrap();
-        // A user-created note under _sources/ that is not a mem_ stub.
-        std::fs::write(sources.join("my-research.md"), "user content").unwrap();
-        std::fs::write(sources.join("mem_orphan.md"), "stub").unwrap();
-        let manifest = StubManifest::default(); // nothing cited → mem_orphan is orphan
+        // Daemon-written stubs (carry the origin_stub: marker) for a mem_ id
+        // AND a non-mem_ import id — both must be reaped when orphaned.
+        project_stubs_for_page(dir.path(), "page_a", &["mem_orphan".to_string()]).unwrap();
+        project_stubs_for_page(dir.path(), "page_b", &["import_42_3".to_string()]).unwrap();
+        // User notes under _sources/ (no marker) — any name, including one that
+        // looks like a daemon stub (`mem_decoy.md`). Both must survive.
+        std::fs::write(sources.join("my-research.md"), "my own note").unwrap();
+        std::fs::write(sources.join("mem_decoy.md"), "user note, not a stub").unwrap();
+
+        let manifest = StubManifest::default(); // nothing cited → all stubs orphan
         gc_orphan_stubs(dir.path(), &manifest).unwrap();
-        assert!(
-            sources.join("my-research.md").exists(),
-            "user file must survive"
-        );
+
         assert!(
             !sources.join("mem_orphan.md").exists(),
-            "orphan mem_ stub removed"
+            "orphan daemon mem_ stub reaped"
+        );
+        assert!(
+            !sources.join("import_42_3.md").exists(),
+            "orphan daemon import_ stub reaped (no longer leaks)"
+        );
+        assert!(
+            sources.join("my-research.md").exists(),
+            "user file (no marker) must survive"
+        );
+        assert!(
+            sources.join("mem_decoy.md").exists(),
+            "user file named mem_* (no marker) must survive — marker-based, not name-based"
+        );
+    }
+
+    #[test]
+    fn gc_reaps_orphan_import_stub() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let sources = dir.path().join("_sources");
+        // An imported memory cited by a page → daemon stub projected.
+        let mut manifest = StubManifest::default();
+        manifest.record("page_x", &["import_9_9".to_string()]);
+        project_stubs_for_page(dir.path(), "page_x", &["import_9_9".to_string()]).unwrap();
+        assert!(sources.join("import_9_9.md").exists());
+
+        // Page drops the source → import stub is now orphan → GC reaps it.
+        manifest.record("page_x", &[]);
+        gc_orphan_stubs(dir.path(), &manifest).unwrap();
+        assert!(
+            !sources.join("import_9_9.md").exists(),
+            "orphan import_ stub must be reaped (the leak this fix closes)"
         );
     }
 }
