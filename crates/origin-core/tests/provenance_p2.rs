@@ -418,3 +418,49 @@ async fn source_less_page_embeds_title_plus_content() {
     assert_eq!(m.as_ref().map(|p| p.id.as_str()), Some("p_notes"),
         "source-less page must embed its content so a content-related query matches above 0.5 (title alone would not)");
 }
+
+#[tokio::test]
+async fn scoped_matcher_never_crosses_workspace() {
+    let (db, _d) = make_db().await;
+    seed_memory(&db, "mem_w", "kubernetes deployment rollout strategy").await;
+    let now = chrono::Utc::now().to_rfc3339();
+    // A confirmed page in workspace "personal".
+    db.insert_page(
+        "page_personal",
+        "K8s",
+        Some("kubernetes deployment rollout strategy"),
+        "Kubernetes rollout strategies including blue-green and canary deployments.",
+        None,
+        Some("personal"),
+        &["mem_w"],
+        &now,
+    )
+    .await
+    .unwrap();
+    let q = db
+        .generate_embeddings(&["kubernetes rollout strategy".to_string()])
+        .unwrap()
+        .remove(0);
+
+    // Scoped to "work": the high-similarity "personal" page must NOT leak.
+    let leaked = db
+        .find_matching_page_scoped(None, &q, 0.5, Some("work"), true)
+        .await
+        .unwrap();
+    assert!(
+        leaked.is_none(),
+        "SECURITY: scoped matcher leaked a cross-workspace page"
+    );
+
+    // CONTROL — scoped to "personal": it SHOULD match (proves the None above is a
+    // workspace exclusion, not a threshold miss).
+    let same = db
+        .find_matching_page_scoped(None, &q, 0.5, Some("personal"), true)
+        .await
+        .unwrap();
+    assert_eq!(
+        same.as_ref().map(|p| p.id.as_str()),
+        Some("page_personal"),
+        "control: the page must match within its own workspace"
+    );
+}
