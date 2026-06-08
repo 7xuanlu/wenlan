@@ -7418,6 +7418,87 @@ async fn expand_temp_isolation_probe() {
     );
 }
 
+/// Paired graph-stream probe (#10): graph augmentation OFF vs ON, isolated.
+/// Ephemeral per-conversation DBs (fixture-driven), deterministic expansion
+/// (temp 0), rerank off, graph gate off (do_graph always true). The ONLY
+/// difference between arms is ORIGIN_GRAPH_MEMORY_STREAM:
+///   OFF = stream unset -> augment runs the legacy observation no-op == no graph.
+///   ON  = stream on    -> live entity->memory stream (memory_entities populated
+///                         per conversation by the collector).
+/// Per-query ndcg@10 / recall@5 paired; analyze_paired.py reports the whole-set
+/// delta AND the graph-touched subset (queries where Δndcg != 0). The collector
+/// prints memory_entities coverage so a null can be checked against substrate
+/// liveness before it is trusted.
+///
+/// Run (unsandboxed, GPU). Smoke first with a subset:
+///   ORIGIN_EVAL_ROOT=$PWD/app/eval \
+///   EVAL_OUT=$HOME/.cache/origin-eval/graph_stream_out \
+///   EVAL_LOCOMO_LIMIT=20 \
+///   CARGO_TARGET_DIR=/Users/lucian/Repos/origin/target \
+///     cargo test -p origin-core --features eval-harness --test eval_harness \
+///     graph_stream_pair_locomo -- --ignored --nocapture --test-threads=1
+///   python3 analyze_paired.py --dir $HOME/.cache/origin-eval/graph_stream_out
+#[tokio::test]
+#[ignore = "needs local LLM + LoCoMo fixture; L7 manual. Set ORIGIN_EVAL_ROOT + EVAL_OUT"]
+async fn graph_stream_pair_locomo() {
+    use std::sync::Arc;
+    println!("=== GRAPH-STREAM PAIR (stream OFF vs ON, entity-populated, LoCoMo) ===");
+    let lo_fx = eval_root().join("data/locomo10.json");
+    if !lo_fx.exists() {
+        println!("[graph_stream] SKIP (fixture {} missing)", lo_fx.display());
+        return;
+    }
+    let llm: Arc<dyn origin_core::llm_provider::LlmProvider> = Arc::new(
+        origin_core::llm_provider::OnDeviceProvider::new_with_model(Some("qwen3.5-9b")).unwrap(),
+    );
+    let prompts = origin_core::prompts::PromptRegistry::default();
+
+    // OFF arm: stream unset -> augment is the legacy observation no-op == no graph.
+    let off_rows = temp_env::async_with_vars(
+        [
+            ("ORIGIN_GRAPH_MEMORY_STREAM", None::<&str>),
+            ("ORIGIN_ENABLE_GRAPH_GATE", None::<&str>),
+            ("ORIGIN_ENABLE_INTENT_LLM", None::<&str>),
+            ("ORIGIN_EXPAND_TEMP", Some("0.0")),
+        ],
+        origin_core::eval::locomo::run_locomo_eval_graph_stream_collect(
+            &lo_fx,
+            llm.clone(),
+            &prompts,
+            "graph_stream",
+            "off",
+        ),
+    )
+    .await
+    .expect("stream-off collect");
+
+    // ON arm: live entity->memory stream over the populated junction.
+    let on_rows = temp_env::async_with_vars(
+        [
+            ("ORIGIN_GRAPH_MEMORY_STREAM", Some("1")),
+            ("ORIGIN_ENABLE_GRAPH_GATE", None::<&str>),
+            ("ORIGIN_ENABLE_INTENT_LLM", None::<&str>),
+            ("ORIGIN_EXPAND_TEMP", Some("0.0")),
+        ],
+        origin_core::eval::locomo::run_locomo_eval_graph_stream_collect(
+            &lo_fx,
+            llm.clone(),
+            &prompts,
+            "graph_stream",
+            "on",
+        ),
+    )
+    .await
+    .expect("stream-on collect");
+
+    write_paired_rows("graph_stream", "locomo", &off_rows);
+    write_paired_rows("graph_stream", "locomo", &on_rows);
+    println!(
+        "=== done -> python3 analyze_paired.py --dir {} ===",
+        paired_out_dir().display()
+    );
+}
+
 /// TRACK 1 graph-substrate gate (#10). Copies the populated scenario_seeded
 /// locomo_v1 DB, runs the entity-linking sweep with the FINE primitive
 /// (`extract_entities_for_content`, NOT the speaker-level single-entity one),

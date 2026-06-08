@@ -2197,6 +2197,145 @@ pub async fn run_locomo_eval_expanded_intent_collect(
     Ok(rows)
 }
 
+/// Paired graph-stream collector. Mirrors [`run_locomo_eval_expanded_intent_collect`]
+/// but POPULATES the `memory_entities` junction (per-conversation fine entity
+/// sweep) before the query loop, so the `ORIGIN_GRAPH_MEMORY_STREAM` augmentation
+/// has a substrate to surface. Without this populate the junction is empty and
+/// graph-ON is a no-op — the lever-liveness trap. Reads the stream flag from the
+/// env (set by the harness arm), so a single collector serves both arms.
+///
+/// The populate runs ONLY when `flag_state == "on"`: the OFF arm leaves the stream
+/// flag unset, augment runs the legacy observation no-op, and the junction is never
+/// read — so populating it on the OFF arm would burn entity-extraction GPU for no
+/// effect on results. Skipping it keeps OFF == "pure base retrieval, no graph" and
+/// halves the smoke's GPU.
+///
+/// Fine extract-ALL is used (person/speaker hubs are excluded at retrieval time by
+/// the v3 type + degree hard filter), and the bounded attempted-tracking loop
+/// mirrors `run_capped_fine_sweep` so zero-entity memories cannot re-fetch forever.
+/// The running `(linked/total)` coverage tally is printed so the caller can confirm
+/// the substrate is non-empty before trusting any null.
+pub async fn run_locomo_eval_graph_stream_collect(
+    path: &std::path::Path,
+    llm: std::sync::Arc<dyn crate::llm_provider::LlmProvider>,
+    prompts: &crate::prompts::PromptRegistry,
+    feature: &str,
+    flag_state: &str,
+) -> Result<Vec<crate::eval::paired::PerQueryRow>, OriginError> {
+    let mut samples = load_locomo(path)?;
+    apply_locomo_limit(&mut samples);
+    let populate = flag_state == "on";
+    let mut rows: Vec<crate::eval::paired::PerQueryRow> = Vec::new();
+    let mut total_mem = 0usize;
+    let mut total_linked = 0usize;
+
+    for sample in &samples {
+        let memories = extract_observations(sample);
+        let tmp = tempfile::tempdir().map_err(|e| OriginError::Generic(format!("tempdir: {e}")))?;
+        let db = MemoryDB::new(tmp.path(), std::sync::Arc::new(crate::events::NoopEmitter)).await?;
+        let docs: Vec<RawDocument> = memories
+            .iter()
+            .enumerate()
+            .map(|(i, mem)| RawDocument {
+                content: mem.content.clone(),
+                source_id: format!("locomo_{}_obs_{}", sample.sample_id, i),
+                source: "memory".to_string(),
+                title: format!("{} session {}", mem.speaker, mem.session_num),
+                memory_type: Some("fact".to_string()),
+                space: Some("conversation".to_string()),
+                last_modified: chrono::Utc::now().timestamp(),
+                ..Default::default()
+            })
+            .collect();
+        db.upsert_documents(docs).await?;
+
+        // Populate memory_entities (ON arm only). Bounded attempted-tracking loop.
+        if populate {
+            let mut attempted: HashSet<String> = HashSet::new();
+            loop {
+                let batch = db
+                    .unlinked_memories(64 + attempted.len())
+                    .await
+                    .unwrap_or_default();
+                let fresh: Vec<(String, String)> = batch
+                    .into_iter()
+                    .filter(|(sid, _)| !attempted.contains(sid))
+                    .collect();
+                if fresh.is_empty() {
+                    break;
+                }
+                for (sid, content) in fresh {
+                    let ents = crate::kg::entity_extraction::extract_entities_for_content(
+                        &db, &llm, prompts, &content,
+                    )
+                    .await
+                    .unwrap_or_default();
+                    if !ents.is_empty() {
+                        let refs: Vec<&str> = ents.iter().map(|s| s.as_str()).collect();
+                        let _ = db.link_memory_entities(&sid, &refs).await;
+                        total_linked += 1;
+                    }
+                    attempted.insert(sid);
+                }
+            }
+        }
+        total_mem += memories.len();
+
+        let dia_to_source: HashMap<String, String> = memories
+            .iter()
+            .enumerate()
+            .map(|(i, m)| {
+                (
+                    m.dia_id.clone(),
+                    format!("locomo_{}_obs_{}", sample.sample_id, i),
+                )
+            })
+            .collect();
+
+        for (qi, qa) in sample.qa.iter().enumerate() {
+            if qa.category == 5 {
+                continue;
+            }
+            let results = db
+                .search_memory_expanded(&qa.question, 10, None, None, None, Some(llm.clone()))
+                .await?;
+
+            let relevant_ids: HashSet<String> = qa
+                .evidence
+                .iter()
+                .filter_map(|did| dia_to_source.get(did).cloned())
+                .collect();
+            if relevant_ids.is_empty() {
+                continue;
+            }
+            let result_ids: Vec<&str> = results.iter().map(|r| r.source_id.as_str()).collect();
+            let grades: HashMap<&str, u8> = result_ids
+                .iter()
+                .map(|id| (*id, if relevant_ids.contains(*id) { 1 } else { 0 }))
+                .collect();
+            let relevant_set: HashSet<&str> = relevant_ids.iter().map(|s| s.as_str()).collect();
+
+            rows.push(crate::eval::paired::PerQueryRow {
+                feature: feature.to_string(),
+                bench: "locomo".to_string(),
+                flag_state: flag_state.to_string(),
+                query_id: format!("{}#q{}", sample.sample_id, qi),
+                category: qa.category.to_string(),
+                ndcg10: metrics::ndcg_at_k(&result_ids, &grades, 10),
+                recall5: metrics::recall_at_k(&result_ids, &relevant_set, 5),
+                mrr: metrics::mrr(&result_ids, &relevant_set),
+                latency_ms: 0.0,
+                graph_skipped: None,
+                temporal_touched: None,
+            });
+        }
+    }
+    println!(
+        "[graph_stream] coverage: {total_linked}/{total_mem} memories linked (flag_state={flag_state}, populate={populate})"
+    );
+    Ok(rows)
+}
+
 // ---------------------------------------------------------------------------
 // PRF benchmark runner -- same as run_locomo_eval but uses search_memory_prf
 // ---------------------------------------------------------------------------
