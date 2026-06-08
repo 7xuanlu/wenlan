@@ -481,6 +481,7 @@ pub async fn create_page(
         last_edited_at: None,
         last_delta_summary: None,
         changelog: None,
+        creation_kind: "authored".to_string(),
     };
 
     // md-first write (only if a knowledge_path was provided)

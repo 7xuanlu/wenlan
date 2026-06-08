@@ -38,6 +38,15 @@ pub struct Page {
     pub last_delta_summary: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub changelog: Option<String>,
+    /// Routing metadata: which mechanism created this page.
+    /// One of: "distilled" | "authored" | "research" | "imported".
+    /// NOT a trust signal (see `review_status` for that).
+    #[serde(default = "default_creation_kind")]
+    pub creation_kind: String,
+}
+
+fn default_creation_kind() -> String {
+    "distilled".to_string()
 }
 
 fn is_zero_f32(v: &f32) -> bool {

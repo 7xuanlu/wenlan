@@ -187,3 +187,77 @@ async fn update_prunes_memory_evidence_but_preserves_external() {
         "external evidence preserved on empty-source edit"
     );
 }
+
+#[tokio::test]
+async fn distilled_page_defaults_creation_kind_distilled() {
+    let (db, _d) = make_db().await;
+    seed_memory(&db, "mem_a", "alpha").await;
+    let now = chrono::Utc::now().to_rfc3339();
+    db.insert_page(
+        "page_1",
+        "T",
+        Some("s"),
+        "body",
+        None,
+        None,
+        &["mem_a"],
+        &now,
+    )
+    .await
+    .unwrap();
+    let p = db.get_page("page_1").await.unwrap().unwrap();
+    assert_eq!(p.creation_kind, "distilled");
+}
+
+/// Guards the `dist` read index in `find_matching_page` against creation_kind
+/// column-shift drift. After adding creation_kind at index 16, the vector
+/// distance moved to index 17. If the read regresses to index 16, it parses
+/// the creation_kind TEXT column as f64 -> unwrap_or(1.0) -> uniform distance
+/// 1.0 -> similarity 0.0 < threshold -> `find_matching_page` returns None.
+/// With the correct index 17 it reads the real distance and returns the near
+/// page. The None-vs-Some(near) boundary is binary, so this is non-flaky.
+#[tokio::test]
+async fn find_matching_page_reads_real_distance_not_creation_kind() {
+    let (db, _d) = make_db().await;
+    let now = chrono::Utc::now().to_rfc3339();
+    db.insert_page(
+        "p_rust",
+        "Rust",
+        Some("rust async tokio runtime"),
+        "Rust ownership and the borrow checker.",
+        None,
+        None,
+        &[],
+        &now,
+    )
+    .await
+    .unwrap();
+    db.insert_page(
+        "p_py",
+        "Python",
+        Some("python decorators metaclasses"),
+        "Python data model and descriptors.",
+        None,
+        None,
+        &[],
+        &now,
+    )
+    .await
+    .unwrap();
+
+    // Query embedding near the Rust page (title + summary is what insert_page embeds).
+    let q = db
+        .generate_embeddings(&["Rust rust async tokio runtime ownership".to_string()])
+        .unwrap()
+        .remove(0);
+
+    // entity_id=None forces the embedding path (skips the entity-first branch).
+    // Threshold 0.5: the near page clears it; under a misread (uniform distance
+    // 1.0 -> similarity 0.0) NO page clears it, so the result would be None.
+    let matched = db.find_matching_page(None, &q, 0.5).await.unwrap();
+    let page = matched.expect("near page must clear the similarity threshold");
+    assert_eq!(
+        page.id, "p_rust",
+        "must match the embedding-nearest page, proving real distance was read"
+    );
+}
