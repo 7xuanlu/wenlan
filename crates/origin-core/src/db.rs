@@ -19700,10 +19700,15 @@ impl MemoryDB {
         let source_ids_json = serde_json::to_string(&source_memory_ids)
             .map_err(|e| OriginError::VectorDb(format!("serialize source_memory_ids: {e}")))?;
 
-        // Generate embedding from title + summary (before acquiring conn lock)
+        // Embed title + summary + capped content so source-less authored/research
+        // pages (often summary-less) still get a content-bearing vector. Cap the
+        // body so a long page doesn't blow the 512-token embedder window with prose
+        // the title+summary already cover.
+        const PAGE_EMBED_CONTENT_CAP: usize = 1500;
+        let capped_body: String = content.chars().take(PAGE_EMBED_CONTENT_CAP).collect();
         let embed_text = match summary {
-            Some(s) => format!("{} {}", title, s),
-            None => title.to_string(),
+            Some(s) => format!("{title} {s} {capped_body}"),
+            None => format!("{title} {capped_body}"),
         };
         let embedding_sql = match self.generate_embeddings(&[embed_text]) {
             Ok(vecs) if !vecs.is_empty() => Some(Self::vec_to_sql(&vecs[0])),

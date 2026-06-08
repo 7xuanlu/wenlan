@@ -391,3 +391,30 @@ async fn scoped_matcher_excludes_user_edited_when_disallowed() {
         "must not return a user_edited page when disallowed"
     );
 }
+
+#[tokio::test]
+async fn source_less_page_embeds_title_plus_content() {
+    let (db, _d) = make_db().await;
+    let now = chrono::Utc::now().to_rfc3339();
+    // Source-less confirmed authored page: OFF-TOPIC title ("Cooking Recipes"),
+    // Rust-specific body, NO summary.
+    // Pre-Task-11 (title-only embed): "Cooking Recipes" embeds far from the Rust
+    // query — cosine < 0.5 → find_matching_page_scoped returns None.
+    // Post-Task-11 (title+content embed): the Rust-dense body pulls the vector
+    // close to the query — cosine > 0.5 → returns the page.
+    db.insert_page_with_kind(
+        "p_notes", "Cooking Recipes", None,
+        "Detailed notes about Rust ownership, borrowing, and the lifetime system used in async code.",
+        None, None, &[], &now, "authored", "confirmed",
+    ).await.unwrap();
+    let q = db
+        .generate_embeddings(&["Rust ownership borrowing lifetimes".to_string()])
+        .unwrap()
+        .remove(0);
+    let m = db
+        .find_matching_page_scoped(None, &q, 0.5, None, true)
+        .await
+        .unwrap();
+    assert_eq!(m.as_ref().map(|p| p.id.as_str()), Some("p_notes"),
+        "source-less page must embed its content so a content-related query matches above 0.5 (title alone would not)");
+}
