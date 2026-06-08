@@ -261,3 +261,24 @@ async fn find_matching_page_reads_real_distance_not_creation_kind() {
         "must match the embedding-nearest page, proving real distance was read"
     );
 }
+
+#[tokio::test]
+async fn distilled_page_defaults_review_status_confirmed() {
+    let (db, _d) = make_db().await;
+    seed_memory(&db, "mem_a", "alpha").await;
+    let now = chrono::Utc::now().to_rfc3339();
+    db.insert_page(
+        "page_1",
+        "T",
+        Some("s"),
+        "body",
+        None,
+        None,
+        &["mem_a"],
+        &now,
+    )
+    .await
+    .unwrap();
+    let p = db.get_page("page_1").await.unwrap().unwrap();
+    assert_eq!(p.review_status, "confirmed");
+}

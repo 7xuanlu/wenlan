@@ -43,10 +43,19 @@ pub struct Page {
     /// NOT a trust signal (see `review_status` for that).
     #[serde(default = "default_creation_kind")]
     pub creation_kind: String,
+    /// Trust boundary: whether this page has been confirmed as accurate.
+    /// One of: "unconfirmed" | "confirmed".
+    /// Distilled pages start confirmed; authored/research pages start unconfirmed.
+    #[serde(default = "default_review_status")]
+    pub review_status: String,
 }
 
 fn default_creation_kind() -> String {
     "distilled".to_string()
+}
+
+fn default_review_status() -> String {
+    "confirmed".to_string()
 }
 
 fn is_zero_f32(v: &f32) -> bool {

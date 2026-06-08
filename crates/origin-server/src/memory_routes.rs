@@ -3290,6 +3290,7 @@ pub async fn handle_refresh_page(
         last_delta_summary: None,
         changelog: None,
         creation_kind: existing.creation_kind.clone(),
+        review_status: existing.review_status.clone(),
     };
 
     // 1. md-first
