@@ -385,3 +385,56 @@ async fn list_memories_confirmed_false_filters_unconfirmed() {
         "created_at must be a number; got: {unconf}"
     );
 }
+
+// ── POST /api/memory/:id/update-page demotes review_status ──────────────────
+
+#[tokio::test]
+async fn manual_page_edit_route_demotes_review_status_to_unconfirmed() {
+    let (app, db, _dir) = test_app_with_db().await;
+    let now = chrono::Utc::now().to_rfc3339();
+    // Seed a confirmed distilled page directly.
+    db.insert_page(
+        "page_demote",
+        "T",
+        Some("s"),
+        "original body",
+        None,
+        None,
+        &[],
+        &now,
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        db.get_page("page_demote")
+            .await
+            .unwrap()
+            .unwrap()
+            .review_status,
+        "confirmed",
+        "freshly seeded distilled page starts confirmed"
+    );
+    // Manual edit via the HTTP route.
+    let (status, _body) = json_post(
+        &app,
+        "/api/memory/page_demote/update-page",
+        Some("tester"),
+        serde_json::json!({ "content": "manually edited body" }),
+    )
+    .await;
+    assert_eq!(
+        status,
+        axum::http::StatusCode::OK,
+        "update route should 200"
+    );
+    // The trust boundary must cover this bypass route.
+    assert_eq!(
+        db.get_page("page_demote")
+            .await
+            .unwrap()
+            .unwrap()
+            .review_status,
+        "unconfirmed",
+        "manual edit must demote the page to unconfirmed"
+    );
+}
