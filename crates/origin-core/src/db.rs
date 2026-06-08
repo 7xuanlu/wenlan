@@ -27,7 +27,7 @@ pub const EMBEDDING_DIM: usize = 768;
 
 /// Current DB schema version (highest `PRAGMA user_version` applied by `migrate()`).
 /// Bump this whenever a new migration lands. Used as an eval cache invalidation key.
-pub const SCHEMA_VERSION: u32 = 59;
+pub const SCHEMA_VERSION: u32 = 60;
 
 /// Shared embedder reference. Pass to [`MemoryDB::new_with_shared_embedder`] to
 /// reuse a single embedder across many `MemoryDB` instances. Created via
@@ -5811,6 +5811,37 @@ impl MemoryDB {
                     .await
                     .map_err(|e| OriginError::VectorDb(format!("m59 bump: {e}")))?;
                 log::info!("[migration] Migration 59 applied: summary_nodes + summary_node_sources + summary_nodes_fts + idx_summary_nodes_embedding (T18 global prelude)");
+            }
+
+            // Migration 60: page_evidence successor table (typed provenance).
+            // Additive — does NOT drop page_sources. Backfills memory rows from
+            // existing page_sources so the typed read path matches legacy on day one.
+            if version < 60 {
+                let conn = self.conn.lock().await;
+                conn.execute_batch(
+                    "
+                    CREATE TABLE IF NOT EXISTS page_evidence (
+                        page_id TEXT NOT NULL REFERENCES pages(id) ON DELETE CASCADE,
+                        source_kind TEXT NOT NULL CHECK(source_kind IN ('memory','external_url','external_file','authored')),
+                        locator TEXT,
+                        title TEXT,
+                        linked_at INTEGER NOT NULL,
+                        link_reason TEXT,
+                        PRIMARY KEY (page_id, source_kind, locator)
+                    );
+                    CREATE INDEX IF NOT EXISTS idx_page_evidence_locator
+                        ON page_evidence(locator) WHERE locator IS NOT NULL;
+                    ",
+                ).await.map_err(|e| OriginError::VectorDb(format!("m60 create page_evidence: {e}")))?;
+                conn.execute(
+                    "INSERT OR IGNORE INTO page_evidence (page_id, source_kind, locator, title, linked_at, link_reason)
+                     SELECT page_id, 'memory', memory_source_id, NULL, linked_at, link_reason FROM page_sources",
+                    (),
+                ).await.map_err(|e| OriginError::VectorDb(format!("m60 backfill page_evidence: {e}")))?;
+                conn.execute("PRAGMA user_version = 60", ())
+                    .await
+                    .map_err(|e| OriginError::VectorDb(format!("m60 bump: {e}")))?;
+                log::info!("[migration] Migration 60 applied: page_evidence successor table + memory backfill from page_sources");
             }
         }
 
@@ -19618,6 +19649,19 @@ impl MemoryDB {
             }
         }
 
+        // Dual-write to page_evidence (P2 typed provenance). INSERT OR IGNORE
+        // keeps this idempotent on re-distill.
+        for sid in source_memory_ids {
+            if let Err(e) = conn.execute(
+                "INSERT OR IGNORE INTO page_evidence (page_id, source_kind, locator, title, linked_at, link_reason)
+                 VALUES (?1, 'memory', ?2, NULL, ?3, 'distill')",
+                libsql::params![id, *sid, linked_at],
+            ).await {
+                let _ = conn.execute("ROLLBACK", ()).await;
+                return Err(OriginError::VectorDb(format!("insert_page page_evidence: {e}")));
+            }
+        }
+
         conn.execute("COMMIT", ())
             .await
             .map_err(|e| OriginError::VectorDb(format!("insert_page commit: {e}")))?;
@@ -21074,6 +21118,61 @@ impl MemoryDB {
             });
         }
         Ok(result)
+    }
+
+    /// Typed evidence read path (P2). Successor to `get_page_sources`.
+    pub async fn get_page_evidence(
+        &self,
+        page_id: &str,
+    ) -> Result<Vec<origin_types::PageEvidence>, OriginError> {
+        let conn = self.conn.lock().await;
+        let mut rows = conn
+            .query(
+                "SELECT page_id, source_kind, locator, title, linked_at, link_reason
+             FROM page_evidence WHERE page_id = ?1 ORDER BY linked_at ASC",
+                libsql::params![page_id],
+            )
+            .await
+            .map_err(|e| OriginError::VectorDb(format!("get_page_evidence: {e}")))?;
+        let mut result = Vec::new();
+        while let Some(row) = rows
+            .next()
+            .await
+            .map_err(|e| OriginError::VectorDb(e.to_string()))?
+        {
+            result.push(origin_types::PageEvidence {
+                page_id: row
+                    .get(0)
+                    .map_err(|e| OriginError::VectorDb(format!("page_evidence page_id: {e}")))?,
+                source_kind: row.get(1).map_err(|e| {
+                    OriginError::VectorDb(format!("page_evidence source_kind: {e}"))
+                })?,
+                locator: row.get::<Option<String>>(2).unwrap_or(None),
+                title: row.get::<Option<String>>(3).unwrap_or(None),
+                linked_at: row.get(4).unwrap_or(0),
+                link_reason: row.get::<Option<String>>(5).unwrap_or(None),
+            });
+        }
+        Ok(result)
+    }
+
+    /// Idempotent typed-evidence link. authored rows (NULL locator) never collide.
+    pub async fn link_page_evidence(
+        &self,
+        page_id: &str,
+        source_kind: &str,
+        locator: Option<&str>,
+        title: Option<&str>,
+        link_reason: &str,
+    ) -> Result<(), OriginError> {
+        let now = chrono::Utc::now().timestamp();
+        let conn = self.conn.lock().await;
+        conn.execute(
+            "INSERT OR IGNORE INTO page_evidence (page_id, source_kind, locator, title, linked_at, link_reason)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            libsql::params![page_id, source_kind, locator, title, now, link_reason],
+        ).await.map_err(|e| OriginError::VectorDb(format!("link_page_evidence: {e}")))?;
+        Ok(())
     }
 
     /// Reverse lookup: find all active pages that reference a given memory source_id.
@@ -35798,8 +35897,30 @@ pub(crate) mod tests {
             conn.execute("PRAGMA foreign_keys = OFF", ()).await.unwrap();
             // Migration 50 renamed pages.domain → pages.space; use the current
             // column name here so the table copy does not crash on post-50 DBs.
+            // Recreate with an explicit schema (PRIMARY KEY on id) rather than
+            // `CREATE TABLE AS SELECT`, which drops the PK — a real pre-49 `pages`
+            // table always had `id TEXT PRIMARY KEY` (m46), and migration 60's
+            // `page_evidence` FK requires the parent column to be a PK/UNIQUE.
             conn.execute_batch(
-                "CREATE TABLE pages_pre49 AS \
+                "CREATE TABLE pages_pre49 (
+                     id TEXT PRIMARY KEY,
+                     title TEXT NOT NULL,
+                     summary TEXT,
+                     content TEXT NOT NULL,
+                     entity_id TEXT,
+                     space TEXT,
+                     source_memory_ids TEXT NOT NULL DEFAULT '[]',
+                     version INTEGER NOT NULL DEFAULT 1,
+                     status TEXT NOT NULL DEFAULT 'active',
+                     embedding F32_BLOB(768),
+                     created_at TEXT NOT NULL,
+                     last_compiled TEXT NOT NULL,
+                     last_modified TEXT NOT NULL,
+                     sources_updated_count INTEGER DEFAULT 0,
+                     stale_reason TEXT,
+                     user_edited INTEGER DEFAULT 0
+                 );
+                 INSERT INTO pages_pre49 \
                  SELECT id, title, summary, content, entity_id, space, \
                  source_memory_ids, version, status, embedding, created_at, last_compiled, \
                  last_modified, sources_updated_count, stale_reason, user_edited FROM pages; \
@@ -41398,8 +41519,8 @@ pub(crate) mod tests {
         let uv: i64 = vrows.next().await.unwrap().unwrap().get(0).unwrap();
         assert_eq!(uv as u32, crate::db::SCHEMA_VERSION);
         // test_db() runs the full migration ladder, so the terminal version is
-        // the current SCHEMA_VERSION (59 after T18 summary_nodes).
-        assert_eq!(uv, 59);
+        // the current SCHEMA_VERSION (60 after P2 page_evidence).
+        assert_eq!(uv, 60);
     }
 
     #[tokio::test]
@@ -41416,7 +41537,7 @@ pub(crate) mod tests {
         let mut vrows = conn.query("PRAGMA user_version", ()).await.unwrap();
         let uv: i64 = vrows.next().await.unwrap().unwrap().get(0).unwrap();
         assert_eq!(
-            uv, 59,
+            uv, 60,
             "user_version restored to current terminal version after idempotent re-run"
         );
     }
@@ -41450,7 +41571,7 @@ pub(crate) mod tests {
         let mut vrows = conn.query("PRAGMA user_version", ()).await.unwrap();
         let uv: i64 = vrows.next().await.unwrap().unwrap().get(0).unwrap();
         assert_eq!(uv as u32, crate::db::SCHEMA_VERSION);
-        assert_eq!(uv, 59);
+        assert_eq!(uv, 60);
     }
 
     #[tokio::test]
@@ -41467,7 +41588,7 @@ pub(crate) mod tests {
         let mut vrows = conn.query("PRAGMA user_version", ()).await.unwrap();
         let uv: i64 = vrows.next().await.unwrap().unwrap().get(0).unwrap();
         assert_eq!(
-            uv, 59,
+            uv, 60,
             "user_version restored to current terminal version after idempotent re-run"
         );
     }
@@ -41515,7 +41636,7 @@ pub(crate) mod tests {
         let mut vrows = conn.query("PRAGMA user_version", ()).await.unwrap();
         let uv: i64 = vrows.next().await.unwrap().unwrap().get(0).unwrap();
         assert_eq!(uv as u32, crate::db::SCHEMA_VERSION);
-        assert_eq!(uv, 59, "terminal version is 59 after T18 summary_nodes");
+        assert_eq!(uv, 60, "terminal version is 60 after P2 page_evidence");
     }
 
     #[tokio::test]
@@ -41532,7 +41653,7 @@ pub(crate) mod tests {
         let mut vrows = conn.query("PRAGMA user_version", ()).await.unwrap();
         let uv: i64 = vrows.next().await.unwrap().unwrap().get(0).unwrap();
         assert_eq!(
-            uv, 59,
+            uv, 60,
             "user_version restored to current terminal version after idempotent re-run"
         );
 

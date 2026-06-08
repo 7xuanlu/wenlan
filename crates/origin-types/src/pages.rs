@@ -43,3 +43,16 @@ pub struct Page {
 fn is_zero_f32(v: &f32) -> bool {
     *v == 0.0
 }
+
+/// Typed provenance link for a page (P2 successor to `PageSource`).
+/// Backed by the `page_evidence` SQL table (migration 60).
+/// Additive — `PageSource` / `page_sources` are NOT removed.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct PageEvidence {
+    pub page_id: String,
+    pub source_kind: String, // memory | external_url | external_file | authored
+    pub locator: Option<String>,
+    pub title: Option<String>,
+    pub linked_at: i64,
+    pub link_reason: Option<String>,
+}
