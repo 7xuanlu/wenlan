@@ -282,3 +282,67 @@ async fn distilled_page_defaults_review_status_confirmed() {
     let p = db.get_page("page_1").await.unwrap().unwrap();
     assert_eq!(p.review_status, "confirmed");
 }
+
+use origin_types::requests::CreateConceptRequest;
+
+#[tokio::test]
+async fn distilled_zero_source_page_rejected() {
+    let (db, dir) = make_db().await;
+    let req = CreateConceptRequest {
+        title: "T".into(),
+        content: "body".into(),
+        summary: Some("s".into()),
+        entity_id: None,
+        space: None,
+        source_memory_ids: vec![],
+        creation_kind: Some("distilled".into()),
+    };
+    let r = origin_core::post_write::create_page(&db, req, "test", Some(dir.path())).await;
+    assert!(matches!(
+        r,
+        Err(origin_core::error::OriginError::Validation(_))
+    ));
+}
+
+#[tokio::test]
+async fn authored_zero_source_page_accepted_unconfirmed() {
+    let (db, dir) = make_db().await;
+    let req = CreateConceptRequest {
+        title: "Authored".into(),
+        content: "hand written body".into(),
+        summary: Some("sum".into()),
+        entity_id: None,
+        space: None,
+        source_memory_ids: vec![],
+        creation_kind: Some("authored".into()),
+    };
+    let wr = origin_core::post_write::create_page(&db, req, "test", Some(dir.path()))
+        .await
+        .unwrap();
+    let p = db.get_page(&wr.id).await.unwrap().unwrap();
+    assert_eq!(p.creation_kind, "authored");
+    assert_eq!(p.review_status, "unconfirmed");
+    assert!(
+        db.get_page_evidence(&wr.id).await.unwrap().is_empty(),
+        "authored page has zero evidence"
+    );
+}
+
+#[tokio::test]
+async fn garbage_creation_kind_rejected() {
+    let (db, dir) = make_db().await;
+    let req = CreateConceptRequest {
+        title: "T".into(),
+        content: "body".into(),
+        summary: None,
+        entity_id: None,
+        space: None,
+        source_memory_ids: vec![],
+        creation_kind: Some("garbage".into()),
+    };
+    let r = origin_core::post_write::create_page(&db, req, "test", Some(dir.path())).await;
+    assert!(
+        matches!(r, Err(origin_core::error::OriginError::Validation(_))),
+        "bad kind must be a 422-class Validation error, not a DB CHECK 500"
+    );
+}

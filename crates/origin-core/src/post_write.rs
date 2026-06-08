@@ -435,11 +435,23 @@ pub async fn create_page(
             "page content must not be empty".into(),
         ));
     }
-    if req.source_memory_ids.is_empty() {
+    let creation_kind = req.creation_kind.as_deref().unwrap_or("distilled");
+    if creation_kind == "distilled" && req.source_memory_ids.is_empty() {
         return Err(OriginError::Validation(
-            "page must cite at least one source memory".into(),
+            "distilled page must cite at least one source memory".into(),
         ));
     }
+    const VALID_KINDS: [&str; 4] = ["distilled", "authored", "research", "imported"];
+    if !VALID_KINDS.contains(&creation_kind) {
+        return Err(OriginError::Validation(format!(
+            "invalid creation_kind '{creation_kind}' (expected one of: distilled, authored, research, imported)"
+        )));
+    }
+    let review_status = if creation_kind == "distilled" {
+        "confirmed"
+    } else {
+        "unconfirmed"
+    };
     // Resolution check: every source id must exist
     for sid in &req.source_memory_ids {
         if db.get_memory_detail(sid).await?.is_none() {
@@ -448,13 +460,16 @@ pub async fn create_page(
             )));
         }
     }
-    // Hallucination guard
-    let passed =
-        crate::kg_quality::hallucination_guard(db, &req.content, &req.source_memory_ids).await?;
-    if !passed {
-        return Err(OriginError::Validation(
-            "page body diverges from cited sources (cos sim < 0.6)".into(),
-        ));
+    // Hallucination guard (only when sources are present)
+    if !req.source_memory_ids.is_empty() {
+        let passed =
+            crate::kg_quality::hallucination_guard(db, &req.content, &req.source_memory_ids)
+                .await?;
+        if !passed {
+            return Err(OriginError::Validation(
+                "page body diverges from cited sources (cos sim < 0.6)".into(),
+            ));
+        }
     }
 
     // Build page
@@ -481,8 +496,8 @@ pub async fn create_page(
         last_edited_at: None,
         last_delta_summary: None,
         changelog: None,
-        creation_kind: "authored".to_string(),
-        review_status: "confirmed".to_string(),
+        creation_kind: creation_kind.to_string(),
+        review_status: review_status.to_string(),
     };
 
     // md-first write (only if a knowledge_path was provided)
@@ -497,7 +512,7 @@ pub async fn create_page(
     // DB index
     let source_refs: Vec<&str> = req.source_memory_ids.iter().map(|s| s.as_str()).collect();
     if let Err(e) = db
-        .insert_page(
+        .insert_page_with_kind(
             &id,
             &req.title,
             req.summary.as_deref(),
@@ -506,6 +521,8 @@ pub async fn create_page(
             req.space.as_deref(),
             &source_refs,
             &now,
+            creation_kind,
+            review_status,
         )
         .await
     {
@@ -1368,6 +1385,7 @@ mod tests {
             entity_id: None,
             space: None,
             source_memory_ids: vec!["mem_does_not_exist".to_string()],
+            creation_kind: None,
         };
         assert!(matches!(
             create_page(&db, req, "test", None).await,
@@ -1398,6 +1416,7 @@ mod tests {
             entity_id: None,
             space: None,
             source_memory_ids: vec!["mem-rust".to_string()],
+            creation_kind: None,
         };
         // Hallucination guard should reject (cos sim < 0.6)
         assert!(matches!(
@@ -1431,6 +1450,7 @@ mod tests {
             entity_id: None,
             space: None,
             source_memory_ids: vec!["mem-rust-happy".to_string()],
+            creation_kind: None,
         };
         let result = create_page(&db, req, "test", None).await.unwrap();
         assert!(result.id.starts_with("page_"));
@@ -1463,6 +1483,7 @@ mod tests {
             entity_id: None,
             space: None,
             source_memory_ids: vec![source_id.to_string()],
+            creation_kind: None,
         };
         create_page(db, req, "test", None).await.unwrap().id
     }

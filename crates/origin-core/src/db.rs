@@ -19630,6 +19630,38 @@ impl MemoryDB {
         source_memory_ids: &[&str],
         now: &str,
     ) -> Result<(), OriginError> {
+        self.insert_page_with_kind(
+            id,
+            title,
+            summary,
+            content,
+            entity_id,
+            space,
+            source_memory_ids,
+            now,
+            "distilled",
+            "confirmed",
+        )
+        .await
+    }
+
+    /// Like `insert_page` but with explicit `creation_kind` and `review_status`.
+    /// All callers that need non-distilled pages (authored, research) use this.
+    /// `insert_page` is a thin wrapper that delegates with distilled/confirmed defaults.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn insert_page_with_kind(
+        &self,
+        id: &str,
+        title: &str,
+        summary: Option<&str>,
+        content: &str,
+        entity_id: Option<&str>,
+        space: Option<&str>,
+        source_memory_ids: &[&str],
+        now: &str,
+        creation_kind: &str,
+        review_status: &str,
+    ) -> Result<(), OriginError> {
         // Sanitize daemon-reserved Sources delimiters from client content so
         // persisted `Page.content` never carries them (symmetric with the
         // watcher's egress canonicalization). Shadows `content` so both the
@@ -19670,16 +19702,16 @@ impl MemoryDB {
         let concept_result = match &embedding_sql {
             Some(emb) => {
                 conn.execute(
-                    "INSERT INTO pages (id, title, summary, content, entity_id, space, source_memory_ids, version, status, embedding, created_at, last_compiled, last_modified)
-                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 1, 'active', vector32(?8), ?9, ?9, ?9)",
-                    libsql::params![id, title, summary, content, entity_id, space, source_ids_json, emb.as_str(), now],
+                    "INSERT INTO pages (id, title, summary, content, entity_id, space, source_memory_ids, version, status, embedding, created_at, last_compiled, last_modified, creation_kind, review_status)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 1, 'active', vector32(?8), ?9, ?9, ?9, ?10, ?11)",
+                    libsql::params![id, title, summary, content, entity_id, space, source_ids_json, emb.as_str(), now, creation_kind, review_status],
                 ).await
             }
             None => {
                 conn.execute(
-                    "INSERT INTO pages (id, title, summary, content, entity_id, space, source_memory_ids, version, status, created_at, last_compiled, last_modified)
-                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 1, 'active', ?8, ?8, ?8)",
-                    libsql::params![id, title, summary, content, entity_id, space, source_ids_json, now],
+                    "INSERT INTO pages (id, title, summary, content, entity_id, space, source_memory_ids, version, status, created_at, last_compiled, last_modified, creation_kind, review_status)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 1, 'active', ?8, ?8, ?8, ?9, ?10)",
+                    libsql::params![id, title, summary, content, entity_id, space, source_ids_json, now, creation_kind, review_status],
                 ).await
             }
         };
