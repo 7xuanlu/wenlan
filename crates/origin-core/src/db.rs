@@ -20055,6 +20055,44 @@ impl MemoryDB {
                 )
                 .await;
         }
+
+        // Mirror the memory-source reconcile onto page_evidence. Only memory
+        // rows are touched; external/authored evidence is preserved.
+        if source_memory_ids.is_empty() {
+            conn.execute(
+                "DELETE FROM page_evidence WHERE page_id = ?1 AND source_kind = 'memory'",
+                libsql::params![id],
+            )
+            .await
+            .map_err(|e| OriginError::VectorDb(format!("update_page evidence prune: {e}")))?;
+        } else {
+            let placeholders: String = (0..source_memory_ids.len())
+                .map(|i| format!("?{}", i + 2))
+                .collect::<Vec<_>>()
+                .join(", ");
+            let delete_sql = format!(
+                "DELETE FROM page_evidence WHERE page_id = ?1 AND source_kind = 'memory' AND locator NOT IN ({})",
+                placeholders
+            );
+            let mut bind: Vec<libsql::Value> = Vec::with_capacity(1 + source_memory_ids.len());
+            bind.push(libsql::Value::Text(id.to_string()));
+            for sid in source_memory_ids {
+                bind.push(libsql::Value::Text((*sid).to_string()));
+            }
+            conn.execute(&delete_sql, libsql::params_from_iter(bind))
+                .await
+                .map_err(|e| OriginError::VectorDb(format!("update_page evidence prune: {e}")))?;
+        }
+        for sid in source_memory_ids {
+            conn.execute(
+                "INSERT OR IGNORE INTO page_evidence (page_id, source_kind, locator, title, linked_at, link_reason)
+                 VALUES (?1, 'memory', ?2, NULL, ?3, ?4)",
+                libsql::params![id, sid, now_ts, link_reason],
+            )
+            .await
+            .map_err(|e| OriginError::VectorDb(format!("update_page evidence insert: {e}")))?;
+        }
+
         drop(conn);
 
         // Refresh the wikilink graph for this page. Extraction is pure CPU;
@@ -21084,6 +21122,13 @@ impl MemoryDB {
         )
         .await
         .map_err(|e| OriginError::VectorDb(format!("link_page_source: {e}")))?;
+        conn.execute(
+            "INSERT OR IGNORE INTO page_evidence (page_id, source_kind, locator, title, linked_at, link_reason)
+             VALUES (?1, 'memory', ?2, NULL, ?3, ?4)",
+            libsql::params![page_id, memory_source_id, now, link_reason],
+        )
+        .await
+        .map_err(|e| OriginError::VectorDb(format!("link_page_source page_evidence: {e}")))?;
         Ok(())
     }
 

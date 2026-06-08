@@ -66,3 +66,124 @@ async fn page_evidence_backfill_matches_legacy_page_sources() {
     assert_eq!(locs, vec!["mem_a".to_string(), "mem_b".to_string()]);
     assert!(ev.iter().all(|e| e.source_kind == "memory"));
 }
+
+/// Sorted memory-locator set from page_evidence vs sorted memory_source_id
+/// set from page_sources for a page. They must be equal (dual-write contract).
+async fn evidence_vs_sources(db: &MemoryDB, page_id: &str) -> (Vec<String>, Vec<String>) {
+    let mut ev: Vec<String> = db
+        .get_page_evidence(page_id)
+        .await
+        .unwrap()
+        .into_iter()
+        .filter(|e| e.source_kind == "memory")
+        .filter_map(|e| e.locator)
+        .collect();
+    let mut ps: Vec<String> = db
+        .get_page_sources(page_id)
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|s| s.memory_source_id)
+        .collect();
+    ev.sort();
+    ps.sort();
+    (ev, ps)
+}
+
+#[tokio::test]
+async fn dual_write_keeps_page_evidence_consistent_with_page_sources() {
+    let (db, _d) = make_db().await;
+    seed_memory(&db, "mem_a", "alpha").await;
+    seed_memory(&db, "mem_b", "beta").await;
+    seed_memory(&db, "mem_c", "gamma").await;
+    let now = chrono::Utc::now().to_rfc3339();
+    db.insert_page(
+        "page_1",
+        "T",
+        Some("s"),
+        "body",
+        None,
+        None,
+        &["mem_a", "mem_b"],
+        &now,
+    )
+    .await
+    .unwrap();
+    let (ev, ps) = evidence_vs_sources(&db, "page_1").await;
+    assert_eq!(ev, ps, "insert_page diverged");
+    db.update_page_content("page_1", "body2", &["mem_a", "mem_c"], "manual_edit")
+        .await
+        .unwrap();
+    let (ev, ps) = evidence_vs_sources(&db, "page_1").await;
+    assert_eq!(ev, ps, "update_page_content diverged");
+    db.link_page_source("page_1", "mem_b", "page_growth")
+        .await
+        .unwrap();
+    let (ev, ps) = evidence_vs_sources(&db, "page_1").await;
+    assert_eq!(ev, ps, "link_page_source diverged");
+}
+
+#[tokio::test]
+async fn update_prunes_memory_evidence_but_preserves_external() {
+    let (db, _d) = make_db().await;
+    seed_memory(&db, "mem_a", "alpha").await;
+    seed_memory(&db, "mem_b", "beta").await;
+    let now = chrono::Utc::now().to_rfc3339();
+    db.insert_page(
+        "page_x",
+        "T",
+        Some("s"),
+        "body",
+        None,
+        None,
+        &["mem_a", "mem_b"],
+        &now,
+    )
+    .await
+    .unwrap();
+    // Attach a non-memory evidence row directly (the row a memory-source edit must NOT touch).
+    db.link_page_evidence(
+        "page_x",
+        "external_url",
+        Some("https://example.com"),
+        Some("Example"),
+        "manual",
+    )
+    .await
+    .unwrap();
+
+    // Edit drops mem_b. Memory rows reconcile; the external row must survive.
+    db.update_page_content("page_x", "body2", &["mem_a"], "manual_edit")
+        .await
+        .unwrap();
+    let ev = db.get_page_evidence("page_x").await.unwrap();
+    let mem: Vec<String> = ev
+        .iter()
+        .filter(|e| e.source_kind == "memory")
+        .filter_map(|e| e.locator.clone())
+        .collect();
+    assert_eq!(
+        mem,
+        vec!["mem_a".to_string()],
+        "memory evidence reconciled to new set"
+    );
+    assert!(
+        ev.iter().any(|e| e.source_kind == "external_url"
+            && e.locator.as_deref() == Some("https://example.com")),
+        "external evidence must survive a memory-source edit"
+    );
+
+    // Empty-source edit: prune ALL memory rows; external still preserved.
+    db.update_page_content("page_x", "body3", &[], "manual_edit")
+        .await
+        .unwrap();
+    let ev = db.get_page_evidence("page_x").await.unwrap();
+    assert!(
+        !ev.iter().any(|e| e.source_kind == "memory"),
+        "empty-source edit prunes all memory evidence"
+    );
+    assert!(
+        ev.iter().any(|e| e.source_kind == "external_url"),
+        "external evidence preserved on empty-source edit"
+    );
+}
