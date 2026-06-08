@@ -19542,6 +19542,12 @@ impl MemoryDB {
         source_memory_ids: &[&str],
         now: &str,
     ) -> Result<(), OriginError> {
+        // Sanitize daemon-reserved Sources delimiters from client content so
+        // persisted `Page.content` never carries them (symmetric with the
+        // watcher's egress canonicalization). Shadows `content` so both the
+        // INSERT and the wikilink refresh below see the sanitized value.
+        let sanitized_content = crate::export::provenance::sanitize_ingress_content(content);
+        let content: &str = &sanitized_content;
         let source_ids_json = serde_json::to_string(&source_memory_ids)
             .map_err(|e| OriginError::VectorDb(format!("serialize source_memory_ids: {e}")))?;
 
@@ -19875,6 +19881,14 @@ impl MemoryDB {
         require_stale: bool,
         changelog: Option<&str>,
     ) -> Result<bool, OriginError> {
+        // Sanitize daemon-reserved Sources delimiters from client content so
+        // persisted `Page.content` never carries them (symmetric with the
+        // watcher's egress canonicalization). Shadows `content` so both the
+        // UPDATE and the wikilink refresh below see the sanitized value. The
+        // watcher's apply path already passes a canonicalized body, so this is
+        // an idempotent no-op there.
+        let sanitized_content = crate::export::provenance::sanitize_ingress_content(content);
+        let content: &str = &sanitized_content;
         let source_ids_json = serde_json::to_string(&source_memory_ids)
             .map_err(|e| OriginError::VectorDb(format!("serialize source_memory_ids: {e}")))?;
         let now = chrono::Utc::now().to_rfc3339();
@@ -31614,6 +31628,75 @@ pub(crate) mod tests {
 
         // Deleting non-existent ID should not error
         db.delete_page("nonexistent").await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn insert_page_strips_daemon_sources_delimiters_from_client_content() {
+        use crate::export::provenance::{SOURCES_BLOCK_END, SOURCES_BLOCK_START};
+        let (db, _dir) = test_db().await;
+        let now = chrono::Utc::now().to_rfc3339();
+        let content = format!(
+            "## Overview\nReal prose.\n\n{SOURCES_BLOCK_START}\n## Sources\n- [[mem_99]]\n{SOURCES_BLOCK_END}\n"
+        );
+        db.insert_page(
+            "page_ingress",
+            "Ingress",
+            None,
+            &content,
+            None,
+            None,
+            &[],
+            &now,
+        )
+        .await
+        .unwrap();
+        let stored = db.get_page("page_ingress").await.unwrap().unwrap();
+        assert!(!stored.content.contains(SOURCES_BLOCK_START));
+        assert!(!stored.content.contains(SOURCES_BLOCK_END));
+        assert!(!stored.content.contains("## Sources"));
+        assert!(!stored.content.contains("[[mem_99]]"));
+        assert!(stored.content.contains("Real prose."));
+    }
+
+    #[tokio::test]
+    async fn update_page_content_strips_daemon_sources_delimiters_from_client_content() {
+        use crate::export::provenance::{SOURCES_BLOCK_END, SOURCES_BLOCK_START};
+        let (db, _dir) = test_db().await;
+        let now = chrono::Utc::now().to_rfc3339();
+        db.insert_page("page_upd", "Upd", None, "seed", None, None, &[], &now)
+            .await
+            .unwrap();
+        let content = format!(
+            "Updated prose.\n\n{SOURCES_BLOCK_START}\n## Sources\n- [[mem_7]]\n{SOURCES_BLOCK_END}\n"
+        );
+        db.update_page_content("page_upd", &content, &[], "manual_edit")
+            .await
+            .unwrap();
+        let stored = db.get_page("page_upd").await.unwrap().unwrap();
+        assert!(!stored.content.contains(SOURCES_BLOCK_START));
+        assert!(!stored.content.contains(SOURCES_BLOCK_END));
+        assert!(!stored.content.contains("## Sources"));
+        assert!(!stored.content.contains("[[mem_7]]"));
+        assert!(stored.content.contains("Updated prose."));
+    }
+
+    #[tokio::test]
+    async fn insert_page_stray_start_delimiter_does_not_truncate_prose() {
+        // Data-loss regression: a lone START token (no matching END) must not
+        // cause the prose after it to be dropped. Both halves must survive and
+        // the delimiter token must be removed.
+        use crate::export::provenance::{SOURCES_BLOCK_END, SOURCES_BLOCK_START};
+        let (db, _dir) = test_db().await;
+        let now = chrono::Utc::now().to_rfc3339();
+        let content = format!("prose A {SOURCES_BLOCK_START} prose B");
+        db.insert_page("page_stray", "Stray", None, &content, None, None, &[], &now)
+            .await
+            .unwrap();
+        let stored = db.get_page("page_stray").await.unwrap().unwrap();
+        assert!(stored.content.contains("prose A"));
+        assert!(stored.content.contains("prose B"));
+        assert!(!stored.content.contains(SOURCES_BLOCK_START));
+        assert!(!stored.content.contains(SOURCES_BLOCK_END));
     }
 
     // ---- page_links / wikilink graph ----

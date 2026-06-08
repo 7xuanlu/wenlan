@@ -39,6 +39,23 @@ pub fn canonicalize_page_body(body: &str) -> String {
     out.trim_end().to_string()
 }
 
+/// Strip daemon-reserved Sources-block delimiters from CLIENT-supplied page
+/// content before persistence. The exporter owns these delimiters; persisted
+/// `Page.content` must never carry them, or the watcher's egress
+/// canonicalization becomes asymmetric (mismatched-pair `user_edited` storm or
+/// stray-delimiter prose truncation). Strips a delimiter-owned block (via
+/// `canonicalize_page_body`) AND removes any residual lone START/END tokens
+/// (a stray delimiter with no matching pair, which `canonicalize_page_body`
+/// leaves untouched). Idempotent: delimiter-free content only gets trailing
+/// whitespace trimmed, so re-sanitizing already-stored content is a no-op.
+pub fn sanitize_ingress_content(content: &str) -> String {
+    let stripped = canonicalize_page_body(content);
+    let cleaned = stripped
+        .replace(SOURCES_BLOCK_START, "")
+        .replace(SOURCES_BLOCK_END, "");
+    cleaned.trim_end().to_string()
+}
+
 /// Encode `s` as a YAML-safe double-quoted scalar. A JSON string literal is
 /// a valid YAML flow scalar, so serde_json handles quotes/backslashes/control
 /// chars correctly. Falls back to a naive quote only if JSON encoding fails
@@ -276,6 +293,42 @@ mod tests {
             format!("head prose\n\n{SOURCES_BLOCK_START}\nx\n{SOURCES_BLOCK_END}\n\ntail prose");
         let canon = canonicalize_page_body(&body);
         assert_eq!(canon, "head prose\n\ntail prose");
+    }
+
+    #[test]
+    fn sanitize_ingress_strips_full_block_preserving_prose() {
+        let content = format!(
+            "## Overview\nReal prose here.\n\n{SOURCES_BLOCK_START}\n## Sources\n- [[mem_1]]\n{SOURCES_BLOCK_END}\n\ntail prose"
+        );
+        let out = sanitize_ingress_content(&content);
+        assert!(!out.contains(SOURCES_BLOCK_START));
+        assert!(!out.contains(SOURCES_BLOCK_END));
+        assert!(!out.contains("[[mem_1]]"));
+        assert!(out.contains("Real prose here."));
+        assert!(out.contains("tail prose"));
+    }
+
+    #[test]
+    fn sanitize_ingress_strips_stray_start_without_truncating_prose() {
+        // A lone START token with prose after it. canonicalize_page_body leaves
+        // it untouched (no matching END), so sanitize must remove the token AND
+        // keep BOTH prose halves — no truncation (the data-loss case).
+        let content = format!("prose A {SOURCES_BLOCK_START} prose B");
+        let out = sanitize_ingress_content(&content);
+        assert!(!out.contains(SOURCES_BLOCK_START));
+        assert!(!out.contains(SOURCES_BLOCK_END));
+        assert!(out.contains("prose A"));
+        assert!(out.contains("prose B"));
+    }
+
+    #[test]
+    fn sanitize_ingress_is_noop_on_delimiter_free_content() {
+        let content =
+            "## Overview\nJust normal prose.\n\n## Sources\nuser-typed, not the daemon block.";
+        let out = sanitize_ingress_content(content);
+        assert_eq!(out, content.trim_end());
+        // Idempotent: re-sanitizing already-stored content changes nothing.
+        assert_eq!(sanitize_ingress_content(&out), out);
     }
 
     #[test]
