@@ -346,3 +346,48 @@ async fn garbage_creation_kind_rejected() {
         "bad kind must be a 422-class Validation error, not a DB CHECK 500"
     );
 }
+
+#[tokio::test]
+async fn scoped_matcher_excludes_user_edited_when_disallowed() {
+    let (db, _d) = make_db().await;
+    seed_memory(&db, "mem_a", "rust async runtime tokio").await;
+    let now = chrono::Utc::now().to_rfc3339();
+    db.insert_page(
+        "page_ue",
+        "Rust",
+        Some("rust async tokio"),
+        "body",
+        None,
+        Some("work"),
+        &["mem_a"],
+        &now,
+    )
+    .await
+    .unwrap();
+    // Mark user_edited via the manual-edit path (sets user_edited=1, keeps review_status=confirmed).
+    db.update_page_content("page_ue", "edited body", &["mem_a"], "manual_edit")
+        .await
+        .unwrap();
+    let emb = db
+        .generate_embeddings(&["rust async tokio".to_string()])
+        .unwrap()
+        .remove(0);
+
+    // CONTROL: with allow_user_edited=true, the page IS returned (proves it matches by embedding + workspace + confirmed).
+    let allowed = db
+        .find_matching_page_scoped(None, &emb, 0.5, Some("work"), true)
+        .await
+        .unwrap();
+    assert_eq!(allowed.as_ref().map(|p| p.id.as_str()), Some("page_ue"),
+        "control: a confirmed in-workspace page must match when user_edited is allowed (else threshold/embedding is the problem, fix the test seed)");
+
+    // TEST: with allow_user_edited=false, the SAME page is REFUSED.
+    let refused = db
+        .find_matching_page_scoped(None, &emb, 0.5, Some("work"), false)
+        .await
+        .unwrap();
+    assert!(
+        refused.map(|p| p.id != "page_ue").unwrap_or(true),
+        "must not return a user_edited page when disallowed"
+    );
+}

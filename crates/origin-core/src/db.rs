@@ -20285,6 +20285,69 @@ impl MemoryDB {
         Ok(None)
     }
 
+    /// Scoped successor to `find_matching_page` for cluster-dedup (P2).
+    /// Entity-first, then embedding cosine, but constrained:
+    ///  - `workspace` (when Some): only pages whose `space` matches are eligible.
+    ///    `None` = no workspace constraint (P3 adds a dedicated workspace axis;
+    ///    until then we scope on the `space` column we have).
+    ///  - only `review_status='confirmed'` pages are dedup targets (an unconfirmed
+    ///    authored page is not a consolidation anchor).
+    ///  - when `allow_user_edited=false`, a `user_edited` match is REFUSED (returns
+    ///    None) so the caller never silently rewrites hand-edited prose.
+    pub async fn find_matching_page_scoped(
+        &self,
+        entity_id: Option<&str>,
+        embedding: &[f32],
+        threshold: f64,
+        workspace: Option<&str>,
+        allow_user_edited: bool,
+    ) -> Result<Option<Page>, OriginError> {
+        // Entity-first, but scoped.
+        if let Some(eid) = entity_id {
+            if let Some(page) = self.get_page_by_entity(eid).await? {
+                let ws_ok = workspace.is_none_or(|w| page.space.as_deref() == Some(w));
+                let status_ok = page.review_status == "confirmed";
+                if ws_ok && status_ok && (allow_user_edited || !page.user_edited) {
+                    return Ok(Some(page));
+                }
+            }
+        }
+        // Embedding cosine, scoped in SQL on space + review_status.
+        let emb_sql = Self::vec_to_sql(embedding);
+        let conn = self.conn.lock().await;
+        let mut rows = conn
+            .query(
+                "SELECT c.id, c.title, c.summary, c.content, c.entity_id, c.space,
+                        c.source_memory_ids, c.version, c.status, c.created_at, c.last_compiled, c.last_modified,
+                        COALESCE(c.sources_updated_count, 0), c.stale_reason, COALESCE(c.user_edited, 0),
+                        COALESCE(c.changelog, '[]'), COALESCE(c.creation_kind, 'distilled'), COALESCE(c.review_status, 'confirmed'),
+                        vector_distance_cos(c.embedding, vector32(?1)) as dist
+                 FROM pages c
+                 WHERE c.status = 'active' AND c.embedding IS NOT NULL
+                   AND COALESCE(c.review_status, 'confirmed') = 'confirmed'
+                   AND (?2 IS NULL OR c.space = ?2)
+                 ORDER BY dist ASC LIMIT 1",
+                libsql::params![emb_sql, workspace],
+            )
+            .await
+            .map_err(|e| OriginError::VectorDb(format!("scoped page similarity: {e}")))?;
+        if let Some(row) = rows
+            .next()
+            .await
+            .map_err(|e| OriginError::VectorDb(e.to_string()))?
+        {
+            let dist: f64 = row.get(18).unwrap_or(1.0);
+            if 1.0 - dist >= threshold {
+                let page = Self::row_to_page(&row)?;
+                if !allow_user_edited && page.user_edited {
+                    return Ok(None);
+                }
+                return Ok(Some(page));
+            }
+        }
+        Ok(None)
+    }
+
     /// Check if a page's inputs have changed since last compilation.
     /// True if source memories were modified or new memories linked to same entity.
     pub async fn has_page_sources_changed(&self, page: &Page) -> Result<bool, OriginError> {
