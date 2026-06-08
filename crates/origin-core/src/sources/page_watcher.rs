@@ -181,7 +181,15 @@ async fn sync_one_file(
         if raw_body != fresh_body.trim_end_matches('\n') {
             let writer =
                 crate::export::knowledge::KnowledgeWriter::new(knowledge_path.to_path_buf());
-            writer.write_page(&existing)?;
+            // Only re-project if the writer already maps this page to a file (state
+            // entry present) — otherwise write_page's unique_filename would fork a
+            // `<slug>-2.md` duplicate against the on-disk file we're reading (real on a
+            // vault synced without `.origin/state.json`). Without state we can't safely
+            // pick the canonical file; leave it as-is until a genuine re-distill
+            // re-establishes the mapping. The page row is untouched either way.
+            if writer.page_filename(&existing.id).is_some() {
+                writer.write_page(&existing)?;
+            }
         }
         return Ok(Outcome::Unchanged);
     }
@@ -626,6 +634,55 @@ mod tests {
         let after = std::fs::read_to_string(&md_path).unwrap();
         assert!(!after.contains("mem_FAKE"));
         assert!(after.contains("[[mem_real]]"));
+    }
+
+    #[tokio::test]
+    async fn no_duplicate_file_when_state_missing_on_reprojection() {
+        let (db, _ddir) = fresh_db().await;
+        let knowledge_dir = TempDir::new().unwrap();
+        let page = sample_page("page_nostate", "No State", "## Overview\nold body");
+        let now = chrono::Utc::now().to_rfc3339();
+        db.insert_page(
+            "page_nostate",
+            &page.title,
+            None,
+            &page.content,
+            None,
+            None,
+            &["mem_z"],
+            &now,
+        )
+        .await
+        .unwrap();
+        // Write an OLD-format .md directly (no write_page → no state.json entry),
+        // with frontmatter origin_id matching the DB row. The prose body equals
+        // the DB content, but the file lacks the delimiter Sources block a fresh
+        // render adds — so the canonicalized bodies are EQUAL (reaching the
+        // equal-canon branch) while raw_body != fresh_body (which would trigger
+        // re-projection if not for the missing-state guard). origin_version: 1
+        // matches the DB row so the watcher does not bail via SkippedDaemonAhead.
+        let md = format!(
+            "---\ntitle: \"{}\"\norigin_id: page_nostate\norigin_version: 1\n---\n\n## Overview\nold body\n",
+            page.title
+        );
+        std::fs::write(knowledge_dir.path().join("no-state.md"), &md).unwrap();
+
+        sync_filesystem_edits(&db, knowledge_dir.path())
+            .await
+            .unwrap();
+
+        // No duplicate page file forked.
+        let md_files: Vec<_> = std::fs::read_dir(knowledge_dir.path())
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .filter(|e| e.path().extension().map(|x| x == "md").unwrap_or(false))
+            .map(|e| e.file_name().to_string_lossy().to_string())
+            .collect();
+        assert!(
+            !md_files.iter().any(|n| n.contains("-2")),
+            "must not fork a duplicate; got {:?}",
+            md_files
+        );
     }
 
     /// Task 5: pure projection + watcher tick with NO user edit must produce
