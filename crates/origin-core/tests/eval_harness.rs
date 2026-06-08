@@ -483,6 +483,78 @@ async fn save_longmemeval_baseline() {
     save_layered(&report, |r| r.to_eval_report());
 }
 
+/// LME full-haystack TEMPORAL retrieval A/B (event_date injected + search_memory_temporal).
+/// Compare per-category vs `save_longmemeval_baseline` (base) on the same fixture +
+/// EVAL_LME_STRATIFIED subset. Toggle the lever with ORIGIN_ENABLE_TEMPORAL_FILTER=1
+/// (hard window filter) or ORIGIN_ENABLE_TEMPORAL_SOFT_BOOST=1 (never-drop boost).
+#[tokio::test]
+#[ignore]
+async fn save_longmemeval_temporal_baseline() {
+    let rel =
+        std::env::var("LME_FIXTURE").unwrap_or_else(|_| "data/longmemeval_oracle.json".to_string());
+    let path = eval_root().join(&rel);
+    if !path.exists() {
+        println!("SKIP: {rel} not found");
+        return;
+    }
+    let report = origin_core::eval::longmemeval::run_longmemeval_eval_temporal(&path)
+        .await
+        .unwrap();
+    println!(
+        "=== LME TEMPORAL retrieval [{rel}] OVERALL ({}q, {}mem): ndcg@10={:.3} R@5={:.3} mrr={:.3} hit@1={:.3} ===",
+        report.total_questions,
+        report.total_memories,
+        report.aggregate_ndcg_at_10,
+        report.aggregate_recall_at_5,
+        report.aggregate_mrr,
+        report.aggregate_hit_rate_at_1
+    );
+    for c in &report.per_category {
+        println!(
+            "  {:28} n={:<4} ndcg@10={:.3} R@5={:.3} mrr={:.3} hit@1={:.3}",
+            c.question_type, c.count, c.ndcg_at_10, c.recall_at_5, c.mrr, c.hit_rate_at_1
+        );
+    }
+}
+
+/// LME full-haystack DECOMPOSE retrieval A/B (search_memory_decomposed: split the
+/// query into independent subqueries, retrieve each, RRF-merge). Targets
+/// multi-session (worst base category, R@5 0.607). Needs the local LLM for the
+/// decomposition call. Compare per-category vs `save_longmemeval_baseline` (base).
+#[tokio::test]
+#[ignore]
+async fn save_longmemeval_decomposed_baseline() {
+    use std::sync::Arc;
+    let rel =
+        std::env::var("LME_FIXTURE").unwrap_or_else(|_| "data/longmemeval_oracle.json".to_string());
+    let path = eval_root().join(&rel);
+    if !path.exists() {
+        println!("SKIP: {rel} not found");
+        return;
+    }
+    let llm: Arc<dyn origin_core::llm_provider::LlmProvider> = Arc::new(
+        origin_core::llm_provider::OnDeviceProvider::new_with_model(Some("qwen3.5-9b")).unwrap(),
+    );
+    let report = origin_core::eval::longmemeval::run_longmemeval_eval_decomposed(&path, llm)
+        .await
+        .unwrap();
+    println!(
+        "=== LME DECOMPOSE retrieval [{rel}] OVERALL ({}q, {}mem): ndcg@10={:.3} R@5={:.3} mrr={:.3} hit@1={:.3} ===",
+        report.total_questions,
+        report.total_memories,
+        report.aggregate_ndcg_at_10,
+        report.aggregate_recall_at_5,
+        report.aggregate_mrr,
+        report.aggregate_hit_rate_at_1
+    );
+    for c in &report.per_category {
+        println!(
+            "  {:28} n={:<4} ndcg@10={:.3} R@5={:.3} mrr={:.3} hit@1={:.3}",
+            c.question_type, c.count, c.ndcg_at_10, c.recall_at_5, c.mrr, c.hit_rate_at_1
+        );
+    }
+}
+
 #[tokio::test]
 #[ignore]
 async fn save_locomo_reranked_baseline() {

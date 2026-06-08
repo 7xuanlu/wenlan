@@ -2073,6 +2073,118 @@ pub async fn run_longmemeval_eval_temporal(path: &Path) -> Result<LongMemEvalRep
     Ok(report)
 }
 
+/// LongMemEval retrieval with query DECOMPOSITION before search
+/// ([`MemoryDB::search_memory_decomposed`]): the question is split into
+/// independent factual subqueries, each retrieved separately, RRF-merged. Targets
+/// multi-session questions whose evidence spans sessions a single embedding
+/// starves. Needs an LLM (the decomposition call). Mirror of
+/// [`run_longmemeval_eval`] with the search call swapped.
+pub async fn run_longmemeval_eval_decomposed(
+    path: &Path,
+    llm: std::sync::Arc<dyn crate::llm_provider::LlmProvider>,
+) -> Result<LongMemEvalReport, OriginError> {
+    let mut samples = load_longmemeval(path)?;
+    apply_lme_limit(&mut samples);
+    let mut all_scores: Vec<(String, f64, f64, f64, f64, f64)> = Vec::new();
+    let mut per_case: Vec<crate::eval::report::CaseResult> = Vec::new();
+    let mut total_memories: usize = 0;
+
+    for sample in &samples {
+        let memories = extract_memories(sample);
+        let tmp = tempfile::tempdir().map_err(|e| OriginError::Generic(format!("tempdir: {e}")))?;
+        let db = MemoryDB::new(tmp.path(), std::sync::Arc::new(crate::events::NoopEmitter)).await?;
+        let docs: Vec<RawDocument> = memories
+            .iter()
+            .map(|mem| {
+                let memory_type = match sample.question_type.as_str() {
+                    "single-session-preference" => "preference",
+                    _ => "fact",
+                };
+                RawDocument {
+                    content: mem.content.clone(),
+                    source_id: memory_source_id(&mem.question_id, mem.session_idx, mem.turn_idx),
+                    source: "memory".to_string(),
+                    title: format!("{} session {}", mem.role, mem.session_idx),
+                    memory_type: Some(memory_type.to_string()),
+                    space: Some("conversation".to_string()),
+                    last_modified: chrono::Utc::now().timestamp(),
+                    ..Default::default()
+                }
+            })
+            .collect();
+        total_memories += docs.len();
+        db.upsert_documents(docs).await?;
+
+        let relevant_source_ids: HashSet<String> = memories
+            .iter()
+            .filter(|m| m.has_answer)
+            .map(|m| memory_source_id(&m.question_id, m.session_idx, m.turn_idx))
+            .collect();
+        if relevant_source_ids.is_empty() {
+            continue;
+        }
+
+        let results = db
+            .search_memory_decomposed(&sample.question, 10, None, None, None, Some(llm.clone()))
+            .await?;
+
+        let result_ids: Vec<&str> = results.iter().map(|r| r.source_id.as_str()).collect();
+        let grades: HashMap<&str, u8> = result_ids
+            .iter()
+            .map(|id| (*id, u8::from(relevant_source_ids.contains(*id))))
+            .collect();
+        let relevant_set: HashSet<&str> = relevant_source_ids.iter().map(|s| s.as_str()).collect();
+
+        let ndcg_10 = metrics::ndcg_at_k(&result_ids, &grades, 10);
+        let ndcg_5 = metrics::ndcg_at_k(&result_ids, &grades, 5);
+        let mrr_val = metrics::mrr(&result_ids, &relevant_set);
+        let recall_5 = metrics::recall_at_k(&result_ids, &relevant_set, 5);
+        let hr_1 = metrics::hit_rate_at_k(&result_ids, &relevant_set, 1);
+
+        all_scores.push((
+            sample.question_type.clone(),
+            ndcg_5,
+            ndcg_10,
+            mrr_val,
+            recall_5,
+            hr_1,
+        ));
+        per_case.push(build_lme_case_result(
+            &sample.question,
+            &sample.question_type,
+            ndcg_5,
+            ndcg_10,
+            mrr_val,
+            recall_5,
+            hr_1,
+        ));
+    }
+
+    let per_category = aggregate_by_category(&all_scores);
+    let mut report = LongMemEvalReport {
+        aggregate_ndcg_at_10: avg_field(&all_scores, |s| s.2),
+        aggregate_mrr: avg_field(&all_scores, |s| s.3),
+        aggregate_recall_at_5: avg_field(&all_scores, |s| s.4),
+        aggregate_hit_rate_at_1: avg_field(&all_scores, |s| s.5),
+        total_questions: all_scores.len(),
+        total_memories,
+        per_category,
+        baseline: None,
+        env: None,
+        per_case,
+        coverage: None,
+    };
+    report.env = Some(build_lme_env(
+        "decomposed",
+        path,
+        "search_memory_decomposed",
+        "on-device",
+        "qwen3.5-9b",
+        None,
+    ));
+    Ok(report)
+}
+
 /// Per-query variant of [`run_longmemeval_eval_temporal`] (T4a). SELF-SEEDS a
 /// fresh ephemeral DB per question (stamps `event_date`), so unlike the cached-DB
 /// collectors this re-runs the write path — runs are reproducible only insofar as
