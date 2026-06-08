@@ -896,6 +896,78 @@ pub fn khop_traversal_enabled() -> bool {
         .unwrap_or(false)
 }
 
+/// True iff `ORIGIN_GRAPH_MEMORY_STREAM` is truthy (`1`/`true`/`yes`). OPT-IN,
+/// default OFF.
+///
+/// When OFF, [`MemoryDB::augment_with_graph`] keeps its legacy
+/// entity→observation merge — which is a structural no-op (it boosts observation
+/// ghost-ids that never collide with base memory keys, and those rows are then
+/// stripped at output). Byte-identical to pre-existing behavior.
+///
+/// When ON, `augment_with_graph` switches to a LIVE entity→memory RRF stream
+/// (see [`MemoryDB::augment_with_memory_stream`]): query-anchored entities are
+/// hard-filtered by type (non-person/speaker) and degree (≤ [`graph_hub_cap`]),
+/// the memories linked to the surviving anchors via `memory_entities` are fused
+/// into the result pool at memory (`source_id`) granularity, and the rows are
+/// tagged `source = "memory"` with real ids so they survive the knowledge_graph
+/// strip. Truthy-only parse so production and eval cannot disagree.
+pub fn graph_memory_stream_enabled() -> bool {
+    std::env::var("ORIGIN_GRAPH_MEMORY_STREAM")
+        .ok()
+        .map(|v| matches!(v.trim().to_ascii_lowercase().as_str(), "1" | "true" | "yes"))
+        .unwrap_or(false)
+}
+
+/// True iff `ORIGIN_GRAPH_SURFACE_NEW` is truthy. OPT-IN, default OFF. Only
+/// meaningful when [`graph_memory_stream_enabled`] is ON.
+///
+/// OFF = boost-only: the graph RRF term lifts only memories already in the base
+/// pool; it can never introduce a memory the base search did not return.
+///
+/// ON = surface-new: graph-only linked memories (absent from the base pool) are
+/// added under the bounded [`graph_surface_budget`], drawn from the same
+/// type+degree-filtered anchors. The higher-recall, higher-noise arm.
+pub fn graph_surface_new_enabled() -> bool {
+    std::env::var("ORIGIN_GRAPH_SURFACE_NEW")
+        .ok()
+        .map(|v| matches!(v.trim().to_ascii_lowercase().as_str(), "1" | "true" | "yes"))
+        .unwrap_or(false)
+}
+
+/// Max `memory_entities` degree for an entity to qualify as a graph anchor
+/// (`ORIGIN_GRAPH_HUB_CAP`, default 20). Over-cap entities (speaker pools,
+/// generic hubs) are EXCLUDED outright — degree is a hard filter, not a
+/// tie-break. A non-positive / unparseable value falls back to the default so
+/// the filter can never be silently disabled.
+pub fn graph_hub_cap() -> usize {
+    std::env::var("ORIGIN_GRAPH_HUB_CAP")
+        .ok()
+        .and_then(|v| v.trim().parse::<usize>().ok())
+        .filter(|n| *n > 0)
+        .unwrap_or(20)
+}
+
+/// Max graph-only memories the surface-new arm may introduce per query
+/// (`ORIGIN_GRAPH_SURFACE_BUDGET`, default 5). Bounds the noise the higher-recall
+/// arm can inject. Ignored in boost-only mode.
+pub fn graph_surface_budget() -> usize {
+    std::env::var("ORIGIN_GRAPH_SURFACE_BUDGET")
+        .ok()
+        .and_then(|v| v.trim().parse::<usize>().ok())
+        .unwrap_or(5)
+}
+
+/// True for entity types that name a person / conversational speaker rather than
+/// a concept/topic/event. Such entities form the "speaker hairball" (one speaker
+/// linked to hundreds of memories) and are excluded as graph anchors so the
+/// stream surfaces concept-bridged memories, not co-speaker noise.
+pub fn is_person_like(entity_type: &str) -> bool {
+    matches!(
+        entity_type.trim().to_ascii_lowercase().as_str(),
+        "person" | "speaker" | "people" | "user"
+    )
+}
+
 /// True iff `ORIGIN_MAGNITUDE_FUSION` is set to a truthy value
 /// (`1`, `true`, or `yes`, case-insensitive). OPT-IN: when unset or falsey,
 /// `search_memory`'s FTS channel keeps the legacy rank-only RRF term
@@ -8322,7 +8394,11 @@ impl MemoryDB {
             // When ON + pool has entity ids: seed BFS from pool provenance instead of
             // a fresh query-anchored search_entities_by_vector call.
             // Graceful log-and-degrade: on Err, warn + fall back to query-anchor.
-            if graph_seed_enabled() && !pool_entity_ids.is_empty() {
+            // The T9 observation-seeded path and the v3 memory-stream path are
+            // mutually exclusive: when the memory stream is on, always route
+            // through augment_with_graph (which dispatches to the stream).
+            if graph_seed_enabled() && !pool_entity_ids.is_empty() && !graph_memory_stream_enabled()
+            {
                 let seeded_result = self
                     .augment_with_graph_seeded(query, final_results, &pool_entity_ids, limit)
                     .await;
@@ -10283,6 +10359,16 @@ impl MemoryDB {
             _ => return Ok(results),
         };
 
+        // v3 (ORIGIN_GRAPH_MEMORY_STREAM): live entity→memory stream replaces the
+        // dead entity→observation boost. The legacy path below boosts observation
+        // ghost-ids that are stripped at output (net no-op); the stream surfaces
+        // real linked memories that survive the strip. See augment_with_memory_stream.
+        if graph_memory_stream_enabled() {
+            return self
+                .augment_with_memory_stream(results, limit, &entity_hits)
+                .await;
+        }
+
         let entity_ids: Vec<String> = entity_hits.iter().map(|r| r.entity.id.clone()).collect();
 
         // T4b: k-hop entity-graph traversal (ORIGIN_ENABLE_GRAPH_KHOP, opt-in,
@@ -10344,6 +10430,227 @@ impl MemoryDB {
                 .then_with(|| a.source_id.cmp(&b.source_id))
         });
         Ok(merged)
+    }
+
+    /// v3 live graph stream (ORIGIN_GRAPH_MEMORY_STREAM). Fuses memories linked
+    /// to the query-anchored entities into the result pool at memory (`source_id`)
+    /// granularity, replacing the dead entity→observation boost.
+    ///
+    /// Steps:
+    /// 1. HARD anchor eligibility — keep `entity_hits` (already ranked by vector
+    ///    distance) that are non-person/speaker type AND have `memory_entities`
+    ///    degree ≤ [`graph_hub_cap`]. Over-cap / person anchors are dropped.
+    /// 2. Fetch the chunk-0 memories linked to the surviving anchors, one row per
+    ///    memory, ranked by best (lowest) anchor rank.
+    /// 3. Roll the base results up to one row per `source_id` (keep the
+    ///    best-scoring = base-matched chunk), so the graph term is added once per
+    ///    memory, never once per chunk.
+    /// 4. Add one graph RRF term `1/(60+graph_rank)` per memory. Boost-only
+    ///    (default) credits only memories already in the base pool; surface-new
+    ///    ([`graph_surface_new_enabled`]) also introduces graph-only memories up
+    ///    to [`graph_surface_budget`].
+    /// 5. Emit one `source = "memory"` row per memory (real ids → survive the
+    ///    knowledge_graph strip).
+    async fn augment_with_memory_stream(
+        &self,
+        results: Vec<SearchResult>,
+        limit: usize,
+        entity_hits: &[EntitySearchResult],
+    ) -> Result<Vec<SearchResult>, OriginError> {
+        // 1. Type filter (cheap, in-memory) then degree filter (one query).
+        let typed: Vec<String> = entity_hits
+            .iter()
+            .filter(|h| !is_person_like(&h.entity.entity_type))
+            .map(|h| h.entity.id.clone())
+            .collect();
+        if typed.is_empty() {
+            return Ok(results);
+        }
+        let degrees = self.entity_degrees(&typed).await?;
+        let cap = graph_hub_cap();
+        let ranked_anchor_ids: Vec<String> = typed
+            .into_iter()
+            .filter(|id| degrees.get(id).copied().unwrap_or(0) <= cap)
+            .collect();
+        if ranked_anchor_ids.is_empty() {
+            log::info!(
+                "[graph_stream] no eligible anchors after type+degree filter (cap={cap}); graph contributes nothing"
+            );
+            return Ok(results);
+        }
+
+        // 2. Linked memories, one per source_id, best anchor rank.
+        let graph_memories = self
+            .get_memories_for_entities(&ranked_anchor_ids, limit)
+            .await?;
+        if graph_memories.is_empty() {
+            return Ok(results);
+        }
+
+        // 3. Roll base up to one row per source_id (keep best-scoring chunk).
+        let mut base_by_sid: HashMap<String, SearchResult> = HashMap::new();
+        for r in results {
+            base_by_sid
+                .entry(r.source_id.clone())
+                .and_modify(|cur| {
+                    if r.score > cur.score {
+                        *cur = r.clone();
+                    }
+                })
+                .or_insert(r);
+        }
+        let mut score_map: HashMap<String, f32> = base_by_sid
+            .iter()
+            .map(|(sid, r)| (sid.clone(), r.score))
+            .collect();
+
+        // 4. One graph RRF term per memory.
+        let surface_new = graph_surface_new_enabled();
+        let mut budget = graph_surface_budget();
+        let mut boosted = 0usize;
+        let mut surfaced = 0usize;
+        for (graph_rank, gm) in graph_memories.into_iter().enumerate() {
+            let term = 1.0 / (60.0 + graph_rank as f32);
+            if base_by_sid.contains_key(&gm.source_id) {
+                *score_map.entry(gm.source_id.clone()).or_default() += term;
+                boosted += 1;
+            } else if surface_new && budget > 0 {
+                score_map.insert(gm.source_id.clone(), term);
+                base_by_sid.insert(gm.source_id.clone(), gm);
+                budget -= 1;
+                surfaced += 1;
+            }
+        }
+        log::info!(
+            "[graph_stream] anchors={} boosted={} surfaced={} (surface_new={})",
+            ranked_anchor_ids.len(),
+            boosted,
+            surfaced,
+            surface_new
+        );
+
+        // 5. Emit one row per memory; rows are source="memory" => survive the strip.
+        let mut merged: Vec<SearchResult> = base_by_sid
+            .into_values()
+            .map(|mut r| {
+                r.score = score_map.get(&r.source_id).copied().unwrap_or(r.score);
+                r
+            })
+            .collect();
+        merged.sort_by(|a, b| {
+            b.score
+                .partial_cmp(&a.score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+                .then_with(|| a.source_id.cmp(&b.source_id))
+        });
+        Ok(merged)
+    }
+
+    /// `memory_entities` link count for each entity id. Entities absent from the
+    /// junction map to 0. One grouped query; parameterized.
+    async fn entity_degrees(
+        &self,
+        entity_ids: &[String],
+    ) -> Result<HashMap<String, usize>, OriginError> {
+        if entity_ids.is_empty() {
+            return Ok(HashMap::new());
+        }
+        let conn = self.conn.lock().await;
+        let placeholders: Vec<String> = (1..=entity_ids.len()).map(|i| format!("?{i}")).collect();
+        let sql = format!(
+            "SELECT entity_id, COUNT(*) FROM memory_entities WHERE entity_id IN ({}) GROUP BY entity_id",
+            placeholders.join(",")
+        );
+        let params: Vec<libsql::Value> = entity_ids
+            .iter()
+            .map(|id| libsql::Value::Text(id.clone()))
+            .collect();
+        let mut rows = conn
+            .query(&sql, libsql::params_from_iter(params))
+            .await
+            .map_err(|e| OriginError::VectorDb(format!("entity_degrees: {e}")))?;
+        let mut out = HashMap::new();
+        while let Ok(Some(row)) = rows.next().await {
+            let id: String = row.get(0).unwrap_or_default();
+            let c: i64 = row.get(1).unwrap_or(0);
+            if !id.is_empty() {
+                out.insert(id, c as usize);
+            }
+        }
+        Ok(out)
+    }
+
+    /// v3 graph stream fetch: for ranked eligible anchor entity ids, return the
+    /// chunk-0 memory rows linked via `memory_entities`, ONE row per memory
+    /// (`source_id`), ordered by best (lowest) anchor rank then `source_id`.
+    /// Rows are tagged `source = "memory"` with real ids so they survive the
+    /// knowledge_graph strip. `ranked_anchor_ids[0]` is the closest anchor.
+    pub async fn get_memories_for_entities(
+        &self,
+        ranked_anchor_ids: &[String],
+        limit: usize,
+    ) -> Result<Vec<SearchResult>, OriginError> {
+        if ranked_anchor_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        let anchor_rank: HashMap<&str, usize> = ranked_anchor_ids
+            .iter()
+            .enumerate()
+            .map(|(i, id)| (id.as_str(), i))
+            .collect();
+        let conn = self.conn.lock().await;
+        let placeholders: Vec<String> = (1..=ranked_anchor_ids.len())
+            .map(|i| format!("?{i}"))
+            .collect();
+        // Projection mirrors row_to_search_result cols 0..32 (event_date at 32),
+        // then appends me.entity_id at col 33 so we can map each edge to its anchor.
+        let sql = format!(
+            "SELECT c.id, c.content, c.source, c.source_id, c.title, c.summary, c.url,
+                    c.chunk_index, c.last_modified, c.chunk_type, c.language, c.byte_start,
+                    c.byte_end, c.semantic_unit, c.memory_type, c.space, c.source_agent,
+                    c.confidence, c.confirmed, c.stability, c.supersedes,
+                    c.entity_id, c.quality, c.is_recap, c.supersede_mode,
+                    c.structured_fields, c.retrieval_cue, c.source_text,
+                    c.version, c.pending_revision,
+                    0.0, c.importance, c.event_date, me.entity_id
+             FROM memories c
+             JOIN memory_entities me ON me.memory_id = c.source_id
+             WHERE me.entity_id IN ({ph})
+               AND c.source = 'memory' AND c.chunk_index = 0",
+            ph = placeholders.join(",")
+        );
+        let params: Vec<libsql::Value> = ranked_anchor_ids
+            .iter()
+            .map(|id| libsql::Value::Text(id.clone()))
+            .collect();
+        let mut rows = conn
+            .query(&sql, libsql::params_from_iter(params))
+            .await
+            .map_err(|e| OriginError::VectorDb(format!("get_memories_for_entities: {e}")))?;
+        // Per memory, keep the best (lowest) anchor rank across its edges.
+        let mut best: HashMap<String, (usize, SearchResult)> = HashMap::new();
+        while let Ok(Some(row)) = rows.next().await {
+            let ent: String = row.get(33).unwrap_or_default();
+            let rank = anchor_rank.get(ent.as_str()).copied().unwrap_or(usize::MAX);
+            let res = match Self::row_to_search_result(&row, 0.0) {
+                Ok(r) => r,
+                Err(_) => continue,
+            };
+            best.entry(res.source_id.clone())
+                .and_modify(|(r, _)| {
+                    if rank < *r {
+                        *r = rank;
+                    }
+                })
+                .or_insert((rank, res));
+        }
+        let mut ordered: Vec<(usize, SearchResult)> = best.into_values().collect();
+        ordered.sort_by(|a, b| {
+            a.0.cmp(&b.0)
+                .then_with(|| a.1.source_id.cmp(&b.1.source_id))
+        });
+        ordered.truncate(limit);
+        Ok(ordered.into_iter().map(|(_, r)| r).collect())
     }
 
     // ---------------------------------------------------------------------------
@@ -30480,6 +30787,275 @@ pub(crate) mod tests {
             .unwrap();
         assert!(!augmented.is_empty(), "should include graph observations");
         assert!(augmented.iter().any(|r| r.source == "knowledge_graph"));
+    }
+
+    // ===== v3 entity→memory graph stream (ORIGIN_GRAPH_MEMORY_STREAM) =====
+    // Lever-liveness gate (no GPU): proves graph-ON moves REAL memories, the
+    // hub filter holds, and the modes behave. Council-validated Tests A/B/C.
+
+    /// Minimal base SearchResult for graph-stream tests (source="memory").
+    fn mk_result(source_id: &str, content: &str, score: f32) -> SearchResult {
+        SearchResult {
+            id: format!("id_{source_id}"),
+            content: content.to_string(),
+            source: "memory".to_string(),
+            source_id: source_id.to_string(),
+            title: String::new(),
+            url: None,
+            chunk_index: 0,
+            last_modified: 0,
+            score,
+            chunk_type: None,
+            language: None,
+            semantic_unit: None,
+            memory_type: None,
+            space: None,
+            source_agent: None,
+            confidence: None,
+            confirmed: None,
+            stability: None,
+            supersedes: None,
+            summary: None,
+            entity_id: None,
+            entity_name: None,
+            quality: None,
+            importance: None,
+            event_date: None,
+            is_archived: false,
+            is_recap: false,
+            structured_fields: None,
+            retrieval_cue: None,
+            source_text: None,
+            raw_score: 0.0,
+            version: 0,
+            pending_revision: false,
+            merged_from: None,
+            last_delta_summary: None,
+        }
+    }
+
+    /// Test A — boost-only: graph-ON lifts the concept-linked memory above an
+    /// unlinked competitor that the base ranked higher; person-linked hub and the
+    /// unlinked competitor are untouched; no ghost rows, no duplicate source_id.
+    #[tokio::test]
+    async fn graph_stream_boost_only_lifts_linked_memory_above_competitor() {
+        let (db, _dir) = test_db().await;
+        let concept = db
+            .store_entity("photosynthesis", "concept", None, None, None)
+            .await
+            .unwrap();
+        let person = db
+            .store_entity("Caroline", "person", None, None, None)
+            .await
+            .unwrap();
+
+        insert_memory_at(
+            &db,
+            "m_base",
+            "base",
+            "photosynthesis field notes",
+            1,
+            1,
+            "enriched",
+        )
+        .await;
+        insert_memory_at(
+            &db,
+            "m_comp",
+            "comp",
+            "photosynthesis lecture recap",
+            1,
+            1,
+            "enriched",
+        )
+        .await;
+        insert_memory_at(
+            &db,
+            "m_hub",
+            "hub",
+            "Caroline weekend plans",
+            1,
+            1,
+            "enriched",
+        )
+        .await;
+        db.link_memory_entities("m_base", &[concept.as_str()])
+            .await
+            .unwrap();
+        db.link_memory_entities("m_hub", &[person.as_str()])
+            .await
+            .unwrap();
+
+        // RRF-scale base pool: competitor ranks ABOVE the linked memory pre-graph.
+        let base = vec![
+            mk_result("m_comp", "photosynthesis lecture recap", 1.0 / 60.0),
+            mk_result("m_base", "photosynthesis field notes", 1.0 / 61.0),
+            mk_result("m_hub", "Caroline weekend plans", 1.0 / 70.0),
+        ];
+        let comp_before = base[0].score;
+        let base_before = base[1].score;
+
+        let out = temp_env::async_with_vars([("ORIGIN_GRAPH_MEMORY_STREAM", Some("1"))], async {
+            db.augment_with_graph("photosynthesis", base, 10)
+                .await
+                .unwrap()
+        })
+        .await;
+
+        assert!(
+            out.iter().all(|r| r.source != "knowledge_graph"),
+            "stream emits no ghost knowledge_graph rows"
+        );
+        let mut sids: Vec<&str> = out.iter().map(|r| r.source_id.as_str()).collect();
+        let n = sids.len();
+        sids.sort();
+        sids.dedup();
+        assert_eq!(sids.len(), n, "no duplicate source_id");
+
+        let pos = |sid: &str| out.iter().position(|r| r.source_id == sid).unwrap();
+        let score = |sid: &str| out.iter().find(|r| r.source_id == sid).unwrap().score;
+
+        assert!(
+            score("m_base") > base_before,
+            "graph boosted the linked memory"
+        );
+        assert!(
+            pos("m_base") < pos("m_comp"),
+            "linked memory now ranks above competitor"
+        );
+        assert!(
+            (score("m_comp") - comp_before).abs() < 1e-6,
+            "unlinked competitor unchanged"
+        );
+        assert!(
+            (score("m_hub") - (1.0f32 / 70.0)).abs() < 1e-6,
+            "person-linked hub not boosted (anchor filtered by type)"
+        );
+    }
+
+    /// Test B — surface-new arm introduces a concept-linked bridge memory that is
+    /// absent from the base pool and whose text does not match the query; boost-only
+    /// leaves it absent.
+    #[tokio::test]
+    async fn graph_stream_surface_new_adds_bridge_memory() {
+        let (db, _dir) = test_db().await;
+        let concept = db
+            .store_entity("photosynthesis", "concept", None, None, None)
+            .await
+            .unwrap();
+        insert_memory_at(
+            &db,
+            "m_bridge",
+            "bridge",
+            "chloroplast stroma reactions",
+            1,
+            1,
+            "enriched",
+        )
+        .await;
+        db.link_memory_entities("m_bridge", &[concept.as_str()])
+            .await
+            .unwrap();
+
+        let base = vec![
+            mk_result("m_f1", "unrelated filler one", 1.0 / 60.0),
+            mk_result("m_f2", "unrelated filler two", 1.0 / 61.0),
+        ];
+
+        let boost_only =
+            temp_env::async_with_vars([("ORIGIN_GRAPH_MEMORY_STREAM", Some("1"))], async {
+                db.augment_with_graph("photosynthesis", base.clone(), 10)
+                    .await
+                    .unwrap()
+            })
+            .await;
+        assert!(
+            boost_only.iter().all(|r| r.source_id != "m_bridge"),
+            "boost-only never surfaces a memory absent from the base pool"
+        );
+
+        let surfaced = temp_env::async_with_vars(
+            [
+                ("ORIGIN_GRAPH_MEMORY_STREAM", Some("1")),
+                ("ORIGIN_GRAPH_SURFACE_NEW", Some("1")),
+            ],
+            async {
+                db.augment_with_graph("photosynthesis", base, 10)
+                    .await
+                    .unwrap()
+            },
+        )
+        .await;
+        let bridge = surfaced.iter().find(|r| r.source_id == "m_bridge");
+        assert!(
+            bridge.is_some(),
+            "surface-new introduces the graph-only bridge memory"
+        );
+        assert_eq!(
+            bridge.unwrap().source,
+            "memory",
+            "surfaced row tagged source=memory so it survives the strip"
+        );
+    }
+
+    /// Test C — poison guard: an over-cap concept hub is excluded as an anchor
+    /// (degree > cap), so its memories never surface; a fine concept (degree 1)
+    /// under the cap DOES surface, proving exclusion is the cause, not silence.
+    #[tokio::test]
+    async fn graph_stream_excludes_over_cap_hub_anchor() {
+        let (db, _dir) = test_db().await;
+        let hub = db
+            .store_entity("general topic", "concept", None, None, None)
+            .await
+            .unwrap();
+        let fine = db
+            .store_entity("photosynthesis", "concept", None, None, None)
+            .await
+            .unwrap();
+        for sid in ["m_h1", "m_h2", "m_h3"] {
+            insert_memory_at(&db, sid, "h", "general topic chatter", 1, 1, "enriched").await;
+            db.link_memory_entities(sid, &[hub.as_str()]).await.unwrap();
+        }
+        insert_memory_at(
+            &db,
+            "m_fine",
+            "f",
+            "photosynthesis detail",
+            1,
+            1,
+            "enriched",
+        )
+        .await;
+        db.link_memory_entities("m_fine", &[fine.as_str()])
+            .await
+            .unwrap();
+
+        let base = vec![mk_result("m_seed", "seed row", 1.0 / 60.0)];
+
+        let out = temp_env::async_with_vars(
+            [
+                ("ORIGIN_GRAPH_MEMORY_STREAM", Some("1")),
+                ("ORIGIN_GRAPH_SURFACE_NEW", Some("1")),
+                ("ORIGIN_GRAPH_HUB_CAP", Some("2")),
+            ],
+            async {
+                db.augment_with_graph("general topic photosynthesis", base, 10)
+                    .await
+                    .unwrap()
+            },
+        )
+        .await;
+
+        for sid in ["m_h1", "m_h2", "m_h3"] {
+            assert!(
+                out.iter().all(|r| r.source_id != sid),
+                "{sid} must not surface via the over-cap hub anchor"
+            );
+        }
+        assert!(
+            out.iter().any(|r| r.source_id == "m_fine"),
+            "fine-concept memory surfaces (anchor under cap) — stream is live, not silent"
+        );
     }
 
     // ==================== T4b: k-hop entity-graph traversal ====================
