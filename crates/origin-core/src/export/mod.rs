@@ -3,6 +3,7 @@
 
 pub mod knowledge;
 pub mod obsidian;
+pub mod provenance;
 
 use crate::error::OriginError;
 use crate::pages::Page;
