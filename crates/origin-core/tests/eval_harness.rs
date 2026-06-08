@@ -446,14 +446,35 @@ async fn save_locomo_baseline() {
 #[tokio::test]
 #[ignore]
 async fn save_longmemeval_baseline() {
-    let path = eval_root().join("data/longmemeval_oracle.json");
+    // LME_FIXTURE overrides the fixture (default oracle = evidence-only/easy).
+    // Set LME_FIXTURE=data/longmemeval_s.json for the REAL ~47-session haystack
+    // retrieval eval. extract_memories ingests ALL haystack_sessions, so the same
+    // runner gives oracle (easy) vs full-haystack (hard) purely by fixture choice.
+    let rel =
+        std::env::var("LME_FIXTURE").unwrap_or_else(|_| "data/longmemeval_oracle.json".to_string());
+    let path = eval_root().join(&rel);
     if !path.exists() {
-        println!("SKIP: longmemeval_oracle.json not found");
+        println!("SKIP: {rel} not found");
         return;
     }
     let report = origin_core::eval::longmemeval::run_longmemeval_eval(&path)
         .await
         .unwrap();
+    println!(
+        "=== LME retrieval [{rel}] OVERALL ({}q, {}mem): ndcg@10={:.3} R@5={:.3} mrr={:.3} hit@1={:.3} ===",
+        report.total_questions,
+        report.total_memories,
+        report.aggregate_ndcg_at_10,
+        report.aggregate_recall_at_5,
+        report.aggregate_mrr,
+        report.aggregate_hit_rate_at_1
+    );
+    for c in &report.per_category {
+        println!(
+            "  {:28} n={:<4} ndcg@10={:.3} R@5={:.3} mrr={:.3} hit@1={:.3}",
+            c.question_type, c.count, c.ndcg_at_10, c.recall_at_5, c.mrr, c.hit_rate_at_1
+        );
+    }
     let baselines_dir = eval_root().join("baselines");
     std::fs::create_dir_all(&baselines_dir).unwrap();
     let baseline_path = baselines_dir.join(report.baseline_filename("longmemeval"));

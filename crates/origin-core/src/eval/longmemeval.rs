@@ -95,6 +95,28 @@ pub fn load_longmemeval(path: &Path) -> Result<Vec<LongMemEvalSample>, OriginErr
 /// developer can run a small pre-flight subset (~30min) before committing
 /// to a full multi-hour run.
 fn apply_lme_limit(samples: &mut Vec<LongMemEvalSample>) {
+    // EVAL_LME_STRATIFIED=N keeps the first N questions of EACH question_type so a
+    // small fast run still covers all 6 categories. The fixture is sorted by type,
+    // so a plain front-truncate (EVAL_LME_LIMIT) only hits the first category.
+    // Takes precedence over EVAL_LME_LIMIT when set.
+    if let Some(n) = std::env::var("EVAL_LME_STRATIFIED")
+        .ok()
+        .and_then(|v| v.parse::<usize>().ok())
+    {
+        let mut seen: HashMap<String, usize> = HashMap::new();
+        samples.retain(|s| {
+            let c = seen.entry(s.question_type.clone()).or_insert(0);
+            *c += 1;
+            *c <= n
+        });
+        log::warn!(
+            "[eval/longmemeval] EVAL_LME_STRATIFIED={} active -- {} questions across {} categories",
+            n,
+            samples.len(),
+            seen.len()
+        );
+        return;
+    }
     apply_limit_from_env(samples, "EVAL_LME_LIMIT", "longmemeval", "questions");
 }
 
