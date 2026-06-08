@@ -7499,6 +7499,72 @@ async fn graph_stream_pair_locomo() {
     );
 }
 
+/// LongMemEval twin of [`graph_stream_pair_locomo`]. Same cached, LLM-free-query
+/// design; populates `lme/<question_id>` once, then both arms reuse it.
+///   ORIGIN_EVAL_ROOT=$PWD/app/eval \
+///   EVAL_OUT=$HOME/.cache/origin-eval/graph_stream_lme_out \
+///   EVAL_LME_LIMIT=20 \
+///   CARGO_TARGET_DIR=/Users/lucian/Repos/origin/target \
+///     cargo test -p origin-core --features eval-harness --test eval_harness \
+///     graph_stream_pair_lme -- --ignored --nocapture --test-threads=1
+///   python3 analyze_paired.py --dir $HOME/.cache/origin-eval/graph_stream_lme_out
+#[tokio::test]
+#[ignore = "needs local LLM + LME fixture; L7 manual. Set ORIGIN_EVAL_ROOT + EVAL_OUT"]
+async fn graph_stream_pair_lme() {
+    use std::sync::Arc;
+    println!("=== GRAPH-STREAM PAIR (stream OFF vs ON, entity-populated, LME) ===");
+    let fx = eval_root().join("data/longmemeval_oracle.json");
+    if !fx.exists() {
+        println!("[graph_stream] SKIP (fixture {} missing)", fx.display());
+        return;
+    }
+    let llm: Arc<dyn origin_core::llm_provider::LlmProvider> = Arc::new(
+        origin_core::llm_provider::OnDeviceProvider::new_with_model(Some("qwen3.5-9b")).unwrap(),
+    );
+    let prompts = origin_core::prompts::PromptRegistry::default();
+
+    // OFF arm: stream unset -> augment is the legacy observation no-op == no graph.
+    let off_rows = temp_env::async_with_vars(
+        [
+            ("ORIGIN_GRAPH_MEMORY_STREAM", None::<&str>),
+            ("ORIGIN_ENABLE_GRAPH_GATE", None::<&str>),
+        ],
+        origin_core::eval::longmemeval::run_longmemeval_eval_graph_stream_collect(
+            &fx,
+            llm.clone(),
+            &prompts,
+            "graph_stream",
+            "off",
+        ),
+    )
+    .await
+    .expect("stream-off collect");
+
+    // ON arm: live entity->memory stream over the populated junction.
+    let on_rows = temp_env::async_with_vars(
+        [
+            ("ORIGIN_GRAPH_MEMORY_STREAM", Some("1")),
+            ("ORIGIN_ENABLE_GRAPH_GATE", None::<&str>),
+        ],
+        origin_core::eval::longmemeval::run_longmemeval_eval_graph_stream_collect(
+            &fx,
+            llm.clone(),
+            &prompts,
+            "graph_stream",
+            "on",
+        ),
+    )
+    .await
+    .expect("stream-on collect");
+
+    write_paired_rows("graph_stream", "lme", &off_rows);
+    write_paired_rows("graph_stream", "lme", &on_rows);
+    println!(
+        "=== done -> python3 analyze_paired.py --dir {} ===",
+        paired_out_dir().display()
+    );
+}
+
 /// TRACK 1 graph-substrate gate (#10). Copies the populated scenario_seeded
 /// locomo_v1 DB, runs the entity-linking sweep with the FINE primitive
 /// (`extract_entities_for_content`, NOT the speaker-level single-entity one),

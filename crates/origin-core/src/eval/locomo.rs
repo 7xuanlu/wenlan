@@ -2197,24 +2197,69 @@ pub async fn run_locomo_eval_expanded_intent_collect(
     Ok(rows)
 }
 
-/// Paired graph-stream collector. Mirrors [`run_locomo_eval_expanded_intent_collect`]
-/// but POPULATES the `memory_entities` junction (per-conversation fine entity
-/// sweep) before the query loop, so the `ORIGIN_GRAPH_MEMORY_STREAM` augmentation
-/// has a substrate to surface. Without this populate the junction is empty and
-/// graph-ON is a no-op — the lever-liveness trap. Reads the stream flag from the
-/// env (set by the harness arm), so a single collector serves both arms.
+/// Cache root for persistent per-conversation graph-populated DBs. Override with
+/// `GRAPH_POP_DIR` (default `~/.cache/origin-eval/graph_pop`). Delete to rebuild
+/// (e.g. after a fixture or extractor change).
+pub(crate) fn graph_pop_dir(bench: &str, sample_id: &str) -> std::path::PathBuf {
+    let base = std::env::var("GRAPH_POP_DIR").unwrap_or_else(|_| {
+        let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
+        format!("{home}/.cache/origin-eval/graph_pop")
+    });
+    std::path::PathBuf::from(base).join(bench).join(sample_id)
+}
+
+/// Bounded fine entity sweep over a freshly-ingested DB; populates the
+/// `memory_entities` junction. Mirrors the gate's `run_capped_fine_sweep`
+/// (attempted-tracking so zero-entity rows cannot re-fetch forever). Fine
+/// extract-ALL is used; person/speaker hubs are excluded at retrieval time by the
+/// v3 type + degree filter. Returns the count of memories that got ≥1 entity.
+pub async fn populate_memory_entities_sweep(
+    db: &MemoryDB,
+    llm: &std::sync::Arc<dyn crate::llm_provider::LlmProvider>,
+    prompts: &crate::prompts::PromptRegistry,
+) -> usize {
+    let mut attempted: HashSet<String> = HashSet::new();
+    let mut linked = 0usize;
+    loop {
+        let batch = db
+            .unlinked_memories(64 + attempted.len())
+            .await
+            .unwrap_or_default();
+        let fresh: Vec<(String, String)> = batch
+            .into_iter()
+            .filter(|(sid, _)| !attempted.contains(sid))
+            .collect();
+        if fresh.is_empty() {
+            break;
+        }
+        for (sid, content) in fresh {
+            let ents = crate::kg::entity_extraction::extract_entities_for_content(
+                db, llm, prompts, &content,
+            )
+            .await
+            .unwrap_or_default();
+            if !ents.is_empty() {
+                let refs: Vec<&str> = ents.iter().map(|s| s.as_str()).collect();
+                let _ = db.link_memory_entities(&sid, &refs).await;
+                linked += 1;
+            }
+            attempted.insert(sid);
+        }
+    }
+    linked
+}
+
+/// Paired graph-stream collector (efficient, cached). For each conversation it
+/// keeps a PERSISTENT populated DB under `<GRAPH_POP_DIR>/locomo/<sample_id>/`:
+/// on first encounter it ingests the conversation + runs the fine entity sweep
+/// (the only LLM cost) and persists it; every later run — the second arm, the
+/// surface-new arm, knob sweeps — reuses that DB and pays ZERO extraction.
 ///
-/// The populate runs ONLY when `flag_state == "on"`: the OFF arm leaves the stream
-/// flag unset, augment runs the legacy observation no-op, and the junction is never
-/// read — so populating it on the OFF arm would burn entity-extraction GPU for no
-/// effect on results. Skipping it keeps OFF == "pure base retrieval, no graph" and
-/// halves the smoke's GPU.
-///
-/// Fine extract-ALL is used (person/speaker hubs are excluded at retrieval time by
-/// the v3 type + degree hard filter), and the bounded attempted-tracking loop
-/// mirrors `run_capped_fine_sweep` so zero-entity memories cannot re-fetch forever.
-/// The running `(linked/total)` coverage tally is printed so the caller can confirm
-/// the substrate is non-empty before trusting any null.
+/// Retrieval uses the base `search_memory` path (no expansion, no rerank), so the
+/// query loop is LLM-free and deterministic. The ONLY per-arm difference is the
+/// `ORIGIN_GRAPH_MEMORY_STREAM` env (set by the harness), making the paired Δ a
+/// clean graph-OFF-vs-ON contrast. Coverage is printed when a conversation is
+/// freshly populated so a null can be checked against substrate liveness.
 pub async fn run_locomo_eval_graph_stream_collect(
     path: &std::path::Path,
     llm: std::sync::Arc<dyn crate::llm_provider::LlmProvider>,
@@ -2224,62 +2269,39 @@ pub async fn run_locomo_eval_graph_stream_collect(
 ) -> Result<Vec<crate::eval::paired::PerQueryRow>, OriginError> {
     let mut samples = load_locomo(path)?;
     apply_locomo_limit(&mut samples);
-    let populate = flag_state == "on";
     let mut rows: Vec<crate::eval::paired::PerQueryRow> = Vec::new();
-    let mut total_mem = 0usize;
-    let mut total_linked = 0usize;
 
     for sample in &samples {
         let memories = extract_observations(sample);
-        let tmp = tempfile::tempdir().map_err(|e| OriginError::Generic(format!("tempdir: {e}")))?;
-        let db = MemoryDB::new(tmp.path(), std::sync::Arc::new(crate::events::NoopEmitter)).await?;
-        let docs: Vec<RawDocument> = memories
-            .iter()
-            .enumerate()
-            .map(|(i, mem)| RawDocument {
-                content: mem.content.clone(),
-                source_id: format!("locomo_{}_obs_{}", sample.sample_id, i),
-                source: "memory".to_string(),
-                title: format!("{} session {}", mem.speaker, mem.session_num),
-                memory_type: Some("fact".to_string()),
-                space: Some("conversation".to_string()),
-                last_modified: chrono::Utc::now().timestamp(),
-                ..Default::default()
-            })
-            .collect();
-        db.upsert_documents(docs).await?;
+        let dir = graph_pop_dir("locomo", &sample.sample_id);
+        let fresh = !dir.join("origin_memory.db").exists();
+        std::fs::create_dir_all(&dir)
+            .map_err(|e| OriginError::Generic(format!("graph_pop dir: {e}")))?;
+        let db = MemoryDB::new(&dir, std::sync::Arc::new(crate::events::NoopEmitter)).await?;
 
-        // Populate memory_entities (ON arm only). Bounded attempted-tracking loop.
-        if populate {
-            let mut attempted: HashSet<String> = HashSet::new();
-            loop {
-                let batch = db
-                    .unlinked_memories(64 + attempted.len())
-                    .await
-                    .unwrap_or_default();
-                let fresh: Vec<(String, String)> = batch
-                    .into_iter()
-                    .filter(|(sid, _)| !attempted.contains(sid))
-                    .collect();
-                if fresh.is_empty() {
-                    break;
-                }
-                for (sid, content) in fresh {
-                    let ents = crate::kg::entity_extraction::extract_entities_for_content(
-                        &db, &llm, prompts, &content,
-                    )
-                    .await
-                    .unwrap_or_default();
-                    if !ents.is_empty() {
-                        let refs: Vec<&str> = ents.iter().map(|s| s.as_str()).collect();
-                        let _ = db.link_memory_entities(&sid, &refs).await;
-                        total_linked += 1;
-                    }
-                    attempted.insert(sid);
-                }
-            }
+        if fresh {
+            let docs: Vec<RawDocument> = memories
+                .iter()
+                .enumerate()
+                .map(|(i, mem)| RawDocument {
+                    content: mem.content.clone(),
+                    source_id: format!("locomo_{}_obs_{}", sample.sample_id, i),
+                    source: "memory".to_string(),
+                    title: format!("{} session {}", mem.speaker, mem.session_num),
+                    memory_type: Some("fact".to_string()),
+                    space: Some("conversation".to_string()),
+                    last_modified: chrono::Utc::now().timestamp(),
+                    ..Default::default()
+                })
+                .collect();
+            db.upsert_documents(docs).await?;
+            let linked = populate_memory_entities_sweep(&db, &llm, prompts).await;
+            println!(
+                "[graph_stream] populated locomo/{}: {linked}/{} memories linked",
+                sample.sample_id,
+                memories.len()
+            );
         }
-        total_mem += memories.len();
 
         let dia_to_source: HashMap<String, String> = memories
             .iter()
@@ -2297,7 +2319,7 @@ pub async fn run_locomo_eval_graph_stream_collect(
                 continue;
             }
             let results = db
-                .search_memory_expanded(&qa.question, 10, None, None, None, Some(llm.clone()))
+                .search_memory(&qa.question, 10, None, None, None, None, None, None)
                 .await?;
 
             let relevant_ids: HashSet<String> = qa
@@ -2330,9 +2352,6 @@ pub async fn run_locomo_eval_graph_stream_collect(
             });
         }
     }
-    println!(
-        "[graph_stream] coverage: {total_linked}/{total_mem} memories linked (flag_state={flag_state}, populate={populate})"
-    );
     Ok(rows)
 }
 

@@ -2163,6 +2163,103 @@ pub async fn run_longmemeval_eval_temporal_collect(
     Ok(rows)
 }
 
+/// Paired graph-stream collector for LongMemEval (efficient, cached). Mirrors
+/// [`crate::eval::locomo::run_locomo_eval_graph_stream_collect`]: one persistent
+/// populated DB per question under `<GRAPH_POP_DIR>/lme/<question_id>/`, the fine
+/// entity sweep paid once, base `search_memory` (no expansion/rerank) so the query
+/// loop is LLM-free. Only `ORIGIN_GRAPH_MEMORY_STREAM` differs per arm.
+pub async fn run_longmemeval_eval_graph_stream_collect(
+    path: &Path,
+    llm: std::sync::Arc<dyn crate::llm_provider::LlmProvider>,
+    prompts: &crate::prompts::PromptRegistry,
+    feature: &str,
+    flag_state: &str,
+) -> Result<Vec<crate::eval::paired::PerQueryRow>, OriginError> {
+    use crate::eval::paired::PerQueryRow;
+
+    let mut samples = load_longmemeval(path)?;
+    apply_lme_limit(&mut samples);
+    let mut rows: Vec<PerQueryRow> = Vec::new();
+
+    for sample in &samples {
+        let memories = extract_memories(sample);
+        let dir = crate::eval::locomo::graph_pop_dir("lme", &sample.question_id);
+        let fresh = !dir.join("origin_memory.db").exists();
+        std::fs::create_dir_all(&dir)
+            .map_err(|e| OriginError::Generic(format!("graph_pop dir: {e}")))?;
+        let db = MemoryDB::new(&dir, std::sync::Arc::new(crate::events::NoopEmitter)).await?;
+
+        if fresh {
+            let docs: Vec<RawDocument> = memories
+                .iter()
+                .map(|mem| {
+                    let memory_type = match sample.question_type.as_str() {
+                        "single-session-preference" => "preference",
+                        _ => "fact",
+                    };
+                    RawDocument {
+                        content: mem.content.clone(),
+                        source_id: memory_source_id(
+                            &mem.question_id,
+                            mem.session_idx,
+                            mem.turn_idx,
+                        ),
+                        source: "memory".to_string(),
+                        title: format!("{} session {}", mem.role, mem.session_idx),
+                        memory_type: Some(memory_type.to_string()),
+                        space: Some("conversation".to_string()),
+                        last_modified: chrono::Utc::now().timestamp(),
+                        ..Default::default()
+                    }
+                })
+                .collect();
+            db.upsert_documents(docs).await?;
+            let linked =
+                crate::eval::locomo::populate_memory_entities_sweep(&db, &llm, prompts).await;
+            println!(
+                "[graph_stream] populated lme/{}: {linked}/{} memories linked",
+                sample.question_id,
+                memories.len()
+            );
+        }
+
+        let relevant_source_ids: HashSet<String> = memories
+            .iter()
+            .filter(|m| m.has_answer)
+            .map(|m| memory_source_id(&m.question_id, m.session_idx, m.turn_idx))
+            .collect();
+        if relevant_source_ids.is_empty() {
+            continue;
+        }
+
+        let results = db
+            .search_memory(&sample.question, 10, None, None, None, None, None, None)
+            .await?;
+        let result_ids: Vec<&str> = results.iter().map(|r| r.source_id.as_str()).collect();
+        let grades: HashMap<&str, u8> = result_ids
+            .iter()
+            .map(|id| (*id, u8::from(relevant_source_ids.contains(*id))))
+            .collect();
+        let relevant_set: HashSet<&str> = relevant_source_ids.iter().map(|s| s.as_str()).collect();
+
+        rows.push(PerQueryRow {
+            feature: feature.to_string(),
+            bench: "lme".to_string(),
+            flag_state: flag_state.to_string(),
+            query_id: sample.question_id.clone(),
+            category: sample.question_type.clone(),
+            ndcg10: metrics::ndcg_at_k(&result_ids, &grades, 10),
+            recall5: metrics::recall_at_k(&result_ids, &relevant_set, 5),
+            mrr: metrics::mrr(&result_ids, &relevant_set),
+            latency_ms: 0.0,
+            graph_skipped: None,
+            temporal_touched: None,
+        });
+    }
+
+    Ok(rows)
+}
+
 // ---------------------------------------------------------------------------
 // Gated benchmark runner — clean / noisy / gated comparison
 // ---------------------------------------------------------------------------
