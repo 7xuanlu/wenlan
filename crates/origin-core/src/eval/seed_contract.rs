@@ -78,13 +78,23 @@ impl SeedExpectations {
         }
     }
 
-    /// Fully-fed profile: `strict` PLUS the graph + temporal substrate presence
-    /// checks. This is what the seed orchestrator asserts after running every
-    /// enrichment step, and what an eval runner asserts before measuring a
+    /// Substrate-liveness profile: no-dupes PLUS the graph + temporal substrate
+    /// presence checks. This is what the seed orchestrator asserts after running
+    /// every enrichment step, and what an eval runner asserts before measuring a
     /// channel — so a starved substrate fails the SEED or is refused by the
     /// EVAL, never silently reported as "the channel doesn't help".
+    ///
+    /// `require_full_classification` is deliberately OFF here: `complete()` gates
+    /// the channels that ship at *zero* (graph/temporal — the recurring lie),
+    /// which are presence checks that never rot. Classification is a near-100%
+    /// *coverage* concern, not a starved-channel one — a single trivial turn
+    /// ("give me 6 more") legitimately yields no importance, so demanding exactly
+    /// 100% would block substrate verification on noise. Classification coverage
+    /// is reported (and validated separately by `strict()` + the real-data test,
+    /// which accepts `>0.99`).
     pub fn complete(variant: impl Into<String>) -> Self {
         Self {
+            require_full_classification: false,
             require_graph_links: true,
             require_event_dates: true,
             ..Self::strict(variant)

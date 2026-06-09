@@ -2373,9 +2373,7 @@ async fn seed_backfill_episodes() {
 #[ignore = "GPU + cached scenario DB; L7 manual. The one seed route. Set ORIGIN_EVAL_ROOT."]
 async fn seed_scenario_dbs_complete() {
     use origin_core::eval::seed_contract::{assert_seed_contract, SeedExpectations};
-    use origin_core::eval::shared::{
-        run_classification_for_eval_concurrent, run_entity_extraction_for_eval_concurrent,
-    };
+    use origin_core::eval::shared::run_classification_for_eval_concurrent;
     use origin_core::prompts::PromptRegistry;
     use origin_core::tuning::DistillationConfig;
     use std::sync::Arc;
@@ -2465,15 +2463,17 @@ async fn seed_scenario_dbs_complete() {
         );
 
         // 3. entity + memory_entities backfill (GPU). The graph-stream substrate
-        //    that has been silently missing on the consolidated seed. Uses the
-        //    PRODUCTION refinery path (extract_single_memory_entities) over
-        //    get_unlinked_memories — concurrent, and parity with real ingest
-        //    (NOT the fine diagnostic sweep). Drains by "unlinked" so it backfills
-        //    even rows the old enrich marked enriched-but-unlinked.
+        //    that has been silently missing on the consolidated seed. MUST drain by
+        //    the memory_entities JUNCTION (populate_memory_entities_sweep uses
+        //    `unlinked_memories` = NOT IN memory_entities), NOT by the legacy
+        //    `entity_id` column: the consolidated seed has stale entity_id markers
+        //    (44%) set by the old enrich WITHOUT junction rows, so the entity_id-
+        //    gated production path (get_unlinked_memories) skips them and links only
+        //    ~10%. Junction-based draining + an attempted-set for termination links
+        //    them all. This is the 6/07 graph-substrate populator.
         let t = std::time::Instant::now();
-        let linked = run_entity_extraction_for_eval_concurrent(&db, &llm, concurrency)
-            .await
-            .expect("entity extraction backfill");
+        let linked =
+            origin_core::eval::locomo::populate_memory_entities_sweep(&db, &llm, &prompts).await;
         eprintln!(
             "[seed_complete] 3/5 memory_entities: {linked} memories linked in {:.1}m",
             t.elapsed().as_secs_f64() / 60.0
