@@ -20061,6 +20061,9 @@ impl MemoryDB {
         let now = chrono::Utc::now().to_rfc3339();
         let now_ts = chrono::Utc::now().timestamp();
         let conn = self.conn.lock().await;
+        conn.execute("BEGIN", ())
+            .await
+            .map_err(|e| OriginError::VectorDb(format!("update_page_content begin: {e}")))?;
 
         // Single atomic UPDATE: content + version + timestamps + user_edited
         // flag. Folding the manual_edit branch into SQL closes the TOCTOU gap
@@ -20102,12 +20105,19 @@ impl MemoryDB {
                    changelog = ?6 \
                  WHERE id = ?5"
             };
-            conn.execute(
-                sql,
-                libsql::params![content, source_ids_json, now, link_reason, id, cl],
-            )
-            .await
-            .map_err(|e| OriginError::VectorDb(format!("update_page_content: {e}")))?
+            match conn
+                .execute(
+                    sql,
+                    libsql::params![content, source_ids_json, now, link_reason, id, cl],
+                )
+                .await
+            {
+                Ok(n) => n,
+                Err(e) => {
+                    let _ = conn.execute("ROLLBACK", ()).await;
+                    return Err(OriginError::VectorDb(format!("update_page_content: {e}")));
+                }
+            }
         } else {
             let sql = if require_stale {
                 "UPDATE pages SET \
@@ -20132,14 +20142,26 @@ impl MemoryDB {
                    review_status = CASE WHEN ?4 IN ('manual_edit', 'fs_edit') THEN 'unconfirmed' ELSE review_status END \
                  WHERE id = ?5"
             };
-            conn.execute(
-                sql,
-                libsql::params![content, source_ids_json, now, link_reason, id],
-            )
-            .await
-            .map_err(|e| OriginError::VectorDb(format!("update_page_content: {e}")))?
+            match conn
+                .execute(
+                    sql,
+                    libsql::params![content, source_ids_json, now, link_reason, id],
+                )
+                .await
+            {
+                Ok(n) => n,
+                Err(e) => {
+                    let _ = conn.execute("ROLLBACK", ()).await;
+                    return Err(OriginError::VectorDb(format!("update_page_content: {e}")));
+                }
+            }
         };
         if require_stale && affected == 0 {
+            // No rows matched the CAS condition (concurrent writer won or page
+            // was already cleared). ROLLBACK closes the open transaction before
+            // returning — an empty txn, but the connection must not be left in
+            // an open-transaction state.
+            let _ = conn.execute("ROLLBACK", ()).await;
             return Ok(false);
         }
 
@@ -20148,12 +20170,18 @@ impl MemoryDB {
         // existing `link_reason` on rows that survive — only brand-new rows
         // pick up the current reason. Empty source list = wipe.
         if source_memory_ids.is_empty() {
-            conn.execute(
-                "DELETE FROM page_sources WHERE page_id = ?1",
-                libsql::params![id],
-            )
-            .await
-            .map_err(|e| OriginError::VectorDb(format!("update_page_content prune: {e}")))?;
+            if let Err(e) = conn
+                .execute(
+                    "DELETE FROM page_sources WHERE page_id = ?1",
+                    libsql::params![id],
+                )
+                .await
+            {
+                let _ = conn.execute("ROLLBACK", ()).await;
+                return Err(OriginError::VectorDb(format!(
+                    "update_page_content prune: {e}"
+                )));
+            }
         } else {
             // Build the NOT IN clause via bind parameters — never string
             // interpolation. Memory ids come from request bodies.
@@ -20170,9 +20198,15 @@ impl MemoryDB {
             for sid in source_memory_ids {
                 bind.push(libsql::Value::Text((*sid).to_string()));
             }
-            conn.execute(&delete_sql, libsql::params_from_iter(bind))
+            if let Err(e) = conn
+                .execute(&delete_sql, libsql::params_from_iter(bind))
                 .await
-                .map_err(|e| OriginError::VectorDb(format!("update_page_content prune: {e}")))?;
+            {
+                let _ = conn.execute("ROLLBACK", ()).await;
+                return Err(OriginError::VectorDb(format!(
+                    "update_page_content prune: {e}"
+                )));
+            }
         }
         for sid in source_memory_ids {
             let _ = conn
@@ -20186,12 +20220,18 @@ impl MemoryDB {
         // Mirror the memory-source reconcile onto page_evidence. Only memory
         // rows are touched; external/authored evidence is preserved.
         if source_memory_ids.is_empty() {
-            conn.execute(
-                "DELETE FROM page_evidence WHERE page_id = ?1 AND source_kind = 'memory'",
-                libsql::params![id],
-            )
-            .await
-            .map_err(|e| OriginError::VectorDb(format!("update_page evidence prune: {e}")))?;
+            if let Err(e) = conn
+                .execute(
+                    "DELETE FROM page_evidence WHERE page_id = ?1 AND source_kind = 'memory'",
+                    libsql::params![id],
+                )
+                .await
+            {
+                let _ = conn.execute("ROLLBACK", ()).await;
+                return Err(OriginError::VectorDb(format!(
+                    "update_page evidence prune: {e}"
+                )));
+            }
         } else {
             let placeholders: String = (0..source_memory_ids.len())
                 .map(|i| format!("?{}", i + 2))
@@ -20206,20 +20246,35 @@ impl MemoryDB {
             for sid in source_memory_ids {
                 bind.push(libsql::Value::Text((*sid).to_string()));
             }
-            conn.execute(&delete_sql, libsql::params_from_iter(bind))
+            if let Err(e) = conn
+                .execute(&delete_sql, libsql::params_from_iter(bind))
                 .await
-                .map_err(|e| OriginError::VectorDb(format!("update_page evidence prune: {e}")))?;
+            {
+                let _ = conn.execute("ROLLBACK", ()).await;
+                return Err(OriginError::VectorDb(format!(
+                    "update_page evidence prune: {e}"
+                )));
+            }
         }
         for sid in source_memory_ids {
-            conn.execute(
-                "INSERT OR IGNORE INTO page_evidence (page_id, source_kind, locator, title, linked_at, link_reason)
-                 VALUES (?1, 'memory', ?2, NULL, ?3, ?4)",
-                libsql::params![id, sid, now_ts, link_reason],
-            )
-            .await
-            .map_err(|e| OriginError::VectorDb(format!("update_page evidence insert: {e}")))?;
+            if let Err(e) = conn
+                .execute(
+                    "INSERT OR IGNORE INTO page_evidence (page_id, source_kind, locator, title, linked_at, link_reason)
+                     VALUES (?1, 'memory', ?2, NULL, ?3, ?4)",
+                    libsql::params![id, sid, now_ts, link_reason],
+                )
+                .await
+            {
+                let _ = conn.execute("ROLLBACK", ()).await;
+                return Err(OriginError::VectorDb(format!(
+                    "update_page evidence insert: {e}"
+                )));
+            }
         }
 
+        conn.execute("COMMIT", ())
+            .await
+            .map_err(|e| OriginError::VectorDb(format!("update_page_content commit: {e}")))?;
         drop(conn);
 
         // Refresh the wikilink graph for this page. Extraction is pure CPU;
@@ -21314,19 +21369,38 @@ impl MemoryDB {
     ) -> Result<(), OriginError> {
         let now = chrono::Utc::now().timestamp();
         let conn = self.conn.lock().await;
-        conn.execute(
-            "INSERT OR IGNORE INTO page_sources (page_id, memory_source_id, linked_at, link_reason) VALUES (?1, ?2, ?3, ?4)",
-            libsql::params![page_id, memory_source_id, now, link_reason],
-        )
-        .await
-        .map_err(|e| OriginError::VectorDb(format!("link_page_source: {e}")))?;
-        conn.execute(
-            "INSERT OR IGNORE INTO page_evidence (page_id, source_kind, locator, title, linked_at, link_reason)
-             VALUES (?1, 'memory', ?2, NULL, ?3, ?4)",
-            libsql::params![page_id, memory_source_id, now, link_reason],
-        )
-        .await
-        .map_err(|e| OriginError::VectorDb(format!("link_page_source page_evidence: {e}")))?;
+        conn.execute("BEGIN", ())
+            .await
+            .map_err(|e| OriginError::VectorDb(format!("link_page_source begin: {e}")))?;
+
+        if let Err(e) = conn
+            .execute(
+                "INSERT OR IGNORE INTO page_sources (page_id, memory_source_id, linked_at, link_reason) VALUES (?1, ?2, ?3, ?4)",
+                libsql::params![page_id, memory_source_id, now, link_reason],
+            )
+            .await
+        {
+            let _ = conn.execute("ROLLBACK", ()).await;
+            return Err(OriginError::VectorDb(format!("link_page_source: {e}")));
+        }
+
+        if let Err(e) = conn
+            .execute(
+                "INSERT OR IGNORE INTO page_evidence (page_id, source_kind, locator, title, linked_at, link_reason)
+                 VALUES (?1, 'memory', ?2, NULL, ?3, ?4)",
+                libsql::params![page_id, memory_source_id, now, link_reason],
+            )
+            .await
+        {
+            let _ = conn.execute("ROLLBACK", ()).await;
+            return Err(OriginError::VectorDb(format!(
+                "link_page_source page_evidence: {e}"
+            )));
+        }
+
+        conn.execute("COMMIT", ())
+            .await
+            .map_err(|e| OriginError::VectorDb(format!("link_page_source commit: {e}")))?;
         Ok(())
     }
 
@@ -21452,19 +21526,42 @@ impl MemoryDB {
     /// Also mirrors the DELETE to page_evidence (dual-write contract).
     pub async fn cleanup_orphaned_page_sources(&self) -> Result<usize, OriginError> {
         let conn = self.conn.lock().await;
-        let rows_affected = conn
+        conn.execute("BEGIN", ()).await.map_err(|e| {
+            OriginError::VectorDb(format!("cleanup_orphaned_page_sources begin: {e}"))
+        })?;
+
+        let rows_affected = match conn
             .execute(
                 "DELETE FROM page_sources WHERE memory_source_id NOT IN (SELECT DISTINCT source_id FROM memories WHERE source != 'episode')",
                 (),
             )
             .await
-            .map_err(|e| OriginError::VectorDb(format!("cleanup_orphaned_page_sources: {e}")))?;
-        conn.execute(
-            "DELETE FROM page_evidence WHERE source_kind = 'memory' AND locator NOT IN (SELECT DISTINCT source_id FROM memories WHERE source != 'episode')",
-            (),
-        )
-        .await
-        .map_err(|e| OriginError::VectorDb(format!("cleanup_orphaned_page_evidence: {e}")))?;
+        {
+            Ok(n) => n,
+            Err(e) => {
+                let _ = conn.execute("ROLLBACK", ()).await;
+                return Err(OriginError::VectorDb(format!(
+                    "cleanup_orphaned_page_sources: {e}"
+                )));
+            }
+        };
+
+        if let Err(e) = conn
+            .execute(
+                "DELETE FROM page_evidence WHERE source_kind = 'memory' AND locator NOT IN (SELECT DISTINCT source_id FROM memories WHERE source != 'episode')",
+                (),
+            )
+            .await
+        {
+            let _ = conn.execute("ROLLBACK", ()).await;
+            return Err(OriginError::VectorDb(format!(
+                "cleanup_orphaned_page_evidence: {e}"
+            )));
+        }
+
+        conn.execute("COMMIT", ()).await.map_err(|e| {
+            OriginError::VectorDb(format!("cleanup_orphaned_page_sources commit: {e}"))
+        })?;
         Ok(rows_affected as usize)
     }
 
