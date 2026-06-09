@@ -35,7 +35,7 @@ pub use memory::{
 };
 pub use memory_type::{MEMORY_TYPE_CAPTURE_DESCRIPTION, MEMORY_TYPE_FILTER_DESCRIPTION};
 pub use narrative::NarrativeResponse;
-pub use pages::Page;
+pub use pages::{Page, PageEvidence};
 pub use responses::{
     ContradictionDismissResponse, ExportStats, ListMemoryRevisionsResponse,
     ListPageRevisionsResponse, ListRefinementsResponse, MemoryDetail, MemoryRevisionEntry,

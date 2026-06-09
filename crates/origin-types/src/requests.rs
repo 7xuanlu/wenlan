@@ -252,6 +252,8 @@ pub struct CreateConceptRequest {
     pub space: Option<String>,
     #[serde(default)]
     pub source_memory_ids: Vec<String>,
+    #[serde(default)]
+    pub creation_kind: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]

@@ -38,8 +38,39 @@ pub struct Page {
     pub last_delta_summary: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub changelog: Option<String>,
+    /// Routing metadata: which mechanism created this page.
+    /// One of: "distilled" | "authored" | "research" | "imported".
+    /// NOT a trust signal (see `review_status` for that).
+    #[serde(default = "default_creation_kind")]
+    pub creation_kind: String,
+    /// Trust boundary: whether this page has been confirmed as accurate.
+    /// One of: "unconfirmed" | "confirmed".
+    /// Distilled pages start confirmed; authored/research pages start unconfirmed.
+    #[serde(default = "default_review_status")]
+    pub review_status: String,
+}
+
+fn default_creation_kind() -> String {
+    "distilled".to_string()
+}
+
+fn default_review_status() -> String {
+    "confirmed".to_string()
 }
 
 fn is_zero_f32(v: &f32) -> bool {
     *v == 0.0
+}
+
+/// Typed provenance link for a page (P2 successor to `PageSource`).
+/// Backed by the `page_evidence` SQL table (migration 60).
+/// Additive — `PageSource` / `page_sources` are NOT removed.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct PageEvidence {
+    pub page_id: String,
+    pub source_kind: String, // memory | external_url | external_file | authored
+    pub locator: Option<String>,
+    pub title: Option<String>,
+    pub linked_at: i64,
+    pub link_reason: Option<String>,
 }
