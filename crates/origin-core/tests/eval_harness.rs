@@ -2342,6 +2342,174 @@ async fn seed_backfill_episodes() {
     }
 }
 
+/// THE ONE SEED ROUTE. Runs every enrichment step on the cached scenario seed
+/// DBs in the correct order, then asserts the completeness contract. This is the
+/// single recipe — never hand-run the individual `seed_*` STEP tests, which are
+/// just the steps this orchestrates. Run THIS and the seed is complete + verified
+/// by construction; miss a step and the contract fails the seed (not a later eval).
+///
+/// Steps (order matters — inject before classify so COALESCE preserves dates):
+///   1. inject event_date (GPU-free)          → temporal substrate
+///   2. classify backfill (GPU)               → importance/quality/cue
+///   3. entity + memory_entities sweep (GPU)   → graph substrate
+///   4. episode backfill (GPU-free embed)      → episode substrate
+///   5. distill pages (GPU)                    → page substrate
+///   6. assert SeedExpectations::complete()    → fail loud on any starved channel
+///
+/// Adding a write-time channel? Add its step here AND its floor to
+/// `SeedExpectations` — the contract is what stops a channel shipping starved
+/// and being re-discovered as "doesn't help" (a lie). The same contract gates
+/// the eval side (`assert_feature_substrate_live`), so neither producer nor
+/// consumer can drift onto a dead substrate.
+///
+/// ```bash
+/// # full (overnight on-device); or SEED_COMPLETE_BENCH=lme to scope one bench:
+/// ORIGIN_EVAL_ROOT=$PWD/app/eval EVAL_ENRICHMENT_CONCURRENCY=8 \
+///   ORIGIN_LLM_PARALLEL_SEQS=8 SEED_COMPLETE_BENCH=lme \
+///   cargo test -p origin-core --features eval-harness --test eval_harness \
+///   seed_scenario_dbs_complete -- --ignored --nocapture --test-threads=1
+/// ```
+#[tokio::test]
+#[ignore = "GPU + cached scenario DB; L7 manual. The one seed route. Set ORIGIN_EVAL_ROOT."]
+async fn seed_scenario_dbs_complete() {
+    use origin_core::eval::seed_contract::{assert_seed_contract, SeedExpectations};
+    use origin_core::eval::shared::run_classification_for_eval_concurrent;
+    use origin_core::prompts::PromptRegistry;
+    use origin_core::tuning::DistillationConfig;
+    use std::sync::Arc;
+
+    let concurrency: usize = std::env::var("EVAL_ENRICHMENT_CONCURRENCY")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(8);
+    let bench_filter = std::env::var("SEED_COMPLETE_BENCH").ok();
+    let model = std::env::var("SEED_COMPLETE_MODEL").ok();
+
+    let llm: Arc<dyn origin_core::llm_provider::LlmProvider> = Arc::new(
+        origin_core::llm_provider::OnDeviceProvider::new_with_model(model.as_deref())
+            .expect("on-device provider"),
+    );
+    let prompts = PromptRegistry::load(&PromptRegistry::override_dir());
+    let tuning = DistillationConfig::default();
+    let root = resolve_scenario_db_root_from_harness();
+
+    for bench in ["locomo_v1", "lme_v1"] {
+        let short = bench.trim_end_matches("_v1"); // "locomo" / "lme"
+        if let Some(f) = &bench_filter {
+            if f != short && f != bench {
+                continue;
+            }
+        }
+        let dir = root.join(bench);
+        if !dir.join("origin_memory.db").exists() {
+            eprintln!(
+                "[seed_complete] SKIP {bench}: no base DB at {}. Build it first \
+                 (fullpipeline harness / scripts/seed-scenario-dbs.sh).",
+                dir.display()
+            );
+            continue;
+        }
+        eprintln!("\n[seed_complete] === {bench} ===");
+        let t_bench = std::time::Instant::now();
+        let db = origin_core::db::MemoryDB::new(&dir, Arc::new(origin_core::events::NoopEmitter))
+            .await
+            .expect("open scenario seed DB");
+
+        // 1. event_date injection (GPU-free, seconds). Per-session date lives in
+        //    fixture metadata; turn/observation text is date-stripped.
+        let fixture = eval_root().join(if short == "locomo" {
+            "data/locomo10.json"
+        } else {
+            "data/longmemeval_oracle.json"
+        });
+        if fixture.exists() {
+            let updates: Vec<(String, i64)> = if short == "locomo" {
+                let samples =
+                    origin_core::eval::locomo::load_locomo(&fixture).expect("load locomo");
+                origin_core::eval::locomo::event_date_map(&samples)
+                    .into_iter()
+                    .collect()
+            } else {
+                let samples =
+                    origin_core::eval::longmemeval::load_longmemeval(&fixture).expect("load lme");
+                origin_core::eval::longmemeval::event_date_map(&samples)
+                    .into_iter()
+                    .collect()
+            };
+            let n = db
+                .set_event_dates_by_source_id(&updates)
+                .await
+                .expect("inject event_date");
+            eprintln!(
+                "[seed_complete] 1/5 event_date: {} mapped -> {n} rows",
+                updates.len()
+            );
+        } else {
+            eprintln!(
+                "[seed_complete] 1/5 event_date SKIP: fixture {} missing",
+                fixture.display()
+            );
+        }
+
+        // 2. classify backfill (GPU). Fills importance/quality/cue on the still
+        //    -unclassified heads; COALESCE keeps the injected event_date.
+        let t = std::time::Instant::now();
+        let classified = run_classification_for_eval_concurrent(&db, &llm, concurrency)
+            .await
+            .expect("classify backfill");
+        eprintln!(
+            "[seed_complete] 2/5 classify: {classified} in {:.1}m",
+            t.elapsed().as_secs_f64() / 60.0
+        );
+
+        // 3. entity + memory_entities sweep (GPU). The graph-stream substrate
+        //    that has been silently missing on the consolidated seed.
+        let t = std::time::Instant::now();
+        let linked =
+            origin_core::eval::locomo::populate_memory_entities_sweep(&db, &llm, &prompts).await;
+        eprintln!(
+            "[seed_complete] 3/5 memory_entities: {linked} memories linked in {:.1}m",
+            t.elapsed().as_secs_f64() / 60.0
+        );
+
+        // 4. episode backfill (GPU-free embed).
+        let n = db.backfill_episodes().await.expect("backfill episodes");
+        eprintln!("[seed_complete] 4/5 episodes: {n} rows");
+
+        // 5. distill pages (GPU).
+        let t = std::time::Instant::now();
+        let pages = origin_core::refinery::distill_pages(&db, Some(&llm), &prompts, &tuning, None)
+            .await
+            .expect("distill pages");
+        eprintln!(
+            "[seed_complete] 5/5 pages: {pages} in {:.1}m",
+            t.elapsed().as_secs_f64() / 60.0
+        );
+
+        // 6. completeness gate. Drop the MemoryDB lock first, open a fresh conn.
+        drop(db);
+        let sdb = libsql::Builder::new_local(dir.join("origin_memory.db").to_str().unwrap())
+            .build()
+            .await
+            .expect("open seed for contract");
+        let conn = sdb.connect().expect("connect seed for contract");
+        let report = assert_seed_contract(&conn, &SeedExpectations::complete(bench))
+            .await
+            .unwrap_or_else(|e| panic!("[seed_complete] {bench} contract VIOLATED: {e}"));
+        eprintln!(
+            "[seed_complete] {bench} COMPLETE + verified in {:.1}m: rows={} classified={} cue={} ({:.0}%) event_date={} ({:.0}%) graph_links={}",
+            t_bench.elapsed().as_secs_f64() / 60.0,
+            report.rows,
+            report.classified,
+            report.cue_nonempty,
+            report.cue_coverage() * 100.0,
+            report.event_date_nonempty,
+            report.event_date_coverage() * 100.0,
+            report.graph_links,
+        );
+    }
+}
+
 /// T3 graph-gate A/B experiment on LongMemEval (retrieval-only, no GPU LLM).
 /// Dual-bench companion to `graph_gate_ab_locomo` so T3 is validated on BOTH
 /// metrics, not a partial view.

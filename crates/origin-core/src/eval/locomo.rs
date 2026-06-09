@@ -1529,6 +1529,13 @@ pub async fn run_locomo_eval_cross_rerank_from_db_collect(
         std::env::set_var("RERANK_POOL_FLOOR", "10");
     }
 
+    // No-drift eval gate: refuse to measure a channel whose substrate is empty
+    // (same contract the seed orchestrator asserts on the producing side).
+    {
+        let conn = db.conn.lock().await;
+        crate::eval::seed_contract::assert_feature_substrate_live(&conn, feature).await?;
+    }
+
     let mut samples = load_locomo(path)?;
     apply_locomo_limit(&mut samples);
     let mut rows: Vec<PerQueryRow> = Vec::new();

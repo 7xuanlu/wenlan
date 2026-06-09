@@ -146,6 +146,16 @@ SKIP semantics (rather than panic) match the surrounding fixture-missing branche
 
 ---
 
+## seed completeness: one route, one contract (no drift)
+
+Seeding a cached scenario DB is ONE orchestrator, not a scatter of STEP tests: run `seed_scenario_dbs_complete` (`tests/eval_harness.rs`). It chains event_date inject → classify → `memory_entities` sweep → episodes → distill, then asserts `SeedExpectations::complete()`. Never hand-run the individual `seed_*` STEP tests; they are its internals.
+
+`seed_contract.rs` is the single liveness contract, gating BOTH ends:
+- **Producer:** `seed_scenario_dbs_complete` asserts `complete()` — hard-fails on `memory_entities=0` (graph) or `event_date=0` (temporal). Presence checks, not percentages (percentages rot).
+- **Consumer:** every per-query collector calls `assert_feature_substrate_live(conn, feature)` at entry — a graph/temporal A/B over an empty substrate **errors ("EVAL REFUSED")** rather than emitting a null that reads as "doesn't help". A starved-substrate lie is structurally impossible.
+
+Adding a channel with an A/B: add its step to the orchestrator, its floor to `SeedExpectations`, its key to `assert_feature_substrate_live`, and a `seed_contract.rs` unit test. See root `AGENTS.md` "Eval seed + eval read: ONE route, ONE contract".
+
 ## cross-reference
 
 - Fixture population, env vars, seed scripts, baseline layout: see `app/eval/AGENTS.md`.

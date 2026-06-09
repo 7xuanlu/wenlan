@@ -1559,6 +1559,15 @@ pub async fn run_longmemeval_eval_cross_rerank_from_db_collect(
         std::env::set_var("RERANK_POOL_FLOOR", "10");
     }
 
+    // No-drift eval gate: refuse to measure a channel whose substrate is empty.
+    // A graph/temporal A/B over a starved DB yields an uninterpretable null that
+    // would be misread as "the channel doesn't help". Same contract the seed
+    // orchestrator asserts on the producing side (seed produces, eval consumes).
+    {
+        let conn = db.conn.lock().await;
+        crate::eval::seed_contract::assert_feature_substrate_live(&conn, feature).await?;
+    }
+
     let mut samples = load_longmemeval(path)?;
     apply_lme_limit(&mut samples);
     let mut rows: Vec<PerQueryRow> = Vec::new();

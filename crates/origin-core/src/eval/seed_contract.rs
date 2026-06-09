@@ -45,6 +45,18 @@ pub struct SeedExpectations {
     pub min_cue_coverage: f64,
     /// Minimum fraction with a non-null `event_date`. `0.0` = report-only.
     pub min_event_date_coverage: f64,
+    /// Require at least one `memory_entities` link to exist (graph-stream
+    /// substrate is non-empty). `false` = report-only. This is a *presence*
+    /// check, not a percentage: a coverage floor rots (AGENTS.md), but zero
+    /// links means the graph channel is dead, which is the recurring bug a
+    /// re-seed must fail loud on. Set by the seed orchestrator after it runs
+    /// the entity-linking step.
+    pub require_graph_links: bool,
+    /// Require at least one non-null `event_date` (temporal substrate is
+    /// non-empty). `false` = report-only. Presence check, same rationale as
+    /// `require_graph_links`: LME turn text carries no dates, so a re-seed that
+    /// forgot the `event_date` injection ships the temporal channel starved.
+    pub require_event_dates: bool,
     /// If set, the seed's recorded manifest fixture sha256 must equal this.
     /// `None` skips the identity check (manifest stamping lands with C4b).
     pub expect_fixture_sha256: Option<String>,
@@ -60,7 +72,22 @@ impl SeedExpectations {
             require_full_classification: true,
             min_cue_coverage: 0.0,
             min_event_date_coverage: 0.0,
+            require_graph_links: false,
+            require_event_dates: false,
             expect_fixture_sha256: None,
+        }
+    }
+
+    /// Fully-fed profile: `strict` PLUS the graph + temporal substrate presence
+    /// checks. This is what the seed orchestrator asserts after running every
+    /// enrichment step, and what an eval runner asserts before measuring a
+    /// channel — so a starved substrate fails the SEED or is refused by the
+    /// EVAL, never silently reported as "the channel doesn't help".
+    pub fn complete(variant: impl Into<String>) -> Self {
+        Self {
+            require_graph_links: true,
+            require_event_dates: true,
+            ..Self::strict(variant)
         }
     }
 }
@@ -78,6 +105,10 @@ pub struct SeedContractReport {
     pub cue_nonempty: i64,
     /// Rows with a non-null `event_date`.
     pub event_date_nonempty: i64,
+    /// Total `memory_entities` link rows (graph-stream substrate). `0` means the
+    /// graph channel has nothing to surface. Tolerant of the table being absent
+    /// on pre-graph seeds (reported as `0`).
+    pub graph_links: i64,
     /// Recorded manifest fixture sha256, if the seed stamped one.
     pub manifest_fixture_sha256: Option<String>,
     /// One human-readable string per failed expectation. Empty = contract holds.
@@ -158,6 +189,7 @@ pub async fn check_seed_contract(
     )
     .await?;
     let event_date_nonempty = count(conn, " AND event_date IS NOT NULL").await?;
+    let graph_links = count_memory_entities(conn).await?;
 
     let manifest_fixture_sha256 = read_manifest_value(conn, "seed_fixture_sha256").await?;
 
@@ -200,6 +232,21 @@ pub async fn check_seed_contract(
             expect.min_event_date_coverage * 100.0
         ));
     }
+    // Presence checks (no percentage → no rot): a dead channel is exactly zero.
+    if expect.require_graph_links && graph_links == 0 {
+        violations.push(
+            "graph substrate empty: 0 memory_entities links (graph channel is dead — \
+             run the entity-linking seed step before measuring graph)"
+                .to_string(),
+        );
+    }
+    if expect.require_event_dates && event_date_nonempty == 0 {
+        violations.push(
+            "temporal substrate empty: 0 event_date rows (temporal channel is dead — \
+             run the event_date injection seed step before measuring temporal)"
+                .to_string(),
+        );
+    }
     if let Some(want) = &expect.expect_fixture_sha256 {
         match &manifest_fixture_sha256 {
             Some(got) if got == want => {}
@@ -218,9 +265,30 @@ pub async fn check_seed_contract(
         classified,
         cue_nonempty,
         event_date_nonempty,
+        graph_links,
         manifest_fixture_sha256,
         violations,
     })
+}
+
+/// Count `memory_entities` link rows. Tolerant of the table being absent
+/// (pre-graph seeds) — returns `0` rather than erroring, mirroring
+/// `read_manifest_value`'s table-missing handling.
+async fn count_memory_entities(conn: &libsql::Connection) -> Result<i64, OriginError> {
+    let mut rows = match conn.query("SELECT COUNT(*) FROM memory_entities", ()).await {
+        Ok(r) => r,
+        Err(_) => return Ok(0), // table missing on pre-graph seeds
+    };
+    match rows
+        .next()
+        .await
+        .map_err(|e| OriginError::VectorDb(format!("memory_entities next: {e}")))?
+    {
+        Some(row) => row
+            .get::<i64>(0)
+            .map_err(|e| OriginError::VectorDb(format!("memory_entities get: {e}"))),
+        None => Ok(0),
+    }
 }
 
 /// Fail LOUD if the seed violates its contract. This is the pipeline gate and
@@ -239,6 +307,38 @@ pub async fn assert_seed_contract(
         )));
     }
     Ok(report)
+}
+
+/// Eval-side no-drift gate. Refuse to measure a channel whose substrate is
+/// empty: a graph/temporal A/B over a starved DB produces an uninterpretable
+/// null that gets misread as "the channel doesn't help". The eval runner calls
+/// this at entry; the seed orchestrator asserts the producing side
+/// (`SeedExpectations::complete`). Same contract at both ends — no drift, no lie.
+///
+/// Feature keys match by substring so the many A/B labels map without an enum:
+/// any feature containing `graph` requires `memory_entities`; any containing
+/// `temp` requires `event_date`. A feature the gate doesn't model imposes no
+/// requirement (returns `Ok`) — the gate never blocks a channel it can't check.
+pub async fn assert_feature_substrate_live(
+    conn: &libsql::Connection,
+    feature: &str,
+) -> Result<(), OriginError> {
+    let f = feature.to_ascii_lowercase();
+    if f.contains("graph") && count_memory_entities(conn).await? == 0 {
+        return Err(OriginError::Generic(format!(
+            "EVAL REFUSED [{feature}]: graph substrate empty (0 memory_entities links). \
+             A graph A/B here measures noise, not graph. Re-seed via \
+             seed_scenario_dbs_complete before measuring."
+        )));
+    }
+    if f.contains("temp") && count(conn, " AND event_date IS NOT NULL").await? == 0 {
+        return Err(OriginError::Generic(format!(
+            "EVAL REFUSED [{feature}]: temporal substrate empty (0 event_date rows). \
+             A temporal A/B here measures noise. Re-seed via \
+             seed_scenario_dbs_complete before measuring."
+        )));
+    }
+    Ok(())
 }
 
 /// Read a manifest value from `app_metadata`. Returns `Ok(None)` if the key is
@@ -280,10 +380,11 @@ mod tests {
         let conn = db.connect().expect("connect in-memory libsql");
         conn.execute_batch(
             "CREATE TABLE memories (
-                source TEXT, source_id TEXT, chunk_index INTEGER DEFAULT 0,
+                id TEXT, source TEXT, source_id TEXT, chunk_index INTEGER DEFAULT 0,
                 is_recap INTEGER DEFAULT 0, importance REAL,
                 retrieval_cue TEXT, event_date INTEGER, content TEXT
              );
+             CREATE TABLE memory_entities (memory_id TEXT, entity_id TEXT);
              CREATE TABLE app_metadata (key TEXT PRIMARY KEY, value TEXT);",
         )
         .await
@@ -298,12 +399,32 @@ mod tests {
         cue: Option<&str>,
     ) {
         conn.execute(
-            "INSERT INTO memories (source, source_id, chunk_index, is_recap, importance, retrieval_cue, event_date)
-             VALUES ('memory', ?1, 0, 0, ?2, ?3, NULL)",
+            "INSERT INTO memories (id, source, source_id, chunk_index, is_recap, importance, retrieval_cue, event_date)
+             VALUES (?1, 'memory', ?1, 0, 0, ?2, ?3, NULL)",
             libsql::params![sid, importance, cue],
         )
         .await
         .expect("insert row");
+    }
+
+    /// Set `event_date` for a memory head (temporal substrate).
+    async fn set_event_date(conn: &libsql::Connection, sid: &str, date: i64) {
+        conn.execute(
+            "UPDATE memories SET event_date = ?2 WHERE source_id = ?1",
+            libsql::params![sid, date],
+        )
+        .await
+        .expect("set event_date");
+    }
+
+    /// Link a memory head to an entity (graph substrate).
+    async fn link_entity(conn: &libsql::Connection, sid: &str, entity: &str) {
+        conn.execute(
+            "INSERT INTO memory_entities (memory_id, entity_id) VALUES (?1, ?2)",
+            libsql::params![sid, entity],
+        )
+        .await
+        .expect("link entity");
     }
 
     #[tokio::test]
@@ -378,6 +499,162 @@ mod tests {
             r.holds(),
             "cue floor 0.0 must not fail a fully-classified seed"
         );
+    }
+
+    #[tokio::test]
+    async fn complete_profile_fails_on_empty_graph_substrate() {
+        let conn = mem_conn().await;
+        insert(&conn, "a", Some(0.5), Some("cue")).await;
+        set_event_date(&conn, "a", 1_700_000_000).await; // temporal OK
+                                                         // no memory_entities links → graph dead
+        let r = check_seed_contract(&conn, &SeedExpectations::complete("test"))
+            .await
+            .unwrap();
+        assert_eq!(r.graph_links, 0);
+        assert!(
+            !r.holds(),
+            "complete() must fail when graph substrate empty"
+        );
+        assert!(
+            r.violations
+                .iter()
+                .any(|v| v.contains("graph substrate empty")),
+            "expected graph-substrate violation, got {:?}",
+            r.violations
+        );
+    }
+
+    #[tokio::test]
+    async fn complete_profile_fails_on_empty_temporal_substrate() {
+        let conn = mem_conn().await;
+        insert(&conn, "a", Some(0.5), Some("cue")).await;
+        link_entity(&conn, "a", "ent_1").await; // graph OK
+                                                // no event_date → temporal dead
+        let r = check_seed_contract(&conn, &SeedExpectations::complete("test"))
+            .await
+            .unwrap();
+        assert_eq!(r.event_date_nonempty, 0);
+        assert!(
+            !r.holds(),
+            "complete() must fail when temporal substrate empty"
+        );
+        assert!(
+            r.violations
+                .iter()
+                .any(|v| v.contains("temporal substrate empty")),
+            "expected temporal-substrate violation, got {:?}",
+            r.violations
+        );
+    }
+
+    #[tokio::test]
+    async fn complete_profile_passes_with_full_substrate() {
+        let conn = mem_conn().await;
+        insert(&conn, "a", Some(0.5), Some("cue a")).await;
+        insert(&conn, "b", Some(0.5), Some("cue b")).await;
+        set_event_date(&conn, "a", 1_700_000_000).await;
+        link_entity(&conn, "a", "ent_1").await;
+        let r = assert_seed_contract(&conn, &SeedExpectations::complete("test"))
+            .await
+            .expect("full substrate should pass complete()");
+        assert!(r.graph_links >= 1);
+        assert!(r.event_date_nonempty >= 1);
+        assert!(r.holds());
+    }
+
+    #[tokio::test]
+    async fn strict_profile_ignores_graph_and_temporal_substrate() {
+        // Regression guard: strict() must stay lenient on graph/temporal so the
+        // generic CI check + minimal seeds don't break. Only complete() has teeth.
+        let conn = mem_conn().await;
+        insert(&conn, "a", Some(0.5), Some("cue")).await;
+        // no links, no event_date
+        let r = check_seed_contract(&conn, &SeedExpectations::strict("test"))
+            .await
+            .unwrap();
+        assert_eq!(r.graph_links, 0);
+        assert_eq!(r.event_date_nonempty, 0);
+        assert!(
+            r.holds(),
+            "strict() must not fail on empty graph/temporal substrate"
+        );
+    }
+
+    #[tokio::test]
+    async fn eval_gate_refuses_graph_on_empty_substrate() {
+        let conn = mem_conn().await;
+        insert(&conn, "a", Some(0.5), Some("cue")).await;
+        set_event_date(&conn, "a", 1_700_000_000).await; // temporal fine
+                                                         // no links → graph dead
+        let err = assert_feature_substrate_live(&conn, "graph_stream")
+            .await
+            .expect_err("graph A/B on empty substrate must be refused");
+        assert!(format!("{err}").contains("graph substrate empty"));
+        // temporal feature must still pass (event_date present)
+        assert_feature_substrate_live(&conn, "temporal")
+            .await
+            .expect("temporal substrate present → allowed");
+    }
+
+    #[tokio::test]
+    async fn eval_gate_refuses_temporal_on_empty_substrate() {
+        let conn = mem_conn().await;
+        insert(&conn, "a", Some(0.5), Some("cue")).await;
+        link_entity(&conn, "a", "ent_1").await; // graph fine
+                                                // no event_date → temporal dead
+        let err = assert_feature_substrate_live(&conn, "expand_temp")
+            .await
+            .expect_err("temporal A/B on empty substrate must be refused");
+        assert!(format!("{err}").contains("temporal substrate empty"));
+        assert_feature_substrate_live(&conn, "graph")
+            .await
+            .expect("graph substrate present → allowed");
+    }
+
+    #[tokio::test]
+    async fn eval_gate_allows_unmodeled_feature() {
+        // A feature the gate doesn't model (no graph/temp substrate need) must
+        // never be blocked, even on an otherwise-empty DB.
+        let conn = mem_conn().await;
+        insert(&conn, "a", Some(0.5), None).await;
+        assert_feature_substrate_live(&conn, "session_diversity")
+            .await
+            .expect("unmodeled feature must pass");
+        assert_feature_substrate_live(&conn, "magnitude_fusion")
+            .await
+            .expect("unmodeled feature must pass");
+    }
+
+    #[tokio::test]
+    async fn graph_links_count_tolerates_missing_table() {
+        // Pre-graph seeds have no memory_entities table; count must report 0,
+        // not error. (Mirrors read_manifest_value's table-missing tolerance.)
+        let db = libsql::Builder::new_local(":memory:")
+            .build()
+            .await
+            .unwrap();
+        let conn = db.connect().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE memories (
+                id TEXT, source TEXT, source_id TEXT, chunk_index INTEGER DEFAULT 0,
+                is_recap INTEGER DEFAULT 0, importance REAL,
+                retrieval_cue TEXT, event_date INTEGER, content TEXT
+             );",
+        )
+        .await
+        .unwrap();
+        conn.execute(
+            "INSERT INTO memories (id, source, source_id, importance) VALUES ('a','memory','a',0.5)",
+            (),
+        )
+        .await
+        .unwrap();
+        // strict() does not require links → must pass despite missing table.
+        let r = check_seed_contract(&conn, &SeedExpectations::strict("test"))
+            .await
+            .expect("missing memory_entities table must not error");
+        assert_eq!(r.graph_links, 0);
+        assert!(r.holds());
     }
 
     /// Characterize REAL data: scoped to memory heads, the `lme_v1` seed has
