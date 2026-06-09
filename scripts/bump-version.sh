@@ -73,5 +73,24 @@ else
 fi
 echo "  Updated $INIT_SKILL (install.sh tag pin)"
 
+# 6. Cargo.lock workspace member versions. release-please bumps the manifests
+# above but never regenerates the lockfile, so validate-versions.sh (run in
+# release.yml on the tag) fails on "Cargo.lock drift" and aborts the release.
+# cargo isn't available on the release-please runner, so rewrite the lock
+# entries textually — symmetric with validate-versions.sh's reader. Internal
+# origin deps are listed name-only (no version string) in Cargo.lock, so only
+# each member's own version line needs to change.
+awk -v ver="$NEW_VERSION" '
+  $0 == "[[package]]" { in_pkg=1; is_member=0; print; next }
+  in_pkg && $1 == "name" && $2 == "=" {
+    n=$3; gsub(/"/, "", n)
+    is_member = (n=="origin" || n=="origin-core" || n=="origin-mcp" || n=="origin-server" || n=="origin-types")
+    print; next
+  }
+  in_pkg && is_member && /^version = / { print "version = \"" ver "\""; in_pkg=0; is_member=0; next }
+  { print }
+' Cargo.lock > Cargo.lock.tmp && mv Cargo.lock.tmp Cargo.lock
+echo "  Updated Cargo.lock (workspace member versions)"
+
 echo ""
-echo "Versions synced from version.txt (${NEW_VERSION}) to Cargo.toml + npm + plugin manifests + plugin MCP/skills."
+echo "Versions synced from version.txt (${NEW_VERSION}) to Cargo.toml + npm + plugin manifests + plugin MCP/skills + Cargo.lock."
