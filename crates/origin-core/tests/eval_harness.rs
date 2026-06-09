@@ -2892,7 +2892,8 @@ async fn paired_ab_emit() {
     println!("EVAL_OUT = {}", paired_out_dir().display());
 
     // (feature_tag, env_flag) for the cached-DB / base `search_memory` features.
-    let cached: [(&str, &str); 5] = [
+    let cached: [(&str, &str); 6] = [
+        ("graph_stream", "ORIGIN_GRAPH_MEMORY_STREAM"),
         ("graph_gate", "ORIGIN_ENABLE_GRAPH_GATE"),
         ("graph_seed", "ORIGIN_ENABLE_GRAPH_SEED"),
         ("fts_hardening", "ORIGIN_ENABLE_FTS_HARDENING"),
