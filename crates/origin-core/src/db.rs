@@ -31058,6 +31058,268 @@ pub(crate) mod tests {
         );
     }
 
+    // ===== G4 standalone capability-liveness gate =====
+    // Eval-Trust v3 G4: per shipped retrieval capability, does flipping it ON
+    // actually change the FINAL public output via the shipped path? A capability
+    // whose OFF and ON outputs are indistinguishable is merged-but-inert — the
+    // boost-then-strip ghost (augment_with_graph adds source="knowledge_graph"
+    // rows at db.rs:~8420 that the retain() at db.rs:8524 strips). These probes
+    // run the shipped public path `search_memory_cross_rerank_cued` (no CE model:
+    // reranker=None is a pass-through) so the strip + every channel injection are
+    // exercised. No GPU; needs only the CI-cached BGE embedder. Covered here:
+    // temporal (reorder), page (membership), legacy-graph (negative control).
+    // Episode/fact/graph-stream-live + the LLM-tier decompose probe are follow-ups.
+
+    /// Run the shipped public path with `flag` OFF then ON, holding `cue` fixed in
+    /// both arms. Returns (off_results, on_results). Caller seeds the substrate and
+    /// asserts the capability's contribution reaches the final Vec.
+    async fn g4_probe(
+        db: &MemoryDB,
+        query: &str,
+        limit: usize,
+        flag: &str,
+        cue: Option<crate::temporal_query::DateRange>,
+    ) -> (Vec<SearchResult>, Vec<SearchResult>) {
+        let off = temp_env::async_with_vars([(flag, None::<&str>)], async {
+            db.search_memory_cross_rerank_cued(query, limit, None, None, None, cue, None)
+                .await
+                .expect("g4_probe OFF arm")
+        })
+        .await;
+        let on = temp_env::async_with_vars([(flag, Some("1"))], async {
+            db.search_memory_cross_rerank_cued(query, limit, None, None, None, cue, None)
+                .await
+                .expect("g4_probe ON arm")
+        })
+        .await;
+        (off, on)
+    }
+
+    /// G4 temporal: the soft boost is the LME-S lever whose aggregate eval null is
+    /// suspected DEAD-TRIGGER (extract_cue fires <1% on real NL) rather than a
+    /// genuine neutral. This probe injects the cue DIRECTLY (bypassing extract_cue)
+    /// so it certifies the boost MECHANISM is live: an in-window dated row is lifted
+    /// ×(1+bonus) while an undated row stays neutral. Red here = the boost can't
+    /// move output even when a cue is present (a real ghost, not a dead trigger).
+    #[tokio::test]
+    async fn g4_temporal_boost_is_live() {
+        let (db, _dir) = test_db().await;
+        // Two rows the query retrieves; distinct text (sharing the query terms)
+        // so the near-duplicate dedup at db.rs:8487 keeps both — only event_date
+        // differs in what the boost can act on.
+        db.upsert_documents(vec![
+            make_memory_doc(
+                "t_dated",
+                "alpha launch milestone shipped to production",
+                "knowledge",
+                "work",
+                "tester",
+            ),
+            make_memory_doc(
+                "t_undated",
+                "alpha launch milestone roadmap discussion draft",
+                "knowledge",
+                "work",
+                "tester",
+            ),
+        ])
+        .await
+        .unwrap();
+
+        // A single day in 2024; place t_dated's event_date inside it.
+        let start = 1_704_067_200_i64; // 2024-01-01T00:00:00Z
+        let end = 1_704_153_599_i64; //   2024-01-01T23:59:59Z
+        {
+            let conn = db.conn.lock().await;
+            conn.execute(
+                "UPDATE memories SET event_date = ?1 WHERE source_id = ?2",
+                libsql::params![start + 3600, "t_dated"],
+            )
+            .await
+            .unwrap();
+        }
+
+        let cue = Some(crate::temporal_query::DateRange { start, end });
+        let (off, on) = g4_probe(
+            &db,
+            "alpha launch milestone",
+            5,
+            "ORIGIN_ENABLE_TEMPORAL_SOFT_BOOST",
+            cue,
+        )
+        .await;
+
+        let score =
+            |v: &[SearchResult], sid: &str| v.iter().find(|r| r.source_id == sid).map(|r| r.score);
+        let dated_off = score(&off, "t_dated").expect("t_dated retrieved OFF");
+        let dated_on = score(&on, "t_dated").expect("t_dated retrieved ON");
+        let undated_off = score(&off, "t_undated").expect("t_undated retrieved OFF");
+        let undated_on = score(&on, "t_undated").expect("t_undated retrieved ON");
+
+        // Ratio cancels the shared base (incl. sub-ms recency drift between runs).
+        let dated_ratio = dated_on / dated_off;
+        let undated_ratio = undated_on / undated_off;
+        assert!(
+            dated_ratio > 1.4,
+            "G4 temporal DEAD: in-window row boost ratio {dated_ratio:.3} (expected ~1.5 = 1+bonus); the boost did not reach the shipped output"
+        );
+        assert!(
+            (undated_ratio - 1.0).abs() < 0.02,
+            "undated row must stay neutral: ratio {undated_ratio:.3}"
+        );
+    }
+
+    /// G4 page channel: membership liveness. The page RRF stream (T18) injects
+    /// source="page" rows in `search_memory_cross_rerank` AFTER the db.rs:8524
+    /// strip. Flag ON must surface ≥1 page in the returned Vec; OFF must not.
+    #[tokio::test]
+    async fn g4_page_channel_is_live() {
+        let (db, _dir) = test_db().await;
+        db.upsert_documents(vec![make_memory_doc(
+            "p_mem",
+            "rust ownership borrow checker notes",
+            "knowledge",
+            "work",
+            "tester",
+        )])
+        .await
+        .unwrap();
+        db.insert_page(
+            "pg_rust",
+            "Rust Ownership",
+            Some("borrow checker and lifetimes overview"),
+            "Rust ownership governs the borrow checker and lifetimes.",
+            None,
+            None,
+            &["p_mem"],
+            "2026-01-01T00:00:00Z",
+        )
+        .await
+        .unwrap();
+
+        let (off, on) = g4_probe(
+            &db,
+            "rust ownership borrow checker",
+            5,
+            "ORIGIN_ENABLE_PAGE_CHANNEL",
+            None,
+        )
+        .await;
+
+        assert!(
+            off.iter().all(|r| r.source != "page"),
+            "page surfaced with channel OFF — probe invalid (page leaked outside its flag)"
+        );
+        assert!(
+            on.iter().any(|r| r.source == "page"),
+            "G4 page DEAD: channel ON surfaced no source==page row on the shipped path"
+        );
+    }
+
+    /// G4 negative control: the legacy entity→observation graph boost adds
+    /// source="knowledge_graph" rows (db.rs:~8420) that the retain() at db.rs:8524
+    /// strips — merged-but-inert. This documents the dead capability: its own rows
+    /// never reach the shipped public output. The LIVE replacement is the
+    /// ORIGIN_GRAPH_MEMORY_STREAM path (covered by graph_stream_* tests above).
+    #[tokio::test]
+    async fn g4_legacy_graph_ghost_is_inert() {
+        let (db, _dir) = test_db().await;
+        db.upsert_documents(vec![make_memory_doc(
+            "g_mem",
+            "Caroline studies photosynthesis in chloroplasts",
+            "knowledge",
+            "work",
+            "tester",
+        )])
+        .await
+        .unwrap();
+        let ent = db
+            .store_entity("photosynthesis", "concept", None, None, None)
+            .await
+            .unwrap();
+        db.link_memory_entities("g_mem", &[ent.as_str()])
+            .await
+            .unwrap();
+
+        // Legacy path = stream OFF. Run the shipped public path directly.
+        let out =
+            temp_env::async_with_vars([("ORIGIN_GRAPH_MEMORY_STREAM", None::<&str>)], async {
+                db.search_memory_cross_rerank_cued(
+                    "photosynthesis",
+                    5,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                )
+                .await
+                .unwrap()
+            })
+            .await;
+
+        assert!(
+            out.iter().all(|r| r.source != "knowledge_graph"),
+            "legacy graph emitted surviving knowledge_graph rows — the db.rs:8524 strip regressed"
+        );
+    }
+
+    /// G4 graph stream (LIVE engine): the positive counterpart to the legacy-ghost
+    /// negative control. `ORIGIN_GRAPH_MEMORY_STREAM` routes `augment_with_graph`
+    /// to `augment_with_memory_stream` (db.rs:10366), which fuses entity-LINKED
+    /// memories at `source_id` granularity (source="memory" — survives the
+    /// db.rs:8524 strip). Flag ON must boost a query-anchored entity-linked memory
+    /// on the shipped path. This is the live engine the intent gate's
+    /// `use_graph`→ON should route into (instead of the dead legacy path the #15
+    /// GPU probe gated — the "switch onto a dead engine" that read as KEEP-OFF).
+    #[tokio::test]
+    async fn g4_graph_stream_is_live() {
+        let (db, _dir) = test_db().await;
+        // Distinct query-matching rows; only one is entity-linked.
+        db.upsert_documents(vec![
+            make_memory_doc(
+                "gs_linked",
+                "photosynthesis converts light in chloroplast membranes",
+                "knowledge",
+                "work",
+                "tester",
+            ),
+            make_memory_doc(
+                "gs_plain",
+                "photosynthesis lecture notes from biology class",
+                "knowledge",
+                "work",
+                "tester",
+            ),
+        ])
+        .await
+        .unwrap();
+        let concept = db
+            .store_entity("photosynthesis", "concept", None, None, None)
+            .await
+            .unwrap();
+        db.link_memory_entities("gs_linked", &[concept.as_str()])
+            .await
+            .unwrap();
+
+        let (off, on) =
+            g4_probe(&db, "photosynthesis", 5, "ORIGIN_GRAPH_MEMORY_STREAM", None).await;
+
+        // The stream surfaces source="memory" rows, never ghost knowledge_graph rows.
+        assert!(
+            on.iter().all(|r| r.source != "knowledge_graph"),
+            "graph stream emitted ghost knowledge_graph rows — strip/tag regressed"
+        );
+        let score =
+            |v: &[SearchResult], sid: &str| v.iter().find(|r| r.source_id == sid).map(|r| r.score);
+        let linked_off = score(&off, "gs_linked").expect("gs_linked retrieved OFF");
+        let linked_on = score(&on, "gs_linked").expect("gs_linked retrieved ON");
+        assert!(
+            linked_on > linked_off + 1e-9,
+            "G4 graph-stream DEAD: entity-linked memory not boosted via the shipped path (off={linked_off} on={linked_on}); the live engine is not reaching output"
+        );
+    }
+
     // ==================== T4b: k-hop entity-graph traversal ====================
 
     /// expand_anchor_entities_khop at depth=2 reaches a 2-hop entity (A->B->C)
