@@ -26,6 +26,7 @@ pub mod pipeline;
 pub mod report;
 pub mod retrieval;
 pub mod runner;
+pub mod seed_contract;
 pub mod signals;
 pub mod wall_clock;
 pub use layer::EvalLayer;

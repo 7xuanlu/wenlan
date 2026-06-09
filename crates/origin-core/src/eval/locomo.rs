@@ -1435,6 +1435,13 @@ pub async fn run_locomo_eval_from_db_collect(
     use crate::eval::paired::PerQueryRow;
     use std::time::Instant;
 
+    // No-drift eval gate: a graph/temporal A/B over an empty substrate is a null,
+    // not a result. Same contract the seed orchestrator asserts (producer/consumer).
+    {
+        let conn = db.conn.lock().await;
+        crate::eval::seed_contract::assert_feature_substrate_live(&conn, feature).await?;
+    }
+
     let mut samples = load_locomo(path)?;
     apply_locomo_limit(&mut samples);
     let gate_on = crate::db::graph_gate_enabled();
@@ -1529,6 +1536,13 @@ pub async fn run_locomo_eval_cross_rerank_from_db_collect(
         std::env::set_var("RERANK_POOL_FLOOR", "10");
     }
 
+    // No-drift eval gate: refuse to measure a channel whose substrate is empty
+    // (same contract the seed orchestrator asserts on the producing side).
+    {
+        let conn = db.conn.lock().await;
+        crate::eval::seed_contract::assert_feature_substrate_live(&conn, feature).await?;
+    }
+
     let mut samples = load_locomo(path)?;
     apply_locomo_limit(&mut samples);
     let mut rows: Vec<PerQueryRow> = Vec::new();
@@ -1595,6 +1609,197 @@ pub async fn run_locomo_eval_cross_rerank_from_db_collect(
         }
     }
 
+    Ok(rows)
+}
+
+// ---------------------------------------------------------------------------
+// Temporal oracle probe (3-arm: Baseline / ExtractCue / Oracle)
+// ---------------------------------------------------------------------------
+
+/// Which temporal cue strategy to apply per query in the temporal oracle probe.
+///
+/// - `Baseline`: no temporal cue — identical to the plain cross-rerank call.
+/// - `ExtractCue`: extract a cue from the question text, resolved against the
+///   conversation's own timeline (arm B). High-confidence cues only; others
+///   fall back to `None`.
+/// - `Oracle`: use the union window of the evidence observation dates (arm C).
+///   If none of the evidence observations have a known `event_date`, falls back
+///   to `None` (counted separately; behaves identically to Baseline for that QA).
+#[derive(Clone, Copy, Debug)]
+pub enum TemporalArm {
+    Baseline,
+    ExtractCue,
+    Oracle,
+}
+
+/// Collector for the 3-arm temporal oracle probe over a pre-seeded LoCoMo DB.
+///
+/// Mirrors [`run_locomo_eval_cross_rerank_from_db_collect`] verbatim for the
+/// relevance judgments, NDCG@10/recall@5/MRR scoring, and `PerQueryRow`
+/// construction. The only difference is how `temporal_cue` is computed per
+/// query, forwarded through [`crate::db::MemoryDB::search_memory_cross_rerank_cued`].
+///
+/// Counters printed to stdout (informational, not returned):
+/// - Arm B: QAs with no high-confidence cue (fall back to `None`).
+/// - Arm C: QAs where no evidence observation has a known `event_date`
+///   (fall back to `None`; behaviorally identical to Baseline for those QAs).
+#[allow(clippy::too_many_arguments)]
+pub async fn run_locomo_eval_cross_rerank_temporal_collect(
+    db: &MemoryDB,
+    path: &Path,
+    reranker: std::sync::Arc<dyn crate::reranker::Reranker>,
+    feature: &str,
+    arm: TemporalArm,
+    flag_state: &str,
+) -> Result<Vec<crate::eval::paired::PerQueryRow>, OriginError> {
+    use crate::eval::paired::PerQueryRow;
+    use crate::temporal_query::{extract_cue, CueConfidence};
+    use std::time::Instant;
+
+    if std::env::var_os("RERANK_POOL_MULTIPLIER").is_none() {
+        std::env::set_var("RERANK_POOL_MULTIPLIER", "1");
+    }
+    if std::env::var_os("RERANK_POOL_FLOOR").is_none() {
+        std::env::set_var("RERANK_POOL_FLOOR", "10");
+    }
+
+    let mut samples = load_locomo(path)?;
+    apply_locomo_limit(&mut samples);
+
+    // Build event_date_map once; used by both ExtractCue (for `now` pinning)
+    // and Oracle (for evidence window construction).
+    let edm = event_date_map(&samples);
+
+    let mut rows: Vec<PerQueryRow> = Vec::new();
+    let mut no_cue_count = 0usize;
+    let mut no_oracle_date_count = 0usize;
+
+    for sample in &samples {
+        let memories = extract_observations(sample);
+        let dia_to_source: HashMap<String, String> = memories
+            .iter()
+            .enumerate()
+            .map(|(i, m)| {
+                (
+                    m.dia_id.clone(),
+                    format!("locomo_{}_obs_{}", sample.sample_id, i),
+                )
+            })
+            .collect();
+
+        // Compute `now` for this sample: the latest known session date + 1 day,
+        // so relative cues like "last week" resolve against the conversation's
+        // own present rather than wall-clock 2026.
+        // If no dated observations exist for this sample, fall back to Utc::now().
+        let sample_source_ids: Vec<String> = memories
+            .iter()
+            .enumerate()
+            .map(|(i, _)| format!("locomo_{}_obs_{}", sample.sample_id, i))
+            .collect();
+        let max_session_ts: Option<i64> = sample_source_ids
+            .iter()
+            .filter_map(|sid| edm.get(sid).copied())
+            .max();
+        let sample_now = match max_session_ts {
+            Some(ts) => {
+                chrono::DateTime::from_timestamp(ts + 86400, 0).unwrap_or_else(chrono::Utc::now)
+            }
+            None => chrono::Utc::now(),
+        };
+
+        for (q_idx, qa) in sample.qa.iter().enumerate() {
+            if qa.category == 5 {
+                continue;
+            }
+
+            let temporal_cue: Option<crate::temporal_query::DateRange> = match arm {
+                TemporalArm::Baseline => None,
+
+                TemporalArm::ExtractCue => {
+                    let cue = extract_cue(&qa.question, sample_now)
+                        .filter(|c| c.confidence == CueConfidence::High)
+                        .map(|c| c.range);
+                    if cue.is_none() {
+                        no_cue_count += 1;
+                    }
+                    cue
+                }
+
+                TemporalArm::Oracle => {
+                    // Collect event_dates for all evidence observations.
+                    let dates: Vec<i64> = qa
+                        .evidence
+                        .iter()
+                        .filter_map(|did| dia_to_source.get(did))
+                        .filter_map(|sid| edm.get(sid).copied())
+                        .collect();
+                    if dates.is_empty() {
+                        no_oracle_date_count += 1;
+                        None
+                    } else {
+                        let start = *dates.iter().min().unwrap();
+                        let end = *dates.iter().max().unwrap();
+                        Some(crate::temporal_query::DateRange { start, end })
+                    }
+                }
+            };
+
+            let t0 = Instant::now();
+            let results = db
+                .search_memory_cross_rerank_cued(
+                    &qa.question,
+                    10,
+                    None,
+                    None,
+                    None,
+                    temporal_cue,
+                    Some(reranker.clone()),
+                )
+                .await?;
+            let latency_ms = t0.elapsed().as_secs_f64() * 1000.0;
+
+            let relevant_ids: HashSet<String> = qa
+                .evidence
+                .iter()
+                .filter_map(|did| dia_to_source.get(did).cloned())
+                .collect();
+            if relevant_ids.is_empty() {
+                continue;
+            }
+            let result_ids: Vec<&str> = results.iter().map(|r| r.source_id.as_str()).collect();
+            let grades: HashMap<&str, u8> = result_ids
+                .iter()
+                .map(|id| (*id, if relevant_ids.contains(*id) { 1 } else { 0 }))
+                .collect();
+            let relevant_set: HashSet<&str> = relevant_ids.iter().map(|s| s.as_str()).collect();
+
+            // temporal_touched: for arm B, record whether a high-confidence cue fired.
+            let temporal_touched = match arm {
+                TemporalArm::ExtractCue => Some(temporal_cue.is_some()),
+                _ => None,
+            };
+
+            rows.push(PerQueryRow {
+                feature: feature.to_string(),
+                bench: "locomo".to_string(),
+                flag_state: flag_state.to_string(),
+                query_id: format!("{}#q{}", sample.sample_id, q_idx),
+                category: qa.category.to_string(),
+                ndcg10: metrics::ndcg_at_k(&result_ids, &grades, 10),
+                recall5: metrics::recall_at_k(&result_ids, &relevant_set, 5),
+                mrr: metrics::mrr(&result_ids, &relevant_set),
+                latency_ms,
+                graph_skipped: None,
+                temporal_touched,
+            });
+        }
+    }
+
+    println!(
+        "[temporal_probe:{arm:?}] no_cue={no_cue_count} no_oracle_date={no_oracle_date_count} \
+         total_rows={}",
+        rows.len()
+    );
     Ok(rows)
 }
 
@@ -1888,6 +2093,280 @@ pub async fn run_locomo_eval_expanded(
         None,
     ));
     Ok(report)
+}
+
+// ---------------------------------------------------------------------------
+// #15 slice-1 paired collector — expanded path + intent routing probe
+// ---------------------------------------------------------------------------
+
+/// #15 slice-1 paired collector. Returns one `PerQueryRow` per LoCoMo QA for the
+/// expanded deep path, recording `graph_skipped` (the negation of the routing
+/// decision actually used). The arm (intent-LLM vs keyword gate) is selected by
+/// the caller via the `ORIGIN_ENABLE_INTENT_LLM` env (the expanded path reads it
+/// internally; this collector records the decision it observes). `flag_state` is
+/// "on"/"off". Ephemeral-per-conversation seeding, mirroring `run_locomo_eval_expanded`.
+///
+/// Probe-operator caveats:
+/// - On the BASELINE (intent-OFF) arm, `graph_skipped` records the keyword gate's
+///   *verdict* (`query_warrants_graph`). That equals the search's realized routing
+///   only when `ORIGIN_ENABLE_GRAPH_GATE=1`; with the gate at its default OFF,
+///   `search_memory_with_cue` always augments (`do_graph = !gate || warrants`), so
+///   the recorded skip would be fictional. The Task 6 probe sets
+///   `ORIGIN_ENABLE_GRAPH_GATE=1` on the baseline arm for this reason — run it that way.
+/// - On the INTENT (intent-ON) arm, the emitter runs ~2x per QA: once here to record
+///   `graph_skipped`, once inside `search_memory_expanded`. Deterministic at temp=0 so
+///   the two agree; size the full-run cost/time for the doubled intent-arm LLM calls.
+pub async fn run_locomo_eval_expanded_intent_collect(
+    path: &std::path::Path,
+    llm: std::sync::Arc<dyn crate::llm_provider::LlmProvider>,
+    feature: &str,
+    flag_state: &str,
+) -> Result<Vec<crate::eval::paired::PerQueryRow>, OriginError> {
+    let mut samples = load_locomo(path)?;
+    apply_locomo_limit(&mut samples);
+    let mut rows: Vec<crate::eval::paired::PerQueryRow> = Vec::new();
+    let intent_arm = crate::retrieval::intent::intent_llm_enabled();
+
+    for sample in &samples {
+        let memories = extract_observations(sample);
+        let tmp = tempfile::tempdir().map_err(|e| OriginError::Generic(format!("tempdir: {e}")))?;
+        let db = MemoryDB::new(tmp.path(), std::sync::Arc::new(crate::events::NoopEmitter)).await?;
+        let docs: Vec<RawDocument> = memories
+            .iter()
+            .enumerate()
+            .map(|(i, mem)| RawDocument {
+                content: mem.content.clone(),
+                source_id: format!("locomo_{}_obs_{}", sample.sample_id, i),
+                source: "memory".to_string(),
+                title: format!("{} session {}", mem.speaker, mem.session_num),
+                memory_type: Some("fact".to_string()),
+                space: Some("conversation".to_string()),
+                last_modified: chrono::Utc::now().timestamp(),
+                ..Default::default()
+            })
+            .collect();
+        db.upsert_documents(docs).await?;
+
+        let dia_to_source: HashMap<String, String> = memories
+            .iter()
+            .enumerate()
+            .map(|(i, m)| {
+                (
+                    m.dia_id.clone(),
+                    format!("locomo_{}_obs_{}", sample.sample_id, i),
+                )
+            })
+            .collect();
+
+        for (qi, qa) in sample.qa.iter().enumerate() {
+            if qa.category == 5 {
+                continue;
+            }
+            // Record the routing decision this arm uses, for graph_skipped.
+            // Intent arm: the LLM's use_graph (a second emit call; deterministic at
+            // temp=0, so it matches the decision search_memory_expanded uses).
+            // Baseline arm: the keyword gate.
+            let used_graph = if intent_arm {
+                crate::retrieval::intent::emit_query_intent_llm(&llm, &qa.question)
+                    .await
+                    .use_graph
+            } else {
+                crate::retrieval::signals::query_warrants_graph(&qa.question)
+            };
+
+            let results = db
+                .search_memory_expanded(&qa.question, 10, None, None, None, Some(llm.clone()))
+                .await?;
+
+            let relevant_ids: HashSet<String> = qa
+                .evidence
+                .iter()
+                .filter_map(|did| dia_to_source.get(did).cloned())
+                .collect();
+            if relevant_ids.is_empty() {
+                continue;
+            }
+            let result_ids: Vec<&str> = results.iter().map(|r| r.source_id.as_str()).collect();
+            let grades: HashMap<&str, u8> = result_ids
+                .iter()
+                .map(|id| (*id, if relevant_ids.contains(*id) { 1 } else { 0 }))
+                .collect();
+            let relevant_set: HashSet<&str> = relevant_ids.iter().map(|s| s.as_str()).collect();
+
+            rows.push(crate::eval::paired::PerQueryRow {
+                feature: feature.to_string(),
+                bench: "locomo".to_string(),
+                flag_state: flag_state.to_string(),
+                query_id: format!("{}#q{}", sample.sample_id, qi),
+                category: qa.category.to_string(),
+                ndcg10: metrics::ndcg_at_k(&result_ids, &grades, 10),
+                recall5: metrics::recall_at_k(&result_ids, &relevant_set, 5),
+                mrr: metrics::mrr(&result_ids, &relevant_set),
+                latency_ms: 0.0,
+                graph_skipped: Some(!used_graph),
+                temporal_touched: None,
+            });
+        }
+    }
+    Ok(rows)
+}
+
+/// Cache root for persistent per-conversation graph-populated DBs. Override with
+/// `GRAPH_POP_DIR` (default `~/.cache/origin-eval/graph_pop`). Delete to rebuild
+/// (e.g. after a fixture or extractor change).
+pub(crate) fn graph_pop_dir(bench: &str, sample_id: &str) -> std::path::PathBuf {
+    let base = std::env::var("GRAPH_POP_DIR").unwrap_or_else(|_| {
+        let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
+        format!("{home}/.cache/origin-eval/graph_pop")
+    });
+    std::path::PathBuf::from(base).join(bench).join(sample_id)
+}
+
+/// Bounded fine entity sweep over a freshly-ingested DB; populates the
+/// `memory_entities` junction. Mirrors the gate's `run_capped_fine_sweep`
+/// (attempted-tracking so zero-entity rows cannot re-fetch forever). Fine
+/// extract-ALL is used; person/speaker hubs are excluded at retrieval time by the
+/// v3 type + degree filter. Returns the count of memories that got ≥1 entity.
+pub async fn populate_memory_entities_sweep(
+    db: &MemoryDB,
+    llm: &std::sync::Arc<dyn crate::llm_provider::LlmProvider>,
+    prompts: &crate::prompts::PromptRegistry,
+) -> usize {
+    let mut attempted: HashSet<String> = HashSet::new();
+    let mut linked = 0usize;
+    loop {
+        let batch = db
+            .unlinked_memories(64 + attempted.len())
+            .await
+            .unwrap_or_default();
+        let fresh: Vec<(String, String)> = batch
+            .into_iter()
+            .filter(|(sid, _)| !attempted.contains(sid))
+            .collect();
+        if fresh.is_empty() {
+            break;
+        }
+        for (sid, content) in fresh {
+            let ents = crate::kg::entity_extraction::extract_entities_for_content(
+                db, llm, prompts, &content,
+            )
+            .await
+            .unwrap_or_default();
+            if !ents.is_empty() {
+                let refs: Vec<&str> = ents.iter().map(|s| s.as_str()).collect();
+                let _ = db.link_memory_entities(&sid, &refs).await;
+                linked += 1;
+            }
+            attempted.insert(sid);
+        }
+    }
+    linked
+}
+
+/// Paired graph-stream collector (efficient, cached). For each conversation it
+/// keeps a PERSISTENT populated DB under `<GRAPH_POP_DIR>/locomo/<sample_id>/`:
+/// on first encounter it ingests the conversation + runs the fine entity sweep
+/// (the only LLM cost) and persists it; every later run — the second arm, the
+/// surface-new arm, knob sweeps — reuses that DB and pays ZERO extraction.
+///
+/// Retrieval uses the base `search_memory` path (no expansion, no rerank), so the
+/// query loop is LLM-free and deterministic. The ONLY per-arm difference is the
+/// `ORIGIN_GRAPH_MEMORY_STREAM` env (set by the harness), making the paired Δ a
+/// clean graph-OFF-vs-ON contrast. Coverage is printed when a conversation is
+/// freshly populated so a null can be checked against substrate liveness.
+pub async fn run_locomo_eval_graph_stream_collect(
+    path: &std::path::Path,
+    llm: std::sync::Arc<dyn crate::llm_provider::LlmProvider>,
+    prompts: &crate::prompts::PromptRegistry,
+    feature: &str,
+    flag_state: &str,
+) -> Result<Vec<crate::eval::paired::PerQueryRow>, OriginError> {
+    let mut samples = load_locomo(path)?;
+    apply_locomo_limit(&mut samples);
+    let mut rows: Vec<crate::eval::paired::PerQueryRow> = Vec::new();
+
+    for sample in &samples {
+        let memories = extract_observations(sample);
+        let dir = graph_pop_dir("locomo", &sample.sample_id);
+        let fresh = !dir.join("origin_memory.db").exists();
+        std::fs::create_dir_all(&dir)
+            .map_err(|e| OriginError::Generic(format!("graph_pop dir: {e}")))?;
+        let db = MemoryDB::new(&dir, std::sync::Arc::new(crate::events::NoopEmitter)).await?;
+
+        if fresh {
+            let docs: Vec<RawDocument> = memories
+                .iter()
+                .enumerate()
+                .map(|(i, mem)| RawDocument {
+                    content: mem.content.clone(),
+                    source_id: format!("locomo_{}_obs_{}", sample.sample_id, i),
+                    source: "memory".to_string(),
+                    title: format!("{} session {}", mem.speaker, mem.session_num),
+                    memory_type: Some("fact".to_string()),
+                    space: Some("conversation".to_string()),
+                    last_modified: chrono::Utc::now().timestamp(),
+                    ..Default::default()
+                })
+                .collect();
+            db.upsert_documents(docs).await?;
+            let linked = populate_memory_entities_sweep(&db, &llm, prompts).await;
+            println!(
+                "[graph_stream] populated locomo/{}: {linked}/{} memories linked",
+                sample.sample_id,
+                memories.len()
+            );
+        }
+
+        let dia_to_source: HashMap<String, String> = memories
+            .iter()
+            .enumerate()
+            .map(|(i, m)| {
+                (
+                    m.dia_id.clone(),
+                    format!("locomo_{}_obs_{}", sample.sample_id, i),
+                )
+            })
+            .collect();
+
+        for (qi, qa) in sample.qa.iter().enumerate() {
+            if qa.category == 5 {
+                continue;
+            }
+            let results = db
+                .search_memory(&qa.question, 10, None, None, None, None, None, None)
+                .await?;
+
+            let relevant_ids: HashSet<String> = qa
+                .evidence
+                .iter()
+                .filter_map(|did| dia_to_source.get(did).cloned())
+                .collect();
+            if relevant_ids.is_empty() {
+                continue;
+            }
+            let result_ids: Vec<&str> = results.iter().map(|r| r.source_id.as_str()).collect();
+            let grades: HashMap<&str, u8> = result_ids
+                .iter()
+                .map(|id| (*id, if relevant_ids.contains(*id) { 1 } else { 0 }))
+                .collect();
+            let relevant_set: HashSet<&str> = relevant_ids.iter().map(|s| s.as_str()).collect();
+
+            rows.push(crate::eval::paired::PerQueryRow {
+                feature: feature.to_string(),
+                bench: "locomo".to_string(),
+                flag_state: flag_state.to_string(),
+                query_id: format!("{}#q{}", sample.sample_id, qi),
+                category: qa.category.to_string(),
+                ndcg10: metrics::ndcg_at_k(&result_ids, &grades, 10),
+                recall5: metrics::recall_at_k(&result_ids, &relevant_set, 5),
+                mrr: metrics::mrr(&result_ids, &relevant_set),
+                latency_ms: 0.0,
+                graph_skipped: None,
+                temporal_touched: None,
+            });
+        }
+    }
+    Ok(rows)
 }
 
 // ---------------------------------------------------------------------------

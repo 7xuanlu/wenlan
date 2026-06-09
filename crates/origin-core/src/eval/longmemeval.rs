@@ -95,6 +95,28 @@ pub fn load_longmemeval(path: &Path) -> Result<Vec<LongMemEvalSample>, OriginErr
 /// developer can run a small pre-flight subset (~30min) before committing
 /// to a full multi-hour run.
 fn apply_lme_limit(samples: &mut Vec<LongMemEvalSample>) {
+    // EVAL_LME_STRATIFIED=N keeps the first N questions of EACH question_type so a
+    // small fast run still covers all 6 categories. The fixture is sorted by type,
+    // so a plain front-truncate (EVAL_LME_LIMIT) only hits the first category.
+    // Takes precedence over EVAL_LME_LIMIT when set.
+    if let Some(n) = std::env::var("EVAL_LME_STRATIFIED")
+        .ok()
+        .and_then(|v| v.parse::<usize>().ok())
+    {
+        let mut seen: HashMap<String, usize> = HashMap::new();
+        samples.retain(|s| {
+            let c = seen.entry(s.question_type.clone()).or_insert(0);
+            *c += 1;
+            *c <= n
+        });
+        log::warn!(
+            "[eval/longmemeval] EVAL_LME_STRATIFIED={} active -- {} questions across {} categories",
+            n,
+            samples.len(),
+            seen.len()
+        );
+        return;
+    }
     apply_limit_from_env(samples, "EVAL_LME_LIMIT", "longmemeval", "questions");
 }
 
@@ -1461,6 +1483,13 @@ pub async fn run_longmemeval_eval_from_db_collect(
     use crate::eval::paired::PerQueryRow;
     use std::time::Instant;
 
+    // No-drift eval gate: a graph/temporal A/B over an empty substrate is a null,
+    // not a result. Same contract the seed orchestrator asserts (producer/consumer).
+    {
+        let conn = db.conn.lock().await;
+        crate::eval::seed_contract::assert_feature_substrate_live(&conn, feature).await?;
+    }
+
     let mut samples = load_longmemeval(path)?;
     apply_lme_limit(&mut samples);
     let gate_on = crate::db::graph_gate_enabled();
@@ -1535,6 +1564,15 @@ pub async fn run_longmemeval_eval_cross_rerank_from_db_collect(
     }
     if std::env::var_os("RERANK_POOL_FLOOR").is_none() {
         std::env::set_var("RERANK_POOL_FLOOR", "10");
+    }
+
+    // No-drift eval gate: refuse to measure a channel whose substrate is empty.
+    // A graph/temporal A/B over a starved DB yields an uninterpretable null that
+    // would be misread as "the channel doesn't help". Same contract the seed
+    // orchestrator asserts on the producing side (seed produces, eval consumes).
+    {
+        let conn = db.conn.lock().await;
+        crate::eval::seed_contract::assert_feature_substrate_live(&conn, feature).await?;
     }
 
     let mut samples = load_longmemeval(path)?;
@@ -2051,6 +2089,118 @@ pub async fn run_longmemeval_eval_temporal(path: &Path) -> Result<LongMemEvalRep
     Ok(report)
 }
 
+/// LongMemEval retrieval with query DECOMPOSITION before search
+/// ([`MemoryDB::search_memory_decomposed`]): the question is split into
+/// independent factual subqueries, each retrieved separately, RRF-merged. Targets
+/// multi-session questions whose evidence spans sessions a single embedding
+/// starves. Needs an LLM (the decomposition call). Mirror of
+/// [`run_longmemeval_eval`] with the search call swapped.
+pub async fn run_longmemeval_eval_decomposed(
+    path: &Path,
+    llm: std::sync::Arc<dyn crate::llm_provider::LlmProvider>,
+) -> Result<LongMemEvalReport, OriginError> {
+    let mut samples = load_longmemeval(path)?;
+    apply_lme_limit(&mut samples);
+    let mut all_scores: Vec<(String, f64, f64, f64, f64, f64)> = Vec::new();
+    let mut per_case: Vec<crate::eval::report::CaseResult> = Vec::new();
+    let mut total_memories: usize = 0;
+
+    for sample in &samples {
+        let memories = extract_memories(sample);
+        let tmp = tempfile::tempdir().map_err(|e| OriginError::Generic(format!("tempdir: {e}")))?;
+        let db = MemoryDB::new(tmp.path(), std::sync::Arc::new(crate::events::NoopEmitter)).await?;
+        let docs: Vec<RawDocument> = memories
+            .iter()
+            .map(|mem| {
+                let memory_type = match sample.question_type.as_str() {
+                    "single-session-preference" => "preference",
+                    _ => "fact",
+                };
+                RawDocument {
+                    content: mem.content.clone(),
+                    source_id: memory_source_id(&mem.question_id, mem.session_idx, mem.turn_idx),
+                    source: "memory".to_string(),
+                    title: format!("{} session {}", mem.role, mem.session_idx),
+                    memory_type: Some(memory_type.to_string()),
+                    space: Some("conversation".to_string()),
+                    last_modified: chrono::Utc::now().timestamp(),
+                    ..Default::default()
+                }
+            })
+            .collect();
+        total_memories += docs.len();
+        db.upsert_documents(docs).await?;
+
+        let relevant_source_ids: HashSet<String> = memories
+            .iter()
+            .filter(|m| m.has_answer)
+            .map(|m| memory_source_id(&m.question_id, m.session_idx, m.turn_idx))
+            .collect();
+        if relevant_source_ids.is_empty() {
+            continue;
+        }
+
+        let results = db
+            .search_memory_decomposed(&sample.question, 10, None, None, None, Some(llm.clone()))
+            .await?;
+
+        let result_ids: Vec<&str> = results.iter().map(|r| r.source_id.as_str()).collect();
+        let grades: HashMap<&str, u8> = result_ids
+            .iter()
+            .map(|id| (*id, u8::from(relevant_source_ids.contains(*id))))
+            .collect();
+        let relevant_set: HashSet<&str> = relevant_source_ids.iter().map(|s| s.as_str()).collect();
+
+        let ndcg_10 = metrics::ndcg_at_k(&result_ids, &grades, 10);
+        let ndcg_5 = metrics::ndcg_at_k(&result_ids, &grades, 5);
+        let mrr_val = metrics::mrr(&result_ids, &relevant_set);
+        let recall_5 = metrics::recall_at_k(&result_ids, &relevant_set, 5);
+        let hr_1 = metrics::hit_rate_at_k(&result_ids, &relevant_set, 1);
+
+        all_scores.push((
+            sample.question_type.clone(),
+            ndcg_5,
+            ndcg_10,
+            mrr_val,
+            recall_5,
+            hr_1,
+        ));
+        per_case.push(build_lme_case_result(
+            &sample.question,
+            &sample.question_type,
+            ndcg_5,
+            ndcg_10,
+            mrr_val,
+            recall_5,
+            hr_1,
+        ));
+    }
+
+    let per_category = aggregate_by_category(&all_scores);
+    let mut report = LongMemEvalReport {
+        aggregate_ndcg_at_10: avg_field(&all_scores, |s| s.2),
+        aggregate_mrr: avg_field(&all_scores, |s| s.3),
+        aggregate_recall_at_5: avg_field(&all_scores, |s| s.4),
+        aggregate_hit_rate_at_1: avg_field(&all_scores, |s| s.5),
+        total_questions: all_scores.len(),
+        total_memories,
+        per_category,
+        baseline: None,
+        env: None,
+        per_case,
+        coverage: None,
+    };
+    report.env = Some(build_lme_env(
+        "decomposed",
+        path,
+        "search_memory_decomposed",
+        "on-device",
+        "qwen3.5-9b",
+        None,
+    ));
+    Ok(report)
+}
+
 /// Per-query variant of [`run_longmemeval_eval_temporal`] (T4a). SELF-SEEDS a
 /// fresh ephemeral DB per question (stamps `event_date`), so unlike the cached-DB
 /// collectors this re-runs the write path — runs are reproducible only insofar as
@@ -2157,6 +2307,103 @@ pub async fn run_longmemeval_eval_temporal_collect(
             latency_ms,
             graph_skipped: None,
             temporal_touched: Some(cue_fired),
+        });
+    }
+
+    Ok(rows)
+}
+
+/// Paired graph-stream collector for LongMemEval (efficient, cached). Mirrors
+/// [`crate::eval::locomo::run_locomo_eval_graph_stream_collect`]: one persistent
+/// populated DB per question under `<GRAPH_POP_DIR>/lme/<question_id>/`, the fine
+/// entity sweep paid once, base `search_memory` (no expansion/rerank) so the query
+/// loop is LLM-free. Only `ORIGIN_GRAPH_MEMORY_STREAM` differs per arm.
+pub async fn run_longmemeval_eval_graph_stream_collect(
+    path: &Path,
+    llm: std::sync::Arc<dyn crate::llm_provider::LlmProvider>,
+    prompts: &crate::prompts::PromptRegistry,
+    feature: &str,
+    flag_state: &str,
+) -> Result<Vec<crate::eval::paired::PerQueryRow>, OriginError> {
+    use crate::eval::paired::PerQueryRow;
+
+    let mut samples = load_longmemeval(path)?;
+    apply_lme_limit(&mut samples);
+    let mut rows: Vec<PerQueryRow> = Vec::new();
+
+    for sample in &samples {
+        let memories = extract_memories(sample);
+        let dir = crate::eval::locomo::graph_pop_dir("lme", &sample.question_id);
+        let fresh = !dir.join("origin_memory.db").exists();
+        std::fs::create_dir_all(&dir)
+            .map_err(|e| OriginError::Generic(format!("graph_pop dir: {e}")))?;
+        let db = MemoryDB::new(&dir, std::sync::Arc::new(crate::events::NoopEmitter)).await?;
+
+        if fresh {
+            let docs: Vec<RawDocument> = memories
+                .iter()
+                .map(|mem| {
+                    let memory_type = match sample.question_type.as_str() {
+                        "single-session-preference" => "preference",
+                        _ => "fact",
+                    };
+                    RawDocument {
+                        content: mem.content.clone(),
+                        source_id: memory_source_id(
+                            &mem.question_id,
+                            mem.session_idx,
+                            mem.turn_idx,
+                        ),
+                        source: "memory".to_string(),
+                        title: format!("{} session {}", mem.role, mem.session_idx),
+                        memory_type: Some(memory_type.to_string()),
+                        space: Some("conversation".to_string()),
+                        last_modified: chrono::Utc::now().timestamp(),
+                        ..Default::default()
+                    }
+                })
+                .collect();
+            db.upsert_documents(docs).await?;
+            let linked =
+                crate::eval::locomo::populate_memory_entities_sweep(&db, &llm, prompts).await;
+            println!(
+                "[graph_stream] populated lme/{}: {linked}/{} memories linked",
+                sample.question_id,
+                memories.len()
+            );
+        }
+
+        let relevant_source_ids: HashSet<String> = memories
+            .iter()
+            .filter(|m| m.has_answer)
+            .map(|m| memory_source_id(&m.question_id, m.session_idx, m.turn_idx))
+            .collect();
+        if relevant_source_ids.is_empty() {
+            continue;
+        }
+
+        let results = db
+            .search_memory(&sample.question, 10, None, None, None, None, None, None)
+            .await?;
+        let result_ids: Vec<&str> = results.iter().map(|r| r.source_id.as_str()).collect();
+        let grades: HashMap<&str, u8> = result_ids
+            .iter()
+            .map(|id| (*id, u8::from(relevant_source_ids.contains(*id))))
+            .collect();
+        let relevant_set: HashSet<&str> = relevant_source_ids.iter().map(|s| s.as_str()).collect();
+
+        rows.push(PerQueryRow {
+            feature: feature.to_string(),
+            bench: "lme".to_string(),
+            flag_state: flag_state.to_string(),
+            query_id: sample.question_id.clone(),
+            category: sample.question_type.clone(),
+            ndcg10: metrics::ndcg_at_k(&result_ids, &grades, 10),
+            recall5: metrics::recall_at_k(&result_ids, &relevant_set, 5),
+            mrr: metrics::mrr(&result_ids, &relevant_set),
+            latency_ms: 0.0,
+            graph_skipped: None,
+            temporal_touched: None,
         });
     }
 

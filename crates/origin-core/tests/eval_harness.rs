@@ -446,20 +446,113 @@ async fn save_locomo_baseline() {
 #[tokio::test]
 #[ignore]
 async fn save_longmemeval_baseline() {
-    let path = eval_root().join("data/longmemeval_oracle.json");
+    // LME_FIXTURE overrides the fixture (default oracle = evidence-only/easy).
+    // Set LME_FIXTURE=data/longmemeval_s.json for the REAL ~47-session haystack
+    // retrieval eval. extract_memories ingests ALL haystack_sessions, so the same
+    // runner gives oracle (easy) vs full-haystack (hard) purely by fixture choice.
+    let rel =
+        std::env::var("LME_FIXTURE").unwrap_or_else(|_| "data/longmemeval_oracle.json".to_string());
+    let path = eval_root().join(&rel);
     if !path.exists() {
-        println!("SKIP: longmemeval_oracle.json not found");
+        println!("SKIP: {rel} not found");
         return;
     }
     let report = origin_core::eval::longmemeval::run_longmemeval_eval(&path)
         .await
         .unwrap();
+    println!(
+        "=== LME retrieval [{rel}] OVERALL ({}q, {}mem): ndcg@10={:.3} R@5={:.3} mrr={:.3} hit@1={:.3} ===",
+        report.total_questions,
+        report.total_memories,
+        report.aggregate_ndcg_at_10,
+        report.aggregate_recall_at_5,
+        report.aggregate_mrr,
+        report.aggregate_hit_rate_at_1
+    );
+    for c in &report.per_category {
+        println!(
+            "  {:28} n={:<4} ndcg@10={:.3} R@5={:.3} mrr={:.3} hit@1={:.3}",
+            c.question_type, c.count, c.ndcg_at_10, c.recall_at_5, c.mrr, c.hit_rate_at_1
+        );
+    }
     let baselines_dir = eval_root().join("baselines");
     std::fs::create_dir_all(&baselines_dir).unwrap();
     let baseline_path = baselines_dir.join(report.baseline_filename("longmemeval"));
     report.save_baseline(&baseline_path).unwrap();
     println!("Saved LongMemEval baseline to {:?}", baseline_path);
     save_layered(&report, |r| r.to_eval_report());
+}
+
+/// LME full-haystack TEMPORAL retrieval A/B (event_date injected + search_memory_temporal).
+/// Compare per-category vs `save_longmemeval_baseline` (base) on the same fixture +
+/// EVAL_LME_STRATIFIED subset. Toggle the lever with ORIGIN_ENABLE_TEMPORAL_FILTER=1
+/// (hard window filter) or ORIGIN_ENABLE_TEMPORAL_SOFT_BOOST=1 (never-drop boost).
+#[tokio::test]
+#[ignore]
+async fn save_longmemeval_temporal_baseline() {
+    let rel =
+        std::env::var("LME_FIXTURE").unwrap_or_else(|_| "data/longmemeval_oracle.json".to_string());
+    let path = eval_root().join(&rel);
+    if !path.exists() {
+        println!("SKIP: {rel} not found");
+        return;
+    }
+    let report = origin_core::eval::longmemeval::run_longmemeval_eval_temporal(&path)
+        .await
+        .unwrap();
+    println!(
+        "=== LME TEMPORAL retrieval [{rel}] OVERALL ({}q, {}mem): ndcg@10={:.3} R@5={:.3} mrr={:.3} hit@1={:.3} ===",
+        report.total_questions,
+        report.total_memories,
+        report.aggregate_ndcg_at_10,
+        report.aggregate_recall_at_5,
+        report.aggregate_mrr,
+        report.aggregate_hit_rate_at_1
+    );
+    for c in &report.per_category {
+        println!(
+            "  {:28} n={:<4} ndcg@10={:.3} R@5={:.3} mrr={:.3} hit@1={:.3}",
+            c.question_type, c.count, c.ndcg_at_10, c.recall_at_5, c.mrr, c.hit_rate_at_1
+        );
+    }
+}
+
+/// LME full-haystack DECOMPOSE retrieval A/B (search_memory_decomposed: split the
+/// query into independent subqueries, retrieve each, RRF-merge). Targets
+/// multi-session (worst base category, R@5 0.607). Needs the local LLM for the
+/// decomposition call. Compare per-category vs `save_longmemeval_baseline` (base).
+#[tokio::test]
+#[ignore]
+async fn save_longmemeval_decomposed_baseline() {
+    use std::sync::Arc;
+    let rel =
+        std::env::var("LME_FIXTURE").unwrap_or_else(|_| "data/longmemeval_oracle.json".to_string());
+    let path = eval_root().join(&rel);
+    if !path.exists() {
+        println!("SKIP: {rel} not found");
+        return;
+    }
+    let llm: Arc<dyn origin_core::llm_provider::LlmProvider> = Arc::new(
+        origin_core::llm_provider::OnDeviceProvider::new_with_model(Some("qwen3.5-9b")).unwrap(),
+    );
+    let report = origin_core::eval::longmemeval::run_longmemeval_eval_decomposed(&path, llm)
+        .await
+        .unwrap();
+    println!(
+        "=== LME DECOMPOSE retrieval [{rel}] OVERALL ({}q, {}mem): ndcg@10={:.3} R@5={:.3} mrr={:.3} hit@1={:.3} ===",
+        report.total_questions,
+        report.total_memories,
+        report.aggregate_ndcg_at_10,
+        report.aggregate_recall_at_5,
+        report.aggregate_mrr,
+        report.aggregate_hit_rate_at_1
+    );
+    for c in &report.per_category {
+        println!(
+            "  {:28} n={:<4} ndcg@10={:.3} R@5={:.3} mrr={:.3} hit@1={:.3}",
+            c.question_type, c.count, c.ndcg_at_10, c.recall_at_5, c.mrr, c.hit_rate_at_1
+        );
+    }
 }
 
 #[tokio::test]
@@ -2249,6 +2342,181 @@ async fn seed_backfill_episodes() {
     }
 }
 
+/// THE ONE SEED ROUTE. Runs every enrichment step on the cached scenario seed
+/// DBs in the correct order, then asserts the completeness contract. This is the
+/// single recipe — never hand-run the individual `seed_*` STEP tests, which are
+/// just the steps this orchestrates. Run THIS and the seed is complete + verified
+/// by construction; miss a step and the contract fails the seed (not a later eval).
+///
+/// Steps (order matters — inject before classify so COALESCE preserves dates):
+///   1. inject event_date (GPU-free)          → temporal substrate
+///   2. classify backfill (GPU)               → importance/quality/cue
+///   3. entity + memory_entities sweep (GPU)   → graph substrate
+///   4. episode backfill (GPU-free embed)      → episode substrate
+///   5. distill pages (GPU)                    → page substrate
+///   6. assert SeedExpectations::complete()    → fail loud on any starved channel
+///
+/// Adding a write-time channel? Add its step here AND its floor to
+/// `SeedExpectations` — the contract is what stops a channel shipping starved
+/// and being re-discovered as "doesn't help" (a lie). The same contract gates
+/// the eval side (`assert_feature_substrate_live`), so neither producer nor
+/// consumer can drift onto a dead substrate.
+///
+/// ```bash
+/// # full (overnight on-device); or SEED_COMPLETE_BENCH=lme to scope one bench:
+/// ORIGIN_EVAL_ROOT=$PWD/app/eval EVAL_ENRICHMENT_CONCURRENCY=8 \
+///   ORIGIN_LLM_PARALLEL_SEQS=8 SEED_COMPLETE_BENCH=lme \
+///   cargo test -p origin-core --features eval-harness --test eval_harness \
+///   seed_scenario_dbs_complete -- --ignored --nocapture --test-threads=1
+/// ```
+#[tokio::test]
+#[ignore = "GPU + cached scenario DB; L7 manual. The one seed route. Set ORIGIN_EVAL_ROOT."]
+async fn seed_scenario_dbs_complete() {
+    use origin_core::eval::seed_contract::{assert_seed_contract, SeedExpectations};
+    use origin_core::eval::shared::run_classification_for_eval_concurrent;
+    use origin_core::prompts::PromptRegistry;
+    use origin_core::tuning::DistillationConfig;
+    use std::sync::Arc;
+
+    let concurrency: usize = std::env::var("EVAL_ENRICHMENT_CONCURRENCY")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(8);
+    let bench_filter = std::env::var("SEED_COMPLETE_BENCH").ok();
+    let model = std::env::var("SEED_COMPLETE_MODEL").ok();
+
+    let llm: Arc<dyn origin_core::llm_provider::LlmProvider> = Arc::new(
+        origin_core::llm_provider::OnDeviceProvider::new_with_model(model.as_deref())
+            .expect("on-device provider"),
+    );
+    let prompts = PromptRegistry::load(&PromptRegistry::override_dir());
+    let tuning = DistillationConfig::default();
+    let root = resolve_scenario_db_root_from_harness();
+
+    for bench in ["locomo_v1", "lme_v1"] {
+        let short = bench.trim_end_matches("_v1"); // "locomo" / "lme"
+        if let Some(f) = &bench_filter {
+            if f != short && f != bench {
+                continue;
+            }
+        }
+        let dir = root.join(bench);
+        if !dir.join("origin_memory.db").exists() {
+            eprintln!(
+                "[seed_complete] SKIP {bench}: no base DB at {}. Build it first \
+                 (fullpipeline harness / scripts/seed-scenario-dbs.sh).",
+                dir.display()
+            );
+            continue;
+        }
+        eprintln!("\n[seed_complete] === {bench} ===");
+        let t_bench = std::time::Instant::now();
+        let db = origin_core::db::MemoryDB::new(&dir, Arc::new(origin_core::events::NoopEmitter))
+            .await
+            .expect("open scenario seed DB");
+
+        // 1. event_date injection (GPU-free, seconds). Per-session date lives in
+        //    fixture metadata; turn/observation text is date-stripped.
+        let fixture = eval_root().join(if short == "locomo" {
+            "data/locomo10.json"
+        } else {
+            "data/longmemeval_oracle.json"
+        });
+        if fixture.exists() {
+            let updates: Vec<(String, i64)> = if short == "locomo" {
+                let samples =
+                    origin_core::eval::locomo::load_locomo(&fixture).expect("load locomo");
+                origin_core::eval::locomo::event_date_map(&samples)
+                    .into_iter()
+                    .collect()
+            } else {
+                let samples =
+                    origin_core::eval::longmemeval::load_longmemeval(&fixture).expect("load lme");
+                origin_core::eval::longmemeval::event_date_map(&samples)
+                    .into_iter()
+                    .collect()
+            };
+            let n = db
+                .set_event_dates_by_source_id(&updates)
+                .await
+                .expect("inject event_date");
+            eprintln!(
+                "[seed_complete] 1/5 event_date: {} mapped -> {n} rows",
+                updates.len()
+            );
+        } else {
+            eprintln!(
+                "[seed_complete] 1/5 event_date SKIP: fixture {} missing",
+                fixture.display()
+            );
+        }
+
+        // 2. classify backfill (GPU). Fills importance/quality/cue on the still
+        //    -unclassified heads; COALESCE keeps the injected event_date.
+        let t = std::time::Instant::now();
+        let classified = run_classification_for_eval_concurrent(&db, &llm, concurrency)
+            .await
+            .expect("classify backfill");
+        eprintln!(
+            "[seed_complete] 2/5 classify: {classified} in {:.1}m",
+            t.elapsed().as_secs_f64() / 60.0
+        );
+
+        // 3. entity + memory_entities backfill (GPU). The graph-stream substrate
+        //    that has been silently missing on the consolidated seed. MUST drain by
+        //    the memory_entities JUNCTION (populate_memory_entities_sweep uses
+        //    `unlinked_memories` = NOT IN memory_entities), NOT by the legacy
+        //    `entity_id` column: the consolidated seed has stale entity_id markers
+        //    (44%) set by the old enrich WITHOUT junction rows, so the entity_id-
+        //    gated production path (get_unlinked_memories) skips them and links only
+        //    ~10%. Junction-based draining + an attempted-set for termination links
+        //    them all. This is the 6/07 graph-substrate populator.
+        let t = std::time::Instant::now();
+        let linked =
+            origin_core::eval::locomo::populate_memory_entities_sweep(&db, &llm, &prompts).await;
+        eprintln!(
+            "[seed_complete] 3/5 memory_entities: {linked} memories linked in {:.1}m",
+            t.elapsed().as_secs_f64() / 60.0
+        );
+
+        // 4. episode backfill (GPU-free embed).
+        let n = db.backfill_episodes().await.expect("backfill episodes");
+        eprintln!("[seed_complete] 4/5 episodes: {n} rows");
+
+        // 5. distill pages (GPU).
+        let t = std::time::Instant::now();
+        let pages = origin_core::refinery::distill_pages(&db, Some(&llm), &prompts, &tuning, None)
+            .await
+            .expect("distill pages");
+        eprintln!(
+            "[seed_complete] 5/5 pages: {pages} in {:.1}m",
+            t.elapsed().as_secs_f64() / 60.0
+        );
+
+        // 6. completeness gate. Drop the MemoryDB lock first, open a fresh conn.
+        drop(db);
+        let sdb = libsql::Builder::new_local(dir.join("origin_memory.db").to_str().unwrap())
+            .build()
+            .await
+            .expect("open seed for contract");
+        let conn = sdb.connect().expect("connect seed for contract");
+        let report = assert_seed_contract(&conn, &SeedExpectations::complete(bench))
+            .await
+            .unwrap_or_else(|e| panic!("[seed_complete] {bench} contract VIOLATED: {e}"));
+        eprintln!(
+            "[seed_complete] {bench} COMPLETE + verified in {:.1}m: rows={} classified={} cue={} ({:.0}%) event_date={} ({:.0}%) graph_links={}",
+            t_bench.elapsed().as_secs_f64() / 60.0,
+            report.rows,
+            report.classified,
+            report.cue_nonempty,
+            report.cue_coverage() * 100.0,
+            report.event_date_nonempty,
+            report.event_date_coverage() * 100.0,
+            report.graph_links,
+        );
+    }
+}
+
 /// T3 graph-gate A/B experiment on LongMemEval (retrieval-only, no GPU LLM).
 /// Dual-bench companion to `graph_gate_ab_locomo` so T3 is validated on BOTH
 /// metrics, not a partial view.
@@ -2624,7 +2892,8 @@ async fn paired_ab_emit() {
     println!("EVAL_OUT = {}", paired_out_dir().display());
 
     // (feature_tag, env_flag) for the cached-DB / base `search_memory` features.
-    let cached: [(&str, &str); 5] = [
+    let cached: [(&str, &str); 6] = [
+        ("graph_stream", "ORIGIN_GRAPH_MEMORY_STREAM"),
         ("graph_gate", "ORIGIN_ENABLE_GRAPH_GATE"),
         ("graph_seed", "ORIGIN_ENABLE_GRAPH_SEED"),
         ("fts_hardening", "ORIGIN_ENABLE_FTS_HARDENING"),
@@ -7119,5 +7388,584 @@ async fn temporal_filter_ab_lme() {
         _ => {
             println!("\n>>> temporal-reasoning bucket: not present in per_category (may be absent at this EVAL_LME_LIMIT)");
         }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Temporal oracle probe: 3-arm LoCoMo retrieval experiment
+// ---------------------------------------------------------------------------
+
+/// Inner runner for the temporal oracle probe.
+///
+/// Runs three arms over the seeded LoCoMo scenario DB and emits paired JSONL
+/// for two feature comparisons that `analyze_paired.py` can consume:
+///
+/// - `temporal_oracle_AB`: Baseline (off) vs ExtractCue (on)
+/// - `temporal_oracle_AC`: Baseline (off) vs Oracle (on)
+///
+/// The Baseline rows are cloned and labeled with the appropriate `feature`
+/// before writing so each pair file is self-consistent (the JSONL analyzer
+/// joins on `(bench, query_id)` within a single feature file, so the feature
+/// label must match across both arms of the same file).
+///
+/// The soft temporal boost env var (`ORIGIN_ENABLE_TEMPORAL_SOFT_BOOST=1`) is
+/// set via `temp_env::async_with_vars` for the ExtractCue and Oracle arms;
+/// the Baseline arm runs without it so the boost is the controlled variable.
+async fn run_temporal_oracle_probe(reranker: std::sync::Arc<dyn origin_core::reranker::Reranker>) {
+    use origin_core::eval::locomo::{run_locomo_eval_cross_rerank_temporal_collect, TemporalArm};
+
+    let root = resolve_scenario_db_root_from_harness();
+    let lo_dir = root.join("locomo_v1");
+    let lo_fx = eval_root().join("data/locomo10.json");
+
+    if !lo_dir.join("origin_memory.db").exists() || !lo_fx.exists() {
+        println!(
+            "[temporal_oracle_probe] SKIP LoCoMo (db={} fixture={})",
+            lo_dir.join("origin_memory.db").exists(),
+            lo_fx.exists()
+        );
+        return;
+    }
+
+    let db = origin_core::db::MemoryDB::new(
+        &lo_dir,
+        std::sync::Arc::new(origin_core::events::NoopEmitter),
+    )
+    .await
+    .expect("open locomo_v1 snapshot DB");
+
+    // --- Arm A: Baseline (no cue, boost env unset) ---
+    println!("--- arm Baseline (no cue, ORIGIN_ENABLE_TEMPORAL_SOFT_BOOST unset) ---");
+    let baseline_rows_ab = run_locomo_eval_cross_rerank_temporal_collect(
+        &db,
+        &lo_fx,
+        reranker.clone(),
+        "temporal_oracle_AB",
+        TemporalArm::Baseline,
+        "off",
+    )
+    .await
+    .expect("baseline collect for AB");
+
+    // Clone baseline rows for the AC feature (different feature label).
+    let baseline_rows_ac: Vec<_> = baseline_rows_ab
+        .iter()
+        .cloned()
+        .map(|mut r| {
+            r.feature = "temporal_oracle_AC".to_string();
+            r
+        })
+        .collect();
+
+    // --- Arm B: ExtractCue (soft boost ON) ---
+    println!("--- arm ExtractCue (ORIGIN_ENABLE_TEMPORAL_SOFT_BOOST=1) ---");
+    let extractcue_rows = temp_env::async_with_vars(
+        [("ORIGIN_ENABLE_TEMPORAL_SOFT_BOOST", Some("1"))],
+        run_locomo_eval_cross_rerank_temporal_collect(
+            &db,
+            &lo_fx,
+            reranker.clone(),
+            "temporal_oracle_AB",
+            TemporalArm::ExtractCue,
+            "on",
+        ),
+    )
+    .await
+    .expect("extractcue collect");
+
+    // --- Arm C: Oracle (soft boost ON) ---
+    println!("--- arm Oracle (ORIGIN_ENABLE_TEMPORAL_SOFT_BOOST=1) ---");
+    let oracle_rows = temp_env::async_with_vars(
+        [("ORIGIN_ENABLE_TEMPORAL_SOFT_BOOST", Some("1"))],
+        run_locomo_eval_cross_rerank_temporal_collect(
+            &db,
+            &lo_fx,
+            reranker.clone(),
+            "temporal_oracle_AC",
+            TemporalArm::Oracle,
+            "on",
+        ),
+    )
+    .await
+    .expect("oracle collect");
+
+    // --- Emit paired JSONL ---
+    // temporal_oracle_AB: Baseline(off) vs ExtractCue(on)
+    write_paired_rows("temporal_oracle_AB", "locomo", &baseline_rows_ab);
+    write_paired_rows("temporal_oracle_AB", "locomo", &extractcue_rows);
+
+    // temporal_oracle_AC: Baseline(off) vs Oracle(on)
+    write_paired_rows("temporal_oracle_AC", "locomo", &baseline_rows_ac);
+    write_paired_rows("temporal_oracle_AC", "locomo", &oracle_rows);
+}
+
+/// 3-arm temporal oracle probe for LoCoMo: Baseline vs ExtractCue vs Oracle.
+///
+/// Emits per-query JSONL for two paired comparisons:
+///   - `temporal_oracle_AB_locomo.jsonl`: Baseline (off) vs ExtractCue (on)
+///   - `temporal_oracle_AC_locomo.jsonl`: Baseline (off) vs Oracle (on)
+///
+/// The soft temporal boost (`ORIGIN_ENABLE_TEMPORAL_SOFT_BOOST=1`) is active
+/// for arms B and C; Baseline runs without it. Feed EVAL_OUT to
+/// `analyze_paired.py` to see per-query Δ for each arm pair.
+///
+/// Run (unsandboxed, against the SEEDED DBs — the snapshot has all-NULL
+/// event_date so the temporal boost would never fire there; the probe is
+/// read-only so the seeds stay intact):
+///
+///   ORIGIN_EVAL_ROOT=/Users/lucian/Repos/origin/app/eval \
+///   SCENARIO_DB_ROOT=~/.cache/origin-eval/scenario_seeded \
+///   EVAL_OUT=~/.cache/origin-eval/temporal_oracle_out \
+///     cargo test -p origin-core --features eval-harness --test eval_harness \
+///     temporal_oracle_probe -- --ignored --nocapture --test-threads=1
+#[tokio::test]
+#[ignore = "downloads ~600MB CE model (CPU); needs cached scenario seeded LoCoMo DB. Set ORIGIN_EVAL_ROOT + SCENARIO_DB_ROOT + EVAL_OUT"]
+async fn temporal_oracle_probe() {
+    println!("=== TEMPORAL ORACLE PROBE (3-arm: Baseline / ExtractCue / Oracle) ===");
+    println!("EVAL_OUT = {}", paired_out_dir().display());
+
+    let reranker = origin_core::reranker::init_cross_encoder_reranker(None)
+        .expect("init_cross_encoder_reranker failed (downloads ~600MB on first run)");
+    println!("CE model = {} (CPU)", reranker.model_id());
+
+    run_temporal_oracle_probe(reranker).await;
+
+    println!(
+        "=== done -> python3 analyze_paired.py --dir {} ===",
+        paired_out_dir().display()
+    );
+}
+
+/// #15 slice-1: paired A/B on the expanded deep path. Arm OFF = keyword gate
+/// (ORIGIN_ENABLE_GRAPH_GATE=1 so the recorded graph_skipped matches the realized
+/// routing; intent flag unset). Arm ON = LLM intent gate (ORIGIN_ENABLE_INTENT_LLM=1,
+/// graph gate also on). Both arms append to query_intent_llm_locomo.jsonl for
+/// analyze_paired.py. Needs a local GPU LLM (Qwen3.5-9B on Metal) + locomo10.json; L7 manual.
+///
+/// CAVEAT (read before interpreting): the ON arm feeds the intent object's
+/// expansions into RRF while the OFF arm feeds the legacy array-rephrasing
+/// expansions, so this A/B contrasts the whole intent PIPELINE vs the legacy
+/// pipeline, not `use_graph` in isolation. A positive delta means "enable the
+/// intent pipeline"; to attribute it to routing alone, add a third arm
+/// (intent-expansions + keyword gate). Clear $EVAL_OUT between runs:
+/// write_paired_rows APPENDS, so re-running double-counts rows.
+///
+/// Run (unsandboxed, real GPU):
+///   ORIGIN_EVAL_ROOT=/Users/lucian/Repos/origin/app/eval \
+///   EVAL_OUT=$HOME/.cache/origin-eval/intent_llm_out \
+///   CARGO_TARGET_DIR=/Users/lucian/Repos/origin/target \
+///     cargo test -p origin-core --features eval-harness --test eval_harness \
+///     query_intent_llm_probe -- --ignored --nocapture --test-threads=1
+///   python3 analyze_paired.py --dir $HOME/.cache/origin-eval/intent_llm_out
+#[tokio::test]
+#[ignore = "needs local GPU LLM (Qwen3.5-9B) + locomo10.json; L7 manual. Set ORIGIN_EVAL_ROOT + EVAL_OUT"]
+async fn query_intent_llm_probe() {
+    use std::sync::Arc;
+    println!("=== QUERY-INTENT-LLM PROBE (intent-gate vs keyword-gate) ===");
+    println!("EVAL_OUT = {}", paired_out_dir().display());
+
+    let lo_fx = eval_root().join("data/locomo10.json");
+    if !lo_fx.exists() {
+        println!("SKIP: locomo10.json not found at {:?}", lo_fx);
+        return;
+    }
+    let llm: Arc<dyn origin_core::llm_provider::LlmProvider> = Arc::new(
+        origin_core::llm_provider::OnDeviceProvider::new_with_model(Some("qwen3.5-9b"))
+            .expect("OnDeviceProvider qwen3.5-9b init failed — check the model is downloaded + Metal is available"),
+    );
+
+    // Arm OFF: keyword gate. GRAPH_GATE=1 so graph_skipped reflects realized routing.
+    println!("--- arm OFF (keyword gate) ---");
+    let off_rows = temp_env::async_with_vars(
+        [
+            ("ORIGIN_ENABLE_GRAPH_GATE", Some("1")),
+            ("ORIGIN_ENABLE_INTENT_LLM", None::<&str>),
+        ],
+        origin_core::eval::locomo::run_locomo_eval_expanded_intent_collect(
+            &lo_fx,
+            llm.clone(),
+            "query_intent_llm",
+            "off",
+        ),
+    )
+    .await
+    .expect("keyword-gate collect");
+
+    // Arm ON: LLM intent gate.
+    println!("--- arm ON (intent-LLM gate) ---");
+    let on_rows = temp_env::async_with_vars(
+        [
+            ("ORIGIN_ENABLE_GRAPH_GATE", Some("1")),
+            ("ORIGIN_ENABLE_INTENT_LLM", Some("1")),
+        ],
+        origin_core::eval::locomo::run_locomo_eval_expanded_intent_collect(
+            &lo_fx,
+            llm.clone(),
+            "query_intent_llm",
+            "on",
+        ),
+    )
+    .await
+    .expect("intent-gate collect");
+
+    write_paired_rows("query_intent_llm", "locomo", &off_rows);
+    write_paired_rows("query_intent_llm", "locomo", &on_rows);
+    println!(
+        "=== done -> python3 analyze_paired.py --dir {} ===",
+        paired_out_dir().display()
+    );
+}
+
+/// TRACK 2: isolate the expansion temperature on the legacy path. Both arms run
+/// the legacy array-expansion (ORIGIN_ENABLE_INTENT_LLM unset); arm "off"=temp 0.3,
+/// arm "on"=temp 0.0. Graph gate identical (ORIGIN_ENABLE_GRAPH_GATE=1). Emits
+/// expand_temp_locomo.jsonl for analyze_paired.py.
+///
+/// NOTE: write_paired_rows APPENDS — clear $EVAL_OUT between runs or rows double-count.
+///
+/// Run (unsandboxed, GPU):
+///   ORIGIN_EVAL_ROOT=/Users/lucian/Repos/origin/app/eval \
+///   EVAL_OUT=$HOME/.cache/origin-eval/expand_temp_out \
+///   EVAL_LOCOMO_LIMIT=10 \
+///   CARGO_TARGET_DIR=/Users/lucian/Repos/origin/target \
+///     cargo test -p origin-core --features eval-harness --test eval_harness \
+///     expand_temp_isolation_probe -- --ignored --nocapture --test-threads=1
+///   python3 analyze_paired.py --dir $HOME/.cache/origin-eval/expand_temp_out
+#[tokio::test]
+#[ignore = "needs local LLM + LoCoMo fixture; L7 manual. Set ORIGIN_EVAL_ROOT + EVAL_OUT"]
+async fn expand_temp_isolation_probe() {
+    use std::sync::Arc;
+    println!("=== EXPAND-TEMP ISOLATION PROBE (temp0.3 vs temp0.0, legacy path) ===");
+    let lo_fx = eval_root().join("data/locomo10.json");
+    if !lo_fx.exists() {
+        println!("[expand_temp] SKIP (fixture {} missing)", lo_fx.display());
+        return;
+    }
+    let llm: Arc<dyn origin_core::llm_provider::LlmProvider> = Arc::new(
+        origin_core::llm_provider::OnDeviceProvider::new_with_model(Some("qwen3.5-9b")).unwrap(),
+    );
+
+    // Arm OFF = temp 0.3 (baseline). Intent flag UNSET in both arms.
+    let off_rows = temp_env::async_with_vars(
+        [
+            ("ORIGIN_ENABLE_GRAPH_GATE", Some("1")),
+            ("ORIGIN_ENABLE_INTENT_LLM", None::<&str>),
+            ("ORIGIN_EXPAND_TEMP", Some("0.3")),
+        ],
+        origin_core::eval::locomo::run_locomo_eval_expanded_intent_collect(
+            &lo_fx,
+            llm.clone(),
+            "expand_temp",
+            "off",
+        ),
+    )
+    .await
+    .expect("temp0.3 collect");
+
+    // Arm ON = temp 0.0.
+    let on_rows = temp_env::async_with_vars(
+        [
+            ("ORIGIN_ENABLE_GRAPH_GATE", Some("1")),
+            ("ORIGIN_ENABLE_INTENT_LLM", None::<&str>),
+            ("ORIGIN_EXPAND_TEMP", Some("0.0")),
+        ],
+        origin_core::eval::locomo::run_locomo_eval_expanded_intent_collect(
+            &lo_fx,
+            llm.clone(),
+            "expand_temp",
+            "on",
+        ),
+    )
+    .await
+    .expect("temp0.0 collect");
+
+    write_paired_rows("expand_temp", "locomo", &off_rows);
+    write_paired_rows("expand_temp", "locomo", &on_rows);
+    println!(
+        "=== done -> python3 analyze_paired.py --dir {} ===",
+        paired_out_dir().display()
+    );
+}
+
+/// Paired graph-stream probe (#10): graph augmentation OFF vs ON, isolated.
+/// Ephemeral per-conversation DBs (fixture-driven), deterministic expansion
+/// (temp 0), rerank off, graph gate off (do_graph always true). The ONLY
+/// difference between arms is ORIGIN_GRAPH_MEMORY_STREAM:
+///   OFF = stream unset -> augment runs the legacy observation no-op == no graph.
+///   ON  = stream on    -> live entity->memory stream (memory_entities populated
+///                         per conversation by the collector).
+/// Per-query ndcg@10 / recall@5 paired; analyze_paired.py reports the whole-set
+/// delta AND the graph-touched subset (queries where Δndcg != 0). The collector
+/// prints memory_entities coverage so a null can be checked against substrate
+/// liveness before it is trusted.
+///
+/// Run (unsandboxed, GPU). Smoke first with a subset:
+///   ORIGIN_EVAL_ROOT=$PWD/app/eval \
+///   EVAL_OUT=$HOME/.cache/origin-eval/graph_stream_out \
+///   EVAL_LOCOMO_LIMIT=20 \
+///   CARGO_TARGET_DIR=/Users/lucian/Repos/origin/target \
+///     cargo test -p origin-core --features eval-harness --test eval_harness \
+///     graph_stream_pair_locomo -- --ignored --nocapture --test-threads=1
+///   python3 analyze_paired.py --dir $HOME/.cache/origin-eval/graph_stream_out
+#[tokio::test]
+#[ignore = "needs local LLM + LoCoMo fixture; L7 manual. Set ORIGIN_EVAL_ROOT + EVAL_OUT"]
+async fn graph_stream_pair_locomo() {
+    use std::sync::Arc;
+    println!("=== GRAPH-STREAM PAIR (stream OFF vs ON, entity-populated, LoCoMo) ===");
+    let lo_fx = eval_root().join("data/locomo10.json");
+    if !lo_fx.exists() {
+        println!("[graph_stream] SKIP (fixture {} missing)", lo_fx.display());
+        return;
+    }
+    let llm: Arc<dyn origin_core::llm_provider::LlmProvider> = Arc::new(
+        origin_core::llm_provider::OnDeviceProvider::new_with_model(Some("qwen3.5-9b")).unwrap(),
+    );
+    let prompts = origin_core::prompts::PromptRegistry::default();
+
+    // OFF arm: stream unset -> augment is the legacy observation no-op == no graph.
+    let off_rows = temp_env::async_with_vars(
+        [
+            ("ORIGIN_GRAPH_MEMORY_STREAM", None::<&str>),
+            ("ORIGIN_ENABLE_GRAPH_GATE", None::<&str>),
+            ("ORIGIN_ENABLE_INTENT_LLM", None::<&str>),
+            ("ORIGIN_EXPAND_TEMP", Some("0.0")),
+        ],
+        origin_core::eval::locomo::run_locomo_eval_graph_stream_collect(
+            &lo_fx,
+            llm.clone(),
+            &prompts,
+            "graph_stream",
+            "off",
+        ),
+    )
+    .await
+    .expect("stream-off collect");
+
+    // ON arm: live entity->memory stream over the populated junction.
+    let on_rows = temp_env::async_with_vars(
+        [
+            ("ORIGIN_GRAPH_MEMORY_STREAM", Some("1")),
+            ("ORIGIN_ENABLE_GRAPH_GATE", None::<&str>),
+            ("ORIGIN_ENABLE_INTENT_LLM", None::<&str>),
+            ("ORIGIN_EXPAND_TEMP", Some("0.0")),
+        ],
+        origin_core::eval::locomo::run_locomo_eval_graph_stream_collect(
+            &lo_fx,
+            llm.clone(),
+            &prompts,
+            "graph_stream",
+            "on",
+        ),
+    )
+    .await
+    .expect("stream-on collect");
+
+    write_paired_rows("graph_stream", "locomo", &off_rows);
+    write_paired_rows("graph_stream", "locomo", &on_rows);
+    println!(
+        "=== done -> python3 analyze_paired.py --dir {} ===",
+        paired_out_dir().display()
+    );
+}
+
+/// LongMemEval twin of [`graph_stream_pair_locomo`]. Same cached, LLM-free-query
+/// design; populates `lme/<question_id>` once, then both arms reuse it.
+///   ORIGIN_EVAL_ROOT=$PWD/app/eval \
+///   EVAL_OUT=$HOME/.cache/origin-eval/graph_stream_lme_out \
+///   EVAL_LME_LIMIT=20 \
+///   CARGO_TARGET_DIR=/Users/lucian/Repos/origin/target \
+///     cargo test -p origin-core --features eval-harness --test eval_harness \
+///     graph_stream_pair_lme -- --ignored --nocapture --test-threads=1
+///   python3 analyze_paired.py --dir $HOME/.cache/origin-eval/graph_stream_lme_out
+#[tokio::test]
+#[ignore = "needs local LLM + LME fixture; L7 manual. Set ORIGIN_EVAL_ROOT + EVAL_OUT"]
+async fn graph_stream_pair_lme() {
+    use std::sync::Arc;
+    println!("=== GRAPH-STREAM PAIR (stream OFF vs ON, entity-populated, LME) ===");
+    let fx = eval_root().join("data/longmemeval_oracle.json");
+    if !fx.exists() {
+        println!("[graph_stream] SKIP (fixture {} missing)", fx.display());
+        return;
+    }
+    let llm: Arc<dyn origin_core::llm_provider::LlmProvider> = Arc::new(
+        origin_core::llm_provider::OnDeviceProvider::new_with_model(Some("qwen3.5-9b")).unwrap(),
+    );
+    let prompts = origin_core::prompts::PromptRegistry::default();
+
+    // OFF arm: stream unset -> augment is the legacy observation no-op == no graph.
+    let off_rows = temp_env::async_with_vars(
+        [
+            ("ORIGIN_GRAPH_MEMORY_STREAM", None::<&str>),
+            ("ORIGIN_ENABLE_GRAPH_GATE", None::<&str>),
+        ],
+        origin_core::eval::longmemeval::run_longmemeval_eval_graph_stream_collect(
+            &fx,
+            llm.clone(),
+            &prompts,
+            "graph_stream",
+            "off",
+        ),
+    )
+    .await
+    .expect("stream-off collect");
+
+    // ON arm: live entity->memory stream over the populated junction.
+    let on_rows = temp_env::async_with_vars(
+        [
+            ("ORIGIN_GRAPH_MEMORY_STREAM", Some("1")),
+            ("ORIGIN_ENABLE_GRAPH_GATE", None::<&str>),
+        ],
+        origin_core::eval::longmemeval::run_longmemeval_eval_graph_stream_collect(
+            &fx,
+            llm.clone(),
+            &prompts,
+            "graph_stream",
+            "on",
+        ),
+    )
+    .await
+    .expect("stream-on collect");
+
+    write_paired_rows("graph_stream", "lme", &off_rows);
+    write_paired_rows("graph_stream", "lme", &on_rows);
+    println!(
+        "=== done -> python3 analyze_paired.py --dir {} ===",
+        paired_out_dir().display()
+    );
+}
+
+/// TRACK 1 graph-substrate gate (#10). Copies the populated scenario_seeded
+/// locomo_v1 DB, runs the entity-linking sweep with the FINE primitive
+/// (`extract_entities_for_content`, NOT the speaker-level single-entity one),
+/// then prints the `memory_entities` degree distribution. Decides whether a
+/// fine entity->memory bridge exists (Option A viable) or it is still a
+/// speaker-pool hairball (graph-first insolvent).
+///
+/// Run (unsandboxed, GPU). Smoke first with a small cap, then full:
+///   SCENARIO_DB=$HOME/.cache/origin-eval/scenario_seeded/locomo_v1/origin_memory.db \
+///   GATE_MAX_MEMORIES=300 \
+///   CARGO_TARGET_DIR=/Users/lucian/Repos/origin/target \
+///     cargo test -p origin-core --features eval-harness --test eval_harness \
+///     graph_substrate_gate_locomo -- --ignored --nocapture --test-threads=1
+#[tokio::test]
+#[ignore = "needs local LLM + scenario_seeded DB; L7 manual. Set SCENARIO_DB"]
+async fn graph_substrate_gate_locomo() {
+    use std::sync::Arc;
+    let src = std::env::var("SCENARIO_DB").unwrap_or_else(|_| {
+        format!(
+            "{}/.cache/origin-eval/scenario_seeded/locomo_v1/origin_memory.db",
+            std::env::var("HOME").unwrap()
+        )
+    });
+    if !std::path::Path::new(&src).exists() {
+        println!("[gate] SKIP (missing {src})");
+        return;
+    }
+    // Work on a COPY -- never mutate the canonical seed.
+    let tmp = tempfile::tempdir().unwrap();
+    let dst = tmp.path().join("origin_memory.db");
+    std::fs::copy(&src, &dst).expect("copy seed");
+    let db = origin_core::db::MemoryDB::new(tmp.path(), Arc::new(origin_core::events::NoopEmitter))
+        .await
+        .expect("open seed copy");
+
+    let before = db.memory_entities_degree_stats().await.unwrap();
+    println!("[gate] BEFORE memory_entities: {before:?}");
+
+    let llm: Arc<dyn origin_core::llm_provider::LlmProvider> = Arc::new(
+        origin_core::llm_provider::OnDeviceProvider::new_with_model(Some("qwen3.5-9b")).unwrap(),
+    );
+    let prompts = origin_core::prompts::PromptRegistry::default();
+    let cap: Option<usize> = std::env::var("GATE_MAX_MEMORIES")
+        .ok()
+        .and_then(|v| v.parse().ok());
+
+    let processed = run_capped_fine_sweep(&db, &llm, &prompts, 32, cap).await;
+    println!("[gate] processed {processed} memories");
+
+    let after = db.memory_entities_degree_stats().await.unwrap();
+    println!("[gate] AFTER memory_entities: {after:?}");
+    print_top_hubs(&db, 20).await;
+    println!(
+        "[gate] DECISION INPUTS: p50={} p90={} max={} hubs>50={} memories_linked={}",
+        after.p50_memories_per_entity,
+        after.p90_memories_per_entity,
+        after.max_memories_per_entity,
+        after.entities_gt_50,
+        after.memories_linked
+    );
+}
+
+/// Run a bounded FINE entity-linking sweep over unlinked memories, optionally
+/// capped at `cap` memories. Tracks attempted source_ids so memories that
+/// yield zero entities do not get re-fetched forever (run_enrichment_sweep
+/// would infinite-loop on the fine primitive, which can return empty). Returns
+/// memories attempted.
+async fn run_capped_fine_sweep(
+    db: &origin_core::db::MemoryDB,
+    llm: &std::sync::Arc<dyn origin_core::llm_provider::LlmProvider>,
+    prompts: &origin_core::prompts::PromptRegistry,
+    batch_size: usize,
+    cap: Option<usize>,
+) -> usize {
+    use std::collections::HashSet;
+    let mut attempted: HashSet<String> = HashSet::new();
+    loop {
+        if cap.is_some_and(|c| attempted.len() >= c) {
+            break;
+        }
+        // Grow the fetch window past already-attempted (zero-entity) rows, which
+        // never leave the unlinked set and pile up at the source_id front. Without
+        // this, a front cluster of >= batch_size zero-entity rows would make every
+        // fetched row already-attempted -> fresh empty -> early break, under-counting
+        // links. attempted.len() >= the zero-entity-attempted count, so the window
+        // always surfaces >= batch_size fresh rows when any remain. O(n^2) queries
+        // total, fine for a one-shot L7 gate.
+        let batch = db
+            .unlinked_memories(batch_size + attempted.len())
+            .await
+            .unwrap_or_default();
+        // Only rows we have not already attempted; if none are fresh, no further
+        // progress is possible (the rest are zero-entity memories) -> stop.
+        let fresh: Vec<(String, String)> = batch
+            .into_iter()
+            .filter(|(sid, _)| !attempted.contains(sid))
+            .collect();
+        if fresh.is_empty() {
+            break;
+        }
+        for (sid, content) in fresh {
+            if cap.is_some_and(|c| attempted.len() >= c) {
+                break;
+            }
+            let ents = origin_core::kg::entity_extraction::extract_entities_for_content(
+                db, llm, prompts, &content,
+            )
+            .await
+            .unwrap_or_default();
+            if !ents.is_empty() {
+                let refs: Vec<&str> = ents.iter().map(|s| s.as_str()).collect();
+                let _ = db.link_memory_entities(&sid, &refs).await;
+                // NB: we intentionally do NOT also set the legacy `entity_id` column
+                // (run_enrichment_sweep did) — the gate reads only the memory_entities
+                // junction, so the junction row alone is sufficient + correct here.
+            }
+            attempted.insert(sid);
+        }
+    }
+    attempted.len()
+}
+
+/// Print the top-N hub entities (count, name) from memory_entities for eyeball
+/// classification (speaker pool vs concept bridge).
+async fn print_top_hubs(db: &origin_core::db::MemoryDB, n: usize) {
+    match db.top_memory_entity_hubs(n).await {
+        Ok(hubs) => {
+            println!("[gate] TOP-{n} hubs (count, name):");
+            for (c, name) in hubs {
+                println!("    {c:5}  {name}");
+            }
+        }
+        Err(e) => println!("[gate] top_hubs err: {e}"),
     }
 }
