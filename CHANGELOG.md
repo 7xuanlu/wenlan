@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.8.1](https://github.com/7xuanlu/origin/compare/v0.8.0...v0.8.1) (2026-06-09)
+
+
+### Bug Fixes
+
+* **eval:** LME retrieval ingest-parity HOW + graph/intent apparatus ([#10](https://github.com/7xuanlu/origin/issues/10)/[#15](https://github.com/7xuanlu/origin/issues/15)) ([#247](https://github.com/7xuanlu/origin/issues/247)) ([92cb68d](https://github.com/7xuanlu/origin/commit/92cb68d71e0d9fcf920985caf041ba38a013421d))
+* **provenance:** P2 typed page_evidence successor table, source-less pages, review_status trust gate ([#249](https://github.com/7xuanlu/origin/issues/249)) ([b245686](https://github.com/7xuanlu/origin/commit/b245686ca844303c7fd3c09495cb14e582e7de1e))
+
 ## [0.8.0](https://github.com/7xuanlu/origin/compare/v0.7.0...v0.8.0) (2026-06-08)
 
 
