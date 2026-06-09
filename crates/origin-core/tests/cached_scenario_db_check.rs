@@ -18,6 +18,7 @@ use std::path::Path;
 use std::sync::Arc;
 
 use origin_core::db::MemoryDB;
+use origin_core::eval::seed_contract::{check_seed_contract, SeedExpectations};
 use origin_core::events::NoopEmitter;
 
 /// Resolve the scenario DB root with sensible fallback:
@@ -105,6 +106,52 @@ async fn dump_counts(dir: &Path, label: &str) {
     }
 }
 
+/// Live wiring of `eval::seed_contract` against the real cached seeds. The
+/// in-mem unit tests prove the predicates; this runs them against the seeds the
+/// eval path shares with production. Non-panicking `check_seed_contract` is used
+/// (real seeds carry a known stray unclassified row, and locomo's classification
+/// rate is not asserted here) so the operator sees every coverage number; only
+/// the structural no-duplicate-`(source, source_id)` invariant — which must hold
+/// for any valid seed — is hard-asserted. Reconstructs the intent of the
+/// seed-contract integration wiring lost when the worktree was force-removed
+/// mid-session (the unstaged change was never in git); placed here, where the
+/// seeded DBs are already opened, rather than re-derived in eval_harness.
+async fn seed_contract_check(dir: &Path, label: &str) {
+    let db_file = dir.join("origin_memory.db");
+    let db = libsql::Builder::new_local(db_file.to_str().unwrap())
+        .build()
+        .await
+        .expect("libsql open for seed contract");
+    let conn = db.connect().expect("libsql connect for seed contract");
+
+    let report = check_seed_contract(&conn, &SeedExpectations::strict(label))
+        .await
+        .expect("check_seed_contract");
+    println!(
+        "[{}] seed_contract: rows={} distinct={} classified={} ({:.1}%) cue={} ({:.1}%) event_date={} ({:.1}%)",
+        label,
+        report.rows,
+        report.distinct_keys,
+        report.classified,
+        (report.classified as f64 / report.rows.max(1) as f64) * 100.0,
+        report.cue_nonempty,
+        report.cue_coverage() * 100.0,
+        report.event_date_nonempty,
+        report.event_date_coverage() * 100.0,
+    );
+    if !report.violations.is_empty() {
+        println!(
+            "[{}] seed_contract violations: {:#?}",
+            label, report.violations
+        );
+    }
+    assert_eq!(
+        report.rows, report.distinct_keys,
+        "[{}] duplicate (source, source_id) memory heads in cached seed: {} rows vs {} distinct",
+        label, report.rows, report.distinct_keys
+    );
+}
+
 #[tokio::test]
 #[ignore = "needs SCENARIO_DB_ROOT pointing at copies of cached scenario DBs (PR-B Step 1)"]
 async fn cached_scenario_db_compat_check() {
@@ -131,5 +178,6 @@ async fn cached_scenario_db_compat_check() {
         );
 
         dump_counts(&dir, sub).await;
+        seed_contract_check(&dir, sub).await;
     }
 }
