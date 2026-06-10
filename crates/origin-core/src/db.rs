@@ -9474,6 +9474,18 @@ impl MemoryDB {
                 memory_results.iter().map(|r| r.source_id.clone()).collect();
             let mut filtered = Vec::with_capacity(page_results.len());
             for page in page_results {
+                // P3 workspace axis: a page passes the scoped gate if its dedicated
+                // `workspace` matches the active `space` filter (NOT the overloaded
+                // `space` category column) OR — unchanged — if a source memory survived
+                // the memory-side filter. NULL workspace never matches any filter.
+                let workspace_match = match (space, page.workspace.as_deref()) {
+                    (Some(filter), Some(ws)) => filter == ws,
+                    _ => false,
+                };
+                if workspace_match {
+                    filtered.push(page);
+                    continue;
+                }
                 let sources = match self.get_page_sources(&page.id).await {
                     Ok(v) => v,
                     Err(e) => {
@@ -16359,7 +16371,7 @@ impl MemoryDB {
         let conn = self.conn.lock().await;
         let mut rows = conn
             .query(
-                "SELECT id, title, summary, content, entity_id, space, source_memory_ids, version, status, created_at, last_compiled, last_modified, COALESCE(sources_updated_count, 0), stale_reason, COALESCE(user_edited, 0), COALESCE(changelog, '[]'), COALESCE(creation_kind, 'distilled'), COALESCE(review_status, 'confirmed')
+                "SELECT id, title, summary, content, entity_id, space, source_memory_ids, version, status, created_at, last_compiled, last_modified, COALESCE(sources_updated_count, 0), stale_reason, COALESCE(user_edited, 0), COALESCE(changelog, '[]'), COALESCE(creation_kind, 'distilled'), COALESCE(review_status, 'confirmed'), workspace
                  FROM pages WHERE status = 'active' ORDER BY created_at ASC LIMIT 1",
                 (),
             )
@@ -20303,13 +20315,14 @@ impl MemoryDB {
             now,
             "distilled",
             "confirmed",
+            None, // workspace: distilled pages inherit from source memory backfill (migration 63)
         )
         .await
     }
 
-    /// Like `insert_page` but with explicit `creation_kind` and `review_status`.
+    /// Like `insert_page` but with explicit `creation_kind`, `review_status`, and `workspace`.
     /// All callers that need non-distilled pages (authored, research) use this.
-    /// `insert_page` is a thin wrapper that delegates with distilled/confirmed defaults.
+    /// `insert_page` is a thin wrapper that delegates with distilled/confirmed/NULL-workspace defaults.
     #[allow(clippy::too_many_arguments)]
     pub async fn insert_page_with_kind(
         &self,
@@ -20323,6 +20336,7 @@ impl MemoryDB {
         now: &str,
         creation_kind: &str,
         review_status: &str,
+        workspace: Option<&str>,
     ) -> Result<(), OriginError> {
         // Sanitize daemon-reserved Sources delimiters from client content so
         // persisted `Page.content` never carries them (symmetric with the
@@ -20369,16 +20383,16 @@ impl MemoryDB {
         let concept_result = match &embedding_sql {
             Some(emb) => {
                 conn.execute(
-                    "INSERT INTO pages (id, title, summary, content, entity_id, space, source_memory_ids, version, status, embedding, created_at, last_compiled, last_modified, creation_kind, review_status)
-                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 1, 'active', vector32(?8), ?9, ?9, ?9, ?10, ?11)",
-                    libsql::params![id, title, summary, content, entity_id, space, source_ids_json, emb.as_str(), now, creation_kind, review_status],
+                    "INSERT INTO pages (id, title, summary, content, entity_id, space, source_memory_ids, version, status, embedding, created_at, last_compiled, last_modified, creation_kind, review_status, workspace)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 1, 'active', vector32(?8), ?9, ?9, ?9, ?10, ?11, ?12)",
+                    libsql::params![id, title, summary, content, entity_id, space, source_ids_json, emb.as_str(), now, creation_kind, review_status, workspace],
                 ).await
             }
             None => {
                 conn.execute(
-                    "INSERT INTO pages (id, title, summary, content, entity_id, space, source_memory_ids, version, status, created_at, last_compiled, last_modified, creation_kind, review_status)
-                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 1, 'active', ?8, ?8, ?8, ?9, ?10)",
-                    libsql::params![id, title, summary, content, entity_id, space, source_ids_json, now, creation_kind, review_status],
+                    "INSERT INTO pages (id, title, summary, content, entity_id, space, source_memory_ids, version, status, created_at, last_compiled, last_modified, creation_kind, review_status, workspace)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 1, 'active', ?8, ?8, ?8, ?9, ?10, ?11)",
+                    libsql::params![id, title, summary, content, entity_id, space, source_ids_json, now, creation_kind, review_status, workspace],
                 ).await
             }
         };
@@ -20437,7 +20451,7 @@ impl MemoryDB {
         let conn = self.conn.lock().await;
         let mut rows = conn
             .query(
-                "SELECT id, title, summary, content, entity_id, space, source_memory_ids, version, status, created_at, last_compiled, last_modified, COALESCE(sources_updated_count, 0), stale_reason, COALESCE(user_edited, 0), COALESCE(changelog, '[]'), COALESCE(creation_kind, 'distilled'), COALESCE(review_status, 'confirmed')
+                "SELECT id, title, summary, content, entity_id, space, source_memory_ids, version, status, created_at, last_compiled, last_modified, COALESCE(sources_updated_count, 0), stale_reason, COALESCE(user_edited, 0), COALESCE(changelog, '[]'), COALESCE(creation_kind, 'distilled'), COALESCE(review_status, 'confirmed'), workspace
                  FROM pages WHERE id = ?1",
                 libsql::params![id],
             )
@@ -20455,7 +20469,7 @@ impl MemoryDB {
         let conn = self.conn.lock().await;
         let mut rows = conn
             .query(
-                "SELECT id, title, summary, content, entity_id, space, source_memory_ids, version, status, created_at, last_compiled, last_modified, COALESCE(sources_updated_count, 0), stale_reason, COALESCE(user_edited, 0), COALESCE(changelog, '[]'), COALESCE(creation_kind, 'distilled'), COALESCE(review_status, 'confirmed')
+                "SELECT id, title, summary, content, entity_id, space, source_memory_ids, version, status, created_at, last_compiled, last_modified, COALESCE(sources_updated_count, 0), stale_reason, COALESCE(user_edited, 0), COALESCE(changelog, '[]'), COALESCE(creation_kind, 'distilled'), COALESCE(review_status, 'confirmed'), workspace
                  FROM pages WHERE entity_id = ?1 AND status = 'active' LIMIT 1",
                 libsql::params![entity_id],
             )
@@ -20506,7 +20520,7 @@ impl MemoryDB {
         let conn = self.conn.lock().await;
         let mut rows = conn
             .query(
-                "SELECT id, title, summary, content, entity_id, space, source_memory_ids, version, status, created_at, last_compiled, last_modified, COALESCE(sources_updated_count, 0), stale_reason, COALESCE(user_edited, 0), COALESCE(changelog, '[]'), COALESCE(creation_kind, 'distilled'), COALESCE(review_status, 'confirmed')
+                "SELECT id, title, summary, content, entity_id, space, source_memory_ids, version, status, created_at, last_compiled, last_modified, COALESCE(sources_updated_count, 0), stale_reason, COALESCE(user_edited, 0), COALESCE(changelog, '[]'), COALESCE(creation_kind, 'distilled'), COALESCE(review_status, 'confirmed'), workspace
                  FROM pages WHERE status = ?1 ORDER BY last_modified DESC LIMIT ?2 OFFSET ?3",
                 libsql::params![status, limit, offset],
             )
@@ -20531,7 +20545,7 @@ impl MemoryDB {
         let conn = self.conn.lock().await;
         let mut rows = conn
             .query(
-                "SELECT id, title, summary, content, entity_id, space, source_memory_ids, version, status, created_at, last_compiled, last_modified, COALESCE(sources_updated_count, 0), stale_reason, COALESCE(user_edited, 0), COALESCE(changelog, '[]'), COALESCE(creation_kind, 'distilled'), COALESCE(review_status, 'confirmed')
+                "SELECT id, title, summary, content, entity_id, space, source_memory_ids, version, status, created_at, last_compiled, last_modified, COALESCE(sources_updated_count, 0), stale_reason, COALESCE(user_edited, 0), COALESCE(changelog, '[]'), COALESCE(creation_kind, 'distilled'), COALESCE(review_status, 'confirmed'), workspace
                  FROM pages
                  WHERE status = ?1
                    AND stale_reason IS NOT NULL
@@ -20575,7 +20589,7 @@ impl MemoryDB {
         let conn = self.conn.lock().await;
         let (sql, params): (String, Vec<libsql::Value>) = if let Some(d) = space {
             (
-                "SELECT id, title, summary, content, entity_id, space, source_memory_ids, version, status, created_at, last_compiled, last_modified, COALESCE(sources_updated_count, 0), stale_reason, COALESCE(user_edited, 0), COALESCE(changelog, '[]'), COALESCE(creation_kind, 'distilled'), COALESCE(review_status, 'confirmed')
+                "SELECT id, title, summary, content, entity_id, space, source_memory_ids, version, status, created_at, last_compiled, last_modified, COALESCE(sources_updated_count, 0), stale_reason, COALESCE(user_edited, 0), COALESCE(changelog, '[]'), COALESCE(creation_kind, 'distilled'), COALESCE(review_status, 'confirmed'), workspace
                  FROM pages WHERE status = ?1 AND space = ?2 ORDER BY last_modified DESC LIMIT ?3 OFFSET ?4".to_string(),
                 vec![
                     libsql::Value::Text(status.to_string()),
@@ -20586,7 +20600,7 @@ impl MemoryDB {
             )
         } else {
             (
-                "SELECT id, title, summary, content, entity_id, space, source_memory_ids, version, status, created_at, last_compiled, last_modified, COALESCE(sources_updated_count, 0), stale_reason, COALESCE(user_edited, 0), COALESCE(changelog, '[]'), COALESCE(creation_kind, 'distilled'), COALESCE(review_status, 'confirmed')
+                "SELECT id, title, summary, content, entity_id, space, source_memory_ids, version, status, created_at, last_compiled, last_modified, COALESCE(sources_updated_count, 0), stale_reason, COALESCE(user_edited, 0), COALESCE(changelog, '[]'), COALESCE(creation_kind, 'distilled'), COALESCE(review_status, 'confirmed'), workspace
                  FROM pages WHERE status = ?1 ORDER BY last_modified DESC LIMIT ?2 OFFSET ?3".to_string(),
                 vec![
                     libsql::Value::Text(status.to_string()),
@@ -20958,6 +20972,7 @@ impl MemoryDB {
                         c.source_memory_ids, c.version, c.status, c.created_at, c.last_compiled, c.last_modified,
                         COALESCE(c.sources_updated_count, 0), c.stale_reason, COALESCE(c.user_edited, 0),
                         COALESCE(c.changelog, '[]'), COALESCE(c.creation_kind, 'distilled'), COALESCE(c.review_status, 'confirmed'),
+                        c.workspace,
                         vector_distance_cos(c.embedding, vector32(?1)) as dist
                  FROM pages c
                  WHERE c.status = 'active' AND c.embedding IS NOT NULL
@@ -20972,7 +20987,7 @@ impl MemoryDB {
             .await
             .map_err(|e| OriginError::VectorDb(e.to_string()))?
         {
-            let dist: f64 = row.get(18).unwrap_or(1.0);
+            let dist: f64 = row.get(19).unwrap_or(1.0);
             let similarity = 1.0 - dist;
             if similarity >= similarity_threshold {
                 return Ok(Some(Self::row_to_page(&row)?));
@@ -21018,6 +21033,7 @@ impl MemoryDB {
                         c.source_memory_ids, c.version, c.status, c.created_at, c.last_compiled, c.last_modified,
                         COALESCE(c.sources_updated_count, 0), c.stale_reason, COALESCE(c.user_edited, 0),
                         COALESCE(c.changelog, '[]'), COALESCE(c.creation_kind, 'distilled'), COALESCE(c.review_status, 'confirmed'),
+                        c.workspace,
                         vector_distance_cos(c.embedding, vector32(?1)) as dist
                  FROM pages c
                  WHERE c.status = 'active' AND c.embedding IS NOT NULL
@@ -21033,7 +21049,7 @@ impl MemoryDB {
             .await
             .map_err(|e| OriginError::VectorDb(e.to_string()))?
         {
-            let dist: f64 = row.get(18).unwrap_or(1.0);
+            let dist: f64 = row.get(19).unwrap_or(1.0);
             if 1.0 - dist >= threshold {
                 let page = Self::row_to_page(&row)?;
                 if !allow_user_edited && page.user_edited {
@@ -21571,7 +21587,7 @@ impl MemoryDB {
                               c.source_memory_ids, c.version, c.status, c.created_at, \
                               c.last_compiled, c.last_modified, \
                               COALESCE(c.sources_updated_count, 0), c.stale_reason, \
-                              COALESCE(c.user_edited, 0), COALESCE(c.changelog, '[]'), COALESCE(c.creation_kind, 'distilled'), COALESCE(c.review_status, 'confirmed')";
+                              COALESCE(c.user_edited, 0), COALESCE(c.changelog, '[]'), COALESCE(c.creation_kind, 'distilled'), COALESCE(c.review_status, 'confirmed'), c.workspace";
 
         // Optional page_type clause: pages store their category in `space`.
         // When Some("recap") is passed, only pages with space='recap' are returned.
@@ -21605,7 +21621,7 @@ impl MemoryDB {
                 while let Ok(Some(row)) = rows.next().await {
                     match Self::row_to_page(&row) {
                         Ok(page) => {
-                            let distance: f64 = row.get(18).unwrap_or(1.0);
+                            let distance: f64 = row.get(19).unwrap_or(1.0);
                             let id = page.id.clone();
                             vector_results.push((id, distance, page));
                         }
@@ -21782,10 +21798,11 @@ impl MemoryDB {
         Ok(count)
     }
 
-    /// Parse a row into a Concept. Column order must match the SELECT used in page queries.
+    /// Parse a row into a Page. Column order must match the SELECT used in page queries.
     /// Columns 0-14 are the fixed page fields; column 15 is COALESCE(changelog,'[]');
-    /// column 16 is COALESCE(creation_kind,'distilled'); column 17 is COALESCE(review_status,'confirmed').
-    /// In ranking SELECTs (find_matching_page, search_pages vector branch), dist is at column 18.
+    /// column 16 is COALESCE(creation_kind,'distilled'); column 17 is COALESCE(review_status,'confirmed');
+    /// column 18 is workspace (P3 dedicated scope axis, may be NULL).
+    /// In ranking SELECTs (find_matching_page, search_pages vector branch), dist is at column 19.
     fn row_to_page(row: &libsql::Row) -> Result<Page, OriginError> {
         let source_ids_json: String = row.get::<String>(6).unwrap_or_else(|_| "[]".to_string());
         let source_memory_ids: Vec<String> =
@@ -21834,6 +21851,7 @@ impl MemoryDB {
             review_status: row
                 .get::<String>(17)
                 .unwrap_or_else(|_| "confirmed".to_string()),
+            workspace: row.get::<Option<String>>(18).unwrap_or(None),
         })
     }
 
@@ -22204,7 +22222,8 @@ impl MemoryDB {
                 "SELECT c.id, c.title, c.summary, c.content, c.entity_id, c.space,
                         c.source_memory_ids, c.version, c.status, c.created_at, c.last_compiled, c.last_modified,
                         COALESCE(c.sources_updated_count, 0), c.stale_reason, COALESCE(c.user_edited, 0),
-                        COALESCE(c.changelog, '[]'), COALESCE(c.creation_kind, 'distilled'), COALESCE(c.review_status, 'confirmed')
+                        COALESCE(c.changelog, '[]'), COALESCE(c.creation_kind, 'distilled'), COALESCE(c.review_status, 'confirmed'),
+                        c.workspace
                  FROM pages c
                  INNER JOIN page_sources cs ON c.id = cs.page_id
                  WHERE cs.memory_source_id = ?1 AND c.status = 'active'",
@@ -22623,6 +22642,23 @@ impl MemoryDB {
         Ok(())
     }
 
+    /// Set `pages.workspace` for a given page. Used by the P3 backfill step and
+    /// integration tests that seed workspace-scoped pages outside of `insert_page_with_kind`.
+    pub async fn set_page_workspace(
+        &self,
+        page_id: &str,
+        workspace: Option<&str>,
+    ) -> Result<(), OriginError> {
+        let conn = self.conn.lock().await;
+        conn.execute(
+            "UPDATE pages SET workspace = ?1 WHERE id = ?2",
+            libsql::params![workspace, page_id],
+        )
+        .await
+        .map_err(|e| OriginError::VectorDb(format!("set_page_workspace: {e}")))?;
+        Ok(())
+    }
+
     /// Increment a page's sources_updated_count (for trivial/non-conflicting source changes).
     pub async fn increment_page_sources_updated(&self, page_id: &str) -> Result<(), OriginError> {
         let conn = self.conn.lock().await;
@@ -22655,7 +22691,7 @@ impl MemoryDB {
     ) -> Result<Vec<crate::pages::Page>, OriginError> {
         let conn = self.conn.lock().await;
         let mut sql = String::from(
-            "SELECT id, title, summary, content, entity_id, space, source_memory_ids, version, status, created_at, last_compiled, last_modified, COALESCE(sources_updated_count, 0), stale_reason, COALESCE(user_edited, 0), COALESCE(changelog, '[]'), COALESCE(creation_kind, 'distilled'), COALESCE(review_status, 'confirmed') \
+            "SELECT id, title, summary, content, entity_id, space, source_memory_ids, version, status, created_at, last_compiled, last_modified, COALESCE(sources_updated_count, 0), stale_reason, COALESCE(user_edited, 0), COALESCE(changelog, '[]'), COALESCE(creation_kind, 'distilled'), COALESCE(review_status, 'confirmed'), workspace \
              FROM pages WHERE stale_reason = ?1 AND status = 'active'",
         );
         let mut bind: Vec<libsql::Value> = vec![libsql::Value::Text(reason.to_string())];
@@ -22691,7 +22727,7 @@ impl MemoryDB {
         let conn = self.conn.lock().await;
         let mut rows = conn
             .query(
-                "SELECT id, title, summary, content, entity_id, space, source_memory_ids, version, status, created_at, last_compiled, last_modified, COALESCE(sources_updated_count, 0), stale_reason, COALESCE(user_edited, 0), COALESCE(changelog, '[]'), COALESCE(creation_kind, 'distilled'), COALESCE(review_status, 'confirmed')
+                "SELECT id, title, summary, content, entity_id, space, source_memory_ids, version, status, created_at, last_compiled, last_modified, COALESCE(sources_updated_count, 0), stale_reason, COALESCE(user_edited, 0), COALESCE(changelog, '[]'), COALESCE(creation_kind, 'distilled'), COALESCE(review_status, 'confirmed'), workspace
                  FROM pages
                  WHERE status = 'archived'
                    AND entity_id IS NULL
@@ -40089,6 +40125,7 @@ pub(crate) mod tests {
             changelog: None,
             creation_kind: "distilled".to_string(),
             review_status: "confirmed".to_string(),
+            workspace: None,
         };
         let r = MemoryDB::search_result_from_page(page);
         assert_eq!(r.source, "page");

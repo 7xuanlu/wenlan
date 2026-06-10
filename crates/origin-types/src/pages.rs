@@ -38,6 +38,11 @@ pub struct Page {
     pub last_delta_summary: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub changelog: Option<String>,
+    /// Dedicated multi-tenant scope axis (P3). Distinct from `space` (category column).
+    /// Set at creation time from `CreateConceptRequest.workspace` or the
+    /// `X-Origin-Space` header. NULL = no workspace constraint.
+    #[serde(default)]
+    pub workspace: Option<String>,
     /// Routing metadata: which mechanism created this page.
     /// One of: "distilled" | "authored" | "research" | "imported".
     /// NOT a trust signal (see `review_status` for that).

@@ -11,6 +11,39 @@ use origin_core::{EventEmitter, NoopEmitter};
 use std::sync::Arc;
 
 // ---------------------------------------------------------------------------
+// Task 6 env guard: serializes tests that mutate ORIGIN_ENABLE_PAGE_CHANNEL
+// so they don't clobber each other when cargo runs them in parallel.
+// ---------------------------------------------------------------------------
+
+static PAGE_CHANNEL_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+struct PageChannelEnvGuard {
+    prev: Option<String>,
+    _guard: std::sync::MutexGuard<'static, ()>,
+}
+
+impl PageChannelEnvGuard {
+    fn set(value: &str) -> Self {
+        let guard = PAGE_CHANNEL_ENV_LOCK.lock().unwrap();
+        let prev = std::env::var("ORIGIN_ENABLE_PAGE_CHANNEL").ok();
+        std::env::set_var("ORIGIN_ENABLE_PAGE_CHANNEL", value);
+        Self {
+            prev,
+            _guard: guard,
+        }
+    }
+}
+
+impl Drop for PageChannelEnvGuard {
+    fn drop(&mut self) {
+        match &self.prev {
+            Some(v) => std::env::set_var("ORIGIN_ENABLE_PAGE_CHANNEL", v),
+            None => std::env::remove_var("ORIGIN_ENABLE_PAGE_CHANNEL"),
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Shared helpers (mirroring distillation_quality.rs / provenance_p2.rs)
 // ---------------------------------------------------------------------------
 
@@ -261,6 +294,7 @@ async fn scoped_match_attach_stamps_only_attached_ids() {
         &now,
         "distilled",
         "confirmed",
+        None, // workspace
     )
     .await
     .expect("insert_page_with_kind must succeed");
@@ -332,4 +366,201 @@ async fn scoped_match_attach_stamps_only_attached_ids() {
             "{sid} must carry a non-NULL last_distilled_at after scoped-match attach"
         );
     }
+}
+
+// ---------------------------------------------------------------------------
+// Task 6 helpers
+// ---------------------------------------------------------------------------
+
+/// Seed a raw memory with an explicit space via upsert.
+async fn seed_memory_in_space(db: &MemoryDB, source_id: &str, content: &str, space: &str) {
+    let doc = RawDocument {
+        source: "memory".to_string(),
+        source_id: source_id.to_string(),
+        title: source_id.to_string(),
+        summary: None,
+        content: content.to_string(),
+        url: None,
+        last_modified: chrono::Utc::now().timestamp(),
+        memory_type: Some("fact".to_string()),
+        space: Some(space.to_string()),
+        source_agent: Some("test-agent".to_string()),
+        confidence: None,
+        confirmed: None,
+        supersedes: None,
+        pending_revision: false,
+        ..Default::default()
+    };
+    db.upsert_documents(vec![doc])
+        .await
+        .expect("seed_memory_in_space");
+}
+
+/// Set pages.workspace via the public DB helper (delegates to db.set_page_workspace).
+async fn set_page_workspace(db: &Arc<MemoryDB>, page_id: &str, workspace: &str) {
+    db.set_page_workspace(page_id, Some(workspace))
+        .await
+        .expect("set_page_workspace must succeed");
+}
+
+// ---------------------------------------------------------------------------
+// Task 6 — Step 1: source-less page respects workspace gate
+// ---------------------------------------------------------------------------
+
+/// A source-less authored page bound to workspace="work" MUST surface under
+/// work-scoped recall and MUST NOT leak into personal-scoped recall.
+///
+/// This verifies the "workspace axis" branch of the security gate:
+///   page.workspace == space_filter => pass, regardless of sources.
+///
+/// The test uses `insert_page_with_kind` directly to bypass `create_page`'s
+/// source-existence check (source-less authored pages are valid per the spec).
+/// The workspace column is then set via `set_page_workspace` (the production
+/// write path that `create_page` will acquire in Step 4 is tested separately).
+///
+/// Passing `None` for `reranker` degrades gracefully (no CE model needed in CI).
+#[tokio::test]
+async fn source_less_page_passes_own_workspace_no_personal_leak() {
+    // Serialize env mutation so parallel test runs don't clobber each other.
+    let _env = PageChannelEnvGuard::set("1");
+
+    let (db, _dir) = make_db().await;
+    let now = chrono::Utc::now().to_rfc3339();
+
+    // Seed anchor memories so both scoped pools are non-empty (prevents the
+    // filter branch from short-circuiting due to empty memory_results).
+    seed_memory_in_space(
+        &db,
+        "mem_work_anchor",
+        "quarterly planning cadence review meeting cycle",
+        "work",
+    )
+    .await;
+    seed_memory_in_space(
+        &db,
+        "mem_pers_anchor",
+        "quarterly planning cadence personal goals review",
+        "personal",
+    )
+    .await;
+
+    // Source-less authored page, confirmed (NOT unconfirmed — a passing test on
+    // an unconfirmed page would bless a trust-model bypass). Zero source ids.
+    // workspace=None here so set_page_workspace simulates the pre-Step-4 state;
+    // the Step 4 write path is tested in create_page_persists_workspace below.
+    db.insert_page_with_kind(
+        "page_sl",
+        "Quarterly Planning Cadence",
+        Some("how we plan quarters"),
+        "Quarterly planning cadence prose. We review goals every quarter.",
+        None, // no entity_id
+        None, // space column intentionally NULL — workspace is the dedicated axis
+        &[],  // zero sources (source-less authored page)
+        &now,
+        "authored",
+        "confirmed",
+        None, // workspace set via SQL helper below (simulates pre-Step-4 state)
+    )
+    .await
+    .expect("insert_page_with_kind must succeed for source-less authored page");
+
+    // Bind the page to workspace="work" via the SQL helper (Step 4 will do this
+    // atomically via insert_page_with_kind; tested separately below).
+    set_page_workspace(&db, "page_sl", "work").await;
+
+    // work-scoped recall: the page MUST surface (workspace match).
+    let work = db
+        .search_memory_cross_rerank(
+            "quarterly planning cadence",
+            10,
+            None,         // memory_type filter
+            Some("work"), // space filter = "work"
+            None,         // source_agent filter
+            None,         // reranker (None = no CE model required in CI)
+        )
+        .await
+        .expect("work-scoped recall must not error");
+
+    assert!(
+        work.iter()
+            .any(|r| r.id == "page_sl" || r.source_id == "page_sl"),
+        "source-less page in workspace=work must surface under work-scoped recall; \
+         got results: {:?}",
+        work.iter()
+            .map(|r| (r.source.as_str(), r.id.as_str()))
+            .collect::<Vec<_>>()
+    );
+
+    // personal-scoped recall: the same page MUST NOT appear.
+    let personal = db
+        .search_memory_cross_rerank(
+            "quarterly planning cadence",
+            10,
+            None,             // memory_type filter
+            Some("personal"), // space filter = "personal"
+            None,             // source_agent filter
+            None,             // reranker
+        )
+        .await
+        .expect("personal-scoped recall must not error");
+
+    assert!(
+        !personal
+            .iter()
+            .any(|r| r.id == "page_sl" || r.source_id == "page_sl"),
+        "work-workspace page LEAKED into personal-scoped recall (cross-workspace disclosure); \
+         got results: {:?}",
+        personal
+            .iter()
+            .map(|r| (r.source.as_str(), r.id.as_str()))
+            .collect::<Vec<_>>()
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Task 6 — Step 4 production write path test
+// ---------------------------------------------------------------------------
+
+/// create_page with workspace=Some("work") MUST persist pages.workspace='work'.
+/// This verifies the production write path added in Step 4: insert_page_with_kind
+/// receives workspace and writes it to the SQL row atomically.
+#[tokio::test]
+async fn create_page_persists_workspace() {
+    use origin_core::post_write::create_page;
+    use origin_types::requests::CreateConceptRequest;
+
+    let (db, _dir) = make_db().await;
+
+    // Seed a source memory so distilled creation_kind validation passes
+    // (authored kind skips the source requirement, but we test authored here).
+    let req = CreateConceptRequest {
+        title: "Work Planning Notes".to_string(),
+        content: "These are authored work planning notes for our quarterly review cycle."
+            .to_string(),
+        summary: Some("quarterly review planning".to_string()),
+        entity_id: None,
+        space: None, // space is the category column; workspace is the new axis
+        source_memory_ids: vec![],
+        creation_kind: Some("authored".to_string()),
+        workspace: Some("work".to_string()),
+    };
+
+    let result = create_page(&db, req, "test-agent", None)
+        .await
+        .expect("create_page must succeed for authored source-less page");
+
+    let page_id = result.id;
+
+    // Verify pages.workspace = 'work' in the DB by reading back via get_page.
+    let page = db
+        .get_page(&page_id)
+        .await
+        .expect("get_page must not error")
+        .expect("page must exist after create_page");
+
+    assert_eq!(
+        page.workspace.as_deref(),
+        Some("work"),
+        "pages.workspace must be 'work' after create_page with workspace=Some(\"work\")"
+    );
 }

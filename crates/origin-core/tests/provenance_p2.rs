@@ -296,6 +296,7 @@ async fn distilled_zero_source_page_rejected() {
         space: None,
         source_memory_ids: vec![],
         creation_kind: Some("distilled".into()),
+        workspace: None,
     };
     let r = origin_core::post_write::create_page(&db, req, "test", Some(dir.path())).await;
     assert!(matches!(
@@ -315,6 +316,7 @@ async fn authored_zero_source_page_accepted_unconfirmed() {
         space: None,
         source_memory_ids: vec![],
         creation_kind: Some("authored".into()),
+        workspace: None,
     };
     let wr = origin_core::post_write::create_page(&db, req, "test", Some(dir.path()))
         .await
@@ -339,6 +341,7 @@ async fn garbage_creation_kind_rejected() {
         space: None,
         source_memory_ids: vec![],
         creation_kind: Some("garbage".into()),
+        workspace: None,
     };
     let r = origin_core::post_write::create_page(&db, req, "test", Some(dir.path())).await;
     assert!(
@@ -411,6 +414,7 @@ async fn source_less_page_embeds_title_plus_content() {
         "p_notes", "Cooking Recipes", None,
         "Detailed notes about Rust ownership, borrowing, and the lifetime system used in async code.",
         None, None, &[], &now, "authored", "confirmed",
+        None, // workspace
     ).await.unwrap();
     let q = db
         .generate_embeddings(&["Rust ownership borrowing lifetimes".to_string()])

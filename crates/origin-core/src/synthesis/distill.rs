@@ -1405,6 +1405,7 @@ mod tests {
             &now,
             "authored",
             "confirmed",
+            None, // workspace
         ).await.unwrap();
 
         // 2. A cluster on the same topic with its own memory + a centroid embedding
