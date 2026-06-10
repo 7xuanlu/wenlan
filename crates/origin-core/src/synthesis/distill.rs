@@ -754,7 +754,11 @@ pub async fn distill_pages_scoped(
             .unwrap_or("general");
 
         // Skip if a page with very similar sources already exists (Jaccard > 0.8)
-        // Memories CAN appear in multiple concepts — this only prevents duplicate concepts
+        // Memories CAN appear in multiple concepts — this only prevents duplicate concepts.
+        // Asymmetry: the concurrent path (distill_one_cluster) takes the skip-and-attach
+        // dedup route instead — it finds a near-match page and stamps last_distilled_at for
+        // the attached ids.  This inline loop only skips on overlap, so it correctly stamps
+        // nothing (no attachment was made).
         let overlap = db
             .max_page_overlap(&cluster.source_ids)
             .await

@@ -38,9 +38,11 @@ pub struct Page {
     pub last_delta_summary: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub changelog: Option<String>,
-    /// Dedicated multi-tenant scope axis (P3). Distinct from `space` (category column).
-    /// Set at creation time from `CreateConceptRequest.workspace` or the
-    /// `X-Origin-Space` header. NULL = no workspace constraint.
+    /// Scope axis (P3). Distinct from `space` (category column). Set at creation
+    /// time from `CreateConceptRequest.workspace` or the `X-Origin-Space` header.
+    /// NULL = no workspace constraint. Enforced only by the scoped-recall page gate
+    /// on the cross-rerank search path; direct page lookups (search_pages MCP tool,
+    /// exports) do not filter by workspace.
     #[serde(default)]
     pub workspace: Option<String>,
     /// Routing metadata: which mechanism created this page.

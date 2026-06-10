@@ -6030,9 +6030,11 @@ impl MemoryDB {
                 log::info!("[migration] Migration 62 applied: pages.review_status trust boundary");
             }
 
-            // Migration 63 (WS): pages.workspace — dedicated multi-tenant scope, DISTINCT
-            // from the overloaded category `space` column (which holds page_type
-            // recap/decision/people AND, inconsistently, the X-Origin-Space value).
+            // Migration 63 (WS): pages.workspace — scope axis, DISTINCT from the
+            // overloaded category `space` column (which holds page_type recap/decision/
+            // people AND, inconsistently, the X-Origin-Space value).  Enforced only by
+            // the scoped-recall page gate in search_memory_cross_rerank_cued; direct
+            // page lookups (search_pages, exports) do not filter by workspace.
             // Backfill: derive workspace from the source memories' `space` — the modal
             // (most common) non-NULL space across a page's source_memory_ids. Source-less
             // pages (zero sources) stay NULL and remain unfiltered-recall-only until set.
@@ -9423,7 +9425,7 @@ impl MemoryDB {
         let page_channel_enabled = page_channel_enabled();
         let global_prelude_enabled = global_prelude_enabled();
 
-        let mut memory_results = self
+        let memory_results = self
             .search_memory_with_cue(
                 query,
                 fetch_pool,
@@ -9630,31 +9632,6 @@ impl MemoryDB {
             fact_results
         };
 
-        // P3 consolidation-demotion: gently down-weight distilled memories' base
-        // cosine score so they rank below their page for the topic query. Applied
-        // to memory_results BEFORE score_map seeding; pages/episodes/facts RRF mass
-        // is added on top unchanged. Keyed by source_id => allowed_memory_ids
-        // (also source_id) is untouched, so the scoped gate + deep recall still
-        // see every memory. Only the RANK moves.
-        {
-            let now_unix = chrono::Utc::now().timestamp();
-            let sids: Vec<String> = memory_results.iter().map(|r| r.source_id.clone()).collect();
-            let stamps = self
-                .fetch_last_distilled_at(&sids)
-                .await
-                .unwrap_or_else(|e| {
-                    log::warn!(
-                        "[memory_db] fetch_last_distilled_at failed: {e}; skipping demotion"
-                    );
-                    Default::default()
-                });
-            for r in memory_results.iter_mut() {
-                if let Some(&ts) = stamps.get(&r.source_id) {
-                    r.score *= Self::compute_distill_demotion(Some(ts), now_unix);
-                }
-            }
-        }
-
         // Two-stage RRF merge — mirrors augment_with_graph (db.rs:7619-7644).
         // Memory r.score SEEDS the merged score_map; page rows contribute only
         // 1/(60+rank) RRF mass on top. `search_result_from_page` zeros page
@@ -9769,6 +9746,52 @@ impl MemoryDB {
                             .unwrap_or(std::cmp::Ordering::Equal)
                     });
                 }
+            }
+        }
+
+        // P3 consolidation-demotion: gently down-weight distilled memories'
+        // FINAL (post-CE / post-blend / post-RRF) score so they rank below
+        // their page for the topic query.  Placed POST-CE so the cross-encoder
+        // overwrite cannot erase the multiplier (adversarial finding C1: a
+        // pre-score_map placement was silently voided on every CE-rerank call).
+        //
+        // Keying: source_id → last_distilled_at.  Only memory rows with a
+        // matching source_id in the stamps map are touched; page/episode/fact
+        // rows are not in the map and pass through unchanged.
+        //
+        // Score read-back: allowed_memory_ids and the workspace gate read
+        // r.source_id (never r.score) earlier in this function — they are
+        // unaffected by this multiplication.  Only RANK moves.
+        //
+        // Re-sort: the CE stage may have re-ordered results; the demotion
+        // may flip adjacent memory rows, so we re-sort to keep the output
+        // consistently ordered before the page partition and truncate below.
+        {
+            let now_unix = chrono::Utc::now().timestamp();
+            let sids: Vec<String> = results.iter().map(|r| r.source_id.clone()).collect();
+            let stamps = self
+                .fetch_last_distilled_at(&sids)
+                .await
+                .unwrap_or_else(|e| {
+                    log::warn!(
+                        "[memory_db] fetch_last_distilled_at failed: {e}; skipping demotion"
+                    );
+                    Default::default()
+                });
+            let mut demoted = false;
+            for r in results.iter_mut() {
+                if let Some(&ts) = stamps.get(&r.source_id) {
+                    r.score *= Self::compute_distill_demotion(Some(ts), now_unix);
+                    demoted = true;
+                }
+            }
+            if demoted {
+                results.sort_by(|a, b| {
+                    b.score
+                        .partial_cmp(&a.score)
+                        .unwrap_or(std::cmp::Ordering::Equal)
+                        .then_with(|| a.source_id.cmp(&b.source_id))
+                });
             }
         }
 
@@ -22217,8 +22240,10 @@ impl MemoryDB {
     /// neutral 1.0 over `OVERRIDE_DAYS`, so the raw evidence stays verifiable against
     /// the page for a few days after distill. None / future-stamp / out-of-window =>
     /// 1.0 (neutral). This is the maturation score applied to the memory->page
-    /// hand-off; multiplier hooks the cosine+RRF score path, NOT effective_confidence
-    /// (which is eviction-only and unused in ranking).
+    /// hand-off; multiplier hooks the FINAL ranking score on the cross-rerank path
+    /// (post-CE), NOT effective_confidence (which is eviction-only and unused in
+    /// ranking). Placement post-CE ensures the cross-encoder overwrite cannot erase
+    /// the demotion; pages/facts/episodes are untouched (not in the stamps map).
     fn compute_distill_demotion(last_distilled_at: Option<i64>, now_unix: i64) -> f32 {
         const DEMOTE_FLOOR: f32 = 0.7;
         const OVERRIDE_DAYS: i64 = 5;

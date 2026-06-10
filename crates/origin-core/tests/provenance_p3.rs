@@ -6,7 +6,9 @@ use origin_core::db::{DistillationCluster, MemoryDB};
 use origin_core::llm_provider::{LlmBackend, LlmError, LlmProvider, LlmRequest};
 use origin_core::prompts::PromptRegistry;
 use origin_core::refinery::distill_one_cluster;
+use origin_core::reranker::Reranker;
 use origin_core::sources::RawDocument;
+use origin_core::OriginError;
 use origin_core::{EventEmitter, NoopEmitter};
 use std::sync::Arc;
 
@@ -702,5 +704,144 @@ async fn distilled_memory_demoted_but_reachable() {
         score_distilled < score_control,
         "distilled memory (score={score_distilled}) must rank below equal-relevance \
          control (score={score_control}) during the demotion window"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// C1 regression: demotion must survive the CE rerank overwrite.
+//
+// A stub reranker that returns EQUAL scores for every candidate is the
+// tightest possible probe: if demotion is applied pre-CE (the bug) the CE
+// overwrites both scores to the same value and the assertion below fails; if
+// demotion is applied post-CE (the fix) the demotion multiplier fires AFTER
+// the equal CE scores land, making score_distilled < score_control.
+// ---------------------------------------------------------------------------
+
+/// Stub reranker that returns the same constant score (0.5) for every
+/// candidate.  This guarantees the CE overwrite fires and produces equal
+/// scores for all candidates, so demotion is the ONLY thing that can
+/// differentiate mem_distilled from mem_control.
+struct EqualScoreReranker;
+
+impl Reranker for EqualScoreReranker {
+    fn rerank(
+        &self,
+        _query: &str,
+        candidates: &[(String, String)],
+    ) -> Result<Vec<(String, f32)>, OriginError> {
+        Ok(candidates
+            .iter()
+            .map(|(id, _)| (id.clone(), 0.5_f32))
+            .collect())
+    }
+
+    fn model_id(&self) -> &str {
+        "equal-score-stub"
+    }
+}
+
+/// Demotion must be rank-effective even when a CE reranker overwrites all
+/// scores to the same value first.
+///
+/// Setup is identical to `distilled_memory_demoted_but_reachable` except
+/// `reranker = Some(EqualScoreReranker)` so the CE overwrite path fires.
+/// After the CE pass every candidate carries score=0.5.  The demotion
+/// multiplier (DEMOTE_FLOOR=0.7 for age=0) must run POST-CE and bring
+/// mem_distilled below mem_control.
+#[tokio::test]
+async fn demotion_survives_ce_rerank() {
+    let _env = PageChannelEnvGuard::set("1");
+
+    let (db, _dir) = make_db().await;
+
+    // Same padding + topic pair as `distilled_memory_demoted_but_reachable`.
+    seed_memory_for_demotion(
+        &db,
+        "mem_pad_ce1",
+        "Photosynthesis converts light energy into chemical energy stored in glucose. \
+         Chlorophyll absorbs red and blue wavelengths, reflecting green. \
+         ATP and NADPH produced in the light reactions power the Calvin cycle.",
+    )
+    .await;
+    seed_memory_for_demotion(
+        &db,
+        "mem_pad_ce2",
+        "Continental drift reshapes ocean basins over millions of years. \
+         Subduction zones recycle oceanic crust into the mantle while \
+         mid-ocean ridges create new crust from magma upwelling.",
+    )
+    .await;
+
+    let content_a = "Rust async runtime tokio executor drives futures to completion \
+        using a multi-threaded work-stealing scheduler. Each thread runs a local \
+        run-queue and steals tasks from siblings when idle. The reactor polls I/O \
+        readiness via epoll on Linux and kqueue on macOS. Blocking tasks run on a \
+        dedicated thread pool so they never starve the async futures.";
+    let content_b = "Tokio async runtime executor futures Rust work-stealing scheduler \
+        drives tasks to completion. Local run-queues per thread steal work from \
+        siblings when idle. The I/O reactor uses epoll on Linux and kqueue on macOS. \
+        Blocking operations run on a separate thread pool to avoid starving \
+        the async reactor.";
+
+    seed_memory_for_demotion(&db, "mem_distilled_ce", content_a).await;
+    seed_memory_for_demotion(&db, "mem_control_ce", content_b).await;
+
+    // Stamp mem_distilled_ce as just-distilled (age=0 → DEMOTE_FLOOR=0.7).
+    let now = chrono::Utc::now().timestamp();
+    db.stamp_last_distilled_at(&["mem_distilled_ce".to_string()], now)
+        .await
+        .expect("stamp_last_distilled_at must succeed");
+
+    let reranker: Arc<dyn Reranker> = Arc::new(EqualScoreReranker);
+
+    let results = db
+        .search_memory_cross_rerank(
+            "rust async runtime tokio executor work-stealing scheduler",
+            10,
+            None,
+            None,
+            None,
+            Some(reranker),
+        )
+        .await
+        .expect("search_memory_cross_rerank must not error");
+
+    // Both must be reachable.
+    assert!(
+        results.iter().any(|r| r.source_id == "mem_distilled_ce"),
+        "mem_distilled_ce must remain reachable after CE-path demotion (got: {:?})",
+        results
+            .iter()
+            .map(|r| r.source_id.as_str())
+            .collect::<Vec<_>>()
+    );
+    assert!(
+        results.iter().any(|r| r.source_id == "mem_control_ce"),
+        "mem_control_ce must be present in results (got: {:?})",
+        results
+            .iter()
+            .map(|r| r.source_id.as_str())
+            .collect::<Vec<_>>()
+    );
+
+    let score_distilled = results
+        .iter()
+        .find(|r| r.source_id == "mem_distilled_ce")
+        .map(|r| r.score)
+        .expect("mem_distilled_ce in results");
+    let score_control = results
+        .iter()
+        .find(|r| r.source_id == "mem_control_ce")
+        .map(|r| r.score)
+        .expect("mem_control_ce in results");
+
+    // After the equal-score CE pass, only the post-CE demotion multiplier can
+    // differentiate these two.  If this assertion fails, the demotion block is
+    // still pre-CE (bug C1 from the adversarial review).
+    assert!(
+        score_distilled < score_control,
+        "demotion must survive CE overwrite: distilled score ({score_distilled}) must be \
+         < control score ({score_control}); if equal, demotion is being erased by the CE \
+         overwrite (adversarial finding C1)"
     );
 }
