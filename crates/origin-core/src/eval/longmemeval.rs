@@ -1646,6 +1646,154 @@ pub async fn run_longmemeval_headroom_probe_from_db(
     Ok(rows)
 }
 
+/// One row of the decompose-recall probe (Step 1 of the decompose probe
+/// ladder): does multi-anchor fetch reach gold that single-query fetch cannot?
+///
+/// All arms fetch at the CE knee window (limit=30, `RERANK_POOL_FLOOR=30`
+/// semantics) so the comparison is against the post-knee production shape:
+/// - `gold_in_base30` — single original query (control arm)
+/// - `gold_in_date30` — Zep-style question-date prefix `(date: ...) question`
+/// - `gold_in_union`  — presence anywhere in the union of per-stream pools
+///   (original + subqueries, 30 each): the ceiling for ANY downstream ranker
+/// - `gold_in_rrf30`  — top-30 of the equal-weight RRF merge, mirroring the
+///   production `search_memory_decomposed` merge: what the CURRENT merge
+///   realizes of that ceiling
+///
+/// Pool-size control is by construction: union ≤ 4 streams × 30 = 120, and the
+/// headroom probe already measured the single-query limit=100 ceiling on the
+/// same questions — join the two JSONLs on `query_id` to separate anchor
+/// diversity from pool size.
+#[derive(Debug, serde::Serialize)]
+pub struct DecomposeRecallRow {
+    pub query_id: String,
+    pub category: String,
+    pub n_gold: usize,
+    /// Subqueries from the fixture (excluding the original). 0 = atomic:
+    /// the union/rrf arms degrade to the base arm by construction.
+    pub n_subqueries: usize,
+    pub gold_in_base30: usize,
+    pub gold_in_date30: usize,
+    pub gold_in_union: usize,
+    pub union_size: usize,
+    pub gold_in_rrf30: usize,
+}
+
+#[derive(serde::Deserialize)]
+struct SubqFixtureRow {
+    query_id: String,
+    subqueries: Vec<String>,
+}
+
+/// Load the pre-generated subquery fixture (JSONL: `{query_id, subqueries}`).
+/// Subqueries exclude the original question (the probe prepends it, mirroring
+/// `retrieval::decompose::parse_subqueries`). Fails loud on malformed lines —
+/// the fixture is generated input, not user data.
+fn load_subquery_fixture(path: &Path) -> Result<HashMap<String, Vec<String>>, OriginError> {
+    let text = std::fs::read_to_string(path)
+        .map_err(|e| OriginError::Generic(format!("read subquery fixture: {e}")))?;
+    let mut map = HashMap::new();
+    for line in text.lines().filter(|l| !l.trim().is_empty()) {
+        let row: SubqFixtureRow = serde_json::from_str(line)
+            .map_err(|e| OriginError::Generic(format!("parse subquery fixture line: {e}")))?;
+        map.insert(row.query_id, row.subqueries);
+    }
+    Ok(map)
+}
+
+/// Equal-weight RRF merge of per-stream ranked id lists, truncated to `k`.
+/// Mirrors the `search_memory_decomposed` merge (score = Σ 1/(60+rank)), with
+/// a stable id tiebreak the production code leaves to HashMap order.
+fn rrf_merge_ids(streams: &[Vec<String>], k: usize) -> Vec<String> {
+    let mut scores: HashMap<&str, f32> = HashMap::new();
+    for ranked in streams {
+        for (rank, id) in ranked.iter().enumerate() {
+            *scores.entry(id.as_str()).or_default() += 1.0 / (60.0 + rank as f32);
+        }
+    }
+    let mut merged: Vec<(&str, f32)> = scores.into_iter().collect();
+    merged.sort_by(|a, b| {
+        b.1.partial_cmp(&a.1)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| a.0.cmp(b.0))
+    });
+    merged.truncate(k);
+    merged.into_iter().map(|(id, _)| id.to_string()).collect()
+}
+
+/// Decompose-recall probe over the base `search_memory` path (Step 1 of the
+/// decompose probe ladder). Consumes a pre-generated subquery fixture
+/// (agent-delegated decomposition — the primary lane from the 2026-05-30
+/// decision) instead of calling an LLM, so the run is deterministic and
+/// GPU-free. See [`DecomposeRecallRow`] for the four arms.
+pub async fn run_longmemeval_decompose_recall_probe_from_db(
+    db: &MemoryDB,
+    path: &Path,
+    subq_path: &Path,
+) -> Result<Vec<DecomposeRecallRow>, OriginError> {
+    const K: usize = 30;
+    let subq_map = load_subquery_fixture(subq_path)?;
+    let mut samples = load_longmemeval(path)?;
+    apply_lme_limit(&mut samples);
+    let mut rows: Vec<DecomposeRecallRow> = Vec::new();
+
+    for sample in &samples {
+        let memories = extract_memories(sample);
+        let relevant_source_ids: HashSet<String> = memories
+            .iter()
+            .filter(|m| m.has_answer)
+            .map(|m| memory_source_id(&m.question_id, m.session_idx, m.turn_idx))
+            .collect();
+        if relevant_source_ids.is_empty() {
+            continue;
+        }
+        let gold_in = |ids: &[String]| {
+            ids.iter()
+                .filter(|id| relevant_source_ids.contains(*id))
+                .count()
+        };
+
+        let subqueries = subq_map
+            .get(&sample.question_id)
+            .cloned()
+            .unwrap_or_default();
+
+        // Streams mirror parse_subqueries: original first, then subqueries.
+        let mut streams: Vec<Vec<String>> = Vec::with_capacity(1 + subqueries.len());
+        for q in std::iter::once(&sample.question).chain(subqueries.iter()) {
+            let results = db
+                .search_memory(q, K, None, None, None, None, None, None)
+                .await?;
+            streams.push(results.into_iter().map(|r| r.source_id).collect());
+        }
+
+        let date_query = format!("(date: {}) {}", sample.question_date, sample.question);
+        let date_results = db
+            .search_memory(&date_query, K, None, None, None, None, None, None)
+            .await?;
+        let date_ids: Vec<String> = date_results.into_iter().map(|r| r.source_id).collect();
+
+        let union: HashSet<&str> = streams.iter().flatten().map(|s| s.as_str()).collect();
+        let rrf_top = rrf_merge_ids(&streams, K);
+
+        rows.push(DecomposeRecallRow {
+            query_id: sample.question_id.clone(),
+            category: sample.question_type.clone(),
+            n_gold: relevant_source_ids.len(),
+            n_subqueries: subqueries.len(),
+            gold_in_base30: gold_in(&streams[0]),
+            gold_in_date30: gold_in(&date_ids),
+            gold_in_union: relevant_source_ids
+                .iter()
+                .filter(|gid| union.contains(gid.as_str()))
+                .count(),
+            union_size: union.len(),
+            gold_in_rrf30: gold_in(&rrf_top),
+        });
+    }
+
+    Ok(rows)
+}
+
 /// Cross-encoder variant of [`run_longmemeval_eval_from_db_collect`]. Identical
 /// query set + relevance judgments + scoring, but retrieval goes through
 /// `search_memory_cross_rerank` (CE rescoring over the widened pool) instead of
@@ -2865,6 +3013,45 @@ mod tests {
         assert_eq!(gold_in_top_k(&[-1, -1], 100), 0);
         // boundary: rank 9 in, rank 10 out at k=10
         assert_eq!(gold_in_top_k(&[9, 10], 10), 1);
+    }
+
+    #[test]
+    fn rrf_merge_prefers_multi_stream_ids() {
+        // id "b" appears in both streams (ranks 1 and 0) and must beat "a"
+        // (rank 0 in one stream only): 1/61 + 1/60 > 1/60.
+        let streams = vec![
+            vec!["a".to_string(), "b".to_string(), "c".to_string()],
+            vec!["b".to_string(), "d".to_string()],
+        ];
+        let merged = rrf_merge_ids(&streams, 3);
+        assert_eq!(merged[0], "b");
+        assert_eq!(merged[1], "a");
+        assert_eq!(merged.len(), 3);
+        // truncation respected
+        assert_eq!(rrf_merge_ids(&streams, 1), vec!["b".to_string()]);
+        // single stream degrades to identity order
+        let single = vec![vec!["x".to_string(), "y".to_string()]];
+        assert_eq!(
+            rrf_merge_ids(&single, 30),
+            vec!["x".to_string(), "y".to_string()]
+        );
+    }
+
+    #[test]
+    fn subquery_fixture_roundtrip() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("subq.jsonl");
+        std::fs::write(
+            &p,
+            "{\"query_id\":\"q1\",\"subqueries\":[\"a\",\"b\"]}\n{\"query_id\":\"q2\",\"subqueries\":[]}\n",
+        )
+        .unwrap();
+        let map = load_subquery_fixture(&p).unwrap();
+        assert_eq!(map["q1"], vec!["a", "b"]);
+        assert!(map["q2"].is_empty());
+        // malformed line fails loud, not silently skipped
+        std::fs::write(&p, "{\"query_id\":\"q1\"\n").unwrap();
+        assert!(load_subquery_fixture(&p).is_err());
     }
 
     fn sample_json() -> &'static str {
