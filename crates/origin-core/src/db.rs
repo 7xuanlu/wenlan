@@ -27,7 +27,7 @@ pub const EMBEDDING_DIM: usize = 768;
 
 /// Current DB schema version (highest `PRAGMA user_version` applied by `migrate()`).
 /// Bump this whenever a new migration lands. Used as an eval cache invalidation key.
-pub const SCHEMA_VERSION: u32 = 62;
+pub const SCHEMA_VERSION: u32 = 63;
 
 /// Shared embedder reference. Pass to [`MemoryDB::new_with_shared_embedder`] to
 /// reuse a single embedder across many `MemoryDB` instances. Created via
@@ -6028,6 +6028,66 @@ impl MemoryDB {
                     .await
                     .map_err(|e| OriginError::VectorDb(format!("m62 bump: {e}")))?;
                 log::info!("[migration] Migration 62 applied: pages.review_status trust boundary");
+            }
+
+            // Migration 63 (WS): pages.workspace — dedicated multi-tenant scope, DISTINCT
+            // from the overloaded category `space` column (which holds page_type
+            // recap/decision/people AND, inconsistently, the X-Origin-Space value).
+            // Backfill: derive workspace from the source memories' `space` — the modal
+            // (most common) non-NULL space across a page's source_memory_ids. Source-less
+            // pages (zero sources) stay NULL and remain unfiltered-recall-only until set.
+            if version < 63 {
+                let conn = self.conn.lock().await;
+                let has_col: bool = {
+                    let mut rows = conn
+                        .query(
+                            "SELECT COUNT(*) FROM pragma_table_info('pages') WHERE name = 'workspace'",
+                            (),
+                        )
+                        .await
+                        .map_err(|e| OriginError::VectorDb(format!("m63 col check: {e}")))?;
+                    match rows.next().await {
+                        Ok(Some(row)) => row.get::<i64>(0).unwrap_or(0) > 0,
+                        _ => false,
+                    }
+                };
+                if !has_col {
+                    conn.execute("ALTER TABLE pages ADD COLUMN workspace TEXT", ())
+                        .await
+                        .map_err(|e| OriginError::VectorDb(format!("m63 add workspace: {e}")))?;
+                    conn.execute(
+                        "CREATE INDEX IF NOT EXISTS idx_pages_workspace ON pages(workspace) WHERE workspace IS NOT NULL",
+                        (),
+                    )
+                    .await
+                    .map_err(|e| OriginError::VectorDb(format!("m63 create idx: {e}")))?;
+                }
+                // Backfill: workspace = the most common non-NULL `space` among the page's
+                // source memories (joined via page_sources.memory_source_id ->
+                // memories.source_id). Pages with no sourced memory keep workspace=NULL.
+                // GROUP BY page + space, pick the space with the max source count, ties
+                // broken by space text (deterministic). Runs even on re-run (idempotent
+                // via WHERE workspace IS NULL) so rollback-and-rerun in tests fills rows.
+                conn.execute(
+                    "UPDATE pages
+                        SET workspace = (
+                            SELECT m.space
+                              FROM page_sources ps
+                              JOIN memories m ON m.source_id = ps.memory_source_id
+                             WHERE ps.page_id = pages.id AND m.space IS NOT NULL
+                          GROUP BY m.space
+                          ORDER BY COUNT(*) DESC, m.space ASC
+                             LIMIT 1
+                        )
+                      WHERE workspace IS NULL",
+                    (),
+                )
+                .await
+                .map_err(|e| OriginError::VectorDb(format!("m63 backfill: {e}")))?;
+                conn.execute("PRAGMA user_version = 63", ())
+                    .await
+                    .map_err(|e| OriginError::VectorDb(format!("m63 bump: {e}")))?;
+                log::info!("[migration] Migration 63 applied: pages.workspace column + backfill from source-memory space (P3 workspace axis)");
             }
         }
 
@@ -43096,8 +43156,8 @@ pub(crate) mod tests {
         let uv: i64 = vrows.next().await.unwrap().unwrap().get(0).unwrap();
         assert_eq!(uv as u32, crate::db::SCHEMA_VERSION);
         // test_db() runs the full migration ladder, so the terminal version is
-        // the current SCHEMA_VERSION (62 after P2 pages.review_status).
-        assert_eq!(uv, 62);
+        // the current SCHEMA_VERSION (63 after P3 pages.workspace).
+        assert_eq!(uv, 63);
     }
 
     #[tokio::test]
@@ -43114,7 +43174,7 @@ pub(crate) mod tests {
         let mut vrows = conn.query("PRAGMA user_version", ()).await.unwrap();
         let uv: i64 = vrows.next().await.unwrap().unwrap().get(0).unwrap();
         assert_eq!(
-            uv, 62,
+            uv, 63,
             "user_version restored to current terminal version after idempotent re-run"
         );
     }
@@ -43148,7 +43208,7 @@ pub(crate) mod tests {
         let mut vrows = conn.query("PRAGMA user_version", ()).await.unwrap();
         let uv: i64 = vrows.next().await.unwrap().unwrap().get(0).unwrap();
         assert_eq!(uv as u32, crate::db::SCHEMA_VERSION);
-        assert_eq!(uv, 62);
+        assert_eq!(uv, 63);
     }
 
     #[tokio::test]
@@ -43165,7 +43225,7 @@ pub(crate) mod tests {
         let mut vrows = conn.query("PRAGMA user_version", ()).await.unwrap();
         let uv: i64 = vrows.next().await.unwrap().unwrap().get(0).unwrap();
         assert_eq!(
-            uv, 62,
+            uv, 63,
             "user_version restored to current terminal version after idempotent re-run"
         );
     }
@@ -43213,10 +43273,7 @@ pub(crate) mod tests {
         let mut vrows = conn.query("PRAGMA user_version", ()).await.unwrap();
         let uv: i64 = vrows.next().await.unwrap().unwrap().get(0).unwrap();
         assert_eq!(uv as u32, crate::db::SCHEMA_VERSION);
-        assert_eq!(
-            uv, 62,
-            "terminal version is 62 after P2 pages.review_status"
-        );
+        assert_eq!(uv, 63, "terminal version is 63 after P3 pages.workspace");
     }
 
     #[tokio::test]
@@ -43233,7 +43290,7 @@ pub(crate) mod tests {
         let mut vrows = conn.query("PRAGMA user_version", ()).await.unwrap();
         let uv: i64 = vrows.next().await.unwrap().unwrap().get(0).unwrap();
         assert_eq!(
-            uv, 62,
+            uv, 63,
             "user_version restored to current terminal version after idempotent re-run"
         );
 
@@ -44806,5 +44863,105 @@ pub(crate) mod tests {
         assert_eq!(centroid.len(), 3);
         assert!((centroid[0] - 0.5).abs() < 1e-6);
         assert!((centroid[1] - 0.5).abs() < 1e-6);
+    }
+
+    /// Migration 63 (P3): pages.workspace is added and backfilled from the
+    /// source memories' `space` column via the page_sources join.
+    #[tokio::test]
+    async fn m_ws_backfills_workspace_from_source_memory_space() {
+        use crate::sources::RawDocument;
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("test.db");
+        let emitter: std::sync::Arc<dyn crate::EventEmitter> =
+            std::sync::Arc::new(crate::NoopEmitter);
+        let db = MemoryDB::new(&db_path, emitter).await.unwrap();
+
+        // Two memories in distinct workspaces.
+        db.upsert_documents(vec![
+            RawDocument {
+                source: "memory".into(),
+                source_id: "mem_work_1".into(),
+                title: "mem_work_1".into(),
+                content: "alpha work fact".into(),
+                memory_type: Some("fact".into()),
+                space: Some("work".into()),
+                last_modified: 1_700_000_000,
+                ..Default::default()
+            },
+            RawDocument {
+                source: "memory".into(),
+                source_id: "mem_pers_1".into(),
+                title: "mem_pers_1".into(),
+                content: "beta personal fact".into(),
+                memory_type: Some("fact".into()),
+                space: Some("personal".into()),
+                last_modified: 1_700_000_000,
+                ..Default::default()
+            },
+        ])
+        .await
+        .unwrap();
+
+        // A page per workspace whose source is the matching memory.
+        let now = chrono::Utc::now().to_rfc3339();
+        db.insert_page(
+            "page_work",
+            "Work Topic",
+            Some("s"),
+            "body",
+            None,
+            Some("recap"),
+            &["mem_work_1"],
+            &now,
+        )
+        .await
+        .unwrap();
+        db.insert_page(
+            "page_pers",
+            "Personal Topic",
+            Some("s"),
+            "body",
+            None,
+            Some("recap"),
+            &["mem_pers_1"],
+            &now,
+        )
+        .await
+        .unwrap();
+
+        // Roll user_version back so migration 63 re-runs over the seeded rows.
+        {
+            let conn = db.conn.lock().await;
+            conn.execute("UPDATE pages SET workspace = NULL", ())
+                .await
+                .unwrap();
+            conn.execute("PRAGMA user_version = 62", ()).await.unwrap();
+        }
+        db.run_migrations(&crate::events::NoopEmitter)
+            .await
+            .unwrap();
+
+        let conn = db.conn.lock().await;
+        let mut rows = conn
+            .query("SELECT id, workspace FROM pages ORDER BY id", ())
+            .await
+            .unwrap();
+        let mut got = std::collections::HashMap::new();
+        while let Some(r) = rows.next().await.unwrap() {
+            got.insert(
+                r.get::<String>(0).unwrap(),
+                r.get::<Option<String>>(1).unwrap(),
+            );
+        }
+        assert_eq!(
+            got.get("page_pers").unwrap().as_deref(),
+            Some("personal"),
+            "page_pers workspace should be 'personal'"
+        );
+        assert_eq!(
+            got.get("page_work").unwrap().as_deref(),
+            Some("work"),
+            "page_work workspace should be 'work'"
+        );
     }
 }
