@@ -2887,6 +2887,46 @@ async fn paired_run_cached_feature_cross_rerank_vals(
 /// when at least one CE feature is selected, so base-only smoke runs stay light.
 #[tokio::test]
 #[ignore = "needs cached scenario DBs (use SNAPSHOT copies); retrieval-only, no GPU. Set ORIGIN_EVAL_ROOT + SCENARIO_DB_ROOT + EVAL_OUT"]
+async fn headroom_probe_emit() {
+    println!("=== RECALL-HEADROOM PROBE (decompose ladder Step 0) ===");
+    let out_dir = paired_out_dir();
+    println!("EVAL_OUT = {}", out_dir.display());
+
+    let root = resolve_scenario_db_root_from_harness();
+    let lme_dir = root.join("lme_v1");
+    let lme_fx = eval_root().join("data/longmemeval_oracle.json");
+    if !lme_dir.join("origin_memory.db").exists() || !lme_fx.exists() {
+        println!(
+            "SKIP: lme_v1 snapshot DB ({}) or fixture ({}) missing",
+            lme_dir.join("origin_memory.db").exists(),
+            lme_fx.exists()
+        );
+        return;
+    }
+
+    let db = origin_core::db::MemoryDB::new(
+        &lme_dir,
+        std::sync::Arc::new(origin_core::events::NoopEmitter),
+    )
+    .await
+    .expect("open lme_v1 snapshot DB");
+
+    let rows = origin_core::eval::longmemeval::run_longmemeval_headroom_probe_from_db(&db, &lme_fx)
+        .await
+        .expect("headroom probe");
+
+    use std::io::Write;
+    let path = out_dir.join("headroom_lme.jsonl");
+    let mut f = std::fs::File::create(&path).expect("create headroom jsonl");
+    for r in &rows {
+        let line = serde_json::to_string(r).expect("serialize HeadroomRow");
+        writeln!(f, "{line}").expect("write jsonl line");
+    }
+    println!("[headroom] wrote {} rows -> {}", rows.len(), path.display());
+}
+
+#[tokio::test]
+#[ignore = "needs cached scenario DBs (use SNAPSHOT copies); retrieval-only, no GPU. Set ORIGIN_EVAL_ROOT + SCENARIO_DB_ROOT + EVAL_OUT"]
 async fn paired_ab_emit() {
     println!("=== PAIRED A/B EMIT (apparatus v2) ===");
     println!("EVAL_OUT = {}", paired_out_dir().display());

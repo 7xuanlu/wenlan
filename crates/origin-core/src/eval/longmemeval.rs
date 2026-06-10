@@ -1540,6 +1540,112 @@ pub async fn run_longmemeval_eval_from_db_collect(
     Ok(rows)
 }
 
+/// One row of the recall-headroom probe: where the gold evidence turns sit in
+/// the base path's ranked list at three separate fetch limits.
+///
+/// Each limit is a SEPARATE `search_memory` call because candidate generation
+/// scales with the limit (`fetch_limit = limit * 3` per channel) and dedup +
+/// graph augmentation run over that scaled pool — ranks from one deep call do
+/// NOT equal where gold sits in a shallower production call. `gold_in_10` is
+/// production semantics (limit=10), `gold_in_30` is the CE knee window
+/// (RERANK_POOL_FLOOR=30) semantics, `gold_in_100` is the deep single-query
+/// fetch ceiling.
+#[derive(Debug, serde::Serialize)]
+pub struct HeadroomRow {
+    pub query_id: String,
+    pub category: String,
+    pub n_gold: usize,
+    /// 0-based rank of each gold id in the limit=100 call, -1 = absent.
+    /// Sorted ascending with absences last so output is deterministic.
+    pub gold_ranks_100: Vec<i64>,
+    pub gold_in_10: usize,
+    pub gold_in_30: usize,
+    pub gold_in_100: usize,
+    pub hit_any_10: bool,
+    pub hit_any_30: bool,
+    pub hit_any_100: bool,
+}
+
+/// Count gold ranks that landed inside the top-`k` (absences are `-1`).
+fn gold_in_top_k(ranks: &[i64], k: usize) -> usize {
+    ranks
+        .iter()
+        .filter(|&&r| r >= 0 && (r as usize) < k)
+        .count()
+}
+
+/// Recall-headroom probe over the base `search_memory` path (Step 0 of the
+/// decompose probe ladder). For each question, runs the base path at three
+/// fetch limits (10 / 30 / 100) and records how many gold evidence turns each
+/// list contains. Gold absent at the deep limit is recall headroom a
+/// single-query fetch cannot reach — the multi-anchor / decompose case; gold
+/// reachable at 30 but not 10 is CE-knee-window territory (RERANK_POOL_FLOOR);
+/// gold reachable at 100 but not 30 is pool-widening territory.
+/// No flag arms: this measures the substrate, not a lever, so there is no
+/// substrate-liveness gate either (the base path has no starvable channel).
+pub async fn run_longmemeval_headroom_probe_from_db(
+    db: &MemoryDB,
+    path: &Path,
+) -> Result<Vec<HeadroomRow>, OriginError> {
+    const LIMITS: [usize; 3] = [10, 30, 100];
+    let mut samples = load_longmemeval(path)?;
+    apply_lme_limit(&mut samples);
+    let mut rows: Vec<HeadroomRow> = Vec::new();
+
+    for sample in &samples {
+        let memories = extract_memories(sample);
+        let relevant_source_ids: HashSet<String> = memories
+            .iter()
+            .filter(|m| m.has_answer)
+            .map(|m| memory_source_id(&m.question_id, m.session_idx, m.turn_idx))
+            .collect();
+        if relevant_source_ids.is_empty() {
+            continue;
+        }
+
+        // One independent search per limit: per-limit candidate generation is
+        // the point (see HeadroomRow docs), so ranks are computed within each
+        // call's own list, never derived by truncating the deep call.
+        let mut gold_in = [0usize; 3];
+        let mut deep_ranks: Vec<i64> = Vec::new();
+        for (i, &k) in LIMITS.iter().enumerate() {
+            let results = db
+                .search_memory(&sample.question, k, None, None, None, None, None, None)
+                .await?;
+            let ranks: Vec<i64> = relevant_source_ids
+                .iter()
+                .map(|gid| {
+                    results
+                        .iter()
+                        .position(|r| r.source_id == *gid)
+                        .map(|p| p as i64)
+                        .unwrap_or(-1)
+                })
+                .collect();
+            gold_in[i] = gold_in_top_k(&ranks, k);
+            if k == 100 {
+                deep_ranks = ranks;
+                deep_ranks.sort_by_key(|&r| if r < 0 { i64::MAX } else { r });
+            }
+        }
+
+        rows.push(HeadroomRow {
+            query_id: sample.question_id.clone(),
+            category: sample.question_type.clone(),
+            n_gold: relevant_source_ids.len(),
+            gold_ranks_100: deep_ranks,
+            gold_in_10: gold_in[0],
+            gold_in_30: gold_in[1],
+            gold_in_100: gold_in[2],
+            hit_any_10: gold_in[0] > 0,
+            hit_any_30: gold_in[1] > 0,
+            hit_any_100: gold_in[2] > 0,
+        });
+    }
+
+    Ok(rows)
+}
+
 /// Cross-encoder variant of [`run_longmemeval_eval_from_db_collect`]. Identical
 /// query set + relevance judgments + scoring, but retrieval goes through
 /// `search_memory_cross_rerank` (CE rescoring over the widened pool) instead of
@@ -2747,6 +2853,19 @@ pub use crate::eval::judge::{
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn gold_in_top_k_bands() {
+        // ranks: two in top-10, one at 11-30, one at 31-100, one absent
+        let ranks = vec![0, 7, 22, 64, -1];
+        assert_eq!(gold_in_top_k(&ranks, 10), 2);
+        assert_eq!(gold_in_top_k(&ranks, 30), 3);
+        assert_eq!(gold_in_top_k(&ranks, 100), 4);
+        // absent-only never counts
+        assert_eq!(gold_in_top_k(&[-1, -1], 100), 0);
+        // boundary: rank 9 in, rank 10 out at k=10
+        assert_eq!(gold_in_top_k(&[9, 10], 10), 1);
+    }
 
     fn sample_json() -> &'static str {
         r#"[{
