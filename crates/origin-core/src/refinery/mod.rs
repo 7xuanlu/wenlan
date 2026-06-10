@@ -12,8 +12,8 @@ pub(crate) mod summary;
 // deep_distill_single}`. These callers live in origin-server, eval modules, and
 // tests outside this crate.
 pub use crate::synthesis::distill::{
-    deep_distill_pages, deep_distill_single, distill_pages, distill_pages_scoped,
-    resolve_distill_target, DistillTarget,
+    deep_distill_pages, deep_distill_single, distill_one_cluster, distill_pages,
+    distill_pages_scoped, resolve_distill_target, DistillTarget,
 };
 
 // Re-export KG phase functions from `kg::*` to preserve the public API path

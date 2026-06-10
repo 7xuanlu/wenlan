@@ -2,8 +2,10 @@
 //! P3 provenance integration tests — Task 4 through Task 6.
 
 use async_trait::async_trait;
-use origin_core::db::MemoryDB;
+use origin_core::db::{DistillationCluster, MemoryDB};
 use origin_core::llm_provider::{LlmBackend, LlmError, LlmProvider, LlmRequest};
+use origin_core::prompts::PromptRegistry;
+use origin_core::refinery::distill_one_cluster;
 use origin_core::sources::RawDocument;
 use origin_core::{EventEmitter, NoopEmitter};
 use std::sync::Arc;
@@ -199,6 +201,135 @@ async fn normal_distill_stamps_last_distilled_at() {
         assert!(
             ld.is_some(),
             "{sid} must carry a non-NULL last_distilled_at after normal distill"
+        );
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Task 5: scoped-match attach path stamps last_distilled_at for attached ids
+// ---------------------------------------------------------------------------
+
+/// Verifies that when `distill_one_cluster` takes the scoped-match ATTACH path
+/// (find_matching_page_scoped fires, no new page is synthesised) it stamps
+/// `last_distilled_at` only on the source_ids whose `link_page_source` call
+/// succeeded, not on every id in the cluster.
+#[tokio::test]
+async fn scoped_match_attach_stamps_only_attached_ids() {
+    let (db, _dir) = make_db().await;
+    let now = chrono::Utc::now().to_rfc3339();
+
+    // Seed two memories into the memories table so stamp_last_distilled_at has
+    // rows to UPDATE.  Content length and topic are arbitrary — the cluster is
+    // built manually below; we are not going through the clustering code path.
+    seed_memory(
+        &db,
+        "mem_s3",
+        "Tokio async runtime work-stealing scheduler reactor Rust executor tasks futures \
+         epoll kqueue multi-threaded blocking thread pool I/O readiness",
+    )
+    .await;
+    seed_memory(
+        &db,
+        "mem_s4",
+        "Rust async futures zero-cost state machine poll heap allocation await point \
+         tokio spawn runtime scheduler work-stealing thread local queue",
+    )
+    .await;
+
+    // The embed text used by insert_page_with_kind is: title + summary + capped_body.
+    // We construct the centroid by embedding the SAME title+summary text so the
+    // cosine between centroid and page embedding is effectively 1.0, guaranteeing
+    // find_matching_page_scoped fires at the 0.85 threshold regardless of the
+    // unrelated body.
+    let page_title = "Tokio Async Runtime";
+    let page_summary = "Tokio async runtime work-stealing scheduler reactor Rust executor";
+    let page_body = "Tokio is the de-facto async runtime for Rust. It runs futures on a \
+        multi-threaded work-stealing scheduler and uses the OS event queue (epoll / kqueue) \
+        as its I/O reactor. Blocking tasks run on a dedicated thread pool so they never \
+        starve async I/O futures.";
+
+    // Insert a confirmed distilled page — this is the page the scoped matcher
+    // must find.  review_status = "confirmed" is required by find_matching_page_scoped.
+    db.insert_page_with_kind(
+        "page_scoped_seed",
+        page_title,
+        Some(page_summary),
+        page_body,
+        None, // no entity_id
+        None, // no space filter
+        &[],  // no source memories yet
+        &now,
+        "distilled",
+        "confirmed",
+    )
+    .await
+    .expect("insert_page_with_kind must succeed");
+
+    // Build the centroid embedding from title+summary (same as the page embed
+    // prefix) so the cosine is near 1.0.
+    let centroid_text = format!("{page_title} {page_summary}");
+    let centroid = db
+        .generate_embeddings(&[centroid_text.clone()])
+        .expect("generate_embeddings must succeed")
+        .remove(0);
+
+    // PRECONDITION: confirm the scoped matcher finds the seed page at 0.85.
+    // If this assertion fails, tune the centroid text to be more similar to
+    // page_title + page_summary + page_body (the full embed text).
+    {
+        let probe = db
+            .find_matching_page_scoped(None, &centroid, 0.85, None, false)
+            .await
+            .expect("find_matching_page_scoped must not error");
+        assert_eq!(
+            probe.as_ref().map(|p| p.id.as_str()),
+            Some("page_scoped_seed"),
+            "precondition: scoped matcher must find page_scoped_seed at threshold 0.85 \
+             (tune centroid_text if this fails)"
+        );
+    }
+
+    // Build a cluster with non-overlapping source_ids (mem_s3, mem_s4).
+    // find_best_overlapping_page will return None for these (no page cites them),
+    // so distill_one_cluster falls through to find_matching_page_scoped, which
+    // then fires and attaches.
+    let cluster = DistillationCluster {
+        source_ids: vec!["mem_s3".to_string(), "mem_s4".to_string()],
+        contents: vec![
+            "Tokio async runtime work-stealing scheduler reactor Rust executor tasks futures"
+                .to_string(),
+            "Rust async futures zero-cost state machine poll heap allocation await point"
+                .to_string(),
+        ],
+        entity_id: None,
+        entity_name: Some("Tokio".to_string()),
+        space: None,
+        estimated_tokens: 50,
+        centroid_embedding: Some(centroid),
+    };
+
+    // Use the same DistillStubLlm as Task 4 (its body is never invoked on the
+    // scoped-match path because the function returns before synthesis).
+    let stub_body = "Tokio async runtime work-stealing scheduler reactor.";
+    let llm: Arc<dyn LlmProvider> = Arc::new(DistillStubLlm::new(stub_body));
+    let prompts = PromptRegistry::default();
+
+    let result = distill_one_cluster(&db, &llm, &prompts, &cluster, None)
+        .await
+        .expect("distill_one_cluster must not error");
+
+    assert!(
+        result.is_none(),
+        "scoped-match attach must return Ok(None) (no new page created)"
+    );
+
+    // Both source memories must now carry a non-NULL last_distilled_at because
+    // link_page_source succeeded for both (no pre-existing page_sources rows).
+    for sid in ["mem_s3", "mem_s4"] {
+        let ld = last_distilled_at_of(&db, sid).await;
+        assert!(
+            ld.is_some(),
+            "{sid} must carry a non-NULL last_distilled_at after scoped-match attach"
         );
     }
 }

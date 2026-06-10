@@ -265,7 +265,7 @@ pub(crate) async fn refine_clusters_with_llm(
 /// Returns `Ok(true)` if a page was created, `Ok(false)` if the cluster was skipped.
 /// Extracted from `distill_pages` to enable parallel cluster processing via
 /// `DISTILL_CLUSTER_CONCURRENCY`.
-pub(crate) async fn distill_one_cluster(
+pub async fn distill_one_cluster(
     db: &MemoryDB,
     llm: &Arc<dyn LlmProvider>,
     prompts: &PromptRegistry,
@@ -335,19 +335,28 @@ pub(crate) async fn distill_one_cluster(
             )
             .await?
         {
+            let mut attached: Vec<String> = Vec::with_capacity(cluster.source_ids.len());
             for sid in &cluster.source_ids {
-                if let Err(e) = db
+                match db
                     .link_page_source(&matched.id, sid, "distill_attach")
                     .await
                 {
-                    log::warn!(
+                    Ok(()) => attached.push(sid.clone()),
+                    Err(e) => log::warn!(
                         "[distill] attach source {sid} -> {} failed: {e}",
                         matched.id
-                    );
+                    ),
                 }
             }
-            // CROSS-PHASE TODO (P3): stamp last_distilled_at on cluster.source_ids
-            // here so attached memories are demoted, not just consumed. Not in P2.
+            // P3: the scoped-match attach consumes these memories into an existing
+            // page, so demote them too. Stamp ONLY the ids that actually attached —
+            // never-attached memories must keep ranking normally. (Resolves P2 TODO.)
+            if let Err(e) = db
+                .stamp_last_distilled_at(&attached, chrono::Utc::now().timestamp())
+                .await
+            {
+                log::warn!("[distill] stamp last_distilled_at (scoped attach) failed: {e}");
+            }
             log::info!(
                 "[distill] cluster '{}' attached {} sources to existing page '{}' (scoped match), skipping new-page synth",
                 topic, cluster.source_ids.len(), matched.title
