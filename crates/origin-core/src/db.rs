@@ -9423,7 +9423,7 @@ impl MemoryDB {
         let page_channel_enabled = page_channel_enabled();
         let global_prelude_enabled = global_prelude_enabled();
 
-        let memory_results = self
+        let mut memory_results = self
             .search_memory_with_cue(
                 query,
                 fetch_pool,
@@ -9629,6 +9629,31 @@ impl MemoryDB {
         } else {
             fact_results
         };
+
+        // P3 consolidation-demotion: gently down-weight distilled memories' base
+        // cosine score so they rank below their page for the topic query. Applied
+        // to memory_results BEFORE score_map seeding; pages/episodes/facts RRF mass
+        // is added on top unchanged. Keyed by source_id => allowed_memory_ids
+        // (also source_id) is untouched, so the scoped gate + deep recall still
+        // see every memory. Only the RANK moves.
+        {
+            let now_unix = chrono::Utc::now().timestamp();
+            let sids: Vec<String> = memory_results.iter().map(|r| r.source_id.clone()).collect();
+            let stamps = self
+                .fetch_last_distilled_at(&sids)
+                .await
+                .unwrap_or_else(|e| {
+                    log::warn!(
+                        "[memory_db] fetch_last_distilled_at failed: {e}; skipping demotion"
+                    );
+                    Default::default()
+                });
+            for r in memory_results.iter_mut() {
+                if let Some(&ts) = stamps.get(&r.source_id) {
+                    r.score *= Self::compute_distill_demotion(Some(ts), now_unix);
+                }
+            }
+        }
 
         // Two-stage RRF merge — mirrors augment_with_graph (db.rs:7619-7644).
         // Memory r.score SEEDS the merged score_map; page rows contribute only
@@ -22183,6 +22208,74 @@ impl MemoryDB {
             }
         };
         Ok(())
+    }
+
+    /// Gentle, recency-overridable demotion multiplier for a distilled memory's
+    /// ranking score. A just-distilled memory is multiplied by `DEMOTE_FLOOR`
+    /// (0.7 — never zero, so it stays findable in deep recall and inside
+    /// allowed_memory_ids for scoped gating); the penalty recovers LINEARLY back to
+    /// neutral 1.0 over `OVERRIDE_DAYS`, so the raw evidence stays verifiable against
+    /// the page for a few days after distill. None / future-stamp / out-of-window =>
+    /// 1.0 (neutral). This is the maturation score applied to the memory->page
+    /// hand-off; multiplier hooks the cosine+RRF score path, NOT effective_confidence
+    /// (which is eviction-only and unused in ranking).
+    fn compute_distill_demotion(last_distilled_at: Option<i64>, now_unix: i64) -> f32 {
+        const DEMOTE_FLOOR: f32 = 0.7;
+        const OVERRIDE_DAYS: i64 = 5;
+        const WINDOW_SECS: i64 = OVERRIDE_DAYS * 86_400;
+        let ts = match last_distilled_at {
+            Some(t) => t,
+            None => return 1.0,
+        };
+        let age = now_unix - ts;
+        if !(0..WINDOW_SECS).contains(&age) {
+            return 1.0; // future stamp (clock skew) or fully recovered -> neutral
+        }
+        // age=0 -> DEMOTE_FLOOR; age=WINDOW_SECS -> 1.0; linear in between.
+        let recovered = (age as f32) / (WINDOW_SECS as f32); // [0,1)
+        DEMOTE_FLOOR + (1.0 - DEMOTE_FLOOR) * recovered
+    }
+
+    /// Batch-fetch `last_distilled_at` for a set of memory `source_id`s.
+    /// Returns only the rows with a non-NULL stamp (absent => never distilled).
+    /// Single parameterized IN query: SQL string built from placeholder indices
+    /// only — no user input interpolated.
+    ///
+    /// Note: `memories.source_id` is NOT unique (chunked memories share source_id
+    /// across chunk rows). The IN query returns one row per chunk; inserting into
+    /// the HashMap dedups (last wins). All chunk rows carry the same stamp because
+    /// `stamp_last_distilled_at` UPDATEs by source_id, so any row's value is correct.
+    async fn fetch_last_distilled_at(
+        &self,
+        source_ids: &[String],
+    ) -> Result<HashMap<String, i64>, OriginError> {
+        if source_ids.is_empty() {
+            return Ok(HashMap::new());
+        }
+        let conn = self.conn.lock().await;
+        let placeholders: Vec<String> = (1..=source_ids.len()).map(|i| format!("?{i}")).collect();
+        let sql = format!(
+            "SELECT source_id, last_distilled_at FROM memories \
+             WHERE source_id IN ({}) AND last_distilled_at IS NOT NULL",
+            placeholders.join(",")
+        );
+        let params: Vec<libsql::Value> = source_ids
+            .iter()
+            .map(|id| libsql::Value::Text(id.clone()))
+            .collect();
+        let mut rows = conn
+            .query(&sql, libsql::params_from_iter(params))
+            .await
+            .map_err(|e| OriginError::VectorDb(format!("fetch_last_distilled_at: {e}")))?;
+        let mut out: HashMap<String, i64> = HashMap::new();
+        while let Ok(Some(row)) = rows.next().await {
+            let sid: String = row.get(0).unwrap_or_default();
+            let ts: i64 = row.get(1).unwrap_or(0);
+            if !sid.is_empty() {
+                out.insert(sid, ts);
+            }
+        }
+        Ok(out)
     }
 
     /// Read the `last_distilled_at` unix-seconds timestamp for a memory.
@@ -45131,6 +45224,38 @@ pub(crate) mod tests {
         assert_eq!(
             cnt, 1,
             "memories.last_distilled_at column must exist after migration"
+        );
+    }
+
+    /// Task 7 (P3): compute_distill_demotion is gentle, clamped, and recency-overridable.
+    #[test]
+    fn distill_demotion_is_gentle_and_recency_overridable() {
+        const DAY: i64 = 86_400;
+        let now = 2_000_000_000_i64;
+        // Never distilled -> no demotion.
+        assert_eq!(MemoryDB::compute_distill_demotion(None, now), 1.0);
+        // Just distilled -> max (but still gentle) demotion, never zero.
+        let fresh = MemoryDB::compute_distill_demotion(Some(now), now);
+        assert!(
+            (0.7..1.0).contains(&fresh),
+            "fresh demotion must be gentle, got {fresh}"
+        );
+        // After the override window (a few days) the demotion has fully decayed back to 1.0.
+        assert_eq!(
+            MemoryDB::compute_distill_demotion(Some(now - 7 * DAY), now),
+            1.0
+        );
+        // Mid-window: monotonically recovering toward 1.0.
+        let d1 = MemoryDB::compute_distill_demotion(Some(now - DAY), now);
+        let d3 = MemoryDB::compute_distill_demotion(Some(now - 3 * DAY), now);
+        assert!(
+            fresh < d1 && d1 < d3 && d3 <= 1.0,
+            "demotion must recover with age: {fresh} {d1} {d3}"
+        );
+        // Clock skew (future stamp) clamps to neutral, never amplifies.
+        assert_eq!(
+            MemoryDB::compute_distill_demotion(Some(now + DAY), now),
+            1.0
         );
     }
 

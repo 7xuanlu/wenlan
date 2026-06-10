@@ -564,3 +564,143 @@ async fn create_page_persists_workspace() {
         "pages.workspace must be 'work' after create_page with workspace=Some(\"work\")"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Task 7 — consolidation-demotion multiplier: distilled memory ranks below
+// an equal-relevance control for the maturation window.
+// ---------------------------------------------------------------------------
+
+/// Seeds a memory with a specific content body for the demotion test.
+async fn seed_memory_for_demotion(db: &MemoryDB, source_id: &str, content: &str) {
+    let doc = RawDocument {
+        source: "memory".to_string(),
+        source_id: source_id.to_string(),
+        title: source_id.to_string(),
+        summary: None,
+        content: content.to_string(),
+        url: None,
+        last_modified: chrono::Utc::now().timestamp(),
+        memory_type: Some("fact".to_string()),
+        space: Some("technology".to_string()),
+        source_agent: Some("test-agent".to_string()),
+        confidence: None,
+        confirmed: None,
+        supersedes: None,
+        pending_revision: false,
+        ..Default::default()
+    };
+    db.upsert_documents(vec![doc])
+        .await
+        .expect("seed memory for demotion");
+}
+
+/// A just-distilled memory must be demoted in ranking relative to an
+/// equal-relevance undistilled control, and must remain reachable (rank-move
+/// only, not eviction).
+///
+/// Uses `ORIGIN_ENABLE_PAGE_CHANNEL=1` so the cross-rerank path exercises the
+/// full code; `reranker=None` so no CE model is required in CI.
+///
+/// Seeds 4 memories total: the distilled + control pair share the same
+/// query-matching topic; two extra memories on an unrelated topic bulk the
+/// corpus so the vector index has enough neighbours and the content-dedup
+/// logic (bigram Jaccard) never hits a near-empty pool edge case.
+#[tokio::test]
+async fn distilled_memory_demoted_but_reachable() {
+    let _env = PageChannelEnvGuard::set("1");
+
+    let (db, _dir) = make_db().await;
+
+    // Two extra padding memories on an unrelated topic — give the vector
+    // index a realistic corpus so both tokio memories rank in the top results.
+    seed_memory_for_demotion(
+        &db,
+        "mem_pad_1",
+        "Photosynthesis converts light energy into chemical energy stored in glucose. \
+         Chlorophyll absorbs red and blue wavelengths, reflecting green. \
+         ATP and NADPH produced in the light reactions power the Calvin cycle.",
+    )
+    .await;
+    seed_memory_for_demotion(
+        &db,
+        "mem_pad_2",
+        "Continental drift reshapes ocean basins over millions of years. \
+         Subduction zones recycle oceanic crust into the mantle while \
+         mid-ocean ridges create new crust from magma upwelling.",
+    )
+    .await;
+
+    // The distilled/control pair: same Rust-async topic so they draw
+    // comparable cosine scores against the query.
+    let content_a = "Rust async runtime tokio executor drives futures to completion \
+        using a multi-threaded work-stealing scheduler. Each thread runs a local \
+        run-queue and steals tasks from siblings when idle. The reactor polls I/O \
+        readiness via epoll on Linux and kqueue on macOS. Blocking tasks run on a \
+        dedicated thread pool so they never starve the async futures.";
+    let content_b = "Tokio async runtime executor futures Rust work-stealing scheduler \
+        drives tasks to completion. Local run-queues per thread steal work from \
+        siblings when idle. The I/O reactor uses epoll on Linux and kqueue on macOS. \
+        Blocking operations run on a separate thread pool to avoid starving \
+        the async reactor.";
+
+    seed_memory_for_demotion(&db, "mem_distilled", content_a).await;
+    seed_memory_for_demotion(&db, "mem_control", content_b).await;
+
+    // Stamp mem_distilled as just-distilled (age = 0 → DEMOTE_FLOOR = 0.7).
+    let now = chrono::Utc::now().timestamp();
+    db.stamp_last_distilled_at(&["mem_distilled".to_string()], now)
+        .await
+        .expect("stamp_last_distilled_at must succeed");
+
+    // Search without scoping, no CE reranker needed.
+    let results = db
+        .search_memory_cross_rerank(
+            "rust async runtime tokio executor work-stealing scheduler",
+            10,
+            None,
+            None,
+            None,
+            None, // reranker = None (no CE model in CI)
+        )
+        .await
+        .expect("search_memory_cross_rerank must not error");
+
+    // mem_distilled must still be present (demotion is rank-move, not eviction).
+    assert!(
+        results.iter().any(|r| r.source_id == "mem_distilled"),
+        "mem_distilled must remain reachable after demotion (got: {:?})",
+        results
+            .iter()
+            .map(|r| r.source_id.as_str())
+            .collect::<Vec<_>>()
+    );
+
+    // mem_control must also be present.
+    assert!(
+        results.iter().any(|r| r.source_id == "mem_control"),
+        "mem_control must be present in results (got: {:?})",
+        results
+            .iter()
+            .map(|r| r.source_id.as_str())
+            .collect::<Vec<_>>()
+    );
+
+    // Score-based assertion: mem_distilled's score < mem_control's score.
+    // This is robust to positional ties (embedding jitter can swap equal-score rows).
+    let score_distilled = results
+        .iter()
+        .find(|r| r.source_id == "mem_distilled")
+        .map(|r| r.score)
+        .expect("mem_distilled in results");
+    let score_control = results
+        .iter()
+        .find(|r| r.source_id == "mem_control")
+        .map(|r| r.score)
+        .expect("mem_control in results");
+
+    assert!(
+        score_distilled < score_control,
+        "distilled memory (score={score_distilled}) must rank below equal-relevance \
+         control (score={score_control}) during the demotion window"
+    );
+}
