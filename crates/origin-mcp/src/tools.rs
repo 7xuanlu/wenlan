@@ -328,7 +328,7 @@ pub struct CreatePageParams {
     )]
     pub title: String,
     #[schemars(
-        description = "Markdown body — 3-7 paragraphs of wiki prose with [[wikilinks]]. Cite source ids inline as (source: mem_XXX)."
+        description = "Markdown body — 3-7 paragraphs of wiki prose with [[wikilinks]]. Do not cite source ids inline; pass them in source_memory_ids and the daemon attaches provenance automatically."
     )]
     pub content: String,
     #[schemars(description = "Optional one-sentence summary — the durable claim.")]
@@ -1136,6 +1136,7 @@ impl OriginMcpServer {
             entity_id: params.entity_id,
             space: space_arg,
             source_memory_ids: params.source_memory_ids,
+            creation_kind: None,
         };
         let resp: CreatePageResponse = match self.client.post("/api/pages", &req).await {
             Ok(r) => r,
@@ -1943,7 +1944,7 @@ impl OriginMcpServer {
     }
 
     #[tool(
-        description = "Create a distilled wiki page from a memory cluster. The /distill flow uses this to post agent-synthesized pages back to the daemon. Provide a markdown body with [[wikilinks]] and inline (source: mem_XXX) citations. Pass the source memory ids so the page stays traceable. The daemon writes both the DB row and the on-disk .origin/pages/<slug>.md projection atomically.",
+        description = "Create a distilled wiki page from a memory cluster. The /distill flow uses this to post agent-synthesized pages back to the daemon. Provide a markdown body with [[wikilinks]]. Do not cite source ids inline; pass them in source_memory_ids and the daemon attaches provenance automatically. The daemon writes both the DB row and the on-disk .origin/pages/<slug>.md projection atomically.",
         annotations(
             title = "Create page",
             read_only_hint = false,
@@ -4253,6 +4254,7 @@ mod tests {
             entity_id: params.entity_id,
             space: params.space,
             source_memory_ids: params.source_memory_ids,
+            creation_kind: None,
         };
         let json = serde_json::to_value(&req).unwrap();
         assert_eq!(json["title"], "Page");

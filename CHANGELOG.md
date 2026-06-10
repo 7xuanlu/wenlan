@@ -1,5 +1,59 @@
 # Changelog
 
+## [0.8.0](https://github.com/7xuanlu/origin/compare/v0.7.0...v0.8.0) (2026-06-08)
+
+
+### Features
+
+* **eval+server:** foundations P0b — comparable hash + path layout + daemon port discovery ([#190](https://github.com/7xuanlu/origin/issues/190)) ([032ce63](https://github.com/7xuanlu/origin/commit/032ce6316c8bdbcd944a22be3cb0145aa4374534))
+* **eval:** foundations P0a — additive types + LatencySummary wiring ([#178](https://github.com/7xuanlu/origin/issues/178)) ([46a9703](https://github.com/7xuanlu/origin/commit/46a9703ad65a528f866682d145ccfa77b7b19f6e))
+* **eval:** foundations P0c — cost caps + wall-clock watchdog + save guards + cleanup ([#191](https://github.com/7xuanlu/origin/issues/191)) ([ffbda8f](https://github.com/7xuanlu/origin/commit/ffbda8febe196b2d110e8923d9fdd2153d607315))
+* **eval:** foundations P1 — L1 baseline plumbing + citation discipline ([#192](https://github.com/7xuanlu/origin/issues/192)) ([83e23b0](https://github.com/7xuanlu/origin/commit/83e23b05c257e5558e06383ea4cd51c409ce4fec))
+* **retrieval:** Plan A foundation — temporal schema + signals + extraction ([#195](https://github.com/7xuanlu/origin/issues/195)) ([0e70cd3](https://github.com/7xuanlu/origin/commit/0e70cd3d7f36a0593669ff353206926b6b9121d0))
+
+
+### Bug Fixes
+
+* **ci:** poll crates.io sparse index, not v1 web API (was 5min false-fail) ([#184](https://github.com/7xuanlu/origin/issues/184)) ([542129b](https://github.com/7xuanlu/origin/commit/542129b0a18b7afcee210c6ecb93807e08f42929))
+* **ci:** rename Homebrew origin CLI tarball + add release archive smoke test ([#197](https://github.com/7xuanlu/origin/issues/197)) ([63fcd4c](https://github.com/7xuanlu/origin/commit/63fcd4c76ecc51859090af65bb35049713aa5047))
+* **eval:** assert page-faithfulness negative-controls are flagged ([#239](https://github.com/7xuanlu/origin/issues/239)) ([2b3601a](https://github.com/7xuanlu/origin/commit/2b3601a5f6791a664466accaf3365fa515d2563d))
+* **ingest:** opt-in deterministic write-time temporal grounding (ORIGIN_ENABLE_TEMPORAL_GROUNDING) ([#225](https://github.com/7xuanlu/origin/issues/225)) ([0ea8107](https://github.com/7xuanlu/origin/commit/0ea8107f00aacc4993e84a84d501892978d907e5))
+* **kg:** deterministic entity-resolution cascade - MinHash/LSH near-dedup (ORIGIN_ENABLE_ENTITY_MINHASH) ([#226](https://github.com/7xuanlu/origin/issues/226)) ([aa35a58](https://github.com/7xuanlu/origin/commit/aa35a58b19a50b07347ca51709cf028b3ec9744e))
+* **memory:** two-pool dedup+contradiction resolution in one LLM call (ORIGIN_ENABLE_DUAL_POOL_RESOLVE) ([#228](https://github.com/7xuanlu/origin/issues/228)) ([b93f09b](https://github.com/7xuanlu/origin/commit/b93f09b90014c33634d29c5c35ac59685f8cb86f))
+* **pages:** opt-in shrink-guard for LLM page rewrites (ORIGIN_MERGE_SHRINK_GUARD) ([#227](https://github.com/7xuanlu/origin/issues/227)) ([734ac52](https://github.com/7xuanlu/origin/commit/734ac52421d38d3c9dad1700b3e63114239220db))
+* **plugin:** MCP runner prefers ~/.origin/bin/origin-mcp over npx ([#199](https://github.com/7xuanlu/origin/issues/199)) ([3f1be92](https://github.com/7xuanlu/origin/commit/3f1be9264f9c2c4edbd8cf56c633c0bc2d9b5f48))
+* **provenance:** navigable source provenance in Obsidian projection (P1) ([#246](https://github.com/7xuanlu/origin/issues/246)) ([f93003c](https://github.com/7xuanlu/origin/commit/f93003c7b572af81114b7f82948f2aa116e9771d))
+* **refinery:** opt-in archive-not-delete soft eviction (ORIGIN_ENABLE_EVICTION) ([#233](https://github.com/7xuanlu/origin/issues/233)) ([c1759de](https://github.com/7xuanlu/origin/commit/c1759dee078b5ebf0e590d08da92165cc5b3eea0))
+* **rerank:** cross-encoder reranker via fastembed (P0 [#1](https://github.com/7xuanlu/origin/issues/1) retrieval lift) ([#187](https://github.com/7xuanlu/origin/issues/187)) ([c5a88b3](https://github.com/7xuanlu/origin/commit/c5a88b314ec32a14c77be642947cdb221b046004))
+* **retrieval:** CoT iterative retrieve-reason-retrieve loop (opt-in ORIGIN_ENABLE_COT_RETRIEVAL) ([#235](https://github.com/7xuanlu/origin/issues/235)) ([a3bf3c6](https://github.com/7xuanlu/origin/commit/a3bf3c6785621919690ed1a5974377fedcdb6b76))
+* **retrieval:** dual-granularity episode-channel (ORIGIN_ENABLE_EPISODE_CHANNEL) ([#224](https://github.com/7xuanlu/origin/issues/224)) ([395d1ae](https://github.com/7xuanlu/origin/commit/395d1ae58d78222d76efedc322350eb56301e3a6))
+* **retrieval:** eval-neutral retrieval cleanup ([#30](https://github.com/7xuanlu/origin/issues/30) [#42](https://github.com/7xuanlu/origin/issues/42) [#48](https://github.com/7xuanlu/origin/issues/48)) ([#208](https://github.com/7xuanlu/origin/issues/208)) ([131421d](https://github.com/7xuanlu/origin/commit/131421df2024308e8395357d15e73557a30535c2))
+* **retrieval:** LLM read-time strategy router (opt-in ORIGIN_LLM_ROUTE) ([#236](https://github.com/7xuanlu/origin/issues/236)) ([39c6e4d](https://github.com/7xuanlu/origin/commit/39c6e4d3f235e11728fe232b0bd29ad6b77c66b8))
+* **retrieval:** multi-vector per-fact child indexing (ORIGIN_ENABLE_FACT_CHANNEL) ([#229](https://github.com/7xuanlu/origin/issues/229)) ([0b66d0c](https://github.com/7xuanlu/origin/commit/0b66d0c113f5939282864887e75c17ec9b2a7cd3))
+* **retrieval:** opt-in FTS recall hardening (ORIGIN_ENABLE_FTS_HARDENING) ([#216](https://github.com/7xuanlu/origin/issues/216)) ([b76ea19](https://github.com/7xuanlu/origin/commit/b76ea19624c937802391813c56527d8925dda274))
+* **retrieval:** opt-in graph-activation gate (ORIGIN_ENABLE_GRAPH_GATE) ([#213](https://github.com/7xuanlu/origin/issues/213)) ([fc8679a](https://github.com/7xuanlu/origin/commit/fc8679a07fe554a2781e4fdd4b20a410ca1a2b91))
+* **retrieval:** opt-in hierarchical global-context prelude (ORIGIN_ENABLE_GLOBAL_PRELUDE) ([#232](https://github.com/7xuanlu/origin/issues/232)) ([1209879](https://github.com/7xuanlu/origin/commit/120987974c66bbd0c98152ffa4e039d2b4e59aaa))
+* **retrieval:** opt-in k-hop entity graph traversal (ORIGIN_ENABLE_GRAPH_KHOP) ([#231](https://github.com/7xuanlu/origin/issues/231)) ([da5a966](https://github.com/7xuanlu/origin/commit/da5a966ccb900e55fd31779903f3b8746e6bdc27))
+* **retrieval:** opt-in magnitude-preserving FTS score fusion (ORIGIN_MAGNITUDE_FUSION) ([#218](https://github.com/7xuanlu/origin/issues/218)) ([e60042d](https://github.com/7xuanlu/origin/commit/e60042dae953e2f9fade7058cbfffdfd1993cf7c))
+* **retrieval:** opt-in per-session result diversification cap (ORIGIN_ENABLE_SESSION_DIVERSITY) ([#222](https://github.com/7xuanlu/origin/issues/222)) ([3e5cf5a](https://github.com/7xuanlu/origin/commit/3e5cf5aaa733598d713d8e7f660ae81f9cd179f3))
+* **retrieval:** opt-in pseudo-relevance feedback retrieval (ORIGIN_PRF_ROUNDS) ([#230](https://github.com/7xuanlu/origin/issues/230)) ([b31a732](https://github.com/7xuanlu/origin/commit/b31a7325c861e21b37e5f9611e4ad16cecd8bff7))
+* **retrieval:** opt-in query-adaptive RRF channel reweighting (ORIGIN_ENABLE_QUERY_INTENT) ([#221](https://github.com/7xuanlu/origin/issues/221)) ([d6c883e](https://github.com/7xuanlu/origin/commit/d6c883ed9c4e52f9ab7fb3c913cfdc97c1ab64f3))
+* **retrieval:** opt-in wide-pool-seeded graph expansion (ORIGIN_ENABLE_GRAPH_SEED) ([#220](https://github.com/7xuanlu/origin/issues/220)) ([fbf42c4](https://github.com/7xuanlu/origin/commit/fbf42c445197b66c8e6963738e984c8c17cae1a4))
+* **retrieval:** page-channel as 4th RRF stream in search_memory_with_reranker ([#203](https://github.com/7xuanlu/origin/issues/203)) ([7d16b41](https://github.com/7xuanlu/origin/commit/7d16b410672a1175c4d2e8d02a65a9e7d77209d3))
+* **retrieval:** per-memory salience prior in ranking (ORIGIN_ENABLE_SALIENCE_PRIOR) ([#223](https://github.com/7xuanlu/origin/issues/223)) ([9cdabfe](https://github.com/7xuanlu/origin/commit/9cdabfeaf6d35969d02a40d6ce102eec1308b50f))
+* **retrieval:** query decomposition into independent subqueries (search_memory_decomposed) ([#214](https://github.com/7xuanlu/origin/issues/214)) ([25e573a](https://github.com/7xuanlu/origin/commit/25e573ae051f4084fa812b3318fca098446b0063))
+* **retrieval:** read-time context compression - opt-in ORIGIN_ENABLE_CONTEXT_COMPRESS ([#237](https://github.com/7xuanlu/origin/issues/237)) ([d2bc318](https://github.com/7xuanlu/origin/commit/d2bc318d346b950fe885b4048753548d7be6f58b))
+* **retrieval:** retrieval/ namespace + cherry-pick hard_filters from [#200](https://github.com/7xuanlu/origin/issues/200) + ORDER BY confidence ([#202](https://github.com/7xuanlu/origin/issues/202)) ([95d3644](https://github.com/7xuanlu/origin/commit/95d36448858e9d0e4b7ee40c0c51f1c7c46163dc))
+* **retrieval:** soft temporal proximity boost - opt-in ORIGIN_ENABLE_TEMPORAL_SOFT_BOOST ([#240](https://github.com/7xuanlu/origin/issues/240)) ([2b04a34](https://github.com/7xuanlu/origin/commit/2b04a346298783ccd51a126092c0268c0d38664f))
+* **retrieval:** wire query-side temporal filter (ORIGIN_ENABLE_TEMPORAL_FILTER) ([#219](https://github.com/7xuanlu/origin/issues/219)) ([068d166](https://github.com/7xuanlu/origin/commit/068d166233c129ae45ae469963934d2d29013553))
+* **seo:** crates.io metadata + drop stale darwin-x64 test assertion ([#177](https://github.com/7xuanlu/origin/issues/177)) ([7def4a0](https://github.com/7xuanlu/origin/commit/7def4a082f3804ef26c2ef97b310668983869786))
+* **server:** opt-in debounced background reflection (ORIGIN_ENABLE_REFLECTION_DEBOUNCE) ([#234](https://github.com/7xuanlu/origin/issues/234)) ([f1b4539](https://github.com/7xuanlu/origin/commit/f1b4539528b468c937b82e17191143632a4db773))
+
+
+### Performance Improvements
+
+* **ci:** native ARM Docker build (drop 90min QEMU emulation) ([#185](https://github.com/7xuanlu/origin/issues/185)) ([eefa266](https://github.com/7xuanlu/origin/commit/eefa2668781a045c62b518f059fdf113911a6533))
+
 ## [0.7.0](https://github.com/7xuanlu/origin/compare/v0.6.1...v0.7.0) (2026-05-24)
 
 

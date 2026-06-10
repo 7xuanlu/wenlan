@@ -57,6 +57,27 @@ impl KnowledgeWriter {
         let content = render_markdown(page);
         std::fs::write(&file_path, &content)?;
 
+        // Project read-only source stubs so [[mem_*]] resolves in Obsidian.
+        if let Err(e) = crate::export::provenance::project_stubs_for_page(
+            &self.path,
+            &page.id,
+            &page.source_memory_ids,
+        ) {
+            log::warn!("[knowledge] stub projection failed for {}: {e}", page.id);
+        }
+
+        // Manifest is a cosmetic projection index, updated load-modify-save
+        // without a lock. HTTP page-write handlers can run concurrently with
+        // scheduler distillation, so a lost update is possible — but the blast
+        // radius is one stub and it self-heals: a spuriously-GC'd stub for a
+        // live page is regenerated on that page's next write_page (project runs
+        // before this update), and a leaked orphan is reaped on the next GC. A
+        // real lock is a P2 concern, unjustified for a regenerable nav aid.
+        let mut manifest = crate::export::provenance::StubManifest::load(&self.path);
+        manifest.record(&page.id, &page.source_memory_ids);
+        let _ = manifest.save(&self.path);
+        let _ = crate::export::provenance::gc_orphan_stubs(&self.path, &manifest);
+
         state.pages.insert(
             page.id.clone(),
             PageFileState {
@@ -128,6 +149,11 @@ impl KnowledgeWriter {
                 std::fs::remove_file(&file_path)?;
             }
             self.save_state(&state)?;
+
+            let mut manifest = crate::export::provenance::StubManifest::load(&self.path);
+            manifest.forget_page(page_id);
+            let _ = manifest.save(&self.path);
+            let _ = crate::export::provenance::gc_orphan_stubs(&self.path, &manifest);
         }
 
         Ok(())
@@ -178,12 +204,23 @@ impl KnowledgeWriter {
     }
 }
 
+/// Public projection of a page's markdown (frontmatter + body + the delimiter
+/// Sources block), so callers outside this module (the watcher's
+/// protected-block re-projection check) can compute the canonical projection
+/// without duplicating it.
+pub fn render_markdown_for(page: &Page) -> String {
+    render_markdown(page)
+}
+
 fn render_markdown(page: &Page) -> String {
+    use crate::export::provenance::{
+        related_frontmatter, render_sources_block, sources_frontmatter, yaml_quoted,
+    };
     let mut out = String::new();
 
     // Frontmatter
     out.push_str("---\n");
-    out.push_str(&format!("title: \"{}\"\n", page.title));
+    out.push_str(&format!("title: {}\n", yaml_quoted(&page.title)));
     if let Some(ref space) = page.space {
         out.push_str(&format!("space: {}\n", space));
     }
@@ -193,13 +230,37 @@ fn render_markdown(page: &Page) -> String {
     let modified_date: String = page.last_modified.chars().take(10).collect();
     out.push_str(&format!("created: {}\n", created_date));
     out.push_str(&format!("modified: {}\n", modified_date));
+    // Read-only provenance projection (one-way; the watcher never reads it back).
+    out.push_str(&sources_frontmatter(&page.source_memory_ids));
+    let related = related_page_titles(&page.content);
+    out.push_str(&related_frontmatter(&related));
     out.push_str("---\n\n");
 
     // Body with wikilinks
     out.push_str(&convert_links_to_wikilinks(&page.content));
-    out.push('\n');
+
+    // Export-only delimiter-wrapped Sources block, generated from DB truth.
+    let block = render_sources_block(&page.source_memory_ids);
+    if !block.is_empty() {
+        out.push_str("\n\n");
+        out.push_str(&block);
+    } else {
+        out.push('\n');
+    }
 
     out
+}
+
+/// Page-to-page wikilink targets in the body, for the read-only `related:`
+/// frontmatter. `mem_*` targets are excluded — those are provenance, not
+/// topic links.
+fn related_page_titles(content: &str) -> Vec<String> {
+    let wikified = convert_links_to_wikilinks(content);
+    crate::sources::obsidian::extract_wikilinks(&wikified)
+        .into_iter()
+        .map(|w| w.target)
+        .filter(|t| !t.starts_with("mem_"))
+        .collect()
 }
 
 #[cfg(test)]
@@ -229,6 +290,8 @@ mod tests {
             last_edited_at: None,
             last_delta_summary: None,
             changelog: None,
+            creation_kind: "distilled".to_string(),
+            review_status: "confirmed".to_string(),
         }
     }
 
@@ -383,5 +446,65 @@ mod tests {
         let path = writer.write_page(&page).unwrap();
         let content = std::fs::read_to_string(&path).unwrap();
         assert!(!content.contains("space:"));
+    }
+
+    #[test]
+    fn render_markdown_emits_sources_frontmatter_and_delimiter_block() {
+        let mut page = test_concept();
+        page.source_memory_ids = vec!["mem_1".to_string(), "mem_2".to_string()];
+        let md = render_markdown(&page);
+        // Read-only frontmatter property.
+        assert!(md.contains("sources: [\"[[mem_1]]\", \"[[mem_2]]\"]"));
+        // Delimiter-wrapped Sources block in the body.
+        assert!(md.contains(crate::export::provenance::SOURCES_BLOCK_START));
+        assert!(md.contains(crate::export::provenance::SOURCES_BLOCK_END));
+        assert!(md.contains("## Sources"));
+        // The projected body, run back through the canonicalizer, drops the
+        // generated block — the round-trip invariant the watcher relies on.
+        let (_, body) = crate::sources::obsidian::extract_frontmatter(&md);
+        let canon = crate::export::provenance::canonicalize_page_body(body);
+        assert!(!canon.contains(crate::export::provenance::SOURCES_BLOCK_START));
+        assert!(!canon.contains("## Sources"));
+        // Substring of test_concept()'s actual body text.
+        assert!(canon.contains("Rust uses ownership"));
+    }
+
+    #[test]
+    fn stubs_resolve_then_gc_when_page_removed() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let writer = KnowledgeWriter::new(dir.path().to_path_buf());
+        let mut page = test_concept();
+        page.source_memory_ids = vec!["mem_x".to_string()];
+        writer.write_page(&page).unwrap();
+        let stub = dir.path().join("_sources").join("mem_x.md");
+        assert!(stub.exists(), "stub projected on write");
+
+        writer.remove_page(&page.id).unwrap();
+        assert!(!stub.exists(), "orphan stub GC'd on page removal");
+    }
+
+    #[test]
+    fn render_markdown_source_less_page_has_no_sources_artifacts() {
+        let mut page = test_concept();
+        page.source_memory_ids = vec![];
+        let md = render_markdown(&page);
+        assert!(!md.contains("sources:"));
+        assert!(!md.contains(crate::export::provenance::SOURCES_BLOCK_START));
+    }
+
+    #[test]
+    fn render_markdown_escapes_title_so_frontmatter_survives_quotes() {
+        let mut page = test_concept();
+        page.title = "The \"Real\" Architecture".to_string();
+        let md = render_markdown(&page);
+        let (fm, _body) = crate::sources::obsidian::extract_frontmatter(&md);
+        // Frontmatter must NOT have collapsed to empty: origin_id still parses.
+        assert_eq!(
+            fm.get_str("origin_id"),
+            Some(page.id.as_str()),
+            "quote-bearing title collapsed the frontmatter map"
+        );
+        // And the title round-trips intact.
+        assert_eq!(fm.get_str("title"), Some("The \"Real\" Architecture"));
     }
 }

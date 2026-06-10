@@ -316,6 +316,46 @@ pub(crate) async fn distill_one_cluster(
         }
     }
 
+    // Source-id overlap found no duplicate. Try the scoped embedding/entity
+    // matcher so a source-less seed (zero source_ids) or a topic-equivalent
+    // page is still recognized. On a match we ATTACH this cluster's sources to
+    // that page's evidence (content untouched) and skip synth — preventing both
+    // a duplicate page and the infinite re-cluster loop (un-attached memories
+    // would re-cluster, match again, skip again, forever). link_page_source
+    // dual-writes page_evidence (Task 3), so the memories are marked consumed
+    // in BOTH the legacy and typed provenance tables.
+    if let Some(centroid) = cluster.centroid_embedding.as_deref() {
+        if let Some(matched) = db
+            .find_matching_page_scoped(
+                cluster.entity_id.as_deref(),
+                centroid,
+                0.85,
+                cluster.space.as_deref(),
+                false, // never rewrite/attach onto hand-edited prose
+            )
+            .await?
+        {
+            for sid in &cluster.source_ids {
+                if let Err(e) = db
+                    .link_page_source(&matched.id, sid, "distill_attach")
+                    .await
+                {
+                    log::warn!(
+                        "[distill] attach source {sid} -> {} failed: {e}",
+                        matched.id
+                    );
+                }
+            }
+            // CROSS-PHASE TODO (P3): stamp last_distilled_at on cluster.source_ids
+            // here so attached memories are demoted, not just consumed. Not in P2.
+            log::info!(
+                "[distill] cluster '{}' attached {} sources to existing page '{}' (scoped match), skipping new-page synth",
+                topic, cluster.source_ids.len(), matched.title
+            );
+            return Ok(None);
+        }
+    }
+
     // Clean input: strip recap headers, domain prefixes, and structured field noise
     let cleaned_contents: Vec<String> = cluster
         .contents
@@ -1311,6 +1351,120 @@ mod tests {
         assert!(
             content.contains("recompiled body"),
             "md body should reflect LLM output"
+        );
+    }
+
+    #[tokio::test]
+    async fn overlapping_cluster_attaches_to_source_less_seed_no_duplicate() {
+        let (db, _dir) = crate::db::tests::test_db().await;
+        let now = chrono::Utc::now().to_rfc3339();
+        // 1. Source-less CONFIRMED authored seed on topic "Tokio", in space "work".
+        //    insert_page_with_kind embeds title+summary; make summary ~= the cluster
+        //    centroid text so cosine >= 0.85. Long body just to be realistic.
+        db.insert_page_with_kind(
+            "seed_tokio",
+            "Tokio async runtime",
+            Some("Tokio asynchronous runtime Rust tasks scheduler reactor"),
+            "Tokio is an asynchronous runtime for the Rust programming language providing a work-stealing scheduler and a reactor backed by the OS event queue.",
+            None,
+            Some("work"),
+            &[],
+            &now,
+            "authored",
+            "confirmed",
+        ).await.unwrap();
+
+        // 2. A cluster on the same topic with its own memory + a centroid embedding
+        //    built from near-identical text (so it clears the 0.85 threshold) and
+        //    content > 200 chars (so WITHOUT the attach, synth would fire + duplicate).
+        let centroid = db
+            .generate_embeddings(&[
+                "Tokio asynchronous runtime Rust tasks scheduler reactor".to_string()
+            ])
+            .unwrap()
+            .remove(0);
+        let long_content = "Tokio is an asynchronous runtime for the Rust programming language. \
+            It provides a multi-threaded work-stealing scheduler, an async TCP and UDP socket API, \
+            and a reactor backed by the operating system event queue for scalable network services.".to_string();
+        let cluster = crate::db::DistillationCluster {
+            source_ids: vec!["mem_x".into()],
+            contents: vec![long_content],
+            entity_id: None,
+            entity_name: Some("Tokio".into()),
+            space: Some("work".into()),
+            estimated_tokens: 80,
+            centroid_embedding: Some(centroid),
+        };
+
+        // SANITY: the scoped matcher must actually find the seed (else the test
+        // proves nothing — the attach never fires). If THIS fails, the seed
+        // summary / centroid text aren't similar enough; make them more identical.
+        {
+            let probe = db
+                .find_matching_page_scoped(
+                    None,
+                    cluster.centroid_embedding.as_deref().unwrap(),
+                    0.85,
+                    Some("work"),
+                    false,
+                )
+                .await
+                .unwrap();
+            assert_eq!(probe.as_ref().map(|p| p.id.as_str()), Some("seed_tokio"),
+                "precondition: scoped matcher must find the seed at 0.85 (tune seed summary vs centroid text if this fails)");
+        }
+
+        let pages_before = {
+            let conn = db.conn.lock().await;
+            let mut r = conn
+                .query("SELECT COUNT(*) FROM pages WHERE status='active'", ())
+                .await
+                .unwrap();
+            let row = r.next().await.unwrap().unwrap();
+            row.get::<i64>(0).unwrap()
+        };
+
+        // Faithful, Tokio-topical, guard-passing synth output: nearly a verbatim
+        // subset of long_content (>0.6 cosine → clears the hallucination guard)
+        // and starts with "- " (summary extraction works). WITHOUT the attach,
+        // this would emit a REAL duplicate page — making the no-duplicate
+        // assertions load-bearing, not masked by the guard rejecting junk text.
+        let llm: Arc<dyn LlmProvider> = Arc::new(MockProvider::new(
+            "- Tokio is an asynchronous runtime for the Rust programming language.\n\
+             - It provides a multi-threaded work-stealing scheduler, an async TCP and UDP \
+             socket API, and a reactor backed by the operating system event queue.",
+        ));
+        let prompts = PromptRegistry::default();
+        let r = distill_one_cluster(&db, &llm, &prompts, &cluster, None)
+            .await
+            .unwrap();
+        assert!(
+            r.is_none(),
+            "overlapping cluster must NOT emit a new page (attach, don't synth)"
+        );
+
+        let pages_after = {
+            let conn = db.conn.lock().await;
+            let mut r = conn
+                .query("SELECT COUNT(*) FROM pages WHERE status='active'", ())
+                .await
+                .unwrap();
+            let row = r.next().await.unwrap().unwrap();
+            row.get::<i64>(0).unwrap()
+        };
+        assert_eq!(pages_before, pages_after, "no duplicate page created");
+
+        // mem_x must now be evidence on the seed (consumed → not re-clustered).
+        let ev: Vec<String> = db
+            .get_page_evidence("seed_tokio")
+            .await
+            .unwrap()
+            .into_iter()
+            .filter_map(|e| e.locator)
+            .collect();
+        assert!(
+            ev.contains(&"mem_x".to_string()),
+            "cluster source attached to seed evidence"
         );
     }
 
