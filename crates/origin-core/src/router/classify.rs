@@ -44,6 +44,61 @@ pub(crate) const RELATIONAL_KEYWORDS: &[&str] = &[
     "connected to",
 ];
 
+/// Request-form phrases that signal a preference/recommendation-seeking query
+/// ("can you recommend...", "any tips for..."). Multi-word where a single word
+/// would over-trigger, mirroring `TEMPORAL_KEYWORDS`' design.
+pub(crate) const PREFERENCE_REQUEST_KEYWORDS: &[&str] = &[
+    "recommend",
+    "suggest",
+    "any tips",
+    "any advice",
+    "any ideas",
+    "what should i",
+    "do you have any",
+    "do you think",
+    "could there be",
+];
+
+/// Past-recall markers that veto the preference classification: "what did you
+/// recommend last time" is recall-of-assistant intent, not a preference ask,
+/// despite sharing the surface keywords.
+pub(crate) const PREFERENCE_PAST_RECALL_EXCLUSIONS: &[&str] = &[
+    "you recommended",
+    "you suggested",
+    "remind me",
+    "last time",
+    "previous conversation",
+    "previous chat",
+    "you mentioned",
+    "you told me",
+];
+
+/// True when the query is a preference/recommendation-seeking request.
+///
+/// Used by the CE-rerank skip-preference gate (`ORIGIN_RERANK_SKIP_PREFERENCE`):
+/// when the flag is on, preference-intent queries keep the base RRF ranking
+/// instead of the cross-encoder rescoring. The gate was built against an older
+/// measurement ("CE hurts single-session-preference −0.155 NDCG@10") that did
+/// NOT reproduce on either current seeded substrate — paired A/Bs at n=479
+/// measured CE *helping* SSP (+0.027, twice) and the bypass net-negative
+/// (−0.0117 agg, BH-sig). The flag therefore ships as a tested, default-OFF
+/// escape hatch, not a recommended setting.
+///
+/// Keyword lists were validated against the full LME-S fixture (500 questions):
+/// 30/30 single-session-preference detected, 0 false positives across the other
+/// 470 (the past-recall exclusions filter out the 14 single-session-assistant
+/// "what did you recommend" forms). Tuned on that fixture — generalization
+/// beyond it is heuristic, same trust level as the temporal/relational lists.
+pub fn is_preference_query(query: &str) -> bool {
+    let lower = query.to_lowercase();
+    PREFERENCE_REQUEST_KEYWORDS
+        .iter()
+        .any(|kw| lower.contains(kw))
+        && !PREFERENCE_PAST_RECALL_EXCLUSIONS
+            .iter()
+            .any(|kw| lower.contains(kw))
+}
+
 /// Classify a query to determine the optimal retrieval strategy.
 ///
 /// # Parameters
@@ -204,6 +259,65 @@ mod tests {
             tier_allowed("unknown", 3),
             "unknown trust should access tier 3"
         );
+    }
+
+    #[test]
+    fn preference_request_queries_detected() {
+        // Real LME-S single-session-preference forms: present-tense
+        // recommendation/suggestion requests. These are the queries the CE
+        // reranker measurably hurts (−0.155 NDCG@10 on that category).
+        let cases = [
+            "Can you recommend some resources where I can learn more about video editing?",
+            "Can you suggest a hotel for my upcoming trip to Miami?",
+            "My kitchen's becoming a bit of a mess again. Any tips for keeping it clean?",
+            "I've been struggling with my slow cooker recipes. Any advice on getting better results?",
+            "I've been feeling a bit stuck with my paintings lately. Do you have any ideas on how I can find new inspiration?",
+            "What should I serve for dinner this weekend with my homegrown ingredients?",
+            "I've been feeling nostalgic lately. Do you think it would be a good idea to attend my high school reunion?",
+            "I noticed my bike seems to be performing even better during my Sunday group rides. Could there be a reason for this?",
+        ];
+        for q in &cases {
+            assert!(
+                is_preference_query(q),
+                "expected preference-intent for: {q}"
+            );
+        }
+    }
+
+    #[test]
+    fn past_recall_queries_not_preference() {
+        // LME-S single-session-assistant forms: past-tense recall of what the
+        // assistant previously recommended. Same surface keywords
+        // ("recommend"/"suggest") but recall-of-assistant intent — these
+        // benefit from the CE reranker and must NOT be bypassed.
+        let cases = [
+            "Can you remind me of the name of the romantic Italian restaurant in Rome you recommended for dinner?",
+            "What was the name of that hostel near the Red Light District that you recommended last time?",
+            "In our previous chat, you suggested 'sexual compulsions' and a few other options for alternative terms. Can you remind me what the other four options were?",
+            "I remember you told me to dilute tea tree oil with a carrier oil. Can you remind me what the recommended ratio is?",
+        ];
+        for q in &cases {
+            assert!(
+                !is_preference_query(q),
+                "expected NOT preference-intent for: {q}"
+            );
+        }
+    }
+
+    #[test]
+    fn factual_queries_not_preference() {
+        let cases = [
+            "When did we update the API?",
+            "What is the relationship between Alice and Bob?",
+            "How many miles did I run last month?",
+            "What is the current database schema?",
+        ];
+        for q in &cases {
+            assert!(
+                !is_preference_query(q),
+                "expected NOT preference-intent for: {q}"
+            );
+        }
     }
 
     #[test]

@@ -2913,12 +2913,23 @@ async fn paired_ab_emit() {
     // cross-rerank collectors so a flag flip produces a real delta. Build the
     // reranker ONCE and only when a CE feature is selected (the BGE-reranker-v2-m3
     // weights are ~600MB on first download), so base-only smoke runs stay light.
-    let ce: [(&str, &str); 5] = [
+    let ce: [(&str, &str); 7] = [
         ("page_channel", "ORIGIN_ENABLE_PAGE_CHANNEL"),
         ("episode_channel", "ORIGIN_ENABLE_EPISODE_CHANNEL"),
         ("fact_channel", "ORIGIN_ENABLE_FACT_CHANNEL"),
         ("global_prelude", "ORIGIN_ENABLE_GLOBAL_PRELUDE"),
         ("session_diversity", "ORIGIN_ENABLE_SESSION_DIVERSITY"),
+        // Skip-preference bypass: ON arm routes preference-intent queries past
+        // the CE back to the base ranking (the −0.155 SSP fix). Non-preference
+        // rows are byte-identical between arms (detector has 0 false positives
+        // on the LME-S fixture), so the delta isolates the bypassed category.
+        ("rerank_skip_pref", "ORIGIN_RERANK_SKIP_PREFERENCE"),
+        // Stacked arm: graph memory stream toggled WITH the CE active on both
+        // arms — measures whether graph_stream's gain composes with the
+        // reranker (base-path graph_stream A/B can't answer that). Tagged
+        // distinctly from base-path "graph_stream" so the analyzer separates
+        // them; the 'graph' substring keeps the substrate-liveness gate armed.
+        ("rerank_graph_stack", "ORIGIN_GRAPH_MEMORY_STREAM"),
     ];
     if ce.iter().any(|(f, _)| paired_feature_selected(f)) {
         let reranker = origin_core::reranker::init_cross_encoder_reranker(None)
