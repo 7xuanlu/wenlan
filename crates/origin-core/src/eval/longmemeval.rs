@@ -1794,6 +1794,156 @@ pub async fn run_longmemeval_decompose_recall_probe_from_db(
     Ok(rows)
 }
 
+/// CE-rank a candidate pool against `query` and return source_ids in CE-score
+/// order (descending, stable id tiebreak). Fail-loud on reranker errors — this
+/// is probe code, not the production degrade path.
+async fn ce_rank_ids(
+    reranker: std::sync::Arc<dyn crate::reranker::Reranker>,
+    query: &str,
+    pool: Vec<(String, String)>,
+) -> Result<Vec<String>, OriginError> {
+    if pool.len() <= 1 {
+        return Ok(pool.into_iter().map(|(id, _)| id).collect());
+    }
+    let q = query.to_string();
+    let mut scored = tokio::task::spawn_blocking(move || reranker.rerank(&q, &pool))
+        .await
+        .map_err(|e| OriginError::Generic(format!("rerank join: {e}")))??;
+    scored.sort_by(|a, b| {
+        b.1.partial_cmp(&a.1)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| a.0.cmp(&b.0))
+    });
+    Ok(scored.into_iter().map(|(id, _)| id).collect())
+}
+
+/// Step 2 of the decompose probe ladder: CE conversion at MATCHED budget.
+///
+/// Both arms feed the cross-encoder exactly 30 candidates (the measured knee,
+/// PR #244) and score the CE's top-10 — so any delta is pool COMPOSITION
+/// (anchor diversity), never pool size:
+/// - OFF arm: base `search_memory(question, 30)` pool (current CE-path shape
+///   under `RERANK_POOL_FLOOR=30`)
+/// - ON arm: equal-weight RRF merge of original+subquery streams (30 each,
+///   per-stream dedup by source_id), truncated to 30 — the
+///   `search_memory_decomposed` merge feeding the CE instead of bypassing it
+///
+/// Atomic questions (no subqueries in the fixture) have byte-identical pools;
+/// the CE is deterministic, so the OFF metrics are emitted for both arms
+/// without a second CE pass (mirrors a production gate where decompose no-ops
+/// on atomic queries). `latency_ms` covers the CE call only — per-stream
+/// searches are shared across arms and excluded.
+///
+/// Emits both arms as [`crate::eval::paired::PerQueryRow`]s
+/// (feature `decompose_ce`) so `analyze_paired.py` reads the output directly.
+pub async fn run_longmemeval_decompose_ce_probe_from_db(
+    db: &MemoryDB,
+    path: &Path,
+    subq_path: &Path,
+    reranker: std::sync::Arc<dyn crate::reranker::Reranker>,
+) -> Result<Vec<crate::eval::paired::PerQueryRow>, OriginError> {
+    use crate::eval::paired::PerQueryRow;
+    use std::time::Instant;
+    const K: usize = 30;
+
+    let subq_map = load_subquery_fixture(subq_path)?;
+    let mut samples = load_longmemeval(path)?;
+    apply_lme_limit(&mut samples);
+    let mut rows: Vec<PerQueryRow> = Vec::new();
+
+    for sample in &samples {
+        let memories = extract_memories(sample);
+        let relevant_source_ids: HashSet<String> = memories
+            .iter()
+            .filter(|m| m.has_answer)
+            .map(|m| memory_source_id(&m.question_id, m.session_idx, m.turn_idx))
+            .collect();
+        if relevant_source_ids.is_empty() {
+            continue;
+        }
+        let relevant_set: HashSet<&str> = relevant_source_ids.iter().map(|s| s.as_str()).collect();
+
+        let subqueries = subq_map
+            .get(&sample.question_id)
+            .cloned()
+            .unwrap_or_default();
+
+        // Per-stream searches: ordered unique source_ids + first-seen content
+        // (the CE candidate text, trimmed to 512 chars like the production path).
+        let mut streams: Vec<Vec<String>> = Vec::with_capacity(1 + subqueries.len());
+        let mut content_by_id: HashMap<String, String> = HashMap::new();
+        for q in std::iter::once(&sample.question).chain(subqueries.iter()) {
+            let results = db
+                .search_memory(q, K, None, None, None, None, None, None)
+                .await?;
+            let mut ids = Vec::with_capacity(results.len());
+            let mut seen: HashSet<&str> = HashSet::new();
+            for r in &results {
+                if seen.insert(r.source_id.as_str()) {
+                    ids.push(r.source_id.clone());
+                }
+            }
+            for r in &results {
+                content_by_id
+                    .entry(r.source_id.clone())
+                    .or_insert_with(|| r.content.chars().take(512).collect());
+            }
+            streams.push(ids);
+        }
+
+        let pool_of = |ids: &[String]| -> Vec<(String, String)> {
+            ids.iter()
+                .map(|id| {
+                    (
+                        id.clone(),
+                        content_by_id.get(id).cloned().unwrap_or_default(),
+                    )
+                })
+                .collect()
+        };
+        let on_ids = rrf_merge_ids(&streams, K);
+        let off_ids = &streams[0];
+
+        let mut emit = |state: &str, ranked: &[String], latency_ms: f64| {
+            let top10: Vec<&str> = ranked.iter().take(10).map(|s| s.as_str()).collect();
+            let grades: HashMap<&str, u8> = top10
+                .iter()
+                .map(|id| (*id, u8::from(relevant_set.contains(*id))))
+                .collect();
+            rows.push(PerQueryRow {
+                feature: "decompose_ce".to_string(),
+                bench: "lme".to_string(),
+                flag_state: state.to_string(),
+                query_id: sample.question_id.clone(),
+                category: sample.question_type.clone(),
+                ndcg10: metrics::ndcg_at_k(&top10, &grades, 10),
+                recall5: metrics::recall_at_k(&top10, &relevant_set, 5),
+                mrr: metrics::mrr(&top10, &relevant_set),
+                latency_ms,
+                graph_skipped: None,
+                temporal_touched: None,
+            });
+        };
+
+        let t0 = Instant::now();
+        let off_ranked = ce_rank_ids(reranker.clone(), &sample.question, pool_of(off_ids)).await?;
+        let off_latency = t0.elapsed().as_secs_f64() * 1000.0;
+        emit("off", &off_ranked, off_latency);
+
+        if subqueries.is_empty() {
+            // Atomic: pools identical, CE deterministic — reuse the OFF ranking.
+            emit("on", &off_ranked, off_latency);
+        } else {
+            let t1 = Instant::now();
+            let on_ranked =
+                ce_rank_ids(reranker.clone(), &sample.question, pool_of(&on_ids)).await?;
+            emit("on", &on_ranked, t1.elapsed().as_secs_f64() * 1000.0);
+        }
+    }
+
+    Ok(rows)
+}
+
 /// Cross-encoder variant of [`run_longmemeval_eval_from_db_collect`]. Identical
 /// query set + relevance judgments + scoring, but retrieval goes through
 /// `search_memory_cross_rerank` (CE rescoring over the widened pool) instead of

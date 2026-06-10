@@ -2984,6 +2984,60 @@ async fn decompose_recall_probe_emit() {
     );
 }
 
+/// Decompose-CE probe (Step 2 of the decompose ladder, the wire/kill gate):
+/// CE conversion at MATCHED budget. OFF = CE over the base pool@30, ON = CE
+/// over the decompose RRF-merge@30 — same 30-candidate CE input both arms, so
+/// the delta is pool composition, never pool size. Emits standard PerQueryRows
+/// (`decompose_ce_lme.jsonl`) for analyze_paired.py. Needs `EVAL_SUBQ_PATH`
+/// (same fixture as `decompose_recall_probe_emit`).
+#[tokio::test]
+#[ignore = "downloads ~600MB CE model (CPU); needs cached scenario SNAPSHOT DB + EVAL_SUBQ_PATH. Set ORIGIN_EVAL_ROOT + SCENARIO_DB_ROOT + EVAL_OUT + EVAL_SUBQ_PATH"]
+async fn decompose_ce_probe_emit() {
+    println!("=== DECOMPOSE-CE PROBE (decompose ladder Step 2, matched budget 30) ===");
+    let out_dir = paired_out_dir();
+    println!("EVAL_OUT = {}", out_dir.display());
+
+    let Some(subq_path) = std::env::var_os("EVAL_SUBQ_PATH").map(std::path::PathBuf::from) else {
+        println!("SKIP: EVAL_SUBQ_PATH not set (path to subquery fixture JSONL)");
+        return;
+    };
+    let root = resolve_scenario_db_root_from_harness();
+    let lme_dir = root.join("lme_v1");
+    let lme_fx = eval_root().join("data/longmemeval_oracle.json");
+    if !lme_dir.join("origin_memory.db").exists() || !lme_fx.exists() || !subq_path.exists() {
+        println!(
+            "SKIP: lme_v1 snapshot DB ({}) or fixture ({}) or subquery fixture ({}) missing",
+            lme_dir.join("origin_memory.db").exists(),
+            lme_fx.exists(),
+            subq_path.exists()
+        );
+        return;
+    }
+
+    let reranker = origin_core::reranker::init_cross_encoder_reranker(None)
+        .expect("init_cross_encoder_reranker failed (downloads ~600MB on first run)");
+    println!("CE model = {} (CPU)", reranker.model_id());
+
+    let db = origin_core::db::MemoryDB::new(
+        &lme_dir,
+        std::sync::Arc::new(origin_core::events::NoopEmitter),
+    )
+    .await
+    .expect("open lme_v1 snapshot DB");
+
+    let rows = origin_core::eval::longmemeval::run_longmemeval_decompose_ce_probe_from_db(
+        &db, &lme_fx, &subq_path, reranker,
+    )
+    .await
+    .expect("decompose CE probe");
+
+    write_paired_rows("decompose_ce", "lme", &rows);
+    println!(
+        "=== done -> python3 analyze_paired.py --dir {} ===",
+        out_dir.display()
+    );
+}
+
 #[tokio::test]
 #[ignore = "needs cached scenario DBs (use SNAPSHOT copies); retrieval-only, no GPU. Set ORIGIN_EVAL_ROOT + SCENARIO_DB_ROOT + EVAL_OUT"]
 async fn paired_ab_emit() {
