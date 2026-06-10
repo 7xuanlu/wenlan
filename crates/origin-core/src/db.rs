@@ -918,6 +918,21 @@ pub fn graph_memory_stream_enabled() -> bool {
         .unwrap_or(false)
 }
 
+/// True iff `ORIGIN_RERANK_SKIP_PREFERENCE` is truthy. OPT-IN, default OFF.
+///
+/// When ON, preference/recommendation-seeking queries (per
+/// [`crate::router::classify::is_preference_query`]) bypass the cross-encoder
+/// reranker and keep the base RRF ranking. The CE measurably hurts that intent
+/// class (LME-S single-session-preference: −0.155 NDCG@10 at n=479) because the
+/// relevant rows are first-person preference statements with low alignment to
+/// the question form, which the CE demotes below superficially-matching rows.
+pub fn rerank_skip_preference_enabled() -> bool {
+    std::env::var("ORIGIN_RERANK_SKIP_PREFERENCE")
+        .ok()
+        .map(|v| matches!(v.trim().to_ascii_lowercase().as_str(), "1" | "true" | "yes"))
+        .unwrap_or(false)
+}
+
 /// True iff `ORIGIN_GRAPH_SURFACE_NEW` is truthy. OPT-IN, default OFF. Only
 /// meaningful when [`graph_memory_stream_enabled`] is ON.
 ///
@@ -9278,6 +9293,27 @@ impl MemoryDB {
         temporal_cue: Option<crate::temporal_query::DateRange>,
         reranker: Option<Arc<dyn crate::reranker::Reranker>>,
     ) -> Result<Vec<SearchResult>, OriginError> {
+        // Skip-preference gate (opt-in, `ORIGIN_RERANK_SKIP_PREFERENCE`):
+        // preference-intent queries keep the base RRF ranking — no pool
+        // widening, no page-channel merge, no CE pass — so the bypassed path
+        // is byte-identical to the non-rerank `search_memory` baseline.
+        if rerank_skip_preference_enabled() && crate::router::classify::is_preference_query(query) {
+            return self
+                .search_memory_with_cue(
+                    query,
+                    limit,
+                    memory_type,
+                    space,
+                    source_agent,
+                    temporal_cue,
+                    None,
+                    None,
+                    None,
+                    None, // graph_override: keyword gate (base-path behavior)
+                )
+                .await;
+        }
+
         // Pool widening before cross-encoder rerank — env-overridable.
         // See `compute_rerank_fetch_pool` for the formula + rationale.
         let fetch_pool = compute_rerank_fetch_pool(
@@ -40442,6 +40478,123 @@ pub(crate) mod tests {
             candidate_ids.iter().all(|id| !id.starts_with("sum_")),
             "no summary node may enter the rerank candidate list, saw {:?}",
             *candidate_ids
+        );
+    }
+
+    /// ORIGIN_RERANK_SKIP_PREFERENCE: preference-intent queries bypass the CE
+    /// reranker entirely (base-path ranking, CE never invoked); non-preference
+    /// queries still rerank; flag unset (default) = CE always runs.
+    #[tokio::test]
+    async fn test_rerank_skip_preference_bypasses_ce() {
+        use crate::reranker::Reranker;
+        use std::sync::{Arc, Mutex};
+
+        struct CountingReranker {
+            calls: Arc<Mutex<usize>>,
+        }
+        impl Reranker for CountingReranker {
+            fn rerank(
+                &self,
+                _q: &str,
+                _candidates: &[(String, String)],
+            ) -> Result<Vec<(String, f32)>, OriginError> {
+                *self.calls.lock().unwrap() += 1;
+                Ok(Vec::new()) // keep original order
+            }
+            fn model_id(&self) -> &str {
+                "counting-test"
+            }
+        }
+
+        let (db, _tmp) = test_db().await;
+        db.upsert_documents(vec![
+            make_memory_doc(
+                "m_rust",
+                "rust systems programming memory safety",
+                "fact",
+                "work",
+                "claude-code",
+            ),
+            make_memory_doc(
+                "m_video",
+                "video editing resources and tutorials",
+                "fact",
+                "work",
+                "claude-code",
+            ),
+        ])
+        .await
+        .unwrap();
+
+        let pref_query = "Can you recommend some resources for learning video editing?";
+
+        // Flag ON + preference query: CE never invoked, results == base path.
+        let calls = Arc::new(Mutex::new(0usize));
+        let reranker: Arc<dyn Reranker> = Arc::new(CountingReranker {
+            calls: calls.clone(),
+        });
+        let (bypassed, base) =
+            temp_env::async_with_vars([("ORIGIN_RERANK_SKIP_PREFERENCE", Some("1"))], async {
+                let bypassed = db
+                    .search_memory_cross_rerank(
+                        pref_query,
+                        10,
+                        None,
+                        None,
+                        None,
+                        Some(reranker.clone()),
+                    )
+                    .await
+                    .unwrap();
+                let base = db
+                    .search_memory(pref_query, 10, None, None, None, None, None, None)
+                    .await
+                    .unwrap();
+                (bypassed, base)
+            })
+            .await;
+        assert_eq!(
+            *calls.lock().unwrap(),
+            0,
+            "CE must not be invoked for a preference-intent query when the skip flag is on"
+        );
+        let bypassed_ids: Vec<&str> = bypassed.iter().map(|r| r.id.as_str()).collect();
+        let base_ids: Vec<&str> = base.iter().map(|r| r.id.as_str()).collect();
+        assert_eq!(
+            bypassed_ids, base_ids,
+            "bypassed preference query must return the base-path ranking"
+        );
+
+        // Flag ON + non-preference query: CE still runs.
+        let _ = temp_env::async_with_vars(
+            [("ORIGIN_RERANK_SKIP_PREFERENCE", Some("1"))],
+            db.search_memory_cross_rerank(
+                "rust programming",
+                10,
+                None,
+                None,
+                None,
+                Some(reranker.clone()),
+            ),
+        )
+        .await
+        .unwrap();
+        assert!(
+            *calls.lock().unwrap() > 0,
+            "CE must still run for non-preference queries with the skip flag on"
+        );
+
+        // Flag unset (default) + preference query: CE still runs.
+        let before = *calls.lock().unwrap();
+        let _ = temp_env::async_with_vars(
+            [("ORIGIN_RERANK_SKIP_PREFERENCE", None::<&str>)],
+            db.search_memory_cross_rerank(pref_query, 10, None, None, None, Some(reranker.clone())),
+        )
+        .await
+        .unwrap();
+        assert!(
+            *calls.lock().unwrap() > before,
+            "default (flag unset) must keep the CE on even for preference queries"
         );
     }
 
