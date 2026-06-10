@@ -2892,13 +2892,24 @@ async fn paired_ab_emit() {
     println!("EVAL_OUT = {}", paired_out_dir().display());
 
     // (feature_tag, env_flag) for the cached-DB / base `search_memory` features.
-    let cached: [(&str, &str); 6] = [
+    let cached: [(&str, &str); 8] = [
         ("graph_stream", "ORIGIN_GRAPH_MEMORY_STREAM"),
         ("graph_gate", "ORIGIN_ENABLE_GRAPH_GATE"),
         ("graph_seed", "ORIGIN_ENABLE_GRAPH_SEED"),
         ("fts_hardening", "ORIGIN_ENABLE_FTS_HARDENING"),
         ("magnitude_fusion", "ORIGIN_MAGNITUDE_FUSION"),
         ("query_intent", "ORIGIN_ENABLE_QUERY_INTENT"),
+        // Cached-DB temporal arms: unlike the self-seeded `temporal_*` arms
+        // below (per-question evidence-only DBs — no distractors, so the
+        // boost has nothing to separate), these read the pooled canonical
+        // scenario DB where event_date is 100% live and every other
+        // question's memories act as distractors. The 'temp' substring keeps
+        // the substrate-liveness gate armed (refuses on event_date = 0).
+        // ORIGIN_ENABLE_TEMPORAL_GROUNDING has no cached arm: it is a
+        // write-time flag (rewrites date phrases at ingest), so flipping it
+        // on a read-only cached DB measures exactly zero by construction.
+        ("temporal_soft_cached", "ORIGIN_ENABLE_TEMPORAL_SOFT_BOOST"),
+        ("temporal_filter_cached", "ORIGIN_ENABLE_TEMPORAL_FILTER"),
     ];
     for (feature, flag) in cached {
         if !paired_feature_selected(feature) {
