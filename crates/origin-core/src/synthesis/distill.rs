@@ -522,6 +522,18 @@ pub(crate) async fn distill_one_cluster(
             )
             .await?;
 
+            // P3 consolidation-demotion: stamp the source memories so the ranking
+            // demotion multiplier in search_memory_cross_rerank ranks them below
+            // their page for the topic query (they stay in allowed_memory_ids +
+            // deep recall). chrono::Utc::now().timestamp() matches the unix-seconds
+            // contract of memories.last_distilled_at.
+            if let Err(e) = db
+                .stamp_last_distilled_at(&cluster.source_ids, chrono::Utc::now().timestamp())
+                .await
+            {
+                log::warn!("[distill] stamp last_distilled_at failed: {e}");
+            }
+
             log::info!(
                 "[distill] distilled {} memories -> page '{}' ('{}')",
                 cluster.source_ids.len(),
@@ -909,6 +921,18 @@ pub async fn distill_pages_scoped(
                     &now,
                 )
                 .await?;
+
+                // P3 consolidation-demotion: stamp the source memories so the ranking
+                // demotion multiplier in search_memory_cross_rerank ranks them below
+                // their page for the topic query (they stay in allowed_memory_ids +
+                // deep recall). chrono::Utc::now().timestamp() matches the unix-seconds
+                // contract of memories.last_distilled_at.
+                if let Err(e) = db
+                    .stamp_last_distilled_at(&cluster.source_ids, chrono::Utc::now().timestamp())
+                    .await
+                {
+                    log::warn!("[distill] stamp last_distilled_at failed: {e}");
+                }
 
                 log::info!(
                     "[distill] distilled {} memories -> page '{}' ('{}')",

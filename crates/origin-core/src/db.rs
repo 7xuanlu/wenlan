@@ -22167,6 +22167,32 @@ impl MemoryDB {
         Ok(())
     }
 
+    /// Read the `last_distilled_at` unix-seconds timestamp for a memory.
+    /// Returns `Ok(None)` when the memory does not exist or the column is NULL
+    /// (never distilled).  Used by integration tests and the demotion signal.
+    pub async fn read_last_distilled_at(
+        &self,
+        source_id: &str,
+    ) -> Result<Option<i64>, OriginError> {
+        let conn = self.conn.lock().await;
+        let mut rows = conn
+            .query(
+                "SELECT last_distilled_at FROM memories WHERE source_id = ?1 AND chunk_index = 0 LIMIT 1",
+                libsql::params![source_id],
+            )
+            .await
+            .map_err(|e| OriginError::VectorDb(format!("read_last_distilled_at: {e}")))?;
+        if let Some(row) = rows
+            .next()
+            .await
+            .map_err(|e| OriginError::VectorDb(e.to_string()))?
+        {
+            Ok(row.get::<Option<i64>>(0).unwrap_or(None))
+        } else {
+            Ok(None)
+        }
+    }
+
     /// Reverse lookup: find all active pages that reference a given memory source_id.
     pub async fn get_pages_for_memory(
         &self,
