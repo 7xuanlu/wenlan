@@ -922,10 +922,11 @@ pub fn graph_memory_stream_enabled() -> bool {
 ///
 /// When ON, preference/recommendation-seeking queries (per
 /// [`crate::router::classify::is_preference_query`]) bypass the cross-encoder
-/// reranker and keep the base RRF ranking. The CE measurably hurts that intent
-/// class (LME-S single-session-preference: −0.155 NDCG@10 at n=479) because the
-/// relevant rows are first-person preference statements with low alignment to
-/// the question form, which the CE demotes below superficially-matching rows.
+/// reranker and keep the base RRF ranking. Built against an older "CE hurts
+/// single-session-preference −0.155" measurement that did NOT reproduce on
+/// either current seeded substrate (paired n=479: CE helps SSP +0.027 twice;
+/// bypass −0.0117 agg, BH-sig negative). Default-OFF escape hatch only — see
+/// `is_preference_query` docs for the full measurement story.
 pub fn rerank_skip_preference_enabled() -> bool {
     std::env::var("ORIGIN_RERANK_SKIP_PREFERENCE")
         .ok()

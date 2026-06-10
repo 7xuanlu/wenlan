@@ -76,9 +76,13 @@ pub(crate) const PREFERENCE_PAST_RECALL_EXCLUSIONS: &[&str] = &[
 /// True when the query is a preference/recommendation-seeking request.
 ///
 /// Used by the CE-rerank skip-preference gate (`ORIGIN_RERANK_SKIP_PREFERENCE`):
-/// the cross-encoder demotes the first-person preference statements these
-/// queries need (LME-S single-session-preference: −0.155 NDCG@10 at n=479), so
-/// preference-intent queries keep the base RRF ranking instead.
+/// when the flag is on, preference-intent queries keep the base RRF ranking
+/// instead of the cross-encoder rescoring. The gate was built against an older
+/// measurement ("CE hurts single-session-preference −0.155 NDCG@10") that did
+/// NOT reproduce on either current seeded substrate — paired A/Bs at n=479
+/// measured CE *helping* SSP (+0.027, twice) and the bypass net-negative
+/// (−0.0117 agg, BH-sig). The flag therefore ships as a tested, default-OFF
+/// escape hatch, not a recommended setting.
 ///
 /// Keyword lists were validated against the full LME-S fixture (500 questions):
 /// 30/30 single-session-preference detected, 0 false positives across the other
