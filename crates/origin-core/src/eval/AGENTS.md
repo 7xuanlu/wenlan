@@ -151,10 +151,16 @@ SKIP semantics (rather than panic) match the surrounding fixture-missing branche
 Seeding a cached scenario DB is ONE orchestrator, not a scatter of STEP tests: run `seed_scenario_dbs_complete` (`tests/eval_harness.rs`). It chains event_date inject → classify → `memory_entities` sweep → episodes → distill, then asserts `SeedExpectations::complete()`. Never hand-run the individual `seed_*` STEP tests; they are its internals.
 
 `seed_contract.rs` is the single liveness contract, gating BOTH ends:
-- **Producer:** `seed_scenario_dbs_complete` asserts `complete()` — hard-fails on `memory_entities=0` (graph) or `event_date=0` (temporal). Presence checks, not percentages (percentages rot).
-- **Consumer:** every per-query collector calls `assert_feature_substrate_live(conn, feature)` at entry — a graph/temporal A/B over an empty substrate **errors ("EVAL REFUSED")** rather than emitting a null that reads as "doesn't help". A starved-substrate lie is structurally impossible.
+- **Producer:** `seed_scenario_dbs_complete` asserts `complete()` — hard-fails on `memory_entities=0` (graph), `event_date=0` (temporal), or `pages=0` active (page channel; matches `MemoryDB::count_active_pages`). Presence checks, not percentages (percentages rot).
+- **Consumer:** every per-query collector calls `assert_feature_substrate_live(conn, feature)` at entry — a graph/temporal/page A/B over an empty substrate **errors ("EVAL REFUSED")** rather than emitting a null that reads as "doesn't help". A starved-substrate lie is structurally impossible.
 
 Adding a channel with an A/B: add its step to the orchestrator, its floor to `SeedExpectations`, its key to `assert_feature_substrate_live`, and a `seed_contract.rs` unit test. See root `AGENTS.md` "Eval seed + eval read: ONE route, ONE contract".
+
+## paired A/B reading: the G3 gate (analyze_paired.py)
+
+`analyze_paired.py` (repo root) applies the Eval-Trust v3 G3 "A/A-floored attributed liveness" gate on top of Wilcoxon + BH-FDR. Any `<feature>_aa_<bench>.jsonl` in the input dir is an A/A no-op control (flag OFF on both arms) and sets that bench's noise floor (aggregate + per-category |meanΔndcg|). Every other feature gets a `G3` verdict: `SIGNAL` (above floor, right direction, attributed, BH-sig), `WEAK` (same minus BH-sig), `NOISE-FLOOR`, `WRONG-DIR`, `UNATTRIBUTED` (<90% of moved queries carry the channel's touch flag — `temporal_touched` / not `graph_skipped`), `NO-FLOOR` (no A/A run for the bench — emit one, e.g. the `rerank_window_aa` pattern, before trusting verdicts). Per-category verdicts are conditions 1+2 only (no per-category p-value). Selftest: `python3 analyze_paired.py --selftest`.
+
+Trust calibration: a `*` suffix (`SIGNAL*`/`WEAK*`) means the rows carried no touch flag, so attribution was vacuous — today only the temporal arms (and graph arms with `ORIGIN_ENABLE_GRAPH_GATE` on) emit one; wiring per-channel touch flags into the other collectors is the open follow-up that makes condition 3 real roster-wide. Floors are bench-keyed, not path-keyed: don't co-locate a CE-path A/A with base-path feature files (noise characteristics differ; the CE-path A/A measured NON-deterministic — a full-ndcg flip between identical OFF arms at smoke n — which the analyzer surfaces as a `WARNING` when a floor source has `n_touched > 0`). `paired_ab_emit` itself emits no `_aa` file; co-locate an A/A from the matching path/bench or every verdict reads `NO-FLOOR`.
 
 ## cross-reference
 

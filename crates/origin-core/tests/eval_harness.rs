@@ -2504,7 +2504,7 @@ async fn seed_scenario_dbs_complete() {
             .await
             .unwrap_or_else(|e| panic!("[seed_complete] {bench} contract VIOLATED: {e}"));
         eprintln!(
-            "[seed_complete] {bench} COMPLETE + verified in {:.1}m: rows={} classified={} cue={} ({:.0}%) event_date={} ({:.0}%) graph_links={}",
+            "[seed_complete] {bench} COMPLETE + verified in {:.1}m: rows={} classified={} cue={} ({:.0}%) event_date={} ({:.0}%) graph_links={} pages={}",
             t_bench.elapsed().as_secs_f64() / 60.0,
             report.rows,
             report.classified,
@@ -2513,6 +2513,7 @@ async fn seed_scenario_dbs_complete() {
             report.event_date_nonempty,
             report.event_date_coverage() * 100.0,
             report.graph_links,
+            report.pages,
         );
     }
 }
