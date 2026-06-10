@@ -105,9 +105,9 @@ impl LlmProvider for DistillStubLlm {
 // Task 4: normal distill path stamps last_distilled_at
 // ---------------------------------------------------------------------------
 
-/// Seeds three thematically-similar Rust-async memories that will form a
-/// single cluster (cosine similarity well above the 0.73 default threshold,
-/// since they all describe tokio/async Rust internals).
+/// Seeds three thematically-similar Rust-async memories that form a single
+/// cluster at the test's 0.6 similarity threshold (their pairwise cosines
+/// hover near the 0.73 production default — too knife-edge to rely on).
 ///
 /// Total content is ~640 chars which clears the 200-char thin-cluster guard.
 async fn seed_rust_async_cluster(db: &MemoryDB) {
@@ -167,7 +167,15 @@ async fn normal_distill_stamps_last_distilled_at() {
     let llm: Arc<dyn LlmProvider> = Arc::new(DistillStubLlm::new(body));
 
     let prompts = origin_core::prompts::PromptRegistry::default();
-    let tuning = origin_core::tuning::DistillationConfig::default();
+    // similarity_threshold 0.6 instead of the 0.73 default: the three seeds'
+    // pairwise cosines sit near 0.73, and with exactly min_cluster_size
+    // memories one flipped edge from run-to-run ONNX embedding jitter kills
+    // the cluster (observed flaking 4/23 runs at the default). 0.6 gives
+    // margin while still exercising the real clustering code.
+    let tuning = origin_core::tuning::DistillationConfig {
+        similarity_threshold: 0.6,
+        ..Default::default()
+    };
 
     let result = origin_core::refinery::distill_pages(
         &db,
