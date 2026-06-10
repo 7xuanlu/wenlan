@@ -51,21 +51,9 @@ async fn seed_memory(db: &MemoryDB, source_id: &str, content: &str) {
 /// Read `last_distilled_at` for a memory directly from SQL.
 /// Returns `None` if the memory doesn't exist or the column is NULL.
 async fn last_distilled_at_of(db: &Arc<MemoryDB>, source_id: &str) -> Option<i64> {
-    // MemoryDB doesn't expose a typed accessor for this P3 column yet, so we
-    // use the raw SQL helper that the internal unit tests in db.rs also use.
-    //
-    // We borrow a small raw-query path via an internal helper that will be
-    // exposed once the full P3 accessor lands.  For now, use the DB's
-    // `get_memory_detail` query as a proxy and check the field via a
-    // secondary direct SQL call through `MemoryDB::conn` — but since conn
-    // is private, call through the public execute_raw helper that several
-    // integration tests use.
-    //
-    // Actually: the simplest cross-crate way is to call a tiny wrapper that
-    // exercises the same path as the db.rs unit test at line 45103:
-    //   SELECT last_distilled_at FROM memories WHERE source_id = ?
-    // We expose this via the `read_last_distilled_at` pub fn added in P3.
-    db.read_last_distilled_at(source_id).await.unwrap_or(None)
+    db.read_last_distilled_at(source_id)
+        .await
+        .expect("read_last_distilled_at")
 }
 
 // ---------------------------------------------------------------------------
@@ -90,8 +78,9 @@ impl DistillStubLlm {
 impl LlmProvider for DistillStubLlm {
     async fn generate(&self, request: LlmRequest) -> Result<String, LlmError> {
         let sys = request.system_prompt.as_deref().unwrap_or("");
-        if sys.contains("3-5 word") || sys.contains("title") || sys.contains("short") {
-            // Title generation — return a deterministic 4-word title.
+        // "3-5 word" matches generate_short_title's system prompt
+        // (refinery/mod.rs) — the title call every successful distill makes.
+        if sys.contains("3-5 word") {
             Ok("Rust Async Runtime Internals".to_string())
         } else {
             // Distillation body — echo our pre-built content.
