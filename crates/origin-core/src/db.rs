@@ -27,7 +27,7 @@ pub const EMBEDDING_DIM: usize = 768;
 
 /// Current DB schema version (highest `PRAGMA user_version` applied by `migrate()`).
 /// Bump this whenever a new migration lands. Used as an eval cache invalidation key.
-pub const SCHEMA_VERSION: u32 = 63;
+pub const SCHEMA_VERSION: u32 = 64;
 
 /// Shared embedder reference. Pass to [`MemoryDB::new_with_shared_embedder`] to
 /// reuse a single embedder across many `MemoryDB` instances. Created via
@@ -6088,6 +6088,44 @@ impl MemoryDB {
                     .await
                     .map_err(|e| OriginError::VectorDb(format!("m63 bump: {e}")))?;
                 log::info!("[migration] Migration 63 applied: pages.workspace column + backfill from source-memory space (P3 workspace axis)");
+            }
+
+            // Migration 64 (LD): memories.last_distilled_at — unix-seconds timestamp set
+            // when a memory is distilled into a page (normal path) or attached to a page on
+            // the skip-and-attach dedup path. NULL = never distilled = no demotion. Feeds a
+            // GENTLE retrieval ranking multiplier in search_memory_cross_rerank (NOT a page
+            // FK: a memory distills into many pages). No backfill — existing distilled
+            // memories simply carry no demotion until re-distilled, which is correct (we do
+            // not retroactively demote).
+            if version < 64 {
+                let conn = self.conn.lock().await;
+                let has_col: bool = {
+                    let mut rows = conn
+                        .query(
+                            "SELECT COUNT(*) FROM pragma_table_info('memories') WHERE name = 'last_distilled_at'",
+                            (),
+                        )
+                        .await
+                        .map_err(|e| OriginError::VectorDb(format!("m64 col check: {e}")))?;
+                    match rows.next().await {
+                        Ok(Some(row)) => row.get::<i64>(0).unwrap_or(0) > 0,
+                        _ => false,
+                    }
+                };
+                if !has_col {
+                    conn.execute(
+                        "ALTER TABLE memories ADD COLUMN last_distilled_at INTEGER",
+                        (),
+                    )
+                    .await
+                    .map_err(|e| {
+                        OriginError::VectorDb(format!("m64 add last_distilled_at: {e}"))
+                    })?;
+                }
+                conn.execute("PRAGMA user_version = 64", ())
+                    .await
+                    .map_err(|e| OriginError::VectorDb(format!("m64 bump: {e}")))?;
+                log::info!("[migration] Migration 64 applied: memories.last_distilled_at column (P3 consolidation demotion)");
             }
         }
 
@@ -43156,8 +43194,8 @@ pub(crate) mod tests {
         let uv: i64 = vrows.next().await.unwrap().unwrap().get(0).unwrap();
         assert_eq!(uv as u32, crate::db::SCHEMA_VERSION);
         // test_db() runs the full migration ladder, so the terminal version is
-        // the current SCHEMA_VERSION (63 after P3 pages.workspace).
-        assert_eq!(uv, 63);
+        // the current SCHEMA_VERSION (64 after P3 memories.last_distilled_at).
+        assert_eq!(uv, 64);
     }
 
     #[tokio::test]
@@ -43174,7 +43212,7 @@ pub(crate) mod tests {
         let mut vrows = conn.query("PRAGMA user_version", ()).await.unwrap();
         let uv: i64 = vrows.next().await.unwrap().unwrap().get(0).unwrap();
         assert_eq!(
-            uv, 63,
+            uv, 64,
             "user_version restored to current terminal version after idempotent re-run"
         );
     }
@@ -43208,7 +43246,7 @@ pub(crate) mod tests {
         let mut vrows = conn.query("PRAGMA user_version", ()).await.unwrap();
         let uv: i64 = vrows.next().await.unwrap().unwrap().get(0).unwrap();
         assert_eq!(uv as u32, crate::db::SCHEMA_VERSION);
-        assert_eq!(uv, 63);
+        assert_eq!(uv, 64);
     }
 
     #[tokio::test]
@@ -43225,7 +43263,7 @@ pub(crate) mod tests {
         let mut vrows = conn.query("PRAGMA user_version", ()).await.unwrap();
         let uv: i64 = vrows.next().await.unwrap().unwrap().get(0).unwrap();
         assert_eq!(
-            uv, 63,
+            uv, 64,
             "user_version restored to current terminal version after idempotent re-run"
         );
     }
@@ -43273,7 +43311,10 @@ pub(crate) mod tests {
         let mut vrows = conn.query("PRAGMA user_version", ()).await.unwrap();
         let uv: i64 = vrows.next().await.unwrap().unwrap().get(0).unwrap();
         assert_eq!(uv as u32, crate::db::SCHEMA_VERSION);
-        assert_eq!(uv, 63, "terminal version is 63 after P3 pages.workspace");
+        assert_eq!(
+            uv, 64,
+            "terminal version is 64 after P3 memories.last_distilled_at"
+        );
     }
 
     #[tokio::test]
@@ -43290,7 +43331,7 @@ pub(crate) mod tests {
         let mut vrows = conn.query("PRAGMA user_version", ()).await.unwrap();
         let uv: i64 = vrows.next().await.unwrap().unwrap().get(0).unwrap();
         assert_eq!(
-            uv, 63,
+            uv, 64,
             "user_version restored to current terminal version after idempotent re-run"
         );
 
@@ -44962,6 +45003,29 @@ pub(crate) mod tests {
             got.get("page_work").unwrap().as_deref(),
             Some("work"),
             "page_work workspace should be 'work'"
+        );
+    }
+
+    /// Migration 64 (LD): memories.last_distilled_at is added with NULL default.
+    #[tokio::test]
+    async fn m_ld_adds_last_distilled_at_default_null() {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("test.db");
+        let emitter: std::sync::Arc<dyn crate::EventEmitter> =
+            std::sync::Arc::new(crate::NoopEmitter);
+        let db = MemoryDB::new(&db_path, emitter).await.unwrap();
+        let conn = db.conn.lock().await;
+        let mut rows = conn
+            .query(
+                "SELECT COUNT(*) FROM pragma_table_info('memories') WHERE name = 'last_distilled_at'",
+                (),
+            )
+            .await
+            .unwrap();
+        let cnt: i64 = rows.next().await.unwrap().unwrap().get(0).unwrap();
+        assert_eq!(
+            cnt, 1,
+            "memories.last_distilled_at column must exist after migration"
         );
     }
 }
