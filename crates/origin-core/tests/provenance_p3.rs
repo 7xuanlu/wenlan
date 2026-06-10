@@ -269,7 +269,7 @@ async fn scoped_match_attach_stamps_only_attached_ids() {
     // prefix) so the cosine is near 1.0.
     let centroid_text = format!("{page_title} {page_summary}");
     let centroid = db
-        .generate_embeddings(&[centroid_text.clone()])
+        .generate_embeddings(&[centroid_text])
         .expect("generate_embeddings must succeed")
         .remove(0);
 
