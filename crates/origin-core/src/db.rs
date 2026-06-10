@@ -22125,6 +22125,48 @@ impl MemoryDB {
         Ok(())
     }
 
+    /// Stamp `last_distilled_at` on the given memories (keyed by `source_id`).
+    /// Called from every distill path that consumes/attaches memories — the normal
+    /// `insert_page` distill and the P2 scoped-match attach path. NULL stays NULL
+    /// for never-distilled memories. Idempotent: re-stamping advances the timestamp.
+    pub async fn stamp_last_distilled_at(
+        &self,
+        source_ids: &[String],
+        now_unix: i64,
+    ) -> Result<(), OriginError> {
+        if source_ids.is_empty() {
+            return Ok(());
+        }
+        let conn = self.conn.lock().await;
+        conn.execute("BEGIN", ())
+            .await
+            .map_err(|e| OriginError::VectorDb(format!("stamp_last_distilled_at begin: {e}")))?;
+        let res: Result<(), OriginError> = async {
+            for sid in source_ids {
+                conn.execute(
+                    "UPDATE memories SET last_distilled_at = ?1 WHERE source_id = ?2",
+                    libsql::params![now_unix, sid.as_str()],
+                )
+                .await
+                .map_err(|e| {
+                    OriginError::VectorDb(format!("stamp_last_distilled_at update: {e}"))
+                })?;
+            }
+            Ok(())
+        }
+        .await;
+        match res {
+            Ok(()) => conn.execute("COMMIT", ()).await.map_err(|e| {
+                OriginError::VectorDb(format!("stamp_last_distilled_at commit: {e}"))
+            })?,
+            Err(e) => {
+                let _ = conn.execute("ROLLBACK", ()).await;
+                return Err(e);
+            }
+        };
+        Ok(())
+    }
+
     /// Reverse lookup: find all active pages that reference a given memory source_id.
     pub async fn get_pages_for_memory(
         &self,
@@ -45027,5 +45069,43 @@ pub(crate) mod tests {
             cnt, 1,
             "memories.last_distilled_at column must exist after migration"
         );
+    }
+
+    /// Task 3 (P3): stamp_last_distilled_at sets the column on the given source_ids.
+    #[tokio::test]
+    async fn stamp_last_distilled_at_sets_timestamp() {
+        use crate::sources::RawDocument;
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("test.db");
+        let emitter: std::sync::Arc<dyn crate::EventEmitter> =
+            std::sync::Arc::new(crate::NoopEmitter);
+        let db = MemoryDB::new(&db_path, emitter).await.unwrap();
+        db.upsert_documents(vec![RawDocument {
+            source: "memory".into(),
+            source_id: "mem_a".into(),
+            title: "mem_a".into(),
+            content: "a fact".into(),
+            memory_type: Some("fact".into()),
+            last_modified: 1_700_000_000,
+            ..Default::default()
+        }])
+        .await
+        .unwrap();
+
+        let now = 1_700_000_500_i64;
+        db.stamp_last_distilled_at(&["mem_a".to_string()], now)
+            .await
+            .unwrap();
+
+        let conn = db.conn.lock().await;
+        let mut rows = conn
+            .query(
+                "SELECT last_distilled_at FROM memories WHERE source_id = 'mem_a'",
+                (),
+            )
+            .await
+            .unwrap();
+        let got: Option<i64> = rows.next().await.unwrap().unwrap().get(0).unwrap();
+        assert_eq!(got, Some(now));
     }
 }
