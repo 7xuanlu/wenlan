@@ -956,7 +956,8 @@ pub async fn run_locomo_eval_reranked(
 
 /// Same seeding/scoring logic as `run_locomo_eval_reranked`, but retrieval uses
 /// `search_memory_cross_rerank` driven by a cross-encoder reranker
-/// (typically `BGERerankerV2M3`). Lets the eval sweep compare LLM-as-judge
+/// (model per `ORIGIN_RERANKER_MODEL`; default `BGERerankerBase` since
+/// 2026-06-11). Lets the eval sweep compare LLM-as-judge
 /// reranking against a purpose-built cross-encoder on identical fixtures.
 pub async fn run_locomo_eval_cross_rerank(
     path: &Path,

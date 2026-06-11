@@ -644,60 +644,76 @@ async fn save_locomo_expanded_baseline() {
 }
 
 // Cross-encoder rerank variants — fastembed TextRerank (BGERerankerV2M3) in
-// place of the LLM reranker. First run downloads ~600MB of model weights.
+// place of the LLM reranker. First run downloads the model weights.
 //
-// ORIGIN_ENABLE_PAGE_CHANNEL is forced to None (unset) here so the pre-PR-B
-// 0.684 / 0.883 disk artifacts stay reproducible regardless of the caller env.
+// ORIGIN_ENABLE_PAGE_CHANNEL is forced to None (unset) and
+// ORIGIN_RERANKER_MODEL is PINNED to bge-v2-m3 here so the pre-PR-B
+// 0.684 / 0.883 disk artifacts stay reproducible regardless of the caller env
+// (the unset-env default flipped to bge-base on 2026-06-11; these two tests
+// protect v2-m3 reference artifacts whose legacy filenames do not encode the
+// reranker model).
 // The ephemeral per-conversation DBs these tests build today have zero
 // distilled pages, so page-channel is a no-op for them with or without the
 // wrap. The wrap makes the intent explicit at the source.
 #[tokio::test]
 #[ignore]
 async fn save_locomo_cross_rerank_baseline() {
-    temp_env::async_with_vars([("ORIGIN_ENABLE_PAGE_CHANNEL", None::<&str>)], async {
-        let path = eval_root().join("data/locomo10.json");
-        if !path.exists() {
-            println!("SKIP: locomo10.json not found");
-            return;
-        }
-        let reranker = origin_core::reranker::init_cross_encoder_reranker(None)
-            .expect("init_cross_encoder_reranker failed (downloads ~600MB on first run)");
-        let report = origin_core::eval::locomo::run_locomo_eval_cross_rerank(&path, reranker)
-            .await
-            .unwrap();
-        let baselines_dir = eval_root().join("baselines");
-        std::fs::create_dir_all(&baselines_dir).unwrap();
-        let baseline_path = baselines_dir.join(report.baseline_filename("locomo"));
-        report.save_baseline(&baseline_path).unwrap();
-        println!("Saved LoCoMo cross-rerank baseline to {:?}", baseline_path);
-    })
+    temp_env::async_with_vars(
+        [
+            ("ORIGIN_ENABLE_PAGE_CHANNEL", None::<&str>),
+            ("ORIGIN_RERANKER_MODEL", Some("bge-v2-m3")),
+        ],
+        async {
+            let path = eval_root().join("data/locomo10.json");
+            if !path.exists() {
+                println!("SKIP: locomo10.json not found");
+                return;
+            }
+            let reranker = origin_core::reranker::init_cross_encoder_reranker(None)
+                .expect("init_cross_encoder_reranker failed (downloads ~600MB on first run)");
+            let report = origin_core::eval::locomo::run_locomo_eval_cross_rerank(&path, reranker)
+                .await
+                .unwrap();
+            let baselines_dir = eval_root().join("baselines");
+            std::fs::create_dir_all(&baselines_dir).unwrap();
+            let baseline_path = baselines_dir.join(report.baseline_filename("locomo"));
+            report.save_baseline(&baseline_path).unwrap();
+            println!("Saved LoCoMo cross-rerank baseline to {:?}", baseline_path);
+        },
+    )
     .await;
 }
 
 #[tokio::test]
 #[ignore]
 async fn save_longmemeval_cross_rerank_baseline() {
-    temp_env::async_with_vars([("ORIGIN_ENABLE_PAGE_CHANNEL", None::<&str>)], async {
-        let path = eval_root().join("data/longmemeval_oracle.json");
-        if !path.exists() {
-            println!("SKIP: longmemeval_oracle.json not found");
-            return;
-        }
-        let reranker = origin_core::reranker::init_cross_encoder_reranker(None)
-            .expect("init_cross_encoder_reranker failed (downloads ~600MB on first run)");
-        let report =
-            origin_core::eval::longmemeval::run_longmemeval_eval_cross_rerank(&path, reranker)
-                .await
-                .unwrap();
-        let baselines_dir = eval_root().join("baselines");
-        std::fs::create_dir_all(&baselines_dir).unwrap();
-        let baseline_path = baselines_dir.join(report.baseline_filename("longmemeval"));
-        report.save_baseline(&baseline_path).unwrap();
-        println!(
-            "Saved LongMemEval cross-rerank baseline to {:?}",
-            baseline_path
-        );
-    })
+    temp_env::async_with_vars(
+        [
+            ("ORIGIN_ENABLE_PAGE_CHANNEL", None::<&str>),
+            ("ORIGIN_RERANKER_MODEL", Some("bge-v2-m3")),
+        ],
+        async {
+            let path = eval_root().join("data/longmemeval_oracle.json");
+            if !path.exists() {
+                println!("SKIP: longmemeval_oracle.json not found");
+                return;
+            }
+            let reranker = origin_core::reranker::init_cross_encoder_reranker(None)
+                .expect("init_cross_encoder_reranker failed (downloads ~600MB on first run)");
+            let report =
+                origin_core::eval::longmemeval::run_longmemeval_eval_cross_rerank(&path, reranker)
+                    .await
+                    .unwrap();
+            let baselines_dir = eval_root().join("baselines");
+            std::fs::create_dir_all(&baselines_dir).unwrap();
+            let baseline_path = baselines_dir.join(report.baseline_filename("longmemeval"));
+            report.save_baseline(&baseline_path).unwrap();
+            println!(
+                "Saved LongMemEval cross-rerank baseline to {:?}",
+                baseline_path
+            );
+        },
+    )
     .await;
 }
 
@@ -3616,7 +3632,7 @@ async fn rerank_window_knee_sweep() {
 /// `analyze_paired.py` has a noise floor that matches the OFF arm path.
 ///
 /// Models:
-///   `rerank_model_v2m3` -- BGE-reranker-v2-m3 (~568M params, default production)
+///   `rerank_model_v2m3` -- BGE-reranker-v2-m3 (~568M params, quality ceiling; default until 2026-06-11)
 ///   `rerank_model_turbo` -- JINA-v1-turbo-en  (~37M params, CPU-fast, English-only)
 ///   `rerank_model_base`  -- BGE-reranker-base  (~278M params, mid-size)
 ///

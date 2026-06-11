@@ -412,7 +412,8 @@ async fn run_daemon() -> anyhow::Result<()> {
     }
 
     // Initialize cross-encoder reranker. Opt-in via `ORIGIN_RERANKER_ENABLED=1`
-    // because first construction downloads ~600MB of model weights. Reuses the
+    // because first construction downloads the model weights (~1.1GB for the
+    // default bge-reranker-base). Reuses the
     // embedder's FastEmbed cache directory so the download is shared with the
     // BGE embedder. Failure is non-fatal: search falls back to embedding+FTS
     // ordering with no rerank pass.
