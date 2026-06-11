@@ -189,25 +189,29 @@ impl Reranker for CrossEncoderReranker {
 }
 
 /// Resolve the cross-encoder model from `ORIGIN_RERANKER_MODEL`. Default (unset
-/// or unrecognized) is `BGERerankerV2M3` — the larger multilingual model that
-/// SuperLocalMemory's V3.3 ablation cited as the single largest contributor to
-/// their retrieval stack — so production behaviour is unchanged.
+/// or unrecognized) is `BGERerankerBase` since 2026-06-11: on the LME paired
+/// sweep (PR #260, scaffold N=1) it kept 94% of BGE-v2-m3's NDCG lift
+/// (+0.1058 vs +0.1130 agg, both BH-sig) at 29% of its latency cost
+/// (P50 510ms vs 1279ms on CPU) and downloads 1.1GB vs 2.27GB.
 ///
-/// `turbo` selects `JINARerankerV1TurboEn` (~37M params vs BGE-v2-m3's ~568M,
-/// English-only): far faster on CPU, for eval A/B sweeps and CPU-only Linux +
-/// Windows deployments where the 568M model would dominate latency. `bge-base`
-/// selects the mid-size `BGERerankerBase`. The chosen model_id is stamped into
-/// the reranker so eval baselines stay honest about which reranker produced them.
+/// `bge` / `bge-v2-m3` still select `BGERerankerV2M3` — the quality ceiling
+/// (largest multilingual model; SuperLocalMemory's V3.3 ablation cited it as
+/// the single largest contributor to their retrieval stack) for users who
+/// accept the latency. `turbo` selects `JINARerankerV1TurboEn` (~37M params,
+/// English-only): near-free on CPU (+20ms P50 in the same sweep), for eval
+/// A/B sweeps and latency-critical deployments. The chosen model_id is
+/// stamped into the reranker so eval baselines stay honest about which
+/// reranker produced them.
 fn reranker_model_from_env() -> fastembed::RerankerModel {
     use fastembed::RerankerModel::{BGERerankerBase, BGERerankerV2M3, JINARerankerV1TurboEn};
     let raw = std::env::var("ORIGIN_RERANKER_MODEL").unwrap_or_default();
     match raw.trim().to_ascii_lowercase().as_str() {
         "turbo" | "jina-turbo" | "jina" => JINARerankerV1TurboEn,
-        "bge-base" => BGERerankerBase,
-        "" | "bge" | "bge-v2-m3" => BGERerankerV2M3,
+        "" | "bge-base" => BGERerankerBase,
+        "bge" | "bge-v2-m3" => BGERerankerV2M3,
         other => {
-            log::warn!("[reranker] unknown ORIGIN_RERANKER_MODEL={other:?}; using BGERerankerV2M3");
-            BGERerankerV2M3
+            log::warn!("[reranker] unknown ORIGIN_RERANKER_MODEL={other:?}; using BGERerankerBase");
+            BGERerankerBase
         }
     }
 }
@@ -215,7 +219,7 @@ fn reranker_model_from_env() -> fastembed::RerankerModel {
 /// Construct the cross-encoder reranker and return it as a trait object.
 ///
 /// Model is selected by [`reranker_model_from_env`] — defaults to
-/// `BGERerankerV2M3`. Pass `cache_dir` aligned with the embedder cache so the
+/// `BGERerankerBase`. Pass `cache_dir` aligned with the embedder cache so the
 /// weights download once and stay reusable across processes.
 ///
 /// Not called in any default-running test — first construction downloads the
@@ -285,11 +289,11 @@ mod tests {
     }
 
     #[test]
-    fn reranker_model_env_default_is_bge_v2m3() {
+    fn reranker_model_env_default_is_bge_base() {
         temp_env::with_var("ORIGIN_RERANKER_MODEL", None::<&str>, || {
             assert!(matches!(
                 reranker_model_from_env(),
-                fastembed::RerankerModel::BGERerankerV2M3
+                fastembed::RerankerModel::BGERerankerBase
             ));
         });
     }
@@ -310,11 +314,11 @@ mod tests {
     }
 
     #[test]
-    fn reranker_model_env_unknown_falls_back_to_bge() {
+    fn reranker_model_env_unknown_falls_back_to_default() {
         temp_env::with_var("ORIGIN_RERANKER_MODEL", Some("nonsense"), || {
             assert!(matches!(
                 reranker_model_from_env(),
-                fastembed::RerankerModel::BGERerankerV2M3
+                fastembed::RerankerModel::BGERerankerBase
             ));
         });
     }
