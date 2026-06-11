@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.8.2](https://github.com/7xuanlu/origin/compare/v0.8.1...v0.8.2) (2026-06-11)
+
+
+### Bug Fixes
+
+* **eval:** channel_touched G3 attribution probes (de-star graph_stream + rerank arms) ([#258](https://github.com/7xuanlu/origin/issues/258)) ([7eff243](https://github.com/7xuanlu/origin/commit/7eff243a68cd7d28d5c9048af471952a89811eaa))
+* **eval:** G3 A/A-floored verdict gate + page-substrate presence floor (Eval-Trust v3) ([#255](https://github.com/7xuanlu/origin/issues/255)) ([823fb15](https://github.com/7xuanlu/origin/commit/823fb15ff94c220bf133c23cc18dc70e6aab1703))
+* **eval:** seed orchestrator fails loud on unavailable LLM / zero distilled pages ([#259](https://github.com/7xuanlu/origin/issues/259)) ([3fe652d](https://github.com/7xuanlu/origin/commit/3fe652de829f64850baca6f9867232ab68136c97))
+* **provenance:** P3 workspace axis + consolidation lifecycle (demotion eval-gated PASS) ([#256](https://github.com/7xuanlu/origin/issues/256)) ([66a8ab4](https://github.com/7xuanlu/origin/commit/66a8ab4350814fdd3c9941865742408115a408af))
+* **retrieval:** CE skip-preference bypass + rerank/graph-stack paired A/B arms ([#251](https://github.com/7xuanlu/origin/issues/251)) ([31ca621](https://github.com/7xuanlu/origin/commit/31ca62121590a8a74e1b8316e91f01a66a47f962))
+* **retrieval:** graph memory stream default-on (quick path only) ([#257](https://github.com/7xuanlu/origin/issues/257)) ([df42f7e](https://github.com/7xuanlu/origin/commit/df42f7e18dd64bf18d464d132b30d34e45e75ea6))
+
 ## [0.8.1](https://github.com/7xuanlu/origin/compare/v0.8.0...v0.8.1) (2026-06-09)
 
 
