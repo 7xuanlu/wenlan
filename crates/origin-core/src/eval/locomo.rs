@@ -1501,6 +1501,10 @@ pub async fn run_locomo_eval_from_db_collect(
                 .await?;
             let latency_ms = t0.elapsed().as_secs_f64() * 1000.0;
 
+            // Outside the latency window: the base-path channel-touch probe.
+            let channel_touched =
+                crate::eval::shared::base_channel_touched(db, feature, &qa.question).await?;
+
             let relevant_ids: HashSet<String> = qa
                 .evidence
                 .iter()
@@ -1528,6 +1532,7 @@ pub async fn run_locomo_eval_from_db_collect(
                 latency_ms,
                 graph_skipped: if gate_on { Some(graph_skipped) } else { None },
                 temporal_touched: None,
+                channel_touched,
             });
         }
     }
@@ -1593,6 +1598,20 @@ pub async fn run_locomo_eval_cross_rerank_from_db_collect(
                 continue;
             }
 
+            // base_ids fetched BEFORE the latency Instant so the probe does not
+            // pollute latency_ms; only the rerank/model arms need the base ranking.
+            let needs_base = feature == "rerank" || feature.starts_with("rerank_model");
+            let base_ids_owned: Vec<String> = if needs_base {
+                db.search_memory(&qa.question, 10, None, None, None, None, None, None)
+                    .await?
+                    .iter()
+                    .map(|r| r.source_id.clone())
+                    .collect()
+            } else {
+                vec![]
+            };
+            let base_ids: Vec<&str> = base_ids_owned.iter().map(|s| s.as_str()).collect();
+
             let t0 = Instant::now();
             let results = db
                 .search_memory_cross_rerank(
@@ -1615,6 +1634,15 @@ pub async fn run_locomo_eval_cross_rerank_from_db_collect(
                 continue;
             }
             let result_ids: Vec<&str> = results.iter().map(|r| r.source_id.as_str()).collect();
+            // After result_ids exist and outside the latency window: CE-path probe.
+            let channel_touched = crate::eval::shared::ce_channel_touched(
+                db,
+                feature,
+                &qa.question,
+                &base_ids,
+                &result_ids,
+            )
+            .await?;
             let grades: HashMap<&str, u8> = result_ids
                 .iter()
                 .map(|id| (*id, if relevant_ids.contains(*id) { 1 } else { 0 }))
@@ -1633,6 +1661,7 @@ pub async fn run_locomo_eval_cross_rerank_from_db_collect(
                 latency_ms,
                 graph_skipped: None,
                 temporal_touched: None,
+                channel_touched,
             });
         }
     }
@@ -1819,6 +1848,7 @@ pub async fn run_locomo_eval_cross_rerank_temporal_collect(
                 latency_ms,
                 graph_skipped: None,
                 temporal_touched,
+                channel_touched: None,
             });
         }
     }
@@ -2250,6 +2280,7 @@ pub async fn run_locomo_eval_expanded_intent_collect(
                 latency_ms: 0.0,
                 graph_skipped: Some(!used_graph),
                 temporal_touched: None,
+                channel_touched: None,
             });
         }
     }
@@ -2381,6 +2412,10 @@ pub async fn run_locomo_eval_graph_stream_collect(
                 .search_memory(&qa.question, 10, None, None, None, None, None, None)
                 .await?;
 
+            // Per-sample DB handle: feature contains graph_stream, probe fires.
+            let channel_touched =
+                crate::eval::shared::base_channel_touched(&db, feature, &qa.question).await?;
+
             let relevant_ids: HashSet<String> = qa
                 .evidence
                 .iter()
@@ -2408,6 +2443,7 @@ pub async fn run_locomo_eval_graph_stream_collect(
                 latency_ms: 0.0,
                 graph_skipped: None,
                 temporal_touched: None,
+                channel_touched,
             });
         }
     }

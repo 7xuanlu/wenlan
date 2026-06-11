@@ -27,7 +27,7 @@ runs). Every other feature on that bench gets a G3 verdict:
   NOISE-FLOOR   |Δ| inside the A/A floor — indistinguishable from no-op noise
   WRONG-DIR     above floor but negative
   UNATTRIBUTED  <90% of moved queries carry the channel's touch flag
-                (temporal_touched / not graph_skipped); movement the channel
+                (channel_touched / temporal_touched / not graph_skipped); movement the channel
                 disclaims is confound, not lever
   NO-FLOOR      bench has no A/A run — verdict unavailable, not a pass
   FLOOR-SRC     the A/A run itself
@@ -38,8 +38,9 @@ for the synthetic-scenario asserts.
 
 G3 trust calibration (read before acting on a verdict):
 - A `*` suffix (SIGNAL*/WEAK*) = the rows carried no touch flag, so the
-  attribution condition was VACUOUS. Today only the temporal arms (and graph
-  arms run with ORIGIN_ENABLE_GRAPH_GATE on) emit a flag; for every other
+  attribution condition was VACUOUS. Today channel arms emit channel_touched
+  (highest precedence), temporal arms emit temporal_touched, and graph arms
+  run with ORIGIN_ENABLE_GRAPH_GATE on emit graph_skipped; for every other
   feature attribution is unchecked, not passed.
 - The floor is keyed by bench only. A/A controls exist for the CE/cross-rerank
   path; do NOT co-locate a CE-path A/A with base-path feature files and trust
@@ -253,17 +254,27 @@ def analyze_pair(feature, bench, rows):
 
     # G3 attribution: of the queries the flag flip actually moved (Δndcg != 0),
     # what fraction does the channel itself claim to have touched? Movement on
-    # a query the channel disclaims (temporal cue didn't fire / graph gate
-    # skipped) is unattributed — noise or confound, not the lever. None when
-    # the rows carry no flag (vacuously attributed; the gate never blocks what
-    # it can't check). temporal_touched wins when both flags are present.
+    # a query the channel disclaims (channel not touched / temporal cue did not
+    # fire / graph gate skipped) is unattributed — noise or confound, not the
+    # lever. None when the rows carry no flag (vacuously attributed; the gate
+    # never blocks what it cannot check). channel_touched has highest precedence,
+    # then temporal_touched, then graph_skipped.
     changed_idx = [i for i, d in enumerate(dndcg) if d != 0.0]
+    has_channel_flag = any(
+        o2.get("channel_touched") is not None for _, o2 in paired
+    )
     has_temporal_flag = any(
         o2.get("temporal_touched") is not None for _, o2 in paired
     )
     attribution_src = None
     attribution_ratio = None
-    if has_temporal_flag:
+    if has_channel_flag:
+        attribution_src = "channel_touched"
+        claimed = [
+            i for i in changed_idx if paired[i][1].get("channel_touched") is True
+        ]
+        attribution_ratio = (len(claimed) / len(changed_idx)) if changed_idx else 1.0
+    elif has_temporal_flag:
         attribution_src = "temporal_touched"
         claimed = [
             i for i in changed_idx if paired[i][1].get("temporal_touched") is True
@@ -363,10 +374,11 @@ def g3_verdict(res, floors):
     NO-FLOOR (verdict unavailable, not a pass).
 
     A trailing `*` (SIGNAL* / WEAK*) means the rows carried NO touch flag, so
-    condition 3 was vacuous — today only the temporal arms (and graph arms run
-    with ORIGIN_ENABLE_GRAPH_GATE on) emit one; everything else is unchecked,
-    and the star keeps that visible instead of letting an unchecked verdict
-    read as a fully-gated one."""
+    condition 3 was vacuous — channel arms emit channel_touched (highest
+    precedence), temporal arms emit temporal_touched, graph arms run with
+    ORIGIN_ENABLE_GRAPH_GATE on emit graph_skipped; everything else is
+    unchecked, and the star keeps that visible instead of letting an unchecked
+    verdict read as a fully-gated one."""
     if is_aa_feature(res["feature"]):
         return "FLOOR-SRC"
     floor = floors.get(res["bench"])
@@ -444,10 +456,11 @@ def recommend(res, bh_sig):
     return "KEEP-OFF"
 
 
-def _selftest_rows(feature, bench, deltas, categories, touched=None, skipped=None):
+def _selftest_rows(feature, bench, deltas, categories, touched=None, skipped=None,
+                   channel_touched=None):
     """Build synthetic OFF/ON row pairs. deltas[i] = ndcg_on - ndcg_off for
     query qi; categories[i] its category; touched/skipped optional per-query
-    ON-arm flags (temporal_touched / graph_skipped)."""
+    ON-arm flags (temporal_touched / graph_skipped / channel_touched)."""
     rows = []
     for i, d in enumerate(deltas):
         base = 0.5
@@ -460,6 +473,8 @@ def _selftest_rows(feature, bench, deltas, categories, touched=None, skipped=Non
             on["temporal_touched"] = touched[i]
         if skipped is not None:
             on["graph_skipped"] = skipped[i]
+        if channel_touched is not None:
+            on["channel_touched"] = channel_touched[i]
         rows.append(off)
         rows.append(on)
     return rows
@@ -535,6 +550,34 @@ def selftest():
     gok["bh_significant"] = True
     assert gok["attribution_ratio"] == 1.0
     assert g3_verdict(gok, floors) == "SIGNAL", g3_verdict(gok, floors)
+
+    # --- channel_touched attribution: highest-precedence flag (overrides temporal/graph)
+    # (a) every moved query has channel_touched=True → attributed, no star, SIGNAL
+    ch_sig = analyze_pair(
+        "chan_a", "lme",
+        _selftest_rows("chan_a", "lme", [0.05] * 20, cats, channel_touched=[True] * 20),
+    )
+    ch_sig["bh_significant"] = True
+    assert ch_sig["attribution_src"] == "channel_touched", ch_sig.get("attribution_src")
+    assert ch_sig["attribution_ratio"] == 1.0, ch_sig["attribution_ratio"]
+    assert g3_verdict(ch_sig, floors) == "SIGNAL", g3_verdict(ch_sig, floors)
+    # (b) no moved query has channel_touched=True → ratio 0.0, UNATTRIBUTED
+    ch_unattr = analyze_pair(
+        "chan_b", "lme",
+        _selftest_rows("chan_b", "lme", [0.05] * 20, cats, channel_touched=[False] * 20),
+    )
+    ch_unattr["bh_significant"] = True
+    assert ch_unattr["attribution_src"] == "channel_touched", ch_unattr.get("attribution_src")
+    assert ch_unattr["attribution_ratio"] == 0.0, ch_unattr["attribution_ratio"]
+    assert g3_verdict(ch_unattr, floors) == "UNATTRIBUTED", g3_verdict(ch_unattr, floors)
+    # (c) precedence: both channel_touched and temporal_touched present → channel wins
+    ch_prec = analyze_pair(
+        "chan_c", "lme",
+        _selftest_rows("chan_c", "lme", [0.05] * 20, cats,
+                       touched=[True] * 20, channel_touched=[True] * 20),
+    )
+    ch_prec["bh_significant"] = True
+    assert ch_prec["attribution_src"] == "channel_touched", ch_prec.get("attribution_src")
 
     # --- no flag data at all → vacuously attributed (gate never blocks what it
     # can't check), but the verdict carries a star so unchecked attribution

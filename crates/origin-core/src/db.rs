@@ -10642,6 +10642,31 @@ impl MemoryDB {
         Ok(merged)
     }
 
+    /// Anchor eligibility shared by the live graph stream and the eval-side
+    /// G3 touch probe: non-person entities with `memory_entities` degree <= hub
+    /// cap, in entity-hit rank order. One source of truth so the probe can
+    /// never drift from what the stream actually does.
+    async fn stream_anchor_ids(
+        &self,
+        entity_hits: &[EntitySearchResult],
+    ) -> Result<Vec<String>, OriginError> {
+        // Type filter (cheap, in-memory) then degree filter (one query).
+        let typed: Vec<String> = entity_hits
+            .iter()
+            .filter(|h| !is_person_like(&h.entity.entity_type))
+            .map(|h| h.entity.id.clone())
+            .collect();
+        if typed.is_empty() {
+            return Ok(vec![]);
+        }
+        let degrees = self.entity_degrees(&typed).await?;
+        let cap = graph_hub_cap();
+        Ok(typed
+            .into_iter()
+            .filter(|id| degrees.get(id).copied().unwrap_or(0) <= cap)
+            .collect())
+    }
+
     /// v3 live graph stream (ORIGIN_GRAPH_MEMORY_STREAM). Fuses memories linked
     /// to the query-anchored entities into the result pool at memory (`source_id`)
     /// granularity, replacing the dead entity→observation boost.
@@ -10667,24 +10692,13 @@ impl MemoryDB {
         limit: usize,
         entity_hits: &[EntitySearchResult],
     ) -> Result<Vec<SearchResult>, OriginError> {
-        // 1. Type filter (cheap, in-memory) then degree filter (one query).
-        let typed: Vec<String> = entity_hits
-            .iter()
-            .filter(|h| !is_person_like(&h.entity.entity_type))
-            .map(|h| h.entity.id.clone())
-            .collect();
-        if typed.is_empty() {
-            return Ok(results);
-        }
-        let degrees = self.entity_degrees(&typed).await?;
-        let cap = graph_hub_cap();
-        let ranked_anchor_ids: Vec<String> = typed
-            .into_iter()
-            .filter(|id| degrees.get(id).copied().unwrap_or(0) <= cap)
-            .collect();
+        // 1. Shared anchor eligibility (type + degree). One source of truth
+        //    with the G3 touch probe so the two can never drift.
+        let ranked_anchor_ids = self.stream_anchor_ids(entity_hits).await?;
         if ranked_anchor_ids.is_empty() {
             log::info!(
-                "[graph_stream] no eligible anchors after type+degree filter (cap={cap}); graph contributes nothing"
+                "[graph_stream] no eligible anchors after type+degree filter (cap={}); graph contributes nothing",
+                graph_hub_cap()
             );
             return Ok(results);
         }
@@ -10754,6 +10768,32 @@ impl MemoryDB {
                 .then_with(|| a.source_id.cmp(&b.source_id))
         });
         Ok(merged)
+    }
+
+    /// Eval-side G3 touch probe: would the v3 graph stream contribute >= 1
+    /// linked memory for this query? Mirrors `augment_with_memory_stream`
+    /// steps 1-2 via the shared `stream_anchor_ids` helper. Read-only.
+    ///
+    /// The entity-hit count `5` mirrors `augment_with_graph`'s
+    /// `search_entities_by_vector(query, 5)` (db.rs:10511) — the same anchor
+    /// set the live stream is fed — so the probe sees what the stream sees.
+    pub async fn graph_stream_touches(
+        &self,
+        query: &str,
+        limit: usize,
+    ) -> Result<bool, OriginError> {
+        let hits = match self.search_entities_by_vector(query, 5).await {
+            Ok(h) if !h.is_empty() => h,
+            _ => return Ok(false),
+        };
+        let anchors = self.stream_anchor_ids(&hits).await?;
+        if anchors.is_empty() {
+            return Ok(false);
+        }
+        Ok(!self
+            .get_memories_for_entities(&anchors, limit)
+            .await?
+            .is_empty())
     }
 
     /// `memory_entities` link count for each entity id. Entities absent from the
@@ -31632,6 +31672,95 @@ pub(crate) mod tests {
             out.iter().any(|r| r.source_id == "m_fine"),
             "fine-concept memory surfaces (anchor under cap) — stream is live, not silent"
         );
+    }
+
+    /// G3 touch probe: the eval-side `graph_stream_touches` agrees with the live
+    /// `augment_with_memory_stream` anchor logic because both share
+    /// `stream_anchor_ids` (one source of truth, cannot drift). Three fixtures:
+    /// A — linked under-cap concept => probe true; B — unlinked fresh DB =>
+    /// probe false; C — same as A but the anchor degree is pushed OVER the hub
+    /// cap, so the shared filter drops it => probe false (drift guard: if the
+    /// probe ever stopped filtering hubs the live stream does, C would go red).
+    #[tokio::test]
+    async fn plan_graph_stream_touches_probe_agrees_with_stream() {
+        // Fixture A — linked, under-cap, non-person anchor => probe true.
+        {
+            let (db, _dir) = test_db().await;
+            let concept = db
+                .store_entity("photosynthesis", "concept", None, None, None)
+                .await
+                .unwrap();
+            insert_memory_at(
+                &db,
+                "m_link",
+                "linked",
+                "photosynthesis field notes",
+                1,
+                1,
+                "enriched",
+            )
+            .await;
+            db.link_memory_entities("m_link", &[concept.as_str()])
+                .await
+                .unwrap();
+            assert!(
+                db.graph_stream_touches("photosynthesis", 10).await.unwrap(),
+                "fixture A: under-cap concept-linked memory must be touched by the stream probe"
+            );
+        }
+
+        // Fixture B — fresh DB, one unlinked memory => probe false.
+        {
+            let (db, _dir) = test_db().await;
+            insert_memory_at(
+                &db,
+                "m_orphan",
+                "orphan",
+                "photosynthesis field notes",
+                1,
+                1,
+                "enriched",
+            )
+            .await;
+            assert!(
+                !db.graph_stream_touches("photosynthesis", 10).await.unwrap(),
+                "fixture B: an unlinked memory has no anchor — probe must be false"
+            );
+        }
+
+        // Fixture C — drift guard: anchor degree pushed OVER the hub cap, so the
+        // SHARED anchor filter drops it exactly as the live stream would.
+        {
+            let (db, _dir) = test_db().await;
+            let concept = db
+                .store_entity("photosynthesis", "concept", None, None, None)
+                .await
+                .unwrap();
+            // Three distinct memories linked to the one concept => degree 3 > cap 2.
+            for sid in ["m_c1", "m_c2", "m_c3"] {
+                insert_memory_at(
+                    &db,
+                    sid,
+                    "c",
+                    "photosynthesis field notes",
+                    1,
+                    1,
+                    "enriched",
+                )
+                .await;
+                db.link_memory_entities(sid, &[concept.as_str()])
+                    .await
+                    .unwrap();
+            }
+            let touched = temp_env::async_with_vars([("ORIGIN_GRAPH_HUB_CAP", Some("2"))], async {
+                db.graph_stream_touches("photosynthesis", 10).await.unwrap()
+            })
+            .await;
+            assert!(
+                !touched,
+                "fixture C: over-cap anchor is filtered like the stream filters it — probe false"
+            );
+        }
     }
 
     // ===== G4 standalone capability-liveness gate =====
