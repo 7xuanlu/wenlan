@@ -760,14 +760,16 @@ pub async fn run_longmemeval_eval(path: &Path) -> Result<LongMemEvalReport, Orig
         per_case,
         coverage: None,
     };
-    report.env = Some(build_lme_env(
-        "base",
-        path,
-        "search_memory",
-        "none",
-        "none",
-        None,
+    let mut env_stamp = build_lme_env("base", path, "search_memory", "none", "none", None);
+    env_stamp.flags.push(format!(
+        "graph_memory_stream={}",
+        if crate::db::graph_memory_stream_enabled() {
+            "on"
+        } else {
+            "off"
+        }
     ));
+    report.env = Some(env_stamp);
     Ok(report)
 }
 
@@ -895,14 +897,23 @@ pub async fn run_longmemeval_eval_reranked(
         per_case,
         coverage: None,
     };
-    report.env = Some(build_lme_env(
+    let mut env_stamp = build_lme_env(
         "reranked",
         path,
         "search_memory_reranked",
         llm.kind(),
         &llm.model_id(),
         None,
+    );
+    env_stamp.flags.push(format!(
+        "graph_memory_stream={}",
+        if crate::db::graph_memory_stream_enabled() {
+            "on"
+        } else {
+            "off"
+        }
     ));
+    report.env = Some(env_stamp);
     Ok(report)
 }
 
@@ -1033,14 +1044,23 @@ pub async fn run_longmemeval_eval_cross_rerank(
         per_case,
         coverage: None,
     };
-    report.env = Some(build_lme_env(
+    let mut env_stamp = build_lme_env(
         "cross_rerank",
         path,
         "search_memory_with_reranker",
         "cross-encoder",
         &format!("cross-encoder:{}", reranker.model_id()),
         None,
+    );
+    env_stamp.flags.push(format!(
+        "graph_memory_stream={}",
+        if crate::db::graph_memory_stream_enabled() {
+            "on"
+        } else {
+            "off"
+        }
     ));
+    report.env = Some(env_stamp);
     Ok(report)
 }
 
@@ -1336,6 +1356,14 @@ pub async fn run_longmemeval_eval_cross_rerank_from_db(
         .flags
         .push(format!("episode_channel={}", episode_state));
     env_stamp.flags.push(format!("fact_channel={}", fact_state));
+    env_stamp.flags.push(format!(
+        "graph_memory_stream={}",
+        if crate::db::graph_memory_stream_enabled() {
+            "on"
+        } else {
+            "off"
+        }
+    ));
     // Record the (now-pinned) rerank-pool knobs so a non-default depth carries
     // into the env stamp / baseline filename instead of being invisible.
     env_stamp.flags.push(format!(
@@ -1462,6 +1490,14 @@ pub async fn run_longmemeval_eval_from_db(
         None,
     );
     env_stamp.flags.push(format!("graph_gate={graph_gate}"));
+    env_stamp.flags.push(format!(
+        "graph_memory_stream={}",
+        if crate::db::graph_memory_stream_enabled() {
+            "on"
+        } else {
+            "off"
+        }
+    ));
     env_stamp.flags.push("scenario_db=consolidated".to_string());
     report.env = Some(env_stamp);
     Ok(report)
@@ -1535,6 +1571,410 @@ pub async fn run_longmemeval_eval_from_db_collect(
             graph_skipped: if gate_on { Some(graph_skipped) } else { None },
             temporal_touched: None,
         });
+    }
+
+    Ok(rows)
+}
+
+/// One row of the recall-headroom probe: where the gold evidence turns sit in
+/// the base path's ranked list at three separate fetch limits.
+///
+/// Each limit is a SEPARATE `search_memory` call because candidate generation
+/// scales with the limit (`fetch_limit = limit * 3` per channel) and dedup +
+/// graph augmentation run over that scaled pool — ranks from one deep call do
+/// NOT equal where gold sits in a shallower production call. `gold_in_10` is
+/// production semantics (limit=10), `gold_in_30` is the CE knee window
+/// (RERANK_POOL_FLOOR=30) semantics, `gold_in_100` is the deep single-query
+/// fetch ceiling.
+#[derive(Debug, serde::Serialize)]
+pub struct HeadroomRow {
+    pub query_id: String,
+    pub category: String,
+    pub n_gold: usize,
+    /// 0-based rank of each gold id in the limit=100 call, -1 = absent.
+    /// Sorted ascending with absences last so output is deterministic.
+    pub gold_ranks_100: Vec<i64>,
+    pub gold_in_10: usize,
+    pub gold_in_30: usize,
+    pub gold_in_100: usize,
+    pub hit_any_10: bool,
+    pub hit_any_30: bool,
+    pub hit_any_100: bool,
+}
+
+/// Count gold ranks that landed inside the top-`k` (absences are `-1`).
+fn gold_in_top_k(ranks: &[i64], k: usize) -> usize {
+    ranks
+        .iter()
+        .filter(|&&r| r >= 0 && (r as usize) < k)
+        .count()
+}
+
+/// Recall-headroom probe over the base `search_memory` path (Step 0 of the
+/// decompose probe ladder). For each question, runs the base path at three
+/// fetch limits (10 / 30 / 100) and records how many gold evidence turns each
+/// list contains. Gold absent at the deep limit is recall headroom a
+/// single-query fetch cannot reach — the multi-anchor / decompose case; gold
+/// reachable at 30 but not 10 is CE-knee-window territory (RERANK_POOL_FLOOR);
+/// gold reachable at 100 but not 30 is pool-widening territory.
+/// No flag arms: this measures the substrate, not a lever, so there is no
+/// substrate-liveness gate either (the base path has no starvable channel).
+pub async fn run_longmemeval_headroom_probe_from_db(
+    db: &MemoryDB,
+    path: &Path,
+) -> Result<Vec<HeadroomRow>, OriginError> {
+    const LIMITS: [usize; 3] = [10, 30, 100];
+    let mut samples = load_longmemeval(path)?;
+    apply_lme_limit(&mut samples);
+    let mut rows: Vec<HeadroomRow> = Vec::new();
+
+    for sample in &samples {
+        let memories = extract_memories(sample);
+        let relevant_source_ids: HashSet<String> = memories
+            .iter()
+            .filter(|m| m.has_answer)
+            .map(|m| memory_source_id(&m.question_id, m.session_idx, m.turn_idx))
+            .collect();
+        if relevant_source_ids.is_empty() {
+            continue;
+        }
+
+        // One independent search per limit: per-limit candidate generation is
+        // the point (see HeadroomRow docs), so ranks are computed within each
+        // call's own list, never derived by truncating the deep call.
+        let mut gold_in = [0usize; 3];
+        let mut deep_ranks: Vec<i64> = Vec::new();
+        for (i, &k) in LIMITS.iter().enumerate() {
+            let results = db
+                .search_memory(&sample.question, k, None, None, None, None, None, None)
+                .await?;
+            let ranks: Vec<i64> = relevant_source_ids
+                .iter()
+                .map(|gid| {
+                    results
+                        .iter()
+                        .position(|r| r.source_id == *gid)
+                        .map(|p| p as i64)
+                        .unwrap_or(-1)
+                })
+                .collect();
+            gold_in[i] = gold_in_top_k(&ranks, k);
+            if k == 100 {
+                deep_ranks = ranks;
+                deep_ranks.sort_by_key(|&r| if r < 0 { i64::MAX } else { r });
+            }
+        }
+
+        rows.push(HeadroomRow {
+            query_id: sample.question_id.clone(),
+            category: sample.question_type.clone(),
+            n_gold: relevant_source_ids.len(),
+            gold_ranks_100: deep_ranks,
+            gold_in_10: gold_in[0],
+            gold_in_30: gold_in[1],
+            gold_in_100: gold_in[2],
+            hit_any_10: gold_in[0] > 0,
+            hit_any_30: gold_in[1] > 0,
+            hit_any_100: gold_in[2] > 0,
+        });
+    }
+
+    Ok(rows)
+}
+
+/// One row of the decompose-recall probe (Step 1 of the decompose probe
+/// ladder): does multi-anchor fetch reach gold that single-query fetch cannot?
+///
+/// All arms fetch at the CE knee window (limit=30, `RERANK_POOL_FLOOR=30`
+/// semantics) so the comparison is against the post-knee production shape:
+/// - `gold_in_base30` — single original query (control arm)
+/// - `gold_in_date30` — Zep-style question-date prefix `(date: ...) question`
+/// - `gold_in_union`  — presence anywhere in the union of per-stream pools
+///   (original + subqueries, 30 each): the ceiling for ANY downstream ranker
+/// - `gold_in_rrf30`  — top-30 of the equal-weight RRF merge, mirroring the
+///   production `search_memory_decomposed` merge: what the CURRENT merge
+///   realizes of that ceiling
+///
+/// Pool-size control is by construction: union ≤ 4 streams × 30 = 120, and the
+/// headroom probe already measured the single-query limit=100 ceiling on the
+/// same questions — join the two JSONLs on `query_id` to separate anchor
+/// diversity from pool size.
+#[derive(Debug, serde::Serialize)]
+pub struct DecomposeRecallRow {
+    pub query_id: String,
+    pub category: String,
+    pub n_gold: usize,
+    /// Subqueries from the fixture (excluding the original). 0 = atomic:
+    /// the union/rrf arms degrade to the base arm by construction.
+    pub n_subqueries: usize,
+    pub gold_in_base30: usize,
+    pub gold_in_date30: usize,
+    pub gold_in_union: usize,
+    pub union_size: usize,
+    pub gold_in_rrf30: usize,
+}
+
+#[derive(serde::Deserialize)]
+struct SubqFixtureRow {
+    query_id: String,
+    subqueries: Vec<String>,
+}
+
+/// Load the pre-generated subquery fixture (JSONL: `{query_id, subqueries}`).
+/// Subqueries exclude the original question (the probe prepends it, mirroring
+/// `retrieval::decompose::parse_subqueries`). Fails loud on malformed lines —
+/// the fixture is generated input, not user data.
+fn load_subquery_fixture(path: &Path) -> Result<HashMap<String, Vec<String>>, OriginError> {
+    let text = std::fs::read_to_string(path)
+        .map_err(|e| OriginError::Generic(format!("read subquery fixture: {e}")))?;
+    let mut map = HashMap::new();
+    for line in text.lines().filter(|l| !l.trim().is_empty()) {
+        let row: SubqFixtureRow = serde_json::from_str(line)
+            .map_err(|e| OriginError::Generic(format!("parse subquery fixture line: {e}")))?;
+        map.insert(row.query_id, row.subqueries);
+    }
+    Ok(map)
+}
+
+/// Equal-weight RRF merge of per-stream ranked id lists, truncated to `k`.
+/// Mirrors the `search_memory_decomposed` merge (score = Σ 1/(60+rank)), with
+/// a stable id tiebreak the production code leaves to HashMap order.
+fn rrf_merge_ids(streams: &[Vec<String>], k: usize) -> Vec<String> {
+    let mut scores: HashMap<&str, f32> = HashMap::new();
+    for ranked in streams {
+        for (rank, id) in ranked.iter().enumerate() {
+            *scores.entry(id.as_str()).or_default() += 1.0 / (60.0 + rank as f32);
+        }
+    }
+    let mut merged: Vec<(&str, f32)> = scores.into_iter().collect();
+    merged.sort_by(|a, b| {
+        b.1.partial_cmp(&a.1)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| a.0.cmp(b.0))
+    });
+    merged.truncate(k);
+    merged.into_iter().map(|(id, _)| id.to_string()).collect()
+}
+
+/// Decompose-recall probe over the base `search_memory` path (Step 1 of the
+/// decompose probe ladder). Consumes a pre-generated subquery fixture
+/// (agent-delegated decomposition — the primary lane from the 2026-05-30
+/// decision) instead of calling an LLM, so the run is deterministic and
+/// GPU-free. See [`DecomposeRecallRow`] for the four arms.
+pub async fn run_longmemeval_decompose_recall_probe_from_db(
+    db: &MemoryDB,
+    path: &Path,
+    subq_path: &Path,
+) -> Result<Vec<DecomposeRecallRow>, OriginError> {
+    const K: usize = 30;
+    let subq_map = load_subquery_fixture(subq_path)?;
+    let mut samples = load_longmemeval(path)?;
+    apply_lme_limit(&mut samples);
+    let mut rows: Vec<DecomposeRecallRow> = Vec::new();
+
+    for sample in &samples {
+        let memories = extract_memories(sample);
+        let relevant_source_ids: HashSet<String> = memories
+            .iter()
+            .filter(|m| m.has_answer)
+            .map(|m| memory_source_id(&m.question_id, m.session_idx, m.turn_idx))
+            .collect();
+        if relevant_source_ids.is_empty() {
+            continue;
+        }
+        let gold_in = |ids: &[String]| {
+            ids.iter()
+                .filter(|id| relevant_source_ids.contains(*id))
+                .count()
+        };
+
+        let subqueries = subq_map
+            .get(&sample.question_id)
+            .cloned()
+            .unwrap_or_default();
+
+        // Streams mirror parse_subqueries: original first, then subqueries.
+        let mut streams: Vec<Vec<String>> = Vec::with_capacity(1 + subqueries.len());
+        for q in std::iter::once(&sample.question).chain(subqueries.iter()) {
+            let results = db
+                .search_memory(q, K, None, None, None, None, None, None)
+                .await?;
+            streams.push(results.into_iter().map(|r| r.source_id).collect());
+        }
+
+        let date_query = format!("(date: {}) {}", sample.question_date, sample.question);
+        let date_results = db
+            .search_memory(&date_query, K, None, None, None, None, None, None)
+            .await?;
+        let date_ids: Vec<String> = date_results.into_iter().map(|r| r.source_id).collect();
+
+        let union: HashSet<&str> = streams.iter().flatten().map(|s| s.as_str()).collect();
+        let rrf_top = rrf_merge_ids(&streams, K);
+
+        rows.push(DecomposeRecallRow {
+            query_id: sample.question_id.clone(),
+            category: sample.question_type.clone(),
+            n_gold: relevant_source_ids.len(),
+            n_subqueries: subqueries.len(),
+            gold_in_base30: gold_in(&streams[0]),
+            gold_in_date30: gold_in(&date_ids),
+            gold_in_union: relevant_source_ids
+                .iter()
+                .filter(|gid| union.contains(gid.as_str()))
+                .count(),
+            union_size: union.len(),
+            gold_in_rrf30: gold_in(&rrf_top),
+        });
+    }
+
+    Ok(rows)
+}
+
+/// CE-rank a candidate pool against `query` and return source_ids in CE-score
+/// order (descending, stable id tiebreak). Fail-loud on reranker errors — this
+/// is probe code, not the production degrade path.
+async fn ce_rank_ids(
+    reranker: std::sync::Arc<dyn crate::reranker::Reranker>,
+    query: &str,
+    pool: Vec<(String, String)>,
+) -> Result<Vec<String>, OriginError> {
+    if pool.len() <= 1 {
+        return Ok(pool.into_iter().map(|(id, _)| id).collect());
+    }
+    let q = query.to_string();
+    let mut scored = tokio::task::spawn_blocking(move || reranker.rerank(&q, &pool))
+        .await
+        .map_err(|e| OriginError::Generic(format!("rerank join: {e}")))??;
+    scored.sort_by(|a, b| {
+        b.1.partial_cmp(&a.1)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| a.0.cmp(&b.0))
+    });
+    Ok(scored.into_iter().map(|(id, _)| id).collect())
+}
+
+/// Step 2 of the decompose probe ladder: CE conversion at MATCHED budget.
+///
+/// Both arms feed the cross-encoder exactly 30 candidates (the measured knee,
+/// PR #244) and score the CE's top-10 — so any delta is pool COMPOSITION
+/// (anchor diversity), never pool size:
+/// - OFF arm: base `search_memory(question, 30)` pool (current CE-path shape
+///   under `RERANK_POOL_FLOOR=30`)
+/// - ON arm: equal-weight RRF merge of original+subquery streams (30 each,
+///   per-stream dedup by source_id), truncated to 30 — the
+///   `search_memory_decomposed` merge feeding the CE instead of bypassing it
+///
+/// Atomic questions (no subqueries in the fixture) have byte-identical pools;
+/// the CE is deterministic, so the OFF metrics are emitted for both arms
+/// without a second CE pass (mirrors a production gate where decompose no-ops
+/// on atomic queries). `latency_ms` covers the CE call only — per-stream
+/// searches are shared across arms and excluded.
+///
+/// Emits both arms as [`crate::eval::paired::PerQueryRow`]s
+/// (feature `decompose_ce`) so `analyze_paired.py` reads the output directly.
+pub async fn run_longmemeval_decompose_ce_probe_from_db(
+    db: &MemoryDB,
+    path: &Path,
+    subq_path: &Path,
+    reranker: std::sync::Arc<dyn crate::reranker::Reranker>,
+) -> Result<Vec<crate::eval::paired::PerQueryRow>, OriginError> {
+    use crate::eval::paired::PerQueryRow;
+    use std::time::Instant;
+    const K: usize = 30;
+
+    let subq_map = load_subquery_fixture(subq_path)?;
+    let mut samples = load_longmemeval(path)?;
+    apply_lme_limit(&mut samples);
+    let mut rows: Vec<PerQueryRow> = Vec::new();
+
+    for sample in &samples {
+        let memories = extract_memories(sample);
+        let relevant_source_ids: HashSet<String> = memories
+            .iter()
+            .filter(|m| m.has_answer)
+            .map(|m| memory_source_id(&m.question_id, m.session_idx, m.turn_idx))
+            .collect();
+        if relevant_source_ids.is_empty() {
+            continue;
+        }
+        let relevant_set: HashSet<&str> = relevant_source_ids.iter().map(|s| s.as_str()).collect();
+
+        let subqueries = subq_map
+            .get(&sample.question_id)
+            .cloned()
+            .unwrap_or_default();
+
+        // Per-stream searches: ordered unique source_ids + first-seen content
+        // (the CE candidate text, trimmed to 512 chars like the production path).
+        let mut streams: Vec<Vec<String>> = Vec::with_capacity(1 + subqueries.len());
+        let mut content_by_id: HashMap<String, String> = HashMap::new();
+        for q in std::iter::once(&sample.question).chain(subqueries.iter()) {
+            let results = db
+                .search_memory(q, K, None, None, None, None, None, None)
+                .await?;
+            let mut ids = Vec::with_capacity(results.len());
+            let mut seen: HashSet<&str> = HashSet::new();
+            for r in &results {
+                if seen.insert(r.source_id.as_str()) {
+                    ids.push(r.source_id.clone());
+                }
+            }
+            for r in &results {
+                content_by_id
+                    .entry(r.source_id.clone())
+                    .or_insert_with(|| r.content.chars().take(512).collect());
+            }
+            streams.push(ids);
+        }
+
+        let pool_of = |ids: &[String]| -> Vec<(String, String)> {
+            ids.iter()
+                .map(|id| {
+                    (
+                        id.clone(),
+                        content_by_id.get(id).cloned().unwrap_or_default(),
+                    )
+                })
+                .collect()
+        };
+        let on_ids = rrf_merge_ids(&streams, K);
+        let off_ids = &streams[0];
+
+        let mut emit = |state: &str, ranked: &[String], latency_ms: f64| {
+            let top10: Vec<&str> = ranked.iter().take(10).map(|s| s.as_str()).collect();
+            let grades: HashMap<&str, u8> = top10
+                .iter()
+                .map(|id| (*id, u8::from(relevant_set.contains(*id))))
+                .collect();
+            rows.push(PerQueryRow {
+                feature: "decompose_ce".to_string(),
+                bench: "lme".to_string(),
+                flag_state: state.to_string(),
+                query_id: sample.question_id.clone(),
+                category: sample.question_type.clone(),
+                ndcg10: metrics::ndcg_at_k(&top10, &grades, 10),
+                recall5: metrics::recall_at_k(&top10, &relevant_set, 5),
+                mrr: metrics::mrr(&top10, &relevant_set),
+                latency_ms,
+                graph_skipped: None,
+                temporal_touched: None,
+            });
+        };
+
+        let t0 = Instant::now();
+        let off_ranked = ce_rank_ids(reranker.clone(), &sample.question, pool_of(off_ids)).await?;
+        let off_latency = t0.elapsed().as_secs_f64() * 1000.0;
+        emit("off", &off_ranked, off_latency);
+
+        if subqueries.is_empty() {
+            // Atomic: pools identical, CE deterministic — reuse the OFF ranking.
+            emit("on", &off_ranked, off_latency);
+        } else {
+            let t1 = Instant::now();
+            let on_ranked =
+                ce_rank_ids(reranker.clone(), &sample.question, pool_of(&on_ids)).await?;
+            emit("on", &on_ranked, t1.elapsed().as_secs_f64() * 1000.0);
+        }
     }
 
     Ok(rows)
@@ -1751,14 +2191,23 @@ pub async fn run_longmemeval_eval_expanded(
         per_case,
         coverage: None,
     };
-    report.env = Some(build_lme_env(
+    let mut env_stamp = build_lme_env(
         "expanded",
         path,
         "search_memory_expanded",
         llm.kind(),
         &llm.model_id(),
         None,
+    );
+    env_stamp.flags.push(format!(
+        "graph_memory_stream={}",
+        if crate::db::graph_memory_stream_enabled() {
+            "on"
+        } else {
+            "off"
+        }
     ));
+    report.env = Some(env_stamp);
     Ok(report)
 }
 
@@ -1902,6 +2351,14 @@ pub async fn run_longmemeval_eval_prf(
     env_stamp.flags.push(format!(
         "prf_rounds={}",
         crate::retrieval::prf::prf_rounds()
+    ));
+    env_stamp.flags.push(format!(
+        "graph_memory_stream={}",
+        if crate::db::graph_memory_stream_enabled() {
+            "on"
+        } else {
+            "off"
+        }
     ));
     report.env = Some(env_stamp);
     Ok(report)
@@ -2078,14 +2535,23 @@ pub async fn run_longmemeval_eval_temporal(path: &Path) -> Result<LongMemEvalRep
         per_case,
         coverage: None,
     };
-    report.env = Some(build_lme_env(
+    let mut env_stamp = build_lme_env(
         "temporal",
         path,
         "search_memory_temporal",
-        "none", // no LLM provider (no query expansion)
+        "none",
         "none",
         None,
+    );
+    env_stamp.flags.push(format!(
+        "graph_memory_stream={}",
+        if crate::db::graph_memory_stream_enabled() {
+            "on"
+        } else {
+            "off"
+        }
     ));
+    report.env = Some(env_stamp);
     Ok(report)
 }
 
@@ -2190,14 +2656,23 @@ pub async fn run_longmemeval_eval_decomposed(
         per_case,
         coverage: None,
     };
-    report.env = Some(build_lme_env(
+    let mut env_stamp = build_lme_env(
         "decomposed",
         path,
         "search_memory_decomposed",
         "on-device",
         "qwen3.5-9b",
         None,
+    );
+    env_stamp.flags.push(format!(
+        "graph_memory_stream={}",
+        if crate::db::graph_memory_stream_enabled() {
+            "on"
+        } else {
+            "off"
+        }
     ));
+    report.env = Some(env_stamp);
     Ok(report)
 }
 
@@ -2678,14 +3153,16 @@ pub async fn run_longmemeval_eval_with_gate(
         per_case,
         coverage: None,
     };
-    report.env = Some(build_lme_env(
-        "gated",
-        path,
-        "search_memory",
-        "none",
-        "none",
-        None,
+    let mut env_stamp = build_lme_env("gated", path, "search_memory", "none", "none", None);
+    env_stamp.flags.push(format!(
+        "graph_memory_stream={}",
+        if crate::db::graph_memory_stream_enabled() {
+            "on"
+        } else {
+            "off"
+        }
     ));
+    report.env = Some(env_stamp);
     Ok(report)
 }
 
@@ -2747,6 +3224,58 @@ pub use crate::eval::judge::{
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn gold_in_top_k_bands() {
+        // ranks: two in top-10, one at 11-30, one at 31-100, one absent
+        let ranks = vec![0, 7, 22, 64, -1];
+        assert_eq!(gold_in_top_k(&ranks, 10), 2);
+        assert_eq!(gold_in_top_k(&ranks, 30), 3);
+        assert_eq!(gold_in_top_k(&ranks, 100), 4);
+        // absent-only never counts
+        assert_eq!(gold_in_top_k(&[-1, -1], 100), 0);
+        // boundary: rank 9 in, rank 10 out at k=10
+        assert_eq!(gold_in_top_k(&[9, 10], 10), 1);
+    }
+
+    #[test]
+    fn rrf_merge_prefers_multi_stream_ids() {
+        // id "b" appears in both streams (ranks 1 and 0) and must beat "a"
+        // (rank 0 in one stream only): 1/61 + 1/60 > 1/60.
+        let streams = vec![
+            vec!["a".to_string(), "b".to_string(), "c".to_string()],
+            vec!["b".to_string(), "d".to_string()],
+        ];
+        let merged = rrf_merge_ids(&streams, 3);
+        assert_eq!(merged[0], "b");
+        assert_eq!(merged[1], "a");
+        assert_eq!(merged.len(), 3);
+        // truncation respected
+        assert_eq!(rrf_merge_ids(&streams, 1), vec!["b".to_string()]);
+        // single stream degrades to identity order
+        let single = vec![vec!["x".to_string(), "y".to_string()]];
+        assert_eq!(
+            rrf_merge_ids(&single, 30),
+            vec!["x".to_string(), "y".to_string()]
+        );
+    }
+
+    #[test]
+    fn subquery_fixture_roundtrip() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("subq.jsonl");
+        std::fs::write(
+            &p,
+            "{\"query_id\":\"q1\",\"subqueries\":[\"a\",\"b\"]}\n{\"query_id\":\"q2\",\"subqueries\":[]}\n",
+        )
+        .unwrap();
+        let map = load_subquery_fixture(&p).unwrap();
+        assert_eq!(map["q1"], vec!["a", "b"]);
+        assert!(map["q2"].is_empty());
+        // malformed line fails loud, not silently skipped
+        std::fs::write(&p, "{\"query_id\":\"q1\"\n").unwrap();
+        assert!(load_subquery_fixture(&p).is_err());
+    }
 
     fn sample_json() -> &'static str {
         r#"[{

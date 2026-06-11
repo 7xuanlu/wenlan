@@ -17,6 +17,40 @@ paired deltas, then computes, per (feature, bench):
 
 Across the whole family, Benjamini-Hochberg FDR at q=0.10 flags significance.
 
+G3 — "A/A-floored attributed liveness" gate (Eval-Trust v3): any `<feature>_aa`
+file in the dir is an A/A no-op control (flag OFF on both arms) and becomes the
+per-bench noise floor (aggregate + per-category |mean Δndcg|, max over A/A
+runs). Every other feature on that bench gets a G3 verdict:
+
+  SIGNAL        |Δ| > floor AND Δ > 0 AND attributed AND BH-significant
+  WEAK          conditions hold but not BH-significant
+  NOISE-FLOOR   |Δ| inside the A/A floor — indistinguishable from no-op noise
+  WRONG-DIR     above floor but negative
+  UNATTRIBUTED  <90% of moved queries carry the channel's touch flag
+                (temporal_touched / not graph_skipped); movement the channel
+                disclaims is confound, not lever
+  NO-FLOOR      bench has no A/A run — verdict unavailable, not a pass
+  FLOOR-SRC     the A/A run itself
+
+A per-category verdict table (conditions 1+2 only — no per-category p-value)
+makes per-category deltas readable as above-floor vs noise. Run `--selftest`
+for the synthetic-scenario asserts.
+
+G3 trust calibration (read before acting on a verdict):
+- A `*` suffix (SIGNAL*/WEAK*) = the rows carried no touch flag, so the
+  attribution condition was VACUOUS. Today only the temporal arms (and graph
+  arms run with ORIGIN_ENABLE_GRAPH_GATE on) emit a flag; for every other
+  feature attribution is unchecked, not passed.
+- The floor is keyed by bench only. A/A controls exist for the CE/cross-rerank
+  path; do NOT co-locate a CE-path A/A with base-path feature files and trust
+  the boundary — path noise characteristics differ. A deterministic base-path
+  A/A floors at 0.0000 (any nonzero delta reads above-floor: intended — a
+  deterministic pipeline has no noise floor).
+- A floor-source with n_touched > 0 triggers a WARNING: the "no-op" control
+  was not a no-op (CE path measured non-deterministic), and at smoke n a
+  single outlier inflates the |mean Δ| floor. Re-run the A/A at full n before
+  trusting NOISE-FLOOR boundaries near it.
+
 Pure stdlib (no numpy/scipy). Wilcoxon uses the normal approximation, which is
 adequate for n >= ~10; for tiny n the p-value is conservative/approximate and is
 flagged in the output. Recommendation column:
@@ -217,6 +251,31 @@ def analyze_pair(feature, bench, rows):
     skip_rate = (len(skipped) / len(paired)) if paired else 0.0
     has_skip = any(o2.get("graph_skipped") is not None for _, o2 in paired)
 
+    # G3 attribution: of the queries the flag flip actually moved (Δndcg != 0),
+    # what fraction does the channel itself claim to have touched? Movement on
+    # a query the channel disclaims (temporal cue didn't fire / graph gate
+    # skipped) is unattributed — noise or confound, not the lever. None when
+    # the rows carry no flag (vacuously attributed; the gate never blocks what
+    # it can't check). temporal_touched wins when both flags are present.
+    changed_idx = [i for i, d in enumerate(dndcg) if d != 0.0]
+    has_temporal_flag = any(
+        o2.get("temporal_touched") is not None for _, o2 in paired
+    )
+    attribution_src = None
+    attribution_ratio = None
+    if has_temporal_flag:
+        attribution_src = "temporal_touched"
+        claimed = [
+            i for i in changed_idx if paired[i][1].get("temporal_touched") is True
+        ]
+        attribution_ratio = (len(claimed) / len(changed_idx)) if changed_idx else 1.0
+    elif has_skip:
+        attribution_src = "graph_skipped"
+        claimed = [
+            i for i in changed_idx if paired[i][1].get("graph_skipped") is False
+        ]
+        attribution_ratio = (len(claimed) / len(changed_idx)) if changed_idx else 1.0
+
     # T4a per-touched subset: when the ON arm carries a temporal_touched flag,
     # restrict the delta to the queries whose temporal cue actually fired. The
     # full-set delta is dominated by no-op queries (~96.6%), so this isolates the
@@ -264,7 +323,110 @@ def analyze_pair(feature, bench, rows):
         "latency": lat,
         "graph_skip_rate": skip_rate if has_skip else None,
         "per_touched_temporal": per_touched,
+        "attribution_src": attribution_src,
+        "attribution_ratio": attribution_ratio,
     }
+
+
+def is_aa_feature(feature):
+    """A/A no-op control runs (flag OFF on both arms) follow the `<feature>_aa`
+    naming convention (e.g. rerank_window_aa). They are the noise-floor source."""
+    return feature.endswith("_aa")
+
+
+def compute_aa_floors(results):
+    """Per-bench noise floor from the A/A (OFF-vs-OFF) runs in the family: the
+    largest |mean Δndcg| any A/A run produced, aggregate and per-category.
+    Multiple A/A features for one bench take the max (conservative). A bench
+    with no A/A run gets no floor — its features read NO-FLOOR rather than
+    being gated against an invented number."""
+    floors = {}
+    for r in results:
+        if not is_aa_feature(r["feature"]):
+            continue
+        f = floors.setdefault(r["bench"], {"agg": 0.0, "per_cat": {}, "sources": []})
+        f["agg"] = max(f["agg"], abs(r["mean_dndcg_all"]))
+        for c, info in r["per_category"].items():
+            f["per_cat"][c] = max(f["per_cat"].get(c, 0.0), abs(info["mean_dndcg"]))
+        f["sources"].append(r["feature"])
+    return floors
+
+
+def g3_verdict(res, floors):
+    """G3 "A/A-floored attributed liveness" verdict for the aggregate Δndcg.
+
+    SIGNAL requires ALL of: (1) |Δ| strictly above the bench's A/A noise floor,
+    (2) right direction (Δ > 0), (3) attribution — when the channel emits a
+    touch flag, ≥90% of the moved queries must carry it — plus BH significance.
+    WEAK = conditions 1-3 pass but the delta is not BH-significant.
+    A/A runs themselves read FLOOR-SRC; a bench without an A/A run reads
+    NO-FLOOR (verdict unavailable, not a pass).
+
+    A trailing `*` (SIGNAL* / WEAK*) means the rows carried NO touch flag, so
+    condition 3 was vacuous — today only the temporal arms (and graph arms run
+    with ORIGIN_ENABLE_GRAPH_GATE on) emit one; everything else is unchecked,
+    and the star keeps that visible instead of letting an unchecked verdict
+    read as a fully-gated one."""
+    if is_aa_feature(res["feature"]):
+        return "FLOOR-SRC"
+    floor = floors.get(res["bench"])
+    if floor is None:
+        return "NO-FLOOR"
+    d = res["mean_dndcg_all"]
+    if abs(d) <= floor["agg"]:
+        return "NOISE-FLOOR"
+    if d < 0:
+        return "WRONG-DIR"
+    ratio = res.get("attribution_ratio")
+    if ratio is not None and ratio < 0.9:
+        return "UNATTRIBUTED"
+    star = "" if ratio is not None else "*"
+    return ("SIGNAL" if res.get("bh_significant") else "WEAK") + star
+
+
+def aa_warnings(results):
+    """Sanity warnings on the floor sources themselves. A no-op control should
+    touch nothing; an A/A with n_touched > 0 means the path is non-deterministic
+    (measured: the CE path flips a query's full ndcg between identical OFF
+    arms), and at smoke sizes a single such outlier inflates the |mean Δ| floor
+    enough to mask genuine feature signal as NOISE-FLOOR. Surface it rather
+    than gate silently on a suspect floor."""
+    warns = []
+    for r in results:
+        if not is_aa_feature(r["feature"]):
+            continue
+        if r["n_touched"] > 0:
+            warns.append(
+                f"A/A {r['feature']}/{r['bench']}: n_touched={r['n_touched']} of "
+                f"{r['n_paired']} (a no-op control should touch nothing) — the "
+                f"path is non-deterministic and the floor "
+                f"({abs(r['mean_dndcg_all']):.4f}) may be outlier-inflated at "
+                f"small n; treat verdicts near the floor as suspect."
+            )
+    return warns
+
+
+def g3_per_category(res, floors):
+    """Per-category G3 reading: conditions 1+2 only (above the per-category A/A
+    floor, right direction). There is no per-category p-value, so no
+    SIGNAL/WEAK split — this is directional readability, not a
+    multiplicity-corrected claim. A category absent from the A/A data falls
+    back to the aggregate floor."""
+    floor = floors.get(res["bench"])
+    out = {}
+    for c, info in res["per_category"].items():
+        if floor is None:
+            out[c] = "NO-FLOOR"
+            continue
+        cat_floor = floor["per_cat"].get(c, floor["agg"])
+        m = info["mean_dndcg"]
+        if abs(m) <= cat_floor:
+            out[c] = "NOISE-FLOOR"
+        elif m < 0:
+            out[c] = "WRONG-DIR"
+        else:
+            out[c] = "ABOVE-FLOOR"
+    return out
 
 
 def recommend(res, bh_sig):
@@ -282,6 +444,139 @@ def recommend(res, bh_sig):
     return "KEEP-OFF"
 
 
+def _selftest_rows(feature, bench, deltas, categories, touched=None, skipped=None):
+    """Build synthetic OFF/ON row pairs. deltas[i] = ndcg_on - ndcg_off for
+    query qi; categories[i] its category; touched/skipped optional per-query
+    ON-arm flags (temporal_touched / graph_skipped)."""
+    rows = []
+    for i, d in enumerate(deltas):
+        base = 0.5
+        common = {"feature": feature, "bench": bench, "query_id": f"q{i}",
+                  "category": categories[i], "recall5": base, "mrr": base,
+                  "latency_ms": 100.0}
+        off = dict(common, flag_state="off", ndcg10=base)
+        on = dict(common, flag_state="on", ndcg10=base + d)
+        if touched is not None:
+            on["temporal_touched"] = touched[i]
+        if skipped is not None:
+            on["graph_skipped"] = skipped[i]
+        rows.append(off)
+        rows.append(on)
+    return rows
+
+
+def selftest():
+    """G3 gate selftest: synthetic scenarios, hard asserts. Run via --selftest."""
+    cats = ["tr", "tr", "ms", "ms"] * 5  # 20 queries, 2 categories
+
+    # --- A/A floor source: |mean Δ| = 0.002 agg
+    aa_deltas = [0.002, -0.002, 0.006, 0.002] * 5
+    aa = analyze_pair("foo_aa", "lme", _selftest_rows("foo_aa", "lme", aa_deltas, cats))
+    assert is_aa_feature("foo_aa") and not is_aa_feature("foo")
+    floors = compute_aa_floors([aa])
+    assert "lme" in floors, "A/A feature must produce a floor for its bench"
+    assert abs(floors["lme"]["agg"] - 0.002) < 1e-12, floors["lme"]["agg"]
+    # per-cat floors: tr mean = (0.002-0.002)*... tr deltas alternate 0.002/-0.002 → 0.0;
+    # ms deltas alternate 0.006/0.002 → 0.004
+    assert abs(floors["lme"]["per_cat"]["tr"] - 0.0) < 1e-12
+    assert abs(floors["lme"]["per_cat"]["ms"] - 0.004) < 1e-12
+
+    # --- NOISE-FLOOR: |Δ| below agg floor
+    small = analyze_pair("tiny", "lme", _selftest_rows("tiny", "lme", [0.001] * 20, cats))
+    small["bh_significant"] = True
+    assert g3_verdict(small, floors) == "NOISE-FLOOR", g3_verdict(small, floors)
+
+    # --- WRONG-DIR: above floor but negative
+    neg = analyze_pair("worse", "lme", _selftest_rows("worse", "lme", [-0.05] * 20, cats))
+    neg["bh_significant"] = True
+    assert g3_verdict(neg, floors) == "WRONG-DIR", g3_verdict(neg, floors)
+
+    # --- UNATTRIBUTED: positive, above floor, but the channel says it did not
+    # touch the moved queries (temporal_touched=false on changed rows)
+    unattr = analyze_pair(
+        "temporal_x", "lme",
+        _selftest_rows("temporal_x", "lme", [0.05] * 20, cats, touched=[False] * 20),
+    )
+    unattr["bh_significant"] = True
+    assert unattr["attribution_ratio"] == 0.0
+    assert g3_verdict(unattr, floors) == "UNATTRIBUTED", g3_verdict(unattr, floors)
+
+    # --- SIGNAL: above floor, right direction, attributed, BH-significant
+    sig = analyze_pair(
+        "temporal_y", "lme",
+        _selftest_rows("temporal_y", "lme", [0.05] * 20, cats, touched=[True] * 20),
+    )
+    sig["bh_significant"] = True
+    assert sig["attribution_ratio"] == 1.0
+    assert g3_verdict(sig, floors) == "SIGNAL", g3_verdict(sig, floors)
+
+    # --- WEAK: all three G3 conditions pass but not BH-significant
+    weak = analyze_pair(
+        "temporal_y2", "lme",
+        _selftest_rows("temporal_y2", "lme", [0.05] * 20, cats, touched=[True] * 20),
+    )
+    weak["bh_significant"] = False
+    assert g3_verdict(weak, floors) == "WEAK", g3_verdict(weak, floors)
+
+    # --- graph_skipped attribution: a changed row on a graph-skipped query is
+    # movement the channel disclaims → unattributed
+    gskip = analyze_pair(
+        "graph_z", "lme",
+        _selftest_rows("graph_z", "lme", [0.05] * 20, cats, skipped=[True] * 20),
+    )
+    gskip["bh_significant"] = True
+    assert gskip["attribution_ratio"] == 0.0
+    assert g3_verdict(gskip, floors) == "UNATTRIBUTED", g3_verdict(gskip, floors)
+    # inverse: graph ran on every changed row → attributed
+    gok = analyze_pair(
+        "graph_ok", "lme",
+        _selftest_rows("graph_ok", "lme", [0.05] * 20, cats, skipped=[False] * 20),
+    )
+    gok["bh_significant"] = True
+    assert gok["attribution_ratio"] == 1.0
+    assert g3_verdict(gok, floors) == "SIGNAL", g3_verdict(gok, floors)
+
+    # --- no flag data at all → vacuously attributed (gate never blocks what it
+    # can't check), but the verdict carries a star so unchecked attribution
+    # stays visible
+    plain = analyze_pair("plain", "lme", _selftest_rows("plain", "lme", [0.05] * 20, cats))
+    plain["bh_significant"] = True
+    assert plain["attribution_ratio"] is None
+    assert g3_verdict(plain, floors) == "SIGNAL*", g3_verdict(plain, floors)
+    plain["bh_significant"] = False
+    assert g3_verdict(plain, floors) == "WEAK*", g3_verdict(plain, floors)
+
+    # --- A/A floor-source sanity warning: the synthetic A/A above has nonzero
+    # per-query deltas (n_touched > 0) → must warn; a truly-deterministic A/A
+    # (all deltas zero) must not
+    warns = aa_warnings([aa])
+    assert len(warns) == 1 and "n_touched" in warns[0], warns
+    aa_clean = analyze_pair(
+        "quiet_aa", "lme", _selftest_rows("quiet_aa", "lme", [0.0] * 20, cats)
+    )
+    assert aa_warnings([aa_clean]) == [], aa_warnings([aa_clean])
+
+    # --- NO-FLOOR: bench without any A/A run
+    other = analyze_pair("plain2", "locomo", _selftest_rows("plain2", "locomo", [0.05] * 20, cats))
+    other["bh_significant"] = True
+    assert g3_verdict(other, floors) == "NO-FLOOR", g3_verdict(other, floors)
+
+    # --- A/A feature itself is labeled as the floor source
+    assert g3_verdict(aa, floors) == "FLOOR-SRC"
+
+    # --- per-category verdicts: ms floor is 0.004 → a +0.003 ms delta is noise,
+    # tr floor 0.0 → +0.003 tr delta is above floor
+    mixed = analyze_pair("mix", "lme", _selftest_rows("mix", "lme", [0.003] * 20, cats))
+    pc = g3_per_category(mixed, floors)
+    assert pc["tr"] == "ABOVE-FLOOR", pc
+    assert pc["ms"] == "NOISE-FLOOR", pc
+    negcat = analyze_pair("negcat", "lme", _selftest_rows("negcat", "lme", [-0.05] * 20, cats))
+    pcn = g3_per_category(negcat, floors)
+    assert pcn["tr"] == "WRONG-DIR" and pcn["ms"] == "WRONG-DIR", pcn
+
+    print("selftest OK")
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--dir", default=os.environ.get("EVAL_OUT", "/tmp/eval_paired"))
@@ -289,7 +584,13 @@ def main():
     ap.add_argument("--boot", type=int, default=10000)
     ap.add_argument("--json", default=None)
     ap.add_argument("--md", default=None)
+    ap.add_argument("--selftest", action="store_true",
+                    help="run the G3 gate selftest and exit")
     args = ap.parse_args()
+
+    if args.selftest:
+        selftest()
+        return
 
     files = sorted(glob.glob(os.path.join(args.dir, "*.jsonl")))
     if not files:
@@ -315,6 +616,14 @@ def main():
         r["bh_significant"] = i in sig_idx
         r["recommendation"] = recommend(r, r["bh_significant"])
 
+    # G3: A/A-floored attributed liveness gate
+    floors = compute_aa_floors(results)
+    for r in results:
+        r["g3"] = g3_verdict(r, floors)
+        r["g3_per_category"] = (
+            g3_per_category(r, floors) if not is_aa_feature(r["feature"]) else None
+        )
+
     # markdown table
     lines = []
     lines.append(f"# Paired A/B analysis (apparatus v2)\n")
@@ -322,9 +631,9 @@ def main():
     lines.append(f"- BH-FDR q = {args.q}, bootstrap B = {args.boot}")
     lines.append(f"- Wilcoxon = normal approx (tie+continuity corrected); small-n p-values approximate\n")
     hdr = (
-        "| feature | bench | n | n_touched | meanΔndcg(all) | 95% CI | Wilcoxon p | BH-sig | worst-cat Δ | ΔP99 lat(ms) | skip% | rec |"
+        "| feature | bench | n | n_touched | meanΔndcg(all) | 95% CI | Wilcoxon p | BH-sig | worst-cat Δ | ΔP99 lat(ms) | skip% | rec | G3 |"
     )
-    sep = "|" + "---|" * 13
+    sep = "|" + "---|" * 14
     lines.append(hdr)
     lines.append(sep)
     for r in results:
@@ -338,13 +647,51 @@ def main():
             else "-"
         )
         lines.append(
-            "| {f} | {b} | {n} | {nt} | {md:+.4f} | [{lo:+.4f},{hi:+.4f}] | {p:.4f} | {sig} | {wc} | {dp99:+.2f} | {skip} | {rec} |".format(
+            "| {f} | {b} | {n} | {nt} | {md:+.4f} | [{lo:+.4f},{hi:+.4f}] | {p:.4f} | {sig} | {wc} | {dp99:+.2f} | {skip} | {rec} | {g3} |".format(
                 f=r["feature"], b=r["bench"], n=r["n_paired"], nt=r["n_touched"],
                 md=r["mean_dndcg_all"], lo=ci[0], hi=ci[1], p=r["wilcoxon_p"],
                 sig="yes" if r["bh_significant"] else "no", wc=wc,
                 dp99=r["latency"]["d_p99"], skip=skip, rec=r["recommendation"],
+                g3=r["g3"],
             )
         )
+
+    # G3 noise floors + per-category verdicts (only when an A/A run exists)
+    if floors:
+        lines.append("\n## G3 noise floor (from A/A OFF-vs-OFF runs)\n")
+        lines.append("| bench | agg floor | per-category floors | sources |")
+        lines.append("|" + "---|" * 4)
+        for b, f in sorted(floors.items()):
+            cats = " ".join(
+                f"{c}={v:.4f}" for c, v in sorted(f["per_cat"].items())
+            ) or "-"
+            lines.append(
+                f"| {b} | {f['agg']:.4f} | {cats} | {', '.join(f['sources'])} |"
+            )
+        for w in aa_warnings(results):
+            lines.append(f"\n**WARNING:** {w}")
+        lines.append(
+            "\n## G3 per-category verdicts\n"
+        )
+        lines.append(
+            "Conditions 1+2 only (above per-category A/A floor, right direction); "
+            "no per-category p-value, so directional readability — not a "
+            "multiplicity-corrected claim. Attribution ratio is feature-level.\n"
+        )
+        lines.append("| feature | bench | category | meanΔndcg | cat floor | verdict |")
+        lines.append("|" + "---|" * 6)
+        for r in results:
+            pc = r.get("g3_per_category")
+            if not pc or r["bench"] not in floors:
+                continue
+            f = floors[r["bench"]]
+            for c in sorted(pc):
+                cat_floor = f["per_cat"].get(c, f["agg"])
+                m = r["per_category"][c]["mean_dndcg"]
+                lines.append(
+                    f"| {r['feature']} | {r['bench']} | {c} | {m:+.4f} "
+                    f"| {cat_floor:.4f} | {pc[c]} |"
+                )
     # T4a per-touched subset (temporal_filter and any future cue-gated feature):
     # the full-set delta above averages over mostly-no-op queries, so additionally
     # report the delta over only the queries whose cue actually fired.

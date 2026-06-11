@@ -2504,7 +2504,7 @@ async fn seed_scenario_dbs_complete() {
             .await
             .unwrap_or_else(|e| panic!("[seed_complete] {bench} contract VIOLATED: {e}"));
         eprintln!(
-            "[seed_complete] {bench} COMPLETE + verified in {:.1}m: rows={} classified={} cue={} ({:.0}%) event_date={} ({:.0}%) graph_links={}",
+            "[seed_complete] {bench} COMPLETE + verified in {:.1}m: rows={} classified={} cue={} ({:.0}%) event_date={} ({:.0}%) graph_links={} pages={}",
             t_bench.elapsed().as_secs_f64() / 60.0,
             report.rows,
             report.classified,
@@ -2513,6 +2513,7 @@ async fn seed_scenario_dbs_complete() {
             report.event_date_nonempty,
             report.event_date_coverage() * 100.0,
             report.graph_links,
+            report.pages,
         );
     }
 }
@@ -2645,6 +2646,23 @@ async fn paired_run_cached_feature(feature: &str, flag: &str) {
     use origin_core::eval::locomo::run_locomo_eval_from_db_collect;
     use origin_core::eval::longmemeval::run_longmemeval_eval_from_db_collect;
     let root = resolve_scenario_db_root_from_harness();
+    // ORIGIN_GRAPH_MEMORY_STREAM is default-ON since 2026-06-10, so its OFF arm
+    // must explicitly disable it ("0"); every other paired flag is opt-in (OFF =
+    // unset).
+    let off_val: Option<&str> = if flag == "ORIGIN_GRAPH_MEMORY_STREAM" {
+        Some("0")
+    } else {
+        None
+    };
+    // Seed-vs-stream mutual exclusion: the seeded branch is reachable only when
+    // !(allow_graph_stream && graph_memory_stream_enabled()), so with the stream
+    // default-ON a graph_seed A/B routes BOTH arms through the stream (byte-
+    // identical A/A). Pin the stream opted-out on BOTH arms to measure the seed.
+    let seed_stream_pin: Option<(&str, Option<&str>)> = if flag == "ORIGIN_ENABLE_GRAPH_SEED" {
+        Some(("ORIGIN_GRAPH_MEMORY_STREAM", Some("0")))
+    } else {
+        None
+    };
 
     // -- LoCoMo --
     let lo_dir = root.join("locomo_v1");
@@ -2656,9 +2674,11 @@ async fn paired_run_cached_feature(feature: &str, flag: &str) {
         )
         .await
         .expect("open locomo_v1 snapshot DB");
-        for (state, val) in [("off", None::<&str>), ("on", Some("1"))] {
+        for (state, val) in [("off", off_val), ("on", Some("1"))] {
             let rows = temp_env::async_with_vars(
-                [(flag, val)],
+                std::iter::once((flag, val))
+                    .chain(seed_stream_pin)
+                    .collect::<Vec<_>>(),
                 run_locomo_eval_from_db_collect(&db, &lo_fx, feature, state),
             )
             .await
@@ -2683,9 +2703,11 @@ async fn paired_run_cached_feature(feature: &str, flag: &str) {
         )
         .await
         .expect("open lme_v1 snapshot DB");
-        for (state, val) in [("off", None::<&str>), ("on", Some("1"))] {
+        for (state, val) in [("off", off_val), ("on", Some("1"))] {
             let rows = temp_env::async_with_vars(
-                [(flag, val)],
+                std::iter::once((flag, val))
+                    .chain(seed_stream_pin)
+                    .collect::<Vec<_>>(),
                 run_longmemeval_eval_from_db_collect(&db, &lme_fx, feature, state),
             )
             .await
@@ -2716,6 +2738,14 @@ async fn paired_run_cached_feature_cross_rerank(
     use origin_core::eval::locomo::run_locomo_eval_cross_rerank_from_db_collect;
     use origin_core::eval::longmemeval::run_longmemeval_eval_cross_rerank_from_db_collect;
     let root = resolve_scenario_db_root_from_harness();
+    // ORIGIN_GRAPH_MEMORY_STREAM is default-ON since 2026-06-10, so its OFF arm
+    // must explicitly disable it ("0"); every other paired flag is opt-in (OFF =
+    // unset).
+    let off_val: Option<&str> = if flag == "ORIGIN_GRAPH_MEMORY_STREAM" {
+        Some("0")
+    } else {
+        None
+    };
 
     // -- LoCoMo --
     let lo_dir = root.join("locomo_v1");
@@ -2727,7 +2757,7 @@ async fn paired_run_cached_feature_cross_rerank(
         )
         .await
         .expect("open locomo_v1 snapshot DB");
-        for (state, val) in [("off", None::<&str>), ("on", Some("1"))] {
+        for (state, val) in [("off", off_val), ("on", Some("1"))] {
             let rows = temp_env::async_with_vars(
                 [(flag, val)],
                 run_locomo_eval_cross_rerank_from_db_collect(
@@ -2760,7 +2790,7 @@ async fn paired_run_cached_feature_cross_rerank(
         )
         .await
         .expect("open lme_v1 snapshot DB");
-        for (state, val) in [("off", None::<&str>), ("on", Some("1"))] {
+        for (state, val) in [("off", off_val), ("on", Some("1"))] {
             let rows = temp_env::async_with_vars(
                 [(flag, val)],
                 run_longmemeval_eval_cross_rerank_from_db_collect(
@@ -2887,6 +2917,159 @@ async fn paired_run_cached_feature_cross_rerank_vals(
 /// when at least one CE feature is selected, so base-only smoke runs stay light.
 #[tokio::test]
 #[ignore = "needs cached scenario DBs (use SNAPSHOT copies); retrieval-only, no GPU. Set ORIGIN_EVAL_ROOT + SCENARIO_DB_ROOT + EVAL_OUT"]
+async fn headroom_probe_emit() {
+    println!("=== RECALL-HEADROOM PROBE (decompose ladder Step 0) ===");
+    let out_dir = paired_out_dir();
+    println!("EVAL_OUT = {}", out_dir.display());
+
+    let root = resolve_scenario_db_root_from_harness();
+    let lme_dir = root.join("lme_v1");
+    let lme_fx = eval_root().join("data/longmemeval_oracle.json");
+    if !lme_dir.join("origin_memory.db").exists() || !lme_fx.exists() {
+        println!(
+            "SKIP: lme_v1 snapshot DB ({}) or fixture ({}) missing",
+            lme_dir.join("origin_memory.db").exists(),
+            lme_fx.exists()
+        );
+        return;
+    }
+
+    let db = origin_core::db::MemoryDB::new(
+        &lme_dir,
+        std::sync::Arc::new(origin_core::events::NoopEmitter),
+    )
+    .await
+    .expect("open lme_v1 snapshot DB");
+
+    let rows = origin_core::eval::longmemeval::run_longmemeval_headroom_probe_from_db(&db, &lme_fx)
+        .await
+        .expect("headroom probe");
+
+    use std::io::Write;
+    let path = out_dir.join("headroom_lme.jsonl");
+    let mut f = std::fs::File::create(&path).expect("create headroom jsonl");
+    for r in &rows {
+        let line = serde_json::to_string(r).expect("serialize HeadroomRow");
+        writeln!(f, "{line}").expect("write jsonl line");
+    }
+    println!("[headroom] wrote {} rows -> {}", rows.len(), path.display());
+}
+
+/// Decompose-recall probe (Step 1 of the decompose ladder): base@30 vs
+/// date-prefix@30 vs subquery union vs RRF-merge@30, all on the base
+/// `search_memory` path. Consumes the pre-generated subquery fixture at
+/// `EVAL_SUBQ_PATH` (JSONL `{query_id, subqueries}` — agent-delegated
+/// decomposition, the primary lane from the 2026-05-30 decision). Join the
+/// emitted `decompose_recall_lme.jsonl` with `headroom_lme.jsonl` on
+/// `query_id` to compare the union arm against the single-query limit=100
+/// ceiling (pool-size control).
+#[tokio::test]
+#[ignore = "needs cached scenario DBs (use SNAPSHOT copies) + EVAL_SUBQ_PATH subquery fixture; retrieval-only, no GPU. Set ORIGIN_EVAL_ROOT + SCENARIO_DB_ROOT + EVAL_OUT + EVAL_SUBQ_PATH"]
+async fn decompose_recall_probe_emit() {
+    println!("=== DECOMPOSE-RECALL PROBE (decompose ladder Step 1) ===");
+    let out_dir = paired_out_dir();
+    println!("EVAL_OUT = {}", out_dir.display());
+
+    let Some(subq_path) = std::env::var_os("EVAL_SUBQ_PATH").map(std::path::PathBuf::from) else {
+        println!("SKIP: EVAL_SUBQ_PATH not set (path to subquery fixture JSONL)");
+        return;
+    };
+    let root = resolve_scenario_db_root_from_harness();
+    let lme_dir = root.join("lme_v1");
+    let lme_fx = eval_root().join("data/longmemeval_oracle.json");
+    if !lme_dir.join("origin_memory.db").exists() || !lme_fx.exists() || !subq_path.exists() {
+        println!(
+            "SKIP: lme_v1 snapshot DB ({}) or fixture ({}) or subquery fixture ({}) missing",
+            lme_dir.join("origin_memory.db").exists(),
+            lme_fx.exists(),
+            subq_path.exists()
+        );
+        return;
+    }
+
+    let db = origin_core::db::MemoryDB::new(
+        &lme_dir,
+        std::sync::Arc::new(origin_core::events::NoopEmitter),
+    )
+    .await
+    .expect("open lme_v1 snapshot DB");
+
+    let rows = origin_core::eval::longmemeval::run_longmemeval_decompose_recall_probe_from_db(
+        &db, &lme_fx, &subq_path,
+    )
+    .await
+    .expect("decompose recall probe");
+
+    use std::io::Write;
+    let path = out_dir.join("decompose_recall_lme.jsonl");
+    let mut f = std::fs::File::create(&path).expect("create decompose recall jsonl");
+    for r in &rows {
+        let line = serde_json::to_string(r).expect("serialize DecomposeRecallRow");
+        writeln!(f, "{line}").expect("write jsonl line");
+    }
+    println!(
+        "[decompose_recall] wrote {} rows -> {}",
+        rows.len(),
+        path.display()
+    );
+}
+
+/// Decompose-CE probe (Step 2 of the decompose ladder, the wire/kill gate):
+/// CE conversion at MATCHED budget. OFF = CE over the base pool@30, ON = CE
+/// over the decompose RRF-merge@30 — same 30-candidate CE input both arms, so
+/// the delta is pool composition, never pool size. Emits standard PerQueryRows
+/// (`decompose_ce_lme.jsonl`) for analyze_paired.py. Needs `EVAL_SUBQ_PATH`
+/// (same fixture as `decompose_recall_probe_emit`).
+#[tokio::test]
+#[ignore = "downloads ~600MB CE model (CPU); needs cached scenario SNAPSHOT DB + EVAL_SUBQ_PATH. Set ORIGIN_EVAL_ROOT + SCENARIO_DB_ROOT + EVAL_OUT + EVAL_SUBQ_PATH"]
+async fn decompose_ce_probe_emit() {
+    println!("=== DECOMPOSE-CE PROBE (decompose ladder Step 2, matched budget 30) ===");
+    let out_dir = paired_out_dir();
+    println!("EVAL_OUT = {}", out_dir.display());
+
+    let Some(subq_path) = std::env::var_os("EVAL_SUBQ_PATH").map(std::path::PathBuf::from) else {
+        println!("SKIP: EVAL_SUBQ_PATH not set (path to subquery fixture JSONL)");
+        return;
+    };
+    let root = resolve_scenario_db_root_from_harness();
+    let lme_dir = root.join("lme_v1");
+    let lme_fx = eval_root().join("data/longmemeval_oracle.json");
+    if !lme_dir.join("origin_memory.db").exists() || !lme_fx.exists() || !subq_path.exists() {
+        println!(
+            "SKIP: lme_v1 snapshot DB ({}) or fixture ({}) or subquery fixture ({}) missing",
+            lme_dir.join("origin_memory.db").exists(),
+            lme_fx.exists(),
+            subq_path.exists()
+        );
+        return;
+    }
+
+    let reranker = origin_core::reranker::init_cross_encoder_reranker(None)
+        .expect("init_cross_encoder_reranker failed (downloads ~600MB on first run)");
+    println!("CE model = {} (CPU)", reranker.model_id());
+
+    let db = origin_core::db::MemoryDB::new(
+        &lme_dir,
+        std::sync::Arc::new(origin_core::events::NoopEmitter),
+    )
+    .await
+    .expect("open lme_v1 snapshot DB");
+
+    let rows = origin_core::eval::longmemeval::run_longmemeval_decompose_ce_probe_from_db(
+        &db, &lme_fx, &subq_path, reranker,
+    )
+    .await
+    .expect("decompose CE probe");
+
+    write_paired_rows("decompose_ce", "lme", &rows);
+    println!(
+        "=== done -> python3 analyze_paired.py --dir {} ===",
+        out_dir.display()
+    );
+}
+
+#[tokio::test]
+#[ignore = "needs cached scenario DBs (use SNAPSHOT copies); retrieval-only, no GPU. Set ORIGIN_EVAL_ROOT + SCENARIO_DB_ROOT + EVAL_OUT"]
 async fn paired_ab_emit() {
     println!("=== PAIRED A/B EMIT (apparatus v2) ===");
     println!("EVAL_OUT = {}", paired_out_dir().display());
@@ -2924,7 +3107,13 @@ async fn paired_ab_emit() {
     // cross-rerank collectors so a flag flip produces a real delta. Build the
     // reranker ONCE and only when a CE feature is selected (the BGE-reranker-v2-m3
     // weights are ~600MB on first download), so base-only smoke runs stay light.
-    let ce: [(&str, &str); 7] = [
+    // `rerank_graph_stack` (ORIGIN_GRAPH_MEMORY_STREAM toggled WITH the CE active
+    // on both arms) RETIRED 2026-06-10: the 2026-06-09 ns receipt (+0.0126,
+    // p=0.17) closed stream-under-CE, and the code now hard-skips the stream
+    // whenever a reranker is present (allow_graph_stream = reranker.is_none()).
+    // With a reranker on both arms the flag toggles nothing, so the two arms are
+    // byte-identical by construction — the arm could only emit a fake null.
+    let ce: [(&str, &str); 6] = [
         ("page_channel", "ORIGIN_ENABLE_PAGE_CHANNEL"),
         ("episode_channel", "ORIGIN_ENABLE_EPISODE_CHANNEL"),
         ("fact_channel", "ORIGIN_ENABLE_FACT_CHANNEL"),
@@ -2935,12 +3124,6 @@ async fn paired_ab_emit() {
         // rows are byte-identical between arms (detector has 0 false positives
         // on the LME-S fixture), so the delta isolates the bypassed category.
         ("rerank_skip_pref", "ORIGIN_RERANK_SKIP_PREFERENCE"),
-        // Stacked arm: graph memory stream toggled WITH the CE active on both
-        // arms — measures whether graph_stream's gain composes with the
-        // reranker (base-path graph_stream A/B can't answer that). Tagged
-        // distinctly from base-path "graph_stream" so the analyzer separates
-        // them; the 'graph' substring keeps the substrate-liveness gate armed.
-        ("rerank_graph_stack", "ORIGIN_GRAPH_MEMORY_STREAM"),
     ];
     if ce.iter().any(|(f, _)| paired_feature_selected(f)) {
         let reranker = origin_core::reranker::init_cross_encoder_reranker(None)
@@ -7713,9 +7896,10 @@ async fn expand_temp_isolation_probe() {
 /// Ephemeral per-conversation DBs (fixture-driven), deterministic expansion
 /// (temp 0), rerank off, graph gate off (do_graph always true). The ONLY
 /// difference between arms is ORIGIN_GRAPH_MEMORY_STREAM:
-///   OFF = stream unset -> augment runs the legacy observation no-op == no graph.
-///   ON  = stream on    -> live entity->memory stream (memory_entities populated
-///                         per conversation by the collector).
+///   OFF = stream "0" -> augment runs the legacy observation no-op == no graph
+///         (the flag is default-ON since 2026-06-10, so the OFF arm pins "0").
+///   ON  = stream "1" -> live entity->memory stream (memory_entities populated
+///                       per conversation by the collector).
 /// Per-query ndcg@10 / recall@5 paired; analyze_paired.py reports the whole-set
 /// delta AND the graph-touched subset (queries where Δndcg != 0). The collector
 /// prints memory_entities coverage so a null can be checked against substrate
@@ -7744,10 +7928,11 @@ async fn graph_stream_pair_locomo() {
     );
     let prompts = origin_core::prompts::PromptRegistry::default();
 
-    // OFF arm: stream unset -> augment is the legacy observation no-op == no graph.
+    // OFF arm: stream "0" -> augment is the legacy observation no-op == no graph
+    // (default-ON since 2026-06-10, so OFF must pin "0", not unset).
     let off_rows = temp_env::async_with_vars(
         [
-            ("ORIGIN_GRAPH_MEMORY_STREAM", None::<&str>),
+            ("ORIGIN_GRAPH_MEMORY_STREAM", Some("0")),
             ("ORIGIN_ENABLE_GRAPH_GATE", None::<&str>),
             ("ORIGIN_ENABLE_INTENT_LLM", None::<&str>),
             ("ORIGIN_EXPAND_TEMP", Some("0.0")),
@@ -7814,10 +7999,11 @@ async fn graph_stream_pair_lme() {
     );
     let prompts = origin_core::prompts::PromptRegistry::default();
 
-    // OFF arm: stream unset -> augment is the legacy observation no-op == no graph.
+    // OFF arm: stream "0" -> augment is the legacy observation no-op == no graph
+    // (default-ON since 2026-06-10, so OFF must pin "0", not unset).
     let off_rows = temp_env::async_with_vars(
         [
-            ("ORIGIN_GRAPH_MEMORY_STREAM", None::<&str>),
+            ("ORIGIN_GRAPH_MEMORY_STREAM", Some("0")),
             ("ORIGIN_ENABLE_GRAPH_GATE", None::<&str>),
         ],
         origin_core::eval::longmemeval::run_longmemeval_eval_graph_stream_collect(

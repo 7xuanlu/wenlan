@@ -57,6 +57,13 @@ pub struct SeedExpectations {
     /// `require_graph_links`: LME turn text carries no dates, so a re-seed that
     /// forgot the `event_date` injection ships the temporal channel starved.
     pub require_event_dates: bool,
+    /// Require at least one `status = 'active'` row in `pages` (page-channel
+    /// substrate is non-empty). `false` = report-only. Presence check, same
+    /// rationale as the other floors: the 2026-06-09 re-seed's distill step
+    /// produced ~4 pages that did not persist, so the page channel shipped
+    /// inert (pages=0) and every page-channel A/B measured nothing — exactly
+    /// the dead-channel lie this contract exists to fail loud on.
+    pub require_pages: bool,
     /// If set, the seed's recorded manifest fixture sha256 must equal this.
     /// `None` skips the identity check (manifest stamping lands with C4b).
     pub expect_fixture_sha256: Option<String>,
@@ -74,15 +81,16 @@ impl SeedExpectations {
             min_event_date_coverage: 0.0,
             require_graph_links: false,
             require_event_dates: false,
+            require_pages: false,
             expect_fixture_sha256: None,
         }
     }
 
-    /// Substrate-liveness profile: no-dupes PLUS the graph + temporal substrate
-    /// presence checks. This is what the seed orchestrator asserts after running
-    /// every enrichment step, and what an eval runner asserts before measuring a
-    /// channel — so a starved substrate fails the SEED or is refused by the
-    /// EVAL, never silently reported as "the channel doesn't help".
+    /// Substrate-liveness profile: no-dupes PLUS the graph + temporal + page
+    /// substrate presence checks. This is what the seed orchestrator asserts
+    /// after running every enrichment step, and what an eval runner asserts
+    /// before measuring a channel — so a starved substrate fails the SEED or is
+    /// refused by the EVAL, never silently reported as "the channel doesn't help".
     ///
     /// `require_full_classification` is deliberately OFF here: `complete()` gates
     /// the channels that ship at *zero* (graph/temporal — the recurring lie),
@@ -97,6 +105,7 @@ impl SeedExpectations {
             require_full_classification: false,
             require_graph_links: true,
             require_event_dates: true,
+            require_pages: true,
             ..Self::strict(variant)
         }
     }
@@ -119,6 +128,10 @@ pub struct SeedContractReport {
     /// graph channel has nothing to surface. Tolerant of the table being absent
     /// on pre-graph seeds (reported as `0`).
     pub graph_links: i64,
+    /// Active pages (`status = 'active'`, matching `MemoryDB::count_active_pages`).
+    /// `0` means the page channel has nothing to surface. Tolerant of the table
+    /// being absent on pre-pages seeds (reported as `0`).
+    pub pages: i64,
     /// Recorded manifest fixture sha256, if the seed stamped one.
     pub manifest_fixture_sha256: Option<String>,
     /// One human-readable string per failed expectation. Empty = contract holds.
@@ -200,6 +213,7 @@ pub async fn check_seed_contract(
     .await?;
     let event_date_nonempty = count(conn, " AND event_date IS NOT NULL").await?;
     let graph_links = count_memory_entities(conn).await?;
+    let pages = count_active_pages(conn).await?;
 
     let manifest_fixture_sha256 = read_manifest_value(conn, "seed_fixture_sha256").await?;
 
@@ -257,6 +271,13 @@ pub async fn check_seed_contract(
                 .to_string(),
         );
     }
+    if expect.require_pages && pages == 0 {
+        violations.push(
+            "page substrate empty: 0 active pages (page channel is dead — \
+             run the distill seed step and verify it persists before measuring pages)"
+                .to_string(),
+        );
+    }
     if let Some(want) = &expect.expect_fixture_sha256 {
         match &manifest_fixture_sha256 {
             Some(got) if got == want => {}
@@ -276,6 +297,7 @@ pub async fn check_seed_contract(
         cue_nonempty,
         event_date_nonempty,
         graph_links,
+        pages,
         manifest_fixture_sha256,
         violations,
     })
@@ -297,6 +319,30 @@ async fn count_memory_entities(conn: &libsql::Connection) -> Result<i64, OriginE
         Some(row) => row
             .get::<i64>(0)
             .map_err(|e| OriginError::VectorDb(format!("memory_entities get: {e}"))),
+        None => Ok(0),
+    }
+}
+
+/// Count `status = 'active'` rows in `pages` (page-channel substrate). The
+/// WHERE clause mirrors `MemoryDB::count_active_pages` so the contract and the
+/// runner-side sanity gate agree on what counts as a live page. Tolerant of
+/// the table being absent (pre-pages seeds) — returns `0` rather than erroring.
+async fn count_active_pages(conn: &libsql::Connection) -> Result<i64, OriginError> {
+    let mut rows = match conn
+        .query("SELECT COUNT(*) FROM pages WHERE status = 'active'", ())
+        .await
+    {
+        Ok(r) => r,
+        Err(_) => return Ok(0), // table missing on pre-pages seeds
+    };
+    match rows
+        .next()
+        .await
+        .map_err(|e| OriginError::VectorDb(format!("pages count next: {e}")))?
+    {
+        Some(row) => row
+            .get::<i64>(0)
+            .map_err(|e| OriginError::VectorDb(format!("pages count get: {e}"))),
         None => Ok(0),
     }
 }
@@ -327,8 +373,9 @@ pub async fn assert_seed_contract(
 ///
 /// Feature keys match by substring so the many A/B labels map without an enum:
 /// any feature containing `graph` requires `memory_entities`; any containing
-/// `temp` requires `event_date`. A feature the gate doesn't model imposes no
-/// requirement (returns `Ok`) — the gate never blocks a channel it can't check.
+/// `temp` requires `event_date`; any containing `page` requires active `pages`.
+/// A feature the gate doesn't model imposes no requirement (returns `Ok`) —
+/// the gate never blocks a channel it can't check.
 pub async fn assert_feature_substrate_live(
     conn: &libsql::Connection,
     feature: &str,
@@ -346,6 +393,13 @@ pub async fn assert_feature_substrate_live(
             "EVAL REFUSED [{feature}]: temporal substrate empty (0 event_date rows). \
              A temporal A/B here measures noise. Re-seed via \
              seed_scenario_dbs_complete before measuring."
+        )));
+    }
+    if f.contains("page") && count_active_pages(conn).await? == 0 {
+        return Err(OriginError::Generic(format!(
+            "EVAL REFUSED [{feature}]: page substrate empty (0 active pages). \
+             A page-channel A/B here measures noise, not pages. Re-seed via \
+             seed_scenario_dbs_complete (with a persisting distill step) before measuring."
         )));
     }
     Ok(())
@@ -395,6 +449,7 @@ mod tests {
                 retrieval_cue TEXT, event_date INTEGER, content TEXT
              );
              CREATE TABLE memory_entities (memory_id TEXT, entity_id TEXT);
+             CREATE TABLE pages (id TEXT, status TEXT);
              CREATE TABLE app_metadata (key TEXT PRIMARY KEY, value TEXT);",
         )
         .await
@@ -435,6 +490,16 @@ mod tests {
         )
         .await
         .expect("link entity");
+    }
+
+    /// Insert a page row (page-channel substrate).
+    async fn insert_page(conn: &libsql::Connection, pid: &str, status: &str) {
+        conn.execute(
+            "INSERT INTO pages (id, status) VALUES (?1, ?2)",
+            libsql::params![pid, status],
+        )
+        .await
+        .expect("insert page");
     }
 
     #[tokio::test]
@@ -564,29 +629,74 @@ mod tests {
         insert(&conn, "b", Some(0.5), Some("cue b")).await;
         set_event_date(&conn, "a", 1_700_000_000).await;
         link_entity(&conn, "a", "ent_1").await;
+        insert_page(&conn, "p1", "active").await;
         let r = assert_seed_contract(&conn, &SeedExpectations::complete("test"))
             .await
             .expect("full substrate should pass complete()");
         assert!(r.graph_links >= 1);
         assert!(r.event_date_nonempty >= 1);
+        assert!(r.pages >= 1);
         assert!(r.holds());
     }
 
     #[tokio::test]
-    async fn strict_profile_ignores_graph_and_temporal_substrate() {
-        // Regression guard: strict() must stay lenient on graph/temporal so the
-        // generic CI check + minimal seeds don't break. Only complete() has teeth.
+    async fn complete_profile_fails_on_empty_page_substrate() {
         let conn = mem_conn().await;
         insert(&conn, "a", Some(0.5), Some("cue")).await;
-        // no links, no event_date
+        set_event_date(&conn, "a", 1_700_000_000).await; // temporal OK
+        link_entity(&conn, "a", "ent_1").await; // graph OK
+                                                // no pages → page channel dead
+        let r = check_seed_contract(&conn, &SeedExpectations::complete("test"))
+            .await
+            .unwrap();
+        assert_eq!(r.pages, 0);
+        assert!(!r.holds(), "complete() must fail when page substrate empty");
+        assert!(
+            r.violations
+                .iter()
+                .any(|v| v.contains("page substrate empty")),
+            "expected page-substrate violation, got {:?}",
+            r.violations
+        );
+    }
+
+    #[tokio::test]
+    async fn non_active_pages_do_not_satisfy_the_page_floor() {
+        // An archived/draft page is not a live channel surface; only
+        // status='active' counts (mirrors MemoryDB::count_active_pages).
+        let conn = mem_conn().await;
+        insert(&conn, "a", Some(0.5), Some("cue")).await;
+        set_event_date(&conn, "a", 1_700_000_000).await;
+        link_entity(&conn, "a", "ent_1").await;
+        insert_page(&conn, "p1", "archived").await;
+        let r = check_seed_contract(&conn, &SeedExpectations::complete("test"))
+            .await
+            .unwrap();
+        assert_eq!(r.pages, 0, "archived pages must not count");
+        assert!(!r.holds());
+        assert!(r
+            .violations
+            .iter()
+            .any(|v| v.contains("page substrate empty")));
+    }
+
+    #[tokio::test]
+    async fn strict_profile_ignores_graph_and_temporal_substrate() {
+        // Regression guard: strict() must stay lenient on graph/temporal/pages
+        // so the generic CI check + minimal seeds don't break. Only complete()
+        // has teeth.
+        let conn = mem_conn().await;
+        insert(&conn, "a", Some(0.5), Some("cue")).await;
+        // no links, no event_date, no pages
         let r = check_seed_contract(&conn, &SeedExpectations::strict("test"))
             .await
             .unwrap();
         assert_eq!(r.graph_links, 0);
         assert_eq!(r.event_date_nonempty, 0);
+        assert_eq!(r.pages, 0);
         assert!(
             r.holds(),
-            "strict() must not fail on empty graph/temporal substrate"
+            "strict() must not fail on empty graph/temporal/page substrate"
         );
     }
 
@@ -622,9 +732,23 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn eval_gate_refuses_page_on_empty_substrate() {
+        let conn = mem_conn().await;
+        insert(&conn, "a", Some(0.5), Some("cue")).await;
+        let err = assert_feature_substrate_live(&conn, "page_channel")
+            .await
+            .expect_err("page A/B on empty substrate must be refused");
+        assert!(format!("{err}").contains("page substrate empty"));
+        insert_page(&conn, "p1", "active").await;
+        assert_feature_substrate_live(&conn, "page_channel")
+            .await
+            .expect("page substrate present → allowed");
+    }
+
+    #[tokio::test]
     async fn eval_gate_allows_unmodeled_feature() {
-        // A feature the gate doesn't model (no graph/temp substrate need) must
-        // never be blocked, even on an otherwise-empty DB.
+        // A feature the gate doesn't model (no graph/temp/page substrate need)
+        // must never be blocked, even on an otherwise-empty DB.
         let conn = mem_conn().await;
         insert(&conn, "a", Some(0.5), None).await;
         assert_feature_substrate_live(&conn, "session_diversity")
@@ -659,11 +783,13 @@ mod tests {
         )
         .await
         .unwrap();
-        // strict() does not require links → must pass despite missing table.
+        // strict() does not require links/pages → must pass despite both the
+        // memory_entities and pages tables being absent from this schema.
         let r = check_seed_contract(&conn, &SeedExpectations::strict("test"))
             .await
-            .expect("missing memory_entities table must not error");
+            .expect("missing memory_entities/pages tables must not error");
         assert_eq!(r.graph_links, 0);
+        assert_eq!(r.pages, 0);
         assert!(r.holds());
     }
 
