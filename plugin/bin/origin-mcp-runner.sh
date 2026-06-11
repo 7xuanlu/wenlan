@@ -13,7 +13,7 @@
 #      failures when ~/.npm/_cacache contains root-owned files left over
 #      from older npm versions (npx exits before responding to initialize,
 #      MCP host then waits 30s and times out).
-#   4. npx -y origin-mcp@^0.8.2 — fallback for users who installed the
+#   4. npx -y origin-mcp@^0.8.3 — fallback for users who installed the
 #      plugin without running install.sh.
 
 # Don't enable `set -u` here: if Claude Code (or any MCP host) invokes the
@@ -35,4 +35,4 @@ if [ -x "${installed_bin}" ]; then
   exec "${installed_bin}" "$@"
 fi
 
-exec npx -y origin-mcp@^0.8.2 "$@"
+exec npx -y origin-mcp@^0.8.3 "$@"
