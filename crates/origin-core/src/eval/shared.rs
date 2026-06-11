@@ -2273,6 +2273,54 @@ pub async fn run_concept_distillation_batch_api(
     Ok(distilled)
 }
 
+/// Static (DB-free) part of the CE-path G3 touch probe. Separated from the
+/// DB-dependent dispatch so the predicate table is unit-testable.
+///   rerank_skip_pref        -> is_preference_query(question): the bypass IS the channel.
+///   rerank / rerank_model_* -> CE top-k ids differ from base top-k ids.
+///   everything else         -> None (no honest probe; verdict keeps its star).
+pub fn ce_channel_touched_static(
+    feature: &str,
+    question: &str,
+    base_ids: &[&str],
+    ce_ids: &[&str],
+) -> Option<bool> {
+    if feature == "rerank_skip_pref" {
+        return Some(crate::router::classify::is_preference_query(question));
+    }
+    if feature == "rerank" || feature.starts_with("rerank_model") {
+        return Some(base_ids != ce_ids);
+    }
+    None
+}
+
+/// Full CE-path probe: adds the DB-dependent arms.
+pub async fn ce_channel_touched(
+    db: &crate::db::MemoryDB,
+    feature: &str,
+    question: &str,
+    base_ids: &[&str],
+    ce_ids: &[&str],
+) -> Result<Option<bool>, OriginError> {
+    if feature == "rerank_graph_stack" {
+        return Ok(Some(db.graph_stream_touches(question, 10).await?));
+    }
+    Ok(ce_channel_touched_static(
+        feature, question, base_ids, ce_ids,
+    ))
+}
+
+/// Base-path probe (search_memory collectors).
+pub async fn base_channel_touched(
+    db: &crate::db::MemoryDB,
+    feature: &str,
+    question: &str,
+) -> Result<Option<bool>, OriginError> {
+    if feature.contains("graph_stream") {
+        return Ok(Some(db.graph_stream_touches(question, 10).await?));
+    }
+    Ok(None)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2480,5 +2528,36 @@ mod tests {
         );
         let (mt, _space) = db.get_memory_classification(source_id).await.unwrap();
         assert_eq!(mt.as_deref(), Some("decision"));
+    }
+
+    #[test]
+    fn plan_channel_touch_probe_dispatch() {
+        // skip_pref: pure preference-classifier predicate, no DB
+        assert_eq!(
+            ce_channel_touched_static("rerank_skip_pref", "any tips for hiking boots?", &[], &[]),
+            Some(true)
+        );
+        assert_eq!(
+            ce_channel_touched_static("rerank_skip_pref", "when did I visit Tokyo?", &[], &[]),
+            Some(false)
+        );
+        // plain rerank / model arms: touched = CE top-k differs from base top-k
+        assert_eq!(
+            ce_channel_touched_static("rerank_model_turbo", "q", &["a", "b"], &["a", "b"]),
+            Some(false)
+        );
+        assert_eq!(
+            ce_channel_touched_static("rerank_model_turbo", "q", &["a", "b"], &["b", "a"]),
+            Some(true)
+        );
+        assert_eq!(
+            ce_channel_touched_static("rerank", "q", &["a"], &["b"]),
+            Some(true)
+        );
+        // unprobed CE channels stay None (star is honest)
+        assert_eq!(
+            ce_channel_touched_static("page_channel", "q", &[], &[]),
+            None
+        );
     }
 }
