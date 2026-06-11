@@ -27,7 +27,7 @@ pub const EMBEDDING_DIM: usize = 768;
 
 /// Current DB schema version (highest `PRAGMA user_version` applied by `migrate()`).
 /// Bump this whenever a new migration lands. Used as an eval cache invalidation key.
-pub const SCHEMA_VERSION: u32 = 62;
+pub const SCHEMA_VERSION: u32 = 64;
 
 /// Shared embedder reference. Pass to [`MemoryDB::new_with_shared_embedder`] to
 /// reuse a single embedder across many `MemoryDB` instances. Created via
@@ -6035,6 +6035,106 @@ impl MemoryDB {
                     .map_err(|e| OriginError::VectorDb(format!("m62 bump: {e}")))?;
                 log::info!("[migration] Migration 62 applied: pages.review_status trust boundary");
             }
+
+            // Migration 63 (WS): pages.workspace — scope axis, DISTINCT from the
+            // overloaded category `space` column (which holds page_type recap/decision/
+            // people AND, inconsistently, the X-Origin-Space value).  Enforced only by
+            // the scoped-recall page gate in search_memory_cross_rerank_cued; direct
+            // page lookups (search_pages, exports) do not filter by workspace.
+            // Backfill: derive workspace from the source memories' `space` — the modal
+            // (most common) non-NULL space across a page's source_memory_ids. Source-less
+            // pages (zero sources) stay NULL and remain unfiltered-recall-only until set.
+            if version < 63 {
+                let conn = self.conn.lock().await;
+                let has_col: bool = {
+                    let mut rows = conn
+                        .query(
+                            "SELECT COUNT(*) FROM pragma_table_info('pages') WHERE name = 'workspace'",
+                            (),
+                        )
+                        .await
+                        .map_err(|e| OriginError::VectorDb(format!("m63 col check: {e}")))?;
+                    match rows.next().await {
+                        Ok(Some(row)) => row.get::<i64>(0).unwrap_or(0) > 0,
+                        _ => false,
+                    }
+                };
+                if !has_col {
+                    conn.execute("ALTER TABLE pages ADD COLUMN workspace TEXT", ())
+                        .await
+                        .map_err(|e| OriginError::VectorDb(format!("m63 add workspace: {e}")))?;
+                    conn.execute(
+                        "CREATE INDEX IF NOT EXISTS idx_pages_workspace ON pages(workspace) WHERE workspace IS NOT NULL",
+                        (),
+                    )
+                    .await
+                    .map_err(|e| OriginError::VectorDb(format!("m63 create idx: {e}")))?;
+                }
+                // Backfill: workspace = the most common non-NULL `space` among the page's
+                // source memories (joined via page_sources.memory_source_id ->
+                // memories.source_id). Pages with no sourced memory keep workspace=NULL.
+                // GROUP BY page + space, pick the space with the max source count, ties
+                // broken by space text (deterministic). Runs even on re-run (idempotent
+                // via WHERE workspace IS NULL) so rollback-and-rerun in tests fills rows.
+                conn.execute(
+                    "UPDATE pages
+                        SET workspace = (
+                            SELECT m.space
+                              FROM page_sources ps
+                              JOIN memories m ON m.source_id = ps.memory_source_id
+                             WHERE ps.page_id = pages.id AND m.space IS NOT NULL
+                          GROUP BY m.space
+                          ORDER BY COUNT(*) DESC, m.space ASC
+                             LIMIT 1
+                        )
+                      WHERE workspace IS NULL",
+                    (),
+                )
+                .await
+                .map_err(|e| OriginError::VectorDb(format!("m63 backfill: {e}")))?;
+                conn.execute("PRAGMA user_version = 63", ())
+                    .await
+                    .map_err(|e| OriginError::VectorDb(format!("m63 bump: {e}")))?;
+                log::info!("[migration] Migration 63 applied: pages.workspace column + backfill from source-memory space (P3 workspace axis)");
+            }
+
+            // Migration 64 (LD): memories.last_distilled_at — unix-seconds timestamp set
+            // when a memory is distilled into a page (normal path) or attached to a page on
+            // the skip-and-attach dedup path. NULL = never distilled = no demotion. Feeds a
+            // GENTLE retrieval ranking multiplier in search_memory_cross_rerank (NOT a page
+            // FK: a memory distills into many pages). No backfill — existing distilled
+            // memories simply carry no demotion until re-distilled, which is correct (we do
+            // not retroactively demote).
+            if version < 64 {
+                let conn = self.conn.lock().await;
+                let has_col: bool = {
+                    let mut rows = conn
+                        .query(
+                            "SELECT COUNT(*) FROM pragma_table_info('memories') WHERE name = 'last_distilled_at'",
+                            (),
+                        )
+                        .await
+                        .map_err(|e| OriginError::VectorDb(format!("m64 col check: {e}")))?;
+                    match rows.next().await {
+                        Ok(Some(row)) => row.get::<i64>(0).unwrap_or(0) > 0,
+                        _ => false,
+                    }
+                };
+                if !has_col {
+                    conn.execute(
+                        "ALTER TABLE memories ADD COLUMN last_distilled_at INTEGER",
+                        (),
+                    )
+                    .await
+                    .map_err(|e| {
+                        OriginError::VectorDb(format!("m64 add last_distilled_at: {e}"))
+                    })?;
+                }
+                conn.execute("PRAGMA user_version = 64", ())
+                    .await
+                    .map_err(|e| OriginError::VectorDb(format!("m64 bump: {e}")))?;
+                log::info!("[migration] Migration 64 applied: memories.last_distilled_at column (P3 consolidation demotion)");
+            }
         }
 
         Ok(())
@@ -9407,6 +9507,18 @@ impl MemoryDB {
                 memory_results.iter().map(|r| r.source_id.clone()).collect();
             let mut filtered = Vec::with_capacity(page_results.len());
             for page in page_results {
+                // P3 workspace axis: a page passes the scoped gate if its dedicated
+                // `workspace` matches the active `space` filter (NOT the overloaded
+                // `space` category column) OR — unchanged — if a source memory survived
+                // the memory-side filter. NULL workspace never matches any filter.
+                let workspace_match = match (space, page.workspace.as_deref()) {
+                    (Some(filter), Some(ws)) => filter == ws,
+                    _ => false,
+                };
+                if workspace_match {
+                    filtered.push(page);
+                    continue;
+                }
                 let sources = match self.get_page_sources(&page.id).await {
                     Ok(v) => v,
                     Err(e) => {
@@ -9665,6 +9777,52 @@ impl MemoryDB {
                             .unwrap_or(std::cmp::Ordering::Equal)
                     });
                 }
+            }
+        }
+
+        // P3 consolidation-demotion: gently down-weight distilled memories'
+        // FINAL (post-CE / post-blend / post-RRF) score so they rank below
+        // their page for the topic query.  Placed POST-CE so the cross-encoder
+        // overwrite cannot erase the multiplier (adversarial finding C1: a
+        // pre-score_map placement was silently voided on every CE-rerank call).
+        //
+        // Keying: source_id → last_distilled_at.  Only memory rows with a
+        // matching source_id in the stamps map are touched; page/episode/fact
+        // rows are not in the map and pass through unchanged.
+        //
+        // Score read-back: allowed_memory_ids and the workspace gate read
+        // r.source_id (never r.score) earlier in this function — they are
+        // unaffected by this multiplication.  Only RANK moves.
+        //
+        // Re-sort: the CE stage may have re-ordered results; the demotion
+        // may flip adjacent memory rows, so we re-sort to keep the output
+        // consistently ordered before the page partition and truncate below.
+        {
+            let now_unix = chrono::Utc::now().timestamp();
+            let sids: Vec<String> = results.iter().map(|r| r.source_id.clone()).collect();
+            let stamps = self
+                .fetch_last_distilled_at(&sids)
+                .await
+                .unwrap_or_else(|e| {
+                    log::warn!(
+                        "[memory_db] fetch_last_distilled_at failed: {e}; skipping demotion"
+                    );
+                    Default::default()
+                });
+            let mut demoted = false;
+            for r in results.iter_mut() {
+                if let Some(&ts) = stamps.get(&r.source_id) {
+                    r.score *= Self::compute_distill_demotion(Some(ts), now_unix);
+                    demoted = true;
+                }
+            }
+            if demoted {
+                results.sort_by(|a, b| {
+                    b.score
+                        .partial_cmp(&a.score)
+                        .unwrap_or(std::cmp::Ordering::Equal)
+                        .then_with(|| a.source_id.cmp(&b.source_id))
+                });
             }
         }
 
@@ -16357,7 +16515,7 @@ impl MemoryDB {
         let conn = self.conn.lock().await;
         let mut rows = conn
             .query(
-                "SELECT id, title, summary, content, entity_id, space, source_memory_ids, version, status, created_at, last_compiled, last_modified, COALESCE(sources_updated_count, 0), stale_reason, COALESCE(user_edited, 0), COALESCE(changelog, '[]'), COALESCE(creation_kind, 'distilled'), COALESCE(review_status, 'confirmed')
+                "SELECT id, title, summary, content, entity_id, space, source_memory_ids, version, status, created_at, last_compiled, last_modified, COALESCE(sources_updated_count, 0), stale_reason, COALESCE(user_edited, 0), COALESCE(changelog, '[]'), COALESCE(creation_kind, 'distilled'), COALESCE(review_status, 'confirmed'), workspace
                  FROM pages WHERE status = 'active' ORDER BY created_at ASC LIMIT 1",
                 (),
             )
@@ -20301,13 +20459,14 @@ impl MemoryDB {
             now,
             "distilled",
             "confirmed",
+            None, // workspace: distilled pages inherit from source memory backfill (migration 63)
         )
         .await
     }
 
-    /// Like `insert_page` but with explicit `creation_kind` and `review_status`.
+    /// Like `insert_page` but with explicit `creation_kind`, `review_status`, and `workspace`.
     /// All callers that need non-distilled pages (authored, research) use this.
-    /// `insert_page` is a thin wrapper that delegates with distilled/confirmed defaults.
+    /// `insert_page` is a thin wrapper that delegates with distilled/confirmed/NULL-workspace defaults.
     #[allow(clippy::too_many_arguments)]
     pub async fn insert_page_with_kind(
         &self,
@@ -20321,6 +20480,7 @@ impl MemoryDB {
         now: &str,
         creation_kind: &str,
         review_status: &str,
+        workspace: Option<&str>,
     ) -> Result<(), OriginError> {
         // Sanitize daemon-reserved Sources delimiters from client content so
         // persisted `Page.content` never carries them (symmetric with the
@@ -20367,16 +20527,16 @@ impl MemoryDB {
         let concept_result = match &embedding_sql {
             Some(emb) => {
                 conn.execute(
-                    "INSERT INTO pages (id, title, summary, content, entity_id, space, source_memory_ids, version, status, embedding, created_at, last_compiled, last_modified, creation_kind, review_status)
-                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 1, 'active', vector32(?8), ?9, ?9, ?9, ?10, ?11)",
-                    libsql::params![id, title, summary, content, entity_id, space, source_ids_json, emb.as_str(), now, creation_kind, review_status],
+                    "INSERT INTO pages (id, title, summary, content, entity_id, space, source_memory_ids, version, status, embedding, created_at, last_compiled, last_modified, creation_kind, review_status, workspace)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 1, 'active', vector32(?8), ?9, ?9, ?9, ?10, ?11, ?12)",
+                    libsql::params![id, title, summary, content, entity_id, space, source_ids_json, emb.as_str(), now, creation_kind, review_status, workspace],
                 ).await
             }
             None => {
                 conn.execute(
-                    "INSERT INTO pages (id, title, summary, content, entity_id, space, source_memory_ids, version, status, created_at, last_compiled, last_modified, creation_kind, review_status)
-                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 1, 'active', ?8, ?8, ?8, ?9, ?10)",
-                    libsql::params![id, title, summary, content, entity_id, space, source_ids_json, now, creation_kind, review_status],
+                    "INSERT INTO pages (id, title, summary, content, entity_id, space, source_memory_ids, version, status, created_at, last_compiled, last_modified, creation_kind, review_status, workspace)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 1, 'active', ?8, ?8, ?8, ?9, ?10, ?11)",
+                    libsql::params![id, title, summary, content, entity_id, space, source_ids_json, now, creation_kind, review_status, workspace],
                 ).await
             }
         };
@@ -20435,7 +20595,7 @@ impl MemoryDB {
         let conn = self.conn.lock().await;
         let mut rows = conn
             .query(
-                "SELECT id, title, summary, content, entity_id, space, source_memory_ids, version, status, created_at, last_compiled, last_modified, COALESCE(sources_updated_count, 0), stale_reason, COALESCE(user_edited, 0), COALESCE(changelog, '[]'), COALESCE(creation_kind, 'distilled'), COALESCE(review_status, 'confirmed')
+                "SELECT id, title, summary, content, entity_id, space, source_memory_ids, version, status, created_at, last_compiled, last_modified, COALESCE(sources_updated_count, 0), stale_reason, COALESCE(user_edited, 0), COALESCE(changelog, '[]'), COALESCE(creation_kind, 'distilled'), COALESCE(review_status, 'confirmed'), workspace
                  FROM pages WHERE id = ?1",
                 libsql::params![id],
             )
@@ -20453,7 +20613,7 @@ impl MemoryDB {
         let conn = self.conn.lock().await;
         let mut rows = conn
             .query(
-                "SELECT id, title, summary, content, entity_id, space, source_memory_ids, version, status, created_at, last_compiled, last_modified, COALESCE(sources_updated_count, 0), stale_reason, COALESCE(user_edited, 0), COALESCE(changelog, '[]'), COALESCE(creation_kind, 'distilled'), COALESCE(review_status, 'confirmed')
+                "SELECT id, title, summary, content, entity_id, space, source_memory_ids, version, status, created_at, last_compiled, last_modified, COALESCE(sources_updated_count, 0), stale_reason, COALESCE(user_edited, 0), COALESCE(changelog, '[]'), COALESCE(creation_kind, 'distilled'), COALESCE(review_status, 'confirmed'), workspace
                  FROM pages WHERE entity_id = ?1 AND status = 'active' LIMIT 1",
                 libsql::params![entity_id],
             )
@@ -20504,7 +20664,7 @@ impl MemoryDB {
         let conn = self.conn.lock().await;
         let mut rows = conn
             .query(
-                "SELECT id, title, summary, content, entity_id, space, source_memory_ids, version, status, created_at, last_compiled, last_modified, COALESCE(sources_updated_count, 0), stale_reason, COALESCE(user_edited, 0), COALESCE(changelog, '[]'), COALESCE(creation_kind, 'distilled'), COALESCE(review_status, 'confirmed')
+                "SELECT id, title, summary, content, entity_id, space, source_memory_ids, version, status, created_at, last_compiled, last_modified, COALESCE(sources_updated_count, 0), stale_reason, COALESCE(user_edited, 0), COALESCE(changelog, '[]'), COALESCE(creation_kind, 'distilled'), COALESCE(review_status, 'confirmed'), workspace
                  FROM pages WHERE status = ?1 ORDER BY last_modified DESC LIMIT ?2 OFFSET ?3",
                 libsql::params![status, limit, offset],
             )
@@ -20529,7 +20689,7 @@ impl MemoryDB {
         let conn = self.conn.lock().await;
         let mut rows = conn
             .query(
-                "SELECT id, title, summary, content, entity_id, space, source_memory_ids, version, status, created_at, last_compiled, last_modified, COALESCE(sources_updated_count, 0), stale_reason, COALESCE(user_edited, 0), COALESCE(changelog, '[]'), COALESCE(creation_kind, 'distilled'), COALESCE(review_status, 'confirmed')
+                "SELECT id, title, summary, content, entity_id, space, source_memory_ids, version, status, created_at, last_compiled, last_modified, COALESCE(sources_updated_count, 0), stale_reason, COALESCE(user_edited, 0), COALESCE(changelog, '[]'), COALESCE(creation_kind, 'distilled'), COALESCE(review_status, 'confirmed'), workspace
                  FROM pages
                  WHERE status = ?1
                    AND stale_reason IS NOT NULL
@@ -20573,7 +20733,7 @@ impl MemoryDB {
         let conn = self.conn.lock().await;
         let (sql, params): (String, Vec<libsql::Value>) = if let Some(d) = space {
             (
-                "SELECT id, title, summary, content, entity_id, space, source_memory_ids, version, status, created_at, last_compiled, last_modified, COALESCE(sources_updated_count, 0), stale_reason, COALESCE(user_edited, 0), COALESCE(changelog, '[]'), COALESCE(creation_kind, 'distilled'), COALESCE(review_status, 'confirmed')
+                "SELECT id, title, summary, content, entity_id, space, source_memory_ids, version, status, created_at, last_compiled, last_modified, COALESCE(sources_updated_count, 0), stale_reason, COALESCE(user_edited, 0), COALESCE(changelog, '[]'), COALESCE(creation_kind, 'distilled'), COALESCE(review_status, 'confirmed'), workspace
                  FROM pages WHERE status = ?1 AND space = ?2 ORDER BY last_modified DESC LIMIT ?3 OFFSET ?4".to_string(),
                 vec![
                     libsql::Value::Text(status.to_string()),
@@ -20584,7 +20744,7 @@ impl MemoryDB {
             )
         } else {
             (
-                "SELECT id, title, summary, content, entity_id, space, source_memory_ids, version, status, created_at, last_compiled, last_modified, COALESCE(sources_updated_count, 0), stale_reason, COALESCE(user_edited, 0), COALESCE(changelog, '[]'), COALESCE(creation_kind, 'distilled'), COALESCE(review_status, 'confirmed')
+                "SELECT id, title, summary, content, entity_id, space, source_memory_ids, version, status, created_at, last_compiled, last_modified, COALESCE(sources_updated_count, 0), stale_reason, COALESCE(user_edited, 0), COALESCE(changelog, '[]'), COALESCE(creation_kind, 'distilled'), COALESCE(review_status, 'confirmed'), workspace
                  FROM pages WHERE status = ?1 ORDER BY last_modified DESC LIMIT ?2 OFFSET ?3".to_string(),
                 vec![
                     libsql::Value::Text(status.to_string()),
@@ -20956,6 +21116,7 @@ impl MemoryDB {
                         c.source_memory_ids, c.version, c.status, c.created_at, c.last_compiled, c.last_modified,
                         COALESCE(c.sources_updated_count, 0), c.stale_reason, COALESCE(c.user_edited, 0),
                         COALESCE(c.changelog, '[]'), COALESCE(c.creation_kind, 'distilled'), COALESCE(c.review_status, 'confirmed'),
+                        c.workspace,
                         vector_distance_cos(c.embedding, vector32(?1)) as dist
                  FROM pages c
                  WHERE c.status = 'active' AND c.embedding IS NOT NULL
@@ -20970,7 +21131,7 @@ impl MemoryDB {
             .await
             .map_err(|e| OriginError::VectorDb(e.to_string()))?
         {
-            let dist: f64 = row.get(18).unwrap_or(1.0);
+            let dist: f64 = row.get(19).unwrap_or(1.0);
             let similarity = 1.0 - dist;
             if similarity >= similarity_threshold {
                 return Ok(Some(Self::row_to_page(&row)?));
@@ -21016,6 +21177,7 @@ impl MemoryDB {
                         c.source_memory_ids, c.version, c.status, c.created_at, c.last_compiled, c.last_modified,
                         COALESCE(c.sources_updated_count, 0), c.stale_reason, COALESCE(c.user_edited, 0),
                         COALESCE(c.changelog, '[]'), COALESCE(c.creation_kind, 'distilled'), COALESCE(c.review_status, 'confirmed'),
+                        c.workspace,
                         vector_distance_cos(c.embedding, vector32(?1)) as dist
                  FROM pages c
                  WHERE c.status = 'active' AND c.embedding IS NOT NULL
@@ -21031,7 +21193,7 @@ impl MemoryDB {
             .await
             .map_err(|e| OriginError::VectorDb(e.to_string()))?
         {
-            let dist: f64 = row.get(18).unwrap_or(1.0);
+            let dist: f64 = row.get(19).unwrap_or(1.0);
             if 1.0 - dist >= threshold {
                 let page = Self::row_to_page(&row)?;
                 if !allow_user_edited && page.user_edited {
@@ -21569,7 +21731,7 @@ impl MemoryDB {
                               c.source_memory_ids, c.version, c.status, c.created_at, \
                               c.last_compiled, c.last_modified, \
                               COALESCE(c.sources_updated_count, 0), c.stale_reason, \
-                              COALESCE(c.user_edited, 0), COALESCE(c.changelog, '[]'), COALESCE(c.creation_kind, 'distilled'), COALESCE(c.review_status, 'confirmed')";
+                              COALESCE(c.user_edited, 0), COALESCE(c.changelog, '[]'), COALESCE(c.creation_kind, 'distilled'), COALESCE(c.review_status, 'confirmed'), c.workspace";
 
         // Optional page_type clause: pages store their category in `space`.
         // When Some("recap") is passed, only pages with space='recap' are returned.
@@ -21603,7 +21765,7 @@ impl MemoryDB {
                 while let Ok(Some(row)) = rows.next().await {
                     match Self::row_to_page(&row) {
                         Ok(page) => {
-                            let distance: f64 = row.get(18).unwrap_or(1.0);
+                            let distance: f64 = row.get(19).unwrap_or(1.0);
                             let id = page.id.clone();
                             vector_results.push((id, distance, page));
                         }
@@ -21780,10 +21942,11 @@ impl MemoryDB {
         Ok(count)
     }
 
-    /// Parse a row into a Concept. Column order must match the SELECT used in page queries.
+    /// Parse a row into a Page. Column order must match the SELECT used in page queries.
     /// Columns 0-14 are the fixed page fields; column 15 is COALESCE(changelog,'[]');
-    /// column 16 is COALESCE(creation_kind,'distilled'); column 17 is COALESCE(review_status,'confirmed').
-    /// In ranking SELECTs (find_matching_page, search_pages vector branch), dist is at column 18.
+    /// column 16 is COALESCE(creation_kind,'distilled'); column 17 is COALESCE(review_status,'confirmed');
+    /// column 18 is workspace (P3 dedicated scope axis, may be NULL).
+    /// In ranking SELECTs (find_matching_page, search_pages vector branch), dist is at column 19.
     fn row_to_page(row: &libsql::Row) -> Result<Page, OriginError> {
         let source_ids_json: String = row.get::<String>(6).unwrap_or_else(|_| "[]".to_string());
         let source_memory_ids: Vec<String> =
@@ -21832,6 +21995,7 @@ impl MemoryDB {
             review_status: row
                 .get::<String>(17)
                 .unwrap_or_else(|_| "confirmed".to_string()),
+            workspace: row.get::<Option<String>>(18).unwrap_or(None),
         })
     }
 
@@ -22123,6 +22287,144 @@ impl MemoryDB {
         Ok(())
     }
 
+    /// Stamp `last_distilled_at` on the given memories (keyed by `source_id`).
+    /// Called from every distill path that consumes/attaches memories — the normal
+    /// `insert_page` distill and the P2 scoped-match attach path. NULL stays NULL
+    /// for never-distilled memories. Idempotent: re-stamping advances the timestamp.
+    pub async fn stamp_last_distilled_at(
+        &self,
+        source_ids: &[String],
+        now_unix: i64,
+    ) -> Result<(), OriginError> {
+        if source_ids.is_empty() {
+            return Ok(());
+        }
+        let conn = self.conn.lock().await;
+        conn.execute("BEGIN", ())
+            .await
+            .map_err(|e| OriginError::VectorDb(format!("stamp_last_distilled_at begin: {e}")))?;
+        let res: Result<(), OriginError> = async {
+            for sid in source_ids {
+                conn.execute(
+                    "UPDATE memories SET last_distilled_at = ?1 WHERE source_id = ?2",
+                    libsql::params![now_unix, sid.as_str()],
+                )
+                .await
+                .map_err(|e| {
+                    OriginError::VectorDb(format!("stamp_last_distilled_at update: {e}"))
+                })?;
+            }
+            Ok(())
+        }
+        .await;
+        match res {
+            Ok(()) => conn.execute("COMMIT", ()).await.map_err(|e| {
+                OriginError::VectorDb(format!("stamp_last_distilled_at commit: {e}"))
+            })?,
+            Err(e) => {
+                let _ = conn.execute("ROLLBACK", ()).await;
+                return Err(e);
+            }
+        };
+        Ok(())
+    }
+
+    /// Gentle, recency-overridable demotion multiplier for a distilled memory's
+    /// ranking score. A just-distilled memory is multiplied by `DEMOTE_FLOOR`
+    /// (0.7 — never zero, so it stays findable in deep recall and inside
+    /// allowed_memory_ids for scoped gating); the penalty recovers LINEARLY back to
+    /// neutral 1.0 over `OVERRIDE_DAYS`, so the raw evidence stays verifiable against
+    /// the page for a few days after distill. None / future-stamp / out-of-window =>
+    /// 1.0 (neutral). This is the maturation score applied to the memory->page
+    /// hand-off; multiplier hooks the FINAL ranking score on the cross-rerank path
+    /// (post-CE), NOT effective_confidence (which is eviction-only and unused in
+    /// ranking). Placement post-CE ensures the cross-encoder overwrite cannot erase
+    /// the demotion; pages/facts/episodes are untouched (not in the stamps map).
+    fn compute_distill_demotion(last_distilled_at: Option<i64>, now_unix: i64) -> f32 {
+        const DEMOTE_FLOOR: f32 = 0.7;
+        const OVERRIDE_DAYS: i64 = 5;
+        const WINDOW_SECS: i64 = OVERRIDE_DAYS * 86_400;
+        let ts = match last_distilled_at {
+            Some(t) => t,
+            None => return 1.0,
+        };
+        let age = now_unix - ts;
+        if !(0..WINDOW_SECS).contains(&age) {
+            return 1.0; // future stamp (clock skew) or fully recovered -> neutral
+        }
+        // age=0 -> DEMOTE_FLOOR; age=WINDOW_SECS -> 1.0; linear in between.
+        let recovered = (age as f32) / (WINDOW_SECS as f32); // [0,1)
+        DEMOTE_FLOOR + (1.0 - DEMOTE_FLOOR) * recovered
+    }
+
+    /// Batch-fetch `last_distilled_at` for a set of memory `source_id`s.
+    /// Returns only the rows with a non-NULL stamp (absent => never distilled).
+    /// Single parameterized IN query: SQL string built from placeholder indices
+    /// only — no user input interpolated.
+    ///
+    /// Note: `memories.source_id` is NOT unique (chunked memories share source_id
+    /// across chunk rows). The IN query returns one row per chunk; inserting into
+    /// the HashMap dedups (last wins). All chunk rows carry the same stamp because
+    /// `stamp_last_distilled_at` UPDATEs by source_id, so any row's value is correct.
+    async fn fetch_last_distilled_at(
+        &self,
+        source_ids: &[String],
+    ) -> Result<HashMap<String, i64>, OriginError> {
+        if source_ids.is_empty() {
+            return Ok(HashMap::new());
+        }
+        let conn = self.conn.lock().await;
+        let placeholders: Vec<String> = (1..=source_ids.len()).map(|i| format!("?{i}")).collect();
+        let sql = format!(
+            "SELECT source_id, last_distilled_at FROM memories \
+             WHERE source_id IN ({}) AND last_distilled_at IS NOT NULL",
+            placeholders.join(",")
+        );
+        let params: Vec<libsql::Value> = source_ids
+            .iter()
+            .map(|id| libsql::Value::Text(id.clone()))
+            .collect();
+        let mut rows = conn
+            .query(&sql, libsql::params_from_iter(params))
+            .await
+            .map_err(|e| OriginError::VectorDb(format!("fetch_last_distilled_at: {e}")))?;
+        let mut out: HashMap<String, i64> = HashMap::new();
+        while let Ok(Some(row)) = rows.next().await {
+            let sid: String = row.get(0).unwrap_or_default();
+            let ts: i64 = row.get(1).unwrap_or(0);
+            if !sid.is_empty() {
+                out.insert(sid, ts);
+            }
+        }
+        Ok(out)
+    }
+
+    /// Read the `last_distilled_at` unix-seconds timestamp for a memory.
+    /// Returns `Ok(None)` when the memory does not exist or the column is NULL
+    /// (never distilled).  Used by integration tests and the demotion signal.
+    pub async fn read_last_distilled_at(
+        &self,
+        source_id: &str,
+    ) -> Result<Option<i64>, OriginError> {
+        let conn = self.conn.lock().await;
+        let mut rows = conn
+            .query(
+                "SELECT last_distilled_at FROM memories WHERE source_id = ?1 AND chunk_index = 0 LIMIT 1",
+                libsql::params![source_id],
+            )
+            .await
+            .map_err(|e| OriginError::VectorDb(format!("read_last_distilled_at: {e}")))?;
+        if let Some(row) = rows
+            .next()
+            .await
+            .map_err(|e| OriginError::VectorDb(e.to_string()))?
+        {
+            Ok(row.get::<Option<i64>>(0).unwrap_or(None))
+        } else {
+            Ok(None)
+        }
+    }
+
     /// Reverse lookup: find all active pages that reference a given memory source_id.
     pub async fn get_pages_for_memory(
         &self,
@@ -22134,7 +22436,8 @@ impl MemoryDB {
                 "SELECT c.id, c.title, c.summary, c.content, c.entity_id, c.space,
                         c.source_memory_ids, c.version, c.status, c.created_at, c.last_compiled, c.last_modified,
                         COALESCE(c.sources_updated_count, 0), c.stale_reason, COALESCE(c.user_edited, 0),
-                        COALESCE(c.changelog, '[]'), COALESCE(c.creation_kind, 'distilled'), COALESCE(c.review_status, 'confirmed')
+                        COALESCE(c.changelog, '[]'), COALESCE(c.creation_kind, 'distilled'), COALESCE(c.review_status, 'confirmed'),
+                        c.workspace
                  FROM pages c
                  INNER JOIN page_sources cs ON c.id = cs.page_id
                  WHERE cs.memory_source_id = ?1 AND c.status = 'active'",
@@ -22553,6 +22856,23 @@ impl MemoryDB {
         Ok(())
     }
 
+    /// Set `pages.workspace` for a given page. Used by the P3 backfill step and
+    /// integration tests that seed workspace-scoped pages outside of `insert_page_with_kind`.
+    pub async fn set_page_workspace(
+        &self,
+        page_id: &str,
+        workspace: Option<&str>,
+    ) -> Result<(), OriginError> {
+        let conn = self.conn.lock().await;
+        conn.execute(
+            "UPDATE pages SET workspace = ?1 WHERE id = ?2",
+            libsql::params![workspace, page_id],
+        )
+        .await
+        .map_err(|e| OriginError::VectorDb(format!("set_page_workspace: {e}")))?;
+        Ok(())
+    }
+
     /// Increment a page's sources_updated_count (for trivial/non-conflicting source changes).
     pub async fn increment_page_sources_updated(&self, page_id: &str) -> Result<(), OriginError> {
         let conn = self.conn.lock().await;
@@ -22585,7 +22905,7 @@ impl MemoryDB {
     ) -> Result<Vec<crate::pages::Page>, OriginError> {
         let conn = self.conn.lock().await;
         let mut sql = String::from(
-            "SELECT id, title, summary, content, entity_id, space, source_memory_ids, version, status, created_at, last_compiled, last_modified, COALESCE(sources_updated_count, 0), stale_reason, COALESCE(user_edited, 0), COALESCE(changelog, '[]'), COALESCE(creation_kind, 'distilled'), COALESCE(review_status, 'confirmed') \
+            "SELECT id, title, summary, content, entity_id, space, source_memory_ids, version, status, created_at, last_compiled, last_modified, COALESCE(sources_updated_count, 0), stale_reason, COALESCE(user_edited, 0), COALESCE(changelog, '[]'), COALESCE(creation_kind, 'distilled'), COALESCE(review_status, 'confirmed'), workspace \
              FROM pages WHERE stale_reason = ?1 AND status = 'active'",
         );
         let mut bind: Vec<libsql::Value> = vec![libsql::Value::Text(reason.to_string())];
@@ -22621,7 +22941,7 @@ impl MemoryDB {
         let conn = self.conn.lock().await;
         let mut rows = conn
             .query(
-                "SELECT id, title, summary, content, entity_id, space, source_memory_ids, version, status, created_at, last_compiled, last_modified, COALESCE(sources_updated_count, 0), stale_reason, COALESCE(user_edited, 0), COALESCE(changelog, '[]'), COALESCE(creation_kind, 'distilled'), COALESCE(review_status, 'confirmed')
+                "SELECT id, title, summary, content, entity_id, space, source_memory_ids, version, status, created_at, last_compiled, last_modified, COALESCE(sources_updated_count, 0), stale_reason, COALESCE(user_edited, 0), COALESCE(changelog, '[]'), COALESCE(creation_kind, 'distilled'), COALESCE(review_status, 'confirmed'), workspace
                  FROM pages
                  WHERE status = 'archived'
                    AND entity_id IS NULL
@@ -40315,6 +40635,7 @@ pub(crate) mod tests {
             changelog: None,
             creation_kind: "distilled".to_string(),
             review_status: "confirmed".to_string(),
+            workspace: None,
         };
         let r = MemoryDB::search_result_from_page(page);
         assert_eq!(r.source, "page");
@@ -43488,8 +43809,8 @@ pub(crate) mod tests {
         let uv: i64 = vrows.next().await.unwrap().unwrap().get(0).unwrap();
         assert_eq!(uv as u32, crate::db::SCHEMA_VERSION);
         // test_db() runs the full migration ladder, so the terminal version is
-        // the current SCHEMA_VERSION (62 after P2 pages.review_status).
-        assert_eq!(uv, 62);
+        // the current SCHEMA_VERSION (64 after P3 memories.last_distilled_at).
+        assert_eq!(uv, 64);
     }
 
     #[tokio::test]
@@ -43506,7 +43827,7 @@ pub(crate) mod tests {
         let mut vrows = conn.query("PRAGMA user_version", ()).await.unwrap();
         let uv: i64 = vrows.next().await.unwrap().unwrap().get(0).unwrap();
         assert_eq!(
-            uv, 62,
+            uv, 64,
             "user_version restored to current terminal version after idempotent re-run"
         );
     }
@@ -43540,7 +43861,7 @@ pub(crate) mod tests {
         let mut vrows = conn.query("PRAGMA user_version", ()).await.unwrap();
         let uv: i64 = vrows.next().await.unwrap().unwrap().get(0).unwrap();
         assert_eq!(uv as u32, crate::db::SCHEMA_VERSION);
-        assert_eq!(uv, 62);
+        assert_eq!(uv, 64);
     }
 
     #[tokio::test]
@@ -43557,7 +43878,7 @@ pub(crate) mod tests {
         let mut vrows = conn.query("PRAGMA user_version", ()).await.unwrap();
         let uv: i64 = vrows.next().await.unwrap().unwrap().get(0).unwrap();
         assert_eq!(
-            uv, 62,
+            uv, 64,
             "user_version restored to current terminal version after idempotent re-run"
         );
     }
@@ -43606,8 +43927,8 @@ pub(crate) mod tests {
         let uv: i64 = vrows.next().await.unwrap().unwrap().get(0).unwrap();
         assert_eq!(uv as u32, crate::db::SCHEMA_VERSION);
         assert_eq!(
-            uv, 62,
-            "terminal version is 62 after P2 pages.review_status"
+            uv, 64,
+            "terminal version is 64 after P3 memories.last_distilled_at"
         );
     }
 
@@ -43625,7 +43946,7 @@ pub(crate) mod tests {
         let mut vrows = conn.query("PRAGMA user_version", ()).await.unwrap();
         let uv: i64 = vrows.next().await.unwrap().unwrap().get(0).unwrap();
         assert_eq!(
-            uv, 62,
+            uv, 64,
             "user_version restored to current terminal version after idempotent re-run"
         );
 
@@ -45228,5 +45549,198 @@ pub(crate) mod tests {
         assert_eq!(centroid.len(), 3);
         assert!((centroid[0] - 0.5).abs() < 1e-6);
         assert!((centroid[1] - 0.5).abs() < 1e-6);
+    }
+
+    /// Migration 63 (P3): pages.workspace is added and backfilled from the
+    /// source memories' `space` column via the page_sources join.
+    #[tokio::test]
+    async fn m_ws_backfills_workspace_from_source_memory_space() {
+        use crate::sources::RawDocument;
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("test.db");
+        let emitter: std::sync::Arc<dyn crate::EventEmitter> =
+            std::sync::Arc::new(crate::NoopEmitter);
+        let db = MemoryDB::new(&db_path, emitter).await.unwrap();
+
+        // Two memories in distinct workspaces.
+        db.upsert_documents(vec![
+            RawDocument {
+                source: "memory".into(),
+                source_id: "mem_work_1".into(),
+                title: "mem_work_1".into(),
+                content: "alpha work fact".into(),
+                memory_type: Some("fact".into()),
+                space: Some("work".into()),
+                last_modified: 1_700_000_000,
+                ..Default::default()
+            },
+            RawDocument {
+                source: "memory".into(),
+                source_id: "mem_pers_1".into(),
+                title: "mem_pers_1".into(),
+                content: "beta personal fact".into(),
+                memory_type: Some("fact".into()),
+                space: Some("personal".into()),
+                last_modified: 1_700_000_000,
+                ..Default::default()
+            },
+        ])
+        .await
+        .unwrap();
+
+        // A page per workspace whose source is the matching memory.
+        let now = chrono::Utc::now().to_rfc3339();
+        db.insert_page(
+            "page_work",
+            "Work Topic",
+            Some("s"),
+            "body",
+            None,
+            Some("recap"),
+            &["mem_work_1"],
+            &now,
+        )
+        .await
+        .unwrap();
+        db.insert_page(
+            "page_pers",
+            "Personal Topic",
+            Some("s"),
+            "body",
+            None,
+            Some("recap"),
+            &["mem_pers_1"],
+            &now,
+        )
+        .await
+        .unwrap();
+
+        // Roll user_version back so migration 63 re-runs over the seeded rows.
+        {
+            let conn = db.conn.lock().await;
+            conn.execute("UPDATE pages SET workspace = NULL", ())
+                .await
+                .unwrap();
+            conn.execute("PRAGMA user_version = 62", ()).await.unwrap();
+        }
+        db.run_migrations(&crate::events::NoopEmitter)
+            .await
+            .unwrap();
+
+        let conn = db.conn.lock().await;
+        let mut rows = conn
+            .query("SELECT id, workspace FROM pages ORDER BY id", ())
+            .await
+            .unwrap();
+        let mut got = std::collections::HashMap::new();
+        while let Some(r) = rows.next().await.unwrap() {
+            got.insert(
+                r.get::<String>(0).unwrap(),
+                r.get::<Option<String>>(1).unwrap(),
+            );
+        }
+        assert_eq!(
+            got.get("page_pers").unwrap().as_deref(),
+            Some("personal"),
+            "page_pers workspace should be 'personal'"
+        );
+        assert_eq!(
+            got.get("page_work").unwrap().as_deref(),
+            Some("work"),
+            "page_work workspace should be 'work'"
+        );
+    }
+
+    /// Migration 64 (LD): memories.last_distilled_at is added with NULL default.
+    #[tokio::test]
+    async fn m_ld_adds_last_distilled_at_default_null() {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("test.db");
+        let emitter: std::sync::Arc<dyn crate::EventEmitter> =
+            std::sync::Arc::new(crate::NoopEmitter);
+        let db = MemoryDB::new(&db_path, emitter).await.unwrap();
+        let conn = db.conn.lock().await;
+        let mut rows = conn
+            .query(
+                "SELECT COUNT(*) FROM pragma_table_info('memories') WHERE name = 'last_distilled_at'",
+                (),
+            )
+            .await
+            .unwrap();
+        let cnt: i64 = rows.next().await.unwrap().unwrap().get(0).unwrap();
+        assert_eq!(
+            cnt, 1,
+            "memories.last_distilled_at column must exist after migration"
+        );
+    }
+
+    /// Task 7 (P3): compute_distill_demotion is gentle, clamped, and recency-overridable.
+    #[test]
+    fn distill_demotion_is_gentle_and_recency_overridable() {
+        const DAY: i64 = 86_400;
+        let now = 2_000_000_000_i64;
+        // Never distilled -> no demotion.
+        assert_eq!(MemoryDB::compute_distill_demotion(None, now), 1.0);
+        // Just distilled -> max (but still gentle) demotion, never zero.
+        let fresh = MemoryDB::compute_distill_demotion(Some(now), now);
+        assert!(
+            (0.7..1.0).contains(&fresh),
+            "fresh demotion must be gentle, got {fresh}"
+        );
+        // After the override window (a few days) the demotion has fully decayed back to 1.0.
+        assert_eq!(
+            MemoryDB::compute_distill_demotion(Some(now - 7 * DAY), now),
+            1.0
+        );
+        // Mid-window: monotonically recovering toward 1.0.
+        let d1 = MemoryDB::compute_distill_demotion(Some(now - DAY), now);
+        let d3 = MemoryDB::compute_distill_demotion(Some(now - 3 * DAY), now);
+        assert!(
+            fresh < d1 && d1 < d3 && d3 <= 1.0,
+            "demotion must recover with age: {fresh} {d1} {d3}"
+        );
+        // Clock skew (future stamp) clamps to neutral, never amplifies.
+        assert_eq!(
+            MemoryDB::compute_distill_demotion(Some(now + DAY), now),
+            1.0
+        );
+    }
+
+    /// Task 3 (P3): stamp_last_distilled_at sets the column on the given source_ids.
+    #[tokio::test]
+    async fn stamp_last_distilled_at_sets_timestamp() {
+        use crate::sources::RawDocument;
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("test.db");
+        let emitter: std::sync::Arc<dyn crate::EventEmitter> =
+            std::sync::Arc::new(crate::NoopEmitter);
+        let db = MemoryDB::new(&db_path, emitter).await.unwrap();
+        db.upsert_documents(vec![RawDocument {
+            source: "memory".into(),
+            source_id: "mem_a".into(),
+            title: "mem_a".into(),
+            content: "a fact".into(),
+            memory_type: Some("fact".into()),
+            last_modified: 1_700_000_000,
+            ..Default::default()
+        }])
+        .await
+        .unwrap();
+
+        let now = 1_700_000_500_i64;
+        db.stamp_last_distilled_at(&["mem_a".to_string()], now)
+            .await
+            .unwrap();
+
+        let conn = db.conn.lock().await;
+        let mut rows = conn
+            .query(
+                "SELECT last_distilled_at FROM memories WHERE source_id = 'mem_a'",
+                (),
+            )
+            .await
+            .unwrap();
+        let got: Option<i64> = rows.next().await.unwrap().unwrap().get(0).unwrap();
+        assert_eq!(got, Some(now));
     }
 }

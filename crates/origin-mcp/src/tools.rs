@@ -1137,6 +1137,7 @@ impl OriginMcpServer {
             space: space_arg,
             source_memory_ids: params.source_memory_ids,
             creation_kind: None,
+            workspace: None,
         };
         let resp: CreatePageResponse = match self.client.post("/api/pages", &req).await {
             Ok(r) => r,
@@ -4255,6 +4256,7 @@ mod tests {
             space: params.space,
             source_memory_ids: params.source_memory_ids,
             creation_kind: None,
+            workspace: None,
         };
         let json = serde_json::to_value(&req).unwrap();
         assert_eq!(json["title"], "Page");

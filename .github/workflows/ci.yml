@@ -200,7 +200,9 @@ jobs:
       # NOT use `--workspace --tests` because that pulls in origin-core's
       # `eval_harness.rs` which requires `ANTHROPIC_API_KEY` (not in CI).
       # origin-core integration tests run via the Linux-only nextest step
-      # below (chat_import_e2e + distillation_quality).
+      # below (chat_import_e2e + distillation_quality + provenance_p2 +
+      # provenance_p3 + space_scoping_e2e — the latter three carry the
+      # cross-workspace-leak security tests and the P3 demotion regression).
       - name: Integration tests origin-cli + origin-server
         run: cargo nextest run -p origin -p origin-server
       - name: Cache fastembed model (Linux)
@@ -220,7 +222,7 @@ jobs:
         if: matrix.os == 'ubuntu-24.04'
         # nextest process-per-test sidesteps the macOS SIGSEGV root cause
         # (ONNX atexit FFI race). No --test-threads=1 needed on ubuntu.
-        run: cargo nextest run -p origin-core --test chat_import_e2e --test distillation_quality
+        run: cargo nextest run -p origin-core --test chat_import_e2e --test distillation_quality --test provenance_p2 --test provenance_p3 --test space_scoping_e2e
       - name: Run embedding-only eval (main only, Linux)
         if: matrix.os == 'ubuntu-24.04' && github.ref == 'refs/heads/main'
         env:
