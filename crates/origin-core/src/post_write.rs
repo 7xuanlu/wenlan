@@ -498,6 +498,7 @@ pub async fn create_page(
         changelog: None,
         creation_kind: creation_kind.to_string(),
         review_status: review_status.to_string(),
+        workspace: req.workspace.clone(),
     };
 
     // md-first write (only if a knowledge_path was provided)
@@ -523,6 +524,7 @@ pub async fn create_page(
             &now,
             creation_kind,
             review_status,
+            req.workspace.as_deref(),
         )
         .await
     {
@@ -1386,6 +1388,7 @@ mod tests {
             space: None,
             source_memory_ids: vec!["mem_does_not_exist".to_string()],
             creation_kind: None,
+            workspace: None,
         };
         assert!(matches!(
             create_page(&db, req, "test", None).await,
@@ -1417,6 +1420,7 @@ mod tests {
             space: None,
             source_memory_ids: vec!["mem-rust".to_string()],
             creation_kind: None,
+            workspace: None,
         };
         // Hallucination guard should reject (cos sim < 0.6)
         assert!(matches!(
@@ -1451,6 +1455,7 @@ mod tests {
             space: None,
             source_memory_ids: vec!["mem-rust-happy".to_string()],
             creation_kind: None,
+            workspace: None,
         };
         let result = create_page(&db, req, "test", None).await.unwrap();
         assert!(result.id.starts_with("page_"));
@@ -1484,6 +1489,7 @@ mod tests {
             space: None,
             source_memory_ids: vec![source_id.to_string()],
             creation_kind: None,
+            workspace: None,
         };
         create_page(db, req, "test", None).await.unwrap().id
     }

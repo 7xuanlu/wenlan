@@ -2011,8 +2011,14 @@ pub async fn handle_create_page(
     Json(mut req): Json<CreateConceptRequest>,
 ) -> Result<Json<CreatePageResponse>, ServerError> {
     // Apply X-Origin-Space header as fallback only when body omits `space`.
+    // Clone before consuming so workspace fallback can use the same value.
     if req.space.is_none() {
-        req.space = header_space;
+        req.space = header_space.clone();
+    }
+    // Apply X-Origin-Space header as fallback for `workspace` as well.
+    // `workspace` is the P3 dedicated scope axis; `space` is the category column.
+    if req.workspace.is_none() {
+        req.workspace = header_space;
     }
     let agent = extract_agent_name(&headers, None);
     let db = {
@@ -3291,6 +3297,7 @@ pub async fn handle_refresh_page(
         changelog: None,
         creation_kind: existing.creation_kind.clone(),
         review_status: existing.review_status.clone(),
+        workspace: existing.workspace.clone(),
     };
 
     // 1. md-first

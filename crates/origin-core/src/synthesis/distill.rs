@@ -265,7 +265,7 @@ pub(crate) async fn refine_clusters_with_llm(
 /// Returns `Ok(true)` if a page was created, `Ok(false)` if the cluster was skipped.
 /// Extracted from `distill_pages` to enable parallel cluster processing via
 /// `DISTILL_CLUSTER_CONCURRENCY`.
-pub(crate) async fn distill_one_cluster(
+pub async fn distill_one_cluster(
     db: &MemoryDB,
     llm: &Arc<dyn LlmProvider>,
     prompts: &PromptRegistry,
@@ -335,19 +335,28 @@ pub(crate) async fn distill_one_cluster(
             )
             .await?
         {
+            let mut attached: Vec<String> = Vec::with_capacity(cluster.source_ids.len());
             for sid in &cluster.source_ids {
-                if let Err(e) = db
+                match db
                     .link_page_source(&matched.id, sid, "distill_attach")
                     .await
                 {
-                    log::warn!(
+                    Ok(()) => attached.push(sid.clone()),
+                    Err(e) => log::warn!(
                         "[distill] attach source {sid} -> {} failed: {e}",
                         matched.id
-                    );
+                    ),
                 }
             }
-            // CROSS-PHASE TODO (P3): stamp last_distilled_at on cluster.source_ids
-            // here so attached memories are demoted, not just consumed. Not in P2.
+            // P3: the scoped-match attach consumes these memories into an existing
+            // page, so demote them too. Stamp ONLY the ids that actually attached —
+            // never-attached memories must keep ranking normally. (Resolves P2 TODO.)
+            if let Err(e) = db
+                .stamp_last_distilled_at(&attached, chrono::Utc::now().timestamp())
+                .await
+            {
+                log::warn!("[distill] stamp last_distilled_at (scoped attach) failed: {e}");
+            }
             log::info!(
                 "[distill] cluster '{}' attached {} sources to existing page '{}' (scoped match), skipping new-page synth",
                 topic, cluster.source_ids.len(), matched.title
@@ -521,6 +530,18 @@ pub(crate) async fn distill_one_cluster(
                 &now,
             )
             .await?;
+
+            // P3 consolidation-demotion: stamp the source memories so the ranking
+            // demotion multiplier in search_memory_cross_rerank ranks them below
+            // their page for the topic query (they stay in allowed_memory_ids +
+            // deep recall). chrono::Utc::now().timestamp() matches the unix-seconds
+            // contract of memories.last_distilled_at.
+            if let Err(e) = db
+                .stamp_last_distilled_at(&cluster.source_ids, chrono::Utc::now().timestamp())
+                .await
+            {
+                log::warn!("[distill] stamp last_distilled_at failed: {e}");
+            }
 
             log::info!(
                 "[distill] distilled {} memories -> page '{}' ('{}')",
@@ -733,7 +754,11 @@ pub async fn distill_pages_scoped(
             .unwrap_or("general");
 
         // Skip if a page with very similar sources already exists (Jaccard > 0.8)
-        // Memories CAN appear in multiple concepts — this only prevents duplicate concepts
+        // Memories CAN appear in multiple concepts — this only prevents duplicate concepts.
+        // Asymmetry: the concurrent path (distill_one_cluster) takes the skip-and-attach
+        // dedup route instead — it finds a near-match page and stamps last_distilled_at for
+        // the attached ids.  This inline loop only skips on overlap, so it correctly stamps
+        // nothing (no attachment was made).
         let overlap = db
             .max_page_overlap(&cluster.source_ids)
             .await
@@ -909,6 +934,18 @@ pub async fn distill_pages_scoped(
                     &now,
                 )
                 .await?;
+
+                // P3 consolidation-demotion: stamp the source memories so the ranking
+                // demotion multiplier in search_memory_cross_rerank ranks them below
+                // their page for the topic query (they stay in allowed_memory_ids +
+                // deep recall). chrono::Utc::now().timestamp() matches the unix-seconds
+                // contract of memories.last_distilled_at.
+                if let Err(e) = db
+                    .stamp_last_distilled_at(&cluster.source_ids, chrono::Utc::now().timestamp())
+                    .await
+                {
+                    log::warn!("[distill] stamp last_distilled_at failed: {e}");
+                }
 
                 log::info!(
                     "[distill] distilled {} memories -> page '{}' ('{}')",
@@ -1372,6 +1409,7 @@ mod tests {
             &now,
             "authored",
             "confirmed",
+            None, // workspace
         ).await.unwrap();
 
         // 2. A cluster on the same topic with its own memory + a centroid embedding

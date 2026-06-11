@@ -254,6 +254,10 @@ pub struct CreateConceptRequest {
     pub source_memory_ids: Vec<String>,
     #[serde(default)]
     pub creation_kind: Option<String>,
+    /// Dedicated workspace axis (P3). When Some, persisted to `pages.workspace`.
+    /// Distinct from `space` (category column used for page_type filtering).
+    #[serde(default)]
+    pub workspace: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]

@@ -282,6 +282,7 @@ mod tests {
             changelog: None,
             creation_kind: "distilled".to_string(),
             review_status: "confirmed".to_string(),
+            workspace: None,
         }
     }
 
