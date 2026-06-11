@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.8.3](https://github.com/7xuanlu/origin/compare/v0.8.2...v0.8.3) (2026-06-11)
+
+
+### Bug Fixes
+
+* **retrieval:** default cross-encoder model bge-reranker-base ([#261](https://github.com/7xuanlu/origin/issues/261)) ([16edb67](https://github.com/7xuanlu/origin/commit/16edb675465a0b2532d7990cb09725372fb7f937))
+
 ## [0.8.2](https://github.com/7xuanlu/origin/compare/v0.8.1...v0.8.2) (2026-06-11)
 
 
