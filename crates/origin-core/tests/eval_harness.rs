@@ -6,6 +6,25 @@
 
 use origin_core::eval::runner::{run_eval, GateMode};
 
+/// Stderr logger so distill's per-cluster `log::warn!`/`log::info!` skip reasons
+/// (thin cluster / LLM error / hallucination sim / garbage title) are visible in
+/// the `seed_scenario_dbs_complete --nocapture` run. Without this, distill's
+/// silent-skip paths are invisible and a page-starved seed is only caught by the
+/// page floor after hours of seeding.
+struct StderrLogger;
+impl log::Log for StderrLogger {
+    fn enabled(&self, metadata: &log::Metadata) -> bool {
+        metadata.level() <= log::Level::Info
+    }
+    fn log(&self, record: &log::Record) {
+        if self.enabled(record.metadata()) {
+            eprintln!("[{}] {}", record.level(), record.args());
+        }
+    }
+    fn flush(&self) {}
+}
+static STDERR_LOGGER: StderrLogger = StderrLogger;
+
 /// Resolve the eval data root. Defaults to `app/eval/` (legacy location).
 /// Override via `ORIGIN_EVAL_ROOT` env var to support Phase 5 PR3 extraction
 /// or local relocation. Centralizing this means future moves touch one site.
@@ -2378,6 +2397,11 @@ async fn seed_scenario_dbs_complete() {
     use origin_core::tuning::DistillationConfig;
     use std::sync::Arc;
 
+    // Route distill's per-cluster log::warn!/info! skip reasons to stderr so the
+    // --nocapture run shows WHY a cluster produced no page. set_logger is global +
+    // idempotent across tests; ignore the already-set error.
+    let _ = log::set_logger(&STDERR_LOGGER).map(|()| log::set_max_level(log::LevelFilter::Info));
+
     let concurrency: usize = std::env::var("EVAL_ENRICHMENT_CONCURRENCY")
         .ok()
         .and_then(|s| s.parse().ok())
@@ -2388,6 +2412,13 @@ async fn seed_scenario_dbs_complete() {
     let llm: Arc<dyn origin_core::llm_provider::LlmProvider> = Arc::new(
         origin_core::llm_provider::OnDeviceProvider::new_with_model(model.as_deref())
             .expect("on-device provider"),
+    );
+    assert!(
+        llm.is_available(),
+        "[seed_complete] on-device LLM unavailable (Metal init failed?). \
+         distill (step 5) would return 0 created pages and the page floor \
+         would fail only after hours of seeding. Fix the GPU env first \
+         (run outside the CC sandbox; check `pgrep -la origin` for GPU contention)."
     );
     let prompts = PromptRegistry::load(&PromptRegistry::override_dir());
     let tuning = DistillationConfig::default();
@@ -2483,14 +2514,42 @@ async fn seed_scenario_dbs_complete() {
         let n = db.backfill_episodes().await.expect("backfill episodes");
         eprintln!("[seed_complete] 4/5 episodes: {n} rows");
 
-        // 5. distill pages (GPU).
+        // 5. distill pages (GPU). Scoped call so created-vs-pending is visible:
+        // zero created with pending>0 = the LLM lane was skipped or every
+        // cluster died in the synthesis gauntlet — fail HERE with evidence,
+        // not at the contract after the fact.
         let t = std::time::Instant::now();
-        let pages = origin_core::refinery::distill_pages(&db, Some(&llm), &prompts, &tuning, None)
-            .await
-            .expect("distill pages");
+        let r = origin_core::refinery::distill_pages_scoped(
+            &db,
+            Some(&llm),
+            &prompts,
+            &tuning,
+            None,
+            None,
+        )
+        .await
+        .expect("distill pages");
+        // find_distillation_clusters_scoped does NOT exclude already-compiled
+        // memories (db.rs: "No covered_ids exclusion"); the per-cluster
+        // max_page_overlap>0.8 skip means a re-run over an already-distilled DB
+        // legitimately creates 0 NEW pages. So 0 created is only a failure when
+        // the DB also has 0 active pages (the genuinely-starved case).
+        let active_pages = db.count_active_pages().await.expect("count active pages");
         eprintln!(
-            "[seed_complete] 5/5 pages: {pages} in {:.1}m",
+            "[seed_complete] 5/5 pages: created={} pending={} active_total={} in {:.1}m",
+            r.created.len(),
+            r.pending.len(),
+            active_pages,
             t.elapsed().as_secs_f64() / 60.0
+        );
+        assert!(
+            !r.created.is_empty() || active_pages > 0,
+            "[seed_complete] {bench}: distill created 0 pages and the DB has 0 \
+             active pages (pending={}). Read the [WARN]/[INFO] distill/compile lines \
+             above for per-cluster skip reasons (thin <200 chars / LLM error / \
+             hallucination sim<0.6 / garbage topic); pending>0 with no warnings \
+             = LLM lane skipped.",
+            r.pending.len()
         );
 
         // 6. completeness gate. Drop the MemoryDB lock first, open a fresh conn.
