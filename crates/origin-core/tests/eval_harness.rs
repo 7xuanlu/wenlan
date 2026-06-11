@@ -3627,8 +3627,10 @@ async fn rerank_window_knee_sweep() {
 /// must select exactly ONE model feature via `EVAL_PAIRED_ONLY`. The test
 /// panics if more than one model feature is selected while the dir is set
 /// (subsumes the unset case: unset selects all three), and cross-checks the
-/// constructed reranker's `model_id()` against the feature label so mounted
-/// weights can't run under the wrong tag.
+/// constructed reranker's `model_id()` against the feature label. The check
+/// validates label-vs-label (the BYO model_id comes from ORIGIN_RERANKER_MODEL_ID
+/// or the dir basename), so it catches copy-paste cross-wiring, not wrong
+/// weights inside a correctly-named dir.
 ///
 /// Run (unsandboxed, against SNAPSHOT DBs so seeds stay pristine):
 ///   ORIGIN_EVAL_ROOT=/Users/lucian/Repos/origin/app/eval \
