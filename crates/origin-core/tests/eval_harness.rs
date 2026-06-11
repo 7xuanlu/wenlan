@@ -3634,8 +3634,8 @@ async fn rerank_window_knee_sweep() {
 ///   ORIGIN_EVAL_ROOT=/Users/lucian/Repos/origin/app/eval \
 ///   SCENARIO_DB_ROOT=~/.cache/origin-eval/scenario_snapshot \
 ///   EVAL_OUT=~/.cache/origin-eval/rerank_model_sweep_out \
-///     cargo test -p origin-core --test eval_harness rerank_model_sweep -- \
-///     --ignored --nocapture --test-threads=1
+///     cargo test -p origin-core --features eval-harness --test eval_harness \
+///     rerank_model_sweep -- --ignored --nocapture --test-threads=1
 ///
 /// For jina-turbo (BYO):
 ///   EVAL_PAIRED_ONLY=rerank_model_turbo \
@@ -3663,7 +3663,10 @@ async fn rerank_model_sweep() {
         && std::env::var("EVAL_PAIRED_ONLY").is_err()
     {
         panic!(
-            "ORIGIN_RERANKER_ONNX_DIR is set (BYO weights) but EVAL_PAIRED_ONLY is unset.              The BYO path ignores ORIGIN_RERANKER_MODEL, so running all three model features              would tag rows with different labels while using the same weights.              Scope to the one mounted model via EVAL_PAIRED_ONLY=rerank_model_turbo (or whichever)."
+            "ORIGIN_RERANKER_ONNX_DIR is set (BYO weights) but EVAL_PAIRED_ONLY is unset. \
+             The BYO path ignores ORIGIN_RERANKER_MODEL, so running all three model features \
+             would tag rows with different labels while using the same weights. Scope to the \
+             one mounted model via EVAL_PAIRED_ONLY=rerank_model_turbo (or whichever)."
         );
     }
 
