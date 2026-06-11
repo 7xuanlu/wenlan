@@ -2705,6 +2705,23 @@ async fn paired_run_cached_feature(feature: &str, flag: &str) {
     use origin_core::eval::locomo::run_locomo_eval_from_db_collect;
     use origin_core::eval::longmemeval::run_longmemeval_eval_from_db_collect;
     let root = resolve_scenario_db_root_from_harness();
+    // ORIGIN_GRAPH_MEMORY_STREAM is default-ON since 2026-06-10, so its OFF arm
+    // must explicitly disable it ("0"); every other paired flag is opt-in (OFF =
+    // unset).
+    let off_val: Option<&str> = if flag == "ORIGIN_GRAPH_MEMORY_STREAM" {
+        Some("0")
+    } else {
+        None
+    };
+    // Seed-vs-stream mutual exclusion: the seeded branch is reachable only when
+    // !(allow_graph_stream && graph_memory_stream_enabled()), so with the stream
+    // default-ON a graph_seed A/B routes BOTH arms through the stream (byte-
+    // identical A/A). Pin the stream opted-out on BOTH arms to measure the seed.
+    let seed_stream_pin: Option<(&str, Option<&str>)> = if flag == "ORIGIN_ENABLE_GRAPH_SEED" {
+        Some(("ORIGIN_GRAPH_MEMORY_STREAM", Some("0")))
+    } else {
+        None
+    };
 
     // -- LoCoMo --
     let lo_dir = root.join("locomo_v1");
@@ -2716,9 +2733,11 @@ async fn paired_run_cached_feature(feature: &str, flag: &str) {
         )
         .await
         .expect("open locomo_v1 snapshot DB");
-        for (state, val) in [("off", None::<&str>), ("on", Some("1"))] {
+        for (state, val) in [("off", off_val), ("on", Some("1"))] {
             let rows = temp_env::async_with_vars(
-                [(flag, val)],
+                std::iter::once((flag, val))
+                    .chain(seed_stream_pin)
+                    .collect::<Vec<_>>(),
                 run_locomo_eval_from_db_collect(&db, &lo_fx, feature, state),
             )
             .await
@@ -2743,9 +2762,11 @@ async fn paired_run_cached_feature(feature: &str, flag: &str) {
         )
         .await
         .expect("open lme_v1 snapshot DB");
-        for (state, val) in [("off", None::<&str>), ("on", Some("1"))] {
+        for (state, val) in [("off", off_val), ("on", Some("1"))] {
             let rows = temp_env::async_with_vars(
-                [(flag, val)],
+                std::iter::once((flag, val))
+                    .chain(seed_stream_pin)
+                    .collect::<Vec<_>>(),
                 run_longmemeval_eval_from_db_collect(&db, &lme_fx, feature, state),
             )
             .await
@@ -2776,6 +2797,14 @@ async fn paired_run_cached_feature_cross_rerank(
     use origin_core::eval::locomo::run_locomo_eval_cross_rerank_from_db_collect;
     use origin_core::eval::longmemeval::run_longmemeval_eval_cross_rerank_from_db_collect;
     let root = resolve_scenario_db_root_from_harness();
+    // ORIGIN_GRAPH_MEMORY_STREAM is default-ON since 2026-06-10, so its OFF arm
+    // must explicitly disable it ("0"); every other paired flag is opt-in (OFF =
+    // unset).
+    let off_val: Option<&str> = if flag == "ORIGIN_GRAPH_MEMORY_STREAM" {
+        Some("0")
+    } else {
+        None
+    };
 
     // -- LoCoMo --
     let lo_dir = root.join("locomo_v1");
@@ -2787,7 +2816,7 @@ async fn paired_run_cached_feature_cross_rerank(
         )
         .await
         .expect("open locomo_v1 snapshot DB");
-        for (state, val) in [("off", None::<&str>), ("on", Some("1"))] {
+        for (state, val) in [("off", off_val), ("on", Some("1"))] {
             let rows = temp_env::async_with_vars(
                 [(flag, val)],
                 run_locomo_eval_cross_rerank_from_db_collect(
@@ -2820,7 +2849,7 @@ async fn paired_run_cached_feature_cross_rerank(
         )
         .await
         .expect("open lme_v1 snapshot DB");
-        for (state, val) in [("off", None::<&str>), ("on", Some("1"))] {
+        for (state, val) in [("off", off_val), ("on", Some("1"))] {
             let rows = temp_env::async_with_vars(
                 [(flag, val)],
                 run_longmemeval_eval_cross_rerank_from_db_collect(
@@ -3137,7 +3166,13 @@ async fn paired_ab_emit() {
     // cross-rerank collectors so a flag flip produces a real delta. Build the
     // reranker ONCE and only when a CE feature is selected (the BGE-reranker-v2-m3
     // weights are ~600MB on first download), so base-only smoke runs stay light.
-    let ce: [(&str, &str); 7] = [
+    // `rerank_graph_stack` (ORIGIN_GRAPH_MEMORY_STREAM toggled WITH the CE active
+    // on both arms) RETIRED 2026-06-10: the 2026-06-09 ns receipt (+0.0126,
+    // p=0.17) closed stream-under-CE, and the code now hard-skips the stream
+    // whenever a reranker is present (allow_graph_stream = reranker.is_none()).
+    // With a reranker on both arms the flag toggles nothing, so the two arms are
+    // byte-identical by construction — the arm could only emit a fake null.
+    let ce: [(&str, &str); 6] = [
         ("page_channel", "ORIGIN_ENABLE_PAGE_CHANNEL"),
         ("episode_channel", "ORIGIN_ENABLE_EPISODE_CHANNEL"),
         ("fact_channel", "ORIGIN_ENABLE_FACT_CHANNEL"),
@@ -3148,12 +3183,6 @@ async fn paired_ab_emit() {
         // rows are byte-identical between arms (detector has 0 false positives
         // on the LME-S fixture), so the delta isolates the bypassed category.
         ("rerank_skip_pref", "ORIGIN_RERANK_SKIP_PREFERENCE"),
-        // Stacked arm: graph memory stream toggled WITH the CE active on both
-        // arms — measures whether graph_stream's gain composes with the
-        // reranker (base-path graph_stream A/B can't answer that). Tagged
-        // distinctly from base-path "graph_stream" so the analyzer separates
-        // them; the 'graph' substring keeps the substrate-liveness gate armed.
-        ("rerank_graph_stack", "ORIGIN_GRAPH_MEMORY_STREAM"),
     ];
     if ce.iter().any(|(f, _)| paired_feature_selected(f)) {
         let reranker = origin_core::reranker::init_cross_encoder_reranker(None)
@@ -7926,9 +7955,10 @@ async fn expand_temp_isolation_probe() {
 /// Ephemeral per-conversation DBs (fixture-driven), deterministic expansion
 /// (temp 0), rerank off, graph gate off (do_graph always true). The ONLY
 /// difference between arms is ORIGIN_GRAPH_MEMORY_STREAM:
-///   OFF = stream unset -> augment runs the legacy observation no-op == no graph.
-///   ON  = stream on    -> live entity->memory stream (memory_entities populated
-///                         per conversation by the collector).
+///   OFF = stream "0" -> augment runs the legacy observation no-op == no graph
+///         (the flag is default-ON since 2026-06-10, so the OFF arm pins "0").
+///   ON  = stream "1" -> live entity->memory stream (memory_entities populated
+///                       per conversation by the collector).
 /// Per-query ndcg@10 / recall@5 paired; analyze_paired.py reports the whole-set
 /// delta AND the graph-touched subset (queries where Δndcg != 0). The collector
 /// prints memory_entities coverage so a null can be checked against substrate
@@ -7957,10 +7987,11 @@ async fn graph_stream_pair_locomo() {
     );
     let prompts = origin_core::prompts::PromptRegistry::default();
 
-    // OFF arm: stream unset -> augment is the legacy observation no-op == no graph.
+    // OFF arm: stream "0" -> augment is the legacy observation no-op == no graph
+    // (default-ON since 2026-06-10, so OFF must pin "0", not unset).
     let off_rows = temp_env::async_with_vars(
         [
-            ("ORIGIN_GRAPH_MEMORY_STREAM", None::<&str>),
+            ("ORIGIN_GRAPH_MEMORY_STREAM", Some("0")),
             ("ORIGIN_ENABLE_GRAPH_GATE", None::<&str>),
             ("ORIGIN_ENABLE_INTENT_LLM", None::<&str>),
             ("ORIGIN_EXPAND_TEMP", Some("0.0")),
@@ -8027,10 +8058,11 @@ async fn graph_stream_pair_lme() {
     );
     let prompts = origin_core::prompts::PromptRegistry::default();
 
-    // OFF arm: stream unset -> augment is the legacy observation no-op == no graph.
+    // OFF arm: stream "0" -> augment is the legacy observation no-op == no graph
+    // (default-ON since 2026-06-10, so OFF must pin "0", not unset).
     let off_rows = temp_env::async_with_vars(
         [
-            ("ORIGIN_GRAPH_MEMORY_STREAM", None::<&str>),
+            ("ORIGIN_GRAPH_MEMORY_STREAM", Some("0")),
             ("ORIGIN_ENABLE_GRAPH_GATE", None::<&str>),
         ],
         origin_core::eval::longmemeval::run_longmemeval_eval_graph_stream_collect(

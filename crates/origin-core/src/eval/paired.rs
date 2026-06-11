@@ -47,6 +47,14 @@ pub struct PerQueryRow {
     /// per-touched-subset delta instead of a corpus-averaged ~96.6% no-op figure.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub temporal_touched: Option<bool>,
+    /// Generic G3 attribution flag: did the feature's channel actually touch
+    /// this query? Feature-specific predicate — see the `channel_touch` probes
+    /// in eval/shared.rs (landing in a later commit of this branch). Takes
+    /// precedence over `temporal_touched`/`graph_skipped` in analyze_paired.py.
+    /// `None` = no honest probe wired for this feature; the analyzer then
+    /// stars the verdict (vacuous attribution) on purpose.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub channel_touched: Option<bool>,
 }
 
 /// Threat-2 guard for the cross-rerank paired runners: assert the
@@ -83,4 +91,42 @@ pub async fn assert_summary_nodes_empty(db: &crate::db::MemoryDB) {
          would silently demote gold memories below the prelude rows; refusing to \
          emit a misleading paired baseline"
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn plan_channel_touched_serde_roundtrip_and_omission() {
+        let mut row = PerQueryRow {
+            feature: "x".into(),
+            bench: "lme".into(),
+            flag_state: "on".into(),
+            query_id: "q1".into(),
+            category: "TR".into(),
+            ndcg10: 0.5,
+            recall5: 0.5,
+            mrr: 0.5,
+            latency_ms: 1.0,
+            graph_skipped: None,
+            temporal_touched: None,
+            channel_touched: None,
+        };
+        // None must be OMITTED from JSON (old analyzers unaffected)
+        let js = serde_json::to_string(&row).unwrap();
+        assert!(
+            !js.contains("channel_touched"),
+            "None must serialize to absent: {js}"
+        );
+        // Some(true) round-trips
+        row.channel_touched = Some(true);
+        let js = serde_json::to_string(&row).unwrap();
+        let back: PerQueryRow = serde_json::from_str(&js).unwrap();
+        assert_eq!(back.channel_touched, Some(true));
+        // old JSONL without the field still deserializes (default None)
+        let old = js.replace(",\"channel_touched\":true", "");
+        let back: PerQueryRow = serde_json::from_str(&old).unwrap();
+        assert_eq!(back.channel_touched, None);
+    }
 }

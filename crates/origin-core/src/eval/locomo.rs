@@ -778,14 +778,16 @@ pub async fn run_locomo_eval(path: &Path) -> Result<LocomoReport, OriginError> {
         per_case,
         coverage: None,
     };
-    report.env = Some(build_locomo_env(
-        "base",
-        path,
-        "search_memory",
-        "none",
-        "none",
-        None,
+    let mut env_stamp = build_locomo_env("base", path, "search_memory", "none", "none", None);
+    env_stamp.flags.push(format!(
+        "graph_memory_stream={}",
+        if crate::db::graph_memory_stream_enabled() {
+            "on"
+        } else {
+            "off"
+        }
     ));
+    report.env = Some(env_stamp);
     Ok(report)
 }
 
@@ -927,14 +929,23 @@ pub async fn run_locomo_eval_reranked(
         per_case,
         coverage: None,
     };
-    report.env = Some(build_locomo_env(
+    let mut env_stamp = build_locomo_env(
         "reranked",
         path,
         "search_memory_reranked",
         llm.kind(),
         &llm.model_id(),
         None,
+    );
+    env_stamp.flags.push(format!(
+        "graph_memory_stream={}",
+        if crate::db::graph_memory_stream_enabled() {
+            "on"
+        } else {
+            "off"
+        }
     ));
+    report.env = Some(env_stamp);
     Ok(report)
 }
 
@@ -1081,14 +1092,23 @@ pub async fn run_locomo_eval_cross_rerank(
         per_case,
         coverage: None,
     };
-    report.env = Some(build_locomo_env(
+    let mut env_stamp = build_locomo_env(
         "cross_rerank",
         path,
         "search_memory_with_reranker",
         "cross-encoder",
         &format!("cross-encoder:{}", reranker.model_id()),
         None,
+    );
+    env_stamp.flags.push(format!(
+        "graph_memory_stream={}",
+        if crate::db::graph_memory_stream_enabled() {
+            "on"
+        } else {
+            "off"
+        }
     ));
+    report.env = Some(env_stamp);
     Ok(report)
 }
 
@@ -1399,6 +1419,14 @@ pub async fn run_locomo_eval_cross_rerank_from_db(
         .flags
         .push(format!("episode_channel={}", episode_state));
     env_stamp.flags.push(format!("fact_channel={}", fact_state));
+    env_stamp.flags.push(format!(
+        "graph_memory_stream={}",
+        if crate::db::graph_memory_stream_enabled() {
+            "on"
+        } else {
+            "off"
+        }
+    ));
     // Record the (now-pinned) rerank-pool knobs so a non-default depth carries
     // into the env stamp / baseline filename instead of being invisible.
     env_stamp.flags.push(format!(
@@ -1473,6 +1501,10 @@ pub async fn run_locomo_eval_from_db_collect(
                 .await?;
             let latency_ms = t0.elapsed().as_secs_f64() * 1000.0;
 
+            // Outside the latency window: the base-path channel-touch probe.
+            let channel_touched =
+                crate::eval::shared::base_channel_touched(db, feature, &qa.question).await?;
+
             let relevant_ids: HashSet<String> = qa
                 .evidence
                 .iter()
@@ -1500,6 +1532,7 @@ pub async fn run_locomo_eval_from_db_collect(
                 latency_ms,
                 graph_skipped: if gate_on { Some(graph_skipped) } else { None },
                 temporal_touched: None,
+                channel_touched,
             });
         }
     }
@@ -1565,6 +1598,20 @@ pub async fn run_locomo_eval_cross_rerank_from_db_collect(
                 continue;
             }
 
+            // base_ids fetched BEFORE the latency Instant so the probe does not
+            // pollute latency_ms; only the rerank/model arms need the base ranking.
+            let needs_base = feature == "rerank" || feature.starts_with("rerank_model");
+            let base_ids_owned: Vec<String> = if needs_base {
+                db.search_memory(&qa.question, 10, None, None, None, None, None, None)
+                    .await?
+                    .iter()
+                    .map(|r| r.source_id.clone())
+                    .collect()
+            } else {
+                vec![]
+            };
+            let base_ids: Vec<&str> = base_ids_owned.iter().map(|s| s.as_str()).collect();
+
             let t0 = Instant::now();
             let results = db
                 .search_memory_cross_rerank(
@@ -1587,6 +1634,15 @@ pub async fn run_locomo_eval_cross_rerank_from_db_collect(
                 continue;
             }
             let result_ids: Vec<&str> = results.iter().map(|r| r.source_id.as_str()).collect();
+            // After result_ids exist and outside the latency window: CE-path probe.
+            let channel_touched = crate::eval::shared::ce_channel_touched(
+                db,
+                feature,
+                &qa.question,
+                &base_ids,
+                &result_ids,
+            )
+            .await?;
             let grades: HashMap<&str, u8> = result_ids
                 .iter()
                 .map(|id| (*id, if relevant_ids.contains(*id) { 1 } else { 0 }))
@@ -1605,6 +1661,7 @@ pub async fn run_locomo_eval_cross_rerank_from_db_collect(
                 latency_ms,
                 graph_skipped: None,
                 temporal_touched: None,
+                channel_touched,
             });
         }
     }
@@ -1791,6 +1848,7 @@ pub async fn run_locomo_eval_cross_rerank_temporal_collect(
                 latency_ms,
                 graph_skipped: None,
                 temporal_touched,
+                channel_touched: None,
             });
         }
     }
@@ -1943,6 +2001,14 @@ pub async fn run_locomo_eval_from_db(
         None,
     );
     env_stamp.flags.push(format!("graph_gate={graph_gate}"));
+    env_stamp.flags.push(format!(
+        "graph_memory_stream={}",
+        if crate::db::graph_memory_stream_enabled() {
+            "on"
+        } else {
+            "off"
+        }
+    ));
     env_stamp.flags.push("scenario_db=consolidated".to_string());
     report.env = Some(env_stamp);
     Ok(report)
@@ -2084,14 +2150,23 @@ pub async fn run_locomo_eval_expanded(
         per_case,
         coverage: None,
     };
-    report.env = Some(build_locomo_env(
+    let mut env_stamp = build_locomo_env(
         "expanded",
         path,
         "search_memory_expanded",
         llm.kind(),
         &llm.model_id(),
         None,
+    );
+    env_stamp.flags.push(format!(
+        "graph_memory_stream={}",
+        if crate::db::graph_memory_stream_enabled() {
+            "on"
+        } else {
+            "off"
+        }
     ));
+    report.env = Some(env_stamp);
     Ok(report)
 }
 
@@ -2205,6 +2280,7 @@ pub async fn run_locomo_eval_expanded_intent_collect(
                 latency_ms: 0.0,
                 graph_skipped: Some(!used_graph),
                 temporal_touched: None,
+                channel_touched: None,
             });
         }
     }
@@ -2336,6 +2412,10 @@ pub async fn run_locomo_eval_graph_stream_collect(
                 .search_memory(&qa.question, 10, None, None, None, None, None, None)
                 .await?;
 
+            // Per-sample DB handle: feature contains graph_stream, probe fires.
+            let channel_touched =
+                crate::eval::shared::base_channel_touched(&db, feature, &qa.question).await?;
+
             let relevant_ids: HashSet<String> = qa
                 .evidence
                 .iter()
@@ -2363,6 +2443,7 @@ pub async fn run_locomo_eval_graph_stream_collect(
                 latency_ms: 0.0,
                 graph_skipped: None,
                 temporal_touched: None,
+                channel_touched,
             });
         }
     }
@@ -2524,6 +2605,14 @@ pub async fn run_locomo_eval_prf(
     env_stamp.flags.push(format!(
         "prf_rounds={}",
         crate::retrieval::prf::prf_rounds()
+    ));
+    env_stamp.flags.push(format!(
+        "graph_memory_stream={}",
+        if crate::db::graph_memory_stream_enabled() {
+            "on"
+        } else {
+            "off"
+        }
     ));
     report.env = Some(env_stamp);
     Ok(report)
@@ -2841,14 +2930,16 @@ pub async fn run_locomo_eval_with_gate(
         per_case,
         coverage: None,
     };
-    report.env = Some(build_locomo_env(
-        "gated",
-        path,
-        "search_memory",
-        "none",
-        "none",
-        None,
+    let mut env_stamp = build_locomo_env("gated", path, "search_memory", "none", "none", None);
+    env_stamp.flags.push(format!(
+        "graph_memory_stream={}",
+        if crate::db::graph_memory_stream_enabled() {
+            "on"
+        } else {
+            "off"
+        }
     ));
+    report.env = Some(env_stamp);
     Ok(report)
 }
 

@@ -896,8 +896,8 @@ pub fn khop_traversal_enabled() -> bool {
         .unwrap_or(false)
 }
 
-/// True iff `ORIGIN_GRAPH_MEMORY_STREAM` is truthy (`1`/`true`/`yes`). OPT-IN,
-/// default OFF.
+/// True iff `ORIGIN_GRAPH_MEMORY_STREAM` is NOT explicitly disabled. DEFAULT ON
+/// (opt out with `0`/`false`/`no`/`off`).
 ///
 /// When OFF, [`MemoryDB::augment_with_graph`] keeps its legacy
 /// entity→observation merge — which is a structural no-op (it boosts observation
@@ -910,12 +910,18 @@ pub fn khop_traversal_enabled() -> bool {
 /// the memories linked to the surviving anchors via `memory_entities` are fused
 /// into the result pool at memory (`source_id`) granularity, and the rows are
 /// tagged `source = "memory"` with real ids so they survive the knowledge_graph
-/// strip. Truthy-only parse so production and eval cannot disagree.
+/// strip. Opt-out parse (unset or any non-falsy value = ON) keeps production and
+/// eval agreeing on the default; measured quick-path win: +0.0545 NDCG@10 agg
+/// BH-sig (paired A/B 2026-06-09); stream-under-CE stack +0.0126 p=0.17 not
+/// significant, so the default-ON benefit lives on the quick path only.
 pub fn graph_memory_stream_enabled() -> bool {
-    std::env::var("ORIGIN_GRAPH_MEMORY_STREAM")
-        .ok()
-        .map(|v| matches!(v.trim().to_ascii_lowercase().as_str(), "1" | "true" | "yes"))
-        .unwrap_or(false)
+    match std::env::var("ORIGIN_GRAPH_MEMORY_STREAM") {
+        Ok(v) => !matches!(
+            v.trim().to_ascii_lowercase().as_str(),
+            "0" | "false" | "no" | "off"
+        ),
+        Err(_) => true,
+    }
 }
 
 /// True iff `ORIGIN_RERANK_SKIP_PREFERENCE` is truthy. OPT-IN, default OFF.
@@ -8019,12 +8025,20 @@ impl MemoryDB {
             recap_penalty,
             scoring,
             None, // graph_override: keyword gate (existing behavior)
+            true, // allow_graph_stream: quick path gets the stream (default ON)
         )
         .await
     }
 
     /// Inner search implementation shared by `search_memory` and `search_memory_temporal`.
     /// The `temporal_cue` argument injects a parameterized event_date filter when `Some`.
+    ///
+    /// `allow_graph_stream` gates the v3 graph memory stream per call site. It now
+    /// serves the quick, temporal, skip-preference-bypass, CE-pool-fetch, and
+    /// expanded paths: pass `true` to let `ORIGIN_GRAPH_MEMORY_STREAM` (default ON)
+    /// fuse entity-linked memories, `false` to force the legacy observation merge
+    /// even when the flag is on (the CE pool fetch passes `reranker.is_none()` so
+    /// the stream rides only the degraded-to-hybrid case, never a live CE rescore).
     #[allow(clippy::too_many_arguments)]
     async fn search_memory_with_cue(
         &self,
@@ -8038,6 +8052,7 @@ impl MemoryDB {
         recap_penalty: Option<f32>,
         scoring: Option<&crate::tuning::SearchScoringConfig>,
         graph_override: Option<bool>,
+        allow_graph_stream: bool,
     ) -> Result<Vec<SearchResult>, OriginError> {
         let t_embed = std::time::Instant::now();
         let embedding = self.get_or_compute_embedding(query)?;
@@ -8528,9 +8543,13 @@ impl MemoryDB {
             // a fresh query-anchored search_entities_by_vector call.
             // Graceful log-and-degrade: on Err, warn + fall back to query-anchor.
             // The T9 observation-seeded path and the v3 memory-stream path are
-            // mutually exclusive: when the memory stream is on, always route
-            // through augment_with_graph (which dispatches to the stream).
-            if graph_seed_enabled() && !pool_entity_ids.is_empty() && !graph_memory_stream_enabled()
+            // mutually exclusive PER CALL: the stream wins only when this call
+            // permits it (`allow_graph_stream`) AND the flag is on; otherwise the
+            // seeded path runs. Both downstream branches dispatch through
+            // `augment_with_graph_gated`, which re-applies the same per-path gate.
+            if graph_seed_enabled()
+                && !pool_entity_ids.is_empty()
+                && !(allow_graph_stream && graph_memory_stream_enabled())
             {
                 let seeded_result = self
                     .augment_with_graph_seeded(query, final_results, &pool_entity_ids, limit)
@@ -8546,11 +8565,15 @@ impl MemoryDB {
                         );
                         // final_results was moved; augment_with_graph with empty results
                         // so score boosts still flow (query-anchor picks up entities).
-                        final_results = self.augment_with_graph(query, vec![], limit).await?;
+                        final_results = self
+                            .augment_with_graph_gated(query, vec![], limit, allow_graph_stream)
+                            .await?;
                     }
                 }
             } else {
-                final_results = self.augment_with_graph(query, final_results, limit).await?;
+                final_results = self
+                    .augment_with_graph_gated(query, final_results, limit, allow_graph_stream)
+                    .await?;
             }
         }
 
@@ -8801,6 +8824,7 @@ impl MemoryDB {
             None, // recap_penalty
             None, // scoring
             None, // graph_override
+            true, // allow_graph_stream: quick/temporal path gets the stream
         )
         .await
     }
@@ -9311,6 +9335,7 @@ impl MemoryDB {
                     None,
                     None,
                     None, // graph_override: keyword gate (base-path behavior)
+                    true, // allow_graph_stream: byte-identical to base search_memory (has the stream)
                 )
                 .await;
         }
@@ -9337,6 +9362,12 @@ impl MemoryDB {
                 None,
                 None,
                 None, // graph_override
+                // allow_graph_stream: skip the stream ONLY when a reranker will
+                // rescore. Under a live CE pass the stream×rerank stack measured
+                // ns (+0.0126, p=0.17, 2026-06-09), so the stream stays off the
+                // CE pool. With no reranker this call degrades to plain hybrid
+                // search, which keeps the stream (quick-path receipt +0.0545 BH-sig).
+                reranker.is_none(),
             )
             .await?;
 
@@ -10069,6 +10100,7 @@ impl MemoryDB {
                     None, // recap_penalty
                     None, // scoring
                     graph_override,
+                    true, // allow_graph_stream: expanded path runs on the quick path
                 )
                 .await
             {
@@ -10093,6 +10125,7 @@ impl MemoryDB {
                     None, // recap_penalty
                     None, // scoring
                     graph_override,
+                    true, // allow_graph_stream: expanded path runs on the quick path
                 )
                 .await;
         }
@@ -10502,11 +10535,34 @@ impl MemoryDB {
     /// Graph observations boost scores of related memories but are stripped from
     /// final output by search_memory (KG is internal scaffolding, not user-facing).
     /// Returns the merged + re-sorted results. If no entities exist, returns input unchanged.
+    ///
+    /// `ORIGIN_GRAPH_MEMORY_STREAM` is default-ON, so this entry dispatches to the
+    /// live entity→memory stream (`augment_with_memory_stream`); the legacy
+    /// observation merge is now the opt-out (flag `0`) / gated
+    /// (`augment_with_graph_gated(.., allow_stream = false)`) path.
     pub async fn augment_with_graph(
         &self,
         query: &str,
         results: Vec<SearchResult>,
         limit: usize,
+    ) -> Result<Vec<SearchResult>, OriginError> {
+        self.augment_with_graph_gated(query, results, limit, true)
+            .await
+    }
+
+    /// Inner graph augmentation shared by the quick path and the CE pool fetch.
+    ///
+    /// `allow_stream = false` forces the legacy observation path even when
+    /// `ORIGIN_GRAPH_MEMORY_STREAM` is on — used by the CE pool fetch, where the
+    /// stream×rerank stack measured not significant (+0.0126, p=0.17, 2026-06-09),
+    /// so the stream only rides the quick path. `allow_stream = true` preserves
+    /// the public `augment_with_graph` behavior (stream when the flag is on).
+    async fn augment_with_graph_gated(
+        &self,
+        query: &str,
+        results: Vec<SearchResult>,
+        limit: usize,
+        allow_stream: bool,
     ) -> Result<Vec<SearchResult>, OriginError> {
         let entity_hits = match self.search_entities_by_vector(query, 5).await {
             Ok(hits) if !hits.is_empty() => hits,
@@ -10517,7 +10573,7 @@ impl MemoryDB {
         // dead entity→observation boost. The legacy path below boosts observation
         // ghost-ids that are stripped at output (net no-op); the stream surfaces
         // real linked memories that survive the strip. See augment_with_memory_stream.
-        if graph_memory_stream_enabled() {
+        if allow_stream && graph_memory_stream_enabled() {
             return self
                 .augment_with_memory_stream(results, limit, &entity_hits)
                 .await;
@@ -10586,6 +10642,31 @@ impl MemoryDB {
         Ok(merged)
     }
 
+    /// Anchor eligibility shared by the live graph stream and the eval-side
+    /// G3 touch probe: non-person entities with `memory_entities` degree <= hub
+    /// cap, in entity-hit rank order. One source of truth so the probe can
+    /// never drift from what the stream actually does.
+    async fn stream_anchor_ids(
+        &self,
+        entity_hits: &[EntitySearchResult],
+    ) -> Result<Vec<String>, OriginError> {
+        // Type filter (cheap, in-memory) then degree filter (one query).
+        let typed: Vec<String> = entity_hits
+            .iter()
+            .filter(|h| !is_person_like(&h.entity.entity_type))
+            .map(|h| h.entity.id.clone())
+            .collect();
+        if typed.is_empty() {
+            return Ok(vec![]);
+        }
+        let degrees = self.entity_degrees(&typed).await?;
+        let cap = graph_hub_cap();
+        Ok(typed
+            .into_iter()
+            .filter(|id| degrees.get(id).copied().unwrap_or(0) <= cap)
+            .collect())
+    }
+
     /// v3 live graph stream (ORIGIN_GRAPH_MEMORY_STREAM). Fuses memories linked
     /// to the query-anchored entities into the result pool at memory (`source_id`)
     /// granularity, replacing the dead entity→observation boost.
@@ -10611,24 +10692,13 @@ impl MemoryDB {
         limit: usize,
         entity_hits: &[EntitySearchResult],
     ) -> Result<Vec<SearchResult>, OriginError> {
-        // 1. Type filter (cheap, in-memory) then degree filter (one query).
-        let typed: Vec<String> = entity_hits
-            .iter()
-            .filter(|h| !is_person_like(&h.entity.entity_type))
-            .map(|h| h.entity.id.clone())
-            .collect();
-        if typed.is_empty() {
-            return Ok(results);
-        }
-        let degrees = self.entity_degrees(&typed).await?;
-        let cap = graph_hub_cap();
-        let ranked_anchor_ids: Vec<String> = typed
-            .into_iter()
-            .filter(|id| degrees.get(id).copied().unwrap_or(0) <= cap)
-            .collect();
+        // 1. Shared anchor eligibility (type + degree). One source of truth
+        //    with the G3 touch probe so the two can never drift.
+        let ranked_anchor_ids = self.stream_anchor_ids(entity_hits).await?;
         if ranked_anchor_ids.is_empty() {
             log::info!(
-                "[graph_stream] no eligible anchors after type+degree filter (cap={cap}); graph contributes nothing"
+                "[graph_stream] no eligible anchors after type+degree filter (cap={}); graph contributes nothing",
+                graph_hub_cap()
             );
             return Ok(results);
         }
@@ -10698,6 +10768,32 @@ impl MemoryDB {
                 .then_with(|| a.source_id.cmp(&b.source_id))
         });
         Ok(merged)
+    }
+
+    /// Eval-side G3 touch probe: would the v3 graph stream contribute >= 1
+    /// linked memory for this query? Mirrors `augment_with_memory_stream`
+    /// steps 1-2 via the shared `stream_anchor_ids` helper. Read-only.
+    ///
+    /// The entity-hit count `5` mirrors `augment_with_graph`'s
+    /// `search_entities_by_vector(query, 5)` (db.rs:10511) — the same anchor
+    /// set the live stream is fed — so the probe sees what the stream sees.
+    pub async fn graph_stream_touches(
+        &self,
+        query: &str,
+        limit: usize,
+    ) -> Result<bool, OriginError> {
+        let hits = match self.search_entities_by_vector(query, 5).await {
+            Ok(h) if !h.is_empty() => h,
+            _ => return Ok(false),
+        };
+        let anchors = self.stream_anchor_ids(&hits).await?;
+        if anchors.is_empty() {
+            return Ok(false);
+        }
+        Ok(!self
+            .get_memories_for_entities(&anchors, limit)
+            .await?
+            .is_empty())
     }
 
     /// `memory_entities` link count for each entity id. Entities absent from the
@@ -31283,6 +31379,9 @@ pub(crate) mod tests {
 
     #[tokio::test]
     async fn test_augment_with_graph_merges_observations() {
+        // Legacy observation-path test: pin the stream OFF ("0"; unset is now
+        // default ON, which would dispatch to the memory stream and emit no
+        // knowledge_graph rows).
         let (db, _dir) = test_db().await;
         // store_entity handles embedding internally
         let eid = db
@@ -31295,10 +31394,13 @@ pub(crate) mod tests {
 
         // Start with an empty result set
         let results: Vec<SearchResult> = vec![];
-        let augmented = db
-            .augment_with_graph("Rust programming", results, 10)
-            .await
-            .unwrap();
+        let augmented =
+            temp_env::async_with_vars([("ORIGIN_GRAPH_MEMORY_STREAM", Some("0"))], async {
+                db.augment_with_graph("Rust programming", results, 10)
+                    .await
+                    .unwrap()
+            })
+            .await;
         assert!(!augmented.is_empty(), "should include graph observations");
         assert!(augmented.iter().any(|r| r.source == "knowledge_graph"));
     }
@@ -31572,29 +31674,127 @@ pub(crate) mod tests {
         );
     }
 
+    /// G3 touch probe: the eval-side `graph_stream_touches` agrees with the live
+    /// `augment_with_memory_stream` anchor logic because both share
+    /// `stream_anchor_ids` (one source of truth, cannot drift). Three fixtures:
+    /// A — linked under-cap concept => probe true; B — unlinked fresh DB =>
+    /// probe false; C — same as A but the anchor degree is pushed OVER the hub
+    /// cap, so the shared filter drops it => probe false (drift guard: if the
+    /// probe ever stopped filtering hubs the live stream does, C would go red).
+    #[tokio::test]
+    async fn plan_graph_stream_touches_probe_agrees_with_stream() {
+        // Fixture A — linked, under-cap, non-person anchor => probe true.
+        {
+            let (db, _dir) = test_db().await;
+            let concept = db
+                .store_entity("photosynthesis", "concept", None, None, None)
+                .await
+                .unwrap();
+            insert_memory_at(
+                &db,
+                "m_link",
+                "linked",
+                "photosynthesis field notes",
+                1,
+                1,
+                "enriched",
+            )
+            .await;
+            db.link_memory_entities("m_link", &[concept.as_str()])
+                .await
+                .unwrap();
+            assert!(
+                db.graph_stream_touches("photosynthesis", 10).await.unwrap(),
+                "fixture A: under-cap concept-linked memory must be touched by the stream probe"
+            );
+        }
+
+        // Fixture B — fresh DB, one unlinked memory => probe false.
+        {
+            let (db, _dir) = test_db().await;
+            insert_memory_at(
+                &db,
+                "m_orphan",
+                "orphan",
+                "photosynthesis field notes",
+                1,
+                1,
+                "enriched",
+            )
+            .await;
+            assert!(
+                !db.graph_stream_touches("photosynthesis", 10).await.unwrap(),
+                "fixture B: an unlinked memory has no anchor — probe must be false"
+            );
+        }
+
+        // Fixture C — drift guard: anchor degree pushed OVER the hub cap, so the
+        // SHARED anchor filter drops it exactly as the live stream would.
+        {
+            let (db, _dir) = test_db().await;
+            let concept = db
+                .store_entity("photosynthesis", "concept", None, None, None)
+                .await
+                .unwrap();
+            // Three distinct memories linked to the one concept => degree 3 > cap 2.
+            for sid in ["m_c1", "m_c2", "m_c3"] {
+                insert_memory_at(
+                    &db,
+                    sid,
+                    "c",
+                    "photosynthesis field notes",
+                    1,
+                    1,
+                    "enriched",
+                )
+                .await;
+                db.link_memory_entities(sid, &[concept.as_str()])
+                    .await
+                    .unwrap();
+            }
+            let touched = temp_env::async_with_vars([("ORIGIN_GRAPH_HUB_CAP", Some("2"))], async {
+                db.graph_stream_touches("photosynthesis", 10).await.unwrap()
+            })
+            .await;
+            assert!(
+                !touched,
+                "fixture C: over-cap anchor is filtered like the stream filters it — probe false"
+            );
+        }
+    }
+
     // ===== G4 standalone capability-liveness gate =====
     // Eval-Trust v3 G4: per shipped retrieval capability, does flipping it ON
     // actually change the FINAL public output via the shipped path? A capability
     // whose OFF and ON outputs are indistinguishable is merged-but-inert — the
     // boost-then-strip ghost (augment_with_graph adds source="knowledge_graph"
-    // rows at db.rs:~8420 that the retain() at db.rs:8524 strips). These probes
-    // run the shipped public path `search_memory_cross_rerank_cued` (no CE model:
-    // reranker=None is a pass-through) so the strip + every channel injection are
-    // exercised. No GPU; needs only the CI-cached BGE embedder. Covered here:
-    // temporal (reorder), page (membership), legacy-graph (negative control).
-    // Episode/fact/graph-stream-live + the LLM-tier decompose probe are follow-ups.
+    // rows at db.rs:~8420 that the retain() at db.rs:8524 strips). The temporal
+    // and page probes run the shipped CE-pool path `search_memory_cross_rerank_cued`
+    // (reranker=None → CE pass skipped → base pool; the page channel + strip live
+    // there). The graph-stream probe instead runs the shipped quick path
+    // `search_memory` — under a LIVE CE rescore the CE pool fetch hard-skips the
+    // stream (reranker.is_none() == false), so the quick path is where the stream
+    // actually rides and the only honest probe for its liveness. No GPU; needs
+    // only the CI-cached BGE embedder. Covered here: temporal (reorder), page
+    // (membership), legacy-graph (negative control), graph-stream (live).
+    // Episode/fact + the LLM-tier decompose probe are follow-ups.
 
-    /// Run the shipped public path with `flag` OFF then ON, holding `cue` fixed in
-    /// both arms. Returns (off_results, on_results). Caller seeds the substrate and
-    /// asserts the capability's contribution reaches the final Vec.
+    /// Run the shipped CE-pool path with `flag` set to `off_val` then ON, holding
+    /// `cue` fixed in both arms. Returns (off_results, on_results). Caller seeds the
+    /// substrate and asserts the capability's contribution reaches the final Vec.
+    /// `off_val` is `None` (unset) for opt-in flags. Used by the temporal + page
+    /// probes; the graph-stream probe drives the quick path directly (the CE pool
+    /// fetch only carries the stream when reranker.is_none(), so toggling the
+    /// stream flag here would not isolate it).
     async fn g4_probe(
         db: &MemoryDB,
         query: &str,
         limit: usize,
         flag: &str,
+        off_val: Option<&str>,
         cue: Option<crate::temporal_query::DateRange>,
     ) -> (Vec<SearchResult>, Vec<SearchResult>) {
-        let off = temp_env::async_with_vars([(flag, None::<&str>)], async {
+        let off = temp_env::async_with_vars([(flag, off_val)], async {
             db.search_memory_cross_rerank_cued(query, limit, None, None, None, cue, None)
                 .await
                 .expect("g4_probe OFF arm")
@@ -31659,6 +31859,7 @@ pub(crate) mod tests {
             "alpha launch milestone",
             5,
             "ORIGIN_ENABLE_TEMPORAL_SOFT_BOOST",
+            None, // opt-in flag: OFF = unset
             cue,
         )
         .await;
@@ -31716,6 +31917,7 @@ pub(crate) mod tests {
             "rust ownership borrow checker",
             5,
             "ORIGIN_ENABLE_PAGE_CHANNEL",
+            None, // opt-in flag: OFF = unset
             None,
         )
         .await;
@@ -31755,22 +31957,14 @@ pub(crate) mod tests {
             .await
             .unwrap();
 
-        // Legacy path = stream OFF. Run the shipped public path directly.
-        let out =
-            temp_env::async_with_vars([("ORIGIN_GRAPH_MEMORY_STREAM", None::<&str>)], async {
-                db.search_memory_cross_rerank_cued(
-                    "photosynthesis",
-                    5,
-                    None,
-                    None,
-                    None,
-                    None,
-                    None,
-                )
+        // Legacy path = stream explicitly OFF ("0"; unset is now default ON). Run
+        // the shipped public path directly.
+        let out = temp_env::async_with_vars([("ORIGIN_GRAPH_MEMORY_STREAM", Some("0"))], async {
+            db.search_memory_cross_rerank_cued("photosynthesis", 5, None, None, None, None, None)
                 .await
                 .unwrap()
-            })
-            .await;
+        })
+        .await;
 
         assert!(
             out.iter().all(|r| r.source != "knowledge_graph"),
@@ -31779,13 +31973,17 @@ pub(crate) mod tests {
     }
 
     /// G4 graph stream (LIVE engine): the positive counterpart to the legacy-ghost
-    /// negative control. `ORIGIN_GRAPH_MEMORY_STREAM` routes `augment_with_graph`
-    /// to `augment_with_memory_stream` (db.rs:10366), which fuses entity-LINKED
-    /// memories at `source_id` granularity (source="memory" — survives the
-    /// db.rs:8524 strip). Flag ON must boost a query-anchored entity-linked memory
-    /// on the shipped path. This is the live engine the intent gate's
-    /// `use_graph`→ON should route into (instead of the dead legacy path the #15
-    /// GPU probe gated — the "switch onto a dead engine" that read as KEEP-OFF).
+    /// negative control. `ORIGIN_GRAPH_MEMORY_STREAM` (default ON) routes
+    /// `augment_with_graph` to `augment_with_memory_stream` (db.rs:10366), which
+    /// fuses entity-LINKED memories at `source_id` granularity (source="memory" —
+    /// survives the db.rs:8524 strip). This probe runs the SHIPPED QUICK PATH
+    /// (`search_memory`) because that is where the stream rides: the CE pool fetch
+    /// hard-skips the stream under a live reranker. OFF = `"0"` (explicit opt-out;
+    /// the unset default is now ON) vs ON = `"1"` must produce a different ranking —
+    /// flag OFF must NOT boost the entity-linked memory, flag ON must. This is the
+    /// live engine the intent gate's `use_graph`→ON should route into (instead of
+    /// the dead legacy path the #15 GPU probe gated — the "switch onto a dead
+    /// engine" that read as KEEP-OFF).
     #[tokio::test]
     async fn g4_graph_stream_is_live() {
         let (db, _dir) = test_db().await;
@@ -31816,8 +32014,19 @@ pub(crate) mod tests {
             .await
             .unwrap();
 
-        let (off, on) =
-            g4_probe(&db, "photosynthesis", 5, "ORIGIN_GRAPH_MEMORY_STREAM", None).await;
+        // Quick path, OFF = "0" (opt-out the default-ON stream) vs ON = "1".
+        let off = temp_env::async_with_vars([("ORIGIN_GRAPH_MEMORY_STREAM", Some("0"))], async {
+            db.search_memory("photosynthesis", 5, None, None, None, None, None, None)
+                .await
+                .expect("g4 graph-stream OFF arm")
+        })
+        .await;
+        let on = temp_env::async_with_vars([("ORIGIN_GRAPH_MEMORY_STREAM", Some("1"))], async {
+            db.search_memory("photosynthesis", 5, None, None, None, None, None, None)
+                .await
+                .expect("g4 graph-stream ON arm")
+        })
+        .await;
 
         // The stream surfaces source="memory" rows, never ghost knowledge_graph rows.
         assert!(
@@ -31831,6 +32040,165 @@ pub(crate) mod tests {
         assert!(
             linked_on > linked_off + 1e-9,
             "G4 graph-stream DEAD: entity-linked memory not boosted via the shipped path (off={linked_off} on={linked_on}); the live engine is not reaching output"
+        );
+    }
+
+    /// Task 2/3 — the CE pool fetch engages the graph memory stream ONLY when no
+    /// reranker will rescore. `ORIGIN_GRAPH_MEMORY_STREAM` defaults ON, so:
+    ///   1. With `reranker = None` the CE call degrades to plain hybrid search,
+    ///      which keeps the stream — it must equal the stream-ON quick path
+    ///      (base-parity: a degraded rerank call == plain hybrid ordering).
+    ///   2. With a LIVE reranker (here an order-preserving no-op) the CE pool
+    ///      fetch hard-skips the stream (`allow_graph_stream = reranker.is_none()`
+    ///      == false), so the pre-CE pool is built stream-free; the no-op
+    ///      preserves that order, so the result equals the stream-DISABLED ("0")
+    ///      quick-path ordering.
+    /// Receipt: the stream×rerank stack measured not significant (+0.0126,
+    /// p=0.17, 2026-06-09), so the stream only rides the non-rerank path.
+    #[tokio::test]
+    async fn plan_ce_pool_fetch_excludes_graph_stream() {
+        use crate::reranker::Reranker;
+
+        // Order-preserving reranker: returns candidates in INPUT ORDER with
+        // strictly descending scores, so the post-CE sort (no source_id
+        // tiebreaker) reproduces the input order deterministically.
+        struct OrderPreservingReranker;
+        impl Reranker for OrderPreservingReranker {
+            fn rerank(
+                &self,
+                _q: &str,
+                candidates: &[(String, String)],
+            ) -> Result<Vec<(String, f32)>, OriginError> {
+                let n = candidates.len();
+                Ok(candidates
+                    .iter()
+                    .enumerate()
+                    .map(|(i, (id, _))| (id.clone(), (n - i) as f32))
+                    .collect())
+            }
+            fn model_id(&self) -> &str {
+                "order-preserving-test"
+            }
+        }
+
+        const QUERY: &str = "photosynthesis";
+        let (db, _dir) = test_db().await;
+        // Two query-matching rows; the base pool ranks `gs_plain` above
+        // `gs_linked` so the stream demonstrably has to MOVE the order. `gs_plain`
+        // repeats the query term so it out-ranks `gs_linked` (single weak mention)
+        // in the base pool; only `gs_linked` is entity-linked, so the stream lifts
+        // it above `gs_plain`, flipping the order.
+        db.upsert_documents(vec![
+            make_memory_doc(
+                "gs_plain",
+                "photosynthesis photosynthesis photosynthesis lecture notes biology class",
+                "knowledge",
+                "work",
+                "tester",
+            ),
+            make_memory_doc(
+                "gs_linked",
+                "a passing note about light in chloroplast membranes mentions photosynthesis once",
+                "knowledge",
+                "work",
+                "tester",
+            ),
+        ])
+        .await
+        .unwrap();
+        let concept = db
+            .store_entity("photosynthesis", "concept", None, None, None)
+            .await
+            .unwrap();
+        db.link_memory_entities("gs_linked", &[concept.as_str()])
+            .await
+            .unwrap();
+
+        let ids = |v: &[SearchResult]| -> Vec<String> {
+            v.iter().take(10).map(|r| r.source_id.clone()).collect()
+        };
+
+        // Pin every pool-composition env explicitly: pool == limit (multiplier=1,
+        // floor=10, limit=10) so the CE pool fetch grabs exactly the base `limit`
+        // rows; opt-in channels off (they default OFF, but ambient exports are
+        // routine here so we pin them).
+        let pool_envs = || {
+            [
+                ("RERANK_POOL_MULTIPLIER", Some("1")),
+                ("RERANK_POOL_FLOOR", Some("10")),
+                ("ORIGIN_ENABLE_PAGE_CHANNEL", None::<&str>),
+                ("ORIGIN_ENABLE_EPISODE_CHANNEL", None::<&str>),
+                ("ORIGIN_ENABLE_FACT_CHANNEL", None::<&str>),
+                ("ORIGIN_ENABLE_GLOBAL_PRELUDE", None::<&str>),
+                ("ORIGIN_ENABLE_GRAPH_SEED", None::<&str>),
+                ("ORIGIN_ENABLE_GRAPH_GATE", None::<&str>),
+                ("ORIGIN_GRAPH_SURFACE_NEW", None::<&str>),
+                ("ORIGIN_ENABLE_SESSION_DIVERSITY", None::<&str>),
+                ("ORIGIN_ENABLE_RERANK_BLEND", None::<&str>),
+            ]
+        };
+
+        // (1) reranker = None: stream ON (default). CE call degrades to plain
+        // hybrid → must equal the stream-ON quick path.
+        let (quick_stream, ce_no_rerank) = temp_env::async_with_vars(
+            pool_envs()
+                .into_iter()
+                .chain([("ORIGIN_GRAPH_MEMORY_STREAM", None::<&str>)]) // unset = default ON
+                .collect::<Vec<_>>(),
+            async {
+                let quick = db
+                    .search_memory(QUERY, 10, None, None, None, None, None, None)
+                    .await
+                    .unwrap();
+                let ce_pool = db
+                    .search_memory_cross_rerank(QUERY, 10, None, None, None, None)
+                    .await
+                    .unwrap();
+                (quick, ce_pool)
+            },
+        )
+        .await;
+
+        // (2) live reranker (order-preserving no-op): CE pool built stream-free →
+        // must equal the stream-DISABLED ("0") quick path.
+        let (no_stream_quick, ce_reranked) = temp_env::async_with_vars(
+            pool_envs()
+                .into_iter()
+                .chain([("ORIGIN_GRAPH_MEMORY_STREAM", Some("0"))])
+                .collect::<Vec<_>>(),
+            async {
+                let quick = db
+                    .search_memory(QUERY, 10, None, None, None, None, None, None)
+                    .await
+                    .unwrap();
+                let reranker: Arc<dyn Reranker> = Arc::new(OrderPreservingReranker);
+                let ce_pool = db
+                    .search_memory_cross_rerank(QUERY, 10, None, None, None, Some(reranker))
+                    .await
+                    .unwrap();
+                (quick, ce_pool)
+            },
+        )
+        .await;
+
+        // Fixture sanity: the stream actually moves the quick path, so the two
+        // quick-path orderings genuinely differ (otherwise both equalities are vacuous).
+        assert_ne!(
+            ids(&quick_stream),
+            ids(&no_stream_quick),
+            "stream must move the quick path in this fixture"
+        );
+        // (1) base-parity: reranker=None CE pool == stream-ON quick path.
+        assert_eq!(
+            ids(&ce_no_rerank),
+            ids(&quick_stream),
+            "reranker=None CE pool must equal the stream-ON quick path (degraded rerank == plain hybrid)"
+        );
+        // (2) stream-free under a live reranker: CE pool == stream-disabled quick path.
+        assert_eq!(
+            ids(&ce_reranked),
+            ids(&no_stream_quick),
+            "live-reranker CE pool must equal the stream-disabled quick path (pool built stream-free, no-op preserved order)"
         );
     }
 
@@ -32059,14 +32427,21 @@ pub(crate) mod tests {
             .await
             .unwrap();
 
-        let off = temp_env::async_with_vars([("ORIGIN_ENABLE_GRAPH_KHOP", None::<&str>)], async {
-            db.augment_with_graph("Postgres", vec![], 25).await.unwrap()
-        })
+        // Pin the stream OFF ("0") so the legacy k-hop branch is reachable (the
+        // default-ON stream early-returns before k-hop).
+        let off = temp_env::async_with_vars(
+            [
+                ("ORIGIN_ENABLE_GRAPH_KHOP", None::<&str>),
+                ("ORIGIN_GRAPH_MEMORY_STREAM", Some("0")),
+            ],
+            async { db.augment_with_graph("Postgres", vec![], 25).await.unwrap() },
+        )
         .await;
         let on_d0 = temp_env::async_with_vars(
             [
                 ("ORIGIN_ENABLE_GRAPH_KHOP", Some("1")),
                 ("ORIGIN_GRAPH_KHOP_DEPTH", Some("0")),
+                ("ORIGIN_GRAPH_MEMORY_STREAM", Some("0")),
             ],
             async { db.augment_with_graph("Postgres", vec![], 25).await.unwrap() },
         )
@@ -32137,16 +32512,25 @@ pub(crate) mod tests {
         );
 
         // Full augment ON must be a superset of augment OFF (never drops anchors).
-        let off = temp_env::async_with_vars([("ORIGIN_ENABLE_GRAPH_KHOP", None::<&str>)], async {
-            db.augment_with_graph("Kubernetes", vec![], 25)
-                .await
-                .unwrap()
-        })
+        // Pin the stream OFF ("0") so the legacy k-hop branch is reachable (the
+        // default-ON stream early-returns before k-hop).
+        let off = temp_env::async_with_vars(
+            [
+                ("ORIGIN_ENABLE_GRAPH_KHOP", None::<&str>),
+                ("ORIGIN_GRAPH_MEMORY_STREAM", Some("0")),
+            ],
+            async {
+                db.augment_with_graph("Kubernetes", vec![], 25)
+                    .await
+                    .unwrap()
+            },
+        )
         .await;
         let on = temp_env::async_with_vars(
             [
                 ("ORIGIN_ENABLE_GRAPH_KHOP", Some("1")),
                 ("ORIGIN_GRAPH_KHOP_DEPTH", Some("2")),
+                ("ORIGIN_GRAPH_MEMORY_STREAM", Some("0")),
             ],
             async {
                 db.augment_with_graph("Kubernetes", vec![], 25)
@@ -32315,15 +32699,23 @@ pub(crate) mod tests {
             .unwrap();
 
         let results: Vec<SearchResult> = vec![];
-        // With empty seed_entity_ids, must delegate to augment_with_graph (query-anchor)
-        let seeded = db
-            .augment_with_graph_seeded("Rust programming", results.clone(), &[], 10)
-            .await
-            .unwrap();
-        let unseeded = db
-            .augment_with_graph("Rust programming", results, 10)
-            .await
-            .unwrap();
+        // Pin the stream OFF ("0") so the legacy observation path runs — under
+        // default-ON both arms dispatch to the stream (no memory_entities links
+        // here → empty), making the parity assert a vacuous 0 == 0.
+        let (seeded, unseeded) =
+            temp_env::async_with_vars([("ORIGIN_GRAPH_MEMORY_STREAM", Some("0"))], async {
+                // With empty seed_entity_ids, must delegate to augment_with_graph (query-anchor)
+                let seeded = db
+                    .augment_with_graph_seeded("Rust programming", results.clone(), &[], 10)
+                    .await
+                    .unwrap();
+                let unseeded = db
+                    .augment_with_graph("Rust programming", results, 10)
+                    .await
+                    .unwrap();
+                (seeded, unseeded)
+            })
+            .await;
 
         // Both should return the same KG observation (Rust entity found by vector search)
         assert_eq!(
@@ -44655,6 +45047,7 @@ pub(crate) mod tests {
                 None,
                 None,
                 Some(false),
+                true, // allow_graph_stream
             )
             .await
             .unwrap();
@@ -44671,6 +45064,7 @@ pub(crate) mod tests {
                 None,
                 None,
                 Some(true),
+                true, // allow_graph_stream
             )
             .await
             .unwrap();
@@ -44779,6 +45173,34 @@ pub(crate) mod tests {
             assert!((expand_temperature() - 0.3).abs() < 1e-6);
         });
     }
+
+    #[test]
+    fn plan_graph_stream_default_on_parser() {
+        // default ON when unset
+        temp_env::with_var("ORIGIN_GRAPH_MEMORY_STREAM", None::<&str>, || {
+            assert!(graph_memory_stream_enabled());
+        });
+        // explicit opt-out values: 0 / false / no / off (and whitespace/case variants)
+        for v in ["0", "false", "no", "off", " 0 ", "FALSE", "OFF"] {
+            temp_env::with_var("ORIGIN_GRAPH_MEMORY_STREAM", Some(v), || {
+                assert!(!graph_memory_stream_enabled(), "{v:?} must disable");
+            });
+        }
+        // truthy values still ON
+        for v in ["1", "true", "yes"] {
+            temp_env::with_var("ORIGIN_GRAPH_MEMORY_STREAM", Some(v), || {
+                assert!(graph_memory_stream_enabled(), "{v:?} must enable");
+            });
+        }
+        // Empty string -> ENABLED (not a recognized opt-out token).
+        temp_env::with_var("ORIGIN_GRAPH_MEMORY_STREAM", Some(""), || {
+            assert!(
+                graph_memory_stream_enabled(),
+                "empty string is not a recognized opt-out token, must stay ENABLED"
+            );
+        });
+    }
+
     #[test]
     fn build_cluster_populates_centroid_embedding() {
         let mems = vec![
