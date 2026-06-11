@@ -3607,6 +3607,201 @@ async fn rerank_window_knee_sweep() {
     );
 }
 
+/// Smaller-CE model sweep (#187): per model, paired arms on the cached DBs.
+///
+/// OFF arm = base `search_memory` collector (no CE).
+/// ON arm  = CE collector with `ORIGIN_RERANKER_MODEL=<model>`.
+///
+/// Plus one A/A floor arm (`rerank_model_aa`, base vs base, no CE) per bench so
+/// `analyze_paired.py` has a noise floor that matches the OFF arm path.
+///
+/// Models:
+///   `rerank_model_v2m3` -- BGE-reranker-v2-m3 (~568M params, default production)
+///   `rerank_model_turbo` -- JINA-v1-turbo-en  (~37M params, CPU-fast, English-only)
+///   `rerank_model_base`  -- BGE-reranker-base  (~278M params, mid-size)
+///
+/// `jina-turbo` is Xet-backed (hf-hub cannot fetch it directly). Use
+/// `ORIGIN_RERANKER_ONNX_DIR` pointing to a pre-downloaded local ONNX dir when
+/// running with that model. When `ORIGIN_RERANKER_ONNX_DIR` is set the BYO path
+/// is active and `ORIGIN_RERANKER_MODEL` is ignored -- so the caller MUST scope
+/// to exactly one model via `EVAL_PAIRED_ONLY`. The test panics loudly if
+/// `ORIGIN_RERANKER_ONNX_DIR` is set without an explicit `EVAL_PAIRED_ONLY`
+/// (running the three-model loop with BYO weights would silently use the same
+/// weights for every iteration -- a latency-confounded result with mislabeled
+/// feature tags).
+///
+/// Run (unsandboxed, against SNAPSHOT DBs so seeds stay pristine):
+///   ORIGIN_EVAL_ROOT=/Users/lucian/Repos/origin/app/eval \
+///   SCENARIO_DB_ROOT=~/.cache/origin-eval/scenario_snapshot \
+///   EVAL_OUT=~/.cache/origin-eval/rerank_model_sweep_out \
+///     cargo test -p origin-core --test eval_harness rerank_model_sweep -- \
+///     --ignored --nocapture --test-threads=1
+///
+/// For jina-turbo (BYO):
+///   EVAL_PAIRED_ONLY=rerank_model_turbo \
+///   ORIGIN_RERANKER_ONNX_DIR=~/.cache/origin-eval/rerankers/jina-turbo \
+///   ORIGIN_RERANKER_MODEL_ID=jina-turbo \
+///   ... (same env above) ...
+#[tokio::test]
+#[ignore = "cached scenario DBs; CPU ONNX; set ORIGIN_EVAL_ROOT + SCENARIO_DB_ROOT + EVAL_OUT"]
+async fn rerank_model_sweep() {
+    use origin_core::eval::locomo::run_locomo_eval_cross_rerank_from_db_collect;
+    use origin_core::eval::locomo::run_locomo_eval_from_db_collect;
+    use origin_core::eval::longmemeval::run_longmemeval_eval_cross_rerank_from_db_collect;
+    use origin_core::eval::longmemeval::run_longmemeval_eval_from_db_collect;
+
+    println!("=== RERANK-MODEL SWEEP (smaller-CE latency/quality matrix, #187) ===");
+    println!("EVAL_OUT = {}", paired_out_dir().display());
+
+    // Guard: when ORIGIN_RERANKER_ONNX_DIR is set the BYO path is active and
+    // ORIGIN_RERANKER_MODEL is ignored by init_cross_encoder_reranker. Running
+    // the three-model loop in that mode would silently apply the same weights to
+    // every iteration while tagging the rows with different feature labels --
+    // producing a mislabeled, latency-confounded matrix. Require an explicit
+    // EVAL_PAIRED_ONLY to scope to the one model whose ONNX dir is mounted.
+    if std::env::var_os("ORIGIN_RERANKER_ONNX_DIR").is_some()
+        && std::env::var("EVAL_PAIRED_ONLY").is_err()
+    {
+        panic!(
+            "ORIGIN_RERANKER_ONNX_DIR is set (BYO weights) but EVAL_PAIRED_ONLY is unset.              The BYO path ignores ORIGIN_RERANKER_MODEL, so running all three model features              would tag rows with different labels while using the same weights.              Scope to the one mounted model via EVAL_PAIRED_ONLY=rerank_model_turbo (or whichever)."
+        );
+    }
+
+    let root = resolve_scenario_db_root_from_harness();
+    let benches: [(&str, &str); 2] = [
+        ("locomo", "data/locomo10.json"),
+        ("lme", "data/longmemeval_oracle.json"),
+    ];
+
+    // A/A floor: base (search_memory, no CE) vs base -- same collector on both
+    // arms. Must read ~zero delta, establishing the noise floor for the OFF arm
+    // path. One pair per bench.
+    if paired_feature_selected("rerank_model_aa") {
+        println!("--- feature rerank_model_aa (A/A no-op: base vs base) ---");
+        for (bench, fx_rel) in benches {
+            let db_dir = root.join(format!("{bench}_v1"));
+            let fx_path = eval_root().join(fx_rel);
+            if !db_dir.join("origin_memory.db").exists() || !fx_path.exists() {
+                println!(
+                    "[paired:rerank_model_aa] SKIP {bench} (db {} fixture {})",
+                    db_dir.join("origin_memory.db").exists(),
+                    fx_path.exists()
+                );
+                continue;
+            }
+            let db = origin_core::db::MemoryDB::new(
+                &db_dir,
+                std::sync::Arc::new(origin_core::events::NoopEmitter),
+            )
+            .await
+            .expect("open snapshot DB for rerank_model_aa");
+            for state in ["off", "on"] {
+                let rows = if bench == "locomo" {
+                    run_locomo_eval_from_db_collect(&db, &fx_path, "rerank_model_aa", state)
+                        .await
+                        .expect("rerank_model_aa locomo collect")
+                } else {
+                    run_longmemeval_eval_from_db_collect(&db, &fx_path, "rerank_model_aa", state)
+                        .await
+                        .expect("rerank_model_aa lme collect")
+                };
+                write_paired_rows("rerank_model_aa", bench, &rows);
+            }
+        }
+    }
+
+    // Per-model sweep: OFF = base search_memory (no CE), ON = CE with that model.
+    let models: [(&str, &str); 3] = [
+        ("rerank_model_v2m3", "bge-v2-m3"),
+        ("rerank_model_turbo", "turbo"),
+        ("rerank_model_base", "bge-base"),
+    ];
+    for (feature, model) in models {
+        if !paired_feature_selected(feature) {
+            continue;
+        }
+        println!("--- {feature} (ORIGIN_RERANKER_MODEL={model}) ---");
+        // Set the model env var so init_cross_encoder_reranker picks it up.
+        // The test runs alone with --test-threads=1 so there is no concurrency
+        // hazard. We remove the var after constructing the reranker to avoid
+        // leaking it into subsequent iterations (the reranker object already
+        // captures the model choice).
+        std::env::set_var("ORIGIN_RERANKER_MODEL", model);
+        let reranker = origin_core::reranker::init_cross_encoder_reranker(None)
+            .expect("init_cross_encoder_reranker failed (first run downloads weights)");
+        std::env::remove_var("ORIGIN_RERANKER_MODEL");
+        println!("CE model_id = {} (CPU)", reranker.model_id());
+
+        for (bench, fx_rel) in benches {
+            let db_dir = root.join(format!("{bench}_v1"));
+            let fx_path = eval_root().join(fx_rel);
+            if !db_dir.join("origin_memory.db").exists() || !fx_path.exists() {
+                println!(
+                    "[paired:{feature}] SKIP {bench} (db {} fixture {})",
+                    db_dir.join("origin_memory.db").exists(),
+                    fx_path.exists()
+                );
+                continue;
+            }
+            // OFF arm: base search_memory (no CE), labeled "off".
+            {
+                let db = origin_core::db::MemoryDB::new(
+                    &db_dir,
+                    std::sync::Arc::new(origin_core::events::NoopEmitter),
+                )
+                .await
+                .expect("open snapshot DB for off arm");
+                let rows = if bench == "locomo" {
+                    run_locomo_eval_from_db_collect(&db, &fx_path, feature, "off")
+                        .await
+                        .expect("locomo base off collect")
+                } else {
+                    run_longmemeval_eval_from_db_collect(&db, &fx_path, feature, "off")
+                        .await
+                        .expect("lme base off collect")
+                };
+                write_paired_rows(feature, bench, &rows);
+            }
+            // ON arm: CE collector with the selected model, labeled "on".
+            {
+                let db = origin_core::db::MemoryDB::new(
+                    &db_dir,
+                    std::sync::Arc::new(origin_core::events::NoopEmitter),
+                )
+                .await
+                .expect("open snapshot DB for on arm");
+                let rows = if bench == "locomo" {
+                    run_locomo_eval_cross_rerank_from_db_collect(
+                        &db,
+                        &fx_path,
+                        reranker.clone(),
+                        feature,
+                        "on",
+                    )
+                    .await
+                    .expect("locomo CE on collect")
+                } else {
+                    run_longmemeval_eval_cross_rerank_from_db_collect(
+                        &db,
+                        &fx_path,
+                        reranker.clone(),
+                        feature,
+                        "on",
+                    )
+                    .await
+                    .expect("lme CE on collect")
+                };
+                write_paired_rows(feature, bench, &rows);
+            }
+        }
+    }
+
+    println!(
+        "=== done -> python3 analyze_paired.py --dir {} ===",
+        paired_out_dir().display()
+    );
+}
+
 /// PR-B page-channel ON baseline (LoCoMo).
 ///
 /// Uses the pre-seeded consolidated scenario DB at
