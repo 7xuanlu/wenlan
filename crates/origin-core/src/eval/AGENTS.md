@@ -112,7 +112,7 @@ When adding a new A/B variant driven by a different env var, add an analogous su
 | `20` | ~30 min | Subset eval: direction check for A/B comparison |
 | unset | ~30 min-3h | Full fixture: for results worth citing |
 
-Reranker first-run downloads ~600MB. Account for that on cold caches.
+Reranker first-run downloads the model weights (~1.1GB for the default bge-reranker-base; ~600MB-2.27GB for others). Account for that on cold caches.
 
 ---
 
