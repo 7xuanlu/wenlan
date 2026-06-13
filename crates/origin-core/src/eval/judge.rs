@@ -1685,3 +1685,486 @@ mod tests {
         assert_eq!(back2, verdicts[1]);
     }
 }
+
+// ===== Paired McNemar answer-accuracy comparator =====
+
+/// Aggregate + per-category McNemar test on paired CE answer-accuracy A/B results.
+///
+/// `results` must contain entries with `approach` prefixed by `"ce_off_"` or `"ce_on_"`.
+/// Pairs are joined on `question`. Unpaired questions are excluded with a log line.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct McNemarReport {
+    /// Aggregate OFF accuracy (fraction of pairs where OFF arm scored 1).
+    pub off_acc: f64,
+    /// Aggregate ON accuracy (fraction of pairs where ON arm scored 1).
+    pub on_acc: f64,
+    /// on_acc − off_acc.
+    pub delta: f64,
+    /// Pairs where OFF=1, ON=0.
+    pub b: u64,
+    /// Pairs where OFF=0, ON=1.
+    pub c: u64,
+    /// Total complete pairs used.
+    pub n_pairs: u64,
+    /// Test statistic (χ² or exact-binomial n_min for small-n path).
+    pub stat: f64,
+    /// Two-sided p-value.
+    pub p_value: f64,
+    /// "mcnemar_chi2" or "exact_binomial" (when b+c < 25).
+    pub test_used: String,
+    /// Per-category breakdown (category parsed from approach suffix after `ce_off_`/`ce_on_`).
+    pub by_category: Vec<McNemarCategory>,
+}
+
+/// Per-category slice of a McNemar report.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct McNemarCategory {
+    pub category: String,
+    pub off_acc: f64,
+    pub on_acc: f64,
+    pub delta: f64,
+    pub b: u64,
+    pub c: u64,
+    pub n_pairs: u64,
+}
+
+/// Compute `McNemarReport` from a slice of `JudgmentResult`s.
+///
+/// Arms are identified by approach prefix (`ce_off_<category>` / `ce_on_<category>`).
+/// Pairs are joined on `question`. Unpaired entries are skipped.
+pub fn paired_answer_mcnemar(results: &[JudgmentResult]) -> McNemarReport {
+    use std::collections::HashMap;
+
+    // Collect per-question score for each arm. Key = question text.
+    let mut off_map: HashMap<&str, (u8, String)> = HashMap::new(); // question -> (score, category)
+    let mut on_map: HashMap<&str, u8> = HashMap::new();
+
+    for r in results {
+        if let Some(cat) = r.approach.strip_prefix("ce_off_") {
+            off_map.insert(r.question.as_str(), (r.score, cat.to_string()));
+        } else if r.approach.starts_with("ce_on_") {
+            on_map.insert(r.question.as_str(), r.score);
+        }
+    }
+
+    // Build complete pairs.
+    let mut agg_b = 0u64; // off=1, on=0
+    let mut agg_c = 0u64; // off=0, on=1
+    let mut agg_off_correct = 0u64;
+    let mut agg_on_correct = 0u64;
+    let mut agg_n = 0u64;
+
+    // Per-category accumulation.
+    let mut cat_b: HashMap<String, u64> = HashMap::new();
+    let mut cat_c: HashMap<String, u64> = HashMap::new();
+    let mut cat_off: HashMap<String, u64> = HashMap::new();
+    let mut cat_on: HashMap<String, u64> = HashMap::new();
+    let mut cat_n: HashMap<String, u64> = HashMap::new();
+
+    for (question, (off_score, category)) in &off_map {
+        if let Some(on_score) = on_map.get(question) {
+            agg_n += 1;
+            agg_off_correct += u64::from(*off_score);
+            agg_on_correct += u64::from(*on_score);
+            if *off_score == 1 && *on_score == 0 {
+                agg_b += 1;
+            } else if *off_score == 0 && *on_score == 1 {
+                agg_c += 1;
+            }
+
+            *cat_n.entry(category.clone()).or_default() += 1;
+            *cat_off.entry(category.clone()).or_default() += u64::from(*off_score);
+            *cat_on.entry(category.clone()).or_default() += u64::from(*on_score);
+            if *off_score == 1 && *on_score == 0 {
+                *cat_b.entry(category.clone()).or_default() += 1;
+            } else if *off_score == 0 && *on_score == 1 {
+                *cat_c.entry(category.clone()).or_default() += 1;
+            }
+        }
+    }
+
+    let unpaired_off = off_map.len().saturating_sub(agg_n as usize);
+    let unpaired_on = on_map.len().saturating_sub(agg_n as usize);
+    if unpaired_off > 0 || unpaired_on > 0 {
+        log::warn!(
+            "[mcnemar] {} OFF-only and {} ON-only entries excluded (unpaired)",
+            unpaired_off,
+            unpaired_on
+        );
+    }
+
+    let (stat, p_value, test_used) = mcnemar_stat(agg_b, agg_c);
+
+    let off_acc = if agg_n > 0 {
+        agg_off_correct as f64 / agg_n as f64
+    } else {
+        0.0
+    };
+    let on_acc = if agg_n > 0 {
+        agg_on_correct as f64 / agg_n as f64
+    } else {
+        0.0
+    };
+
+    // Build per-category vec, sorted by category name for determinism.
+    let mut all_cats: Vec<String> = cat_n.keys().cloned().collect();
+    all_cats.sort();
+    let by_category: Vec<McNemarCategory> = all_cats
+        .into_iter()
+        .map(|cat| {
+            let n = *cat_n.get(&cat).unwrap_or(&0);
+            let off_c = *cat_off.get(&cat).unwrap_or(&0);
+            let on_c = *cat_on.get(&cat).unwrap_or(&0);
+            let b = *cat_b.get(&cat).unwrap_or(&0);
+            let c = *cat_c.get(&cat).unwrap_or(&0);
+            McNemarCategory {
+                category: cat,
+                off_acc: if n > 0 { off_c as f64 / n as f64 } else { 0.0 },
+                on_acc: if n > 0 { on_c as f64 / n as f64 } else { 0.0 },
+                delta: if n > 0 {
+                    on_c as f64 / n as f64 - off_c as f64 / n as f64
+                } else {
+                    0.0
+                },
+                b,
+                c,
+                n_pairs: n,
+            }
+        })
+        .collect();
+
+    McNemarReport {
+        off_acc,
+        on_acc,
+        delta: on_acc - off_acc,
+        b: agg_b,
+        c: agg_c,
+        n_pairs: agg_n,
+        stat,
+        p_value,
+        test_used,
+        by_category,
+    }
+}
+
+/// Compute McNemar statistic + two-sided p-value.
+///
+/// Uses exact two-sided binomial when `b + c < 25` (standard small-n threshold),
+/// McNemar χ²=(|b−c|−1)²/(b+c) with continuity correction otherwise.
+fn mcnemar_stat(b: u64, c: u64) -> (f64, f64, String) {
+    let n_disc = b + c;
+    if n_disc == 0 {
+        // No discordant pairs — cannot distinguish arms.
+        return (0.0, 1.0, "mcnemar_chi2".to_string());
+    }
+
+    if n_disc < 25 {
+        // Exact two-sided binomial: P(X <= min(b,c)) * 2, clamped to [0,1].
+        // Under H0, B ~ Binomial(n=b+c, p=0.5).
+        let n = n_disc;
+        let k = b.min(c);
+        let p_one_tail = binomial_cdf(n, k, 0.5);
+        let p = (p_one_tail * 2.0).min(1.0);
+        return (k as f64, p, "exact_binomial".to_string());
+    }
+
+    // McNemar χ² with continuity correction.
+    let diff = (b as f64 - c as f64).abs() - 1.0;
+    let chi2 = (diff * diff) / n_disc as f64;
+    let p = chi2_df1_p_value(chi2);
+    (chi2, p, "mcnemar_chi2".to_string())
+}
+
+/// Cumulative binomial P(X <= k) for X ~ Bin(n, 0.5), computed EXACTLY.
+///
+/// McNemar's exact path only ever uses `p = 0.5` with `n = b + c < 25`
+/// (the `n >= 25` case takes the chi² path). For that regime the CDF is the
+/// closed form `sum_{i=0}^{k} C(n,i) / 2^n`, which f64 represents exactly:
+/// the largest term `C(24,12) ≈ 2.7e6` and `2^24` both fit with no rounding,
+/// so there is no need for a regularized-incomplete-beta approximation.
+///
+/// `p` is accepted for signature clarity but must be `0.5`; any other value
+/// would be a programming error (debug-asserted).
+fn binomial_cdf(n: u64, k: u64, p: f64) -> f64 {
+    debug_assert!((p - 0.5).abs() < 1e-12, "binomial_cdf only supports p=0.5");
+    if k >= n {
+        return 1.0;
+    }
+    let mut sum: f64 = 0.0;
+    for i in 0..=k {
+        sum += binomial_coeff(n, i);
+    }
+    sum / 2f64.powi(n as i32)
+}
+
+/// Exact binomial coefficient C(n, k) as f64. Exact for the small `n < 25`
+/// McNemar regime (values stay well under 2^53).
+fn binomial_coeff(n: u64, k: u64) -> f64 {
+    if k > n {
+        return 0.0;
+    }
+    let k = k.min(n - k); // symmetry: C(n,k) = C(n,n-k)
+    let mut result: f64 = 1.0;
+    for i in 0..k {
+        result = result * (n - i) as f64 / (i + 1) as f64;
+    }
+    result
+}
+
+/// Two-sided p-value from a chi-squared(df=1) statistic via the complementary error function.
+///
+/// P(chi2(1) > t) = erfc(sqrt(t/2)).
+fn chi2_df1_p_value(chi2: f64) -> f64 {
+    if chi2 <= 0.0 {
+        return 1.0;
+    }
+    erfc(chi2.sqrt() / std::f64::consts::SQRT_2)
+}
+
+/// Complementary error function erfc(x) = 1 - erf(x).
+/// Implemented via polynomial approximation; accurate to ~1e-7.
+fn erfc(x: f64) -> f64 {
+    if x < 0.0 {
+        return 2.0 - erfc(-x);
+    }
+    if x > 10.0 {
+        return 0.0;
+    }
+    // Use asymptotic expansion for large x.
+    if x >= 4.0 {
+        let t = 1.0 / (x * x);
+        let series = 1.0 - t * (0.5 - t * (0.75 - t * (1.875 - t * (6.5625 - t * 29.53125))));
+        return series * (-x * x).exp() / (x * std::f64::consts::PI.sqrt());
+    }
+    // For 0 <= x < 4, use Horner's polynomial (Abramowitz & Stegun 7.1.26, p=0.47047).
+    let p = 0.47047_f64;
+    let a1 = 0.3480242_f64;
+    let a2 = -0.0958798_f64;
+    let a3 = 0.7478556_f64;
+    let t = 1.0 / (1.0 + p * x);
+    let erf_x = 1.0 - (a1 * t + a2 * t * t + a3 * t * t * t) * (-x * x).exp();
+    1.0 - erf_x
+}
+
+#[cfg(test)]
+mod mcnemar_tests {
+    use super::*;
+
+    fn make_result(question: &str, approach: &str, score: u8) -> JudgmentResult {
+        JudgmentResult {
+            question: question.to_string(),
+            approach: approach.to_string(),
+            score,
+            reason: String::new(),
+            context_tokens: 0,
+        }
+    }
+
+    #[test]
+    fn mcnemar_clear_on_win() {
+        // ON wins on 10 questions, OFF wins on 0. c=10, b=0, n=10.
+        let mut results = Vec::new();
+        for i in 0..10 {
+            let q = format!("question_{i}");
+            results.push(make_result(&q, "ce_off_single-hop", 0));
+            results.push(make_result(&q, "ce_on_single-hop", 1));
+        }
+        let report = paired_answer_mcnemar(&results);
+        assert_eq!(report.n_pairs, 10);
+        assert_eq!(report.b, 0);
+        assert_eq!(report.c, 10);
+        assert!(report.delta > 0.0, "ON should win: delta={}", report.delta);
+        assert_eq!(report.test_used, "exact_binomial", "n_disc=10 < 25");
+        // Exact binomial with k=0, n=10: p = 2*(0.5^10) ~ 0.002
+        assert!(report.p_value < 0.05, "p={}", report.p_value);
+        assert_eq!(report.by_category.len(), 1);
+        assert_eq!(report.by_category[0].category, "single-hop");
+        assert_eq!(report.by_category[0].c, 10);
+    }
+
+    #[test]
+    fn mcnemar_clear_off_win() {
+        // OFF wins on 8 questions. b=8, c=0.
+        let mut results = Vec::new();
+        for i in 0..8 {
+            let q = format!("q_{i}");
+            results.push(make_result(&q, "ce_off_temporal-reasoning", 1));
+            results.push(make_result(&q, "ce_on_temporal-reasoning", 0));
+        }
+        let report = paired_answer_mcnemar(&results);
+        assert_eq!(report.b, 8);
+        assert_eq!(report.c, 0);
+        assert!(report.delta < 0.0, "OFF should win");
+        assert_eq!(report.test_used, "exact_binomial");
+        assert!(report.p_value < 0.05);
+    }
+
+    #[test]
+    fn mcnemar_tie_no_discordant() {
+        // Both arms always agree — no discordant pairs. b=c=0.
+        let mut results = Vec::new();
+        for i in 0..20 {
+            let q = format!("q_{i}");
+            let score = if i % 2 == 0 { 1 } else { 0 };
+            results.push(make_result(&q, "ce_off_single-hop", score));
+            results.push(make_result(&q, "ce_on_single-hop", score));
+        }
+        let report = paired_answer_mcnemar(&results);
+        assert_eq!(report.b, 0);
+        assert_eq!(report.c, 0);
+        assert_eq!(report.p_value, 1.0, "no discordant pairs -> p=1");
+        assert!((report.delta).abs() < 1e-10, "tie -> delta=0");
+    }
+
+    #[test]
+    fn mcnemar_small_n_exact_binomial_path() {
+        // 5 discordant pairs (b+c=5 < 25) -> exact_binomial path.
+        let mut results = Vec::new();
+        // 10 concordant pairs (both score 1) — ignored by McNemar.
+        for i in 0..10 {
+            let q = format!("q_{i}");
+            results.push(make_result(&q, "ce_off_multi-session", 1));
+            results.push(make_result(&q, "ce_on_multi-session", 1));
+        }
+        // 5 discordant ON-wins (off=0, on=1).
+        for i in 10..15 {
+            let q = format!("q_{i}");
+            results.push(make_result(&q, "ce_off_multi-session", 0));
+            results.push(make_result(&q, "ce_on_multi-session", 1));
+        }
+        let report = paired_answer_mcnemar(&results);
+        assert_eq!(report.test_used, "exact_binomial", "5 discordant -> exact");
+        assert_eq!(report.c, 5);
+        assert_eq!(report.b, 0);
+    }
+
+    #[test]
+    fn mcnemar_per_category_split() {
+        // Two categories: ON wins single-hop, tie on temporal-reasoning.
+        let mut results = Vec::new();
+        for i in 0..5 {
+            let q = format!("sh_{i}");
+            results.push(make_result(&q, "ce_off_single-hop", 0));
+            results.push(make_result(&q, "ce_on_single-hop", 1));
+        }
+        for i in 0..5 {
+            let q = format!("tr_{i}");
+            results.push(make_result(&q, "ce_off_temporal-reasoning", 1));
+            results.push(make_result(&q, "ce_on_temporal-reasoning", 1));
+        }
+        let report = paired_answer_mcnemar(&results);
+        assert_eq!(report.n_pairs, 10);
+        assert_eq!(report.by_category.len(), 2);
+
+        let sh = report
+            .by_category
+            .iter()
+            .find(|c| c.category == "single-hop")
+            .expect("single-hop category");
+        assert_eq!(sh.c, 5);
+        assert_eq!(sh.b, 0);
+        assert!((sh.on_acc - 1.0).abs() < 1e-9);
+        assert!((sh.off_acc).abs() < 1e-9);
+
+        let tr = report
+            .by_category
+            .iter()
+            .find(|c| c.category == "temporal-reasoning")
+            .expect("temporal-reasoning category");
+        assert_eq!(tr.b, 0);
+        assert_eq!(tr.c, 0);
+        assert!((tr.delta).abs() < 1e-9);
+    }
+
+    #[test]
+    fn mcnemar_large_n_chi2_path() {
+        // 30 discordant ON-wins (b+c=30 >= 25) -> chi2 path.
+        let mut results = Vec::new();
+        for i in 0..30 {
+            let q = format!("q_{i}");
+            results.push(make_result(&q, "ce_off_single-hop", 0));
+            results.push(make_result(&q, "ce_on_single-hop", 1));
+        }
+        let report = paired_answer_mcnemar(&results);
+        assert_eq!(report.test_used, "mcnemar_chi2", "30 discordant -> chi2");
+        assert!(report.stat > 0.0);
+        assert!(report.p_value < 0.05, "p={}", report.p_value);
+    }
+
+    // ----- value-pinned numeric guards (regression-protect beta-CF / erfc) -----
+
+    /// Helper: build `b` OFF-wins + `c` ON-wins (all discordant) and return the report.
+    fn report_for_bc(b: usize, c: usize) -> McNemarReport {
+        let mut results = Vec::new();
+        let mut i = 0;
+        for _ in 0..b {
+            let q = format!("b_{i}");
+            results.push(make_result(&q, "ce_off_single-hop", 1));
+            results.push(make_result(&q, "ce_on_single-hop", 0));
+            i += 1;
+        }
+        for _ in 0..c {
+            let q = format!("c_{i}");
+            results.push(make_result(&q, "ce_off_single-hop", 0));
+            results.push(make_result(&q, "ce_on_single-hop", 1));
+            i += 1;
+        }
+        paired_answer_mcnemar(&results)
+    }
+
+    #[test]
+    fn mcnemar_pinned_exact_binomial_0_10() {
+        // b=0, c=10: exact two-sided binomial p = 2*(0.5)^10 = 0.001953125.
+        let r = report_for_bc(0, 10);
+        assert_eq!(r.test_used, "exact_binomial");
+        assert!(
+            (r.p_value - 0.001_953_125).abs() < 1e-9,
+            "p={} expected 0.001953125",
+            r.p_value
+        );
+    }
+
+    #[test]
+    fn mcnemar_pinned_exact_binomial_0_8() {
+        // b=0, c=8: p = 2*(0.5)^8 = 0.0078125.
+        let r = report_for_bc(0, 8);
+        assert_eq!(r.test_used, "exact_binomial");
+        assert!(
+            (r.p_value - 0.007_812_5).abs() < 1e-9,
+            "p={} expected 0.0078125",
+            r.p_value
+        );
+    }
+
+    #[test]
+    fn mcnemar_pinned_balanced_discordance_clamps_to_one() {
+        // b=c=5 (b+c=10 < 25): exact-binomial path; 2*P(X<=5) > 1 so clamps to 1.0.
+        // This exercises the `(p*2).min(1.0)` clamp and the b==c symmetry, which
+        // the no-discordant tie test (b=c=0) short-circuits before reaching.
+        let r = report_for_bc(5, 5);
+        assert_eq!(r.test_used, "exact_binomial");
+        assert!(
+            (r.p_value - 1.0).abs() < 1e-12,
+            "p={} expected exactly 1.0 (clamped)",
+            r.p_value
+        );
+    }
+
+    #[test]
+    fn mcnemar_pinned_chi2_0_30() {
+        // b=0, c=30 (b+c=30 >= 25): chi2 with continuity = (|0-30|-1)^2/30 = 28.0333…,
+        // p = erfc(sqrt(chi2/2)) ≈ 1.1924e-7. Guards erfc accuracy in the small-p tail.
+        let r = report_for_bc(0, 30);
+        assert_eq!(r.test_used, "mcnemar_chi2");
+        assert!(
+            (r.stat - 28.033_333).abs() < 1e-4,
+            "stat={} expected ~28.0333",
+            r.stat
+        );
+        assert!(
+            (r.p_value - 1.192_436_7e-7).abs() < 1e-8,
+            "p={} expected ~1.1924e-7",
+            r.p_value
+        );
+    }
+}
