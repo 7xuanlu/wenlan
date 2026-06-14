@@ -226,6 +226,10 @@ impl OriginClient {
                 "Your origin-mcp v{mcp} is older than the daemon v{daemon}. \
                  Run `brew upgrade origin-mcp` (or `npm update -g origin-mcp`)."
             )),
+            VersionStatus::DaemonOutdated { mcp, daemon } => Some(format!(
+                "The Origin daemon is running v{daemon} but origin-mcp v{mcp} is installed. \
+                 The daemon was not restarted after an upgrade. Run `origin restart` to load it."
+            )),
         }
     }
 }
