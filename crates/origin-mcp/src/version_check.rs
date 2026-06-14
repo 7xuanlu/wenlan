@@ -8,11 +8,12 @@ pub enum VersionStatus {
 }
 
 /// Compare origin-mcp's compiled version against the daemon's reported version.
-/// Treats minor/major drift as `McpOutdated`. Patch differences are ignored
-/// (release-please bumps patches frequently and they're API-compatible).
-/// Unparseable daemon versions are treated as Compatible (handshake never blocks).
-/// Also flags DaemonOutdated when the running daemon is strictly older than origin-mcp
-/// (it was not restarted after an upgrade).
+/// Treats the daemon being minor/major AHEAD as `McpOutdated` (a patch-ahead
+/// daemon is ignored: release-please bumps patches frequently and they're
+/// API-compatible). Flags `DaemonOutdated` when the running daemon is strictly
+/// OLDER than origin-mcp at any level, including patch (it was not restarted
+/// after an upgrade). Unparseable daemon versions are treated as Compatible
+/// (handshake never blocks).
 pub fn compare(mcp_version: &str, daemon_version: &str) -> VersionStatus {
     // Defensive on both sides: if either version fails to parse, fall back to
     // Compatible. Never panic at startup over a malformed version string.
