@@ -307,6 +307,40 @@ pub fn uninstall() -> Result<()> {
     Ok(())
 }
 
+/// Restart the Origin daemon: stop the running process, then start the freshly
+/// registered binary. Required after an upgrade — installing a new binary does
+/// not replace an already-running daemon (the new process detects the healthy
+/// incumbent on port 7878 and exits). See origin-server/src/main.rs:582-615.
+pub fn restart() -> Result<()> {
+    if !is_installed() {
+        anyhow::bail!("Origin service is not installed. Run `origin install` first.");
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        // No service-manager on Windows: drive Task Scheduler directly,
+        // mirroring uninstall()'s /end and install()'s /run.
+        let _ = std::process::Command::new("schtasks.exe")
+            .args(["/end", "/tn", WINDOWS_TASK_NAME])
+            .output();
+        run_schtasks(&["/run", "/tn", WINDOWS_TASK_NAME], "run scheduled task")?;
+        println!("Restarted Windows scheduled task '{}'.", WINDOWS_TASK_NAME);
+        return Ok(());
+    }
+
+    #[cfg_attr(target_os = "windows", allow(unreachable_code))]
+    let label_value = label()?;
+    let m = manager()?;
+    // Best-effort stop: errors if not currently running, which is fine.
+    let _ = m.stop(ServiceStopCtx {
+        label: label_value.clone(),
+    });
+    m.start(ServiceStartCtx { label: label_value })
+        .context("start service")?;
+    println!("Restarted {}.", SERVICE_LABEL);
+    Ok(())
+}
+
 pub fn is_installed() -> bool {
     #[cfg(target_os = "windows")]
     {

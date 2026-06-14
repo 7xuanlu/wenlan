@@ -45,6 +45,8 @@ enum Commands {
     Install,
     /// Uninstall the Origin LaunchAgent.
     Uninstall,
+    /// Restart the Origin daemon (stop then start). Required after an upgrade.
+    Restart,
     /// Diagnose daemon, model, and API key setup.
     Doctor,
     /// Manage local models.
@@ -131,6 +133,7 @@ async fn main() -> anyhow::Result<()> {
         }
         Commands::Install => commands::service::install()?,
         Commands::Uninstall => commands::service::uninstall()?,
+        Commands::Restart => commands::service::restart()?,
         Commands::Doctor => commands::setup::run_doctor().await?,
         Commands::Model { command } => commands::setup::run_model(command).await?,
         Commands::Key { command } => commands::setup::run_key(command).await?,

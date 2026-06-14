@@ -207,6 +207,7 @@ fn each_subcommand_has_help() {
         "setup",
         "install",
         "uninstall",
+        "restart",
         "doctor",
         "model",
         "key",
@@ -491,6 +492,31 @@ fn service_unit_path_resolves_per_os() {
     assert!(path
         .to_string_lossy()
         .ends_with(".config/systemd/user/origin-server.service"));
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn restart_after_install_succeeds_isolated() {
+    let runtime = IsolatedRuntime::new();
+
+    // Not installed yet → restart should fail with a helpful hint.
+    cli_with_isolated_runtime(&runtime)
+        .arg("restart")
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("not installed"));
+
+    cli_with_isolated_runtime(&runtime)
+        .arg("install")
+        .assert()
+        .success();
+
+    // Installed → restart stops then starts the service and reports it.
+    cli_with_isolated_runtime(&runtime)
+        .arg("restart")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Restarted com.origin.server"));
 }
 
 #[cfg(target_os = "macos")]
