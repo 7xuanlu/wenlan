@@ -115,12 +115,29 @@ pub struct HealthResponse {
     pub version: String,
 }
 
+/// Cross-encoder reranker state, surfaced on `/api/status` so operators can see
+/// whether an opt-in reranker is actually wired vs. silently degraded.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "state", rename_all = "snake_case")]
+pub enum RerankerStatus {
+    /// `ORIGIN_RERANKER_ENABLED` was not `1` — no reranker requested.
+    #[default]
+    Disabled,
+    /// Reranker initialized and wired.
+    Active { model_id: String },
+    /// Reranker was requested but init failed (e.g. model download error);
+    /// search silently falls back to embedding+FTS ordering.
+    Failed { reason: String },
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 pub struct StatusResponse {
     pub is_running: bool,
     pub files_indexed: u64,
     pub files_total: u64,
     pub sources_connected: Vec<String>,
+    #[serde(default)]
+    pub reranker: RerankerStatus,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -1138,6 +1155,30 @@ mod tests {
         assert_eq!(json["revision_content"], "new body");
         let decoded: PendingRevisionItem = serde_json::from_value(json).unwrap();
         assert_eq!(decoded, item);
+    }
+}
+
+#[cfg(test)]
+mod reranker_status_tests {
+    use super::*;
+
+    #[test]
+    fn status_response_defaults_reranker_to_disabled() {
+        // Old daemons omit the field entirely.
+        let json =
+            r#"{"is_running":true,"files_indexed":0,"files_total":0,"sources_connected":[]}"#;
+        let parsed: StatusResponse = serde_json::from_str(json).unwrap();
+        assert_eq!(parsed.reranker, RerankerStatus::Disabled);
+    }
+
+    #[test]
+    fn reranker_status_active_roundtrips() {
+        let s = RerankerStatus::Active {
+            model_id: "BGERerankerBase".into(),
+        };
+        let json = serde_json::to_string(&s).unwrap();
+        assert_eq!(serde_json::from_str::<RerankerStatus>(&json).unwrap(), s);
+        assert!(json.contains("\"state\":\"active\""));
     }
 }
 
