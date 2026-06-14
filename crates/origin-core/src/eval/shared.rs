@@ -831,12 +831,18 @@ where
             crate::eval::seed_contract::assert_feature_substrate_live(&conn, "pages").await?;
         }
         log::info!(
-            "[scenario_db] migrate_stale: schema migrated, substrate live at {} ({} memories)",
+            "[scenario_db] migrate_stale: schema migrated, substrate live at {} ({} memories) — \
+             falling through to shared Phase-1 classification backfill",
             db_dir.display(),
             mem_count
         );
-        write_cache_env_stamp(&cache_env_path, &want);
-        return Ok(db);
+        // Do NOT return here — fall through to the cache-hit backfill block so the
+        // migrate path shares the Phase-1 classification pass (importance/quality/
+        // event_date). Returning early here would skip that backfill and ship
+        // training-serving skew (T8/T11/T15 starved on migrated DBs). The migrate
+        // guard above already ensured mem_count > 0 && enriched == mem_count, so the
+        // fall-through enters the correct branch below and never the partial-wipe path.
+        // write_cache_env_stamp + return Ok(db) happen at the bottom of that block.
     }
 
     if mem_count > 0 && enriched == mem_count {

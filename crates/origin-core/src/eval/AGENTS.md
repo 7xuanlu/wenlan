@@ -156,6 +156,24 @@ Seeding a cached scenario DB is ONE orchestrator, not a scatter of STEP tests: r
 
 Adding a channel with an A/B: add its step to the orchestrator, its floor to `SeedExpectations`, its key to `assert_feature_substrate_live`, and a `seed_contract.rs` unit test. See root `AGENTS.md` "Eval seed + eval read: ONE route, ONE contract".
 
+---
+
+## scenario DB cache env flags
+
+Three env flags govern how `open_or_seed_scenario_db` handles a stale or mismatched cached scenario DB.
+
+| Flag | Default | Effect |
+|---|---|---|
+| `EVAL_ALLOW_WIPE` | unset (refuses) | Permits `clear_all_for_eval` to wipe a partial or cache-env-mismatched DB and reseed from scratch. |
+| `EVAL_PARALLEL_OK` | unset (refuses) | Allows concurrent access to a locked scenario DB (results may be corrupted). |
+| `EVAL_MIGRATE_STALE` | unset (refuses) | Migrates a schema-stale cached scenario DB IN PLACE, without wipe or re-seed. |
+
+### EVAL_MIGRATE_STALE details
+
+`EVAL_MIGRATE_STALE=1` triggers the migrate path when `open_or_seed_scenario_db` detects that the DB's `cache_env.json` has a schema/migrations stamp mismatch but the enricher provenance (`enricher_provider` + `enricher_model`) matches the current run. It refuses cloud-enriched or unstamped-legacy DBs (anti-laundering: a DB seeded by a different model cannot be silently promoted as if it were seeded by the current one). The migrate guard requires the DB to already be fully enriched (`enriched == mem_count`, no partial state) and substrate-live (temporal, graph, pages). If either check fails, the path returns an error and you must re-seed (or set `EVAL_ALLOW_WIPE=1`).
+
+After the migration guard passes, execution falls through into the shared Phase-1 classification backfill (the same block that runs on a normal cache hit). This ensures that a migrated OLD DB that predates the classification pass gets `importance`/`quality` backfilled before the eval loop sees it, preventing T8/T11/T15 training-serving skew. There is exactly one `write_cache_env_stamp` + `return Ok(db)` for both the migrate and cache-hit paths (at the bottom of the shared block).
+
 ## paired A/B reading: the G3 gate (analyze_paired.py)
 
 `analyze_paired.py` (repo root) applies the Eval-Trust v3 G3 "A/A-floored attributed liveness" gate on top of Wilcoxon + BH-FDR. Any `<feature>_aa_<bench>.jsonl` in the input dir is an A/A no-op control (flag OFF on both arms) and sets that bench's noise floor (aggregate + per-category |meanΔndcg|). Every other feature gets a `G3` verdict: `SIGNAL` (above floor, right direction, attributed, BH-sig), `WEAK` (same minus BH-sig), `NOISE-FLOOR`, `WRONG-DIR`, `UNATTRIBUTED` (<90% of moved queries carry the channel's touch flag — precedence: `channel_touched` (generic, highest) > `temporal_touched` > `graph_skipped`; features with a wired probe: `graph_stream` arms — probe is whether the stream would contribute ≥1 linked memory (non-person anchors under hub cap with linked memories, mirrors `MemoryDB::graph_stream_touches`); `rerank_skip_pref` — probe is `is_preference_query`, the bypass IS the channel; `rerank`/`rerank_model_*` — probe is CE top-10 differing from base top-10, collectors fetch base ids outside the latency window; `rerank_graph_stack` — stream probe (arm retired on graph-stream-default-on branch); page/episode/fact/global_prelude carry NO probe intentionally — verdicts stay `*` until an internals probe exists), `NO-FLOOR` (no A/A run for the bench — emit one, e.g. the `rerank_window_aa` pattern, before trusting verdicts). Per-category verdicts are conditions 1+2 only (no per-category p-value). Selftest: `python3 analyze_paired.py --selftest`.
