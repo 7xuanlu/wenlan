@@ -128,9 +128,18 @@ async fn run_daemon() -> anyhow::Result<()> {
 
     // Run migration-55 backfill (event_date regex Pass A + memory_entities Pass B)
     // before the HTTP listener binds so no ingest races the backfill. Idempotent.
-    db_arc.run_migration_55().await.map_err(|e| {
+    tracing::info!(
+        "Running first-boot data backfill (event dates + knowledge-graph links); \
+         this can take a moment on large databases…"
+    );
+    let m55 = db_arc.run_migration_55().await.map_err(|e| {
         anyhow::anyhow!("running migration 55 (event_date + memory_entities backfill): {e}")
     })?;
+    tracing::info!(
+        "First-boot backfill complete: scanned {} memories for dates, inserted {} entity links",
+        m55.event_dates_scanned,
+        m55.entity_links_inserted
+    );
 
     // Consolidate user-facing assets under ~/.origin/.
     // - Ensure ~/.origin/{pages, sessions, sessions/_status} exist

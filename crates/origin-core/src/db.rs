@@ -22,6 +22,13 @@ pub struct MigrationProgress {
     pub phase: String,
 }
 
+/// Counts returned by the migration-55 startup backfill, for an operator notice.
+#[derive(Debug, Default, PartialEq)]
+pub struct Migration55Report {
+    pub event_dates_scanned: usize,
+    pub entity_links_inserted: usize,
+}
+
 /// Embedding dimension — must match the model (GTE-Base-EN-v1.5-Q = 768).
 pub const EMBEDDING_DIM: usize = 768;
 
@@ -23824,7 +23831,7 @@ impl MemoryDB {
     ///
     /// Idempotent via `app_metadata` flag `backfill_event_date_v1`.  Safe to call
     /// on every daemon startup; the second call is a no-op after the flag is set.
-    pub async fn run_migration_55_pass_a(&self) -> Result<(), OriginError> {
+    pub async fn run_migration_55_pass_a(&self) -> Result<usize, OriginError> {
         // Idempotency probe.
         {
             let conn = self.conn.lock().await;
@@ -23842,7 +23849,7 @@ impl MemoryDB {
                 .is_some()
             {
                 log::info!("[migration] Migration 55 Pass A skipped (already applied)");
-                return Ok(());
+                return Ok(0);
             }
         }
 
@@ -23926,10 +23933,10 @@ impl MemoryDB {
         log::info!(
             "[migration] Migration 55 Pass A complete: scanned {scanned} memories for event_date backfill"
         );
-        Ok(())
+        Ok(scanned)
     }
 
-    pub async fn run_migration_55_pass_b(&self) -> Result<(), OriginError> {
+    pub async fn run_migration_55_pass_b(&self) -> Result<usize, OriginError> {
         let conn = self.conn.lock().await;
 
         // Ensure app_metadata exists (idempotent; Task 14 also ensures it).
@@ -23956,22 +23963,23 @@ impl MemoryDB {
                 .is_some()
             {
                 log::info!("[migration] Migration 55 Pass B skipped (already applied)");
-                return Ok(());
+                return Ok(0);
             }
         }
 
         // Backfill in a single statement.
         // ON CONFLICT DO NOTHING handles duplicate (source_id, entity_id) pairs from
         // memories with multiple chunk rows sharing the same source_id.
-        conn.execute(
-            "INSERT INTO memory_entities (memory_id, entity_id)
+        let inserted =
+            conn.execute(
+                "INSERT INTO memory_entities (memory_id, entity_id)
              SELECT source_id, entity_id FROM memories
              WHERE entity_id IS NOT NULL
              ON CONFLICT DO NOTHING",
-            (),
-        )
-        .await
-        .map_err(|e| OriginError::VectorDb(format!("m55b insert: {e}")))?;
+                (),
+            )
+            .await
+            .map_err(|e| OriginError::VectorDb(format!("m55b insert: {e}")))? as usize;
 
         conn.execute(
             "INSERT OR REPLACE INTO app_metadata (key, value) VALUES ('backfill_memory_entities_v1', '1')",
@@ -23983,14 +23991,17 @@ impl MemoryDB {
         log::info!(
             "[migration] Migration 55 Pass B complete: memory_entities backfilled from memories.entity_id"
         );
-        Ok(())
+        Ok(inserted)
     }
 
     /// Wires Pass A then Pass B together. Task 21 calls this from server startup.
-    pub async fn run_migration_55(&self) -> Result<(), OriginError> {
-        self.run_migration_55_pass_a().await?;
-        self.run_migration_55_pass_b().await?;
-        Ok(())
+    pub async fn run_migration_55(&self) -> Result<Migration55Report, OriginError> {
+        let event_dates_scanned = self.run_migration_55_pass_a().await?;
+        let entity_links_inserted = self.run_migration_55_pass_b().await?;
+        Ok(Migration55Report {
+            event_dates_scanned,
+            entity_links_inserted,
+        })
     }
 
     // ==================== Memory Revision Chain ====================
@@ -40437,6 +40448,45 @@ pub(crate) mod tests {
             let row = rows.next().await.unwrap().expect("meta flag must be set");
             assert_eq!(row.get::<String>(0).unwrap(), "1");
         }
+    }
+
+    #[tokio::test]
+    async fn migration_55_backfill_reports_counts() {
+        let (db, _dir) = test_db().await;
+        {
+            let conn = db.conn.lock().await;
+            // Seed one entity + two memories: one with an entity_id (graph link),
+            // one with a date cue in content, both with NULL event_date.
+            conn.execute(
+                "INSERT INTO entities (id, name, entity_type, created_at, updated_at) \
+                 VALUES ('ent_x', 'X', 'Topic', 0, 0)",
+                (),
+            )
+            .await
+            .unwrap();
+            conn.execute(
+                "INSERT INTO memories \
+                 (id, content, source, source_id, title, chunk_index, last_modified, chunk_type, entity_id) \
+                 VALUES ('c1', 'met her yesterday', 'memory', 'm1', '', 0, 1700000000, 'text', 'ent_x')",
+                (),
+            )
+            .await
+            .unwrap();
+            conn.execute(
+                "INSERT INTO memories \
+                 (id, content, source, source_id, title, chunk_index, last_modified, chunk_type) \
+                 VALUES ('c2', 'no date here', 'memory', 'm2', '', 0, 1700000000, 'text')",
+                (),
+            )
+            .await
+            .unwrap();
+        }
+
+        let report = db.run_migration_55().await.expect("backfill runs");
+        // Both memories have NULL event_date, so both are scanned.
+        assert_eq!(report.event_dates_scanned, 2);
+        // Exactly one memory has a non-null entity_id → one link inserted.
+        assert_eq!(report.entity_links_inserted, 1);
     }
 
     // ==================== run_enrichment_sweep ====================
