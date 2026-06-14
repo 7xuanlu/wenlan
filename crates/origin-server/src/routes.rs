@@ -71,7 +71,7 @@ pub async fn handle_health(
 /// GET /api/status - Get indexing status
 pub async fn handle_status(
     State(state): State<Arc<RwLock<ServerState>>>,
-) -> Result<Json<StatusResponse>, ServerError> {
+) -> Result<Json<origin_types::responses::StatusResponse>, ServerError> {
     let s = state.read().await;
 
     let files_indexed = if let Some(db) = &s.db {
@@ -80,11 +80,12 @@ pub async fn handle_status(
         0
     };
 
-    Ok(Json(StatusResponse {
+    Ok(Json(origin_types::responses::StatusResponse {
         is_running: true,
         files_indexed,
         files_total: 0,
         sources_connected: vec![],
+        reranker: s.reranker_status.clone(),
     }))
 }
 
@@ -1182,6 +1183,34 @@ mod recent_endpoints_tests {
             .unwrap();
         let response = app.oneshot(req).await.unwrap();
         assert_eq!(response.status(), 503);
+    }
+
+    #[tokio::test]
+    async fn status_reports_reranker_disabled_by_default() {
+        let state = Arc::new(RwLock::new(ServerState::default()));
+        let app = crate::router::build_router(state);
+        let req = Request::builder()
+            .method("GET")
+            .uri("/api/status")
+            .body(Body::empty())
+            .unwrap();
+        let response = app.oneshot(req).await.unwrap();
+        assert_eq!(response.status(), 200);
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        // Verify the reranker field is actually present in the JSON response.
+        let raw = std::str::from_utf8(&bytes).unwrap();
+        assert!(
+            raw.contains("\"reranker\""),
+            "status JSON must include a reranker field, got: {raw}"
+        );
+        let parsed: origin_types::responses::StatusResponse =
+            serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(
+            parsed.reranker,
+            origin_types::responses::RerankerStatus::Disabled
+        );
     }
 }
 
