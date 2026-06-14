@@ -26077,8 +26077,15 @@ pub(crate) mod tests {
         );
     }
 
+    // Salience tests read/write the process-global `ORIGIN_ENABLE_SALIENCE_PRIOR`.
+    // `temp_env::async_with_vars` mutates that global, so two salience tests
+    // running concurrently can corrupt each other's flag mid-`.await`. Serialize
+    // them on a process-local async lock (same pattern as `PRF_ENV_LOCK` above).
+    static SALIENCE_ENV_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
     #[tokio::test]
     async fn salience_reorders_when_flag_on() {
+        let _serial = SALIENCE_ENV_LOCK.lock().await;
         let (db, _dir) = test_db().await;
         let doc_a = make_memory_doc(
             "sal_a",
@@ -26142,6 +26149,7 @@ pub(crate) mod tests {
 
     #[tokio::test]
     async fn salience_inert_when_flag_off() {
+        let _serial = SALIENCE_ENV_LOCK.lock().await;
         let (db, _dir) = test_db().await;
         let doc_a = make_memory_doc(
             "inert_a",
@@ -26233,6 +26241,7 @@ pub(crate) mod tests {
     /// SAME ranking as flag OFF (salience_mult forced to 1.0 by None short-circuit).
     #[tokio::test]
     async fn salience_null_rows_unchanged() {
+        let _serial = SALIENCE_ENV_LOCK.lock().await;
         let (db, _dir) = test_db().await;
         let doc_a = make_memory_doc(
             "null_a",
@@ -26299,6 +26308,7 @@ pub(crate) mod tests {
 
     #[tokio::test]
     async fn salience_prior_enabled_reads_env() {
+        let _serial = SALIENCE_ENV_LOCK.lock().await;
         for val in &["1", "true", "yes"] {
             let got =
                 temp_env::async_with_vars([("ORIGIN_ENABLE_SALIENCE_PRIOR", Some(*val))], async {
@@ -41630,12 +41640,19 @@ pub(crate) mod tests {
 
     // ── T13: Magnitude-preserving FTS score fusion ───────────────────────────
 
+    // Magnitude-fusion tests read/write the process-global `ORIGIN_MAGNITUDE_FUSION`.
+    // `temp_env::async_with_vars` mutates that global, so two tests running
+    // concurrently can corrupt each other's flag mid-`.await`. Serialize them on
+    // a process-local async lock (same pattern as `PRF_ENV_LOCK` and `SALIENCE_ENV_LOCK`).
+    static MAGNITUDE_ENV_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
     /// Test 1 (merge gate): with `ORIGIN_MAGNITUDE_FUSION` UNSET vs explicitly
     /// `"0"`, `search_memory` must return byte-identical ordering AND scores.
     /// This is the structural defense against the silent-regression class that
     /// closed PR #147 — the default path must be untouched.
     #[tokio::test]
     async fn magnitude_fusion_default_off_is_byte_identical() {
+        let _serial = MAGNITUDE_ENV_LOCK.lock().await;
         let (db, _tmp) = test_db().await;
         db.upsert_documents(vec![
             make_memory_doc(
@@ -41717,6 +41734,7 @@ pub(crate) mod tests {
     /// applies equally and does not confound the comparison.
     #[tokio::test]
     async fn magnitude_fusion_on_preserves_bm25_magnitude() {
+        let _serial = MAGNITUDE_ENV_LOCK.lock().await;
         let (db, _tmp) = test_db().await;
         db.upsert_documents(vec![
             make_memory_doc(
@@ -41810,6 +41828,7 @@ pub(crate) mod tests {
     /// end-to-end behavior and guards finiteness on the magnitude path.
     #[tokio::test]
     async fn magnitude_fusion_on_handles_negative_bm25_sign() {
+        let _serial = MAGNITUDE_ENV_LOCK.lock().await;
         let (db, _tmp) = test_db().await;
         db.upsert_documents(vec![
             make_memory_doc(
@@ -41869,6 +41888,7 @@ pub(crate) mod tests {
     /// returned, all scores finite (no div-by-zero / NaN from the normalizer).
     #[tokio::test]
     async fn magnitude_fusion_on_zero_fts_hits_no_panic() {
+        let _serial = MAGNITUDE_ENV_LOCK.lock().await;
         let (db, _tmp) = test_db().await;
         db.upsert_documents(vec![make_memory_doc(
             "m_novec",
@@ -41982,6 +42002,7 @@ pub(crate) mod tests {
     /// outranks an equal-base unconfirmed one.
     #[tokio::test]
     async fn magnitude_fusion_on_multiplier_stack_intact() {
+        let _serial = MAGNITUDE_ENV_LOCK.lock().await;
         let (db, _tmp) = test_db().await;
         // Two memories matching the query equally on the FTS keywords but with
         // distinct filler so the near-duplicate dedup (Jaccard > 0.92) does not
