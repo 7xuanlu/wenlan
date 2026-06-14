@@ -8512,7 +8512,7 @@ async fn print_top_hubs(db: &origin_core::db::MemoryDB, n: usize) {
 /// Runtime proof for the CE A/B per-question seed loop.
 ///
 /// GPU/Metal + minutes, NOT run in CI/gate. This seeds one temporal-reasoning
-/// LongMemEval oracle question through `run_fullpipeline_lme_ce_ab`, then opens
+/// LongMemEval oracle question through `run_fullpipeline_lme`, then opens
 /// that question's scenario DB and verifies the temporal substrate was populated.
 /// Post-fix GREEN-only proof (not a red/green pair): with the seed-loop injection
 /// in place, event_date count is > 0; it cannot exhibit the pre-fix RED state
@@ -8520,7 +8520,7 @@ async fn print_top_hubs(db: &origin_core::db::MemoryDB, n: usize) {
 #[tokio::test]
 #[ignore = "GPU/Metal + minutes; runtime proof for CE A/B event_date injection"]
 async fn ce_ab_seed_injects_event_date() {
-    use origin_core::eval::answer_quality::run_fullpipeline_lme_ce_ab;
+    use origin_core::eval::answer_quality::{run_fullpipeline_lme, ArmSpec};
     use origin_core::eval::shared::{scenario_db_dir, EnrichmentMode};
     use origin_core::llm_provider::{LlmProvider, OnDeviceProvider};
     use std::sync::Arc;
@@ -8566,9 +8566,16 @@ async fn ce_ab_seed_injects_event_date() {
         .expect("init_cross_encoder_reranker");
     let output_path = tmp.path().join("ce_ab_lme_tuples.json");
 
-    run_fullpipeline_lme_ce_ab(&fixture_path, enrichment, llm, &output_path, reranker)
-        .await
-        .expect("run_fullpipeline_lme_ce_ab");
+    run_fullpipeline_lme(
+        &fixture_path,
+        enrichment,
+        llm,
+        Some(reranker),
+        &ArmSpec::ce_two(),
+        &output_path,
+    )
+    .await
+    .expect("run_fullpipeline_lme");
 
     if let Some(value) = previous_graph_stream {
         std::env::set_var("ORIGIN_GRAPH_MEMORY_STREAM", value);
@@ -8614,7 +8621,7 @@ async fn ce_ab_seed_injects_event_date() {
 #[tokio::test]
 #[ignore]
 async fn generate_ce_ab_lme() {
-    use origin_core::eval::answer_quality::run_fullpipeline_lme_ce_ab;
+    use origin_core::eval::answer_quality::{run_fullpipeline_lme, ArmSpec};
     use origin_core::llm_provider::{LlmProvider, OnDeviceProvider};
     use std::sync::Arc;
 
@@ -8639,7 +8646,7 @@ async fn generate_ce_ab_lme() {
     if origin_core::db::graph_memory_stream_enabled() {
         panic!(
             "Set ORIGIN_GRAPH_MEMORY_STREAM=0 before running this test. \
-             The CE A/B is invalid without it (see run_fullpipeline_lme_ce_ab docs)."
+             The CE A/B is invalid without it (see run_fullpipeline_lme docs)."
         );
     }
 
@@ -8666,9 +8673,16 @@ async fn generate_ce_ab_lme() {
         "init_cross_encoder_reranker failed (downloads ~1.1GB bge-reranker-base on first run)",
     );
 
-    let tuples = run_fullpipeline_lme_ce_ab(&lme_path, enrichment, llm, &output_path, reranker)
-        .await
-        .expect("run_fullpipeline_lme_ce_ab failed");
+    let tuples = run_fullpipeline_lme(
+        &lme_path,
+        enrichment,
+        llm,
+        Some(reranker),
+        &ArmSpec::ce_two(),
+        &output_path,
+    )
+    .await
+    .expect("run_fullpipeline_lme failed");
 
     eprintln!(
         "\n[generate_ce_ab_lme] Done: {} tuples saved to {:?}",

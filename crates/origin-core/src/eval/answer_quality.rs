@@ -2721,30 +2721,109 @@ pub async fn run_fullpipeline_lme_batch(
 
 // ===== Fair CE A/B answer runner =====
 
-/// Fair cross-encoder (CE) answer-accuracy A/B for LongMemEval.
+/// One arm of an LME answer A/B. Maps to a labeled retrieval mode per category.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ArmKind {
+    /// CE off: CrossRerank(None).
+    CeOff,
+    /// CE on: CrossRerank(Some(reranker)).
+    CeOn,
+    // PR-3 will add CeOnGraph -> CrossRerankGraph. Do NOT add it now.
+}
+
+impl ArmKind {
+    /// Stable label prefix, e.g. "ce_off" / "ce_on".
+    fn label_prefix(self) -> &'static str {
+        match self {
+            ArmKind::CeOff => "ce_off",
+            ArmKind::CeOn => "ce_on",
+        }
+    }
+}
+
+/// The set of arms to run, in order.
+#[derive(Debug, Clone)]
+pub struct ArmSpec {
+    arms: Vec<ArmKind>,
+}
+
+impl ArmSpec {
+    /// The shipped 2-arm CE A/B: [CeOff, CeOn].
+    pub fn ce_two() -> Self {
+        ArmSpec {
+            arms: vec![ArmKind::CeOff, ArmKind::CeOn],
+        }
+    }
+
+    /// One label per arm for a given category, in order.
+    /// e.g. `ce_two().labels("single-session-user")`
+    ///        == `["ce_off_single-session-user", "ce_on_single-session-user"]`
+    pub fn labels(&self, category: &str) -> Vec<String> {
+        self.arms
+            .iter()
+            .map(|arm| format!("{}_{}", arm.label_prefix(), category))
+            .collect()
+    }
+
+    /// Label prefixes (for the done-set), e.g. `["ce_off", "ce_on"]`.
+    fn prefixes(&self) -> Vec<&'static str> {
+        self.arms.iter().map(|arm| arm.label_prefix()).collect()
+    }
+
+    /// Resolve arms to `(label, CtxRetrieval)` for a category, given the reranker.
+    /// `CeOn` requires `reranker.is_some()` — returns `Err` if an arm needs it and
+    /// it is `None`.
+    fn resolve(
+        &self,
+        category: &str,
+        reranker: &Option<Arc<dyn crate::reranker::Reranker>>,
+    ) -> Result<Vec<(String, CtxRetrieval)>, OriginError> {
+        let mut result = Vec::with_capacity(self.arms.len());
+        for arm in &self.arms {
+            let label = format!("{}_{}", arm.label_prefix(), category);
+            let retrieval = match arm {
+                ArmKind::CeOff => CtxRetrieval::CrossRerank(None),
+                ArmKind::CeOn => {
+                    let r = reranker.clone().ok_or_else(|| {
+                        OriginError::Generic(format!(
+                            "ArmSpec::resolve: arm {} requires a reranker but none was provided",
+                            label
+                        ))
+                    })?;
+                    CtxRetrieval::CrossRerank(Some(r))
+                }
+            };
+            result.push((label, retrieval));
+        }
+        Ok(result)
+    }
+}
+
+/// Provider-generic LME full-pipeline A/B runner.
 ///
-/// **FAIR design**: both arms route through `search_memory_cross_rerank` so
+/// Replaces the hardcoded `run_fullpipeline_lme_ce_ab` with an extensible
+/// `ArmSpec`-driven variant. Pass `ArmSpec::ce_two()` to reproduce the
+/// existing CE A/B behavior exactly.
+///
+/// **FAIR design**: all arms route through `search_memory_cross_rerank` so
 /// P3 distill-demotion is symmetric, and the caller MUST set
 /// `ORIGIN_GRAPH_MEMORY_STREAM=0` (enforced at entry) so the OFF arm
 /// (reranker=None) does not re-enable the graph stream that the ON arm
 /// (reranker=Some) suppresses — without this, the A/B measures
 /// graph-stream vs CE, not CE alone.
 ///
-/// - OFF arm: `CrossRerank(None)` — no CE, graph stream off.
-/// - ON  arm: `CrossRerank(Some(reranker))` — CE active, graph stream off.
-///
-/// Per question, both arms share the same seeded DB (same seed/enrichment
+/// Per question, all arms share the same seeded DB (same seed/enrichment
 /// as `run_fullpipeline_lme_batch`). Answers are generated on-device by the
-/// supplied `llm` provider (Qwen3.5-9B) at `temperature = 0.0` so both arms
+/// supplied `llm` provider (Qwen3.5-9B) at `temperature = 0.0` so all arms
 /// are deterministic and self-judging is avoided (the downstream judge is a
 /// different model). Mirrors `generate_e2e_answers_for_question`'s LLM call.
 ///
-/// Approach labels: `"ce_off_{category}"` / `"ce_on_{category}"`.
+/// Approach labels: `"<arm_prefix>_{category}"` per arm.
 ///
 /// ## MEASUREMENT SCOPE
 ///
 /// This isolates the cross-encoder. The confounder gate forces the graph stream
-/// (and skip-preference / temporal boost+filter) OFF on BOTH arms, so the only
+/// (and skip-preference / temporal boost+filter) OFF on ALL arms, so the only
 /// deliberate difference is the CE rescore. Production, however, runs the graph
 /// stream DEFAULT-ON, where CE-off keeps the stream and CE-on drops it
 /// (allow_graph_stream = reranker.is_none(), db.rs). A positive delta here therefore
@@ -2756,12 +2835,13 @@ pub async fn run_fullpipeline_lme_batch(
 ///
 /// Returns `Err` immediately if `ORIGIN_GRAPH_MEMORY_STREAM` is not one of
 /// "0"/"false"/"no"/"off" — the A/B is statistically invalid without it.
-pub async fn run_fullpipeline_lme_ce_ab(
+pub async fn run_fullpipeline_lme(
     longmemeval_path: &std::path::Path,
     enrichment: crate::eval::shared::EnrichmentMode,
     llm: Arc<dyn crate::llm_provider::LlmProvider>,
+    reranker: Option<Arc<dyn crate::reranker::Reranker>>,
+    arms: &ArmSpec,
     output_path: &std::path::Path,
-    reranker: Arc<dyn crate::reranker::Reranker>,
 ) -> Result<Vec<crate::eval::judge::JudgmentTuple>, OriginError> {
     use crate::eval::judge::{save_judgment_tuples, JudgmentTuple};
     use crate::eval::longmemeval::{category_name, extract_memories, load_longmemeval};
@@ -2849,26 +2929,33 @@ pub async fn run_fullpipeline_lme_ce_ab(
         }
     }
 
-    // A question is done only when BOTH arms are present.
+    // A question is done only when ALL arms are present.
+    // Build one set per prefix, then intersect them all.
     let done_questions: std::collections::HashSet<String> = {
-        let mut off_qs: std::collections::HashSet<String> = std::collections::HashSet::new();
-        let mut on_qs: std::collections::HashSet<String> = std::collections::HashSet::new();
+        let prefixes = arms.prefixes();
+        let mut per_prefix: Vec<std::collections::HashSet<String>> = prefixes
+            .iter()
+            .map(|_| std::collections::HashSet::new())
+            .collect();
         for t in &finished_tuples {
-            // Key on question_id (fallback to text for pre-question_id caches) so two
-            // questions sharing text are not treated as one done unit — mirrors the
-            // McNemar pairing key.
             let k = if t.question_id.is_empty() {
                 t.question.clone()
             } else {
                 t.question_id.clone()
             };
-            if t.approach.starts_with("ce_off_") {
-                off_qs.insert(k);
-            } else if t.approach.starts_with("ce_on_") {
-                on_qs.insert(k);
+            for (i, prefix) in prefixes.iter().enumerate() {
+                if t.approach.starts_with(&format!("{prefix}_")) {
+                    per_prefix[i].insert(k.clone());
+                }
             }
         }
-        off_qs.intersection(&on_qs).cloned().collect()
+        // Intersection across all arm-prefix sets.
+        let mut iter = per_prefix.into_iter();
+        if let Some(first) = iter.next() {
+            iter.fold(first, |acc, set| acc.intersection(&set).cloned().collect())
+        } else {
+            std::collections::HashSet::new()
+        }
     };
 
     let baselines_dir = output_path
@@ -2998,19 +3085,9 @@ pub async fn run_fullpipeline_lme_ce_ab(
 
         let category = category_name(&sample.question_type);
 
-        // Generate an answer for both arms from the same seeded DB.
-        // OFF = CrossRerank(None) (CE off); ON = CrossRerank(Some(reranker)) (CE on).
-        // Both route through cross_rerank so P3 demotion is symmetric.
-        for (arm_label, retrieval) in [
-            (
-                format!("ce_off_{category}"),
-                CtxRetrieval::CrossRerank(None),
-            ),
-            (
-                format!("ce_on_{category}"),
-                CtxRetrieval::CrossRerank(Some(reranker.clone())),
-            ),
-        ] {
+        // Generate an answer for all arms from the same seeded DB.
+        let arm_pairs = arms.resolve(category, &reranker)?;
+        for (arm_label, retrieval) in arm_pairs {
             let (ctx, ctx_tokens) =
                 match build_structured_context(&db, &sample.question, 10, None, retrieval).await {
                     Ok(v) => v,
@@ -3036,11 +3113,11 @@ pub async fn run_fullpipeline_lme_ce_ab(
             let answer = match llm.generate(request).await {
                 Ok(raw) => strip_think_tags(&raw).trim().to_string(),
                 Err(e) => {
-                    // Skip BOTH arms for this question rather than persisting a
+                    // Skip ALL arms for this question rather than persisting a
                     // half-pair; on resume the question is reprocessed (H1).
                     eprintln!(
                         "[ce_ab_lme] WARN: scenario {} arm {arm_label} generation failed: {e}. \
-                         Dropping both arms for this question; will retry on resume.",
+                         Dropping all arms for this question; will retry on resume.",
                         sample.question_id
                     );
                     break;
@@ -3052,7 +3129,7 @@ pub async fn run_fullpipeline_lme_ce_ab(
             if answer.is_empty() {
                 eprintln!(
                     "[ce_ab_lme] WARN: scenario {} arm {arm_label} produced empty answer. \
-                     Dropping both arms; will retry on resume.",
+                     Dropping all arms; will retry on resume.",
                     sample.question_id
                 );
                 break;
@@ -3155,5 +3232,27 @@ mod tests {
         crate::eval::seed_contract::assert_feature_substrate_live(&conn, "temporal")
             .await
             .unwrap();
+    }
+
+    #[test]
+    fn arm_spec_ce_two_labels() {
+        let spec = ArmSpec::ce_two();
+        assert_eq!(
+            spec.labels("single-session-user"),
+            vec![
+                "ce_off_single-session-user".to_string(),
+                "ce_on_single-session-user".to_string(),
+            ],
+            "ce_two labels for single-session-user"
+        );
+        assert_eq!(
+            spec.labels("temporal-reasoning"),
+            vec![
+                "ce_off_temporal-reasoning".to_string(),
+                "ce_on_temporal-reasoning".to_string(),
+            ],
+            "ce_two labels for temporal-reasoning"
+        );
+        assert_eq!(spec.prefixes(), vec!["ce_off", "ce_on"], "ce_two prefixes");
     }
 }
