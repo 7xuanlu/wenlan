@@ -164,7 +164,7 @@ Three env flags govern how `open_or_seed_scenario_db` handles a stale or mismatc
 
 | Flag | Default | Effect |
 |---|---|---|
-| `EVAL_ALLOW_WIPE` | unset (refuses) | Permits `clear_all_for_eval` to wipe a partial or cache-env-mismatched DB and reseed from scratch. |
+| `EVAL_ALLOW_WIPE` | unset (refuses) | Permits wiping + reseeding from scratch: a partial-state DB via `clear_all_for_eval`, or a cache-env-mismatched DB by removing its `origin_memory.db` file (`std::fs::remove_file`). |
 | `EVAL_PARALLEL_OK` | unset (refuses) | Allows concurrent access to a locked scenario DB (results may be corrupted). |
 | `EVAL_MIGRATE_STALE` | unset (refuses) | Migrates a schema-stale cached scenario DB IN PLACE, without wipe or re-seed. |
 
