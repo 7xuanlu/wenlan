@@ -44,14 +44,6 @@ pub struct HealthResponse {
     pub version: String,
 }
 
-#[derive(Debug, Serialize)]
-pub struct StatusResponse {
-    pub is_running: bool,
-    pub files_indexed: u64,
-    pub files_total: u64,
-    pub sources_connected: Vec<String>,
-}
-
 // ===== Route Handlers =====
 
 /// GET /api/health - Health check endpoint
