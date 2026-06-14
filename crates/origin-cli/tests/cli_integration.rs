@@ -541,9 +541,14 @@ fn install_over_running_daemon_stops_first_isolated() {
         .success();
 
     let calls = fs::read_to_string(&log).unwrap_or_default();
+    // We assert specifically for "stop" — our explicit m.stop() emits
+    // `launchctl stop com.origin.server`. service-manager's internal reinstall
+    // logic emits `launchctl remove`, which is a different verb and does NOT
+    // terminate a running process the same way. The test must discriminate
+    // between our explicit stop and the library's internal unload-before-reload.
     assert!(
-        calls.contains("out") || calls.contains("unload") || calls.contains("stop") || calls.contains("remove"),
-        "second install must stop the running daemon before reinstalling; launchctl calls were:\n{calls}"
+        calls.lines().any(|l| l.starts_with("stop ")),
+        "second install must explicitly call `launchctl stop` before reinstalling; launchctl calls were:\n{calls}"
     );
 }
 
