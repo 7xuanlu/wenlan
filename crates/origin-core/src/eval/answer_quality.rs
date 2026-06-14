@@ -2906,6 +2906,27 @@ pub async fn run_fullpipeline_lme_ce_ab(
             )));
         }
 
+        // Make the temporal substrate LIVE for this question's scenario DB by
+        // injecting per-session event_date (turn text carries no date; the date
+        // is per-session haystack metadata). This is substrate-prep + a liveness
+        // gate, NOT a direct answer fix: event_date is not rendered into the CE
+        // A/B context (build_structured_context renders only content) and no
+        // temporal ranking flag is set on this path, so dates influence neither
+        // ranking nor the prompt today. Their value is (a) the contract gate
+        // below can enforce presence (no starved-temporal null), (b) a future
+        // temporal lever has live data to read. source_id keys mirror the seed
+        // closure's `lme_{qid}_{sess}_t{turn}` exactly via event_date_map ->
+        // memory_source_id; a key mismatch updates 0 rows and the gate then
+        // refuses (loud), never silently passes.
+        let date_map = crate::eval::longmemeval::event_date_map(std::slice::from_ref(sample));
+        if !date_map.is_empty() {
+            let updates: Vec<(String, i64)> = date_map.into_iter().collect();
+            db.set_event_dates_by_source_id(&updates).await?;
+            // Refuse rather than emit a starved-temporal null (eval ONE-contract).
+            let conn = db.conn.lock().await;
+            crate::eval::seed_contract::assert_feature_substrate_live(&conn, "temporal").await?;
+        }
+
         let category = category_name(&sample.question_type);
 
         // Generate an answer for both arms from the same seeded DB.
@@ -3007,3 +3028,62 @@ pub async fn run_fullpipeline_lme_ce_ab(
 }
 
 // ===== Flat cache loaders =====
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::eval::longmemeval::{ChatTurn, LongMemEvalSample};
+
+    #[tokio::test]
+    async fn event_date_injection_lands_on_seeded_rows() {
+        let sample = LongMemEvalSample {
+            question_id: "qtest".to_string(),
+            question_type: "temporal-reasoning".to_string(),
+            question: "What happened after the May session?".to_string(),
+            answer: serde_json::json!("the answer"),
+            question_date: "2023/05/02 (Tue) 10:00".to_string(),
+            haystack_dates: vec!["2023/05/01 (Mon) 10:00".to_string()],
+            haystack_session_ids: vec!["s0".to_string()],
+            haystack_sessions: vec![vec![ChatTurn {
+                role: "user".to_string(),
+                content: "I had the planning session today.".to_string(),
+                has_answer: true,
+            }]],
+            answer_session_ids: vec!["s0".to_string()],
+        };
+
+        let tmp = tempfile::tempdir().unwrap();
+        let db = MemoryDB::new_with_shared_embedder(
+            tmp.path(),
+            Arc::new(NoopEmitter),
+            eval_shared_embedder(),
+        )
+        .await
+        .unwrap();
+
+        db.upsert_documents(vec![RawDocument {
+            source: "memory".to_string(),
+            source_id: format!("lme_{}_{}_t{}", sample.question_id, 0usize, 0usize),
+            title: "session 0 turn 0".to_string(),
+            content: "I had the planning session today.".to_string(),
+            last_modified: chrono::Utc::now().timestamp(),
+            memory_type: Some("fact".to_string()),
+            space: Some("conversation".to_string()),
+            ..Default::default()
+        }])
+        .await
+        .unwrap();
+
+        let updates: Vec<(String, i64)> =
+            crate::eval::longmemeval::event_date_map(std::slice::from_ref(&sample))
+                .into_iter()
+                .collect();
+        let updated = db.set_event_dates_by_source_id(&updates).await.unwrap();
+        assert_eq!(updated, 1, "event_date_map key must match seeded source_id");
+
+        let conn = db.conn.lock().await;
+        crate::eval::seed_contract::assert_feature_substrate_live(&conn, "temporal")
+            .await
+            .unwrap();
+    }
+}

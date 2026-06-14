@@ -1706,6 +1706,10 @@ pub struct McNemarReport {
     pub c: u64,
     /// Total complete pairs used.
     pub n_pairs: u64,
+    /// Discordant pairs (b + c) — the only pairs McNemar's test uses.
+    pub n_discordant: u64,
+    /// True when b + c < 10: too few discordant pairs for a trustworthy test.
+    pub underpowered: bool,
     /// Test statistic (χ² or exact-binomial n_min for small-n path).
     pub stat: f64,
     /// Two-sided p-value.
@@ -1840,6 +1844,8 @@ pub fn paired_answer_mcnemar(results: &[JudgmentResult]) -> McNemarReport {
         b: agg_b,
         c: agg_c,
         n_pairs: agg_n,
+        n_discordant: agg_b + agg_c,
+        underpowered: (agg_b + agg_c) < 10,
         stat,
         p_value,
         test_used,
@@ -2089,6 +2095,60 @@ mod mcnemar_tests {
         assert_eq!(report.test_used, "mcnemar_chi2", "30 discordant -> chi2");
         assert!(report.stat > 0.0);
         assert!(report.p_value < 0.05, "p={}", report.p_value);
+    }
+
+    #[test]
+    fn mcnemar_underpowered_small_discordant() {
+        // Test with b+c=3 (underpowered, < 10).
+        // 5 concordant pairs + 3 discordant pairs.
+        let mut results = Vec::new();
+        // 5 concordant (both score 1)
+        for i in 0..5 {
+            let q = format!("q_{i}");
+            results.push(make_result(&q, "ce_off_single-hop", 1));
+            results.push(make_result(&q, "ce_on_single-hop", 1));
+        }
+        // 3 discordant ON-wins
+        for i in 5..8 {
+            let q = format!("q_{i}");
+            results.push(make_result(&q, "ce_off_single-hop", 0));
+            results.push(make_result(&q, "ce_on_single-hop", 1));
+        }
+        let report = paired_answer_mcnemar(&results);
+        assert_eq!(report.n_pairs, 8);
+        assert_eq!(report.b, 0);
+        assert_eq!(report.c, 3);
+        assert_eq!(report.n_discordant, 3);
+        assert!(report.underpowered, "3 < 10, should be underpowered");
+    }
+
+    #[test]
+    fn mcnemar_powered_sufficient_discordant() {
+        // Test with b+c=15 (powered, >= 10).
+        let mut results = Vec::new();
+        for i in 0..15 {
+            let q = format!("q_{i}");
+            results.push(make_result(&q, "ce_off_single-hop", 0));
+            results.push(make_result(&q, "ce_on_single-hop", 1));
+        }
+        let report = paired_answer_mcnemar(&results);
+        assert_eq!(report.n_discordant, 15);
+        assert!(!report.underpowered, "15 >= 10, should not be underpowered");
+    }
+
+    #[test]
+    fn mcnemar_underpowered_boundary_at_ten() {
+        // Pin the exact `b + c < 10` floor so an off-by-one (`<` vs `<=`) in the
+        // underpowered comparator is caught — this flag drives how a null delta
+        // is interpreted, so the boundary must be exact.
+        assert!(
+            report_for_bc(0, 9).underpowered,
+            "b+c=9 is below the floor -> underpowered"
+        );
+        assert!(
+            !report_for_bc(0, 10).underpowered,
+            "b+c=10 meets the floor -> NOT underpowered"
+        );
     }
 
     // ----- value-pinned numeric guards (regression-protect beta-CF / erfc) -----

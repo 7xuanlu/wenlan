@@ -8508,6 +8508,95 @@ async fn print_top_hubs(db: &origin_core::db::MemoryDB, n: usize) {
 
 // ===== CE A/B answer-accuracy harness =====
 
+/// Runtime proof for the CE A/B per-question seed loop.
+///
+/// GPU/Metal + minutes, NOT run in CI/gate. This seeds one temporal-reasoning
+/// LongMemEval oracle question through `run_fullpipeline_lme_ce_ab`, then opens
+/// that question's scenario DB and verifies the temporal substrate was populated.
+/// Post-fix GREEN-only proof (not a red/green pair): with the seed-loop injection
+/// in place, event_date count is > 0; it cannot exhibit the pre-fix RED state
+/// against current code.
+#[tokio::test]
+#[ignore = "GPU/Metal + minutes; runtime proof for CE A/B event_date injection"]
+async fn ce_ab_seed_injects_event_date() {
+    use origin_core::eval::answer_quality::run_fullpipeline_lme_ce_ab;
+    use origin_core::eval::shared::{scenario_db_dir, EnrichmentMode};
+    use origin_core::llm_provider::{LlmProvider, OnDeviceProvider};
+    use std::sync::Arc;
+
+    let lme_path = eval_root().join("data/longmemeval_oracle.json");
+    if !lme_path.exists() {
+        eprintln!("SKIP: longmemeval_oracle.json not found at {:?}", lme_path);
+        return;
+    }
+
+    let raw = std::fs::read_to_string(&lme_path).expect("read longmemeval_oracle.json");
+    let samples: Vec<serde_json::Value> =
+        serde_json::from_str(&raw).expect("parse longmemeval_oracle.json");
+    let sample = samples
+        .into_iter()
+        .find(|sample| {
+            sample.get("question_type").and_then(|v| v.as_str()) == Some("temporal-reasoning")
+        })
+        .expect("fixture should contain a temporal-reasoning question");
+    let question_id = sample
+        .get("question_id")
+        .and_then(|v| v.as_str())
+        .expect("temporal sample has question_id")
+        .to_string();
+
+    let tmp = tempfile::tempdir().unwrap();
+    let fixture_path = tmp.path().join("one_temporal_lme.json");
+    std::fs::write(
+        &fixture_path,
+        serde_json::to_vec_pretty(&vec![sample]).expect("serialize one-question fixture"),
+    )
+    .expect("write one-question fixture");
+
+    let previous_graph_stream = std::env::var_os("ORIGIN_GRAPH_MEMORY_STREAM");
+    std::env::set_var("ORIGIN_GRAPH_MEMORY_STREAM", "0");
+
+    let llm: Arc<dyn LlmProvider> = Arc::new(
+        OnDeviceProvider::new_with_model(Some("qwen3.5-9b"))
+            .expect("Qwen3.5-9B on-device provider"),
+    );
+    let enrichment = EnrichmentMode::OnDevice(llm.clone());
+    let reranker = origin_core::reranker::init_cross_encoder_reranker(None)
+        .expect("init_cross_encoder_reranker");
+    let output_path = tmp.path().join("ce_ab_lme_tuples.json");
+
+    run_fullpipeline_lme_ce_ab(&fixture_path, enrichment, llm, &output_path, reranker)
+        .await
+        .expect("run_fullpipeline_lme_ce_ab");
+
+    if let Some(value) = previous_graph_stream {
+        std::env::set_var("ORIGIN_GRAPH_MEMORY_STREAM", value);
+    } else {
+        std::env::remove_var("ORIGIN_GRAPH_MEMORY_STREAM");
+    }
+
+    let scenario_dir = scenario_db_dir(tmp.path(), "lme", &question_id);
+    let scenario_db =
+        libsql::Builder::new_local(scenario_dir.join("origin_memory.db").to_str().unwrap())
+            .build()
+            .await
+            .expect("open scenario DB");
+    let conn = scenario_db.connect().expect("connect scenario DB");
+    let mut rows = conn
+        .query(
+            "SELECT COUNT(*) FROM memories WHERE event_date IS NOT NULL",
+            (),
+        )
+        .await
+        .expect("query event_date count");
+    let row = rows.next().await.unwrap().unwrap();
+    let event_date_count = row.get::<i64>(0).unwrap();
+    assert!(
+        event_date_count > 0,
+        "CE A/B per-question scenario DB must have temporal substrate"
+    );
+}
+
 /// Fair CE A/B answer-accuracy eval for LongMemEval.
 ///
 /// Both arms route through `search_memory_cross_rerank` so P3 distill-demotion
@@ -8659,6 +8748,15 @@ async fn judge_ce_ab_lme() {
     eprintln!(
         "b(off✓ on✗)={} | c(off✗ on✓)={} | stat={:.4} | p={:.4} | test={}",
         report.b, report.c, report.stat, report.p_value, report.test_used
+    );
+    eprintln!(
+        "discordant pairs (b+c): {}{}",
+        report.n_discordant,
+        if report.underpowered {
+            "  [UNDERPOWERED: b+c < 10]"
+        } else {
+            ""
+        }
     );
     eprintln!("\nPer-category:");
     for cat in &report.by_category {
