@@ -594,6 +594,16 @@ async fn run_daemon() -> anyhow::Result<()> {
         scheduler::spawn_scheduler(shared.clone(), write_signal);
     }
 
+    if origin_core::db::entity_sweep_enabled() {
+        tracing::info!(
+            "Background entity-enrichment sweep is ON: it backfills knowledge-graph \
+             links over existing memories via your configured LLM. Set \
+             ORIGIN_ENABLE_ENTITY_SWEEP=0 to disable."
+        );
+    } else {
+        tracing::info!("Background entity-enrichment sweep is OFF (ORIGIN_ENABLE_ENTITY_SWEEP).");
+    }
+
     // Build router
     let app = router::build_router(shared);
 
