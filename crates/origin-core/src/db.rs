@@ -931,6 +931,22 @@ pub fn graph_memory_stream_enabled() -> bool {
     }
 }
 
+/// True unless `ORIGIN_ENABLE_ENTITY_SWEEP` is a falsy token (`0`, `false`,
+/// `no`, `off`). OPT-OUT, default ON.
+///
+/// When OFF, the post-ingest entity sweep is skipped. Useful for isolated
+/// eval runs or debugging where the caller seeds entity data externally and
+/// does not want the sweep to overwrite it.
+pub fn entity_sweep_enabled() -> bool {
+    match std::env::var("ORIGIN_ENABLE_ENTITY_SWEEP") {
+        Ok(v) => !matches!(
+            v.trim().to_ascii_lowercase().as_str(),
+            "0" | "false" | "no" | "off"
+        ),
+        Err(_) => true,
+    }
+}
+
 /// True iff `ORIGIN_RERANK_SKIP_PREFERENCE` is truthy. OPT-IN, default OFF.
 ///
 /// When ON, preference/recommendation-seeking queries (per
@@ -45591,6 +45607,26 @@ pub(crate) mod tests {
                 "empty string is not a recognized opt-out token, must stay ENABLED"
             );
         });
+    }
+
+    #[test]
+    fn entity_sweep_enabled_defaults_on_and_opts_out() {
+        // default ON when unset
+        temp_env::with_var("ORIGIN_ENABLE_ENTITY_SWEEP", None::<&str>, || {
+            assert!(entity_sweep_enabled());
+        });
+        // explicit opt-out values: 0 / false / no / off (and whitespace/case variants)
+        for v in ["0", "false", "no", "off", " 0 ", "FALSE", "OFF"] {
+            temp_env::with_var("ORIGIN_ENABLE_ENTITY_SWEEP", Some(v), || {
+                assert!(!entity_sweep_enabled(), "{v:?} must disable");
+            });
+        }
+        // truthy and unrecognized values remain ON
+        for v in ["1", "true", "yes", ""] {
+            temp_env::with_var("ORIGIN_ENABLE_ENTITY_SWEEP", Some(v), || {
+                assert!(entity_sweep_enabled(), "{v:?} must stay enabled");
+            });
+        }
     }
 
     #[test]
