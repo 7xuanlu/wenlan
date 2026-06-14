@@ -2439,6 +2439,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore] // Eval benchmark — requires ONNX model download; runs on main CI, skip on PR CI
     async fn test_multi_turn_eval() {
         let fixture_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .parent()
