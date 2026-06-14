@@ -7783,6 +7783,7 @@ async fn smoke_tool_use_judge_returns_structured_verdict() {
         category: "single-session-user".to_string(),
         approach: "smoke".to_string(),
         context_tokens: 0,
+        question_id: String::new(),
     };
 
     let judge_model = std::env::var("EVAL_JUDGE_MODEL")
@@ -8504,4 +8505,271 @@ async fn print_top_hubs(db: &origin_core::db::MemoryDB, n: usize) {
         }
         Err(e) => println!("[gate] top_hubs err: {e}"),
     }
+}
+
+// ===== CE A/B answer-accuracy harness =====
+
+/// Runtime proof for the CE A/B per-question seed loop.
+///
+/// GPU/Metal + minutes, NOT run in CI/gate. This seeds one temporal-reasoning
+/// LongMemEval oracle question through `run_fullpipeline_lme_ce_ab`, then opens
+/// that question's scenario DB and verifies the temporal substrate was populated.
+/// Post-fix GREEN-only proof (not a red/green pair): with the seed-loop injection
+/// in place, event_date count is > 0; it cannot exhibit the pre-fix RED state
+/// against current code.
+#[tokio::test]
+#[ignore = "GPU/Metal + minutes; runtime proof for CE A/B event_date injection"]
+async fn ce_ab_seed_injects_event_date() {
+    use origin_core::eval::answer_quality::run_fullpipeline_lme_ce_ab;
+    use origin_core::eval::shared::{scenario_db_dir, EnrichmentMode};
+    use origin_core::llm_provider::{LlmProvider, OnDeviceProvider};
+    use std::sync::Arc;
+
+    let lme_path = eval_root().join("data/longmemeval_oracle.json");
+    if !lme_path.exists() {
+        eprintln!("SKIP: longmemeval_oracle.json not found at {:?}", lme_path);
+        return;
+    }
+
+    let raw = std::fs::read_to_string(&lme_path).expect("read longmemeval_oracle.json");
+    let samples: Vec<serde_json::Value> =
+        serde_json::from_str(&raw).expect("parse longmemeval_oracle.json");
+    let sample = samples
+        .into_iter()
+        .find(|sample| {
+            sample.get("question_type").and_then(|v| v.as_str()) == Some("temporal-reasoning")
+        })
+        .expect("fixture should contain a temporal-reasoning question");
+    let question_id = sample
+        .get("question_id")
+        .and_then(|v| v.as_str())
+        .expect("temporal sample has question_id")
+        .to_string();
+
+    let tmp = tempfile::tempdir().unwrap();
+    let fixture_path = tmp.path().join("one_temporal_lme.json");
+    std::fs::write(
+        &fixture_path,
+        serde_json::to_vec_pretty(&vec![sample]).expect("serialize one-question fixture"),
+    )
+    .expect("write one-question fixture");
+
+    let previous_graph_stream = std::env::var_os("ORIGIN_GRAPH_MEMORY_STREAM");
+    std::env::set_var("ORIGIN_GRAPH_MEMORY_STREAM", "0");
+
+    let llm: Arc<dyn LlmProvider> = Arc::new(
+        OnDeviceProvider::new_with_model(Some("qwen3.5-9b"))
+            .expect("Qwen3.5-9B on-device provider"),
+    );
+    let enrichment = EnrichmentMode::OnDevice(llm.clone());
+    let reranker = origin_core::reranker::init_cross_encoder_reranker(None)
+        .expect("init_cross_encoder_reranker");
+    let output_path = tmp.path().join("ce_ab_lme_tuples.json");
+
+    run_fullpipeline_lme_ce_ab(&fixture_path, enrichment, llm, &output_path, reranker)
+        .await
+        .expect("run_fullpipeline_lme_ce_ab");
+
+    if let Some(value) = previous_graph_stream {
+        std::env::set_var("ORIGIN_GRAPH_MEMORY_STREAM", value);
+    } else {
+        std::env::remove_var("ORIGIN_GRAPH_MEMORY_STREAM");
+    }
+
+    let scenario_dir = scenario_db_dir(tmp.path(), "lme", &question_id);
+    let scenario_db =
+        libsql::Builder::new_local(scenario_dir.join("origin_memory.db").to_str().unwrap())
+            .build()
+            .await
+            .expect("open scenario DB");
+    let conn = scenario_db.connect().expect("connect scenario DB");
+    let mut rows = conn
+        .query(
+            "SELECT COUNT(*) FROM memories WHERE event_date IS NOT NULL",
+            (),
+        )
+        .await
+        .expect("query event_date count");
+    let row = rows.next().await.unwrap().unwrap();
+    let event_date_count = row.get::<i64>(0).unwrap();
+    assert!(
+        event_date_count > 0,
+        "CE A/B per-question scenario DB must have temporal substrate"
+    );
+}
+
+/// Fair CE A/B answer-accuracy eval for LongMemEval.
+///
+/// Both arms route through `search_memory_cross_rerank` so P3 distill-demotion
+/// is symmetric. Graph stream must be OFF (ORIGIN_GRAPH_MEMORY_STREAM=0) so
+/// the OFF arm does not re-enable it. Answers are generated on-device by
+/// Qwen3.5-9B at temperature 0.0 (NOT Claude — avoids self-judge with the
+/// Haiku judge).
+///
+/// ```bash
+/// ORIGIN_GRAPH_MEMORY_STREAM=0 \
+/// LME_LIMIT_QUESTIONS=50 \
+///   cargo test -p origin-core --test eval_harness generate_ce_ab_lme -- --ignored --nocapture
+/// ```
+#[tokio::test]
+#[ignore]
+async fn generate_ce_ab_lme() {
+    use origin_core::eval::answer_quality::run_fullpipeline_lme_ce_ab;
+    use origin_core::llm_provider::{LlmProvider, OnDeviceProvider};
+    use std::sync::Arc;
+
+    let lme_path = eval_root().join("data/longmemeval_oracle.json");
+    if !lme_path.exists() {
+        eprintln!("SKIP: longmemeval_oracle.json not found at {:?}", lme_path);
+        return;
+    }
+
+    // The enrichment phase (entity extraction, distillation) is configured via
+    // EnrichmentMode; answer-gen is on-device Qwen3.5-9B (see below), so these
+    // only steer enrichment, not the answers being measured.
+    let enrich_model =
+        std::env::var("EVAL_ANSWER_MODEL").unwrap_or_else(|_| "claude-haiku-4-5-20251001".into());
+    let cost_cap: f64 = std::env::var("EVAL_COST_CAP")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(10.0);
+
+    // Safety: the runner enforces this, but surfacing it early gives a clearer
+    // message when the operator forgot to set it.
+    if origin_core::db::graph_memory_stream_enabled() {
+        panic!(
+            "Set ORIGIN_GRAPH_MEMORY_STREAM=0 before running this test. \
+             The CE A/B is invalid without it (see run_fullpipeline_lme_ce_ab docs)."
+        );
+    }
+
+    let baselines = origin_core::eval::shared::eval_baselines_dir_override()
+        .unwrap_or_else(|| eval_root().join("baselines"));
+    std::fs::create_dir_all(&baselines).ok();
+    let output_path = baselines.join("ce_ab_lme_tuples.json");
+
+    eprintln!(
+        "[generate_ce_ab_lme]\n  answer model: on-device qwen3.5-9b (temp 0.0)\n  enrich model: {}\n  output: {:?}",
+        enrich_model, output_path,
+    );
+
+    // On-device Qwen3.5-9B generates the answers being measured (NOT Claude).
+    let llm: Arc<dyn LlmProvider> = Arc::new(
+        OnDeviceProvider::new_with_model(Some("qwen3.5-9b"))
+            .expect("OnDeviceProvider::new_with_model failed — is the Qwen3.5-9B model available?"),
+    );
+
+    let enrichment = origin_core::eval::shared::EnrichmentMode::from_env(&enrich_model, cost_cap)
+        .expect("EnrichmentMode::from_env failed");
+
+    let reranker = origin_core::reranker::init_cross_encoder_reranker(None).expect(
+        "init_cross_encoder_reranker failed (downloads ~1.1GB bge-reranker-base on first run)",
+    );
+
+    let tuples = run_fullpipeline_lme_ce_ab(&lme_path, enrichment, llm, &output_path, reranker)
+        .await
+        .expect("run_fullpipeline_lme_ce_ab failed");
+
+    eprintln!(
+        "\n[generate_ce_ab_lme] Done: {} tuples saved to {:?}",
+        tuples.len(),
+        output_path
+    );
+}
+
+/// Judge CE A/B tuples and print McNemar report.
+///
+/// Load tuples from `ce_ab_lme_tuples.json`, judge via Haiku (or
+/// `LME_JUDGE_MODEL` override), then print the paired McNemar report.
+///
+/// For N>=3 runs, execute `generate_ce_ab_lme` N times and merge the
+/// tuple files before judging.
+///
+/// ```bash
+/// ORIGIN_GRAPH_MEMORY_STREAM=0 \
+/// ANTHROPIC_API_KEY=... \
+///   cargo test -p origin-core --test eval_harness judge_ce_ab_lme -- --ignored --nocapture
+/// ```
+#[tokio::test]
+#[ignore]
+async fn judge_ce_ab_lme() {
+    use origin_core::eval::judge::{
+        judge_with_claude_model_batched_persistent, load_judgment_tuples, paired_answer_mcnemar,
+    };
+
+    let baselines = origin_core::eval::shared::eval_baselines_dir_override()
+        .unwrap_or_else(|| eval_root().join("baselines"));
+    let tuples_path = baselines.join("ce_ab_lme_tuples.json");
+
+    if !tuples_path.exists() {
+        eprintln!(
+            "SKIP: {:?} not found. Run generate_ce_ab_lme first.",
+            tuples_path
+        );
+        return;
+    }
+
+    // The judge runs via the `claude` CLI (OAuth subscription, no API spend).
+    // ANTHROPIC_API_KEY must be UNSET for a $-free run: if it is set, the
+    // `claude` CLI bills the Anthropic API instead of the subscription. Warn
+    // loudly rather than require the key (the old `expect` forced the billing
+    // trap on every run).
+    if std::env::var("ANTHROPIC_API_KEY").is_ok() {
+        eprintln!(
+            "[judge_ce_ab_lme] WARNING: ANTHROPIC_API_KEY is set — the `claude` CLI will \
+             bill the API instead of your OAuth subscription. Unset it for a $-free run."
+        );
+    }
+
+    let judge_model = std::env::var("LME_JUDGE_MODEL")
+        .unwrap_or_else(|_| "claude-haiku-4-5-20251001".to_string());
+
+    let tuples = load_judgment_tuples(&tuples_path).expect("load_judgment_tuples failed");
+    eprintln!("[judge_ce_ab_lme] Loaded {} tuples", tuples.len());
+
+    let cache_path = baselines.join("ce_ab_lme_judge_cache.jsonl");
+    let results = judge_with_claude_model_batched_persistent(
+        &tuples,
+        10, // batch_size
+        3,  // rotation_calls
+        &judge_model,
+        &cache_path,
+        3, // max_retries
+    )
+    .await
+    .expect("judging failed");
+
+    let report = paired_answer_mcnemar(&results);
+
+    eprintln!("\n=== CE A/B McNemar Report ===");
+    eprintln!(
+        "n_pairs={} | OFF acc={:.4} | ON acc={:.4} | delta={:+.4}",
+        report.n_pairs, report.off_acc, report.on_acc, report.delta
+    );
+    eprintln!(
+        "b(off✓ on✗)={} | c(off✗ on✓)={} | stat={:.4} | p={:.4} | test={}",
+        report.b, report.c, report.stat, report.p_value, report.test_used
+    );
+    eprintln!(
+        "discordant pairs (b+c): {}{}",
+        report.n_discordant,
+        if report.underpowered {
+            "  [UNDERPOWERED: b+c < 10]"
+        } else {
+            ""
+        }
+    );
+    eprintln!("\nPer-category:");
+    for cat in &report.by_category {
+        eprintln!(
+            "  {:<30} n={:4} off={:.4} on={:.4} delta={:+.4} b={} c={}",
+            cat.category, cat.n_pairs, cat.off_acc, cat.on_acc, cat.delta, cat.b, cat.c
+        );
+    }
+
+    // Print JSON for machine consumption.
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&report).unwrap_or_default()
+    );
 }

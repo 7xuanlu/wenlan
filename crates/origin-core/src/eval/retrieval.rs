@@ -3742,6 +3742,7 @@ mod tests {
                 .to_string(),
             context_tokens: 50,
             category: String::new(),
+            question_id: String::new(),
         };
 
         let result = judge_single_tuple(&tuple).await.unwrap();
