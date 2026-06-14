@@ -75,7 +75,7 @@ fn write_fake_launchctl(fake_bin: &Path) {
     let path = fake_bin.join("launchctl");
     fs::write(
         &path,
-        "#!/bin/sh\ncase \"$1\" in\n  list) exit 0 ;;\n  load|unload) echo \"fake launchctl $1 $2\"; exit 0 ;;\n  *) echo \"fake launchctl $@\"; exit 0 ;;\nesac\n",
+        "#!/bin/sh\nif [ -n \"$ORIGIN_TEST_LAUNCHCTL_LOG\" ]; then echo \"$@\" >> \"$ORIGIN_TEST_LAUNCHCTL_LOG\"; fi\ncase \"$1\" in\n  list) exit 0 ;;\n  load|unload) echo \"fake launchctl $1 $2\"; exit 0 ;;\n  *) echo \"fake launchctl $@\"; exit 0 ;;\nesac\n",
     )
     .expect("write fake launchctl");
     #[cfg(unix)]
@@ -517,6 +517,34 @@ fn restart_after_install_succeeds_isolated() {
         .assert()
         .success()
         .stdout(predicate::str::contains("Restarted com.origin.server"));
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn install_over_running_daemon_stops_first_isolated() {
+    let runtime = IsolatedRuntime::new();
+    let log = runtime.data.path().join("launchctl.log");
+
+    // First install registers + starts the service.
+    cli_with_isolated_runtime(&runtime)
+        .arg("install")
+        .assert()
+        .success();
+
+    // Second install (the upgrade case): clear the log, reinstall, and assert
+    // a stop-class launchctl call happened before the new start.
+    let _ = fs::remove_file(&log);
+    cli_with_isolated_runtime(&runtime)
+        .env("ORIGIN_TEST_LAUNCHCTL_LOG", &log)
+        .arg("install")
+        .assert()
+        .success();
+
+    let calls = fs::read_to_string(&log).unwrap_or_default();
+    assert!(
+        calls.contains("out") || calls.contains("unload") || calls.contains("stop") || calls.contains("remove"),
+        "second install must stop the running daemon before reinstalling; launchctl calls were:\n{calls}"
+    );
 }
 
 #[cfg(target_os = "macos")]

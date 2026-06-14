@@ -194,6 +194,9 @@ pub fn install() -> Result<()> {
         // origin-server.
         let program = current_server_path()?;
         let program_str = program.to_string_lossy();
+        let _ = std::process::Command::new("schtasks.exe")
+            .args(["/end", "/tn", WINDOWS_TASK_NAME])
+            .output();
         run_schtasks(
             &[
                 "/create",
@@ -219,6 +222,14 @@ pub fn install() -> Result<()> {
     let label_value = label()?;
     let program = current_server_path()?;
     let m = manager()?;
+
+    // Stop any daemon already running under this label so the reinstall swaps
+    // the binary. Without this, the freshly-installed binary detects the
+    // healthy incumbent on port 7878 and exits, leaving the OLD daemon running
+    // (origin-server/src/main.rs:582-615). Best-effort: errors if not running.
+    let _ = m.stop(ServiceStopCtx {
+        label: label_value.clone(),
+    });
 
     // Apply RUST_LOG=info to every platform. launchd consumes
     // `EnvironmentVariables`, systemd-user consumes `Environment=`. winsw +
