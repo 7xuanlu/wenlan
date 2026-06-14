@@ -201,12 +201,28 @@ pub async fn judge_with_claude_model_persistent(
 
     let cached_keys: HashSet<(String, String)> = cached
         .iter()
-        .map(|r| (r.question.clone(), r.approach.clone()))
+        .map(|r| {
+            // Dedup key: question_id when present (fallback to text for
+            // pre-question_id caches), so two questions sharing text don't collide.
+            let k = if r.question_id.is_empty() {
+                r.question.clone()
+            } else {
+                r.question_id.clone()
+            };
+            (k, r.approach.clone())
+        })
         .collect();
 
     let todo: Vec<JudgmentTuple> = tuples
         .iter()
-        .filter(|t| !cached_keys.contains(&(t.question.clone(), t.approach.clone())))
+        .filter(|t| {
+            let k = if t.question_id.is_empty() {
+                t.question.clone()
+            } else {
+                t.question_id.clone()
+            };
+            !cached_keys.contains(&(k, t.approach.clone()))
+        })
         .cloned()
         .collect();
 
@@ -682,12 +698,28 @@ pub async fn judge_with_claude_model_batched_persistent(
 
     let cached_keys: HashSet<(String, String)> = cached
         .iter()
-        .map(|r| (r.question.clone(), r.approach.clone()))
+        .map(|r| {
+            // Dedup key: question_id when present (fallback to text for
+            // pre-question_id caches), so two questions sharing text don't collide.
+            let k = if r.question_id.is_empty() {
+                r.question.clone()
+            } else {
+                r.question_id.clone()
+            };
+            (k, r.approach.clone())
+        })
         .collect();
 
     let todo: Vec<&JudgmentTuple> = tuples
         .iter()
-        .filter(|t| !cached_keys.contains(&(t.question.clone(), t.approach.clone())))
+        .filter(|t| {
+            let k = if t.question_id.is_empty() {
+                t.question.clone()
+            } else {
+                t.question_id.clone()
+            };
+            !cached_keys.contains(&(k, t.approach.clone()))
+        })
         .collect();
 
     eprintln!(

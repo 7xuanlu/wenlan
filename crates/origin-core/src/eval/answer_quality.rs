@@ -2854,10 +2854,18 @@ pub async fn run_fullpipeline_lme_ce_ab(
         let mut off_qs: std::collections::HashSet<String> = std::collections::HashSet::new();
         let mut on_qs: std::collections::HashSet<String> = std::collections::HashSet::new();
         for t in &finished_tuples {
+            // Key on question_id (fallback to text for pre-question_id caches) so two
+            // questions sharing text are not treated as one done unit — mirrors the
+            // McNemar pairing key.
+            let k = if t.question_id.is_empty() {
+                t.question.clone()
+            } else {
+                t.question_id.clone()
+            };
             if t.approach.starts_with("ce_off_") {
-                off_qs.insert(t.question.clone());
+                off_qs.insert(k);
             } else if t.approach.starts_with("ce_on_") {
-                on_qs.insert(t.question.clone());
+                on_qs.insert(k);
             }
         }
         off_qs.intersection(&on_qs).cloned().collect()
@@ -2871,7 +2879,13 @@ pub async fn run_fullpipeline_lme_ce_ab(
     let mut save_counter = 0usize;
 
     for (q_idx, sample) in samples.iter().enumerate() {
-        if done_questions.contains(&sample.question) {
+        // Match the done-set key (question_id, fallback to text) — see build above.
+        let sample_key: &str = if sample.question_id.is_empty() {
+            sample.question.as_str()
+        } else {
+            sample.question_id.as_str()
+        };
+        if done_questions.contains(sample_key) {
             continue;
         }
 
