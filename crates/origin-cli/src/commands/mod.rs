@@ -14,4 +14,4 @@ pub mod store;
 
 #[cfg(not(target_os = "windows"))]
 pub use service::service_unit_path;
-pub use service::{install, is_installed, uninstall, SERVICE_LABEL};
+pub use service::{install, is_installed, restart, uninstall, SERVICE_LABEL};

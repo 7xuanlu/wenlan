@@ -11,6 +11,7 @@ use origin_core::prompts::PromptRegistry;
 use origin_core::quality_gate::QualityGate;
 use origin_core::reranker::Reranker;
 use origin_core::tuning::TuningConfig;
+use origin_types::responses::RerankerStatus;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::RwLock;
@@ -39,6 +40,10 @@ pub struct ServerState {
     /// startup via `origin_core::reranker::init_cross_encoder_reranker`. `None`
     /// means search falls back to embedding+FTS ordering with no rerank pass.
     pub reranker: Option<Arc<dyn Reranker>>,
+    /// Observable reranker state for `/api/status`. Distinguishes "never
+    /// enabled" (`Disabled`) from "requested but init failed" (`Failed`) —
+    /// both leave `reranker == None`.
+    pub reranker_status: RerankerStatus,
     /// Intelligence prompt templates.
     pub prompts: PromptRegistry,
     /// Intelligence tuning parameters.
@@ -73,6 +78,7 @@ impl Default for ServerState {
             synthesis_llm: None,
             external_llm: None,
             reranker: None,
+            reranker_status: RerankerStatus::Disabled,
             prompts: PromptRegistry::default(),
             tuning: TuningConfig::default(),
             access_tracker: AccessTracker::new(),

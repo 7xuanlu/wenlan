@@ -128,9 +128,18 @@ async fn run_daemon() -> anyhow::Result<()> {
 
     // Run migration-55 backfill (event_date regex Pass A + memory_entities Pass B)
     // before the HTTP listener binds so no ingest races the backfill. Idempotent.
-    db_arc.run_migration_55().await.map_err(|e| {
+    tracing::info!(
+        "Running first-boot data backfill (event dates + knowledge-graph links); \
+         this can take a moment on large databases…"
+    );
+    let m55 = db_arc.run_migration_55().await.map_err(|e| {
         anyhow::anyhow!("running migration 55 (event_date + memory_entities backfill): {e}")
     })?;
+    tracing::info!(
+        "First-boot backfill complete: scanned {} memories for dates, inserted {} entity links",
+        m55.event_dates_scanned,
+        m55.entity_links_inserted
+    );
 
     // Consolidate user-facing assets under ~/.origin/.
     // - Ensure ~/.origin/{pages, sessions, sessions/_status} exist
@@ -419,25 +428,36 @@ async fn run_daemon() -> anyhow::Result<()> {
     // ordering with no rerank pass.
     if std::env::var("ORIGIN_RERANKER_ENABLED").as_deref() == Ok("1") {
         let cache_dir = origin_core::db::resolve_fastembed_cache_dir(&data_dir);
+        tracing::info!(
+            "[reranker] enabling cross-encoder; first run downloads model weights \
+             (~1.1GB for the default bge-reranker-base). The daemon finishes starting \
+             once the model is ready\u{2026}"
+        );
         let init_result = tokio::task::spawn_blocking(move || {
             origin_core::reranker::init_cross_encoder_reranker(cache_dir)
         })
         .await;
         match init_result {
             Ok(Ok(reranker)) => {
-                tracing::info!(
-                    "[reranker] cross-encoder initialized (model={})",
-                    reranker.model_id()
-                );
+                let model_id = reranker.model_id().to_string();
+                tracing::info!("[reranker] cross-encoder initialized (model={model_id})");
+                server_state.reranker_status =
+                    origin_types::responses::RerankerStatus::Active { model_id };
                 server_state.reranker = Some(reranker);
             }
             Ok(Err(e)) => {
                 tracing::warn!("[reranker] init failed, falling back to embedding+FTS only: {e}");
+                server_state.reranker_status = origin_types::responses::RerankerStatus::Failed {
+                    reason: e.to_string(),
+                };
             }
             Err(e) => {
                 tracing::warn!(
                     "[reranker] init join failed, falling back to embedding+FTS only: {e}"
                 );
+                server_state.reranker_status = origin_types::responses::RerankerStatus::Failed {
+                    reason: e.to_string(),
+                };
             }
         }
     } else {
@@ -572,6 +592,16 @@ async fn run_daemon() -> anyhow::Result<()> {
             s.write_signal.clone()
         };
         scheduler::spawn_scheduler(shared.clone(), write_signal);
+    }
+
+    if origin_core::db::entity_sweep_enabled() {
+        tracing::info!(
+            "Background entity-enrichment sweep is ON: it backfills knowledge-graph \
+             links over existing memories via your configured LLM. Set \
+             ORIGIN_ENABLE_ENTITY_SWEEP=0 to disable."
+        );
+    } else {
+        tracing::info!("Background entity-enrichment sweep is OFF (ORIGIN_ENABLE_ENTITY_SWEEP).");
     }
 
     // Build router

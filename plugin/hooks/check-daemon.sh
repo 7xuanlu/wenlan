@@ -29,8 +29,9 @@ EXPECTED_VER=$(extract_version <"$PLUGIN_JSON")
 
 if [ -n "$DAEMON_VER" ] && [ -n "$EXPECTED_VER" ] && [ "$DAEMON_VER" != "$EXPECTED_VER" ]; then
   cat <<MSG
-[origin] daemon v${DAEMON_VER}, plugin expects v${EXPECTED_VER}. Upgrade:
-  curl -fsSL https://raw.githubusercontent.com/7xuanlu/origin/v${EXPECTED_VER}/install.sh | bash
+[origin] daemon v${DAEMON_VER}, plugin expects v${EXPECTED_VER}.
+  If you already upgraded, the daemon may not have restarted. Run: origin restart
+  Otherwise upgrade: curl -fsSL https://raw.githubusercontent.com/7xuanlu/origin/v${EXPECTED_VER}/install.sh | bash
 MSG
 fi
 
