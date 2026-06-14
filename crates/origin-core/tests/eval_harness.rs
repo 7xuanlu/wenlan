@@ -7783,6 +7783,7 @@ async fn smoke_tool_use_judge_returns_structured_verdict() {
         category: "single-session-user".to_string(),
         approach: "smoke".to_string(),
         context_tokens: 0,
+        question_id: String::new(),
     };
 
     let judge_model = std::env::var("EVAL_JUDGE_MODEL")

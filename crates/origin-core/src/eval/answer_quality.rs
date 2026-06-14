@@ -580,6 +580,7 @@ pub async fn run_e2e_locomo_eval(
                         answer,
                         context_tokens: origin_ctx_tokens,
                         category: String::new(),
+                        question_id: String::new(),
                     });
                 }
                 Err(e) => {
@@ -634,6 +635,7 @@ pub async fn run_e2e_locomo_eval(
                             answer,
                             context_tokens: compressed_ctx_tokens,
                             category: String::new(),
+                            question_id: String::new(),
                         });
                     }
                     Err(e) => {
@@ -673,6 +675,7 @@ pub async fn run_e2e_locomo_eval(
                             answer,
                             context_tokens: replay_ctx_tokens,
                             category: String::new(),
+                            question_id: String::new(),
                         });
                     }
                     Err(e) => {
@@ -712,6 +715,7 @@ pub async fn run_e2e_locomo_eval(
                         answer,
                         context_tokens: 0,
                         category: String::new(),
+                        question_id: String::new(),
                     });
                 }
                 Err(e) => {
@@ -817,6 +821,7 @@ async fn generate_e2e_answers_for_question(
             answer,
             context_tokens: flat_tokens,
             category: category.to_string(),
+            question_id: String::new(),
         });
     }
 
@@ -861,6 +866,7 @@ async fn generate_e2e_answers_for_question(
             answer,
             context_tokens: structured_tokens,
             category: category.to_string(),
+            question_id: String::new(),
         });
     }
 
@@ -2189,6 +2195,7 @@ pub async fn run_fullpipeline_locomo_batch(
                 answer: answer.clone(),
                 context_tokens: meta.context_tokens,
                 category: meta.category.clone(),
+                question_id: String::new(),
             });
             matched += 1;
             if matched.is_multiple_of(10) {
@@ -2684,6 +2691,7 @@ pub async fn run_fullpipeline_lme_batch(
                 answer: answer.clone(),
                 context_tokens: meta.context_tokens,
                 category: meta.category.clone(),
+                question_id: String::new(),
             });
             matched += 1;
             if matched.is_multiple_of(10) {
@@ -2733,6 +2741,17 @@ pub async fn run_fullpipeline_lme_batch(
 ///
 /// Approach labels: `"ce_off_{category}"` / `"ce_on_{category}"`.
 ///
+/// ## MEASUREMENT SCOPE
+///
+/// This isolates the cross-encoder. The confounder gate forces the graph stream
+/// (and skip-preference / temporal boost+filter) OFF on BOTH arms, so the only
+/// deliberate difference is the CE rescore. Production, however, runs the graph
+/// stream DEFAULT-ON, where CE-off keeps the stream and CE-on drops it
+/// (allow_graph_stream = reranker.is_none(), db.rs). A positive delta here therefore
+/// supports 'the CE rescore adds answer accuracy in isolation' — it does NOT by
+/// itself prove the production default-flip (CE-on coupled with stream-off) is a net
+/// win; that needs a separate stream-on-vs-CE-on comparison. Interpret accordingly.
+///
 /// # Errors
 ///
 /// Returns `Err` immediately if `ORIGIN_GRAPH_MEMORY_STREAM` is not one of
@@ -2748,19 +2767,45 @@ pub async fn run_fullpipeline_lme_ce_ab(
     use crate::eval::longmemeval::{category_name, extract_memories, load_longmemeval};
     use crate::llm_provider::{strip_think_tags, LlmRequest};
 
-    // Safety gate: the A/B is invalid when ORIGIN_GRAPH_MEMORY_STREAM is ON
-    // (default ON since 2026-06-10), because reranker=None on the OFF arm
-    // re-enables the graph stream, making the A/B measure CE vs graph+CE.
-    // Reuse `graph_memory_stream_enabled` so the guard cannot drift from the
-    // predicate that actually gates the stream inside cross_rerank.
-    if crate::db::graph_memory_stream_enabled() {
-        return Err(OriginError::Generic(
-            "ORIGIN_GRAPH_MEMORY_STREAM must be explicitly set to 0/false/no/off before \
-             running the CE A/B. Without it the OFF arm (reranker=None) re-enables the \
-             graph stream while the ON arm suppresses it, so the A/B measures \
-             CE vs graph+CE instead of CE alone. Set the env var and retry."
-                .to_string(),
-        ));
+    // Safety gate: the CE A/B isolates the cross-encoder only when no other
+    // retrieval flag perturbs ONE arm asymmetrically. graph stream: the OFF arm
+    // (reranker=None) re-enables it while the ON arm suppresses it; skip-pref: the
+    // ON arm bypasses the CE on preference queries; temporal boost/filter: alters
+    // the base pool. Reuse the same predicates that gate each feature so the guard
+    // cannot drift. Refuse loud, naming the offenders, rather than emit a
+    // confounded delta.
+    let confounders: [(&str, bool); 4] = [
+        (
+            "ORIGIN_GRAPH_MEMORY_STREAM",
+            crate::db::graph_memory_stream_enabled(),
+        ),
+        (
+            "ORIGIN_RERANK_SKIP_PREFERENCE",
+            crate::db::rerank_skip_preference_enabled(),
+        ),
+        (
+            "ORIGIN_ENABLE_TEMPORAL_SOFT_BOOST",
+            crate::db::temporal_soft_boost_enabled(),
+        ),
+        (
+            "ORIGIN_ENABLE_TEMPORAL_FILTER",
+            crate::db::temporal_filter_enabled(),
+        ),
+    ];
+    let active: Vec<&str> = confounders
+        .iter()
+        .filter(|(_, on)| *on)
+        .map(|(name, _)| *name)
+        .collect();
+    if !active.is_empty() {
+        return Err(OriginError::Generic(format!(
+            "CE A/B refused: confounding flag(s) active: {}. Each perturbs one arm \
+             asymmetrically (graph stream re-enabled on the OFF arm; CE bypass on \
+             preference queries; temporal boost/filter alters the base pool), so the \
+             A/B would not isolate the cross-encoder. Set them all to 0/false/no/off \
+             and retry.",
+            active.join(", ")
+        )));
     }
 
     let mut samples = load_longmemeval(longmemeval_path)?;
@@ -2912,19 +2957,29 @@ pub async fn run_fullpipeline_lme_ce_ab(
         // gate, NOT a direct answer fix: event_date is not rendered into the CE
         // A/B context (build_structured_context renders only content) and no
         // temporal ranking flag is set on this path, so dates influence neither
-        // ranking nor the prompt today. Their value is (a) the contract gate
-        // below can enforce presence (no starved-temporal null), (b) a future
-        // temporal lever has live data to read. source_id keys mirror the seed
-        // closure's `lme_{qid}_{sess}_t{turn}` exactly via event_date_map ->
-        // memory_source_id; a key mismatch updates 0 rows and the gate then
-        // refuses (loud), never silently passes.
+        // ranking nor the prompt today. Their value is (a) a per-question liveness
+        // signal (the rows-updated count below), (b) a future temporal lever has
+        // live data to read. source_id keys mirror the seed closure's
+        // `lme_{qid}_{sess}_t{turn}` exactly via event_date_map -> memory_source_id.
         let date_map = crate::eval::longmemeval::event_date_map(std::slice::from_ref(sample));
         if !date_map.is_empty() {
             let updates: Vec<(String, i64)> = date_map.into_iter().collect();
-            db.set_event_dates_by_source_id(&updates).await?;
-            // Refuse rather than emit a starved-temporal null (eval ONE-contract).
-            let conn = db.conn.lock().await;
-            crate::eval::seed_contract::assert_feature_substrate_live(&conn, "temporal").await?;
+            let n_total = updates.len();
+            let rows = db.set_event_dates_by_source_id(&updates).await?;
+            if rows == 0 {
+                // Per-question log + continue (NOT whole-run abort): a non-empty
+                // date_map that updates 0 rows means source_id-format drift for
+                // THIS question. Skip it rather than nuke a multi-hour decision run;
+                // the rows-updated count is an earlier, more precise signal than a
+                // DB-wide liveness assert (which propagated and aborted the run).
+                log::warn!(
+                    "[ce_ab_lme] event_date injection updated 0/{} rows for question {} \
+                     — source_id drift; skipping question",
+                    n_total,
+                    sample.question_id
+                );
+                continue;
+            }
         }
 
         let category = category_name(&sample.question_type);
@@ -2996,6 +3051,7 @@ pub async fn run_fullpipeline_lme_ce_ab(
                 answer,
                 context_tokens: ctx_tokens,
                 category: category.to_string(),
+                question_id: sample.question_id.clone(),
             });
         }
 

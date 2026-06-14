@@ -41,6 +41,12 @@ pub struct JudgmentTuple {
     /// "single-hop"). Defaults to empty for backward compat with existing JSON.
     #[serde(default)]
     pub category: String,
+    /// Stable question identifier used to pair arms in `paired_answer_mcnemar`.
+    /// Pairing on question TEXT collapses distinct questions that share text;
+    /// keying on this id is correct-by-construction. Empty for non-paired paths
+    /// and old JSON (the pairing falls back to question text when empty).
+    #[serde(default)]
+    pub question_id: String,
 }
 
 /// Result from the LLM judge.
@@ -52,6 +58,10 @@ pub struct JudgmentResult {
     pub score: u8,
     pub reason: String,
     pub context_tokens: usize,
+    /// Stable question identifier carried from the `JudgmentTuple`. Used to pair
+    /// arms in `paired_answer_mcnemar` (falls back to question text when empty).
+    #[serde(default)]
+    pub question_id: String,
 }
 
 // Cost telemetry has been moved to `cli_batch::CliCostInfo` and is shared across
@@ -509,6 +519,7 @@ pub async fn judge_single_tuple_model_with_cost(
             score,
             reason,
             context_tokens: tuple.context_tokens,
+            question_id: tuple.question_id.clone(),
         },
         cost,
     ))
@@ -791,6 +802,7 @@ pub async fn judge_with_claude_model_batched_persistent(
                         score: *score,
                         reason: reason.clone(),
                         context_tokens: tuple.context_tokens,
+                        question_id: tuple.question_id.clone(),
                     };
                     let line = match serde_json::to_string(&r) {
                         Ok(s) => s,
@@ -1197,6 +1209,7 @@ pub async fn judge_with_batch_api(
             score,
             reason,
             context_tokens: tuple.context_tokens,
+            question_id: tuple.question_id.clone(),
         });
     }
 
@@ -1739,15 +1752,21 @@ pub struct McNemarCategory {
 pub fn paired_answer_mcnemar(results: &[JudgmentResult]) -> McNemarReport {
     use std::collections::HashMap;
 
-    // Collect per-question score for each arm. Key = question text.
-    let mut off_map: HashMap<&str, (u8, String)> = HashMap::new(); // question -> (score, category)
+    // Collect per-question score for each arm. Key = question_id when present,
+    // else question text (distinct questions sharing text must not collapse).
+    let mut off_map: HashMap<&str, (u8, String)> = HashMap::new(); // key -> (score, category)
     let mut on_map: HashMap<&str, u8> = HashMap::new();
 
     for r in results {
+        let key: &str = if r.question_id.is_empty() {
+            r.question.as_str()
+        } else {
+            r.question_id.as_str()
+        };
         if let Some(cat) = r.approach.strip_prefix("ce_off_") {
-            off_map.insert(r.question.as_str(), (r.score, cat.to_string()));
+            off_map.insert(key, (r.score, cat.to_string()));
         } else if r.approach.starts_with("ce_on_") {
-            on_map.insert(r.question.as_str(), r.score);
+            on_map.insert(key, r.score);
         }
     }
 
@@ -1963,6 +1982,7 @@ mod mcnemar_tests {
             score,
             reason: String::new(),
             context_tokens: 0,
+            question_id: String::new(),
         }
     }
 
@@ -2226,5 +2246,53 @@ mod mcnemar_tests {
             "p={} expected ~1.1924e-7",
             r.p_value
         );
+    }
+
+    #[test]
+    fn mcnemar_pairs_on_question_id_not_text() {
+        // Two distinct questions share identical question text but have different question_ids.
+        // With old text-keying both collapse into one pair (collision → n_pairs=1).
+        // With question_id keying they are treated as separate pairs (n_pairs=2).
+        let results = vec![
+            JudgmentResult {
+                question: "same question text".to_string(),
+                approach: "ce_off_single-hop".to_string(),
+                score: 1,
+                reason: String::new(),
+                context_tokens: 0,
+                question_id: "q_a".to_string(),
+            },
+            JudgmentResult {
+                question: "same question text".to_string(),
+                approach: "ce_on_single-hop".to_string(),
+                score: 0,
+                reason: String::new(),
+                context_tokens: 0,
+                question_id: "q_a".to_string(),
+            },
+            JudgmentResult {
+                question: "same question text".to_string(),
+                approach: "ce_off_single-hop".to_string(),
+                score: 0,
+                reason: String::new(),
+                context_tokens: 0,
+                question_id: "q_b".to_string(),
+            },
+            JudgmentResult {
+                question: "same question text".to_string(),
+                approach: "ce_on_single-hop".to_string(),
+                score: 1,
+                reason: String::new(),
+                context_tokens: 0,
+                question_id: "q_b".to_string(),
+            },
+        ];
+        let report = paired_answer_mcnemar(&results);
+        assert_eq!(
+            report.n_pairs, 2,
+            "should be 2 distinct pairs keyed by question_id"
+        );
+        assert_eq!(report.b, 1, "q_a: off=1,on=0 → b");
+        assert_eq!(report.c, 1, "q_b: off=0,on=1 → c");
     }
 }
