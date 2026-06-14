@@ -88,6 +88,17 @@ npx -y @7xuanlu/origin setup
 
 Then start with `~/.origin/bin/origin status`, `~/.origin/bin/origin recall <query>`, or `~/.origin/bin/origin store <text>`. CLI details: [crates/origin-cli](crates/origin-cli/README.md).
 
+Service management:
+
+```bash
+origin install            # register + start the daemon (stops a running one first)
+origin restart            # stop + start the daemon -- run this after upgrading
+origin status
+origin uninstall
+```
+
+After upgrading Origin (`npx -y @7xuanlu/origin setup` or `install.sh`), the new binary is on disk but the already-running daemon keeps serving the old code until you restart it. `origin install` now restarts automatically; if you upgraded another way, run `origin restart`.
+
 ---
 
 ## How Origin works
