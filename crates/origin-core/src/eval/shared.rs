@@ -665,14 +665,69 @@ pub fn scenario_db_dir(baselines_dir: &Path, benchmark: &str, scenario_id: &str)
 struct ScenarioCacheEnv {
     schema_db_version: u32,
     migrations_hash: String,
+    #[serde(default)]
+    enricher_provider: String,
+    #[serde(default)]
+    enricher_model: String,
 }
 
-fn current_cache_env() -> ScenarioCacheEnv {
+fn current_cache_env(enrichment: &EnrichmentMode) -> ScenarioCacheEnv {
+    let (enricher_provider, enricher_model) = enrichment.provenance();
     ScenarioCacheEnv {
         schema_db_version: crate::db::SCHEMA_VERSION,
         migrations_hash: option_env!("ORIGIN_MIGRATIONS_HASH")
             .unwrap_or("unknown")
             .to_string(),
+        enricher_provider,
+        enricher_model,
+    }
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum CacheStampDecision {
+    Reuse,
+    MigrateStale,
+    Wipe,
+    Refuse,
+}
+
+fn provenance_matches(stored: &ScenarioCacheEnv, want: &ScenarioCacheEnv) -> bool {
+    // Empty (unstamped) fields never match a populated `want`.
+    !stored.enricher_provider.is_empty()
+        && !stored.enricher_model.is_empty()
+        && stored.enricher_provider == want.enricher_provider
+        && stored.enricher_model == want.enricher_model
+}
+
+fn decide_cache_stamp(
+    stored: Option<&ScenarioCacheEnv>,
+    want: &ScenarioCacheEnv,
+    db_exists: bool,
+    migrate_stale: bool,
+    allow_wipe: bool,
+) -> CacheStampDecision {
+    match stored {
+        Some(s) if s == want => CacheStampDecision::Reuse,
+        Some(s) => {
+            if migrate_stale && provenance_matches(s, want) {
+                CacheStampDecision::MigrateStale
+            } else if allow_wipe {
+                CacheStampDecision::Wipe
+            } else {
+                CacheStampDecision::Refuse
+            }
+        }
+        None => {
+            if db_exists {
+                if allow_wipe {
+                    CacheStampDecision::Wipe
+                } else {
+                    CacheStampDecision::Refuse
+                }
+            } else {
+                CacheStampDecision::Reuse
+            }
+        }
     }
 }
 
@@ -711,32 +766,43 @@ where
     // Cache invalidation by schema/migrations stamp. If the on-disk stamp
     // disagrees with the build's stamp, the cached DB is stale.
     let cache_env_path = db_dir.join("cache_env.json");
-    let want = current_cache_env();
-    let stamp_match = match std::fs::read(&cache_env_path) {
-        Ok(bytes) => match serde_json::from_slice::<ScenarioCacheEnv>(&bytes) {
-            Ok(stored) => stored == want,
-            Err(_) => false,
-        },
-        Err(_) => !db_dir.join("origin_memory.db").exists(),
-    };
-    if !stamp_match {
-        if std::env::var("EVAL_ALLOW_WIPE").as_deref() != Ok("1") {
+    let want = current_cache_env(enrichment);
+    let db_file = db_dir.join("origin_memory.db");
+    let db_exists = db_file.exists();
+    let stored_opt: Option<ScenarioCacheEnv> = std::fs::read(&cache_env_path)
+        .ok()
+        .and_then(|bytes| serde_json::from_slice(&bytes).ok());
+    let migrate_stale = std::env::var("EVAL_MIGRATE_STALE").as_deref() == Ok("1");
+    let allow_wipe = std::env::var("EVAL_ALLOW_WIPE").as_deref() == Ok("1");
+    let stamp_decision = decide_cache_stamp(
+        stored_opt.as_ref(),
+        &want,
+        db_exists,
+        migrate_stale,
+        allow_wipe,
+    );
+    let attempt_migrate = match stamp_decision {
+        CacheStampDecision::Reuse => false,
+        CacheStampDecision::Wipe => {
+            log::warn!(
+                "[scenario_db] cache_env mismatch at {} — wiping (EVAL_ALLOW_WIPE=1)",
+                db_dir.display()
+            );
+            if db_file.exists() {
+                std::fs::remove_file(&db_file)
+                    .map_err(|e| OriginError::Generic(format!("remove stale scenario.db: {e}")))?;
+            }
+            false
+        }
+        CacheStampDecision::Refuse => {
             return Err(OriginError::Generic(format!(
                 "[scenario_db] cache_env mismatch at {} (schema/migrations changed). \
                  Set EVAL_ALLOW_WIPE=1 to wipe and reseed, or migrate manually.",
                 db_dir.display()
             )));
         }
-        log::warn!(
-            "[scenario_db] cache_env mismatch at {} — wiping (EVAL_ALLOW_WIPE=1)",
-            db_dir.display()
-        );
-        let db_file = db_dir.join("origin_memory.db");
-        if db_file.exists() {
-            std::fs::remove_file(&db_file)
-                .map_err(|e| OriginError::Generic(format!("remove stale scenario.db: {e}")))?;
-        }
-    }
+        CacheStampDecision::MigrateStale => true,
+    };
 
     let db = MemoryDB::new_with_shared_embedder(
         db_dir,
@@ -747,6 +813,31 @@ where
 
     let mem_count = db.memory_count().await.unwrap_or(0);
     let enriched = db.enriched_memory_count().await.unwrap_or(0);
+
+    if attempt_migrate {
+        if mem_count == 0 || enriched != mem_count {
+            return Err(OriginError::Generic(format!(
+                "[scenario_db] stale DB at {} is not fully enriched ({}/{} enriched). \
+                 Cannot migrate — must re-seed. Set EVAL_ALLOW_WIPE=1 to wipe and reseed.",
+                db_dir.display(),
+                enriched,
+                mem_count
+            )));
+        }
+        {
+            let conn = db.conn.lock().await;
+            crate::eval::seed_contract::assert_feature_substrate_live(&conn, "temporal").await?;
+            crate::eval::seed_contract::assert_feature_substrate_live(&conn, "graph").await?;
+            crate::eval::seed_contract::assert_feature_substrate_live(&conn, "pages").await?;
+        }
+        log::info!(
+            "[scenario_db] migrate_stale: schema migrated, substrate live at {} ({} memories)",
+            db_dir.display(),
+            mem_count
+        );
+        write_cache_env_stamp(&cache_env_path, &want);
+        return Ok(db);
+    }
 
     if mem_count > 0 && enriched == mem_count {
         // Entity/title/page enrichment is complete (`enriched_memory_count` tracks
@@ -914,6 +1005,16 @@ pub enum EnrichmentMode {
 }
 
 impl EnrichmentMode {
+    fn provenance(&self) -> (String, String) {
+        match self {
+            EnrichmentMode::OnDevice(llm) => (llm.kind().to_string(), llm.model_id()),
+            EnrichmentMode::BatchApi { model, .. } => {
+                ("anthropic-batch".to_string(), model.clone())
+            }
+            EnrichmentMode::Cli { model, .. } => ("cli".to_string(), model.clone()),
+        }
+    }
+
     /// Construct from environment.
     ///
     /// - `EVAL_ENRICHMENT=cloud` (or `batch`) → `BatchApi` (requires `ANTHROPIC_API_KEY`).
@@ -2351,6 +2452,8 @@ mod tests {
         let want = ScenarioCacheEnv {
             schema_db_version: 99,
             migrations_hash: "abc123".to_string(),
+            enricher_provider: "on-device".to_string(),
+            enricher_model: "qwen3-4b".to_string(),
         };
         let tmp = tempfile::tempdir().unwrap();
         let path = tmp.path().join("cache_env.json");
@@ -2479,6 +2582,13 @@ mod tests {
             source_text: None,
         };
 
+        // Create the mode upfront so the cache stamp and the re-open use the same provenance.
+        let llm: Arc<dyn LlmProvider> = Arc::new(SequencedMockProvider::new(vec![
+            r#"{"memory_type":"decision","domain":"infra","quality":"high","importance":7,"tags":["db"]}"#,
+            r#"{"event_date":"2026-03-01","retrieval_cue":"db choice billing"}"#,
+        ]));
+        let mode = EnrichmentMode::OnDevice(llm);
+
         // Build the "pre-classification cache" state: seed + mark enriched (the
         // entity/title marker) but leave importance NULL, and stamp cache_env so
         // the re-open is a stamp-match cache hit (not a wipe).
@@ -2502,15 +2612,11 @@ mod tests {
                     .len(),
                 1
             );
-            write_cache_env_stamp(&dir.path().join("cache_env.json"), &current_cache_env());
+            write_cache_env_stamp(
+                &dir.path().join("cache_env.json"),
+                &current_cache_env(&mode),
+            );
         }
-
-        // Re-open via the cache path with an OnDevice mock (classify then extract).
-        let llm: Arc<dyn LlmProvider> = Arc::new(SequencedMockProvider::new(vec![
-            r#"{"memory_type":"decision","domain":"infra","quality":"high","importance":7,"tags":["db"]}"#,
-            r#"{"event_date":"2026-03-01","retrieval_cue":"db choice billing"}"#,
-        ]));
-        let mode = EnrichmentMode::OnDevice(llm);
 
         // Empty seed closure: it's a cache hit, so no re-seed should occur.
         let db = open_or_seed_scenario_db(dir.path(), emb.clone(), Vec::new, &mode)
@@ -2558,6 +2664,86 @@ mod tests {
         assert_eq!(
             ce_channel_touched_static("page_channel", "q", &[], &[]),
             None
+        );
+    }
+
+    /// Task 2.5 — provenance-stamped EVAL_MIGRATE_STALE.
+    ///
+    /// `decide_cache_stamp` must allow migration ONLY when the stored stamp's
+    /// enricher provenance matches the current run's provenance. A schema-59 DB
+    /// stamped with "on-device / qwen3.5-9b" migrates under EVAL_MIGRATE_STALE=1.
+    /// A DB stamped with "anthropic-batch / haiku" — or an UNSTAMPED legacy DB
+    /// (empty enricher fields from `#[serde(default)]`) — is REFUSED even with the
+    /// flag. This prevents cloud-substrate laundering onto on-device headline runs.
+    #[test]
+    fn migrate_stale_requires_matching_provenance() {
+        let want = ScenarioCacheEnv {
+            schema_db_version: crate::db::SCHEMA_VERSION,
+            migrations_hash: option_env!("ORIGIN_MIGRATIONS_HASH")
+                .unwrap_or("unknown")
+                .to_string(),
+            enricher_provider: "on-device".to_string(),
+            enricher_model: "qwen3.5-9b".to_string(),
+        };
+
+        // Case 1: stored is schema-59 but same provider/model → MigrateStale.
+        let stored_qwen = ScenarioCacheEnv {
+            schema_db_version: 59,
+            migrations_hash: "old-hash".to_string(),
+            enricher_provider: "on-device".to_string(),
+            enricher_model: "qwen3.5-9b".to_string(),
+        };
+        assert_eq!(
+            decide_cache_stamp(Some(&stored_qwen), &want, true, true, false),
+            CacheStampDecision::MigrateStale,
+            "same provenance, schema diff + migrate_stale=true → MigrateStale"
+        );
+
+        // Case 2: stored is cloud-enriched (haiku) → Refuse even with migrate_stale.
+        let stored_haiku = ScenarioCacheEnv {
+            schema_db_version: 59,
+            migrations_hash: "old-hash".to_string(),
+            enricher_provider: "anthropic-batch".to_string(),
+            enricher_model: "haiku".to_string(),
+        };
+        assert_eq!(
+            decide_cache_stamp(Some(&stored_haiku), &want, true, true, false),
+            CacheStampDecision::Refuse,
+            "cloud provenance mismatch → Refuse even with migrate_stale=true"
+        );
+
+        // Case 3: stored is unstamped legacy (empty enricher fields) → Refuse.
+        let stored_unstamped = ScenarioCacheEnv {
+            schema_db_version: 59,
+            migrations_hash: "old-hash".to_string(),
+            enricher_provider: String::new(),
+            enricher_model: String::new(),
+        };
+        assert_eq!(
+            decide_cache_stamp(Some(&stored_unstamped), &want, true, true, false),
+            CacheStampDecision::Refuse,
+            "unstamped legacy DB → Refuse (must re-seed for on-device headline)"
+        );
+
+        // Case 4: same provenance but migrate_stale=false → Refuse (flag required).
+        assert_eq!(
+            decide_cache_stamp(Some(&stored_qwen), &want, true, false, false),
+            CacheStampDecision::Refuse,
+            "matching provenance but migrate_stale=false → Refuse"
+        );
+
+        // Case 5: exact stamp match → Reuse (no wipe, no migrate needed).
+        assert_eq!(
+            decide_cache_stamp(Some(&want), &want, true, false, false),
+            CacheStampDecision::Reuse,
+            "exact match → Reuse"
+        );
+
+        // Case 6: mismatch + allow_wipe → Wipe.
+        assert_eq!(
+            decide_cache_stamp(Some(&stored_haiku), &want, true, false, true),
+            CacheStampDecision::Wipe,
+            "mismatch + allow_wipe → Wipe"
         );
     }
 }
