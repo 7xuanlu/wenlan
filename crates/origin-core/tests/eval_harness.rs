@@ -8911,3 +8911,177 @@ async fn judge_ce_ab_lme() {
         serde_json::to_string_pretty(&report).unwrap_or_default()
     );
 }
+
+/// BEST-POSSIBLE CEILING: single-arm full-stack answer accuracy on GOLD (oracle).
+///
+/// Unlike the CE A/B (which forces every feature OFF to isolate the cross-encoder),
+/// this runs ONE arm with the full production stack turned ON and just measures how
+/// accurately Origin answers the gold/oracle questions. Answers what the CE A/Bs
+/// never could: "how good are we with everything on?" Pairs with
+/// `judge_lme_fullstack_ceiling` for the accuracy report.
+///
+/// GOLD = `longmemeval_oracle.json` via `DbSource::SeedPerQuestion` (each question's
+/// own evidence sessions, the easy/oracle retrieval setting). Enrichment runs per
+/// question (classify + entities + distill), so pages/graph substrate exists.
+///
+/// "Best-possible" = the operator turns the feature flags ON. RECOMMENDED env:
+/// ```bash
+/// ORIGIN_ENABLE_PAGE_CHANNEL=1 ORIGIN_GRAPH_MEMORY_STREAM=1 \
+/// ORIGIN_ENABLE_TEMPORAL_SOFT_BOOST=1 RERANK_POOL_FLOOR=50 \
+/// EVAL_BASELINES_DIR=$HOME/.cache/origin-eval-ceiling \
+///   cargo test -p origin-core --test eval_harness --features eval-harness \
+///   generate_lme_fullstack_ceiling -- --ignored --nocapture
+/// ```
+/// NOTE: on the CE path the live graph stream is structurally suppressed
+/// (`allow_graph_stream = reranker.is_none()`), so `ORIGIN_GRAPH_MEMORY_STREAM=1`
+/// contributes via entity-linked memories already in the pool, not the live stream.
+#[tokio::test]
+#[ignore]
+async fn generate_lme_fullstack_ceiling() {
+    use origin_core::eval::answer_quality::{run_fullpipeline_lme, ArmSpec, DbSource};
+    use origin_core::llm_provider::{LlmProvider, OnDeviceProvider};
+    use std::sync::Arc;
+
+    let lme_path = eval_root().join("data/longmemeval_oracle.json");
+    if !lme_path.exists() {
+        eprintln!("SKIP: longmemeval_oracle.json not found at {:?}", lme_path);
+        return;
+    }
+
+    let enrich_model =
+        std::env::var("EVAL_ANSWER_MODEL").unwrap_or_else(|_| "claude-haiku-4-5-20251001".into());
+    let cost_cap: f64 = std::env::var("EVAL_COST_CAP")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(10.0);
+
+    let baselines = origin_core::eval::shared::eval_baselines_dir_override()
+        .unwrap_or_else(|| eval_root().join("baselines"));
+    std::fs::create_dir_all(&baselines).ok();
+    let output_path = baselines.join("lme_fullstack_ceiling_tuples.json");
+
+    // Receipt: echo the effective feature config so the baseline can't lie about
+    // what "full stack" meant for this run.
+    eprintln!(
+        "[generate_lme_fullstack_ceiling] FULL-STACK config:\n  \
+         page_channel={}  graph_stream_flag={}  temporal_soft_boost={}  temporal_filter={}\n  \
+         RERANK_POOL_FLOOR={}  RERANK_POOL_MULTIPLIER={}\n  \
+         answer model: on-device qwen3.5-9b (temp 0.0)\n  enrich model: {}\n  output: {:?}",
+        origin_core::db::page_channel_enabled(),
+        origin_core::db::graph_memory_stream_enabled(),
+        origin_core::db::temporal_soft_boost_enabled(),
+        origin_core::db::temporal_filter_enabled(),
+        std::env::var("RERANK_POOL_FLOOR").unwrap_or_else(|_| "10 (default)".into()),
+        std::env::var("RERANK_POOL_MULTIPLIER").unwrap_or_else(|_| "1 (default)".into()),
+        enrich_model,
+        output_path,
+    );
+
+    let llm: Arc<dyn LlmProvider> = Arc::new(
+        OnDeviceProvider::new_with_model(Some("qwen3.5-9b"))
+            .expect("OnDeviceProvider::new_with_model failed — is the Qwen3.5-9B model available?"),
+    );
+
+    let enrichment = origin_core::eval::shared::EnrichmentMode::from_env(&enrich_model, cost_cap)
+        .expect("EnrichmentMode::from_env failed");
+
+    let reranker = origin_core::reranker::init_cross_encoder_reranker(None).expect(
+        "init_cross_encoder_reranker failed (downloads ~1.1GB bge-reranker-base on first run)",
+    );
+
+    let tuples = run_fullpipeline_lme(
+        &lme_path,
+        enrichment,
+        llm,
+        Some(reranker),
+        &ArmSpec::full_stack(),
+        DbSource::SeedPerQuestion,
+        &output_path,
+    )
+    .await
+    .expect("run_fullpipeline_lme (full_stack) failed");
+
+    eprintln!(
+        "\n[generate_lme_fullstack_ceiling] Done: {} tuples saved to {:?}",
+        tuples.len(),
+        output_path
+    );
+}
+
+/// Judge the full-stack ceiling tuples → single-arm ACCURACY (per category +
+/// overall). No McNemar (single arm); uses `aggregate_judgments`, where each arm
+/// label is `fullstack_{category}` so per-approach rows ARE per-category accuracy.
+///
+/// ```bash
+/// EVAL_BASELINES_DIR=$HOME/.cache/origin-eval-ceiling \
+///   cargo test -p origin-core --test eval_harness --features eval-harness \
+///   judge_lme_fullstack_ceiling -- --ignored --nocapture
+/// ```
+#[tokio::test]
+#[ignore]
+async fn judge_lme_fullstack_ceiling() {
+    use origin_core::eval::judge::{
+        aggregate_judgments, judge_with_claude_model_batched_persistent, load_judgment_tuples,
+    };
+
+    let baselines = origin_core::eval::shared::eval_baselines_dir_override()
+        .unwrap_or_else(|| eval_root().join("baselines"));
+    let tuples_path = baselines.join("lme_fullstack_ceiling_tuples.json");
+    if !tuples_path.exists() {
+        eprintln!(
+            "SKIP: {:?} not found. Run generate_lme_fullstack_ceiling first.",
+            tuples_path
+        );
+        return;
+    }
+
+    if std::env::var("ANTHROPIC_API_KEY").is_ok() {
+        eprintln!(
+            "[judge_lme_fullstack_ceiling] WARNING: ANTHROPIC_API_KEY is set — the `claude` CLI \
+             will bill the API instead of your OAuth subscription. Unset it for a $-free run."
+        );
+    }
+
+    let judge_model = std::env::var("LME_JUDGE_MODEL")
+        .unwrap_or_else(|_| "claude-haiku-4-5-20251001".to_string());
+    let tuples = load_judgment_tuples(&tuples_path).expect("load_judgment_tuples failed");
+    eprintln!(
+        "[judge_lme_fullstack_ceiling] Loaded {} tuples",
+        tuples.len()
+    );
+
+    let cache_path = baselines.join("lme_fullstack_ceiling_judge_cache.jsonl");
+    let results =
+        judge_with_claude_model_batched_persistent(&tuples, 10, 3, &judge_model, &cache_path, 3)
+            .await
+            .expect("judging failed");
+
+    let report = aggregate_judgments(&results, &judge_model);
+    let total: usize = report.results_by_approach.iter().map(|r| r.total).sum();
+    let correct: usize = report.results_by_approach.iter().map(|r| r.correct).sum();
+    let overall = correct as f64 / (total.max(1)) as f64;
+
+    eprintln!("\n=== LME FULL-STACK CEILING (gold/oracle) ===");
+    eprintln!("OVERALL accuracy = {:.4} ({}/{})", overall, correct, total);
+    eprintln!("\nPer-category (approach = fullstack_<category>):");
+    let mut rows = report.results_by_approach.clone();
+    rows.sort_by(|a, b| a.approach.cmp(&b.approach));
+    for r in &rows {
+        eprintln!(
+            "  {:<40} acc={:.4} ({}/{})  mean_ctx_tokens={:.0}",
+            r.approach, r.accuracy, r.correct, r.total, r.mean_context_tokens
+        );
+    }
+
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&serde_json::json!({
+            "overall_accuracy": overall,
+            "total": total,
+            "correct": correct,
+            "by_approach": report.results_by_approach,
+            "judge_model": judge_model,
+        }))
+        .unwrap_or_default()
+    );
+}

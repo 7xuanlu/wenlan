@@ -2728,6 +2728,17 @@ pub enum ArmKind {
     CeOff,
     /// CE on: CrossRerank(Some(reranker)).
     CeOn,
+    /// Full production stack, single arm: CrossRerank(Some(reranker)) with all
+    /// feature env flags left ON by the operator (page channel / graph stream /
+    /// temporal / deep `RERANK_POOL_FLOOR`). Used by the "best-possible ceiling"
+    /// run to measure how good Origin can answer with everything turned on, NOT
+    /// for an isolated A/B. Resolves to the same retrieval as `CeOn`; the
+    /// difference is the surrounding env flags + that no confounder isolation is
+    /// enforced (there is no OFF arm to perturb asymmetrically). Note: on this
+    /// CE path the live graph stream is structurally suppressed
+    /// (`allow_graph_stream = reranker.is_none()`, db.rs), so graph contributes
+    /// via entity-linked memories already in the pool, not the live stream.
+    FullStack,
     // PR-3 will add CeOnGraph -> CrossRerankGraph. Do NOT add it now.
 }
 
@@ -2737,6 +2748,7 @@ impl ArmKind {
         match self {
             ArmKind::CeOff => "ce_off",
             ArmKind::CeOn => "ce_on",
+            ArmKind::FullStack => "fullstack",
         }
     }
 }
@@ -2753,6 +2765,25 @@ impl ArmSpec {
         ArmSpec {
             arms: vec![ArmKind::CeOff, ArmKind::CeOn],
         }
+    }
+
+    /// Single-arm "best-possible ceiling": [FullStack]. All feature env flags are
+    /// the operator's responsibility (page channel / graph / temporal / deep
+    /// `RERANK_POOL_FLOOR`); this spec just runs one CE-reranked arm and measures
+    /// its accuracy, with NO confounder isolation (see `needs_confounder_isolation`).
+    pub fn full_stack() -> Self {
+        ArmSpec {
+            arms: vec![ArmKind::FullStack],
+        }
+    }
+
+    /// Whether this spec is a CE isolation A/B that must run with the graph
+    /// stream / skip-pref / temporal flags OFF. True iff a `CeOff` arm is present:
+    /// the OFF arm (reranker=None) is the one those flags would perturb
+    /// asymmetrically vs an ON arm. A single-arm ceiling (`full_stack`) has no
+    /// OFF arm, so the isolation gate does not apply — features are meant to be ON.
+    fn needs_confounder_isolation(&self) -> bool {
+        self.arms.contains(&ArmKind::CeOff)
     }
 
     /// One label per arm for a given category, in order.
@@ -2783,7 +2814,7 @@ impl ArmSpec {
             let label = format!("{}_{}", arm.label_prefix(), category);
             let retrieval = match arm {
                 ArmKind::CeOff => CtxRetrieval::CrossRerank(None),
-                ArmKind::CeOn => {
+                ArmKind::CeOn | ArmKind::FullStack => {
                     let r = reranker.clone().ok_or_else(|| {
                         OriginError::Generic(format!(
                             "ArmSpec::resolve: arm {} requires a reranker but none was provided",
@@ -2890,38 +2921,44 @@ pub async fn run_fullpipeline_lme(
     // the base pool. Reuse the same predicates that gate each feature so the guard
     // cannot drift. Refuse loud, naming the offenders, rather than emit a
     // confounded delta.
-    let confounders: [(&str, bool); 4] = [
-        (
-            "ORIGIN_GRAPH_MEMORY_STREAM",
-            crate::db::graph_memory_stream_enabled(),
-        ),
-        (
-            "ORIGIN_RERANK_SKIP_PREFERENCE",
-            crate::db::rerank_skip_preference_enabled(),
-        ),
-        (
-            "ORIGIN_ENABLE_TEMPORAL_SOFT_BOOST",
-            crate::db::temporal_soft_boost_enabled(),
-        ),
-        (
-            "ORIGIN_ENABLE_TEMPORAL_FILTER",
-            crate::db::temporal_filter_enabled(),
-        ),
-    ];
-    let active: Vec<&str> = confounders
-        .iter()
-        .filter(|(_, on)| *on)
-        .map(|(name, _)| *name)
-        .collect();
-    if !active.is_empty() {
-        return Err(OriginError::Generic(format!(
-            "CE A/B refused: confounding flag(s) active: {}. Each perturbs one arm \
-             asymmetrically (graph stream re-enabled on the OFF arm; CE bypass on \
-             preference queries; temporal boost/filter alters the base pool), so the \
-             A/B would not isolate the cross-encoder. Set them all to 0/false/no/off \
-             and retry.",
-            active.join(", ")
-        )));
+    //
+    // Only enforced for an isolation A/B (a spec with a CeOff arm). A single-arm
+    // ceiling (`ArmSpec::full_stack`) has no OFF arm to perturb, so features are
+    // meant to be ON and the gate is skipped — see `needs_confounder_isolation`.
+    if arms.needs_confounder_isolation() {
+        let confounders: [(&str, bool); 4] = [
+            (
+                "ORIGIN_GRAPH_MEMORY_STREAM",
+                crate::db::graph_memory_stream_enabled(),
+            ),
+            (
+                "ORIGIN_RERANK_SKIP_PREFERENCE",
+                crate::db::rerank_skip_preference_enabled(),
+            ),
+            (
+                "ORIGIN_ENABLE_TEMPORAL_SOFT_BOOST",
+                crate::db::temporal_soft_boost_enabled(),
+            ),
+            (
+                "ORIGIN_ENABLE_TEMPORAL_FILTER",
+                crate::db::temporal_filter_enabled(),
+            ),
+        ];
+        let active: Vec<&str> = confounders
+            .iter()
+            .filter(|(_, on)| *on)
+            .map(|(name, _)| *name)
+            .collect();
+        if !active.is_empty() {
+            return Err(OriginError::Generic(format!(
+                "CE A/B refused: confounding flag(s) active: {}. Each perturbs one arm \
+                 asymmetrically (graph stream re-enabled on the OFF arm; CE bypass on \
+                 preference queries; temporal boost/filter alters the base pool), so the \
+                 A/B would not isolate the cross-encoder. Set them all to 0/false/no/off \
+                 and retry.",
+                active.join(", ")
+            )));
+        }
     }
 
     let mut samples = load_longmemeval(longmemeval_path)?;
@@ -3351,5 +3388,24 @@ mod tests {
             "ce_two labels for temporal-reasoning"
         );
         assert_eq!(spec.prefixes(), vec!["ce_off", "ce_on"], "ce_two prefixes");
+        assert!(
+            spec.needs_confounder_isolation(),
+            "ce_two is an isolation A/B (has CeOff) — gate must apply"
+        );
+    }
+
+    #[test]
+    fn arm_spec_full_stack_labels() {
+        let spec = ArmSpec::full_stack();
+        assert_eq!(
+            spec.labels("single-session-user"),
+            vec!["fullstack_single-session-user".to_string()],
+            "full_stack is a single arm"
+        );
+        assert_eq!(spec.prefixes(), vec!["fullstack"], "full_stack prefix");
+        assert!(
+            !spec.needs_confounder_isolation(),
+            "full_stack has no CeOff arm — confounder gate must be skipped so features can be ON"
+        );
     }
 }
