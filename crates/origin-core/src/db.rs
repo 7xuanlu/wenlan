@@ -41767,14 +41767,25 @@ pub(crate) mod tests {
             zero.len(),
             "unset vs =0 must return the same number of results"
         );
-        let unset_pairs: Vec<(String, f32)> =
-            unset.iter().map(|r| (r.id.clone(), r.score)).collect();
-        let zero_pairs: Vec<(String, f32)> = zero.iter().map(|r| (r.id.clone(), r.score)).collect();
+        // Ordering must be byte-identical (unset vs ="0" is the same code branch).
+        // Scores use a tolerance: the OFF-path RRF summation is non-deterministic at
+        // the last f32 ULP (~4e-8 drift observed in CI), so exact bit-equality flakes
+        // while any real OFF-vs-ON divergence is >> 1e-5.
+        let unset_ids: Vec<&str> = unset.iter().map(|r| r.id.as_str()).collect();
+        let zero_ids: Vec<&str> = zero.iter().map(|r| r.id.as_str()).collect();
         assert_eq!(
-            unset_pairs, zero_pairs,
-            "ORIGIN_MAGNITUDE_FUSION unset vs =0 must be byte-identical (id + score), \
-             got unset={unset_pairs:?} zero={zero_pairs:?}"
+            unset_ids, zero_ids,
+            "ORIGIN_MAGNITUDE_FUSION unset vs =0 must return identical ordering, got unset={unset_ids:?} zero={zero_ids:?}"
         );
+        for (u, z) in unset.iter().zip(zero.iter()) {
+            assert!(
+                (u.score - z.score).abs() <= 1.0e-5,
+                "ORIGIN_MAGNITUDE_FUSION unset vs =0 score drift > 1e-5 for {}: unset={} zero={}",
+                u.id,
+                u.score,
+                z.score
+            );
+        }
     }
 
     /// Test 2 (core win — magnitude preserved within the FTS weight budget):
