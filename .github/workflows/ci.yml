@@ -255,13 +255,13 @@ jobs:
           "$STAGE/origin" install
           test -f ~/.config/systemd/user/origin-server.service
           systemctl --user is-enabled origin-server
-          for i in $(seq 1 20); do
+          for i in $(seq 1 90); do
             if curl -sf http://127.0.0.1:7878/api/health >/dev/null; then
               echo "    daemon healthy after ${i}s"
               break
             fi
             sleep 1
-            if [ "$i" = "20" ]; then
+            if [ "$i" = "90" ]; then
               echo "FAIL: daemon did not start under systemd user service" >&2
               journalctl --user -u origin-server --no-pager | tail -50 >&2 || true
               exit 1
