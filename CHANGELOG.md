@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.8.4](https://github.com/7xuanlu/origin/compare/v0.8.3...v0.8.4) (2026-06-14)
+
+
+### Bug Fixes
+
+* **eval:** CE answer-accuracy 2-arm gate (event_date + power) ([#263](https://github.com/7xuanlu/origin/issues/263)) ([a051807](https://github.com/7xuanlu/origin/commit/a05180793189b23050b43131d7fa65b586713fd1))
+* reliable + observable daemon upgrades (restart, version handshake, reranker status, backfill/sweep notices) ([#265](https://github.com/7xuanlu/origin/issues/265)) ([14d2b07](https://github.com/7xuanlu/origin/commit/14d2b07916b3ae68cb4e4b44fd06e722b88cd12a))
+
 ## [0.8.3](https://github.com/7xuanlu/origin/compare/v0.8.2...v0.8.3) (2026-06-11)
 
 
