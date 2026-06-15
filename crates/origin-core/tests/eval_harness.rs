@@ -8520,7 +8520,7 @@ async fn print_top_hubs(db: &origin_core::db::MemoryDB, n: usize) {
 #[tokio::test]
 #[ignore = "GPU/Metal + minutes; runtime proof for CE A/B event_date injection"]
 async fn ce_ab_seed_injects_event_date() {
-    use origin_core::eval::answer_quality::{run_fullpipeline_lme, ArmSpec};
+    use origin_core::eval::answer_quality::{run_fullpipeline_lme, ArmSpec, DbSource};
     use origin_core::eval::shared::{scenario_db_dir, EnrichmentMode};
     use origin_core::llm_provider::{LlmProvider, OnDeviceProvider};
     use std::sync::Arc;
@@ -8572,6 +8572,7 @@ async fn ce_ab_seed_injects_event_date() {
         llm,
         Some(reranker),
         &ArmSpec::ce_two(),
+        DbSource::SeedPerQuestion,
         &output_path,
     )
     .await
@@ -8621,7 +8622,7 @@ async fn ce_ab_seed_injects_event_date() {
 #[tokio::test]
 #[ignore]
 async fn generate_ce_ab_lme() {
-    use origin_core::eval::answer_quality::{run_fullpipeline_lme, ArmSpec};
+    use origin_core::eval::answer_quality::{run_fullpipeline_lme, ArmSpec, DbSource};
     use origin_core::llm_provider::{LlmProvider, OnDeviceProvider};
     use std::sync::Arc;
 
@@ -8679,6 +8680,7 @@ async fn generate_ce_ab_lme() {
         llm,
         Some(reranker),
         &ArmSpec::ce_two(),
+        DbSource::SeedPerQuestion,
         &output_path,
     )
     .await
@@ -8686,6 +8688,123 @@ async fn generate_ce_ab_lme() {
 
     eprintln!(
         "\n[generate_ce_ab_lme] Done: {} tuples saved to {:?}",
+        tuples.len(),
+        output_path
+    );
+}
+
+/// CE A/B answer-accuracy on the CONSOLIDATED (large-pool, N>>k) LME DB.
+///
+/// Counterpart to `generate_ce_ab_lme`, which seeds one tiny oracle-pool DB per
+/// question (N~k) so the cross-encoder reorders an already-complete context and
+/// cannot change membership. This variant runs every question against ONE
+/// pre-seeded consolidated DB (all questions' memories in a single store), so
+/// retrieval must select k-from-many and the CE has real reselection headroom.
+///
+/// REQUIRED env:
+/// - `CE_AB_CONSOLIDATED_DB` — directory containing the seeded `origin_memory.db`
+///   (e.g. `~/.cache/origin-eval/scenario_seeded/lme_v1`). The DB is opened once,
+///   read-only (no seed, no event_date inject — it is already enriched + dated).
+/// - `ORIGIN_GRAPH_MEMORY_STREAM=0` — confounder gate (same as the oracle variant).
+/// - `RERANK_POOL_FLOOR` > 10 STRONGLY recommended (e.g. 50): with the default
+///   floor of 10 the CE fetch pool equals the top-10 window, so it reorders the
+///   returned docs without reselecting — a null by construction regardless of
+///   the consolidated pool size (see `compute_rerank_fetch_pool`). The runner
+///   logs a WARNING when the effective fetch pool is <= 10.
+///
+/// ```bash
+/// CE_AB_CONSOLIDATED_DB=$HOME/.cache/origin-eval/scenario_seeded/lme_v1 \
+/// ORIGIN_GRAPH_MEMORY_STREAM=0 RERANK_POOL_FLOOR=50 \
+/// EVAL_BASELINES_DIR=$HOME/.cache/origin-eval-ce-consolidated \
+///   cargo test -p origin-core --test eval_harness --features eval-harness \
+///   generate_ce_ab_lme_consolidated -- --ignored --nocapture
+/// ```
+#[tokio::test]
+#[ignore]
+async fn generate_ce_ab_lme_consolidated() {
+    use origin_core::eval::answer_quality::{run_fullpipeline_lme, ArmSpec, DbSource};
+    use origin_core::llm_provider::{LlmProvider, OnDeviceProvider};
+    use std::sync::Arc;
+
+    let lme_path = eval_root().join("data/longmemeval_oracle.json");
+    if !lme_path.exists() {
+        eprintln!("SKIP: longmemeval_oracle.json not found at {:?}", lme_path);
+        return;
+    }
+
+    let consolidated_dir = match std::env::var("CE_AB_CONSOLIDATED_DB") {
+        Ok(d) => std::path::PathBuf::from(d),
+        Err(_) => {
+            eprintln!(
+                "SKIP: set CE_AB_CONSOLIDATED_DB to the seeded consolidated DB dir \
+                 (e.g. ~/.cache/origin-eval/scenario_seeded/lme_v1)"
+            );
+            return;
+        }
+    };
+    if !consolidated_dir.join("origin_memory.db").exists() {
+        eprintln!(
+            "SKIP: no origin_memory.db under CE_AB_CONSOLIDATED_DB={:?}. \
+             Seed it (scripts/seed-scenario-dbs.sh) first.",
+            consolidated_dir
+        );
+        return;
+    }
+
+    if origin_core::db::graph_memory_stream_enabled() {
+        panic!(
+            "Set ORIGIN_GRAPH_MEMORY_STREAM=0 before running this test. \
+             The CE A/B is invalid without it (see run_fullpipeline_lme docs)."
+        );
+    }
+
+    let enrich_model =
+        std::env::var("EVAL_ANSWER_MODEL").unwrap_or_else(|_| "claude-haiku-4-5-20251001".into());
+    let cost_cap: f64 = std::env::var("EVAL_COST_CAP")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(10.0);
+
+    let baselines = origin_core::eval::shared::eval_baselines_dir_override()
+        .unwrap_or_else(|| eval_root().join("baselines"));
+    std::fs::create_dir_all(&baselines).ok();
+    let output_path = baselines.join("ce_ab_lme_consolidated_tuples.json");
+
+    eprintln!(
+        "[generate_ce_ab_lme_consolidated]\n  consolidated DB: {:?}\n  answer model: \
+         on-device qwen3.5-9b (temp 0.0)\n  enrich model (unused on consolidated path): {}\n  \
+         output: {:?}",
+        consolidated_dir, enrich_model, output_path,
+    );
+
+    let llm: Arc<dyn LlmProvider> = Arc::new(
+        OnDeviceProvider::new_with_model(Some("qwen3.5-9b"))
+            .expect("OnDeviceProvider::new_with_model failed — is the Qwen3.5-9B model available?"),
+    );
+
+    // EnrichmentMode is unused on the consolidated path (no per-question seeding),
+    // but the signature requires one; supply the configured mode for symmetry.
+    let enrichment = origin_core::eval::shared::EnrichmentMode::from_env(&enrich_model, cost_cap)
+        .expect("EnrichmentMode::from_env failed");
+
+    let reranker = origin_core::reranker::init_cross_encoder_reranker(None).expect(
+        "init_cross_encoder_reranker failed (downloads ~1.1GB bge-reranker-base on first run)",
+    );
+
+    let tuples = run_fullpipeline_lme(
+        &lme_path,
+        enrichment,
+        llm,
+        Some(reranker),
+        &ArmSpec::ce_two(),
+        DbSource::Consolidated(consolidated_dir),
+        &output_path,
+    )
+    .await
+    .expect("run_fullpipeline_lme (consolidated) failed");
+
+    eprintln!(
+        "\n[generate_ce_ab_lme_consolidated] Done: {} tuples saved to {:?}",
         tuples.len(),
         output_path
     );
@@ -8713,11 +8832,16 @@ async fn judge_ce_ab_lme() {
 
     let baselines = origin_core::eval::shared::eval_baselines_dir_override()
         .unwrap_or_else(|| eval_root().join("baselines"));
-    let tuples_path = baselines.join("ce_ab_lme_tuples.json");
+    // Default to the oracle output; CE_AB_TUPLES_FILE lets the same judge grade
+    // the consolidated variant (ce_ab_lme_consolidated_tuples.json) without a
+    // second judge fn — keeps producer/consumer on one path.
+    let tuples_file =
+        std::env::var("CE_AB_TUPLES_FILE").unwrap_or_else(|_| "ce_ab_lme_tuples.json".to_string());
+    let tuples_path = baselines.join(&tuples_file);
 
     if !tuples_path.exists() {
         eprintln!(
-            "SKIP: {:?} not found. Run generate_ce_ab_lme first.",
+            "SKIP: {:?} not found. Run generate_ce_ab_lme (or set CE_AB_TUPLES_FILE) first.",
             tuples_path
         );
         return;

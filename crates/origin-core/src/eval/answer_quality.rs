@@ -2799,11 +2799,46 @@ impl ArmSpec {
     }
 }
 
+/// Where the per-question retrieval pool comes from.
+///
+/// The cross-encoder is a *selection* stage: it can only change which memories
+/// reach the answerer when the candidate pool it reranks is larger than the
+/// returned top-k window. Two settings expose very different pools:
+///
+/// - [`DbSource::SeedPerQuestion`] — seed a fresh scenario DB from the
+///   question's own sessions (the LME *oracle* setting). The total pool is just
+///   that question's gold turns (N ~ k), so a top-10 rerank reorders an
+///   already-complete context and rarely changes membership. This is the
+///   default and matches the original `run_fullpipeline_lme_ce_ab` behavior.
+/// - [`DbSource::Consolidated`] — reuse ONE pre-seeded consolidated DB (every
+///   question's memories in a single store, N >> k). Retrieval must select
+///   k-from-many, so the CE has real reselection headroom. The DB is opened
+///   ONCE and shared read-only across all questions; per-question seeding and
+///   `event_date` injection are skipped (the consolidated DB is already
+///   enriched + dated). Pair with `RERANK_POOL_FLOOR` > 10 so the CE fetch pool
+///   exceeds the top-10 window (see `compute_rerank_fetch_pool`); with the
+///   default floor of 10 the CE reranks exactly the 10 docs it returns and
+///   cannot change membership regardless of the consolidated pool size.
+#[derive(Debug, Clone)]
+pub enum DbSource {
+    /// Seed a fresh per-question scenario DB (oracle setting, small pool N~k).
+    SeedPerQuestion,
+    /// Reuse one pre-seeded consolidated DB for every question (full-corpus
+    /// setting, large pool N>>k). The path is the DB *directory* (the one that
+    /// contains `origin_memory.db`). Opened once, never mutated.
+    Consolidated(std::path::PathBuf),
+}
+
 /// Provider-generic LME full-pipeline A/B runner.
 ///
 /// Replaces the hardcoded `run_fullpipeline_lme_ce_ab` with an extensible
 /// `ArmSpec`-driven variant. Pass `ArmSpec::ce_two()` to reproduce the
 /// existing CE A/B behavior exactly.
+///
+/// `db_source` selects the candidate pool (see [`DbSource`]):
+/// [`DbSource::SeedPerQuestion`] reproduces the original oracle behavior;
+/// [`DbSource::Consolidated`] runs every question against one shared large-pool
+/// DB so the cross-encoder has real reselection headroom.
 ///
 /// **FAIR design**: all arms route through `search_memory_cross_rerank` so
 /// P3 distill-demotion is symmetric, and the caller MUST set
@@ -2841,6 +2876,7 @@ pub async fn run_fullpipeline_lme(
     llm: Arc<dyn crate::llm_provider::LlmProvider>,
     reranker: Option<Arc<dyn crate::reranker::Reranker>>,
     arms: &ArmSpec,
+    db_source: DbSource,
     output_path: &std::path::Path,
 ) -> Result<Vec<crate::eval::judge::JudgmentTuple>, OriginError> {
     use crate::eval::judge::{save_judgment_tuples, JudgmentTuple};
@@ -2902,6 +2938,52 @@ pub async fn run_fullpipeline_lme(
         );
     }
     let shared_embedder = crate::eval::shared::eval_shared_embedder();
+
+    // Consolidated source: open the ONE shared DB up front and assert it is
+    // substrate-live (non-empty pool), so a misconfigured path fails loud here
+    // rather than emitting a vacuous A/B. Opened read-only in effect — the
+    // consolidated branch performs no writes (no seed, no event_date inject).
+    let consolidated_db: Option<Arc<MemoryDB>> = match &db_source {
+        DbSource::SeedPerQuestion => None,
+        DbSource::Consolidated(dir) => {
+            let db = MemoryDB::new_with_shared_embedder(
+                dir,
+                Arc::new(NoopEmitter),
+                shared_embedder.clone(),
+            )
+            .await
+            .map_err(|e| {
+                OriginError::Generic(format!(
+                    "[ce_ab_lme] failed to open consolidated DB at {dir:?}: {e}"
+                ))
+            })?;
+            let n = db.memory_count().await.unwrap_or(0);
+            if n == 0 {
+                return Err(OriginError::Generic(format!(
+                    "EVAL REFUSED [ce_ab_lme]: consolidated DB at {dir:?} has 0 memories. \
+                     A CE A/B over an empty substrate measures noise, not CE. \
+                     Seed it (scripts/seed-scenario-dbs.sh) and retry."
+                )));
+            }
+            let fetch_pool = crate::db::compute_rerank_fetch_pool(
+                10,
+                std::env::var("RERANK_POOL_MULTIPLIER").ok().as_deref(),
+                std::env::var("RERANK_POOL_FLOOR").ok().as_deref(),
+            );
+            eprintln!(
+                "[ce_ab_lme] consolidated DB {dir:?}: {n} memories (shared pool), \
+                 CE fetch_pool={fetch_pool} vs top-10 window{}",
+                if fetch_pool <= 10 {
+                    " — WARNING: fetch_pool<=10 means the CE reorders the returned \
+                     docs without reselecting; set RERANK_POOL_FLOOR>10 to give it \
+                     membership headroom"
+                } else {
+                    ""
+                }
+            );
+            Some(Arc::new(db))
+        }
+    };
 
     // Resume: load any already-generated tuples.
     let mut finished_tuples: Vec<JudgmentTuple> = if output_path.exists() {
@@ -2986,102 +3068,117 @@ pub async fn run_fullpipeline_lme(
             continue;
         }
 
-        let memories = extract_memories(sample);
-        if memories.is_empty() {
-            continue;
-        }
+        // Acquire this question's retrieval DB. Consolidated reuses the ONE
+        // shared large-pool DB opened above (skip per-question seeding +
+        // event_date injection — it is already enriched + 100% dated, and is
+        // never mutated). SeedPerQuestion seeds a fresh oracle-pool scenario DB
+        // from the sample's own sessions, byte-identical to the prior behavior.
+        let db: Arc<MemoryDB> = match &db_source {
+            DbSource::Consolidated(_) => consolidated_db
+                .clone()
+                .expect("consolidated_db is Some for DbSource::Consolidated"),
+            DbSource::SeedPerQuestion => {
+                let memories = extract_memories(sample);
+                if memories.is_empty() {
+                    continue;
+                }
 
-        let scope_dir =
-            crate::eval::shared::scenario_db_dir(baselines_dir, "lme", &sample.question_id);
+                let scope_dir =
+                    crate::eval::shared::scenario_db_dir(baselines_dir, "lme", &sample.question_id);
 
-        let question_id = sample.question_id.clone();
-        let question_type = sample.question_type.clone();
-        let memories_owned = memories.clone();
+                let question_id = sample.question_id.clone();
+                let question_type = sample.question_type.clone();
+                let memories_owned = memories.clone();
 
-        let db = match crate::eval::shared::open_or_seed_scenario_db(
-            &scope_dir,
-            shared_embedder.clone(),
-            move || {
-                memories_owned
-                    .iter()
-                    .map(|mem| crate::sources::RawDocument {
-                        content: mem.content.clone(),
-                        source_id: format!(
-                            "lme_{}_{}_t{}",
-                            question_id, mem.session_idx, mem.turn_idx
-                        ),
-                        source: "memory".to_string(),
-                        title: format!("session {} turn {}", mem.session_idx, mem.turn_idx),
-                        memory_type: Some(
-                            if question_type == "single-session-preference" {
-                                "preference"
-                            } else {
-                                "fact"
-                            }
-                            .to_string(),
-                        ),
-                        space: Some("conversation".to_string()),
-                        last_modified: chrono::Utc::now().timestamp(),
-                        ..Default::default()
-                    })
-                    .collect()
-            },
-            &enrichment,
-        )
-        .await
-        {
-            Ok(db) => db,
-            Err(e) => {
-                return Err(OriginError::Generic(format!(
-                    "[ce_ab_lme] scenario {} failed to open/seed DB: {e}. Refusing to \
-                     silently drop the question — re-seed and retry.",
-                    sample.question_id
-                )));
+                let seeded = match crate::eval::shared::open_or_seed_scenario_db(
+                    &scope_dir,
+                    shared_embedder.clone(),
+                    move || {
+                        memories_owned
+                            .iter()
+                            .map(|mem| crate::sources::RawDocument {
+                                content: mem.content.clone(),
+                                source_id: format!(
+                                    "lme_{}_{}_t{}",
+                                    question_id, mem.session_idx, mem.turn_idx
+                                ),
+                                source: "memory".to_string(),
+                                title: format!("session {} turn {}", mem.session_idx, mem.turn_idx),
+                                memory_type: Some(
+                                    if question_type == "single-session-preference" {
+                                        "preference"
+                                    } else {
+                                        "fact"
+                                    }
+                                    .to_string(),
+                                ),
+                                space: Some("conversation".to_string()),
+                                last_modified: chrono::Utc::now().timestamp(),
+                                ..Default::default()
+                            })
+                            .collect()
+                    },
+                    &enrichment,
+                )
+                .await
+                {
+                    Ok(db) => db,
+                    Err(e) => {
+                        return Err(OriginError::Generic(format!(
+                            "[ce_ab_lme] scenario {} failed to open/seed DB: {e}. Refusing to \
+                             silently drop the question — re-seed and retry.",
+                            sample.question_id
+                        )));
+                    }
+                };
+
+                // Substrate-liveness: a per-question DB with zero memories yields a
+                // vacuous A/B (both arms retrieve nothing). Fail loud rather than
+                // emit a misleading null, per the eval ONE-contract discipline (H2).
+                let db_mem_count = seeded.memory_count().await.unwrap_or(0);
+                if db_mem_count == 0 {
+                    return Err(OriginError::Generic(format!(
+                        "EVAL REFUSED [ce_ab_lme]: scenario {} seeded DB has 0 memories. \
+                         A CE A/B over an empty substrate measures noise, not CE. Re-seed and retry.",
+                        sample.question_id
+                    )));
+                }
+
+                // Make the temporal substrate LIVE for this question's scenario DB by
+                // injecting per-session event_date (turn text carries no date; the date
+                // is per-session haystack metadata). This is substrate-prep + a liveness
+                // gate, NOT a direct answer fix: event_date is not rendered into the CE
+                // A/B context (build_structured_context renders only content) and no
+                // temporal ranking flag is set on this path, so dates influence neither
+                // ranking nor the prompt today. Their value is (a) a per-question liveness
+                // signal (the rows-updated count below), (b) a future temporal lever has
+                // live data to read. source_id keys mirror the seed closure's
+                // `lme_{qid}_{sess}_t{turn}` exactly via event_date_map -> memory_source_id.
+                let date_map =
+                    crate::eval::longmemeval::event_date_map(std::slice::from_ref(sample));
+                if !date_map.is_empty() {
+                    let updates: Vec<(String, i64)> = date_map.into_iter().collect();
+                    let n_total = updates.len();
+                    let rows = seeded.set_event_dates_by_source_id(&updates).await?;
+                    if rows == 0 {
+                        // Per-question log + continue (NOT whole-run abort): a non-empty
+                        // date_map that updates 0 rows means source_id-format drift for
+                        // THIS question. Skip it rather than nuke a multi-hour decision run;
+                        // the rows-updated count is an earlier, more precise signal than a
+                        // DB-wide liveness assert (which propagated and aborted the run).
+                        log::warn!(
+                            "[ce_ab_lme] event_date injection updated 0/{} rows for question {} \
+                             — source_id drift; skipping question",
+                            n_total,
+                            sample.question_id
+                        );
+                        continue;
+                    }
+                }
+
+                Arc::new(seeded)
             }
         };
-
-        // Substrate-liveness: a per-question DB with zero memories yields a
-        // vacuous A/B (both arms retrieve nothing). Fail loud rather than
-        // emit a misleading null, per the eval ONE-contract discipline (H2).
-        let db_mem_count = db.memory_count().await.unwrap_or(0);
-        if db_mem_count == 0 {
-            return Err(OriginError::Generic(format!(
-                "EVAL REFUSED [ce_ab_lme]: scenario {} seeded DB has 0 memories. \
-                 A CE A/B over an empty substrate measures noise, not CE. Re-seed and retry.",
-                sample.question_id
-            )));
-        }
-
-        // Make the temporal substrate LIVE for this question's scenario DB by
-        // injecting per-session event_date (turn text carries no date; the date
-        // is per-session haystack metadata). This is substrate-prep + a liveness
-        // gate, NOT a direct answer fix: event_date is not rendered into the CE
-        // A/B context (build_structured_context renders only content) and no
-        // temporal ranking flag is set on this path, so dates influence neither
-        // ranking nor the prompt today. Their value is (a) a per-question liveness
-        // signal (the rows-updated count below), (b) a future temporal lever has
-        // live data to read. source_id keys mirror the seed closure's
-        // `lme_{qid}_{sess}_t{turn}` exactly via event_date_map -> memory_source_id.
-        let date_map = crate::eval::longmemeval::event_date_map(std::slice::from_ref(sample));
-        if !date_map.is_empty() {
-            let updates: Vec<(String, i64)> = date_map.into_iter().collect();
-            let n_total = updates.len();
-            let rows = db.set_event_dates_by_source_id(&updates).await?;
-            if rows == 0 {
-                // Per-question log + continue (NOT whole-run abort): a non-empty
-                // date_map that updates 0 rows means source_id-format drift for
-                // THIS question. Skip it rather than nuke a multi-hour decision run;
-                // the rows-updated count is an earlier, more precise signal than a
-                // DB-wide liveness assert (which propagated and aborted the run).
-                log::warn!(
-                    "[ce_ab_lme] event_date injection updated 0/{} rows for question {} \
-                     — source_id drift; skipping question",
-                    n_total,
-                    sample.question_id
-                );
-                continue;
-            }
-        }
 
         let category = category_name(&sample.question_type);
 
