@@ -22,6 +22,13 @@ pub struct MigrationProgress {
     pub phase: String,
 }
 
+/// Counts returned by the migration-55 startup backfill, for an operator notice.
+#[derive(Debug, Default, PartialEq)]
+pub struct Migration55Report {
+    pub event_dates_scanned: usize,
+    pub entity_links_inserted: usize,
+}
+
 /// Embedding dimension — must match the model (GTE-Base-EN-v1.5-Q = 768).
 pub const EMBEDDING_DIM: usize = 768;
 
@@ -916,6 +923,22 @@ pub fn khop_traversal_enabled() -> bool {
 /// significant, so the default-ON benefit lives on the quick path only.
 pub fn graph_memory_stream_enabled() -> bool {
     match std::env::var("ORIGIN_GRAPH_MEMORY_STREAM") {
+        Ok(v) => !matches!(
+            v.trim().to_ascii_lowercase().as_str(),
+            "0" | "false" | "no" | "off"
+        ),
+        Err(_) => true,
+    }
+}
+
+/// True unless `ORIGIN_ENABLE_ENTITY_SWEEP` is a falsy token (`0`, `false`,
+/// `no`, `off`). OPT-OUT, default ON.
+///
+/// When OFF, the post-ingest entity sweep is skipped. Useful for isolated
+/// eval runs or debugging where the caller seeds entity data externally and
+/// does not want the sweep to overwrite it.
+pub fn entity_sweep_enabled() -> bool {
+    match std::env::var("ORIGIN_ENABLE_ENTITY_SWEEP") {
         Ok(v) => !matches!(
             v.trim().to_ascii_lowercase().as_str(),
             "0" | "false" | "no" | "off"
@@ -23824,7 +23847,7 @@ impl MemoryDB {
     ///
     /// Idempotent via `app_metadata` flag `backfill_event_date_v1`.  Safe to call
     /// on every daemon startup; the second call is a no-op after the flag is set.
-    pub async fn run_migration_55_pass_a(&self) -> Result<(), OriginError> {
+    pub async fn run_migration_55_pass_a(&self) -> Result<usize, OriginError> {
         // Idempotency probe.
         {
             let conn = self.conn.lock().await;
@@ -23842,7 +23865,7 @@ impl MemoryDB {
                 .is_some()
             {
                 log::info!("[migration] Migration 55 Pass A skipped (already applied)");
-                return Ok(());
+                return Ok(0);
             }
         }
 
@@ -23926,10 +23949,10 @@ impl MemoryDB {
         log::info!(
             "[migration] Migration 55 Pass A complete: scanned {scanned} memories for event_date backfill"
         );
-        Ok(())
+        Ok(scanned)
     }
 
-    pub async fn run_migration_55_pass_b(&self) -> Result<(), OriginError> {
+    pub async fn run_migration_55_pass_b(&self) -> Result<usize, OriginError> {
         let conn = self.conn.lock().await;
 
         // Ensure app_metadata exists (idempotent; Task 14 also ensures it).
@@ -23956,22 +23979,23 @@ impl MemoryDB {
                 .is_some()
             {
                 log::info!("[migration] Migration 55 Pass B skipped (already applied)");
-                return Ok(());
+                return Ok(0);
             }
         }
 
         // Backfill in a single statement.
         // ON CONFLICT DO NOTHING handles duplicate (source_id, entity_id) pairs from
         // memories with multiple chunk rows sharing the same source_id.
-        conn.execute(
-            "INSERT INTO memory_entities (memory_id, entity_id)
+        let inserted =
+            conn.execute(
+                "INSERT INTO memory_entities (memory_id, entity_id)
              SELECT source_id, entity_id FROM memories
              WHERE entity_id IS NOT NULL
              ON CONFLICT DO NOTHING",
-            (),
-        )
-        .await
-        .map_err(|e| OriginError::VectorDb(format!("m55b insert: {e}")))?;
+                (),
+            )
+            .await
+            .map_err(|e| OriginError::VectorDb(format!("m55b insert: {e}")))? as usize;
 
         conn.execute(
             "INSERT OR REPLACE INTO app_metadata (key, value) VALUES ('backfill_memory_entities_v1', '1')",
@@ -23983,14 +24007,17 @@ impl MemoryDB {
         log::info!(
             "[migration] Migration 55 Pass B complete: memory_entities backfilled from memories.entity_id"
         );
-        Ok(())
+        Ok(inserted)
     }
 
     /// Wires Pass A then Pass B together. Task 21 calls this from server startup.
-    pub async fn run_migration_55(&self) -> Result<(), OriginError> {
-        self.run_migration_55_pass_a().await?;
-        self.run_migration_55_pass_b().await?;
-        Ok(())
+    pub async fn run_migration_55(&self) -> Result<Migration55Report, OriginError> {
+        let event_dates_scanned = self.run_migration_55_pass_a().await?;
+        let entity_links_inserted = self.run_migration_55_pass_b().await?;
+        Ok(Migration55Report {
+            event_dates_scanned,
+            entity_links_inserted,
+        })
     }
 
     // ==================== Memory Revision Chain ====================
@@ -26077,8 +26104,15 @@ pub(crate) mod tests {
         );
     }
 
+    // Salience tests read/write the process-global `ORIGIN_ENABLE_SALIENCE_PRIOR`.
+    // `temp_env::async_with_vars` mutates that global, so two salience tests
+    // running concurrently can corrupt each other's flag mid-`.await`. Serialize
+    // them on a process-local async lock (same pattern as `PRF_ENV_LOCK` above).
+    static SALIENCE_ENV_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
     #[tokio::test]
     async fn salience_reorders_when_flag_on() {
+        let _serial = SALIENCE_ENV_LOCK.lock().await;
         let (db, _dir) = test_db().await;
         let doc_a = make_memory_doc(
             "sal_a",
@@ -26142,6 +26176,7 @@ pub(crate) mod tests {
 
     #[tokio::test]
     async fn salience_inert_when_flag_off() {
+        let _serial = SALIENCE_ENV_LOCK.lock().await;
         let (db, _dir) = test_db().await;
         let doc_a = make_memory_doc(
             "inert_a",
@@ -26233,6 +26268,7 @@ pub(crate) mod tests {
     /// SAME ranking as flag OFF (salience_mult forced to 1.0 by None short-circuit).
     #[tokio::test]
     async fn salience_null_rows_unchanged() {
+        let _serial = SALIENCE_ENV_LOCK.lock().await;
         let (db, _dir) = test_db().await;
         let doc_a = make_memory_doc(
             "null_a",
@@ -26299,6 +26335,7 @@ pub(crate) mod tests {
 
     #[tokio::test]
     async fn salience_prior_enabled_reads_env() {
+        let _serial = SALIENCE_ENV_LOCK.lock().await;
         for val in &["1", "true", "yes"] {
             let got =
                 temp_env::async_with_vars([("ORIGIN_ENABLE_SALIENCE_PRIOR", Some(*val))], async {
@@ -40429,6 +40466,45 @@ pub(crate) mod tests {
         }
     }
 
+    #[tokio::test]
+    async fn migration_55_backfill_reports_counts() {
+        let (db, _dir) = test_db().await;
+        {
+            let conn = db.conn.lock().await;
+            // Seed one entity + two memories: one with an entity_id (graph link),
+            // one with a date cue in content, both with NULL event_date.
+            conn.execute(
+                "INSERT INTO entities (id, name, entity_type, created_at, updated_at) \
+                 VALUES ('ent_x', 'X', 'Topic', 0, 0)",
+                (),
+            )
+            .await
+            .unwrap();
+            conn.execute(
+                "INSERT INTO memories \
+                 (id, content, source, source_id, title, chunk_index, last_modified, chunk_type, entity_id) \
+                 VALUES ('c1', 'met her yesterday', 'memory', 'm1', '', 0, 1700000000, 'text', 'ent_x')",
+                (),
+            )
+            .await
+            .unwrap();
+            conn.execute(
+                "INSERT INTO memories \
+                 (id, content, source, source_id, title, chunk_index, last_modified, chunk_type) \
+                 VALUES ('c2', 'no date here', 'memory', 'm2', '', 0, 1700000000, 'text')",
+                (),
+            )
+            .await
+            .unwrap();
+        }
+
+        let report = db.run_migration_55().await.expect("backfill runs");
+        // Both memories have NULL event_date, so both are scanned.
+        assert_eq!(report.event_dates_scanned, 2);
+        // Exactly one memory has a non-null entity_id → one link inserted.
+        assert_eq!(report.entity_links_inserted, 1);
+    }
+
     // ==================== run_enrichment_sweep ====================
 
     #[tokio::test]
@@ -41630,12 +41706,19 @@ pub(crate) mod tests {
 
     // ── T13: Magnitude-preserving FTS score fusion ───────────────────────────
 
+    // Magnitude-fusion tests read/write the process-global `ORIGIN_MAGNITUDE_FUSION`.
+    // `temp_env::async_with_vars` mutates that global, so two tests running
+    // concurrently can corrupt each other's flag mid-`.await`. Serialize them on
+    // a process-local async lock (same pattern as `PRF_ENV_LOCK` and `SALIENCE_ENV_LOCK`).
+    static MAGNITUDE_ENV_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
     /// Test 1 (merge gate): with `ORIGIN_MAGNITUDE_FUSION` UNSET vs explicitly
     /// `"0"`, `search_memory` must return byte-identical ordering AND scores.
     /// This is the structural defense against the silent-regression class that
     /// closed PR #147 — the default path must be untouched.
     #[tokio::test]
     async fn magnitude_fusion_default_off_is_byte_identical() {
+        let _serial = MAGNITUDE_ENV_LOCK.lock().await;
         let (db, _tmp) = test_db().await;
         db.upsert_documents(vec![
             make_memory_doc(
@@ -41684,14 +41767,25 @@ pub(crate) mod tests {
             zero.len(),
             "unset vs =0 must return the same number of results"
         );
-        let unset_pairs: Vec<(String, f32)> =
-            unset.iter().map(|r| (r.id.clone(), r.score)).collect();
-        let zero_pairs: Vec<(String, f32)> = zero.iter().map(|r| (r.id.clone(), r.score)).collect();
+        // Ordering must be byte-identical (unset vs ="0" is the same code branch).
+        // Scores use a tolerance: the OFF-path RRF summation is non-deterministic at
+        // the last f32 ULP (~4e-8 drift observed in CI), so exact bit-equality flakes
+        // while any real OFF-vs-ON divergence is >> 1e-5.
+        let unset_ids: Vec<&str> = unset.iter().map(|r| r.id.as_str()).collect();
+        let zero_ids: Vec<&str> = zero.iter().map(|r| r.id.as_str()).collect();
         assert_eq!(
-            unset_pairs, zero_pairs,
-            "ORIGIN_MAGNITUDE_FUSION unset vs =0 must be byte-identical (id + score), \
-             got unset={unset_pairs:?} zero={zero_pairs:?}"
+            unset_ids, zero_ids,
+            "ORIGIN_MAGNITUDE_FUSION unset vs =0 must return identical ordering, got unset={unset_ids:?} zero={zero_ids:?}"
         );
+        for (u, z) in unset.iter().zip(zero.iter()) {
+            assert!(
+                (u.score - z.score).abs() <= 1.0e-5,
+                "ORIGIN_MAGNITUDE_FUSION unset vs =0 score drift > 1e-5 for {}: unset={} zero={}",
+                u.id,
+                u.score,
+                z.score
+            );
+        }
     }
 
     /// Test 2 (core win — magnitude preserved within the FTS weight budget):
@@ -41717,6 +41811,7 @@ pub(crate) mod tests {
     /// applies equally and does not confound the comparison.
     #[tokio::test]
     async fn magnitude_fusion_on_preserves_bm25_magnitude() {
+        let _serial = MAGNITUDE_ENV_LOCK.lock().await;
         let (db, _tmp) = test_db().await;
         db.upsert_documents(vec![
             make_memory_doc(
@@ -41810,6 +41905,7 @@ pub(crate) mod tests {
     /// end-to-end behavior and guards finiteness on the magnitude path.
     #[tokio::test]
     async fn magnitude_fusion_on_handles_negative_bm25_sign() {
+        let _serial = MAGNITUDE_ENV_LOCK.lock().await;
         let (db, _tmp) = test_db().await;
         db.upsert_documents(vec![
             make_memory_doc(
@@ -41869,6 +41965,7 @@ pub(crate) mod tests {
     /// returned, all scores finite (no div-by-zero / NaN from the normalizer).
     #[tokio::test]
     async fn magnitude_fusion_on_zero_fts_hits_no_panic() {
+        let _serial = MAGNITUDE_ENV_LOCK.lock().await;
         let (db, _tmp) = test_db().await;
         db.upsert_documents(vec![make_memory_doc(
             "m_novec",
@@ -41982,6 +42079,7 @@ pub(crate) mod tests {
     /// outranks an equal-base unconfirmed one.
     #[tokio::test]
     async fn magnitude_fusion_on_multiplier_stack_intact() {
+        let _serial = MAGNITUDE_ENV_LOCK.lock().await;
         let (db, _tmp) = test_db().await;
         // Two memories matching the query equally on the FTS keywords but with
         // distinct filler so the near-duplicate dedup (Jaccard > 0.92) does not
@@ -45520,6 +45618,26 @@ pub(crate) mod tests {
                 "empty string is not a recognized opt-out token, must stay ENABLED"
             );
         });
+    }
+
+    #[test]
+    fn entity_sweep_enabled_defaults_on_and_opts_out() {
+        // default ON when unset
+        temp_env::with_var("ORIGIN_ENABLE_ENTITY_SWEEP", None::<&str>, || {
+            assert!(entity_sweep_enabled());
+        });
+        // explicit opt-out values: 0 / false / no / off (and whitespace/case variants)
+        for v in ["0", "false", "no", "off", " 0 ", "FALSE", "OFF"] {
+            temp_env::with_var("ORIGIN_ENABLE_ENTITY_SWEEP", Some(v), || {
+                assert!(!entity_sweep_enabled(), "{v:?} must disable");
+            });
+        }
+        // truthy and unrecognized values remain ON
+        for v in ["1", "true", "yes", ""] {
+            temp_env::with_var("ORIGIN_ENABLE_ENTITY_SWEEP", Some(v), || {
+                assert!(entity_sweep_enabled(), "{v:?} must stay enabled");
+            });
+        }
     }
 
     #[test]

@@ -75,7 +75,7 @@ fn write_fake_launchctl(fake_bin: &Path) {
     let path = fake_bin.join("launchctl");
     fs::write(
         &path,
-        "#!/bin/sh\ncase \"$1\" in\n  list) exit 0 ;;\n  load|unload) echo \"fake launchctl $1 $2\"; exit 0 ;;\n  *) echo \"fake launchctl $@\"; exit 0 ;;\nesac\n",
+        "#!/bin/sh\nif [ -n \"$ORIGIN_TEST_LAUNCHCTL_LOG\" ]; then echo \"$@\" >> \"$ORIGIN_TEST_LAUNCHCTL_LOG\"; fi\ncase \"$1\" in\n  list) exit 0 ;;\n  load|unload) echo \"fake launchctl $1 $2\"; exit 0 ;;\n  *) echo \"fake launchctl $@\"; exit 0 ;;\nesac\n",
     )
     .expect("write fake launchctl");
     #[cfg(unix)]
@@ -207,6 +207,7 @@ fn each_subcommand_has_help() {
         "setup",
         "install",
         "uninstall",
+        "restart",
         "doctor",
         "model",
         "key",
@@ -491,6 +492,64 @@ fn service_unit_path_resolves_per_os() {
     assert!(path
         .to_string_lossy()
         .ends_with(".config/systemd/user/origin-server.service"));
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn restart_after_install_succeeds_isolated() {
+    let runtime = IsolatedRuntime::new();
+
+    // Not installed yet → restart should fail with a helpful hint.
+    cli_with_isolated_runtime(&runtime)
+        .arg("restart")
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("not installed"));
+
+    cli_with_isolated_runtime(&runtime)
+        .arg("install")
+        .assert()
+        .success();
+
+    // Installed → restart stops then starts the service and reports it.
+    cli_with_isolated_runtime(&runtime)
+        .arg("restart")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Restarted com.origin.server"));
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn install_over_running_daemon_stops_first_isolated() {
+    let runtime = IsolatedRuntime::new();
+    let log = runtime.data.path().join("launchctl.log");
+
+    // First install registers + starts the service.
+    cli_with_isolated_runtime(&runtime)
+        .arg("install")
+        .assert()
+        .success();
+
+    // Second install (the upgrade case): clear the log, reinstall, and assert
+    // a stop-class launchctl call happened before the new start.
+    let _ = fs::remove_file(&log);
+    cli_with_isolated_runtime(&runtime)
+        .env("ORIGIN_TEST_LAUNCHCTL_LOG", &log)
+        .arg("install")
+        .assert()
+        .success();
+
+    let calls = fs::read_to_string(&log).unwrap_or_default();
+    // We assert specifically for "stop" — our explicit m.stop() emits
+    // `launchctl stop com.origin.server`. service-manager's internal reinstall
+    // logic emits `launchctl remove`, which is a different verb and does NOT
+    // terminate a running process the same way. The test must discriminate
+    // between our explicit stop and the library's internal unload-before-reload.
+    assert!(
+        calls.lines().any(|l| l.starts_with("stop ")),
+        "second install must explicitly call `launchctl stop` before reinstalling; launchctl calls were:\n{calls}"
+    );
 }
 
 #[cfg(target_os = "macos")]

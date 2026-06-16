@@ -194,6 +194,9 @@ pub fn install() -> Result<()> {
         // origin-server.
         let program = current_server_path()?;
         let program_str = program.to_string_lossy();
+        let _ = std::process::Command::new("schtasks.exe")
+            .args(["/end", "/tn", WINDOWS_TASK_NAME])
+            .output();
         run_schtasks(
             &[
                 "/create",
@@ -219,6 +222,14 @@ pub fn install() -> Result<()> {
     let label_value = label()?;
     let program = current_server_path()?;
     let m = manager()?;
+
+    // Stop any daemon already running under this label so the reinstall swaps
+    // the binary. Without this, the freshly-installed binary detects the
+    // healthy incumbent on port 7878 and exits, leaving the OLD daemon running
+    // (origin-server/src/main.rs:582-615). Best-effort: errors if not running.
+    let _ = m.stop(ServiceStopCtx {
+        label: label_value.clone(),
+    });
 
     // Apply RUST_LOG=info to every platform. launchd consumes
     // `EnvironmentVariables`, systemd-user consumes `Environment=`. winsw +
@@ -304,6 +315,40 @@ pub fn uninstall() -> Result<()> {
     m.uninstall(ServiceUninstallCtx { label: label_value })
         .context("uninstall service")?;
     println!("Uninstalled {}.", SERVICE_LABEL);
+    Ok(())
+}
+
+/// Restart the Origin daemon: stop the running process, then start the freshly
+/// registered binary. Required after an upgrade — installing a new binary does
+/// not replace an already-running daemon (the new process detects the healthy
+/// incumbent on port 7878 and exits). See origin-server/src/main.rs:582-615.
+pub fn restart() -> Result<()> {
+    if !is_installed() {
+        anyhow::bail!("Origin service is not installed. Run `origin install` first.");
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        // No service-manager on Windows: drive Task Scheduler directly,
+        // mirroring uninstall()'s /end and install()'s /run.
+        let _ = std::process::Command::new("schtasks.exe")
+            .args(["/end", "/tn", WINDOWS_TASK_NAME])
+            .output();
+        run_schtasks(&["/run", "/tn", WINDOWS_TASK_NAME], "run scheduled task")?;
+        println!("Restarted Windows scheduled task '{}'.", WINDOWS_TASK_NAME);
+        return Ok(());
+    }
+
+    #[cfg_attr(target_os = "windows", allow(unreachable_code))]
+    let label_value = label()?;
+    let m = manager()?;
+    // Best-effort stop: errors if not currently running, which is fine.
+    let _ = m.stop(ServiceStopCtx {
+        label: label_value.clone(),
+    });
+    m.start(ServiceStartCtx { label: label_value })
+        .context("start service")?;
+    println!("Restarted {}.", SERVICE_LABEL);
     Ok(())
 }
 

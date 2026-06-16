@@ -331,7 +331,9 @@ pub fn spawn_scheduler(shared: SharedState, write_signal: WriteSignal) {
 
             // --- 5. Enrichment sweep: back-fill entity linkage for memories
             //        ingested while the LLM was unavailable. ---
-            if now.duration_since(last_enrichment_sweep) >= ENRICHMENT_SWEEP_INTERVAL {
+            if origin_core::db::entity_sweep_enabled()
+                && now.duration_since(last_enrichment_sweep) >= ENRICHMENT_SWEEP_INTERVAL
+            {
                 // Pick the best available LLM: prefer api_llm (cloud, reliable),
                 // fall back to on-device llm.
                 let sweep_llm = api_llm.as_ref().or(llm.as_ref()).cloned();

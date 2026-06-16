@@ -5,7 +5,7 @@ AI work memory for Claude Code. Origin carries sessions, decisions, lessons, and
 ## 30-Second Setup
 
 ```text
-0s   /plugin marketplace add 7xuanlu/origin
+0s   /plugin marketplace add 7xuanlu/claude-plugins
      /plugin install origin@7xuanlu
 5s   restart Claude Code
 10s  /init   auto-installs daemon if missing, configures local memory,
@@ -21,7 +21,7 @@ if the daemon ever stops.
 ## Install
 
 ```text
-/plugin marketplace add 7xuanlu/origin
+/plugin marketplace add 7xuanlu/claude-plugins
 /plugin install origin@7xuanlu
 ```
 
