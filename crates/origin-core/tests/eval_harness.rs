@@ -9085,3 +9085,417 @@ async fn judge_lme_fullstack_ceiling() {
         .unwrap_or_default()
     );
 }
+
+// ── Task 2.1 RED contract test ─────────────────────────────────────────────
+//
+// PURPOSE (TDD – this test is EXPECTED TO FAIL).
+//
+// There are two post-store enrichment paths in origin-core:
+//   • Production / canonical: `ingest::run_canonical_enrichment` runs
+//     Phase-1 (classify) + Phase-2 via `post_ingest::run_post_ingest_enrichment`
+//     (auto_link_entity → extract_single_memory_entities) + Phase-3.
+//   • Eval seed (FORKED): `eval::shared::enrich_db_for_eval_local` runs
+//     `run_classification_for_eval_concurrent` (Phase 1) +
+//     `run_entity_extraction_for_eval_concurrent` (NO auto_link_entity — all
+//     memories go through LLM extraction via `get_unlinked_memories`) +
+//     `run_title_enrichment_for_eval` + `distill_pages`.
+//
+// The structural divergence the test captures:
+//
+//   The canonical arm uses `auto_link_entity` (cosine-distance vector search
+//   against the entities table) BEFORE LLM extraction. When a match is found
+//   below the `entity_link_distance` threshold, the memory's `entity_id` column
+//   is updated and LLM extraction is SKIPPED — that memory receives no new row
+//   in the `memory_entities` junction table from the canonical arm.
+//
+//   The eval arm uses `get_unlinked_memories` (entity_id IS NULL filter) and
+//   always routes every match to LLM extraction via `extract_single_memory_entities`,
+//   writing a `memory_entities` row unconditionally.
+//
+//   Concretely: after Doc 1 is processed in the canonical arm and its entity
+//   ("Alice Chen") is embedded in the entities table, Doc 2 ("Alice Chen.") is
+//   auto-linked at distance ≈ 0 (entity name and content are nearly identical),
+//   skipping LLM extraction → no `memory_entities` row for Doc 2 in the
+//   canonical arm. The eval arm processes all 3 docs via LLM → writes
+//   `memory_entities` for all 3 → sets diverge.
+//
+//   To reliably trigger this divergence, Doc 2 content is set to the entity
+//   name verbatim ("Alice Chen.") so cosine-distance < 0.15 (production default)
+//   is guaranteed.
+//
+// EXPECTED OUTCOME:
+//   The `assert_eq!` on entity-link tuples FAILS (eval arm has 7+ tuples, canonical
+//   arm has fewer because Doc 2 and/or Doc 3 are auto-linked and skip LLM).
+//   This failure is the RED gate. Do NOT fix it here. Task 2.3 fixes the fork.
+//
+// Run:
+//   RUSTC_WRAPPER= cargo test -p origin-core --test eval_harness \
+//     --features eval-harness \
+//     enrichment_parity_contract_red -- --ignored --nocapture
+#[tokio::test]
+#[ignore = "GPU (on-device LLM); RED contract documenting the eval-vs-prod enrichment fork. Expected to FAIL. Task 2.3 will fix."]
+async fn enrichment_parity_contract_red() {
+    use origin_core::db::MemoryDB;
+    use origin_core::eval::shared::enrich_db_for_eval_local;
+    use origin_core::events::NoopEmitter;
+    use origin_core::ingest::{run_canonical_enrichment, EnrichmentOpts};
+    use origin_core::llm_provider::{LlmProvider, OnDeviceProvider};
+    use origin_core::prompts::PromptRegistry;
+    use origin_core::tuning::{DistillationConfig, RefineryConfig};
+    use origin_types::sources::RawDocument;
+    use std::collections::HashSet;
+    use std::sync::Arc;
+
+    // ── LLM provider (shared between arms for reproducibility) ──────────────
+    let llm: Arc<dyn origin_core::llm_provider::LlmProvider> = match OnDeviceProvider::new() {
+        Ok(p) => {
+            assert!(
+                p.is_available(),
+                "[parity_contract] on-device LLM unavailable. \
+                     Run outside the CC sandbox; check `pgrep -la origin` for GPU contention."
+            );
+            Arc::new(p)
+        }
+        Err(e) => panic!("[parity_contract] on-device provider init failed: {e}"),
+    };
+
+    // Pin concurrency to 1 for determinism.
+    std::env::set_var("EVAL_ENRICHMENT_CONCURRENCY", "1");
+    // Ensure no Anthropic key (on-device only).
+    std::env::remove_var("ANTHROPIC_API_KEY");
+
+    // Fixed timestamp so both arms are identical on last_modified.
+    let fixed_ts: i64 = 1_700_000_000;
+
+    // ── Synthetic docs ───────────────────────────────────────────────────────
+    // Doc 1: long sentence so LLM extracts "Alice Chen" entity and writes the
+    //        entity to the `entities` table + `memory_entities` junction.
+    // Doc 2: VERBATIM entity name ("Alice Chen.") so cosine distance from the
+    //        "Alice Chen" entity embedding < 0.15 → `auto_link_entity` fires in
+    //        the CANONICAL arm → skips LLM extraction → NO `memory_entities` row.
+    //        In the EVAL arm, `get_unlinked_memories` (entity_id IS NULL) picks
+    //        it up anyway and routes it through LLM extraction → junction row written.
+    // Doc 3: Another sentence about the same person, for coverage.
+    let test_docs: Vec<(&str, &str)> = vec![
+        (
+            "parity_src_001",
+            "Alice Chen is the lead engineer at Acme Corp. She manages the platform team.",
+        ),
+        (
+            // Short verbatim entity-name content — guarantees auto_link fires in canonical arm.
+            "parity_src_002",
+            "Alice Chen.",
+        ),
+        (
+            "parity_src_003",
+            "Acme Corp is migrating to Rust. The migration is led by Alice Chen.",
+        ),
+    ];
+
+    fn make_doc(source_id: &str, content: &str, ts: i64) -> RawDocument {
+        RawDocument {
+            source: "memory".to_string(),
+            source_id: source_id.to_string(),
+            title: content.chars().take(40).collect(),
+            summary: None,
+            content: content.to_string(),
+            url: None,
+            last_modified: ts,
+            metadata: std::collections::HashMap::new(),
+            memory_type: Some("fact".to_string()),
+            space: None,
+            source_agent: Some("parity_test".to_string()),
+            confidence: Some(0.9),
+            confirmed: Some(true),
+            stability: Some("new".to_string()),
+            supersedes: None,
+            pending_revision: false,
+            entity_id: None,
+            quality: None,
+            importance: None,
+            is_recap: false,
+            enrichment_status: "raw".to_string(),
+            supersede_mode: "hide".to_string(),
+            structured_fields: None,
+            retrieval_cue: None,
+            source_text: None,
+        }
+    }
+
+    // Shared embedder — avoid double model load.
+    let shared_embedder = MemoryDB::create_shared_embedder()
+        .await
+        .expect("create_shared_embedder");
+
+    // ── ARM A: eval path ─────────────────────────────────────────────────────
+    let eval_dir = tempfile::TempDir::new().expect("eval tempdir");
+    let eval_db_path = eval_dir.path().join("origin_memory.db");
+    {
+        let db = MemoryDB::new_with_shared_embedder(
+            eval_dir.path(),
+            Arc::new(NoopEmitter),
+            shared_embedder.clone(),
+        )
+        .await
+        .expect("eval DB init");
+
+        db.upsert_documents(
+            test_docs
+                .iter()
+                .map(|(id, content)| make_doc(id, content, fixed_ts))
+                .collect(),
+        )
+        .await
+        .expect("eval upsert_documents");
+
+        eprintln!("[parity_contract] ARM A (eval): enrich_db_for_eval_local...");
+        enrich_db_for_eval_local(&db, &llm)
+            .await
+            .expect("enrich_db_for_eval_local");
+        eprintln!("[parity_contract] ARM A: done");
+        // Drop DB — flush WAL before raw libsql read below.
+    }
+
+    // ── ARM B: canonical path ────────────────────────────────────────────────
+    let canon_dir = tempfile::TempDir::new().expect("canon tempdir");
+    let canon_db_path = canon_dir.path().join("origin_memory.db");
+    {
+        let db = MemoryDB::new_with_shared_embedder(
+            canon_dir.path(),
+            Arc::new(NoopEmitter),
+            shared_embedder.clone(),
+        )
+        .await
+        .expect("canon DB init");
+
+        db.upsert_documents(
+            test_docs
+                .iter()
+                .map(|(id, content)| make_doc(id, content, fixed_ts))
+                .collect(),
+        )
+        .await
+        .expect("canon upsert_documents");
+
+        let prompts = PromptRegistry::default();
+        // Use production-default entity_link_distance (0.15). Doc 2 content is the
+        // verbatim entity name "Alice Chen." so cosine distance < 0.15 is expected,
+        // triggering auto_link and skipping LLM extraction for Doc 2.
+        let refinery = RefineryConfig::default();
+        let distillation = DistillationConfig::default();
+
+        eprintln!("[parity_contract] ARM B (canonical): run_canonical_enrichment × 3...");
+        for (source_id, content) in &test_docs {
+            let opts = EnrichmentOpts {
+                initial_memory_type: "fact".to_string(),
+                initial_domain: None,
+                initial_supersede_mode: "hide".to_string(),
+                initial_structured_fields: None,
+                agent_supplied_memory_type: false,
+                agent_supplied_profile_alias: false,
+                agent_supplied_structured_fields: false,
+            };
+            run_canonical_enrichment(
+                &db,
+                source_id,
+                content,
+                None,
+                Some(&llm),
+                &prompts,
+                &refinery,
+                &distillation,
+                None,
+                &opts,
+                None,
+            )
+            .await;
+        }
+        eprintln!("[parity_contract] ARM B: done");
+        // Drop DB before raw libsql read below.
+    }
+
+    // ── Read membership tuples via raw libsql (same pattern as seed_contract) ─
+    async fn read_entity_link_tuples(db_path: &std::path::Path) -> Vec<(String, String)> {
+        let sdb = libsql::Builder::new_local(db_path.to_str().unwrap())
+            .build()
+            .await
+            .expect("open db for entity read");
+        let conn = sdb.connect().expect("connect for entity read");
+        let mut rows = conn
+            .query(
+                "SELECT me.memory_id, e.name \
+                 FROM memory_entities me \
+                 JOIN entities e ON e.id = me.entity_id \
+                 ORDER BY me.memory_id, e.name",
+                (),
+            )
+            .await
+            .expect("entity_link query");
+        let mut out = Vec::new();
+        while let Ok(Some(row)) = rows.next().await {
+            let mem_id: String = row.get(0).unwrap_or_default();
+            let entity_name: String = row.get(1).unwrap_or_default();
+            out.push((mem_id, entity_name));
+        }
+        out
+    }
+
+    async fn read_page_membership_tuples(db_path: &std::path::Path) -> Vec<(String, String)> {
+        let sdb = libsql::Builder::new_local(db_path.to_str().unwrap())
+            .build()
+            .await
+            .expect("open db for page read");
+        let conn = sdb.connect().expect("connect for page read");
+        let mut rows = conn
+            .query(
+                "SELECT page_id, memory_source_id \
+                 FROM page_sources \
+                 ORDER BY page_id, memory_source_id",
+                (),
+            )
+            .await
+            .expect("page_sources query");
+        let mut out = Vec::new();
+        while let Ok(Some(row)) = rows.next().await {
+            let page_id: String = row.get(0).unwrap_or_default();
+            let mem_src: String = row.get(1).unwrap_or_default();
+            out.push((page_id, mem_src));
+        }
+        out
+    }
+
+    async fn read_titles_nonempty(db_path: &std::path::Path) -> HashSet<String> {
+        let sdb = libsql::Builder::new_local(db_path.to_str().unwrap())
+            .build()
+            .await
+            .expect("open db for title read");
+        let conn = sdb.connect().expect("connect for title read");
+        let mut rows = conn
+            .query(
+                "SELECT source_id FROM memories \
+                 WHERE source = 'memory' AND chunk_index = 0 \
+                   AND title IS NOT NULL AND title != '' \
+                 ORDER BY source_id",
+                (),
+            )
+            .await
+            .expect("title query");
+        let mut set = HashSet::new();
+        while let Ok(Some(row)) = rows.next().await {
+            set.insert(row.get::<String>(0).unwrap_or_default());
+        }
+        set
+    }
+
+    let eval_entity_links = read_entity_link_tuples(&eval_db_path).await;
+    let canon_entity_links = read_entity_link_tuples(&canon_db_path).await;
+    let eval_page_membership = read_page_membership_tuples(&eval_db_path).await;
+    let canon_page_membership = read_page_membership_tuples(&canon_db_path).await;
+    let eval_titles_nonempty = read_titles_nonempty(&eval_db_path).await;
+    let canon_titles_nonempty = read_titles_nonempty(&canon_db_path).await;
+
+    // ── Report ───────────────────────────────────────────────────────────────
+    eprintln!("\n[parity_contract] === MEMBERSHIP TUPLE COMPARISON ===");
+    eprintln!("\nEntity-link tuples (memory_id, entity_name):");
+    eprintln!(
+        "  EVAL  ({} tuples): {:?}",
+        eval_entity_links.len(),
+        eval_entity_links
+    );
+    eprintln!(
+        "  CANON ({} tuples): {:?}",
+        canon_entity_links.len(),
+        canon_entity_links
+    );
+    let eval_set: HashSet<_> = eval_entity_links.iter().collect();
+    let canon_set: HashSet<_> = canon_entity_links.iter().collect();
+    let only_eval: Vec<_> = eval_set.difference(&canon_set).collect();
+    let only_canon: Vec<_> = canon_set.difference(&eval_set).collect();
+    eprintln!(
+        "  In EVAL only ({} tuples): {:?}",
+        only_eval.len(),
+        only_eval
+    );
+    eprintln!(
+        "  In CANON only ({} tuples): {:?}",
+        only_canon.len(),
+        only_canon
+    );
+
+    eprintln!("\nPage-membership tuples:");
+    eprintln!(
+        "  EVAL  ({} tuples): {:?}",
+        eval_page_membership.len(),
+        eval_page_membership
+    );
+    eprintln!(
+        "  CANON ({} tuples): {:?}",
+        canon_page_membership.len(),
+        canon_page_membership
+    );
+
+    eprintln!("\nTitle-nonempty source_ids:");
+    eprintln!("  EVAL  ({} ids): {:?}", eval_titles_nonempty.len(), {
+        let mut v: Vec<_> = eval_titles_nonempty.iter().cloned().collect();
+        v.sort();
+        v
+    });
+    eprintln!("  CANON ({} ids): {:?}", canon_titles_nonempty.len(), {
+        let mut v: Vec<_> = canon_titles_nonempty.iter().cloned().collect();
+        v.sort();
+        v
+    });
+
+    // ── RED assertion: parity sets MUST match (assert_eq! fails when they differ) ──
+    //
+    // This assert_eq! is the RED gate.
+    //
+    // The two paths fork at `auto_link_entity`:
+    //   • Eval arm: always routes to `extract_single_memory_entities` (no auto_link step).
+    //   • Canonical arm: auto-links Doc 2 ("Alice Chen." — verbatim entity name) at
+    //     cosine distance ≈ 0, skipping LLM extraction → no `memory_entities` row for Doc 2.
+    //
+    // Expected failure message: eval_entity_links (N tuples) != canon_entity_links (M tuples)
+    // where N > M because canonical arm has fewer junction rows (Doc 2 was auto-linked).
+    //
+    // If this assert PASSES it means either:
+    //   (a) The fork was removed (Task 2.3 succeeded — this test is green now).
+    //   (b) The corpus failed to exercise auto_link (distance > 0.15 for "Alice Chen.").
+    //       In case (b), check the eprintln output above and strengthen the corpus.
+    //
+    // Do NOT fix this test. Task 2.3 will route enrich_db_for_eval_local through
+    // run_canonical_enrichment, making both arms byte-identical.
+    assert_eq!(
+        eval_entity_links,
+        canon_entity_links,
+        "[parity_contract] RED: entity-link tuples DIVERGE between eval and canonical paths.\n\
+         Eval arm processed all 3 docs via LLM (enrich_db_for_eval_local has no auto_link step).\n\
+         Canonical arm auto-linked Doc 2 ('Alice Chen.' ~ entity 'alice chen' at dist≈0), \
+         skipping LLM extraction for that doc → fewer memory_entities rows.\n\
+         EVAL  ({eval_n}): {eval:?}\n\
+         CANON ({canon_n}): {canon:?}",
+        eval_n = eval_entity_links.len(),
+        eval = eval_entity_links,
+        canon_n = canon_entity_links.len(),
+        canon = canon_entity_links,
+    );
+
+    // Secondary checks (report divergence even if entity-links happen to match).
+    assert_eq!(
+        eval_page_membership, canon_page_membership,
+        "[parity_contract] RED: page-membership tuples diverge: eval={:?} canon={:?}",
+        eval_page_membership, canon_page_membership,
+    );
+
+    assert_eq!(
+        eval_titles_nonempty, canon_titles_nonempty,
+        "[parity_contract] RED: title-nonempty sets diverge: eval={:?} canon={:?}",
+        eval_titles_nonempty, canon_titles_nonempty,
+    );
+
+    // If we reach here, all sets are equal — the fork is already gone (Task 2.3 is done).
+    eprintln!(
+        "\n[parity_contract] GREEN: all membership sets are equal — \
+         the eval-vs-canonical fork is resolved. Task 2.3 complete."
+    );
+}
