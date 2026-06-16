@@ -1995,22 +1995,26 @@ pub async fn run_classification_for_eval_concurrent(
     Ok(processed)
 }
 
-/// On-device enrichment via production code paths. Mirrors production exactly:
-/// `refinery::extract_entities_from_memories` → `post_ingest::enrich_title` per memory →
-/// `refinery::distill_pages`. Free but slow (Qwen3-4B serial ≈ several hours at LME scale).
+/// On-device eval seed enrichment via the production code path.
 ///
-/// Concurrency: entity + title phases dispatch up to `EVAL_ENRICHMENT_CONCURRENCY` parallel LLM
-/// calls (default 1 = serial). Distillation stays serial due to cluster ordering dependencies:
-/// `distill_pages` builds clusters by scanning enrichment state written by prior phases, and
-/// splitting it would break the FK ordering assumptions in `find_distillation_clusters`.
+/// Phase 1 (classification) runs the shared `ingest` classify+extract pass per
+/// memory with `EVAL_ENRICHMENT_CONCURRENCY` parallelism (default 1 = serial),
+/// writing importance / event_date / quality / structured_fields / retrieval_cue.
 ///
-/// Batching: when `EVAL_ENRICHMENT_BATCH_SIZE > 1`, entity extraction uses
-/// `run_entity_extraction_for_eval_batched` instead of the per-memory concurrent path.
-/// Batch mode packs multiple memories into one LLM call, which is faster on single-device Metal
-/// where true concurrency is limited. Qwen3.5-9B handles batch_size=5-10 reliably;
-/// Qwen3-4B degrades above 1-2. Default (1) preserves current per-memory behavior.
+/// Phase 2 (entity link + extraction + title + page growth) is de-forked: it loops
+/// over every primary memory in insertion order and calls the production
+/// `post_ingest::run_post_ingest_enrichment` per memory — the SAME code the daemon
+/// store path runs — so the eval seed and production share one enrichment path
+/// (Google "Rules of ML", Rule #32). This restores the `auto_link_entity` step the
+/// old eval fork lacked. Free but slow (Qwen3-4B serial ≈ several hours at LME scale).
 ///
-/// For staged evals (e.g. `pipeline.rs` Flat/Enriched/Distilled), call the three sub-steps
+/// Phase 3 (`refinery::distill_pages`) stays serial: it builds clusters by scanning
+/// enrichment state written by prior phases, and splitting it would break the FK
+/// ordering assumptions in `find_distillation_clusters`.
+///
+/// Returns REAL `(entity_links, titles, concepts)` counts via cheap COUNT queries.
+///
+/// For staged evals (e.g. `pipeline.rs` Flat/Enriched/Distilled), call the sub-steps
 /// independently — `run_entity_extraction_for_eval`, `run_title_enrichment_for_eval`,
 /// `refinery::distill_pages` — so each stage can be measured in isolation.
 pub async fn enrich_db_for_eval_local(
@@ -2018,45 +2022,84 @@ pub async fn enrich_db_for_eval_local(
     llm: &Arc<dyn crate::llm_provider::LlmProvider>,
 ) -> Result<(usize, usize, usize), OriginError> {
     use crate::prompts::PromptRegistry;
-    use crate::tuning::DistillationConfig;
+    use crate::tuning::{DistillationConfig, RefineryConfig};
 
     let concurrency: usize = std::env::var("EVAL_ENRICHMENT_CONCURRENCY")
         .ok()
         .and_then(|s| s.parse().ok())
         .unwrap_or(1);
 
-    let batch_size: usize = std::env::var("EVAL_ENRICHMENT_BATCH_SIZE")
-        .ok()
-        .and_then(|s| s.parse().ok())
-        .unwrap_or(1);
+    eprintln!("    [enrich_local] concurrency={concurrency}");
 
-    eprintln!(
-        "    [enrich_local] concurrency={} batch_size={}",
-        concurrency, batch_size
-    );
-
-    // Phase 1 (classification) FIRST: write importance / event_date / quality /
-    // structured_fields / retrieval_cue via the shared `ingest` canonical pass,
-    // matching the production order where Phase 1 precedes the entity/title/page
-    // passes. The legacy shortcut skipped this entirely — without it the T8
-    // (salience), T11/T20 (temporal), and T15 (fact-channel) flags read empty
-    // columns and ship merged-but-inert.
+    // Phase 1 (classification) FIRST — shared with production; write importance /
+    // event_date / quality / structured_fields / retrieval_cue.
     let classified = run_classification_for_eval_concurrent(db, llm, concurrency).await?;
     eprintln!("    [enrich_local] {classified} memories classified (Phase 1)");
 
-    let entities = if batch_size > 1 {
-        run_entity_extraction_for_eval_batched(db, llm, batch_size).await?
-    } else {
-        run_entity_extraction_for_eval_concurrent(db, llm, concurrency).await?
-    };
-    let titles = run_title_enrichment_for_eval(db, llm, concurrency).await?;
-
+    // Phase 2 — de-forked: route through the production `run_post_ingest_enrichment`
+    // per memory in insertion order. Matches the production single-memory path;
+    // the windowed `find_recent_batch` batch-extraction branch does not fire on
+    // historical-timestamp seeds (seeded rows are >30s old). This includes
+    // `auto_link_entity` (the step the old fork lacked), so a verbatim entity-name
+    // memory is auto-linked instead of re-extracted, matching the canonical arm.
     let prompts = PromptRegistry::load(&PromptRegistry::override_dir());
-    let tuning = DistillationConfig::default();
-    let concepts = crate::refinery::distill_pages(db, Some(llm), &prompts, &tuning, None).await?;
+    let refinery = RefineryConfig::default();
+    let distillation = DistillationConfig::default();
+
+    let all_memories = db.get_all_source_memories_ordered().await?;
+    let total_memories = all_memories.len();
+    eprintln!("    [enrich_local] Phase 2: {total_memories} memories via canonical post_ingest...");
+    let t2_start = std::time::Instant::now();
+
+    for (i, (source_id, content)) in all_memories.iter().enumerate() {
+        crate::post_ingest::run_post_ingest_enrichment(
+            db,
+            source_id,
+            content,
+            None, // entity_id: let auto_link_entity + extraction decide
+            None,
+            None,
+            None,
+            Some(llm),
+            &prompts,
+            &refinery,
+            &distillation,
+            None, // knowledge_path
+            None, // cancel
+        )
+        .await?;
+        if (i + 1) % 20 == 0 || i + 1 == total_memories {
+            let elapsed = t2_start.elapsed().as_secs_f64();
+            let rate = (i + 1) as f64 / elapsed.max(0.001);
+            eprintln!(
+                "    [enrich_local] Phase 2: {}/{} done | {:.1}s elapsed | {:.1}/s",
+                i + 1,
+                total_memories,
+                elapsed,
+                rate,
+            );
+        }
+    }
+
+    let elapsed_phase2 = t2_start.elapsed();
+    eprintln!(
+        "    [enrich_local] Phase 2 done in {:.1}s ({:.2}s/memory avg)",
+        elapsed_phase2.as_secs_f64(),
+        elapsed_phase2.as_secs_f64() / total_memories.max(1) as f64,
+    );
+
+    // Phase 3: distill pages (unchanged — already shared with production).
+    let concepts =
+        crate::refinery::distill_pages(db, Some(llm), &prompts, &distillation, None).await?;
     eprintln!("    [distill_local] {} concepts", concepts);
 
-    Ok((entities, titles, concepts))
+    // Report REAL counts (Phase 2 now runs entity + title together via
+    // run_post_ingest_enrichment, so they're not tracked per-phase). Cheap COUNT
+    // queries keep the shared seed log honest instead of fabricating memory-count
+    // proxies. Matches what the BatchApi/Cli arms of enrich_db_for_eval return.
+    let entity_links = db.count_memory_entity_links().await? as usize;
+    let titles = db.count_nonempty_titles().await? as usize;
+    Ok((entity_links, titles, concepts))
 }
 
 /// Batch title enrichment via Anthropic Batch API.

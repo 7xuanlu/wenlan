@@ -5438,7 +5438,7 @@ async fn smoke_fullpipeline() {
 /// On-device Qwen3-4B (free, Metal GPU). Requires `--ignored --nocapture`.
 ///
 /// Run as probe before full LME/LoCoMo:
-///   SMOKE_LOCOMO_SAMPLES=10 EVAL_LOCAL_MODEL=qwen3.5-9b EVAL_ENRICHMENT_BATCH_SIZE=8 \
+///   SMOKE_LOCOMO_SAMPLES=10 EVAL_LOCAL_MODEL=qwen3.5-9b \
 ///   cargo test -p origin --test eval_harness smoke_per_scenario_locomo -- --ignored --nocapture
 /// Default config (2 samples x 10 obs) is the CI smoke.
 #[tokio::test]
@@ -6164,7 +6164,7 @@ async fn smoke_per_scenario_locomo_cli_batched() {
 /// On-device Qwen3-4B, ~60-90s on Metal GPU. Requires `--ignored --nocapture`.
 ///
 /// Run as probe before full LME/LoCoMo:
-///   SMOKE_LME_SAMPLES=10 EVAL_LOCAL_MODEL=qwen3.5-9b EVAL_ENRICHMENT_BATCH_SIZE=8 \
+///   SMOKE_LME_SAMPLES=10 EVAL_LOCAL_MODEL=qwen3.5-9b \
 ///   cargo test -p origin --test eval_harness smoke_per_scenario_lme -- --ignored --nocapture
 /// Default config (2 samples x 5 mems) is the CI smoke.
 #[tokio::test]
@@ -9131,10 +9131,10 @@ async fn judge_lme_fullstack_ceiling() {
 // Run:
 //   RUSTC_WRAPPER= cargo test -p origin-core --test eval_harness \
 //     --features eval-harness \
-//     enrichment_parity_contract_red -- --ignored --nocapture
+//     enrichment_parity_contract -- --ignored --nocapture
 #[tokio::test]
-#[ignore = "GPU (on-device LLM); RED contract documenting the eval-vs-prod enrichment fork. Expected to FAIL. Task 2.3 will fix."]
-async fn enrichment_parity_contract_red() {
+#[ignore = "GPU (on-device LLM); parity regression guard â enrich_db_for_eval_local must produce identical entity-link, page-membership, and title-nonempty sets as run_canonical_enrichment. Task 2.3 de-forked Phase-2 through run_post_ingest_enrichment."]
+async fn enrichment_parity_contract() {
     use origin_core::db::MemoryDB;
     use origin_core::eval::shared::enrich_db_for_eval_local;
     use origin_core::events::NoopEmitter;

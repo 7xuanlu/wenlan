@@ -16522,6 +16522,48 @@ impl MemoryDB {
             .map_err(|e| OriginError::VectorDb(format!("count_active_pages get: {}", e)))
     }
 
+    /// Count rows in the `memory_entities` junction table (entity-link edges).
+    /// Used by the eval seed to report a REAL entity-link count after Phase-2
+    /// enrichment instead of a fabricated memory-count proxy.
+    pub async fn count_memory_entity_links(&self) -> Result<i64, OriginError> {
+        let conn = self.conn.lock().await;
+        let mut rows = conn
+            .query("SELECT COUNT(*) FROM memory_entities", ())
+            .await
+            .map_err(|e| OriginError::VectorDb(format!("count_memory_entity_links query: {e}")))?;
+        let row = rows
+            .next()
+            .await
+            .map_err(|e| OriginError::VectorDb(format!("count_memory_entity_links next: {e}")))?
+            .ok_or_else(|| OriginError::Generic("count_memory_entity_links: no rows".into()))?;
+        row.get::<i64>(0)
+            .map_err(|e| OriginError::VectorDb(format!("count_memory_entity_links get: {e}")))
+    }
+
+    /// Count primary (chunk_index=0) source memories with a non-empty title.
+    /// Used by the eval seed to report a REAL enriched-title count after Phase-2.
+    pub async fn count_nonempty_titles(&self) -> Result<i64, OriginError> {
+        let conn = self.conn.lock().await;
+        let mut rows = conn
+            .query(
+                "SELECT COUNT(*) FROM memories
+                 WHERE source = 'memory'
+                   AND chunk_index = 0
+                   AND title IS NOT NULL
+                   AND title != ''",
+                (),
+            )
+            .await
+            .map_err(|e| OriginError::VectorDb(format!("count_nonempty_titles query: {e}")))?;
+        let row = rows
+            .next()
+            .await
+            .map_err(|e| OriginError::VectorDb(format!("count_nonempty_titles next: {e}")))?
+            .ok_or_else(|| OriginError::Generic("count_nonempty_titles: no rows".into()))?;
+        row.get::<i64>(0)
+            .map_err(|e| OriginError::VectorDb(format!("count_nonempty_titles get: {e}")))
+    }
+
     /// Return the most-recently-modified active page, if any. Used by
     /// `MilestoneEvaluator::check_after_refinery_pass` to build the
     /// `first-page` payload.
@@ -18929,6 +18971,40 @@ impl MemoryDB {
             .map_err(|e| OriginError::VectorDb(format!("get_unlinked_memories: {}", e)))?;
 
         let mut results = vec![];
+        while let Some(row) = rows
+            .next()
+            .await
+            .map_err(|e| OriginError::VectorDb(e.to_string()))?
+        {
+            let source_id: String = row
+                .get(0)
+                .map_err(|e| OriginError::VectorDb(e.to_string()))?;
+            let content: String = row.get::<String>(1).unwrap_or_default();
+            results.push((source_id, content));
+        }
+        Ok(results)
+    }
+
+    /// Return all primary (chunk_index=0, non-recap) source memories in rowid ASC
+    /// order (insertion order). Used by the eval seed Phase-2 de-fork to enumerate
+    /// memories for `run_post_ingest_enrichment` in the same sequential order the
+    /// production server processes them.
+    pub async fn get_all_source_memories_ordered(
+        &self,
+    ) -> Result<Vec<(String, String)>, OriginError> {
+        let conn = self.conn.lock().await;
+        let mut rows = conn
+            .query(
+                "SELECT source_id, content FROM memories
+                 WHERE source = 'memory'
+                   AND chunk_index = 0
+                   AND is_recap = 0
+                 ORDER BY rowid ASC",
+                (),
+            )
+            .await
+            .map_err(|e| OriginError::VectorDb(format!("get_all_source_memories_ordered: {e}")))?;
+        let mut results = Vec::new();
         while let Some(row) = rows
             .next()
             .await
