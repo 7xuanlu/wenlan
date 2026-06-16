@@ -18590,7 +18590,7 @@ impl MemoryDB {
             .query(
                 "SELECT COUNT(DISTINCT es.source_id) FROM enrichment_steps es
                  JOIN memories m ON m.source_id = es.source_id
-                 WHERE m.source = 'memory' AND m.chunk_index = 0",
+                 WHERE m.source = 'memory' AND m.chunk_index = 0 AND m.is_recap = 0",
                 (),
             )
             .await
@@ -18645,7 +18645,7 @@ impl MemoryDB {
         let conn = self.conn.lock().await;
         let mut rows = conn
             .query(
-                "SELECT COUNT(*) FROM memories WHERE source = 'memory' AND chunk_index = 0",
+                "SELECT COUNT(*) FROM memories WHERE source = 'memory' AND chunk_index = 0 AND is_recap = 0",
                 (),
             )
             .await

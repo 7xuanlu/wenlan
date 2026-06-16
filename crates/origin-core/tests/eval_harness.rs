@@ -5850,11 +5850,13 @@ async fn smoke_eval_baselines_dir_e2e() {
 /// Manual smoke for per-scenario enrichment using Claude CLI provider (D2).
 ///
 /// Validates that `EnrichmentMode::OnDevice(ClaudeCliProvider)` works end-to-end:
-/// seed → concurrent entity extraction + title enrichment (EVAL_ENRICHMENT_CONCURRENCY=4)
-/// → distillation → isolation check. Uses claude-haiku-4-5-20251001 via Max plan.
+/// seed → Phase-1 concurrent classification (EVAL_ENRICHMENT_CONCURRENCY=4) → Phase-2
+/// sequential per-memory entity extraction + title + page enrichment (post-de-fork,
+/// EVAL_ENRICHMENT_CONCURRENCY governs Phase-1 only) → distillation → isolation check.
+/// Uses claude-haiku-4-5-20251001 via Max plan.
 ///
 /// - 1 LoCoMo conversation, 5 observations (small: CLI subprocess ~2-3s/call)
-/// - Expected duration: ~20s (5 obs × 2 phases / 4 concurrency × 3s + distill)
+/// - Expected duration: ~30s (Phase-1: 5 obs / 4 concurrency × 3s; Phase-2: 5 obs sequential × ~3s + distill)
 /// - Skips silently if `claude` binary is not in PATH
 ///
 /// ```bash
@@ -9311,6 +9313,14 @@ async fn enrichment_parity_contract() {
             .await;
         }
         eprintln!("[parity_contract] ARM B: done");
+        // Mirror production's background refinery (and Arm A's internal Phase-3):
+        // run_canonical_enrichment is the STORE path, whose Phase-3 is dual-pool
+        // dedup (default-OFF), NOT page distillation. Without this, Arm B ends with
+        // zero pages while Arm A distilled, making the page-membership assert below
+        // distill-vs-nothing. Distilling here makes it eval-distill vs canonical-distill.
+        origin_core::refinery::distill_pages(&db, Some(&llm), &prompts, &distillation, None)
+            .await
+            .expect("canon distill_pages");
         // Drop DB before raw libsql read below.
     }
 
@@ -9458,13 +9468,17 @@ async fn enrichment_parity_contract() {
     // Expected failure message: eval_entity_links (N tuples) != canon_entity_links (M tuples)
     // where N > M because canonical arm has fewer junction rows (Doc 2 was auto-linked).
     //
-    // If this assert PASSES it means either:
-    //   (a) The fork was removed (Task 2.3 succeeded — this test is green now).
-    //   (b) The corpus failed to exercise auto_link (distance > 0.15 for "Alice Chen.").
-    //       In case (b), check the eprintln output above and strengthen the corpus.
+    // Post-de-fork (Task 2.3 DONE): enrich_db_for_eval_local routes Phase-2 through
+    // the per-memory run_post_ingest_enrichment path, so both arms auto-link Doc 2
+    // and the entity-link tuples now match. This assert is the load-bearing regression
+    // guard: if Phase-2 is ever re-forked, the tuples diverge and this fails.
     //
-    // Do NOT fix this test. Task 2.3 will route enrich_db_for_eval_local through
-    // run_canonical_enrichment, making both arms byte-identical.
+    // Vacuous-pass guard: if the LLM extracted nothing, both arms are empty and the
+    // assert_eq! below would pass while measuring nothing — fail loud instead.
+    assert!(
+        !eval_entity_links.is_empty(),
+        "[parity_contract] vacuous: corpus produced zero entity links — strengthen corpus or check the LLM extracted entities"
+    );
     assert_eq!(
         eval_entity_links,
         canon_entity_links,
@@ -9480,16 +9494,20 @@ async fn enrichment_parity_contract() {
         canon = canon_entity_links,
     );
 
-    // Secondary checks (report divergence even if entity-links happen to match).
+    // Secondary check: page-membership parity. Both arms now run distill_pages at
+    // Phase-3 (Arm A internally, Arm B explicitly above), so this guards that the eval
+    // seed's page distillation matches the canonical distill. May be empty for this
+    // minimal 3-doc corpus (no cluster reaches the min size) — that is an acceptable
+    // 0==0 outcome; the assert still catches a structural divergence if pages do form.
     assert_eq!(
         eval_page_membership, canon_page_membership,
-        "[parity_contract] RED: page-membership tuples diverge: eval={:?} canon={:?}",
+        "[parity_contract] page-membership tuples diverge (eval-distill vs canonical-distill): eval={:?} canon={:?}",
         eval_page_membership, canon_page_membership,
     );
 
     assert_eq!(
         eval_titles_nonempty, canon_titles_nonempty,
-        "[parity_contract] RED: title-nonempty sets diverge: eval={:?} canon={:?}",
+        "[parity_contract] title-nonempty sets diverge: eval={:?} canon={:?}",
         eval_titles_nonempty, canon_titles_nonempty,
     );
 
