@@ -1150,6 +1150,47 @@ struct PendingAnswer {
 const E2E_SYSTEM_PROMPT: &str =
     "Answer the question using only the provided context. Be specific and concise. Respond in 1-3 sentences.";
 
+/// V2 answer prompt, opt-in via `ORIGIN_EVAL_ANSWER_PROMPT_V2`. Two changes over v1:
+/// (a) license a concrete preference-aligned recommendation instead of abstaining,
+/// (b) work dates step by step for temporal reasoning. Paired with a larger token
+/// budget (see `e2e_max_answer_tokens`) so the chain-of-thought has room. Default OFF
+/// keeps the v1 path byte-identical.
+const E2E_SYSTEM_PROMPT_V2: &str =
+    "Answer the question using the provided context. Be specific. For temporal questions \
+     (ordering, durations, \"which came first\", \"how many days between\"), work through the \
+     relevant dates step by step, then give the answer. For preference or recommendation \
+     questions, give a concrete recommendation aligned with the user's stated preferences \
+     instead of declining; only say the context lacks the information if no relevant \
+     preference is present. Keep the final answer to a few sentences.";
+
+/// Opt-in gate for the v2 answer prompt. Default OFF (v1). Accepts 1/true/yes/on.
+fn e2e_answer_prompt_v2_enabled() -> bool {
+    matches!(
+        std::env::var("ORIGIN_EVAL_ANSWER_PROMPT_V2")
+            .ok()
+            .as_deref(),
+        Some("1") | Some("true") | Some("yes") | Some("on")
+    )
+}
+
+/// Active E2E system prompt: v2 if opted in, else v1 (byte-identical default).
+fn e2e_system_prompt() -> String {
+    if e2e_answer_prompt_v2_enabled() {
+        E2E_SYSTEM_PROMPT_V2.to_string()
+    } else {
+        E2E_SYSTEM_PROMPT.to_string()
+    }
+}
+
+/// Max answer tokens: 512 under v2 (CoT room), 200 under v1 (byte-identical default).
+fn e2e_max_answer_tokens() -> usize {
+    if e2e_answer_prompt_v2_enabled() {
+        512
+    } else {
+        200
+    }
+}
+
 /// Controls which retrieval path `build_structured_context` uses.
 ///
 /// - `Quick`: existing `search_memory` quick path (unchanged behavior, graph stream ON).
@@ -1915,8 +1956,8 @@ pub async fn run_fullpipeline_locomo_batch(
                 batch_requests.push((
                     req_id.clone(),
                     format!("Context:\n{}\n\nQuestion: {}", ctx, qa.question),
-                    Some(E2E_SYSTEM_PROMPT.to_string()),
-                    200,
+                    Some(e2e_system_prompt()),
+                    e2e_max_answer_tokens(),
                 ));
                 pending.insert(
                     req_id,
@@ -2059,8 +2100,8 @@ pub async fn run_fullpipeline_locomo_batch(
                             entries.push((
                                 req_id,
                                 format!("Context:\n{}\n\nQuestion: {}", ctx, qa.question),
-                                Some(E2E_SYSTEM_PROMPT.to_string()),
-                                200,
+                                Some(e2e_system_prompt()),
+                                e2e_max_answer_tokens(),
                                 sample.sample_id.clone(),
                                 PendingAnswer {
                                     question: qa.question.clone(),
@@ -2409,8 +2450,8 @@ pub async fn run_fullpipeline_lme_batch(
             batch_requests.push((
                 req_id.clone(),
                 format!("Context:\n{}\n\nQuestion: {}", ctx, sample.question),
-                Some(E2E_SYSTEM_PROMPT.to_string()),
-                200,
+                Some(e2e_system_prompt()),
+                e2e_max_answer_tokens(),
             ));
             pending.insert(
                 req_id,
@@ -2562,8 +2603,8 @@ pub async fn run_fullpipeline_lme_batch(
                         Ok(vec![(
                             req_id,
                             format!("Context:\n{}\n\nQuestion: {}", ctx, sample.question),
-                            Some(E2E_SYSTEM_PROMPT.to_string()),
-                            200usize,
+                            Some(e2e_system_prompt()),
+                            e2e_max_answer_tokens(),
                             PendingAnswer {
                                 question: sample.question.clone(),
                                 ground_truth,
@@ -3023,9 +3064,9 @@ pub async fn run_fullpipeline_lme_ce_ab(
                 };
 
             let request = LlmRequest {
-                system_prompt: Some(E2E_SYSTEM_PROMPT.to_string()),
+                system_prompt: Some(e2e_system_prompt()),
                 user_prompt: format!("Context:\n{}\n\nQuestion: {}", ctx, sample.question),
-                max_tokens: 200,
+                max_tokens: e2e_max_answer_tokens() as u32,
                 // Pinned to 0.0 (vs the 0.1 used elsewhere) so both arms are
                 // deterministic — fairness depends on identical decoding.
                 temperature: 0.0,
@@ -3103,6 +3144,27 @@ pub async fn run_fullpipeline_lme_ce_ab(
 mod tests {
     use super::*;
     use crate::eval::longmemeval::{ChatTurn, LongMemEvalSample};
+
+    #[test]
+    fn answer_prompt_v2_gate_default_off_byte_identical() {
+        // Save/restore the env so we don't poison other tests.
+        let prev = std::env::var("ORIGIN_EVAL_ANSWER_PROMPT_V2").ok();
+        std::env::remove_var("ORIGIN_EVAL_ANSWER_PROMPT_V2");
+        assert!(!e2e_answer_prompt_v2_enabled());
+        assert_eq!(e2e_system_prompt(), E2E_SYSTEM_PROMPT);
+        assert_eq!(e2e_max_answer_tokens(), 200);
+
+        std::env::set_var("ORIGIN_EVAL_ANSWER_PROMPT_V2", "1");
+        assert!(e2e_answer_prompt_v2_enabled());
+        assert_eq!(e2e_system_prompt(), E2E_SYSTEM_PROMPT_V2);
+        assert_eq!(e2e_max_answer_tokens(), 512);
+
+        // restore
+        match prev {
+            Some(v) => std::env::set_var("ORIGIN_EVAL_ANSWER_PROMPT_V2", v),
+            None => std::env::remove_var("ORIGIN_EVAL_ANSWER_PROMPT_V2"),
+        }
+    }
 
     #[tokio::test]
     async fn event_date_injection_lands_on_seeded_rows() {
