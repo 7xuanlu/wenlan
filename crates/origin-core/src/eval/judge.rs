@@ -90,16 +90,53 @@ pub struct JudgedE2EReport {
 
 // ===== LLM-as-Judge Functions =====
 
+/// Sidecar `.bak` path for a judgment-tuples file (e.g. `foo.json` -> `foo.json.bak`).
+fn judgment_bak_path(path: &Path) -> PathBuf {
+    let mut s = path.as_os_str().to_owned();
+    s.push(".bak");
+    PathBuf::from(s)
+}
+
 /// Save E2E answer tuples to JSON for offline judging.
+///
+/// Resume safety: `std::fs::write` truncates-then-writes, so a process killed
+/// mid-write (the harness flushes every 10 questions on multi-hour runs) could
+/// leave the resume file corrupt and lose ALL generated tuples. To bound that,
+/// the prior file is copied to a `.bak` last-good snapshot before each overwrite;
+/// `load_judgment_tuples` recovers from it transparently if the main file is
+/// unreadable. Cross-platform (`fs::copy`), no atomic-rename Windows caveat.
 pub fn save_judgment_tuples(tuples: &[JudgmentTuple], path: &Path) -> Result<(), std::io::Error> {
     let json = serde_json::to_string_pretty(tuples).map_err(std::io::Error::other)?;
+    if path.exists() {
+        let _ = std::fs::copy(path, judgment_bak_path(path));
+    }
     std::fs::write(path, json)
 }
 
-/// Load previously saved judgment tuples from JSON.
+/// Load previously saved judgment tuples from JSON. Falls back to the `.bak`
+/// last-good snapshot when the main file is missing or corrupt (e.g. the writer
+/// was killed mid-flush) so a resume never restarts from zero.
 pub fn load_judgment_tuples(path: &Path) -> Result<Vec<JudgmentTuple>, std::io::Error> {
-    let content = std::fs::read_to_string(path)?;
-    serde_json::from_str(&content).map_err(std::io::Error::other)
+    let primary: Result<Vec<JudgmentTuple>, std::io::Error> = std::fs::read_to_string(path)
+        .and_then(|c| serde_json::from_str(&c).map_err(std::io::Error::other));
+    match primary {
+        Ok(tuples) => Ok(tuples),
+        Err(e) => {
+            let bak = judgment_bak_path(path);
+            if bak.exists() {
+                let content = std::fs::read_to_string(&bak)?;
+                let tuples: Vec<JudgmentTuple> =
+                    serde_json::from_str(&content).map_err(std::io::Error::other)?;
+                eprintln!(
+                    "[judge] main tuples file {path:?} unreadable ({e}); recovered {} tuples from {bak:?}",
+                    tuples.len()
+                );
+                Ok(tuples)
+            } else {
+                Err(e)
+            }
+        }
+    }
 }
 
 /// Judge answer tuples using Claude via the `claude -p` CLI.
@@ -1534,6 +1571,40 @@ fn strip_json_fence(s: &str) -> Option<&str> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn mk_tuple(answer: &str) -> JudgmentTuple {
+        JudgmentTuple {
+            question: "q".to_string(),
+            ground_truth: "gt".to_string(),
+            approach: "arm".to_string(),
+            answer: answer.to_string(),
+            context_tokens: 0,
+            category: "temporal-reasoning".to_string(),
+            question_id: "qid".to_string(),
+        }
+    }
+
+    #[test]
+    fn save_keeps_bak_and_load_recovers_from_corrupt_main() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("tuples.json");
+
+        // First save: main written, no .bak yet (nothing to back up).
+        save_judgment_tuples(&[mk_tuple("a")], &path).unwrap();
+        assert!(!judgment_bak_path(&path).exists());
+
+        // Second save: prior good copy ([a]) rotated into .bak; main becomes [a,b].
+        save_judgment_tuples(&[mk_tuple("a"), mk_tuple("b")], &path).unwrap();
+        assert!(judgment_bak_path(&path).exists());
+        assert_eq!(load_judgment_tuples(&path).unwrap().len(), 2);
+
+        // Kill mid-write simulation: main left corrupt. load() recovers the
+        // last-good .bak (the 1-tuple snapshot) instead of erroring.
+        std::fs::write(&path, "{ truncated").unwrap();
+        let recovered = load_judgment_tuples(&path).unwrap();
+        assert_eq!(recovered.len(), 1);
+        assert_eq!(recovered[0].answer, "a");
+    }
 
     #[test]
     fn parse_judge_output_json_yes() {
