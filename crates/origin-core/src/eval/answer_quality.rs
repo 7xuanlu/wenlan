@@ -2762,30 +2762,175 @@ pub async fn run_fullpipeline_lme_batch(
 
 // ===== Fair CE A/B answer runner =====
 
-/// Fair cross-encoder (CE) answer-accuracy A/B for LongMemEval.
+/// One arm of an LME answer A/B. Maps to a labeled retrieval mode per category.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ArmKind {
+    /// CE off: CrossRerank(None).
+    CeOff,
+    /// CE on: CrossRerank(Some(reranker)).
+    CeOn,
+    /// Full production stack, single arm: CrossRerank(Some(reranker)) with all
+    /// feature env flags left ON by the operator (page channel / graph stream /
+    /// temporal / deep `RERANK_POOL_FLOOR`). Used by the "best-possible ceiling"
+    /// run to measure how good Origin can answer with everything turned on, NOT
+    /// for an isolated A/B. Resolves to the same retrieval as `CeOn`; the
+    /// difference is the surrounding env flags + that no confounder isolation is
+    /// enforced (there is no OFF arm to perturb asymmetrically). Note: on this
+    /// CE path the live graph stream is structurally suppressed
+    /// (`allow_graph_stream = reranker.is_none()`, db.rs), so graph contributes
+    /// via entity-linked memories already in the pool, not the live stream.
+    FullStack,
+    // PR-3 will add CeOnGraph -> CrossRerankGraph. Do NOT add it now.
+}
+
+impl ArmKind {
+    /// Stable label prefix, e.g. "ce_off" / "ce_on".
+    fn label_prefix(self) -> &'static str {
+        match self {
+            ArmKind::CeOff => "ce_off",
+            ArmKind::CeOn => "ce_on",
+            ArmKind::FullStack => "fullstack",
+        }
+    }
+}
+
+/// The set of arms to run, in order.
+#[derive(Debug, Clone)]
+pub struct ArmSpec {
+    arms: Vec<ArmKind>,
+}
+
+impl ArmSpec {
+    /// The shipped 2-arm CE A/B: [CeOff, CeOn].
+    pub fn ce_two() -> Self {
+        ArmSpec {
+            arms: vec![ArmKind::CeOff, ArmKind::CeOn],
+        }
+    }
+
+    /// Single-arm "best-possible ceiling": [FullStack]. All feature env flags are
+    /// the operator's responsibility (page channel / graph / temporal / deep
+    /// `RERANK_POOL_FLOOR`); this spec just runs one CE-reranked arm and measures
+    /// its accuracy, with NO confounder isolation (see `needs_confounder_isolation`).
+    pub fn full_stack() -> Self {
+        ArmSpec {
+            arms: vec![ArmKind::FullStack],
+        }
+    }
+
+    /// Whether this spec is a CE isolation A/B that must run with the graph
+    /// stream / skip-pref / temporal flags OFF. True iff a `CeOff` arm is present:
+    /// the OFF arm (reranker=None) is the one those flags would perturb
+    /// asymmetrically vs an ON arm. A single-arm ceiling (`full_stack`) has no
+    /// OFF arm, so the isolation gate does not apply — features are meant to be ON.
+    fn needs_confounder_isolation(&self) -> bool {
+        self.arms.contains(&ArmKind::CeOff)
+    }
+
+    /// One label per arm for a given category, in order.
+    /// e.g. `ce_two().labels("single-session-user")`
+    ///        == `["ce_off_single-session-user", "ce_on_single-session-user"]`
+    pub fn labels(&self, category: &str) -> Vec<String> {
+        self.arms
+            .iter()
+            .map(|arm| format!("{}_{}", arm.label_prefix(), category))
+            .collect()
+    }
+
+    /// Label prefixes (for the done-set), e.g. `["ce_off", "ce_on"]`.
+    fn prefixes(&self) -> Vec<&'static str> {
+        self.arms.iter().map(|arm| arm.label_prefix()).collect()
+    }
+
+    /// Resolve arms to `(label, CtxRetrieval)` for a category, given the reranker.
+    /// `CeOn` requires `reranker.is_some()` — returns `Err` if an arm needs it and
+    /// it is `None`.
+    fn resolve(
+        &self,
+        category: &str,
+        reranker: &Option<Arc<dyn crate::reranker::Reranker>>,
+    ) -> Result<Vec<(String, CtxRetrieval)>, OriginError> {
+        let mut result = Vec::with_capacity(self.arms.len());
+        for arm in &self.arms {
+            let label = format!("{}_{}", arm.label_prefix(), category);
+            let retrieval = match arm {
+                ArmKind::CeOff => CtxRetrieval::CrossRerank(None),
+                ArmKind::CeOn | ArmKind::FullStack => {
+                    let r = reranker.clone().ok_or_else(|| {
+                        OriginError::Generic(format!(
+                            "ArmSpec::resolve: arm {} requires a reranker but none was provided",
+                            label
+                        ))
+                    })?;
+                    CtxRetrieval::CrossRerank(Some(r))
+                }
+            };
+            result.push((label, retrieval));
+        }
+        Ok(result)
+    }
+}
+
+/// Where the per-question retrieval pool comes from.
 ///
-/// **FAIR design**: both arms route through `search_memory_cross_rerank` so
+/// The cross-encoder is a *selection* stage: it can only change which memories
+/// reach the answerer when the candidate pool it reranks is larger than the
+/// returned top-k window. Two settings expose very different pools:
+///
+/// - [`DbSource::SeedPerQuestion`] — seed a fresh scenario DB from the
+///   question's own sessions (the LME *oracle* setting). The total pool is just
+///   that question's gold turns (N ~ k), so a top-10 rerank reorders an
+///   already-complete context and rarely changes membership. This is the
+///   default and matches the original `run_fullpipeline_lme_ce_ab` behavior.
+/// - [`DbSource::Consolidated`] — reuse ONE pre-seeded consolidated DB (every
+///   question's memories in a single store, N >> k). Retrieval must select
+///   k-from-many, so the CE has real reselection headroom. The DB is opened
+///   ONCE and shared read-only across all questions; per-question seeding and
+///   `event_date` injection are skipped (the consolidated DB is already
+///   enriched + dated). Pair with `RERANK_POOL_FLOOR` > 10 so the CE fetch pool
+///   exceeds the top-10 window (see `compute_rerank_fetch_pool`); with the
+///   default floor of 10 the CE reranks exactly the 10 docs it returns and
+///   cannot change membership regardless of the consolidated pool size.
+#[derive(Debug, Clone)]
+pub enum DbSource {
+    /// Seed a fresh per-question scenario DB (oracle setting, small pool N~k).
+    SeedPerQuestion,
+    /// Reuse one pre-seeded consolidated DB for every question (full-corpus
+    /// setting, large pool N>>k). The path is the DB *directory* (the one that
+    /// contains `origin_memory.db`). Opened once, never mutated.
+    Consolidated(std::path::PathBuf),
+}
+
+/// Provider-generic LME full-pipeline A/B runner.
+///
+/// Replaces the hardcoded `run_fullpipeline_lme_ce_ab` with an extensible
+/// `ArmSpec`-driven variant. Pass `ArmSpec::ce_two()` to reproduce the
+/// existing CE A/B behavior exactly.
+///
+/// `db_source` selects the candidate pool (see [`DbSource`]):
+/// [`DbSource::SeedPerQuestion`] reproduces the original oracle behavior;
+/// [`DbSource::Consolidated`] runs every question against one shared large-pool
+/// DB so the cross-encoder has real reselection headroom.
+///
+/// **FAIR design**: all arms route through `search_memory_cross_rerank` so
 /// P3 distill-demotion is symmetric, and the caller MUST set
 /// `ORIGIN_GRAPH_MEMORY_STREAM=0` (enforced at entry) so the OFF arm
 /// (reranker=None) does not re-enable the graph stream that the ON arm
 /// (reranker=Some) suppresses — without this, the A/B measures
 /// graph-stream vs CE, not CE alone.
 ///
-/// - OFF arm: `CrossRerank(None)` — no CE, graph stream off.
-/// - ON  arm: `CrossRerank(Some(reranker))` — CE active, graph stream off.
-///
-/// Per question, both arms share the same seeded DB (same seed/enrichment
+/// Per question, all arms share the same seeded DB (same seed/enrichment
 /// as `run_fullpipeline_lme_batch`). Answers are generated on-device by the
-/// supplied `llm` provider (Qwen3.5-9B) at `temperature = 0.0` so both arms
+/// supplied `llm` provider (Qwen3.5-9B) at `temperature = 0.0` so all arms
 /// are deterministic and self-judging is avoided (the downstream judge is a
 /// different model). Mirrors `generate_e2e_answers_for_question`'s LLM call.
 ///
-/// Approach labels: `"ce_off_{category}"` / `"ce_on_{category}"`.
+/// Approach labels: `"<arm_prefix>_{category}"` per arm.
 ///
 /// ## MEASUREMENT SCOPE
 ///
 /// This isolates the cross-encoder. The confounder gate forces the graph stream
-/// (and skip-preference / temporal boost+filter) OFF on BOTH arms, so the only
+/// (and skip-preference / temporal boost+filter) OFF on ALL arms, so the only
 /// deliberate difference is the CE rescore. Production, however, runs the graph
 /// stream DEFAULT-ON, where CE-off keeps the stream and CE-on drops it
 /// (allow_graph_stream = reranker.is_none(), db.rs). A positive delta here therefore
@@ -2797,12 +2942,14 @@ pub async fn run_fullpipeline_lme_batch(
 ///
 /// Returns `Err` immediately if `ORIGIN_GRAPH_MEMORY_STREAM` is not one of
 /// "0"/"false"/"no"/"off" — the A/B is statistically invalid without it.
-pub async fn run_fullpipeline_lme_ce_ab(
+pub async fn run_fullpipeline_lme(
     longmemeval_path: &std::path::Path,
     enrichment: crate::eval::shared::EnrichmentMode,
     llm: Arc<dyn crate::llm_provider::LlmProvider>,
+    reranker: Option<Arc<dyn crate::reranker::Reranker>>,
+    arms: &ArmSpec,
+    db_source: DbSource,
     output_path: &std::path::Path,
-    reranker: Arc<dyn crate::reranker::Reranker>,
 ) -> Result<Vec<crate::eval::judge::JudgmentTuple>, OriginError> {
     use crate::eval::judge::{save_judgment_tuples, JudgmentTuple};
     use crate::eval::longmemeval::{category_name, extract_memories, load_longmemeval};
@@ -2815,38 +2962,44 @@ pub async fn run_fullpipeline_lme_ce_ab(
     // the base pool. Reuse the same predicates that gate each feature so the guard
     // cannot drift. Refuse loud, naming the offenders, rather than emit a
     // confounded delta.
-    let confounders: [(&str, bool); 4] = [
-        (
-            "ORIGIN_GRAPH_MEMORY_STREAM",
-            crate::db::graph_memory_stream_enabled(),
-        ),
-        (
-            "ORIGIN_RERANK_SKIP_PREFERENCE",
-            crate::db::rerank_skip_preference_enabled(),
-        ),
-        (
-            "ORIGIN_ENABLE_TEMPORAL_SOFT_BOOST",
-            crate::db::temporal_soft_boost_enabled(),
-        ),
-        (
-            "ORIGIN_ENABLE_TEMPORAL_FILTER",
-            crate::db::temporal_filter_enabled(),
-        ),
-    ];
-    let active: Vec<&str> = confounders
-        .iter()
-        .filter(|(_, on)| *on)
-        .map(|(name, _)| *name)
-        .collect();
-    if !active.is_empty() {
-        return Err(OriginError::Generic(format!(
-            "CE A/B refused: confounding flag(s) active: {}. Each perturbs one arm \
-             asymmetrically (graph stream re-enabled on the OFF arm; CE bypass on \
-             preference queries; temporal boost/filter alters the base pool), so the \
-             A/B would not isolate the cross-encoder. Set them all to 0/false/no/off \
-             and retry.",
-            active.join(", ")
-        )));
+    //
+    // Only enforced for an isolation A/B (a spec with a CeOff arm). A single-arm
+    // ceiling (`ArmSpec::full_stack`) has no OFF arm to perturb, so features are
+    // meant to be ON and the gate is skipped — see `needs_confounder_isolation`.
+    if arms.needs_confounder_isolation() {
+        let confounders: [(&str, bool); 4] = [
+            (
+                "ORIGIN_GRAPH_MEMORY_STREAM",
+                crate::db::graph_memory_stream_enabled(),
+            ),
+            (
+                "ORIGIN_RERANK_SKIP_PREFERENCE",
+                crate::db::rerank_skip_preference_enabled(),
+            ),
+            (
+                "ORIGIN_ENABLE_TEMPORAL_SOFT_BOOST",
+                crate::db::temporal_soft_boost_enabled(),
+            ),
+            (
+                "ORIGIN_ENABLE_TEMPORAL_FILTER",
+                crate::db::temporal_filter_enabled(),
+            ),
+        ];
+        let active: Vec<&str> = confounders
+            .iter()
+            .filter(|(_, on)| *on)
+            .map(|(name, _)| *name)
+            .collect();
+        if !active.is_empty() {
+            return Err(OriginError::Generic(format!(
+                "CE A/B refused: confounding flag(s) active: {}. Each perturbs one arm \
+                 asymmetrically (graph stream re-enabled on the OFF arm; CE bypass on \
+                 preference queries; temporal boost/filter alters the base pool), so the \
+                 A/B would not isolate the cross-encoder. Set them all to 0/false/no/off \
+                 and retry.",
+                active.join(", ")
+            )));
+        }
     }
 
     let mut samples = load_longmemeval(longmemeval_path)?;
@@ -2863,6 +3016,52 @@ pub async fn run_fullpipeline_lme_ce_ab(
         );
     }
     let shared_embedder = crate::eval::shared::eval_shared_embedder();
+
+    // Consolidated source: open the ONE shared DB up front and assert it is
+    // substrate-live (non-empty pool), so a misconfigured path fails loud here
+    // rather than emitting a vacuous A/B. Opened read-only in effect — the
+    // consolidated branch performs no writes (no seed, no event_date inject).
+    let consolidated_db: Option<Arc<MemoryDB>> = match &db_source {
+        DbSource::SeedPerQuestion => None,
+        DbSource::Consolidated(dir) => {
+            let db = MemoryDB::new_with_shared_embedder(
+                dir,
+                Arc::new(NoopEmitter),
+                shared_embedder.clone(),
+            )
+            .await
+            .map_err(|e| {
+                OriginError::Generic(format!(
+                    "[ce_ab_lme] failed to open consolidated DB at {dir:?}: {e}"
+                ))
+            })?;
+            let n = db.memory_count().await.unwrap_or(0);
+            if n == 0 {
+                return Err(OriginError::Generic(format!(
+                    "EVAL REFUSED [ce_ab_lme]: consolidated DB at {dir:?} has 0 memories. \
+                     A CE A/B over an empty substrate measures noise, not CE. \
+                     Seed it (scripts/seed-scenario-dbs.sh) and retry."
+                )));
+            }
+            let fetch_pool = crate::db::compute_rerank_fetch_pool(
+                10,
+                std::env::var("RERANK_POOL_MULTIPLIER").ok().as_deref(),
+                std::env::var("RERANK_POOL_FLOOR").ok().as_deref(),
+            );
+            eprintln!(
+                "[ce_ab_lme] consolidated DB {dir:?}: {n} memories (shared pool), \
+                 CE fetch_pool={fetch_pool} vs top-10 window{}",
+                if fetch_pool <= 10 {
+                    " — WARNING: fetch_pool<=10 means the CE reorders the returned \
+                     docs without reselecting; set RERANK_POOL_FLOOR>10 to give it \
+                     membership headroom"
+                } else {
+                    ""
+                }
+            );
+            Some(Arc::new(db))
+        }
+    };
 
     // Resume: load any already-generated tuples.
     let mut finished_tuples: Vec<JudgmentTuple> = if output_path.exists() {
@@ -2890,26 +3089,33 @@ pub async fn run_fullpipeline_lme_ce_ab(
         }
     }
 
-    // A question is done only when BOTH arms are present.
+    // A question is done only when ALL arms are present.
+    // Build one set per prefix, then intersect them all.
     let done_questions: std::collections::HashSet<String> = {
-        let mut off_qs: std::collections::HashSet<String> = std::collections::HashSet::new();
-        let mut on_qs: std::collections::HashSet<String> = std::collections::HashSet::new();
+        let prefixes = arms.prefixes();
+        let mut per_prefix: Vec<std::collections::HashSet<String>> = prefixes
+            .iter()
+            .map(|_| std::collections::HashSet::new())
+            .collect();
         for t in &finished_tuples {
-            // Key on question_id (fallback to text for pre-question_id caches) so two
-            // questions sharing text are not treated as one done unit — mirrors the
-            // McNemar pairing key.
             let k = if t.question_id.is_empty() {
                 t.question.clone()
             } else {
                 t.question_id.clone()
             };
-            if t.approach.starts_with("ce_off_") {
-                off_qs.insert(k);
-            } else if t.approach.starts_with("ce_on_") {
-                on_qs.insert(k);
+            for (i, prefix) in prefixes.iter().enumerate() {
+                if t.approach.starts_with(&format!("{prefix}_")) {
+                    per_prefix[i].insert(k.clone());
+                }
             }
         }
-        off_qs.intersection(&on_qs).cloned().collect()
+        // Intersection across all arm-prefix sets.
+        let mut iter = per_prefix.into_iter();
+        if let Some(first) = iter.next() {
+            iter.fold(first, |acc, set| acc.intersection(&set).cloned().collect())
+        } else {
+            std::collections::HashSet::new()
+        }
     };
 
     let baselines_dir = output_path
@@ -2940,118 +3146,123 @@ pub async fn run_fullpipeline_lme_ce_ab(
             continue;
         }
 
-        let memories = extract_memories(sample);
-        if memories.is_empty() {
-            continue;
-        }
+        // Acquire this question's retrieval DB. Consolidated reuses the ONE
+        // shared large-pool DB opened above (skip per-question seeding +
+        // event_date injection — it is already enriched + 100% dated, and is
+        // never mutated). SeedPerQuestion seeds a fresh oracle-pool scenario DB
+        // from the sample's own sessions, byte-identical to the prior behavior.
+        let db: Arc<MemoryDB> = match &db_source {
+            DbSource::Consolidated(_) => consolidated_db
+                .clone()
+                .expect("consolidated_db is Some for DbSource::Consolidated"),
+            DbSource::SeedPerQuestion => {
+                let memories = extract_memories(sample);
+                if memories.is_empty() {
+                    continue;
+                }
 
-        let scope_dir =
-            crate::eval::shared::scenario_db_dir(baselines_dir, "lme", &sample.question_id);
+                let scope_dir =
+                    crate::eval::shared::scenario_db_dir(baselines_dir, "lme", &sample.question_id);
 
-        let question_id = sample.question_id.clone();
-        let question_type = sample.question_type.clone();
-        let memories_owned = memories.clone();
+                let question_id = sample.question_id.clone();
+                let question_type = sample.question_type.clone();
+                let memories_owned = memories.clone();
 
-        let db = match crate::eval::shared::open_or_seed_scenario_db(
-            &scope_dir,
-            shared_embedder.clone(),
-            move || {
-                memories_owned
-                    .iter()
-                    .map(|mem| crate::sources::RawDocument {
-                        content: mem.content.clone(),
-                        source_id: format!(
-                            "lme_{}_{}_t{}",
-                            question_id, mem.session_idx, mem.turn_idx
-                        ),
-                        source: "memory".to_string(),
-                        title: format!("session {} turn {}", mem.session_idx, mem.turn_idx),
-                        memory_type: Some(
-                            if question_type == "single-session-preference" {
-                                "preference"
-                            } else {
-                                "fact"
-                            }
-                            .to_string(),
-                        ),
-                        space: Some("conversation".to_string()),
-                        last_modified: chrono::Utc::now().timestamp(),
-                        ..Default::default()
-                    })
-                    .collect()
-            },
-            &enrichment,
-        )
-        .await
-        {
-            Ok(db) => db,
-            Err(e) => {
-                return Err(OriginError::Generic(format!(
-                    "[ce_ab_lme] scenario {} failed to open/seed DB: {e}. Refusing to \
-                     silently drop the question — re-seed and retry.",
-                    sample.question_id
-                )));
+                let seeded = match crate::eval::shared::open_or_seed_scenario_db(
+                    &scope_dir,
+                    shared_embedder.clone(),
+                    move || {
+                        memories_owned
+                            .iter()
+                            .map(|mem| crate::sources::RawDocument {
+                                content: mem.content.clone(),
+                                source_id: format!(
+                                    "lme_{}_{}_t{}",
+                                    question_id, mem.session_idx, mem.turn_idx
+                                ),
+                                source: "memory".to_string(),
+                                title: format!("session {} turn {}", mem.session_idx, mem.turn_idx),
+                                memory_type: Some(
+                                    if question_type == "single-session-preference" {
+                                        "preference"
+                                    } else {
+                                        "fact"
+                                    }
+                                    .to_string(),
+                                ),
+                                space: Some("conversation".to_string()),
+                                last_modified: chrono::Utc::now().timestamp(),
+                                ..Default::default()
+                            })
+                            .collect()
+                    },
+                    &enrichment,
+                )
+                .await
+                {
+                    Ok(db) => db,
+                    Err(e) => {
+                        return Err(OriginError::Generic(format!(
+                            "[ce_ab_lme] scenario {} failed to open/seed DB: {e}. Refusing to \
+                             silently drop the question — re-seed and retry.",
+                            sample.question_id
+                        )));
+                    }
+                };
+
+                // Substrate-liveness: a per-question DB with zero memories yields a
+                // vacuous A/B (both arms retrieve nothing). Fail loud rather than
+                // emit a misleading null, per the eval ONE-contract discipline (H2).
+                let db_mem_count = seeded.memory_count().await.unwrap_or(0);
+                if db_mem_count == 0 {
+                    return Err(OriginError::Generic(format!(
+                        "EVAL REFUSED [ce_ab_lme]: scenario {} seeded DB has 0 memories. \
+                         A CE A/B over an empty substrate measures noise, not CE. Re-seed and retry.",
+                        sample.question_id
+                    )));
+                }
+
+                // Make the temporal substrate LIVE for this question's scenario DB by
+                // injecting per-session event_date (turn text carries no date; the date
+                // is per-session haystack metadata). This is substrate-prep + a liveness
+                // gate, NOT a direct answer fix: event_date is not rendered into the CE
+                // A/B context (build_structured_context renders only content) and no
+                // temporal ranking flag is set on this path, so dates influence neither
+                // ranking nor the prompt today. Their value is (a) a per-question liveness
+                // signal (the rows-updated count below), (b) a future temporal lever has
+                // live data to read. source_id keys mirror the seed closure's
+                // `lme_{qid}_{sess}_t{turn}` exactly via event_date_map -> memory_source_id.
+                let date_map =
+                    crate::eval::longmemeval::event_date_map(std::slice::from_ref(sample));
+                if !date_map.is_empty() {
+                    let updates: Vec<(String, i64)> = date_map.into_iter().collect();
+                    let n_total = updates.len();
+                    let rows = seeded.set_event_dates_by_source_id(&updates).await?;
+                    if rows == 0 {
+                        // Per-question log + continue (NOT whole-run abort): a non-empty
+                        // date_map that updates 0 rows means source_id-format drift for
+                        // THIS question. Skip it rather than nuke a multi-hour decision run;
+                        // the rows-updated count is an earlier, more precise signal than a
+                        // DB-wide liveness assert (which propagated and aborted the run).
+                        log::warn!(
+                            "[ce_ab_lme] event_date injection updated 0/{} rows for question {} \
+                             — source_id drift; skipping question",
+                            n_total,
+                            sample.question_id
+                        );
+                        continue;
+                    }
+                }
+
+                Arc::new(seeded)
             }
         };
 
-        // Substrate-liveness: a per-question DB with zero memories yields a
-        // vacuous A/B (both arms retrieve nothing). Fail loud rather than
-        // emit a misleading null, per the eval ONE-contract discipline (H2).
-        let db_mem_count = db.memory_count().await.unwrap_or(0);
-        if db_mem_count == 0 {
-            return Err(OriginError::Generic(format!(
-                "EVAL REFUSED [ce_ab_lme]: scenario {} seeded DB has 0 memories. \
-                 A CE A/B over an empty substrate measures noise, not CE. Re-seed and retry.",
-                sample.question_id
-            )));
-        }
-
-        // Make the temporal substrate LIVE for this question's scenario DB by
-        // injecting per-session event_date (turn text carries no date; the date
-        // is per-session haystack metadata). This is substrate-prep + a liveness
-        // gate, NOT a direct answer fix: event_date is not rendered into the CE
-        // A/B context (build_structured_context renders only content) and no
-        // temporal ranking flag is set on this path, so dates influence neither
-        // ranking nor the prompt today. Their value is (a) a per-question liveness
-        // signal (the rows-updated count below), (b) a future temporal lever has
-        // live data to read. source_id keys mirror the seed closure's
-        // `lme_{qid}_{sess}_t{turn}` exactly via event_date_map -> memory_source_id.
-        let date_map = crate::eval::longmemeval::event_date_map(std::slice::from_ref(sample));
-        if !date_map.is_empty() {
-            let updates: Vec<(String, i64)> = date_map.into_iter().collect();
-            let n_total = updates.len();
-            let rows = db.set_event_dates_by_source_id(&updates).await?;
-            if rows == 0 {
-                // Per-question log + continue (NOT whole-run abort): a non-empty
-                // date_map that updates 0 rows means source_id-format drift for
-                // THIS question. Skip it rather than nuke a multi-hour decision run;
-                // the rows-updated count is an earlier, more precise signal than a
-                // DB-wide liveness assert (which propagated and aborted the run).
-                log::warn!(
-                    "[ce_ab_lme] event_date injection updated 0/{} rows for question {} \
-                     — source_id drift; skipping question",
-                    n_total,
-                    sample.question_id
-                );
-                continue;
-            }
-        }
-
         let category = category_name(&sample.question_type);
 
-        // Generate an answer for both arms from the same seeded DB.
-        // OFF = CrossRerank(None) (CE off); ON = CrossRerank(Some(reranker)) (CE on).
-        // Both route through cross_rerank so P3 demotion is symmetric.
-        for (arm_label, retrieval) in [
-            (
-                format!("ce_off_{category}"),
-                CtxRetrieval::CrossRerank(None),
-            ),
-            (
-                format!("ce_on_{category}"),
-                CtxRetrieval::CrossRerank(Some(reranker.clone())),
-            ),
-        ] {
+        // Generate an answer for all arms from the same seeded DB.
+        let arm_pairs = arms.resolve(category, &reranker)?;
+        for (arm_label, retrieval) in arm_pairs {
             let (ctx, ctx_tokens) =
                 match build_structured_context(&db, &sample.question, 10, None, retrieval).await {
                     Ok(v) => v,
@@ -3077,11 +3288,11 @@ pub async fn run_fullpipeline_lme_ce_ab(
             let answer = match llm.generate(request).await {
                 Ok(raw) => strip_think_tags(&raw).trim().to_string(),
                 Err(e) => {
-                    // Skip BOTH arms for this question rather than persisting a
+                    // Skip ALL arms for this question rather than persisting a
                     // half-pair; on resume the question is reprocessed (H1).
                     eprintln!(
                         "[ce_ab_lme] WARN: scenario {} arm {arm_label} generation failed: {e}. \
-                         Dropping both arms for this question; will retry on resume.",
+                         Dropping all arms for this question; will retry on resume.",
                         sample.question_id
                     );
                     break;
@@ -3093,7 +3304,7 @@ pub async fn run_fullpipeline_lme_ce_ab(
             if answer.is_empty() {
                 eprintln!(
                     "[ce_ab_lme] WARN: scenario {} arm {arm_label} produced empty answer. \
-                     Dropping both arms; will retry on resume.",
+                     Dropping all arms; will retry on resume.",
                     sample.question_id
                 );
                 break;
@@ -3217,5 +3428,46 @@ mod tests {
         crate::eval::seed_contract::assert_feature_substrate_live(&conn, "temporal")
             .await
             .unwrap();
+    }
+
+    #[test]
+    fn arm_spec_ce_two_labels() {
+        let spec = ArmSpec::ce_two();
+        assert_eq!(
+            spec.labels("single-session-user"),
+            vec![
+                "ce_off_single-session-user".to_string(),
+                "ce_on_single-session-user".to_string(),
+            ],
+            "ce_two labels for single-session-user"
+        );
+        assert_eq!(
+            spec.labels("temporal-reasoning"),
+            vec![
+                "ce_off_temporal-reasoning".to_string(),
+                "ce_on_temporal-reasoning".to_string(),
+            ],
+            "ce_two labels for temporal-reasoning"
+        );
+        assert_eq!(spec.prefixes(), vec!["ce_off", "ce_on"], "ce_two prefixes");
+        assert!(
+            spec.needs_confounder_isolation(),
+            "ce_two is an isolation A/B (has CeOff) — gate must apply"
+        );
+    }
+
+    #[test]
+    fn arm_spec_full_stack_labels() {
+        let spec = ArmSpec::full_stack();
+        assert_eq!(
+            spec.labels("single-session-user"),
+            vec!["fullstack_single-session-user".to_string()],
+            "full_stack is a single arm"
+        );
+        assert_eq!(spec.prefixes(), vec!["fullstack"], "full_stack prefix");
+        assert!(
+            !spec.needs_confounder_isolation(),
+            "full_stack has no CeOff arm — confounder gate must be skipped so features can be ON"
+        );
     }
 }

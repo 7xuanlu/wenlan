@@ -5438,7 +5438,7 @@ async fn smoke_fullpipeline() {
 /// On-device Qwen3-4B (free, Metal GPU). Requires `--ignored --nocapture`.
 ///
 /// Run as probe before full LME/LoCoMo:
-///   SMOKE_LOCOMO_SAMPLES=10 EVAL_LOCAL_MODEL=qwen3.5-9b EVAL_ENRICHMENT_BATCH_SIZE=8 \
+///   SMOKE_LOCOMO_SAMPLES=10 EVAL_LOCAL_MODEL=qwen3.5-9b \
 ///   cargo test -p origin --test eval_harness smoke_per_scenario_locomo -- --ignored --nocapture
 /// Default config (2 samples x 10 obs) is the CI smoke.
 #[tokio::test]
@@ -5850,11 +5850,13 @@ async fn smoke_eval_baselines_dir_e2e() {
 /// Manual smoke for per-scenario enrichment using Claude CLI provider (D2).
 ///
 /// Validates that `EnrichmentMode::OnDevice(ClaudeCliProvider)` works end-to-end:
-/// seed → concurrent entity extraction + title enrichment (EVAL_ENRICHMENT_CONCURRENCY=4)
-/// → distillation → isolation check. Uses claude-haiku-4-5-20251001 via Max plan.
+/// seed → Phase-1 concurrent classification (EVAL_ENRICHMENT_CONCURRENCY=4) → Phase-2
+/// sequential per-memory entity extraction + title + page enrichment (post-de-fork,
+/// EVAL_ENRICHMENT_CONCURRENCY governs Phase-1 only) → distillation → isolation check.
+/// Uses claude-haiku-4-5-20251001 via Max plan.
 ///
 /// - 1 LoCoMo conversation, 5 observations (small: CLI subprocess ~2-3s/call)
-/// - Expected duration: ~20s (5 obs × 2 phases / 4 concurrency × 3s + distill)
+/// - Expected duration: ~30s (Phase-1: 5 obs / 4 concurrency × 3s; Phase-2: 5 obs sequential × ~3s + distill)
 /// - Skips silently if `claude` binary is not in PATH
 ///
 /// ```bash
@@ -6164,7 +6166,7 @@ async fn smoke_per_scenario_locomo_cli_batched() {
 /// On-device Qwen3-4B, ~60-90s on Metal GPU. Requires `--ignored --nocapture`.
 ///
 /// Run as probe before full LME/LoCoMo:
-///   SMOKE_LME_SAMPLES=10 EVAL_LOCAL_MODEL=qwen3.5-9b EVAL_ENRICHMENT_BATCH_SIZE=8 \
+///   SMOKE_LME_SAMPLES=10 EVAL_LOCAL_MODEL=qwen3.5-9b \
 ///   cargo test -p origin --test eval_harness smoke_per_scenario_lme -- --ignored --nocapture
 /// Default config (2 samples x 5 mems) is the CI smoke.
 #[tokio::test]
@@ -8512,7 +8514,7 @@ async fn print_top_hubs(db: &origin_core::db::MemoryDB, n: usize) {
 /// Runtime proof for the CE A/B per-question seed loop.
 ///
 /// GPU/Metal + minutes, NOT run in CI/gate. This seeds one temporal-reasoning
-/// LongMemEval oracle question through `run_fullpipeline_lme_ce_ab`, then opens
+/// LongMemEval oracle question through `run_fullpipeline_lme`, then opens
 /// that question's scenario DB and verifies the temporal substrate was populated.
 /// Post-fix GREEN-only proof (not a red/green pair): with the seed-loop injection
 /// in place, event_date count is > 0; it cannot exhibit the pre-fix RED state
@@ -8520,7 +8522,7 @@ async fn print_top_hubs(db: &origin_core::db::MemoryDB, n: usize) {
 #[tokio::test]
 #[ignore = "GPU/Metal + minutes; runtime proof for CE A/B event_date injection"]
 async fn ce_ab_seed_injects_event_date() {
-    use origin_core::eval::answer_quality::run_fullpipeline_lme_ce_ab;
+    use origin_core::eval::answer_quality::{run_fullpipeline_lme, ArmSpec, DbSource};
     use origin_core::eval::shared::{scenario_db_dir, EnrichmentMode};
     use origin_core::llm_provider::{LlmProvider, OnDeviceProvider};
     use std::sync::Arc;
@@ -8566,9 +8568,17 @@ async fn ce_ab_seed_injects_event_date() {
         .expect("init_cross_encoder_reranker");
     let output_path = tmp.path().join("ce_ab_lme_tuples.json");
 
-    run_fullpipeline_lme_ce_ab(&fixture_path, enrichment, llm, &output_path, reranker)
-        .await
-        .expect("run_fullpipeline_lme_ce_ab");
+    run_fullpipeline_lme(
+        &fixture_path,
+        enrichment,
+        llm,
+        Some(reranker),
+        &ArmSpec::ce_two(),
+        DbSource::SeedPerQuestion,
+        &output_path,
+    )
+    .await
+    .expect("run_fullpipeline_lme");
 
     if let Some(value) = previous_graph_stream {
         std::env::set_var("ORIGIN_GRAPH_MEMORY_STREAM", value);
@@ -8614,7 +8624,7 @@ async fn ce_ab_seed_injects_event_date() {
 #[tokio::test]
 #[ignore]
 async fn generate_ce_ab_lme() {
-    use origin_core::eval::answer_quality::run_fullpipeline_lme_ce_ab;
+    use origin_core::eval::answer_quality::{run_fullpipeline_lme, ArmSpec, DbSource};
     use origin_core::llm_provider::{LlmProvider, OnDeviceProvider};
     use std::sync::Arc;
 
@@ -8639,7 +8649,7 @@ async fn generate_ce_ab_lme() {
     if origin_core::db::graph_memory_stream_enabled() {
         panic!(
             "Set ORIGIN_GRAPH_MEMORY_STREAM=0 before running this test. \
-             The CE A/B is invalid without it (see run_fullpipeline_lme_ce_ab docs)."
+             The CE A/B is invalid without it (see run_fullpipeline_lme docs)."
         );
     }
 
@@ -8666,12 +8676,137 @@ async fn generate_ce_ab_lme() {
         "init_cross_encoder_reranker failed (downloads ~1.1GB bge-reranker-base on first run)",
     );
 
-    let tuples = run_fullpipeline_lme_ce_ab(&lme_path, enrichment, llm, &output_path, reranker)
-        .await
-        .expect("run_fullpipeline_lme_ce_ab failed");
+    let tuples = run_fullpipeline_lme(
+        &lme_path,
+        enrichment,
+        llm,
+        Some(reranker),
+        &ArmSpec::ce_two(),
+        DbSource::SeedPerQuestion,
+        &output_path,
+    )
+    .await
+    .expect("run_fullpipeline_lme failed");
 
     eprintln!(
         "\n[generate_ce_ab_lme] Done: {} tuples saved to {:?}",
+        tuples.len(),
+        output_path
+    );
+}
+
+/// CE A/B answer-accuracy on the CONSOLIDATED (large-pool, N>>k) LME DB.
+///
+/// Counterpart to `generate_ce_ab_lme`, which seeds one tiny oracle-pool DB per
+/// question (N~k) so the cross-encoder reorders an already-complete context and
+/// cannot change membership. This variant runs every question against ONE
+/// pre-seeded consolidated DB (all questions' memories in a single store), so
+/// retrieval must select k-from-many and the CE has real reselection headroom.
+///
+/// REQUIRED env:
+/// - `CE_AB_CONSOLIDATED_DB` — directory containing the seeded `origin_memory.db`
+///   (e.g. `~/.cache/origin-eval/scenario_seeded/lme_v1`). The DB is opened once,
+///   read-only (no seed, no event_date inject — it is already enriched + dated).
+/// - `ORIGIN_GRAPH_MEMORY_STREAM=0` — confounder gate (same as the oracle variant).
+/// - `RERANK_POOL_FLOOR` > 10 STRONGLY recommended (e.g. 50): with the default
+///   floor of 10 the CE fetch pool equals the top-10 window, so it reorders the
+///   returned docs without reselecting — a null by construction regardless of
+///   the consolidated pool size (see `compute_rerank_fetch_pool`). The runner
+///   logs a WARNING when the effective fetch pool is <= 10.
+///
+/// ```bash
+/// CE_AB_CONSOLIDATED_DB=$HOME/.cache/origin-eval/scenario_seeded/lme_v1 \
+/// ORIGIN_GRAPH_MEMORY_STREAM=0 RERANK_POOL_FLOOR=50 \
+/// EVAL_BASELINES_DIR=$HOME/.cache/origin-eval-ce-consolidated \
+///   cargo test -p origin-core --test eval_harness --features eval-harness \
+///   generate_ce_ab_lme_consolidated -- --ignored --nocapture
+/// ```
+#[tokio::test]
+#[ignore]
+async fn generate_ce_ab_lme_consolidated() {
+    use origin_core::eval::answer_quality::{run_fullpipeline_lme, ArmSpec, DbSource};
+    use origin_core::llm_provider::{LlmProvider, OnDeviceProvider};
+    use std::sync::Arc;
+
+    let lme_path = eval_root().join("data/longmemeval_oracle.json");
+    if !lme_path.exists() {
+        eprintln!("SKIP: longmemeval_oracle.json not found at {:?}", lme_path);
+        return;
+    }
+
+    let consolidated_dir = match std::env::var("CE_AB_CONSOLIDATED_DB") {
+        Ok(d) => std::path::PathBuf::from(d),
+        Err(_) => {
+            eprintln!(
+                "SKIP: set CE_AB_CONSOLIDATED_DB to the seeded consolidated DB dir \
+                 (e.g. ~/.cache/origin-eval/scenario_seeded/lme_v1)"
+            );
+            return;
+        }
+    };
+    if !consolidated_dir.join("origin_memory.db").exists() {
+        eprintln!(
+            "SKIP: no origin_memory.db under CE_AB_CONSOLIDATED_DB={:?}. \
+             Seed it (scripts/seed-scenario-dbs.sh) first.",
+            consolidated_dir
+        );
+        return;
+    }
+
+    if origin_core::db::graph_memory_stream_enabled() {
+        panic!(
+            "Set ORIGIN_GRAPH_MEMORY_STREAM=0 before running this test. \
+             The CE A/B is invalid without it (see run_fullpipeline_lme docs)."
+        );
+    }
+
+    let enrich_model =
+        std::env::var("EVAL_ANSWER_MODEL").unwrap_or_else(|_| "claude-haiku-4-5-20251001".into());
+    let cost_cap: f64 = std::env::var("EVAL_COST_CAP")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(10.0);
+
+    let baselines = origin_core::eval::shared::eval_baselines_dir_override()
+        .unwrap_or_else(|| eval_root().join("baselines"));
+    std::fs::create_dir_all(&baselines).ok();
+    let output_path = baselines.join("ce_ab_lme_consolidated_tuples.json");
+
+    eprintln!(
+        "[generate_ce_ab_lme_consolidated]\n  consolidated DB: {:?}\n  answer model: \
+         on-device qwen3.5-9b (temp 0.0)\n  enrich model (unused on consolidated path): {}\n  \
+         output: {:?}",
+        consolidated_dir, enrich_model, output_path,
+    );
+
+    let llm: Arc<dyn LlmProvider> = Arc::new(
+        OnDeviceProvider::new_with_model(Some("qwen3.5-9b"))
+            .expect("OnDeviceProvider::new_with_model failed — is the Qwen3.5-9B model available?"),
+    );
+
+    // EnrichmentMode is unused on the consolidated path (no per-question seeding),
+    // but the signature requires one; supply the configured mode for symmetry.
+    let enrichment = origin_core::eval::shared::EnrichmentMode::from_env(&enrich_model, cost_cap)
+        .expect("EnrichmentMode::from_env failed");
+
+    let reranker = origin_core::reranker::init_cross_encoder_reranker(None).expect(
+        "init_cross_encoder_reranker failed (downloads ~1.1GB bge-reranker-base on first run)",
+    );
+
+    let tuples = run_fullpipeline_lme(
+        &lme_path,
+        enrichment,
+        llm,
+        Some(reranker),
+        &ArmSpec::ce_two(),
+        DbSource::Consolidated(consolidated_dir),
+        &output_path,
+    )
+    .await
+    .expect("run_fullpipeline_lme (consolidated) failed");
+
+    eprintln!(
+        "\n[generate_ce_ab_lme_consolidated] Done: {} tuples saved to {:?}",
         tuples.len(),
         output_path
     );
@@ -8699,11 +8834,16 @@ async fn judge_ce_ab_lme() {
 
     let baselines = origin_core::eval::shared::eval_baselines_dir_override()
         .unwrap_or_else(|| eval_root().join("baselines"));
-    let tuples_path = baselines.join("ce_ab_lme_tuples.json");
+    // Default to the oracle output; CE_AB_TUPLES_FILE lets the same judge grade
+    // the consolidated variant (ce_ab_lme_consolidated_tuples.json) without a
+    // second judge fn — keeps producer/consumer on one path.
+    let tuples_file =
+        std::env::var("CE_AB_TUPLES_FILE").unwrap_or_else(|_| "ce_ab_lme_tuples.json".to_string());
+    let tuples_path = baselines.join(&tuples_file);
 
     if !tuples_path.exists() {
         eprintln!(
-            "SKIP: {:?} not found. Run generate_ce_ab_lme first.",
+            "SKIP: {:?} not found. Run generate_ce_ab_lme (or set CE_AB_TUPLES_FILE) first.",
             tuples_path
         );
         return;
@@ -8771,5 +8911,609 @@ async fn judge_ce_ab_lme() {
     println!(
         "{}",
         serde_json::to_string_pretty(&report).unwrap_or_default()
+    );
+}
+
+/// BEST-POSSIBLE CEILING: single-arm full-stack answer accuracy on GOLD (oracle).
+///
+/// Unlike the CE A/B (which forces every feature OFF to isolate the cross-encoder),
+/// this runs ONE arm with the full production stack turned ON and just measures how
+/// accurately Origin answers the gold/oracle questions. Answers what the CE A/Bs
+/// never could: "how good are we with everything on?" Pairs with
+/// `judge_lme_fullstack_ceiling` for the accuracy report.
+///
+/// GOLD = `longmemeval_oracle.json` via `DbSource::SeedPerQuestion` (each question's
+/// own evidence sessions, the easy/oracle retrieval setting). Enrichment runs per
+/// question (classify + entities + distill), so pages/graph substrate exists.
+///
+/// "Best-possible" = the operator turns the feature flags ON. RECOMMENDED env:
+/// ```bash
+/// ORIGIN_ENABLE_PAGE_CHANNEL=1 ORIGIN_GRAPH_MEMORY_STREAM=1 \
+/// ORIGIN_ENABLE_TEMPORAL_SOFT_BOOST=1 RERANK_POOL_FLOOR=50 \
+/// EVAL_BASELINES_DIR=$HOME/.cache/origin-eval-ceiling \
+///   cargo test -p origin-core --test eval_harness --features eval-harness \
+///   generate_lme_fullstack_ceiling -- --ignored --nocapture
+/// ```
+/// NOTE: on the CE path the live graph stream is structurally suppressed
+/// (`allow_graph_stream = reranker.is_none()`), so `ORIGIN_GRAPH_MEMORY_STREAM=1`
+/// contributes via entity-linked memories already in the pool, not the live stream.
+#[tokio::test]
+#[ignore]
+async fn generate_lme_fullstack_ceiling() {
+    use origin_core::eval::answer_quality::{run_fullpipeline_lme, ArmSpec, DbSource};
+    use origin_core::llm_provider::{LlmProvider, OnDeviceProvider};
+    use std::sync::Arc;
+
+    let lme_path = eval_root().join("data/longmemeval_oracle.json");
+    if !lme_path.exists() {
+        eprintln!("SKIP: longmemeval_oracle.json not found at {:?}", lme_path);
+        return;
+    }
+
+    let enrich_model =
+        std::env::var("EVAL_ANSWER_MODEL").unwrap_or_else(|_| "claude-haiku-4-5-20251001".into());
+    let cost_cap: f64 = std::env::var("EVAL_COST_CAP")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(10.0);
+
+    let baselines = origin_core::eval::shared::eval_baselines_dir_override()
+        .unwrap_or_else(|| eval_root().join("baselines"));
+    std::fs::create_dir_all(&baselines).ok();
+    let output_path = baselines.join("lme_fullstack_ceiling_tuples.json");
+
+    // Receipt: echo the effective feature config so the baseline can't lie about
+    // what "full stack" meant for this run.
+    eprintln!(
+        "[generate_lme_fullstack_ceiling] FULL-STACK config:\n  \
+         page_channel={}  graph_stream_flag={}  temporal_soft_boost={}  temporal_filter={}\n  \
+         RERANK_POOL_FLOOR={}  RERANK_POOL_MULTIPLIER={}\n  \
+         answer model: on-device qwen3.5-9b (temp 0.0)\n  enrich model: {}\n  output: {:?}",
+        origin_core::db::page_channel_enabled(),
+        origin_core::db::graph_memory_stream_enabled(),
+        origin_core::db::temporal_soft_boost_enabled(),
+        origin_core::db::temporal_filter_enabled(),
+        std::env::var("RERANK_POOL_FLOOR").unwrap_or_else(|_| "10 (default)".into()),
+        std::env::var("RERANK_POOL_MULTIPLIER").unwrap_or_else(|_| "1 (default)".into()),
+        enrich_model,
+        output_path,
+    );
+
+    let llm: Arc<dyn LlmProvider> = Arc::new(
+        OnDeviceProvider::new_with_model(Some("qwen3.5-9b"))
+            .expect("OnDeviceProvider::new_with_model failed — is the Qwen3.5-9B model available?"),
+    );
+
+    let enrichment = origin_core::eval::shared::EnrichmentMode::from_env(&enrich_model, cost_cap)
+        .expect("EnrichmentMode::from_env failed");
+
+    let reranker = origin_core::reranker::init_cross_encoder_reranker(None).expect(
+        "init_cross_encoder_reranker failed (downloads ~1.1GB bge-reranker-base on first run)",
+    );
+
+    let tuples = run_fullpipeline_lme(
+        &lme_path,
+        enrichment,
+        llm,
+        Some(reranker),
+        &ArmSpec::full_stack(),
+        DbSource::SeedPerQuestion,
+        &output_path,
+    )
+    .await
+    .expect("run_fullpipeline_lme (full_stack) failed");
+
+    eprintln!(
+        "\n[generate_lme_fullstack_ceiling] Done: {} tuples saved to {:?}",
+        tuples.len(),
+        output_path
+    );
+}
+
+/// Judge the full-stack ceiling tuples → single-arm ACCURACY (per category +
+/// overall). No McNemar (single arm); uses `aggregate_judgments`, where each arm
+/// label is `fullstack_{category}` so per-approach rows ARE per-category accuracy.
+///
+/// ```bash
+/// EVAL_BASELINES_DIR=$HOME/.cache/origin-eval-ceiling \
+///   cargo test -p origin-core --test eval_harness --features eval-harness \
+///   judge_lme_fullstack_ceiling -- --ignored --nocapture
+/// ```
+#[tokio::test]
+#[ignore]
+async fn judge_lme_fullstack_ceiling() {
+    use origin_core::eval::judge::{
+        aggregate_judgments, judge_with_claude_model_batched_persistent, load_judgment_tuples,
+    };
+
+    let baselines = origin_core::eval::shared::eval_baselines_dir_override()
+        .unwrap_or_else(|| eval_root().join("baselines"));
+    let tuples_path = baselines.join("lme_fullstack_ceiling_tuples.json");
+    if !tuples_path.exists() {
+        eprintln!(
+            "SKIP: {:?} not found. Run generate_lme_fullstack_ceiling first.",
+            tuples_path
+        );
+        return;
+    }
+
+    if std::env::var("ANTHROPIC_API_KEY").is_ok() {
+        eprintln!(
+            "[judge_lme_fullstack_ceiling] WARNING: ANTHROPIC_API_KEY is set — the `claude` CLI \
+             will bill the API instead of your OAuth subscription. Unset it for a $-free run."
+        );
+    }
+
+    let judge_model = std::env::var("LME_JUDGE_MODEL")
+        .unwrap_or_else(|_| "claude-haiku-4-5-20251001".to_string());
+    let tuples = load_judgment_tuples(&tuples_path).expect("load_judgment_tuples failed");
+    eprintln!(
+        "[judge_lme_fullstack_ceiling] Loaded {} tuples",
+        tuples.len()
+    );
+
+    let cache_path = baselines.join("lme_fullstack_ceiling_judge_cache.jsonl");
+    let results =
+        judge_with_claude_model_batched_persistent(&tuples, 10, 3, &judge_model, &cache_path, 3)
+            .await
+            .expect("judging failed");
+
+    let report = aggregate_judgments(&results, &judge_model);
+    let total: usize = report.results_by_approach.iter().map(|r| r.total).sum();
+    let correct: usize = report.results_by_approach.iter().map(|r| r.correct).sum();
+    let overall = correct as f64 / (total.max(1)) as f64;
+
+    eprintln!("\n=== LME FULL-STACK CEILING (gold/oracle) ===");
+    eprintln!("OVERALL accuracy = {:.4} ({}/{})", overall, correct, total);
+    eprintln!("\nPer-category (approach = fullstack_<category>):");
+    let mut rows = report.results_by_approach.clone();
+    rows.sort_by(|a, b| a.approach.cmp(&b.approach));
+    for r in &rows {
+        eprintln!(
+            "  {:<40} acc={:.4} ({}/{})  mean_ctx_tokens={:.0}",
+            r.approach, r.accuracy, r.correct, r.total, r.mean_context_tokens
+        );
+    }
+
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&serde_json::json!({
+            "overall_accuracy": overall,
+            "total": total,
+            "correct": correct,
+            "by_approach": report.results_by_approach,
+            "judge_model": judge_model,
+        }))
+        .unwrap_or_default()
+    );
+}
+
+// ── Task 2.1 RED contract test ─────────────────────────────────────────────
+//
+// PURPOSE (TDD – this test is EXPECTED TO FAIL).
+//
+// There are two post-store enrichment paths in origin-core:
+//   • Production / canonical: `ingest::run_canonical_enrichment` runs
+//     Phase-1 (classify) + Phase-2 via `post_ingest::run_post_ingest_enrichment`
+//     (auto_link_entity → extract_single_memory_entities) + Phase-3.
+//   • Eval seed (FORKED): `eval::shared::enrich_db_for_eval_local` runs
+//     `run_classification_for_eval_concurrent` (Phase 1) +
+//     `run_entity_extraction_for_eval_concurrent` (NO auto_link_entity — all
+//     memories go through LLM extraction via `get_unlinked_memories`) +
+//     `run_title_enrichment_for_eval` + `distill_pages`.
+//
+// The structural divergence the test captures:
+//
+//   The canonical arm uses `auto_link_entity` (cosine-distance vector search
+//   against the entities table) BEFORE LLM extraction. When a match is found
+//   below the `entity_link_distance` threshold, the memory's `entity_id` column
+//   is updated and LLM extraction is SKIPPED — that memory receives no new row
+//   in the `memory_entities` junction table from the canonical arm.
+//
+//   The eval arm uses `get_unlinked_memories` (entity_id IS NULL filter) and
+//   always routes every match to LLM extraction via `extract_single_memory_entities`,
+//   writing a `memory_entities` row unconditionally.
+//
+//   Concretely: after Doc 1 is processed in the canonical arm and its entity
+//   ("Alice Chen") is embedded in the entities table, Doc 2 ("Alice Chen.") is
+//   auto-linked at distance ≈ 0 (entity name and content are nearly identical),
+//   skipping LLM extraction → no `memory_entities` row for Doc 2 in the
+//   canonical arm. The eval arm processes all 3 docs via LLM → writes
+//   `memory_entities` for all 3 → sets diverge.
+//
+//   To reliably trigger this divergence, Doc 2 content is set to the entity
+//   name verbatim ("Alice Chen.") so cosine-distance < 0.15 (production default)
+//   is guaranteed.
+//
+// EXPECTED OUTCOME:
+//   The `assert_eq!` on entity-link tuples FAILS (eval arm has 7+ tuples, canonical
+//   arm has fewer because Doc 2 and/or Doc 3 are auto-linked and skip LLM).
+//   This failure is the RED gate. Do NOT fix it here. Task 2.3 fixes the fork.
+//
+// Run:
+//   RUSTC_WRAPPER= cargo test -p origin-core --test eval_harness \
+//     --features eval-harness \
+//     enrichment_parity_contract -- --ignored --nocapture
+#[tokio::test]
+#[ignore = "GPU (on-device LLM); parity regression guard â enrich_db_for_eval_local must produce identical entity-link, page-membership, and title-nonempty sets as run_canonical_enrichment. Task 2.3 de-forked Phase-2 through run_post_ingest_enrichment."]
+async fn enrichment_parity_contract() {
+    use origin_core::db::MemoryDB;
+    use origin_core::eval::shared::enrich_db_for_eval_local;
+    use origin_core::events::NoopEmitter;
+    use origin_core::ingest::{run_canonical_enrichment, EnrichmentOpts};
+    use origin_core::llm_provider::{LlmProvider, OnDeviceProvider};
+    use origin_core::prompts::PromptRegistry;
+    use origin_core::tuning::{DistillationConfig, RefineryConfig};
+    use origin_types::sources::RawDocument;
+    use std::collections::HashSet;
+    use std::sync::Arc;
+
+    // ── LLM provider (shared between arms for reproducibility) ──────────────
+    let llm: Arc<dyn origin_core::llm_provider::LlmProvider> = match OnDeviceProvider::new() {
+        Ok(p) => {
+            assert!(
+                p.is_available(),
+                "[parity_contract] on-device LLM unavailable. \
+                     Run outside the CC sandbox; check `pgrep -la origin` for GPU contention."
+            );
+            Arc::new(p)
+        }
+        Err(e) => panic!("[parity_contract] on-device provider init failed: {e}"),
+    };
+
+    // Pin concurrency to 1 for determinism.
+    std::env::set_var("EVAL_ENRICHMENT_CONCURRENCY", "1");
+    // Ensure no Anthropic key (on-device only).
+    std::env::remove_var("ANTHROPIC_API_KEY");
+
+    // Fixed timestamp so both arms are identical on last_modified.
+    let fixed_ts: i64 = 1_700_000_000;
+
+    // ── Synthetic docs ───────────────────────────────────────────────────────
+    // Doc 1: long sentence so LLM extracts "Alice Chen" entity and writes the
+    //        entity to the `entities` table + `memory_entities` junction.
+    // Doc 2: VERBATIM entity name ("Alice Chen.") so cosine distance from the
+    //        "Alice Chen" entity embedding < 0.15 → `auto_link_entity` fires in
+    //        the CANONICAL arm → skips LLM extraction → NO `memory_entities` row.
+    //        In the EVAL arm, `get_unlinked_memories` (entity_id IS NULL) picks
+    //        it up anyway and routes it through LLM extraction → junction row written.
+    // Doc 3: Another sentence about the same person, for coverage.
+    let test_docs: Vec<(&str, &str)> = vec![
+        (
+            "parity_src_001",
+            "Alice Chen is the lead engineer at Acme Corp. She manages the platform team.",
+        ),
+        (
+            // Short verbatim entity-name content — guarantees auto_link fires in canonical arm.
+            "parity_src_002",
+            "Alice Chen.",
+        ),
+        (
+            "parity_src_003",
+            "Acme Corp is migrating to Rust. The migration is led by Alice Chen.",
+        ),
+    ];
+
+    fn make_doc(source_id: &str, content: &str, ts: i64) -> RawDocument {
+        RawDocument {
+            source: "memory".to_string(),
+            source_id: source_id.to_string(),
+            title: content.chars().take(40).collect(),
+            summary: None,
+            content: content.to_string(),
+            url: None,
+            last_modified: ts,
+            metadata: std::collections::HashMap::new(),
+            memory_type: Some("fact".to_string()),
+            space: None,
+            source_agent: Some("parity_test".to_string()),
+            confidence: Some(0.9),
+            confirmed: Some(true),
+            stability: Some("new".to_string()),
+            supersedes: None,
+            pending_revision: false,
+            entity_id: None,
+            quality: None,
+            importance: None,
+            is_recap: false,
+            enrichment_status: "raw".to_string(),
+            supersede_mode: "hide".to_string(),
+            structured_fields: None,
+            retrieval_cue: None,
+            source_text: None,
+        }
+    }
+
+    // Shared embedder — avoid double model load.
+    let shared_embedder = MemoryDB::create_shared_embedder()
+        .await
+        .expect("create_shared_embedder");
+
+    // ── ARM A: eval path ─────────────────────────────────────────────────────
+    let eval_dir = tempfile::TempDir::new().expect("eval tempdir");
+    let eval_db_path = eval_dir.path().join("origin_memory.db");
+    {
+        let db = MemoryDB::new_with_shared_embedder(
+            eval_dir.path(),
+            Arc::new(NoopEmitter),
+            shared_embedder.clone(),
+        )
+        .await
+        .expect("eval DB init");
+
+        db.upsert_documents(
+            test_docs
+                .iter()
+                .map(|(id, content)| make_doc(id, content, fixed_ts))
+                .collect(),
+        )
+        .await
+        .expect("eval upsert_documents");
+
+        eprintln!("[parity_contract] ARM A (eval): enrich_db_for_eval_local...");
+        enrich_db_for_eval_local(&db, &llm)
+            .await
+            .expect("enrich_db_for_eval_local");
+        eprintln!("[parity_contract] ARM A: done");
+        // Drop DB — flush WAL before raw libsql read below.
+    }
+
+    // ── ARM B: canonical path ────────────────────────────────────────────────
+    let canon_dir = tempfile::TempDir::new().expect("canon tempdir");
+    let canon_db_path = canon_dir.path().join("origin_memory.db");
+    {
+        let db = MemoryDB::new_with_shared_embedder(
+            canon_dir.path(),
+            Arc::new(NoopEmitter),
+            shared_embedder.clone(),
+        )
+        .await
+        .expect("canon DB init");
+
+        db.upsert_documents(
+            test_docs
+                .iter()
+                .map(|(id, content)| make_doc(id, content, fixed_ts))
+                .collect(),
+        )
+        .await
+        .expect("canon upsert_documents");
+
+        let prompts = PromptRegistry::default();
+        // Use production-default entity_link_distance (0.15). Doc 2 content is the
+        // verbatim entity name "Alice Chen." so cosine distance < 0.15 is expected,
+        // triggering auto_link and skipping LLM extraction for Doc 2.
+        let refinery = RefineryConfig::default();
+        let distillation = DistillationConfig::default();
+
+        eprintln!("[parity_contract] ARM B (canonical): run_canonical_enrichment × 3...");
+        for (source_id, content) in &test_docs {
+            let opts = EnrichmentOpts {
+                initial_memory_type: "fact".to_string(),
+                initial_domain: None,
+                initial_supersede_mode: "hide".to_string(),
+                initial_structured_fields: None,
+                agent_supplied_memory_type: false,
+                agent_supplied_profile_alias: false,
+                agent_supplied_structured_fields: false,
+            };
+            run_canonical_enrichment(
+                &db,
+                source_id,
+                content,
+                None,
+                Some(&llm),
+                &prompts,
+                &refinery,
+                &distillation,
+                None,
+                &opts,
+                None,
+            )
+            .await;
+        }
+        eprintln!("[parity_contract] ARM B: done");
+        // Mirror production's background refinery (and Arm A's internal Phase-3):
+        // run_canonical_enrichment is the STORE path, whose Phase-3 is dual-pool
+        // dedup (default-OFF), NOT page distillation. Without this, Arm B ends with
+        // zero pages while Arm A distilled, making the page-membership assert below
+        // distill-vs-nothing. Distilling here makes it eval-distill vs canonical-distill.
+        origin_core::refinery::distill_pages(&db, Some(&llm), &prompts, &distillation, None)
+            .await
+            .expect("canon distill_pages");
+        // Drop DB before raw libsql read below.
+    }
+
+    // ── Read membership tuples via raw libsql (same pattern as seed_contract) ─
+    async fn read_entity_link_tuples(db_path: &std::path::Path) -> Vec<(String, String)> {
+        let sdb = libsql::Builder::new_local(db_path.to_str().unwrap())
+            .build()
+            .await
+            .expect("open db for entity read");
+        let conn = sdb.connect().expect("connect for entity read");
+        let mut rows = conn
+            .query(
+                "SELECT me.memory_id, e.name \
+                 FROM memory_entities me \
+                 JOIN entities e ON e.id = me.entity_id \
+                 ORDER BY me.memory_id, e.name",
+                (),
+            )
+            .await
+            .expect("entity_link query");
+        let mut out = Vec::new();
+        while let Ok(Some(row)) = rows.next().await {
+            let mem_id: String = row.get(0).unwrap_or_default();
+            let entity_name: String = row.get(1).unwrap_or_default();
+            out.push((mem_id, entity_name));
+        }
+        out
+    }
+
+    async fn read_page_membership_tuples(db_path: &std::path::Path) -> Vec<(String, String)> {
+        let sdb = libsql::Builder::new_local(db_path.to_str().unwrap())
+            .build()
+            .await
+            .expect("open db for page read");
+        let conn = sdb.connect().expect("connect for page read");
+        let mut rows = conn
+            .query(
+                "SELECT page_id, memory_source_id \
+                 FROM page_sources \
+                 ORDER BY page_id, memory_source_id",
+                (),
+            )
+            .await
+            .expect("page_sources query");
+        let mut out = Vec::new();
+        while let Ok(Some(row)) = rows.next().await {
+            let page_id: String = row.get(0).unwrap_or_default();
+            let mem_src: String = row.get(1).unwrap_or_default();
+            out.push((page_id, mem_src));
+        }
+        out
+    }
+
+    async fn read_titles_nonempty(db_path: &std::path::Path) -> HashSet<String> {
+        let sdb = libsql::Builder::new_local(db_path.to_str().unwrap())
+            .build()
+            .await
+            .expect("open db for title read");
+        let conn = sdb.connect().expect("connect for title read");
+        let mut rows = conn
+            .query(
+                "SELECT source_id FROM memories \
+                 WHERE source = 'memory' AND chunk_index = 0 \
+                   AND title IS NOT NULL AND title != '' \
+                 ORDER BY source_id",
+                (),
+            )
+            .await
+            .expect("title query");
+        let mut set = HashSet::new();
+        while let Ok(Some(row)) = rows.next().await {
+            set.insert(row.get::<String>(0).unwrap_or_default());
+        }
+        set
+    }
+
+    let eval_entity_links = read_entity_link_tuples(&eval_db_path).await;
+    let canon_entity_links = read_entity_link_tuples(&canon_db_path).await;
+    let eval_page_membership = read_page_membership_tuples(&eval_db_path).await;
+    let canon_page_membership = read_page_membership_tuples(&canon_db_path).await;
+    let eval_titles_nonempty = read_titles_nonempty(&eval_db_path).await;
+    let canon_titles_nonempty = read_titles_nonempty(&canon_db_path).await;
+
+    // ── Report ───────────────────────────────────────────────────────────────
+    eprintln!("\n[parity_contract] === MEMBERSHIP TUPLE COMPARISON ===");
+    eprintln!("\nEntity-link tuples (memory_id, entity_name):");
+    eprintln!(
+        "  EVAL  ({} tuples): {:?}",
+        eval_entity_links.len(),
+        eval_entity_links
+    );
+    eprintln!(
+        "  CANON ({} tuples): {:?}",
+        canon_entity_links.len(),
+        canon_entity_links
+    );
+    let eval_set: HashSet<_> = eval_entity_links.iter().collect();
+    let canon_set: HashSet<_> = canon_entity_links.iter().collect();
+    let only_eval: Vec<_> = eval_set.difference(&canon_set).collect();
+    let only_canon: Vec<_> = canon_set.difference(&eval_set).collect();
+    eprintln!(
+        "  In EVAL only ({} tuples): {:?}",
+        only_eval.len(),
+        only_eval
+    );
+    eprintln!(
+        "  In CANON only ({} tuples): {:?}",
+        only_canon.len(),
+        only_canon
+    );
+
+    eprintln!("\nPage-membership tuples:");
+    eprintln!(
+        "  EVAL  ({} tuples): {:?}",
+        eval_page_membership.len(),
+        eval_page_membership
+    );
+    eprintln!(
+        "  CANON ({} tuples): {:?}",
+        canon_page_membership.len(),
+        canon_page_membership
+    );
+
+    eprintln!("\nTitle-nonempty source_ids:");
+    eprintln!("  EVAL  ({} ids): {:?}", eval_titles_nonempty.len(), {
+        let mut v: Vec<_> = eval_titles_nonempty.iter().cloned().collect();
+        v.sort();
+        v
+    });
+    eprintln!("  CANON ({} ids): {:?}", canon_titles_nonempty.len(), {
+        let mut v: Vec<_> = canon_titles_nonempty.iter().cloned().collect();
+        v.sort();
+        v
+    });
+
+    // ── RED assertion: parity sets MUST match (assert_eq! fails when they differ) ──
+    //
+    // This assert_eq! is the RED gate.
+    //
+    // The two paths fork at `auto_link_entity`:
+    //   • Eval arm: always routes to `extract_single_memory_entities` (no auto_link step).
+    //   • Canonical arm: auto-links Doc 2 ("Alice Chen." — verbatim entity name) at
+    //     cosine distance ≈ 0, skipping LLM extraction → no `memory_entities` row for Doc 2.
+    //
+    // Expected failure message: eval_entity_links (N tuples) != canon_entity_links (M tuples)
+    // where N > M because canonical arm has fewer junction rows (Doc 2 was auto-linked).
+    //
+    // Post-de-fork (Task 2.3 DONE): enrich_db_for_eval_local routes Phase-2 through
+    // the per-memory run_post_ingest_enrichment path, so both arms auto-link Doc 2
+    // and the entity-link tuples now match. This assert is the load-bearing regression
+    // guard: if Phase-2 is ever re-forked, the tuples diverge and this fails.
+    //
+    // Vacuous-pass guard: if the LLM extracted nothing, both arms are empty and the
+    // assert_eq! below would pass while measuring nothing — fail loud instead.
+    assert!(
+        !eval_entity_links.is_empty(),
+        "[parity_contract] vacuous: corpus produced zero entity links — strengthen corpus or check the LLM extracted entities"
+    );
+    assert_eq!(
+        eval_entity_links,
+        canon_entity_links,
+        "[parity_contract] RED: entity-link tuples DIVERGE between eval and canonical paths.\n\
+         Eval arm processed all 3 docs via LLM (enrich_db_for_eval_local has no auto_link step).\n\
+         Canonical arm auto-linked Doc 2 ('Alice Chen.' ~ entity 'alice chen' at dist≈0), \
+         skipping LLM extraction for that doc → fewer memory_entities rows.\n\
+         EVAL  ({eval_n}): {eval:?}\n\
+         CANON ({canon_n}): {canon:?}",
+        eval_n = eval_entity_links.len(),
+        eval = eval_entity_links,
+        canon_n = canon_entity_links.len(),
+        canon = canon_entity_links,
+    );
+
+    // Secondary check: page-membership parity. Both arms now run distill_pages at
+    // Phase-3 (Arm A internally, Arm B explicitly above), so this guards that the eval
+    // seed's page distillation matches the canonical distill. May be empty for this
+    // minimal 3-doc corpus (no cluster reaches the min size) — that is an acceptable
+    // 0==0 outcome; the assert still catches a structural divergence if pages do form.
+    assert_eq!(
+        eval_page_membership, canon_page_membership,
+        "[parity_contract] page-membership tuples diverge (eval-distill vs canonical-distill): eval={:?} canon={:?}",
+        eval_page_membership, canon_page_membership,
+    );
+
+    assert_eq!(
+        eval_titles_nonempty, canon_titles_nonempty,
+        "[parity_contract] title-nonempty sets diverge: eval={:?} canon={:?}",
+        eval_titles_nonempty, canon_titles_nonempty,
+    );
+
+    // If we reach here, all sets are equal — the fork is already gone (Task 2.3 is done).
+    eprintln!(
+        "\n[parity_contract] GREEN: all membership sets are equal — \
+         the eval-vs-canonical fork is resolved. Task 2.3 complete."
     );
 }

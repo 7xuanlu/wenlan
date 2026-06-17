@@ -426,210 +426,6 @@ pub async fn run_entity_extraction_for_eval_concurrent(
     Ok(total)
 }
 
-/// Batched entity extraction for on-device LLMs (Qwen3.5-9B or larger).
-///
-/// Packs `batch_size` memories into a single numbered prompt, makes one LLM call per chunk,
-/// and parses per-memory entities from the response using `parse_kg_response`. This is the
-/// preferred path when `EVAL_ENRICHMENT_BATCH_SIZE > 1` because Metal is single-device — true
-/// parallelism doesn't help, but fewer round-trips per token amortizes inference overhead.
-///
-/// Qwen3.5-9B handles batches of 5-10 memories reliably. Qwen3-4B degrades above 1-2.
-///
-/// Returns total entity-linked memories (memories that got at least one entity).
-///
-/// Logs progress every 5 chunks: `[entity_extract_batched] chunk K/N: ...`.
-pub async fn run_entity_extraction_for_eval_batched(
-    db: &MemoryDB,
-    llm: &Arc<dyn crate::llm_provider::LlmProvider>,
-    batch_size: usize,
-) -> Result<usize, OriginError> {
-    use crate::extract::parse_kg_response;
-    use crate::prompts::PromptRegistry;
-
-    let batch_size = batch_size.max(1);
-    let prompts = PromptRegistry::load(&PromptRegistry::override_dir());
-    let mut entity_cache: std::collections::HashMap<String, String> =
-        std::collections::HashMap::new();
-    let mut total_linked = 0usize;
-    let t0 = std::time::Instant::now();
-
-    // Collect all unlinked memories once. Re-querying per chunk would re-fetch the same
-    // rows until `update_memory_entity_id` marks them linked — expensive and racy.
-    let all_unlinked = db.get_unlinked_memories(100_000).await?;
-    if all_unlinked.is_empty() {
-        eprintln!("[entity_extract_batched] no unlinked memories — skipping");
-        let marked = db.mark_all_memories_enriched_for_eval().await?;
-        eprintln!(
-            "[entity_extract_batched] marked {} memories as enriched",
-            marked
-        );
-        return Ok(0);
-    }
-
-    let total_memories = all_unlinked.len();
-    let chunks: Vec<&[(String, String)]> = all_unlinked.chunks(batch_size).collect();
-    let num_chunks = chunks.len();
-
-    eprintln!(
-        "[entity_extract_batched] {} memories in {} chunks (batch_size={})",
-        total_memories, num_chunks, batch_size
-    );
-
-    for (chunk_idx, chunk) in chunks.iter().enumerate() {
-        // Format numbered prompt: "1. <content>\n2. <content>\n..."
-        let numbered: String = chunk
-            .iter()
-            .enumerate()
-            .map(|(i, (_, content))| {
-                let truncated: String = content.chars().take(500).collect();
-                format!("{}. {}", i + 1, truncated)
-            })
-            .collect::<Vec<_>>()
-            .join("\n");
-
-        let response = llm
-            .generate(crate::llm_provider::LlmRequest {
-                system_prompt: Some(prompts.extract_knowledge_graph.clone()),
-                user_prompt: numbered,
-                max_tokens: ((chunk.len() * 256) as u32).max(512),
-                temperature: 0.3,
-                label: Some(format!("batch_extract_chunk_{}", chunk_idx)),
-                timeout_secs: None,
-            })
-            .await;
-
-        let response = match response {
-            Ok(r) => r,
-            Err(e) => {
-                log::warn!(
-                    "[entity_extract_batched] chunk {}/{}: LLM failed: {}",
-                    chunk_idx + 1,
-                    num_chunks,
-                    e
-                );
-                continue;
-            }
-        };
-
-        // parse_kg_response expects (index, content) pairs — index is used to map
-        // numbered sections back to individual memories.
-        let indexed: Vec<(usize, String)> = chunk
-            .iter()
-            .enumerate()
-            .map(|(i, (_, c))| (i, c.clone()))
-            .collect();
-        let kg_results = parse_kg_response(&response, &indexed);
-
-        let mut chunk_entities = 0usize;
-        let mut chunk_linked = 0usize;
-
-        for (mem_idx, kg) in kg_results.iter().enumerate() {
-            if mem_idx >= chunk.len() {
-                break;
-            }
-            let (source_id, _) = &chunk[mem_idx];
-            let mut first_entity_id: Option<String> = None;
-
-            for entity in &kg.entities {
-                match crate::importer::resolve_entity_bulk(
-                    db,
-                    &mut entity_cache,
-                    entity,
-                    "batch_eval",
-                )
-                .await
-                {
-                    Ok((id, _)) => {
-                        chunk_entities += 1;
-                        if first_entity_id.is_none() {
-                            first_entity_id = Some(id);
-                        }
-                    }
-                    Err(e) => log::warn!("[entity_extract_batched] entity create failed: {e}"),
-                }
-            }
-            for obs in &kg.observations {
-                if let Some(entity_id) = entity_cache.get(&obs.entity.to_lowercase()) {
-                    if let Err(e) = db
-                        .add_observation(entity_id, &obs.content, Some("batch_eval"), None)
-                        .await
-                    {
-                        log::warn!(
-                            "[entity_extract_batched] add_observation failed for entity={} source={}: {}",
-                            entity_id, source_id, e
-                        );
-                    }
-                }
-            }
-            for rel in &kg.relations {
-                let from_id = entity_cache.get(&rel.from.to_lowercase()).cloned();
-                let to_id = entity_cache.get(&rel.to.to_lowercase()).cloned();
-                if let (Some(from), Some(to)) = (from_id, to_id) {
-                    if let Err(e) = db
-                        .create_relation(
-                            &from,
-                            &to,
-                            &rel.relation_type,
-                            Some("batch_eval"),
-                            rel.confidence,
-                            rel.explanation.as_deref(),
-                            Some(source_id),
-                        )
-                        .await
-                    {
-                        log::warn!(
-                            "[entity_extract_batched] create_relation failed from={} to={} source={}: {}",
-                            from, to, source_id, e
-                        );
-                    }
-                }
-            }
-
-            if let Some(ref eid) = first_entity_id {
-                if let Err(e) = db.update_memory_entity_id(source_id, eid).await {
-                    log::warn!(
-                        "[entity_extract_batched] update_memory_entity_id failed for source={} entity={}: {}",
-                        source_id, eid, e
-                    );
-                } else {
-                    chunk_linked += 1;
-                }
-            }
-        }
-
-        total_linked += chunk_linked;
-
-        if (chunk_idx + 1) % 5 == 0 || chunk_idx + 1 == num_chunks {
-            let elapsed = t0.elapsed().as_secs_f64();
-            let rate = (chunk_idx + 1) as f64 / elapsed.max(0.001);
-            let eta = if rate > 0.0 {
-                (num_chunks - chunk_idx - 1) as f64 / rate
-            } else {
-                0.0
-            };
-            eprintln!(
-                "[entity_extract_batched] chunk {}/{}: extracted {} entities from {} memories (total_linked: {}) elapsed={:.0}s rate={:.1}chunk/s eta={:.0}s",
-                chunk_idx + 1,
-                num_chunks,
-                chunk_entities,
-                chunk.len(),
-                total_linked,
-                elapsed,
-                rate,
-                eta,
-            );
-        }
-    }
-
-    let marked = db.mark_all_memories_enriched_for_eval().await?;
-    eprintln!(
-        "[entity_extract_batched] done: {} memories linked, {} marked enriched",
-        total_linked, marked
-    );
-
-    Ok(total_linked)
-}
-
 /// Resolve the per-scenario DB directory under `baselines/fullpipeline/{benchmark}/{scenario_id}/`.
 ///
 /// `benchmark` is the short name (`"lme"` or `"locomo"`). The function prepends `"fullpipeline/"`,
@@ -665,14 +461,69 @@ pub fn scenario_db_dir(baselines_dir: &Path, benchmark: &str, scenario_id: &str)
 struct ScenarioCacheEnv {
     schema_db_version: u32,
     migrations_hash: String,
+    #[serde(default)]
+    enricher_provider: String,
+    #[serde(default)]
+    enricher_model: String,
 }
 
-fn current_cache_env() -> ScenarioCacheEnv {
+fn current_cache_env(enrichment: &EnrichmentMode) -> ScenarioCacheEnv {
+    let (enricher_provider, enricher_model) = enrichment.provenance();
     ScenarioCacheEnv {
         schema_db_version: crate::db::SCHEMA_VERSION,
         migrations_hash: option_env!("ORIGIN_MIGRATIONS_HASH")
             .unwrap_or("unknown")
             .to_string(),
+        enricher_provider,
+        enricher_model,
+    }
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum CacheStampDecision {
+    Reuse,
+    MigrateStale,
+    Wipe,
+    Refuse,
+}
+
+fn provenance_matches(stored: &ScenarioCacheEnv, want: &ScenarioCacheEnv) -> bool {
+    // Empty (unstamped) fields never match a populated `want`.
+    !stored.enricher_provider.is_empty()
+        && !stored.enricher_model.is_empty()
+        && stored.enricher_provider == want.enricher_provider
+        && stored.enricher_model == want.enricher_model
+}
+
+fn decide_cache_stamp(
+    stored: Option<&ScenarioCacheEnv>,
+    want: &ScenarioCacheEnv,
+    db_exists: bool,
+    migrate_stale: bool,
+    allow_wipe: bool,
+) -> CacheStampDecision {
+    match stored {
+        Some(s) if s == want => CacheStampDecision::Reuse,
+        Some(s) => {
+            if migrate_stale && provenance_matches(s, want) {
+                CacheStampDecision::MigrateStale
+            } else if allow_wipe {
+                CacheStampDecision::Wipe
+            } else {
+                CacheStampDecision::Refuse
+            }
+        }
+        None => {
+            if db_exists {
+                if allow_wipe {
+                    CacheStampDecision::Wipe
+                } else {
+                    CacheStampDecision::Refuse
+                }
+            } else {
+                CacheStampDecision::Reuse
+            }
+        }
     }
 }
 
@@ -711,32 +562,43 @@ where
     // Cache invalidation by schema/migrations stamp. If the on-disk stamp
     // disagrees with the build's stamp, the cached DB is stale.
     let cache_env_path = db_dir.join("cache_env.json");
-    let want = current_cache_env();
-    let stamp_match = match std::fs::read(&cache_env_path) {
-        Ok(bytes) => match serde_json::from_slice::<ScenarioCacheEnv>(&bytes) {
-            Ok(stored) => stored == want,
-            Err(_) => false,
-        },
-        Err(_) => !db_dir.join("origin_memory.db").exists(),
-    };
-    if !stamp_match {
-        if std::env::var("EVAL_ALLOW_WIPE").as_deref() != Ok("1") {
+    let want = current_cache_env(enrichment);
+    let db_file = db_dir.join("origin_memory.db");
+    let db_exists = db_file.exists();
+    let stored_opt: Option<ScenarioCacheEnv> = std::fs::read(&cache_env_path)
+        .ok()
+        .and_then(|bytes| serde_json::from_slice(&bytes).ok());
+    let migrate_stale = std::env::var("EVAL_MIGRATE_STALE").as_deref() == Ok("1");
+    let allow_wipe = std::env::var("EVAL_ALLOW_WIPE").as_deref() == Ok("1");
+    let stamp_decision = decide_cache_stamp(
+        stored_opt.as_ref(),
+        &want,
+        db_exists,
+        migrate_stale,
+        allow_wipe,
+    );
+    let attempt_migrate = match stamp_decision {
+        CacheStampDecision::Reuse => false,
+        CacheStampDecision::Wipe => {
+            log::warn!(
+                "[scenario_db] cache_env mismatch at {} — wiping (EVAL_ALLOW_WIPE=1)",
+                db_dir.display()
+            );
+            if db_file.exists() {
+                std::fs::remove_file(&db_file)
+                    .map_err(|e| OriginError::Generic(format!("remove stale scenario.db: {e}")))?;
+            }
+            false
+        }
+        CacheStampDecision::Refuse => {
             return Err(OriginError::Generic(format!(
                 "[scenario_db] cache_env mismatch at {} (schema/migrations changed). \
                  Set EVAL_ALLOW_WIPE=1 to wipe and reseed, or migrate manually.",
                 db_dir.display()
             )));
         }
-        log::warn!(
-            "[scenario_db] cache_env mismatch at {} — wiping (EVAL_ALLOW_WIPE=1)",
-            db_dir.display()
-        );
-        let db_file = db_dir.join("origin_memory.db");
-        if db_file.exists() {
-            std::fs::remove_file(&db_file)
-                .map_err(|e| OriginError::Generic(format!("remove stale scenario.db: {e}")))?;
-        }
-    }
+        CacheStampDecision::MigrateStale => true,
+    };
 
     let db = MemoryDB::new_with_shared_embedder(
         db_dir,
@@ -747,6 +609,37 @@ where
 
     let mem_count = db.memory_count().await.unwrap_or(0);
     let enriched = db.enriched_memory_count().await.unwrap_or(0);
+
+    if attempt_migrate {
+        if mem_count == 0 || enriched != mem_count {
+            return Err(OriginError::Generic(format!(
+                "[scenario_db] stale DB at {} is not fully enriched ({}/{} enriched). \
+                 Cannot migrate — must re-seed. Set EVAL_ALLOW_WIPE=1 to wipe and reseed.",
+                db_dir.display(),
+                enriched,
+                mem_count
+            )));
+        }
+        {
+            let conn = db.conn.lock().await;
+            crate::eval::seed_contract::assert_feature_substrate_live(&conn, "temporal").await?;
+            crate::eval::seed_contract::assert_feature_substrate_live(&conn, "graph").await?;
+            crate::eval::seed_contract::assert_feature_substrate_live(&conn, "pages").await?;
+        }
+        log::info!(
+            "[scenario_db] migrate_stale: schema migrated, substrate live at {} ({} memories) — \
+             falling through to shared Phase-1 classification backfill",
+            db_dir.display(),
+            mem_count
+        );
+        // Do NOT return here — fall through to the cache-hit backfill block so the
+        // migrate path shares the Phase-1 classification pass (importance/quality/
+        // event_date). Returning early here would skip that backfill and ship
+        // training-serving skew (T8/T11/T15 starved on migrated DBs). The migrate
+        // guard above already ensured mem_count > 0 && enriched == mem_count, so the
+        // fall-through enters the correct branch below and never the partial-wipe path.
+        // write_cache_env_stamp + return Ok(db) happen at the bottom of that block.
+    }
 
     if mem_count > 0 && enriched == mem_count {
         // Entity/title/page enrichment is complete (`enriched_memory_count` tracks
@@ -914,6 +807,16 @@ pub enum EnrichmentMode {
 }
 
 impl EnrichmentMode {
+    fn provenance(&self) -> (String, String) {
+        match self {
+            EnrichmentMode::OnDevice(llm) => (llm.kind().to_string(), llm.model_id()),
+            EnrichmentMode::BatchApi { model, .. } => {
+                ("anthropic-batch".to_string(), model.clone())
+            }
+            EnrichmentMode::Cli { model, .. } => ("cli".to_string(), model.clone()),
+        }
+    }
+
     /// Construct from environment.
     ///
     /// - `EVAL_ENRICHMENT=cloud` (or `batch`) → `BatchApi` (requires `ANTHROPIC_API_KEY`).
@@ -1888,22 +1791,26 @@ pub async fn run_classification_for_eval_concurrent(
     Ok(processed)
 }
 
-/// On-device enrichment via production code paths. Mirrors production exactly:
-/// `refinery::extract_entities_from_memories` → `post_ingest::enrich_title` per memory →
-/// `refinery::distill_pages`. Free but slow (Qwen3-4B serial ≈ several hours at LME scale).
+/// On-device eval seed enrichment via the production code path.
 ///
-/// Concurrency: entity + title phases dispatch up to `EVAL_ENRICHMENT_CONCURRENCY` parallel LLM
-/// calls (default 1 = serial). Distillation stays serial due to cluster ordering dependencies:
-/// `distill_pages` builds clusters by scanning enrichment state written by prior phases, and
-/// splitting it would break the FK ordering assumptions in `find_distillation_clusters`.
+/// Phase 1 (classification) runs the shared `ingest` classify+extract pass per
+/// memory with `EVAL_ENRICHMENT_CONCURRENCY` parallelism (default 1 = serial),
+/// writing importance / event_date / quality / structured_fields / retrieval_cue.
 ///
-/// Batching: when `EVAL_ENRICHMENT_BATCH_SIZE > 1`, entity extraction uses
-/// `run_entity_extraction_for_eval_batched` instead of the per-memory concurrent path.
-/// Batch mode packs multiple memories into one LLM call, which is faster on single-device Metal
-/// where true concurrency is limited. Qwen3.5-9B handles batch_size=5-10 reliably;
-/// Qwen3-4B degrades above 1-2. Default (1) preserves current per-memory behavior.
+/// Phase 2 (entity link + extraction + title + page growth) is de-forked: it loops
+/// over every primary memory in insertion order and calls the production
+/// `post_ingest::run_post_ingest_enrichment` per memory — the SAME code the daemon
+/// store path runs — so the eval seed and production share one enrichment path
+/// (Google "Rules of ML", Rule #32). This restores the `auto_link_entity` step the
+/// old eval fork lacked. Free but slow (Qwen3-4B serial ≈ several hours at LME scale).
 ///
-/// For staged evals (e.g. `pipeline.rs` Flat/Enriched/Distilled), call the three sub-steps
+/// Phase 3 (`refinery::distill_pages`) stays serial: it builds clusters by scanning
+/// enrichment state written by prior phases, and splitting it would break the FK
+/// ordering assumptions in `find_distillation_clusters`.
+///
+/// Returns REAL `(entity_links, titles, concepts)` counts via cheap COUNT queries.
+///
+/// For staged evals (e.g. `pipeline.rs` Flat/Enriched/Distilled), call the sub-steps
 /// independently — `run_entity_extraction_for_eval`, `run_title_enrichment_for_eval`,
 /// `refinery::distill_pages` — so each stage can be measured in isolation.
 pub async fn enrich_db_for_eval_local(
@@ -1911,45 +1818,85 @@ pub async fn enrich_db_for_eval_local(
     llm: &Arc<dyn crate::llm_provider::LlmProvider>,
 ) -> Result<(usize, usize, usize), OriginError> {
     use crate::prompts::PromptRegistry;
-    use crate::tuning::DistillationConfig;
+    use crate::tuning::{DistillationConfig, RefineryConfig};
 
     let concurrency: usize = std::env::var("EVAL_ENRICHMENT_CONCURRENCY")
         .ok()
         .and_then(|s| s.parse().ok())
         .unwrap_or(1);
 
-    let batch_size: usize = std::env::var("EVAL_ENRICHMENT_BATCH_SIZE")
-        .ok()
-        .and_then(|s| s.parse().ok())
-        .unwrap_or(1);
+    eprintln!("    [enrich_local] concurrency={concurrency}");
 
-    eprintln!(
-        "    [enrich_local] concurrency={} batch_size={}",
-        concurrency, batch_size
-    );
-
-    // Phase 1 (classification) FIRST: write importance / event_date / quality /
-    // structured_fields / retrieval_cue via the shared `ingest` canonical pass,
-    // matching the production order where Phase 1 precedes the entity/title/page
-    // passes. The legacy shortcut skipped this entirely — without it the T8
-    // (salience), T11/T20 (temporal), and T15 (fact-channel) flags read empty
-    // columns and ship merged-but-inert.
+    // Phase 1 (classification) FIRST — shared with production; write importance /
+    // event_date / quality / structured_fields / retrieval_cue.
     let classified = run_classification_for_eval_concurrent(db, llm, concurrency).await?;
     eprintln!("    [enrich_local] {classified} memories classified (Phase 1)");
 
-    let entities = if batch_size > 1 {
-        run_entity_extraction_for_eval_batched(db, llm, batch_size).await?
-    } else {
-        run_entity_extraction_for_eval_concurrent(db, llm, concurrency).await?
-    };
-    let titles = run_title_enrichment_for_eval(db, llm, concurrency).await?;
-
+    // Phase 2 — de-forked: route through the production `run_post_ingest_enrichment`
+    // per memory in insertion order. Matches the production single-memory path;
+    // the windowed `find_recent_batch` batch-extraction branch does not fire on
+    // historical-timestamp seeds (seeded rows are >30s old). This includes
+    // `auto_link_entity` (the step the old fork lacked), so a verbatim entity-name
+    // memory is auto-linked instead of re-extracted, matching the canonical arm.
     let prompts = PromptRegistry::load(&PromptRegistry::override_dir());
-    let tuning = DistillationConfig::default();
-    let concepts = crate::refinery::distill_pages(db, Some(llm), &prompts, &tuning, None).await?;
+    let refinery = RefineryConfig::default();
+    let distillation = DistillationConfig::default();
+
+    let all_memories = db.get_all_source_memories_ordered().await?;
+    let total_memories = all_memories.len();
+    eprintln!("    [enrich_local] Phase 2: {total_memories} memories via canonical post_ingest...");
+    let t2_start = std::time::Instant::now();
+
+    for (i, (source_id, content)) in all_memories.iter().enumerate() {
+        crate::post_ingest::run_post_ingest_enrichment(
+            db,
+            source_id,
+            content,
+            None, // entity_id: let auto_link_entity + extraction decide
+            None,
+            None,
+            None,
+            Some(llm),
+            &prompts,
+            &refinery,
+            &distillation,
+            None, // knowledge_path
+            None, // cancel
+        )
+        .await?;
+        if (i + 1) % 20 == 0 || i + 1 == total_memories {
+            let elapsed = t2_start.elapsed().as_secs_f64();
+            let rate = (i + 1) as f64 / elapsed.max(0.001);
+            eprintln!(
+                "    [enrich_local] Phase 2: {}/{} done | {:.1}s elapsed | {:.1}/s",
+                i + 1,
+                total_memories,
+                elapsed,
+                rate,
+            );
+        }
+    }
+
+    let elapsed_phase2 = t2_start.elapsed();
+    eprintln!(
+        "    [enrich_local] Phase 2 done in {:.1}s ({:.2}s/memory avg)",
+        elapsed_phase2.as_secs_f64(),
+        elapsed_phase2.as_secs_f64() / total_memories.max(1) as f64,
+    );
+
+    // Phase 3: distill pages (unchanged — already shared with production).
+    let concepts =
+        crate::refinery::distill_pages(db, Some(llm), &prompts, &distillation, None).await?;
     eprintln!("    [distill_local] {} concepts", concepts);
 
-    Ok((entities, titles, concepts))
+    // Report REAL counts (Phase 2 now runs entity + title together via
+    // run_post_ingest_enrichment, so they're not tracked per-phase). Cheap COUNT
+    // queries keep the shared seed log honest instead of fabricating memory-count
+    // proxies. These are junction-edge + non-empty-title counts (logging-only); not
+    // directly comparable to the BatchApi/Cli arms' entity-created semantics.
+    let entity_links = db.count_memory_entity_links().await? as usize;
+    let titles = db.count_nonempty_titles().await? as usize;
+    Ok((entity_links, titles, concepts))
 }
 
 /// Batch title enrichment via Anthropic Batch API.
@@ -2351,6 +2298,8 @@ mod tests {
         let want = ScenarioCacheEnv {
             schema_db_version: 99,
             migrations_hash: "abc123".to_string(),
+            enricher_provider: "on-device".to_string(),
+            enricher_model: "qwen3-4b".to_string(),
         };
         let tmp = tempfile::tempdir().unwrap();
         let path = tmp.path().join("cache_env.json");
@@ -2479,6 +2428,13 @@ mod tests {
             source_text: None,
         };
 
+        // Create the mode upfront so the cache stamp and the re-open use the same provenance.
+        let llm: Arc<dyn LlmProvider> = Arc::new(SequencedMockProvider::new(vec![
+            r#"{"memory_type":"decision","domain":"infra","quality":"high","importance":7,"tags":["db"]}"#,
+            r#"{"event_date":"2026-03-01","retrieval_cue":"db choice billing"}"#,
+        ]));
+        let mode = EnrichmentMode::OnDevice(llm);
+
         // Build the "pre-classification cache" state: seed + mark enriched (the
         // entity/title marker) but leave importance NULL, and stamp cache_env so
         // the re-open is a stamp-match cache hit (not a wipe).
@@ -2502,15 +2458,11 @@ mod tests {
                     .len(),
                 1
             );
-            write_cache_env_stamp(&dir.path().join("cache_env.json"), &current_cache_env());
+            write_cache_env_stamp(
+                &dir.path().join("cache_env.json"),
+                &current_cache_env(&mode),
+            );
         }
-
-        // Re-open via the cache path with an OnDevice mock (classify then extract).
-        let llm: Arc<dyn LlmProvider> = Arc::new(SequencedMockProvider::new(vec![
-            r#"{"memory_type":"decision","domain":"infra","quality":"high","importance":7,"tags":["db"]}"#,
-            r#"{"event_date":"2026-03-01","retrieval_cue":"db choice billing"}"#,
-        ]));
-        let mode = EnrichmentMode::OnDevice(llm);
 
         // Empty seed closure: it's a cache hit, so no re-seed should occur.
         let db = open_or_seed_scenario_db(dir.path(), emb.clone(), Vec::new, &mode)
@@ -2558,6 +2510,86 @@ mod tests {
         assert_eq!(
             ce_channel_touched_static("page_channel", "q", &[], &[]),
             None
+        );
+    }
+
+    /// Task 2.5 — provenance-stamped EVAL_MIGRATE_STALE.
+    ///
+    /// `decide_cache_stamp` must allow migration ONLY when the stored stamp's
+    /// enricher provenance matches the current run's provenance. A schema-59 DB
+    /// stamped with "on-device / qwen3.5-9b" migrates under EVAL_MIGRATE_STALE=1.
+    /// A DB stamped with "anthropic-batch / haiku" — or an UNSTAMPED legacy DB
+    /// (empty enricher fields from `#[serde(default)]`) — is REFUSED even with the
+    /// flag. This prevents cloud-substrate laundering onto on-device headline runs.
+    #[test]
+    fn migrate_stale_requires_matching_provenance() {
+        let want = ScenarioCacheEnv {
+            schema_db_version: crate::db::SCHEMA_VERSION,
+            migrations_hash: option_env!("ORIGIN_MIGRATIONS_HASH")
+                .unwrap_or("unknown")
+                .to_string(),
+            enricher_provider: "on-device".to_string(),
+            enricher_model: "qwen3.5-9b".to_string(),
+        };
+
+        // Case 1: stored is schema-59 but same provider/model → MigrateStale.
+        let stored_qwen = ScenarioCacheEnv {
+            schema_db_version: 59,
+            migrations_hash: "old-hash".to_string(),
+            enricher_provider: "on-device".to_string(),
+            enricher_model: "qwen3.5-9b".to_string(),
+        };
+        assert_eq!(
+            decide_cache_stamp(Some(&stored_qwen), &want, true, true, false),
+            CacheStampDecision::MigrateStale,
+            "same provenance, schema diff + migrate_stale=true → MigrateStale"
+        );
+
+        // Case 2: stored is cloud-enriched (haiku) → Refuse even with migrate_stale.
+        let stored_haiku = ScenarioCacheEnv {
+            schema_db_version: 59,
+            migrations_hash: "old-hash".to_string(),
+            enricher_provider: "anthropic-batch".to_string(),
+            enricher_model: "haiku".to_string(),
+        };
+        assert_eq!(
+            decide_cache_stamp(Some(&stored_haiku), &want, true, true, false),
+            CacheStampDecision::Refuse,
+            "cloud provenance mismatch → Refuse even with migrate_stale=true"
+        );
+
+        // Case 3: stored is unstamped legacy (empty enricher fields) → Refuse.
+        let stored_unstamped = ScenarioCacheEnv {
+            schema_db_version: 59,
+            migrations_hash: "old-hash".to_string(),
+            enricher_provider: String::new(),
+            enricher_model: String::new(),
+        };
+        assert_eq!(
+            decide_cache_stamp(Some(&stored_unstamped), &want, true, true, false),
+            CacheStampDecision::Refuse,
+            "unstamped legacy DB → Refuse (must re-seed for on-device headline)"
+        );
+
+        // Case 4: same provenance but migrate_stale=false → Refuse (flag required).
+        assert_eq!(
+            decide_cache_stamp(Some(&stored_qwen), &want, true, false, false),
+            CacheStampDecision::Refuse,
+            "matching provenance but migrate_stale=false → Refuse"
+        );
+
+        // Case 5: exact stamp match → Reuse (no wipe, no migrate needed).
+        assert_eq!(
+            decide_cache_stamp(Some(&want), &want, true, false, false),
+            CacheStampDecision::Reuse,
+            "exact match → Reuse"
+        );
+
+        // Case 6: mismatch + allow_wipe → Wipe.
+        assert_eq!(
+            decide_cache_stamp(Some(&stored_haiku), &want, true, false, true),
+            CacheStampDecision::Wipe,
+            "mismatch + allow_wipe → Wipe"
         );
     }
 }
