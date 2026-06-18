@@ -9,6 +9,7 @@
 //! [`LlmEngine::backend`].
 
 use crate::error::OriginError;
+use crate::llm_provider::format_chatml_prompt;
 
 use llama_cpp_2::context::params::LlamaContextParams;
 use llama_cpp_2::context::LlamaContext;
@@ -670,6 +671,15 @@ impl LlmEngine {
         }
     }
 
+    /// Count tokens for the formatted ChatML prompt used by the provider path.
+    pub fn count_prompt_tokens(&self, system_prompt: Option<&str>, prompt: &str) -> usize {
+        let formatted = format_chatml_prompt(system_prompt, prompt);
+        self.model
+            .str_to_token(&formatted, AddBos::Always)
+            .map(|t| t.len())
+            .unwrap_or(usize::MAX)
+    }
+
     /// Run continuous-batch inference over multiple prompts in a single context.
     ///
     /// This is the Option B (S2) entry point: one `LlamaContext` (built with
@@ -686,12 +696,12 @@ impl LlmEngine {
     ///
     /// Returns a vector aligned with `prompts`: each element is `Some(output)`
     /// if that sequence finished successfully, `None` if it timed out or was
-    /// terminated early (e.g. truncation). The KV cache is fully cleared on
+    /// refused for budget. The KV cache is fully cleared on
     /// entry so previous decodes do not leak into this batch.
     ///
-    /// Per-seq budget math: each prompt's token count is capped at
+    /// Per-seq budget math: each prompt's token count must fit
     /// `(ctx_size / seq_capacity) - max_output_tokens`. This intentionally uses
-    /// configured capacity, not current batch size, so truncation behavior does
+    /// configured capacity, not current batch size, so refusal behavior does
     /// not depend on queue timing.
     #[allow(clippy::type_complexity)]
     pub fn run_inference_continuous_batch(
@@ -720,7 +730,7 @@ impl LlmEngine {
              per-seq budget={max_per_seq}"
         );
 
-        // Tokenize each prompt and apply per-seq prompt cap.
+        // Tokenize each prompt and refuse prompts that exceed the per-seq cap.
         let mut tokenized: Vec<Vec<llama_cpp_2::token::LlamaToken>> = Vec::with_capacity(n_seqs);
         let mut max_output_per_seq: Vec<i32> = Vec::with_capacity(n_seqs);
         let mut temperatures: Vec<f32> = Vec::with_capacity(n_seqs);
@@ -761,11 +771,12 @@ impl LlmEngine {
             let tokens = if tokens.len() > max_prompt_tokens {
                 log::warn!(
                     "[llm_engine] continuous: prompt tokens ({}) exceed per-seq budget ({}), \
-                     truncating",
+                     refusing seq",
                     tokens.len(),
                     max_prompt_tokens
                 );
-                tokens[..max_prompt_tokens].to_vec()
+                failed[seq_id] = true;
+                Vec::new()
             } else {
                 tokens
             };
