@@ -3122,149 +3122,170 @@ pub async fn run_fullpipeline_lme(
         .parent()
         .ok_or_else(|| OriginError::Generic("output_path has no parent".to_string()))?;
 
+    let scenario_concurrency: usize = std::env::var("EVAL_SCENARIO_CONCURRENCY")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(1)
+        .min(8);
+    eprintln!("[ce_ab_lme] scenario concurrency = {scenario_concurrency}");
+
     let mut processed = 0usize;
     let mut save_counter = 0usize;
 
-    for (q_idx, sample) in samples.iter().enumerate() {
-        // Match the done-set key (question_id, fallback to text) — see build above.
-        let sample_key: &str = if sample.question_id.is_empty() {
-            sample.question.as_str()
-        } else {
-            sample.question_id.as_str()
-        };
-        if done_questions.contains(sample_key) {
-            continue;
-        }
+    if scenario_concurrency <= 1 {
+        for (q_idx, sample) in samples.iter().enumerate() {
+            // Match the done-set key (question_id, fallback to text) — see build above.
+            let sample_key: &str = if sample.question_id.is_empty() {
+                sample.question.as_str()
+            } else {
+                sample.question_id.as_str()
+            };
+            if done_questions.contains(sample_key) {
+                continue;
+            }
 
-        // Ground truth: LME answers are JSON strings; handle non-string values
-        // explicitly rather than borrowing a temporary (M1).
-        let ground_truth = match &sample.answer {
-            serde_json::Value::String(s) => s.clone(),
-            other => other.to_string(),
-        };
-        if ground_truth.is_empty() {
-            continue;
-        }
+            // Ground truth: LME answers are JSON strings; handle non-string values
+            // explicitly rather than borrowing a temporary (M1).
+            let ground_truth = match &sample.answer {
+                serde_json::Value::String(s) => s.clone(),
+                other => other.to_string(),
+            };
+            if ground_truth.is_empty() {
+                continue;
+            }
 
-        // Acquire this question's retrieval DB. Consolidated reuses the ONE
-        // shared large-pool DB opened above (skip per-question seeding +
-        // event_date injection — it is already enriched + 100% dated, and is
-        // never mutated). SeedPerQuestion seeds a fresh oracle-pool scenario DB
-        // from the sample's own sessions, byte-identical to the prior behavior.
-        let db: Arc<MemoryDB> = match &db_source {
-            DbSource::Consolidated(_) => consolidated_db
-                .clone()
-                .expect("consolidated_db is Some for DbSource::Consolidated"),
-            DbSource::SeedPerQuestion => {
-                let memories = extract_memories(sample);
-                if memories.is_empty() {
-                    continue;
-                }
+            // Acquire this question's retrieval DB. Consolidated reuses the ONE
+            // shared large-pool DB opened above (skip per-question seeding +
+            // event_date injection — it is already enriched + 100% dated, and is
+            // never mutated). SeedPerQuestion seeds a fresh oracle-pool scenario DB
+            // from the sample's own sessions, byte-identical to the prior behavior.
+            let db: Arc<MemoryDB> = match &db_source {
+                DbSource::Consolidated(_) => consolidated_db
+                    .clone()
+                    .expect("consolidated_db is Some for DbSource::Consolidated"),
+                DbSource::SeedPerQuestion => {
+                    let memories = extract_memories(sample);
+                    if memories.is_empty() {
+                        continue;
+                    }
 
-                let scope_dir =
-                    crate::eval::shared::scenario_db_dir(baselines_dir, "lme", &sample.question_id);
+                    let scope_dir = crate::eval::shared::scenario_db_dir(
+                        baselines_dir,
+                        "lme",
+                        &sample.question_id,
+                    );
 
-                let question_id = sample.question_id.clone();
-                let question_type = sample.question_type.clone();
-                let memories_owned = memories.clone();
+                    let question_id = sample.question_id.clone();
+                    let question_type = sample.question_type.clone();
+                    let memories_owned = memories.clone();
 
-                let seeded = match crate::eval::shared::open_or_seed_scenario_db(
-                    &scope_dir,
-                    shared_embedder.clone(),
-                    move || {
-                        memories_owned
-                            .iter()
-                            .map(|mem| crate::sources::RawDocument {
-                                content: mem.content.clone(),
-                                source_id: format!(
-                                    "lme_{}_{}_t{}",
-                                    question_id, mem.session_idx, mem.turn_idx
-                                ),
-                                source: "memory".to_string(),
-                                title: format!("session {} turn {}", mem.session_idx, mem.turn_idx),
-                                memory_type: Some(
-                                    if question_type == "single-session-preference" {
-                                        "preference"
-                                    } else {
-                                        "fact"
-                                    }
-                                    .to_string(),
-                                ),
-                                space: Some("conversation".to_string()),
-                                last_modified: chrono::Utc::now().timestamp(),
-                                ..Default::default()
-                            })
-                            .collect()
-                    },
-                    &enrichment,
-                )
-                .await
-                {
-                    Ok(db) => db,
-                    Err(e) => {
+                    let seeded = match crate::eval::shared::open_or_seed_scenario_db(
+                        &scope_dir,
+                        shared_embedder.clone(),
+                        move || {
+                            memories_owned
+                                .iter()
+                                .map(|mem| crate::sources::RawDocument {
+                                    content: mem.content.clone(),
+                                    source_id: format!(
+                                        "lme_{}_{}_t{}",
+                                        question_id, mem.session_idx, mem.turn_idx
+                                    ),
+                                    source: "memory".to_string(),
+                                    title: format!(
+                                        "session {} turn {}",
+                                        mem.session_idx, mem.turn_idx
+                                    ),
+                                    memory_type: Some(
+                                        if question_type == "single-session-preference" {
+                                            "preference"
+                                        } else {
+                                            "fact"
+                                        }
+                                        .to_string(),
+                                    ),
+                                    space: Some("conversation".to_string()),
+                                    last_modified: chrono::Utc::now().timestamp(),
+                                    ..Default::default()
+                                })
+                                .collect()
+                        },
+                        &enrichment,
+                    )
+                    .await
+                    {
+                        Ok(db) => db,
+                        Err(e) => {
+                            return Err(OriginError::Generic(format!(
+                                "[ce_ab_lme] scenario {} failed to open/seed DB: {e}. Refusing to \
+                                 silently drop the question — re-seed and retry.",
+                                sample.question_id
+                            )));
+                        }
+                    };
+
+                    // Substrate-liveness: a per-question DB with zero memories yields a
+                    // vacuous A/B (both arms retrieve nothing). Fail loud rather than
+                    // emit a misleading null, per the eval ONE-contract discipline (H2).
+                    let db_mem_count = seeded.memory_count().await.unwrap_or(0);
+                    if db_mem_count == 0 {
                         return Err(OriginError::Generic(format!(
-                            "[ce_ab_lme] scenario {} failed to open/seed DB: {e}. Refusing to \
-                             silently drop the question — re-seed and retry.",
+                            "EVAL REFUSED [ce_ab_lme]: scenario {} seeded DB has 0 memories. \
+                             A CE A/B over an empty substrate measures noise, not CE. Re-seed and retry.",
                             sample.question_id
                         )));
                     }
-                };
 
-                // Substrate-liveness: a per-question DB with zero memories yields a
-                // vacuous A/B (both arms retrieve nothing). Fail loud rather than
-                // emit a misleading null, per the eval ONE-contract discipline (H2).
-                let db_mem_count = seeded.memory_count().await.unwrap_or(0);
-                if db_mem_count == 0 {
-                    return Err(OriginError::Generic(format!(
-                        "EVAL REFUSED [ce_ab_lme]: scenario {} seeded DB has 0 memories. \
-                         A CE A/B over an empty substrate measures noise, not CE. Re-seed and retry.",
-                        sample.question_id
-                    )));
-                }
-
-                // Make the temporal substrate LIVE for this question's scenario DB by
-                // injecting per-session event_date (turn text carries no date; the date
-                // is per-session haystack metadata). This is substrate-prep + a liveness
-                // gate, NOT a direct answer fix: event_date is not rendered into the CE
-                // A/B context (build_structured_context renders only content) and no
-                // temporal ranking flag is set on this path, so dates influence neither
-                // ranking nor the prompt today. Their value is (a) a per-question liveness
-                // signal (the rows-updated count below), (b) a future temporal lever has
-                // live data to read. source_id keys mirror the seed closure's
-                // `lme_{qid}_{sess}_t{turn}` exactly via event_date_map -> memory_source_id.
-                let date_map =
-                    crate::eval::longmemeval::event_date_map(std::slice::from_ref(sample));
-                if !date_map.is_empty() {
-                    let updates: Vec<(String, i64)> = date_map.into_iter().collect();
-                    let n_total = updates.len();
-                    let rows = seeded.set_event_dates_by_source_id(&updates).await?;
-                    if rows == 0 {
-                        // Per-question log + continue (NOT whole-run abort): a non-empty
-                        // date_map that updates 0 rows means source_id-format drift for
-                        // THIS question. Skip it rather than nuke a multi-hour decision run;
-                        // the rows-updated count is an earlier, more precise signal than a
-                        // DB-wide liveness assert (which propagated and aborted the run).
-                        log::warn!(
-                            "[ce_ab_lme] event_date injection updated 0/{} rows for question {} \
-                             — source_id drift; skipping question",
-                            n_total,
-                            sample.question_id
-                        );
-                        continue;
+                    // Make the temporal substrate LIVE for this question's scenario DB by
+                    // injecting per-session event_date (turn text carries no date; the date
+                    // is per-session haystack metadata). This is substrate-prep + a liveness
+                    // gate, NOT a direct answer fix: event_date is not rendered into the CE
+                    // A/B context (build_structured_context renders only content) and no
+                    // temporal ranking flag is set on this path, so dates influence neither
+                    // ranking nor the prompt today. Their value is (a) a per-question liveness
+                    // signal (the rows-updated count below), (b) a future temporal lever has
+                    // live data to read. source_id keys mirror the seed closure's
+                    // `lme_{qid}_{sess}_t{turn}` exactly via event_date_map -> memory_source_id.
+                    let date_map =
+                        crate::eval::longmemeval::event_date_map(std::slice::from_ref(sample));
+                    if !date_map.is_empty() {
+                        let updates: Vec<(String, i64)> = date_map.into_iter().collect();
+                        let n_total = updates.len();
+                        let rows = seeded.set_event_dates_by_source_id(&updates).await?;
+                        if rows == 0 {
+                            // Per-question log + continue (NOT whole-run abort): a non-empty
+                            // date_map that updates 0 rows means source_id-format drift for
+                            // THIS question. Skip it rather than nuke a multi-hour decision run;
+                            // the rows-updated count is an earlier, more precise signal than a
+                            // DB-wide liveness assert (which propagated and aborted the run).
+                            log::warn!(
+                                "[ce_ab_lme] event_date injection updated 0/{} rows for question {} \
+                                 — source_id drift; skipping question",
+                                n_total,
+                                sample.question_id
+                            );
+                            continue;
+                        }
                     }
+
+                    Arc::new(seeded)
                 }
+            };
 
-                Arc::new(seeded)
-            }
-        };
+            let category = category_name(&sample.question_type);
 
-        let category = category_name(&sample.question_type);
-
-        // Generate an answer for all arms from the same seeded DB.
-        let arm_pairs = arms.resolve(category, &reranker)?;
-        for (arm_label, retrieval) in arm_pairs {
-            let (ctx, ctx_tokens) =
-                match build_structured_context(&db, &sample.question, 10, None, retrieval).await {
+            // Generate an answer for all arms from the same seeded DB.
+            let arm_pairs = arms.resolve(category, &reranker)?;
+            for (arm_label, retrieval) in arm_pairs {
+                let (ctx, ctx_tokens) = match build_structured_context(
+                    &db,
+                    &sample.question,
+                    10,
+                    None,
+                    retrieval,
+                )
+                .await
+                {
                     Ok(v) => v,
                     Err(e) => {
                         return Err(OriginError::Generic(format!(
@@ -3274,67 +3295,307 @@ pub async fn run_fullpipeline_lme(
                     }
                 };
 
-            let request = LlmRequest {
-                system_prompt: Some(e2e_system_prompt()),
-                user_prompt: format!("Context:\n{}\n\nQuestion: {}", ctx, sample.question),
-                max_tokens: e2e_max_answer_tokens() as u32,
-                // Pinned to 0.0 (vs the 0.1 used elsewhere) so both arms are
-                // deterministic — fairness depends on identical decoding.
-                temperature: 0.0,
-                label: Some(arm_label.clone()),
-                timeout_secs: None,
-            };
+                let request = LlmRequest {
+                    system_prompt: Some(e2e_system_prompt()),
+                    user_prompt: format!("Context:\n{}\n\nQuestion: {}", ctx, sample.question),
+                    max_tokens: e2e_max_answer_tokens() as u32,
+                    // Pinned to 0.0 (vs the 0.1 used elsewhere) so both arms are
+                    // deterministic — fairness depends on identical decoding.
+                    temperature: 0.0,
+                    label: Some(arm_label.clone()),
+                    timeout_secs: None,
+                };
 
-            let answer = match llm.generate(request).await {
-                Ok(raw) => strip_think_tags(&raw).trim().to_string(),
-                Err(e) => {
-                    // Skip ALL arms for this question rather than persisting a
-                    // half-pair; on resume the question is reprocessed (H1).
+                let answer = match llm.generate(request).await {
+                    Ok(raw) => strip_think_tags(&raw).trim().to_string(),
+                    Err(e) => {
+                        // Skip ALL arms for this question rather than persisting a
+                        // half-pair; on resume the question is reprocessed (H1).
+                        eprintln!(
+                            "[ce_ab_lme] WARN: scenario {} arm {arm_label} generation failed: {e}. \
+                             Dropping all arms for this question; will retry on resume.",
+                            sample.question_id
+                        );
+                        break;
+                    }
+                };
+
+                // Never persist an empty answer — it would mark the question DONE on
+                // resume and silently bias the arm to score 0 (H1).
+                if answer.is_empty() {
                     eprintln!(
-                        "[ce_ab_lme] WARN: scenario {} arm {arm_label} generation failed: {e}. \
-                         Dropping all arms for this question; will retry on resume.",
+                        "[ce_ab_lme] WARN: scenario {} arm {arm_label} produced empty answer. \
+                         Dropping all arms; will retry on resume.",
                         sample.question_id
                     );
                     break;
                 }
-            };
 
-            // Never persist an empty answer — it would mark the question DONE on
-            // resume and silently bias the arm to score 0 (H1).
-            if answer.is_empty() {
+                finished_tuples.push(JudgmentTuple {
+                    question: sample.question.clone(),
+                    ground_truth: ground_truth.clone(),
+                    approach: arm_label,
+                    answer,
+                    context_tokens: ctx_tokens,
+                    category: category.to_string(),
+                    question_id: sample.question_id.clone(),
+                });
+            }
+
+            processed += 1;
+            save_counter += 1;
+            if save_counter >= 10 {
+                save_counter = 0;
+                if let Err(e) = save_judgment_tuples(&finished_tuples, output_path) {
+                    eprintln!("[ce_ab_lme] WARN: incremental save failed: {e}");
+                }
+            }
+            if q_idx % 100 == 99 {
                 eprintln!(
-                    "[ce_ab_lme] WARN: scenario {} arm {arm_label} produced empty answer. \
-                     Dropping all arms; will retry on resume.",
-                    sample.question_id
+                    "[ce_ab_lme] {}/{} questions processed",
+                    q_idx + 1,
+                    samples.len()
                 );
-                break;
-            }
-
-            finished_tuples.push(JudgmentTuple {
-                question: sample.question.clone(),
-                ground_truth: ground_truth.clone(),
-                approach: arm_label,
-                answer,
-                context_tokens: ctx_tokens,
-                category: category.to_string(),
-                question_id: sample.question_id.clone(),
-            });
-        }
-
-        processed += 1;
-        save_counter += 1;
-        if save_counter >= 10 {
-            save_counter = 0;
-            if let Err(e) = save_judgment_tuples(&finished_tuples, output_path) {
-                eprintln!("[ce_ab_lme] WARN: incremental save failed: {e}");
             }
         }
-        if q_idx % 100 == 99 {
-            eprintln!(
-                "[ce_ab_lme] {}/{} questions processed",
-                q_idx + 1,
-                samples.len()
-            );
+    } else {
+        use futures::StreamExt;
+
+        let enrichment_arc = Arc::new(enrichment);
+        let done_arc = Arc::new(done_questions.clone());
+        let baselines_dir_owned = baselines_dir.to_path_buf();
+        let db_source_owned = db_source.clone();
+        let consolidated_db_owned = consolidated_db.clone();
+        let arms_owned = arms.clone();
+        let total = samples.len();
+
+        let scenario_outputs: Vec<Result<Vec<JudgmentTuple>, OriginError>> =
+            futures::stream::iter(samples.iter().enumerate())
+                .map(|(q_idx, sample)| {
+                    let shared_embedder = shared_embedder.clone();
+                    let enrichment_arc = enrichment_arc.clone();
+                    let done_arc = done_arc.clone();
+                    let baselines_dir_owned = baselines_dir_owned.clone();
+                    let db_source = db_source_owned.clone();
+                    let consolidated_db = consolidated_db_owned.clone();
+                    let arms = arms_owned.clone();
+                    let reranker = reranker.clone();
+                    let llm = llm.clone();
+                    async move {
+                        let sample_key: &str = if sample.question_id.is_empty() {
+                            sample.question.as_str()
+                        } else {
+                            sample.question_id.as_str()
+                        };
+                        if done_arc.contains(sample_key) {
+                            return Ok(Vec::new());
+                        }
+
+                        let ground_truth = match &sample.answer {
+                            serde_json::Value::String(s) => s.clone(),
+                            other => other.to_string(),
+                        };
+                        if ground_truth.is_empty() {
+                            return Ok(Vec::new());
+                        }
+
+                        let db: Arc<MemoryDB> = match &db_source {
+                            DbSource::Consolidated(_) => consolidated_db
+                                .clone()
+                                .expect("consolidated_db is Some for DbSource::Consolidated"),
+                            DbSource::SeedPerQuestion => {
+                                let memories = extract_memories(sample);
+                                if memories.is_empty() {
+                                    return Ok(Vec::new());
+                                }
+
+                                let scope_dir = crate::eval::shared::scenario_db_dir(
+                                    &baselines_dir_owned,
+                                    "lme",
+                                    &sample.question_id,
+                                );
+
+                                let question_id = sample.question_id.clone();
+                                let question_type = sample.question_type.clone();
+                                let memories_owned = memories.clone();
+
+                                let seeded = match crate::eval::shared::open_or_seed_scenario_db(
+                                    &scope_dir,
+                                    shared_embedder,
+                                    move || {
+                                        memories_owned
+                                            .iter()
+                                            .map(|mem| crate::sources::RawDocument {
+                                                content: mem.content.clone(),
+                                                source_id: format!(
+                                                    "lme_{}_{}_t{}",
+                                                    question_id, mem.session_idx, mem.turn_idx
+                                                ),
+                                                source: "memory".to_string(),
+                                                title: format!(
+                                                    "session {} turn {}",
+                                                    mem.session_idx, mem.turn_idx
+                                                ),
+                                                memory_type: Some(
+                                                    if question_type
+                                                        == "single-session-preference"
+                                                    {
+                                                        "preference"
+                                                    } else {
+                                                        "fact"
+                                                    }
+                                                    .to_string(),
+                                                ),
+                                                space: Some("conversation".to_string()),
+                                                last_modified: chrono::Utc::now().timestamp(),
+                                                ..Default::default()
+                                            })
+                                            .collect()
+                                    },
+                                    &enrichment_arc,
+                                )
+                                .await
+                                {
+                                    Ok(db) => db,
+                                    Err(e) => {
+                                        return Err(OriginError::Generic(format!(
+                                            "[ce_ab_lme] scenario {} failed to open/seed DB: {e}. Refusing to \
+                                             silently drop the question — re-seed and retry.",
+                                            sample.question_id
+                                        )));
+                                    }
+                                };
+
+                                let db_mem_count = seeded.memory_count().await.unwrap_or(0);
+                                if db_mem_count == 0 {
+                                    return Err(OriginError::Generic(format!(
+                                        "EVAL REFUSED [ce_ab_lme]: scenario {} seeded DB has 0 memories. \
+                                         A CE A/B over an empty substrate measures noise, not CE. Re-seed and retry.",
+                                        sample.question_id
+                                    )));
+                                }
+
+                                let date_map = crate::eval::longmemeval::event_date_map(
+                                    std::slice::from_ref(sample),
+                                );
+                                if !date_map.is_empty() {
+                                    let updates: Vec<(String, i64)> =
+                                        date_map.into_iter().collect();
+                                    let n_total = updates.len();
+                                    let rows = seeded.set_event_dates_by_source_id(&updates).await?;
+                                    if rows == 0 {
+                                        log::warn!(
+                                            "[ce_ab_lme] event_date injection updated 0/{} rows for question {} \
+                                             — source_id drift; skipping question",
+                                            n_total,
+                                            sample.question_id
+                                        );
+                                        return Ok(Vec::new());
+                                    }
+                                }
+
+                                Arc::new(seeded)
+                            }
+                        };
+
+                        let category = category_name(&sample.question_type);
+                        let arm_pairs = arms.resolve(category, &reranker)?;
+                        let mut tuples = Vec::with_capacity(arm_pairs.len());
+                        for (arm_label, retrieval) in arm_pairs {
+                            let (ctx, ctx_tokens) = match build_structured_context(
+                                &db,
+                                &sample.question,
+                                10,
+                                None,
+                                retrieval,
+                            )
+                            .await
+                            {
+                                Ok(v) => v,
+                                Err(e) => {
+                                    return Err(OriginError::Generic(format!(
+                                        "[ce_ab_lme] scenario {} arm {arm_label} context build failed: {e}",
+                                        sample.question_id
+                                    )));
+                                }
+                            };
+
+                            let request = LlmRequest {
+                                system_prompt: Some(e2e_system_prompt()),
+                                user_prompt: format!(
+                                    "Context:\n{}\n\nQuestion: {}",
+                                    ctx, sample.question
+                                ),
+                                max_tokens: e2e_max_answer_tokens() as u32,
+                                temperature: 0.0,
+                                label: Some(arm_label.clone()),
+                                timeout_secs: None,
+                            };
+
+                            let answer = match llm.generate(request).await {
+                                Ok(raw) => strip_think_tags(&raw).trim().to_string(),
+                                Err(e) => {
+                                    eprintln!(
+                                        "[ce_ab_lme] WARN: scenario {} arm {arm_label} generation failed: {e}. \
+                                         Dropping all arms for this question; will retry on resume.",
+                                        sample.question_id
+                                    );
+                                    return Ok(Vec::new());
+                                }
+                            };
+
+                            if answer.is_empty() {
+                                eprintln!(
+                                    "[ce_ab_lme] WARN: scenario {} arm {arm_label} produced empty answer. \
+                                     Dropping all arms; will retry on resume.",
+                                    sample.question_id
+                                );
+                                return Ok(Vec::new());
+                            }
+
+                            tuples.push(JudgmentTuple {
+                                question: sample.question.clone(),
+                                ground_truth: ground_truth.clone(),
+                                approach: arm_label,
+                                answer,
+                                context_tokens: ctx_tokens,
+                                category: category.to_string(),
+                                question_id: sample.question_id.clone(),
+                            });
+                        }
+
+                        if q_idx % 100 == 99 {
+                            eprintln!(
+                                "[ce_ab_lme] {}/{} questions processed",
+                                q_idx + 1,
+                                total
+                            );
+                        }
+
+                        Ok(tuples)
+                    }
+                })
+                .buffer_unordered(scenario_concurrency)
+                .collect()
+                .await;
+
+        for result in scenario_outputs {
+            let tuples = result?;
+            if !tuples.is_empty() {
+                processed += 1;
+                finished_tuples.extend(tuples);
+                // Mirror the serial path's incremental checkpoint (see save_counter above):
+                // this drain loop is sequential (single-writer), so saving every 10 questions
+                // bounds crash loss to ~10 questions instead of the entire run when
+                // scenario_concurrency > 1. The final save below flushes the remainder.
+                save_counter += 1;
+                if save_counter >= 10 {
+                    save_counter = 0;
+                    if let Err(e) = save_judgment_tuples(&finished_tuples, output_path) {
+                        eprintln!("[ce_ab_lme] WARN: incremental save failed: {e}");
+                    }
+                }
+            }
         }
     }
 
@@ -3355,6 +3616,8 @@ pub async fn run_fullpipeline_lme(
 mod tests {
     use super::*;
     use crate::eval::longmemeval::{ChatTurn, LongMemEvalSample};
+    use std::collections::HashMap;
+    use std::time::Duration;
 
     #[test]
     fn answer_prompt_v2_gate_default_off_byte_identical() {
@@ -3428,6 +3691,64 @@ mod tests {
         crate::eval::seed_contract::assert_feature_substrate_live(&conn, "temporal")
             .await
             .unwrap();
+    }
+
+    #[tokio::test]
+    async fn concurrent_collection_preserves_qid_attribution() {
+        use futures::StreamExt;
+
+        fn val(qid: &str) -> u64 {
+            qid.strip_prefix('q')
+                .unwrap()
+                .parse::<u64>()
+                .unwrap()
+                .pow(2)
+        }
+
+        // Create 10 qids to increase chance of completion-order mismatch.
+        let qids: Vec<String> = (0..10).map(|i| format!("q{i}")).collect();
+        let serial_map: HashMap<String, u64> =
+            qids.iter().map(|qid| (qid.clone(), val(qid))).collect();
+
+        // Intentionally reverse the sleep order so earlier inputs (smaller qids) sleep LONGER,
+        // forcing completion order != input order with very high probability.
+        let n = qids.len() as u64;
+        let outputs: Vec<(String, u64)> = futures::stream::iter(qids.iter().enumerate())
+            .map(|(idx, qid)| async move {
+                // q0 sleeps 100ms, q1 sleeps 90ms, ..., q9 sleeps 10ms
+                // So completion order will be: q9, q8, ..., q1, q0 (reverse of input)
+                tokio::time::sleep(Duration::from_millis((n - idx as u64) * 10)).await;
+                (qid.clone(), val(qid))
+            })
+            .buffer_unordered(8)
+            .collect()
+            .await;
+
+        // WRONG approach: zip original qids with completion-ordered values.
+        // Since completion order is reversed, zipping produces:
+        // q0 -> val(q9)=81, q1 -> val(q8)=64, q2 -> val(q7)=49, etc.
+        // This is WRONG and must NOT equal serial_map.
+        let wrong_index_map: HashMap<String, u64> = qids
+            .iter()
+            .cloned()
+            .zip(outputs.iter().map(|(_, v)| *v))
+            .collect();
+
+        // The WRONG map MUST differ from the serial map (the whole point of this test).
+        // If this assertion fails, it means the test isn't detecting misattribution properly.
+        assert_ne!(
+            wrong_index_map, serial_map,
+            "CRITICAL: wrong_index_map MUST differ from serial_map to validate this test's effectiveness. \
+             This failure means the scrambling didn't work as expected or the test logic is flawed."
+        );
+
+        // RIGHT approach: collect tuples that CARRY their qid alongside their value.
+        // Each tuple remembers its own qid, so reassembly is correct regardless of completion order.
+        let concurrent_map: HashMap<String, u64> = outputs.into_iter().collect();
+        assert_eq!(
+            concurrent_map, serial_map,
+            "concurrent_map MUST match serial_map when tuples carry their own qid"
+        );
     }
 
     #[test]
