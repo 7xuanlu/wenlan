@@ -132,7 +132,7 @@ pub trait LlmProvider: Send + Sync {
 /// (which defaults to thinking-on). Without it, all output tokens go to
 /// reasoning and `strip_think_tags` removes them, leaving empty output.
 /// Harmless for Qwen3 (which has no thinking mode).
-fn format_chatml_prompt(system: Option<&str>, user: &str) -> String {
+pub(crate) fn format_chatml_prompt(system: Option<&str>, user: &str) -> String {
     match system {
         Some(sys) => format!(
             "<|im_start|>system\n{sys}\n<|im_end|>\n\
@@ -162,7 +162,7 @@ const MAX_LLM_WORKERS: usize = 8;
 const MAX_LLM_PARALLEL_SEQS: usize = 8;
 const DEFAULT_BATCH_COALESCE_MS: u64 = 0;
 const MAX_BATCH_COALESCE_MS: u64 = 25;
-const MIN_CONTINUOUS_BATCH_PROMPT_RESERVE_TOKENS: usize = 256;
+const CONTINUOUS_BATCH_SAFETY_RESERVE_TOKENS: usize = 32;
 
 fn parse_clamped_usize_env(name: &str, default: usize, min: usize, max: usize) -> usize {
     std::env::var(name)
@@ -184,21 +184,35 @@ fn continuous_batch_per_seq_budget(ctx_size: u32, seq_capacity: usize) -> usize 
     (ctx_size as usize) / seq_capacity.max(1)
 }
 
-fn continuous_batch_eligible(ctx_size: u32, max_tokens: i32, seq_capacity: usize) -> bool {
+fn continuous_batch_eligible(
+    ctx_size: u32,
+    prompt_tokens: usize,
+    max_tokens: i32,
+    seq_capacity: usize,
+) -> bool {
     if seq_capacity <= 1 || max_tokens <= 0 {
         return false;
     }
     let per_seq_budget = continuous_batch_per_seq_budget(ctx_size, seq_capacity);
-    let max_tokens = max_tokens as usize;
 
-    // Continuous batching splits one KV context across sequence slots. Keep
-    // high-output synthesis/distillation calls on the single-seq path; they
-    // need the whole context and should not become queue-timing dependent.
-    max_tokens.saturating_add(MIN_CONTINUOUS_BATCH_PROMPT_RESERVE_TOKENS) <= per_seq_budget
+    // The request's full footprint must fit the per-seq budget. Requests that
+    // do not fit run single-seq at full context instead of being truncated.
+    prompt_tokens
+        .saturating_add(max_tokens as usize)
+        .saturating_add(CONTINUOUS_BATCH_SAFETY_RESERVE_TOKENS)
+        <= per_seq_budget
 }
 
-fn request_continuous_batch_eligible(req: &InferenceRequest, seq_capacity: usize) -> bool {
-    continuous_batch_eligible(req.ctx_size, req.max_tokens, seq_capacity)
+fn request_continuous_batch_eligible(
+    engine: &LlmEngine,
+    req: &InferenceRequest,
+    seq_capacity: usize,
+) -> bool {
+    if seq_capacity <= 1 || req.max_tokens <= 0 {
+        return false;
+    }
+    let prompt_tokens = engine.count_prompt_tokens(req.system_prompt.as_deref(), &req.prompt);
+    continuous_batch_eligible(req.ctx_size, prompt_tokens, req.max_tokens, seq_capacity)
 }
 
 fn context_seq_max_for_batch(batch_len: usize, parallel_seqs: usize) -> u32 {
@@ -513,7 +527,8 @@ impl OnDeviceProvider {
                         };
 
                         let mut batch_reqs: Vec<InferenceRequest> = Vec::with_capacity(m);
-                        let batch_eligible = request_continuous_batch_eligible(&first_req, m);
+                        let batch_eligible =
+                            request_continuous_batch_eligible(&engine, &first_req, m);
                         batch_reqs.push(first_req);
 
                         if m > 1 && batch_eligible {
@@ -533,7 +548,11 @@ impl OnDeviceProvider {
                                     let mut local = Vec::new();
                                     while batch_reqs.len() + local.len() < m {
                                         match rx.try_recv() {
-                                            Ok(r) if request_continuous_batch_eligible(&r, m) => {
+                                            Ok(r)
+                                                if request_continuous_batch_eligible(
+                                                    &engine, &r, m,
+                                                ) =>
+                                            {
                                                 local.push(r)
                                             }
                                             Ok(r) => {
@@ -1513,11 +1532,26 @@ mod tests {
         // 8K context / 8 seq slots = 1024 tokens per seq. Entity extraction
         // style calls fit; distillation/chat synthesis calls keep the full
         // single-seq context instead of being silently budget-truncated.
-        assert!(continuous_batch_eligible(8192, 128, 8));
-        assert!(continuous_batch_eligible(8192, 512, 8));
-        assert!(!continuous_batch_eligible(8192, 1024, 8));
-        assert!(!continuous_batch_eligible(8192, 2048, 8));
-        assert!(!continuous_batch_eligible(8192, 128, 1));
+        assert!(continuous_batch_eligible(8192, 64, 128, 8));
+        assert!(continuous_batch_eligible(8192, 64, 512, 8));
+        assert!(!continuous_batch_eligible(8192, 64, 1024, 8));
+        assert!(!continuous_batch_eligible(8192, 64, 2048, 8));
+        assert!(!continuous_batch_eligible(8192, 64, 128, 1));
+    }
+
+    #[test]
+    fn long_context_prompt_not_batched_even_with_small_output() {
+        // The old bug: a context-heavy prompt (900 tok) with modest output (512) passed
+        // the fixed-256 reserve gate (512+256<=1024) and was then silently truncated.
+        // Now the ACTUAL prompt length is accounted: 900+512+32 > 1024 => NOT eligible
+        // => runs single-seq at full context.
+        assert!(!continuous_batch_eligible(8192, 900, 512, 8));
+        // The same request fits at M=4 (budget 2048): 900+512+32 <= 2048.
+        assert!(continuous_batch_eligible(8192, 900, 512, 4));
+        // A short prompt still batches at M=8.
+        assert!(continuous_batch_eligible(8192, 200, 256, 8));
+        // M=1 never batches.
+        assert!(!continuous_batch_eligible(8192, 10, 10, 1));
     }
 
     #[test]
