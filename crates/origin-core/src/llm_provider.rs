@@ -209,6 +209,54 @@ fn context_seq_max_for_batch(batch_len: usize, parallel_seqs: usize) -> u32 {
     }
 }
 
+#[derive(Clone, Debug)]
+#[allow(dead_code)]
+pub(crate) struct BatchLogRecord {
+    pub(crate) n_seqs: usize,
+    pub(crate) call_class: String,
+    pub(crate) wall_ms: u64,
+}
+
+#[derive(Clone, Debug)]
+#[allow(dead_code)]
+pub(crate) struct BatchLogSummary {
+    pub(crate) batching_rate: f64,
+    pub(crate) wall_ms_share_by_class: std::collections::HashMap<String, f64>,
+}
+
+#[allow(dead_code)]
+pub(crate) fn aggregate_batch_log(records: &[BatchLogRecord]) -> BatchLogSummary {
+    let batching_rate = if records.is_empty() {
+        0.0
+    } else {
+        let batched_count = records.iter().filter(|record| record.n_seqs >= 2).count();
+        batched_count as f64 / records.len() as f64
+    };
+
+    let total_wall_ms: u128 = records.iter().map(|record| record.wall_ms as u128).sum();
+    let mut wall_ms_share_by_class = std::collections::HashMap::new();
+
+    if total_wall_ms > 0 {
+        for record in records {
+            *wall_ms_share_by_class
+                .entry(record.call_class.clone())
+                .or_insert(0.0) += record.wall_ms as f64;
+        }
+        for share in wall_ms_share_by_class.values_mut() {
+            *share /= total_wall_ms as f64;
+        }
+    }
+
+    BatchLogSummary {
+        batching_rate,
+        wall_ms_share_by_class,
+    }
+}
+
+fn batch_log_call_class(label: Option<&str>) -> &str {
+    label.unwrap_or("unknown")
+}
+
 /// On-device LLM provider that runs inference on a dedicated `std::thread`.
 ///
 /// Construction downloads the model (cached), loads it via Metal GPU, and
@@ -469,6 +517,7 @@ impl OnDeviceProvider {
                         let target_ctx_size =
                             batch_reqs.iter().map(|r| r.ctx_size).max().unwrap_or(0);
                         let target_seq_max = context_seq_max_for_batch(batch_reqs.len(), m);
+                        let batch_log_enabled = std::env::var("ORIGIN_BATCH_LOG").is_ok();
 
                         if persistent_ctx.is_none()
                             || persistent_ctx_size != target_ctx_size
@@ -493,6 +542,7 @@ impl OnDeviceProvider {
                         // inference). This is critical for backward compat —
                         // single-request latency must not regress.
                         if m == 1 || batch_reqs.len() == 1 {
+                            let batch_n_seqs = batch_reqs.len();
                             let req = batch_reqs.pop().expect("batch has at least 1 req");
                             let full_prompt =
                                 format_chatml_prompt(req.system_prompt.as_deref(), &req.prompt);
@@ -501,36 +551,81 @@ impl OnDeviceProvider {
                                 None => (30, true),
                             };
 
-                            let result = match persistent_ctx.as_mut() {
-                                Some(ctx) => engine.run_inference_persistent(
-                                    ctx,
-                                    &full_prompt,
-                                    req.max_tokens,
-                                    req.temperature,
-                                    timeout_secs,
-                                    strip_think,
-                                    req.label.as_deref(),
-                                ),
-                                None => {
-                                    log::warn!(
-                                        "[on_device_provider] worker {i} persistent context \
-                                         unavailable, falling back to per-call context"
-                                    );
-                                    match req.timeout_secs {
-                                        Some(secs) => engine.run_inference_raw(
-                                            &full_prompt,
-                                            req.max_tokens,
-                                            req.temperature,
-                                            secs,
-                                            req.ctx_size,
-                                        ),
-                                        None => engine.run_inference(
-                                            &full_prompt,
-                                            req.max_tokens,
-                                            req.temperature,
-                                            req.ctx_size,
-                                            req.label.as_deref(),
-                                        ),
+                            let result = if batch_log_enabled {
+                                let call_class = batch_log_call_class(req.label.as_deref());
+                                let t = std::time::Instant::now();
+                                let result = match persistent_ctx.as_mut() {
+                                    Some(ctx) => engine.run_inference_persistent(
+                                        ctx,
+                                        &full_prompt,
+                                        req.max_tokens,
+                                        req.temperature,
+                                        timeout_secs,
+                                        strip_think,
+                                        req.label.as_deref(),
+                                    ),
+                                    None => {
+                                        log::warn!(
+                                            "[on_device_provider] worker {i} persistent context \
+                                             unavailable, falling back to per-call context"
+                                        );
+                                        match req.timeout_secs {
+                                            Some(secs) => engine.run_inference_raw(
+                                                &full_prompt,
+                                                req.max_tokens,
+                                                req.temperature,
+                                                secs,
+                                                req.ctx_size,
+                                            ),
+                                            None => engine.run_inference(
+                                                &full_prompt,
+                                                req.max_tokens,
+                                                req.temperature,
+                                                req.ctx_size,
+                                                req.label.as_deref(),
+                                            ),
+                                        }
+                                    }
+                                };
+                                eprintln!(
+                                    "[batch_log] n_seqs={} call_class={} wall_ms={}",
+                                    batch_n_seqs,
+                                    call_class,
+                                    t.elapsed().as_millis()
+                                );
+                                result
+                            } else {
+                                match persistent_ctx.as_mut() {
+                                    Some(ctx) => engine.run_inference_persistent(
+                                        ctx,
+                                        &full_prompt,
+                                        req.max_tokens,
+                                        req.temperature,
+                                        timeout_secs,
+                                        strip_think,
+                                        req.label.as_deref(),
+                                    ),
+                                    None => {
+                                        log::warn!(
+                                            "[on_device_provider] worker {i} persistent context \
+                                             unavailable, falling back to per-call context"
+                                        );
+                                        match req.timeout_secs {
+                                            Some(secs) => engine.run_inference_raw(
+                                                &full_prompt,
+                                                req.max_tokens,
+                                                req.temperature,
+                                                secs,
+                                                req.ctx_size,
+                                            ),
+                                            None => engine.run_inference(
+                                                &full_prompt,
+                                                req.max_tokens,
+                                                req.temperature,
+                                                req.ctx_size,
+                                                req.label.as_deref(),
+                                            ),
+                                        }
                                     }
                                 }
                             };
@@ -574,40 +669,91 @@ impl OnDeviceProvider {
                                 })
                                 .collect();
 
-                        let outputs: Vec<Option<String>> = match persistent_ctx.as_mut() {
-                            Some(ctx) => engine.run_inference_continuous_batch(ctx, &prompts, m),
-                            None => {
-                                log::warn!(
-                                    "[on_device_provider] worker {i} persistent multi-seq \
-                                     context unavailable, falling back to serial per-call"
-                                );
-                                // Serial fallback: run each request through
-                                // run_inference_raw / run_inference. Slower
-                                // but preserves correctness.
-                                prompts
-                                    .iter()
-                                    .zip(batch_reqs.iter())
-                                    .map(
-                                        |((p, max_t, temp, timeout, _strip, label), req)| match req
-                                            .timeout_secs
-                                        {
-                                            Some(_) => engine.run_inference_raw(
-                                                p,
-                                                *max_t,
-                                                *temp,
-                                                *timeout,
-                                                req.ctx_size,
-                                            ),
-                                            None => engine.run_inference(
-                                                p,
-                                                *max_t,
-                                                *temp,
-                                                req.ctx_size,
-                                                label.as_deref(),
-                                            ),
-                                        },
-                                    )
-                                    .collect()
+                        let outputs: Vec<Option<String>> = if batch_log_enabled {
+                            let batch_n_seqs = batch_reqs.len();
+                            let batch_call_class = batch_log_call_class(
+                                batch_reqs.first().and_then(|req| req.label.as_deref()),
+                            );
+                            let t = std::time::Instant::now();
+                            let outputs = match persistent_ctx.as_mut() {
+                                Some(ctx) => {
+                                    engine.run_inference_continuous_batch(ctx, &prompts, m)
+                                }
+                                None => {
+                                    log::warn!(
+                                        "[on_device_provider] worker {i} persistent multi-seq \
+                                         context unavailable, falling back to serial per-call"
+                                    );
+                                    // Serial fallback: run each request through
+                                    // run_inference_raw / run_inference. Slower
+                                    // but preserves correctness.
+                                    prompts
+                                        .iter()
+                                        .zip(batch_reqs.iter())
+                                        .map(|((p, max_t, temp, timeout, _strip, label), req)| {
+                                            match req.timeout_secs {
+                                                Some(_) => engine.run_inference_raw(
+                                                    p,
+                                                    *max_t,
+                                                    *temp,
+                                                    *timeout,
+                                                    req.ctx_size,
+                                                ),
+                                                None => engine.run_inference(
+                                                    p,
+                                                    *max_t,
+                                                    *temp,
+                                                    req.ctx_size,
+                                                    label.as_deref(),
+                                                ),
+                                            }
+                                        })
+                                        .collect()
+                                }
+                            };
+                            eprintln!(
+                                "[batch_log] n_seqs={} call_class={} wall_ms={}",
+                                batch_n_seqs,
+                                batch_call_class,
+                                t.elapsed().as_millis()
+                            );
+                            outputs
+                        } else {
+                            match persistent_ctx.as_mut() {
+                                Some(ctx) => {
+                                    engine.run_inference_continuous_batch(ctx, &prompts, m)
+                                }
+                                None => {
+                                    log::warn!(
+                                        "[on_device_provider] worker {i} persistent multi-seq \
+                                         context unavailable, falling back to serial per-call"
+                                    );
+                                    // Serial fallback: run each request through
+                                    // run_inference_raw / run_inference. Slower
+                                    // but preserves correctness.
+                                    prompts
+                                        .iter()
+                                        .zip(batch_reqs.iter())
+                                        .map(|((p, max_t, temp, timeout, _strip, label), req)| {
+                                            match req.timeout_secs {
+                                                Some(_) => engine.run_inference_raw(
+                                                    p,
+                                                    *max_t,
+                                                    *temp,
+                                                    *timeout,
+                                                    req.ctx_size,
+                                                ),
+                                                None => engine.run_inference(
+                                                    p,
+                                                    *max_t,
+                                                    *temp,
+                                                    req.ctx_size,
+                                                    label.as_deref(),
+                                                ),
+                                            }
+                                        })
+                                        .collect()
+                                }
                             }
                         };
 
@@ -1409,6 +1555,42 @@ mod tests {
         assert_eq!(context_seq_max_for_batch(1, 8), 1);
         assert_eq!(context_seq_max_for_batch(2, 8), 8);
         assert_eq!(context_seq_max_for_batch(8, 8), 8);
+    }
+
+    #[test]
+    fn aggregate_batch_log_rate_and_class_share() {
+        let records = vec![
+            BatchLogRecord {
+                n_seqs: 1,
+                call_class: "distill".to_string(),
+                wall_ms: 100,
+            },
+            BatchLogRecord {
+                n_seqs: 4,
+                call_class: "extract".to_string(),
+                wall_ms: 60,
+            },
+            BatchLogRecord {
+                n_seqs: 2,
+                call_class: "extract".to_string(),
+                wall_ms: 40,
+            },
+            BatchLogRecord {
+                n_seqs: 1,
+                call_class: "classify".to_string(),
+                wall_ms: 50,
+            },
+        ];
+
+        let summary = aggregate_batch_log(&records);
+        assert!((summary.batching_rate - 0.5).abs() < 1e-9);
+        assert!((summary.wall_ms_share_by_class["extract"] - 0.4).abs() < 1e-9);
+        assert!((summary.wall_ms_share_by_class["distill"] - 0.4).abs() < 1e-9);
+        assert!((summary.wall_ms_share_by_class["classify"] - 0.2).abs() < 1e-9);
+
+        let empty = aggregate_batch_log(&[]);
+        assert_eq!(empty.batching_rate, 0.0);
+        assert!(empty.wall_ms_share_by_class.is_empty());
     }
 
     #[test]
