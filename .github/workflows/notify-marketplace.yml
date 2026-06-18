@@ -1,0 +1,21 @@
+name: notify-marketplace
+
+# On a published release, tell the claude-plugins marketplace to re-sync pins.
+# The marketplace's sync-marketplace workflow re-derives every plugin's pin itself,
+# so this only needs to fire the dispatch (the client_payload is informational).
+on:
+  release:
+    types: [published]
+
+jobs:
+  notify:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Dispatch to claude-plugins
+        env:
+          GH_TOKEN: ${{ secrets.MARKETPLACE_SYNC_TOKEN }}
+        run: |
+          gh api repos/7xuanlu/claude-plugins/dispatches \
+            -f event_type=plugin-released \
+            -F "client_payload[plugin]=origin" \
+            -F "client_payload[tag]=${{ github.event.release.tag_name }}"
