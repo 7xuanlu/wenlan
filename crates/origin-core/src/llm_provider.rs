@@ -1611,7 +1611,7 @@ mod tests {
         // BatchLogRecord and fed to the aggregator. This ensures the emitted
         // format and aggregator input stay reconciled. The emitted format is:
         // [batch_log] n_seqs=N call_class=TAG wall_ms=MS
-        let lines = vec![
+        let lines = [
             "[batch_log] n_seqs=1 call_class=distill wall_ms=100",
             "[batch_log] n_seqs=4 call_class=extract wall_ms=60",
             "[batch_log] n_seqs=2 call_class=extract wall_ms=40",
