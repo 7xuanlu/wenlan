@@ -3584,6 +3584,17 @@ pub async fn run_fullpipeline_lme(
             if !tuples.is_empty() {
                 processed += 1;
                 finished_tuples.extend(tuples);
+                // Mirror the serial path's incremental checkpoint (see save_counter above):
+                // this drain loop is sequential (single-writer), so saving every 10 questions
+                // bounds crash loss to ~10 questions instead of the entire run when
+                // scenario_concurrency > 1. The final save below flushes the remainder.
+                save_counter += 1;
+                if save_counter >= 10 {
+                    save_counter = 0;
+                    if let Err(e) = save_judgment_tuples(&finished_tuples, output_path) {
+                        eprintln!("[ce_ab_lme] WARN: incremental save failed: {e}");
+                    }
+                }
             }
         }
     }
