@@ -3694,13 +3694,18 @@ mod tests {
                 .pow(2)
         }
 
-        let qids: Vec<String> = (0..5).map(|i| format!("q{i}")).collect();
+        // Create 10 qids to increase chance of completion-order mismatch.
+        let qids: Vec<String> = (0..10).map(|i| format!("q{i}")).collect();
         let serial_map: HashMap<String, u64> =
             qids.iter().map(|qid| (qid.clone(), val(qid))).collect();
 
+        // Intentionally reverse the sleep order so earlier inputs (smaller qids) sleep LONGER,
+        // forcing completion order != input order with very high probability.
         let n = qids.len() as u64;
         let outputs: Vec<(String, u64)> = futures::stream::iter(qids.iter().enumerate())
             .map(|(idx, qid)| async move {
+                // q0 sleeps 100ms, q1 sleeps 90ms, ..., q9 sleeps 10ms
+                // So completion order will be: q9, q8, ..., q1, q0 (reverse of input)
                 tokio::time::sleep(Duration::from_millis((n - idx as u64) * 10)).await;
                 (qid.clone(), val(qid))
             })
@@ -3708,18 +3713,31 @@ mod tests {
             .collect()
             .await;
 
+        // WRONG approach: zip original qids with completion-ordered values.
+        // Since completion order is reversed, zipping produces:
+        // q0 -> val(q9)=81, q1 -> val(q8)=64, q2 -> val(q7)=49, etc.
+        // This is WRONG and must NOT equal serial_map.
         let wrong_index_map: HashMap<String, u64> = qids
             .iter()
             .cloned()
             .zip(outputs.iter().map(|(_, v)| *v))
             .collect();
+
+        // The WRONG map MUST differ from the serial map (the whole point of this test).
+        // If this assertion fails, it means the test isn't detecting misattribution properly.
         assert_ne!(
             wrong_index_map, serial_map,
-            "associating completion-ordered values by original input index misattributes out-of-order results"
+            "CRITICAL: wrong_index_map MUST differ from serial_map to validate this test's effectiveness. \
+             This failure means the scrambling didn't work as expected or the test logic is flawed."
         );
 
+        // RIGHT approach: collect tuples that CARRY their qid alongside their value.
+        // Each tuple remembers its own qid, so reassembly is correct regardless of completion order.
         let concurrent_map: HashMap<String, u64> = outputs.into_iter().collect();
-        assert_eq!(concurrent_map, serial_map);
+        assert_eq!(
+            concurrent_map, serial_map,
+            "concurrent_map MUST match serial_map when tuples carry their own qid"
+        );
     }
 
     #[test]
