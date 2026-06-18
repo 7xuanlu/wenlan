@@ -210,7 +210,7 @@ fn context_seq_max_for_batch(batch_len: usize, parallel_seqs: usize) -> u32 {
 }
 
 #[derive(Clone, Debug)]
-#[allow(dead_code)]
+#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) struct BatchLogRecord {
     pub(crate) n_seqs: usize,
     pub(crate) call_class: String,
@@ -218,13 +218,20 @@ pub(crate) struct BatchLogRecord {
 }
 
 #[derive(Clone, Debug)]
-#[allow(dead_code)]
+#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) struct BatchLogSummary {
     pub(crate) batching_rate: f64,
     pub(crate) wall_ms_share_by_class: std::collections::HashMap<String, f64>,
 }
 
-#[allow(dead_code)]
+/// Aggregate a batch of `BatchLogRecord`s to compute:
+/// - `batching_rate`: fraction of records with n_seqs >= 2 (i.e., batched requests)
+/// - `wall_ms_share_by_class`: per-class wall-time share as a fraction of total wall_ms
+///
+/// Used for offline log analysis. A parser (see `parse_batch_log_line`) transforms
+/// emitted `[batch_log]` stderr lines into `BatchLogRecord`s, which can then be
+/// aggregated over a collection interval.
+#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) fn aggregate_batch_log(records: &[BatchLogRecord]) -> BatchLogSummary {
     let batching_rate = if records.is_empty() {
         0.0
@@ -255,6 +262,43 @@ pub(crate) fn aggregate_batch_log(records: &[BatchLogRecord]) -> BatchLogSummary
 
 fn batch_log_call_class(label: Option<&str>) -> &str {
     label.unwrap_or("unknown")
+}
+
+/// Parse a `[batch_log]` stderr line into a `BatchLogRecord`.
+/// The expected format is: `[batch_log] n_seqs=N call_class=TAG wall_ms=MS`
+/// Returns None if the line does not match the expected format.
+#[cfg(test)]
+fn parse_batch_log_line(line: &str) -> Option<BatchLogRecord> {
+    // Trim and check prefix
+    let line = line.trim();
+    if !line.starts_with("[batch_log] ") {
+        return None;
+    }
+    let rest = &line["[batch_log] ".len()..];
+
+    // Parse key=value pairs
+    let mut n_seqs: Option<usize> = None;
+    let mut call_class: Option<String> = None;
+    let mut wall_ms: Option<u64> = None;
+
+    for part in rest.split_whitespace() {
+        if let Some(val) = part.strip_prefix("n_seqs=") {
+            n_seqs = val.parse().ok();
+        } else if let Some(val) = part.strip_prefix("call_class=") {
+            call_class = Some(val.to_string());
+        } else if let Some(val) = part.strip_prefix("wall_ms=") {
+            wall_ms = val.parse().ok();
+        }
+    }
+
+    match (n_seqs, call_class, wall_ms) {
+        (Some(n), Some(c), Some(w)) => Some(BatchLogRecord {
+            n_seqs: n,
+            call_class: c,
+            wall_ms: w,
+        }),
+        _ => None,
+    }
 }
 
 /// On-device LLM provider that runs inference on a dedicated `std::thread`.
@@ -1525,6 +1569,43 @@ mod tests {
         let empty = aggregate_batch_log(&[]);
         assert_eq!(empty.batching_rate, 0.0);
         assert!(empty.wall_ms_share_by_class.is_empty());
+    }
+
+    #[test]
+    fn batch_log_round_trip_parse_and_aggregate() {
+        // Test that the emitted [batch_log] format can be parsed back into
+        // BatchLogRecord and fed to the aggregator. This ensures the emitted
+        // format and aggregator input stay reconciled. The emitted format is:
+        // [batch_log] n_seqs=N call_class=TAG wall_ms=MS
+        let lines = vec![
+            "[batch_log] n_seqs=1 call_class=distill wall_ms=100",
+            "[batch_log] n_seqs=4 call_class=extract wall_ms=60",
+            "[batch_log] n_seqs=2 call_class=extract wall_ms=40",
+            "[batch_log] n_seqs=1 call_class=classify wall_ms=50",
+        ];
+
+        let parsed: Vec<BatchLogRecord> = lines
+            .iter()
+            .filter_map(|line| parse_batch_log_line(line))
+            .collect();
+
+        assert_eq!(parsed.len(), 4, "all lines should parse");
+        let summary = aggregate_batch_log(&parsed);
+
+        // Verify the parsed records produce the same aggregation as the
+        // hand-constructed records from the previous test.
+        assert!((summary.batching_rate - 0.5).abs() < 1e-9);
+        assert!((summary.wall_ms_share_by_class["extract"] - 0.4).abs() < 1e-9);
+        assert!((summary.wall_ms_share_by_class["distill"] - 0.4).abs() < 1e-9);
+        assert!((summary.wall_ms_share_by_class["classify"] - 0.2).abs() < 1e-9);
+
+        // Test malformed lines are rejected
+        assert!(parse_batch_log_line("garbage").is_none());
+        assert!(parse_batch_log_line("[batch_log] n_seqs=1").is_none());
+        assert!(
+            parse_batch_log_line("[batch_log] n_seqs=invalid call_class=test wall_ms=100")
+                .is_none()
+        );
     }
 
     #[test]
