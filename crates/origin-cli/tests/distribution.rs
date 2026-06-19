@@ -37,7 +37,6 @@ fn json_string<'a>(value: &'a Value, key: &str) -> &'a str {
 #[test]
 fn plugin_distribution_contains_required_files() {
     for path in [
-        ".claude-plugin/marketplace.json",
         "plugin/.claude-plugin/plugin.json",
         "plugin/.claude-plugin/README.md",
         "plugin/.mcp.json",
@@ -52,26 +51,6 @@ fn plugin_distribution_contains_required_files() {
     ] {
         assert_file(path);
     }
-}
-
-#[test]
-fn plugin_marketplace_points_at_bundled_plugin() {
-    let marketplace = read_json(".claude-plugin/marketplace.json");
-    assert_eq!(json_string(&marketplace, "name"), "7xuanlu");
-
-    let plugin = marketplace["plugins"]
-        .as_array()
-        .and_then(|plugins| plugins.iter().find(|plugin| plugin["name"] == "origin"))
-        .expect("marketplace lists origin plugin");
-
-    assert_eq!(plugin["source"], "./plugin");
-    assert!(
-        plugin["description"]
-            .as_str()
-            .expect("description")
-            .contains("MCP memory"),
-        "marketplace description should mention MCP memory"
-    );
 }
 
 #[test]

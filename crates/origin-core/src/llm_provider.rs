@@ -132,7 +132,7 @@ pub trait LlmProvider: Send + Sync {
 /// (which defaults to thinking-on). Without it, all output tokens go to
 /// reasoning and `strip_think_tags` removes them, leaving empty output.
 /// Harmless for Qwen3 (which has no thinking mode).
-fn format_chatml_prompt(system: Option<&str>, user: &str) -> String {
+pub(crate) fn format_chatml_prompt(system: Option<&str>, user: &str) -> String {
     match system {
         Some(sys) => format!(
             "<|im_start|>system\n{sys}\n<|im_end|>\n\
@@ -162,7 +162,7 @@ const MAX_LLM_WORKERS: usize = 8;
 const MAX_LLM_PARALLEL_SEQS: usize = 8;
 const DEFAULT_BATCH_COALESCE_MS: u64 = 0;
 const MAX_BATCH_COALESCE_MS: u64 = 25;
-const MIN_CONTINUOUS_BATCH_PROMPT_RESERVE_TOKENS: usize = 256;
+const CONTINUOUS_BATCH_SAFETY_RESERVE_TOKENS: usize = 32;
 
 fn parse_clamped_usize_env(name: &str, default: usize, min: usize, max: usize) -> usize {
     std::env::var(name)
@@ -184,21 +184,35 @@ fn continuous_batch_per_seq_budget(ctx_size: u32, seq_capacity: usize) -> usize 
     (ctx_size as usize) / seq_capacity.max(1)
 }
 
-fn continuous_batch_eligible(ctx_size: u32, max_tokens: i32, seq_capacity: usize) -> bool {
+fn continuous_batch_eligible(
+    ctx_size: u32,
+    prompt_tokens: usize,
+    max_tokens: i32,
+    seq_capacity: usize,
+) -> bool {
     if seq_capacity <= 1 || max_tokens <= 0 {
         return false;
     }
     let per_seq_budget = continuous_batch_per_seq_budget(ctx_size, seq_capacity);
-    let max_tokens = max_tokens as usize;
 
-    // Continuous batching splits one KV context across sequence slots. Keep
-    // high-output synthesis/distillation calls on the single-seq path; they
-    // need the whole context and should not become queue-timing dependent.
-    max_tokens.saturating_add(MIN_CONTINUOUS_BATCH_PROMPT_RESERVE_TOKENS) <= per_seq_budget
+    // The request's full footprint must fit the per-seq budget. Requests that
+    // do not fit run single-seq at full context instead of being truncated.
+    prompt_tokens
+        .saturating_add(max_tokens as usize)
+        .saturating_add(CONTINUOUS_BATCH_SAFETY_RESERVE_TOKENS)
+        <= per_seq_budget
 }
 
-fn request_continuous_batch_eligible(req: &InferenceRequest, seq_capacity: usize) -> bool {
-    continuous_batch_eligible(req.ctx_size, req.max_tokens, seq_capacity)
+fn request_continuous_batch_eligible(
+    engine: &LlmEngine,
+    req: &InferenceRequest,
+    seq_capacity: usize,
+) -> bool {
+    if seq_capacity <= 1 || req.max_tokens <= 0 {
+        return false;
+    }
+    let prompt_tokens = engine.count_prompt_tokens(req.system_prompt.as_deref(), &req.prompt);
+    continuous_batch_eligible(req.ctx_size, prompt_tokens, req.max_tokens, seq_capacity)
 }
 
 fn context_seq_max_for_batch(batch_len: usize, parallel_seqs: usize) -> u32 {
@@ -206,6 +220,98 @@ fn context_seq_max_for_batch(batch_len: usize, parallel_seqs: usize) -> u32 {
         parallel_seqs.max(1) as u32
     } else {
         1
+    }
+}
+
+#[derive(Clone, Debug)]
+#[cfg_attr(not(test), allow(dead_code))]
+pub(crate) struct BatchLogRecord {
+    pub(crate) n_seqs: usize,
+    pub(crate) call_class: String,
+    pub(crate) wall_ms: u64,
+}
+
+#[derive(Clone, Debug)]
+#[cfg_attr(not(test), allow(dead_code))]
+pub(crate) struct BatchLogSummary {
+    pub(crate) batching_rate: f64,
+    pub(crate) wall_ms_share_by_class: std::collections::HashMap<String, f64>,
+}
+
+/// Aggregate a batch of `BatchLogRecord`s to compute:
+/// - `batching_rate`: fraction of records with n_seqs >= 2 (i.e., batched requests)
+/// - `wall_ms_share_by_class`: per-class wall-time share as a fraction of total wall_ms
+///
+/// Used for offline log analysis. A parser (see `parse_batch_log_line`) transforms
+/// emitted `[batch_log]` stderr lines into `BatchLogRecord`s, which can then be
+/// aggregated over a collection interval.
+#[cfg_attr(not(test), allow(dead_code))]
+pub(crate) fn aggregate_batch_log(records: &[BatchLogRecord]) -> BatchLogSummary {
+    let batching_rate = if records.is_empty() {
+        0.0
+    } else {
+        let batched_count = records.iter().filter(|record| record.n_seqs >= 2).count();
+        batched_count as f64 / records.len() as f64
+    };
+
+    let total_wall_ms: u128 = records.iter().map(|record| record.wall_ms as u128).sum();
+    let mut wall_ms_share_by_class = std::collections::HashMap::new();
+
+    if total_wall_ms > 0 {
+        for record in records {
+            *wall_ms_share_by_class
+                .entry(record.call_class.clone())
+                .or_insert(0.0) += record.wall_ms as f64;
+        }
+        for share in wall_ms_share_by_class.values_mut() {
+            *share /= total_wall_ms as f64;
+        }
+    }
+
+    BatchLogSummary {
+        batching_rate,
+        wall_ms_share_by_class,
+    }
+}
+
+fn batch_log_call_class(label: Option<&str>) -> &str {
+    label.unwrap_or("unknown")
+}
+
+/// Parse a `[batch_log]` stderr line into a `BatchLogRecord`.
+/// The expected format is: `[batch_log] n_seqs=N call_class=TAG wall_ms=MS`
+/// Returns None if the line does not match the expected format.
+#[cfg(test)]
+fn parse_batch_log_line(line: &str) -> Option<BatchLogRecord> {
+    // Trim and check prefix
+    let line = line.trim();
+    if !line.starts_with("[batch_log] ") {
+        return None;
+    }
+    let rest = &line["[batch_log] ".len()..];
+
+    // Parse key=value pairs
+    let mut n_seqs: Option<usize> = None;
+    let mut call_class: Option<String> = None;
+    let mut wall_ms: Option<u64> = None;
+
+    for part in rest.split_whitespace() {
+        if let Some(val) = part.strip_prefix("n_seqs=") {
+            n_seqs = val.parse().ok();
+        } else if let Some(val) = part.strip_prefix("call_class=") {
+            call_class = Some(val.to_string());
+        } else if let Some(val) = part.strip_prefix("wall_ms=") {
+            wall_ms = val.parse().ok();
+        }
+    }
+
+    match (n_seqs, call_class, wall_ms) {
+        (Some(n), Some(c), Some(w)) => Some(BatchLogRecord {
+            n_seqs: n,
+            call_class: c,
+            wall_ms: w,
+        }),
+        _ => None,
     }
 }
 
@@ -421,7 +527,8 @@ impl OnDeviceProvider {
                         };
 
                         let mut batch_reqs: Vec<InferenceRequest> = Vec::with_capacity(m);
-                        let batch_eligible = request_continuous_batch_eligible(&first_req, m);
+                        let batch_eligible =
+                            request_continuous_batch_eligible(&engine, &first_req, m);
                         batch_reqs.push(first_req);
 
                         if m > 1 && batch_eligible {
@@ -441,7 +548,11 @@ impl OnDeviceProvider {
                                     let mut local = Vec::new();
                                     while batch_reqs.len() + local.len() < m {
                                         match rx.try_recv() {
-                                            Ok(r) if request_continuous_batch_eligible(&r, m) => {
+                                            Ok(r)
+                                                if request_continuous_batch_eligible(
+                                                    &engine, &r, m,
+                                                ) =>
+                                            {
                                                 local.push(r)
                                             }
                                             Ok(r) => {
@@ -469,6 +580,7 @@ impl OnDeviceProvider {
                         let target_ctx_size =
                             batch_reqs.iter().map(|r| r.ctx_size).max().unwrap_or(0);
                         let target_seq_max = context_seq_max_for_batch(batch_reqs.len(), m);
+                        let batch_log_enabled = std::env::var("ORIGIN_BATCH_LOG").is_ok();
 
                         if persistent_ctx.is_none()
                             || persistent_ctx_size != target_ctx_size
@@ -493,6 +605,7 @@ impl OnDeviceProvider {
                         // inference). This is critical for backward compat —
                         // single-request latency must not regress.
                         if m == 1 || batch_reqs.len() == 1 {
+                            let batch_n_seqs = batch_reqs.len();
                             let req = batch_reqs.pop().expect("batch has at least 1 req");
                             let full_prompt =
                                 format_chatml_prompt(req.system_prompt.as_deref(), &req.prompt);
@@ -500,6 +613,9 @@ impl OnDeviceProvider {
                                 Some(secs) => (secs, false),
                                 None => (30, true),
                             };
+
+                            // Optionally time the inference only when batch_log_enabled.
+                            let t = batch_log_enabled.then(std::time::Instant::now);
 
                             let result = match persistent_ctx.as_mut() {
                                 Some(ctx) => engine.run_inference_persistent(
@@ -534,6 +650,16 @@ impl OnDeviceProvider {
                                     }
                                 }
                             };
+
+                            if let Some(t) = t {
+                                let call_class = batch_log_call_class(req.label.as_deref());
+                                eprintln!(
+                                    "[batch_log] n_seqs={} call_class={} wall_ms={}",
+                                    batch_n_seqs,
+                                    call_class,
+                                    t.elapsed().as_millis()
+                                );
+                            }
 
                             let response = match result {
                                 Some(text) => {
@@ -574,6 +700,14 @@ impl OnDeviceProvider {
                                 })
                                 .collect();
 
+                        let batch_n_seqs = batch_reqs.len();
+                        let batch_call_class = batch_log_call_class(
+                            batch_reqs.first().and_then(|req| req.label.as_deref()),
+                        );
+
+                        // Optionally time the inference only when batch_log_enabled.
+                        let t = batch_log_enabled.then(std::time::Instant::now);
+
                         let outputs: Vec<Option<String>> = match persistent_ctx.as_mut() {
                             Some(ctx) => engine.run_inference_continuous_batch(ctx, &prompts, m),
                             None => {
@@ -610,6 +744,15 @@ impl OnDeviceProvider {
                                     .collect()
                             }
                         };
+
+                        if let Some(t) = t {
+                            eprintln!(
+                                "[batch_log] n_seqs={} call_class={} wall_ms={}",
+                                batch_n_seqs,
+                                batch_call_class,
+                                t.elapsed().as_millis()
+                            );
+                        }
 
                         // Demultiplex per-seq results back to per-request channels.
                         let mut any_ok = false;
@@ -1389,11 +1532,26 @@ mod tests {
         // 8K context / 8 seq slots = 1024 tokens per seq. Entity extraction
         // style calls fit; distillation/chat synthesis calls keep the full
         // single-seq context instead of being silently budget-truncated.
-        assert!(continuous_batch_eligible(8192, 128, 8));
-        assert!(continuous_batch_eligible(8192, 512, 8));
-        assert!(!continuous_batch_eligible(8192, 1024, 8));
-        assert!(!continuous_batch_eligible(8192, 2048, 8));
-        assert!(!continuous_batch_eligible(8192, 128, 1));
+        assert!(continuous_batch_eligible(8192, 64, 128, 8));
+        assert!(continuous_batch_eligible(8192, 64, 512, 8));
+        assert!(!continuous_batch_eligible(8192, 64, 1024, 8));
+        assert!(!continuous_batch_eligible(8192, 64, 2048, 8));
+        assert!(!continuous_batch_eligible(8192, 64, 128, 1));
+    }
+
+    #[test]
+    fn long_context_prompt_not_batched_even_with_small_output() {
+        // The old bug: a context-heavy prompt (900 tok) with modest output (512) passed
+        // the fixed-256 reserve gate (512+256<=1024) and was then silently truncated.
+        // Now the ACTUAL prompt length is accounted: 900+512+32 > 1024 => NOT eligible
+        // => runs single-seq at full context.
+        assert!(!continuous_batch_eligible(8192, 900, 512, 8));
+        // The same request fits at M=4 (budget 2048): 900+512+32 <= 2048.
+        assert!(continuous_batch_eligible(8192, 900, 512, 4));
+        // A short prompt still batches at M=8.
+        assert!(continuous_batch_eligible(8192, 200, 256, 8));
+        // M=1 never batches.
+        assert!(!continuous_batch_eligible(8192, 10, 10, 1));
     }
 
     #[test]
@@ -1409,6 +1567,79 @@ mod tests {
         assert_eq!(context_seq_max_for_batch(1, 8), 1);
         assert_eq!(context_seq_max_for_batch(2, 8), 8);
         assert_eq!(context_seq_max_for_batch(8, 8), 8);
+    }
+
+    #[test]
+    fn aggregate_batch_log_rate_and_class_share() {
+        let records = vec![
+            BatchLogRecord {
+                n_seqs: 1,
+                call_class: "distill".to_string(),
+                wall_ms: 100,
+            },
+            BatchLogRecord {
+                n_seqs: 4,
+                call_class: "extract".to_string(),
+                wall_ms: 60,
+            },
+            BatchLogRecord {
+                n_seqs: 2,
+                call_class: "extract".to_string(),
+                wall_ms: 40,
+            },
+            BatchLogRecord {
+                n_seqs: 1,
+                call_class: "classify".to_string(),
+                wall_ms: 50,
+            },
+        ];
+
+        let summary = aggregate_batch_log(&records);
+        assert!((summary.batching_rate - 0.5).abs() < 1e-9);
+        assert!((summary.wall_ms_share_by_class["extract"] - 0.4).abs() < 1e-9);
+        assert!((summary.wall_ms_share_by_class["distill"] - 0.4).abs() < 1e-9);
+        assert!((summary.wall_ms_share_by_class["classify"] - 0.2).abs() < 1e-9);
+
+        let empty = aggregate_batch_log(&[]);
+        assert_eq!(empty.batching_rate, 0.0);
+        assert!(empty.wall_ms_share_by_class.is_empty());
+    }
+
+    #[test]
+    fn batch_log_round_trip_parse_and_aggregate() {
+        // Test that the emitted [batch_log] format can be parsed back into
+        // BatchLogRecord and fed to the aggregator. This ensures the emitted
+        // format and aggregator input stay reconciled. The emitted format is:
+        // [batch_log] n_seqs=N call_class=TAG wall_ms=MS
+        let lines = [
+            "[batch_log] n_seqs=1 call_class=distill wall_ms=100",
+            "[batch_log] n_seqs=4 call_class=extract wall_ms=60",
+            "[batch_log] n_seqs=2 call_class=extract wall_ms=40",
+            "[batch_log] n_seqs=1 call_class=classify wall_ms=50",
+        ];
+
+        let parsed: Vec<BatchLogRecord> = lines
+            .iter()
+            .filter_map(|line| parse_batch_log_line(line))
+            .collect();
+
+        assert_eq!(parsed.len(), 4, "all lines should parse");
+        let summary = aggregate_batch_log(&parsed);
+
+        // Verify the parsed records produce the same aggregation as the
+        // hand-constructed records from the previous test.
+        assert!((summary.batching_rate - 0.5).abs() < 1e-9);
+        assert!((summary.wall_ms_share_by_class["extract"] - 0.4).abs() < 1e-9);
+        assert!((summary.wall_ms_share_by_class["distill"] - 0.4).abs() < 1e-9);
+        assert!((summary.wall_ms_share_by_class["classify"] - 0.2).abs() < 1e-9);
+
+        // Test malformed lines are rejected
+        assert!(parse_batch_log_line("garbage").is_none());
+        assert!(parse_batch_log_line("[batch_log] n_seqs=1").is_none());
+        assert!(
+            parse_batch_log_line("[batch_log] n_seqs=invalid call_class=test wall_ms=100")
+                .is_none()
+        );
     }
 
     #[test]

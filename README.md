@@ -56,7 +56,7 @@ One store, every tool: Claude Code, Cursor, Codex, Claude Desktop, VS Code, and 
 ### Claude Code in 30 seconds
 
 ```text
-/plugin marketplace add 7xuanlu/origin
+/plugin marketplace add 7xuanlu/claude-plugins
 /plugin install origin@7xuanlu
 /init
 ```

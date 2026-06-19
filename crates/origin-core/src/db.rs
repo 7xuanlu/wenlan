@@ -16522,6 +16522,48 @@ impl MemoryDB {
             .map_err(|e| OriginError::VectorDb(format!("count_active_pages get: {}", e)))
     }
 
+    /// Count rows in the `memory_entities` junction table (entity-link edges).
+    /// Used by the eval seed to report a REAL entity-link count after Phase-2
+    /// enrichment instead of a fabricated memory-count proxy.
+    pub async fn count_memory_entity_links(&self) -> Result<i64, OriginError> {
+        let conn = self.conn.lock().await;
+        let mut rows = conn
+            .query("SELECT COUNT(*) FROM memory_entities", ())
+            .await
+            .map_err(|e| OriginError::VectorDb(format!("count_memory_entity_links query: {e}")))?;
+        let row = rows
+            .next()
+            .await
+            .map_err(|e| OriginError::VectorDb(format!("count_memory_entity_links next: {e}")))?
+            .ok_or_else(|| OriginError::Generic("count_memory_entity_links: no rows".into()))?;
+        row.get::<i64>(0)
+            .map_err(|e| OriginError::VectorDb(format!("count_memory_entity_links get: {e}")))
+    }
+
+    /// Count primary (chunk_index=0) source memories with a non-empty title.
+    /// Used by the eval seed to report a REAL enriched-title count after Phase-2.
+    pub async fn count_nonempty_titles(&self) -> Result<i64, OriginError> {
+        let conn = self.conn.lock().await;
+        let mut rows = conn
+            .query(
+                "SELECT COUNT(*) FROM memories
+                 WHERE source = 'memory'
+                   AND chunk_index = 0
+                   AND title IS NOT NULL
+                   AND title != ''",
+                (),
+            )
+            .await
+            .map_err(|e| OriginError::VectorDb(format!("count_nonempty_titles query: {e}")))?;
+        let row = rows
+            .next()
+            .await
+            .map_err(|e| OriginError::VectorDb(format!("count_nonempty_titles next: {e}")))?
+            .ok_or_else(|| OriginError::Generic("count_nonempty_titles: no rows".into()))?;
+        row.get::<i64>(0)
+            .map_err(|e| OriginError::VectorDb(format!("count_nonempty_titles get: {e}")))
+    }
+
     /// Return the most-recently-modified active page, if any. Used by
     /// `MilestoneEvaluator::check_after_refinery_pass` to build the
     /// `first-page` payload.
@@ -18548,7 +18590,7 @@ impl MemoryDB {
             .query(
                 "SELECT COUNT(DISTINCT es.source_id) FROM enrichment_steps es
                  JOIN memories m ON m.source_id = es.source_id
-                 WHERE m.source = 'memory' AND m.chunk_index = 0",
+                 WHERE m.source = 'memory' AND m.chunk_index = 0 AND m.is_recap = 0",
                 (),
             )
             .await
@@ -18603,7 +18645,7 @@ impl MemoryDB {
         let conn = self.conn.lock().await;
         let mut rows = conn
             .query(
-                "SELECT COUNT(*) FROM memories WHERE source = 'memory' AND chunk_index = 0",
+                "SELECT COUNT(*) FROM memories WHERE source = 'memory' AND chunk_index = 0 AND is_recap = 0",
                 (),
             )
             .await
@@ -18929,6 +18971,40 @@ impl MemoryDB {
             .map_err(|e| OriginError::VectorDb(format!("get_unlinked_memories: {}", e)))?;
 
         let mut results = vec![];
+        while let Some(row) = rows
+            .next()
+            .await
+            .map_err(|e| OriginError::VectorDb(e.to_string()))?
+        {
+            let source_id: String = row
+                .get(0)
+                .map_err(|e| OriginError::VectorDb(e.to_string()))?;
+            let content: String = row.get::<String>(1).unwrap_or_default();
+            results.push((source_id, content));
+        }
+        Ok(results)
+    }
+
+    /// Return all primary (chunk_index=0, non-recap) source memories in rowid ASC
+    /// order (insertion order). Used by the eval seed Phase-2 de-fork to enumerate
+    /// memories for `run_post_ingest_enrichment` in the same sequential order the
+    /// production server processes them.
+    pub async fn get_all_source_memories_ordered(
+        &self,
+    ) -> Result<Vec<(String, String)>, OriginError> {
+        let conn = self.conn.lock().await;
+        let mut rows = conn
+            .query(
+                "SELECT source_id, content FROM memories
+                 WHERE source = 'memory'
+                   AND chunk_index = 0
+                   AND is_recap = 0
+                 ORDER BY rowid ASC",
+                (),
+            )
+            .await
+            .map_err(|e| OriginError::VectorDb(format!("get_all_source_memories_ordered: {e}")))?;
+        let mut results = Vec::new();
         while let Some(row) = rows
             .next()
             .await
@@ -41866,14 +41942,25 @@ pub(crate) mod tests {
             zero.len(),
             "unset vs =0 must return the same number of results"
         );
-        let unset_pairs: Vec<(String, f32)> =
-            unset.iter().map(|r| (r.id.clone(), r.score)).collect();
-        let zero_pairs: Vec<(String, f32)> = zero.iter().map(|r| (r.id.clone(), r.score)).collect();
+        // Ordering must be byte-identical (unset vs ="0" is the same code branch).
+        // Scores use a tolerance: the OFF-path RRF summation is non-deterministic at
+        // the last f32 ULP (~4e-8 drift observed in CI), so exact bit-equality flakes
+        // while any real OFF-vs-ON divergence is >> 1e-5.
+        let unset_ids: Vec<&str> = unset.iter().map(|r| r.id.as_str()).collect();
+        let zero_ids: Vec<&str> = zero.iter().map(|r| r.id.as_str()).collect();
         assert_eq!(
-            unset_pairs, zero_pairs,
-            "ORIGIN_MAGNITUDE_FUSION unset vs =0 must be byte-identical (id + score), \
-             got unset={unset_pairs:?} zero={zero_pairs:?}"
+            unset_ids, zero_ids,
+            "ORIGIN_MAGNITUDE_FUSION unset vs =0 must return identical ordering, got unset={unset_ids:?} zero={zero_ids:?}"
         );
+        for (u, z) in unset.iter().zip(zero.iter()) {
+            assert!(
+                (u.score - z.score).abs() <= 1.0e-5,
+                "ORIGIN_MAGNITUDE_FUSION unset vs =0 score drift > 1e-5 for {}: unset={} zero={}",
+                u.id,
+                u.score,
+                z.score
+            );
+        }
     }
 
     /// Test 2 (core win — magnitude preserved within the FTS weight budget):
