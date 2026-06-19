@@ -214,7 +214,7 @@ cat .release-please-manifest.json
 
 ### Release pipeline gotchas (learned the hard way)
 
-**Version files that must stay in sync:** `version.txt`, `.release-please-manifest.json`, and the four daemon `Cargo.toml` files (`# x-release-please-version` marker on the `version` line). The release-please workflow syncs these automatically on the release branch; manual version changes must update all of them. The desktop app version lives in [7xuanlu/origin-app](https://github.com/7xuanlu/origin-app) and bumps independently.
+**Version files that must stay in sync:** `version.txt`, `.release-please-manifest.json`, and the root workspace `Cargo.toml` (`# x-release-please-version` marker on the `[workspace.package]` version line; the 4 crates inherit it via `version.workspace = true`). The release-please workflow syncs these automatically on the release branch; manual version changes must update all of them. The desktop app version lives in [7xuanlu/origin-app](https://github.com/7xuanlu/origin-app) and bumps independently.
 
 **release-please determines "last version" from merged PR commit messages**, not tags or manifest. It scans for commits matching `chore(main): release X.Y.Z`. Deleting a tag or GitHub Release is NOT enough to reset the version. You must also ensure no commit message in the history matches that pattern, or use `release-as` to force-override.
 
@@ -232,6 +232,19 @@ Manual setup: `bash scripts/setup-hooks.sh`. Hooks live under `.githooks/`.
 
 - **Pre-commit:** auto-formats Rust (`cargo fmt --all`, re-stages changed files) + Clippy on changed crates. Formatting issues can never reach CI.
 - **Pre-push:** workspace clippy + library tests. No coverage gate (see above).
+
+### Drift-defense (doc/flag/config drift)
+
+Three fail-loud CI teeth live as `#[cfg(test)]` lib tests in `crates/origin-core/src/drift_guard.rs` (picked up by the same `cargo test --workspace --lib` that CI + pre-push already run — no extra wiring):
+
+- **Teeth #1 — path resolver:** tracked markdown may not reference an in-repo path that doesn't exist on the branch. Skips `docs/plans/**`, `docs/superpowers/**`, and `*AUDIT.md` (historical/aspirational), and only checks file-like refs. Suppress an intentional ref with `<!-- drift-ok -->`.
+- **Teeth #2 — flag doc contract (fail-closed):** every behavioral `ORIGIN_*` flag read in `crates/*/src` must be documented in an `AGENTS.md`, else allowlisted (`FLAG_ALLOWLIST`, infra/test) or grandfathered (`BASELINE_UNDOCUMENTED`, the burn-down list of flags undocumented at introduction). A NEW undocumented flag fails the build.
+- **Teeth #3 — version sync:** `version.txt`, `.release-please-manifest.json`, and the root workspace `Cargo.toml` must carry an identical version string.
+
+The fuzzy surfaces (eval numbers stale vs the current env-hash, design-doc/decision rot, memory→repo dangling pointers, stale worktrees) are covered by the read-only `doc-drift-auditor` subagent. Run weekly, locally:
+
+- One-off: `bash scripts/drift-audit.sh`
+- Recurring: `/loop 7d "bash scripts/drift-audit.sh"`, or a cron/launchd entry. Reports land in `docs/superpowers/drift-reports/` (gitignored working-doc space).
 
 ## Architecture
 

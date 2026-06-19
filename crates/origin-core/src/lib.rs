@@ -20,6 +20,8 @@ pub mod context_packager;
 pub mod contradiction;
 pub mod db;
 pub mod decay;
+#[cfg(test)]
+mod drift_guard;
 pub mod engine;
 pub mod error;
 pub mod eval;
