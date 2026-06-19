@@ -23983,6 +23983,27 @@ impl MemoryDB {
             }
         }
 
+        // Wrap repair + backfill + flag in one transaction so an interrupted boot
+        // leaves no partial state (mirrors Pass A's per-batch BEGIN/COMMIT).
+        conn.execute("BEGIN", ())
+            .await
+            .map_err(|e| OriginError::VectorDb(format!("m55b begin: {e}")))?;
+
+        // Self-heal orphaned refs first: a deleted entity can leave dangling
+        // `memories.entity_id` rows (that column has no FK, so they sit harmless).
+        // Copying them into the FK-constrained `memory_entities` below would abort
+        // the whole INSERT on `FOREIGN KEY constraint failed` and crash-loop the
+        // daemon on every boot (0.8.4 incident). Null them so the backfill — gated
+        // on `entity_id IS NOT NULL` — skips them cleanly.
+        conn.execute(
+            "UPDATE memories SET entity_id = NULL
+             WHERE entity_id IS NOT NULL
+               AND entity_id NOT IN (SELECT id FROM entities)",
+            (),
+        )
+        .await
+        .map_err(|e| OriginError::VectorDb(format!("m55b self-heal orphans: {e}")))?;
+
         // Backfill in a single statement.
         // ON CONFLICT DO NOTHING handles duplicate (source_id, entity_id) pairs from
         // memories with multiple chunk rows sharing the same source_id.
@@ -24003,6 +24024,10 @@ impl MemoryDB {
         )
         .await
         .map_err(|e| OriginError::VectorDb(format!("m55b flag: {e}")))?;
+
+        conn.execute("COMMIT", ())
+            .await
+            .map_err(|e| OriginError::VectorDb(format!("m55b commit: {e}")))?;
 
         log::info!(
             "[migration] Migration 55 Pass B complete: memory_entities backfilled from memories.entity_id"
@@ -40464,6 +40489,80 @@ pub(crate) mod tests {
             let row = rows.next().await.unwrap().expect("meta flag must be set");
             assert_eq!(row.get::<String>(0).unwrap(), "1");
         }
+    }
+
+    /// Regression: m55b must not crash when a memory's `entity_id` references a
+    /// deleted entity. Orphaned (FK-violating) refs are self-healed to NULL, and
+    /// only valid links are backfilled. Mirrors the 0.8.4 daemon crash-loop:
+    /// one deleted entity left dangling `memories.entity_id` rows, and the bulk
+    /// `INSERT ... SELECT` aborted on the FK to `entities(id)`.
+    #[tokio::test]
+    async fn test_migration_55_pass_b_self_heals_orphaned_entity_id() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db_path = tmp.path().join("test.db");
+        let db = MemoryDB::new(&db_path, Arc::new(crate::events::NoopEmitter))
+            .await
+            .unwrap();
+
+        {
+            let conn = db.conn.lock().await;
+            // One real entity.
+            conn.execute(
+                "INSERT INTO entities (id, name, entity_type, created_at, updated_at) VALUES ('e_real', 'n', 'Topic', 0, 0)",
+                (),
+            )
+            .await
+            .unwrap();
+
+            // One memory linked to the real entity, one to a deleted/ghost entity.
+            conn.execute(
+                "INSERT INTO memories (id, content, source, source_id, title, chunk_index, last_modified, chunk_type, entity_id) VALUES ('c1', '', 'memory', 'mem_ok', '', 0, 0, 'text', 'e_real')",
+                (),
+            )
+            .await
+            .unwrap();
+            conn.execute(
+                "INSERT INTO memories (id, content, source, source_id, title, chunk_index, last_modified, chunk_type, entity_id) VALUES ('c2', '', 'memory', 'mem_orphan', '', 0, 0, 'text', 'e_ghost')",
+                (),
+            )
+            .await
+            .unwrap();
+        }
+
+        // Must NOT crash on the orphaned FK ref (the 0.8.4 bug).
+        db.run_migration_55_pass_b()
+            .await
+            .expect("pass B must self-heal orphans, not crash on FK");
+
+        let conn = db.conn.lock().await;
+
+        // Only the valid link is backfilled.
+        let mut rows = conn
+            .query(
+                "SELECT memory_id, entity_id FROM memory_entities WHERE memory_id LIKE 'mem_%' ORDER BY memory_id",
+                (),
+            )
+            .await
+            .unwrap();
+        let mut got: Vec<(String, String)> = Vec::new();
+        while let Some(row) = rows.next().await.unwrap() {
+            got.push((row.get::<String>(0).unwrap(), row.get::<String>(1).unwrap()));
+        }
+        assert_eq!(got, vec![("mem_ok".into(), "e_real".into())]);
+
+        // The orphaned ref is self-healed to NULL.
+        let mut rows = conn
+            .query(
+                "SELECT entity_id FROM memories WHERE source_id = 'mem_orphan'",
+                (),
+            )
+            .await
+            .unwrap();
+        let row = rows.next().await.unwrap().expect("orphan memory exists");
+        assert!(
+            row.get::<Option<String>>(0).unwrap().is_none(),
+            "orphaned entity_id must be nulled by self-heal"
+        );
     }
 
     #[tokio::test]
