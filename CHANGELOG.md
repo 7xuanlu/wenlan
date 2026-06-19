@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.8.5](https://github.com/7xuanlu/origin/compare/v0.8.4...v0.8.5) (2026-06-19)
+
+
+### Bug Fixes
+
+* **eval:** scenario concurrency for on-device LME CE A/B + batch-log instrumentation ([#270](https://github.com/7xuanlu/origin/issues/270)) ([b06872d](https://github.com/7xuanlu/origin/commit/b06872d49c7b3481db6b6c37a0a49aa3688cba88))
+* guard migration 55 Pass B against orphaned entity_id ([#274](https://github.com/7xuanlu/origin/issues/274)) ([3273a51](https://github.com/7xuanlu/origin/commit/3273a51943acbb3a9d5e95fbf516baa6bd014e09))
+* **llm:** no-truncation invariant for continuous-batch coalescer ([#272](https://github.com/7xuanlu/origin/issues/272)) ([22eae08](https://github.com/7xuanlu/origin/commit/22eae0843c5fcd534eef47d3a042036716db0ad8))
+
 ## [0.8.4](https://github.com/7xuanlu/origin/compare/v0.8.3...v0.8.4) (2026-06-14)
 
 
