@@ -45,7 +45,7 @@ Used in: ephemeral runner seed paths and the fullpipeline harness. The `run_loco
 ```rust
 // Use the helper, not a hand-rolled format!:
 memory_source_id(question_id, session_idx, turn_idx)
-// defined at longmemeval.rs:165-167
+// defined in longmemeval.rs
 ```
 
 The helper exists precisely so the format is defined once. Do not inline an equivalent `format!` call elsewhere.
