@@ -832,10 +832,19 @@ impl LlmEngine {
             current_batch_offset += tokens.len() as i32;
         }
 
+        // [validation instrumentation] isolate prefill vs decode wall-time to
+        // answer the prefill-dominant-vs-decode-dominant question before any
+        // perf fix. Measurement only (gated by ORIGIN_BATCH_LOG); no behavior
+        // change. prep = tokenize + batch build (CPU); prefill = the single
+        // shared GPU decode of all prompts; decode = the generation loop.
+        let prep_ms = batch_start.elapsed().as_millis();
+        let prefill_start = Instant::now();
         if let Err(e) = ctx.decode(&mut batch) {
             log::warn!("[llm_engine] continuous prefill decode failed: {e}");
             return vec![None; n_seqs];
         }
+        let prefill_ms = prefill_start.elapsed().as_millis();
+        let gen_start = Instant::now();
 
         // Per-seq sampler chain. Each seq gets independent sampler state so
         // repetition penalties and temperature don't leak between requests.
@@ -957,6 +966,17 @@ impl LlmEngine {
             }
 
             logits_idx = next_logits_idx;
+        }
+
+        // [validation instrumentation] prefill-vs-decode split per batch.
+        if std::env::var("ORIGIN_BATCH_LOG").is_ok() {
+            let decode_ms = gen_start.elapsed().as_millis();
+            let out_tok: i32 = tokens_generated.iter().sum();
+            eprintln!(
+                "[batch_timing] n_seqs={n_seqs} prefill_tok={total_prefill} out_tok={out_tok} \
+                 prep_ms={prep_ms} prefill_ms={prefill_ms} decode_ms={decode_ms} total_ms={}",
+                batch_start.elapsed().as_millis()
+            );
         }
 
         // Free per-seq KV cache so the next batch reuses slots cleanly.
