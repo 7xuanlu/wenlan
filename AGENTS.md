@@ -214,7 +214,7 @@ cat .release-please-manifest.json
 
 ### Release pipeline gotchas (learned the hard way)
 
-**Version files that must stay in sync:** `version.txt`, `.release-please-manifest.json`, and the four daemon `Cargo.toml` files (`# x-release-please-version` marker on the `version` line). The release-please workflow syncs these automatically on the release branch; manual version changes must update all of them. The desktop app version lives in [7xuanlu/origin-app](https://github.com/7xuanlu/origin-app) and bumps independently.
+**Version files that must stay in sync:** `version.txt`, `.release-please-manifest.json`, and the root workspace `Cargo.toml` (`# x-release-please-version` marker on the `[workspace.package]` version line; the 4 crates inherit it via `version.workspace = true`). The release-please workflow syncs these automatically on the release branch; manual version changes must update all of them. The desktop app version lives in [7xuanlu/origin-app](https://github.com/7xuanlu/origin-app) and bumps independently.
 
 **release-please determines "last version" from merged PR commit messages**, not tags or manifest. It scans for commits matching `chore(main): release X.Y.Z`. Deleting a tag or GitHub Release is NOT enough to reset the version. You must also ensure no commit message in the history matches that pattern, or use `release-as` to force-override.
 
@@ -232,6 +232,19 @@ Manual setup: `bash scripts/setup-hooks.sh`. Hooks live under `.githooks/`.
 
 - **Pre-commit:** auto-formats Rust (`cargo fmt --all`, re-stages changed files) + Clippy on changed crates. Formatting issues can never reach CI.
 - **Pre-push:** workspace clippy + library tests. No coverage gate (see above).
+
+### Drift-defense (doc/flag/config drift)
+
+Three fail-loud CI teeth live as `#[cfg(test)]` lib tests in `crates/origin-core/src/drift_guard.rs` (picked up by the same `cargo test --workspace --lib` that CI + pre-push already run — no extra wiring):
+
+- **Teeth #1 — path resolver:** tracked markdown may not reference an in-repo path that doesn't exist on the branch. Skips `docs/plans/**`, `docs/superpowers/**`, and `*AUDIT.md` (historical/aspirational), and only checks file-like refs. Suppress an intentional ref with `<!-- drift-ok -->`.
+- **Teeth #2 — flag doc contract (fail-closed):** every behavioral `ORIGIN_*` flag read in `crates/*/src` must be documented in an `AGENTS.md`, else allowlisted (`FLAG_ALLOWLIST`, infra/test) or grandfathered (`BASELINE_UNDOCUMENTED`, the burn-down list of flags undocumented at introduction). A NEW undocumented flag fails the build.
+- **Teeth #3 — version sync:** `version.txt`, `.release-please-manifest.json`, and the root workspace `Cargo.toml` must carry an identical version string.
+
+The fuzzy surfaces (eval numbers stale vs the current env-hash, design-doc/decision rot, memory→repo dangling pointers, stale worktrees) are covered by the read-only `doc-drift-auditor` subagent. Run weekly, locally:
+
+- One-off: `bash scripts/drift-audit.sh`
+- Recurring: `/loop 7d "bash scripts/drift-audit.sh"`, or a cron/launchd entry. Reports land in `docs/superpowers/drift-reports/` (gitignored working-doc space).
 
 ## Architecture
 
@@ -347,7 +360,7 @@ The recurring failure mode was not any single missing artifact — it was that s
 - **NULL semantics**: Store `Option<T>` as SQL NULL, not empty string — so IS NULL filters work correctly
 - **UTF-8 safety**: Never byte-index Rust strings (`&s[..n]`) — use `chars().take(n)` or `strip_prefix`/`strip_suffix`. Exception: byte-slicing after a verified ASCII prefix check is safe (the boundary is guaranteed valid), but prefer the char-safe version anyway for consistency.
 - **Batch SQL**: Wrap multi-row insert/delete loops in BEGIN/COMMIT transactions
-- **LIKE patterns against JSON**: Quote the match target to avoid substring false positives — `%"{id}"%` not `%{id}%` (e.g., `mem_1` would otherwise match `mem_10`). See the fix at `crates/origin-core/src/db.rs:~9895` and the regression test.
+- **LIKE patterns against JSON**: Quote the match target to avoid substring false positives — `%"{id}"%` not `%{id}%` (e.g., `mem_1` would otherwise match `mem_10`). See the fix in `crates/origin-core/src/db.rs` (the `%"{id}"%` quoting shown above) and the regression test.
 
 ### Dev environment gotchas
 
@@ -356,7 +369,7 @@ The recurring failure mode was not any single missing artifact — it was that s
 - **Stale binary after merge/pull**: `cargo build -p origin-server` may report "0.64s Finished" without recompiling if the source timestamps haven't changed (e.g., after `git pull` fast-forward). Touch a source file to force recompilation: `touch crates/origin-server/src/router.rs && cargo build -p origin-server`. Verify the binary timestamp matches: `ls -la target/debug/origin-server`.
 - **kill vs kill -9**: `kill <PID>` may not terminate the daemon cleanly. Always use `kill -9 <PID>` and verify with `lsof -ti :7878` afterward. If the port is still in use, another process took over.
 - **Worktree target directories are per-worktree**: Each `.worktrees/<name>` checkout has its own `target/`. Building inside a worktree writes to that worktree's `target/`, not the main repo's. Verify a binary's source with `lsof -p <PID> | grep origin-server` so you don't run a stale binary from a different worktree.
-- **Upgrading the daemon requires a restart**: installing a new binary does NOT replace an already-running daemon -- the new process detects the healthy incumbent on port 7878 and exits (`origin-server/src/main.rs:582-615`). `origin install` now stops the running service before reinstalling, and `origin restart` (stop then start) reloads it explicitly. The MCP version handshake surfaces a stale daemon (`VersionStatus::DaemonOutdated`) and points users at `origin restart`. Enabling the cross-encoder (`ORIGIN_RERANKER_ENABLED=1`) blocks startup on a one-time ~1.1GB model download and, on failure, serves with no rerank -- `/api/status` now reports `reranker` as `disabled` / `active` / `failed` so the degraded state is visible.
+- **Upgrading the daemon requires a restart**: installing a new binary does NOT replace an already-running daemon -- the new process detects the healthy incumbent on port 7878 and exits (`origin-server/src/main.rs`). `origin install` now stops the running service before reinstalling, and `origin restart` (stop then start) reloads it explicitly. The MCP version handshake surfaces a stale daemon (`VersionStatus::DaemonOutdated`) and points users at `origin restart`. Enabling the cross-encoder (`ORIGIN_RERANKER_ENABLED=1`) blocks startup on a one-time ~1.1GB model download and, on failure, serves with no rerank -- `/api/status` now reports `reranker` as `disabled` / `active` / `failed` so the degraded state is visible.
 
 **Other:**
 - **Metal/ggml on macOS Tahoe 26.x**: `ggml_metal_init` may fail even though native Metal works. The daemon auto-degrades and continues without LLM. Not a code bug. Check for competing GPU processes: `pgrep -la origin`.
