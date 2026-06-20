@@ -811,6 +811,31 @@ impl LlmEngine {
         // drains, instead of raggedly draining as short outputs finish first.
         let n_slots = m.min(n_valid);
 
+        // [prefix-KV cache] Length of the shared instruction-template prefix to
+        // prime once and fan out across the batch's KV slots, so each sequence
+        // prefills only its unique suffix. 0 disables (flag off, < 2 slots, < 2
+        // reqs, or too short to beat the priming cost). LCP + min_len are taken
+        // over ALL valid_reqs, so a later backfilled request can never be left
+        // with an empty suffix. `mut` because a priming failure resets it to 0.
+        //
+        // Gated to transformer KV caches only. Recurrent / hybrid models (e.g.
+        // Qwen3.5-9B, whose DeltaNet layers llama.cpp reports as `is_hybrid`)
+        // carry a COMPRESSED recurrent state, not the position-addressable
+        // per-token K/V that prefix sharing needs: a cross-stream seq_cp + a
+        // partial [prefix_len,..) clear is meaningless (and rejected) for that
+        // state and would silently contaminate a backfilled slot. The transformer
+        // 4B default is fine; the hybrid 9B is excluded here.
+        let mut prefix_len: usize =
+            if prefix_kv_cache_enabled() && !self.model.is_recurrent() && !self.model.is_hybrid() {
+                let valid_slices: Vec<&[llama_cpp_2::token::LlamaToken]> = valid_reqs
+                    .iter()
+                    .map(|&r| tokenized[r].as_slice())
+                    .collect();
+                reusable_prefix_len(&valid_slices, n_slots, PREFIX_KV_MIN_TOKENS)
+            } else {
+                0
+            };
+
         // One decode iteration may prefill freed slots (each up to max_per_seq
         // tokens) plus continue the rest (one token each); that total is bounded
         // by the context window. Size the batch for the worst case once.
@@ -868,14 +893,63 @@ impl LlmEngine {
             })
             .collect();
 
-        // [validation instrumentation] prefill-vs-decode wall-time split (gated
-        // by ORIGIN_BATCH_LOG; no behavior change). prep = tokenize + build
-        // (CPU); prefill = the first (initial-fill) decode; decode = the rest of
+        // [validation instrumentation] prep/prime/prefill/decode wall-time split
+        // (gated by ORIGIN_BATCH_LOG; no behavior change). prep = tokenize + build
+        // (CPU); prime = prefix-KV priming decode + per-slot copy (0 when the cache
+        // is off); prefill = the first (initial-fill) decode; decode = the rest of
         // the generation loop, including backfill prefills.
         let prep_ms = batch_start.elapsed().as_millis();
-        let gen_start = Instant::now();
         let mut prefill_ms: u128 = 0;
         let mut first_decode = true;
+
+        // [prefix-KV cache] Prime the shared prefix into seq 0 once, then fan its
+        // KV out to the other initial slots. Each slot then prefills only its
+        // suffix, and the per-slot pre-prefill clear below preserves [0,prefix_len)
+        // so a backfilled request reuses the resident prefix too — the prefix is
+        // computed exactly once for the whole batch. The dst seqs are empty here
+        // (entry `clear_kv_cache()`), so the copy populates [0,prefix_len) cleanly.
+        // Any failure resets all KV and falls back to full per-seq prefill.
+        let mut prime_ms: u128 = 0;
+        if prefix_len > 0 {
+            let prime_start = Instant::now();
+            let donor = valid_reqs[0];
+            batch.clear();
+            let mut primed = true;
+            for (i, token) in tokenized[donor][..prefix_len].iter().enumerate() {
+                let is_last = i == prefix_len - 1;
+                if batch.add(*token, i as i32, &[0_i32], is_last).is_err() {
+                    primed = false;
+                    break;
+                }
+            }
+            if primed && ctx.decode(&mut batch).is_ok() {
+                for dst in 1..n_slots {
+                    // FULL-sequence copy (None,None), not a [0,prefix_len) range:
+                    // cross-stream `seq_cp` asserts `is_full` and ABORTS on a
+                    // partial range (llama-kv-cache.cpp:443). Seq 0 holds ONLY the
+                    // primed prefix right now, so a full copy transfers exactly
+                    // [0,prefix_len) into each dst. (The buffer copy is deferred to
+                    // the next decode — applied before the suffix batch computes.)
+                    if ctx.copy_kv_cache_seq(0, dst as i32, None, None).is_err() {
+                        primed = false;
+                        break;
+                    }
+                }
+            } else {
+                primed = false;
+            }
+            if !primed {
+                log::warn!("[llm_engine] prefix-KV priming failed; full per-seq prefill");
+                ctx.clear_kv_cache();
+                prefix_len = 0;
+            }
+            batch.clear();
+            prime_ms = prime_start.elapsed().as_millis();
+        }
+
+        // Clock generation AFTER any priming, so prime_ms / prefill_ms / decode_ms
+        // partition the post-prep GPU time without overlap.
+        let gen_start = Instant::now();
 
         // Unified continuous-batch loop. (A) Sample one token for every slot
         // with fresh logits, retiring + backfilling finished ones. (B) Build one
@@ -970,28 +1044,57 @@ impl LlmEngine {
                     // request's attention. (Initial-fill slots are already clean
                     // from the entry `clear_kv_cache()`; clearing again is a
                     // harmless no-op.)
-                    let _ = ctx.clear_kv_cache_seq(Some(slot as u32), None, None);
+                    //
+                    // [prefix-KV cache] When prefix_len > 0, preserve the resident
+                    // shared prefix KV [0,prefix_len) and clear only [prefix_len,..),
+                    // so every request — initial or backfilled into this slot —
+                    // reuses the prefix and prefills just its suffix. prefix_len == 0
+                    // keeps the original full clear (p0 = None) byte-for-byte.
+                    let clear_from = (prefix_len > 0).then_some(prefix_len as u32);
+                    // Fail CLOSED on a partial clear that did not fully succeed:
+                    // Ok(false)/Err means stale KV may remain at [prefix_len,..)
+                    // where the suffix is about to write, which would corrupt this
+                    // request's attention — so treat it as a prefill failure (the
+                    // request fails loudly via the `!prefill_ok` path below instead
+                    // of emitting contaminated output). A full clear (prefix_len == 0,
+                    // p0 = None) always returns Ok(true), so the OFF path is byte
+                    // unchanged. The recurrent/hybrid gate already keeps prefix_len>0
+                    // to transformer caches where seq_rm succeeds; this guards an
+                    // unexpected llama.cpp layout/version, not a known path.
+                    let clear_ok = matches!(
+                        ctx.clear_kv_cache_seq(Some(slot as u32), clear_from, None),
+                        Ok(true)
+                    );
                     let tokens = &tokenized[req];
-                    let mut prefill_ok = true;
-                    // Tokens actually written to the batch buffer so far. Advance
-                    // `batch_pos` by this even on a mid-prefill failure: the
-                    // partial tokens still occupy batch rows, so a later slot's
-                    // `logits_idx` must account for them. (The bound
-                    // `batch_capacity = ctx_size` makes failure unreachable, but
-                    // this keeps `batch_pos` honest if that ever changes.)
+                    let mut prefill_ok = clear_ok;
+                    if !clear_ok {
+                        log::warn!(
+                            "[llm_engine] prefix-KV partial clear failed (seq {slot}); failing request {req}"
+                        );
+                        failed[req] = true;
+                    }
+                    // `added` counts BATCH ROWS written for this slot. `logits_idx`
+                    // indexes batch rows (= rows added so far this slot), NOT token
+                    // positions — the two diverge once the shared prefix is skipped
+                    // (the suffix starts at token position prefix_len but batch row
+                    // 0). `batch.add` still takes the ABSOLUTE token position `i`.
+                    // Advance `batch_pos` by the row count even on a mid-prefill
+                    // failure so a later slot's `logits_idx` stays honest.
                     let mut added: i32 = 0;
-                    for (i, token) in tokens.iter().enumerate() {
-                        let is_last = i == tokens.len() - 1;
-                        if let Err(e) = batch.add(*token, i as i32, &[slot as i32], is_last) {
-                            log::warn!("[llm_engine] continuous prefill batch.add failed: {e}");
-                            failed[req] = true;
-                            prefill_ok = false;
-                            break;
+                    if prefill_ok {
+                        for (i, token) in tokens.iter().enumerate().skip(prefix_len) {
+                            let is_last = i == tokens.len() - 1;
+                            if let Err(e) = batch.add(*token, i as i32, &[slot as i32], is_last) {
+                                log::warn!("[llm_engine] continuous prefill batch.add failed: {e}");
+                                failed[req] = true;
+                                prefill_ok = false;
+                                break;
+                            }
+                            if is_last {
+                                st.logits_idx = batch_pos + added;
+                            }
+                            added += 1;
                         }
-                        if is_last {
-                            st.logits_idx = batch_pos + i as i32;
-                        }
-                        added += 1;
                     }
                     batch_pos += added;
                     if !prefill_ok {
@@ -1062,7 +1165,8 @@ impl LlmEngine {
             let out_tok: i32 = tokens_generated.iter().sum();
             eprintln!(
                 "[batch_timing] n_seqs={n_seqs} prefill_tok={total_prefill} out_tok={out_tok} \
-                 prep_ms={prep_ms} prefill_ms={prefill_ms} decode_ms={decode_ms} total_ms={}",
+                 prefix_len={prefix_len} prep_ms={prep_ms} prime_ms={prime_ms} \
+                 prefill_ms={prefill_ms} decode_ms={decode_ms} total_ms={}",
                 batch_start.elapsed().as_millis()
             );
         }
@@ -1550,6 +1654,65 @@ pub(crate) fn truncate_at_word_boundary(text: &str, max_chars: usize) -> &str {
     }
 }
 
+/// The shared prompt prefix must be at least this many tokens for the prefix-KV
+/// cache to engage. Below it the one-off priming decode + per-slot KV copy cost
+/// more than just re-prefilling the tiny prefix. The chatml instruction template
+/// alone is well over this, so a homogeneous enrichment batch clears it easily.
+// ponytail: fixed floor; promote to a flag only if a real workload wants tuning.
+const PREFIX_KV_MIN_TOKENS: usize = 32;
+
+/// Prefill-side prefix-KV cache (`ORIGIN_LLM_PREFIX_KV_CACHE`). OFF by default
+/// (opt-in; enable with `1`/`true`/`yes`/`on`). When ON, a continuous batch
+/// primes its shared instruction-template prefix once and fans that KV out to
+/// every sequence slot, so each request prefills only its unique suffix. Default
+/// OFF for the same reason as slot backfill: it mutates the shared on-device
+/// inference path's KV handling, which CI cannot validate on Metal.
+fn prefix_kv_cache_enabled() -> bool {
+    match std::env::var("ORIGIN_LLM_PREFIX_KV_CACHE") {
+        Ok(v) => matches!(
+            v.trim().to_ascii_lowercase().as_str(),
+            "1" | "true" | "yes" | "on"
+        ),
+        Err(_) => false,
+    }
+}
+
+/// Length of the longest leading token run shared by EVERY sequence in `seqs`.
+/// 0 for an empty input or whenever any member is empty. Pure; generic over
+/// `T: PartialEq` so the engine calls it over `&[LlamaToken]` while the unit
+/// tests use `&[i32]`. Underpins the prefix-KV cache (`ORIGIN_LLM_PREFIX_KV_CACHE`).
+fn longest_common_prefix_len<T: PartialEq>(seqs: &[&[T]]) -> usize {
+    let Some((first, rest)) = seqs.split_first() else {
+        return 0;
+    };
+    let max = rest.iter().fold(first.len(), |m, s| m.min(s.len()));
+    let mut i = 0;
+    while i < max && rest.iter().all(|s| s[i] == first[i]) {
+        i += 1;
+    }
+    i
+}
+
+/// Reusable cached-prefix length for a continuous batch: the common token prefix
+/// capped at `min_len - 1` so every sequence keeps at least one suffix token to
+/// prefill (a zero-suffix sequence would get no logits row and silently fail),
+/// gated to 0 unless there are >= 2 sequences, >= 2 physical slots, and the
+/// capped prefix clears `min_tokens`. `seqs` MUST be the valid (non-empty)
+/// sequences scheduled this batch — both the LCP and `min_len` are taken over the
+/// whole set so a later backfilled request can never be left with an empty suffix.
+fn reusable_prefix_len<T: PartialEq>(seqs: &[&[T]], n_slots: usize, min_tokens: usize) -> usize {
+    if n_slots < 2 || seqs.len() < 2 {
+        return 0;
+    }
+    let min_len = seqs.iter().map(|s| s.len()).min().unwrap_or(0);
+    let capped = longest_common_prefix_len(seqs).min(min_len.saturating_sub(1));
+    if capped < min_tokens {
+        0
+    } else {
+        capped
+    }
+}
+
 /// Slot→request assignment policy for continuous-batch slot backfill.
 ///
 /// The continuous-batch decoder owns `n_slots` physical sequence slots (M).
@@ -1904,5 +2067,91 @@ mod tests {
         // Contains { and } but is not valid JSON — Strategy 3 must reject it.
         let text = "garbage{ broken } stuff { incomplete";
         assert_eq!(extract_json_array(text), None);
+    }
+
+    // ---- prefix-KV cache: pure prefix-length seam (ORIGIN_LLM_PREFIX_KV_CACHE) ----
+    // GPU-free unit tests over plain i32 token ids. The same fns run over
+    // `&[LlamaToken]` in the engine (LlamaToken: Copy + PartialEq).
+
+    #[test]
+    fn lcp_identical_sequences_is_full_length() {
+        let (a, b) = ([1, 2, 3, 4], [1, 2, 3, 4]);
+        let seqs: [&[i32]; 2] = [&a, &b];
+        assert_eq!(longest_common_prefix_len(&seqs), 4);
+    }
+
+    #[test]
+    fn lcp_partial_shared_prefix() {
+        let (a, b, c) = ([1, 2, 3, 9], [1, 2, 3, 8, 8], [1, 2, 7]);
+        let seqs: [&[i32]; 3] = [&a, &b, &c];
+        assert_eq!(longest_common_prefix_len(&seqs), 2); // diverge at idx 2 (3 vs 3 vs 7)
+    }
+
+    #[test]
+    fn lcp_no_shared_prefix_is_zero() {
+        let (a, b) = ([1, 2, 3], [9, 2, 3]);
+        let seqs: [&[i32]; 2] = [&a, &b];
+        assert_eq!(longest_common_prefix_len(&seqs), 0);
+    }
+
+    #[test]
+    fn lcp_empty_member_forces_zero() {
+        let (a, b): ([i32; 0], [i32; 3]) = ([], [1, 2, 3]);
+        let seqs: [&[i32]; 2] = [&a, &b];
+        assert_eq!(longest_common_prefix_len(&seqs), 0);
+    }
+
+    #[test]
+    fn lcp_single_sequence_is_its_length() {
+        let a = [1, 2, 3];
+        let seqs: [&[i32]; 1] = [&a];
+        assert_eq!(longest_common_prefix_len(&seqs), 3);
+    }
+
+    #[test]
+    fn lcp_empty_input_is_zero() {
+        let seqs: [&[i32]; 0] = [];
+        assert_eq!(longest_common_prefix_len(&seqs), 0);
+    }
+
+    #[test]
+    fn reusable_caps_at_min_len_minus_one_when_one_is_prefix_of_rest() {
+        // [1,2,3] is a strict prefix of [1,2,3,4,5]; LCP=3=min_len. Must cap to 2
+        // so the shortest seq keeps >=1 suffix token (else no logits row -> silent fail).
+        let (a, b) = ([1, 2, 3], [1, 2, 3, 4, 5]);
+        let seqs: [&[i32]; 2] = [&a, &b];
+        assert_eq!(reusable_prefix_len(&seqs, 2, 1), 2);
+    }
+
+    #[test]
+    fn reusable_min_len_is_global_across_all_sequences() {
+        // Backfill safety: the SHORTEST seq anywhere in valid_reqs bounds the cap.
+        // LCP over all three = 3, but c (len 3) caps it to 2.
+        let (a, b, c) = ([1, 2, 3, 4, 5, 6], [1, 2, 3, 4, 5, 7], [1, 2, 3]);
+        let seqs: [&[i32]; 3] = [&a, &b, &c];
+        assert_eq!(reusable_prefix_len(&seqs, 2, 1), 2);
+    }
+
+    #[test]
+    fn reusable_respects_min_tokens_threshold() {
+        let (a, b) = ([1, 2, 3, 4, 5, 6], [1, 2, 3, 9, 9, 9]); // LCP=3, min_len=6 -> cap 3
+        let seqs: [&[i32]; 2] = [&a, &b];
+        assert_eq!(reusable_prefix_len(&seqs, 2, 4), 0); // 3 < threshold 4 -> disabled
+        assert_eq!(reusable_prefix_len(&seqs, 2, 3), 3); // 3 >= threshold 3 -> enabled
+    }
+
+    #[test]
+    fn reusable_zero_for_fewer_than_two_sequences() {
+        let a = [1, 2, 3, 4, 5];
+        let seqs: [&[i32]; 1] = [&a];
+        assert_eq!(reusable_prefix_len(&seqs, 2, 1), 0);
+    }
+
+    #[test]
+    fn reusable_zero_when_fewer_than_two_slots() {
+        // Long shared prefix but 1 physical slot -> no copy targets -> disabled.
+        let (a, b) = ([1, 2, 3, 4, 5], [1, 2, 3, 4, 9]);
+        let seqs: [&[i32]; 2] = [&a, &b];
+        assert_eq!(reusable_prefix_len(&seqs, 1, 1), 0);
     }
 }
