@@ -234,6 +234,11 @@ const BASELINE_UNDOCUMENTED: &[&str] = &[
     "ORIGIN_GRAPH_KHOP_MAX_NODES",
     "ORIGIN_GRAPH_SEED_TOP_K",
     "ORIGIN_GRAPH_SURFACE_BUDGET",
+    // Helper-read LLM batching flags (parse_clamped_*_env call sites in llm_provider.rs),
+    // surfaced by the broadened read-detector. Pre-existing + undocumented at contract intro.
+    "ORIGIN_LLM_COALESCE_MS",
+    "ORIGIN_LLM_PARALLEL_SEQS",
+    "ORIGIN_LLM_WORKERS",
     "ORIGIN_MAGNITUDE_FUSION",
     "ORIGIN_MERGE_SHRINK_GUARD",
     "ORIGIN_PAGE_CHANNEL_LIMIT",
@@ -247,10 +252,13 @@ const BASELINE_UNDOCUMENTED: &[&str] = &[
     "ORIGIN_TEST_FASTEMBED_CACHE",
 ];
 
-/// Every ORIGIN_* flag actually read via `env::var("ORIGIN_…")` in production
-/// source (crates/*/src, excluding tests/).
+/// Every ORIGIN_* flag read in production source (`crates/*/src`). Matches the flag
+/// name as a string-literal argument to an env reader — `env::var("…")`, `var_os("…")`,
+/// or any `*_env("…")` helper (e.g. the `parse_clamped_*_env` idiom, whose name arg is
+/// a literal at the call site) — so indirect reads through a helper aren't silently
+/// missed. Whitespace-tolerant so multi-line call sites (name on its own line) match.
 fn flags_read_in_code(root: &Path) -> BTreeSet<String> {
-    let re = regex::Regex::new(r#"env::var\("(ORIGIN_[A-Z0-9_]+)"\)"#).unwrap();
+    let re = regex::Regex::new(r#"(?:var_os|var|_env)\s*\(\s*"(ORIGIN_[A-Z0-9_]+)""#).unwrap();
     let mut flags = BTreeSet::new();
     for f in git_ls_files(root, "*.rs") {
         if !f.starts_with("crates/") || !f.contains("/src/") {
@@ -275,6 +283,19 @@ fn documented_flags(root: &Path) -> BTreeSet<String> {
         }
     }
     flags
+}
+
+/// Fail-closed set-difference: flags read in code but neither documented nor exempt.
+/// Extracted so the gate AND a positive-control test exercise the same logic.
+fn undocumented_flags(
+    read: &BTreeSet<String>,
+    documented: &BTreeSet<String>,
+    exempt: &BTreeSet<String>,
+) -> Vec<String> {
+    read.iter()
+        .filter(|f| !documented.contains(*f) && !exempt.contains(*f))
+        .cloned()
+        .collect()
 }
 
 #[test]
@@ -304,17 +325,30 @@ fn behavioral_flags_are_documented() {
         .map(|s| s.to_string())
         .collect();
 
-    let missing: Vec<String> = read
-        .iter()
-        .filter(|f| !documented.contains(*f) && !exempt.contains(*f))
-        .cloned()
-        .collect();
+    let missing = undocumented_flags(&read, &documented, &exempt);
 
     assert!(
         missing.is_empty(),
-        "NEW undocumented behavioral ORIGIN_* flag(s) (document in an AGENTS.md, or add to FLAG_ALLOWLIST/BASELINE_UNDOCUMENTED with a reason):\n{}",
+        "NEW undocumented behavioral ORIGIN_* flag(s). Fix: document in an *AGENTS.md* \
+         (only AGENTS.md files are scanned for docs — docs/ and READMEs do NOT count), \
+         or add to FLAG_ALLOWLIST / BASELINE_UNDOCUMENTED with a reason:\n{}",
         missing.join("\n")
     );
+}
+
+#[test]
+fn flag_doc_contract_detects_undocumented() {
+    // Positive control: the SAME set-difference the gate uses must flag a
+    // read-but-undocumented flag while leaving a documented one alone. Proves the
+    // tooth bites (the failure path), not just that the live repo happens to be green.
+    let read: BTreeSet<String> = ["ORIGIN_REAL", "ORIGIN_FAKE_UNDOCUMENTED"]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+    let documented: BTreeSet<String> = ["ORIGIN_REAL"].iter().map(|s| s.to_string()).collect();
+    let exempt: BTreeSet<String> = BTreeSet::new();
+    let missing = undocumented_flags(&read, &documented, &exempt);
+    assert_eq!(missing, vec!["ORIGIN_FAKE_UNDOCUMENTED".to_string()]);
 }
 
 #[test]
