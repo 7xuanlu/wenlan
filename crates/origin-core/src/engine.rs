@@ -720,13 +720,16 @@ impl LlmEngine {
         ctx.clear_kv_cache();
 
         let ctx_size = ctx.n_ctx();
-        let seq_capacity = seq_capacity.max(n_seqs).max(1);
-        // Per-seq context budget: divide context window by number of slots,
-        // then subtract per-seq output reserve. Defensive saturating math
-        // prevents underflow when callers configure aggressive M values.
-        let max_per_seq = (ctx_size as usize) / seq_capacity;
+        // `m` = configured parallelism = number of physical KV slots the
+        // context was allocated with (n_seq_max). The KV cache is partitioned
+        // into `m` slots, each capped at ctx/m (per-slot cap, not pooled —
+        // proven by GPU probe a4db3a65), so the per-seq budget divides by `m`
+        // regardless of how many requests the queue holds. When the queue is
+        // longer than `m`, slot backfill reuses these same `m` slots.
+        let m = seq_capacity.max(1);
+        let max_per_seq = (ctx_size as usize) / m;
         log::debug!(
-            "[llm_engine] continuous batch: {n_seqs} seqs, seq_capacity={seq_capacity}, ctx_size={ctx_size}, \
+            "[llm_engine] continuous batch: {n_seqs} reqs, m={m}, ctx_size={ctx_size}, \
              per-seq budget={max_per_seq}"
         );
 
@@ -788,184 +791,269 @@ impl LlmEngine {
             labels.push(label.clone());
         }
 
-        // Total prefill tokens across all sequences. Sized exactly so the
-        // single prefill decode covers every prompt in one pass.
+        // Total prefill tokens across all valid sequences (each valid prompt is
+        // prefilled exactly once, even when backfilled into a reused slot).
         let total_prefill: usize = tokenized.iter().map(|t| t.len()).sum();
-        if total_prefill == 0 {
+
+        // Live request queue: indices with a non-empty tokenization. Failed /
+        // over-budget requests keep `failed[req]=true` and an empty output and
+        // are never scheduled onto a slot.
+        let valid_reqs: Vec<usize> = (0..n_seqs).filter(|&r| !tokenized[r].is_empty()).collect();
+        let n_valid = valid_reqs.len();
+        if n_valid == 0 {
             // All sequences were rejected (empty prompts or budget exhaustion).
             return vec![None; n_seqs];
         }
 
-        // Build a batch big enough for prefill (multi-seq) plus the largest
-        // possible per-step decode (one token per active seq).
-        let batch_capacity = total_prefill.max(n_seqs);
-        let mut batch = LlamaBatch::new(batch_capacity, n_seqs as i32);
+        // Physical sequence slots driven this call. Capped at `m` (the context's
+        // n_seq_max); when the queue is longer than `m`, slot backfill reuses
+        // these same slots so decode width stays at `n_slots` until the queue
+        // drains, instead of raggedly draining as short outputs finish first.
+        let n_slots = m.min(n_valid);
 
-        // Prefill: add every sequence's prompt tokens to the batch.
-        // Track each seq's `logits_idx` (the offset in the batch where its
-        // last prompt token lives — that's the row we sample for the first
-        // continuation token). Also track `n_past` per seq (position of the
-        // next token to write).
-        let mut logits_idx: Vec<i32> = vec![-1; n_seqs];
-        let mut n_past: Vec<i32> = vec![0; n_seqs];
-        let mut active: Vec<bool> = vec![true; n_seqs];
-        let mut current_batch_offset: i32 = 0;
+        // One decode iteration may prefill freed slots (each up to max_per_seq
+        // tokens) plus continue the rest (one token each); that total is bounded
+        // by the context window. Size the batch for the worst case once.
+        let batch_capacity = (ctx_size as usize).max(n_slots);
+        let mut batch = LlamaBatch::new(batch_capacity, n_slots as i32);
 
-        for (seq_id, tokens) in tokenized.iter().enumerate() {
-            if tokens.is_empty() {
-                active[seq_id] = false;
-                continue;
-            }
-            for (i, token) in tokens.iter().enumerate() {
-                let is_last = i == tokens.len() - 1;
-                if let Err(e) = batch.add(*token, i as i32, &[seq_id as i32], is_last) {
-                    log::warn!("[llm_engine] continuous prefill batch.add failed: {e}");
-                    active[seq_id] = false;
-                    failed[seq_id] = true;
-                    break;
-                }
-                if is_last {
-                    logits_idx[seq_id] = current_batch_offset + i as i32;
-                }
-            }
-            n_past[seq_id] = tokens.len() as i32;
-            current_batch_offset += tokens.len() as i32;
+        // Per-REQUEST output state (indexed by original request index).
+        let mut outputs: Vec<String> = vec![String::new(); n_seqs];
+        let mut tokens_generated: Vec<i32> = vec![0; n_seqs];
+
+        // Slot-backfill scheduler keeps every physical slot full from the
+        // `valid_reqs` queue. When `n_valid <= n_slots` the queue is empty after
+        // the initial fill and no backfill ever happens — that path is
+        // byte-identical to the pre-backfill single-batch behavior.
+        let mut sched = BackfillScheduler::new(n_valid, n_slots);
+
+        // Per-slot llama state, rebuilt on backfill. `None` = free slot. `pos`
+        // is the scheduler's request index = a position into `valid_reqs`.
+        struct SlotState {
+            pos: usize,
+            sampler: LlamaSampler,
+            decoder: encoding_rs::Decoder,
+            n_past: i32,
+            logits_idx: i32,
+            tokens_gen: i32,
+            start_time: Instant,
+            needs_prefill: bool,
+            pending_token: Option<llama_cpp_2::token::LlamaToken>,
         }
-
-        // [validation instrumentation] isolate prefill vs decode wall-time to
-        // answer the prefill-dominant-vs-decode-dominant question before any
-        // perf fix. Measurement only (gated by ORIGIN_BATCH_LOG); no behavior
-        // change. prep = tokenize + batch build (CPU); prefill = the single
-        // shared GPU decode of all prompts; decode = the generation loop.
-        let prep_ms = batch_start.elapsed().as_millis();
-        let prefill_start = Instant::now();
-        if let Err(e) = ctx.decode(&mut batch) {
-            log::warn!("[llm_engine] continuous prefill decode failed: {e}");
-            return vec![None; n_seqs];
-        }
-        let prefill_ms = prefill_start.elapsed().as_millis();
-        let gen_start = Instant::now();
-
-        // Per-seq sampler chain. Each seq gets independent sampler state so
-        // repetition penalties and temperature don't leak between requests.
-        // Seed varies per seq to break dist() determinism collisions.
-        let mut samplers: Vec<LlamaSampler> = (0..n_seqs)
-            .map(|i| {
-                LlamaSampler::chain_simple([
+        // Sampler seed = 42 + original request index, so the no-overflow path
+        // reproduces the previous per-seq seeds (seq_id == request index) exactly.
+        fn make_slot_state(pos: usize, valid_reqs: &[usize], temperatures: &[f32]) -> SlotState {
+            let req = valid_reqs[pos];
+            SlotState {
+                pos,
+                sampler: LlamaSampler::chain_simple([
                     LlamaSampler::penalties(256, 1.2, 0.0, 0.0),
-                    LlamaSampler::temp(temperatures[i]),
-                    LlamaSampler::dist(42 + i as u32),
-                ])
+                    LlamaSampler::temp(temperatures[req]),
+                    LlamaSampler::dist(42 + req as u32),
+                ]),
+                decoder: encoding_rs::UTF_8.new_decoder(),
+                n_past: 0,
+                logits_idx: -1,
+                tokens_gen: 0,
+                start_time: Instant::now(),
+                needs_prefill: true,
+                pending_token: None,
+            }
+        }
+        let mut slots: Vec<Option<SlotState>> = (0..n_slots)
+            .map(|slot| {
+                sched
+                    .request_in_slot(slot)
+                    .map(|pos| make_slot_state(pos, &valid_reqs, &temperatures))
             })
             .collect();
 
-        // Per-seq accumulated output bytes (decoded incrementally).
-        let mut decoders: Vec<encoding_rs::Decoder> = (0..n_seqs)
-            .map(|_| encoding_rs::UTF_8.new_decoder())
-            .collect();
-        let mut outputs: Vec<String> = vec![String::new(); n_seqs];
-        let mut tokens_generated: Vec<i32> = vec![0; n_seqs];
-        let start_times: Vec<Instant> = vec![Instant::now(); n_seqs];
+        // [validation instrumentation] prefill-vs-decode wall-time split (gated
+        // by ORIGIN_BATCH_LOG; no behavior change). prep = tokenize + build
+        // (CPU); prefill = the first (initial-fill) decode; decode = the rest of
+        // the generation loop, including backfill prefills.
+        let prep_ms = batch_start.elapsed().as_millis();
+        let gen_start = Instant::now();
+        let mut prefill_ms: u128 = 0;
+        let mut first_decode = true;
 
-        // Generation loop: each iteration samples one new token per active
-        // seq from the previous decode, writes them all into a fresh batch,
-        // then runs one decode. Continues until every seq is inactive
-        // (EOG, max_output reached, or timeout).
+        // Unified continuous-batch loop. (A) Sample one token for every slot
+        // with fresh logits, retiring + backfilling finished ones. (B) Build one
+        // batch holding the continuation token for each surviving slot plus the
+        // full prompt for each freshly-backfilled (or initial) slot, then a
+        // single decode. Repeats until the queue drains and all slots free.
         loop {
-            let any_active = active.iter().any(|&a| a);
-            if !any_active {
-                break;
-            }
-
-            batch.clear();
-            let mut next_logits_idx: Vec<i32> = vec![-1; n_seqs];
-            let mut batch_pos: i32 = 0;
-
-            for seq_id in 0..n_seqs {
-                if !active[seq_id] {
-                    continue;
+            // (A) Sample, advance, retire/backfill. Each slot's borrow ends
+            // before the (sched + slots) backfill mutation via `should_retire`.
+            // `slot` is the llama seq_id (passed to sched.retire), not just an
+            // index, so the range loop is the clearest form here.
+            #[allow(clippy::needless_range_loop)]
+            for slot in 0..n_slots {
+                let needs_prefill = match slots[slot].as_ref() {
+                    Some(st) => st.needs_prefill,
+                    None => continue, // free slot
+                };
+                if needs_prefill {
+                    continue; // awaiting its first (prefill) decode — no logits yet
                 }
+                let st = slots[slot].as_mut().unwrap();
+                let req = valid_reqs[st.pos];
 
-                // Per-seq timeout. Mirrors the single-seq timeout semantics.
-                if start_times[seq_id].elapsed().as_secs() > timeouts[seq_id] {
+                let should_retire = if st.start_time.elapsed().as_secs() > timeouts[req] {
                     log::warn!(
-                        "[llm_engine] continuous seq {seq_id} timeout at {}s",
-                        timeouts[seq_id]
+                        "[llm_engine] continuous seq {req} timeout at {}s",
+                        timeouts[req]
                     );
-                    active[seq_id] = false;
-                    failed[seq_id] = true;
-                    continue;
-                }
+                    failed[req] = true;
+                    true
+                } else if st.logits_idx < 0 {
+                    log::warn!("[llm_engine] continuous seq {req} has no logits row");
+                    failed[req] = true;
+                    true
+                } else {
+                    let token = st.sampler.sample(ctx, st.logits_idx);
+                    st.sampler.accept(token);
+                    if self.model.is_eog_token(token) {
+                        true
+                    } else {
+                        match self
+                            .model
+                            .token_to_piece(token, &mut st.decoder, true, None)
+                        {
+                            Ok(piece) => {
+                                outputs[req].push_str(&piece);
+                                st.tokens_gen += 1;
+                                tokens_generated[req] = st.tokens_gen;
+                                if st.tokens_gen >= max_output_per_seq[req] {
+                                    true
+                                } else {
+                                    st.pending_token = Some(token);
+                                    false
+                                }
+                            }
+                            Err(_) => {
+                                failed[req] = true;
+                                true
+                            }
+                        }
+                    }
+                };
 
-                if logits_idx[seq_id] < 0 {
-                    log::warn!("[llm_engine] continuous seq {seq_id} has no logits row");
-                    active[seq_id] = false;
-                    failed[seq_id] = true;
-                    continue;
-                }
-
-                // Sample next token from this seq's logits row.
-                let token = samplers[seq_id].sample(ctx, logits_idx[seq_id]);
-                samplers[seq_id].accept(token);
-
-                if self.model.is_eog_token(token) {
-                    active[seq_id] = false;
-                    continue;
-                }
-
-                // Append decoded piece to this seq's output. token_to_piece
-                // updates the seq-local UTF-8 decoder so multi-byte glyphs
-                // are split correctly across calls.
-                match self
-                    .model
-                    .token_to_piece(token, &mut decoders[seq_id], true, None)
-                {
-                    Ok(piece) => outputs[seq_id].push_str(&piece),
-                    Err(_) => {
-                        active[seq_id] = false;
-                        failed[seq_id] = true;
-                        continue;
+                if should_retire {
+                    match sched.retire(slot) {
+                        Some(pos) => {
+                            slots[slot] = Some(make_slot_state(pos, &valid_reqs, &temperatures))
+                        }
+                        None => slots[slot] = None,
                     }
                 }
-
-                tokens_generated[seq_id] += 1;
-                if tokens_generated[seq_id] >= max_output_per_seq[seq_id] {
-                    active[seq_id] = false;
-                    continue;
-                }
-
-                // Stage this token into the next decode batch.
-                if let Err(e) = batch.add(token, n_past[seq_id], &[seq_id as i32], true) {
-                    log::warn!(
-                        "[llm_engine] continuous decode batch.add failed (seq {seq_id}): {e}"
-                    );
-                    active[seq_id] = false;
-                    failed[seq_id] = true;
-                    continue;
-                }
-                next_logits_idx[seq_id] = batch_pos;
-                batch_pos += 1;
-                n_past[seq_id] += 1;
             }
 
-            if batch_pos == 0 {
-                // Every seq finished/expired this round.
+            // (B) Build the next batch (prefill freshly-filled slots, continue
+            // the rest) and decode once.
+            batch.clear();
+            let mut batch_pos: i32 = 0;
+            let mut staged = false;
+            // `slot` is the llama seq_id (passed to batch.add and sched.retire),
+            // not just an index, so the range loop is the clearest form here.
+            #[allow(clippy::needless_range_loop)]
+            for slot in 0..n_slots {
+                let Some(st) = slots[slot].as_mut() else {
+                    continue;
+                };
+                let req = valid_reqs[st.pos];
+                if st.needs_prefill {
+                    // Wipe any prior occupant's KV for this physical slot before
+                    // prefilling the new request. The slot's seq_id is reused on
+                    // backfill, so stale KV from the finished request — at the
+                    // same positions the new prompt writes — would corrupt this
+                    // request's attention. (Initial-fill slots are already clean
+                    // from the entry `clear_kv_cache()`; clearing again is a
+                    // harmless no-op.)
+                    let _ = ctx.clear_kv_cache_seq(Some(slot as u32), None, None);
+                    let tokens = &tokenized[req];
+                    let mut prefill_ok = true;
+                    // Tokens actually written to the batch buffer so far. Advance
+                    // `batch_pos` by this even on a mid-prefill failure: the
+                    // partial tokens still occupy batch rows, so a later slot's
+                    // `logits_idx` must account for them. (The bound
+                    // `batch_capacity = ctx_size` makes failure unreachable, but
+                    // this keeps `batch_pos` honest if that ever changes.)
+                    let mut added: i32 = 0;
+                    for (i, token) in tokens.iter().enumerate() {
+                        let is_last = i == tokens.len() - 1;
+                        if let Err(e) = batch.add(*token, i as i32, &[slot as i32], is_last) {
+                            log::warn!("[llm_engine] continuous prefill batch.add failed: {e}");
+                            failed[req] = true;
+                            prefill_ok = false;
+                            break;
+                        }
+                        if is_last {
+                            st.logits_idx = batch_pos + i as i32;
+                        }
+                        added += 1;
+                    }
+                    batch_pos += added;
+                    if !prefill_ok {
+                        match sched.retire(slot) {
+                            Some(pos) => {
+                                slots[slot] = Some(make_slot_state(pos, &valid_reqs, &temperatures))
+                            }
+                            None => slots[slot] = None,
+                        }
+                        continue;
+                    }
+                    st.n_past = tokens.len() as i32;
+                    st.needs_prefill = false;
+                    staged = true;
+                } else if let Some(token) = st.pending_token.take() {
+                    if let Err(e) = batch.add(token, st.n_past, &[slot as i32], true) {
+                        log::warn!(
+                            "[llm_engine] continuous decode batch.add failed (seq {req}): {e}"
+                        );
+                        failed[req] = true;
+                        match sched.retire(slot) {
+                            Some(pos) => {
+                                slots[slot] = Some(make_slot_state(pos, &valid_reqs, &temperatures))
+                            }
+                            None => slots[slot] = None,
+                        }
+                        continue;
+                    }
+                    st.logits_idx = batch_pos;
+                    batch_pos += 1;
+                    st.n_past += 1;
+                    staged = true;
+                }
+            }
+
+            if slots.iter().all(|s| s.is_none()) {
+                // Queue drained and every slot finished.
                 break;
+            }
+            if !staged {
+                // Nothing decodable this pass (e.g. a slot was just backfilled
+                // after a prefill error and awaits its prefill next pass). Don't
+                // decode an empty batch; loop again rather than dropping the
+                // still-queued requests.
+                continue;
             }
 
             if let Err(e) = ctx.decode(&mut batch) {
                 log::warn!("[llm_engine] continuous decode failed: {e}");
-                // All remaining active seqs are unrecoverable.
-                for (seq_id, is_active) in active.iter_mut().enumerate() {
-                    if *is_active {
-                        failed[seq_id] = true;
-                        *is_active = false;
+                // All slots still holding a request are unrecoverable.
+                for cell in slots.iter_mut() {
+                    if let Some(st) = cell.as_ref() {
+                        failed[valid_reqs[st.pos]] = true;
                     }
+                    *cell = None;
                 }
                 break;
             }
-
-            logits_idx = next_logits_idx;
+            if first_decode {
+                prefill_ms = gen_start.elapsed().as_millis();
+                first_decode = false;
+            }
         }
 
         // [validation instrumentation] prefill-vs-decode split per batch.
@@ -979,12 +1067,12 @@ impl LlmEngine {
             );
         }
 
-        // Free per-seq KV cache so the next batch reuses slots cleanly.
-        // (clear_kv_cache() at the next entry would do this anyway, but
-        // explicit per-seq removal keeps the invariant tight if the same
-        // ctx is later used at a different M.)
-        for seq_id in 0..n_seqs {
-            let _ = ctx.clear_kv_cache_seq(Some(seq_id as u32), None, None);
+        // Free each physical slot's KV cache so the next batch reuses slots
+        // cleanly. (clear_kv_cache() at the next entry would do this anyway, but
+        // explicit per-slot removal keeps the invariant tight if the same ctx is
+        // later used at a different M.) Only `n_slots` seq ids were ever used.
+        for slot in 0..n_slots {
+            let _ = ctx.clear_kv_cache_seq(Some(slot as u32), None, None);
         }
 
         // Apply strip_think + trimming per seq, mirroring run_inference_persistent.
@@ -1462,9 +1550,160 @@ pub(crate) fn truncate_at_word_boundary(text: &str, max_chars: usize) -> &str {
     }
 }
 
+/// Slot→request assignment policy for continuous-batch slot backfill.
+///
+/// The continuous-batch decoder owns `n_slots` physical sequence slots (M).
+/// When a request queue is longer than the slots, this scheduler keeps every
+/// slot full: as soon as a slot's request finishes, the next queued request is
+/// assigned to that slot (backfill), so decode width stays near M instead of
+/// raggedly draining M→1 as short outputs finish first.
+///
+/// Pure bookkeeping — no GPU/llama state — so it is exhaustively unit-testable.
+/// When `n_requests <= n_slots` the queue is empty after the initial fill and
+/// `retire` never backfills, making the no-overflow path byte-identical to the
+/// pre-backfill behavior (each request keeps its own slot for its whole life).
+struct BackfillScheduler {
+    /// Logical request index currently occupying each slot (`None` = free).
+    slot_request: Vec<Option<usize>>,
+    /// Next queued request index not yet assigned to any slot.
+    next_request: usize,
+    /// Total logical requests to service.
+    n_requests: usize,
+}
+
+impl BackfillScheduler {
+    /// Fill slots 0..min(n_slots, n_requests) with the first requests; the rest
+    /// of the queue waits to backfill freed slots.
+    fn new(n_requests: usize, n_slots: usize) -> Self {
+        let initial = n_slots.min(n_requests);
+        let slot_request = (0..n_slots)
+            .map(|slot| if slot < initial { Some(slot) } else { None })
+            .collect();
+        Self {
+            slot_request,
+            next_request: initial,
+            n_requests,
+        }
+    }
+
+    /// Request currently assigned to `slot`, if any.
+    fn request_in_slot(&self, slot: usize) -> Option<usize> {
+        self.slot_request.get(slot).copied().flatten()
+    }
+
+    /// Number of slots currently holding a request.
+    #[cfg(test)]
+    fn active_count(&self) -> usize {
+        self.slot_request.iter().filter(|r| r.is_some()).count()
+    }
+
+    /// Retire the request in `slot` and backfill from the queue if any remain.
+    /// Returns the newly-assigned request index (caller must prefill it), or
+    /// `None` if the queue is empty (slot becomes free).
+    fn retire(&mut self, slot: usize) -> Option<usize> {
+        let cell = self.slot_request.get_mut(slot)?;
+        if self.next_request < self.n_requests {
+            let assigned = self.next_request;
+            self.next_request += 1;
+            *cell = Some(assigned);
+            Some(assigned)
+        } else {
+            *cell = None;
+            None
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn backfill_initial_fill_caps_at_slots() {
+        let s = BackfillScheduler::new(20, 8);
+        for slot in 0..8 {
+            assert_eq!(s.request_in_slot(slot), Some(slot));
+        }
+        assert_eq!(s.active_count(), 8);
+    }
+
+    #[test]
+    fn backfill_fewer_requests_than_slots_leaves_tail_free() {
+        let s = BackfillScheduler::new(3, 8);
+        assert_eq!(s.request_in_slot(0), Some(0));
+        assert_eq!(s.request_in_slot(2), Some(2));
+        assert_eq!(s.request_in_slot(3), None);
+        assert_eq!(s.active_count(), 3);
+    }
+
+    #[test]
+    fn backfill_retire_assigns_next_queued_request() {
+        let mut s = BackfillScheduler::new(20, 8);
+        // Slot 0 finishes its request 0 -> next queued (8) backfills it.
+        assert_eq!(s.retire(0), Some(8));
+        assert_eq!(s.request_in_slot(0), Some(8));
+        assert_eq!(s.retire(1), Some(9));
+        assert_eq!(s.request_in_slot(1), Some(9));
+        assert_eq!(s.active_count(), 8); // still full
+    }
+
+    #[test]
+    fn backfill_no_overflow_never_backfills() {
+        // n_requests <= n_slots: queue empty after initial fill (byte-identical
+        // to pre-backfill behavior — each request owns its slot for its life).
+        let mut s = BackfillScheduler::new(5, 8);
+        assert_eq!(s.retire(0), None);
+        assert_eq!(s.request_in_slot(0), None);
+        assert_eq!(s.active_count(), 4);
+    }
+
+    #[test]
+    fn backfill_queue_drains_then_slots_free() {
+        let mut s = BackfillScheduler::new(10, 8);
+        // 2 overflow requests (8, 9) remain after the initial fill of 0..8.
+        assert_eq!(s.retire(0), Some(8));
+        assert_eq!(s.retire(1), Some(9));
+        // Queue now empty: further retires free the slot.
+        assert_eq!(s.retire(2), None);
+        assert_eq!(s.request_in_slot(2), None);
+    }
+
+    #[test]
+    fn backfill_services_every_request_exactly_once() {
+        // Retire slots in a deliberately uneven order until all slots free;
+        // every request 0..n must be serviced exactly once.
+        let n_requests = 37;
+        let n_slots = 8;
+        let mut s = BackfillScheduler::new(n_requests, n_slots);
+        let mut serviced: Vec<usize> = (0..n_slots.min(n_requests))
+            .filter_map(|slot| s.request_in_slot(slot))
+            .collect();
+        // Round-robin retire with a skew so slots free at different rates.
+        loop {
+            let mut any_active = false;
+            for slot in 0..n_slots {
+                if s.request_in_slot(slot).is_some() {
+                    any_active = true;
+                    if let Some(req) = s.retire(slot) {
+                        serviced.push(req);
+                    }
+                }
+            }
+            if !any_active {
+                break;
+            }
+        }
+        serviced.sort_unstable();
+        assert_eq!(serviced, (0..n_requests).collect::<Vec<_>>());
+    }
+
+    #[test]
+    fn backfill_zero_requests_is_inert() {
+        let mut s = BackfillScheduler::new(0, 8);
+        assert_eq!(s.active_count(), 0);
+        assert_eq!(s.request_in_slot(0), None);
+        assert_eq!(s.retire(0), None);
+    }
 
     #[test]
     fn test_truncate_at_word_boundary_ascii() {

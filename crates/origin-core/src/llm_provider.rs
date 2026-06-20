@@ -163,6 +163,31 @@ const MAX_LLM_PARALLEL_SEQS: usize = 8;
 const DEFAULT_BATCH_COALESCE_MS: u64 = 0;
 const MAX_BATCH_COALESCE_MS: u64 = 25;
 const CONTINUOUS_BATCH_SAFETY_RESERVE_TOKENS: usize = 32;
+/// Slot-backfill drain multiplier: how many `m`-slot batches' worth of
+/// immediately-available requests one continuous-batch call may pull, so the
+/// engine has a queue to keep its `m` slots full (avoiding the ragged M→1 decode
+/// drain). Bounds per-call latency: outputs for a drained batch return together,
+/// so a drained request waits at most ~this-many slot-rounds. m≤8 → cap≤32.
+const BACKFILL_DRAIN_FACTOR: usize = 4;
+
+/// Continuous-batch slot backfill (`ORIGIN_LLM_SLOT_BACKFILL`). OFF by default
+/// (opt-in); enable with `1`/`true`/`yes`/`on`. Default-OFF because this is a
+/// structural rewrite of the SHARED on-device inference path that CI cannot
+/// validate on Metal hardware — it ships behind an explicit opt-in for the
+/// throughput-bound paths (bulk ingest, eval seed) until staged-rollout
+/// confidence accrues. When ON the coalescer may drain more than `m`
+/// immediately-available requests into one call so the engine keeps all `m`
+/// slots full via backfill; when OFF (the default) it caps the drain at `m` —
+/// one slot per request, byte-identical to the pre-backfill behavior.
+fn slot_backfill_enabled() -> bool {
+    match std::env::var("ORIGIN_LLM_SLOT_BACKFILL") {
+        Ok(v) => matches!(
+            v.trim().to_ascii_lowercase().as_str(),
+            "1" | "true" | "yes" | "on"
+        ),
+        Err(_) => false,
+    }
+}
 
 fn parse_clamped_usize_env(name: &str, default: usize, min: usize, max: usize) -> usize {
     std::env::var(name)
@@ -485,6 +510,14 @@ impl OnDeviceProvider {
             let thread_available = Arc::clone(&available);
             let m = parallel_seqs;
             let coalesce_wait = std::time::Duration::from_millis(coalesce_ms);
+            // How many requests one continuous-batch call may drain. With slot
+            // backfill ON, drain past `m` so the engine keeps all `m` slots full
+            // from the queue; OFF caps at `m` (pre-backfill: one slot per req).
+            let drain_cap = if slot_backfill_enabled() {
+                m.saturating_mul(BACKFILL_DRAIN_FACTOR).max(m)
+            } else {
+                m
+            };
 
             std::thread::Builder::new()
                 .name(format!("llm-provider-worker-{i}"))
@@ -492,7 +525,8 @@ impl OnDeviceProvider {
                     let mut deferred_reqs: std::collections::VecDeque<InferenceRequest> =
                         std::collections::VecDeque::new();
                     log::info!(
-                        "[on_device_provider] worker {i} thread started (parallel_seqs={m})"
+                        "[on_device_provider] worker {i} thread started \
+                         (parallel_seqs={m}, drain_cap={drain_cap})"
                     );
 
                     // Persistent LlamaContext: build lazily on first request,
@@ -526,27 +560,29 @@ impl OnDeviceProvider {
                             },
                         };
 
-                        let mut batch_reqs: Vec<InferenceRequest> = Vec::with_capacity(m);
+                        let mut batch_reqs: Vec<InferenceRequest> = Vec::with_capacity(drain_cap);
                         let batch_eligible =
                             request_continuous_batch_eligible(&engine, &first_req, m);
                         batch_reqs.push(first_req);
 
                         if m > 1 && batch_eligible {
-                            // Short coalescing window: try to drain up to M-1
-                            // additional pending requests. By default this is
-                            // an immediate drain (0ms wait) so isolated calls
-                            // pay no artificial latency. Operators can set
-                            // ORIGIN_LLM_COALESCE_MS for trickle workloads.
+                            // Short coalescing window: try to drain up to
+                            // `drain_cap`-1 additional pending requests. By
+                            // default this is an immediate drain (0ms wait) so
+                            // isolated calls pay no artificial latency. Operators
+                            // can set ORIGIN_LLM_COALESCE_MS for trickle
+                            // workloads. With slot backfill ON, drain_cap > m so
+                            // the engine keeps all m slots full from the queue.
                             let coalesce_attempts: u32 =
                                 if coalesce_wait.is_zero() { 1 } else { 3 };
                             for _ in 0..coalesce_attempts {
-                                if batch_reqs.len() >= m {
+                                if batch_reqs.len() >= drain_cap {
                                     break;
                                 }
                                 let drained = {
                                     let rx = rx_arc.lock().unwrap();
                                     let mut local = Vec::new();
-                                    while batch_reqs.len() + local.len() < m {
+                                    while batch_reqs.len() + local.len() < drain_cap {
                                         match rx.try_recv() {
                                             Ok(r)
                                                 if request_continuous_batch_eligible(
