@@ -288,6 +288,121 @@ pub fn synthetic_mixed_workload(n: usize, temperature: f32) -> Vec<WorkloadItem>
         .collect()
 }
 
+/// Build a workload that SHARES one long instruction prefix across every request
+/// (the prefix-KV cache's target shape: a homogeneous enrichment burst). All items
+/// use an identical ~system prompt + identical user task framing, then a per-item
+/// distinctive sentence of VARYING length. The length variance (and a queue longer
+/// than `m`) exercises slot backfill, the `min_len-1` cap, and the short-backfilled-
+/// request edge case together. The shared prefix is well over `PREFIX_KV_MIN_TOKENS`,
+/// so the cache engages. Prompts are chatml-formatted exactly like the real path.
+pub fn shared_prefix_workload(n: usize, temperature: f32) -> Vec<WorkloadItem> {
+    // One fixed instruction shared by every request — this is the cacheable prefix.
+    const SYSTEM: &str = "You are a precise information extractor. Read the user's \
+        sentence and reply with a compact JSON object containing the single most \
+        important named entity and a one-word topic. Output only JSON, no prose, no \
+        markdown fences, no explanation. Always include both keys.";
+    // (canary, sentence) pairs of deliberately varying length — the shortest keeps
+    // the overall min length close to the shared prefix to test the cap.
+    let base = [
+        ("Lavazza", "Lavazza shipped espresso machines to the Milan office this spring after a long delay."),
+        ("Berlin", "Berlin rained."),
+        ("Pixel", "Pixel the rescue terrier learned to sit, stay, and roll over within two short weeks."),
+        ("Acme", "Acme missed forecast."),
+        ("Tamalpais", "Tamalpais glowed at dawn while fog slowly burned off the valley below the ridgeline trail."),
+        ("Okafor", "Okafor fixed it."),
+        ("Diego", "Diego migrated the entire backend from Postgres to SQLite for the offline local build target."),
+        ("Beatrix", "Beatrix baked two cakes."),
+    ];
+    (0..n)
+        .map(|i| {
+            let (canary, s) = base[i % base.len()];
+            let user = format!("Sentence: \"{s}\"");
+            let prompt = crate::llm_provider::format_chatml_prompt(Some(SYSTEM), &user);
+            // Vary the output budget too, so decode width drains raggedly.
+            let max_out = if i % 2 == 0 { 24 } else { 64 };
+            WorkloadItem {
+                prompt: (
+                    prompt,
+                    max_out,
+                    temperature,
+                    30,
+                    true,
+                    Some("extract".to_string()),
+                ),
+                canary: canary.to_string(),
+                is_extract: true,
+            }
+        })
+        .collect()
+}
+
+/// Output divergence between the prefix-KV cache OFF and ON for the SAME request
+/// set / same `m` / same seeds. Because the cache changes neither scheduling nor
+/// sampler seeds nor batch shape, the ON output must be byte-identical to OFF (the
+/// copied prefix KV is mathematically the prefix's fresh KV) — so plain byte
+/// equivalence is the correct oracle here (unlike slot backfill). At temperature
+/// 0.0 sampling is greedy argmax: stable under benign sub-ULP float noise, but a
+/// real wrong-logits-row or KV-corruption bug flips the argmax and diverges loudly.
+/// Returns the first `(request_index, off_output, on_output)` that differs.
+///
+/// Toggles `ORIGIN_LLM_PREFIX_KV_CACHE` around each arm. The engine clears its KV
+/// at the start of every call, so reusing `ctx` across both arms is safe.
+pub fn first_prefix_cache_divergence(
+    engine: &LlmEngine,
+    ctx: &mut LlamaContext<'_>,
+    prompts: &[BatchPrompt],
+    m: usize,
+) -> Option<(usize, Option<String>, Option<String>)> {
+    std::env::remove_var("ORIGIN_LLM_PREFIX_KV_CACHE");
+    let off = engine.run_inference_continuous_batch(ctx, prompts, m);
+    std::env::set_var("ORIGIN_LLM_PREFIX_KV_CACHE", "1");
+    let on = engine.run_inference_continuous_batch(ctx, prompts, m);
+    std::env::remove_var("ORIGIN_LLM_PREFIX_KV_CACHE");
+    off.iter()
+        .zip(&on)
+        .enumerate()
+        .find(|(_, (a, b))| a != b)
+        .map(|(i, (a, b))| (i, a.clone(), b.clone()))
+}
+
+/// Prefix-KV cache ON-vs-OFF over the WHOLE queue in one call each (identical
+/// scheduling; only the flag differs). Wall-clock barely moves when decode
+/// dominates — the real signal is `prefill_ms`/`prime_ms` from the `[batch_timing]`
+/// line (set `ORIGIN_BATCH_LOG=1`). This A/B asserts only no-regression; the
+/// prefill magnitude is read from the logs.
+pub fn run_prefix_cache_throughput_ab(
+    engine: &LlmEngine,
+    ctx: &mut LlamaContext<'_>,
+    prompts: &[BatchPrompt],
+    m: usize,
+) -> ThroughputAb {
+    std::env::remove_var("ORIGIN_LLM_PREFIX_KV_CACHE");
+    let off_start = Instant::now();
+    let off_outputs = engine.run_inference_continuous_batch(ctx, prompts, m);
+    let off_wall = off_start.elapsed().as_millis();
+
+    std::env::set_var("ORIGIN_LLM_PREFIX_KV_CACHE", "1");
+    let on_start = Instant::now();
+    let on_outputs = engine.run_inference_continuous_batch(ctx, prompts, m);
+    let on_wall = on_start.elapsed().as_millis();
+    std::env::remove_var("ORIGIN_LLM_PREFIX_KV_CACHE");
+
+    ThroughputAb {
+        on: ThroughputArm {
+            wall_ms: on_wall,
+            out_chars: out_chars(&on_outputs),
+            completed: completed(&on_outputs),
+        },
+        off: ThroughputArm {
+            wall_ms: off_wall,
+            out_chars: out_chars(&off_outputs),
+            completed: completed(&off_outputs),
+        },
+        n_requests: prompts.len(),
+        m,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -372,6 +487,85 @@ mod tests {
         assert!(
             ab.speedup() >= 0.95,
             "slot backfill regressed throughput: {:.2}x (OFF {} ms / ON {} ms)",
+            ab.speedup(),
+            ab.off.wall_ms,
+            ab.on.wall_ms
+        );
+    }
+
+    /// Prefix-KV cache CORRECTNESS oracle: with a long shared instruction prefix
+    /// and a queue (19) longer than M=8 (so backfill engages, 11 backfills), the
+    /// cache ON must produce output BYTE-IDENTICAL to OFF — the copied prefix KV is
+    /// mathematically the prefix's fresh KV. Greedy (temp 0.0) so a real wrong-
+    /// logits-row / KV-corruption bug flips the argmax and is caught, while benign
+    /// float noise does not. Also asserts every request completed (the `min_len-1`
+    /// cap must leave even the shortest backfilled request a non-empty suffix). Run:
+    /// `cargo test -p origin-core --lib eval::engine_throughput::tests::prefix_cache_equivalence -- --ignored --nocapture`
+    #[test]
+    #[ignore = "needs GPU + downloaded GGUF model (L7 manual)"]
+    fn prefix_cache_equivalence() {
+        let Some((engine, mut ctx)) = build_engine_and_ctx() else {
+            eprintln!("[engine_throughput] engine unavailable (no GPU/model) — skipping");
+            return;
+        };
+        let items = shared_prefix_workload(19, 0.0);
+        let prompts: Vec<BatchPrompt> = items.iter().map(|it| it.prompt.clone()).collect();
+        // Re-run OFF once on its own to assert completeness (no silent empty-suffix
+        // failure) independent of the divergence check.
+        std::env::remove_var("ORIGIN_LLM_PREFIX_KV_CACHE");
+        let off_completed =
+            completed(&engine.run_inference_continuous_batch(&mut ctx, &prompts, M));
+        let divergence = first_prefix_cache_divergence(engine, &mut ctx, &prompts, M);
+        leak_ctx(ctx);
+        assert_eq!(
+            off_completed,
+            prompts.len(),
+            "baseline (OFF) left {} of {} requests with no output",
+            prompts.len() - off_completed,
+            prompts.len()
+        );
+        match divergence {
+            None => eprintln!(
+                "[engine_throughput] prefix-KV equivalence OK: cached output byte-identical to fresh prefill ({} requests, M={M}, backfill engaged)",
+                prompts.len()
+            ),
+            Some((i, off, on)) => panic!(
+                "prefix-KV cache changed request {i}'s output\n  OFF: {off:?}\n  ON:  {on:?}"
+            ),
+        }
+    }
+
+    /// Prefix-KV cache prefill A/B: report wall-clock ON vs OFF over a homogeneous
+    /// shared-prefix batch. The headline (prefill_ms / prime_ms drop) is in the
+    /// `[batch_timing]` lines below; set ORIGIN_BATCH_LOG via the test. Run:
+    /// `ORIGIN_BATCH_LOG=1 cargo test -p origin-core --lib eval::engine_throughput::tests::prefix_cache_prefill_ab -- --ignored --nocapture`
+    #[test]
+    #[ignore = "needs GPU + downloaded GGUF model (L7 manual)"]
+    fn prefix_cache_prefill_ab() {
+        let Some((engine, mut ctx)) = build_engine_and_ctx() else {
+            eprintln!("[engine_throughput] engine unavailable (no GPU/model) — skipping");
+            return;
+        };
+        std::env::set_var("ORIGIN_BATCH_LOG", "1"); // surface [batch_timing] prefix_len/prime_ms/prefill_ms
+        let items = shared_prefix_workload(40, 0.0);
+        let prompts: Vec<BatchPrompt> = items.iter().map(|it| it.prompt.clone()).collect();
+        let ab = run_prefix_cache_throughput_ab(engine, &mut ctx, &prompts, M);
+        leak_ctx(ctx);
+        eprintln!(
+            "[engine_throughput] prefix-KV n={} m={}\n  OFF: {} ms, {} chars, {} ok\n  ON:  {} ms, {} chars, {} ok\n  wall speedup (OFF/ON): {:.2}x  (prefill detail in [batch_timing] above)",
+            ab.n_requests, ab.m,
+            ab.off.wall_ms, ab.off.out_chars, ab.off.completed,
+            ab.on.wall_ms, ab.on.out_chars, ab.on.completed,
+            ab.speedup(),
+        );
+        assert_eq!(
+            ab.on.completed,
+            prompts.len(),
+            "prefix-KV ON dropped requests"
+        );
+        assert!(
+            ab.speedup() >= 0.95,
+            "prefix-KV regressed throughput: {:.2}x (OFF {} ms / ON {} ms)",
             ab.speedup(),
             ab.off.wall_ms,
             ab.on.wall_ms
