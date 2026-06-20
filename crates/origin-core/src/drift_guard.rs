@@ -75,7 +75,7 @@ fn version_files_are_in_sync() {
 #[test]
 fn version_sync_detects_mismatch() {
     // Pure-logic guard: a hand-built mismatched set must be flagged.
-    let sources = vec![
+    let sources = [
         ("a".to_string(), "0.8.4".to_string()),
         ("b".to_string(), "0.8.5".to_string()),
     ];
