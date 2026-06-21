@@ -73,7 +73,7 @@ export LME_S_FIXTURE="$STRAT_FIXTURE"
 export RUSTC_WRAPPER=
 
 mkdir -p "$LOG_DIR" "$(dirname "$STRAT_FIXTURE")" "$CACHE"
-TEST_BIN_GLOB="$REPO_ROOT/.claude/worktrees/adaptive-rerank-pool/target/debug/deps/eval_harness-*"
+TEST_BIN_GLOB="${TEST_BIN_GLOB:-$REPO_ROOT/target/debug/deps/eval_harness-*}"
 
 # Strat counts must match full LME-S proportions (15.6/26.7/11.1/5.6/14.4/26.7%).
 STRAT_COUNTS='{"knowledge-update":14,"multi-session":24,"single-session-assistant":10,"single-session-preference":5,"single-session-user":13,"temporal-reasoning":24}'
