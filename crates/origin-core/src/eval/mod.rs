@@ -9,7 +9,6 @@ pub mod shared;
 pub mod answer_quality;
 pub mod context_path;
 pub mod cost;
-pub mod engine_throughput;
 pub mod entity_dedup;
 pub mod fixtures;
 pub mod gen;

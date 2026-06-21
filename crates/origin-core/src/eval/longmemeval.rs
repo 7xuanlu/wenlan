@@ -1576,6 +1576,8 @@ pub async fn run_longmemeval_eval_from_db_collect(
             graph_skipped: if gate_on { Some(graph_skipped) } else { None },
             temporal_touched: None,
             channel_touched,
+            cov_blind: None,
+            cov_expanded: None,
         });
     }
 
@@ -1685,6 +1687,92 @@ pub async fn run_longmemeval_headroom_probe_from_db(
         });
     }
 
+    Ok(rows)
+}
+
+/// Per-question variant of the recall-headroom probe. Opens each question's OWN
+/// seeded scenario DB (the faithful per-question instrument) instead of one
+/// consolidated DB, and records where gold sits in that question's own base
+/// `search_memory` ranking at limits 10/30/100. This is the honest gold-rank
+/// measurement for deciding whether a deeper CE rerank pool can ever help on
+/// per-question LME-S: gold reachable at 30 but not 10 = CE-knee territory
+/// (a deeper pool can promote it); gold reachable at 100 but not 30 =
+/// pool-widening territory; gold absent at 100 = recall headroom no pool depth
+/// can reach. If `gold_in_10 == gold_in_30 == gold_in_100` for (nearly) every
+/// question, pool depth is structurally inert here and the adaptive pool cannot
+/// add accuracy regardless of sweep size. Questions with no seeded DB under
+/// `baselines_dir` are skipped (counted), not seeded — this is a read-only probe.
+pub async fn run_longmemeval_headroom_probe_per_question(
+    longmemeval_path: &Path,
+    baselines_dir: &Path,
+) -> Result<Vec<HeadroomRow>, OriginError> {
+    const LIMITS: [usize; 3] = [10, 30, 100];
+    let mut samples = load_longmemeval(longmemeval_path)?;
+    apply_lme_limit(&mut samples);
+    let mut rows: Vec<HeadroomRow> = Vec::new();
+    let mut missing = 0usize;
+
+    for sample in &samples {
+        let scope_dir =
+            crate::eval::shared::scenario_db_dir(baselines_dir, "lme", &sample.question_id);
+        if !scope_dir.join("origin_memory.db").exists() {
+            missing += 1;
+            continue;
+        }
+        let db = MemoryDB::new(&scope_dir, std::sync::Arc::new(crate::events::NoopEmitter)).await?;
+
+        let memories = extract_memories(sample);
+        let relevant_source_ids: HashSet<String> = memories
+            .iter()
+            .filter(|m| m.has_answer)
+            .map(|m| memory_source_id(&m.question_id, m.session_idx, m.turn_idx))
+            .collect();
+        if relevant_source_ids.is_empty() {
+            continue;
+        }
+
+        let mut gold_in = [0usize; 3];
+        let mut deep_ranks: Vec<i64> = Vec::new();
+        for (i, &k) in LIMITS.iter().enumerate() {
+            let results = db
+                .search_memory(&sample.question, k, None, None, None, None, None, None)
+                .await?;
+            let ranks: Vec<i64> = relevant_source_ids
+                .iter()
+                .map(|gid| {
+                    results
+                        .iter()
+                        .position(|r| r.source_id == *gid)
+                        .map(|p| p as i64)
+                        .unwrap_or(-1)
+                })
+                .collect();
+            gold_in[i] = gold_in_top_k(&ranks, k);
+            if k == 100 {
+                deep_ranks = ranks;
+                deep_ranks.sort_by_key(|&r| if r < 0 { i64::MAX } else { r });
+            }
+        }
+
+        rows.push(HeadroomRow {
+            query_id: sample.question_id.clone(),
+            category: sample.question_type.clone(),
+            n_gold: relevant_source_ids.len(),
+            gold_ranks_100: deep_ranks,
+            gold_in_10: gold_in[0],
+            gold_in_30: gold_in[1],
+            gold_in_100: gold_in[2],
+            hit_any_10: gold_in[0] > 0,
+            hit_any_30: gold_in[1] > 0,
+            hit_any_100: gold_in[2] > 0,
+        });
+    }
+    if missing > 0 {
+        eprintln!(
+            "[headroom_per_question] WARN: {missing} question(s) had no seeded DB under {} (skipped)",
+            baselines_dir.display()
+        );
+    }
     Ok(rows)
 }
 
@@ -1836,6 +1924,170 @@ pub async fn run_longmemeval_decompose_recall_probe_from_db(
     Ok(rows)
 }
 
+/// `(ndcg@10, recall@5, mrr)` for a retrieved/reranked result list against the
+/// `has_answer` relevant set, binary relevance.
+///
+/// IDCG is normalized over ALL gold for the question (every `has_answer`
+/// memory), NOT just the gold that landed in the retrieved set. Grading only the
+/// retrieved ids (the legacy baseline convention) inflates IDCG as each gold is
+/// surfaced, so in the multi-gold case a genuine recall improvement can register
+/// as an NDCG *drop* — the metric becomes anti-correlated with the pool-depth
+/// objective (boule adversarial review, 2026-06-19). All-gold IDCG makes
+/// surfacing a buried gold into the top-k strictly raise NDCG. This intentionally
+/// diverges from the legacy retrieved-set baselines (which measured a different,
+/// pool-blind quantity on oracle/consolidated substrates).
+fn score_retrieval(result_ids: &[&str], relevant_source_ids: &HashSet<String>) -> (f64, f64, f64) {
+    let grades: HashMap<&str, u8> = relevant_source_ids
+        .iter()
+        .map(|s| (s.as_str(), 1u8))
+        .collect();
+    let relevant_set: HashSet<&str> = relevant_source_ids.iter().map(|s| s.as_str()).collect();
+    (
+        metrics::ndcg_at_k(result_ids, &grades, 10),
+        metrics::recall_at_k(result_ids, &relevant_set, 5),
+        metrics::mrr(result_ids, &relevant_set),
+    )
+}
+
+/// Deep-S retrieval-quality probe for the CE rerank pool / model decision.
+///
+/// Opens each question's OWN pre-seeded deep-S scenario DB
+/// (`<baselines_dir>/fullpipeline/lme/<question_id>/`) — faithful per-question
+/// isolation, NOT one shared/consolidated store — and runs the PRODUCTION
+/// retrieval path (`search_memory_cross_rerank_cued`) for that question, scoring
+/// its top-10 against the `has_answer` relevant set. NO answer generation, NO
+/// judge (phases P3/P4 skipped → minutes, deterministic). `reranker = None`
+/// exercises the byte-identical non-CE baseline (CE-off); `Some` runs the CE
+/// with pool / model from the live env (`RERANK_POOL_FLOOR`, `ORIGIN_RERANKER_MODEL`).
+/// `arm_label` is the
+/// `feature` on each [`PerQueryRow`] so `analyze_paired.py` reads the output
+/// directly. Caller sets the per-arm env + arm_label.
+///
+/// REUSE-ONLY: a per-question DB that is missing is a hard error (the probe must
+/// not pay enrichment, and a half-seeded substrate must not silently score ~0).
+/// Seed the deep-S substrate first; point the fixture at exactly the cached qids.
+pub async fn run_longmemeval_rerank_pool_probe(
+    baselines_dir: &Path,
+    path: &Path,
+    reranker: Option<std::sync::Arc<dyn crate::reranker::Reranker>>,
+    arm_label: &str,
+) -> Result<Vec<crate::eval::paired::PerQueryRow>, OriginError> {
+    use crate::eval::paired::PerQueryRow;
+    use crate::eval::shared::{eval_shared_embedder, scenario_db_dir};
+    use std::time::Instant;
+
+    let shared_embedder = eval_shared_embedder();
+    let mut samples = load_longmemeval(path)?;
+    apply_lme_limit(&mut samples);
+    let flag_state = if reranker.is_some() { "on" } else { "off" };
+    let mut rows: Vec<PerQueryRow> = Vec::with_capacity(samples.len());
+
+    for sample in &samples {
+        let relevant_source_ids: HashSet<String> = extract_memories(sample)
+            .iter()
+            .filter(|m| m.has_answer)
+            .map(|m| memory_source_id(&m.question_id, m.session_idx, m.turn_idx))
+            .collect();
+        if relevant_source_ids.is_empty() {
+            continue; // no gradeable evidence turn
+        }
+
+        let scope_dir = scenario_db_dir(baselines_dir, "lme", &sample.question_id);
+        if !scope_dir.join("origin_memory.db").exists() {
+            return Err(OriginError::Generic(format!(
+                "rerank_pool_probe: no cached deep-S DB for question {} at {} — \
+                 seed the substrate first (retrieval probe never seeds)",
+                sample.question_id,
+                scope_dir.display()
+            )));
+        }
+        let db = MemoryDB::new_with_shared_embedder(
+            &scope_dir,
+            std::sync::Arc::new(crate::events::NoopEmitter),
+            shared_embedder.clone(),
+        )
+        .await?;
+
+        let t0 = Instant::now();
+        let results = db
+            .search_memory_cross_rerank_cued(
+                &sample.question,
+                10,
+                None,
+                None,
+                None,
+                None,
+                reranker.clone(),
+            )
+            .await?;
+        let latency_ms = t0.elapsed().as_secs_f64() * 1000.0;
+
+        let result_ids: Vec<&str> = results.iter().map(|r| r.source_id.as_str()).collect();
+        let (ndcg10, recall5, mrr) = score_retrieval(&result_ids, &relevant_source_ids);
+
+        // Source-expanded coverage (page provenance, eval-only). Positional
+        // NDCG/recall score a `source="page"` result as a miss — its page id
+        // never matches a memory-keyed gold id. coverage_recall over the
+        // provenance-expanded set credits a page via the memory source ids it
+        // was distilled from, so the page-channel-ON arm is measurable.
+        // `cov_expanded - cov_blind` is the page contribution. Mirror of the
+        // LoCoMo path (locomo.rs).
+        let relevant_set: std::collections::HashSet<&str> =
+            relevant_source_ids.iter().map(|s| s.as_str()).collect();
+        let page_src_owned: Vec<(String, Vec<String>)> = {
+            let mut v = Vec::new();
+            for r in &results {
+                if r.source == "page" {
+                    let srcs: Vec<String> = db
+                        .get_page_sources(&r.source_id)
+                        .await
+                        .unwrap_or_default()
+                        .into_iter()
+                        .map(|ps| ps.memory_source_id)
+                        .collect();
+                    v.push((r.source_id.clone(), srcs));
+                }
+            }
+            v
+        };
+        let page_sources_map: std::collections::HashMap<&str, Vec<&str>> = page_src_owned
+            .iter()
+            .map(|(pid, srcs)| (pid.as_str(), srcs.iter().map(|s| s.as_str()).collect()))
+            .collect();
+        let units: Vec<(&str, &str)> = results
+            .iter()
+            .map(|r| (r.source.as_str(), r.source_id.as_str()))
+            .collect();
+        let cov_blind = crate::eval::metrics::coverage_recall(
+            &crate::eval::metrics::build_coverage_set(&units, &std::collections::HashMap::new()),
+            &relevant_set,
+        );
+        let cov_expanded = crate::eval::metrics::coverage_recall(
+            &crate::eval::metrics::build_coverage_set(&units, &page_sources_map),
+            &relevant_set,
+        );
+
+        rows.push(PerQueryRow {
+            feature: arm_label.to_string(),
+            bench: "lme".to_string(),
+            flag_state: flag_state.to_string(),
+            query_id: sample.question_id.clone(),
+            category: sample.question_type.clone(),
+            ndcg10,
+            recall5,
+            mrr,
+            latency_ms,
+            graph_skipped: None,
+            temporal_touched: None,
+            channel_touched: None,
+            cov_blind: Some(cov_blind),
+            cov_expanded: Some(cov_expanded),
+        });
+    }
+
+    Ok(rows)
+}
+
 /// CE-rank a candidate pool against `query` and return source_ids in CE-score
 /// order (descending, stable id tiebreak). Fail-loud on reranker errors — this
 /// is probe code, not the production degrade path.
@@ -1965,6 +2217,8 @@ pub async fn run_longmemeval_decompose_ce_probe_from_db(
                 graph_skipped: None,
                 temporal_touched: None,
                 channel_touched: None,
+                cov_blind: None,
+                cov_expanded: None,
             });
         };
 
@@ -2093,6 +2347,8 @@ pub async fn run_longmemeval_eval_cross_rerank_from_db_collect(
             graph_skipped: None,
             temporal_touched: None,
             channel_touched,
+            cov_blind: None,
+            cov_expanded: None,
         });
     }
 
@@ -2814,6 +3070,8 @@ pub async fn run_longmemeval_eval_temporal_collect(
             graph_skipped: None,
             temporal_touched: Some(cue_fired),
             channel_touched: None,
+            cov_blind: None,
+            cov_expanded: None,
         });
     }
 
@@ -2915,6 +3173,8 @@ pub async fn run_longmemeval_eval_graph_stream_collect(
             graph_skipped: None,
             temporal_touched: None,
             channel_touched,
+            cov_blind: None,
+            cov_expanded: None,
         });
     }
 
@@ -3260,6 +3520,40 @@ pub use crate::eval::judge::{
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn score_retrieval_ranks_answer_memory() {
+        use std::collections::HashSet;
+        let relevant: HashSet<String> = ["lme_q1_0_t0".to_string()].into_iter().collect();
+        // answer at rank 1 → perfect on all three metrics
+        assert_eq!(
+            score_retrieval(&["lme_q1_0_t0", "d1", "d2"], &relevant),
+            (1.0, 1.0, 1.0)
+        );
+        // answer at rank 3 → ndcg@10 = 1/log2(4) = 0.5, recall@5 = 1.0, mrr = 1/3
+        let (ndcg, recall, mrr) = score_retrieval(&["d1", "d2", "lme_q1_0_t0"], &relevant);
+        assert!((ndcg - 0.5).abs() < 1e-9, "ndcg={ndcg}");
+        assert_eq!(recall, 1.0);
+        assert!((mrr - 1.0 / 3.0).abs() < 1e-9, "mrr={mrr}");
+        // answer not in the returned set → all zero
+        assert_eq!(score_retrieval(&["d1", "d2"], &relevant), (0.0, 0.0, 0.0));
+    }
+
+    #[test]
+    fn score_retrieval_rewards_surfacing_buried_gold() {
+        use std::collections::HashSet;
+        // Two gold memories for this question. A deeper pool surfacing the second
+        // gold into top-10 MUST raise NDCG. Under the old retrieved-set IDCG this
+        // DROPPED (1.0 → 0.92); all-gold IDCG fixes it (0.61 → 0.92). This test
+        // is the regression guard for the boule-caught normalization bug.
+        let relevant: HashSet<String> = ["g1".to_string(), "g2".to_string()].into_iter().collect();
+        let (ndcg_one, _, _) = score_retrieval(&["g1", "d1", "d2"], &relevant); // only g1
+        let (ndcg_both, _, _) = score_retrieval(&["g1", "d1", "g2"], &relevant); // g2 surfaced @3
+        assert!(
+            ndcg_both > ndcg_one,
+            "surfacing a buried gold must RAISE ndcg, not drop it: {ndcg_one} -> {ndcg_both}"
+        );
+    }
 
     #[test]
     fn gold_in_top_k_bands() {
