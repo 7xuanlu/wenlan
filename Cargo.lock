@@ -3191,8 +3191,6 @@ dependencies = [
  "clap",
  "dirs 6.0.0",
  "futures",
- "hyper 1.9.0",
- "hyper-util",
  "openssl-sys",
  "origin-core",
  "origin-types",
@@ -5079,11 +5077,9 @@ dependencies = [
  "http-body 1.0.1",
  "iri-string",
  "pin-project-lite",
- "tokio",
  "tower 0.5.3",
  "tower-layer",
  "tower-service",
- "tracing",
 ]
 
 [[package]]
