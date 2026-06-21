@@ -202,140 +202,6 @@ mod agent_id_tests {
     }
 }
 
-/// Embedding model configuration — used by eval 2x2 (model × prefix) ablations.
-#[derive(Debug, Clone)]
-pub struct EmbedConfig {
-    pub model: EmbeddingModel,
-    pub dim: usize,
-}
-
-impl Default for EmbedConfig {
-    fn default() -> Self {
-        Self {
-            model: EmbeddingModel::BGEBaseENV15Q,
-            dim: 768,
-        }
-    }
-}
-
-impl EmbedConfig {
-    pub fn bge_small() -> Self {
-        Self {
-            model: EmbeddingModel::BGESmallENV15,
-            dim: 384,
-        }
-    }
-    pub fn bge_small_q() -> Self {
-        Self {
-            model: EmbeddingModel::BGESmallENV15Q,
-            dim: 384,
-        }
-    }
-    pub fn bge_base() -> Self {
-        Self {
-            model: EmbeddingModel::BGEBaseENV15,
-            dim: 768,
-        }
-    }
-    pub fn bge_base_q() -> Self {
-        Self {
-            model: EmbeddingModel::BGEBaseENV15Q,
-            dim: 768,
-        }
-    }
-    pub fn gte_base() -> Self {
-        Self {
-            model: EmbeddingModel::GTEBaseENV15,
-            dim: 768,
-        }
-    }
-    pub fn gte_base_q() -> Self {
-        Self {
-            model: EmbeddingModel::GTEBaseENV15Q,
-            dim: 768,
-        }
-    }
-    pub fn nomic_v15() -> Self {
-        Self {
-            model: EmbeddingModel::NomicEmbedTextV15,
-            dim: 768,
-        }
-    }
-    pub fn nomic_v15_q() -> Self {
-        Self {
-            model: EmbeddingModel::NomicEmbedTextV15Q,
-            dim: 768,
-        }
-    }
-    pub fn snowflake_m() -> Self {
-        Self {
-            model: EmbeddingModel::SnowflakeArcticEmbedM,
-            dim: 768,
-        }
-    }
-    pub fn snowflake_m_q() -> Self {
-        Self {
-            model: EmbeddingModel::SnowflakeArcticEmbedMQ,
-            dim: 768,
-        }
-    }
-    pub fn mpnet_base() -> Self {
-        Self {
-            model: EmbeddingModel::AllMpnetBaseV2,
-            dim: 768,
-        }
-    }
-    // 1024d models
-    pub fn bge_large() -> Self {
-        Self {
-            model: EmbeddingModel::BGELargeENV15,
-            dim: 1024,
-        }
-    }
-    pub fn bge_large_q() -> Self {
-        Self {
-            model: EmbeddingModel::BGELargeENV15Q,
-            dim: 1024,
-        }
-    }
-    pub fn gte_large() -> Self {
-        Self {
-            model: EmbeddingModel::GTELargeENV15,
-            dim: 1024,
-        }
-    }
-    pub fn gte_large_q() -> Self {
-        Self {
-            model: EmbeddingModel::GTELargeENV15Q,
-            dim: 1024,
-        }
-    }
-    pub fn mxbai_large() -> Self {
-        Self {
-            model: EmbeddingModel::MxbaiEmbedLargeV1,
-            dim: 1024,
-        }
-    }
-    pub fn mxbai_large_q() -> Self {
-        Self {
-            model: EmbeddingModel::MxbaiEmbedLargeV1Q,
-            dim: 1024,
-        }
-    }
-    pub fn modernbert_large() -> Self {
-        Self {
-            model: EmbeddingModel::ModernBertEmbedLarge,
-            dim: 1024,
-        }
-    }
-    pub fn snowflake_l() -> Self {
-        Self {
-            model: EmbeddingModel::SnowflakeArcticEmbedL,
-            dim: 1024,
-        }
-    }
-}
-
 /// Resolve the directory FastEmbed should load the ONNX model from.
 ///
 /// Resolution order (first hit wins):
@@ -2015,86 +1881,6 @@ impl MemoryDB {
             .map_err(|_| OriginError::Embedding("embedder thread panicked".into()))?
             .map_err(|e| OriginError::Embedding(format!("init embedder: {}", e)))?;
         Ok(Arc::new(std::sync::Mutex::new(embedder)))
-    }
-
-    /// Lightweight constructor for eval ablation tests (model × prefix 2x2).
-    /// Creates a fresh ephemeral DB with the given embedding model and dimension.
-    /// Skips migrations (fresh DB only) and profile bootstrap.
-    pub async fn new_with_embed_config(
-        db_path: &Path,
-        config: EmbedConfig,
-    ) -> Result<Self, OriginError> {
-        std::fs::create_dir_all(db_path)?;
-        let db_file = db_path.join("origin_memory.db");
-
-        let db = libsql::Builder::new_local(db_file.to_str().unwrap_or("origin_memory.db"))
-            .build()
-            .await
-            .map_err(|e| OriginError::VectorDb(format!("libsql open: {}", e)))?;
-
-        let conn = db
-            .connect()
-            .map_err(|e| OriginError::VectorDb(format!("libsql connect: {}", e)))?;
-
-        conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;")
-            .await
-            .map_err(|e| OriginError::VectorDb(format!("pragma: {}", e)))?;
-
-        // Build schema with configurable vector dimension
-        let schema = SCHEMA.replace("F32_BLOB(768)", &format!("F32_BLOB({})", config.dim));
-        conn.execute_batch(&schema)
-            .await
-            .map_err(|e| OriginError::VectorDb(format!("schema: {}", e)))?;
-
-        if let Err(e) = conn.execute_batch(FTS_SCHEMA).await {
-            log::warn!("[memory_db] FTS5 creation failed: {}", e);
-        }
-        if let Err(e) = conn.execute_batch(FTS_TRIGGERS).await {
-            log::warn!("[memory_db] FTS triggers failed: {}", e);
-        }
-
-        // Vector indexes for fresh DB
-        let _ = conn.execute(
-                "CREATE INDEX IF NOT EXISTS memories_vec_idx ON memories (
-                    libsql_vector_idx(embedding, 'metric=cosine', 'compress_neighbors=float8', 'max_neighbors=32')
-                )", (),
-        ).await;
-        let _ = conn.execute(
-                "CREATE INDEX IF NOT EXISTS entities_vec_idx ON entities (
-                    libsql_vector_idx(embedding, 'metric=cosine', 'compress_neighbors=float8', 'max_neighbors=32')
-                )", (),
-        ).await;
-        // T15a: child-vector index (mirrors memories_vec_idx).
-        let _ = conn.execute(
-                "CREATE INDEX IF NOT EXISTS child_vectors_vec_idx ON child_vectors (
-                    libsql_vector_idx(embedding, 'metric=cosine', 'compress_neighbors=float8', 'max_neighbors=32')
-                )", (),
-        ).await;
-
-        // Init embedding model — use default cache dir (persistent across runs)
-        let model = config.model;
-        let (embed_tx, embed_rx) = tokio::sync::oneshot::channel();
-        std::thread::Builder::new()
-            .name("embedder-init-eval".into())
-            .spawn(move || {
-                let result = TextEmbedding::try_new(
-                    InitOptions::new(model).with_show_download_progress(true),
-                );
-                let _ = embed_tx.send(result);
-            })
-            .map_err(|e| OriginError::Embedding(format!("spawn embedder thread: {}", e)))?;
-        let embedder = embed_rx
-            .await
-            .map_err(|_| OriginError::Embedding("embedder thread panicked".into()))?
-            .map_err(|e| OriginError::Embedding(format!("init embedder: {}", e)))?;
-
-        Ok(Self {
-            _db: db,
-            conn: tokio::sync::Mutex::new(conn),
-            embedder: Arc::new(std::sync::Mutex::new(embedder)),
-            chunker: ChunkingEngine::new(),
-            embedding_cache: std::sync::Mutex::new(EmbeddingCache::new(200)),
-        })
     }
 
     // ===== Migrations =====
@@ -7030,30 +6816,6 @@ impl MemoryDB {
         Ok(results)
     }
 
-    /// Count memories that still need classification (memory_type IS NULL).
-    pub async fn count_unclassified_imports(&self) -> Result<usize, OriginError> {
-        let conn = self.conn.lock().await;
-        let mut rows = conn
-            .query(
-                "SELECT COUNT(DISTINCT source_id) FROM memories
-                 WHERE source = 'memory'
-                   AND memory_type IS NULL",
-                libsql::params![],
-            )
-            .await
-            .map_err(|e| OriginError::VectorDb(e.to_string()))?;
-        if let Some(row) = rows
-            .next()
-            .await
-            .map_err(|e| OriginError::VectorDb(e.to_string()))?
-        {
-            let count: i64 = row.get(0).unwrap_or(0);
-            Ok(count as usize)
-        } else {
-            Ok(0)
-        }
-    }
-
     /// Get the current memory_type and space for a source_id (first chunk).
     pub async fn get_memory_classification(
         &self,
@@ -7105,17 +6867,6 @@ impl MemoryDB {
         conn.execute(
             "UPDATE memories SET space = ?1 WHERE source_id = ?2",
             libsql::params![space, source_id],
-        )
-        .await
-        .map_err(|e| OriginError::VectorDb(e.to_string()))?;
-        Ok(())
-    }
-
-    pub async fn update_quality(&self, source_id: &str, quality: &str) -> Result<(), OriginError> {
-        let conn = self.conn.lock().await;
-        conn.execute(
-            "UPDATE memories SET quality = ?1 WHERE source_id = ?2",
-            libsql::params![quality, source_id],
         )
         .await
         .map_err(|e| OriginError::VectorDb(e.to_string()))?;
