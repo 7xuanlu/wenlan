@@ -1517,9 +1517,143 @@ impl LlmProvider for SequencedMockProvider {
     }
 }
 
+/// Test double that returns canned responses keyed by `request.system_prompt`.
+///
+/// Used by WAY B Phase 1 tests (Task 1.1 split-equivalence, Task 1.5 golden
+/// orchestration-equivalence) to mock the on-device entity-extraction LLM
+/// deterministically, isolating orchestration logic from real inference.
+///
+/// # Visibility
+/// Gated `#[cfg(test)]` — visible to all `#[cfg(test)]` unit-test modules in
+/// this crate (including `entity_extraction.rs` for Task 1.1). Task 1.5's
+/// golden test must therefore be a `#[cfg(test)]` unit-test module in `src/`
+/// (not under `tests/`), because `#[cfg(test)]` items in `src/` are NOT
+/// visible to integration tests under `tests/`. No `test-support` feature
+/// exists in `Cargo.toml`; the `#[cfg(test)]`-unit-test route is the choice.
+#[cfg(test)]
+pub struct CannedLlmProvider {
+    default: String,
+    map: std::collections::HashMap<String, String>,
+    /// If any entry here is a substring of `request.user_prompt`, return an error.
+    fail_on_user_substrings: Vec<String>,
+}
+
+#[cfg(test)]
+impl CannedLlmProvider {
+    pub fn new(default: impl Into<String>) -> Self {
+        Self {
+            default: default.into(),
+            map: std::collections::HashMap::new(),
+            fail_on_user_substrings: Vec::new(),
+        }
+    }
+
+    /// Register a canned response for any `system_prompt` that equals or
+    /// contains `key`.
+    pub fn with(mut self, key: impl Into<String>, response: impl Into<String>) -> Self {
+        self.map.insert(key.into(), response.into());
+        self
+    }
+
+    /// Return `Err(LlmError::RequestFailed)` for any call whose `user_prompt`
+    /// contains `substr`. Used in error-path tests to fail exactly one memory's
+    /// extract without keying on the system prompt (which is shared across all
+    /// memories in the batch). Only affects `generate`; `is_available` stays true.
+    pub fn fail_on(mut self, substr: impl Into<String>) -> Self {
+        self.fail_on_user_substrings.push(substr.into());
+        self
+    }
+}
+
+#[cfg(test)]
+#[async_trait]
+impl LlmProvider for CannedLlmProvider {
+    async fn generate(&self, request: LlmRequest) -> Result<String, LlmError> {
+        // Error injection: fail before checking the map so the caller sees Err.
+        for substr in &self.fail_on_user_substrings {
+            if request.user_prompt.contains(substr.as_str()) {
+                return Err(LlmError::InferenceFailed(format!(
+                    "canned error: user_prompt contains {:?}",
+                    substr
+                )));
+            }
+        }
+        if let Some(sys) = &request.system_prompt {
+            for (key, response) in &self.map {
+                if sys == key || sys.contains(key.as_str()) {
+                    return Ok(response.clone());
+                }
+            }
+        }
+        Ok(self.default.clone())
+    }
+
+    fn is_available(&self) -> bool {
+        true
+    }
+
+    fn name(&self) -> &str {
+        "canned"
+    }
+
+    fn backend(&self) -> LlmBackend {
+        LlmBackend::OnDevice
+    }
+
+    fn kind(&self) -> &'static str {
+        "mock"
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn canned_llm_returns_by_prompt() {
+        let provider = CannedLlmProvider::new("DEFAULT").with("kg-system", "{\"entities\":[]}");
+
+        // Registered key → canned response.
+        let req_match = LlmRequest {
+            system_prompt: Some("kg-system".into()),
+            user_prompt: "extract".into(),
+            max_tokens: 64,
+            temperature: 0.0,
+            label: None,
+            timeout_secs: None,
+        };
+        assert_eq!(
+            provider.generate(req_match).await.unwrap(),
+            "{\"entities\":[]}"
+        );
+
+        // Unregistered prompt → default.
+        let req_default = LlmRequest {
+            system_prompt: Some("unregistered".into()),
+            user_prompt: "extract".into(),
+            max_tokens: 64,
+            temperature: 0.0,
+            label: None,
+            timeout_secs: None,
+        };
+        assert_eq!(provider.generate(req_default).await.unwrap(), "DEFAULT");
+
+        // No system prompt → default.
+        let req_no_sys = LlmRequest {
+            system_prompt: None,
+            user_prompt: "extract".into(),
+            max_tokens: 64,
+            temperature: 0.0,
+            label: None,
+            timeout_secs: None,
+        };
+        assert_eq!(provider.generate(req_no_sys).await.unwrap(), "DEFAULT");
+
+        // Metadata checks.
+        assert!(provider.is_available());
+        assert_eq!(provider.name(), "canned");
+        assert_eq!(provider.backend(), LlmBackend::OnDevice);
+    }
 
     #[test]
     fn test_format_chatml_prompt_with_system() {

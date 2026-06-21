@@ -1844,45 +1844,67 @@ pub async fn enrich_db_for_eval_local(
 
     let all_memories = db.get_all_source_memories_ordered().await?;
     let total_memories = all_memories.len();
-    eprintln!("    [enrich_local] Phase 2: {total_memories} memories via canonical post_ingest...");
-    let t2_start = std::time::Instant::now();
 
-    for (i, (source_id, content)) in all_memories.iter().enumerate() {
-        crate::post_ingest::run_post_ingest_enrichment(
+    if batched_post_ingest_enabled() {
+        let conc = std::env::var("EVAL_ENRICHMENT_CONCURRENCY")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(8);
+        eprintln!("    [enrich_local] Phase 2: {total_memories} memories via BATCHED post_ingest (conc={conc})...");
+        enrich_post_ingest_batched(
             db,
-            source_id,
-            content,
-            None, // entity_id: let auto_link_entity + extraction decide
-            None,
-            None,
-            None,
-            Some(llm),
+            llm,
             &prompts,
             &refinery,
             &distillation,
-            None, // knowledge_path
-            None, // cancel
+            &all_memories,
+            conc,
         )
         .await?;
-        if (i + 1) % 20 == 0 || i + 1 == total_memories {
-            let elapsed = t2_start.elapsed().as_secs_f64();
-            let rate = (i + 1) as f64 / elapsed.max(0.001);
-            eprintln!(
-                "    [enrich_local] Phase 2: {}/{} done | {:.1}s elapsed | {:.1}/s",
-                i + 1,
-                total_memories,
-                elapsed,
-                rate,
-            );
-        }
-    }
+    } else {
+        eprintln!(
+            "    [enrich_local] Phase 2: {total_memories} memories via canonical post_ingest..."
+        );
+        let t2_start = std::time::Instant::now();
 
-    let elapsed_phase2 = t2_start.elapsed();
-    eprintln!(
-        "    [enrich_local] Phase 2 done in {:.1}s ({:.2}s/memory avg)",
-        elapsed_phase2.as_secs_f64(),
-        elapsed_phase2.as_secs_f64() / total_memories.max(1) as f64,
-    );
+        for (i, (source_id, content)) in all_memories.iter().enumerate() {
+            crate::post_ingest::run_post_ingest_enrichment(
+                db,
+                source_id,
+                content,
+                None, // entity_id: let auto_link_entity + extraction decide
+                None,
+                None,
+                None,
+                Some(llm),
+                &prompts,
+                &refinery,
+                &distillation,
+                None, // knowledge_path
+                None, // cancel
+                None, // precomputed_kg — Task 1.4 will re-route through the orchestrator
+            )
+            .await?;
+            if (i + 1) % 20 == 0 || i + 1 == total_memories {
+                let elapsed = t2_start.elapsed().as_secs_f64();
+                let rate = (i + 1) as f64 / elapsed.max(0.001);
+                eprintln!(
+                    "    [enrich_local] Phase 2: {}/{} done | {:.1}s elapsed | {:.1}/s",
+                    i + 1,
+                    total_memories,
+                    elapsed,
+                    rate,
+                );
+            }
+        }
+
+        let elapsed_phase2 = t2_start.elapsed();
+        eprintln!(
+            "    [enrich_local] Phase 2 done in {:.1}s ({:.2}s/memory avg)",
+            elapsed_phase2.as_secs_f64(),
+            elapsed_phase2.as_secs_f64() / total_memories.max(1) as f64,
+        );
+    }
 
     // Phase 3: distill pages (unchanged — already shared with production).
     let concepts =
@@ -1897,6 +1919,126 @@ pub async fn enrich_db_for_eval_local(
     let entity_links = db.count_memory_entity_links().await? as usize;
     let titles = db.count_nonempty_titles().await? as usize;
     Ok((entity_links, titles, concepts))
+}
+
+/// Returns true when `ORIGIN_SEED_BATCHED_POSTINGEST` is set to `1`, `true`, `yes`, or `on`.
+/// Default OFF — the existing serial Phase-2 loop is used when unset or any other value.
+fn batched_post_ingest_enabled() -> bool {
+    matches!(
+        std::env::var("ORIGIN_SEED_BATCHED_POSTINGEST")
+            .unwrap_or_default()
+            .to_lowercase()
+            .as_str(),
+        "1" | "true" | "yes" | "on"
+    )
+}
+
+/// Two-pass batched Phase-2 orchestrator.
+///
+/// Pass 2a: pre-compute `extract_kg` for all memories in parallel via
+/// `buffer_unordered(concurrency)`. Results are collected into a `HashMap`
+/// keyed by `source_id`; errors are buffered (not `?`-aborted) so a single
+/// memory's extraction failure does not cancel the entire batch.
+///
+/// Pass 2b: iterate `all_memories` in insertion order. For each memory, pull
+/// the buffered `Result<Vec<KgExtractionResult>>` from the map:
+/// - `Some(Ok(kg))` → pass the pre-computed KG to `run_post_ingest_enrichment`
+///   (skips the inline extract call inside post_ingest).
+/// - `Some(Err(_))` or missing → pass `None` (serial fallback: post_ingest
+///   re-runs extract inline, recording the same entity_extract status as the
+///   serial path).
+///
+/// Pass 2b is serial in insertion order so that `auto_link_entity` (step 1 of
+/// post_ingest) sees entities created by earlier memories, preserving the same
+/// DB state as the serial path (Rule #32).
+pub(crate) async fn enrich_post_ingest_batched(
+    db: &MemoryDB,
+    llm: &Arc<dyn crate::llm_provider::LlmProvider>,
+    prompts: &crate::prompts::PromptRegistry,
+    refinery: &crate::tuning::RefineryConfig,
+    distillation: &crate::tuning::DistillationConfig,
+    all_memories: &[(String, String)], // (source_id, content), insertion order
+    concurrency: usize,
+) -> Result<(), OriginError> {
+    use futures::StreamExt;
+    use std::collections::HashMap;
+
+    let total = all_memories.len();
+    let t2a_start = std::time::Instant::now();
+
+    // Pass 2a — parallel KG extraction (fills GPU batch).
+    // Clone source_id + content into the closure so the futures are 'static.
+    let buffered: HashMap<String, Result<Vec<crate::extract::KgExtractionResult>, OriginError>> =
+        futures::stream::iter(all_memories.iter().map(|(source_id, content)| {
+            let llm = llm.clone();
+            let prompts_clone = prompts.clone();
+            let sid = source_id.clone();
+            let cnt = content.clone();
+            async move {
+                let result = crate::refinery::extract_kg(&llm, &prompts_clone, &cnt).await;
+                (sid, result)
+            }
+        }))
+        .buffer_unordered(concurrency.max(1))
+        .collect::<Vec<_>>()
+        .await
+        .into_iter()
+        .collect();
+
+    let elapsed_2a = t2a_start.elapsed();
+    eprintln!(
+        "    [enrich_local] Phase 2a (batch KG extract): {}/{} done in {:.1}s",
+        buffered.len(),
+        total,
+        elapsed_2a.as_secs_f64(),
+    );
+
+    // Pass 2b — serial commit in insertion order.
+    let t2b_start = std::time::Instant::now();
+    let mut buffered = buffered; // rebind as mut so we can .remove()
+    for (i, (source_id, content)) in all_memories.iter().enumerate() {
+        let precomputed = match buffered.remove(source_id.as_str()) {
+            Some(Ok(kg)) => Some(kg),
+            _ => None, // Err or missing → serial fallback (post_ingest re-extracts inline)
+        };
+        crate::post_ingest::run_post_ingest_enrichment(
+            db,
+            source_id,
+            content,
+            None, // entity_id: let auto_link_entity + extraction decide
+            None,
+            None,
+            None,
+            Some(llm),
+            prompts,
+            refinery,
+            distillation,
+            None, // knowledge_path
+            None, // cancel
+            precomputed,
+        )
+        .await?;
+        if (i + 1) % 20 == 0 || i + 1 == total {
+            let elapsed = t2b_start.elapsed().as_secs_f64();
+            let rate = (i + 1) as f64 / elapsed.max(0.001);
+            eprintln!(
+                "    [enrich_local] Phase 2 (batched): {}/{} done | {:.1}s elapsed | {:.1}/s",
+                i + 1,
+                total,
+                elapsed,
+                rate,
+            );
+        }
+    }
+
+    let elapsed_2b = t2b_start.elapsed();
+    eprintln!(
+        "    [enrich_local] Phase 2 (batched) done in {:.1}s ({:.2}s/memory avg)",
+        elapsed_2b.as_secs_f64(),
+        elapsed_2b.as_secs_f64() / total.max(1) as f64,
+    );
+
+    Ok(())
 }
 
 /// Batch title enrichment via Anthropic Batch API.
@@ -2590,6 +2732,549 @@ mod tests {
             decide_cache_stamp(Some(&stored_haiku), &want, true, false, true),
             CacheStampDecision::Wipe,
             "mismatch + allow_wipe → Wipe"
+        );
+    }
+
+    /// Smoke test: `enrich_post_ingest_batched` runs Pass 2a + 2b and links at
+    /// least one entity for memory "m1". Uses `CannedLlmProvider` (CPU-only, no
+    /// GPU, no seed). The KG JSON response key is a 30-char prefix of the
+    /// `extract_knowledge_graph` prompt (mirrors `entity_extraction.rs` tests).
+    #[tokio::test]
+    async fn batched_orchestrator_links_entities() {
+        use crate::llm_provider::{CannedLlmProvider, LlmProvider};
+        use crate::prompts::PromptRegistry;
+        use crate::sources::RawDocument;
+        use crate::tuning::{DistillationConfig, RefineryConfig};
+        use std::sync::Arc;
+
+        let dir = tempfile::TempDir::new().unwrap();
+        let db = MemoryDB::new(
+            dir.path().join("test.db").as_path(),
+            Arc::new(crate::events::NoopEmitter),
+        )
+        .await
+        .unwrap();
+
+        // Upsert 3 memories whose content will trigger Alice-entity extraction.
+        for id in &["m1", "m2", "m3"] {
+            let doc = RawDocument {
+                source: "memory".to_string(),
+                source_id: id.to_string(),
+                title: format!("Test memory {id}"),
+                content: format!("Alice works on project {id}"),
+                ..Default::default()
+            };
+            db.upsert_documents(vec![doc]).await.unwrap();
+        }
+
+        let prompts = PromptRegistry::default();
+        // Key = first 30 chars of extract_knowledge_graph prompt (same idiom as
+        // entity_extraction.rs tests so the canned provider matches).
+        let key_fragment: String = prompts.extract_knowledge_graph.chars().take(30).collect();
+        // Respond with one entity ("Alice") so post_ingest can create + link it.
+        let kg_json =
+            r#"[{"entities":[{"name":"Alice","type":"person"}],"observations":[],"relations":[]}]"#;
+        // Also need a fallback for any other prompts (auto_link_entity / title / classify).
+        let llm: Arc<dyn LlmProvider> =
+            Arc::new(CannedLlmProvider::new("{}").with(key_fragment, kg_json));
+
+        let mems = db.get_all_source_memories_ordered().await.unwrap();
+        assert_eq!(mems.len(), 3, "should have 3 seeded memories");
+
+        let refinery = RefineryConfig::default();
+        let distillation = DistillationConfig::default();
+
+        enrich_post_ingest_batched(&db, &llm, &prompts, &refinery, &distillation, &mems, 8)
+            .await
+            .unwrap();
+
+        // At least m1 must be linked to an entity after the orchestrator runs.
+        let entity_id = db.get_memory_entity_id("m1").await.unwrap();
+        assert!(
+            entity_id.is_some(),
+            "m1 should be linked to an entity after enrich_post_ingest_batched"
+        );
+    }
+
+    // ── Task 1.5: WAY B golden gate ──────────────────────────────────────────
+    //
+    // Two tests prove that `enrich_post_ingest_batched` (WAY B) and the serial
+    // per-memory `run_post_ingest_enrichment` loop (WAY A) produce a SEMANTICALLY
+    // identical substrate when given the same mock LLM.
+    //
+    // Fixture memories use `source_agent = None` so `find_recent_batch` always
+    // returns an empty Vec (the windowed-batch branch requires source_agent to be
+    // Some). This makes the single-memory extract path structurally the only
+    // branch taken in both WAY A and WAY B's serial-commit pass, guaranteeing
+    // apples-to-apples comparison.
+
+    /// Semantic substrate fingerprint extracted from a MemoryDB.
+    ///
+    /// All raw auto-generated IDs (entity id, page id, …) are excluded because
+    /// they are assigned sequentially per-DB and will differ between two separate
+    /// DBs even when content is identical. We compare names, types, links, and
+    /// step records instead.
+    #[derive(Debug, PartialEq, Eq)]
+    struct SubstrateFingerprint {
+        /// Sorted set of (name, entity_type) across all entities.
+        entities: Vec<(String, String)>,
+        /// Sorted list of (source_id, entity_name) derived from
+        /// `memories.entity_id → entities.name` for chunk_index=0 primary memories.
+        memory_entity_links: Vec<(String, String)>,
+        /// Sorted list of (source_id, title) for chunk_index=0 primary memories.
+        titles: Vec<(String, String)>,
+        /// Sorted set of active page titles.
+        page_titles: Vec<String>,
+        /// Sorted set of (source_id, step_name, status) across all enrichment_steps.
+        enrichment_steps: Vec<(String, String, String)>,
+    }
+
+    async fn collect_fingerprint(db: &MemoryDB) -> SubstrateFingerprint {
+        let conn = db.conn.lock().await;
+
+        // 1. Entities — (name, entity_type) sorted.
+        let mut entities = Vec::new();
+        {
+            let mut rows = conn
+                .query(
+                    "SELECT name, entity_type FROM entities ORDER BY name, entity_type",
+                    (),
+                )
+                .await
+                .expect("entities query");
+            while let Ok(Some(row)) = rows.next().await {
+                entities.push((
+                    row.get::<String>(0).unwrap_or_default(),
+                    row.get::<String>(1).unwrap_or_default(),
+                ));
+            }
+        }
+        entities.sort();
+
+        // 2. Memory→entity links — (source_id, entity_name) for chunk 0 rows.
+        //    Uses memories.entity_id (the primary link column written by post_ingest).
+        let mut memory_entity_links = Vec::new();
+        {
+            let mut rows = conn
+                .query(
+                    "SELECT m.source_id, e.name
+                     FROM memories m
+                     JOIN entities e ON e.id = m.entity_id
+                     WHERE m.chunk_index = 0 AND m.source = 'memory'
+                     ORDER BY m.source_id",
+                    (),
+                )
+                .await
+                .expect("memory_entity_links query");
+            while let Ok(Some(row)) = rows.next().await {
+                memory_entity_links.push((
+                    row.get::<String>(0).unwrap_or_default(),
+                    row.get::<String>(1).unwrap_or_default(),
+                ));
+            }
+        }
+        memory_entity_links.sort();
+
+        // 3. Titles — (source_id, title) for chunk 0 primary memories.
+        let mut titles = Vec::new();
+        {
+            let mut rows = conn
+                .query(
+                    "SELECT source_id, title FROM memories
+                     WHERE chunk_index = 0 AND source = 'memory'
+                     ORDER BY source_id",
+                    (),
+                )
+                .await
+                .expect("titles query");
+            while let Ok(Some(row)) = rows.next().await {
+                titles.push((
+                    row.get::<String>(0).unwrap_or_default(),
+                    row.get::<String>(1).unwrap_or_default(),
+                ));
+            }
+        }
+        titles.sort();
+
+        // 4. Active page titles.
+        let mut page_titles = Vec::new();
+        {
+            let mut rows = conn
+                .query(
+                    "SELECT title FROM pages WHERE status = 'active' ORDER BY title",
+                    (),
+                )
+                .await
+                .expect("page_titles query");
+            while let Ok(Some(row)) = rows.next().await {
+                page_titles.push(row.get::<String>(0).unwrap_or_default());
+            }
+        }
+        page_titles.sort();
+
+        // 5. Enrichment steps — (source_id, step_name, status) sorted.
+        let mut enrichment_steps = Vec::new();
+        {
+            let mut rows = conn
+                .query(
+                    "SELECT source_id, step_name, status FROM enrichment_steps
+                     ORDER BY source_id, step_name",
+                    (),
+                )
+                .await
+                .expect("enrichment_steps query");
+            while let Ok(Some(row)) = rows.next().await {
+                enrichment_steps.push((
+                    row.get::<String>(0).unwrap_or_default(),
+                    row.get::<String>(1).unwrap_or_default(),
+                    row.get::<String>(2).unwrap_or_default(),
+                ));
+            }
+        }
+        enrichment_steps.sort();
+
+        SubstrateFingerprint {
+            entities,
+            memory_entity_links,
+            titles,
+            page_titles,
+            enrichment_steps,
+        }
+    }
+
+    /// Helper: build two fresh in-memory DBs and upsert the same N fixture
+    /// memories into each. Returns (db_a, db_b, mems) where mems is the ordered
+    /// (source_id, content) list suitable for both serial and batched enrichment.
+    ///
+    /// IMPORTANT: `source_agent = None` so `find_recent_batch` always returns
+    /// an empty Vec — the windowed-batch branch never fires.
+    async fn make_two_dbs_with_fixtures(
+        fixture_ids: &[&str],
+        contents: &[&str],
+    ) -> (MemoryDB, MemoryDB, Vec<(String, String)>) {
+        use crate::sources::RawDocument;
+
+        let dir_a = tempfile::TempDir::new().unwrap();
+        let dir_b = tempfile::TempDir::new().unwrap();
+
+        let db_a = MemoryDB::new(
+            dir_a.path().join("a.db").as_path(),
+            Arc::new(crate::events::NoopEmitter),
+        )
+        .await
+        .unwrap();
+        let db_b = MemoryDB::new(
+            dir_b.path().join("b.db").as_path(),
+            Arc::new(crate::events::NoopEmitter),
+        )
+        .await
+        .unwrap();
+
+        for (id, content) in fixture_ids.iter().zip(contents.iter()) {
+            let doc = RawDocument {
+                source: "memory".to_string(),
+                source_id: id.to_string(),
+                title: format!("Title for {id}"),
+                content: content.to_string(),
+                source_agent: None, // REQUIRED: prevents find_recent_batch window branch
+                ..Default::default()
+            };
+            db_a.upsert_documents(vec![doc.clone()]).await.unwrap();
+            db_b.upsert_documents(vec![doc]).await.unwrap();
+        }
+
+        let mems = db_a.get_all_source_memories_ordered().await.unwrap();
+        assert_eq!(
+            mems.len(),
+            fixture_ids.len(),
+            "all fixtures inserted into db_a"
+        );
+
+        // db_b must have the same insertion order.
+        let mems_b = db_b.get_all_source_memories_ordered().await.unwrap();
+        assert_eq!(mems_b, mems, "db_b same insertion order as db_a");
+
+        // tempdir handles are dropped here but the DB files remain because they were
+        // opened by path — we must keep them alive. Leak them via forget.
+        std::mem::forget(dir_a);
+        std::mem::forget(dir_b);
+
+        (db_a, db_b, mems)
+    }
+
+    /// Task 1.5 — Test 1: serial vs batched produce IDENTICAL substrates.
+    ///
+    /// WAY A: serial `run_post_ingest_enrichment(..., precomputed_kg=None)` per memory.
+    /// WAY B: `enrich_post_ingest_batched(...)`.
+    /// Both receive the same `CannedLlmProvider`; both must yield the same
+    /// semantic fingerprint.
+    #[tokio::test]
+    async fn serial_and_batched_produce_identical_substrate() {
+        use crate::llm_provider::{CannedLlmProvider, LlmProvider};
+        use crate::prompts::PromptRegistry;
+        use crate::tuning::{DistillationConfig, RefineryConfig};
+
+        // Fixture: 3 memories about Alice (unique token) so CannedLlm extracts
+        // "Alice" as an entity for each.
+        let ids = ["gold_s1", "gold_s2", "gold_s3"];
+        let contents = [
+            "Alice is the project lead on the Atlas initiative.",
+            "Alice reviewed the Atlas roadmap last Tuesday.",
+            "Alice signed off on the Atlas budget this week.",
+        ];
+        let (db_a, db_b, mems) = make_two_dbs_with_fixtures(&ids, &contents).await;
+
+        let prompts = PromptRegistry::default();
+        // Key on the extract_knowledge_graph system prompt prefix (same idiom as
+        // the existing smoke test). Respond with Alice as a person entity.
+        let key_fragment: String = prompts.extract_knowledge_graph.chars().take(30).collect();
+        let kg_json =
+            r#"[{"entities":[{"name":"Alice","type":"person"}],"observations":[],"relations":[]}]"#;
+        // Default response for classify/title/other prompts that don't match the KG key.
+        let canned = Arc::new(CannedLlmProvider::new("{}").with(key_fragment, kg_json));
+        let llm: Arc<dyn LlmProvider> = canned;
+
+        let refinery = RefineryConfig::default();
+        let distillation = DistillationConfig::default();
+
+        // WAY A — serial, one call per memory, precomputed_kg = None.
+        for (source_id, content) in &mems {
+            crate::post_ingest::run_post_ingest_enrichment(
+                &db_a,
+                source_id,
+                content,
+                None, // entity_id
+                None,
+                None,
+                None,
+                Some(&llm),
+                &prompts,
+                &refinery,
+                &distillation,
+                None, // knowledge_path
+                None, // cancel
+                None, // precomputed_kg
+            )
+            .await
+            .unwrap();
+        }
+
+        // WAY B — batched orchestrator (Pass 2a parallel extract + Pass 2b serial commit).
+        enrich_post_ingest_batched(&db_b, &llm, &prompts, &refinery, &distillation, &mems, 8)
+            .await
+            .unwrap();
+
+        let fp_a = collect_fingerprint(&db_a).await;
+        let fp_b = collect_fingerprint(&db_b).await;
+
+        assert_eq!(
+            fp_a, fp_b,
+            "WAY A serial and WAY B batched substrates must be identical.\n\
+             Serial:  {fp_a:#?}\n\
+             Batched: {fp_b:#?}"
+        );
+
+        // Sanity: entity link must be present (not just empty on both sides).
+        assert!(
+            !fp_a.memory_entity_links.is_empty(),
+            "expected at least one memory→entity link; got none (mock LLM may not have fired)"
+        );
+    }
+
+    /// Task 1.5 — Test 2: error-path equivalence (finding B).
+    ///
+    /// When one memory's KG extract ERRORS, serial and batched still produce the
+    /// SAME substrate: the failing memory records `(sid, "entity_extract", "failed")`
+    /// in BOTH paths, and the other memories are enriched normally.
+    ///
+    /// `CannedLlmProvider::fail_on(substr)` returns `Err` when `user_prompt`
+    /// contains the unique token that appears only in the failing memory's content.
+    #[tokio::test]
+    async fn error_path_serial_and_batched_produce_identical_substrate() {
+        use crate::llm_provider::{CannedLlmProvider, LlmProvider};
+        use crate::prompts::PromptRegistry;
+        use crate::tuning::{DistillationConfig, RefineryConfig};
+
+        // Fixture: 3 memories. Memory "err_s2" contains a unique token
+        // "__INJECT_FAIL__" that the error-injecting mock will match.
+        let ids = ["err_s1", "err_s2", "err_s3"];
+        let contents = [
+            "Alice is the project lead on the Beta initiative.",
+            "Alice __INJECT_FAIL__ reviewed the Beta roadmap.", // this one errors
+            "Alice signed off on the Beta budget this week.",
+        ];
+        let (db_a, db_b, mems) = make_two_dbs_with_fixtures(&ids, &contents).await;
+
+        let prompts = PromptRegistry::default();
+        let key_fragment: String = prompts.extract_knowledge_graph.chars().take(30).collect();
+        let kg_json =
+            r#"[{"entities":[{"name":"Alice","type":"person"}],"observations":[],"relations":[]}]"#;
+
+        // Mock that errors on any call whose user_prompt contains the unique token.
+        let canned = Arc::new(
+            CannedLlmProvider::new("{}")
+                .with(key_fragment, kg_json)
+                .fail_on("__INJECT_FAIL__"),
+        );
+        let llm: Arc<dyn LlmProvider> = canned;
+
+        let refinery = RefineryConfig::default();
+        let distillation = DistillationConfig::default();
+
+        // WAY A — serial per memory.
+        for (source_id, content) in &mems {
+            // Errors from run_post_ingest_enrichment are swallowed into enrichment_steps
+            // (the function records "failed" and returns Ok). We call .unwrap() here
+            // to fail fast if the function signature changes to propagate errors.
+            crate::post_ingest::run_post_ingest_enrichment(
+                &db_a,
+                source_id,
+                content,
+                None,
+                None,
+                None,
+                None,
+                Some(&llm),
+                &prompts,
+                &refinery,
+                &distillation,
+                None,
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+        }
+
+        // WAY B — batched.
+        enrich_post_ingest_batched(&db_b, &llm, &prompts, &refinery, &distillation, &mems, 8)
+            .await
+            .unwrap();
+
+        let fp_a = collect_fingerprint(&db_a).await;
+        let fp_b = collect_fingerprint(&db_b).await;
+
+        assert_eq!(
+            fp_a, fp_b,
+            "Error-path: WAY A and WAY B must still match.\n\
+             Serial:  {fp_a:#?}\n\
+             Batched: {fp_b:#?}"
+        );
+
+        // Both must record the failing memory's step as "failed".
+        let failing_step_a = fp_a
+            .enrichment_steps
+            .iter()
+            .find(|(sid, step, _)| sid == "err_s2" && step == "entity_extract");
+        let failing_step_b = fp_b
+            .enrichment_steps
+            .iter()
+            .find(|(sid, step, _)| sid == "err_s2" && step == "entity_extract");
+
+        assert_eq!(
+            failing_step_a.map(|(_, _, status)| status.as_str()),
+            Some("failed"),
+            "serial: err_s2 entity_extract should be 'failed'"
+        );
+        assert_eq!(
+            failing_step_b.map(|(_, _, status)| status.as_str()),
+            Some("failed"),
+            "batched: err_s2 entity_extract should be 'failed'"
+        );
+    }
+
+    // ── Task 1.6: ONE route, ONE contract ────────────────────────────────────
+    //
+    // Tie `enrich_post_ingest_batched` (WAY B) to the canonical `seed_contract`
+    // so a silently-dropped entity-link channel fails LOUD here, not at eval
+    // time.  We scope to the GRAPH floor only (`require_graph_links = true`)
+    // because distillation is NOT run by the batched orchestrator — asserting
+    // the pages floor would false-fail by construction.
+
+    /// Task 1.6 — batched path satisfies the graph substrate floor.
+    ///
+    /// Contract: after `enrich_post_ingest_batched` the `memory_entities` table
+    /// must be non-empty (graph channel alive).  Verified via the canonical
+    /// `check_seed_contract` function with a `SeedExpectations` profile that
+    /// carries `require_graph_links = true` and every other floor OFF (no pages,
+    /// no temporal, no dupe check, no classification check) — because the
+    /// orchestrator runs Phase 1+2 enrichment only; distillation (pages) runs
+    /// separately and asserting it here would false-fail.
+    ///
+    /// If this test reports `graph_links == 0`, that is a REAL finding: the
+    /// batched orchestrator stopped writing `memory_entities` links and the
+    /// graph channel would ship starved.
+    #[tokio::test]
+    async fn batched_path_meets_graph_contract() {
+        use crate::eval::seed_contract::{check_seed_contract, SeedExpectations};
+        use crate::llm_provider::{CannedLlmProvider, LlmProvider};
+        use crate::prompts::PromptRegistry;
+        use crate::tuning::{DistillationConfig, RefineryConfig};
+
+        // Reuse the 1.5 single-DB fixture pattern: 3 memories with source_agent=None
+        // (prevents find_recent_batch windowed-batch branch) whose content yields
+        // "Alice" via CannedLlmProvider.
+        let ids = ["c16_s1", "c16_s2", "c16_s3"];
+        let contents = [
+            "Alice leads the Gamma project at headquarters.",
+            "Alice reviewed the Gamma proposal last Monday.",
+            "Alice approved the Gamma budget for next quarter.",
+        ];
+        // Only need one DB — reuse make_two_dbs_with_fixtures and discard db_a.
+        let (_db_a, db, mems) = make_two_dbs_with_fixtures(&ids, &contents).await;
+
+        let prompts = PromptRegistry::default();
+        let key_fragment: String = prompts.extract_knowledge_graph.chars().take(30).collect();
+        let kg_json =
+            r#"[{"entities":[{"name":"Alice","type":"person"}],"observations":[],"relations":[]}]"#;
+        let llm: Arc<dyn LlmProvider> =
+            Arc::new(CannedLlmProvider::new("{}").with(key_fragment, kg_json));
+
+        let refinery = RefineryConfig::default();
+        let distillation = DistillationConfig::default();
+
+        // Run the batched orchestrator (WAY B).
+        enrich_post_ingest_batched(&db, &llm, &prompts, &refinery, &distillation, &mems, 8)
+            .await
+            .unwrap();
+
+        // ── Canonical contract check (graph floor only) ─────────────────────
+        // `complete()` also requires pages and event_dates, which the batched
+        // orchestrator does NOT produce (no distill, no date injection).  Build a
+        // targeted profile with ONLY the graph floor asserted so the contract
+        // tests exactly the channel we care about and cannot false-fail on the
+        // deliberately-absent others.
+        let expect = SeedExpectations {
+            variant: "batched_path_graph_floor".to_string(),
+            require_no_dupes: false,
+            require_full_classification: false,
+            min_cue_coverage: 0.0,
+            min_event_date_coverage: 0.0,
+            require_graph_links: true, // ← the one floor we assert
+            require_event_dates: false,
+            require_pages: false, // distill not run → pages absent by design
+            expect_fixture_sha256: None,
+        };
+
+        let conn = db.conn.lock().await;
+        let report = check_seed_contract(&conn, &expect)
+            .await
+            .expect("check_seed_contract should not error");
+
+        assert!(
+            report.graph_links > 0,
+            "graph substrate is empty after enrich_post_ingest_batched: \
+             memory_entities links = 0. The batched path dropped the entity-link \
+             channel — this is a REAL finding, not a test gap.\n\
+             Contract report: {:?}",
+            report
+        );
+        assert!(
+            report.holds(),
+            "seed_contract VIOLATED after enrich_post_ingest_batched:\n{}\n\
+             Full report: {:?}",
+            report.violations.join("; "),
+            report
         );
     }
 }
