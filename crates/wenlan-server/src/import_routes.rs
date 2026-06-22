@@ -366,6 +366,7 @@ pub async fn handle_chat_export_import(
                             &tuning.distillation,
                             knowledge_path.as_deref(),
                             None, // cancel — bulk import is not debounced
+                            None, // precomputed_kg
                         )
                         .await
                         {

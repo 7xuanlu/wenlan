@@ -42,8 +42,18 @@ pub struct ServerState {
     pub reranker: Option<Arc<dyn Reranker>>,
     /// Observable reranker state for `/api/status`. Distinguishes "never
     /// enabled" (`Disabled`) from "requested but init failed" (`Failed`) —
-    /// both leave `reranker == None`.
+    /// both leave `reranker == None`. This tracks the DEEP path
+    /// (`/api/memory/search` rerank=true); for `full` mode it flips to `Active`
+    /// once the background bge-base load completes.
     pub reranker_status: RerankerStatus,
+    /// Cross-encoder for the LIGHT paths — quick (`/api/search`) + context
+    /// (`/api/chat-context`). Wired (turbo) when `WENLAN_RERANKER_MODE` is
+    /// `lite`/`full`. `None` => those paths use plain hybrid ordering.
+    pub reranker_light: Option<Arc<dyn Reranker>>,
+    /// Observable light-path reranker state for `/api/status`.
+    pub reranker_light_status: RerankerStatus,
+    /// Resolved `WENLAN_RERANKER_MODE` string ("off"|"lite"|"full") for `/api/status`.
+    pub reranker_mode: String,
     /// Intelligence prompt templates.
     pub prompts: PromptRegistry,
     /// Intelligence tuning parameters.
@@ -79,6 +89,9 @@ impl Default for ServerState {
             external_llm: None,
             reranker: None,
             reranker_status: RerankerStatus::Disabled,
+            reranker_light: None,
+            reranker_light_status: RerankerStatus::Disabled,
+            reranker_mode: String::from("off"),
             prompts: PromptRegistry::default(),
             tuning: TuningConfig::default(),
             access_tracker: AccessTracker::new(),

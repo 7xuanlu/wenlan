@@ -30,8 +30,6 @@ reqwest = { workspace = true }
 service-manager = { workspace = true }
 dirs = { workspace = true }
 anyhow = { workspace = true }
-hyper = { workspace = true }
-hyper-util = { workspace = true }
 chrono = { workspace = true }
 uuid = { workspace = true }
 clap = { version = "4", features = ["derive"] }

@@ -28,7 +28,7 @@ pub async fn extract_entities_for_content(
             user_prompt: numbered,
             max_tokens: 512,
             temperature: 0.3,
-            label: None,
+            label: Some("extract".into()),
             timeout_secs: None,
         })
         .await
@@ -96,14 +96,13 @@ pub async fn extract_entities_for_content(
     Ok(entity_cache.into_values().collect())
 }
 
-/// Extract entities from a single memory via LLM. Returns the primary entity_id if one was created/found.
-pub async fn extract_single_memory_entities(
-    db: &MemoryDB,
+/// Pure half: call the LLM and parse the KG response. No DB access.
+/// Returns the raw parse result to be committed by `commit_kg`.
+pub async fn extract_kg(
     llm: &Arc<dyn LlmProvider>,
     prompts: &PromptRegistry,
-    source_id: &str,
     content: &str,
-) -> Result<Option<String>, WenlanError> {
+) -> Result<Vec<crate::extract::KgExtractionResult>, WenlanError> {
     let truncated: String = content.chars().take(500).collect();
     let numbered = format!("1. {}", truncated);
 
@@ -113,21 +112,29 @@ pub async fn extract_single_memory_entities(
             user_prompt: numbered,
             max_tokens: 512,
             temperature: 0.3,
-            label: None,
+            label: Some("extract".into()),
             timeout_secs: None,
         })
         .await
         .map_err(|e| WenlanError::Llm(format!("entity extraction: {}", e)))?;
 
     let batch = [(0usize, content.to_string())];
-    let kg_results = crate::extract::parse_kg_response(&response, &batch);
+    Ok(crate::extract::parse_kg_response(&response, &batch))
+}
 
+/// Serial DB-write half: commit a parsed KG result set to the DB and link
+/// the memory row identified by `source_id`. Returns the primary entity id.
+pub async fn commit_kg(
+    db: &MemoryDB,
+    source_id: &str,
+    kg: &[crate::extract::KgExtractionResult],
+) -> Result<Option<String>, WenlanError> {
     let mut entity_cache: std::collections::HashMap<String, String> =
         std::collections::HashMap::new();
     let mut first_entity_id: Option<String> = None;
 
-    for kg in &kg_results {
-        for entity in &kg.entities {
+    for kg_item in kg {
+        for entity in &kg_item.entities {
             let name_lower = entity.name.to_lowercase();
             // In-batch cache (per-extraction-pass dedup; capability fn doesn't take a cache)
             if let Some(id) = entity_cache.get(&name_lower) {
@@ -153,7 +160,7 @@ pub async fn extract_single_memory_entities(
                 Err(e) => log::warn!("[post_ingest] entity create failed: {e}"),
             }
         }
-        for obs in &kg.observations {
+        for obs in &kg_item.observations {
             if let Some(entity_id) = entity_cache.get(&obs.entity.to_lowercase()) {
                 let req = wenlan_types::requests::AddObservationRequest {
                     entity_id: entity_id.clone(),
@@ -166,7 +173,7 @@ pub async fn extract_single_memory_entities(
                 }
             }
         }
-        for rel in &kg.relations {
+        for rel in &kg_item.relations {
             let from_id = entity_cache.get(&rel.from.to_lowercase()).cloned();
             let to_id = entity_cache.get(&rel.to.to_lowercase()).cloned();
             if let (Some(from), Some(to)) = (from_id, to_id) {
@@ -200,4 +207,113 @@ pub async fn extract_single_memory_entities(
     }
 
     Ok(first_entity_id)
+}
+
+/// Extract entities from a single memory via LLM. Returns the primary entity_id if one was created/found.
+pub async fn extract_single_memory_entities(
+    db: &MemoryDB,
+    llm: &Arc<dyn LlmProvider>,
+    prompts: &PromptRegistry,
+    source_id: &str,
+    content: &str,
+) -> Result<Option<String>, WenlanError> {
+    let kg = extract_kg(llm, prompts, content).await?;
+    commit_kg(db, source_id, &kg).await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::llm_provider::CannedLlmProvider;
+    use crate::sources::RawDocument;
+    use std::sync::Arc;
+
+    /// Build a test prompt registry using defaults (no override dir needed).
+    fn test_prompts() -> PromptRegistry {
+        crate::prompts::PromptRegistry::default()
+    }
+
+    /// Build a CannedLlmProvider that returns a minimal KG JSON containing
+    /// "Alice" as an entity when the extract_knowledge_graph prompt is used.
+    fn canned_alice() -> Arc<CannedLlmProvider> {
+        let prompts = test_prompts();
+        // The key must appear in (or equal) the system_prompt sent by extract_kg.
+        // We use a short substring of the prompt as the key.
+        let key_fragment = prompts
+            .extract_knowledge_graph
+            .chars()
+            .take(30)
+            .collect::<String>();
+        let kg_json =
+            r#"[{"entities":[{"name":"Alice","type":"person"}],"observations":[],"relations":[]}]"#;
+        Arc::new(CannedLlmProvider::new("DEFAULT").with(key_fragment, kg_json))
+    }
+
+    #[tokio::test]
+    async fn extract_kg_returns_parsed_kg_no_db() {
+        let prompts = test_prompts();
+        let canned = canned_alice();
+        let result = extract_kg(
+            &(canned as Arc<dyn LlmProvider>),
+            &prompts,
+            "Alice joined Acme",
+        )
+        .await
+        .expect("extract_kg should succeed");
+        assert!(
+            !result.is_empty(),
+            "should return at least one KgExtractionResult"
+        );
+        let first = &result[0];
+        assert!(
+            first.entities.iter().any(|e| e.name == "Alice"),
+            "expected entity 'Alice' in result, got: {:?}",
+            first.entities
+        );
+    }
+
+    #[tokio::test]
+    async fn extract_then_commit_creates_and_links() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let db = crate::db::MemoryDB::new(dir.path(), Arc::new(crate::events::NoopEmitter))
+            .await
+            .expect("MemoryDB::new failed");
+        // Seed a memory row so commit_kg's update_memory_entity_id / link_memory_entities have a target.
+        let doc = RawDocument {
+            source: "memory".to_string(),
+            source_id: "m1".to_string(),
+            title: "Test memory".to_string(),
+            content: "Alice joined Acme".to_string(),
+            ..Default::default()
+        };
+        db.upsert_documents(vec![doc])
+            .await
+            .expect("upsert_documents failed");
+
+        let prompts = test_prompts();
+        let canned = canned_alice();
+        let kg = extract_kg(
+            &(canned as Arc<dyn LlmProvider>),
+            &prompts,
+            "Alice joined Acme",
+        )
+        .await
+        .expect("extract_kg failed");
+
+        let eid = commit_kg(&db, "m1", &kg).await.expect("commit_kg failed");
+        assert!(
+            eid.is_some(),
+            "expected a primary entity id after commit_kg"
+        );
+
+        // Verify the memory is linked to the entity via the legacy 1-1 column.
+        let stored_eid = db
+            .get_memory_entity_id("m1")
+            .await
+            .expect("get_memory_entity_id failed");
+        assert_eq!(
+            stored_eid, eid,
+            "stored entity_id should match the one returned by commit_kg"
+        );
+    }
 }

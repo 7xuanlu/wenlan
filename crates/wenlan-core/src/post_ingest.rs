@@ -73,6 +73,7 @@ pub async fn run_post_ingest_enrichment(
     distillation: &crate::tuning::DistillationConfig,
     knowledge_path: Option<&std::path::Path>,
     cancel: Option<&AtomicBool>,
+    precomputed_kg: Option<Vec<crate::extract::KgExtractionResult>>,
 ) -> Result<(), WenlanError> {
     log::info!("[post_ingest] enriching {source_id}");
 
@@ -188,12 +189,19 @@ pub async fn run_post_ingest_enrichment(
                     }
                 }
             } else {
-                // Single memory extraction (no batch or source_agent unknown)
-                match crate::refinery::extract_single_memory_entities(
-                    db, llm_ref, prompts, source_id, content,
-                )
-                .await
-                {
+                // Single memory extraction (no batch or source_agent unknown).
+                // If a pre-computed KG was supplied by the caller, commit it directly
+                // (skipping the inline LLM extract). Otherwise, run the LLM extract
+                // as today. Both paths return Result<Option<String>, WenlanError>.
+                match match precomputed_kg {
+                    Some(kg) => crate::refinery::commit_kg(db, source_id, &kg).await,
+                    None => {
+                        crate::refinery::extract_single_memory_entities(
+                            db, llm_ref, prompts, source_id, content,
+                        )
+                        .await
+                    }
+                } {
                     Ok(Some(eid)) => {
                         let eid_prefix: String = eid.chars().take(12).collect();
                         log::info!("[post_ingest] {source_id}: extracted entity {eid_prefix}");
@@ -773,6 +781,7 @@ mod tests {
             &crate::tuning::DistillationConfig::default(),
             None,
             None, // cancel — T22, inert
+            None, // precomputed_kg
         )
         .await
         .unwrap();
@@ -802,6 +811,7 @@ mod tests {
             &crate::tuning::DistillationConfig::default(),
             None,
             None, // cancel — T22, inert
+            None, // precomputed_kg
         )
         .await
         .unwrap();
@@ -954,6 +964,7 @@ mod tests {
             &crate::tuning::DistillationConfig::default(),
             None,
             Some(cancel.as_ref()),
+            None, // precomputed_kg
         )
         .await
         .unwrap();
@@ -1002,6 +1013,7 @@ mod tests {
             &crate::tuning::DistillationConfig::default(),
             None,
             Some(cancel.as_ref()),
+            None, // precomputed_kg
         )
         .await
         .unwrap();
@@ -1060,6 +1072,7 @@ mod tests {
                 &crate::tuning::DistillationConfig::default(),
                 None,
                 Some(cancel_task.as_ref()),
+                None, // precomputed_kg
             )
             .await
             .unwrap();
@@ -1128,6 +1141,7 @@ mod tests {
             &crate::tuning::DistillationConfig::default(),
             None,
             Some(cancel.as_ref()),
+            None, // precomputed_kg
         )
         .await
         .unwrap();
@@ -1162,6 +1176,7 @@ mod tests {
             &crate::tuning::DistillationConfig::default(),
             None,
             None, // cancel — T22, inert
+            None, // precomputed_kg
         )
         .await
         .unwrap();
@@ -1192,5 +1207,143 @@ mod tests {
             .find(|i| i.source_id == "mem_honest_b")
             .unwrap();
         assert_eq!(item_b.enrichment_status, "raw");
+    }
+
+    /// TDD gate for Task 1.2 — precomputed_kg parameter.
+    ///
+    /// DB-A: run_post_ingest_enrichment with precomputed_kg = None (canned LLM called for extract).
+    /// DB-B: run_post_ingest_enrichment with precomputed_kg = Some(kg) (precomputed KG passed in;
+    ///        LLM must NOT be called for extract on this arm).
+    ///
+    /// Asserts: both link source_id to an entity with the same name, and both record
+    /// entity_extract = "ok".
+    #[tokio::test]
+    async fn precomputed_kg_matches_inline_extract() {
+        use crate::llm_provider::{CannedLlmProvider, LlmProvider};
+        use std::sync::Arc;
+
+        let prompts = crate::prompts::PromptRegistry::default();
+
+        // Build a CannedLlmProvider that returns a KG with "Alice" as entity.
+        // Key = first 30 chars of the extract_knowledge_graph prompt (matches the `sys.contains(key)` check).
+        let key_fragment: String = prompts.extract_knowledge_graph.chars().take(30).collect();
+        let kg_json =
+            r#"[{"entities":[{"name":"Alice","type":"person"}],"observations":[],"relations":[]}]"#;
+        let canned: Arc<dyn LlmProvider> =
+            Arc::new(CannedLlmProvider::new("DEFAULT").with(key_fragment.clone(), kg_json));
+
+        // Pre-compute the KG using extract_kg (pure, no DB).
+        let precomputed = crate::refinery::extract_kg(&canned, &prompts, "Alice joined Acme")
+            .await
+            .expect("extract_kg failed in test setup");
+        assert!(
+            !precomputed.is_empty(),
+            "precomputed KG must be non-empty for a useful test"
+        );
+
+        // ----- DB-A: None arm (inline LLM extract) -----
+        let (db_a, _dir_a) = test_db().await;
+        let doc_a = make_doc("mem_pkg_a", "Alice joined Acme");
+        db_a.upsert_documents(vec![doc_a]).await.unwrap();
+        let canned_a: Arc<dyn LlmProvider> =
+            Arc::new(CannedLlmProvider::new("DEFAULT").with(key_fragment.clone(), kg_json));
+        run_post_ingest_enrichment(
+            &db_a,
+            "mem_pkg_a",
+            "Alice joined Acme",
+            None,
+            Some("fact"),
+            None,
+            None,
+            Some(&canned_a),
+            &prompts,
+            &crate::tuning::RefineryConfig::default(),
+            &crate::tuning::DistillationConfig::default(),
+            None,
+            None,
+            None, // precomputed_kg = None
+        )
+        .await
+        .unwrap();
+
+        // ----- DB-B: Some(kg) arm (precomputed KG, LLM should NOT be called for extract) -----
+        let (db_b, _dir_b) = test_db().await;
+        let doc_b = make_doc("mem_pkg_b", "Alice joined Acme");
+        db_b.upsert_documents(vec![doc_b]).await.unwrap();
+        // Use a CannedLlmProvider that returns DEFAULT (no entities) — if extract_kg is mistakenly
+        // called on the B arm, it would extract nothing and the test would fail.
+        let canned_b_no_extract: Arc<dyn LlmProvider> = Arc::new(CannedLlmProvider::new("[]"));
+        run_post_ingest_enrichment(
+            &db_b,
+            "mem_pkg_b",
+            "Alice joined Acme",
+            None,
+            Some("fact"),
+            None,
+            None,
+            Some(&canned_b_no_extract),
+            &prompts,
+            &crate::tuning::RefineryConfig::default(),
+            &crate::tuning::DistillationConfig::default(),
+            None,
+            None,
+            Some(precomputed), // precomputed_kg = Some(kg)
+        )
+        .await
+        .unwrap();
+
+        // Both arms must record entity_extract = "ok"
+        let steps_a = db_a.get_enrichment_steps("mem_pkg_a").await.unwrap();
+        let extract_a = steps_a
+            .iter()
+            .find(|s| s.step == "entity_extract")
+            .expect("entity_extract step missing on arm A");
+        assert_eq!(
+            extract_a.status, "ok",
+            "arm A entity_extract status must be ok"
+        );
+
+        let steps_b = db_b.get_enrichment_steps("mem_pkg_b").await.unwrap();
+        let extract_b = steps_b
+            .iter()
+            .find(|s| s.step == "entity_extract")
+            .expect("entity_extract step missing on arm B");
+        assert_eq!(
+            extract_b.status, "ok",
+            "arm B entity_extract status must be ok"
+        );
+
+        // Both arms must link source_id to an entity, and that entity must be "Alice"
+        let eid_a = db_a
+            .get_memory_entity_id("mem_pkg_a")
+            .await
+            .unwrap()
+            .expect("arm A must have an entity_id");
+        let eid_b = db_b
+            .get_memory_entity_id("mem_pkg_b")
+            .await
+            .unwrap()
+            .expect("arm B must have an entity_id");
+
+        // Verify entity name for each arm
+        let (name_a, _) = db_a
+            .get_entity_name_type(&eid_a)
+            .await
+            .unwrap()
+            .expect("entity from arm A not found");
+        assert_eq!(
+            name_a, "Alice",
+            "arm A entity name must be Alice, got: {name_a}"
+        );
+
+        let (name_b, _) = db_b
+            .get_entity_name_type(&eid_b)
+            .await
+            .unwrap()
+            .expect("entity from arm B not found");
+        assert_eq!(
+            name_b, "Alice",
+            "arm B entity name must be Alice, got: {name_b}"
+        );
     }
 }

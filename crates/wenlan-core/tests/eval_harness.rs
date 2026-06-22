@@ -3030,6 +3030,94 @@ async fn headroom_probe_emit() {
     println!("[headroom] wrote {} rows -> {}", rows.len(), path.display());
 }
 
+/// Per-question recall-headroom probe on the FAITHFUL per-question LME-S
+/// instrument: opens each question's own seeded scenario DB (reused from the
+/// pool-sweep cache, no re-seed) and measures where gold sits at limits
+/// 10/30/100. Decides whether a deeper CE rerank pool can EVER add accuracy on
+/// per-question LME-S (PR-3): if gold_in_10 == gold_in_30 == gold_in_100 for
+/// (nearly) every question, pool depth is structurally inert and no sweep size
+/// helps. Read-only (no answer-gen, no LLM, no batching).
+///
+/// ```bash
+/// LME_S_FIXTURE=/path/to/even_subset.json \
+/// EVAL_BASELINES_DIR=$HOME/.cache/origin-eval-ce-lme-s-smoke \
+///   cargo test -p origin-core --test eval_harness --features eval-harness \
+///   headroom_probe_per_question_lme_s -- --ignored --nocapture
+/// ```
+#[tokio::test]
+#[ignore]
+async fn headroom_probe_per_question_lme_s() {
+    println!("=== PER-QUESTION RECALL-HEADROOM PROBE (gold-rank, faithful instrument) ===");
+    let lme_path = match std::env::var("LME_S_FIXTURE") {
+        Ok(p) => std::path::PathBuf::from(p),
+        Err(_) => {
+            let d = eval_root().join("data");
+            let c = d.join("longmemeval_s_cleaned.json");
+            if c.exists() {
+                c
+            } else {
+                d.join("longmemeval_s.json")
+            }
+        }
+    };
+    if !lme_path.exists() {
+        println!("SKIP: LME-S fixture not found at {:?}", lme_path);
+        return;
+    }
+    let baselines = origin_core::eval::shared::eval_baselines_dir_override()
+        .unwrap_or_else(|| eval_root().join("baselines"));
+
+    let rows = origin_core::eval::longmemeval::run_longmemeval_headroom_probe_per_question(
+        &lme_path, &baselines,
+    )
+    .await
+    .expect("per-question headroom probe");
+
+    if rows.is_empty() {
+        println!(
+            "SKIP/EMPTY: no seeded per-question DBs under {:?}",
+            baselines
+        );
+        return;
+    }
+
+    println!(
+        "\n{:<28} {:>5} {:>8} {:>8} {:>8}   gold_ranks_100",
+        "category", "ngold", "in_10", "in_30", "in_100"
+    );
+    let (mut knee_30, mut widen_100, mut inert) = (0usize, 0usize, 0usize);
+    for r in &rows {
+        // CE-knee: gold reachable at 30 but not 10. Pool-widening: at 100 not 30.
+        if r.gold_in_30 > r.gold_in_10 {
+            knee_30 += 1;
+        }
+        if r.gold_in_100 > r.gold_in_30 {
+            widen_100 += 1;
+        }
+        if r.gold_in_10 == r.gold_in_30 && r.gold_in_30 == r.gold_in_100 {
+            inert += 1;
+        }
+        println!(
+            "{:<28} {:>5} {:>8} {:>8} {:>8}   {:?}",
+            r.category, r.n_gold, r.gold_in_10, r.gold_in_30, r.gold_in_100, r.gold_ranks_100
+        );
+    }
+    println!(
+        "\n[headroom_per_question] n={} | CE-knee questions (gold in 30 not 10)={} | \
+         pool-widen (100 not 30)={} | pool-INERT (10==30==100)={}",
+        rows.len(),
+        knee_30,
+        widen_100,
+        inert
+    );
+    println!(
+        "VERDICT: {} of {} questions exercise the deep-pool regime; if ~0, adaptive CE pool \
+         is structurally inert on per-question LME-S (no sweep size helps).",
+        knee_30 + widen_100,
+        rows.len()
+    );
+}
+
 /// Decompose-recall probe (Step 1 of the decompose ladder): base@30 vs
 /// date-prefix@30 vs subquery union vs RRF-merge@30, all on the base
 /// `search_memory` path. Consumes the pre-generated subquery fixture at
@@ -3084,6 +3172,129 @@ async fn decompose_recall_probe_emit() {
     }
     println!(
         "[decompose_recall] wrote {} rows -> {}",
+        rows.len(),
+        path.display()
+    );
+}
+
+/// Deep-S CE rerank POOL / MODEL retrieval probe — NDCG@10 + recall@5 + P50
+/// latency, NO answer generation, NO judge (the cheap, deterministic path that
+/// DECIDES pool depth + CE on/off; see eval/AGENTS.md "CE rerank pool / model
+/// eval methodology"). ONE arm per invocation — a sweep script drives the env
+/// grid. Reads pre-seeded FAITHFUL per-question deep-S DBs from
+/// `EVAL_BASELINES_DIR` (`fullpipeline/lme/<qid>/`); `LME_S_FIXTURE` must list
+/// exactly the cached qids. NOT the consolidated DB. Emits
+/// `EVAL_OUT/<arm_label>.jsonl` of `PerQueryRow` for `analyze_paired.py`.
+///
+/// ```bash
+/// EVAL_BASELINES_DIR=~/.cache/origin-eval-pool31 LME_S_FIXTURE=/tmp/claude/lme_s_31.json \
+///   EVAL_OUT=/tmp/claude/pool_ndcg CE_AB_ARM_LABEL=ce_on_pool20_base CE_AB_RERANK=on \
+///   RERANK_POOL_FLOOR=20 ORIGIN_RERANKER_MODEL=bge-base RUSTC_WRAPPER= \
+///   cargo test -p origin-core --test eval_harness --features eval-harness \
+///   rerank_pool_retrieval_probe_emit -- --ignored --nocapture
+/// ```
+#[tokio::test]
+#[ignore = "retrieval-only deep-S NDCG probe: needs pre-seeded per-question deep-S DBs in EVAL_BASELINES_DIR + LME_S_FIXTURE listing exactly those qids. No GPU answer, no judge."]
+async fn rerank_pool_retrieval_probe_emit() {
+    // CONFOUND CONTROL (boule adversarial review, 2026-06-19):
+    // `search_memory_cross_rerank_cued` sets `allow_graph_stream = reranker.is_none()`,
+    // so a CE-off arm (reranker=None) would run WITH the +0.0545-NDCG graph stream
+    // while every CE-on arm runs WITHOUT it — a confound LARGER than the CE signal
+    // being measured. Force the stream OFF on every arm so CE-on/off and the pool
+    // sweep are clean and comparable. (Production realism — CE-on/stream-off vs
+    // hybrid/stream-on — is a SEPARATE experiment, not this selector.)
+    std::env::set_var("ORIGIN_GRAPH_MEMORY_STREAM", "0");
+
+    let baselines = origin_core::eval::shared::eval_baselines_dir_override()
+        .unwrap_or_else(|| eval_root().join("baselines"));
+    let fixture = match std::env::var("LME_S_FIXTURE") {
+        Ok(p) => std::path::PathBuf::from(p),
+        Err(_) => {
+            let d = eval_root().join("data");
+            let c = d.join("longmemeval_s_cleaned.json");
+            if c.exists() {
+                c
+            } else {
+                d.join("longmemeval_s.json")
+            }
+        }
+    };
+    if !fixture.exists() {
+        eprintln!("SKIP: LME-S fixture not found at {}", fixture.display());
+        return;
+    }
+    let arm_label =
+        std::env::var("CE_AB_ARM_LABEL").unwrap_or_else(|_| "rerank_pool_arm".to_string());
+    let want_ce = std::env::var("CE_AB_RERANK")
+        .map(|v| {
+            matches!(
+                v.trim().to_ascii_lowercase().as_str(),
+                "1" | "on" | "true" | "yes"
+            )
+        })
+        .unwrap_or(false);
+    let reranker = if want_ce {
+        Some(
+            origin_core::reranker::init_cross_encoder_reranker(None)
+                .expect("init_cross_encoder_reranker failed"),
+        )
+    } else {
+        None
+    };
+    eprintln!(
+        "[rerank_pool_probe] arm={arm_label} ce={want_ce} baselines={} fixture={} \
+         pool_floor={} model={}",
+        baselines.display(),
+        fixture.display(),
+        std::env::var("RERANK_POOL_FLOOR").unwrap_or_else(|_| "10(default)".into()),
+        std::env::var("ORIGIN_RERANKER_MODEL").unwrap_or_else(|_| "bge-base(default)".into()),
+    );
+
+    let rows = origin_core::eval::longmemeval::run_longmemeval_rerank_pool_probe(
+        &baselines, &fixture, reranker, &arm_label,
+    )
+    .await
+    .expect("rerank_pool probe failed");
+
+    let n = rows.len().max(1) as f64;
+    let mean_ndcg: f64 = rows.iter().map(|r| r.ndcg10).sum::<f64>() / n;
+    let mean_recall: f64 = rows.iter().map(|r| r.recall5).sum::<f64>() / n;
+    // Source-expanded coverage: cov_expanded - cov_blind = the page channel's
+    // honest contribution (pages credit gold via provenance, not positional
+    // rank). Both None on emitters that don't measure coverage; this probe
+    // always sets them, so unwrap_or(0.0) is a guard, not a real path.
+    let mean_cov_blind: f64 = rows.iter().map(|r| r.cov_blind.unwrap_or(0.0)).sum::<f64>() / n;
+    let mean_cov_expanded: f64 = rows
+        .iter()
+        .map(|r| r.cov_expanded.unwrap_or(0.0))
+        .sum::<f64>()
+        / n;
+    let mut lat: Vec<f64> = rows.iter().map(|r| r.latency_ms).collect();
+    lat.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    let p50 = lat.get(lat.len() / 2).copied().unwrap_or(0.0);
+    eprintln!(
+        "[rerank_pool_probe] arm={arm_label} n={} mean_ndcg10={mean_ndcg:.4} \
+         mean_recall5={mean_recall:.4} cov_blind={mean_cov_blind:.4} \
+         cov_expanded={mean_cov_expanded:.4} cov_delta={:.4} p50_latency_ms={p50:.0}",
+        rows.len(),
+        mean_cov_expanded - mean_cov_blind
+    );
+
+    let out_dir = paired_out_dir();
+    std::fs::create_dir_all(&out_dir).ok();
+    let path = out_dir.join(format!("{arm_label}.jsonl"));
+    use std::io::Write;
+    let mut f = std::fs::File::create(&path).expect("create jsonl");
+    for r in &rows {
+        writeln!(
+            f,
+            "{}",
+            serde_json::to_string(r).expect("serialize PerQueryRow")
+        )
+        .expect("write jsonl line");
+    }
+    eprintln!(
+        "[rerank_pool_probe] wrote {} rows -> {}",
         rows.len(),
         path.display()
     );
@@ -4787,9 +4998,15 @@ async fn enrich_fullpipeline_lme_only() {
     };
     use wenlan_core::sources::RawDocument;
 
-    let lme_path = eval_root().join("data/longmemeval_oracle.json");
+    // Fixture override: LME_S_FIXTURE points at the DEEP per-question fixture
+    // (longmemeval_s*.json — ~47-session haystack) for a faithful deep-S seed-only
+    // run; default stays the shallow oracle for backward compat.
+    let lme_path = match std::env::var("LME_S_FIXTURE") {
+        Ok(p) => std::path::PathBuf::from(p),
+        Err(_) => eval_root().join("data/longmemeval_oracle.json"),
+    };
     if !lme_path.exists() {
-        eprintln!("SKIP: longmemeval_oracle.json not found");
+        eprintln!("SKIP: fixture not found at {lme_path:?}");
         return;
     }
 
@@ -4819,101 +5036,156 @@ async fn enrich_fullpipeline_lme_only() {
     );
 
     let samples = load_longmemeval(&lme_path).expect("load_longmemeval");
-    let enrichment =
-        EnrichmentMode::from_env(&answer_model, cost_cap).expect("EnrichmentMode init failed");
+    use futures::StreamExt;
+    use std::sync::Arc;
+
+    let enrichment = Arc::new(
+        EnrichmentMode::from_env(&answer_model, cost_cap).expect("EnrichmentMode init failed"),
+    );
     let shared_embedder = eval_shared_embedder();
 
+    // Cross-question fan-out. The serial loop this replaces only filled the M=8
+    // batch DURING one question's classify phase, then ran n_seqs=1 through the
+    // entity/distill gaps — leaving the GPU starved most of the run. Seeding
+    // EVAL_SCENARIO_CONCURRENCY questions at once keeps the shared on-device
+    // coalescer fed (each question owns its own scenario DB, so no write race),
+    // raising realized width toward M=8 (~1.5x at conc=16, AGENTS.md). Mirrors
+    // the answer_quality.rs full-pipeline fan-out, minus P3/P4.
+    let scenario_concurrency: usize = std::env::var("EVAL_SCENARIO_CONCURRENCY")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(1)
+        .clamp(1, 16);
+    eprintln!("[lme_enrich_only] scenario concurrency = {scenario_concurrency}");
+
     let t0 = std::time::Instant::now();
-    let mut processed = 0usize;
-    let mut total_memories = 0usize;
+    let total = samples.len();
+    let end = limit.map(|n| (skip + n).min(total)).unwrap_or(total);
+    let indices: Vec<usize> = (skip..end).collect();
+    let n_work = indices.len();
+    let samples_arc = Arc::new(samples);
+    let baselines_arc = Arc::new(baselines.clone());
+    let done = Arc::new(std::sync::atomic::AtomicUsize::new(0));
 
-    for (idx, sample) in samples.iter().enumerate().skip(skip) {
-        if limit.is_some_and(|n| processed >= n) {
-            break;
-        }
+    // Each task: (question_id, mem_count, enriched). None = empty/failed scenario.
+    let results: Vec<(String, usize, usize)> = futures::stream::iter(indices.into_iter())
+        .map(|idx| {
+            let shared_embedder = shared_embedder.clone();
+            let enrichment = enrichment.clone();
+            let samples_arc = samples_arc.clone();
+            let baselines_arc = baselines_arc.clone();
+            let done = done.clone();
+            async move {
+                let sample = &samples_arc[idx];
+                let ground_truth = sample
+                    .answer
+                    .as_str()
+                    .unwrap_or(&sample.answer.to_string())
+                    .to_string();
+                let memories = extract_memories(sample);
+                if ground_truth.is_empty() || memories.is_empty() {
+                    return None;
+                }
 
-        let ground_truth = sample
-            .answer
-            .as_str()
-            .unwrap_or(&sample.answer.to_string())
-            .to_string();
-        if ground_truth.is_empty() {
-            continue;
-        }
+                let scope_dir = scenario_db_dir(&baselines_arc, "lme", &sample.question_id);
+                let question_id = sample.question_id.clone();
+                let qid_doc = question_id.clone();
+                let question_type = sample.question_type.clone();
+                let memories_owned = memories.clone();
 
-        let memories = extract_memories(sample);
-        if memories.is_empty() {
-            continue;
-        }
+                let scenario_t0 = std::time::Instant::now();
+                let db = match open_or_seed_scenario_db(
+                    &scope_dir,
+                    shared_embedder,
+                    move || {
+                        memories_owned
+                            .iter()
+                            .map(|mem| RawDocument {
+                                content: mem.content.clone(),
+                                source_id: format!(
+                                    "lme_{}_{}_t{}",
+                                    qid_doc, mem.session_idx, mem.turn_idx
+                                ),
+                                source: "memory".to_string(),
+                                title: format!(
+                                    "session {} turn {}",
+                                    mem.session_idx, mem.turn_idx
+                                ),
+                                memory_type: Some(
+                                    if question_type == "single-session-preference" {
+                                        "preference"
+                                    } else {
+                                        "fact"
+                                    }
+                                    .to_string(),
+                                ),
+                                space: Some("conversation".to_string()),
+                                last_modified: chrono::Utc::now().timestamp(),
+                                ..Default::default()
+                            })
+                            .collect()
+                    },
+                    &enrichment,
+                )
+                .await
+                {
+                    Ok(db) => db,
+                    Err(e) => {
+                        eprintln!("[lme_enrich_only] WARN q={question_id} seed failed: {e}");
+                        return None;
+                    }
+                };
 
-        let scope_dir = scenario_db_dir(&baselines, "lme", &sample.question_id);
-        let question_id = sample.question_id.clone();
-        let question_type = sample.question_type.clone();
-        let memories_owned = memories.clone();
+                let mem_count = db.memory_count().await.unwrap_or(0);
+                let enriched = db.enriched_memory_count().await.unwrap_or(0);
+                let d = done.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
+                // `scenario_t0.elapsed()` is the wall this question was IN FLIGHT — but
+                // `.buffer_unordered(scenario_concurrency)` runs that many questions through
+                // ONE GPU worker at once, so each question's wall is ~conc× its true
+                // throughput cost. A reader who treats the raw in-flight wall as "cost to
+                // seed one question" overcounts by conc× (the recurring 2026-06-21 misread:
+                // 53min shown / conc3 = ~18min true). Emit wall AND wall/conc (the honest
+                // per-Q rate when GPU-bound) so the inflated number can't be misread alone.
+                let inflight_s = scenario_t0.elapsed().as_secs_f32();
+                eprintln!(
+                    "[lme_enrich_only] {}/{} q={} mem={} enriched={}/{} wall={:.0}s/conc{}≈{:.0}s/Q total={:.1}m",
+                    d,
+                    n_work,
+                    question_id,
+                    memories.len(),
+                    enriched,
+                    mem_count,
+                    inflight_s,
+                    scenario_concurrency,
+                    inflight_s / scenario_concurrency.max(1) as f32,
+                    t0.elapsed().as_secs_f32() / 60.0,
+                );
+                Some((question_id, mem_count, enriched))
+            }
+        })
+        .buffer_unordered(scenario_concurrency)
+        .filter_map(|x| async move { x })
+        .collect()
+        .await;
 
-        let scenario_t0 = std::time::Instant::now();
-        let db = open_or_seed_scenario_db(
-            &scope_dir,
-            shared_embedder.clone(),
-            move || {
-                memories_owned
-                    .iter()
-                    .map(|mem| RawDocument {
-                        content: mem.content.clone(),
-                        source_id: format!(
-                            "lme_{}_{}_t{}",
-                            question_id, mem.session_idx, mem.turn_idx
-                        ),
-                        source: "memory".to_string(),
-                        title: format!("session {} turn {}", mem.session_idx, mem.turn_idx),
-                        memory_type: Some(
-                            if question_type == "single-session-preference" {
-                                "preference"
-                            } else {
-                                "fact"
-                            }
-                            .to_string(),
-                        ),
-                        space: Some("conversation".to_string()),
-                        last_modified: chrono::Utc::now().timestamp(),
-                        ..Default::default()
-                    })
-                    .collect()
-            },
-            &enrichment,
-        )
-        .await
-        .expect("open_or_seed_scenario_db");
-
-        let mem_count = db.memory_count().await.unwrap_or(0);
-        let enriched = db.enriched_memory_count().await.unwrap_or(0);
-        processed += 1;
-        total_memories += mem_count;
-
-        eprintln!(
-            "[lme_enrich_only] {}/{} idx={} q={} mem={} enriched={}/{} elapsed={:.1}s total={:.1}m",
-            processed,
-            limit.unwrap_or(samples.len().saturating_sub(skip)),
-            idx,
-            sample.question_id,
-            memories.len(),
-            enriched,
-            mem_count,
-            scenario_t0.elapsed().as_secs_f32(),
-            t0.elapsed().as_secs_f32() / 60.0,
-        );
-        assert_eq!(
-            mem_count, enriched,
-            "{} should be fully enriched ({}/{})",
-            sample.question_id, enriched, mem_count
-        );
-    }
+    let processed = results.len();
+    let total_memories: usize = results.iter().map(|(_, m, _)| m).sum();
+    let not_enriched: Vec<String> = results
+        .iter()
+        .filter(|(_, m, e)| m != e)
+        .map(|(q, m, e)| format!("{q} ({e}/{m})"))
+        .collect();
 
     eprintln!(
-        "[lme_enrich_only] done: {} scenarios, {} memories in {:.1}m",
+        "[lme_enrich_only] done: {} scenarios, {} memories in {:.1}m (concurrency {})",
         processed,
         total_memories,
-        t0.elapsed().as_secs_f32() / 60.0
+        t0.elapsed().as_secs_f32() / 60.0,
+        scenario_concurrency,
+    );
+    assert!(
+        not_enriched.is_empty(),
+        "scenarios not fully enriched: {not_enriched:?}"
     );
 }
 
@@ -9010,6 +9282,334 @@ async fn generate_lme_fullstack_ceiling() {
     );
 }
 
+/// FULL-STACK accuracy on the DEEP per-question LME-S substrate (pool-decision +
+/// headline instrument).
+///
+/// Judge the pages A/B tuples (`generate_pages_ab_lme_s` output) via `claude -p` (no API
+/// key — Max OAuth). `aggregate_judgments` groups by the tuple `approach` field
+/// (`ce_off`/`ce_on`/`ce_on_pages` x category); collapse arms across categories in
+/// post-processing for the directional pages-help verdict (ce_on_pages vs ce_on).
+///
+/// ```bash
+/// EVAL_BASELINES_DIR=$HOME/.cache/origin-eval-pool90-mig \
+///   cargo test -p origin-core --test eval_harness --features eval-harness \
+///   judge_pages_ab_lme_s -- --ignored --nocapture
+/// ```
+#[tokio::test]
+#[ignore]
+async fn judge_pages_ab_lme_s() {
+    use origin_core::eval::token_efficiency::{
+        aggregate_judgments, judge_with_claude, load_judgment_tuples,
+    };
+    let baselines = origin_core::eval::shared::eval_baselines_dir_override()
+        .unwrap_or_else(|| eval_root().join("baselines"));
+    let tuples_path = baselines.join("pages_ab_lme_s_tuples.json");
+    if !tuples_path.exists() {
+        eprintln!(
+            "SKIP: run generate_pages_ab_lme_s first ({:?} missing)",
+            tuples_path
+        );
+        return;
+    }
+    let tuples = load_judgment_tuples(&tuples_path).expect("load pages-ab tuples");
+    let conc: usize = std::env::var("EVAL_JUDGE_CONCURRENCY")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(5);
+    eprintln!(
+        "Judging {} pages-A/B tuples via claude -p (conc={})...",
+        tuples.len(),
+        conc
+    );
+    let results = judge_with_claude(&tuples, conc)
+        .await
+        .expect("judge failed");
+    let report = aggregate_judgments(&results, "haiku");
+    eprintln!("\n=== Pages A/B (deep LME-S, claude -p judge) ===");
+    eprintln!(
+        "{:<36} | {:<9} | {:<8} | Total",
+        "approach (arm_category)", "accuracy", "correct"
+    );
+    for r in &report.results_by_approach {
+        eprintln!(
+            "{:<36} | {:<8.1}% | {:<8} | {}",
+            r.approach,
+            r.accuracy * 100.0,
+            r.correct,
+            r.total
+        );
+    }
+    eprintln!("\nTotal judged: {}", report.total_judged);
+}
+
+/// STEP (manual unblock): inject real dataset `event_date` into the PER-QUESTION
+/// LME-S fullpipeline DBs under `EVAL_BASELINES_DIR/fullpipeline/lme/<qid>`. The pool90
+/// seed (`enrich_fullpipeline_lme_only`) skipped temporal injection, so the migrate-read
+/// substrate-live guard refuses (0 event_date rows). This loops each per-Q DB and writes
+/// `event_date` from dataset session metadata (`event_date_map` -> `set_event_dates_by_source_id`):
+/// GPU-free, non-destructive (fills `event_date` only). Run against a COPY of pool90 so the
+/// original stays pristine.
+///
+/// ```bash
+/// EVAL_BASELINES_DIR=$HOME/.cache/origin-eval-pool90-mig LME_S_FIXTURE=/tmp/claude/lme_s_90.json \
+///   cargo test -p origin-core --test eval_harness --features eval-harness \
+///   seed_inject_event_dates_per_q_lme_s -- --ignored --nocapture
+/// ```
+#[tokio::test]
+#[ignore]
+async fn seed_inject_event_dates_per_q_lme_s() {
+    use origin_core::eval::longmemeval;
+    use origin_core::eval::shared::{eval_baselines_dir_override, scenario_db_dir};
+    let baselines = eval_baselines_dir_override()
+        .expect("EVAL_BASELINES_DIR must point at the per-Q baselines dir (the copy)");
+    let lme_path = std::path::PathBuf::from(
+        std::env::var("LME_S_FIXTURE").expect("LME_S_FIXTURE must point at the deep LME-S fixture"),
+    );
+    let samples = longmemeval::load_longmemeval(&lme_path).expect("load lme-s fixture");
+    let updates: Vec<(String, i64)> = longmemeval::event_date_map(&samples).into_iter().collect();
+    eprintln!(
+        "[inject_per_q] {} source_id->date mappings across {} questions; baselines={:?}",
+        updates.len(),
+        samples.len(),
+        baselines
+    );
+    let emitter = || std::sync::Arc::new(origin_core::events::NoopEmitter);
+    let mut dbs = 0usize;
+    let mut missing = 0usize;
+    for sample in &samples {
+        let dir = scenario_db_dir(&baselines, "lme", &sample.question_id);
+        if !dir.join("origin_memory.db").exists() {
+            missing += 1;
+            continue;
+        }
+        let db = origin_core::db::MemoryDB::new(&dir, emitter())
+            .await
+            .expect("open per-q db");
+        let n = db
+            .set_event_dates_by_source_id(&updates)
+            .await
+            .expect("inject event_dates");
+        eprintln!("[inject_per_q] {} -> {} rows", sample.question_id, n);
+        dbs += 1;
+    }
+    eprintln!(
+        "[inject_per_q] done: {} DBs updated, {} qids had no DB under baselines",
+        dbs, missing
+    );
+    assert!(
+        dbs > 0,
+        "no per-q DBs found under {:?}/fullpipeline/lme",
+        baselines
+    );
+}
+
+/// Pages answer-acc A/B over the DEEP per-question LME-S substrate, reusing the
+/// pre-seeded pool90 DBs in `EVAL_BASELINES_DIR` (NO re-seed; cache-hit reads the
+/// existing per-question seeds, so the substrate stays untouched). `ArmSpec::pages_ab()`
+/// = 3 arms isolating the page channel in the ANSWER context: ce_off (CE off, no pages)
+/// / ce_on (CE on, no pages) / ce_on_pages (CE on, pages). Answers on-device
+/// Qwen3.5-9B (temp 0.0); the judge is a separate `claude -p` step over the saved
+/// tuples. A `CeOff` arm is present so `needs_confounder_isolation` is true and the
+/// runner enforces `ORIGIN_GRAPH_MEMORY_STREAM=0`. The page fetch is driven by the
+/// per-arm `include_pages` toggle (independent of `ORIGIN_ENABLE_PAGE_CHANNEL`).
+///
+/// ```bash
+/// EVAL_BASELINES_DIR=$HOME/.cache/origin-eval-pool90 LME_S_FIXTURE=/tmp/claude/lme_s_90.json \
+/// ORIGIN_GRAPH_MEMORY_STREAM=0 EVAL_ENRICHMENT=local LME_LIMIT_QUESTIONS=20 \
+///   cargo test -p origin-core --test eval_harness --features eval-harness \
+///   generate_pages_ab_lme_s -- --ignored --nocapture
+/// ```
+#[tokio::test]
+#[ignore]
+async fn generate_pages_ab_lme_s() {
+    use origin_core::eval::answer_quality::{run_fullpipeline_lme, ArmSpec, DbSource};
+    use origin_core::llm_provider::{LlmProvider, OnDeviceProvider};
+    use std::sync::Arc;
+
+    let lme_path = match std::env::var("LME_S_FIXTURE") {
+        Ok(p) => std::path::PathBuf::from(p),
+        Err(_) => {
+            let data_dir = eval_root().join("data");
+            let cleaned = data_dir.join("longmemeval_s_cleaned.json");
+            if cleaned.exists() {
+                cleaned
+            } else {
+                data_dir.join("longmemeval_s.json")
+            }
+        }
+    };
+    if !lme_path.exists() {
+        eprintln!(
+            "SKIP: LME-S fixture not found at {:?}. Set LME_S_FIXTURE=<path> or point \
+             ORIGIN_EVAL_ROOT at the main checkout's app/eval.",
+            lme_path
+        );
+        return;
+    }
+
+    let enrich_model =
+        std::env::var("EVAL_ANSWER_MODEL").unwrap_or_else(|_| "claude-haiku-4-5-20251001".into());
+    let cost_cap: f64 = std::env::var("EVAL_COST_CAP")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(10.0);
+
+    let baselines = origin_core::eval::shared::eval_baselines_dir_override()
+        .unwrap_or_else(|| eval_root().join("baselines"));
+    std::fs::create_dir_all(&baselines).ok();
+    let output_path = baselines.join("pages_ab_lme_s_tuples.json");
+
+    eprintln!(
+        "[generate_pages_ab_lme_s] PAGES A/B (DEEP S fixture, pool90 reuse):\n  \
+         fixture: {:?}\n  \
+         arms: ce_off (no pages) / ce_on (no pages) / ce_on_pages (pages)\n  \
+         page_channel_flag={}  graph_stream_flag={}\n  \
+         RERANK_POOL_FLOOR={}\n  \
+         answer model: on-device qwen3.5-9b (temp 0.0)\n  enrich model: {}\n  output: {:?}",
+        lme_path,
+        origin_core::db::page_channel_enabled(),
+        origin_core::db::graph_memory_stream_enabled(),
+        std::env::var("RERANK_POOL_FLOOR").unwrap_or_else(|_| "10 (default)".into()),
+        enrich_model,
+        output_path,
+    );
+
+    let llm: Arc<dyn LlmProvider> =
+        Arc::new(OnDeviceProvider::new_with_model(Some("qwen3.5-9b")).expect(
+            "OnDeviceProvider::new_with_model failed -- is the Qwen3.5-9B model available?",
+        ));
+
+    let enrichment = origin_core::eval::shared::EnrichmentMode::from_env(&enrich_model, cost_cap)
+        .expect("EnrichmentMode::from_env failed");
+
+    let reranker = origin_core::reranker::init_cross_encoder_reranker(None).expect(
+        "init_cross_encoder_reranker failed (downloads ~1.1GB bge-reranker-base on first run)",
+    );
+
+    let tuples = run_fullpipeline_lme(
+        &lme_path,
+        enrichment,
+        llm,
+        Some(reranker),
+        &ArmSpec::pages_ab(),
+        DbSource::SeedPerQuestion,
+        &output_path,
+    )
+    .await
+    .expect("run_fullpipeline_lme (pages_ab deep-S) failed");
+
+    eprintln!(
+        "\n[generate_pages_ab_lme_s] Done: {} tuples saved to {:?}",
+        tuples.len(),
+        output_path
+    );
+}
+
+/// Same as `generate_lme_fullstack_ceiling` but uses the DEEP `longmemeval_s.json`
+/// fixture (each question carries its own sessions + ~47 real distractor sessions)
+/// instead of the shallow oracle fixture, so the CE fetch pool has genuine
+/// reselection headroom and `RERANK_POOL_FLOOR`
+/// actually move the result. Single-arm `ArmSpec::full_stack()` = production stack
+/// (page + temporal + CE; graph stream structurally suppressed under live CE), so
+/// the per-pool accuracy is the pool decision IN full-capacity context, and the
+/// number at the chosen pool is the LME-S headline.
+///
+/// Set `EVAL_SCENARIO_CONCURRENCY=8` to batch all on-device phases (#270). Fixture:
+/// `LME_S_FIXTURE` override → `longmemeval_s_cleaned.json` → `longmemeval_s.json`.
+/// ```bash
+/// ORIGIN_ENABLE_PAGE_CHANNEL=1 RERANK_POOL_FLOOR=50 EVAL_SCENARIO_CONCURRENCY=8 \
+/// ORIGIN_LLM_PARALLEL_SEQS=8 ORIGIN_LLM_CTX_SIZE=16384 ORIGIN_LLM_COALESCE_MS=10 \
+/// EVAL_BASELINES_DIR=$HOME/.cache/origin-eval-fullstack-s \
+///   cargo test -p origin-core --test eval_harness --features eval-harness \
+///   generate_lme_fullstack_s -- --ignored --nocapture
+/// ```
+#[tokio::test]
+#[ignore]
+async fn generate_lme_fullstack_s() {
+    use origin_core::eval::answer_quality::{run_fullpipeline_lme, ArmSpec, DbSource};
+    use origin_core::llm_provider::{LlmProvider, OnDeviceProvider};
+    use std::sync::Arc;
+
+    let lme_path = match std::env::var("LME_S_FIXTURE") {
+        Ok(p) => std::path::PathBuf::from(p),
+        Err(_) => {
+            let data_dir = eval_root().join("data");
+            let cleaned = data_dir.join("longmemeval_s_cleaned.json");
+            if cleaned.exists() {
+                cleaned
+            } else {
+                data_dir.join("longmemeval_s.json")
+            }
+        }
+    };
+    if !lme_path.exists() {
+        eprintln!(
+            "SKIP: LME-S fixture not found at {:?}. Set LME_S_FIXTURE=<path> or point \
+             ORIGIN_EVAL_ROOT at the main checkout's app/eval.",
+            lme_path
+        );
+        return;
+    }
+
+    let enrich_model =
+        std::env::var("EVAL_ANSWER_MODEL").unwrap_or_else(|_| "claude-haiku-4-5-20251001".into());
+    let cost_cap: f64 = std::env::var("EVAL_COST_CAP")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(10.0);
+
+    let baselines = origin_core::eval::shared::eval_baselines_dir_override()
+        .unwrap_or_else(|| eval_root().join("baselines"));
+    std::fs::create_dir_all(&baselines).ok();
+    let output_path = baselines.join("lme_fullstack_s_tuples.json");
+
+    eprintln!(
+        "[generate_lme_fullstack_s] FULL-STACK config (DEEP S fixture):\n  \
+         fixture: {:?}\n  \
+         page_channel={}  graph_stream_flag={}  temporal_soft_boost={}  temporal_filter={}\n  \
+         RERANK_POOL_FLOOR={}\n  \
+         answer model: on-device qwen3.5-9b (temp 0.0)\n  enrich model: {}\n  output: {:?}",
+        lme_path,
+        origin_core::db::page_channel_enabled(),
+        origin_core::db::graph_memory_stream_enabled(),
+        origin_core::db::temporal_soft_boost_enabled(),
+        origin_core::db::temporal_filter_enabled(),
+        std::env::var("RERANK_POOL_FLOOR").unwrap_or_else(|_| "10 (default)".into()),
+        enrich_model,
+        output_path,
+    );
+
+    let llm: Arc<dyn LlmProvider> = Arc::new(
+        OnDeviceProvider::new_with_model(Some("qwen3.5-9b"))
+            .expect("OnDeviceProvider::new_with_model failed — is the Qwen3.5-9B model available?"),
+    );
+
+    let enrichment = origin_core::eval::shared::EnrichmentMode::from_env(&enrich_model, cost_cap)
+        .expect("EnrichmentMode::from_env failed");
+
+    let reranker = origin_core::reranker::init_cross_encoder_reranker(None).expect(
+        "init_cross_encoder_reranker failed (downloads ~1.1GB bge-reranker-base on first run)",
+    );
+
+    let tuples = run_fullpipeline_lme(
+        &lme_path,
+        enrichment,
+        llm,
+        Some(reranker),
+        &ArmSpec::full_stack(),
+        DbSource::SeedPerQuestion,
+        &output_path,
+    )
+    .await
+    .expect("run_fullpipeline_lme (full_stack deep-S) failed");
+
+    eprintln!(
+        "\n[generate_lme_fullstack_s] Done: {} tuples saved to {:?}",
+        tuples.len(),
+        output_path
+    );
+}
+
 /// Judge the full-stack ceiling tuples → single-arm ACCURACY (per category +
 /// overall). No McNemar (single arm); uses `aggregate_judgments`, where each arm
 /// label is `fullstack_{category}` so per-approach rows ARE per-category accuracy.
@@ -9028,7 +9628,11 @@ async fn judge_lme_fullstack_ceiling() {
 
     let baselines = wenlan_core::eval::shared::eval_baselines_dir_override()
         .unwrap_or_else(|| eval_root().join("baselines"));
-    let tuples_path = baselines.join("lme_fullstack_ceiling_tuples.json");
+    // FULLSTACK_TUPLES_FILE lets this same judge grade the deep-S variant
+    // (`lme_fullstack_s_tuples.json`) without a second judge fn.
+    let tuples_file = std::env::var("FULLSTACK_TUPLES_FILE")
+        .unwrap_or_else(|_| "lme_fullstack_ceiling_tuples.json".to_string());
+    let tuples_path = baselines.join(&tuples_file);
     if !tuples_path.exists() {
         eprintln!(
             "SKIP: {:?} not found. Run generate_lme_fullstack_ceiling first.",
@@ -9515,5 +10119,104 @@ async fn enrichment_parity_contract() {
     eprintln!(
         "\n[parity_contract] GREEN: all membership sets are equal — \
          the eval-vs-canonical fork is resolved. Task 2.3 complete."
+    );
+}
+
+/// Settle the OPEN flag from `lesson_libsql_count_vector_index_bug`: does the
+/// libsql LIBRARY mis-plan `SELECT COUNT(*) FROM pages WHERE status='active'`
+/// against the `pages` vector-index shadow (idx_pages_embedding), the way the
+/// external sqlite3 CLI does? `MemoryDB::count_active_pages` (db.rs) — which the
+/// seed contract's page floor relies on — uses exactly that aggregate. If the
+/// library shares the CLI bug, the floor would falsely reject live-page DBs.
+///
+/// Asserts, for every cached pool DB: library COUNT(*) == library row-enumerate,
+/// AND the enumerate is > 0 (pool DBs are seeded with pages). Run:
+/// ```text
+/// EVAL_BASELINES_DIR=$HOME/.cache/origin-eval-pool31 RUSTC_WRAPPER= \
+///   cargo test -p origin-core --test eval_harness --features eval-harness \
+///   libsql_count_active_pages_parity -- --ignored --nocapture
+/// ```
+#[tokio::test]
+#[ignore = "libsql-library COUNT(*)-vs-enumerate parity on cached pool page DBs; set EVAL_BASELINES_DIR"]
+async fn libsql_count_active_pages_parity() {
+    let root = origin_core::eval::shared::eval_baselines_dir_override()
+        .unwrap_or_else(|| eval_root().join("baselines"))
+        .join("fullpipeline")
+        .join("lme");
+    if !root.is_dir() {
+        eprintln!("SKIP: no cached page DBs at {}", root.display());
+        return;
+    }
+    let mut checked = 0usize;
+    let mut mismatches: Vec<String> = Vec::new();
+    let mut zero_pages: Vec<String> = Vec::new();
+    let mut dirs: Vec<_> = std::fs::read_dir(&root)
+        .expect("read pool dir")
+        .filter_map(|e| e.ok().map(|e| e.path()))
+        .filter(|p| p.is_dir())
+        .collect();
+    dirs.sort();
+    for d in dirs {
+        let db_path = d.join("origin_memory.db");
+        if !db_path.exists() {
+            continue;
+        }
+        let qid = d.file_name().unwrap().to_string_lossy().to_string();
+        let sdb = libsql::Builder::new_local(db_path.to_str().unwrap())
+            .build()
+            .await
+            .expect("open page DB");
+        let conn = sdb.connect().expect("connect page DB");
+
+        // Aggregate path — the exact query count_active_pages runs.
+        let mut crow = conn
+            .query("SELECT COUNT(*) FROM pages WHERE status = 'active'", ())
+            .await
+            .expect("count query");
+        let count: i64 = crow
+            .next()
+            .await
+            .expect("count next")
+            .expect("count row")
+            .get::<i64>(0)
+            .expect("count get");
+
+        // Enumerate path — the bug-immune ground truth.
+        let mut erows = conn
+            .query("SELECT id FROM pages WHERE status = 'active'", ())
+            .await
+            .expect("enum query");
+        let mut enumerated = 0i64;
+        while let Ok(Some(_)) = erows.next().await {
+            enumerated += 1;
+        }
+
+        checked += 1;
+        if count != enumerated {
+            mismatches.push(format!("{qid}: count={count} enum={enumerated}"));
+        }
+        if enumerated == 0 {
+            zero_pages.push(qid);
+        }
+    }
+
+    eprintln!(
+        "[count_parity] checked={checked} mismatches={} zero_page_dbs={}",
+        mismatches.len(),
+        zero_pages.len()
+    );
+    assert!(checked > 0, "no DBs checked under {}", root.display());
+    assert!(
+        mismatches.is_empty(),
+        "libsql COUNT(*) diverged from enumerate on {} DB(s): {:?} — \
+         count_active_pages / seed-contract page floor would be WRONG on these",
+        mismatches.len(),
+        mismatches
+    );
+    assert!(
+        zero_pages.is_empty(),
+        "{} pool DB(s) have zero active pages (expected seeded): {:?}",
+        zero_pages.len(),
+        zero_pages
     );
 }

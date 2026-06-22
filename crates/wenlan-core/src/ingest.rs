@@ -112,7 +112,7 @@ pub async fn run_classification_enrichment(
             user_prompt: truncated,
             max_tokens: 128,
             temperature: 0.1,
-            label: None,
+            label: Some("classify".into()),
             timeout_secs: None,
         }),
     )
@@ -294,6 +294,7 @@ pub async fn run_canonical_enrichment(
         distillation,
         knowledge_path,
         cancel,
+        None, // precomputed_kg
     )
     .await
     {

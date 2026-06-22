@@ -78,6 +78,8 @@ pub async fn handle_status(
         files_total: 0,
         sources_connected: vec![],
         reranker: s.reranker_status.clone(),
+        reranker_light: s.reranker_light_status.clone(),
+        reranker_mode: s.reranker_mode.clone(),
     }))
 }
 
@@ -92,24 +94,52 @@ pub async fn handle_search(
     }
     let start = std::time::Instant::now();
 
-    let db = {
+    let (db, reranker_light) = {
         let s = state.read().await;
-        s.db.clone().ok_or(ServerError::DbNotInitialized)?
+        let db = s.db.clone().ok_or(ServerError::DbNotInitialized)?;
+        (db, s.reranker_light.clone())
     };
 
     let results = if req.source_filter.as_deref() == Some("memory") {
-        db.search_memory(
-            &req.query,
-            req.limit,
-            None,
-            req.space.as_deref(),
-            None,
-            None,
-            None,
-            None,
-        )
-        .await
-        .map_err(|e| ServerError::SearchFailed(e.to_string()))?
+        match reranker_light {
+            // Quick-path CE (WENLAN_RERANKER_MODE lite/full): fetch a widened pool via
+            // plain search_memory, then cross-encode down to req.limit at the handler
+            // layer. search_memory itself stays CE-free, so internal callers are unaffected.
+            Some(reranker) => {
+                // Light path uses the default pool (max(limit,10)). Unlike the deep path
+                // (db.rs), it does NOT read RERANK_POOL_MULTIPLIER/FLOOR — turbo is cheap
+                // and the light path isn't an eval-sweep surface. (review note)
+                let pool = wenlan_core::db::compute_rerank_fetch_pool(req.limit, None, None);
+                let pooled = db
+                    .search_memory(
+                        &req.query,
+                        pool,
+                        None,
+                        req.space.as_deref(),
+                        None,
+                        None,
+                        None,
+                        None,
+                    )
+                    .await
+                    .map_err(|e| ServerError::SearchFailed(e.to_string()))?;
+                wenlan_core::db::rerank_results_light(reranker, &req.query, pooled, req.limit).await
+            }
+            // mode=off (default): byte-identical to the pre-mode path.
+            None => db
+                .search_memory(
+                    &req.query,
+                    req.limit,
+                    None,
+                    req.space.as_deref(),
+                    None,
+                    None,
+                    None,
+                    None,
+                )
+                .await
+                .map_err(|e| ServerError::SearchFailed(e.to_string()))?,
+        }
     } else {
         db.search(
             &req.query,
@@ -218,13 +248,14 @@ pub async fn handle_chat_context(
     // ~15 sequential awaits (load_memories_by_type, search_*, log_accesses,
     // etc.) would block every writer to ServerState — e.g. store_memory's
     // deferred async work — for the full duration. See CLAUDE.md locking rules.
-    let (db_arc, access_tracker, page_min_overlap) = {
+    let (db_arc, access_tracker, page_min_overlap, reranker_light) = {
         let s = state.read().await;
         let db = s.db.clone().ok_or(ServerError::DbNotInitialized)?;
         (
             db,
             s.access_tracker.clone(),
             s.tuning.distillation.page_min_overlap,
+            s.reranker_light.clone(),
         )
     }; // guard dropped here
     let db = db_arc.as_ref();
@@ -312,23 +343,34 @@ pub async fn handle_chat_context(
         Vec::new()
     };
 
-    // Tier 3 (search). Plain search_memory outperforms the LLM reranker on
-    // LongMemEval (0.790 base vs 0.722 reranked), so Tier-3 always uses the
-    // base path regardless of classification.use_graph.
-    // The cross-encoder reranker lives on /api/memory/search, not here.
-    let search_results = db
-        .search_memory(
-            query,
-            req.max_chunks,
-            None,
-            space_filter,
-            None,
-            None,
-            None,
-            None,
-        )
-        .await
-        .unwrap_or_default();
+    // Tier 3 (search). Plain search_memory by default (it beat the old LLM reranker
+    // on LongMemEval, 0.790 base vs 0.722). Under WENLAN_RERANKER_MODE lite/full the
+    // context path adds a turbo cross-encoder pass at the HANDLER layer over a widened
+    // pool; search_memory itself stays CE-free so internal callers are unaffected.
+    let search_results = match &reranker_light {
+        Some(reranker) => {
+            let pool = wenlan_core::db::compute_rerank_fetch_pool(req.max_chunks, None, None);
+            let pooled = db
+                .search_memory(query, pool, None, space_filter, None, None, None, None)
+                .await
+                .unwrap_or_default();
+            wenlan_core::db::rerank_results_light(reranker.clone(), query, pooled, req.max_chunks)
+                .await
+        }
+        None => db
+            .search_memory(
+                query,
+                req.max_chunks,
+                None,
+                space_filter,
+                None,
+                None,
+                None,
+                None,
+            )
+            .await
+            .unwrap_or_default(),
+    };
 
     let threshold = req.relevance_threshold.unwrap_or(0.0) as f32;
     let filtered_search: Vec<_> = search_results

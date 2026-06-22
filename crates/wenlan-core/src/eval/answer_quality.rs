@@ -1213,9 +1213,8 @@ async fn build_structured_context(
     search_limit: usize,
     domain: Option<&str>,
     retrieval: CtxRetrieval,
+    include_pages: bool,
 ) -> Result<(String, usize), WenlanError> {
-    use crate::pages::filter_pages_by_source_overlap;
-
     let results = match retrieval {
         CtxRetrieval::Quick => {
             db.search_memory(question, search_limit, None, domain, None, None, None, None)
@@ -1231,42 +1230,46 @@ async fn build_structured_context(
     let search_source_ids: std::collections::HashSet<String> =
         results.iter().map(|r| r.source_id.clone()).collect();
 
-    // Structured: concepts + search results (matches production /api/chat-context).
-    // EVAL_CONCEPT_MIN_OVERLAP env var lets us sweep thresholds without code changes;
-    // defaults to the production tuning value (2).
-    let min_overlap: usize = std::env::var("EVAL_CONCEPT_MIN_OVERLAP")
-        .ok()
-        .and_then(|s| s.parse().ok())
-        .unwrap_or_else(|| crate::tuning::DistillationConfig::default().page_min_overlap);
-
     let mut parts: Vec<String> = Vec::new();
-    let raw_concepts = db.search_pages(question, 3, None).await.unwrap_or_default();
-    let concepts = filter_pages_by_source_overlap(&raw_concepts, &search_source_ids, min_overlap);
+    if include_pages {
+        use crate::pages::filter_pages_by_source_overlap;
+        // Structured: concepts + search results (matches production /api/chat-context).
+        // EVAL_CONCEPT_MIN_OVERLAP env var lets us sweep thresholds without code changes;
+        // defaults to the production tuning value (2).
+        let min_overlap: usize = std::env::var("EVAL_CONCEPT_MIN_OVERLAP")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or_else(|| crate::tuning::DistillationConfig::default().page_min_overlap);
 
-    if !raw_concepts.is_empty() {
-        for c in &raw_concepts {
-            let kept = concepts.iter().any(|k| k.id == c.id);
-            let overlap = c
-                .source_memory_ids
-                .iter()
-                .filter(|sid| search_source_ids.contains(sid.as_str()))
-                .count();
-            log::info!(
-                "[eval:concept] score={:.4} overlap={}/{} {} title={:?} q={:?}",
-                c.relevance_score,
-                overlap,
-                results.len(),
-                if kept { "KEPT" } else { "FILTERED" },
-                c.title.chars().take(40).collect::<String>(),
-                question.chars().take(50).collect::<String>(),
-            );
+        let raw_concepts = db.search_pages(question, 3, None).await.unwrap_or_default();
+        let concepts =
+            filter_pages_by_source_overlap(&raw_concepts, &search_source_ids, min_overlap);
+
+        if !raw_concepts.is_empty() {
+            for c in &raw_concepts {
+                let kept = concepts.iter().any(|k| k.id == c.id);
+                let overlap = c
+                    .source_memory_ids
+                    .iter()
+                    .filter(|sid| search_source_ids.contains(sid.as_str()))
+                    .count();
+                log::info!(
+                    "[eval:concept] score={:.4} overlap={}/{} {} title={:?} q={:?}",
+                    c.relevance_score,
+                    overlap,
+                    results.len(),
+                    if kept { "KEPT" } else { "FILTERED" },
+                    c.title.chars().take(40).collect::<String>(),
+                    question.chars().take(50).collect::<String>(),
+                );
+            }
         }
-    }
-    if !concepts.is_empty() {
-        parts.push("## Compiled Knowledge".to_string());
-        for c in &concepts {
-            let summary = c.summary.as_deref().unwrap_or("");
-            parts.push(format!("**{}**: {}\n{}", c.title, summary, c.content));
+        if !concepts.is_empty() {
+            parts.push("## Compiled Knowledge".to_string());
+            for c in &concepts {
+                let summary = c.summary.as_deref().unwrap_or("");
+                parts.push(format!("**{}**: {}\n{}", c.title, summary, c.content));
+            }
         }
     }
     if !results.is_empty() {
@@ -1938,9 +1941,15 @@ pub async fn run_fullpipeline_locomo_batch(
                 }
 
                 let category = category_name(qa.category);
-                let ctx_result =
-                    build_structured_context(&db, &qa.question, 10, None, CtxRetrieval::Quick)
-                        .await;
+                let ctx_result = build_structured_context(
+                    &db,
+                    &qa.question,
+                    10,
+                    None,
+                    CtxRetrieval::Quick,
+                    true,
+                )
+                .await;
                 let (ctx, ctx_tokens) = match ctx_result {
                     Ok(v) => v,
                     Err(e) => {
@@ -2083,6 +2092,7 @@ pub async fn run_fullpipeline_locomo_batch(
                                 10,
                                 None,
                                 CtxRetrieval::Quick,
+                                true,
                             )
                             .await;
                             let (ctx, ctx_tokens) = match ctx_result {
@@ -2432,9 +2442,15 @@ pub async fn run_fullpipeline_lme_batch(
             );
 
             let category = category_name(&sample.question_type);
-            let ctx_result =
-                build_structured_context(&db, &sample.question, 10, None, CtxRetrieval::Quick)
-                    .await;
+            let ctx_result = build_structured_context(
+                &db,
+                &sample.question,
+                10,
+                None,
+                CtxRetrieval::Quick,
+                true,
+            )
+            .await;
             let (ctx, ctx_tokens) = match ctx_result {
                 Ok(v) => v,
                 Err(e) => {
@@ -2583,6 +2599,7 @@ pub async fn run_fullpipeline_lme_batch(
                             10,
                             None,
                             CtxRetrieval::Quick,
+                            true,
                         )
                         .await;
                         let (ctx, ctx_tokens) = match ctx_result {
@@ -2783,38 +2800,78 @@ pub enum ArmKind {
     // PR-3 will add CeOnGraph -> CrossRerankGraph. Do NOT add it now.
 }
 
-impl ArmKind {
-    /// Stable label prefix, e.g. "ce_off" / "ce_on".
-    fn label_prefix(self) -> &'static str {
-        match self {
-            ArmKind::CeOff => "ce_off",
-            ArmKind::CeOn => "ce_on",
-            ArmKind::FullStack => "fullstack",
-        }
-    }
+/// One arm: a retrieval mode paired with whether to include pages in context.
+/// `label_prefix` is the stable identity used in baseline filenames — assigned
+/// explicitly by each constructor, independent of `include_pages`.
+#[derive(Debug, Clone)]
+pub struct Arm {
+    pub kind: ArmKind,
+    pub include_pages: bool,
+    /// Stable baseline label prefix, e.g. "ce_off", "ce_on", "ce_on_pages".
+    /// Assigned by the constructor, NOT derived from `include_pages`.
+    pub label_prefix: &'static str,
 }
 
 /// The set of arms to run, in order.
 #[derive(Debug, Clone)]
 pub struct ArmSpec {
-    arms: Vec<ArmKind>,
+    arms: Vec<Arm>,
 }
 
 impl ArmSpec {
-    /// The shipped 2-arm CE A/B: [CeOff, CeOn].
+    /// The shipped 2-arm CE A/B: [CeOff+pages, CeOn+pages].
     pub fn ce_two() -> Self {
         ArmSpec {
-            arms: vec![ArmKind::CeOff, ArmKind::CeOn],
+            arms: vec![
+                Arm {
+                    kind: ArmKind::CeOff,
+                    include_pages: true,
+                    label_prefix: "ce_off",
+                },
+                Arm {
+                    kind: ArmKind::CeOn,
+                    include_pages: true,
+                    label_prefix: "ce_on",
+                },
+            ],
         }
     }
 
-    /// Single-arm "best-possible ceiling": [FullStack]. All feature env flags are
+    /// Single-arm "best-possible ceiling": [FullStack+pages]. All feature env flags are
     /// the operator's responsibility (page channel / graph / temporal / deep
     /// `RERANK_POOL_FLOOR`); this spec just runs one CE-reranked arm and measures
     /// its accuracy, with NO confounder isolation (see `needs_confounder_isolation`).
     pub fn full_stack() -> Self {
         ArmSpec {
-            arms: vec![ArmKind::FullStack],
+            arms: vec![Arm {
+                kind: ArmKind::FullStack,
+                include_pages: true,
+                label_prefix: "fullstack",
+            }],
+        }
+    }
+
+    /// 3-arm pages A/B: [CeOff-no-pages, CeOn-no-pages, CeOn+pages].
+    /// Isolates the page-channel contribution on top of the CE baseline.
+    pub fn pages_ab() -> Self {
+        ArmSpec {
+            arms: vec![
+                Arm {
+                    kind: ArmKind::CeOff,
+                    include_pages: false,
+                    label_prefix: "ce_off",
+                },
+                Arm {
+                    kind: ArmKind::CeOn,
+                    include_pages: false,
+                    label_prefix: "ce_on",
+                },
+                Arm {
+                    kind: ArmKind::CeOn,
+                    include_pages: true,
+                    label_prefix: "ce_on_pages",
+                },
+            ],
         }
     }
 
@@ -2824,36 +2881,36 @@ impl ArmSpec {
     /// asymmetrically vs an ON arm. A single-arm ceiling (`full_stack`) has no
     /// OFF arm, so the isolation gate does not apply — features are meant to be ON.
     fn needs_confounder_isolation(&self) -> bool {
-        self.arms.contains(&ArmKind::CeOff)
+        self.arms.iter().any(|a| a.kind == ArmKind::CeOff)
     }
 
     /// One label per arm for a given category, in order.
-    /// e.g. `ce_two().labels("single-session-user")`
-    ///        == `["ce_off_single-session-user", "ce_on_single-session-user"]`
+    /// Label is `<arm.label_prefix>_<category>`; the prefix is assigned explicitly per
+    /// constructor (e.g. "ce_off_cat", "ce_on_pages_cat"), NOT derived from `include_pages`.
     pub fn labels(&self, category: &str) -> Vec<String> {
         self.arms
             .iter()
-            .map(|arm| format!("{}_{}", arm.label_prefix(), category))
+            .map(|arm| format!("{}_{}", arm.label_prefix, category))
             .collect()
     }
 
     /// Label prefixes (for the done-set), e.g. `["ce_off", "ce_on"]`.
     fn prefixes(&self) -> Vec<&'static str> {
-        self.arms.iter().map(|arm| arm.label_prefix()).collect()
+        self.arms.iter().map(|arm| arm.label_prefix).collect()
     }
 
-    /// Resolve arms to `(label, CtxRetrieval)` for a category, given the reranker.
+    /// Resolve arms to `(label, CtxRetrieval, include_pages)` for a category, given the reranker.
     /// `CeOn` requires `reranker.is_some()` — returns `Err` if an arm needs it and
     /// it is `None`.
     fn resolve(
         &self,
         category: &str,
         reranker: &Option<Arc<dyn crate::reranker::Reranker>>,
-    ) -> Result<Vec<(String, CtxRetrieval)>, WenlanError> {
+    ) -> Result<Vec<(String, CtxRetrieval, bool)>, WenlanError> {
         let mut result = Vec::with_capacity(self.arms.len());
         for arm in &self.arms {
-            let label = format!("{}_{}", arm.label_prefix(), category);
-            let retrieval = match arm {
+            let label = format!("{}_{}", arm.label_prefix, category);
+            let retrieval = match arm.kind {
                 ArmKind::CeOff => CtxRetrieval::CrossRerank(None),
                 ArmKind::CeOn | ArmKind::FullStack => {
                     let r = reranker.clone().ok_or_else(|| {
@@ -2865,7 +2922,7 @@ impl ArmSpec {
                     CtxRetrieval::CrossRerank(Some(r))
                 }
             };
-            result.push((label, retrieval));
+            result.push((label, retrieval, arm.include_pages));
         }
         Ok(result)
     }
@@ -3276,13 +3333,14 @@ pub async fn run_fullpipeline_lme(
 
             // Generate an answer for all arms from the same seeded DB.
             let arm_pairs = arms.resolve(category, &reranker)?;
-            for (arm_label, retrieval) in arm_pairs {
+            for (arm_label, retrieval, include_pages) in arm_pairs {
                 let (ctx, ctx_tokens) = match build_structured_context(
                     &db,
                     &sample.question,
                     10,
                     None,
                     retrieval,
+                    include_pages,
                 )
                 .await
                 {
@@ -3501,13 +3559,14 @@ pub async fn run_fullpipeline_lme(
                         let category = category_name(&sample.question_type);
                         let arm_pairs = arms.resolve(category, &reranker)?;
                         let mut tuples = Vec::with_capacity(arm_pairs.len());
-                        for (arm_label, retrieval) in arm_pairs {
+                        for (arm_label, retrieval, include_pages) in arm_pairs {
                             let (ctx, ctx_tokens) = match build_structured_context(
                                 &db,
                                 &sample.question,
                                 10,
                                 None,
                                 retrieval,
+                                include_pages,
                             )
                             .await
                             {
@@ -3790,5 +3849,140 @@ mod tests {
             !spec.needs_confounder_isolation(),
             "full_stack has no CeOff arm — confounder gate must be skipped so features can be ON"
         );
+    }
+
+    /// Task 1: `include_pages=true` surfaces `## Compiled Knowledge`; `false` omits it.
+    #[tokio::test]
+    async fn build_structured_context_include_pages_toggle() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db = MemoryDB::new_with_shared_embedder(
+            tmp.path(),
+            Arc::new(NoopEmitter),
+            eval_shared_embedder(),
+        )
+        .await
+        .unwrap();
+
+        // Seed two memories so the page overlap gate (default min_overlap=2) passes.
+        let source_id_1 = "test_mem_p1";
+        let source_id_2 = "test_mem_p2";
+        db.upsert_documents(vec![
+            RawDocument {
+                source: "memory".to_string(),
+                source_id: source_id_1.to_string(),
+                title: "planning session".to_string(),
+                content: "I discussed project planning with the team.".to_string(),
+                last_modified: chrono::Utc::now().timestamp(),
+                memory_type: Some("fact".to_string()),
+                space: Some("conversation".to_string()),
+                ..Default::default()
+            },
+            RawDocument {
+                source: "memory".to_string(),
+                source_id: source_id_2.to_string(),
+                title: "team coordination".to_string(),
+                content: "We coordinated the planning tasks across the team.".to_string(),
+                last_modified: chrono::Utc::now().timestamp(),
+                memory_type: Some("fact".to_string()),
+                space: Some("conversation".to_string()),
+                ..Default::default()
+            },
+        ])
+        .await
+        .unwrap();
+
+        // Insert a page referencing both memories (satisfies default min_overlap=2 gate).
+        let now = chrono::Utc::now().to_rfc3339();
+        db.insert_page(
+            "page_test_001",
+            "Project Planning Guide",
+            Some("Overview of planning practices."),
+            "This page covers project planning discussions and team coordination.",
+            None,
+            None,
+            &[source_id_1, source_id_2],
+            &now,
+        )
+        .await
+        .unwrap();
+
+        let question = "planning";
+
+        let (ctx_on, _) =
+            build_structured_context(&db, question, 10, None, CtxRetrieval::Quick, true)
+                .await
+                .unwrap();
+
+        let (ctx_off, _) =
+            build_structured_context(&db, question, 10, None, CtxRetrieval::Quick, false)
+                .await
+                .unwrap();
+
+        assert!(
+            ctx_on.contains("## Compiled Knowledge"),
+            "include_pages=true must include ## Compiled Knowledge; got: {ctx_on}"
+        );
+        assert!(
+            !ctx_off.contains("## Compiled Knowledge"),
+            "include_pages=false must NOT include ## Compiled Knowledge; got: {ctx_off}"
+        );
+        // Both should contain memory content when there are hits.
+        assert!(
+            ctx_on.contains("## Relevant Memories") || ctx_on.contains("planning"),
+            "include_pages=true context should contain memory content"
+        );
+        assert!(
+            ctx_off.contains("## Relevant Memories") || ctx_off.contains("planning"),
+            "include_pages=false context should contain memory content"
+        );
+    }
+
+    /// Task 2 (pure, no DB): pages_ab() has 3 arms with the right kinds and include_pages flags.
+    #[test]
+    fn arm_spec_pages_ab_arms() {
+        let spec = ArmSpec::pages_ab();
+        let arms: Vec<_> = spec.arms.iter().collect();
+        assert_eq!(arms.len(), 3, "pages_ab must have 3 arms");
+        assert_eq!(arms[0].kind, ArmKind::CeOff, "arm 0 kind");
+        assert_eq!(arms[1].kind, ArmKind::CeOn, "arm 1 kind");
+        assert_eq!(arms[2].kind, ArmKind::CeOn, "arm 2 kind");
+        assert!(!arms[0].include_pages, "arm 0 include_pages must be false");
+        assert!(!arms[1].include_pages, "arm 1 include_pages must be false");
+        assert!(arms[2].include_pages, "arm 2 include_pages must be true");
+    }
+
+    /// Task 2 (pure, no DB): pages_ab().labels() produces the correct suffixed label strings.
+    #[test]
+    fn arm_spec_pages_ab_labels() {
+        let spec = ArmSpec::pages_ab();
+        assert_eq!(
+            spec.labels("x"),
+            vec![
+                "ce_off_x".to_string(),
+                "ce_on_x".to_string(),
+                "ce_on_pages_x".to_string()
+            ],
+            "pages_ab labels"
+        );
+    }
+
+    /// Task 2 (pure, no DB): ce_two() and full_stack() all arms have include_pages=true
+    /// (byte-identical preservation guard).
+    #[test]
+    fn arm_spec_existing_arms_include_pages_true() {
+        for arm in &ArmSpec::ce_two().arms {
+            assert!(
+                arm.include_pages,
+                "ce_two arm {:?} must have include_pages=true",
+                arm.kind
+            );
+        }
+        for arm in &ArmSpec::full_stack().arms {
+            assert!(
+                arm.include_pages,
+                "full_stack arm {:?} must have include_pages=true",
+                arm.kind
+            );
+        }
     }
 }

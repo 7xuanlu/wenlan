@@ -19,7 +19,7 @@ pub use crate::synthesis::distill::{
 // Re-export KG phase functions from `kg::*` to preserve the public API path
 // `wenlan_core::refinery::{extract_single_memory_entities, reweave_entity_links}`.
 // External callers: post_ingest.rs, eval/shared.rs, wenlan-server::memory_routes.rs.
-pub use crate::kg::entity_extraction::extract_single_memory_entities;
+pub use crate::kg::entity_extraction::{commit_kg, extract_kg, extract_single_memory_entities};
 pub use crate::kg::reweave::reweave_entity_links;
 
 // Internal re-imports for refinery code that still calls into the moved

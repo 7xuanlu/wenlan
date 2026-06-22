@@ -975,7 +975,7 @@ pub async fn handle_search_memory(
         if req.rerank {
             if reranker.is_none() {
                 tracing::warn!(
-                    "[search] rerank=true requested but no reranker wired (set WENLAN_RERANKER_ENABLED=1); falling back to plain hybrid search"
+                    "[search] rerank=true requested but no deep reranker wired (set WENLAN_RERANKER_MODE=full, or legacy WENLAN_RERANKER_ENABLED=1); falling back to plain hybrid search"
                 );
             }
             db.search_memory_cross_rerank(

@@ -45,7 +45,7 @@ Used in: ephemeral runner seed paths and the fullpipeline harness. The `run_loco
 ```rust
 // Use the helper, not a hand-rolled format!:
 memory_source_id(question_id, session_idx, turn_idx)
-// defined in longmemeval.rs
+// defined at longmemeval.rs:165-167
 ```
 
 The helper exists precisely so the format is defined once. Do not inline an equivalent `format!` call elsewhere.
@@ -155,6 +155,178 @@ Seeding a cached scenario DB is ONE orchestrator, not a scatter of STEP tests: r
 - **Consumer:** every per-query collector calls `assert_feature_substrate_live(conn, feature)` at entry — a graph/temporal/page A/B over an empty substrate **errors ("EVAL REFUSED")** rather than emitting a null that reads as "doesn't help". A starved-substrate lie is structurally impossible.
 
 Adding a channel with an A/B: add its step to the orchestrator, its floor to `SeedExpectations`, its key to `assert_feature_substrate_live`, and a `seed_contract.rs` unit test. See root `AGENTS.md` "Eval seed + eval read: ONE route, ONE contract".
+
+---
+
+## Eval architecture + workflow (diagram)
+
+```
+SUBSTRATE  (what you retrieve from)                          pool/CE decision valid?
+  deep-S faithful   per-Q DB, SeedPerQuestion + _s fixture    mem~285, isolated   ✅ the only valid one
+  oracle            per-Q DB, SeedPerQuestion + oracle fixture mem~12, gold-only   ✗ pool-blind
+  consolidated      ONE shared DB (all questions merged)       11397 mem, leakage  ⛔ BANNED (code-gated)
+
+PHASES  —  P1+P2 = expensive SEED (cache once per substrate-version);  P3+P4 = cheap READ (per experiment)
+
+  ┌──────────── SEED  (cache once, contract-gated) ─────────────┐   ┌────── READ  (per experiment) ──────┐
+  │ P1 store + embed            (FastEmbed BGE-Base-Q)           │   │ P3 answer   (on-device qwen3.5-9b) │
+  │ P2 enrich: classify→entity→distill(pages)   (qwen3-4b)       │   │ P4 judge    (claude CLI OAuth)     │
+  │ gate: P1+P2 content-hash + SeedExpectations                  │   │ subset N (category-stratified)     │
+  │       (mem≥2×pool, entities>0, pages>0)                      │   │                                    │
+  └─────────────────────────────────────────────────────────────┘   └────────────────────────────────────┘
+       cache → scenario_seeded/lme_s_deep_<codehash>/fullpipeline/lme/<qid>/
+       (lazy-load the 9B answer model AFTER seeding — it sits idle in VRAM during P2 and slows the 4B enricher)
+
+  ⚠ TWO "PHASE" NUMBERINGS — DISTINCT SYSTEMS, DO NOT CONFLATE:
+    • OUTER pipeline (this diagram): P1 store+embed · P2 enrich · P3 answer · P4 judge.
+        P1+P2 = SEED (cache once); P3+P4 = READ (per experiment). The seed runs ONLY P1+P2.
+    • INNER enrich stages (enrich_db_for_eval_local, shared.rs): outer P2 expands into THREE
+        sub-stages the CODE + SEED LOGS also label "Phase 1/2/3":
+          Phase 1 = classify        — within-Q parallel @ EVAL_ENRICHMENT_CONCURRENCY → fills width ~8
+          Phase 2 = post_ingest/mem  — per-memory link+extract+title; the DOMINANT cost, width ~1.5
+          Phase 3 = distill_pages    — clustering (global barrier) + per-cluster synth (DISTILL_CLUSTER_CONCURRENCY)
+    ⇒ A seed log line "[enrich_local] Phase 2" = INNER post_ingest ⊂ OUTER P2 (enrich), NOT outer P3 (answer).
+      EVAL_SCENARIO_CONCURRENCY (cross-Q fan-out) is the ONLY parallelism feeding inner Phase 2's batch
+      (post_ingest is a serial within-Q loop), so inner-Phase-2 width ≤ conc; classify adds within-Q
+      parallelism on top → fills the batch. See "post_ingest serial: what's actually order-dependent" below.
+
+DECISION METRICS
+  pool depth + CE on/off + model  →  RETRIEVAL: NDCG@10 + recall@5 + P50 latency   ← READ minus P3/P4
+                                      deterministic · no LLM · no judge · minutes · resolvable at N=30-60
+  end-task confirmation           →  ANSWER-ACC (judged)   ← full READ · N=150 · pool effect ~2-3pp < MDE ⇒ confirm-only
+
+WORKFLOW
+  1. seed deep-S ONCE   (conc=16 ≈860s/Q, contract + shape gated)                  → canonical cache
+  2. rerank_pool_retrieval_probe_emit × {CE-off,  CE-on × pool{10,20,50,adaptive} × model{bge-base,turbo}}
+       → PerQueryRow jsonl → analyze_paired.py → PICK pool depth + model + CE-on/off  (retrieval metrics)
+  3. (optional, citable)  confirm the winner via answer-accuracy @ N=150
+```
+
+## CE rerank pool / model eval methodology (boule-verified 2026-06-19)
+
+Cross-model adversarial review (claude/main-loop + gpt-5.5 + gemini-3.1-pro, unanimous approve-with-changes). Binding rules for any CE fetch-pool-depth or reranker-model decision:
+
+1. **Decide pool depth on RETRIEVAL metrics, not answer accuracy.** Pool-depth answer-accuracy effects are ~2-3pp — below even the full N=479 paired-binary MDE (~5pp), so an answer-accuracy A/B can return a NULL that gets misread as "depth doesn't matter" (the dead-substrate trap). Score the CE-reranked top-10 against LME `answer_session_ids`: **NDCG@10 + recall@k + coverage_recall** (continuous, bigger deltas +0.05..0.18, deterministic, no judge → resolvable at N=30-60). Answer accuracy (judged) is CONFIRMATORY; latency P50/P99 is a co-equal decision axis (bge-base ~1.2s vs jina-turbo +20ms).
+
+2. **Substrate shape gate: `mem ≥ 2×max_pool` per question** (≥100, ideally the full ~285-memory deep-S haystack). A pool sweep only fully collapses at `mem ≤ min_pool`, but exercising pool=50 + adaptive headroom against real distractors needs `mem ≫ max_pool`. Shallow gold/oracle DBs (mem<50) are NOT pool-testable. This is a hard `SeedExpectations` assert, not a guideline.
+
+3. **Faithful per-question isolation only.** The consolidated/merged cross-conversation substrate (one shared 11397-memory haystack) is BANNED for CE pool / on-off decisions — a question retrieves another's evidence, inflating deep-pool gains. Code teeth: `run_fullpipeline_lme` refuses `DbSource::Consolidated` for confounder-isolation arms unless `ALLOW_CONSOLIDATED_CE=1`. See root `AGENTS.md` + memory `feedback_no_consolidated_ce_substrate`.
+   - **`DbSource::SeedPerQuestion` depth depends on the FIXTURE:** + `longmemeval_oracle.json` (the runner default) = gold turns only (mem~12, pool-BLIND — "rarely changes membership"); + `longmemeval_s.json` (`LME_S_FIXTURE`) = the deep ~285-mem isolated haystack (the correct substrate). Same enum value, opposite validity.
+   - **PROVENANCE WARNING:** the historical CE figures (`+0.178 NDCG@10`, `+0.233@pool=50` in root `AGENTS.md`) were measured on **oracle (pool-blind)** or **consolidated (banned)** substrates — NOT faithful deep-S. Do NOT cite them for a deep-S pool/CE decision; regenerate retrieval NDCG on `SeedPerQuestion + _s`.
+
+### emitter correctness (boule adversarial review 2026-06-19 — 2 critical fixes shipped)
+The retrieval-NDCG emitter (`run_longmemeval_rerank_pool_probe`, `score_retrieval`) and its runner must obey:
+4. **NDCG IDCG over ALL gold, not the retrieved set.** Grading only retrieved ids inflates IDCG as each gold is surfaced → in the multi-gold case a real recall gain registers as an NDCG *drop* (anti-correlated with the objective). `score_retrieval` builds grades over the full `has_answer` set; regression test `score_retrieval_rewards_surfacing_buried_gold`. This DIVERGES from the legacy retrieved-set baselines (which measured a pool-blind quantity) — intentional.
+5. **CE-off baseline MUST control the graph stream.** `search_memory_cross_rerank_cued` sets `allow_graph_stream = reranker.is_none()`, so a `reranker=None` CE-off arm runs WITH the +0.0545-NDCG graph stream while CE-on runs without it — a confound bigger than the CE signal. The runner forces `ORIGIN_GRAPH_MEMORY_STREAM=0` on every arm. (Production-realistic CE-on/stream-off vs hybrid/stream-on is a SEPARATE experiment.)
+6. **Stratify, don't restrict.** Pool depth can only help on BURIED-evidence questions (gold NOT in the base/CE-off top-10); easy questions (gold already @1) are at ceiling and dilute the aggregate. Measure the buried-evidence FRACTION first and pre-declare strata; do NOT filter to buried-only (selecting on the outcome overstates the production gain).
+7. **Emit `recall@pool_size` as a diagnostic** (not a decision blocker). Pool depth acts entirely on stage (a) "did gold enter the CE INPUT pool"; final top-10 alone can't attribute a null to recall-saturation vs CE-won't-promote. A null final-top-10 gain is still actionable: pick the cheaper/shallower pool. [TODO — not yet emitted]
+8. **Stats:** define the `adaptive` policy explicitly; report P50 + **p95/p99** latency; apply an MDE / multiple-comparison treatment across the pool×model arms. [TODO]
+   - Binary `has_answer` relevance = confirmed correct for this selector.
+
+### deep-S N=31 pool/model sweep — RESULTS + substrate caveats (2026-06-19)
+
+First faithful deep-S retrieval-NDCG sweep: 9 arms × N=31 via `rerank_pool_retrieval_probe_emit` (one binary, `ORIGIN_GRAPH_MEMORY_STREAM=0` forced on every arm). `ce_off` = 0.614 ndcg@10. Verdicts split by what the substrate can support:
+
+- **CE on/off = FIRM.** Every CE-on arm +0.107..+0.164 ndcg@10 (t=2.1..3.4); bge at all pools + turbo@pool10 survive Bonferroni (α/8). Robust even on the easy-skewed sample below — a harder/complete substrate can only help CE more. **Safe to record + act on now.**
+- **pool depth: 10 = peak/floor (DIRECTIONAL).** bge p10/p20/p50 = 0.764/0.778/0.770 (p50−p20 Δ−0.008, deeper *hurts*); turbo monotone DOWN with depth (0.747/0.725/0.721). recall@5 rises with depth, ndcg@10 does not. pool=50 dominated (4.4s P50).
+- **adaptive @ rel_gap=0.15 = DOMINATED (DIRECTIONAL).** Expands eff-pool to ~17, gets LOWER ndcg at HIGHER latency than fixed pool=10 — the deeper-helps premise fails on this substrate, and rel_gap→0 just collapses adaptive back to fixed pool=10. No reason to ship the machinery here.
+- **model bge vs turbo = NOT RESOLVABLE at N=31.** bge directionally higher at all 4 pool settings (+0.018..+0.053) but t<1.3 and 16-19/31 queries TIE → decide on latency, not quality. turbo p10 = 280ms vs bge p10 = 551ms / p20 = 1253ms.
+
+**Pareto frontier (4 non-dominated arms):** ce_off(200ms, .614) → turbo_p10(280ms, .747, +0.132) → bge_p10(551ms, .764) → bge_p20(1253ms, .778). turbo_p10 is the KNEE (~80% of max CE gain for +80ms). Recommended default = **CE ON · jina-turbo · pool=10**; bge-base = quality-ceiling opt-in; KILL pool=50 + adaptive.
+
+**SUBSTRATE VALIDITY — two defects (why only CE-on is ship-firm):**
+1. **Not representative.** The 31 DBs (smoke 24 + batchtest 8, opportunistic — NOT stratified) over-weight single-session-user (36% vs full LME-S 14%) and starve multi-session + temporal-reasoning (13% each vs 27% each) — the two hard categories where deep pools help most. → aggregate ndcg inflated; pool-depth verdict under-powered exactly where it matters.
+2. **Enrichment near-complete (CORRECTED 2026-06-19 — earlier "pages=0" was a COUNT bug).** All 31 DBs are LIVE on classify (100%), `memory_entities` (329-431), `event_date` (261-299 ≈ 100%), AND **pages** (239 active total, mean 7.7/container, ALL 31 non-zero, real topical titles e.g. "ANZAC Identity Origins", "gender pay gap"). The prior "pages=0" was a measurement bug: **`COUNT(*) FROM pages` mis-plans against the libsql vector-index shadow and returns 0** even when rows exist — enumerate instead (`SELECT id FROM pages WHERE status='active' | wc -l`). **PREVENTION:** before trusting any "channel starved" finding, run `scripts/probe-scenario-liveness.sh <db-dir>` (enumerate-based, all channels) — never hand-roll `COUNT(*)`. A "starved" verdict must come from row enumeration, and `immutable=1` (the sandbox CANTOPEN workaround) ignores the `-wal`, so checkpoint or drop it when recent writes matter. Only **episodes=0** is a genuine gap (no episode-backfill step). The page channel did NOT contribute to the N=31 sweep ONLY because `ORIGIN_ENABLE_PAGE_CHANNEL` was unset — the pages EXIST, so page-channel-ON is testable on the existing pool31 with NO reseed. ⚠ OPEN: `count_active_pages` (db.rs:16572, used by the seed contract's page floor) runs the SAME `SELECT COUNT(*) FROM pages WHERE status='active'` that returned 0 in the sqlite3 CLI. The CLI mis-plans on libsql vector-index shadows; whether **libsql's own** `COUNT(*)` is also affected is UNVERIFIED — if it is, the `complete()` page floor falsely rejects live-page DBs. Needs a Rust-level check (count via libsql vs row enumeration).
+
+**CHANNEL UTILIZATION — the sweep ran CE over a PLAIN hybrid base, NOT the full stack.** Traced `search_memory_cross_rerank_cued`: the probe calls it with `temporal_cue=None` and every enrichment flag at its default-OFF. Only vector + FTS (RRF) + CE fired. Dormant channels split two ways:
+- *Legitimately off (no gap):* graph→memory stream is code-skipped under any live CE (`allow_graph_stream = reranker.is_none()`) — its dormancy MATCHES production CE-on, and graph×CE measured non-significant (don't stack). Temporal soft boost = measured CLOSED-NULL on LME (cue fires ~3%, event-anchored TR doesn't trigger the deictic gate). Global prelude = opt-in.
+- *Page channel — flag-off, NOT absent (corrected):* `ORIGIN_ENABLE_PAGE_CHANNEL` was default-OFF in the sweep, so pages never entered the CE candidate pool — but the pages EXIST (mean 7.7/container). So page-channel-ON is testable on the EXISTING pool31 NOW (no reseed). SCORING CAVEAT: the probe scores top-10 vs gold MEMORY ids, so a page surfaced into the top-10 counts as a MISS unless page→source expansion (HippoRAG-style, PR #203 `coverage_recall`) is applied — wire that before reading a page-on NDCG, else the page arm looks falsely negative. Episodes genuinely absent (minor channel).
+
+**GATE — confirm pool/model/adaptive at N=90 (corrected scope 2026-06-19).** Pages are ALREADY live in pool31 (no reseed needed for the page channel), so:
+- **Immediate (no reseed):** re-run the N=31 sweep with `ORIGIN_ENABLE_PAGE_CHANNEL=1` on the existing pool31 to get the **page-channel-ON family** — but FIRST wire page→source expansion into the probe's scorer (else pages count as misses). This tests "does pool depth shift when page candidates join the CE pool" without any seeding.
+- **The remaining real reason to reseed N=90 = REPRESENTATIVENESS only** (the category skew: SSU 36% vs full 14%, MS/TR starved), NOT pages. Stratify to full LME-S proportions (KU 14 · MS 24 · SSA 10 · SSP 5 · SSU 13 · TR 24 = 90). Episodes (genuinely absent) can be added in the same reseed if the episode channel is ever wired into retrieval.
+- The N=90 reseed MUST use the batched enrichment path (n_seq_max=8); the seed-only `enrich_fullpipeline_lme_only` path measured at n_seq_max=1 / 0.4s/call (serial) — see throughput note. CE-on ships now; turbo↔bge flip + pool-depth + adaptive-kill wait for the representative N=90. Per-query latency N-independent (turbo p10 stays 280ms).
+
+## choosing N: statistical power
+
+Paired binary-accuracy MDE (p≈0.6, inter-arm corr≈0.7, α.05, power.80): **N=30 ≈ ±19pp, N=60 ≈ ±14pp, N=150 ≈ ±9pp, N=479 ≈ ±5pp**. (rho/discordance are assumed, not measured — treat as order-of-magnitude.) Therefore: N=30 is blind to few-pp effects; N≈150 is the directional floor for answer-accuracy; N=479 (full LME-S) is the citable gold standard used by prior shipped flags. Quick-tier subsets MUST be **category-stratified** (LME-S categories are uneven: multi-session 133 / temporal 133 / knowledge-update 78 / SSU 70 / SSA 56 / SSP 30) and the ship rule pre-registered before the run. NDCG-based pool decisions (rule 1) are resolvable at far lower N than answer-accuracy.
+
+## on-device seed throughput (cost planning)
+
+Batch is **M=8-capped** (per-slot KV = ctx/n_seq_max; raising M truncates prompts — probe `a4db3a65`). M=8 is a fixed ceiling, but realized fill has headroom: full-pipeline seed runs ~5/8 (classify+extract+distill+answer interleave with CPU gaps; distill is ~3% of wall, not the bottleneck). **Scenario-concurrency >8 raises realized throughput toward M=8** (MEASURED: conc=8 → time-weighted 5.33/8; conc=16 → **7.83/8, 96% of GPU-time at full M=8** over 396 calls = ~1.47×) — it does not raise the ceiling. Config that hit 7.83/8: `EVAL_SCENARIO_CONCURRENCY=16 ORIGIN_LLM_PARALLEL_SEQS=8 ORIGIN_LLM_CTX_SIZE=16384 ORIGIN_LLM_COALESCE_MS=10`. Deep-S seed ≈ 1262s/Q at conc=8 → **≈860s/Q at conc=16** → N=150 ≈ 36h, N=479 ≈ 4.8 days. Surface this cost as a planning input; do NOT let a cost wall rationalize the consolidated-substrate ban. **conc is RAM-BOUND (~1.6GB/Q working set), so the saturation point is per-box: conc=16 was measured on a free-RAM box; on a 16GB box conc=16 SWAPS and runs SLOWER than serial, and the safe cap is conc≈3 (runbook `ram_warn` computes `1.6·conc+4` GB and warns).** Width-8 fill on a RAM-capped box comes from WAY B's within-Q batching (`ORIGIN_SEED_BATCHED_POSTINGEST`), NOT from raising conc.
+
+**Reading the seed log — the per-Q number is concurrency-inflated.** The `[lme_enrich_only] … wall=Xs/conc N≈Ys/Q total=Zm` line: `wall` is the IN-FLIGHT wall for that one question, but `.buffer_unordered(N)` runs N questions through ONE GPU worker at once, so `wall` is ≈N× the true throughput cost. Read `≈Ys/Q` (= `wall/conc`, the honest per-Q rate when GPU-bound) or `total ÷ done`, NEVER raw `wall`, for throughput/ETA. (Pre-2026-06-21 the field was the bare `scenario=Xs` wall and was repeatedly misread as per-Q cost — e.g. a `scenario=3192s` line at conc3 is ~1064s/Q ≈ 18min, not 53min. The fix: emit `wall/conc≈Ys/Q` inline so the inflated number can't stand alone. A GPU at 99% util with flat per-call decode ms/tok IS optimal — a rising per-Q `wall` there is the cache thinning to fully-fresh questions, not a regression.)
+
+## on-device perf levers (merged status + default state)
+
+The "is decode / prefill / distill addressed?" question has ONE answer table — check HERE before
+claiming a lever is missing or "ruled out" (a 2026-06-20 audit found the throughput notes
+self-contradicting and a diagram that wrongly called decode unaddressed):
+
+| lever | flag / knob | merged | engine default | seed runbook | targets |
+|---|---|---|---|---|---|
+| WAY B extract batching | `ORIGIN_SEED_BATCHED_POSTINGEST` | ✅ `b4460d59` | OFF | **ON** | extract slot occupancy — width 1.69→8.00 measured (the realized lever) |
+| continuous-batch slot-backfill | `ORIGIN_LLM_SLOT_BACKFILL` | ✅ #276 `6724b757` | OFF | **ON** | decode ragged-finish slots — `drain_cap` m→4m keeps M=8 full as seqs finish early |
+| prefill prefix-KV cache | `ORIGIN_LLM_PREFIX_KV_CACHE` | ✅ #278 `0503f451` | OFF | **ON** | shared-prefix prefill (≥32 tok) — caches the KG-template prefix only, NOT per-memory content |
+| distill cluster concurrency | `DISTILL_CLUSTER_CONCURRENCY` | ✅ `distill.rs:717` | 1 (serial), max 4 | **2** | distill across independent clusters — ~3% of wall, small prize |
+| flash-attn | — | n/a | — | — | REFUTED (no gain on this path) — the ONLY genuinely ruled-out idea |
+
+**Why default-OFF in the engine but ON in the seed:** slot-backfill rewrites the shared on-device
+inference path that CI can't validate on Metal (opt-in until staged-rollout confidence); #278 +
+distill-conc were gated behind WAY B Phase-2 measurement. They are SAFE to enable on the seed:
+per-sequence semantics are unchanged (the substrate is already non-deterministic under M=8 batch
+composition — these flags don't add a new class), and `SeedExpectations` /
+`assert_feature_substrate_live` hard-fail if any flag ever zeroed out extraction. The runbook turns
+all four ON via overridable `${VAR:-default}` and prints a `[perf]` banner at start, so the active
+levers are visible per run — never silent.
+
+## post_ingest serial: what's actually order-dependent
+
+Inner Phase 2 (`run_post_ingest_enrichment` per memory, `post_ingest.rs`) is a serial within-Q
+loop. Grounded breakdown of WHY — only PART of it needs ordering:
+
+| step (post_ingest.rs)              | LLM? (decode) | order-dependent? | why |
+|---|---|---|---|
+| 1. auto_link_entity                | maybe (extract on miss) | YES | links to entities CREATED by prior memories |
+| 2. entity extract (`extract_single_memory_entities`) | YES (heavy) | NO | depends only on THIS memory's content |
+| 3. check_page_contradiction        | maybe | YES | reads pages written by prior memories/distill |
+| 5. enrich_title                    | YES (heavy) | NO | depends only on THIS memory's content |
+
+So the decode-bound LLM work (extract + title) is order-INDEPENDENT; only the link/contradiction
+DB commits need insertion order. The serial loop is a fidelity-preserving SIMPLICITY choice
+(matches the production single-memory store path, "Rules of ML" #32), NOT a hard requirement on
+the LLM work.
+
+PROPOSED LEVER — ENDORSED-WITH-CHANGES by boule `wfapcs1sm` (degraded panel: codex gpt-5.5
+approve-with-changes + gemini revised-to-approve; claude dropped by contamination gate; medium
+conf). Decouple compute from commit — pre-compute extract+title in a `buffer_unordered` batch
+(fills M=8), then apply link/contradiction serially in insertion order, preserving the substrate.
+DIRECTION confirmed (batch-fill is the primary lever). CORRECTION 2026-06-20: only flash-attn was
+refuted. prefix-KV (#278 `0503f451`) and continuous-batch slot-backfill (#276 `6724b757`) are now
+MERGED and are COMPLEMENTARY engine levers — both default-OFF flags (see "on-device perf levers"
+table below); distill cluster-concurrency was always BUILT (`distill.rs:717`). Do NOT re-assert
+these are "ruled out" — for the SEED's extract workload prefill often DOMINATES the call (live
+`[batch_timing]`: prefill 51-60% of total in 2 of 3 sampled M=8 batches), so #278 (prefill-side)
+is plausibly the higher-value parked lever, NOT decode.
+MANDATORY GATES before any code (council dissent):
+  1. The "~3-5×" was OVERSTATED + conceded. Magnitude is Amdahl-bound by the serial commit tail —
+     first MEASURE the independent-extract/title vs dependent-commit split of post_ingest wall time.
+  2. Width 1.5 proves starvation, NOT scalable headroom — confirm with a tokens/sec-vs-batch curve
+     (GPU may be memory-bandwidth-bound before M=8).
+  3. PURITY UNVERIFIED: prove `extract_single_memory_entities` + `enrich_title` are pure functions of
+     one memory. The duplicate-entity hazard (two same-Q memories about a NEW entity → parallel
+     extract+create dupes that the serial `auto_link_entity` path would have merged) is the dominant
+     fidelity risk and must be golden-tested against the serial substrate.
+  4. Buffered precompute of ~285 memories may worsen the conc=3 RAM cap — bound the buffer.
+  5. Deterministic sampling + golden output tests, else seed reproducibility breaks.
+
+distill (inner Phase 3) is NOT serial-by-design: clustering (`find_distillation_clusters`) is a
+genuine global barrier, but per-cluster synthesis already honors `DISTILL_CLUSTER_CONCURRENCY`
+(`distill.rs:717`, default 1, max 4). It's ~3% of wall — a non-target regardless.
+
+## content-addressed seed (no silent-stale)
+
+A cached seed is valid only for an exact P1+P2 **code-content hash** — the hand-list {fixture-rev, embedder, enricher-model} is insufficient (omits chunker, embedding quantization, distill-code version, session-construction, schema). Hash the seeding+enrichment code + config + fixture bytes; `SeedExpectations` is the backstop. A P2 enrichment change flips the hash → reseed once, contract-gated; a P3 flag/pool/model change leaves it untouched → reuse. Pay the seed once per substrate-version, never per experiment.
 
 ---
 
