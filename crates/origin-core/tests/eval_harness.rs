@@ -9285,6 +9285,124 @@ async fn generate_lme_fullstack_ceiling() {
 /// FULL-STACK accuracy on the DEEP per-question LME-S substrate (pool-decision +
 /// headline instrument).
 ///
+/// Judge the pages A/B tuples (`generate_pages_ab_lme_s` output) via `claude -p` (no API
+/// key — Max OAuth). `aggregate_judgments` groups by the tuple `approach` field
+/// (`ce_off`/`ce_on`/`ce_on_pages` x category); collapse arms across categories in
+/// post-processing for the directional pages-help verdict (ce_on_pages vs ce_on).
+///
+/// ```bash
+/// EVAL_BASELINES_DIR=$HOME/.cache/origin-eval-pool90-mig \
+///   cargo test -p origin-core --test eval_harness --features eval-harness \
+///   judge_pages_ab_lme_s -- --ignored --nocapture
+/// ```
+#[tokio::test]
+#[ignore]
+async fn judge_pages_ab_lme_s() {
+    use origin_core::eval::token_efficiency::{
+        aggregate_judgments, judge_with_claude, load_judgment_tuples,
+    };
+    let baselines = origin_core::eval::shared::eval_baselines_dir_override()
+        .unwrap_or_else(|| eval_root().join("baselines"));
+    let tuples_path = baselines.join("pages_ab_lme_s_tuples.json");
+    if !tuples_path.exists() {
+        eprintln!(
+            "SKIP: run generate_pages_ab_lme_s first ({:?} missing)",
+            tuples_path
+        );
+        return;
+    }
+    let tuples = load_judgment_tuples(&tuples_path).expect("load pages-ab tuples");
+    let conc: usize = std::env::var("EVAL_JUDGE_CONCURRENCY")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(5);
+    eprintln!(
+        "Judging {} pages-A/B tuples via claude -p (conc={})...",
+        tuples.len(),
+        conc
+    );
+    let results = judge_with_claude(&tuples, conc)
+        .await
+        .expect("judge failed");
+    let report = aggregate_judgments(&results, "haiku");
+    eprintln!("\n=== Pages A/B (deep LME-S, claude -p judge) ===");
+    eprintln!(
+        "{:<36} | {:<9} | {:<8} | Total",
+        "approach (arm_category)", "accuracy", "correct"
+    );
+    for r in &report.results_by_approach {
+        eprintln!(
+            "{:<36} | {:<8.1}% | {:<8} | {}",
+            r.approach,
+            r.accuracy * 100.0,
+            r.correct,
+            r.total
+        );
+    }
+    eprintln!("\nTotal judged: {}", report.total_judged);
+}
+
+/// STEP (manual unblock): inject real dataset `event_date` into the PER-QUESTION
+/// LME-S fullpipeline DBs under `EVAL_BASELINES_DIR/fullpipeline/lme/<qid>`. The pool90
+/// seed (`enrich_fullpipeline_lme_only`) skipped temporal injection, so the migrate-read
+/// substrate-live guard refuses (0 event_date rows). This loops each per-Q DB and writes
+/// `event_date` from dataset session metadata (`event_date_map` -> `set_event_dates_by_source_id`):
+/// GPU-free, non-destructive (fills `event_date` only). Run against a COPY of pool90 so the
+/// original stays pristine.
+///
+/// ```bash
+/// EVAL_BASELINES_DIR=$HOME/.cache/origin-eval-pool90-mig LME_S_FIXTURE=/tmp/claude/lme_s_90.json \
+///   cargo test -p origin-core --test eval_harness --features eval-harness \
+///   seed_inject_event_dates_per_q_lme_s -- --ignored --nocapture
+/// ```
+#[tokio::test]
+#[ignore]
+async fn seed_inject_event_dates_per_q_lme_s() {
+    use origin_core::eval::longmemeval;
+    use origin_core::eval::shared::{eval_baselines_dir_override, scenario_db_dir};
+    let baselines = eval_baselines_dir_override()
+        .expect("EVAL_BASELINES_DIR must point at the per-Q baselines dir (the copy)");
+    let lme_path = std::path::PathBuf::from(
+        std::env::var("LME_S_FIXTURE").expect("LME_S_FIXTURE must point at the deep LME-S fixture"),
+    );
+    let samples = longmemeval::load_longmemeval(&lme_path).expect("load lme-s fixture");
+    let updates: Vec<(String, i64)> = longmemeval::event_date_map(&samples).into_iter().collect();
+    eprintln!(
+        "[inject_per_q] {} source_id->date mappings across {} questions; baselines={:?}",
+        updates.len(),
+        samples.len(),
+        baselines
+    );
+    let emitter = || std::sync::Arc::new(origin_core::events::NoopEmitter);
+    let mut dbs = 0usize;
+    let mut missing = 0usize;
+    for sample in &samples {
+        let dir = scenario_db_dir(&baselines, "lme", &sample.question_id);
+        if !dir.join("origin_memory.db").exists() {
+            missing += 1;
+            continue;
+        }
+        let db = origin_core::db::MemoryDB::new(&dir, emitter())
+            .await
+            .expect("open per-q db");
+        let n = db
+            .set_event_dates_by_source_id(&updates)
+            .await
+            .expect("inject event_dates");
+        eprintln!("[inject_per_q] {} -> {} rows", sample.question_id, n);
+        dbs += 1;
+    }
+    eprintln!(
+        "[inject_per_q] done: {} DBs updated, {} qids had no DB under baselines",
+        dbs, missing
+    );
+    assert!(
+        dbs > 0,
+        "no per-q DBs found under {:?}/fullpipeline/lme",
+        baselines
+    );
+}
+
 /// Pages answer-acc A/B over the DEEP per-question LME-S substrate, reusing the
 /// pre-seeded pool90 DBs in `EVAL_BASELINES_DIR` (NO re-seed; cache-hit reads the
 /// existing per-question seeds, so the substrate stays untouched). `ArmSpec::pages_ab()`
