@@ -296,6 +296,94 @@ pub fn init_cross_encoder_reranker(
     Ok(Arc::new(inner) as Arc<dyn Reranker>)
 }
 
+/// Load a SPECIFIC cross-encoder model, bypassing `ORIGIN_RERANKER_MODEL`. Used by
+/// the per-path `ORIGIN_RERANKER_MODE` wiring where each path pins its own model
+/// (turbo on the light paths, bge-base on the deep path). First construction
+/// downloads the weights; callers run it off the async runtime via `spawn_blocking`.
+pub fn init_cross_encoder_reranker_model(
+    model: fastembed::RerankerModel,
+    cache_dir: Option<std::path::PathBuf>,
+) -> Result<Arc<dyn Reranker>, OriginError> {
+    let inner = CrossEncoderReranker::try_new(model, cache_dir)
+        .map_err(|e| OriginError::Llm(format!("init_cross_encoder_reranker_model: {e}")))?;
+    Ok(Arc::new(inner) as Arc<dyn Reranker>)
+}
+
+/// Load the reranker for a resolved [`RerankerPick`]: a pinned model for
+/// `Turbo`/`BgeBase`, or the legacy env+BYO selection for `Configured`. Lets the
+/// daemon wire per-path rerankers without naming `fastembed` types directly.
+pub fn init_cross_encoder_reranker_pick(
+    pick: RerankerPick,
+    cache_dir: Option<std::path::PathBuf>,
+) -> Result<Arc<dyn Reranker>, OriginError> {
+    match pick.fastembed_model() {
+        Some(model) => init_cross_encoder_reranker_model(model, cache_dir),
+        None => init_cross_encoder_reranker(cache_dir),
+    }
+}
+
+/// Which cross-encoder model a retrieval path should use under a given
+/// [`RerankerMode`]. `Configured` defers to [`reranker_model_from_env`] (legacy
+/// `ORIGIN_RERANKER_ENABLED=1` back-compat: honors `ORIGIN_RERANKER_MODEL` + BYO).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RerankerPick {
+    /// JINA turbo (small, ~146MB) — the light/quick model.
+    Turbo,
+    /// bge-reranker-base (~1.1GB) — the heavy deep model.
+    BgeBase,
+    /// The legacy `ORIGIN_RERANKER_MODEL` selection (back-compat path).
+    Configured,
+}
+
+impl RerankerPick {
+    /// Map a non-`Configured` pick to its concrete fastembed model. `Configured`
+    /// returns `None` — that path uses [`init_cross_encoder_reranker`] (env + BYO).
+    pub fn fastembed_model(self) -> Option<fastembed::RerankerModel> {
+        match self {
+            RerankerPick::Turbo => Some(fastembed::RerankerModel::JINARerankerV1TurboEn),
+            RerankerPick::BgeBase => Some(fastembed::RerankerModel::BGERerankerBase),
+            RerankerPick::Configured => None,
+        }
+    }
+}
+
+/// Per-path reranker selection resolved from `(mode, legacy ORIGIN_RERANKER_ENABLED)`.
+/// `light` = quick (`/api/search`) + context (`/api/chat-context`);
+/// `deep`  = `/api/memory/search` with `rerank=true`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct RerankerPlan {
+    pub light: Option<RerankerPick>,
+    pub deep: Option<RerankerPick>,
+}
+
+/// Resolve which model each path uses. An explicit `ORIGIN_RERANKER_MODE` wins;
+/// when mode is `Off`, the legacy `ORIGIN_RERANKER_ENABLED=1` switch maps to
+/// deep-only `Configured` — exactly the pre-mode behavior.
+pub fn resolve_reranker_plan(mode: RerankerMode, legacy_enabled: bool) -> RerankerPlan {
+    match mode {
+        RerankerMode::Off => {
+            if legacy_enabled {
+                RerankerPlan {
+                    light: None,
+                    deep: Some(RerankerPick::Configured),
+                }
+            } else {
+                RerankerPlan::default()
+            }
+        }
+        // lite: turbo everywhere CE applies — quick + context + explicit deep rerank.
+        RerankerMode::Lite => RerankerPlan {
+            light: Some(RerankerPick::Turbo),
+            deep: Some(RerankerPick::Turbo),
+        },
+        // full: turbo on the light paths, heavy bge-base on the explicit deep path.
+        RerankerMode::Full => RerankerPlan {
+            light: Some(RerankerPick::Turbo),
+            deep: Some(RerankerPick::BgeBase),
+        },
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -423,6 +511,57 @@ mod tests {
                 assert_eq!(reranker_mode_from_env(), RerankerMode::Off, "value {v:?}");
             });
         }
+    }
+
+    #[test]
+    fn resolve_plan_off_without_legacy_is_empty() {
+        assert_eq!(
+            resolve_reranker_plan(RerankerMode::Off, false),
+            RerankerPlan::default()
+        );
+    }
+
+    #[test]
+    fn resolve_plan_off_with_legacy_is_deep_configured() {
+        // back-compat: ENABLED=1 + mode unset == deep-only configured model (today).
+        let p = resolve_reranker_plan(RerankerMode::Off, true);
+        assert_eq!(p.light, None);
+        assert_eq!(p.deep, Some(RerankerPick::Configured));
+    }
+
+    #[test]
+    fn resolve_plan_lite_is_turbo_light_and_deep() {
+        let p = resolve_reranker_plan(RerankerMode::Lite, false);
+        assert_eq!(p.light, Some(RerankerPick::Turbo));
+        assert_eq!(p.deep, Some(RerankerPick::Turbo));
+    }
+
+    #[test]
+    fn resolve_plan_full_is_turbo_light_bgebase_deep() {
+        let p = resolve_reranker_plan(RerankerMode::Full, false);
+        assert_eq!(p.light, Some(RerankerPick::Turbo));
+        assert_eq!(p.deep, Some(RerankerPick::BgeBase));
+    }
+
+    #[test]
+    fn resolve_plan_explicit_mode_wins_over_legacy() {
+        // mode set AND legacy enabled -> mode wins (not back-compat deep-only).
+        let p = resolve_reranker_plan(RerankerMode::Full, true);
+        assert_eq!(p.light, Some(RerankerPick::Turbo));
+        assert_eq!(p.deep, Some(RerankerPick::BgeBase));
+    }
+
+    #[test]
+    fn reranker_pick_fastembed_mapping() {
+        assert!(matches!(
+            RerankerPick::Turbo.fastembed_model(),
+            Some(fastembed::RerankerModel::JINARerankerV1TurboEn)
+        ));
+        assert!(matches!(
+            RerankerPick::BgeBase.fastembed_model(),
+            Some(fastembed::RerankerModel::BGERerankerBase)
+        ));
+        assert!(RerankerPick::Configured.fastembed_model().is_none());
     }
 
     /// Smoke test for the real cross-encoder model. `#[ignore]` because the

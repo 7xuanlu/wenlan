@@ -78,9 +78,8 @@ pub async fn handle_status(
         files_total: 0,
         sources_connected: vec![],
         reranker: s.reranker_status.clone(),
-        // Populated from ServerState in T3 (mode resolution); defaults keep T2 green.
-        reranker_light: origin_types::responses::RerankerStatus::Disabled,
-        reranker_mode: String::new(),
+        reranker_light: s.reranker_light_status.clone(),
+        reranker_mode: s.reranker_mode.clone(),
     }))
 }
 
