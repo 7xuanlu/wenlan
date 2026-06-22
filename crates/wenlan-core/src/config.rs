@@ -117,7 +117,7 @@ impl Config {
         self.knowledge_path.clone().unwrap_or_else(|| {
             dirs::home_dir()
                 .unwrap_or_else(|| PathBuf::from("."))
-                .join(".origin/pages")
+                .join(".wenlan/pages")
         })
     }
 
@@ -141,7 +141,7 @@ fn config_path() -> PathBuf {
         .unwrap_or_else(|| {
             dirs::data_local_dir()
                 .unwrap_or_else(|| PathBuf::from("."))
-                .join("origin")
+                .join("wenlan")
         });
     root.join("config.json")
 }
@@ -377,7 +377,7 @@ mod tests {
     #[test]
     fn test_config_knowledge_path_default() {
         let config: Config = serde_json::from_str("{}").unwrap();
-        let default_path = dirs::home_dir().unwrap().join(".origin/pages");
+        let default_path = dirs::home_dir().unwrap().join(".wenlan/pages");
         assert_eq!(config.knowledge_path_or_default(), default_path);
     }
 

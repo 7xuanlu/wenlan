@@ -104,6 +104,17 @@ async fn run_daemon() -> anyhow::Result<()> {
         .and_then(|v| v.parse().ok())
         .unwrap_or(7878);
 
+    // One-time origin -> wenlan data migration (default locations only). Runs here,
+    // before the DB opens, so the daemon is the sole writer. No-op once migrated.
+    if wenlan_core::env_compat::var_compat("WENLAN_DATA_DIR").is_none() {
+        if let Some(dl) = dirs::data_local_dir() {
+            wenlan_core::migrate_rename::migrate_and_log(&dl.join("origin"), &dl.join("wenlan"));
+        }
+    }
+    if let Some(home) = dirs::home_dir() {
+        wenlan_core::migrate_rename::migrate_and_log(&home.join(".origin"), &home.join(".wenlan"));
+    }
+
     // Data directory. `WENLAN_DATA_DIR` (set by `--data-dir` flag) overrides the
     // default, enabling isolated dev/demo runs (e.g. `--data-dir /tmp/origin-demo`).
     let wenlan_root = wenlan_core::env_compat::var_compat("WENLAN_DATA_DIR")
@@ -111,7 +122,7 @@ async fn run_daemon() -> anyhow::Result<()> {
         .unwrap_or_else(|| {
             dirs::data_local_dir()
                 .unwrap_or_else(|| std::path::PathBuf::from("."))
-                .join("origin")
+                .join("wenlan")
         });
     let data_dir = wenlan_root.join("memorydb");
     tracing::info!("Origin data root: {}", wenlan_root.display());
@@ -150,14 +161,14 @@ async fn run_daemon() -> anyhow::Result<()> {
     //   the new dir is empty. Never deletes the old dir; user can clean up
     //   manually after verifying.
     if let Some(home) = dirs::home_dir() {
-        let origin_dot = home.join(".origin");
+        let wenlan_dot = home.join(".wenlan");
         for sub in ["pages", "sessions", "sessions/_status"] {
-            if let Err(e) = std::fs::create_dir_all(origin_dot.join(sub)) {
+            if let Err(e) = std::fs::create_dir_all(wenlan_dot.join(sub)) {
                 tracing::warn!("[origin-dir] create {} failed: {}", sub, e);
             }
         }
 
-        let db_link = origin_dot.join("db");
+        let db_link = wenlan_dot.join("db");
         let link_target_already_correct = std::fs::read_link(&db_link)
             .map(|t| t == data_dir)
             .unwrap_or(false);
@@ -181,7 +192,7 @@ async fn run_daemon() -> anyhow::Result<()> {
         }
 
         let legacy_pages = home.join("Origin/knowledge");
-        let new_pages = origin_dot.join("pages");
+        let new_pages = wenlan_dot.join("pages");
         let legacy_has_md = std::fs::read_dir(&legacy_pages)
             .map(|entries| {
                 entries
@@ -234,7 +245,7 @@ async fn run_daemon() -> anyhow::Result<()> {
         // missing or any step fails. Skills (/handoff, /distill, /forget)
         // commit per logical batch; daemon only does the initial bring-up
         // here.
-        let dot_git = origin_dot.join(".git");
+        let dot_git = wenlan_dot.join(".git");
         let git_available = std::process::Command::new("git")
             .arg("--version")
             .stdout(std::process::Stdio::null())
@@ -243,7 +254,7 @@ async fn run_daemon() -> anyhow::Result<()> {
             .map(|s| s.success())
             .unwrap_or(false);
         if !dot_git.exists() && git_available {
-            let gitignore = origin_dot.join(".gitignore");
+            let gitignore = wenlan_dot.join(".gitignore");
             if !gitignore.exists() {
                 // No trailing slash on `db` / `bin` — those entries are
                 // symlinks in the consolidated layout, and pattern `db/`
@@ -256,7 +267,7 @@ async fn run_daemon() -> anyhow::Result<()> {
             let run = |args: &[&str]| {
                 std::process::Command::new("git")
                     .args(args)
-                    .current_dir(&origin_dot)
+                    .current_dir(&wenlan_dot)
                     .stdout(std::process::Stdio::null())
                     .stderr(std::process::Stdio::null())
                     .status()
@@ -286,7 +297,7 @@ async fn run_daemon() -> anyhow::Result<()> {
                     "-m",
                     "backfill: initial pages from DB",
                 ]);
-                tracing::info!("[origin-dir] git init complete at {}", origin_dot.display());
+                tracing::info!("[origin-dir] git init complete at {}", wenlan_dot.display());
             }
         }
     }
@@ -303,7 +314,7 @@ async fn run_daemon() -> anyhow::Result<()> {
     // re-trigger a full DB scan + write attempt on every single startup.
     {
         let knowledge_path = wenlan_core::config::load_config().knowledge_path_or_default();
-        let marker_path = knowledge_path.join(".origin").join(".backfill-attempted");
+        let marker_path = knowledge_path.join(".wenlan").join(".backfill-attempted");
 
         let already_attempted = marker_path.exists();
         let has_md_files = !already_attempted

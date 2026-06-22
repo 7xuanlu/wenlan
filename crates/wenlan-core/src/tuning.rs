@@ -734,7 +734,7 @@ impl TuningConfig {
     pub fn config_path() -> PathBuf {
         dirs::data_local_dir()
             .unwrap_or_else(|| PathBuf::from("."))
-            .join("origin")
+            .join("wenlan")
             .join("intelligence.toml")
     }
 }

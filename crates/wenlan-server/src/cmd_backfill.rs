@@ -35,7 +35,7 @@ pub async fn run(dry_run: bool) -> anyhow::Result<()> {
         .unwrap_or_else(|| {
             dirs::data_local_dir()
                 .unwrap_or_else(|| std::path::PathBuf::from("."))
-                .join("origin")
+                .join("wenlan")
         });
     let data_dir = origin_root.join("memorydb");
 
@@ -114,11 +114,11 @@ pub async fn run(dry_run: bool) -> anyhow::Result<()> {
 /// Service label registered with the host service manager. Must match
 /// `wenlan_cli::commands::service::SERVICE_LABEL` — `service_unit_path_matches_cli`
 /// pins both copies to the on-disk paths `service-manager` 0.11 actually writes.
-const SERVICE_LABEL: &str = "com.origin.server";
+const SERVICE_LABEL: &str = "com.wenlan.server";
 
 /// Resolves the platform-specific path to the Origin service unit file on
 /// Unix-likes. Mirrors the on-disk path that `service-manager` 0.11 writes:
-/// - macOS (launchd): `~/Library/LaunchAgents/com.origin.server.plist`
+/// - macOS (launchd): `~/Library/LaunchAgents/com.wenlan.server.plist`
 ///   (uses `ServiceLabel::to_qualified_name()` — qualifier kept).
 /// - Linux (systemd-user): `~/.config/systemd/user/origin-server.service`
 ///   (uses `ServiceLabel::to_script_name()` — qualifier DROPPED, org+app
@@ -245,7 +245,7 @@ mod tests {
 
         #[cfg(target_os = "macos")]
         assert!(
-            p.ends_with("Library/LaunchAgents/com.origin.server.plist"),
+            p.ends_with("Library/LaunchAgents/com.wenlan.server.plist"),
             "unexpected macOS path: {p}"
         );
         #[cfg(target_os = "linux")]

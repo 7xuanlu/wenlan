@@ -52,7 +52,7 @@ impl Activity {
 fn activities_path() -> PathBuf {
     dirs::data_local_dir()
         .unwrap_or_else(|| PathBuf::from("."))
-        .join("origin")
+        .join("wenlan")
         .join("activities.json")
 }
 

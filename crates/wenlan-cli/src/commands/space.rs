@@ -11,7 +11,7 @@ fn set_default_in_toml(name: &str) -> anyhow::Result<()> {
     use std::io::Write;
     let home =
         std::env::var("HOME").map_err(|_| anyhow::anyhow!("HOME environment variable not set"))?;
-    let path = std::path::PathBuf::from(home).join(".origin/spaces.toml");
+    let path = std::path::PathBuf::from(home).join(".wenlan/spaces.toml");
     std::fs::create_dir_all(path.parent().unwrap())?;
 
     let existing = std::fs::read_to_string(&path).unwrap_or_default();
@@ -41,7 +41,7 @@ fn set_default_in_toml(name: &str) -> anyhow::Result<()> {
 
 fn read_default_from_toml() -> Option<String> {
     let home = std::env::var("HOME").ok()?;
-    let path = std::path::PathBuf::from(home).join(".origin/spaces.toml");
+    let path = std::path::PathBuf::from(home).join(".wenlan/spaces.toml");
     let body = std::fs::read_to_string(&path).ok()?;
     for line in body.lines() {
         let trimmed = line.trim();

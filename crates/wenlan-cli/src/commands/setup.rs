@@ -408,7 +408,7 @@ fn print_space_resolution(cwd: &std::path::Path) {
         env.as_deref().unwrap_or("(unset)")
     );
 
-    let cfg = dirs::home_dir().map(|h| h.join(".origin/spaces.toml"));
+    let cfg = dirs::home_dir().map(|h| h.join(".wenlan/spaces.toml"));
     let cfg_exists = cfg.as_ref().map(|p| p.exists()).unwrap_or(false);
     let _ = writeln!(
         out,

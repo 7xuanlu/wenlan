@@ -36,6 +36,7 @@ pub mod kg_quality;
 pub mod llm_classifier;
 pub mod llm_provider;
 pub mod memory_schema;
+pub mod migrate_rename;
 pub mod migrations;
 pub mod narrative;
 pub mod on_device_models;

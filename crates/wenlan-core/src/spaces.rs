@@ -21,7 +21,7 @@ fn legacy_db_path() -> PathBuf {
         .unwrap_or_else(|| {
             dirs::data_local_dir()
                 .unwrap_or_else(|| PathBuf::from("."))
-                .join("origin")
+                .join("wenlan")
         });
     root.join("spaces.db")
 }

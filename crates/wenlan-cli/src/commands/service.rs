@@ -17,7 +17,7 @@ use std::path::{Path, PathBuf};
 
 use crate::client::origin_host_from_env;
 
-pub const SERVICE_LABEL: &str = "com.origin.server";
+pub const SERVICE_LABEL: &str = "com.wenlan.server";
 
 /// Windows Task Scheduler does not love dots in task names. The macOS launchd
 /// and systemd-user paths still use the canonical reverse-DNS `SERVICE_LABEL`.
@@ -64,10 +64,10 @@ fn manager() -> Result<Box<dyn ServiceManager>> {
 ///
 /// Mirrors the on-disk path that `service-manager` 0.11 actually writes:
 /// - macOS (launchd): `~/Library/LaunchAgents/<qualified_name>.plist`
-///   (`to_qualified_name()` keeps the qualifier, e.g. `com.origin.server.plist`).
+///   (`to_qualified_name()` keeps the qualifier, e.g. `com.wenlan.server.plist`).
 /// - Linux (systemd-user): `<config_dir>/systemd/user/<script_name>.service`
 ///   (`ServiceLabel::to_script_name()` joins org+app with `-` and DROPS the
-///   qualifier, so `com.origin.server` becomes `origin-server.service`).
+///   qualifier, so `com.wenlan.server` becomes `origin-server.service`).
 /// - Windows: no on-disk unit file. The scheduled task lives in the Task
 ///   Scheduler database — see `is_installed()` for the schtasks-based probe.
 #[cfg(not(target_os = "windows"))]
@@ -118,13 +118,13 @@ fn origin_data_root() -> PathBuf {
         .unwrap_or_else(|| {
             dirs::data_local_dir()
                 .unwrap_or_else(|| PathBuf::from("."))
-                .join("origin")
+                .join("wenlan")
         })
 }
 
 /// Builds a launchd plist that mirrors `service-manager`'s default output for
 /// `OnFailure` restart + user-level + autostart, with the extra keys the old
-/// embedded `com.origin.server.plist` template carried: `StandardOutPath`,
+/// embedded `com.wenlan.server.plist` template carried: `StandardOutPath`,
 /// `StandardErrorPath`, and `EnvironmentVariables.RUST_LOG`.
 ///
 /// `LaunchdInstallConfig` in service-manager 0.11 only exposes `keep_alive`;

@@ -47,8 +47,8 @@ impl KnowledgeWriter {
     }
 
     pub fn write_page(&self, page: &Page) -> Result<String, WenlanError> {
-        let origin_dir = self.path.join(".origin");
-        std::fs::create_dir_all(&origin_dir)?;
+        let wenlan_dir = self.path.join(".wenlan");
+        std::fs::create_dir_all(&wenlan_dir)?;
 
         let mut state = self.load_state();
         let filename = self.unique_filename(&page.id, &page.title, &state);
@@ -160,7 +160,7 @@ impl KnowledgeWriter {
     }
 
     fn load_state(&self) -> KnowledgeState {
-        let state_path = self.path.join(".origin/state.json");
+        let state_path = self.path.join(".wenlan/state.json");
         let data = match std::fs::read_to_string(&state_path) {
             Ok(d) => d,
             Err(_) => return KnowledgeState::default(),
@@ -197,7 +197,7 @@ impl KnowledgeWriter {
     }
 
     fn save_state(&self, state: &KnowledgeState) -> Result<(), WenlanError> {
-        let state_path = self.path.join(".origin/state.json");
+        let state_path = self.path.join(".wenlan/state.json");
         let data = serde_json::to_string_pretty(state)?;
         std::fs::write(&state_path, data)?;
         Ok(())
@@ -415,8 +415,8 @@ mod tests {
                 "concept_bbb": { "file": "b.md", "version": 2, "last_written": "2026-04-02T00:00:00+00:00" }
             }
         }"#;
-        std::fs::create_dir_all(dir.path().join(".origin")).unwrap();
-        std::fs::write(dir.path().join(".origin/state.json"), v1_json).unwrap();
+        std::fs::create_dir_all(dir.path().join(".wenlan")).unwrap();
+        std::fs::write(dir.path().join(".wenlan/state.json"), v1_json).unwrap();
 
         let state = writer.load_state();
         // v1 keys are auto-rewritten to page_ prefix.
@@ -429,7 +429,7 @@ mod tests {
 
         // After save_state, the file is rewritten in v2 form (no "concepts" key).
         writer.save_state(&state).unwrap();
-        let written = std::fs::read_to_string(dir.path().join(".origin/state.json")).unwrap();
+        let written = std::fs::read_to_string(dir.path().join(".wenlan/state.json")).unwrap();
         assert!(written.contains("\"pages\""));
         assert!(!written.contains("\"concepts\""));
         assert!(written.contains("\"schema_version\""));
