@@ -2811,27 +2811,67 @@ impl ArmKind {
     }
 }
 
+/// One arm: a retrieval mode paired with whether to include pages in context.
+#[derive(Debug, Clone)]
+pub struct Arm {
+    pub kind: ArmKind,
+    pub include_pages: bool,
+}
+
 /// The set of arms to run, in order.
 #[derive(Debug, Clone)]
 pub struct ArmSpec {
-    arms: Vec<ArmKind>,
+    arms: Vec<Arm>,
 }
 
 impl ArmSpec {
-    /// The shipped 2-arm CE A/B: [CeOff, CeOn].
+    /// The shipped 2-arm CE A/B: [CeOff+pages, CeOn+pages].
     pub fn ce_two() -> Self {
         ArmSpec {
-            arms: vec![ArmKind::CeOff, ArmKind::CeOn],
+            arms: vec![
+                Arm {
+                    kind: ArmKind::CeOff,
+                    include_pages: true,
+                },
+                Arm {
+                    kind: ArmKind::CeOn,
+                    include_pages: true,
+                },
+            ],
         }
     }
 
-    /// Single-arm "best-possible ceiling": [FullStack]. All feature env flags are
+    /// Single-arm "best-possible ceiling": [FullStack+pages]. All feature env flags are
     /// the operator's responsibility (page channel / graph / temporal / deep
     /// `RERANK_POOL_FLOOR`); this spec just runs one CE-reranked arm and measures
     /// its accuracy, with NO confounder isolation (see `needs_confounder_isolation`).
     pub fn full_stack() -> Self {
         ArmSpec {
-            arms: vec![ArmKind::FullStack],
+            arms: vec![Arm {
+                kind: ArmKind::FullStack,
+                include_pages: true,
+            }],
+        }
+    }
+
+    /// 3-arm pages A/B: [CeOff-no-pages, CeOn-no-pages, CeOn+pages].
+    /// Isolates the page-channel contribution on top of the CE baseline.
+    pub fn pages_ab() -> Self {
+        ArmSpec {
+            arms: vec![
+                Arm {
+                    kind: ArmKind::CeOff,
+                    include_pages: false,
+                },
+                Arm {
+                    kind: ArmKind::CeOn,
+                    include_pages: false,
+                },
+                Arm {
+                    kind: ArmKind::CeOn,
+                    include_pages: true,
+                },
+            ],
         }
     }
 
@@ -2841,36 +2881,60 @@ impl ArmSpec {
     /// asymmetrically vs an ON arm. A single-arm ceiling (`full_stack`) has no
     /// OFF arm, so the isolation gate does not apply — features are meant to be ON.
     fn needs_confounder_isolation(&self) -> bool {
-        self.arms.contains(&ArmKind::CeOff)
+        self.arms.iter().any(|a| a.kind == ArmKind::CeOff)
     }
 
     /// One label per arm for a given category, in order.
-    /// e.g. `ce_two().labels("single-session-user")`
-    ///        == `["ce_off_single-session-user", "ce_on_single-session-user"]`
+    /// Arms with `include_pages=true` get a `_pages` suffix: "ce_off_pages_cat".
+    /// Arms with `include_pages=false` omit the suffix: "ce_off_cat".
     pub fn labels(&self, category: &str) -> Vec<String> {
         self.arms
             .iter()
-            .map(|arm| format!("{}_{}", arm.label_prefix(), category))
+            .map(|arm| {
+                let base = arm.kind.label_prefix();
+                let prefix = if arm.include_pages {
+                    format!("{base}_pages")
+                } else {
+                    base.to_string()
+                };
+                format!("{prefix}_{category}")
+            })
             .collect()
     }
 
-    /// Label prefixes (for the done-set), e.g. `["ce_off", "ce_on"]`.
-    fn prefixes(&self) -> Vec<&'static str> {
-        self.arms.iter().map(|arm| arm.label_prefix()).collect()
+    /// Label prefixes (for the done-set), e.g. `["ce_off_pages", "ce_on_pages"]`.
+    fn prefixes(&self) -> Vec<String> {
+        self.arms
+            .iter()
+            .map(|arm| {
+                let base = arm.kind.label_prefix();
+                if arm.include_pages {
+                    format!("{base}_pages")
+                } else {
+                    base.to_string()
+                }
+            })
+            .collect()
     }
 
-    /// Resolve arms to `(label, CtxRetrieval)` for a category, given the reranker.
+    /// Resolve arms to `(label, CtxRetrieval, include_pages)` for a category, given the reranker.
     /// `CeOn` requires `reranker.is_some()` — returns `Err` if an arm needs it and
     /// it is `None`.
     fn resolve(
         &self,
         category: &str,
         reranker: &Option<Arc<dyn crate::reranker::Reranker>>,
-    ) -> Result<Vec<(String, CtxRetrieval)>, OriginError> {
+    ) -> Result<Vec<(String, CtxRetrieval, bool)>, OriginError> {
         let mut result = Vec::with_capacity(self.arms.len());
         for arm in &self.arms {
-            let label = format!("{}_{}", arm.label_prefix(), category);
-            let retrieval = match arm {
+            let base = arm.kind.label_prefix();
+            let prefix = if arm.include_pages {
+                format!("{base}_pages")
+            } else {
+                base.to_string()
+            };
+            let label = format!("{prefix}_{category}");
+            let retrieval = match arm.kind {
                 ArmKind::CeOff => CtxRetrieval::CrossRerank(None),
                 ArmKind::CeOn | ArmKind::FullStack => {
                     let r = reranker.clone().ok_or_else(|| {
@@ -2882,7 +2946,7 @@ impl ArmSpec {
                     CtxRetrieval::CrossRerank(Some(r))
                 }
             };
-            result.push((label, retrieval));
+            result.push((label, retrieval, arm.include_pages));
         }
         Ok(result)
     }
@@ -3293,14 +3357,14 @@ pub async fn run_fullpipeline_lme(
 
             // Generate an answer for all arms from the same seeded DB.
             let arm_pairs = arms.resolve(category, &reranker)?;
-            for (arm_label, retrieval) in arm_pairs {
+            for (arm_label, retrieval, include_pages) in arm_pairs {
                 let (ctx, ctx_tokens) = match build_structured_context(
                     &db,
                     &sample.question,
                     10,
                     None,
                     retrieval,
-                    true,
+                    include_pages,
                 )
                 .await
                 {
@@ -3519,14 +3583,14 @@ pub async fn run_fullpipeline_lme(
                         let category = category_name(&sample.question_type);
                         let arm_pairs = arms.resolve(category, &reranker)?;
                         let mut tuples = Vec::with_capacity(arm_pairs.len());
-                        for (arm_label, retrieval) in arm_pairs {
+                        for (arm_label, retrieval, include_pages) in arm_pairs {
                             let (ctx, ctx_tokens) = match build_structured_context(
                                 &db,
                                 &sample.question,
                                 10,
                                 None,
                                 retrieval,
-                                true,
+                                include_pages,
                             )
                             .await
                             {
@@ -3776,20 +3840,24 @@ mod tests {
         assert_eq!(
             spec.labels("single-session-user"),
             vec![
-                "ce_off_single-session-user".to_string(),
-                "ce_on_single-session-user".to_string(),
+                "ce_off_pages_single-session-user".to_string(),
+                "ce_on_pages_single-session-user".to_string(),
             ],
             "ce_two labels for single-session-user"
         );
         assert_eq!(
             spec.labels("temporal-reasoning"),
             vec![
-                "ce_off_temporal-reasoning".to_string(),
-                "ce_on_temporal-reasoning".to_string(),
+                "ce_off_pages_temporal-reasoning".to_string(),
+                "ce_on_pages_temporal-reasoning".to_string(),
             ],
             "ce_two labels for temporal-reasoning"
         );
-        assert_eq!(spec.prefixes(), vec!["ce_off", "ce_on"], "ce_two prefixes");
+        assert_eq!(
+            spec.prefixes(),
+            vec!["ce_off_pages".to_string(), "ce_on_pages".to_string()],
+            "ce_two prefixes"
+        );
         assert!(
             spec.needs_confounder_isolation(),
             "ce_two is an isolation A/B (has CeOff) — gate must apply"
@@ -3801,10 +3869,14 @@ mod tests {
         let spec = ArmSpec::full_stack();
         assert_eq!(
             spec.labels("single-session-user"),
-            vec!["fullstack_single-session-user".to_string()],
+            vec!["fullstack_pages_single-session-user".to_string()],
             "full_stack is a single arm"
         );
-        assert_eq!(spec.prefixes(), vec!["fullstack"], "full_stack prefix");
+        assert_eq!(
+            spec.prefixes(),
+            vec!["fullstack_pages".to_string()],
+            "full_stack prefix"
+        );
         assert!(
             !spec.needs_confounder_isolation(),
             "full_stack has no CeOff arm — confounder gate must be skipped so features can be ON"
@@ -3895,5 +3967,54 @@ mod tests {
             ctx_off.contains("## Relevant Memories") || ctx_off.contains("planning"),
             "include_pages=false context should contain memory content"
         );
+    }
+
+    /// Task 2 (pure, no DB): pages_ab() has 3 arms with the right kinds and include_pages flags.
+    #[test]
+    fn arm_spec_pages_ab_arms() {
+        let spec = ArmSpec::pages_ab();
+        let arms: Vec<_> = spec.arms.iter().collect();
+        assert_eq!(arms.len(), 3, "pages_ab must have 3 arms");
+        assert_eq!(arms[0].kind, ArmKind::CeOff, "arm 0 kind");
+        assert_eq!(arms[1].kind, ArmKind::CeOn, "arm 1 kind");
+        assert_eq!(arms[2].kind, ArmKind::CeOn, "arm 2 kind");
+        assert!(!arms[0].include_pages, "arm 0 include_pages must be false");
+        assert!(!arms[1].include_pages, "arm 1 include_pages must be false");
+        assert!(arms[2].include_pages, "arm 2 include_pages must be true");
+    }
+
+    /// Task 2 (pure, no DB): pages_ab().labels() produces the correct suffixed label strings.
+    #[test]
+    fn arm_spec_pages_ab_labels() {
+        let spec = ArmSpec::pages_ab();
+        assert_eq!(
+            spec.labels("x"),
+            vec![
+                "ce_off_x".to_string(),
+                "ce_on_x".to_string(),
+                "ce_on_pages_x".to_string()
+            ],
+            "pages_ab labels"
+        );
+    }
+
+    /// Task 2 (pure, no DB): ce_two() and full_stack() all arms have include_pages=true
+    /// (byte-identical preservation guard).
+    #[test]
+    fn arm_spec_existing_arms_include_pages_true() {
+        for arm in &ArmSpec::ce_two().arms {
+            assert!(
+                arm.include_pages,
+                "ce_two arm {:?} must have include_pages=true",
+                arm.kind
+            );
+        }
+        for arm in &ArmSpec::full_stack().arms {
+            assert!(
+                arm.include_pages,
+                "full_stack arm {:?} must have include_pages=true",
+                arm.kind
+            );
+        }
     }
 }
