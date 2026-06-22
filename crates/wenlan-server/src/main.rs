@@ -152,12 +152,12 @@ async fn run_daemon() -> anyhow::Result<()> {
         m55.entity_links_inserted
     );
 
-    // Consolidate user-facing assets under ~/.origin/.
-    // - Ensure ~/.origin/{pages, sessions, sessions/_status} exist
-    // - Symlink ~/.origin/db -> <data_dir> (cosmetic alias; DB stays at
+    // Consolidate user-facing assets under ~/.wenlan/.
+    // - Ensure ~/.wenlan/{pages, sessions, sessions/_status} exist
+    // - Symlink ~/.wenlan/db -> <data_dir> (cosmetic alias; DB stays at
     //   the platform data directory (resolved via `dirs::data_local_dir()` per OS)
-    //   under `origin/memorydb/`, to avoid moving live SQLite/WAL files mid-flight).
-    // - Migrate legacy ~/Wenlan/knowledge/ md files into ~/.origin/pages/ if
+    //   under `wenlan/memorydb/`, to avoid moving live SQLite/WAL files mid-flight).
+    // - Migrate legacy ~/Origin/knowledge/ md files into ~/.wenlan/pages/ if
     //   the new dir is empty. Never deletes the old dir; user can clean up
     //   manually after verifying.
     if let Some(home) = dirs::home_dir() {
@@ -240,7 +240,7 @@ async fn run_daemon() -> anyhow::Result<()> {
             }
         }
 
-        // Initialize ~/.origin/ as a git repo so users get version history
+        // Initialize ~/.wenlan/ as a git repo so users get version history
         // of pages + sessions for free. Defensive — silent skip if git is
         // missing or any step fails. Skills (/handoff, /distill, /forget)
         // commit per logical batch; daemon only does the initial bring-up

@@ -15,10 +15,10 @@ if [ "$HAS_RUST" = "yes" ]; then
 
     # Detect which crates were touched so we can run targeted clippy
     TOUCHED_CRATES=""
-    if echo "$STAGED_FILES" | grep -q '^crates/origin-types/'; then TOUCHED_CRATES="$TOUCHED_CRATES -p origin-types"; fi
-    if echo "$STAGED_FILES" | grep -q '^crates/origin-core/'; then TOUCHED_CRATES="$TOUCHED_CRATES -p origin-core"; fi
-    if echo "$STAGED_FILES" | grep -q '^crates/origin-server/'; then TOUCHED_CRATES="$TOUCHED_CRATES -p origin-server"; fi
-    if echo "$STAGED_FILES" | grep -q '^crates/origin-cli/'; then TOUCHED_CRATES="$TOUCHED_CRATES -p origin"; fi
+    if echo "$STAGED_FILES" | grep -q '^crates/wenlan-types/'; then TOUCHED_CRATES="$TOUCHED_CRATES -p wenlan-types"; fi
+    if echo "$STAGED_FILES" | grep -q '^crates/wenlan-core/'; then TOUCHED_CRATES="$TOUCHED_CRATES -p wenlan-core"; fi
+    if echo "$STAGED_FILES" | grep -q '^crates/wenlan-server/'; then TOUCHED_CRATES="$TOUCHED_CRATES -p wenlan-server"; fi
+    if echo "$STAGED_FILES" | grep -q '^crates/wenlan-cli/'; then TOUCHED_CRATES="$TOUCHED_CRATES -p wenlan"; fi
 
     if [ -n "$TOUCHED_CRATES" ]; then
         echo "  Running Clippy on changed crates..."

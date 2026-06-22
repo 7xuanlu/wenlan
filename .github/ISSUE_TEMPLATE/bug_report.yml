@@ -1,5 +1,5 @@
 name: Bug Report
-description: Report a bug in Origin
+description: Report a bug in Wenlan
 labels: ["bug"]
 body:
   - type: textarea
@@ -15,7 +15,7 @@ body:
       label: Steps to reproduce
       description: How can we reproduce this?
       placeholder: |
-        1. Open Origin
+        1. Open Wenlan
         2. Go to...
         3. Click on...
     validations:
@@ -37,7 +37,7 @@ body:
   - type: input
     id: version
     attributes:
-      label: Origin version
+      label: Wenlan version
       description: "From About screen or `cargo pkgid` in src-tauri/"
       placeholder: "0.1.0"
     validations:

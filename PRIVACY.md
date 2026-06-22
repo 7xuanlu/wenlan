@@ -10,10 +10,10 @@ Only what you explicitly capture: decisions, lessons, observations, project cont
 
 All data stays on your machine:
 
-- `~/.origin/pages/` -- wiki pages (Markdown)
-- `~/.origin/sessions/` -- session logs (Markdown)
-- `~/.origin/db/` -- symlink to the libSQL database at `~/Library/Application Support/wenlan/memorydb/`
-- `~/.origin/bin/` -- installed binaries
+- `~/.wenlan/pages/` -- wiki pages (Markdown)
+- `~/.wenlan/sessions/` -- session logs (Markdown)
+- `~/.wenlan/db/` -- symlink to the libSQL database at `~/Library/Application Support/wenlan/memorydb/`
+- `~/.wenlan/bin/` -- installed binaries
 
 The daemon listens on `127.0.0.1:7878` (localhost only). No data is sent to any remote server by default.
 
@@ -21,8 +21,8 @@ The daemon listens on `127.0.0.1:7878` (localhost only). No data is sent to any 
 
 None by default. Two opt-in integrations exist:
 
-- **Anthropic API (BYOK):** If you run `origin key set anthropic`, your memories are sent to the Anthropic API for richer extraction and synthesis. Anthropic's privacy policy applies to that data. Wenlan does not store or relay your API key beyond the local config file.
-- **On-device model:** If you run `origin model install`, a Qwen model is downloaded from Hugging Face Hub. No memory data leaves your machine in this mode.
+- **Anthropic API (BYOK):** If you run `wenlan key set anthropic`, your memories are sent to the Anthropic API for richer extraction and synthesis. Anthropic's privacy policy applies to that data. Wenlan does not store or relay your API key beyond the local config file.
+- **On-device model:** If you run `wenlan model install`, a Qwen model is downloaded from Hugging Face Hub. No memory data leaves your machine in this mode.
 
 ## Telemetry
 
@@ -31,8 +31,8 @@ None. Wenlan collects no usage analytics, crash reports, or diagnostics.
 ## Data deletion
 
 - Delete individual memories: `/forget` skill or `origin` CLI.
-- Delete everything: remove `~/.origin/` and `~/Library/Application Support/wenlan/`.
-- Uninstall the daemon: `origin uninstall`.
+- Delete everything: remove `~/.wenlan/` and `~/Library/Application Support/wenlan/`.
+- Uninstall the daemon: `wenlan uninstall`.
 
 ## Contact
 

@@ -172,7 +172,7 @@ pub async fn handle_store_memory(
     crate::space_header::SpaceHeader(header_space): crate::space_header::SpaceHeader,
     Json(mut req): Json<StoreMemoryRequest>,
 ) -> Result<Json<StoreMemoryResponse>, ServerError> {
-    // Apply X-Wenlan-Space header as fallback only when body omits `space`.
+    // Apply X-Origin-Space header as fallback only when body omits `space`.
     if req.space.is_none() {
         req.space = header_space;
     }
@@ -1162,7 +1162,7 @@ pub async fn handle_create_entity(
     crate::space_header::SpaceHeader(header_space): crate::space_header::SpaceHeader,
     Json(mut req): Json<CreateEntityRequest>,
 ) -> Result<Json<CreateEntityResponse>, ServerError> {
-    // Apply X-Wenlan-Space header as fallback only when body omits `space`.
+    // Apply X-Origin-Space header as fallback only when body omits `space`.
     if req.space.is_none() {
         req.space = header_space;
     }
@@ -2010,12 +2010,12 @@ pub async fn handle_create_page(
     crate::space_header::SpaceHeader(header_space): crate::space_header::SpaceHeader,
     Json(mut req): Json<CreateConceptRequest>,
 ) -> Result<Json<CreatePageResponse>, ServerError> {
-    // Apply X-Wenlan-Space header as fallback only when body omits `space`.
+    // Apply X-Origin-Space header as fallback only when body omits `space`.
     // Clone before consuming so workspace fallback can use the same value.
     if req.space.is_none() {
         req.space = header_space.clone();
     }
-    // Apply X-Wenlan-Space header as fallback for `workspace` as well.
+    // Apply X-Origin-Space header as fallback for `workspace` as well.
     // `workspace` is the P3 dedicated scope axis; `space` is the category column.
     if req.workspace.is_none() {
         req.workspace = header_space;

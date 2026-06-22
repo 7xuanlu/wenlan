@@ -56,7 +56,7 @@ impl IsolatedRuntime {
     fn service_unit_path(&self) -> PathBuf {
         self.home
             .path()
-            .join("Library/LaunchAgents/com.origin.server.plist")
+            .join("Library/LaunchAgents/com.wenlan.server.plist")
     }
 
     #[cfg(target_os = "macos")]
@@ -183,7 +183,7 @@ fn top_level_help() {
         .arg("--help")
         .assert()
         .success()
-        .stdout(predicate::str::contains("Origin CLI"));
+        .stdout(predicate::str::contains("Wenlan CLI"));
 }
 
 #[test]
@@ -274,7 +274,7 @@ fn mcp_add_native_clients_run_add_without_destructive_remove() {
             .args(["mcp", "add", client])
             .assert()
             .success()
-            .stdout(predicate::str::contains("Configured Origin MCP"));
+            .stdout(predicate::str::contains("Configured Wenlan MCP"));
 
         // .cmd shells on Windows write CRLF line endings; the Unix shell
         // script writes LF. Normalize before the byte-for-byte compare.
@@ -486,7 +486,7 @@ fn service_unit_path_resolves_per_os() {
     #[cfg(target_os = "macos")]
     assert!(path
         .to_string_lossy()
-        .ends_with("Library/LaunchAgents/com.origin.server.plist"));
+        .ends_with("Library/LaunchAgents/com.wenlan.server.plist"));
 
     #[cfg(target_os = "linux")]
     assert!(path
@@ -516,7 +516,7 @@ fn restart_after_install_succeeds_isolated() {
         .arg("restart")
         .assert()
         .success()
-        .stdout(predicate::str::contains("Restarted com.origin.server"));
+        .stdout(predicate::str::contains("Restarted com.wenlan.server"));
 }
 
 #[cfg(target_os = "macos")]
@@ -542,7 +542,7 @@ fn install_over_running_daemon_stops_first_isolated() {
 
     let calls = fs::read_to_string(&log).unwrap_or_default();
     // We assert specifically for "stop" — our explicit m.stop() emits
-    // `launchctl stop com.origin.server`. service-manager's internal reinstall
+    // `launchctl stop com.wenlan.server`. service-manager's internal reinstall
     // logic emits `launchctl remove`, which is a different verb and does NOT
     // terminate a running process the same way. The test must discriminate
     // between our explicit stop and the library's internal unload-before-reload.
@@ -562,7 +562,7 @@ fn setup_install_status_uninstall_roundtrip_isolated() {
         .assert()
         .success()
         .stdout(predicate::str::contains(
-            "Origin is set up for local memory",
+            "Wenlan is set up for local memory",
         ))
         .stdout(predicate::str::contains("Distill cycles stay off"));
 
@@ -576,11 +576,11 @@ fn setup_install_status_uninstall_roundtrip_isolated() {
         .assert()
         .success()
         .stdout(predicate::str::contains(
-            "Installed and started com.origin.server",
+            "Installed and started com.wenlan.server",
         ));
 
     let plist = fs::read_to_string(runtime.service_unit_path()).expect("plist written");
-    assert!(plist.contains("<string>com.origin.server</string>"));
+    assert!(plist.contains("<string>com.wenlan.server</string>"));
     assert!(plist.contains("wenlan-server"));
     assert!(!plist.contains("origin</string>"));
     // Launchd parity with the legacy embedded plist: stdout/stderr go to the
@@ -620,7 +620,7 @@ fn setup_install_status_uninstall_roundtrip_isolated() {
         .arg("uninstall")
         .assert()
         .success()
-        .stdout(predicate::str::contains("Uninstalled com.origin.server"));
+        .stdout(predicate::str::contains("Uninstalled com.wenlan.server"));
 
     assert!(
         !runtime.service_unit_path().exists(),

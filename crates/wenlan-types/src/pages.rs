@@ -39,7 +39,7 @@ pub struct Page {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub changelog: Option<String>,
     /// Scope axis (P3). Distinct from `space` (category column). Set at creation
-    /// time from `CreateConceptRequest.workspace` or the `X-Wenlan-Space` header.
+    /// time from `CreateConceptRequest.workspace` or the `X-Origin-Space` header.
     /// NULL = no workspace constraint. Enforced only by the scoped-recall page gate
     /// on the cross-rerank search path; direct page lookups (search_pages MCP tool,
     /// exports) do not filter by workspace.

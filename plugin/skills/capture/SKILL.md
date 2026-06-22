@@ -42,7 +42,7 @@ also print:
 If the resolved space did not previously exist, the daemon auto-creates
 it. When `source_layer` is `arg`, also print:
 
-    Created new space '<space>' from arg. Register with `origin space add <space>` to silence.
+    Created new space '<space>' from arg. Register with `wenlan space add <space>` to silence.
 
 ## How to invoke
 

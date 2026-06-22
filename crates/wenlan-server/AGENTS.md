@@ -23,4 +23,4 @@ HTTP daemon — owns the Axum router + all routes. All handlers operate on `Arc<
 | `scheduler.rs` | Background periodic tasks (distill cycles, distillation, etc.) |
 | `websocket.rs` | `/ws/updates` |
 | `error.rs` | `ServerError` + axum `IntoResponse` impl |
-| `resources/com.origin.server.plist` | launchd plist template (embedded via `include_str!`) |
+| `resources/com.wenlan.server.plist` | launchd plist template (embedded via `include_str!`) |

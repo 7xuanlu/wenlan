@@ -53,7 +53,7 @@ async fn four_memory_cluster_passes_thin_content_guard() {
         ("mem_q1", "libSQL stores 768-dimensional embeddings in F32_BLOB columns using DiskANN approximate nearest neighbor indexing."),
         ("mem_q2", "The vector index is built with DiskANN parameters R=64 and L=200, tuned for sub-millisecond recall at 10k+ memories."),
         ("mem_q3", "Hybrid search combines cosine similarity (vector lane) with FTS5 BM25 scoring (keyword lane) via Reciprocal Rank Fusion."),
-        ("mem_q4", "libSQL is Turso's SQLite fork; it adds vector extensions natively so no external vector DB is required for Origin."),
+        ("mem_q4", "libSQL is Turso's SQLite fork; it adds vector extensions natively so no external vector DB is required for Wenlan."),
     ];
 
     let docs: Vec<RawDocument> = memories

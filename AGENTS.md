@@ -25,10 +25,10 @@ cargo run -p wenlan-server                # listens on 127.0.0.1:7878
 
 # Or start the daemon as a managed launchd service:
 cargo build -p origin -p wenlan-server
-./target/debug/origin setup --basic       # configure local memory
-./target/debug/origin install             # writes plist, launchctl load
-./target/debug/origin status
-./target/debug/origin uninstall           # when done
+./target/debug/wenlan setup --basic       # configure local memory
+./target/debug/wenlan install             # writes plist, launchctl load
+./target/debug/wenlan status
+./target/debug/wenlan uninstall           # when done
 
 # Workspace-level builds
 cargo check --workspace
@@ -41,7 +41,7 @@ cargo check -p wenlan-core
 cargo check -p wenlan-server
 cargo check -p origin                     # the CLI binary
 cargo build -p origin --release
-./target/release/origin --help
+./target/release/wenlan --help
 
 # Run tests for a single crate
 cargo test -p wenlan-core
@@ -79,9 +79,9 @@ Wenlan runs on macOS (arm64, x86_64), Linux (x86_64, aarch64; musl), and Windows
 |---|---|---|
 | macOS | `~/Library/Application Support/wenlan/` | launchd via `~/Library/LaunchAgents/com.wenlan.server.plist` (user-level) |
 | Linux | `~/.local/share/wenlan/` (or `$XDG_DATA_HOME/origin`) | systemd user unit at `~/.config/systemd/user/wenlan-server.service` (qualifier dropped per `ServiceLabel::to_script_name()`). Enable lingering with `loginctl enable-linger` if you want the service alive after logout. |
-| Windows | `%LOCALAPPDATA%\origin\` | Per-user Task Scheduler ONLOGON task registered via `schtasks.exe /create /tn OriginServer /sc ONLOGON /tr <exe> /f`. `origin install` short-circuits before service-manager and drives schtasks directly (wenlan-server is a plain console app and would otherwise time out at 30s under sc.exe + the Windows Service Control Protocol). `origin uninstall` calls `schtasks /delete /tn OriginServer /f`. |
+| Windows | `%LOCALAPPDATA%\origin\` | Per-user Task Scheduler ONLOGON task registered via `schtasks.exe /create /tn OriginServer /sc ONLOGON /tr <exe> /f`. `wenlan install` short-circuits before service-manager and drives schtasks directly (wenlan-server is a plain console app and would otherwise time out at 30s under sc.exe + the Windows Service Control Protocol). `wenlan uninstall` calls `schtasks /delete /tn OriginServer /f`. |
 
-`origin install` / `origin uninstall` work on macOS, Linux, and Windows. macOS + Linux go through the `service-manager` crate (launchd / systemd-user); Windows takes the schtasks path described above so the daemon does not need a service dispatcher.
+`wenlan install` / `wenlan uninstall` work on macOS, Linux, and Windows. macOS + Linux go through the `service-manager` crate (launchd / systemd-user); Windows takes the schtasks path described above so the daemon does not need a service dispatcher.
 
 ### llama-cpp-2 backend
 
@@ -369,7 +369,7 @@ The recurring failure mode was not any single missing artifact — it was that s
 - **Stale binary after merge/pull**: `cargo build -p wenlan-server` may report "0.64s Finished" without recompiling if the source timestamps haven't changed (e.g., after `git pull` fast-forward). Touch a source file to force recompilation: `touch crates/wenlan-server/src/router.rs && cargo build -p wenlan-server`. Verify the binary timestamp matches: `ls -la target/debug/wenlan-server`.
 - **kill vs kill -9**: `kill <PID>` may not terminate the daemon cleanly. Always use `kill -9 <PID>` and verify with `lsof -ti :7878` afterward. If the port is still in use, another process took over.
 - **Worktree target directories are per-worktree**: Each `.worktrees/<name>` checkout has its own `target/`. Building inside a worktree writes to that worktree's `target/`, not the main repo's. Verify a binary's source with `lsof -p <PID> | grep wenlan-server` so you don't run a stale binary from a different worktree.
-- **Upgrading the daemon requires a restart**: installing a new binary does NOT replace an already-running daemon -- the new process detects the healthy incumbent on port 7878 and exits (`wenlan-server/src/main.rs`). `origin install` now stops the running service before reinstalling, and `origin restart` (stop then start) reloads it explicitly. The MCP version handshake surfaces a stale daemon (`VersionStatus::DaemonOutdated`) and points users at `origin restart`. Enabling the cross-encoder (`WENLAN_RERANKER_ENABLED=1`) blocks startup on a one-time ~1.1GB model download and, on failure, serves with no rerank -- `/api/status` now reports `reranker` as `disabled` / `active` / `failed` so the degraded state is visible.
+- **Upgrading the daemon requires a restart**: installing a new binary does NOT replace an already-running daemon -- the new process detects the healthy incumbent on port 7878 and exits (`wenlan-server/src/main.rs`). `wenlan install` now stops the running service before reinstalling, and `wenlan restart` (stop then start) reloads it explicitly. The MCP version handshake surfaces a stale daemon (`VersionStatus::DaemonOutdated`) and points users at `wenlan restart`. Enabling the cross-encoder (`WENLAN_RERANKER_ENABLED=1`) blocks startup on a one-time ~1.1GB model download and, on failure, serves with no rerank -- `/api/status` now reports `reranker` as `disabled` / `active` / `failed` so the degraded state is visible.
 
 **Other:**
 - **Metal/ggml on macOS Tahoe 26.x**: `ggml_metal_init` may fail even though native Metal works. The daemon auto-degrades and continues without LLM. Not a code bug. Check for competing GPU processes: `pgrep -la origin`.

@@ -172,7 +172,7 @@ mod tests {
     #[test]
     fn test_slugify_title() {
         assert_eq!(slugify("libSQL Architecture"), "libsql-architecture");
-        assert_eq!(slugify("Wenlan's MCP (v2)"), "origins-mcp-v2");
+        assert_eq!(slugify("Wenlan's MCP (v2)"), "wenlans-mcp-v2");
         assert_eq!(slugify("  Spaces  "), "spaces");
         assert_eq!(slugify("Hello World"), "hello-world");
     }

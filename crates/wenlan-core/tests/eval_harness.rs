@@ -1739,7 +1739,7 @@ async fn data_flags_temporal_subset_screen() {
 }
 
 /// STEP 9 reranker model A/B: compare the shippable native cross-encoders on
-/// Origin's own eval to answer "which reranker to use." Candidates (all Apache/MIT,
+/// Wenlan's own eval to answer "which reranker to use." Candidates (all Apache/MIT,
 /// all fastembed cross-encoders): bge-reranker-v2-m3 (current, 0.6B), bge-reranker-base
 /// (0.3B, half size), jina-reranker-v1-turbo-en (37.8M). Non-commercial (jina-v2/v3)
 /// and no-ONNX (mxbai/Qwen3) candidates are excluded — see the reranker survey.
@@ -4061,7 +4061,7 @@ async fn test_quality_cost_fixtures() {
     let fixture_dir = eval_root().join("fixtures");
 
     let strategies = vec![
-        SearchStrategy::Origin,
+        SearchStrategy::Wenlan,
         SearchStrategy::NaiveRag,
         SearchStrategy::FullReplay,
         SearchStrategy::NoMemory,
@@ -4077,7 +4077,7 @@ async fn test_quality_cost_fixtures() {
         "should show token savings"
     );
 
-    // Origin should have better quality than NaiveRag
+    // Wenlan should have better quality than NaiveRag
     let origin = report
         .strategies
         .iter()
@@ -4090,7 +4090,7 @@ async fn test_quality_cost_fixtures() {
         .unwrap();
     assert!(
         origin.ndcg_at_10 >= naive.ndcg_at_10,
-        "Origin NDCG ({:.3}) should be >= NaiveRag ({:.3})",
+        "Wenlan NDCG ({:.3}) should be >= NaiveRag ({:.3})",
         origin.ndcg_at_10,
         naive.ndcg_at_10
     );
@@ -4110,7 +4110,7 @@ async fn test_quality_cost_agent_workload() {
     }
 
     let strategies = vec![
-        SearchStrategy::Origin,
+        SearchStrategy::Wenlan,
         SearchStrategy::NaiveRag,
         SearchStrategy::FullReplay,
         SearchStrategy::NoMemory,
@@ -4133,7 +4133,7 @@ async fn save_quality_cost_fixtures_baseline() {
     let baseline_path = eval_root().join("baselines/quality_cost_fixtures_baseline.json");
 
     let strategies = vec![
-        SearchStrategy::Origin,
+        SearchStrategy::Wenlan,
         SearchStrategy::NaiveRag,
         SearchStrategy::FullReplay,
         SearchStrategy::NoMemory,
@@ -4163,7 +4163,7 @@ async fn test_scaling_curve() {
     println!("\n=== Scaling Curve ===");
     println!(
         "{:<12} | {:<15} | {:<15}",
-        "Corpus Size", "Origin Tokens", "Replay Tokens"
+        "Corpus Size", "Wenlan Tokens", "Replay Tokens"
     );
     println!("{:-<12}-+-{:-<15}-+-{:-<15}", "", "", "");
     for p in &points {
@@ -4187,10 +4187,10 @@ async fn test_scaling_curve() {
 }
 
 // ---------------------------------------------------------------------------
-// Pipeline eval: LoCoMo + LongMemEval through Origin's full pipeline
+// Pipeline eval: LoCoMo + LongMemEval through Wenlan's full pipeline
 // ---------------------------------------------------------------------------
 
-/// Run LoCoMo through Origin's full pipeline: flat → enriched → distilled.
+/// Run LoCoMo through Wenlan's full pipeline: flat → enriched → distilled.
 /// Requires Metal GPU (run with sandbox disabled).
 #[tokio::test]
 #[ignore]
@@ -4226,7 +4226,7 @@ async fn benchmark_locomo_pipeline() {
         "Should have aggregate metrics"
     );
 
-    // Flat/Origin should have non-zero NDCG
+    // Flat/Wenlan should have non-zero NDCG
     let flat_origin = report
         .aggregate
         .iter()
@@ -4237,11 +4237,11 @@ async fn benchmark_locomo_pipeline() {
     );
     assert!(
         flat_origin.unwrap().ndcg_at_10 > 0.0,
-        "Flat/Origin NDCG should be > 0"
+        "Flat/Wenlan NDCG should be > 0"
     );
 }
 
-/// Run LongMemEval through Origin's full pipeline: flat → enriched → distilled.
+/// Run LongMemEval through Wenlan's full pipeline: flat → enriched → distilled.
 /// Requires Metal GPU (run with sandbox disabled).
 /// Caps at 100 questions for reasonable runtime.
 #[tokio::test]
@@ -4288,7 +4288,7 @@ async fn benchmark_longmemeval_pipeline() {
     );
     assert!(
         flat_origin.unwrap().ndcg_at_10 > 0.0,
-        "Flat/Origin NDCG should be > 0"
+        "Flat/Wenlan NDCG should be > 0"
     );
 }
 
@@ -8918,7 +8918,7 @@ async fn judge_ce_ab_lme() {
 ///
 /// Unlike the CE A/B (which forces every feature OFF to isolate the cross-encoder),
 /// this runs ONE arm with the full production stack turned ON and just measures how
-/// accurately Origin answers the gold/oracle questions. Answers what the CE A/Bs
+/// accurately Wenlan answers the gold/oracle questions. Answers what the CE A/Bs
 /// never could: "how good are we with everything on?" Pairs with
 /// `judge_lme_fullstack_ceiling` for the accuracy report.
 ///

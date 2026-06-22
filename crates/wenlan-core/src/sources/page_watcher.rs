@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Poll-based filesystem watcher for the page projection at
-//! `~/.origin/pages/*.md`.
+//! `~/.wenlan/pages/*.md`.
 //!
 //! md is canonical. When the user opens a page in Obsidian / VS Code / etc.
 //! and saves a change, the daemon's DB row goes stale. This module walks the
@@ -80,7 +80,7 @@ pub async fn sync_filesystem_edits(
             .unwrap_or("")
             .to_ascii_lowercase();
         // Pages live flat under knowledge_path. Subdirectories (e.g. the
-        // `.origin/` state dir) aren't recursed.
+        // `.wenlan/` state dir) aren't recursed.
         if !path.is_file() || ext != "md" {
             continue;
         }
@@ -184,7 +184,7 @@ async fn sync_one_file(
             // Only re-project if the writer already maps this page to a file (state
             // entry present) — otherwise write_page's unique_filename would fork a
             // `<slug>-2.md` duplicate against the on-disk file we're reading (real on a
-            // vault synced without `.origin/state.json`). Without state we can't safely
+            // vault synced without `.wenlan/state.json`). Without state we can't safely
             // pick the canonical file; leave it as-is until a genuine re-distill
             // re-establishes the mapping. The page row is untouched either way.
             if writer.page_filename(&existing.id).is_some() {

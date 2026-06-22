@@ -108,10 +108,10 @@ impl Config {
         self.watch_paths.clear();
     }
 
-    /// Returns the configured pages path, or `~/.origin/pages/` as default.
+    /// Returns the configured pages path, or `~/.wenlan/pages/` as default.
     /// Field name remains `knowledge_path` for back-compat with existing
     /// config files; the default folder is rebranded to `pages/` to match
-    /// the user-facing `Page` concept and the consolidated `~/.origin/`
+    /// the user-facing `Page` concept and the consolidated `~/.wenlan/`
     /// data layout.
     pub fn knowledge_path_or_default(&self) -> PathBuf {
         self.knowledge_path.clone().unwrap_or_else(|| {

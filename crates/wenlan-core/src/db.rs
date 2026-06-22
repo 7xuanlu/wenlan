@@ -63,7 +63,7 @@ static EMBEDDER_INIT_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 ///
 /// `EMBEDDER_INIT_LOCK` only serializes within a single process. Under
 /// `cargo nextest`, every test runs in its own forked process and they share
-/// the same FastEmbed cache directory (`dirs::data_dir()/origin/memorydb/
+/// the same FastEmbed cache directory (`dirs::data_dir()/wenlan/memorydb/
 /// fastembed_cache` on Linux when no per-DB cache or `WENLAN_TEST_FASTEMBED_CACHE`
 /// override is set). Parallel test processes racing on that cache reproduce
 /// the `Failed to retrieve model_optimized.onnx` symptom, surfacing as
@@ -76,7 +76,7 @@ static EMBEDDER_INIT_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 fn acquire_embedder_init_file_lock(cache_dir: Option<&std::path::Path>) -> Option<std::fs::File> {
     let lock_dir = cache_dir
         .map(|p| p.to_path_buf())
-        .or_else(|| dirs::data_dir().map(|d| d.join("origin/memorydb")))?;
+        .or_else(|| dirs::data_dir().map(|d| d.join("wenlan/memorydb")))?;
     std::fs::create_dir_all(&lock_dir).ok()?;
     let lock_path = lock_dir.join(".embedder_init.lock");
     let file = std::fs::OpenOptions::new()
@@ -342,9 +342,9 @@ impl EmbedConfig {
 ///   1. The per-DB cache `<db_path>/fastembed_cache` when that directory
 ///      exists and is non-empty. This is what the running daemon uses
 ///      at the platform data directory (resolved via `dirs::data_local_dir()` per OS)
-///      under `origin/memorydb/fastembed_cache`.
+///      under `wenlan/memorydb/fastembed_cache`.
 ///   2. `WENLAN_TEST_FASTEMBED_CACHE` env var (escape hatch for CI).
-///   3. `dirs::data_dir().join("origin/memorydb/fastembed_cache")` —
+///   3. `dirs::data_dir().join("wenlan/memorydb/fastembed_cache")` —
 ///      matches the production daemon's conventional path on the same
 ///      host, so tests that use a tempdir DB still pick up the already-
 ///      downloaded model instead of re-fetching from HuggingFace.
@@ -374,7 +374,7 @@ pub fn resolve_fastembed_cache_dir(db_path: &std::path::Path) -> Option<std::pat
 
     // 3. Shared host cache — matches the daemon's conventional path even
     //    when the caller supplied a tempdir.
-    if let Some(shared) = dirs::data_dir().map(|d| d.join("origin/memorydb/fastembed_cache")) {
+    if let Some(shared) = dirs::data_dir().map(|d| d.join("wenlan/memorydb/fastembed_cache")) {
         if shared.exists()
             && std::fs::read_dir(&shared)
                 .map(|mut it| it.next().is_some())
@@ -2001,7 +2001,7 @@ impl MemoryDB {
                 // Cross-process serialization first (covers nextest forked test
                 // processes). Process-local mutex second. No `embed_cache_dir`
                 // here — caller doesn't supply one, so the lock falls back to
-                // `dirs::data_dir()/origin/memorydb/.embedder_init.lock`.
+                // `dirs::data_dir()/wenlan/memorydb/.embedder_init.lock`.
                 let _file_lock = acquire_embedder_init_file_lock(None);
                 let _guard = EMBEDDER_INIT_LOCK.lock().unwrap_or_else(|p| p.into_inner());
                 let opts = InitOptions::new(EmbeddingModel::BGEBaseENV15Q)
@@ -6061,7 +6061,7 @@ impl MemoryDB {
 
             // Migration 63 (WS): pages.workspace — scope axis, DISTINCT from the
             // overloaded category `space` column (which holds page_type recap/decision/
-            // people AND, inconsistently, the X-Wenlan-Space value).  Enforced only by
+            // people AND, inconsistently, the X-Origin-Space value).  Enforced only by
             // the scoped-recall page gate in search_memory_cross_rerank_cued; direct
             // page lookups (search_pages, exports) do not filter by workspace.
             // Backfill: derive workspace from the source memories' `space` — the modal

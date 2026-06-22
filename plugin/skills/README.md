@@ -44,16 +44,16 @@ layers. Higher layers override lower ones:
 | Layer | Mechanism | Example |
 |---|---|---|
 | 1 | `space:X` inline arg | `/capture space:health "slept 5hrs"` |
-| 2 | `ORIGIN_SPACE` env var | `ORIGIN_SPACE=career claude` |
-| 3 | `~/.origin/spaces.toml` cwd-prefix mapping (longest prefix wins; ties go to first-defined) | see `plugin/examples/spaces.toml` |
+| 2 | `WENLAN_SPACE` env var | `WENLAN_SPACE=career claude` |
+| 3 | `~/.wenlan/spaces.toml` cwd-prefix mapping (longest prefix wins; ties go to first-defined) | see `plugin/examples/spaces.toml` |
 | 4 | cwd git-repo basename | `~/Repos/origin/...` → `origin` |
 | 5 | conversation topic | (rarely used directly) |
 | 6 | default | `personal` |
 
 To pin a session to a specific bucket regardless of cwd, set
-`ORIGIN_SPACE` before invoking Claude Code. To pin by working directory
+`WENLAN_SPACE` before invoking Claude Code. To pin by working directory
 declaratively, copy `plugin/examples/spaces.toml` to
-`~/.origin/spaces.toml` and edit. To override per call, prefix any
+`~/.wenlan/spaces.toml` and edit. To override per call, prefix any
 space-aware skill arg with `space:<name>`.
 
 On the first space-aware skill call of a session, the skill prints one

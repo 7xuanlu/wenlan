@@ -169,7 +169,7 @@ async fn add(
     if set_default {
         set_default_in_toml(name)?;
         if !quiet {
-            println!("Set '{}' as the default in ~/.origin/spaces.toml.", name);
+            println!("Set '{}' as the default in ~/.wenlan/spaces.toml.", name);
         }
     }
     Ok(())
@@ -184,7 +184,7 @@ async fn default_cmd(
         Some(n) => {
             set_default_in_toml(n)?;
             if !quiet {
-                println!("Set default space to '{}' in ~/.origin/spaces.toml.", n);
+                println!("Set default space to '{}' in ~/.wenlan/spaces.toml.", n);
             }
         }
         None => match read_default_from_toml() {
@@ -234,7 +234,7 @@ async fn show(client: &WenlanClient, format: OutputFormat, quiet: bool, name: &s
                 println!("Starred:        yes");
             }
             if default.as_deref() == Some(space.name.as_str()) {
-                println!("Default:        yes (~/.origin/spaces.toml)");
+                println!("Default:        yes (~/.wenlan/spaces.toml)");
             }
         }
         OutputFormat::Auto => unreachable!("Auto resolved by main before dispatch"),

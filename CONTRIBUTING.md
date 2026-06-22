@@ -24,9 +24,9 @@ Or install as a launchd service:
 
 ```bash
 cargo build --release -p origin -p wenlan-server
-./target/release/origin setup --basic
-./target/release/origin install
-./target/release/origin status
+./target/release/wenlan setup --basic
+./target/release/wenlan install
+./target/release/wenlan status
 ```
 
 > First build can take several minutes while `llama.cpp` compiles for Metal.

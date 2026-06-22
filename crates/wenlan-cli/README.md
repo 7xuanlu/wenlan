@@ -9,10 +9,10 @@ License: Apache-2.0.
 Recommended user setup:
 
 ```bash
-npx -y @7xuanlu/origin setup
+npx -y @7xuanlu/wenlan setup
 ```
 
-The setup package supports macOS (arm64, x64), Linux (x64, arm64), and Windows (x64). It downloads the platform-matching release archive, installs `origin`, `wenlan-server`, and `wenlan-mcp` into `~/.origin/bin/`, configures local memory, registers the daemon with the host's native service manager (launchd on macOS, systemd-user on Linux), and verifies status. On Windows, `origin install` is not supported in v1 (daemon does not yet speak the Windows Service Control Protocol); run `wenlan-server.exe` manually or via Task Scheduler.
+The setup package supports macOS (arm64, x64), Linux (x64, arm64), and Windows (x64). It downloads the platform-matching release archive, installs `origin`, `wenlan-server`, and `wenlan-mcp` into `~/.wenlan/bin/`, configures local memory, registers the daemon with the host's native service manager (launchd on macOS, systemd-user on Linux), and verifies status. On Windows, `wenlan install` is not supported in v1 (daemon does not yet speak the Windows Service Control Protocol); run `wenlan-server.exe` manually or via Task Scheduler.
 
 For local development:
 
@@ -24,7 +24,7 @@ Or build from the workspace:
 
 ```bash
 cargo build -p origin --release
-./target/release/origin --help
+./target/release/wenlan --help
 ```
 
 ## Configuration
@@ -37,27 +37,27 @@ export ORIGIN_HOST=http://127.0.0.1:7878  # default
 
 ## Subcommands
 
-### `origin status`
+### `wenlan status`
 
 Show daemon, native service (launchd / systemd-user / sc.exe), model, and API key state.
 
 ```bash
-origin status
-origin status --format json
+wenlan status
+wenlan status --format json
 ```
 
-### `origin setup`
+### `wenlan setup`
 
 Configure Wenlan's runtime mode.
 
 ```bash
-origin setup                  # interactive
-origin setup --basic          # local memory, no local model or API key
-origin setup --model qwen3-4b # download/select a local model
-origin setup --anthropic-api-key-env ANTHROPIC_API_KEY
+wenlan setup                  # interactive
+wenlan setup --basic          # local memory, no local model or API key
+wenlan setup --model qwen3-4b # download/select a local model
+wenlan setup --anthropic-api-key-env ANTHROPIC_API_KEY
 ```
 
-### `origin install` / `origin uninstall`
+### `wenlan install` / `wenlan uninstall`
 
 Register or remove the daemon with the host's native service manager. The service runs the sibling `wenlan-server` binary next to `origin`.
 
@@ -66,36 +66,36 @@ Register or remove the daemon with the host's native service manager. The servic
 - **Windows**: not yet supported in v1. The console-app daemon does not implement the Windows Service Control Protocol; sc.exe start times out. Run `wenlan-server.exe` manually or register a Task Scheduler logon task. Tracked follow-up.
 
 ```bash
-origin install
-origin uninstall
+wenlan install
+wenlan uninstall
 ```
 
-### `origin doctor`
+### `wenlan doctor`
 
 Diagnose daemon reachability, native service state (launchd / systemd-user / sc.exe), model setup, and API key setup.
 
 ```bash
-origin doctor
+wenlan doctor
 ```
 
-### `origin model`
+### `wenlan model`
 
 Manage opt-in local models.
 
 ```bash
-origin model list
-origin model status
-origin model install qwen3-4b
+wenlan model list
+wenlan model status
+wenlan model install qwen3-4b
 ```
 
-### `origin key`
+### `wenlan key`
 
 Manage provider API keys.
 
 ```bash
-origin key status
-origin key set anthropic --env ANTHROPIC_API_KEY
-origin key clear anthropic
+wenlan key status
+wenlan key set anthropic --env ANTHROPIC_API_KEY
+wenlan key clear anthropic
 ```
 
 ### `origin mcp add <client>`
@@ -118,65 +118,65 @@ Use `--dry-run` to preview JSON config edits before writing them:
 origin mcp add cursor --dry-run
 ```
 
-### `origin search <query>`
+### `wenlan search <query>`
 
 Search memories (vector + FTS hybrid).
 
 ```bash
-origin search "embedding model"
-origin search "rust" --limit 5
-origin search "rust" --format json | jq '.results[].score'
+wenlan search "embedding model"
+wenlan search "rust" --limit 5
+wenlan search "rust" --format json | jq '.results[].score'
 ```
 
-### `origin recall <query>`
+### `wenlan recall <query>`
 
 Get the working memory bundle for a query (pages + decisions + relevant memories + graph context).
 
 ```bash
-origin recall "what we agreed on for the API"
-origin recall "memory layer" --format json
+wenlan recall "what we agreed on for the API"
+wenlan recall "memory layer" --format json
 ```
 
-### `origin store [text] [--file <path>] [--type <type>]`
+### `wenlan store [text] [--file <path>] [--type <type>]`
 
 Store a memory. Provide content positionally, via `--file`, or pipe via stdin.
 
 ```bash
-origin store "remember this insight" --type fact
-origin store --file notes.md --type page
-echo "stdin pipe content" | origin store --type quick_thought
+wenlan store "remember this insight" --type fact
+wenlan store --file notes.md --type page
+echo "stdin pipe content" | wenlan store --type quick_thought
 ```
 
-### `origin list [--limit N] [--type X]`
+### `wenlan list [--limit N] [--type X]`
 
 List recent memories.
 
 ```bash
-origin list
-origin list --limit 5
-origin list --type fact --format json
+wenlan list
+wenlan list --limit 5
+wenlan list --type fact --format json
 ```
 
-### `origin agents list/show/edit`
+### `wenlan agents list/show/edit`
 
 Manage registered agents.
 
 ```bash
-origin agents list
-origin agents show claude-code
-origin agents edit claude-code --trust trusted --enabled true
+wenlan agents list
+wenlan agents show claude-code
+wenlan agents edit claude-code --trust trusted --enabled true
 ```
 
-### `origin space <list|add|default|move|show>`
+### `wenlan space <list|add|default|move|show>`
 
 Manage memory spaces (buckets).
 
 ```bash
-origin space list
-origin space add ideas --default
-origin space show career
-origin space default work
-origin space move scratch career
+wenlan space list
+wenlan space add ideas --default
+wenlan space show career
+wenlan space default work
+wenlan space move scratch career
 ```
 
 ## Output formats

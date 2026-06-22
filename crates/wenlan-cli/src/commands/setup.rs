@@ -412,7 +412,7 @@ fn print_space_resolution(cwd: &std::path::Path) {
     let cfg_exists = cfg.as_ref().map(|p| p.exists()).unwrap_or(false);
     let _ = writeln!(
         out,
-        "~/.origin/spaces.toml: {}",
+        "~/.wenlan/spaces.toml: {}",
         if cfg_exists { "present" } else { "missing" }
     );
 

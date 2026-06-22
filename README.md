@@ -31,7 +31,7 @@ Wenlan is the single local home for your AI work artifacts: decisions, lessons, 
 
 A brief opens each session, a handoff closes it, so the thread carries forward instead of restarting.
 
-One store, every tool: Claude Code, Cursor, Codex, Claude Desktop, VS Code, and Gemini CLI query the same local daemon. Read the Markdown under `~/.origin/`, or symlink it into Obsidian for a graph view. Spaces keep work, personal, and client projects from bleeding together.
+One store, every tool: Claude Code, Cursor, Codex, Claude Desktop, VS Code, and Gemini CLI query the same local daemon. Read the Markdown under `~/.wenlan/`, or symlink it into Obsidian for a graph view. Spaces keep work, personal, and client projects from bleeding together.
 
 [![Watch the Wenlan demo](./docs/assets/demo-preview.gif)](https://youtu.be/k37gjWVPHwI)
 
@@ -42,7 +42,7 @@ One store, every tool: Claude Code, Cursor, Codex, Claude Desktop, VS Code, and 
 1. **Compounds, not just storage.** Most memory tools hand back snippets. Wenlan clusters captures into source-backed wiki pages, and those pages feed retrieval alongside the atomic memories they came from.
 2. **One home, locked to none.** Every MCP client queries the same local daemon, so context built in one tool shows up in the next. Obsidian is one optional view you can symlink in, not where your work lives.
 3. **Review before trust.** Low-confidence captures and contradictions surface for review instead of silently entering context. Correct yourself once and Wenlan supersedes the old fact instead of serving both. Pages cite their source memory IDs, and the daemon refuses unsourced pages rather than letting hallucinated summaries in.
-4. **Real git versioning.** Memory, page, and session writes commit into `~/.origin/.git/`, so you can inspect, diff, revert, or branch the Markdown artifacts.
+4. **Real git versioning.** Memory, page, and session writes commit into `~/.wenlan/.git/`, so you can inspect, diff, revert, or branch the Markdown artifacts.
    ```text
    a1b2c3d page: embedding-retrieval refreshed (4 sources)
    9f8e7d6 session: handoff embedding-work
@@ -72,8 +72,8 @@ Plugin details and daily commands: [plugin/](plugin/.claude-plugin/README.md).
 Use this if you want Wenlan tools in Claude Code without the plugin, or in Codex, Cursor, Claude Desktop, VS Code, or Gemini CLI.
 
 ```bash
-npx -y @7xuanlu/origin setup
-~/.origin/bin/origin mcp add claude-code      # or: codex, cursor, claude-desktop, vscode, gemini
+npx -y @7xuanlu/wenlan setup
+~/.wenlan/bin/origin mcp add claude-code      # or: codex, cursor, claude-desktop, vscode, gemini
 ```
 
 MCP-only gives agents tools for capture, recall, context, doctor, and page distillation. It does not install Claude Code slash skills like `/brief`, `/handoff`, `/distill`, or `/init`.
@@ -83,21 +83,21 @@ MCP-only gives agents tools for capture, recall, context, doctor, and page disti
 Set up the local Wenlan runtime:
 
 ```bash
-npx -y @7xuanlu/origin setup
+npx -y @7xuanlu/wenlan setup
 ```
 
-Then start with `~/.origin/bin/origin status`, `~/.origin/bin/origin recall <query>`, or `~/.origin/bin/origin store <text>`. CLI details: [crates/wenlan-cli](crates/wenlan-cli/README.md).
+Then start with `~/.wenlan/bin/wenlan status`, `~/.wenlan/bin/wenlan recall <query>`, or `~/.wenlan/bin/wenlan store <text>`. CLI details: [crates/wenlan-cli](crates/wenlan-cli/README.md).
 
 Service management:
 
 ```bash
-origin install            # register + start the daemon (stops a running one first)
-origin restart            # stop + start the daemon -- run this after upgrading
-origin status
-origin uninstall
+wenlan install            # register + start the daemon (stops a running one first)
+wenlan restart            # stop + start the daemon -- run this after upgrading
+wenlan status
+wenlan uninstall
 ```
 
-After upgrading Wenlan (`npx -y @7xuanlu/origin setup` or `install.sh`), the new binary is on disk but the already-running daemon keeps serving the old code until you restart it. `origin install` now restarts automatically; if you upgraded another way, run `origin restart`.
+After upgrading Wenlan (`npx -y @7xuanlu/wenlan setup` or `install.sh`), the new binary is on disk but the already-running daemon keeps serving the old code until you restart it. `wenlan install` now restarts automatically; if you upgraded another way, run `wenlan restart`.
 
 ---
 
@@ -146,7 +146,7 @@ Works fully local with no API key, cloud account, or signup. Capture, recall, hy
 - **Stays fresh on its own**: background passes link entities, grow matching pages, and update each memory's effective confidence from type, access, and age, so recent and load-bearing memories surface while stale ones fade.
 - **Review before trust**: low-confidence captures, pending revisions, contradictions, and supersessions can surface instead of silently entering context.
 - **Explicit spaces**: tag memories, pages, and recalls with `space=work | personal | client-X` so a day-job capture never bleeds into a side-project brief. Auto-detected from the current repo or workspace when no space is set; overridable always.
-- **You own the data**: everything is plain Markdown under `~/.origin/`, versioned in git. Grep it, symlink it into Obsidian, or walk away with the files anytime. No lock-in.
+- **You own the data**: everything is plain Markdown under `~/.wenlan/`, versioned in git. Grep it, symlink it into Obsidian, or walk away with the files anytime. No lock-in.
 
 ### Spaces
 
@@ -155,15 +155,15 @@ Memories belong to a **space** like `origin`, `career`, or
 
     ORIGIN_SPACE=career claude
 
-Or declaratively via `~/.origin/spaces.toml` (see
+Or declaratively via `~/.wenlan/spaces.toml` (see
 `plugin/examples/spaces.toml`). To manage spaces from the CLI:
 
-    origin space list
-    origin space add ideas --default
-    origin space show ideas
-    origin space move scratch career
+    wenlan space list
+    wenlan space add ideas --default
+    wenlan space show ideas
+    wenlan space move scratch career
 
-`origin doctor` prints the current resolver state so you can see exactly
+`wenlan doctor` prints the current resolver state so you can see exactly
 which layer chose the active space.
 
 ---

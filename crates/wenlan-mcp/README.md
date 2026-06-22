@@ -6,7 +6,7 @@ Wenlan owns storage, search, embeddings, pages, and distill cycles. `wenlan-mcp`
 
 ## Install
 
-Most users should install through the root README. After `npx -y @7xuanlu/origin setup`, use the product CLI to configure supported clients:
+Most users should install through the root README. After `npx -y @7xuanlu/wenlan setup`, use the product CLI to configure supported clients:
 
 ```bash
 origin mcp add codex              # or: claude-code, cursor, claude-desktop, vscode, gemini
@@ -68,7 +68,7 @@ wenlan-mcp --origin-url http://127.0.0.1:7879
 | `forget` | Delete a memory by ID. Destructive. |
 | `doctor` | Diagnose daemon reachability, setup mode, API key state, and on-device model state. |
 
-`doctor` mirrors `origin doctor`. It is diagnostic only and is not part of the memory loop.
+`doctor` mirrors `wenlan doctor`. It is diagnostic only and is not part of the memory loop.
 
 ## Setup Modes
 
@@ -76,8 +76,8 @@ Wenlan works immediately in **local memory** mode: storage, search, recall, and 
 
 Users can opt into more expensive distill cycles:
 
-- **On-device model:** private extraction and distillation after `origin model install`.
-- **Anthropic key:** richer extraction and page synthesis after `origin key set anthropic`.
+- **On-device model:** private extraction and distillation after `wenlan model install`.
+- **Anthropic key:** richer extraction and page synthesis after `wenlan key set anthropic`.
 
 ## Agent Guidance
 

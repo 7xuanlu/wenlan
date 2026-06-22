@@ -6,7 +6,7 @@ use serde::{de::DeserializeOwned, Serialize};
 const DEFAULT_HTTP_URL: &str = "http://127.0.0.1:7878";
 
 /// Single source of truth for the space-lock header name.
-/// Mirrors the daemon's `X-Wenlan-Space` constant (HTTP normalises to lowercase).
+/// Mirrors the daemon's `X-Origin-Space` constant (HTTP normalises to lowercase).
 pub fn space_header_name() -> &'static str {
     "x-origin-space"
 }

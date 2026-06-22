@@ -321,7 +321,7 @@ when absent.
 ```
 Conflict on L stale page(s) — page has user edits, sources also
 changed. Open and reconcile manually:
-  - <Title>  (~/.origin/pages/<slug>.md)
+  - <Title>  (~/.wenlan/pages/<slug>.md)
 ```
 
 Distinct wording from the coherence-skip block so the user can tell
@@ -345,23 +345,23 @@ Rules:
   thresholds. Most memories sit alone without enough peers to form a
   cluster of 3+. Capture more on the same topic to grow them.
 
-## Auto-commit ~/.origin/
+## Auto-commit ~/.wenlan/
 
 After writing the pages above, snapshot the change so the user can `git
 log` their memory's life timeline. Defensive — silent skip if `git` is
-missing or `~/.origin/` is not a repo yet.
+missing or `~/.wenlan/` is not a repo yet.
 
 ```
-Bash: git -C ~/.origin add -A && \
-      git -C ~/.origin -c user.name=Wenlan -c user.email=daemon@origin.local \
+Bash: git -C ~/.wenlan add -A && \
+      git -C ~/.wenlan -c user.name=Wenlan -c user.email=daemon@origin.local \
           commit --quiet -m "distill: <N> pages" 2>/dev/null || \
-      (sleep 1 && git -C ~/.origin add -A && \
-       git -C ~/.origin -c user.name=Wenlan -c user.email=daemon@origin.local \
+      (sleep 1 && git -C ~/.wenlan add -A && \
+       git -C ~/.wenlan -c user.name=Wenlan -c user.email=daemon@origin.local \
            commit --quiet -m "distill: <N> pages" 2>/dev/null) || true
 ```
 
 The retry handles index.lock races — the daemon may be writing to
-`~/.origin/` at the same moment (auto-commit from captures). One-second
+`~/.wenlan/` at the same moment (auto-commit from captures). One-second
 wait is enough for the daemon to release the lock.
 
 ## When to use

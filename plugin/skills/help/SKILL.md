@@ -40,35 +40,35 @@ Daily flow (~1 min overhead per session):
   4. /recall X      →  as needed for lookups
   5. /handoff       →  ~30 s, narrative session log + captures
 
-Where your data lives (everything under ~/.origin/):
+Where your data lives (everything under ~/.wenlan/):
 
-  ~/.origin/pages/      wiki pages distilled from your memories (md)
-  ~/.origin/sessions/   session logs by date (md)
-  ~/.origin/sessions/_status/  current per-project goals + last-handoff
-  ~/.origin/db/         memories + knowledge graph (symlink to libSQL)
-  ~/.origin/bin/        installed binaries
+  ~/.wenlan/pages/      wiki pages distilled from your memories (md)
+  ~/.wenlan/sessions/   session logs by date (md)
+  ~/.wenlan/sessions/_status/  current per-project goals + last-handoff
+  ~/.wenlan/db/         memories + knowledge graph (symlink to libSQL)
+  ~/.wenlan/bin/        installed binaries
 
 View it without a GUI:
 
-  open ~/.origin/                  browse in Finder
-  code ~/.origin/                  open in VS Code
-  git -C ~/.origin log --oneline   timeline of every memory + distill pass
-  ln -s ~/.origin/pages ~/Vault/origin   # symlink into Obsidian for graph view
+  open ~/.wenlan/                  browse in Finder
+  code ~/.wenlan/                  open in VS Code
+  git -C ~/.wenlan log --oneline   timeline of every memory + distill pass
+  ln -s ~/.wenlan/pages ~/Vault/origin   # symlink into Obsidian for graph view
 
-~/.origin/ is a git repo. Skills auto-commit per logical batch (one per
+~/.wenlan/ is a git repo. Skills auto-commit per logical batch (one per
 session, distill pass, or forget). Use git log / git diff / git revert
 as a free audit trail. No remote — purely local history.
 
 Three classes of artifact:
   - memories: granular, queryable, live in DB only (confirmed = stays in DB)
-  - pages:    synthesized wikis, DB + ~/.origin/pages/*.md projection
-  - sessions: chronological narrative, ~/.origin/sessions/*.md only
+  - pages:    synthesized wikis, DB + ~/.wenlan/pages/*.md projection
+  - sessions: chronological narrative, ~/.wenlan/sessions/*.md only
 
 Daemon must run at 127.0.0.1:7878. Hook prints "/origin:init" if down.
 
 Optional upgrades for richer distill cycles:
-  origin model install            local Qwen, no API cost
-  origin key set anthropic        Anthropic API, higher quality
+  wenlan model install            local Qwen, no API cost
+  wenlan key set anthropic        Anthropic API, higher quality
 ```
 
 ## When to use

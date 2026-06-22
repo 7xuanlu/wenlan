@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
-//! `X-Wenlan-Space` HTTP header extractor.
+//! `X-Origin-Space` HTTP header extractor.
 //!
-//! When the request includes `X-Wenlan-Space: <name>`, this extractor
+//! When the request includes `X-Origin-Space: <name>`, this extractor
 //! returns `Some(name)`. Handlers use it as a fallback applied only when
 //! the request body omits the `space` field. Explicit body `space` always
 //! wins to preserve the user's per-call override path.
@@ -56,7 +56,7 @@ mod tests {
 
     #[tokio::test]
     async fn present_header_yields_some() {
-        let mut parts = build_parts(&[("X-Wenlan-Space", "career")]);
+        let mut parts = build_parts(&[("X-Origin-Space", "career")]);
         let SpaceHeader(val) = SpaceHeader::from_request_parts(&mut parts, &())
             .await
             .unwrap();
@@ -65,7 +65,7 @@ mod tests {
 
     #[tokio::test]
     async fn empty_header_yields_none() {
-        let mut parts = build_parts(&[("X-Wenlan-Space", "   ")]);
+        let mut parts = build_parts(&[("X-Origin-Space", "   ")]);
         let SpaceHeader(val) = SpaceHeader::from_request_parts(&mut parts, &())
             .await
             .unwrap();

@@ -36,10 +36,10 @@ Bash: cd_repo=$(git -C "$PWD" rev-parse --show-toplevel 2>/dev/null); echo "${cd
 - If output is a path → `<project>` = basename (e.g. `origin`).
 - If `no-git` → `<project>` = cwd basename.
 
-Read `~/.origin/sessions/_status/<project>.md`:
+Read `~/.wenlan/sessions/_status/<project>.md`:
 
 ```
-Bash: cat ~/.origin/sessions/_status/<project>.md
+Bash: cat ~/.wenlan/sessions/_status/<project>.md
 ```
 
 If the file exists, render its `## Last session`, `## Active`, and `## Backlog`

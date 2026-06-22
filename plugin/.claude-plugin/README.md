@@ -65,14 +65,14 @@ A `SessionStart` hook (`hooks/check-daemon.sh`) probes the local daemon at `127.
 ## Where your data lives
 
 ```text
-~/.origin/pages/               wiki pages distilled from memories (md)
-~/.origin/sessions/            session logs by date (md)
-~/.origin/sessions/_status/    current per-project goals + last-handoff timestamp
-~/.origin/db/                  symlink to the libSQL store
-~/.origin/bin/                 installed binaries
+~/.wenlan/pages/               wiki pages distilled from memories (md)
+~/.wenlan/sessions/            session logs by date (md)
+~/.wenlan/sessions/_status/    current per-project goals + last-handoff timestamp
+~/.wenlan/db/                  symlink to the libSQL store
+~/.wenlan/bin/                 installed binaries
 ```
 
-Browse with `open ~/.origin/` (Finder), `code ~/.origin/` (VS Code), or symlink `~/.origin/pages/` into an Obsidian vault for the graph view. No Tauri app required.
+Browse with `open ~/.wenlan/` (Finder), `code ~/.wenlan/` (VS Code), or symlink `~/.wenlan/pages/` into an Obsidian vault for the graph view. No Tauri app required.
 
 ## Local memory and agent-side model phases
 
