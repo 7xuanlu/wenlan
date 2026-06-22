@@ -106,6 +106,9 @@ pub async fn handle_search(
             // plain search_memory, then cross-encode down to req.limit at the handler
             // layer. search_memory itself stays CE-free, so internal callers are unaffected.
             Some(reranker) => {
+                // Light path uses the default pool (max(limit,10)). Unlike the deep path
+                // (db.rs), it does NOT read RERANK_POOL_MULTIPLIER/FLOOR — turbo is cheap
+                // and the light path isn't an eval-sweep surface. (review note)
                 let pool = origin_core::db::compute_rerank_fetch_pool(req.limit, None, None);
                 let pooled = db
                     .search_memory(

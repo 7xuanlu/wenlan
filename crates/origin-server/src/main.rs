@@ -519,9 +519,12 @@ async fn run_daemon() -> anyhow::Result<()> {
                 }
             }
             // lite: the deep path reuses the already-loaded turbo (no second load).
+            // Mirror the light status either way so a FAILED turbo load surfaces as
+            // deep=failed (not a misleading deep=disabled) on /api/status; the missing
+            // Arc still makes rerank=true fall back to plain hybrid. (review fix)
             Some(RerankerPick::Turbo) => {
+                server_state.reranker_status = server_state.reranker_light_status.clone();
                 if let Some(r) = light_reranker.clone() {
-                    server_state.reranker_status = server_state.reranker_light_status.clone();
                     server_state.reranker = Some(r);
                 }
             }
