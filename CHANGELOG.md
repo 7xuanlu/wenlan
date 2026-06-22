@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.8.6](https://github.com/7xuanlu/origin/compare/v0.8.5...v0.8.6) (2026-06-22)
+
+
+### Bug Fixes
+
+* ORIGIN_RERANKER_MODE (off|lite|full) — reachable cross-encoder rerank ([#282](https://github.com/7xuanlu/origin/issues/282)) ([be88029](https://github.com/7xuanlu/origin/commit/be880296a4a33615c60aa5b0d9d16e57ddfeb76e))
+
+
+### Performance Improvements
+
+* continuous-batch slot backfill for on-device enrichment (default-OFF, 1.65x decode) ([#276](https://github.com/7xuanlu/origin/issues/276)) ([68f2f76](https://github.com/7xuanlu/origin/commit/68f2f765fe3fd90eaed0bc41032d04a75779839e))
+* **engine:** prefill-side prefix-KV cache for on-device enrichment (default-OFF, ~1.9x prefill) ([#278](https://github.com/7xuanlu/origin/issues/278)) ([8274538](https://github.com/7xuanlu/origin/commit/827453837204b692bbf776c9dbedeeedb6cbc9e8))
+
 ## [0.8.5](https://github.com/7xuanlu/origin/compare/v0.8.4...v0.8.5) (2026-06-19)
 
 
