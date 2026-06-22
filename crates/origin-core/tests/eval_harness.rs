@@ -9285,6 +9285,108 @@ async fn generate_lme_fullstack_ceiling() {
 /// FULL-STACK accuracy on the DEEP per-question LME-S substrate (pool-decision +
 /// headline instrument).
 ///
+/// Pages answer-acc A/B over the DEEP per-question LME-S substrate, reusing the
+/// pre-seeded pool90 DBs in `EVAL_BASELINES_DIR` (NO re-seed; cache-hit reads the
+/// existing per-question seeds, so the substrate stays untouched). `ArmSpec::pages_ab()`
+/// = 3 arms isolating the page channel in the ANSWER context: ce_off (CE off, no pages)
+/// / ce_on (CE on, no pages) / ce_on_pages (CE on, pages). Answers on-device
+/// Qwen3.5-9B (temp 0.0); the judge is a separate `claude -p` step over the saved
+/// tuples. A `CeOff` arm is present so `needs_confounder_isolation` is true and the
+/// runner enforces `ORIGIN_GRAPH_MEMORY_STREAM=0`. The page fetch is driven by the
+/// per-arm `include_pages` toggle (independent of `ORIGIN_ENABLE_PAGE_CHANNEL`).
+///
+/// ```bash
+/// EVAL_BASELINES_DIR=$HOME/.cache/origin-eval-pool90 LME_S_FIXTURE=/tmp/claude/lme_s_90.json \
+/// ORIGIN_GRAPH_MEMORY_STREAM=0 EVAL_ENRICHMENT=local LME_LIMIT_QUESTIONS=20 \
+///   cargo test -p origin-core --test eval_harness --features eval-harness \
+///   generate_pages_ab_lme_s -- --ignored --nocapture
+/// ```
+#[tokio::test]
+#[ignore]
+async fn generate_pages_ab_lme_s() {
+    use origin_core::eval::answer_quality::{run_fullpipeline_lme, ArmSpec, DbSource};
+    use origin_core::llm_provider::{LlmProvider, OnDeviceProvider};
+    use std::sync::Arc;
+
+    let lme_path = match std::env::var("LME_S_FIXTURE") {
+        Ok(p) => std::path::PathBuf::from(p),
+        Err(_) => {
+            let data_dir = eval_root().join("data");
+            let cleaned = data_dir.join("longmemeval_s_cleaned.json");
+            if cleaned.exists() {
+                cleaned
+            } else {
+                data_dir.join("longmemeval_s.json")
+            }
+        }
+    };
+    if !lme_path.exists() {
+        eprintln!(
+            "SKIP: LME-S fixture not found at {:?}. Set LME_S_FIXTURE=<path> or point \
+             ORIGIN_EVAL_ROOT at the main checkout's app/eval.",
+            lme_path
+        );
+        return;
+    }
+
+    let enrich_model =
+        std::env::var("EVAL_ANSWER_MODEL").unwrap_or_else(|_| "claude-haiku-4-5-20251001".into());
+    let cost_cap: f64 = std::env::var("EVAL_COST_CAP")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(10.0);
+
+    let baselines = origin_core::eval::shared::eval_baselines_dir_override()
+        .unwrap_or_else(|| eval_root().join("baselines"));
+    std::fs::create_dir_all(&baselines).ok();
+    let output_path = baselines.join("pages_ab_lme_s_tuples.json");
+
+    eprintln!(
+        "[generate_pages_ab_lme_s] PAGES A/B (DEEP S fixture, pool90 reuse):\n  \
+         fixture: {:?}\n  \
+         arms: ce_off (no pages) / ce_on (no pages) / ce_on_pages (pages)\n  \
+         page_channel_flag={}  graph_stream_flag={}\n  \
+         RERANK_POOL_FLOOR={}\n  \
+         answer model: on-device qwen3.5-9b (temp 0.0)\n  enrich model: {}\n  output: {:?}",
+        lme_path,
+        origin_core::db::page_channel_enabled(),
+        origin_core::db::graph_memory_stream_enabled(),
+        std::env::var("RERANK_POOL_FLOOR").unwrap_or_else(|_| "10 (default)".into()),
+        enrich_model,
+        output_path,
+    );
+
+    let llm: Arc<dyn LlmProvider> =
+        Arc::new(OnDeviceProvider::new_with_model(Some("qwen3.5-9b")).expect(
+            "OnDeviceProvider::new_with_model failed -- is the Qwen3.5-9B model available?",
+        ));
+
+    let enrichment = origin_core::eval::shared::EnrichmentMode::from_env(&enrich_model, cost_cap)
+        .expect("EnrichmentMode::from_env failed");
+
+    let reranker = origin_core::reranker::init_cross_encoder_reranker(None).expect(
+        "init_cross_encoder_reranker failed (downloads ~1.1GB bge-reranker-base on first run)",
+    );
+
+    let tuples = run_fullpipeline_lme(
+        &lme_path,
+        enrichment,
+        llm,
+        Some(reranker),
+        &ArmSpec::pages_ab(),
+        DbSource::SeedPerQuestion,
+        &output_path,
+    )
+    .await
+    .expect("run_fullpipeline_lme (pages_ab deep-S) failed");
+
+    eprintln!(
+        "\n[generate_pages_ab_lme_s] Done: {} tuples saved to {:?}",
+        tuples.len(),
+        output_path
+    );
+}
+
 /// Same as `generate_lme_fullstack_ceiling` but uses the DEEP `longmemeval_s.json`
 /// fixture (each question carries its own sessions + ~47 real distractor sessions)
 /// instead of the shallow oracle fixture, so the CE fetch pool has genuine
