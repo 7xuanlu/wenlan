@@ -1213,9 +1213,8 @@ async fn build_structured_context(
     search_limit: usize,
     domain: Option<&str>,
     retrieval: CtxRetrieval,
+    include_pages: bool,
 ) -> Result<(String, usize), OriginError> {
-    use crate::pages::filter_pages_by_source_overlap;
-
     let results = match retrieval {
         CtxRetrieval::Quick => {
             db.search_memory(question, search_limit, None, domain, None, None, None, None)
@@ -1231,42 +1230,46 @@ async fn build_structured_context(
     let search_source_ids: std::collections::HashSet<String> =
         results.iter().map(|r| r.source_id.clone()).collect();
 
-    // Structured: concepts + search results (matches production /api/chat-context).
-    // EVAL_CONCEPT_MIN_OVERLAP env var lets us sweep thresholds without code changes;
-    // defaults to the production tuning value (2).
-    let min_overlap: usize = std::env::var("EVAL_CONCEPT_MIN_OVERLAP")
-        .ok()
-        .and_then(|s| s.parse().ok())
-        .unwrap_or_else(|| crate::tuning::DistillationConfig::default().page_min_overlap);
-
     let mut parts: Vec<String> = Vec::new();
-    let raw_concepts = db.search_pages(question, 3, None).await.unwrap_or_default();
-    let concepts = filter_pages_by_source_overlap(&raw_concepts, &search_source_ids, min_overlap);
+    if include_pages {
+        use crate::pages::filter_pages_by_source_overlap;
+        // Structured: concepts + search results (matches production /api/chat-context).
+        // EVAL_CONCEPT_MIN_OVERLAP env var lets us sweep thresholds without code changes;
+        // defaults to the production tuning value (2).
+        let min_overlap: usize = std::env::var("EVAL_CONCEPT_MIN_OVERLAP")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or_else(|| crate::tuning::DistillationConfig::default().page_min_overlap);
 
-    if !raw_concepts.is_empty() {
-        for c in &raw_concepts {
-            let kept = concepts.iter().any(|k| k.id == c.id);
-            let overlap = c
-                .source_memory_ids
-                .iter()
-                .filter(|sid| search_source_ids.contains(sid.as_str()))
-                .count();
-            log::info!(
-                "[eval:concept] score={:.4} overlap={}/{} {} title={:?} q={:?}",
-                c.relevance_score,
-                overlap,
-                results.len(),
-                if kept { "KEPT" } else { "FILTERED" },
-                c.title.chars().take(40).collect::<String>(),
-                question.chars().take(50).collect::<String>(),
-            );
+        let raw_concepts = db.search_pages(question, 3, None).await.unwrap_or_default();
+        let concepts =
+            filter_pages_by_source_overlap(&raw_concepts, &search_source_ids, min_overlap);
+
+        if !raw_concepts.is_empty() {
+            for c in &raw_concepts {
+                let kept = concepts.iter().any(|k| k.id == c.id);
+                let overlap = c
+                    .source_memory_ids
+                    .iter()
+                    .filter(|sid| search_source_ids.contains(sid.as_str()))
+                    .count();
+                log::info!(
+                    "[eval:concept] score={:.4} overlap={}/{} {} title={:?} q={:?}",
+                    c.relevance_score,
+                    overlap,
+                    results.len(),
+                    if kept { "KEPT" } else { "FILTERED" },
+                    c.title.chars().take(40).collect::<String>(),
+                    question.chars().take(50).collect::<String>(),
+                );
+            }
         }
-    }
-    if !concepts.is_empty() {
-        parts.push("## Compiled Knowledge".to_string());
-        for c in &concepts {
-            let summary = c.summary.as_deref().unwrap_or("");
-            parts.push(format!("**{}**: {}\n{}", c.title, summary, c.content));
+        if !concepts.is_empty() {
+            parts.push("## Compiled Knowledge".to_string());
+            for c in &concepts {
+                let summary = c.summary.as_deref().unwrap_or("");
+                parts.push(format!("**{}**: {}\n{}", c.title, summary, c.content));
+            }
         }
     }
     if !results.is_empty() {
@@ -1938,9 +1941,15 @@ pub async fn run_fullpipeline_locomo_batch(
                 }
 
                 let category = category_name(qa.category);
-                let ctx_result =
-                    build_structured_context(&db, &qa.question, 10, None, CtxRetrieval::Quick)
-                        .await;
+                let ctx_result = build_structured_context(
+                    &db,
+                    &qa.question,
+                    10,
+                    None,
+                    CtxRetrieval::Quick,
+                    true,
+                )
+                .await;
                 let (ctx, ctx_tokens) = match ctx_result {
                     Ok(v) => v,
                     Err(e) => {
@@ -2083,6 +2092,7 @@ pub async fn run_fullpipeline_locomo_batch(
                                 10,
                                 None,
                                 CtxRetrieval::Quick,
+                                true,
                             )
                             .await;
                             let (ctx, ctx_tokens) = match ctx_result {
@@ -2432,9 +2442,15 @@ pub async fn run_fullpipeline_lme_batch(
             );
 
             let category = category_name(&sample.question_type);
-            let ctx_result =
-                build_structured_context(&db, &sample.question, 10, None, CtxRetrieval::Quick)
-                    .await;
+            let ctx_result = build_structured_context(
+                &db,
+                &sample.question,
+                10,
+                None,
+                CtxRetrieval::Quick,
+                true,
+            )
+            .await;
             let (ctx, ctx_tokens) = match ctx_result {
                 Ok(v) => v,
                 Err(e) => {
@@ -2583,6 +2599,7 @@ pub async fn run_fullpipeline_lme_batch(
                             10,
                             None,
                             CtxRetrieval::Quick,
+                            true,
                         )
                         .await;
                         let (ctx, ctx_tokens) = match ctx_result {
@@ -3283,6 +3300,7 @@ pub async fn run_fullpipeline_lme(
                     10,
                     None,
                     retrieval,
+                    true,
                 )
                 .await
                 {
@@ -3508,6 +3526,7 @@ pub async fn run_fullpipeline_lme(
                                 10,
                                 None,
                                 retrieval,
+                                true,
                             )
                             .await
                             {
@@ -3789,6 +3808,92 @@ mod tests {
         assert!(
             !spec.needs_confounder_isolation(),
             "full_stack has no CeOff arm — confounder gate must be skipped so features can be ON"
+        );
+    }
+
+    /// Task 1: `include_pages=true` surfaces `## Compiled Knowledge`; `false` omits it.
+    #[tokio::test]
+    async fn build_structured_context_include_pages_toggle() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db = MemoryDB::new_with_shared_embedder(
+            tmp.path(),
+            Arc::new(NoopEmitter),
+            eval_shared_embedder(),
+        )
+        .await
+        .unwrap();
+
+        // Seed two memories so the page overlap gate (default min_overlap=2) passes.
+        let source_id_1 = "test_mem_p1";
+        let source_id_2 = "test_mem_p2";
+        db.upsert_documents(vec![
+            RawDocument {
+                source: "memory".to_string(),
+                source_id: source_id_1.to_string(),
+                title: "planning session".to_string(),
+                content: "I discussed project planning with the team.".to_string(),
+                last_modified: chrono::Utc::now().timestamp(),
+                memory_type: Some("fact".to_string()),
+                space: Some("conversation".to_string()),
+                ..Default::default()
+            },
+            RawDocument {
+                source: "memory".to_string(),
+                source_id: source_id_2.to_string(),
+                title: "team coordination".to_string(),
+                content: "We coordinated the planning tasks across the team.".to_string(),
+                last_modified: chrono::Utc::now().timestamp(),
+                memory_type: Some("fact".to_string()),
+                space: Some("conversation".to_string()),
+                ..Default::default()
+            },
+        ])
+        .await
+        .unwrap();
+
+        // Insert a page referencing both memories (satisfies default min_overlap=2 gate).
+        let now = chrono::Utc::now().to_rfc3339();
+        db.insert_page(
+            "page_test_001",
+            "Project Planning Guide",
+            Some("Overview of planning practices."),
+            "This page covers project planning discussions and team coordination.",
+            None,
+            None,
+            &[source_id_1, source_id_2],
+            &now,
+        )
+        .await
+        .unwrap();
+
+        let question = "planning";
+
+        let (ctx_on, _) =
+            build_structured_context(&db, question, 10, None, CtxRetrieval::Quick, true)
+                .await
+                .unwrap();
+
+        let (ctx_off, _) =
+            build_structured_context(&db, question, 10, None, CtxRetrieval::Quick, false)
+                .await
+                .unwrap();
+
+        assert!(
+            ctx_on.contains("## Compiled Knowledge"),
+            "include_pages=true must include ## Compiled Knowledge; got: {ctx_on}"
+        );
+        assert!(
+            !ctx_off.contains("## Compiled Knowledge"),
+            "include_pages=false must NOT include ## Compiled Knowledge; got: {ctx_off}"
+        );
+        // Both should contain memory content when there are hits.
+        assert!(
+            ctx_on.contains("## Relevant Memories") || ctx_on.contains("planning"),
+            "include_pages=true context should contain memory content"
+        );
+        assert!(
+            ctx_off.contains("## Relevant Memories") || ctx_off.contains("planning"),
+            "include_pages=false context should contain memory content"
         );
     }
 }
