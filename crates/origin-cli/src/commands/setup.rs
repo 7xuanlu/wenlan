@@ -127,6 +127,7 @@ pub async fn run_doctor() -> anyhow::Result<()> {
     print_daemon_health().await;
     print_key_status();
     print_model_status();
+    print_reranker_status().await;
 
     let cfg = config::load_config();
     let has_key = cfg
@@ -156,6 +157,7 @@ pub async fn run_doctor() -> anyhow::Result<()> {
 pub async fn print_runtime_status() -> anyhow::Result<()> {
     print_key_status();
     print_model_status();
+    print_reranker_status().await;
     Ok(())
 }
 
@@ -354,6 +356,42 @@ async fn print_daemon_health() {
         Ok(resp) if resp.status().is_success() => println!("Daemon: running on {}", url),
         Ok(resp) => println!("Daemon: unhealthy ({})", resp.status()),
         Err(_) => println!("Daemon: not reachable on {}", url),
+    }
+}
+
+/// Fetch `/api/status` and print the per-path reranker summary (mode + deep + light).
+/// Silent on network error — the daemon being down is already surfaced by the
+/// preceding health check.
+async fn print_reranker_status() {
+    use origin_types::responses::RerankerStatus;
+    let url = origin_url("/api/status");
+    let Ok(resp) = reqwest::get(&url).await else {
+        return;
+    };
+    let Ok(status) = resp.json::<origin_types::responses::StatusResponse>().await else {
+        return;
+    };
+    let fmt = |s: &RerankerStatus| match s {
+        RerankerStatus::Disabled => "disabled".to_string(),
+        RerankerStatus::Active { model_id } => format!("active ({model_id})"),
+        RerankerStatus::Failed { reason } => format!("failed ({reason})"),
+    };
+    let mode = if status.reranker_mode.is_empty() {
+        "off"
+    } else {
+        status.reranker_mode.as_str()
+    };
+    println!("Reranker mode: {mode}");
+    println!(
+        "  deep  (/api/memory/search rerank=true): {}",
+        fmt(&status.reranker)
+    );
+    println!(
+        "  light (/api/search + /api/chat-context): {}",
+        fmt(&status.reranker_light)
+    );
+    if mode == "off" {
+        println!("  (set ORIGIN_RERANKER_MODE=lite|full to enable cross-encoder rerank)");
     }
 }
 

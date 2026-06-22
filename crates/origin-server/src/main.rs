@@ -420,50 +420,122 @@ async fn run_daemon() -> anyhow::Result<()> {
         }
     }
 
-    // Initialize cross-encoder reranker. Opt-in via `ORIGIN_RERANKER_ENABLED=1`
-    // because first construction downloads the model weights (~1.1GB for the
-    // default bge-reranker-base). Reuses the
-    // embedder's FastEmbed cache directory so the download is shared with the
-    // BGE embedder. Failure is non-fatal: search falls back to embedding+FTS
-    // ordering with no rerank pass.
-    if std::env::var("ORIGIN_RERANKER_ENABLED").as_deref() == Ok("1") {
-        let cache_dir = origin_core::db::resolve_fastembed_cache_dir(&data_dir);
+    // Cross-encoder reranker wiring. `ORIGIN_RERANKER_MODE = off|lite|full` (default
+    // off) selects which retrieval paths get a CE and which model; the legacy
+    // `ORIGIN_RERANKER_ENABLED=1` (with MODE unset) maps to deep-only CE using the
+    // configured model — exactly the pre-mode behavior. First construction downloads
+    // weights (turbo ~146MB, bge-base ~1.1GB) into the shared FastEmbed cache;
+    // failure is non-fatal (the affected path falls back to embedding+FTS ordering).
+    let reranker_cache_dir = origin_core::db::resolve_fastembed_cache_dir(&data_dir);
+    let mut deep_bgebase_pending = false;
+    {
+        use origin_core::reranker::{RerankerMode, RerankerPick};
+        use origin_types::responses::RerankerStatus;
+        let mode = origin_core::reranker::reranker_mode_from_env();
+        let legacy_enabled = std::env::var("ORIGIN_RERANKER_ENABLED").as_deref() == Ok("1");
+        let plan = origin_core::reranker::resolve_reranker_plan(mode, legacy_enabled);
+        server_state.reranker_mode = match mode {
+            RerankerMode::Off => "off",
+            RerankerMode::Lite => "lite",
+            RerankerMode::Full => "full",
+        }
+        .to_string();
         tracing::info!(
-            "[reranker] enabling cross-encoder; first run downloads model weights \
-             (~1.1GB for the default bge-reranker-base). The daemon finishes starting \
-             once the model is ready\u{2026}"
+            "[reranker] mode={} (legacy_enabled={legacy_enabled}); light={:?} deep={:?}",
+            server_state.reranker_mode,
+            plan.light,
+            plan.deep
         );
-        let init_result = tokio::task::spawn_blocking(move || {
-            origin_core::reranker::init_cross_encoder_reranker(cache_dir)
-        })
-        .await;
-        match init_result {
-            Ok(Ok(reranker)) => {
-                let model_id = reranker.model_id().to_string();
-                tracing::info!("[reranker] cross-encoder initialized (model={model_id})");
-                server_state.reranker_status =
-                    origin_types::responses::RerankerStatus::Active { model_id };
-                server_state.reranker = Some(reranker);
-            }
-            Ok(Err(e)) => {
-                tracing::warn!("[reranker] init failed, falling back to embedding+FTS only: {e}");
-                server_state.reranker_status = origin_types::responses::RerankerStatus::Failed {
-                    reason: e.to_string(),
-                };
-            }
-            Err(e) => {
-                tracing::warn!(
-                    "[reranker] init join failed, falling back to embedding+FTS only: {e}"
-                );
-                server_state.reranker_status = origin_types::responses::RerankerStatus::Failed {
-                    reason: e.to_string(),
-                };
+
+        // Light paths (quick `/api/search` + context `/api/chat-context`): turbo
+        // (~146MB), eager-load — small enough not to meaningfully block startup.
+        let mut light_reranker: Option<Arc<dyn origin_core::reranker::Reranker>> = None;
+        if let Some(pick) = plan.light {
+            let cache = reranker_cache_dir.clone();
+            match tokio::task::spawn_blocking(move || {
+                origin_core::reranker::init_cross_encoder_reranker_pick(pick, cache)
+            })
+            .await
+            {
+                Ok(Ok(r)) => {
+                    let model_id = r.model_id().to_string();
+                    tracing::info!("[reranker] light paths active (model={model_id})");
+                    server_state.reranker_light_status = RerankerStatus::Active { model_id };
+                    light_reranker = Some(r.clone());
+                    server_state.reranker_light = Some(r);
+                }
+                Ok(Err(e)) => {
+                    tracing::warn!(
+                        "[reranker] light init failed; quick + context fall back to plain hybrid: {e}"
+                    );
+                    server_state.reranker_light_status = RerankerStatus::Failed {
+                        reason: e.to_string(),
+                    };
+                }
+                Err(e) => {
+                    tracing::warn!("[reranker] light init join failed: {e}");
+                    server_state.reranker_light_status = RerankerStatus::Failed {
+                        reason: e.to_string(),
+                    };
+                }
             }
         }
-    } else {
-        tracing::info!(
-            "[reranker] ORIGIN_RERANKER_ENABLED!=1, skipping cross-encoder init (set =1 to enable)"
-        );
+
+        // Deep path (`/api/memory/search` with rerank=true).
+        match plan.deep {
+            // Back-compat: ENABLED=1 + mode unset -> eager-load the configured model
+            // (+ BYO via ORIGIN_RERANKER_ONNX_DIR), blocking startup, exactly as before.
+            Some(RerankerPick::Configured) => {
+                tracing::info!(
+                    "[reranker] deep path (legacy ORIGIN_RERANKER_ENABLED); first run downloads \
+                     weights (~1.1GB). The daemon finishes starting once the model is ready\u{2026}"
+                );
+                let cache = reranker_cache_dir.clone();
+                match tokio::task::spawn_blocking(move || {
+                    origin_core::reranker::init_cross_encoder_reranker(cache)
+                })
+                .await
+                {
+                    Ok(Ok(r)) => {
+                        let model_id = r.model_id().to_string();
+                        tracing::info!("[reranker] deep path active (model={model_id})");
+                        server_state.reranker_status = RerankerStatus::Active { model_id };
+                        server_state.reranker = Some(r);
+                    }
+                    Ok(Err(e)) => {
+                        tracing::warn!(
+                            "[reranker] deep init failed; rerank=true falls back to plain hybrid: {e}"
+                        );
+                        server_state.reranker_status = RerankerStatus::Failed {
+                            reason: e.to_string(),
+                        };
+                    }
+                    Err(e) => {
+                        tracing::warn!("[reranker] deep init join failed: {e}");
+                        server_state.reranker_status = RerankerStatus::Failed {
+                            reason: e.to_string(),
+                        };
+                    }
+                }
+            }
+            // lite: the deep path reuses the already-loaded turbo (no second load).
+            // Mirror the light status either way so a FAILED turbo load surfaces as
+            // deep=failed (not a misleading deep=disabled) on /api/status; the missing
+            // Arc still makes rerank=true fall back to plain hybrid. (review fix)
+            Some(RerankerPick::Turbo) => {
+                server_state.reranker_status = server_state.reranker_light_status.clone();
+                if let Some(r) = light_reranker.clone() {
+                    server_state.reranker = Some(r);
+                }
+            }
+            // full: heavy bge-base. Council fix #3 — do NOT block startup; load it in
+            // the background after the state is shared (rerank=true falls back to plain
+            // until ready). Status stays Disabled until the background load completes.
+            Some(RerankerPick::BgeBase) => {
+                deep_bgebase_pending = true;
+            }
+            None => {}
+        }
     }
 
     // Import any legacy tag data from the pre-PR-B2 spaces.db file.
@@ -504,6 +576,55 @@ async fn run_daemon() -> anyhow::Result<()> {
     }
 
     let shared: SharedState = Arc::new(RwLock::new(server_state));
+
+    // full mode: load the heavy deep bge-base in the background so startup never
+    // blocks on the ~1.1GB download (council fix #3). rerank=true uses plain hybrid
+    // until this completes; deep status flips to Active/Failed when the load resolves.
+    if deep_bgebase_pending {
+        let shared_for_deep = shared.clone();
+        let cache = reranker_cache_dir.clone();
+        tokio::spawn(async move {
+            use origin_types::responses::RerankerStatus;
+            tracing::info!(
+                "[reranker] full mode: loading deep bge-base in background (~1.1GB first run); \
+                 rerank=true uses plain hybrid until ready\u{2026}"
+            );
+            let loaded = tokio::task::spawn_blocking(move || {
+                origin_core::reranker::init_cross_encoder_reranker_pick(
+                    origin_core::reranker::RerankerPick::BgeBase,
+                    cache,
+                )
+            })
+            .await;
+            match loaded {
+                Ok(Ok(r)) => {
+                    let model_id = r.model_id().to_string();
+                    let mut st = shared_for_deep.write().await;
+                    st.reranker_status = RerankerStatus::Active {
+                        model_id: model_id.clone(),
+                    };
+                    st.reranker = Some(r);
+                    tracing::info!("[reranker] deep bge-base loaded and active (model={model_id})");
+                }
+                Ok(Err(e)) => {
+                    let mut st = shared_for_deep.write().await;
+                    st.reranker_status = RerankerStatus::Failed {
+                        reason: e.to_string(),
+                    };
+                    tracing::warn!(
+                        "[reranker] deep bge-base load failed; rerank=true stays on plain hybrid: {e}"
+                    );
+                }
+                Err(e) => {
+                    let mut st = shared_for_deep.write().await;
+                    st.reranker_status = RerankerStatus::Failed {
+                        reason: e.to_string(),
+                    };
+                    tracing::warn!("[reranker] deep bge-base load task panicked: {e}");
+                }
+            }
+        });
+    }
 
     // Initialize on-device LLM in the background if a model is already cached.
     // This intentionally does NOT trigger a download — users opt in explicitly
