@@ -16,7 +16,7 @@ Pre-1.0. Expect minor version bumps to include breaking changes, per Rust 0.x co
 
 - [useorigin.app](https://useorigin.app) — project home
 - [useorigin.app/docs](https://useorigin.app/docs) — install + daily workflow
-- [origin-mcp on crates.io](https://crates.io/crates/origin-mcp) — sibling crate
+- [origin-mcp on crates.io](https://crates.io/crates/wenlan-mcp) — sibling crate
 - [github.com/7xuanlu/origin](https://github.com/7xuanlu/origin) — source
 
 ## License

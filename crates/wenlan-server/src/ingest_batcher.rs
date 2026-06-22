@@ -33,8 +33,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use futures::future::BoxFuture;
-use wenlan_core::sources::RawDocument;
 use tokio::sync::{mpsc, oneshot};
+use wenlan_core::sources::RawDocument;
 
 /// Per-document result from a batched ingest flush.
 #[derive(Debug, Clone)]

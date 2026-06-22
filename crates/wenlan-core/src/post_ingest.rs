@@ -26,9 +26,9 @@ use crate::db::MemoryDB;
 use crate::error::WenlanError;
 use crate::llm_provider::LlmProvider;
 use crate::prompts::PromptRegistry;
-use wenlan_types::requests::UpdatePageRequest;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use wenlan_types::requests::UpdatePageRequest;
 
 /// Result of the title enrichment step.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -43,7 +43,7 @@ pub(crate) enum TitleEnrichResult {
 
 /// True iff the caller has signalled cancellation. `None` (the default-OFF
 /// path) is never cancelled, so the flag is fully inert unless an operator
-/// opts into `ORIGIN_ENABLE_REFLECTION_DEBOUNCE` and a newer same-agent write
+/// opts into `WENLAN_ENABLE_REFLECTION_DEBOUNCE` and a newer same-agent write
 /// supersedes this one mid-burst. Checked only BETWEEN best-effort steps so a
 /// step is never half-applied (clean-boundary cancellation).
 fn is_cancelled(cancel: Option<&AtomicBool>) -> bool {

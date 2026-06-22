@@ -6,6 +6,10 @@ use axum::{
     http::HeaderMap,
     response::Json,
 };
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+use std::sync::Arc;
+use tokio::sync::RwLock;
 use wenlan_core::sources::compute_effective_confidence;
 use wenlan_types::requests::{
     AddObservationRequest, ConfirmRequest, CreateConceptRequest, CreateEntityRequest,
@@ -18,10 +22,6 @@ use wenlan_types::responses::{
     StoreMemoryResponse,
 };
 use wenlan_types::sources::{stability_tier, MemoryType, RawDocument, StabilityTier};
-use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
-use std::sync::Arc;
-use tokio::sync::RwLock;
 
 // ===== Profile Types =====
 
@@ -793,7 +793,7 @@ pub async fn handle_store_memory(
 
         // Dispatch: opt-in debounced reflection vs. verbatim detached spawn.
         //
-        // Default OFF (`ORIGIN_ENABLE_REFLECTION_DEBOUNCE` unset/falsey): spawn
+        // Default OFF (`WENLAN_ENABLE_REFLECTION_DEBOUNCE` unset/falsey): spawn
         // immediately with `cancel = None` — byte-identical to the pre-T22 path
         // (no debouncer touched, no coalescing, every store gets its own task).
         //
@@ -975,7 +975,7 @@ pub async fn handle_search_memory(
         if req.rerank {
             if reranker.is_none() {
                 tracing::warn!(
-                    "[search] rerank=true requested but no reranker wired (set ORIGIN_RERANKER_ENABLED=1); falling back to plain hybrid search"
+                    "[search] rerank=true requested but no reranker wired (set WENLAN_RERANKER_ENABLED=1); falling back to plain hybrid search"
                 );
             }
             db.search_memory_cross_rerank(

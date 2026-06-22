@@ -15,8 +15,8 @@ use crate::refinery::helpers::{
 };
 use crate::sources::StabilityTier;
 use crate::synthesis::refinement_queue::{resolve_proposal, ResolveStatus};
-use wenlan_types::requests::UpdatePageRequest;
 use std::sync::Arc;
+use wenlan_types::requests::UpdatePageRequest;
 
 /// What a distillation pass is scoped to. Resolved from a free-form string
 /// supplied by the user (page id, entity name, or domain value).

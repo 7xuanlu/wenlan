@@ -5,8 +5,8 @@ use crate::db::MemoryDB;
 use crate::error::WenlanError;
 use crate::llm_provider::{LlmProvider, LlmRequest};
 use crate::prompts::PromptRegistry;
-use wenlan_types::requests::UpdatePageRequest;
 use std::sync::Arc;
+use wenlan_types::requests::UpdatePageRequest;
 
 /// Layer 2: LLM assigns orphan memories to existing concepts or proposes new ones.
 pub(crate) async fn assign_orphan_memories(

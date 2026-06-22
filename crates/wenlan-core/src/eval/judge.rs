@@ -587,7 +587,7 @@ pub async fn judge_single_tuple_model_with_cost(
 /// lenient LLM judge; strict exact-match is used by no one and undersold us ~7pp on
 /// byte-identical answers (noise run 2026-06-15: strict 61.3% vs lenient 68.7%).
 ///
-/// Opt into STRICT exact-match with `ORIGIN_EVAL_JUDGE_STRICT=1` for citable
+/// Opt into STRICT exact-match with `WENLAN_EVAL_JUDGE_STRICT=1` for citable
 /// strict-eval runs (the strict path is the one held to N>=3 + stddev). The strict
 /// branch is byte-identical to the historical baseline so old strict baselines stay
 /// reproducible. The historical rationale for strict (probe 2026-04-29: strict
@@ -596,7 +596,7 @@ pub async fn judge_single_tuple_model_with_cost(
 pub fn strict_batch_judge_prompt(tuples: &[JudgmentTuple]) -> String {
     let mut s = String::with_capacity(2048 + tuples.len() * 256);
     let strict = matches!(
-        std::env::var("ORIGIN_EVAL_JUDGE_STRICT").ok().as_deref(),
+        std::env::var("WENLAN_EVAL_JUDGE_STRICT").ok().as_deref(),
         Some("1") | Some("true") | Some("yes") | Some("on")
     );
     if strict {

@@ -63,7 +63,7 @@ pub struct PerQueryRow {
 /// The global-context prelude (db.rs:9268) PREPENDs `summary_nodes` rows to the
 /// search output. They carry no gold leaf id, so a populated table would push
 /// gold memories down the result list and silently depress recall/ndcg without
-/// any flag flip. The table is empty unless `ORIGIN_ENABLE_GLOBAL_PRELUDE` plus
+/// any flag flip. The table is empty unless `WENLAN_ENABLE_GLOBAL_PRELUDE` plus
 /// a populate step ran, so this is a no-op on the default path — but it fails
 /// loud if a future change accidentally seeds it.
 ///

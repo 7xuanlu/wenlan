@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
 //! P2 typed-evidence integration tests.
+use std::sync::Arc;
 use wenlan_core::db::MemoryDB;
 use wenlan_core::sources::RawDocument;
 use wenlan_core::{EventEmitter, NoopEmitter};
-use std::sync::Arc;
 
 async fn make_db() -> (Arc<MemoryDB>, tempfile::TempDir) {
     let dir = tempfile::tempdir().expect("tempdir");

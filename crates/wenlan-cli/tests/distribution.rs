@@ -152,7 +152,7 @@ fn smoke_codex_mcp_add_uses_temp_home() {
 
     let output = Command::new(origin)
         .env("HOME", runtime.path())
-        .env("ORIGIN_HOST", "http://127.0.0.1:9")
+        .env("WENLAN_HOST", "http://127.0.0.1:9")
         .args(["mcp", "add", "codex"])
         .output()
         .expect("run origin mcp add codex");

@@ -7,10 +7,10 @@
 //!    pass the 200-char thin-cluster guard in `distill_pages`.
 //! 3. That the batch `get_memories_by_source_ids` returns correct results.
 
+use std::sync::Arc;
 use wenlan_core::db::MemoryDB;
 use wenlan_core::sources::RawDocument;
 use wenlan_core::{EventEmitter, NoopEmitter};
-use std::sync::Arc;
 
 async fn make_db() -> (Arc<MemoryDB>, tempfile::TempDir) {
     let dir = tempfile::tempdir().expect("tempdir");

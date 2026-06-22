@@ -113,7 +113,7 @@ fn current_server_path() -> Result<PathBuf> {
 /// service backend that consumes pre-rendered log paths today.
 #[cfg(target_os = "macos")]
 fn origin_data_root() -> PathBuf {
-    std::env::var_os("ORIGIN_DATA_DIR")
+    std::env::var_os("WENLAN_DATA_DIR")
         .map(PathBuf::from)
         .unwrap_or_else(|| {
             dirs::data_local_dir()

@@ -8,14 +8,14 @@ use axum::{
     http::StatusCode,
     response::Json,
 };
-use wenlan_core::sources::obsidian::{has_any_markdown, note_to_documents, scan_vault};
-use wenlan_core::sources::Source;
-use wenlan_types::sources::{SourceType, SyncStatus};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::RwLock;
+use wenlan_core::sources::obsidian::{has_any_markdown, note_to_documents, scan_vault};
+use wenlan_core::sources::Source;
+use wenlan_types::sources::{SourceType, SyncStatus};
 
 // ===== Request/Response Types =====
 

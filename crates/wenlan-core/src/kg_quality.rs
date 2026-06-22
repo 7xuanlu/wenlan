@@ -148,7 +148,7 @@ pub async fn find_merge_candidates(db: &MemoryDB) -> Result<usize, WenlanError> 
     drop(conn);
 
     // T16: surface MinHash/LSH band collisions into the human-review queue.
-    // Opt-in (ORIGIN_ENABLE_ENTITY_MINHASH). These are the *borderline* pairs
+    // Opt-in (WENLAN_ENABLE_ENTITY_MINHASH). These are the *borderline* pairs
     // the auto-merge cascade deliberately leaves alone: exact Jaccard in
     // [0.85, 0.9), or a same/near match across DIFFERENT entity types. They are
     // enqueued as `entity_merge` proposals tagged `minhash_jaccard`, never
@@ -1086,7 +1086,7 @@ mod tests {
 
     #[tokio::test]
     async fn find_merge_candidates_surfaces_band_near_dups() {
-        temp_env::async_with_vars([("ORIGIN_ENABLE_ENTITY_MINHASH", Some("1"))], async {
+        temp_env::async_with_vars([("WENLAN_ENABLE_ENTITY_MINHASH", Some("1"))], async {
             let (db, _dir) = test_db().await;
             // "Glorptech"/"Glorptechs": high-entropy, share an LSH band, exact
             // Jaccard ~0.875 in [0.85, 0.9) -> borderline -> human-review only.
@@ -1127,7 +1127,7 @@ mod tests {
     #[tokio::test]
     async fn find_merge_candidates_minhash_off_no_band_proposals() {
         // Flag OFF: the band-collision pass must not run at all.
-        temp_env::async_with_vars([("ORIGIN_ENABLE_ENTITY_MINHASH", None::<&str>)], async {
+        temp_env::async_with_vars([("WENLAN_ENABLE_ENTITY_MINHASH", None::<&str>)], async {
             let (db, _dir) = test_db().await;
             db.store_entity("Glorptech", "project", None, Some("t"), None)
                 .await

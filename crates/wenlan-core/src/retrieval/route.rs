@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 // T7 — LLM read-time strategy router.
-// Default-OFF: when ORIGIN_LLM_ROUTE is unset/falsey, `classify_strategy` never
+// Default-OFF: when WENLAN_LLM_ROUTE is unset/falsey, `classify_strategy` never
 // calls the LLM and `db::search_memory_routed` delegates straight to
 // `search_memory_cross_rerank`, so behaviour is byte-identical to pre-T7.
 //
@@ -43,7 +43,7 @@ pub(crate) enum RetrievalStrategy {
     Expanded,
 }
 
-/// True iff `ORIGIN_LLM_ROUTE` is set to a truthy value (`1`, `true`, or `yes`,
+/// True iff `WENLAN_LLM_ROUTE` is set to a truthy value (`1`, `true`, or `yes`,
 /// case-insensitive). The router is OPT-IN: unset or a falsey value
 /// (`0`/`false`/`no`/"") leaves it disabled, so `search_memory_routed` is
 /// byte-identical to `search_memory_cross_rerank`. Truthy-only parse copied
@@ -51,7 +51,7 @@ pub(crate) enum RetrievalStrategy {
 /// harness can never disagree on the flag (which would make baseline filenames
 /// lie — see AGENTS.md Eval Citation Discipline).
 pub(crate) fn route_enabled() -> bool {
-    std::env::var("ORIGIN_LLM_ROUTE")
+    std::env::var("WENLAN_LLM_ROUTE")
         .ok()
         .map(|v| matches!(v.trim().to_ascii_lowercase().as_str(), "1" | "true" | "yes"))
         .unwrap_or(false)
@@ -250,7 +250,7 @@ mod tests {
     async fn classify_strategy_timeout_returns_plainrag() {
         // Provider sleeps past the 10s timeout. With a paused clock the timeout
         // fires in virtual time; assert PlainRag and no panic.
-        temp_env::async_with_vars([("ORIGIN_LLM_ROUTE", Some("1"))], async {
+        temp_env::async_with_vars([("WENLAN_LLM_ROUTE", Some("1"))], async {
             let llm = sleeping_arc(30);
             assert_eq!(
                 classify_strategy("anything", Some(llm)).await,
@@ -262,7 +262,7 @@ mod tests {
 
     #[tokio::test]
     async fn classify_strategy_unparseable_returns_plainrag() {
-        temp_env::async_with_vars([("ORIGIN_LLM_ROUTE", Some("1"))], async {
+        temp_env::async_with_vars([("WENLAN_LLM_ROUTE", Some("1"))], async {
             let llm = arc(Ok("banana"));
             assert_eq!(
                 classify_strategy("anything", Some(llm)).await,
@@ -274,7 +274,7 @@ mod tests {
 
     #[tokio::test]
     async fn classify_strategy_unknown_variant_returns_plainrag() {
-        temp_env::async_with_vars([("ORIGIN_LLM_ROUTE", Some("1"))], async {
+        temp_env::async_with_vars([("WENLAN_LLM_ROUTE", Some("1"))], async {
             let llm = arc(Ok(r#"{"strategy":"CYPHER"}"#));
             assert_eq!(
                 classify_strategy("anything", Some(llm)).await,
@@ -286,7 +286,7 @@ mod tests {
 
     #[tokio::test]
     async fn classify_strategy_llm_error_returns_plainrag() {
-        temp_env::async_with_vars([("ORIGIN_LLM_ROUTE", Some("1"))], async {
+        temp_env::async_with_vars([("WENLAN_LLM_ROUTE", Some("1"))], async {
             let llm = arc(Err(()));
             assert_eq!(
                 classify_strategy("anything", Some(llm)).await,
@@ -313,7 +313,7 @@ mod tests {
             ("{\"strategy\":\"PlainRag\"}", RetrievalStrategy::PlainRag),
         ];
         for (out, expected) in cases {
-            temp_env::async_with_vars([("ORIGIN_LLM_ROUTE", Some("1"))], async {
+            temp_env::async_with_vars([("WENLAN_LLM_ROUTE", Some("1"))], async {
                 let llm = arc(Ok(out));
                 assert_eq!(
                     classify_strategy("anything", Some(llm)).await,
@@ -328,7 +328,7 @@ mod tests {
     #[tokio::test]
     async fn classify_strategy_parses_with_surrounding_noise() {
         // Real on-device output often wraps the JSON in prose.
-        temp_env::async_with_vars([("ORIGIN_LLM_ROUTE", Some("1"))], async {
+        temp_env::async_with_vars([("WENLAN_LLM_ROUTE", Some("1"))], async {
             let llm = arc(Ok(r#"Sure! {"strategy":"Expanded"} done."#));
             assert_eq!(
                 classify_strategy("anything", Some(llm)).await,
@@ -346,7 +346,7 @@ mod tests {
         // an LLM is supplied. A relational query the LLM would route to
         // GraphCompletion still goes through keyword classification.
         for val in [None::<&str>, Some("0"), Some("false"), Some("")] {
-            temp_env::async_with_vars([("ORIGIN_LLM_ROUTE", val)], async {
+            temp_env::async_with_vars([("WENLAN_LLM_ROUTE", val)], async {
                 assert!(!route_enabled());
                 // LLM returns Expanded, but flag-off ignores it and uses keyword.
                 let llm = arc(Ok(r#"{"strategy":"Expanded"}"#));
@@ -363,7 +363,7 @@ mod tests {
     #[tokio::test]
     async fn route_enabled_accepts_truthy_synonyms() {
         for val in ["1", "true", "YES", "True"] {
-            temp_env::async_with_vars([("ORIGIN_LLM_ROUTE", Some(val))], async {
+            temp_env::async_with_vars([("WENLAN_LLM_ROUTE", Some(val))], async {
                 assert!(route_enabled(), "value {val} should enable routing");
             })
             .await;

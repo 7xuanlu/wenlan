@@ -52,7 +52,7 @@ pub struct ThroughputArm {
     /// Wall-clock for the whole workload (ms).
     pub wall_ms: u128,
     /// Total output characters produced (work proxy; token counts are logged by
-    /// `ORIGIN_BATCH_LOG`'s `[batch_timing]` line, not returned by the engine).
+    /// `WENLAN_BATCH_LOG`'s `[batch_timing]` line, not returned by the engine).
     pub out_chars: usize,
     /// Requests that produced output (non-`None`).
     pub completed: usize,
@@ -345,7 +345,7 @@ pub fn shared_prefix_workload(n: usize, temperature: f32) -> Vec<WorkloadItem> {
 /// real wrong-logits-row or KV-corruption bug flips the argmax and diverges loudly.
 /// Returns the first `(request_index, off_output, on_output)` that differs.
 ///
-/// Toggles `ORIGIN_LLM_PREFIX_KV_CACHE` around each arm. The engine clears its KV
+/// Toggles `WENLAN_LLM_PREFIX_KV_CACHE` around each arm. The engine clears its KV
 /// at the start of every call, so reusing `ctx` across both arms is safe.
 pub fn first_prefix_cache_divergence(
     engine: &LlmEngine,
@@ -353,11 +353,11 @@ pub fn first_prefix_cache_divergence(
     prompts: &[BatchPrompt],
     m: usize,
 ) -> Option<(usize, Option<String>, Option<String>)> {
-    std::env::remove_var("ORIGIN_LLM_PREFIX_KV_CACHE");
+    std::env::remove_var("WENLAN_LLM_PREFIX_KV_CACHE");
     let off = engine.run_inference_continuous_batch(ctx, prompts, m);
-    std::env::set_var("ORIGIN_LLM_PREFIX_KV_CACHE", "1");
+    std::env::set_var("WENLAN_LLM_PREFIX_KV_CACHE", "1");
     let on = engine.run_inference_continuous_batch(ctx, prompts, m);
-    std::env::remove_var("ORIGIN_LLM_PREFIX_KV_CACHE");
+    std::env::remove_var("WENLAN_LLM_PREFIX_KV_CACHE");
     off.iter()
         .zip(&on)
         .enumerate()
@@ -368,7 +368,7 @@ pub fn first_prefix_cache_divergence(
 /// Prefix-KV cache ON-vs-OFF over the WHOLE queue in one call each (identical
 /// scheduling; only the flag differs). Wall-clock barely moves when decode
 /// dominates — the real signal is `prefill_ms`/`prime_ms` from the `[batch_timing]`
-/// line (set `ORIGIN_BATCH_LOG=1`). This A/B asserts only no-regression; the
+/// line (set `WENLAN_BATCH_LOG=1`). This A/B asserts only no-regression; the
 /// prefill magnitude is read from the logs.
 pub fn run_prefix_cache_throughput_ab(
     engine: &LlmEngine,
@@ -376,16 +376,16 @@ pub fn run_prefix_cache_throughput_ab(
     prompts: &[BatchPrompt],
     m: usize,
 ) -> ThroughputAb {
-    std::env::remove_var("ORIGIN_LLM_PREFIX_KV_CACHE");
+    std::env::remove_var("WENLAN_LLM_PREFIX_KV_CACHE");
     let off_start = Instant::now();
     let off_outputs = engine.run_inference_continuous_batch(ctx, prompts, m);
     let off_wall = off_start.elapsed().as_millis();
 
-    std::env::set_var("ORIGIN_LLM_PREFIX_KV_CACHE", "1");
+    std::env::set_var("WENLAN_LLM_PREFIX_KV_CACHE", "1");
     let on_start = Instant::now();
     let on_outputs = engine.run_inference_continuous_batch(ctx, prompts, m);
     let on_wall = on_start.elapsed().as_millis();
-    std::env::remove_var("ORIGIN_LLM_PREFIX_KV_CACHE");
+    std::env::remove_var("WENLAN_LLM_PREFIX_KV_CACHE");
 
     ThroughputAb {
         on: ThroughputArm {
@@ -512,7 +512,7 @@ mod tests {
         let prompts: Vec<BatchPrompt> = items.iter().map(|it| it.prompt.clone()).collect();
         // Re-run OFF once on its own to assert completeness (no silent empty-suffix
         // failure) independent of the divergence check.
-        std::env::remove_var("ORIGIN_LLM_PREFIX_KV_CACHE");
+        std::env::remove_var("WENLAN_LLM_PREFIX_KV_CACHE");
         let off_completed =
             completed(&engine.run_inference_continuous_batch(&mut ctx, &prompts, M));
         let divergence = first_prefix_cache_divergence(engine, &mut ctx, &prompts, M);
@@ -537,8 +537,8 @@ mod tests {
 
     /// Prefix-KV cache prefill A/B: report wall-clock ON vs OFF over a homogeneous
     /// shared-prefix batch. The headline (prefill_ms / prime_ms drop) is in the
-    /// `[batch_timing]` lines below; set ORIGIN_BATCH_LOG via the test. Run:
-    /// `ORIGIN_BATCH_LOG=1 cargo test -p origin-core --lib eval::engine_throughput::tests::prefix_cache_prefill_ab -- --ignored --nocapture`
+    /// `[batch_timing]` lines below; set WENLAN_BATCH_LOG via the test. Run:
+    /// `WENLAN_BATCH_LOG=1 cargo test -p origin-core --lib eval::engine_throughput::tests::prefix_cache_prefill_ab -- --ignored --nocapture`
     #[test]
     #[ignore = "needs GPU + downloaded GGUF model (L7 manual)"]
     fn prefix_cache_prefill_ab() {
@@ -546,7 +546,7 @@ mod tests {
             eprintln!("[engine_throughput] engine unavailable (no GPU/model) — skipping");
             return;
         };
-        std::env::set_var("ORIGIN_BATCH_LOG", "1"); // surface [batch_timing] prefix_len/prime_ms/prefill_ms
+        std::env::set_var("WENLAN_BATCH_LOG", "1"); // surface [batch_timing] prefix_len/prime_ms/prefill_ms
         let items = shared_prefix_workload(40, 0.0);
         let prompts: Vec<BatchPrompt> = items.iter().map(|it| it.prompt.clone()).collect();
         let ab = run_prefix_cache_throughput_ab(engine, &mut ctx, &prompts, M);

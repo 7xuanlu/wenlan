@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
-//! Integration test: spawn origin-server with ORIGIN_BIND_ADDR=127.0.0.1:0 and verify
-//! both port-discovery channels (stdout printline + ORIGIN_PORT_FILE) work.
+//! Integration test: spawn origin-server with WENLAN_BIND_ADDR=127.0.0.1:0 and verify
+//! both port-discovery channels (stdout printline + WENLAN_PORT_FILE) work.
 
 use std::io::{BufRead, BufReader};
 use std::process::{Command, Stdio};
@@ -14,8 +14,8 @@ fn binary_path() -> std::path::PathBuf {
 fn port_discovery_via_stdout() {
     let tmp = tempfile::tempdir().unwrap();
     let mut child = Command::new(binary_path())
-        .env("ORIGIN_BIND_ADDR", "127.0.0.1:0")
-        .env("ORIGIN_DATA_DIR", tmp.path())
+        .env("WENLAN_BIND_ADDR", "127.0.0.1:0")
+        .env("WENLAN_DATA_DIR", tmp.path())
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
         .spawn()
@@ -29,17 +29,17 @@ fn port_discovery_via_stdout() {
     loop {
         if Instant::now() > deadline {
             let _ = child.kill();
-            panic!("timed out waiting for ORIGIN_LISTENING_ON line");
+            panic!("timed out waiting for WENLAN_LISTENING_ON line");
         }
         line.clear();
         if reader.read_line(&mut line).unwrap() == 0 {
             let _ = child.kill();
             panic!("daemon stdout closed before announcing port");
         }
-        if line.starts_with("ORIGIN_LISTENING_ON=") {
+        if line.starts_with("WENLAN_LISTENING_ON=") {
             let addr = line
                 .trim_end()
-                .strip_prefix("ORIGIN_LISTENING_ON=")
+                .strip_prefix("WENLAN_LISTENING_ON=")
                 .unwrap();
             assert!(addr.starts_with("127.0.0.1:"), "bad addr: {}", addr);
             let port_str = addr.split(':').next_back().unwrap();
@@ -57,9 +57,9 @@ fn port_discovery_via_port_file() {
     let tmp = tempfile::tempdir().unwrap();
     let port_file = tmp.path().join("port");
     let mut child = Command::new(binary_path())
-        .env("ORIGIN_BIND_ADDR", "127.0.0.1:0")
-        .env("ORIGIN_DATA_DIR", tmp.path().join("data"))
-        .env("ORIGIN_PORT_FILE", &port_file)
+        .env("WENLAN_BIND_ADDR", "127.0.0.1:0")
+        .env("WENLAN_DATA_DIR", tmp.path().join("data"))
+        .env("WENLAN_PORT_FILE", &port_file)
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .spawn()
@@ -69,7 +69,7 @@ fn port_discovery_via_port_file() {
     loop {
         if Instant::now() > deadline {
             let _ = child.kill();
-            panic!("timed out waiting for ORIGIN_PORT_FILE");
+            panic!("timed out waiting for WENLAN_PORT_FILE");
         }
         if let Ok(contents) = std::fs::read_to_string(&port_file) {
             let _port: u16 = contents.trim().parse().expect("valid port in file");

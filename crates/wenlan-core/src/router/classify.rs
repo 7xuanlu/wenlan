@@ -75,7 +75,7 @@ pub(crate) const PREFERENCE_PAST_RECALL_EXCLUSIONS: &[&str] = &[
 
 /// True when the query is a preference/recommendation-seeking request.
 ///
-/// Used by the CE-rerank skip-preference gate (`ORIGIN_RERANK_SKIP_PREFERENCE`):
+/// Used by the CE-rerank skip-preference gate (`WENLAN_RERANK_SKIP_PREFERENCE`):
 /// when the flag is on, preference-intent queries keep the base RRF ranking
 /// instead of the cross-encoder rescoring. The gate was built against an older
 /// measurement ("CE hurts single-session-preference −0.155 NDCG@10") that did

@@ -75,7 +75,7 @@ impl Candidate {
 }
 
 /// Tunable knobs for the dual-pool resolution. Sensible defaults; not env-wired
-/// (the master switch is the `ORIGIN_ENABLE_DUAL_POOL_RESOLVE` flag).
+/// (the master switch is the `WENLAN_ENABLE_DUAL_POOL_RESOLVE` flag).
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct ResolutionConfig {
     /// Minimum cosine similarity for Pool A (near-duplicates).

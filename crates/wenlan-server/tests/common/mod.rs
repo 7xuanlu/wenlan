@@ -1,14 +1,14 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Shared helpers for origin-server integration tests.
 
+use std::sync::Arc;
+use tokio::sync::RwLock;
 use wenlan_core::db::MemoryDB;
 use wenlan_core::events::NoopEmitter;
 use wenlan_core::quality_gate::QualityGate;
 use wenlan_core::sources::RawDocument;
 use wenlan_server::router::build_router;
 use wenlan_server::state::ServerState;
-use std::sync::Arc;
-use tokio::sync::RwLock;
 
 /// Insert a page with a single wikilink reference whose target does not exist,
 /// producing an orphan `page_links` row (`target_page_id IS NULL`).

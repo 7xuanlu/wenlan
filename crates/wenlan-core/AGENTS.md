@@ -1,10 +1,10 @@
-# crates/origin-core
+# crates/wenlan-core
 
-Applies to agents working under `crates/origin-core/`. Read alongside root `AGENTS.md`, which takes precedence on any topic not covered here.
+Applies to agents working under `crates/wenlan-core/`. Read alongside root `AGENTS.md`, which takes precedence on any topic not covered here.
 
 All business logic lives here. No tauri, no axum. Framework-agnostic.
 
-## Key Modules (`crates/origin-core/src/`)
+## Key Modules (`crates/wenlan-core/src/`)
 
 | Module | Purpose |
 |---|---|
@@ -38,5 +38,5 @@ All business logic lives here. No tauri, no axum. Framework-agnostic.
 | `router/classify.rs`, `content_score.rs` | Smart router scoring helpers (non-tauri parts) |
 | `config.rs` | Persistent config at `dirs::data_local_dir()/origin/config.json` (on macOS, `~/Library/Application Support/origin/config.json`) |
 | `export/` | Markdown/JSON/zip/PDF exporters |
-| `eval/` | Benchmark harness: LoCoMo, LongMemEval. Each benchmark has base (embedding-only), reranked (LLM rescores after search), and expanded (LLM query expansion before search) variants. Baselines under `EVAL_BASELINES_DIR` (gitignored). See `crates/origin-core/src/eval/AGENTS.md`. |
+| `eval/` | Benchmark harness: LoCoMo, LongMemEval. Each benchmark has base (embedding-only), reranked (LLM rescores after search), and expanded (LLM query expansion before search) variants. Baselines under `EVAL_BASELINES_DIR` (gitignored). See `crates/wenlan-core/src/eval/AGENTS.md`. |
 | `state.rs` | `CoreState` — shared state struct used by origin-server |

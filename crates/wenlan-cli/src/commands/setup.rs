@@ -2,8 +2,8 @@
 //! Human-facing setup/status commands for the Origin runtime.
 
 use clap::{Subcommand, ValueEnum};
-use wenlan_core::{config, on_device_models};
 use std::io::{self, Write};
+use wenlan_core::{config, on_device_models};
 
 use crate::client::origin_host_from_env;
 
@@ -401,10 +401,10 @@ fn print_space_resolution(cwd: &std::path::Path) {
     let mut out = stdout.lock();
     let _ = writeln!(out, "\n--- Space resolution ---");
 
-    let env = std::env::var("ORIGIN_SPACE").ok().filter(|s| !s.is_empty());
+    let env = std::env::var("WENLAN_SPACE").ok().filter(|s| !s.is_empty());
     let _ = writeln!(
         out,
-        "ORIGIN_SPACE env:      {}",
+        "WENLAN_SPACE env:      {}",
         env.as_deref().unwrap_or("(unset)")
     );
 

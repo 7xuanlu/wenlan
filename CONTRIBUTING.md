@@ -53,11 +53,11 @@ cargo clippy --workspace --all-targets -- -D warnings
 
 ## Architecture Overview
 
-- **Shared types**: `crates/origin-types` (Apache-2.0). Lightweight wire types shared with `origin-mcp` and `origin-app` via crates.io.
-- **Core logic**: `crates/origin-core` (Apache-2.0). DB, embeddings, LLM engine, search, knowledge graph, distill cycles, eval. No tauri / no axum dependencies.
-- **HTTP daemon**: `crates/origin-server` (Apache-2.0), serves `127.0.0.1:7878`.
-- **CLI binary**: `crates/origin-cli` (Apache-2.0). The `origin` command for setup, service management, search, recall, etc.
-- **MCP server**: `crates/origin-mcp` (Apache-2.0). The connector spawned by Claude Code, Cursor, Codex, and other MCP clients.
+- **Shared types**: `crates/wenlan-types` (Apache-2.0). Lightweight wire types shared with `origin-mcp` and `origin-app` via crates.io.
+- **Core logic**: `crates/wenlan-core` (Apache-2.0). DB, embeddings, LLM engine, search, knowledge graph, distill cycles, eval. No tauri / no axum dependencies.
+- **HTTP daemon**: `crates/wenlan-server` (Apache-2.0), serves `127.0.0.1:7878`.
+- **CLI binary**: `crates/wenlan-cli` (Apache-2.0). The `origin` command for setup, service management, search, recall, etc.
+- **MCP server**: `crates/wenlan-mcp` (Apache-2.0). The connector spawned by Claude Code, Cursor, Codex, and other MCP clients.
 - **Desktop app** (separate repo): [7xuanlu/origin-app](https://github.com/7xuanlu/origin-app), AGPL-3.0-only.
 - **Database**: libSQL (vectors + knowledge graph + FTS).
 
@@ -93,7 +93,7 @@ These conventions keep the codebase consistent. See `CLAUDE.md` for the full lis
 
 ## License
 
-This repo is Apache-2.0: `crates/origin-types`, `crates/origin-core`, `crates/origin-server`, `crates/origin-cli`, `crates/origin-mcp`, and the Claude Code plugin files. The desktop app in [origin-app](https://github.com/7xuanlu/origin-app) is AGPL-3.0-only.
+This repo is Apache-2.0: `crates/wenlan-types`, `crates/wenlan-core`, `crates/wenlan-server`, `crates/wenlan-cli`, `crates/wenlan-mcp`, and the Claude Code plugin files. The desktop app in [origin-app](https://github.com/7xuanlu/origin-app) is AGPL-3.0-only.
 
 By contributing, you agree that your changes will be licensed under the license that applies to the files you modify.
 

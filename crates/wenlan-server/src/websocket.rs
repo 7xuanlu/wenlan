@@ -7,10 +7,10 @@ use axum::{
     },
     response::Response,
 };
-use wenlan_types::sources::RawDocument;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tokio::sync::RwLock;
+use wenlan_types::sources::RawDocument;
 
 // ===== WebSocket Message Types =====
 

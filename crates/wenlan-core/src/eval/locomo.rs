@@ -624,12 +624,12 @@ fn build_locomo_env(
         skill_prompt_hash: None,
         schema_version: 1,
         schema_db_version: Some(crate::db::SCHEMA_VERSION),
-        migrations_hash: option_env!("ORIGIN_MIGRATIONS_HASH").map(String::from),
+        migrations_hash: option_env!("WENLAN_MIGRATIONS_HASH").map(String::from),
         n_runs,
         is_single_run: n_runs == 1,
         run_id,
         timestamp_utc,
-        git_sha: option_env!("ORIGIN_GIT_SHA").map(String::from),
+        git_sha: option_env!("WENLAN_GIT_SHA").map(String::from),
         warmup_iterations: 0,
         ..Default::default()
     }
@@ -956,7 +956,7 @@ pub async fn run_locomo_eval_reranked(
 
 /// Same seeding/scoring logic as `run_locomo_eval_reranked`, but retrieval uses
 /// `search_memory_cross_rerank` driven by a cross-encoder reranker
-/// (model per `ORIGIN_RERANKER_MODEL`; default `BGERerankerBase` since
+/// (model per `WENLAN_RERANKER_MODEL`; default `BGERerankerBase` since
 /// 2026-06-11). Lets the eval sweep compare LLM-as-judge
 /// reranking against a purpose-built cross-encoder on identical fixtures.
 pub async fn run_locomo_eval_cross_rerank(
@@ -1126,7 +1126,7 @@ pub async fn run_locomo_eval_cross_rerank(
 /// `locomo_<sample_id>_obs_<i>` (matches both the in-tree fullpipeline
 /// seed path and the ephemeral seed in `run_locomo_eval_cross_rerank`).
 /// Page-channel ON/OFF is controlled by the caller via the
-/// `ORIGIN_ENABLE_PAGE_CHANNEL` env var (read inside
+/// `WENLAN_ENABLE_PAGE_CHANNEL` env var (read inside
 /// `search_memory_cross_rerank`).
 pub async fn run_locomo_eval_cross_rerank_from_db(
     db: &MemoryDB,
@@ -1308,7 +1308,7 @@ pub async fn run_locomo_eval_cross_rerank_from_db(
         coverage,
     };
 
-    // Branch variant_tag on ORIGIN_ENABLE_PAGE_CHANNEL + ORIGIN_MAGNITUDE_FUSION
+    // Branch variant_tag on WENLAN_ENABLE_PAGE_CHANNEL + WENLAN_MAGNITUDE_FUSION
     // so each variant produces distinct baseline filenames (comparable_hash uses
     // the variant string). magfusion appends `_magfusion` when enabled.
     let page_channel_state = if crate::db::page_channel_enabled() {
@@ -1329,10 +1329,10 @@ pub async fn run_locomo_eval_cross_rerank_from_db(
     if magfusion_state == "on" {
         variant_tag.push_str("_magfusion");
     }
-    // T9: append __graph_seed_d{depth} suffix when ORIGIN_ENABLE_GRAPH_SEED is on.
+    // T9: append __graph_seed_d{depth} suffix when WENLAN_ENABLE_GRAPH_SEED is on.
     let graph_seed_depth = if crate::db::graph_seed_enabled() {
         let depth = crate::retrieval::signals::parse_hop_depth(
-            std::env::var("ORIGIN_GRAPH_HOP_DEPTH").ok().as_deref(),
+            std::env::var("WENLAN_GRAPH_HOP_DEPTH").ok().as_deref(),
         );
         Some(depth)
     } else {
@@ -1341,13 +1341,13 @@ pub async fn run_locomo_eval_cross_rerank_from_db(
     if let Some(depth) = graph_seed_depth {
         variant_tag.push_str(&format!("__graph_seed_d{}", depth));
     }
-    // T4b: append __graph_khop_d{depth} suffix when ORIGIN_ENABLE_GRAPH_KHOP is on.
+    // T4b: append __graph_khop_d{depth} suffix when WENLAN_ENABLE_GRAPH_KHOP is on.
     // Honest config stamp: this runner calls search_memory_cross_rerank ->
     // augment_with_graph, where the k-hop expansion lives, so the flag genuinely
     // changes the retrieval path. No accuracy claim is encoded by the tag.
     let graph_khop_depth = if crate::db::khop_traversal_enabled() {
         Some(crate::retrieval::traversal::parse_khop_depth(
-            std::env::var("ORIGIN_GRAPH_KHOP_DEPTH").ok().as_deref(),
+            std::env::var("WENLAN_GRAPH_KHOP_DEPTH").ok().as_deref(),
         ))
     } else {
         None
@@ -1355,14 +1355,14 @@ pub async fn run_locomo_eval_cross_rerank_from_db(
     if let Some(depth) = graph_khop_depth {
         variant_tag.push_str(&format!("__graph_khop_d{}", depth));
     }
-    // T19: append __query_intent suffix when ORIGIN_ENABLE_QUERY_INTENT is on.
+    // T19: append __query_intent suffix when WENLAN_ENABLE_QUERY_INTENT is on.
     let query_intent_state = if crate::retrieval::query_intent::query_intent_enabled() {
         variant_tag.push_str("__query_intent");
         "on"
     } else {
         "off"
     };
-    // T8: append __salience suffix when ORIGIN_ENABLE_SALIENCE_PRIOR is on, so
+    // T8: append __salience suffix when WENLAN_ENABLE_SALIENCE_PRIOR is on, so
     // salience-ON and salience-OFF baselines get distinct baseline filenames.
     let salience_state = if crate::db::salience_prior_enabled() {
         variant_tag.push_str("__salience");
@@ -1370,7 +1370,7 @@ pub async fn run_locomo_eval_cross_rerank_from_db(
     } else {
         "off"
     };
-    // T2: append __episode suffix when ORIGIN_ENABLE_EPISODE_CHANNEL is on, so
+    // T2: append __episode suffix when WENLAN_ENABLE_EPISODE_CHANNEL is on, so
     // episode-ON and episode-OFF baselines get distinct baseline filenames.
     let episode_state = if crate::db::episode_channel_enabled() {
         variant_tag.push_str("__episode");
@@ -1378,7 +1378,7 @@ pub async fn run_locomo_eval_cross_rerank_from_db(
     } else {
         "off"
     };
-    // T15a: append __fact suffix when ORIGIN_ENABLE_FACT_CHANNEL is on, so
+    // T15a: append __fact suffix when WENLAN_ENABLE_FACT_CHANNEL is on, so
     // fact-ON and fact-OFF baselines get distinct baseline filenames.
     let fact_state = if crate::retrieval::fact_channel::fact_channel_enabled() {
         variant_tag.push_str("__fact");
@@ -1865,7 +1865,7 @@ pub async fn run_locomo_eval_cross_rerank_temporal_collect(
 // ---------------------------------------------------------------------------
 /// Retrieval eval over a pre-seeded DB using the base `search_memory` path
 /// (vector + FTS + RRF + graph augmentation) — the path the graph gate
-/// (`ORIGIN_ENABLE_GRAPH_GATE`) acts on. Mirrors `run_locomo_eval_cross_rerank_from_db`
+/// (`WENLAN_ENABLE_GRAPH_GATE`) acts on. Mirrors `run_locomo_eval_cross_rerank_from_db`
 /// but without the cross-encoder/page channel, so the only LLM-free retrieval
 /// signal under test is the graph augmentation + its gate. Used for the T3
 /// graph-gate A/B experiment.
@@ -2178,17 +2178,17 @@ pub async fn run_locomo_eval_expanded(
 /// #15 slice-1 paired collector. Returns one `PerQueryRow` per LoCoMo QA for the
 /// expanded deep path, recording `graph_skipped` (the negation of the routing
 /// decision actually used). The arm (intent-LLM vs keyword gate) is selected by
-/// the caller via the `ORIGIN_ENABLE_INTENT_LLM` env (the expanded path reads it
+/// the caller via the `WENLAN_ENABLE_INTENT_LLM` env (the expanded path reads it
 /// internally; this collector records the decision it observes). `flag_state` is
 /// "on"/"off". Ephemeral-per-conversation seeding, mirroring `run_locomo_eval_expanded`.
 ///
 /// Probe-operator caveats:
 /// - On the BASELINE (intent-OFF) arm, `graph_skipped` records the keyword gate's
 ///   *verdict* (`query_warrants_graph`). That equals the search's realized routing
-///   only when `ORIGIN_ENABLE_GRAPH_GATE=1`; with the gate at its default OFF,
+///   only when `WENLAN_ENABLE_GRAPH_GATE=1`; with the gate at its default OFF,
 ///   `search_memory_with_cue` always augments (`do_graph = !gate || warrants`), so
 ///   the recorded skip would be fictional. The Task 6 probe sets
-///   `ORIGIN_ENABLE_GRAPH_GATE=1` on the baseline arm for this reason — run it that way.
+///   `WENLAN_ENABLE_GRAPH_GATE=1` on the baseline arm for this reason — run it that way.
 /// - On the INTENT (intent-ON) arm, the emitter runs ~2x per QA: once here to record
 ///   `graph_skipped`, once inside `search_memory_expanded`. Deterministic at temp=0 so
 ///   the two agree; size the full-run cost/time for the doubled intent-arm LLM calls.
@@ -2348,7 +2348,7 @@ pub async fn populate_memory_entities_sweep(
 ///
 /// Retrieval uses the base `search_memory` path (no expansion, no rerank), so the
 /// query loop is LLM-free and deterministic. The ONLY per-arm difference is the
-/// `ORIGIN_GRAPH_MEMORY_STREAM` env (set by the harness), making the paired Δ a
+/// `WENLAN_GRAPH_MEMORY_STREAM` env (set by the harness), making the paired Δ a
 /// clean graph-OFF-vs-ON contrast. Coverage is printed when a conversation is
 /// freshly populated so a null can be checked against substrate liveness.
 pub async fn run_locomo_eval_graph_stream_collect(
@@ -2458,7 +2458,7 @@ pub async fn run_locomo_eval_graph_stream_collect(
 /// Same seeding/scoring logic as `run_locomo_eval`, but retrieval uses
 /// `search_memory_prf` (T6 pseudo-relevance feedback): draft an answer from the
 /// top-K retrieved, feed it back as the next query, RRF-merge until convergence.
-/// The round budget is read from `ORIGIN_PRF_ROUNDS` (default 0 = plain search);
+/// The round budget is read from `WENLAN_PRF_ROUNDS` (default 0 = plain search);
 /// the value is stamped into `env.flags` for exact reproducibility.
 ///
 /// `#[ignore]`d L7-manual (GPU + Qwen). Validate by `cargo check`; no headline

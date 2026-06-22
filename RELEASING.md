@@ -39,7 +39,7 @@ The `release.yml` workflow validates that the pushed tag version matches `versio
 6. Publishes `origin-mcp` and `@7xuanlu/origin` to npm.
 7. Updates the Homebrew tap for `origin-mcp`.
 
-`origin-mcp` now lives in this monorepo under `crates/origin-mcp` and shares the workspace Apache-2.0 license. The desktop DMG is still built from [origin-app](https://github.com/7xuanlu/origin-app); see its `RELEASING.md` for that pipeline.
+`origin-mcp` now lives in this monorepo under `crates/wenlan-mcp` and shares the workspace Apache-2.0 license. The desktop DMG is still built from [origin-app](https://github.com/7xuanlu/origin-app); see its `RELEASING.md` for that pipeline.
 
 ## Required secrets
 

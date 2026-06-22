@@ -471,7 +471,7 @@ fn current_cache_env(enrichment: &EnrichmentMode) -> ScenarioCacheEnv {
     let (enricher_provider, enricher_model) = enrichment.provenance();
     ScenarioCacheEnv {
         schema_db_version: crate::db::SCHEMA_VERSION,
-        migrations_hash: option_env!("ORIGIN_MIGRATIONS_HASH")
+        migrations_hash: option_env!("WENLAN_MIGRATIONS_HASH")
             .unwrap_or("unknown")
             .to_string(),
         enricher_provider,
@@ -2525,7 +2525,7 @@ mod tests {
     fn migrate_stale_requires_matching_provenance() {
         let want = ScenarioCacheEnv {
             schema_db_version: crate::db::SCHEMA_VERSION,
-            migrations_hash: option_env!("ORIGIN_MIGRATIONS_HASH")
+            migrations_hash: option_env!("WENLAN_MIGRATIONS_HASH")
                 .unwrap_or("unknown")
                 .to_string(),
             enricher_provider: "on-device".to_string(),

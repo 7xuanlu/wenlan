@@ -3,12 +3,12 @@
 
 mod cmd_backfill;
 
-/// Resolve the bind address. Honors the `ORIGIN_BIND_ADDR` env var when set
+/// Resolve the bind address. Honors the `WENLAN_BIND_ADDR` env var when set
 /// (e.g. inside Docker where the daemon must listen on `0.0.0.0`). Falls back
 /// to the localhost-only address used by the macOS/native install path.
 fn resolve_bind_addr(port: u16) -> String {
-    std::env::var("ORIGIN_BIND_ADDR")
-        .ok()
+    wenlan_core::env_compat::var_compat("WENLAN_BIND_ADDR")
+        .and_then(|v| v.into_string().ok())
         .unwrap_or_else(|| format!("127.0.0.1:{}", port))
 }
 
@@ -26,16 +26,16 @@ mod bind_addr_tests {
     #[test]
     fn default_when_env_unset() {
         let _guard = env_lock().lock().unwrap();
-        std::env::remove_var("ORIGIN_BIND_ADDR");
+        std::env::remove_var("WENLAN_BIND_ADDR");
         assert_eq!(resolve_bind_addr(7878), "127.0.0.1:7878");
     }
 
     #[test]
     fn honors_env_when_set() {
         let _guard = env_lock().lock().unwrap();
-        std::env::set_var("ORIGIN_BIND_ADDR", "0.0.0.0:9090");
+        std::env::set_var("WENLAN_BIND_ADDR", "0.0.0.0:9090");
         assert_eq!(resolve_bind_addr(7878), "0.0.0.0:9090");
-        std::env::remove_var("ORIGIN_BIND_ADDR");
+        std::env::remove_var("WENLAN_BIND_ADDR");
     }
 }
 
@@ -66,12 +66,12 @@ struct Cli {
     /// When set, the daemon reads/writes the DB at `<dir>/memorydb/origin_memory.db`
     /// and config at `<dir>/config.json` instead of the default
     /// the platform data directory under `dirs::data_local_dir().join("origin/")`.
-    /// macOS: `~/Library/Application Support/origin/`. Linux: `~/.local/share/origin/`. Windows: `%LOCALAPPDATA%\origin\`. Also honored via `ORIGIN_DATA_DIR` env.
+    /// macOS: `~/Library/Application Support/origin/`. Linux: `~/.local/share/origin/`. Windows: `%LOCALAPPDATA%\origin\`. Also honored via `WENLAN_DATA_DIR` env.
     #[arg(long, global = true)]
     data_dir: Option<std::path::PathBuf>,
 
     /// Override the HTTP port (default 7878). Useful when running a scratch
-    /// daemon alongside the main one. Also honored via `ORIGIN_PORT` env.
+    /// daemon alongside the main one. Also honored via `WENLAN_PORT` env.
     #[arg(long, global = true)]
     port: Option<u16>,
 }
@@ -98,23 +98,23 @@ async fn run_daemon() -> anyhow::Result<()> {
 
     tracing::info!("origin-server v{}", wenlan_core::version());
 
-    // Port (clap `--port`/`ORIGIN_PORT` → env var set by main(); read here)
-    let port: u16 = std::env::var("ORIGIN_PORT")
-        .ok()
+    // Port (clap `--port`/`WENLAN_PORT` → env var set by main(); read here)
+    let port: u16 = wenlan_core::env_compat::var_compat("WENLAN_PORT")
+        .and_then(|v| v.into_string().ok())
         .and_then(|v| v.parse().ok())
         .unwrap_or(7878);
 
-    // Data directory. `ORIGIN_DATA_DIR` (set by `--data-dir` flag) overrides the
+    // Data directory. `WENLAN_DATA_DIR` (set by `--data-dir` flag) overrides the
     // default, enabling isolated dev/demo runs (e.g. `--data-dir /tmp/origin-demo`).
-    let origin_root = std::env::var_os("ORIGIN_DATA_DIR")
+    let wenlan_root = wenlan_core::env_compat::var_compat("WENLAN_DATA_DIR")
         .map(std::path::PathBuf::from)
         .unwrap_or_else(|| {
             dirs::data_local_dir()
                 .unwrap_or_else(|| std::path::PathBuf::from("."))
                 .join("origin")
         });
-    let data_dir = origin_root.join("memorydb");
-    tracing::info!("Origin data root: {}", origin_root.display());
+    let data_dir = wenlan_root.join("memorydb");
+    tracing::info!("Origin data root: {}", wenlan_root.display());
 
     // Build state
     let mut server_state = ServerState::new();
@@ -420,13 +420,13 @@ async fn run_daemon() -> anyhow::Result<()> {
         }
     }
 
-    // Initialize cross-encoder reranker. Opt-in via `ORIGIN_RERANKER_ENABLED=1`
+    // Initialize cross-encoder reranker. Opt-in via `WENLAN_RERANKER_ENABLED=1`
     // because first construction downloads the model weights (~1.1GB for the
     // default bge-reranker-base). Reuses the
     // embedder's FastEmbed cache directory so the download is shared with the
     // BGE embedder. Failure is non-fatal: search falls back to embedding+FTS
     // ordering with no rerank pass.
-    if std::env::var("ORIGIN_RERANKER_ENABLED").as_deref() == Ok("1") {
+    if std::env::var("WENLAN_RERANKER_ENABLED").as_deref() == Ok("1") {
         let cache_dir = wenlan_core::db::resolve_fastembed_cache_dir(&data_dir);
         tracing::info!(
             "[reranker] enabling cross-encoder; first run downloads model weights \
@@ -462,7 +462,7 @@ async fn run_daemon() -> anyhow::Result<()> {
         }
     } else {
         tracing::info!(
-            "[reranker] ORIGIN_RERANKER_ENABLED!=1, skipping cross-encoder init (set =1 to enable)"
+            "[reranker] WENLAN_RERANKER_ENABLED!=1, skipping cross-encoder init (set =1 to enable)"
         );
     }
 
@@ -598,10 +598,10 @@ async fn run_daemon() -> anyhow::Result<()> {
         tracing::info!(
             "Background entity-enrichment sweep is ON: it backfills knowledge-graph \
              links over existing memories via your configured LLM. Set \
-             ORIGIN_ENABLE_ENTITY_SWEEP=0 to disable."
+             WENLAN_ENABLE_ENTITY_SWEEP=0 to disable."
         );
     } else {
-        tracing::info!("Background entity-enrichment sweep is OFF (ORIGIN_ENABLE_ENTITY_SWEEP).");
+        tracing::info!("Background entity-enrichment sweep is OFF (WENLAN_ENABLE_ENTITY_SWEEP).");
     }
 
     // Build router
@@ -650,18 +650,18 @@ async fn run_daemon() -> anyhow::Result<()> {
     tracing::info!("Listening on http://{}", local_addr);
 
     // Eval harness reads this stdout line to discover the bound port even when
-    // ORIGIN_BIND_ADDR=127.0.0.1:0. Format MUST stay stable — see
+    // WENLAN_BIND_ADDR=127.0.0.1:0. Format MUST stay stable — see
     // crates/origin-core/src/eval/http_harness.rs in the P2 plan.
-    println!("ORIGIN_LISTENING_ON={}", local_addr);
+    println!("WENLAN_LISTENING_ON={}", local_addr);
     use std::io::Write;
     let _ = std::io::stdout().flush();
 
-    // Alternate signal: write the port to a file if ORIGIN_PORT_FILE is set.
+    // Alternate signal: write the port to a file if WENLAN_PORT_FILE is set.
     // Eval harness uses this when stdout is captured by tracing-appender.
-    if let Ok(port_file) = std::env::var("ORIGIN_PORT_FILE") {
+    if let Ok(port_file) = std::env::var("WENLAN_PORT_FILE") {
         if let Err(e) = std::fs::write(&port_file, local_addr.port().to_string()) {
-            tracing::error!("failed to write ORIGIN_PORT_FILE={}: {}", port_file, e);
-            return Err(anyhow::anyhow!("ORIGIN_PORT_FILE write failed: {}", e));
+            tracing::error!("failed to write WENLAN_PORT_FILE={}: {}", port_file, e);
+            return Err(anyhow::anyhow!("WENLAN_PORT_FILE write failed: {}", e));
         }
     }
 
@@ -786,10 +786,10 @@ async fn main() -> anyhow::Result<()> {
     // and origin-core's config loader (`wenlan_core::config::config_path`) see
     // the same values without plumbing a parameter through every call site.
     if let Some(ref dir) = cli.data_dir {
-        std::env::set_var("ORIGIN_DATA_DIR", dir);
+        std::env::set_var("WENLAN_DATA_DIR", dir);
     }
     if let Some(port) = cli.port {
-        std::env::set_var("ORIGIN_PORT", port.to_string());
+        std::env::set_var("WENLAN_PORT", port.to_string());
     }
 
     match cli.command {

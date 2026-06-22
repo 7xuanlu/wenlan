@@ -2,6 +2,7 @@
 //! P3 provenance integration tests — Task 4 through Task 6.
 
 use async_trait::async_trait;
+use std::sync::Arc;
 use wenlan_core::db::{DistillationCluster, MemoryDB};
 use wenlan_core::llm_provider::{LlmBackend, LlmError, LlmProvider, LlmRequest};
 use wenlan_core::prompts::PromptRegistry;
@@ -10,10 +11,9 @@ use wenlan_core::reranker::Reranker;
 use wenlan_core::sources::RawDocument;
 use wenlan_core::WenlanError;
 use wenlan_core::{EventEmitter, NoopEmitter};
-use std::sync::Arc;
 
 // ---------------------------------------------------------------------------
-// Task 6 env guard: serializes tests that mutate ORIGIN_ENABLE_PAGE_CHANNEL
+// Task 6 env guard: serializes tests that mutate WENLAN_ENABLE_PAGE_CHANNEL
 // so they don't clobber each other when cargo runs them in parallel.
 // ---------------------------------------------------------------------------
 
@@ -27,8 +27,8 @@ struct PageChannelEnvGuard {
 impl PageChannelEnvGuard {
     fn set(value: &str) -> Self {
         let guard = PAGE_CHANNEL_ENV_LOCK.lock().unwrap();
-        let prev = std::env::var("ORIGIN_ENABLE_PAGE_CHANNEL").ok();
-        std::env::set_var("ORIGIN_ENABLE_PAGE_CHANNEL", value);
+        let prev = std::env::var("WENLAN_ENABLE_PAGE_CHANNEL").ok();
+        std::env::set_var("WENLAN_ENABLE_PAGE_CHANNEL", value);
         Self {
             prev,
             _guard: guard,
@@ -39,8 +39,8 @@ impl PageChannelEnvGuard {
 impl Drop for PageChannelEnvGuard {
     fn drop(&mut self) {
         match &self.prev {
-            Some(v) => std::env::set_var("ORIGIN_ENABLE_PAGE_CHANNEL", v),
-            None => std::env::remove_var("ORIGIN_ENABLE_PAGE_CHANNEL"),
+            Some(v) => std::env::set_var("WENLAN_ENABLE_PAGE_CHANNEL", v),
+            None => std::env::remove_var("WENLAN_ENABLE_PAGE_CHANNEL"),
         }
     }
 }
@@ -600,7 +600,7 @@ async fn seed_memory_for_demotion(db: &MemoryDB, source_id: &str, content: &str)
 /// equal-relevance undistilled control, and must remain reachable (rank-move
 /// only, not eviction).
 ///
-/// Uses `ORIGIN_ENABLE_PAGE_CHANNEL=1` so the cross-rerank path exercises the
+/// Uses `WENLAN_ENABLE_PAGE_CHANNEL=1` so the cross-rerank path exercises the
 /// full code; `reranker=None` so no CE model is required in CI.
 ///
 /// Seeds 4 memories total: the distilled + control pair share the same

@@ -10,10 +10,10 @@ mod common;
 
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
-use wenlan_core::sources::RawDocument;
-use wenlan_types::memory::SearchResult;
 use serde::Deserialize;
 use tower::ServiceExt;
+use wenlan_core::sources::RawDocument;
+use wenlan_types::memory::SearchResult;
 
 #[derive(Debug, Deserialize)]
 struct SearchResponse {

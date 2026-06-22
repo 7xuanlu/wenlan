@@ -64,7 +64,7 @@ static EMBEDDER_INIT_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 /// `EMBEDDER_INIT_LOCK` only serializes within a single process. Under
 /// `cargo nextest`, every test runs in its own forked process and they share
 /// the same FastEmbed cache directory (`dirs::data_dir()/origin/memorydb/
-/// fastembed_cache` on Linux when no per-DB cache or `ORIGIN_TEST_FASTEMBED_CACHE`
+/// fastembed_cache` on Linux when no per-DB cache or `WENLAN_TEST_FASTEMBED_CACHE`
 /// override is set). Parallel test processes racing on that cache reproduce
 /// the `Failed to retrieve model_optimized.onnx` symptom, surfacing as
 /// post-merge main CI failures on a different test each run. This file lock
@@ -343,7 +343,7 @@ impl EmbedConfig {
 ///      exists and is non-empty. This is what the running daemon uses
 ///      at the platform data directory (resolved via `dirs::data_local_dir()` per OS)
 ///      under `origin/memorydb/fastembed_cache`.
-///   2. `ORIGIN_TEST_FASTEMBED_CACHE` env var (escape hatch for CI).
+///   2. `WENLAN_TEST_FASTEMBED_CACHE` env var (escape hatch for CI).
 ///   3. `dirs::data_dir().join("origin/memorydb/fastembed_cache")` —
 ///      matches the production daemon's conventional path on the same
 ///      host, so tests that use a tempdir DB still pick up the already-
@@ -365,7 +365,7 @@ pub fn resolve_fastembed_cache_dir(db_path: &std::path::Path) -> Option<std::pat
     }
 
     // 2. Explicit env override.
-    if let Ok(env_cache) = std::env::var("ORIGIN_TEST_FASTEMBED_CACHE") {
+    if let Ok(env_cache) = std::env::var("WENLAN_TEST_FASTEMBED_CACHE") {
         let p = std::path::PathBuf::from(env_cache);
         if p.exists() {
             return Some(p);
@@ -414,27 +414,27 @@ pub fn compute_rerank_fetch_pool(
     limit.saturating_mul(multiplier).max(floor).max(limit)
 }
 
-/// True iff `ORIGIN_ENABLE_PAGE_CHANNEL` is set to a truthy value
+/// True iff `WENLAN_ENABLE_PAGE_CHANNEL` is set to a truthy value
 /// (`1`, `true`, or `yes`, case-insensitive). The page-channel is OPT-IN:
 /// unset or a falsey value (`0`/`false`/`no`/"") leaves it disabled.
 ///
 /// Used by [`MemoryDB::search_memory_cross_rerank`] to gate the page-channel
 /// branch and by the eval harness (locomo + longmemeval) to tag baseline
 /// JSON artifacts with their page-ON/OFF variant. All five call sites MUST
-/// share this helper so an `ORIGIN_ENABLE_PAGE_CHANNEL` setting can't
+/// share this helper so an `WENLAN_ENABLE_PAGE_CHANNEL` setting can't
 /// disagree between production and eval (which would make baseline filenames
 /// lie about their contents — see AGENTS.md Eval Citation Discipline).
 ///
 /// Truthy-only parse (not `is_ok()`): operators enable the channel by setting
 /// the var to a truthy value; any other value or unset = disabled.
 pub fn page_channel_enabled() -> bool {
-    std::env::var("ORIGIN_ENABLE_PAGE_CHANNEL")
+    std::env::var("WENLAN_ENABLE_PAGE_CHANNEL")
         .ok()
         .map(|v| matches!(v.trim().to_ascii_lowercase().as_str(), "1" | "true" | "yes"))
         .unwrap_or(false)
 }
 
-/// True iff `ORIGIN_ENABLE_EVICTION` is set to a truthy value (`1`, `true`, or
+/// True iff `WENLAN_ENABLE_EVICTION` is set to a truthy value (`1`, `true`, or
 /// `yes`, case-insensitive). When enabled, the refinery's `evict` phase flips
 /// stale, low-`effective_confidence`, non-immune memories to
 /// `supersede_mode='evicted'` (recoverable, never hard-deleted). `'evicted'` is
@@ -447,13 +447,13 @@ pub fn page_channel_enabled() -> bool {
 /// the "no memory count cap" contract). Truthy-only parse, verbatim copy of
 /// [`page_channel_enabled`]. T21 Stage 1.
 pub fn eviction_enabled() -> bool {
-    std::env::var("ORIGIN_ENABLE_EVICTION")
+    std::env::var("WENLAN_ENABLE_EVICTION")
         .ok()
         .map(|v| matches!(v.trim().to_ascii_lowercase().as_str(), "1" | "true" | "yes"))
         .unwrap_or(false)
 }
 
-/// True iff `ORIGIN_ENABLE_GLOBAL_PRELUDE` is set to a truthy value
+/// True iff `WENLAN_ENABLE_GLOBAL_PRELUDE` is set to a truthy value
 /// (`1`, `true`, or `yes`, case-insensitive). T18 hierarchical global-context
 /// prelude is OPT-IN, default OFF (ship-dark): unset or a falsey value
 /// (`0`/`false`/`no`/"") leaves both the refinery build path and
@@ -468,18 +468,18 @@ pub fn eviction_enabled() -> bool {
 /// MUST share this helper so the env var cannot disagree between production and
 /// eval (which would make baseline filenames lie). Mirrors [`page_channel_enabled`].
 pub fn global_prelude_enabled() -> bool {
-    std::env::var("ORIGIN_ENABLE_GLOBAL_PRELUDE")
+    std::env::var("WENLAN_ENABLE_GLOBAL_PRELUDE")
         .ok()
         .map(|v| matches!(v.trim().to_ascii_lowercase().as_str(), "1" | "true" | "yes"))
         .unwrap_or(false)
 }
 
 /// Expansion temperature for the legacy `search_memory_expanded` paraphrase
-/// call. `ORIGIN_EXPAND_TEMP` overrides the historical 0.3 default (used by the
+/// call. `WENLAN_EXPAND_TEMP` overrides the historical 0.3 default (used by the
 /// Track-2 temperature-isolation A/B). Non-finite / negative / unparseable falls
 /// back to 0.3.
 pub fn expand_temperature() -> f32 {
-    std::env::var("ORIGIN_EXPAND_TEMP")
+    std::env::var("WENLAN_EXPAND_TEMP")
         .ok()
         .and_then(|v| v.trim().parse::<f32>().ok())
         .filter(|t| t.is_finite() && *t >= 0.0)
@@ -494,7 +494,7 @@ pub struct EvictionReport {
     pub archived: usize,
     /// Number of memories hard-deleted. Always 0 in Stage 1 (archive-not-delete).
     pub deleted: usize,
-    /// True when `ORIGIN_ENABLE_EVICTION` was off, so nothing ran.
+    /// True when `WENLAN_ENABLE_EVICTION` was off, so nothing ran.
     pub skipped_disabled: bool,
 }
 
@@ -593,7 +593,7 @@ pub fn select_evictions(
     selected.into_iter().collect()
 }
 
-/// True iff `ORIGIN_ENABLE_DUAL_POOL_RESOLVE` is set to a truthy value
+/// True iff `WENLAN_ENABLE_DUAL_POOL_RESOLVE` is set to a truthy value
 /// (`1`, `true`, or `yes`, case-insensitive). When enabled, `handle_store_memory`
 /// resolves each incoming memory against two candidate pools (near-duplicates +
 /// possibly-contradicting same-entity/domain rows) in a single LLM call and acts
@@ -604,13 +604,13 @@ pub fn select_evictions(
 /// write path byte-identical (no extra vector query, no LLM call, no mutation).
 /// Truthy-only parse, mirrors [`page_channel_enabled`].
 pub fn dual_pool_resolve_enabled() -> bool {
-    std::env::var("ORIGIN_ENABLE_DUAL_POOL_RESOLVE")
+    std::env::var("WENLAN_ENABLE_DUAL_POOL_RESOLVE")
         .ok()
         .map(|v| matches!(v.trim().to_ascii_lowercase().as_str(), "1" | "true" | "yes"))
         .unwrap_or(false)
 }
 
-/// True iff `ORIGIN_ENABLE_REFLECTION_DEBOUNCE` is set to a truthy value
+/// True iff `WENLAN_ENABLE_REFLECTION_DEBOUNCE` is set to a truthy value
 /// (`1`, `true`, or `yes`, case-insensitive). When enabled, `handle_store_memory`
 /// routes its deferred post-ingest enrichment through a per-agent debouncer
 /// (`wenlan_server::reflection_debounce::ReflectionDebouncer`) so a burst of
@@ -622,13 +622,13 @@ pub fn dual_pool_resolve_enabled() -> bool {
 /// verbatim with `cancel = None`, no debouncer consulted. Truthy-only parse,
 /// mirrors [`page_channel_enabled`].
 pub fn reflection_debounce_enabled() -> bool {
-    std::env::var("ORIGIN_ENABLE_REFLECTION_DEBOUNCE")
+    std::env::var("WENLAN_ENABLE_REFLECTION_DEBOUNCE")
         .ok()
         .map(|v| matches!(v.trim().to_ascii_lowercase().as_str(), "1" | "true" | "yes"))
         .unwrap_or(false)
 }
 
-/// True iff `ORIGIN_ENABLE_TEMPORAL_GROUNDING` is set to a truthy value
+/// True iff `WENLAN_ENABLE_TEMPORAL_GROUNDING` is set to a truthy value
 /// (`1`, `true`, or `yes`, case-insensitive). When enabled, `upsert_documents`
 /// deterministically rewrites relative date phrases in memory prose to include
 /// absolute dates, anchored to the memory's `last_modified` (observation date),
@@ -639,13 +639,13 @@ pub fn reflection_debounce_enabled() -> bool {
 /// write path byte-identical to pre-T11. Truthy-only parse, mirrors
 /// [`page_channel_enabled`].
 pub fn temporal_grounding_enabled() -> bool {
-    std::env::var("ORIGIN_ENABLE_TEMPORAL_GROUNDING")
+    std::env::var("WENLAN_ENABLE_TEMPORAL_GROUNDING")
         .ok()
         .map(|v| matches!(v.trim().to_ascii_lowercase().as_str(), "1" | "true" | "yes"))
         .unwrap_or(false)
 }
 
-/// True iff `ORIGIN_ENABLE_EPISODE_CHANNEL` is set to a truthy value
+/// True iff `WENLAN_ENABLE_EPISODE_CHANNEL` is set to a truthy value
 /// (`1`, `true`, or `yes`, case-insensitive). The episode-channel is OPT-IN
 /// (master write+read switch): unset or a falsey value (`0`/`false`/`no`/"")
 /// leaves it disabled, so behaviour is byte-identical to pre-T2.
@@ -654,17 +654,17 @@ pub fn temporal_grounding_enabled() -> bool {
 /// each distilled `source='memory'` fact, and
 /// [`MemoryDB::search_memory_cross_rerank`] injects those episodes as a 5th RRF
 /// stream. The eval harness reads this same helper so an
-/// `ORIGIN_ENABLE_EPISODE_CHANNEL` setting can't disagree between production and
+/// `WENLAN_ENABLE_EPISODE_CHANNEL` setting can't disagree between production and
 /// eval (which would make baseline filenames lie). Mirrors
 /// [`page_channel_enabled`] (truthy-only parse).
 pub fn episode_channel_enabled() -> bool {
-    std::env::var("ORIGIN_ENABLE_EPISODE_CHANNEL")
+    std::env::var("WENLAN_ENABLE_EPISODE_CHANNEL")
         .ok()
         .map(|v| matches!(v.trim().to_ascii_lowercase().as_str(), "1" | "true" | "yes"))
         .unwrap_or(false)
 }
 
-/// True iff `ORIGIN_ENABLE_COT_RETRIEVAL` is set to a truthy value
+/// True iff `WENLAN_ENABLE_COT_RETRIEVAL` is set to a truthy value
 /// (`1`, `true`, or `yes`, case-insensitive). The CoT iterative retrieve-reason-
 /// retrieve loop (T5) is OPT-IN: unset or a falsey value (`0`/`false`/`no`/"")
 /// leaves `search_memory_iterative` byte-identical to `search_memory_cross_rerank`
@@ -676,13 +676,13 @@ pub fn episode_channel_enabled() -> bool {
 /// tag would lie about what was measured (see AGENTS.md Eval Citation
 /// Discipline). Truthy-only parse, mirrors [`page_channel_enabled`].
 pub fn cot_retrieval_enabled() -> bool {
-    std::env::var("ORIGIN_ENABLE_COT_RETRIEVAL")
+    std::env::var("WENLAN_ENABLE_COT_RETRIEVAL")
         .ok()
         .map(|v| matches!(v.trim().to_ascii_lowercase().as_str(), "1" | "true" | "yes"))
         .unwrap_or(false)
 }
 
-/// True iff `ORIGIN_ENABLE_ENTITY_MINHASH` is set to a truthy value
+/// True iff `WENLAN_ENABLE_ENTITY_MINHASH` is set to a truthy value
 /// (`1`, `true`, or `yes`, case-insensitive). The deterministic MinHash/LSH
 /// entity near-dedup cascade (T16) is OPT-IN: unset or a falsey value
 /// (`0`/`false`/`no`/"") leaves entity resolution byte-identical to the
@@ -695,7 +695,7 @@ pub fn cot_retrieval_enabled() -> bool {
 /// [`page_channel_enabled`] (truthy-only parse) so production and any future
 /// eval wiring can't disagree on the flag.
 pub fn entity_minhash_enabled() -> bool {
-    std::env::var("ORIGIN_ENABLE_ENTITY_MINHASH")
+    std::env::var("WENLAN_ENABLE_ENTITY_MINHASH")
         .ok()
         .map(|v| matches!(v.trim().to_ascii_lowercase().as_str(), "1" | "true" | "yes"))
         .unwrap_or(false)
@@ -704,10 +704,10 @@ pub fn entity_minhash_enabled() -> bool {
 /// Minimum verbatim word count for an episode co-write. Short turns ("ok",
 /// "loves rust") carry no retrieval signal that the distilled fact doesn't
 /// already cover, so they're skipped to keep the corpus-doubling cost bounded.
-/// Override with `ORIGIN_EPISODE_WORD_GATE` (default 8). Mirrors the
+/// Override with `WENLAN_EPISODE_WORD_GATE` (default 8). Mirrors the
 /// env-override pattern used by the page/session limits.
 fn episode_word_gate() -> usize {
-    std::env::var("ORIGIN_EPISODE_WORD_GATE")
+    std::env::var("WENLAN_EPISODE_WORD_GATE")
         .ok()
         .and_then(|s| s.trim().parse().ok())
         .unwrap_or(8)
@@ -732,7 +732,7 @@ pub(crate) struct EpisodeDerivation {
 /// below `word_gate` words (short turns carry no signal the distilled fact
 /// lacks). The seed path never sets `source_text`, so `content` is the verbatim
 /// in both the co-write and the backfill — a backfilled seed is byte-identical
-/// to a fresh `ORIGIN_ENABLE_EPISODE_CHANNEL=1` ingest.
+/// to a fresh `WENLAN_ENABLE_EPISODE_CHANNEL=1` ingest.
 pub(crate) fn derive_episode(
     source_id: &str,
     source_text: Option<&str>,
@@ -754,20 +754,20 @@ pub(crate) fn derive_episode(
     })
 }
 
-/// True iff `ORIGIN_ENABLE_SALIENCE_PRIOR` is set to a truthy value
+/// True iff `WENLAN_ENABLE_SALIENCE_PRIOR` is set to a truthy value
 /// (`1`, `true`, or `yes`, case-insensitive). T8 salience prior is OPT-IN:
 /// when unset or falsey, the ranking formula forces `salience_mult` to `1.0`,
 /// so output is byte-identical to pre-T8. "Write-always, rank-gated": the
 /// importance column backfills passively while this flag is off; only the READ
 /// into ranking is gated. Mirrors [`page_channel_enabled`] (truthy-only parse).
 pub fn salience_prior_enabled() -> bool {
-    std::env::var("ORIGIN_ENABLE_SALIENCE_PRIOR")
+    std::env::var("WENLAN_ENABLE_SALIENCE_PRIOR")
         .ok()
         .map(|v| matches!(v.trim().to_ascii_lowercase().as_str(), "1" | "true" | "yes"))
         .unwrap_or(false)
 }
 
-/// True iff `ORIGIN_ENABLE_SESSION_DIVERSITY` is set to a truthy value
+/// True iff `WENLAN_ENABLE_SESSION_DIVERSITY` is set to a truthy value
 /// (`1`, `true`, or `yes`, case-insensitive).  OPT-IN, default OFF: when
 /// unset or falsey, [`MemoryDB::search_memory_cross_rerank`] output is
 /// byte-identical to pre-T20 behaviour (regression guard tests #13/#14).
@@ -776,21 +776,21 @@ pub fn salience_prior_enabled() -> bool {
 /// `retrieval::session_diversity::session_key` and are never counted
 /// against the cap — safe to enable in production until a real session column ships.
 pub fn session_diversity_enabled() -> bool {
-    std::env::var("ORIGIN_ENABLE_SESSION_DIVERSITY")
+    std::env::var("WENLAN_ENABLE_SESSION_DIVERSITY")
         .ok()
         .map(|v| matches!(v.trim().to_ascii_lowercase().as_str(), "1" | "true" | "yes"))
         .unwrap_or(false)
 }
 
-/// Parse `ORIGIN_SESSION_DIVERSITY_MAX` as a `usize`.
+/// Parse `WENLAN_SESSION_DIVERSITY_MAX` as a `usize`.
 /// Defaults to 3 when unset or when the value fails to parse.
 fn session_diversity_max() -> usize {
-    std::env::var("ORIGIN_SESSION_DIVERSITY_MAX")
+    std::env::var("WENLAN_SESSION_DIVERSITY_MAX")
         .ok()
         .and_then(|v| v.trim().parse().ok())
         .unwrap_or(3)
 }
-/// True iff `ORIGIN_ENABLE_GRAPH_GATE` is set to a truthy value
+/// True iff `WENLAN_ENABLE_GRAPH_GATE` is set to a truthy value
 /// (`1`, `true`, or `yes`, case-insensitive). OPT-IN: when unset or falsey,
 /// `augment_with_graph` runs unconditionally (legacy behavior, byte-identical).
 /// When enabled, the graph hop is skipped for queries that don't warrant it —
@@ -799,27 +799,27 @@ fn session_diversity_max() -> usize {
 /// lookups. See [`crate::retrieval::signals::query_warrants_graph`]. The gate is
 /// strictly a cost/noise saver: ambiguous queries still augment.
 pub fn graph_gate_enabled() -> bool {
-    std::env::var("ORIGIN_ENABLE_GRAPH_GATE")
+    std::env::var("WENLAN_ENABLE_GRAPH_GATE")
         .ok()
         .map(|v| matches!(v.trim().to_ascii_lowercase().as_str(), "1" | "true" | "yes"))
         .unwrap_or(false)
 }
 
-/// True iff `ORIGIN_ENABLE_GRAPH_SEED` is set to a truthy value
+/// True iff `WENLAN_ENABLE_GRAPH_SEED` is set to a truthy value
 /// (`1`, `true`, or `yes`, case-insensitive). T9 wide-pool-seeded graph expansion.
 /// OPT-IN: unset or falsey leaves `augment_with_graph` using the existing
 /// query-anchor seed (byte-identical to pre-T9). When enabled, the seeded variant
 /// seeds from the wide candidate pool entity provenance + k-hop BFS.
-/// Controls: `ORIGIN_GRAPH_HOP_DEPTH` (default 1), `ORIGIN_GRAPH_SEED_TOP_K` (default 10),
-/// `ORIGIN_GRAPH_FRONTIER_CAP` (default 64).
+/// Controls: `WENLAN_GRAPH_HOP_DEPTH` (default 1), `WENLAN_GRAPH_SEED_TOP_K` (default 10),
+/// `WENLAN_GRAPH_FRONTIER_CAP` (default 64).
 pub fn graph_seed_enabled() -> bool {
-    std::env::var("ORIGIN_ENABLE_GRAPH_SEED")
+    std::env::var("WENLAN_ENABLE_GRAPH_SEED")
         .ok()
         .map(|v| matches!(v.trim().to_ascii_lowercase().as_str(), "1" | "true" | "yes"))
         .unwrap_or(false)
 }
 
-/// True iff `ORIGIN_ENABLE_TEMPORAL_FILTER` is set to a truthy value
+/// True iff `WENLAN_ENABLE_TEMPORAL_FILTER` is set to a truthy value
 /// (`1`, `true`, or `yes`, case-insensitive). The temporal filter is OPT-IN:
 /// unset or a falsey value leaves it disabled (dark by default).
 ///
@@ -831,13 +831,13 @@ pub fn graph_seed_enabled() -> bool {
 /// All call sites MUST share this helper so the env var cannot disagree between
 /// production and eval.
 pub fn temporal_filter_enabled() -> bool {
-    std::env::var("ORIGIN_ENABLE_TEMPORAL_FILTER")
+    std::env::var("WENLAN_ENABLE_TEMPORAL_FILTER")
         .ok()
         .map(|v| matches!(v.trim().to_ascii_lowercase().as_str(), "1" | "true" | "yes"))
         .unwrap_or(false)
 }
 
-/// True iff `ORIGIN_ENABLE_TEMPORAL_SOFT_BOOST` is set to a truthy value
+/// True iff `WENLAN_ENABLE_TEMPORAL_SOFT_BOOST` is set to a truthy value
 /// (`1`, `true`, or `yes`, case-insensitive). OPT-IN, default OFF.
 ///
 /// The temporal SOFT boost is the gentler successor to the T4a hard filter:
@@ -848,13 +848,13 @@ pub fn temporal_filter_enabled() -> bool {
 /// `search_memory`. Mirrors [`salience_prior_enabled`] (truthy-only parse) so
 /// production and eval cannot disagree on the flag.
 pub fn temporal_soft_boost_enabled() -> bool {
-    std::env::var("ORIGIN_ENABLE_TEMPORAL_SOFT_BOOST")
+    std::env::var("WENLAN_ENABLE_TEMPORAL_SOFT_BOOST")
         .ok()
         .map(|v| matches!(v.trim().to_ascii_lowercase().as_str(), "1" | "true" | "yes"))
         .unwrap_or(false)
 }
 
-/// Parse `ORIGIN_TEMPORAL_BONUS` as an `f64`. Defaults to `0.5` when unset, when
+/// Parse `WENLAN_TEMPORAL_BONUS` as an `f64`. Defaults to `0.5` when unset, when
 /// the value fails to parse, or when it is non-finite (NaN / ±inf). The parsed
 /// value is clamped with `.max(0.0)` so a negative configuration becomes `0.0`
 /// (neutral, no boost). This is the load-bearing safety clamp: a negative bonus
@@ -866,12 +866,12 @@ pub fn temporal_soft_boost_enabled() -> bool {
 /// This is the additive bonus applied to in-window dated memories: their score
 /// is multiplied by `1 + bonus`.
 pub fn temporal_bonus() -> f64 {
-    match std::env::var("ORIGIN_TEMPORAL_BONUS") {
+    match std::env::var("WENLAN_TEMPORAL_BONUS") {
         Ok(raw) => match raw.trim().parse::<f64>() {
             Ok(v) if v.is_finite() => v.max(0.0),
             _ => {
                 log::warn!(
-                    "[memory_db] ORIGIN_TEMPORAL_BONUS={:?} is not a finite number; using default 0.5",
+                    "[memory_db] WENLAN_TEMPORAL_BONUS={:?} is not a finite number; using default 0.5",
                     raw
                 );
                 0.5
@@ -881,29 +881,29 @@ pub fn temporal_bonus() -> f64 {
     }
 }
 
-/// True iff `ORIGIN_ENABLE_GRAPH_KHOP` is set to a truthy value
+/// True iff `WENLAN_ENABLE_GRAPH_KHOP` is set to a truthy value
 /// (`1`, `true`, or `yes`, case-insensitive). T4b k-hop entity-graph traversal.
 ///
 /// OPT-IN, default OFF: when unset or falsey, [`MemoryDB::augment_with_graph`]
 /// uses the query-anchored top entities verbatim (single-hop observations only),
 /// byte-identical to the pre-T4b path. When enabled, those anchor entities are
-/// expanded up to `ORIGIN_GRAPH_KHOP_DEPTH` hops (default 1 == single-hop parity)
-/// over the entity->relation->entity graph, bounded by `ORIGIN_GRAPH_KHOP_MAX_NODES`
+/// expanded up to `WENLAN_GRAPH_KHOP_DEPTH` hops (default 1 == single-hop parity)
+/// over the entity->relation->entity graph, bounded by `WENLAN_GRAPH_KHOP_MAX_NODES`
 /// (default 25) and a cycle-safe visited set, before observations are fetched.
 ///
-/// Composes with the T3 graph-gate (`ORIGIN_ENABLE_GRAPH_GATE`) and T9 pool-seed
-/// (`ORIGIN_ENABLE_GRAPH_SEED`): the gate still decides WHETHER `augment_with_graph`
+/// Composes with the T3 graph-gate (`WENLAN_ENABLE_GRAPH_GATE`) and T9 pool-seed
+/// (`WENLAN_ENABLE_GRAPH_SEED`): the gate still decides WHETHER `augment_with_graph`
 /// fires; this flag only changes the breadth of the anchor expansion inside it.
 /// Truthy-only parse, mirrors [`page_channel_enabled`], so production and eval
 /// cannot disagree on the flag.
 pub fn khop_traversal_enabled() -> bool {
-    std::env::var("ORIGIN_ENABLE_GRAPH_KHOP")
+    std::env::var("WENLAN_ENABLE_GRAPH_KHOP")
         .ok()
         .map(|v| matches!(v.trim().to_ascii_lowercase().as_str(), "1" | "true" | "yes"))
         .unwrap_or(false)
 }
 
-/// True iff `ORIGIN_GRAPH_MEMORY_STREAM` is NOT explicitly disabled. DEFAULT ON
+/// True iff `WENLAN_GRAPH_MEMORY_STREAM` is NOT explicitly disabled. DEFAULT ON
 /// (opt out with `0`/`false`/`no`/`off`).
 ///
 /// When OFF, [`MemoryDB::augment_with_graph`] keeps its legacy
@@ -922,7 +922,7 @@ pub fn khop_traversal_enabled() -> bool {
 /// BH-sig (paired A/B 2026-06-09); stream-under-CE stack +0.0126 p=0.17 not
 /// significant, so the default-ON benefit lives on the quick path only.
 pub fn graph_memory_stream_enabled() -> bool {
-    match std::env::var("ORIGIN_GRAPH_MEMORY_STREAM") {
+    match std::env::var("WENLAN_GRAPH_MEMORY_STREAM") {
         Ok(v) => !matches!(
             v.trim().to_ascii_lowercase().as_str(),
             "0" | "false" | "no" | "off"
@@ -931,14 +931,14 @@ pub fn graph_memory_stream_enabled() -> bool {
     }
 }
 
-/// True unless `ORIGIN_ENABLE_ENTITY_SWEEP` is a falsy token (`0`, `false`,
+/// True unless `WENLAN_ENABLE_ENTITY_SWEEP` is a falsy token (`0`, `false`,
 /// `no`, `off`). OPT-OUT, default ON.
 ///
 /// When OFF, the post-ingest entity sweep is skipped. Useful for isolated
 /// eval runs or debugging where the caller seeds entity data externally and
 /// does not want the sweep to overwrite it.
 pub fn entity_sweep_enabled() -> bool {
-    match std::env::var("ORIGIN_ENABLE_ENTITY_SWEEP") {
+    match std::env::var("WENLAN_ENABLE_ENTITY_SWEEP") {
         Ok(v) => !matches!(
             v.trim().to_ascii_lowercase().as_str(),
             "0" | "false" | "no" | "off"
@@ -947,7 +947,7 @@ pub fn entity_sweep_enabled() -> bool {
     }
 }
 
-/// True iff `ORIGIN_RERANK_SKIP_PREFERENCE` is truthy. OPT-IN, default OFF.
+/// True iff `WENLAN_RERANK_SKIP_PREFERENCE` is truthy. OPT-IN, default OFF.
 ///
 /// When ON, preference/recommendation-seeking queries (per
 /// [`crate::router::classify::is_preference_query`]) bypass the cross-encoder
@@ -957,13 +957,13 @@ pub fn entity_sweep_enabled() -> bool {
 /// bypass −0.0117 agg, BH-sig negative). Default-OFF escape hatch only — see
 /// `is_preference_query` docs for the full measurement story.
 pub fn rerank_skip_preference_enabled() -> bool {
-    std::env::var("ORIGIN_RERANK_SKIP_PREFERENCE")
+    std::env::var("WENLAN_RERANK_SKIP_PREFERENCE")
         .ok()
         .map(|v| matches!(v.trim().to_ascii_lowercase().as_str(), "1" | "true" | "yes"))
         .unwrap_or(false)
 }
 
-/// True iff `ORIGIN_GRAPH_SURFACE_NEW` is truthy. OPT-IN, default OFF. Only
+/// True iff `WENLAN_GRAPH_SURFACE_NEW` is truthy. OPT-IN, default OFF. Only
 /// meaningful when [`graph_memory_stream_enabled`] is ON.
 ///
 /// OFF = boost-only: the graph RRF term lifts only memories already in the base
@@ -973,19 +973,19 @@ pub fn rerank_skip_preference_enabled() -> bool {
 /// added under the bounded [`graph_surface_budget`], drawn from the same
 /// type+degree-filtered anchors. The higher-recall, higher-noise arm.
 pub fn graph_surface_new_enabled() -> bool {
-    std::env::var("ORIGIN_GRAPH_SURFACE_NEW")
+    std::env::var("WENLAN_GRAPH_SURFACE_NEW")
         .ok()
         .map(|v| matches!(v.trim().to_ascii_lowercase().as_str(), "1" | "true" | "yes"))
         .unwrap_or(false)
 }
 
 /// Max `memory_entities` degree for an entity to qualify as a graph anchor
-/// (`ORIGIN_GRAPH_HUB_CAP`, default 20). Over-cap entities (speaker pools,
+/// (`WENLAN_GRAPH_HUB_CAP`, default 20). Over-cap entities (speaker pools,
 /// generic hubs) are EXCLUDED outright — degree is a hard filter, not a
 /// tie-break. A non-positive / unparseable value falls back to the default so
 /// the filter can never be silently disabled.
 pub fn graph_hub_cap() -> usize {
-    std::env::var("ORIGIN_GRAPH_HUB_CAP")
+    std::env::var("WENLAN_GRAPH_HUB_CAP")
         .ok()
         .and_then(|v| v.trim().parse::<usize>().ok())
         .filter(|n| *n > 0)
@@ -993,10 +993,10 @@ pub fn graph_hub_cap() -> usize {
 }
 
 /// Max graph-only memories the surface-new arm may introduce per query
-/// (`ORIGIN_GRAPH_SURFACE_BUDGET`, default 5). Bounds the noise the higher-recall
+/// (`WENLAN_GRAPH_SURFACE_BUDGET`, default 5). Bounds the noise the higher-recall
 /// arm can inject. Ignored in boost-only mode.
 pub fn graph_surface_budget() -> usize {
-    std::env::var("ORIGIN_GRAPH_SURFACE_BUDGET")
+    std::env::var("WENLAN_GRAPH_SURFACE_BUDGET")
         .ok()
         .and_then(|v| v.trim().parse::<usize>().ok())
         .unwrap_or(5)
@@ -1013,7 +1013,7 @@ pub fn is_person_like(entity_type: &str) -> bool {
     )
 }
 
-/// True iff `ORIGIN_MAGNITUDE_FUSION` is set to a truthy value
+/// True iff `WENLAN_MAGNITUDE_FUSION` is set to a truthy value
 /// (`1`, `true`, or `yes`, case-insensitive). OPT-IN: when unset or falsey,
 /// `search_memory`'s FTS channel keeps the legacy rank-only RRF term
 /// `fts_weight/(rrf_k+rank)` (byte-identical default behavior).
@@ -1031,7 +1031,7 @@ pub fn is_person_like(entity_type: &str) -> bool {
 /// Used by `search_memory` to gate the fusion branch and by the eval harness
 /// (locomo + longmemeval) to tag baseline JSON artifacts with their
 /// magfusion-ON/OFF variant. Both sites MUST share this helper so an
-/// `ORIGIN_MAGNITUDE_FUSION` setting can't disagree between production and eval
+/// `WENLAN_MAGNITUDE_FUSION` setting can't disagree between production and eval
 /// (which would make baseline filenames lie — see AGENTS.md Eval Citation
 /// Discipline).
 ///
@@ -1039,7 +1039,7 @@ pub fn is_person_like(entity_type: &str) -> bool {
 /// across queries (fine for single-query ranking; a future cross-query
 /// score_threshold would need a different normalization).
 pub fn magnitude_fusion_enabled() -> bool {
-    std::env::var("ORIGIN_MAGNITUDE_FUSION")
+    std::env::var("WENLAN_MAGNITUDE_FUSION")
         .ok()
         .map(|v| matches!(v.trim().to_ascii_lowercase().as_str(), "1" | "true" | "yes"))
         .unwrap_or(false)
@@ -1063,7 +1063,7 @@ fn fts_magnitude(raw_bm25: f32) -> f32 {
 }
 
 /// Min-max normalize a slice of (already sign-corrected, non-negative) FTS
-/// magnitudes into `[0.0, 1.0]`. Used by the `ORIGIN_MAGNITUDE_FUSION` path in
+/// magnitudes into `[0.0, 1.0]`. Used by the `WENLAN_MAGNITUDE_FUSION` path in
 /// `search_memory`.
 ///
 /// Guards: empty → empty; a single element or an all-equal set (`max - min`
@@ -1635,7 +1635,7 @@ CREATE INDEX IF NOT EXISTS idx_rejected_agent ON rejected_memories(source_agent)
 -- PARENT memory (parent_id = parent source_id; parent_kind = 'memory'). The
 -- vector index (child_vectors_vec_idx) is created separately, like the other
 -- libsql_vector_idx indexes. Ships EMPTY + inert: rows are only co-written when
--- ORIGIN_ENABLE_FACT_CHANNEL is on (see upsert_documents).
+-- WENLAN_ENABLE_FACT_CHANNEL is on (see upsert_documents).
 CREATE TABLE IF NOT EXISTS child_vectors (
     id TEXT PRIMARY KEY,
     parent_kind TEXT NOT NULL,
@@ -5779,7 +5779,7 @@ impl MemoryDB {
 
             // Migration 56: T2 dual-granularity episode-channel. Add the
             // per-row `episode_of` pointer (TEXT, nullable; NULL for every
-            // ordinary memory row). When `ORIGIN_ENABLE_EPISODE_CHANNEL` is on,
+            // ordinary memory row). When `WENLAN_ENABLE_EPISODE_CHANNEL` is on,
             // `upsert_documents` co-writes a verbatim `source='episode'` row
             // whose `episode_of` carries the parent fact source_id. Additive and
             // non-destructive: no backfill, existing rows keep NULL.
@@ -5825,7 +5825,7 @@ impl MemoryDB {
 
             // Migration 57: T16 deterministic entity-resolution cascade.
             // Index high-entropy entity names by their LSH band keys so the
-            // opt-in MinHash near-dedup step (ORIGIN_ENABLE_ENTITY_MINHASH) can
+            // opt-in MinHash near-dedup step (WENLAN_ENABLE_ENTITY_MINHASH) can
             // find same-band candidates at entity-creation time. Additive and
             // non-destructive: the table ships EMPTY and inert -- no backfill,
             // and the resolution cascade only writes/reads it when the flag is
@@ -5855,7 +5855,7 @@ impl MemoryDB {
             // vectors (narrative + one per structured field) that rehydrate to
             // their PARENT memory. Additive and non-destructive: the table ships
             // EMPTY and inert -- rows are only co-written when
-            // ORIGIN_ENABLE_FACT_CHANNEL is on, and the read channel only queries
+            // WENLAN_ENABLE_FACT_CHANNEL is on, and the read channel only queries
             // it under the same flag. No inline backfill (could block on large
             // DBs); rebuild_child_vectors_for_missing() is the deferred
             // turn-it-on-later path. The vector index is created OUTSIDE any
@@ -7416,7 +7416,7 @@ impl MemoryDB {
             let metadata = doc.metadata.clone();
 
             // T11: write-time temporal grounding (deterministic prose grounder).
-            // When ORIGIN_ENABLE_TEMPORAL_GROUNDING is set, relative date phrases
+            // When WENLAN_ENABLE_TEMPORAL_GROUNDING is set, relative date phrases
             // (yesterday/today/tomorrow) in the prose are rewritten to include
             // absolute dates anchored to last_modified (the observation date),
             // BEFORE chunking, embedding, and INSERT. Flag OFF = byte-identical.
@@ -8158,7 +8158,7 @@ impl MemoryDB {
     ///
     /// `allow_graph_stream` gates the v3 graph memory stream per call site. It now
     /// serves the quick, temporal, skip-preference-bypass, CE-pool-fetch, and
-    /// expanded paths: pass `true` to let `ORIGIN_GRAPH_MEMORY_STREAM` (default ON)
+    /// expanded paths: pass `true` to let `WENLAN_GRAPH_MEMORY_STREAM` (default ON)
     /// fuse entity-linked memories, `false` to force the legacy observation merge
     /// even when the flag is on (the CE pool fetch passes `reranker.is_none()` so
     /// the stream rides only the degraded-to-hybrid case, never a live CE rescore).
@@ -8455,7 +8455,7 @@ impl MemoryDB {
         let fts_weight = scoring.map(|s| s.fts_weight).unwrap_or(0.2);
 
         if magnitude_fusion_enabled() {
-            // Magnitude-preserving FTS fusion (ORIGIN_MAGNITUDE_FUSION).
+            // Magnitude-preserving FTS fusion (WENLAN_MAGNITUDE_FUSION).
             // FOOTGUN: `result.score` here holds the RAW NEGATIVE FTS5 bm25
             // (captured as `rank as f32`, NOT negated like fts_only_search).
             // Negate FIRST so a stronger match (more-negative raw bm25) becomes
@@ -8500,7 +8500,7 @@ impl MemoryDB {
 
         let now = chrono::Utc::now().timestamp();
 
-        // Temporal SOFT boost (opt-in): when ORIGIN_ENABLE_TEMPORAL_SOFT_BOOST is on
+        // Temporal SOFT boost (opt-in): when WENLAN_ENABLE_TEMPORAL_SOFT_BOOST is on
         // AND a High-confidence cue produced a window, derive the inclusive
         // [start, end] range. In-window dated rows are lifted by (1 + bonus) in the
         // scoring closure; outside-window / undated / no-cue rows stay neutral and
@@ -8644,13 +8644,13 @@ impl MemoryDB {
         //
         // T9: harvest (entity_id, rank) from the WIDE pre-truncate pool BEFORE dropping
         // the lock (final_results here is the limit*3 scored pool). rank = enumeration
-        // index. Used by augment_with_graph_seeded when ORIGIN_ENABLE_GRAPH_SEED=1.
+        // index. Used by augment_with_graph_seeded when WENLAN_ENABLE_GRAPH_SEED=1.
         let pool_entity_ids: Vec<String> = final_results
             .iter()
             .filter_map(|r| r.entity_id.clone())
             .collect();
         drop(conn);
-        // Graph gate (ORIGIN_ENABLE_GRAPH_GATE, opt-in): when enabled, skip the
+        // Graph gate (WENLAN_ENABLE_GRAPH_GATE, opt-in): when enabled, skip the
         // graph hop for queries that warrant no traversal (no relational/temporal
         // phrasing, no entity anchor). When the gate is off, always augment —
         // behavior is byte-identical to before this gate existed.
@@ -8661,7 +8661,7 @@ impl MemoryDB {
             None => !graph_gate_enabled() || crate::retrieval::signals::query_warrants_graph(query),
         };
         if do_graph {
-            // T9: pool-seeded variant (ORIGIN_ENABLE_GRAPH_SEED, opt-in, default OFF).
+            // T9: pool-seeded variant (WENLAN_ENABLE_GRAPH_SEED, opt-in, default OFF).
             // When ON + pool has entity ids: seed BFS from pool provenance instead of
             // a fresh query-anchored search_entities_by_vector call.
             // Graceful log-and-degrade: on Err, warn + fall back to query-anchor.
@@ -8873,7 +8873,7 @@ impl MemoryDB {
     ///
     /// Wraps [`search_memory_with_cue`] with an optional temporal hard-filter:
     ///
-    /// - `ORIGIN_ENABLE_TEMPORAL_FILTER` unset/falsey -> delegates to plain
+    /// - `WENLAN_ENABLE_TEMPORAL_FILTER` unset/falsey -> delegates to plain
     ///   [`search_memory`] (byte-identical, dark by default).
     /// - Query has no temporal pattern -> plain delegation (cue = None).
     /// - Cue has `Low` confidence (e.g. "last week" at week boundary) ->
@@ -9090,15 +9090,15 @@ impl MemoryDB {
     /// regression (LoCoMo -0.71pt NDCG@10, LME -1.92pt NDCG@10) caused by
     /// page rows displacing specific-event memory hits in CE rerank. Reduced
     /// to 3 for the iteration cycle. Override at runtime with
-    /// `ORIGIN_PAGE_CHANNEL_LIMIT=<N>`. The channel is opt-in; set
-    /// `ORIGIN_ENABLE_PAGE_CHANNEL=1` to enable (used by page-channel eval
+    /// `WENLAN_PAGE_CHANNEL_LIMIT=<N>`. The channel is opt-in; set
+    /// `WENLAN_ENABLE_PAGE_CHANNEL=1` to enable (used by page-channel eval
     /// tests — see comparable_hash follow-up).
     const PAGE_CHANNEL_LIMIT_DEFAULT: usize = 3;
 
     /// Resolve the page-channel pool size at call time. Env override lets
     /// the eval harness sweep tuning values without recompile.
     fn page_channel_limit() -> usize {
-        std::env::var("ORIGIN_PAGE_CHANNEL_LIMIT")
+        std::env::var("WENLAN_PAGE_CHANNEL_LIMIT")
             .ok()
             .and_then(|s| s.parse().ok())
             .unwrap_or(Self::PAGE_CHANNEL_LIMIT_DEFAULT)
@@ -9107,27 +9107,27 @@ impl MemoryDB {
     /// Default episode-channel pool size. Mirrors `PAGE_CHANNEL_LIMIT_DEFAULT`
     /// (3) for the same reason: a small pool keeps verbatim episodes from
     /// displacing distilled facts inside the cross-encoder rerank top-N. Override
-    /// at runtime with `ORIGIN_EPISODE_CHANNEL_LIMIT=<N>`. The channel is opt-in;
-    /// set `ORIGIN_ENABLE_EPISODE_CHANNEL=1` to enable.
+    /// at runtime with `WENLAN_EPISODE_CHANNEL_LIMIT=<N>`. The channel is opt-in;
+    /// set `WENLAN_ENABLE_EPISODE_CHANNEL=1` to enable.
     const EPISODE_CHANNEL_LIMIT_DEFAULT: usize = 3;
 
     /// Resolve the episode-channel pool size at call time. Env override lets the
     /// eval harness sweep tuning values without recompile (mirrors
     /// `page_channel_limit`).
     fn episode_channel_limit() -> usize {
-        std::env::var("ORIGIN_EPISODE_CHANNEL_LIMIT")
+        std::env::var("WENLAN_EPISODE_CHANNEL_LIMIT")
             .ok()
             .and_then(|s| s.parse().ok())
             .unwrap_or(Self::EPISODE_CHANNEL_LIMIT_DEFAULT)
     }
 
     /// Max subqueries (including the original) for `search_memory_decomposed`.
-    /// Env override `ORIGIN_QUERY_DECOMP_MAX_SUBQUERIES` lets the eval harness
+    /// Env override `WENLAN_QUERY_DECOMP_MAX_SUBQUERIES` lets the eval harness
     /// sweep the cap without recompile. Default 4 matches Cognee's CoT max_iter.
     const QUERY_DECOMP_MAX_DEFAULT: usize = 4;
 
     fn query_decomp_max_subqueries() -> usize {
-        std::env::var("ORIGIN_QUERY_DECOMP_MAX_SUBQUERIES")
+        std::env::var("WENLAN_QUERY_DECOMP_MAX_SUBQUERIES")
             .ok()
             .and_then(|s| s.parse().ok())
             .filter(|&n| n >= 1)
@@ -9136,7 +9136,7 @@ impl MemoryDB {
 
     /// Default CoT iterative-retrieval round cap (excluding round 0). Each round
     /// costs 2 LLM calls (draft + validate) plus 1 retrieval, so the cap bounds
-    /// runaway cost. Override with `ORIGIN_COT_MAX_ITER`. Default 3 matches the
+    /// runaway cost. Override with `WENLAN_COT_MAX_ITER`. Default 3 matches the
     /// plan + Cognee CoT max_iter. Mirrors the `page_channel_limit` env-override
     /// idiom. Test-only for now: callers of `search_memory_iterative` pass
     /// `max_iter` explicitly, and no production/eval path drives the loop yet, so
@@ -9146,7 +9146,7 @@ impl MemoryDB {
 
     #[cfg(test)]
     pub(crate) fn cot_max_iter() -> usize {
-        std::env::var("ORIGIN_COT_MAX_ITER")
+        std::env::var("WENLAN_COT_MAX_ITER")
             .ok()
             .and_then(|s| s.trim().parse().ok())
             .unwrap_or(Self::COT_MAX_ITER_DEFAULT)
@@ -9154,10 +9154,10 @@ impl MemoryDB {
 
     /// Per-round draft/validation LLM timeout for the CoT loop. Default 10s
     /// (mirrors `search_memory_expanded`). Env-overridable with
-    /// `ORIGIN_COT_ROUND_TIMEOUT_SECS` so the timeout-degrade path can be unit
+    /// `WENLAN_COT_ROUND_TIMEOUT_SECS` so the timeout-degrade path can be unit
     /// tested without a 10s real-time wait.
     fn cot_round_timeout() -> std::time::Duration {
-        let secs = std::env::var("ORIGIN_COT_ROUND_TIMEOUT_SECS")
+        let secs = std::env::var("WENLAN_COT_ROUND_TIMEOUT_SECS")
             .ok()
             .and_then(|s| s.trim().parse::<u64>().ok())
             .unwrap_or(10);
@@ -9402,7 +9402,7 @@ impl MemoryDB {
     /// pool and the CE rerank step. Memory `r.score` seeds the merged score_map;
     /// page rows contribute only `1/(60+rank)` RRF mass on top (mirrors
     /// `augment_with_graph` at db.rs:7619-7644). Enable with
-    /// `ORIGIN_ENABLE_PAGE_CHANNEL=1` (opt-in, default OFF).
+    /// `WENLAN_ENABLE_PAGE_CHANNEL=1` (opt-in, default OFF).
     pub async fn search_memory_cross_rerank(
         &self,
         query: &str,
@@ -9426,7 +9426,7 @@ impl MemoryDB {
 
     /// Like [`search_memory_cross_rerank`] but injects an optional temporal cue
     /// into the base-pool retrieval step so the soft temporal boost applies when
-    /// `temporal_cue` is `Some` and `ORIGIN_ENABLE_TEMPORAL_SOFT_BOOST` is set.
+    /// `temporal_cue` is `Some` and `WENLAN_ENABLE_TEMPORAL_SOFT_BOOST` is set.
     ///
     /// All existing callers are unaffected — they go through the thin delegator
     /// above with `temporal_cue = None`.
@@ -9441,7 +9441,7 @@ impl MemoryDB {
         temporal_cue: Option<crate::temporal_query::DateRange>,
         reranker: Option<Arc<dyn crate::reranker::Reranker>>,
     ) -> Result<Vec<SearchResult>, WenlanError> {
-        // Skip-preference gate (opt-in, `ORIGIN_RERANK_SKIP_PREFERENCE`):
+        // Skip-preference gate (opt-in, `WENLAN_RERANK_SKIP_PREFERENCE`):
         // preference-intent queries keep the base RRF ranking — no pool
         // widening, no page-channel merge, no CE pass — so the bypassed path
         // is byte-identical to the non-rerank `search_memory` baseline.
@@ -9902,7 +9902,7 @@ impl MemoryDB {
 
     /// LLM read-time strategy router (T7). Classifies `query` into a
     /// [`crate::retrieval::route::RetrievalStrategy`] and dispatches to the
-    /// matching already-built search method. Opt-in via `ORIGIN_LLM_ROUTE`.
+    /// matching already-built search method. Opt-in via `WENLAN_LLM_ROUTE`.
     ///
     /// When the flag is unset/falsey ([`crate::retrieval::route::route_enabled`]
     /// is false) this delegates straight to [`Self::search_memory_cross_rerank`]
@@ -10345,7 +10345,7 @@ impl MemoryDB {
     /// drafting a short answer from the current top-K retrieved snippets and
     /// feeding that draft back as the next retrieval query, RRF-merging each
     /// round's pool until the candidate set converges (no new ids) or the
-    /// `ORIGIN_PRF_ROUNDS` budget (default 0, clamp <= 4) is exhausted.
+    /// `WENLAN_PRF_ROUNDS` budget (default 0, clamp <= 4) is exhausted.
     ///
     /// The original literal query is always RRF round 0, which weights the
     /// literal query as one equal RRF stream; a strong off-topic draft answer
@@ -10354,7 +10354,7 @@ impl MemoryDB {
     /// (paraphrases the literal query up front, no draft, no loop): PRF reads
     /// the retrieved *content*, drafts an answer, and iterates.
     ///
-    /// Graceful degradation: `ORIGIN_PRF_ROUNDS=0`/unset, `llm.is_none()`, an
+    /// Graceful degradation: `WENLAN_PRF_ROUNDS=0`/unset, `llm.is_none()`, an
     /// LLM timeout/error, or a blank draft all fall back to the round-0 pool,
     /// never an error. When dark (rounds 0) the output is id-order-identical to
     /// a plain `search_memory` (scores are re-derived as `1/(60+rank)`;
@@ -10598,8 +10598,8 @@ impl MemoryDB {
     /// T4b: expand a set of anchor entity ids to the bounded, cycle-safe k-hop
     /// neighbourhood over the `relations` graph.
     ///
-    /// Depth is read from `ORIGIN_GRAPH_KHOP_DEPTH` (default 1 == single-hop
-    /// parity) and the total expanded-node cap from `ORIGIN_GRAPH_KHOP_MAX_NODES`
+    /// Depth is read from `WENLAN_GRAPH_KHOP_DEPTH` (default 1 == single-hop
+    /// parity) and the total expanded-node cap from `WENLAN_GRAPH_KHOP_MAX_NODES`
     /// (default 25). Edges are collected per hop with parameterized `IN (?, ...)`
     /// queries (BOTH directions, mirroring `expand_entities_khop`), then handed to
     /// the pure [`crate::retrieval::traversal::bfs_khop`] which enforces the depth
@@ -10620,9 +10620,9 @@ impl MemoryDB {
             return Ok(Vec::new());
         }
 
-        let max_hops = parse_khop_depth(std::env::var("ORIGIN_GRAPH_KHOP_DEPTH").ok().as_deref());
+        let max_hops = parse_khop_depth(std::env::var("WENLAN_GRAPH_KHOP_DEPTH").ok().as_deref());
         let max_nodes =
-            parse_khop_max_nodes(std::env::var("ORIGIN_GRAPH_KHOP_MAX_NODES").ok().as_deref());
+            parse_khop_max_nodes(std::env::var("WENLAN_GRAPH_KHOP_MAX_NODES").ok().as_deref());
 
         // depth 0 -> no expansion; return deduped seeds via the pure fn (no SQL).
         if max_hops == 0 {
@@ -10717,7 +10717,7 @@ impl MemoryDB {
     /// final output by search_memory (KG is internal scaffolding, not user-facing).
     /// Returns the merged + re-sorted results. If no entities exist, returns input unchanged.
     ///
-    /// `ORIGIN_GRAPH_MEMORY_STREAM` is default-ON, so this entry dispatches to the
+    /// `WENLAN_GRAPH_MEMORY_STREAM` is default-ON, so this entry dispatches to the
     /// live entity→memory stream (`augment_with_memory_stream`); the legacy
     /// observation merge is now the opt-out (flag `0`) / gated
     /// (`augment_with_graph_gated(.., allow_stream = false)`) path.
@@ -10734,7 +10734,7 @@ impl MemoryDB {
     /// Inner graph augmentation shared by the quick path and the CE pool fetch.
     ///
     /// `allow_stream = false` forces the legacy observation path even when
-    /// `ORIGIN_GRAPH_MEMORY_STREAM` is on — used by the CE pool fetch, where the
+    /// `WENLAN_GRAPH_MEMORY_STREAM` is on — used by the CE pool fetch, where the
     /// stream×rerank stack measured not significant (+0.0126, p=0.17, 2026-06-09),
     /// so the stream only rides the quick path. `allow_stream = true` preserves
     /// the public `augment_with_graph` behavior (stream when the flag is on).
@@ -10750,7 +10750,7 @@ impl MemoryDB {
             _ => return Ok(results),
         };
 
-        // v3 (ORIGIN_GRAPH_MEMORY_STREAM): live entity→memory stream replaces the
+        // v3 (WENLAN_GRAPH_MEMORY_STREAM): live entity→memory stream replaces the
         // dead entity→observation boost. The legacy path below boosts observation
         // ghost-ids that are stripped at output (net no-op); the stream surfaces
         // real linked memories that survive the strip. See augment_with_memory_stream.
@@ -10762,9 +10762,9 @@ impl MemoryDB {
 
         let entity_ids: Vec<String> = entity_hits.iter().map(|r| r.entity.id.clone()).collect();
 
-        // T4b: k-hop entity-graph traversal (ORIGIN_ENABLE_GRAPH_KHOP, opt-in,
+        // T4b: k-hop entity-graph traversal (WENLAN_ENABLE_GRAPH_KHOP, opt-in,
         // default OFF). When ON, expand the query-anchored entities up to
-        // ORIGIN_GRAPH_KHOP_DEPTH hops (default 1) over the relation graph,
+        // WENLAN_GRAPH_KHOP_DEPTH hops (default 1) over the relation graph,
         // bounded + cycle-safe, then fetch observations for the expanded set.
         // When OFF, use entity_ids verbatim -> byte-identical single-hop path.
         // Log-and-degrade: a traversal Err falls back to the anchor set.
@@ -10848,7 +10848,7 @@ impl MemoryDB {
             .collect())
     }
 
-    /// v3 live graph stream (ORIGIN_GRAPH_MEMORY_STREAM). Fuses memories linked
+    /// v3 live graph stream (WENLAN_GRAPH_MEMORY_STREAM). Fuses memories linked
     /// to the query-anchored entities into the result pool at memory (`source_id`)
     /// granularity, replacing the dead entity→observation boost.
     ///
@@ -11188,8 +11188,8 @@ impl MemoryDB {
     /// If `seed_entity_ids` is empty, delegates to [`Self::augment_with_graph`]
     /// (query-anchor fallback, never-worse-than-today guarantee).
     ///
-    /// BFS depth and cap are read from env: `ORIGIN_GRAPH_HOP_DEPTH` (default 1),
-    /// `ORIGIN_GRAPH_SEED_TOP_K` (default 10), `ORIGIN_GRAPH_FRONTIER_CAP` (default 64).
+    /// BFS depth and cap are read from env: `WENLAN_GRAPH_HOP_DEPTH` (default 1),
+    /// `WENLAN_GRAPH_SEED_TOP_K` (default 10), `WENLAN_GRAPH_FRONTIER_CAP` (default 64).
     ///
     /// RRF merge is byte-identical to `augment_with_graph`: seed score_map from
     /// existing results, then += 1/(60+rank) per graph row via `entry().or_default()` +
@@ -11208,13 +11208,13 @@ impl MemoryDB {
 
         // Read tuning env vars
         let depth = crate::retrieval::signals::parse_hop_depth(
-            std::env::var("ORIGIN_GRAPH_HOP_DEPTH").ok().as_deref(),
+            std::env::var("WENLAN_GRAPH_HOP_DEPTH").ok().as_deref(),
         );
         let top_k = crate::retrieval::signals::parse_seed_top_k(
-            std::env::var("ORIGIN_GRAPH_SEED_TOP_K").ok().as_deref(),
+            std::env::var("WENLAN_GRAPH_SEED_TOP_K").ok().as_deref(),
         );
         let frontier_cap = crate::retrieval::signals::parse_frontier_cap(
-            std::env::var("ORIGIN_GRAPH_FRONTIER_CAP").ok().as_deref(),
+            std::env::var("WENLAN_GRAPH_FRONTIER_CAP").ok().as_deref(),
         );
 
         // Build (entity_id, rank) pairs from the provided seed list (already ranked)
@@ -12516,7 +12516,7 @@ impl MemoryDB {
     /// Idempotent backfill: rebuild `child_vectors` for every `source='memory'`
     /// parent that currently has NO child rows (T15a). This is the supported
     /// turn-it-on-later path — after migration 58 or after flipping
-    /// `ORIGIN_ENABLE_FACT_CHANNEL` on, the table is empty, so a DB ingested with
+    /// `WENLAN_ENABLE_FACT_CHANNEL` on, the table is empty, so a DB ingested with
     /// the flag off needs this pass before the read channel can surface anything.
     ///
     /// No-op when `fact_channel_enabled()` is false. Returns the number of
@@ -18774,7 +18774,7 @@ impl MemoryDB {
     /// One episode per parent, keyed on the `chunk_index = 0` row. For
     /// single-chunk memories (all of `locomo_v1`) this equals the full turn, so
     /// the backfilled episode is byte-identical to a fresh
-    /// `ORIGIN_ENABLE_EPISODE_CHANNEL=1` ingest. Multi-chunk parents
+    /// `WENLAN_ENABLE_EPISODE_CHANNEL=1` ingest. Multi-chunk parents
     /// (~4.5% of `lme_v1`, long turns split by the 512-char/64-overlap chunker)
     /// capture only the first chunk — conservative (later chunks remain in the
     /// base channel); full-verbatim-from-dataset (like `event_date`) is a fidelity
@@ -20397,7 +20397,7 @@ impl MemoryDB {
     /// by the Decay phase, so this MUST run after Decay within a cycle.
     ///
     /// Belt-and-suspenders gate: returns `skipped_disabled: true` with zero
-    /// mutations when `ORIGIN_ENABLE_EVICTION` is off, even though the refinery
+    /// mutations when `WENLAN_ENABLE_EVICTION` is off, even though the refinery
     /// dispatch also gates on the flag. Selection logic lives in the pure
     /// [`select_evictions`]; this method only does the SELECT + batch UPDATE.
     ///
@@ -24801,7 +24801,7 @@ pub(crate) mod tests {
                     opts = opts.with_cache_dir(cache);
                 }
                 let emb = TextEmbedding::try_new(opts).expect(
-                    "failed to init embedder for tests (set ORIGIN_TEST_FASTEMBED_CACHE or run the daemon once to populate the shared cache)",
+                    "failed to init embedder for tests (set WENLAN_TEST_FASTEMBED_CACHE or run the daemon once to populate the shared cache)",
                 );
                 Arc::new(std::sync::Mutex::new(emb))
             })
@@ -25389,7 +25389,7 @@ pub(crate) mod tests {
 
     // ==================== search_memory_prf (T6: pseudo-relevance feedback) ====================
 
-    // PRF tests read the process-global `ORIGIN_PRF_ROUNDS` via `prf_rounds()`.
+    // PRF tests read the process-global `WENLAN_PRF_ROUNDS` via `prf_rounds()`.
     // `temp_env::async_with_vars` mutates that global, so two PRF tests running
     // concurrently can corrupt each other's flag mid-`.await`. Serialize them on
     // a process-local async lock so the flag is stable across each test's awaits
@@ -25431,7 +25431,7 @@ pub(crate) mod tests {
             Arc::new(crate::llm_provider::MockProvider::new("a draft answer"));
 
         let (prf, plain) =
-            temp_env::async_with_vars([("ORIGIN_PRF_ROUNDS", None::<&str>)], async {
+            temp_env::async_with_vars([("WENLAN_PRF_ROUNDS", None::<&str>)], async {
                 let prf = db
                     .search_memory_prf("color blue", 10, None, None, None, Some(llm.clone()))
                     .await
@@ -25475,7 +25475,7 @@ pub(crate) mod tests {
         .await
         .unwrap();
 
-        let (prf, plain) = temp_env::async_with_vars([("ORIGIN_PRF_ROUNDS", Some("2"))], async {
+        let (prf, plain) = temp_env::async_with_vars([("WENLAN_PRF_ROUNDS", Some("2"))], async {
             let prf = db
                 .search_memory_prf("color blue", 10, None, None, None, None)
                 .await
@@ -25522,7 +25522,7 @@ pub(crate) mod tests {
         let llm: Arc<dyn crate::llm_provider::LlmProvider> =
             Arc::new(crate::llm_provider::MockProvider::unavailable());
 
-        let (prf, plain) = temp_env::async_with_vars([("ORIGIN_PRF_ROUNDS", Some("2"))], async {
+        let (prf, plain) = temp_env::async_with_vars([("WENLAN_PRF_ROUNDS", Some("2"))], async {
             let prf = db
                 .search_memory_prf("color blue", 10, None, None, None, Some(llm.clone()))
                 .await
@@ -25581,7 +25581,7 @@ pub(crate) mod tests {
             crate::llm_provider::MockProvider::new("grocery shopping car maintenance weekend"),
         );
 
-        let prf = temp_env::async_with_vars([("ORIGIN_PRF_ROUNDS", Some("1"))], async {
+        let prf = temp_env::async_with_vars([("WENLAN_PRF_ROUNDS", Some("1"))], async {
             db.search_memory_prf(
                 "quantum entanglement physics",
                 10,
@@ -25641,13 +25641,13 @@ pub(crate) mod tests {
             crate::llm_provider::MockProvider::new("database libSQL vector search"),
         );
 
-        let three = temp_env::async_with_vars([("ORIGIN_PRF_ROUNDS", Some("3"))], async {
+        let three = temp_env::async_with_vars([("WENLAN_PRF_ROUNDS", Some("3"))], async {
             db.search_memory_prf("color blue", 10, None, None, None, Some(llm.clone()))
                 .await
                 .unwrap()
         })
         .await;
-        let one = temp_env::async_with_vars([("ORIGIN_PRF_ROUNDS", Some("1"))], async {
+        let one = temp_env::async_with_vars([("WENLAN_PRF_ROUNDS", Some("1"))], async {
             db.search_memory_prf("color blue", 10, None, None, None, Some(llm.clone()))
                 .await
                 .unwrap()
@@ -25728,7 +25728,7 @@ pub(crate) mod tests {
                 "photosynthesis chloroplast biology cellular respiration enzyme",
             ));
 
-        let (prf, plain) = temp_env::async_with_vars([("ORIGIN_PRF_ROUNDS", Some("1"))], async {
+        let (prf, plain) = temp_env::async_with_vars([("WENLAN_PRF_ROUNDS", Some("1"))], async {
             let prf = db
                 .search_memory_prf(
                     "astronomy telescope galaxies",
@@ -26205,7 +26205,7 @@ pub(crate) mod tests {
         );
     }
 
-    // Salience tests read/write the process-global `ORIGIN_ENABLE_SALIENCE_PRIOR`.
+    // Salience tests read/write the process-global `WENLAN_ENABLE_SALIENCE_PRIOR`.
     // `temp_env::async_with_vars` mutates that global, so two salience tests
     // running concurrently can corrupt each other's flag mid-`.await`. Serialize
     // them on a process-local async lock (same pattern as `PRF_ENV_LOCK` above).
@@ -26246,7 +26246,7 @@ pub(crate) mod tests {
             .unwrap();
         }
         let results =
-            temp_env::async_with_vars([("ORIGIN_ENABLE_SALIENCE_PRIOR", Some("1"))], async {
+            temp_env::async_with_vars([("WENLAN_ENABLE_SALIENCE_PRIOR", Some("1"))], async {
                 db.search_memory(
                     "Kubernetes container orchestration",
                     10,
@@ -26311,7 +26311,7 @@ pub(crate) mod tests {
         }
         // Baseline: flag explicitly unset.
         let baseline =
-            temp_env::async_with_vars([("ORIGIN_ENABLE_SALIENCE_PRIOR", None::<&str>)], async {
+            temp_env::async_with_vars([("WENLAN_ENABLE_SALIENCE_PRIOR", None::<&str>)], async {
                 db.search_memory(
                     "Kubernetes container orchestration",
                     10,
@@ -26338,7 +26338,7 @@ pub(crate) mod tests {
         // flag OFF a second time is identical, and the high-importance row is NOT
         // boosted above what the base formula produces.
         let again =
-            temp_env::async_with_vars([("ORIGIN_ENABLE_SALIENCE_PRIOR", Some("0"))], async {
+            temp_env::async_with_vars([("WENLAN_ENABLE_SALIENCE_PRIOR", Some("0"))], async {
                 db.search_memory(
                     "Kubernetes container orchestration",
                     10,
@@ -26388,7 +26388,7 @@ pub(crate) mod tests {
         db.upsert_documents(vec![doc_a, doc_b]).await.unwrap();
         // No importance set -> all NULL.
         let off =
-            temp_env::async_with_vars([("ORIGIN_ENABLE_SALIENCE_PRIOR", None::<&str>)], async {
+            temp_env::async_with_vars([("WENLAN_ENABLE_SALIENCE_PRIOR", None::<&str>)], async {
                 db.search_memory(
                     "Kubernetes container orchestration",
                     10,
@@ -26403,7 +26403,7 @@ pub(crate) mod tests {
                 .unwrap()
             })
             .await;
-        let on = temp_env::async_with_vars([("ORIGIN_ENABLE_SALIENCE_PRIOR", Some("1"))], async {
+        let on = temp_env::async_with_vars([("WENLAN_ENABLE_SALIENCE_PRIOR", Some("1"))], async {
             db.search_memory(
                 "Kubernetes container orchestration",
                 10,
@@ -26439,7 +26439,7 @@ pub(crate) mod tests {
         let _serial = SALIENCE_ENV_LOCK.lock().await;
         for val in &["1", "true", "yes"] {
             let got =
-                temp_env::async_with_vars([("ORIGIN_ENABLE_SALIENCE_PRIOR", Some(*val))], async {
+                temp_env::async_with_vars([("WENLAN_ENABLE_SALIENCE_PRIOR", Some(*val))], async {
                     crate::db::salience_prior_enabled()
                 })
                 .await;
@@ -26447,14 +26447,14 @@ pub(crate) mod tests {
         }
         for val in &["0", "false", "no", ""] {
             let got =
-                temp_env::async_with_vars([("ORIGIN_ENABLE_SALIENCE_PRIOR", Some(*val))], async {
+                temp_env::async_with_vars([("WENLAN_ENABLE_SALIENCE_PRIOR", Some(*val))], async {
                     crate::db::salience_prior_enabled()
                 })
                 .await;
             assert!(!got, "expected false for {val}");
         }
         let unset =
-            temp_env::async_with_vars([("ORIGIN_ENABLE_SALIENCE_PRIOR", None::<&str>)], async {
+            temp_env::async_with_vars([("WENLAN_ENABLE_SALIENCE_PRIOR", None::<&str>)], async {
                 crate::db::salience_prior_enabled()
             })
             .await;
@@ -26465,7 +26465,7 @@ pub(crate) mod tests {
     async fn dual_pool_resolve_enabled_truthy_parse() {
         for val in &["1", "true", "yes", "TRUE", "Yes"] {
             let got = temp_env::async_with_vars(
-                [("ORIGIN_ENABLE_DUAL_POOL_RESOLVE", Some(*val))],
+                [("WENLAN_ENABLE_DUAL_POOL_RESOLVE", Some(*val))],
                 async { crate::db::dual_pool_resolve_enabled() },
             )
             .await;
@@ -26473,14 +26473,14 @@ pub(crate) mod tests {
         }
         for val in &["0", "false", "no", ""] {
             let got = temp_env::async_with_vars(
-                [("ORIGIN_ENABLE_DUAL_POOL_RESOLVE", Some(*val))],
+                [("WENLAN_ENABLE_DUAL_POOL_RESOLVE", Some(*val))],
                 async { crate::db::dual_pool_resolve_enabled() },
             )
             .await;
             assert!(!got, "expected false for {val}");
         }
         let unset =
-            temp_env::async_with_vars([("ORIGIN_ENABLE_DUAL_POOL_RESOLVE", None::<&str>)], async {
+            temp_env::async_with_vars([("WENLAN_ENABLE_DUAL_POOL_RESOLVE", None::<&str>)], async {
                 crate::db::dual_pool_resolve_enabled()
             })
             .await;
@@ -26491,7 +26491,7 @@ pub(crate) mod tests {
     async fn reflection_debounce_enabled_truthy_parse() {
         for val in &["1", "true", "yes", "TRUE", "Yes"] {
             let got = temp_env::async_with_vars(
-                [("ORIGIN_ENABLE_REFLECTION_DEBOUNCE", Some(*val))],
+                [("WENLAN_ENABLE_REFLECTION_DEBOUNCE", Some(*val))],
                 async { crate::db::reflection_debounce_enabled() },
             )
             .await;
@@ -26499,14 +26499,14 @@ pub(crate) mod tests {
         }
         for val in &["0", "false", "no", ""] {
             let got = temp_env::async_with_vars(
-                [("ORIGIN_ENABLE_REFLECTION_DEBOUNCE", Some(*val))],
+                [("WENLAN_ENABLE_REFLECTION_DEBOUNCE", Some(*val))],
                 async { crate::db::reflection_debounce_enabled() },
             )
             .await;
             assert!(!got, "expected false for {val}");
         }
         let unset = temp_env::async_with_vars(
-            [("ORIGIN_ENABLE_REFLECTION_DEBOUNCE", None::<&str>)],
+            [("WENLAN_ENABLE_REFLECTION_DEBOUNCE", None::<&str>)],
             async { crate::db::reflection_debounce_enabled() },
         )
         .await;
@@ -29694,7 +29694,7 @@ pub(crate) mod tests {
     }
 
     // Tests that read `rerank_blend_enabled()` (via `search_memory_cross_rerank` /
-    // `search_memory_iterative`) share the process-global `ORIGIN_ENABLE_RERANK_BLEND`
+    // `search_memory_iterative`) share the process-global `WENLAN_ENABLE_RERANK_BLEND`
     // env. `temp_env::async_with_vars` mutates that global, so the blend writer below
     // can flip a concurrent REPLACE-asserting test onto the blend path mid-`.await`.
     // Serialize every such test on this process-local async lock (mirrors
@@ -29747,7 +29747,7 @@ pub(crate) mod tests {
         );
     }
 
-    /// When ORIGIN_ENABLE_RERANK_BLEND=1, the blend retains the (1-α)·normalized-RRF
+    /// When WENLAN_ENABLE_RERANK_BLEND=1, the blend retains the (1-α)·normalized-RRF
     /// term from the boosted-RRF priors. Because the priors differ across candidates
     /// (different embedding similarities), not all blend scores collapse to equal values
     /// the way the legacy REPLACE path does (which writes CE logit 0.0 for all via
@@ -29790,7 +29790,7 @@ pub(crate) mod tests {
         // Because norm_rrf values differ (Rust docs rank higher vs cooking), scores differ.
         // With legacy REPLACE: all scores = 0.0, all equal.
         let results =
-            temp_env::async_with_vars([("ORIGIN_ENABLE_RERANK_BLEND", Some("1"))], async {
+            temp_env::async_with_vars([("WENLAN_ENABLE_RERANK_BLEND", Some("1"))], async {
                 db.search_memory_cross_rerank(
                     "Rust programming language features",
                     10,
@@ -30740,7 +30740,7 @@ pub(crate) mod tests {
             .await;
         }
         let before = count_rows(&db).await;
-        let report = temp_env::async_with_vars([("ORIGIN_ENABLE_EVICTION", Some("1"))], async {
+        let report = temp_env::async_with_vars([("WENLAN_ENABLE_EVICTION", Some("1"))], async {
             db.evict_stale(&crate::tuning::EvictionConfig::default())
                 .await
                 .unwrap()
@@ -30802,7 +30802,7 @@ pub(crate) mod tests {
         )
         .await;
 
-        let report = temp_env::async_with_vars([("ORIGIN_ENABLE_EVICTION", Some("1"))], async {
+        let report = temp_env::async_with_vars([("WENLAN_ENABLE_EVICTION", Some("1"))], async {
             db.evict_stale(&crate::tuning::EvictionConfig::default())
                 .await
                 .unwrap()
@@ -30830,7 +30830,7 @@ pub(crate) mod tests {
             false,
         )
         .await;
-        let report = temp_env::async_with_vars([("ORIGIN_ENABLE_EVICTION", Some("1"))], async {
+        let report = temp_env::async_with_vars([("WENLAN_ENABLE_EVICTION", Some("1"))], async {
             db.evict_stale(&crate::tuning::EvictionConfig::default())
                 .await
                 .unwrap()
@@ -30857,7 +30857,7 @@ pub(crate) mod tests {
             false,
         )
         .await;
-        let report = temp_env::async_with_vars([("ORIGIN_ENABLE_EVICTION", Some("1"))], async {
+        let report = temp_env::async_with_vars([("WENLAN_ENABLE_EVICTION", Some("1"))], async {
             db.evict_stale(&crate::tuning::EvictionConfig::default())
                 .await
                 .unwrap()
@@ -30891,7 +30891,7 @@ pub(crate) mod tests {
             per_space_cap: Some(3),
             ..Default::default()
         };
-        let report = temp_env::async_with_vars([("ORIGIN_ENABLE_EVICTION", Some("1"))], async {
+        let report = temp_env::async_with_vars([("WENLAN_ENABLE_EVICTION", Some("1"))], async {
             db.evict_stale(&cfg).await.unwrap()
         })
         .await;
@@ -30956,7 +30956,7 @@ pub(crate) mod tests {
             per_space_cap: Some(2),
             ..Default::default()
         };
-        let report = temp_env::async_with_vars([("ORIGIN_ENABLE_EVICTION", Some("1"))], async {
+        let report = temp_env::async_with_vars([("WENLAN_ENABLE_EVICTION", Some("1"))], async {
             db.evict_stale(&cfg).await.unwrap()
         })
         .await;
@@ -31015,7 +31015,7 @@ pub(crate) mod tests {
         .await;
 
         // Flag unset -> skipped, nothing archived.
-        let report = temp_env::async_with_vars([("ORIGIN_ENABLE_EVICTION", None::<&str>)], async {
+        let report = temp_env::async_with_vars([("WENLAN_ENABLE_EVICTION", None::<&str>)], async {
             db.evict_stale(&crate::tuning::EvictionConfig::default())
                 .await
                 .unwrap()
@@ -31034,7 +31034,7 @@ pub(crate) mod tests {
         );
 
         // Flag set -> runs.
-        let report = temp_env::async_with_vars([("ORIGIN_ENABLE_EVICTION", Some("1"))], async {
+        let report = temp_env::async_with_vars([("WENLAN_ENABLE_EVICTION", Some("1"))], async {
             db.evict_stale(&crate::tuning::EvictionConfig::default())
                 .await
                 .unwrap()
@@ -31049,7 +31049,7 @@ pub(crate) mod tests {
     #[tokio::test]
     async fn test_evict_stale_empty_db_is_clean_noop() {
         let (db, _dir) = test_db().await;
-        let report = temp_env::async_with_vars([("ORIGIN_ENABLE_EVICTION", Some("1"))], async {
+        let report = temp_env::async_with_vars([("WENLAN_ENABLE_EVICTION", Some("1"))], async {
             db.evict_stale(&crate::tuning::EvictionConfig::default())
                 .await
                 .unwrap()
@@ -31126,7 +31126,7 @@ pub(crate) mod tests {
         );
 
         // Evict.
-        let report = temp_env::async_with_vars([("ORIGIN_ENABLE_EVICTION", Some("1"))], async {
+        let report = temp_env::async_with_vars([("WENLAN_ENABLE_EVICTION", Some("1"))], async {
             db.evict_stale(&crate::tuning::EvictionConfig::default())
                 .await
                 .unwrap()
@@ -31853,7 +31853,7 @@ pub(crate) mod tests {
         // Start with an empty result set
         let results: Vec<SearchResult> = vec![];
         let augmented =
-            temp_env::async_with_vars([("ORIGIN_GRAPH_MEMORY_STREAM", Some("0"))], async {
+            temp_env::async_with_vars([("WENLAN_GRAPH_MEMORY_STREAM", Some("0"))], async {
                 db.augment_with_graph("Rust programming", results, 10)
                     .await
                     .unwrap()
@@ -31863,7 +31863,7 @@ pub(crate) mod tests {
         assert!(augmented.iter().any(|r| r.source == "knowledge_graph"));
     }
 
-    // ===== v3 entity→memory graph stream (ORIGIN_GRAPH_MEMORY_STREAM) =====
+    // ===== v3 entity→memory graph stream (WENLAN_GRAPH_MEMORY_STREAM) =====
     // Lever-liveness gate (no GPU): proves graph-ON moves REAL memories, the
     // hub filter holds, and the modes behave. Council-validated Tests A/B/C.
 
@@ -31969,7 +31969,7 @@ pub(crate) mod tests {
         let comp_before = base[0].score;
         let base_before = base[1].score;
 
-        let out = temp_env::async_with_vars([("ORIGIN_GRAPH_MEMORY_STREAM", Some("1"))], async {
+        let out = temp_env::async_with_vars([("WENLAN_GRAPH_MEMORY_STREAM", Some("1"))], async {
             db.augment_with_graph("photosynthesis", base, 10)
                 .await
                 .unwrap()
@@ -32037,7 +32037,7 @@ pub(crate) mod tests {
         ];
 
         let boost_only =
-            temp_env::async_with_vars([("ORIGIN_GRAPH_MEMORY_STREAM", Some("1"))], async {
+            temp_env::async_with_vars([("WENLAN_GRAPH_MEMORY_STREAM", Some("1"))], async {
                 db.augment_with_graph("photosynthesis", base.clone(), 10)
                     .await
                     .unwrap()
@@ -32050,8 +32050,8 @@ pub(crate) mod tests {
 
         let surfaced = temp_env::async_with_vars(
             [
-                ("ORIGIN_GRAPH_MEMORY_STREAM", Some("1")),
-                ("ORIGIN_GRAPH_SURFACE_NEW", Some("1")),
+                ("WENLAN_GRAPH_MEMORY_STREAM", Some("1")),
+                ("WENLAN_GRAPH_SURFACE_NEW", Some("1")),
             ],
             async {
                 db.augment_with_graph("photosynthesis", base, 10)
@@ -32108,9 +32108,9 @@ pub(crate) mod tests {
 
         let out = temp_env::async_with_vars(
             [
-                ("ORIGIN_GRAPH_MEMORY_STREAM", Some("1")),
-                ("ORIGIN_GRAPH_SURFACE_NEW", Some("1")),
-                ("ORIGIN_GRAPH_HUB_CAP", Some("2")),
+                ("WENLAN_GRAPH_MEMORY_STREAM", Some("1")),
+                ("WENLAN_GRAPH_SURFACE_NEW", Some("1")),
+                ("WENLAN_GRAPH_HUB_CAP", Some("2")),
             ],
             async {
                 db.augment_with_graph("general topic photosynthesis", base, 10)
@@ -32210,7 +32210,7 @@ pub(crate) mod tests {
                     .await
                     .unwrap();
             }
-            let touched = temp_env::async_with_vars([("ORIGIN_GRAPH_HUB_CAP", Some("2"))], async {
+            let touched = temp_env::async_with_vars([("WENLAN_GRAPH_HUB_CAP", Some("2"))], async {
                 db.graph_stream_touches("photosynthesis", 10).await.unwrap()
             })
             .await;
@@ -32316,7 +32316,7 @@ pub(crate) mod tests {
             &db,
             "alpha launch milestone",
             5,
-            "ORIGIN_ENABLE_TEMPORAL_SOFT_BOOST",
+            "WENLAN_ENABLE_TEMPORAL_SOFT_BOOST",
             None, // opt-in flag: OFF = unset
             cue,
         )
@@ -32374,7 +32374,7 @@ pub(crate) mod tests {
             &db,
             "rust ownership borrow checker",
             5,
-            "ORIGIN_ENABLE_PAGE_CHANNEL",
+            "WENLAN_ENABLE_PAGE_CHANNEL",
             None, // opt-in flag: OFF = unset
             None,
         )
@@ -32394,7 +32394,7 @@ pub(crate) mod tests {
     /// source="knowledge_graph" rows (db.rs:~8420) that the retain() at db.rs:8524
     /// strips — merged-but-inert. This documents the dead capability: its own rows
     /// never reach the shipped public output. The LIVE replacement is the
-    /// ORIGIN_GRAPH_MEMORY_STREAM path (covered by graph_stream_* tests above).
+    /// WENLAN_GRAPH_MEMORY_STREAM path (covered by graph_stream_* tests above).
     #[tokio::test]
     async fn g4_legacy_graph_ghost_is_inert() {
         let (db, _dir) = test_db().await;
@@ -32417,7 +32417,7 @@ pub(crate) mod tests {
 
         // Legacy path = stream explicitly OFF ("0"; unset is now default ON). Run
         // the shipped public path directly.
-        let out = temp_env::async_with_vars([("ORIGIN_GRAPH_MEMORY_STREAM", Some("0"))], async {
+        let out = temp_env::async_with_vars([("WENLAN_GRAPH_MEMORY_STREAM", Some("0"))], async {
             db.search_memory_cross_rerank_cued("photosynthesis", 5, None, None, None, None, None)
                 .await
                 .unwrap()
@@ -32431,7 +32431,7 @@ pub(crate) mod tests {
     }
 
     /// G4 graph stream (LIVE engine): the positive counterpart to the legacy-ghost
-    /// negative control. `ORIGIN_GRAPH_MEMORY_STREAM` (default ON) routes
+    /// negative control. `WENLAN_GRAPH_MEMORY_STREAM` (default ON) routes
     /// `augment_with_graph` to `augment_with_memory_stream` (db.rs:10366), which
     /// fuses entity-LINKED memories at `source_id` granularity (source="memory" —
     /// survives the db.rs:8524 strip). This probe runs the SHIPPED QUICK PATH
@@ -32473,13 +32473,13 @@ pub(crate) mod tests {
             .unwrap();
 
         // Quick path, OFF = "0" (opt-out the default-ON stream) vs ON = "1".
-        let off = temp_env::async_with_vars([("ORIGIN_GRAPH_MEMORY_STREAM", Some("0"))], async {
+        let off = temp_env::async_with_vars([("WENLAN_GRAPH_MEMORY_STREAM", Some("0"))], async {
             db.search_memory("photosynthesis", 5, None, None, None, None, None, None)
                 .await
                 .expect("g4 graph-stream OFF arm")
         })
         .await;
-        let on = temp_env::async_with_vars([("ORIGIN_GRAPH_MEMORY_STREAM", Some("1"))], async {
+        let on = temp_env::async_with_vars([("WENLAN_GRAPH_MEMORY_STREAM", Some("1"))], async {
             db.search_memory("photosynthesis", 5, None, None, None, None, None, None)
                 .await
                 .expect("g4 graph-stream ON arm")
@@ -32502,7 +32502,7 @@ pub(crate) mod tests {
     }
 
     /// Task 2/3 — the CE pool fetch engages the graph memory stream ONLY when no
-    /// reranker will rescore. `ORIGIN_GRAPH_MEMORY_STREAM` defaults ON, so:
+    /// reranker will rescore. `WENLAN_GRAPH_MEMORY_STREAM` defaults ON, so:
     ///   1. With `reranker = None` the CE call degrades to plain hybrid search,
     ///      which keeps the stream — it must equal the stream-ON quick path
     ///      (base-parity: a degraded rerank call == plain hybrid ordering).
@@ -32584,15 +32584,15 @@ pub(crate) mod tests {
             [
                 ("RERANK_POOL_MULTIPLIER", Some("1")),
                 ("RERANK_POOL_FLOOR", Some("10")),
-                ("ORIGIN_ENABLE_PAGE_CHANNEL", None::<&str>),
-                ("ORIGIN_ENABLE_EPISODE_CHANNEL", None::<&str>),
-                ("ORIGIN_ENABLE_FACT_CHANNEL", None::<&str>),
-                ("ORIGIN_ENABLE_GLOBAL_PRELUDE", None::<&str>),
-                ("ORIGIN_ENABLE_GRAPH_SEED", None::<&str>),
-                ("ORIGIN_ENABLE_GRAPH_GATE", None::<&str>),
-                ("ORIGIN_GRAPH_SURFACE_NEW", None::<&str>),
-                ("ORIGIN_ENABLE_SESSION_DIVERSITY", None::<&str>),
-                ("ORIGIN_ENABLE_RERANK_BLEND", None::<&str>),
+                ("WENLAN_ENABLE_PAGE_CHANNEL", None::<&str>),
+                ("WENLAN_ENABLE_EPISODE_CHANNEL", None::<&str>),
+                ("WENLAN_ENABLE_FACT_CHANNEL", None::<&str>),
+                ("WENLAN_ENABLE_GLOBAL_PRELUDE", None::<&str>),
+                ("WENLAN_ENABLE_GRAPH_SEED", None::<&str>),
+                ("WENLAN_ENABLE_GRAPH_GATE", None::<&str>),
+                ("WENLAN_GRAPH_SURFACE_NEW", None::<&str>),
+                ("WENLAN_ENABLE_SESSION_DIVERSITY", None::<&str>),
+                ("WENLAN_ENABLE_RERANK_BLEND", None::<&str>),
             ]
         };
 
@@ -32601,7 +32601,7 @@ pub(crate) mod tests {
         let (quick_stream, ce_no_rerank) = temp_env::async_with_vars(
             pool_envs()
                 .into_iter()
-                .chain([("ORIGIN_GRAPH_MEMORY_STREAM", None::<&str>)]) // unset = default ON
+                .chain([("WENLAN_GRAPH_MEMORY_STREAM", None::<&str>)]) // unset = default ON
                 .collect::<Vec<_>>(),
             async {
                 let quick = db
@@ -32622,7 +32622,7 @@ pub(crate) mod tests {
         let (no_stream_quick, ce_reranked) = temp_env::async_with_vars(
             pool_envs()
                 .into_iter()
-                .chain([("ORIGIN_GRAPH_MEMORY_STREAM", Some("0"))])
+                .chain([("WENLAN_GRAPH_MEMORY_STREAM", Some("0"))])
                 .collect::<Vec<_>>(),
             async {
                 let quick = db
@@ -32690,7 +32690,7 @@ pub(crate) mod tests {
             .await
             .unwrap();
 
-        let expanded = temp_env::async_with_vars([("ORIGIN_GRAPH_KHOP_DEPTH", Some("2"))], async {
+        let expanded = temp_env::async_with_vars([("WENLAN_GRAPH_KHOP_DEPTH", Some("2"))], async {
             db.expand_anchor_entities_khop(std::slice::from_ref(&a))
                 .await
                 .unwrap()
@@ -32725,7 +32725,7 @@ pub(crate) mod tests {
             .await
             .unwrap();
 
-        let expanded = temp_env::async_with_vars([("ORIGIN_GRAPH_KHOP_DEPTH", Some("1"))], async {
+        let expanded = temp_env::async_with_vars([("WENLAN_GRAPH_KHOP_DEPTH", Some("1"))], async {
             db.expand_anchor_entities_khop(std::slice::from_ref(&a))
                 .await
                 .unwrap()
@@ -32755,7 +32755,7 @@ pub(crate) mod tests {
             .await
             .unwrap();
 
-        let expanded = temp_env::async_with_vars([("ORIGIN_GRAPH_KHOP_DEPTH", Some("3"))], async {
+        let expanded = temp_env::async_with_vars([("WENLAN_GRAPH_KHOP_DEPTH", Some("3"))], async {
             db.expand_anchor_entities_khop(std::slice::from_ref(&a))
                 .await
                 .unwrap()
@@ -32771,7 +32771,7 @@ pub(crate) mod tests {
         );
     }
 
-    /// Hub fan-out is capped by ORIGIN_GRAPH_KHOP_MAX_NODES.
+    /// Hub fan-out is capped by WENLAN_GRAPH_KHOP_MAX_NODES.
     #[tokio::test]
     async fn test_khop_expand_respects_max_nodes() {
         let (db, _dir) = test_db().await;
@@ -32790,8 +32790,8 @@ pub(crate) mod tests {
         }
         let expanded = temp_env::async_with_vars(
             [
-                ("ORIGIN_GRAPH_KHOP_DEPTH", Some("1")),
-                ("ORIGIN_GRAPH_KHOP_MAX_NODES", Some("10")),
+                ("WENLAN_GRAPH_KHOP_DEPTH", Some("1")),
+                ("WENLAN_GRAPH_KHOP_MAX_NODES", Some("10")),
             ],
             async {
                 db.expand_anchor_entities_khop(std::slice::from_ref(&hub))
@@ -32830,8 +32830,8 @@ pub(crate) mod tests {
         }
         let expanded = temp_env::async_with_vars(
             [
-                ("ORIGIN_GRAPH_KHOP_DEPTH", Some("1")),
-                ("ORIGIN_GRAPH_KHOP_MAX_NODES", Some("10")),
+                ("WENLAN_GRAPH_KHOP_DEPTH", Some("1")),
+                ("WENLAN_GRAPH_KHOP_MAX_NODES", Some("10")),
             ],
             async {
                 db.expand_anchor_entities_khop(std::slice::from_ref(&hub))
@@ -32859,7 +32859,7 @@ pub(crate) mod tests {
         assert!(expanded.is_empty());
     }
 
-    /// FLAG-OFF BYTE-IDENTITY: augment_with_graph with ORIGIN_ENABLE_GRAPH_KHOP
+    /// FLAG-OFF BYTE-IDENTITY: augment_with_graph with WENLAN_ENABLE_GRAPH_KHOP
     /// unset must be byte-identical to the flag ON at depth=0 (no expansion). The
     /// OFF path uses the anchor entity set verbatim; depth=0 expansion returns the
     /// deduped anchors unchanged, so the two outputs (ids + ordering + scores) match.
@@ -32889,17 +32889,17 @@ pub(crate) mod tests {
         // default-ON stream early-returns before k-hop).
         let off = temp_env::async_with_vars(
             [
-                ("ORIGIN_ENABLE_GRAPH_KHOP", None::<&str>),
-                ("ORIGIN_GRAPH_MEMORY_STREAM", Some("0")),
+                ("WENLAN_ENABLE_GRAPH_KHOP", None::<&str>),
+                ("WENLAN_GRAPH_MEMORY_STREAM", Some("0")),
             ],
             async { db.augment_with_graph("Postgres", vec![], 25).await.unwrap() },
         )
         .await;
         let on_d0 = temp_env::async_with_vars(
             [
-                ("ORIGIN_ENABLE_GRAPH_KHOP", Some("1")),
-                ("ORIGIN_GRAPH_KHOP_DEPTH", Some("0")),
-                ("ORIGIN_GRAPH_MEMORY_STREAM", Some("0")),
+                ("WENLAN_ENABLE_GRAPH_KHOP", Some("1")),
+                ("WENLAN_GRAPH_KHOP_DEPTH", Some("0")),
+                ("WENLAN_GRAPH_MEMORY_STREAM", Some("0")),
             ],
             async { db.augment_with_graph("Postgres", vec![], 25).await.unwrap() },
         )
@@ -32947,7 +32947,7 @@ pub(crate) mod tests {
 
         // Anchor on the 2-hop entity directly so the traversal target is deterministic,
         // independent of how vector-anchor ranking orders a tiny test corpus.
-        let expanded = temp_env::async_with_vars([("ORIGIN_GRAPH_KHOP_DEPTH", Some("2"))], async {
+        let expanded = temp_env::async_with_vars([("WENLAN_GRAPH_KHOP_DEPTH", Some("2"))], async {
             db.expand_anchor_entities_khop(std::slice::from_ref(&a))
                 .await
                 .unwrap()
@@ -32974,8 +32974,8 @@ pub(crate) mod tests {
         // default-ON stream early-returns before k-hop).
         let off = temp_env::async_with_vars(
             [
-                ("ORIGIN_ENABLE_GRAPH_KHOP", None::<&str>),
-                ("ORIGIN_GRAPH_MEMORY_STREAM", Some("0")),
+                ("WENLAN_ENABLE_GRAPH_KHOP", None::<&str>),
+                ("WENLAN_GRAPH_MEMORY_STREAM", Some("0")),
             ],
             async {
                 db.augment_with_graph("Kubernetes", vec![], 25)
@@ -32986,9 +32986,9 @@ pub(crate) mod tests {
         .await;
         let on = temp_env::async_with_vars(
             [
-                ("ORIGIN_ENABLE_GRAPH_KHOP", Some("1")),
-                ("ORIGIN_GRAPH_KHOP_DEPTH", Some("2")),
-                ("ORIGIN_GRAPH_MEMORY_STREAM", Some("0")),
+                ("WENLAN_ENABLE_GRAPH_KHOP", Some("1")),
+                ("WENLAN_GRAPH_KHOP_DEPTH", Some("2")),
+                ("WENLAN_GRAPH_MEMORY_STREAM", Some("0")),
             ],
             async {
                 db.augment_with_graph("Kubernetes", vec![], 25)
@@ -33161,7 +33161,7 @@ pub(crate) mod tests {
         // default-ON both arms dispatch to the stream (no memory_entities links
         // here → empty), making the parity assert a vacuous 0 == 0.
         let (seeded, unseeded) =
-            temp_env::async_with_vars([("ORIGIN_GRAPH_MEMORY_STREAM", Some("0"))], async {
+            temp_env::async_with_vars([("WENLAN_GRAPH_MEMORY_STREAM", Some("0"))], async {
                 // With empty seed_entity_ids, must delegate to augment_with_graph (query-anchor)
                 let seeded = db
                     .augment_with_graph_seeded("Rust programming", results.clone(), &[], 10)
@@ -33258,7 +33258,7 @@ pub(crate) mod tests {
         );
     }
 
-    /// Dark-ship: with ORIGIN_ENABLE_GRAPH_SEED unset, search_memory is byte-identical.
+    /// Dark-ship: with WENLAN_ENABLE_GRAPH_SEED unset, search_memory is byte-identical.
     #[tokio::test]
     async fn test_search_memory_seeded_flag_off_is_identical() {
         let (db, _dir) = test_db().await;
@@ -33281,7 +33281,7 @@ pub(crate) mod tests {
             .unwrap();
 
         // With flag OFF, output must be identical to pre-T9 path
-        std::env::remove_var("ORIGIN_ENABLE_GRAPH_SEED");
+        std::env::remove_var("WENLAN_ENABLE_GRAPH_SEED");
         let results = db
             .search_memory("Rust programming", 10, None, None, None, None, None, None)
             .await
@@ -40942,7 +40942,7 @@ pub(crate) mod tests {
         .await
         .unwrap();
 
-        let hits = temp_env::async_with_vars([("ORIGIN_ENABLE_PAGE_CHANNEL", Some("1"))], async {
+        let hits = temp_env::async_with_vars([("WENLAN_ENABLE_PAGE_CHANNEL", Some("1"))], async {
             db.search_memory_cross_rerank("pages topic retrieval", 10, None, None, None, None)
                 .await
                 .unwrap()
@@ -40950,7 +40950,7 @@ pub(crate) mod tests {
         .await;
         assert!(
             hits.iter().any(|r| r.source == "page"),
-            "ORIGIN_ENABLE_PAGE_CHANNEL=1: expected at least one source=page hit, got {} results sources={:?}",
+            "WENLAN_ENABLE_PAGE_CHANNEL=1: expected at least one source=page hit, got {} results sources={:?}",
             hits.len(),
             hits.iter().map(|r| &r.source).collect::<Vec<_>>()
         );
@@ -40975,7 +40975,7 @@ pub(crate) mod tests {
         .unwrap();
 
         let hits =
-            temp_env::async_with_vars([("ORIGIN_ENABLE_PAGE_CHANNEL", None::<&str>)], async {
+            temp_env::async_with_vars([("WENLAN_ENABLE_PAGE_CHANNEL", None::<&str>)], async {
                 db.search_memory_cross_rerank("pages disabled", 10, None, None, None, None)
                     .await
                     .unwrap()
@@ -41008,7 +41008,7 @@ pub(crate) mod tests {
         .await
         .unwrap();
 
-        let hits = temp_env::async_with_vars([("ORIGIN_ENABLE_PAGE_CHANNEL", Some("0"))], async {
+        let hits = temp_env::async_with_vars([("WENLAN_ENABLE_PAGE_CHANNEL", Some("0"))], async {
             db.search_memory_cross_rerank("truthy zero", 10, None, None, None, None)
                 .await
                 .unwrap()
@@ -41016,7 +41016,7 @@ pub(crate) mod tests {
         .await;
         assert!(
             hits.iter().all(|r| r.source != "page"),
-            "ORIGIN_ENABLE_PAGE_CHANNEL=0 must keep channel disabled,              but got page hits: {:?}",
+            "WENLAN_ENABLE_PAGE_CHANNEL=0 must keep channel disabled,              but got page hits: {:?}",
             hits.iter().map(|r| (&r.id, &r.source)).collect::<Vec<_>>()
         );
     }
@@ -41044,7 +41044,7 @@ pub(crate) mod tests {
 
         for value in ["true", "YES", "True"] {
             let hits =
-                temp_env::async_with_vars([("ORIGIN_ENABLE_PAGE_CHANNEL", Some(value))], async {
+                temp_env::async_with_vars([("WENLAN_ENABLE_PAGE_CHANNEL", Some(value))], async {
                     db.search_memory_cross_rerank("truthy syn", 10, None, None, None, None)
                         .await
                         .unwrap()
@@ -41052,7 +41052,7 @@ pub(crate) mod tests {
                 .await;
             assert!(
                 hits.iter().any(|r| r.source == "page"),
-                "ORIGIN_ENABLE_PAGE_CHANNEL={value}: expected page hits, got {:?}",
+                "WENLAN_ENABLE_PAGE_CHANNEL={value}: expected page hits, got {:?}",
                 hits.iter().map(|r| (&r.id, &r.source)).collect::<Vec<_>>()
             );
         }
@@ -41270,7 +41270,7 @@ pub(crate) mod tests {
         .await;
 
         let baseline =
-            temp_env::async_with_vars([("ORIGIN_ENABLE_GLOBAL_PRELUDE", None::<&str>)], async {
+            temp_env::async_with_vars([("WENLAN_ENABLE_GLOBAL_PRELUDE", None::<&str>)], async {
                 db.search_memory_cross_rerank("rust programming", 10, None, None, None, None)
                     .await
                     .unwrap()
@@ -41288,7 +41288,7 @@ pub(crate) mod tests {
 
         // Run again with flag explicitly "0" — must be byte-identical (id+score).
         let zero =
-            temp_env::async_with_vars([("ORIGIN_ENABLE_GLOBAL_PRELUDE", Some("0"))], async {
+            temp_env::async_with_vars([("WENLAN_ENABLE_GLOBAL_PRELUDE", Some("0"))], async {
                 db.search_memory_cross_rerank("rust programming", 10, None, None, None, None)
                     .await
                     .unwrap()
@@ -41353,7 +41353,7 @@ pub(crate) mod tests {
         .await;
 
         let hits =
-            temp_env::async_with_vars([("ORIGIN_ENABLE_GLOBAL_PRELUDE", Some("1"))], async {
+            temp_env::async_with_vars([("WENLAN_ENABLE_GLOBAL_PRELUDE", Some("1"))], async {
                 db.search_memory_cross_rerank("rust programming", 10, None, None, None, None)
                     .await
                     .unwrap()
@@ -41432,7 +41432,7 @@ pub(crate) mod tests {
 
         let seen = Arc::new(Mutex::new(Vec::new()));
         let reranker: Arc<dyn Reranker> = Arc::new(RecordingReranker { seen: seen.clone() });
-        let _ = temp_env::async_with_vars([("ORIGIN_ENABLE_GLOBAL_PRELUDE", Some("1"))], async {
+        let _ = temp_env::async_with_vars([("WENLAN_ENABLE_GLOBAL_PRELUDE", Some("1"))], async {
             db.search_memory_cross_rerank("rust programming", 10, None, None, None, Some(reranker))
                 .await
                 .unwrap()
@@ -41446,7 +41446,7 @@ pub(crate) mod tests {
         );
     }
 
-    /// ORIGIN_RERANK_SKIP_PREFERENCE: preference-intent queries bypass the CE
+    /// WENLAN_RERANK_SKIP_PREFERENCE: preference-intent queries bypass the CE
     /// reranker entirely (base-path ranking, CE never invoked); non-preference
     /// queries still rerank; flag unset (default) = CE always runs.
     #[tokio::test]
@@ -41499,7 +41499,7 @@ pub(crate) mod tests {
             calls: calls.clone(),
         });
         let (bypassed, base) =
-            temp_env::async_with_vars([("ORIGIN_RERANK_SKIP_PREFERENCE", Some("1"))], async {
+            temp_env::async_with_vars([("WENLAN_RERANK_SKIP_PREFERENCE", Some("1"))], async {
                 let bypassed = db
                     .search_memory_cross_rerank(
                         pref_query,
@@ -41532,7 +41532,7 @@ pub(crate) mod tests {
 
         // Flag ON + non-preference query: CE still runs.
         let _ = temp_env::async_with_vars(
-            [("ORIGIN_RERANK_SKIP_PREFERENCE", Some("1"))],
+            [("WENLAN_RERANK_SKIP_PREFERENCE", Some("1"))],
             db.search_memory_cross_rerank(
                 "rust programming",
                 10,
@@ -41552,7 +41552,7 @@ pub(crate) mod tests {
         // Flag unset (default) + preference query: CE still runs.
         let before = *calls.lock().unwrap();
         let _ = temp_env::async_with_vars(
-            [("ORIGIN_RERANK_SKIP_PREFERENCE", None::<&str>)],
+            [("WENLAN_RERANK_SKIP_PREFERENCE", None::<&str>)],
             db.search_memory_cross_rerank(pref_query, 10, None, None, None, Some(reranker.clone())),
         )
         .await
@@ -41599,7 +41599,7 @@ pub(crate) mod tests {
 
         for value in ["1", "true", "YES", "True"] {
             let hits =
-                temp_env::async_with_vars([("ORIGIN_ENABLE_GLOBAL_PRELUDE", Some(value))], async {
+                temp_env::async_with_vars([("WENLAN_ENABLE_GLOBAL_PRELUDE", Some(value))], async {
                     db.search_memory_cross_rerank("rust", 10, None, None, None, None)
                         .await
                         .unwrap()
@@ -41612,7 +41612,7 @@ pub(crate) mod tests {
         }
         for value in ["0", "false", ""] {
             let hits =
-                temp_env::async_with_vars([("ORIGIN_ENABLE_GLOBAL_PRELUDE", Some(value))], async {
+                temp_env::async_with_vars([("WENLAN_ENABLE_GLOBAL_PRELUDE", Some(value))], async {
                     db.search_memory_cross_rerank("rust", 10, None, None, None, None)
                         .await
                         .unwrap()
@@ -41673,7 +41673,7 @@ pub(crate) mod tests {
 
         // Query with space="work" filter active: personal-sourced summary must be dropped.
         let hits =
-            temp_env::async_with_vars([("ORIGIN_ENABLE_GLOBAL_PRELUDE", Some("1"))], async {
+            temp_env::async_with_vars([("WENLAN_ENABLE_GLOBAL_PRELUDE", Some("1"))], async {
                 db.search_memory_cross_rerank("rust", 10, None, Some("work"), None, None)
                     .await
                     .unwrap()
@@ -41706,7 +41706,7 @@ pub(crate) mod tests {
 
         // Unset flag → legacy path
         let results =
-            temp_env::async_with_vars([("ORIGIN_ENABLE_FTS_HARDENING", None::<&str>)], async {
+            temp_env::async_with_vars([("WENLAN_ENABLE_FTS_HARDENING", None::<&str>)], async {
                 db.search_memory("rust programming", 10, None, None, None, None, None, None)
                     .await
                     .unwrap()
@@ -41724,7 +41724,7 @@ pub(crate) mod tests {
 
         // Flag ON must also surface the same hit (no regression)
         let results_on =
-            temp_env::async_with_vars([("ORIGIN_ENABLE_FTS_HARDENING", Some("1"))], async {
+            temp_env::async_with_vars([("WENLAN_ENABLE_FTS_HARDENING", Some("1"))], async {
                 db.search_memory("rust programming", 10, None, None, None, None, None, None)
                     .await
                     .unwrap()
@@ -41759,7 +41759,7 @@ pub(crate) mod tests {
 
         // Flag OFF: FTS branch errors, returns Ok but FTS may contribute 0 rows
         let _results_off =
-            temp_env::async_with_vars([("ORIGIN_ENABLE_FTS_HARDENING", None::<&str>)], async {
+            temp_env::async_with_vars([("WENLAN_ENABLE_FTS_HARDENING", None::<&str>)], async {
                 db.search_memory(query, 10, None, None, None, None, None, None)
                     .await
                     .unwrap() // must not panic/error regardless
@@ -41768,7 +41768,7 @@ pub(crate) mod tests {
 
         // Flag ON: sanitize_fts_query neutralizes parens, FTS channel fires
         let results_on =
-            temp_env::async_with_vars([("ORIGIN_ENABLE_FTS_HARDENING", Some("1"))], async {
+            temp_env::async_with_vars([("WENLAN_ENABLE_FTS_HARDENING", Some("1"))], async {
                 db.search_memory(query, 10, None, None, None, None, None, None)
                     .await
                     .unwrap()
@@ -41811,7 +41811,7 @@ pub(crate) mod tests {
         );
 
         let result =
-            temp_env::async_with_vars([("ORIGIN_ENABLE_FTS_HARDENING", Some("1"))], async {
+            temp_env::async_with_vars([("WENLAN_ENABLE_FTS_HARDENING", Some("1"))], async {
                 db.search_memory(&long_query, 10, None, None, None, None, None, None)
                     .await
             })
@@ -41865,7 +41865,7 @@ pub(crate) mod tests {
         let query = "what is the xylophoneZZZ9";
 
         let results =
-            temp_env::async_with_vars([("ORIGIN_ENABLE_FTS_HARDENING", Some("1"))], async {
+            temp_env::async_with_vars([("WENLAN_ENABLE_FTS_HARDENING", Some("1"))], async {
                 db.search_memory(query, 10, None, None, None, None, None, None)
                     .await
                     .unwrap()
@@ -41881,13 +41881,13 @@ pub(crate) mod tests {
 
     // ── T13: Magnitude-preserving FTS score fusion ───────────────────────────
 
-    // Magnitude-fusion tests read/write the process-global `ORIGIN_MAGNITUDE_FUSION`.
+    // Magnitude-fusion tests read/write the process-global `WENLAN_MAGNITUDE_FUSION`.
     // `temp_env::async_with_vars` mutates that global, so two tests running
     // concurrently can corrupt each other's flag mid-`.await`. Serialize them on
     // a process-local async lock (same pattern as `PRF_ENV_LOCK` and `SALIENCE_ENV_LOCK`).
     static MAGNITUDE_ENV_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
-    /// Test 1 (merge gate): with `ORIGIN_MAGNITUDE_FUSION` UNSET vs explicitly
+    /// Test 1 (merge gate): with `WENLAN_MAGNITUDE_FUSION` UNSET vs explicitly
     /// `"0"`, `search_memory` must return byte-identical ordering AND scores.
     /// This is the structural defense against the silent-regression class that
     /// closed PR #147 — the default path must be untouched.
@@ -41922,7 +41922,7 @@ pub(crate) mod tests {
         .unwrap();
 
         // Unset flag (default path).
-        let unset = temp_env::async_with_vars([("ORIGIN_MAGNITUDE_FUSION", None::<&str>)], async {
+        let unset = temp_env::async_with_vars([("WENLAN_MAGNITUDE_FUSION", None::<&str>)], async {
             db.search_memory("rust programming", 10, None, None, None, None, None, None)
                 .await
                 .unwrap()
@@ -41930,7 +41930,7 @@ pub(crate) mod tests {
         .await;
 
         // Explicit "0" (falsy → same default path).
-        let zero = temp_env::async_with_vars([("ORIGIN_MAGNITUDE_FUSION", Some("0"))], async {
+        let zero = temp_env::async_with_vars([("WENLAN_MAGNITUDE_FUSION", Some("0"))], async {
             db.search_memory("rust programming", 10, None, None, None, None, None, None)
                 .await
                 .unwrap()
@@ -41950,12 +41950,12 @@ pub(crate) mod tests {
         let zero_ids: Vec<&str> = zero.iter().map(|r| r.id.as_str()).collect();
         assert_eq!(
             unset_ids, zero_ids,
-            "ORIGIN_MAGNITUDE_FUSION unset vs =0 must return identical ordering, got unset={unset_ids:?} zero={zero_ids:?}"
+            "WENLAN_MAGNITUDE_FUSION unset vs =0 must return identical ordering, got unset={unset_ids:?} zero={zero_ids:?}"
         );
         for (u, z) in unset.iter().zip(zero.iter()) {
             assert!(
                 (u.score - z.score).abs() <= 1.0e-5,
-                "ORIGIN_MAGNITUDE_FUSION unset vs =0 score drift > 1e-5 for {}: unset={} zero={}",
+                "WENLAN_MAGNITUDE_FUSION unset vs =0 score drift > 1e-5 for {}: unset={} zero={}",
                 u.id,
                 u.score,
                 z.score
@@ -42017,13 +42017,13 @@ pub(crate) mod tests {
         };
 
         let query = "obsidian";
-        let off = temp_env::async_with_vars([("ORIGIN_MAGNITUDE_FUSION", None::<&str>)], async {
+        let off = temp_env::async_with_vars([("WENLAN_MAGNITUDE_FUSION", None::<&str>)], async {
             db.search_memory(query, 10, None, None, None, None, None, None)
                 .await
                 .unwrap()
         })
         .await;
-        let on = temp_env::async_with_vars([("ORIGIN_MAGNITUDE_FUSION", Some("1"))], async {
+        let on = temp_env::async_with_vars([("WENLAN_MAGNITUDE_FUSION", Some("1"))], async {
             db.search_memory(query, 10, None, None, None, None, None, None)
                 .await
                 .unwrap()
@@ -42102,7 +42102,7 @@ pub(crate) mod tests {
         .unwrap();
 
         let query = "quartzite sandstone metaquartzite orthoquartzite";
-        let on = temp_env::async_with_vars([("ORIGIN_MAGNITUDE_FUSION", Some("1"))], async {
+        let on = temp_env::async_with_vars([("WENLAN_MAGNITUDE_FUSION", Some("1"))], async {
             db.search_memory(query, 10, None, None, None, None, None, None)
                 .await
                 .unwrap()
@@ -42154,7 +42154,7 @@ pub(crate) mod tests {
 
         // A query whose tokens do not lexically match the seeded content, so the
         // FTS channel returns zero rows; the vector channel still fires.
-        let result = temp_env::async_with_vars([("ORIGIN_MAGNITUDE_FUSION", Some("1"))], async {
+        let result = temp_env::async_with_vars([("WENLAN_MAGNITUDE_FUSION", Some("1"))], async {
             db.search_memory(
                 "qwertyuiop zxcvbnm asdfghjkl",
                 10,
@@ -42279,7 +42279,7 @@ pub(crate) mod tests {
             .await
             .unwrap();
 
-        let on = temp_env::async_with_vars([("ORIGIN_MAGNITUDE_FUSION", Some("1"))], async {
+        let on = temp_env::async_with_vars([("WENLAN_MAGNITUDE_FUSION", Some("1"))], async {
             db.search_memory("feldspar mineral", 10, None, None, None, None, None, None)
                 .await
                 .unwrap()
@@ -42410,7 +42410,7 @@ pub(crate) mod tests {
         .await;
 
         let results =
-            temp_env::async_with_vars([("ORIGIN_ENABLE_TEMPORAL_FILTER", Some("1"))], async {
+            temp_env::async_with_vars([("WENLAN_ENABLE_TEMPORAL_FILTER", Some("1"))], async {
                 db.search_memory_temporal(
                     "what database decision did I make yesterday",
                     10,
@@ -42462,7 +42462,7 @@ pub(crate) mod tests {
         .await;
 
         let temporal_results =
-            temp_env::async_with_vars([("ORIGIN_ENABLE_TEMPORAL_FILTER", Some("1"))], async {
+            temp_env::async_with_vars([("WENLAN_ENABLE_TEMPORAL_FILTER", Some("1"))], async {
                 db.search_memory_temporal("what database did I pick", 10, None, None, None, now)
                     .await
                     .unwrap()
@@ -42524,7 +42524,7 @@ pub(crate) mod tests {
         seed_memory_with_event_date(&db, "low_conf_out", text, Some(1_746_057_600)).await;
 
         let results =
-            temp_env::async_with_vars([("ORIGIN_ENABLE_TEMPORAL_FILTER", Some("1"))], async {
+            temp_env::async_with_vars([("WENLAN_ENABLE_TEMPORAL_FILTER", Some("1"))], async {
                 db.search_memory_temporal(
                     "what happened last week in sprint planning",
                     10,
@@ -42556,7 +42556,7 @@ pub(crate) mod tests {
 
         // Flag unset -> filter off -> out-of-range memory returned
         let off_results =
-            temp_env::async_with_vars([("ORIGIN_ENABLE_TEMPORAL_FILTER", None::<&str>)], async {
+            temp_env::async_with_vars([("WENLAN_ENABLE_TEMPORAL_FILTER", None::<&str>)], async {
                 db.search_memory_temporal(
                     "what database architecture did I decide yesterday",
                     10,
@@ -42577,7 +42577,7 @@ pub(crate) mod tests {
 
         // Flag set -> filter on -> out-of-range memory excluded
         let on_results =
-            temp_env::async_with_vars([("ORIGIN_ENABLE_TEMPORAL_FILTER", Some("1"))], async {
+            temp_env::async_with_vars([("WENLAN_ENABLE_TEMPORAL_FILTER", Some("1"))], async {
                 db.search_memory_temporal(
                     "what database architecture did I decide yesterday",
                     10,
@@ -42604,7 +42604,7 @@ pub(crate) mod tests {
         let now: chrono::DateTime<chrono::Utc> = "2026-05-27T12:00:00Z".parse().unwrap();
 
         let results =
-            temp_env::async_with_vars([("ORIGIN_ENABLE_TEMPORAL_FILTER", Some("1"))], async {
+            temp_env::async_with_vars([("WENLAN_ENABLE_TEMPORAL_FILTER", Some("1"))], async {
                 db.search_memory_temporal("what happened yesterday", 10, None, None, None, now)
                     .await
             })
@@ -42622,7 +42622,7 @@ pub(crate) mod tests {
     // the parsed query window is multiplied by (1 + bonus); outside-window, undated,
     // and no-cue rows stay neutral (× 1.0) and are NEVER excluded. This contrasts
     // with the T4a HARD filter, which DROPS outside-window rows. Driven (eventually)
-    // through `search_memory_temporal` behind `ORIGIN_ENABLE_TEMPORAL_SOFT_BOOST`.
+    // through `search_memory_temporal` behind `WENLAN_ENABLE_TEMPORAL_SOFT_BOOST`.
     //
     // Fixtures reuse the T4a "yesterday" window: now = 2026-05-27T12:00:00Z, so
     // "yesterday" = 2026-05-26. In-window ts 1_779_775_200 (2026-05-26T06:00:00Z);
@@ -42677,8 +42677,8 @@ pub(crate) mod tests {
         // to explicit dates and the soft boost runs.
         let boosted = temp_env::async_with_vars(
             [
-                ("ORIGIN_ENABLE_TEMPORAL_FILTER", Some("1")),
-                ("ORIGIN_ENABLE_TEMPORAL_SOFT_BOOST", Some("1")),
+                ("WENLAN_ENABLE_TEMPORAL_FILTER", Some("1")),
+                ("WENLAN_ENABLE_TEMPORAL_SOFT_BOOST", Some("1")),
             ],
             async {
                 db.search_memory_temporal(query, 10, None, None, None, now)
@@ -42776,8 +42776,8 @@ pub(crate) mod tests {
 
         let boosted = temp_env::async_with_vars(
             [
-                ("ORIGIN_ENABLE_TEMPORAL_FILTER", Some("1")),
-                ("ORIGIN_ENABLE_TEMPORAL_SOFT_BOOST", Some("1")),
+                ("WENLAN_ENABLE_TEMPORAL_FILTER", Some("1")),
+                ("WENLAN_ENABLE_TEMPORAL_SOFT_BOOST", Some("1")),
             ],
             async {
                 db.search_memory_temporal(query, 10, None, None, None, now)
@@ -42838,7 +42838,7 @@ pub(crate) mod tests {
             .expect("undated candidate must be present in plain baseline");
 
         let boosted =
-            temp_env::async_with_vars([("ORIGIN_ENABLE_TEMPORAL_SOFT_BOOST", Some("1"))], async {
+            temp_env::async_with_vars([("WENLAN_ENABLE_TEMPORAL_SOFT_BOOST", Some("1"))], async {
                 db.search_memory_temporal(query, 10, None, None, None, now)
                     .await
                     .unwrap()
@@ -42889,8 +42889,8 @@ pub(crate) mod tests {
 
         let off = temp_env::async_with_vars(
             [
-                ("ORIGIN_ENABLE_TEMPORAL_FILTER", None::<&str>),
-                ("ORIGIN_ENABLE_TEMPORAL_SOFT_BOOST", None::<&str>),
+                ("WENLAN_ENABLE_TEMPORAL_FILTER", None::<&str>),
+                ("WENLAN_ENABLE_TEMPORAL_SOFT_BOOST", None::<&str>),
             ],
             async {
                 db.search_memory_temporal(query, 10, None, None, None, now)
@@ -42942,8 +42942,8 @@ pub(crate) mod tests {
 
         let boosted = temp_env::async_with_vars(
             [
-                ("ORIGIN_ENABLE_TEMPORAL_FILTER", Some("1")),
-                ("ORIGIN_ENABLE_TEMPORAL_SOFT_BOOST", Some("1")),
+                ("WENLAN_ENABLE_TEMPORAL_FILTER", Some("1")),
+                ("WENLAN_ENABLE_TEMPORAL_SOFT_BOOST", Some("1")),
             ],
             async {
                 db.search_memory_temporal(query, 10, None, None, None, now)
@@ -42960,28 +42960,28 @@ pub(crate) mod tests {
         );
     }
 
-    /// Safety clamp on `ORIGIN_TEMPORAL_BONUS`: a negative value must clamp to 0.0
+    /// Safety clamp on `WENLAN_TEMPORAL_BONUS`: a negative value must clamp to 0.0
     /// (neutral, no boost) — never below, which would make
     /// `temporal_interval_boost` return `< 1.0` and demote/exclude in-window rows,
     /// breaking the soft boost's "never < 1.0" invariant. Non-finite values
     /// (NaN / inf) fall back to the 0.5 default. A valid value passes through.
     #[tokio::test]
     async fn temporal_bonus_clamped_non_negative() {
-        let neg = temp_env::async_with_vars([("ORIGIN_TEMPORAL_BONUS", Some("-1"))], async {
+        let neg = temp_env::async_with_vars([("WENLAN_TEMPORAL_BONUS", Some("-1"))], async {
             crate::db::temporal_bonus()
         })
         .await;
         assert_eq!(neg, 0.0, "negative bonus must clamp to 0.0");
 
         for bad in &["nan", "inf"] {
-            let got = temp_env::async_with_vars([("ORIGIN_TEMPORAL_BONUS", Some(*bad))], async {
+            let got = temp_env::async_with_vars([("WENLAN_TEMPORAL_BONUS", Some(*bad))], async {
                 crate::db::temporal_bonus()
             })
             .await;
             assert_eq!(got, 0.5, "non-finite {bad:?} must fall back to default 0.5");
         }
 
-        let valid = temp_env::async_with_vars([("ORIGIN_TEMPORAL_BONUS", Some("0.25"))], async {
+        let valid = temp_env::async_with_vars([("WENLAN_TEMPORAL_BONUS", Some("0.25"))], async {
             crate::db::temporal_bonus()
         })
         .await;
@@ -42990,7 +42990,7 @@ pub(crate) mod tests {
 
     // ── T19: Query-adaptive RRF channel reweighting integration tests ─────────
 
-    /// Regression guard (dark-ship): with ORIGIN_ENABLE_QUERY_INTENT unset,
+    /// Regression guard (dark-ship): with WENLAN_ENABLE_QUERY_INTENT unset,
     /// search_memory must produce byte-identical ordering AND scores vs explicit "0".
     #[tokio::test]
     async fn query_intent_flag_off_identical_to_baseline() {
@@ -43024,14 +43024,14 @@ pub(crate) mod tests {
         let query = "what is the database password";
 
         let unset =
-            temp_env::async_with_vars([("ORIGIN_ENABLE_QUERY_INTENT", None::<&str>)], async {
+            temp_env::async_with_vars([("WENLAN_ENABLE_QUERY_INTENT", None::<&str>)], async {
                 db.search_memory(query, 10, None, None, None, None, None, None)
                     .await
                     .unwrap()
             })
             .await;
 
-        let zero = temp_env::async_with_vars([("ORIGIN_ENABLE_QUERY_INTENT", Some("0"))], async {
+        let zero = temp_env::async_with_vars([("WENLAN_ENABLE_QUERY_INTENT", Some("0"))], async {
             db.search_memory(query, 10, None, None, None, None, None, None)
                 .await
                 .unwrap()
@@ -43093,7 +43093,7 @@ pub(crate) mod tests {
 
         let query = "password key"; // short factual query -> Factual intent -> fts boosted
 
-        let off = temp_env::async_with_vars([("ORIGIN_ENABLE_QUERY_INTENT", Some("0"))], async {
+        let off = temp_env::async_with_vars([("WENLAN_ENABLE_QUERY_INTENT", Some("0"))], async {
             db.search_memory(query, 10, None, None, None, None, None, None)
                 .await
                 .unwrap()
@@ -43102,8 +43102,8 @@ pub(crate) mod tests {
 
         let on = temp_env::async_with_vars(
             [
-                ("ORIGIN_ENABLE_QUERY_INTENT", Some("1")),
-                ("ORIGIN_QUERY_INTENT_FTS_BOOST", Some("3.0")), // large boost to make effect detectable
+                ("WENLAN_ENABLE_QUERY_INTENT", Some("1")),
+                ("WENLAN_QUERY_INTENT_FTS_BOOST", Some("3.0")), // large boost to make effect detectable
             ],
             async {
                 db.search_memory(query, 10, None, None, None, None, None, None)
@@ -43185,14 +43185,14 @@ pub(crate) mod tests {
         let query =
             "summarize my thoughts on the database design tradeoffs and overall system complexity";
 
-        let off = temp_env::async_with_vars([("ORIGIN_ENABLE_QUERY_INTENT", Some("0"))], async {
+        let off = temp_env::async_with_vars([("WENLAN_ENABLE_QUERY_INTENT", Some("0"))], async {
             db.search_memory(query, 10, None, None, None, None, None, None)
                 .await
                 .unwrap()
         })
         .await;
 
-        let on = temp_env::async_with_vars([("ORIGIN_ENABLE_QUERY_INTENT", Some("1"))], async {
+        let on = temp_env::async_with_vars([("WENLAN_ENABLE_QUERY_INTENT", Some("1"))], async {
             db.search_memory(query, 10, None, None, None, None, None, None)
                 .await
                 .unwrap()
@@ -43218,7 +43218,7 @@ pub(crate) mod tests {
         }
     }
 
-    /// Truthy-parse synonyms for ORIGIN_ENABLE_QUERY_INTENT: "1", "true", "yes"
+    /// Truthy-parse synonyms for WENLAN_ENABLE_QUERY_INTENT: "1", "true", "yes"
     /// must enable; "0", "false", "" must disable (mirrors page_channel_enabled_accepts_truthy_synonyms).
     #[tokio::test]
     async fn query_intent_truthy_synonyms() {
@@ -43226,36 +43226,36 @@ pub(crate) mod tests {
 
         for value in ["1", "true", "yes", "TRUE", "YES", "True"] {
             let enabled =
-                temp_env::async_with_vars([("ORIGIN_ENABLE_QUERY_INTENT", Some(value))], async {
+                temp_env::async_with_vars([("WENLAN_ENABLE_QUERY_INTENT", Some(value))], async {
                     query_intent_enabled()
                 })
                 .await;
             assert!(
                 enabled,
-                "ORIGIN_ENABLE_QUERY_INTENT={value}: must be truthy"
+                "WENLAN_ENABLE_QUERY_INTENT={value}: must be truthy"
             );
         }
 
         for value in ["0", "false", "no", "", "off", "False"] {
             let enabled =
-                temp_env::async_with_vars([("ORIGIN_ENABLE_QUERY_INTENT", Some(value))], async {
+                temp_env::async_with_vars([("WENLAN_ENABLE_QUERY_INTENT", Some(value))], async {
                     query_intent_enabled()
                 })
                 .await;
             assert!(
                 !enabled,
-                "ORIGIN_ENABLE_QUERY_INTENT={value}: must be falsey"
+                "WENLAN_ENABLE_QUERY_INTENT={value}: must be falsey"
             );
         }
 
         let enabled =
-            temp_env::async_with_vars([("ORIGIN_ENABLE_QUERY_INTENT", None::<&str>)], async {
+            temp_env::async_with_vars([("WENLAN_ENABLE_QUERY_INTENT", None::<&str>)], async {
                 query_intent_enabled()
             })
             .await;
         assert!(
             !enabled,
-            "ORIGIN_ENABLE_QUERY_INTENT=unset: must be disabled"
+            "WENLAN_ENABLE_QUERY_INTENT=unset: must be disabled"
         );
     }
     // -- T20: per-session diversification cap integration tests -------------------
@@ -43294,7 +43294,7 @@ pub(crate) mod tests {
         }
 
         let unset =
-            temp_env::async_with_vars([("ORIGIN_ENABLE_SESSION_DIVERSITY", None::<&str>)], async {
+            temp_env::async_with_vars([("WENLAN_ENABLE_SESSION_DIVERSITY", None::<&str>)], async {
                 db.search_memory_cross_rerank("diversity flag identity", 10, None, None, None, None)
                     .await
                     .unwrap()
@@ -43302,7 +43302,7 @@ pub(crate) mod tests {
             .await;
 
         let off =
-            temp_env::async_with_vars([("ORIGIN_ENABLE_SESSION_DIVERSITY", Some("0"))], async {
+            temp_env::async_with_vars([("WENLAN_ENABLE_SESSION_DIVERSITY", Some("0"))], async {
                 db.search_memory_cross_rerank("diversity flag identity", 10, None, None, None, None)
                     .await
                     .unwrap()
@@ -43320,8 +43320,8 @@ pub(crate) mod tests {
         // reduce or maintain, never increase the result count).
         let flag_on = temp_env::async_with_vars(
             [
-                ("ORIGIN_ENABLE_SESSION_DIVERSITY", Some("1")),
-                ("ORIGIN_SESSION_DIVERSITY_MAX", Some("2")),
+                ("WENLAN_ENABLE_SESSION_DIVERSITY", Some("1")),
+                ("WENLAN_SESSION_DIVERSITY_MAX", Some("2")),
             ],
             async {
                 db.search_memory_cross_rerank("diversity flag identity", 10, None, None, None, None)
@@ -43355,8 +43355,8 @@ pub(crate) mod tests {
 
         let flag_off = temp_env::async_with_vars(
             [
-                ("ORIGIN_ENABLE_SESSION_DIVERSITY", None::<&str>),
-                ("ORIGIN_SESSION_DIVERSITY_MAX", None::<&str>),
+                ("WENLAN_ENABLE_SESSION_DIVERSITY", None::<&str>),
+                ("WENLAN_SESSION_DIVERSITY_MAX", None::<&str>),
             ],
             async {
                 db.search_memory_cross_rerank(
@@ -43375,8 +43375,8 @@ pub(crate) mod tests {
 
         let flag_on = temp_env::async_with_vars(
             [
-                ("ORIGIN_ENABLE_SESSION_DIVERSITY", Some("1")),
-                ("ORIGIN_SESSION_DIVERSITY_MAX", Some("2")),
+                ("WENLAN_ENABLE_SESSION_DIVERSITY", Some("1")),
+                ("WENLAN_SESSION_DIVERSITY_MAX", Some("2")),
             ],
             async {
                 db.search_memory_cross_rerank(
@@ -43404,7 +43404,7 @@ pub(crate) mod tests {
     // T7 — LLM read-time strategy router (search_memory_routed) tests
     // =====================================================================
 
-    /// SINGLE MOST IMPORTANT regression guard: with ORIGIN_LLM_ROUTE off
+    /// SINGLE MOST IMPORTANT regression guard: with WENLAN_LLM_ROUTE off
     /// (unset AND =0), search_memory_routed returns byte-identical results to
     /// search_memory_cross_rerank — the zero-regression default path.
     /// Mirrors page_channel_enabled_treats_zero_and_unset_as_disabled.
@@ -43427,7 +43427,7 @@ pub(crate) mod tests {
             .unwrap();
 
         for flag in [None::<&str>, Some("0"), Some("false")] {
-            let routed = temp_env::async_with_vars([("ORIGIN_LLM_ROUTE", flag)], async {
+            let routed = temp_env::async_with_vars([("WENLAN_LLM_ROUTE", flag)], async {
                 db.search_memory_routed(
                     "routed identity content",
                     10,
@@ -43445,17 +43445,17 @@ pub(crate) mod tests {
             assert_eq!(
                 routed.iter().map(|r| &r.source_id).collect::<Vec<_>>(),
                 baseline.iter().map(|r| &r.source_id).collect::<Vec<_>>(),
-                "ORIGIN_LLM_ROUTE={flag:?} must be byte-identical to search_memory_cross_rerank (order)"
+                "WENLAN_LLM_ROUTE={flag:?} must be byte-identical to search_memory_cross_rerank (order)"
             );
             assert_eq!(
                 routed.iter().map(|r| r.score).collect::<Vec<_>>(),
                 baseline.iter().map(|r| r.score).collect::<Vec<_>>(),
-                "ORIGIN_LLM_ROUTE={flag:?} must be byte-identical to search_memory_cross_rerank (scores)"
+                "WENLAN_LLM_ROUTE={flag:?} must be byte-identical to search_memory_cross_rerank (scores)"
             );
         }
     }
 
-    /// With ORIGIN_LLM_ROUTE on but llm=None, classification falls back to the
+    /// With WENLAN_LLM_ROUTE on but llm=None, classification falls back to the
     /// deterministic keyword path and dispatch never errors/panics. A plain
     /// factual query routes to PlainRag (cross-rerank) and returns results.
     #[tokio::test]
@@ -43470,7 +43470,7 @@ pub(crate) mod tests {
             .await;
         }
 
-        let results = temp_env::async_with_vars([("ORIGIN_LLM_ROUTE", Some("1"))], async {
+        let results = temp_env::async_with_vars([("WENLAN_LLM_ROUTE", Some("1"))], async {
             db.search_memory_routed(
                 "database password",
                 10,
@@ -43491,9 +43491,9 @@ pub(crate) mod tests {
         );
     }
 
-    /// With ORIGIN_LLM_ROUTE on, llm=None, and a temporal query, the keyword
+    /// With WENLAN_LLM_ROUTE on, llm=None, and a temporal query, the keyword
     /// fallback selects TemporalScoped, which dispatches to
-    /// search_memory_temporal. Without ORIGIN_ENABLE_TEMPORAL_FILTER that method
+    /// search_memory_temporal. Without WENLAN_ENABLE_TEMPORAL_FILTER that method
     /// degrades to plain search, so the call still succeeds and never panics.
     #[tokio::test]
     async fn search_memory_routed_temporal_keyword_dispatches_cleanly() {
@@ -43507,7 +43507,7 @@ pub(crate) mod tests {
             .await;
         }
 
-        let results = temp_env::async_with_vars([("ORIGIN_LLM_ROUTE", Some("1"))], async {
+        let results = temp_env::async_with_vars([("WENLAN_LLM_ROUTE", Some("1"))], async {
             db.search_memory_routed("what changed last week", 10, None, None, None, None, None)
                 .await
                 .unwrap()
@@ -43549,13 +43549,13 @@ pub(crate) mod tests {
     async fn episode_channel_enabled_treats_zero_and_unset_as_disabled() {
         for value in [None, Some("0"), Some("false"), Some("no"), Some("")] {
             let got =
-                temp_env::async_with_vars([("ORIGIN_ENABLE_EPISODE_CHANNEL", value)], async {
+                temp_env::async_with_vars([("WENLAN_ENABLE_EPISODE_CHANNEL", value)], async {
                     episode_channel_enabled()
                 })
                 .await;
             assert!(
                 !got,
-                "ORIGIN_ENABLE_EPISODE_CHANNEL={value:?} must leave channel disabled"
+                "WENLAN_ENABLE_EPISODE_CHANNEL={value:?} must leave channel disabled"
             );
         }
     }
@@ -43564,13 +43564,13 @@ pub(crate) mod tests {
     async fn episode_channel_enabled_accepts_truthy_synonyms() {
         for value in ["1", "true", "YES", "True"] {
             let got = temp_env::async_with_vars(
-                [("ORIGIN_ENABLE_EPISODE_CHANNEL", Some(value))],
+                [("WENLAN_ENABLE_EPISODE_CHANNEL", Some(value))],
                 async { episode_channel_enabled() },
             )
             .await;
             assert!(
                 got,
-                "ORIGIN_ENABLE_EPISODE_CHANNEL={value} must enable channel"
+                "WENLAN_ENABLE_EPISODE_CHANNEL={value} must enable channel"
             );
         }
     }
@@ -43578,14 +43578,14 @@ pub(crate) mod tests {
     #[tokio::test]
     async fn episode_channel_limit_default_and_override() {
         let default =
-            temp_env::async_with_vars([("ORIGIN_EPISODE_CHANNEL_LIMIT", None::<&str>)], async {
+            temp_env::async_with_vars([("WENLAN_EPISODE_CHANNEL_LIMIT", None::<&str>)], async {
                 MemoryDB::episode_channel_limit()
             })
             .await;
         assert_eq!(default, 3, "default episode channel limit is 3");
 
         let overridden =
-            temp_env::async_with_vars([("ORIGIN_EPISODE_CHANNEL_LIMIT", Some("7"))], async {
+            temp_env::async_with_vars([("WENLAN_EPISODE_CHANNEL_LIMIT", Some("7"))], async {
                 MemoryDB::episode_channel_limit()
             })
             .await;
@@ -43596,13 +43596,13 @@ pub(crate) mod tests {
 
     #[tokio::test]
     async fn cot_max_iter_default_and_override() {
-        let default = temp_env::async_with_vars([("ORIGIN_COT_MAX_ITER", None::<&str>)], async {
+        let default = temp_env::async_with_vars([("WENLAN_COT_MAX_ITER", None::<&str>)], async {
             MemoryDB::cot_max_iter()
         })
         .await;
         assert_eq!(default, 3, "default cot max_iter is 3");
 
-        let overridden = temp_env::async_with_vars([("ORIGIN_COT_MAX_ITER", Some("5"))], async {
+        let overridden = temp_env::async_with_vars([("WENLAN_COT_MAX_ITER", Some("5"))], async {
             MemoryDB::cot_max_iter()
         })
         .await;
@@ -43663,7 +43663,7 @@ pub(crate) mod tests {
 
         // Flag ON to prove max_iter==0 short-circuits regardless of flag state.
         let (baseline, iterative) =
-            temp_env::async_with_vars([("ORIGIN_ENABLE_COT_RETRIEVAL", Some("1"))], async {
+            temp_env::async_with_vars([("WENLAN_ENABLE_COT_RETRIEVAL", Some("1"))], async {
                 let baseline = db
                     .search_memory_cross_rerank(
                         "Acme engineer",
@@ -43711,7 +43711,7 @@ pub(crate) mod tests {
             ]));
 
         let (baseline, iterative) =
-            temp_env::async_with_vars([("ORIGIN_ENABLE_COT_RETRIEVAL", None::<&str>)], async {
+            temp_env::async_with_vars([("WENLAN_ENABLE_COT_RETRIEVAL", None::<&str>)], async {
                 let baseline = db
                     .search_memory_cross_rerank(
                         "Acme engineer",
@@ -43762,7 +43762,7 @@ pub(crate) mod tests {
         let llm: Arc<dyn crate::llm_provider::LlmProvider> = mock.clone();
 
         let (baseline, iterative) =
-            temp_env::async_with_vars([("ORIGIN_ENABLE_COT_RETRIEVAL", Some("1"))], async {
+            temp_env::async_with_vars([("WENLAN_ENABLE_COT_RETRIEVAL", Some("1"))], async {
                 let baseline = db
                     .search_memory_cross_rerank(
                         "Acme engineer",
@@ -43817,7 +43817,7 @@ pub(crate) mod tests {
         let reranker: Arc<dyn crate::reranker::Reranker> = Arc::new(crate::reranker::NoopReranker);
 
         let (baseline, iterative) =
-            temp_env::async_with_vars([("ORIGIN_ENABLE_COT_RETRIEVAL", Some("1"))], async {
+            temp_env::async_with_vars([("WENLAN_ENABLE_COT_RETRIEVAL", Some("1"))], async {
                 let baseline = db
                     .search_memory_cross_rerank(
                         "Acme engineer",
@@ -43888,7 +43888,7 @@ pub(crate) mod tests {
             ]));
 
         let (baseline, iterative) =
-            temp_env::async_with_vars([("ORIGIN_ENABLE_COT_RETRIEVAL", Some("1"))], async {
+            temp_env::async_with_vars([("WENLAN_ENABLE_COT_RETRIEVAL", Some("1"))], async {
                 let baseline = db
                     .search_memory_iterative(
                         "primary topic widget throughput",
@@ -43949,7 +43949,7 @@ pub(crate) mod tests {
         let llm: Arc<dyn crate::llm_provider::LlmProvider> = mock.clone();
 
         let max_iter = 2;
-        temp_env::async_with_vars([("ORIGIN_ENABLE_COT_RETRIEVAL", Some("1"))], async {
+        temp_env::async_with_vars([("WENLAN_ENABLE_COT_RETRIEVAL", Some("1"))], async {
             db.search_memory_iterative(
                 "Acme engineer",
                 10,
@@ -43974,7 +43974,7 @@ pub(crate) mod tests {
     }
 
     /// Test 17: a draft call that sleeps past the per-round timeout degrades to
-    /// the best pool so far (no error). `ORIGIN_COT_ROUND_TIMEOUT_SECS=0` makes
+    /// the best pool so far (no error). `WENLAN_COT_ROUND_TIMEOUT_SECS=0` makes
     /// the timeout fire on the first poll against a still-sleeping mock, so the
     /// test stays fast (no 10s real wait).
     #[tokio::test]
@@ -43987,8 +43987,8 @@ pub(crate) mod tests {
 
         let (baseline, iterative) = temp_env::async_with_vars(
             [
-                ("ORIGIN_ENABLE_COT_RETRIEVAL", Some("1")),
-                ("ORIGIN_COT_ROUND_TIMEOUT_SECS", Some("0")),
+                ("WENLAN_ENABLE_COT_RETRIEVAL", Some("1")),
+                ("WENLAN_COT_ROUND_TIMEOUT_SECS", Some("0")),
             ],
             async {
                 let baseline = db
@@ -44027,7 +44027,7 @@ pub(crate) mod tests {
     }
 
     /// Test-only LLM provider whose `generate` sleeps `sleep_secs` so the per-round
-    /// `tokio::time::timeout` fires. Paired with `ORIGIN_COT_ROUND_TIMEOUT_SECS=0`.
+    /// `tokio::time::timeout` fires. Paired with `WENLAN_COT_ROUND_TIMEOUT_SECS=0`.
     struct SlowMockProvider {
         sleep_secs: u64,
     }
@@ -44258,7 +44258,7 @@ pub(crate) mod tests {
     #[tokio::test]
     async fn child_vectors_written_on_store_when_flag_on() {
         let (db, _dir) = test_db().await;
-        temp_env::async_with_vars([("ORIGIN_ENABLE_FACT_CHANNEL", Some("1"))], async {
+        temp_env::async_with_vars([("WENLAN_ENABLE_FACT_CHANNEL", Some("1"))], async {
             db.upsert_documents(vec![memory_doc_with_fields(
                 "fact_on",
                 "The annual subscription renews and the team reviews vendors each cycle.",
@@ -44305,7 +44305,7 @@ pub(crate) mod tests {
     #[tokio::test]
     async fn child_vectors_not_written_when_flag_off() {
         let (db, _dir) = test_db().await;
-        temp_env::async_with_vars([("ORIGIN_ENABLE_FACT_CHANNEL", None::<&str>)], async {
+        temp_env::async_with_vars([("WENLAN_ENABLE_FACT_CHANNEL", None::<&str>)], async {
             db.upsert_documents(vec![memory_doc_with_fields(
                 "fact_off",
                 "The annual subscription renews and the team reviews vendors each cycle.",
@@ -44325,7 +44325,7 @@ pub(crate) mod tests {
     #[tokio::test]
     async fn child_vectors_deterministic_ids_and_replace_on_restore() {
         let (db, _dir) = test_db().await;
-        temp_env::async_with_vars([("ORIGIN_ENABLE_FACT_CHANNEL", Some("1"))], async {
+        temp_env::async_with_vars([("WENLAN_ENABLE_FACT_CHANNEL", Some("1"))], async {
             db.upsert_documents(vec![memory_doc_with_fields(
                 "fact_re",
                 "The user lives in a big coastal city with great public transit.",
@@ -44363,7 +44363,7 @@ pub(crate) mod tests {
     #[tokio::test]
     async fn child_vectors_cascade_delete_on_parent_delete() {
         let (db, _dir) = test_db().await;
-        temp_env::async_with_vars([("ORIGIN_ENABLE_FACT_CHANNEL", Some("1"))], async {
+        temp_env::async_with_vars([("WENLAN_ENABLE_FACT_CHANNEL", Some("1"))], async {
             db.upsert_documents(vec![memory_doc_with_fields(
                 "fact_del",
                 "The user keeps detailed notes on every recurring monthly expense.",
@@ -44392,7 +44392,7 @@ pub(crate) mod tests {
         let (db, _dir) = test_db().await;
         // Seed a memory whose buried structured field is the only place the
         // renewal date appears, plus a decoy.
-        temp_env::async_with_vars([("ORIGIN_ENABLE_FACT_CHANNEL", Some("1"))], async {
+        temp_env::async_with_vars([("WENLAN_ENABLE_FACT_CHANNEL", Some("1"))], async {
             db.upsert_documents(vec![
                 memory_doc_with_fields(
                     "m_target",
@@ -44411,7 +44411,7 @@ pub(crate) mod tests {
             .unwrap();
         })
         .await;
-        let hits = temp_env::async_with_vars([("ORIGIN_ENABLE_FACT_CHANNEL", Some("1"))], async {
+        let hits = temp_env::async_with_vars([("WENLAN_ENABLE_FACT_CHANNEL", Some("1"))], async {
             db.search_memory_cross_rerank("when is the renewal date", 10, None, None, None, None)
                 .await
                 .unwrap()
@@ -44434,7 +44434,7 @@ pub(crate) mod tests {
     async fn fact_channel_absent_when_flag_off() {
         let (db, _dir) = test_db().await;
         // Store WITH flag on so children exist, then read with flag OFF.
-        temp_env::async_with_vars([("ORIGIN_ENABLE_FACT_CHANNEL", Some("1"))], async {
+        temp_env::async_with_vars([("WENLAN_ENABLE_FACT_CHANNEL", Some("1"))], async {
             db.upsert_documents(vec![memory_doc_with_fields(
                 "m_offread",
                 "The contract auto-renews and finance reconciles the invoice monthly.",
@@ -44447,7 +44447,7 @@ pub(crate) mod tests {
         // Read with flag OFF: the channel must not run. Compare to a query that
         // only the buried field would match.
         let off_hits =
-            temp_env::async_with_vars([("ORIGIN_ENABLE_FACT_CHANNEL", None::<&str>)], async {
+            temp_env::async_with_vars([("WENLAN_ENABLE_FACT_CHANNEL", None::<&str>)], async {
                 db.search_memory_cross_rerank(
                     "November 3 renewal date specific",
                     10,
@@ -44461,7 +44461,7 @@ pub(crate) mod tests {
             })
             .await;
         let on_hits =
-            temp_env::async_with_vars([("ORIGIN_ENABLE_FACT_CHANNEL", Some("1"))], async {
+            temp_env::async_with_vars([("WENLAN_ENABLE_FACT_CHANNEL", Some("1"))], async {
                 db.search_memory_cross_rerank(
                     "November 3 renewal date specific",
                     10,
@@ -44487,7 +44487,7 @@ pub(crate) mod tests {
     #[tokio::test]
     async fn fact_channel_respects_space_filter() {
         let (db, _dir) = test_db().await;
-        temp_env::async_with_vars([("ORIGIN_ENABLE_FACT_CHANNEL", Some("1"))], async {
+        temp_env::async_with_vars([("WENLAN_ENABLE_FACT_CHANNEL", Some("1"))], async {
             let mut work = memory_doc_with_fields(
                 "m_work",
                 "The work project tracks its launch milestone in the shared planner.",
@@ -44503,7 +44503,7 @@ pub(crate) mod tests {
             db.upsert_documents(vec![work, personal]).await.unwrap();
         })
         .await;
-        let hits = temp_env::async_with_vars([("ORIGIN_ENABLE_FACT_CHANNEL", Some("1"))], async {
+        let hits = temp_env::async_with_vars([("WENLAN_ENABLE_FACT_CHANNEL", Some("1"))], async {
             db.search_memory_cross_rerank(
                 "milestone launch day",
                 10,
@@ -44529,7 +44529,7 @@ pub(crate) mod tests {
     async fn rebuild_child_vectors_for_missing_backfills() {
         let (db, _dir) = test_db().await;
         // Store with the flag OFF: no children written.
-        temp_env::async_with_vars([("ORIGIN_ENABLE_FACT_CHANNEL", None::<&str>)], async {
+        temp_env::async_with_vars([("WENLAN_ENABLE_FACT_CHANNEL", None::<&str>)], async {
             db.upsert_documents(vec![memory_doc_with_fields(
                 "m_backfill",
                 "The user prefers the dashboard view and pins the weekly report card.",
@@ -44546,7 +44546,7 @@ pub(crate) mod tests {
         );
         // Flip the flag and backfill.
         let rebuilt =
-            temp_env::async_with_vars([("ORIGIN_ENABLE_FACT_CHANNEL", Some("1"))], async {
+            temp_env::async_with_vars([("WENLAN_ENABLE_FACT_CHANNEL", Some("1"))], async {
                 db.rebuild_child_vectors_for_missing().await.unwrap()
             })
             .await;
@@ -44561,7 +44561,7 @@ pub(crate) mod tests {
     async fn fact_channel_off_is_byte_identical_to_baseline() {
         let (db, _dir) = test_db().await;
         // Seed without children (flag OFF on store).
-        temp_env::async_with_vars([("ORIGIN_ENABLE_FACT_CHANNEL", None::<&str>)], async {
+        temp_env::async_with_vars([("WENLAN_ENABLE_FACT_CHANNEL", None::<&str>)], async {
             db.upsert_documents(vec![
                 make_memory_doc(
                     "b1",
@@ -44583,7 +44583,7 @@ pub(crate) mod tests {
         })
         .await;
         let unset: Vec<String> =
-            temp_env::async_with_vars([("ORIGIN_ENABLE_FACT_CHANNEL", None::<&str>)], async {
+            temp_env::async_with_vars([("WENLAN_ENABLE_FACT_CHANNEL", None::<&str>)], async {
                 db.search_memory_cross_rerank("rust python journal", 10, None, None, None, None)
                     .await
                     .unwrap()
@@ -44593,7 +44593,7 @@ pub(crate) mod tests {
             })
             .await;
         let off: Vec<String> =
-            temp_env::async_with_vars([("ORIGIN_ENABLE_FACT_CHANNEL", Some("0"))], async {
+            temp_env::async_with_vars([("WENLAN_ENABLE_FACT_CHANNEL", Some("0"))], async {
                 db.search_memory_cross_rerank("rust python journal", 10, None, None, None, None)
                     .await
                     .unwrap()
@@ -44666,13 +44666,13 @@ pub(crate) mod tests {
     #[tokio::test]
     async fn entity_minhash_enabled_treats_zero_and_unset_as_disabled() {
         for value in [None, Some("0"), Some("false"), Some("no"), Some("")] {
-            let got = temp_env::async_with_vars([("ORIGIN_ENABLE_ENTITY_MINHASH", value)], async {
+            let got = temp_env::async_with_vars([("WENLAN_ENABLE_ENTITY_MINHASH", value)], async {
                 entity_minhash_enabled()
             })
             .await;
             assert!(
                 !got,
-                "ORIGIN_ENABLE_ENTITY_MINHASH={value:?} must leave cascade disabled"
+                "WENLAN_ENABLE_ENTITY_MINHASH={value:?} must leave cascade disabled"
             );
         }
     }
@@ -44681,13 +44681,13 @@ pub(crate) mod tests {
     async fn entity_minhash_enabled_accepts_truthy_synonyms() {
         for value in ["1", "true", "YES", "True"] {
             let got =
-                temp_env::async_with_vars([("ORIGIN_ENABLE_ENTITY_MINHASH", Some(value))], async {
+                temp_env::async_with_vars([("WENLAN_ENABLE_ENTITY_MINHASH", Some(value))], async {
                     entity_minhash_enabled()
                 })
                 .await;
             assert!(
                 got,
-                "ORIGIN_ENABLE_ENTITY_MINHASH={value} must enable cascade"
+                "WENLAN_ENABLE_ENTITY_MINHASH={value} must enable cascade"
             );
         }
     }
@@ -44697,7 +44697,7 @@ pub(crate) mod tests {
     #[tokio::test]
     async fn episode_cowrite_happy_path() {
         let (db, _dir) = test_db().await;
-        temp_env::async_with_vars([("ORIGIN_ENABLE_EPISODE_CHANNEL", Some("1"))], async {
+        temp_env::async_with_vars([("WENLAN_ENABLE_EPISODE_CHANNEL", Some("1"))], async {
             db.upsert_documents(vec![make_memory_doc(
                 "fact_1",
                 "the user prefers dark mode in every editor they use daily",
@@ -44749,7 +44749,7 @@ pub(crate) mod tests {
     #[tokio::test]
     async fn episode_word_gate_excludes_short_turns() {
         let (db, _dir) = test_db().await;
-        temp_env::async_with_vars([("ORIGIN_ENABLE_EPISODE_CHANNEL", Some("1"))], async {
+        temp_env::async_with_vars([("WENLAN_ENABLE_EPISODE_CHANNEL", Some("1"))], async {
             db.upsert_documents(vec![make_memory_doc(
                 "short_1",
                 "loves rust",
@@ -44771,7 +44771,7 @@ pub(crate) mod tests {
     #[tokio::test]
     async fn episode_flag_off_writes_no_episode_and_keeps_corpus_size() {
         let (db, _dir) = test_db().await;
-        temp_env::async_with_vars([("ORIGIN_ENABLE_EPISODE_CHANNEL", None::<&str>)], async {
+        temp_env::async_with_vars([("WENLAN_ENABLE_EPISODE_CHANNEL", None::<&str>)], async {
             db.upsert_documents(vec![make_memory_doc(
                 "fact_off",
                 "the user prefers tabs over spaces for indentation in their code",
@@ -44835,7 +44835,7 @@ pub(crate) mod tests {
     async fn backfill_episodes_creates_rows_only_for_gated_parents() {
         let (db, _dir) = test_db().await;
         // Flag OFF -> upsert writes NO episodes; backfill must create them.
-        temp_env::async_with_vars([("ORIGIN_ENABLE_EPISODE_CHANNEL", None::<&str>)], async {
+        temp_env::async_with_vars([("WENLAN_ENABLE_EPISODE_CHANNEL", None::<&str>)], async {
             db.upsert_documents(vec![
                 make_memory_doc(
                     "p_long",
@@ -44894,7 +44894,7 @@ pub(crate) mod tests {
     #[tokio::test]
     async fn backfill_episodes_is_idempotent() {
         let (db, _dir) = test_db().await;
-        temp_env::async_with_vars([("ORIGIN_ENABLE_EPISODE_CHANNEL", None::<&str>)], async {
+        temp_env::async_with_vars([("WENLAN_ENABLE_EPISODE_CHANNEL", None::<&str>)], async {
             db.upsert_documents(vec![make_memory_doc(
                 "p1",
                 "the user prefers dark mode in every editor they use daily",
@@ -44921,7 +44921,7 @@ pub(crate) mod tests {
         // and episode_of must be byte-identical (proves no training-serving skew).
         let content = "the user prefers dark mode in every editor they use daily";
         let (db_a, _a) = test_db().await;
-        temp_env::async_with_vars([("ORIGIN_ENABLE_EPISODE_CHANNEL", Some("1"))], async {
+        temp_env::async_with_vars([("WENLAN_ENABLE_EPISODE_CHANNEL", Some("1"))], async {
             db_a.upsert_documents(vec![make_memory_doc(
                 "fp",
                 content,
@@ -44934,7 +44934,7 @@ pub(crate) mod tests {
         })
         .await;
         let (db_b, _b) = test_db().await;
-        temp_env::async_with_vars([("ORIGIN_ENABLE_EPISODE_CHANNEL", None::<&str>)], async {
+        temp_env::async_with_vars([("WENLAN_ENABLE_EPISODE_CHANNEL", None::<&str>)], async {
             db_b.upsert_documents(vec![make_memory_doc(
                 "fp",
                 content,
@@ -44999,7 +44999,7 @@ pub(crate) mod tests {
         doc.source_text = Some(
             "honestly i always switch every single app over to a dark theme right away".to_string(),
         );
-        temp_env::async_with_vars([("ORIGIN_ENABLE_EPISODE_CHANNEL", Some("1"))], async {
+        temp_env::async_with_vars([("WENLAN_ENABLE_EPISODE_CHANNEL", Some("1"))], async {
             db.upsert_documents(vec![doc]).await.unwrap();
         })
         .await;
@@ -45026,7 +45026,7 @@ pub(crate) mod tests {
             "claude-code",
         );
         doc.source = "episode".to_string();
-        temp_env::async_with_vars([("ORIGIN_ENABLE_EPISODE_CHANNEL", Some("1"))], async {
+        temp_env::async_with_vars([("WENLAN_ENABLE_EPISODE_CHANNEL", Some("1"))], async {
             db.upsert_documents(vec![doc]).await.unwrap();
         })
         .await;
@@ -45040,7 +45040,7 @@ pub(crate) mod tests {
     #[tokio::test]
     async fn episode_and_fact_both_present_after_single_upsert() {
         let (db, _dir) = test_db().await;
-        temp_env::async_with_vars([("ORIGIN_ENABLE_EPISODE_CHANNEL", Some("1"))], async {
+        temp_env::async_with_vars([("WENLAN_ENABLE_EPISODE_CHANNEL", Some("1"))], async {
             db.upsert_documents(vec![make_memory_doc(
                 "fact_atomic",
                 "the user runs all their evals on a metal gpu attached to the laptop",
@@ -45063,7 +45063,7 @@ pub(crate) mod tests {
     #[tokio::test]
     async fn episode_round_trips_importance_null() {
         let (db, _dir) = test_db().await;
-        temp_env::async_with_vars([("ORIGIN_ENABLE_EPISODE_CHANNEL", Some("1"))], async {
+        temp_env::async_with_vars([("WENLAN_ENABLE_EPISODE_CHANNEL", Some("1"))], async {
             db.upsert_documents(vec![make_memory_doc(
                 "fact_imp",
                 "the user keeps every benchmark baseline json gitignored in the cache dir",
@@ -45090,7 +45090,7 @@ pub(crate) mod tests {
     #[tokio::test]
     async fn episode_reupsert_does_not_orphan_duplicates() {
         let (db, _dir) = test_db().await;
-        temp_env::async_with_vars([("ORIGIN_ENABLE_EPISODE_CHANNEL", Some("1"))], async {
+        temp_env::async_with_vars([("WENLAN_ENABLE_EPISODE_CHANNEL", Some("1"))], async {
             for _ in 0..2 {
                 db.upsert_documents(vec![make_memory_doc(
                     "fact_re",
@@ -45116,7 +45116,7 @@ pub(crate) mod tests {
     #[tokio::test]
     async fn search_memory_excludes_episode_rows() {
         let (db, _dir) = test_db().await;
-        temp_env::async_with_vars([("ORIGIN_ENABLE_EPISODE_CHANNEL", Some("1"))], async {
+        temp_env::async_with_vars([("WENLAN_ENABLE_EPISODE_CHANNEL", Some("1"))], async {
             db.upsert_documents(vec![
                 make_memory_doc(
                     "fact_a",
@@ -45175,7 +45175,7 @@ pub(crate) mod tests {
     #[tokio::test]
     async fn search_episodes_returns_only_episode_rows() {
         let (db, _dir) = test_db().await;
-        temp_env::async_with_vars([("ORIGIN_ENABLE_EPISODE_CHANNEL", Some("1"))], async {
+        temp_env::async_with_vars([("WENLAN_ENABLE_EPISODE_CHANNEL", Some("1"))], async {
             db.upsert_documents(vec![make_memory_doc(
                 "fact_se",
                 "the user debugged a gnarly async deadlock in the libsql connection pool",
@@ -45201,7 +45201,7 @@ pub(crate) mod tests {
     #[tokio::test]
     async fn search_episodes_respects_limit() {
         let (db, _dir) = test_db().await;
-        temp_env::async_with_vars([("ORIGIN_ENABLE_EPISODE_CHANNEL", Some("1"))], async {
+        temp_env::async_with_vars([("WENLAN_ENABLE_EPISODE_CHANNEL", Some("1"))], async {
             for i in 0..5 {
                 db.upsert_documents(vec![make_memory_doc(
                     &format!("fact_lim_{i}"),
@@ -45227,7 +45227,7 @@ pub(crate) mod tests {
     #[tokio::test]
     async fn episode_5th_stream_surfaces_when_flag_on() {
         let (db, _dir) = test_db().await;
-        temp_env::async_with_vars([("ORIGIN_ENABLE_EPISODE_CHANNEL", Some("1"))], async {
+        temp_env::async_with_vars([("WENLAN_ENABLE_EPISODE_CHANNEL", Some("1"))], async {
             db.upsert_documents(vec![make_memory_doc(
                 "fact_5th",
                 "the user shipped a verbatim episode storage tier for their memory layer",
@@ -45260,7 +45260,7 @@ pub(crate) mod tests {
     #[tokio::test]
     async fn episode_5th_stream_absent_when_flag_off() {
         let (db, _dir) = test_db().await;
-        temp_env::async_with_vars([("ORIGIN_ENABLE_EPISODE_CHANNEL", Some("1"))], async {
+        temp_env::async_with_vars([("WENLAN_ENABLE_EPISODE_CHANNEL", Some("1"))], async {
             db.upsert_documents(vec![make_memory_doc(
                 "fact_off5",
                 "the user shipped a verbatim episode storage tier for their memory layer",
@@ -45273,7 +45273,7 @@ pub(crate) mod tests {
         })
         .await;
         let hits =
-            temp_env::async_with_vars([("ORIGIN_ENABLE_EPISODE_CHANNEL", None::<&str>)], async {
+            temp_env::async_with_vars([("WENLAN_ENABLE_EPISODE_CHANNEL", None::<&str>)], async {
                 db.search_memory_cross_rerank(
                     "verbatim episode storage tier",
                     10,
@@ -45309,7 +45309,7 @@ pub(crate) mod tests {
         )
         .await
         .unwrap();
-        temp_env::async_with_vars([("ORIGIN_ENABLE_EPISODE_CHANNEL", Some("1"))], async {
+        temp_env::async_with_vars([("WENLAN_ENABLE_EPISODE_CHANNEL", Some("1"))], async {
             db.upsert_documents(vec![make_memory_doc(
                 "fact_compose",
                 "the user cares about retrieval fusion and ranking composition behaviour",
@@ -45323,8 +45323,8 @@ pub(crate) mod tests {
         .await;
         let hits = temp_env::async_with_vars(
             [
-                ("ORIGIN_ENABLE_EPISODE_CHANNEL", Some("1")),
-                ("ORIGIN_ENABLE_PAGE_CHANNEL", Some("1")),
+                ("WENLAN_ENABLE_EPISODE_CHANNEL", Some("1")),
+                ("WENLAN_ENABLE_PAGE_CHANNEL", Some("1")),
             ],
             async {
                 db.search_memory_cross_rerank(
@@ -45353,7 +45353,7 @@ pub(crate) mod tests {
     #[tokio::test]
     async fn episode_space_leak_guard() {
         let (db, _dir) = test_db().await;
-        temp_env::async_with_vars([("ORIGIN_ENABLE_EPISODE_CHANNEL", Some("1"))], async {
+        temp_env::async_with_vars([("WENLAN_ENABLE_EPISODE_CHANNEL", Some("1"))], async {
             db.upsert_documents(vec![make_memory_doc(
                 "fact_personal",
                 "the user keeps their secret diary passphrase rotated every quarter reliably",
@@ -45366,7 +45366,7 @@ pub(crate) mod tests {
         })
         .await;
         let hits =
-            temp_env::async_with_vars([("ORIGIN_ENABLE_EPISODE_CHANNEL", Some("1"))], async {
+            temp_env::async_with_vars([("WENLAN_ENABLE_EPISODE_CHANNEL", Some("1"))], async {
                 db.search_memory_cross_rerank(
                     "diary passphrase rotated quarter",
                     10,
@@ -45396,7 +45396,7 @@ pub(crate) mod tests {
         // in-place edit would delete/overwrite the verbatim episode. Guard it.
         let verbatim = "honestly i always switch every single app over to a dark theme right away";
         let (db, _dir) = test_db().await;
-        temp_env::async_with_vars([("ORIGIN_ENABLE_EPISODE_CHANNEL", Some("1"))], async {
+        temp_env::async_with_vars([("WENLAN_ENABLE_EPISODE_CHANNEL", Some("1"))], async {
             let mut doc = make_memory_doc(
                 "fact_edit",
                 "user likes dark mode",
@@ -45425,7 +45425,7 @@ pub(crate) mod tests {
         );
         // Episode verbatim content unchanged + still retrievable.
         let eps =
-            temp_env::async_with_vars([("ORIGIN_ENABLE_EPISODE_CHANNEL", Some("1"))], async {
+            temp_env::async_with_vars([("WENLAN_ENABLE_EPISODE_CHANNEL", Some("1"))], async {
                 db.search_episodes("dark theme right away", 5)
                     .await
                     .unwrap()
@@ -45464,7 +45464,7 @@ pub(crate) mod tests {
             "upsert_memory_in_place must not delete the episode row"
         );
         let eps2 =
-            temp_env::async_with_vars([("ORIGIN_ENABLE_EPISODE_CHANNEL", Some("1"))], async {
+            temp_env::async_with_vars([("WENLAN_ENABLE_EPISODE_CHANNEL", Some("1"))], async {
                 db.search_episodes("dark theme right away", 5)
                     .await
                     .unwrap()
@@ -45496,41 +45496,41 @@ pub(crate) mod tests {
     }
     // -- T11: temporal_grounding_enabled + store-seam integration tests ----------
 
-    /// Truthy-parse coverage for ORIGIN_ENABLE_TEMPORAL_GROUNDING.
+    /// Truthy-parse coverage for WENLAN_ENABLE_TEMPORAL_GROUNDING.
     /// Mirrors page_channel_enabled_accepts_truthy_synonyms pattern.
     #[tokio::test]
     async fn temporal_grounding_enabled_truthy_synonyms() {
         for value in ["1", "true", "yes", "TRUE", "YES", "True"] {
             let enabled = temp_env::async_with_vars(
-                [("ORIGIN_ENABLE_TEMPORAL_GROUNDING", Some(value))],
+                [("WENLAN_ENABLE_TEMPORAL_GROUNDING", Some(value))],
                 async { temporal_grounding_enabled() },
             )
             .await;
             assert!(
                 enabled,
-                "ORIGIN_ENABLE_TEMPORAL_GROUNDING={value}: must be truthy"
+                "WENLAN_ENABLE_TEMPORAL_GROUNDING={value}: must be truthy"
             );
         }
         for value in ["0", "false", "no", "", "off"] {
             let enabled = temp_env::async_with_vars(
-                [("ORIGIN_ENABLE_TEMPORAL_GROUNDING", Some(value))],
+                [("WENLAN_ENABLE_TEMPORAL_GROUNDING", Some(value))],
                 async { temporal_grounding_enabled() },
             )
             .await;
             assert!(
                 !enabled,
-                "ORIGIN_ENABLE_TEMPORAL_GROUNDING={value}: must be falsey"
+                "WENLAN_ENABLE_TEMPORAL_GROUNDING={value}: must be falsey"
             );
         }
         // Unset = disabled.
         let enabled = temp_env::async_with_vars(
-            [("ORIGIN_ENABLE_TEMPORAL_GROUNDING", None::<&str>)],
+            [("WENLAN_ENABLE_TEMPORAL_GROUNDING", None::<&str>)],
             async { temporal_grounding_enabled() },
         )
         .await;
         assert!(
             !enabled,
-            "ORIGIN_ENABLE_TEMPORAL_GROUNDING unset must be disabled"
+            "WENLAN_ENABLE_TEMPORAL_GROUNDING unset must be disabled"
         );
     }
 
@@ -45541,7 +45541,7 @@ pub(crate) mod tests {
         let raw_content = "I met her yesterday and the review is tomorrow";
 
         temp_env::async_with_vars(
-            [("ORIGIN_ENABLE_TEMPORAL_GROUNDING", None::<&str>)],
+            [("WENLAN_ENABLE_TEMPORAL_GROUNDING", None::<&str>)],
             async {
                 db.upsert_documents(vec![make_memory_doc(
                     "tg_off_mem",
@@ -45587,7 +45587,7 @@ pub(crate) mod tests {
         );
         doc.last_modified = observation_ts;
 
-        temp_env::async_with_vars([("ORIGIN_ENABLE_TEMPORAL_GROUNDING", Some("1"))], async {
+        temp_env::async_with_vars([("WENLAN_ENABLE_TEMPORAL_GROUNDING", Some("1"))], async {
             db.upsert_documents(vec![doc]).await.unwrap();
         })
         .await;
@@ -45693,10 +45693,10 @@ pub(crate) mod tests {
         }
 
         // NOTE: this pins the flag to None (unset) only. A future flag-ON lib test
-        // mutating ORIGIN_ENABLE_INTENT_LLM truthy must serialize against other env
+        // mutating WENLAN_ENABLE_INTENT_LLM truthy must serialize against other env
         // tests via the process-local async lock pattern used by the PRF tests, since
         // temp_env mutates a process-global across .await points.
-        temp_env::async_with_vars([("ORIGIN_ENABLE_INTENT_LLM", None::<&str>)], async {
+        temp_env::async_with_vars([("WENLAN_ENABLE_INTENT_LLM", None::<&str>)], async {
             let tmp = tempfile::tempdir().unwrap();
             let db = MemoryDB::new(tmp.path(), std::sync::Arc::new(crate::events::NoopEmitter))
                 .await
@@ -45757,13 +45757,13 @@ pub(crate) mod tests {
     #[test]
     fn expand_temperature_reads_env_default_0_3() {
         // Unset -> default 0.3 (guard so the test is order-independent).
-        temp_env::with_var("ORIGIN_EXPAND_TEMP", None::<&str>, || {
+        temp_env::with_var("WENLAN_EXPAND_TEMP", None::<&str>, || {
             assert!((expand_temperature() - 0.3).abs() < 1e-6);
         });
-        temp_env::with_var("ORIGIN_EXPAND_TEMP", Some("0.0"), || {
+        temp_env::with_var("WENLAN_EXPAND_TEMP", Some("0.0"), || {
             assert!(expand_temperature().abs() < 1e-6);
         });
-        temp_env::with_var("ORIGIN_EXPAND_TEMP", Some("garbage"), || {
+        temp_env::with_var("WENLAN_EXPAND_TEMP", Some("garbage"), || {
             assert!((expand_temperature() - 0.3).abs() < 1e-6);
         });
     }
@@ -45771,23 +45771,23 @@ pub(crate) mod tests {
     #[test]
     fn plan_graph_stream_default_on_parser() {
         // default ON when unset
-        temp_env::with_var("ORIGIN_GRAPH_MEMORY_STREAM", None::<&str>, || {
+        temp_env::with_var("WENLAN_GRAPH_MEMORY_STREAM", None::<&str>, || {
             assert!(graph_memory_stream_enabled());
         });
         // explicit opt-out values: 0 / false / no / off (and whitespace/case variants)
         for v in ["0", "false", "no", "off", " 0 ", "FALSE", "OFF"] {
-            temp_env::with_var("ORIGIN_GRAPH_MEMORY_STREAM", Some(v), || {
+            temp_env::with_var("WENLAN_GRAPH_MEMORY_STREAM", Some(v), || {
                 assert!(!graph_memory_stream_enabled(), "{v:?} must disable");
             });
         }
         // truthy values still ON
         for v in ["1", "true", "yes"] {
-            temp_env::with_var("ORIGIN_GRAPH_MEMORY_STREAM", Some(v), || {
+            temp_env::with_var("WENLAN_GRAPH_MEMORY_STREAM", Some(v), || {
                 assert!(graph_memory_stream_enabled(), "{v:?} must enable");
             });
         }
         // Empty string -> ENABLED (not a recognized opt-out token).
-        temp_env::with_var("ORIGIN_GRAPH_MEMORY_STREAM", Some(""), || {
+        temp_env::with_var("WENLAN_GRAPH_MEMORY_STREAM", Some(""), || {
             assert!(
                 graph_memory_stream_enabled(),
                 "empty string is not a recognized opt-out token, must stay ENABLED"
@@ -45798,18 +45798,18 @@ pub(crate) mod tests {
     #[test]
     fn entity_sweep_enabled_defaults_on_and_opts_out() {
         // default ON when unset
-        temp_env::with_var("ORIGIN_ENABLE_ENTITY_SWEEP", None::<&str>, || {
+        temp_env::with_var("WENLAN_ENABLE_ENTITY_SWEEP", None::<&str>, || {
             assert!(entity_sweep_enabled());
         });
         // explicit opt-out values: 0 / false / no / off (and whitespace/case variants)
         for v in ["0", "false", "no", "off", " 0 ", "FALSE", "OFF"] {
-            temp_env::with_var("ORIGIN_ENABLE_ENTITY_SWEEP", Some(v), || {
+            temp_env::with_var("WENLAN_ENABLE_ENTITY_SWEEP", Some(v), || {
                 assert!(!entity_sweep_enabled(), "{v:?} must disable");
             });
         }
         // truthy and unrecognized values remain ON
         for v in ["1", "true", "yes", ""] {
-            temp_env::with_var("ORIGIN_ENABLE_ENTITY_SWEEP", Some(v), || {
+            temp_env::with_var("WENLAN_ENABLE_ENTITY_SWEEP", Some(v), || {
                 assert!(entity_sweep_enabled(), "{v:?} must stay enabled");
             });
         }

@@ -86,7 +86,7 @@ Set up the local Origin runtime:
 npx -y @7xuanlu/origin setup
 ```
 
-Then start with `~/.origin/bin/origin status`, `~/.origin/bin/origin recall <query>`, or `~/.origin/bin/origin store <text>`. CLI details: [crates/origin-cli](crates/origin-cli/README.md).
+Then start with `~/.origin/bin/origin status`, `~/.origin/bin/origin recall <query>`, or `~/.origin/bin/origin store <text>`. CLI details: [crates/wenlan-cli](crates/wenlan-cli/README.md).
 
 Service management:
 
@@ -170,7 +170,7 @@ which layer chose the active space.
 
 ## Evaluation
 
-**Hybrid retrieval, transparent eval.** BGE-Base-EN-v1.5-Q + FTS5 + Reciprocal Rank Fusion; local BGE-Reranker-Base cross-encoder rerank is the default path when enabled, with BGE-Reranker-V2-M3 available as a higher-quality option. The table below is retrieval-only, not end-to-end answer quality. ~168 tokens per recall query. Eval harness at [`crates/origin-core/src/eval/`](crates/origin-core/src/eval/). Run it yourself.
+**Hybrid retrieval, transparent eval.** BGE-Base-EN-v1.5-Q + FTS5 + Reciprocal Rank Fusion; local BGE-Reranker-Base cross-encoder rerank is the default path when enabled, with BGE-Reranker-V2-M3 available as a higher-quality option. The table below is retrieval-only, not end-to-end answer quality. ~168 tokens per recall query. Eval harness at [`crates/wenlan-core/src/eval/`](crates/wenlan-core/src/eval/). Run it yourself.
 
 Update workflow in [docs/eval](docs/eval/README.md).
 
@@ -192,10 +192,10 @@ Origin is daemon-first. `origin-server` owns the local database, embeddings, dis
 
 | Path                                                   | What lives there                                                                                                                                                                                           |
 | ------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| [crates/origin-core](crates/origin-core/README.md)     | Storage, search, embeddings, distill cycles, graph, pages, export, eval.                                                                                                                                   |
-| [crates/origin-server](crates/origin-server/README.md) | Local daemon and HTTP API.                                                                                                                                                                                 |
-| [crates/origin-mcp](crates/origin-mcp/README.md)       | MCP server, tools, npm package.                                                                                                                                                                            |
-| [crates/origin-cli](crates/origin-cli/README.md)       | User CLI for setup, service management, search, recall, store, list, agents, model/key setup, and doctor.                                                                                                  |
+| [crates/wenlan-core](crates/wenlan-core/README.md)     | Storage, search, embeddings, distill cycles, graph, pages, export, eval.                                                                                                                                   |
+| [crates/wenlan-server](crates/wenlan-server/README.md) | Local daemon and HTTP API.                                                                                                                                                                                 |
+| [crates/wenlan-mcp](crates/wenlan-mcp/README.md)       | MCP server, tools, npm package.                                                                                                                                                                            |
+| [crates/wenlan-cli](crates/wenlan-cli/README.md)       | User CLI for setup, service management, search, recall, store, list, agents, model/key setup, and doctor.                                                                                                  |
 | [plugin/](plugin/.claude-plugin/README.md)             | Claude Code plugin (`plugin.json`, skills, hooks, `.mcp.json`).                                                                                                                                           |
 | [docs/eval](docs/eval/README.md)                       | Benchmark workflow and methodology.                                                                                                                                                                        |
 

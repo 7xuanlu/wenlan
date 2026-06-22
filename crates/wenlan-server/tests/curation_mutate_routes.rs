@@ -10,8 +10,8 @@ mod common;
 
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
-use wenlan_types::{ContradictionDismissResponse, RevisionAcceptResponse, RevisionDismissResponse};
 use tower::ServiceExt;
+use wenlan_types::{ContradictionDismissResponse, RevisionAcceptResponse, RevisionDismissResponse};
 
 async fn body_as_json<T: serde::de::DeserializeOwned>(response: axum::http::Response<Body>) -> T {
     let bytes = axum::body::to_bytes(response.into_body(), 64 * 1024)

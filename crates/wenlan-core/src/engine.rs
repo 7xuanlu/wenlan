@@ -894,7 +894,7 @@ impl LlmEngine {
             .collect();
 
         // [validation instrumentation] prep/prime/prefill/decode wall-time split
-        // (gated by ORIGIN_BATCH_LOG; no behavior change). prep = tokenize + build
+        // (gated by WENLAN_BATCH_LOG; no behavior change). prep = tokenize + build
         // (CPU); prime = prefix-KV priming decode + per-slot copy (0 when the cache
         // is off); prefill = the first (initial-fill) decode; decode = the rest of
         // the generation loop, including backfill prefills.
@@ -1160,7 +1160,7 @@ impl LlmEngine {
         }
 
         // [validation instrumentation] prefill-vs-decode split per batch.
-        if std::env::var("ORIGIN_BATCH_LOG").is_ok() {
+        if std::env::var("WENLAN_BATCH_LOG").is_ok() {
             let decode_ms = gen_start.elapsed().as_millis();
             let out_tok: i32 = tokens_generated.iter().sum();
             eprintln!(
@@ -1661,14 +1661,14 @@ pub(crate) fn truncate_at_word_boundary(text: &str, max_chars: usize) -> &str {
 // ponytail: fixed floor; promote to a flag only if a real workload wants tuning.
 const PREFIX_KV_MIN_TOKENS: usize = 32;
 
-/// Prefill-side prefix-KV cache (`ORIGIN_LLM_PREFIX_KV_CACHE`). OFF by default
+/// Prefill-side prefix-KV cache (`WENLAN_LLM_PREFIX_KV_CACHE`). OFF by default
 /// (opt-in; enable with `1`/`true`/`yes`/`on`). When ON, a continuous batch
 /// primes its shared instruction-template prefix once and fans that KV out to
 /// every sequence slot, so each request prefills only its unique suffix. Default
 /// OFF for the same reason as slot backfill: it mutates the shared on-device
 /// inference path's KV handling, which CI cannot validate on Metal.
 fn prefix_kv_cache_enabled() -> bool {
-    match std::env::var("ORIGIN_LLM_PREFIX_KV_CACHE") {
+    match std::env::var("WENLAN_LLM_PREFIX_KV_CACHE") {
         Ok(v) => matches!(
             v.trim().to_ascii_lowercase().as_str(),
             "1" | "true" | "yes" | "on"
@@ -1680,7 +1680,7 @@ fn prefix_kv_cache_enabled() -> bool {
 /// Length of the longest leading token run shared by EVERY sequence in `seqs`.
 /// 0 for an empty input or whenever any member is empty. Pure; generic over
 /// `T: PartialEq` so the engine calls it over `&[LlamaToken]` while the unit
-/// tests use `&[i32]`. Underpins the prefix-KV cache (`ORIGIN_LLM_PREFIX_KV_CACHE`).
+/// tests use `&[i32]`. Underpins the prefix-KV cache (`WENLAN_LLM_PREFIX_KV_CACHE`).
 fn longest_common_prefix_len<T: PartialEq>(seqs: &[&[T]]) -> usize {
     let Some((first, rest)) = seqs.split_first() else {
         return 0;
@@ -2069,7 +2069,7 @@ mod tests {
         assert_eq!(extract_json_array(text), None);
     }
 
-    // ---- prefix-KV cache: pure prefix-length seam (ORIGIN_LLM_PREFIX_KV_CACHE) ----
+    // ---- prefix-KV cache: pure prefix-length seam (WENLAN_LLM_PREFIX_KV_CACHE) ----
     // GPU-free unit tests over plain i32 token ids. The same fns run over
     // `&[LlamaToken]` in the engine (LlamaToken: Copy + PartialEq).
 

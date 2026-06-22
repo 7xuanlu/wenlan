@@ -14,7 +14,7 @@ use tower_http::cors::CorsLayer;
 
 use crate::auth;
 use crate::client::WenlanClient;
-use crate::tools::{WenlanMcpServer, TransportMode};
+use crate::tools::{TransportMode, WenlanMcpServer};
 
 #[derive(Debug, Clone)]
 pub struct ServeConfig {

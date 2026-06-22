@@ -34,11 +34,11 @@ mod common;
 
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
+use std::sync::Arc;
+use tower::ServiceExt;
 use wenlan_core::db::MemoryDB;
 use wenlan_core::sources::RawDocument;
 use wenlan_types::responses::ChatContextResponse;
-use std::sync::Arc;
-use tower::ServiceExt;
 
 const TEST_AGENT: &str = "test-e2e-space-filter";
 

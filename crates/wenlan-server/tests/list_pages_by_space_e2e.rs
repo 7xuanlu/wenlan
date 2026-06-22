@@ -9,9 +9,9 @@ mod common;
 
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
-use wenlan_types::pages::Page;
 use serde::Deserialize;
 use tower::ServiceExt;
+use wenlan_types::pages::Page;
 
 #[derive(Debug, Deserialize)]
 struct ListPagesResponse {

@@ -5,6 +5,7 @@
 //! origin-core, origin-server, and the Tauri app. Dependencies are
 //! limited to serde and serde_json -- no heavy runtime deps.
 
+pub mod brand;
 pub mod briefing;
 pub mod entities;
 pub mod events;

@@ -92,8 +92,8 @@ Three sibling subdirs live alongside `data/` and are tracked in git:
 app/eval/baselines/<benchmark>__<retrieval_method>__<hash>.json
 ```
 
-Used by README citations and external references. Written by `report.save_baseline(&baseline_path)`. The `save_locomo_v2_with_pages_baseline` and `save_longmemeval_v2_with_pages_baseline` tests branch the filename suffix on `ORIGIN_ENABLE_PAGE_CHANNEL`:
-- page-channel ON (`ORIGIN_ENABLE_PAGE_CHANNEL=1`): `...__with_pages.json`
+Used by README citations and external references. Written by `report.save_baseline(&baseline_path)`. The `save_locomo_v2_with_pages_baseline` and `save_longmemeval_v2_with_pages_baseline` tests branch the filename suffix on `WENLAN_ENABLE_PAGE_CHANNEL`:
+- page-channel ON (`WENLAN_ENABLE_PAGE_CHANNEL=1`): `...__with_pages.json`
 - page-channel OFF (default, unset): `...__no_pages.json`
 
 ### Layered path (P0b schema, for compare-baselines)
@@ -125,8 +125,8 @@ Exception: `save_locomo_cross_rerank_baseline` and `save_longmemeval_cross_reran
 | `EVAL_MAX_USD` | Cost cap for API-batch judge runs (pre-flight and per-batch) | none | `anthropic.rs` (`parse_eval_max_usd`, `submit_batch`, `estimate_batch_cost`) |
 | `EVAL_MAX_WALL_SECS` | Wall-clock timeout for eval runs | 14400 (4h) | `wall_clock.rs` watchdog |
 | `EVAL_ALLOW_WIPE` | Allow `clear_all_for_eval` to wipe DB | unset (refuses) | `open_or_seed_scenario_db` stale-cache recovery |
-| `ORIGIN_ENABLE_PAGE_CHANNEL` | Enable page-channel in `search_memory_with_reranker` | unset (page-channel OFF) | `db.rs:search_memory_with_reranker`, `locomo.rs:run_locomo_eval_cross_rerank_from_db`, `longmemeval.rs:run_longmemeval_eval_cross_rerank_from_db`, suffix branching in `eval_harness.rs` |
-| `ORIGIN_EVAL_ROOT` | Override `eval_root()` in test harness | `app/eval/` | `eval_root()` in `eval_harness.rs` |
+| `WENLAN_ENABLE_PAGE_CHANNEL` | Enable page-channel in `search_memory_with_reranker` | unset (page-channel OFF) | `db.rs:search_memory_with_reranker`, `locomo.rs:run_locomo_eval_cross_rerank_from_db`, `longmemeval.rs:run_longmemeval_eval_cross_rerank_from_db`, suffix branching in `eval_harness.rs` |
+| `WENLAN_EVAL_ROOT` | Override `eval_root()` in test harness | `app/eval/` | `eval_root()` in `eval_harness.rs` |
 
 ---
 
@@ -151,7 +151,7 @@ Sources: `~/.cache/origin-eval/fullpipeline_locomo_tuples.db/origin_memory.db` a
 
 ### cached_scenario_db_check.rs
 
-`crates/origin-core/tests/cached_scenario_db_check.rs` (L7 manual, `--ignored`) opens each scenario DB via `MemoryDB::new`, which replays migrations idempotently, then prints table counts and 3 sample pages per DB. Root resolution: `SCENARIO_DB_ROOT > EVAL_BASELINES_DIR/scenario_seeded > ~/.cache/origin-eval/scenario_seeded/`.
+`crates/wenlan-core/tests/cached_scenario_db_check.rs` (L7 manual, `--ignored`) opens each scenario DB via `MemoryDB::new`, which replays migrations idempotently, then prints table counts and 3 sample pages per DB. Root resolution: `SCENARIO_DB_ROOT > EVAL_BASELINES_DIR/scenario_seeded > ~/.cache/origin-eval/scenario_seeded/`.
 
 Run with:
 
@@ -165,7 +165,7 @@ cargo test -p origin-core --test cached_scenario_db_check -- --ignored --nocaptu
 
 Numbers from `~/.cache/origin-eval/baselines/` carry guardrails that MUST be honored when citing them externally (Reddit, HN, Karpathy gist, vendor decks, README, blog).
 
-- **Default run policy (lenient + N=1).** Routine/iteration evals default to **N=1 with the lenient judge** (`strict_batch_judge_prompt`'s default branch — field-standard, matches the official LongMemEval `evaluate_qa.py` judge and every benchmarked peer). These are **directional only**: fast feedback for "did this move the needle", never cited externally (the Single-run rule below still binds). The **strict, citable path is explicit and opt-in**: set `ORIGIN_EVAL_JUDGE_STRICT=1` **and** run **N≥3 + stddev**. So lenient/N=1 = working number; strict/N≥3 = headline number. Rationale: on byte-identical answers the judge alone swings ±7–13pp at N=1 (noise run 2026-06-15: strict 61.3% vs lenient 68.7% on 60Q), so a single run is signal-for-iteration, not evidence-for-claims.
+- **Default run policy (lenient + N=1).** Routine/iteration evals default to **N=1 with the lenient judge** (`strict_batch_judge_prompt`'s default branch — field-standard, matches the official LongMemEval `evaluate_qa.py` judge and every benchmarked peer). These are **directional only**: fast feedback for "did this move the needle", never cited externally (the Single-run rule below still binds). The **strict, citable path is explicit and opt-in**: set `WENLAN_EVAL_JUDGE_STRICT=1` **and** run **N≥3 + stddev**. So lenient/N=1 = working number; strict/N≥3 = headline number. Rationale: on byte-identical answers the judge alone swings ±7–13pp at N=1 (noise run 2026-06-15: strict 61.3% vs lenient 68.7% on 60Q), so a single run is signal-for-iteration, not evidence-for-claims.
 - **Single-run rule.** Any baseline with `env.is_single_run = true` MUST NOT be cited externally. Internal team references are fine but must be flagged "single-run, treat as scaffold." Full citation requires the P1.5 multi-run protocol (mean ± stddev over ≥3 runs, ideally 10).
 - **Schema-version rule.** Cross-`env.schema_version` comparisons are refused by `compare-baselines` (exit code 2). Public claims that compare numbers across schema versions MUST regenerate both sides via current `save_*_baseline` tests.
 - **Receipt-only rule (extends cost-receipt).** Regression thresholds, latency claims, accuracy improvements must have a measured-stddev or N≥3-run backing. No "improved X%" or "regressed Y%" without `compare-baselines` output AND multi-run inputs.
@@ -196,7 +196,7 @@ Page-channel impact is measured by running the same test twice:
 
 ```bash
 # page-channel ON (opt-in):
-ORIGIN_ENABLE_PAGE_CHANNEL=1 cargo test -p origin-core --test eval_harness save_locomo_v2_with_pages_baseline -- --ignored --nocapture
+WENLAN_ENABLE_PAGE_CHANNEL=1 cargo test -p origin-core --test eval_harness save_locomo_v2_with_pages_baseline -- --ignored --nocapture
 
 # page-channel OFF (default):
 cargo test -p origin-core --test eval_harness save_locomo_v2_with_pages_baseline -- --ignored --nocapture

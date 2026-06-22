@@ -2,7 +2,7 @@
 //! Deterministic entity-name near-dedup primitives (T16, R13).
 //!
 //! Pure, LLM-free helpers used by the opt-in entity-resolution cascade
-//! (`ORIGIN_ENABLE_ENTITY_MINHASH`). Catch near-duplicate entity names
+//! (`WENLAN_ENABLE_ENTITY_MINHASH`). Catch near-duplicate entity names
 //! ("PostgreSQL"/"Postgres") at entity-creation time via char-shingle
 //! MinHash/LSH banding + an exact Jaccard confirmation, gated by a Shannon-
 //! entropy filter that punts short/low-entropy names (3-char acronyms) back to

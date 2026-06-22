@@ -1150,7 +1150,7 @@ struct PendingAnswer {
 const E2E_SYSTEM_PROMPT: &str =
     "Answer the question using only the provided context. Be specific and concise. Respond in 1-3 sentences.";
 
-/// V2 answer prompt, opt-in via `ORIGIN_EVAL_ANSWER_PROMPT_V2`. Two changes over v1:
+/// V2 answer prompt, opt-in via `WENLAN_EVAL_ANSWER_PROMPT_V2`. Two changes over v1:
 /// (a) license a concrete preference-aligned recommendation instead of abstaining,
 /// (b) work dates step by step for temporal reasoning. Paired with a larger token
 /// budget (see `e2e_max_answer_tokens`) so the chain-of-thought has room. Default OFF
@@ -1166,7 +1166,7 @@ const E2E_SYSTEM_PROMPT_V2: &str =
 /// Opt-in gate for the v2 answer prompt. Default OFF (v1). Accepts 1/true/yes/on.
 fn e2e_answer_prompt_v2_enabled() -> bool {
     matches!(
-        std::env::var("ORIGIN_EVAL_ANSWER_PROMPT_V2")
+        std::env::var("WENLAN_EVAL_ANSWER_PROMPT_V2")
             .ok()
             .as_deref(),
         Some("1") | Some("true") | Some("yes") | Some("on")
@@ -1196,7 +1196,7 @@ fn e2e_max_answer_tokens() -> usize {
 /// - `Quick`: existing `search_memory` quick path (unchanged behavior, graph stream ON).
 /// - `CrossRerank(r)`: `search_memory_cross_rerank`; `r=None` disables the CE while
 ///   still routing through cross_rerank so P3 distill-demotion is symmetric across arms.
-///   Pass `ORIGIN_GRAPH_MEMORY_STREAM=0` to suppress the stream on the None arm.
+///   Pass `WENLAN_GRAPH_MEMORY_STREAM=0` to suppress the stream on the None arm.
 pub(crate) enum CtxRetrieval {
     Quick,
     CrossRerank(Option<Arc<dyn crate::reranker::Reranker>>),
@@ -2914,7 +2914,7 @@ pub enum DbSource {
 ///
 /// **FAIR design**: all arms route through `search_memory_cross_rerank` so
 /// P3 distill-demotion is symmetric, and the caller MUST set
-/// `ORIGIN_GRAPH_MEMORY_STREAM=0` (enforced at entry) so the OFF arm
+/// `WENLAN_GRAPH_MEMORY_STREAM=0` (enforced at entry) so the OFF arm
 /// (reranker=None) does not re-enable the graph stream that the ON arm
 /// (reranker=Some) suppresses — without this, the A/B measures
 /// graph-stream vs CE, not CE alone.
@@ -2940,7 +2940,7 @@ pub enum DbSource {
 ///
 /// # Errors
 ///
-/// Returns `Err` immediately if `ORIGIN_GRAPH_MEMORY_STREAM` is not one of
+/// Returns `Err` immediately if `WENLAN_GRAPH_MEMORY_STREAM` is not one of
 /// "0"/"false"/"no"/"off" — the A/B is statistically invalid without it.
 pub async fn run_fullpipeline_lme(
     longmemeval_path: &std::path::Path,
@@ -2969,19 +2969,19 @@ pub async fn run_fullpipeline_lme(
     if arms.needs_confounder_isolation() {
         let confounders: [(&str, bool); 4] = [
             (
-                "ORIGIN_GRAPH_MEMORY_STREAM",
+                "WENLAN_GRAPH_MEMORY_STREAM",
                 crate::db::graph_memory_stream_enabled(),
             ),
             (
-                "ORIGIN_RERANK_SKIP_PREFERENCE",
+                "WENLAN_RERANK_SKIP_PREFERENCE",
                 crate::db::rerank_skip_preference_enabled(),
             ),
             (
-                "ORIGIN_ENABLE_TEMPORAL_SOFT_BOOST",
+                "WENLAN_ENABLE_TEMPORAL_SOFT_BOOST",
                 crate::db::temporal_soft_boost_enabled(),
             ),
             (
-                "ORIGIN_ENABLE_TEMPORAL_FILTER",
+                "WENLAN_ENABLE_TEMPORAL_FILTER",
                 crate::db::temporal_filter_enabled(),
             ),
         ];
@@ -3622,21 +3622,21 @@ mod tests {
     #[test]
     fn answer_prompt_v2_gate_default_off_byte_identical() {
         // Save/restore the env so we don't poison other tests.
-        let prev = std::env::var("ORIGIN_EVAL_ANSWER_PROMPT_V2").ok();
-        std::env::remove_var("ORIGIN_EVAL_ANSWER_PROMPT_V2");
+        let prev = std::env::var("WENLAN_EVAL_ANSWER_PROMPT_V2").ok();
+        std::env::remove_var("WENLAN_EVAL_ANSWER_PROMPT_V2");
         assert!(!e2e_answer_prompt_v2_enabled());
         assert_eq!(e2e_system_prompt(), E2E_SYSTEM_PROMPT);
         assert_eq!(e2e_max_answer_tokens(), 200);
 
-        std::env::set_var("ORIGIN_EVAL_ANSWER_PROMPT_V2", "1");
+        std::env::set_var("WENLAN_EVAL_ANSWER_PROMPT_V2", "1");
         assert!(e2e_answer_prompt_v2_enabled());
         assert_eq!(e2e_system_prompt(), E2E_SYSTEM_PROMPT_V2);
         assert_eq!(e2e_max_answer_tokens(), 512);
 
         // restore
         match prev {
-            Some(v) => std::env::set_var("ORIGIN_EVAL_ANSWER_PROMPT_V2", v),
-            None => std::env::remove_var("ORIGIN_EVAL_ANSWER_PROMPT_V2"),
+            Some(v) => std::env::set_var("WENLAN_EVAL_ANSWER_PROMPT_V2", v),
+            None => std::env::remove_var("WENLAN_EVAL_ANSWER_PROMPT_V2"),
         }
     }
 

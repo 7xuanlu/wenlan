@@ -34,18 +34,18 @@ use crate::llm_provider::{LlmProvider, LlmRequest};
 use crate::tuning::ContextCompressConfig;
 use std::sync::Arc;
 
-/// True iff `ORIGIN_ENABLE_CONTEXT_COMPRESS` is set to a truthy value
+/// True iff `WENLAN_ENABLE_CONTEXT_COMPRESS` is set to a truthy value
 /// (`1`, `true`, or `yes`, case-insensitive, trimmed). Context compression is
 /// OPT-IN: unset or a falsey value (`0`/`false`/`no`/"") leaves it disabled.
 ///
 /// Master gate for the feature. All call sites (production read path + eval
 /// harness baseline tagging) MUST share this helper so an
-/// `ORIGIN_ENABLE_CONTEXT_COMPRESS` setting can't disagree between production
+/// `WENLAN_ENABLE_CONTEXT_COMPRESS` setting can't disagree between production
 /// and eval (which would make baseline filenames lie about their contents —
 /// see AGENTS.md Eval Citation Discipline). Truthy-only parse (not `is_ok()`),
 /// mirroring `page_channel_enabled` exactly.
 pub fn context_compress_enabled() -> bool {
-    std::env::var("ORIGIN_ENABLE_CONTEXT_COMPRESS")
+    std::env::var("WENLAN_ENABLE_CONTEXT_COMPRESS")
         .ok()
         .map(|v| matches!(v.trim().to_ascii_lowercase().as_str(), "1" | "true" | "yes"))
         .unwrap_or(false)
@@ -254,18 +254,18 @@ mod tests {
     #[test]
     fn context_compress_enabled_truthy_values() {
         for v in ["1", "true", "TRUE", "yes", "YES", "  true  "] {
-            let on = temp_env::with_var("ORIGIN_ENABLE_CONTEXT_COMPRESS", Some(v), || {
+            let on = temp_env::with_var("WENLAN_ENABLE_CONTEXT_COMPRESS", Some(v), || {
                 context_compress_enabled()
             });
             assert!(on, "expected enabled for {v:?}");
         }
         for v in ["0", "false", "no", "", "garbage"] {
-            let off = temp_env::with_var("ORIGIN_ENABLE_CONTEXT_COMPRESS", Some(v), || {
+            let off = temp_env::with_var("WENLAN_ENABLE_CONTEXT_COMPRESS", Some(v), || {
                 context_compress_enabled()
             });
             assert!(!off, "expected disabled for {v:?}");
         }
-        let unset = temp_env::with_var("ORIGIN_ENABLE_CONTEXT_COMPRESS", None::<&str>, || {
+        let unset = temp_env::with_var("WENLAN_ENABLE_CONTEXT_COMPRESS", None::<&str>, || {
             context_compress_enabled()
         });
         assert!(!unset, "unset must be disabled");
@@ -417,7 +417,7 @@ mod tests {
         // default, and that even if the call were reached, a disabled tuning
         // config returns the verbatim bundle (no behavior change default-OFF).
         let disabled_by_env =
-            temp_env::with_var("ORIGIN_ENABLE_CONTEXT_COMPRESS", None::<&str>, || {
+            temp_env::with_var("WENLAN_ENABLE_CONTEXT_COMPRESS", None::<&str>, || {
                 context_compress_enabled()
             });
         assert!(!disabled_by_env, "env gate must default OFF");

@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Quick probe: run a single CLASSIFY_MEMORY prompt against a model and print RAW output.
 
-use wenlan_core::engine::LlmEngine;
-use wenlan_core::prompts::PromptRegistry;
 use std::path::PathBuf;
 use std::time::Instant;
+use wenlan_core::engine::LlmEngine;
+use wenlan_core::prompts::PromptRegistry;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     env_logger::init();

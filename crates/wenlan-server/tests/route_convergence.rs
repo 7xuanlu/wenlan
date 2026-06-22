@@ -14,13 +14,13 @@
 
 use axum::body::Body;
 use axum::http::{header, Method, Request, StatusCode};
+use std::sync::Arc;
+use tokio::sync::RwLock;
+use tower::ServiceExt;
 use wenlan_core::db::MemoryDB;
 use wenlan_core::events::NoopEmitter;
 use wenlan_server::router::build_router;
 use wenlan_server::state::ServerState;
-use std::sync::Arc;
-use tokio::sync::RwLock;
-use tower::ServiceExt;
 
 async fn test_app() -> (axum::Router, tempfile::TempDir) {
     let dir = tempfile::tempdir().unwrap();

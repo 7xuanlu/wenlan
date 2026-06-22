@@ -189,7 +189,7 @@ impl Reranker for CrossEncoderReranker {
     }
 }
 
-/// Resolve the cross-encoder model from `ORIGIN_RERANKER_MODEL`. Default (unset
+/// Resolve the cross-encoder model from `WENLAN_RERANKER_MODEL`. Default (unset
 /// or unrecognized) is `BGERerankerBase` since 2026-06-11: on the LME paired
 /// sweep (PR #260, scaffold N=1) it kept 94% of BGE-v2-m3's NDCG lift
 /// (+0.1058 vs +0.1130 agg, both BH-sig) at 29% of its marginal P50 cost
@@ -206,13 +206,13 @@ impl Reranker for CrossEncoderReranker {
 /// reranker produced them.
 fn reranker_model_from_env() -> fastembed::RerankerModel {
     use fastembed::RerankerModel::{BGERerankerBase, BGERerankerV2M3, JINARerankerV1TurboEn};
-    let raw = std::env::var("ORIGIN_RERANKER_MODEL").unwrap_or_default();
+    let raw = std::env::var("WENLAN_RERANKER_MODEL").unwrap_or_default();
     match raw.trim().to_ascii_lowercase().as_str() {
         "turbo" | "jina-turbo" | "jina" => JINARerankerV1TurboEn,
         "" | "bge-base" => BGERerankerBase,
         "bge" | "bge-v2-m3" => BGERerankerV2M3,
         other => {
-            log::warn!("[reranker] unknown ORIGIN_RERANKER_MODEL={other:?}; using BGERerankerBase");
+            log::warn!("[reranker] unknown WENLAN_RERANKER_MODEL={other:?}; using BGERerankerBase");
             BGERerankerBase
         }
     }
@@ -230,12 +230,12 @@ fn reranker_model_from_env() -> fastembed::RerankerModel {
 pub fn init_cross_encoder_reranker(
     cache_dir: Option<std::path::PathBuf>,
 ) -> Result<Arc<dyn Reranker>, WenlanError> {
-    // BYO opt-in: load a local ONNX cross-encoder from ORIGIN_RERANKER_ONNX_DIR,
+    // BYO opt-in: load a local ONNX cross-encoder from WENLAN_RERANKER_ONNX_DIR,
     // bypassing the hf-hub downloader for Xet-backed models it can't fetch. Unset
     // (the production default) keeps the enum download path below.
-    if let Ok(dir) = std::env::var("ORIGIN_RERANKER_ONNX_DIR") {
+    if let Ok(dir) = std::env::var("WENLAN_RERANKER_ONNX_DIR") {
         let dir = std::path::PathBuf::from(dir);
-        let model_id = std::env::var("ORIGIN_RERANKER_MODEL_ID").unwrap_or_else(|_| {
+        let model_id = std::env::var("WENLAN_RERANKER_MODEL_ID").unwrap_or_else(|_| {
             dir.file_name()
                 .map(|s| s.to_string_lossy().into_owned())
                 .unwrap_or_else(|| "user-defined".to_string())
@@ -292,7 +292,7 @@ mod tests {
 
     #[test]
     fn reranker_model_env_default_is_bge_base() {
-        temp_env::with_var("ORIGIN_RERANKER_MODEL", None::<&str>, || {
+        temp_env::with_var("WENLAN_RERANKER_MODEL", None::<&str>, || {
             assert!(matches!(
                 reranker_model_from_env(),
                 fastembed::RerankerModel::BGERerankerBase
@@ -303,7 +303,7 @@ mod tests {
     #[test]
     fn reranker_model_env_turbo_selects_jina() {
         for v in ["turbo", "jina-turbo", "JINA", "Turbo"] {
-            temp_env::with_var("ORIGIN_RERANKER_MODEL", Some(v), || {
+            temp_env::with_var("WENLAN_RERANKER_MODEL", Some(v), || {
                 assert!(
                     matches!(
                         reranker_model_from_env(),
@@ -324,7 +324,7 @@ mod tests {
             ("BGE-V2-M3", true),
             ("bge-base", false),
         ] {
-            temp_env::with_var("ORIGIN_RERANKER_MODEL", Some(v), || {
+            temp_env::with_var("WENLAN_RERANKER_MODEL", Some(v), || {
                 let got = reranker_model_from_env();
                 if want_v2m3 {
                     assert!(
@@ -343,7 +343,7 @@ mod tests {
 
     #[test]
     fn reranker_model_env_unknown_falls_back_to_default() {
-        temp_env::with_var("ORIGIN_RERANKER_MODEL", Some("nonsense"), || {
+        temp_env::with_var("WENLAN_RERANKER_MODEL", Some("nonsense"), || {
             assert!(matches!(
                 reranker_model_from_env(),
                 fastembed::RerankerModel::BGERerankerBase

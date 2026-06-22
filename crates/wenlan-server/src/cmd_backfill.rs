@@ -8,11 +8,11 @@
 //! `page_sources` rows are deleted automatically via ON DELETE CASCADE.
 
 use anyhow::{anyhow, Context, Result};
-use wenlan_core::db::MemoryDB;
-use wenlan_core::events::NoopEmitter;
 use std::io::{self, Write};
 use std::sync::Arc;
 use std::time::Duration;
+use wenlan_core::db::MemoryDB;
+use wenlan_core::events::NoopEmitter;
 
 const DAEMON_PROBE_TIMEOUT: Duration = Duration::from_millis(500);
 
@@ -30,7 +30,7 @@ pub async fn run(dry_run: bool) -> anyhow::Result<()> {
 
     // Step 2: open the DB directly (not via daemon).
     // Mirrors the path computation in `run_daemon()` in main.rs.
-    let origin_root = std::env::var_os("ORIGIN_DATA_DIR")
+    let origin_root = std::env::var_os("WENLAN_DATA_DIR")
         .map(std::path::PathBuf::from)
         .unwrap_or_else(|| {
             dirs::data_local_dir()
@@ -189,7 +189,7 @@ fn check_service_unloaded() -> Result<()> {
 
 async fn check_daemon_not_running() -> Result<()> {
     // Mirror the port-reading logic from cmd_status in main.rs.
-    let port: u16 = std::env::var("ORIGIN_PORT")
+    let port: u16 = std::env::var("WENLAN_PORT")
         .ok()
         .and_then(|v| v.parse().ok())
         .unwrap_or(7878);

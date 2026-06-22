@@ -1601,7 +1601,7 @@ mod tests {
         let prompts = PromptRegistry::default();
         // Flag unset -> no-op.
         let outcome =
-            temp_env::async_with_vars([("ORIGIN_ENABLE_DUAL_POOL_RESOLVE", None::<&str>)], async {
+            temp_env::async_with_vars([("WENLAN_ENABLE_DUAL_POOL_RESOLVE", None::<&str>)], async {
                 resolve_dual_pool(&db, "mem_x", Some(&llm), &prompts, &dyn_em)
                     .await
                     .unwrap()
@@ -1635,7 +1635,7 @@ mod tests {
         let prompts = PromptRegistry::default();
         let dyn_em = noop_emitter();
         let outcome =
-            temp_env::async_with_vars([("ORIGIN_ENABLE_DUAL_POOL_RESOLVE", Some("1"))], async {
+            temp_env::async_with_vars([("WENLAN_ENABLE_DUAL_POOL_RESOLVE", Some("1"))], async {
                 resolve_dual_pool(&db, "mem_x", None, &prompts, &dyn_em)
                     .await
                     .unwrap()
@@ -1665,7 +1665,7 @@ mod tests {
         let prompts = PromptRegistry::default();
         let dyn_em = noop_emitter();
         let outcome =
-            temp_env::async_with_vars([("ORIGIN_ENABLE_DUAL_POOL_RESOLVE", Some("1"))], async {
+            temp_env::async_with_vars([("WENLAN_ENABLE_DUAL_POOL_RESOLVE", Some("1"))], async {
                 resolve_dual_pool(&db, "mem_solo", Some(&llm), &prompts, &dyn_em)
                     .await
                     .unwrap()
@@ -1733,7 +1733,7 @@ mod tests {
         let emitter = Arc::new(RecordingEmitter::new());
         let dyn_em: Arc<dyn EventEmitter> = emitter.clone();
         let outcome =
-            temp_env::async_with_vars([("ORIGIN_ENABLE_DUAL_POOL_RESOLVE", Some("1"))], async {
+            temp_env::async_with_vars([("WENLAN_ENABLE_DUAL_POOL_RESOLVE", Some("1"))], async {
                 resolve_dual_pool(&db, "mem_new", Some(&llm), &prompts, &dyn_em)
                     .await
                     .unwrap()
@@ -1819,7 +1819,7 @@ mod tests {
         let prompts = PromptRegistry::default();
         let dyn_em = noop_emitter();
         let outcome =
-            temp_env::async_with_vars([("ORIGIN_ENABLE_DUAL_POOL_RESOLVE", Some("1"))], async {
+            temp_env::async_with_vars([("WENLAN_ENABLE_DUAL_POOL_RESOLVE", Some("1"))], async {
                 resolve_dual_pool(&db, "mem_incoming", Some(&llm), &prompts, &dyn_em)
                     .await
                     .unwrap()
@@ -1892,7 +1892,7 @@ mod tests {
         let prompts = PromptRegistry::default();
         let dyn_em = noop_emitter();
         let outcome =
-            temp_env::async_with_vars([("ORIGIN_ENABLE_DUAL_POOL_RESOLVE", Some("1"))], async {
+            temp_env::async_with_vars([("WENLAN_ENABLE_DUAL_POOL_RESOLVE", Some("1"))], async {
                 resolve_dual_pool(&db, "mem_inc", Some(&llm), &prompts, &dyn_em)
                     .await
                     .unwrap()
@@ -1970,7 +1970,7 @@ mod tests {
         let dyn_em = noop_emitter();
         let before = row_count(&db).await;
         let outcome =
-            temp_env::async_with_vars([("ORIGIN_ENABLE_DUAL_POOL_RESOLVE", Some("1"))], async {
+            temp_env::async_with_vars([("WENLAN_ENABLE_DUAL_POOL_RESOLVE", Some("1"))], async {
                 resolve_dual_pool(&db, "mem_inc", Some(&llm), &prompts, &dyn_em)
                     .await
                     .unwrap()
@@ -2031,7 +2031,7 @@ mod tests {
         let dyn_em: Arc<dyn EventEmitter> = emitter.clone();
         let before = row_count(&db).await;
         let outcome =
-            temp_env::async_with_vars([("ORIGIN_ENABLE_DUAL_POOL_RESOLVE", Some("1"))], async {
+            temp_env::async_with_vars([("WENLAN_ENABLE_DUAL_POOL_RESOLVE", Some("1"))], async {
                 resolve_dual_pool(&db, "mem_new", Some(&llm), &prompts, &dyn_em)
                     .await
                     .unwrap()
@@ -2084,7 +2084,7 @@ mod tests {
         let prompts = PromptRegistry::default();
         let dyn_em = noop_emitter();
         let outcome =
-            temp_env::async_with_vars([("ORIGIN_ENABLE_DUAL_POOL_RESOLVE", Some("1"))], async {
+            temp_env::async_with_vars([("WENLAN_ENABLE_DUAL_POOL_RESOLVE", Some("1"))], async {
                 resolve_dual_pool(&db, "mem_new", Some(&llm), &prompts, &dyn_em)
                     .await
                     .unwrap()
@@ -2239,7 +2239,7 @@ mod tests {
         let prompts = PromptRegistry::default();
         let dyn_em = noop_emitter();
         let outcome =
-            temp_env::async_with_vars([("ORIGIN_ENABLE_DUAL_POOL_RESOLVE", Some("1"))], async {
+            temp_env::async_with_vars([("WENLAN_ENABLE_DUAL_POOL_RESOLVE", Some("1"))], async {
                 resolve_dual_pool(&db, "mem_inc", Some(&llm), &prompts, &dyn_em)
                     .await
                     .unwrap()

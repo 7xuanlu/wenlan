@@ -6,10 +6,10 @@
 //! - Memories tagged with space=B are excluded when filter=A.
 //! - The special filter value "uncategorized" matches rows where space IS NULL.
 
+use std::sync::Arc;
 use wenlan_core::db::MemoryDB;
 use wenlan_core::sources::RawDocument;
 use wenlan_core::{EventEmitter, NoopEmitter};
-use std::sync::Arc;
 
 async fn make_db() -> (Arc<MemoryDB>, tempfile::TempDir) {
     let dir = tempfile::tempdir().expect("tempdir");

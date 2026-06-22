@@ -45,7 +45,7 @@ pub struct SearchMemoryRequest {
     #[serde(default)]
     pub source_agent: Option<String>,
     /// When `true` AND the daemon has a reranker wired (via
-    /// `ORIGIN_RERANKER_ENABLED=1`), results pass through a cross-encoder
+    /// `WENLAN_RERANKER_ENABLED=1`), results pass through a cross-encoder
     /// reranker after the embedding+FTS hybrid step. When `true` but no
     /// reranker is available, the daemon logs a warning and falls back to
     /// the plain hybrid ordering. Default `false` to preserve current

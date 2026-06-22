@@ -22,7 +22,7 @@ use crate::db::SearchResult;
 /// sweep the value without a recompile.
 const FACT_CHANNEL_LIMIT_DEFAULT: usize = 20;
 
-/// True iff `ORIGIN_ENABLE_FACT_CHANNEL` is set to a truthy value
+/// True iff `WENLAN_ENABLE_FACT_CHANNEL` is set to a truthy value
 /// (`1`, `true`, or `yes`, case-insensitive). The fact-channel is OPT-IN
 /// (master write+read switch): unset or a falsey value (`0`/`false`/`no`/"")
 /// leaves it disabled, so behaviour is byte-identical to pre-T15a.
@@ -30,7 +30,7 @@ const FACT_CHANNEL_LIMIT_DEFAULT: usize = 20;
 /// The WRITE side (child-vector co-write in `upsert_documents`) and the READ
 /// side (`search_facts_channel` inside `search_memory_cross_rerank`) both gate
 /// on this single helper, and the eval harness reads it too -- so an
-/// `ORIGIN_ENABLE_FACT_CHANNEL` setting can't disagree between production and
+/// `WENLAN_ENABLE_FACT_CHANNEL` setting can't disagree between production and
 /// eval (which would make baseline filenames lie). Truthy-only parse, mirrors
 /// `page_channel_enabled`.
 ///
@@ -40,17 +40,17 @@ const FACT_CHANNEL_LIMIT_DEFAULT: usize = 20;
 /// turn-it-on-later backfill (mirrors how page-channel pages exist independent
 /// of the read flag).
 pub fn fact_channel_enabled() -> bool {
-    std::env::var("ORIGIN_ENABLE_FACT_CHANNEL")
+    std::env::var("WENLAN_ENABLE_FACT_CHANNEL")
         .ok()
         .map(|v| matches!(v.trim().to_ascii_lowercase().as_str(), "1" | "true" | "yes"))
         .unwrap_or(false)
 }
 
 /// Resolve the fact-channel pool size at call time. Env override
-/// `ORIGIN_FACT_CHANNEL_LIMIT` lets the eval harness sweep tuning values
+/// `WENLAN_FACT_CHANNEL_LIMIT` lets the eval harness sweep tuning values
 /// without recompile (mirrors `page_channel_limit`). Default 20.
 pub fn fact_channel_limit() -> usize {
-    std::env::var("ORIGIN_FACT_CHANNEL_LIMIT")
+    std::env::var("WENLAN_FACT_CHANNEL_LIMIT")
         .ok()
         .and_then(|s| s.trim().parse().ok())
         .unwrap_or(FACT_CHANNEL_LIMIT_DEFAULT)
@@ -164,11 +164,11 @@ mod tests {
     #[test]
     fn fact_channel_enabled_treats_zero_and_unset_as_disabled() {
         for v in ["0", "false", "no", "", "  "] {
-            temp_env::with_var("ORIGIN_ENABLE_FACT_CHANNEL", Some(v), || {
+            temp_env::with_var("WENLAN_ENABLE_FACT_CHANNEL", Some(v), || {
                 assert!(!fact_channel_enabled(), "value {v:?} must disable");
             });
         }
-        temp_env::with_var("ORIGIN_ENABLE_FACT_CHANNEL", None::<&str>, || {
+        temp_env::with_var("WENLAN_ENABLE_FACT_CHANNEL", None::<&str>, || {
             assert!(!fact_channel_enabled(), "unset must disable");
         });
     }
@@ -176,7 +176,7 @@ mod tests {
     #[test]
     fn fact_channel_enabled_accepts_truthy_synonyms() {
         for v in ["1", "true", "TRUE", "yes", "Yes", " 1 "] {
-            temp_env::with_var("ORIGIN_ENABLE_FACT_CHANNEL", Some(v), || {
+            temp_env::with_var("WENLAN_ENABLE_FACT_CHANNEL", Some(v), || {
                 assert!(fact_channel_enabled(), "value {v:?} must enable");
             });
         }
@@ -184,13 +184,13 @@ mod tests {
 
     #[test]
     fn fact_channel_limit_default_and_override() {
-        temp_env::with_var("ORIGIN_FACT_CHANNEL_LIMIT", None::<&str>, || {
+        temp_env::with_var("WENLAN_FACT_CHANNEL_LIMIT", None::<&str>, || {
             assert_eq!(fact_channel_limit(), 20, "default is 20");
         });
-        temp_env::with_var("ORIGIN_FACT_CHANNEL_LIMIT", Some("7"), || {
+        temp_env::with_var("WENLAN_FACT_CHANNEL_LIMIT", Some("7"), || {
             assert_eq!(fact_channel_limit(), 7, "env override honoured");
         });
-        temp_env::with_var("ORIGIN_FACT_CHANNEL_LIMIT", Some("garbage"), || {
+        temp_env::with_var("WENLAN_FACT_CHANNEL_LIMIT", Some("garbage"), || {
             assert_eq!(
                 fact_channel_limit(),
                 20,

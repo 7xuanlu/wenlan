@@ -1,6 +1,6 @@
-# crates/origin-core/src/eval - Rust runner conventions
+# crates/wenlan-core/src/eval - Rust runner conventions
 
-Applies to agents working under `crates/origin-core/src/eval/`. Read alongside root `AGENTS.md` and `app/eval/AGENTS.md` for fixture + artifact context.
+Applies to agents working under `crates/wenlan-core/src/eval/`. Read alongside root `AGENTS.md` and `app/eval/AGENTS.md` for fixture + artifact context.
 
 ---
 
@@ -84,13 +84,13 @@ env_stamp.flags.push(format!("page_channel={}", page_channel_state));
 env_stamp.flags.push("scenario_db=consolidated".to_string());
 ```
 
-3. Mirror the filename suffix in `eval_harness.rs` (legacy path). The harness branches `__with_pages` vs `__no_pages` on `ORIGIN_ENABLE_PAGE_CHANNEL` (opt-in, default OFF).
+3. Mirror the filename suffix in `eval_harness.rs` (legacy path). The harness branches `__with_pages` vs `__no_pages` on `WENLAN_ENABLE_PAGE_CHANNEL` (opt-in, default OFF).
 
 ---
 
 ## filename suffix on legacy path
 
-`eval_harness.rs` branches the `app/eval/baselines/` filename suffix on `ORIGIN_ENABLE_PAGE_CHANNEL`:
+`eval_harness.rs` branches the `app/eval/baselines/` filename suffix on `WENLAN_ENABLE_PAGE_CHANNEL`:
 
 ```rust
 let suffix = if wenlan_core::db::page_channel_enabled() {

@@ -49,11 +49,11 @@ pub fn blend_score(ce_logit: f32, norm_rrf: f32, alpha: f32) -> f32 {
     alpha * sigmoid(ce_logit) + (1.0 - alpha) * norm_rrf
 }
 
-/// Opt-in: blend rerank only when `ORIGIN_ENABLE_RERANK_BLEND` is truthy
+/// Opt-in: blend rerank only when `WENLAN_ENABLE_RERANK_BLEND` is truthy
 /// (default OFF → legacy REPLACE). Mirrors the other channel flags' parser.
 #[allow(dead_code)]
 pub fn rerank_blend_enabled() -> bool {
-    let val = std::env::var("ORIGIN_ENABLE_RERANK_BLEND")
+    let val = std::env::var("WENLAN_ENABLE_RERANK_BLEND")
         .unwrap_or_default()
         .to_ascii_lowercase();
     val == "1" || val == "true" || val == "yes"

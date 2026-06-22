@@ -21,9 +21,9 @@ struct CacheEntry {
 }
 
 fn cache_path() -> Option<PathBuf> {
-    // ORIGIN_MCP_CACHE_DIR override exists so tests can point at a temp dir
+    // WENLAN_MCP_CACHE_DIR override exists so tests can point at a temp dir
     // instead of polluting the user's real cache (~/Library/Caches/origin-mcp/...).
-    let base = std::env::var_os("ORIGIN_MCP_CACHE_DIR")
+    let base = std::env::var_os("WENLAN_MCP_CACHE_DIR")
         .map(PathBuf::from)
         .or_else(|| dirs::cache_dir().map(|d| d.join("wenlan-mcp")))?;
     std::fs::create_dir_all(&base).ok()?;
@@ -123,7 +123,7 @@ mod tests {
     use super::*;
     use std::sync::Mutex;
 
-    /// Tests touch process-wide state (`ORIGIN_MCP_CACHE_DIR` env var + the
+    /// Tests touch process-wide state (`WENLAN_MCP_CACHE_DIR` env var + the
     /// resulting on-disk cache file). Cargo runs tests in parallel by default,
     /// so we serialize the disk-touching tests through this lock. The env
     /// override is per-test (set inside the lock) so each disk-test gets its
@@ -134,7 +134,7 @@ mod tests {
         let dir =
             std::env::temp_dir().join(format!("origin-mcp-test-{label}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
-        std::env::set_var("ORIGIN_MCP_CACHE_DIR", &dir);
+        std::env::set_var("WENLAN_MCP_CACHE_DIR", &dir);
         dir
     }
 
@@ -142,7 +142,7 @@ mod tests {
     fn cache_path_under_user_cache_dir() {
         // No override → falls back to dirs::cache_dir().
         let _g = CACHE_LOCK.lock().unwrap();
-        std::env::remove_var("ORIGIN_MCP_CACHE_DIR");
+        std::env::remove_var("WENLAN_MCP_CACHE_DIR");
         let p = cache_path().expect("cache dir should resolve on this platform");
         assert!(p.ends_with("origin-mcp/version-check.json"), "got {p:?}");
     }
@@ -159,7 +159,7 @@ mod tests {
         let loaded = load_cache().expect("cache should load");
         assert_eq!(loaded.latest_tag, "9.9.9");
         let _ = std::fs::remove_dir_all(&dir);
-        std::env::remove_var("ORIGIN_MCP_CACHE_DIR");
+        std::env::remove_var("WENLAN_MCP_CACHE_DIR");
     }
 
     #[test]
@@ -176,6 +176,6 @@ mod tests {
             "expired entry should not be returned"
         );
         let _ = std::fs::remove_dir_all(&dir);
-        std::env::remove_var("ORIGIN_MCP_CACHE_DIR");
+        std::env::remove_var("WENLAN_MCP_CACHE_DIR");
     }
 }

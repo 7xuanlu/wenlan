@@ -7,10 +7,10 @@
 //!       includes each space's name in the formatted output
 //!   (c) an empty array is rendered as "0 spaces"
 
-use wenlan_mcp::client::WenlanClient;
-use wenlan_mcp::tools::{ListSpacesParams, WenlanMcpServer, TransportMode};
-use wenlan_types::memory::Space;
 use rmcp::model::RawContent;
+use wenlan_mcp::client::WenlanClient;
+use wenlan_mcp::tools::{ListSpacesParams, TransportMode, WenlanMcpServer};
+use wenlan_types::memory::Space;
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 

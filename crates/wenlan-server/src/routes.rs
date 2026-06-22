@@ -6,14 +6,14 @@ use axum::{
     http::{HeaderMap, StatusCode},
     response::Json,
 };
+use serde::{Deserialize, Serialize};
+use std::sync::Arc;
+use tokio::sync::RwLock;
 use wenlan_core::router::classify::{classify_query, estimate_tokens, tier_allowed};
 use wenlan_types::requests::ChatContextRequest;
 use wenlan_types::responses::{
     ChatContextResponse, KnowledgeContext, ProfileContext, TierTokenEstimates,
 };
-use serde::{Deserialize, Serialize};
-use std::sync::Arc;
-use tokio::sync::RwLock;
 
 // ===== Request/Response Types =====
 
@@ -368,7 +368,7 @@ pub async fn handle_chat_context(
     // is the refinery's SummaryRollup phase; here we only read. Honors the
     // space filter via the source-overlap gate (a summary surfaces iff >=1 of
     // its provenance memories survived the memory-side filter). Empty/absent
-    // unless ORIGIN_ENABLE_GLOBAL_PRELUDE is on, so the default response shape
+    // unless WENLAN_ENABLE_GLOBAL_PRELUDE is on, so the default response shape
     // is byte-identical to pre-T18.
     let corpus_overview: Vec<String> = if wenlan_core::db::global_prelude_enabled() {
         let nodes = db.search_summary_nodes(query, 3).await.unwrap_or_default();

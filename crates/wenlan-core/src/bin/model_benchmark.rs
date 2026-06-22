@@ -11,11 +11,11 @@
 //!   - DETECT_CONTRADICTION (correct label accuracy)
 //!   - DISTILL_PAGE (structural: has TLDR, headers, sources)
 
-use wenlan_core::engine::LlmEngine;
-use wenlan_core::prompts::PromptRegistry;
 use serde::Serialize;
 use std::path::PathBuf;
 use std::time::Instant;
+use wenlan_core::engine::LlmEngine;
+use wenlan_core::prompts::PromptRegistry;
 
 #[derive(Debug, Serialize)]
 struct PromptResult {

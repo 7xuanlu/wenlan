@@ -20,11 +20,11 @@ pub struct QueryIntentLlm {
     pub subqueries: Vec<String>,
 }
 
-/// True iff `ORIGIN_ENABLE_INTENT_LLM` is set truthy. DISTINCT from the shipped
-/// zero-LLM T19 `ORIGIN_ENABLE_QUERY_INTENT` so eval baselines never confound.
+/// True iff `WENLAN_ENABLE_INTENT_LLM` is set truthy. DISTINCT from the shipped
+/// zero-LLM T19 `WENLAN_ENABLE_QUERY_INTENT` so eval baselines never confound.
 #[allow(dead_code)]
 pub fn intent_llm_enabled() -> bool {
-    std::env::var("ORIGIN_ENABLE_INTENT_LLM")
+    std::env::var("WENLAN_ENABLE_INTENT_LLM")
         .ok()
         .map(|v| matches!(v.trim().to_ascii_lowercase().as_str(), "1" | "true" | "yes"))
         .unwrap_or(false)
@@ -161,7 +161,7 @@ mod tests {
     #[test]
     fn flag_off_by_default() {
         // Pin the var unset (matches the crate's env-flag test convention).
-        temp_env::with_vars([("ORIGIN_ENABLE_INTENT_LLM", None::<&str>)], || {
+        temp_env::with_vars([("WENLAN_ENABLE_INTENT_LLM", None::<&str>)], || {
             assert!(!intent_llm_enabled());
         });
     }

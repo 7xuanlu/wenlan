@@ -7,9 +7,9 @@ determine `#[doc(hidden)]` placement per D0 of the shared-types drift-fix spec.
 ## Methodology
 
 1. Enumerated all `pub struct` / `pub enum` across all 6 files in
-   `crates/origin-types/src/` — 119 unique types.
-2. For each type, grepped `crates/origin-server/src/` and
-   `crates/origin-core/src/` for:
+   `crates/wenlan-types/src/` — 119 unique types.
+2. For each type, grepped `crates/wenlan-server/src/` and
+   `crates/wenlan-core/src/` for:
    - `Json<Type>` extractors and return types on axum handlers
    - `State<>` extraction
    - Response literal construction

@@ -3,8 +3,8 @@
 
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
-use wenlan_types::responses::{OrphanLinksResponse, PendingRevisionItem};
 use tower::ServiceExt;
+use wenlan_types::responses::{OrphanLinksResponse, PendingRevisionItem};
 
 mod common;
 use common::{insert_memory, insert_page_with_orphan_link, test_app};

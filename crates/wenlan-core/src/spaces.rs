@@ -13,10 +13,10 @@ use rusqlite::Connection;
 use std::path::{Path, PathBuf};
 
 fn legacy_db_path() -> PathBuf {
-    // Honor ORIGIN_DATA_DIR so scratch / worktree daemons do not reach into
+    // Honor WENLAN_DATA_DIR so scratch / worktree daemons do not reach into
     // the user's real platform data directory (resolved via `dirs::data_local_dir()` per OS)
     // `spaces.db` and rename it out from under a production daemon still running pre-PR-B2.
-    let root = std::env::var_os("ORIGIN_DATA_DIR")
+    let root = std::env::var_os("WENLAN_DATA_DIR")
         .map(PathBuf::from)
         .unwrap_or_else(|| {
             dirs::data_local_dir()
@@ -116,19 +116,19 @@ mod tests {
     use crate::events::NoopEmitter;
     use std::sync::Arc;
 
-    /// `legacy_db_path` must honor `ORIGIN_DATA_DIR` so scratch / worktree
+    /// `legacy_db_path` must honor `WENLAN_DATA_DIR` so scratch / worktree
     /// daemons do not reach into the user's production platform data directory
     /// (resolved via `dirs::data_local_dir()` per OS) `spaces.db` and rename it.
     #[test]
     fn test_legacy_db_path_honors_origin_data_dir() {
         // Save + restore so we don't leak env state to other tests.
-        let prev = std::env::var_os("ORIGIN_DATA_DIR");
-        std::env::set_var("ORIGIN_DATA_DIR", "/tmp/origin-spaces-path-test");
+        let prev = std::env::var_os("WENLAN_DATA_DIR");
+        std::env::set_var("WENLAN_DATA_DIR", "/tmp/origin-spaces-path-test");
         let p = legacy_db_path();
         assert_eq!(p, PathBuf::from("/tmp/origin-spaces-path-test/spaces.db"));
         match prev {
-            Some(v) => std::env::set_var("ORIGIN_DATA_DIR", v),
-            None => std::env::remove_var("ORIGIN_DATA_DIR"),
+            Some(v) => std::env::set_var("WENLAN_DATA_DIR", v),
+            None => std::env::remove_var("WENLAN_DATA_DIR"),
         }
     }
 

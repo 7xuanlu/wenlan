@@ -2,10 +2,10 @@ use std::net::IpAddr;
 use std::path::PathBuf;
 
 use clap::{Parser, Subcommand};
-use wenlan_mcp::client::{discover_origin_url, WenlanClient};
-use wenlan_mcp::tools::{WenlanMcpServer, TransportMode};
-use wenlan_mcp::{auth, serve, token};
 use rmcp::{transport::stdio, ServiceExt};
+use wenlan_mcp::client::{discover_origin_url, WenlanClient};
+use wenlan_mcp::tools::{TransportMode, WenlanMcpServer};
+use wenlan_mcp::{auth, serve, token};
 
 #[derive(Parser)]
 #[command(
@@ -104,9 +104,9 @@ async fn main() -> anyhow::Result<()> {
 
     wenlan_mcp::lock_state::init_from_env();
     if let Some(space) = wenlan_mcp::lock_state::locked_space() {
-        eprintln!("origin-mcp: ORIGIN_SPACE lock active, space=\"{}\"", space);
+        eprintln!("origin-mcp: WENLAN_SPACE lock active, space=\"{}\"", space);
     } else {
-        eprintln!("origin-mcp: ORIGIN_SPACE lock inactive (no lock)");
+        eprintln!("origin-mcp: WENLAN_SPACE lock inactive (no lock)");
     }
 
     match cli.command {

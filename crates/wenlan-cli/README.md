@@ -17,7 +17,7 @@ The setup package supports macOS (arm64, x64), Linux (x64, arm64), and Windows (
 For local development:
 
 ```bash
-cargo install --path crates/origin-cli
+cargo install --path crates/wenlan-cli
 ```
 
 Or build from the workspace:

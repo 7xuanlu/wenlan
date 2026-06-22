@@ -305,7 +305,7 @@ pub struct RefineryConfig {
     #[serde(default = "d_30_i64")]
     pub batch_window_secs: i64,
     /// Debounce window (seconds) for background reflection coalescing. When
-    /// `ORIGIN_ENABLE_REFLECTION_DEBOUNCE` is truthy, per-agent mid-burst
+    /// `WENLAN_ENABLE_REFLECTION_DEBOUNCE` is truthy, per-agent mid-burst
     /// enrichment spawns inside this window are cancelled/coalesced so only the
     /// latest write triggers a reflection. Inert when the flag is unset/0.
     /// Default 5s (mirrors the page-channel opt-in precedent — feature is OFF
@@ -412,7 +412,7 @@ impl Default for GateConfig {
 }
 
 /// Read-time context compression (T10, gap C6). Master enable is the env
-/// flag `ORIGIN_ENABLE_CONTEXT_COMPRESS` (see
+/// flag `WENLAN_ENABLE_CONTEXT_COMPRESS` (see
 /// [`crate::retrieval::compress::context_compress_enabled`]); these fields are
 /// the knobs read once that gate is open. Default OFF -> byte-identical to
 /// today's verbatim bundle.
@@ -488,7 +488,7 @@ pub struct ConfidenceConfig {
 /// Controls which stale, low-value memories the refinery's `evict` phase
 /// flips to `supersede_mode='archive'` (recoverable, never hard-deleted).
 /// All gates are conservative and the feature is opt-in via
-/// `ORIGIN_ENABLE_EVICTION`; see [`crate::db::eviction_enabled`].
+/// `WENLAN_ENABLE_EVICTION`; see [`crate::db::eviction_enabled`].
 #[derive(Debug, Clone, Deserialize)]
 pub struct EvictionConfig {
     /// A memory is only eligible once its `last_accessed` is at least this many

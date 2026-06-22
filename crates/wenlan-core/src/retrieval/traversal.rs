@@ -15,7 +15,7 @@
 //!   3. a `visited` set -- every node is expanded at most once, so a relation
 //!      cycle (A->B->A) terminates instead of looping forever.
 //!
-//! Wired into `db::augment_with_graph` behind `ORIGIN_ENABLE_GRAPH_KHOP`
+//! Wired into `db::augment_with_graph` behind `WENLAN_ENABLE_GRAPH_KHOP`
 //! (default OFF). When off, the anchor entity set is used verbatim and behaviour
 //! is byte-identical to the pre-T4b single-hop path.
 
@@ -116,7 +116,7 @@ pub(crate) fn bfs_khop(
     out
 }
 
-/// Parse `ORIGIN_GRAPH_KHOP_DEPTH` -> usize in [0, 3]. Default 1 on unset or
+/// Parse `WENLAN_GRAPH_KHOP_DEPTH` -> usize in [0, 3]. Default 1 on unset or
 /// parse failure (1 hop == byte-parity with the legacy single-hop expansion).
 /// Capped at 3 to match the T9 `parse_hop_depth` ceiling -- k-hop cost grows fast.
 pub(crate) fn parse_khop_depth(val: Option<&str>) -> usize {
@@ -130,7 +130,7 @@ pub(crate) fn parse_khop_depth(val: Option<&str>) -> usize {
     }
 }
 
-/// Parse `ORIGIN_GRAPH_KHOP_MAX_NODES` -> usize in [1, 512]. Default 25 on unset
+/// Parse `WENLAN_GRAPH_KHOP_MAX_NODES` -> usize in [1, 512]. Default 25 on unset
 /// or parse failure. Bounds total expanded entities so a hub entity can't pull a
 /// combinatorial blast of tangential memories.
 pub(crate) fn parse_khop_max_nodes(val: Option<&str>) -> usize {

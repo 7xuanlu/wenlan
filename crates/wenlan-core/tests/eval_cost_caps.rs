@@ -156,8 +156,8 @@ fn reconcile_cost_matches_haiku_batch_pricing() {
     assert_eq!(reconcile_cost_usd(0, 0), 0.0);
 }
 
-use wenlan_core::eval::wall_clock::WallClockWatchdog;
 use std::time::Duration;
+use wenlan_core::eval::wall_clock::WallClockWatchdog;
 
 #[tokio::test]
 async fn watchdog_fires_after_cap() {

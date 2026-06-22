@@ -1,4 +1,4 @@
-//! Read `ORIGIN_SPACE` at startup; expose the value as the "locked space".
+//! Read `WENLAN_SPACE` at startup; expose the value as the "locked space".
 //!
 //! When set, every outbound daemon call attaches `X-Origin-Space: <value>`,
 //! the MCP tool handlers ignore any inbound `space` arg from the model, and
@@ -17,14 +17,14 @@ static LOCKED: RwLock<Option<String>> = RwLock::new(None);
 /// accepting any requests. Subsequent calls overwrite the value, which is
 /// intentional for test isolation.
 pub fn init_from_env() {
-    let value = std::env::var("ORIGIN_SPACE")
+    let value = std::env::var("WENLAN_SPACE")
         .ok()
         .map(|s| s.trim().to_string())
         .filter(|s| !s.is_empty());
     *LOCKED.write().expect("lock_state write lock poisoned") = value;
 }
 
-/// Return the locked space slug, or `None` if `ORIGIN_SPACE` was not set.
+/// Return the locked space slug, or `None` if `WENLAN_SPACE` was not set.
 pub fn locked_space() -> Option<String> {
     LOCKED
         .read()
@@ -40,7 +40,7 @@ pub fn is_locked() -> bool {
         .is_some()
 }
 
-/// Shared mutex for test modules that mutate `ORIGIN_SPACE` env var + the
+/// Shared mutex for test modules that mutate `WENLAN_SPACE` env var + the
 /// `LOCKED` RwLock. Exposed as `pub(crate)` so `client::tests` can share the
 /// same serialisation lock and avoid races between test threads.
 #[cfg(test)]
@@ -53,7 +53,7 @@ mod tests {
     #[test]
     fn locked_space_returns_none_when_env_unset() {
         let _guard = ENV_LOCK.lock().unwrap();
-        std::env::remove_var("ORIGIN_SPACE");
+        std::env::remove_var("WENLAN_SPACE");
         init_from_env();
         assert_eq!(locked_space(), None);
         assert!(!is_locked());
@@ -62,22 +62,22 @@ mod tests {
     #[test]
     fn locked_space_returns_value_when_env_set() {
         let _guard = ENV_LOCK.lock().unwrap();
-        std::env::set_var("ORIGIN_SPACE", "work");
+        std::env::set_var("WENLAN_SPACE", "work");
         init_from_env();
         assert_eq!(locked_space().as_deref(), Some("work"));
         assert!(is_locked());
         // Clean up.
-        std::env::remove_var("ORIGIN_SPACE");
+        std::env::remove_var("WENLAN_SPACE");
         init_from_env();
     }
 
     #[test]
     fn whitespace_only_value_treated_as_unset() {
         let _guard = ENV_LOCK.lock().unwrap();
-        std::env::set_var("ORIGIN_SPACE", "   ");
+        std::env::set_var("WENLAN_SPACE", "   ");
         init_from_env();
         assert_eq!(locked_space(), None);
-        std::env::remove_var("ORIGIN_SPACE");
+        std::env::remove_var("WENLAN_SPACE");
         init_from_env();
     }
 }

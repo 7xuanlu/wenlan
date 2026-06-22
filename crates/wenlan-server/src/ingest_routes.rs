@@ -5,11 +5,11 @@ use axum::{
     extract::{Path, State},
     response::Json,
 };
-use wenlan_types::sources::RawDocument;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
+use wenlan_types::sources::RawDocument;
 
 // ===== Request/Response Types =====
 

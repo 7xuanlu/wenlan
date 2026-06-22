@@ -14,8 +14,8 @@
 //! conversation per sample; collapsing all its observations to one session key
 //! would brutally suppress recall (recommendation (c) in the T20 spec).
 //!
-//! Enabled by `ORIGIN_ENABLE_SESSION_DIVERSITY` (truthy: `1`/`true`/`yes`).
-//! Cap size set by `ORIGIN_SESSION_DIVERSITY_MAX` (default 3).
+//! Enabled by `WENLAN_ENABLE_SESSION_DIVERSITY` (truthy: `1`/`true`/`yes`).
+//! Cap size set by `WENLAN_SESSION_DIVERSITY_MAX` (default 3).
 
 use std::collections::HashMap;
 

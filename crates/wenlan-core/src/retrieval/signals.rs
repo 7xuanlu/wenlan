@@ -103,7 +103,7 @@ pub(crate) fn temporal_interval_boost(
 // T9 — Wide-pool-seeded graph expansion helpers
 // ---------------------------------------------------------------------------
 
-/// Parse `ORIGIN_GRAPH_HOP_DEPTH` → usize in [0, 3]. Default 1 on unset or parse failure.
+/// Parse `WENLAN_GRAPH_HOP_DEPTH` → usize in [0, 3]. Default 1 on unset or parse failure.
 pub(crate) fn parse_hop_depth(val: Option<&str>) -> usize {
     let raw = match val {
         Some(s) => s,
@@ -115,7 +115,7 @@ pub(crate) fn parse_hop_depth(val: Option<&str>) -> usize {
     }
 }
 
-/// Parse `ORIGIN_GRAPH_SEED_TOP_K` → usize in [1, 50]. Default 10 on unset or parse failure.
+/// Parse `WENLAN_GRAPH_SEED_TOP_K` → usize in [1, 50]. Default 10 on unset or parse failure.
 pub(crate) fn parse_seed_top_k(val: Option<&str>) -> usize {
     let raw = match val {
         Some(s) => s,
@@ -127,7 +127,7 @@ pub(crate) fn parse_seed_top_k(val: Option<&str>) -> usize {
     }
 }
 
-/// Parse `ORIGIN_GRAPH_FRONTIER_CAP` → usize in [1, 512]. Default 64 on unset or parse failure.
+/// Parse `WENLAN_GRAPH_FRONTIER_CAP` → usize in [1, 512]. Default 64 on unset or parse failure.
 pub(crate) fn parse_frontier_cap(val: Option<&str>) -> usize {
     let raw = match val {
         Some(s) => s,
@@ -194,7 +194,7 @@ pub(crate) fn query_has_entity_anchor(query: &str) -> bool {
 }
 
 /// Cheap, zero-LLM predicate gating the otherwise-unconditional
-/// `augment_with_graph` call (opt-in via `ORIGIN_ENABLE_GRAPH_GATE`). Returns true
+/// `augment_with_graph` call (opt-in via `WENLAN_ENABLE_GRAPH_GATE`). Returns true
 /// when the query is worth a graph hop: relational/temporal phrasing
 /// (`classify_query().use_graph`) OR an entity anchor. Single-fact lookups like
 /// "what is the database password" return false so the graph entity-embedding +
@@ -278,7 +278,7 @@ mod tests {
         assert!(v_close > v_far);
     }
 
-    // --- T3 graph-gate predicate (ORIGIN_ENABLE_GRAPH_GATE) ---
+    // --- T3 graph-gate predicate (WENLAN_ENABLE_GRAPH_GATE) ---
 
     #[test]
     fn graph_gate_fires_on_relational_phrasing() {
@@ -515,14 +515,14 @@ mod tests {
     #[test]
     fn graph_seed_enabled_truthy_table() {
         for val in &["1", "true", "yes"] {
-            std::env::set_var("ORIGIN_ENABLE_GRAPH_SEED", val);
+            std::env::set_var("WENLAN_ENABLE_GRAPH_SEED", val);
             assert!(crate::db::graph_seed_enabled(), "expected true for {val}");
         }
         for val in &["0", "false", ""] {
-            std::env::set_var("ORIGIN_ENABLE_GRAPH_SEED", val);
+            std::env::set_var("WENLAN_ENABLE_GRAPH_SEED", val);
             assert!(!crate::db::graph_seed_enabled(), "expected false for {val}");
         }
-        std::env::remove_var("ORIGIN_ENABLE_GRAPH_SEED");
+        std::env::remove_var("WENLAN_ENABLE_GRAPH_SEED");
         assert!(
             !crate::db::graph_seed_enabled(),
             "expected false when unset"

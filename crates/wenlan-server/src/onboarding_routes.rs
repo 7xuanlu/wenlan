@@ -18,8 +18,8 @@ use axum::{
     http::StatusCode,
     Json,
 };
-use wenlan_core::onboarding::{MilestoneId, MilestoneRecord};
 use std::str::FromStr;
+use wenlan_core::onboarding::{MilestoneId, MilestoneRecord};
 
 pub async fn handle_list_milestones(
     State(state): State<SharedState>,

@@ -120,7 +120,7 @@ pub struct HealthResponse {
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "state", rename_all = "snake_case")]
 pub enum RerankerStatus {
-    /// `ORIGIN_RERANKER_ENABLED` was not `1` — no reranker requested.
+    /// `WENLAN_RERANKER_ENABLED` was not `1` — no reranker requested.
     #[default]
     Disabled,
     /// Reranker initialized and wired.

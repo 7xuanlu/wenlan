@@ -61,7 +61,7 @@ pub struct ReportEnv {
     pub total_cost_usd: f64,
     #[serde(default)]
     pub total_wall_secs: u64,
-    /// Runtime flags active during this eval run (e.g. `ORIGIN_DISABLE_SUPERSEDE_FILTER=1`).
+    /// Runtime flags active during this eval run (e.g. `WENLAN_DISABLE_SUPERSEDE_FILTER=1`).
     /// Used to attest to non-default runtime configuration in baseline JSON files.
     #[serde(default)]
     pub flags: Vec<String>,
@@ -850,13 +850,13 @@ mod tests {
     #[test]
     fn report_env_serializes_flags_field() {
         let env = ReportEnv {
-            flags: vec!["ORIGIN_DISABLE_SUPERSEDE_FILTER=1".into()],
+            flags: vec!["WENLAN_DISABLE_SUPERSEDE_FILTER=1".into()],
             ..Default::default()
         };
         let json = serde_json::to_string(&env).expect("serialize");
         assert!(json.contains("\"flags\""), "json missing 'flags' key");
         assert!(
-            json.contains("ORIGIN_DISABLE_SUPERSEDE_FILTER=1"),
+            json.contains("WENLAN_DISABLE_SUPERSEDE_FILTER=1"),
             "json missing flag value"
         );
     }

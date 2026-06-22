@@ -336,7 +336,7 @@ pub fn extract_cue(query: &str, now: DateTime<Utc>) -> Option<ExtractedCue> {
 /// Rewrite relative date phrases in stored memory prose to include absolute dates.
 ///
 /// This is the deterministic write-time prose grounder for T11. It is called at
-/// store time (inside `upsert_documents`) when `ORIGIN_ENABLE_TEMPORAL_GROUNDING`
+/// store time (inside `upsert_documents`) when `WENLAN_ENABLE_TEMPORAL_GROUNDING`
 /// is set to a truthy value, **before** the content is embedded or inserted into
 /// the database, so the embedder and FTS index both see the grounded text.
 ///

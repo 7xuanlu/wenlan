@@ -20,8 +20,8 @@ mod common;
 
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
-use wenlan_types::responses::{PendingRevisionItem, StoreMemoryResponse};
 use tower::ServiceExt;
+use wenlan_types::responses::{PendingRevisionItem, StoreMemoryResponse};
 
 async fn body_as_json<T: serde::de::DeserializeOwned>(response: axum::http::Response<Body>) -> T {
     let bytes = axum::body::to_bytes(response.into_body(), 64 * 1024)

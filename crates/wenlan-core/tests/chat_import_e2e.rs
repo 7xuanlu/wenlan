@@ -5,12 +5,12 @@
 use std::io::Write;
 use std::sync::Arc;
 
+use serde_json::json;
 use wenlan_core::chat_import::bulk_ingest::bulk_import_conversations;
 use wenlan_core::chat_import::dispatch_parse;
 use wenlan_core::chat_import::types::Vendor;
 use wenlan_core::db::MemoryDB;
 use wenlan_core::{EventEmitter, NoopEmitter};
-use serde_json::json;
 
 /// Build an in-memory ZIP archive from a list of `(filename, data)` entries.
 fn make_zip(entries: &[(&str, &[u8])]) -> Vec<u8> {
@@ -348,14 +348,14 @@ async fn chatgpt_end_to_end_imports_and_dedupes() {
 ///   cargo test -p origin-core --test chat_import_e2e --release \
 ///       -- --ignored chatgpt_real_zip_smoke --nocapture
 ///
-/// Set `ORIGIN_CHATGPT_ZIP=/path/to/export.zip` to override the path.
+/// Set `WENLAN_CHATGPT_ZIP=/path/to/export.zip` to override the path.
 /// Verifies: (a) dispatch picks the ChatGPT parser, (b) parsing completes
 /// without panic, (c) conversation count is non-zero and in a sane range.
 #[test]
 #[ignore]
 fn chatgpt_real_zip_smoke() {
     let default_path = "/Users/lucian/Downloads/b50fdbe7b5a67df02e91af8f5d75a53ea4796a12b5c7b726b8b2562a233c2905-2026-04-11-20-28-58-326de17fc3cb48bb91504f88fe0ded37.zip";
-    let path = std::env::var("ORIGIN_CHATGPT_ZIP").unwrap_or_else(|_| default_path.to_string());
+    let path = std::env::var("WENLAN_CHATGPT_ZIP").unwrap_or_else(|_| default_path.to_string());
 
     if !std::path::Path::new(&path).exists() {
         eprintln!("zip not found at {path}; skipping");

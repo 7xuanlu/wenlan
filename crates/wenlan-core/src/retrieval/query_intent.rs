@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 // T19 -- Zero-LLM query intent classifier.
-// Default-OFF: when ORIGIN_ENABLE_QUERY_INTENT is unset, weights=1.0, byte-identical.
+// Default-OFF: when WENLAN_ENABLE_QUERY_INTENT is unset, weights=1.0, byte-identical.
 
 use crate::router::classify::{RELATIONAL_KEYWORDS, TEMPORAL_KEYWORDS};
 
@@ -29,7 +29,7 @@ impl ChannelWeights {
 }
 
 fn fts_boost() -> f32 {
-    std::env::var("ORIGIN_QUERY_INTENT_FTS_BOOST")
+    std::env::var("WENLAN_QUERY_INTENT_FTS_BOOST")
         .ok()
         .and_then(|v| v.trim().parse::<f32>().ok())
         .filter(|v| v.is_finite() && *v > 0.0)
@@ -37,7 +37,7 @@ fn fts_boost() -> f32 {
 }
 
 pub fn query_intent_enabled() -> bool {
-    std::env::var("ORIGIN_ENABLE_QUERY_INTENT")
+    std::env::var("WENLAN_ENABLE_QUERY_INTENT")
         .ok()
         .map(|v| matches!(v.trim().to_ascii_lowercase().as_str(), "1" | "true" | "yes"))
         .unwrap_or(false)
@@ -130,10 +130,10 @@ mod tests {
 
     #[test]
     fn env_override_fts_boost() {
-        temp_env::with_vars([("ORIGIN_QUERY_INTENT_FTS_BOOST", Some("3.0"))], || {
+        temp_env::with_vars([("WENLAN_QUERY_INTENT_FTS_BOOST", Some("3.0"))], || {
             assert_eq!(preset(QueryIntent::Factual).fts, 3.0);
         });
-        temp_env::with_vars([("ORIGIN_QUERY_INTENT_FTS_BOOST", None::<&str>)], || {
+        temp_env::with_vars([("WENLAN_QUERY_INTENT_FTS_BOOST", None::<&str>)], || {
             assert_eq!(preset(QueryIntent::Factual).fts, 1.5);
         });
     }
@@ -141,7 +141,7 @@ mod tests {
     #[test]
     fn effective_weights_is_identity_when_flag_off() {
         for flag_val in [None::<&str>, Some("0"), Some("false"), Some("")] {
-            temp_env::with_vars([("ORIGIN_ENABLE_QUERY_INTENT", flag_val)], || {
+            temp_env::with_vars([("WENLAN_ENABLE_QUERY_INTENT", flag_val)], || {
                 let w = effective_weights("what is X");
                 assert_eq!(w.vector, 1.0);
                 assert_eq!(w.fts, 1.0);

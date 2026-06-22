@@ -302,7 +302,7 @@ pub async fn run_canonical_enrichment(
 
     // Phase 3 (T14): dual-pool dedup + contradiction resolution.
     //
-    // Behind `ORIGIN_ENABLE_DUAL_POOL_RESOLVE` (default OFF -> no-op and the
+    // Behind `WENLAN_ENABLE_DUAL_POOL_RESOLVE` (default OFF -> no-op and the
     // path is byte-identical). Runs LAST so the `event_date` Phase 1 wrote is
     // visible for bidirectional temporal expiry. Best-effort: log-and-degrade.
     if crate::db::dual_pool_resolve_enabled() {

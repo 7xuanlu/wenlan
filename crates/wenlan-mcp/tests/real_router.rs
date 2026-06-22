@@ -11,18 +11,18 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
+use rmcp::model::{CallToolResult, RawContent};
 use wenlan_core::{db::MemoryDB, NoopEmitter};
 use wenlan_mcp::{
     client::WenlanClient,
     tools::{
-        AcceptRevisionRequest, DismissContradictionRequest, DismissRevisionRequest,
-        WenlanMcpServer, TransportMode,
+        AcceptRevisionRequest, DismissContradictionRequest, DismissRevisionRequest, TransportMode,
+        WenlanMcpServer,
     },
 };
 use wenlan_types::{
     ContradictionDismissResponse, RawDocument, RevisionAcceptResponse, RevisionDismissResponse,
 };
-use rmcp::model::{CallToolResult, RawContent};
 
 // ── helpers ────────────────────────────────────────────────────────────────
 

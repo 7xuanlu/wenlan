@@ -7,11 +7,11 @@
 
 use crate::db::MemoryDB;
 use crate::error::WenlanError;
+use std::path::Path;
 use wenlan_types::requests::{
     AddObservationRequest, CreateConceptRequest, CreateEntityRequest, CreateRelationRequest,
     UpdatePageRequest,
 };
-use std::path::Path;
 
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct WriteResult {
@@ -101,7 +101,7 @@ pub async fn create_entity(
     // Step 2.5: deterministic MinHash/LSH near-dedup (T16, opt-in).
     // Catches char-level near-dups like "PostgreSQL"/"Postgres" that exact-name
     // match misses and that the vector step may also miss. Gated behind
-    // ORIGIN_ENABLE_ENTITY_MINHASH; the entropy gate inside
+    // WENLAN_ENABLE_ENTITY_MINHASH; the entropy gate inside
     // minhash_resolve_candidate punts short/low-entropy names to the vector
     // step. Same-type-only; auto-merge requires exact Jaccard >= 0.9.
     if crate::db::entity_minhash_enabled() {
@@ -596,12 +596,12 @@ fn is_llm_rewrite(edited_by: &str) -> bool {
     )
 }
 
-/// Parse ORIGIN_MERGE_SHRINK_GUARD env var as f64 threshold.
+/// Parse WENLAN_MERGE_SHRINK_GUARD env var as f64 threshold.
 /// Returns Some(t) when set to a valid float; None when unset/unparseable
 /// (guard OFF = byte-identical behavior to pre-T17).
 /// Mirrors page_channel_enabled() env-read discipline in db.rs.
 pub(crate) fn merge_shrink_threshold() -> Option<f64> {
-    std::env::var("ORIGIN_MERGE_SHRINK_GUARD")
+    std::env::var("WENLAN_MERGE_SHRINK_GUARD")
         .ok()
         .and_then(|v| v.trim().parse::<f64>().ok())
 }
@@ -664,7 +664,7 @@ pub async fn update_page(
     let current_version = current.version;
     let new_version = current_version + 1;
 
-    // Shrink-guard (T17): opt-in via ORIGIN_MERGE_SHRINK_GUARD=<f64>.
+    // Shrink-guard (T17): opt-in via WENLAN_MERGE_SHRINK_GUARD=<f64>.
     // OFF by default: unset/unparseable = None = zero regression.
     // Only fires for LLM-rewrite edited_by; human edits are never blocked.
     // Placed AFTER current page load (needs old body), BEFORE early-return.
@@ -1971,7 +1971,7 @@ mod tests {
 
     #[tokio::test]
     async fn create_entity_minhash_merges_abbreviation() {
-        temp_env::async_with_vars([("ORIGIN_ENABLE_ENTITY_MINHASH", Some("1"))], async {
+        temp_env::async_with_vars([("WENLAN_ENABLE_ENTITY_MINHASH", Some("1"))], async {
             let (db, _dir) = test_db().await;
             let first = create_entity(
                 &db,
@@ -2007,7 +2007,7 @@ mod tests {
 
     #[tokio::test]
     async fn create_entity_minhash_respects_type_guard() {
-        temp_env::async_with_vars([("ORIGIN_ENABLE_ENTITY_MINHASH", Some("1"))], async {
+        temp_env::async_with_vars([("WENLAN_ENABLE_ENTITY_MINHASH", Some("1"))], async {
             let (db, _dir) = test_db().await;
             let first = create_entity(
                 &db,
@@ -2035,7 +2035,7 @@ mod tests {
 
     #[tokio::test]
     async fn create_entity_minhash_short_name_skips_fuzzy() {
-        temp_env::async_with_vars([("ORIGIN_ENABLE_ENTITY_MINHASH", Some("1"))], async {
+        temp_env::async_with_vars([("WENLAN_ENABLE_ENTITY_MINHASH", Some("1"))], async {
             let (db, _dir) = test_db().await;
             // "API"/"APIs" are below the entropy gate, so Step 2.5 must punt them
             // to the vector step and never record a "minhash" alias.
@@ -2079,7 +2079,7 @@ mod tests {
         // CRITICAL regression guard: with the flag OFF, the near-dup pair must
         // stay TWO separate entities (vector distance ~0.13 > 0.1 so the vector
         // step does not merge them), and NO minhash alias / band row is written.
-        temp_env::async_with_vars([("ORIGIN_ENABLE_ENTITY_MINHASH", None::<&str>)], async {
+        temp_env::async_with_vars([("WENLAN_ENABLE_ENTITY_MINHASH", None::<&str>)], async {
             let (db, _dir) = test_db().await;
             let first = create_entity(
                 &db,
@@ -2128,7 +2128,7 @@ mod tests {
     async fn resolve_entity_bulk_minhash_mirrors_create_entity() {
         use crate::extract::ExtractedEntity;
         use std::collections::HashMap;
-        temp_env::async_with_vars([("ORIGIN_ENABLE_ENTITY_MINHASH", Some("1"))], async {
+        temp_env::async_with_vars([("WENLAN_ENABLE_ENTITY_MINHASH", Some("1"))], async {
             let (db, _dir) = test_db().await;
             let mut cache: HashMap<String, String> = HashMap::new();
             let e1 = ExtractedEntity {
@@ -2160,7 +2160,7 @@ mod tests {
     async fn update_page_shrink_guard_rejects_truncation() {
         let _lock = env_lock().await;
         // Guard ON + LLM-rewrite caller + body shrinks below threshold -> Err + DB unchanged
-        std::env::set_var("ORIGIN_MERGE_SHRINK_GUARD", "0.7");
+        std::env::set_var("WENLAN_MERGE_SHRINK_GUARD", "0.7");
         let (db, _dir) = test_db().await;
         let mem_id = "mem-sg-reject";
         // 100-char body
@@ -2188,14 +2188,14 @@ mod tests {
             "body must be unchanged after rejection"
         );
         assert_eq!(page.version, 1, "version must not bump on rejection");
-        std::env::remove_var("ORIGIN_MERGE_SHRINK_GUARD");
+        std::env::remove_var("WENLAN_MERGE_SHRINK_GUARD");
     }
 
     #[tokio::test]
     async fn update_page_shrink_guard_allows_growth() {
         let _lock = env_lock().await;
         // Guard ON + LLM-rewrite caller + body grows -> Ok
-        std::env::set_var("ORIGIN_MERGE_SHRINK_GUARD", "0.7");
+        std::env::set_var("WENLAN_MERGE_SHRINK_GUARD", "0.7");
         let (db, _dir) = test_db().await;
         let mem_id = "mem-sg-grow";
         let old_body = "a".repeat(50);
@@ -2211,14 +2211,14 @@ mod tests {
         assert!(result.is_ok(), "shrink-guard must allow growing body");
         let page = db.get_page(&page_id).await.unwrap().unwrap();
         assert_eq!(page.content, long_body);
-        std::env::remove_var("ORIGIN_MERGE_SHRINK_GUARD");
+        std::env::remove_var("WENLAN_MERGE_SHRINK_GUARD");
     }
 
     #[tokio::test]
     async fn update_page_shrink_guard_off_by_default() {
         let _lock = env_lock().await;
         // Guard UNSET: even extreme truncation must succeed (zero regression)
-        std::env::remove_var("ORIGIN_MERGE_SHRINK_GUARD");
+        std::env::remove_var("WENLAN_MERGE_SHRINK_GUARD");
         let (db, _dir) = test_db().await;
         let mem_id = "mem-sg-off";
         let old_body = "a".repeat(100);
@@ -2245,7 +2245,7 @@ mod tests {
     async fn update_page_shrink_guard_skips_human_edits() {
         let _lock = env_lock().await;
         // Guard ON + human edited_by: guard never fires, update goes through
-        std::env::set_var("ORIGIN_MERGE_SHRINK_GUARD", "0.7");
+        std::env::set_var("WENLAN_MERGE_SHRINK_GUARD", "0.7");
         let (db, _dir) = test_db().await;
         let mem_id = "mem-sg-human";
         let old_body = "a".repeat(100);
@@ -2283,29 +2283,29 @@ mod tests {
             }
             Err(e) => panic!("unexpected error: {e:?}"),
         }
-        std::env::remove_var("ORIGIN_MERGE_SHRINK_GUARD");
+        std::env::remove_var("WENLAN_MERGE_SHRINK_GUARD");
     }
 
     // merge_shrink_threshold parse tests
 
     #[test]
     fn merge_shrink_threshold_unset_returns_none() {
-        std::env::remove_var("ORIGIN_MERGE_SHRINK_GUARD");
+        std::env::remove_var("WENLAN_MERGE_SHRINK_GUARD");
         assert!(merge_shrink_threshold().is_none());
     }
 
     #[test]
     fn merge_shrink_threshold_valid_float() {
-        std::env::set_var("ORIGIN_MERGE_SHRINK_GUARD", "0.7");
+        std::env::set_var("WENLAN_MERGE_SHRINK_GUARD", "0.7");
         assert_eq!(merge_shrink_threshold(), Some(0.7));
-        std::env::remove_var("ORIGIN_MERGE_SHRINK_GUARD");
+        std::env::remove_var("WENLAN_MERGE_SHRINK_GUARD");
     }
 
     #[test]
     fn merge_shrink_threshold_garbage_returns_none() {
-        std::env::set_var("ORIGIN_MERGE_SHRINK_GUARD", "garbage");
+        std::env::set_var("WENLAN_MERGE_SHRINK_GUARD", "garbage");
         assert!(merge_shrink_threshold().is_none());
-        std::env::remove_var("ORIGIN_MERGE_SHRINK_GUARD");
+        std::env::remove_var("WENLAN_MERGE_SHRINK_GUARD");
     }
 
     // is_llm_rewrite tests

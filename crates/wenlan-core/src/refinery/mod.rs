@@ -625,7 +625,7 @@ pub async fn run_periodic_steep_with_api(
 
     // Phase 9: Evict — T21 Stage 1 archive-not-delete soft eviction. Double
     // gated: the trigger must include Evict (Backstop/Daily only) AND the
-    // ORIGIN_ENABLE_EVICTION env flag must be truthy. Default OFF = no phase,
+    // WENLAN_ENABLE_EVICTION env flag must be truthy. Default OFF = no phase,
     // no archiving, byte-identical to current unbounded-append behavior.
     // Placed AFTER the Decay block so Evict reads freshly-decayed
     // effective_confidence within the same cycle. Failures degrade silently
@@ -1420,11 +1420,11 @@ mod tests {
 
     // ── T21 Eviction phase wiring (B1-B3) ────────────────────────────────────
 
-    // B1 — with ORIGIN_ENABLE_EVICTION=1, Backstop runs 'evict' as a phase.
+    // B1 — with WENLAN_ENABLE_EVICTION=1, Backstop runs 'evict' as a phase.
     #[tokio::test]
     async fn test_evict_runs_as_phase_when_enabled() {
         let (db, _dir) = test_db().await;
-        let result = temp_env::async_with_vars([("ORIGIN_ENABLE_EVICTION", Some("1"))], async {
+        let result = temp_env::async_with_vars([("WENLAN_ENABLE_EVICTION", Some("1"))], async {
             run_periodic_steep_with_api(
                 &db,
                 None,
@@ -1443,7 +1443,7 @@ mod tests {
         let phase_names: Vec<&str> = result.phases.iter().map(|p| p.name.as_str()).collect();
         assert!(
             phase_names.contains(&"evict"),
-            "ORIGIN_ENABLE_EVICTION=1 Backstop should run 'evict', got {:?}",
+            "WENLAN_ENABLE_EVICTION=1 Backstop should run 'evict', got {:?}",
             phase_names
         );
     }
@@ -1453,7 +1453,7 @@ mod tests {
     #[tokio::test]
     async fn test_evict_absent_when_flag_unset() {
         let (db, _dir) = test_db().await;
-        let result = temp_env::async_with_vars([("ORIGIN_ENABLE_EVICTION", None::<&str>)], async {
+        let result = temp_env::async_with_vars([("WENLAN_ENABLE_EVICTION", None::<&str>)], async {
             run_periodic_steep_with_api(
                 &db,
                 None,
@@ -1482,7 +1482,7 @@ mod tests {
     #[tokio::test]
     async fn test_evict_not_run_on_burstend() {
         let (db, _dir) = test_db().await;
-        let result = temp_env::async_with_vars([("ORIGIN_ENABLE_EVICTION", Some("1"))], async {
+        let result = temp_env::async_with_vars([("WENLAN_ENABLE_EVICTION", Some("1"))], async {
             run_periodic_steep_with_api(
                 &db,
                 None,

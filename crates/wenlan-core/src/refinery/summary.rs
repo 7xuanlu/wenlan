@@ -40,24 +40,24 @@ pub struct SummaryMember {
 /// Minimum members a bucket must have before it earns a summary node. Buckets
 /// below this are skipped (a one- or two-memory "community" carries no rollup
 /// signal the leaf memories don't already provide). Override with
-/// `ORIGIN_PRELUDE_MIN_MEMBERS`.
+/// `WENLAN_PRELUDE_MIN_MEMBERS`.
 pub const MIN_BUCKET_MEMBERS: usize = 3;
 
 /// Default number of vector-matched buckets returned at read time (the root is
-/// always returned on top of this). Override with `ORIGIN_PRELUDE_BUCKET_K`.
+/// always returned on top of this). Override with `WENLAN_PRELUDE_BUCKET_K`.
 pub const DEFAULT_BUCKET_K: usize = 3;
 
-/// Read [`MIN_BUCKET_MEMBERS`], honoring `ORIGIN_PRELUDE_MIN_MEMBERS`.
+/// Read [`MIN_BUCKET_MEMBERS`], honoring `WENLAN_PRELUDE_MIN_MEMBERS`.
 pub fn min_bucket_members() -> usize {
-    std::env::var("ORIGIN_PRELUDE_MIN_MEMBERS")
+    std::env::var("WENLAN_PRELUDE_MIN_MEMBERS")
         .ok()
         .and_then(|s| s.trim().parse().ok())
         .unwrap_or(MIN_BUCKET_MEMBERS)
 }
 
-/// Read [`DEFAULT_BUCKET_K`], honoring `ORIGIN_PRELUDE_BUCKET_K`.
+/// Read [`DEFAULT_BUCKET_K`], honoring `WENLAN_PRELUDE_BUCKET_K`.
 pub fn bucket_k() -> usize {
-    std::env::var("ORIGIN_PRELUDE_BUCKET_K")
+    std::env::var("WENLAN_PRELUDE_BUCKET_K")
         .ok()
         .and_then(|s| s.trim().parse().ok())
         .unwrap_or(DEFAULT_BUCKET_K)

@@ -5,10 +5,10 @@
 //!
 //! Topic: "Aperture Realtime Sync" (fictional canvas app, no external knowledge)
 
-use wenlan_core::engine::LlmEngine;
-use wenlan_core::prompts::PromptRegistry;
 use std::path::PathBuf;
 use std::time::Instant;
+use wenlan_core::engine::LlmEngine;
+use wenlan_core::prompts::PromptRegistry;
 
 const TOPIC: &str = "Aperture Realtime Sync";
 

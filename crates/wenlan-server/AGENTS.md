@@ -1,10 +1,10 @@
-# crates/origin-server
+# crates/wenlan-server
 
-Applies to agents working under `crates/origin-server/`. Read alongside root `AGENTS.md`, which takes precedence on any topic not covered here.
+Applies to agents working under `crates/wenlan-server/`. Read alongside root `AGENTS.md`, which takes precedence on any topic not covered here.
 
 HTTP daemon — owns the Axum router + all routes. All handlers operate on `Arc<RwLock<ServerState>>` where `ServerState.db: Option<Arc<MemoryDB>>`.
 
-## Key Modules (`crates/origin-server/src/`)
+## Key Modules (`crates/wenlan-server/src/`)
 
 | Module | Purpose |
 |---|---|

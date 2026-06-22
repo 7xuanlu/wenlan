@@ -21,8 +21,8 @@ fn cli_with_isolated_runtime(runtime: &IsolatedRuntime) -> Command {
     let joined = std::env::join_paths(entries).expect("join PATH entries");
     cmd.env("HOME", runtime.home.path())
         .env("USERPROFILE", runtime.home.path())
-        .env("ORIGIN_DATA_DIR", runtime.data.path())
-        .env("ORIGIN_HOST", "http://127.0.0.1:9")
+        .env("WENLAN_DATA_DIR", runtime.data.path())
+        .env("WENLAN_HOST", "http://127.0.0.1:9")
         .env("PATH", &joined);
     cmd
 }
@@ -75,7 +75,7 @@ fn write_fake_launchctl(fake_bin: &Path) {
     let path = fake_bin.join("launchctl");
     fs::write(
         &path,
-        "#!/bin/sh\nif [ -n \"$ORIGIN_TEST_LAUNCHCTL_LOG\" ]; then echo \"$@\" >> \"$ORIGIN_TEST_LAUNCHCTL_LOG\"; fi\ncase \"$1\" in\n  list) exit 0 ;;\n  load|unload) echo \"fake launchctl $1 $2\"; exit 0 ;;\n  *) echo \"fake launchctl $@\"; exit 0 ;;\nesac\n",
+        "#!/bin/sh\nif [ -n \"$WENLAN_TEST_LAUNCHCTL_LOG\" ]; then echo \"$@\" >> \"$WENLAN_TEST_LAUNCHCTL_LOG\"; fi\ncase \"$1\" in\n  list) exit 0 ;;\n  load|unload) echo \"fake launchctl $1 $2\"; exit 0 ;;\n  *) echo \"fake launchctl $@\"; exit 0 ;;\nesac\n",
     )
     .expect("write fake launchctl");
     #[cfg(unix)]
@@ -95,7 +95,7 @@ fn write_fake_command(fake_bin: &Path, name: &str) {
         let path = fake_bin.join(name);
         fs::write(
             &path,
-            "#!/bin/sh\nprintf '%s' \"${0##*/}\" >> \"$ORIGIN_TEST_CLI_LOG\"\nfor arg in \"$@\"; do printf '\\t%s' \"$arg\" >> \"$ORIGIN_TEST_CLI_LOG\"; done\nprintf '\\n' >> \"$ORIGIN_TEST_CLI_LOG\"\nexit 0\n",
+            "#!/bin/sh\nprintf '%s' \"${0##*/}\" >> \"$WENLAN_TEST_CLI_LOG\"\nfor arg in \"$@\"; do printf '\\t%s' \"$arg\" >> \"$WENLAN_TEST_CLI_LOG\"; done\nprintf '\\n' >> \"$WENLAN_TEST_CLI_LOG\"\nexit 0\n",
         )
         .expect("write fake command");
         use std::os::unix::fs::PermissionsExt;
@@ -122,7 +122,7 @@ fn write_fake_command(fake_bin: &Path, name: &str) {
              shift\r\n\
              goto loop\r\n\
              :done\r\n\
-             >>\"%ORIGIN_TEST_CLI_LOG%\" echo(!LINE!\r\n\
+             >>\"%WENLAN_TEST_CLI_LOG%\" echo(!LINE!\r\n\
              exit /b 0\r\n"
         );
         fs::write(&path, script).expect("write fake .cmd");
@@ -270,7 +270,7 @@ fn mcp_add_native_clients_run_add_without_destructive_remove() {
         let log = runtime.root.path().join(format!("{client}.log"));
 
         cli_with_isolated_runtime(&runtime)
-            .env("ORIGIN_TEST_CLI_LOG", &log)
+            .env("WENLAN_TEST_CLI_LOG", &log)
             .args(["mcp", "add", client])
             .assert()
             .success()
@@ -443,7 +443,7 @@ fn agents_edit_no_flags_bails() {
 #[test]
 fn status_json_succeeds_when_daemon_is_unreachable() {
     cli()
-        .env("ORIGIN_HOST", "http://127.0.0.1:9")
+        .env("WENLAN_HOST", "http://127.0.0.1:9")
         .args(["status", "--format", "json"])
         .assert()
         .success()
@@ -465,7 +465,7 @@ fn status_table_uses_origin_host_for_health_probe() {
 #[test]
 fn doctor_uses_origin_host_for_health_probe() {
     cli()
-        .env("ORIGIN_HOST", "http://127.0.0.1:9")
+        .env("WENLAN_HOST", "http://127.0.0.1:9")
         .arg("doctor")
         .assert()
         .success()
@@ -535,7 +535,7 @@ fn install_over_running_daemon_stops_first_isolated() {
     // a stop-class launchctl call happened before the new start.
     let _ = fs::remove_file(&log);
     cli_with_isolated_runtime(&runtime)
-        .env("ORIGIN_TEST_LAUNCHCTL_LOG", &log)
+        .env("WENLAN_TEST_LAUNCHCTL_LOG", &log)
         .arg("install")
         .assert()
         .success();

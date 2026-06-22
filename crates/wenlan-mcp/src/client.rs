@@ -267,7 +267,7 @@ mod tests {
     fn space_header_attached_when_locked() {
         // Share ENV_LOCK with lock_state::tests to prevent env var races.
         let _guard = crate::lock_state::ENV_LOCK.lock().unwrap();
-        std::env::set_var("ORIGIN_SPACE", "career");
+        std::env::set_var("WENLAN_SPACE", "career");
         crate::lock_state::init_from_env();
 
         let client = Client::new();
@@ -280,7 +280,7 @@ mod tests {
         assert_eq!(header.to_str().unwrap(), "career");
 
         // Clean up.
-        std::env::remove_var("ORIGIN_SPACE");
+        std::env::remove_var("WENLAN_SPACE");
         crate::lock_state::init_from_env();
     }
 
@@ -288,7 +288,7 @@ mod tests {
     fn space_header_absent_when_unlocked() {
         // Share ENV_LOCK with lock_state::tests to prevent env var races.
         let _guard = crate::lock_state::ENV_LOCK.lock().unwrap();
-        std::env::remove_var("ORIGIN_SPACE");
+        std::env::remove_var("WENLAN_SPACE");
         crate::lock_state::init_from_env();
 
         let client = Client::new();

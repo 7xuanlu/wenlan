@@ -3,7 +3,7 @@
 //!
 //! Mirrors the relevant slice of `app/src/api.rs::WenlanClient` but uses
 //! `anyhow::Result` (this is a CLI binary, not a Tauri command surface),
-//! and reads `ORIGIN_HOST` (full URL) instead of `ORIGIN_PORT` so users can
+//! and reads `WENLAN_HOST` (full URL) instead of `WENLAN_PORT` so users can
 //! point the CLI at a remote daemon over a tunnel.
 //!
 //! The methods exposed here are the subset the CLI subcommands need:
@@ -21,7 +21,7 @@ use wenlan_types::{
 const DEFAULT_HOST: &str = "http://127.0.0.1:7878";
 
 pub fn origin_host_from_env() -> String {
-    std::env::var("ORIGIN_HOST")
+    std::env::var("WENLAN_HOST")
         .unwrap_or_else(|_| DEFAULT_HOST.to_string())
         .trim_end_matches('/')
         .to_string()
@@ -33,7 +33,7 @@ pub struct WenlanClient {
 }
 
 impl WenlanClient {
-    /// Create a client using `ORIGIN_HOST` env var, or default to `http://127.0.0.1:7878`.
+    /// Create a client using `WENLAN_HOST` env var, or default to `http://127.0.0.1:7878`.
     pub fn from_env() -> Self {
         let base_url = origin_host_from_env();
         Self {

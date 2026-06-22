@@ -3,12 +3,12 @@
 //!
 //! Emits two compile-time env vars used by `ReportEnv` in the eval harness:
 //!
-//! - `ORIGIN_MIGRATIONS_HASH`: 16-char hex prefix of SHA-256 over the
+//! - `WENLAN_MIGRATIONS_HASH`: 16-char hex prefix of SHA-256 over the
 //!   migration-bearing source files (`src/db.rs` + every file under
 //!   `src/migrations/`). Changes whenever a migration lands, which
 //!   invalidates eval caches that were built against the old schema.
 //!
-//! - `ORIGIN_GIT_SHA`: 12-char short git SHA of HEAD. Unset in tarball
+//! - `WENLAN_GIT_SHA`: 12-char short git SHA of HEAD. Unset in tarball
 //!   builds where `.git/` is absent (the `option_env!` call-sites handle
 //!   the None case gracefully).
 
@@ -53,9 +53,9 @@ fn main() {
     if found_any {
         let hex = format!("{:x}", hasher.finalize());
         let short: String = hex.chars().take(16).collect();
-        println!("cargo:rustc-env=ORIGIN_MIGRATIONS_HASH={}", short);
+        println!("cargo:rustc-env=WENLAN_MIGRATIONS_HASH={}", short);
     } else {
-        println!("cargo:rustc-env=ORIGIN_MIGRATIONS_HASH=missing");
+        println!("cargo:rustc-env=WENLAN_MIGRATIONS_HASH=missing");
     }
 
     // --- git SHA -----------------------------------------------------------
@@ -68,7 +68,7 @@ fn main() {
         if output.status.success() {
             let sha = String::from_utf8_lossy(&output.stdout).trim().to_string();
             if !sha.is_empty() {
-                println!("cargo:rustc-env=ORIGIN_GIT_SHA={}", sha);
+                println!("cargo:rustc-env=WENLAN_GIT_SHA={}", sha);
             }
         }
     }

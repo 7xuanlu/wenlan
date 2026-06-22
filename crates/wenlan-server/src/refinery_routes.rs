@@ -6,14 +6,14 @@
 use axum::extract::{Path, Query, State};
 use axum::http::HeaderMap;
 use axum::Json;
+use serde::Deserialize;
+use std::sync::Arc;
+use tokio::sync::RwLock;
 use wenlan_core::synthesis::refinement_queue::{apply_refinement, resolve_proposal, ResolveStatus};
 use wenlan_types::responses::{
     AcceptRefinementResponse, ListRefinementsResponse, ProposalAction, RefinementPayload,
     RefinementProposalSummary, RejectRefinementResponse,
 };
-use serde::Deserialize;
-use std::sync::Arc;
-use tokio::sync::RwLock;
 
 use crate::error::ServerError;
 use crate::memory_routes::extract_agent_name;

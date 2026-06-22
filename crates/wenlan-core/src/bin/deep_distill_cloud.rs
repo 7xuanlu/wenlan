@@ -2,9 +2,9 @@
 //! deep_distill_cloud: Run the same deep distillation prompt through Anthropic models.
 //! Produces output directly comparable to deep_distill.rs for on-device models.
 
-use wenlan_core::prompts::PromptRegistry;
 use serde_json::json;
 use std::time::Instant;
+use wenlan_core::prompts::PromptRegistry;
 
 const MEMORIES: &[&str] = &[
     "[mem_1] Origin is a personal knowledge wiki app built with Tauri 2 and Rust.",

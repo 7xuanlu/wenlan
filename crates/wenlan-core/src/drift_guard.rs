@@ -185,80 +185,80 @@ fn doc_path_references_resolve() {
 /// Infra/transport/path flags exempt from the documentation requirement.
 /// Extend deliberately, each with a one-line reason.
 const FLAG_ALLOWLIST: &[&str] = &[
-    "ORIGIN_PORT",            // transport
-    "ORIGIN_HOST",            // transport
-    "ORIGIN_BIND_ADDR",       // transport
-    "ORIGIN_DATA_DIR",        // path
-    "ORIGIN_PORT_FILE",       // path
-    "ORIGIN_LISTENING_ON",    // runtime status
-    "ORIGIN_GIT_SHA",         // build stamp
-    "ORIGIN_MCP_CACHE_DIR",   // path
-    "ORIGIN_MIGRATIONS_HASH", // build stamp
-    "ORIGIN_BATCH_LOG",       // debug logging
-    "ORIGIN_CHATGPT_ZIP",     // import path
+    "WENLAN_PORT",            // transport
+    "WENLAN_HOST",            // transport
+    "WENLAN_BIND_ADDR",       // transport
+    "WENLAN_DATA_DIR",        // path
+    "WENLAN_PORT_FILE",       // path
+    "WENLAN_LISTENING_ON",    // runtime status
+    "WENLAN_GIT_SHA",         // build stamp
+    "WENLAN_MCP_CACHE_DIR",   // path
+    "WENLAN_MIGRATIONS_HASH", // build stamp
+    "WENLAN_BATCH_LOG",       // debug logging
+    "WENLAN_CHATGPT_ZIP",     // import path
 ];
 
 /// BASELINE: behavioral flags undocumented when this contract was introduced
 /// (2026-06-19). Grandfathered so the gate lands green on a repo with an existing
 /// backlog; a NEW undocumented flag still fails fail-closed. BURN DOWN by
 /// documenting each in an AGENTS.md and deleting it from this list. (Pure test/infra
-/// flags — e.g. ORIGIN_TEST_FASTEMBED_CACHE — should instead move to FLAG_ALLOWLIST.)
+/// flags — e.g. WENLAN_TEST_FASTEMBED_CACHE — should instead move to FLAG_ALLOWLIST.)
 const BASELINE_UNDOCUMENTED: &[&str] = &[
-    "ORIGIN_COT_MAX_ITER",
-    "ORIGIN_COT_ROUND_TIMEOUT_SECS",
-    "ORIGIN_ENABLE_CONTEXT_COMPRESS",
-    "ORIGIN_ENABLE_COT_RETRIEVAL",
-    "ORIGIN_ENABLE_DUAL_POOL_RESOLVE",
-    "ORIGIN_ENABLE_ENTITY_MINHASH",
-    "ORIGIN_ENABLE_EPISODE_CHANNEL",
-    "ORIGIN_ENABLE_EVICTION",
-    "ORIGIN_ENABLE_FACT_CHANNEL",
-    "ORIGIN_ENABLE_FTS_HARDENING",
-    "ORIGIN_ENABLE_GLOBAL_PRELUDE",
-    "ORIGIN_ENABLE_GRAPH_GATE",
-    "ORIGIN_ENABLE_GRAPH_SEED",
-    "ORIGIN_ENABLE_REFLECTION_DEBOUNCE",
-    "ORIGIN_ENABLE_RERANK_BLEND",
-    "ORIGIN_ENABLE_SALIENCE_PRIOR",
-    "ORIGIN_ENABLE_SESSION_DIVERSITY",
-    "ORIGIN_ENABLE_TEMPORAL_GROUNDING",
-    "ORIGIN_EPISODE_CHANNEL_LIMIT",
-    "ORIGIN_EPISODE_WORD_GATE",
-    "ORIGIN_EVAL_ANSWER_PROMPT_V2",
-    "ORIGIN_EXPAND_TEMP",
-    "ORIGIN_FACT_CHANNEL_LIMIT",
-    "ORIGIN_GRAPH_FRONTIER_CAP",
-    "ORIGIN_GRAPH_HOP_DEPTH",
-    "ORIGIN_GRAPH_HUB_CAP",
-    "ORIGIN_GRAPH_KHOP_DEPTH",
-    "ORIGIN_GRAPH_KHOP_MAX_NODES",
-    "ORIGIN_GRAPH_SEED_TOP_K",
-    "ORIGIN_GRAPH_SURFACE_BUDGET",
+    "WENLAN_COT_MAX_ITER",
+    "WENLAN_COT_ROUND_TIMEOUT_SECS",
+    "WENLAN_ENABLE_CONTEXT_COMPRESS",
+    "WENLAN_ENABLE_COT_RETRIEVAL",
+    "WENLAN_ENABLE_DUAL_POOL_RESOLVE",
+    "WENLAN_ENABLE_ENTITY_MINHASH",
+    "WENLAN_ENABLE_EPISODE_CHANNEL",
+    "WENLAN_ENABLE_EVICTION",
+    "WENLAN_ENABLE_FACT_CHANNEL",
+    "WENLAN_ENABLE_FTS_HARDENING",
+    "WENLAN_ENABLE_GLOBAL_PRELUDE",
+    "WENLAN_ENABLE_GRAPH_GATE",
+    "WENLAN_ENABLE_GRAPH_SEED",
+    "WENLAN_ENABLE_REFLECTION_DEBOUNCE",
+    "WENLAN_ENABLE_RERANK_BLEND",
+    "WENLAN_ENABLE_SALIENCE_PRIOR",
+    "WENLAN_ENABLE_SESSION_DIVERSITY",
+    "WENLAN_ENABLE_TEMPORAL_GROUNDING",
+    "WENLAN_EPISODE_CHANNEL_LIMIT",
+    "WENLAN_EPISODE_WORD_GATE",
+    "WENLAN_EVAL_ANSWER_PROMPT_V2",
+    "WENLAN_EXPAND_TEMP",
+    "WENLAN_FACT_CHANNEL_LIMIT",
+    "WENLAN_GRAPH_FRONTIER_CAP",
+    "WENLAN_GRAPH_HOP_DEPTH",
+    "WENLAN_GRAPH_HUB_CAP",
+    "WENLAN_GRAPH_KHOP_DEPTH",
+    "WENLAN_GRAPH_KHOP_MAX_NODES",
+    "WENLAN_GRAPH_SEED_TOP_K",
+    "WENLAN_GRAPH_SURFACE_BUDGET",
     // Helper-read LLM batching flags (parse_clamped_*_env call sites in llm_provider.rs),
     // surfaced by the broadened read-detector. Pre-existing + undocumented at contract intro.
-    "ORIGIN_LLM_COALESCE_MS",
-    "ORIGIN_LLM_PARALLEL_SEQS",
-    "ORIGIN_LLM_WORKERS",
-    "ORIGIN_MAGNITUDE_FUSION",
-    "ORIGIN_MERGE_SHRINK_GUARD",
-    "ORIGIN_PAGE_CHANNEL_LIMIT",
-    "ORIGIN_PRELUDE_BUCKET_K",
-    "ORIGIN_PRELUDE_MIN_MEMBERS",
-    "ORIGIN_PRF_ROUNDS",
-    "ORIGIN_QUERY_DECOMP_MAX_SUBQUERIES",
-    "ORIGIN_QUERY_INTENT_FTS_BOOST",
-    "ORIGIN_SESSION_DIVERSITY_MAX",
-    "ORIGIN_SPACE",
-    "ORIGIN_TEST_FASTEMBED_CACHE",
+    "WENLAN_LLM_COALESCE_MS",
+    "WENLAN_LLM_PARALLEL_SEQS",
+    "WENLAN_LLM_WORKERS",
+    "WENLAN_MAGNITUDE_FUSION",
+    "WENLAN_MERGE_SHRINK_GUARD",
+    "WENLAN_PAGE_CHANNEL_LIMIT",
+    "WENLAN_PRELUDE_BUCKET_K",
+    "WENLAN_PRELUDE_MIN_MEMBERS",
+    "WENLAN_PRF_ROUNDS",
+    "WENLAN_QUERY_DECOMP_MAX_SUBQUERIES",
+    "WENLAN_QUERY_INTENT_FTS_BOOST",
+    "WENLAN_SESSION_DIVERSITY_MAX",
+    "WENLAN_SPACE",
+    "WENLAN_TEST_FASTEMBED_CACHE",
 ];
 
-/// Every ORIGIN_* flag read in production source (`crates/*/src`). Matches the flag
+/// Every WENLAN_* flag read in production source (`crates/*/src`). Matches the flag
 /// name as a string-literal argument to an env reader — `env::var("…")`, `var_os("…")`,
 /// or any `*_env("…")` helper (e.g. the `parse_clamped_*_env` idiom, whose name arg is
 /// a literal at the call site) — so indirect reads through a helper aren't silently
 /// missed. Whitespace-tolerant so multi-line call sites (name on its own line) match.
 fn flags_read_in_code(root: &Path) -> BTreeSet<String> {
-    let re = regex::Regex::new(r#"(?:var_os|var|_env)\s*\(\s*"(ORIGIN_[A-Z0-9_]+)""#).unwrap();
+    let re = regex::Regex::new(r#"(?:var_os|var|_env)\s*\(\s*"(WENLAN_[A-Z0-9_]+)""#).unwrap();
     let mut flags = BTreeSet::new();
     for f in git_ls_files(root, "*.rs") {
         if !f.starts_with("crates/") || !f.contains("/src/") {
@@ -272,9 +272,9 @@ fn flags_read_in_code(root: &Path) -> BTreeSet<String> {
     flags
 }
 
-/// Every ORIGIN_* flag mentioned in any tracked AGENTS.md (the prose flag docs).
+/// Every WENLAN_* flag mentioned in any tracked AGENTS.md (the prose flag docs).
 fn documented_flags(root: &Path) -> BTreeSet<String> {
-    let re = regex::Regex::new(r"ORIGIN_[A-Z0-9_]+").unwrap();
+    let re = regex::Regex::new(r"WENLAN_[A-Z0-9_]+").unwrap();
     let mut flags = BTreeSet::new();
     for f in git_ls_files(root, "*AGENTS.md") {
         let txt = std::fs::read_to_string(root.join(&f)).unwrap_or_default();
@@ -303,12 +303,12 @@ fn flag_collectors_basic() {
     let root = repo_root();
     let doc = documented_flags(&root);
     assert!(
-        doc.contains("ORIGIN_GRAPH_MEMORY_STREAM"),
+        doc.contains("WENLAN_GRAPH_MEMORY_STREAM"),
         "expected a known documented flag to be found"
     );
     let read = flags_read_in_code(&root);
     assert!(
-        read.contains("ORIGIN_GRAPH_HUB_CAP"),
+        read.contains("WENLAN_GRAPH_HUB_CAP"),
         "expected a known code-read flag to be found"
     );
 }
@@ -329,7 +329,7 @@ fn behavioral_flags_are_documented() {
 
     assert!(
         missing.is_empty(),
-        "NEW undocumented behavioral ORIGIN_* flag(s). Fix: document in an *AGENTS.md* \
+        "NEW undocumented behavioral WENLAN_* flag(s). Fix: document in an *AGENTS.md* \
          (only AGENTS.md files are scanned for docs — docs/ and READMEs do NOT count), \
          or add to FLAG_ALLOWLIST / BASELINE_UNDOCUMENTED with a reason:\n{}",
         missing.join("\n")
@@ -341,14 +341,14 @@ fn flag_doc_contract_detects_undocumented() {
     // Positive control: the SAME set-difference the gate uses must flag a
     // read-but-undocumented flag while leaving a documented one alone. Proves the
     // tooth bites (the failure path), not just that the live repo happens to be green.
-    let read: BTreeSet<String> = ["ORIGIN_REAL", "ORIGIN_FAKE_UNDOCUMENTED"]
+    let read: BTreeSet<String> = ["WENLAN_REAL", "WENLAN_FAKE_UNDOCUMENTED"]
         .iter()
         .map(|s| s.to_string())
         .collect();
-    let documented: BTreeSet<String> = ["ORIGIN_REAL"].iter().map(|s| s.to_string()).collect();
+    let documented: BTreeSet<String> = ["WENLAN_REAL"].iter().map(|s| s.to_string()).collect();
     let exempt: BTreeSet<String> = BTreeSet::new();
     let missing = undocumented_flags(&read, &documented, &exempt);
-    assert_eq!(missing, vec!["ORIGIN_FAKE_UNDOCUMENTED".to_string()]);
+    assert_eq!(missing, vec!["WENLAN_FAKE_UNDOCUMENTED".to_string()]);
 }
 
 #[test]
@@ -358,7 +358,7 @@ fn flag_default_mismatch_warns() {
     // defaults are skipped (warn-by-omission).
     let root = repo_root();
     let read_re = regex::Regex::new(
-        r#"env::var\("(ORIGIN_[A-Z0-9_]+)"\).*unwrap_or\(([0-9]+(?:\.[0-9]+)?|true|false)\)"#,
+        r#"env::var\("(WENLAN_[A-Z0-9_]+)"\).*unwrap_or\(([0-9]+(?:\.[0-9]+)?|true|false)\)"#,
     )
     .unwrap();
     let mut code_defaults = BTreeMap::new();

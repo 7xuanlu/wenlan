@@ -40,11 +40,11 @@ pub fn stopwords() -> &'static HashSet<&'static str> {
     &STOPWORDS
 }
 
-/// Returns `true` iff `ORIGIN_ENABLE_FTS_HARDENING` is set to a truthy value
+/// Returns `true` iff `WENLAN_ENABLE_FTS_HARDENING` is set to a truthy value
 /// (`"1"`, `"true"`, or `"yes"`, case-insensitive). Any other value or unset
 /// leaves hardening disabled (byte-identical to pre-T12 behavior).
 pub fn fts_recall_hardening_enabled() -> bool {
-    std::env::var("ORIGIN_ENABLE_FTS_HARDENING")
+    std::env::var("WENLAN_ENABLE_FTS_HARDENING")
         .ok()
         .map(|v| matches!(v.trim().to_ascii_lowercase().as_str(), "1" | "true" | "yes"))
         .unwrap_or(false)
@@ -332,7 +332,7 @@ mod tests {
     #[test]
     fn hardening_enabled_truthy_values() {
         for val in ["1", "true", "yes", "TRUE", "YES", "True"] {
-            temp_env::with_var("ORIGIN_ENABLE_FTS_HARDENING", Some(val), || {
+            temp_env::with_var("WENLAN_ENABLE_FTS_HARDENING", Some(val), || {
                 assert!(
                     fts_recall_hardening_enabled(),
                     "Expected enabled for value={val:?}"
@@ -344,7 +344,7 @@ mod tests {
     #[test]
     fn hardening_disabled_for_falsy_and_unset() {
         for val in [Some("0"), Some("false"), Some("garbage"), None] {
-            temp_env::with_var("ORIGIN_ENABLE_FTS_HARDENING", val, || {
+            temp_env::with_var("WENLAN_ENABLE_FTS_HARDENING", val, || {
                 assert!(
                     !fts_recall_hardening_enabled(),
                     "Expected disabled for value={val:?}"

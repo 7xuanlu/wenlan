@@ -133,10 +133,10 @@ impl Config {
 }
 
 fn config_path() -> PathBuf {
-    // Honor the `ORIGIN_DATA_DIR` override so a scratch daemon (e.g.
+    // Honor the `WENLAN_DATA_DIR` override so a scratch daemon (e.g.
     // `origin-server --data-dir /tmp/origin-demo`) reads and writes its own
     // config file rather than clobbering the user's real one.
-    let root = std::env::var_os("ORIGIN_DATA_DIR")
+    let root = crate::env_compat::var_compat("WENLAN_DATA_DIR")
         .map(PathBuf::from)
         .unwrap_or_else(|| {
             dirs::data_local_dir()

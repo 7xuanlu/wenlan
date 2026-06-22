@@ -44,11 +44,11 @@ pub struct SearchResult {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub quality: Option<String>,
     /// T8 salience prior: per-memory importance 1-10 (NULL = unrated). Read into
-    /// the ranking formula only when `ORIGIN_ENABLE_SALIENCE_PRIOR` is on.
+    /// the ranking formula only when `WENLAN_ENABLE_SALIENCE_PRIOR` is on.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub importance: Option<u8>,
     /// Event timestamp (unix seconds) the memory describes, when extractable.
-    /// Read into the temporal SOFT boost only when `ORIGIN_ENABLE_TEMPORAL_SOFT_BOOST`
+    /// Read into the temporal SOFT boost only when `WENLAN_ENABLE_TEMPORAL_SOFT_BOOST`
     /// is on; NULL (undated) rows stay neutral.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub event_date: Option<i64>,

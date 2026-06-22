@@ -170,7 +170,7 @@ const CONTINUOUS_BATCH_SAFETY_RESERVE_TOKENS: usize = 32;
 /// so a drained request waits at most ~this-many slot-rounds. m≤8 → cap≤32.
 const BACKFILL_DRAIN_FACTOR: usize = 4;
 
-/// Continuous-batch slot backfill (`ORIGIN_LLM_SLOT_BACKFILL`). OFF by default
+/// Continuous-batch slot backfill (`WENLAN_LLM_SLOT_BACKFILL`). OFF by default
 /// (opt-in); enable with `1`/`true`/`yes`/`on`. Default-OFF because this is a
 /// structural rewrite of the SHARED on-device inference path that CI cannot
 /// validate on Metal hardware — it ships behind an explicit opt-in for the
@@ -180,7 +180,7 @@ const BACKFILL_DRAIN_FACTOR: usize = 4;
 /// slots full via backfill; when OFF (the default) it caps the drain at `m` —
 /// one slot per request, byte-identical to the pre-backfill behavior.
 fn slot_backfill_enabled() -> bool {
-    match std::env::var("ORIGIN_LLM_SLOT_BACKFILL") {
+    match std::env::var("WENLAN_LLM_SLOT_BACKFILL") {
         Ok(v) => matches!(
             v.trim().to_ascii_lowercase().as_str(),
             "1" | "true" | "yes" | "on"
@@ -455,12 +455,12 @@ impl OnDeviceProvider {
         // stores before backpressure.
         let (tx, rx) = std::sync::mpsc::sync_channel::<InferenceRequest>(256);
 
-        // Multi-context worker pool. ORIGIN_LLM_WORKERS controls the number of
+        // Multi-context worker pool. WENLAN_LLM_WORKERS controls the number of
         // parallel inference threads, each owning a persistent LlamaContext.
         // Workers compete on a shared receiver: lock is held only during recv(),
         // released before GPU inference, so contention is minimal.
         //
-        // ORIGIN_LLM_PARALLEL_SEQS (Option B / S2) controls how many sequences
+        // WENLAN_LLM_PARALLEL_SEQS (Option B / S2) controls how many sequences
         // each worker decodes in parallel inside its single LlamaContext via
         // llama.cpp's continuous batching scheduler. M=1 (default) routes
         // through the single-seq persistent path and is byte-identical to S1.
@@ -476,11 +476,11 @@ impl OnDeviceProvider {
         //
         // GGML_METAL_NO_RESIDENCY (set above) mitigates Metal command queue
         // exhaustion from multiple simultaneous contexts.
-        let n_workers = parse_clamped_usize_env("ORIGIN_LLM_WORKERS", 1, 1, MAX_LLM_WORKERS);
+        let n_workers = parse_clamped_usize_env("WENLAN_LLM_WORKERS", 1, 1, MAX_LLM_WORKERS);
         let parallel_seqs =
-            parse_clamped_usize_env("ORIGIN_LLM_PARALLEL_SEQS", 1, 1, MAX_LLM_PARALLEL_SEQS);
+            parse_clamped_usize_env("WENLAN_LLM_PARALLEL_SEQS", 1, 1, MAX_LLM_PARALLEL_SEQS);
         let coalesce_ms = parse_clamped_u64_env(
-            "ORIGIN_LLM_COALESCE_MS",
+            "WENLAN_LLM_COALESCE_MS",
             DEFAULT_BATCH_COALESCE_MS,
             0,
             MAX_BATCH_COALESCE_MS,
@@ -550,7 +550,7 @@ impl OnDeviceProvider {
                         // Block on the first request, then opportunistically
                         // pull up to M-1 more if M>1. By default, the follow-up
                         // drain is immediate so isolated calls do not wait for
-                        // siblings; ORIGIN_LLM_COALESCE_MS can opt into a tiny
+                        // siblings; WENLAN_LLM_COALESCE_MS can opt into a tiny
                         // wait for trickle workloads.
                         let first_req = match deferred_reqs.pop_front() {
                             Some(r) => r,
@@ -570,7 +570,7 @@ impl OnDeviceProvider {
                             // `drain_cap`-1 additional pending requests. By
                             // default this is an immediate drain (0ms wait) so
                             // isolated calls pay no artificial latency. Operators
-                            // can set ORIGIN_LLM_COALESCE_MS for trickle
+                            // can set WENLAN_LLM_COALESCE_MS for trickle
                             // workloads. With slot backfill ON, drain_cap > m so
                             // the engine keeps all m slots full from the queue.
                             let coalesce_attempts: u32 =
@@ -616,7 +616,7 @@ impl OnDeviceProvider {
                         let target_ctx_size =
                             batch_reqs.iter().map(|r| r.ctx_size).max().unwrap_or(0);
                         let target_seq_max = context_seq_max_for_batch(batch_reqs.len(), m);
-                        let batch_log_enabled = std::env::var("ORIGIN_BATCH_LOG").is_ok();
+                        let batch_log_enabled = std::env::var("WENLAN_BATCH_LOG").is_ok();
 
                         if persistent_ctx.is_none()
                             || persistent_ctx_size != target_ctx_size

@@ -18,8 +18,8 @@
 //! silent-zero class is guarded by the unit tests below.
 
 use crate::llm_provider::LlmRequest;
-use wenlan_types::SearchResult;
 use std::collections::HashMap;
+use wenlan_types::SearchResult;
 
 /// Outcome of validating a draft answer against the retrieved context.
 #[derive(Debug, Clone, PartialEq, Eq)]

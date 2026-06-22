@@ -11,10 +11,10 @@
 //!   cargo run -p origin-core --bin fixture_gen -- --mode blind --count 10 --out eval/fixtures/gen/blind
 //!   cargo run -p origin-core --bin fixture_gen -- --help
 
-use wenlan_core::eval::gen;
-use wenlan_core::llm_provider::{LlmProvider, OnDeviceProvider};
 use std::path::PathBuf;
 use std::sync::Arc;
+use wenlan_core::eval::gen;
+use wenlan_core::llm_provider::{LlmProvider, OnDeviceProvider};
 
 #[derive(Debug)]
 struct Args {

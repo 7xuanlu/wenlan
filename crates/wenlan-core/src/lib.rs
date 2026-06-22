@@ -23,6 +23,7 @@ pub mod decay;
 #[cfg(test)]
 mod drift_guard;
 pub mod engine;
+pub mod env_compat;
 pub mod error;
 pub mod eval;
 pub mod events;

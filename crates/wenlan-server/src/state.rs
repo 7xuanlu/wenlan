@@ -4,6 +4,9 @@
 use crate::ingest_batcher::IngestBatcher;
 use crate::reflection_debounce::ReflectionDebouncer;
 use crate::scheduler::WriteSignal;
+use std::path::PathBuf;
+use std::sync::Arc;
+use tokio::sync::RwLock;
 use wenlan_core::access_tracker::AccessTracker;
 use wenlan_core::db::MemoryDB;
 use wenlan_core::llm_provider::LlmProvider;
@@ -12,9 +15,6 @@ use wenlan_core::quality_gate::QualityGate;
 use wenlan_core::reranker::Reranker;
 use wenlan_core::tuning::TuningConfig;
 use wenlan_types::responses::RerankerStatus;
-use std::path::PathBuf;
-use std::sync::Arc;
-use tokio::sync::RwLock;
 
 /// Shared state for the HTTP daemon.
 ///
@@ -57,7 +57,7 @@ pub struct ServerState {
     /// Write-event tracker for the event-driven steep scheduler.
     pub write_signal: WriteSignal,
     /// Per-agent debouncer for background reflection (T22). Coalesces
-    /// mid-burst enrichment spawns when `ORIGIN_ENABLE_REFLECTION_DEBOUNCE`
+    /// mid-burst enrichment spawns when `WENLAN_ENABLE_REFLECTION_DEBOUNCE`
     /// is truthy; inert (never consulted) when the flag is unset/0.
     pub reflection_debouncer: ReflectionDebouncer,
     /// Coalescing batcher for concurrent `/api/memory/store` calls. Groups

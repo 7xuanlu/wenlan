@@ -5,8 +5,8 @@ use crate::error::ServerError;
 use crate::state::SharedState;
 use axum::extract::{Query, State};
 use axum::response::Json;
-use wenlan_types::responses::{KnowledgeCountResponse, KnowledgePathResponse};
 use serde::Deserialize;
+use wenlan_types::responses::{KnowledgeCountResponse, KnowledgePathResponse};
 
 /// GET /api/knowledge/path
 pub async fn handle_get_knowledge_path() -> Result<Json<KnowledgePathResponse>, ServerError> {

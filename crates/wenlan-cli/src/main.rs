@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 use clap::{Parser, Subcommand};
-use wenlan_cli::{client, commands, output};
 use output::OutputFormat;
+use wenlan_cli::{client, commands, output};
 
 #[derive(Parser)]
 #[command(

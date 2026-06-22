@@ -5,12 +5,12 @@ use crate::error::ServerError;
 use crate::state::SharedState;
 use axum::extract::State;
 use axum::response::Json;
+use serde::{Deserialize, Serialize};
+use std::sync::Arc;
 use wenlan_core::config;
 use wenlan_core::on_device_models::{self, OnDeviceModel};
 use wenlan_types::requests::UpdateConfigRequest;
 use wenlan_types::responses::ConfigResponse;
-use serde::{Deserialize, Serialize};
-use std::sync::Arc;
 
 fn config_to_response(cfg: &config::Config) -> ConfigResponse {
     ConfigResponse {
@@ -337,7 +337,7 @@ pub async fn handle_download_on_device_model(
     Ok(Json(SuccessResponse { ok: true }))
 }
 
-/// Shared mutex for tests that mutate the global ORIGIN_DATA_DIR env var.
+/// Shared mutex for tests that mutate the global WENLAN_DATA_DIR env var.
 /// A single file-level static ensures tests in both test modules serialise
 /// through the same lock and never race with each other.
 #[cfg(test)]
@@ -362,8 +362,8 @@ mod setup_status_tests {
     impl WenlanDataDirGuard {
         fn new() -> Self {
             let tmp = tempfile::tempdir().unwrap();
-            let previous = std::env::var_os("ORIGIN_DATA_DIR");
-            std::env::set_var("ORIGIN_DATA_DIR", tmp.path());
+            let previous = std::env::var_os("WENLAN_DATA_DIR");
+            std::env::set_var("WENLAN_DATA_DIR", tmp.path());
             Self {
                 previous,
                 _tmp: tmp,
@@ -374,8 +374,8 @@ mod setup_status_tests {
     impl Drop for WenlanDataDirGuard {
         fn drop(&mut self) {
             match &self.previous {
-                Some(value) => std::env::set_var("ORIGIN_DATA_DIR", value),
-                None => std::env::remove_var("ORIGIN_DATA_DIR"),
+                Some(value) => std::env::set_var("WENLAN_DATA_DIR", value),
+                None => std::env::remove_var("WENLAN_DATA_DIR"),
             }
         }
     }
@@ -486,8 +486,8 @@ mod config_model_fields_tests {
     impl DataDirGuard {
         fn new() -> Self {
             let tmp = tempfile::tempdir().unwrap();
-            let previous = std::env::var_os("ORIGIN_DATA_DIR");
-            std::env::set_var("ORIGIN_DATA_DIR", tmp.path());
+            let previous = std::env::var_os("WENLAN_DATA_DIR");
+            std::env::set_var("WENLAN_DATA_DIR", tmp.path());
             Self {
                 previous,
                 _tmp: tmp,
@@ -498,8 +498,8 @@ mod config_model_fields_tests {
     impl Drop for DataDirGuard {
         fn drop(&mut self) {
             match &self.previous {
-                Some(value) => std::env::set_var("ORIGIN_DATA_DIR", value),
-                None => std::env::remove_var("ORIGIN_DATA_DIR"),
+                Some(value) => std::env::set_var("WENLAN_DATA_DIR", value),
+                None => std::env::remove_var("WENLAN_DATA_DIR"),
             }
         }
     }

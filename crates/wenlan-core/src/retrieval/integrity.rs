@@ -3,7 +3,7 @@
 //! substitution-only enrichment.
 //!
 //! All functions in this module are pure (no I/O, no env reads, no side
-//! effects). Env reads (`ORIGIN_MERGE_SHRINK_GUARD`) live at the call site in
+//! effects). Env reads (`WENLAN_MERGE_SHRINK_GUARD`) live at the call site in
 //! `post_write.rs` so this module stays trivially testable.
 
 /// Returns `true` iff replacing `old` with `new` is NOT a catastrophic shrink.

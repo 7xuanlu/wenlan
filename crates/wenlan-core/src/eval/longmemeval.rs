@@ -616,12 +616,12 @@ fn build_lme_env(
         skill_prompt_hash: None,
         schema_version: 1,
         schema_db_version: Some(crate::db::SCHEMA_VERSION),
-        migrations_hash: option_env!("ORIGIN_MIGRATIONS_HASH").map(String::from),
+        migrations_hash: option_env!("WENLAN_MIGRATIONS_HASH").map(String::from),
         n_runs,
         is_single_run: n_runs == 1,
         run_id,
         timestamp_utc,
-        git_sha: option_env!("ORIGIN_GIT_SHA").map(String::from),
+        git_sha: option_env!("WENLAN_GIT_SHA").map(String::from),
         warmup_iterations: 0,
         ..Default::default()
     }
@@ -924,7 +924,7 @@ pub async fn run_longmemeval_eval_reranked(
 
 /// Same seeding/scoring logic as `run_longmemeval_eval_reranked`, but retrieval
 /// uses `search_memory_cross_rerank` driven by a cross-encoder reranker
-/// (model per `ORIGIN_RERANKER_MODEL`; default `BGERerankerBase` since
+/// (model per `WENLAN_RERANKER_MODEL`; default `BGERerankerBase` since
 /// 2026-06-11). Lets the eval sweep compare LLM-as-judge
 /// reranking against a purpose-built cross-encoder on identical fixtures.
 pub async fn run_longmemeval_eval_cross_rerank(
@@ -1079,7 +1079,7 @@ pub async fn run_longmemeval_eval_cross_rerank(
 /// `memory_source_id` function used by the LME ephemeral seed path and
 /// the fullpipeline harness).
 /// Page-channel ON/OFF is controlled by the caller via the
-/// `ORIGIN_ENABLE_PAGE_CHANNEL` env var (read inside
+/// `WENLAN_ENABLE_PAGE_CHANNEL` env var (read inside
 /// `search_memory_cross_rerank`).
 pub async fn run_longmemeval_eval_cross_rerank_from_db(
     db: &MemoryDB,
@@ -1245,7 +1245,7 @@ pub async fn run_longmemeval_eval_cross_rerank_from_db(
         coverage,
     };
 
-    // Branch variant_tag on ORIGIN_ENABLE_PAGE_CHANNEL + ORIGIN_MAGNITUDE_FUSION
+    // Branch variant_tag on WENLAN_ENABLE_PAGE_CHANNEL + WENLAN_MAGNITUDE_FUSION
     // so each variant produces distinct baseline filenames (comparable_hash uses
     // the variant string). magfusion appends `_magfusion` when enabled.
     let page_channel_state = if crate::db::page_channel_enabled() {
@@ -1266,10 +1266,10 @@ pub async fn run_longmemeval_eval_cross_rerank_from_db(
     if magfusion_state == "on" {
         variant_tag.push_str("_magfusion");
     }
-    // T9: append __graph_seed_d{depth} suffix when ORIGIN_ENABLE_GRAPH_SEED is on.
+    // T9: append __graph_seed_d{depth} suffix when WENLAN_ENABLE_GRAPH_SEED is on.
     let graph_seed_depth = if crate::db::graph_seed_enabled() {
         let depth = crate::retrieval::signals::parse_hop_depth(
-            std::env::var("ORIGIN_GRAPH_HOP_DEPTH").ok().as_deref(),
+            std::env::var("WENLAN_GRAPH_HOP_DEPTH").ok().as_deref(),
         );
         Some(depth)
     } else {
@@ -1278,13 +1278,13 @@ pub async fn run_longmemeval_eval_cross_rerank_from_db(
     if let Some(depth) = graph_seed_depth {
         variant_tag.push_str(&format!("__graph_seed_d{}", depth));
     }
-    // T4b: append __graph_khop_d{depth} suffix when ORIGIN_ENABLE_GRAPH_KHOP is on.
+    // T4b: append __graph_khop_d{depth} suffix when WENLAN_ENABLE_GRAPH_KHOP is on.
     // Honest config stamp: this runner calls search_memory_cross_rerank ->
     // augment_with_graph, where the k-hop expansion lives, so the flag genuinely
     // changes the retrieval path. No accuracy claim is encoded by the tag.
     let graph_khop_depth = if crate::db::khop_traversal_enabled() {
         Some(crate::retrieval::traversal::parse_khop_depth(
-            std::env::var("ORIGIN_GRAPH_KHOP_DEPTH").ok().as_deref(),
+            std::env::var("WENLAN_GRAPH_KHOP_DEPTH").ok().as_deref(),
         ))
     } else {
         None
@@ -1292,14 +1292,14 @@ pub async fn run_longmemeval_eval_cross_rerank_from_db(
     if let Some(depth) = graph_khop_depth {
         variant_tag.push_str(&format!("__graph_khop_d{}", depth));
     }
-    // T19: append __query_intent suffix when ORIGIN_ENABLE_QUERY_INTENT is on.
+    // T19: append __query_intent suffix when WENLAN_ENABLE_QUERY_INTENT is on.
     let query_intent_state = if crate::retrieval::query_intent::query_intent_enabled() {
         variant_tag.push_str("__query_intent");
         "on"
     } else {
         "off"
     };
-    // T8: append __salience suffix when ORIGIN_ENABLE_SALIENCE_PRIOR is on, so
+    // T8: append __salience suffix when WENLAN_ENABLE_SALIENCE_PRIOR is on, so
     // salience-ON and salience-OFF baselines get distinct baseline filenames.
     let salience_state = if crate::db::salience_prior_enabled() {
         variant_tag.push_str("__salience");
@@ -1307,7 +1307,7 @@ pub async fn run_longmemeval_eval_cross_rerank_from_db(
     } else {
         "off"
     };
-    // T2: append __episode suffix when ORIGIN_ENABLE_EPISODE_CHANNEL is on, so
+    // T2: append __episode suffix when WENLAN_ENABLE_EPISODE_CHANNEL is on, so
     // episode-ON and episode-OFF baselines get distinct baseline filenames.
     let episode_state = if crate::db::episode_channel_enabled() {
         variant_tag.push_str("__episode");
@@ -1315,7 +1315,7 @@ pub async fn run_longmemeval_eval_cross_rerank_from_db(
     } else {
         "off"
     };
-    // T15a: append __fact suffix when ORIGIN_ENABLE_FACT_CHANNEL is on, so
+    // T15a: append __fact suffix when WENLAN_ENABLE_FACT_CHANNEL is on, so
     // fact-ON and fact-OFF baselines get distinct baseline filenames.
     let fact_state = if crate::retrieval::fact_channel::fact_channel_enabled() {
         variant_tag.push_str("__fact");
@@ -1385,7 +1385,7 @@ pub async fn run_longmemeval_eval_cross_rerank_from_db(
 /// (vector + FTS + RRF + graph augmentation) — the path the graph gate acts on.
 /// Mirrors `run_longmemeval_eval_cross_rerank_from_db` minus the cross-encoder/
 /// page channel. Reports the graph-gate skip rate (queries that bypass graph)
-/// when `ORIGIN_ENABLE_GRAPH_GATE` is on. Used for the T3 graph-gate A/B.
+/// when `WENLAN_ENABLE_GRAPH_GATE` is on. Used for the T3 graph-gate A/B.
 pub async fn run_longmemeval_eval_from_db(
     db: &MemoryDB,
     path: &Path,
@@ -2249,7 +2249,7 @@ pub async fn run_longmemeval_eval_expanded(
 /// Same seeding/scoring logic as `run_longmemeval_eval`, but retrieval uses
 /// `search_memory_prf` (T6 pseudo-relevance feedback): draft an answer from the
 /// top-K retrieved, feed it back as the next query, RRF-merge until convergence.
-/// The round budget is read from `ORIGIN_PRF_ROUNDS` (default 0 = plain search)
+/// The round budget is read from `WENLAN_PRF_ROUNDS` (default 0 = plain search)
 /// and stamped into `env.flags` for reproducibility.
 ///
 /// `#[ignore]`d L7-manual (GPU + Qwen). Validate by `cargo check`; no headline
@@ -2515,7 +2515,7 @@ pub async fn run_longmemeval_eval_temporal(path: &Path) -> Result<LongMemEvalRep
         // Fall back to Utc::now() only if the date is unparseable (degraded mode).
         let now = parse_lme_date(&sample.question_date).unwrap_or_else(chrono::Utc::now);
 
-        // T4a: use search_memory_temporal with ORIGIN_ENABLE_TEMPORAL_FILTER=1
+        // T4a: use search_memory_temporal with WENLAN_ENABLE_TEMPORAL_FILTER=1
         let results = db
             .search_memory_temporal(&sample.question, 10, None, None, None, now)
             .await?;
@@ -2824,7 +2824,7 @@ pub async fn run_longmemeval_eval_temporal_collect(
 /// [`crate::eval::locomo::run_locomo_eval_graph_stream_collect`]: one persistent
 /// populated DB per question under `<GRAPH_POP_DIR>/lme/<question_id>/`, the fine
 /// entity sweep paid once, base `search_memory` (no expansion/rerank) so the query
-/// loop is LLM-free. Only `ORIGIN_GRAPH_MEMORY_STREAM` differs per arm.
+/// loop is LLM-free. Only `WENLAN_GRAPH_MEMORY_STREAM` differs per arm.
 pub async fn run_longmemeval_eval_graph_stream_collect(
     path: &Path,
     llm: std::sync::Arc<dyn crate::llm_provider::LlmProvider>,

@@ -68,7 +68,7 @@ pub fn effective_space(inbound: &Option<String>) -> Option<String> {
                 tracing::warn!(
                     inbound = %passed,
                     locked = %locked,
-                    "model passed inbound space while ORIGIN_SPACE is locked; using locked value"
+                    "model passed inbound space while WENLAN_SPACE is locked; using locked value"
                 );
             }
         }
@@ -155,7 +155,7 @@ pub struct RecallParams {
     #[serde(default, alias = "domain")]
     pub space: Option<String>,
     #[schemars(
-        description = "Enable cross-encoder reranking. Slower (model inference) but higher retrieval quality. Off by default. Requires ORIGIN_RERANKER_ENABLED=1 on the daemon; otherwise the daemon falls back to the plain hybrid ordering."
+        description = "Enable cross-encoder reranking. Slower (model inference) but higher retrieval quality. Off by default. Requires WENLAN_RERANKER_ENABLED=1 on the daemon; otherwise the daemon falls back to the plain hybrid ordering."
     )]
     #[serde(default)]
     pub rerank: Option<bool>,
@@ -749,7 +749,7 @@ impl WenlanMcpServer {
             source_agent: self.resolve_source_agent(None),
             // Opt-in cross-encoder rerank. Default `false` preserves the
             // current cost/latency for callers that don't pass the flag.
-            // Requires ORIGIN_RERANKER_ENABLED=1 on the daemon to take
+            // Requires WENLAN_RERANKER_ENABLED=1 on the daemon to take
             // effect; otherwise the daemon logs and falls back to plain
             // hybrid ordering.
             rerank: params.rerank.unwrap_or(false),
@@ -1732,7 +1732,7 @@ impl WenlanMcpServer {
     }
 
     #[tool(
-        description = "Search memories by query. Use when the user asks 'do you remember', 'what do you know about', 'look up', or when you need a specific fact before acting.\n\nWrite queries as natural language — the search engine handles semantic matching. For precision, use filters (memory_type, space) to narrow results. If you get too many results, add filters rather than making the query longer.\n\nFor higher retrieval quality at the cost of latency, pass `rerank: true` to opt into the cross-encoder reranker (requires ORIGIN_RERANKER_ENABLED=1 on the daemon).\n\nThis is for targeted lookups. For broad session orientation, use context instead.",
+        description = "Search memories by query. Use when the user asks 'do you remember', 'what do you know about', 'look up', or when you need a specific fact before acting.\n\nWrite queries as natural language — the search engine handles semantic matching. For precision, use filters (memory_type, space) to narrow results. If you get too many results, add filters rather than making the query longer.\n\nFor higher retrieval quality at the cost of latency, pass `rerank: true` to opt into the cross-encoder reranker (requires WENLAN_RERANKER_ENABLED=1 on the daemon).\n\nThis is for targeted lookups. For broad session orientation, use context instead.",
         annotations(title = "Recall", read_only_hint = true, open_world_hint = false)
     )]
     async fn recall(
@@ -2355,7 +2355,7 @@ impl WenlanMcpServer {
 /// Return a copy of `tool` with the `space` field removed from its
 /// `inputSchema.properties` (and from `required` if present).
 ///
-/// Called when `ORIGIN_SPACE` is locked so the model never sees the field.
+/// Called when `WENLAN_SPACE` is locked so the model never sees the field.
 /// The runtime guard in `effective_space()` is the load-bearing safety net;
 /// this is UX polish on top.
 fn strip_space_from_tool_schema(mut tool: Tool) -> Tool {
@@ -4714,7 +4714,7 @@ mod tests {
     #[test]
     fn locked_overrides_inbound_space() {
         let _guard = crate::lock_state::ENV_LOCK.lock().unwrap();
-        std::env::set_var("ORIGIN_SPACE", "career");
+        std::env::set_var("WENLAN_SPACE", "career");
         crate::lock_state::init_from_env();
 
         let inbound = Some("ideas".to_string());
@@ -4725,7 +4725,7 @@ mod tests {
     #[test]
     fn unlocked_passes_inbound_through() {
         let _guard = crate::lock_state::ENV_LOCK.lock().unwrap();
-        std::env::remove_var("ORIGIN_SPACE");
+        std::env::remove_var("WENLAN_SPACE");
         crate::lock_state::init_from_env();
 
         let inbound = Some("ideas".to_string());
@@ -4736,7 +4736,7 @@ mod tests {
     #[test]
     fn locked_with_no_inbound_yields_locked() {
         let _guard = crate::lock_state::ENV_LOCK.lock().unwrap();
-        std::env::set_var("ORIGIN_SPACE", "career");
+        std::env::set_var("WENLAN_SPACE", "career");
         crate::lock_state::init_from_env();
 
         let inbound: Option<String> = None;
@@ -4747,7 +4747,7 @@ mod tests {
     #[test]
     fn unlocked_with_no_inbound_yields_none() {
         let _guard = crate::lock_state::ENV_LOCK.lock().unwrap();
-        std::env::remove_var("ORIGIN_SPACE");
+        std::env::remove_var("WENLAN_SPACE");
         crate::lock_state::init_from_env();
 
         let inbound: Option<String> = None;
@@ -4780,7 +4780,7 @@ mod tests {
     #[test]
     fn capture_tool_schema_omits_space_when_locked() {
         let _guard = crate::lock_state::ENV_LOCK.lock().unwrap();
-        std::env::set_var("ORIGIN_SPACE", "career");
+        std::env::set_var("WENLAN_SPACE", "career");
         crate::lock_state::init_from_env();
 
         let tools = WenlanMcpServer::tool_router().list_all();
@@ -4799,11 +4799,11 @@ mod tests {
             .expect("capture has properties");
         assert!(
             !props.contains_key("space"),
-            "space field must be omitted from capture schema when ORIGIN_SPACE is locked"
+            "space field must be omitted from capture schema when WENLAN_SPACE is locked"
         );
 
         // Clean up.
-        std::env::remove_var("ORIGIN_SPACE");
+        std::env::remove_var("WENLAN_SPACE");
         crate::lock_state::init_from_env();
     }
 
@@ -4811,7 +4811,7 @@ mod tests {
     #[test]
     fn capture_tool_schema_includes_space_when_unlocked() {
         let _guard = crate::lock_state::ENV_LOCK.lock().unwrap();
-        std::env::remove_var("ORIGIN_SPACE");
+        std::env::remove_var("WENLAN_SPACE");
         crate::lock_state::init_from_env();
 
         // When not locked, tools are returned as-is (no stripping).
@@ -4827,7 +4827,7 @@ mod tests {
             .expect("capture has properties");
         assert!(
             props.contains_key("space"),
-            "space field must be present in capture schema when ORIGIN_SPACE is not locked"
+            "space field must be present in capture schema when WENLAN_SPACE is not locked"
         );
     }
 }

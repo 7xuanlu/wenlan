@@ -18,8 +18,8 @@
 //! async orchestration lives in `db::search_memory_prf`.
 
 use crate::llm_provider::LlmRequest;
-use wenlan_types::SearchResult;
 use std::collections::HashSet;
+use wenlan_types::SearchResult;
 
 /// Hard ceiling on PRF rounds. Matches Cognee's `max_iter` ceiling and bounds
 /// worst-case cost (each round = 1 LLM generate + 1 hybrid search).
@@ -27,7 +27,7 @@ const PRF_ROUNDS_MAX: usize = 4;
 
 const PRF_SYSTEM_PROMPT: &str = "Using ONLY the context below, write a 1-2 sentence direct answer to the question. Do not invent facts. If insufficient, give best partial guess using context terms.";
 
-/// Resolve the PRF round budget from `ORIGIN_PRF_ROUNDS`.
+/// Resolve the PRF round budget from `WENLAN_PRF_ROUNDS`.
 ///
 /// Default `0` (unset, empty, or unparseable) — when `0` the caller skips the
 /// feedback loop entirely and `search_memory_prf` is id-order-identical to a
@@ -37,7 +37,7 @@ const PRF_SYSTEM_PROMPT: &str = "Using ONLY the context below, write a 1-2 sente
 /// operator typo cannot blow up latency/cost. Parse failure is the default,
 /// never a panic (mirrors `db::page_channel_limit`'s parse-with-default).
 pub(crate) fn prf_rounds() -> usize {
-    std::env::var("ORIGIN_PRF_ROUNDS")
+    std::env::var("WENLAN_PRF_ROUNDS")
         .ok()
         .and_then(|s| s.trim().parse::<usize>().ok())
         .unwrap_or(0)
@@ -148,25 +148,25 @@ mod tests {
 
     #[test]
     fn prf_rounds_defaults_to_zero_when_unset() {
-        temp_env::with_var("ORIGIN_PRF_ROUNDS", None::<&str>, || {
+        temp_env::with_var("WENLAN_PRF_ROUNDS", None::<&str>, || {
             assert_eq!(prf_rounds(), 0);
         });
     }
 
     #[test]
     fn prf_rounds_parses_value() {
-        temp_env::with_var("ORIGIN_PRF_ROUNDS", Some("2"), || {
+        temp_env::with_var("WENLAN_PRF_ROUNDS", Some("2"), || {
             assert_eq!(prf_rounds(), 2);
         });
         // parse failure = default 0, never a panic
-        temp_env::with_var("ORIGIN_PRF_ROUNDS", Some("garbage"), || {
+        temp_env::with_var("WENLAN_PRF_ROUNDS", Some("garbage"), || {
             assert_eq!(prf_rounds(), 0);
         });
     }
 
     #[test]
     fn prf_rounds_clamps_to_max() {
-        temp_env::with_var("ORIGIN_PRF_ROUNDS", Some("99"), || {
+        temp_env::with_var("WENLAN_PRF_ROUNDS", Some("99"), || {
             assert_eq!(prf_rounds(), 4);
         });
     }

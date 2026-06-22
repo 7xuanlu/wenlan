@@ -14,11 +14,11 @@
 //! unit test. This file extends coverage to `CaptureParams` and `RecallParams` and also
 //! verifies the alias round-trips through the `capture_impl` / `recall_impl` dispatch path.
 
+use rmcp::model::RawContent;
 use wenlan_mcp::client::WenlanClient;
-use wenlan_mcp::tools::{CaptureParams, WenlanMcpServer, RecallParams, TransportMode};
+use wenlan_mcp::tools::{CaptureParams, RecallParams, TransportMode, WenlanMcpServer};
 use wenlan_types::memory::SearchResult;
 use wenlan_types::responses::{SearchMemoryResponse, StoreMemoryResponse};
-use rmcp::model::RawContent;
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 

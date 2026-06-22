@@ -2,10 +2,10 @@
 //! deep_distill: Test on-device model quality for the deep distillation scenario.
 //! Feeds 28 memories into DISTILL_PAGE and measures quality + latency.
 
-use wenlan_core::engine::LlmEngine;
-use wenlan_core::prompts::PromptRegistry;
 use std::path::PathBuf;
 use std::time::Instant;
+use wenlan_core::engine::LlmEngine;
+use wenlan_core::prompts::PromptRegistry;
 
 const MEMORIES: &[&str] = &[
     "[mem_1] Origin is a personal knowledge wiki app built with Tauri 2 and Rust.",

@@ -26,10 +26,10 @@ impl log::Log for StderrLogger {
 static STDERR_LOGGER: StderrLogger = StderrLogger;
 
 /// Resolve the eval data root. Defaults to `app/eval/` (legacy location).
-/// Override via `ORIGIN_EVAL_ROOT` env var to support Phase 5 PR3 extraction
+/// Override via `WENLAN_EVAL_ROOT` env var to support Phase 5 PR3 extraction
 /// or local relocation. Centralizing this means future moves touch one site.
 fn eval_root() -> std::path::PathBuf {
-    if let Ok(p) = std::env::var("ORIGIN_EVAL_ROOT") {
+    if let Ok(p) = std::env::var("WENLAN_EVAL_ROOT") {
         return std::path::PathBuf::from(p);
     }
     std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../app/eval")
@@ -375,8 +375,8 @@ async fn test_longmemeval_gate_comparison() {
 #[tokio::test]
 #[ignore]
 async fn test_lifecycle_locomo_with_mock_llm() {
-    use wenlan_core::eval::lifecycle::{run_lifecycle_locomo, EvalMockLlm};
     use std::sync::Arc;
+    use wenlan_core::eval::lifecycle::{run_lifecycle_locomo, EvalMockLlm};
 
     let path = eval_root().join("data/locomo10.json");
     if !path.exists() {
@@ -400,8 +400,8 @@ async fn test_lifecycle_locomo_with_mock_llm() {
 #[tokio::test]
 #[ignore]
 async fn test_lifecycle_longmemeval_with_mock_llm() {
-    use wenlan_core::eval::lifecycle::{run_lifecycle_longmemeval, EvalMockLlm};
     use std::sync::Arc;
+    use wenlan_core::eval::lifecycle::{run_lifecycle_longmemeval, EvalMockLlm};
 
     let path = eval_root().join("data/longmemeval_oracle.json");
     if !path.exists() {
@@ -504,8 +504,8 @@ async fn save_longmemeval_baseline() {
 
 /// LME full-haystack TEMPORAL retrieval A/B (event_date injected + search_memory_temporal).
 /// Compare per-category vs `save_longmemeval_baseline` (base) on the same fixture +
-/// EVAL_LME_STRATIFIED subset. Toggle the lever with ORIGIN_ENABLE_TEMPORAL_FILTER=1
-/// (hard window filter) or ORIGIN_ENABLE_TEMPORAL_SOFT_BOOST=1 (never-drop boost).
+/// EVAL_LME_STRATIFIED subset. Toggle the lever with WENLAN_ENABLE_TEMPORAL_FILTER=1
+/// (hard window filter) or WENLAN_ENABLE_TEMPORAL_SOFT_BOOST=1 (never-drop boost).
 #[tokio::test]
 #[ignore]
 async fn save_longmemeval_temporal_baseline() {
@@ -646,8 +646,8 @@ async fn save_locomo_expanded_baseline() {
 // Cross-encoder rerank variants — fastembed TextRerank (BGERerankerV2M3) in
 // place of the LLM reranker. First run downloads the model weights.
 //
-// ORIGIN_ENABLE_PAGE_CHANNEL is forced to None (unset) and
-// ORIGIN_RERANKER_MODEL is PINNED to bge-v2-m3 here so the pre-PR-B
+// WENLAN_ENABLE_PAGE_CHANNEL is forced to None (unset) and
+// WENLAN_RERANKER_MODEL is PINNED to bge-v2-m3 here so the pre-PR-B
 // 0.684 / 0.883 disk artifacts stay reproducible regardless of the caller env
 // (the unset-env default flipped to bge-base on 2026-06-11; these two tests
 // protect v2-m3 reference artifacts whose legacy filenames do not encode the
@@ -660,8 +660,8 @@ async fn save_locomo_expanded_baseline() {
 async fn save_locomo_cross_rerank_baseline() {
     temp_env::async_with_vars(
         [
-            ("ORIGIN_ENABLE_PAGE_CHANNEL", None::<&str>),
-            ("ORIGIN_RERANKER_MODEL", Some("bge-v2-m3")),
+            ("WENLAN_ENABLE_PAGE_CHANNEL", None::<&str>),
+            ("WENLAN_RERANKER_MODEL", Some("bge-v2-m3")),
         ],
         async {
             let path = eval_root().join("data/locomo10.json");
@@ -689,8 +689,8 @@ async fn save_locomo_cross_rerank_baseline() {
 async fn save_longmemeval_cross_rerank_baseline() {
     temp_env::async_with_vars(
         [
-            ("ORIGIN_ENABLE_PAGE_CHANNEL", None::<&str>),
-            ("ORIGIN_RERANKER_MODEL", Some("bge-v2-m3")),
+            ("WENLAN_ENABLE_PAGE_CHANNEL", None::<&str>),
+            ("WENLAN_RERANKER_MODEL", Some("bge-v2-m3")),
         ],
         async {
             let path = eval_root().join("data/longmemeval_oracle.json");
@@ -766,7 +766,7 @@ fn resolve_scenario_db_root_from_harness() -> std::path::PathBuf {
 
 /// T3 graph-gate A/B experiment (retrieval-only, no GPU LLM, no judge).
 /// Runs the base `search_memory` path over the cached LoCoMo scenario DB with
-/// `ORIGIN_ENABLE_GRAPH_GATE` OFF (graph always on) vs ON (gated), and prints
+/// `WENLAN_ENABLE_GRAPH_GATE` OFF (graph always on) vs ON (gated), and prints
 /// the retrieval-metric deltas. Single-run = scaffold/direction only.
 #[tokio::test]
 #[ignore = "needs cached scenario DB (run scripts/seed-scenario-dbs.sh); retrieval-only, no GPU"]
@@ -791,13 +791,13 @@ async fn graph_gate_ab_locomo() {
     .expect("open locomo_v1 scenario DB");
 
     let off = temp_env::async_with_vars(
-        [("ORIGIN_ENABLE_GRAPH_GATE", None::<&str>)],
+        [("WENLAN_ENABLE_GRAPH_GATE", None::<&str>)],
         run_locomo_eval_from_db(&db, &fixture),
     )
     .await
     .expect("gate-off eval");
     let on = temp_env::async_with_vars(
-        [("ORIGIN_ENABLE_GRAPH_GATE", Some("1"))],
+        [("WENLAN_ENABLE_GRAPH_GATE", Some("1"))],
         run_locomo_eval_from_db(&db, &fixture),
     )
     .await
@@ -855,13 +855,13 @@ async fn magnitude_fusion_ab_dualbench() {
             .await
             .unwrap();
             let off = temp_env::async_with_vars(
-                [("ORIGIN_MAGNITUDE_FUSION", None::<&str>)],
+                [("WENLAN_MAGNITUDE_FUSION", None::<&str>)],
                 run_locomo_eval_from_db(&db, &fx),
             )
             .await
             .unwrap();
             let on = temp_env::async_with_vars(
-                [("ORIGIN_MAGNITUDE_FUSION", Some("1"))],
+                [("WENLAN_MAGNITUDE_FUSION", Some("1"))],
                 run_locomo_eval_from_db(&db, &fx),
             )
             .await
@@ -889,13 +889,13 @@ async fn magnitude_fusion_ab_dualbench() {
             .await
             .unwrap();
             let off = temp_env::async_with_vars(
-                [("ORIGIN_MAGNITUDE_FUSION", None::<&str>)],
+                [("WENLAN_MAGNITUDE_FUSION", None::<&str>)],
                 run_longmemeval_eval_from_db(&db, &fx),
             )
             .await
             .unwrap();
             let on = temp_env::async_with_vars(
-                [("ORIGIN_MAGNITUDE_FUSION", Some("1"))],
+                [("WENLAN_MAGNITUDE_FUSION", Some("1"))],
                 run_longmemeval_eval_from_db(&db, &fx),
             )
             .await
@@ -958,13 +958,13 @@ async fn session_diversity_ab_dualbench() {
             let reranker = wenlan_core::reranker::init_cross_encoder_reranker(None)
                 .expect("init_cross_encoder_reranker failed (downloads ~600MB on first run)");
             let off = temp_env::async_with_vars(
-                [("ORIGIN_ENABLE_SESSION_DIVERSITY", None::<&str>)],
+                [("WENLAN_ENABLE_SESSION_DIVERSITY", None::<&str>)],
                 run_locomo_eval_cross_rerank_from_db(&db, &fx, reranker.clone()),
             )
             .await
             .unwrap();
             let on = temp_env::async_with_vars(
-                [("ORIGIN_ENABLE_SESSION_DIVERSITY", Some("1"))],
+                [("WENLAN_ENABLE_SESSION_DIVERSITY", Some("1"))],
                 run_locomo_eval_cross_rerank_from_db(&db, &fx, reranker.clone()),
             )
             .await
@@ -1009,13 +1009,13 @@ async fn session_diversity_ab_dualbench() {
             let reranker = wenlan_core::reranker::init_cross_encoder_reranker(None)
                 .expect("init_cross_encoder_reranker failed (downloads ~600MB on first run)");
             let off = temp_env::async_with_vars(
-                [("ORIGIN_ENABLE_SESSION_DIVERSITY", None::<&str>)],
+                [("WENLAN_ENABLE_SESSION_DIVERSITY", None::<&str>)],
                 run_longmemeval_eval_cross_rerank_from_db(&db, &fx, reranker.clone()),
             )
             .await
             .unwrap();
             let on = temp_env::async_with_vars(
-                [("ORIGIN_ENABLE_SESSION_DIVERSITY", Some("1"))],
+                [("WENLAN_ENABLE_SESSION_DIVERSITY", Some("1"))],
                 run_longmemeval_eval_cross_rerank_from_db(&db, &fx, reranker.clone()),
             )
             .await
@@ -1048,7 +1048,7 @@ async fn session_diversity_ab_dualbench() {
 }
 
 /// T19 query-adaptive channel-reweighting A/B on BOTH benches (retrieval-only).
-/// Toggles `ORIGIN_ENABLE_QUERY_INTENT` OFF vs ON over the cached scenario DBs
+/// Toggles `WENLAN_ENABLE_QUERY_INTENT` OFF vs ON over the cached scenario DBs
 /// via the base `search_memory` path. ON, Factual-classified (short, non-relational)
 /// queries upweight the FTS RRF stream; General/Temporal stay identity. Default-OFF
 /// path is byte-identical by construction, so any non-zero delta comes from queries
@@ -1079,13 +1079,13 @@ async fn query_intent_ab_dualbench() {
             .await
             .unwrap();
             let off = temp_env::async_with_vars(
-                [("ORIGIN_ENABLE_QUERY_INTENT", None::<&str>)],
+                [("WENLAN_ENABLE_QUERY_INTENT", None::<&str>)],
                 run_locomo_eval_from_db(&db, &fx),
             )
             .await
             .unwrap();
             let on = temp_env::async_with_vars(
-                [("ORIGIN_ENABLE_QUERY_INTENT", Some("1"))],
+                [("WENLAN_ENABLE_QUERY_INTENT", Some("1"))],
                 run_locomo_eval_from_db(&db, &fx),
             )
             .await
@@ -1121,13 +1121,13 @@ async fn query_intent_ab_dualbench() {
             .await
             .unwrap();
             let off = temp_env::async_with_vars(
-                [("ORIGIN_ENABLE_QUERY_INTENT", None::<&str>)],
+                [("WENLAN_ENABLE_QUERY_INTENT", None::<&str>)],
                 run_longmemeval_eval_from_db(&db, &fx),
             )
             .await
             .unwrap();
             let on = temp_env::async_with_vars(
-                [("ORIGIN_ENABLE_QUERY_INTENT", Some("1"))],
+                [("WENLAN_ENABLE_QUERY_INTENT", Some("1"))],
                 run_longmemeval_eval_from_db(&db, &fx),
             )
             .await
@@ -1158,8 +1158,8 @@ async fn query_intent_ab_dualbench() {
 
 /// STEP 7 cheap combined A/B: the two filled-data flags that engage the no-GPU
 /// base `search_memory` path, toggled TOGETHER OFF vs ON over the cached scenario
-/// DBs. `ORIGIN_ENABLE_SALIENCE_PRIOR` reads the backfilled `importance`;
-/// `ORIGIN_ENABLE_TEMPORAL_SOFT_BOOST` reads the injected `event_date`. Combined
+/// DBs. `WENLAN_ENABLE_SALIENCE_PRIOR` reads the backfilled `importance`;
+/// `WENLAN_ENABLE_TEMPORAL_SOFT_BOOST` reads the injected `event_date`. Combined
 /// (not per-flag) by design — a directional gate before the expensive per-flag
 /// grid. Retrieval-only, no GPU. The other reseed-unblocked flags (FACT_CHANNEL,
 /// EPISODE_CHANNEL, SESSION_DIVERSITY) live on the cross-rerank path and need a
@@ -1177,12 +1177,12 @@ async fn data_flags_ab_dualbench() {
     let root = resolve_scenario_db_root_from_harness();
 
     let on_vars = [
-        ("ORIGIN_ENABLE_SALIENCE_PRIOR", Some("1")),
-        ("ORIGIN_ENABLE_TEMPORAL_SOFT_BOOST", Some("1")),
+        ("WENLAN_ENABLE_SALIENCE_PRIOR", Some("1")),
+        ("WENLAN_ENABLE_TEMPORAL_SOFT_BOOST", Some("1")),
     ];
     let off_vars = [
-        ("ORIGIN_ENABLE_SALIENCE_PRIOR", None::<&str>),
-        ("ORIGIN_ENABLE_TEMPORAL_SOFT_BOOST", None::<&str>),
+        ("WENLAN_ENABLE_SALIENCE_PRIOR", None::<&str>),
+        ("WENLAN_ENABLE_TEMPORAL_SOFT_BOOST", None::<&str>),
     ];
 
     let lo_cov = |r: &wenlan_core::eval::locomo::LocomoReport| {
@@ -1383,13 +1383,13 @@ fn mean_std_matches_hand_calc() {
 /// runs per the Eval Citation Discipline.
 ///
 /// ```bash
-/// ORIGIN_EVAL_ROOT=/Users/lucian/Repos/origin/app/eval \
+/// WENLAN_EVAL_ROOT=/Users/lucian/Repos/origin/app/eval \
 /// SCENARIO_DB_ROOT=~/.cache/origin-eval/scenario_seeded \
 /// cargo test -p origin-core --features eval-harness --test eval_harness \
 ///   data_flags_perflag_screen -- --ignored --nocapture
 /// ```
 #[tokio::test]
-#[ignore = "needs cached scenario DBs + raw dataset json (ORIGIN_EVAL_ROOT); retrieval-only, no GPU"]
+#[ignore = "needs cached scenario DBs + raw dataset json (WENLAN_EVAL_ROOT); retrieval-only, no GPU"]
 async fn data_flags_perflag_screen() {
     use wenlan_core::eval::locomo::run_locomo_eval_from_db;
     use wenlan_core::eval::longmemeval::run_longmemeval_eval_from_db;
@@ -1397,10 +1397,10 @@ async fn data_flags_perflag_screen() {
     let root = resolve_scenario_db_root_from_harness();
     // (display name, env var) — all on the no-GPU `search_memory` base path.
     let flags = [
-        ("salience", "ORIGIN_ENABLE_SALIENCE_PRIOR"),
-        ("temporal_soft", "ORIGIN_ENABLE_TEMPORAL_SOFT_BOOST"),
-        ("temporal_ground", "ORIGIN_ENABLE_TEMPORAL_GROUNDING"),
-        ("temporal_filter", "ORIGIN_ENABLE_TEMPORAL_FILTER"),
+        ("salience", "WENLAN_ENABLE_SALIENCE_PRIOR"),
+        ("temporal_soft", "WENLAN_ENABLE_TEMPORAL_SOFT_BOOST"),
+        ("temporal_ground", "WENLAN_ENABLE_TEMPORAL_GROUNDING"),
+        ("temporal_filter", "WENLAN_ENABLE_TEMPORAL_FILTER"),
     ];
     let all_off: Vec<(&str, Option<&str>)> = flags.iter().map(|(_, e)| (*e, None)).collect();
     let draws = [11u64, 23, 37];
@@ -1608,22 +1608,22 @@ fn filter_temporal_lme_keeps_only_temporal_reasoning() {
 /// LME has 133 temporal questions -> K=60 gives real draw diversity.
 ///
 /// ```bash
-/// ORIGIN_EVAL_ROOT=/Users/lucian/Repos/origin/app/eval \
+/// WENLAN_EVAL_ROOT=/Users/lucian/Repos/origin/app/eval \
 /// SCENARIO_DB_ROOT=~/.cache/origin-eval/scenario_seeded \
 /// cargo test -p origin-core --features eval-harness --test eval_harness \
 ///   data_flags_temporal_subset_screen -- --ignored --nocapture
 /// ```
 #[tokio::test]
-#[ignore = "needs cached scenario DBs + raw dataset json (ORIGIN_EVAL_ROOT); retrieval-only, no GPU"]
+#[ignore = "needs cached scenario DBs + raw dataset json (WENLAN_EVAL_ROOT); retrieval-only, no GPU"]
 async fn data_flags_temporal_subset_screen() {
     use wenlan_core::eval::locomo::run_locomo_eval_from_db;
     use wenlan_core::eval::longmemeval::run_longmemeval_eval_from_db;
 
     let root = resolve_scenario_db_root_from_harness();
     let flags = [
-        ("temporal_soft", "ORIGIN_ENABLE_TEMPORAL_SOFT_BOOST"),
-        ("temporal_ground", "ORIGIN_ENABLE_TEMPORAL_GROUNDING"),
-        ("temporal_filter", "ORIGIN_ENABLE_TEMPORAL_FILTER"),
+        ("temporal_soft", "WENLAN_ENABLE_TEMPORAL_SOFT_BOOST"),
+        ("temporal_ground", "WENLAN_ENABLE_TEMPORAL_GROUNDING"),
+        ("temporal_filter", "WENLAN_ENABLE_TEMPORAL_FILTER"),
     ];
     let all_off: Vec<(&str, Option<&str>)> = flags.iter().map(|(_, e)| (*e, None)).collect();
     let draws = [11u64, 23, 37];
@@ -1750,12 +1750,12 @@ async fn data_flags_temporal_subset_screen() {
 /// if the gap exceeds |bge-v2-m3 - bge-v2-m3#noise|. (This control is the lesson
 /// from the temporal screen: without it, HashMap tie-break noise reads as signal.)
 ///
-/// Each model is loaded BYO via `ORIGIN_RERANKER_ONNX_DIR` (curled into
+/// Each model is loaded BYO via `WENLAN_RERANKER_ONNX_DIR` (curled into
 /// `~/.cache/origin-eval/rerankers/<name>/`) to dodge the Xet enum-download failure.
 /// Scaffold, sign-level. CPU cross-encoder — slow; run watched.
 ///
 /// ```bash
-/// ORIGIN_EVAL_ROOT=/Users/lucian/Repos/origin/app/eval \
+/// WENLAN_EVAL_ROOT=/Users/lucian/Repos/origin/app/eval \
 /// SCENARIO_DB_ROOT=~/.cache/origin-eval/scenario_seeded \
 /// cargo test -p origin-core --features eval-harness --test eval_harness \
 ///   reranker_model_ab -- --ignored --nocapture
@@ -1781,20 +1781,20 @@ async fn reranker_model_ab() {
     // Force every opt-in channel/reseed flag OFF (production default) so only the
     // reranker model varies across arms.
     let chan_off: Vec<(&str, Option<&str>)> = vec![
-        ("ORIGIN_ENABLE_PAGE_CHANNEL", None),
-        ("ORIGIN_ENABLE_EPISODE_CHANNEL", None),
-        ("ORIGIN_ENABLE_FACT_CHANNEL", None),
-        ("ORIGIN_ENABLE_SESSION_DIVERSITY", None),
-        ("ORIGIN_ENABLE_SALIENCE_PRIOR", None),
-        ("ORIGIN_ENABLE_TEMPORAL_SOFT_BOOST", None),
-        ("ORIGIN_ENABLE_TEMPORAL_FILTER", None),
-        ("ORIGIN_ENABLE_TEMPORAL_GROUNDING", None),
-        ("ORIGIN_ENABLE_GRAPH_GATE", None),
-        ("ORIGIN_ENABLE_GRAPH_SEED", None),
-        ("ORIGIN_ENABLE_GRAPH_KHOP", None),
-        ("ORIGIN_ENABLE_QUERY_INTENT", None),
-        ("ORIGIN_ENABLE_COT_RETRIEVAL", None),
-        ("ORIGIN_ENABLE_GLOBAL_PRELUDE", None),
+        ("WENLAN_ENABLE_PAGE_CHANNEL", None),
+        ("WENLAN_ENABLE_EPISODE_CHANNEL", None),
+        ("WENLAN_ENABLE_FACT_CHANNEL", None),
+        ("WENLAN_ENABLE_SESSION_DIVERSITY", None),
+        ("WENLAN_ENABLE_SALIENCE_PRIOR", None),
+        ("WENLAN_ENABLE_TEMPORAL_SOFT_BOOST", None),
+        ("WENLAN_ENABLE_TEMPORAL_FILTER", None),
+        ("WENLAN_ENABLE_TEMPORAL_GROUNDING", None),
+        ("WENLAN_ENABLE_GRAPH_GATE", None),
+        ("WENLAN_ENABLE_GRAPH_SEED", None),
+        ("WENLAN_ENABLE_GRAPH_KHOP", None),
+        ("WENLAN_ENABLE_QUERY_INTENT", None),
+        ("WENLAN_ENABLE_COT_RETRIEVAL", None),
+        ("WENLAN_ENABLE_GLOBAL_PRELUDE", None),
     ];
     // K (conversations per draw) + draws (seeds) are env-tunable so the slow CPU
     // cross-encoder run can be scoped/scaled without a 20-min recompile. LoCoMo has
@@ -1840,8 +1840,8 @@ async fn reranker_model_ab() {
             let (_guard, sub) = write_json_subset(&lo_fx, k, seed);
             eprintln!("[start] {label} seed={seed} k={k}");
             let mut vars = chan_off.clone();
-            vars.push(("ORIGIN_RERANKER_ONNX_DIR", Some(dir.as_str())));
-            vars.push(("ORIGIN_RERANKER_MODEL_ID", Some(label)));
+            vars.push(("WENLAN_RERANKER_ONNX_DIR", Some(dir.as_str())));
+            vars.push(("WENLAN_RERANKER_MODEL_ID", Some(label)));
             let report = temp_env::async_with_vars(vars, async {
                 let reranker = wenlan_core::reranker::init_cross_encoder_reranker(None)
                     .expect("init_cross_encoder_reranker (BYO) failed");
@@ -1889,9 +1889,9 @@ async fn reranker_model_ab() {
 
 /// STEP 7 GPU combined A/B: the three filled-data flags that engage the
 /// cross-rerank path, toggled TOGETHER OFF vs ON over the cached scenario DBs.
-/// `ORIGIN_ENABLE_EPISODE_CHANNEL` (5th RRF stream, reads backfilled episode
-/// rows), `ORIGIN_ENABLE_FACT_CHANNEL` (reads backfilled `structured_fields`),
-/// and `ORIGIN_ENABLE_SESSION_DIVERSITY` (reads injected `event_date`). Combined
+/// `WENLAN_ENABLE_EPISODE_CHANNEL` (5th RRF stream, reads backfilled episode
+/// rows), `WENLAN_ENABLE_FACT_CHANNEL` (reads backfilled `structured_fields`),
+/// and `WENLAN_ENABLE_SESSION_DIVERSITY` (reads injected `event_date`). Combined
 /// directional gate (parallel to `data_flags_ab_dualbench` on the no-GPU path);
 /// per-flag attribution follows if this moves. Needs Metal GPU (cross-encoder
 /// reranker, downloads ~600MB on first run) + cached scenario DBs. Run unsandboxed.
@@ -1909,14 +1909,14 @@ async fn cross_rerank_data_flags_ab_dualbench() {
     let root = resolve_scenario_db_root_from_harness();
 
     let on_vars = [
-        ("ORIGIN_ENABLE_EPISODE_CHANNEL", Some("1")),
-        ("ORIGIN_ENABLE_FACT_CHANNEL", Some("1")),
-        ("ORIGIN_ENABLE_SESSION_DIVERSITY", Some("1")),
+        ("WENLAN_ENABLE_EPISODE_CHANNEL", Some("1")),
+        ("WENLAN_ENABLE_FACT_CHANNEL", Some("1")),
+        ("WENLAN_ENABLE_SESSION_DIVERSITY", Some("1")),
     ];
     let off_vars = [
-        ("ORIGIN_ENABLE_EPISODE_CHANNEL", None::<&str>),
-        ("ORIGIN_ENABLE_FACT_CHANNEL", None::<&str>),
-        ("ORIGIN_ENABLE_SESSION_DIVERSITY", None::<&str>),
+        ("WENLAN_ENABLE_EPISODE_CHANNEL", None::<&str>),
+        ("WENLAN_ENABLE_FACT_CHANNEL", None::<&str>),
+        ("WENLAN_ENABLE_SESSION_DIVERSITY", None::<&str>),
     ];
 
     let lo_cov = |r: &wenlan_core::eval::locomo::LocomoReport| {
@@ -2023,7 +2023,7 @@ async fn cross_rerank_data_flags_ab_dualbench() {
 /// KG observation rows are stripped from user output, only the RRF boost survives,
 /// so reordering of the surviving chunks is the only NDCG signal). The graph-seed
 /// expands the entity set used for the KG-RRF boost, which can pull more source
-/// chunks into coverage. Toggles `ORIGIN_ENABLE_GRAPH_SEED` OFF vs ON over the
+/// chunks into coverage. Toggles `WENLAN_ENABLE_GRAPH_SEED` OFF vs ON over the
 /// cached scenario DBs. Single-run scaffold — N≥3 for any headline claim.
 #[tokio::test]
 #[ignore = "needs cached scenario DBs; retrieval-only, no GPU"]
@@ -2051,13 +2051,13 @@ async fn graph_seed_ab_dualbench() {
             .await
             .unwrap();
             let off = temp_env::async_with_vars(
-                [("ORIGIN_ENABLE_GRAPH_SEED", None::<&str>)],
+                [("WENLAN_ENABLE_GRAPH_SEED", None::<&str>)],
                 run_locomo_eval_from_db(&db, &fx),
             )
             .await
             .unwrap();
             let on = temp_env::async_with_vars(
-                [("ORIGIN_ENABLE_GRAPH_SEED", Some("1"))],
+                [("WENLAN_ENABLE_GRAPH_SEED", Some("1"))],
                 run_locomo_eval_from_db(&db, &fx),
             )
             .await
@@ -2090,13 +2090,13 @@ async fn graph_seed_ab_dualbench() {
             .await
             .unwrap();
             let off = temp_env::async_with_vars(
-                [("ORIGIN_ENABLE_GRAPH_SEED", None::<&str>)],
+                [("WENLAN_ENABLE_GRAPH_SEED", None::<&str>)],
                 run_longmemeval_eval_from_db(&db, &fx),
             )
             .await
             .unwrap();
             let on = temp_env::async_with_vars(
-                [("ORIGIN_ENABLE_GRAPH_SEED", Some("1"))],
+                [("WENLAN_ENABLE_GRAPH_SEED", Some("1"))],
                 run_longmemeval_eval_from_db(&db, &fx),
             )
             .await
@@ -2143,13 +2143,13 @@ async fn fts_hardening_ab_dualbench() {
             .await
             .unwrap();
             let off = temp_env::async_with_vars(
-                [("ORIGIN_ENABLE_FTS_HARDENING", None::<&str>)],
+                [("WENLAN_ENABLE_FTS_HARDENING", None::<&str>)],
                 run_locomo_eval_from_db(&db, &fx),
             )
             .await
             .unwrap();
             let on = temp_env::async_with_vars(
-                [("ORIGIN_ENABLE_FTS_HARDENING", Some("1"))],
+                [("WENLAN_ENABLE_FTS_HARDENING", Some("1"))],
                 run_locomo_eval_from_db(&db, &fx),
             )
             .await
@@ -2176,13 +2176,13 @@ async fn fts_hardening_ab_dualbench() {
             .await
             .unwrap();
             let off = temp_env::async_with_vars(
-                [("ORIGIN_ENABLE_FTS_HARDENING", None::<&str>)],
+                [("WENLAN_ENABLE_FTS_HARDENING", None::<&str>)],
                 run_longmemeval_eval_from_db(&db, &fx),
             )
             .await
             .unwrap();
             let on = temp_env::async_with_vars(
-                [("ORIGIN_ENABLE_FTS_HARDENING", Some("1"))],
+                [("WENLAN_ENABLE_FTS_HARDENING", Some("1"))],
                 run_longmemeval_eval_from_db(&db, &fx),
             )
             .await
@@ -2272,16 +2272,16 @@ async fn seed_inject_event_dates() {
 /// injected date survives (extract returns None for date-stripped text).
 ///
 /// ```bash
-/// EVAL_ENRICHMENT_CONCURRENCY=8 ORIGIN_LLM_PARALLEL_SEQS=8 \
+/// EVAL_ENRICHMENT_CONCURRENCY=8 WENLAN_LLM_PARALLEL_SEQS=8 \
 ///   cargo test -p origin-core --features eval-harness --test eval_harness \
 ///   seed_backfill_classify -- --ignored --nocapture
 /// ```
 #[tokio::test]
 #[ignore]
 async fn seed_backfill_classify() {
+    use std::sync::Arc;
     use wenlan_core::eval::shared::run_classification_for_eval_concurrent;
     use wenlan_core::llm_provider::OnDeviceProvider;
-    use std::sync::Arc;
 
     let concurrency: usize = std::env::var("EVAL_ENRICHMENT_CONCURRENCY")
         .ok()
@@ -2339,7 +2339,7 @@ async fn seed_backfill_classify() {
 }
 
 /// STEP 7 (T2): backfill verbatim `source='episode'` rows into the cached seed
-/// DBs (locomo_v1 + lme_v1) so the episode channel (`ORIGIN_ENABLE_EPISODE_CHANNEL`)
+/// DBs (locomo_v1 + lme_v1) so the episode channel (`WENLAN_ENABLE_EPISODE_CHANNEL`)
 /// has data to measure. GPU-FREE — only FastEmbed (deterministic), no LLM. Derives
 /// each episode through the same `derive_episode` helper the write-path co-write
 /// uses (no skew). Byte-identical to a fresh flag-on ingest for single-chunk
@@ -2399,19 +2399,19 @@ async fn seed_backfill_episodes() {
 ///
 /// ```bash
 /// # full (overnight on-device); or SEED_COMPLETE_BENCH=lme to scope one bench:
-/// ORIGIN_EVAL_ROOT=$PWD/app/eval EVAL_ENRICHMENT_CONCURRENCY=8 \
-///   ORIGIN_LLM_PARALLEL_SEQS=8 SEED_COMPLETE_BENCH=lme \
+/// WENLAN_EVAL_ROOT=$PWD/app/eval EVAL_ENRICHMENT_CONCURRENCY=8 \
+///   WENLAN_LLM_PARALLEL_SEQS=8 SEED_COMPLETE_BENCH=lme \
 ///   cargo test -p origin-core --features eval-harness --test eval_harness \
 ///   seed_scenario_dbs_complete -- --ignored --nocapture --test-threads=1
 /// ```
 #[tokio::test]
-#[ignore = "GPU + cached scenario DB; L7 manual. The one seed route. Set ORIGIN_EVAL_ROOT."]
+#[ignore = "GPU + cached scenario DB; L7 manual. The one seed route. Set WENLAN_EVAL_ROOT."]
 async fn seed_scenario_dbs_complete() {
+    use std::sync::Arc;
     use wenlan_core::eval::seed_contract::{assert_seed_contract, SeedExpectations};
     use wenlan_core::eval::shared::run_classification_for_eval_concurrent;
     use wenlan_core::prompts::PromptRegistry;
     use wenlan_core::tuning::DistillationConfig;
-    use std::sync::Arc;
 
     // Route distill's per-cluster log::warn!/info! skip reasons to stderr so the
     // --nocapture run shows WHY a cluster produced no page. set_logger is global +
@@ -2619,13 +2619,13 @@ async fn graph_gate_ab_lme() {
     .expect("open lme_v1 scenario DB");
 
     let off = temp_env::async_with_vars(
-        [("ORIGIN_ENABLE_GRAPH_GATE", None::<&str>)],
+        [("WENLAN_ENABLE_GRAPH_GATE", None::<&str>)],
         run_longmemeval_eval_from_db(&db, &fixture),
     )
     .await
     .expect("gate-off eval");
     let on = temp_env::async_with_vars(
-        [("ORIGIN_ENABLE_GRAPH_GATE", Some("1"))],
+        [("WENLAN_ENABLE_GRAPH_GATE", Some("1"))],
         run_longmemeval_eval_from_db(&db, &fixture),
     )
     .await
@@ -2673,7 +2673,7 @@ async fn graph_gate_ab_lme() {
 // Wilcoxon / bootstrap (variance from across-queries, not across-runs).
 //
 // Run (unsandboxed, against the SNAPSHOT DBs so the seeds stay pristine):
-//   ORIGIN_EVAL_ROOT=/Users/lucian/Repos/origin/app/eval \
+//   WENLAN_EVAL_ROOT=/Users/lucian/Repos/origin/app/eval \
 //   SCENARIO_DB_ROOT=~/.cache/origin-eval/scenario_snapshot \
 //   EVAL_OUT=/tmp/eval_paired \
 //     cargo test -p origin-core --features eval-harness --test eval_harness -- \
@@ -2721,10 +2721,10 @@ async fn paired_run_cached_feature(feature: &str, flag: &str) {
     use wenlan_core::eval::locomo::run_locomo_eval_from_db_collect;
     use wenlan_core::eval::longmemeval::run_longmemeval_eval_from_db_collect;
     let root = resolve_scenario_db_root_from_harness();
-    // ORIGIN_GRAPH_MEMORY_STREAM is default-ON since 2026-06-10, so its OFF arm
+    // WENLAN_GRAPH_MEMORY_STREAM is default-ON since 2026-06-10, so its OFF arm
     // must explicitly disable it ("0"); every other paired flag is opt-in (OFF =
     // unset).
-    let off_val: Option<&str> = if flag == "ORIGIN_GRAPH_MEMORY_STREAM" {
+    let off_val: Option<&str> = if flag == "WENLAN_GRAPH_MEMORY_STREAM" {
         Some("0")
     } else {
         None
@@ -2733,8 +2733,8 @@ async fn paired_run_cached_feature(feature: &str, flag: &str) {
     // !(allow_graph_stream && graph_memory_stream_enabled()), so with the stream
     // default-ON a graph_seed A/B routes BOTH arms through the stream (byte-
     // identical A/A). Pin the stream opted-out on BOTH arms to measure the seed.
-    let seed_stream_pin: Option<(&str, Option<&str>)> = if flag == "ORIGIN_ENABLE_GRAPH_SEED" {
-        Some(("ORIGIN_GRAPH_MEMORY_STREAM", Some("0")))
+    let seed_stream_pin: Option<(&str, Option<&str>)> = if flag == "WENLAN_ENABLE_GRAPH_SEED" {
+        Some(("WENLAN_GRAPH_MEMORY_STREAM", Some("0")))
     } else {
         None
     };
@@ -2813,10 +2813,10 @@ async fn paired_run_cached_feature_cross_rerank(
     use wenlan_core::eval::locomo::run_locomo_eval_cross_rerank_from_db_collect;
     use wenlan_core::eval::longmemeval::run_longmemeval_eval_cross_rerank_from_db_collect;
     let root = resolve_scenario_db_root_from_harness();
-    // ORIGIN_GRAPH_MEMORY_STREAM is default-ON since 2026-06-10, so its OFF arm
+    // WENLAN_GRAPH_MEMORY_STREAM is default-ON since 2026-06-10, so its OFF arm
     // must explicitly disable it ("0"); every other paired flag is opt-in (OFF =
     // unset).
-    let off_val: Option<&str> = if flag == "ORIGIN_GRAPH_MEMORY_STREAM" {
+    let off_val: Option<&str> = if flag == "WENLAN_GRAPH_MEMORY_STREAM" {
         Some("0")
     } else {
         None
@@ -2991,7 +2991,7 @@ async fn paired_run_cached_feature_cross_rerank_vals(
 /// CE arm builds the BGE-reranker-v2-m3 weights (~600MB on first run) and only
 /// when at least one CE feature is selected, so base-only smoke runs stay light.
 #[tokio::test]
-#[ignore = "needs cached scenario DBs (use SNAPSHOT copies); retrieval-only, no GPU. Set ORIGIN_EVAL_ROOT + SCENARIO_DB_ROOT + EVAL_OUT"]
+#[ignore = "needs cached scenario DBs (use SNAPSHOT copies); retrieval-only, no GPU. Set WENLAN_EVAL_ROOT + SCENARIO_DB_ROOT + EVAL_OUT"]
 async fn headroom_probe_emit() {
     println!("=== RECALL-HEADROOM PROBE (decompose ladder Step 0) ===");
     let out_dir = paired_out_dir();
@@ -3039,7 +3039,7 @@ async fn headroom_probe_emit() {
 /// `query_id` to compare the union arm against the single-query limit=100
 /// ceiling (pool-size control).
 #[tokio::test]
-#[ignore = "needs cached scenario DBs (use SNAPSHOT copies) + EVAL_SUBQ_PATH subquery fixture; retrieval-only, no GPU. Set ORIGIN_EVAL_ROOT + SCENARIO_DB_ROOT + EVAL_OUT + EVAL_SUBQ_PATH"]
+#[ignore = "needs cached scenario DBs (use SNAPSHOT copies) + EVAL_SUBQ_PATH subquery fixture; retrieval-only, no GPU. Set WENLAN_EVAL_ROOT + SCENARIO_DB_ROOT + EVAL_OUT + EVAL_SUBQ_PATH"]
 async fn decompose_recall_probe_emit() {
     println!("=== DECOMPOSE-RECALL PROBE (decompose ladder Step 1) ===");
     let out_dir = paired_out_dir();
@@ -3096,7 +3096,7 @@ async fn decompose_recall_probe_emit() {
 /// (`decompose_ce_lme.jsonl`) for analyze_paired.py. Needs `EVAL_SUBQ_PATH`
 /// (same fixture as `decompose_recall_probe_emit`).
 #[tokio::test]
-#[ignore = "downloads ~600MB CE model (CPU); needs cached scenario SNAPSHOT DB + EVAL_SUBQ_PATH. Set ORIGIN_EVAL_ROOT + SCENARIO_DB_ROOT + EVAL_OUT + EVAL_SUBQ_PATH"]
+#[ignore = "downloads ~600MB CE model (CPU); needs cached scenario SNAPSHOT DB + EVAL_SUBQ_PATH. Set WENLAN_EVAL_ROOT + SCENARIO_DB_ROOT + EVAL_OUT + EVAL_SUBQ_PATH"]
 async fn decompose_ce_probe_emit() {
     println!("=== DECOMPOSE-CE PROBE (decompose ladder Step 2, matched budget 30) ===");
     let out_dir = paired_out_dir();
@@ -3144,30 +3144,30 @@ async fn decompose_ce_probe_emit() {
 }
 
 #[tokio::test]
-#[ignore = "needs cached scenario DBs (use SNAPSHOT copies); retrieval-only, no GPU. Set ORIGIN_EVAL_ROOT + SCENARIO_DB_ROOT + EVAL_OUT"]
+#[ignore = "needs cached scenario DBs (use SNAPSHOT copies); retrieval-only, no GPU. Set WENLAN_EVAL_ROOT + SCENARIO_DB_ROOT + EVAL_OUT"]
 async fn paired_ab_emit() {
     println!("=== PAIRED A/B EMIT (apparatus v2) ===");
     println!("EVAL_OUT = {}", paired_out_dir().display());
 
     // (feature_tag, env_flag) for the cached-DB / base `search_memory` features.
     let cached: [(&str, &str); 8] = [
-        ("graph_stream", "ORIGIN_GRAPH_MEMORY_STREAM"),
-        ("graph_gate", "ORIGIN_ENABLE_GRAPH_GATE"),
-        ("graph_seed", "ORIGIN_ENABLE_GRAPH_SEED"),
-        ("fts_hardening", "ORIGIN_ENABLE_FTS_HARDENING"),
-        ("magnitude_fusion", "ORIGIN_MAGNITUDE_FUSION"),
-        ("query_intent", "ORIGIN_ENABLE_QUERY_INTENT"),
+        ("graph_stream", "WENLAN_GRAPH_MEMORY_STREAM"),
+        ("graph_gate", "WENLAN_ENABLE_GRAPH_GATE"),
+        ("graph_seed", "WENLAN_ENABLE_GRAPH_SEED"),
+        ("fts_hardening", "WENLAN_ENABLE_FTS_HARDENING"),
+        ("magnitude_fusion", "WENLAN_MAGNITUDE_FUSION"),
+        ("query_intent", "WENLAN_ENABLE_QUERY_INTENT"),
         // Cached-DB temporal arms: unlike the self-seeded `temporal_*` arms
         // below (per-question evidence-only DBs — no distractors, so the
         // boost has nothing to separate), these read the pooled canonical
         // scenario DB where event_date is 100% live and every other
         // question's memories act as distractors. The 'temp' substring keeps
         // the substrate-liveness gate armed (refuses on event_date = 0).
-        // ORIGIN_ENABLE_TEMPORAL_GROUNDING has no cached arm: it is a
+        // WENLAN_ENABLE_TEMPORAL_GROUNDING has no cached arm: it is a
         // write-time flag (rewrites date phrases at ingest), so flipping it
         // on a read-only cached DB measures exactly zero by construction.
-        ("temporal_soft_cached", "ORIGIN_ENABLE_TEMPORAL_SOFT_BOOST"),
-        ("temporal_filter_cached", "ORIGIN_ENABLE_TEMPORAL_FILTER"),
+        ("temporal_soft_cached", "WENLAN_ENABLE_TEMPORAL_SOFT_BOOST"),
+        ("temporal_filter_cached", "WENLAN_ENABLE_TEMPORAL_FILTER"),
     ];
     for (feature, flag) in cached {
         if !paired_feature_selected(feature) {
@@ -3182,23 +3182,23 @@ async fn paired_ab_emit() {
     // cross-rerank collectors so a flag flip produces a real delta. Build the
     // reranker ONCE and only when a CE feature is selected (the BGE-reranker-v2-m3
     // weights are ~600MB on first download), so base-only smoke runs stay light.
-    // `rerank_graph_stack` (ORIGIN_GRAPH_MEMORY_STREAM toggled WITH the CE active
+    // `rerank_graph_stack` (WENLAN_GRAPH_MEMORY_STREAM toggled WITH the CE active
     // on both arms) RETIRED 2026-06-10: the 2026-06-09 ns receipt (+0.0126,
     // p=0.17) closed stream-under-CE, and the code now hard-skips the stream
     // whenever a reranker is present (allow_graph_stream = reranker.is_none()).
     // With a reranker on both arms the flag toggles nothing, so the two arms are
     // byte-identical by construction — the arm could only emit a fake null.
     let ce: [(&str, &str); 6] = [
-        ("page_channel", "ORIGIN_ENABLE_PAGE_CHANNEL"),
-        ("episode_channel", "ORIGIN_ENABLE_EPISODE_CHANNEL"),
-        ("fact_channel", "ORIGIN_ENABLE_FACT_CHANNEL"),
-        ("global_prelude", "ORIGIN_ENABLE_GLOBAL_PRELUDE"),
-        ("session_diversity", "ORIGIN_ENABLE_SESSION_DIVERSITY"),
+        ("page_channel", "WENLAN_ENABLE_PAGE_CHANNEL"),
+        ("episode_channel", "WENLAN_ENABLE_EPISODE_CHANNEL"),
+        ("fact_channel", "WENLAN_ENABLE_FACT_CHANNEL"),
+        ("global_prelude", "WENLAN_ENABLE_GLOBAL_PRELUDE"),
+        ("session_diversity", "WENLAN_ENABLE_SESSION_DIVERSITY"),
         // Skip-preference bypass: ON arm routes preference-intent queries past
         // the CE back to the base ranking (the −0.155 SSP fix). Non-preference
         // rows are byte-identical between arms (detector has 0 false positives
         // on the LME-S fixture), so the delta isolates the bypassed category.
-        ("rerank_skip_pref", "ORIGIN_RERANK_SKIP_PREFERENCE"),
+        ("rerank_skip_pref", "WENLAN_RERANK_SKIP_PREFERENCE"),
     ];
     if ce.iter().any(|(f, _)| paired_feature_selected(f)) {
         let reranker = wenlan_core::reranker::init_cross_encoder_reranker(None)
@@ -3215,12 +3215,12 @@ async fn paired_ab_emit() {
     // T4a temporal-filter: self-seeds, LME only, search_memory_temporal path.
     if paired_feature_selected("temporal_filter") {
         use wenlan_core::eval::longmemeval::run_longmemeval_eval_temporal_collect;
-        println!("--- feature temporal_filter (flag ORIGIN_ENABLE_TEMPORAL_FILTER) [RE-SEED] ---");
+        println!("--- feature temporal_filter (flag WENLAN_ENABLE_TEMPORAL_FILTER) [RE-SEED] ---");
         let lme_fx = eval_root().join("data/longmemeval_oracle.json");
         if lme_fx.exists() {
             for (state, val) in [("off", None::<&str>), ("on", Some("1"))] {
                 let rows = temp_env::async_with_vars(
-                    [("ORIGIN_ENABLE_TEMPORAL_FILTER", val)],
+                    [("WENLAN_ENABLE_TEMPORAL_FILTER", val)],
                     run_longmemeval_eval_temporal_collect(&lme_fx, "temporal_filter", state),
                 )
                 .await
@@ -3236,12 +3236,12 @@ async fn paired_ab_emit() {
     // OFF arm = plain baseline (no temporal flag); ON arm = binary in-window score boost.
     if paired_feature_selected("temporal_soft_boost") {
         use wenlan_core::eval::longmemeval::run_longmemeval_eval_temporal_collect;
-        println!("--- feature temporal_soft_boost (flag ORIGIN_ENABLE_TEMPORAL_SOFT_BOOST) [RE-SEED] ---");
+        println!("--- feature temporal_soft_boost (flag WENLAN_ENABLE_TEMPORAL_SOFT_BOOST) [RE-SEED] ---");
         let lme_fx = eval_root().join("data/longmemeval_oracle.json");
         if lme_fx.exists() {
             for (state, val) in [("off", None::<&str>), ("on", Some("1"))] {
                 let rows = temp_env::async_with_vars(
-                    [("ORIGIN_ENABLE_TEMPORAL_SOFT_BOOST", val)],
+                    [("WENLAN_ENABLE_TEMPORAL_SOFT_BOOST", val)],
                     run_longmemeval_eval_temporal_collect(&lme_fx, "temporal_soft_boost", state),
                 )
                 .await
@@ -3272,13 +3272,13 @@ async fn paired_ab_emit() {
 /// and runs on CPU (fastembed ONNX). Pin the subset with `EVAL_LME_LIMIT`.
 ///
 /// Run (unsandboxed, against the SNAPSHOT DB so the seed stays pristine):
-///   ORIGIN_EVAL_ROOT=/Users/lucian/Repos/origin/app/eval \
+///   WENLAN_EVAL_ROOT=/Users/lucian/Repos/origin/app/eval \
 ///   SCENARIO_DB_ROOT=~/.cache/origin-eval/scenario_snapshot \
 ///   EVAL_OUT=~/.cache/origin-eval/reranker_out EVAL_LME_LIMIT=50 \
 ///     cargo test -p origin-core --features eval-harness --test eval_harness -- \
 ///     --ignored --nocapture --test-threads=1 paired_cross_rerank_emit
 #[tokio::test]
-#[ignore = "downloads ~600MB CE model (CPU); needs cached scenario SNAPSHOT DB. Set ORIGIN_EVAL_ROOT + SCENARIO_DB_ROOT + EVAL_OUT"]
+#[ignore = "downloads ~600MB CE model (CPU); needs cached scenario SNAPSHOT DB. Set WENLAN_EVAL_ROOT + SCENARIO_DB_ROOT + EVAL_OUT"]
 async fn paired_cross_rerank_emit() {
     use wenlan_core::eval::longmemeval::{
         run_longmemeval_eval_cross_rerank_from_db_collect, run_longmemeval_eval_from_db_collect,
@@ -3422,7 +3422,7 @@ async fn paired_run_cached_feature_cross_rerank_control(
     }
 }
 
-/// Paired A/B emitter for `ORIGIN_ENABLE_RERANK_BLEND` (blend vs replace).
+/// Paired A/B emitter for `WENLAN_ENABLE_RERANK_BLEND` (blend vs replace).
 ///
 /// The flag ONLY affects the cross_rerank path: when ON, the CE logit is
 /// BLENDED with the boosted-RRF score (`α·σ(CE)+(1−α)·norm(WRRF)`) instead of
@@ -3447,13 +3447,13 @@ async fn paired_run_cached_feature_cross_rerank_control(
 ///
 /// Run (unsandboxed, against the SNAPSHOT DBs so the seeds stay pristine):
 ///   EVAL_LOCOMO_LIMIT=20 EVAL_LME_LIMIT=20 \
-///   ORIGIN_EVAL_ROOT=/Users/lucian/Repos/origin/app/eval \
+///   WENLAN_EVAL_ROOT=/Users/lucian/Repos/origin/app/eval \
 ///   SCENARIO_DB_ROOT=~/.cache/origin-eval/scenario_snapshot \
 ///   EVAL_OUT=~/.cache/origin-eval/rerank_blend_out \
 ///     cargo test -p origin-core --test eval_harness rerank_blend_paired_ab -- \
 ///     --ignored --nocapture --test-threads=1
 #[tokio::test]
-#[ignore = "downloads ~600MB CE model (CPU); needs cached scenario SNAPSHOT DB. Set ORIGIN_EVAL_ROOT + SCENARIO_DB_ROOT + EVAL_OUT"]
+#[ignore = "downloads ~600MB CE model (CPU); needs cached scenario SNAPSHOT DB. Set WENLAN_EVAL_ROOT + SCENARIO_DB_ROOT + EVAL_OUT"]
 async fn rerank_blend_paired_ab() {
     println!("=== RERANK-BLEND PAIRED A/B (blend vs replace) ===");
     println!("EVAL_OUT = {}", paired_out_dir().display());
@@ -3466,10 +3466,10 @@ async fn rerank_blend_paired_ab() {
     println!("CE model = {} (CPU)", reranker.model_id());
 
     // A/B arm: OFF (replace, flag unset) vs ON (blend, flag=1).
-    println!("--- feature rerank_blend (flag ORIGIN_ENABLE_RERANK_BLEND) [A/B] ---");
+    println!("--- feature rerank_blend (flag WENLAN_ENABLE_RERANK_BLEND) [A/B] ---");
     paired_run_cached_feature_cross_rerank(
         "rerank_blend",
-        "ORIGIN_ENABLE_RERANK_BLEND",
+        "WENLAN_ENABLE_RERANK_BLEND",
         reranker.clone(),
     )
     .await;
@@ -3478,7 +3478,7 @@ async fn rerank_blend_paired_ab() {
     println!("--- feature rerank_blend_aa (A/A no-op control: OFF vs OFF) ---");
     paired_run_cached_feature_cross_rerank_control(
         "rerank_blend_aa",
-        "ORIGIN_ENABLE_RERANK_BLEND",
+        "WENLAN_ENABLE_RERANK_BLEND",
         None,
         reranker.clone(),
     )
@@ -3516,13 +3516,13 @@ async fn rerank_blend_paired_ab() {
 /// First run downloads the BGE-reranker-v2-m3 weights (~600MB) and runs on CPU.
 ///
 /// Run (unsandboxed, against the SNAPSHOT DBs so the seeds stay pristine):
-///   ORIGIN_EVAL_ROOT=/Users/lucian/Repos/origin/app/eval \
+///   WENLAN_EVAL_ROOT=/Users/lucian/Repos/origin/app/eval \
 ///   SCENARIO_DB_ROOT=~/.cache/origin-eval/scenario_snapshot \
 ///   EVAL_OUT=~/.cache/origin-eval/rerank_window_out \
 ///     cargo test -p origin-core --features eval-harness --test eval_harness \
 ///     rerank_window_paired_ab -- --ignored --nocapture --test-threads=1
 #[tokio::test]
-#[ignore = "downloads ~600MB CE model (CPU); needs cached scenario SNAPSHOT DB. Set ORIGIN_EVAL_ROOT + SCENARIO_DB_ROOT + EVAL_OUT"]
+#[ignore = "downloads ~600MB CE model (CPU); needs cached scenario SNAPSHOT DB. Set WENLAN_EVAL_ROOT + SCENARIO_DB_ROOT + EVAL_OUT"]
 async fn rerank_window_paired_ab() {
     println!("=== RERANK-WINDOW PAIRED A/B (pool floor 10 vs 50) ===");
     println!("EVAL_OUT = {}", paired_out_dir().display());
@@ -3580,13 +3580,13 @@ async fn rerank_window_paired_ab() {
 /// full 10/20/30/50 recall+latency curve.
 ///
 /// Run (unsandboxed, against the SNAPSHOT DBs so the seeds stay pristine):
-///   ORIGIN_EVAL_ROOT=/Users/lucian/Repos/origin/app/eval \
+///   WENLAN_EVAL_ROOT=/Users/lucian/Repos/origin/app/eval \
 ///   SCENARIO_DB_ROOT=~/.cache/origin-eval/scenario_snapshot \
 ///   EVAL_OUT=~/.cache/origin-eval/rerank_window_knee_out \
 ///     cargo test -p origin-core --features eval-harness --test eval_harness \
 ///     rerank_window_knee_sweep -- --ignored --nocapture --test-threads=1
 #[tokio::test]
-#[ignore = "downloads ~600MB CE model (CPU); needs cached scenario SNAPSHOT DB. Set ORIGIN_EVAL_ROOT + SCENARIO_DB_ROOT + EVAL_OUT"]
+#[ignore = "downloads ~600MB CE model (CPU); needs cached scenario SNAPSHOT DB. Set WENLAN_EVAL_ROOT + SCENARIO_DB_ROOT + EVAL_OUT"]
 async fn rerank_window_knee_sweep() {
     println!("=== RERANK-WINDOW KNEE SWEEP (pool floor 10 vs 20, 10 vs 30) ===");
     println!("EVAL_OUT = {}", paired_out_dir().display());
@@ -3626,7 +3626,7 @@ async fn rerank_window_knee_sweep() {
 /// Smaller-CE model sweep (#187): per model, paired arms on the cached DBs.
 ///
 /// OFF arm = base `search_memory` collector (no CE).
-/// ON arm  = CE collector with `ORIGIN_RERANKER_MODEL=<model>`.
+/// ON arm  = CE collector with `WENLAN_RERANKER_MODEL=<model>`.
 ///
 /// Plus one A/A floor arm (`rerank_model_aa`, base vs base, no CE) per bench so
 /// `analyze_paired.py` has a noise floor that matches the OFF arm path.
@@ -3637,19 +3637,19 @@ async fn rerank_window_knee_sweep() {
 ///   `rerank_model_base`  -- BGE-reranker-base  (~278M params, mid-size)
 ///
 /// `jina-turbo` is Xet-backed (hf-hub cannot fetch it directly). Use
-/// `ORIGIN_RERANKER_ONNX_DIR` pointing to a pre-downloaded local ONNX dir when
-/// running with that model. When `ORIGIN_RERANKER_ONNX_DIR` is set the BYO path
-/// is active and `ORIGIN_RERANKER_MODEL` is ignored -- so each BYO invocation
+/// `WENLAN_RERANKER_ONNX_DIR` pointing to a pre-downloaded local ONNX dir when
+/// running with that model. When `WENLAN_RERANKER_ONNX_DIR` is set the BYO path
+/// is active and `WENLAN_RERANKER_MODEL` is ignored -- so each BYO invocation
 /// must select exactly ONE model feature via `EVAL_PAIRED_ONLY`. The test
 /// panics if more than one model feature is selected while the dir is set
 /// (subsumes the unset case: unset selects all three), and cross-checks the
 /// constructed reranker's `model_id()` against the feature label. The check
-/// validates label-vs-label (the BYO model_id comes from ORIGIN_RERANKER_MODEL_ID
+/// validates label-vs-label (the BYO model_id comes from WENLAN_RERANKER_MODEL_ID
 /// or the dir basename), so it catches copy-paste cross-wiring, not wrong
 /// weights inside a correctly-named dir.
 ///
 /// Run (unsandboxed, against SNAPSHOT DBs so seeds stay pristine):
-///   ORIGIN_EVAL_ROOT=/Users/lucian/Repos/origin/app/eval \
+///   WENLAN_EVAL_ROOT=/Users/lucian/Repos/origin/app/eval \
 ///   SCENARIO_DB_ROOT=~/.cache/origin-eval/scenario_snapshot \
 ///   EVAL_OUT=~/.cache/origin-eval/rerank_model_sweep_out \
 ///     cargo test -p origin-core --features eval-harness --test eval_harness \
@@ -3660,12 +3660,12 @@ async fn rerank_window_knee_sweep() {
 /// pair stays legal under the one-model guard) or no run ever writes
 /// `rerank_model_aa_*.jsonl` and every verdict comes out NO-FLOOR:
 ///   run 1: EVAL_PAIRED_ONLY=rerank_model_v2m3,rerank_model_aa \
-///          ORIGIN_RERANKER_ONNX_DIR=~/.cache/origin-eval/rerankers/bge-v2-m3 \
-///          ORIGIN_RERANKER_MODEL_ID=bge-v2-m3 ... (same env above) ...
+///          WENLAN_RERANKER_ONNX_DIR=~/.cache/origin-eval/rerankers/bge-v2-m3 \
+///          WENLAN_RERANKER_MODEL_ID=bge-v2-m3 ... (same env above) ...
 ///   run 2: EVAL_PAIRED_ONLY=rerank_model_turbo + the jina-turbo dir + id
 ///   run 3: EVAL_PAIRED_ONLY=rerank_model_base + the bge-base dir + id
 #[tokio::test]
-#[ignore = "cached scenario DBs; CPU ONNX; set ORIGIN_EVAL_ROOT + SCENARIO_DB_ROOT + EVAL_OUT"]
+#[ignore = "cached scenario DBs; CPU ONNX; set WENLAN_EVAL_ROOT + SCENARIO_DB_ROOT + EVAL_OUT"]
 async fn rerank_model_sweep() {
     use wenlan_core::eval::locomo::run_locomo_eval_cross_rerank_from_db_collect;
     use wenlan_core::eval::locomo::run_locomo_eval_from_db_collect;
@@ -3675,22 +3675,22 @@ async fn rerank_model_sweep() {
     println!("=== RERANK-MODEL SWEEP (smaller-CE latency/quality matrix, #187) ===");
     println!("EVAL_OUT = {}", paired_out_dir().display());
 
-    // (feature tag, ORIGIN_RERANKER_MODEL value, expected model_id substring).
+    // (feature tag, WENLAN_RERANKER_MODEL value, expected model_id substring).
     let models: [(&str, &str, &str); 3] = [
         ("rerank_model_v2m3", "bge-v2-m3", "v2-m3"),
         ("rerank_model_turbo", "turbo", "turbo"),
         ("rerank_model_base", "bge-base", "base"),
     ];
 
-    // Guard: when ORIGIN_RERANKER_ONNX_DIR is set the BYO path is active and
-    // ORIGIN_RERANKER_MODEL is ignored by init_cross_encoder_reranker, so every
+    // Guard: when WENLAN_RERANKER_ONNX_DIR is set the BYO path is active and
+    // WENLAN_RERANKER_MODEL is ignored by init_cross_encoder_reranker, so every
     // selected model feature would run on the SAME mounted weights under
     // different labels -- a mislabeled, latency-confounded matrix. Allow at most
     // one selected model feature per BYO invocation (`> 1`, not `!= 1`, so an
     // aa-only floor run stays legal with the dir exported -- the A/A arm builds
     // no reranker). EVAL_PAIRED_ONLY unset selects all three, so the unset case
     // is subsumed.
-    let byo_active = std::env::var_os("ORIGIN_RERANKER_ONNX_DIR").is_some();
+    let byo_active = std::env::var_os("WENLAN_RERANKER_ONNX_DIR").is_some();
     if byo_active {
         let selected: Vec<&str> = models
             .iter()
@@ -3699,8 +3699,8 @@ async fn rerank_model_sweep() {
             .collect();
         if selected.len() > 1 {
             panic!(
-                "ORIGIN_RERANKER_ONNX_DIR is set (BYO weights) but {} model features \
-                 are selected ({selected:?}). The BYO path ignores ORIGIN_RERANKER_MODEL, \
+                "WENLAN_RERANKER_ONNX_DIR is set (BYO weights) but {} model features \
+                 are selected ({selected:?}). The BYO path ignores WENLAN_RERANKER_MODEL, \
                  so every selected feature would run on the same mounted weights under \
                  different labels. Select exactly one of rerank_model_{{v2m3,turbo,base}} \
                  via EVAL_PAIRED_ONLY.",
@@ -3763,21 +3763,21 @@ async fn rerank_model_sweep() {
         if !paired_feature_selected(feature) {
             continue;
         }
-        println!("--- {feature} (ORIGIN_RERANKER_MODEL={model}) ---");
+        println!("--- {feature} (WENLAN_RERANKER_MODEL={model}) ---");
         // Set the model env var so init_cross_encoder_reranker picks it up.
         // The test runs alone with --test-threads=1 so there is no concurrency
         // hazard. We remove the var after constructing the reranker to avoid
         // leaking it into subsequent iterations (the reranker object already
         // captures the model choice).
-        std::env::set_var("ORIGIN_RERANKER_MODEL", model);
+        std::env::set_var("WENLAN_RERANKER_MODEL", model);
         let reranker =
             wenlan_core::reranker::init_cross_encoder_reranker(None).unwrap_or_else(|e| {
                 panic!("{feature}: init_cross_encoder_reranker (first run downloads weights): {e}")
             });
-        std::env::remove_var("ORIGIN_RERANKER_MODEL");
+        std::env::remove_var("WENLAN_RERANKER_MODEL");
         println!("CE model_id = {} (CPU)", reranker.model_id());
         // Label/weights cross-check (BYO only): the BYO loader stamps model_id
-        // from ORIGIN_RERANKER_MODEL_ID (or the dir basename), so assert it
+        // from WENLAN_RERANKER_MODEL_ID (or the dir basename), so assert it
         // contains the feature's expected token -- mounted weights can't run
         // under the wrong feature label. The enum path stamps the fastembed
         // Debug repr (e.g. "BGERerankerV2M3", no hyphens) and selects weights
@@ -3786,7 +3786,7 @@ async fn rerank_model_sweep() {
             assert!(
                 reranker.model_id().to_lowercase().contains(expect_sub),
                 "feature {feature} expected model_id containing {expect_sub:?}, got {:?} -- \
-                 the mounted ORIGIN_RERANKER_ONNX_DIR weights do not match the feature label",
+                 the mounted WENLAN_RERANKER_ONNX_DIR weights do not match the feature label",
                 reranker.model_id()
             );
         }
@@ -3866,7 +3866,7 @@ async fn rerank_model_sweep() {
         wrote_any,
         "rerank_model_sweep wrote NO paired rows -- check EVAL_PAIRED_ONLY spelling \
          (valid: rerank_model_aa, rerank_model_v2m3, rerank_model_turbo, \
-         rerank_model_base) and that SCENARIO_DB_ROOT / ORIGIN_EVAL_ROOT point at \
+         rerank_model_base) and that SCENARIO_DB_ROOT / WENLAN_EVAL_ROOT point at \
          the seeded DBs + fixtures"
     );
 
@@ -3881,7 +3881,7 @@ async fn rerank_model_sweep() {
 /// Uses the pre-seeded consolidated scenario DB at
 /// `${SCENARIO_DB_ROOT or ~/.cache/origin-eval/scenario_seeded}/locomo_v1/origin_memory.db`
 /// — skips ingest entirely. Page-channel ON by default; set
-/// `ORIGIN_ENABLE_PAGE_CHANNEL=1` to measure the ON variant. Page-channel is OFF by default.
+/// `WENLAN_ENABLE_PAGE_CHANNEL=1` to measure the ON variant. Page-channel is OFF by default.
 ///
 /// Filename suffix `__with_pages` distinguishes from the per-conversation
 /// `cross_rerank__*__pool_baseline.json` headline (which uses ephemeral DBs
@@ -3939,7 +3939,7 @@ async fn save_locomo_v2_with_pages_baseline() {
     let baselines_dir = eval_root().join("baselines");
     std::fs::create_dir_all(&baselines_dir).unwrap();
     let mut filename = report.baseline_filename("locomo");
-    // Branch suffix on ORIGIN_ENABLE_PAGE_CHANNEL so page-ON and page-OFF artifacts
+    // Branch suffix on WENLAN_ENABLE_PAGE_CHANNEL so page-ON and page-OFF artifacts
     // don't collide at the legacy app/eval/baselines/ path. Truthy parse via
     // shared helper so suffix matches what the production code path actually did.
     let suffix = if wenlan_core::db::page_channel_enabled() {
@@ -3966,7 +3966,7 @@ async fn save_locomo_v2_with_pages_baseline() {
 /// Uses the pre-seeded consolidated scenario DB at
 /// `${SCENARIO_DB_ROOT or ~/.cache/origin-eval/scenario_seeded}/lme_v1/origin_memory.db`
 /// — skips ingest entirely. Page-channel ON by default; set
-/// `ORIGIN_ENABLE_PAGE_CHANNEL=1` to measure the ON variant. Page-channel is OFF by default.
+/// `WENLAN_ENABLE_PAGE_CHANNEL=1` to measure the ON variant. Page-channel is OFF by default.
 ///
 /// Filename suffix `__with_pages` distinguishes from the per-question
 /// `cross_rerank__*__pool_baseline.json` headline.
@@ -4024,7 +4024,7 @@ async fn save_longmemeval_v2_with_pages_baseline() {
     let baselines_dir = eval_root().join("baselines");
     std::fs::create_dir_all(&baselines_dir).unwrap();
     let mut filename = report.baseline_filename("longmemeval");
-    // Branch suffix on ORIGIN_ENABLE_PAGE_CHANNEL so page-ON and page-OFF artifacts
+    // Branch suffix on WENLAN_ENABLE_PAGE_CHANNEL so page-ON and page-OFF artifacts
     // don't collide at the legacy app/eval/baselines/ path. Truthy parse via
     // shared helper so suffix matches what the production code path actually did.
     let suffix = if wenlan_core::db::page_channel_enabled() {
@@ -4195,8 +4195,8 @@ async fn test_scaling_curve() {
 #[tokio::test]
 #[ignore]
 async fn benchmark_locomo_pipeline() {
-    use wenlan_core::eval::token_efficiency::run_locomo_pipeline_eval;
     use std::sync::Arc;
+    use wenlan_core::eval::token_efficiency::run_locomo_pipeline_eval;
 
     let locomo_path = eval_root().join("data/locomo10.json");
     if !locomo_path.exists() {
@@ -4247,8 +4247,8 @@ async fn benchmark_locomo_pipeline() {
 #[tokio::test]
 #[ignore]
 async fn benchmark_longmemeval_pipeline() {
-    use wenlan_core::eval::token_efficiency::run_longmemeval_pipeline_eval;
     use std::sync::Arc;
+    use wenlan_core::eval::token_efficiency::run_longmemeval_pipeline_eval;
 
     let path = eval_root().join("data/longmemeval_oracle.json");
     if !path.exists() {
@@ -4301,8 +4301,8 @@ async fn benchmark_longmemeval_pipeline() {
 #[tokio::test]
 #[ignore]
 async fn benchmark_context_path() {
-    use wenlan_core::eval::token_efficiency::run_context_path_eval;
     use std::sync::Arc;
+    use wenlan_core::eval::token_efficiency::run_context_path_eval;
 
     let locomo_path = eval_root().join("data/locomo10.json");
     if !locomo_path.exists() {
@@ -4330,8 +4330,8 @@ async fn benchmark_context_path() {
 #[tokio::test]
 #[ignore]
 async fn benchmark_context_path_longmemeval() {
-    use wenlan_core::eval::token_efficiency::run_context_path_eval_longmemeval;
     use std::sync::Arc;
+    use wenlan_core::eval::token_efficiency::run_context_path_eval_longmemeval;
 
     let path = eval_root().join("data/longmemeval_oracle.json");
     if !path.exists() {
@@ -4364,8 +4364,8 @@ async fn benchmark_context_path_longmemeval() {
 #[tokio::test]
 #[ignore]
 async fn generate_e2e_context_tuples_locomo() {
-    use wenlan_core::eval::token_efficiency::{run_e2e_context_eval, save_judgment_tuples};
     use std::sync::Arc;
+    use wenlan_core::eval::token_efficiency::{run_e2e_context_eval, save_judgment_tuples};
 
     let locomo_path = eval_root().join("data/locomo10.json");
     if !locomo_path.exists() {
@@ -4398,10 +4398,10 @@ async fn generate_e2e_context_tuples_locomo() {
 #[tokio::test]
 #[ignore]
 async fn generate_e2e_context_tuples_longmemeval() {
+    use std::sync::Arc;
     use wenlan_core::eval::token_efficiency::{
         run_e2e_context_eval_longmemeval, save_judgment_tuples,
     };
-    use std::sync::Arc;
 
     let path = eval_root().join("data/longmemeval_oracle.json");
     if !path.exists() {
@@ -4481,8 +4481,8 @@ async fn judge_e2e_context_locomo() {
 #[tokio::test]
 #[ignore]
 async fn generate_e2e_context_tuples_locomo_api() {
-    use wenlan_core::eval::token_efficiency::{run_e2e_context_eval, save_judgment_tuples};
     use std::sync::Arc;
+    use wenlan_core::eval::token_efficiency::{run_e2e_context_eval, save_judgment_tuples};
 
     let locomo_path = eval_root().join("data/locomo10.json");
     if !locomo_path.exists() {
@@ -4775,7 +4775,7 @@ async fn generate_fullpipeline_lme() {
 /// enrichment, and concept distillation.
 ///
 /// ```bash
-/// ORIGIN_LLM_WORKERS=1 ORIGIN_LLM_PARALLEL_SEQS=8 EVAL_ENRICHMENT_CONCURRENCY=8 \
+/// WENLAN_LLM_WORKERS=1 WENLAN_LLM_PARALLEL_SEQS=8 EVAL_ENRICHMENT_CONCURRENCY=8 \
 ///   cargo test -p origin --test eval_harness enrich_fullpipeline_lme_only -- --ignored --nocapture
 /// ```
 #[tokio::test]
@@ -4926,8 +4926,8 @@ async fn enrich_fullpipeline_lme_only() {
 /// Fast (no LLM, no API) — just opens DB, counts memories, asserts enrichment_complete.
 #[tokio::test]
 async fn smoke_enriched_db_reuse() {
-    use wenlan_core::db::MemoryDB;
     use std::sync::Arc;
+    use wenlan_core::db::MemoryDB;
 
     let baselines = wenlan_core::eval::shared::eval_baselines_dir_override()
         .unwrap_or_else(|| eval_root().join("baselines"));
@@ -5096,11 +5096,11 @@ async fn judge_fullpipeline_lme() {
 #[tokio::test]
 #[ignore]
 async fn quality_distill_4b_vs_9b() {
+    use std::sync::Arc;
     use wenlan_core::eval::locomo::{extract_observations, load_locomo};
     use wenlan_core::eval::shared::eval_shared_embedder;
     use wenlan_core::llm_provider::{LlmProvider, LlmRequest, OnDeviceProvider};
     use wenlan_core::prompts::PromptRegistry;
-    use std::sync::Arc;
 
     let locomo_path = eval_root().join("data/locomo10.json");
     if !locomo_path.exists() {
@@ -5244,9 +5244,9 @@ async fn quality_distill_4b_vs_9b() {
 #[tokio::test]
 #[ignore]
 async fn probe_batch_sizes() {
+    use std::sync::Arc;
     use wenlan_core::eval::locomo::{extract_observations, load_locomo};
     use wenlan_core::eval::shared::probe_extraction_batch_sizes;
-    use std::sync::Arc;
 
     let locomo_path = eval_root().join("data/locomo10.json");
     if !locomo_path.exists() {
@@ -5307,12 +5307,12 @@ async fn probe_batch_sizes() {
 #[tokio::test]
 #[ignore]
 async fn smoke_fullpipeline() {
+    use std::sync::Arc;
     use wenlan_core::eval::locomo::{extract_observations, load_locomo};
     use wenlan_core::eval::shared::{
         count_tokens, eval_shared_embedder, run_concept_distillation_batch_api,
         run_enrichment_batch_api, run_title_enrichment_batch_api,
     };
-    use std::sync::Arc;
 
     let api_key = std::env::var("ANTHROPIC_API_KEY").expect("ANTHROPIC_API_KEY required");
     let model = "claude-haiku-4-5-20251001";
@@ -5665,18 +5665,18 @@ async fn smoke_per_scenario_locomo() {
 /// On-device Qwen3-4B (free, Metal). Isolated tempdir (no cache pollution).
 ///
 /// ```bash
-/// MEASURE_CLASSIFY_N=30 EVAL_ENRICHMENT_CONCURRENCY=8 ORIGIN_LLM_PARALLEL_SEQS=8 \
+/// MEASURE_CLASSIFY_N=30 EVAL_ENRICHMENT_CONCURRENCY=8 WENLAN_LLM_PARALLEL_SEQS=8 \
 ///   cargo test -p origin-core --features eval-harness --test eval_harness \
 ///   measure_classify_only_rate -- --ignored --nocapture
 /// ```
 #[tokio::test]
 #[ignore]
 async fn measure_classify_only_rate() {
+    use std::sync::Arc;
     use wenlan_core::eval::locomo::{extract_observations, load_locomo};
     use wenlan_core::eval::shared::{eval_shared_embedder, run_classification_for_eval_concurrent};
     use wenlan_core::llm_provider::OnDeviceProvider;
     use wenlan_core::sources::RawDocument;
-    use std::sync::Arc;
 
     let locomo_path = eval_root().join("data/locomo10.json");
     if !locomo_path.exists() {
@@ -5813,10 +5813,10 @@ async fn measure_classify_only_rate() {
 #[tokio::test]
 #[ignore]
 async fn smoke_eval_baselines_dir_e2e() {
+    use std::sync::Arc;
     use wenlan_core::db::MemoryDB;
     use wenlan_core::eval::shared::{eval_baselines_dir_override, scenario_db_dir};
     use wenlan_core::events::NoopEmitter;
-    use std::sync::Arc;
 
     let tmp = tempfile::tempdir().unwrap();
     let path_str = tmp.path().to_str().unwrap().to_string();
@@ -5865,12 +5865,12 @@ async fn smoke_eval_baselines_dir_e2e() {
 #[tokio::test]
 #[ignore]
 async fn smoke_per_scenario_locomo_cli() {
+    use std::sync::Arc;
     use wenlan_core::eval::locomo::{extract_observations, load_locomo};
     use wenlan_core::eval::shared::{
         eval_shared_embedder, open_or_seed_scenario_db, scenario_db_dir, EnrichmentMode,
     };
     use wenlan_core::sources::RawDocument;
-    use std::sync::Arc;
 
     // Probe for `claude` binary — skip silently if not available.
     let probe = std::process::Command::new("claude")
@@ -6631,10 +6631,10 @@ fn print_judge_report(report: &wenlan_core::eval::judge::JudgedE2EReport) {
 #[tokio::test]
 #[ignore]
 async fn probe_concept_scores() {
+    use std::sync::Arc;
     use wenlan_core::db::MemoryDB;
     use wenlan_core::eval::shared::eval_shared_embedder;
     use wenlan_core::events::NoopEmitter;
-    use std::sync::Arc;
 
     let baselines = wenlan_core::eval::shared::eval_baselines_dir_override()
         .unwrap_or_else(|| eval_root().join("baselines"));
@@ -6771,12 +6771,12 @@ async fn probe_concept_scores() {
 #[tokio::test]
 #[ignore]
 async fn probe_overlap_gate() {
+    use std::collections::HashMap;
+    use std::sync::Arc;
     use wenlan_core::db::MemoryDB;
     use wenlan_core::eval::shared::eval_shared_embedder;
     use wenlan_core::events::NoopEmitter;
     use wenlan_core::pages::filter_pages_by_source_overlap;
-    use std::collections::HashMap;
-    use std::sync::Arc;
 
     let baselines = wenlan_core::eval::shared::eval_baselines_dir_override()
         .unwrap_or_else(|| eval_root().join("baselines"));
@@ -6946,14 +6946,14 @@ async fn probe_overlap_gate() {
 /// for verifying that the persistent LlamaContext optimization (build the
 /// context once, clear KV cache between calls) actually pays off vs the old
 /// per-call `new_context()` path, and for measuring the impact of the
-/// multi-worker pool (S1, `ORIGIN_LLM_WORKERS`) and continuous batching
-/// (S2, `ORIGIN_LLM_PARALLEL_SEQS`).
+/// multi-worker pool (S1, `WENLAN_LLM_WORKERS`) and continuous batching
+/// (S2, `WENLAN_LLM_PARALLEL_SEQS`).
 ///
 /// Three useful invocations to compare:
-///   ORIGIN_LLM_WORKERS=1 ORIGIN_LLM_PARALLEL_SEQS=1   # baseline (single seq, single ctx)
-///   ORIGIN_LLM_WORKERS=4 ORIGIN_LLM_PARALLEL_SEQS=1   # S1: 4 contexts, 1 seq each
-///   ORIGIN_LLM_WORKERS=1 ORIGIN_LLM_PARALLEL_SEQS=4   # S2: 1 context, 4 parallel seqs
-///   ORIGIN_LLM_WORKERS=2 ORIGIN_LLM_PARALLEL_SEQS=2   # composed: 2 ctx x 2 seq = 4 concurrent
+///   WENLAN_LLM_WORKERS=1 WENLAN_LLM_PARALLEL_SEQS=1   # baseline (single seq, single ctx)
+///   WENLAN_LLM_WORKERS=4 WENLAN_LLM_PARALLEL_SEQS=1   # S1: 4 contexts, 1 seq each
+///   WENLAN_LLM_WORKERS=1 WENLAN_LLM_PARALLEL_SEQS=4   # S2: 1 context, 4 parallel seqs
+///   WENLAN_LLM_WORKERS=2 WENLAN_LLM_PARALLEL_SEQS=2   # composed: 2 ctx x 2 seq = 4 concurrent
 ///
 /// Requires Metal GPU + a downloaded Qwen3-4B model. Marked `#[ignore]` so it
 /// doesn't run in CI. Invoke with:
@@ -6963,9 +6963,9 @@ async fn probe_overlap_gate() {
 #[ignore]
 async fn stress_concurrent_inference() {
     use futures::future::join_all;
-    use wenlan_core::llm_provider::{LlmProvider, LlmRequest, OnDeviceProvider};
     use std::sync::Arc;
     use std::time::Instant;
+    use wenlan_core::llm_provider::{LlmProvider, LlmRequest, OnDeviceProvider};
 
     eprintln!("[stress] booting OnDeviceProvider (Qwen3-4B default)...");
     let boot_start = Instant::now();
@@ -7357,9 +7357,9 @@ async fn redistill_one_conv(
     tuning: &wenlan_core::tuning::DistillationConfig,
     embedder: wenlan_core::db::SharedEmbedder,
 ) -> Result<(), String> {
+    use std::sync::Arc;
     use wenlan_core::db::MemoryDB;
     use wenlan_core::refinery::distill_pages;
-    use std::sync::Arc;
 
     let emitter: Arc<dyn wenlan_core::events::EventEmitter> = Arc::new(wenlan_core::NoopEmitter);
     let db = MemoryDB::new_with_shared_embedder(conv_dir, emitter, embedder)
@@ -7823,7 +7823,7 @@ async fn smoke_tool_use_judge_returns_structured_verdict() {
 /// question from the fixture, stamps `event_date` from `haystack_dates`, then
 /// retrieves via `search_memory_temporal(.., now=question_date)`.
 ///
-/// `ORIGIN_ENABLE_TEMPORAL_FILTER` controls whether the hard temporal filter
+/// `WENLAN_ENABLE_TEMPORAL_FILTER` controls whether the hard temporal filter
 /// activates on High-confidence temporal cues. This A/B measures:
 ///   OFF (None)  -- temporal search path with filter disabled (plain search)
 ///   ON  ("1")   -- temporal search path with hard filter enabled
@@ -7831,7 +7831,7 @@ async fn smoke_tool_use_judge_returns_structured_verdict() {
 /// Respects `EVAL_LME_LIMIT` for fast iteration (e.g. EVAL_LME_LIMIT=30).
 /// Single-run scaffold -- N>=3 for any headline per AGENTS.md Eval Citation Discipline.
 #[tokio::test]
-#[ignore = "self-seeds from fixture; retrieval-only, no GPU; set ORIGIN_EVAL_ROOT + EVAL_LME_LIMIT"]
+#[ignore = "self-seeds from fixture; retrieval-only, no GPU; set WENLAN_EVAL_ROOT + EVAL_LME_LIMIT"]
 async fn temporal_filter_ab_lme() {
     use wenlan_core::eval::longmemeval::run_longmemeval_eval_temporal;
 
@@ -7850,14 +7850,14 @@ async fn temporal_filter_ab_lme() {
     println!("fixture: {}", fixture.display());
 
     let off = temp_env::async_with_vars(
-        [("ORIGIN_ENABLE_TEMPORAL_FILTER", None::<&str>)],
+        [("WENLAN_ENABLE_TEMPORAL_FILTER", None::<&str>)],
         run_longmemeval_eval_temporal(&fixture),
     )
     .await
     .expect("temporal eval OFF failed");
 
     let on = temp_env::async_with_vars(
-        [("ORIGIN_ENABLE_TEMPORAL_FILTER", Some("1"))],
+        [("WENLAN_ENABLE_TEMPORAL_FILTER", Some("1"))],
         run_longmemeval_eval_temporal(&fixture),
     )
     .await
@@ -7944,7 +7944,7 @@ async fn temporal_filter_ab_lme() {
 /// joins on `(bench, query_id)` within a single feature file, so the feature
 /// label must match across both arms of the same file).
 ///
-/// The soft temporal boost env var (`ORIGIN_ENABLE_TEMPORAL_SOFT_BOOST=1`) is
+/// The soft temporal boost env var (`WENLAN_ENABLE_TEMPORAL_SOFT_BOOST=1`) is
 /// set via `temp_env::async_with_vars` for the ExtractCue and Oracle arms;
 /// the Baseline arm runs without it so the boost is the controlled variable.
 async fn run_temporal_oracle_probe(reranker: std::sync::Arc<dyn wenlan_core::reranker::Reranker>) {
@@ -7971,7 +7971,7 @@ async fn run_temporal_oracle_probe(reranker: std::sync::Arc<dyn wenlan_core::rer
     .expect("open locomo_v1 snapshot DB");
 
     // --- Arm A: Baseline (no cue, boost env unset) ---
-    println!("--- arm Baseline (no cue, ORIGIN_ENABLE_TEMPORAL_SOFT_BOOST unset) ---");
+    println!("--- arm Baseline (no cue, WENLAN_ENABLE_TEMPORAL_SOFT_BOOST unset) ---");
     let baseline_rows_ab = run_locomo_eval_cross_rerank_temporal_collect(
         &db,
         &lo_fx,
@@ -7994,9 +7994,9 @@ async fn run_temporal_oracle_probe(reranker: std::sync::Arc<dyn wenlan_core::rer
         .collect();
 
     // --- Arm B: ExtractCue (soft boost ON) ---
-    println!("--- arm ExtractCue (ORIGIN_ENABLE_TEMPORAL_SOFT_BOOST=1) ---");
+    println!("--- arm ExtractCue (WENLAN_ENABLE_TEMPORAL_SOFT_BOOST=1) ---");
     let extractcue_rows = temp_env::async_with_vars(
-        [("ORIGIN_ENABLE_TEMPORAL_SOFT_BOOST", Some("1"))],
+        [("WENLAN_ENABLE_TEMPORAL_SOFT_BOOST", Some("1"))],
         run_locomo_eval_cross_rerank_temporal_collect(
             &db,
             &lo_fx,
@@ -8010,9 +8010,9 @@ async fn run_temporal_oracle_probe(reranker: std::sync::Arc<dyn wenlan_core::rer
     .expect("extractcue collect");
 
     // --- Arm C: Oracle (soft boost ON) ---
-    println!("--- arm Oracle (ORIGIN_ENABLE_TEMPORAL_SOFT_BOOST=1) ---");
+    println!("--- arm Oracle (WENLAN_ENABLE_TEMPORAL_SOFT_BOOST=1) ---");
     let oracle_rows = temp_env::async_with_vars(
-        [("ORIGIN_ENABLE_TEMPORAL_SOFT_BOOST", Some("1"))],
+        [("WENLAN_ENABLE_TEMPORAL_SOFT_BOOST", Some("1"))],
         run_locomo_eval_cross_rerank_temporal_collect(
             &db,
             &lo_fx,
@@ -8041,7 +8041,7 @@ async fn run_temporal_oracle_probe(reranker: std::sync::Arc<dyn wenlan_core::rer
 ///   - `temporal_oracle_AB_locomo.jsonl`: Baseline (off) vs ExtractCue (on)
 ///   - `temporal_oracle_AC_locomo.jsonl`: Baseline (off) vs Oracle (on)
 ///
-/// The soft temporal boost (`ORIGIN_ENABLE_TEMPORAL_SOFT_BOOST=1`) is active
+/// The soft temporal boost (`WENLAN_ENABLE_TEMPORAL_SOFT_BOOST=1`) is active
 /// for arms B and C; Baseline runs without it. Feed EVAL_OUT to
 /// `analyze_paired.py` to see per-query Δ for each arm pair.
 ///
@@ -8049,13 +8049,13 @@ async fn run_temporal_oracle_probe(reranker: std::sync::Arc<dyn wenlan_core::rer
 /// event_date so the temporal boost would never fire there; the probe is
 /// read-only so the seeds stay intact):
 ///
-///   ORIGIN_EVAL_ROOT=/Users/lucian/Repos/origin/app/eval \
+///   WENLAN_EVAL_ROOT=/Users/lucian/Repos/origin/app/eval \
 ///   SCENARIO_DB_ROOT=~/.cache/origin-eval/scenario_seeded \
 ///   EVAL_OUT=~/.cache/origin-eval/temporal_oracle_out \
 ///     cargo test -p origin-core --features eval-harness --test eval_harness \
 ///     temporal_oracle_probe -- --ignored --nocapture --test-threads=1
 #[tokio::test]
-#[ignore = "downloads ~600MB CE model (CPU); needs cached scenario seeded LoCoMo DB. Set ORIGIN_EVAL_ROOT + SCENARIO_DB_ROOT + EVAL_OUT"]
+#[ignore = "downloads ~600MB CE model (CPU); needs cached scenario seeded LoCoMo DB. Set WENLAN_EVAL_ROOT + SCENARIO_DB_ROOT + EVAL_OUT"]
 async fn temporal_oracle_probe() {
     println!("=== TEMPORAL ORACLE PROBE (3-arm: Baseline / ExtractCue / Oracle) ===");
     println!("EVAL_OUT = {}", paired_out_dir().display());
@@ -8073,8 +8073,8 @@ async fn temporal_oracle_probe() {
 }
 
 /// #15 slice-1: paired A/B on the expanded deep path. Arm OFF = keyword gate
-/// (ORIGIN_ENABLE_GRAPH_GATE=1 so the recorded graph_skipped matches the realized
-/// routing; intent flag unset). Arm ON = LLM intent gate (ORIGIN_ENABLE_INTENT_LLM=1,
+/// (WENLAN_ENABLE_GRAPH_GATE=1 so the recorded graph_skipped matches the realized
+/// routing; intent flag unset). Arm ON = LLM intent gate (WENLAN_ENABLE_INTENT_LLM=1,
 /// graph gate also on). Both arms append to query_intent_llm_locomo.jsonl for
 /// analyze_paired.py. Needs a local GPU LLM (Qwen3.5-9B on Metal) + locomo10.json; L7 manual.
 ///
@@ -8087,14 +8087,14 @@ async fn temporal_oracle_probe() {
 /// write_paired_rows APPENDS, so re-running double-counts rows.
 ///
 /// Run (unsandboxed, real GPU):
-///   ORIGIN_EVAL_ROOT=/Users/lucian/Repos/origin/app/eval \
+///   WENLAN_EVAL_ROOT=/Users/lucian/Repos/origin/app/eval \
 ///   EVAL_OUT=$HOME/.cache/origin-eval/intent_llm_out \
 ///   CARGO_TARGET_DIR=/Users/lucian/Repos/origin/target \
 ///     cargo test -p origin-core --features eval-harness --test eval_harness \
 ///     query_intent_llm_probe -- --ignored --nocapture --test-threads=1
 ///   python3 analyze_paired.py --dir $HOME/.cache/origin-eval/intent_llm_out
 #[tokio::test]
-#[ignore = "needs local GPU LLM (Qwen3.5-9B) + locomo10.json; L7 manual. Set ORIGIN_EVAL_ROOT + EVAL_OUT"]
+#[ignore = "needs local GPU LLM (Qwen3.5-9B) + locomo10.json; L7 manual. Set WENLAN_EVAL_ROOT + EVAL_OUT"]
 async fn query_intent_llm_probe() {
     use std::sync::Arc;
     println!("=== QUERY-INTENT-LLM PROBE (intent-gate vs keyword-gate) ===");
@@ -8114,8 +8114,8 @@ async fn query_intent_llm_probe() {
     println!("--- arm OFF (keyword gate) ---");
     let off_rows = temp_env::async_with_vars(
         [
-            ("ORIGIN_ENABLE_GRAPH_GATE", Some("1")),
-            ("ORIGIN_ENABLE_INTENT_LLM", None::<&str>),
+            ("WENLAN_ENABLE_GRAPH_GATE", Some("1")),
+            ("WENLAN_ENABLE_INTENT_LLM", None::<&str>),
         ],
         wenlan_core::eval::locomo::run_locomo_eval_expanded_intent_collect(
             &lo_fx,
@@ -8131,8 +8131,8 @@ async fn query_intent_llm_probe() {
     println!("--- arm ON (intent-LLM gate) ---");
     let on_rows = temp_env::async_with_vars(
         [
-            ("ORIGIN_ENABLE_GRAPH_GATE", Some("1")),
-            ("ORIGIN_ENABLE_INTENT_LLM", Some("1")),
+            ("WENLAN_ENABLE_GRAPH_GATE", Some("1")),
+            ("WENLAN_ENABLE_INTENT_LLM", Some("1")),
         ],
         wenlan_core::eval::locomo::run_locomo_eval_expanded_intent_collect(
             &lo_fx,
@@ -8153,14 +8153,14 @@ async fn query_intent_llm_probe() {
 }
 
 /// TRACK 2: isolate the expansion temperature on the legacy path. Both arms run
-/// the legacy array-expansion (ORIGIN_ENABLE_INTENT_LLM unset); arm "off"=temp 0.3,
-/// arm "on"=temp 0.0. Graph gate identical (ORIGIN_ENABLE_GRAPH_GATE=1). Emits
+/// the legacy array-expansion (WENLAN_ENABLE_INTENT_LLM unset); arm "off"=temp 0.3,
+/// arm "on"=temp 0.0. Graph gate identical (WENLAN_ENABLE_GRAPH_GATE=1). Emits
 /// expand_temp_locomo.jsonl for analyze_paired.py.
 ///
 /// NOTE: write_paired_rows APPENDS — clear $EVAL_OUT between runs or rows double-count.
 ///
 /// Run (unsandboxed, GPU):
-///   ORIGIN_EVAL_ROOT=/Users/lucian/Repos/origin/app/eval \
+///   WENLAN_EVAL_ROOT=/Users/lucian/Repos/origin/app/eval \
 ///   EVAL_OUT=$HOME/.cache/origin-eval/expand_temp_out \
 ///   EVAL_LOCOMO_LIMIT=10 \
 ///   CARGO_TARGET_DIR=/Users/lucian/Repos/origin/target \
@@ -8168,7 +8168,7 @@ async fn query_intent_llm_probe() {
 ///     expand_temp_isolation_probe -- --ignored --nocapture --test-threads=1
 ///   python3 analyze_paired.py --dir $HOME/.cache/origin-eval/expand_temp_out
 #[tokio::test]
-#[ignore = "needs local LLM + LoCoMo fixture; L7 manual. Set ORIGIN_EVAL_ROOT + EVAL_OUT"]
+#[ignore = "needs local LLM + LoCoMo fixture; L7 manual. Set WENLAN_EVAL_ROOT + EVAL_OUT"]
 async fn expand_temp_isolation_probe() {
     use std::sync::Arc;
     println!("=== EXPAND-TEMP ISOLATION PROBE (temp0.3 vs temp0.0, legacy path) ===");
@@ -8184,9 +8184,9 @@ async fn expand_temp_isolation_probe() {
     // Arm OFF = temp 0.3 (baseline). Intent flag UNSET in both arms.
     let off_rows = temp_env::async_with_vars(
         [
-            ("ORIGIN_ENABLE_GRAPH_GATE", Some("1")),
-            ("ORIGIN_ENABLE_INTENT_LLM", None::<&str>),
-            ("ORIGIN_EXPAND_TEMP", Some("0.3")),
+            ("WENLAN_ENABLE_GRAPH_GATE", Some("1")),
+            ("WENLAN_ENABLE_INTENT_LLM", None::<&str>),
+            ("WENLAN_EXPAND_TEMP", Some("0.3")),
         ],
         wenlan_core::eval::locomo::run_locomo_eval_expanded_intent_collect(
             &lo_fx,
@@ -8201,9 +8201,9 @@ async fn expand_temp_isolation_probe() {
     // Arm ON = temp 0.0.
     let on_rows = temp_env::async_with_vars(
         [
-            ("ORIGIN_ENABLE_GRAPH_GATE", Some("1")),
-            ("ORIGIN_ENABLE_INTENT_LLM", None::<&str>),
-            ("ORIGIN_EXPAND_TEMP", Some("0.0")),
+            ("WENLAN_ENABLE_GRAPH_GATE", Some("1")),
+            ("WENLAN_ENABLE_INTENT_LLM", None::<&str>),
+            ("WENLAN_EXPAND_TEMP", Some("0.0")),
         ],
         wenlan_core::eval::locomo::run_locomo_eval_expanded_intent_collect(
             &lo_fx,
@@ -8226,7 +8226,7 @@ async fn expand_temp_isolation_probe() {
 /// Paired graph-stream probe (#10): graph augmentation OFF vs ON, isolated.
 /// Ephemeral per-conversation DBs (fixture-driven), deterministic expansion
 /// (temp 0), rerank off, graph gate off (do_graph always true). The ONLY
-/// difference between arms is ORIGIN_GRAPH_MEMORY_STREAM:
+/// difference between arms is WENLAN_GRAPH_MEMORY_STREAM:
 ///   OFF = stream "0" -> augment runs the legacy observation no-op == no graph
 ///         (the flag is default-ON since 2026-06-10, so the OFF arm pins "0").
 ///   ON  = stream "1" -> live entity->memory stream (memory_entities populated
@@ -8237,7 +8237,7 @@ async fn expand_temp_isolation_probe() {
 /// liveness before it is trusted.
 ///
 /// Run (unsandboxed, GPU). Smoke first with a subset:
-///   ORIGIN_EVAL_ROOT=$PWD/app/eval \
+///   WENLAN_EVAL_ROOT=$PWD/app/eval \
 ///   EVAL_OUT=$HOME/.cache/origin-eval/graph_stream_out \
 ///   EVAL_LOCOMO_LIMIT=20 \
 ///   CARGO_TARGET_DIR=/Users/lucian/Repos/origin/target \
@@ -8245,7 +8245,7 @@ async fn expand_temp_isolation_probe() {
 ///     graph_stream_pair_locomo -- --ignored --nocapture --test-threads=1
 ///   python3 analyze_paired.py --dir $HOME/.cache/origin-eval/graph_stream_out
 #[tokio::test]
-#[ignore = "needs local LLM + LoCoMo fixture; L7 manual. Set ORIGIN_EVAL_ROOT + EVAL_OUT"]
+#[ignore = "needs local LLM + LoCoMo fixture; L7 manual. Set WENLAN_EVAL_ROOT + EVAL_OUT"]
 async fn graph_stream_pair_locomo() {
     use std::sync::Arc;
     println!("=== GRAPH-STREAM PAIR (stream OFF vs ON, entity-populated, LoCoMo) ===");
@@ -8263,10 +8263,10 @@ async fn graph_stream_pair_locomo() {
     // (default-ON since 2026-06-10, so OFF must pin "0", not unset).
     let off_rows = temp_env::async_with_vars(
         [
-            ("ORIGIN_GRAPH_MEMORY_STREAM", Some("0")),
-            ("ORIGIN_ENABLE_GRAPH_GATE", None::<&str>),
-            ("ORIGIN_ENABLE_INTENT_LLM", None::<&str>),
-            ("ORIGIN_EXPAND_TEMP", Some("0.0")),
+            ("WENLAN_GRAPH_MEMORY_STREAM", Some("0")),
+            ("WENLAN_ENABLE_GRAPH_GATE", None::<&str>),
+            ("WENLAN_ENABLE_INTENT_LLM", None::<&str>),
+            ("WENLAN_EXPAND_TEMP", Some("0.0")),
         ],
         wenlan_core::eval::locomo::run_locomo_eval_graph_stream_collect(
             &lo_fx,
@@ -8282,10 +8282,10 @@ async fn graph_stream_pair_locomo() {
     // ON arm: live entity->memory stream over the populated junction.
     let on_rows = temp_env::async_with_vars(
         [
-            ("ORIGIN_GRAPH_MEMORY_STREAM", Some("1")),
-            ("ORIGIN_ENABLE_GRAPH_GATE", None::<&str>),
-            ("ORIGIN_ENABLE_INTENT_LLM", None::<&str>),
-            ("ORIGIN_EXPAND_TEMP", Some("0.0")),
+            ("WENLAN_GRAPH_MEMORY_STREAM", Some("1")),
+            ("WENLAN_ENABLE_GRAPH_GATE", None::<&str>),
+            ("WENLAN_ENABLE_INTENT_LLM", None::<&str>),
+            ("WENLAN_EXPAND_TEMP", Some("0.0")),
         ],
         wenlan_core::eval::locomo::run_locomo_eval_graph_stream_collect(
             &lo_fx,
@@ -8308,7 +8308,7 @@ async fn graph_stream_pair_locomo() {
 
 /// LongMemEval twin of [`graph_stream_pair_locomo`]. Same cached, LLM-free-query
 /// design; populates `lme/<question_id>` once, then both arms reuse it.
-///   ORIGIN_EVAL_ROOT=$PWD/app/eval \
+///   WENLAN_EVAL_ROOT=$PWD/app/eval \
 ///   EVAL_OUT=$HOME/.cache/origin-eval/graph_stream_lme_out \
 ///   EVAL_LME_LIMIT=20 \
 ///   CARGO_TARGET_DIR=/Users/lucian/Repos/origin/target \
@@ -8316,7 +8316,7 @@ async fn graph_stream_pair_locomo() {
 ///     graph_stream_pair_lme -- --ignored --nocapture --test-threads=1
 ///   python3 analyze_paired.py --dir $HOME/.cache/origin-eval/graph_stream_lme_out
 #[tokio::test]
-#[ignore = "needs local LLM + LME fixture; L7 manual. Set ORIGIN_EVAL_ROOT + EVAL_OUT"]
+#[ignore = "needs local LLM + LME fixture; L7 manual. Set WENLAN_EVAL_ROOT + EVAL_OUT"]
 async fn graph_stream_pair_lme() {
     use std::sync::Arc;
     println!("=== GRAPH-STREAM PAIR (stream OFF vs ON, entity-populated, LME) ===");
@@ -8334,8 +8334,8 @@ async fn graph_stream_pair_lme() {
     // (default-ON since 2026-06-10, so OFF must pin "0", not unset).
     let off_rows = temp_env::async_with_vars(
         [
-            ("ORIGIN_GRAPH_MEMORY_STREAM", Some("0")),
-            ("ORIGIN_ENABLE_GRAPH_GATE", None::<&str>),
+            ("WENLAN_GRAPH_MEMORY_STREAM", Some("0")),
+            ("WENLAN_ENABLE_GRAPH_GATE", None::<&str>),
         ],
         wenlan_core::eval::longmemeval::run_longmemeval_eval_graph_stream_collect(
             &fx,
@@ -8351,8 +8351,8 @@ async fn graph_stream_pair_lme() {
     // ON arm: live entity->memory stream over the populated junction.
     let on_rows = temp_env::async_with_vars(
         [
-            ("ORIGIN_GRAPH_MEMORY_STREAM", Some("1")),
-            ("ORIGIN_ENABLE_GRAPH_GATE", None::<&str>),
+            ("WENLAN_GRAPH_MEMORY_STREAM", Some("1")),
+            ("WENLAN_ENABLE_GRAPH_GATE", None::<&str>),
         ],
         wenlan_core::eval::longmemeval::run_longmemeval_eval_graph_stream_collect(
             &fx,
@@ -8522,10 +8522,10 @@ async fn print_top_hubs(db: &wenlan_core::db::MemoryDB, n: usize) {
 #[tokio::test]
 #[ignore = "GPU/Metal + minutes; runtime proof for CE A/B event_date injection"]
 async fn ce_ab_seed_injects_event_date() {
+    use std::sync::Arc;
     use wenlan_core::eval::answer_quality::{run_fullpipeline_lme, ArmSpec, DbSource};
     use wenlan_core::eval::shared::{scenario_db_dir, EnrichmentMode};
     use wenlan_core::llm_provider::{LlmProvider, OnDeviceProvider};
-    use std::sync::Arc;
 
     let lme_path = eval_root().join("data/longmemeval_oracle.json");
     if !lme_path.exists() {
@@ -8556,8 +8556,8 @@ async fn ce_ab_seed_injects_event_date() {
     )
     .expect("write one-question fixture");
 
-    let previous_graph_stream = std::env::var_os("ORIGIN_GRAPH_MEMORY_STREAM");
-    std::env::set_var("ORIGIN_GRAPH_MEMORY_STREAM", "0");
+    let previous_graph_stream = std::env::var_os("WENLAN_GRAPH_MEMORY_STREAM");
+    std::env::set_var("WENLAN_GRAPH_MEMORY_STREAM", "0");
 
     let llm: Arc<dyn LlmProvider> = Arc::new(
         OnDeviceProvider::new_with_model(Some("qwen3.5-9b"))
@@ -8581,9 +8581,9 @@ async fn ce_ab_seed_injects_event_date() {
     .expect("run_fullpipeline_lme");
 
     if let Some(value) = previous_graph_stream {
-        std::env::set_var("ORIGIN_GRAPH_MEMORY_STREAM", value);
+        std::env::set_var("WENLAN_GRAPH_MEMORY_STREAM", value);
     } else {
-        std::env::remove_var("ORIGIN_GRAPH_MEMORY_STREAM");
+        std::env::remove_var("WENLAN_GRAPH_MEMORY_STREAM");
     }
 
     let scenario_dir = scenario_db_dir(tmp.path(), "lme", &question_id);
@@ -8611,22 +8611,22 @@ async fn ce_ab_seed_injects_event_date() {
 /// Fair CE A/B answer-accuracy eval for LongMemEval.
 ///
 /// Both arms route through `search_memory_cross_rerank` so P3 distill-demotion
-/// is symmetric. Graph stream must be OFF (ORIGIN_GRAPH_MEMORY_STREAM=0) so
+/// is symmetric. Graph stream must be OFF (WENLAN_GRAPH_MEMORY_STREAM=0) so
 /// the OFF arm does not re-enable it. Answers are generated on-device by
 /// Qwen3.5-9B at temperature 0.0 (NOT Claude — avoids self-judge with the
 /// Haiku judge).
 ///
 /// ```bash
-/// ORIGIN_GRAPH_MEMORY_STREAM=0 \
+/// WENLAN_GRAPH_MEMORY_STREAM=0 \
 /// LME_LIMIT_QUESTIONS=50 \
 ///   cargo test -p origin-core --test eval_harness generate_ce_ab_lme -- --ignored --nocapture
 /// ```
 #[tokio::test]
 #[ignore]
 async fn generate_ce_ab_lme() {
+    use std::sync::Arc;
     use wenlan_core::eval::answer_quality::{run_fullpipeline_lme, ArmSpec, DbSource};
     use wenlan_core::llm_provider::{LlmProvider, OnDeviceProvider};
-    use std::sync::Arc;
 
     let lme_path = eval_root().join("data/longmemeval_oracle.json");
     if !lme_path.exists() {
@@ -8648,7 +8648,7 @@ async fn generate_ce_ab_lme() {
     // message when the operator forgot to set it.
     if wenlan_core::db::graph_memory_stream_enabled() {
         panic!(
-            "Set ORIGIN_GRAPH_MEMORY_STREAM=0 before running this test. \
+            "Set WENLAN_GRAPH_MEMORY_STREAM=0 before running this test. \
              The CE A/B is invalid without it (see run_fullpipeline_lme docs)."
         );
     }
@@ -8707,7 +8707,7 @@ async fn generate_ce_ab_lme() {
 /// - `CE_AB_CONSOLIDATED_DB` — directory containing the seeded `origin_memory.db`
 ///   (e.g. `~/.cache/origin-eval/scenario_seeded/lme_v1`). The DB is opened once,
 ///   read-only (no seed, no event_date inject — it is already enriched + dated).
-/// - `ORIGIN_GRAPH_MEMORY_STREAM=0` — confounder gate (same as the oracle variant).
+/// - `WENLAN_GRAPH_MEMORY_STREAM=0` — confounder gate (same as the oracle variant).
 /// - `RERANK_POOL_FLOOR` > 10 STRONGLY recommended (e.g. 50): with the default
 ///   floor of 10 the CE fetch pool equals the top-10 window, so it reorders the
 ///   returned docs without reselecting — a null by construction regardless of
@@ -8716,7 +8716,7 @@ async fn generate_ce_ab_lme() {
 ///
 /// ```bash
 /// CE_AB_CONSOLIDATED_DB=$HOME/.cache/origin-eval/scenario_seeded/lme_v1 \
-/// ORIGIN_GRAPH_MEMORY_STREAM=0 RERANK_POOL_FLOOR=50 \
+/// WENLAN_GRAPH_MEMORY_STREAM=0 RERANK_POOL_FLOOR=50 \
 /// EVAL_BASELINES_DIR=$HOME/.cache/origin-eval-ce-consolidated \
 ///   cargo test -p origin-core --test eval_harness --features eval-harness \
 ///   generate_ce_ab_lme_consolidated -- --ignored --nocapture
@@ -8724,9 +8724,9 @@ async fn generate_ce_ab_lme() {
 #[tokio::test]
 #[ignore]
 async fn generate_ce_ab_lme_consolidated() {
+    use std::sync::Arc;
     use wenlan_core::eval::answer_quality::{run_fullpipeline_lme, ArmSpec, DbSource};
     use wenlan_core::llm_provider::{LlmProvider, OnDeviceProvider};
-    use std::sync::Arc;
 
     let lme_path = eval_root().join("data/longmemeval_oracle.json");
     if !lme_path.exists() {
@@ -8755,7 +8755,7 @@ async fn generate_ce_ab_lme_consolidated() {
 
     if wenlan_core::db::graph_memory_stream_enabled() {
         panic!(
-            "Set ORIGIN_GRAPH_MEMORY_STREAM=0 before running this test. \
+            "Set WENLAN_GRAPH_MEMORY_STREAM=0 before running this test. \
              The CE A/B is invalid without it (see run_fullpipeline_lme docs)."
         );
     }
@@ -8821,7 +8821,7 @@ async fn generate_ce_ab_lme_consolidated() {
 /// tuple files before judging.
 ///
 /// ```bash
-/// ORIGIN_GRAPH_MEMORY_STREAM=0 \
+/// WENLAN_GRAPH_MEMORY_STREAM=0 \
 /// ANTHROPIC_API_KEY=... \
 ///   cargo test -p origin-core --test eval_harness judge_ce_ab_lme -- --ignored --nocapture
 /// ```
@@ -8928,21 +8928,21 @@ async fn judge_ce_ab_lme() {
 ///
 /// "Best-possible" = the operator turns the feature flags ON. RECOMMENDED env:
 /// ```bash
-/// ORIGIN_ENABLE_PAGE_CHANNEL=1 ORIGIN_GRAPH_MEMORY_STREAM=1 \
-/// ORIGIN_ENABLE_TEMPORAL_SOFT_BOOST=1 RERANK_POOL_FLOOR=50 \
+/// WENLAN_ENABLE_PAGE_CHANNEL=1 WENLAN_GRAPH_MEMORY_STREAM=1 \
+/// WENLAN_ENABLE_TEMPORAL_SOFT_BOOST=1 RERANK_POOL_FLOOR=50 \
 /// EVAL_BASELINES_DIR=$HOME/.cache/origin-eval-ceiling \
 ///   cargo test -p origin-core --test eval_harness --features eval-harness \
 ///   generate_lme_fullstack_ceiling -- --ignored --nocapture
 /// ```
 /// NOTE: on the CE path the live graph stream is structurally suppressed
-/// (`allow_graph_stream = reranker.is_none()`), so `ORIGIN_GRAPH_MEMORY_STREAM=1`
+/// (`allow_graph_stream = reranker.is_none()`), so `WENLAN_GRAPH_MEMORY_STREAM=1`
 /// contributes via entity-linked memories already in the pool, not the live stream.
 #[tokio::test]
 #[ignore]
 async fn generate_lme_fullstack_ceiling() {
+    use std::sync::Arc;
     use wenlan_core::eval::answer_quality::{run_fullpipeline_lme, ArmSpec, DbSource};
     use wenlan_core::llm_provider::{LlmProvider, OnDeviceProvider};
-    use std::sync::Arc;
 
     let lme_path = eval_root().join("data/longmemeval_oracle.json");
     if !lme_path.exists() {
@@ -9137,6 +9137,8 @@ async fn judge_lme_fullstack_ceiling() {
 #[tokio::test]
 #[ignore = "GPU (on-device LLM); parity regression guard â enrich_db_for_eval_local must produce identical entity-link, page-membership, and title-nonempty sets as run_canonical_enrichment. Task 2.3 de-forked Phase-2 through run_post_ingest_enrichment."]
 async fn enrichment_parity_contract() {
+    use std::collections::HashSet;
+    use std::sync::Arc;
     use wenlan_core::db::MemoryDB;
     use wenlan_core::eval::shared::enrich_db_for_eval_local;
     use wenlan_core::events::NoopEmitter;
@@ -9145,8 +9147,6 @@ async fn enrichment_parity_contract() {
     use wenlan_core::prompts::PromptRegistry;
     use wenlan_core::tuning::{DistillationConfig, RefineryConfig};
     use wenlan_types::sources::RawDocument;
-    use std::collections::HashSet;
-    use std::sync::Arc;
 
     // ── LLM provider (shared between arms for reproducibility) ──────────────
     let llm: Arc<dyn wenlan_core::llm_provider::LlmProvider> = match OnDeviceProvider::new() {
