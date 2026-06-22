@@ -69,7 +69,7 @@ fn space_default_toml_file_written_correctly() {
         .assert()
         .success();
 
-    let toml_path = tmp.path().join(".origin/spaces.toml");
+    let toml_path = tmp.path().join(".wenlan/spaces.toml");
     let content = fs::read_to_string(&toml_path).expect("spaces.toml should exist");
     assert!(
         content.contains("default = \"personal\""),
@@ -97,7 +97,7 @@ fn space_default_overwrite_existing_entry() {
         .success();
 
     // Only the new value survives.
-    let toml_path = tmp.path().join(".origin/spaces.toml");
+    let toml_path = tmp.path().join(".wenlan/spaces.toml");
     let content = fs::read_to_string(&toml_path).expect("spaces.toml should exist");
     assert!(
         content.contains("default = \"second\""),
