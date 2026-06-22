@@ -2800,22 +2800,16 @@ pub enum ArmKind {
     // PR-3 will add CeOnGraph -> CrossRerankGraph. Do NOT add it now.
 }
 
-impl ArmKind {
-    /// Stable label prefix, e.g. "ce_off" / "ce_on".
-    fn label_prefix(self) -> &'static str {
-        match self {
-            ArmKind::CeOff => "ce_off",
-            ArmKind::CeOn => "ce_on",
-            ArmKind::FullStack => "fullstack",
-        }
-    }
-}
-
 /// One arm: a retrieval mode paired with whether to include pages in context.
+/// `label_prefix` is the stable identity used in baseline filenames — assigned
+/// explicitly by each constructor, independent of `include_pages`.
 #[derive(Debug, Clone)]
 pub struct Arm {
     pub kind: ArmKind,
     pub include_pages: bool,
+    /// Stable baseline label prefix, e.g. "ce_off", "ce_on", "ce_on_pages".
+    /// Assigned by the constructor, NOT derived from `include_pages`.
+    pub label_prefix: &'static str,
 }
 
 /// The set of arms to run, in order.
@@ -2832,10 +2826,12 @@ impl ArmSpec {
                 Arm {
                     kind: ArmKind::CeOff,
                     include_pages: true,
+                    label_prefix: "ce_off",
                 },
                 Arm {
                     kind: ArmKind::CeOn,
                     include_pages: true,
+                    label_prefix: "ce_on",
                 },
             ],
         }
@@ -2850,6 +2846,7 @@ impl ArmSpec {
             arms: vec![Arm {
                 kind: ArmKind::FullStack,
                 include_pages: true,
+                label_prefix: "fullstack",
             }],
         }
     }
@@ -2862,14 +2859,17 @@ impl ArmSpec {
                 Arm {
                     kind: ArmKind::CeOff,
                     include_pages: false,
+                    label_prefix: "ce_off",
                 },
                 Arm {
                     kind: ArmKind::CeOn,
                     include_pages: false,
+                    label_prefix: "ce_on",
                 },
                 Arm {
                     kind: ArmKind::CeOn,
                     include_pages: true,
+                    label_prefix: "ce_on_pages",
                 },
             ],
         }
@@ -2885,36 +2885,18 @@ impl ArmSpec {
     }
 
     /// One label per arm for a given category, in order.
-    /// Arms with `include_pages=true` get a `_pages` suffix: "ce_off_pages_cat".
-    /// Arms with `include_pages=false` omit the suffix: "ce_off_cat".
+    /// Label is `<arm.label_prefix>_<category>`; the prefix is assigned explicitly per
+    /// constructor (e.g. "ce_off_cat", "ce_on_pages_cat"), NOT derived from `include_pages`.
     pub fn labels(&self, category: &str) -> Vec<String> {
         self.arms
             .iter()
-            .map(|arm| {
-                let base = arm.kind.label_prefix();
-                let prefix = if arm.include_pages {
-                    format!("{base}_pages")
-                } else {
-                    base.to_string()
-                };
-                format!("{prefix}_{category}")
-            })
+            .map(|arm| format!("{}_{}", arm.label_prefix, category))
             .collect()
     }
 
-    /// Label prefixes (for the done-set), e.g. `["ce_off_pages", "ce_on_pages"]`.
-    fn prefixes(&self) -> Vec<String> {
-        self.arms
-            .iter()
-            .map(|arm| {
-                let base = arm.kind.label_prefix();
-                if arm.include_pages {
-                    format!("{base}_pages")
-                } else {
-                    base.to_string()
-                }
-            })
-            .collect()
+    /// Label prefixes (for the done-set), e.g. `["ce_off", "ce_on"]`.
+    fn prefixes(&self) -> Vec<&'static str> {
+        self.arms.iter().map(|arm| arm.label_prefix).collect()
     }
 
     /// Resolve arms to `(label, CtxRetrieval, include_pages)` for a category, given the reranker.
@@ -2927,13 +2909,7 @@ impl ArmSpec {
     ) -> Result<Vec<(String, CtxRetrieval, bool)>, OriginError> {
         let mut result = Vec::with_capacity(self.arms.len());
         for arm in &self.arms {
-            let base = arm.kind.label_prefix();
-            let prefix = if arm.include_pages {
-                format!("{base}_pages")
-            } else {
-                base.to_string()
-            };
-            let label = format!("{prefix}_{category}");
+            let label = format!("{}_{}", arm.label_prefix, category);
             let retrieval = match arm.kind {
                 ArmKind::CeOff => CtxRetrieval::CrossRerank(None),
                 ArmKind::CeOn | ArmKind::FullStack => {
@@ -3840,24 +3816,20 @@ mod tests {
         assert_eq!(
             spec.labels("single-session-user"),
             vec![
-                "ce_off_pages_single-session-user".to_string(),
-                "ce_on_pages_single-session-user".to_string(),
+                "ce_off_single-session-user".to_string(),
+                "ce_on_single-session-user".to_string(),
             ],
             "ce_two labels for single-session-user"
         );
         assert_eq!(
             spec.labels("temporal-reasoning"),
             vec![
-                "ce_off_pages_temporal-reasoning".to_string(),
-                "ce_on_pages_temporal-reasoning".to_string(),
+                "ce_off_temporal-reasoning".to_string(),
+                "ce_on_temporal-reasoning".to_string(),
             ],
             "ce_two labels for temporal-reasoning"
         );
-        assert_eq!(
-            spec.prefixes(),
-            vec!["ce_off_pages".to_string(), "ce_on_pages".to_string()],
-            "ce_two prefixes"
-        );
+        assert_eq!(spec.prefixes(), vec!["ce_off", "ce_on"], "ce_two prefixes");
         assert!(
             spec.needs_confounder_isolation(),
             "ce_two is an isolation A/B (has CeOff) — gate must apply"
@@ -3869,14 +3841,10 @@ mod tests {
         let spec = ArmSpec::full_stack();
         assert_eq!(
             spec.labels("single-session-user"),
-            vec!["fullstack_pages_single-session-user".to_string()],
+            vec!["fullstack_single-session-user".to_string()],
             "full_stack is a single arm"
         );
-        assert_eq!(
-            spec.prefixes(),
-            vec!["fullstack_pages".to_string()],
-            "full_stack prefix"
-        );
+        assert_eq!(spec.prefixes(), vec!["fullstack"], "full_stack prefix");
         assert!(
             !spec.needs_confounder_isolation(),
             "full_stack has no CeOff arm — confounder gate must be skipped so features can be ON"
