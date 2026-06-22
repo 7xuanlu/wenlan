@@ -20,7 +20,7 @@ use serde::{Deserialize, Serialize};
 ///
 /// Emitted as a JSONL line. The analyzer joins OFF and ON files on
 /// `(bench, query_id)` to form per-query Δ pairs.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct PerQueryRow {
     /// Feature under test, e.g. `"fts_hardening"`.
     pub feature: String,
@@ -55,6 +55,19 @@ pub struct PerQueryRow {
     /// stars the verdict (vacuous attribution) on purpose.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub channel_touched: Option<bool>,
+    /// Set-based coverage recall over the result bundle WITHOUT page provenance
+    /// expansion: pages contribute only their own id (which never matches a
+    /// memory-keyed gold id). Equals the share of gold leaf ids retrieved
+    /// directly. `None` for emitters that don't measure coverage.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cov_blind: Option<f64>,
+    /// Set-based coverage recall WITH page provenance expansion: a `source="page"`
+    /// (or `"summary"`) result is credited via the memory source ids it was
+    /// distilled from. `cov_expanded - cov_blind` is the honest page-channel
+    /// contribution — the metric pages move that positional NDCG/recall cannot
+    /// see. `None` for emitters that don't measure coverage.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cov_expanded: Option<f64>,
 }
 
 /// Threat-2 guard for the cross-rerank paired runners: assert the
@@ -112,6 +125,8 @@ mod tests {
             graph_skipped: None,
             temporal_touched: None,
             channel_touched: None,
+            cov_blind: None,
+            cov_expanded: None,
         };
         // None must be OMITTED from JSON (old analyzers unaffected)
         let js = serde_json::to_string(&row).unwrap();

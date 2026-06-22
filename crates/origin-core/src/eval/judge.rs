@@ -54,6 +54,10 @@ pub struct JudgmentTuple {
 pub struct JudgmentResult {
     pub question: String,
     pub approach: String,
+    /// Model answer that was judged. Defaults empty for old cache JSONL records,
+    /// which prevents pre-answer-key cache entries from matching new tuples.
+    #[serde(default)]
+    pub answer: String,
     /// 0 or 1.
     pub score: u8,
     pub reason: String,
@@ -62,6 +66,20 @@ pub struct JudgmentResult {
     /// arms in `paired_answer_mcnemar` (falls back to question text when empty).
     #[serde(default)]
     pub question_id: String,
+}
+
+fn judge_cache_key(
+    question_id: &str,
+    question: &str,
+    approach: &str,
+    answer: &str,
+) -> (String, String, String) {
+    let k = if question_id.is_empty() {
+        question.to_string()
+    } else {
+        question_id.to_string()
+    };
+    (k, approach.to_string(), answer.to_string())
 }
 
 // Cost telemetry has been moved to `cli_batch::CliCostInfo` and is shared across
@@ -236,29 +254,20 @@ pub async fn judge_with_claude_model_persistent(
         Vec::new()
     };
 
-    let cached_keys: HashSet<(String, String)> = cached
+    let cached_keys: HashSet<(String, String, String)> = cached
         .iter()
-        .map(|r| {
-            // Dedup key: question_id when present (fallback to text for
-            // pre-question_id caches), so two questions sharing text don't collide.
-            let k = if r.question_id.is_empty() {
-                r.question.clone()
-            } else {
-                r.question_id.clone()
-            };
-            (k, r.approach.clone())
-        })
+        .map(|r| judge_cache_key(&r.question_id, &r.question, &r.approach, &r.answer))
         .collect();
 
     let todo: Vec<JudgmentTuple> = tuples
         .iter()
         .filter(|t| {
-            let k = if t.question_id.is_empty() {
-                t.question.clone()
-            } else {
-                t.question_id.clone()
-            };
-            !cached_keys.contains(&(k, t.approach.clone()))
+            !cached_keys.contains(&judge_cache_key(
+                &t.question_id,
+                &t.question,
+                &t.approach,
+                &t.answer,
+            ))
         })
         .cloned()
         .collect();
@@ -569,6 +578,7 @@ pub async fn judge_single_tuple_model_with_cost(
         JudgmentResult {
             question: tuple.question.clone(),
             approach: tuple.approach.clone(),
+            answer: tuple.answer.clone(),
             score,
             reason,
             context_tokens: tuple.context_tokens,
@@ -758,29 +768,20 @@ pub async fn judge_with_claude_model_batched_persistent(
         Vec::new()
     };
 
-    let cached_keys: HashSet<(String, String)> = cached
+    let cached_keys: HashSet<(String, String, String)> = cached
         .iter()
-        .map(|r| {
-            // Dedup key: question_id when present (fallback to text for
-            // pre-question_id caches), so two questions sharing text don't collide.
-            let k = if r.question_id.is_empty() {
-                r.question.clone()
-            } else {
-                r.question_id.clone()
-            };
-            (k, r.approach.clone())
-        })
+        .map(|r| judge_cache_key(&r.question_id, &r.question, &r.approach, &r.answer))
         .collect();
 
     let todo: Vec<&JudgmentTuple> = tuples
         .iter()
         .filter(|t| {
-            let k = if t.question_id.is_empty() {
-                t.question.clone()
-            } else {
-                t.question_id.clone()
-            };
-            !cached_keys.contains(&(k, t.approach.clone()))
+            !cached_keys.contains(&judge_cache_key(
+                &t.question_id,
+                &t.question,
+                &t.approach,
+                &t.answer,
+            ))
         })
         .collect();
 
@@ -893,6 +894,7 @@ pub async fn judge_with_claude_model_batched_persistent(
                     let r = JudgmentResult {
                         question: tuple.question.clone(),
                         approach: tuple.approach.clone(),
+                        answer: tuple.answer.clone(),
                         score: *score,
                         reason: reason.clone(),
                         context_tokens: tuple.context_tokens,
@@ -1300,6 +1302,7 @@ pub async fn judge_with_batch_api(
         results.push(JudgmentResult {
             question: tuple.question.clone(),
             approach: tuple.approach.clone(),
+            answer: tuple.answer.clone(),
             score,
             reason,
             context_tokens: tuple.context_tokens,
@@ -1582,6 +1585,19 @@ mod tests {
             category: "temporal-reasoning".to_string(),
             question_id: "qid".to_string(),
         }
+    }
+
+    #[test]
+    fn judge_cache_key_includes_answer() {
+        let cached_keys: std::collections::HashSet<_> = [
+            judge_cache_key("qid", "same question", "arm", "A"),
+            judge_cache_key("qid", "same question", "arm", "B"),
+        ]
+        .into_iter()
+        .collect();
+
+        assert_eq!(cached_keys.len(), 2);
+        assert!(!cached_keys.contains(&judge_cache_key("qid", "same question", "arm", "C")));
     }
 
     #[test]
@@ -2107,6 +2123,7 @@ mod mcnemar_tests {
         JudgmentResult {
             question: question.to_string(),
             approach: approach.to_string(),
+            answer: String::new(),
             score,
             reason: String::new(),
             context_tokens: 0,
@@ -2385,6 +2402,7 @@ mod mcnemar_tests {
             JudgmentResult {
                 question: "same question text".to_string(),
                 approach: "ce_off_single-hop".to_string(),
+                answer: String::new(),
                 score: 1,
                 reason: String::new(),
                 context_tokens: 0,
@@ -2393,6 +2411,7 @@ mod mcnemar_tests {
             JudgmentResult {
                 question: "same question text".to_string(),
                 approach: "ce_on_single-hop".to_string(),
+                answer: String::new(),
                 score: 0,
                 reason: String::new(),
                 context_tokens: 0,
@@ -2401,6 +2420,7 @@ mod mcnemar_tests {
             JudgmentResult {
                 question: "same question text".to_string(),
                 approach: "ce_off_single-hop".to_string(),
+                answer: String::new(),
                 score: 0,
                 reason: String::new(),
                 context_tokens: 0,
@@ -2409,6 +2429,7 @@ mod mcnemar_tests {
             JudgmentResult {
                 question: "same question text".to_string(),
                 approach: "ce_on_single-hop".to_string(),
+                answer: String::new(),
                 score: 1,
                 reason: String::new(),
                 context_tokens: 0,

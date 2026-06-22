@@ -1534,6 +1534,8 @@ pub async fn run_locomo_eval_from_db_collect(
                 graph_skipped: if gate_on { Some(graph_skipped) } else { None },
                 temporal_touched: None,
                 channel_touched,
+                cov_blind: None,
+                cov_expanded: None,
             });
         }
     }
@@ -1663,6 +1665,8 @@ pub async fn run_locomo_eval_cross_rerank_from_db_collect(
                 graph_skipped: None,
                 temporal_touched: None,
                 channel_touched,
+                cov_blind: None,
+                cov_expanded: None,
             });
         }
     }
@@ -1850,6 +1854,8 @@ pub async fn run_locomo_eval_cross_rerank_temporal_collect(
                 graph_skipped: None,
                 temporal_touched,
                 channel_touched: None,
+                cov_blind: None,
+                cov_expanded: None,
             });
         }
     }
@@ -2282,6 +2288,8 @@ pub async fn run_locomo_eval_expanded_intent_collect(
                 graph_skipped: Some(!used_graph),
                 temporal_touched: None,
                 channel_touched: None,
+                cov_blind: None,
+                cov_expanded: None,
             });
         }
     }
@@ -2445,6 +2453,8 @@ pub async fn run_locomo_eval_graph_stream_collect(
                 graph_skipped: None,
                 temporal_touched: None,
                 channel_touched,
+                cov_blind: None,
+                cov_expanded: None,
             });
         }
     }
