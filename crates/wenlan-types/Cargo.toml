@@ -1,0 +1,18 @@
+[package]
+name = "wenlan-types"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Shared wire-format types for Origin, the local-first personal agent memory system."
+homepage = "https://useorigin.app"
+documentation = "https://docs.rs/wenlan-types"
+authors = ["Qi-Xuan Lu <h164654156465@gmail.com>"]
+readme = "README.md"
+keywords = ["memory", "mcp", "wenlan", "agent"]
+categories = ["data-structures", "api-bindings"]
+
+[dependencies]
+anyhow = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }

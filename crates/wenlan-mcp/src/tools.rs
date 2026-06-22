@@ -1,0 +1,4833 @@
+use crate::client::{WenlanClient, WenlanError};
+use crate::types::*;
+use rmcp::{
+    handler::server::router::tool::ToolRouter,
+    handler::server::wrapper::Parameters,
+    model::{
+        CallToolResult, Content, Implementation, InitializeResult, ListToolsResult,
+        PaginatedRequestParams, ServerCapabilities, Tool,
+    },
+    service::{NotificationContext, RequestContext, RoleServer},
+    tool, tool_handler, tool_router, ErrorData as McpError, ServerHandler,
+};
+use serde::{Deserialize, Deserializer};
+
+/// Deserialize an `Option<usize>` that also accepts stringified numbers (e.g. `"10"`).
+/// MCP clients like Claude Desktop sometimes send numeric params as strings.
+fn deserialize_optional_usize_lenient<'de, D>(deserializer: D) -> Result<Option<usize>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum StringOrNumber {
+        Number(usize),
+        Str(String),
+    }
+
+    match Option::<StringOrNumber>::deserialize(deserializer)? {
+        None => Ok(None),
+        Some(StringOrNumber::Number(n)) => Ok(Some(n)),
+        Some(StringOrNumber::Str(s)) => s
+            .parse::<usize>()
+            .map(Some)
+            .map_err(serde::de::Error::custom),
+    }
+}
+
+/// Deserialize an `Option<i64>` that also accepts stringified numbers (e.g. `"1715000000000"`).
+/// Same lenient shape as `deserialize_optional_usize_lenient`, for params that map onto
+/// signed daemon fields (timestamps, badge windows, etc.).
+fn deserialize_optional_i64_lenient<'de, D>(deserializer: D) -> Result<Option<i64>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum StringOrNumber {
+        Number(i64),
+        Str(String),
+    }
+
+    match Option::<StringOrNumber>::deserialize(deserializer)? {
+        None => Ok(None),
+        Some(StringOrNumber::Number(n)) => Ok(Some(n)),
+        Some(StringOrNumber::Str(s)) => {
+            s.parse::<i64>().map(Some).map_err(serde::de::Error::custom)
+        }
+    }
+}
+
+/// Return the effective space for a tool call: when locked, always the
+/// locked value (warns if model attempted to override); otherwise the
+/// inbound value passed by the model.
+pub fn effective_space(inbound: &Option<String>) -> Option<String> {
+    if let Some(locked) = crate::lock_state::locked_space() {
+        if let Some(passed) = inbound.as_ref() {
+            if passed != &locked {
+                tracing::warn!(
+                    inbound = %passed,
+                    locked = %locked,
+                    "model passed inbound space while ORIGIN_SPACE is locked; using locked value"
+                );
+            }
+        }
+        Some(locked)
+    } else {
+        inbound.clone()
+    }
+}
+
+/// Controls which operations are allowed based on transport.
+#[derive(Clone, Debug, PartialEq)]
+pub enum TransportMode {
+    /// Local stdio — full access, all tools
+    Stdio,
+    /// Remote HTTP — block deletes, inject source_agent
+    Http,
+}
+
+#[derive(Clone)]
+pub struct WenlanMcpServer {
+    #[allow(dead_code)]
+    tool_router: ToolRouter<Self>,
+    client: WenlanClient,
+    transport: TransportMode,
+    agent_name: String,
+    /// Client name from MCP initialize handshake (e.g., "Claude Code", "Claude Desktop")
+    client_name: std::sync::Arc<std::sync::Mutex<Option<String>>>,
+    user_id: Option<String>,
+}
+
+// ===== Parameter Structs =====
+
+// --- Primary tool params ---
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct CaptureParams {
+    #[schemars(
+        description = "The memory content. Write as a complete statement with context and reasoning, not shorthand. One idea per memory."
+    )]
+    pub content: String,
+    #[schemars(description = wenlan_types::MEMORY_TYPE_CAPTURE_DESCRIPTION)]
+    pub memory_type: Option<String>,
+    #[schemars(
+        description = "Topic scope (e.g. 'rust', 'work', 'health', 'origin'). Auto-detected if omitted."
+    )]
+    #[serde(default, alias = "domain")]
+    pub space: Option<String>,
+    #[schemars(
+        description = "Person, project, or tool name to anchor to (e.g. 'Alice', 'Origin', 'PostgreSQL'). Helps build the knowledge graph."
+    )]
+    pub entity: Option<String>,
+    #[schemars(
+        description = "0.0-1.0. Leave unset for auto-calculation based on type and trust level. Set low (0.3-0.5) for uncertain info, high (0.8-1.0) for user-stated facts."
+    )]
+    pub confidence: Option<f32>,
+    #[schemars(
+        description = "source_id of a memory this replaces. Use when correcting or updating an existing memory — get the ID from recall first."
+    )]
+    pub supersedes: Option<String>,
+    #[schemars(
+        description = "Pre-extracted structured fields as a JSON object. Auto-extracted by backend; only supply if you have high-quality structured data already."
+    )]
+    pub structured_fields: Option<serde_json::Map<String, serde_json::Value>>,
+    #[schemars(
+        description = "A question this memory answers, for search matching. Auto-generated by backend; only supply to override."
+    )]
+    pub retrieval_cue: Option<String>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct RecallParams {
+    #[schemars(
+        description = "Natural language search. Be specific: 'Alice database preference' finds more than 'database stuff'."
+    )]
+    pub query: String,
+    #[schemars(
+        description = "Max memory results (distilled pages are returned separately), default 10. Use 3-5 for quick lookups, 10-20 for exploration."
+    )]
+    #[serde(default, deserialize_with = "deserialize_optional_usize_lenient")]
+    pub limit: Option<usize>,
+    #[schemars(description = wenlan_types::MEMORY_TYPE_FILTER_DESCRIPTION)]
+    pub memory_type: Option<String>,
+    #[schemars(description = "Filter by topic scope.")]
+    #[serde(default, alias = "domain")]
+    pub space: Option<String>,
+    #[schemars(
+        description = "Enable cross-encoder reranking. Slower (model inference) but higher retrieval quality. Off by default. Requires ORIGIN_RERANKER_ENABLED=1 on the daemon; otherwise the daemon falls back to the plain hybrid ordering."
+    )]
+    #[serde(default)]
+    pub rerank: Option<bool>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct ContextParams {
+    #[schemars(
+        description = "Topic or conversation summary to focus context retrieval. Omit at session start for general orientation; provide when shifting topics."
+    )]
+    pub topic: Option<String>,
+    #[schemars(
+        description = "Max context chunks, default 20. Increase for complex topics, decrease for quick check-ins."
+    )]
+    #[serde(default, deserialize_with = "deserialize_optional_usize_lenient")]
+    pub limit: Option<usize>,
+    #[schemars(
+        description = "Scope context to a space (e.g. 'work', 'personal'). Auto-detected from conversation if omitted."
+    )]
+    #[serde(default, alias = "domain")]
+    pub space: Option<String>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct ForgetParams {
+    #[schemars(
+        description = "The source_id of the memory to delete. Get this from recall results first."
+    )]
+    pub memory_id: String,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct DistillParams {
+    #[schemars(
+        description = "Optional target scope. Accepts a page id (`page_*` or `concept_*`) to re-distill that single page, an entity name (e.g. `Origin`, `Alice`) to scope clustering to that entity, or a space value (e.g. `work`, `personal`) to scope to that space. Omit for a full pass over any clusters with new sources. The daemon resolves the string and falls back with a hint payload if nothing matches."
+    )]
+    #[serde(default, alias = "page_id")]
+    pub target: Option<String>,
+
+    #[schemars(
+        description = "When true, clears the user_edited flag on the target page before recompile. Use for /distill rebuild <page> to explicitly wipe user prose and regenerate from sources. Only valid when target is a single page id; the daemon ignores it otherwise. Requires daemon LLM."
+    )]
+    #[serde(default)]
+    pub force: Option<bool>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct ListPendingParams {
+    #[schemars(
+        description = "Max results, default 20. Increase for full audit, decrease for quick check-in."
+    )]
+    #[serde(default, deserialize_with = "deserialize_optional_usize_lenient")]
+    pub limit: Option<usize>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct ConfirmMemoryParams {
+    #[schemars(
+        description = "The source_id of the memory to confirm. Get this from list_pending or recall results."
+    )]
+    pub memory_id: String,
+}
+
+// --- Review proposal params ---
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct ListRefinementsParams {
+    #[schemars(
+        description = "Optional action filter. One of: entity_merge, relation_conflict, detect_contradiction, suggest_entity, dedup_merge."
+    )]
+    #[serde(default)]
+    pub action: Option<String>,
+    #[schemars(description = "Max number of proposals to return. Default 50, max 500.")]
+    #[serde(default, deserialize_with = "deserialize_optional_usize_lenient")]
+    pub limit: Option<usize>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct RejectRefinementParams {
+    #[schemars(description = "The review proposal id to dismiss.")]
+    pub id: String,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct AcceptRefinementParams {
+    #[schemars(description = "The review proposal id (e.g. \"merge_abc123_def456\").")]
+    pub id: String,
+}
+
+// --- Knowledge graph CRUD params ---
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct CreateEntityParams {
+    #[schemars(
+        description = "Canonical entity name (e.g. 'Alice', 'Origin', 'PostgreSQL'). Use the exact, full name — aliases resolve to this canonical form."
+    )]
+    pub name: String,
+    #[schemars(
+        description = "Entity category: 'person', 'project', 'tool', 'place', 'organization', etc. Free-form string; choose the noun that best describes what it is."
+    )]
+    pub entity_type: String,
+    #[schemars(description = "Topic scope (e.g. 'work', 'origin'). Optional.")]
+    #[serde(default, alias = "domain")]
+    pub space: Option<String>,
+    #[schemars(
+        description = "0.0-1.0 confidence in the entity assertion. Leave unset for caller-default."
+    )]
+    pub confidence: Option<f32>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct CreateRelationParams {
+    #[schemars(
+        description = "Canonical name of the source entity (e.g. 'Alice'). Must exist or will be created on the daemon side."
+    )]
+    pub from_entity: String,
+    #[schemars(
+        description = "Canonical name of the target entity (e.g. 'Origin'). Must exist or will be created on the daemon side."
+    )]
+    pub to_entity: String,
+    #[schemars(
+        description = "Verb describing the directed relation (e.g. 'works_on', 'prefers', 'uses', 'depends_on'). Snake_case, present-tense."
+    )]
+    pub relation_type: String,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct CreateObservationParams {
+    pub entity_id: String,
+    pub content: String,
+    #[serde(default)]
+    pub source_agent: Option<String>,
+    #[serde(default)]
+    pub confidence: Option<f32>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct ConfirmEntityParams {
+    pub entity_id: String,
+    #[serde(default = "default_confirmed")]
+    pub confirmed: bool,
+}
+
+fn default_confirmed() -> bool {
+    true
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct UpdateObservationParams {
+    pub observation_id: String,
+    pub content: String,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct ConfirmObservationParams {
+    pub observation_id: String,
+    #[serde(default = "default_confirmed")]
+    pub confirmed: bool,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct DeleteObservationParams {
+    pub observation_id: String,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct CreatePageParams {
+    #[schemars(
+        description = "Short noun phrase that names the page (e.g. 'Origin daemon architecture')."
+    )]
+    pub title: String,
+    #[schemars(
+        description = "Markdown body — 3-7 paragraphs of wiki prose with [[wikilinks]]. Do not cite source ids inline; pass them in source_memory_ids and the daemon attaches provenance automatically."
+    )]
+    pub content: String,
+    #[schemars(description = "Optional one-sentence summary — the durable claim.")]
+    pub summary: Option<String>,
+    #[schemars(
+        description = "Optional entity_id (e.g. 'ent_abc') to anchor the page to a knowledge-graph entity."
+    )]
+    pub entity_id: Option<String>,
+    #[schemars(description = "Topic scope (e.g. 'origin', 'work'). Optional.")]
+    #[serde(default, alias = "domain")]
+    pub space: Option<String>,
+    #[schemars(
+        description = "Memory source_ids the page is distilled from. Required for traceability."
+    )]
+    #[serde(default)]
+    pub source_memory_ids: Vec<String>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct DeletePageParams {
+    #[schemars(
+        description = "Page id (e.g. 'page_abc' or legacy 'concept_abc'). Get it from get_page or distill output."
+    )]
+    pub page_id: String,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct UpdatePageParams {
+    #[schemars(
+        description = "Page id (e.g. 'page_abc' or legacy 'concept_abc'). Get it from the `stale_pages` block in distill output."
+    )]
+    pub page_id: String,
+    #[schemars(
+        description = "Refreshed markdown body — same wiki-prose style as create_page. Replaces the existing content."
+    )]
+    pub content: String,
+    #[schemars(
+        description = "Full source_memory_ids list for the refreshed page — typically the stale page's existing list (carry through from distill output)."
+    )]
+    pub source_memory_ids: Vec<String>,
+    #[schemars(
+        description = "Optional one-sentence summary. Omit to keep the existing summary; pass empty string to clear it."
+    )]
+    pub summary: Option<String>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct GetPageParams {
+    #[schemars(
+        description = "Page id (e.g. 'page_abc' or legacy 'concept_abc'). For title-based lookup, search via recall or the daemon's /api/pages/search."
+    )]
+    pub page_id: String,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct GetPageLinksParams {
+    #[schemars(
+        description = "Page id (e.g. 'page_abc'). Returns inbound + outbound wikilink graph for that page."
+    )]
+    pub page_id: String,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct GetPageSourcesParams {
+    #[schemars(
+        description = "Page id (e.g. 'page_abc'). Returns the source memories that distilled into this page, each enriched with the memory's metadata for display."
+    )]
+    pub page_id: String,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct GetMemoryRevisionsParams {
+    #[schemars(
+        description = "Memory source id (e.g. 'mem_abc' or 'merged_<uuid>'). Returns the full supersede chain ordered by depth (0 = current)."
+    )]
+    pub memory_id: String,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct GetPageRevisionsParams {
+    #[schemars(
+        description = "Page id (e.g. 'page_abc'). Returns the version changelog ordered newest-first."
+    )]
+    pub page_id: String,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct ListMemoriesParams {
+    #[schemars(
+        description = "Filter by memory type (e.g. 'fact', 'preference', 'decision'). Optional."
+    )]
+    pub memory_type: Option<String>,
+    #[schemars(description = "Filter by topic/space. Optional.")]
+    #[serde(default, alias = "domain")]
+    pub space: Option<String>,
+    #[schemars(
+        description = "Max results, default 100. Increase for bulk listings, decrease for quick scans."
+    )]
+    #[serde(default, deserialize_with = "deserialize_optional_usize_lenient")]
+    pub limit: Option<usize>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct SearchPagesParams {
+    #[schemars(
+        description = "Natural-language search over page title + body content (e.g. 'mutex deadlock', 'distillation architecture')."
+    )]
+    pub query: String,
+    #[schemars(
+        description = "Max results, default 20. Use 1 to resolve a title to its id before calling get_page; higher for broader search."
+    )]
+    #[serde(default, deserialize_with = "deserialize_optional_usize_lenient")]
+    pub limit: Option<usize>,
+    #[schemars(
+        description = "Optional page type filter (e.g. 'recap', 'decision'). Narrows results to one type. Omit to search all types."
+    )]
+    #[serde(default)]
+    pub page_type: Option<String>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct ListPagesRecentParams {
+    #[schemars(
+        description = "Max results, default 10. Use higher (up to ~50) for a wider sweep of recent activity."
+    )]
+    #[serde(default, deserialize_with = "deserialize_optional_usize_lenient")]
+    pub limit: Option<usize>,
+    #[schemars(
+        description = "Optional Unix milliseconds. Items modified before this timestamp lose their 'new'/'updated' badge; the feed itself is still top-N by recency. This is not a date filter — items before `since_ms` are still returned, just without badges. Omit for default badge behavior."
+    )]
+    #[serde(default, deserialize_with = "deserialize_optional_i64_lenient")]
+    pub since_ms: Option<i64>,
+}
+
+// --- Curation read params ---
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct ListNurtureParams {
+    /// Maximum cards to return. Default 50. Clamped to 1..=500.
+    #[serde(default, deserialize_with = "deserialize_optional_usize_lenient")]
+    pub limit: Option<usize>,
+    /// Restrict to a single space.
+    #[serde(default, alias = "domain")]
+    pub space: Option<String>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct ListEntitySuggestionsParams {}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct ListSpacesParams {}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct AcceptRevisionRequest {
+    /// The source_id of the memory whose pending revision should be accepted.
+    pub target_source_id: String,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct DismissRevisionRequest {
+    /// The source_id of the memory whose pending revision should be dismissed.
+    pub target_source_id: String,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct DismissContradictionRequest {
+    /// The source_id of the memory whose contradiction flags should be dismissed.
+    pub source_id: String,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct ListPendingImportsParams {}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct ListRejectionsParams {
+    /// Maximum records to return. Default 50. Clamped to 1..=500.
+    #[serde(default, deserialize_with = "deserialize_optional_usize_lenient")]
+    pub limit: Option<usize>,
+    /// Filter by rejection reason code (e.g. "duplicate", "low_quality").
+    #[serde(default)]
+    pub reason: Option<String>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct ListPendingRevisionsParams {
+    /// Maximum rows to return. Server defaults to 50, clamps to 500.
+    #[serde(default, deserialize_with = "deserialize_optional_usize_lenient")]
+    pub limit: Option<usize>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct ListOrphanLinksParams {
+    /// Minimum reference count a label must have to appear. Default 1. Daemon clamps via `.max(1)`.
+    #[serde(default, deserialize_with = "deserialize_optional_i64_lenient")]
+    pub min_count: Option<i64>,
+}
+
+// ===== Internal Implementations =====
+
+fn format_capture_success(resp: &StoreMemoryResponse) -> String {
+    let mut msg = format!("Stored {}", resp.source_id);
+    if !resp.warnings.is_empty() {
+        msg.push_str("\nWarnings:");
+        for warning in &resp.warnings {
+            msg.push_str(&format!("\n  - {}", warning));
+        }
+    }
+    if !resp.auto_superseded.is_empty() {
+        msg.push_str("\n\nAuto-superseded (trust-tier + high-similarity, no action needed):");
+        for target_id in &resp.auto_superseded {
+            msg.push_str(&format!("\n  - {target_id}"));
+        }
+    }
+    if !resp.triggered_revisions.is_empty() {
+        msg.push_str("\n\nTriggered revisions (protected memories now flagged):");
+        for target_id in &resp.triggered_revisions {
+            msg.push_str(&format!("\n  - {target_id}"));
+        }
+        msg.push_str(
+            "\n\nAction: accept (accept_revision) | dismiss (dismiss_revision) | leave (decide later)",
+        );
+    }
+    msg
+}
+
+fn daemon_setup_hint() -> &'static str {
+    "Install the local Origin runtime and run `origin setup`.
+
+Setup choices:
+- Local Memory: store, search, and recall now. No model download or API key.
+- On-device Model: private local extraction and distill cycles after model download.
+- Anthropic Key: richer extraction and distill cycles using your API key.
+
+Install:
+  curl -fsSL https://raw.githubusercontent.com/7xuanlu/origin/main/install.sh | bash
+  export PATH=\"$HOME/.origin/bin:$PATH\"
+  origin setup
+  origin install
+  origin status"
+}
+
+/// Convert a backend error into a tool-level error result (isError: true)
+/// with an actionable message. This keeps the MCP transport healthy
+/// (no protocol-level McpError) while telling the caller what happened.
+fn tool_error(e: WenlanError, verb: &str) -> CallToolResult {
+    let msg = match &e {
+        WenlanError::Unreachable(_) => format!(
+            "Origin daemon is not reachable (retried 3x over ~6s). \
+             The {verb} was NOT completed.\n\n{}",
+            daemon_setup_hint()
+        ),
+        WenlanError::Api { status, body } => format!(
+            "Origin daemon returned HTTP {status}: {body}. The {verb} may not have completed."
+        ),
+        WenlanError::Deserialize(detail) => format!(
+            "Failed to parse daemon response: {detail}. \
+             This may indicate a version mismatch between origin-mcp and the daemon."
+        ),
+    };
+    CallToolResult::error(vec![Content::text(msg)])
+}
+
+fn format_doctor_message(status: &serde_json::Value) -> String {
+    let mode = status
+        .get("mode")
+        .and_then(|v| v.as_str())
+        .unwrap_or("unknown");
+    let setup_completed = status
+        .get("setup_completed")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    let anthropic_key_configured = status
+        .get("anthropic_key_configured")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    let local_model_selected = status.get("local_model_selected").and_then(|v| v.as_str());
+    let local_model_loaded = status.get("local_model_loaded").and_then(|v| v.as_str());
+    let local_model_cached = status
+        .get("local_model_cached")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+
+    let mode_label = match mode {
+        "basic-memory" => "Local Memory",
+        "local-model" => "On-device Model",
+        "anthropic-key" => "Anthropic Key",
+        other => other,
+    };
+    let local_model_line = match local_model_selected {
+        Some(id) => {
+            let cache_status = if local_model_cached {
+                "downloaded"
+            } else {
+                "not downloaded"
+            };
+            let loaded_status = if Some(id) == local_model_loaded {
+                ", loaded"
+            } else {
+                ""
+            };
+            format!("{id} ({cache_status}{loaded_status})")
+        }
+        None => "not selected".to_string(),
+    };
+    let refinement_line = if anthropic_key_configured || local_model_loaded.is_some() {
+        "enabled (richer extraction and page synthesis are active)"
+    } else if setup_completed {
+        "off (local memory stores, searches, and recalls now. Choose an on-device model or Anthropic key for richer extraction.)"
+    } else {
+        "not configured"
+    };
+
+    let mut msg = format!(
+        "Origin daemon: running\n\
+         Setup: {}\n\
+         Mode: {mode_label}\n\
+         Anthropic key: {}\n\
+         On-device model: {local_model_line}\n\
+         Distill cycles: {refinement_line}",
+        if setup_completed {
+            "completed"
+        } else {
+            "not completed"
+        },
+        if anthropic_key_configured {
+            "configured"
+        } else {
+            "not configured"
+        }
+    );
+
+    if !setup_completed {
+        msg.push_str(
+            "\n\nRun `origin setup` to choose Local Memory, On-device Model, or Anthropic Key.",
+        );
+    } else if !anthropic_key_configured && local_model_loaded.is_none() {
+        msg.push_str(
+            "\n\nLocal memory works now: capture, recall, and context are available. \
+             To enable richer extraction and distill cycles, run `origin model install` \
+             or `origin key set anthropic`.",
+        );
+    }
+
+    msg
+}
+
+impl WenlanMcpServer {
+    /// Resolve the source_agent for a write operation.
+    /// Priority: explicit param > MCP client name (from initialize) > configured agent_name.
+    fn resolve_source_agent(&self, param_agent: Option<String>) -> Option<String> {
+        // 1. Explicit param from tool call
+        if let Some(ref agent) = param_agent {
+            if !agent.is_empty() {
+                return param_agent;
+            }
+        }
+        // 2. Client name captured from MCP initialize handshake
+        if let Ok(guard) = self.client_name.lock() {
+            if let Some(ref name) = *guard {
+                return Some(name.clone());
+            }
+        }
+        // 3. Configured --agent-name flag
+        Some(self.agent_name.clone())
+    }
+
+    /// Resolve a local user_id for logging or future use.
+    /// This value is intentionally not sent on the wire (D4).
+    fn resolve_user_id(&self, param_user_id: Option<String>) -> Option<String> {
+        if self.transport == TransportMode::Http {
+            self.user_id.clone().or(param_user_id)
+        } else {
+            param_user_id
+        }
+    }
+
+    pub async fn capture_impl(&self, params: CaptureParams) -> Result<CallToolResult, McpError> {
+        // Tool was renamed `remember -> capture` in v0.4. The HTTP request
+        // body shape (StoreMemoryRequest) is unchanged; only the MCP-facing
+        // tool name shifted.
+        let source_agent = self.resolve_source_agent(None);
+        if let Some(uid) = self.resolve_user_id(None) {
+            tracing::debug!(user_id = %uid, "capture invoked");
+        }
+        let space_arg = effective_space(&params.space);
+
+        let req = StoreMemoryRequest {
+            content: params.content,
+            memory_type: params.memory_type,
+            space: space_arg,
+            source_agent,
+            title: None,
+            confidence: params.confidence,
+            supersedes: params.supersedes,
+            entity: params.entity,
+            entity_id: None,
+            structured_fields: params.structured_fields.map(serde_json::Value::Object),
+            retrieval_cue: params.retrieval_cue,
+        };
+
+        let resp: StoreMemoryResponse = match self.client.post("/api/memory/store", &req).await {
+            Ok(r) => r,
+            Err(e) => return Ok(tool_error(e, "memory store")),
+        };
+
+        Ok(CallToolResult::success(vec![Content::text(
+            format_capture_success(&resp),
+        )]))
+    }
+
+    pub async fn recall_impl(&self, params: RecallParams) -> Result<CallToolResult, McpError> {
+        let space_arg = effective_space(&params.space);
+        let req = SearchMemoryRequest {
+            query: params.query,
+            limit: params.limit.unwrap_or(10),
+            memory_type: params.memory_type,
+            space: space_arg,
+            source_agent: self.resolve_source_agent(None),
+            // Opt-in cross-encoder rerank. Default `false` preserves the
+            // current cost/latency for callers that don't pass the flag.
+            // Requires ORIGIN_RERANKER_ENABLED=1 on the daemon to take
+            // effect; otherwise the daemon logs and falls back to plain
+            // hybrid ordering.
+            rerank: params.rerank.unwrap_or(false),
+        };
+
+        let resp: SearchMemoryResponse = match self.client.post("/api/memory/search", &req).await {
+            Ok(r) => r,
+            Err(e) => return Ok(tool_error(e, "search")),
+        };
+
+        let json = serde_json::to_string_pretty(&resp.results)
+            .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+
+        let mut output = format!(
+            "{} results ({:.1}ms)\n{}",
+            resp.results.len(),
+            resp.took_ms,
+            json
+        );
+
+        if let Some(pages) = resp.supplemental_pages.as_ref().filter(|p| !p.is_empty()) {
+            let pages_json = serde_json::to_string_pretty(pages)
+                .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+            output.push_str(&format!("\n\nCompiled pages:\n{}", pages_json));
+        }
+
+        Ok(CallToolResult::success(vec![Content::text(output)]))
+    }
+
+    pub async fn context_impl(&self, params: ContextParams) -> Result<CallToolResult, McpError> {
+        let space_arg = effective_space(&params.space);
+        #[allow(deprecated)]
+        let req = ChatContextRequest {
+            query: None,
+            conversation_id: params.topic,
+            max_chunks: params.limit.unwrap_or(20),
+            relevance_threshold: None,
+            include_goals: true,
+            space: space_arg,
+        };
+
+        // Extract only the `context` string field from the response.
+        //
+        // The full ChatContextResponse embeds Vec<SearchResult> which may
+        // contain fields added after the published origin-types version.
+        // Since context_impl only uses `resp.context`, we parse the raw
+        // JSON and pull that field directly — this makes the tool forward-
+        // compatible with any new fields the daemon might add.
+        let raw: serde_json::Value = match self.client.post("/api/chat-context", &req).await {
+            Ok(r) => r,
+            Err(e) => return Ok(tool_error(e, "context load")),
+        };
+
+        let context = raw
+            .get("context")
+            .and_then(|v| v.as_str())
+            .unwrap_or_default()
+            .to_string();
+
+        if context.is_empty() {
+            Ok(CallToolResult::success(vec![Content::text(
+                "No relevant context found".to_string(),
+            )]))
+        } else {
+            Ok(CallToolResult::success(vec![Content::text(context)]))
+        }
+    }
+
+    pub async fn doctor_impl(&self) -> Result<CallToolResult, McpError> {
+        let status: serde_json::Value = match self.client.get("/api/setup/status").await {
+            Ok(r) => r,
+            Err(WenlanError::Api { status: 404, .. }) => {
+                return Ok(CallToolResult::error(vec![Content::text(
+                    "Origin daemon is running, but it does not expose /api/setup/status. \
+                     Update Origin, then run `origin doctor`."
+                        .to_string(),
+                )]));
+            }
+            Err(e) => return Ok(tool_error(e, "status check")),
+        };
+
+        Ok(CallToolResult::success(vec![Content::text(
+            format_doctor_message(&status),
+        )]))
+    }
+
+    pub async fn forget_impl(&self, memory_id: &str) -> Result<CallToolResult, McpError> {
+        if self.transport == TransportMode::Http {
+            return Ok(CallToolResult::error(vec![Content::text(
+                "Delete operations are not available over remote connections. \
+                 Use local MCP on the machine running Origin to delete memories."
+                    .to_string(),
+            )]));
+        }
+
+        let resp: DeleteResponse = match self
+            .client
+            .delete(&format!("/api/memory/delete/{}", memory_id))
+            .await
+        {
+            Ok(r) => r,
+            Err(e) => return Ok(tool_error(e, "delete")),
+        };
+
+        Ok(CallToolResult::success(vec![Content::text(
+            if resp.deleted {
+                "Memory deleted"
+            } else {
+                "Memory not found"
+            }
+            .to_string(),
+        )]))
+    }
+
+    pub async fn distill_impl(&self, params: DistillParams) -> Result<CallToolResult, McpError> {
+        let mut body = serde_json::Map::new();
+        if let Some(t) = params.target.as_deref().filter(|t| !t.is_empty()) {
+            body.insert("target".into(), serde_json::Value::String(t.to_string()));
+        }
+        if params.force.unwrap_or(false) {
+            body.insert("force".into(), serde_json::Value::Bool(true));
+        }
+        let body = serde_json::Value::Object(body);
+        match self
+            .client
+            .post::<serde_json::Value, serde_json::Value>("/api/distill", &body)
+            .await
+        {
+            Ok(resp) => {
+                if let Some(unresolved) = resp.get("unresolved").and_then(|v| v.as_str()) {
+                    let hint = resp
+                        .get("hint")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("no matching target");
+                    return Ok(CallToolResult::success(vec![Content::text(format!(
+                        "Could not resolve target `{}`. {}",
+                        unresolved, hint
+                    ))]));
+                }
+                // Return the daemon's structured response verbatim. The caller
+                // (agent in Claude Code, Cursor, etc.) reads `pending` from the
+                // payload, synthesizes each cluster in-session, and POSTs the
+                // resulting pages back to /api/pages. The MCP tool stays as a
+                // thin wrapper; the synthesis lives where the LLM is.
+                let pretty =
+                    serde_json::to_string_pretty(&resp).unwrap_or_else(|_| resp.to_string());
+                Ok(CallToolResult::success(vec![Content::text(pretty)]))
+            }
+            Err(e) => Ok(tool_error(e, "distill")),
+        }
+    }
+
+    pub async fn list_pending_impl(
+        &self,
+        params: ListPendingParams,
+    ) -> Result<CallToolResult, McpError> {
+        let limit = params.limit.unwrap_or(20).min(100);
+        let req = ListMemoriesRequest {
+            memory_type: None,
+            space: None,
+            confirmed: Some(false),
+            limit,
+        };
+        let resp: ListMemoriesResponse = match self.client.post("/api/memory/list", &req).await {
+            Ok(r) => r,
+            Err(e) => return Ok(tool_error(e, "list_pending")),
+        };
+        let body = serde_json::to_string_pretty(&resp.memories)
+            .unwrap_or_else(|e| format!("serialization error: {e}"));
+        Ok(CallToolResult::success(vec![Content::text(body)]))
+    }
+
+    pub async fn confirm_memory_impl(&self, memory_id: &str) -> Result<CallToolResult, McpError> {
+        if self.transport == TransportMode::Http {
+            return Ok(CallToolResult::error(vec![Content::text(
+                "Confirm operations are not available over remote connections. \
+                 Use local MCP on the machine running Origin for review."
+                    .to_string(),
+            )]));
+        }
+        let path = format!("/api/memory/confirm/{}", memory_id);
+        match self
+            .client
+            .post::<serde_json::Value, serde_json::Value>(&path, &serde_json::json!({}))
+            .await
+        {
+            Ok(_) => Ok(CallToolResult::success(vec![Content::text(format!(
+                "Memory {} confirmed.",
+                memory_id
+            ))])),
+            Err(e) => Ok(tool_error(e, "confirm_memory")),
+        }
+    }
+
+    pub async fn create_entity_impl(
+        &self,
+        params: CreateEntityParams,
+    ) -> Result<CallToolResult, McpError> {
+        let source_agent = self.resolve_source_agent(None);
+        let space_arg = effective_space(&params.space);
+        let req = CreateEntityRequest {
+            name: params.name,
+            entity_type: params.entity_type,
+            space: space_arg,
+            source_agent,
+            confidence: params.confidence,
+        };
+        let resp: CreateEntityResponse = match self.client.post("/api/memory/entities", &req).await
+        {
+            Ok(r) => r,
+            Err(e) => return Ok(tool_error(e, "create_entity")),
+        };
+        let mut text = format!("Created entity {}", resp.id);
+        for w in &resp.warnings {
+            text.push_str(&format!("\nwarning: {w}"));
+        }
+        Ok(CallToolResult::success(vec![Content::text(text)]))
+    }
+
+    pub async fn create_relation_impl(
+        &self,
+        params: CreateRelationParams,
+    ) -> Result<CallToolResult, McpError> {
+        let source_agent = self.resolve_source_agent(None);
+        let req = CreateRelationRequest {
+            from_entity: params.from_entity,
+            to_entity: params.to_entity,
+            relation_type: params.relation_type,
+            source_agent,
+            confidence: None,
+            explanation: None,
+            source_memory_id: None,
+        };
+        let resp: CreateRelationResponse =
+            match self.client.post("/api/memory/relations", &req).await {
+                Ok(r) => r,
+                Err(e) => return Ok(tool_error(e, "create_relation")),
+            };
+        let mut text = format!("Created relation {}", resp.id);
+        for w in &resp.warnings {
+            text.push_str(&format!("\nwarning: {w}"));
+        }
+        Ok(CallToolResult::success(vec![Content::text(text)]))
+    }
+
+    pub async fn create_observation_impl(
+        &self,
+        params: CreateObservationParams,
+    ) -> Result<CallToolResult, McpError> {
+        let req = wenlan_types::requests::AddObservationRequest {
+            entity_id: params.entity_id,
+            content: params.content,
+            source_agent: params.source_agent,
+            confidence: params.confidence,
+        };
+        let resp: wenlan_types::responses::AddObservationResponse =
+            match self.client.post("/api/memory/observations", &req).await {
+                Ok(r) => r,
+                Err(e) => return Ok(tool_error(e, "create_observation")),
+            };
+        let mut text = format!("Created observation {}", resp.id);
+        for w in &resp.warnings {
+            text.push_str(&format!("\nwarning: {w}"));
+        }
+        Ok(CallToolResult::success(vec![Content::text(text)]))
+    }
+
+    pub async fn confirm_entity_impl(
+        &self,
+        params: ConfirmEntityParams,
+    ) -> Result<CallToolResult, McpError> {
+        if self.transport == TransportMode::Http {
+            return Ok(CallToolResult::error(vec![Content::text(
+                "Confirm operations are not available over remote connections. \
+                 Use local MCP on the machine running Origin to confirm entities."
+                    .to_string(),
+            )]));
+        }
+        let req = wenlan_types::requests::ConfirmEntityRequest {
+            confirmed: params.confirmed,
+        };
+        let path = format!("/api/memory/entities/{}/confirm", params.entity_id);
+        let _: wenlan_types::responses::SuccessResponse = match self.client.put(&path, &req).await {
+            Ok(r) => r,
+            Err(e) => return Ok(tool_error(e, "confirm_entity")),
+        };
+        Ok(CallToolResult::success(vec![Content::text(format!(
+            "Entity {} {}",
+            params.entity_id,
+            if params.confirmed {
+                "confirmed"
+            } else {
+                "unconfirmed"
+            }
+        ))]))
+    }
+
+    pub async fn update_observation_impl(
+        &self,
+        params: UpdateObservationParams,
+    ) -> Result<CallToolResult, McpError> {
+        if self.transport == TransportMode::Http {
+            return Ok(CallToolResult::error(vec![Content::text(
+                "Update operations are not available over remote connections. \
+                 Use local MCP on the machine running Origin to update observations."
+                    .to_string(),
+            )]));
+        }
+        let req = wenlan_types::requests::UpdateObservationRequest {
+            content: params.content,
+        };
+        let path = format!("/api/memory/observations/{}", params.observation_id);
+        let _: wenlan_types::responses::SuccessResponse = match self.client.put(&path, &req).await {
+            Ok(r) => r,
+            Err(e) => return Ok(tool_error(e, "update_observation")),
+        };
+        Ok(CallToolResult::success(vec![Content::text(format!(
+            "Updated observation {}",
+            params.observation_id
+        ))]))
+    }
+
+    pub async fn confirm_observation_impl(
+        &self,
+        params: ConfirmObservationParams,
+    ) -> Result<CallToolResult, McpError> {
+        if self.transport == TransportMode::Http {
+            return Ok(CallToolResult::error(vec![Content::text(
+                "Confirm operations are not available over remote connections. \
+                 Use local MCP on the machine running Origin to confirm observations."
+                    .to_string(),
+            )]));
+        }
+        let req = wenlan_types::requests::ConfirmObservationRequest {
+            confirmed: params.confirmed,
+        };
+        let path = format!("/api/memory/observations/{}/confirm", params.observation_id);
+        let _: wenlan_types::responses::SuccessResponse = match self.client.put(&path, &req).await {
+            Ok(r) => r,
+            Err(e) => return Ok(tool_error(e, "confirm_observation")),
+        };
+        Ok(CallToolResult::success(vec![Content::text(format!(
+            "Observation {} {}",
+            params.observation_id,
+            if params.confirmed {
+                "confirmed"
+            } else {
+                "unconfirmed"
+            }
+        ))]))
+    }
+
+    pub async fn delete_observation_impl(
+        &self,
+        params: DeleteObservationParams,
+    ) -> Result<CallToolResult, McpError> {
+        if self.transport == TransportMode::Http {
+            return Ok(CallToolResult::error(vec![Content::text(
+                "Delete operations are not available over remote connections. \
+                 Use local MCP on the machine running Origin to delete observations."
+                    .to_string(),
+            )]));
+        }
+        let path = format!("/api/memory/observations/{}", params.observation_id);
+        let _: wenlan_types::responses::SuccessResponse = match self.client.delete(&path).await {
+            Ok(r) => r,
+            Err(e) => return Ok(tool_error(e, "delete_observation")),
+        };
+        Ok(CallToolResult::success(vec![Content::text(format!(
+            "Observation {} deleted",
+            params.observation_id
+        ))]))
+    }
+
+    pub async fn create_page_impl(
+        &self,
+        params: CreatePageParams,
+    ) -> Result<CallToolResult, McpError> {
+        let space_arg = effective_space(&params.space);
+        let req = CreateConceptRequest {
+            title: params.title,
+            content: params.content,
+            summary: params.summary,
+            entity_id: params.entity_id,
+            space: space_arg,
+            source_memory_ids: params.source_memory_ids,
+            creation_kind: None,
+            workspace: None,
+        };
+        let resp: CreatePageResponse = match self.client.post("/api/pages", &req).await {
+            Ok(r) => r,
+            Err(e) => return Ok(tool_error(e, "create_page")),
+        };
+        let mut text = format!("Created page {}", resp.id);
+        for w in &resp.warnings {
+            text.push_str(&format!("\nwarning: {w}"));
+        }
+        Ok(CallToolResult::success(vec![Content::text(text)]))
+    }
+
+    pub async fn update_page_impl(
+        &self,
+        params: UpdatePageParams,
+    ) -> Result<CallToolResult, McpError> {
+        if self.transport == TransportMode::Http {
+            return Ok(CallToolResult::error(vec![Content::text(
+                "Update operations are not available over remote connections. \
+                 Use local MCP on the machine running Origin to update pages."
+                    .to_string(),
+            )]));
+        }
+        let req = wenlan_types::requests::RefreshPageRequest {
+            content: params.content,
+            source_memory_ids: params.source_memory_ids,
+            summary: params.summary,
+        };
+        let path = format!("/api/pages/{}", params.page_id);
+        // Typed end-to-end: a wire-shape drift on the daemon side fails at
+        // deserialize instead of silently returning the no-op "Refreshed"
+        // line. Same discipline as PR #77's search_pages / list_pages_recent.
+        let _: wenlan_types::responses::SuccessResponse = match self.client.put(&path, &req).await {
+            Ok(r) => r,
+            Err(e) => return Ok(tool_error(e, "update_page")),
+        };
+        Ok(CallToolResult::success(vec![Content::text(format!(
+            "Refreshed page {}",
+            params.page_id
+        ))]))
+    }
+
+    pub async fn delete_page_impl(&self, page_id: &str) -> Result<CallToolResult, McpError> {
+        if self.transport == TransportMode::Http {
+            return Ok(CallToolResult::error(vec![Content::text(
+                "Delete operations are not available over remote connections. \
+                 Use local MCP on the machine running Origin to delete pages."
+                    .to_string(),
+            )]));
+        }
+
+        let path = format!("/api/pages/{}", page_id);
+        let resp: serde_json::Value = match self.client.delete(&path).await {
+            Ok(r) => r,
+            Err(e) => return Ok(tool_error(e, "delete_page")),
+        };
+        let status = resp
+            .get("status")
+            .and_then(|v| v.as_str())
+            .unwrap_or("deleted");
+        Ok(CallToolResult::success(vec![Content::text(format!(
+            "Page {} {}",
+            page_id, status
+        ))]))
+    }
+
+    pub async fn get_page_impl(&self, page_id: &str) -> Result<CallToolResult, McpError> {
+        let path = format!("/api/pages/{}", page_id);
+        let resp: serde_json::Value = match self.client.get(&path).await {
+            Ok(r) => r,
+            Err(e) => return Ok(tool_error(e, "get_page")),
+        };
+        let pretty = serde_json::to_string_pretty(&resp).unwrap_or_else(|_| resp.to_string());
+        Ok(CallToolResult::success(vec![Content::text(pretty)]))
+    }
+
+    pub async fn get_page_links_impl(&self, page_id: &str) -> Result<CallToolResult, McpError> {
+        let path = format!("/api/pages/{}/links", page_id);
+        // Typed end-to-end via PageLinksResponse — keeps wire shape pinned.
+        let resp: wenlan_types::responses::PageLinksResponse = match self.client.get(&path).await {
+            Ok(r) => r,
+            Err(e) => return Ok(tool_error(e, "get_page_links")),
+        };
+        let pretty = serde_json::to_string_pretty(&resp).unwrap_or_else(|_| String::new());
+        Ok(CallToolResult::success(vec![Content::text(pretty)]))
+    }
+
+    pub async fn get_page_sources_impl(&self, page_id: &str) -> Result<CallToolResult, McpError> {
+        let path = format!("/api/pages/{}/sources", page_id);
+        // Daemon returns Vec<PageSourceWithMemory> directly (no envelope key).
+        let resp: Vec<PageSourceWithMemory> = match self.client.get(&path).await {
+            Ok(r) => r,
+            Err(e) => return Ok(tool_error(e, "get_page_sources")),
+        };
+        let pretty = serde_json::to_string_pretty(&resp)
+            .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+        Ok(CallToolResult::success(vec![Content::text(format!(
+            "{} sources\n{}",
+            resp.len(),
+            pretty
+        ))]))
+    }
+
+    pub async fn get_memory_revisions_impl(
+        &self,
+        memory_id: &str,
+    ) -> Result<CallToolResult, McpError> {
+        let path = format!("/api/memory/{}/revisions", memory_id);
+        let resp: ListMemoryRevisionsResponse = match self.client.get(&path).await {
+            Ok(r) => r,
+            Err(e) => return Ok(tool_error(e, "get_memory_revisions")),
+        };
+        let pretty = serde_json::to_string_pretty(&resp)
+            .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+        Ok(CallToolResult::success(vec![Content::text(format!(
+            "chain depth {}\n{}",
+            resp.chain_depth, pretty
+        ))]))
+    }
+
+    pub async fn get_page_revisions_impl(&self, page_id: &str) -> Result<CallToolResult, McpError> {
+        let path = format!("/api/pages/{}/revisions", page_id);
+        let resp: ListPageRevisionsResponse = match self.client.get(&path).await {
+            Ok(r) => r,
+            Err(e) => return Ok(tool_error(e, "get_page_revisions")),
+        };
+        let pretty = serde_json::to_string_pretty(&resp)
+            .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+        Ok(CallToolResult::success(vec![Content::text(format!(
+            "version {} ({} entries)\n{}",
+            resp.current_version,
+            resp.entries.len(),
+            pretty
+        ))]))
+    }
+
+    pub async fn list_memories_impl(
+        &self,
+        params: ListMemoriesParams,
+    ) -> Result<CallToolResult, McpError> {
+        let space_arg = effective_space(&params.space);
+        let req = ListMemoriesRequest {
+            memory_type: params.memory_type,
+            space: space_arg,
+            limit: params.limit.unwrap_or(100),
+            confirmed: None,
+        };
+        let resp: ListMemoriesResponse = match self.client.post("/api/memory/list", &req).await {
+            Ok(r) => r,
+            Err(e) => return Ok(tool_error(e, "list_memories")),
+        };
+        let pretty = serde_json::to_string_pretty(&resp.memories)
+            .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+        Ok(CallToolResult::success(vec![Content::text(format!(
+            "{} memories\n{}",
+            resp.memories.len(),
+            pretty
+        ))]))
+    }
+
+    pub async fn search_pages_impl(
+        &self,
+        params: SearchPagesParams,
+    ) -> Result<CallToolResult, McpError> {
+        let req = SearchPagesRequest {
+            query: params.query,
+            limit: params.limit,
+            page_type: params.page_type,
+        };
+        let resp: SearchPagesResponse = match self.client.post("/api/pages/search", &req).await {
+            Ok(r) => r,
+            Err(e) => return Ok(tool_error(e, "search_pages")),
+        };
+        let pretty = serde_json::to_string_pretty(&resp.pages)
+            .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+        Ok(CallToolResult::success(vec![Content::text(format!(
+            "{} pages\n{}",
+            resp.pages.len(),
+            pretty
+        ))]))
+    }
+
+    pub async fn list_pages_recent_impl(
+        &self,
+        params: ListPagesRecentParams,
+    ) -> Result<CallToolResult, McpError> {
+        let path = build_recent_pages_path(params.limit, params.since_ms);
+        let resp: Vec<RecentActivityItem> = match self.client.get(&path).await {
+            Ok(r) => r,
+            Err(e) => return Ok(tool_error(e, "list_pages_recent")),
+        };
+        let pretty = serde_json::to_string_pretty(&resp)
+            .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+        Ok(CallToolResult::success(vec![Content::text(format!(
+            "{} recent pages\n{}",
+            resp.len(),
+            pretty
+        ))]))
+    }
+
+    pub async fn list_spaces_impl(
+        &self,
+        _params: ListSpacesParams,
+    ) -> Result<CallToolResult, McpError> {
+        let resp: Vec<Space> = match self.client.get("/api/spaces").await {
+            Ok(r) => r,
+            Err(e) => return Ok(tool_error(e, "list_spaces")),
+        };
+        let pretty = serde_json::to_string_pretty(&resp)
+            .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+        Ok(CallToolResult::success(vec![Content::text(format!(
+            "{} spaces\n{}",
+            resp.len(),
+            pretty
+        ))]))
+    }
+
+    pub async fn list_refinements_impl(
+        &self,
+        params: ListRefinementsParams,
+    ) -> Result<CallToolResult, McpError> {
+        let mut path = String::from("/api/refinery/queue");
+        let mut q: Vec<String> = Vec::new();
+        if let Some(a) = params.action.as_deref() {
+            q.push(format!("action={}", url_encode_simple(a)));
+        }
+        if let Some(l) = params.limit {
+            q.push(format!("limit={l}"));
+        }
+        if !q.is_empty() {
+            path.push('?');
+            path.push_str(&q.join("&"));
+        }
+
+        let resp: ListRefinementsResponse = match self.client.get(&path).await {
+            Ok(v) => v,
+            Err(e) => return Ok(tool_error(e, "list_refinements")),
+        };
+
+        let pretty = serde_json::to_string_pretty(&resp.proposals)
+            .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+        Ok(CallToolResult::success(vec![Content::text(format!(
+            "{} pending review proposals\n{}",
+            resp.proposals.len(),
+            pretty
+        ))]))
+    }
+
+    pub async fn reject_refinement_impl(
+        &self,
+        params: RejectRefinementParams,
+    ) -> Result<CallToolResult, McpError> {
+        if self.transport == TransportMode::Http {
+            return Ok(CallToolResult::error(vec![Content::text(
+                "Review proposal operations are not available over remote connections. \
+                 Use local MCP on the machine running Origin to reject proposals."
+                    .to_string(),
+            )]));
+        }
+        let path = format!(
+            "/api/refinery/queue/{}/reject",
+            url_encode_simple(&params.id)
+        );
+        let resp: RejectRefinementResponse =
+            match self.client.post(&path, &serde_json::json!({})).await {
+                Ok(v) => v,
+                Err(e) => return Ok(tool_error(e, "reject_refinement")),
+            };
+
+        Ok(CallToolResult::success(vec![Content::text(format!(
+            "Review proposal {} dismissed.",
+            resp.id
+        ))]))
+    }
+
+    pub async fn accept_refinement_impl(
+        &self,
+        params: AcceptRefinementParams,
+    ) -> Result<CallToolResult, McpError> {
+        if self.transport == TransportMode::Http {
+            return Ok(CallToolResult::error(vec![Content::text(
+                "Review proposal operations are not available over remote connections. \
+                 Use local MCP on the machine running Origin to accept proposals."
+                    .to_string(),
+            )]));
+        }
+        let path = format!(
+            "/api/refinery/queue/{}/accept",
+            url_encode_simple(&params.id)
+        );
+        let resp: AcceptRefinementResponse =
+            match self.client.post(&path, &serde_json::json!({})).await {
+                Ok(v) => v,
+                Err(e) => return Ok(tool_error(e, "accept_refinement")),
+            };
+
+        Ok(CallToolResult::success(vec![Content::text(format!(
+            "Review proposal {} accepted (action={}).",
+            resp.id, resp.action_applied
+        ))]))
+    }
+
+    pub async fn list_nurture_impl(
+        &self,
+        params: ListNurtureParams,
+    ) -> Result<CallToolResult, McpError> {
+        let space_arg = effective_space(&params.space);
+        let mut path = String::from("/api/memory/nurture");
+        let mut q: Vec<String> = Vec::new();
+        if let Some(l) = params.limit {
+            q.push(format!("limit={}", l.clamp(1, 500)));
+        }
+        if let Some(s) = space_arg.as_deref().filter(|s| !s.is_empty()) {
+            q.push(format!("space={}", url_encode_simple(s)));
+        }
+        if !q.is_empty() {
+            path.push('?');
+            path.push_str(&q.join("&"));
+        }
+
+        let resp: wenlan_types::responses::NurtureCardsResponse = match self.client.get(&path).await
+        {
+            Ok(v) => v,
+            Err(e) => return Ok(tool_error(e, "list_nurture")),
+        };
+
+        let pretty = serde_json::to_string_pretty(&resp.cards)
+            .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+        Ok(CallToolResult::success(vec![Content::text(format!(
+            "{} nurture cards\n{}",
+            resp.cards.len(),
+            pretty
+        ))]))
+    }
+
+    pub async fn list_entity_suggestions_impl(
+        &self,
+        _params: ListEntitySuggestionsParams,
+    ) -> Result<CallToolResult, McpError> {
+        let resp: Vec<wenlan_types::entities::EntitySuggestion> =
+            match self.client.get("/api/memory/entity-suggestions").await {
+                Ok(v) => v,
+                Err(e) => return Ok(tool_error(e, "list_entity_suggestions")),
+            };
+        let pretty = serde_json::to_string_pretty(&resp)
+            .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+        Ok(CallToolResult::success(vec![Content::text(format!(
+            "{} entity suggestion(s)\n{}",
+            resp.len(),
+            pretty
+        ))]))
+    }
+
+    pub async fn accept_revision_impl(
+        &self,
+        req: AcceptRevisionRequest,
+    ) -> Result<CallToolResult, McpError> {
+        if self.transport == TransportMode::Http {
+            return Ok(CallToolResult::error(vec![Content::text(
+                "Revision operations are not available over remote connections. \
+                 Use local MCP on the machine running Origin to accept memory revisions."
+                    .to_string(),
+            )]));
+        }
+        let path = format!("/api/memory/revision/{}/accept", req.target_source_id);
+        let response = match self
+            .client
+            .post_empty::<RevisionAcceptResponse>(&path)
+            .await
+        {
+            Ok(r) => r,
+            Err(e) => return Ok(tool_error(e, "accept_revision")),
+        };
+        let pretty = serde_json::to_string_pretty(&response)
+            .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+        Ok(CallToolResult::success(vec![Content::text(pretty)]))
+    }
+
+    pub async fn dismiss_revision_impl(
+        &self,
+        req: DismissRevisionRequest,
+    ) -> Result<CallToolResult, McpError> {
+        if self.transport == TransportMode::Http {
+            return Ok(CallToolResult::error(vec![Content::text(
+                "Revision operations are not available over remote connections. \
+                 Use local MCP on the machine running Origin to dismiss memory revisions."
+                    .to_string(),
+            )]));
+        }
+        let path = format!("/api/memory/revision/{}/dismiss", req.target_source_id);
+        let response = match self
+            .client
+            .post_empty::<RevisionDismissResponse>(&path)
+            .await
+        {
+            Ok(r) => r,
+            Err(e) => return Ok(tool_error(e, "dismiss_revision")),
+        };
+        let pretty = serde_json::to_string_pretty(&response)
+            .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+        Ok(CallToolResult::success(vec![Content::text(pretty)]))
+    }
+
+    pub async fn dismiss_contradiction_impl(
+        &self,
+        req: DismissContradictionRequest,
+    ) -> Result<CallToolResult, McpError> {
+        if self.transport == TransportMode::Http {
+            return Ok(CallToolResult::error(vec![Content::text(
+                "Contradiction operations are not available over remote connections. \
+                 Use local MCP on the machine running Origin to dismiss contradictions."
+                    .to_string(),
+            )]));
+        }
+        let path = format!("/api/memory/contradiction/{}/dismiss", req.source_id);
+        let response = match self
+            .client
+            .post_empty::<ContradictionDismissResponse>(&path)
+            .await
+        {
+            Ok(r) => r,
+            Err(e) => return Ok(tool_error(e, "dismiss_contradiction")),
+        };
+        let pretty = serde_json::to_string_pretty(&response)
+            .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+        Ok(CallToolResult::success(vec![Content::text(pretty)]))
+    }
+
+    pub async fn list_pending_imports_impl(
+        &self,
+        _params: ListPendingImportsParams,
+    ) -> Result<CallToolResult, McpError> {
+        let resp: Vec<wenlan_types::import::PendingImport> =
+            match self.client.get("/api/import/state").await {
+                Ok(v) => v,
+                Err(e) => return Ok(tool_error(e, "list_pending_imports")),
+            };
+        let pretty = serde_json::to_string_pretty(&resp)
+            .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+        Ok(CallToolResult::success(vec![Content::text(format!(
+            "{} pending import(s)\n{}",
+            resp.len(),
+            pretty
+        ))]))
+    }
+
+    pub async fn list_rejections_impl(
+        &self,
+        params: ListRejectionsParams,
+    ) -> Result<CallToolResult, McpError> {
+        let mut path = String::from("/api/memory/rejections");
+        let mut q: Vec<String> = Vec::new();
+        if let Some(l) = params.limit {
+            q.push(format!("limit={}", l.clamp(1, 500)));
+        }
+        if let Some(r) = params.reason.as_deref().filter(|s| !s.is_empty()) {
+            q.push(format!("reason={}", url_encode_simple(r)));
+        }
+        if !q.is_empty() {
+            path.push('?');
+            path.push_str(&q.join("&"));
+        }
+
+        let resp: Vec<wenlan_types::memory::RejectionRecord> = match self.client.get(&path).await {
+            Ok(v) => v,
+            Err(e) => return Ok(tool_error(e, "list_rejections")),
+        };
+
+        let pretty = serde_json::to_string_pretty(&resp)
+            .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+        Ok(CallToolResult::success(vec![Content::text(format!(
+            "{} rejection(s)\n{}",
+            resp.len(),
+            pretty
+        ))]))
+    }
+
+    pub async fn list_pending_revisions_impl(
+        &self,
+        params: ListPendingRevisionsParams,
+    ) -> Result<CallToolResult, McpError> {
+        let path = match params.limit {
+            Some(l) => format!("/api/memory/pending-revisions?limit={}", l.clamp(1, 500)),
+            None => "/api/memory/pending-revisions".to_string(),
+        };
+        let resp: Vec<wenlan_types::responses::PendingRevisionItem> =
+            match self.client.get(&path).await {
+                Ok(v) => v,
+                Err(e) => return Ok(tool_error(e, "list_pending_revisions")),
+            };
+        let pretty = serde_json::to_string_pretty(&resp)
+            .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+        Ok(CallToolResult::success(vec![Content::text(format!(
+            "{} pending revision(s)\n{}",
+            resp.len(),
+            pretty
+        ))]))
+    }
+
+    pub async fn list_orphan_links_impl(
+        &self,
+        params: ListOrphanLinksParams,
+    ) -> Result<CallToolResult, McpError> {
+        let path = match params.min_count {
+            Some(n) => format!("/api/pages/orphan-links?min_count={}", n.max(1)),
+            None => "/api/pages/orphan-links".to_string(),
+        };
+        let resp: wenlan_types::responses::OrphanLinksResponse = match self.client.get(&path).await
+        {
+            Ok(v) => v,
+            Err(e) => return Ok(tool_error(e, "list_orphan_links")),
+        };
+        let pretty = serde_json::to_string_pretty(&resp)
+            .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+        Ok(CallToolResult::success(vec![Content::text(format!(
+            "{} orphan link(s)\n{}",
+            resp.orphan_labels.len(),
+            pretty
+        ))]))
+    }
+}
+
+/// Build the `/api/pages/recent` URL with optional `limit` + `since_ms` query
+/// params. Pure function so the test can exercise the actual builder rather
+/// than a duplicate.
+fn build_recent_pages_path(limit: Option<usize>, since_ms: Option<i64>) -> String {
+    let mut path = String::from("/api/pages/recent");
+    let mut q: Vec<String> = Vec::new();
+    if let Some(l) = limit {
+        q.push(format!("limit={}", l));
+    }
+    if let Some(s) = since_ms {
+        q.push(format!("since_ms={}", s));
+    }
+    if !q.is_empty() {
+        path.push('?');
+        path.push_str(&q.join("&"));
+    }
+    path
+}
+
+/// Percent-encode a string for use in URL query parameter values.
+/// Encodes all characters except unreserved ones (A-Z, a-z, 0-9, `-`, `_`, `.`, `~`).
+fn url_encode_simple(s: &str) -> String {
+    s.chars()
+        .flat_map(|c| match c {
+            'A'..='Z' | 'a'..='z' | '0'..='9' | '-' | '_' | '.' | '~' => {
+                vec![c]
+            }
+            _ => format!("%{:02X}", c as u32).chars().collect(),
+        })
+        .collect()
+}
+
+// ===== Tool Registrations =====
+
+#[tool_router]
+impl WenlanMcpServer {
+    pub fn new(
+        client: WenlanClient,
+        transport: TransportMode,
+        agent_name: String,
+        user_id: Option<String>,
+    ) -> Self {
+        Self {
+            tool_router: Self::tool_router(),
+            client,
+            transport,
+            agent_name,
+            client_name: std::sync::Arc::new(std::sync::Mutex::new(None)),
+            user_id,
+        }
+    }
+
+    // --- Primary Tools ---
+
+    #[tool(
+        description = "Capture a memory. Call PROACTIVELY when you learn something durable about the user — preferences, decisions, corrections, or facts about people/projects/tools they care about. Don't wait for the user to say 'remember this' or 'capture that' — that phrasing is a floor, not a trigger.\n\nWrite content as a complete, self-contained statement — someone reading it months later with no conversation context should understand it. Include the WHY, not just the WHAT. Name people, projects, and tools explicitly.\n\nThe backend auto-classifies type, extracts structured fields, detects entities, and links to the knowledge graph. You don't need to set memory_type or structured_fields unless you're confident — omitting them gets better results than guessing wrong.\n\nDo NOT store: system prompts, boot logs, heartbeat/health checks, transient task state ('currently working on...'), tool output/responses, architecture dumps, single-word acknowledgments, or content you have already stored. Focus on durable facts, preferences, decisions, lessons, gotchas, and identity information. Each call is one atomic idea — \"prefers TDD\" and \"uses pytest\" are two calls, not one.",
+        annotations(
+            title = "Capture",
+            read_only_hint = false,
+            destructive_hint = false,
+            idempotent_hint = false,
+            open_world_hint = false
+        )
+    )]
+    async fn capture(
+        &self,
+        Parameters(params): Parameters<CaptureParams>,
+    ) -> Result<CallToolResult, McpError> {
+        self.capture_impl(params).await
+    }
+
+    #[tool(
+        description = "Search memories by query. Use when the user asks 'do you remember', 'what do you know about', 'look up', or when you need a specific fact before acting.\n\nWrite queries as natural language — the search engine handles semantic matching. For precision, use filters (memory_type, space) to narrow results. If you get too many results, add filters rather than making the query longer.\n\nFor higher retrieval quality at the cost of latency, pass `rerank: true` to opt into the cross-encoder reranker (requires ORIGIN_RERANKER_ENABLED=1 on the daemon).\n\nThis is for targeted lookups. For broad session orientation, use context instead.",
+        annotations(title = "Recall", read_only_hint = true, open_world_hint = false)
+    )]
+    async fn recall(
+        &self,
+        Parameters(params): Parameters<RecallParams>,
+    ) -> Result<CallToolResult, McpError> {
+        self.recall_impl(params).await
+    }
+
+    #[tool(
+        description = "Load session context — identity, preferences, goals, and topic-relevant memories. Call this FIRST at the start of every session before doing anything else. Also call on major topic shifts or when the user says 'catch me up' or 'what's the background on'.\n\nThis returns a curated blend of who the user is and what's relevant. For specific factual lookups, use recall instead. Use the result to model how the user thinks, not just to look things up — their preferences and corrections tell you how they want to be helped.",
+        annotations(title = "Context", read_only_hint = true, open_world_hint = false)
+    )]
+    async fn context(
+        &self,
+        Parameters(params): Parameters<ContextParams>,
+    ) -> Result<CallToolResult, McpError> {
+        self.context_impl(params).await
+    }
+
+    #[tool(
+        description = "Diagnose the local Origin runtime. This is not part of the memory loop. Use only when Origin tools fail, when onboarding a new MCP client, or when the user asks why setup, extraction, or distill cycles are off. Reports daemon reachability, setup mode, Local Memory, On-device Model, Anthropic key state, and on-device model state.",
+        annotations(title = "Doctor", read_only_hint = true, open_world_hint = false)
+    )]
+    async fn doctor(&self) -> Result<CallToolResult, McpError> {
+        self.doctor_impl().await
+    }
+
+    #[tool(
+        description = "Delete a memory by ID. Use when the user says 'forget this', 'delete that', 'that's wrong and should be removed'. Requires the source_id — get it from recall first.\n\nThis is destructive and cannot be undone. For corrections, prefer storing a new memory with the supersedes param pointing to the old one — this preserves history.",
+        annotations(
+            title = "Forget",
+            read_only_hint = false,
+            destructive_hint = true,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
+    )]
+    async fn forget(
+        &self,
+        Parameters(params): Parameters<ForgetParams>,
+    ) -> Result<CallToolResult, McpError> {
+        self.forget_impl(&params.memory_id).await
+    }
+
+    #[tool(
+        description = "Trigger Origin's distillation pass. With no `target`, runs a full pass that clusters new memories into pages and refreshes the wiki view. With a `target`, scopes the pass: a page id (`page_*` or `concept_*`) re-distills that single page, an entity name scopes clustering to that entity, a space value (e.g. `work`, `personal`) scopes to that space. Use when the user explicitly asks to synthesize, distill, or rebuild a page. The daemon also runs distillation periodically in the background, so don't trigger redundantly during normal flow.",
+        annotations(
+            title = "Distill",
+            read_only_hint = false,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
+    )]
+    async fn distill(
+        &self,
+        Parameters(params): Parameters<DistillParams>,
+    ) -> Result<CallToolResult, McpError> {
+        self.distill_impl(params).await
+    }
+
+    #[tool(
+        description = "List unconfirmed memories pending review. Use when the user wants to audit what got captured before it becomes authoritative — typical phrases: 'review pending', 'show unconfirmed', 'what got captured'. Pair with `confirm_memory` to accept and `forget` to reject.",
+        annotations(title = "List pending", read_only_hint = true, open_world_hint = false)
+    )]
+    async fn list_pending(
+        &self,
+        Parameters(params): Parameters<ListPendingParams>,
+    ) -> Result<CallToolResult, McpError> {
+        self.list_pending_impl(params).await
+    }
+
+    #[tool(
+        description = "Confirm a pending memory by source_id. Use during review to accept a memory the agent captured. The user typically picks from a `list_pending` result. To reject instead, call `forget` with the same `memory_id`.",
+        annotations(
+            title = "Confirm memory",
+            read_only_hint = false,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
+    )]
+    async fn confirm_memory(
+        &self,
+        Parameters(params): Parameters<ConfirmMemoryParams>,
+    ) -> Result<CallToolResult, McpError> {
+        self.confirm_memory_impl(&params.memory_id).await
+    }
+
+    // --- Knowledge graph CRUD ---
+
+    #[tool(
+        description = "Create an entity in the knowledge graph. Use when the user names a person, project, tool, or place that isn't yet linked, or when you need a stable id to anchor memories or pages to. The daemon's post-ingest enrichment usually creates entities automatically when a model or Anthropic key is configured — call this explicitly when distill cycles are off or you need the id back synchronously.",
+        annotations(
+            title = "Create entity",
+            read_only_hint = false,
+            destructive_hint = false,
+            idempotent_hint = false,
+            open_world_hint = false
+        )
+    )]
+    async fn create_entity(
+        &self,
+        Parameters(params): Parameters<CreateEntityParams>,
+    ) -> Result<CallToolResult, McpError> {
+        self.create_entity_impl(params).await
+    }
+
+    #[tool(
+        description = "Create a directed relation between two entities in the knowledge graph. Use sparingly — most relations come out of the daemon's enrichment when a model or Anthropic key is configured. Call this explicitly to record a relation the user articulated that the daemon couldn't infer, or when distill cycles are off.",
+        annotations(
+            title = "Create relation",
+            read_only_hint = false,
+            destructive_hint = false,
+            idempotent_hint = false,
+            open_world_hint = false
+        )
+    )]
+    async fn create_relation(
+        &self,
+        Parameters(params): Parameters<CreateRelationParams>,
+    ) -> Result<CallToolResult, McpError> {
+        self.create_relation_impl(params).await
+    }
+
+    #[tool(
+        description = "Attach a factual observation to an existing entity in the knowledge graph. Use sparingly — most observations come from daemon extraction. Call explicitly when the user articulates a fact about a person/project/tool that the daemon couldn't infer, or when distill cycles are off. Requires the entity_id; resolve via search_entities first if you only have the name. Returns 422 if entity does not exist.",
+        annotations(
+            title = "Create observation",
+            read_only_hint = false,
+            destructive_hint = false,
+            idempotent_hint = false,
+            open_world_hint = false
+        )
+    )]
+    async fn create_observation(
+        &self,
+        Parameters(params): Parameters<CreateObservationParams>,
+    ) -> Result<CallToolResult, McpError> {
+        self.create_observation_impl(params).await
+    }
+
+    #[tool(
+        description = "Confirm (or unconfirm) an entity in the knowledge graph — flips its stability flag from tentative to durable. Call when the user explicitly affirms or revokes an extracted entity (\"yes that's right\", \"no that's wrong\"), or when you have high confidence after seeing the entity reused across multiple contexts. Unconfirmed entities may be pruned by distill cycles; confirmed ones persist. Defaults confirmed=true if omitted. Do NOT call for every extracted entity — most should stay unconfirmed and let distill cycles decide. Not available over remote HTTP MCP transport (local stdio only).",
+        annotations(
+            title = "Confirm entity",
+            read_only_hint = false,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
+    )]
+    async fn confirm_entity(
+        &self,
+        Parameters(params): Parameters<ConfirmEntityParams>,
+    ) -> Result<CallToolResult, McpError> {
+        self.confirm_entity_impl(params).await
+    }
+
+    #[tool(
+        description = "Update the content of an existing observation. Use when the user corrects a fact (\"actually X not Y\") or when you find that a prior observation needs refinement based on new context. Only the content text changes — the entity attachment stays the same. To move an observation to a different entity, delete and recreate. Prefer this over delete+recreate when the entity attachment is correct, so history is preserved. Not available over remote HTTP MCP transport (local stdio only).",
+        annotations(
+            title = "Update observation",
+            read_only_hint = false,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
+    )]
+    async fn update_observation(
+        &self,
+        Parameters(params): Parameters<UpdateObservationParams>,
+    ) -> Result<CallToolResult, McpError> {
+        self.update_observation_impl(params).await
+    }
+
+    #[tool(
+        description = "Confirm (or unconfirm) an observation — flips its stability flag from tentative to durable. Call when the user explicitly affirms a specific fact attached to an entity (\"yes Alice does prefer tabs\"), or when you observe the same fact restated across multiple sources. Unconfirmed observations may be pruned by distill cycles; confirmed ones persist. Defaults confirmed=true if omitted. Do NOT call for every observation you create — let distill cycles promote them when warranted. Not available over remote HTTP MCP transport (local stdio only).",
+        annotations(
+            title = "Confirm observation",
+            read_only_hint = false,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
+    )]
+    async fn confirm_observation(
+        &self,
+        Parameters(params): Parameters<ConfirmObservationParams>,
+    ) -> Result<CallToolResult, McpError> {
+        self.confirm_observation_impl(params).await
+    }
+
+    #[tool(
+        description = "Delete an observation by ID. Destructive and cannot be undone — for corrections, prefer update_observation. Not available over remote HTTP MCP transport (local stdio only).",
+        annotations(
+            title = "Delete observation",
+            read_only_hint = false,
+            destructive_hint = true,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
+    )]
+    async fn delete_observation(
+        &self,
+        Parameters(params): Parameters<DeleteObservationParams>,
+    ) -> Result<CallToolResult, McpError> {
+        self.delete_observation_impl(params).await
+    }
+
+    #[tool(
+        description = "Create a distilled wiki page from a memory cluster. The /distill flow uses this to post agent-synthesized pages back to the daemon. Provide a markdown body with [[wikilinks]]. Do not cite source ids inline; pass them in source_memory_ids and the daemon attaches provenance automatically. The daemon writes both the DB row and the on-disk .origin/pages/<slug>.md projection atomically.",
+        annotations(
+            title = "Create page",
+            read_only_hint = false,
+            destructive_hint = false,
+            idempotent_hint = false,
+            open_world_hint = false
+        )
+    )]
+    async fn create_page(
+        &self,
+        Parameters(params): Parameters<CreatePageParams>,
+    ) -> Result<CallToolResult, McpError> {
+        self.create_page_impl(params).await
+    }
+
+    #[tool(
+        description = "Refresh a stale page in place. Replaces content + source_memory_ids + optional summary, clears the daemon's stale_reason in the same call. Preserves page_id, created_at, and bumps version monotonically — external [[wikilinks]] keep working. Use this on entries in the /distill response's `stale_pages` block instead of delete_page + create_page (which churned ids and lost version history). Not available over remote HTTP MCP transport (local stdio only).",
+        annotations(
+            title = "Refresh page",
+            read_only_hint = false,
+            destructive_hint = false,
+            idempotent_hint = false,
+            open_world_hint = false
+        )
+    )]
+    async fn update_page(
+        &self,
+        Parameters(params): Parameters<UpdatePageParams>,
+    ) -> Result<CallToolResult, McpError> {
+        self.update_page_impl(params).await
+    }
+
+    #[tool(
+        description = "Delete a page by id. Destructive — removes both the DB row and the on-disk md projection. Use during a /distill refresh to drop a stale page before creating its replacement, or when the user explicitly asks to remove a page. Pages without sources can be re-derived by running /distill again on the same scope.",
+        annotations(
+            title = "Delete page",
+            read_only_hint = false,
+            destructive_hint = true,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
+    )]
+    async fn delete_page(
+        &self,
+        Parameters(params): Parameters<DeletePageParams>,
+    ) -> Result<CallToolResult, McpError> {
+        self.delete_page_impl(&params.page_id).await
+    }
+
+    #[tool(
+        description = "Fetch a page by id. Returns the full page row including title, summary, body, source memory ids, and metadata. The /read skill uses this for the preview block — agents reading a page should call this rather than guessing the on-disk path, because the md slug is daemon-controlled.",
+        annotations(title = "Get page", read_only_hint = true, open_world_hint = false)
+    )]
+    async fn get_page(
+        &self,
+        Parameters(params): Parameters<GetPageParams>,
+    ) -> Result<CallToolResult, McpError> {
+        self.get_page_impl(&params.page_id).await
+    }
+
+    #[tool(
+        description = "Fetch the wikilink graph centered on one page: `outbound` (labels parsed out of this page's body, with target_page_id set when matched; NULL means broken/orphan) and `inbound` (active pages whose body cites this title). Use this for the /read preview to surface 'N inbound, M broken' without parsing the full body.",
+        annotations(
+            title = "Get page links",
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
+    )]
+    async fn get_page_links(
+        &self,
+        Parameters(params): Parameters<GetPageLinksParams>,
+    ) -> Result<CallToolResult, McpError> {
+        self.get_page_links_impl(&params.page_id).await
+    }
+
+    #[tool(
+        description = "Fetch the source memories of a page — the memory ids the page was distilled from, each enriched with the memory's title, content, type, and space. The /distill skill uses this on the stale-page refresh path: get_page returns ids, get_page_sources returns the full memory content needed to re-synthesize prose.",
+        annotations(
+            title = "Get page sources",
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
+    )]
+    async fn get_page_sources(
+        &self,
+        Parameters(params): Parameters<GetPageSourcesParams>,
+    ) -> Result<CallToolResult, McpError> {
+        self.get_page_sources_impl(&params.page_id).await
+    }
+
+    #[tool(
+        description = "Fetch the supersede chain for a memory — all prior versions ordered by depth (0 = current, 1 = immediate predecessor, …). Use after recall when you need to understand how a memory evolved or verify that a correction was recorded.",
+        annotations(
+            title = "Get memory revisions",
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
+    )]
+    async fn get_memory_revisions(
+        &self,
+        Parameters(params): Parameters<GetMemoryRevisionsParams>,
+    ) -> Result<CallToolResult, McpError> {
+        self.get_memory_revisions_impl(&params.memory_id).await
+    }
+
+    #[tool(
+        description = "Fetch the version changelog for a page — all distillation rounds ordered newest-first. Use after get_page when you need to understand what changed between versions or which source memories triggered a re-distill.",
+        annotations(
+            title = "Get page revisions",
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
+    )]
+    async fn get_page_revisions(
+        &self,
+        Parameters(params): Parameters<GetPageRevisionsParams>,
+    ) -> Result<CallToolResult, McpError> {
+        self.get_page_revisions_impl(&params.page_id).await
+    }
+
+    #[tool(
+        description = "List memories filtered by type and/or space. Returns the raw memory rows — useful for bulk review, type audits, or feeding a downstream tool. For semantic search use recall; for orientation use context. This is the listing path: predictable order, no relevance ranking.",
+        annotations(
+            title = "List memories",
+            read_only_hint = true,
+            open_world_hint = false
+        )
+    )]
+    async fn list_memories(
+        &self,
+        Parameters(params): Parameters<ListMemoriesParams>,
+    ) -> Result<CallToolResult, McpError> {
+        self.list_memories_impl(params).await
+    }
+
+    #[tool(
+        description = "Search pages by query. Use to resolve a page title to its id before calling get_page (set `limit: 1` for that), or to browse pages on a topic. Returns matching pages with id, title, and summary. Optional `page_type` filter narrows to one type (e.g. `recap`, `decision`). For listing recent activity instead, use list_pages_recent.",
+        annotations(title = "Search pages", read_only_hint = true, open_world_hint = false)
+    )]
+    async fn search_pages(
+        &self,
+        Parameters(params): Parameters<SearchPagesParams>,
+    ) -> Result<CallToolResult, McpError> {
+        self.search_pages_impl(params).await
+    }
+
+    #[tool(
+        description = "List recently created or updated pages. Use when the user asks 'what's new', 'recent pages', 'what got synthesized lately'. Returns top-N pages by activity timestamp with optional badge deltas (`since_ms` scopes the badge window). For a topic search instead, use search_pages.",
+        annotations(title = "Recent pages", read_only_hint = true, open_world_hint = false)
+    )]
+    async fn list_pages_recent(
+        &self,
+        Parameters(params): Parameters<ListPagesRecentParams>,
+    ) -> Result<CallToolResult, McpError> {
+        self.list_pages_recent_impl(params).await
+    }
+
+    #[tool(
+        description = "List all spaces in this Origin instance. Use when the user asks 'what spaces exist', 'list my topics', or to discover space names before passing one as a filter to search_memory / list_nurture. Returns each space's name, description, memory_count, entity_count, and timestamps.",
+        annotations(title = "List spaces", read_only_hint = true, open_world_hint = false)
+    )]
+    async fn list_spaces(
+        &self,
+        Parameters(params): Parameters<ListSpacesParams>,
+    ) -> Result<CallToolResult, McpError> {
+        self.list_spaces_impl(params).await
+    }
+
+    // --- Review proposal tools ---
+
+    #[tool(
+        description = "List pending review proposals from Origin's daemon-side queue. Use when the user wants to audit what the daemon has queued for review — phrases like 'pending proposals', 'what's queued', 'check review queue'. Returns proposals with action (entity_merge/relation_conflict/detect_contradiction/suggest_entity/dedup_merge), source ids, confidence, and typed payload. Filter by action with optional `action` param. Pair with `reject_refinement` to dismiss noise.",
+        annotations(
+            title = "List review proposals",
+            read_only_hint = true,
+            open_world_hint = false
+        )
+    )]
+    async fn list_refinements(
+        &self,
+        Parameters(params): Parameters<ListRefinementsParams>,
+    ) -> Result<CallToolResult, McpError> {
+        self.list_refinements_impl(params).await
+    }
+
+    #[tool(
+        description = "Reject (dismiss) a review proposal by id. Use when reviewing the daemon queue and the user decides a proposal is wrong or noise. Marks the queue row dismissed and logs the agent activity. Idempotent: already-dismissed proposals return 422. Note: there is no accept verb yet; keeping a proposal is a no-op (it stays queued). Not available over remote HTTP MCP transport (local stdio only).",
+        annotations(
+            title = "Reject review proposal",
+            read_only_hint = false,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
+    )]
+    async fn reject_refinement(
+        &self,
+        Parameters(params): Parameters<RejectRefinementParams>,
+    ) -> Result<CallToolResult, McpError> {
+        self.reject_refinement_impl(params).await
+    }
+
+    #[tool(
+        description = "Apply a review queue proposal using sensible defaults. \
+            entity_merge: existing entity wins as canonical. \
+            relation_conflict: new relation supersedes. \
+            detect_contradiction: previously-stored memory flagged for revision. \
+            Returns 422 for suggest_entity (no producer) and dedup_merge (deprecated). \
+            Not available over remote HTTP MCP transport (local stdio only).",
+        annotations(
+            title = "Accept review proposal",
+            read_only_hint = false,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
+    )]
+    async fn accept_refinement(
+        &self,
+        Parameters(params): Parameters<AcceptRefinementParams>,
+    ) -> Result<CallToolResult, McpError> {
+        self.accept_refinement_impl(params).await
+    }
+
+    // --- Curation read tools ---
+
+    #[tool(
+        description = "List nurture cards: memories flagged for human attention because they are unconfirmed, low-confidence, or have been queued for review by the daemon. Use when the user wants to audit what needs review: phrases like 'what needs my attention', 'unconfirmed memories', 'nurture queue'. Returns memory items with metadata. Optional `limit` caps results (default 50, max 500). Optional `space` restricts to one topic space. Distinct from `list_pending` (which lists all unconfirmed captures) and `list_refinements` (which lists daemon-generated merge/conflict proposals).",
+        annotations(
+            title = "List nurture cards",
+            read_only_hint = true,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
+    )]
+    async fn list_nurture(
+        &self,
+        Parameters(params): Parameters<ListNurtureParams>,
+    ) -> Result<CallToolResult, McpError> {
+        self.list_nurture_impl(params).await
+    }
+
+    #[tool(
+        description = "List entity-suggestion proposals from the daemon review queue \
+                       (action='suggest_entity'). Use when the user asks 'what entities \
+                       does the daemon want to create' or wants to triage merge-vs-create \
+                       decisions. Returns id, proposed entity_name, source_ids, confidence. \
+                       Pair with PR2's approve/dismiss verbs once they land.",
+        annotations(
+            title = "List entity suggestions",
+            read_only_hint = true,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
+    )]
+    async fn list_entity_suggestions(
+        &self,
+        Parameters(params): Parameters<ListEntitySuggestionsParams>,
+    ) -> Result<CallToolResult, McpError> {
+        self.list_entity_suggestions_impl(params).await
+    }
+
+    #[tool(
+        description = "Accept a pending memory revision. Replaces the target memory's content \
+                       with the proposed revision content and removes the revision row from the \
+                       pending list. Returns the consumed revision id. Returns an error if no \
+                       pending revision exists for that target. Not available over remote HTTP MCP transport (local stdio only).",
+        annotations(
+            title = "Accept revision",
+            read_only_hint = false,
+            destructive_hint = false,
+            idempotent_hint = false,
+            open_world_hint = false
+        )
+    )]
+    async fn accept_revision(
+        &self,
+        Parameters(req): Parameters<AcceptRevisionRequest>,
+    ) -> Result<CallToolResult, McpError> {
+        self.accept_revision_impl(req).await
+    }
+
+    #[tool(
+        description = "Dismiss a pending memory revision. Deletes the revision row; the original \
+                       memory is unchanged. Returns an error if no pending revision exists for \
+                       that target. Not available over remote HTTP MCP transport (local stdio only).",
+        annotations(
+            title = "Dismiss revision",
+            read_only_hint = false,
+            destructive_hint = false,
+            idempotent_hint = false,
+            open_world_hint = false
+        )
+    )]
+    async fn dismiss_revision(
+        &self,
+        Parameters(req): Parameters<DismissRevisionRequest>,
+    ) -> Result<CallToolResult, McpError> {
+        self.dismiss_revision_impl(req).await
+    }
+
+    #[tool(
+        description = "Dismiss all awaiting-review contradiction flags for a memory. Idempotent. \
+                       Returns wrote:true even if no rows matched. Not available over remote HTTP MCP transport (local stdio only).",
+        annotations(
+            title = "Dismiss contradiction",
+            read_only_hint = false,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
+    )]
+    async fn dismiss_contradiction(
+        &self,
+        Parameters(req): Parameters<DismissContradictionRequest>,
+    ) -> Result<CallToolResult, McpError> {
+        self.dismiss_contradiction_impl(req).await
+    }
+
+    #[tool(
+        description = "List in-flight chat-history imports awaiting processing or completion. \
+                       Use when the user asks 'what imports are running', 'is my Claude.ai \
+                       export done', or to surface import progress. Returns id, vendor, \
+                       stage, source path, processed/total conversation counts.",
+        annotations(
+            title = "List pending imports",
+            read_only_hint = true,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
+    )]
+    async fn list_pending_imports(
+        &self,
+        Parameters(params): Parameters<ListPendingImportsParams>,
+    ) -> Result<CallToolResult, McpError> {
+        self.list_pending_imports_impl(params).await
+    }
+
+    #[tool(
+        description = "List quality-gate rejections: memories the daemon discarded before storing, due to low quality, duplication, or other filters. Use when the user asks 'what did Origin reject', 'what was filtered out', or to diagnose why captures are not appearing. Returns rejection records with reason code, detail, and similarity info. Optional `limit` caps results (default 50, max 500). Optional `reason` filters by rejection reason code (e.g. 'duplicate', 'low_quality').",
+        annotations(
+            title = "List rejections",
+            read_only_hint = true,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
+    )]
+    async fn list_rejections(
+        &self,
+        Parameters(params): Parameters<ListRejectionsParams>,
+    ) -> Result<CallToolResult, McpError> {
+        self.list_rejections_impl(params).await
+    }
+
+    #[tool(
+        description = "List memories awaiting human accept/dismiss because a newer version \
+                       was proposed (Protected tier supersede). Use when the user asks \
+                       'what revisions are pending', 'show me memories awaiting approval'. \
+                       Each item carries target_source_id (the memory being revised: pass \
+                       THIS to accept_pending_revision in PR2) and revision_content for \
+                       display. Optional `limit` caps results (default 50, max 500).",
+        annotations(
+            title = "List pending revisions",
+            read_only_hint = true,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
+    )]
+    async fn list_pending_revisions(
+        &self,
+        Parameters(params): Parameters<ListPendingRevisionsParams>,
+    ) -> Result<CallToolResult, McpError> {
+        self.list_pending_revisions_impl(params).await
+    }
+
+    #[tool(
+        description = "List wiki-link labels that appear in page bodies but have no matching \
+                       page title. Use when the user asks 'what links are broken', 'orphan links', \
+                       or wants to find knowledge gaps. Returns label names and reference counts. \
+                       Optional `min_count` filters to labels referenced at least N times \
+                       (default 1, minimum 1).",
+        annotations(
+            title = "List orphan links",
+            read_only_hint = true,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
+    )]
+    async fn list_orphan_links(
+        &self,
+        Parameters(params): Parameters<ListOrphanLinksParams>,
+    ) -> Result<CallToolResult, McpError> {
+        self.list_orphan_links_impl(params).await
+    }
+}
+
+// ===== Schema gating =====
+
+/// Return a copy of `tool` with the `space` field removed from its
+/// `inputSchema.properties` (and from `required` if present).
+///
+/// Called when `ORIGIN_SPACE` is locked so the model never sees the field.
+/// The runtime guard in `effective_space()` is the load-bearing safety net;
+/// this is UX polish on top.
+fn strip_space_from_tool_schema(mut tool: Tool) -> Tool {
+    let mut schema = (*tool.input_schema).clone();
+    if let Some(props) = schema.get_mut("properties").and_then(|v| v.as_object_mut()) {
+        props.remove("space");
+    }
+    if let Some(required) = schema.get_mut("required").and_then(|v| v.as_array_mut()) {
+        required.retain(|v| v.as_str() != Some("space"));
+    }
+    tool.input_schema = std::sync::Arc::new(schema);
+    tool
+}
+
+// ===== ServerHandler =====
+
+#[tool_handler]
+impl ServerHandler for WenlanMcpServer {
+    async fn list_tools(
+        &self,
+        _request: Option<PaginatedRequestParams>,
+        _context: RequestContext<RoleServer>,
+    ) -> Result<ListToolsResult, McpError> {
+        let tools = Self::tool_router().list_all();
+        let tools = if crate::lock_state::is_locked() {
+            tools
+                .into_iter()
+                .map(strip_space_from_tool_schema)
+                .collect()
+        } else {
+            tools
+        };
+        Ok(ListToolsResult {
+            tools,
+            meta: None,
+            next_cursor: None,
+        })
+    }
+
+    async fn on_initialized(&self, context: NotificationContext<RoleServer>) {
+        // Capture client name from MCP initialize handshake
+        if let Some(client_info) = context.peer.peer_info() {
+            let name = &client_info.client_info.name;
+            if !name.is_empty() {
+                if let Ok(mut guard) = self.client_name.lock() {
+                    tracing::info!("MCP client identified: {}", name);
+                    *guard = Some(name.clone());
+                }
+            }
+        }
+    }
+
+    fn get_info(&self) -> InitializeResult {
+        InitializeResult::new(
+            ServerCapabilities::builder()
+                .enable_tools()
+                .build(),
+        )
+        .with_server_info(
+            Implementation::new("wenlan-mcp", env!("CARGO_PKG_VERSION"))
+        )
+        .with_instructions(
+            "Origin is your personal memory layer — a local knowledge base that persists across sessions and tools.\n\
+             Think of yourself as a curator, not a logger. Store insights, not conversation artifacts.\n\n\
+             Origin is cumulative: each memory you store can be recalled, linked, and distilled into knowledge over time. \
+             It's also shared across all the user's tools: what you write, other agents (Claude Desktop, Claude Code, \
+             ChatGPT, Cursor, etc.) will read later. Write for any future reader, not just this conversation.\n\n\
+             FIRST THING EVERY SESSION: Call context to load the user's identity, preferences, goals, and\n\
+             topic-relevant memories. This is how you know who you're talking to. Use the result to model how the \
+             user thinks — their preferences, corrections, and past decisions tell you how they want to be helped, \
+             not just what they already know.\n\n\
+             STORE PROACTIVELY — don't wait for the user to ask.\n\
+             - The user states a preference (\"I use X because...\", \"I prefer Y over Z\")\n\
+             - The user makes a decision (\"going with approach A\", \"switching to B\")\n\
+             - The user corrects you or prior info (\"actually, it's C, not D\") — store the correction so it sticks\n\
+             - The user shares a durable fact about themselves, their work, or people/projects/tools they care about — \
+               anchor it to the entity\n\n\
+             If the user asks explicitly (\"remember this\", \"save this\", \"don't forget\"), that's a floor — you \
+             should have already stored it.\n\n\
+             WHEN NOT TO STORE:\n\
+             - Conversation filler (\"ok\", \"thanks\", \"let's move on\")\n\
+             - Things the user can trivially re-derive (file paths, recent git history)\n\
+             - Anything already stored — recall first if unsure\n\
+             - Tool output or command results (file contents, git history, build logs) — these are derivable\n\
+             - General world facts or documentation that aren't personal to this user (e.g., \"Rust has a borrow \
+               checker\", \"PostgreSQL supports JSONB\") — those are not memory material.\n\
+             - Your own inferences about the user that they didn't express. Store what they said; infer from that \
+               when responding.\n\n\
+             CONTENT QUALITY — this is where you make the biggest difference:\n\
+             - Specific beats vague: \"prefers Rust for CLI tools because of compile-time safety\" > \"likes Rust\"\n\
+             - Include the WHY: the backend can classify \"dark mode\" as a preference, but only you know\n\
+               \"switched to dark mode because of migraines from bright screens\"\n\
+             - Name the entities: mention people, projects, tools by name — this powers the knowledge graph\n\
+             - Atomic: one idea per memory — \"prefers TDD\" and \"uses pytest\" should be two memories, not one\n\
+             - Declarative, not narrative: \"User prefers X because Y\" — not \"User said today they prefer X\". \
+               Memories outlive the conversation that produced them.\n\n\
+             MEMORY TYPES — omit and trust the backend.\n\n\
+             By default, do NOT set memory_type. The backend auto-classifies into identity / preference / \
+             decision / lesson / gotcha / fact with more context than you have. Agents that over-specify \
+             types tend to pick wrong.\n\n\
+             Opt-in specification:\n\
+             - \"profile\"   — you're sure it's about the user (identity / preference)\n\
+             - \"knowledge\" — you're sure it's about the world (decision / lesson / gotcha / fact)\n\
+             - Precise type — only if you're confident and the distinction matters.\n\n\
+             EXCEPTION — decisions carry structured fields (alternatives considered, reversibility, domain) \
+             that power the Decision Log view. Set memory_type=\"decision\" explicitly ONLY when the user \
+             articulated alternatives weighed AND the reasoning for the choice. A bare \"I'm switching to Cursor\" \
+             is just a preference change — omit the type. \"Switching to Cursor over VSCode because of better \
+             Claude integration, and we can always go back\" — that's a decision.\n\n\
+             RECALL vs CONTEXT:\n\
+             - context: broad orientation, session start, topic shifts, \"catch me up\"\n\
+             - recall: specific lookup (\"what's Alice's role?\", \"database preferences\", \"our auth decision\")\n\n\
+             The backend handles classification, entity extraction, structured fields, quality scoring,\n\
+             and dedup — you don't need to replicate that logic. Focus on what only you know:\n\
+             the conversational context, why something matters, and what the user actually cares about."
+        )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::client::WenlanClient;
+    use crate::types::{
+        ChatContextRequest, ChatContextResponse, SearchMemoryRequest, SearchResult,
+        StoreMemoryRequest, StoreMemoryResponse,
+    };
+
+    fn make_server(
+        transport: TransportMode,
+        agent_name: &str,
+        user_id: Option<&str>,
+    ) -> WenlanMcpServer {
+        let client = WenlanClient::new("http://127.0.0.1:19999".into());
+        WenlanMcpServer::new(
+            client,
+            transport,
+            agent_name.into(),
+            user_id.map(String::from),
+        )
+    }
+
+    // ===== Transport resolution (existing) =====
+
+    #[test]
+    fn test_http_mode_prefers_param_over_agent_name() {
+        let server = make_server(TransportMode::Http, "claude.ai", None);
+        // Explicit param has highest priority
+        let result = server.resolve_source_agent(Some("user-provided".into()));
+        assert_eq!(result, Some("user-provided".into()));
+    }
+
+    #[test]
+    fn test_http_mode_sets_source_agent_when_none() {
+        let server = make_server(TransportMode::Http, "chatgpt", None);
+        let result = server.resolve_source_agent(None);
+        assert_eq!(result, Some("chatgpt".into()));
+    }
+
+    #[test]
+    fn test_stdio_mode_passes_through_source_agent() {
+        let server = make_server(TransportMode::Stdio, "ignored", None);
+        let result = server.resolve_source_agent(Some("user-provided".into()));
+        assert_eq!(result, Some("user-provided".into()));
+    }
+
+    #[test]
+    fn test_stdio_mode_falls_back_to_agent_name() {
+        let server = make_server(TransportMode::Stdio, "fallback", None);
+        // No param, no client_name → falls back to configured agent_name
+        let result = server.resolve_source_agent(None);
+        assert_eq!(result, Some("fallback".into()));
+    }
+
+    #[test]
+    fn test_http_mode_resolves_configured_user_id_for_local_use() {
+        let server = make_server(TransportMode::Http, "agent", Some("lucian"));
+        let result = server.resolve_user_id(None);
+        assert_eq!(result, Some("lucian".into()));
+    }
+
+    #[test]
+    fn test_transport_mode_equality() {
+        assert_eq!(TransportMode::Stdio, TransportMode::Stdio);
+        assert_eq!(TransportMode::Http, TransportMode::Http);
+        assert_ne!(TransportMode::Stdio, TransportMode::Http);
+    }
+
+    // ===== Param deserialization: CaptureParams =====
+
+    #[test]
+    fn test_capture_params_minimal() {
+        let json = r#"{"content": "Lucian prefers dark mode"}"#;
+        let params: CaptureParams = serde_json::from_str(json).unwrap();
+        assert_eq!(params.content, "Lucian prefers dark mode");
+        assert!(params.memory_type.is_none());
+        assert!(params.space.is_none());
+        assert!(params.entity.is_none());
+        assert!(params.confidence.is_none());
+        assert!(params.supersedes.is_none());
+    }
+
+    #[test]
+    fn test_capture_params_full() {
+        let json = r#"{
+            "content": "We chose PostgreSQL over MongoDB",
+            "memory_type": "decision",
+            "space": "origin",
+            "entity": "PostgreSQL",
+            "confidence": 0.95,
+            "supersedes": "mem_abc123"
+        }"#;
+        let params: CaptureParams = serde_json::from_str(json).unwrap();
+        assert_eq!(params.content, "We chose PostgreSQL over MongoDB");
+        assert_eq!(params.memory_type.as_deref(), Some("decision"));
+        assert_eq!(params.space.as_deref(), Some("origin"));
+        assert_eq!(params.entity.as_deref(), Some("PostgreSQL"));
+        assert_eq!(params.confidence, Some(0.95));
+        assert_eq!(params.supersedes.as_deref(), Some("mem_abc123"));
+    }
+
+    #[test]
+    fn test_capture_params_missing_content_fails() {
+        let json = r#"{"memory_type": "fact"}"#;
+        let result = serde_json::from_str::<CaptureParams>(json);
+        assert!(result.is_err());
+    }
+
+    // ===== Param deserialization: RecallParams =====
+
+    #[test]
+    fn test_recall_params_minimal() {
+        let json = r#"{"query": "what does Alice work on?"}"#;
+        let params: RecallParams = serde_json::from_str(json).unwrap();
+        assert_eq!(params.query, "what does Alice work on?");
+        assert!(params.limit.is_none());
+        assert!(
+            params.rerank.is_none(),
+            "rerank omitted must remain None so the daemon receives default false"
+        );
+    }
+
+    #[test]
+    fn test_recall_params_full() {
+        let json = r#"{
+            "query": "database preferences",
+            "limit": 5,
+            "memory_type": "decision",
+            "space": "origin",
+            "rerank": true
+        }"#;
+        let params: RecallParams = serde_json::from_str(json).unwrap();
+        assert_eq!(params.query, "database preferences");
+        assert_eq!(params.limit, Some(5));
+        assert_eq!(params.memory_type.as_deref(), Some("decision"));
+        assert_eq!(params.space.as_deref(), Some("origin"));
+        assert_eq!(params.rerank, Some(true));
+    }
+
+    #[test]
+    fn test_recall_params_limit_as_string() {
+        let json = r#"{"query": "test", "limit": "10"}"#;
+        let params: RecallParams = serde_json::from_str(json).unwrap();
+        assert_eq!(params.limit, Some(10));
+    }
+
+    #[test]
+    fn test_recall_params_missing_query_fails() {
+        let json = r#"{"limit": 5}"#;
+        let result = serde_json::from_str::<RecallParams>(json);
+        assert!(result.is_err());
+    }
+
+    // ===== Param deserialization: ContextParams =====
+
+    #[test]
+    fn test_context_params_empty() {
+        let json = r#"{}"#;
+        let params: ContextParams = serde_json::from_str(json).unwrap();
+        assert!(params.topic.is_none());
+        assert!(params.limit.is_none());
+        assert!(params.space.is_none());
+    }
+
+    #[test]
+    fn test_context_params_full() {
+        let json = r#"{"topic": "project Origin architecture", "limit": 30, "space": "work"}"#;
+        let params: ContextParams = serde_json::from_str(json).unwrap();
+        assert_eq!(params.topic.as_deref(), Some("project Origin architecture"));
+        assert_eq!(params.limit, Some(30));
+        assert_eq!(params.space.as_deref(), Some("work"));
+    }
+
+    #[test]
+    fn test_context_params_limit_as_string() {
+        let json = r#"{"limit": "20"}"#;
+        let params: ContextParams = serde_json::from_str(json).unwrap();
+        assert_eq!(params.limit, Some(20));
+    }
+
+    #[test]
+    fn legacy_domain_alias_still_deserializes() {
+        // Cached MCP clients (pre-0.7.0 schema) send `"domain"` instead of `"space"`.
+        // The serde alias must accept legacy JSON so they don't break for the one-release window.
+        let json = r#"{"topic": "project work", "domain": "work"}"#;
+        let params: ContextParams =
+            serde_json::from_str(json).expect("legacy 'domain' key must deserialize");
+        assert_eq!(
+            params.space.as_deref(),
+            Some("work"),
+            "alias must map domain → space"
+        );
+    }
+
+    #[test]
+    fn store_memory_request_serialization_excludes_user_id() {
+        let req = StoreMemoryRequest {
+            content: "test content".into(),
+            memory_type: None,
+            space: None,
+            source_agent: Some("test-agent".into()),
+            title: None,
+            confidence: None,
+            supersedes: None,
+            entity: None,
+            entity_id: None,
+            structured_fields: None,
+            retrieval_cue: None,
+        };
+        let json = serde_json::to_value(&req).unwrap();
+        let obj = json.as_object().unwrap();
+        assert!(
+            !obj.contains_key("user_id"),
+            "user_id must not be on the wire; got: {:?}",
+            obj.keys().collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn capture_success_message_is_terse() {
+        let resp = StoreMemoryResponse {
+            source_id: "mem_abc".into(),
+            chunks_created: 3,
+            memory_type: "fact".into(),
+            entity_id: Some("ent_xyz".into()),
+            quality: Some("high".into()),
+            warnings: vec![],
+            extraction_method: "llm".into(),
+            enrichment: String::new(),
+            hint: String::new(),
+            triggered_revisions: vec![],
+            auto_superseded: vec![],
+        };
+        let msg = format_capture_success(&resp);
+        assert_eq!(msg, "Stored mem_abc");
+        assert!(!msg.contains("chunks"));
+        assert!(!msg.contains("quality"));
+        assert!(!msg.contains("entity"));
+    }
+
+    #[test]
+    fn capture_success_message_surfaces_warnings() {
+        let resp = StoreMemoryResponse {
+            source_id: "mem_abc".into(),
+            chunks_created: 1,
+            memory_type: "decision".into(),
+            entity_id: None,
+            quality: None,
+            warnings: vec!["decision memory missing required 'claim' field".into()],
+            extraction_method: "agent".into(),
+            enrichment: String::new(),
+            hint: String::new(),
+            triggered_revisions: vec![],
+            auto_superseded: vec![],
+        };
+        let msg = format_capture_success(&resp);
+        assert!(msg.starts_with("Stored mem_abc"));
+        assert!(msg.contains("Warnings:"));
+        assert!(msg.contains("decision memory missing required 'claim' field"));
+    }
+
+    #[test]
+    fn format_capture_success_surfaces_triggered_revisions() {
+        let resp = StoreMemoryResponse {
+            source_id: "mem_new".into(),
+            chunks_created: 1,
+            memory_type: "fact".into(),
+            entity_id: None,
+            quality: None,
+            warnings: vec![],
+            extraction_method: "agent".into(),
+            enrichment: String::new(),
+            hint: String::new(),
+            triggered_revisions: vec!["mem_protected_target".to_string()],
+            auto_superseded: vec![],
+        };
+        let out = format_capture_success(&resp);
+        assert!(out.contains("Triggered revisions"));
+        assert!(out.contains("mem_protected_target"));
+        assert!(out.contains("accept_revision"));
+        assert!(out.contains("dismiss_revision"));
+    }
+
+    #[test]
+    fn format_capture_success_omits_section_when_empty() {
+        let resp = StoreMemoryResponse {
+            source_id: "mem_new".into(),
+            chunks_created: 1,
+            memory_type: "fact".into(),
+            entity_id: None,
+            quality: None,
+            warnings: vec![],
+            extraction_method: "agent".into(),
+            enrichment: String::new(),
+            hint: String::new(),
+            triggered_revisions: vec![],
+            auto_superseded: vec![],
+        };
+        let out = format_capture_success(&resp);
+        assert!(!out.contains("Triggered revisions"));
+    }
+
+    #[test]
+    fn format_capture_success_surfaces_auto_superseded() {
+        let resp = StoreMemoryResponse {
+            source_id: "mem_new".into(),
+            chunks_created: 1,
+            memory_type: "fact".into(),
+            entity_id: None,
+            quality: None,
+            warnings: vec![],
+            extraction_method: "agent".into(),
+            enrichment: String::new(),
+            hint: String::new(),
+            triggered_revisions: vec![],
+            auto_superseded: vec!["mem_old_xyz".to_string()],
+        };
+        let out = format_capture_success(&resp);
+        assert!(out.contains("Auto-superseded"));
+        assert!(out.contains("mem_old_xyz"));
+        assert!(out.contains("no action needed"));
+    }
+
+    #[test]
+    fn format_capture_success_omits_auto_superseded_when_empty() {
+        let resp = StoreMemoryResponse {
+            source_id: "mem_new".into(),
+            chunks_created: 1,
+            memory_type: "fact".into(),
+            entity_id: None,
+            quality: None,
+            warnings: vec![],
+            extraction_method: "agent".into(),
+            enrichment: String::new(),
+            hint: String::new(),
+            triggered_revisions: vec![],
+            auto_superseded: vec![],
+        };
+        let out = format_capture_success(&resp);
+        assert!(!out.contains("Auto-superseded"));
+    }
+
+    #[test]
+    fn doctor_local_memory_message_sets_expectations() {
+        let msg = format_doctor_message(&serde_json::json!({
+            "setup_completed": true,
+            "mode": "basic-memory",
+            "anthropic_key_configured": false,
+            "local_model_selected": null,
+            "local_model_loaded": null,
+            "local_model_cached": false
+        }));
+
+        assert!(msg.contains("Mode: Local Memory"));
+        assert!(msg.contains("On-device model: not selected"));
+        assert!(msg.contains("Distill cycles: off"));
+        assert!(msg.contains("Local memory works now: capture, recall, and context are available"));
+        assert!(msg.contains("origin model install"));
+        assert!(msg.contains("origin key set anthropic"));
+    }
+
+    #[test]
+    fn doctor_on_device_model_message_shows_loaded_model() {
+        let msg = format_doctor_message(&serde_json::json!({
+            "setup_completed": true,
+            "mode": "local-model",
+            "anthropic_key_configured": false,
+            "local_model_selected": "qwen3-1.7b",
+            "local_model_loaded": "qwen3-1.7b",
+            "local_model_cached": true
+        }));
+
+        assert!(msg.contains("Mode: On-device Model"), "{msg}");
+        assert!(
+            msg.contains("On-device model: qwen3-1.7b (downloaded, loaded)"),
+            "{msg}"
+        );
+        assert!(msg.contains("Distill cycles: enabled"), "{msg}");
+        assert!(!msg.contains("Local memory works now"));
+    }
+
+    #[test]
+    fn doctor_unconfigured_message_names_three_setup_paths() {
+        let msg = format_doctor_message(&serde_json::json!({
+            "setup_completed": false,
+            "mode": "unknown",
+            "anthropic_key_configured": false,
+            "local_model_selected": null,
+            "local_model_loaded": null,
+            "local_model_cached": false
+        }));
+
+        assert!(msg.contains("Setup: not completed"));
+        assert!(msg.contains("Run `origin setup`"));
+        assert!(msg.contains("Local Memory, On-device Model, or Anthropic Key"));
+    }
+
+    #[test]
+    fn search_memory_request_serialization_excludes_entity() {
+        let req = SearchMemoryRequest {
+            query: "test".into(),
+            limit: 10,
+            memory_type: None,
+            space: None,
+            source_agent: None,
+            rerank: false,
+        };
+        let json = serde_json::to_value(&req).unwrap();
+        let obj = json.as_object().unwrap();
+        assert!(
+            !obj.contains_key("entity"),
+            "entity must not be on the wire; got keys: {:?}",
+            obj.keys().collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn chat_context_request_serialization_includes_domain() {
+        #[allow(deprecated)]
+        let req = ChatContextRequest {
+            query: None,
+            conversation_id: Some("topic".into()),
+            max_chunks: 20,
+            relevance_threshold: None,
+            include_goals: true,
+            space: Some("work".into()),
+        };
+        let json = serde_json::to_value(&req).unwrap();
+        assert_eq!(json["space"], serde_json::json!("work"));
+        assert_eq!(json["conversation_id"], serde_json::json!("topic"));
+    }
+
+    #[test]
+    fn chat_context_response_deserializes_with_profile_and_knowledge() {
+        let json = r#"{
+            "context": "user is Lucian, prefers Rust",
+            "profile": {
+                "narrative": "n",
+                "identity": ["rust"],
+                "preferences": [],
+                "goals": []
+            },
+            "knowledge": {
+                "pages": [],
+                "decisions": [],
+                "relevant_memories": [],
+                "graph_context": []
+            },
+            "took_ms": 42.0,
+            "token_estimates": {
+                "tier1_identity": 10,
+                "tier2_project": 20,
+                "tier3_relevant": 30,
+                "total": 60
+            }
+        }"#;
+        let parsed: ChatContextResponse = serde_json::from_str(json).unwrap();
+        assert_eq!(parsed.context, "user is Lucian, prefers Rust");
+        assert_eq!(parsed.profile.identity, vec!["rust"]);
+        assert_eq!(parsed.token_estimates.total, 60);
+    }
+
+    #[test]
+    fn capture_params_structured_fields_schema_is_object() {
+        use schemars::schema_for;
+
+        let schema = schema_for!(CaptureParams);
+        let json = serde_json::to_value(&schema).unwrap();
+        let sf_schema = json
+            .pointer("/properties/structured_fields")
+            .expect("structured_fields property in schema");
+        let type_val = sf_schema
+            .pointer("/type")
+            .unwrap_or(&serde_json::Value::Null);
+        let type_str = match type_val {
+            serde_json::Value::String(s) => s.clone(),
+            serde_json::Value::Array(arr) => arr
+                .iter()
+                .filter_map(|v| v.as_str())
+                .collect::<Vec<_>>()
+                .join(","),
+            other => panic!(
+                "structured_fields schema lacks type constraint; got: {:?}",
+                other
+            ),
+        };
+        assert!(
+            type_str.contains("object"),
+            "expected object type, got: {}",
+            type_str
+        );
+    }
+
+    // ===== Param deserialization: ForgetParams =====
+
+    #[test]
+    fn test_forget_params() {
+        let json = r#"{"memory_id": "mem_abc123"}"#;
+        let params: ForgetParams = serde_json::from_str(json).unwrap();
+        assert_eq!(params.memory_id, "mem_abc123");
+    }
+
+    #[test]
+    fn test_forget_params_missing_id_fails() {
+        let json = r#"{}"#;
+        let result = serde_json::from_str::<ForgetParams>(json);
+        assert!(result.is_err());
+    }
+
+    // ===== Request serialization: StoreMemoryRequest =====
+
+    #[test]
+    fn test_store_request_includes_new_fields() {
+        let req = StoreMemoryRequest {
+            content: "test".into(),
+            memory_type: Some("decision".into()),
+            space: None,
+            source_agent: Some("claude".into()),
+            title: None,
+            confidence: Some(0.9),
+            supersedes: Some("old_id".into()),
+            entity: Some("PostgreSQL".into()),
+            entity_id: None,
+            structured_fields: None,
+            retrieval_cue: None,
+        };
+        let json = serde_json::to_value(&req).unwrap();
+        assert_eq!(json["entity"], "PostgreSQL");
+        assert_eq!(json["supersedes"], "old_id");
+        assert!(json["confidence"].as_f64().unwrap() > 0.89);
+        assert_eq!(json["source_agent"], "claude");
+        assert!(json.get("user_id").is_none());
+    }
+
+    #[test]
+    fn test_store_request_minimal() {
+        let req = StoreMemoryRequest {
+            content: "hello".into(),
+            memory_type: Some("fact".into()),
+            space: None,
+            source_agent: None,
+            title: None,
+            confidence: None,
+            supersedes: None,
+            entity: None,
+            entity_id: None,
+            structured_fields: None,
+            retrieval_cue: None,
+        };
+        let json = serde_json::to_value(&req).unwrap();
+        assert_eq!(json["content"], "hello");
+        assert_eq!(json["memory_type"], "fact");
+        assert!(json.get("user_id").is_none());
+    }
+
+    // ===== Response deserialization: StoreMemoryResponse =====
+
+    #[test]
+    fn test_store_response_with_new_fields() {
+        let json = r#"{
+            "source_id": "mem_xyz",
+            "chunks_created": 2,
+            "memory_type": "fact",
+            "entity_id": "ent_abc",
+            "quality": "high",
+            "warnings": ["decision memory missing claim"],
+            "extraction_method": "agent"
+        }"#;
+        let resp: StoreMemoryResponse = serde_json::from_str(json).unwrap();
+        assert_eq!(resp.source_id, "mem_xyz");
+        assert_eq!(resp.chunks_created, 2);
+        assert_eq!(resp.memory_type, "fact");
+        assert_eq!(resp.entity_id.as_deref(), Some("ent_abc"));
+        assert_eq!(resp.quality.as_deref(), Some("high"));
+        assert_eq!(resp.warnings, vec!["decision memory missing claim"]);
+        assert_eq!(resp.extraction_method, "agent");
+    }
+
+    #[test]
+    fn test_store_response_backward_compat_no_new_fields() {
+        // Old backend response without warnings/extraction_method
+        let json = r#"{
+            "source_id": "mem_old",
+            "chunks_created": 1,
+            "memory_type": "fact"
+        }"#;
+        let resp: StoreMemoryResponse = serde_json::from_str(json).unwrap();
+        assert_eq!(resp.source_id, "mem_old");
+        assert_eq!(resp.chunks_created, 1);
+        assert_eq!(resp.memory_type, "fact");
+        assert!(resp.entity_id.is_none());
+        assert!(resp.quality.is_none());
+        assert!(resp.warnings.is_empty());
+        assert_eq!(resp.extraction_method, "unknown");
+    }
+
+    #[test]
+    fn test_store_response_with_warnings_and_extraction_method() {
+        let json = r#"{
+            "source_id": "mem_xyz",
+            "chunks_created": 1,
+            "memory_type": "decision",
+            "warnings": ["decision memory missing required 'claim' field"],
+            "extraction_method": "llm"
+        }"#;
+        let resp: StoreMemoryResponse = serde_json::from_str(json).unwrap();
+        assert_eq!(resp.memory_type, "decision");
+        assert_eq!(
+            resp.warnings,
+            vec!["decision memory missing required 'claim' field"]
+        );
+        assert_eq!(resp.extraction_method, "llm");
+    }
+
+    // ===== Response deserialization: SearchResult =====
+
+    #[test]
+    fn test_search_result_with_new_fields() {
+        let json = r#"{
+            "id": "1",
+            "content": "We chose Postgres",
+            "source": "memory",
+            "source_id": "mem_1",
+            "title": "DB decision",
+            "url": null,
+            "chunk_index": 0,
+            "last_modified": 1711000000,
+            "score": 0.95,
+            "chunk_type": "memory",
+            "language": "en",
+            "semantic_unit": "sentence",
+            "memory_type": "decision",
+            "space": "origin",
+            "source_agent": "claude",
+            "confidence": 0.9,
+            "confirmed": true,
+            "stability": "standard",
+            "supersedes": "mem_0",
+            "summary": "DB choice",
+            "entity_id": "ent_pg",
+            "entity_name": "PostgreSQL",
+            "quality": "high",
+            "is_archived": false,
+            "is_recap": false,
+            "source_text": "We chose Postgres",
+            "raw_score": 0.42
+        }"#;
+        let result: SearchResult = serde_json::from_str(json).unwrap();
+        assert_eq!(result.chunk_type.as_deref(), Some("memory"));
+        assert_eq!(result.language.as_deref(), Some("en"));
+        assert_eq!(result.semantic_unit.as_deref(), Some("sentence"));
+        assert_eq!(result.stability.as_deref(), Some("standard"));
+        assert_eq!(result.supersedes.as_deref(), Some("mem_0"));
+        assert_eq!(result.summary.as_deref(), Some("DB choice"));
+        assert_eq!(result.entity_id.as_deref(), Some("ent_pg"));
+        assert_eq!(result.entity_name.as_deref(), Some("PostgreSQL"));
+        assert_eq!(result.quality.as_deref(), Some("high"));
+        assert!(!result.is_archived);
+        assert!(!result.is_recap);
+        assert_eq!(result.source_text.as_deref(), Some("We chose Postgres"));
+        assert!((result.raw_score - 0.42).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn test_search_result_backward_compat_no_new_fields() {
+        // Old backend response without entity/quality/archive/recap
+        let json = r#"{
+            "id": "1",
+            "content": "test",
+            "source": "memory",
+            "source_id": "mem_1",
+            "title": "test",
+            "url": null,
+            "chunk_index": 0,
+            "last_modified": 1711000000,
+            "score": 0.8,
+            "memory_type": "fact",
+            "space": null,
+            "source_agent": null,
+            "confidence": null,
+            "confirmed": null
+        }"#;
+        let result: SearchResult = serde_json::from_str(json).unwrap();
+        assert!(result.entity_id.is_none());
+        assert!(result.entity_name.is_none());
+        assert!(result.quality.is_none());
+        assert!(!result.is_archived);
+        assert!(!result.is_recap);
+        assert!(result.structured_fields.is_none());
+        assert!(result.retrieval_cue.is_none());
+        assert_eq!(result.raw_score, 0.0);
+    }
+
+    #[test]
+    fn test_search_result_with_structured_fields_and_retrieval_cue() {
+        let json = r#"{
+            "id": "1",
+            "content": "Lucian prefers dark mode",
+            "source": "memory",
+            "source_id": "mem_1",
+            "title": "Dark mode preference",
+            "url": null,
+            "chunk_index": 0,
+            "last_modified": 1711000000,
+            "score": 0.92,
+            "memory_type": "preference",
+            "space": null,
+            "source_agent": null,
+            "confidence": null,
+            "confirmed": null,
+            "structured_fields": "{\"theme\":\"dark\",\"applies_to\":\"all_apps\"}",
+            "retrieval_cue": "What UI theme does Lucian prefer?"
+        }"#;
+        let result: SearchResult = serde_json::from_str(json).unwrap();
+        assert_eq!(
+            result.structured_fields.as_deref(),
+            Some("{\"theme\":\"dark\",\"applies_to\":\"all_apps\"}")
+        );
+        assert_eq!(
+            result.retrieval_cue.as_deref(),
+            Some("What UI theme does Lucian prefer?")
+        );
+        assert!(!result.is_archived);
+        assert!(!result.is_recap);
+        assert_eq!(result.raw_score, 0.0);
+    }
+
+    #[test]
+    fn test_search_result_knowledge_graph_source() {
+        // Entity-boosted observation results from knowledge graph
+        let json = r#"{
+            "id": "obs_1",
+            "content": "Prefers Rust over Go",
+            "source": "knowledge_graph",
+            "source_id": "ent_lucian",
+            "title": "Lucian",
+            "url": null,
+            "chunk_index": 0,
+            "last_modified": 1711000000,
+            "score": 1.14,
+            "memory_type": null,
+            "space": null,
+            "source_agent": null,
+            "confidence": null,
+            "confirmed": null,
+            "entity_id": "ent_lucian",
+            "entity_name": "Lucian"
+        }"#;
+        let result: SearchResult = serde_json::from_str(json).unwrap();
+        assert_eq!(result.source, "knowledge_graph");
+        assert_eq!(result.entity_id.as_deref(), Some("ent_lucian"));
+        assert_eq!(result.entity_name.as_deref(), Some("Lucian"));
+        assert!(!result.is_archived);
+        assert!(!result.is_recap);
+        assert_eq!(result.raw_score, 0.0);
+    }
+
+    // ===== Transport security: forget blocks on HTTP =====
+
+    #[tokio::test]
+    async fn test_forget_blocked_on_http_transport() {
+        let server = make_server(TransportMode::Http, "agent", None);
+        let result = server.forget_impl("mem_123").await.unwrap();
+        // Should return error content, not an Err
+        let content = &result.content[0];
+        match content.raw {
+            rmcp::model::RawContent::Text(ref tc) => {
+                assert!(tc.text.contains("not available over remote connections"));
+            }
+            _ => panic!("expected text content"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_forget_allowed_on_stdio_transport() {
+        // This will fail with connection error (no server), which proves
+        // the transport check passed and it tried to make the HTTP call.
+        // The error comes back as CallToolResult with is_error: true
+        // (tool-level failure), not McpError (protocol-level).
+        let server = make_server(TransportMode::Stdio, "agent", None);
+        let result = server.forget_impl("mem_123").await.unwrap();
+        assert!(
+            result.is_error.unwrap_or(false),
+            "should fail with connection error, not transport block"
+        );
+    }
+
+    // ===== Transport security: revision wrappers block on HTTP =====
+
+    #[tokio::test]
+    async fn test_accept_revision_blocked_on_http_transport() {
+        let server = make_server(TransportMode::Http, "agent", None);
+        let req = AcceptRevisionRequest {
+            target_source_id: "mem_x".into(),
+        };
+        let result = server.accept_revision_impl(req).await.unwrap();
+        let content = &result.content[0];
+        match content.raw {
+            rmcp::model::RawContent::Text(ref tc) => {
+                assert!(tc.text.contains("not available over remote connections"));
+            }
+            _ => panic!("expected text content"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_accept_revision_allowed_on_stdio_transport() {
+        let server = make_server(TransportMode::Stdio, "agent", None);
+        let req = AcceptRevisionRequest {
+            target_source_id: "mem_x".into(),
+        };
+        let result = server.accept_revision_impl(req).await.unwrap();
+        assert!(
+            result.is_error.unwrap_or(false),
+            "should fail with connection error, not transport block"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_dismiss_revision_blocked_on_http_transport() {
+        let server = make_server(TransportMode::Http, "agent", None);
+        let req = DismissRevisionRequest {
+            target_source_id: "mem_x".into(),
+        };
+        let result = server.dismiss_revision_impl(req).await.unwrap();
+        let content = &result.content[0];
+        match content.raw {
+            rmcp::model::RawContent::Text(ref tc) => {
+                assert!(tc.text.contains("not available over remote connections"));
+            }
+            _ => panic!("expected text content"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_dismiss_revision_allowed_on_stdio_transport() {
+        let server = make_server(TransportMode::Stdio, "agent", None);
+        let req = DismissRevisionRequest {
+            target_source_id: "mem_x".into(),
+        };
+        let result = server.dismiss_revision_impl(req).await.unwrap();
+        assert!(
+            result.is_error.unwrap_or(false),
+            "should fail with connection error, not transport block"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_dismiss_contradiction_blocked_on_http_transport() {
+        let server = make_server(TransportMode::Http, "agent", None);
+        let req = DismissContradictionRequest {
+            source_id: "mem_x".into(),
+        };
+        let result = server.dismiss_contradiction_impl(req).await.unwrap();
+        let content = &result.content[0];
+        match content.raw {
+            rmcp::model::RawContent::Text(ref tc) => {
+                assert!(tc.text.contains("not available over remote connections"));
+            }
+            _ => panic!("expected text content"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_dismiss_contradiction_allowed_on_stdio_transport() {
+        let server = make_server(TransportMode::Stdio, "agent", None);
+        let req = DismissContradictionRequest {
+            source_id: "mem_x".into(),
+        };
+        let result = server.dismiss_contradiction_impl(req).await.unwrap();
+        assert!(
+            result.is_error.unwrap_or(false),
+            "should fail with connection error, not transport block"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_confirm_entity_blocked_on_http_transport() {
+        let server = make_server(TransportMode::Http, "agent", None);
+        let params = ConfirmEntityParams {
+            entity_id: "ent_x".into(),
+            confirmed: true,
+        };
+        let result = server.confirm_entity_impl(params).await.unwrap();
+        let content = &result.content[0];
+        match content.raw {
+            rmcp::model::RawContent::Text(ref tc) => {
+                assert!(tc.text.contains("not available over remote connections"));
+            }
+            _ => panic!("expected text content"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_confirm_entity_allowed_on_stdio_transport() {
+        let server = make_server(TransportMode::Stdio, "agent", None);
+        let params = ConfirmEntityParams {
+            entity_id: "ent_x".into(),
+            confirmed: true,
+        };
+        let result = server.confirm_entity_impl(params).await.unwrap();
+        assert!(
+            result.is_error.unwrap_or(false),
+            "should fail with connection error, not transport block"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_confirm_observation_blocked_on_http_transport() {
+        let server = make_server(TransportMode::Http, "agent", None);
+        let params = ConfirmObservationParams {
+            observation_id: "obs_x".into(),
+            confirmed: true,
+        };
+        let result = server.confirm_observation_impl(params).await.unwrap();
+        let content = &result.content[0];
+        match content.raw {
+            rmcp::model::RawContent::Text(ref tc) => {
+                assert!(tc.text.contains("not available over remote connections"));
+            }
+            _ => panic!("expected text content"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_confirm_observation_allowed_on_stdio_transport() {
+        let server = make_server(TransportMode::Stdio, "agent", None);
+        let params = ConfirmObservationParams {
+            observation_id: "obs_x".into(),
+            confirmed: true,
+        };
+        let result = server.confirm_observation_impl(params).await.unwrap();
+        assert!(
+            result.is_error.unwrap_or(false),
+            "should fail with connection error, not transport block"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_update_observation_blocked_on_http_transport() {
+        let server = make_server(TransportMode::Http, "agent", None);
+        let params = UpdateObservationParams {
+            observation_id: "obs_x".into(),
+            content: "new content".into(),
+        };
+        let result = server.update_observation_impl(params).await.unwrap();
+        let content = &result.content[0];
+        match content.raw {
+            rmcp::model::RawContent::Text(ref tc) => {
+                assert!(tc.text.contains("not available over remote connections"));
+            }
+            _ => panic!("expected text content"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_update_observation_allowed_on_stdio_transport() {
+        let server = make_server(TransportMode::Stdio, "agent", None);
+        let params = UpdateObservationParams {
+            observation_id: "obs_x".into(),
+            content: "new content".into(),
+        };
+        let result = server.update_observation_impl(params).await.unwrap();
+        assert!(
+            result.is_error.unwrap_or(false),
+            "should fail with connection error, not transport block"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_update_page_blocked_on_http_transport() {
+        let server = make_server(TransportMode::Http, "agent", None);
+        let params = UpdatePageParams {
+            page_id: "page_x".into(),
+            content: "body".into(),
+            source_memory_ids: vec!["mem_a".into()],
+            summary: None,
+        };
+        let result = server.update_page_impl(params).await.unwrap();
+        let content = &result.content[0];
+        match content.raw {
+            rmcp::model::RawContent::Text(ref tc) => {
+                assert!(tc.text.contains("not available over remote connections"));
+            }
+            _ => panic!("expected text content"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_update_page_allowed_on_stdio_transport() {
+        let server = make_server(TransportMode::Stdio, "agent", None);
+        let params = UpdatePageParams {
+            page_id: "page_x".into(),
+            content: "body".into(),
+            source_memory_ids: vec!["mem_a".into()],
+            summary: None,
+        };
+        let result = server.update_page_impl(params).await.unwrap();
+        assert!(
+            result.is_error.unwrap_or(false),
+            "should fail with connection error, not transport block"
+        );
+    }
+
+    // ===== Refinement queue guards =====
+
+    #[tokio::test]
+    async fn test_reject_refinement_blocked_on_http_transport() {
+        let server = make_server(TransportMode::Http, "agent", None);
+        let params = RejectRefinementParams {
+            id: "merge_abc_def".into(),
+        };
+        let result = server.reject_refinement_impl(params).await.unwrap();
+        let content = &result.content[0];
+        match content.raw {
+            rmcp::model::RawContent::Text(ref tc) => {
+                assert!(tc.text.contains("not available over remote connections"));
+            }
+            _ => panic!("expected text content"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_reject_refinement_allowed_on_stdio_transport() {
+        let server = make_server(TransportMode::Stdio, "agent", None);
+        let params = RejectRefinementParams {
+            id: "merge_abc_def".into(),
+        };
+        let result = server.reject_refinement_impl(params).await.unwrap();
+        assert!(
+            result.is_error.unwrap_or(false),
+            "should fail with connection error, not transport block"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_accept_refinement_blocked_on_http_transport() {
+        let server = make_server(TransportMode::Http, "agent", None);
+        let params = AcceptRefinementParams {
+            id: "merge_abc_def".into(),
+        };
+        let result = server.accept_refinement_impl(params).await.unwrap();
+        let content = &result.content[0];
+        match content.raw {
+            rmcp::model::RawContent::Text(ref tc) => {
+                assert!(tc.text.contains("not available over remote connections"));
+            }
+            _ => panic!("expected text content"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_accept_refinement_allowed_on_stdio_transport() {
+        let server = make_server(TransportMode::Stdio, "agent", None);
+        let params = AcceptRefinementParams {
+            id: "merge_abc_def".into(),
+        };
+        let result = server.accept_refinement_impl(params).await.unwrap();
+        assert!(
+            result.is_error.unwrap_or(false),
+            "should fail with connection error, not transport block"
+        );
+    }
+
+    // ===== Context default limit =====
+
+    #[test]
+    fn test_context_request_default_limit() {
+        let params = ContextParams {
+            topic: Some("test".into()),
+            limit: None,
+            space: None,
+        };
+        #[allow(deprecated)]
+        let req = ChatContextRequest {
+            query: None,
+            conversation_id: params.topic,
+            max_chunks: params.limit.unwrap_or(20),
+            relevance_threshold: None,
+            include_goals: true,
+            space: params.space,
+        };
+        assert_eq!(req.max_chunks, 20);
+    }
+
+    #[test]
+    fn test_context_request_custom_limit() {
+        let params = ContextParams {
+            topic: None,
+            limit: Some(5),
+            space: Some("work".into()),
+        };
+        #[allow(deprecated)]
+        let req = ChatContextRequest {
+            query: None,
+            conversation_id: params.topic,
+            max_chunks: params.limit.unwrap_or(20),
+            relevance_threshold: None,
+            include_goals: true,
+            space: params.space,
+        };
+        assert_eq!(req.max_chunks, 5);
+        assert_eq!(req.space.as_deref(), Some("work"));
+    }
+
+    #[test]
+    fn test_context_maps_topic_to_conversation_id() {
+        let params = ContextParams {
+            topic: Some("project Origin".into()),
+            limit: None,
+            space: None,
+        };
+        #[allow(deprecated)]
+        let req = ChatContextRequest {
+            query: None,
+            conversation_id: params.topic.clone(),
+            max_chunks: params.limit.unwrap_or(20),
+            relevance_threshold: None,
+            include_goals: true,
+            space: params.space,
+        };
+        assert_eq!(req.conversation_id.as_deref(), Some("project Origin"));
+    }
+
+    // ===== Remember request construction =====
+
+    #[test]
+    fn test_capture_constructs_store_request_with_entity() {
+        let server = make_server(TransportMode::Stdio, "claude", None);
+        let params = CaptureParams {
+            content: "Alice manages the frontend team".into(),
+            memory_type: Some("fact".into()),
+            space: Some("work".into()),
+            entity: Some("Alice".into()),
+            confidence: Some(0.9),
+            supersedes: None,
+            structured_fields: None,
+            retrieval_cue: None,
+        };
+
+        // Replicate capture_impl's request construction
+        let source_agent = server.resolve_source_agent(None);
+
+        let req = StoreMemoryRequest {
+            content: params.content,
+            memory_type: params.memory_type,
+            space: params.space,
+            source_agent,
+            title: None,
+            confidence: params.confidence,
+            supersedes: params.supersedes,
+            entity: params.entity,
+            entity_id: None,
+            structured_fields: params.structured_fields.map(serde_json::Value::Object),
+            retrieval_cue: params.retrieval_cue,
+        };
+
+        let json = serde_json::to_value(&req).unwrap();
+        assert_eq!(json["content"], "Alice manages the frontend team");
+        assert_eq!(json["memory_type"], "fact");
+        assert_eq!(json["space"], "work");
+        assert_eq!(json["entity"], "Alice");
+        assert!(json["confidence"].as_f64().unwrap() > 0.89);
+        // stdio mode: no param, no client_name → falls back to agent_name "claude"
+        assert_eq!(json["source_agent"], "claude");
+    }
+
+    #[test]
+    fn test_remember_http_mode_injects_agent() {
+        let server = make_server(TransportMode::Http, "claude.ai", Some("lucian"));
+        let source_agent = server.resolve_source_agent(None);
+
+        assert_eq!(source_agent, Some("claude.ai".into()));
+    }
+
+    // ===== Recall request construction =====
+
+    #[test]
+    fn test_recall_constructs_search_request() {
+        let params = RecallParams {
+            query: "database choices".into(),
+            limit: Some(5),
+            memory_type: Some("decision".into()),
+            space: None,
+            rerank: None,
+        };
+
+        let req = SearchMemoryRequest {
+            query: params.query,
+            limit: params.limit.unwrap_or(10),
+            memory_type: params.memory_type,
+            space: params.space,
+            source_agent: None,
+            rerank: params.rerank.unwrap_or(false),
+        };
+
+        let json = serde_json::to_value(&req).unwrap();
+        assert_eq!(json["query"], "database choices");
+        assert_eq!(json["limit"], 5);
+        assert_eq!(json["memory_type"], "decision");
+        assert!(json.get("entity").is_none());
+        assert!(json["space"].is_null());
+        assert!(json["source_agent"].is_null());
+        assert_eq!(json["rerank"], false);
+    }
+
+    #[test]
+    fn test_recall_forwards_rerank_flag() {
+        // When the caller passes rerank: Some(true), the constructed
+        // SearchMemoryRequest must carry rerank=true through to the daemon.
+        let params = RecallParams {
+            query: "database choices".into(),
+            limit: None,
+            memory_type: None,
+            space: None,
+            rerank: Some(true),
+        };
+
+        let req = SearchMemoryRequest {
+            query: params.query,
+            limit: params.limit.unwrap_or(10),
+            memory_type: params.memory_type,
+            space: params.space,
+            source_agent: None,
+            rerank: params.rerank.unwrap_or(false),
+        };
+
+        assert!(
+            req.rerank,
+            "RecallParams.rerank=Some(true) must flow through to SearchMemoryRequest.rerank=true"
+        );
+        let json = serde_json::to_value(&req).unwrap();
+        assert_eq!(json["rerank"], true);
+    }
+
+    #[test]
+    fn test_recall_params_schema_advertises_rerank() {
+        // The schemars-derived JSON Schema for RecallParams must advertise
+        // the rerank field so MCP clients (Claude Desktop, Cursor, etc.) see
+        // it as an available parameter.
+        let params_schema = serde_json::to_string(&schemars::schema_for!(RecallParams))
+            .expect("RecallParams schema serializes");
+        assert!(
+            params_schema.contains("rerank"),
+            "RecallParams schema must advertise the `rerank` field, got: {params_schema}"
+        );
+        assert!(
+            params_schema.contains("cross-encoder"),
+            "RecallParams.rerank description must mention cross-encoder so models understand the tradeoff, got: {params_schema}"
+        );
+    }
+
+    // ===== Memory type pass-through =====
+
+    /// CaptureParams must pass every canonical memory_type through to the
+    /// daemon verbatim. The MCP layer is dumb wire — it doesn't validate or
+    /// rewrite the value; the daemon owns that. Drift test sourced from
+    /// `MemoryType::all_values()` so adding a variant extends coverage
+    /// automatically.
+    #[test]
+    fn test_capture_passes_through_all_canonical_types() {
+        for t in wenlan_types::MemoryType::all_values() {
+            let params = CaptureParams {
+                content: "test".into(),
+                memory_type: Some((*t).to_string()),
+                space: None,
+                entity: None,
+                confidence: None,
+                supersedes: None,
+                structured_fields: None,
+                retrieval_cue: None,
+            };
+            assert_eq!(params.memory_type.as_deref(), Some(*t));
+        }
+    }
+
+    /// Legacy "goal" alias still flows through the wire untouched —
+    /// `MemoryType::FromStr` folds it to "identity" daemon-side. The MCP
+    /// layer must not pre-reject it (the daemon owns the fold decision).
+    #[test]
+    fn test_capture_passes_through_legacy_goal_alias() {
+        let params = CaptureParams {
+            content: "test".into(),
+            memory_type: Some("goal".into()),
+            space: None,
+            entity: None,
+            confidence: None,
+            supersedes: None,
+            structured_fields: None,
+            retrieval_cue: None,
+        };
+        assert_eq!(params.memory_type.as_deref(), Some("goal"));
+    }
+
+    // ===== Structured fields in remember params =====
+
+    #[test]
+    fn test_capture_params_with_structured_fields_and_cue() {
+        let json = r#"{
+            "content": "Lucian prefers dark mode",
+            "structured_fields": {"theme":"dark"},
+            "retrieval_cue": "What theme does Lucian prefer?"
+        }"#;
+        let params: CaptureParams = serde_json::from_str(json).unwrap();
+        let structured_fields = params.structured_fields.expect("structured_fields");
+        assert_eq!(
+            structured_fields.get("theme"),
+            Some(&serde_json::Value::String("dark".into()))
+        );
+        assert_eq!(
+            params.retrieval_cue.as_deref(),
+            Some("What theme does Lucian prefer?")
+        );
+    }
+
+    #[test]
+    fn test_store_request_with_structured_fields() {
+        let req = StoreMemoryRequest {
+            content: "test".into(),
+            memory_type: Some("fact".into()),
+            space: None,
+            source_agent: None,
+            title: None,
+            confidence: None,
+            supersedes: None,
+            entity: None,
+            entity_id: None,
+            structured_fields: Some(serde_json::json!({"key":"val"})),
+            retrieval_cue: Some("What is the key?".into()),
+        };
+        let json = serde_json::to_value(&req).unwrap();
+        assert_eq!(json["structured_fields"], serde_json::json!({"key":"val"}));
+        assert_eq!(json["retrieval_cue"], "What is the key?");
+    }
+
+    // ===== ChatContextResponse deserialization =====
+
+    #[test]
+    fn test_chat_context_response() {
+        let json = r#"{
+            "context": "User prefers dark mode. Works on Origin project.",
+            "profile": {
+                "narrative": "narrative",
+                "identity": [],
+                "preferences": [],
+                "goals": []
+            },
+            "knowledge": {
+                "pages": [],
+                "decisions": [],
+                "relevant_memories": [],
+                "graph_context": []
+            },
+            "took_ms": 12.5,
+            "token_estimates": {
+                "tier1_identity": 1,
+                "tier2_project": 2,
+                "tier3_relevant": 3,
+                "total": 6
+            }
+        }"#;
+        let resp: ChatContextResponse = serde_json::from_str(json).unwrap();
+        assert!(!resp.context.is_empty());
+        assert!(resp.profile.identity.is_empty());
+        assert_eq!(resp.took_ms, 12.5);
+        assert_eq!(resp.token_estimates.total, 6);
+    }
+
+    #[test]
+    fn test_chat_context_response_empty() {
+        let json = r#"{
+            "context": "",
+            "profile": {
+                "narrative": "",
+                "identity": [],
+                "preferences": [],
+                "goals": []
+            },
+            "knowledge": {
+                "pages": [],
+                "decisions": [],
+                "relevant_memories": [],
+                "graph_context": []
+            },
+            "took_ms": 1.0,
+            "token_estimates": {
+                "tier1_identity": 0,
+                "tier2_project": 0,
+                "tier3_relevant": 0,
+                "total": 0
+            }
+        }"#;
+        let resp: ChatContextResponse = serde_json::from_str(json).unwrap();
+        assert!(resp.context.is_empty());
+    }
+
+    // ===== with_instructions content assertions =====
+    // These tests lock in the refined agent-facing guidance. If any
+    // assertion fails, either the rule was intentionally changed
+    // (update the test) or the refinement was accidentally dropped
+    // (restore the rule).
+
+    fn server_instructions() -> String {
+        let s = make_server(TransportMode::Stdio, "test", None);
+        s.get_info()
+            .instructions
+            .expect("server must ship with_instructions")
+    }
+
+    #[test]
+    fn instructions_mention_cumulative_knowledge() {
+        assert!(
+            server_instructions().contains("cumulative"),
+            "with_instructions must describe Origin as cumulative"
+        );
+    }
+
+    #[test]
+    fn instructions_mention_shared_across_tools() {
+        assert!(
+            server_instructions().contains("shared across all"),
+            "with_instructions must tell agents the store is shared across tools"
+        );
+    }
+
+    #[test]
+    fn instructions_mention_how_user_thinks() {
+        assert!(
+            server_instructions().contains("how the user thinks"),
+            "with_instructions must frame context as modeling how the user thinks"
+        );
+    }
+
+    #[test]
+    fn instructions_use_proactive_framing() {
+        assert!(
+            server_instructions().contains("STORE PROACTIVELY"),
+            "with_instructions must use STORE PROACTIVELY framing (not passive WHEN TO STORE)"
+        );
+    }
+
+    #[test]
+    fn instructions_ban_tool_output_storage() {
+        assert!(
+            server_instructions().contains("Tool output or command results"),
+            "with_instructions must explicitly rule out tool output as storage material"
+        );
+    }
+
+    #[test]
+    fn instructions_ban_ghost_inferences() {
+        assert!(
+            server_instructions().contains("Your own inferences"),
+            "with_instructions must rule out storing agent's own inferences user didn't express"
+        );
+    }
+
+    #[test]
+    fn instructions_call_out_atomic_memory() {
+        assert!(
+            server_instructions().contains("Atomic: one idea per memory"),
+            "with_instructions must call out the atomic-memory rule explicitly by name"
+        );
+    }
+
+    #[test]
+    fn instructions_specify_declarative_writing() {
+        assert!(
+            server_instructions().contains("Declarative, not narrative"),
+            "with_instructions must require declarative (not narrative) writing style"
+        );
+    }
+
+    #[test]
+    fn instructions_default_to_omit_memory_type() {
+        let i = server_instructions();
+        assert!(
+            i.contains("omit and trust the backend"),
+            "with_instructions must default agents to omitting memory_type"
+        );
+        assert!(
+            i.contains("do NOT set memory_type"),
+            "with_instructions must explicitly say do NOT set memory_type by default"
+        );
+    }
+
+    #[test]
+    fn instructions_list_every_canonical_memory_type() {
+        let i = server_instructions();
+        for ty in wenlan_types::MemoryType::all_values() {
+            assert!(
+                contains_word(&i, ty),
+                "with_instructions must list canonical memory type \"{ty}\" so MCP clients see the full vocabulary",
+            );
+        }
+    }
+
+    #[test]
+    fn instructions_omit_legacy_goal_type() {
+        let i = server_instructions();
+        // "goal" (singular) is a legacy memory_type folded to Identity by
+        // MemoryType::FromStr. The plural English noun "goals" (life goals,
+        // profile.goals chat-context field) is a separate concern and must
+        // NOT trigger this test — tokenizing on word boundaries lets one
+        // through while still catching the legacy memory-type token.
+        assert!(
+            !contains_word(&i, "goal"),
+            "with_instructions must not advertise legacy \"goal\" memory_type"
+        );
+    }
+
+    /// Tokenize on non-alphanumeric boundaries and check whether `needle`
+    /// appears as a standalone token. Mirrors the helper used by the
+    /// origin-types drift tests so "goals" (plural noun) does not false-match
+    /// the legacy "goal" memory_type token.
+    fn contains_word(haystack: &str, needle: &str) -> bool {
+        haystack
+            .split(|c: char| !c.is_ascii_alphanumeric() && c != '_')
+            .any(|tok| tok == needle)
+    }
+
+    #[test]
+    fn instructions_carve_out_decisions_for_decision_log() {
+        let i = server_instructions();
+        assert!(
+            i.contains("Decision Log"),
+            "with_instructions must name the Decision Log as the reason for explicit decision typing"
+        );
+        assert!(
+            i.contains("memory_type=\"decision\""),
+            "with_instructions must tell agents to set memory_type=\"decision\" explicitly for decisions"
+        );
+    }
+
+    // ===== tool-level and param-level description assertions =====
+
+    fn tool_descriptions() -> std::collections::HashMap<String, String> {
+        let server = make_server(TransportMode::Stdio, "test", None);
+        server
+            .tool_router
+            .list_all()
+            .into_iter()
+            .filter_map(|t| {
+                let desc = t.description.as_ref()?.to_string();
+                Some((t.name.to_string(), desc))
+            })
+            .collect()
+    }
+
+    #[test]
+    fn capture_description_calls_out_atomic() {
+        let descriptions = tool_descriptions();
+        let capture = descriptions.get("capture").expect("capture tool exists");
+        assert!(
+            capture.contains("Each call is one atomic idea"),
+            "capture description must call out atomic-per-call explicitly, got: {capture}"
+        );
+    }
+
+    #[test]
+    fn context_description_frames_modeling_user() {
+        let descriptions = tool_descriptions();
+        let ctx = descriptions.get("context").expect("context tool exists");
+        assert!(
+            ctx.contains("how the user thinks"),
+            "context description must frame the result as modeling how the user thinks, got: {ctx}"
+        );
+    }
+
+    #[test]
+    fn doctor_description_mentions_setup_mode() {
+        let descriptions = tool_descriptions();
+        let status = descriptions.get("doctor").expect("doctor tool exists");
+        assert!(
+            status.contains("Local Memory"),
+            "doctor description must mention setup modes, got: {status}"
+        );
+        assert!(
+            status.contains("On-device Model"),
+            "doctor description must mention on-device setup, got: {status}"
+        );
+        assert!(
+            status.contains("not part of the memory loop"),
+            "doctor description must frame itself as diagnostic-only, got: {status}"
+        );
+    }
+
+    #[test]
+    fn recall_memory_type_param_lists_two_level_filter() {
+        let params_schema = serde_json::to_string(&schemars::schema_for!(RecallParams))
+            .expect("RecallParams schema serializes");
+        assert!(
+            params_schema.contains("Two-level filter"),
+            "RecallParams.memory_type must advertise the two-level filter, got schema: {params_schema}"
+        );
+        assert!(
+            params_schema.contains("profile"),
+            "RecallParams.memory_type must mention profile alias"
+        );
+        assert!(
+            params_schema.contains("knowledge"),
+            "RecallParams.memory_type must mention knowledge alias"
+        );
+    }
+
+    // ===== Knowledge graph / page CRUD =====
+
+    // --- CreateEntityParams ---
+
+    #[test]
+    fn test_create_entity_params_minimal() {
+        let json = r#"{"name": "Alice", "entity_type": "person"}"#;
+        let params: CreateEntityParams = serde_json::from_str(json).unwrap();
+        assert_eq!(params.name, "Alice");
+        assert_eq!(params.entity_type, "person");
+        assert!(params.space.is_none());
+        assert!(params.confidence.is_none());
+    }
+
+    #[test]
+    fn test_create_entity_params_full() {
+        let json = r#"{
+            "name": "PostgreSQL",
+            "entity_type": "tool",
+            "space": "origin",
+            "confidence": 0.9
+        }"#;
+        let params: CreateEntityParams = serde_json::from_str(json).unwrap();
+        assert_eq!(params.name, "PostgreSQL");
+        assert_eq!(params.entity_type, "tool");
+        assert_eq!(params.space.as_deref(), Some("origin"));
+        assert_eq!(params.confidence, Some(0.9));
+    }
+
+    #[test]
+    fn test_create_entity_params_missing_name_fails() {
+        let json = r#"{"entity_type": "person"}"#;
+        let result = serde_json::from_str::<CreateEntityParams>(json);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_create_entity_params_missing_type_fails() {
+        let json = r#"{"name": "Alice"}"#;
+        let result = serde_json::from_str::<CreateEntityParams>(json);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_create_entity_request_body_shape() {
+        let server = make_server(TransportMode::Stdio, "claude", None);
+        let params = CreateEntityParams {
+            name: "Origin".into(),
+            entity_type: "project".into(),
+            space: Some("origin".into()),
+            confidence: Some(0.95),
+        };
+        let source_agent = server.resolve_source_agent(None);
+        let req = CreateEntityRequest {
+            name: params.name,
+            entity_type: params.entity_type,
+            space: params.space,
+            source_agent,
+            confidence: params.confidence,
+        };
+        let json = serde_json::to_value(&req).unwrap();
+        assert_eq!(json["name"], "Origin");
+        assert_eq!(json["entity_type"], "project");
+        assert_eq!(json["space"], "origin");
+        assert_eq!(json["source_agent"], "claude");
+        assert!(json["confidence"].as_f64().unwrap() > 0.94);
+    }
+
+    // --- CreateRelationParams ---
+
+    #[test]
+    fn test_create_relation_params() {
+        let json = r#"{
+            "from_entity": "Alice",
+            "to_entity": "Origin",
+            "relation_type": "works_on"
+        }"#;
+        let params: CreateRelationParams = serde_json::from_str(json).unwrap();
+        assert_eq!(params.from_entity, "Alice");
+        assert_eq!(params.to_entity, "Origin");
+        assert_eq!(params.relation_type, "works_on");
+    }
+
+    #[test]
+    fn test_create_relation_params_missing_field_fails() {
+        let json = r#"{"from_entity": "Alice", "to_entity": "Origin"}"#;
+        let result = serde_json::from_str::<CreateRelationParams>(json);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_create_relation_request_body_shape() {
+        let server = make_server(TransportMode::Stdio, "claude", None);
+        let params = CreateRelationParams {
+            from_entity: "Alice".into(),
+            to_entity: "Origin".into(),
+            relation_type: "prefers".into(),
+        };
+        let source_agent = server.resolve_source_agent(None);
+        let req = CreateRelationRequest {
+            from_entity: params.from_entity,
+            to_entity: params.to_entity,
+            relation_type: params.relation_type,
+            source_agent,
+            confidence: None,
+            explanation: None,
+            source_memory_id: None,
+        };
+        let json = serde_json::to_value(&req).unwrap();
+        assert_eq!(json["from_entity"], "Alice");
+        assert_eq!(json["to_entity"], "Origin");
+        assert_eq!(json["relation_type"], "prefers");
+        assert_eq!(json["source_agent"], "claude");
+    }
+
+    // --- CreatePageParams ---
+
+    #[test]
+    fn test_create_page_params_minimal() {
+        let json = r#"{"title": "Origin daemon", "content": "Body text."}"#;
+        let params: CreatePageParams = serde_json::from_str(json).unwrap();
+        assert_eq!(params.title, "Origin daemon");
+        assert_eq!(params.content, "Body text.");
+        assert!(params.summary.is_none());
+        assert!(params.entity_id.is_none());
+        assert!(params.space.is_none());
+        assert!(params.source_memory_ids.is_empty());
+    }
+
+    #[test]
+    fn test_create_page_params_full() {
+        let json = r##"{
+            "title": "Origin daemon",
+            "content": "Markdown body with [[wikilinks]].",
+            "summary": "The headless HTTP daemon at the heart of Origin.",
+            "entity_id": "ent_origin",
+            "space": "origin",
+            "source_memory_ids": ["mem_1", "mem_2"]
+        }"##;
+        let params: CreatePageParams = serde_json::from_str(json).unwrap();
+        assert_eq!(params.title, "Origin daemon");
+        assert_eq!(
+            params.summary.as_deref(),
+            Some("The headless HTTP daemon at the heart of Origin.")
+        );
+        assert_eq!(params.entity_id.as_deref(), Some("ent_origin"));
+        assert_eq!(params.space.as_deref(), Some("origin"));
+        assert_eq!(params.source_memory_ids, vec!["mem_1", "mem_2"]);
+    }
+
+    #[test]
+    fn test_create_page_params_missing_required_fails() {
+        let json = r#"{"title": "Only title"}"#;
+        let result = serde_json::from_str::<CreatePageParams>(json);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_create_page_request_body_shape() {
+        let params = CreatePageParams {
+            title: "Page".into(),
+            content: "Body".into(),
+            summary: Some("S".into()),
+            entity_id: Some("ent_1".into()),
+            space: Some("origin".into()),
+            source_memory_ids: vec!["mem_1".into()],
+        };
+        let req = CreateConceptRequest {
+            title: params.title,
+            content: params.content,
+            summary: params.summary,
+            entity_id: params.entity_id,
+            space: params.space,
+            source_memory_ids: params.source_memory_ids,
+            creation_kind: None,
+            workspace: None,
+        };
+        let json = serde_json::to_value(&req).unwrap();
+        assert_eq!(json["title"], "Page");
+        assert_eq!(json["content"], "Body");
+        assert_eq!(json["summary"], "S");
+        assert_eq!(json["entity_id"], "ent_1");
+        assert_eq!(json["space"], "origin");
+        assert_eq!(json["source_memory_ids"], serde_json::json!(["mem_1"]));
+    }
+
+    // --- DeletePageParams ---
+
+    #[test]
+    fn test_delete_page_params() {
+        let json = r#"{"page_id": "page_abc"}"#;
+        let params: DeletePageParams = serde_json::from_str(json).unwrap();
+        assert_eq!(params.page_id, "page_abc");
+    }
+
+    #[test]
+    fn test_delete_page_params_missing_fails() {
+        let json = r#"{}"#;
+        let result = serde_json::from_str::<DeletePageParams>(json);
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_delete_page_blocked_on_http_transport() {
+        let server = make_server(TransportMode::Http, "agent", None);
+        let result = server.delete_page_impl("page_123").await.unwrap();
+        let content = &result.content[0];
+        match content.raw {
+            rmcp::model::RawContent::Text(ref tc) => {
+                assert!(tc.text.contains("not available over remote connections"));
+            }
+            _ => panic!("expected text content"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_delete_page_allowed_on_stdio_transport() {
+        // No daemon running → falls through to connection error (not transport block).
+        let server = make_server(TransportMode::Stdio, "agent", None);
+        let result = server.delete_page_impl("page_123").await.unwrap();
+        assert!(
+            result.is_error.unwrap_or(false),
+            "should fail with connection error, not transport block"
+        );
+    }
+
+    #[tokio::test]
+    async fn delete_observation_refuses_http_transport() {
+        let server = make_server(TransportMode::Http, "agent", None);
+        let params = DeleteObservationParams {
+            observation_id: "obs_123".to_string(),
+        };
+        let result = server.delete_observation_impl(params).await.unwrap();
+        let content = &result.content[0];
+        match content.raw {
+            rmcp::model::RawContent::Text(ref tc) => {
+                assert!(tc.text.contains("not available over remote connections"));
+            }
+            _ => panic!("expected text content"),
+        }
+    }
+
+    // --- GetPageParams ---
+
+    #[test]
+    fn test_get_page_params() {
+        let json = r#"{"page_id": "page_abc"}"#;
+        let params: GetPageParams = serde_json::from_str(json).unwrap();
+        assert_eq!(params.page_id, "page_abc");
+    }
+
+    #[test]
+    fn test_get_page_params_missing_fails() {
+        let json = r#"{}"#;
+        let result = serde_json::from_str::<GetPageParams>(json);
+        assert!(result.is_err());
+    }
+
+    // --- ListMemoriesParams ---
+
+    #[test]
+    fn test_list_memories_params_empty() {
+        let json = r#"{}"#;
+        let params: ListMemoriesParams = serde_json::from_str(json).unwrap();
+        assert!(params.memory_type.is_none());
+        assert!(params.space.is_none());
+        assert!(params.limit.is_none());
+    }
+
+    #[test]
+    fn test_list_memories_params_full() {
+        let json = r#"{"memory_type": "decision", "space": "origin", "limit": 50}"#;
+        let params: ListMemoriesParams = serde_json::from_str(json).unwrap();
+        assert_eq!(params.memory_type.as_deref(), Some("decision"));
+        assert_eq!(params.space.as_deref(), Some("origin"));
+        assert_eq!(params.limit, Some(50));
+    }
+
+    #[test]
+    fn test_list_memories_params_limit_as_string() {
+        // MCP clients sometimes serialize numeric params as strings.
+        let json = r#"{"limit": "25"}"#;
+        let params: ListMemoriesParams = serde_json::from_str(json).unwrap();
+        assert_eq!(params.limit, Some(25));
+    }
+
+    #[test]
+    fn test_list_memories_request_body_shape() {
+        let params = ListMemoriesParams {
+            memory_type: Some("fact".into()),
+            space: None,
+            limit: Some(10),
+        };
+        let req = ListMemoriesRequest {
+            memory_type: params.memory_type,
+            space: params.space,
+            limit: params.limit.unwrap_or(100),
+            confirmed: None,
+        };
+        let json = serde_json::to_value(&req).unwrap();
+        assert_eq!(json["memory_type"], "fact");
+        assert!(json["space"].is_null());
+        assert_eq!(json["limit"], 10);
+    }
+
+    #[test]
+    fn test_list_memories_request_default_limit() {
+        let params = ListMemoriesParams {
+            memory_type: None,
+            space: None,
+            limit: None,
+        };
+        let req = ListMemoriesRequest {
+            memory_type: params.memory_type,
+            space: params.space,
+            limit: params.limit.unwrap_or(100),
+            confirmed: None,
+        };
+        assert_eq!(req.limit, 100);
+    }
+
+    // --- UpdatePageParams ---
+
+    #[test]
+    fn test_update_page_params_minimal() {
+        let json =
+            r#"{"page_id": "page_abc", "content": "fresh body", "source_memory_ids": ["mem_1"]}"#;
+        let params: UpdatePageParams = serde_json::from_str(json).unwrap();
+        assert_eq!(params.page_id, "page_abc");
+        assert_eq!(params.content, "fresh body");
+        assert_eq!(params.source_memory_ids, vec!["mem_1"]);
+        assert!(params.summary.is_none());
+    }
+
+    #[test]
+    fn test_update_page_params_with_summary() {
+        let json = r#"{
+            "page_id": "page_abc",
+            "content": "body",
+            "source_memory_ids": ["mem_1", "mem_2"],
+            "summary": "Refreshed claim."
+        }"#;
+        let params: UpdatePageParams = serde_json::from_str(json).unwrap();
+        assert_eq!(params.summary.as_deref(), Some("Refreshed claim."));
+        assert_eq!(params.source_memory_ids.len(), 2);
+    }
+
+    #[test]
+    fn test_update_page_params_missing_required_fails() {
+        // Missing source_memory_ids is a hard fail — refresh without sources
+        // would orphan the page from its provenance trail.
+        let json = r#"{"page_id": "page_abc", "content": "body"}"#;
+        let result = serde_json::from_str::<UpdatePageParams>(json);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_update_page_request_body_shape() {
+        let params = UpdatePageParams {
+            page_id: "page_abc".into(),
+            content: "Body".into(),
+            source_memory_ids: vec!["mem_1".into()],
+            summary: Some("S".into()),
+        };
+        let req = wenlan_types::requests::RefreshPageRequest {
+            content: params.content,
+            source_memory_ids: params.source_memory_ids,
+            summary: params.summary,
+        };
+        let json = serde_json::to_value(&req).unwrap();
+        assert_eq!(json["content"], "Body");
+        assert_eq!(json["source_memory_ids"], serde_json::json!(["mem_1"]));
+        assert_eq!(json["summary"], "S");
+        // page_id stays in the URL, never the body.
+        assert!(json.get("page_id").is_none());
+    }
+
+    // --- Tool registration ---
+
+    #[test]
+    fn new_crud_tools_are_registered() {
+        let descriptions = tool_descriptions();
+        for name in [
+            "create_entity",
+            "create_relation",
+            "create_observation",
+            "confirm_entity",
+            "update_observation",
+            "confirm_observation",
+            "delete_observation",
+            "create_page",
+            "update_page",
+            "delete_page",
+            "get_page",
+            "get_page_links",
+            "list_memories",
+            "search_pages",
+            "list_pages_recent",
+            "list_spaces",
+        ] {
+            assert!(
+                descriptions.contains_key(name),
+                "tool `{name}` must be registered, got: {:?}",
+                descriptions.keys().collect::<Vec<_>>()
+            );
+        }
+    }
+
+    #[test]
+    fn capture_memory_type_schema_lists_every_canonical_type() {
+        let params_schema = serde_json::to_string(&schemars::schema_for!(CaptureParams))
+            .expect("CaptureParams schema serializes");
+        for ty in wenlan_types::MemoryType::all_values() {
+            assert!(
+                params_schema.contains(ty),
+                "CaptureParams.memory_type schema must list canonical type \"{ty}\", got: {params_schema}"
+            );
+        }
+    }
+
+    #[test]
+    fn recall_memory_type_schema_lists_every_canonical_type() {
+        let params_schema = serde_json::to_string(&schemars::schema_for!(RecallParams))
+            .expect("RecallParams schema serializes");
+        for ty in wenlan_types::MemoryType::all_values() {
+            assert!(
+                params_schema.contains(ty),
+                "RecallParams.memory_type schema must list canonical type \"{ty}\", got: {params_schema}"
+            );
+        }
+    }
+
+    #[test]
+    fn create_entity_schema_documents_name_and_type() {
+        let schema = serde_json::to_string(&schemars::schema_for!(CreateEntityParams))
+            .expect("CreateEntityParams schema serializes");
+        assert!(
+            schema.contains("Canonical entity name"),
+            "schema must describe `name` field"
+        );
+        assert!(
+            schema.contains("Entity category"),
+            "schema must describe `entity_type` field"
+        );
+    }
+
+    #[test]
+    fn create_page_schema_documents_traceability() {
+        let schema = serde_json::to_string(&schemars::schema_for!(CreatePageParams))
+            .expect("CreatePageParams schema serializes");
+        assert!(
+            schema.contains("traceability"),
+            "schema must spell out why source_memory_ids matter"
+        );
+    }
+
+    #[test]
+    fn delete_page_tool_is_marked_destructive() {
+        let server = make_server(TransportMode::Stdio, "test", None);
+        let tool = server
+            .tool_router
+            .list_all()
+            .into_iter()
+            .find(|t| t.name == "delete_page")
+            .expect("delete_page registered");
+        let ann = tool.annotations.as_ref().expect("annotations present");
+        assert_eq!(
+            ann.destructive_hint,
+            Some(true),
+            "delete_page must declare destructive_hint=true"
+        );
+    }
+
+    // --- SearchPagesParams ---
+
+    #[test]
+    fn test_search_pages_params_minimal() {
+        let json = r#"{"query": "mutex deadlock"}"#;
+        let params: SearchPagesParams = serde_json::from_str(json).unwrap();
+        assert_eq!(params.query, "mutex deadlock");
+        assert!(params.limit.is_none());
+    }
+
+    #[test]
+    fn test_search_pages_params_full() {
+        let json = r#"{"query": "distill architecture", "limit": 5}"#;
+        let params: SearchPagesParams = serde_json::from_str(json).unwrap();
+        assert_eq!(params.query, "distill architecture");
+        assert_eq!(params.limit, Some(5));
+    }
+
+    #[test]
+    fn test_search_pages_params_missing_query_fails() {
+        let json = r#"{"limit": 10}"#;
+        let result = serde_json::from_str::<SearchPagesParams>(json);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_search_pages_params_limit_as_string() {
+        let json = r#"{"query": "x", "limit": "3"}"#;
+        let params: SearchPagesParams = serde_json::from_str(json).unwrap();
+        assert_eq!(params.limit, Some(3));
+    }
+
+    #[test]
+    fn test_search_pages_request_body_shape() {
+        let params = SearchPagesParams {
+            query: "mutex".into(),
+            limit: Some(7),
+            page_type: None,
+        };
+        let req = SearchPagesRequest {
+            query: params.query,
+            limit: params.limit,
+            page_type: params.page_type,
+        };
+        let json = serde_json::to_value(&req).unwrap();
+        assert_eq!(json["query"], "mutex");
+        assert_eq!(json["limit"], 7);
+    }
+
+    // --- ListPagesRecentParams ---
+
+    #[test]
+    fn test_list_pages_recent_params_empty() {
+        let json = r#"{}"#;
+        let params: ListPagesRecentParams = serde_json::from_str(json).unwrap();
+        assert!(params.limit.is_none());
+        assert!(params.since_ms.is_none());
+    }
+
+    #[test]
+    fn test_list_pages_recent_params_full() {
+        let json = r#"{"limit": 20, "since_ms": 1715000000000}"#;
+        let params: ListPagesRecentParams = serde_json::from_str(json).unwrap();
+        assert_eq!(params.limit, Some(20));
+        assert_eq!(params.since_ms, Some(1715000000000));
+    }
+
+    #[test]
+    fn test_list_pages_recent_params_string_numbers() {
+        let json = r#"{"limit": "15", "since_ms": "1715000000000"}"#;
+        let params: ListPagesRecentParams = serde_json::from_str(json).unwrap();
+        assert_eq!(params.limit, Some(15));
+        assert_eq!(params.since_ms, Some(1715000000000));
+    }
+
+    #[test]
+    fn list_pages_recent_url_construction() {
+        // Exercises the actual builder used by `list_pages_recent_impl` so the
+        // test cannot drift from production behavior.
+        assert_eq!(build_recent_pages_path(None, None), "/api/pages/recent");
+        assert_eq!(
+            build_recent_pages_path(Some(5), None),
+            "/api/pages/recent?limit=5"
+        );
+        assert_eq!(
+            build_recent_pages_path(None, Some(123)),
+            "/api/pages/recent?since_ms=123"
+        );
+        assert_eq!(
+            build_recent_pages_path(Some(10), Some(456)),
+            "/api/pages/recent?limit=10&since_ms=456"
+        );
+        // Negative since_ms (i64 — sentinel like "-1" must still serialize).
+        assert_eq!(
+            build_recent_pages_path(None, Some(-1)),
+            "/api/pages/recent?since_ms=-1"
+        );
+    }
+
+    #[test]
+    fn search_pages_and_list_pages_recent_are_read_only() {
+        let server = make_server(TransportMode::Stdio, "test", None);
+        for name in ["search_pages", "list_pages_recent"] {
+            let tool = server
+                .tool_router
+                .list_all()
+                .into_iter()
+                .find(|t| t.name == name)
+                .unwrap_or_else(|| panic!("`{name}` registered"));
+            let ann = tool.annotations.as_ref().expect("annotations present");
+            assert_eq!(
+                ann.read_only_hint,
+                Some(true),
+                "`{name}` must declare read_only_hint=true"
+            );
+        }
+    }
+
+    #[test]
+    fn accept_refinement_response_typed_deserialize() {
+        let raw = r#"{"id":"ref_xyz","action_applied":"entity_merge"}"#;
+        let parsed: AcceptRefinementResponse = serde_json::from_str(raw).unwrap();
+        assert_eq!(parsed.id, "ref_xyz");
+        assert_eq!(parsed.action_applied, "entity_merge");
+    }
+
+    #[test]
+    fn accept_refinement_response_rejects_extra_envelope() {
+        // Daemon must not wrap successful response under an extra key — the
+        // lesson_mcp_typed_deserialize guard. This test verifies a non-typed
+        // shape fails to deserialize loud.
+        let wrong = r#"{"data":{"id":"ref_xyz","action_applied":"entity_merge"}}"#;
+        let result: Result<AcceptRefinementResponse, _> = serde_json::from_str(wrong);
+        assert!(
+            result.is_err(),
+            "envelope-wrapped response must fail typed deserialize"
+        );
+    }
+
+    // ===== DistillParams force field =====
+
+    #[test]
+    fn distill_params_deserializes_force() {
+        let p: DistillParams =
+            serde_json::from_str(r#"{"target":"page_xyz","force":true}"#).unwrap();
+        assert_eq!(p.target.as_deref(), Some("page_xyz"));
+        assert_eq!(p.force, Some(true));
+    }
+
+    #[test]
+    fn distill_params_defaults_force_to_none() {
+        let p: DistillParams = serde_json::from_str(r#"{"target":"foo"}"#).unwrap();
+        assert_eq!(p.force, None);
+    }
+
+    // ===== effective_space =====
+
+    #[test]
+    fn locked_overrides_inbound_space() {
+        let _guard = crate::lock_state::ENV_LOCK.lock().unwrap();
+        std::env::set_var("ORIGIN_SPACE", "career");
+        crate::lock_state::init_from_env();
+
+        let inbound = Some("ideas".to_string());
+        let resolved = effective_space(&inbound);
+        assert_eq!(resolved.as_deref(), Some("career"));
+    }
+
+    #[test]
+    fn unlocked_passes_inbound_through() {
+        let _guard = crate::lock_state::ENV_LOCK.lock().unwrap();
+        std::env::remove_var("ORIGIN_SPACE");
+        crate::lock_state::init_from_env();
+
+        let inbound = Some("ideas".to_string());
+        let resolved = effective_space(&inbound);
+        assert_eq!(resolved.as_deref(), Some("ideas"));
+    }
+
+    #[test]
+    fn locked_with_no_inbound_yields_locked() {
+        let _guard = crate::lock_state::ENV_LOCK.lock().unwrap();
+        std::env::set_var("ORIGIN_SPACE", "career");
+        crate::lock_state::init_from_env();
+
+        let inbound: Option<String> = None;
+        let resolved = effective_space(&inbound);
+        assert_eq!(resolved.as_deref(), Some("career"));
+    }
+
+    #[test]
+    fn unlocked_with_no_inbound_yields_none() {
+        let _guard = crate::lock_state::ENV_LOCK.lock().unwrap();
+        std::env::remove_var("ORIGIN_SPACE");
+        crate::lock_state::init_from_env();
+
+        let inbound: Option<String> = None;
+        let resolved = effective_space(&inbound);
+        assert_eq!(resolved, None);
+    }
+
+    // ===== Schema gating =====
+
+    /// Baseline: the raw `capture` schema from the tool router includes `space`.
+    #[test]
+    fn capture_schema_has_space_in_raw_router() {
+        let tools = WenlanMcpServer::tool_router().list_all();
+        let capture = tools
+            .into_iter()
+            .find(|t| t.name == "capture")
+            .expect("capture tool registered");
+        let props = capture
+            .input_schema
+            .get("properties")
+            .and_then(|v| v.as_object())
+            .expect("capture has properties");
+        assert!(
+            props.contains_key("space"),
+            "baseline: capture schema must have space before gating"
+        );
+    }
+
+    /// When locked, `strip_space_from_tool_schema` removes `space` from properties.
+    #[test]
+    fn capture_tool_schema_omits_space_when_locked() {
+        let _guard = crate::lock_state::ENV_LOCK.lock().unwrap();
+        std::env::set_var("ORIGIN_SPACE", "career");
+        crate::lock_state::init_from_env();
+
+        let tools = WenlanMcpServer::tool_router().list_all();
+        let tools: Vec<_> = tools
+            .into_iter()
+            .map(strip_space_from_tool_schema)
+            .collect();
+        let capture = tools
+            .iter()
+            .find(|t| t.name == "capture")
+            .expect("capture tool registered");
+        let props = capture
+            .input_schema
+            .get("properties")
+            .and_then(|v| v.as_object())
+            .expect("capture has properties");
+        assert!(
+            !props.contains_key("space"),
+            "space field must be omitted from capture schema when ORIGIN_SPACE is locked"
+        );
+
+        // Clean up.
+        std::env::remove_var("ORIGIN_SPACE");
+        crate::lock_state::init_from_env();
+    }
+
+    /// Unlocked: `list_tools` equivalent — raw router listing preserves `space`.
+    #[test]
+    fn capture_tool_schema_includes_space_when_unlocked() {
+        let _guard = crate::lock_state::ENV_LOCK.lock().unwrap();
+        std::env::remove_var("ORIGIN_SPACE");
+        crate::lock_state::init_from_env();
+
+        // When not locked, tools are returned as-is (no stripping).
+        let tools = WenlanMcpServer::tool_router().list_all();
+        let capture = tools
+            .iter()
+            .find(|t| t.name == "capture")
+            .expect("capture tool registered");
+        let props = capture
+            .input_schema
+            .get("properties")
+            .and_then(|v| v.as_object())
+            .expect("capture has properties");
+        assert!(
+            props.contains_key("space"),
+            "space field must be present in capture schema when ORIGIN_SPACE is not locked"
+        );
+    }
+}

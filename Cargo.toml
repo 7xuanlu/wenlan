@@ -1,11 +1,11 @@
 [workspace]
 resolver = "2"
 members = [
-    "crates/origin-cli",
-    "crates/origin-types",
-    "crates/origin-core",
-    "crates/origin-server",
-    "crates/origin-mcp",
+    "crates/wenlan-cli",
+    "crates/wenlan-types",
+    "crates/wenlan-core",
+    "crates/wenlan-server",
+    "crates/wenlan-mcp",
 ]
 
 [workspace.package]
@@ -16,8 +16,8 @@ repository = "https://github.com/7xuanlu/origin"
 
 [workspace.dependencies]
 # Internal crates — both path AND version required for cargo publish
-origin-types = { path = "crates/origin-types", version = "0.8.5" }
-origin-core  = { path = "crates/origin-core",  version = "0.8.5" }
+wenlan-types = { path = "crates/wenlan-types", version = "0.8.5" }
+wenlan-core  = { path = "crates/wenlan-core",  version = "0.8.5" }
 
 # Serialization
 serde = { version = "1", features = ["derive"] }
