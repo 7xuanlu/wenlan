@@ -773,7 +773,7 @@ pub async fn handle_distill(
                         "force": true,
                         "page_id": page_id,
                         "updated": false,
-                        "hint": "force rebuild needs an LLM in the daemon — install an on-device model or set an Anthropic key via `origin setup` / `/origin:doctor`",
+                        "hint": "force rebuild needs an LLM in the daemon — install an on-device model or set an Anthropic key via `wenlan setup` / `/origin:doctor`",
                     })));
                 }
             }
@@ -985,7 +985,7 @@ pub async fn handle_redistill(
         Ok(Json(serde_json::json!({
             "status": "skipped",
             "updated": false,
-            "hint": "page re-distill needs an LLM in the daemon — install an on-device model or set an Anthropic key via `origin setup` / `/origin:doctor`",
+            "hint": "page re-distill needs an LLM in the daemon — install an on-device model or set an Anthropic key via `wenlan setup` / `/origin:doctor`",
         })))
     }
 }

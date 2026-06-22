@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-//! `origin space list/add/default/move/show` — manage memory spaces.
+//! `wenlan space list/add/default/move/show` — manage memory spaces.
 
 use anyhow::Result;
 use clap::Subcommand;

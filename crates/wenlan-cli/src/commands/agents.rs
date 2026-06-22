@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-//! `origin agents list/show/edit` — manage registered agents.
+//! `wenlan agents list/show/edit` — manage registered agents.
 
 use anyhow::Result;
 use clap::Subcommand;

@@ -555,7 +555,7 @@ fn format_capture_success(resp: &StoreMemoryResponse) -> String {
 }
 
 fn daemon_setup_hint() -> &'static str {
-    "Install the local Wenlan runtime and run `origin setup`.
+    "Install the local Wenlan runtime and run `wenlan setup`.
 
 Setup choices:
 - Local Memory: store, search, and recall now. No model download or API key.
@@ -565,9 +565,9 @@ Setup choices:
 Install:
   curl -fsSL https://raw.githubusercontent.com/7xuanlu/origin/main/install.sh | bash
   export PATH=\"$HOME/.origin/bin:$PATH\"
-  origin setup
-  origin install
-  origin status"
+  wenlan setup
+  wenlan install
+  wenlan status"
 }
 
 /// Convert a backend error into a tool-level error result (isError: true)
@@ -662,13 +662,13 @@ fn format_doctor_message(status: &serde_json::Value) -> String {
 
     if !setup_completed {
         msg.push_str(
-            "\n\nRun `origin setup` to choose Local Memory, On-device Model, or Anthropic Key.",
+            "\n\nRun `wenlan setup` to choose Local Memory, On-device Model, or Anthropic Key.",
         );
     } else if !anthropic_key_configured && local_model_loaded.is_none() {
         msg.push_str(
             "\n\nLocal memory works now: capture, recall, and context are available. \
-             To enable richer extraction and distill cycles, run `origin model install` \
-             or `origin key set anthropic`.",
+             To enable richer extraction and distill cycles, run `wenlan model install` \
+             or `wenlan key set anthropic`.",
         );
     }
 
@@ -824,7 +824,7 @@ impl WenlanMcpServer {
             Err(WenlanError::Api { status: 404, .. }) => {
                 return Ok(CallToolResult::error(vec![Content::text(
                     "Wenlan daemon is running, but it does not expose /api/setup/status. \
-                     Update Wenlan, then run `origin doctor`."
+                     Update Wenlan, then run `wenlan doctor`."
                         .to_string(),
                 )]));
             }
@@ -2833,8 +2833,8 @@ mod tests {
         assert!(msg.contains("On-device model: not selected"));
         assert!(msg.contains("Distill cycles: off"));
         assert!(msg.contains("Local memory works now: capture, recall, and context are available"));
-        assert!(msg.contains("origin model install"));
-        assert!(msg.contains("origin key set anthropic"));
+        assert!(msg.contains("wenlan model install"));
+        assert!(msg.contains("wenlan key set anthropic"));
     }
 
     #[test]
@@ -2869,7 +2869,7 @@ mod tests {
         }));
 
         assert!(msg.contains("Setup: not completed"));
-        assert!(msg.contains("Run `origin setup`"));
+        assert!(msg.contains("Run `wenlan setup`"));
         assert!(msg.contains("Local Memory, On-device Model, or Anthropic Key"));
     }
 

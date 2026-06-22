@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-//! `origin search <query>` — POST /api/search.
+//! `wenlan search <query>` — POST /api/search.
 
 use anyhow::Result;
 use wenlan_types::responses::SearchResponse;

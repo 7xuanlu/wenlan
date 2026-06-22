@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-//! `origin status` — show daemon, service, model, and key state.
+//! `wenlan status` — show daemon, service, model, and key state.
 
 use anyhow::Result;
 

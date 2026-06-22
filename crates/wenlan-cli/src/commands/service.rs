@@ -324,7 +324,7 @@ pub fn uninstall() -> Result<()> {
 /// incumbent on port 7878 and exits). See wenlan-server/src/main.rs:582-615.
 pub fn restart() -> Result<()> {
     if !is_installed() {
-        anyhow::bail!("Wenlan service is not installed. Run `origin install` first.");
+        anyhow::bail!("Wenlan service is not installed. Run `wenlan install` first.");
     }
 
     #[cfg(target_os = "windows")]

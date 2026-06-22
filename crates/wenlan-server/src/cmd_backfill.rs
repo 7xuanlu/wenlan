@@ -164,8 +164,8 @@ fn check_service_unloaded() -> Result<()> {
             Err(anyhow!(
                 "The Wenlan service is registered with the Windows Service Control Manager as \
                  '{SERVICE_LABEL}'.\n\
-                 Unload it first to prevent auto-restart:\n  origin uninstall\n\
-                 Then re-run this command. (Reinstall after with `origin install`.)"
+                 Unload it first to prevent auto-restart:\n  wenlan uninstall\n\
+                 Then re-run this command. (Reinstall after with `wenlan install`.)"
             ))
         } else {
             Ok(())
@@ -177,8 +177,8 @@ fn check_service_unloaded() -> Result<()> {
         if unit.exists() {
             Err(anyhow!(
                 "The Wenlan service is registered with the platform service manager at:\n  {}\n\
-                 Unload it first to prevent auto-restart:\n  origin uninstall\n\
-                 Then re-run this command. (Reinstall after with `origin install`.)",
+                 Unload it first to prevent auto-restart:\n  wenlan uninstall\n\
+                 Then re-run this command. (Reinstall after with `wenlan install`.)",
                 unit.display()
             ))
         } else {
@@ -202,7 +202,7 @@ async fn check_daemon_not_running() -> Result<()> {
     match client.get(&probe_url).send().await {
         Ok(_) => Err(anyhow!(
             "Daemon is running on :{port}. Stop it before running backfill:\n  \
-             origin uninstall\n  \
+             wenlan uninstall\n  \
              # or: kill -9 $(lsof -ti :{port})"
         )),
         // Truly refused (nothing listening): safe to proceed.
@@ -211,7 +211,7 @@ async fn check_daemon_not_running() -> Result<()> {
         Err(e) if e.is_timeout() => Err(anyhow!(
             "Daemon probe to :{port} timed out after {}ms. \
              Daemon may be busy. Stop it explicitly and retry:\n  \
-             origin uninstall\n  \
+             wenlan uninstall\n  \
              # or: kill -9 $(lsof -ti :{port})",
             DAEMON_PROBE_TIMEOUT.as_millis()
         )),
@@ -228,8 +228,8 @@ mod tests {
     fn check_service_unloaded_returns_ok_when_no_service_installed() {
         // In the test environment we are unlikely to have the production service
         // unit file at the user's data dir. If a developer has previously run
-        // `origin install`, this test will fail locally — that is acceptable, the
-        // failure tells them to `origin uninstall` first.
+        // `wenlan install`, this test will fail locally — that is acceptable, the
+        // failure tells them to `wenlan uninstall` first.
         check_service_unloaded().expect("expected Ok in clean test env");
     }
 

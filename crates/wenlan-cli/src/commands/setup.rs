@@ -143,8 +143,8 @@ pub async fn run_doctor() -> anyhow::Result<()> {
         println!("Distill cycles: ready for richer extraction and page synthesis.");
     } else {
         println!("Distill cycles: off until you choose a local model or Anthropic key.");
-        println!("  Run: origin model install");
-        println!("  Or:  origin key set anthropic");
+        println!("  Run: wenlan model install");
+        println!("  Or:  wenlan key set anthropic");
     }
 
     let cwd = std::env::current_dir()?;

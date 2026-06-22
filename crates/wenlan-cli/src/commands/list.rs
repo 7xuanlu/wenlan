@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-//! `origin list [--limit N] [--type X]` — POST /api/memory/list.
+//! `wenlan list [--limit N] [--type X]` — POST /api/memory/list.
 
 use anyhow::Result;
 use wenlan_types::responses::ListMemoriesResponse;
