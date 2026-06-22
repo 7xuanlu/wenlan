@@ -136,8 +136,19 @@ pub struct StatusResponse {
     pub files_indexed: u64,
     pub files_total: u64,
     pub sources_connected: Vec<String>,
+    /// Reranker on the DEEP path (`/api/memory/search` with `rerank=true`). Legacy
+    /// field — for `ORIGIN_RERANKER_ENABLED=1` it is the configured model, exactly as before.
     #[serde(default)]
     pub reranker: RerankerStatus,
+    /// Reranker on the LIGHT paths — quick (`/api/search`) + context
+    /// (`/api/chat-context`). Populated when `ORIGIN_RERANKER_MODE` is `lite`/`full`.
+    /// Additive: defaults to `Disabled` so older daemons (which omit it) deserialize cleanly.
+    #[serde(default)]
+    pub reranker_light: RerankerStatus,
+    /// Resolved reranker mode: `"off"` | `"lite"` | `"full"`. Empty string for older
+    /// daemons that predate `ORIGIN_RERANKER_MODE`.
+    #[serde(default)]
+    pub reranker_mode: String,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -1164,11 +1175,36 @@ mod reranker_status_tests {
 
     #[test]
     fn status_response_defaults_reranker_to_disabled() {
-        // Old daemons omit the field entirely.
+        // Old daemons omit reranker AND the newer reranker_light/reranker_mode fields
+        // entirely — all three must default cleanly (additive wire change, no break).
         let json =
             r#"{"is_running":true,"files_indexed":0,"files_total":0,"sources_connected":[]}"#;
         let parsed: StatusResponse = serde_json::from_str(json).unwrap();
         assert_eq!(parsed.reranker, RerankerStatus::Disabled);
+        assert_eq!(parsed.reranker_light, RerankerStatus::Disabled);
+        assert_eq!(parsed.reranker_mode, "");
+    }
+
+    #[test]
+    fn status_response_roundtrips_per_path_reranker() {
+        let s = StatusResponse {
+            is_running: true,
+            files_indexed: 0,
+            files_total: 0,
+            sources_connected: vec![],
+            reranker: RerankerStatus::Active {
+                model_id: "BGERerankerBase".into(),
+            },
+            reranker_light: RerankerStatus::Active {
+                model_id: "JINARerankerV1TurboEn".into(),
+            },
+            reranker_mode: "full".into(),
+        };
+        let json = serde_json::to_string(&s).unwrap();
+        let parsed: StatusResponse = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed.reranker, s.reranker);
+        assert_eq!(parsed.reranker_light, s.reranker_light);
+        assert_eq!(parsed.reranker_mode, "full");
     }
 
     #[test]
