@@ -192,7 +192,7 @@ fn version_flag() {
         .arg("--version")
         .assert()
         .success()
-        .stdout(predicate::str::contains("origin"));
+        .stdout(predicate::str::contains("wenlan"));
 }
 
 #[test]
@@ -491,7 +491,7 @@ fn service_unit_path_resolves_per_os() {
     #[cfg(target_os = "linux")]
     assert!(path
         .to_string_lossy()
-        .ends_with(".config/systemd/user/origin-server.service"));
+        .ends_with(".config/systemd/user/wenlan-server.service"));
 }
 
 #[cfg(target_os = "macos")]
@@ -590,7 +590,7 @@ fn setup_install_status_uninstall_roundtrip_isolated() {
         "missing StandardOutPath in plist: {plist}"
     );
     assert!(
-        plist.contains("origin-server.stdout.log"),
+        plist.contains("wenlan-server.stdout.log"),
         "stdout log path not threaded into plist: {plist}"
     );
     assert!(
@@ -598,7 +598,7 @@ fn setup_install_status_uninstall_roundtrip_isolated() {
         "missing StandardErrorPath in plist: {plist}"
     );
     assert!(
-        plist.contains("origin-server.stderr.log"),
+        plist.contains("wenlan-server.stderr.log"),
         "stderr log path not threaded into plist: {plist}"
     );
     assert!(

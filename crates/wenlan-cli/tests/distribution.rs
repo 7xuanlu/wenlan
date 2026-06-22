@@ -82,7 +82,7 @@ fn npm_package_allowlists_match_release_generated_files() {
     // `run.js`. Linux/Windows users install via the Docker image, the tar/zip
     // release archives, or `cargo install`, so the npm allowlist stays narrow
     // on purpose.
-    let setup_pkg = read_json("crates/origin-cli/npm/package.json");
+    let setup_pkg = read_json("crates/wenlan-cli/npm/package.json");
     assert_eq!(json_string(&setup_pkg, "name"), "@7xuanlu/origin");
     assert_eq!(setup_pkg["bin"]["origin"], "run.js");
     assert_eq!(setup_pkg["license"], "Apache-2.0");
@@ -97,9 +97,9 @@ fn npm_package_allowlists_match_release_generated_files() {
     // (darwin x2, linux x2, windows x1) via its npm postinstall. The
     // allowlist must include each platform the matrix uploads or `npm
     // install` rejects the package on those hosts.
-    let mcp_pkg = read_json("crates/origin-mcp/npm/package.json");
-    assert_eq!(json_string(&mcp_pkg, "name"), "wenlan-mcp");
-    assert_eq!(mcp_pkg["bin"]["wenlan-mcp"], "run.js");
+    let mcp_pkg = read_json("crates/wenlan-mcp/npm/package.json");
+    assert_eq!(json_string(&mcp_pkg, "name"), "origin-mcp");
+    assert_eq!(mcp_pkg["bin"]["origin-mcp"], "run.js");
     assert_eq!(mcp_pkg["scripts"]["postinstall"], "node install.js");
     assert_eq!(mcp_pkg["license"], "Apache-2.0");
     assert_eq!(
