@@ -126,7 +126,7 @@ async fn call_llm_for_answer(
 ///
 /// Tests three approaches:
 /// - FlatMarkdown: all seeds as markdown context
-/// - Origin: search results as context
+/// - Wenlan: search results as context
 /// - NoContext: no context (LLM baseline)
 ///
 /// For each case, composes a prompt with context + query, sends to Haiku,
@@ -202,7 +202,7 @@ pub async fn run_e2e_answer_eval(
             .collect::<Vec<_>>()
             .join("\n\n");
 
-        // Origin: seed ephemeral DB, run hybrid search
+        // Wenlan: seed ephemeral DB, run hybrid search
         let origin_context = {
             let case_tmp = tempfile::tempdir()
                 .map_err(|e| WenlanError::Generic(format!("tempdir e2e: {e}")))?;
@@ -471,7 +471,7 @@ pub async fn run_e2e_locomo_eval(
             }
         };
 
-        // Seed ephemeral DB for Origin retrieval.
+        // Seed ephemeral DB for Wenlan retrieval.
         let tmp = tempfile::tempdir()
             .map_err(|e| WenlanError::Generic(format!("tempdir e2e_locomo: {e}")))?;
         let db = MemoryDB::new_with_shared_embedder(
@@ -529,7 +529,7 @@ pub async fn run_e2e_locomo_eval(
                 Be specific and concise. Respond in 1-3 sentences."
                 .to_string();
 
-            // ---- Origin approach: hybrid search ----
+            // ---- Wenlan approach: hybrid search ----
             let origin_context = {
                 let results = db
                     .search_memory(
@@ -588,7 +588,7 @@ pub async fn run_e2e_locomo_eval(
                 }
             }
 
-            // ---- T10: Origin-compressed approach (env-gated) ----
+            // ---- T10: Wenlan-compressed approach (env-gated) ----
             if compress_on {
                 // Env flag is the master gate; force the tuning `enabled`
                 // knob on so the env-gated eval actually compresses (other
@@ -2772,7 +2772,7 @@ pub enum ArmKind {
     /// Full production stack, single arm: CrossRerank(Some(reranker)) with all
     /// feature env flags left ON by the operator (page channel / graph stream /
     /// temporal / deep `RERANK_POOL_FLOOR`). Used by the "best-possible ceiling"
-    /// run to measure how good Origin can answer with everything turned on, NOT
+    /// run to measure how good Wenlan can answer with everything turned on, NOT
     /// for an isolated A/B. Resolves to the same retrieval as `CeOn`; the
     /// difference is the surrounding env flags + that no confounder isolation is
     /// enforced (there is no OFF arm to perturb asymmetrically). Note: on this

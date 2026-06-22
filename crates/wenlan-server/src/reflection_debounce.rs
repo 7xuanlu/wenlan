@@ -36,9 +36,9 @@
 //! the fresh task is not itself immediately starved. Reflection makes progress
 //! under sustained load without ever double-enriching.
 //!
-//! This struct lives in `origin-server` (the detached-spawn owner). The
+//! This struct lives in `wenlan-server` (the detached-spawn owner). The
 //! cancellation *signal* it produces (`Arc<AtomicBool>`) is passed into
-//! `origin-core`'s `run_post_ingest_enrichment` as `Option<&AtomicBool>`; core
+//! `wenlan-core`'s `run_post_ingest_enrichment` as `Option<&AtomicBool>`; core
 //! stays framework-agnostic and only sees a plain atomic.
 //!
 //! No new dependency: built on `tokio::spawn` + `JoinHandle::abort` +

@@ -1,13 +1,13 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Knowledge compilation: pages are synthesized wiki entries distilled from memory clusters.
 
-// Re-export the wire type from origin-types so existing consumers keep working.
+// Re-export the wire type from wenlan-types so existing consumers keep working.
 pub use wenlan_types::pages::Page;
 
 /// Generate a new unique page ID.
 ///
 /// Replaces the former `Page::new_id()` associated function now that `Page`
-/// is defined in `origin-types` and `impl` blocks on foreign types are
+/// is defined in `wenlan-types` and `impl` blocks on foreign types are
 /// disallowed.
 pub fn new_page_id() -> String {
     format!("page_{}", uuid::Uuid::new_v4())

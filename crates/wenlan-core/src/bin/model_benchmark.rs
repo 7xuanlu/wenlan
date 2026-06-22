@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
 #![allow(clippy::type_complexity)]
-//! model-benchmark: Evaluate a GGUF model against Origin's P0 prompts.
+//! model-benchmark: Evaluate a GGUF model against Wenlan's P0 prompts.
 //!
 //! Usage:
-//!   cargo run --release -p origin-core --bin model_benchmark -- <path/to/model.gguf> [<output.json>]
+//!   cargo run --release -p wenlan-core --bin model_benchmark -- <path/to/model.gguf> [<output.json>]
 //!
 //! Scores structural quality and latency for:
 //!   - CLASSIFY_MEMORY (JSON parse, correct enum, domain present)
@@ -47,11 +47,11 @@ struct BenchmarkReport {
 // ---- Test fixtures ----
 
 const CLASSIFY_CASES: &[&str] = &[
-    "I'm a senior Rust engineer at Meta working on Origin, a personal knowledge wiki app.",
+    "I'm a senior Rust engineer at Meta working on Wenlan, a personal knowledge wiki app.",
     "I prefer tabs over spaces for indentation because it's more configurable.",
     "Switched from PostgreSQL to libSQL for the embedded use case and better vector support.",
     "The libSQL database schema uses F32_BLOB(384) for vector columns.",
-    "Goal: ship BYOK model routing in Origin by end of week.",
+    "Goal: ship BYOK model routing in Wenlan by end of week.",
     "My favorite coffee is oat milk flat white from Blue Bottle.",
     "Chose Tauri over Electron because it uses the system webview and has smaller bundle size.",
     "React Query v5 uses isPending instead of isLoading for new queries.",
@@ -75,7 +75,7 @@ const CLASSIFY_EXPECTED_TYPES: &[&str] = &[
 const EXTRACT_CASES: &[&str] = &[
     "Alice from the ML team helped debug the tokenizer bug in Qwen3-4B. She found that the BOS token wasn't being added properly.",
     "Installed Ollama on my MacBook to test Gemma 4 E4B locally. Runs at about 30 tok/s on M2 Pro.",
-    "Had a call with Sarah and Tom about the Origin roadmap. Decided to prioritize BYOK over cloud sync for Q2.",
+    "Had a call with Sarah and Tom about the Wenlan roadmap. Decided to prioritize BYOK over cloud sync for Q2.",
     "Reading Karpathy's blog post about LLM knowledge bases. He recommends storing notes as markdown files and using Claude Code to query them.",
     "Used Rust's tokio runtime for the HTTP server. Axum 0.8 made the routing much cleaner than manual Hyper.",
 ];
@@ -83,7 +83,7 @@ const EXTRACT_CASES: &[&str] = &[
 const EXTRACT_EXPECTED_ENTITIES: &[&[&str]] = &[
     &["Alice", "Qwen3-4B", "ML team"],
     &["Ollama", "MacBook", "Gemma 4", "M2"],
-    &["Sarah", "Tom", "Origin", "BYOK"],
+    &["Sarah", "Tom", "Wenlan", "BYOK"],
     &["Karpathy", "Claude Code"],
     &["Rust", "tokio", "Axum"],
 ];
@@ -95,8 +95,8 @@ const CONTRADICTION_PAIRS: &[(&str, &str, &str)] = &[
         "CONTRADICTS",
     ),
     (
-        "The Origin database is stored in libSQL under the platform data directory (e.g. ~/Library/Application Support/origin on macOS, ~/.local/share/origin on Linux, %LOCALAPPDATA%\\origin on Windows).",
-        "Origin uses libSQL for its local database.",
+        "The Wenlan database is stored in libSQL under the platform data directory (e.g. ~/Library/Application Support/wenlan on macOS, ~/.local/share/wenlan on Linux, %LOCALAPPDATA%\\origin on Windows).",
+        "Wenlan uses libSQL for its local database.",
         "CONSISTENT",
     ),
     (
@@ -117,12 +117,12 @@ const CONTRADICTION_PAIRS: &[(&str, &str, &str)] = &[
 ];
 
 const DISTILL_CLUSTER: &[&str] = &[
-    "[mem_1] Origin is a personal knowledge wiki app built with Tauri 2 and Rust.",
-    "[mem_2] Origin uses libSQL (Turso's SQLite fork) as its database with F32_BLOB(384) vector columns.",
-    "[mem_3] The on-device LLM in Origin is Qwen3-4B-Instruct-2507 running on Metal GPU via llama-cpp-2.",
-    "[mem_4] Origin ingests memories from file watching, clipboard, and quick capture, then distills them into concept pages.",
+    "[mem_1] Wenlan is a personal knowledge wiki app built with Tauri 2 and Rust.",
+    "[mem_2] Wenlan uses libSQL (Turso's SQLite fork) as its database with F32_BLOB(384) vector columns.",
+    "[mem_3] The on-device LLM in Wenlan is Qwen3-4B-Instruct-2507 running on Metal GPU via llama-cpp-2.",
+    "[mem_4] Wenlan ingests memories from file watching, clipboard, and quick capture, then distills them into concept pages.",
     "[mem_5] The app is AGPL-3.0 licensed and targets macOS as the primary platform.",
-    "[mem_6] Origin uses FastEmbed (BGE-Small-EN-v1.5, 384-dim) for semantic search embeddings.",
+    "[mem_6] Wenlan uses FastEmbed (BGE-Small-EN-v1.5, 384-dim) for semantic search embeddings.",
 ];
 
 // ---- Scoring logic ----
@@ -383,7 +383,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         eprintln!();
         eprintln!("Example:");
         eprintln!(
-            "  cargo run --release -p origin-core --bin model_benchmark -- ~/.cache/huggingface/models/qwen3.5/Qwen3.5-4B-Q4_K_M.gguf"
+            "  cargo run --release -p wenlan-core --bin model_benchmark -- ~/.cache/huggingface/models/qwen3.5/Qwen3.5-4B-Q4_K_M.gguf"
         );
         std::process::exit(1);
     }
@@ -472,7 +472,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // 4. DISTILL_PAGE (single cluster)
     let cluster_text = DISTILL_CLUSTER.join("\n\n");
-    let distill_user = format!("Topic: Origin Architecture\n\n{}", cluster_text);
+    let distill_user = format!("Topic: Wenlan Architecture\n\n{}", cluster_text);
     let distill_prompt = build_prompt(&prompts.distill_page, &distill_user);
     let distill_samples: Vec<_> = vec![(
         cluster_text,

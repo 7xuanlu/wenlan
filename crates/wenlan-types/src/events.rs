@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Event emission trait — shared by daemon (NoopEmitter) and Tauri app (TauriEmitter).
 //!
-//! Allows origin-core to emit UI events without depending on tauri.
+//! Allows wenlan-core to emit UI events without depending on tauri.
 //! The Tauri app supplies its own implementation that wraps `tauri::Emitter`;
 //! tests and headless operation use `NoopEmitter`.
 

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-//! LoCoMo benchmark adapter — converts locomo10.json into Origin eval cases.
+//! LoCoMo benchmark adapter — converts locomo10.json into Wenlan eval cases.
 //!
 //! LoCoMo (Long Conversational Memory) contains 10 conversations with
 //! pre-extracted observations and ~1,986 QA pairs in 5 categories:
@@ -214,7 +214,7 @@ pub fn event_date_map(samples: &[LocomoSample]) -> HashMap<String, i64> {
 // Conversion to eval cases
 // ---------------------------------------------------------------------------
 
-/// Convert a LoCoMo sample into eval cases for Origin's runner.
+/// Convert a LoCoMo sample into eval cases for Wenlan's runner.
 ///
 /// For each non-adversarial QA pair (category != 5):
 /// - Observations whose `dia_id` matches the QA evidence become seeds with `relevance=3`

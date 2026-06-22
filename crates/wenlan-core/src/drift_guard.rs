@@ -6,7 +6,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 /// Repo root, resolved at compile time from this crate's manifest dir
-/// (crates/origin-core -> ../.. == repo root).
+/// (crates/wenlan-core -> ../.. == repo root).
 fn repo_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../..")
@@ -125,17 +125,17 @@ fn extract_repo_path_refs(md: &str) -> Vec<String> {
 #[test]
 fn path_extractor_finds_real_and_ignores_noise() {
     let md = "\
-See `crates/origin-core/src/db.rs` for details.
+See `crates/wenlan-core/src/db.rs` for details.
 Visit https://docs/example.com for nothing.
 ```
 docs/in/a/fence.rs should be ignored
 ```
-This crates/origin-core/src/eval/seed_contract.rs:42 line ref.
+This crates/wenlan-core/src/eval/seed_contract.rs:42 line ref.
 A made-up path crates/does/not/exist.rs here. <!-- drift-ok -->
 ";
     let refs = extract_repo_path_refs(md);
-    assert!(refs.contains(&"crates/origin-core/src/db.rs".to_string()));
-    assert!(refs.contains(&"crates/origin-core/src/eval/seed_contract.rs".to_string()));
+    assert!(refs.contains(&"crates/wenlan-core/src/db.rs".to_string()));
+    assert!(refs.contains(&"crates/wenlan-core/src/eval/seed_contract.rs".to_string()));
     assert!(
         !refs.iter().any(|r| r.contains("fence")),
         "fenced path leaked"

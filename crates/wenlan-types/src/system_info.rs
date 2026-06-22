@@ -3,7 +3,7 @@
 
 use serde::{Deserialize, Serialize};
 
-/// `Deserialize` is for downstream client consumers (origin-mcp, plugins).
+/// `Deserialize` is for downstream client consumers (wenlan-mcp, plugins).
 /// The daemon currently only serializes; deserialization happens on the wire reader side.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SystemInfo {

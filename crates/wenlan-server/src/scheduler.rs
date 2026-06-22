@@ -11,7 +11,7 @@ use std::time::{Duration, Instant};
 
 use crate::state::SharedState;
 
-/// 30-minute ceiling for adaptive gap — matches ACTIVITY_GAP_SECS in origin-core.
+/// 30-minute ceiling for adaptive gap — matches ACTIVITY_GAP_SECS in wenlan-core.
 const BURST_GAP_CEILING: Duration = Duration::from_secs(1800);
 /// 5-minute floor — prevents premature firing on fast writers.
 const BURST_GAP_FLOOR: Duration = Duration::from_secs(300);

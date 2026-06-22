@@ -9,7 +9,7 @@ pub(crate) mod summary;
 
 // Re-export distillation functions from `synthesis::distill` to preserve the
 // public API path `wenlan_core::refinery::{distill_pages, deep_distill_pages,
-// deep_distill_single}`. These callers live in origin-server, eval modules, and
+// deep_distill_single}`. These callers live in wenlan-server, eval modules, and
 // tests outside this crate.
 pub use crate::synthesis::distill::{
     deep_distill_pages, deep_distill_single, distill_one_cluster, distill_pages,
@@ -18,7 +18,7 @@ pub use crate::synthesis::distill::{
 
 // Re-export KG phase functions from `kg::*` to preserve the public API path
 // `wenlan_core::refinery::{extract_single_memory_entities, reweave_entity_links}`.
-// External callers: post_ingest.rs, eval/shared.rs, origin-server::memory_routes.rs.
+// External callers: post_ingest.rs, eval/shared.rs, wenlan-server::memory_routes.rs.
 pub use crate::kg::entity_extraction::extract_single_memory_entities;
 pub use crate::kg::reweave::reweave_entity_links;
 
@@ -99,7 +99,7 @@ impl TriggerKind {
     }
 }
 
-/// How loud Origin should be about a phase's output — the "earned interrupt"
+/// How loud Wenlan should be about a phase's output — the "earned interrupt"
 /// signal. Each phase classifies its own output based on what it actually
 /// produced, not based on which trigger ran it.
 ///
@@ -141,12 +141,12 @@ pub(crate) fn classify_emergence(new_concepts: usize) -> (Nudge, Option<String>)
         0 => (Nudge::Silent, None),
         1 => (
             Nudge::Wow,
-            Some("Origin steeped your memories into a new page".to_string()),
+            Some("Wenlan steeped your memories into a new page".to_string()),
         ),
         n => (
             Nudge::Wow,
             Some(format!(
-                "Origin steeped your memories into {} new concepts",
+                "Wenlan steeped your memories into {} new concepts",
                 n
             )),
         ),
@@ -159,12 +159,12 @@ pub(crate) fn classify_redistill(refreshed: usize) -> (Nudge, Option<String>) {
         0 => (Nudge::Silent, None),
         1 => (
             Nudge::Ambient,
-            Some("Origin refreshed a page with new information".to_string()),
+            Some("Wenlan refreshed a page with new information".to_string()),
         ),
         n => (
             Nudge::Ambient,
             Some(format!(
-                "Origin refreshed {} concepts with new information",
+                "Wenlan refreshed {} concepts with new information",
                 n
             )),
         ),
@@ -177,11 +177,11 @@ pub(crate) fn classify_refinement_queue(processed: usize) -> (Nudge, Option<Stri
         0 => (Nudge::Silent, None),
         1 => (
             Nudge::Ambient,
-            Some("Origin resolved a memory contradiction".to_string()),
+            Some("Wenlan resolved a memory contradiction".to_string()),
         ),
         n => (
             Nudge::Ambient,
-            Some(format!("Origin resolved {} memory contradictions", n)),
+            Some(format!("Wenlan resolved {} memory contradictions", n)),
         ),
     }
 }
@@ -2030,7 +2030,7 @@ mod tests {
 
         // 1. Insert memories that form a cluster
         for (i, content) in [
-            "Origin uses libSQL for all storage including vectors and FTS",
+            "Wenlan uses libSQL for all storage including vectors and FTS",
             "libSQL supports DiskANN indexing for vector search",
             "The embedding dimension is 384 using BGE-Small model",
         ]
@@ -2240,7 +2240,7 @@ mod tests {
             Ok(PhaseOutput {
                 items_processed: 5,
                 nudge: Nudge::Wow,
-                headline: Some("Origin did a wow thing".to_string()),
+                headline: Some("Wenlan did a wow thing".to_string()),
             })
         })
         .await;
@@ -2248,7 +2248,7 @@ mod tests {
         assert_eq!(result.name, "decay");
         assert_eq!(result.items_processed, 5);
         assert_eq!(result.nudge, Nudge::Wow);
-        assert_eq!(result.headline.as_deref(), Some("Origin did a wow thing"));
+        assert_eq!(result.headline.as_deref(), Some("Wenlan did a wow thing"));
         assert!(result.error.is_none());
     }
 
@@ -2377,7 +2377,7 @@ mod tests {
         // legitimate technical titles); not rejected by is_all_generic_tokens.
         // True negatives — these SHOULD pass through.
         assert!(!is_all_generic_tokens("General AI Architecture"));
-        assert!(!is_all_generic_tokens("Origin Concept Model"));
+        assert!(!is_all_generic_tokens("Wenlan Concept Model"));
         assert!(!is_all_generic_tokens("libSQL Storage"));
     }
 
@@ -2400,9 +2400,9 @@ mod tests {
         // True negatives — must keep
         assert!(!is_all_generic_tokens("Topic and Notes")); // 'and' saves it
         assert!(!is_all_generic_tokens("libsql Vector Storage"));
-        assert!(!is_all_generic_tokens("Origin Memory Layer"));
-        assert!(!is_all_generic_tokens("Origin Concept Model")); // wordlist excludes 'page'
-        assert!(!is_all_generic_tokens("Notes on Origin")); // 'on', 'origin' not generic
+        assert!(!is_all_generic_tokens("Wenlan Memory Layer"));
+        assert!(!is_all_generic_tokens("Wenlan Concept Model")); // wordlist excludes 'page'
+        assert!(!is_all_generic_tokens("Notes on Wenlan")); // 'on', 'origin' not generic
         assert!(!is_all_generic_tokens("Content Strategy")); // 'content' not in list, 'strategy' not in list
 
         // Edge cases
@@ -2436,7 +2436,7 @@ mod tests {
         assert!(looks_like_markup_styled("Foo — Bar")); // em-dash separator
 
         // Clean titles must pass through
-        assert!(!looks_like_markup_styled("Origin Memory Layer"));
+        assert!(!looks_like_markup_styled("Wenlan Memory Layer"));
         assert!(!looks_like_markup_styled("libSQL Storage"));
         assert!(!looks_like_markup_styled("Concept Distillation Pipeline"));
         assert!(!looks_like_markup_styled("Range: 1-10")); // ASCII hyphen ok

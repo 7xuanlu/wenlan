@@ -21,7 +21,7 @@ fn count_results_tokens(results: &[crate::db::SearchResult]) -> usize {
     results.iter().map(|r| count_tokens(&r.content)).sum()
 }
 
-// ===== Pipeline Eval: LoCoMo + LongMemEval through Origin's full pipeline =====
+// ===== Pipeline Eval: LoCoMo + LongMemEval through Wenlan's full pipeline =====
 
 /// Pipeline condition: what processing has been applied to the DB.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -150,7 +150,7 @@ impl PipelineBenchmarkReport {
 
 /// Search strategies to test in pipeline eval (subset -- no LLM-requiring ones).
 const PIPELINE_STRATEGIES: &[SearchStrategy] = &[
-    SearchStrategy::Origin,
+    SearchStrategy::Wenlan,
     SearchStrategy::NaiveRag,
     SearchStrategy::FtsOnly,
     SearchStrategy::VectorPlusFts,
@@ -165,7 +165,7 @@ async fn run_strategy_search(
     domain: Option<&str>,
 ) -> Result<(Vec<String>, usize), WenlanError> {
     let results = match strategy {
-        SearchStrategy::Origin => {
+        SearchStrategy::Wenlan => {
             db.search_memory(query, limit, None, domain, None, Some(1.0), Some(1.0), None)
                 .await?
         }
@@ -354,7 +354,7 @@ async fn expand_evidence_for_distillation(
     Ok(expanded)
 }
 
-/// Run LoCoMo through Origin's full pipeline: flat, enriched, distilled.
+/// Run LoCoMo through Wenlan's full pipeline: flat, enriched, distilled.
 ///
 /// For each conversation:
 /// 1. Flat: seed observations, measure retrieval quality + tokens
@@ -675,7 +675,7 @@ pub async fn run_locomo_pipeline_eval(
     })
 }
 
-/// Run LongMemEval through Origin's full pipeline: flat, enriched, distilled.
+/// Run LongMemEval through Wenlan's full pipeline: flat, enriched, distilled.
 ///
 /// Same approach as LoCoMo but adapted for LongMemEval's per-question structure.
 /// LongMemEval has 500 questions with ~22 turns each (oracle variant).

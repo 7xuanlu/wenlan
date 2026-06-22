@@ -29,7 +29,7 @@ pub fn minmax_normalize(scores: &[f32]) -> Vec<f32> {
 }
 
 /// Query-type-dependent blend weight α (weight on the CE term).
-/// SuperLocalMemory: 0.5 for multi-hop/temporal, 0.75 single-hop. Origin maps
+/// SuperLocalMemory: 0.5 for multi-hop/temporal, 0.75 single-hop. Wenlan maps
 /// temporal/relational keyword presence → 0.5 (let boosted-RRF matter), else 0.75.
 #[allow(dead_code)]
 pub fn alpha_for_query(query: &str) -> f32 {

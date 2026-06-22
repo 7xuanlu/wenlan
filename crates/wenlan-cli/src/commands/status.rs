@@ -27,7 +27,7 @@ pub async fn run(client: &WenlanClient, format: OutputFormat, quiet: bool) -> Re
             }
         },
         OutputFormat::Table => {
-            println!("Origin runtime");
+            println!("Wenlan runtime");
             service::print_status().await?;
             setup::print_runtime_status().await?;
         }

@@ -1294,7 +1294,7 @@ fn sub_cluster_by_tokens(
 
 // ===== Public Types =====
 //
-// Most DTOs now live in `origin-types` so the server crate and downstream
+// Most DTOs now live in `wenlan-types` so the server crate and downstream
 // consumers can depend on them without pulling in libSQL/FastEmbed. They are
 // re-exported here so existing `crate::db::SearchResult`-style imports keep
 // working.
@@ -1305,7 +1305,7 @@ pub use wenlan_types::{
     RejectionRecord, Relation, RelationWithEntity, SearchResult, Space, TopMemory, TypeBreakdown,
 };
 
-// Re-export wire type from origin-types so existing consumers keep working.
+// Re-export wire type from wenlan-types so existing consumers keep working.
 pub use wenlan_types::responses::MemoryDetail;
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -1385,7 +1385,7 @@ pub fn best_overlapping_page_in_index(
     best
 }
 
-// Re-export wire type from origin-types so existing consumers keep working.
+// Re-export wire type from wenlan-types so existing consumers keep working.
 pub use wenlan_types::responses::PendingRevision;
 pub use wenlan_types::MemoryRevisionEntry;
 
@@ -5400,7 +5400,7 @@ impl MemoryDB {
                 // `label_key` is the lowercased label used for cross-page
                 // dedup + the orphan-by-count signal. `label` keeps the
                 // first-seen casing for display. PRIMARY KEY is on
-                // (source, label_key) so a page that says `[[Origin]]`
+                // (source, label_key) so a page that says `[[Wenlan]]`
                 // and another that says `[[origin]]` group together — the
                 // emergence signal "N pages reach for the same label"
                 // doesn't split on casing drift.
@@ -6061,7 +6061,7 @@ impl MemoryDB {
 
             // Migration 63 (WS): pages.workspace — scope axis, DISTINCT from the
             // overloaded category `space` column (which holds page_type recap/decision/
-            // people AND, inconsistently, the X-Origin-Space value).  Enforced only by
+            // people AND, inconsistently, the X-Wenlan-Space value).  Enforced only by
             // the scoped-recall page gate in search_memory_cross_rerank_cued; direct
             // page lookups (search_pages, exports) do not filter by workspace.
             // Backfill: derive workspace from the source memories' `space` — the modal
@@ -15744,7 +15744,7 @@ impl MemoryDB {
         // ---- Key insights (all classified memory types) ----
 
         // 'goal' dropped per Phase 0 — migration 45 folded all goal rows into
-        // identity, and MemoryType::Goal was removed from origin-types. Any
+        // identity, and MemoryType::Goal was removed from wenlan-types. Any
         // residual goal-typed rows would have been migrated; keeping 'goal' in
         // the IN clause is dead.
         let mut rows = conn
@@ -18365,7 +18365,7 @@ impl MemoryDB {
         // threshold; sub-groups still over the cap are dropped with a log
         // line. Used by all three buckets (community, entity, unlinked) so
         // the same grab-bag mitigation applies uniformly — community 16's
-        // 99-memory "Origin" pile was the original failure mode but the
+        // 99-memory "Wenlan" pile was the original failure mode but the
         // entity-only bucket has the same risk (e.g. one entity that swept
         // in unrelated sub-topics over time).
         //
@@ -19659,7 +19659,7 @@ impl MemoryDB {
     ///
     /// `Merged` is currently never emitted: the `pages` schema has no
     /// merge-tracking column (e.g. `merged_into` / `superseded_by`). The
-    /// `PageChangeKind::Merged` variant remains defined in `origin-types`
+    /// `PageChangeKind::Merged` variant remains defined in `wenlan-types`
     /// so a later task can extend this method once such a column exists.
     pub async fn list_recent_changes(
         &self,
@@ -20391,7 +20391,7 @@ impl MemoryDB {
     ///
     /// Flips stale, low-`effective_confidence`, non-immune memories to
     /// `supersede_mode='evicted'` so they drop out of default retrieval while
-    /// staying fully recoverable in the table (no hard DELETE — Origin's core
+    /// staying fully recoverable in the table (no hard DELETE — Wenlan's core
     /// contract is "every DELETE is explicit"). The salience proxy is
     /// `effective_confidence`, already folded over confidence × recency × access
     /// by the Decay phase, so this MUST run after Decay within a cycle.
@@ -27336,7 +27336,7 @@ pub(crate) mod tests {
             .unwrap();
         let origin = db
             .store_entity(
-                "Origin",
+                "Wenlan",
                 "project",
                 Some("tech"),
                 Some("claude"),
@@ -27360,7 +27360,7 @@ pub(crate) mod tests {
         let obs2 = db
             .add_observation(
                 &origin,
-                "Origin uses Rust for backend",
+                "Wenlan uses Rust for backend",
                 Some("claude"),
                 None,
             )
@@ -27713,7 +27713,7 @@ pub(crate) mod tests {
         db.store_entity("Alice", "person", Some("work"), Some("claude"), Some(0.9))
             .await
             .unwrap();
-        db.store_entity("Origin", "project", Some("work"), Some("claude"), Some(0.8))
+        db.store_entity("Wenlan", "project", Some("work"), Some("claude"), Some(0.8))
             .await
             .unwrap();
         db.store_entity("Bob", "person", Some("personal"), None, None)
@@ -27749,7 +27749,7 @@ pub(crate) mod tests {
             .await
             .unwrap();
         let origin_id = db
-            .store_entity("Origin", "project", Some("work"), None, None)
+            .store_entity("Wenlan", "project", Some("work"), None, None)
             .await
             .unwrap();
 
@@ -27776,7 +27776,7 @@ pub(crate) mod tests {
         assert_eq!(detail.observations.len(), 2);
         assert_eq!(detail.relations.len(), 1);
         assert_eq!(detail.relations[0].relation_type, "works_on");
-        assert_eq!(detail.relations[0].entity_name, "Origin");
+        assert_eq!(detail.relations[0].entity_name, "Wenlan");
         assert_eq!(detail.relations[0].direction, "outgoing");
 
         // Check from the other side
@@ -30272,7 +30272,7 @@ pub(crate) mod tests {
             let doc = RawDocument {
                 source: "memory".to_string(),
                 source_id: sid.to_string(),
-                content: format!("Test content about Origin item {}", i),
+                content: format!("Test content about Wenlan item {}", i),
                 title: format!("Test mem {}", i),
                 url: None,
                 last_modified: now,
@@ -30414,7 +30414,7 @@ pub(crate) mod tests {
 
     #[tokio::test]
     async fn find_distillation_clusters_caps_oversized_entity_group() {
-        // A single entity (think "Origin" community cid=16 in prod) sweeps in
+        // A single entity (think "Wenlan" community cid=16 in prod) sweeps in
         // a long tail of unrelated memories over time. Greedy clustering at
         // 0.73 returns one big blob; the agent's coherence check rejects it
         // as a grab-bag and the user sees nothing. The grouped-cluster cap
@@ -30507,7 +30507,7 @@ pub(crate) mod tests {
         // Store a recap
         let doc = RawDocument {
             source_id: "recap_count_1".to_string(),
-            content: "Working on Origin memory system".to_string(),
+            content: "Working on Wenlan memory system".to_string(),
             source: "memory".to_string(),
             title: "Morning session".to_string(),
             memory_type: Some("fact".to_string()),
@@ -34567,9 +34567,9 @@ pub(crate) mod tests {
         let now = chrono::Utc::now().to_rfc3339();
         db.insert_page(
             "page_rrf_t1",
-            "Origin daemon retrieval",
+            "Wenlan daemon retrieval",
             Some("The daemon exposes hybrid memory search over HTTP"),
-            "Origin daemon serves hybrid search combining vector similarity and full-text ranking.",
+            "Wenlan daemon serves hybrid search combining vector similarity and full-text ranking.",
             None,
             Some("architecture"),
             &["m1"],
@@ -35005,7 +35005,7 @@ pub(crate) mod tests {
         let now = chrono::Utc::now().to_rfc3339();
         db.insert_page(
             "concept_1",
-            "Origin positioning",
+            "Wenlan positioning",
             None,
             "content",
             None,
@@ -35035,13 +35035,13 @@ pub(crate) mod tests {
         assert_eq!(events[0].query, None);
         assert_eq!(
             events[0].page_titles,
-            vec!["Origin positioning".to_string()]
+            vec!["Wenlan positioning".to_string()]
         );
         assert_eq!(events[1].agent_name, "claude-code");
         assert_eq!(events[1].query.as_deref(), Some("positioning"));
         assert_eq!(
             events[1].page_titles,
-            vec!["Origin positioning".to_string()]
+            vec!["Wenlan positioning".to_string()]
         );
     }
 
@@ -37288,7 +37288,7 @@ pub(crate) mod tests {
         // Three stale pages, one per scope axis.
         db.insert_page(
             "page_origin",
-            "Origin Page",
+            "Wenlan Page",
             None,
             "content",
             Some("ent_origin"),

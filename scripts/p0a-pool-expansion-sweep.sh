@@ -35,7 +35,7 @@ echo "    EVAL_LOCOMO_LIMIT=${EVAL_LOCOMO_LIMIT:-(full fixture)}"
 
 if [[ "${SKIP_BUILD:-0}" != "1" ]]; then
     echo "==> Building"
-    cargo build -p origin-core --features eval-harness
+    cargo build -p wenlan-core --features eval-harness
     cargo build --bin compare-baselines --features eval-harness
 fi
 
@@ -58,7 +58,7 @@ run_save() {
     (
         if [[ -n "$mult" ]]; then export RERANK_POOL_MULTIPLIER="$mult"; fi
         if [[ -n "$floor" ]]; then export RERANK_POOL_FLOOR="$floor"; fi
-        cargo test -p origin-core --test eval_harness --features eval-harness \
+        cargo test -p wenlan-core --test eval_harness --features eval-harness \
             save_locomo_cross_rerank_baseline -- --ignored --nocapture
     )
 

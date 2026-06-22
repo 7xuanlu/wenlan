@@ -1,15 +1,15 @@
 // SPDX-License-Identifier: Apache-2.0
 //! fixture-gen: Generate eval fixtures.
 //!
-//! Lives in origin-core (not the Tauri app crate) so Tauri's bundler
-//! doesn't copy it into Origin.app/Contents/MacOS. Binaries under
-//! `origin-core/src/bin/` are discoverable by cargo but invisible to
+//! Lives in wenlan-core (not the Tauri app crate) so Tauri's bundler
+//! doesn't copy it into Wenlan.app/Contents/MacOS. Binaries under
+//! `wenlan-core/src/bin/` are discoverable by cargo but invisible to
 //! `tauri build`, which only scans the app crate's `[[bin]]` entries.
 //!
 //! Usage:
-//!   cargo run -p origin-core --bin fixture_gen -- --mode regression --count 6 --out eval/fixtures/gen/regression
-//!   cargo run -p origin-core --bin fixture_gen -- --mode blind --count 10 --out eval/fixtures/gen/blind
-//!   cargo run -p origin-core --bin fixture_gen -- --help
+//!   cargo run -p wenlan-core --bin fixture_gen -- --mode regression --count 6 --out eval/fixtures/gen/regression
+//!   cargo run -p wenlan-core --bin fixture_gen -- --mode blind --count 10 --out eval/fixtures/gen/blind
+//!   cargo run -p wenlan-core --bin fixture_gen -- --help
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -30,7 +30,7 @@ fn parse_args() -> Result<Args, String> {
         eprintln!("fixture-gen: Generate eval fixtures\n");
         eprintln!("Usage:");
         eprintln!(
-            "  cargo run -p origin-core --bin fixture_gen -- --mode <regression|blind> [OPTIONS]\n"
+            "  cargo run -p wenlan-core --bin fixture_gen -- --mode <regression|blind> [OPTIONS]\n"
         );
         eprintln!("Modes:");
         eprintln!("  regression     Pipeline-aware adversarial fixtures (requires on-device LLM)");

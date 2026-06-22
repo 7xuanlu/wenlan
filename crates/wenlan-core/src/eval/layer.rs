@@ -7,8 +7,8 @@ use std::fmt;
 /// Which layer of the production query path an eval baseline covers.
 ///
 /// L1Db: in-process `MemoryDB::search_memory()` direct.
-/// L2Http: HTTP through spawned `origin-server` daemon.
-/// L3Mcp: stdio MCP roundtrip through spawned `origin-mcp`.
+/// L2Http: HTTP through spawned `wenlan-server` daemon.
+/// L3Mcp: stdio MCP roundtrip through spawned `wenlan-mcp`.
 /// L4Skill: reserved for skill+model in-loop (not built yet).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]

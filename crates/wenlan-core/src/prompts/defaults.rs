@@ -34,7 +34,7 @@ quality must be one of: low, medium, high (how specific and actionable is this m
 importance must be an integer 1-10: 1 = purely mundane/derivable, 10 = identity-defining or a major decision";
 
 // Used by llm_formatter in the app crate; referenced again once llm_formatter
-// moves into origin-core in a later phase.
+// moves into wenlan-core in a later phase.
 //
 // Profile memories split into 2 subtypes after the taxonomy refactor.
 // "goal" is folded to "identity" by MemoryType::FromStr (aspirations are

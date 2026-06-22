@@ -2,7 +2,7 @@
 //! Source connectors and memory type helpers.
 //!
 //! The core memory types (`MemoryType`, `RawDocument`, `SourceType`,
-//! `StabilityTier`, `SyncStatus`) live in `origin-types` and are re-exported
+//! `StabilityTier`, `SyncStatus`) live in `wenlan-types` and are re-exported
 //! here so intra-crate imports keep working via `crate::sources::*`.
 //!
 //! This module owns helpers that need `tuning::ConfidenceConfig` (confidence
@@ -16,8 +16,8 @@ use crate::error::WenlanError;
 use async_trait::async_trait;
 use std::any::Any;
 
-// Re-export canonical type definitions from origin-types. This keeps
-// `crate::sources::RawDocument` working for origin-core modules while the
+// Re-export canonical type definitions from wenlan-types. This keeps
+// `crate::sources::RawDocument` working for wenlan-core modules while the
 // authoritative definition lives in the shared types crate.
 pub use wenlan_types::sources::{
     stability_tier, MemoryType, RawDocument, Source, SourceStatus, SourceType, StabilityTier,
@@ -78,10 +78,10 @@ pub fn compute_effective_confidence(
 /// Trait that all data source connectors must implement.
 ///
 /// Intentionally duplicated in `origin-app/app/src/sources/data_source.rs`
-/// because origin-app has no origin-core dependency (Phase 5-D PR2). The
+/// because origin-app has no wenlan-core dependency (Phase 5-D PR2). The
 /// two trait declarations are identical except for the error type
 /// (`WenlanError` here, `AppError` in origin-app). The shared data shapes
-/// (`RawDocument`, `SourceStatus`) live in origin-types so connectors can
+/// (`RawDocument`, `SourceStatus`) live in wenlan-types so connectors can
 /// move freely between crates.
 #[async_trait]
 pub trait DataSource: Send + Sync {

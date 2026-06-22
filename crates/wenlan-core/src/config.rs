@@ -17,7 +17,7 @@ fn default_skip_apps() -> Vec<String> {
         "Notification Center".into(),
         "loginwindow".into(),
         "Spotlight".into(),
-        "Origin".into(),
+        "Wenlan".into(),
         "1Password".into(),
         "Keychain Access".into(),
         "LastPass".into(),
@@ -134,7 +134,7 @@ impl Config {
 
 fn config_path() -> PathBuf {
     // Honor the `WENLAN_DATA_DIR` override so a scratch daemon (e.g.
-    // `origin-server --data-dir /tmp/origin-demo`) reads and writes its own
+    // `wenlan-server --data-dir /tmp/wenlan-demo`) reads and writes its own
     // config file rather than clobbering the user's real one.
     let root = crate::env_compat::var_compat("WENLAN_DATA_DIR")
         .map(PathBuf::from)

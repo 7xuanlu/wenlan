@@ -36,7 +36,7 @@ pub struct StoreMemoryResponse {
     #[serde(default)]
     pub enrichment: String,
     /// Prose cue for caller agents — safe to relay to the user verbatim.
-    /// Communicates that Origin is compiling the memory into reusable
+    /// Communicates that Wenlan is compiling the memory into reusable
     /// context in the background, so callers don't treat `None` enriched
     /// fields as failure. Empty when the store completed fully sync.
     #[serde(default, skip_serializing_if = "String::is_empty")]
@@ -322,7 +322,7 @@ pub struct ImportMemoriesResponse {
 
 // ===== Steep =====
 
-/// How loud Origin should be about a phase's output.
+/// How loud Wenlan should be about a phase's output.
 #[doc(hidden)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Nudge {
@@ -939,7 +939,7 @@ mod tests {
             "warnings": [],
             "extraction_method": "unknown",
             "enrichment": "pending",
-            "hint": "Stored. Origin is compiling classification + concept links in the background (~2s). Recall will surface the enriched form shortly."
+            "hint": "Stored. Wenlan is compiling classification + concept links in the background (~2s). Recall will surface the enriched form shortly."
         }"#;
         let parsed: StoreMemoryResponse = serde_json::from_str(json).unwrap();
         assert_eq!(parsed.enrichment, "pending");
@@ -948,7 +948,7 @@ mod tests {
 
     #[test]
     fn store_memory_response_defaults_enrichment_for_older_responses() {
-        // Backward-compat: existing clients (origin-mcp, Tauri app) that
+        // Backward-compat: existing clients (wenlan-mcp, Tauri app) that
         // deserialize pre-async-refactor responses must keep working.
         let json = r#"{
             "source_id": "mem_old",

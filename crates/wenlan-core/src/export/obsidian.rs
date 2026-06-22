@@ -108,7 +108,7 @@ mod tests {
             id: "concept_abc".to_string(),
             title: "libSQL Architecture".to_string(),
             summary: Some("Core database layer".to_string()),
-            content: "## Key Facts\n- Stores vectors\n\n## Related Concepts\n- [Origin Architecture](concept_xyz789)\n- [Embedding Pipeline](concept_pqr012)".to_string(),
+            content: "## Key Facts\n- Stores vectors\n\n## Related Concepts\n- [Wenlan Architecture](concept_xyz789)\n- [Embedding Pipeline](concept_pqr012)".to_string(),
             entity_id: Some("entity_libsql".to_string()),
             space: Some("architecture".to_string()),
             source_memory_ids: vec!["m1".to_string(), "m2".to_string()],
@@ -149,7 +149,7 @@ mod tests {
         assert!(file_content.contains("modified: 2026-04-07"));
 
         // Check wikilinks conversion
-        assert!(file_content.contains("[[Origin Architecture]]"));
+        assert!(file_content.contains("[[Wenlan Architecture]]"));
         assert!(file_content.contains("[[Embedding Pipeline]]"));
         assert!(!file_content.contains("(concept_xyz789)"));
         assert!(!file_content.contains("(concept_pqr012)"));
@@ -172,16 +172,16 @@ mod tests {
     #[test]
     fn test_slugify_title() {
         assert_eq!(slugify("libSQL Architecture"), "libsql-architecture");
-        assert_eq!(slugify("Origin's MCP (v2)"), "origins-mcp-v2");
+        assert_eq!(slugify("Wenlan's MCP (v2)"), "origins-mcp-v2");
         assert_eq!(slugify("  Spaces  "), "spaces");
         assert_eq!(slugify("Hello World"), "hello-world");
     }
 
     #[test]
     fn test_convert_links_to_wikilinks() {
-        let input = "See [Origin Architecture](concept_abc-123-def) for details.";
+        let input = "See [Wenlan Architecture](concept_abc-123-def) for details.";
         let output = convert_links_to_wikilinks(input);
-        assert_eq!(output, "See [[Origin Architecture]] for details.");
+        assert_eq!(output, "See [[Wenlan Architecture]] for details.");
     }
 
     #[test]

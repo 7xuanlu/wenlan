@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-//! Configure Origin MCP in supported clients.
+//! Configure Wenlan MCP in supported clients.
 
 use anyhow::{anyhow, bail, Context, Result};
 use clap::{Args, Subcommand, ValueEnum};
@@ -22,7 +22,7 @@ struct ServerCommand {
 
 #[derive(Subcommand)]
 pub enum McpCommand {
-    /// Add Origin MCP to a supported client.
+    /// Add Wenlan MCP to a supported client.
     Add(AddArgs),
 }
 
@@ -39,7 +39,7 @@ pub struct AddArgs {
 #[derive(Clone, Copy, Debug, ValueEnum)]
 #[value(rename_all = "kebab-case")]
 pub enum McpClient {
-    /// Claude Code without the Origin plugin.
+    /// Claude Code without the Wenlan plugin.
     ClaudeCode,
     /// OpenAI Codex CLI.
     Codex,
@@ -139,7 +139,7 @@ fn add_native(
     run_external(binary, &add_args)?;
 
     if !quiet {
-        println!("Configured Origin MCP for {client}.");
+        println!("Configured Wenlan MCP for {client}.");
         if let Some(note) = note {
             println!("{note}");
         }
@@ -185,7 +185,7 @@ fn add_json_config(
     if !changed {
         if !quiet {
             println!(
-                "Origin MCP already configured for {client} at {}.",
+                "Wenlan MCP already configured for {client} at {}.",
                 path.display()
             );
         }
@@ -218,7 +218,7 @@ fn add_json_config(
     write_json_atomic(&path, &config)?;
 
     if !quiet {
-        println!("Updated {} for Origin MCP.", path.display());
+        println!("Updated {} for Wenlan MCP.", path.display());
         if let Some(backup) = backup {
             println!("Backup: {}", backup.display());
         }
@@ -318,8 +318,8 @@ fn home_path(parts: &[&str]) -> Result<PathBuf> {
 }
 
 fn claude_code_tools_only_note() -> &'static str {
-    "Claude Code MCP tools only: remember, recall, context, doctor, and related Origin tools. \
-This does not install Origin plugin skills like /brief, /handoff, /distill, or /init."
+    "Claude Code MCP tools only: remember, recall, context, doctor, and related Wenlan tools. \
+This does not install Wenlan plugin skills like /brief, /handoff, /distill, or /init."
 }
 
 fn server_command() -> ServerCommand {

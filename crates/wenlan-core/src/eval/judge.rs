@@ -1067,7 +1067,7 @@ pub fn aggregate_judgments(results: &[JudgmentResult], judge_model: &str) -> Jud
 /// (function `get_anscheck_prompt`, lines ~20-50). Every LME canonical task category
 /// has an explicit branch so we never silently fall through to a default. See the
 /// audit test `judge_prompt_has_branch_for_every_lme_task_category` in
-/// `crates/origin-core/tests/eval_harness.rs`.
+/// `crates/wenlan-core/tests/eval_harness.rs`.
 pub fn lme_anscheck_prompt(task: &str, question: &str, answer: &str, response: &str) -> String {
     // Each branch begins with an explicit "Task category:" tag so the
     // category branched on is visible in the rendered prompt and discoverable
@@ -1427,7 +1427,7 @@ pub fn stamp_judge_model(env: &mut Option<crate::eval::report::ReportEnv>, model
 //
 // **NOT YET WIRED.** As of PR #192 these symbols exist only as
 // unit-tested scaffolding. The batch-judge iteration in
-// `crates/origin-core/src/eval/answer_quality.rs` does not call
+// `crates/wenlan-core/src/eval/answer_quality.rs` does not call
 // `stamp_verdict_row` or `write_judge_verdicts_jsonl`. Wiring is
 // deferred to the next PR that regenerates answer-quality baselines,
 // where the JSONL is actually consumed. Until then, treat these as

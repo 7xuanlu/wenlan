@@ -8,7 +8,7 @@ use crate::prompts::PromptRegistry;
 use crate::tuning::BriefingConfig;
 use serde::Serialize;
 
-// Re-export wire types from origin-types so existing consumers keep working.
+// Re-export wire types from wenlan-types so existing consumers keep working.
 pub use wenlan_types::briefing::{BriefingResponse, ContradictionItem};
 
 /// A memory row loaded for briefing assembly.

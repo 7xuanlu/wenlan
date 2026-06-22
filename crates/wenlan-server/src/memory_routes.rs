@@ -172,7 +172,7 @@ pub async fn handle_store_memory(
     crate::space_header::SpaceHeader(header_space): crate::space_header::SpaceHeader,
     Json(mut req): Json<StoreMemoryRequest>,
 ) -> Result<Json<StoreMemoryResponse>, ServerError> {
-    // Apply X-Origin-Space header as fallback only when body omits `space`.
+    // Apply X-Wenlan-Space header as fallback only when body omits `space`.
     if req.space.is_none() {
         req.space = header_space;
     }
@@ -863,7 +863,7 @@ pub async fn handle_store_memory(
     let (enrichment, hint) = if llm_available {
         (
             "pending".to_string(),
-            "Stored. Origin is compiling classification + page links in the \
+            "Stored. Wenlan is compiling classification + page links in the \
              background (~2s). Recall will surface the enriched form shortly."
                 .to_string(),
         )
@@ -1162,7 +1162,7 @@ pub async fn handle_create_entity(
     crate::space_header::SpaceHeader(header_space): crate::space_header::SpaceHeader,
     Json(mut req): Json<CreateEntityRequest>,
 ) -> Result<Json<CreateEntityResponse>, ServerError> {
-    // Apply X-Origin-Space header as fallback only when body omits `space`.
+    // Apply X-Wenlan-Space header as fallback only when body omits `space`.
     if req.space.is_none() {
         req.space = header_space;
     }
@@ -2010,12 +2010,12 @@ pub async fn handle_create_page(
     crate::space_header::SpaceHeader(header_space): crate::space_header::SpaceHeader,
     Json(mut req): Json<CreateConceptRequest>,
 ) -> Result<Json<CreatePageResponse>, ServerError> {
-    // Apply X-Origin-Space header as fallback only when body omits `space`.
+    // Apply X-Wenlan-Space header as fallback only when body omits `space`.
     // Clone before consuming so workspace fallback can use the same value.
     if req.space.is_none() {
         req.space = header_space.clone();
     }
-    // Apply X-Origin-Space header as fallback for `workspace` as well.
+    // Apply X-Wenlan-Space header as fallback for `workspace` as well.
     // `workspace` is the P3 dedicated scope axis; `space` is the category column.
     if req.workspace.is_none() {
         req.workspace = header_space;
@@ -2051,7 +2051,7 @@ pub async fn handle_export_pages(
     };
     let vault_path = req
         .vault_path
-        .unwrap_or_else(|| "~/obsidian-vault/Origin/pages".to_string());
+        .unwrap_or_else(|| "~/obsidian-vault/Wenlan/pages".to_string());
     let expanded = if let Some(rest) = vault_path.strip_prefix("~/") {
         let home = std::env::var("HOME").unwrap_or_default();
         format!("{}/{}", home, rest)
@@ -3261,7 +3261,7 @@ pub async fn handle_refresh_page(
     //
     // Summary semantics: `None` keeps the existing summary. `Some(s)` where
     // `s` is non-empty replaces it. `Some("")` clears it — empty string maps
-    // to NULL in the DB so `IS NULL` filters work (per origin-core's NULL
+    // to NULL in the DB so `IS NULL` filters work (per wenlan-core's NULL
     // semantics rule). The MCP tool description documents this; normalize
     // here so the daemon never stores a literal empty string.
     let now = chrono::Utc::now().to_rfc3339();

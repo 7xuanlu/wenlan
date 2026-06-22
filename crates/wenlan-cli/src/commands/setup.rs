@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-//! Human-facing setup/status commands for the Origin runtime.
+//! Human-facing setup/status commands for the Wenlan runtime.
 
 use clap::{Subcommand, ValueEnum};
 use std::io::{self, Write};
@@ -17,7 +17,7 @@ pub struct SetupArgs {
 
 #[derive(Subcommand)]
 pub enum ModelCommand {
-    /// List local models Origin can download and run.
+    /// List local models Wenlan can download and run.
     List,
     /// Show selected/downloaded local model state.
     Status,
@@ -58,7 +58,7 @@ pub enum KeyProvider {
 pub async fn run_setup(args: SetupArgs) -> anyhow::Result<()> {
     if args.basic {
         configure_basic_memory()?;
-        println!("Origin is set up for local memory.");
+        println!("Wenlan is set up for local memory.");
         println!("Storage, search, recall, and MCP memory work without a local model or API key.");
         println!("Distill cycles stay off until you choose a local model or Anthropic key.");
         return Ok(());
@@ -122,7 +122,7 @@ pub async fn run_key(command: KeyCommand) -> anyhow::Result<()> {
 }
 
 pub async fn run_doctor() -> anyhow::Result<()> {
-    println!("Origin doctor");
+    println!("Wenlan doctor");
     println!();
     print_daemon_health().await;
     print_key_status();
@@ -160,7 +160,7 @@ pub async fn print_runtime_status() -> anyhow::Result<()> {
 }
 
 async fn interactive_setup() -> anyhow::Result<()> {
-    println!("Set up Origin");
+    println!("Set up Wenlan");
     println!();
     println!("1) Local Memory");
     println!("   Store, search, recall, and MCP memory. No local model or API key.");
@@ -174,7 +174,7 @@ async fn interactive_setup() -> anyhow::Result<()> {
     match choice.trim() {
         "" | "1" => {
             configure_basic_memory()?;
-            println!("Origin is set up for local memory.");
+            println!("Wenlan is set up for local memory.");
             Ok(())
         }
         "2" => {

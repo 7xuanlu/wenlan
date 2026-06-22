@@ -2,7 +2,7 @@
 
 ## Reporting a Vulnerability
 
-If you discover a security vulnerability in Origin, **please do not open a public issue.**
+If you discover a security vulnerability in Wenlan, **please do not open a public issue.**
 
 Instead, email **h164654156465@gmail.com** with:
 

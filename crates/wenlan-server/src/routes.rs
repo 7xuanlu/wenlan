@@ -287,7 +287,7 @@ pub async fn handle_chat_context(
     // Tier 2 (corrections + decisions). Goal taxonomy folded into Identity by
     // migration 45 (Phase 0); the goals Vec stays for ProfileContext wire compat
     // but is always empty now. Both `req.include_goals` and `ProfileContext.goals`
-    // are deprecated and will be removed in origin-types 0.4.
+    // are deprecated and will be removed in wenlan-types 0.4.
     let goals: Vec<String> = Vec::new();
 
     let decisions: Vec<String> = if tier_allowed(&classification.trust_level, 2) {
@@ -580,8 +580,8 @@ pub async fn handle_chat_context(
     }
 
     // ProfileContext.goals is deprecated (migration 45 folded goal -> identity);
-    // we still emit it as an empty Vec for wire backward compat with origin-mcp
-    // and any external consumers of /api/chat-context until origin-types 0.4
+    // we still emit it as an empty Vec for wire backward compat with wenlan-mcp
+    // and any external consumers of /api/chat-context until wenlan-types 0.4
     // drops the field entirely.
     #[allow(deprecated)]
     let profile = ProfileContext {

@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
-//! Shared types for the Origin memory system.
+//! Shared types for the Wenlan memory system.
 //!
 //! This crate provides lightweight type definitions shared across
-//! origin-core, origin-server, and the Tauri app. Dependencies are
+//! wenlan-core, wenlan-server, and the Tauri app. Dependencies are
 //! limited to serde and serde_json -- no heavy runtime deps.
 
 pub mod brand;
@@ -193,7 +193,7 @@ mod retrieval_event_tests {
             timestamp_ms: 1_700_000_000_000,
             agent_name: "claude-code".into(),
             query: Some("origin positioning".into()),
-            page_titles: vec!["Origin positioning".into(), "Daemon architecture".into()],
+            page_titles: vec!["Wenlan positioning".into(), "Daemon architecture".into()],
             page_ids: vec![],
             memory_snippets: vec![],
         };

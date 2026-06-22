@@ -279,19 +279,19 @@ mod tests {
     fn entity_match_filters_by_similarity_threshold() {
         // Two captures anchored to the same entity but with orthogonal
         // embeddings — distinct ideas about the same topic. Must NOT match.
-        let candidates = vec![candidate("existing", Some("Origin"), vec![1.0, 0.0, 0.0])];
+        let candidates = vec![candidate("existing", Some("Wenlan"), vec![1.0, 0.0, 0.0])];
         let probe = vec![0.0f32, 1.0, 0.0]; // orthogonal => sim = 0.0
         assert!(
-            best_entity_match(&candidates, "Origin", &probe, 0.70).is_none(),
+            best_entity_match(&candidates, "Wenlan", &probe, 0.70).is_none(),
             "entity match alone must NOT coalesce when content differs (sim < threshold)"
         );
     }
 
     #[test]
     fn entity_match_returns_high_similarity_candidate() {
-        let candidates = vec![candidate("existing", Some("Origin"), vec![1.0, 0.0, 0.0])];
+        let candidates = vec![candidate("existing", Some("Wenlan"), vec![1.0, 0.0, 0.0])];
         let probe = vec![1.0f32, 0.0, 0.0]; // identical => sim = 1.0
-        let result = best_entity_match(&candidates, "Origin", &probe, 0.70);
+        let result = best_entity_match(&candidates, "Wenlan", &probe, 0.70);
         assert!(result.is_some());
         let (matched, sim) = result.unwrap();
         assert_eq!(matched.source_id, "existing");
@@ -300,15 +300,15 @@ mod tests {
 
     #[test]
     fn entity_match_picks_best_among_multiple_entity_candidates() {
-        // Two existing memories share entity "Origin"; one is a close match,
+        // Two existing memories share entity "Wenlan"; one is a close match,
         // the other is moderately related. Helper must pick the close match,
         // not just the first.
         let candidates = vec![
-            candidate("low_sim", Some("Origin"), vec![1.0, 0.0, 0.0]),
-            candidate("high_sim", Some("Origin"), vec![0.95, 0.31, 0.0]),
+            candidate("low_sim", Some("Wenlan"), vec![1.0, 0.0, 0.0]),
+            candidate("high_sim", Some("Wenlan"), vec![0.95, 0.31, 0.0]),
         ];
         let probe = vec![0.95f32, 0.31, 0.0];
-        let (matched, _) = best_entity_match(&candidates, "Origin", &probe, 0.70).unwrap();
+        let (matched, _) = best_entity_match(&candidates, "Wenlan", &probe, 0.70).unwrap();
         assert_eq!(matched.source_id, "high_sim");
     }
 
@@ -318,24 +318,24 @@ mod tests {
             candidate("no_entity", None, vec![1.0, 0.0, 0.0]),
             candidate(
                 "with_entity",
-                Some("Origin"),
+                Some("Wenlan"),
                 vec![0.5, 0.5, std::f32::consts::FRAC_1_SQRT_2],
             ),
         ];
         let probe = vec![0.5f32, 0.5, std::f32::consts::FRAC_1_SQRT_2];
-        let (matched, _) = best_entity_match(&candidates, "Origin", &probe, 0.70).unwrap();
+        let (matched, _) = best_entity_match(&candidates, "Wenlan", &probe, 0.70).unwrap();
         assert_eq!(matched.source_id, "with_entity");
     }
 
     /// Regression for 2026-05-11: four atomic /handoff captures all
-    /// anchored to entity="Origin" but carrying distinct decisions
+    /// anchored to entity="Wenlan" but carrying distinct decisions
     /// previously coalesced into a single in-place upsert (returning the
     /// same source_id `mem_60c6f1b75dd1` for all four). With the
     /// threshold guard, each pair-wise check against the existing memory
     /// must return None when content similarity is low.
     #[test]
     fn distinct_captures_same_entity_do_not_coalesce() {
-        let existing = candidate("existing", Some("Origin"), vec![1.0, 0.0, 0.0, 0.0]);
+        let existing = candidate("existing", Some("Wenlan"), vec![1.0, 0.0, 0.0, 0.0]);
         let candidates = vec![existing];
         // Four distinct embeddings, each orthogonal-ish to the existing one
         let captures = [
@@ -345,7 +345,7 @@ mod tests {
             vec![0.5f32, 0.5, 0.5, 0.5], // mixed but still orthogonal to e1
         ];
         for probe in captures.iter() {
-            let result = best_entity_match(&candidates, "Origin", probe, 0.70);
+            let result = best_entity_match(&candidates, "Wenlan", probe, 0.70);
             assert!(
                 result.is_none(),
                 "distinct content sharing entity must not coalesce; sim={:.3}",

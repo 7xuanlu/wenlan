@@ -1,13 +1,13 @@
 # syntax=docker/dockerfile:1.7
 #
-# origin-server daemon image (Linux, glibc).
+# wenlan-server daemon image (Linux, glibc).
 #
 # Build (multi-arch via buildx):
 #   docker buildx build --platform linux/amd64,linux/arm64 \
-#     -f docker/Dockerfile.daemon -t origin-server:dev .
+#     -f docker/Dockerfile.daemon -t wenlan-server:dev .
 #
 # Run:
-#   docker run --rm -p 7878:7878 -v origin-data:/data origin-server:dev
+#   docker run --rm -p 7878:7878 -v origin-data:/data wenlan-server:dev
 #
 # Why glibc (not musl): the ONNX Runtime crate (`ort` 2.x, pulled in via
 # `fastembed`) does not publish prebuilt musl binaries. Building ort against
@@ -32,17 +32,17 @@ RUN cargo chef prepare --recipe-path recipe.json
 
 FROM chef AS builder
 COPY --from=planner /src/recipe.json recipe.json
-RUN cargo chef cook --release --recipe-path recipe.json -p origin-server
+RUN cargo chef cook --release --recipe-path recipe.json -p wenlan-server
 COPY . .
-RUN cargo build --release -p origin-server
-RUN strip target/release/origin-server
+RUN cargo build --release -p wenlan-server
+RUN strip target/release/wenlan-server
 # Skeleton dir copied into runtime so /data exists in the image with the
 # right ownership. Without this, Docker creates /data lazily at first
 # run owned by root, and the nonroot user (UID 65532) can't write to it.
 RUN mkdir -p /data-skeleton
 
 FROM gcr.io/distroless/cc-debian13:nonroot AS runtime
-COPY --from=builder /src/target/release/origin-server /usr/local/bin/origin-server
+COPY --from=builder /src/target/release/wenlan-server /usr/local/bin/wenlan-server
 # Copy the ONNX Runtime shared library that `ort`'s build script placed next
 # to the binary via the `copy-dylibs` feature. Without this, the daemon
 # crashes on first embedding call with `libonnxruntime.so` not found.
@@ -55,10 +55,10 @@ COPY --from=builder --chown=65532:65532 /data-skeleton /data
 ENV LD_LIBRARY_PATH=/usr/local/lib
 USER nonroot
 EXPOSE 7878
-# ORIGIN_BIND_ADDR makes the daemon listen on all interfaces so host port
+# WENLAN_BIND_ADDR makes the daemon listen on all interfaces so host port
 # publishing (-p 7878:7878) works. Falls back to 127.0.0.1 outside Docker.
-ENV ORIGIN_BIND_ADDR=0.0.0.0:7878
-ENV ORIGIN_PORT=7878
-ENV ORIGIN_DATA_DIR=/data
+ENV WENLAN_BIND_ADDR=0.0.0.0:7878
+ENV WENLAN_PORT=7878
+ENV WENLAN_DATA_DIR=/data
 VOLUME ["/data"]
-ENTRYPOINT ["/usr/local/bin/origin-server"]
+ENTRYPOINT ["/usr/local/bin/wenlan-server"]

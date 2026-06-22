@@ -15,8 +15,8 @@ set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
-echo "==> Building origin-core with eval-harness feature"
-cargo build -p origin-core --features eval-harness
+echo "==> Building wenlan-core with eval-harness feature"
+cargo build -p wenlan-core --features eval-harness
 
 echo "==> Building compare-baselines binary"
 cargo build --bin compare-baselines --features eval-harness
@@ -24,7 +24,7 @@ cargo build --bin compare-baselines --features eval-harness
 run_save() {
     local test_name="$1"
     echo "==> Running $test_name"
-    cargo test -p origin-core --test eval_harness --features eval-harness \
+    cargo test -p wenlan-core --test eval_harness --features eval-harness \
         "$test_name" -- --ignored --nocapture
 }
 

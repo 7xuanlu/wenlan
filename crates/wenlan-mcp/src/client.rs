@@ -6,15 +6,15 @@ use serde::{de::DeserializeOwned, Serialize};
 const DEFAULT_HTTP_URL: &str = "http://127.0.0.1:7878";
 
 /// Single source of truth for the space-lock header name.
-/// Mirrors the daemon's `X-Origin-Space` constant (HTTP normalises to lowercase).
+/// Mirrors the daemon's `X-Wenlan-Space` constant (HTTP normalises to lowercase).
 pub fn space_header_name() -> &'static str {
     "x-origin-space"
 }
 
-/// Discover the Origin server URL.
+/// Discover the Wenlan server URL.
 /// Priority: CLI flag > HTTP default.
 /// Note: UDS discovery disabled — reqwest doesn't support unix:// URLs natively.
-/// Origin always binds HTTP on 127.0.0.1:7878 alongside UDS, so HTTP is reliable.
+/// Wenlan always binds HTTP on 127.0.0.1:7878 alongside UDS, so HTTP is reliable.
 pub fn discover_origin_url(cli_url: Option<String>) -> String {
     if let Some(url) = cli_url {
         return url;
@@ -23,7 +23,7 @@ pub fn discover_origin_url(cli_url: Option<String>) -> String {
     DEFAULT_HTTP_URL.to_string()
 }
 
-/// HTTP client for the Origin REST API.
+/// HTTP client for the Wenlan REST API.
 #[derive(Clone)]
 pub struct WenlanClient {
     client: Client,
@@ -199,7 +199,7 @@ impl WenlanClient {
     }
 
     /// Query the daemon's /api/health, compare versions, and return a
-    /// human-readable warning if origin-mcp is older than the daemon's minor.
+    /// human-readable warning if wenlan-mcp is older than the daemon's minor.
     /// Returns None if compatible OR if the daemon is unreachable / response
     /// can't be parsed (handshake never blocks startup).
     pub async fn version_handshake(&self) -> Option<String> {
@@ -223,11 +223,11 @@ impl WenlanClient {
         match compare(mcp_version, daemon_version) {
             VersionStatus::Compatible => None,
             VersionStatus::McpOutdated { mcp, daemon } => Some(format!(
-                "Your origin-mcp v{mcp} is older than the daemon v{daemon}. \
-                 Run `brew upgrade origin-mcp` (or `npm update -g origin-mcp`)."
+                "Your wenlan-mcp v{mcp} is older than the daemon v{daemon}. \
+                 Run `brew upgrade wenlan-mcp` (or `npm update -g wenlan-mcp`)."
             )),
             VersionStatus::DaemonOutdated { mcp, daemon } => Some(format!(
-                "The Origin daemon is running v{daemon} but origin-mcp v{mcp} is installed. \
+                "The Wenlan daemon is running v{daemon} but wenlan-mcp v{mcp} is installed. \
                  The daemon was not restarted after an upgrade. Run `origin restart` to load it."
             )),
         }
@@ -236,13 +236,13 @@ impl WenlanClient {
 
 #[derive(Debug, thiserror::Error)]
 pub enum WenlanError {
-    #[error("Origin is not reachable: {0}")]
+    #[error("Wenlan is not reachable: {0}")]
     Unreachable(String),
 
-    #[error("Origin API error (HTTP {status}): {body}")]
+    #[error("Wenlan API error (HTTP {status}): {body}")]
     Api { status: u16, body: String },
 
-    #[error("Failed to parse Origin response: {0}")]
+    #[error("Failed to parse Wenlan response: {0}")]
     Deserialize(String),
 }
 

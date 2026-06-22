@@ -1,6 +1,6 @@
 //! Read `WENLAN_SPACE` at startup; expose the value as the "locked space".
 //!
-//! When set, every outbound daemon call attaches `X-Origin-Space: <value>`,
+//! When set, every outbound daemon call attaches `X-Wenlan-Space: <value>`,
 //! the MCP tool handlers ignore any inbound `space` arg from the model, and
 //! the schema-gating layer (later wired in tools.rs) omits the `space`
 //! field from tool definitions.

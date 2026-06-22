@@ -10,14 +10,14 @@ use wenlan_mcp::{auth, serve, token};
 #[derive(Parser)]
 #[command(
     name = "wenlan-mcp",
-    about = "MCP server for Origin — personal agent memory layer",
+    about = "MCP server for Wenlan — personal agent memory layer",
     version
 )]
 struct Cli {
     #[command(subcommand)]
     command: Option<Commands>,
 
-    /// Origin server URL (e.g. http://127.0.0.1:7878). Auto-discovers if not set.
+    /// Wenlan server URL (e.g. http://127.0.0.1:7878). Auto-discovers if not set.
     #[arg(long, global = true)]
     origin_url: Option<String>,
 }
@@ -60,7 +60,7 @@ struct ServeArgs {
     #[arg(long)]
     user_id: Option<String>,
 
-    /// Comma-separated list of allowed Origin headers
+    /// Comma-separated list of allowed Wenlan headers
     #[arg(long, default_value = "https://claude.ai,https://chatgpt.com")]
     allowed_origins: String,
 }
@@ -76,7 +76,7 @@ enum TokenAction {
     /// Generate a new bearer token
     Generate {
         /// Output file path
-        #[arg(long, default_value = "~/.config/origin-mcp/token")]
+        #[arg(long, default_value = "~/.config/wenlan-mcp/token")]
         output: String,
     },
 }
@@ -104,9 +104,9 @@ async fn main() -> anyhow::Result<()> {
 
     wenlan_mcp::lock_state::init_from_env();
     if let Some(space) = wenlan_mcp::lock_state::locked_space() {
-        eprintln!("origin-mcp: WENLAN_SPACE lock active, space=\"{}\"", space);
+        eprintln!("wenlan-mcp: WENLAN_SPACE lock active, space=\"{}\"", space);
     } else {
-        eprintln!("origin-mcp: WENLAN_SPACE lock inactive (no lock)");
+        eprintln!("wenlan-mcp: WENLAN_SPACE lock inactive (no lock)");
     }
 
     match cli.command {
@@ -118,7 +118,7 @@ async fn main() -> anyhow::Result<()> {
 
 async fn run_stdio(origin_url: Option<String>) -> anyhow::Result<()> {
     let base_url = discover_origin_url(origin_url);
-    tracing::info!("Connecting to Origin at {}", base_url);
+    tracing::info!("Connecting to Wenlan at {}", base_url);
 
     let client = WenlanClient::new(base_url).with_agent_name("claude-code".into());
 
@@ -140,7 +140,7 @@ async fn run_stdio(origin_url: Option<String>) -> anyhow::Result<()> {
         .await
         .inspect_err(|e| tracing::error!("Failed to start MCP server: {}", e))?;
 
-    tracing::info!("origin-mcp server running on stdio");
+    tracing::info!("wenlan-mcp server running on stdio");
     service.waiting().await?;
     Ok(())
 }
@@ -151,7 +151,7 @@ async fn run_serve(args: ServeArgs, origin_url: Option<String>) -> anyhow::Resul
     if resolved_token.is_none() && !args.no_auth {
         anyhow::bail!(
             "Authentication required. Use --token, --token-file, or --no-auth.\n\
-             Generate a token with: origin-mcp token generate"
+             Generate a token with: wenlan-mcp token generate"
         );
     }
     if args.no_auth {
@@ -168,7 +168,7 @@ async fn run_serve(args: ServeArgs, origin_url: Option<String>) -> anyhow::Resul
     }
 
     let base_url = discover_origin_url(origin_url);
-    tracing::info!("Connecting to Origin at {}", base_url);
+    tracing::info!("Connecting to Wenlan at {}", base_url);
 
     if let Some(msg) = WenlanClient::new(base_url.clone())
         .version_handshake()
@@ -241,7 +241,7 @@ fn run_token(args: TokenArgs) -> anyhow::Result<()> {
             eprintln!("Token saved to {}", path.display());
             eprintln!("Token: {}", new_token);
             eprintln!();
-            eprintln!("Use with: origin-mcp serve --token-file {}", path.display());
+            eprintln!("Use with: wenlan-mcp serve --token-file {}", path.display());
             Ok(())
         }
     }

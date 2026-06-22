@@ -7,11 +7,11 @@ pub enum VersionStatus {
     DaemonOutdated { mcp: Version, daemon: Version },
 }
 
-/// Compare origin-mcp's compiled version against the daemon's reported version.
+/// Compare wenlan-mcp's compiled version against the daemon's reported version.
 /// Treats the daemon being minor/major AHEAD as `McpOutdated` (a patch-ahead
 /// daemon is ignored: release-please bumps patches frequently and they're
 /// API-compatible). Flags `DaemonOutdated` when the running daemon is strictly
-/// OLDER than origin-mcp at any level, including patch (it was not restarted
+/// OLDER than wenlan-mcp at any level, including patch (it was not restarted
 /// after an upgrade). Unparseable daemon versions are treated as Compatible
 /// (handshake never blocks).
 pub fn compare(mcp_version: &str, daemon_version: &str) -> VersionStatus {

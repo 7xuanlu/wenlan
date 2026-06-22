@@ -101,9 +101,9 @@ mod tests {
 
     #[test]
     fn extract_dedups_case_insensitively() {
-        let v = extract_wikilinks("[[Origin]] and [[origin]] and [[ORIGIN]]");
+        let v = extract_wikilinks("[[Wenlan]] and [[origin]] and [[ORIGIN]]");
         // Keep first-seen casing.
-        assert_eq!(v, vec!["Origin"]);
+        assert_eq!(v, vec!["Wenlan"]);
     }
 
     #[test]

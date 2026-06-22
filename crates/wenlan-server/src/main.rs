@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-//! Origin headless daemon — runs the memory server without Tauri.
+//! Wenlan headless daemon — runs the memory server without Tauri.
 
 mod cmd_backfill;
 
@@ -50,13 +50,13 @@ use clap::{Parser, Subcommand};
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
-/// Origin memory daemon — headless HTTP server.
+/// Wenlan memory daemon — headless HTTP server.
 #[derive(Parser)]
 #[command(
     name = "wenlan-server",
     bin_name = "wenlan-server",
     version,
-    about = "Origin headless HTTP daemon."
+    about = "Wenlan headless HTTP daemon."
 )]
 struct Cli {
     #[command(subcommand)]
@@ -65,8 +65,8 @@ struct Cli {
     /// Override the data directory (for isolated dev/demo runs).
     /// When set, the daemon reads/writes the DB at `<dir>/memorydb/origin_memory.db`
     /// and config at `<dir>/config.json` instead of the default
-    /// the platform data directory under `dirs::data_local_dir().join("origin/")`.
-    /// macOS: `~/Library/Application Support/origin/`. Linux: `~/.local/share/origin/`. Windows: `%LOCALAPPDATA%\origin\`. Also honored via `WENLAN_DATA_DIR` env.
+    /// the platform data directory under `dirs::data_local_dir().join("wenlan/")`.
+    /// macOS: `~/Library/Application Support/wenlan/`. Linux: `~/.local/share/wenlan/`. Windows: `%LOCALAPPDATA%\origin\`. Also honored via `WENLAN_DATA_DIR` env.
     #[arg(long, global = true)]
     data_dir: Option<std::path::PathBuf>,
 
@@ -96,7 +96,7 @@ async fn run_daemon() -> anyhow::Result<()> {
         )
         .init();
 
-    tracing::info!("origin-server v{}", wenlan_core::version());
+    tracing::info!("wenlan-server v{}", wenlan_core::version());
 
     // Port (clap `--port`/`WENLAN_PORT` → env var set by main(); read here)
     let port: u16 = wenlan_core::env_compat::var_compat("WENLAN_PORT")
@@ -116,7 +116,7 @@ async fn run_daemon() -> anyhow::Result<()> {
     }
 
     // Data directory. `WENLAN_DATA_DIR` (set by `--data-dir` flag) overrides the
-    // default, enabling isolated dev/demo runs (e.g. `--data-dir /tmp/origin-demo`).
+    // default, enabling isolated dev/demo runs (e.g. `--data-dir /tmp/wenlan-demo`).
     let wenlan_root = wenlan_core::env_compat::var_compat("WENLAN_DATA_DIR")
         .map(std::path::PathBuf::from)
         .unwrap_or_else(|| {
@@ -125,7 +125,7 @@ async fn run_daemon() -> anyhow::Result<()> {
                 .join("wenlan")
         });
     let data_dir = wenlan_root.join("memorydb");
-    tracing::info!("Origin data root: {}", wenlan_root.display());
+    tracing::info!("Wenlan data root: {}", wenlan_root.display());
 
     // Build state
     let mut server_state = ServerState::new();
@@ -157,14 +157,14 @@ async fn run_daemon() -> anyhow::Result<()> {
     // - Symlink ~/.origin/db -> <data_dir> (cosmetic alias; DB stays at
     //   the platform data directory (resolved via `dirs::data_local_dir()` per OS)
     //   under `origin/memorydb/`, to avoid moving live SQLite/WAL files mid-flight).
-    // - Migrate legacy ~/Origin/knowledge/ md files into ~/.origin/pages/ if
+    // - Migrate legacy ~/Wenlan/knowledge/ md files into ~/.origin/pages/ if
     //   the new dir is empty. Never deletes the old dir; user can clean up
     //   manually after verifying.
     if let Some(home) = dirs::home_dir() {
         let wenlan_dot = home.join(".wenlan");
         for sub in ["pages", "sessions", "sessions/_status"] {
             if let Err(e) = std::fs::create_dir_all(wenlan_dot.join(sub)) {
-                tracing::warn!("[origin-dir] create {} failed: {}", sub, e);
+                tracing::warn!("[wenlan-dir] create {} failed: {}", sub, e);
             }
         }
 
@@ -176,7 +176,7 @@ async fn run_daemon() -> anyhow::Result<()> {
             #[cfg(unix)]
             if let Err(e) = std::os::unix::fs::symlink(&data_dir, &db_link) {
                 tracing::warn!(
-                    "[origin-dir] symlink {} -> {} failed: {}",
+                    "[wenlan-dir] symlink {} -> {} failed: {}",
                     db_link.display(),
                     data_dir.display(),
                     e
@@ -277,19 +277,19 @@ async fn run_daemon() -> anyhow::Result<()> {
             if run(&["init", "--quiet"]).is_some() {
                 let _ = run(&[
                     "-c",
-                    "user.name=Origin",
+                    "user.name=Wenlan",
                     "-c",
                     "user.email=daemon@origin.local",
                     "commit",
                     "--allow-empty",
                     "--quiet",
                     "-m",
-                    "Origin initialized",
+                    "Wenlan initialized",
                 ]);
                 let _ = run(&["add", "-A"]);
                 let _ = run(&[
                     "-c",
-                    "user.name=Origin",
+                    "user.name=Wenlan",
                     "-c",
                     "user.email=daemon@origin.local",
                     "commit",
@@ -297,7 +297,7 @@ async fn run_daemon() -> anyhow::Result<()> {
                     "-m",
                     "backfill: initial pages from DB",
                 ]);
-                tracing::info!("[origin-dir] git init complete at {}", wenlan_dot.display());
+                tracing::info!("[wenlan-dir] git init complete at {}", wenlan_dot.display());
             }
         }
     }
@@ -496,7 +496,7 @@ async fn run_daemon() -> anyhow::Result<()> {
     // the libSQL transaction (one per flush for the survivors) across
     // concurrent writes.
     //
-    // See `crates/origin-server/src/ingest_batcher.rs` for the design and
+    // See `crates/wenlan-server/src/ingest_batcher.rs` for the design and
     // contract tests.
     {
         let db_for_batcher = db_arc.clone();
@@ -568,7 +568,7 @@ async fn run_daemon() -> anyhow::Result<()> {
     // serves traffic. `mark_llm_ready` is a one-shot per process, so this hook
     // runs at most once regardless of which provider fires first.
     //
-    // The on-device `llm-provider-worker` (`crates/origin-core/src/llm_provider.rs:142`)
+    // The on-device `llm-provider-worker` (`crates/wenlan-core/src/llm_provider.rs:142`)
     // runs on a `std::thread`, not a Tokio task — GPU inference is blocking
     // and would starve the async runtime. When it calls `mark_llm_ready()`
     // from that thread, our hook fires synchronously on a thread with no
@@ -662,7 +662,7 @@ async fn run_daemon() -> anyhow::Result<()> {
 
     // Eval harness reads this stdout line to discover the bound port even when
     // WENLAN_BIND_ADDR=127.0.0.1:0. Format MUST stay stable — see
-    // crates/origin-core/src/eval/http_harness.rs in the P2 plan.
+    // crates/wenlan-core/src/eval/http_harness.rs in the P2 plan.
     println!("WENLAN_LISTENING_ON={}", local_addr);
     use std::io::Write;
     let _ = std::io::stdout().flush();
@@ -793,8 +793,8 @@ async fn ingest_batch_process(
 async fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
 
-    // Propagate flags through env vars so both origin-server's own path logic
-    // and origin-core's config loader (`wenlan_core::config::config_path`) see
+    // Propagate flags through env vars so both wenlan-server's own path logic
+    // and wenlan-core's config loader (`wenlan_core::config::config_path`) see
     // the same values without plumbing a parameter through every call site.
     if let Some(ref dir) = cli.data_dir {
         std::env::set_var("WENLAN_DATA_DIR", dir);

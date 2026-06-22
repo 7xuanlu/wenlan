@@ -210,7 +210,7 @@ pub fn gc_orphan_stubs(knowledge_path: &Path, manifest: &StubManifest) -> std::i
 }
 
 /// Map a memory id to a filesystem/wikilink-safe token. Ids already matching
-/// `[A-Za-z0-9_-]+` (all stored Origin `mem_<uuid>` ids) pass through
+/// `[A-Za-z0-9_-]+` (all stored Wenlan `mem_<uuid>` ids) pass through
 /// unchanged. Other chars are hex-escaped as `_XX`.
 /// NOTE: not collision-free for arbitrary input — because `_` is both the
 /// escape introducer and a passthrough char, `"mem_a/"` and a literal
@@ -257,7 +257,7 @@ pub fn project_stubs_for_page(
         let body = format!(
             "---\ntitle: {quoted}\norigin_stub: {quoted}\n---\n\n\
              This is a read-only source projection for memory `{id}`, cited by \
-             page `{page_id}`. Edit the memory in Origin, not this file.\n"
+             page `{page_id}`. Edit the memory in Wenlan, not this file.\n"
         );
         std::fs::write(&path, body)?;
     }

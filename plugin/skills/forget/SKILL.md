@@ -1,7 +1,7 @@
 ---
 name: forget
 description: >
-  Delete a memory from Origin by ID. Destructive and cannot be undone —
+  Delete a memory from Wenlan by ID. Destructive and cannot be undone —
   prefer `/capture` with `supersedes` for corrections. Invoked as
   `/forget <source_id>`.
 argument-hint: "<source_id>"
@@ -49,10 +49,10 @@ silent skip if `git` missing, `~/.origin/` not a repo, or no diff.
 
 ```
 Bash: git -C ~/.origin add -A && \
-      git -C ~/.origin -c user.name=Origin -c user.email=daemon@origin.local \
+      git -C ~/.origin -c user.name=Wenlan -c user.email=daemon@origin.local \
           commit --quiet -m "forget: <source_id>" 2>/dev/null || \
       (sleep 1 && git -C ~/.origin add -A && \
-       git -C ~/.origin -c user.name=Origin -c user.email=daemon@origin.local \
+       git -C ~/.origin -c user.name=Wenlan -c user.email=daemon@origin.local \
            commit --quiet -m "forget: <source_id>" 2>/dev/null) || true
 ```
 

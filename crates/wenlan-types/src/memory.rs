@@ -249,7 +249,7 @@ pub struct TopMemory {
 /// A session snapshot — a compact summary of a contiguous working session.
 ///
 /// Wire format for `GET /api/snapshots`. Mirrors `SessionSnapshotRow` in
-/// origin-core/db.rs but lives here so origin-types can stay the single
+/// wenlan-core/db.rs but lives here so wenlan-types can stay the single
 /// source of truth for HTTP boundary shapes (and because capture_count is
 /// serialized as a JSON number rather than a Rust `usize`).
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -367,7 +367,7 @@ pub struct RejectionRecord {
     pub created_at: i64,
 }
 
-/// An event describing when an agent retrieved pages/memories from Origin.
+/// An event describing when an agent retrieved pages/memories from Wenlan.
 ///
 /// Backs Zone 4 of the home page ("Where Claude leaned on you") — a proof
 /// surface showing which pages were pulled into an agent's context and

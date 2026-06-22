@@ -5,7 +5,7 @@
 //! detection, activity log construction, session JSON parsing. The
 //! state-coupled background timer (`run_packager_timer`) still lives in the
 //! Tauri app crate because it consumes `AppState` directly; it will move into
-//! origin-server during Task 4.
+//! wenlan-server during Task 4.
 
 use crate::db::CaptureRefRow;
 use crate::tuning::PackagerConfig;

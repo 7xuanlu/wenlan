@@ -353,7 +353,7 @@ mod tests {
 
     /// Smoke test for the real cross-encoder model. `#[ignore]` because the
     /// first construction downloads ~600MB of weights. Run manually with
-    /// `cargo test -p origin-core --lib reranker::tests -- --ignored`.
+    /// `cargo test -p wenlan-core --lib reranker::tests -- --ignored`.
     #[tokio::test]
     #[ignore]
     async fn cross_encoder_real_model_smoke() {

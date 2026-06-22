@@ -230,9 +230,9 @@ mod tests {
 
     #[test]
     fn build_relation_judge_prompt_includes_triple_and_source() {
-        let p = build_relation_judge_prompt("Origin uses libSQL.", "Origin", "libSQL", "uses");
-        assert!(p.contains("Origin uses libSQL."));
-        assert!(p.contains("Origin"));
+        let p = build_relation_judge_prompt("Wenlan uses libSQL.", "Wenlan", "libSQL", "uses");
+        assert!(p.contains("Wenlan uses libSQL."));
+        assert!(p.contains("Wenlan"));
         assert!(p.contains("libSQL"));
         assert!(p.contains("uses"));
     }

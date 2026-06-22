@@ -437,7 +437,7 @@ mod tests {
     /// KV slot-reuse correctness: with backfill engaged (19 requests over M=8
     /// slots → 11 backfills), every extract output must be grounded in its own
     /// prompt's canary and leak no foreign canary. Run locally on Metal:
-    /// `cargo test -p origin-core --lib eval::engine_throughput::tests::backfill_grounding -- --ignored --nocapture`
+    /// `cargo test -p wenlan-core --lib eval::engine_throughput::tests::backfill_grounding -- --ignored --nocapture`
     #[test]
     #[ignore = "needs GPU + downloaded GGUF model (L7 manual)"]
     fn backfill_grounding() {
@@ -462,7 +462,7 @@ mod tests {
 
     /// Throughput A/B: report the wall-clock speedup of slot backfill ON vs OFF
     /// on a mixed M=8 workload. Run locally on Metal:
-    /// `cargo test -p origin-core --lib eval::engine_throughput::tests::backfill_throughput_ab -- --ignored --nocapture`
+    /// `cargo test -p wenlan-core --lib eval::engine_throughput::tests::backfill_throughput_ab -- --ignored --nocapture`
     #[test]
     #[ignore = "needs GPU + downloaded GGUF model (L7 manual)"]
     fn backfill_throughput_ab() {
@@ -500,7 +500,7 @@ mod tests {
     /// logits-row / KV-corruption bug flips the argmax and is caught, while benign
     /// float noise does not. Also asserts every request completed (the `min_len-1`
     /// cap must leave even the shortest backfilled request a non-empty suffix). Run:
-    /// `cargo test -p origin-core --lib eval::engine_throughput::tests::prefix_cache_equivalence -- --ignored --nocapture`
+    /// `cargo test -p wenlan-core --lib eval::engine_throughput::tests::prefix_cache_equivalence -- --ignored --nocapture`
     #[test]
     #[ignore = "needs GPU + downloaded GGUF model (L7 manual)"]
     fn prefix_cache_equivalence() {
@@ -538,7 +538,7 @@ mod tests {
     /// Prefix-KV cache prefill A/B: report wall-clock ON vs OFF over a homogeneous
     /// shared-prefix batch. The headline (prefill_ms / prime_ms drop) is in the
     /// `[batch_timing]` lines below; set WENLAN_BATCH_LOG via the test. Run:
-    /// `WENLAN_BATCH_LOG=1 cargo test -p origin-core --lib eval::engine_throughput::tests::prefix_cache_prefill_ab -- --ignored --nocapture`
+    /// `WENLAN_BATCH_LOG=1 cargo test -p wenlan-core --lib eval::engine_throughput::tests::prefix_cache_prefill_ab -- --ignored --nocapture`
     #[test]
     #[ignore = "needs GPU + downloaded GGUF model (L7 manual)"]
     fn prefix_cache_prefill_ab() {

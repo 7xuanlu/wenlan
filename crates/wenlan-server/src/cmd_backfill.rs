@@ -116,17 +116,17 @@ pub async fn run(dry_run: bool) -> anyhow::Result<()> {
 /// pins both copies to the on-disk paths `service-manager` 0.11 actually writes.
 const SERVICE_LABEL: &str = "com.wenlan.server";
 
-/// Resolves the platform-specific path to the Origin service unit file on
+/// Resolves the platform-specific path to the Wenlan service unit file on
 /// Unix-likes. Mirrors the on-disk path that `service-manager` 0.11 writes:
 /// - macOS (launchd): `~/Library/LaunchAgents/com.wenlan.server.plist`
 ///   (uses `ServiceLabel::to_qualified_name()` — qualifier kept).
-/// - Linux (systemd-user): `~/.config/systemd/user/origin-server.service`
+/// - Linux (systemd-user): `~/.config/systemd/user/wenlan-server.service`
 ///   (uses `ServiceLabel::to_script_name()` — qualifier DROPPED, org+app
 ///   joined with `-`).
 ///
 /// Windows uses `sc.exe` which writes no on-disk unit file, so this is
 /// `#[cfg]`-gated off Windows. Kept in sync with
-/// `origin-cli::commands::service::service_unit_path` via
+/// `wenlan-cli::commands::service::service_unit_path` via
 /// `service_unit_path_matches_cli` below.
 #[cfg(not(target_os = "windows"))]
 fn service_unit_path() -> Result<std::path::PathBuf> {
@@ -162,7 +162,7 @@ fn check_service_unloaded() -> Result<()> {
             .unwrap_or(false);
         if registered {
             Err(anyhow!(
-                "The Origin service is registered with the Windows Service Control Manager as \
+                "The Wenlan service is registered with the Windows Service Control Manager as \
                  '{SERVICE_LABEL}'.\n\
                  Unload it first to prevent auto-restart:\n  origin uninstall\n\
                  Then re-run this command. (Reinstall after with `origin install`.)"
@@ -176,7 +176,7 @@ fn check_service_unloaded() -> Result<()> {
         let unit = service_unit_path()?;
         if unit.exists() {
             Err(anyhow!(
-                "The Origin service is registered with the platform service manager at:\n  {}\n\
+                "The Wenlan service is registered with the platform service manager at:\n  {}\n\
                  Unload it first to prevent auto-restart:\n  origin uninstall\n\
                  Then re-run this command. (Reinstall after with `origin install`.)",
                 unit.display()
@@ -250,7 +250,7 @@ mod tests {
         );
         #[cfg(target_os = "linux")]
         assert!(
-            p.ends_with(".config/systemd/user/origin-server.service"),
+            p.ends_with(".config/systemd/user/wenlan-server.service"),
             "unexpected Linux path: {p}"
         );
     }

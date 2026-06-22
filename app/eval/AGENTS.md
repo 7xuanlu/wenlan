@@ -156,7 +156,7 @@ Sources: `~/.cache/origin-eval/fullpipeline_locomo_tuples.db/origin_memory.db` a
 Run with:
 
 ```bash
-cargo test -p origin-core --test cached_scenario_db_check -- --ignored --nocapture
+cargo test -p wenlan-core --test cached_scenario_db_check -- --ignored --nocapture
 ```
 
 ---
@@ -196,10 +196,10 @@ Page-channel impact is measured by running the same test twice:
 
 ```bash
 # page-channel ON (opt-in):
-WENLAN_ENABLE_PAGE_CHANNEL=1 cargo test -p origin-core --test eval_harness save_locomo_v2_with_pages_baseline -- --ignored --nocapture
+WENLAN_ENABLE_PAGE_CHANNEL=1 cargo test -p wenlan-core --test eval_harness save_locomo_v2_with_pages_baseline -- --ignored --nocapture
 
 # page-channel OFF (default):
-cargo test -p origin-core --test eval_harness save_locomo_v2_with_pages_baseline -- --ignored --nocapture
+cargo test -p wenlan-core --test eval_harness save_locomo_v2_with_pages_baseline -- --ignored --nocapture
 ```
 
 The cached consolidated scenario DB introduces cross-conversation noise compared to the per-conversation ephemeral DB used by `save_locomo_cross_rerank_baseline`. So numbers from `save_locomo_v2_with_pages_baseline` are NOT directly comparable to the published 0.684 LoCoMo bar. They are comparable to the OFF variant of the same runner (page-channel unset/default).

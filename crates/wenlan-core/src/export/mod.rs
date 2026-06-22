@@ -8,8 +8,8 @@ pub mod provenance;
 use crate::error::WenlanError;
 use crate::pages::Page;
 
-// ExportStats moved to origin-types in Phase 5-D PR2 so the Tauri app can
-// deserialize it without pulling in the full origin-core dep.
+// ExportStats moved to wenlan-types in Phase 5-D PR2 so the Tauri app can
+// deserialize it without pulling in the full wenlan-core dep.
 pub use wenlan_types::ExportStats;
 
 #[derive(Debug)]

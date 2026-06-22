@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-//! Core business logic for the Origin memory system.
+//! Core business logic for the Wenlan memory system.
 //!
 //! This crate contains memory storage, retrieval, embeddings, LLM processing,
 //! and all non-UI logic. It is being extracted from the Tauri app crate

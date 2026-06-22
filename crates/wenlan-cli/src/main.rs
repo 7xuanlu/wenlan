@@ -7,7 +7,7 @@ use wenlan_cli::{client, commands, output};
 #[command(
     name = "wenlan",
     version,
-    about = "Origin CLI. Set up and use the local Origin runtime."
+    about = "Wenlan CLI. Set up and use the local Wenlan runtime."
 )]
 struct Cli {
     #[command(subcommand)]
@@ -41,11 +41,11 @@ enum Commands {
         #[arg(short = 'y', long)]
         yes: bool,
     },
-    /// Install the Origin daemon as a macOS LaunchAgent.
+    /// Install the Wenlan daemon as a macOS LaunchAgent.
     Install,
-    /// Uninstall the Origin LaunchAgent.
+    /// Uninstall the Wenlan LaunchAgent.
     Uninstall,
-    /// Restart the Origin daemon (stop then start). Required after an upgrade.
+    /// Restart the Wenlan daemon (stop then start). Required after an upgrade.
     Restart,
     /// Diagnose daemon, model, and API key setup.
     Doctor,
@@ -59,7 +59,7 @@ enum Commands {
         #[command(subcommand)]
         command: commands::setup::KeyCommand,
     },
-    /// Configure Origin MCP for supported clients.
+    /// Configure Wenlan MCP for supported clients.
     Mcp {
         #[command(subcommand)]
         command: commands::mcp::McpCommand,

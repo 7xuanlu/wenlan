@@ -164,7 +164,7 @@ For each cluster, first run a **coherence check** before synthesizing:
 - Skim every memory in `cluster.contents`.
 - If the cluster has ≥ ~4 memories and the topics scatter (entity
   shared but the memories cover unrelated sub-topics — e.g. all tagged
-  `Origin` but spanning RwLock bugs, schema choices, onboarding UI,
+  `Wenlan` but spanning RwLock bugs, schema choices, onboarding UI,
   migrations, and CSS), the cluster is **incoherent**. Skip
   synthesizing it. Record it for the report under "Skipped (low
   coherence)" with the existing page title (if refresh) or a short
@@ -353,10 +353,10 @@ missing or `~/.origin/` is not a repo yet.
 
 ```
 Bash: git -C ~/.origin add -A && \
-      git -C ~/.origin -c user.name=Origin -c user.email=daemon@origin.local \
+      git -C ~/.origin -c user.name=Wenlan -c user.email=daemon@origin.local \
           commit --quiet -m "distill: <N> pages" 2>/dev/null || \
       (sleep 1 && git -C ~/.origin add -A && \
-       git -C ~/.origin -c user.name=Origin -c user.email=daemon@origin.local \
+       git -C ~/.origin -c user.name=Wenlan -c user.email=daemon@origin.local \
            commit --quiet -m "distill: <N> pages" 2>/dev/null) || true
 ```
 

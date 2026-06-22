@@ -1,8 +1,8 @@
-# Contributing to Origin
+# Contributing to Wenlan
 
-Origin is a local-first personal AI memory layer. We welcome bug fixes, features, tests, docs, and design feedback.
+Wenlan is a local-first personal AI memory layer. We welcome bug fixes, features, tests, docs, and design feedback.
 
-This repo holds the daemon (`origin-server`), the CLI (`origin`), the MCP server (`origin-mcp`), and the shared types/core (`origin-types`, `origin-core`). The Tauri desktop app lives in [7xuanlu/origin-app](https://github.com/7xuanlu/origin-app). Bug reports for the local runtime, CLI, MCP server, and plugin are welcome here.
+This repo holds the daemon (`wenlan-server`), the CLI (`origin`), the MCP server (`wenlan-mcp`), and the shared types/core (`wenlan-types`, `wenlan-core`). The Tauri desktop app lives in [7xuanlu/origin-app](https://github.com/7xuanlu/origin-app). Bug reports for the local runtime, CLI, MCP server, and plugin are welcome here.
 
 ## Development Setup
 
@@ -11,19 +11,19 @@ This repo holds the daemon (`origin-server`), the CLI (`origin`), the MCP server
 ```bash
 git clone https://github.com/7xuanlu/origin.git
 cd origin
-cargo build -p origin-server
+cargo build -p wenlan-server
 ```
 
 Run the daemon directly:
 
 ```bash
-cargo run -p origin-server
+cargo run -p wenlan-server
 ```
 
 Or install as a launchd service:
 
 ```bash
-cargo build --release -p origin -p origin-server
+cargo build --release -p origin -p wenlan-server
 ./target/release/origin setup --basic
 ./target/release/origin install
 ./target/release/origin status
@@ -38,9 +38,9 @@ cargo build --release -p origin -p origin-server
 cargo test --workspace
 
 # Per-crate
-cargo test -p origin-types
-cargo test -p origin-core --lib
-cargo test -p origin-server
+cargo test -p wenlan-types
+cargo test -p wenlan-core --lib
+cargo test -p wenlan-server
 cargo test -p origin
 ```
 
@@ -53,7 +53,7 @@ cargo clippy --workspace --all-targets -- -D warnings
 
 ## Architecture Overview
 
-- **Shared types**: `crates/wenlan-types` (Apache-2.0). Lightweight wire types shared with `origin-mcp` and `origin-app` via crates.io.
+- **Shared types**: `crates/wenlan-types` (Apache-2.0). Lightweight wire types shared with `wenlan-mcp` and `origin-app` via crates.io.
 - **Core logic**: `crates/wenlan-core` (Apache-2.0). DB, embeddings, LLM engine, search, knowledge graph, distill cycles, eval. No tauri / no axum dependencies.
 - **HTTP daemon**: `crates/wenlan-server` (Apache-2.0), serves `127.0.0.1:7878`.
 - **CLI binary**: `crates/wenlan-cli` (Apache-2.0). The `origin` command for setup, service management, search, recall, etc.

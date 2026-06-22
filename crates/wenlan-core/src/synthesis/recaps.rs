@@ -14,12 +14,12 @@ pub(crate) fn classify_recaps(generated: usize) -> (Nudge, Option<String>) {
         0 => (Nudge::Silent, None),
         1 => (
             Nudge::Ambient,
-            Some("Origin steeped a recent activity burst into a recap".to_string()),
+            Some("Wenlan steeped a recent activity burst into a recap".to_string()),
         ),
         n => (
             Nudge::Ambient,
             Some(format!(
-                "Origin steeped {} recent activity bursts into recaps",
+                "Wenlan steeped {} recent activity bursts into recaps",
                 n
             )),
         ),
@@ -242,7 +242,7 @@ mod tests {
         for i in 0..5 {
             let mut doc = make_memory(
                 &format!("recent_{}", i),
-                &format!("Working on feature {} for the Origin project", i),
+                &format!("Working on feature {} for the Wenlan project", i),
                 "fact",
                 "engineering",
             );
@@ -281,7 +281,7 @@ mod tests {
         // The recap should be searchable (stored as memory_type=fact, is_recap=1)
         let results = db
             .search_memory(
-                "Origin project feature",
+                "Wenlan project feature",
                 10,
                 Some("fact"),
                 None,

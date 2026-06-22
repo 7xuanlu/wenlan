@@ -20,11 +20,11 @@ pub use crate::eval::shared::{count_tokens, eval_shared_embedder, run_entity_ext
 /// The search strategies compared by the token efficiency eval.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum SearchStrategy {
-    /// Origin's full hybrid search (vector + FTS + RRF).
-    Origin,
-    /// Origin hybrid + LLM reranking pass.
+    /// Wenlan's full hybrid search (vector + FTS + RRF).
+    Wenlan,
+    /// Wenlan hybrid + LLM reranking pass.
     WenlanReranked,
-    /// Origin hybrid + LLM query expansion.
+    /// Wenlan hybrid + LLM query expansion.
     WenlanExpanded,
     /// Vector-only search (no FTS, no RRF, no scoring).
     NaiveRag,
@@ -42,7 +42,7 @@ impl SearchStrategy {
     /// Snake_case identifier used in serialized output.
     pub fn name(&self) -> &'static str {
         match self {
-            Self::Origin => "origin",
+            Self::Wenlan => "origin",
             Self::WenlanReranked => "origin_reranked",
             Self::WenlanExpanded => "origin_expanded",
             Self::NaiveRag => "naive_rag",
@@ -56,9 +56,9 @@ impl SearchStrategy {
     /// Human-readable label for terminal display.
     pub fn display_name(&self) -> &'static str {
         match self {
-            Self::Origin => "Origin",
-            Self::WenlanReranked => "Origin+Rerank",
-            Self::WenlanExpanded => "Origin+Expand",
+            Self::Wenlan => "Wenlan",
+            Self::WenlanReranked => "Wenlan+Rerank",
+            Self::WenlanExpanded => "Wenlan+Expand",
             Self::NaiveRag => "Naive RAG",
             Self::FullReplay => "Full Replay",
             Self::NoMemory => "No Memory",
@@ -116,16 +116,16 @@ pub struct StrategyReport {
     pub stddev_mrr: f64,
 }
 
-/// Top-line token-efficiency comparison: Origin vs FullReplay.
+/// Top-line token-efficiency comparison: Wenlan vs FullReplay.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HeadlineMetrics {
     /// Percentage reduction in tokens: (replay - origin) / replay * 100.
     pub savings_pct: f64,
-    /// Mean context tokens for Origin strategy.
+    /// Mean context tokens for Wenlan strategy.
     pub origin_tokens: f64,
     /// Mean context tokens for FullReplay strategy.
     pub replay_tokens: f64,
-    /// Percentage of FullReplay quality retained by Origin: origin_ndcg / replay_ndcg * 100.
+    /// Percentage of FullReplay quality retained by Wenlan: origin_ndcg / replay_ndcg * 100.
     /// Uses NDCG@10 as the quality proxy.
     pub quality_retained_pct: f64,
 }
@@ -143,11 +143,11 @@ pub struct ScalingPoint {
 pub struct MultiTurnPoint {
     /// 1-based turn number.
     pub turn: usize,
-    /// Origin tokens used this turn (fresh retrieval).
+    /// Wenlan tokens used this turn (fresh retrieval).
     pub origin_tokens: usize,
     /// Replay tokens used this turn (corpus + accumulated history).
     pub replay_tokens: usize,
-    /// Cumulative Origin tokens up to and including this turn.
+    /// Cumulative Wenlan tokens up to and including this turn.
     pub cumulative_origin: usize,
     /// Cumulative Replay tokens up to and including this turn.
     pub cumulative_replay: usize,
@@ -160,7 +160,7 @@ pub struct MultiTurnReport {
     pub turns: usize,
     /// Per-turn breakdown.
     pub per_turn: Vec<MultiTurnPoint>,
-    /// Total Origin tokens across all turns.
+    /// Total Wenlan tokens across all turns.
     pub total_origin_tokens: usize,
     /// Total Replay tokens across all turns.
     pub total_replay_tokens: usize,
@@ -284,7 +284,7 @@ pub struct NativeMemoryBaseline {
     pub mechanism: String,
 }
 
-/// One alternative scenario for recalling specific information (without Origin).
+/// One alternative scenario for recalling specific information (without Wenlan).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RecallAlternative {
     /// Machine-readable identifier.
@@ -295,10 +295,10 @@ pub struct RecallAlternative {
     pub description: String,
 }
 
-/// Multi-turn augmentation comparison: native-only vs native+Origin vs native+full-replay.
+/// Multi-turn augmentation comparison: native-only vs native+Wenlan vs native+full-replay.
 ///
 /// Models a 10-turn session where a fraction of turns need specific recall.
-/// Native memory is a constant cost already paid; Origin adds a small overhead.
+/// Native memory is a constant cost already paid; Wenlan adds a small overhead.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MultiTurnAugmentationComparison {
     /// Total turns in the session.
@@ -307,27 +307,27 @@ pub struct MultiTurnAugmentationComparison {
     pub recall_turns: usize,
     /// Native-only total: native_per_turn * turns (no specific recall capability).
     pub native_only_total: usize,
-    /// Native + Origin: native_per_turn * turns + origin_retrieval * recall_turns.
+    /// Native + Wenlan: native_per_turn * turns + origin_retrieval * recall_turns.
     pub native_plus_origin_total: usize,
     /// Native + full replay: native_per_turn * turns + full_replay_tokens * recall_turns.
     pub native_plus_replay_total: usize,
-    /// Origin's additional cost as a percentage of the native-only baseline.
+    /// Wenlan's additional cost as a percentage of the native-only baseline.
     pub origin_overhead_pct: f64,
 }
 
-/// Augmentation report: what Origin ADDS on top of native memory.
+/// Augmentation report: what Wenlan ADDS on top of native memory.
 ///
-/// Origin does not replace native memory — users pay for native memory regardless.
-/// This report answers: "What does adding Origin cost, and what do you get?"
+/// Wenlan does not replace native memory — users pay for native memory regardless.
+/// This report answers: "What does adding Wenlan cost, and what do you get?"
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NativeMemoryAugmentationReport {
-    /// What Origin adds per query on top of native memory (mean across fixture cases).
+    /// What Wenlan adds per query on top of native memory (mean across fixture cases).
     pub origin_retrieval_tokens: f64,
     /// Native baselines for reference (cost already paid by the user).
     pub baselines: Vec<NativeMemoryBaseline>,
-    /// Alternative costs when the user needs specific recall without Origin.
+    /// Alternative costs when the user needs specific recall without Wenlan.
     pub alternatives: Vec<RecallAlternative>,
-    /// Multi-turn comparison: native-only vs native+Origin vs native+full-replay.
+    /// Multi-turn comparison: native-only vs native+Wenlan vs native+full-replay.
     pub multi_turn: MultiTurnAugmentationComparison,
     /// Honest framing note explaining the augmentation model.
     pub framing_note: String,
@@ -428,7 +428,7 @@ pub async fn run_quality_cost_eval(
             }
 
             let (context_tokens, ndcg, mrr_score, recall5) = match strategy {
-                SearchStrategy::Origin => {
+                SearchStrategy::Wenlan => {
                     let results = db
                         .search_memory(
                             &case.query,
@@ -598,7 +598,7 @@ pub async fn run_quality_cost_eval(
     // Compute headline metrics
     let origin_report = strategy_reports
         .iter()
-        .find(|r| r.strategy == SearchStrategy::Origin.name());
+        .find(|r| r.strategy == SearchStrategy::Wenlan.name());
     let replay_report = strategy_reports
         .iter()
         .find(|r| r.strategy == SearchStrategy::FullReplay.name());
@@ -644,9 +644,9 @@ pub async fn run_quality_cost_eval(
 /// Simulate multi-turn token accumulation.
 ///
 /// Seeds a DB with fixture memories, then simulates N turns of an agent session.
-/// Each turn runs an Origin search (constant cost) vs full replay (accumulating cost).
+/// Each turn runs an Wenlan search (constant cost) vs full replay (accumulating cost).
 /// The `response_overhead` parameter estimates tokens per LLM response that accumulate
-/// in the without-Origin conversation history.
+/// in the without-Wenlan conversation history.
 ///
 /// Picks the fixture case with the most seeds (positive + negative) for the most
 /// realistic numbers. Uses multiple fixture queries (rotating) if available.
@@ -711,7 +711,7 @@ pub async fn run_multi_turn_eval(
         let query_case = query_cases[(turn - 1) % query_cases.len()];
         let query = &query_case.query;
 
-        // Origin: fresh retrieval each turn — constant cost.
+        // Wenlan: fresh retrieval each turn — constant cost.
         let results = db
             .search_memory(
                 query,
@@ -762,13 +762,13 @@ pub async fn run_multi_turn_eval(
     })
 }
 
-/// Measure what Origin adds on top of native memory (augmentation framing).
+/// Measure what Wenlan adds on top of native memory (augmentation framing).
 ///
 /// Users already pay for native memory (Claude Code's CLAUDE.md, ChatGPT's memory facts,
-/// etc.) regardless of whether they use Origin. Origin does not replace that cost.
-/// The real question is: "What does Origin cost on top, and what does it provide?"
+/// etc.) regardless of whether they use Wenlan. Wenlan does not replace that cost.
+/// The real question is: "What does Wenlan cost on top, and what does it provide?"
 ///
-/// This function runs Origin search against fixtures to get actual mean tokens/query,
+/// This function runs Wenlan search against fixtures to get actual mean tokens/query,
 /// then models alternative recall costs and multi-turn overhead.
 ///
 /// Native platform token estimates are researched estimates as of April 2026, sourced
@@ -778,7 +778,7 @@ pub async fn run_native_memory_augmentation(
     fixture_dir: &Path,
     limit: usize,
 ) -> Result<NativeMemoryAugmentationReport, WenlanError> {
-    // Step 1: run Origin against fixtures to get actual mean retrieval tokens/query.
+    // Step 1: run Wenlan against fixtures to get actual mean retrieval tokens/query.
     let cases = load_fixtures(fixture_dir)?;
     let confidence_cfg = ConfidenceConfig::default();
     let mut origin_token_samples: Vec<usize> = Vec::new();
@@ -906,14 +906,14 @@ pub async fn run_native_memory_augmentation(
             scenario: "origin_retrieval".to_string(),
             tokens_per_recall: origin_retrieval_tokens.round() as usize,
             description: format!(
-                "Origin finds relevant context automatically (~{} tokens, measured from fixtures)",
+                "Wenlan finds relevant context automatically (~{} tokens, measured from fixtures)",
                 origin_retrieval_tokens.round() as usize
             ),
         },
     ];
 
     // Step 4: model 10-turn session overhead.
-    // Use Claude Code (11,300 tokens/turn) as the reference — most Origin users are Claude Code users.
+    // Use Claude Code (11,300 tokens/turn) as the reference — most Wenlan users are Claude Code users.
     // Assume 60% of turns need specific recall (realistic for coding sessions).
     let turns = 10usize;
     let recall_turns = 6usize; // 60% of turns
@@ -942,8 +942,8 @@ pub async fn run_native_memory_augmentation(
 
     let framing_note =
         "Native memory (CLAUDE.md, ChatGPT facts, Claude.ai summaries) is a fixed cost users \
-         already pay. Origin does not replace it — it augments it. The question is not \
-         'Origin vs native' but 'what does adding Origin cost, and what do you get in return?'"
+         already pay. Wenlan does not replace it — it augments it. The question is not \
+         'Wenlan vs native' but 'what does adding Wenlan cost, and what do you get in return?'"
             .to_string();
 
     Ok(NativeMemoryAugmentationReport {
@@ -1414,15 +1414,15 @@ pub async fn run_pipeline_token_eval_simulated(
 pub struct QualityAtScalePoint {
     /// Number of memories stored.
     pub memory_count: usize,
-    /// Origin's measured retrieval quality (NDCG@10).
+    /// Wenlan's measured retrieval quality (NDCG@10).
     pub origin_ndcg: f64,
-    /// Origin's token cost per query.
+    /// Wenlan's token cost per query.
     pub origin_tokens: f64,
     /// Native approach: all memories injected (tokens = total corpus).
     pub native_tokens: f64,
     /// Native approach: estimated effective quality (degrades with scale due to "lost in middle").
     pub native_effective_quality: f64,
-    /// Origin's quality-per-token ratio.
+    /// Wenlan's quality-per-token ratio.
     pub origin_quality_per_1k_tokens: f64,
     /// Native's quality-per-token ratio.
     pub native_quality_per_1k_tokens: f64,
@@ -1432,7 +1432,7 @@ pub struct QualityAtScalePoint {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct QualityAtScaleReport {
     pub points: Vec<QualityAtScalePoint>,
-    /// The crossover point: at what memory count does Origin's approach become clearly better?
+    /// The crossover point: at what memory count does Wenlan's approach become clearly better?
     pub crossover_memory_count: Option<usize>,
     pub methodology_note: String,
 }
@@ -1460,13 +1460,13 @@ fn native_quality_at_scale(memory_count: usize) -> f64 {
 
 /// Measure how recall quality and token cost compare as memory count grows.
 ///
-/// At each corpus size: measures Origin's actual NDCG and tokens (via search),
+/// At each corpus size: measures Wenlan's actual NDCG and tokens (via search),
 /// and models native memory's quality degradation (lost-in-the-middle effect).
 ///
 /// For each size in `sizes`:
 /// 1. Takes the first N seeds across all non-empty fixture cases.
-/// 2. Seeds an ephemeral DB and runs Origin's hybrid search.
-/// 3. Measures Origin NDCG@10 and token cost from the retrieved results.
+/// 2. Seeds an ephemeral DB and runs Wenlan's hybrid search.
+/// 3. Measures Wenlan NDCG@10 and token cost from the retrieved results.
 /// 4. Computes native_tokens as the full corpus token count (all-inject).
 /// 5. Applies the lost-in-the-middle degradation model for native effective quality.
 /// 6. Reports quality-per-1k-tokens for both and finds the crossover point.
@@ -1539,7 +1539,7 @@ pub async fn run_quality_at_scale_eval(
                 .map(|s| (s.id.as_str(), s.relevance))
                 .collect();
 
-            // Origin: hybrid search
+            // Wenlan: hybrid search
             let results = db
                 .search_memory(
                     &case.query,
@@ -1603,7 +1603,7 @@ pub async fn run_quality_at_scale_eval(
         });
     }
 
-    // Crossover: first point where Origin's quality-per-1k-tokens exceeds native's.
+    // Crossover: first point where Wenlan's quality-per-1k-tokens exceeds native's.
     let crossover_memory_count = points
         .iter()
         .find(|p| p.origin_quality_per_1k_tokens > p.native_quality_per_1k_tokens)
@@ -1611,7 +1611,7 @@ pub async fn run_quality_at_scale_eval(
 
     let methodology_note = "Native quality estimated using lost-in-the-middle degradation model \
         (Liu et al., 2023). At ≤10 facts native quality ≈ 0.95; degrades logarithmically \
-        thereafter (floor 0.30). Origin quality is measured directly via NDCG@10 on fixture \
+        thereafter (floor 0.30). Wenlan quality is measured directly via NDCG@10 on fixture \
         cases. Token counts use cl100k_base tokenizer."
         .to_string();
 
@@ -1625,7 +1625,7 @@ pub async fn run_quality_at_scale_eval(
 /// Run scaling evaluation: same queries at increasing corpus sizes.
 ///
 /// For each size, seeds only the first N memories from each case, then runs
-/// Origin and FullReplay strategies to measure token cost scaling.
+/// Wenlan and FullReplay strategies to measure token cost scaling.
 pub async fn run_scaling_eval(
     fixture_dir: &Path,
     corpus_sizes: &[usize],
@@ -1688,7 +1688,7 @@ pub async fn run_scaling_eval(
                 .join("\n\n");
             let replay_tokens = count_tokens(&replay_content);
 
-            // Origin: search and count (neutralize confirmation/recap bias)
+            // Wenlan: search and count (neutralize confirmation/recap bias)
             let results = db
                 .search_memory(
                     &case.query,
@@ -1736,9 +1736,9 @@ pub enum MemoryLayerApproach {
     FactList,
     /// Compressed summary, fixed ~2K token budget (Claude.ai style).
     SynthesizedSummary,
-    /// Query-specific retrieval, top-K (Origin).
+    /// Query-specific retrieval, top-K (Wenlan).
     WenlanRetrieval,
-    /// Native markdown + Origin retrieval on top (complement).
+    /// Native markdown + Wenlan retrieval on top (complement).
     WenlanPlusNative,
 }
 
@@ -1758,8 +1758,8 @@ impl MemoryLayerApproach {
             Self::FlatMarkdown => "Flat Markdown",
             Self::FactList => "Fact List",
             Self::SynthesizedSummary => "Synth Summary",
-            Self::WenlanRetrieval => "Origin",
-            Self::WenlanPlusNative => "Origin+Native",
+            Self::WenlanRetrieval => "Wenlan",
+            Self::WenlanPlusNative => "Wenlan+Native",
         }
     }
 
@@ -1776,7 +1776,7 @@ impl MemoryLayerApproach {
             }
             Self::WenlanRetrieval => "Query-specific retrieval, top-K relevant results only",
             Self::WenlanPlusNative => {
-                "Native markdown context + Origin retrieval on top (complement)"
+                "Native markdown context + Wenlan retrieval on top (complement)"
             }
         }
     }
@@ -1834,7 +1834,7 @@ fn deterministic_shuffle<T: Clone>(items: &[T], seed_str: &str) -> Vec<T> {
 /// - FactList: all seeds as discrete facts, capped at 200, all injected
 /// - SynthesizedSummary: concatenated content truncated to ~2K tokens (lossy)
 /// - WenlanRetrieval: actual search_memory (hybrid vector+FTS) top-K
-/// - WenlanPlusNative: native markdown tokens + Origin retrieval tokens
+/// - WenlanPlusNative: native markdown tokens + Wenlan retrieval tokens
 pub async fn run_memory_layer_comparison(
     fixture_dir: &Path,
     limit: usize,
@@ -2053,7 +2053,7 @@ pub async fn run_memory_layer_comparison(
             .get_mut(&MemoryLayerApproach::WenlanRetrieval)
             .unwrap()
             .push(origin_ndcg);
-        // Origin can potentially find any stored memory
+        // Wenlan can potentially find any stored memory
         accessible_acc
             .get_mut(&MemoryLayerApproach::WenlanRetrieval)
             .unwrap()
@@ -2071,8 +2071,8 @@ pub async fn run_memory_layer_comparison(
                 .join("\n\n");
             let markdown_tokens = count_tokens(&markdown) as f64;
             let complement_tokens = markdown_tokens + origin_tokens;
-            // Quality is at least as good as the better of native or Origin alone.
-            // Native has all memories in random order; Origin has ranked retrieval.
+            // Quality is at least as good as the better of native or Wenlan alone.
+            // Native has all memories in random order; Wenlan has ranked retrieval.
             // Together the LLM benefits from both, so the floor is max(flat_ndcg, origin_ndcg).
             let complement_ndcg = flat_ndcg.max(origin_ndcg);
             tokens_acc
@@ -2119,12 +2119,12 @@ pub async fn run_memory_layer_comparison(
     }
 
     let complement_advantage = "Native memory provides general project context (conventions, \
-        architecture). Origin adds precise, query-specific recall. Together they cover both \
+        architecture). Wenlan adds precise, query-specific recall. Together they cover both \
         general and specific knowledge needs."
         .to_string();
 
     let methodology = "All approaches tested on the same fixture data. Native simulations model \
-        documented platform behavior. Origin quality measured via actual search. Quality \
+        documented platform behavior. Wenlan quality measured via actual search. Quality \
         estimated via NDCG@K against fixture relevance grades."
         .to_string();
 
@@ -2224,7 +2224,7 @@ mod tests {
 
     #[test]
     fn test_strategy_display() {
-        assert_eq!(SearchStrategy::Origin.name(), "origin");
+        assert_eq!(SearchStrategy::Wenlan.name(), "origin");
         assert_eq!(SearchStrategy::WenlanReranked.name(), "origin_reranked");
         assert_eq!(SearchStrategy::WenlanExpanded.name(), "origin_expanded");
         assert_eq!(SearchStrategy::NaiveRag.name(), "naive_rag");
@@ -2233,14 +2233,14 @@ mod tests {
         assert_eq!(SearchStrategy::FtsOnly.name(), "fts_only");
         assert_eq!(SearchStrategy::VectorPlusFts.name(), "vector_plus_fts");
 
-        assert_eq!(SearchStrategy::Origin.display_name(), "Origin");
+        assert_eq!(SearchStrategy::Wenlan.display_name(), "Wenlan");
         assert_eq!(
             SearchStrategy::WenlanReranked.display_name(),
-            "Origin+Rerank"
+            "Wenlan+Rerank"
         );
         assert_eq!(
             SearchStrategy::WenlanExpanded.display_name(),
-            "Origin+Expand"
+            "Wenlan+Expand"
         );
         assert_eq!(SearchStrategy::NaiveRag.display_name(), "Naive RAG");
         assert_eq!(SearchStrategy::FullReplay.display_name(), "Full Replay");
@@ -2251,7 +2251,7 @@ mod tests {
 
     #[test]
     fn test_strategy_requires_llm() {
-        assert!(!SearchStrategy::Origin.requires_llm());
+        assert!(!SearchStrategy::Wenlan.requires_llm());
         assert!(SearchStrategy::WenlanReranked.requires_llm());
         assert!(SearchStrategy::WenlanExpanded.requires_llm());
         assert!(!SearchStrategy::NaiveRag.requires_llm());
@@ -2328,7 +2328,7 @@ mod tests {
         }
 
         let strategies = vec![
-            SearchStrategy::Origin,
+            SearchStrategy::Wenlan,
             SearchStrategy::NaiveRag,
             SearchStrategy::FullReplay,
             SearchStrategy::NoMemory,
@@ -2352,7 +2352,7 @@ mod tests {
         );
 
         // Headline sanity
-        // FullReplay has more tokens than Origin (unless corpus is tiny)
+        // FullReplay has more tokens than Wenlan (unless corpus is tiny)
         let origin_r = report.strategies.iter().find(|r| r.strategy == "origin");
         let replay_r = report
             .strategies
@@ -2462,10 +2462,10 @@ mod tests {
         assert_eq!(report.turns, 10);
         assert_eq!(report.per_turn.len(), 10);
 
-        // Origin total should be MUCH less than replay total
+        // Wenlan total should be MUCH less than replay total
         assert!(
             report.total_origin_tokens < report.total_replay_tokens,
-            "Origin {} should be < Replay {}",
+            "Wenlan {} should be < Replay {}",
             report.total_origin_tokens,
             report.total_replay_tokens
         );
@@ -2482,14 +2482,14 @@ mod tests {
             );
         }
 
-        // Origin should stay roughly constant (allow up to 50% drift due to query rotation)
+        // Wenlan should stay roughly constant (allow up to 50% drift due to query rotation)
         let first = report.per_turn[0].origin_tokens;
         let last = report.per_turn.last().unwrap().origin_tokens;
         if first > 0 {
             let drift = (last as f64 - first as f64).abs() / first as f64;
             assert!(
                 drift < 0.5,
-                "Origin should stay roughly constant, drift={:.1}%",
+                "Wenlan should stay roughly constant, drift={:.1}%",
                 drift * 100.0
             );
         }
@@ -2501,7 +2501,7 @@ mod tests {
         );
         eprintln!(
             "{:<6} | {:<15} | {:<15} | {:<15} | {:<15}",
-            "Turn", "Origin/turn", "Replay/turn", "Origin cumul", "Replay cumul"
+            "Turn", "Wenlan/turn", "Replay/turn", "Wenlan cumul", "Replay cumul"
         );
         eprintln!(
             "{:-<6}-+-{:-<15}-+-{:-<15}-+-{:-<15}-+-{:-<15}",
@@ -2514,7 +2514,7 @@ mod tests {
             );
         }
         eprintln!(
-            "\nTotal: Origin={}, Replay={}, Savings={:.1}%",
+            "\nTotal: Wenlan={}, Replay={}, Savings={:.1}%",
             report.total_origin_tokens, report.total_replay_tokens, report.savings_pct
         );
     }
@@ -2680,7 +2680,7 @@ mod tests {
                     continue; // skip adversarial
                 }
 
-                // Origin hybrid search
+                // Wenlan hybrid search
                 let origin_results = db
                     .search_memory(
                         &qa.question,
@@ -2723,7 +2723,7 @@ mod tests {
                     0.0
                 };
                 eprintln!(
-                    "  {} QA pairs | Origin: {:.0} tok/q ({:.1}% savings) | Naive: {:.0} tok/q | Corpus: {} tok",
+                    "  {} QA pairs | Wenlan: {:.0} tok/q ({:.1}% savings) | Naive: {:.0} tok/q | Corpus: {} tok",
                     conv_questions,
                     conv_origin_mean,
                     conv_origin_pct,
@@ -2760,7 +2760,7 @@ mod tests {
             mean_corpus, 1.0, 0.0
         );
         eprintln!(
-            "Origin (hybrid)    {:>10.1}  {:>11.4}  {:>7.1}%",
+            "Wenlan (hybrid)    {:>10.1}  {:>11.4}  {:>7.1}%",
             mean_origin, origin_compression, origin_savings
         );
         eprintln!(
@@ -2769,7 +2769,7 @@ mod tests {
         );
         eprintln!("----------------------------------------");
         eprintln!(
-            "Headline: Origin saves {:.1}% tokens vs Full Replay ({:.0} vs {:.0} tokens/query)",
+            "Headline: Wenlan saves {:.1}% tokens vs Full Replay ({:.0} vs {:.0} tokens/query)",
             origin_savings, mean_origin, mean_corpus,
         );
         eprintln!(
@@ -2780,9 +2780,9 @@ mod tests {
     }
 
     /// Ablation test: seeds a small DB with 3 clearly-differentiated documents and
-    /// runs NaiveRag, FtsOnly, VectorPlusFts, and Origin. Verifies:
+    /// runs NaiveRag, FtsOnly, VectorPlusFts, and Wenlan. Verifies:
     /// - All strategies return non-empty results (basic correctness).
-    /// - Origin and VectorPlusFts return at most `limit` results.
+    /// - Wenlan and VectorPlusFts return at most `limit` results.
     /// - FtsOnly can retrieve keyword-matching documents.
     #[tokio::test]
     async fn test_ablation_strategies() {
@@ -2841,7 +2841,7 @@ mod tests {
         );
         assert!(vpf.len() <= limit, "VectorPlusFts should respect limit");
 
-        // Origin: full hybrid
+        // Wenlan: full hybrid
         let origin = db
             .search_memory(
                 query,
@@ -2855,8 +2855,8 @@ mod tests {
             )
             .await
             .unwrap();
-        assert!(!origin.is_empty(), "Origin should return results");
-        assert!(origin.len() <= limit, "Origin should respect limit");
+        assert!(!origin.is_empty(), "Wenlan should return results");
+        assert!(origin.len() <= limit, "Wenlan should respect limit");
 
         // VectorPlusFts should cover at least what NaiveRag covers (superset of signals)
         let naive_ids: HashSet<&str> = naive.iter().map(|r| r.source_id.as_str()).collect();
@@ -2977,26 +2977,26 @@ mod tests {
         assert!(!report.alternatives.is_empty());
         assert!(
             report.origin_retrieval_tokens > 0.0,
-            "Origin should retrieve some tokens from fixtures"
+            "Wenlan should retrieve some tokens from fixtures"
         );
 
-        // The multi-turn model should show that Origin adds minimal overhead
+        // The multi-turn model should show that Wenlan adds minimal overhead
         let mt = &report.multi_turn;
         assert!(
             mt.native_plus_origin_total >= mt.native_only_total,
-            "Origin is additive — total must be >= native-only"
+            "Wenlan is additive — total must be >= native-only"
         );
         assert!(
             mt.native_plus_replay_total >= mt.native_plus_origin_total,
-            "Full replay should cost more than Origin retrieval"
+            "Full replay should cost more than Wenlan retrieval"
         );
         assert!(
             mt.origin_overhead_pct < 5.0,
-            "Origin overhead should be under 5% on a 10-turn Claude Code session, got {:.2}%",
+            "Wenlan overhead should be under 5% on a 10-turn Claude Code session, got {:.2}%",
             mt.origin_overhead_pct
         );
 
-        // Origin retrieval should be cheaper than full replay per recall event
+        // Wenlan retrieval should be cheaper than full replay per recall event
         let origin_per_recall = report
             .alternatives
             .iter()
@@ -3011,13 +3011,13 @@ mod tests {
             .unwrap_or(0);
         assert!(
             origin_per_recall < replay_per_recall,
-            "Origin retrieval ({} tokens) should be cheaper than full replay ({} tokens)",
+            "Wenlan retrieval ({} tokens) should be cheaper than full replay ({} tokens)",
             origin_per_recall,
             replay_per_recall
         );
 
         // Print augmentation framing
-        eprintln!("\n=== Origin: Cost of Better Recall ===\n");
+        eprintln!("\n=== Wenlan: Cost of Better Recall ===\n");
         eprintln!("When you need specific information from past sessions:\n");
         eprintln!(
             "{:<28} | {:<19} | Quality",
@@ -3036,11 +3036,11 @@ mod tests {
             mt.turns, mt.recall_turns
         );
         eprintln!(
-            "  Without Origin: {:>7} tokens (native memory only, no specific recall)",
+            "  Without Wenlan: {:>7} tokens (native memory only, no specific recall)",
             mt.native_only_total
         );
         eprintln!(
-            "  With Origin:    {:>7} tokens (+{:.1}% overhead, full specific recall)",
+            "  With Wenlan:    {:>7} tokens (+{:.1}% overhead, full specific recall)",
             mt.native_plus_origin_total, mt.origin_overhead_pct
         );
         eprintln!(
@@ -3069,7 +3069,7 @@ mod tests {
     /// counts, runs real LLM distillation (`distill_pages`), then re-measures.
     ///
     /// Requires the Qwen3-4B model to be present in the hf-hub cache.
-    /// Run with: cargo test -p origin-core --lib eval::retrieval::tests::benchmark_pipeline_token_real_llm -- --ignored --nocapture
+    /// Run with: cargo test -p wenlan-core --lib eval::retrieval::tests::benchmark_pipeline_token_real_llm -- --ignored --nocapture
     #[tokio::test]
     #[ignore] // Requires on-device LLM (Qwen3-4B) — use --ignored to run
     async fn benchmark_pipeline_token_real_llm() {
@@ -3295,15 +3295,15 @@ mod tests {
 
         assert!(!report.points.is_empty());
 
-        eprintln!("\n=== Quality at Scale: Origin vs Native Memory ===");
+        eprintln!("\n=== Quality at Scale: Wenlan vs Native Memory ===");
         eprintln!(
             "{:<10} | {:<12} | {:<12} | {:<12} | {:<12} | {:<12} | {:<12}",
             "Memories",
-            "Origin NDCG",
+            "Wenlan NDCG",
             "Native NDCG*",
-            "Origin Tok",
+            "Wenlan Tok",
             "Native Tok",
-            "Origin Q/kT",
+            "Wenlan Q/kT",
             "Native Q/kT"
         );
         eprintln!(
@@ -3324,7 +3324,7 @@ mod tests {
         }
         if let Some(cross) = report.crossover_memory_count {
             eprintln!(
-                "\nCrossover at {} memories: Origin becomes more efficient per token",
+                "\nCrossover at {} memories: Wenlan becomes more efficient per token",
                 cross
             );
         } else {
@@ -3403,8 +3403,8 @@ mod tests {
             "missing origin_plus_native"
         );
 
-        // Origin should have better quality-per-token than flat markdown
-        // (Origin retrieves only relevant results; flat markdown dumps everything unranked)
+        // Wenlan should have better quality-per-token than flat markdown
+        // (Wenlan retrieves only relevant results; flat markdown dumps everything unranked)
         let origin = report
             .approaches
             .iter()
@@ -3417,12 +3417,12 @@ mod tests {
             .unwrap();
         assert!(
             origin.quality_per_1k_tokens > flat.quality_per_1k_tokens,
-            "Origin quality/token ({:.3}) should exceed flat markdown ({:.3})",
+            "Wenlan quality/token ({:.3}) should exceed flat markdown ({:.3})",
             origin.quality_per_1k_tokens,
             flat.quality_per_1k_tokens,
         );
 
-        // Origin+Native has higher tokens than Origin alone (it includes the markdown too)
+        // Wenlan+Native has higher tokens than Wenlan alone (it includes the markdown too)
         let complement = report
             .approaches
             .iter()
@@ -3580,18 +3580,18 @@ mod tests {
         }
         eprintln!("\nMethodology: {}", report.methodology);
 
-        // Origin should score >= NoContext (it has relevant info; no-context relies on world knowledge only)
+        // Wenlan should score >= NoContext (it has relevant info; no-context relies on world knowledge only)
         let origin = report.results.iter().find(|r| r.approach == "origin");
         let no_ctx = report.results.iter().find(|r| r.approach == "no_context");
         if let (Some(o), Some(n)) = (origin, no_ctx) {
-            // Soft check: Origin's answer score should not be worse than no-context minus a tolerance
+            // Soft check: Wenlan's answer score should not be worse than no-context minus a tolerance
             assert!(
                 o.mean_answer_score >= n.mean_answer_score - 0.2,
-                "Origin answer score ({:.3}) was much worse than no-context ({:.3})",
+                "Wenlan answer score ({:.3}) was much worse than no-context ({:.3})",
                 o.mean_answer_score,
                 n.mean_answer_score
             );
-            // Origin should use fewer tokens than FlatMarkdown
+            // Wenlan should use fewer tokens than FlatMarkdown
             let flat = report
                 .results
                 .iter()
@@ -3599,7 +3599,7 @@ mod tests {
             if let Some(f) = flat {
                 assert!(
                     o.mean_context_tokens <= f.mean_context_tokens,
-                    "Origin context ({:.0} tok) should be <= FlatMarkdown ({:.0} tok)",
+                    "Wenlan context ({:.0} tok) should be <= FlatMarkdown ({:.0} tok)",
                     o.mean_context_tokens,
                     f.mean_context_tokens
                 );
@@ -3616,7 +3616,7 @@ mod tests {
     /// Takes ~10 minutes for 5 questions/conv x 10 convs = 150 LLM calls.
     ///
     /// Run with:
-    /// cargo test -p origin-core --lib eval::retrieval::tests::benchmark_e2e_locomo_on_device -- --ignored --nocapture
+    /// cargo test -p wenlan-core --lib eval::retrieval::tests::benchmark_e2e_locomo_on_device -- --ignored --nocapture
     #[tokio::test]
     #[ignore] // Requires on-device Qwen3-4B model (~10 min)
     async fn benchmark_e2e_locomo_on_device() {
@@ -3682,7 +3682,7 @@ mod tests {
             );
         }
 
-        // Origin should score at least as well as NoContext
+        // Wenlan should score at least as well as NoContext
         let origin = report
             .results
             .iter()
@@ -3698,10 +3698,10 @@ mod tests {
             origin.mean_answer_score, no_ctx.mean_answer_score
         );
 
-        // Soft check: Origin with memory context should not be dramatically worse than no-context.
+        // Soft check: Wenlan with memory context should not be dramatically worse than no-context.
         assert!(
             origin.mean_answer_score >= no_ctx.mean_answer_score - 0.3,
-            "Origin answer score ({:.3}) was much worse than no-context ({:.3})",
+            "Wenlan answer score ({:.3}) was much worse than no-context ({:.3})",
             origin.mean_answer_score,
             no_ctx.mean_answer_score,
         );
@@ -3710,7 +3710,7 @@ mod tests {
     /// Judge a single hardcoded tuple via `claude -p` CLI.
     ///
     /// Run with:
-    /// cargo test -p origin-core --lib eval::retrieval::tests::test_judge_single_tuple -- --ignored --nocapture
+    /// cargo test -p wenlan-core --lib eval::retrieval::tests::test_judge_single_tuple -- --ignored --nocapture
     #[tokio::test]
     #[ignore] // Requires claude CLI with active Max subscription
     async fn test_judge_single_tuple() {
@@ -3735,10 +3735,10 @@ mod tests {
         }
 
         let tuple = JudgmentTuple {
-            question: "What database does Origin use?".to_string(),
-            ground_truth: "Origin uses libSQL (Turso's SQLite fork)".to_string(),
+            question: "What database does Wenlan use?".to_string(),
+            ground_truth: "Wenlan uses libSQL (Turso's SQLite fork)".to_string(),
             approach: "test".to_string(),
-            answer: "Origin uses libSQL, which is Turso's fork of SQLite, for its database layer."
+            answer: "Wenlan uses libSQL, which is Turso's fork of SQLite, for its database layer."
                 .to_string(),
             context_tokens: 50,
             category: String::new(),
@@ -3756,7 +3756,7 @@ mod tests {
     /// Phase 2: feed tuples to `claude -p haiku` as binary judge.
     ///
     /// Run with:
-    /// cargo test -p origin-core --lib eval::retrieval::tests::benchmark_e2e_locomo_judged -- --ignored --nocapture
+    /// cargo test -p wenlan-core --lib eval::retrieval::tests::benchmark_e2e_locomo_judged -- --ignored --nocapture
     #[tokio::test]
     #[ignore] // Requires on-device Qwen3-4B model AND claude CLI with Max subscription (~15 min)
     async fn benchmark_e2e_locomo_judged() {

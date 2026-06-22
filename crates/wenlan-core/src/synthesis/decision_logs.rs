@@ -14,11 +14,11 @@ pub(crate) fn classify_decision_logs(generated: usize) -> (Nudge, Option<String>
         0 => (Nudge::Silent, None),
         1 => (
             Nudge::Ambient,
-            Some("Origin narrated a week's worth of decisions into a log".to_string()),
+            Some("Wenlan narrated a week's worth of decisions into a log".to_string()),
         ),
         n => (
             Nudge::Ambient,
-            Some(format!("Origin narrated decisions into {} logs", n)),
+            Some(format!("Wenlan narrated decisions into {} logs", n)),
         ),
     }
 }

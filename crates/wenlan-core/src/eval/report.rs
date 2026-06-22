@@ -327,7 +327,7 @@ impl EvalReport {
     /// Format report as terminal-friendly text.
     pub fn to_terminal(&self) -> String {
         let mut out = String::new();
-        out.push_str("Origin Memory Eval\n");
+        out.push_str("Wenlan Memory Eval\n");
         out.push_str("==================\n");
         out.push_str(&format!(
             "Fixtures: {} cases from {} files\n",

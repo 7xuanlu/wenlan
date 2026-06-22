@@ -1,16 +1,16 @@
-# origin-server
+# wenlan-server
 
-Local daemon for Origin. It owns the database, embeddings, search, distill cycles, page distillation, knowledge graph, and HTTP API on `127.0.0.1:7878`.
+Local daemon for Wenlan. It owns the database, embeddings, search, distill cycles, page distillation, knowledge graph, and HTTP API on `127.0.0.1:7878`.
 
 ## Headless install
 
-Most users install Origin through the [Claude Code plugin](../../plugin/.claude-plugin/README.md), which auto-runs the install script the first time `/init` runs. This page is for daemon internals. For terminal setup, use the product CLI:
+Most users install Wenlan through the [Claude Code plugin](../../plugin/.claude-plugin/README.md), which auto-runs the install script the first time `/init` runs. This page is for daemon internals. For terminal setup, use the product CLI:
 
 ```bash
 npx -y @7xuanlu/origin setup
 ```
 
-The installer downloads `origin`, `origin-server`, and `origin-mcp` into `~/.origin/bin/`. Cross-platform: macOS (arm64, x64), Linux (x64, arm64; glibc), Windows (x64). The `origin` CLI owns setup and service management; `origin-server` is the daemon binary the host's service manager runs (launchd on macOS, systemd-user on Linux, Task Scheduler ONLOGON task on Windows).
+The installer downloads `origin`, `wenlan-server`, and `wenlan-mcp` into `~/.origin/bin/`. Cross-platform: macOS (arm64, x64), Linux (x64, arm64; glibc), Windows (x64). The `origin` CLI owns setup and service management; `wenlan-server` is the daemon binary the host's service manager runs (launchd on macOS, systemd-user on Linux, Task Scheduler ONLOGON task on Windows).
 
 ## Setup modes
 
@@ -37,7 +37,7 @@ All user-facing data lives under `~/.origin/`:
 ~/.origin/.git/                git repo — skills auto-commit per logical batch
 ```
 
-The libSQL store lives under the platform data directory (`dirs::data_local_dir()/origin/memorydb/origin_memory.db`). On macOS that resolves to `~/Library/Application Support/origin/memorydb/`; on Linux `~/.local/share/origin/memorydb/`; on Windows `%LOCALAPPDATA%\origin\memorydb\`. `~/.origin/db` is a symlink on macOS + Linux so the user-facing tree stays single-rooted (Windows skips the symlink since it needs Developer Mode or admin and the alias is cosmetic). Use `open ~/.origin/`, `code ~/.origin/`, or symlink `~/.origin/pages/` into an Obsidian vault for the graph view.
+The libSQL store lives under the platform data directory (`dirs::data_local_dir()/origin/memorydb/origin_memory.db`). On macOS that resolves to `~/Library/Application Support/wenlan/memorydb/`; on Linux `~/.local/share/wenlan/memorydb/`; on Windows `%LOCALAPPDATA%\origin\memorydb\`. `~/.origin/db` is a symlink on macOS + Linux so the user-facing tree stays single-rooted (Windows skips the symlink since it needs Developer Mode or admin and the alias is cosmetic). Use `open ~/.origin/`, `code ~/.origin/`, or symlink `~/.origin/pages/` into an Obsidian vault for the graph view.
 
 ## Service Commands
 
@@ -47,21 +47,21 @@ origin uninstall    # remove from the service manager
 origin status       # service + runtime status
 ```
 
-On Windows the install path uses `schtasks.exe` to register a per-user `OriginServer` ONLOGON task and triggers it immediately. origin-server stays a plain console app — no Windows Service Control Protocol dispatcher is needed.
+On Windows the install path uses `schtasks.exe` to register a per-user `OriginServer` ONLOGON task and triggers it immediately. wenlan-server stays a plain console app — no Windows Service Control Protocol dispatcher is needed.
 
 The daemon listens on `127.0.0.1:7878`. MCP clients, the Claude Code plugin, and local tools call that local API.
 
 ## Build From Source
 
 ```bash
-cargo build -p origin-server
-cargo run -p origin-server
+cargo build -p wenlan-server
+cargo run -p wenlan-server
 ```
 
 Or build a release binary and register it with the host service manager:
 
 ```bash
-cargo build --release -p origin -p origin-server
+cargo build --release -p origin -p wenlan-server
 ./target/release/origin setup --basic
 ./target/release/origin install
 ./target/release/origin status

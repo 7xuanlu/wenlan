@@ -88,7 +88,7 @@ context()
 ```
 
 Pass → continue. Fail → MCP not wired. Tell user:
-"origin-mcp didn't respond. Restart Claude Code so the plugin's
+"wenlan-mcp didn't respond. Restart Claude Code so the plugin's
 `.mcp.json` re-spawns the server."
 
 ### 6. Ready report
@@ -96,7 +96,7 @@ Pass → continue. Fail → MCP not wired. Tell user:
 Print:
 
 ```
-Origin ready.
+Wenlan ready.
   Daemon:   up on 127.0.0.1:7878
   Mode:     <mode from doctor()>
   MCP:      connected

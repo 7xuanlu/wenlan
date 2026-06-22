@@ -145,8 +145,8 @@ mod tests {
 
     #[test]
     fn test_goal_status_update() {
-        let existing = r#"{"objective":"launch Origin","status":"in_progress"}"#;
-        let new = r#"{"objective":"launch Origin","status":"completed"}"#;
+        let existing = r#"{"objective":"launch Wenlan","status":"in_progress"}"#;
+        let new = r#"{"objective":"launch Wenlan","status":"completed"}"#;
         assert!(fields_may_contradict("goal", existing, new));
     }
 

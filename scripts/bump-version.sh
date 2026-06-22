@@ -26,24 +26,24 @@ else
 fi
 echo "  Updated Cargo.toml (workspace.package.version)"
 
-# 1b. Cargo.toml workspace.dependencies version pins (origin-types, origin-core)
+# 1b. Cargo.toml workspace.dependencies version pins (wenlan-types, wenlan-core)
 # These must match workspace.package.version so cargo publish strips the path
 # and uses the registry version. Without this, the local member resolves
 # `version = "0.X.Y"` against a workspace.package "0.X.Z" and the build fails.
-for dep in origin-types origin-core; do
+for dep in wenlan-types wenlan-core; do
     if [[ "$(uname)" == "Darwin" ]]; then
         sed -i '' -E "s|^(${dep}[[:space:]]+= \\{ path = \"crates/${dep}\",[[:space:]]+version = \")[^\"]+(\".*)|\\1${NEW_VERSION}\\2|" Cargo.toml
     else
         sed -i -E "s|^(${dep}[[:space:]]+= \\{ path = \"crates/${dep}\",[[:space:]]+version = \")[^\"]+(\".*)|\\1${NEW_VERSION}\\2|" Cargo.toml
     fi
 done
-echo "  Updated Cargo.toml (workspace.dependencies origin-types/origin-core)"
+echo "  Updated Cargo.toml (workspace.dependencies wenlan-types/wenlan-core)"
 
 # 2. npm wrapper package.json files
-(cd crates/origin-mcp/npm && npm version "$NEW_VERSION" --no-git-tag-version --allow-same-version >/dev/null)
-(cd crates/origin-cli/npm && npm version "$NEW_VERSION" --no-git-tag-version --allow-same-version >/dev/null)
-echo "  Updated crates/origin-mcp/npm/package.json"
-echo "  Updated crates/origin-cli/npm/package.json"
+(cd crates/wenlan-mcp/npm && npm version "$NEW_VERSION" --no-git-tag-version --allow-same-version >/dev/null)
+(cd crates/wenlan-cli/npm && npm version "$NEW_VERSION" --no-git-tag-version --allow-same-version >/dev/null)
+echo "  Updated crates/wenlan-mcp/npm/package.json"
+echo "  Updated crates/wenlan-cli/npm/package.json"
 
 # 3. Claude plugin manifest (moved under plugin/ subdir in v0.5.0)
 PLUGIN_MANIFEST="plugin/.claude-plugin/plugin.json"
@@ -52,16 +52,16 @@ mv "${PLUGIN_MANIFEST}.tmp" "$PLUGIN_MANIFEST"
 echo "  Updated $PLUGIN_MANIFEST"
 
 # 4. Plugin's MCP server pin — the wrapper script falls back to
-# `npx -y origin-mcp@^X.Y.Z` so a floating tag can't auto-RCE on every
+# `npx -y wenlan-mcp@^X.Y.Z` so a floating tag can't auto-RCE on every
 # Claude Code session. The pin lives in the runner shell script, not
-# .mcp.json, so dev users can override the binary via ORIGIN_MCP_DEV_BIN.
-PLUGIN_MCP_RUNNER="plugin/bin/origin-mcp-runner.sh"
+# .mcp.json, so dev users can override the binary via WENLAN_MCP_DEV_BIN.
+PLUGIN_MCP_RUNNER="plugin/bin/wenlan-mcp-runner.sh"
 if [[ "$(uname)" == "Darwin" ]]; then
-    sed -i '' -E "s|(origin-mcp@\\^)[0-9]+\\.[0-9]+\\.[0-9]+|\\1${NEW_VERSION}|g" "$PLUGIN_MCP_RUNNER"
+    sed -i '' -E "s|(wenlan-mcp@\\^)[0-9]+\\.[0-9]+\\.[0-9]+|\\1${NEW_VERSION}|g" "$PLUGIN_MCP_RUNNER"
 else
-    sed -i -E "s|(origin-mcp@\\^)[0-9]+\\.[0-9]+\\.[0-9]+|\\1${NEW_VERSION}|g" "$PLUGIN_MCP_RUNNER"
+    sed -i -E "s|(wenlan-mcp@\\^)[0-9]+\\.[0-9]+\\.[0-9]+|\\1${NEW_VERSION}|g" "$PLUGIN_MCP_RUNNER"
 fi
-echo "  Updated $PLUGIN_MCP_RUNNER (origin-mcp pin)"
+echo "  Updated $PLUGIN_MCP_RUNNER (wenlan-mcp pin)"
 
 # 5. /init skill install.sh URL pinned to current tag (not `main`), so the
 # install one-liner is reproducible at the release boundary.
@@ -84,7 +84,7 @@ awk -v ver="$NEW_VERSION" '
   $0 == "[[package]]" { in_pkg=1; is_member=0; print; next }
   in_pkg && $1 == "name" && $2 == "=" {
     n=$3; gsub(/"/, "", n)
-    is_member = (n=="origin" || n=="origin-core" || n=="origin-mcp" || n=="origin-server" || n=="origin-types")
+    is_member = (n=="origin" || n=="wenlan-core" || n=="wenlan-mcp" || n=="wenlan-server" || n=="wenlan-types")
     print; next
   }
   in_pkg && is_member && /^version = / { print "version = \"" ver "\""; in_pkg=0; is_member=0; next }

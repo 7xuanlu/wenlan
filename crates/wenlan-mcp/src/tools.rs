@@ -117,7 +117,7 @@ pub struct CaptureParams {
     #[serde(default, alias = "domain")]
     pub space: Option<String>,
     #[schemars(
-        description = "Person, project, or tool name to anchor to (e.g. 'Alice', 'Origin', 'PostgreSQL'). Helps build the knowledge graph."
+        description = "Person, project, or tool name to anchor to (e.g. 'Alice', 'Wenlan', 'PostgreSQL'). Helps build the knowledge graph."
     )]
     pub entity: Option<String>,
     #[schemars(
@@ -190,7 +190,7 @@ pub struct ForgetParams {
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct DistillParams {
     #[schemars(
-        description = "Optional target scope. Accepts a page id (`page_*` or `concept_*`) to re-distill that single page, an entity name (e.g. `Origin`, `Alice`) to scope clustering to that entity, or a space value (e.g. `work`, `personal`) to scope to that space. Omit for a full pass over any clusters with new sources. The daemon resolves the string and falls back with a hint payload if nothing matches."
+        description = "Optional target scope. Accepts a page id (`page_*` or `concept_*`) to re-distill that single page, an entity name (e.g. `Wenlan`, `Alice`) to scope clustering to that entity, or a space value (e.g. `work`, `personal`) to scope to that space. Omit for a full pass over any clusters with new sources. The daemon resolves the string and falls back with a hint payload if nothing matches."
     )]
     #[serde(default, alias = "page_id")]
     pub target: Option<String>,
@@ -250,7 +250,7 @@ pub struct AcceptRefinementParams {
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct CreateEntityParams {
     #[schemars(
-        description = "Canonical entity name (e.g. 'Alice', 'Origin', 'PostgreSQL'). Use the exact, full name — aliases resolve to this canonical form."
+        description = "Canonical entity name (e.g. 'Alice', 'Wenlan', 'PostgreSQL'). Use the exact, full name — aliases resolve to this canonical form."
     )]
     pub name: String,
     #[schemars(
@@ -273,7 +273,7 @@ pub struct CreateRelationParams {
     )]
     pub from_entity: String,
     #[schemars(
-        description = "Canonical name of the target entity (e.g. 'Origin'). Must exist or will be created on the daemon side."
+        description = "Canonical name of the target entity (e.g. 'Wenlan'). Must exist or will be created on the daemon side."
     )]
     pub to_entity: String,
     #[schemars(
@@ -324,7 +324,7 @@ pub struct DeleteObservationParams {
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct CreatePageParams {
     #[schemars(
-        description = "Short noun phrase that names the page (e.g. 'Origin daemon architecture')."
+        description = "Short noun phrase that names the page (e.g. 'Wenlan daemon architecture')."
     )]
     pub title: String,
     #[schemars(
@@ -555,7 +555,7 @@ fn format_capture_success(resp: &StoreMemoryResponse) -> String {
 }
 
 fn daemon_setup_hint() -> &'static str {
-    "Install the local Origin runtime and run `origin setup`.
+    "Install the local Wenlan runtime and run `origin setup`.
 
 Setup choices:
 - Local Memory: store, search, and recall now. No model download or API key.
@@ -576,16 +576,16 @@ Install:
 fn tool_error(e: WenlanError, verb: &str) -> CallToolResult {
     let msg = match &e {
         WenlanError::Unreachable(_) => format!(
-            "Origin daemon is not reachable (retried 3x over ~6s). \
+            "Wenlan daemon is not reachable (retried 3x over ~6s). \
              The {verb} was NOT completed.\n\n{}",
             daemon_setup_hint()
         ),
         WenlanError::Api { status, body } => format!(
-            "Origin daemon returned HTTP {status}: {body}. The {verb} may not have completed."
+            "Wenlan daemon returned HTTP {status}: {body}. The {verb} may not have completed."
         ),
         WenlanError::Deserialize(detail) => format!(
             "Failed to parse daemon response: {detail}. \
-             This may indicate a version mismatch between origin-mcp and the daemon."
+             This may indicate a version mismatch between wenlan-mcp and the daemon."
         ),
     };
     CallToolResult::error(vec![Content::text(msg)])
@@ -642,7 +642,7 @@ fn format_doctor_message(status: &serde_json::Value) -> String {
     };
 
     let mut msg = format!(
-        "Origin daemon: running\n\
+        "Wenlan daemon: running\n\
          Setup: {}\n\
          Mode: {mode_label}\n\
          Anthropic key: {}\n\
@@ -794,7 +794,7 @@ impl WenlanMcpServer {
         // Extract only the `context` string field from the response.
         //
         // The full ChatContextResponse embeds Vec<SearchResult> which may
-        // contain fields added after the published origin-types version.
+        // contain fields added after the published wenlan-types version.
         // Since context_impl only uses `resp.context`, we parse the raw
         // JSON and pull that field directly — this makes the tool forward-
         // compatible with any new fields the daemon might add.
@@ -823,8 +823,8 @@ impl WenlanMcpServer {
             Ok(r) => r,
             Err(WenlanError::Api { status: 404, .. }) => {
                 return Ok(CallToolResult::error(vec![Content::text(
-                    "Origin daemon is running, but it does not expose /api/setup/status. \
-                     Update Origin, then run `origin doctor`."
+                    "Wenlan daemon is running, but it does not expose /api/setup/status. \
+                     Update Wenlan, then run `origin doctor`."
                         .to_string(),
                 )]));
             }
@@ -840,7 +840,7 @@ impl WenlanMcpServer {
         if self.transport == TransportMode::Http {
             return Ok(CallToolResult::error(vec![Content::text(
                 "Delete operations are not available over remote connections. \
-                 Use local MCP on the machine running Origin to delete memories."
+                 Use local MCP on the machine running Wenlan to delete memories."
                     .to_string(),
             )]));
         }
@@ -926,7 +926,7 @@ impl WenlanMcpServer {
         if self.transport == TransportMode::Http {
             return Ok(CallToolResult::error(vec![Content::text(
                 "Confirm operations are not available over remote connections. \
-                 Use local MCP on the machine running Origin for review."
+                 Use local MCP on the machine running Wenlan for review."
                     .to_string(),
             )]));
         }
@@ -1024,7 +1024,7 @@ impl WenlanMcpServer {
         if self.transport == TransportMode::Http {
             return Ok(CallToolResult::error(vec![Content::text(
                 "Confirm operations are not available over remote connections. \
-                 Use local MCP on the machine running Origin to confirm entities."
+                 Use local MCP on the machine running Wenlan to confirm entities."
                     .to_string(),
             )]));
         }
@@ -1054,7 +1054,7 @@ impl WenlanMcpServer {
         if self.transport == TransportMode::Http {
             return Ok(CallToolResult::error(vec![Content::text(
                 "Update operations are not available over remote connections. \
-                 Use local MCP on the machine running Origin to update observations."
+                 Use local MCP on the machine running Wenlan to update observations."
                     .to_string(),
             )]));
         }
@@ -1079,7 +1079,7 @@ impl WenlanMcpServer {
         if self.transport == TransportMode::Http {
             return Ok(CallToolResult::error(vec![Content::text(
                 "Confirm operations are not available over remote connections. \
-                 Use local MCP on the machine running Origin to confirm observations."
+                 Use local MCP on the machine running Wenlan to confirm observations."
                     .to_string(),
             )]));
         }
@@ -1109,7 +1109,7 @@ impl WenlanMcpServer {
         if self.transport == TransportMode::Http {
             return Ok(CallToolResult::error(vec![Content::text(
                 "Delete operations are not available over remote connections. \
-                 Use local MCP on the machine running Origin to delete observations."
+                 Use local MCP on the machine running Wenlan to delete observations."
                     .to_string(),
             )]));
         }
@@ -1157,7 +1157,7 @@ impl WenlanMcpServer {
         if self.transport == TransportMode::Http {
             return Ok(CallToolResult::error(vec![Content::text(
                 "Update operations are not available over remote connections. \
-                 Use local MCP on the machine running Origin to update pages."
+                 Use local MCP on the machine running Wenlan to update pages."
                     .to_string(),
             )]));
         }
@@ -1184,7 +1184,7 @@ impl WenlanMcpServer {
         if self.transport == TransportMode::Http {
             return Ok(CallToolResult::error(vec![Content::text(
                 "Delete operations are not available over remote connections. \
-                 Use local MCP on the machine running Origin to delete pages."
+                 Use local MCP on the machine running Wenlan to delete pages."
                     .to_string(),
             )]));
         }
@@ -1393,7 +1393,7 @@ impl WenlanMcpServer {
         if self.transport == TransportMode::Http {
             return Ok(CallToolResult::error(vec![Content::text(
                 "Review proposal operations are not available over remote connections. \
-                 Use local MCP on the machine running Origin to reject proposals."
+                 Use local MCP on the machine running Wenlan to reject proposals."
                     .to_string(),
             )]));
         }
@@ -1420,7 +1420,7 @@ impl WenlanMcpServer {
         if self.transport == TransportMode::Http {
             return Ok(CallToolResult::error(vec![Content::text(
                 "Review proposal operations are not available over remote connections. \
-                 Use local MCP on the machine running Origin to accept proposals."
+                 Use local MCP on the machine running Wenlan to accept proposals."
                     .to_string(),
             )]));
         }
@@ -1498,7 +1498,7 @@ impl WenlanMcpServer {
         if self.transport == TransportMode::Http {
             return Ok(CallToolResult::error(vec![Content::text(
                 "Revision operations are not available over remote connections. \
-                 Use local MCP on the machine running Origin to accept memory revisions."
+                 Use local MCP on the machine running Wenlan to accept memory revisions."
                     .to_string(),
             )]));
         }
@@ -1523,7 +1523,7 @@ impl WenlanMcpServer {
         if self.transport == TransportMode::Http {
             return Ok(CallToolResult::error(vec![Content::text(
                 "Revision operations are not available over remote connections. \
-                 Use local MCP on the machine running Origin to dismiss memory revisions."
+                 Use local MCP on the machine running Wenlan to dismiss memory revisions."
                     .to_string(),
             )]));
         }
@@ -1548,7 +1548,7 @@ impl WenlanMcpServer {
         if self.transport == TransportMode::Http {
             return Ok(CallToolResult::error(vec![Content::text(
                 "Contradiction operations are not available over remote connections. \
-                 Use local MCP on the machine running Origin to dismiss contradictions."
+                 Use local MCP on the machine running Wenlan to dismiss contradictions."
                     .to_string(),
             )]));
         }
@@ -1754,7 +1754,7 @@ impl WenlanMcpServer {
     }
 
     #[tool(
-        description = "Diagnose the local Origin runtime. This is not part of the memory loop. Use only when Origin tools fail, when onboarding a new MCP client, or when the user asks why setup, extraction, or distill cycles are off. Reports daemon reachability, setup mode, Local Memory, On-device Model, Anthropic key state, and on-device model state.",
+        description = "Diagnose the local Wenlan runtime. This is not part of the memory loop. Use only when Wenlan tools fail, when onboarding a new MCP client, or when the user asks why setup, extraction, or distill cycles are off. Reports daemon reachability, setup mode, Local Memory, On-device Model, Anthropic key state, and on-device model state.",
         annotations(title = "Doctor", read_only_hint = true, open_world_hint = false)
     )]
     async fn doctor(&self) -> Result<CallToolResult, McpError> {
@@ -1779,7 +1779,7 @@ impl WenlanMcpServer {
     }
 
     #[tool(
-        description = "Trigger Origin's distillation pass. With no `target`, runs a full pass that clusters new memories into pages and refreshes the wiki view. With a `target`, scopes the pass: a page id (`page_*` or `concept_*`) re-distills that single page, an entity name scopes clustering to that entity, a space value (e.g. `work`, `personal`) scopes to that space. Use when the user explicitly asks to synthesize, distill, or rebuild a page. The daemon also runs distillation periodically in the background, so don't trigger redundantly during normal flow.",
+        description = "Trigger Wenlan's distillation pass. With no `target`, runs a full pass that clusters new memories into pages and refreshes the wiki view. With a `target`, scopes the pass: a page id (`page_*` or `concept_*`) re-distills that single page, an entity name scopes clustering to that entity, a space value (e.g. `work`, `personal`) scopes to that space. Use when the user explicitly asks to synthesize, distill, or rebuild a page. The daemon also runs distillation periodically in the background, so don't trigger redundantly during normal flow.",
         annotations(
             title = "Distill",
             read_only_hint = false,
@@ -2112,7 +2112,7 @@ impl WenlanMcpServer {
     }
 
     #[tool(
-        description = "List all spaces in this Origin instance. Use when the user asks 'what spaces exist', 'list my topics', or to discover space names before passing one as a filter to search_memory / list_nurture. Returns each space's name, description, memory_count, entity_count, and timestamps.",
+        description = "List all spaces in this Wenlan instance. Use when the user asks 'what spaces exist', 'list my topics', or to discover space names before passing one as a filter to search_memory / list_nurture. Returns each space's name, description, memory_count, entity_count, and timestamps.",
         annotations(title = "List spaces", read_only_hint = true, open_world_hint = false)
     )]
     async fn list_spaces(
@@ -2125,7 +2125,7 @@ impl WenlanMcpServer {
     // --- Review proposal tools ---
 
     #[tool(
-        description = "List pending review proposals from Origin's daemon-side queue. Use when the user wants to audit what the daemon has queued for review — phrases like 'pending proposals', 'what's queued', 'check review queue'. Returns proposals with action (entity_merge/relation_conflict/detect_contradiction/suggest_entity/dedup_merge), source ids, confidence, and typed payload. Filter by action with optional `action` param. Pair with `reject_refinement` to dismiss noise.",
+        description = "List pending review proposals from Wenlan's daemon-side queue. Use when the user wants to audit what the daemon has queued for review — phrases like 'pending proposals', 'what's queued', 'check review queue'. Returns proposals with action (entity_merge/relation_conflict/detect_contradiction/suggest_entity/dedup_merge), source ids, confidence, and typed payload. Filter by action with optional `action` param. Pair with `reject_refinement` to dismiss noise.",
         annotations(
             title = "List review proposals",
             read_only_hint = true,
@@ -2293,7 +2293,7 @@ impl WenlanMcpServer {
     }
 
     #[tool(
-        description = "List quality-gate rejections: memories the daemon discarded before storing, due to low quality, duplication, or other filters. Use when the user asks 'what did Origin reject', 'what was filtered out', or to diagnose why captures are not appearing. Returns rejection records with reason code, detail, and similarity info. Optional `limit` caps results (default 50, max 500). Optional `reason` filters by rejection reason code (e.g. 'duplicate', 'low_quality').",
+        description = "List quality-gate rejections: memories the daemon discarded before storing, due to low quality, duplication, or other filters. Use when the user asks 'what did Wenlan reject', 'what was filtered out', or to diagnose why captures are not appearing. Returns rejection records with reason code, detail, and similarity info. Optional `limit` caps results (default 50, max 500). Optional `reason` filters by rejection reason code (e.g. 'duplicate', 'low_quality').",
         annotations(
             title = "List rejections",
             read_only_hint = true,
@@ -2418,9 +2418,9 @@ impl ServerHandler for WenlanMcpServer {
             Implementation::new("wenlan-mcp", env!("CARGO_PKG_VERSION"))
         )
         .with_instructions(
-            "Origin is your personal memory layer — a local knowledge base that persists across sessions and tools.\n\
+            "Wenlan is your personal memory layer — a local knowledge base that persists across sessions and tools.\n\
              Think of yourself as a curator, not a logger. Store insights, not conversation artifacts.\n\n\
-             Origin is cumulative: each memory you store can be recalled, linked, and distilled into knowledge over time. \
+             Wenlan is cumulative: each memory you store can be recalled, linked, and distilled into knowledge over time. \
              It's also shared across all the user's tools: what you write, other agents (Claude Desktop, Claude Code, \
              ChatGPT, Cursor, etc.) will read later. Write for any future reader, not just this conversation.\n\n\
              FIRST THING EVERY SESSION: Call context to load the user's identity, preferences, goals, and\n\
@@ -2642,9 +2642,9 @@ mod tests {
 
     #[test]
     fn test_context_params_full() {
-        let json = r#"{"topic": "project Origin architecture", "limit": 30, "space": "work"}"#;
+        let json = r#"{"topic": "project Wenlan architecture", "limit": 30, "space": "work"}"#;
         let params: ContextParams = serde_json::from_str(json).unwrap();
-        assert_eq!(params.topic.as_deref(), Some("project Origin architecture"));
+        assert_eq!(params.topic.as_deref(), Some("project Wenlan architecture"));
         assert_eq!(params.limit, Some(30));
         assert_eq!(params.space.as_deref(), Some("work"));
     }
@@ -3584,7 +3584,7 @@ mod tests {
     #[test]
     fn test_context_maps_topic_to_conversation_id() {
         let params = ContextParams {
-            topic: Some("project Origin".into()),
+            topic: Some("project Wenlan".into()),
             limit: None,
             space: None,
         };
@@ -3597,7 +3597,7 @@ mod tests {
             include_goals: true,
             space: params.space,
         };
-        assert_eq!(req.conversation_id.as_deref(), Some("project Origin"));
+        assert_eq!(req.conversation_id.as_deref(), Some("project Wenlan"));
     }
 
     // ===== Remember request construction =====
@@ -3816,7 +3816,7 @@ mod tests {
     #[test]
     fn test_chat_context_response() {
         let json = r#"{
-            "context": "User prefers dark mode. Works on Origin project.",
+            "context": "User prefers dark mode. Works on Wenlan project.",
             "profile": {
                 "narrative": "narrative",
                 "identity": [],
@@ -3889,7 +3889,7 @@ mod tests {
     fn instructions_mention_cumulative_knowledge() {
         assert!(
             server_instructions().contains("cumulative"),
-            "with_instructions must describe Origin as cumulative"
+            "with_instructions must describe Wenlan as cumulative"
         );
     }
 
@@ -3989,7 +3989,7 @@ mod tests {
 
     /// Tokenize on non-alphanumeric boundaries and check whether `needle`
     /// appears as a standalone token. Mirrors the helper used by the
-    /// origin-types drift tests so "goals" (plural noun) does not false-match
+    /// wenlan-types drift tests so "goals" (plural noun) does not false-match
     /// the legacy "goal" memory_type token.
     fn contains_word(haystack: &str, needle: &str) -> bool {
         haystack
@@ -4128,7 +4128,7 @@ mod tests {
     fn test_create_entity_request_body_shape() {
         let server = make_server(TransportMode::Stdio, "claude", None);
         let params = CreateEntityParams {
-            name: "Origin".into(),
+            name: "Wenlan".into(),
             entity_type: "project".into(),
             space: Some("origin".into()),
             confidence: Some(0.95),
@@ -4142,7 +4142,7 @@ mod tests {
             confidence: params.confidence,
         };
         let json = serde_json::to_value(&req).unwrap();
-        assert_eq!(json["name"], "Origin");
+        assert_eq!(json["name"], "Wenlan");
         assert_eq!(json["entity_type"], "project");
         assert_eq!(json["space"], "origin");
         assert_eq!(json["source_agent"], "claude");
@@ -4155,18 +4155,18 @@ mod tests {
     fn test_create_relation_params() {
         let json = r#"{
             "from_entity": "Alice",
-            "to_entity": "Origin",
+            "to_entity": "Wenlan",
             "relation_type": "works_on"
         }"#;
         let params: CreateRelationParams = serde_json::from_str(json).unwrap();
         assert_eq!(params.from_entity, "Alice");
-        assert_eq!(params.to_entity, "Origin");
+        assert_eq!(params.to_entity, "Wenlan");
         assert_eq!(params.relation_type, "works_on");
     }
 
     #[test]
     fn test_create_relation_params_missing_field_fails() {
-        let json = r#"{"from_entity": "Alice", "to_entity": "Origin"}"#;
+        let json = r#"{"from_entity": "Alice", "to_entity": "Wenlan"}"#;
         let result = serde_json::from_str::<CreateRelationParams>(json);
         assert!(result.is_err());
     }
@@ -4176,7 +4176,7 @@ mod tests {
         let server = make_server(TransportMode::Stdio, "claude", None);
         let params = CreateRelationParams {
             from_entity: "Alice".into(),
-            to_entity: "Origin".into(),
+            to_entity: "Wenlan".into(),
             relation_type: "prefers".into(),
         };
         let source_agent = server.resolve_source_agent(None);
@@ -4191,7 +4191,7 @@ mod tests {
         };
         let json = serde_json::to_value(&req).unwrap();
         assert_eq!(json["from_entity"], "Alice");
-        assert_eq!(json["to_entity"], "Origin");
+        assert_eq!(json["to_entity"], "Wenlan");
         assert_eq!(json["relation_type"], "prefers");
         assert_eq!(json["source_agent"], "claude");
     }
@@ -4200,9 +4200,9 @@ mod tests {
 
     #[test]
     fn test_create_page_params_minimal() {
-        let json = r#"{"title": "Origin daemon", "content": "Body text."}"#;
+        let json = r#"{"title": "Wenlan daemon", "content": "Body text."}"#;
         let params: CreatePageParams = serde_json::from_str(json).unwrap();
-        assert_eq!(params.title, "Origin daemon");
+        assert_eq!(params.title, "Wenlan daemon");
         assert_eq!(params.content, "Body text.");
         assert!(params.summary.is_none());
         assert!(params.entity_id.is_none());
@@ -4213,18 +4213,18 @@ mod tests {
     #[test]
     fn test_create_page_params_full() {
         let json = r##"{
-            "title": "Origin daemon",
+            "title": "Wenlan daemon",
             "content": "Markdown body with [[wikilinks]].",
-            "summary": "The headless HTTP daemon at the heart of Origin.",
+            "summary": "The headless HTTP daemon at the heart of Wenlan.",
             "entity_id": "ent_origin",
             "space": "origin",
             "source_memory_ids": ["mem_1", "mem_2"]
         }"##;
         let params: CreatePageParams = serde_json::from_str(json).unwrap();
-        assert_eq!(params.title, "Origin daemon");
+        assert_eq!(params.title, "Wenlan daemon");
         assert_eq!(
             params.summary.as_deref(),
-            Some("The headless HTTP daemon at the heart of Origin.")
+            Some("The headless HTTP daemon at the heart of Wenlan.")
         );
         assert_eq!(params.entity_id.as_deref(), Some("ent_origin"));
         assert_eq!(params.space.as_deref(), Some("origin"));

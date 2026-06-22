@@ -1,6 +1,6 @@
-# Origin
+# Wenlan
 
-AI work memory for Claude Code. Origin carries sessions, decisions, lessons, and project context forward, then turns them into searchable memory and wiki pages.
+AI work memory for Claude Code. Wenlan carries sessions, decisions, lessons, and project context forward, then turns them into searchable memory and wiki pages.
 
 ## 30-Second Setup
 
@@ -9,7 +9,7 @@ AI work memory for Claude Code. Origin carries sessions, decisions, lessons, and
      /plugin install origin@7xuanlu
 5s   restart Claude Code
 10s  /init   auto-installs daemon if missing, configures local memory,
-            verifies daemon + MCP + round-trip, prints "Origin ready"
+            verifies daemon + MCP + round-trip, prints "Wenlan ready"
 30s  /brief  (or /capture <something to remember>)
 ```
 
@@ -25,21 +25,21 @@ if the daemon ever stops.
 /plugin install origin@7xuanlu
 ```
 
-`7xuanlu` is the GitHub repo owner. If you fork Origin, use your own handle.
+`7xuanlu` is the GitHub repo owner. If you fork Wenlan, use your own handle.
 
-The marketplace is defined in [`../../.claude-plugin/marketplace.json`](../../.claude-plugin/marketplace.json) (at the repo root). The plugin metadata is defined in [`plugin.json`](plugin.json). MCP configuration is in [`../.mcp.json`](../.mcp.json) (this plugin's `.mcp.json`), which delegates to [`../bin/origin-mcp-runner.sh`](../bin/origin-mcp-runner.sh).
+The marketplace is defined in [`../../.claude-plugin/marketplace.json`](../../.claude-plugin/marketplace.json) (at the repo root). The plugin metadata is defined in [`plugin.json`](plugin.json). MCP configuration is in [`../.mcp.json`](../.mcp.json) (this plugin's `.mcp.json`), which delegates to [`../bin/wenlan-mcp-runner.sh`](../bin/wenlan-mcp-runner.sh).
 
 The runner picks the MCP server binary in three paths, in order:
 
-1. **Filesystem override** — if `plugin/bin/origin-mcp.local` exists (typically a symlink to a locally-built binary, gitignored), the runner exec's it. Most reliable: survives plugin reloads that don't re-read env.
-2. **Env var override** — `ORIGIN_MCP_DEV_BIN=/abs/path/to/origin-mcp`. Convenient if you already export it; requires Claude Code to inherit the var at startup.
-3. **Default** — `npx -y origin-mcp@^X.Y.Z`. What end users get after installing the plugin.
+1. **Filesystem override** — if `plugin/bin/wenlan-mcp.local` exists (typically a symlink to a locally-built binary, gitignored), the runner exec's it. Most reliable: survives plugin reloads that don't re-read env.
+2. **Env var override** — `ORIGIN_MCP_DEV_BIN=/abs/path/to/wenlan-mcp`. Convenient if you already export it; requires Claude Code to inherit the var at startup.
+3. **Default** — `npx -y wenlan-mcp@^X.Y.Z`. What end users get after installing the plugin.
 
 To set up the filesystem override during dev:
 
 ```
-cargo build -p origin-mcp --release
-ln -s $(pwd)/target/release/origin-mcp plugin/bin/origin-mcp.local
+cargo build -p wenlan-mcp --release
+ln -s $(pwd)/target/release/wenlan-mcp plugin/bin/wenlan-mcp.local
 ```
 
 Reload the plugin (`/reload-plugins`) and the wrapper picks the local binary on the next MCP spawn.
@@ -47,7 +47,7 @@ Reload the plugin (`/reload-plugins`) and the wrapper picks the local binary on 
 ## Daily Commands
 
 ```text
-/init       set up + verify Origin works (run once, or to diagnose)
+/init       set up + verify Wenlan works (run once, or to diagnose)
 /help       one-screen reference
 /brief      load identity + topic context (start of session)
 /capture    save one durable memory in flow

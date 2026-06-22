@@ -3,7 +3,7 @@ name: handoff
 description: >
   End-of-session ritual. Captures decisions, lessons, gotchas, and open
   threads. Writes a narrative session log to ~/.origin/sessions/ and stores
-  granular memories via Origin MCP. Previews any unconfirmed captures from
+  granular memories via Wenlan MCP. Previews any unconfirmed captures from
   the current session before closing. Invoked as `/handoff`.
 allowed-tools: ["Bash", "mcp__plugin_origin_origin__capture", "mcp__plugin_origin_origin__list_pending"]
 ---
@@ -239,10 +239,10 @@ missing or `~/.origin/` is not a repo yet.
 
 ```
 Bash: git -C ~/.origin add -A && \
-      git -C ~/.origin -c user.name=Origin -c user.email=daemon@origin.local \
+      git -C ~/.origin -c user.name=Wenlan -c user.email=daemon@origin.local \
           commit --quiet -m "session: <slug>" 2>/dev/null || \
       (sleep 1 && git -C ~/.origin add -A && \
-       git -C ~/.origin -c user.name=Origin -c user.email=daemon@origin.local \
+       git -C ~/.origin -c user.name=Wenlan -c user.email=daemon@origin.local \
            commit --quiet -m "session: <slug>" 2>/dev/null) || true
 ```
 

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-//! LongMemEval benchmark adapter — converts LongMemEval dataset into Origin eval cases.
+//! LongMemEval benchmark adapter — converts LongMemEval dataset into Wenlan eval cases.
 //!
 //! LongMemEval (ICLR 2025, arXiv:2410.10813) tests 5 core memory retrieval abilities
 //! across 500 questions with user-assistant chat history:

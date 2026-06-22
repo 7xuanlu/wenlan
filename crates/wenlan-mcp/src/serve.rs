@@ -47,13 +47,13 @@ pub async fn run_serve(config: ServeConfig) -> anyhow::Result<()> {
     // DNS-rebinding protection for loopback deployments. Every serve
     // deployment we support is reached through a public tunnel
     // (cloudflared, ngrok) that forwards the tunnel hostname in Host,
-    // whether or not a bearer token is used (Origin.app runs `serve
+    // whether or not a bearer token is used (Wenlan.app runs `serve
     // --no-auth --host 127.0.0.1` and fronts it with cloudflared; auth
     // deployments do the same with a token). Leaving the default in
     // place rejects every tunneled request with a plain-text 403 the
     // upstream MCP proxy cannot parse, surfacing to users as a bogus
     // "-32600 Invalid Request". MCP's custom-header requirement
-    // already triggers CORS preflight, so the Origin allowlist catches
+    // already triggers CORS preflight, so the Wenlan allowlist catches
     // browser-driven DNS rebinding; a local non-browser attacker
     // bypasses Host checking anyway by hitting 127.0.0.1 directly.
     let mcp_config = StreamableHttpServerConfig::default().disable_allowed_hosts();
@@ -90,7 +90,7 @@ pub async fn run_serve(config: ServeConfig) -> anyhow::Result<()> {
 
     let addr: SocketAddr = format!("{}:{}", config.host, config.port).parse()?;
     let listener = tokio::net::TcpListener::bind(addr).await?;
-    tracing::info!("origin-mcp HTTP server listening on {}", addr);
+    tracing::info!("wenlan-mcp HTTP server listening on {}", addr);
 
     if token.is_some() {
         tracing::info!("Bearer token authentication enabled");
@@ -114,7 +114,7 @@ pub async fn run_serve(config: ServeConfig) -> anyhow::Result<()> {
         {
             tokio::signal::ctrl_c().await.ok();
         }
-        tracing::info!("Shutting down origin-mcp HTTP server");
+        tracing::info!("Shutting down wenlan-mcp HTTP server");
     };
 
     axum::serve(listener, router)
@@ -146,7 +146,7 @@ fn build_cors_layer(allowed_origins: &[String]) -> CorsLayer {
     }
 }
 
-/// Auth middleware: bearer token first (401), then Origin header (403).
+/// Auth middleware: bearer token first (401), then Wenlan header (403).
 async fn auth_and_origin_middleware(
     req: Request,
     next: Next,
@@ -172,11 +172,11 @@ async fn auth_and_origin_middleware(
         None => return (StatusCode::UNAUTHORIZED, "Authorization header required").into_response(),
     }
 
-    // 2. Validate Origin header AFTER auth
+    // 2. Validate Wenlan header AFTER auth
     if let Some(origin) = req.headers().get(http::header::ORIGIN) {
         if let Ok(origin_str) = origin.to_str() {
             if !auth::is_origin_allowed(origin_str, allowed_origins) {
-                return (StatusCode::FORBIDDEN, "Origin not allowed").into_response();
+                return (StatusCode::FORBIDDEN, "Wenlan not allowed").into_response();
             }
         }
     }

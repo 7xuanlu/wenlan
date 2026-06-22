@@ -33,10 +33,10 @@ All business logic lives here. No tauri, no axum. Framework-agnostic.
 | `schema.rs` | Memory schema definitions (formerly `memory_schema.rs`) |
 | `prompts/` | Prompt registry (defaults + override dir loader) |
 | `chunker/` | Code-aware, Markdown-aware, fixed-size chunking |
-| `sources/` | `RawDocument`, file watchers, Obsidian importer. `RawDocument` and related types re-exported from `origin-types`. |
+| `sources/` | `RawDocument`, file watchers, Obsidian importer. `RawDocument` and related types re-exported from `wenlan-types`. |
 | `privacy.rs` | PII redaction |
 | `router/classify.rs`, `content_score.rs` | Smart router scoring helpers (non-tauri parts) |
-| `config.rs` | Persistent config at `dirs::data_local_dir()/origin/config.json` (on macOS, `~/Library/Application Support/origin/config.json`) |
+| `config.rs` | Persistent config at `dirs::data_local_dir()/origin/config.json` (on macOS, `~/Library/Application Support/wenlan/config.json`) |
 | `export/` | Markdown/JSON/zip/PDF exporters |
 | `eval/` | Benchmark harness: LoCoMo, LongMemEval. Each benchmark has base (embedding-only), reranked (LLM rescores after search), and expanded (LLM query expansion before search) variants. Baselines under `EVAL_BASELINES_DIR` (gitignored). See `crates/wenlan-core/src/eval/AGENTS.md`. |
-| `state.rs` | `CoreState` — shared state struct used by origin-server |
+| `state.rs` | `CoreState` — shared state struct used by wenlan-server |

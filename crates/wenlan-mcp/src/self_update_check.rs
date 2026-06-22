@@ -22,7 +22,7 @@ struct CacheEntry {
 
 fn cache_path() -> Option<PathBuf> {
     // WENLAN_MCP_CACHE_DIR override exists so tests can point at a temp dir
-    // instead of polluting the user's real cache (~/Library/Caches/origin-mcp/...).
+    // instead of polluting the user's real cache (~/Library/Caches/wenlan-mcp/...).
     let base = std::env::var_os("WENLAN_MCP_CACHE_DIR")
         .map(PathBuf::from)
         .or_else(|| dirs::cache_dir().map(|d| d.join("wenlan-mcp")))?;
@@ -76,7 +76,7 @@ async fn fetch_latest_tag() -> Option<String> {
         .get(RELEASES_URL)
         .header(
             "User-Agent",
-            concat!("origin-mcp/", env!("CARGO_PKG_VERSION")),
+            concat!("wenlan-mcp/", env!("CARGO_PKG_VERSION")),
         )
         .timeout(Duration::from_secs(3))
         .send()
@@ -110,8 +110,8 @@ pub async fn check() -> Option<String> {
     let latest = Version::parse(&latest_tag).ok()?;
     if latest > mcp {
         Some(format!(
-            "A newer origin-mcp is available (v{latest}, you are on v{mcp}). \
-             Run `brew upgrade origin-mcp`."
+            "A newer wenlan-mcp is available (v{latest}, you are on v{mcp}). \
+             Run `brew upgrade wenlan-mcp`."
         ))
     } else {
         None
@@ -132,7 +132,7 @@ mod tests {
 
     fn set_temp_cache(label: &str) -> PathBuf {
         let dir =
-            std::env::temp_dir().join(format!("origin-mcp-test-{label}-{}", std::process::id()));
+            std::env::temp_dir().join(format!("wenlan-mcp-test-{label}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::env::set_var("WENLAN_MCP_CACHE_DIR", &dir);
         dir
@@ -144,7 +144,7 @@ mod tests {
         let _g = CACHE_LOCK.lock().unwrap();
         std::env::remove_var("WENLAN_MCP_CACHE_DIR");
         let p = cache_path().expect("cache dir should resolve on this platform");
-        assert!(p.ends_with("origin-mcp/version-check.json"), "got {p:?}");
+        assert!(p.ends_with("wenlan-mcp/version-check.json"), "got {p:?}");
     }
 
     #[test]

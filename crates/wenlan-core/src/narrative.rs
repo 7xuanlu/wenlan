@@ -6,7 +6,7 @@ use crate::llm_provider::{LlmProvider, LlmRequest};
 use crate::prompts::PromptRegistry;
 use crate::tuning::NarrativeConfig;
 
-// Re-export wire type from origin-types so existing consumers keep working.
+// Re-export wire type from wenlan-types so existing consumers keep working.
 pub use wenlan_types::narrative::NarrativeResponse;
 
 /// A memory row loaded for narrative assembly.

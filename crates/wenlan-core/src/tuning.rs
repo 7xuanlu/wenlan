@@ -355,7 +355,7 @@ pub struct DistillationConfig {
     /// Hard cap on size of entity- or community-grouped clusters before the
     /// agent's coherence check rejects them as grab-bags. A 12+ prose-memory
     /// cluster at the default 0.73 similarity is almost always a community
-    /// pile (e.g. cid=16 "Origin" sweeping in unrelated sub-topics). When a
+    /// pile (e.g. cid=16 "Wenlan" sweeping in unrelated sub-topics). When a
     /// grouped sub-cluster exceeds this, re-split once at threshold +0.05
     /// (cap 0.92) and drop sub-clusters that still overflow.
     #[serde(default = "d_12_usize")]

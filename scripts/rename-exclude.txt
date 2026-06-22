@@ -13,5 +13,5 @@ origin-eval
 scenario_seeded
 origin_id
 origin_version
-ORIGIN_REAL
-ORIGIN_FAKE_UNDOCUMENTED
+WENLAN_REAL
+WENLAN_FAKE_UNDOCUMENTED

@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::VecDeque;
 
 /// Current unix timestamp (seconds). Used by `WorkingMemory::prune` and tests.
-/// Uses `std::time` to keep origin-types free of chrono.
+/// Uses `std::time` to keep wenlan-types free of chrono.
 fn now_unix_secs() -> i64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)

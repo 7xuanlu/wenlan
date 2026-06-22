@@ -1,8 +1,8 @@
-# origin-mcp
+# wenlan-mcp
 
-MCP server for [Origin](https://github.com/7xuanlu/origin). It lets Claude Code, Cursor, Codex, Claude Desktop, Gemini CLI, and other MCP clients read and write to the local Origin daemon through the [Model Context Protocol](https://modelcontextprotocol.io).
+MCP server for [Wenlan](https://github.com/7xuanlu/origin). It lets Claude Code, Cursor, Codex, Claude Desktop, Gemini CLI, and other MCP clients read and write to the local Wenlan daemon through the [Model Context Protocol](https://modelcontextprotocol.io).
 
-Origin owns storage, search, embeddings, pages, and distill cycles. `origin-mcp` is the connector.
+Wenlan owns storage, search, embeddings, pages, and distill cycles. `wenlan-mcp` is the connector.
 
 ## Install
 
@@ -13,7 +13,7 @@ origin mcp add codex              # or: claude-code, cursor, claude-desktop, vsc
 origin mcp add cursor --dry-run   # preview before editing JSON config
 ```
 
-MCP-only setup gives agents tools for capture, recall, context, doctor, and page distillation. It does not install Claude Code slash skills like `/brief`, `/handoff`, `/distill`, or `/init`; use the Origin plugin for that workflow.
+MCP-only setup gives agents tools for capture, recall, context, doctor, and page distillation. It does not install Claude Code slash skills like `/brief`, `/handoff`, `/distill`, or `/init`; use the Wenlan plugin for that workflow.
 
 If you only need the raw MCP connector config, add this to your MCP client:
 
@@ -22,19 +22,19 @@ If you only need the raw MCP connector config, add this to your MCP client:
   "mcpServers": {
     "origin": {
       "command": "npx",
-      "args": ["-y", "origin-mcp"]
+      "args": ["-y", "wenlan-mcp"]
     }
   }
 }
 ```
 
-The npm wrapper auto-detects the host platform and downloads the matching prebuilt binary from the Origin release. Supported: macOS (arm64, x64), Linux (x64, arm64; glibc), Windows (x64). Other targets require building from source via `cargo install origin-mcp`.
+The npm wrapper auto-detects the host platform and downloads the matching prebuilt binary from the Wenlan release. Supported: macOS (arm64, x64), Linux (x64, arm64; glibc), Windows (x64). Other targets require building from source via `cargo install wenlan-mcp`.
 
 Or install a binary directly:
 
 ```bash
-brew install 7xuanlu/tap/origin-mcp
-cargo install origin-mcp
+brew install 7xuanlu/tap/wenlan-mcp
+cargo install wenlan-mcp
 ```
 
 Then use:
@@ -43,16 +43,16 @@ Then use:
 {
   "mcpServers": {
     "origin": {
-      "command": "origin-mcp"
+      "command": "wenlan-mcp"
     }
   }
 }
 ```
 
-`origin-mcp` expects the Origin daemon at `http://127.0.0.1:7878` by default. Override it with:
+`wenlan-mcp` expects the Wenlan daemon at `http://127.0.0.1:7878` by default. Override it with:
 
 ```bash
-origin-mcp --origin-url http://127.0.0.1:7879
+wenlan-mcp --origin-url http://127.0.0.1:7879
 ```
 
 ## Tools
@@ -72,7 +72,7 @@ origin-mcp --origin-url http://127.0.0.1:7879
 
 ## Setup Modes
 
-Origin works immediately in **local memory** mode: storage, search, recall, and MCP memory are available without a local model or API key.
+Wenlan works immediately in **local memory** mode: storage, search, recall, and MCP memory are available without a local model or API key.
 
 Users can opt into more expensive distill cycles:
 
@@ -94,9 +94,9 @@ See [`src/tools.rs`](src/tools.rs) for the full instructions.
 ## Links
 
 - [useorigin.app](https://useorigin.app) — project home
-- [useorigin.app/learn/mcp-memory-server](https://useorigin.app/learn/mcp-memory-server) — concept article on Origin as an MCP memory server
+- [useorigin.app/learn/mcp-memory-server](https://useorigin.app/learn/mcp-memory-server) — concept article on Wenlan as an MCP memory server
 - [useorigin.app/docs/mcp-clients](https://useorigin.app/docs/mcp-clients) — connect Claude Code, Cursor, Codex, Claude Desktop, Gemini CLI
-- [npm: origin-mcp](https://www.npmjs.com/package/origin-mcp) — standalone npm package
+- [npm: wenlan-mcp](https://www.npmjs.com/package/wenlan-mcp) — standalone npm package
 - [github.com/7xuanlu/origin](https://github.com/7xuanlu/origin) — source
 
 ## License

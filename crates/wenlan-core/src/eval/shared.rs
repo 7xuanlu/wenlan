@@ -328,7 +328,7 @@ pub async fn run_enrichment_batch_api(
     Ok(total_entities)
 }
 
-/// Run entity extraction using Origin's production pipeline (refinery path).
+/// Run entity extraction using Wenlan's production pipeline (refinery path).
 ///
 /// Uses `extract_entities_from_memories` which calls `extract_single_memory_entities`
 /// with the production EXTRACT_KNOWLEDGE_GRAPH prompt (PR5) and proper Qwen chat

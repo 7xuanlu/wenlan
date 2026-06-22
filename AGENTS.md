@@ -2,7 +2,7 @@
 
 This file guides any coding agent working in this repository — Claude Code, Cursor, Codex, GitHub Copilot, Zed, Aider, and similar. It is the canonical agent-instruction file; vendor-specific files (such as `CLAUDE.md`) re-import from here so the rules stay in sync. The format follows the [agents.md](https://agents.md/) spec.
 
-This repo holds the **daemon** (`origin-server`), the **CLI** (`origin`), shared **wire types** (`origin-types`), the **business-logic core** (`origin-core`), and the **MCP server** (`origin-mcp`). All five ship from this monorepo. The Tauri desktop app (`origin-app`) ships from a separate repo: [7xuanlu/origin-app](https://github.com/7xuanlu/origin-app). Public product surface lives at [useorigin.app](https://useorigin.app) (marketing, docs at `/docs`, longer-form writing at `/learn`).
+This repo holds the **daemon** (`wenlan-server`), the **CLI** (`origin`), shared **wire types** (`wenlan-types`), the **business-logic core** (`wenlan-core`), and the **MCP server** (`wenlan-mcp`). All five ship from this monorepo. The Tauri desktop app (`origin-app`) ships from a separate repo: [7xuanlu/origin-app](https://github.com/7xuanlu/origin-app). Public product surface lives at [useorigin.app](https://useorigin.app) (marketing, docs at `/docs`, longer-form writing at `/learn`).
 
 ## Design Philosophy
 
@@ -17,14 +17,14 @@ This repo holds the **daemon** (`origin-server`), the **CLI** (`origin`), shared
 
 ## Build & Dev Commands
 
-Origin is a Cargo workspace with 5 crates: `origin-types`, `origin-core`, `origin-server`, `origin` (CLI in `crates/wenlan-cli`), and `origin-mcp`.
+Wenlan is a Cargo workspace with 5 crates: `wenlan-types`, `wenlan-core`, `wenlan-server`, `origin` (CLI in `crates/wenlan-cli`), and `wenlan-mcp`.
 
 ```bash
 # Run the daemon directly:
-cargo run -p origin-server                # listens on 127.0.0.1:7878
+cargo run -p wenlan-server                # listens on 127.0.0.1:7878
 
 # Or start the daemon as a managed launchd service:
-cargo build -p origin -p origin-server
+cargo build -p origin -p wenlan-server
 ./target/debug/origin setup --basic       # configure local memory
 ./target/debug/origin install             # writes plist, launchctl load
 ./target/debug/origin status
@@ -36,17 +36,17 @@ cargo build --workspace
 cargo test --workspace
 
 # Per-crate builds (faster for iteration)
-cargo check -p origin-types
-cargo check -p origin-core
-cargo check -p origin-server
+cargo check -p wenlan-types
+cargo check -p wenlan-core
+cargo check -p wenlan-server
 cargo check -p origin                     # the CLI binary
 cargo build -p origin --release
 ./target/release/origin --help
 
 # Run tests for a single crate
-cargo test -p origin-core
-cargo test -p origin-core --lib <module>::tests
-cargo test -p origin-core <test_name>
+cargo test -p wenlan-core
+cargo test -p wenlan-core --lib <module>::tests
+cargo test -p wenlan-core <test_name>
 
 # Generate coverage reports (opens in browser)
 bash scripts/coverage.sh
@@ -56,16 +56,16 @@ bash scripts/setup-hooks.sh
 
 # Eval benchmarks (require GPU + model files, run manually)
 # Unit tests for eval modules (fast, no GPU):
-cargo test -p origin-core --lib locomo::tests
-cargo test -p origin-core --lib longmemeval::tests
+cargo test -p wenlan-core --lib locomo::tests
+cargo test -p wenlan-core --lib longmemeval::tests
 
 # Generate eval baselines (slow, needs Qwen 3.5-9B on Metal GPU):
-cargo test -p origin-core --test eval_harness save_locomo_baseline -- --ignored --nocapture
-cargo test -p origin-core --test eval_harness save_locomo_reranked_baseline -- --ignored --nocapture
-cargo test -p origin-core --test eval_harness save_locomo_expanded_baseline -- --ignored --nocapture
-cargo test -p origin-core --test eval_harness save_longmemeval_baseline -- --ignored --nocapture
-cargo test -p origin-core --test eval_harness save_longmemeval_reranked_baseline -- --ignored --nocapture
-cargo test -p origin-core --test eval_harness save_longmemeval_expanded_baseline -- --ignored --nocapture
+cargo test -p wenlan-core --test eval_harness save_locomo_baseline -- --ignored --nocapture
+cargo test -p wenlan-core --test eval_harness save_locomo_reranked_baseline -- --ignored --nocapture
+cargo test -p wenlan-core --test eval_harness save_locomo_expanded_baseline -- --ignored --nocapture
+cargo test -p wenlan-core --test eval_harness save_longmemeval_baseline -- --ignored --nocapture
+cargo test -p wenlan-core --test eval_harness save_longmemeval_reranked_baseline -- --ignored --nocapture
+cargo test -p wenlan-core --test eval_harness save_longmemeval_expanded_baseline -- --ignored --nocapture
 # Baselines saved to <EVAL_BASELINES_DIR>/*.json (gitignored, default ~/.cache/origin-eval).
 ```
 
@@ -73,13 +73,13 @@ Pre-commit auto-formats Rust and runs Clippy on changed crates. Pre-push runs wo
 
 ## Cross-platform
 
-Origin runs on macOS (arm64, x86_64), Linux (x86_64, aarch64; musl), and Windows (x86_64).
+Wenlan runs on macOS (arm64, x86_64), Linux (x86_64, aarch64; musl), and Windows (x86_64).
 
 | OS | Data dir | Service registration |
 |---|---|---|
-| macOS | `~/Library/Application Support/origin/` | launchd via `~/Library/LaunchAgents/com.origin.server.plist` (user-level) |
-| Linux | `~/.local/share/origin/` (or `$XDG_DATA_HOME/origin`) | systemd user unit at `~/.config/systemd/user/origin-server.service` (qualifier dropped per `ServiceLabel::to_script_name()`). Enable lingering with `loginctl enable-linger` if you want the service alive after logout. |
-| Windows | `%LOCALAPPDATA%\origin\` | Per-user Task Scheduler ONLOGON task registered via `schtasks.exe /create /tn OriginServer /sc ONLOGON /tr <exe> /f`. `origin install` short-circuits before service-manager and drives schtasks directly (origin-server is a plain console app and would otherwise time out at 30s under sc.exe + the Windows Service Control Protocol). `origin uninstall` calls `schtasks /delete /tn OriginServer /f`. |
+| macOS | `~/Library/Application Support/wenlan/` | launchd via `~/Library/LaunchAgents/com.wenlan.server.plist` (user-level) |
+| Linux | `~/.local/share/wenlan/` (or `$XDG_DATA_HOME/origin`) | systemd user unit at `~/.config/systemd/user/wenlan-server.service` (qualifier dropped per `ServiceLabel::to_script_name()`). Enable lingering with `loginctl enable-linger` if you want the service alive after logout. |
+| Windows | `%LOCALAPPDATA%\origin\` | Per-user Task Scheduler ONLOGON task registered via `schtasks.exe /create /tn OriginServer /sc ONLOGON /tr <exe> /f`. `origin install` short-circuits before service-manager and drives schtasks directly (wenlan-server is a plain console app and would otherwise time out at 30s under sc.exe + the Windows Service Control Protocol). `origin uninstall` calls `schtasks /delete /tn OriginServer /f`. |
 
 `origin install` / `origin uninstall` work on macOS, Linux, and Windows. macOS + Linux go through the `service-manager` crate (launchd / systemd-user); Windows takes the schtasks path described above so the daemon does not need a service dispatcher.
 
@@ -89,7 +89,7 @@ By default, Linux and Windows builds are CPU-only. macOS keeps Metal. CUDA and V
 
 ### ORT (ONNX Runtime) on Windows
 
-If you see `Failed to load onnxruntime.dll` or version-mismatch errors on Windows, set `ORT_DYLIB_PATH` to the bundled `onnxruntime.dll` inside the Origin install directory before starting the daemon. The bundled DLL ships in the Windows release zip.
+If you see `Failed to load onnxruntime.dll` or version-mismatch errors on Windows, set `ORT_DYLIB_PATH` to the bundled `onnxruntime.dll` inside the Wenlan install directory before starting the daemon. The bundled DLL ships in the Windows release zip.
 
 ### Daemon bind address
 
@@ -97,7 +97,7 @@ The daemon binds to `127.0.0.1:7878` by default. To expose it on a non-loopback 
 
 ### Manual Windows verification from macOS
 
-The CI matrix runs `windows-2022` on every PR and is the primary signal. For hands-on testing, run a Windows 11 VM via UTM or Parallels; install MSVC 2022 Build Tools and Rust; then `cargo build --release -p origin-server` and `scripts/smoke-windows.ps1`.
+The CI matrix runs `windows-2022` on every PR and is the primary signal. For hands-on testing, run a Windows 11 VM via UTM or Parallels; install MSVC 2022 Build Tools and Rust; then `cargo build --release -p wenlan-server` and `scripts/smoke-windows.ps1`.
 
 ### Linux smoke from macOS
 
@@ -109,7 +109,7 @@ Builds the multi-arch daemon image (linux/arm64 for native Apple Silicon speed v
 
 ## Local vs CI test responsibilities
 
-Origin runs across several layers. The split is driven by three questions: **(1) Can a hosted runner do this?** (no GPU, no API keys, no cost). **(2) Is it under 60s on cold cache?** **(3) Does it gate correctness or measure quality?** Quality measures never gate.
+Wenlan runs across several layers. The split is driven by three questions: **(1) Can a hosted runner do this?** (no GPU, no API keys, no cost). **(2) Is it under 60s on cold cache?** **(3) Does it gate correctness or measure quality?** Quality measures never gate.
 
 | Layer | What runs | Where | When | Time | Blocks? |
 |---|---|---|---|---|---|
@@ -117,8 +117,8 @@ Origin runs across several layers. The split is driven by three questions: **(1)
 | **L2 pre-commit** | `cargo fmt --all`, clippy on staged crates | Local | `git commit` | ~5s | Yes |
 | **L3 pre-push** | `cargo clippy --workspace --all-targets`, `cargo test --workspace --lib` | Local | `git push` | ~60-90s | Yes |
 | **L4 CI on PR** | Same checks workspace-wide; tests for types + server + CLI; core lib tests + chat_import_e2e + distillation_quality | GitHub (`ci.yml`) | Every PR | ~10min | Yes (required) |
-| **L5 coverage on PR** | `cargo llvm-cov` on origin-core + origin-server only | GitHub (`coverage.yml`) | Every PR | ~10min | **No (informational)** |
-| **L6 main canary** | Embedding-only eval (`cargo test -p origin-core --lib eval::retrieval -- --ignored`) | GitHub (`ci.yml`) | Push to `main` | ~10min | No (post-merge) |
+| **L5 coverage on PR** | `cargo llvm-cov` on wenlan-core + wenlan-server only | GitHub (`coverage.yml`) | Every PR | ~10min | **No (informational)** |
+| **L6 main canary** | Embedding-only eval (`cargo test -p wenlan-core --lib eval::retrieval -- --ignored`) | GitHub (`ci.yml`) | Push to `main` | ~10min | No (post-merge) |
 | **L7 manual local** | `bash scripts/coverage.sh` (HTML coverage), GPU eval suite (`cargo test -- --ignored`), Anthropic batch judge (`ANTHROPIC_API_KEY=... cargo test ...`) | Your laptop | On demand | minutes-hours | No |
 | **L8 pre-release** | Full eval suite vs saved baseline. Commit a **curated, env-stamped snapshot** of headline numbers to a results doc/README (single-run tagged "scaffold"; headline claims need N≥3 + stddev). Raw per-run baselines + history series stay gitignored. See "Commit policy" under Eval Citation Discipline. | Your laptop | Per release | hours | Soft gate |
 
@@ -126,7 +126,7 @@ Origin runs across several layers. The split is driven by three questions: **(1)
 
 - **GPU evals (LongMemEval / LoCoMo runner functions, Qwen3.5-9B inference)** — GitHub macOS runners have no Metal acceleration. The tests are `#[ignore]`d so they don't accidentally run.
 - **Anthropic API batch judge** — costs $0.35/run and requires `ANTHROPIC_API_KEY` which we don't expose to PR runs from forks.
-- **Tauri / desktop coverage** — the desktop app lives in [7xuanlu/origin-app](https://github.com/7xuanlu/origin-app) and runs its own CI there. This repo's coverage is scoped to `origin-core + origin-server`.
+- **Tauri / desktop coverage** — the desktop app lives in [7xuanlu/origin-app](https://github.com/7xuanlu/origin-app) and runs its own CI there. This repo's coverage is scoped to `wenlan-core + wenlan-server`.
 
 ### Why pre-push doesn't run coverage
 
@@ -182,7 +182,7 @@ Releases are automated via [release-please](https://github.com/googleapis/releas
 **How it works:**
 1. Every push to `main`, release-please scans new commits and maintains an open "release PR" that accumulates changes and updates `CHANGELOG.md`.
 2. When you're ready to ship, merge the release PR. That triggers a GitHub release (draft) + git tag.
-3. The `v*` tag push triggers `.github/workflows/release.yml`, which builds `origin`, `origin-server`, and `origin-mcp`, uploads standalone binaries to the release, and publishes it.
+3. The `v*` tag push triggers `.github/workflows/release.yml`, which builds `origin`, `wenlan-server`, and `wenlan-mcp`, uploads standalone binaries to the release, and publishes it.
 4. The release-please workflow also syncs daemon `Cargo.toml` versions on the release branch (release-please can't handle Cargo workspaces reliably with `simple` release type).
 
 **Commit messages control version bumps.** Pre-1.0:
@@ -220,7 +220,7 @@ cat .release-please-manifest.json
 
 **Never delete a release tag without also cleaning up the commit history.** If you need to undo a release version, you must rewrite the commit message that release-please created (`git filter-branch --msg-filter`), delete the tag, delete the GitHub Release, and rename the merged PR title via API. Otherwise release-please will keep bumping from the old version.
 
-**The `release.yml` workflow ships the local runtime.** It handles: origin CLI, origin-server, origin-mcp, standalone binary uploads, crates.io publishing for `origin-types` + `origin-mcp`, and npm publishing for `origin-mcp` + `@7xuanlu/origin`. It does NOT build a desktop bundle — origin-app builds its own DMG in its own repo.
+**The `release.yml` workflow ships the local runtime.** It handles: origin CLI, wenlan-server, wenlan-mcp, standalone binary uploads, crates.io publishing for `wenlan-types` + `wenlan-mcp`, and npm publishing for `wenlan-mcp` + `@7xuanlu/origin`. It does NOT build a desktop bundle — origin-app builds its own DMG in its own repo.
 
 ### Branch protection
 
@@ -248,7 +248,7 @@ The fuzzy surfaces (eval numbers stale vs the current env-hash, design-doc/decis
 
 ## Architecture
 
-Origin is a **Personal Agent Memory Layer** — a local-first memory server on macOS where AI agents write what they learn and humans curate. Daemon-centric: a headless HTTP server owns all business logic and data; the desktop app, the CLI, and external MCP clients are all thin clients over its HTTP API.
+Wenlan is a **Personal Agent Memory Layer** — a local-first memory server on macOS where AI agents write what they learn and humans curate. Daemon-centric: a headless HTTP server owns all business logic and data; the desktop app, the CLI, and external MCP clients are all thin clients over its HTTP API.
 
 ### Workspace Layout
 
@@ -256,22 +256,22 @@ The repo is a Cargo workspace with 5 crates:
 
 | Crate | Role | Key dependencies |
 |---|---|---|
-| `crates/wenlan-types` | Shared API boundary types (request/response, memory, entities). Lightweight: serde + serde_json + anyhow only. Consumed by `origin-mcp`, `origin-app` (separate repo, via crates.io), and any other downstream tool. | serde |
+| `crates/wenlan-types` | Shared API boundary types (request/response, memory, entities). Lightweight: serde + serde_json + anyhow only. Consumed by `wenlan-mcp`, `origin-app` (separate repo, via crates.io), and any other downstream tool. | serde |
 | `crates/wenlan-core` | All business logic: DB, embeddings, LLM engine, search, classification, knowledge graph, distill cycles, pages, export, eval. **Must have NO axum or tauri dependencies.** | libSQL, FastEmbed, llama-cpp-2, hf-hub |
-| `crates/wenlan-server` | Headless HTTP daemon on `127.0.0.1:7878`. Depends on `origin-core`. Provides `install/uninstall/status` subcommands for launchd management. | axum, tower, clap |
-| `crates/wenlan-cli` | CLI binary `origin`. Talks to daemon HTTP via `origin-types` and owns setup/service commands. Subcommands: status/search/recall/store/list/agents/install/setup/model/key/doctor. | reqwest, clap |
-| `crates/wenlan-mcp` | MCP server binary that bridges MCP clients (Claude Code, Cursor, Codex, Claude Desktop, etc.) to the daemon HTTP API. Stdio + streamable-HTTP transports via the `rmcp` crate. Ships as a standalone binary + npm package (`npx -y origin-mcp`). | rmcp, reqwest, schemars |
+| `crates/wenlan-server` | Headless HTTP daemon on `127.0.0.1:7878`. Depends on `wenlan-core`. Provides `install/uninstall/status` subcommands for launchd management. | axum, tower, clap |
+| `crates/wenlan-cli` | CLI binary `origin`. Talks to daemon HTTP via `wenlan-types` and owns setup/service commands. Subcommands: status/search/recall/store/list/agents/install/setup/model/key/doctor. | reqwest, clap |
+| `crates/wenlan-mcp` | MCP server binary that bridges MCP clients (Claude Code, Cursor, Codex, Claude Desktop, etc.) to the daemon HTTP API. Stdio + streamable-HTTP transports via the `rmcp` crate. Ships as a standalone binary + npm package (`npx -y wenlan-mcp`). | rmcp, reqwest, schemars |
 
-The daemon (`origin-server`) is the single source of truth. External tools (the desktop app, MCP clients via `origin-mcp`, `origin` CLI, curl) all talk HTTP to the same daemon. `origin-mcp` source lives in this monorepo; at runtime it's a separate process the MCP client spawns.
+The daemon (`wenlan-server`) is the single source of truth. External tools (the desktop app, MCP clients via `wenlan-mcp`, `origin` CLI, curl) all talk HTTP to the same daemon. `wenlan-mcp` source lives in this monorepo; at runtime it's a separate process the MCP client spawns.
 
 ### Stack
 
 - **Daemon**: Rust, Axum 0.8 (HTTP), libSQL (Turso's SQLite fork — vectors, knowledge graph, documents), Tokio, FastEmbed (BGE-Base-EN-v1.5-Q, 768-dim, 512-token max), llama-cpp-2 (Qwen3-4B-Instruct-2507 via Metal GPU; Qwen3.5-9B optional), launchd for process management
 - **CLI** (`origin`): Rust, reqwest, clap
 
-### Database: libSQL (owned by origin-core)
+### Database: libSQL (owned by wenlan-core)
 
-One libSQL database at the platform data directory (`dirs::data_local_dir()/origin/memorydb/origin_memory.db`; on macOS, `~/Library/Application Support/origin/memorydb/origin_memory.db`), owned by `MemoryDB` in `crates/wenlan-core/src/db.rs`:
+One libSQL database at the platform data directory (`dirs::data_local_dir()/origin/memorydb/origin_memory.db`; on macOS, `~/Library/Application Support/wenlan/memorydb/origin_memory.db`), owned by `MemoryDB` in `crates/wenlan-core/src/db.rs`:
 - **Document chunks**: `chunks` table with `F32_BLOB(768)` vector column, DiskANN indexing (768-dim, BGE-Base-EN-v1.5-Q)
 - **Knowledge graph**: `entities`, `relations`, `observations` tables with FK cascades
 - **Full-text search**: FTS5 virtual table (`chunks_fts`) auto-synced via triggers
@@ -283,7 +283,7 @@ One libSQL database at the platform data directory (`dirs::data_local_dir()/orig
 
 ### Events: EventEmitter trait (no tauri::Emitter in core)
 
-Instead of passing `tauri::AppHandle` into business logic, `origin-core` defines an `EventEmitter` trait:
+Instead of passing `tauri::AppHandle` into business logic, `wenlan-core` defines an `EventEmitter` trait:
 
 ```rust
 // crates/wenlan-core/src/events.rs
@@ -297,13 +297,13 @@ pub struct NoopEmitter;
 - The desktop app (separate `origin-app` repo) provides a `TauriEmitter` adapter that wraps `AppHandle::emit`
 - `MemoryDB::new(db_path, emitter: Arc<dyn EventEmitter>)` takes the trait object
 
-This keeps `origin-core` framework-agnostic and testable with `NoopEmitter` in unit tests.
+This keeps `wenlan-core` framework-agnostic and testable with `NoopEmitter` in unit tests.
 
 ### IPC Surface
 
 All data flows through the daemon's HTTP API. The desktop app, CLI, and MCP clients all hit it.
 
-- **HTTP API**: Axum on `127.0.0.1:7878`, served by `origin-server`. Used by the desktop app, the `origin-mcp` MCP server (same workspace, separate binary process), the `origin` CLI, and any external tool.
+- **HTTP API**: Axum on `127.0.0.1:7878`, served by `wenlan-server`. Used by the desktop app, the `wenlan-mcp` MCP server (same workspace, separate binary process), the `origin` CLI, and any external tool.
   - General: `/api/health`, `/api/status`, `/api/search`, `/api/context`, `/api/chat-context`, `/api/ping`
   - Ingest: `/api/ingest/text`, `/api/ingest/webpage`, `/api/ingest/memory`
   - Memory CRUD: `/api/memory/store`, `/api/memory/search`, `/api/memory/confirm/{id}`, `/api/memory/list`, `/api/memory/delete/{id}`
@@ -329,11 +329,11 @@ The `origin` binary — a thin reqwest-based CLI for the daemon's HTTP API. Subc
 See `app/eval/AGENTS.md` "eval citation discipline" section for the full rules (single-run, schema-version, receipt-only, per-case visibility, layer attribution, commit policy). External-facing numbers MUST satisfy those rules.
 
 ### Crate boundaries
-- **origin-core must have NO tauri or axum dependencies.** Verify with `grep -rn "use tauri\|use axum" crates/wenlan-core/src/` — expect zero hits. Any event emission goes through the `EventEmitter` trait.
-- **origin-types must be lightweight.** Only serde + serde_json + anyhow. No chrono, no tokio, no heavy deps. These types are shared with `origin-mcp` (same workspace, Apache-2.0) and `origin-app` (AGPL-3.0 separate repo, consumes via crates.io), so adding heavy deps forces them downstream.
-- **Don't add business logic to origin-server.** Route handlers should call `origin-core` functions with state snapshots — the server's job is HTTP framing, not logic.
+- **wenlan-core must have NO tauri or axum dependencies.** Verify with `grep -rn "use tauri\|use axum" crates/wenlan-core/src/` — expect zero hits. Any event emission goes through the `EventEmitter` trait.
+- **wenlan-types must be lightweight.** Only serde + serde_json + anyhow. No chrono, no tokio, no heavy deps. These types are shared with `wenlan-mcp` (same workspace, Apache-2.0) and `origin-app` (AGPL-3.0 separate repo, consumes via crates.io), so adding heavy deps forces them downstream.
+- **Don't add business logic to wenlan-server.** Route handlers should call `wenlan-core` functions with state snapshots — the server's job is HTTP framing, not logic.
 - **Don't add new HTTP endpoints to the CLI.** Use existing daemon endpoints. If a CLI subcommand needs new data, add a daemon endpoint first.
-- **MCP wrappers in `origin-mcp` always typed-deserialize.** Every `_impl` method in `crates/wenlan-mcp/src/tools.rs` deserializes the daemon response into a typed wire struct from `origin-types` (e.g. `SearchPagesResponse { pages: Vec<Page> }`), never into `serde_json::Value`. Untyped responses silently emit whatever shape the daemon returns; typed deserialization fails loud on envelope-key drift. Mirror commit `4f545869` and PR #77.
+- **MCP wrappers in `wenlan-mcp` always typed-deserialize.** Every `_impl` method in `crates/wenlan-mcp/src/tools.rs` deserializes the daemon response into a typed wire struct from `wenlan-types` (e.g. `SearchPagesResponse { pages: Vec<Page> }`), never into `serde_json::Value`. Untyped responses silently emit whatever shape the daemon returns; typed deserialization fails loud on envelope-key drift. Mirror commit `4f545869` and PR #77.
 
 ### Ingest-path parity (training-serving skew)
 - **All post-store enrichment goes through `origin_core::ingest::run_canonical_enrichment`.** It is the ONE shared path for classify + extract + `apply_enrichment` + tags (Phase 1), entity/title/page enrichment (Phase 2), and dual-pool dedup/contradiction resolution (Phase 3). The server `handle_store_memory`, the eval seed pipeline, and the importer all call it. Do NOT re-implement a subset of enrichment in any consumer.
@@ -352,7 +352,7 @@ The recurring failure mode was not any single missing artifact — it was that s
 ### Async and locking
 - **Never hold a `tokio::sync::RwLock` read or write guard across `.await`.** Holding a read guard during an LLM call (which can take seconds) blocks all writers. Pattern: snapshot what you need from the guard into a scoped block that ends before the await, then call the async function with the cloned values. See `crates/wenlan-server/src/memory_routes.rs` `handle_store_memory` for an example of the post-ingest enrichment pattern.
 - **`Arc<MemoryDB>` is the sharing primitive.** `ServerState.db` is `Option<Arc<MemoryDB>>`. Clone the Arc out of the guard rather than borrowing through the guard.
-- **Daemon is the single writer.** Only `origin-server` opens the libSQL database. The desktop app and CLI never touch the DB directly — they talk HTTP.
+- **Daemon is the single writer.** Only `wenlan-server` opens the libSQL database. The desktop app and CLI never touch the DB directly — they talk HTTP.
 - **libSQL connection pattern**: `MemoryDB` holds `tokio::sync::Mutex<libsql::Connection>` internally. Never try to share a `libsql::Connection` across tasks directly (`Send` but not `Sync`).
 
 ### SQL, strings, data
@@ -365,15 +365,15 @@ The recurring failure mode was not any single missing artifact — it was that s
 ### Dev environment gotchas
 
 **Daemon lifecycle:**
-- **Worktree daemon mismatch**: The daemon on port 7878 can be from launchd, main branch, a stale worktree, or a previous session. Always verify which binary is running: `lsof -i :7878` to get the PID, then `lsof -p <PID> | grep "txt.*origin-server"` to see the binary path and size. Kill and restart from the current working tree.
-- **Stale binary after merge/pull**: `cargo build -p origin-server` may report "0.64s Finished" without recompiling if the source timestamps haven't changed (e.g., after `git pull` fast-forward). Touch a source file to force recompilation: `touch crates/wenlan-server/src/router.rs && cargo build -p origin-server`. Verify the binary timestamp matches: `ls -la target/debug/origin-server`.
+- **Worktree daemon mismatch**: The daemon on port 7878 can be from launchd, main branch, a stale worktree, or a previous session. Always verify which binary is running: `lsof -i :7878` to get the PID, then `lsof -p <PID> | grep "txt.*wenlan-server"` to see the binary path and size. Kill and restart from the current working tree.
+- **Stale binary after merge/pull**: `cargo build -p wenlan-server` may report "0.64s Finished" without recompiling if the source timestamps haven't changed (e.g., after `git pull` fast-forward). Touch a source file to force recompilation: `touch crates/wenlan-server/src/router.rs && cargo build -p wenlan-server`. Verify the binary timestamp matches: `ls -la target/debug/wenlan-server`.
 - **kill vs kill -9**: `kill <PID>` may not terminate the daemon cleanly. Always use `kill -9 <PID>` and verify with `lsof -ti :7878` afterward. If the port is still in use, another process took over.
-- **Worktree target directories are per-worktree**: Each `.worktrees/<name>` checkout has its own `target/`. Building inside a worktree writes to that worktree's `target/`, not the main repo's. Verify a binary's source with `lsof -p <PID> | grep origin-server` so you don't run a stale binary from a different worktree.
-- **Upgrading the daemon requires a restart**: installing a new binary does NOT replace an already-running daemon -- the new process detects the healthy incumbent on port 7878 and exits (`origin-server/src/main.rs`). `origin install` now stops the running service before reinstalling, and `origin restart` (stop then start) reloads it explicitly. The MCP version handshake surfaces a stale daemon (`VersionStatus::DaemonOutdated`) and points users at `origin restart`. Enabling the cross-encoder (`WENLAN_RERANKER_ENABLED=1`) blocks startup on a one-time ~1.1GB model download and, on failure, serves with no rerank -- `/api/status` now reports `reranker` as `disabled` / `active` / `failed` so the degraded state is visible.
+- **Worktree target directories are per-worktree**: Each `.worktrees/<name>` checkout has its own `target/`. Building inside a worktree writes to that worktree's `target/`, not the main repo's. Verify a binary's source with `lsof -p <PID> | grep wenlan-server` so you don't run a stale binary from a different worktree.
+- **Upgrading the daemon requires a restart**: installing a new binary does NOT replace an already-running daemon -- the new process detects the healthy incumbent on port 7878 and exits (`wenlan-server/src/main.rs`). `origin install` now stops the running service before reinstalling, and `origin restart` (stop then start) reloads it explicitly. The MCP version handshake surfaces a stale daemon (`VersionStatus::DaemonOutdated`) and points users at `origin restart`. Enabling the cross-encoder (`WENLAN_RERANKER_ENABLED=1`) blocks startup on a one-time ~1.1GB model download and, on failure, serves with no rerank -- `/api/status` now reports `reranker` as `disabled` / `active` / `failed` so the degraded state is visible.
 
 **Other:**
 - **Metal/ggml on macOS Tahoe 26.x**: `ggml_metal_init` may fail even though native Metal works. The daemon auto-degrades and continues without LLM. Not a code bug. Check for competing GPU processes: `pgrep -la origin`.
-- **Dev and prod share data by default**: Both use port 7878 and the platform data directory (on macOS, `~/Library/Application Support/origin/`). For isolated testing, override explicitly: `WENLAN_PORT=7879 WENLAN_DATA_DIR=/tmp/origin-test cargo run -p origin-server`.
+- **Dev and prod share data by default**: Both use port 7878 and the platform data directory (on macOS, `~/Library/Application Support/wenlan/`). For isolated testing, override explicitly: `WENLAN_PORT=7879 WENLAN_DATA_DIR=/tmp/origin-test cargo run -p wenlan-server`.
 
 ### Worktree cleanup after squash-merge
 
@@ -390,10 +390,10 @@ Run this hygiene pass roughly once a week or whenever `git worktree list` exceed
 - `WENLAN_LLM_SLOT_BACKFILL`: continuous-batch slot backfill for the on-device LLM (`OnDeviceProvider`). **DEFAULT OFF (opt-in; enable with `1`/`true`/`yes`/`on`).** When ON, a continuous-batch call may drain more than `m` (= `WENLAN_LLM_PARALLEL_SEQS`) immediately-available requests and the engine keeps all `m` KV slots full by backfilling the next queued request the moment a slot finishes — so decode width stays at `m` instead of raggedly draining `m`→1 as short outputs (classify ~20 tok) finish before long ones (entity ~100 tok). Fixes the decode-bound enrichment throughput floor (the seed enrichment batch measured 40% prefill / 59% decode; the 59% is this ragged drain). Pure throughput optimization, semantically-equivalent outputs (same prompts, same per-request sampler seeds; cross-slot KV is cleared on reuse). The drain cap is `m * 4` (m≤8 → ≤32), bounding per-call latency since a drained batch's outputs return together. **Default-OFF** because it is a structural rewrite of the SHARED inference path that CI cannot validate on Metal; enable it for throughput-bound paths (bulk ingest, eval seed firehose) where the latency-return-together tradeoff is acceptable. When OFF (the default) the drain caps at `m` — one slot per request, byte-identical to the pre-backfill engine. The no-overflow path (queue ≤ `m`, e.g. a single memory's enrichment) never backfills regardless of the flag. Parsed by `slot_backfill_enabled()` in `crates/wenlan-core/src/llm_provider.rs`; the engine scheduling lives in `LlmEngine::run_inference_continuous_batch` (`engine.rs`, `BackfillScheduler`). Follow-ups before any default-ON flip: separate live/bulk queues (or priority gating) so live enrichment can never inherit firehose head-of-line latency, and stochastic/cancellation/timeout fuzzing beyond the GPU grounding oracle. Correctness validated by `eval::engine_throughput::tests::backfill_grounding` (KV-reuse cross-contamination oracle, L7 GPU) + the wall-clock A/B `backfill_throughput_ab`.
 - `WENLAN_LLM_PREFIX_KV_CACHE`: prefill-side prefix-KV cache for the on-device LLM continuous batch (`OnDeviceProvider`). **DEFAULT OFF (opt-in; enable with `1`/`true`/`yes`/`on`).** When ON, `LlmEngine::run_inference_continuous_batch` (`engine.rs`) detects the longest token prefix shared by every sequence in the batch (the fixed chatml system prompt + task framing — ~80% of a ~225-token enrichment prompt), primes that prefix's KV **once** into seq 0, fans it to the other slots via `copy_kv_cache_seq`, and then prefills only each request's unique suffix at positions `[prefix_len, ..)`. The per-slot pre-prefill clear preserves `[0, prefix_len)` (clears only `[prefix_len, ..)`), so a slot-backfilled request reuses the resident prefix too — the prefix is encoded exactly once for the whole batch. Attacks the **prefill** half of the enrichment batch (measured 40% prefill / 59% decode via `[batch_timing]`); complementary to `WENLAN_LLM_SLOT_BACKFILL`, which attacks the decode half. Honest ceiling ~1.5x on the prefill portion, not the whole batch. **Semantically equivalent to a full per-seq prefill** — a prefix token's KV is causally closed and batch-composition-independent in exact arithmetic, so the algebra is identical; as with all batched GPU inference, intermediate logits can still differ at the ULP level (greedy decode absorbs this — the L7 equivalence oracle asserts byte-identity at temperature 0). A pure throughput optimization, not a semantic change. The cache engages only on TRANSFORMER models (gated off when `model.is_recurrent()` or `model.is_hybrid()` — e.g. Qwen3.5-9B's DeltaNet hybrid layers, whose compressed recurrent state is not the position-addressable per-token K/V that prefix sharing requires), and only when there are ≥ 2 sequences, ≥ 2 KV slots, and the shared prefix clears `PREFIX_KV_MIN_TOKENS` (32); otherwise, and on any priming failure, it falls back to byte-identical full per-seq prefill (`prefix_len = 0`). **Default-OFF** because, like slot backfill, it mutates the SHARED on-device inference path's KV handling, which CI cannot validate on Metal. Parsed by `prefix_kv_cache_enabled()`; the prefix-length seam is `reusable_prefix_len()` / `longest_common_prefix_len()` in `crates/wenlan-core/src/engine.rs` (pure, unit-tested). Correctness validated by `eval::engine_throughput` (fresh-vs-cached equivalence oracle, L7 GPU) + the `[batch_timing]` `prime_ms`/`prefill_ms` A/B.
 - Log filter default is `warn` — add modules explicitly for `info` logs (e.g., `origin_core::db=info`, `origin_server=info`)
-- All local data stored in the platform data directory (`dirs::data_local_dir()/origin/`; on macOS, `~/Library/Application Support/origin/`) — MemoryDB, config, activities, tags
-- Crate names: `origin-types`, `origin-core`, `origin-server`, `origin` (CLI), `origin-mcp` — all in this workspace. The desktop app crate `origin-app` lives in [7xuanlu/origin-app](https://github.com/7xuanlu/origin-app).
-- **Licenses**: all five workspace crates (`origin-types`, `origin-core`, `origin-server`, `origin` CLI, `origin-mcp`) are **Apache-2.0** via workspace inheritance. The desktop app in `origin-app` is **AGPL-3.0-only** (separate repo).
-- `origin-mcp` is in-tree at `crates/wenlan-mcp/` (merged from the old `7xuanlu/origin-mcp` repo on 2026-05-09 via `git subtree`). It talks to the daemon via HTTP at runtime and is published to npm as a standalone binary (`npx -y origin-mcp`).
+- All local data stored in the platform data directory (`dirs::data_local_dir()/origin/`; on macOS, `~/Library/Application Support/wenlan/`) — MemoryDB, config, activities, tags
+- Crate names: `wenlan-types`, `wenlan-core`, `wenlan-server`, `origin` (CLI), `wenlan-mcp` — all in this workspace. The desktop app crate `origin-app` lives in [7xuanlu/origin-app](https://github.com/7xuanlu/origin-app).
+- **Licenses**: all five workspace crates (`wenlan-types`, `wenlan-core`, `wenlan-server`, `origin` CLI, `wenlan-mcp`) are **Apache-2.0** via workspace inheritance. The desktop app in `origin-app` is **AGPL-3.0-only** (separate repo).
+- `wenlan-mcp` is in-tree at `crates/wenlan-mcp/` (merged from the old `7xuanlu/wenlan-mcp` repo on 2026-05-09 via `git subtree`). It talks to the daemon via HTTP at runtime and is published to npm as a standalone binary (`npx -y wenlan-mcp`).
 
 ### Retrieval helpers location (PR-A, 2026-05-27)
 

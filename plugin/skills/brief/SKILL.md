@@ -1,19 +1,19 @@
 ---
 name: brief
 description: >
-  Session-start briefing from Origin. Reads the project status file (the
+  Session-start briefing from Wenlan. Reads the project status file (the
   /handoff-maintained ledger of Active/Backlog work), then loads identity,
   preferences, and topic-relevant memories so the agent walks in with context.
   Surfaces any memories the daemon has flagged for human revision before the
   session uses them. Invoked as `/brief [topic]`. Call FIRST at session start,
-  before any other Origin verb.
+  before any other Wenlan verb.
 argument-hint: "[topic]"
 allowed-tools: ["Bash", "mcp__plugin_origin_origin__context", "mcp__plugin_origin_origin__recall", "mcp__plugin_origin_origin__list_pending_revisions", "mcp__plugin_origin_origin__accept_revision", "mcp__plugin_origin_origin__dismiss_revision"]
 ---
 
 # /brief
 
-Pull a curated session brief from Origin. Three sources, in order:
+Pull a curated session brief from Wenlan. Three sources, in order:
 
 1. **Project status file** — what `/handoff` last wrote. Authoritative for
    "what's left to do" right now.
@@ -90,7 +90,7 @@ context(topic="<args or inferred>", space=<resolved>)
 
 ## When to use
 
-- Session start — call BEFORE any other Origin tool.
+- Session start — call BEFORE any other Wenlan tool.
 - Major topic shift mid-session.
 - User says "catch me up", "what's the background on X", "remind me about Y".
 - Mid-session check-in to confirm assumptions.
@@ -133,7 +133,7 @@ Each `PendingRevisionItem` carries `target_source_id`, `revision_source_id`, `re
 Pending revisions (<N> total, top 3 shown):
 
 1. target: mem_abc123  (proposed by <source_agent or "daemon">)
-   revision: "Origin uses Turso libSQL fork (libSQL-server) for vectors..."
+   revision: "Wenlan uses Turso libSQL fork (libSQL-server) for vectors..."
    Action: accept (replace original) | dismiss (drop revision) | skip
 
 2. ...

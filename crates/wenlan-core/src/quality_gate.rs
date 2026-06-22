@@ -776,7 +776,7 @@ mod tests {
     #[test]
     fn test_admits_real_fact() {
         let g = gate();
-        let r = g.check_content("Origin uses Tauri 2 with a Rust backend and React 19 frontend");
+        let r = g.check_content("Wenlan uses Tauri 2 with a Rust backend and React 19 frontend");
         assert!(r.admitted);
     }
 
@@ -995,13 +995,13 @@ mod integration_tests {
         let legit: Vec<&str> = vec![
             "User prefers dark mode for all code editors and terminal applications",
             "Decided to use libSQL instead of PostgreSQL because it supports embedded vector search natively",
-            "The Origin app uses Tauri 2 with a React 19 frontend and Rust backend running on macOS",
+            "The Wenlan app uses Tauri 2 with a React 19 frontend and Rust backend running on macOS",
             "Project deadline is April 15 for the v1 launch milestone with three features remaining",
             "User is a senior software engineer specializing in Rust and distributed systems",
             "Always run cargo test before committing to avoid breaking the CI pipeline checks",
             "The database migration from SQLite to libSQL was completed in February with zero data loss",
             "Lucian prefers TDD workflow with separate agents for test writing versus implementation code",
-            "Origin uses FastEmbed bge-base-en-v1.5 for embeddings with 768 dimensions and DiskANN indexing",
+            "Wenlan uses FastEmbed bge-base-en-v1.5 for embeddings with 768 dimensions and DiskANN indexing",
             "The memory distillation pipeline clusters similar memories and generates consolidated summaries",
             "Knowledge graph uses entities relations and observations tables with FK cascade deletes enabled",
             "Remote access tunnel connects via Cloudflare Worker relay for stable MCP URLs to agents",
@@ -1203,7 +1203,7 @@ mod integration_tests {
             ("mem_fmt",     "Auto-format on save is enabled using rustfmt for Rust and prettier for TypeScript"),
             // Architecture decisions
             ("mem_db",      "Decided to use libSQL for the embedded database because it supports vectors FTS5 and knowledge graph natively"),
-            ("mem_tauri",   "Origin uses Tauri 2 with React 19 frontend and Rust backend on macOS"),
+            ("mem_tauri",   "Wenlan uses Tauri 2 with React 19 frontend and Rust backend on macOS"),
             ("mem_embed",   "Embeddings use FastEmbed bge-base-en-v1.5 model producing 768-dimensional vectors stored in DiskANN index"),
             ("mem_deploy",  "Application is distributed as a macOS .app bundle built via GitHub Actions CI pipeline"),
             // Personal facts
@@ -1215,7 +1215,7 @@ mod integration_tests {
             ("mem_tdd",     "Always write tests before implementation code following strict TDD workflow with separate agents"),
             ("mem_deadline","v1 launch target is end of April with ChatGPT integration as the highest priority feature"),
             ("mem_stack",   "Frontend uses React 19 with TanStack Query 5 Tailwind CSS 4 and Vite as the build tool"),
-            ("mem_mcp",     "Origin exposes an MCP server on port 7878 that agents connect to for reading and writing memories"),
+            ("mem_mcp",     "Wenlan exposes an MCP server on port 7878 that agents connect to for reading and writing memories"),
             // Identity facts
             ("mem_name",    "User full name is Lucian and preferred pronoun is he slash him in all written communications"),
             ("mem_style",   "Communication style is direct and concise with preference for bullet points over long prose"),
@@ -1269,7 +1269,7 @@ mod integration_tests {
              "semantic", "mem_db"),
 
             // mem_tauri paraphrases
-            ("Origin is built with Tauri 2 using a React 19 UI layer and a Rust backend targeting macOS",
+            ("Wenlan is built with Tauri 2 using a React 19 UI layer and a Rust backend targeting macOS",
              "structural", "mem_tauri"),
             ("The desktop app combines a Rust Tauri backend with a React frontend and runs on macOS",
              "semantic", "mem_tauri"),
@@ -1299,9 +1299,9 @@ mod integration_tests {
              "semantic", "mem_deadline"),
 
             // mem_mcp paraphrases
-            ("Origin runs an MCP server on port 7878 that external agents use to store and retrieve memories",
+            ("Wenlan runs an MCP server on port 7878 that external agents use to store and retrieve memories",
              "structural", "mem_mcp"),
-            ("Agents connect to the MCP server at port 7878 to read from and write memories into Origin",
+            ("Agents connect to the MCP server at port 7878 to read from and write memories into Wenlan",
              "semantic", "mem_mcp"),
 
             // mem_name paraphrases
@@ -1368,7 +1368,7 @@ mod integration_tests {
              "different process fact"),
 
             // Same domain (communication), different fact
-            ("Meeting notes are captured in Obsidian and synced with the Origin memory store after each call",
+            ("Meeting notes are captured in Obsidian and synced with the Wenlan memory store after each call",
              "different note-taking fact"),
             ("Status updates are shared as concise bullet-point summaries no longer than five lines per update",
              "different comms fact"),

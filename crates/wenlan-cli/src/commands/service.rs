@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: Apache-2.0
-//! Cross-platform service registration for the Origin daemon.
+//! Cross-platform service registration for the Wenlan daemon.
 //!
 //! - macOS: launchd LaunchAgent via the `service-manager` crate.
 //! - Linux: systemd --user unit via the `service-manager` crate.
 //! - Windows: per-user ONLOGON Task Scheduler entry via `schtasks.exe`.
-//!   We bypass `service-manager`'s `ScServiceManager` because origin-server
+//!   We bypass `service-manager`'s `ScServiceManager` because wenlan-server
 //!   is a plain console app and does not implement the Windows Service
 //!   Control Protocol (`sc start` would time out at 30s with error 1053).
 
@@ -60,14 +60,14 @@ fn manager() -> Result<Box<dyn ServiceManager>> {
     Ok(m)
 }
 
-/// Resolves the platform-specific path to the Origin service unit file.
+/// Resolves the platform-specific path to the Wenlan service unit file.
 ///
 /// Mirrors the on-disk path that `service-manager` 0.11 actually writes:
 /// - macOS (launchd): `~/Library/LaunchAgents/<qualified_name>.plist`
 ///   (`to_qualified_name()` keeps the qualifier, e.g. `com.wenlan.server.plist`).
 /// - Linux (systemd-user): `<config_dir>/systemd/user/<script_name>.service`
 ///   (`ServiceLabel::to_script_name()` joins org+app with `-` and DROPS the
-///   qualifier, so `com.wenlan.server` becomes `origin-server.service`).
+///   qualifier, so `com.wenlan.server` becomes `wenlan-server.service`).
 /// - Windows: no on-disk unit file. The scheduled task lives in the Task
 ///   Scheduler database — see `is_installed()` for the schtasks-based probe.
 #[cfg(not(target_os = "windows"))]
@@ -100,7 +100,7 @@ fn current_server_path() -> Result<PathBuf> {
     }
     if !server.exists() {
         anyhow::bail!(
-            "origin-server not found next to origin at {}. Re-run the Origin installer.",
+            "wenlan-server not found next to origin at {}. Re-run the Wenlan installer.",
             server.display()
         );
     }
@@ -108,7 +108,7 @@ fn current_server_path() -> Result<PathBuf> {
 }
 
 /// Resolves the data root the daemon will use at runtime. Mirrors
-/// `crates/origin-server/src/main.rs` so launchd log paths line up with the
+/// `crates/wenlan-server/src/main.rs` so launchd log paths line up with the
 /// on-disk layout the daemon owns. macOS-only because launchd is the only
 /// service backend that consumes pre-rendered log paths today.
 #[cfg(target_os = "macos")]
@@ -185,13 +185,13 @@ fn build_launchd_plist(
 pub fn install() -> Result<()> {
     #[cfg(target_os = "windows")]
     {
-        // origin-server is a plain console app and does not speak the Windows
+        // wenlan-server is a plain console app and does not speak the Windows
         // Service Control Protocol, so sc.exe install + start would time out
         // at 30s with error 1053. Use Task Scheduler instead: register a
         // per-user ONLOGON task and trigger it immediately. Matches the
         // user-scope semantics of launchd LaunchAgent (macOS) and
         // systemd --user (Linux), without needing a service dispatcher in
-        // origin-server.
+        // wenlan-server.
         let program = current_server_path()?;
         let program_str = program.to_string_lossy();
         let _ = std::process::Command::new("schtasks.exe")
@@ -212,7 +212,7 @@ pub fn install() -> Result<()> {
         )?;
         run_schtasks(&["/run", "/tn", WINDOWS_TASK_NAME], "run scheduled task")?;
         println!(
-            "Installed and started Windows scheduled task '{}' (origin-server).",
+            "Installed and started Windows scheduled task '{}' (wenlan-server).",
             WINDOWS_TASK_NAME
         );
         return Ok(());
@@ -226,7 +226,7 @@ pub fn install() -> Result<()> {
     // Stop any daemon already running under this label so the reinstall swaps
     // the binary. Without this, the freshly-installed binary detects the
     // healthy incumbent on port 7878 and exits, leaving the OLD daemon running
-    // (origin-server/src/main.rs:582-615). Best-effort: errors if not running.
+    // (wenlan-server/src/main.rs:582-615). Best-effort: errors if not running.
     let _ = m.stop(ServiceStopCtx {
         label: label_value.clone(),
     });
@@ -249,8 +249,8 @@ pub fn install() -> Result<()> {
             // builds, but creating ahead of time guarantees the daemon never
             // racing the dir into existence on first start.
             let _ = std::fs::create_dir_all(&log_dir);
-            let stdout_path = log_dir.join("origin-server.stdout.log");
-            let stderr_path = log_dir.join("origin-server.stderr.log");
+            let stdout_path = log_dir.join("wenlan-server.stdout.log");
+            let stderr_path = log_dir.join("wenlan-server.stderr.log");
             Some(build_launchd_plist(
                 &program,
                 &stdout_path,
@@ -318,13 +318,13 @@ pub fn uninstall() -> Result<()> {
     Ok(())
 }
 
-/// Restart the Origin daemon: stop the running process, then start the freshly
+/// Restart the Wenlan daemon: stop the running process, then start the freshly
 /// registered binary. Required after an upgrade — installing a new binary does
 /// not replace an already-running daemon (the new process detects the healthy
-/// incumbent on port 7878 and exits). See origin-server/src/main.rs:582-615.
+/// incumbent on port 7878 and exits). See wenlan-server/src/main.rs:582-615.
 pub fn restart() -> Result<()> {
     if !is_installed() {
-        anyhow::bail!("Origin service is not installed. Run `origin install` first.");
+        anyhow::bail!("Wenlan service is not installed. Run `origin install` first.");
     }
 
     #[cfg(target_os = "windows")]

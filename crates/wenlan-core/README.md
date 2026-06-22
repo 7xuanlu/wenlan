@@ -1,6 +1,6 @@
-# origin-core
+# wenlan-core
 
-Business logic for Origin. This crate has no Axum or Tauri dependency. The daemon, MCP server, CLI, and future clients go through this layer rather than owning storage or memory behavior themselves.
+Business logic for Wenlan. This crate has no Axum or Tauri dependency. The daemon, MCP server, CLI, and future clients go through this layer rather than owning storage or memory behavior themselves.
 
 ## What Lives Here
 
@@ -16,7 +16,7 @@ Business logic for Origin. This crate has no Axum or Tauri dependency. The daemo
 ## Core Flow
 
 1. A client stores text through the daemon.
-2. `origin-core` validates and stores the raw memory.
+2. `wenlan-core` validates and stores the raw memory.
 3. Post-ingest enrichment links entities, deduplicates, and queues review proposals.
 4. Distill cycles compile related memories into pages and refresh existing pages.
 5. Recall combines vector search, full-text search, graph context, and relevant pages.

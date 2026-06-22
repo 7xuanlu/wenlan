@@ -8,10 +8,10 @@ use wenlan_core::engine::LlmEngine;
 use wenlan_core::prompts::PromptRegistry;
 
 const MEMORIES: &[&str] = &[
-    "[mem_1] Origin is a personal knowledge wiki app built with Tauri 2 and Rust.",
-    "[mem_2] Origin uses libSQL (Turso's SQLite fork) for storage with F32_BLOB(384) vector columns.",
+    "[mem_1] Wenlan is a personal knowledge wiki app built with Tauri 2 and Rust.",
+    "[mem_2] Wenlan uses libSQL (Turso's SQLite fork) for storage with F32_BLOB(384) vector columns.",
     "[mem_3] The on-device LLM is Qwen3-4B-Instruct-2507 running on Metal GPU via llama-cpp-2.",
-    "[mem_4] Origin ingests memories from file watching, clipboard, and quick capture.",
+    "[mem_4] Wenlan ingests memories from file watching, clipboard, and quick capture.",
     "[mem_5] The app is AGPL-3.0 licensed and targets macOS as the primary platform.",
     "[mem_6] FastEmbed provides BGE-Small-EN-v1.5 embeddings at 384 dimensions.",
     "[mem_7] Hybrid search combines vector similarity with FTS5 via Reciprocal Rank Fusion (RRF).",
@@ -23,7 +23,7 @@ const MEMORIES: &[&str] = &[
     "[mem_13] AFK detection triggers after 60 seconds of idle via CGEventSource.",
     "[mem_14] Two-pass capture pipeline: immediate OCR/chunk/upsert, then async LLM reformat.",
     "[mem_15] The refinery steep cycle runs every 2 hours — decay, recaps, entity extraction, distillation.",
-    "[mem_16] Origin stores all data locally under the platform data directory (resolved by the dirs crate per OS).",
+    "[mem_16] Wenlan stores all data locally under the platform data directory (resolved by the dirs crate per OS).",
     "[mem_17] The HTTP server runs on 127.0.0.1:7878 using Axum 0.8 — plus a Unix socket.",
     "[mem_18] Entity extraction uses the EXTRACT_KNOWLEDGE_GRAPH prompt with JSON output.",
     "[mem_19] Concept distillation produces wiki-style pages with TLDR, headers, and [[wikilinks]].",
@@ -32,7 +32,7 @@ const MEMORIES: &[&str] = &[
     "[mem_22] DiskANN vector indexing is built into libSQL for fast semantic search at scale.",
     "[mem_23] React Query (TanStack v5) manages frontend state; module stores for cross-unmount state.",
     "[mem_24] The focus sensor polls cursor position at 10Hz from a dedicated std::thread.",
-    "[mem_25] Origin exposes ~92 Tauri commands from search.rs called via invoke() wrappers.",
+    "[mem_25] Wenlan exposes ~92 Tauri commands from search.rs called via invoke() wrappers.",
     "[mem_26] Community detection runs before distillation to inform cluster formation.",
     "[mem_27] Recap generation uses the DETECT_PATTERN prompt on 30-minute memory bursts.",
     "[mem_28] BYOK model routing: synthesis_llm -> api_llm -> external_llm -> on_device.",
@@ -151,7 +151,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("Model loaded.\n");
 
     let memories_block = MEMORIES.join("\n\n");
-    let user = format!("Topic: Origin Architecture\n\n{}", memories_block);
+    let user = format!("Topic: Wenlan Architecture\n\n{}", memories_block);
     let prompt = build_prompt(&prompts.distill_page, &user);
     let prompt_chars = prompt.len();
 

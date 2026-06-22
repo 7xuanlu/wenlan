@@ -1,7 +1,7 @@
 ---
 name: help
 description: >
-  One-screen quick reference for the Origin plugin. Lists the daily
+  One-screen quick reference for the Wenlan plugin. Lists the daily
   verbs, the daily flow, where data lives, and how to view it without a
   GUI. Use when the user says "help", "what can I do", "list origin
   commands", "how do I use origin", or invokes `/help`.
@@ -10,7 +10,7 @@ allowed-tools: []
 
 # /help
 
-Print the Origin plugin reference card. Read-only — never calls a tool.
+Print the Wenlan plugin reference card. Read-only — never calls a tool.
 
 ## How to invoke
 
@@ -18,9 +18,9 @@ When triggered, output the block below verbatim. No editing, no
 abbreviating, no embellishing. The user is asking for the menu.
 
 ```
-Origin plugin — daily verbs
+Wenlan plugin — daily verbs
 
-  /init         set up Origin (auto-installs daemon + local memory)
+  /init         set up Wenlan (auto-installs daemon + local memory)
   /brief        load identity + topic context (start of session)
   /capture <x>  save one durable memory in flow
   /recall <q>   search local memory

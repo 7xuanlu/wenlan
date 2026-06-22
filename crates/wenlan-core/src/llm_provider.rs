@@ -20,7 +20,7 @@ use crate::engine::LlmEngine;
 
 // ---------------------------------------------------------------------------
 // Readiness hook — fires exactly once per process when an LLM provider first
-// successfully serves traffic. Used by origin-server to trigger the
+// successfully serves traffic. Used by wenlan-server to trigger the
 // `intelligence-ready` onboarding milestone.
 //
 // The hook is a process-level one-shot (shared across provider instances):
@@ -1956,7 +1956,7 @@ mod tests {
     /// A hook that uses bare `tokio::spawn(...)` therefore panics with
     /// "there is no reactor running, must be called from the context of a
     /// Tokio 1.x runtime" — exactly what was observed at `main.rs:420` when
-    /// the panic killed the LLM worker on 2026-04-16 (see `/tmp/origin-server.log`).
+    /// the panic killed the LLM worker on 2026-04-16 (see `/tmp/wenlan-server.log`).
     ///
     /// The correct pattern is to capture a `tokio::runtime::Handle` at hook
     /// construction time (inside an async/Tokio context) and use
