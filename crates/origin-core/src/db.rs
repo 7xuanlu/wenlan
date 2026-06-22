@@ -280,6 +280,56 @@ pub fn compute_rerank_fetch_pool(
     limit.saturating_mul(multiplier).max(floor).max(limit)
 }
 
+/// Handler-layer cross-encoder rerank for the LIGHT paths (quick `/api/search`,
+/// context `/api/chat-context`). Reorders `results` by the cross-encoder and
+/// returns the top `limit`.
+///
+/// Deliberately a STANDALONE step, NOT folded into `search_memory`, so internal
+/// callers (`search_corrections_by_topic`, `verify_page`) that call `search_memory`
+/// directly never get — or pay for — CE. The daemon handler fetches a widened pool
+/// via plain `search_memory`, then calls this. On reranker error / empty output the
+/// input order is preserved. The sync CE runs off the async runtime via
+/// `spawn_blocking`. No score blend (that is a deep-path opt-in); the CE score
+/// replaces the prior score directly.
+pub async fn rerank_results_light(
+    reranker: Arc<dyn crate::reranker::Reranker>,
+    query: &str,
+    mut results: Vec<SearchResult>,
+    limit: usize,
+) -> Vec<SearchResult> {
+    if results.len() > 1 {
+        let candidates: Vec<(String, String)> = results
+            .iter()
+            .map(|r| (r.id.clone(), r.content.chars().take(512).collect()))
+            .collect();
+        let query_owned = query.to_string();
+        match tokio::task::spawn_blocking(move || reranker.rerank(&query_owned, &candidates)).await
+        {
+            Ok(Ok(scored)) if !scored.is_empty() => {
+                let ce_map: HashMap<String, f32> = scored.into_iter().collect();
+                for r in &mut results {
+                    if let Some(&s) = ce_map.get(&r.id) {
+                        r.score = s;
+                    }
+                }
+                results.sort_by(|a, b| {
+                    b.score
+                        .partial_cmp(&a.score)
+                        .unwrap_or(std::cmp::Ordering::Equal)
+                        .then_with(|| a.source_id.cmp(&b.source_id))
+                });
+            }
+            Ok(Ok(_)) => {} // empty rerank output -> keep original order
+            Ok(Err(e)) => {
+                log::warn!("[reranker-light] rerank err: {e}; keeping original order")
+            }
+            Err(e) => log::warn!("[reranker-light] join failed: {e}; keeping original order"),
+        }
+    }
+    results.truncate(limit);
+    results
+}
+
 /// True iff `ORIGIN_ENABLE_PAGE_CHANNEL` is set to a truthy value
 /// (`1`, `true`, or `yes`, case-insensitive). The page-channel is OPT-IN:
 /// unset or a falsey value (`0`/`false`/`no`/"") leaves it disabled.
@@ -31657,6 +31707,66 @@ pub(crate) mod tests {
             merged_from: None,
             last_delta_summary: None,
         }
+    }
+
+    #[tokio::test]
+    async fn rerank_results_light_reorders_and_truncates() {
+        use crate::reranker::Reranker;
+        // Scores by position so the LAST candidate wins — proves the helper reorders
+        // by CE score, not input order.
+        struct RevReranker;
+        impl Reranker for RevReranker {
+            fn rerank(
+                &self,
+                _q: &str,
+                c: &[(String, String)],
+            ) -> Result<Vec<(String, f32)>, OriginError> {
+                Ok(c.iter()
+                    .enumerate()
+                    .map(|(i, (id, _))| (id.clone(), i as f32))
+                    .collect())
+            }
+            fn model_id(&self) -> &str {
+                "rev"
+            }
+        }
+        let results = vec![
+            mk_result("a", "alpha", 0.9),
+            mk_result("b", "bravo", 0.5),
+            mk_result("c", "charlie", 0.1),
+        ];
+        let out = rerank_results_light(Arc::new(RevReranker), "q", results, 2).await;
+        assert_eq!(out.len(), 2, "truncated to limit");
+        assert_eq!(out[0].source_id, "c", "highest CE score first");
+        assert_eq!(out[1].source_id, "b");
+    }
+
+    #[tokio::test]
+    async fn rerank_results_light_keeps_order_on_reranker_error() {
+        use crate::reranker::Reranker;
+        struct ErrReranker;
+        impl Reranker for ErrReranker {
+            fn rerank(
+                &self,
+                _q: &str,
+                _c: &[(String, String)],
+            ) -> Result<Vec<(String, f32)>, OriginError> {
+                Err(OriginError::Llm("boom".into()))
+            }
+            fn model_id(&self) -> &str {
+                "err"
+            }
+        }
+        let results = vec![
+            mk_result("a", "alpha", 0.9),
+            mk_result("b", "bravo", 0.5),
+            mk_result("c", "charlie", 0.1),
+        ];
+        let out = rerank_results_light(Arc::new(ErrReranker), "q", results, 2).await;
+        // Reranker error -> original order preserved, still truncated to limit.
+        assert_eq!(out.len(), 2);
+        assert_eq!(out[0].source_id, "a");
+        assert_eq!(out[1].source_id, "b");
     }
 
     /// Test A — boost-only: graph-ON lifts the concept-linked memory above an
