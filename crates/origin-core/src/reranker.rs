@@ -218,6 +218,50 @@ fn reranker_model_from_env() -> fastembed::RerankerModel {
     }
 }
 
+/// Reranker activation mode, selected by `ORIGIN_RERANKER_MODE`.
+///
+/// Governs WHICH retrieval paths get a cross-encoder and which model:
+/// - `Off` (default): no CE anywhere — byte-identical to the pre-mode daemon.
+/// - `Lite`: the light turbo CE (`JINARerankerV1TurboEn`) on the quick
+///   (`/api/search`) and context (`/api/chat-context`) paths AND on an explicit
+///   `rerank=true` deep search; the heavy bge-base model is not loaded.
+/// - `Full`: turbo on quick/context, plus the heavy `BGERerankerBase` (pool-10)
+///   on the explicit `rerank=true` deep path.
+///
+/// Distinct from the legacy `ORIGIN_RERANKER_ENABLED=1` switch, which — with
+/// `ORIGIN_RERANKER_MODE` unset — maps to deep-only CE using the
+/// [`reranker_model_from_env`] model (exactly the pre-mode behavior). When both
+/// are set, the explicit mode wins.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum RerankerMode {
+    /// No cross-encoder on any path.
+    #[default]
+    Off,
+    /// Turbo CE on quick + context + explicit deep rerank; no heavy model.
+    Lite,
+    /// Turbo on quick + context; heavy bge-base on explicit deep rerank.
+    Full,
+}
+
+/// Parse [`RerankerMode`] from `ORIGIN_RERANKER_MODE`. Unset / empty / `off` /
+/// unrecognized → `Off` (fail-safe: an unknown value never silently enables CE).
+pub fn reranker_mode_from_env() -> RerankerMode {
+    match std::env::var("ORIGIN_RERANKER_MODE")
+        .unwrap_or_default()
+        .trim()
+        .to_ascii_lowercase()
+        .as_str()
+    {
+        "lite" => RerankerMode::Lite,
+        "full" => RerankerMode::Full,
+        "" | "off" => RerankerMode::Off,
+        other => {
+            log::warn!("[reranker] unknown ORIGIN_RERANKER_MODE={other:?}; using Off");
+            RerankerMode::Off
+        }
+    }
+}
+
 /// Construct the cross-encoder reranker and return it as a trait object.
 ///
 /// Model is selected by [`reranker_model_from_env`] — defaults to
@@ -349,6 +393,36 @@ mod tests {
                 fastembed::RerankerModel::BGERerankerBase
             ));
         });
+    }
+
+    #[test]
+    fn reranker_mode_env_default_is_off() {
+        temp_env::with_var("ORIGIN_RERANKER_MODE", None::<&str>, || {
+            assert_eq!(reranker_mode_from_env(), RerankerMode::Off);
+        });
+    }
+
+    #[test]
+    fn reranker_mode_env_parses_lite_and_full_case_insensitive() {
+        for v in ["lite", "LITE", " Lite "] {
+            temp_env::with_var("ORIGIN_RERANKER_MODE", Some(v), || {
+                assert_eq!(reranker_mode_from_env(), RerankerMode::Lite, "value {v:?}");
+            });
+        }
+        for v in ["full", "FULL", " Full "] {
+            temp_env::with_var("ORIGIN_RERANKER_MODE", Some(v), || {
+                assert_eq!(reranker_mode_from_env(), RerankerMode::Full, "value {v:?}");
+            });
+        }
+    }
+
+    #[test]
+    fn reranker_mode_env_explicit_off_and_unknown_are_off() {
+        for v in ["off", "OFF", "nonsense", ""] {
+            temp_env::with_var("ORIGIN_RERANKER_MODE", Some(v), || {
+                assert_eq!(reranker_mode_from_env(), RerankerMode::Off, "value {v:?}");
+            });
+        }
     }
 
     /// Smoke test for the real cross-encoder model. `#[ignore]` because the
