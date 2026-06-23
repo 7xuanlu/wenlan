@@ -27,7 +27,7 @@ wenlan-core  = { path = "crates/wenlan-core",  version = "0.4.1" }
 EOF
 
 cat > "$TMPDIR_TEST/crates/wenlan-mcp/npm/package.json" <<EOF
-{"name": "origin-mcp", "version": "0.4.1"}
+{"name": "wenlan-mcp", "version": "0.4.1"}
 EOF
 
 cat > "$TMPDIR_TEST/crates/wenlan-cli/npm/package.json" <<EOF
@@ -38,8 +38,8 @@ cat > "$TMPDIR_TEST/plugin/.claude-plugin/plugin.json" <<EOF
 {"name": "origin", "version": "0.4.1"}
 EOF
 
-cat > "$TMPDIR_TEST/plugin/bin/origin-mcp-runner.sh" <<EOF
-exec npx -y origin-mcp@^0.4.1 "\$@"
+cat > "$TMPDIR_TEST/plugin/bin/wenlan-mcp-runner.sh" <<EOF
+exec npx -y wenlan-mcp@^0.4.1 "\$@"
 EOF
 
 cat > "$TMPDIR_TEST/plugin/skills/init/SKILL.md" <<EOF
@@ -105,7 +105,7 @@ PLUGIN_VER=$(jq -r .version "$TMPDIR_TEST/plugin/.claude-plugin/plugin.json")
 [[ "$MCP_NPM_VER" == "0.5.0" ]]  || { echo "FAIL: wenlan-mcp npm not bumped (got $MCP_NPM_VER)"; exit 1; }
 [[ "$WENLAN_NPM_VER" == "0.5.0" ]]  || { echo "FAIL: wenlan npm not bumped (got $WENLAN_NPM_VER)"; exit 1; }
 [[ "$PLUGIN_VER" == "0.5.0" ]] || { echo "FAIL: plugin not bumped (got $PLUGIN_VER)"; exit 1; }
-grep -q 'origin-mcp@\^0.5.0' "$TMPDIR_TEST/plugin/bin/origin-mcp-runner.sh" || { echo "FAIL: runner pin not bumped"; exit 1; }
+grep -q 'wenlan-mcp@\^0.5.0' "$TMPDIR_TEST/plugin/bin/wenlan-mcp-runner.sh" || { echo "FAIL: runner pin not bumped"; exit 1; }
 grep -q '/v0.5.0/install.sh' "$TMPDIR_TEST/plugin/skills/init/SKILL.md" || { echo "FAIL: init skill installer not bumped"; exit 1; }
 
 # Cargo.lock: all five workspace members bumped to 0.5.0, exactly as
