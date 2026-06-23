@@ -59,6 +59,11 @@ enum Commands {
         #[command(subcommand)]
         command: commands::setup::KeyCommand,
     },
+    /// Set the cross-encoder reranker mode (off/lite/full; persisted to config).
+    Reranker {
+        /// Mode to persist; the daemon reads it at startup.
+        mode: commands::setup::RerankerModeArg,
+    },
     /// Configure Wenlan MCP for supported clients.
     Mcp {
         #[command(subcommand)]
@@ -137,6 +142,7 @@ async fn main() -> anyhow::Result<()> {
         Commands::Doctor => commands::setup::run_doctor().await?,
         Commands::Model { command } => commands::setup::run_model(command).await?,
         Commands::Key { command } => commands::setup::run_key(command).await?,
+        Commands::Reranker { mode } => commands::setup::run_reranker(mode).await?,
         Commands::Mcp { command } => commands::mcp::run(command, cli.quiet)?,
         Commands::Search { query, limit } => {
             commands::search::run(&client, format, cli.quiet, query, limit).await?

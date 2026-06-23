@@ -246,19 +246,41 @@ pub enum RerankerMode {
 /// Parse [`RerankerMode`] from `WENLAN_RERANKER_MODE`. Unset / empty / `off` /
 /// unrecognized → `Off` (fail-safe: an unknown value never silently enables CE).
 pub fn reranker_mode_from_env() -> RerankerMode {
-    match std::env::var("WENLAN_RERANKER_MODE")
-        .unwrap_or_default()
-        .trim()
-        .to_ascii_lowercase()
-        .as_str()
-    {
+    reranker_mode_from_str(&std::env::var("WENLAN_RERANKER_MODE").unwrap_or_default())
+}
+
+/// Pure parse of a reranker-mode string (`lite`/`full`/`off`, case-insensitive,
+/// trimmed). Empty or unrecognized → `Off` (fail-safe: an unknown value never
+/// silently enables CE). Shared by [`reranker_mode_from_env`] (env source) and
+/// [`reranker_mode_resolved`] (config source).
+pub fn reranker_mode_from_str(raw: &str) -> RerankerMode {
+    match raw.trim().to_ascii_lowercase().as_str() {
         "lite" => RerankerMode::Lite,
         "full" => RerankerMode::Full,
         "" | "off" => RerankerMode::Off,
         other => {
-            log::warn!("[reranker] unknown WENLAN_RERANKER_MODE={other:?}; using Off");
+            log::warn!("[reranker] unknown reranker mode {other:?}; using Off");
             RerankerMode::Off
         }
+    }
+}
+
+/// Resolve the effective [`RerankerMode`] from env override + persistent config.
+/// Precedence: `WENLAN_RERANKER_MODE` (dev/override — wins only when non-empty;
+/// an explicit `off` still overrides) > `config.reranker_mode` (persistent user
+/// setting) > `Off`. An empty/unset env value falls through to config, matching
+/// the env-over-config pattern of the other runtime knobs (model, key).
+pub fn reranker_mode_resolved(config: &crate::config::Config) -> RerankerMode {
+    // Env wins only when present AND non-empty: Wenlan treats an empty env value as
+    // unset (cf. the anthropic-key / external-llm guards in the daemon), so a stray
+    // inherited `WENLAN_RERANKER_MODE=` can't silently override a persisted config.
+    // An explicit non-empty `off` still overrides.
+    match std::env::var("WENLAN_RERANKER_MODE")
+        .ok()
+        .filter(|v| !v.trim().is_empty())
+    {
+        Some(env_mode) => reranker_mode_from_str(&env_mode),
+        None => reranker_mode_from_str(config.reranker_mode.as_deref().unwrap_or("")),
     }
 }
 
@@ -511,6 +533,110 @@ mod tests {
                 assert_eq!(reranker_mode_from_env(), RerankerMode::Off, "value {v:?}");
             });
         }
+    }
+
+    #[test]
+    fn mode_from_str_parses_values() {
+        assert_eq!(reranker_mode_from_str("lite"), RerankerMode::Lite);
+        assert_eq!(reranker_mode_from_str("FULL"), RerankerMode::Full);
+        assert_eq!(reranker_mode_from_str(" off "), RerankerMode::Off);
+        assert_eq!(reranker_mode_from_str(""), RerankerMode::Off);
+        assert_eq!(reranker_mode_from_str("nonsense"), RerankerMode::Off);
+    }
+
+    #[test]
+    fn resolved_uses_config_when_env_unset() {
+        let cfg = crate::config::Config {
+            reranker_mode: Some("full".to_string()),
+            ..Default::default()
+        };
+        temp_env::with_var("WENLAN_RERANKER_MODE", None::<&str>, || {
+            assert_eq!(reranker_mode_resolved(&cfg), RerankerMode::Full);
+        });
+    }
+
+    #[test]
+    fn resolved_off_when_env_and_config_unset() {
+        let cfg = crate::config::Config::default();
+        temp_env::with_var("WENLAN_RERANKER_MODE", None::<&str>, || {
+            assert_eq!(reranker_mode_resolved(&cfg), RerankerMode::Off);
+        });
+    }
+
+    #[test]
+    fn resolved_env_overrides_config() {
+        // env present wins over config — even an explicit "off" override.
+        let cfg = crate::config::Config {
+            reranker_mode: Some("full".to_string()),
+            ..Default::default()
+        };
+        temp_env::with_var("WENLAN_RERANKER_MODE", Some("off"), || {
+            assert_eq!(reranker_mode_resolved(&cfg), RerankerMode::Off);
+        });
+        temp_env::with_var("WENLAN_RERANKER_MODE", Some("lite"), || {
+            assert_eq!(reranker_mode_resolved(&cfg), RerankerMode::Lite);
+        });
+    }
+
+    #[test]
+    fn resolved_unknown_config_is_off() {
+        let cfg = crate::config::Config {
+            reranker_mode: Some("garbage".to_string()),
+            ..Default::default()
+        };
+        temp_env::with_var("WENLAN_RERANKER_MODE", None::<&str>, || {
+            assert_eq!(reranker_mode_resolved(&cfg), RerankerMode::Off);
+        });
+    }
+
+    #[test]
+    fn resolved_empty_env_falls_through_to_config() {
+        // An empty / whitespace WENLAN_RERANKER_MODE must NOT override a persisted
+        // config — Wenlan treats an empty env value as unset (cf. the anthropic-key
+        // and external-llm guards in the daemon). A stray inherited empty var should
+        // not silently disable the user's saved reranker mode.
+        let cfg = crate::config::Config {
+            reranker_mode: Some("full".to_string()),
+            ..Default::default()
+        };
+        for empty in ["", "   "] {
+            temp_env::with_var("WENLAN_RERANKER_MODE", Some(empty), || {
+                assert_eq!(
+                    reranker_mode_resolved(&cfg),
+                    RerankerMode::Full,
+                    "env={empty:?}"
+                );
+            });
+        }
+    }
+
+    #[test]
+    fn config_mode_composes_with_legacy_enabled() {
+        // The daemon composes reranker_mode_resolved(config) with the separately-read
+        // legacy WENLAN_RERANKER_ENABLED via resolve_reranker_plan. Verify both legs:
+        // a config-sourced `full` still wins over the legacy switch, and an unset mode
+        // + legacy preserves the back-compat deep-only plan.
+        let cfg_full = crate::config::Config {
+            reranker_mode: Some("full".to_string()),
+            ..Default::default()
+        };
+        let cfg_none = crate::config::Config::default();
+        temp_env::with_var("WENLAN_RERANKER_MODE", None::<&str>, || {
+            let p_full = resolve_reranker_plan(reranker_mode_resolved(&cfg_full), true);
+            assert_eq!(
+                p_full.deep,
+                Some(RerankerPick::BgeBase),
+                "config full wins over legacy"
+            );
+
+            let p_none = resolve_reranker_plan(reranker_mode_resolved(&cfg_none), true);
+            assert_eq!(p_none.light, None, "back-compat: legacy is deep-only");
+            assert_eq!(
+                p_none.deep,
+                Some(RerankerPick::Configured),
+                "back-compat deep model"
+            );
+        });
     }
 
     #[test]
