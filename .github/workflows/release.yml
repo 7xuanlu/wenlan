@@ -558,7 +558,7 @@ jobs:
           cat > tap/Formula/wenlan-mcp.rb << 'FORMULA'
           class WenlanMcp < Formula
             desc "MCP server for Wenlan — personal agent memory layer"
-            homepage "https://github.com/7xuanlu/origin"
+            homepage "https://github.com/7xuanlu/wenlan"
             version "VERSION_PLACEHOLDER"
             url "https://github.com/7xuanlu/wenlan/releases/download/vVERSION_PLACEHOLDER/wenlan-mcp-darwin-arm64.tar.gz"
             sha256 "SHA_PLACEHOLDER"
@@ -589,7 +589,7 @@ jobs:
           cat > tap/Formula/wenlan.rb << 'FORMULA'
           class Wenlan < Formula
             desc "Wenlan CLI — local-first memory + knowledge layer for AI agents"
-            homepage "https://github.com/7xuanlu/origin"
+            homepage "https://github.com/7xuanlu/wenlan"
             version "VERSION_PLACEHOLDER"
             url "https://github.com/7xuanlu/wenlan/releases/download/vVERSION_PLACEHOLDER/wenlan-cli-darwin-arm64.tar.gz"
             sha256 "SHA_PLACEHOLDER"

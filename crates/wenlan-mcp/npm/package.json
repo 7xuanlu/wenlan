@@ -15,11 +15,11 @@
     "agents",
     "claude",
     "chatgpt",
-    "origin"
+    "wenlan"
   ],
-  "homepage": "https://github.com/7xuanlu/origin#readme",
+  "homepage": "https://github.com/7xuanlu/wenlan#readme",
   "bugs": {
-    "url": "https://github.com/7xuanlu/origin/issues"
+    "url": "https://github.com/7xuanlu/wenlan/issues"
   },
   "author": "7xuanlu <h164654156465@gmail.com>",
   "license": "Apache-2.0",
@@ -49,7 +49,7 @@
   ],
   "repository": {
     "type": "git",
-    "url": "https://github.com/7xuanlu/origin",
+    "url": "https://github.com/7xuanlu/wenlan",
     "directory": "crates/wenlan-mcp/npm"
   }
 }

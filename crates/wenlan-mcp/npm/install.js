@@ -11,7 +11,7 @@ const fs = require("fs");
 const path = require("path");
 
 const VERSION = require("./package.json").version;
-const REPO = "7xuanlu/origin";
+const REPO = "7xuanlu/wenlan";
 
 // Maps Node platform-arch to the release bundle filename shipped by release.yml.
 // Each bundle contains wenlan, wenlan-server, and wenlan-mcp (or .exe on Windows).
