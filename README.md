@@ -5,7 +5,7 @@
 [![CI](https://github.com/7xuanlu/wenlan/actions/workflows/ci.yml/badge.svg?branch=main&event=push)](https://github.com/7xuanlu/wenlan/actions/workflows/ci.yml?query=branch%3Amain)
 [![Release](https://img.shields.io/github/v/release/7xuanlu/wenlan?sort=semver)](https://github.com/7xuanlu/wenlan/releases/latest)
 [![npm: @7xuanlu/origin](https://img.shields.io/npm/v/%407xuanlu%2Forigin?label=%407xuanlu%2Forigin)](https://www.npmjs.com/package/@7xuanlu/origin)
-[![npm: wenlan-mcp](https://img.shields.io/npm/v/wenlan-mcp?label=wenlan-mcp)](https://www.npmjs.com/package/wenlan-mcp)
+[![npm: origin-mcp](https://img.shields.io/npm/v/origin-mcp?label=origin-mcp)](https://www.npmjs.com/package/origin-mcp)
 [![MCP Server](https://img.shields.io/badge/MCP-server-blue)](https://modelcontextprotocol.io)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](#license)
 
@@ -25,9 +25,9 @@
   <a href="#what-you-get"><img alt="Obsidian" src="https://img.shields.io/badge/Obsidian-Markdown%20pages-7C3AED"></a>
 </p>
 
-**Wenlan (文瀾) is a living personal knowledge library for the AI-native age, built by your agents and grounded in its sources.**
+**A living personal knowledge library for the AI-native age, built by your agents and grounded in its sources.**
 
-It takes its name from an imperial library that held one of China's largest book collections. Your agents capture what they learn as they work, and you add the pages and sources you already trust, so the library grows from the bottom up and the top down. Wenlan keeps it current on its own, distilling both into source-cited wiki pages.
+Wenlan (文瀾) takes its name from an imperial library that held one of China's largest book collections. Your agents capture what they learn as they work, and you add the pages and sources you already trust, so the library grows from the bottom up and the top down. Wenlan keeps it current on its own, distilling both into source-cited wiki pages.
 
 Each session opens with a brief and closes with a handoff, so the thread carries forward instead of restarting.
 
@@ -72,8 +72,8 @@ Plugin details and daily commands: [plugin/](plugin/.claude-plugin/README.md).
 Use this if you want Wenlan tools in Claude Code without the plugin, or in Codex, Cursor, Claude Desktop, VS Code, or Gemini CLI.
 
 ```bash
-npx -y @7xuanlu/wenlan setup
-~/.wenlan/bin/origin mcp add claude-code      # or: codex, cursor, claude-desktop, vscode, gemini
+npx -y @7xuanlu/origin setup
+~/.origin/bin/origin mcp add claude-code      # or: codex, cursor, claude-desktop, vscode, gemini
 ```
 
 MCP-only gives agents tools for capture, recall, context, doctor, and page distillation. It does not install Claude Code slash skills like `/brief`, `/handoff`, `/distill`, or `/init`.
@@ -83,21 +83,21 @@ MCP-only gives agents tools for capture, recall, context, doctor, and page disti
 Set up the local Wenlan runtime:
 
 ```bash
-npx -y @7xuanlu/wenlan setup
+npx -y @7xuanlu/origin setup
 ```
 
-Then start with `~/.wenlan/bin/wenlan status`, `~/.wenlan/bin/wenlan recall <query>`, or `~/.wenlan/bin/wenlan store <text>`. CLI details: [crates/wenlan-cli](crates/wenlan-cli/README.md).
+Then start with `~/.origin/bin/origin status`, `~/.origin/bin/origin recall <query>`, or `~/.origin/bin/origin store <text>`. CLI details: [crates/wenlan-cli](crates/wenlan-cli/README.md).
 
 Service management:
 
 ```bash
-wenlan install            # register + start the daemon (stops a running one first)
-wenlan restart            # stop + start the daemon -- run this after upgrading
-wenlan status
-wenlan uninstall
+origin install            # register + start the daemon (stops a running one first)
+origin restart            # stop + start the daemon -- run this after upgrading
+origin status
+origin uninstall
 ```
 
-After upgrading Wenlan (`npx -y @7xuanlu/wenlan setup` or `install.sh`), the new binary is on disk but the already-running daemon keeps serving the old code until you restart it. `wenlan install` now restarts automatically; if you upgraded another way, run `wenlan restart`.
+After upgrading Wenlan (`npx -y @7xuanlu/origin setup` or `install.sh`), the new binary is on disk but the already-running daemon keeps serving the old code until you restart it. `origin install` now restarts automatically; if you upgraded another way, run `origin restart`.
 
 ---
 
@@ -150,10 +150,10 @@ Works fully local with no API key, cloud account, or signup. Capture, recall, hy
 
 ### Spaces
 
-Memories belong to a **space** like `origin`, `career`, or
+Memories belong to a **space** like `wenlan`, `career`, or
 `ideas`. Set the active space per shell:
 
-    ORIGIN_SPACE=career claude
+    WENLAN_SPACE=career claude
 
 Or declaratively via `~/.wenlan/spaces.toml` (see
 `plugin/examples/spaces.toml`). To manage spaces from the CLI:
@@ -163,7 +163,7 @@ Or declaratively via `~/.wenlan/spaces.toml` (see
     wenlan space show ideas
     wenlan space move scratch career
 
-`wenlan doctor` prints the current resolver state so you can see exactly
+`origin doctor` prints the current resolver state so you can see exactly
 which layer chose the active space.
 
 ---
@@ -206,11 +206,11 @@ Full contributor map: [CLAUDE.md](CLAUDE.md).
 
 ## Build from source
 
-Wenlan builds natively on macOS (Apple Silicon + Intel), Linux (x86_64 + ARM64; glibc), and Windows (x86_64). The npm wrapper (`@7xuanlu/origin`, `wenlan-mcp`) and `install.sh` auto-detect your platform and pull the matching prebuilt release. Most users should install through the Claude Code plugin or `npx`. For local development:
+Wenlan builds natively on macOS (Apple Silicon + Intel), Linux (x86_64 + ARM64; glibc), and Windows (x86_64). The npm wrapper (`@7xuanlu/origin`, `origin-mcp`) and `install.sh` auto-detect your platform and pull the matching prebuilt release. Most users should install through the Claude Code plugin or `npx`. For local development:
 
 ```bash
 git clone https://github.com/7xuanlu/wenlan.git
-cd origin
+cd wenlan
 cargo build --workspace
 cargo run -p wenlan-server
 ```
