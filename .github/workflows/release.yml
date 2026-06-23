@@ -50,7 +50,7 @@ jobs:
 
           $CHANGELOG
 
-          **Full Changelog**: https://github.com/7xuanlu/origin/compare/${PREV_TAG}...${RELEASE_TAG}
+          **Full Changelog**: https://github.com/7xuanlu/wenlan/compare/${PREV_TAG}...${RELEASE_TAG}
 
           ## Install
 
@@ -71,12 +71,12 @@ jobs:
 
           **Shell installer:**
           \`\`\`
-          curl -fsSL https://raw.githubusercontent.com/7xuanlu/origin/main/install.sh | bash
+          curl -fsSL https://raw.githubusercontent.com/7xuanlu/wenlan/main/install.sh | bash
           \`\`\`
 
           **Exact shell install for this release:**
           \`\`\`
-          curl -fsSL https://raw.githubusercontent.com/7xuanlu/origin/${RELEASE_TAG}/install.sh | WENLAN_RELEASE_TAG=${RELEASE_TAG} bash
+          curl -fsSL https://raw.githubusercontent.com/7xuanlu/wenlan/${RELEASE_TAG}/install.sh | WENLAN_RELEASE_TAG=${RELEASE_TAG} bash
           \`\`\`
           Downloads exact binaries and prints manual isolated daemon/MCP setup steps.
 
@@ -560,7 +560,7 @@ jobs:
             desc "MCP server for Wenlan — personal agent memory layer"
             homepage "https://github.com/7xuanlu/origin"
             version "VERSION_PLACEHOLDER"
-            url "https://github.com/7xuanlu/origin/releases/download/vVERSION_PLACEHOLDER/wenlan-mcp-darwin-arm64.tar.gz"
+            url "https://github.com/7xuanlu/wenlan/releases/download/vVERSION_PLACEHOLDER/wenlan-mcp-darwin-arm64.tar.gz"
             sha256 "SHA_PLACEHOLDER"
             license "Apache-2.0"
 
@@ -591,7 +591,7 @@ jobs:
             desc "Wenlan CLI — local-first memory + knowledge layer for AI agents"
             homepage "https://github.com/7xuanlu/origin"
             version "VERSION_PLACEHOLDER"
-            url "https://github.com/7xuanlu/origin/releases/download/vVERSION_PLACEHOLDER/wenlan-cli-darwin-arm64.tar.gz"
+            url "https://github.com/7xuanlu/wenlan/releases/download/vVERSION_PLACEHOLDER/wenlan-cli-darwin-arm64.tar.gz"
             sha256 "SHA_PLACEHOLDER"
             license "Apache-2.0"
 

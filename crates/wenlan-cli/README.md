@@ -63,7 +63,7 @@ Register or remove the daemon with the host's native service manager. The servic
 
 - **macOS**: launchd user agent at `~/Library/LaunchAgents/com.wenlan.server.plist`.
 - **Linux**: systemd user unit at `~/.config/systemd/user/wenlan-server.service`. `loginctl enable-linger` if you want it alive after logout.
-- **Windows**: not yet supported in v1. The console-app daemon does not implement the Windows Service Control Protocol; sc.exe start times out. Run `origin-server.exe` manually or register a Task Scheduler logon task. Tracked follow-up.
+- **Windows**: not yet supported in v1. The console-app daemon does not implement the Windows Service Control Protocol; sc.exe start times out. Run `wenlan-server.exe` manually or register a Task Scheduler logon task. Tracked follow-up.
 
 ```bash
 origin install

@@ -37,7 +37,7 @@ echo "wenlan-core dep:  $WENLAN_CORE_DEP_VER"
 echo "Cargo.lock:"
 printf '%s\n' "$LOCK_VERSIONS" | sed 's/^/  /'
 echo "wenlan-mcp npm: $MCP_NPM_VER"
-echo "@7xuanlu/origin npm: $WENLAN_NPM_VER"
+echo "wenlan npm: $WENLAN_NPM_VER"
 echo "Plugin:      $PLUGIN_VER"
 
 if [[ "$VTXT_VER" != "$TAG_VER" || "$WS_VER" != "$TAG_VER" || "$WENLAN_TYPES_DEP_VER" != "$TAG_VER" || "$WENLAN_CORE_DEP_VER" != "$TAG_VER" || "$MCP_NPM_VER" != "$TAG_VER" || "$WENLAN_NPM_VER" != "$TAG_VER" || "$PLUGIN_VER" != "$TAG_VER" ]]; then

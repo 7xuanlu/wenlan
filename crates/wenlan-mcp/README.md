@@ -22,19 +22,19 @@ If you only need the raw MCP connector config, add this to your MCP client:
   "mcpServers": {
     "origin": {
       "command": "npx",
-      "args": ["-y", "origin-mcp"]
+      "args": ["-y", "wenlan-mcp"]
     }
   }
 }
 ```
 
-The npm wrapper auto-detects the host platform and downloads the matching prebuilt binary from the Wenlan release. Supported: macOS (arm64, x64), Linux (x64, arm64; glibc), Windows (x64). Other targets require building from source via `cargo install origin-mcp`.
+The npm wrapper auto-detects the host platform and downloads the matching prebuilt binary from the Wenlan release. Supported: macOS (arm64, x64), Linux (x64, arm64; glibc), Windows (x64). Other targets require building from source via `cargo install wenlan-mcp`.
 
 Or install a binary directly:
 
 ```bash
-brew install 7xuanlu/tap/origin-mcp
-cargo install origin-mcp
+brew install 7xuanlu/tap/wenlan-mcp
+cargo install wenlan-mcp
 ```
 
 Then use:
@@ -43,16 +43,16 @@ Then use:
 {
   "mcpServers": {
     "origin": {
-      "command": "origin-mcp"
+      "command": "wenlan-mcp"
     }
   }
 }
 ```
 
-`origin-mcp` expects the Wenlan daemon at `http://127.0.0.1:7878` by default. Override it with:
+`wenlan-mcp` expects the Wenlan daemon at `http://127.0.0.1:7878` by default. Override it with:
 
 ```bash
-origin-mcp --origin-url http://127.0.0.1:7879
+wenlan-mcp --origin-url http://127.0.0.1:7879
 ```
 
 ## Tools
@@ -96,7 +96,7 @@ See [`src/tools.rs`](src/tools.rs) for the full instructions.
 - [useorigin.app](https://useorigin.app) — project home
 - [useorigin.app/learn/mcp-memory-server](https://useorigin.app/learn/mcp-memory-server) — concept article on Wenlan as an MCP memory server
 - [useorigin.app/docs/mcp-clients](https://useorigin.app/docs/mcp-clients) — connect Claude Code, Cursor, Codex, Claude Desktop, Gemini CLI
-- [npm: origin-mcp](https://www.npmjs.com/package/origin-mcp) — standalone npm package
+- [npm: wenlan-mcp](https://www.npmjs.com/package/wenlan-mcp) — standalone npm package
 - [github.com/7xuanlu/wenlan](https://github.com/7xuanlu/wenlan) — source
 
 ## License

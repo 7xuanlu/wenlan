@@ -33,7 +33,7 @@ All user-facing data lives under `~/.wenlan/`:
 ~/.wenlan/sessions/            session logs by date (md, written by /handoff)
 ~/.wenlan/sessions/_status/    current per-project goals + last-handoff timestamps
 ~/.wenlan/db/                  symlink to the libSQL store
-~/.origin/bin/                 installed binaries
+~/.wenlan/bin/                 installed binaries
 ~/.wenlan/.git/                git repo — skills auto-commit per logical batch
 ```
 

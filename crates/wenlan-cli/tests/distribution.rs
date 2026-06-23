@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-//! Distribution and packaging contract tests for Origin's user-facing setup paths.
+//! Distribution and packaging contract tests for Wenlan's user-facing setup paths.
 
 use serde_json::Value;
 use std::fs;
@@ -11,7 +11,7 @@ fn repo_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
         .ancestors()
         .nth(2)
-        .expect("origin-cli is nested under crates/")
+        .expect("wenlan-cli is nested under crates/")
         .to_path_buf()
 }
 
@@ -40,7 +40,7 @@ fn plugin_distribution_contains_required_files() {
         "plugin/.claude-plugin/plugin.json",
         "plugin/.claude-plugin/README.md",
         "plugin/.mcp.json",
-        "plugin/bin/origin-mcp-runner.sh",
+        "plugin/bin/wenlan-mcp-runner.sh",
         "plugin/hooks/hooks.json",
         "plugin/hooks/check-daemon.sh",
         "plugin/skills/brief/SKILL.md",
@@ -72,19 +72,19 @@ fn plugin_manifest_and_mcp_launcher_stay_in_sync() {
     let origin = &mcp["mcpServers"]["origin"];
     assert_eq!(
         json_string(origin, "command"),
-        "${CLAUDE_PLUGIN_ROOT}/bin/origin-mcp-runner.sh"
+        "${CLAUDE_PLUGIN_ROOT}/bin/wenlan-mcp-runner.sh"
     );
 }
 
 #[test]
 fn npm_package_allowlists_match_release_generated_files() {
-    // The @7xuanlu/origin CLI wrapper currently ships a macOS-arm64-only
+    // The wenlan CLI wrapper currently ships a macOS-arm64-only
     // `run.js`. Linux/Windows users install via the Docker image, the tar/zip
     // release archives, or `cargo install`, so the npm allowlist stays narrow
     // on purpose.
     let setup_pkg = read_json("crates/wenlan-cli/npm/package.json");
-    assert_eq!(json_string(&setup_pkg, "name"), "@7xuanlu/origin");
-    assert_eq!(setup_pkg["bin"]["origin"], "run.js");
+    assert_eq!(json_string(&setup_pkg, "name"), "wenlan");
+    assert_eq!(setup_pkg["bin"]["wenlan"], "run.js");
     assert_eq!(setup_pkg["license"], "Apache-2.0");
     assert_eq!(setup_pkg["os"], serde_json::json!(["darwin"]));
     assert_eq!(setup_pkg["cpu"], serde_json::json!(["arm64"]));
@@ -93,13 +93,13 @@ fn npm_package_allowlists_match_release_generated_files() {
         serde_json::json!(["run.js", "README.md", "LICENSE"])
     );
 
-    // origin-mcp ships prebuilt binaries for every release-matrix target
+    // wenlan-mcp ships prebuilt binaries for every release-matrix target
     // (darwin x2, linux x2, windows x1) via its npm postinstall. The
     // allowlist must include each platform the matrix uploads or `npm
     // install` rejects the package on those hosts.
     let mcp_pkg = read_json("crates/wenlan-mcp/npm/package.json");
-    assert_eq!(json_string(&mcp_pkg, "name"), "origin-mcp");
-    assert_eq!(mcp_pkg["bin"]["origin-mcp"], "run.js");
+    assert_eq!(json_string(&mcp_pkg, "name"), "wenlan-mcp");
+    assert_eq!(mcp_pkg["bin"]["wenlan-mcp"], "run.js");
     assert_eq!(mcp_pkg["scripts"]["postinstall"], "node install.js");
     assert_eq!(mcp_pkg["license"], "Apache-2.0");
     assert_eq!(
@@ -124,18 +124,18 @@ fn release_workflow_publishes_cli_and_mcp_npm_packages() {
     // the release.
     for needle in [
         "Build & Publish ${{ matrix.target }}",
-        "Publish origin-mcp",
-        "Publish @7xuanlu/origin",
-        "cp README.md crates/origin-mcp/npm/README.md",
-        "cp README.md crates/origin-cli/npm/README.md",
-        "origin-darwin-arm64",
-        // origin-darwin-x64 dropped in v0.7.0 (PR #168) — ort has no
+        "Publish wenlan-mcp",
+        "Publish wenlan",
+        "cp README.md crates/wenlan-mcp/npm/README.md",
+        "cp README.md crates/wenlan-cli/npm/README.md",
+        "wenlan-darwin-arm64",
+        // wenlan-darwin-x64 dropped in v0.7.0 (PR #168) — ort has no
         // prebuilt for x86_64-apple-darwin. Re-add when ONNX builds from
         // source or ort-tract becomes viable.
-        "origin-linux-arm64",
-        "origin-linux-x64",
-        "origin-windows-x64",
-        "origin-mcp-darwin-arm64.tar.gz",
+        "wenlan-linux-arm64",
+        "wenlan-linux-x64",
+        "wenlan-windows-x64",
+        "wenlan-mcp-darwin-arm64.tar.gz",
     ] {
         assert!(
             workflow.contains(needle),
@@ -145,7 +145,7 @@ fn release_workflow_publishes_cli_and_mcp_npm_packages() {
 }
 
 #[test]
-#[ignore = "manual smoke: requires real codex CLI and may download origin-mcp through npx"]
+#[ignore = "manual smoke: requires real codex CLI and may download wenlan-mcp through npx"]
 fn smoke_codex_mcp_add_uses_temp_home() {
     let runtime = TempDir::new().expect("temp home");
     let origin = assert_cmd::cargo::cargo_bin("wenlan");

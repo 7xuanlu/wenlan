@@ -564,7 +564,7 @@ Setup choices:
 
 Install:
   curl -fsSL https://raw.githubusercontent.com/7xuanlu/wenlan/main/install.sh | bash
-  export PATH=\"$HOME/.origin/bin:$PATH\"
+  export PATH=\"$HOME/.wenlan/bin:$PATH\"
   wenlan setup
   wenlan install
   wenlan status"
