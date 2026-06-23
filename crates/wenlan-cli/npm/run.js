@@ -7,7 +7,7 @@ const https = require("https");
 const os = require("os");
 const path = require("path");
 
-const REPO = "7xuanlu/origin";
+const REPO = "7xuanlu/wenlan";
 const ASSET = "wenlan-darwin-arm64.tar.gz";
 const REQUESTED_TAG =
   process.env.WENLAN_RELEASE_TAG ||

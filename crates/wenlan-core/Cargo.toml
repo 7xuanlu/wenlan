@@ -4,7 +4,7 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "Core business logic for Origin — memory storage, retrieval, and processing"
+description = "Core business logic for Wenlan — memory storage, retrieval, and processing"
 
 [features]
 default = []
