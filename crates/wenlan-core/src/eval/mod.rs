@@ -24,6 +24,7 @@ pub mod metrics;
 pub mod page_faithfulness;
 pub mod paired;
 pub mod pipeline;
+pub mod rank_overlap;
 pub mod report;
 pub mod retrieval;
 pub mod runner;
