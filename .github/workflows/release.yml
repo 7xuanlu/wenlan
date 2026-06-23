@@ -367,7 +367,7 @@ jobs:
           file: docker/Dockerfile.daemon
           platforms: ${{ matrix.platform }}
           push: true
-          tags: ghcr.io/7xuanlu/origin-server:${{ env.RELEASE_TAG }}-${{ matrix.tag-suffix }}
+          tags: ghcr.io/7xuanlu/wenlan-server:${{ env.RELEASE_TAG }}-${{ matrix.tag-suffix }}
 
   docker-manifest:
     name: Combine Docker Manifest (multi-arch)
@@ -384,7 +384,7 @@ jobs:
       - name: Create + push multi-arch manifest
         run: |
           TAG="${{ env.RELEASE_TAG }}"
-          IMG="ghcr.io/7xuanlu/origin-server"
+          IMG="ghcr.io/7xuanlu/wenlan-server"
           docker buildx imagetools create -t "$IMG:$TAG" "$IMG:$TAG-amd64" "$IMG:$TAG-arm64"
           docker buildx imagetools create -t "$IMG:latest"  "$IMG:$TAG-amd64" "$IMG:$TAG-arm64"
 
@@ -487,12 +487,12 @@ jobs:
           node-version: "24"
           registry-url: "https://registry.npmjs.org"
       - name: Sync npm version from tag
-        working-directory: crates/origin-mcp/npm
+        working-directory: crates/wenlan-mcp/npm
         run: |
           VERSION="${RELEASE_TAG#v}"
           npm version "$VERSION" --no-git-tag-version --allow-same-version
       - name: Sync setup package version from tag
-        working-directory: crates/origin-cli/npm
+        working-directory: crates/wenlan-cli/npm
         run: |
           VERSION="${RELEASE_TAG#v}"
           npm version "$VERSION" --no-git-tag-version --allow-same-version
@@ -502,31 +502,31 @@ jobs:
         # always reflect the current project description and the same legal
         # text the daemon ships under.
         run: |
-          cp README.md crates/origin-mcp/npm/README.md
-          cp README.md crates/origin-cli/npm/README.md
-          cp LICENSE crates/origin-mcp/npm/LICENSE
-          cp LICENSE crates/origin-cli/npm/LICENSE
-      - name: Publish origin-mcp
-        working-directory: crates/origin-mcp/npm
+          cp README.md crates/wenlan-mcp/npm/README.md
+          cp README.md crates/wenlan-cli/npm/README.md
+          cp LICENSE crates/wenlan-mcp/npm/LICENSE
+          cp LICENSE crates/wenlan-cli/npm/LICENSE
+      - name: Publish wenlan-mcp
+        working-directory: crates/wenlan-mcp/npm
         # Skip if version already on npm. Retried releases or re-dispatch
         # workflows would otherwise fail with "You cannot publish over the
         # previously published versions". `npm view <pkg>@<v> version`
         # exits 0 + prints the version when published, exits 1 otherwise.
         run: |
           VERSION="${RELEASE_TAG#v}"
-          if npm view "origin-mcp@$VERSION" version >/dev/null 2>&1; then
-            echo "origin-mcp@$VERSION already on npm, skipping"
+          if npm view "wenlan-mcp@$VERSION" version >/dev/null 2>&1; then
+            echo "wenlan-mcp@$VERSION already on npm, skipping"
           else
             npm publish --provenance --access public
           fi
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-      - name: Publish @7xuanlu/origin
-        working-directory: crates/origin-cli/npm
+      - name: Publish wenlan
+        working-directory: crates/wenlan-cli/npm
         run: |
           VERSION="${RELEASE_TAG#v}"
-          if npm view "@7xuanlu/origin@$VERSION" version >/dev/null 2>&1; then
-            echo "@7xuanlu/origin@$VERSION already on npm, skipping"
+          if npm view "wenlan@$VERSION" version >/dev/null 2>&1; then
+            echo "wenlan@$VERSION already on npm, skipping"
           else
             npm publish --provenance --access public
           fi
