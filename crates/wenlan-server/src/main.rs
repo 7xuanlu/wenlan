@@ -442,7 +442,7 @@ async fn run_daemon() -> anyhow::Result<()> {
     {
         use wenlan_core::reranker::{RerankerMode, RerankerPick};
         use wenlan_types::responses::RerankerStatus;
-        let mode = wenlan_core::reranker::reranker_mode_from_env();
+        let mode = wenlan_core::reranker::reranker_mode_resolved(&config);
         let legacy_enabled = std::env::var("WENLAN_RERANKER_ENABLED").as_deref() == Ok("1");
         let plan = wenlan_core::reranker::resolve_reranker_plan(mode, legacy_enabled);
         server_state.reranker_mode = match mode {
