@@ -15,6 +15,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.MARKETPLACE_SYNC_TOKEN }}
         run: |
+          # plugin=origin is the plugin name + /origin: namespace; rename deferred to 5E.
           gh api repos/7xuanlu/claude-plugins/dispatches \
             -f event_type=plugin-released \
             -F "client_payload[plugin]=origin" \

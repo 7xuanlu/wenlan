@@ -278,7 +278,7 @@ jobs:
           rm wenlan-mcp
 
       # Per-binary archive for the wenlan CLI consumed by the Homebrew tap
-      # formula. Darwin-arm64 only — matches the origin-mcp tap pattern.
+      # formula. Darwin-arm64 only — matches the wenlan-mcp tap pattern.
       # Filename intentionally distinct from the multi-binary release tarball
       # `wenlan-darwin-arm64.tar.gz` to avoid clobbering it in `dist/`.
       - name: Package wenlan CLI tarball for Homebrew (darwin-arm64 only)
