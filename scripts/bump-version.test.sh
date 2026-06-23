@@ -27,7 +27,7 @@ wenlan-core  = { path = "crates/wenlan-core",  version = "0.4.1" }
 EOF
 
 cat > "$TMPDIR_TEST/crates/wenlan-mcp/npm/package.json" <<EOF
-{"name": "wenlan-mcp", "version": "0.4.1"}
+{"name": "origin-mcp", "version": "0.4.1"}
 EOF
 
 cat > "$TMPDIR_TEST/crates/wenlan-cli/npm/package.json" <<EOF
@@ -38,12 +38,12 @@ cat > "$TMPDIR_TEST/plugin/.claude-plugin/plugin.json" <<EOF
 {"name": "origin", "version": "0.4.1"}
 EOF
 
-cat > "$TMPDIR_TEST/plugin/bin/wenlan-mcp-runner.sh" <<EOF
-exec npx -y wenlan-mcp@^0.4.1 "\$@"
+cat > "$TMPDIR_TEST/plugin/bin/origin-mcp-runner.sh" <<EOF
+exec npx -y origin-mcp@^0.4.1 "\$@"
 EOF
 
 cat > "$TMPDIR_TEST/plugin/skills/init/SKILL.md" <<EOF
-Bash: curl -fsSL https://raw.githubusercontent.com/7xuanlu/origin/v0.4.1/install.sh | bash
+Bash: curl -fsSL https://raw.githubusercontent.com/7xuanlu/wenlan/v0.4.1/install.sh | bash
 EOF
 
 # Cargo.lock fixture: workspace members at the old version + an external dep
@@ -60,7 +60,7 @@ version = "1.0.86"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 
 [[package]]
-name = "origin"
+name = "wenlan"
 version = "0.4.1"
 dependencies = [
  "anyhow",
@@ -105,7 +105,7 @@ PLUGIN_VER=$(jq -r .version "$TMPDIR_TEST/plugin/.claude-plugin/plugin.json")
 [[ "$MCP_NPM_VER" == "0.5.0" ]]  || { echo "FAIL: wenlan-mcp npm not bumped (got $MCP_NPM_VER)"; exit 1; }
 [[ "$WENLAN_NPM_VER" == "0.5.0" ]]  || { echo "FAIL: @7xuanlu/origin npm not bumped (got $WENLAN_NPM_VER)"; exit 1; }
 [[ "$PLUGIN_VER" == "0.5.0" ]] || { echo "FAIL: plugin not bumped (got $PLUGIN_VER)"; exit 1; }
-grep -q 'wenlan-mcp@\^0.5.0' "$TMPDIR_TEST/plugin/bin/wenlan-mcp-runner.sh" || { echo "FAIL: runner pin not bumped"; exit 1; }
+grep -q 'origin-mcp@\^0.5.0' "$TMPDIR_TEST/plugin/bin/origin-mcp-runner.sh" || { echo "FAIL: runner pin not bumped"; exit 1; }
 grep -q '/v0.5.0/install.sh' "$TMPDIR_TEST/plugin/skills/init/SKILL.md" || { echo "FAIL: init skill installer not bumped"; exit 1; }
 
 # Cargo.lock: all five workspace members bumped to 0.5.0, exactly as
@@ -115,11 +115,11 @@ LOCK_VERSIONS=$(awk '
   in_pkg && $1 == "name" && $2 == "=" { name=$3; gsub(/"/, "", name); next }
   in_pkg && $1 == "version" && $2 == "=" {
     version=$3; gsub(/"/, "", version)
-    if (name == "origin" || name == "wenlan-core" || name == "wenlan-mcp" || name == "wenlan-server" || name == "wenlan-types") print name ":" version
+    if (name == "wenlan" || name == "wenlan-core" || name == "wenlan-mcp" || name == "wenlan-server" || name == "wenlan-types") print name ":" version
     in_pkg=0
   }
 ' "$TMPDIR_TEST/Cargo.lock" | sort)
-for crate in origin wenlan-core wenlan-mcp wenlan-server wenlan-types; do
+for crate in wenlan wenlan-core wenlan-mcp wenlan-server wenlan-types; do
   printf '%s\n' "$LOCK_VERSIONS" | grep -qx "${crate}:0.5.0" || { echo "FAIL: Cargo.lock ${crate} not bumped to 0.5.0 (got: $(printf '%s' "$LOCK_VERSIONS" | grep "^${crate}:" || echo none))"; exit 1; }
 done
 # External deps must be left alone.

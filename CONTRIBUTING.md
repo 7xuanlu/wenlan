@@ -9,7 +9,7 @@ This repo holds the daemon (`wenlan-server`), the CLI (`origin`), the MCP server
 **Requirements:** macOS (arm64 + x64), Linux (x86_64 + arm64; glibc), or Windows (x86_64); platform build tools ([Xcode Command Line Tools](https://developer.apple.com/xcode/resources/) on macOS, MSVC Build Tools on Windows, gcc + make on Linux); [Rust](https://rustup.rs/) (stable).
 
 ```bash
-git clone https://github.com/7xuanlu/origin.git
+git clone https://github.com/7xuanlu/wenlan.git
 cd origin
 cargo build -p wenlan-server
 ```
@@ -65,7 +65,7 @@ See `CLAUDE.md` for a full module-by-module breakdown.
 
 ## Finding Work
 
-Look for issues labeled [`good first issue`](https://github.com/7xuanlu/origin/labels/good%20first%20issue) or [`help wanted`](https://github.com/7xuanlu/origin/labels/help%20wanted).
+Look for issues labeled [`good first issue`](https://github.com/7xuanlu/wenlan/labels/good%20first%20issue) or [`help wanted`](https://github.com/7xuanlu/wenlan/labels/help%20wanted).
 
 ## Pull Request Process
 
