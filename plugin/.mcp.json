@@ -1,7 +1,7 @@
 {
   "mcpServers": {
     "origin": {
-      "command": "${CLAUDE_PLUGIN_ROOT}/bin/origin-mcp-runner.sh"
+      "command": "${CLAUDE_PLUGIN_ROOT}/bin/wenlan-mcp-runner.sh"
     }
   }
 }

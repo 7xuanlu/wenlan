@@ -220,7 +220,7 @@ cat .release-please-manifest.json
 
 **Never delete a release tag without also cleaning up the commit history.** If you need to undo a release version, you must rewrite the commit message that release-please created (`git filter-branch --msg-filter`), delete the tag, delete the GitHub Release, and rename the merged PR title via API. Otherwise release-please will keep bumping from the old version.
 
-**The `release.yml` workflow ships the local runtime.** It handles: origin CLI, wenlan-server, wenlan-mcp, standalone binary uploads, crates.io publishing for `wenlan-types` + `wenlan-mcp`, and npm publishing for `wenlan-mcp` + `@7xuanlu/origin`. It does NOT build a desktop bundle — origin-app builds its own DMG in its own repo.
+**The `release.yml` workflow ships the local runtime.** It handles: origin CLI, wenlan-server, wenlan-mcp, standalone binary uploads, crates.io publishing for `wenlan-types` + `wenlan-mcp`, and npm publishing for `wenlan-mcp` + `wenlan`. It does NOT build a desktop bundle — origin-app builds its own DMG in its own repo.
 
 ### Branch protection
 

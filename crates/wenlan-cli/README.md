@@ -9,10 +9,10 @@ License: Apache-2.0.
 Recommended user setup:
 
 ```bash
-npx -y @7xuanlu/origin setup
+npx -y wenlan setup
 ```
 
-The setup package supports macOS (arm64, x64), Linux (x64, arm64), and Windows (x64). It downloads the platform-matching release archive, installs `origin`, `origin-server`, and `origin-mcp` into `~/.origin/bin/`, configures local memory, registers the daemon with the host's native service manager (launchd on macOS, systemd-user on Linux), and verifies status. On Windows, `origin install` is not supported in v1 (daemon does not yet speak the Windows Service Control Protocol); run `origin-server.exe` manually or via Task Scheduler.
+The setup package supports macOS (arm64, x64), Linux (x64, arm64), and Windows (x64). It downloads the platform-matching release archive, installs `wenlan`, `wenlan-server`, and `wenlan-mcp` into `~/.wenlan/bin/`, configures local memory, registers the daemon with the host's native service manager (launchd on macOS, systemd-user on Linux), and verifies status. On Windows, `wenlan install` is not supported in v1 (daemon does not yet speak the Windows Service Control Protocol); run `wenlan-server.exe` manually or via Task Scheduler.
 
 For local development:
 
@@ -59,11 +59,11 @@ origin setup --anthropic-api-key-env ANTHROPIC_API_KEY
 
 ### `origin install` / `origin uninstall`
 
-Register or remove the daemon with the host's native service manager. The service runs the sibling `origin-server` binary next to `origin`.
+Register or remove the daemon with the host's native service manager. The service runs the sibling `wenlan-server` binary next to `wenlan`.
 
 - **macOS**: launchd user agent at `~/Library/LaunchAgents/com.wenlan.server.plist`.
 - **Linux**: systemd user unit at `~/.config/systemd/user/wenlan-server.service`. `loginctl enable-linger` if you want it alive after logout.
-- **Windows**: not yet supported in v1. The console-app daemon does not implement the Windows Service Control Protocol; sc.exe start times out. Run `origin-server.exe` manually or register a Task Scheduler logon task. Tracked follow-up.
+- **Windows**: not yet supported in v1. The console-app daemon does not implement the Windows Service Control Protocol; sc.exe start times out. Run `wenlan-server.exe` manually or register a Task Scheduler logon task. Tracked follow-up.
 
 ```bash
 origin install
@@ -98,24 +98,24 @@ origin key set anthropic --env ANTHROPIC_API_KEY
 origin key clear anthropic
 ```
 
-### `origin mcp add <client>`
+### `wenlan mcp add <client>`
 
 Configure Wenlan MCP for a supported client. This is the MCP-only path for Claude Code users who do not want the plugin, and for Codex, Cursor, Claude Desktop, VS Code, and Gemini CLI.
 
 ```bash
-origin mcp add claude-code
-origin mcp add codex
-origin mcp add cursor --dry-run
+wenlan mcp add claude-code
+wenlan mcp add codex
+wenlan mcp add cursor --dry-run
 ```
 
 Supported clients: `claude-code`, `codex`, `gemini`, `cursor`, `claude-desktop`, `vscode`.
 
-When `origin-mcp` is installed next to the `origin` CLI, the generated config points at that binary. Otherwise it falls back to `npx -y origin-mcp`.
+When `wenlan-mcp` is installed next to the `wenlan` CLI, the generated config points at that binary. Otherwise it falls back to `npx -y wenlan-mcp`.
 
 Use `--dry-run` to preview JSON config edits before writing them:
 
 ```bash
-origin mcp add cursor --dry-run
+wenlan mcp add cursor --dry-run
 ```
 
 ### `origin search <query>`

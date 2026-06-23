@@ -110,8 +110,8 @@ pub async fn check() -> Option<String> {
     let latest = Version::parse(&latest_tag).ok()?;
     if latest > mcp {
         Some(format!(
-            "A newer origin-mcp is available (v{latest}, you are on v{mcp}). \
-             Run `brew upgrade origin-mcp`."
+            "A newer wenlan-mcp is available (v{latest}, you are on v{mcp}). \
+             Run `brew upgrade wenlan-mcp`."
         ))
     } else {
         None

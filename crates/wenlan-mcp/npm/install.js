@@ -14,13 +14,12 @@ const VERSION = require("./package.json").version;
 const REPO = "7xuanlu/origin";
 
 // Maps Node platform-arch to the release bundle filename shipped by release.yml.
-// Each bundle contains origin, origin-server, and origin-mcp (or .exe on Windows).
+// Each bundle contains wenlan, wenlan-server, and wenlan-mcp (or .exe on Windows).
 const ASSETS = {
-  "darwin-arm64": { file: "origin-darwin-arm64.tar.gz",  archive: "tar.gz" },
-  "darwin-x64":   { file: "origin-darwin-x64.tar.gz",    archive: "tar.gz" },
-  "linux-arm64":  { file: "origin-linux-arm64.tar.gz",   archive: "tar.gz" },
-  "linux-x64":    { file: "origin-linux-x64.tar.gz",     archive: "tar.gz" },
-  "win32-x64":    { file: "origin-windows-x64.zip",      archive: "zip"    },
+  "darwin-arm64": { file: "wenlan-darwin-arm64.tar.gz",  archive: "tar.gz" },
+  "linux-arm64":  { file: "wenlan-linux-arm64.tar.gz",   archive: "tar.gz" },
+  "linux-x64":    { file: "wenlan-linux-x64.tar.gz",     archive: "tar.gz" },
+  "win32-x64":    { file: "wenlan-windows-x64.zip",      archive: "zip"    },
 };
 
 const key = `${process.platform}-${process.arch}`;
@@ -33,8 +32,8 @@ if (!asset) {
 }
 
 const isWindows = process.platform === "win32";
-const binaryName = isWindows ? "origin-mcp.exe" : "origin-mcp";
-const installName = isWindows ? "origin-mcp.exe" : "origin-mcp";
+const binaryName = isWindows ? "wenlan-mcp.exe" : "wenlan-mcp";
+const installName = isWindows ? "wenlan-mcp.exe" : "wenlan-mcp";
 
 const binDir = join(__dirname, "bin");
 const dest = join(binDir, installName);
@@ -43,7 +42,7 @@ mkdirSync(binDir, { recursive: true });
 
 const downloadUrl = `https://github.com/${REPO}/releases/download/v${VERSION}/${asset.file}`;
 
-console.log(`Downloading origin-mcp ${VERSION} for ${key}...`);
+console.log(`Downloading wenlan-mcp ${VERSION} for ${key}...`);
 
 function download(url, dest, redirects = 0) {
   return new Promise((resolve, reject) => {
@@ -51,7 +50,7 @@ function download(url, dest, redirects = 0) {
       return reject(new Error("Too many redirects"));
     }
     const mod = url.startsWith("https") ? https : http;
-    mod.get(url, { headers: { "User-Agent": "origin-mcp-npm" } }, (res) => {
+    mod.get(url, { headers: { "User-Agent": "wenlan-mcp-npm" } }, (res) => {
       if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
         return download(res.headers.location, dest, redirects + 1).then(resolve, reject);
       }
@@ -105,7 +104,7 @@ async function install() {
       chmodSync(dest, 0o755);
     }
 
-    console.log(`origin-mcp installed successfully (${key})`);
+    console.log(`wenlan-mcp installed successfully (${key})`);
   } finally {
     // Clean up downloaded archive regardless of success or failure.
     try {
@@ -119,6 +118,6 @@ async function install() {
 }
 
 install().catch((err) => {
-  console.error(`Failed to install origin-mcp: ${err.message}`);
+  console.error(`Failed to install wenlan-mcp: ${err.message}`);
   process.exit(1);
 });

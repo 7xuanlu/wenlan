@@ -1,16 +1,17 @@
 // SPDX-License-Identifier: Apache-2.0
-//! `X-Origin-Space` HTTP header extractor.
+//! `X-Wenlan-Space` HTTP header extractor (dual-read for backward compat).
 //!
-//! When the request includes `X-Origin-Space: <name>`, this extractor
-//! returns `Some(name)`. Handlers use it as a fallback applied only when
-//! the request body omits the `space` field. Explicit body `space` always
-//! wins to preserve the user's per-call override path.
+//! Accepts both `X-Wenlan-Space: <name>` (new, preferred) and `X-Origin-Space: <name>` (legacy).
+//! Prefers the new header; falls back to legacy if only that is present.
+//! Handlers use it as a fallback applied only when the request body omits the `space` field.
+//! Explicit body `space` always wins to preserve the user's per-call override path.
 
 use axum::extract::FromRequestParts;
 use axum::http::request::Parts;
 use std::convert::Infallible;
 
-pub const HEADER_NAME: &str = "x-origin-space";
+pub const HEADER_NAME: &str = "x-wenlan-space";
+pub const HEADER_NAME_LEGACY: &str = "x-origin-space";
 
 #[derive(Debug, Clone, Default)]
 pub struct SpaceHeader(pub Option<String>);
@@ -25,6 +26,7 @@ where
         let val = parts
             .headers
             .get(HEADER_NAME)
+            .or_else(|| parts.headers.get(HEADER_NAME_LEGACY))
             .and_then(|h| h.to_str().ok())
             .map(|s| s.trim().to_string())
             .filter(|s| !s.is_empty());
@@ -70,5 +72,23 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(val, None);
+    }
+
+    #[tokio::test]
+    async fn legacy_origin_header_still_read() {
+        let mut parts = build_parts(&[("X-Origin-Space", "career")]);
+        let SpaceHeader(val) = SpaceHeader::from_request_parts(&mut parts, &())
+            .await
+            .unwrap();
+        assert_eq!(val.as_deref(), Some("career"));
+    }
+
+    #[tokio::test]
+    async fn wenlan_header_read() {
+        let mut parts = build_parts(&[("X-Wenlan-Space", "health")]);
+        let SpaceHeader(val) = SpaceHeader::from_request_parts(&mut parts, &())
+            .await
+            .unwrap();
+        assert_eq!(val.as_deref(), Some("health"));
     }
 }

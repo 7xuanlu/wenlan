@@ -6,9 +6,10 @@ use serde::{de::DeserializeOwned, Serialize};
 const DEFAULT_HTTP_URL: &str = "http://127.0.0.1:7878";
 
 /// Single source of truth for the space-lock header name.
-/// Mirrors the daemon's `X-Origin-Space` constant (HTTP normalises to lowercase).
+/// Mirrors the daemon's `X-Wenlan-Space` constant (daemon dual-reads the legacy x-origin-space).
+/// HTTP normalises to lowercase.
 pub fn space_header_name() -> &'static str {
-    "x-origin-space"
+    "x-wenlan-space"
 }
 
 /// Discover the Wenlan server URL.
@@ -105,7 +106,7 @@ impl WenlanClient {
     }
 
     /// Attach per-request headers common to all daemon calls:
-    /// `x-agent-name` (when set) and `x-origin-space` (when space is locked).
+    /// `x-agent-name` (when set) and `x-wenlan-space` (when space is locked).
     fn attach_common_headers(
         mut req: reqwest::RequestBuilder,
         agent: Option<&str>,
@@ -223,11 +224,11 @@ impl WenlanClient {
         match compare(mcp_version, daemon_version) {
             VersionStatus::Compatible => None,
             VersionStatus::McpOutdated { mcp, daemon } => Some(format!(
-                "Your origin-mcp v{mcp} is older than the daemon v{daemon}. \
-                 Run `brew upgrade origin-mcp` (or `npm update -g origin-mcp`)."
+                "Your wenlan-mcp v{mcp} is older than the daemon v{daemon}. \
+                 Run `brew upgrade wenlan-mcp` (or `npm update -g wenlan-mcp`)."
             )),
             VersionStatus::DaemonOutdated { mcp, daemon } => Some(format!(
-                "The Wenlan daemon is running v{daemon} but origin-mcp v{mcp} is installed. \
+                "The Wenlan daemon is running v{daemon} but wenlan-mcp v{mcp} is installed. \
                  The daemon was not restarted after an upgrade. Run `wenlan restart` to load it."
             )),
         }

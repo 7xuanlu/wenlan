@@ -50,37 +50,37 @@ jobs:
 
           $CHANGELOG
 
-          **Full Changelog**: https://github.com/7xuanlu/origin/compare/${PREV_TAG}...${RELEASE_TAG}
+          **Full Changelog**: https://github.com/7xuanlu/wenlan/compare/${PREV_TAG}...${RELEASE_TAG}
 
           ## Install
 
-          **Origin setup (local runtime + daemon):**
+          **Wenlan setup (local runtime + daemon):**
           \`\`\`
-          npx -y @7xuanlu/origin setup
+          npx -y wenlan setup
           \`\`\`
 
           **MCP connector only:**
           \`\`\`
-          npx -y origin-mcp
+          npx -y wenlan-mcp
           \`\`\`
 
           **Exact release setup:**
           \`\`\`
-          ORIGIN_RELEASE_TAG=${RELEASE_TAG} npx -y @7xuanlu/origin setup
+          WENLAN_RELEASE_TAG=${RELEASE_TAG} npx -y wenlan setup
           \`\`\`
 
           **Shell installer:**
           \`\`\`
-          curl -fsSL https://raw.githubusercontent.com/7xuanlu/origin/main/install.sh | bash
+          curl -fsSL https://raw.githubusercontent.com/7xuanlu/wenlan/main/install.sh | bash
           \`\`\`
 
           **Exact shell install for this release:**
           \`\`\`
-          curl -fsSL https://raw.githubusercontent.com/7xuanlu/origin/${RELEASE_TAG}/install.sh | ORIGIN_RELEASE_TAG=${RELEASE_TAG} bash
+          curl -fsSL https://raw.githubusercontent.com/7xuanlu/wenlan/${RELEASE_TAG}/install.sh | WENLAN_RELEASE_TAG=${RELEASE_TAG} bash
           \`\`\`
           Downloads exact binaries and prints manual isolated daemon/MCP setup steps.
 
-          > Origin works in local memory mode without a local model or API key. Distill cycles are opt-in with \`origin model install\` or \`origin key set anthropic\`.
+          > Wenlan works in local memory mode without a local model or API key. Distill cycles are opt-in with \`wenlan model install\` or \`wenlan key set anthropic\`.
           INSTALL_EOF
 
           # Strip leading whitespace from heredoc indentation
@@ -111,7 +111,7 @@ jobs:
           - target: aarch64-apple-darwin
             os: macos-14
             archive: tar.gz
-            artifact_name: origin-darwin-arm64
+            artifact_name: wenlan-darwin-arm64
           # x86_64-apple-darwin dropped from v0.7.0: `ort` 2.x does not
           # publish prebuilt ONNX Runtime binaries for Intel Mac. Adding it
           # back requires compiling ONNX from source (~15min build) or
@@ -123,15 +123,15 @@ jobs:
           - target: aarch64-unknown-linux-gnu
             os: ubuntu-24.04-arm
             archive: tar.gz
-            artifact_name: origin-linux-arm64
+            artifact_name: wenlan-linux-arm64
           - target: x86_64-unknown-linux-gnu
             os: ubuntu-24.04
             archive: tar.gz
-            artifact_name: origin-linux-x64
+            artifact_name: wenlan-linux-x64
           - target: x86_64-pc-windows-msvc
             os: windows-2022
             archive: zip
-            artifact_name: origin-windows-x64
+            artifact_name: wenlan-windows-x64
     runs-on: ${{ matrix.os }}
     steps:
       - name: Checkout
@@ -209,18 +209,19 @@ jobs:
         env:
           SCCACHE_GHA_ENABLED: "true"
           RUSTC_WRAPPER: "sccache"
-        run: cargo build --release -p origin -p origin-server -p origin-mcp --target ${{ matrix.target }}
+        run: cargo build --release -p wenlan -p wenlan-server -p wenlan-mcp --target ${{ matrix.target }}
 
       - name: Smoke
         shell: bash
         run: |
-          ./target/${{ matrix.target }}/release/origin${{ runner.os == 'Windows' && '.exe' || '' }} --help
-          ./target/${{ matrix.target }}/release/origin-server${{ runner.os == 'Windows' && '.exe' || '' }} --help
+          ./target/${{ matrix.target }}/release/wenlan${{ runner.os == 'Windows' && '.exe' || '' }} --help
+          ./target/${{ matrix.target }}/release/wenlan-server${{ runner.os == 'Windows' && '.exe' || '' }} --help
 
       - name: List Windows build artifacts
         if: matrix.target == 'x86_64-pc-windows-msvc'
         shell: bash
-        run: ls -la target/${{ matrix.target }}/release/ | head -30
+        run: |
+          find "target/${{ matrix.target }}/release" -maxdepth 1 -mindepth 1 -print | sort | head -30
 
       # ort 2.x caches link-time `.lib` artifacts under
       # `%LOCALAPPDATA%\ort.pyke.io\...` but does NOT keep onnxruntime.dll
@@ -258,41 +259,41 @@ jobs:
             # sc.exe path which requires Administrator elevation. Documented
             # in AGENTS.md.
             7z a "dist/${{ matrix.artifact_name }}.zip" \
-              "./target/${{ matrix.target }}/release/origin.exe" \
-              "./target/${{ matrix.target }}/release/origin-server.exe" \
-              "./target/${{ matrix.target }}/release/origin-mcp.exe" \
+              "./target/${{ matrix.target }}/release/wenlan.exe" \
+              "./target/${{ matrix.target }}/release/wenlan-server.exe" \
+              "./target/${{ matrix.target }}/release/wenlan-mcp.exe" \
               "./target/${{ matrix.target }}/release/onnxruntime.dll"
           else
             tar -C "target/${{ matrix.target }}/release" -czf "dist/${{ matrix.artifact_name }}.tar.gz" \
-              origin origin-server origin-mcp
+              wenlan wenlan-server wenlan-mcp
           fi
 
-      # Per-binary archive for origin-mcp consumed by the Homebrew tap formula.
+      # Per-binary archive for wenlan-mcp consumed by the Homebrew tap formula.
       # Produced only on the darwin-arm64 leg to match the existing tap entry.
-      - name: Package origin-mcp tarball for Homebrew (darwin-arm64 only)
+      - name: Package wenlan-mcp tarball for Homebrew (darwin-arm64 only)
         if: matrix.target == 'aarch64-apple-darwin'
         shell: bash
         run: |
-          cp "target/${{ matrix.target }}/release/origin-mcp" origin-mcp
-          tar -czf dist/origin-mcp-darwin-arm64.tar.gz origin-mcp
-          rm origin-mcp
+          cp "target/${{ matrix.target }}/release/wenlan-mcp" wenlan-mcp
+          tar -czf dist/wenlan-mcp-darwin-arm64.tar.gz wenlan-mcp
+          rm wenlan-mcp
 
-      # Per-binary archive for the origin CLI consumed by the Homebrew tap
-      # formula. Darwin-arm64 only — matches the origin-mcp tap pattern.
+      # Per-binary archive for the wenlan CLI consumed by the Homebrew tap
+      # formula. Darwin-arm64 only — matches the wenlan-mcp tap pattern.
       # Filename intentionally distinct from the multi-binary release tarball
-      # `origin-darwin-arm64.tar.gz` to avoid clobbering it in `dist/`.
-      - name: Package origin CLI tarball for Homebrew (darwin-arm64 only)
+      # `wenlan-darwin-arm64.tar.gz` to avoid clobbering it in `dist/`.
+      - name: Package wenlan CLI tarball for Homebrew (darwin-arm64 only)
         if: matrix.target == 'aarch64-apple-darwin'
         shell: bash
         run: |
-          cp "target/${{ matrix.target }}/release/origin" origin
-          tar -czf dist/origin-cli-darwin-arm64.tar.gz origin
-          rm origin
+          cp "target/${{ matrix.target }}/release/wenlan" wenlan
+          tar -czf dist/wenlan-cli-darwin-arm64.tar.gz wenlan
+          rm wenlan
 
       # Smoke test: verify the multi-binary release archive contains all three
       # binaries before upload. Catches regressions like a same-named Homebrew
       # tarball clobbering the install.sh-consumed archive (v0.7.0 bug).
-      - name: Verify release archive contains origin, origin-server, origin-mcp
+      - name: Verify release archive contains wenlan, wenlan-server, wenlan-mcp
         shell: bash
         run: |
           set -e
@@ -303,7 +304,7 @@ jobs:
             contents=$(unzip -l "dist/${{ matrix.artifact_name }}.zip" | awk '{print $NF}')
             suffix=".exe"
           fi
-          for bin in origin origin-server origin-mcp; do
+          for bin in wenlan wenlan-server wenlan-mcp; do
             if ! printf '%s\n' "$contents" | grep -qE "(^|/)${bin}${suffix}$"; then
               echo "ERROR: dist/${{ matrix.artifact_name }}.${{ matrix.archive }} missing ${bin}${suffix}"
               echo "--- archive contents ---"
@@ -311,7 +312,7 @@ jobs:
               exit 1
             fi
           done
-          echo "OK: archive contains origin, origin-server, origin-mcp"
+          echo "OK: archive contains wenlan, wenlan-server, wenlan-mcp"
 
       - name: Upload archives to release
         uses: softprops/action-gh-release@v2
@@ -322,14 +323,14 @@ jobs:
           append_body: false
           fail_on_unmatched_files: true
 
-      - name: Upload Homebrew artifacts (origin + origin-mcp)
+      - name: Upload Homebrew artifacts (wenlan + wenlan-mcp)
         if: matrix.target == 'aarch64-apple-darwin'
         uses: actions/upload-artifact@v4
         with:
           name: homebrew-artifacts
           path: |
-            dist/origin-cli-darwin-arm64.tar.gz
-            dist/origin-mcp-darwin-arm64.tar.gz
+            dist/wenlan-cli-darwin-arm64.tar.gz
+            dist/wenlan-mcp-darwin-arm64.tar.gz
 
   docker:
     name: Build & Push Docker Image (${{ matrix.platform }})
@@ -367,7 +368,7 @@ jobs:
           file: docker/Dockerfile.daemon
           platforms: ${{ matrix.platform }}
           push: true
-          tags: ghcr.io/7xuanlu/origin-server:${{ env.RELEASE_TAG }}-${{ matrix.tag-suffix }}
+          tags: ghcr.io/7xuanlu/wenlan-server:${{ env.RELEASE_TAG }}-${{ matrix.tag-suffix }}
 
   docker-manifest:
     name: Combine Docker Manifest (multi-arch)
@@ -384,12 +385,12 @@ jobs:
       - name: Create + push multi-arch manifest
         run: |
           TAG="${{ env.RELEASE_TAG }}"
-          IMG="ghcr.io/7xuanlu/origin-server"
+          IMG="ghcr.io/7xuanlu/wenlan-server"
           docker buildx imagetools create -t "$IMG:$TAG" "$IMG:$TAG-amd64" "$IMG:$TAG-arm64"
           docker buildx imagetools create -t "$IMG:latest"  "$IMG:$TAG-amd64" "$IMG:$TAG-arm64"
 
   publish-crates:
-    name: Publish crates.io (origin-types + origin-mcp)
+    name: Publish crates.io (wenlan-types + wenlan-mcp)
     needs: release
     runs-on: ubuntu-latest
 
@@ -403,10 +404,10 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
 
       - name: Pre-flight cargo publish dry-run
-        # Only origin-types — origin-mcp's --dry-run resolves origin-types from
+        # Only wenlan-types — wenlan-mcp's --dry-run resolves wenlan-types from
         # crates.io which doesn't have the new version until the publish step
-        # runs. Real origin-mcp publish happens after origin-types is indexed.
-        run: cargo publish -p origin-types --dry-run
+        # runs. Real wenlan-mcp publish happens after wenlan-types is indexed.
+        run: cargo publish -p wenlan-types --dry-run
 
       - name: Resolve workspace version
         id: version
@@ -415,7 +416,7 @@ jobs:
           echo "value=$VERSION" >> "$GITHUB_OUTPUT"
           echo "Workspace version: $VERSION"
 
-      - name: Publish origin-types to crates.io
+      - name: Publish wenlan-types to crates.io
         # Source-of-truth registry check uses the sparse index (same as the
         # downstream `Wait for ... available` step). The v1 web API lags
         # behind by minutes-to-hours under load and gave false "not
@@ -424,51 +425,51 @@ jobs:
         if: env.CARGO_REGISTRY_TOKEN != ''
         run: |
           VERSION="${{ steps.version.outputs.value }}"
-          if curl -sf "https://index.crates.io/or/ig/origin-types" | grep -q "\"vers\":\"$VERSION\""; then
-            echo "origin-types ${VERSION} already on sparse index, skipping publish"
+          if curl -sf "https://index.crates.io/we/nl/wenlan-types" | grep -q "\"vers\":\"$VERSION\""; then
+            echo "wenlan-types ${VERSION} already on sparse index, skipping publish"
           else
-            cargo publish -p origin-types
+            cargo publish -p wenlan-types
           fi
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
 
-      - name: Wait for origin-types to be available on crates.io
+      - name: Wait for wenlan-types to be available on crates.io
         # Poll the sparse index (https://index.crates.io) — that's what
-        # `cargo publish -p origin-mcp` reads to resolve its
-        # `origin-types = "^X.Y.Z"` dep. The v1 web API
+        # the wenlan-mcp publish step reads to resolve its
+        # `wenlan-types = "^X.Y.Z"` dep. The v1 web API
         # (`crates.io/api/v1/crates/<name>/<version>`) lags behind the
         # sparse index by minutes-to-hours during load, which caused
         # false negatives (publish succeeded, web API still 404). The
         # sparse index path for any crate `name` is
         # `/<prefix>/<name>` where prefix depends on name length;
-        # for 4+ chars: `<first2>/<chars 3-4>/<name>`. `origin-types`
-        # → `or/ig/origin-types`. The index returns NDJSON, one record
+        # for 4+ chars: `<first2>/<chars 3-4>/<name>`. `wenlan-types`
+        # → `we/nl/wenlan-types`. The index returns NDJSON, one record
         # per published version.
         run: |
           VERSION="${{ steps.version.outputs.value }}"
-          INDEX_URL="https://index.crates.io/or/ig/origin-types"
+          INDEX_URL="https://index.crates.io/we/nl/wenlan-types"
           for i in $(seq 1 60); do
             if curl -sf "$INDEX_URL" | grep -q "\"vers\":\"$VERSION\""; then
-              echo "origin-types ${VERSION} visible on sparse index"; exit 0
+              echo "wenlan-types ${VERSION} visible on sparse index"; exit 0
             fi
-            echo "Waiting for sparse index to publish origin-types ${VERSION}... ($i/60)"
+            echo "Waiting for sparse index to publish wenlan-types ${VERSION}... ($i/60)"
             sleep 10
           done
-          echo "ERROR: origin-types ${VERSION} not visible on sparse index after 10 min"
+          echo "ERROR: wenlan-types ${VERSION} not visible on sparse index after 10 min"
           echo "Last index response:"
           curl -s "$INDEX_URL" | tail -5
           exit 1
 
-      - name: Publish origin-mcp to crates.io
-        # Sparse index check (see origin-types step) avoids the v1 web API
+      - name: Publish wenlan-mcp to crates.io
+        # Sparse index check (see wenlan-types step) avoids the v1 web API
         # propagation lag that previously caused duplicate-publish failures.
         if: env.CARGO_REGISTRY_TOKEN != ''
         run: |
           VERSION="${{ steps.version.outputs.value }}"
-          if curl -sf "https://index.crates.io/or/ig/origin-mcp" | grep -q "\"vers\":\"$VERSION\""; then
-            echo "origin-mcp ${VERSION} already on sparse index, skipping publish"
+          if curl -sf "https://index.crates.io/we/nl/wenlan-mcp" | grep -q "\"vers\":\"$VERSION\""; then
+            echo "wenlan-mcp ${VERSION} already on sparse index, skipping publish"
           else
-            cargo publish -p origin-mcp
+            cargo publish -p wenlan-mcp
           fi
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
@@ -487,12 +488,12 @@ jobs:
           node-version: "24"
           registry-url: "https://registry.npmjs.org"
       - name: Sync npm version from tag
-        working-directory: crates/origin-mcp/npm
+        working-directory: crates/wenlan-mcp/npm
         run: |
           VERSION="${RELEASE_TAG#v}"
           npm version "$VERSION" --no-git-tag-version --allow-same-version
       - name: Sync setup package version from tag
-        working-directory: crates/origin-cli/npm
+        working-directory: crates/wenlan-cli/npm
         run: |
           VERSION="${RELEASE_TAG#v}"
           npm version "$VERSION" --no-git-tag-version --allow-same-version
@@ -502,31 +503,31 @@ jobs:
         # always reflect the current project description and the same legal
         # text the daemon ships under.
         run: |
-          cp README.md crates/origin-mcp/npm/README.md
-          cp README.md crates/origin-cli/npm/README.md
-          cp LICENSE crates/origin-mcp/npm/LICENSE
-          cp LICENSE crates/origin-cli/npm/LICENSE
-      - name: Publish origin-mcp
-        working-directory: crates/origin-mcp/npm
+          cp README.md crates/wenlan-mcp/npm/README.md
+          cp README.md crates/wenlan-cli/npm/README.md
+          cp LICENSE crates/wenlan-mcp/npm/LICENSE
+          cp LICENSE crates/wenlan-cli/npm/LICENSE
+      - name: Publish wenlan-mcp
+        working-directory: crates/wenlan-mcp/npm
         # Skip if version already on npm. Retried releases or re-dispatch
         # workflows would otherwise fail with "You cannot publish over the
         # previously published versions". `npm view <pkg>@<v> version`
         # exits 0 + prints the version when published, exits 1 otherwise.
         run: |
           VERSION="${RELEASE_TAG#v}"
-          if npm view "origin-mcp@$VERSION" version >/dev/null 2>&1; then
-            echo "origin-mcp@$VERSION already on npm, skipping"
+          if npm view "wenlan-mcp@$VERSION" version >/dev/null 2>&1; then
+            echo "wenlan-mcp@$VERSION already on npm, skipping"
           else
             npm publish --provenance --access public
           fi
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-      - name: Publish @7xuanlu/origin
-        working-directory: crates/origin-cli/npm
+      - name: Publish wenlan
+        working-directory: crates/wenlan-cli/npm
         run: |
           VERSION="${RELEASE_TAG#v}"
-          if npm view "@7xuanlu/origin@$VERSION" version >/dev/null 2>&1; then
-            echo "@7xuanlu/origin@$VERSION already on npm, skipping"
+          if npm view "wenlan@$VERSION" version >/dev/null 2>&1; then
+            echo "wenlan@$VERSION already on npm, skipping"
           else
             npm publish --provenance --access public
           fi
@@ -548,18 +549,18 @@ jobs:
           HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
         run: |
           VERSION="${RELEASE_TAG#v}"
-          SHA_MCP_DARWIN_ARM64=$(sha256sum origin-mcp-darwin-arm64.tar.gz | cut -d' ' -f1)
-          SHA_CLI_DARWIN_ARM64=$(sha256sum origin-darwin-arm64.tar.gz | cut -d' ' -f1)
+          SHA_MCP_DARWIN_ARM64=$(sha256sum wenlan-mcp-darwin-arm64.tar.gz | cut -d' ' -f1)
+          SHA_CLI_DARWIN_ARM64=$(sha256sum wenlan-cli-darwin-arm64.tar.gz | cut -d' ' -f1)
 
-          git clone https://x-access-token:${HOMEBREW_TAP_TOKEN}@github.com/7xuanlu/homebrew-tap.git tap
+          git clone "https://x-access-token:${HOMEBREW_TAP_TOKEN}@github.com/7xuanlu/homebrew-tap.git" tap
           mkdir -p tap/Formula
 
-          cat > tap/Formula/origin-mcp.rb << 'FORMULA'
-          class OriginMcp < Formula
-            desc "MCP server for Origin — personal agent memory layer"
+          cat > tap/Formula/wenlan-mcp.rb << 'FORMULA'
+          class WenlanMcp < Formula
+            desc "MCP server for Wenlan — personal agent memory layer"
             homepage "https://github.com/7xuanlu/origin"
             version "VERSION_PLACEHOLDER"
-            url "https://github.com/7xuanlu/origin/releases/download/vVERSION_PLACEHOLDER/origin-mcp-darwin-arm64.tar.gz"
+            url "https://github.com/7xuanlu/wenlan/releases/download/vVERSION_PLACEHOLDER/wenlan-mcp-darwin-arm64.tar.gz"
             sha256 "SHA_PLACEHOLDER"
             license "Apache-2.0"
 
@@ -573,24 +574,24 @@ jobs:
             end
 
             def install
-              bin.install "origin-mcp"
+              bin.install "wenlan-mcp"
             end
 
             test do
-              assert_match "origin-mcp", shell_output("#{bin}/origin-mcp --help")
+              assert_match "wenlan-mcp", shell_output("#{bin}/wenlan-mcp --help")
             end
           end
           FORMULA
 
-          sed -i "s/VERSION_PLACEHOLDER/${VERSION}/g" tap/Formula/origin-mcp.rb
-          sed -i "s/SHA_PLACEHOLDER/${SHA_MCP_DARWIN_ARM64}/g" tap/Formula/origin-mcp.rb
+          sed -i "s/VERSION_PLACEHOLDER/${VERSION}/g" tap/Formula/wenlan-mcp.rb
+          sed -i "s/SHA_PLACEHOLDER/${SHA_MCP_DARWIN_ARM64}/g" tap/Formula/wenlan-mcp.rb
 
-          cat > tap/Formula/origin.rb << 'FORMULA'
-          class Origin < Formula
-            desc "Origin CLI — local-first memory + knowledge layer for AI agents"
+          cat > tap/Formula/wenlan.rb << 'FORMULA'
+          class Wenlan < Formula
+            desc "Wenlan CLI — local-first memory + knowledge layer for AI agents"
             homepage "https://github.com/7xuanlu/origin"
             version "VERSION_PLACEHOLDER"
-            url "https://github.com/7xuanlu/origin/releases/download/vVERSION_PLACEHOLDER/origin-darwin-arm64.tar.gz"
+            url "https://github.com/7xuanlu/wenlan/releases/download/vVERSION_PLACEHOLDER/wenlan-cli-darwin-arm64.tar.gz"
             sha256 "SHA_PLACEHOLDER"
             license "Apache-2.0"
 
@@ -604,26 +605,26 @@ jobs:
             end
 
             def install
-              bin.install "origin"
+              bin.install "wenlan"
             end
 
             test do
-              assert_match "origin", shell_output("#{bin}/origin --help")
+              assert_match "wenlan", shell_output("#{bin}/wenlan --help")
             end
           end
           FORMULA
 
-          sed -i "s/VERSION_PLACEHOLDER/${VERSION}/g" tap/Formula/origin.rb
-          sed -i "s/SHA_PLACEHOLDER/${SHA_CLI_DARWIN_ARM64}/g" tap/Formula/origin.rb
+          sed -i "s/VERSION_PLACEHOLDER/${VERSION}/g" tap/Formula/wenlan.rb
+          sed -i "s/SHA_PLACEHOLDER/${SHA_CLI_DARWIN_ARM64}/g" tap/Formula/wenlan.rb
 
           cd tap
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add Formula/origin-mcp.rb Formula/origin.rb
-          git commit -m "origin + origin-mcp ${VERSION}"
+          git add Formula/wenlan-mcp.rb Formula/wenlan.rb
+          git commit -m "wenlan + wenlan-mcp ${VERSION}"
           git push origin HEAD:main
 
       - name: Verify formula syntax
         run: |
-          ruby -c tap/Formula/origin-mcp.rb
-          ruby -c tap/Formula/origin.rb
+          ruby -c tap/Formula/wenlan-mcp.rb
+          ruby -c tap/Formula/wenlan.rb

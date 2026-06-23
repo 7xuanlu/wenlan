@@ -388,13 +388,13 @@ jobs:
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: "24"
-      - name: Validate origin-mcp npm package
+      - name: Validate wenlan-mcp npm package
         working-directory: crates/wenlan-mcp/npm
         run: |
           npm pack --dry-run
           node -c run.js
           node -c install.js
-      - name: Validate @7xuanlu/origin npm package
+      - name: Validate wenlan npm package
         working-directory: crates/wenlan-cli/npm
         run: |
           npm pack --dry-run

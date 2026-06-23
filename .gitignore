@@ -79,8 +79,8 @@ memorydb/
 src-tauri/
 
 # Local override for the plugin's MCP runner — typically a symlink to a
-# dev-built origin-mcp binary. See plugin/bin/origin-mcp-runner.sh.
-plugin/bin/origin-mcp.local
+# dev-built wenlan-mcp binary. See plugin/bin/wenlan-mcp-runner.sh.
+plugin/bin/wenlan-mcp.local
 
 # Python bytecode (analyze_paired.py + tests)
 __pycache__/

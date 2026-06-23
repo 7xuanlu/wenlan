@@ -304,7 +304,7 @@ async fn version_handshake_warns_when_daemon_minor_ahead() {
     assert!(warning.is_some(), "expected a warning when daemon ahead");
     let msg = warning.unwrap();
     assert!(msg.contains("wenlan-mcp"), "msg={msg}");
-    assert!(msg.contains("brew upgrade origin-mcp"), "msg={msg}");
+    assert!(msg.contains("brew upgrade wenlan-mcp"), "msg={msg}");
 }
 
 #[tokio::test]
