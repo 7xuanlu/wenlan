@@ -67,6 +67,11 @@ pub struct Config {
     pub external_llm_endpoint: Option<String>,
     #[serde(default)]
     pub external_llm_model: Option<String>,
+    /// Persistent cross-encoder reranker mode (`off`/`lite`/`full`). Daemon-read
+    /// at startup via `reranker_mode_resolved`; the `WENLAN_RERANKER_MODE` env
+    /// var overrides it. Set with `wenlan reranker <mode>`.
+    #[serde(default)]
+    pub reranker_mode: Option<String>,
 }
 
 /// Generate a source ID slug from a directory path (last component, lowercased, sanitized).
@@ -347,6 +352,21 @@ mod tests {
         let config: Config = serde_json::from_str(json).unwrap();
         assert!(config.routine_model.is_none());
         assert!(config.synthesis_model.is_none());
+    }
+
+    #[test]
+    fn config_reranker_mode_roundtrip_and_default_none() {
+        // Persisted reranker_mode survives a serialize -> deserialize round-trip,
+        // and an old config file without the field deserializes to None (serde default).
+        let cfg = Config {
+            reranker_mode: Some("full".to_string()),
+            ..Default::default()
+        };
+        let back: Config = serde_json::from_str(&serde_json::to_string(&cfg).unwrap()).unwrap();
+        assert_eq!(back.reranker_mode.as_deref(), Some("full"));
+
+        let old: Config = serde_json::from_str(r#"{"anthropic_api_key": "sk-test"}"#).unwrap();
+        assert_eq!(old.reranker_mode, None);
     }
 
     // --- New sources/knowledge_path tests ---
