@@ -4,7 +4,7 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "Headless daemon for Origin — HTTP/MCP server without Tauri"
+description = "Headless daemon for Wenlan — HTTP/MCP server without Tauri"
 
 [lib]
 name = "wenlan_server"
