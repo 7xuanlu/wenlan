@@ -54,19 +54,19 @@ jobs:
 
           ## Install
 
-          **Origin setup (local runtime + daemon):**
+          **Wenlan setup (local runtime + daemon):**
           \`\`\`
-          npx -y @7xuanlu/origin setup
+          npx -y wenlan setup
           \`\`\`
 
           **MCP connector only:**
           \`\`\`
-          npx -y origin-mcp
+          npx -y wenlan-mcp
           \`\`\`
 
           **Exact release setup:**
           \`\`\`
-          ORIGIN_RELEASE_TAG=${RELEASE_TAG} npx -y @7xuanlu/origin setup
+          WENLAN_RELEASE_TAG=${RELEASE_TAG} npx -y wenlan setup
           \`\`\`
 
           **Shell installer:**
@@ -76,11 +76,11 @@ jobs:
 
           **Exact shell install for this release:**
           \`\`\`
-          curl -fsSL https://raw.githubusercontent.com/7xuanlu/origin/${RELEASE_TAG}/install.sh | ORIGIN_RELEASE_TAG=${RELEASE_TAG} bash
+          curl -fsSL https://raw.githubusercontent.com/7xuanlu/origin/${RELEASE_TAG}/install.sh | WENLAN_RELEASE_TAG=${RELEASE_TAG} bash
           \`\`\`
           Downloads exact binaries and prints manual isolated daemon/MCP setup steps.
 
-          > Origin works in local memory mode without a local model or API key. Distill cycles are opt-in with \`origin model install\` or \`origin key set anthropic\`.
+          > Wenlan works in local memory mode without a local model or API key. Distill cycles are opt-in with \`wenlan model install\` or \`wenlan key set anthropic\`.
           INSTALL_EOF
 
           # Strip leading whitespace from heredoc indentation
@@ -548,18 +548,18 @@ jobs:
           HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
         run: |
           VERSION="${RELEASE_TAG#v}"
-          SHA_MCP_DARWIN_ARM64=$(sha256sum origin-mcp-darwin-arm64.tar.gz | cut -d' ' -f1)
-          SHA_CLI_DARWIN_ARM64=$(sha256sum origin-darwin-arm64.tar.gz | cut -d' ' -f1)
+          SHA_MCP_DARWIN_ARM64=$(sha256sum wenlan-mcp-darwin-arm64.tar.gz | cut -d' ' -f1)
+          SHA_CLI_DARWIN_ARM64=$(sha256sum wenlan-cli-darwin-arm64.tar.gz | cut -d' ' -f1)
 
           git clone https://x-access-token:${HOMEBREW_TAP_TOKEN}@github.com/7xuanlu/homebrew-tap.git tap
           mkdir -p tap/Formula
 
-          cat > tap/Formula/origin-mcp.rb << 'FORMULA'
-          class OriginMcp < Formula
-            desc "MCP server for Origin — personal agent memory layer"
+          cat > tap/Formula/wenlan-mcp.rb << 'FORMULA'
+          class WenlanMcp < Formula
+            desc "MCP server for Wenlan — personal agent memory layer"
             homepage "https://github.com/7xuanlu/origin"
             version "VERSION_PLACEHOLDER"
-            url "https://github.com/7xuanlu/origin/releases/download/vVERSION_PLACEHOLDER/origin-mcp-darwin-arm64.tar.gz"
+            url "https://github.com/7xuanlu/origin/releases/download/vVERSION_PLACEHOLDER/wenlan-mcp-darwin-arm64.tar.gz"
             sha256 "SHA_PLACEHOLDER"
             license "Apache-2.0"
 
@@ -573,24 +573,24 @@ jobs:
             end
 
             def install
-              bin.install "origin-mcp"
+              bin.install "wenlan-mcp"
             end
 
             test do
-              assert_match "origin-mcp", shell_output("#{bin}/origin-mcp --help")
+              assert_match "wenlan-mcp", shell_output("#{bin}/wenlan-mcp --help")
             end
           end
           FORMULA
 
-          sed -i "s/VERSION_PLACEHOLDER/${VERSION}/g" tap/Formula/origin-mcp.rb
-          sed -i "s/SHA_PLACEHOLDER/${SHA_MCP_DARWIN_ARM64}/g" tap/Formula/origin-mcp.rb
+          sed -i "s/VERSION_PLACEHOLDER/${VERSION}/g" tap/Formula/wenlan-mcp.rb
+          sed -i "s/SHA_PLACEHOLDER/${SHA_MCP_DARWIN_ARM64}/g" tap/Formula/wenlan-mcp.rb
 
-          cat > tap/Formula/origin.rb << 'FORMULA'
-          class Origin < Formula
-            desc "Origin CLI — local-first memory + knowledge layer for AI agents"
+          cat > tap/Formula/wenlan.rb << 'FORMULA'
+          class Wenlan < Formula
+            desc "Wenlan CLI — local-first memory + knowledge layer for AI agents"
             homepage "https://github.com/7xuanlu/origin"
             version "VERSION_PLACEHOLDER"
-            url "https://github.com/7xuanlu/origin/releases/download/vVERSION_PLACEHOLDER/origin-darwin-arm64.tar.gz"
+            url "https://github.com/7xuanlu/origin/releases/download/vVERSION_PLACEHOLDER/wenlan-cli-darwin-arm64.tar.gz"
             sha256 "SHA_PLACEHOLDER"
             license "Apache-2.0"
 
@@ -604,26 +604,26 @@ jobs:
             end
 
             def install
-              bin.install "origin"
+              bin.install "wenlan"
             end
 
             test do
-              assert_match "origin", shell_output("#{bin}/origin --help")
+              assert_match "wenlan", shell_output("#{bin}/wenlan --help")
             end
           end
           FORMULA
 
-          sed -i "s/VERSION_PLACEHOLDER/${VERSION}/g" tap/Formula/origin.rb
-          sed -i "s/SHA_PLACEHOLDER/${SHA_CLI_DARWIN_ARM64}/g" tap/Formula/origin.rb
+          sed -i "s/VERSION_PLACEHOLDER/${VERSION}/g" tap/Formula/wenlan.rb
+          sed -i "s/SHA_PLACEHOLDER/${SHA_CLI_DARWIN_ARM64}/g" tap/Formula/wenlan.rb
 
           cd tap
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add Formula/origin-mcp.rb Formula/origin.rb
-          git commit -m "origin + origin-mcp ${VERSION}"
+          git add Formula/wenlan-mcp.rb Formula/wenlan.rb
+          git commit -m "wenlan + wenlan-mcp ${VERSION}"
           git push origin HEAD:main
 
       - name: Verify formula syntax
         run: |
-          ruby -c tap/Formula/origin-mcp.rb
-          ruby -c tap/Formula/origin.rb
+          ruby -c tap/Formula/wenlan-mcp.rb
+          ruby -c tap/Formula/wenlan.rb
