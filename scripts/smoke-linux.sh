@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-IMAGE_TAG="${IMAGE_TAG:-origin-server:smoke}"
+IMAGE_TAG="${IMAGE_TAG:-wenlan-server:smoke}"
 CONTAINER="${CONTAINER:-origin-smoke}"
 PORT="${PORT:-17878}"
 # Default to the host arch: linux/arm64 on Apple Silicon devs (fast via OrbStack

@@ -1,7 +1,7 @@
 ---
 name: forget
 description: >
-  Delete a memory from Origin by ID. Destructive and cannot be undone —
+  Delete a memory from Wenlan by ID. Destructive and cannot be undone —
   prefer `/capture` with `supersedes` for corrections. Invoked as
   `/forget <source_id>`.
 argument-hint: "<source_id>"
@@ -41,21 +41,21 @@ Deletion is destructive. Always confirm with the user before calling forget,
 unless the user has already given an explicit, unambiguous instruction in
 the same turn (e.g. they pasted the ID and said "delete this").
 
-## Auto-commit ~/.origin/
+## Auto-commit ~/.wenlan/
 
 If the deletion removed a page md (daemon archives the page and
 KnowledgeWriter unlinks the file), snapshot the change. Defensive —
-silent skip if `git` missing, `~/.origin/` not a repo, or no diff.
+silent skip if `git` missing, `~/.wenlan/` not a repo, or no diff.
 
 ```
-Bash: git -C ~/.origin add -A && \
-      git -C ~/.origin -c user.name=Origin -c user.email=daemon@origin.local \
+Bash: git -C ~/.wenlan add -A && \
+      git -C ~/.wenlan -c user.name=Wenlan -c user.email=daemon@origin.local \
           commit --quiet -m "forget: <source_id>" 2>/dev/null || \
-      (sleep 1 && git -C ~/.origin add -A && \
-       git -C ~/.origin -c user.name=Origin -c user.email=daemon@origin.local \
+      (sleep 1 && git -C ~/.wenlan add -A && \
+       git -C ~/.wenlan -c user.name=Wenlan -c user.email=daemon@origin.local \
            commit --quiet -m "forget: <source_id>" 2>/dev/null) || true
 ```
 
 The retry handles index.lock races — the daemon may be writing to
-`~/.origin/` at the same moment (auto-commit from captures). One-second
+`~/.wenlan/` at the same moment (auto-commit from captures). One-second
 wait is enough for the daemon to release the lock.

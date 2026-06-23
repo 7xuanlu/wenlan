@@ -1,7 +1,7 @@
 ---
 name: recall
 description: >
-  Search Origin's local memory by query. Targeted lookup, not orientation.
+  Search Wenlan's local memory by query. Targeted lookup, not orientation.
   Invoked as `/recall <query>`. Use when the user asks "do you
   remember", "what do you know about", "look up".
 argument-hint: "<query>"
@@ -10,7 +10,7 @@ allowed-tools: ["mcp__plugin_origin_origin__recall"]
 
 # /recall
 
-Search Origin's memory by natural-language query. Returns matching memories
+Search Wenlan's memory by natural-language query. Returns matching memories
 ranked by hybrid vector + FTS search, then re-ordered by the agent if it
 helps.
 

@@ -26,7 +26,7 @@ ENTITY_RULES = [
     (["mempalace", "MemPalace"], "MemPalace", "project", "origin"),
     (["supermemory", "Supermemory"], "Supermemory", "organization", "origin"),
     (["karpathy"], "Andrej Karpathy", "person", None),
-    (["origin-mcp"], "origin-mcp", "project", "origin"),
+    (["wenlan-mcp"], "wenlan-mcp", "project", "origin"),
     (["knowledge graph", "entity graph"], "Knowledge Graph", "concept", "origin"),
     (["quality gate"], "Quality Gate", "concept", "origin"),
     (["refinery sweep", "refinery phase"], "Refinery", "concept", "origin"),

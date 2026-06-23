@@ -12,7 +12,7 @@ allowed-tools: ["Bash", "mcp__plugin_origin_origin__capture"]
 
 Alias for `/handoff`. Identical behavior — full end-of-session ritual:
 git context grab (if repo), narrative session log at
-`~/.origin/sessions/`, project status update, granular MCP captures.
+`~/.wenlan/sessions/`, project status update, granular MCP captures.
 
 Run the steps in `/origin:handoff` exactly. Same artifacts, same
 guardrails. The only reason this skill exists is the symmetric naming —

@@ -1,5 +1,5 @@
 name: Feature Request
-description: Suggest an idea for Origin
+description: Suggest an idea for Wenlan
 labels: ["enhancement"]
 body:
   - type: textarea

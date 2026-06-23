@@ -2,14 +2,14 @@ $ErrorActionPreference = "Stop"
 
 $Port    = 17878
 $DataDir = New-Item -ItemType Directory -Path "$env:TEMP\origin-smoke-$([System.Guid]::NewGuid())"
-$ExePath = "target\release\origin-server.exe"
+$ExePath = "target\release\wenlan-server.exe"
 
 if (-not (Test-Path $ExePath)) {
-    throw "expected $ExePath to exist; build origin-server first"
+    throw "expected $ExePath to exist; build wenlan-server first"
 }
 
-$env:ORIGIN_BIND_ADDR = "127.0.0.1:$Port"
-$env:ORIGIN_DATA_DIR  = $DataDir.FullName
+$env:WENLAN_BIND_ADDR = "127.0.0.1:$Port"
+$env:WENLAN_DATA_DIR  = $DataDir.FullName
 
 Write-Host "==> Starting daemon"
 $proc = Start-Process -FilePath $ExePath -PassThru -WindowStyle Hidden

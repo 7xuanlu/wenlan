@@ -2,7 +2,7 @@
 
 ## Context
 
-Origin has pivoted from screen capture/focus tracking to being a **personal agent memory layer** — where AI agents write what they learn and humans curate. The current MemoryView is built around a capture-centric model (time-grouped files from screen, clipboard, focus). This redesign reimagines the memory page around the new primitives: profile, preferences, facts, identity, goals, relationships — the same concepts as the official MCP memory server, but with a human-first browsing experience.
+Wenlan has pivoted from screen capture/focus tracking to being a **personal agent memory layer** — where AI agents write what they learn and humans curate. The current MemoryView is built around a capture-centric model (time-grouped files from screen, clipboard, focus). This redesign reimagines the memory page around the new primitives: profile, preferences, facts, identity, goals, relationships — the same concepts as the official MCP memory server, but with a human-first browsing experience.
 
 ## Design Principles
 
@@ -16,7 +16,7 @@ Origin has pivoted from screen capture/focus tracking to being a **personal agen
 
 ```
 ┌─────────────────────────────────────────────────────────┐
-│  Origin                                    [search] [gear] │
+│  Wenlan                                    [search] [gear] │
 ├──────────────┬──────────────────────────────────────────┤
 │  Sidebar     │  Main Stream                            │
 │  (240px)     │  (remaining width)                      │
@@ -107,7 +107,7 @@ Best stuff always at top. Low-quality memories naturally sink.
 
 ### Connections
 
-Entity names mentioned in memories appear as warm-underlined links. Click to navigate to that entity's detail view. Breadcrumb trail: `Everything > Work > Origin project`.
+Entity names mentioned in memories appear as warm-underlined links. Click to navigate to that entity's detail view. Breadcrumb trail: `Everything > Work > Wenlan project`.
 
 ## Domain Scaffolding
 

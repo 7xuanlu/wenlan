@@ -34,12 +34,12 @@ get_page(page_id="<id>")
 
 The response is a JSON object wrapping `{ "page": {...} }`. Read
 `title`, `summary`, `space`, and `source_memory_ids` off the page,
-then look up the md filename in `~/.origin/pages/.origin/state.json`:
+then look up the md filename in `~/.wenlan/pages/.origin/state.json`:
 
 ```
 Bash: python3 -c '
 import json, os, sys
-state_path = os.path.expanduser("~/.origin/pages/.origin/state.json")
+state_path = os.path.expanduser("~/.wenlan/pages/.origin/state.json")
 pid = "<id>"
 filename = None
 try:
@@ -47,7 +47,7 @@ try:
         filename = json.load(f).get("pages", {}).get(pid, {}).get("file")
 except FileNotFoundError:
     pass
-print(f"~/.origin/pages/{filename}" if filename else "(no md projection on disk)")
+print(f"~/.wenlan/pages/{filename}" if filename else "(no md projection on disk)")
 '
 ```
 
@@ -82,7 +82,7 @@ Summary:  <one sentence>
 Sources:  <N> memories
 Space:    <space or (none)>
 Links:    <N inbound, M outbound (<K> broken)>
-Open:     ~/.origin/pages/<slug>.md
+Open:     ~/.wenlan/pages/<slug>.md
 ⚠ Stale: <stale_reason> — run /distill to refresh
 ```
 
@@ -147,5 +147,5 @@ better than their tools do.
 
 - Raw memory lookups → use `/recall`.
 - Listing all pages → `list_pages_recent` MCP tool or
-  `ls ~/.origin/pages/`.
+  `ls ~/.wenlan/pages/`.
 - Reading the full body → open the md file in the user's editor.

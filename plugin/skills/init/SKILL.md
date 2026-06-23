@@ -47,16 +47,16 @@ Then add it to PATH for the current session and configure local memory
 non-interactively:
 
 ```
-Bash: export PATH="$HOME/.origin/bin:$PATH" && origin setup --basic && origin install
+Bash: export PATH="$HOME/.origin/bin:$PATH" && wenlan setup --basic && wenlan install
 ```
 
 If `present` (CLI exists, daemon down), just install + start:
 
 ```
-Bash: origin setup --basic 2>/dev/null || true; origin install
+Bash: wenlan setup --basic 2>/dev/null || true; wenlan install
 ```
 
-`origin setup --basic` is idempotent — safe to re-run. `origin install`
+`wenlan setup --basic` is idempotent — safe to re-run. `wenlan install`
 writes the launchd plist and starts the daemon.
 
 ### 3. Re-probe daemon health
@@ -88,7 +88,7 @@ context()
 ```
 
 Pass → continue. Fail → MCP not wired. Tell user:
-"origin-mcp didn't respond. Restart Claude Code so the plugin's
+"wenlan-mcp didn't respond. Restart Claude Code so the plugin's
 `.mcp.json` re-spawns the server."
 
 ### 6. Ready report
@@ -96,11 +96,11 @@ Pass → continue. Fail → MCP not wired. Tell user:
 Print:
 
 ```
-Origin ready.
+Wenlan ready.
   Daemon:   up on 127.0.0.1:7878
   Mode:     <mode from doctor()>
   MCP:      connected
-  Data:     ~/.origin/  (pages, sessions, db symlink)
+  Data:     ~/.wenlan/  (pages, sessions, db symlink)
   Try:      /brief, /capture <thing>, /recall <query>, /help
 ```
 
@@ -112,8 +112,8 @@ once so the user sees the verb cheat-sheet without asking.
 Mention these in the ready report only if the user explicitly asks for
 "richer features" or asks about model-backed extraction:
 
-- `origin model install` — local Qwen for distill cycles.
-- `origin key set anthropic` — Anthropic for stronger synthesis.
+- `wenlan model install` — local Qwen for distill cycles.
+- `wenlan key set anthropic` — Anthropic for stronger synthesis.
 
 Default flow ignores both. Storage, search, recall, and MCP memory all
 work in local memory mode.
@@ -127,4 +127,4 @@ work in local memory mode.
 ## When NOT to use
 
 - Daemon already verified this session → `/brief` instead.
-- Editing one config field → `origin doctor` or settings file directly.
+- Editing one config field → `wenlan doctor` or settings file directly.

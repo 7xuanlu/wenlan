@@ -1,11 +1,11 @@
 <p align="center">
-  <img src="./docs/assets/social-preview.png" alt="Origin: Where AI work compounds. Decisions, lessons, project context, and wiki pages." width="100%">
+  <img src="./docs/assets/social-preview.png" alt="Wenlan: Where AI work compounds. Decisions, lessons, project context, and wiki pages." width="100%">
 </p>
 
 [![CI](https://github.com/7xuanlu/origin/actions/workflows/ci.yml/badge.svg?branch=main&event=push)](https://github.com/7xuanlu/origin/actions/workflows/ci.yml?query=branch%3Amain)
 [![Release](https://img.shields.io/github/v/release/7xuanlu/origin?sort=semver)](https://github.com/7xuanlu/origin/releases/latest)
 [![npm: @7xuanlu/origin](https://img.shields.io/npm/v/%407xuanlu%2Forigin?label=%407xuanlu%2Forigin)](https://www.npmjs.com/package/@7xuanlu/origin)
-[![npm: origin-mcp](https://img.shields.io/npm/v/origin-mcp?label=origin-mcp)](https://www.npmjs.com/package/origin-mcp)
+[![npm: wenlan-mcp](https://img.shields.io/npm/v/wenlan-mcp?label=wenlan-mcp)](https://www.npmjs.com/package/wenlan-mcp)
 [![MCP Server](https://img.shields.io/badge/MCP-server-blue)](https://modelcontextprotocol.io)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](#license)
 
@@ -27,22 +27,22 @@
 
 **Your next AI session should pick up the context you built, not lose it in chat history.**
 
-Origin is the single local home for your AI work artifacts: decisions, lessons, gotchas, project context. Captured in flow, distilled into source-backed wiki pages, recalled across chats, projects, and time.
+Wenlan is the single local home for your AI work artifacts: decisions, lessons, gotchas, project context. Captured in flow, distilled into source-backed wiki pages, recalled across chats, projects, and time.
 
 A brief opens each session, a handoff closes it, so the thread carries forward instead of restarting.
 
-One store, every tool: Claude Code, Cursor, Codex, Claude Desktop, VS Code, and Gemini CLI query the same local daemon. Read the Markdown under `~/.origin/`, or symlink it into Obsidian for a graph view. Spaces keep work, personal, and client projects from bleeding together.
+One store, every tool: Claude Code, Cursor, Codex, Claude Desktop, VS Code, and Gemini CLI query the same local daemon. Read the Markdown under `~/.wenlan/`, or symlink it into Obsidian for a graph view. Spaces keep work, personal, and client projects from bleeding together.
 
-[![Watch the Origin demo](./docs/assets/demo-preview.gif)](https://youtu.be/k37gjWVPHwI)
+[![Watch the Wenlan demo](./docs/assets/demo-preview.gif)](https://youtu.be/k37gjWVPHwI)
 
 ---
 
-## What makes Origin distinct
+## What makes Wenlan distinct
 
-1. **Compounds, not just storage.** Most memory tools hand back snippets. Origin clusters captures into source-backed wiki pages, and those pages feed retrieval alongside the atomic memories they came from.
+1. **Compounds, not just storage.** Most memory tools hand back snippets. Wenlan clusters captures into source-backed wiki pages, and those pages feed retrieval alongside the atomic memories they came from.
 2. **One home, locked to none.** Every MCP client queries the same local daemon, so context built in one tool shows up in the next. Obsidian is one optional view you can symlink in, not where your work lives.
-3. **Review before trust.** Low-confidence captures and contradictions surface for review instead of silently entering context. Correct yourself once and Origin supersedes the old fact instead of serving both. Pages cite their source memory IDs, and the daemon refuses unsourced pages rather than letting hallucinated summaries in.
-4. **Real git versioning.** Memory, page, and session writes commit into `~/.origin/.git/`, so you can inspect, diff, revert, or branch the Markdown artifacts.
+3. **Review before trust.** Low-confidence captures and contradictions surface for review instead of silently entering context. Correct yourself once and Wenlan supersedes the old fact instead of serving both. Pages cite their source memory IDs, and the daemon refuses unsourced pages rather than letting hallucinated summaries in.
+4. **Real git versioning.** Memory, page, and session writes commit into `~/.wenlan/.git/`, so you can inspect, diff, revert, or branch the Markdown artifacts.
    ```text
    a1b2c3d page: embedding-retrieval refreshed (4 sources)
    9f8e7d6 session: handoff embedding-work
@@ -69,39 +69,39 @@ Plugin details and daily commands: [plugin/](plugin/.claude-plugin/README.md).
 
 ### MCP-only setup
 
-Use this if you want Origin tools in Claude Code without the plugin, or in Codex, Cursor, Claude Desktop, VS Code, or Gemini CLI.
+Use this if you want Wenlan tools in Claude Code without the plugin, or in Codex, Cursor, Claude Desktop, VS Code, or Gemini CLI.
 
 ```bash
-npx -y @7xuanlu/origin setup
-~/.origin/bin/origin mcp add claude-code      # or: codex, cursor, claude-desktop, vscode, gemini
+npx -y @7xuanlu/wenlan setup
+~/.wenlan/bin/origin mcp add claude-code      # or: codex, cursor, claude-desktop, vscode, gemini
 ```
 
 MCP-only gives agents tools for capture, recall, context, doctor, and page distillation. It does not install Claude Code slash skills like `/brief`, `/handoff`, `/distill`, or `/init`.
 
 ### Terminal runtime setup
 
-Set up the local Origin runtime:
+Set up the local Wenlan runtime:
 
 ```bash
-npx -y @7xuanlu/origin setup
+npx -y @7xuanlu/wenlan setup
 ```
 
-Then start with `~/.origin/bin/origin status`, `~/.origin/bin/origin recall <query>`, or `~/.origin/bin/origin store <text>`. CLI details: [crates/origin-cli](crates/origin-cli/README.md).
+Then start with `~/.wenlan/bin/wenlan status`, `~/.wenlan/bin/wenlan recall <query>`, or `~/.wenlan/bin/wenlan store <text>`. CLI details: [crates/wenlan-cli](crates/wenlan-cli/README.md).
 
 Service management:
 
 ```bash
-origin install            # register + start the daemon (stops a running one first)
-origin restart            # stop + start the daemon -- run this after upgrading
-origin status
-origin uninstall
+wenlan install            # register + start the daemon (stops a running one first)
+wenlan restart            # stop + start the daemon -- run this after upgrading
+wenlan status
+wenlan uninstall
 ```
 
-After upgrading Origin (`npx -y @7xuanlu/origin setup` or `install.sh`), the new binary is on disk but the already-running daemon keeps serving the old code until you restart it. `origin install` now restarts automatically; if you upgraded another way, run `origin restart`.
+After upgrading Wenlan (`npx -y @7xuanlu/wenlan setup` or `install.sh`), the new binary is on disk but the already-running daemon keeps serving the old code until you restart it. `wenlan install` now restarts automatically; if you upgraded another way, run `wenlan restart`.
 
 ---
 
-## How Origin works
+## How Wenlan works
 
 The same loop runs every session: capture while you work, let the daemon refine between sessions, and return with the knowledge already in context.
 
@@ -146,7 +146,7 @@ Works fully local with no API key, cloud account, or signup. Capture, recall, hy
 - **Stays fresh on its own**: background passes link entities, grow matching pages, and update each memory's effective confidence from type, access, and age, so recent and load-bearing memories surface while stale ones fade.
 - **Review before trust**: low-confidence captures, pending revisions, contradictions, and supersessions can surface instead of silently entering context.
 - **Explicit spaces**: tag memories, pages, and recalls with `space=work | personal | client-X` so a day-job capture never bleeds into a side-project brief. Auto-detected from the current repo or workspace when no space is set; overridable always.
-- **You own the data**: everything is plain Markdown under `~/.origin/`, versioned in git. Grep it, symlink it into Obsidian, or walk away with the files anytime. No lock-in.
+- **You own the data**: everything is plain Markdown under `~/.wenlan/`, versioned in git. Grep it, symlink it into Obsidian, or walk away with the files anytime. No lock-in.
 
 ### Spaces
 
@@ -155,22 +155,22 @@ Memories belong to a **space** like `origin`, `career`, or
 
     ORIGIN_SPACE=career claude
 
-Or declaratively via `~/.origin/spaces.toml` (see
+Or declaratively via `~/.wenlan/spaces.toml` (see
 `plugin/examples/spaces.toml`). To manage spaces from the CLI:
 
-    origin space list
-    origin space add ideas --default
-    origin space show ideas
-    origin space move scratch career
+    wenlan space list
+    wenlan space add ideas --default
+    wenlan space show ideas
+    wenlan space move scratch career
 
-`origin doctor` prints the current resolver state so you can see exactly
+`wenlan doctor` prints the current resolver state so you can see exactly
 which layer chose the active space.
 
 ---
 
 ## Evaluation
 
-**Hybrid retrieval, transparent eval.** BGE-Base-EN-v1.5-Q + FTS5 + Reciprocal Rank Fusion; local BGE-Reranker-Base cross-encoder rerank is the default path when enabled, with BGE-Reranker-V2-M3 available as a higher-quality option. The table below is retrieval-only, not end-to-end answer quality. ~168 tokens per recall query. Eval harness at [`crates/origin-core/src/eval/`](crates/origin-core/src/eval/). Run it yourself.
+**Hybrid retrieval, transparent eval.** BGE-Base-EN-v1.5-Q + FTS5 + Reciprocal Rank Fusion; local BGE-Reranker-Base cross-encoder rerank is the default path when enabled, with BGE-Reranker-V2-M3 available as a higher-quality option. The table below is retrieval-only, not end-to-end answer quality. ~168 tokens per recall query. Eval harness at [`crates/wenlan-core/src/eval/`](crates/wenlan-core/src/eval/). Run it yourself.
 
 Update workflow in [docs/eval](docs/eval/README.md).
 
@@ -187,15 +187,15 @@ Update workflow in [docs/eval](docs/eval/README.md).
 
 ## Repo Map
 
-Origin is daemon-first. `origin-server` owns the local database, embeddings, distill cycles, knowledge graph, and HTTP API on `127.0.0.1:7878`. The plugin, MCP server, CLI, and local tools are thin clients over that daemon.
+Wenlan is daemon-first. `wenlan-server` owns the local database, embeddings, distill cycles, knowledge graph, and HTTP API on `127.0.0.1:7878`. The plugin, MCP server, CLI, and local tools are thin clients over that daemon.
 
 
 | Path                                                   | What lives there                                                                                                                                                                                           |
 | ------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| [crates/origin-core](crates/origin-core/README.md)     | Storage, search, embeddings, distill cycles, graph, pages, export, eval.                                                                                                                                   |
-| [crates/origin-server](crates/origin-server/README.md) | Local daemon and HTTP API.                                                                                                                                                                                 |
-| [crates/origin-mcp](crates/origin-mcp/README.md)       | MCP server, tools, npm package.                                                                                                                                                                            |
-| [crates/origin-cli](crates/origin-cli/README.md)       | User CLI for setup, service management, search, recall, store, list, agents, model/key setup, and doctor.                                                                                                  |
+| [crates/wenlan-core](crates/wenlan-core/README.md)     | Storage, search, embeddings, distill cycles, graph, pages, export, eval.                                                                                                                                   |
+| [crates/wenlan-server](crates/wenlan-server/README.md) | Local daemon and HTTP API.                                                                                                                                                                                 |
+| [crates/wenlan-mcp](crates/wenlan-mcp/README.md)       | MCP server, tools, npm package.                                                                                                                                                                            |
+| [crates/wenlan-cli](crates/wenlan-cli/README.md)       | User CLI for setup, service management, search, recall, store, list, agents, model/key setup, and doctor.                                                                                                  |
 | [plugin/](plugin/.claude-plugin/README.md)             | Claude Code plugin (`plugin.json`, skills, hooks, `.mcp.json`).                                                                                                                                           |
 | [docs/eval](docs/eval/README.md)                       | Benchmark workflow and methodology.                                                                                                                                                                        |
 
@@ -206,13 +206,13 @@ Full contributor map: [CLAUDE.md](CLAUDE.md).
 
 ## Build from source
 
-Origin builds natively on macOS (Apple Silicon + Intel), Linux (x86_64 + ARM64; glibc), and Windows (x86_64). The npm wrapper (`@7xuanlu/origin`, `origin-mcp`) and `install.sh` auto-detect your platform and pull the matching prebuilt release. Most users should install through the Claude Code plugin or `npx`. For local development:
+Wenlan builds natively on macOS (Apple Silicon + Intel), Linux (x86_64 + ARM64; glibc), and Windows (x86_64). The npm wrapper (`@7xuanlu/origin`, `wenlan-mcp`) and `install.sh` auto-detect your platform and pull the matching prebuilt release. Most users should install through the Claude Code plugin or `npx`. For local development:
 
 ```bash
 git clone https://github.com/7xuanlu/origin.git
 cd origin
 cargo build --workspace
-cargo run -p origin-server
+cargo run -p wenlan-server
 ```
 
 Build details for the daemon, MCP server, CLI, and core crates live in the crate READMEs linked above. Cross-platform specifics (service registration, paths, Windows install limitation) live in [AGENTS.md](AGENTS.md#cross-platform).
@@ -221,19 +221,19 @@ Build details for the daemon, MCP server, CLI, and core crates live in the crate
 
 ## Learn more
 
-Longer-form writing on AI work memory and how Origin compares lives at [useorigin.app/learn](https://useorigin.app/learn):
+Longer-form writing on AI work memory and how Wenlan compares lives at [useorigin.app/learn](https://useorigin.app/learn):
 
 **Concepts**
-- [What is AI work memory?](https://useorigin.app/learn/ai-work-memory): the shape of the problem Origin solves
-- [MCP memory server](https://useorigin.app/learn/mcp-memory-server): how Origin exposes memory through the Model Context Protocol
+- [What is AI work memory?](https://useorigin.app/learn/ai-work-memory): the shape of the problem Wenlan solves
+- [MCP memory server](https://useorigin.app/learn/mcp-memory-server): how Wenlan exposes memory through the Model Context Protocol
 - [Local-first AI memory](https://useorigin.app/learn/local-first-ai-memory): data, privacy, and control
 - [Markdown + local index](https://useorigin.app/learn/markdown-local-index-ai-memory): the storage model
 - [AI agent handoff loop](https://useorigin.app/learn/ai-agent-handoff-loop): session-end discipline that prevents context loss
 
 **Comparisons**
-- [Origin vs Basic Memory](https://useorigin.app/learn/origin-vs-basic-memory): Markdown knowledge base vs AI work-session memory
-- [Origin vs claude-mem](https://useorigin.app/learn/origin-vs-claude-mem): observer-style Claude Code memory vs MCP-first cross-tool memory
-- [Origin vs Superlocal Memory](https://useorigin.app/learn/origin-vs-superlocal-memory): includes the honest LoCoMo benchmark concession
+- [Wenlan vs Basic Memory](https://useorigin.app/learn/origin-vs-basic-memory): Markdown knowledge base vs AI work-session memory
+- [Wenlan vs claude-mem](https://useorigin.app/learn/origin-vs-claude-mem): observer-style Claude Code memory vs MCP-first cross-tool memory
+- [Wenlan vs Superlocal Memory](https://useorigin.app/learn/origin-vs-superlocal-memory): includes the honest LoCoMo benchmark concession
 
 **Docs**
 - [Get started](https://useorigin.app/docs/get-started): install + verify the first local memory loop
@@ -242,10 +242,10 @@ Longer-form writing on AI work memory and how Origin compares lives at [useorigi
 
 ---
 
-## What Origin is NOT
+## What Wenlan is NOT
 
-- **Not a Life OS.** No habits, calendar, journal, or life-management modules. Origin scopes to AI work artifacts only. If you want a full personal OS, look at [PAI](https://github.com/danielmiessler/PAI).
-- **Not a workflow suite.** ~30 MCP tools across one daemon. If you want 30+ skills, 8+ agents, and an auto-research loop bundled, look at [pro-workflow](https://github.com/rohitg00/pro-workflow). Origin trades breadth for focus.
+- **Not a Life OS.** No habits, calendar, journal, or life-management modules. Wenlan scopes to AI work artifacts only. If you want a full personal OS, look at [PAI](https://github.com/danielmiessler/PAI).
+- **Not a workflow suite.** ~30 MCP tools across one daemon. If you want 30+ skills, 8+ agents, and an auto-research loop bundled, look at [pro-workflow](https://github.com/rohitg00/pro-workflow). Wenlan trades breadth for focus.
 - **Not a memory infrastructure SDK.** For people using AI daily, not as a backend for other apps building memory features.
 - **Not for one-off chats.** Best when work spans sessions, projects, and weeks.
 
@@ -259,7 +259,7 @@ Bug fixes, eval cases, docs, and features are welcome. Start with [CONTRIBUTING.
 
 ## License
 
-Origin is licensed under **Apache-2.0**. This includes the local runtime, CLI, MCP server, shared types, and Claude Code plugin files in this repo.
+Wenlan is licensed under **Apache-2.0**. This includes the local runtime, CLI, MCP server, shared types, and Claude Code plugin files in this repo.
 
 The permissive license keeps the daemon boundary usable for MCP clients and downstream local tools.
 

@@ -1,7 +1,7 @@
 ---
 name: capture
 description: >
-  Save a memory to Origin in flow. Active capture verb — use proactively
+  Save a memory to Wenlan in flow. Active capture verb — use proactively
   when the user states a preference, makes a decision, corrects you, or
   shares a durable fact. Invoked as `/capture <content>`.
 argument-hint: "<content>"
@@ -42,7 +42,7 @@ also print:
 If the resolved space did not previously exist, the daemon auto-creates
 it. When `source_layer` is `arg`, also print:
 
-    Created new space '<space>' from arg. Register with `origin space add <space>` to silence.
+    Created new space '<space>' from arg. Register with `wenlan space add <space>` to silence.
 
 ## How to invoke
 
@@ -114,7 +114,7 @@ covers extraction.
 - Decisions: "Going with approach A because B"
 - Preferences: "Prefers TDD because catches regressions early"
 - Corrections: "Actually it's C, not D"
-- Identity / project facts: "Works on Origin, a local memory daemon for AI tools"
+- Identity / project facts: "Works on Wenlan, a local memory daemon for AI tools"
 
 ## What NOT to capture
 
@@ -149,7 +149,7 @@ After `capture` returns, check `response.triggered_revisions` and `response.auto
 If `auto_superseded` is non-empty, the daemon already resolved the contradiction. Surface it as informational:
 
 ```
-Note: auto-superseded mem_X. Origin replaced a prior protected memory because
+Note: auto-superseded mem_X. Wenlan replaced a prior protected memory because
 trust=high and similarity > 0.9. No action needed.
 ```
 

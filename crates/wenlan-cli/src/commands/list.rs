@@ -1,0 +1,53 @@
+// SPDX-License-Identifier: Apache-2.0
+//! `wenlan list [--limit N] [--type X]` — POST /api/memory/list.
+
+use anyhow::Result;
+use wenlan_types::responses::ListMemoriesResponse;
+
+use crate::client::WenlanClient;
+use crate::output::{print_json, OutputFormat};
+
+pub async fn run(
+    client: &WenlanClient,
+    format: OutputFormat,
+    quiet: bool,
+    limit: usize,
+    memory_type: Option<String>,
+) -> Result<()> {
+    let resp = client.list(Some(limit), memory_type).await?;
+    if quiet {
+        return Ok(());
+    }
+    match format {
+        OutputFormat::Json => print_json(&resp)?,
+        OutputFormat::Table => print_table(&resp),
+        OutputFormat::Auto => unreachable!("Auto resolved by main before dispatch"),
+    }
+    Ok(())
+}
+
+fn print_table(resp: &ListMemoriesResponse) {
+    if resp.memories.is_empty() {
+        println!("(no memories)");
+        return;
+    }
+    println!(
+        "{} memor{}",
+        resp.memories.len(),
+        if resp.memories.len() == 1 { "y" } else { "ies" }
+    );
+    for m in &resp.memories {
+        let title: &str = if m.title.is_empty() {
+            "(no title)"
+        } else {
+            &m.title
+        };
+        let title_disp = if title.chars().count() > 60 {
+            format!("{}...", title.chars().take(57).collect::<String>())
+        } else {
+            title.to_string()
+        };
+        let mtype = m.memory_type.as_deref().unwrap_or("-");
+        println!("  {} [{}] {}", m.source_id, mtype, title_disp);
+    }
+}

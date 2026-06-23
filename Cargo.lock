@@ -3089,135 +3089,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "04744f49eae99ab78e0d5c0b603ab218f515ea8cfe5a456d7629ad883a3b6e7d"
 
 [[package]]
-name = "origin"
-version = "0.8.6"
-dependencies = [
- "anyhow",
- "assert_cmd",
- "clap",
- "dirs 6.0.0",
- "origin-core",
- "origin-types",
- "predicates",
- "reqwest",
- "serde",
- "serde_json",
- "service-manager",
- "tempfile",
- "tokio",
- "which",
-]
-
-[[package]]
-name = "origin-core"
-version = "0.8.6"
-dependencies = [
- "anyhow",
- "async-trait",
- "chrono",
- "dirs 6.0.0",
- "encoding_rs",
- "env_logger",
- "fastembed",
- "fs2",
- "futures",
- "hex",
- "hf-hub",
- "libsql",
- "llama-cpp-2",
- "log",
- "lru",
- "origin-types",
- "pdf-extract",
- "regex",
- "reqwest",
- "rusqlite",
- "serde",
- "serde_json",
- "serde_yaml",
- "sha2",
- "sysinfo",
- "temp-env",
- "tempfile",
- "text-splitter",
- "thiserror 2.0.18",
- "tiktoken-rs",
- "tokio",
- "toml",
- "uuid",
- "zip",
-]
-
-[[package]]
-name = "origin-mcp"
-version = "0.8.6"
-dependencies = [
- "anyhow",
- "axum 0.8.8",
- "base64 0.22.1",
- "clap",
- "dirs 6.0.0",
- "http 1.4.0",
- "origin-core",
- "origin-server",
- "origin-types",
- "portpicker",
- "rand 0.10.1",
- "reqwest",
- "rmcp",
- "schemars",
- "semver",
- "serde",
- "serde_json",
- "subtle",
- "tempfile",
- "thiserror 2.0.18",
- "tokio",
- "tokio-util",
- "tower 0.5.3",
- "tower-http 0.6.8",
- "tracing",
- "tracing-subscriber",
- "wiremock",
-]
-
-[[package]]
-name = "origin-server"
-version = "0.8.6"
-dependencies = [
- "anyhow",
- "axum 0.8.8",
- "chrono",
- "clap",
- "dirs 6.0.0",
- "futures",
- "openssl-sys",
- "origin-core",
- "origin-types",
- "reqwest",
- "serde",
- "serde_json",
- "service-manager",
- "sha2",
- "tempfile",
- "tokio",
- "tower 0.5.3",
- "tower-http 0.6.8",
- "tracing",
- "tracing-subscriber",
- "uuid",
-]
-
-[[package]]
-name = "origin-types"
-version = "0.8.6"
-dependencies = [
- "anyhow",
- "serde",
- "serde_json",
-]
-
-[[package]]
 name = "ort"
 version = "2.0.0-rc.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5620,6 +5491,135 @@ name = "weezl"
 version = "0.1.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a28ac98ddc8b9274cb41bb4d9d4d5c425b6020c50c46f25559911905610b4a88"
+
+[[package]]
+name = "wenlan"
+version = "0.8.6"
+dependencies = [
+ "anyhow",
+ "assert_cmd",
+ "clap",
+ "dirs 6.0.0",
+ "predicates",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "service-manager",
+ "tempfile",
+ "tokio",
+ "wenlan-core",
+ "wenlan-types",
+ "which",
+]
+
+[[package]]
+name = "wenlan-core"
+version = "0.8.6"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "chrono",
+ "dirs 6.0.0",
+ "encoding_rs",
+ "env_logger",
+ "fastembed",
+ "fs2",
+ "futures",
+ "hex",
+ "hf-hub",
+ "libsql",
+ "llama-cpp-2",
+ "log",
+ "lru",
+ "pdf-extract",
+ "regex",
+ "reqwest",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "serde_yaml",
+ "sha2",
+ "sysinfo",
+ "temp-env",
+ "tempfile",
+ "text-splitter",
+ "thiserror 2.0.18",
+ "tiktoken-rs",
+ "tokio",
+ "toml",
+ "uuid",
+ "wenlan-types",
+ "zip",
+]
+
+[[package]]
+name = "wenlan-mcp"
+version = "0.8.6"
+dependencies = [
+ "anyhow",
+ "axum 0.8.8",
+ "base64 0.22.1",
+ "clap",
+ "dirs 6.0.0",
+ "http 1.4.0",
+ "portpicker",
+ "rand 0.10.1",
+ "reqwest",
+ "rmcp",
+ "schemars",
+ "semver",
+ "serde",
+ "serde_json",
+ "subtle",
+ "tempfile",
+ "thiserror 2.0.18",
+ "tokio",
+ "tokio-util",
+ "tower 0.5.3",
+ "tower-http 0.6.8",
+ "tracing",
+ "tracing-subscriber",
+ "wenlan-core",
+ "wenlan-server",
+ "wenlan-types",
+ "wiremock",
+]
+
+[[package]]
+name = "wenlan-server"
+version = "0.8.6"
+dependencies = [
+ "anyhow",
+ "axum 0.8.8",
+ "chrono",
+ "clap",
+ "dirs 6.0.0",
+ "futures",
+ "openssl-sys",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "service-manager",
+ "sha2",
+ "tempfile",
+ "tokio",
+ "tower 0.5.3",
+ "tower-http 0.6.8",
+ "tracing",
+ "tracing-subscriber",
+ "uuid",
+ "wenlan-core",
+ "wenlan-types",
+]
+
+[[package]]
+name = "wenlan-types"
+version = "0.8.6"
+dependencies = [
+ "anyhow",
+ "serde",
+ "serde_json",
+]
 
 [[package]]
 name = "which"

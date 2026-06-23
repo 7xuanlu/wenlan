@@ -2,8 +2,8 @@
 name: handoff
 description: >
   End-of-session ritual. Captures decisions, lessons, gotchas, and open
-  threads. Writes a narrative session log to ~/.origin/sessions/ and stores
-  granular memories via Origin MCP. Previews any unconfirmed captures from
+  threads. Writes a narrative session log to ~/.wenlan/sessions/ and stores
+  granular memories via Wenlan MCP. Previews any unconfirmed captures from
   the current session before closing. Invoked as `/handoff`.
 allowed-tools: ["Bash", "mcp__plugin_origin_origin__capture", "mcp__plugin_origin_origin__list_pending"]
 ---
@@ -13,8 +13,8 @@ allowed-tools: ["Bash", "mcp__plugin_origin_origin__capture", "mcp__plugin_origi
 End-of-session debrief. Three artifacts each pass:
 
 1. **Granular MCP captures** — one per decision/lesson/gotcha (DB authoritative).
-2. **Session log md** — narrative thread at `~/.origin/sessions/<YYYY-MM-DD-HHmm>-<slug>.md`.
-3. **Project status md + json** — current goals + last-handoff timestamp at `~/.origin/sessions/_status/`.
+2. **Session log md** — narrative thread at `~/.wenlan/sessions/<YYYY-MM-DD-HHmm>-<slug>.md`.
+3. **Project status md + json** — current goals + last-handoff timestamp at `~/.wenlan/sessions/_status/`.
 
 These are orthogonal: captures are queryable atoms, session log is the
 narrative thread, status file lets the next session see where we left off.
@@ -31,7 +31,7 @@ Bash: cd_repo=$(git -C "$PWD" rev-parse --show-toplevel 2>/dev/null); echo "${cd
 - If `no-git` → use the cwd basename. Skip git steps below; rely entirely
   on conversation context.
 
-Read `~/.origin/sessions/_status/handoff-<project>.json` for `lastHandoff`
+Read `~/.wenlan/sessions/_status/handoff-<project>.json` for `lastHandoff`
 timestamp (ISO-8601). If file missing, default to "12 hours ago".
 
 ### 1.5 Pending-captures preview
@@ -144,7 +144,7 @@ Otherwise just store and report counts at the end.
 
 ### 5. Write session log
 
-Bash heredoc to `~/.origin/sessions/<YYYY-MM-DD-HHmm>-<slug>.md`:
+Bash heredoc to `~/.wenlan/sessions/<YYYY-MM-DD-HHmm>-<slug>.md`:
 
 ```markdown
 # Session <YYYY-MM-DD HH:MM> — <slug>
@@ -175,7 +175,7 @@ Bash heredoc to `~/.origin/sessions/<YYYY-MM-DD-HHmm>-<slug>.md`:
 
 ### 6. Update project status
 
-Overwrite `~/.origin/sessions/_status/<project>.md`:
+Overwrite `~/.wenlan/sessions/_status/<project>.md`:
 
 ```markdown
 # <Project> — Current Status
@@ -219,7 +219,7 @@ in whichever section reflects its recency.
 
 ### 7. Write timestamp
 
-Overwrite `~/.origin/sessions/_status/handoff-<project>.json`:
+Overwrite `~/.wenlan/sessions/_status/handoff-<project>.json`:
 
 ```json
 {
@@ -231,23 +231,23 @@ Overwrite `~/.origin/sessions/_status/handoff-<project>.json`:
 
 Per-project file prevents parallel sessions from clobbering each other.
 
-### 8. Auto-commit ~/.origin/
+### 8. Auto-commit ~/.wenlan/
 
 After writing the files above, snapshot the change so the user can `git
 log` their memory's life timeline. Defensive — silent skip if `git` is
-missing or `~/.origin/` is not a repo yet.
+missing or `~/.wenlan/` is not a repo yet.
 
 ```
-Bash: git -C ~/.origin add -A && \
-      git -C ~/.origin -c user.name=Origin -c user.email=daemon@origin.local \
+Bash: git -C ~/.wenlan add -A && \
+      git -C ~/.wenlan -c user.name=Wenlan -c user.email=daemon@origin.local \
           commit --quiet -m "session: <slug>" 2>/dev/null || \
-      (sleep 1 && git -C ~/.origin add -A && \
-       git -C ~/.origin -c user.name=Origin -c user.email=daemon@origin.local \
+      (sleep 1 && git -C ~/.wenlan add -A && \
+       git -C ~/.wenlan -c user.name=Wenlan -c user.email=daemon@origin.local \
            commit --quiet -m "session: <slug>" 2>/dev/null) || true
 ```
 
 The retry handles index.lock races — the daemon may be writing to
-`~/.origin/` at the same moment (auto-commit from captures). One-second
+`~/.wenlan/` at the same moment (auto-commit from captures). One-second
 wait is enough for the daemon to release the lock.
 
 ### 9. Confirm
@@ -261,8 +261,8 @@ Handoff stored.
   Insights:    <N> (brief list)
   Corrections: <N> (brief list)
   Facts:       <N> (brief list)
-  Session:     ~/.origin/sessions/<filename>
-  Status:      ~/.origin/sessions/_status/<project>.md
+  Session:     ~/.wenlan/sessions/<filename>
+  Status:      ~/.wenlan/sessions/_status/<project>.md
   Git:         <commit hash> session: <slug>
 ```
 
@@ -284,8 +284,8 @@ full sentences — the session log has the details.
 
 - **Memories** (MCP captures) live in the daemon DB only. Confirmation flips
   a `stability` flag — they never get exported to md.
-- **Pages** are wiki-style syntheses written to `~/.origin/pages/` by the
+- **Pages** are wiki-style syntheses written to `~/.wenlan/pages/` by the
   daemon when `/distill` runs. Citations link back to source memory ids.
-- **Sessions** (this skill) live only at `~/.origin/sessions/`. They are
+- **Sessions** (this skill) live only at `~/.wenlan/sessions/`. They are
   the narrative axis: chronological, not topical. Browse them as a
   changelog of your work.

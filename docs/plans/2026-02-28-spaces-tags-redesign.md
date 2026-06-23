@@ -18,7 +18,7 @@ Replace the flat category system with **Spaces** (auto-detected + user-defined c
 ```rust
 struct Space {
     id: String,           // slug, e.g. "origin-dev"
-    name: String,         // display name, e.g. "Origin Dev"
+    name: String,         // display name, e.g. "Wenlan Dev"
     icon: String,         // emoji
     color: String,        // accent color
     rules: Vec<SpaceRule>,// auto-routing rules
@@ -108,7 +108,7 @@ LLM formatter produces:
 Top bar: Space pills replace category pills. Click to filter.
 
 ```
-[All] [Origin Dev] [ML Research] [Team Comms] [+]
+[All] [Wenlan Dev] [ML Research] [Team Comms] [+]
 [Search...]
 
 Tags: rust  tauri  debugging  ocr

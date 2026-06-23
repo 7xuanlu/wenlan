@@ -59,12 +59,12 @@ jobs:
             windows:
               # Files that change Windows-specific behavior. PRs not
               # touching any of these skip the Windows test job entirely.
-              - 'crates/origin-cli/src/commands/service.rs'
-              - 'crates/origin-cli/src/commands/mcp.rs'
-              - 'crates/origin-cli/tests/cli_integration.rs'
-              - 'crates/origin-cli/tests/distribution.rs'
-              - 'crates/origin-server/src/main.rs'
-              - 'crates/origin-mcp/npm/install.js'
+              - 'crates/wenlan-cli/src/commands/service.rs'
+              - 'crates/wenlan-cli/src/commands/mcp.rs'
+              - 'crates/wenlan-cli/tests/cli_integration.rs'
+              - 'crates/wenlan-cli/tests/distribution.rs'
+              - 'crates/wenlan-server/src/main.rs'
+              - 'crates/wenlan-mcp/npm/install.js'
               - 'scripts/smoke-windows.ps1'
               - 'install.sh'
               - 'Cargo.toml'
@@ -121,15 +121,15 @@ jobs:
           # small files otherwise; cached restore is ~2-3min faster.
           cache-all-crates: "true"
       - run: cargo clippy --workspace --all-targets -- -D warnings
-      - name: Verify origin-mcp uses path dep for origin-types
+      - name: Verify wenlan-mcp uses path dep for wenlan-types
         run: |
           SOURCE=$(cargo metadata --format-version 1 --locked \
             | jq -r '.packages[]
-                     | select(.name == "origin-mcp")
+                     | select(.name == "wenlan-mcp")
                      | .dependencies[]
-                     | select(.name == "origin-types")
+                     | select(.name == "wenlan-types")
                      | .source // "PATH"')
-          [[ "$SOURCE" == "PATH" ]] || { echo "ERROR: origin-mcp must use path dep for origin-types"; exit 1; }
+          [[ "$SOURCE" == "PATH" ]] || { echo "ERROR: wenlan-mcp must use path dep for wenlan-types"; exit 1; }
 
   test:
     name: test (${{ matrix.os }})
@@ -186,7 +186,7 @@ jobs:
       # Workspace lib tests skipped on Windows — Linux + macOS catch the
       # same cross-platform unit logic in ~5-15min vs 25min on Windows.
       # Windows-specific behavior (paths, mcp_add, schtasks) is covered
-      # by `Integration tests origin-cli + origin-server` + the schtasks
+      # by `Integration tests wenlan-cli + wenlan-server` + the schtasks
       # install round-trip E2E further down.
       - name: Workspace lib tests (Linux)
         if: matrix.os == 'ubuntu-24.04'
@@ -196,25 +196,25 @@ jobs:
         # nextest spawns one process per test by default — sidesteps the
         # ONNX atexit FFI race that required --test-threads=1 with cargo test.
         run: cargo nextest run --workspace --lib --test-threads=1
-      # Integration tests for origin-cli + origin-server. We deliberately do
-      # NOT use `--workspace --tests` because that pulls in origin-core's
+      # Integration tests for wenlan-cli + wenlan-server. We deliberately do
+      # NOT use `--workspace --tests` because that pulls in wenlan-core's
       # `eval_harness.rs` which requires `ANTHROPIC_API_KEY` (not in CI).
-      # origin-core integration tests run via the Linux-only nextest step
+      # wenlan-core integration tests run via the Linux-only nextest step
       # below (chat_import_e2e + distillation_quality + provenance_p2 +
       # provenance_p3 + space_scoping_e2e — the latter three carry the
       # cross-workspace-leak security tests and the P3 demotion regression).
-      - name: Integration tests origin-cli + origin-server
-        run: cargo nextest run -p origin -p origin-server
+      - name: Integration tests wenlan-cli + wenlan-server
+        run: cargo nextest run -p wenlan -p wenlan-server
       - name: Cache fastembed model (Linux)
         if: matrix.os == 'ubuntu-24.04'
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
-          # Origin's `resolve_fastembed_cache_dir` writes to
-          # `dirs::data_dir()/origin/memorydb/fastembed_cache` on Linux when
-          # no per-DB path or ORIGIN_TEST_FASTEMBED_CACHE override is given.
+          # Wenlan's `resolve_fastembed_cache_dir` writes to
+          # `dirs::data_dir()/wenlan/memorydb/fastembed_cache` on Linux when
+          # no per-DB path or WENLAN_TEST_FASTEMBED_CACHE override is given.
           # The previous `~/.fastembed_cache` path never matched what tests
           # actually wrote (Path Validation Error in post-run save).
-          path: ~/.local/share/origin/memorydb/fastembed_cache
+          path: ~/.local/share/wenlan/memorydb/fastembed_cache
           key: fastembed-bge-base-en-v1.5-q-v2
           restore-keys: |
             fastembed-bge-base-en-v1.5-q-
@@ -222,12 +222,12 @@ jobs:
         if: matrix.os == 'ubuntu-24.04'
         # nextest process-per-test sidesteps the macOS SIGSEGV root cause
         # (ONNX atexit FFI race). No --test-threads=1 needed on ubuntu.
-        run: cargo nextest run -p origin-core --test chat_import_e2e --test distillation_quality --test provenance_p2 --test provenance_p3 --test space_scoping_e2e
+        run: cargo nextest run -p wenlan-core --test chat_import_e2e --test distillation_quality --test provenance_p2 --test provenance_p3 --test space_scoping_e2e
       - name: Run embedding-only eval (main only, Linux)
         if: matrix.os == 'ubuntu-24.04' && github.ref == 'refs/heads/main'
         env:
           EVAL_BASELINES_DIR: ${{ runner.temp }}/origin-eval-canary
-        run: cargo nextest run -p origin-core --lib --run-ignored=only eval::retrieval
+        run: cargo nextest run -p wenlan-core --lib --run-ignored=only eval::retrieval
       - name: Upload eval canary baseline (with env schema)
         if: always() && matrix.os == 'ubuntu-24.04'
         uses: actions/upload-artifact@v4
@@ -236,7 +236,7 @@ jobs:
           path: ${{ runner.temp }}/origin-eval-canary/*.json
           retention-days: 30
           if-no-files-found: warn
-      - name: E2E origin install (Linux user-systemd)
+      - name: E2E wenlan install (Linux user-systemd)
         if: matrix.os == 'ubuntu-24.04'
         run: |
           set -euo pipefail
@@ -244,17 +244,17 @@ jobs:
           export XDG_RUNTIME_DIR=/run/user/$(id -u)
           # Build native (cargo nextest run --workspace --lib already built tests,
           # but the install path needs the actual release-or-debug binaries).
-          cargo build -p origin -p origin-server
+          cargo build -p wenlan -p wenlan-server
           STAGE=$(mktemp -d)
-          cp target/debug/origin target/debug/origin-server "$STAGE/"
+          cp target/debug/wenlan target/debug/wenlan-server "$STAGE/"
           cleanup() {
-            "$STAGE/origin" uninstall 2>/dev/null || true
+            "$STAGE/wenlan" uninstall 2>/dev/null || true
             rm -rf "$STAGE"
           }
           trap cleanup EXIT
-          "$STAGE/origin" install
-          test -f ~/.config/systemd/user/origin-server.service
-          systemctl --user is-enabled origin-server
+          "$STAGE/wenlan" install
+          test -f ~/.config/systemd/user/wenlan-server.service
+          systemctl --user is-enabled wenlan-server
           for i in $(seq 1 90); do
             if curl -sf http://127.0.0.1:7878/api/health >/dev/null; then
               echo "    daemon healthy after ${i}s"
@@ -263,12 +263,12 @@ jobs:
             sleep 1
             if [ "$i" = "90" ]; then
               echo "FAIL: daemon did not start under systemd user service" >&2
-              journalctl --user -u origin-server --no-pager | tail -50 >&2 || true
+              journalctl --user -u wenlan-server --no-pager | tail -50 >&2 || true
               exit 1
             fi
           done
-          "$STAGE/origin" uninstall
-          test ! -f ~/.config/systemd/user/origin-server.service
+          "$STAGE/wenlan" uninstall
+          test ! -f ~/.config/systemd/user/wenlan-server.service
           echo "    Linux install/uninstall round-trip PASS"
       # Linux Docker smoke + Windows release-build smoke previously ran here.
       # Both duplicated work that release.yml already does on every tag push
@@ -277,24 +277,24 @@ jobs:
       # round-trip below — that's the only contract test PR CI uniquely
       # exercises.
 
-      # `origin install` on Windows registers a per-user Task Scheduler
+      # `wenlan install` on Windows registers a per-user Task Scheduler
       # ONLOGON entry via schtasks.exe and triggers it immediately. We
       # verify the full round-trip: install registers the task, daemon
       # binds /api/health, uninstall removes the task.
-      - name: E2E origin install round-trip (Windows; schtasks)
+      - name: E2E wenlan install round-trip (Windows; schtasks)
         if: matrix.os == 'windows-2022'
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
-          cargo build -p origin -p origin-server
-          $installOut = & target\debug\origin.exe install 2>&1
+          cargo build -p wenlan -p wenlan-server
+          $installOut = & target\debug\wenlan.exe install 2>&1
           $installCode = $LASTEXITCODE
           Write-Host "install exit=$installCode out=$installOut"
           if ($installCode -ne 0) { throw "install failed: $installOut" }
 
           # schtasks /query must report the task as present.
-          & schtasks.exe /query /tn OriginServer | Out-Null
-          if ($LASTEXITCODE -ne 0) { throw "schtasks did not register OriginServer" }
+          & schtasks.exe /query /tn WenlanServer | Out-Null
+          if ($LASTEXITCODE -ne 0) { throw "schtasks did not register WenlanServer" }
 
           # /run launched the daemon as a separate process. Poll /api/health.
           $healthy = $false
@@ -306,26 +306,26 @@ jobs:
             Start-Sleep -Seconds 1
           }
           if (-not $healthy) {
-            & schtasks.exe /query /tn OriginServer /fo LIST /v
+            & schtasks.exe /query /tn WenlanServer /fo LIST /v
             throw "daemon did not respond on /api/health after schtasks /run"
           }
           Write-Host "    daemon healthy under scheduled task"
 
-          $uninstallOut = & target\debug\origin.exe uninstall 2>&1
+          $uninstallOut = & target\debug\wenlan.exe uninstall 2>&1
           $uninstallCode = $LASTEXITCODE
           Write-Host "uninstall exit=$uninstallCode out=$uninstallOut"
           if ($uninstallCode -ne 0) { throw "uninstall failed: $uninstallOut" }
 
           # Task must be gone; /query returns 1 with stderr "not found".
-          & schtasks.exe /query /tn OriginServer 2>&1 | Out-Null
+          & schtasks.exe /query /tn WenlanServer 2>&1 | Out-Null
           if ($LASTEXITCODE -eq 0) {
-            & schtasks.exe /delete /tn OriginServer /f | Out-Null
+            & schtasks.exe /delete /tn WenlanServer /f | Out-Null
             throw "uninstall did not remove the scheduled task"
           }
 
-          # Best-effort: kill any leftover origin-server.exe so the next step
+          # Best-effort: kill any leftover wenlan-server.exe so the next step
           # is not blocked on port 7878.
-          Get-Process -Name origin-server -ErrorAction SilentlyContinue |
+          Get-Process -Name wenlan-server -ErrorAction SilentlyContinue |
             Stop-Process -Force -ErrorAction SilentlyContinue
 
           Write-Host "    Windows install round-trip PASS"
@@ -389,13 +389,13 @@ jobs:
         with:
           node-version: "24"
       - name: Validate origin-mcp npm package
-        working-directory: crates/origin-mcp/npm
+        working-directory: crates/wenlan-mcp/npm
         run: |
           npm pack --dry-run
           node -c run.js
           node -c install.js
       - name: Validate @7xuanlu/origin npm package
-        working-directory: crates/origin-cli/npm
+        working-directory: crates/wenlan-cli/npm
         run: |
           npm pack --dry-run
           node -c run.js

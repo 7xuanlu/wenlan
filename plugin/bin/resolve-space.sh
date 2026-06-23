@@ -3,7 +3,7 @@
 #
 # Layers (highest to lowest priority):
 #   1. --arg <space>                explicit override from skill caller
-#   2. ORIGIN_SPACE env var         per-shell pin
+#   2. WENLAN_SPACE env var         per-shell pin
 #   3. ~/.origin/spaces.toml        cwd-prefix mapping (longest prefix wins)
 #      3.5. top-level `default` key  applies when no [[mapping]] matched
 #   4. cwd repo basename            git rev-parse --show-toplevel
@@ -36,8 +36,8 @@ if [ -n "$arg_trimmed" ]; then
     exit 0
 fi
 
-# Layer 2: ORIGIN_SPACE env var (per-shell pin)
-env_trimmed="$(printf '%s' "${ORIGIN_SPACE:-}" | tr -d '[:space:]')"
+# Layer 2: WENLAN_SPACE env var (per-shell pin)
+env_trimmed="$(printf '%s' "${WENLAN_SPACE:-}" | tr -d '[:space:]')"
 if [ -n "$env_trimmed" ]; then
     printf '%s\tenv\n' "$env_trimmed"
     exit 0

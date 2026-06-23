@@ -1,6 +1,6 @@
-# Origin Skills
+# Wenlan Skills
 
-Claude Code workflow skills installed by the Origin plugin.
+Claude Code workflow skills installed by the Wenlan plugin.
 
 These skills keep the daily interface short:
 
@@ -17,7 +17,7 @@ These skills keep the daily interface short:
 /debrief     alias for /handoff
 ```
 
-The skills do not store data themselves. They guide Claude Code to use the local `origin-mcp` tools, which talk to the Origin daemon on `127.0.0.1:7878`.
+The skills do not store data themselves. They guide Claude Code to use the local `wenlan-mcp` tools, which talk to the Wenlan daemon on `127.0.0.1:7878`.
 
 ## Files
 
@@ -27,7 +27,7 @@ The skills do not store data themselves. They guide Claude Code to use the local
 | `help` | One-screen quick reference of the 10 verbs and the daily flow. |
 | `brief` | Load working context at session start or topic shifts. |
 | `capture` | Save one durable memory: decision, lesson, gotcha, preference, fact, or correction. |
-| `recall` | Query Origin for focused context. |
+| `recall` | Query Wenlan for focused context. |
 | `distill` | Refresh wiki pages from accumulated memories. |
 | `review` | Power-user deep audit of pending surfaces (captures, revisions). Daily flow handled by `/brief`. |
 | `forget` | Delete a memory by ID. |
@@ -44,16 +44,16 @@ layers. Higher layers override lower ones:
 | Layer | Mechanism | Example |
 |---|---|---|
 | 1 | `space:X` inline arg | `/capture space:health "slept 5hrs"` |
-| 2 | `ORIGIN_SPACE` env var | `ORIGIN_SPACE=career claude` |
-| 3 | `~/.origin/spaces.toml` cwd-prefix mapping (longest prefix wins; ties go to first-defined) | see `plugin/examples/spaces.toml` |
+| 2 | `WENLAN_SPACE` env var | `WENLAN_SPACE=career claude` |
+| 3 | `~/.wenlan/spaces.toml` cwd-prefix mapping (longest prefix wins; ties go to first-defined) | see `plugin/examples/spaces.toml` |
 | 4 | cwd git-repo basename | `~/Repos/origin/...` → `origin` |
 | 5 | conversation topic | (rarely used directly) |
 | 6 | default | `personal` |
 
 To pin a session to a specific bucket regardless of cwd, set
-`ORIGIN_SPACE` before invoking Claude Code. To pin by working directory
+`WENLAN_SPACE` before invoking Claude Code. To pin by working directory
 declaratively, copy `plugin/examples/spaces.toml` to
-`~/.origin/spaces.toml` and edit. To override per call, prefix any
+`~/.wenlan/spaces.toml` and edit. To override per call, prefix any
 space-aware skill arg with `space:<name>`.
 
 On the first space-aware skill call of a session, the skill prints one

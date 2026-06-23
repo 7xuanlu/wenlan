@@ -2,7 +2,7 @@
 
 This file guides any coding agent working in this repository — Claude Code, Cursor, Codex, GitHub Copilot, Zed, Aider, and similar. It is the canonical agent-instruction file; vendor-specific files (such as `CLAUDE.md`) re-import from here so the rules stay in sync. The format follows the [agents.md](https://agents.md/) spec.
 
-This repo holds the **daemon** (`origin-server`), the **CLI** (`origin`), shared **wire types** (`origin-types`), the **business-logic core** (`origin-core`), and the **MCP server** (`origin-mcp`). All five ship from this monorepo. The Tauri desktop app (`origin-app`) ships from a separate repo: [7xuanlu/origin-app](https://github.com/7xuanlu/origin-app). Public product surface lives at [useorigin.app](https://useorigin.app) (marketing, docs at `/docs`, longer-form writing at `/learn`).
+This repo holds the **daemon** (`wenlan-server`), the **CLI** (`origin`), shared **wire types** (`wenlan-types`), the **business-logic core** (`wenlan-core`), and the **MCP server** (`wenlan-mcp`). All five ship from this monorepo. The Tauri desktop app (`origin-app`) ships from a separate repo: [7xuanlu/origin-app](https://github.com/7xuanlu/origin-app). Public product surface lives at [useorigin.app](https://useorigin.app) (marketing, docs at `/docs`, longer-form writing at `/learn`).
 
 ## Design Philosophy
 
@@ -17,18 +17,18 @@ This repo holds the **daemon** (`origin-server`), the **CLI** (`origin`), shared
 
 ## Build & Dev Commands
 
-Origin is a Cargo workspace with 5 crates: `origin-types`, `origin-core`, `origin-server`, `origin` (CLI in `crates/origin-cli`), and `origin-mcp`.
+Wenlan is a Cargo workspace with 5 crates: `wenlan-types`, `wenlan-core`, `wenlan-server`, `origin` (CLI in `crates/wenlan-cli`), and `wenlan-mcp`.
 
 ```bash
 # Run the daemon directly:
-cargo run -p origin-server                # listens on 127.0.0.1:7878
+cargo run -p wenlan-server                # listens on 127.0.0.1:7878
 
 # Or start the daemon as a managed launchd service:
-cargo build -p origin -p origin-server
-./target/debug/origin setup --basic       # configure local memory
-./target/debug/origin install             # writes plist, launchctl load
-./target/debug/origin status
-./target/debug/origin uninstall           # when done
+cargo build -p origin -p wenlan-server
+./target/debug/wenlan setup --basic       # configure local memory
+./target/debug/wenlan install             # writes plist, launchctl load
+./target/debug/wenlan status
+./target/debug/wenlan uninstall           # when done
 
 # Workspace-level builds
 cargo check --workspace
@@ -36,17 +36,17 @@ cargo build --workspace
 cargo test --workspace
 
 # Per-crate builds (faster for iteration)
-cargo check -p origin-types
-cargo check -p origin-core
-cargo check -p origin-server
+cargo check -p wenlan-types
+cargo check -p wenlan-core
+cargo check -p wenlan-server
 cargo check -p origin                     # the CLI binary
 cargo build -p origin --release
-./target/release/origin --help
+./target/release/wenlan --help
 
 # Run tests for a single crate
-cargo test -p origin-core
-cargo test -p origin-core --lib <module>::tests
-cargo test -p origin-core <test_name>
+cargo test -p wenlan-core
+cargo test -p wenlan-core --lib <module>::tests
+cargo test -p wenlan-core <test_name>
 
 # Generate coverage reports (opens in browser)
 bash scripts/coverage.sh
@@ -56,16 +56,16 @@ bash scripts/setup-hooks.sh
 
 # Eval benchmarks (require GPU + model files, run manually)
 # Unit tests for eval modules (fast, no GPU):
-cargo test -p origin-core --lib locomo::tests
-cargo test -p origin-core --lib longmemeval::tests
+cargo test -p wenlan-core --lib locomo::tests
+cargo test -p wenlan-core --lib longmemeval::tests
 
 # Generate eval baselines (slow, needs Qwen 3.5-9B on Metal GPU):
-cargo test -p origin-core --test eval_harness save_locomo_baseline -- --ignored --nocapture
-cargo test -p origin-core --test eval_harness save_locomo_reranked_baseline -- --ignored --nocapture
-cargo test -p origin-core --test eval_harness save_locomo_expanded_baseline -- --ignored --nocapture
-cargo test -p origin-core --test eval_harness save_longmemeval_baseline -- --ignored --nocapture
-cargo test -p origin-core --test eval_harness save_longmemeval_reranked_baseline -- --ignored --nocapture
-cargo test -p origin-core --test eval_harness save_longmemeval_expanded_baseline -- --ignored --nocapture
+cargo test -p wenlan-core --test eval_harness save_locomo_baseline -- --ignored --nocapture
+cargo test -p wenlan-core --test eval_harness save_locomo_reranked_baseline -- --ignored --nocapture
+cargo test -p wenlan-core --test eval_harness save_locomo_expanded_baseline -- --ignored --nocapture
+cargo test -p wenlan-core --test eval_harness save_longmemeval_baseline -- --ignored --nocapture
+cargo test -p wenlan-core --test eval_harness save_longmemeval_reranked_baseline -- --ignored --nocapture
+cargo test -p wenlan-core --test eval_harness save_longmemeval_expanded_baseline -- --ignored --nocapture
 # Baselines saved to <EVAL_BASELINES_DIR>/*.json (gitignored, default ~/.cache/origin-eval).
 ```
 
@@ -73,15 +73,15 @@ Pre-commit auto-formats Rust and runs Clippy on changed crates. Pre-push runs wo
 
 ## Cross-platform
 
-Origin runs on macOS (arm64, x86_64), Linux (x86_64, aarch64; musl), and Windows (x86_64).
+Wenlan runs on macOS (arm64, x86_64), Linux (x86_64, aarch64; musl), and Windows (x86_64).
 
 | OS | Data dir | Service registration |
 |---|---|---|
-| macOS | `~/Library/Application Support/origin/` | launchd via `~/Library/LaunchAgents/com.origin.server.plist` (user-level) |
-| Linux | `~/.local/share/origin/` (or `$XDG_DATA_HOME/origin`) | systemd user unit at `~/.config/systemd/user/origin-server.service` (qualifier dropped per `ServiceLabel::to_script_name()`). Enable lingering with `loginctl enable-linger` if you want the service alive after logout. |
-| Windows | `%LOCALAPPDATA%\origin\` | Per-user Task Scheduler ONLOGON task registered via `schtasks.exe /create /tn OriginServer /sc ONLOGON /tr <exe> /f`. `origin install` short-circuits before service-manager and drives schtasks directly (origin-server is a plain console app and would otherwise time out at 30s under sc.exe + the Windows Service Control Protocol). `origin uninstall` calls `schtasks /delete /tn OriginServer /f`. |
+| macOS | `~/Library/Application Support/wenlan/` | launchd via `~/Library/LaunchAgents/com.wenlan.server.plist` (user-level) |
+| Linux | `~/.local/share/wenlan/` (or `$XDG_DATA_HOME/origin`) | systemd user unit at `~/.config/systemd/user/wenlan-server.service` (qualifier dropped per `ServiceLabel::to_script_name()`). Enable lingering with `loginctl enable-linger` if you want the service alive after logout. |
+| Windows | `%LOCALAPPDATA%\origin\` | Per-user Task Scheduler ONLOGON task registered via `schtasks.exe /create /tn OriginServer /sc ONLOGON /tr <exe> /f`. `wenlan install` short-circuits before service-manager and drives schtasks directly (wenlan-server is a plain console app and would otherwise time out at 30s under sc.exe + the Windows Service Control Protocol). `wenlan uninstall` calls `schtasks /delete /tn OriginServer /f`. |
 
-`origin install` / `origin uninstall` work on macOS, Linux, and Windows. macOS + Linux go through the `service-manager` crate (launchd / systemd-user); Windows takes the schtasks path described above so the daemon does not need a service dispatcher.
+`wenlan install` / `wenlan uninstall` work on macOS, Linux, and Windows. macOS + Linux go through the `service-manager` crate (launchd / systemd-user); Windows takes the schtasks path described above so the daemon does not need a service dispatcher.
 
 ### llama-cpp-2 backend
 
@@ -89,15 +89,15 @@ By default, Linux and Windows builds are CPU-only. macOS keeps Metal. CUDA and V
 
 ### ORT (ONNX Runtime) on Windows
 
-If you see `Failed to load onnxruntime.dll` or version-mismatch errors on Windows, set `ORT_DYLIB_PATH` to the bundled `onnxruntime.dll` inside the Origin install directory before starting the daemon. The bundled DLL ships in the Windows release zip.
+If you see `Failed to load onnxruntime.dll` or version-mismatch errors on Windows, set `ORT_DYLIB_PATH` to the bundled `onnxruntime.dll` inside the Wenlan install directory before starting the daemon. The bundled DLL ships in the Windows release zip.
 
 ### Daemon bind address
 
-The daemon binds to `127.0.0.1:7878` by default. To expose it on a non-loopback address (e.g., inside Docker), set `ORIGIN_BIND_ADDR=0.0.0.0:7878` in the daemon's environment. The Docker image already sets this.
+The daemon binds to `127.0.0.1:7878` by default. To expose it on a non-loopback address (e.g., inside Docker), set `WENLAN_BIND_ADDR=0.0.0.0:7878` in the daemon's environment. The Docker image already sets this.
 
 ### Manual Windows verification from macOS
 
-The CI matrix runs `windows-2022` on every PR and is the primary signal. For hands-on testing, run a Windows 11 VM via UTM or Parallels; install MSVC 2022 Build Tools and Rust; then `cargo build --release -p origin-server` and `scripts/smoke-windows.ps1`.
+The CI matrix runs `windows-2022` on every PR and is the primary signal. For hands-on testing, run a Windows 11 VM via UTM or Parallels; install MSVC 2022 Build Tools and Rust; then `cargo build --release -p wenlan-server` and `scripts/smoke-windows.ps1`.
 
 ### Linux smoke from macOS
 
@@ -109,7 +109,7 @@ Builds the multi-arch daemon image (linux/arm64 for native Apple Silicon speed v
 
 ## Local vs CI test responsibilities
 
-Origin runs across several layers. The split is driven by three questions: **(1) Can a hosted runner do this?** (no GPU, no API keys, no cost). **(2) Is it under 60s on cold cache?** **(3) Does it gate correctness or measure quality?** Quality measures never gate.
+Wenlan runs across several layers. The split is driven by three questions: **(1) Can a hosted runner do this?** (no GPU, no API keys, no cost). **(2) Is it under 60s on cold cache?** **(3) Does it gate correctness or measure quality?** Quality measures never gate.
 
 | Layer | What runs | Where | When | Time | Blocks? |
 |---|---|---|---|---|---|
@@ -117,8 +117,8 @@ Origin runs across several layers. The split is driven by three questions: **(1)
 | **L2 pre-commit** | `cargo fmt --all`, clippy on staged crates | Local | `git commit` | ~5s | Yes |
 | **L3 pre-push** | `cargo clippy --workspace --all-targets`, `cargo test --workspace --lib` | Local | `git push` | ~60-90s | Yes |
 | **L4 CI on PR** | Same checks workspace-wide; tests for types + server + CLI; core lib tests + chat_import_e2e + distillation_quality | GitHub (`ci.yml`) | Every PR | ~10min | Yes (required) |
-| **L5 coverage on PR** | `cargo llvm-cov` on origin-core + origin-server only | GitHub (`coverage.yml`) | Every PR | ~10min | **No (informational)** |
-| **L6 main canary** | Embedding-only eval (`cargo test -p origin-core --lib eval::retrieval -- --ignored`) | GitHub (`ci.yml`) | Push to `main` | ~10min | No (post-merge) |
+| **L5 coverage on PR** | `cargo llvm-cov` on wenlan-core + wenlan-server only | GitHub (`coverage.yml`) | Every PR | ~10min | **No (informational)** |
+| **L6 main canary** | Embedding-only eval (`cargo test -p wenlan-core --lib eval::retrieval -- --ignored`) | GitHub (`ci.yml`) | Push to `main` | ~10min | No (post-merge) |
 | **L7 manual local** | `bash scripts/coverage.sh` (HTML coverage), GPU eval suite (`cargo test -- --ignored`), Anthropic batch judge (`ANTHROPIC_API_KEY=... cargo test ...`) | Your laptop | On demand | minutes-hours | No |
 | **L8 pre-release** | Full eval suite vs saved baseline. Commit a **curated, env-stamped snapshot** of headline numbers to a results doc/README (single-run tagged "scaffold"; headline claims need N≥3 + stddev). Raw per-run baselines + history series stay gitignored. See "Commit policy" under Eval Citation Discipline. | Your laptop | Per release | hours | Soft gate |
 
@@ -126,7 +126,7 @@ Origin runs across several layers. The split is driven by three questions: **(1)
 
 - **GPU evals (LongMemEval / LoCoMo runner functions, Qwen3.5-9B inference)** — GitHub macOS runners have no Metal acceleration. The tests are `#[ignore]`d so they don't accidentally run.
 - **Anthropic API batch judge** — costs $0.35/run and requires `ANTHROPIC_API_KEY` which we don't expose to PR runs from forks.
-- **Tauri / desktop coverage** — the desktop app lives in [7xuanlu/origin-app](https://github.com/7xuanlu/origin-app) and runs its own CI there. This repo's coverage is scoped to `origin-core + origin-server`.
+- **Tauri / desktop coverage** — the desktop app lives in [7xuanlu/origin-app](https://github.com/7xuanlu/origin-app) and runs its own CI there. This repo's coverage is scoped to `wenlan-core + wenlan-server`.
 
 ### Why pre-push doesn't run coverage
 
@@ -151,7 +151,7 @@ Path must be writable and local (network mounts not recommended). When set, also
 
 The PR-B page-channel runners reuse the fullpipeline_*.db seeded DBs without re-ingesting. They live at `~/.cache/origin-eval/scenario_seeded/{locomo_v1,lme_v1}/origin_memory.db`. Repopulate via `bash scripts/seed-scenario-dbs.sh` from the repo root. The `cached_scenario_db_check.rs` integration test (L7 manual) verifies migration replay against current schema; it auto-resolves the root from `SCENARIO_DB_ROOT > EVAL_BASELINES_DIR/scenario_seeded > ~/.cache/origin-eval/scenario_seeded/`.
 
-For full eval discipline (fixture management, baseline layout, env vars, seed scripts, pre-flight checklist, runner conventions), see `app/eval/AGENTS.md` and `crates/origin-core/src/eval/AGENTS.md`. The subdir AGENTS.md files apply per the agents.md hierarchical-instruction convention when an agent is working under those subtrees.
+For full eval discipline (fixture management, baseline layout, env vars, seed scripts, pre-flight checklist, runner conventions), see `app/eval/AGENTS.md` and `crates/wenlan-core/src/eval/AGENTS.md`. The subdir AGENTS.md files apply per the agents.md hierarchical-instruction convention when an agent is working under those subtrees.
 
 ### Eval pre-flight subset
 
@@ -182,7 +182,7 @@ Releases are automated via [release-please](https://github.com/googleapis/releas
 **How it works:**
 1. Every push to `main`, release-please scans new commits and maintains an open "release PR" that accumulates changes and updates `CHANGELOG.md`.
 2. When you're ready to ship, merge the release PR. That triggers a GitHub release (draft) + git tag.
-3. The `v*` tag push triggers `.github/workflows/release.yml`, which builds `origin`, `origin-server`, and `origin-mcp`, uploads standalone binaries to the release, and publishes it.
+3. The `v*` tag push triggers `.github/workflows/release.yml`, which builds `origin`, `wenlan-server`, and `wenlan-mcp`, uploads standalone binaries to the release, and publishes it.
 4. The release-please workflow also syncs daemon `Cargo.toml` versions on the release branch (release-please can't handle Cargo workspaces reliably with `simple` release type).
 
 **Commit messages control version bumps.** Pre-1.0:
@@ -220,7 +220,7 @@ cat .release-please-manifest.json
 
 **Never delete a release tag without also cleaning up the commit history.** If you need to undo a release version, you must rewrite the commit message that release-please created (`git filter-branch --msg-filter`), delete the tag, delete the GitHub Release, and rename the merged PR title via API. Otherwise release-please will keep bumping from the old version.
 
-**The `release.yml` workflow ships the local runtime.** It handles: origin CLI, origin-server, origin-mcp, standalone binary uploads, crates.io publishing for `origin-types` + `origin-mcp`, and npm publishing for `origin-mcp` + `@7xuanlu/origin`. It does NOT build a desktop bundle — origin-app builds its own DMG in its own repo.
+**The `release.yml` workflow ships the local runtime.** It handles: origin CLI, wenlan-server, wenlan-mcp, standalone binary uploads, crates.io publishing for `wenlan-types` + `wenlan-mcp`, and npm publishing for `wenlan-mcp` + `@7xuanlu/origin`. It does NOT build a desktop bundle — origin-app builds its own DMG in its own repo.
 
 ### Branch protection
 
@@ -235,10 +235,10 @@ Manual setup: `bash scripts/setup-hooks.sh`. Hooks live under `.githooks/`.
 
 ### Drift-defense (doc/flag/config drift)
 
-Three fail-loud CI teeth live as `#[cfg(test)]` lib tests in `crates/origin-core/src/drift_guard.rs` (picked up by the same `cargo test --workspace --lib` that CI + pre-push already run — no extra wiring):
+Three fail-loud CI teeth live as `#[cfg(test)]` lib tests in `crates/wenlan-core/src/drift_guard.rs` (picked up by the same `cargo test --workspace --lib` that CI + pre-push already run — no extra wiring):
 
 - **Teeth #1 — path resolver:** tracked markdown may not reference an in-repo path that doesn't exist on the branch. Skips `docs/plans/**`, `docs/superpowers/**`, and `*AUDIT.md` (historical/aspirational), and only checks file-like refs. Suppress an intentional ref with `<!-- drift-ok -->`.
-- **Teeth #2 — flag doc contract (fail-closed):** every behavioral `ORIGIN_*` flag read in `crates/*/src` must be documented in an `AGENTS.md`, else allowlisted (`FLAG_ALLOWLIST`, infra/test) or grandfathered (`BASELINE_UNDOCUMENTED`, the burn-down list of flags undocumented at introduction). A NEW undocumented flag fails the build.
+- **Teeth #2 — flag doc contract (fail-closed):** every behavioral `WENLAN_*` flag read in `crates/*/src` must be documented in an `AGENTS.md`, else allowlisted (`FLAG_ALLOWLIST`, infra/test) or grandfathered (`BASELINE_UNDOCUMENTED`, the burn-down list of flags undocumented at introduction). A NEW undocumented flag fails the build.
 - **Teeth #3 — version sync:** `version.txt`, `.release-please-manifest.json`, and the root workspace `Cargo.toml` must carry an identical version string.
 
 The fuzzy surfaces (eval numbers stale vs the current env-hash, design-doc/decision rot, memory→repo dangling pointers, stale worktrees) are covered by the read-only `doc-drift-auditor` subagent. Run weekly, locally:
@@ -248,7 +248,7 @@ The fuzzy surfaces (eval numbers stale vs the current env-hash, design-doc/decis
 
 ## Architecture
 
-Origin is a **Personal Agent Memory Layer** — a local-first memory server on macOS where AI agents write what they learn and humans curate. Daemon-centric: a headless HTTP server owns all business logic and data; the desktop app, the CLI, and external MCP clients are all thin clients over its HTTP API.
+Wenlan is a **Personal Agent Memory Layer** — a local-first memory server on macOS where AI agents write what they learn and humans curate. Daemon-centric: a headless HTTP server owns all business logic and data; the desktop app, the CLI, and external MCP clients are all thin clients over its HTTP API.
 
 ### Workspace Layout
 
@@ -256,22 +256,22 @@ The repo is a Cargo workspace with 5 crates:
 
 | Crate | Role | Key dependencies |
 |---|---|---|
-| `crates/origin-types` | Shared API boundary types (request/response, memory, entities). Lightweight: serde + serde_json + anyhow only. Consumed by `origin-mcp`, `origin-app` (separate repo, via crates.io), and any other downstream tool. | serde |
-| `crates/origin-core` | All business logic: DB, embeddings, LLM engine, search, classification, knowledge graph, distill cycles, pages, export, eval. **Must have NO axum or tauri dependencies.** | libSQL, FastEmbed, llama-cpp-2, hf-hub |
-| `crates/origin-server` | Headless HTTP daemon on `127.0.0.1:7878`. Depends on `origin-core`. Provides `install/uninstall/status` subcommands for launchd management. | axum, tower, clap |
-| `crates/origin-cli` | CLI binary `origin`. Talks to daemon HTTP via `origin-types` and owns setup/service commands. Subcommands: status/search/recall/store/list/agents/install/setup/model/key/doctor. | reqwest, clap |
-| `crates/origin-mcp` | MCP server binary that bridges MCP clients (Claude Code, Cursor, Codex, Claude Desktop, etc.) to the daemon HTTP API. Stdio + streamable-HTTP transports via the `rmcp` crate. Ships as a standalone binary + npm package (`npx -y origin-mcp`). | rmcp, reqwest, schemars |
+| `crates/wenlan-types` | Shared API boundary types (request/response, memory, entities). Lightweight: serde + serde_json + anyhow only. Consumed by `wenlan-mcp`, `origin-app` (separate repo, via crates.io), and any other downstream tool. | serde |
+| `crates/wenlan-core` | All business logic: DB, embeddings, LLM engine, search, classification, knowledge graph, distill cycles, pages, export, eval. **Must have NO axum or tauri dependencies.** | libSQL, FastEmbed, llama-cpp-2, hf-hub |
+| `crates/wenlan-server` | Headless HTTP daemon on `127.0.0.1:7878`. Depends on `wenlan-core`. Provides `install/uninstall/status` subcommands for launchd management. | axum, tower, clap |
+| `crates/wenlan-cli` | CLI binary `origin`. Talks to daemon HTTP via `wenlan-types` and owns setup/service commands. Subcommands: status/search/recall/store/list/agents/install/setup/model/key/doctor. | reqwest, clap |
+| `crates/wenlan-mcp` | MCP server binary that bridges MCP clients (Claude Code, Cursor, Codex, Claude Desktop, etc.) to the daemon HTTP API. Stdio + streamable-HTTP transports via the `rmcp` crate. Ships as a standalone binary + npm package (`npx -y wenlan-mcp`). | rmcp, reqwest, schemars |
 
-The daemon (`origin-server`) is the single source of truth. External tools (the desktop app, MCP clients via `origin-mcp`, `origin` CLI, curl) all talk HTTP to the same daemon. `origin-mcp` source lives in this monorepo; at runtime it's a separate process the MCP client spawns.
+The daemon (`wenlan-server`) is the single source of truth. External tools (the desktop app, MCP clients via `wenlan-mcp`, `origin` CLI, curl) all talk HTTP to the same daemon. `wenlan-mcp` source lives in this monorepo; at runtime it's a separate process the MCP client spawns.
 
 ### Stack
 
 - **Daemon**: Rust, Axum 0.8 (HTTP), libSQL (Turso's SQLite fork — vectors, knowledge graph, documents), Tokio, FastEmbed (BGE-Base-EN-v1.5-Q, 768-dim, 512-token max), llama-cpp-2 (Qwen3-4B-Instruct-2507 via Metal GPU; Qwen3.5-9B optional), launchd for process management
 - **CLI** (`origin`): Rust, reqwest, clap
 
-### Database: libSQL (owned by origin-core)
+### Database: libSQL (owned by wenlan-core)
 
-One libSQL database at the platform data directory (`dirs::data_local_dir()/origin/memorydb/origin_memory.db`; on macOS, `~/Library/Application Support/origin/memorydb/origin_memory.db`), owned by `MemoryDB` in `crates/origin-core/src/db.rs`:
+One libSQL database at the platform data directory (`dirs::data_local_dir()/origin/memorydb/origin_memory.db`; on macOS, `~/Library/Application Support/wenlan/memorydb/origin_memory.db`), owned by `MemoryDB` in `crates/wenlan-core/src/db.rs`:
 - **Document chunks**: `chunks` table with `F32_BLOB(768)` vector column, DiskANN indexing (768-dim, BGE-Base-EN-v1.5-Q)
 - **Knowledge graph**: `entities`, `relations`, `observations` tables with FK cascades
 - **Full-text search**: FTS5 virtual table (`chunks_fts`) auto-synced via triggers
@@ -283,10 +283,10 @@ One libSQL database at the platform data directory (`dirs::data_local_dir()/orig
 
 ### Events: EventEmitter trait (no tauri::Emitter in core)
 
-Instead of passing `tauri::AppHandle` into business logic, `origin-core` defines an `EventEmitter` trait:
+Instead of passing `tauri::AppHandle` into business logic, `wenlan-core` defines an `EventEmitter` trait:
 
 ```rust
-// crates/origin-core/src/events.rs
+// crates/wenlan-core/src/events.rs
 pub trait EventEmitter: Send + Sync {
     fn emit(&self, event: &str, payload: &str) -> Result<()>;
 }
@@ -297,13 +297,13 @@ pub struct NoopEmitter;
 - The desktop app (separate `origin-app` repo) provides a `TauriEmitter` adapter that wraps `AppHandle::emit`
 - `MemoryDB::new(db_path, emitter: Arc<dyn EventEmitter>)` takes the trait object
 
-This keeps `origin-core` framework-agnostic and testable with `NoopEmitter` in unit tests.
+This keeps `wenlan-core` framework-agnostic and testable with `NoopEmitter` in unit tests.
 
 ### IPC Surface
 
 All data flows through the daemon's HTTP API. The desktop app, CLI, and MCP clients all hit it.
 
-- **HTTP API**: Axum on `127.0.0.1:7878`, served by `origin-server`. Used by the desktop app, the `origin-mcp` MCP server (same workspace, separate binary process), the `origin` CLI, and any external tool.
+- **HTTP API**: Axum on `127.0.0.1:7878`, served by `wenlan-server`. Used by the desktop app, the `wenlan-mcp` MCP server (same workspace, separate binary process), the `origin` CLI, and any external tool.
   - General: `/api/health`, `/api/status`, `/api/search`, `/api/context`, `/api/chat-context`, `/api/ping`
   - Ingest: `/api/ingest/text`, `/api/ingest/webpage`, `/api/ingest/memory`
   - Memory CRUD: `/api/memory/store`, `/api/memory/search`, `/api/memory/confirm/{id}`, `/api/memory/list`, `/api/memory/delete/{id}`
@@ -315,10 +315,10 @@ All data flows through the daemon's HTTP API. The desktop app, CLI, and MCP clie
 
 Per-crate module tables live in subtree `AGENTS.md` files (loaded when an agent works under that crate, per the agents.md hierarchical-instruction convention):
 
-- `crates/origin-core/AGENTS.md` — all business logic (db, engine, classify, extract, rerank, refinery, pages, eval, ...).
-- `crates/origin-server/AGENTS.md` — HTTP daemon (router, routes, state, ingest_batcher, scheduler, ...).
+- `crates/wenlan-core/AGENTS.md` — all business logic (db, engine, classify, extract, rerank, refinery, pages, eval, ...).
+- `crates/wenlan-server/AGENTS.md` — HTTP daemon (router, routes, state, ingest_batcher, scheduler, ...).
 
-## Key Modules — origin (CLI, `crates/origin-cli/src/`)
+## Key Modules — origin (CLI, `crates/wenlan-cli/src/`)
 
 The `origin` binary — a thin reqwest-based CLI for the daemon's HTTP API. Subcommands cover `setup`, `install`, `status`, `search`, `recall`, `store`, `list`, `agents`, `model`, `key`, `doctor`. The CLI does not touch the database directly: every command is an HTTP call.
 
@@ -329,14 +329,14 @@ The `origin` binary — a thin reqwest-based CLI for the daemon's HTTP API. Subc
 See `app/eval/AGENTS.md` "eval citation discipline" section for the full rules (single-run, schema-version, receipt-only, per-case visibility, layer attribution, commit policy). External-facing numbers MUST satisfy those rules.
 
 ### Crate boundaries
-- **origin-core must have NO tauri or axum dependencies.** Verify with `grep -rn "use tauri\|use axum" crates/origin-core/src/` — expect zero hits. Any event emission goes through the `EventEmitter` trait.
-- **origin-types must be lightweight.** Only serde + serde_json + anyhow. No chrono, no tokio, no heavy deps. These types are shared with `origin-mcp` (same workspace, Apache-2.0) and `origin-app` (AGPL-3.0 separate repo, consumes via crates.io), so adding heavy deps forces them downstream.
-- **Don't add business logic to origin-server.** Route handlers should call `origin-core` functions with state snapshots — the server's job is HTTP framing, not logic.
+- **wenlan-core must have NO tauri or axum dependencies.** Verify with `grep -rn "use tauri\|use axum" crates/wenlan-core/src/` — expect zero hits. Any event emission goes through the `EventEmitter` trait.
+- **wenlan-types must be lightweight.** Only serde + serde_json + anyhow. No chrono, no tokio, no heavy deps. These types are shared with `wenlan-mcp` (same workspace, Apache-2.0) and `origin-app` (AGPL-3.0 separate repo, consumes via crates.io), so adding heavy deps forces them downstream.
+- **Don't add business logic to wenlan-server.** Route handlers should call `wenlan-core` functions with state snapshots — the server's job is HTTP framing, not logic.
 - **Don't add new HTTP endpoints to the CLI.** Use existing daemon endpoints. If a CLI subcommand needs new data, add a daemon endpoint first.
-- **MCP wrappers in `origin-mcp` always typed-deserialize.** Every `_impl` method in `crates/origin-mcp/src/tools.rs` deserializes the daemon response into a typed wire struct from `origin-types` (e.g. `SearchPagesResponse { pages: Vec<Page> }`), never into `serde_json::Value`. Untyped responses silently emit whatever shape the daemon returns; typed deserialization fails loud on envelope-key drift. Mirror commit `4f545869` and PR #77.
+- **MCP wrappers in `wenlan-mcp` always typed-deserialize.** Every `_impl` method in `crates/wenlan-mcp/src/tools.rs` deserializes the daemon response into a typed wire struct from `wenlan-types` (e.g. `SearchPagesResponse { pages: Vec<Page> }`), never into `serde_json::Value`. Untyped responses silently emit whatever shape the daemon returns; typed deserialization fails loud on envelope-key drift. Mirror commit `4f545869` and PR #77.
 
 ### Ingest-path parity (training-serving skew)
-- **All post-store enrichment goes through `origin_core::ingest::run_canonical_enrichment`.** It is the ONE shared path for classify + extract + `apply_enrichment` + tags (Phase 1), entity/title/page enrichment (Phase 2), and dual-pool dedup/contradiction resolution (Phase 3). The server `handle_store_memory`, the eval seed pipeline, and the importer all call it. Do NOT re-implement a subset of enrichment in any consumer.
+- **All post-store enrichment goes through `wenlan_core::ingest::run_canonical_enrichment`.** It is the ONE shared path for classify + extract + `apply_enrichment` + tags (Phase 1), entity/title/page enrichment (Phase 2), and dual-pool dedup/contradiction resolution (Phase 3). The server `handle_store_memory`, the eval seed pipeline, and the importer all call it. Do NOT re-implement a subset of enrichment in any consumer.
 - **Why.** The eval seed used to re-implement a divergent subset (`enrich_db_for_eval` = entity + title + page only), so every new write-time feature (importance/T8, event_date/T11+T20, episode/T2, fact-channel/T15, dual-pool/T14, summary-nodes/T18) silently lagged in the eval path and shipped merged-but-inert, re-discovered as "starved" each eval cycle. Sharing the code makes seed-vs-production fidelity hold by construction. This is the standard fix for **training-serving skew** — Google "Rules of ML", Rule #32: *"Re-use code between your training pipeline and your serving pipeline whenever possible"* → *"eliminates a source of training-serving skew."* See also 12-Factor X (dev/prod parity) and the technical-debt framing (Cunningham, OOPSLA '92): the eval shortcut was debt never repaid.
 - **New write-time feature checklist.** Add it inside `run_canonical_enrichment` (not in a consumer), then add a seed-completeness assert — a contract test (Fowler, `ContractTest`) — so the seed cache fails loud when the feature's artifact is missing rather than silently absent. A flag merged without its artifact present in the seed is unmeasurable.
 
@@ -344,15 +344,15 @@ See `app/eval/AGENTS.md` "eval citation discipline" section for the full rules (
 
 The recurring failure mode was not any single missing artifact — it was that seeding a cached scenario DB was a *scatter of manual STEP tests* (`seed_inject_event_dates`, `seed_backfill_classify`, entity sweep, `seed_backfill_episodes`, `distill_pages`) run by memory. Miss one and a channel ships starved, then a graph/temporal A/B over it returns a null that gets misread as "the channel doesn't help" — a lie about a dead substrate, re-discovered every cycle.
 
-- **Seed side — the ONE route.** Re-seed cached scenario DBs with the orchestrator `seed_scenario_dbs_complete` (`crates/origin-core/tests/eval_harness.rs`). It runs every enrichment step in the correct order (event_date inject → classify → entity/`memory_entities` sweep → episodes → distill) then asserts `SeedExpectations::complete()`. **Never hand-run the individual `seed_*` STEP tests** — they are the orchestrator's internals. Run the one route and the seed is complete *and* contract-verified by construction.
-- **Contract side — teeth, not prose.** `crates/origin-core/src/eval/seed_contract.rs` is the single liveness contract. `SeedExpectations::complete()` hard-fails the seed when a channel's substrate is empty: `memory_entities = 0` (graph), `event_date = 0` (temporal), `pages = 0` active (page channel), plus dupes + classification from `strict()`. These are *presence* checks (`> 0`), not coverage percentages — a percentage floor rots (see the L3/coverage note), but zero links means the channel is dead, which is the bug. `strict()` stays lenient (report-only) for minimal seeds; only `complete()` has teeth.
+- **Seed side — the ONE route.** Re-seed cached scenario DBs with the orchestrator `seed_scenario_dbs_complete` (`crates/wenlan-core/tests/eval_harness.rs`). It runs every enrichment step in the correct order (event_date inject → classify → entity/`memory_entities` sweep → episodes → distill) then asserts `SeedExpectations::complete()`. **Never hand-run the individual `seed_*` STEP tests** — they are the orchestrator's internals. Run the one route and the seed is complete *and* contract-verified by construction.
+- **Contract side — teeth, not prose.** `crates/wenlan-core/src/eval/seed_contract.rs` is the single liveness contract. `SeedExpectations::complete()` hard-fails the seed when a channel's substrate is empty: `memory_entities = 0` (graph), `event_date = 0` (temporal), `pages = 0` active (page channel), plus dupes + classification from `strict()`. These are *presence* checks (`> 0`), not coverage percentages — a percentage floor rots (see the L3/coverage note), but zero links means the channel is dead, which is the bug. `strict()` stays lenient (report-only) for minimal seeds; only `complete()` has teeth.
 - **Eval side — refuse, don't lie.** The SAME contract gates the consumer: every per-query eval collector calls `seed_contract::assert_feature_substrate_live(conn, feature)` at entry. A graph A/B over a DB with zero `memory_entities` (or a temporal A/B with zero `event_date`, or a page-channel A/B with zero active `pages`) **errors loud** ("EVAL REFUSED") instead of emitting a null. Producer and consumer share one contract, so neither can drift onto a dead substrate.
 - **Adding a write-time channel.** Add its step to `seed_scenario_dbs_complete`, its presence floor to `SeedExpectations` (+ wire it into `assert_feature_substrate_live` if it has an A/B), and a unit test in `seed_contract.rs`. The contract — not a runbook — is what keeps the seed honest.
 
 ### Async and locking
-- **Never hold a `tokio::sync::RwLock` read or write guard across `.await`.** Holding a read guard during an LLM call (which can take seconds) blocks all writers. Pattern: snapshot what you need from the guard into a scoped block that ends before the await, then call the async function with the cloned values. See `crates/origin-server/src/memory_routes.rs` `handle_store_memory` for an example of the post-ingest enrichment pattern.
+- **Never hold a `tokio::sync::RwLock` read or write guard across `.await`.** Holding a read guard during an LLM call (which can take seconds) blocks all writers. Pattern: snapshot what you need from the guard into a scoped block that ends before the await, then call the async function with the cloned values. See `crates/wenlan-server/src/memory_routes.rs` `handle_store_memory` for an example of the post-ingest enrichment pattern.
 - **`Arc<MemoryDB>` is the sharing primitive.** `ServerState.db` is `Option<Arc<MemoryDB>>`. Clone the Arc out of the guard rather than borrowing through the guard.
-- **Daemon is the single writer.** Only `origin-server` opens the libSQL database. The desktop app and CLI never touch the DB directly — they talk HTTP.
+- **Daemon is the single writer.** Only `wenlan-server` opens the libSQL database. The desktop app and CLI never touch the DB directly — they talk HTTP.
 - **libSQL connection pattern**: `MemoryDB` holds `tokio::sync::Mutex<libsql::Connection>` internally. Never try to share a `libsql::Connection` across tasks directly (`Send` but not `Sync`).
 
 ### SQL, strings, data
@@ -360,20 +360,20 @@ The recurring failure mode was not any single missing artifact — it was that s
 - **NULL semantics**: Store `Option<T>` as SQL NULL, not empty string — so IS NULL filters work correctly
 - **UTF-8 safety**: Never byte-index Rust strings (`&s[..n]`) — use `chars().take(n)` or `strip_prefix`/`strip_suffix`. Exception: byte-slicing after a verified ASCII prefix check is safe (the boundary is guaranteed valid), but prefer the char-safe version anyway for consistency.
 - **Batch SQL**: Wrap multi-row insert/delete loops in BEGIN/COMMIT transactions
-- **LIKE patterns against JSON**: Quote the match target to avoid substring false positives — `%"{id}"%` not `%{id}%` (e.g., `mem_1` would otherwise match `mem_10`). See the fix in `crates/origin-core/src/db.rs` (the `%"{id}"%` quoting shown above) and the regression test.
+- **LIKE patterns against JSON**: Quote the match target to avoid substring false positives — `%"{id}"%` not `%{id}%` (e.g., `mem_1` would otherwise match `mem_10`). See the fix in `crates/wenlan-core/src/db.rs` (the `%"{id}"%` quoting shown above) and the regression test.
 
 ### Dev environment gotchas
 
 **Daemon lifecycle:**
-- **Worktree daemon mismatch**: The daemon on port 7878 can be from launchd, main branch, a stale worktree, or a previous session. Always verify which binary is running: `lsof -i :7878` to get the PID, then `lsof -p <PID> | grep "txt.*origin-server"` to see the binary path and size. Kill and restart from the current working tree.
-- **Stale binary after merge/pull**: `cargo build -p origin-server` may report "0.64s Finished" without recompiling if the source timestamps haven't changed (e.g., after `git pull` fast-forward). Touch a source file to force recompilation: `touch crates/origin-server/src/router.rs && cargo build -p origin-server`. Verify the binary timestamp matches: `ls -la target/debug/origin-server`.
+- **Worktree daemon mismatch**: The daemon on port 7878 can be from launchd, main branch, a stale worktree, or a previous session. Always verify which binary is running: `lsof -i :7878` to get the PID, then `lsof -p <PID> | grep "txt.*wenlan-server"` to see the binary path and size. Kill and restart from the current working tree.
+- **Stale binary after merge/pull**: `cargo build -p wenlan-server` may report "0.64s Finished" without recompiling if the source timestamps haven't changed (e.g., after `git pull` fast-forward). Touch a source file to force recompilation: `touch crates/wenlan-server/src/router.rs && cargo build -p wenlan-server`. Verify the binary timestamp matches: `ls -la target/debug/wenlan-server`.
 - **kill vs kill -9**: `kill <PID>` may not terminate the daemon cleanly. Always use `kill -9 <PID>` and verify with `lsof -ti :7878` afterward. If the port is still in use, another process took over.
-- **Worktree target directories are per-worktree**: Each `.worktrees/<name>` checkout has its own `target/`. Building inside a worktree writes to that worktree's `target/`, not the main repo's. Verify a binary's source with `lsof -p <PID> | grep origin-server` so you don't run a stale binary from a different worktree.
-- **Upgrading the daemon requires a restart**: installing a new binary does NOT replace an already-running daemon -- the new process detects the healthy incumbent on port 7878 and exits (`origin-server/src/main.rs`). `origin install` now stops the running service before reinstalling, and `origin restart` (stop then start) reloads it explicitly. The MCP version handshake surfaces a stale daemon (`VersionStatus::DaemonOutdated`) and points users at `origin restart`. Enabling the cross-encoder (`ORIGIN_RERANKER_ENABLED=1`) blocks startup on a one-time ~1.1GB model download and, on failure, serves with no rerank -- `/api/status` now reports `reranker` as `disabled` / `active` / `failed` so the degraded state is visible.
+- **Worktree target directories are per-worktree**: Each `.worktrees/<name>` checkout has its own `target/`. Building inside a worktree writes to that worktree's `target/`, not the main repo's. Verify a binary's source with `lsof -p <PID> | grep wenlan-server` so you don't run a stale binary from a different worktree.
+- **Upgrading the daemon requires a restart**: installing a new binary does NOT replace an already-running daemon -- the new process detects the healthy incumbent on port 7878 and exits (`wenlan-server/src/main.rs`). `wenlan install` now stops the running service before reinstalling, and `wenlan restart` (stop then start) reloads it explicitly. The MCP version handshake surfaces a stale daemon (`VersionStatus::DaemonOutdated`) and points users at `wenlan restart`. Enabling the cross-encoder (`WENLAN_RERANKER_ENABLED=1`) blocks startup on a one-time ~1.1GB model download and, on failure, serves with no rerank -- `/api/status` now reports `reranker` as `disabled` / `active` / `failed` so the degraded state is visible.
 
 **Other:**
 - **Metal/ggml on macOS Tahoe 26.x**: `ggml_metal_init` may fail even though native Metal works. The daemon auto-degrades and continues without LLM. Not a code bug. Check for competing GPU processes: `pgrep -la origin`.
-- **Dev and prod share data by default**: Both use port 7878 and the platform data directory (on macOS, `~/Library/Application Support/origin/`). For isolated testing, override explicitly: `ORIGIN_PORT=7879 ORIGIN_DATA_DIR=/tmp/origin-test cargo run -p origin-server`.
+- **Dev and prod share data by default**: Both use port 7878 and the platform data directory (on macOS, `~/Library/Application Support/wenlan/`). For isolated testing, override explicitly: `WENLAN_PORT=7879 WENLAN_DATA_DIR=/tmp/origin-test cargo run -p wenlan-server`.
 
 ### Worktree cleanup after squash-merge
 
@@ -386,29 +386,29 @@ GitHub squash-merge bundles all PR commits into one new commit on `main` with a 
 Run this hygiene pass roughly once a week or whenever `git worktree list` exceeds ~5 entries. Stale worktree paths waste disk + confuse "is this work merged?" investigations.
 
 ### Misc
-- `ORIGIN_BIND_ADDR=<host:port>`: override the daemon's bind address (default `127.0.0.1:7878`). Used inside Docker to listen on `0.0.0.0`.
-- `ORIGIN_LLM_SLOT_BACKFILL`: continuous-batch slot backfill for the on-device LLM (`OnDeviceProvider`). **DEFAULT OFF (opt-in; enable with `1`/`true`/`yes`/`on`).** When ON, a continuous-batch call may drain more than `m` (= `ORIGIN_LLM_PARALLEL_SEQS`) immediately-available requests and the engine keeps all `m` KV slots full by backfilling the next queued request the moment a slot finishes — so decode width stays at `m` instead of raggedly draining `m`→1 as short outputs (classify ~20 tok) finish before long ones (entity ~100 tok). Fixes the decode-bound enrichment throughput floor (the seed enrichment batch measured 40% prefill / 59% decode; the 59% is this ragged drain). Pure throughput optimization, semantically-equivalent outputs (same prompts, same per-request sampler seeds; cross-slot KV is cleared on reuse). The drain cap is `m * 4` (m≤8 → ≤32), bounding per-call latency since a drained batch's outputs return together. **Default-OFF** because it is a structural rewrite of the SHARED inference path that CI cannot validate on Metal; enable it for throughput-bound paths (bulk ingest, eval seed firehose) where the latency-return-together tradeoff is acceptable. When OFF (the default) the drain caps at `m` — one slot per request, byte-identical to the pre-backfill engine. The no-overflow path (queue ≤ `m`, e.g. a single memory's enrichment) never backfills regardless of the flag. Parsed by `slot_backfill_enabled()` in `crates/origin-core/src/llm_provider.rs`; the engine scheduling lives in `LlmEngine::run_inference_continuous_batch` (`engine.rs`, `BackfillScheduler`). Follow-ups before any default-ON flip: separate live/bulk queues (or priority gating) so live enrichment can never inherit firehose head-of-line latency, and stochastic/cancellation/timeout fuzzing beyond the GPU grounding oracle. Correctness validated by `eval::engine_throughput::tests::backfill_grounding` (KV-reuse cross-contamination oracle, L7 GPU) + the wall-clock A/B `backfill_throughput_ab`.
-- `ORIGIN_LLM_PREFIX_KV_CACHE`: prefill-side prefix-KV cache for the on-device LLM continuous batch (`OnDeviceProvider`). **DEFAULT OFF (opt-in; enable with `1`/`true`/`yes`/`on`).** When ON, `LlmEngine::run_inference_continuous_batch` (`engine.rs`) detects the longest token prefix shared by every sequence in the batch (the fixed chatml system prompt + task framing — ~80% of a ~225-token enrichment prompt), primes that prefix's KV **once** into seq 0, fans it to the other slots via `copy_kv_cache_seq`, and then prefills only each request's unique suffix at positions `[prefix_len, ..)`. The per-slot pre-prefill clear preserves `[0, prefix_len)` (clears only `[prefix_len, ..)`), so a slot-backfilled request reuses the resident prefix too — the prefix is encoded exactly once for the whole batch. Attacks the **prefill** half of the enrichment batch (measured 40% prefill / 59% decode via `[batch_timing]`); complementary to `ORIGIN_LLM_SLOT_BACKFILL`, which attacks the decode half. Honest ceiling ~1.5x on the prefill portion, not the whole batch. **Semantically equivalent to a full per-seq prefill** — a prefix token's KV is causally closed and batch-composition-independent in exact arithmetic, so the algebra is identical; as with all batched GPU inference, intermediate logits can still differ at the ULP level (greedy decode absorbs this — the L7 equivalence oracle asserts byte-identity at temperature 0). A pure throughput optimization, not a semantic change. The cache engages only on TRANSFORMER models (gated off when `model.is_recurrent()` or `model.is_hybrid()` — e.g. Qwen3.5-9B's DeltaNet hybrid layers, whose compressed recurrent state is not the position-addressable per-token K/V that prefix sharing requires), and only when there are ≥ 2 sequences, ≥ 2 KV slots, and the shared prefix clears `PREFIX_KV_MIN_TOKENS` (32); otherwise, and on any priming failure, it falls back to byte-identical full per-seq prefill (`prefix_len = 0`). **Default-OFF** because, like slot backfill, it mutates the SHARED on-device inference path's KV handling, which CI cannot validate on Metal. Parsed by `prefix_kv_cache_enabled()`; the prefix-length seam is `reusable_prefix_len()` / `longest_common_prefix_len()` in `crates/origin-core/src/engine.rs` (pure, unit-tested). Correctness validated by `eval::engine_throughput` (fresh-vs-cached equivalence oracle, L7 GPU) + the `[batch_timing]` `prime_ms`/`prefill_ms` A/B.
-- Log filter default is `warn` — add modules explicitly for `info` logs (e.g., `origin_core::db=info`, `origin_server=info`)
-- All local data stored in the platform data directory (`dirs::data_local_dir()/origin/`; on macOS, `~/Library/Application Support/origin/`) — MemoryDB, config, activities, tags
-- Crate names: `origin-types`, `origin-core`, `origin-server`, `origin` (CLI), `origin-mcp` — all in this workspace. The desktop app crate `origin-app` lives in [7xuanlu/origin-app](https://github.com/7xuanlu/origin-app).
-- **Licenses**: all five workspace crates (`origin-types`, `origin-core`, `origin-server`, `origin` CLI, `origin-mcp`) are **Apache-2.0** via workspace inheritance. The desktop app in `origin-app` is **AGPL-3.0-only** (separate repo).
-- `origin-mcp` is in-tree at `crates/origin-mcp/` (merged from the old `7xuanlu/origin-mcp` repo on 2026-05-09 via `git subtree`). It talks to the daemon via HTTP at runtime and is published to npm as a standalone binary (`npx -y origin-mcp`).
+- `WENLAN_BIND_ADDR=<host:port>`: override the daemon's bind address (default `127.0.0.1:7878`). Used inside Docker to listen on `0.0.0.0`.
+- `WENLAN_LLM_SLOT_BACKFILL`: continuous-batch slot backfill for the on-device LLM (`OnDeviceProvider`). **DEFAULT OFF (opt-in; enable with `1`/`true`/`yes`/`on`).** When ON, a continuous-batch call may drain more than `m` (= `WENLAN_LLM_PARALLEL_SEQS`) immediately-available requests and the engine keeps all `m` KV slots full by backfilling the next queued request the moment a slot finishes — so decode width stays at `m` instead of raggedly draining `m`→1 as short outputs (classify ~20 tok) finish before long ones (entity ~100 tok). Fixes the decode-bound enrichment throughput floor (the seed enrichment batch measured 40% prefill / 59% decode; the 59% is this ragged drain). Pure throughput optimization, semantically-equivalent outputs (same prompts, same per-request sampler seeds; cross-slot KV is cleared on reuse). The drain cap is `m * 4` (m≤8 → ≤32), bounding per-call latency since a drained batch's outputs return together. **Default-OFF** because it is a structural rewrite of the SHARED inference path that CI cannot validate on Metal; enable it for throughput-bound paths (bulk ingest, eval seed firehose) where the latency-return-together tradeoff is acceptable. When OFF (the default) the drain caps at `m` — one slot per request, byte-identical to the pre-backfill engine. The no-overflow path (queue ≤ `m`, e.g. a single memory's enrichment) never backfills regardless of the flag. Parsed by `slot_backfill_enabled()` in `crates/wenlan-core/src/llm_provider.rs`; the engine scheduling lives in `LlmEngine::run_inference_continuous_batch` (`engine.rs`, `BackfillScheduler`). Follow-ups before any default-ON flip: separate live/bulk queues (or priority gating) so live enrichment can never inherit firehose head-of-line latency, and stochastic/cancellation/timeout fuzzing beyond the GPU grounding oracle. Correctness validated by `eval::engine_throughput::tests::backfill_grounding` (KV-reuse cross-contamination oracle, L7 GPU) + the wall-clock A/B `backfill_throughput_ab`.
+- `WENLAN_LLM_PREFIX_KV_CACHE`: prefill-side prefix-KV cache for the on-device LLM continuous batch (`OnDeviceProvider`). **DEFAULT OFF (opt-in; enable with `1`/`true`/`yes`/`on`).** When ON, `LlmEngine::run_inference_continuous_batch` (`engine.rs`) detects the longest token prefix shared by every sequence in the batch (the fixed chatml system prompt + task framing — ~80% of a ~225-token enrichment prompt), primes that prefix's KV **once** into seq 0, fans it to the other slots via `copy_kv_cache_seq`, and then prefills only each request's unique suffix at positions `[prefix_len, ..)`. The per-slot pre-prefill clear preserves `[0, prefix_len)` (clears only `[prefix_len, ..)`), so a slot-backfilled request reuses the resident prefix too — the prefix is encoded exactly once for the whole batch. Attacks the **prefill** half of the enrichment batch (measured 40% prefill / 59% decode via `[batch_timing]`); complementary to `WENLAN_LLM_SLOT_BACKFILL`, which attacks the decode half. Honest ceiling ~1.5x on the prefill portion, not the whole batch. **Semantically equivalent to a full per-seq prefill** — a prefix token's KV is causally closed and batch-composition-independent in exact arithmetic, so the algebra is identical; as with all batched GPU inference, intermediate logits can still differ at the ULP level (greedy decode absorbs this — the L7 equivalence oracle asserts byte-identity at temperature 0). A pure throughput optimization, not a semantic change. The cache engages only on TRANSFORMER models (gated off when `model.is_recurrent()` or `model.is_hybrid()` — e.g. Qwen3.5-9B's DeltaNet hybrid layers, whose compressed recurrent state is not the position-addressable per-token K/V that prefix sharing requires), and only when there are ≥ 2 sequences, ≥ 2 KV slots, and the shared prefix clears `PREFIX_KV_MIN_TOKENS` (32); otherwise, and on any priming failure, it falls back to byte-identical full per-seq prefill (`prefix_len = 0`). **Default-OFF** because, like slot backfill, it mutates the SHARED on-device inference path's KV handling, which CI cannot validate on Metal. Parsed by `prefix_kv_cache_enabled()`; the prefix-length seam is `reusable_prefix_len()` / `longest_common_prefix_len()` in `crates/wenlan-core/src/engine.rs` (pure, unit-tested). Correctness validated by `eval::engine_throughput` (fresh-vs-cached equivalence oracle, L7 GPU) + the `[batch_timing]` `prime_ms`/`prefill_ms` A/B.
+- Log filter default is `warn` — add modules explicitly for `info` logs (e.g., `wenlan_core::db=info`, `origin_server=info`)
+- All local data stored in the platform data directory (`dirs::data_local_dir()/origin/`; on macOS, `~/Library/Application Support/wenlan/`) — MemoryDB, config, activities, tags
+- Crate names: `wenlan-types`, `wenlan-core`, `wenlan-server`, `origin` (CLI), `wenlan-mcp` — all in this workspace. The desktop app crate `origin-app` lives in [7xuanlu/origin-app](https://github.com/7xuanlu/origin-app).
+- **Licenses**: all five workspace crates (`wenlan-types`, `wenlan-core`, `wenlan-server`, `origin` CLI, `wenlan-mcp`) are **Apache-2.0** via workspace inheritance. The desktop app in `origin-app` is **AGPL-3.0-only** (separate repo).
+- `wenlan-mcp` is in-tree at `crates/wenlan-mcp/` (merged from the old `7xuanlu/wenlan-mcp` repo on 2026-05-09 via `git subtree`). It talks to the daemon via HTTP at runtime and is published to npm as a standalone binary (`npx -y wenlan-mcp`).
 
 ### Retrieval helpers location (PR-A, 2026-05-27)
 
-`crates/origin-core/src/retrieval/` is the canonical home for retrieval helpers (`hard_filters`, `signals`). The old `composite/` namespace was deleted along with the dead `CompositeWeights` scaffolding when PR #200 closed. Future retrieval-channel additions (page-channel in PR-B, etc.) live in `retrieval/`.
+`crates/wenlan-core/src/retrieval/` is the canonical home for retrieval helpers (`hard_filters`, `signals`). The old `composite/` namespace was deleted along with the dead `CompositeWeights` scaffolding when PR #200 closed. Future retrieval-channel additions (page-channel in PR-B, etc.) live in `retrieval/`.
 
 ### Retrieval env flags
 
-- `ORIGIN_RERANKER_MODEL` — cross-encoder model selector for the opt-in CE rerank path (`ORIGIN_RERANKER_ENABLED=1` on the daemon; CE itself stays default-OFF). DEFAULT (unset/unrecognized) = `bge-base` (BGERerankerBase, 1.1GB) since 2026-06-11: LME paired sweep PR #260 (scaffold N=1, n=479) measured it at 94% of v2-m3's NDCG lift (+0.1058 vs +0.1130 agg, both BH-sig, all categories above the A/A floor) at 29% of its marginal P50 cost (dP50 +318ms vs +1094ms; on-arm P50 510ms vs 1279ms CPU). `bge`/`bge-v2-m3` = quality ceiling for users who accept ~1.3s P50; `turbo`/`jina-turbo`/`jina` = JINARerankerV1TurboEn (146MB, +20ms P50, 71% of v2-m3's lift — the latency-critical pick). History: the 2026-06-04 LoCoMo model A/B (channels OFF, older substrate) ranked base WORST (0.500 vs turbo 0.569 vs v2-m3 0.612) — the base-vs-turbo ordering is fixture-dependent; the default decision trusts the LME sweep on the current harness/substrate per user call 2026-06-11. v2-m3-vs-base ordering is consistent on both. BYO override: `ORIGIN_RERANKER_ONNX_DIR` (+ `ORIGIN_RERANKER_MODEL_ID`) bypasses the selector entirely.
-- `ORIGIN_RERANKER_MODE` — cross-encoder activation mode: `off` (DEFAULT) | `lite` | `full` (PR-B). Selects which retrieval paths get a CE and which model, wired at the daemon HANDLER layer (never inside core `search_memory`, so internal callers `search_corrections_by_topic` + `verify_page` stay CE-free). `off` = byte-identical to no rerank. `lite` = turbo (jina-turbo, ~146MB) on the quick (`/api/search`) + context (`/api/chat-context`) paths AND on an explicit `rerank=true` deep search. `full` = turbo on quick/context + the heavy bge-base (~1.1GB, pool-widened via `compute_rerank_fetch_pool`) on the explicit `rerank=true` deep path; the deep model loads in the BACKGROUND so startup never blocks on the download (rerank=true falls back to plain hybrid until it is ready). The `rerank` request flag on `/api/memory/search` keeps its contract (`true` = rerank when a model is wired, `false` = plain hybrid) — the mode never inverts it. Legacy `ORIGIN_RERANKER_ENABLED=1` with `ORIGIN_RERANKER_MODE` unset = deep-only CE using `ORIGIN_RERANKER_MODEL` (exactly the pre-mode behavior, blocking startup); an explicit mode wins over the legacy switch. Per-path state is surfaced on `/api/status` (`reranker` = deep, `reranker_light` = quick+context, `reranker_mode`) and in `origin status` / `origin doctor`. Parsed by `reranker_mode_from_env()` + `resolve_reranker_plan()` in `crates/origin-core/src/reranker.rs`; the handler rerank step is `rerank_results_light()` in `crates/origin-core/src/db.rs`. CE model weights are a user-downloadable asset (the ~1.1GB bge-base cold download is the UX gate).
-- `ORIGIN_ENABLE_TEMPORAL_SOFT_BOOST` — opt-in (default OFF). Multiplicatively BOOSTS in-window dated memories by `(1 + ORIGIN_TEMPORAL_BONUS)` while leaving outside-window / undated / no-cue rows neutral (×1.0, never dropped). Gentler successor to the `ORIGIN_ENABLE_TEMPORAL_FILTER` hard filter; the two are mutually exclusive (soft takes precedence when both are set). Measured CLOSED-NULL on LME-S (2026-06-09, paired A/B `temporal_soft_cached` / `temporal_filter_cached` arms, n=479, event_date 100% live): n_touched 15/479 and 10/479, agg deltas inside noise, temporal-reasoning slightly negative. Attribution is structural, not substrate: `temporal_query::extract_cue` recognizes only deictic now-anchored phrasing (yesterday / last week / N days ago / since YYYY), while LME temporal-reasoning questions are event-anchored ordering/arithmetic ("which did I do first, A or B", "how many days between A and B") — the cue gate fires on ~3% of queries, and the few deictic hits compute windows against the eval wall-clock, not the 2022-23 memory dates. Re-measuring with a bigger `ORIGIN_TEMPORAL_BONUS` cannot change this; the lever for the TR category is multi-anchor retrieval (query decomposition, #11), not window boosting. FUTURE NOTE (fair re-test, parked): the closure is for the flags AS-WIRED, and the A/B carries a clock-era confound — read-side cue windows anchor to the eval wall-clock (2026) while memory event_dates are 2022-23, so even the few fired rows could not land in-window, and write-side grounding (T11) anchors to `last_modified` = seed-import time, same era mismatch. A fair re-test needs era-aligned clocks: per-question `now` = the question's own timestamp on the read side, and event-clock (not import-clock) grounding on the write side. The ~3% cue fire rate is regex-only and clock-independent, so the phrasing gap dominates regardless of the confound.
-- `ORIGIN_TEMPORAL_BONUS` — additive bonus for the soft boost (default `0.5`). Clamped non-negative: a negative or non-finite value falls back to neutral (`0.0`) / the default so the boost can only lift a row, never demote it.
-- `ORIGIN_ENABLE_INTENT_LLM` — opt-in (default OFF). On the deep/expanded path (`search_memory_expanded`), the existing query-expansion LLM call emits a structured intent object `{expansions, use_graph, entities, temporal_window, subqueries}` instead of a plain array of rephrasings (one call, `temperature=0`, per-field-tolerant parse via `engine::extract_json`, fallback to the keyword `classify_query` gate on timeout / error / unparseable). Slice-1 wires only `use_graph` into the deep-path graph gate (through the `graph_override` arg on `search_memory_with_cue`); `entities`, `temporal_window`, and `subqueries` are emitted and logged only (parked: `entities`→#10 graph traversal, `temporal_window`→#13, `subqueries`→#11). DISTINCT from the shipped zero-LLM T19 `ORIGIN_ENABLE_QUERY_INTENT` (channel-weight classifier, `__query_intent` baseline suffix); never reuse that flag for the LLM emitter or eval baselines confound. Wiring + scope: `search_memory_expanded` is an expansion path exercised by the eval harness and the dormant `search_memory_routed` strategy (`ORIGIN_LLM_ROUTE`, default OFF); the live daemon calls `search_memory` (quick) + `search_memory_cross_rerank` (deep), so slice-1 wires and PROVES the `use_graph` signal on the expanded path, while deploying it into the live deep path is a downstream step. Reconciliation with existing prototypes (all default-OFF, all off the live path): the T7 strategy router (`retrieval/route.rs` `classify_strategy` / `parse_strategy`, `ORIGIN_LLM_ROUTE`, dispatched by `search_memory_routed`) and the query-decomposition parser (`retrieval/decompose.rs` `parse_subqueries`, used by the `search_memory_decomposed` prototype); the `subqueries` field deliberately reuses `decompose.rs`'s JSON-array shape so #11 can consume it without re-contracting. Measurement caveat: the paired probe's ON arm feeds the intent object's expansions into RRF while the OFF arm feeds the legacy array-rephrasing expansions, so the A/B contrasts the whole intent pipeline against the legacy pipeline, not `use_graph` in isolation; read a positive result as enable-the-intent-pipeline and add a third arm (intent-expansions + keyword gate) to attribute the delta to routing alone. Never surfaced on the MCP `recall` tool; the daemon owns retrieval routing.
-- `ORIGIN_GRAPH_MEMORY_STREAM` — DEFAULT ON since 2026-06-10 (opt out with `0`/`false`/`no`/`off`; unset or any other value = ON). Live entity->memory RRF stream on the quick path (`search_memory`): query-anchored non-person entities with `memory_entities` degree <= hub cap contribute their linked memories as an extra RRF term (boost-only by default; surface-new stays opt-in). Receipt: +0.0545 NDCG@10 agg, BH-sig, paired A/B on cached canonical DBs (2026-06-09). The CE deep path skips the stream ONLY under a live rescore (`allow_graph_stream = reranker.is_none()` at the `search_memory_cross_rerank_cued` pool fetch): the stream×rerank stack measured not significant (+0.0126, p=0.17), so the stream's value is the non-rerank path; a rerank call without a configured reranker degrades to plain hybrid search WITH the stream (byte-identical to base). The skip-preference bypass keeps the stream allowed (stays byte-identical to the base `search_memory` baseline). Paired-A/B note: OFF arms must set `0` explicitly (unset = ON), and the `graph_seed` arm pins the stream to `0` on both arms (seed branch is unreachable while the stream is engaged). The `rerank_graph_stack` arm is retired — with the per-path skip, both its arms are byte-identical by construction. HAZARD: `ORIGIN_GRAPH_SURFACE_NEW` (opt-in) inserts graph-only rows WITHOUT re-applying memory_type/space/source_agent filters (`get_memories_for_entities` filters only entity link + source='memory' + chunk 0), i.e. a space-scoped search can surface cross-space rows — the same disclosure class the page/episode/fact channels gate; keep it OFF on multi-space data until an overlap gate lands (follow-up). Note on k-hop interaction: with the stream engaged, the opt-in `ORIGIN_ENABLE_GRAPH_KHOP` branch is unreachable on the quick path (stream early-returns before k-hop); set `ORIGIN_GRAPH_MEMORY_STREAM=0` to measure k-hop in isolation, mirroring the `graph_seed` note above.
-- `ORIGIN_RERANK_SKIP_PREFERENCE` — opt-in (default OFF). On the cross-encoder path (`search_memory_cross_rerank_cued`), preference/recommendation-seeking queries (per `router::classify::is_preference_query` — request-form keywords like "recommend"/"any tips", vetoed by past-recall markers like "you recommended"/"remind me") bypass the CE entirely and return the base `search_memory_with_cue` ranking, byte-identical to the non-rerank baseline. History: built against an older "CE hurts single-session-preference −0.155 NDCG@10" measurement that did NOT reproduce on either current seeded substrate — paired A/Bs at n=479 measured CE *helping* SSP (+0.027 on both the canonical and the re-seeded DB) and the bypass net-negative (−0.0117 agg, BH-sig). Ships as a tested, default-OFF escape hatch, NOT a recommended setting; the CE base-vs-on case itself re-verified at +0.178 NDCG@10 agg (BH-sig, positive every category, N=2 substrates) with P50 1165ms vs 111ms base (CPU BGE-reranker-v2-m3) — the default-ON decision stays gated on the smaller-CE-model benchmark. The keyword lists were validated against the full LME-S fixture: 30/30 SSP detected, 0 false positives across the other 470 questions; generalization beyond the fixture is heuristic, same trust level as the temporal/relational keyword gates. Paired A/B arm: `rerank_skip_pref` in `paired_ab_emit` (CE path, flag toggled). The `rerank_graph_stack` arm (same test) toggled `ORIGIN_GRAPH_MEMORY_STREAM` with the CE active on both arms to measure graph×rerank composition — measured NOT significant (+0.0126, p=0.17): graph_stream's +0.0545 quick-path gain is subsumed under the CE (except temporal-reasoning, +0.037), so the two levers do not stack. That arm is retired as of 2026-06-10; the code now hard-skips the stream under a live reranker (`allow_graph_stream = reranker.is_none()`), making both arms byte-identical by construction.
-- `ORIGIN_ENABLE_ENTITY_SWEEP` — DEFAULT ON (opt out with `0`/`false`/`no`/`off`). Gates the background 30-min entity-enrichment sweep that backfills `memory_entities` over existing memories via the configured LLM. Disabling it stops the automatic LLM spend/compute on a large corpus; the graph stream then only sees links created at write time. Parsed by `origin_core::db::entity_sweep_enabled()`, checked in `scheduler.rs` before the sweep fire-condition.
+- `WENLAN_RERANKER_MODEL` — cross-encoder model selector for the opt-in CE rerank path (`WENLAN_RERANKER_ENABLED=1` on the daemon; CE itself stays default-OFF). DEFAULT (unset/unrecognized) = `bge-base` (BGERerankerBase, 1.1GB) since 2026-06-11: LME paired sweep PR #260 (scaffold N=1, n=479) measured it at 94% of v2-m3's NDCG lift (+0.1058 vs +0.1130 agg, both BH-sig, all categories above the A/A floor) at 29% of its marginal P50 cost (dP50 +318ms vs +1094ms; on-arm P50 510ms vs 1279ms CPU). `bge`/`bge-v2-m3` = quality ceiling for users who accept ~1.3s P50; `turbo`/`jina-turbo`/`jina` = JINARerankerV1TurboEn (146MB, +20ms P50, 71% of v2-m3's lift — the latency-critical pick). History: the 2026-06-04 LoCoMo model A/B (channels OFF, older substrate) ranked base WORST (0.500 vs turbo 0.569 vs v2-m3 0.612) — the base-vs-turbo ordering is fixture-dependent; the default decision trusts the LME sweep on the current harness/substrate per user call 2026-06-11. v2-m3-vs-base ordering is consistent on both. BYO override: `WENLAN_RERANKER_ONNX_DIR` (+ `WENLAN_RERANKER_MODEL_ID`) bypasses the selector entirely.
+- `WENLAN_RERANKER_MODE` — cross-encoder activation mode: `off` (DEFAULT) | `lite` | `full` (PR-B). Selects which retrieval paths get a CE and which model, wired at the daemon HANDLER layer (never inside core `search_memory`, so internal callers `search_corrections_by_topic` + `verify_page` stay CE-free). `off` = byte-identical to no rerank. `lite` = turbo (jina-turbo, ~146MB) on the quick (`/api/search`) + context (`/api/chat-context`) paths AND on an explicit `rerank=true` deep search. `full` = turbo on quick/context + the heavy bge-base (~1.1GB, pool-widened via `compute_rerank_fetch_pool`) on the explicit `rerank=true` deep path; the deep model loads in the BACKGROUND so startup never blocks on the download (rerank=true falls back to plain hybrid until it is ready). The `rerank` request flag on `/api/memory/search` keeps its contract (`true` = rerank when a model is wired, `false` = plain hybrid) — the mode never inverts it. Legacy `WENLAN_RERANKER_ENABLED=1` with `WENLAN_RERANKER_MODE` unset = deep-only CE using `WENLAN_RERANKER_MODEL` (exactly the pre-mode behavior, blocking startup); an explicit mode wins over the legacy switch. Per-path state is surfaced on `/api/status` (`reranker` = deep, `reranker_light` = quick+context, `reranker_mode`) and in `origin status` / `origin doctor`. Parsed by `reranker_mode_from_env()` + `resolve_reranker_plan()` in `crates/wenlan-core/src/reranker.rs`; the handler rerank step is `rerank_results_light()` in `crates/wenlan-core/src/db.rs`. CE model weights are a user-downloadable asset (the ~1.1GB bge-base cold download is the UX gate).
+- `WENLAN_ENABLE_TEMPORAL_SOFT_BOOST` — opt-in (default OFF). Multiplicatively BOOSTS in-window dated memories by `(1 + WENLAN_TEMPORAL_BONUS)` while leaving outside-window / undated / no-cue rows neutral (×1.0, never dropped). Gentler successor to the `WENLAN_ENABLE_TEMPORAL_FILTER` hard filter; the two are mutually exclusive (soft takes precedence when both are set). Measured CLOSED-NULL on LME-S (2026-06-09, paired A/B `temporal_soft_cached` / `temporal_filter_cached` arms, n=479, event_date 100% live): n_touched 15/479 and 10/479, agg deltas inside noise, temporal-reasoning slightly negative. Attribution is structural, not substrate: `temporal_query::extract_cue` recognizes only deictic now-anchored phrasing (yesterday / last week / N days ago / since YYYY), while LME temporal-reasoning questions are event-anchored ordering/arithmetic ("which did I do first, A or B", "how many days between A and B") — the cue gate fires on ~3% of queries, and the few deictic hits compute windows against the eval wall-clock, not the 2022-23 memory dates. Re-measuring with a bigger `WENLAN_TEMPORAL_BONUS` cannot change this; the lever for the TR category is multi-anchor retrieval (query decomposition, #11), not window boosting. FUTURE NOTE (fair re-test, parked): the closure is for the flags AS-WIRED, and the A/B carries a clock-era confound — read-side cue windows anchor to the eval wall-clock (2026) while memory event_dates are 2022-23, so even the few fired rows could not land in-window, and write-side grounding (T11) anchors to `last_modified` = seed-import time, same era mismatch. A fair re-test needs era-aligned clocks: per-question `now` = the question's own timestamp on the read side, and event-clock (not import-clock) grounding on the write side. The ~3% cue fire rate is regex-only and clock-independent, so the phrasing gap dominates regardless of the confound.
+- `WENLAN_TEMPORAL_BONUS` — additive bonus for the soft boost (default `0.5`). Clamped non-negative: a negative or non-finite value falls back to neutral (`0.0`) / the default so the boost can only lift a row, never demote it.
+- `WENLAN_ENABLE_INTENT_LLM` — opt-in (default OFF). On the deep/expanded path (`search_memory_expanded`), the existing query-expansion LLM call emits a structured intent object `{expansions, use_graph, entities, temporal_window, subqueries}` instead of a plain array of rephrasings (one call, `temperature=0`, per-field-tolerant parse via `engine::extract_json`, fallback to the keyword `classify_query` gate on timeout / error / unparseable). Slice-1 wires only `use_graph` into the deep-path graph gate (through the `graph_override` arg on `search_memory_with_cue`); `entities`, `temporal_window`, and `subqueries` are emitted and logged only (parked: `entities`→#10 graph traversal, `temporal_window`→#13, `subqueries`→#11). DISTINCT from the shipped zero-LLM T19 `WENLAN_ENABLE_QUERY_INTENT` (channel-weight classifier, `__query_intent` baseline suffix); never reuse that flag for the LLM emitter or eval baselines confound. Wiring + scope: `search_memory_expanded` is an expansion path exercised by the eval harness and the dormant `search_memory_routed` strategy (`WENLAN_LLM_ROUTE`, default OFF); the live daemon calls `search_memory` (quick) + `search_memory_cross_rerank` (deep), so slice-1 wires and PROVES the `use_graph` signal on the expanded path, while deploying it into the live deep path is a downstream step. Reconciliation with existing prototypes (all default-OFF, all off the live path): the T7 strategy router (`retrieval/route.rs` `classify_strategy` / `parse_strategy`, `WENLAN_LLM_ROUTE`, dispatched by `search_memory_routed`) and the query-decomposition parser (`retrieval/decompose.rs` `parse_subqueries`, used by the `search_memory_decomposed` prototype); the `subqueries` field deliberately reuses `decompose.rs`'s JSON-array shape so #11 can consume it without re-contracting. Measurement caveat: the paired probe's ON arm feeds the intent object's expansions into RRF while the OFF arm feeds the legacy array-rephrasing expansions, so the A/B contrasts the whole intent pipeline against the legacy pipeline, not `use_graph` in isolation; read a positive result as enable-the-intent-pipeline and add a third arm (intent-expansions + keyword gate) to attribute the delta to routing alone. Never surfaced on the MCP `recall` tool; the daemon owns retrieval routing.
+- `WENLAN_GRAPH_MEMORY_STREAM` — DEFAULT ON since 2026-06-10 (opt out with `0`/`false`/`no`/`off`; unset or any other value = ON). Live entity->memory RRF stream on the quick path (`search_memory`): query-anchored non-person entities with `memory_entities` degree <= hub cap contribute their linked memories as an extra RRF term (boost-only by default; surface-new stays opt-in). Receipt: +0.0545 NDCG@10 agg, BH-sig, paired A/B on cached canonical DBs (2026-06-09). The CE deep path skips the stream ONLY under a live rescore (`allow_graph_stream = reranker.is_none()` at the `search_memory_cross_rerank_cued` pool fetch): the stream×rerank stack measured not significant (+0.0126, p=0.17), so the stream's value is the non-rerank path; a rerank call without a configured reranker degrades to plain hybrid search WITH the stream (byte-identical to base). The skip-preference bypass keeps the stream allowed (stays byte-identical to the base `search_memory` baseline). Paired-A/B note: OFF arms must set `0` explicitly (unset = ON), and the `graph_seed` arm pins the stream to `0` on both arms (seed branch is unreachable while the stream is engaged). The `rerank_graph_stack` arm is retired — with the per-path skip, both its arms are byte-identical by construction. HAZARD: `WENLAN_GRAPH_SURFACE_NEW` (opt-in) inserts graph-only rows WITHOUT re-applying memory_type/space/source_agent filters (`get_memories_for_entities` filters only entity link + source='memory' + chunk 0), i.e. a space-scoped search can surface cross-space rows — the same disclosure class the page/episode/fact channels gate; keep it OFF on multi-space data until an overlap gate lands (follow-up). Note on k-hop interaction: with the stream engaged, the opt-in `WENLAN_ENABLE_GRAPH_KHOP` branch is unreachable on the quick path (stream early-returns before k-hop); set `WENLAN_GRAPH_MEMORY_STREAM=0` to measure k-hop in isolation, mirroring the `graph_seed` note above.
+- `WENLAN_RERANK_SKIP_PREFERENCE` — opt-in (default OFF). On the cross-encoder path (`search_memory_cross_rerank_cued`), preference/recommendation-seeking queries (per `router::classify::is_preference_query` — request-form keywords like "recommend"/"any tips", vetoed by past-recall markers like "you recommended"/"remind me") bypass the CE entirely and return the base `search_memory_with_cue` ranking, byte-identical to the non-rerank baseline. History: built against an older "CE hurts single-session-preference −0.155 NDCG@10" measurement that did NOT reproduce on either current seeded substrate — paired A/Bs at n=479 measured CE *helping* SSP (+0.027 on both the canonical and the re-seeded DB) and the bypass net-negative (−0.0117 agg, BH-sig). Ships as a tested, default-OFF escape hatch, NOT a recommended setting; the CE base-vs-on case itself re-verified at +0.178 NDCG@10 agg (BH-sig, positive every category, N=2 substrates) with P50 1165ms vs 111ms base (CPU BGE-reranker-v2-m3) — the default-ON decision stays gated on the smaller-CE-model benchmark. The keyword lists were validated against the full LME-S fixture: 30/30 SSP detected, 0 false positives across the other 470 questions; generalization beyond the fixture is heuristic, same trust level as the temporal/relational keyword gates. Paired A/B arm: `rerank_skip_pref` in `paired_ab_emit` (CE path, flag toggled). The `rerank_graph_stack` arm (same test) toggled `WENLAN_GRAPH_MEMORY_STREAM` with the CE active on both arms to measure graph×rerank composition — measured NOT significant (+0.0126, p=0.17): graph_stream's +0.0545 quick-path gain is subsumed under the CE (except temporal-reasoning, +0.037), so the two levers do not stack. That arm is retired as of 2026-06-10; the code now hard-skips the stream under a live reranker (`allow_graph_stream = reranker.is_none()`), making both arms byte-identical by construction.
+- `WENLAN_ENABLE_ENTITY_SWEEP` — DEFAULT ON (opt out with `0`/`false`/`no`/`off`). Gates the background 30-min entity-enrichment sweep that backfills `memory_entities` over existing memories via the configured LLM. Disabling it stops the automatic LLM spend/compute on a large corpus; the graph stream then only sees links created at write time. Parsed by `wenlan_core::db::entity_sweep_enabled()`, checked in `scheduler.rs` before the sweep fire-condition.
 
 ### Consolidation demotion (P3, always-on, no flag)
 

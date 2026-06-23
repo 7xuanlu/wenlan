@@ -1,7 +1,7 @@
 ---
 name: review
 description: >
-  Power-user audit of Origin's pending surfaces. Most users want
+  Power-user audit of Wenlan's pending surfaces. Most users want
   `/brief` for revisions. That handles the daily flow. Use `/review` only
   for explicit deep-walk audits after bulk imports, or when you want to walk
   the full queue rather than the top 3 shown in /brief.
