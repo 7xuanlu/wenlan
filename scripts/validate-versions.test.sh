@@ -16,7 +16,7 @@ wenlan-core  = { path = "crates/wenlan-core",  version = "0.5.0" }
 EOF
 cat > "$TMPDIR_TEST/Cargo.lock" <<EOF
 [[package]]
-name = "origin"
+name = "wenlan"
 version = "0.5.0"
 
 [[package]]

@@ -19,7 +19,7 @@ LOCK_VERSIONS=$(awk '
   in_pkg && $1 == "version" && $2 == "=" {
     version=$3
     gsub(/"/, "", version)
-    if (name == "origin" || name == "wenlan-core" || name == "wenlan-mcp" || name == "wenlan-server" || name == "wenlan-types") {
+    if (name == "wenlan" || name == "wenlan-core" || name == "wenlan-mcp" || name == "wenlan-server" || name == "wenlan-types") {
       print name ":" version
     }
     in_pkg=0
@@ -45,7 +45,7 @@ if [[ "$VTXT_VER" != "$TAG_VER" || "$WS_VER" != "$TAG_VER" || "$WENLAN_TYPES_DEP
     exit 1
 fi
 
-for crate in origin wenlan-core wenlan-mcp wenlan-server wenlan-types; do
+for crate in wenlan wenlan-core wenlan-mcp wenlan-server wenlan-types; do
     if ! printf '%s\n' "$LOCK_VERSIONS" | grep -qx "${crate}:${TAG_VER}"; then
         echo "ERROR: Cargo.lock drift — ${crate} is not ${TAG_VER}"
         exit 1
