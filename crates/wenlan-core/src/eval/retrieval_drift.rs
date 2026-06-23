@@ -26,10 +26,29 @@ const ANCHOR_RBO_THRESHOLD: f64 = 0.85; // 0.85: looser floor — full-reverse l
 /// Per-query frozen ranking snapshot.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct QueryRanking {
+    /// Stable per-case identity (query + space + sorted seed ids). Used to match
+    /// golden↔live — NOT the query string, which is non-unique across fixture cases
+    /// (distinct corpora can share a natural-language query), and `load_fixtures`
+    /// walks the dir in non-deterministic order, so a query-keyed match mispairs.
+    pub key: String,
     pub query: String,
     pub ranked_ids: Vec<String>,
     /// Stored for DIAGNOSIS only — never asserted exactly (cross-arch f32 ULP drift).
     pub scores: Vec<f32>,
+}
+
+/// Stable identity for a fixture case: query + space + sorted seed ids. Distinct
+/// corpora that share a query string get distinct keys; order-independent so the
+/// non-deterministic fixture load order can't mispair golden↔live.
+fn case_key(case: &crate::eval::fixtures::EvalCase) -> String {
+    let mut ids: Vec<&str> = case.seeds.iter().map(|s| s.id.as_str()).collect();
+    ids.sort_unstable();
+    format!(
+        "{}\u{241f}{}\u{241f}{}",
+        case.query,
+        case.space.as_deref().unwrap_or(""),
+        ids.join(",")
+    )
 }
 
 /// Full golden snapshot for a fixture set.
@@ -107,6 +126,7 @@ pub async fn capture_rankings(
             )
             .await?;
         queries.push(QueryRanking {
+            key: case_key(case),
             query: case.query.clone(),
             ranked_ids: results.iter().map(|r| r.source_id.clone()).collect(),
             scores: results.iter().map(|r| r.score).collect(),
@@ -220,6 +240,7 @@ mod tests {
             fixture_set_hash: "abc123".to_string(),
             top_k: 10,
             queries: vec![QueryRanking {
+                key: "q\u{241f}\u{241f}m1,m2".to_string(),
                 query: "q".to_string(),
                 ranked_ids: vec!["m1".to_string(), "m2".to_string()],
                 scores: vec![0.91, 0.42],
@@ -307,21 +328,19 @@ mod tests {
             );
         }
 
+        // Match by stable per-case key, NOT query string (non-unique across cases).
         use std::collections::HashMap;
         let cur: HashMap<&str, &super::QueryRanking> = current
             .queries
             .iter()
-            .map(|q| (q.query.as_str(), q))
+            .map(|q| (q.key.as_str(), q))
             .collect();
-        let anc: HashMap<&str, &super::QueryRanking> = anchor
-            .queries
-            .iter()
-            .map(|q| (q.query.as_str(), q))
-            .collect();
+        let anc: HashMap<&str, &super::QueryRanking> =
+            anchor.queries.iter().map(|q| (q.key.as_str(), q)).collect();
 
         let mut failures: Vec<String> = Vec::new();
         for q in &live.queries {
-            if let Some(g) = cur.get(q.query.as_str()) {
+            if let Some(g) = cur.get(q.key.as_str()) {
                 let s = crate::eval::rank_overlap::rbo(&g.ranked_ids, &q.ranked_ids, super::RBO_P);
                 if s < super::CURRENT_RBO_THRESHOLD {
                     failures.push(format!(
@@ -330,7 +349,7 @@ mod tests {
                     ));
                 }
             }
-            if let Some(g) = anc.get(q.query.as_str()) {
+            if let Some(g) = anc.get(q.key.as_str()) {
                 let s = crate::eval::rank_overlap::rbo(&g.ranked_ids, &q.ranked_ids, super::RBO_P);
                 if s < super::ANCHOR_RBO_THRESHOLD {
                     failures.push(format!(

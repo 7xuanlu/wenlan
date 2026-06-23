@@ -1,0 +1,2555 @@
+{
+  "generated_env": "macos-aarch64",
+  "fixture_set_hash": "96ac1a58cabc8d8f",
+  "top_k": 10,
+  "queries": [
+    {
+      "key": "what error handling pattern did we decide on␟␟agent_coding_err_boundary,agent_coding_err_handling_decision,agent_coding_err_logging,agent_coding_err_validation",
+      "query": "what error handling pattern did we decide on",
+      "ranked_ids": [
+        "agent_coding_err_handling_decision",
+        "agent_coding_err_boundary",
+        "agent_coding_err_logging",
+        "agent_coding_neg_err_test",
+        "agent_coding_err_validation",
+        "agent_coding_neg_err_retry",
+        "agent_coding_neg_err_payment",
+        "agent_coding_neg_err_db",
+        "agent_coding_neg_err_monitoring",
+        "agent_coding_neg_err_circuit"
+      ],
+      "scores": [
+        0.09230279,
+        0.08389525,
+        0.08015681,
+        0.07909242,
+        0.078737155,
+        0.07446509,
+        0.073728114,
+        0.070988245,
+        0.050591722,
+        0.046426047
+      ]
+    },
+    {
+      "key": "which database did we pick and why␟␟agent_coding_db_cache,agent_coding_db_decision,agent_coding_db_schema_approach",
+      "query": "which database did we pick and why",
+      "ranked_ids": [
+        "agent_coding_db_decision",
+        "agent_coding_neg_db_json",
+        "agent_coding_db_schema_approach",
+        "agent_coding_neg_db_backup",
+        "agent_coding_neg_db_read_replica",
+        "agent_coding_db_cache",
+        "agent_coding_neg_db_pool",
+        "agent_coding_neg_db_test",
+        "agent_coding_neg_db_index"
+      ],
+      "scores": [
+        0.09419571,
+        0.08170668,
+        0.07759279,
+        0.07493519,
+        0.07023886,
+        0.07016061,
+        0.06914701,
+        0.05745293,
+        0.05337923
+      ]
+    },
+    {
+      "key": "what testing framework are we using␟␟agent_coding_test_coverage,agent_coding_test_framework,agent_coding_test_frontend",
+      "query": "what testing framework are we using",
+      "ranked_ids": [
+        "agent_coding_test_framework",
+        "agent_coding_neg_test_snapshots",
+        "agent_coding_test_frontend",
+        "agent_coding_neg_test_contracts",
+        "agent_coding_neg_test_load",
+        "agent_coding_neg_test_mock",
+        "agent_coding_neg_test_e2e",
+        "agent_coding_neg_test_ci",
+        "agent_coding_test_coverage"
+      ],
+      "scores": [
+        0.09017222,
+        0.08801257,
+        0.0842046,
+        0.07796163,
+        0.07785118,
+        0.07565016,
+        0.06299728,
+        0.06170878,
+        0.048786446
+      ]
+    },
+    {
+      "key": "how does the authentication flow work␟␟agent_coding_auth_flow,agent_coding_auth_middleware,agent_coding_auth_provider,agent_coding_auth_roles",
+      "query": "how does the authentication flow work",
+      "ranked_ids": [
+        "agent_coding_auth_flow",
+        "agent_coding_neg_auth_webhook",
+        "agent_coding_auth_provider",
+        "agent_coding_neg_auth_audit",
+        "agent_coding_auth_middleware",
+        "agent_coding_auth_roles",
+        "agent_coding_neg_auth_api_key",
+        "agent_coding_neg_auth_rate",
+        "agent_coding_neg_auth_session",
+        "agent_coding_neg_auth_cors"
+      ],
+      "scores": [
+        0.08759888,
+        0.084235914,
+        0.083625816,
+        0.07919595,
+        0.07806675,
+        0.07667609,
+        0.0728881,
+        0.07284207,
+        0.07053263,
+        0.06984949
+      ]
+    },
+    {
+      "key": "what are the known bugs in the payment module␟␟agent_coding_pay_bug_idempotency,agent_coding_pay_bug_refund,agent_coding_pay_bug_webhook",
+      "query": "what are the known bugs in the payment module",
+      "ranked_ids": [
+        "agent_coding_neg_pay_provider",
+        "agent_coding_neg_pay_test",
+        "agent_coding_neg_pay_flow",
+        "agent_coding_pay_bug_refund",
+        "agent_coding_pay_bug_idempotency",
+        "agent_coding_neg_pay_currency",
+        "agent_coding_neg_pay_retry",
+        "agent_coding_pay_bug_webhook",
+        "agent_coding_neg_pay_invoice"
+      ],
+      "scores": [
+        0.08670498,
+        0.084294975,
+        0.084119916,
+        0.082290955,
+        0.07777079,
+        0.07431256,
+        0.073931046,
+        0.073053755,
+        0.0645859
+      ]
+    },
+    {
+      "key": "what architecture decisions were made for the API layer␟␟gc_api_gateway,gc_api_openapi,gc_api_pagination,gc_api_rate_limit,gc_api_rest_decision,gc_api_versioning,gc_f01,gc_f02,gc_f03,gc_f04,gc_f05,gc_f06,gc_f07,gc_f08,gc_f09,gc_f10,gc_f11,gc_f12,gc_f13,gc_f14,gc_f15,gc_f16,gc_f17,gc_f18,gc_f19,gc_f20,gc_f21,gc_f22,gc_f23,gc_f24,gc_f25,gc_f26,gc_f27,gc_f28,gc_f29,gc_f30,gc_f31,gc_f32,gc_f33,gc_f34",
+      "query": "what architecture decisions were made for the API layer",
+      "ranked_ids": [
+        "gc_api_versioning",
+        "gc_api_gateway",
+        "gc_f12",
+        "gc_f13",
+        "gc_f09",
+        "gc_api_rest_decision",
+        "gc_f18",
+        "gc_api_openapi",
+        "gc_api_rate_limit",
+        "gc_f23"
+      ],
+      "scores": [
+        0.087524384,
+        0.08599391,
+        0.08100577,
+        0.078995585,
+        0.078275256,
+        0.077868804,
+        0.076906316,
+        0.07448161,
+        0.07243896,
+        0.065588444
+      ]
+    },
+    {
+      "key": "what user preferences were captured␟␟gc2_f01,gc2_f02,gc2_f03,gc2_f04,gc2_f05,gc2_f06,gc2_f07,gc2_f08,gc2_f09,gc2_f10,gc2_f11,gc2_f12,gc2_f13,gc2_f14,gc2_f15,gc2_f16,gc2_f17,gc2_f18,gc2_f19,gc2_f20,gc2_f21,gc2_f22,gc2_f23,gc2_f24,gc2_f25,gc2_f26,gc2_f27,gc2_f28,gc2_f29,gc2_f30,gc2_f31,gc2_f32,gc2_f33,gc2_f34,gc2_f35,gc_pref_dark_mode,gc_pref_deploy,gc_pref_lang,gc_pref_meeting,gc_pref_work_hours",
+      "query": "what user preferences were captured",
+      "ranked_ids": [
+        "gc2_f10",
+        "gc2_f34",
+        "gc2_f06",
+        "gc2_f04",
+        "gc_pref_dark_mode",
+        "gc2_f22",
+        "gc2_f33",
+        "gc2_f03",
+        "gc2_f29",
+        "gc2_f28"
+      ],
+      "scores": [
+        0.076598294,
+        0.07391151,
+        0.064690195,
+        0.058131475,
+        0.05656511,
+        0.05368199,
+        0.052669693,
+        0.05223269,
+        0.05062962,
+        0.049430046
+      ]
+    },
+    {
+      "key": "what project goals and milestones exist␟␟gc3_f01,gc3_f02,gc3_f03,gc3_f04,gc3_f05,gc3_f06,gc3_f07,gc3_f08,gc3_f09,gc3_f10,gc3_f11,gc3_f12,gc3_f13,gc3_f14,gc3_f15,gc3_f16,gc3_f17,gc3_f18,gc3_f19,gc3_f20,gc3_f21,gc3_f22,gc3_f23,gc3_f24,gc3_f25,gc3_f26,gc3_f27,gc3_f28,gc3_f29,gc3_f30,gc3_f31,gc3_f32,gc3_f33,gc_goal_eval,gc_goal_fitness,gc_goal_launch,gc_goal_milestone_v1,gc_goal_personal_learn,gc_goal_q2_saas,gc_goal_saas_customers",
+      "query": "what project goals and milestones exist",
+      "ranked_ids": [
+        "gc_goal_personal_learn",
+        "gc_goal_q2_saas",
+        "gc3_f22",
+        "gc3_f11",
+        "gc3_f31",
+        "gc_goal_launch",
+        "gc_goal_milestone_v1",
+        "gc3_f14",
+        "gc3_f08",
+        "gc3_f28"
+      ],
+      "scores": [
+        0.0825066,
+        0.0796413,
+        0.06968546,
+        0.06773856,
+        0.066905424,
+        0.06671115,
+        0.06541537,
+        0.063295595,
+        0.059333093,
+        0.05930697
+      ]
+    },
+    {
+      "key": "who am I and what is my role␟␟identity_background,identity_expertise,identity_family,identity_location,identity_name_role,identity_open_source",
+      "query": "who am I and what is my role",
+      "ranked_ids": [
+        "identity_name_role",
+        "identity_background",
+        "identity_neg_project",
+        "identity_family",
+        "identity_expertise",
+        "identity_neg_routine",
+        "identity_neg_goals",
+        "identity_open_source",
+        "identity_neg_work_style",
+        "identity_location"
+      ],
+      "scores": [
+        0.07759038,
+        0.074102886,
+        0.07047693,
+        0.06535605,
+        0.062884346,
+        0.061786074,
+        0.050471626,
+        0.049633168,
+        0.04782214,
+        0.046397798
+      ]
+    },
+    {
+      "key": "what are my coding preferences␟␟pref_code_style,pref_comments,pref_deps,pref_error_handling,pref_git,pref_lang_choice,pref_testing",
+      "query": "what are my coding preferences",
+      "ranked_ids": [
+        "pref_code_style",
+        "pref_neg_communication",
+        "pref_comments",
+        "pref_git",
+        "pref_lang_choice",
+        "pref_error_handling",
+        "pref_deps",
+        "pref_neg_books",
+        "pref_testing",
+        "pref_neg_project_stack"
+      ],
+      "scores": [
+        0.08688375,
+        0.07808749,
+        0.07547253,
+        0.07232337,
+        0.06309702,
+        0.061659053,
+        0.060151707,
+        0.054547705,
+        0.048888642,
+        0.047989197
+      ]
+    },
+    {
+      "key": "what are my current project goals␟␟goal_origin_eval,goal_origin_launch,goal_origin_v02,goal_personal_fitness,goal_personal_learn,goal_saas_revenue",
+      "query": "what are my current project goals",
+      "ranked_ids": [
+        "goal_neg_community",
+        "goal_saas_revenue",
+        "goal_personal_learn",
+        "goal_neg_saas_backlog",
+        "goal_personal_fitness",
+        "goal_origin_launch",
+        "goal_neg_origin_completed",
+        "goal_neg_team",
+        "goal_neg_career",
+        "goal_origin_eval"
+      ],
+      "scores": [
+        0.0875201,
+        0.08404666,
+        0.082666084,
+        0.070350654,
+        0.06410975,
+        0.06127086,
+        0.05675905,
+        0.055420484,
+        0.053243704,
+        0.0511517
+      ]
+    },
+    {
+      "key": "what did I decide about the database schema␟␟agent_multi_db_schema_chatgpt,agent_multi_db_schema_claude,agent_multi_db_schema_cursor,agent_multi_db_schema_desktop,agent_multi_db_schema_index",
+      "query": "what did I decide about the database schema",
+      "ranked_ids": [
+        "agent_multi_db_schema_cursor",
+        "agent_multi_db_schema_chatgpt",
+        "agent_multi_db_schema_claude",
+        "agent_multi_db_schema_desktop",
+        "agent_multi_neg_db_partitioning",
+        "agent_multi_neg_db_cache",
+        "agent_multi_neg_db_backup",
+        "agent_multi_db_schema_index",
+        "agent_multi_neg_db_search",
+        "agent_multi_neg_db_read"
+      ],
+      "scores": [
+        0.08771129,
+        0.08322269,
+        0.08213385,
+        0.07728534,
+        0.077145316,
+        0.07280076,
+        0.069549054,
+        0.06677597,
+        0.06501888,
+        0.06445573
+      ]
+    },
+    {
+      "key": "what are my coding style preferences␟␟agent_multi_style_comments,agent_multi_style_fn_size,agent_multi_style_naming,agent_multi_style_rust_claude",
+      "query": "what are my coding style preferences",
+      "ranked_ids": [
+        "agent_multi_neg_style_review",
+        "agent_multi_neg_style_editor",
+        "agent_multi_style_fn_size",
+        "agent_multi_neg_style_git",
+        "agent_multi_neg_style_lib",
+        "agent_multi_style_naming",
+        "agent_multi_neg_style_infra",
+        "agent_multi_style_comments",
+        "agent_multi_neg_style_meetings",
+        "agent_multi_neg_style_deploy"
+      ],
+      "scores": [
+        0.08804228,
+        0.08305401,
+        0.08167578,
+        0.08112263,
+        0.07788888,
+        0.07709165,
+        0.07500112,
+        0.073475726,
+        0.06900388,
+        0.06816109
+      ]
+    },
+    {
+      "key": "what's the deployment strategy␟␟agent_multi_deploy_blue_green,agent_multi_deploy_env,agent_multi_deploy_secrets,agent_multi_deploy_strategy",
+      "query": "what's the deployment strategy",
+      "ranked_ids": [
+        "agent_multi_deploy_env",
+        "agent_multi_deploy_blue_green",
+        "agent_multi_deploy_strategy",
+        "agent_multi_neg_deploy_region",
+        "agent_multi_neg_deploy_local",
+        "agent_multi_neg_deploy_ci",
+        "agent_multi_neg_deploy_cost",
+        "agent_multi_neg_deploy_scaling",
+        "agent_multi_neg_deploy_dns",
+        "agent_multi_deploy_secrets"
+      ],
+      "scores": [
+        0.06819427,
+        0.06431401,
+        0.06303551,
+        0.05896265,
+        0.056573473,
+        0.054508775,
+        0.05119163,
+        0.050296184,
+        0.04848574,
+        0.047641795
+      ]
+    },
+    {
+      "key": "what performance issues have been found␟␟agent_multi_perf_cache_miss,agent_multi_perf_cold_start,agent_multi_perf_memory,agent_multi_perf_n_plus_one,agent_multi_perf_search_scan",
+      "query": "what performance issues have been found",
+      "ranked_ids": [
+        "agent_multi_neg_perf_frontend",
+        "agent_multi_neg_perf_target",
+        "agent_multi_neg_perf_db_sizing",
+        "agent_multi_neg_perf_build",
+        "agent_multi_perf_search_scan",
+        "agent_multi_neg_perf_load_test",
+        "agent_multi_neg_perf_serialization",
+        "agent_multi_neg_perf_infra",
+        "agent_multi_neg_perf_websocket",
+        "agent_multi_neg_perf_embedding"
+      ],
+      "scores": [
+        0.086291686,
+        0.083849,
+        0.061341118,
+        0.059934895,
+        0.058093287,
+        0.05437654,
+        0.053352494,
+        0.05126175,
+        0.050347738,
+        0.049162127
+      ]
+    },
+    {
+      "key": "how does the caching layer work␟␟noisy1_f01,noisy1_f02,noisy1_f03,noisy1_f04,noisy1_f05,noisy1_f06,noisy1_f07,noisy1_f08,noisy1_f09,noisy1_f10,noisy1_f11,noisy1_f12,noisy1_f13,noisy1_f14,noisy1_f15,noisy1_f16,noisy1_f17,noisy1_f18,noisy1_f19,noisy1_f20,noisy_cache_eviction,noisy_cache_hit_rate,noisy_cache_invalidation,noisy_cache_pool,noisy_cache_strategy",
+      "query": "how does the caching layer work",
+      "ranked_ids": [
+        "noisy_cache_strategy",
+        "noisy1_f03",
+        "noisy_cache_hit_rate",
+        "noisy1_f06",
+        "noisy_cache_eviction",
+        "noisy1_f20",
+        "noisy_cache_invalidation",
+        "noisy1_f11",
+        "noisy1_f15",
+        "noisy1_f01"
+      ],
+      "scores": [
+        0.09122953,
+        0.089313075,
+        0.07671126,
+        0.072368495,
+        0.07197615,
+        0.06993156,
+        0.06495775,
+        0.0632879,
+        0.063218676,
+        0.06310952
+      ]
+    },
+    {
+      "key": "what CI/CD pipeline do we use␟␟noisy2_f01,noisy2_f02,noisy2_f03,noisy2_f04,noisy2_f05,noisy2_f06,noisy2_f07,noisy2_f08,noisy2_f09,noisy2_f10,noisy2_f11,noisy2_f12,noisy2_f13,noisy2_f14,noisy2_f15,noisy2_f16,noisy2_f17,noisy2_f18,noisy2_f19,noisy2_f20,noisy_ci_coverage,noisy_ci_deploy,noisy_ci_jobs,noisy_ci_platform,noisy_ci_time",
+      "query": "what CI/CD pipeline do we use",
+      "ranked_ids": [
+        "noisy_ci_platform",
+        "noisy_ci_jobs",
+        "noisy_ci_time",
+        "noisy_ci_coverage",
+        "noisy2_f18",
+        "noisy2_f02",
+        "noisy_ci_deploy",
+        "noisy2_f06",
+        "noisy2_f17",
+        "noisy2_f08"
+      ],
+      "scores": [
+        0.07264831,
+        0.069810055,
+        0.06650607,
+        0.06266538,
+        0.058860067,
+        0.054961156,
+        0.053329926,
+        0.05223268,
+        0.04982801,
+        0.047629535
+      ]
+    },
+    {
+      "key": "what are the API rate limits␟␟noisy3_f01,noisy3_f02,noisy3_f03,noisy3_f04,noisy3_f05,noisy3_f06,noisy3_f07,noisy3_f08,noisy3_f09,noisy3_f10,noisy3_f11,noisy3_f12,noisy3_f13,noisy3_f14,noisy3_f15,noisy3_f16,noisy3_f17,noisy3_f18,noisy3_f19,noisy3_f20,noisy_ratelimit_exceeded,noisy_ratelimit_impl,noisy_ratelimit_storage,noisy_ratelimit_tier,noisy_ratelimit_values",
+      "query": "what are the API rate limits",
+      "ranked_ids": [
+        "noisy_ratelimit_values",
+        "noisy_ratelimit_exceeded",
+        "noisy_ratelimit_impl",
+        "noisy_ratelimit_storage",
+        "noisy_ratelimit_tier",
+        "noisy3_f17",
+        "noisy3_f16",
+        "noisy3_f11",
+        "noisy3_f07",
+        "noisy3_f13"
+      ],
+      "scores": [
+        0.104222715,
+        0.09287036,
+        0.09179451,
+        0.08513322,
+        0.08337031,
+        0.07215819,
+        0.063084766,
+        0.06290849,
+        0.061350945,
+        0.055714812
+      ]
+    },
+    {
+      "key": "how is user data encrypted␟␟noisy4_f01,noisy4_f02,noisy4_f03,noisy4_f04,noisy4_f05,noisy4_f06,noisy4_f07,noisy4_f08,noisy4_f09,noisy4_f10,noisy4_f11,noisy4_f12,noisy4_f13,noisy4_f14,noisy4_f15,noisy4_f16,noisy4_f17,noisy4_f18,noisy4_f19,noisy4_f20,noisy_enc_at_rest,noisy_enc_in_transit,noisy_enc_keys,noisy_enc_passwords,noisy_enc_pii",
+      "query": "how is user data encrypted",
+      "ranked_ids": [
+        "noisy_enc_keys",
+        "noisy_enc_at_rest",
+        "noisy_enc_passwords",
+        "noisy4_f10",
+        "noisy4_f08",
+        "noisy_enc_in_transit",
+        "noisy_enc_pii",
+        "noisy4_f01",
+        "noisy4_f06",
+        "noisy4_f16"
+      ],
+      "scores": [
+        0.08491457,
+        0.0818146,
+        0.077135935,
+        0.074444056,
+        0.069467425,
+        0.068838075,
+        0.06699315,
+        0.06633557,
+        0.06407539,
+        0.059736032
+      ]
+    },
+    {
+      "key": "what frontend framework do I prefer␟␟atemporal_fe_react,atemporal_fe_svelte,atemporal_fe_svelte_perf,atemporal_fe_vue",
+      "query": "what frontend framework do I prefer",
+      "ranked_ids": [
+        "atemporal_fe_svelte",
+        "atemporal_neg_fe_testing",
+        "atemporal_neg_fe_css",
+        "atemporal_neg_fe_build",
+        "atemporal_neg_fe_react_perf",
+        "atemporal_neg_fe_state",
+        "atemporal_fe_svelte_perf"
+      ],
+      "scores": [
+        0.10303048,
+        0.09107905,
+        0.082108244,
+        0.06420814,
+        0.057842467,
+        0.052901294,
+        0.05040057
+      ]
+    },
+    {
+      "key": "what deployment target are we using␟␟atemporal_deploy_aws,atemporal_deploy_aws_intermediate,atemporal_deploy_heroku,atemporal_deploy_selfhosted,atemporal_deploy_selfhosted_detail",
+      "query": "what deployment target are we using",
+      "ranked_ids": [
+        "atemporal_deploy_selfhosted",
+        "atemporal_neg_deploy_ci",
+        "atemporal_deploy_selfhosted_detail",
+        "atemporal_neg_deploy_cdn",
+        "atemporal_neg_deploy_monitoring",
+        "atemporal_neg_deploy_secrets",
+        "atemporal_deploy_aws_intermediate"
+      ],
+      "scores": [
+        0.074633665,
+        0.062531486,
+        0.05513554,
+        0.05372504,
+        0.05125844,
+        0.048611112,
+        0.005167376
+      ]
+    },
+    {
+      "key": "what logging approach was decided␟␟atemporal_log_env_logger,atemporal_log_println,atemporal_log_tracing,atemporal_log_tracing_filter,atemporal_log_tracing_opentelemetry",
+      "query": "what logging approach was decided",
+      "ranked_ids": [
+        "atemporal_neg_log_access",
+        "atemporal_neg_log_cloudwatch",
+        "atemporal_neg_log_debug",
+        "atemporal_neg_log_audit",
+        "atemporal_log_tracing_opentelemetry",
+        "atemporal_neg_log_sentry",
+        "atemporal_log_tracing_filter",
+        "atemporal_log_tracing"
+      ],
+      "scores": [
+        0.0605536,
+        0.054449786,
+        0.053329837,
+        0.047851756,
+        0.04251969,
+        0.041817233,
+        0.03838915,
+        0.037330378
+      ]
+    },
+    {
+      "key": "memory deduplication threshold␟␟mem_dedup_decision,mem_dedup_impl",
+      "query": "memory deduplication threshold",
+      "ranked_ids": [
+        "mem_frame_dedup_threshold",
+        "mem_novelty_threshold",
+        "mem_dedup_decision",
+        "mem_dedup_impl",
+        "mem_unrelated_identity"
+      ],
+      "scores": [
+        0.096046954,
+        0.092493124,
+        0.09042855,
+        0.0822074,
+        0.04431097
+      ]
+    },
+    {
+      "key": "how does confidence scoring work␟␟mem_confidence_decay,mem_confidence_formula,mem_tangential",
+      "query": "how does confidence scoring work",
+      "ranked_ids": [
+        "mem_confidence_formula",
+        "mem_confidence_trust_level",
+        "mem_confidence_decay",
+        "mem_retrieval_scoring",
+        "mem_tangential"
+      ],
+      "scores": [
+        0.09273073,
+        0.08630186,
+        0.08365397,
+        0.07987079,
+        0.07001692
+      ]
+    },
+    {
+      "key": "hybrid search reciprocal rank fusion␟␟mem_rrf_impl",
+      "query": "hybrid search reciprocal rank fusion",
+      "ranked_ids": [
+        "mem_rrf_impl",
+        "mem_graph_rrf",
+        "mem_score_normalization",
+        "mem_unrelated_recap"
+      ],
+      "scores": [
+        0.09620233,
+        0.06437901,
+        0.056450054,
+        0.045075454
+      ]
+    },
+    {
+      "key": "preferred programming language for systems work␟␟mem_pref_python,mem_pref_rust",
+      "query": "preferred programming language for systems work",
+      "ranked_ids": [
+        "mem_pref_cpp",
+        "mem_pref_python",
+        "mem_pref_rust",
+        "mem_pref_unrelated",
+        "mem_pref_rust_tokio"
+      ],
+      "scores": [
+        0.09529134,
+        0.093594156,
+        0.086889274,
+        0.08420028,
+        0.07421533
+      ]
+    },
+    {
+      "key": "Origin launch status␟␟mem_goal_current,mem_goal_old",
+      "query": "Origin launch status",
+      "ranked_ids": [
+        "mem_goal_old",
+        "mem_goal_current",
+        "mem_goal_other",
+        "mem_feature_launch",
+        "mem_competitor_launch"
+      ],
+      "scores": [
+        0.14869507,
+        0.14423253,
+        0.11915153,
+        0.116047144,
+        0.06036175
+      ]
+    },
+    {
+      "key": "authentication flow for mobile app␟projectA␟mem_auth_mobile,mem_auth_tokens",
+      "query": "authentication flow for mobile app",
+      "ranked_ids": [
+        "mem_auth_tokens",
+        "mem_auth_deeplink",
+        "mem_auth_mobile",
+        "mem_auth_refresh_edge"
+      ],
+      "scores": [
+        0.084921755,
+        0.08054137,
+        0.07983069,
+        0.07502491
+      ]
+    },
+    {
+      "key": "database schema migration strategy␟projectB␟mem_migration_strategy",
+      "query": "database schema migration strategy",
+      "ranked_ids": [
+        "mem_migration_tooling",
+        "mem_migration_strategy",
+        "mem_embed_migration"
+      ],
+      "scores": [
+        0.09519099,
+        0.08856212,
+        0.07891145
+      ]
+    },
+    {
+      "key": "Rust programming language features␟␟mem_rust_async,mem_rust_borrow",
+      "query": "Rust programming language features",
+      "ranked_ids": [
+        "mem_rust_borrow",
+        "mem_rust_async",
+        "mem_python_gc"
+      ],
+      "scores": [
+        0.09592627,
+        0.09197644,
+        0.0625547
+      ]
+    },
+    {
+      "key": "libSQL database capabilities␟␟mem_libsql_vectors",
+      "query": "libSQL database capabilities",
+      "ranked_ids": [
+        "mem_libsql_vectors",
+        "mem_postgres_vectors"
+      ],
+      "scores": [
+        0.09562304,
+        0.063493244
+      ]
+    },
+    {
+      "key": "who is Lucian␟␟mem_lucian_role",
+      "query": "who is Lucian",
+      "ranked_ids": [
+        "mem_lucian_role",
+        "mem_other_person"
+      ],
+      "scores": [
+        0.08357787,
+        0.061433256
+      ]
+    },
+    {
+      "key": "what database does the project use␟␟hca_db_chatgpt,hca_db_claude,hca_db_manual",
+      "query": "what database does the project use",
+      "ranked_ids": [
+        "hca_db_claude",
+        "hca_db_chatgpt",
+        "hca_db_noise_schema",
+        "hca_db_noise_lancedb",
+        "hca_db_noise_session",
+        "hca_db_noise_postgres",
+        "hca_db_noise_fk",
+        "hca_db_manual",
+        "hca_db_noise_params",
+        "hca_db_noise_mutex"
+      ],
+      "scores": [
+        0.0961828,
+        0.09294488,
+        0.08582424,
+        0.07899354,
+        0.07800269,
+        0.0747998,
+        0.07158908,
+        0.07024701,
+        0.070095494,
+        0.054793537
+      ]
+    },
+    {
+      "key": "user's preferred coding workflow␟␟hca_wf_chatgpt,hca_wf_claude,hca_wf_manual",
+      "query": "user's preferred coding workflow",
+      "ranked_ids": [
+        "hca_wf_noise_lang",
+        "hca_wf_manual",
+        "hca_wf_claude",
+        "hca_wf_noise_squash",
+        "hca_wf_noise_worktree",
+        "hca_wf_noise_darkmode",
+        "hca_wf_noise_review",
+        "hca_wf_chatgpt"
+      ],
+      "scores": [
+        0.069319054,
+        0.06341959,
+        0.0623417,
+        0.06025092,
+        0.059024204,
+        0.056944456,
+        0.0518338,
+        0.050896343
+      ]
+    },
+    {
+      "key": "how does the chunking strategy handle code blocks␟␟hd_chunking_code,hd_chunking_lang,hd_chunking_overlap,hd_d01,hd_d02,hd_d03,hd_d04,hd_d05,hd_d06,hd_d07,hd_d08,hd_d09,hd_d10,hd_d11,hd_d12,hd_d13,hd_d14,hd_d15,hd_d16,hd_d17,hd_d18,hd_d19,hd_d20,hd_d21,hd_d22,hd_d23,hd_d24,hd_d25,hd_d26,hd_d27,hd_d28,hd_d29,hd_d30,hd_d31,hd_d32,hd_d33,hd_d34,hd_d35,hd_d36,hd_d37,hd_d38,hd_d39,hd_d40,hd_d41,hd_d42,hd_d43,hd_d44,hd_d45,hd_d46,hd_d47",
+      "query": "how does the chunking strategy handle code blocks",
+      "ranked_ids": [
+        "hd_chunking_overlap",
+        "hd_chunking_code",
+        "hd_chunking_lang",
+        "hd_d43",
+        "hd_d17",
+        "hd_d37",
+        "hd_d34",
+        "hd_d19",
+        "hd_d30",
+        "hd_d32"
+      ],
+      "scores": [
+        0.09762002,
+        0.09473752,
+        0.09239719,
+        0.08110847,
+        0.07624023,
+        0.07143272,
+        0.07121859,
+        0.06740454,
+        0.06369926,
+        0.06195186
+      ]
+    },
+    {
+      "key": "what triggers a memory to be archived␟␟hd2_archive_decay,hd2_archive_trigger,hd2_d01,hd2_d02,hd2_d03,hd2_d04,hd2_d05,hd2_d06,hd2_d07,hd2_d08,hd2_d09,hd2_d10,hd2_d11,hd2_d12,hd2_d13,hd2_d14,hd2_d15,hd2_d16,hd2_d17,hd2_d18,hd2_d19,hd2_d20,hd2_d21,hd2_d22,hd2_d23,hd2_d24,hd2_d25,hd2_d26,hd2_d27,hd2_d28,hd2_d29,hd2_d30",
+      "query": "what triggers a memory to be archived",
+      "ranked_ids": [
+        "hd2_archive_trigger",
+        "hd2_d21",
+        "hd2_d02",
+        "hd2_neg_supersede",
+        "hd2_archive_decay",
+        "hd2_neg_quality_gate",
+        "hd2_d27",
+        "hd2_d08",
+        "hd2_d22",
+        "hd2_d09"
+      ],
+      "scores": [
+        0.09917484,
+        0.090540186,
+        0.087881,
+        0.08729695,
+        0.08245629,
+        0.07715207,
+        0.07514905,
+        0.072930075,
+        0.06928189,
+        0.06912004
+      ]
+    },
+    {
+      "key": "error handling patterns in the API layer␟projectA␟hdb_api_errors_a,hdb_content_type_a,hdb_error_types_a,hdb_health_endpoint_a,hdb_pagination_a,hdb_rate_limiting_a,hdb_request_logging_a",
+      "query": "error handling patterns in the API layer",
+      "ranked_ids": [
+        "hdb_api_errors_a",
+        "hdb_error_types_a",
+        "hdb_request_logging_a",
+        "hdb_rate_limiting_a",
+        "hdb_health_endpoint_a",
+        "hdb_content_type_a",
+        "hdb_pagination_a"
+      ],
+      "scores": [
+        0.090374164,
+        0.08876492,
+        0.08343119,
+        0.081277795,
+        0.07816204,
+        0.07619699,
+        0.06766409
+      ]
+    },
+    {
+      "key": "how is state managed in the frontend␟projectA␟hdb_backend_state_a,hdb_capture_heartbeat_a,hdb_processing_store_a,hdb_state_a,hdb_state_local_a",
+      "query": "how is state managed in the frontend",
+      "ranked_ids": [
+        "hdb_state_a",
+        "hdb_backend_state_a",
+        "hdb_state_local_a",
+        "hdb_processing_store_a",
+        "hdb_capture_heartbeat_a"
+      ],
+      "scores": [
+        0.09304567,
+        0.08651602,
+        0.08183163,
+        0.07968205,
+        0.07428143
+      ]
+    },
+    {
+      "key": "how are embeddings generated for new memories␟origin␟hnv_embed_gen,hnv_embed_prefix",
+      "query": "how are embeddings generated for new memories",
+      "ranked_ids": [
+        "hnv_embed_gen",
+        "hnv_neg_migration",
+        "hnv_neg_search",
+        "hnv_embed_prefix",
+        "hnv_neg_cache"
+      ],
+      "scores": [
+        0.095748305,
+        0.08468994,
+        0.08328874,
+        0.06530418,
+        0.063044615
+      ]
+    },
+    {
+      "key": "when does the quality gate reject a memory␟origin␟hnv_gate_novelty,hnv_gate_reject",
+      "query": "when does the quality gate reject a memory",
+      "ranked_ids": [
+        "hnv_gate_novelty",
+        "hnv_gate_reject",
+        "hnv_neg_accept",
+        "hnv_neg_confidence",
+        "hnv_neg_ui"
+      ],
+      "scores": [
+        0.102002345,
+        0.10069974,
+        0.09556414,
+        0.095025286,
+        0.09083558
+      ]
+    },
+    {
+      "key": "which embedding model are we using␟␟htd_distractor_indexing,htd_distractor_libsql,htd_distractor_llm,htd_distractor_pnpm,htd_distractor_prefix,htd_distractor_react,htd_distractor_rrf,htd_distractor_tauri,htd_model_v1,htd_model_v2,htd_model_v3",
+      "query": "which embedding model are we using",
+      "ranked_ids": [
+        "htd_hard_neg_projectb",
+        "htd_model_v1",
+        "htd_model_v2",
+        "htd_distractor_prefix",
+        "htd_distractor_rrf",
+        "htd_model_v3",
+        "htd_distractor_pnpm",
+        "htd_distractor_indexing",
+        "htd_distractor_llm",
+        "htd_distractor_libsql"
+      ],
+      "scores": [
+        0.09397946,
+        0.09242564,
+        0.089654215,
+        0.077413276,
+        0.075072005,
+        0.068198115,
+        0.068124965,
+        0.054819576,
+        0.045883648,
+        0.044961635
+      ]
+    },
+    {
+      "key": "what is the current authentication approach␟␟htd_auth_v1,htd_auth_v2,htd_auth_v3,htd_distractor_cors,htd_distractor_oauth,htd_distractor_remote,htd_distractor_trust",
+      "query": "what is the current authentication approach",
+      "ranked_ids": [
+        "htd_auth_v1",
+        "htd_hard_neg_projecta",
+        "htd_auth_v2",
+        "htd_distractor_oauth",
+        "htd_distractor_trust",
+        "htd_distractor_remote",
+        "htd_distractor_cors",
+        "htd_auth_v3"
+      ],
+      "scores": [
+        0.087908335,
+        0.080148794,
+        0.079403125,
+        0.07526949,
+        0.07392366,
+        0.06835268,
+        0.065725744,
+        0.058135256
+      ]
+    },
+    {
+      "key": "vector embedding model selection␟␟mem_embedding_choice,mem_embedding_perf",
+      "query": "vector embedding model selection",
+      "ranked_ids": [
+        "mem_embed_course",
+        "mem_embedding_choice",
+        "mem_identity_skills",
+        "mem_embedding_perf",
+        "mem_identity_employer",
+        "mem_embed_blog"
+      ],
+      "scores": [
+        0.095954716,
+        0.093199916,
+        0.08509879,
+        0.08160427,
+        0.07390352,
+        0.059499234
+      ]
+    },
+    {
+      "key": "API endpoint design patterns␟␟mem_api_patterns",
+      "query": "API endpoint design patterns",
+      "ranked_ids": [
+        "mem_api_patterns",
+        "mem_api_websocket",
+        "mem_pref_api",
+        "mem_api_other_project"
+      ],
+      "scores": [
+        0.08836082,
+        0.084914565,
+        0.082325466,
+        0.08176644
+      ]
+    },
+    {
+      "key": "libSQL database architecture␟origin␟mem_libsql_conn,mem_libsql_fts,mem_libsql_single_db,mem_libsql_vector",
+      "query": "libSQL database architecture",
+      "ranked_ids": [
+        "mem_libsql_single_db",
+        "mem_libsql_vector",
+        "mem_libsql_conn",
+        "mem_libsql_fts"
+      ],
+      "scores": [
+        0.09364113,
+        0.09177087,
+        0.08045842,
+        0.07621969
+      ]
+    },
+    {
+      "key": "memory retrieval pipeline␟origin␟mem_confirmation_boost,mem_domain_prefix,mem_hybrid_search,mem_recap_penalty",
+      "query": "memory retrieval pipeline",
+      "ranked_ids": [
+        "mem_confirmation_boost",
+        "mem_domain_prefix",
+        "mem_hybrid_search",
+        "mem_recap_penalty"
+      ],
+      "scores": [
+        0.08949415,
+        0.08420731,
+        0.06363877,
+        0.061541893
+      ]
+    },
+    {
+      "key": "how does knowledge compilation work␟origin␟mem_concept_compile,mem_concept_fts,mem_concept_source_ids",
+      "query": "how does knowledge compilation work",
+      "ranked_ids": [
+        "mem_concept_compile",
+        "mem_concept_source_ids",
+        "mem_concept_fts"
+      ],
+      "scores": [
+        0.090016484,
+        0.06063027,
+        0.059428014
+      ]
+    },
+    {
+      "key": "preferred text editor␟␟mem_editor_pref",
+      "query": "preferred text editor",
+      "ranked_ids": [
+        "dup_editor_reorder",
+        "mem_editor_pref",
+        "dup_editor_hedged",
+        "dup_editor_passive",
+        "dup_editor_noisy",
+        "dup_editor_agent_pov"
+      ],
+      "scores": [
+        0.09494782,
+        0.07358423,
+        0.06739277,
+        0.06353542,
+        0.06111814,
+        0.059883878
+      ]
+    },
+    {
+      "key": "async runtime decision␟␟mem_tokio_decision",
+      "query": "async runtime decision",
+      "ranked_ids": [
+        "dup_tokio_nominal",
+        "mem_tokio_decision",
+        "dup_tokio_minimal",
+        "dup_tokio_present",
+        "dup_tokio_future_past"
+      ],
+      "scores": [
+        0.09129044,
+        0.088104196,
+        0.06648791,
+        0.0643096,
+        0.057626937
+      ]
+    },
+    {
+      "key": "programming language used for backend␟␟mem_rust_backend",
+      "query": "programming language used for backend",
+      "ranked_ids": [
+        "dup_rust_coarse",
+        "mem_rust_backend",
+        "dup_rust_framing",
+        "dup_rust_partial",
+        "dup_rust_medium"
+      ],
+      "scores": [
+        0.0927219,
+        0.08490911,
+        0.08180278,
+        0.07890731,
+        0.078376
+      ]
+    },
+    {
+      "key": "user's name␟␟mem_user_name",
+      "query": "user's name",
+      "ranked_ids": [
+        "mem_user_name",
+        "dup_name_possessive",
+        "dup_name_buried",
+        "dup_name_agent",
+        "dup_name_greeting"
+      ],
+      "scores": [
+        0.078639895,
+        0.074627995,
+        0.06993107,
+        0.0646885,
+        0.06345235
+      ]
+    },
+    {
+      "key": "font size preference in code editor␟␟mem_font_size",
+      "query": "font size preference in code editor",
+      "ranked_ids": [
+        "mem_font_size",
+        "dup_font_session4",
+        "dup_font_session2",
+        "dup_font_session3",
+        "dup_font_session6",
+        "dup_font_session5"
+      ],
+      "scores": [
+        0.10322574,
+        0.101941146,
+        0.09664617,
+        0.08646659,
+        0.08359669,
+        0.08024131
+      ]
+    },
+    {
+      "key": "why libSQL was chosen over PostgreSQL␟␟mem_libsql_choice",
+      "query": "why libSQL was chosen over PostgreSQL",
+      "ranked_ids": [
+        "mem_libsql_choice",
+        "dup_libsql_passive",
+        "dup_libsql_short",
+        "dup_libsql_present",
+        "dup_libsql_angle",
+        "dup_libsql_partial"
+      ],
+      "scores": [
+        0.10493758,
+        0.101419225,
+        0.09958161,
+        0.09524451,
+        0.08872626,
+        0.08597333
+      ]
+    },
+    {
+      "key": "what are the user's core preferences and technical stack decisions␟␟mem_real_decision,mem_real_fact,mem_real_pref",
+      "query": "what are the user's core preferences and technical stack decisions",
+      "ranked_ids": [
+        "mem_real_pref",
+        "mem_real_decision",
+        "noise_sys_prompt_1",
+        "mem_real_fact",
+        "noise_credential_1",
+        "noise_timestamp_1",
+        "noise_sys_prompt_2",
+        "noise_ack_1",
+        "noise_heartbeat_1"
+      ],
+      "scores": [
+        0.06347122,
+        0.054295655,
+        0.051711846,
+        0.04994759,
+        0.04862612,
+        0.046628132,
+        0.043815,
+        0.041986257,
+        0.037643038
+      ]
+    },
+    {
+      "key": "what editor settings does the user prefer␟␟mem_editor_pref_1,mem_editor_pref_2",
+      "query": "what editor settings does the user prefer",
+      "ranked_ids": [
+        "noise_vague_editor_1",
+        "mem_editor_pref_1",
+        "noise_generic_editor_2",
+        "noise_meta_editor_1",
+        "mem_editor_pref_2",
+        "noise_status_editor_1",
+        "noise_generic_editor_1"
+      ],
+      "scores": [
+        0.109616265,
+        0.08836617,
+        0.08528054,
+        0.081841536,
+        0.075719655,
+        0.07509479,
+        0.07046374
+      ]
+    },
+    {
+      "key": "why did we choose libSQL over other databases␟␟mem_db_decision_1,mem_db_decision_2",
+      "query": "why did we choose libSQL over other databases",
+      "ranked_ids": [
+        "mem_db_decision_1",
+        "mem_db_decision_2",
+        "noise_vague_db_1",
+        "noise_tool_output_1",
+        "noise_generic_db_1",
+        "noise_generic_db_2"
+      ],
+      "scores": [
+        0.09791629,
+        0.09290036,
+        0.0876376,
+        0.07498958,
+        0.06406463,
+        0.061949186
+      ]
+    },
+    {
+      "key": "food allergies or dietary restrictions␟␟mem_diet_1,mem_diet_2",
+      "query": "food allergies or dietary restrictions",
+      "ranked_ids": [
+        "noise_dup_diet_1",
+        "noise_sysprompt_diet_1",
+        "noise_sysprompt_diet_2",
+        "mem_diet_1",
+        "mem_diet_2",
+        "noise_generic_diet_1"
+      ],
+      "scores": [
+        0.09409519,
+        0.088045225,
+        0.08203316,
+        0.066040345,
+        0.060208004,
+        0.058819346
+      ]
+    },
+    {
+      "key": "preferred programming languages and when to use each␟␟mem_lang_pref_1,mem_lang_pref_2",
+      "query": "preferred programming languages and when to use each",
+      "ranked_ids": [
+        "noise_vague_lang_1",
+        "mem_lang_pref_1",
+        "noise_generic_lang_1",
+        "noise_generic_lang_2",
+        "mem_lang_pref_2",
+        "noise_status_lang_2",
+        "noise_status_lang_1"
+      ],
+      "scores": [
+        0.1049446,
+        0.08760894,
+        0.08387614,
+        0.08017781,
+        0.07854949,
+        0.06870449,
+        0.04441745
+      ]
+    },
+    {
+      "key": "how should the app be distributed to users␟␟mem_distrib_decision_1,mem_distrib_decision_2",
+      "query": "how should the app be distributed to users",
+      "ranked_ids": [
+        "mem_distrib_decision_1",
+        "noise_meta_distrib_1",
+        "noise_generic_distrib_1",
+        "noise_tool_output_2",
+        "mem_distrib_decision_2",
+        "noise_tool_output_3"
+      ],
+      "scores": [
+        0.087159835,
+        0.08123506,
+        0.07870115,
+        0.055736747,
+        0.053934626,
+        0.05052764
+      ]
+    },
+    {
+      "key": "when does the user prefer to do focused work␟␟mem_schedule_1,mem_schedule_2",
+      "query": "when does the user prefer to do focused work",
+      "ranked_ids": [
+        "noise_dup_schedule_1",
+        "mem_schedule_1",
+        "noise_dup_schedule_2",
+        "noise_status_schedule_1",
+        "mem_schedule_2",
+        "noise_generic_schedule_1"
+      ],
+      "scores": [
+        0.094053276,
+        0.08832646,
+        0.08431435,
+        0.07974995,
+        0.07658859,
+        0.05886208
+      ]
+    },
+    {
+      "key": "MCP server authentication approach␟␟mem_auth_decision_1,mem_auth_decision_2",
+      "query": "MCP server authentication approach",
+      "ranked_ids": [
+        "noise_vague_auth_1",
+        "noise_meta_auth_1",
+        "mem_auth_decision_1",
+        "mem_auth_decision_2",
+        "noise_sysprompt_auth_1",
+        "noise_generic_auth_2",
+        "noise_generic_auth_1"
+      ],
+      "scores": [
+        0.10946,
+        0.09525216,
+        0.08821007,
+        0.08449972,
+        0.07463611,
+        0.073337406,
+        0.05820084
+      ]
+    },
+    {
+      "key": "code review process and standards␟␟mem_review_pref_1,mem_review_pref_2",
+      "query": "code review process and standards",
+      "ranked_ids": [
+        "noise_generic_review_1",
+        "noise_sysprompt_review_1",
+        "mem_review_pref_1",
+        "noise_dup_review_1",
+        "mem_review_pref_2",
+        "noise_status_review_1",
+        "noise_tool_output_4"
+      ],
+      "scores": [
+        0.0980926,
+        0.09589234,
+        0.09012105,
+        0.08528813,
+        0.07738095,
+        0.07614845,
+        0.07020671
+      ]
+    },
+    {
+      "key": "dark mode preferences␟␟mem_dark_original,mem_theme_config",
+      "query": "dark mode preferences",
+      "ranked_ids": [
+        "mem_dark_original",
+        "mem_dark_duplicate",
+        "mem_theme_config"
+      ],
+      "scores": [
+        0.104273215,
+        0.09549779,
+        0.08377046
+      ]
+    },
+    {
+      "key": "database technology choices␟␟mem_db_config,mem_db_decision",
+      "query": "database technology choices",
+      "ranked_ids": [
+        "mem_db_duplicate",
+        "mem_db_decision",
+        "mem_db_config"
+      ],
+      "scores": [
+        0.086674094,
+        0.07928862,
+        0.072229594
+      ]
+    },
+    {
+      "key": "how does state management work in the Rust backend␟␟mem_onboard_atomic_flags,mem_onboard_llm_bridge,mem_onboard_setup_gotcha,mem_onboard_state_arch",
+      "query": "how does state management work in the Rust backend",
+      "ranked_ids": [
+        "junk_onboard_obvious",
+        "junk_onboard_generic_rwlock",
+        "mem_onboard_state_arch",
+        "mem_onboard_setup_gotcha",
+        "junk_onboard_restate",
+        "mem_onboard_llm_bridge",
+        "mem_onboard_atomic_flags",
+        "junk_onboard_ack1",
+        "junk_onboard_sysprompt",
+        "junk_onboard_generic_arc"
+      ],
+      "scores": [
+        0.09374051,
+        0.09119977,
+        0.08811459,
+        0.080099665,
+        0.08009397,
+        0.07584963,
+        0.07445015,
+        0.06972174,
+        0.06360166,
+        0.061273083
+      ]
+    },
+    {
+      "key": "why did semantic search stop returning results␟␟mem_debug_fix,mem_debug_lesson,mem_debug_root_cause",
+      "query": "why did semantic search stop returning results",
+      "ranked_ids": [
+        "junk_debug_status_update",
+        "mem_debug_fix",
+        "junk_debug_restate",
+        "junk_debug_generic_advice",
+        "mem_debug_root_cause",
+        "mem_debug_lesson",
+        "junk_debug_hypothesis1",
+        "junk_debug_hypothesis2",
+        "junk_debug_stacktrace",
+        "junk_debug_timestamp"
+      ],
+      "scores": [
+        0.09311613,
+        0.09231744,
+        0.08565031,
+        0.07371523,
+        0.060393274,
+        0.055963326,
+        0.052837092,
+        0.0500947,
+        0.04647356,
+        0.043580927
+      ]
+    },
+    {
+      "key": "what is the quality gate and how should it filter memories␟␟mem_plan_no_llm_gate,mem_plan_novelty_threshold,mem_plan_quality_gate_def,mem_plan_two_stage",
+      "query": "what is the quality gate and how should it filter memories",
+      "ranked_ids": [
+        "mem_plan_quality_gate_def",
+        "junk_plan_restate_req",
+        "junk_plan_restate2",
+        "junk_plan_meta",
+        "mem_plan_two_stage",
+        "mem_plan_no_llm_gate",
+        "mem_plan_novelty_threshold",
+        "junk_plan_generic_best_practice",
+        "junk_plan_rejected_idea2",
+        "junk_plan_rejected_idea1"
+      ],
+      "scores": [
+        0.10023685,
+        0.09284534,
+        0.09059791,
+        0.08652937,
+        0.08377914,
+        0.08237276,
+        0.078704394,
+        0.076098226,
+        0.07483126,
+        0.06743591
+      ]
+    },
+    {
+      "key": "what tech stack is used for the main project␟␟rmh_finance_sub,rmh_fitness,rmh_food_diet,rmh_goal_launch,rmh_health_allergy,rmh_health_sleep,rmh_identity_role,rmh_identity_values,rmh_pref_coffee,rmh_pref_comms,rmh_pref_editor,rmh_pref_music,rmh_pref_os,rmh_pref_reading,rmh_proj_db,rmh_proj_deploy,rmh_proj_embed,rmh_proj_license,rmh_proj_llm,rmh_proj_pnpm,rmh_proj_react,rmh_proj_rust,rmh_proj_tauri,rmh_proj_testing,rmh_recap_week,rmh_travel_home",
+      "query": "what tech stack is used for the main project",
+      "ranked_ids": [
+        "rmh_proj_react",
+        "rmh_proj_license",
+        "rmh_proj_rust",
+        "rmh_proj_deploy",
+        "rmh_proj_pnpm",
+        "rmh_proj_tauri",
+        "rmh_identity_role",
+        "rmh_pref_editor",
+        "rmh_identity_values",
+        "rmh_recap_week"
+      ],
+      "scores": [
+        0.08511736,
+        0.082549006,
+        0.07846705,
+        0.075846046,
+        0.074007966,
+        0.073527284,
+        0.068984136,
+        0.06870467,
+        0.06810118,
+        0.0680599
+      ]
+    },
+    {
+      "key": "how does the user's work schedule affect their productivity preferences␟␟rmh2_caffeine,rmh2_comms,rmh2_finance_sub,rmh2_fitness,rmh2_focus,rmh2_food_diet,rmh2_goal_launch,rmh2_health_allergy,rmh2_identity_role,rmh2_identity_values,rmh2_pref_editor,rmh2_pref_music,rmh2_pref_os,rmh2_pref_reading,rmh2_proj_db,rmh2_proj_embed,rmh2_proj_license,rmh2_proj_react,rmh2_proj_rust,rmh2_proj_tauri,rmh2_proj_testing,rmh2_recap_week,rmh2_schedule,rmh2_sleep,rmh2_travel_home",
+      "query": "how does the user's work schedule affect their productivity preferences",
+      "ranked_ids": [
+        "rmh2_schedule",
+        "rmh2_comms",
+        "rmh2_focus",
+        "rmh2_goal_launch",
+        "rmh2_pref_editor",
+        "rmh2_recap_week",
+        "rmh2_proj_rust",
+        "rmh2_proj_license",
+        "rmh2_proj_react",
+        "rmh2_identity_values"
+      ],
+      "scores": [
+        0.10559494,
+        0.08973073,
+        0.080881275,
+        0.07923197,
+        0.07227013,
+        0.06894737,
+        0.06511083,
+        0.06325361,
+        0.062198,
+        0.057498462
+      ]
+    },
+    {
+      "key": "what are the user's dietary constraints for meal planning␟␟rmh3_allergy,rmh3_caffeine,rmh3_diet,rmh3_finance_sub,rmh3_fitness,rmh3_goal_launch,rmh3_grocery,rmh3_health_sleep,rmh3_identity_role,rmh3_identity_values,rmh3_pref_comms,rmh3_pref_editor,rmh3_pref_music,rmh3_pref_os,rmh3_pref_reading,rmh3_proj_db,rmh3_proj_embed,rmh3_proj_llm,rmh3_proj_react,rmh3_proj_rust,rmh3_proj_tauri,rmh3_proj_testing,rmh3_recap_week,rmh3_recipe,rmh3_travel_home",
+      "query": "what are the user's dietary constraints for meal planning",
+      "ranked_ids": [
+        "rmh3_diet",
+        "rmh3_recipe",
+        "rmh3_grocery",
+        "rmh3_caffeine",
+        "rmh3_allergy",
+        "rmh3_health_sleep",
+        "rmh3_goal_launch",
+        "rmh3_proj_rust",
+        "rmh3_pref_comms",
+        "rmh3_recap_week"
+      ],
+      "scores": [
+        0.06503078,
+        0.056280863,
+        0.053728607,
+        0.04889169,
+        0.047647282,
+        0.045789685,
+        0.044052172,
+        0.043111555,
+        0.04163926,
+        0.04082865
+      ]
+    },
+    {
+      "key": "what hardware and software does the user use for development␟␟rmh4_editor,rmh4_finance_sub,rmh4_fitness,rmh4_food_diet,rmh4_goal_launch,rmh4_health_allergy,rmh4_health_sleep,rmh4_hw,rmh4_identity_role,rmh4_identity_values,rmh4_pref_coffee,rmh4_pref_comms,rmh4_pref_music,rmh4_pref_reading,rmh4_proj_db,rmh4_proj_embed,rmh4_proj_license,rmh4_proj_llm,rmh4_proj_react,rmh4_proj_rust,rmh4_proj_tauri,rmh4_proj_testing,rmh4_recap_week,rmh4_terminal,rmh4_tools,rmh4_travel_home",
+      "query": "what hardware and software does the user use for development",
+      "ranked_ids": [
+        "rmh4_tools",
+        "rmh4_terminal",
+        "rmh4_proj_license",
+        "rmh4_editor",
+        "rmh4_goal_launch",
+        "rmh4_proj_react",
+        "rmh4_proj_rust",
+        "rmh4_proj_testing",
+        "rmh4_recap_week",
+        "rmh4_proj_tauri"
+      ],
+      "scores": [
+        0.08439411,
+        0.07640549,
+        0.07459043,
+        0.07201825,
+        0.07193452,
+        0.06760958,
+        0.065125465,
+        0.0621694,
+        0.056517363,
+        0.05648296
+      ]
+    },
+    {
+      "key": "how should I plan a dinner for the user␟␟rmh5_allergy,rmh5_caffeine,rmh5_diet,rmh5_finance_sub,rmh5_fitness,rmh5_goal_launch,rmh5_grocery,rmh5_health_sleep,rmh5_identity_role,rmh5_identity_values,rmh5_pref_comms,rmh5_pref_editor,rmh5_pref_music,rmh5_pref_os,rmh5_pref_reading,rmh5_proj_db,rmh5_proj_embed,rmh5_proj_llm,rmh5_proj_react,rmh5_proj_rust,rmh5_proj_tauri,rmh5_proj_testing,rmh5_recap_week,rmh5_recipe,rmh5_schedule,rmh5_travel_home",
+      "query": "how should I plan a dinner for the user",
+      "ranked_ids": [
+        "rmh5_recipe",
+        "rmh5_diet",
+        "rmh5_goal_launch",
+        "rmh5_pref_comms",
+        "rmh5_schedule",
+        "rmh5_proj_react",
+        "rmh5_identity_role",
+        "rmh5_pref_editor",
+        "rmh5_proj_rust",
+        "rmh5_proj_db"
+      ],
+      "scores": [
+        0.074949026,
+        0.0743073,
+        0.07279448,
+        0.07159629,
+        0.067677245,
+        0.06548159,
+        0.06439208,
+        0.06358582,
+        0.0622052,
+        0.060999632
+      ]
+    },
+    {
+      "key": "what kind of person is the user␟␟rod_diet,rod_edu,rod_finance_sub,rod_fitness,rod_goal_launch,rod_grocery,rod_health_allergy,rod_health_sleep,rod_identity_role,rod_identity_values,rod_music,rod_pref_coffee,rod_pref_comms,rod_pref_editor,rod_pref_os,rod_pref_reading,rod_proj_db,rod_proj_deploy,rod_proj_embed,rod_proj_license,rod_proj_llm,rod_proj_pnpm,rod_proj_react,rod_proj_rust,rod_proj_tauri,rod_proj_testing,rod_recap_week,rod_recipe,rod_travel_home,rod_travel_safari",
+      "query": "what kind of person is the user",
+      "ranked_ids": [
+        "rod_proj_license",
+        "rod_proj_react",
+        "rod_proj_rust",
+        "rod_goal_launch",
+        "rod_health_sleep",
+        "rod_travel_home",
+        "rod_proj_tauri",
+        "rod_pref_editor",
+        "rod_recap_week",
+        "rod_identity_role"
+      ],
+      "scores": [
+        0.07137321,
+        0.07053454,
+        0.06888797,
+        0.06452776,
+        0.06278571,
+        0.060421746,
+        0.06012545,
+        0.059625044,
+        0.05738678,
+        0.05498206
+      ]
+    },
+    {
+      "key": "what are the user's biggest concerns right now␟␟rod2_blocker_npm,rod2_blocker_oauth,rod2_edu,rod2_finance_runway,rod2_finance_sub,rod2_fitness,rod2_food_diet,rod2_goal_launch,rod2_health_allergy,rod2_health_sleep,rod2_identity_role,rod2_identity_values,rod2_pref_coffee,rod2_pref_comms,rod2_pref_editor,rod2_pref_music,rod2_pref_os,rod2_pref_reading,rod2_proj_db,rod2_proj_embed,rod2_proj_license,rod2_proj_llm,rod2_proj_pnpm,rod2_proj_react,rod2_proj_rust,rod2_proj_tauri,rod2_proj_testing,rod2_recap_week,rod2_travel_home",
+      "query": "what are the user's biggest concerns right now",
+      "ranked_ids": [
+        "rod2_proj_react",
+        "rod2_recap_week",
+        "rod2_pref_comms",
+        "rod2_blocker_oauth",
+        "rod2_identity_values",
+        "rod2_pref_os",
+        "rod2_proj_license",
+        "rod2_proj_testing",
+        "rod2_proj_rust",
+        "rod2_proj_pnpm"
+      ],
+      "scores": [
+        0.05880981,
+        0.057407256,
+        0.055426687,
+        0.052900907,
+        0.05194645,
+        0.050567925,
+        0.04815915,
+        0.047337834,
+        0.04634698,
+        0.045513876
+      ]
+    },
+    {
+      "key": "summarize everything you know about the user's health␟␟rod3_allergy,rod3_caffeine,rod3_diet,rod3_edu,rod3_ergonomics,rod3_finance_sub,rod3_fitness,rod3_goal_launch,rod3_grocery,rod3_identity_role,rod3_identity_values,rod3_pref_comms,rod3_pref_editor,rod3_pref_music,rod3_pref_os,rod3_pref_reading,rod3_proj_db,rod3_proj_embed,rod3_proj_license,rod3_proj_llm,rod3_proj_react,rod3_proj_rust,rod3_proj_tauri,rod3_proj_testing,rod3_recap_week,rod3_recipe,rod3_sleep,rod3_travel_home",
+      "query": "summarize everything you know about the user's health",
+      "ranked_ids": [
+        "rod3_sleep",
+        "rod3_allergy",
+        "rod3_proj_db",
+        "rod3_fitness",
+        "rod3_proj_react",
+        "rod3_diet",
+        "rod3_goal_launch",
+        "rod3_identity_role",
+        "rod3_pref_editor",
+        "rod3_pref_reading"
+      ],
+      "scores": [
+        0.088395484,
+        0.06729506,
+        0.060430378,
+        0.055204008,
+        0.054889426,
+        0.05200831,
+        0.050834294,
+        0.04902711,
+        0.047362942,
+        0.046621133
+      ]
+    },
+    {
+      "key": "what motivates the user's technical decisions␟␟rod4_db_decision,rod4_edu,rod4_finance_sub,rod4_fitness,rod4_food_diet,rod4_goal_launch,rod4_health_allergy,rod4_health_sleep,rod4_identity_role,rod4_license_decision,rod4_pnpm_decision,rod4_pref_coffee,rod4_pref_comms,rod4_pref_editor,rod4_pref_music,rod4_pref_os,rod4_pref_reading,rod4_proj_deploy,rod4_proj_embed,rod4_proj_llm,rod4_proj_react,rod4_proj_testing,rod4_recap_week,rod4_rust_decision,rod4_tauri_decision,rod4_travel_home,rod4_values",
+      "query": "what motivates the user's technical decisions",
+      "ranked_ids": [
+        "rod4_values",
+        "rod4_goal_launch",
+        "rod4_identity_role",
+        "rod4_tauri_decision",
+        "rod4_license_decision",
+        "rod4_recap_week",
+        "rod4_rust_decision",
+        "rod4_pref_music",
+        "rod4_proj_react",
+        "rod4_pref_editor"
+      ],
+      "scores": [
+        0.06425097,
+        0.05922166,
+        0.055673864,
+        0.052510567,
+        0.05051351,
+        0.04939587,
+        0.048442602,
+        0.04658073,
+        0.045859266,
+        0.044864777
+      ]
+    },
+    {
+      "key": "what would make a good gift for the user␟␟rod5_coffee,rod5_edu,rod5_finance_sub,rod5_fitness,rod5_food_diet,rod5_goal_launch,rod5_grocery,rod5_health_allergy,rod5_health_sleep,rod5_identity_role,rod5_identity_values,rod5_music,rod5_pref_comms,rod5_pref_editor,rod5_pref_os,rod5_proj_db,rod5_proj_embed,rod5_proj_llm,rod5_proj_react,rod5_proj_rust,rod5_proj_tauri,rod5_proj_testing,rod5_reading,rod5_recap_week,rod5_recipe,rod5_travel,rod5_travel_home",
+      "query": "what would make a good gift for the user",
+      "ranked_ids": [
+        "rod5_goal_launch",
+        "rod5_identity_role",
+        "rod5_proj_rust",
+        "rod5_proj_db",
+        "rod5_proj_react",
+        "rod5_pref_editor",
+        "rod5_pref_os",
+        "rod5_health_allergy",
+        "rod5_travel",
+        "rod5_health_sleep"
+      ],
+      "scores": [
+        0.07451856,
+        0.07007568,
+        0.062426545,
+        0.061516963,
+        0.060550146,
+        0.057179905,
+        0.055159763,
+        0.052346673,
+        0.051991317,
+        0.050233033
+      ]
+    },
+    {
+      "key": "what language is the backend written in␟␟rsh_finance_sub,rsh_food_diet,rsh_goal_launch,rsh_health_allergy,rsh_health_sleep,rsh_identity_role,rsh_identity_values,rsh_pref_coffee,rsh_pref_comms,rsh_pref_editor,rsh_pref_music,rsh_pref_os,rsh_pref_reading,rsh_proj_db,rsh_proj_deploy,rsh_proj_embed,rsh_proj_license,rsh_proj_llm,rsh_proj_react,rsh_proj_rust,rsh_proj_tauri,rsh_proj_testing,rsh_recap_week,rsh_travel_home",
+      "query": "what language is the backend written in",
+      "ranked_ids": [
+        "rsh_proj_react",
+        "rsh_proj_rust",
+        "rsh_proj_deploy",
+        "rsh_recap_week",
+        "rsh_proj_license",
+        "rsh_pref_editor",
+        "rsh_proj_tauri",
+        "rsh_proj_db",
+        "rsh_pref_comms",
+        "rsh_proj_llm"
+      ],
+      "scores": [
+        0.08353427,
+        0.08205958,
+        0.08012809,
+        0.07730294,
+        0.0767691,
+        0.072028175,
+        0.0718638,
+        0.067648046,
+        0.06565139,
+        0.061574496
+      ]
+    },
+    {
+      "key": "where did the user go to school␟␟rsh3_edu,rsh3_finance_sub,rsh3_food_diet,rsh3_goal_launch,rsh3_health_allergy,rsh3_health_sleep,rsh3_identity_role,rsh3_identity_values,rsh3_learning,rsh3_pref_coffee,rsh3_pref_comms,rsh3_pref_editor,rsh3_pref_music,rsh3_pref_os,rsh3_pref_reading,rsh3_proj_db,rsh3_proj_embed,rsh3_proj_llm,rsh3_proj_react,rsh3_proj_rust,rsh3_proj_tauri,rsh3_proj_testing,rsh3_recap_week,rsh3_travel_home",
+      "query": "where did the user go to school",
+      "ranked_ids": [
+        "rsh3_edu",
+        "rsh3_proj_react",
+        "rsh3_learning",
+        "rsh3_proj_rust",
+        "rsh3_recap_week",
+        "rsh3_travel_home",
+        "rsh3_pref_editor",
+        "rsh3_proj_tauri",
+        "rsh3_identity_values",
+        "rsh3_goal_launch"
+      ],
+      "scores": [
+        0.079932876,
+        0.06915895,
+        0.067722924,
+        0.063279614,
+        0.06142285,
+        0.060362335,
+        0.06004942,
+        0.05960085,
+        0.059352875,
+        0.054464314
+      ]
+    },
+    {
+      "key": "how much does the user exercise␟␟rsh4_finance_sub,rsh4_fitness,rsh4_food_diet,rsh4_goal_launch,rsh4_health_allergy,rsh4_health_sleep,rsh4_identity_role,rsh4_identity_values,rsh4_pref_coffee,rsh4_pref_comms,rsh4_pref_editor,rsh4_pref_music,rsh4_pref_os,rsh4_pref_reading,rsh4_proj_db,rsh4_proj_embed,rsh4_proj_license,rsh4_proj_llm,rsh4_proj_react,rsh4_proj_rust,rsh4_proj_testing,rsh4_recap_week,rsh4_travel_home",
+      "query": "how much does the user exercise",
+      "ranked_ids": [
+        "rsh4_fitness",
+        "rsh4_goal_launch",
+        "rsh4_pref_editor",
+        "rsh4_health_sleep",
+        "rsh4_proj_license",
+        "rsh4_proj_rust",
+        "rsh4_proj_react",
+        "rsh4_pref_coffee",
+        "rsh4_finance_sub",
+        "rsh4_travel_home"
+      ],
+      "scores": [
+        0.07832433,
+        0.070694804,
+        0.06404776,
+        0.06342793,
+        0.061858624,
+        0.060751647,
+        0.0598457,
+        0.055170424,
+        0.054540295,
+        0.053946894
+      ]
+    },
+    {
+      "key": "what does the user do for a living␟␟rsh5_edu,rsh5_finance_sub,rsh5_fitness,rsh5_food_diet,rsh5_goal_launch,rsh5_health_allergy,rsh5_health_sleep,rsh5_identity_role,rsh5_identity_values,rsh5_pref_coffee,rsh5_pref_comms,rsh5_pref_editor,rsh5_pref_music,rsh5_pref_os,rsh5_pref_reading,rsh5_proj_db,rsh5_proj_embed,rsh5_proj_llm,rsh5_proj_react,rsh5_proj_rust,rsh5_proj_tauri,rsh5_proj_testing,rsh5_recap_week,rsh5_travel_home",
+      "query": "what does the user do for a living",
+      "ranked_ids": [
+        "rsh5_identity_role",
+        "rsh5_travel_home",
+        "rsh5_pref_comms",
+        "rsh5_proj_react",
+        "rsh5_pref_editor",
+        "rsh5_proj_db",
+        "rsh5_proj_tauri",
+        "rsh5_proj_rust",
+        "rsh5_goal_launch",
+        "rsh5_recap_week"
+      ],
+      "scores": [
+        0.07571221,
+        0.069525376,
+        0.068780676,
+        0.06726387,
+        0.066556,
+        0.065901406,
+        0.06445256,
+        0.06348596,
+        0.06345508,
+        0.058112867
+      ]
+    },
+    {
+      "key": "what package manager does the project use␟␟rsh6_finance_sub,rsh6_goal_launch,rsh6_health_sleep,rsh6_identity_role,rsh6_pnpm,rsh6_pref_coffee,rsh6_pref_comms,rsh6_pref_editor,rsh6_pref_os,rsh6_proj_cargo,rsh6_proj_db,rsh6_proj_deploy,rsh6_proj_embed,rsh6_proj_license,rsh6_proj_llm,rsh6_proj_react,rsh6_proj_rust,rsh6_proj_tauri,rsh6_proj_testing,rsh6_recap_week,rsh6_travel_home",
+      "query": "what package manager does the project use",
+      "ranked_ids": [
+        "rsh6_pnpm",
+        "rsh6_proj_react",
+        "rsh6_proj_license",
+        "rsh6_proj_rust",
+        "rsh6_proj_tauri",
+        "rsh6_proj_cargo",
+        "rsh6_pref_editor",
+        "rsh6_recap_week",
+        "rsh6_goal_launch",
+        "rsh6_proj_deploy"
+      ],
+      "scores": [
+        0.08507905,
+        0.07740475,
+        0.0762709,
+        0.075600296,
+        0.0704824,
+        0.06919567,
+        0.06839107,
+        0.064429246,
+        0.06301469,
+        0.062162887
+      ]
+    },
+    {
+      "key": "what's the user's email setup␟␟rsh7_comms,rsh7_finance_sub,rsh7_fitness,rsh7_food_diet,rsh7_goal_launch,rsh7_health_allergy,rsh7_health_sleep,rsh7_identity_role,rsh7_identity_values,rsh7_notif,rsh7_pref_coffee,rsh7_pref_editor,rsh7_pref_music,rsh7_pref_os,rsh7_pref_reading,rsh7_proj_db,rsh7_proj_llm,rsh7_proj_react,rsh7_proj_rust,rsh7_proj_testing,rsh7_recap_week,rsh7_travel_home",
+      "query": "what's the user's email setup",
+      "ranked_ids": [
+        "rsh7_comms",
+        "rsh7_notif",
+        "rsh7_proj_react",
+        "rsh7_goal_launch",
+        "rsh7_finance_sub",
+        "rsh7_recap_week",
+        "rsh7_proj_testing",
+        "rsh7_identity_role",
+        "rsh7_proj_db",
+        "rsh7_proj_llm"
+      ],
+      "scores": [
+        0.065085165,
+        0.05993092,
+        0.052216392,
+        0.05084614,
+        0.048736796,
+        0.046985447,
+        0.044057604,
+        0.04339071,
+        0.042568013,
+        0.041915495
+      ]
+    },
+    {
+      "key": "what project is the user currently working on␟␟rt_finance_sub,rt_fitness,rt_food_diet,rt_goal_launch,rt_health_allergy,rt_health_sleep,rt_identity_role,rt_identity_values,rt_pref_coffee,rt_pref_comms,rt_pref_editor,rt_pref_music,rt_pref_os,rt_pref_reading,rt_proj_db,rt_proj_embed,rt_proj_llm,rt_proj_react,rt_proj_rust,rt_proj_tauri,rt_proj_testing,rt_project_consulting,rt_project_current,rt_project_saas,rt_recap_week,rt_travel_home",
+      "query": "what project is the user currently working on",
+      "ranked_ids": [
+        "rt_proj_react",
+        "rt_pref_editor",
+        "rt_proj_tauri",
+        "rt_proj_rust",
+        "rt_goal_launch",
+        "rt_project_current",
+        "rt_proj_llm",
+        "rt_proj_testing",
+        "rt_pref_comms",
+        "rt_identity_role"
+      ],
+      "scores": [
+        0.124575146,
+        0.12040663,
+        0.11298793,
+        0.11075177,
+        0.10235869,
+        0.098281525,
+        0.09653655,
+        0.09153862,
+        0.079856746,
+        0.07743779
+      ]
+    },
+    {
+      "key": "where does the user live␟␟rt2_finance_sub,rt2_fitness,rt2_food_diet,rt2_goal_launch,rt2_health_allergy,rt2_health_sleep,rt2_home_oakland,rt2_home_portland,rt2_home_sf,rt2_identity_role,rt2_identity_values,rt2_pref_coffee,rt2_pref_comms,rt2_pref_editor,rt2_pref_music,rt2_pref_os,rt2_pref_reading,rt2_proj_db,rt2_proj_embed,rt2_proj_react,rt2_proj_rust,rt2_proj_tauri,rt2_proj_testing,rt2_recap_week,rt2_travel_safari",
+      "query": "where does the user live",
+      "ranked_ids": [
+        "rt2_home_sf",
+        "rt2_proj_react",
+        "rt2_proj_rust",
+        "rt2_pref_editor",
+        "rt2_fitness",
+        "rt2_proj_db",
+        "rt2_goal_launch",
+        "rt2_pref_coffee",
+        "rt2_pref_comms",
+        "rt2_proj_tauri"
+      ],
+      "scores": [
+        0.07511113,
+        0.07055715,
+        0.06767369,
+        0.06181708,
+        0.056932934,
+        0.055542935,
+        0.055096556,
+        0.05295639,
+        0.04939506,
+        0.0466525
+      ]
+    },
+    {
+      "key": "what embedding model does the project use␟␟rt3_embed_prefix,rt3_embed_v1,rt3_embed_v2,rt3_embed_v3,rt3_finance_sub,rt3_fitness,rt3_food_diet,rt3_goal_launch,rt3_health_allergy,rt3_health_sleep,rt3_identity_role,rt3_identity_values,rt3_pref_coffee,rt3_pref_comms,rt3_pref_editor,rt3_pref_music,rt3_pref_os,rt3_pref_reading,rt3_proj_db,rt3_proj_license,rt3_proj_llm,rt3_proj_react,rt3_proj_rust,rt3_proj_tauri,rt3_proj_testing,rt3_recap_week,rt3_travel_home",
+      "query": "what embedding model does the project use",
+      "ranked_ids": [
+        "rt3_embed_v3",
+        "rt3_proj_rust",
+        "rt3_proj_react",
+        "rt3_embed_prefix",
+        "rt3_pref_editor",
+        "rt3_goal_launch",
+        "rt3_proj_license",
+        "rt3_proj_testing",
+        "rt3_proj_db",
+        "rt3_pref_comms"
+      ],
+      "scores": [
+        0.07860384,
+        0.078307085,
+        0.077537075,
+        0.07535647,
+        0.06904286,
+        0.06423878,
+        0.06187664,
+        0.056805756,
+        0.051255252,
+        0.04928544
+      ]
+    },
+    {
+      "key": "what editor does the user prefer␟␟rt4_editor_cursor,rt4_editor_vim,rt4_editor_vscode,rt4_finance_sub,rt4_fitness,rt4_food_diet,rt4_goal_launch,rt4_health_allergy,rt4_health_sleep,rt4_identity_role,rt4_identity_values,rt4_pref_coffee,rt4_pref_comms,rt4_pref_music,rt4_pref_os,rt4_pref_reading,rt4_proj_db,rt4_proj_embed,rt4_proj_llm,rt4_proj_react,rt4_proj_rust,rt4_proj_tauri,rt4_proj_testing,rt4_recap_week,rt4_tools_figma,rt4_travel_home",
+      "query": "what editor does the user prefer",
+      "ranked_ids": [
+        "rt4_editor_cursor",
+        "rt4_proj_rust",
+        "rt4_proj_react",
+        "rt4_goal_launch",
+        "rt4_pref_comms",
+        "rt4_tools_figma",
+        "rt4_proj_testing",
+        "rt4_travel_home",
+        "rt4_proj_tauri",
+        "rt4_identity_role"
+      ],
+      "scores": [
+        0.08959688,
+        0.077180535,
+        0.07625919,
+        0.063198105,
+        0.06086754,
+        0.05569562,
+        0.050557893,
+        0.049492937,
+        0.047318596,
+        0.045937248
+      ]
+    },
+    {
+      "key": "what's the user's current fitness routine␟␟rt5_finance_sub,rt5_fitness_v1,rt5_fitness_v2,rt5_fitness_v3,rt5_food_diet,rt5_goal_launch,rt5_health_allergy,rt5_identity_role,rt5_identity_values,rt5_pref_coffee,rt5_pref_comms,rt5_pref_editor,rt5_pref_music,rt5_pref_os,rt5_pref_reading,rt5_proj_db,rt5_proj_embed,rt5_proj_llm,rt5_proj_react,rt5_proj_rust,rt5_proj_tauri,rt5_proj_testing,rt5_recap_week,rt5_sleep,rt5_standing_desk,rt5_travel_home",
+      "query": "what's the user's current fitness routine",
+      "ranked_ids": [
+        "rt5_sleep",
+        "rt5_fitness_v3",
+        "rt5_standing_desk",
+        "rt5_food_diet",
+        "rt5_proj_react",
+        "rt5_pref_music",
+        "rt5_goal_launch",
+        "rt5_pref_coffee",
+        "rt5_identity_role",
+        "rt5_recap_week"
+      ],
+      "scores": [
+        0.06547701,
+        0.057529885,
+        0.055508498,
+        0.053386085,
+        0.051100608,
+        0.050165977,
+        0.049308054,
+        0.047997892,
+        0.047121048,
+        0.046158448
+      ]
+    },
+    {
+      "key": "when did the user's financial situation last change␟␟rt6_edu,rt6_finance_consulting,rt6_finance_indie,rt6_finance_salary,rt6_finance_sub,rt6_fitness,rt6_food_diet,rt6_goal_launch,rt6_health_allergy,rt6_health_sleep,rt6_identity_role,rt6_identity_values,rt6_pref_coffee,rt6_pref_comms,rt6_pref_editor,rt6_pref_music,rt6_pref_os,rt6_pref_reading,rt6_proj_db,rt6_proj_embed,rt6_proj_react,rt6_proj_rust,rt6_proj_tauri,rt6_proj_testing,rt6_recap_week,rt6_travel_home",
+      "query": "when did the user's financial situation last change",
+      "ranked_ids": [
+        "rt6_finance_sub",
+        "rt6_proj_react",
+        "rt6_finance_indie",
+        "rt6_proj_rust",
+        "rt6_proj_db",
+        "rt6_recap_week",
+        "rt6_edu",
+        "rt6_identity_values",
+        "rt6_pref_comms",
+        "rt6_proj_tauri"
+      ],
+      "scores": [
+        0.059042998,
+        0.052686363,
+        0.050128054,
+        0.049076386,
+        0.04685854,
+        0.046081632,
+        0.044887584,
+        0.044205908,
+        0.04338195,
+        0.04256088
+      ]
+    },
+    {
+      "key": "how to configure build profiles␟␟mem_build_detail,mem_build_original",
+      "query": "how to configure build profiles",
+      "ranked_ids": [
+        "mem_build_xcode",
+        "mem_build_detail",
+        "mem_build_recap",
+        "mem_build_original",
+        "mem_build_ci"
+      ],
+      "scores": [
+        0.09728105,
+        0.09372956,
+        0.08772531,
+        0.085955024,
+        0.08131583
+      ]
+    },
+    {
+      "key": "search ranking algorithm␟␟mem_ranking_impl,mem_ranking_rrf",
+      "query": "search ranking algorithm",
+      "ranked_ids": [
+        "mem_ranking_rrf",
+        "mem_ranking_impl",
+        "mem_ranking_recap",
+        "mem_fts_ranking",
+        "mem_scoring_config"
+      ],
+      "scores": [
+        0.09447842,
+        0.08843819,
+        0.085678756,
+        0.07540085,
+        0.059392046
+      ]
+    },
+    {
+      "key": "memory deduplication and merge strategy␟␟mem_dedup_core,mem_dedup_postingest,mem_dedup_tangential",
+      "query": "memory deduplication and merge strategy",
+      "ranked_ids": [
+        "mem_search_dedup",
+        "mem_dedup_core",
+        "mem_dedup_tangential",
+        "mem_git_merge",
+        "mem_entity_merge",
+        "mem_dedup_postingest"
+      ],
+      "scores": [
+        0.08878717,
+        0.08728422,
+        0.079882056,
+        0.07699515,
+        0.07520104,
+        0.0636058
+      ]
+    },
+    {
+      "key": "on-device language model inference␟␟mem_llm_perf,mem_llm_prompts,mem_llm_setup",
+      "query": "on-device language model inference",
+      "ranked_ids": [
+        "mem_embed_model_inference",
+        "mem_llm_eval",
+        "mem_llm_prompts",
+        "mem_llm_setup",
+        "mem_llm_perf",
+        "mem_llm_noise"
+      ],
+      "scores": [
+        0.07185537,
+        0.064923786,
+        0.06082575,
+        0.056507807,
+        0.048464797,
+        0.041016147
+      ]
+    },
+    {
+      "key": "how to prevent storing duplicate information␟␟mem_dedup_semantic,mem_supersede",
+      "query": "how to prevent storing duplicate information",
+      "ranked_ids": [
+        "mem_keyword_trap",
+        "mem_prevent_low_quality",
+        "mem_dedup_semantic",
+        "mem_recap_dedup",
+        "mem_supersede"
+      ],
+      "scores": [
+        0.07892709,
+        0.07725194,
+        0.06689694,
+        0.062301647,
+        0.055076603
+      ]
+    },
+    {
+      "key": "making search results more relevant␟␟mem_reranking,mem_scoring_tuning",
+      "query": "making search results more relevant",
+      "ranked_ids": [
+        "mem_eval_quality",
+        "mem_result_display",
+        "mem_unrelated_search",
+        "mem_reranking",
+        "mem_scoring_tuning"
+      ],
+      "scores": [
+        0.08493427,
+        0.083714746,
+        0.08191184,
+        0.07646475,
+        0.059444267
+      ]
+    },
+    {
+      "key": "code review suggestions␟␟mem_review_agent1,mem_review_agent2",
+      "query": "code review suggestions",
+      "ranked_ids": [
+        "mem_review_untrusted",
+        "mem_review_recap",
+        "mem_review_template",
+        "mem_review_agent2",
+        "mem_review_ci",
+        "mem_review_agent1"
+      ],
+      "scores": [
+        0.095034994,
+        0.08470178,
+        0.07953617,
+        0.077840604,
+        0.07265915,
+        0.071958795
+      ]
+    },
+    {
+      "key": "memory storage decisions␟␟mem_storage_decision,mem_storage_detail",
+      "query": "memory storage decisions",
+      "ranked_ids": [
+        "mem_storage_refinery",
+        "mem_storage_detail",
+        "mem_storage_config",
+        "mem_storage_decision",
+        "mem_storage_files"
+      ],
+      "scores": [
+        0.085147396,
+        0.07903023,
+        0.07398283,
+        0.07298749,
+        0.069167584
+      ]
+    },
+    {
+      "key": "database connection pooling␟␟mem_db_confirmed,mem_db_unconfirmed",
+      "query": "database connection pooling",
+      "ranked_ids": [
+        "mem_db_recap_auto",
+        "mem_db_confirmed",
+        "mem_db_unconfirmed"
+      ],
+      "scores": [
+        0.09315181,
+        0.08534402,
+        0.080365226
+      ]
+    },
+    {
+      "key": "configuration file format␟␟mem_config_json,mem_config_toml",
+      "query": "configuration file format",
+      "ranked_ids": [
+        "mem_config_generic",
+        "mem_config_toml",
+        "mem_config_json"
+      ],
+      "scores": [
+        0.08563824,
+        0.07665302,
+        0.06752404
+      ]
+    },
+    {
+      "key": "error handling best practices␟␟mem_error_confirmed,mem_error_tangential,mem_error_unconfirmed",
+      "query": "error handling best practices",
+      "ranked_ids": [
+        "mem_error_confirmed",
+        "mem_error_other",
+        "mem_error_unconfirmed",
+        "mem_error_tangential"
+      ],
+      "scores": [
+        0.09449186,
+        0.082659036,
+        0.07962318,
+        0.06883265
+      ]
+    },
+    {
+      "key": "window management and multi-window architecture␟␟mem_window_arch,mem_window_toast",
+      "query": "window management and multi-window architecture",
+      "ranked_ids": [
+        "mem_window_generic",
+        "mem_window_arch",
+        "mem_window_toast"
+      ],
+      "scores": [
+        0.06888067,
+        0.06514163,
+        0.06252633
+      ]
+    },
+    {
+      "key": "full-text search implementation␟␟mem_fts_neardup,mem_fts_original",
+      "query": "full-text search implementation",
+      "ranked_ids": [
+        "mem_fts_original",
+        "mem_fts_recap",
+        "mem_fts_neardup"
+      ],
+      "scores": [
+        0.07715484,
+        0.07081731,
+        0.057242487
+      ]
+    },
+    {
+      "key": "knowledge graph entity relationships␟␟mem_kg_original,mem_kg_partial_dup",
+      "query": "knowledge graph entity relationships",
+      "ranked_ids": [
+        "mem_kg_original",
+        "mem_kg_other",
+        "mem_kg_partial_dup"
+      ],
+      "scores": [
+        0.103985235,
+        0.091266505,
+        0.077641115
+      ]
+    },
+    {
+      "key": "async programming patterns␟technology␟mem_async_tech",
+      "query": "async programming patterns",
+      "ranked_ids": [
+        "mem_async_tech"
+      ],
+      "scores": [
+        0.08748839
+      ]
+    },
+    {
+      "key": "type system design decisions␟software-engineering␟mem_types_se",
+      "query": "type system design decisions",
+      "ranked_ids": [
+        "mem_types_se"
+      ],
+      "scores": [
+        0.08581208
+      ]
+    },
+    {
+      "key": "state management architecture␟␟mem_state_high_quality,mem_state_low_quality,mem_state_no_quality",
+      "query": "state management architecture",
+      "ranked_ids": [
+        "mem_state_high_quality",
+        "mem_state_no_quality",
+        "mem_state_noise",
+        "mem_state_low_quality"
+      ],
+      "scores": [
+        0.092247576,
+        0.0810742,
+        0.06606293,
+        0.06129298
+      ]
+    },
+    {
+      "key": "CSS grid layout patterns␟␟mem_css_original",
+      "query": "CSS grid layout patterns",
+      "ranked_ids": [
+        "mem_css_original",
+        "mem_css_recap2",
+        "mem_css_recap3",
+        "mem_css_recap1"
+      ],
+      "scores": [
+        0.095747314,
+        0.088209845,
+        0.08426246,
+        0.081187285
+      ]
+    },
+    {
+      "key": "image optimization strategy␟␟mem_img_decision",
+      "query": "image optimization strategy",
+      "ranked_ids": [
+        "mem_img_recap2",
+        "mem_img_recap",
+        "mem_img_decision"
+      ],
+      "scores": [
+        0.07804045,
+        0.06634343,
+        0.0541643
+      ]
+    },
+    {
+      "key": "dark mode preference for editors␟␟mem_pref_dark,mem_pref_vim",
+      "query": "dark mode preference for editors",
+      "ranked_ids": [
+        "mem_pref_dark",
+        "mem_pref_light",
+        "mem_pref_theme",
+        "mem_pref_vim",
+        "mem_pref_keybindings"
+      ],
+      "scores": [
+        0.10903851,
+        0.09674552,
+        0.09130473,
+        0.07782019,
+        0.057263166
+      ]
+    },
+    {
+      "key": "what decision was made about the database␟␟mem_dec_agpl,mem_dec_libsql",
+      "query": "what decision was made about the database",
+      "ranked_ids": [
+        "mem_dec_db_path",
+        "mem_dec_libsql",
+        "mem_dec_conn_pool",
+        "mem_dec_unrelated",
+        "mem_dec_agpl"
+      ],
+      "scores": [
+        0.088143006,
+        0.08086142,
+        0.07386289,
+        0.07027285,
+        0.06595851
+      ]
+    },
+    {
+      "key": "Lucian identity claims␟␟mem_id_founder,mem_id_rust",
+      "query": "Lucian identity claims",
+      "ranked_ids": [
+        "mem_id_founder",
+        "mem_id_talk",
+        "mem_id_teammate",
+        "mem_id_noise",
+        "mem_id_rust"
+      ],
+      "scores": [
+        0.049734693,
+        0.04411419,
+        0.04062688,
+        0.03947978,
+        0.03795029
+      ]
+    },
+    {
+      "key": "what database does the project use␟␟new_db_decision,old_db_decision",
+      "query": "what database does the project use",
+      "ranked_ids": [
+        "new_db_decision",
+        "neg_unrelated_pref"
+      ],
+      "scores": [
+        0.09729699,
+        0.046726067
+      ]
+    },
+    {
+      "key": "deployment strategy for the API␟␟new_deploy,old_deploy",
+      "query": "deployment strategy for the API",
+      "ranked_ids": [
+        "new_deploy",
+        "neg_ci_config"
+      ],
+      "scores": [
+        0.08880286,
+        0.059460945
+      ]
+    },
+    {
+      "key": "preferred frontend framework␟␟new_framework,old_framework",
+      "query": "preferred frontend framework",
+      "ranked_ids": [
+        "new_framework",
+        "neg_backend_pref"
+      ],
+      "scores": [
+        0.12188368,
+        0.09813273
+      ]
+    },
+    {
+      "key": "team communication tool␟␟fresh_comms,stale_comms,very_relevant_old",
+      "query": "team communication tool",
+      "ranked_ids": [
+        "fresh_comms",
+        "very_relevant_old",
+        "neg_email_pref"
+      ],
+      "scores": [
+        0.08939002,
+        0.052707933,
+        0.044998016
+      ]
+    },
+    {
+      "key": "async runtime configuration␟␟mem_async_decision,mem_async_threading",
+      "query": "async runtime configuration",
+      "ranked_ids": [
+        "mem_async_other_project",
+        "mem_async_threading",
+        "mem_async_test_harness",
+        "mem_async_decision",
+        "mem_async_trivia",
+        "mem_deps_trivia"
+      ],
+      "scores": [
+        0.08628248,
+        0.085759334,
+        0.08146798,
+        0.07992398,
+        0.076755054,
+        0.04444532
+      ]
+    },
+    {
+      "key": "privacy and data redaction␟␟mem_privacy_apps,mem_privacy_impl",
+      "query": "privacy and data redaction",
+      "ranked_ids": [
+        "mem_privacy_impl",
+        "mem_privacy_audit",
+        "mem_privacy_generic",
+        "mem_privacy_apps",
+        "mem_privacy_sharing"
+      ],
+      "scores": [
+        0.0932018,
+        0.09092897,
+        0.08268291,
+        0.077479,
+        0.07278856
+      ]
+    }
+  ]
+}
