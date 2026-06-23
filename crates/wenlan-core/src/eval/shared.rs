@@ -22,8 +22,18 @@ static BPE: LazyLock<&'static tiktoken_rs::CoreBPE> = LazyLock::new(|| {
 /// reaches zero — the TextEmbedding destructor never runs.
 static EVAL_EMBEDDER: LazyLock<Arc<std::sync::Mutex<fastembed::TextEmbedding>>> =
     LazyLock::new(|| {
-        let opts = fastembed::InitOptions::new(fastembed::EmbeddingModel::BGEBaseENV15Q)
+        let mut opts = fastembed::InitOptions::new(fastembed::EmbeddingModel::BGEBaseENV15Q)
             .with_show_download_progress(true);
+        // Reuse the shared on-disk fastembed cache (`WENLAN_TEST_FASTEMBED_CACHE`, else the
+        // data-dir cache) instead of fastembed's cwd-relative `./.fastembed_cache` default —
+        // otherwise every git worktree starts from an empty cwd cache and re-downloads the
+        // model. Mirrors the db.rs production/test embedder via `resolve_fastembed_cache_dir`;
+        // the `db_path` here is a sentinel, so only the env + default tiers apply.
+        if let Some(cache) =
+            crate::db::resolve_fastembed_cache_dir(std::path::Path::new(".nonexistent"))
+        {
+            opts = opts.with_cache_dir(cache);
+        }
         let embedder = fastembed::TextEmbedding::try_new(opts)
             .expect("failed to load BGE-Base-EN-v1.5-Q ONNX model");
         let arc = Arc::new(std::sync::Mutex::new(embedder));
