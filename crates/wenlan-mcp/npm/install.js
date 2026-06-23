@@ -17,7 +17,6 @@ const REPO = "7xuanlu/origin";
 // Each bundle contains wenlan, wenlan-server, and wenlan-mcp (or .exe on Windows).
 const ASSETS = {
   "darwin-arm64": { file: "wenlan-darwin-arm64.tar.gz",  archive: "tar.gz" },
-  "darwin-x64":   { file: "wenlan-darwin-x64.tar.gz",    archive: "tar.gz" },
   "linux-arm64":  { file: "wenlan-linux-arm64.tar.gz",   archive: "tar.gz" },
   "linux-x64":    { file: "wenlan-linux-x64.tar.gz",     archive: "tar.gz" },
   "win32-x64":    { file: "wenlan-windows-x64.zip",      archive: "zip"    },
