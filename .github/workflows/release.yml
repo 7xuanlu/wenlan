@@ -220,7 +220,7 @@ jobs:
       - name: List Windows build artifacts
         if: matrix.target == 'x86_64-pc-windows-msvc'
         shell: bash
-        run: find "target/${{ matrix.target }}/release" -maxdepth 1 -print | head -30
+        run: ls -la target/${{ matrix.target }}/release/ | head -30
 
       # ort 2.x caches link-time `.lib` artifacts under
       # `%LOCALAPPDATA%\ort.pyke.io\...` but does NOT keep onnxruntime.dll
@@ -551,7 +551,7 @@ jobs:
           SHA_MCP_DARWIN_ARM64=$(sha256sum origin-mcp-darwin-arm64.tar.gz | cut -d' ' -f1)
           SHA_CLI_DARWIN_ARM64=$(sha256sum origin-darwin-arm64.tar.gz | cut -d' ' -f1)
 
-          git clone "https://x-access-token:${HOMEBREW_TAP_TOKEN}@github.com/7xuanlu/homebrew-tap.git" tap
+          git clone https://x-access-token:${HOMEBREW_TAP_TOKEN}@github.com/7xuanlu/homebrew-tap.git tap
           mkdir -p tap/Formula
 
           cat > tap/Formula/origin-mcp.rb << 'FORMULA'
