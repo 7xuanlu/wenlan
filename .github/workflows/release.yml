@@ -389,7 +389,7 @@ jobs:
           docker buildx imagetools create -t "$IMG:latest"  "$IMG:$TAG-amd64" "$IMG:$TAG-arm64"
 
   publish-crates:
-    name: Publish crates.io (origin-types + origin-mcp)
+    name: Publish crates.io (wenlan-types + wenlan-mcp)
     needs: release
     runs-on: ubuntu-latest
 
@@ -403,10 +403,10 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
 
       - name: Pre-flight cargo publish dry-run
-        # Only origin-types — origin-mcp's --dry-run resolves origin-types from
+        # Only wenlan-types — wenlan-mcp's --dry-run resolves wenlan-types from
         # crates.io which doesn't have the new version until the publish step
-        # runs. Real origin-mcp publish happens after origin-types is indexed.
-        run: cargo publish -p origin-types --dry-run
+        # runs. Real wenlan-mcp publish happens after wenlan-types is indexed.
+        run: cargo publish -p wenlan-types --dry-run
 
       - name: Resolve workspace version
         id: version
@@ -415,7 +415,7 @@ jobs:
           echo "value=$VERSION" >> "$GITHUB_OUTPUT"
           echo "Workspace version: $VERSION"
 
-      - name: Publish origin-types to crates.io
+      - name: Publish wenlan-types to crates.io
         # Source-of-truth registry check uses the sparse index (same as the
         # downstream `Wait for ... available` step). The v1 web API lags
         # behind by minutes-to-hours under load and gave false "not
@@ -424,51 +424,51 @@ jobs:
         if: env.CARGO_REGISTRY_TOKEN != ''
         run: |
           VERSION="${{ steps.version.outputs.value }}"
-          if curl -sf "https://index.crates.io/or/ig/origin-types" | grep -q "\"vers\":\"$VERSION\""; then
-            echo "origin-types ${VERSION} already on sparse index, skipping publish"
+          if curl -sf "https://index.crates.io/we/nl/wenlan-types" | grep -q "\"vers\":\"$VERSION\""; then
+            echo "wenlan-types ${VERSION} already on sparse index, skipping publish"
           else
-            cargo publish -p origin-types
+            cargo publish -p wenlan-types
           fi
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
 
-      - name: Wait for origin-types to be available on crates.io
+      - name: Wait for wenlan-types to be available on crates.io
         # Poll the sparse index (https://index.crates.io) — that's what
-        # `cargo publish -p origin-mcp` reads to resolve its
-        # `origin-types = "^X.Y.Z"` dep. The v1 web API
+        # the wenlan-mcp publish step reads to resolve its
+        # `wenlan-types = "^X.Y.Z"` dep. The v1 web API
         # (`crates.io/api/v1/crates/<name>/<version>`) lags behind the
         # sparse index by minutes-to-hours during load, which caused
         # false negatives (publish succeeded, web API still 404). The
         # sparse index path for any crate `name` is
         # `/<prefix>/<name>` where prefix depends on name length;
-        # for 4+ chars: `<first2>/<chars 3-4>/<name>`. `origin-types`
-        # → `or/ig/origin-types`. The index returns NDJSON, one record
+        # for 4+ chars: `<first2>/<chars 3-4>/<name>`. `wenlan-types`
+        # → `we/nl/wenlan-types`. The index returns NDJSON, one record
         # per published version.
         run: |
           VERSION="${{ steps.version.outputs.value }}"
-          INDEX_URL="https://index.crates.io/or/ig/origin-types"
+          INDEX_URL="https://index.crates.io/we/nl/wenlan-types"
           for i in $(seq 1 60); do
             if curl -sf "$INDEX_URL" | grep -q "\"vers\":\"$VERSION\""; then
-              echo "origin-types ${VERSION} visible on sparse index"; exit 0
+              echo "wenlan-types ${VERSION} visible on sparse index"; exit 0
             fi
-            echo "Waiting for sparse index to publish origin-types ${VERSION}... ($i/60)"
+            echo "Waiting for sparse index to publish wenlan-types ${VERSION}... ($i/60)"
             sleep 10
           done
-          echo "ERROR: origin-types ${VERSION} not visible on sparse index after 10 min"
+          echo "ERROR: wenlan-types ${VERSION} not visible on sparse index after 10 min"
           echo "Last index response:"
           curl -s "$INDEX_URL" | tail -5
           exit 1
 
-      - name: Publish origin-mcp to crates.io
-        # Sparse index check (see origin-types step) avoids the v1 web API
+      - name: Publish wenlan-mcp to crates.io
+        # Sparse index check (see wenlan-types step) avoids the v1 web API
         # propagation lag that previously caused duplicate-publish failures.
         if: env.CARGO_REGISTRY_TOKEN != ''
         run: |
           VERSION="${{ steps.version.outputs.value }}"
-          if curl -sf "https://index.crates.io/or/ig/origin-mcp" | grep -q "\"vers\":\"$VERSION\""; then
-            echo "origin-mcp ${VERSION} already on sparse index, skipping publish"
+          if curl -sf "https://index.crates.io/we/nl/wenlan-mcp" | grep -q "\"vers\":\"$VERSION\""; then
+            echo "wenlan-mcp ${VERSION} already on sparse index, skipping publish"
           else
-            cargo publish -p origin-mcp
+            cargo publish -p wenlan-mcp
           fi
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
