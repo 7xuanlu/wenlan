@@ -8,7 +8,7 @@ const os = require("os");
 const path = require("path");
 
 const REPO = "7xuanlu/origin";
-const TARGET = "aarch64-apple-darwin";
+const ASSET = "wenlan-darwin-arm64.tar.gz";
 const REQUESTED_TAG =
   process.env.WENLAN_RELEASE_TAG ||
   process.env.WENLAN_TAG ||
@@ -67,11 +67,21 @@ async function fetchJson(url) {
 async function download(url, dest) {
   const res = await request(url);
   await new Promise((resolve, reject) => {
-    const file = fs.createWriteStream(dest, { mode: 0o755 });
+    const file = fs.createWriteStream(dest);
     res.pipe(file);
     file.on("finish", () => file.close(resolve));
     file.on("error", reject);
   });
+}
+
+function extractBinaries(archivePath, dir) {
+  const result = childProcess.spawnSync(
+    "tar",
+    ["-xzf", archivePath, "-C", dir, ...BINARIES],
+    { stdio: "inherit" }
+  );
+  if (result.error) throw result.error;
+  if (result.status !== 0) throw new Error(`tar exited with status ${result.status}`);
 }
 
 function run(command, args) {
@@ -106,11 +116,23 @@ async function installBinaries() {
   const dir = binDir();
   fs.mkdirSync(dir, { recursive: true });
 
+  const archivePath = path.join(os.tmpdir(), ASSET);
+  const url = `https://github.com/${REPO}/releases/download/${tag}/${ASSET}`;
+  process.stderr.write(`Downloading Wenlan ${tag}...\n`);
+
+  try {
+    await download(url, archivePath);
+    extractBinaries(archivePath, dir);
+  } finally {
+    try {
+      if (fs.existsSync(archivePath)) fs.unlinkSync(archivePath);
+    } catch (_) {
+      // Best-effort cleanup only.
+    }
+  }
+
   for (const name of BINARIES) {
     const dest = path.join(dir, name);
-    const url = `https://github.com/${REPO}/releases/download/${tag}/${name}-${TARGET}`;
-    process.stderr.write(`Downloading ${name} ${tag}...\n`);
-    await download(url, dest);
     fs.chmodSync(dest, 0o755);
   }
 
