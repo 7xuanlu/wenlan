@@ -52,18 +52,17 @@ mv "${PLUGIN_MANIFEST}.tmp" "$PLUGIN_MANIFEST"
 echo "  Updated $PLUGIN_MANIFEST"
 
 # 4. Plugin's MCP server pin — the wrapper script falls back to
-# `npx -y origin-mcp@^X.Y.Z` so a floating tag can't auto-RCE on every
+# `npx -y wenlan-mcp@^X.Y.Z` so a floating tag can't auto-RCE on every
 # Claude Code session. The pin lives in the runner shell script, not
-# .mcp.json, so dev users can override the binary via ORIGIN_MCP_DEV_BIN.
-# (npm publish identity `origin-mcp` + the runner filename stay frozen until
-# the Phase-5 publish cutover; only the version pin is bumped here.)
-PLUGIN_MCP_RUNNER="plugin/bin/origin-mcp-runner.sh"
+# .mcp.json, so dev users can override the wenlan-mcp binary via
+# WENLAN_MCP_DEV_BIN.
+PLUGIN_MCP_RUNNER="plugin/bin/wenlan-mcp-runner.sh"
 if [[ "$(uname)" == "Darwin" ]]; then
-    sed -i '' -E "s|(origin-mcp@\\^)[0-9]+\\.[0-9]+\\.[0-9]+|\\1${NEW_VERSION}|g" "$PLUGIN_MCP_RUNNER"
+    sed -i '' -E "s|(wenlan-mcp@\\^)[0-9]+\\.[0-9]+\\.[0-9]+|\\1${NEW_VERSION}|g" "$PLUGIN_MCP_RUNNER"
 else
-    sed -i -E "s|(origin-mcp@\\^)[0-9]+\\.[0-9]+\\.[0-9]+|\\1${NEW_VERSION}|g" "$PLUGIN_MCP_RUNNER"
+    sed -i -E "s|(wenlan-mcp@\\^)[0-9]+\\.[0-9]+\\.[0-9]+|\\1${NEW_VERSION}|g" "$PLUGIN_MCP_RUNNER"
 fi
-echo "  Updated $PLUGIN_MCP_RUNNER (origin-mcp pin)"
+echo "  Updated $PLUGIN_MCP_RUNNER (wenlan-mcp pin)"
 
 # 5. /init skill install.sh URL pinned to current tag (not `main`), so the
 # install one-liner is reproducible at the release boundary.
