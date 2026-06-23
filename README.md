@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="./docs/assets/social-preview.png" alt="Wenlan: Where AI work compounds. Decisions, lessons, project context, and wiki pages." width="100%">
+  <img src="./docs/assets/social-preview.png" alt="Wenlan: a living personal knowledge library for the AI-native age." width="100%">
 </p>
 
 [![CI](https://github.com/7xuanlu/wenlan/actions/workflows/ci.yml/badge.svg?branch=main&event=push)](https://github.com/7xuanlu/wenlan/actions/workflows/ci.yml?query=branch%3Amain)
@@ -25,11 +25,11 @@
   <a href="#what-you-get"><img alt="Obsidian" src="https://img.shields.io/badge/Obsidian-Markdown%20pages-7C3AED"></a>
 </p>
 
-**Your next AI session should pick up the context you built, not lose it in chat history.**
+**A living personal knowledge library for the AI-native age, built by your agents and grounded in its sources.**
 
-Wenlan is the single local home for your AI work artifacts: decisions, lessons, gotchas, project context. Captured in flow, distilled into source-backed wiki pages, recalled across chats, projects, and time.
+Wenlan (文瀾) takes its name from an imperial library that held one of China's largest book collections.
 
-The name is 文瀾 (Wénlán), after an imperial library that held one of China's largest book collections.
+It is a living personal knowledge library for the AI-native age. Your AI agents capture what they learn as they work, and Wenlan keeps it current on its own: deduping, linking, and distilling scattered notes into source-cited wiki pages. Unlike a static llm-wiki, it keeps evolving between sessions. Unlike a black-box memory, every page shows where it came from, so you can read, trust, or correct it without signing off on every change.
 
 A brief opens each session, a handoff closes it, so the thread carries forward instead of restarting.
 
@@ -41,9 +41,9 @@ One store, every tool: Claude Code, Cursor, Codex, Claude Desktop, VS Code, and 
 
 ## What makes Wenlan distinct
 
-1. **Compounds, not just storage.** Most memory tools hand back snippets. Wenlan clusters captures into source-backed wiki pages, and those pages feed retrieval alongside the atomic memories they came from.
+1. **Evolves on its own.** Most memory tools just hand back what you put in. Wenlan keeps working between sessions: it dedupes, links, and clusters your captures into source-cited wiki pages that feed retrieval alongside the atomic notes they came from. Unlike a static llm-wiki, the library stays current without you maintaining it.
 2. **One home, locked to none.** Every MCP client queries the same local daemon, so context built in one tool shows up in the next. Obsidian is one optional view you can symlink in, not where your work lives.
-3. **Review before trust.** Low-confidence captures and contradictions surface for review instead of silently entering context. Correct yourself once and Wenlan supersedes the old fact instead of serving both. Pages cite their source memory IDs, and the daemon refuses unsourced pages rather than letting hallucinated summaries in.
+3. **Sourced, so you can trust it.** Every page cites the memories it came from, and the daemon refuses unsourced pages rather than letting hallucinated summaries in. Low-confidence captures and contradictions surface for you to confirm or correct, but the everyday flow never stops for approval. Fix something once and Wenlan supersedes the old fact instead of serving both.
 4. **Real git versioning.** Memory, page, and session writes commit into `~/.wenlan/.git/`, so you can inspect, diff, revert, or branch the Markdown artifacts.
    ```text
    a1b2c3d page: embedding-retrieval refreshed (4 sources)
