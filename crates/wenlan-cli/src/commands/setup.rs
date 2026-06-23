@@ -55,6 +55,28 @@ pub enum KeyProvider {
     Anthropic,
 }
 
+/// Cross-encoder reranker mode, persisted to config and read by the daemon at
+/// startup. Mirrors the core `RerankerMode` (off/lite/full).
+#[derive(Clone, Copy, Debug, ValueEnum)]
+pub enum RerankerModeArg {
+    /// No cross-encoder on any path (default).
+    Off,
+    /// Turbo CE (jina-turbo, ~146MB) on quick + context + explicit deep rerank.
+    Lite,
+    /// Turbo on the light paths; heavy bge-base (~1.1GB) on the deep rerank.
+    Full,
+}
+
+impl RerankerModeArg {
+    fn as_str(self) -> &'static str {
+        match self {
+            RerankerModeArg::Off => "off",
+            RerankerModeArg::Lite => "lite",
+            RerankerModeArg::Full => "full",
+        }
+    }
+}
+
 pub async fn run_setup(args: SetupArgs) -> anyhow::Result<()> {
     if args.basic {
         configure_basic_memory()?;
@@ -119,6 +141,32 @@ pub async fn run_key(command: KeyCommand) -> anyhow::Result<()> {
             provider: KeyProvider::Anthropic,
         } => clear_anthropic_key().await,
     }
+}
+
+/// Persist the cross-encoder reranker mode to config. The daemon reads it at
+/// startup via `reranker_mode_resolved` (the `WENLAN_RERANKER_MODE` env var
+/// still overrides it). Model weights download lazily on first use after restart
+/// — `full`'s heavy bge-base loads in the background so startup never blocks.
+pub async fn run_reranker(mode: RerankerModeArg) -> anyhow::Result<()> {
+    let mode_str = mode.as_str();
+    let mut cfg = config::load_config();
+    cfg.reranker_mode = Some(mode_str.to_string());
+    config::save_config(&cfg)?;
+    println!("Reranker mode set to '{mode_str}'.");
+    match mode {
+        RerankerModeArg::Off => println!("Cross-encoder rerank is disabled."),
+        RerankerModeArg::Lite => {
+            println!(
+                "Turbo cross-encoder (~146MB) on quick + context paths; downloads on first query."
+            );
+        }
+        RerankerModeArg::Full => {
+            println!("Turbo (~146MB) on light paths + heavy bge-base (~1.1GB) on deep rerank.");
+            println!("The deep model downloads in the background after restart.");
+        }
+    }
+    println!("Run `wenlan restart` to apply.");
+    Ok(())
 }
 
 pub async fn run_doctor() -> anyhow::Result<()> {

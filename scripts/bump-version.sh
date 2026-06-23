@@ -69,9 +69,9 @@ echo "  Updated $PLUGIN_MCP_RUNNER (origin-mcp pin)"
 # install one-liner is reproducible at the release boundary.
 INIT_SKILL="plugin/skills/init/SKILL.md"
 if [[ "$(uname)" == "Darwin" ]]; then
-    sed -i '' -E "s|(raw\\.githubusercontent\\.com/7xuanlu/origin/)(main\|v[0-9]+\\.[0-9]+\\.[0-9]+)(/install\\.sh)|\\1v${NEW_VERSION}\\3|g" "$INIT_SKILL"
+    sed -i '' -E "s|(raw\\.githubusercontent\\.com/7xuanlu/wenlan/)(main\|v[0-9]+\\.[0-9]+\\.[0-9]+)(/install\\.sh)|\\1v${NEW_VERSION}\\3|g" "$INIT_SKILL"
 else
-    sed -i -E "s|(raw\\.githubusercontent\\.com/7xuanlu/origin/)(main\|v[0-9]+\\.[0-9]+\\.[0-9]+)(/install\\.sh)|\\1v${NEW_VERSION}\\3|g" "$INIT_SKILL"
+    sed -i -E "s|(raw\\.githubusercontent\\.com/7xuanlu/wenlan/)(main\|v[0-9]+\\.[0-9]+\\.[0-9]+)(/install\\.sh)|\\1v${NEW_VERSION}\\3|g" "$INIT_SKILL"
 fi
 echo "  Updated $INIT_SKILL (install.sh tag pin)"
 

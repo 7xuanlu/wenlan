@@ -563,7 +563,7 @@ Setup choices:
 - Anthropic Key: richer extraction and distill cycles using your API key.
 
 Install:
-  curl -fsSL https://raw.githubusercontent.com/7xuanlu/origin/main/install.sh | bash
+  curl -fsSL https://raw.githubusercontent.com/7xuanlu/wenlan/main/install.sh | bash
   export PATH=\"$HOME/.origin/bin:$PATH\"
   wenlan setup
   wenlan install

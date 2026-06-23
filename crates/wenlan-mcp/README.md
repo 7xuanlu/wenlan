@@ -1,12 +1,12 @@
 # wenlan-mcp
 
-MCP server for [Wenlan](https://github.com/7xuanlu/origin). It lets Claude Code, Cursor, Codex, Claude Desktop, Gemini CLI, and other MCP clients read and write to the local Wenlan daemon through the [Model Context Protocol](https://modelcontextprotocol.io).
+MCP server for [Wenlan](https://github.com/7xuanlu/wenlan). It lets Claude Code, Cursor, Codex, Claude Desktop, Gemini CLI, and other MCP clients read and write to the local Wenlan daemon through the [Model Context Protocol](https://modelcontextprotocol.io).
 
 Wenlan owns storage, search, embeddings, pages, and distill cycles. `wenlan-mcp` is the connector.
 
 ## Install
 
-Most users should install through the root README. After `npx -y @7xuanlu/wenlan setup`, use the product CLI to configure supported clients:
+Most users should install through the root README. After `npx -y @7xuanlu/origin setup`, use the product CLI to configure supported clients:
 
 ```bash
 origin mcp add codex              # or: claude-code, cursor, claude-desktop, vscode, gemini
@@ -22,19 +22,19 @@ If you only need the raw MCP connector config, add this to your MCP client:
   "mcpServers": {
     "origin": {
       "command": "npx",
-      "args": ["-y", "wenlan-mcp"]
+      "args": ["-y", "origin-mcp"]
     }
   }
 }
 ```
 
-The npm wrapper auto-detects the host platform and downloads the matching prebuilt binary from the Wenlan release. Supported: macOS (arm64, x64), Linux (x64, arm64; glibc), Windows (x64). Other targets require building from source via `cargo install wenlan-mcp`.
+The npm wrapper auto-detects the host platform and downloads the matching prebuilt binary from the Wenlan release. Supported: macOS (arm64, x64), Linux (x64, arm64; glibc), Windows (x64). Other targets require building from source via `cargo install origin-mcp`.
 
 Or install a binary directly:
 
 ```bash
-brew install 7xuanlu/tap/wenlan-mcp
-cargo install wenlan-mcp
+brew install 7xuanlu/tap/origin-mcp
+cargo install origin-mcp
 ```
 
 Then use:
@@ -43,16 +43,16 @@ Then use:
 {
   "mcpServers": {
     "origin": {
-      "command": "wenlan-mcp"
+      "command": "origin-mcp"
     }
   }
 }
 ```
 
-`wenlan-mcp` expects the Wenlan daemon at `http://127.0.0.1:7878` by default. Override it with:
+`origin-mcp` expects the Wenlan daemon at `http://127.0.0.1:7878` by default. Override it with:
 
 ```bash
-wenlan-mcp --origin-url http://127.0.0.1:7879
+origin-mcp --origin-url http://127.0.0.1:7879
 ```
 
 ## Tools
@@ -68,7 +68,7 @@ wenlan-mcp --origin-url http://127.0.0.1:7879
 | `forget` | Delete a memory by ID. Destructive. |
 | `doctor` | Diagnose daemon reachability, setup mode, API key state, and on-device model state. |
 
-`doctor` mirrors `wenlan doctor`. It is diagnostic only and is not part of the memory loop.
+`doctor` mirrors `origin doctor`. It is diagnostic only and is not part of the memory loop.
 
 ## Setup Modes
 
@@ -76,8 +76,8 @@ Wenlan works immediately in **local memory** mode: storage, search, recall, and 
 
 Users can opt into more expensive distill cycles:
 
-- **On-device model:** private extraction and distillation after `wenlan model install`.
-- **Anthropic key:** richer extraction and page synthesis after `wenlan key set anthropic`.
+- **On-device model:** private extraction and distillation after `origin model install`.
+- **Anthropic key:** richer extraction and page synthesis after `origin key set anthropic`.
 
 ## Agent Guidance
 
@@ -96,8 +96,8 @@ See [`src/tools.rs`](src/tools.rs) for the full instructions.
 - [useorigin.app](https://useorigin.app) — project home
 - [useorigin.app/learn/mcp-memory-server](https://useorigin.app/learn/mcp-memory-server) — concept article on Wenlan as an MCP memory server
 - [useorigin.app/docs/mcp-clients](https://useorigin.app/docs/mcp-clients) — connect Claude Code, Cursor, Codex, Claude Desktop, Gemini CLI
-- [npm: wenlan-mcp](https://www.npmjs.com/package/wenlan-mcp) — standalone npm package
-- [github.com/7xuanlu/origin](https://github.com/7xuanlu/origin) — source
+- [npm: origin-mcp](https://www.npmjs.com/package/origin-mcp) — standalone npm package
+- [github.com/7xuanlu/wenlan](https://github.com/7xuanlu/wenlan) — source
 
 ## License
 

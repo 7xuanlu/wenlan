@@ -7,19 +7,19 @@ Local daemon for Wenlan. It owns the database, embeddings, search, distill cycle
 Most users install Wenlan through the [Claude Code plugin](../../plugin/.claude-plugin/README.md), which auto-runs the install script the first time `/init` runs. This page is for daemon internals. For terminal setup, use the product CLI:
 
 ```bash
-npx -y @7xuanlu/wenlan setup
+npx -y @7xuanlu/origin setup
 ```
 
-The installer downloads `origin`, `wenlan-server`, and `wenlan-mcp` into `~/.wenlan/bin/`. Cross-platform: macOS (arm64, x64), Linux (x64, arm64; glibc), Windows (x64). The `origin` CLI owns setup and service management; `wenlan-server` is the daemon binary the host's service manager runs (launchd on macOS, systemd-user on Linux, Task Scheduler ONLOGON task on Windows).
+The installer downloads `origin`, `origin-server`, and `origin-mcp` into `~/.origin/bin/`. Cross-platform: macOS (arm64, x64), Linux (x64, arm64; glibc), Windows (x64). The `origin` CLI owns setup and service management; `origin-server` is the daemon binary the host's service manager runs (launchd on macOS, systemd-user on Linux, Task Scheduler ONLOGON task on Windows).
 
 ## Setup modes
 
 ```bash
-wenlan setup                  # interactive (1=local memory, 2=on-device model, 3=Anthropic key)
-wenlan setup --basic          # non-interactive local memory setup used by the plugin's /init
-wenlan model install          # opt into a local Qwen model (llama.cpp + Metal)
-wenlan key set anthropic      # opt into Anthropic-backed extraction (BYOK)
-wenlan doctor                 # diagnose daemon, model, and key state
+origin setup                  # interactive (1=local memory, 2=on-device model, 3=Anthropic key)
+origin setup --basic          # non-interactive local memory setup used by the plugin's /init
+origin model install          # opt into a local Qwen model (llama.cpp + Metal)
+origin key set anthropic      # opt into Anthropic-backed extraction (BYOK)
+origin doctor                 # diagnose daemon, model, and key state
 ```
 
 Local memory works without a local model or API key: store, search, recall, and MCP memory are available immediately. On-device models and Anthropic keys unlock distill cycles: auto entity extraction, page synthesis, recaps, and knowledge-graph rethink.
@@ -33,7 +33,7 @@ All user-facing data lives under `~/.wenlan/`:
 ~/.wenlan/sessions/            session logs by date (md, written by /handoff)
 ~/.wenlan/sessions/_status/    current per-project goals + last-handoff timestamps
 ~/.wenlan/db/                  symlink to the libSQL store
-~/.wenlan/bin/                 installed binaries
+~/.origin/bin/                 installed binaries
 ~/.wenlan/.git/                git repo — skills auto-commit per logical batch
 ```
 
@@ -42,9 +42,9 @@ The libSQL store lives under the platform data directory (`dirs::data_local_dir(
 ## Service Commands
 
 ```bash
-wenlan install      # register with the host service manager (launchd / systemd-user / schtasks)
-wenlan uninstall    # remove from the service manager
-wenlan status       # service + runtime status
+origin install      # register with the host service manager (launchd / systemd-user / schtasks)
+origin uninstall    # remove from the service manager
+origin status       # service + runtime status
 ```
 
 On Windows the install path uses `schtasks.exe` to register a per-user `OriginServer` ONLOGON task and triggers it immediately. wenlan-server stays a plain console app — no Windows Service Control Protocol dispatcher is needed.
@@ -61,7 +61,7 @@ cargo run -p wenlan-server
 Or build a release binary and register it with the host service manager:
 
 ```bash
-cargo build --release -p origin -p wenlan-server
+cargo build --release -p wenlan -p wenlan-server
 ./target/release/wenlan setup --basic
 ./target/release/wenlan install
 ./target/release/wenlan status
@@ -83,7 +83,7 @@ See [CLAUDE.md](../../CLAUDE.md) for the full route and module map.
 - [useorigin.app](https://useorigin.app) — project home
 - [useorigin.app/docs/get-started](https://useorigin.app/docs/get-started) — install + verify the first memory loop
 - [useorigin.app/docs/mcp-clients](https://useorigin.app/docs/mcp-clients) — connect Claude Code, Cursor, Codex, Claude Desktop, Gemini CLI
-- [github.com/7xuanlu/origin](https://github.com/7xuanlu/origin) — source
+- [github.com/7xuanlu/wenlan](https://github.com/7xuanlu/wenlan) — source
 
 ## License
 
