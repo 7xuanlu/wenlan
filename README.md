@@ -27,9 +27,7 @@
 
 **A living personal knowledge library for the AI-native age, built by your agents and grounded in its sources.**
 
-Wenlan (文瀾) takes its name from an imperial library that held one of China's largest book collections.
-
-It is a living personal knowledge library for the AI-native age. Your AI agents capture what they learn as they work, and Wenlan keeps it current on its own: deduping, linking, and distilling scattered notes into source-cited wiki pages. Unlike a static llm-wiki, it keeps evolving between sessions. Unlike a black-box memory, every page shows where it came from, so you can read, trust, or correct it without signing off on every change.
+Wenlan (文瀾) takes its name from an imperial library that held one of China's largest book collections. It is a living personal knowledge library for the AI-native age: your AI agents capture what they learn, and Wenlan keeps it current on its own, distilling scattered notes into source-cited wiki pages. Unlike a static llm-wiki, it keeps evolving between sessions. Unlike a black-box memory, every page shows its sources, so you can read, trust, or correct it.
 
 A brief opens each session, a handoff closes it, so the thread carries forward instead of restarting.
 
