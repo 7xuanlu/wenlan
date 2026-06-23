@@ -487,6 +487,10 @@ jobs:
         with:
           node-version: "24"
           registry-url: "https://registry.npmjs.org"
+      - name: Ensure npm supports OIDC trusted publishing
+        # Trusted publishing (tokenless OIDC) requires npm >= 11.5.1. Node 24's
+        # bundled npm may lag; pin to latest so the OIDC handshake is available.
+        run: npm install -g npm@latest
       - name: Sync npm version from tag
         working-directory: crates/wenlan-mcp/npm
         run: |
@@ -520,8 +524,6 @@ jobs:
           else
             npm publish --provenance --access public
           fi
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
       - name: Publish wenlan
         working-directory: crates/wenlan-cli/npm
         run: |
@@ -531,8 +533,6 @@ jobs:
           else
             npm publish --provenance --access public
           fi
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
   update-homebrew:
     name: Update Homebrew tap
