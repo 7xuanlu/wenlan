@@ -9,10 +9,10 @@ License: Apache-2.0.
 Recommended user setup:
 
 ```bash
-npx -y @7xuanlu/wenlan setup
+npx -y @7xuanlu/origin setup
 ```
 
-The setup package supports macOS (arm64, x64), Linux (x64, arm64), and Windows (x64). It downloads the platform-matching release archive, installs `origin`, `wenlan-server`, and `wenlan-mcp` into `~/.wenlan/bin/`, configures local memory, registers the daemon with the host's native service manager (launchd on macOS, systemd-user on Linux), and verifies status. On Windows, `wenlan install` is not supported in v1 (daemon does not yet speak the Windows Service Control Protocol); run `wenlan-server.exe` manually or via Task Scheduler.
+The setup package supports macOS (arm64, x64), Linux (x64, arm64), and Windows (x64). It downloads the platform-matching release archive, installs `origin`, `origin-server`, and `origin-mcp` into `~/.origin/bin/`, configures local memory, registers the daemon with the host's native service manager (launchd on macOS, systemd-user on Linux), and verifies status. On Windows, `origin install` is not supported in v1 (daemon does not yet speak the Windows Service Control Protocol); run `origin-server.exe` manually or via Task Scheduler.
 
 For local development:
 
@@ -23,79 +23,79 @@ cargo install --path crates/wenlan-cli
 Or build from the workspace:
 
 ```bash
-cargo build -p origin --release
+cargo build -p wenlan --release
 ./target/release/wenlan --help
 ```
 
 ## Configuration
 
-Set `ORIGIN_HOST` to point at a remote daemon:
+Set `WENLAN_HOST` to point at a remote daemon:
 
 ```bash
-export ORIGIN_HOST=http://127.0.0.1:7878  # default
+export WENLAN_HOST=http://127.0.0.1:7878  # default
 ```
 
 ## Subcommands
 
-### `wenlan status`
+### `origin status`
 
 Show daemon, native service (launchd / systemd-user / sc.exe), model, and API key state.
 
 ```bash
-wenlan status
-wenlan status --format json
+origin status
+origin status --format json
 ```
 
-### `wenlan setup`
+### `origin setup`
 
 Configure Wenlan's runtime mode.
 
 ```bash
-wenlan setup                  # interactive
-wenlan setup --basic          # local memory, no local model or API key
-wenlan setup --model qwen3-4b # download/select a local model
-wenlan setup --anthropic-api-key-env ANTHROPIC_API_KEY
+origin setup                  # interactive
+origin setup --basic          # local memory, no local model or API key
+origin setup --model qwen3-4b # download/select a local model
+origin setup --anthropic-api-key-env ANTHROPIC_API_KEY
 ```
 
-### `wenlan install` / `wenlan uninstall`
+### `origin install` / `origin uninstall`
 
-Register or remove the daemon with the host's native service manager. The service runs the sibling `wenlan-server` binary next to `origin`.
+Register or remove the daemon with the host's native service manager. The service runs the sibling `origin-server` binary next to `origin`.
 
 - **macOS**: launchd user agent at `~/Library/LaunchAgents/com.wenlan.server.plist`.
 - **Linux**: systemd user unit at `~/.config/systemd/user/wenlan-server.service`. `loginctl enable-linger` if you want it alive after logout.
-- **Windows**: not yet supported in v1. The console-app daemon does not implement the Windows Service Control Protocol; sc.exe start times out. Run `wenlan-server.exe` manually or register a Task Scheduler logon task. Tracked follow-up.
+- **Windows**: not yet supported in v1. The console-app daemon does not implement the Windows Service Control Protocol; sc.exe start times out. Run `origin-server.exe` manually or register a Task Scheduler logon task. Tracked follow-up.
 
 ```bash
-wenlan install
-wenlan uninstall
+origin install
+origin uninstall
 ```
 
-### `wenlan doctor`
+### `origin doctor`
 
 Diagnose daemon reachability, native service state (launchd / systemd-user / sc.exe), model setup, and API key setup.
 
 ```bash
-wenlan doctor
+origin doctor
 ```
 
-### `wenlan model`
+### `origin model`
 
 Manage opt-in local models.
 
 ```bash
-wenlan model list
-wenlan model status
-wenlan model install qwen3-4b
+origin model list
+origin model status
+origin model install qwen3-4b
 ```
 
-### `wenlan key`
+### `origin key`
 
 Manage provider API keys.
 
 ```bash
-wenlan key status
-wenlan key set anthropic --env ANTHROPIC_API_KEY
-wenlan key clear anthropic
+origin key status
+origin key set anthropic --env ANTHROPIC_API_KEY
+origin key clear anthropic
 ```
 
 ### `origin mcp add <client>`
@@ -110,7 +110,7 @@ origin mcp add cursor --dry-run
 
 Supported clients: `claude-code`, `codex`, `gemini`, `cursor`, `claude-desktop`, `vscode`.
 
-When `wenlan-mcp` is installed next to the `origin` CLI, the generated config points at that binary. Otherwise it falls back to `npx -y wenlan-mcp`.
+When `origin-mcp` is installed next to the `origin` CLI, the generated config points at that binary. Otherwise it falls back to `npx -y origin-mcp`.
 
 Use `--dry-run` to preview JSON config edits before writing them:
 
@@ -118,65 +118,65 @@ Use `--dry-run` to preview JSON config edits before writing them:
 origin mcp add cursor --dry-run
 ```
 
-### `wenlan search <query>`
+### `origin search <query>`
 
 Search memories (vector + FTS hybrid).
 
 ```bash
-wenlan search "embedding model"
-wenlan search "rust" --limit 5
-wenlan search "rust" --format json | jq '.results[].score'
+origin search "embedding model"
+origin search "rust" --limit 5
+origin search "rust" --format json | jq '.results[].score'
 ```
 
-### `wenlan recall <query>`
+### `origin recall <query>`
 
 Get the working memory bundle for a query (pages + decisions + relevant memories + graph context).
 
 ```bash
-wenlan recall "what we agreed on for the API"
-wenlan recall "memory layer" --format json
+origin recall "what we agreed on for the API"
+origin recall "memory layer" --format json
 ```
 
-### `wenlan store [text] [--file <path>] [--type <type>]`
+### `origin store [text] [--file <path>] [--type <type>]`
 
 Store a memory. Provide content positionally, via `--file`, or pipe via stdin.
 
 ```bash
-wenlan store "remember this insight" --type fact
-wenlan store --file notes.md --type page
-echo "stdin pipe content" | wenlan store --type quick_thought
+origin store "remember this insight" --type fact
+origin store --file notes.md --type page
+echo "stdin pipe content" | origin store --type quick_thought
 ```
 
-### `wenlan list [--limit N] [--type X]`
+### `origin list [--limit N] [--type X]`
 
 List recent memories.
 
 ```bash
-wenlan list
-wenlan list --limit 5
-wenlan list --type fact --format json
+origin list
+origin list --limit 5
+origin list --type fact --format json
 ```
 
-### `wenlan agents list/show/edit`
+### `origin agents list/show/edit`
 
 Manage registered agents.
 
 ```bash
-wenlan agents list
-wenlan agents show claude-code
-wenlan agents edit claude-code --trust trusted --enabled true
+origin agents list
+origin agents show claude-code
+origin agents edit claude-code --trust trusted --enabled true
 ```
 
-### `wenlan space <list|add|default|move|show>`
+### `origin space <list|add|default|move|show>`
 
 Manage memory spaces (buckets).
 
 ```bash
-wenlan space list
-wenlan space add ideas --default
-wenlan space show career
-wenlan space default work
-wenlan space move scratch career
+origin space list
+origin space add ideas --default
+origin space show career
+origin space default work
+origin space move scratch career
 ```
 
 ## Output formats

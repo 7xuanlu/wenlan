@@ -33,7 +33,7 @@ The runner picks the MCP server binary in three paths, in order:
 
 1. **Filesystem override** — if `plugin/bin/wenlan-mcp.local` exists (typically a symlink to a locally-built binary, gitignored), the runner exec's it. Most reliable: survives plugin reloads that don't re-read env.
 2. **Env var override** — `ORIGIN_MCP_DEV_BIN=/abs/path/to/wenlan-mcp`. Convenient if you already export it; requires Claude Code to inherit the var at startup.
-3. **Default** — `npx -y wenlan-mcp@^X.Y.Z`. What end users get after installing the plugin.
+3. **Default** — `npx -y origin-mcp@^X.Y.Z`. What end users get after installing the plugin.
 
 To set up the filesystem override during dev:
 
@@ -69,7 +69,7 @@ A `SessionStart` hook (`hooks/check-daemon.sh`) probes the local daemon at `127.
 ~/.wenlan/sessions/            session logs by date (md)
 ~/.wenlan/sessions/_status/    current per-project goals + last-handoff timestamp
 ~/.wenlan/db/                  symlink to the libSQL store
-~/.wenlan/bin/                 installed binaries
+~/.origin/bin/                 installed binaries
 ```
 
 Browse with `open ~/.wenlan/` (Finder), `code ~/.wenlan/` (VS Code), or symlink `~/.wenlan/pages/` into an Obsidian vault for the graph view. No Tauri app required.
