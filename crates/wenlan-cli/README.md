@@ -192,7 +192,7 @@ wenlan space move scratch career
 - [useorigin.app/docs/get-started](https://useorigin.app/docs/get-started) — install + verify the first memory loop
 - [useorigin.app/docs/commands](https://useorigin.app/docs/commands) — Claude Code commands and MCP tools reference
 - [useorigin.app/docs/troubleshooting](https://useorigin.app/docs/troubleshooting) — common failure modes
-- [github.com/7xuanlu/origin](https://github.com/7xuanlu/origin) — source
+- [github.com/7xuanlu/wenlan](https://github.com/7xuanlu/wenlan) — source
 
 ## License
 

@@ -31,7 +31,7 @@ if [ -n "$DAEMON_VER" ] && [ -n "$EXPECTED_VER" ] && [ "$DAEMON_VER" != "$EXPECT
   cat <<MSG
 [origin] daemon v${DAEMON_VER}, plugin expects v${EXPECTED_VER}.
   If you already upgraded, the daemon may not have restarted. Run: origin restart
-  Otherwise upgrade: curl -fsSL https://raw.githubusercontent.com/7xuanlu/origin/v${EXPECTED_VER}/install.sh | bash
+  Otherwise upgrade: curl -fsSL https://raw.githubusercontent.com/7xuanlu/wenlan/v${EXPECTED_VER}/install.sh | bash
 MSG
 fi
 

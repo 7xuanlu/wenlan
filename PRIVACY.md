@@ -36,6 +36,6 @@ None. Wenlan collects no usage analytics, crash reports, or diagnostics.
 
 ## Contact
 
-Questions or concerns: open an issue at https://github.com/7xuanlu/origin/issues.
+Questions or concerns: open an issue at https://github.com/7xuanlu/wenlan/issues.
 
 Last updated: 2026-05-10.

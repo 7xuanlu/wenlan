@@ -2,7 +2,7 @@
 set -euo pipefail
 
 # Origin installer — downloads Origin runtime binaries to ~/.origin/bin/
-# Usage:      curl -fsSL https://raw.githubusercontent.com/7xuanlu/origin/main/install.sh | bash
+# Usage:      curl -fsSL https://raw.githubusercontent.com/7xuanlu/wenlan/main/install.sh | bash
 # Prerelease: curl -fsSL ... | ORIGIN_RELEASE_TAG=v0.2.0-alpha.1 bash
 #
 # Supported platforms: macOS (arm64, x86_64), Linux (aarch64, x86_64).
