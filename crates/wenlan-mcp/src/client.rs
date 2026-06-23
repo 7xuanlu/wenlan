@@ -223,11 +223,11 @@ impl WenlanClient {
         match compare(mcp_version, daemon_version) {
             VersionStatus::Compatible => None,
             VersionStatus::McpOutdated { mcp, daemon } => Some(format!(
-                "Your origin-mcp v{mcp} is older than the daemon v{daemon}. \
-                 Run `brew upgrade origin-mcp` (or `npm update -g origin-mcp`)."
+                "Your wenlan-mcp v{mcp} is older than the daemon v{daemon}. \
+                 Run `brew upgrade wenlan-mcp` (or `npm update -g wenlan-mcp`)."
             )),
             VersionStatus::DaemonOutdated { mcp, daemon } => Some(format!(
-                "The Wenlan daemon is running v{daemon} but origin-mcp v{mcp} is installed. \
+                "The Wenlan daemon is running v{daemon} but wenlan-mcp v{mcp} is installed. \
                  The daemon was not restarted after an upgrade. Run `wenlan restart` to load it."
             )),
         }
