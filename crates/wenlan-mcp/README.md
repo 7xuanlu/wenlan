@@ -6,11 +6,11 @@ Wenlan owns storage, search, embeddings, pages, and distill cycles. `wenlan-mcp`
 
 ## Install
 
-Most users should install through the root README. After `npx -y @7xuanlu/origin setup`, use the product CLI to configure supported clients:
+Most users should install through the root README. After `npx -y wenlan setup`, use the product CLI to configure supported clients:
 
 ```bash
-origin mcp add codex              # or: claude-code, cursor, claude-desktop, vscode, gemini
-origin mcp add cursor --dry-run   # preview before editing JSON config
+wenlan mcp add codex              # or: claude-code, cursor, claude-desktop, vscode, gemini
+wenlan mcp add cursor --dry-run   # preview before editing JSON config
 ```
 
 MCP-only setup gives agents tools for capture, recall, context, doctor, and page distillation. It does not install Claude Code slash skills like `/brief`, `/handoff`, `/distill`, or `/init`; use the Wenlan plugin for that workflow.

@@ -7,10 +7,10 @@ Local daemon for Wenlan. It owns the database, embeddings, search, distill cycle
 Most users install Wenlan through the [Claude Code plugin](../../plugin/.claude-plugin/README.md), which auto-runs the install script the first time `/init` runs. This page is for daemon internals. For terminal setup, use the product CLI:
 
 ```bash
-npx -y @7xuanlu/origin setup
+npx -y wenlan setup
 ```
 
-The installer downloads `origin`, `origin-server`, and `origin-mcp` into `~/.origin/bin/`. Cross-platform: macOS (arm64, x64), Linux (x64, arm64; glibc), Windows (x64). The `origin` CLI owns setup and service management; `origin-server` is the daemon binary the host's service manager runs (launchd on macOS, systemd-user on Linux, Task Scheduler ONLOGON task on Windows).
+The installer downloads `wenlan`, `wenlan-server`, and `wenlan-mcp` into `~/.wenlan/bin/`. Cross-platform: macOS (arm64, x64), Linux (x64, arm64; glibc), Windows (x64). The `wenlan` CLI owns setup and service management; `wenlan-server` is the daemon binary the host's service manager runs (launchd on macOS, systemd-user on Linux, Task Scheduler ONLOGON task on Windows).
 
 ## Setup modes
 
