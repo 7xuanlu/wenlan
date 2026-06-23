@@ -25,11 +25,11 @@
   <a href="#what-you-get"><img alt="Obsidian" src="https://img.shields.io/badge/Obsidian-Markdown%20pages-7C3AED"></a>
 </p>
 
-**A living personal knowledge library for the AI-native age, built by your agents and grounded in its sources.**
+**Wenlan (文瀾) is a living personal knowledge library for the AI-native age, built by your agents and grounded in its sources.**
 
-Wenlan (文瀾) takes its name from an imperial library that held one of China's largest book collections. Your AI agents capture what they learn as they work, and Wenlan keeps it current on its own, distilling scattered notes into source-cited wiki pages.
+It takes its name from an imperial library that held one of China's largest book collections. Your agents capture what they learn as they work, and you add the pages and sources you already trust, so the library grows from the bottom up and the top down. Wenlan keeps it current on its own, distilling both into source-cited wiki pages.
 
-A brief opens each session, a handoff closes it, so the thread carries forward instead of restarting.
+Each session opens with a brief and closes with a handoff, so the thread carries forward instead of restarting.
 
 Unlike a static llm-wiki, it keeps evolving between sessions. Unlike a black-box memory, every page shows its sources, so you can read, trust, or correct it.
 
