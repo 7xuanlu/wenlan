@@ -4,7 +4,7 @@
 const { spawn } = require("child_process");
 const { join } = require("path");
 
-const binaryName = process.platform === "win32" ? "origin-mcp.exe" : "origin-mcp";
+const binaryName = process.platform === "win32" ? "wenlan-mcp.exe" : "wenlan-mcp";
 const bin = join(__dirname, "bin", binaryName);
 const child = spawn(bin, process.argv.slice(2), { stdio: "inherit" });
 
