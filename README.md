@@ -29,6 +29,8 @@
 
 Wenlan is the single local home for your AI work artifacts: decisions, lessons, gotchas, project context. Captured in flow, distilled into source-backed wiki pages, recalled across chats, projects, and time.
 
+The name is 文瀾 (Wénlán), after an imperial library that held one of China's largest book collections.
+
 A brief opens each session, a handoff closes it, so the thread carries forward instead of restarting.
 
 One store, every tool: Claude Code, Cursor, Codex, Claude Desktop, VS Code, and Gemini CLI query the same local daemon. Read the Markdown under `~/.wenlan/`, or symlink it into Obsidian for a graph view. Spaces keep work, personal, and client projects from bleeding together.
