@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.9.0](https://github.com/7xuanlu/wenlan/compare/v0.8.6...v0.9.0) (2026-06-23)
+
+
+### Features
+
+* Phase-5 publish cutover — flip distribution identities to wenlan ([#288](https://github.com/7xuanlu/wenlan/issues/288)) ([3474f0c](https://github.com/7xuanlu/wenlan/commit/3474f0ccb9a648d2c18a86f3c7daefa2d7a64b04))
+* rebrand to Wenlan (文瀾) ([#284](https://github.com/7xuanlu/wenlan/issues/284)) ([19441c8](https://github.com/7xuanlu/wenlan/commit/19441c8eadf047bb1dcd5c9d7821a59ca984b319))
+
+
+### Bug Fixes
+
+* config-backed WENLAN_RERANKER_MODE via `wenlan reranker <off|lite|full>` ([#285](https://github.com/7xuanlu/wenlan/issues/285)) ([33f89af](https://github.com/7xuanlu/wenlan/commit/33f89afd080540c0570b3d50b5699958d82ef8a5))
+
 ## [0.8.6](https://github.com/7xuanlu/origin/compare/v0.8.5...v0.8.6) (2026-06-22)
 
 
