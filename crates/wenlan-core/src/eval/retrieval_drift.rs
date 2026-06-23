@@ -12,11 +12,11 @@ use std::path::Path;
 #[allow(dead_code)]
 const TOP_K: usize = 10;
 #[allow(dead_code)]
-const RBO_P: f64 = 0.9; // persistence — weights the top of the ranking; tuned later
+const RBO_P: f64 = 0.9; // persistence: top-2 swap ~0.85, deep swap ~0.99 — top weighted ~10× depth-10
 #[allow(dead_code)]
-const CURRENT_RBO_THRESHOLD: f64 = 0.95; // per-query floor vs current golden; tuned later
+const CURRENT_RBO_THRESHOLD: f64 = 0.95; // 0.95: above a benign deep swap (~0.99), below a top-2 swap (~0.85)
 #[allow(dead_code)]
-const ANCHOR_RBO_THRESHOLD: f64 = 0.85; // looser cumulative-drift floor vs old anchor; tuned later
+const ANCHOR_RBO_THRESHOLD: f64 = 0.85; // 0.85: looser floor — full-reverse lands ~0.25, well below this
 
 /// Per-query frozen ranking snapshot.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -51,6 +51,65 @@ pub fn load_golden(path: &Path) -> std::io::Result<RankingGolden> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn ids(n: usize) -> Vec<String> {
+        (0..n).map(|i| format!("m{i}")).collect()
+    }
+
+    #[test]
+    fn injected_reverse_top2_is_red() {
+        let g = ids(10);
+        let mut bad = g.clone();
+        bad.swap(0, 1);
+        let s = crate::eval::rank_overlap::rbo(&g, &bad, super::RBO_P);
+        assert!(
+            s < super::CURRENT_RBO_THRESHOLD,
+            "reverse-top-2 must trip current floor (got {s:.4})"
+        );
+    }
+    #[test]
+    fn injected_drop_best_is_red() {
+        let g = ids(10);
+        let mut bad = g[1..].to_vec();
+        bad.push("mX".to_string());
+        let s = crate::eval::rank_overlap::rbo(&g, &bad, super::RBO_P);
+        assert!(
+            s < super::CURRENT_RBO_THRESHOLD,
+            "drop-best must trip current floor (got {s:.4})"
+        );
+    }
+    #[test]
+    fn injected_full_reverse_is_red_even_at_anchor() {
+        let g = ids(10);
+        let mut bad = g.clone();
+        bad.reverse();
+        let s = crate::eval::rank_overlap::rbo(&g, &bad, super::RBO_P);
+        assert!(
+            s < super::ANCHOR_RBO_THRESHOLD,
+            "full reverse must trip even the looser anchor floor (got {s:.4})"
+        );
+    }
+    #[test]
+    fn identical_is_green() {
+        let g = ids(10);
+        let s = crate::eval::rank_overlap::rbo(&g, &g, super::RBO_P);
+        assert!(
+            s >= super::CURRENT_RBO_THRESHOLD,
+            "identical must pass (got {s:.4})"
+        );
+    }
+    #[test]
+    fn benign_deep_neartie_swap_is_green() {
+        let g = ids(10);
+        let mut benign = g.clone();
+        benign.swap(7, 8);
+        let s = crate::eval::rank_overlap::rbo(&g, &benign, super::RBO_P);
+        assert!(
+            s >= super::CURRENT_RBO_THRESHOLD,
+            "deep near-tie swap must stay green (got {s:.4})"
+        );
+    }
+
     #[test]
     fn golden_json_roundtrips() {
         let g = RankingGolden {
