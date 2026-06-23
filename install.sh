@@ -8,7 +8,7 @@ set -euo pipefail
 # Supported platforms: macOS (arm64), Linux (aarch64, x86_64).
 # Windows users: download wenlan-windows-x64.zip from the GitHub release page.
 
-REPO="7xuanlu/origin"
+REPO="7xuanlu/wenlan"
 REQUESTED_TAG="${WENLAN_RELEASE_TAG:-${WENLAN_TAG:-${ORIGIN_RELEASE_TAG:-${ORIGIN_TAG:-}}}}"
 
 if [[ -n "${REQUESTED_TAG}" ]]; then
