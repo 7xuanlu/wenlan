@@ -62,6 +62,12 @@ mod tests {
         let mut bad = g.clone();
         bad.swap(0, 1);
         let s = crate::eval::rank_overlap::rbo(&g, &bad, super::RBO_P);
+        // Concrete expected value: top-2 swap with p=0.9, n=10 → ~0.8465.
+        // This assertion fails if rbo is wrong, independent of the threshold constants.
+        assert!(
+            (s - 0.846466_f64).abs() < 1e-4,
+            "top-2 swap RBO must be ~0.8465 (got {s:.6})"
+        );
         assert!(
             s < super::CURRENT_RBO_THRESHOLD,
             "reverse-top-2 must trip current floor (got {s:.4})"
@@ -73,6 +79,12 @@ mod tests {
         let mut bad = g[1..].to_vec();
         bad.push("mX".to_string());
         let s = crate::eval::rank_overlap::rbo(&g, &bad, super::RBO_P);
+        // Concrete expected value: drop-best with p=0.9, n=10 → ~0.6386.
+        // This assertion fails if rbo is wrong, independent of the threshold constants.
+        assert!(
+            (s - 0.638556_f64).abs() < 1e-4,
+            "drop-best RBO must be ~0.6386 (got {s:.6})"
+        );
         assert!(
             s < super::CURRENT_RBO_THRESHOLD,
             "drop-best must trip current floor (got {s:.4})"
@@ -84,6 +96,12 @@ mod tests {
         let mut bad = g.clone();
         bad.reverse();
         let s = crate::eval::rank_overlap::rbo(&g, &bad, super::RBO_P);
+        // Concrete expected value: full reverse with p=0.9, n=10 → ~0.2502.
+        // This assertion fails if rbo is wrong, independent of the threshold constants.
+        assert!(
+            (s - 0.250152_f64).abs() < 1e-4,
+            "full-reverse RBO must be ~0.2502 (got {s:.6})"
+        );
         assert!(
             s < super::ANCHOR_RBO_THRESHOLD,
             "full reverse must trip even the looser anchor floor (got {s:.4})"
@@ -93,6 +111,12 @@ mod tests {
     fn identical_is_green() {
         let g = ids(10);
         let s = crate::eval::rank_overlap::rbo(&g, &g, super::RBO_P);
+        // Concrete expected value: identical lists → exactly 1.0.
+        // This assertion fails if rbo is wrong, independent of the threshold constants.
+        assert!(
+            (s - 1.0_f64).abs() < 1e-9,
+            "identical RBO must be exactly 1.0 (got {s:.9})"
+        );
         assert!(
             s >= super::CURRENT_RBO_THRESHOLD,
             "identical must pass (got {s:.4})"
@@ -104,6 +128,12 @@ mod tests {
         let mut benign = g.clone();
         benign.swap(7, 8);
         let s = crate::eval::rank_overlap::rbo(&g, &benign, super::RBO_P);
+        // Concrete expected value: swap positions 7/8 with p=0.9, n=10 → ~0.9908.
+        // This assertion fails if rbo is wrong, independent of the threshold constants.
+        assert!(
+            (s - 0.990821_f64).abs() < 1e-4,
+            "deep near-tie swap RBO must be ~0.9908 (got {s:.6})"
+        );
         assert!(
             s >= super::CURRENT_RBO_THRESHOLD,
             "deep near-tie swap must stay green (got {s:.4})"
