@@ -1,23 +1,23 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Origin installer — downloads Origin runtime binaries to ~/.origin/bin/
+# Wenlan installer — downloads Wenlan runtime binaries to ~/.wenlan/bin/
 # Usage:      curl -fsSL https://raw.githubusercontent.com/7xuanlu/wenlan/main/install.sh | bash
-# Prerelease: curl -fsSL ... | ORIGIN_RELEASE_TAG=v0.2.0-alpha.1 bash
+# Prerelease: curl -fsSL ... | WENLAN_RELEASE_TAG=v0.2.0-alpha.1 bash
 #
-# Supported platforms: macOS (arm64, x86_64), Linux (aarch64, x86_64).
-# Windows users: download origin-windows-x64.zip from the GitHub release page.
+# Supported platforms: macOS (arm64), Linux (aarch64, x86_64).
+# Windows users: download wenlan-windows-x64.zip from the GitHub release page.
 
 REPO="7xuanlu/origin"
-REQUESTED_TAG="${ORIGIN_RELEASE_TAG:-${ORIGIN_TAG:-}}"
+REQUESTED_TAG="${WENLAN_RELEASE_TAG:-${WENLAN_TAG:-${ORIGIN_RELEASE_TAG:-${ORIGIN_TAG:-}}}}"
 
 if [[ -n "${REQUESTED_TAG}" ]]; then
   SAFE_TAG="$(printf '%s' "${REQUESTED_TAG}" | LC_ALL=C tr -c 'A-Za-z0-9._-' '_')"
-  BIN_DIR="${HOME}/.origin/releases/${SAFE_TAG}"
+  BIN_DIR="${HOME}/.wenlan/releases/${SAFE_TAG}"
   API_URL="https://api.github.com/repos/${REPO}/releases/tags/${REQUESTED_TAG}"
   RELEASE_PAGE="https://github.com/${REPO}/releases/tag/${REQUESTED_TAG}"
 else
-  BIN_DIR="${HOME}/.origin/bin"
+  BIN_DIR="${HOME}/.wenlan/bin"
   API_URL="https://api.github.com/repos/${REPO}/releases/latest"
   RELEASE_PAGE="https://github.com/${REPO}/releases"
 fi
@@ -49,15 +49,14 @@ OS="$(uname -s)"
 ARCH="$(uname -m)"
 
 case "${OS}-${ARCH}" in
-  Darwin-arm64)         ASSET="origin-darwin-arm64.tar.gz" ;;
-  Darwin-x86_64)        ASSET="origin-darwin-x64.tar.gz" ;;
+  Darwin-arm64)         ASSET="wenlan-darwin-arm64.tar.gz" ;;
   Linux-aarch64|Linux-arm64)
-                        ASSET="origin-linux-arm64.tar.gz" ;;
-  Linux-x86_64)         ASSET="origin-linux-x64.tar.gz" ;;
+                        ASSET="wenlan-linux-arm64.tar.gz" ;;
+  Linux-x86_64)         ASSET="wenlan-linux-x64.tar.gz" ;;
   *)
     die "Unsupported platform: ${OS}-${ARCH}
-Supported: Darwin-arm64, Darwin-x86_64, Linux-aarch64, Linux-x86_64.
-For Windows, download origin-windows-x64.zip from the GitHub release page:
+Supported: Darwin-arm64, Linux-aarch64, Linux-x86_64.
+For Windows, download wenlan-windows-x64.zip from the GitHub release page:
   ${RELEASE_PAGE}"
     ;;
 esac
@@ -104,7 +103,7 @@ ok "Extracted"
 
 # ── Install binaries ─────────────────────────────────────────────────────────
 
-for bin in origin origin-server origin-mcp; do
+for bin in wenlan wenlan-server wenlan-mcp; do
   if [[ ! -f "${TMP_DIR}/${bin}" ]]; then
     die "Archive ${ASSET} missing expected binary: ${bin}"
   fi
@@ -113,26 +112,26 @@ done
 
 # Clear macOS quarantine attribute (unsigned binaries downloaded from the internet)
 if [[ "${OS}" == "Darwin" ]]; then
-  xattr -cr "${BIN_DIR}/origin"        2>/dev/null || true
-  xattr -cr "${BIN_DIR}/origin-server" 2>/dev/null || true
-  xattr -cr "${BIN_DIR}/origin-mcp"    2>/dev/null || true
+  xattr -cr "${BIN_DIR}/wenlan"        2>/dev/null || true
+  xattr -cr "${BIN_DIR}/wenlan-server" 2>/dev/null || true
+  xattr -cr "${BIN_DIR}/wenlan-mcp"    2>/dev/null || true
 fi
 
-ok "Installed origin, origin-server, origin-mcp to ${BIN_DIR}"
+ok "Installed wenlan, wenlan-server, wenlan-mcp to ${BIN_DIR}"
 
 # ── PATH setup ────────────────────────────────────────────────────────────────
 
 add_to_path() {
   local rc_file="$1"
-  local line='export PATH="${HOME}/.origin/bin:${PATH}"'
+  local line='export PATH="${HOME}/.wenlan/bin:${PATH}"'
 
-  if [[ -f "${rc_file}" ]] && grep -qF '.origin/bin' "${rc_file}"; then
-    ok "${rc_file} already has ~/.origin/bin in PATH — skipping"
+  if [[ -f "${rc_file}" ]] && grep -qF '.wenlan/bin' "${rc_file}"; then
+    ok "${rc_file} already has ~/.wenlan/bin in PATH — skipping"
     return
   fi
 
-  printf '\n# Added by Origin installer\n%s\n' "${line}" >> "${rc_file}"
-  ok "Added ~/.origin/bin to PATH in ${rc_file}"
+  printf '\n# Added by Wenlan installer\n%s\n' "${line}" >> "${rc_file}"
+  ok "Added ~/.wenlan/bin to PATH in ${rc_file}"
 }
 
 # Detect current shell and preferred rc file
@@ -157,14 +156,14 @@ export PATH="${BIN_DIR}:${PATH}"
 
 if [[ -n "${REQUESTED_TAG}" ]]; then
   EXACT_RUNTIME_PORT="$(derive_isolated_port "${REQUESTED_TAG}")"
-  EXACT_RUNTIME_DATA_DIR="${HOME}/Library/Application Support/origin/releases/${SAFE_TAG}"
+  EXACT_RUNTIME_DATA_DIR="${HOME}/Library/Application Support/wenlan/releases/${SAFE_TAG}"
 fi
 
 # ── Next steps ────────────────────────────────────────────────────────────────
 
 printf '\n'
 printf '\033[1;32m━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\033[0m\n'
-printf '\033[1;32m  Origin installed successfully!\033[0m\n'
+printf '\033[1;32m  Wenlan installed successfully!\033[0m\n'
 printf '\033[1;32m━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\033[0m\n'
 printf '\n'
 printf 'Next steps:\n\n'
@@ -173,24 +172,24 @@ if [[ -z "${REQUESTED_TAG}" ]]; then
   printf '\n'
   printf '       source %s\n' "${RC_FILE}"
   printf '\n'
-  printf '  2. Set up Origin:\n'
+  printf '  2. Set up Wenlan:\n'
   printf '\n'
-  printf '       origin setup --basic\n'
+  printf '       wenlan setup --basic\n'
   printf '\n'
-  printf '  3. Register Origin as a background service (launchd):\n'
+  printf '  3. Register Wenlan as a background service (launchd):\n'
   printf '\n'
-  printf '       origin install\n'
+  printf '       wenlan install\n'
   printf '\n'
   printf '  4. Verify the daemon and memory setup:\n'
   printf '\n'
-  printf '       origin status\n'
+  printf '       wenlan status\n'
   printf '\n'
   printf '  5. Add the MCP server to Claude Desktop or Cursor:\n'
   printf '\n'
   printf '       {\n'
   printf '         "mcpServers": {\n'
-  printf '           "origin": {\n'
-  printf '             "command": "%s/origin-mcp"\n' "${BIN_DIR}"
+  printf '           "wenlan": {\n'
+  printf '             "command": "%s/wenlan-mcp"\n' "${BIN_DIR}"
   printf '           }\n'
   printf '         }\n'
   printf '       }\n'
@@ -204,14 +203,14 @@ else
   printf '\n'
   printf '  2. Start this exact tagged daemon in an isolated runtime:\n'
   printf '\n'
-  printf '       origin-server --port %s --data-dir "%s"\n' "${EXACT_RUNTIME_PORT}" "${EXACT_RUNTIME_DATA_DIR}"
+  printf '       wenlan-server --port %s --data-dir "%s"\n' "${EXACT_RUNTIME_PORT}" "${EXACT_RUNTIME_DATA_DIR}"
   printf '\n'
   printf '  3. Add this exact-release MCP server to Claude Desktop or Cursor:\n'
   printf '\n'
   printf '       {\n'
   printf '         "mcpServers": {\n'
-  printf '           "origin-exact": {\n'
-  printf '             "command": "%s/origin-mcp",\n' "${BIN_DIR}"
+  printf '           "wenlan-exact": {\n'
+  printf '             "command": "%s/wenlan-mcp",\n' "${BIN_DIR}"
   printf '             "args": ["--origin-url", "http://127.0.0.1:%s"]\n' "${EXACT_RUNTIME_PORT}"
   printf '           }\n'
   printf '         }\n'
@@ -219,14 +218,14 @@ else
   printf '\n'
   printf '     Data dir: %s\n' "${EXACT_RUNTIME_DATA_DIR}"
   printf '\n'
-  printf '  4. Do not run origin install for exact tagged installs.\n'
+  printf '  4. Do not run wenlan install for exact tagged installs.\n'
   printf '\n'
-  printf '     That replaces the stable com.origin.server LaunchAgent.\n'
+  printf '     That replaces the stable com.wenlan.server LaunchAgent.\n'
   printf '\n'
 fi
-printf '\033[1;33mNote:\033[0m Origin can store and retrieve memories without a local model or API key.\n'
-printf '      Distill cycles are opt-in with `origin model install`.\n'
-printf '      Anthropic can be configured with `origin key set anthropic`.\n'
+printf '\033[1;33mNote:\033[0m Wenlan can store and retrieve memories without a local model or API key.\n'
+printf '      Distill cycles are opt-in with `wenlan model install`.\n'
+printf '      Anthropic can be configured with `wenlan key set anthropic`.\n'
 if [[ -n "${REQUESTED_TAG}" ]]; then
   printf '      Manual release page for this install: %s\n' "${RELEASE_PAGE}"
 fi
