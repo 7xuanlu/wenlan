@@ -27,6 +27,7 @@ pub mod pipeline;
 pub mod rank_overlap;
 pub mod report;
 pub mod retrieval;
+pub mod retrieval_drift;
 pub mod runner;
 pub mod seed_contract;
 pub mod signals;
