@@ -352,6 +352,17 @@ After the migration guard passes, execution falls through into the shared Phase-
 
 Trust calibration: a `*` suffix (`SIGNAL*`/`WEAK*`) means the rows carried no touch flag, so attribution was vacuous — `graph_stream`, `rerank_skip_pref`, `rerank`/`rerank_model_*`, and `rerank_graph_stack` arms now emit `channel_touched` probes (condition 3 is real for those); page/episode/fact/global_prelude intentionally carry no probe yet — their `*` verdicts are honest, not a bug, and stay until an internals probe is wired. Floors are bench-keyed, not path-keyed: don't co-locate a CE-path A/A with base-path feature files (noise characteristics differ; the CE-path A/A measured NON-deterministic — a full-ndcg flip between identical OFF arms at smoke n — which the analyzer surfaces as a `WARNING` when a floor source has `n_touched > 0`). `paired_ab_emit` itself emits no `_aa` file; co-locate an A/A from the matching path/bench or every verdict reads `NO-FLOOR`.
 
+## retrieval drift oracle (differential / equivalence)
+
+`eval::retrieval_drift` is a deterministic DRIFT detector for retrieval ranking — the first concrete instance of the loop-engineering differential-oracle pattern (`~/.agents/loop-engineering.md`). It catches silent reorderings the labeled NDCG eval (`eval::retrieval`) misses, because that eval is noisy (±~19pp at small N) and post-merge.
+
+- **Honest framing:** it detects DRIFT from a frozen reference, NOT absolute correctness. It is trustworthy only **layered UNDER** `eval::retrieval`: the labeled NDCG eval vouches each baseline and gates every golden refresh. Never sell it as a correctness oracle.
+- **Invariant:** top-weighted Rank-Biased Overlap (`eval::rank_overlap::rbo`) — asserts ranking ORDER agreement (a stable property), never byte-exact scores. Catches a within-top-K demotion; tolerates benign cross-arch f32 ULP near-tie swaps. Scores are stored for diagnosis only.
+- **Goldens (committed):** `crates/wenlan-core/src/eval/goldens/retrieval_ranking.{current,anchor}.json`. Dual anchor — `current` refreshed on intentional changes, `anchor` drifts only by explicit human decision (delete it to re-anchor) to catch slow cumulative drift.
+- **Cadence:** L6 (push to `main`). `ranking_drift_vs_golden` is `#[ignore]`d and picked up by the existing `cargo nextest run -p wenlan-core --lib --run-ignored=only eval::retrieval` step via substring match — **no `ci.yml` change**. The metric + regression-injection tests are synthetic (no model) and run per-PR. NOT a pre-push gate (origin has none by design).
+- **Refresh discipline:** `EVAL_GOLDEN_BLESS=1 cargo test -p wenlan-core --lib eval::retrieval_drift::tests::bless_goldens -- --ignored` — ONLY when `eval::retrieval` is green AND the ranking change is intentional. Capture/refresh in the env the gate runs in (Linux CI) to match arch; the RBO tolerance absorbs residual ULP.
+- **Verify-the-verifier:** the synthetic injection tests (`injected_reverse_top2_is_red`, `injected_drop_best_is_red`, `injected_full_reverse_is_red_even_at_anchor`, `identical_is_green`, `benign_deep_neartie_swap_is_green`) prove the metric goes red on real regressions and green on benign noise — an oracle never seen red is not an oracle.
+
 ## cross-reference
 
 - Fixture population, env vars, seed scripts, baseline layout: see `app/eval/AGENTS.md`.
