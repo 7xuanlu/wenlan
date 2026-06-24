@@ -3,8 +3,8 @@ name: help
 description: >
   One-screen quick reference for the Wenlan plugin. Lists the daily
   verbs, the daily flow, where data lives, and how to view it without a
-  GUI. Use when the user says "help", "what can I do", "list origin
-  commands", "how do I use origin", or invokes `/help`.
+  GUI. Use when the user says "help", "what can I do", "list wenlan
+  commands", "how do I use wenlan", or invokes `/help`.
 allowed-tools: []
 ---
 
@@ -53,7 +53,7 @@ View it without a GUI:
   open ~/.wenlan/                  browse in Finder
   code ~/.wenlan/                  open in VS Code
   git -C ~/.wenlan log --oneline   timeline of every memory + distill pass
-  ln -s ~/.wenlan/pages ~/Vault/origin   # symlink into Obsidian for graph view
+  ln -s ~/.wenlan/pages ~/Vault/wenlan   # symlink into Obsidian for graph view
 
 ~/.wenlan/ is a git repo. Skills auto-commit per logical batch (one per
 session, distill pass, or forget). Use git log / git diff / git revert
@@ -64,7 +64,7 @@ Three classes of artifact:
   - pages:    synthesized wikis, DB + ~/.wenlan/pages/*.md projection
   - sessions: chronological narrative, ~/.wenlan/sessions/*.md only
 
-Daemon must run at 127.0.0.1:7878. Hook prints "/origin:init" if down.
+Daemon must run at 127.0.0.1:7878. Hook prints "/wenlan:init" if down.
 
 Optional upgrades for richer distill cycles:
   wenlan model install            local Qwen, no API cost
@@ -74,7 +74,7 @@ Optional upgrades for richer distill cycles:
 ## When to use
 
 - User explicitly types `/help`.
-- User asks "what can I do with origin", "list origin commands", "how
+- User asks "what can I do with wenlan", "list wenlan commands", "how
   does this plugin work", "remind me what verbs are available".
 - First session after install — print this once on `/init` success too.
 

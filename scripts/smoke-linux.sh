@@ -2,7 +2,7 @@
 set -euo pipefail
 
 IMAGE_TAG="${IMAGE_TAG:-wenlan-server:smoke}"
-CONTAINER="${CONTAINER:-origin-smoke}"
+CONTAINER="${CONTAINER:-wenlan-smoke}"
 PORT="${PORT:-17878}"
 # Default to the host arch: linux/arm64 on Apple Silicon devs (fast via OrbStack
 # / Docker Desktop), linux/amd64 on CI (ubuntu-24.04 is amd64; arm64 emulation

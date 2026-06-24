@@ -5,7 +5,7 @@ description: >
   threads. Writes a narrative session log to ~/.wenlan/sessions/ and stores
   granular memories via Wenlan MCP. Previews any unconfirmed captures from
   the current session before closing. Invoked as `/handoff`.
-allowed-tools: ["Bash", "mcp__plugin_origin_origin__capture", "mcp__plugin_origin_origin__list_pending"]
+allowed-tools: ["Bash", "mcp__plugin_wenlan_wenlan__capture", "mcp__plugin_wenlan_wenlan__list_pending"]
 ---
 
 # /handoff
@@ -27,7 +27,7 @@ narrative thread, status file lets the next session see where we left off.
 Bash: cd_repo=$(git -C "$PWD" rev-parse --show-toplevel 2>/dev/null); echo "${cd_repo:-no-git}"
 ```
 
-- If output is a path → use the basename as `<project>` (e.g. `origin`).
+- If output is a path → use the basename as `<project>` (e.g. `wenlan`).
 - If `no-git` → use the cwd basename. Skip git steps below; rely entirely
   on conversation context.
 
@@ -119,7 +119,7 @@ captures:
 
 Pass `space="$space"` to every `capture(...)` call in the loop. /handoff
 does not accept a `space:X` inline arg — if the user wants a different
-space, they set `ORIGIN_SPACE` before invoking.
+space, they set `WENLAN_SPACE` before invoking.
 
 ### 4. MCP captures (one per item)
 
@@ -239,10 +239,10 @@ missing or `~/.wenlan/` is not a repo yet.
 
 ```
 Bash: git -C ~/.wenlan add -A && \
-      git -C ~/.wenlan -c user.name=Wenlan -c user.email=daemon@origin.local \
+      git -C ~/.wenlan -c user.name=Wenlan -c user.email=daemon@wenlan.local \
           commit --quiet -m "session: <slug>" 2>/dev/null || \
       (sleep 1 && git -C ~/.wenlan add -A && \
-       git -C ~/.wenlan -c user.name=Wenlan -c user.email=daemon@origin.local \
+       git -C ~/.wenlan -c user.name=Wenlan -c user.email=daemon@wenlan.local \
            commit --quiet -m "session: <slug>" 2>/dev/null) || true
 ```
 

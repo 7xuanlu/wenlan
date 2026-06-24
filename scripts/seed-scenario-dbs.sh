@@ -2,7 +2,7 @@
 # Repopulate ~/.cache/origin-eval/scenario_seeded/ from canonical
 # fullpipeline_*.db.
 #
-# Used by `crates/origin-core/tests/cached_scenario_db_check.rs` and the
+# Used by `crates/wenlan-core/tests/cached_scenario_db_check.rs` and the
 # PR-B page-channel eval runners
 # (`save_locomo_v2_with_pages_baseline` / `save_longmemeval_v2_with_pages_baseline`).
 #

@@ -5,7 +5,7 @@ description: >
   when the user states a preference, makes a decision, corrects you, or
   shares a durable fact. Invoked as `/capture <content>`.
 argument-hint: "<content>"
-allowed-tools: ["mcp__plugin_origin_origin__capture", "mcp__plugin_origin_origin__recall", "mcp__plugin_origin_origin__create_entity", "mcp__plugin_origin_origin__create_relation", "mcp__plugin_origin_origin__accept_revision", "mcp__plugin_origin_origin__dismiss_revision", "Bash"]
+allowed-tools: ["mcp__plugin_wenlan_wenlan__capture", "mcp__plugin_wenlan_wenlan__recall", "mcp__plugin_wenlan_wenlan__create_entity", "mcp__plugin_wenlan_wenlan__create_relation", "mcp__plugin_wenlan_wenlan__accept_revision", "mcp__plugin_wenlan_wenlan__dismiss_revision", "Bash"]
 ---
 
 # /capture
@@ -46,7 +46,7 @@ it. When `source_layer` is `arg`, also print:
 
 ## How to invoke
 
-Call the `origin` MCP server's `capture` tool with the user's content as a
+Call the `wenlan` MCP server's `capture` tool with the user's content as a
 complete, self-contained statement. Attach `topic` from cwd or the
 conversation — don't make the user type it.
 
@@ -84,7 +84,7 @@ omit `entity`.
 
 ### `topic` / `space` inference
 
-- cwd inside a repo → repo name (e.g. `~/Repos/origin/...` → `"origin"`).
+- cwd inside a repo → repo name (e.g. `~/Repos/wenlan/...` → `"wenlan"`).
 - Outside any repo → most recent topic from the conversation, or omit.
 - Always pass `space` when scope is known; if uncertain, run `list_spaces`
   later (post-PR-C) or omit.

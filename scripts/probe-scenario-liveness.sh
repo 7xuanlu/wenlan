@@ -4,7 +4,7 @@
 # `SELECT COUNT(*)`. The sqlite3 CLI mis-plans COUNT(*) against libsql
 # vector-index shadows (e.g. `pages`) and returns 0 even when rows exist — which
 # once produced a false "pages=0 starved" finding. See memory
-# lesson_libsql_count_vector_index_bug + crates/origin-core/src/eval/AGENTS.md.
+# lesson_libsql_count_vector_index_bug + crates/wenlan-core/src/eval/AGENTS.md.
 #
 # Usage: probe-scenario-liveness.sh <dir-of-per-question-DBs>
 #   e.g. probe-scenario-liveness.sh ~/.cache/origin-eval-pool31/fullpipeline/lme
@@ -34,4 +34,4 @@ for d in "$ROOT"/*/; do
 done
 printf -- '------------------------------------------------------------\n'
 echo "DBs=$n | totals mem=$tot_mem class=$tot_cls ents=$tot_ent pages=$tot_pg evdate=$tot_ed episodes=$tot_ep"
-echo "channels with ANY zero-DB: pages=$zero_pg ents=$zero_ent event_date=$zero_ed  (episodes empty by design unless ORIGIN_ENABLE_EPISODE_CHANNEL seed ran)"
+echo "channels with ANY zero-DB: pages=$zero_pg ents=$zero_ent event_date=$zero_ed  (episodes empty by design unless WENLAN_ENABLE_EPISODE_CHANNEL seed ran)"

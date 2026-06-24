@@ -1,6 +1,6 @@
 # Releasing Wenlan (daemon side)
 
-This document covers releases of the local runtime: `origin` CLI, `wenlan-server` daemon, `wenlan-mcp` connector, and shared crates (`wenlan-types`, `wenlan-core`). The desktop app ships from [7xuanlu/origin-app](https://github.com/7xuanlu/origin-app) on its own release cadence.
+This document covers releases of the local runtime: `wenlan` CLI, `wenlan-server` daemon, `wenlan-mcp` connector, and shared crates (`wenlan-types`, `wenlan-core`). The desktop app ships from [7xuanlu/origin-app](https://github.com/7xuanlu/origin-app) on its own release cadence.
 
 ## How release-please works
 
@@ -32,11 +32,11 @@ The `release.yml` workflow validates that the pushed tag version matches `versio
 ## What the release workflow does
 
 1. Validates version consistency.
-2. Builds `origin`, `wenlan-server`, and `wenlan-mcp` for `aarch64-apple-darwin`.
-3. Smoke-tests `origin --help` and `wenlan-server --help`.
+2. Builds `wenlan`, `wenlan-server`, and `wenlan-mcp` for `aarch64-apple-darwin`.
+3. Smoke-tests `wenlan --help` and `wenlan-server --help`.
 4. Creates the GitHub release with standalone binaries attached.
 5. Publishes `wenlan-types` and `wenlan-mcp` to crates.io.
-6. Publishes `wenlan-mcp` and `@7xuanlu/origin` to npm.
+6. Publishes `wenlan-mcp` and `wenlan` to npm.
 7. Updates the Homebrew tap for `wenlan-mcp`.
 
 `wenlan-mcp` now lives in this monorepo under `crates/wenlan-mcp` and shares the workspace Apache-2.0 license. The desktop DMG is still built from [origin-app](https://github.com/7xuanlu/origin-app); see its `RELEASING.md` for that pipeline.

@@ -5,7 +5,7 @@ Shared wire-format types for [Wenlan](https://github.com/7xuanlu/wenlan) — a p
 This crate defines the HTTP API request/response types and core enums used by:
 - `wenlan-server` (HTTP backend daemon)
 - `wenlan-mcp` (MCP server wrapper for AI tools)
-- `origin` (product CLI)
+- `wenlan` (product CLI)
 - downstream local clients that talk to the Wenlan daemon
 
 ## Stability

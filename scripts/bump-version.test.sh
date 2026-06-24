@@ -35,7 +35,7 @@ cat > "$TMPDIR_TEST/crates/wenlan-cli/npm/package.json" <<EOF
 EOF
 
 cat > "$TMPDIR_TEST/plugin/.claude-plugin/plugin.json" <<EOF
-{"name": "origin", "version": "0.4.1"}
+{"name": "wenlan", "version": "0.4.1"}
 EOF
 
 cat > "$TMPDIR_TEST/plugin/bin/wenlan-mcp-runner.sh" <<EOF

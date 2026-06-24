@@ -20,7 +20,7 @@ If you only need the raw MCP connector config, add this to your MCP client:
 ```json
 {
   "mcpServers": {
-    "origin": {
+    "wenlan": {
       "command": "npx",
       "args": ["-y", "wenlan-mcp"]
     }
@@ -42,7 +42,7 @@ Then use:
 ```json
 {
   "mcpServers": {
-    "origin": {
+    "wenlan": {
       "command": "wenlan-mcp"
     }
   }
@@ -68,7 +68,7 @@ wenlan-mcp --origin-url http://127.0.0.1:7879
 | `forget` | Delete a memory by ID. Destructive. |
 | `doctor` | Diagnose daemon reachability, setup mode, API key state, and on-device model state. |
 
-`doctor` mirrors `origin doctor`. It is diagnostic only and is not part of the memory loop.
+`doctor` mirrors `wenlan doctor`. It is diagnostic only and is not part of the memory loop.
 
 ## Setup Modes
 
@@ -76,8 +76,8 @@ Wenlan works immediately in **local memory** mode: storage, search, recall, and 
 
 Users can opt into more expensive distill cycles:
 
-- **On-device model:** private extraction and distillation after `origin model install`.
-- **Anthropic key:** richer extraction and page synthesis after `origin key set anthropic`.
+- **On-device model:** private extraction and distillation after `wenlan model install`.
+- **Anthropic key:** richer extraction and page synthesis after `wenlan key set anthropic`.
 
 ## Agent Guidance
 

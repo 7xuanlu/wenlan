@@ -57,7 +57,7 @@ Unlike a static llm-wiki, it keeps evolving between sessions. Unlike a black-box
 
 ```text
 /plugin marketplace add 7xuanlu/claude-plugins
-/plugin install origin@7xuanlu
+/plugin install wenlan@7xuanlu
 /init
 ```
 
@@ -86,15 +86,15 @@ Set up the local Wenlan runtime:
 npx -y wenlan setup
 ```
 
-Then start with `~/.origin/bin/origin status`, `~/.origin/bin/origin recall <query>`, or `~/.origin/bin/origin store <text>`. CLI details: [crates/wenlan-cli](crates/wenlan-cli/README.md).
+Then start with `~/.wenlan/bin/wenlan status`, `~/.wenlan/bin/wenlan recall <query>`, or `~/.wenlan/bin/wenlan store <text>`. CLI details: [crates/wenlan-cli](crates/wenlan-cli/README.md).
 
 Service management:
 
 ```bash
-origin install            # register + start the daemon (stops a running one first)
-origin restart            # stop + start the daemon -- run this after upgrading
-origin status
-origin uninstall
+wenlan install            # register + start the daemon (stops a running one first)
+wenlan restart            # stop + start the daemon -- run this after upgrading
+wenlan status
+wenlan uninstall
 ```
 
 After upgrading Wenlan (`npx -y wenlan setup` or `install.sh`), the new binary is on disk but the already-running daemon keeps serving the old code until you restart it. `wenlan install` now restarts automatically; if you upgraded another way, run `wenlan restart`.
@@ -163,7 +163,7 @@ Or declaratively via `~/.wenlan/spaces.toml` (see
     wenlan space show ideas
     wenlan space move scratch career
 
-`origin doctor` prints the current resolver state so you can see exactly
+`wenlan doctor` prints the current resolver state so you can see exactly
 which layer chose the active space.
 
 ---

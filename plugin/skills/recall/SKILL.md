@@ -5,7 +5,7 @@ description: >
   Invoked as `/recall <query>`. Use when the user asks "do you
   remember", "what do you know about", "look up".
 argument-hint: "<query>"
-allowed-tools: ["mcp__plugin_origin_origin__recall"]
+allowed-tools: ["mcp__plugin_wenlan_wenlan__recall"]
 ---
 
 # /recall
@@ -71,7 +71,7 @@ recall(query="<expanded query>", space=<resolved>, memory_type=<inferred>)
 
 Inferences (do not ask the user):
 
-- `space`: current working directory (e.g. `~/Repos/origin/...` → `"origin"`),
+- `space`: current working directory (e.g. `~/Repos/wenlan/...` → `"wenlan"`),
   the topic being discussed, or whatever space was mentioned in recent turns.
   Always pass when scope is known; if uncertain, run `list_spaces` later
   (post-PR-C) or omit.

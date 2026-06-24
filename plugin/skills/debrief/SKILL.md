@@ -1,11 +1,11 @@
 ---
 name: debrief
 description: >
-  Alias for `/origin:handoff` — symmetric brief/debrief naming. Same
+  Alias for `/wenlan:handoff` — symmetric brief/debrief naming. Same
   behavior: end-of-session ritual that writes session log + project
   status + granular MCP captures. Invoked as `/debrief`. Use when the
   user prefers the brief/debrief pair over brief/handoff.
-allowed-tools: ["Bash", "mcp__plugin_origin_origin__capture"]
+allowed-tools: ["Bash", "mcp__plugin_wenlan_wenlan__capture"]
 ---
 
 # /debrief
@@ -14,7 +14,7 @@ Alias for `/handoff`. Identical behavior — full end-of-session ritual:
 git context grab (if repo), narrative session log at
 `~/.wenlan/sessions/`, project status update, granular MCP captures.
 
-Run the steps in `/origin:handoff` exactly. Same artifacts, same
+Run the steps in `/wenlan:handoff` exactly. Same artifacts, same
 guardrails. The only reason this skill exists is the symmetric naming —
 `/brief` (session start) ↔ `/debrief` (session end). Pick whichever
 verb feels natural; both invoke the same flow.
@@ -32,5 +32,5 @@ verb feels natural; both invoke the same flow.
 ## Active space
 
 `/debrief` resolves the active space the same way `/handoff` does (see
-the resolver chain in `/handoff`). Set `ORIGIN_SPACE` before invocation
+the resolver chain in `/handoff`). Set `WENLAN_SPACE` before invocation
 to override.
