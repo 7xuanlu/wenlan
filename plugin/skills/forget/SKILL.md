@@ -5,7 +5,7 @@ description: >
   prefer `/capture` with `supersedes` for corrections. Invoked as
   `/forget <source_id>`.
 argument-hint: "<source_id>"
-allowed-tools: ["Bash", "mcp__plugin_origin_origin__forget", "mcp__plugin_origin_origin__recall"]
+allowed-tools: ["Bash", "mcp__plugin_wenlan_wenlan__forget", "mcp__plugin_wenlan_wenlan__recall"]
 ---
 
 # /forget
@@ -49,10 +49,10 @@ silent skip if `git` missing, `~/.wenlan/` not a repo, or no diff.
 
 ```
 Bash: git -C ~/.wenlan add -A && \
-      git -C ~/.wenlan -c user.name=Wenlan -c user.email=daemon@origin.local \
+      git -C ~/.wenlan -c user.name=Wenlan -c user.email=daemon@wenlan.local \
           commit --quiet -m "forget: <source_id>" 2>/dev/null || \
       (sleep 1 && git -C ~/.wenlan add -A && \
-       git -C ~/.wenlan -c user.name=Wenlan -c user.email=daemon@origin.local \
+       git -C ~/.wenlan -c user.name=Wenlan -c user.email=daemon@wenlan.local \
            commit --quiet -m "forget: <source_id>" 2>/dev/null) || true
 ```
 

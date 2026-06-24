@@ -79,7 +79,7 @@ echo "  Updated $INIT_SKILL (install.sh tag pin)"
 # release.yml on the tag) fails on "Cargo.lock drift" and aborts the release.
 # cargo isn't available on the release-please runner, so rewrite the lock
 # entries textually — symmetric with validate-versions.sh's reader. Internal
-# origin deps are listed name-only (no version string) in Cargo.lock, so only
+# wenlan deps are listed name-only (no version string) in Cargo.lock, so only
 # each member's own version line needs to change.
 awk -v ver="$NEW_VERSION" '
   $0 == "[[package]]" { in_pkg=1; is_member=0; print; next }

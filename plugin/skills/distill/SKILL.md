@@ -6,7 +6,7 @@ description: >
   the daemon couldn't (no LLM or cluster too big). Invoked as
   `/distill [target]`.
 argument-hint: "[target | rebuild <page-id> | deep]"
-allowed-tools: ["mcp__plugin_origin_origin__recall", "mcp__plugin_origin_origin__distill", "mcp__plugin_origin_origin__create_page", "mcp__plugin_origin_origin__update_page", "mcp__plugin_origin_origin__delete_page", "mcp__plugin_origin_origin__get_page_sources", "Bash"]
+allowed-tools: ["mcp__plugin_wenlan_wenlan__recall", "mcp__plugin_wenlan_wenlan__distill", "mcp__plugin_wenlan_wenlan__create_page", "mcp__plugin_wenlan_wenlan__update_page", "mcp__plugin_wenlan_wenlan__delete_page", "mcp__plugin_wenlan_wenlan__get_page_sources", "Bash"]
 ---
 
 # /distill
@@ -82,7 +82,7 @@ Bash: top=$(git -C "$PWD" rev-parse --show-toplevel 2>/dev/null); \
       fi
 ```
 
-- Output → use it (e.g. `origin`).
+- Output → use it (e.g. `wenlan`).
 - Not a git repo → fall back to `basename "$PWD"`.
 - Reserved keyword `deep` → no scope (global pass).
 - Reserved keyword sequence `rebuild <page-id>` → call
@@ -353,10 +353,10 @@ missing or `~/.wenlan/` is not a repo yet.
 
 ```
 Bash: git -C ~/.wenlan add -A && \
-      git -C ~/.wenlan -c user.name=Wenlan -c user.email=daemon@origin.local \
+      git -C ~/.wenlan -c user.name=Wenlan -c user.email=daemon@wenlan.local \
           commit --quiet -m "distill: <N> pages" 2>/dev/null || \
       (sleep 1 && git -C ~/.wenlan add -A && \
-       git -C ~/.wenlan -c user.name=Wenlan -c user.email=daemon@origin.local \
+       git -C ~/.wenlan -c user.name=Wenlan -c user.email=daemon@wenlan.local \
            commit --quiet -m "distill: <N> pages" 2>/dev/null) || true
 ```
 

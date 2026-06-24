@@ -46,7 +46,7 @@ layers. Higher layers override lower ones:
 | 1 | `space:X` inline arg | `/capture space:health "slept 5hrs"` |
 | 2 | `WENLAN_SPACE` env var | `WENLAN_SPACE=career claude` |
 | 3 | `~/.wenlan/spaces.toml` cwd-prefix mapping (longest prefix wins; ties go to first-defined) | see `plugin/examples/spaces.toml` |
-| 4 | cwd git-repo basename | `~/Repos/origin/...` → `origin` |
+| 4 | cwd git-repo basename | `~/Repos/wenlan/...` → `wenlan` |
 | 5 | conversation topic | (rarely used directly) |
 | 6 | default | `personal` |
 

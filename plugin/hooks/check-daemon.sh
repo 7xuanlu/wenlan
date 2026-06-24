@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# SessionStart hook: probe the local Origin daemon and surface two issues:
-#   1. Daemon not running → point user at /origin:init (it auto-installs).
+# SessionStart hook: probe the local Wenlan daemon and surface two issues:
+#   1. Daemon not running → point user at /wenlan:init (it auto-installs).
 #   2. Daemon version mismatches the plugin manifest → print the upgrade
 #      one-liner directly so the user can copy-paste.
 # Hook never blocks (always exit 0) and never prints command soup.
@@ -11,7 +11,7 @@ PLUGIN_JSON="${CLAUDE_PLUGIN_ROOT:-}/.claude-plugin/plugin.json"
 
 RESP=$(curl -fsS -m 1 "$URL" 2>/dev/null) || {
   cat <<MSG
-[origin] daemon not running. Run /origin:init to set up.
+[wenlan] daemon not running. Run /wenlan:init to set up.
 MSG
   exit 0
 }
@@ -29,8 +29,8 @@ EXPECTED_VER=$(extract_version <"$PLUGIN_JSON")
 
 if [ -n "$DAEMON_VER" ] && [ -n "$EXPECTED_VER" ] && [ "$DAEMON_VER" != "$EXPECTED_VER" ]; then
   cat <<MSG
-[origin] daemon v${DAEMON_VER}, plugin expects v${EXPECTED_VER}.
-  If you already upgraded, the daemon may not have restarted. Run: origin restart
+[wenlan] daemon v${DAEMON_VER}, plugin expects v${EXPECTED_VER}.
+  If you already upgraded, the daemon may not have restarted. Run: wenlan restart
   Otherwise upgrade: curl -fsSL https://raw.githubusercontent.com/7xuanlu/wenlan/v${EXPECTED_VER}/install.sh | bash
 MSG
 fi

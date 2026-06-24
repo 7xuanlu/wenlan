@@ -7,7 +7,7 @@
 #
 # Example (from any worktree):
 #   bash scripts/migrate-eval-cache.sh \
-#     ~/Repos/origin/.worktrees/eval-per-scenario/app/eval/baselines
+#     ~/Repos/wenlan/.worktrees/eval-per-scenario/app/eval/baselines
 #
 # Defaults destination to ~/.cache/origin-eval. Override via EVAL_BASELINES_DIR.
 # By default refuses to run if destination already exists; use --force to

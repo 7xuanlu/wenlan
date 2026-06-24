@@ -6,14 +6,14 @@ AI work memory for Claude Code. Wenlan carries sessions, decisions, lessons, and
 
 ```text
 0s   /plugin marketplace add 7xuanlu/claude-plugins
-     /plugin install origin@7xuanlu
+     /plugin install wenlan@7xuanlu
 5s   restart Claude Code
 10s  /init   auto-installs daemon if missing, configures local memory,
             verifies daemon + MCP + round-trip, prints "Wenlan ready"
 30s  /brief  (or /capture <something to remember>)
 ```
 
-`/init` is self-healing — if the daemon isn't running and the `origin`
+`/init` is self-healing — if the daemon isn't running and the `wenlan`
 CLI isn't on PATH, it runs the install one-liner for you. No copy/paste,
 no restart loop. The `SessionStart` hook only nudges you toward `/init`
 if the daemon ever stops.
@@ -22,7 +22,7 @@ if the daemon ever stops.
 
 ```text
 /plugin marketplace add 7xuanlu/claude-plugins
-/plugin install origin@7xuanlu
+/plugin install wenlan@7xuanlu
 ```
 
 `7xuanlu` is the GitHub repo owner. If you fork Wenlan, use your own handle.
@@ -60,7 +60,7 @@ Reload the plugin (`/reload-plugins`) and the wrapper picks the local binary on 
 /debrief    alias for /handoff (brief/debrief symmetry)
 ```
 
-A `SessionStart` hook (`hooks/check-daemon.sh`) probes the local daemon at `127.0.0.1:7878`. If down, it prints a single line: `daemon not running. Run /origin:init to set up.` The skill owns the install logic — the hook is just a nudge. Hook never blocks the session.
+A `SessionStart` hook (`hooks/check-daemon.sh`) probes the local daemon at `127.0.0.1:7878`. If down, it prints a single line: `daemon not running. Run /wenlan:init to set up.` The skill owns the install logic — the hook is just a nudge. Hook never blocks the session.
 
 ## Where your data lives
 
@@ -69,7 +69,7 @@ A `SessionStart` hook (`hooks/check-daemon.sh`) probes the local daemon at `127.
 ~/.wenlan/sessions/            session logs by date (md)
 ~/.wenlan/sessions/_status/    current per-project goals + last-handoff timestamp
 ~/.wenlan/db/                  symlink to the libSQL store
-~/.origin/bin/                 installed binaries
+~/.wenlan/bin/                 installed binaries
 ```
 
 Browse with `open ~/.wenlan/` (Finder), `code ~/.wenlan/` (VS Code), or symlink `~/.wenlan/pages/` into an Obsidian vault for the graph view. No Tauri app required.

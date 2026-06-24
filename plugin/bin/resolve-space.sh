@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
-# resolve-space.sh — Resolve the active Origin space from the 6-layer chain.
+# resolve-space.sh — Resolve the active Wenlan space from the 6-layer chain.
 #
 # Layers (highest to lowest priority):
 #   1. --arg <space>                explicit override from skill caller
 #   2. WENLAN_SPACE env var         per-shell pin
-#   3. ~/.origin/spaces.toml        cwd-prefix mapping (longest prefix wins)
+#   3. ~/.wenlan/spaces.toml        cwd-prefix mapping (longest prefix wins)
 #      3.5. top-level `default` key  applies when no [[mapping]] matched
 #   4. cwd repo basename            git rev-parse --show-toplevel
 #   5. --topic <string>             conversation topic fallback
@@ -44,9 +44,9 @@ if [ -n "$env_trimmed" ]; then
 fi
 
 # Layer 3: cwd-config TOML mapping
-# Reads file at $SPACES_FILE (override), else ~/.origin/spaces.toml.
+# Reads file at $SPACES_FILE (override), else ~/.wenlan/spaces.toml.
 # Parses [[mapping]] blocks; longest prefix matching $cwd wins.
-spaces_file="${SPACES_FILE:-$HOME/.origin/spaces.toml}"
+spaces_file="${SPACES_FILE:-$HOME/.wenlan/spaces.toml}"
 if [ -n "$cwd" ] && [ -f "$spaces_file" ]; then
     best_prefix=""
     best_space=""

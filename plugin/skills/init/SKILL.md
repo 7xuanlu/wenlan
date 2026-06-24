@@ -3,9 +3,9 @@ name: init
 description: >
   Frictionless setup. Detects missing daemon, installs it, configures local
   memory, and verifies the full plugin → MCP → daemon round-trip. Run
-  after `/plugin install origin@7xuanlu`, or any time the user says "set up
-  origin", "is origin working", "fix origin".
-allowed-tools: ["Bash", "mcp__plugin_origin_origin__doctor", "mcp__plugin_origin_origin__context"]
+  after `/plugin install wenlan@7xuanlu`, or any time the user says "set up
+  wenlan", "is wenlan working", "fix wenlan".
+allowed-tools: ["Bash", "mcp__plugin_wenlan_wenlan__doctor", "mcp__plugin_wenlan_wenlan__context"]
 ---
 
 # /init
@@ -31,10 +31,10 @@ Bash: curl -fsS -m 1 http://127.0.0.1:7878/api/health
 
 ### 2. Bootstrap (auto-install if missing)
 
-Detect whether the `origin` CLI is on PATH:
+Detect whether the `wenlan` CLI is on PATH:
 
 ```
-Bash: command -v origin >/dev/null 2>&1 && echo present || echo absent
+Bash: command -v wenlan >/dev/null 2>&1 && echo present || echo absent
 ```
 
 If `absent`, run the installer (no human prompts):
@@ -47,7 +47,7 @@ Then add it to PATH for the current session and configure local memory
 non-interactively:
 
 ```
-Bash: export PATH="$HOME/.origin/bin:$PATH" && wenlan setup --basic && wenlan install
+Bash: export PATH="$HOME/.wenlan/bin:$PATH" && wenlan setup --basic && wenlan install
 ```
 
 If `present` (CLI exists, daemon down), just install + start:
@@ -72,7 +72,7 @@ check `lsof -ti :7878`).
 
 ### 4. Doctor (verify backend)
 
-Call the `origin` MCP server's `doctor` tool:
+Call the `wenlan` MCP server's `doctor` tool:
 
 ```
 doctor()
@@ -120,9 +120,9 @@ work in local memory mode.
 
 ## When to use
 
-- Right after `/plugin install origin@7xuanlu`.
-- Hook printed "daemon down — run /origin:init".
-- User says "set up origin", "is it working", "reinstall origin".
+- Right after `/plugin install wenlan@7xuanlu`.
+- Hook printed "daemon down — run /wenlan:init".
+- User says "set up wenlan", "is it working", "reinstall wenlan".
 
 ## When NOT to use
 

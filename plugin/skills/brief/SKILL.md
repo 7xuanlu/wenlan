@@ -8,7 +8,7 @@ description: >
   session uses them. Invoked as `/brief [topic]`. Call FIRST at session start,
   before any other Wenlan verb.
 argument-hint: "[topic]"
-allowed-tools: ["Bash", "mcp__plugin_origin_origin__context", "mcp__plugin_origin_origin__recall", "mcp__plugin_origin_origin__list_pending_revisions", "mcp__plugin_origin_origin__accept_revision", "mcp__plugin_origin_origin__dismiss_revision"]
+allowed-tools: ["Bash", "mcp__plugin_wenlan_wenlan__context", "mcp__plugin_wenlan_wenlan__recall", "mcp__plugin_wenlan_wenlan__list_pending_revisions", "mcp__plugin_wenlan_wenlan__accept_revision", "mcp__plugin_wenlan_wenlan__dismiss_revision"]
 ---
 
 # /brief
@@ -33,7 +33,7 @@ Detect project root:
 Bash: cd_repo=$(git -C "$PWD" rev-parse --show-toplevel 2>/dev/null); echo "${cd_repo:-no-git}"
 ```
 
-- If output is a path → `<project>` = basename (e.g. `origin`).
+- If output is a path → `<project>` = basename (e.g. `wenlan`).
 - If `no-git` → `<project>` = cwd basename.
 
 Read `~/.wenlan/sessions/_status/<project>.md`:
@@ -71,7 +71,7 @@ so the user can confirm the resolution before the brief proceeds.
 
 ## 3. Call context
 
-Call the `origin` MCP server's `context` tool. If the user passed a topic
+Call the `wenlan` MCP server's `context` tool. If the user passed a topic
 argument, pass it through. Otherwise infer scope from the working directory and
 the conversation so far — don't ask the user.
 

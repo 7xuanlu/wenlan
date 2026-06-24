@@ -9,7 +9,7 @@
 # VALIDATE-FIRST: `validate` mode seeds a small subset and GATES on TWO things
 # before you commit to the multi-hour full run:
 #   (1) full-speed batching — mean on-device n_seqs ≥ FILL_FLOOR (M=8 coalescer
-#       actually filling, not running serial), via ORIGIN_BATCH_LOG telemetry.
+#       actually filling, not running serial), via WENLAN_BATCH_LOG telemetry.
 #   (2) complete substrate  — every seeded DB has classify + entities + pages
 #       live (the channels the page/CE/pool decision needs), via the enumerate-
 #       based liveness probe (never COUNT(*) — see lesson_libsql_count bug).
@@ -21,12 +21,12 @@
 #   scripts/seed-lme-s-n90.sh full                # seed all 90 (resumable)
 #
 # GPU: needs Metal. Run OUTSIDE the command sandbox. If a daemon holds :7878 it
-# competes for Metal — stop it (`origin stop` / kill) for a clean full-speed run.
+# competes for Metal — stop it (`wenlan stop` / kill) for a clean full-speed run.
 set -uo pipefail
 
 # ── Config (override via env) ────────────────────────────────────────────────
 MODE="${1:-validate}"
-REPO_ROOT="${REPO_ROOT:-/Users/lucian/Repos/origin}"
+REPO_ROOT="${REPO_ROOT:-/Users/lucian/Repos/wenlan}"
 FIXTURE_SRC="${FIXTURE_SRC:-$REPO_ROOT/app/eval/data/longmemeval_s.json}"   # deep 500-Q
 STRAT_FIXTURE="${STRAT_FIXTURE:-/tmp/claude/lme_s_90.json}"
 # Dedicated N=90 substrate dir. Decoupled from the ambient EVAL_BASELINES_DIR
@@ -48,25 +48,25 @@ PROBE="$(cd "$(dirname "$0")" && pwd)/probe-scenario-liveness.sh"
 # Default 4 = the saturation point. Raising it does not speed the seed up.
 export EVAL_SCENARIO_CONCURRENCY="${EVAL_SCENARIO_CONCURRENCY:-4}"
 export EVAL_ENRICHMENT_CONCURRENCY="${EVAL_ENRICHMENT_CONCURRENCY:-8}"
-export ORIGIN_LLM_PARALLEL_SEQS="${ORIGIN_LLM_PARALLEL_SEQS:-8}"
-export ORIGIN_LLM_CTX_SIZE="${ORIGIN_LLM_CTX_SIZE:-16384}"
-export ORIGIN_LLM_COALESCE_MS="${ORIGIN_LLM_COALESCE_MS:-10}"
+export WENLAN_LLM_PARALLEL_SEQS="${WENLAN_LLM_PARALLEL_SEQS:-8}"
+export WENLAN_LLM_CTX_SIZE="${WENLAN_LLM_CTX_SIZE:-16384}"
+export WENLAN_LLM_COALESCE_MS="${WENLAN_LLM_COALESCE_MS:-10}"
 
 # ── Speedup levers (engine-level; all MERGED, all overridable, default ON here) ─
 # These are default-OFF in the engine (opt-in) but ON for the seed: each is a
 # throughput win with per-sequence semantics unchanged. To A/B a lever, override
 # it to 0 on the command line. Authoritative table + safety rationale:
-#   crates/origin-core/src/eval/AGENTS.md → "on-device perf levers".
+#   crates/wenlan-core/src/eval/AGENTS.md → "on-device perf levers".
 #   BATCHED_POSTINGEST (WAY B): within-Q buffer_unordered extract → fills M=8.
 #   SLOT_BACKFILL      (#276):  keeps M=8 slots full as ragged seqs finish (decode).
 #   PREFIX_KV          (#278):  caches the shared KG-template prefill (prefill).
 #   DISTILL_CLUSTER_CONCURRENCY: parallel distill across independent clusters.
-export ORIGIN_SEED_BATCHED_POSTINGEST="${ORIGIN_SEED_BATCHED_POSTINGEST:-1}"
-export ORIGIN_LLM_SLOT_BACKFILL="${ORIGIN_LLM_SLOT_BACKFILL:-1}"
-export ORIGIN_LLM_PREFIX_KV_CACHE="${ORIGIN_LLM_PREFIX_KV_CACHE:-1}"
+export WENLAN_SEED_BATCHED_POSTINGEST="${WENLAN_SEED_BATCHED_POSTINGEST:-1}"
+export WENLAN_LLM_SLOT_BACKFILL="${WENLAN_LLM_SLOT_BACKFILL:-1}"
+export WENLAN_LLM_PREFIX_KV_CACHE="${WENLAN_LLM_PREFIX_KV_CACHE:-1}"
 export DISTILL_CLUSTER_CONCURRENCY="${DISTILL_CLUSTER_CONCURRENCY:-2}"
 
-export ORIGIN_BATCH_LOG=1                 # emit [batch_log] n_seqs=.. to stderr
+export WENLAN_BATCH_LOG=1                 # emit [batch_log] n_seqs=.. to stderr
 export EVAL_ENRICHMENT="${EVAL_ENRICHMENT:-local}"   # on-device Qwen3-4B
 export EVAL_BASELINES_DIR="$CACHE"
 export LME_S_FIXTURE="$STRAT_FIXTURE"
@@ -83,8 +83,8 @@ hr() { printf -- '─%.0s' {1..70}; echo; }
 
 # Print the active perf levers so a run is never silently mis-configured.
 perf_banner() {
-  echo "[perf] levers: BATCHED_POSTINGEST=$ORIGIN_SEED_BATCHED_POSTINGEST SLOT_BACKFILL=$ORIGIN_LLM_SLOT_BACKFILL PREFIX_KV=$ORIGIN_LLM_PREFIX_KV_CACHE DISTILL_CONC=$DISTILL_CLUSTER_CONCURRENCY"
-  echo "[perf] batch:  conc=$EVAL_SCENARIO_CONCURRENCY within-Q=$EVAL_ENRICHMENT_CONCURRENCY M=$ORIGIN_LLM_PARALLEL_SEQS ctx=$ORIGIN_LLM_CTX_SIZE coalesce=${ORIGIN_LLM_COALESCE_MS}ms"
+  echo "[perf] levers: BATCHED_POSTINGEST=$WENLAN_SEED_BATCHED_POSTINGEST SLOT_BACKFILL=$WENLAN_LLM_SLOT_BACKFILL PREFIX_KV=$WENLAN_LLM_PREFIX_KV_CACHE DISTILL_CONC=$DISTILL_CLUSTER_CONCURRENCY"
+  echo "[perf] batch:  conc=$EVAL_SCENARIO_CONCURRENCY within-Q=$EVAL_ENRICHMENT_CONCURRENCY M=$WENLAN_LLM_PARALLEL_SEQS ctx=$WENLAN_LLM_CTX_SIZE coalesce=${WENLAN_LLM_COALESCE_MS}ms"
 }
 
 build_strat() {
@@ -146,7 +146,7 @@ run_seed() {
   local limit="$1" skip="${2:-0}" log="$3"
   : > "$log"
   LME_LIMIT_QUESTIONS="$limit" LME_SKIP_QUESTIONS="$skip" \
-  cargo test -p origin-core --test eval_harness --features eval-harness \
+  cargo test -p wenlan-core --test eval_harness --features eval-harness \
     enrich_fullpipeline_lme_only -- --ignored --nocapture 2>&1 \
   | tee "$log" \
   | awk -v total="$limit" '
@@ -171,7 +171,7 @@ import sys, re
 log, floor = sys.argv[1], float(sys.argv[2])
 ns = [int(m) for m in re.findall(r"\[batch_log\] n_seqs=(\d+)", open(log, errors="ignore").read())]
 if not ns:
-    print("  fill: NO [batch_log] lines — ORIGIN_BATCH_LOG not honored or no on-device calls"); sys.exit(3)
+    print("  fill: NO [batch_log] lines — WENLAN_BATCH_LOG not honored or no on-device calls"); sys.exit(3)
 mean = sum(ns)/len(ns)
 batched = sum(1 for n in ns if n >= 2)/len(ns)
 print(f"  fill: calls={len(ns)} mean_n_seqs={mean:.2f} batching_rate={batched:.0%} (floor {floor})")

@@ -7,7 +7,7 @@ description: >
   the full queue rather than the top 3 shown in /brief.
   Invoked as `/review captures` or `/review revisions`.
 argument-hint: "captures | revisions"
-allowed-tools: ["mcp__plugin_origin_origin__list_pending", "mcp__plugin_origin_origin__list_pending_revisions", "mcp__plugin_origin_origin__confirm_memory", "mcp__plugin_origin_origin__forget", "mcp__plugin_origin_origin__capture", "mcp__plugin_origin_origin__accept_revision", "mcp__plugin_origin_origin__dismiss_revision"]
+allowed-tools: ["mcp__plugin_wenlan_wenlan__list_pending", "mcp__plugin_wenlan_wenlan__list_pending_revisions", "mcp__plugin_wenlan_wenlan__confirm_memory", "mcp__plugin_wenlan_wenlan__forget", "mcp__plugin_wenlan_wenlan__capture", "mcp__plugin_wenlan_wenlan__accept_revision", "mcp__plugin_wenlan_wenlan__dismiss_revision"]
 ---
 
 # /review

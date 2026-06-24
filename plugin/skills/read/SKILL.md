@@ -5,7 +5,7 @@ description: >
   summary, source count, and the local md path. Full body lives on disk —
   open with the user's editor. Invoked as `/read <title_or_id>`.
 argument-hint: "<title_or_id>"
-allowed-tools: ["mcp__plugin_origin_origin__get_page", "mcp__plugin_origin_origin__search_pages", "mcp__plugin_origin_origin__get_page_links", "Bash"]
+allowed-tools: ["mcp__plugin_wenlan_wenlan__get_page", "mcp__plugin_wenlan_wenlan__search_pages", "mcp__plugin_wenlan_wenlan__get_page_links", "Bash"]
 ---
 
 # /read
@@ -34,12 +34,12 @@ get_page(page_id="<id>")
 
 The response is a JSON object wrapping `{ "page": {...} }`. Read
 `title`, `summary`, `space`, and `source_memory_ids` off the page,
-then look up the md filename in `~/.wenlan/pages/.origin/state.json`:
+then look up the md filename in `~/.wenlan/pages/.wenlan/state.json`:
 
 ```
 Bash: python3 -c '
 import json, os, sys
-state_path = os.path.expanduser("~/.wenlan/pages/.origin/state.json")
+state_path = os.path.expanduser("~/.wenlan/pages/.wenlan/state.json")
 pid = "<id>"
 filename = None
 try:

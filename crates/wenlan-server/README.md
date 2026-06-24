@@ -15,11 +15,11 @@ The installer downloads `wenlan`, `wenlan-server`, and `wenlan-mcp` into `~/.wen
 ## Setup modes
 
 ```bash
-origin setup                  # interactive (1=local memory, 2=on-device model, 3=Anthropic key)
-origin setup --basic          # non-interactive local memory setup used by the plugin's /init
-origin model install          # opt into a local Qwen model (llama.cpp + Metal)
-origin key set anthropic      # opt into Anthropic-backed extraction (BYOK)
-origin doctor                 # diagnose daemon, model, and key state
+wenlan setup                  # interactive (1=local memory, 2=on-device model, 3=Anthropic key)
+wenlan setup --basic          # non-interactive local memory setup used by the plugin's /init
+wenlan model install          # opt into a local Qwen model (llama.cpp + Metal)
+wenlan key set anthropic      # opt into Anthropic-backed extraction (BYOK)
+wenlan doctor                 # diagnose daemon, model, and key state
 ```
 
 Local memory works without a local model or API key: store, search, recall, and MCP memory are available immediately. On-device models and Anthropic keys unlock distill cycles: auto entity extraction, page synthesis, recaps, and knowledge-graph rethink.
@@ -42,9 +42,9 @@ The libSQL store lives under the platform data directory (`dirs::data_local_dir(
 ## Service Commands
 
 ```bash
-origin install      # register with the host service manager (launchd / systemd-user / schtasks)
-origin uninstall    # remove from the service manager
-origin status       # service + runtime status
+wenlan install      # register with the host service manager (launchd / systemd-user / schtasks)
+wenlan uninstall    # remove from the service manager
+wenlan status       # service + runtime status
 ```
 
 On Windows the install path uses `schtasks.exe` to register a per-user `OriginServer` ONLOGON task and triggers it immediately. wenlan-server stays a plain console app — no Windows Service Control Protocol dispatcher is needed.

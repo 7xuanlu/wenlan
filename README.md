@@ -39,9 +39,9 @@ Unlike a static llm-wiki, it keeps evolving between sessions. Unlike a black-box
 
 ## What makes Wenlan distinct
 
-1. **Evolves on its own.** Most memory tools just hand back what you put in. Wenlan keeps working between sessions: it dedupes, links, and clusters your captures into source-cited wiki pages that feed retrieval alongside the atomic notes they came from. Unlike a static llm-wiki, the library stays current without you maintaining it.
-2. **One home, locked to none.** Every MCP client queries the same local daemon, so context built in one tool shows up in the next. Obsidian is one optional view you can symlink in, not where your work lives.
-3. **Sourced, so you can trust it.** Every page cites the memories it came from, and the daemon refuses unsourced pages rather than letting hallucinated summaries in. Low-confidence captures and contradictions surface for you to confirm or correct, but the everyday flow never stops for approval. Fix something once and Wenlan supersedes the old fact instead of serving both.
+1. **Trustworthy on its own.** Every page cites the memories it came from, and the daemon refuses unsourced pages rather than letting hallucinated summaries in. It dedupes facts and supersedes the old version when one changes, so you read a clean, current wiki instead of a pile of duplicates. The everyday flow never stops for approval; a capture only surfaces for you when something genuinely conflicts.
+2. **Evolves on its own.** Most memory tools just hand back what you put in. Wenlan keeps working between sessions, clustering your captures into source-cited wiki pages that feed retrieval alongside the atomic notes they came from. Unlike a static llm-wiki, it stays current without you maintaining it.
+3. **One home, locked to none.** Every MCP client queries the same local daemon, so context built in one tool shows up in the next. Obsidian is one optional view you can symlink in, not where your work lives.
 4. **Real git versioning.** Memory, page, and session writes commit into `~/.wenlan/.git/`, so you can inspect, diff, revert, or branch the Markdown artifacts.
    ```text
    a1b2c3d page: embedding-retrieval refreshed (4 sources)
@@ -57,7 +57,7 @@ Unlike a static llm-wiki, it keeps evolving between sessions. Unlike a black-box
 
 ```text
 /plugin marketplace add 7xuanlu/claude-plugins
-/plugin install origin@7xuanlu
+/plugin install wenlan@7xuanlu
 /init
 ```
 
@@ -86,15 +86,15 @@ Set up the local Wenlan runtime:
 npx -y wenlan setup
 ```
 
-Then start with `~/.origin/bin/origin status`, `~/.origin/bin/origin recall <query>`, or `~/.origin/bin/origin store <text>`. CLI details: [crates/wenlan-cli](crates/wenlan-cli/README.md).
+Then start with `~/.wenlan/bin/wenlan status`, `~/.wenlan/bin/wenlan recall <query>`, or `~/.wenlan/bin/wenlan store <text>`. CLI details: [crates/wenlan-cli](crates/wenlan-cli/README.md).
 
 Service management:
 
 ```bash
-origin install            # register + start the daemon (stops a running one first)
-origin restart            # stop + start the daemon -- run this after upgrading
-origin status
-origin uninstall
+wenlan install            # register + start the daemon (stops a running one first)
+wenlan restart            # stop + start the daemon -- run this after upgrading
+wenlan status
+wenlan uninstall
 ```
 
 After upgrading Wenlan (`npx -y wenlan setup` or `install.sh`), the new binary is on disk but the already-running daemon keeps serving the old code until you restart it. `wenlan install` now restarts automatically; if you upgraded another way, run `wenlan restart`.
@@ -163,7 +163,7 @@ Or declaratively via `~/.wenlan/spaces.toml` (see
     wenlan space show ideas
     wenlan space move scratch career
 
-`origin doctor` prints the current resolver state so you can see exactly
+`wenlan doctor` prints the current resolver state so you can see exactly
 which layer chose the active space.
 
 ---

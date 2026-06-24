@@ -30,7 +30,7 @@ None. Wenlan collects no usage analytics, crash reports, or diagnostics.
 
 ## Data deletion
 
-- Delete individual memories: `/forget` skill or `origin` CLI.
+- Delete individual memories: `/forget` skill or `wenlan` CLI.
 - Delete everything: remove `~/.wenlan/` and `~/Library/Application Support/wenlan/`.
 - Uninstall the daemon: `wenlan uninstall`.
 
