@@ -233,7 +233,7 @@ fn mcp_add_claude_code_dry_run_explains_tools_only() {
         .assert()
         .success()
         .stdout(predicate::str::contains(format!(
-            "claude mcp add -s user origin -- {}",
+            "claude mcp add -s user wenlan -- {}",
             origin_mcp_sibling_arg()
         )))
         .stdout(predicate::str::contains("MCP tools only"))
@@ -250,17 +250,17 @@ fn mcp_add_native_clients_run_add_without_destructive_remove() {
         (
             "claude-code",
             "claude",
-            format!("claude\tmcp\tadd\t-s\tuser\torigin\t--\t{wenlan_mcp}\n"),
+            format!("claude\tmcp\tadd\t-s\tuser\twenlan\t--\t{wenlan_mcp}\n"),
         ),
         (
             "codex",
             "codex",
-            format!("codex\tmcp\tadd\torigin\t--\t{wenlan_mcp}\n"),
+            format!("codex\tmcp\tadd\twenlan\t--\t{wenlan_mcp}\n"),
         ),
         (
             "gemini",
             "gemini",
-            format!("gemini\tmcp\tadd\t-s\tuser\torigin\t{wenlan_mcp}\n"),
+            format!("gemini\tmcp\tadd\t-s\tuser\twenlan\t{wenlan_mcp}\n"),
         ),
     ];
 
@@ -286,13 +286,13 @@ fn mcp_add_native_clients_run_add_without_destructive_remove() {
 }
 
 #[test]
-fn mcp_add_cursor_preserves_existing_servers_and_backs_up_changed_origin() {
+fn mcp_add_cursor_preserves_existing_servers_and_backs_up_changed_wenlan() {
     let runtime = IsolatedRuntime::new();
     let config_path = runtime.home.path().join(".cursor/mcp.json");
     fs::create_dir_all(config_path.parent().expect("cursor config parent")).unwrap();
     fs::write(
         &config_path,
-        r#"{"mcpServers":{"origin":{"command":"old-origin"},"other":{"command":"other-cmd"}}}"#,
+        r#"{"mcpServers":{"wenlan":{"command":"old-wenlan"},"other":{"command":"other-cmd"}}}"#,
     )
     .unwrap();
 
@@ -325,11 +325,11 @@ fn mcp_add_cursor_preserves_existing_servers_and_backs_up_changed_origin() {
         .collect();
     assert_eq!(backups.len(), 1, "expected one backup");
     let backup = fs::read_to_string(backups[0].path()).expect("backup content");
-    assert!(backup.contains("old-origin"), "{backup}");
+    assert!(backup.contains("old-wenlan"), "{backup}");
 }
 
 #[test]
-fn mcp_add_cursor_dry_run_prints_only_origin_block() {
+fn mcp_add_cursor_dry_run_prints_only_wenlan_block() {
     let runtime = IsolatedRuntime::new();
     let config_path = runtime.home.path().join(".cursor/mcp.json");
     fs::create_dir_all(config_path.parent().expect("cursor config parent")).unwrap();
@@ -343,7 +343,7 @@ fn mcp_add_cursor_dry_run_prints_only_origin_block() {
         .args(["mcp", "add", "cursor", "--dry-run"])
         .assert()
         .success()
-        .stdout(predicate::str::contains("mcpServers.origin"))
+        .stdout(predicate::str::contains("mcpServers.wenlan"))
         .stdout(predicate::str::contains("wenlan-mcp"))
         .stdout(predicate::str::contains("SECRET_TOKEN").not())
         .stdout(predicate::str::contains("secret-tool").not());

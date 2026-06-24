@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-const SERVER_NAME: &str = "origin";
+const SERVER_NAME: &str = "wenlan";
 const FALLBACK_SERVER_COMMAND: &str = "npx";
 const FALLBACK_SERVER_ARGS: [&str; 2] = ["-y", "wenlan-mcp"];
 
