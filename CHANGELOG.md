@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.9.1](https://github.com/7xuanlu/wenlan/compare/v0.9.0...v0.9.1) (2026-06-24)
+
+
+### Bug Fixes
+
+* complete Origin→Wenlan rebrand tail (docs, plugin, scripts) ([#292](https://github.com/7xuanlu/wenlan/issues/292)) ([3f80de3](https://github.com/7xuanlu/wenlan/commit/3f80de307f55a60dc8da248741cfa87eb0e53e7f))
+* **dist:** complete origin→wenlan cleanup across all publish surfaces ([#289](https://github.com/7xuanlu/wenlan/issues/289)) ([8b1c6de](https://github.com/7xuanlu/wenlan/commit/8b1c6dedc83d667e0197652c6f64ac1bf182f187))
+* rename CLI MCP server handle origin -&gt; wenlan; drop tracked ffmpeg2pass junk ([#294](https://github.com/7xuanlu/wenlan/issues/294)) ([cce076a](https://github.com/7xuanlu/wenlan/commit/cce076a80e7071d4e0339be7ecde0469ea0649f5))
+
 ## [0.9.0](https://github.com/7xuanlu/wenlan/compare/v0.8.6...v0.9.0) (2026-06-23)
 
 
