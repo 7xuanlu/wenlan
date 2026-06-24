@@ -171,6 +171,6 @@ fn smoke_codex_mcp_add_uses_temp_home() {
         config.display()
     );
     let text = fs::read_to_string(config).expect("read Codex config");
-    assert!(text.contains("origin"), "{text}");
+    assert!(text.contains("wenlan"), "{text}");
     assert!(text.contains("wenlan-mcp"), "{text}");
 }
