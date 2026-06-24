@@ -377,3 +377,26 @@ fn flag_default_mismatch_warns() {
         );
     }
 }
+
+#[test]
+fn root_agents_md_stays_lean() {
+    // Teeth #4 — size budget on the ONE always-loaded instruction file.
+    // Root AGENTS.md (which CLAUDE.md re-imports) is paid in full context EVERY
+    // session; subtree AGENTS.md load on-demand. It silently accreted 39.9KB ->
+    // 57.3KB as each retrieval/engine PR appended its flag wall to the path of
+    // least resistance (the file it was already editing). This gate makes the
+    // agents.md hierarchical convention the DEFAULT-BY-FORCE: exceed the budget
+    // and the only green path is moving crate-specific reference into the owning
+    // crate's AGENTS.md, not raising this number. No verifier control needed —
+    // the check is a byte comparison, not parsing logic.
+    const BUDGET: u64 = 44_000; // ~11k tok. Today ~39.8KB after the 2026-06-23 extraction.
+    let path = repo_root().join("AGENTS.md");
+    let bytes = std::fs::metadata(&path).expect("stat root AGENTS.md").len();
+    assert!(
+        bytes <= BUDGET,
+        "root AGENTS.md is {bytes}B > {BUDGET}B budget. It loads in FULL every session. \
+         Push crate-specific reference (env-flag docs, deep internals) into the owning crate's \
+         subtree AGENTS.md — they load on-demand and still satisfy the teeth-#2 flag-doc contract \
+         (it scans every tracked *AGENTS.md). Raising BUDGET is the wrong fix."
+    );
+}
