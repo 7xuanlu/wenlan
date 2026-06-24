@@ -25,6 +25,10 @@
   <a href="#what-you-get"><img alt="Obsidian" src="https://img.shields.io/badge/Obsidian-Markdown%20pages-7C3AED"></a>
 </p>
 
+<p align="center">
+  English | <a href="./README.zh-Hans.md">简体中文</a> | <a href="./README.zh-Hant.md">繁體中文</a>
+</p>
+
 **A living personal knowledge library for the AI-native age, built by your agents and grounded in its sources.**
 
 Wenlan (文瀾) takes its name from an imperial library that held one of China's largest book collections. Your agents capture what they learn as they work, and you add the pages and sources you already trust, so the library grows from the bottom up and the top down. Wenlan keeps it current on its own, distilling both into source-cited wiki pages.
@@ -170,18 +174,17 @@ which layer chose the active space.
 
 ## Evaluation
 
-**Hybrid retrieval, transparent eval.** BGE-Base-EN-v1.5-Q + FTS5 + Reciprocal Rank Fusion; local BGE-Reranker-Base cross-encoder rerank is the default path when enabled, with BGE-Reranker-V2-M3 available as a higher-quality option. The table below is retrieval-only, not end-to-end answer quality. ~168 tokens per recall query. Eval harness at [`crates/wenlan-core/src/eval/`](crates/wenlan-core/src/eval/). Run it yourself.
+**Hybrid retrieval, transparent eval.** BGE-Base-EN-v1.5-Q + FTS5 + Reciprocal Rank Fusion; local BGE-Reranker-Base cross-encoder rerank is the default path when enabled, with BGE-Reranker-V2-M3 available as a higher-quality option. The retrieval table is not end-to-end answer quality. ~168 tokens per recall query. Eval harness at [`crates/wenlan-core/src/eval/`](crates/wenlan-core/src/eval/). Run it yourself.
 
-Update workflow in [docs/eval](docs/eval/README.md).
+Update workflow and answer-quality snapshots live in [docs/eval](docs/eval/README.md).
 
 
 <!-- EVAL_SNAPSHOT_START -->
 | Benchmark | Recall@5 | MRR | NDCG@10 |
 |---|---:|---:|---:|
-| LongMemEval (oracle, 500 Q) | 93.6% | 0.857 | 0.883 |
-| LoCoMo (locomo10) | 70.0% | 0.647 | 0.684 |
+| LME_Oracle (500 Q) | 93.6% | 0.857 | 0.883 |
+| LME_S (deep, 90 Q) | 87.7% | 0.815 | 0.822 |
 <!-- EVAL_SNAPSHOT_END -->
-
 
 ---
 
@@ -233,7 +236,7 @@ Longer-form writing on AI work memory and how Wenlan compares lives at [useorigi
 **Comparisons**
 - [Wenlan vs Basic Memory](https://useorigin.app/learn/origin-vs-basic-memory): Markdown knowledge base vs AI work-session memory
 - [Wenlan vs claude-mem](https://useorigin.app/learn/origin-vs-claude-mem): observer-style Claude Code memory vs MCP-first cross-tool memory
-- [Wenlan vs Superlocal Memory](https://useorigin.app/learn/origin-vs-superlocal-memory): includes the honest LoCoMo benchmark concession
+- [Wenlan vs Superlocal Memory](https://useorigin.app/learn/origin-vs-superlocal-memory): tradeoffs against another local memory shape
 
 **Docs**
 - [Get started](https://useorigin.app/docs/get-started): install + verify the first local memory loop

@@ -1,0 +1,26 @@
+{
+  "updated_at": "2026-06-24",
+  "benchmark": "LME_S",
+  "fixture": "/tmp/claude/lme_s_90.json",
+  "fixture_questions": 90,
+  "gradeable_rows": 84,
+  "mode": "retrieval-only",
+  "substrate": "faithful per-question deep-S DBs",
+  "artifact": "docs/eval/results/lme_s_90_bge_base_pool20.jsonl",
+  "cache_root": "~/.cache/origin-eval-pool90",
+  "command": "env EVAL_BASELINES_DIR=/Users/lucian/.cache/origin-eval-pool90 LME_S_FIXTURE=/tmp/claude/lme_s_90.json EVAL_OUT=/Users/lucian/Repos/wenlan/docs/eval/results CE_AB_ARM_LABEL=lme_s_90_bge_base_pool20 CE_AB_RERANK=on RERANK_POOL_FLOOR=20 WENLAN_RERANKER_MODEL=bge-base WENLAN_GRAPH_MEMORY_STREAM=0 cargo test -p wenlan-core --test eval_harness --features eval-harness rerank_pool_retrieval_probe_emit -- --ignored --nocapture --test-threads=1",
+  "retrieval": {
+    "recall_at_5": 0.8767857142857144,
+    "mrr": 0.8145975056689342,
+    "ndcg_at_10": 0.8223431120728476,
+    "coverage_blind": 0.9202380952380952,
+    "coverage_expanded": 0.9202380952380952,
+    "p50_latency_ms": 1166,
+    "mean_latency_ms": 1167.3214965238094
+  },
+  "notes": [
+    "Single-run local retrieval snapshot; treat as scaffold unless reproduced.",
+    "CE on, bge-base cross-encoder, RERANK_POOL_FLOOR=20, WENLAN_GRAPH_MEMORY_STREAM=0.",
+    "Raw JSONL has 84 rows because six fixture questions had no gradeable evidence rows."
+  ]
+}
