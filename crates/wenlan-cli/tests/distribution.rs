@@ -56,7 +56,7 @@ fn plugin_distribution_contains_required_files() {
 #[test]
 fn plugin_manifest_and_mcp_launcher_stay_in_sync() {
     let plugin = read_json("plugin/.claude-plugin/plugin.json");
-    assert_eq!(json_string(&plugin, "name"), "origin");
+    assert_eq!(json_string(&plugin, "name"), "wenlan");
     assert_eq!(json_string(&plugin, "license"), "Apache-2.0");
     assert_eq!(json_string(&plugin, "category"), "memory");
 
@@ -69,9 +69,9 @@ fn plugin_manifest_and_mcp_launcher_stay_in_sync() {
     }
 
     let mcp = read_json("plugin/.mcp.json");
-    let origin = &mcp["mcpServers"]["origin"];
+    let server = &mcp["mcpServers"]["wenlan"];
     assert_eq!(
-        json_string(origin, "command"),
+        json_string(server, "command"),
         "${CLAUDE_PLUGIN_ROOT}/bin/wenlan-mcp-runner.sh"
     );
 }
