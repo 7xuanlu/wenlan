@@ -576,52 +576,6 @@ async fn save_longmemeval_decomposed_baseline() {
 
 #[tokio::test]
 #[ignore]
-async fn save_locomo_reranked_baseline() {
-    use std::sync::Arc;
-    let path = eval_root().join("data/locomo10.json");
-    if !path.exists() {
-        println!("SKIP: locomo10.json not found");
-        return;
-    }
-    let llm: Arc<dyn wenlan_core::llm_provider::LlmProvider> = Arc::new(
-        wenlan_core::llm_provider::OnDeviceProvider::new_with_model(Some("qwen3.5-9b")).unwrap(),
-    );
-    let report = wenlan_core::eval::locomo::run_locomo_eval_reranked(&path, llm)
-        .await
-        .unwrap();
-    let baselines_dir = eval_root().join("baselines");
-    std::fs::create_dir_all(&baselines_dir).unwrap();
-    let baseline_path = baselines_dir.join(report.baseline_filename("locomo"));
-    report.save_baseline(&baseline_path).unwrap();
-    println!("Saved LoCoMo reranked baseline to {:?}", baseline_path);
-    save_layered(&report, |r| r.to_eval_report());
-}
-
-#[tokio::test]
-#[ignore]
-async fn save_longmemeval_reranked_baseline() {
-    use std::sync::Arc;
-    let path = eval_root().join("data/longmemeval_oracle.json");
-    if !path.exists() {
-        println!("SKIP: longmemeval_oracle.json not found");
-        return;
-    }
-    let llm: Arc<dyn wenlan_core::llm_provider::LlmProvider> = Arc::new(
-        wenlan_core::llm_provider::OnDeviceProvider::new_with_model(Some("qwen3.5-9b")).unwrap(),
-    );
-    let report = wenlan_core::eval::longmemeval::run_longmemeval_eval_reranked(&path, llm)
-        .await
-        .unwrap();
-    let baselines_dir = eval_root().join("baselines");
-    std::fs::create_dir_all(&baselines_dir).unwrap();
-    let baseline_path = baselines_dir.join(report.baseline_filename("longmemeval"));
-    report.save_baseline(&baseline_path).unwrap();
-    println!("Saved LongMemEval reranked baseline to {:?}", baseline_path);
-    save_layered(&report, |r| r.to_eval_report());
-}
-
-#[tokio::test]
-#[ignore]
 async fn save_locomo_expanded_baseline() {
     use std::sync::Arc;
     let path = eval_root().join("data/locomo10.json");
