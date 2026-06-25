@@ -9,6 +9,121 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::LazyLock;
 
+pub fn stamp_cr_from_db_env<F>(build_env: F) -> crate::eval::report::ReportEnv
+where
+    F: FnOnce(&str) -> crate::eval::report::ReportEnv,
+{
+    let page_channel_state = if crate::db::page_channel_enabled() {
+        "on"
+    } else {
+        "off"
+    };
+    let magfusion_state = if crate::db::magnitude_fusion_enabled() {
+        "on"
+    } else {
+        "off"
+    };
+    let mut variant_tag = if page_channel_state == "off" {
+        "cross_rerank_v2_no_pages".to_string()
+    } else {
+        "cross_rerank_v2_pages".to_string()
+    };
+    if magfusion_state == "on" {
+        variant_tag.push_str("_magfusion");
+    }
+    let graph_seed_depth = if crate::db::graph_seed_enabled() {
+        let depth = crate::retrieval::signals::parse_hop_depth(
+            std::env::var("WENLAN_GRAPH_HOP_DEPTH").ok().as_deref(),
+        );
+        Some(depth)
+    } else {
+        None
+    };
+    if let Some(depth) = graph_seed_depth {
+        variant_tag.push_str(&format!("__graph_seed_d{}", depth));
+    }
+    let graph_khop_depth = if crate::db::khop_traversal_enabled() {
+        Some(crate::retrieval::traversal::parse_khop_depth(
+            std::env::var("WENLAN_GRAPH_KHOP_DEPTH").ok().as_deref(),
+        ))
+    } else {
+        None
+    };
+    if let Some(depth) = graph_khop_depth {
+        variant_tag.push_str(&format!("__graph_khop_d{}", depth));
+    }
+    let query_intent_state = if crate::retrieval::query_intent::query_intent_enabled() {
+        variant_tag.push_str("__query_intent");
+        "on"
+    } else {
+        "off"
+    };
+    let salience_state = if crate::db::salience_prior_enabled() {
+        variant_tag.push_str("__salience");
+        "on"
+    } else {
+        "off"
+    };
+    let episode_state = if crate::db::episode_channel_enabled() {
+        variant_tag.push_str("__episode");
+        "on"
+    } else {
+        "off"
+    };
+    let fact_state = if crate::retrieval::fact_channel::fact_channel_enabled() {
+        variant_tag.push_str("__fact");
+        "on"
+    } else {
+        "off"
+    };
+    let mut env_stamp = build_env(&variant_tag);
+    env_stamp
+        .flags
+        .push(format!("page_channel={}", page_channel_state));
+    env_stamp
+        .flags
+        .push(format!("magnitude_fusion={}", magfusion_state));
+    if let Some(depth) = graph_seed_depth {
+        env_stamp.flags.push(format!("graph_seed=on_d{}", depth));
+    } else {
+        env_stamp.flags.push("graph_seed=off".to_string());
+    }
+    if let Some(depth) = graph_khop_depth {
+        env_stamp.flags.push(format!("graph_khop=on_d{}", depth));
+    } else {
+        env_stamp.flags.push("graph_khop=off".to_string());
+    }
+    env_stamp
+        .flags
+        .push(format!("query_intent={}", query_intent_state));
+    env_stamp
+        .flags
+        .push(format!("salience_prior={}", salience_state));
+    env_stamp
+        .flags
+        .push(format!("episode_channel={}", episode_state));
+    env_stamp.flags.push(format!("fact_channel={}", fact_state));
+    env_stamp.flags.push(format!(
+        "graph_memory_stream={}",
+        if crate::db::graph_memory_stream_enabled() {
+            "on"
+        } else {
+            "off"
+        }
+    ));
+    env_stamp.flags.push(format!(
+        "rerank_pool=mult{}_floor{}",
+        std::env::var("RERANK_POOL_MULTIPLIER")
+            .as_deref()
+            .unwrap_or("1"),
+        std::env::var("RERANK_POOL_FLOOR")
+            .as_deref()
+            .unwrap_or("10"),
+    ));
+    env_stamp.flags.push("scenario_db=consolidated".to_string());
+    env_stamp
+}
+
 /// Shared BPE tokenizer instance (cl100k_base). Initialized once, intentionally
 /// leaked to avoid destructor conflicts with ONNX runtime at process exit.
 static BPE: LazyLock<&'static tiktoken_rs::CoreBPE> = LazyLock::new(|| {
@@ -887,7 +1002,13 @@ impl EnrichmentMode {
                     .unwrap_or_else(|| PathBuf::from("eval/baselines"));
                 eprintln!(
                     "[enrichment] mode=cli model={} batch_entities={} batch_titles={} rotation={} retries={} cost_cap=${:.2} cache_dir={}",
-                    model, batch_entities, batch_titles, rotation, retries, cli_cost_cap, cache_dir.display()
+                    model,
+                    batch_entities,
+                    batch_titles,
+                    rotation,
+                    retries,
+                    cli_cost_cap,
+                    cache_dir.display()
                 );
                 Ok(Self::Cli {
                     model,
@@ -1007,7 +1128,10 @@ pub async fn enrich_db_for_eval(
             // Concept distillation: not yet ported to CLI. Skip for now; user can
             // separately run on-device or Batch API distillation if needed.
             // TODO: add Cli concept distillation in a follow-up if usage warrants.
-            eprintln!("[enrichment-cli] entities={} titles={} concepts=0 (distillation not implemented in CLI mode)", entities, titles);
+            eprintln!(
+                "[enrichment-cli] entities={} titles={} concepts=0 (distillation not implemented in CLI mode)",
+                entities, titles
+            );
             Ok((entities, titles, 0))
         }
     }
@@ -1428,7 +1552,9 @@ pub async fn run_entity_extraction_for_eval_cli(
             if let Err(e) = db.update_memory_entity_id(memory_id, &eid).await {
                 log::warn!(
                     "[enrich-cli-entities] update_memory_entity_id failed for memory={} entity={}: {}",
-                    memory_id, eid, e
+                    memory_id,
+                    eid,
+                    e
                 );
             } else {
                 total_linked += 1;
@@ -1439,7 +1565,13 @@ pub async fn run_entity_extraction_for_eval_cli(
     db.mark_all_memories_enriched_for_eval().await?;
     eprintln!(
         "[enrich-cli-entities] DONE: {} batches succ, {} failed, {} retries | aborted={} | total_cost=${:.4} | linked={} entities={}",
-        succ_batches, fail_batches, retries, aborted, total_cost, total_linked, total_entities_count
+        succ_batches,
+        fail_batches,
+        retries,
+        aborted,
+        total_cost,
+        total_linked,
+        total_entities_count
     );
 
     Ok(total_linked)
@@ -1860,7 +1992,9 @@ pub async fn enrich_db_for_eval_local(
             .ok()
             .and_then(|s| s.parse().ok())
             .unwrap_or(8);
-        eprintln!("    [enrich_local] Phase 2: {total_memories} memories via BATCHED post_ingest (conc={conc})...");
+        eprintln!(
+            "    [enrich_local] Phase 2: {total_memories} memories via BATCHED post_ingest (conc={conc})..."
+        );
         enrich_post_ingest_batched(
             db,
             llm,
