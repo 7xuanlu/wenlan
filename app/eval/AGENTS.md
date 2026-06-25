@@ -45,7 +45,6 @@ Tests that depend on `locomo10.json`:
 - `test_locomo_benchmark`
 - `test_locomo_gate_comparison`
 - `save_locomo_baseline`
-- `save_locomo_reranked_baseline`
 - `save_locomo_expanded_baseline`
 - `save_locomo_cross_rerank_baseline`
 - `save_locomo_v2_with_pages_baseline`
@@ -61,7 +60,6 @@ Tests that depend on `longmemeval_oracle.json`:
 - `test_longmemeval_benchmark`
 - `test_longmemeval_gate_comparison`
 - `save_longmemeval_baseline`
-- `save_longmemeval_reranked_baseline`
 - `save_longmemeval_expanded_baseline`
 - `save_longmemeval_cross_rerank_baseline`
 - `save_longmemeval_v2_with_pages_baseline`
