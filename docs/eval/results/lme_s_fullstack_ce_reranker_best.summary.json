@@ -1,0 +1,50 @@
+{
+  "updated_at": "2026-06-24",
+  "benchmark": "LME_S",
+  "mode": "answer-quality",
+  "run": "full stack, CE reranker, single run",
+  "fixture_questions": 60,
+  "artifact": "$HOME/.cache/origin-eval-ceiling/lme_fullstack_ceiling_nsemeq_r5_judge_cache.jsonl",
+  "tuples": "$HOME/.cache/origin-eval-ceiling/lme_fullstack_ceiling_nsemeq_r5_tuples.json",
+  "scored_rows": 60,
+  "accuracy": 0.7666666666666667,
+  "task_avg": 0.7666666666666667,
+  "correct": 46,
+  "category_scores": {
+    "knowledge-update": {
+      "correct": 6,
+      "total": 10,
+      "accuracy": 0.6
+    },
+    "multi-session": {
+      "correct": 6,
+      "total": 10,
+      "accuracy": 0.6
+    },
+    "single-session-assistant": {
+      "correct": 7,
+      "total": 10,
+      "accuracy": 0.7
+    },
+    "single-session-preference": {
+      "correct": 10,
+      "total": 10,
+      "accuracy": 1.0
+    },
+    "single-session-user": {
+      "correct": 10,
+      "total": 10,
+      "accuracy": 1.0
+    },
+    "temporal-reasoning": {
+      "correct": 7,
+      "total": 10,
+      "accuracy": 0.7
+    }
+  },
+  "notes": [
+    "Best local judged LME-S full-stack CE-reranker artifact found under $HOME/.cache/origin-eval-ceiling on 2026-06-24.",
+    "This is answer quality, not retrieval-only; keep it out of the generated README retrieval table.",
+    "The prior 500-question full-stack snapshot was 282/500 accuracy with 59.4% task average at $HOME/.cache/origin-eval-ceiling/lme_fullstack_ceiling_judge_cache.jsonl."
+  ]
+}

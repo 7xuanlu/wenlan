@@ -3064,10 +3064,10 @@ async fn headroom_probe_per_question_lme_s() {
         println!("SKIP: LME-S fixture not found at {:?}", lme_path);
         return;
     }
-    let baselines = origin_core::eval::shared::eval_baselines_dir_override()
+    let baselines = wenlan_core::eval::shared::eval_baselines_dir_override()
         .unwrap_or_else(|| eval_root().join("baselines"));
 
-    let rows = origin_core::eval::longmemeval::run_longmemeval_headroom_probe_per_question(
+    let rows = wenlan_core::eval::longmemeval::run_longmemeval_headroom_probe_per_question(
         &lme_path, &baselines,
     )
     .await
@@ -3189,7 +3189,7 @@ async fn decompose_recall_probe_emit() {
 /// ```bash
 /// EVAL_BASELINES_DIR=~/.cache/origin-eval-pool31 LME_S_FIXTURE=/tmp/claude/lme_s_31.json \
 ///   EVAL_OUT=/tmp/claude/pool_ndcg CE_AB_ARM_LABEL=ce_on_pool20_base CE_AB_RERANK=on \
-///   RERANK_POOL_FLOOR=20 ORIGIN_RERANKER_MODEL=bge-base RUSTC_WRAPPER= \
+///   RERANK_POOL_FLOOR=20 WENLAN_RERANKER_MODEL=bge-base RUSTC_WRAPPER= \
 ///   cargo test -p origin-core --test eval_harness --features eval-harness \
 ///   rerank_pool_retrieval_probe_emit -- --ignored --nocapture
 /// ```
@@ -3203,9 +3203,9 @@ async fn rerank_pool_retrieval_probe_emit() {
     // being measured. Force the stream OFF on every arm so CE-on/off and the pool
     // sweep are clean and comparable. (Production realism — CE-on/stream-off vs
     // hybrid/stream-on — is a SEPARATE experiment, not this selector.)
-    std::env::set_var("ORIGIN_GRAPH_MEMORY_STREAM", "0");
+    std::env::set_var("WENLAN_GRAPH_MEMORY_STREAM", "0");
 
-    let baselines = origin_core::eval::shared::eval_baselines_dir_override()
+    let baselines = wenlan_core::eval::shared::eval_baselines_dir_override()
         .unwrap_or_else(|| eval_root().join("baselines"));
     let fixture = match std::env::var("LME_S_FIXTURE") {
         Ok(p) => std::path::PathBuf::from(p),
@@ -3235,7 +3235,7 @@ async fn rerank_pool_retrieval_probe_emit() {
         .unwrap_or(false);
     let reranker = if want_ce {
         Some(
-            origin_core::reranker::init_cross_encoder_reranker(None)
+            wenlan_core::reranker::init_cross_encoder_reranker(None)
                 .expect("init_cross_encoder_reranker failed"),
         )
     } else {
@@ -3247,10 +3247,10 @@ async fn rerank_pool_retrieval_probe_emit() {
         baselines.display(),
         fixture.display(),
         std::env::var("RERANK_POOL_FLOOR").unwrap_or_else(|_| "10(default)".into()),
-        std::env::var("ORIGIN_RERANKER_MODEL").unwrap_or_else(|_| "bge-base(default)".into()),
+        std::env::var("WENLAN_RERANKER_MODEL").unwrap_or_else(|_| "bge-base(default)".into()),
     );
 
-    let rows = origin_core::eval::longmemeval::run_longmemeval_rerank_pool_probe(
+    let rows = wenlan_core::eval::longmemeval::run_longmemeval_rerank_pool_probe(
         &baselines, &fixture, reranker, &arm_label,
     )
     .await
@@ -9298,10 +9298,10 @@ async fn generate_lme_fullstack_ceiling() {
 #[tokio::test]
 #[ignore]
 async fn judge_pages_ab_lme_s() {
-    use origin_core::eval::token_efficiency::{
+    use wenlan_core::eval::token_efficiency::{
         aggregate_judgments, judge_with_claude, load_judgment_tuples,
     };
-    let baselines = origin_core::eval::shared::eval_baselines_dir_override()
+    let baselines = wenlan_core::eval::shared::eval_baselines_dir_override()
         .unwrap_or_else(|| eval_root().join("baselines"));
     let tuples_path = baselines.join("pages_ab_lme_s_tuples.json");
     if !tuples_path.exists() {
@@ -9358,8 +9358,8 @@ async fn judge_pages_ab_lme_s() {
 #[tokio::test]
 #[ignore]
 async fn seed_inject_event_dates_per_q_lme_s() {
-    use origin_core::eval::longmemeval;
-    use origin_core::eval::shared::{eval_baselines_dir_override, scenario_db_dir};
+    use wenlan_core::eval::longmemeval;
+    use wenlan_core::eval::shared::{eval_baselines_dir_override, scenario_db_dir};
     let baselines = eval_baselines_dir_override()
         .expect("EVAL_BASELINES_DIR must point at the per-Q baselines dir (the copy)");
     let lme_path = std::path::PathBuf::from(
@@ -9373,7 +9373,7 @@ async fn seed_inject_event_dates_per_q_lme_s() {
         samples.len(),
         baselines
     );
-    let emitter = || std::sync::Arc::new(origin_core::events::NoopEmitter);
+    let emitter = || std::sync::Arc::new(wenlan_core::events::NoopEmitter);
     let mut dbs = 0usize;
     let mut missing = 0usize;
     for sample in &samples {
@@ -9382,7 +9382,7 @@ async fn seed_inject_event_dates_per_q_lme_s() {
             missing += 1;
             continue;
         }
-        let db = origin_core::db::MemoryDB::new(&dir, emitter())
+        let db = wenlan_core::db::MemoryDB::new(&dir, emitter())
             .await
             .expect("open per-q db");
         let n = db
@@ -9410,21 +9410,21 @@ async fn seed_inject_event_dates_per_q_lme_s() {
 /// / ce_on (CE on, no pages) / ce_on_pages (CE on, pages). Answers on-device
 /// Qwen3.5-9B (temp 0.0); the judge is a separate `claude -p` step over the saved
 /// tuples. A `CeOff` arm is present so `needs_confounder_isolation` is true and the
-/// runner enforces `ORIGIN_GRAPH_MEMORY_STREAM=0`. The page fetch is driven by the
-/// per-arm `include_pages` toggle (independent of `ORIGIN_ENABLE_PAGE_CHANNEL`).
+/// runner enforces `WENLAN_GRAPH_MEMORY_STREAM=0`. The page fetch is driven by the
+/// per-arm `include_pages` toggle (independent of `WENLAN_ENABLE_PAGE_CHANNEL`).
 ///
 /// ```bash
 /// EVAL_BASELINES_DIR=$HOME/.cache/origin-eval-pool90 LME_S_FIXTURE=/tmp/claude/lme_s_90.json \
-/// ORIGIN_GRAPH_MEMORY_STREAM=0 EVAL_ENRICHMENT=local LME_LIMIT_QUESTIONS=20 \
+/// WENLAN_GRAPH_MEMORY_STREAM=0 EVAL_ENRICHMENT=local LME_LIMIT_QUESTIONS=20 \
 ///   cargo test -p origin-core --test eval_harness --features eval-harness \
 ///   generate_pages_ab_lme_s -- --ignored --nocapture
 /// ```
 #[tokio::test]
 #[ignore]
 async fn generate_pages_ab_lme_s() {
-    use origin_core::eval::answer_quality::{run_fullpipeline_lme, ArmSpec, DbSource};
-    use origin_core::llm_provider::{LlmProvider, OnDeviceProvider};
     use std::sync::Arc;
+    use wenlan_core::eval::answer_quality::{run_fullpipeline_lme, ArmSpec, DbSource};
+    use wenlan_core::llm_provider::{LlmProvider, OnDeviceProvider};
 
     let lme_path = match std::env::var("LME_S_FIXTURE") {
         Ok(p) => std::path::PathBuf::from(p),
@@ -9441,7 +9441,7 @@ async fn generate_pages_ab_lme_s() {
     if !lme_path.exists() {
         eprintln!(
             "SKIP: LME-S fixture not found at {:?}. Set LME_S_FIXTURE=<path> or point \
-             ORIGIN_EVAL_ROOT at the main checkout's app/eval.",
+             WENLAN_EVAL_ROOT at the main checkout's app/eval.",
             lme_path
         );
         return;
@@ -9454,7 +9454,7 @@ async fn generate_pages_ab_lme_s() {
         .and_then(|s| s.parse().ok())
         .unwrap_or(10.0);
 
-    let baselines = origin_core::eval::shared::eval_baselines_dir_override()
+    let baselines = wenlan_core::eval::shared::eval_baselines_dir_override()
         .unwrap_or_else(|| eval_root().join("baselines"));
     std::fs::create_dir_all(&baselines).ok();
     let output_path = baselines.join("pages_ab_lme_s_tuples.json");
@@ -9467,8 +9467,8 @@ async fn generate_pages_ab_lme_s() {
          RERANK_POOL_FLOOR={}\n  \
          answer model: on-device qwen3.5-9b (temp 0.0)\n  enrich model: {}\n  output: {:?}",
         lme_path,
-        origin_core::db::page_channel_enabled(),
-        origin_core::db::graph_memory_stream_enabled(),
+        wenlan_core::db::page_channel_enabled(),
+        wenlan_core::db::graph_memory_stream_enabled(),
         std::env::var("RERANK_POOL_FLOOR").unwrap_or_else(|_| "10 (default)".into()),
         enrich_model,
         output_path,
@@ -9479,10 +9479,10 @@ async fn generate_pages_ab_lme_s() {
             "OnDeviceProvider::new_with_model failed -- is the Qwen3.5-9B model available?",
         ));
 
-    let enrichment = origin_core::eval::shared::EnrichmentMode::from_env(&enrich_model, cost_cap)
+    let enrichment = wenlan_core::eval::shared::EnrichmentMode::from_env(&enrich_model, cost_cap)
         .expect("EnrichmentMode::from_env failed");
 
-    let reranker = origin_core::reranker::init_cross_encoder_reranker(None).expect(
+    let reranker = wenlan_core::reranker::init_cross_encoder_reranker(None).expect(
         "init_cross_encoder_reranker failed (downloads ~1.1GB bge-reranker-base on first run)",
     );
 
@@ -9517,8 +9517,8 @@ async fn generate_pages_ab_lme_s() {
 /// Set `EVAL_SCENARIO_CONCURRENCY=8` to batch all on-device phases (#270). Fixture:
 /// `LME_S_FIXTURE` override → `longmemeval_s_cleaned.json` → `longmemeval_s.json`.
 /// ```bash
-/// ORIGIN_ENABLE_PAGE_CHANNEL=1 RERANK_POOL_FLOOR=50 EVAL_SCENARIO_CONCURRENCY=8 \
-/// ORIGIN_LLM_PARALLEL_SEQS=8 ORIGIN_LLM_CTX_SIZE=16384 ORIGIN_LLM_COALESCE_MS=10 \
+/// WENLAN_ENABLE_PAGE_CHANNEL=1 RERANK_POOL_FLOOR=50 EVAL_SCENARIO_CONCURRENCY=8 \
+/// WENLAN_LLM_PARALLEL_SEQS=8 WENLAN_LLM_CTX_SIZE=16384 WENLAN_LLM_COALESCE_MS=10 \
 /// EVAL_BASELINES_DIR=$HOME/.cache/origin-eval-fullstack-s \
 ///   cargo test -p origin-core --test eval_harness --features eval-harness \
 ///   generate_lme_fullstack_s -- --ignored --nocapture
@@ -9526,9 +9526,9 @@ async fn generate_pages_ab_lme_s() {
 #[tokio::test]
 #[ignore]
 async fn generate_lme_fullstack_s() {
-    use origin_core::eval::answer_quality::{run_fullpipeline_lme, ArmSpec, DbSource};
-    use origin_core::llm_provider::{LlmProvider, OnDeviceProvider};
     use std::sync::Arc;
+    use wenlan_core::eval::answer_quality::{run_fullpipeline_lme, ArmSpec, DbSource};
+    use wenlan_core::llm_provider::{LlmProvider, OnDeviceProvider};
 
     let lme_path = match std::env::var("LME_S_FIXTURE") {
         Ok(p) => std::path::PathBuf::from(p),
@@ -9545,7 +9545,7 @@ async fn generate_lme_fullstack_s() {
     if !lme_path.exists() {
         eprintln!(
             "SKIP: LME-S fixture not found at {:?}. Set LME_S_FIXTURE=<path> or point \
-             ORIGIN_EVAL_ROOT at the main checkout's app/eval.",
+             WENLAN_EVAL_ROOT at the main checkout's app/eval.",
             lme_path
         );
         return;
@@ -9558,7 +9558,7 @@ async fn generate_lme_fullstack_s() {
         .and_then(|s| s.parse().ok())
         .unwrap_or(10.0);
 
-    let baselines = origin_core::eval::shared::eval_baselines_dir_override()
+    let baselines = wenlan_core::eval::shared::eval_baselines_dir_override()
         .unwrap_or_else(|| eval_root().join("baselines"));
     std::fs::create_dir_all(&baselines).ok();
     let output_path = baselines.join("lme_fullstack_s_tuples.json");
@@ -9570,10 +9570,10 @@ async fn generate_lme_fullstack_s() {
          RERANK_POOL_FLOOR={}\n  \
          answer model: on-device qwen3.5-9b (temp 0.0)\n  enrich model: {}\n  output: {:?}",
         lme_path,
-        origin_core::db::page_channel_enabled(),
-        origin_core::db::graph_memory_stream_enabled(),
-        origin_core::db::temporal_soft_boost_enabled(),
-        origin_core::db::temporal_filter_enabled(),
+        wenlan_core::db::page_channel_enabled(),
+        wenlan_core::db::graph_memory_stream_enabled(),
+        wenlan_core::db::temporal_soft_boost_enabled(),
+        wenlan_core::db::temporal_filter_enabled(),
         std::env::var("RERANK_POOL_FLOOR").unwrap_or_else(|_| "10 (default)".into()),
         enrich_model,
         output_path,
@@ -9584,10 +9584,10 @@ async fn generate_lme_fullstack_s() {
             .expect("OnDeviceProvider::new_with_model failed — is the Qwen3.5-9B model available?"),
     );
 
-    let enrichment = origin_core::eval::shared::EnrichmentMode::from_env(&enrich_model, cost_cap)
+    let enrichment = wenlan_core::eval::shared::EnrichmentMode::from_env(&enrich_model, cost_cap)
         .expect("EnrichmentMode::from_env failed");
 
-    let reranker = origin_core::reranker::init_cross_encoder_reranker(None).expect(
+    let reranker = wenlan_core::reranker::init_cross_encoder_reranker(None).expect(
         "init_cross_encoder_reranker failed (downloads ~1.1GB bge-reranker-base on first run)",
     );
 
@@ -10139,7 +10139,7 @@ async fn enrichment_parity_contract() {
 #[tokio::test]
 #[ignore = "libsql-library COUNT(*)-vs-enumerate parity on cached pool page DBs; set EVAL_BASELINES_DIR"]
 async fn libsql_count_active_pages_parity() {
-    let root = origin_core::eval::shared::eval_baselines_dir_override()
+    let root = wenlan_core::eval::shared::eval_baselines_dir_override()
         .unwrap_or_else(|| eval_root().join("baselines"))
         .join("fullpipeline")
         .join("lme");

@@ -1,19 +1,19 @@
 {
-  "updated_at": "2026-05-25",
+  "updated_at": "2026-06-24",
   "benchmarks": {
-    "longmemeval": {
-      "label": "LongMemEval (oracle, 500 Q)",
+    "longmemeval_oracle": {
+      "label": "LME_Oracle (500 Q)",
       "recall_at_5": 0.936,
       "mrr": 0.857,
       "ndcg_at_10": 0.883,
       "notes": "single-run local snapshot"
     },
-    "locomo": {
-      "label": "LoCoMo (locomo10)",
-      "recall_at_5": 0.7,
-      "mrr": 0.647,
-      "ndcg_at_10": 0.684,
-      "notes": "single-run local snapshot"
+    "longmemeval_s": {
+      "label": "LME_S (deep, 90 Q)",
+      "recall_at_5": 0.8767857142857144,
+      "mrr": 0.8145975056689342,
+      "ndcg_at_10": 0.8223431120728476,
+      "notes": "single-run local retrieval snapshot from docs/eval/results/lme_s_90_bge_base_pool20.summary.json"
     }
   }
 }
