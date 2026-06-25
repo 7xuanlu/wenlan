@@ -580,24 +580,6 @@ pub fn episode_channel_enabled() -> bool {
         .unwrap_or(false)
 }
 
-/// True iff `WENLAN_ENABLE_COT_RETRIEVAL` is set to a truthy value
-/// (`1`, `true`, or `yes`, case-insensitive). The CoT iterative retrieve-reason-
-/// retrieve loop (T5) is OPT-IN: unset or a falsey value (`0`/`false`/`no`/"")
-/// leaves `search_memory_iterative` byte-identical to `search_memory_cross_rerank`
-/// (round-0 only; no draft answer, no validation, no extra LLM calls).
-///
-/// Used by [`MemoryDB::search_memory_iterative`] to gate the loop. The eval
-/// harness does NOT stamp a cot variant tag: the cross-rerank runners call
-/// `search_memory_cross_rerank`, not the iterative loop, so a `__cot` baseline
-/// tag would lie about what was measured (see AGENTS.md Eval Citation
-/// Discipline). Truthy-only parse, mirrors [`page_channel_enabled`].
-pub fn cot_retrieval_enabled() -> bool {
-    std::env::var("WENLAN_ENABLE_COT_RETRIEVAL")
-        .ok()
-        .map(|v| matches!(v.trim().to_ascii_lowercase().as_str(), "1" | "true" | "yes"))
-        .unwrap_or(false)
-}
-
 /// True iff `WENLAN_ENABLE_ENTITY_MINHASH` is set to a truthy value
 /// (`1`, `true`, or `yes`, case-insensitive). The deterministic MinHash/LSH
 /// entity near-dedup cascade (T16) is OPT-IN: unset or a falsey value
@@ -8799,24 +8781,6 @@ impl MemoryDB {
             .and_then(|s| s.parse().ok())
             .filter(|&n| n >= 1)
             .unwrap_or(Self::QUERY_DECOMP_MAX_DEFAULT)
-    }
-
-    /// Default CoT iterative-retrieval round cap (excluding round 0). Each round
-    /// costs 2 LLM calls (draft + validate) plus 1 retrieval, so the cap bounds
-    /// runaway cost. Override with `WENLAN_COT_MAX_ITER`. Default 3 matches the
-    /// plan + Cognee CoT max_iter. Mirrors the `page_channel_limit` env-override
-    /// idiom. Test-only for now: callers of `search_memory_iterative` pass
-    /// `max_iter` explicitly, and no production/eval path drives the loop yet, so
-    /// this env-resolver is exercised only by its unit test.
-    #[cfg(test)]
-    const COT_MAX_ITER_DEFAULT: usize = 3;
-
-    #[cfg(test)]
-    pub(crate) fn cot_max_iter() -> usize {
-        std::env::var("WENLAN_COT_MAX_ITER")
-            .ok()
-            .and_then(|s| s.trim().parse().ok())
-            .unwrap_or(Self::COT_MAX_ITER_DEFAULT)
     }
 
     /// Hybrid search over the verbatim `source='episode'` tier (T2).
