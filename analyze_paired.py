@@ -209,15 +209,17 @@ def analyze_pair(feature, bench, rows):
     dmrr = [o2["mrr"] - o1["mrr"] for o1, o2 in paired]
 
     # For page_channel feature: compute marginal coverage delta
-    # marginal = (cov_expanded_on - cov_blind_on) - (cov_expanded_off - cov_blind_off)
+    # marginal = coverage_on (expanded) - coverage_off (blind).
+    # Compares: ON arm with page->source expansion vs OFF arm with no pages.
     d_marginal_cov = []
     for o1, o2 in paired:
         if feature == "page_channel" and \
            o1.get("cov_blind") is not None and o1.get("cov_expanded") is not None and \
            o2.get("cov_blind") is not None and o2.get("cov_expanded") is not None:
-            on_marginal = o2["cov_expanded"] - o2["cov_blind"]
-            off_marginal = o1["cov_expanded"] - o1["cov_blind"]
-            d_marginal_cov.append(on_marginal - off_marginal)
+            # o1 (OFF arm): cov_blind (no page expansion)
+            # o2 (ON arm): cov_expanded (page->source expansion)
+            # marginal = on_coverage - off_coverage
+            d_marginal_cov.append(o2["cov_expanded"] - o1["cov_blind"])
         else:
             d_marginal_cov.append(0.0)
 
