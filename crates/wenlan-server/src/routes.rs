@@ -248,15 +248,10 @@ pub async fn handle_chat_context(
     // ~15 sequential awaits (load_memories_by_type, search_*, log_accesses,
     // etc.) would block every writer to ServerState — e.g. store_memory's
     // deferred async work — for the full duration. See CLAUDE.md locking rules.
-    let (db_arc, access_tracker, page_min_overlap, reranker_light) = {
+    let (db_arc, access_tracker, reranker_light) = {
         let s = state.read().await;
         let db = s.db.clone().ok_or(ServerError::DbNotInitialized)?;
-        (
-            db,
-            s.access_tracker.clone(),
-            s.tuning.distillation.page_min_overlap,
-            s.reranker_light.clone(),
-        )
+        (db, s.access_tracker.clone(), s.reranker_light.clone())
     }; // guard dropped here
     let db = db_arc.as_ref();
 
@@ -386,24 +381,26 @@ pub async fn handle_chat_context(
         .map(|r| r.source_id.clone())
         .collect();
 
-    let page_results: Vec<String> =
-        if tier_allowed(&classification.trust_level, 2) && query != "recent context" {
-            let raw_pages = db.search_pages(query, 3, None).await.unwrap_or_default();
-            let pages = wenlan_core::pages::filter_pages_by_source_overlap(
-                &raw_pages,
-                &search_source_ids,
-                page_min_overlap,
-            );
-            pages
-                .iter()
-                .map(|c| {
-                    let summary = c.summary.as_deref().unwrap_or("");
-                    format!("**{}**: {}\n{}", c.title, summary, c.content)
-                })
-                .collect()
-        } else {
-            Vec::new()
-        };
+    let page_results: Vec<String> = if tier_allowed(&classification.trust_level, 2)
+        && query != "recent context"
+    {
+        let raw_pages = db.search_pages(query, 3, None).await.unwrap_or_default();
+        // Un-gated: rank confirmed pages by relevance (source-overlap is a
+        // tie-break boost, not a hard filter) and take the top 3 (token cap,
+        // matching the search_pages fetch above). The old source-overlap gate
+        // dropped high-relevance pages whose source memories did not intersect
+        // the memory hit pool.
+        let pages = wenlan_core::pages::select_pages_for_context(&raw_pages, &search_source_ids, 3);
+        pages
+            .iter()
+            .map(|c| {
+                let summary = c.summary.as_deref().unwrap_or("");
+                format!("**{}**: {}\n{}", c.title, summary, c.content)
+            })
+            .collect()
+    } else {
+        Vec::new()
+    };
 
     // T18 global-context prelude (opt-in, ship-dark). Read-only: surfaces the
     // pre-built summary_nodes as a `## Corpus Overview` section. The build path
@@ -1313,5 +1310,74 @@ mod distill_request_tests {
     fn distill_request_rejects_unknown_field() {
         let r = serde_json::from_str::<DistillRequest>(r#"{"bogus":true}"#);
         assert!(r.is_err(), "deny_unknown_fields should reject unknown keys");
+    }
+}
+
+#[cfg(test)]
+mod context_page_selection_tests {
+    use std::collections::HashSet;
+    use wenlan_core::pages::{filter_pages_by_source_overlap, select_pages_for_context, Page};
+
+    fn make_page(id: &str, source_ids: &[&str], relevance_score: f32, review_status: &str) -> Page {
+        Page {
+            id: id.to_string(),
+            title: id.to_string(),
+            summary: None,
+            content: String::new(),
+            entity_id: None,
+            space: None,
+            source_memory_ids: source_ids.iter().map(|s| s.to_string()).collect(),
+            version: 1,
+            status: "active".to_string(),
+            created_at: String::new(),
+            last_compiled: String::new(),
+            last_modified: String::new(),
+            sources_updated_count: 0,
+            stale_reason: None,
+            user_edited: false,
+            relevance_score,
+            last_edited_by: None,
+            last_edited_at: None,
+            last_delta_summary: None,
+            changelog: None,
+            creation_kind: "distilled".to_string(),
+            review_status: review_status.to_string(),
+            workspace: None,
+        }
+    }
+
+    /// The `/api/context` page block is wired to `select_pages_for_context(.., 3)`
+    /// (the un-gated selector), NOT the old source-overlap gate. A high-relevance
+    /// page whose source memories do NOT intersect the memory hit pool MUST still
+    /// surface — the exact case the prior `filter_pages_by_source_overlap(.., >=1)`
+    /// gate dropped. This locks the T2 wiring so a revert to the gate fails loud.
+    #[test]
+    fn context_surfaces_zero_overlap_page_that_old_gate_dropped() {
+        // Memory hit pool returned by search_memory for this query.
+        let search_source_ids: HashSet<String> =
+            ["m1", "m2"].iter().map(|s| s.to_string()).collect();
+
+        // Top-relevance page compiled from memories DISJOINT from the pool,
+        // plus a lower-relevance page that does overlap.
+        let raw_pages = vec![
+            make_page("page_zero_overlap", &["x9", "x8"], 0.95, "confirmed"),
+            make_page("page_overlap", &["m1"], 0.40, "confirmed"),
+        ];
+
+        // The OLD gate (min_overlap >= 1) drops the zero-overlap page — the
+        // regression this change removes. Assert it really would have dropped it,
+        // so the test below is exercising the gate boundary, not a no-op.
+        let gated = filter_pages_by_source_overlap(&raw_pages, &search_source_ids, 1);
+        assert!(
+            !gated.iter().any(|p| p.id == "page_zero_overlap"),
+            "old source-overlap gate should drop the zero-overlap page"
+        );
+
+        // The NEW wiring (cap = 3, matching the handler's literal) surfaces it.
+        let selected = select_pages_for_context(&raw_pages, &search_source_ids, 3);
+        assert!(
+            selected.iter().any(|p| p.id == "page_zero_overlap"),
+            "un-gated context path must surface the high-relevance zero-overlap page"
+        );
     }
 }
