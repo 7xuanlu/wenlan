@@ -23,11 +23,32 @@ attention. Otherwise, push through automatically.
 ### 1. Daemon health probe
 
 ```
-Bash: curl -fsS -m 1 http://127.0.0.1:7878/api/health
+Bash: for i in 1 2 3; do curl -fsS -m 3 http://127.0.0.1:7878/api/health && break; sleep 1; done
 ```
 
-- 200 OK → skip to step 4.
+- 200 OK → continue to version drift probe.
 - Anything else → step 2.
+
+### 1.5. Version drift probe
+
+Compare daemon version vs plugin manifest version:
+
+```
+Bash: PLUGIN_JSON="${CLAUDE_PLUGIN_ROOT:-}/.claude-plugin/plugin.json"; if command -v python3 >/dev/null 2>&1 && [ -r "$PLUGIN_JSON" ]; then RESP="$(curl -fsS -m 3 http://127.0.0.1:7878/api/health)"; DAEMON_VER="$(printf '%s' "$RESP" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("version",""))')"; EXPECTED_VER="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("version",""))' "$PLUGIN_JSON")"; printf 'daemon=%s expected=%s\n' "$DAEMON_VER" "$EXPECTED_VER"; else echo "version_check=skipped"; fi
+```
+
+- Same version → skip to step 4.
+- If `PLUGIN_JSON` is unreadable or `python3` is missing, skip to step 4;
+  the daemon is healthy and the hook will keep surfacing a mismatch if one
+  exists.
+- If mismatch, repair the runtime (no human prompts):
+
+```
+Bash: PLUGIN_JSON="${CLAUDE_PLUGIN_ROOT:-}/.claude-plugin/plugin.json"; EXPECTED_VER="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("version",""))' "$PLUGIN_JSON")"; curl -fsSL https://raw.githubusercontent.com/7xuanlu/wenlan/v${EXPECTED_VER}/install.sh | bash
+Bash: export PATH="$HOME/.wenlan/bin:$PATH" && wenlan setup --basic && wenlan install
+```
+
+Then continue to step 3.
 
 ### 2. Bootstrap (auto-install if missing)
 
@@ -62,7 +83,7 @@ writes the launchd plist and starts the daemon.
 ### 3. Re-probe daemon health
 
 ```
-Bash: for i in 1 2 3 4 5; do curl -fsS -m 1 http://127.0.0.1:7878/api/health && break; sleep 1; done
+Bash: for i in 1 2 3 4 5; do curl -fsS -m 3 http://127.0.0.1:7878/api/health && break; sleep 1; done
 ```
 
 If the daemon still isn't reachable after ~5s, surface the error and stop.
@@ -122,6 +143,7 @@ work in local memory mode.
 
 - Right after `/plugin install wenlan@7xuanlu`.
 - Hook printed "daemon down — run /wenlan:init".
+- Hook printed "Run /wenlan:init to repair" for a version mismatch.
 - User says "set up wenlan", "is it working", "reinstall wenlan".
 
 ## When NOT to use
