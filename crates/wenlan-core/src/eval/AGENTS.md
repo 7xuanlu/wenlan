@@ -12,7 +12,7 @@ Two runner families exist. Choose based on what question you are answering.
 
 Create a `tempdir` + `MemoryDB::new` + upsert observations per conversation. Each conversation gets a fresh isolated DB. No page distillation runs because pages are a background task that requires a full enrichment pipeline.
 
-Examples: `run_locomo_eval`, `run_locomo_eval_cross_rerank`, `run_locomo_eval_expanded`, and their LME equivalents.
+Examples: `run_locomo_eval`, `run_locomo_eval_cross_rerank`, and their LME equivalents.
 
 Use when: measuring the published baseline bar, or any retrieval-only benchmark where pages should not be a factor.
 

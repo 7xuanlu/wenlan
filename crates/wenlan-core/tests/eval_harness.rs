@@ -536,67 +536,6 @@ async fn save_longmemeval_temporal_baseline() {
     }
 }
 
-/// LME full-haystack DECOMPOSE retrieval A/B (search_memory_decomposed: split the
-/// query into independent subqueries, retrieve each, RRF-merge). Targets
-/// multi-session (worst base category, R@5 0.607). Needs the local LLM for the
-/// decomposition call. Compare per-category vs `save_longmemeval_baseline` (base).
-#[tokio::test]
-#[ignore]
-async fn save_longmemeval_decomposed_baseline() {
-    use std::sync::Arc;
-    let rel =
-        std::env::var("LME_FIXTURE").unwrap_or_else(|_| "data/longmemeval_oracle.json".to_string());
-    let path = eval_root().join(&rel);
-    if !path.exists() {
-        println!("SKIP: {rel} not found");
-        return;
-    }
-    let llm: Arc<dyn wenlan_core::llm_provider::LlmProvider> = Arc::new(
-        wenlan_core::llm_provider::OnDeviceProvider::new_with_model(Some("qwen3.5-9b")).unwrap(),
-    );
-    let report = wenlan_core::eval::longmemeval::run_longmemeval_eval_decomposed(&path, llm)
-        .await
-        .unwrap();
-    println!(
-        "=== LME DECOMPOSE retrieval [{rel}] OVERALL ({}q, {}mem): ndcg@10={:.3} R@5={:.3} mrr={:.3} hit@1={:.3} ===",
-        report.total_questions,
-        report.total_memories,
-        report.aggregate_ndcg_at_10,
-        report.aggregate_recall_at_5,
-        report.aggregate_mrr,
-        report.aggregate_hit_rate_at_1
-    );
-    for c in &report.per_category {
-        println!(
-            "  {:28} n={:<4} ndcg@10={:.3} R@5={:.3} mrr={:.3} hit@1={:.3}",
-            c.question_type, c.count, c.ndcg_at_10, c.recall_at_5, c.mrr, c.hit_rate_at_1
-        );
-    }
-}
-
-#[tokio::test]
-#[ignore]
-async fn save_locomo_expanded_baseline() {
-    use std::sync::Arc;
-    let path = eval_root().join("data/locomo10.json");
-    if !path.exists() {
-        println!("SKIP: locomo10.json not found");
-        return;
-    }
-    let llm: Arc<dyn wenlan_core::llm_provider::LlmProvider> = Arc::new(
-        wenlan_core::llm_provider::OnDeviceProvider::new_with_model(Some("qwen3.5-9b")).unwrap(),
-    );
-    let report = wenlan_core::eval::locomo::run_locomo_eval_expanded(&path, llm)
-        .await
-        .unwrap();
-    let baselines_dir = eval_root().join("baselines");
-    std::fs::create_dir_all(&baselines_dir).unwrap();
-    let baseline_path = baselines_dir.join(report.baseline_filename("locomo"));
-    report.save_baseline(&baseline_path).unwrap();
-    println!("Saved LoCoMo expanded baseline to {:?}", baseline_path);
-    save_layered(&report, |r| r.to_eval_report());
-}
-
 // Cross-encoder rerank variants — fastembed TextRerank (BGERerankerV2M3) in
 // place of the LLM reranker. First run downloads the model weights.
 //
@@ -669,29 +608,6 @@ async fn save_longmemeval_cross_rerank_baseline() {
         },
     )
     .await;
-}
-
-#[tokio::test]
-#[ignore]
-async fn save_longmemeval_expanded_baseline() {
-    use std::sync::Arc;
-    let path = eval_root().join("data/longmemeval_oracle.json");
-    if !path.exists() {
-        println!("SKIP: longmemeval_oracle.json not found");
-        return;
-    }
-    let llm: Arc<dyn wenlan_core::llm_provider::LlmProvider> = Arc::new(
-        wenlan_core::llm_provider::OnDeviceProvider::new_with_model(Some("qwen3.5-9b")).unwrap(),
-    );
-    let report = wenlan_core::eval::longmemeval::run_longmemeval_eval_expanded(&path, llm)
-        .await
-        .unwrap();
-    let baselines_dir = eval_root().join("baselines");
-    std::fs::create_dir_all(&baselines_dir).unwrap();
-    let baseline_path = baselines_dir.join(report.baseline_filename("longmemeval"));
-    report.save_baseline(&baseline_path).unwrap();
-    println!("Saved LongMemEval expanded baseline to {:?}", baseline_path);
-    save_layered(&report, |r| r.to_eval_report());
 }
 
 // ---------------------------------------------------------------------------
