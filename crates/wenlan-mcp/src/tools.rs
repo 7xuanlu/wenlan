@@ -675,6 +675,24 @@ fn format_doctor_message(status: &serde_json::Value) -> String {
     msg
 }
 
+/// Call a daemon HTTP method and short-circuit on transport error.
+///
+/// `$call` — the client method expression (without `.await`)
+/// `$label` — the verb string passed to `tool_error` on failure
+///
+/// Expands to the `match … { Ok(r) => r, Err(e) => return Ok(tool_error(e, $label)) }`
+/// boilerplate that every `*_impl` method repeats. The per-site `let binding: T =`
+/// type annotation is preserved outside the macro so typed deserialization is
+/// still driven by the concrete response type (AGENTS.md hard invariant, PR #77).
+macro_rules! try_call {
+    ($call:expr, $label:expr) => {
+        match $call.await {
+            Ok(r) => r,
+            Err(e) => return Ok(tool_error(e, $label)),
+        }
+    };
+}
+
 impl WenlanMcpServer {
     /// Resolve the source_agent for a write operation.
     /// Priority: explicit param > MCP client name (from initialize) > configured agent_name.
@@ -729,10 +747,8 @@ impl WenlanMcpServer {
             retrieval_cue: params.retrieval_cue,
         };
 
-        let resp: StoreMemoryResponse = match self.client.post("/api/memory/store", &req).await {
-            Ok(r) => r,
-            Err(e) => return Ok(tool_error(e, "memory store")),
-        };
+        let resp: StoreMemoryResponse =
+            try_call!(self.client.post("/api/memory/store", &req), "memory store");
 
         Ok(CallToolResult::success(vec![Content::text(
             format_capture_success(&resp),
@@ -755,10 +771,8 @@ impl WenlanMcpServer {
             rerank: params.rerank.unwrap_or(false),
         };
 
-        let resp: SearchMemoryResponse = match self.client.post("/api/memory/search", &req).await {
-            Ok(r) => r,
-            Err(e) => return Ok(tool_error(e, "search")),
-        };
+        let resp: SearchMemoryResponse =
+            try_call!(self.client.post("/api/memory/search", &req), "search");
 
         let json = serde_json::to_string_pretty(&resp.results)
             .map_err(|e| McpError::internal_error(e.to_string(), None))?;
@@ -798,10 +812,8 @@ impl WenlanMcpServer {
         // Since context_impl only uses `resp.context`, we parse the raw
         // JSON and pull that field directly — this makes the tool forward-
         // compatible with any new fields the daemon might add.
-        let raw: serde_json::Value = match self.client.post("/api/chat-context", &req).await {
-            Ok(r) => r,
-            Err(e) => return Ok(tool_error(e, "context load")),
-        };
+        let raw: serde_json::Value =
+            try_call!(self.client.post("/api/chat-context", &req), "context load");
 
         let context = raw
             .get("context")
@@ -845,14 +857,11 @@ impl WenlanMcpServer {
             )]));
         }
 
-        let resp: DeleteResponse = match self
-            .client
-            .delete(&format!("/api/memory/delete/{}", memory_id))
-            .await
-        {
-            Ok(r) => r,
-            Err(e) => return Ok(tool_error(e, "delete")),
-        };
+        let resp: DeleteResponse = try_call!(
+            self.client
+                .delete(&format!("/api/memory/delete/{}", memory_id)),
+            "delete"
+        );
 
         Ok(CallToolResult::success(vec![Content::text(
             if resp.deleted {
@@ -913,10 +922,8 @@ impl WenlanMcpServer {
             confirmed: Some(false),
             limit,
         };
-        let resp: ListMemoriesResponse = match self.client.post("/api/memory/list", &req).await {
-            Ok(r) => r,
-            Err(e) => return Ok(tool_error(e, "list_pending")),
-        };
+        let resp: ListMemoriesResponse =
+            try_call!(self.client.post("/api/memory/list", &req), "list_pending");
         let body = serde_json::to_string_pretty(&resp.memories)
             .unwrap_or_else(|e| format!("serialization error: {e}"));
         Ok(CallToolResult::success(vec![Content::text(body)]))
@@ -957,11 +964,10 @@ impl WenlanMcpServer {
             source_agent,
             confidence: params.confidence,
         };
-        let resp: CreateEntityResponse = match self.client.post("/api/memory/entities", &req).await
-        {
-            Ok(r) => r,
-            Err(e) => return Ok(tool_error(e, "create_entity")),
-        };
+        let resp: CreateEntityResponse = try_call!(
+            self.client.post("/api/memory/entities", &req),
+            "create_entity"
+        );
         let mut text = format!("Created entity {}", resp.id);
         for w in &resp.warnings {
             text.push_str(&format!("\nwarning: {w}"));
@@ -983,11 +989,10 @@ impl WenlanMcpServer {
             explanation: None,
             source_memory_id: None,
         };
-        let resp: CreateRelationResponse =
-            match self.client.post("/api/memory/relations", &req).await {
-                Ok(r) => r,
-                Err(e) => return Ok(tool_error(e, "create_relation")),
-            };
+        let resp: CreateRelationResponse = try_call!(
+            self.client.post("/api/memory/relations", &req),
+            "create_relation"
+        );
         let mut text = format!("Created relation {}", resp.id);
         for w in &resp.warnings {
             text.push_str(&format!("\nwarning: {w}"));
@@ -1005,11 +1010,10 @@ impl WenlanMcpServer {
             source_agent: params.source_agent,
             confidence: params.confidence,
         };
-        let resp: wenlan_types::responses::AddObservationResponse =
-            match self.client.post("/api/memory/observations", &req).await {
-                Ok(r) => r,
-                Err(e) => return Ok(tool_error(e, "create_observation")),
-            };
+        let resp: wenlan_types::responses::AddObservationResponse = try_call!(
+            self.client.post("/api/memory/observations", &req),
+            "create_observation"
+        );
         let mut text = format!("Created observation {}", resp.id);
         for w in &resp.warnings {
             text.push_str(&format!("\nwarning: {w}"));
@@ -1032,10 +1036,8 @@ impl WenlanMcpServer {
             confirmed: params.confirmed,
         };
         let path = format!("/api/memory/entities/{}/confirm", params.entity_id);
-        let _: wenlan_types::responses::SuccessResponse = match self.client.put(&path, &req).await {
-            Ok(r) => r,
-            Err(e) => return Ok(tool_error(e, "confirm_entity")),
-        };
+        let _: wenlan_types::responses::SuccessResponse =
+            try_call!(self.client.put(&path, &req), "confirm_entity");
         Ok(CallToolResult::success(vec![Content::text(format!(
             "Entity {} {}",
             params.entity_id,
@@ -1062,10 +1064,8 @@ impl WenlanMcpServer {
             content: params.content,
         };
         let path = format!("/api/memory/observations/{}", params.observation_id);
-        let _: wenlan_types::responses::SuccessResponse = match self.client.put(&path, &req).await {
-            Ok(r) => r,
-            Err(e) => return Ok(tool_error(e, "update_observation")),
-        };
+        let _: wenlan_types::responses::SuccessResponse =
+            try_call!(self.client.put(&path, &req), "update_observation");
         Ok(CallToolResult::success(vec![Content::text(format!(
             "Updated observation {}",
             params.observation_id
@@ -1087,10 +1087,8 @@ impl WenlanMcpServer {
             confirmed: params.confirmed,
         };
         let path = format!("/api/memory/observations/{}/confirm", params.observation_id);
-        let _: wenlan_types::responses::SuccessResponse = match self.client.put(&path, &req).await {
-            Ok(r) => r,
-            Err(e) => return Ok(tool_error(e, "confirm_observation")),
-        };
+        let _: wenlan_types::responses::SuccessResponse =
+            try_call!(self.client.put(&path, &req), "confirm_observation");
         Ok(CallToolResult::success(vec![Content::text(format!(
             "Observation {} {}",
             params.observation_id,
@@ -1114,10 +1112,8 @@ impl WenlanMcpServer {
             )]));
         }
         let path = format!("/api/memory/observations/{}", params.observation_id);
-        let _: wenlan_types::responses::SuccessResponse = match self.client.delete(&path).await {
-            Ok(r) => r,
-            Err(e) => return Ok(tool_error(e, "delete_observation")),
-        };
+        let _: wenlan_types::responses::SuccessResponse =
+            try_call!(self.client.delete(&path), "delete_observation");
         Ok(CallToolResult::success(vec![Content::text(format!(
             "Observation {} deleted",
             params.observation_id
@@ -1139,10 +1135,8 @@ impl WenlanMcpServer {
             creation_kind: None,
             workspace: None,
         };
-        let resp: CreatePageResponse = match self.client.post("/api/pages", &req).await {
-            Ok(r) => r,
-            Err(e) => return Ok(tool_error(e, "create_page")),
-        };
+        let resp: CreatePageResponse =
+            try_call!(self.client.post("/api/pages", &req), "create_page");
         let mut text = format!("Created page {}", resp.id);
         for w in &resp.warnings {
             text.push_str(&format!("\nwarning: {w}"));
@@ -1170,10 +1164,8 @@ impl WenlanMcpServer {
         // Typed end-to-end: a wire-shape drift on the daemon side fails at
         // deserialize instead of silently returning the no-op "Refreshed"
         // line. Same discipline as PR #77's search_pages / list_pages_recent.
-        let _: wenlan_types::responses::SuccessResponse = match self.client.put(&path, &req).await {
-            Ok(r) => r,
-            Err(e) => return Ok(tool_error(e, "update_page")),
-        };
+        let _: wenlan_types::responses::SuccessResponse =
+            try_call!(self.client.put(&path, &req), "update_page");
         Ok(CallToolResult::success(vec![Content::text(format!(
             "Refreshed page {}",
             params.page_id
@@ -1190,10 +1182,7 @@ impl WenlanMcpServer {
         }
 
         let path = format!("/api/pages/{}", page_id);
-        let resp: serde_json::Value = match self.client.delete(&path).await {
-            Ok(r) => r,
-            Err(e) => return Ok(tool_error(e, "delete_page")),
-        };
+        let resp: serde_json::Value = try_call!(self.client.delete(&path), "delete_page");
         let status = resp
             .get("status")
             .and_then(|v| v.as_str())
@@ -1206,10 +1195,7 @@ impl WenlanMcpServer {
 
     pub async fn get_page_impl(&self, page_id: &str) -> Result<CallToolResult, McpError> {
         let path = format!("/api/pages/{}", page_id);
-        let resp: serde_json::Value = match self.client.get(&path).await {
-            Ok(r) => r,
-            Err(e) => return Ok(tool_error(e, "get_page")),
-        };
+        let resp: serde_json::Value = try_call!(self.client.get(&path), "get_page");
         let pretty = serde_json::to_string_pretty(&resp).unwrap_or_else(|_| resp.to_string());
         Ok(CallToolResult::success(vec![Content::text(pretty)]))
     }
@@ -1217,10 +1203,8 @@ impl WenlanMcpServer {
     pub async fn get_page_links_impl(&self, page_id: &str) -> Result<CallToolResult, McpError> {
         let path = format!("/api/pages/{}/links", page_id);
         // Typed end-to-end via PageLinksResponse — keeps wire shape pinned.
-        let resp: wenlan_types::responses::PageLinksResponse = match self.client.get(&path).await {
-            Ok(r) => r,
-            Err(e) => return Ok(tool_error(e, "get_page_links")),
-        };
+        let resp: wenlan_types::responses::PageLinksResponse =
+            try_call!(self.client.get(&path), "get_page_links");
         let pretty = serde_json::to_string_pretty(&resp).unwrap_or_else(|_| String::new());
         Ok(CallToolResult::success(vec![Content::text(pretty)]))
     }
@@ -1228,10 +1212,7 @@ impl WenlanMcpServer {
     pub async fn get_page_sources_impl(&self, page_id: &str) -> Result<CallToolResult, McpError> {
         let path = format!("/api/pages/{}/sources", page_id);
         // Daemon returns Vec<PageSourceWithMemory> directly (no envelope key).
-        let resp: Vec<PageSourceWithMemory> = match self.client.get(&path).await {
-            Ok(r) => r,
-            Err(e) => return Ok(tool_error(e, "get_page_sources")),
-        };
+        let resp: Vec<PageSourceWithMemory> = try_call!(self.client.get(&path), "get_page_sources");
         let pretty = serde_json::to_string_pretty(&resp)
             .map_err(|e| McpError::internal_error(e.to_string(), None))?;
         Ok(CallToolResult::success(vec![Content::text(format!(
@@ -1246,10 +1227,8 @@ impl WenlanMcpServer {
         memory_id: &str,
     ) -> Result<CallToolResult, McpError> {
         let path = format!("/api/memory/{}/revisions", memory_id);
-        let resp: ListMemoryRevisionsResponse = match self.client.get(&path).await {
-            Ok(r) => r,
-            Err(e) => return Ok(tool_error(e, "get_memory_revisions")),
-        };
+        let resp: ListMemoryRevisionsResponse =
+            try_call!(self.client.get(&path), "get_memory_revisions");
         let pretty = serde_json::to_string_pretty(&resp)
             .map_err(|e| McpError::internal_error(e.to_string(), None))?;
         Ok(CallToolResult::success(vec![Content::text(format!(
@@ -1260,10 +1239,8 @@ impl WenlanMcpServer {
 
     pub async fn get_page_revisions_impl(&self, page_id: &str) -> Result<CallToolResult, McpError> {
         let path = format!("/api/pages/{}/revisions", page_id);
-        let resp: ListPageRevisionsResponse = match self.client.get(&path).await {
-            Ok(r) => r,
-            Err(e) => return Ok(tool_error(e, "get_page_revisions")),
-        };
+        let resp: ListPageRevisionsResponse =
+            try_call!(self.client.get(&path), "get_page_revisions");
         let pretty = serde_json::to_string_pretty(&resp)
             .map_err(|e| McpError::internal_error(e.to_string(), None))?;
         Ok(CallToolResult::success(vec![Content::text(format!(
@@ -1285,10 +1262,8 @@ impl WenlanMcpServer {
             limit: params.limit.unwrap_or(100),
             confirmed: None,
         };
-        let resp: ListMemoriesResponse = match self.client.post("/api/memory/list", &req).await {
-            Ok(r) => r,
-            Err(e) => return Ok(tool_error(e, "list_memories")),
-        };
+        let resp: ListMemoriesResponse =
+            try_call!(self.client.post("/api/memory/list", &req), "list_memories");
         let pretty = serde_json::to_string_pretty(&resp.memories)
             .map_err(|e| McpError::internal_error(e.to_string(), None))?;
         Ok(CallToolResult::success(vec![Content::text(format!(
@@ -1307,10 +1282,8 @@ impl WenlanMcpServer {
             limit: params.limit,
             page_type: params.page_type,
         };
-        let resp: SearchPagesResponse = match self.client.post("/api/pages/search", &req).await {
-            Ok(r) => r,
-            Err(e) => return Ok(tool_error(e, "search_pages")),
-        };
+        let resp: SearchPagesResponse =
+            try_call!(self.client.post("/api/pages/search", &req), "search_pages");
         let pretty = serde_json::to_string_pretty(&resp.pages)
             .map_err(|e| McpError::internal_error(e.to_string(), None))?;
         Ok(CallToolResult::success(vec![Content::text(format!(
@@ -1325,10 +1298,7 @@ impl WenlanMcpServer {
         params: ListPagesRecentParams,
     ) -> Result<CallToolResult, McpError> {
         let path = build_recent_pages_path(params.limit, params.since_ms);
-        let resp: Vec<RecentActivityItem> = match self.client.get(&path).await {
-            Ok(r) => r,
-            Err(e) => return Ok(tool_error(e, "list_pages_recent")),
-        };
+        let resp: Vec<RecentActivityItem> = try_call!(self.client.get(&path), "list_pages_recent");
         let pretty = serde_json::to_string_pretty(&resp)
             .map_err(|e| McpError::internal_error(e.to_string(), None))?;
         Ok(CallToolResult::success(vec![Content::text(format!(
@@ -1342,10 +1312,7 @@ impl WenlanMcpServer {
         &self,
         _params: ListSpacesParams,
     ) -> Result<CallToolResult, McpError> {
-        let resp: Vec<Space> = match self.client.get("/api/spaces").await {
-            Ok(r) => r,
-            Err(e) => return Ok(tool_error(e, "list_spaces")),
-        };
+        let resp: Vec<Space> = try_call!(self.client.get("/api/spaces"), "list_spaces");
         let pretty = serde_json::to_string_pretty(&resp)
             .map_err(|e| McpError::internal_error(e.to_string(), None))?;
         Ok(CallToolResult::success(vec![Content::text(format!(
@@ -1372,10 +1339,7 @@ impl WenlanMcpServer {
             path.push_str(&q.join("&"));
         }
 
-        let resp: ListRefinementsResponse = match self.client.get(&path).await {
-            Ok(v) => v,
-            Err(e) => return Ok(tool_error(e, "list_refinements")),
-        };
+        let resp: ListRefinementsResponse = try_call!(self.client.get(&path), "list_refinements");
 
         let pretty = serde_json::to_string_pretty(&resp.proposals)
             .map_err(|e| McpError::internal_error(e.to_string(), None))?;
@@ -1401,11 +1365,10 @@ impl WenlanMcpServer {
             "/api/refinery/queue/{}/reject",
             url_encode_simple(&params.id)
         );
-        let resp: RejectRefinementResponse =
-            match self.client.post(&path, &serde_json::json!({})).await {
-                Ok(v) => v,
-                Err(e) => return Ok(tool_error(e, "reject_refinement")),
-            };
+        let resp: RejectRefinementResponse = try_call!(
+            self.client.post(&path, &serde_json::json!({})),
+            "reject_refinement"
+        );
 
         Ok(CallToolResult::success(vec![Content::text(format!(
             "Review proposal {} dismissed.",
@@ -1428,11 +1391,10 @@ impl WenlanMcpServer {
             "/api/refinery/queue/{}/accept",
             url_encode_simple(&params.id)
         );
-        let resp: AcceptRefinementResponse =
-            match self.client.post(&path, &serde_json::json!({})).await {
-                Ok(v) => v,
-                Err(e) => return Ok(tool_error(e, "accept_refinement")),
-            };
+        let resp: AcceptRefinementResponse = try_call!(
+            self.client.post(&path, &serde_json::json!({})),
+            "accept_refinement"
+        );
 
         Ok(CallToolResult::success(vec![Content::text(format!(
             "Review proposal {} accepted (action={}).",
@@ -1458,11 +1420,8 @@ impl WenlanMcpServer {
             path.push_str(&q.join("&"));
         }
 
-        let resp: wenlan_types::responses::NurtureCardsResponse = match self.client.get(&path).await
-        {
-            Ok(v) => v,
-            Err(e) => return Ok(tool_error(e, "list_nurture")),
-        };
+        let resp: wenlan_types::responses::NurtureCardsResponse =
+            try_call!(self.client.get(&path), "list_nurture");
 
         let pretty = serde_json::to_string_pretty(&resp.cards)
             .map_err(|e| McpError::internal_error(e.to_string(), None))?;
@@ -1477,11 +1436,10 @@ impl WenlanMcpServer {
         &self,
         _params: ListEntitySuggestionsParams,
     ) -> Result<CallToolResult, McpError> {
-        let resp: Vec<wenlan_types::entities::EntitySuggestion> =
-            match self.client.get("/api/memory/entity-suggestions").await {
-                Ok(v) => v,
-                Err(e) => return Ok(tool_error(e, "list_entity_suggestions")),
-            };
+        let resp: Vec<wenlan_types::entities::EntitySuggestion> = try_call!(
+            self.client.get("/api/memory/entity-suggestions"),
+            "list_entity_suggestions"
+        );
         let pretty = serde_json::to_string_pretty(&resp)
             .map_err(|e| McpError::internal_error(e.to_string(), None))?;
         Ok(CallToolResult::success(vec![Content::text(format!(
@@ -1503,14 +1461,10 @@ impl WenlanMcpServer {
             )]));
         }
         let path = format!("/api/memory/revision/{}/accept", req.target_source_id);
-        let response = match self
-            .client
-            .post_empty::<RevisionAcceptResponse>(&path)
-            .await
-        {
-            Ok(r) => r,
-            Err(e) => return Ok(tool_error(e, "accept_revision")),
-        };
+        let response = try_call!(
+            self.client.post_empty::<RevisionAcceptResponse>(&path),
+            "accept_revision"
+        );
         let pretty = serde_json::to_string_pretty(&response)
             .map_err(|e| McpError::internal_error(e.to_string(), None))?;
         Ok(CallToolResult::success(vec![Content::text(pretty)]))
@@ -1528,14 +1482,10 @@ impl WenlanMcpServer {
             )]));
         }
         let path = format!("/api/memory/revision/{}/dismiss", req.target_source_id);
-        let response = match self
-            .client
-            .post_empty::<RevisionDismissResponse>(&path)
-            .await
-        {
-            Ok(r) => r,
-            Err(e) => return Ok(tool_error(e, "dismiss_revision")),
-        };
+        let response = try_call!(
+            self.client.post_empty::<RevisionDismissResponse>(&path),
+            "dismiss_revision"
+        );
         let pretty = serde_json::to_string_pretty(&response)
             .map_err(|e| McpError::internal_error(e.to_string(), None))?;
         Ok(CallToolResult::success(vec![Content::text(pretty)]))
@@ -1553,14 +1503,11 @@ impl WenlanMcpServer {
             )]));
         }
         let path = format!("/api/memory/contradiction/{}/dismiss", req.source_id);
-        let response = match self
-            .client
-            .post_empty::<ContradictionDismissResponse>(&path)
-            .await
-        {
-            Ok(r) => r,
-            Err(e) => return Ok(tool_error(e, "dismiss_contradiction")),
-        };
+        let response = try_call!(
+            self.client
+                .post_empty::<ContradictionDismissResponse>(&path),
+            "dismiss_contradiction"
+        );
         let pretty = serde_json::to_string_pretty(&response)
             .map_err(|e| McpError::internal_error(e.to_string(), None))?;
         Ok(CallToolResult::success(vec![Content::text(pretty)]))
@@ -1571,10 +1518,7 @@ impl WenlanMcpServer {
         _params: ListPendingImportsParams,
     ) -> Result<CallToolResult, McpError> {
         let resp: Vec<wenlan_types::import::PendingImport> =
-            match self.client.get("/api/import/state").await {
-                Ok(v) => v,
-                Err(e) => return Ok(tool_error(e, "list_pending_imports")),
-            };
+            try_call!(self.client.get("/api/import/state"), "list_pending_imports");
         let pretty = serde_json::to_string_pretty(&resp)
             .map_err(|e| McpError::internal_error(e.to_string(), None))?;
         Ok(CallToolResult::success(vec![Content::text(format!(
@@ -1601,10 +1545,8 @@ impl WenlanMcpServer {
             path.push_str(&q.join("&"));
         }
 
-        let resp: Vec<wenlan_types::memory::RejectionRecord> = match self.client.get(&path).await {
-            Ok(v) => v,
-            Err(e) => return Ok(tool_error(e, "list_rejections")),
-        };
+        let resp: Vec<wenlan_types::memory::RejectionRecord> =
+            try_call!(self.client.get(&path), "list_rejections");
 
         let pretty = serde_json::to_string_pretty(&resp)
             .map_err(|e| McpError::internal_error(e.to_string(), None))?;
@@ -1624,10 +1566,7 @@ impl WenlanMcpServer {
             None => "/api/memory/pending-revisions".to_string(),
         };
         let resp: Vec<wenlan_types::responses::PendingRevisionItem> =
-            match self.client.get(&path).await {
-                Ok(v) => v,
-                Err(e) => return Ok(tool_error(e, "list_pending_revisions")),
-            };
+            try_call!(self.client.get(&path), "list_pending_revisions");
         let pretty = serde_json::to_string_pretty(&resp)
             .map_err(|e| McpError::internal_error(e.to_string(), None))?;
         Ok(CallToolResult::success(vec![Content::text(format!(
@@ -1645,11 +1584,8 @@ impl WenlanMcpServer {
             Some(n) => format!("/api/pages/orphan-links?min_count={}", n.max(1)),
             None => "/api/pages/orphan-links".to_string(),
         };
-        let resp: wenlan_types::responses::OrphanLinksResponse = match self.client.get(&path).await
-        {
-            Ok(v) => v,
-            Err(e) => return Ok(tool_error(e, "list_orphan_links")),
-        };
+        let resp: wenlan_types::responses::OrphanLinksResponse =
+            try_call!(self.client.get(&path), "list_orphan_links");
         let pretty = serde_json::to_string_pretty(&resp)
             .map_err(|e| McpError::internal_error(e.to_string(), None))?;
         Ok(CallToolResult::success(vec![Content::text(format!(
