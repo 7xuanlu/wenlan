@@ -644,7 +644,14 @@ fn build_locomo_env(
 /// 2. Seed ALL observations as memories
 /// 3. For each non-adversarial QA pair, search and score
 /// 4. Aggregate per-category and overall metrics
-pub async fn run_locomo_eval(path: &Path) -> Result<LocomoReport, WenlanError> {
+async fn run_locomo_eval_core(
+    path: &Path,
+    reranker: Option<std::sync::Arc<dyn crate::reranker::Reranker>>,
+    variant: &str,
+    retrieval_method: &str,
+    llm_provider_class: &str,
+    llm_model: &str,
+) -> Result<LocomoReport, WenlanError> {
     let mut samples = load_locomo(path)?;
     apply_locomo_limit(&mut samples);
     let mut conversations = Vec::new();
@@ -695,9 +702,20 @@ pub async fn run_locomo_eval(path: &Path) -> Result<LocomoReport, WenlanError> {
                 continue;
             }
 
-            let results = db
-                .search_memory(&qa.question, 10, None, None, None, None, None, None)
-                .await?;
+            let results = if let Some(reranker) = &reranker {
+                db.search_memory_cross_rerank(
+                    &qa.question,
+                    10,
+                    None,
+                    None,
+                    None,
+                    Some(reranker.clone()),
+                )
+                .await?
+            } else {
+                db.search_memory(&qa.question, 10, None, None, None, None, None, None)
+                    .await?
+            };
 
             // Build relevance judgments: evidence dia_ids -> source_ids = relevant
             let relevant_ids: HashSet<String> = qa
@@ -778,7 +796,14 @@ pub async fn run_locomo_eval(path: &Path) -> Result<LocomoReport, WenlanError> {
         per_case,
         coverage: None,
     };
-    let mut env_stamp = build_locomo_env("base", path, "search_memory", "none", "none", None);
+    let mut env_stamp = build_locomo_env(
+        variant,
+        path,
+        retrieval_method,
+        llm_provider_class,
+        llm_model,
+        None,
+    );
     env_stamp.flags.push(format!(
         "graph_memory_stream={}",
         if crate::db::graph_memory_stream_enabled() {
@@ -789,6 +814,10 @@ pub async fn run_locomo_eval(path: &Path) -> Result<LocomoReport, WenlanError> {
     ));
     report.env = Some(env_stamp);
     Ok(report)
+}
+
+pub async fn run_locomo_eval(path: &Path) -> Result<LocomoReport, WenlanError> {
+    run_locomo_eval_core(path, None, "base", "search_memory", "none", "none").await
 }
 
 // ---------------------------------------------------------------------------
@@ -805,154 +834,16 @@ pub async fn run_locomo_eval_cross_rerank(
     path: &Path,
     reranker: std::sync::Arc<dyn crate::reranker::Reranker>,
 ) -> Result<LocomoReport, WenlanError> {
-    let mut samples = load_locomo(path)?;
-    apply_locomo_limit(&mut samples);
-    let mut conversations = Vec::new();
-    // (category, ndcg_5, ndcg_10, mrr, recall_5, hit_rate_1)
-    let mut all_scores: Vec<(u8, f64, f64, f64, f64, f64)> = Vec::new();
-    let mut per_case: Vec<crate::eval::report::CaseResult> = Vec::new();
-
-    for sample in &samples {
-        let memories = extract_observations(sample);
-
-        // Create ephemeral DB for this conversation
-        let tmp = tempfile::tempdir().map_err(|e| WenlanError::Generic(format!("tempdir: {e}")))?;
-        let db = MemoryDB::new(tmp.path(), std::sync::Arc::new(crate::events::NoopEmitter)).await?;
-
-        // Seed all observations as memories
-        let docs: Vec<RawDocument> = memories
-            .iter()
-            .enumerate()
-            .map(|(i, mem)| RawDocument {
-                content: mem.content.clone(),
-                source_id: format!("locomo_{}_obs_{}", sample.sample_id, i),
-                source: "memory".to_string(),
-                title: format!("{} session {}", mem.speaker, mem.session_num),
-                memory_type: Some("fact".to_string()),
-                space: Some("conversation".to_string()),
-                last_modified: chrono::Utc::now().timestamp(),
-                ..Default::default()
-            })
-            .collect();
-        db.upsert_documents(docs).await?;
-
-        // Map dia_id to source_id for relevance judgments
-        let dia_to_source: HashMap<String, String> = memories
-            .iter()
-            .enumerate()
-            .map(|(i, m)| {
-                (
-                    m.dia_id.clone(),
-                    format!("locomo_{}_obs_{}", sample.sample_id, i),
-                )
-            })
-            .collect();
-
-        let mut conv_scores: Vec<(u8, f64, f64, f64, f64, f64)> = Vec::new();
-
-        for qa in &sample.qa {
-            if qa.category == 5 {
-                continue;
-            }
-
-            let results = db
-                .search_memory_cross_rerank(
-                    &qa.question,
-                    10,
-                    None,
-                    None,
-                    None,
-                    Some(reranker.clone()),
-                )
-                .await?;
-
-            let relevant_ids: HashSet<String> = qa
-                .evidence
-                .iter()
-                .filter_map(|did| dia_to_source.get(did).cloned())
-                .collect();
-
-            if relevant_ids.is_empty() {
-                continue;
-            }
-
-            let result_ids: Vec<&str> = results.iter().map(|r| r.source_id.as_str()).collect();
-
-            let grades: HashMap<&str, u8> = result_ids
-                .iter()
-                .map(|id| (*id, if relevant_ids.contains(*id) { 1 } else { 0 }))
-                .collect();
-
-            let relevant_set: HashSet<&str> = relevant_ids.iter().map(|s| s.as_str()).collect();
-
-            let ndcg_10 = metrics::ndcg_at_k(&result_ids, &grades, 10);
-            let ndcg_5 = metrics::ndcg_at_k(&result_ids, &grades, 5);
-            let mrr_val = metrics::mrr(&result_ids, &relevant_set);
-            let recall_5 = metrics::recall_at_k(&result_ids, &relevant_set, 5);
-            let hr_1 = metrics::hit_rate_at_k(&result_ids, &relevant_set, 1);
-
-            conv_scores.push((qa.category, ndcg_5, ndcg_10, mrr_val, recall_5, hr_1));
-            all_scores.push((qa.category, ndcg_5, ndcg_10, mrr_val, recall_5, hr_1));
-            per_case.push(build_locomo_case_result(
-                &qa.question,
-                qa.category,
-                ndcg_5,
-                ndcg_10,
-                mrr_val,
-                recall_5,
-                hr_1,
-            ));
-        }
-
-        let per_cat = aggregate_by_category(&conv_scores);
-
-        let n = conv_scores.len();
-        conversations.push(LocomoConversationResult {
-            sample_id: sample.sample_id.clone(),
-            memories_seeded: memories.len(),
-            questions_evaluated: n,
-            overall_ndcg_at_10: avg_field(&conv_scores, |s| s.2),
-            overall_mrr: avg_field(&conv_scores, |s| s.3),
-            overall_recall_at_5: avg_field(&conv_scores, |s| s.4),
-            per_category: per_cat,
-        });
-    }
-
-    let per_cat_agg = aggregate_by_category(&all_scores);
-
-    let mut report = LocomoReport {
-        conversations,
-        aggregate_ndcg_at_10: avg_field(&all_scores, |s| s.2),
-        aggregate_mrr: avg_field(&all_scores, |s| s.3),
-        aggregate_recall_at_5: avg_field(&all_scores, |s| s.4),
-        aggregate_hit_rate_at_1: avg_field(&all_scores, |s| s.5),
-        total_questions: all_scores.len(),
-        total_memories: samples.iter().map(|s| extract_observations(s).len()).sum(),
-        per_category_aggregate: per_cat_agg,
-        qa_accuracy: None,
-        baseline: None,
-        env: None,
-        per_case,
-        coverage: None,
-    };
-    let mut env_stamp = build_locomo_env(
-        "cross_rerank",
+    let llm_model = format!("cross-encoder:{}", reranker.model_id());
+    run_locomo_eval_core(
         path,
+        Some(reranker),
+        "cross_rerank",
         "search_memory_with_reranker",
         "cross-encoder",
-        &format!("cross-encoder:{}", reranker.model_id()),
-        None,
-    );
-    env_stamp.flags.push(format!(
-        "graph_memory_stream={}",
-        if crate::db::graph_memory_stream_enabled() {
-            "on"
-        } else {
-            "off"
-        }
-    ));
-    report.env = Some(env_stamp);
-    Ok(report)
+        &llm_model,
+    )
+    .await
 }
 
 // ---------------------------------------------------------------------------
@@ -1150,138 +1041,16 @@ pub async fn run_locomo_eval_cross_rerank_from_db(
         coverage,
     };
 
-    // Branch variant_tag on WENLAN_ENABLE_PAGE_CHANNEL + WENLAN_MAGNITUDE_FUSION
-    // so each variant produces distinct baseline filenames (comparable_hash uses
-    // the variant string). magfusion appends `_magfusion` when enabled.
-    let page_channel_state = if crate::db::page_channel_enabled() {
-        "on"
-    } else {
-        "off"
-    };
-    let magfusion_state = if crate::db::magnitude_fusion_enabled() {
-        "on"
-    } else {
-        "off"
-    };
-    let mut variant_tag = if page_channel_state == "off" {
-        "cross_rerank_v2_no_pages".to_string()
-    } else {
-        "cross_rerank_v2_pages".to_string()
-    };
-    if magfusion_state == "on" {
-        variant_tag.push_str("_magfusion");
-    }
-    // T9: append __graph_seed_d{depth} suffix when WENLAN_ENABLE_GRAPH_SEED is on.
-    let graph_seed_depth = if crate::db::graph_seed_enabled() {
-        let depth = crate::retrieval::signals::parse_hop_depth(
-            std::env::var("WENLAN_GRAPH_HOP_DEPTH").ok().as_deref(),
-        );
-        Some(depth)
-    } else {
-        None
-    };
-    if let Some(depth) = graph_seed_depth {
-        variant_tag.push_str(&format!("__graph_seed_d{}", depth));
-    }
-    // T4b: append __graph_khop_d{depth} suffix when WENLAN_ENABLE_GRAPH_KHOP is on.
-    // Honest config stamp: this runner calls search_memory_cross_rerank ->
-    // augment_with_graph, where the k-hop expansion lives, so the flag genuinely
-    // changes the retrieval path. No accuracy claim is encoded by the tag.
-    let graph_khop_depth = if crate::db::khop_traversal_enabled() {
-        Some(crate::retrieval::traversal::parse_khop_depth(
-            std::env::var("WENLAN_GRAPH_KHOP_DEPTH").ok().as_deref(),
-        ))
-    } else {
-        None
-    };
-    if let Some(depth) = graph_khop_depth {
-        variant_tag.push_str(&format!("__graph_khop_d{}", depth));
-    }
-    // T19: append __query_intent suffix when WENLAN_ENABLE_QUERY_INTENT is on.
-    let query_intent_state = if crate::retrieval::query_intent::query_intent_enabled() {
-        variant_tag.push_str("__query_intent");
-        "on"
-    } else {
-        "off"
-    };
-    // T8: append __salience suffix when WENLAN_ENABLE_SALIENCE_PRIOR is on, so
-    // salience-ON and salience-OFF baselines get distinct baseline filenames.
-    let salience_state = if crate::db::salience_prior_enabled() {
-        variant_tag.push_str("__salience");
-        "on"
-    } else {
-        "off"
-    };
-    // T2: append __episode suffix when WENLAN_ENABLE_EPISODE_CHANNEL is on, so
-    // episode-ON and episode-OFF baselines get distinct baseline filenames.
-    let episode_state = if crate::db::episode_channel_enabled() {
-        variant_tag.push_str("__episode");
-        "on"
-    } else {
-        "off"
-    };
-    // T15a: append __fact suffix when WENLAN_ENABLE_FACT_CHANNEL is on, so
-    // fact-ON and fact-OFF baselines get distinct baseline filenames.
-    let fact_state = if crate::retrieval::fact_channel::fact_channel_enabled() {
-        variant_tag.push_str("__fact");
-        "on"
-    } else {
-        "off"
-    };
-    let mut env_stamp = build_locomo_env(
-        &variant_tag,
-        path,
-        "search_memory_with_reranker",
-        "cross-encoder",
-        &format!("cross-encoder:{}", reranker.model_id()),
-        None,
-    );
-    env_stamp
-        .flags
-        .push(format!("page_channel={}", page_channel_state));
-    env_stamp
-        .flags
-        .push(format!("magnitude_fusion={}", magfusion_state));
-    if let Some(depth) = graph_seed_depth {
-        env_stamp.flags.push(format!("graph_seed=on_d{}", depth));
-    } else {
-        env_stamp.flags.push("graph_seed=off".to_string());
-    }
-    if let Some(depth) = graph_khop_depth {
-        env_stamp.flags.push(format!("graph_khop=on_d{}", depth));
-    } else {
-        env_stamp.flags.push("graph_khop=off".to_string());
-    }
-    env_stamp
-        .flags
-        .push(format!("query_intent={}", query_intent_state));
-    env_stamp
-        .flags
-        .push(format!("salience_prior={}", salience_state));
-    env_stamp
-        .flags
-        .push(format!("episode_channel={}", episode_state));
-    env_stamp.flags.push(format!("fact_channel={}", fact_state));
-    env_stamp.flags.push(format!(
-        "graph_memory_stream={}",
-        if crate::db::graph_memory_stream_enabled() {
-            "on"
-        } else {
-            "off"
-        }
-    ));
-    // Record the (now-pinned) rerank-pool knobs so a non-default depth carries
-    // into the env stamp / baseline filename instead of being invisible.
-    env_stamp.flags.push(format!(
-        "rerank_pool=mult{}_floor{}",
-        std::env::var("RERANK_POOL_MULTIPLIER")
-            .as_deref()
-            .unwrap_or("1"),
-        std::env::var("RERANK_POOL_FLOOR")
-            .as_deref()
-            .unwrap_or("10"),
-    ));
-    env_stamp.flags.push("scenario_db=consolidated".to_string());
+    let env_stamp = crate::eval::shared::stamp_cr_from_db_env(|variant_tag| {
+        build_locomo_env(
+            variant_tag,
+            path,
+            "search_memory_with_reranker",
+            "cross-encoder",
+            &format!("cross-encoder:{}", reranker.model_id()),
+            None,
+        )
+    });
     report.env = Some(env_stamp);
     Ok(report)
 }
@@ -1297,14 +1066,26 @@ pub async fn run_locomo_eval_cross_rerank_from_db(
 /// `feature` / `flag_state` are stamped onto each row for the downstream
 /// paired analyzer. The graph-gate skip decision is recorded per-query so the
 /// T3 "skip work, no recall regression" metric is recoverable.
-pub async fn run_locomo_eval_from_db_collect(
+async fn run_locomo_eval_from_db_collect_core(
     db: &MemoryDB,
     path: &Path,
+    reranker: Option<std::sync::Arc<dyn crate::reranker::Reranker>>,
     feature: &str,
     flag_state: &str,
+    needs_base_ids: bool,
 ) -> Result<Vec<crate::eval::paired::PerQueryRow>, WenlanError> {
     use crate::eval::paired::PerQueryRow;
     use std::time::Instant;
+
+    let use_ce = reranker.is_some();
+    if use_ce {
+        if std::env::var_os("RERANK_POOL_MULTIPLIER").is_none() {
+            std::env::set_var("RERANK_POOL_MULTIPLIER", "1");
+        }
+        if std::env::var_os("RERANK_POOL_FLOOR").is_none() {
+            std::env::set_var("RERANK_POOL_FLOOR", "10");
+        }
+    }
 
     // No-drift eval gate: a graph/temporal A/B over an empty substrate is a null,
     // not a result. Same contract the seed orchestrator asserts (producer/consumer).
@@ -1315,7 +1096,11 @@ pub async fn run_locomo_eval_from_db_collect(
 
     let mut samples = load_locomo(path)?;
     apply_locomo_limit(&mut samples);
-    let gate_on = crate::db::graph_gate_enabled();
+    let gate_on = if use_ce {
+        false
+    } else {
+        crate::db::graph_gate_enabled()
+    };
     let mut rows: Vec<PerQueryRow> = Vec::new();
 
     for sample in &samples {
@@ -1338,25 +1123,68 @@ pub async fn run_locomo_eval_from_db_collect(
             let graph_skipped =
                 gate_on && !crate::retrieval::signals::query_warrants_graph(&qa.question);
 
+            let base_ids_owned: Vec<String> = if needs_base_ids {
+                db.search_memory(&qa.question, 10, None, None, None, None, None, None)
+                    .await?
+                    .iter()
+                    .map(|r| r.source_id.clone())
+                    .collect()
+            } else {
+                vec![]
+            };
+            let base_ids: Vec<&str> = base_ids_owned.iter().map(|s| s.as_str()).collect();
+
             let t0 = Instant::now();
-            let results = db
-                .search_memory(&qa.question, 10, None, None, None, None, None, None)
-                .await?;
+            let results = if let Some(reranker) = &reranker {
+                db.search_memory_cross_rerank(
+                    &qa.question,
+                    10,
+                    None,
+                    None,
+                    None,
+                    Some(reranker.clone()),
+                )
+                .await?
+            } else {
+                db.search_memory(&qa.question, 10, None, None, None, None, None, None)
+                    .await?
+            };
             let latency_ms = t0.elapsed().as_secs_f64() * 1000.0;
 
-            // Outside the latency window: the base-path channel-touch probe.
-            let channel_touched =
-                crate::eval::shared::base_channel_touched(db, feature, &qa.question).await?;
-
-            let relevant_ids: HashSet<String> = qa
-                .evidence
-                .iter()
-                .filter_map(|did| dia_to_source.get(did).cloned())
-                .collect();
-            if relevant_ids.is_empty() {
-                continue;
-            }
             let result_ids: Vec<&str> = results.iter().map(|r| r.source_id.as_str()).collect();
+            let channel_touched;
+            let relevant_ids: HashSet<String>;
+            if use_ce {
+                relevant_ids = qa
+                    .evidence
+                    .iter()
+                    .filter_map(|did| dia_to_source.get(did).cloned())
+                    .collect();
+                if relevant_ids.is_empty() {
+                    continue;
+                }
+                // After result_ids exist and outside the latency window: CE-path probe.
+                channel_touched = crate::eval::shared::ce_channel_touched(
+                    db,
+                    feature,
+                    &qa.question,
+                    &base_ids,
+                    &result_ids,
+                )
+                .await?;
+            } else {
+                // Outside the latency window: the base-path channel-touch probe.
+                channel_touched =
+                    crate::eval::shared::base_channel_touched(db, feature, &qa.question).await?;
+                relevant_ids = qa
+                    .evidence
+                    .iter()
+                    .filter_map(|did| dia_to_source.get(did).cloned())
+                    .collect();
+                if relevant_ids.is_empty() {
+                    continue;
+                }
+            }
             let grades: HashMap<&str, u8> = result_ids
                 .iter()
                 .map(|id| (*id, if relevant_ids.contains(*id) { 1 } else { 0 }))
@@ -1385,6 +1213,15 @@ pub async fn run_locomo_eval_from_db_collect(
     Ok(rows)
 }
 
+pub async fn run_locomo_eval_from_db_collect(
+    db: &MemoryDB,
+    path: &Path,
+    feature: &str,
+    flag_state: &str,
+) -> Result<Vec<crate::eval::paired::PerQueryRow>, WenlanError> {
+    run_locomo_eval_from_db_collect_core(db, path, None, feature, flag_state, false).await
+}
+
 /// Cross-encoder variant of [`run_locomo_eval_from_db_collect`]. Identical query
 /// set + relevance judgments + scoring, but retrieval goes through
 /// `search_memory_cross_rerank` (CE rescoring over the widened pool, where the
@@ -1404,116 +1241,9 @@ pub async fn run_locomo_eval_cross_rerank_from_db_collect(
     feature: &str,
     flag_state: &str,
 ) -> Result<Vec<crate::eval::paired::PerQueryRow>, WenlanError> {
-    use crate::eval::paired::PerQueryRow;
-    use std::time::Instant;
-
-    if std::env::var_os("RERANK_POOL_MULTIPLIER").is_none() {
-        std::env::set_var("RERANK_POOL_MULTIPLIER", "1");
-    }
-    if std::env::var_os("RERANK_POOL_FLOOR").is_none() {
-        std::env::set_var("RERANK_POOL_FLOOR", "10");
-    }
-
-    // No-drift eval gate: refuse to measure a channel whose substrate is empty
-    // (same contract the seed orchestrator asserts on the producing side).
-    {
-        let conn = db.conn.lock().await;
-        crate::eval::seed_contract::assert_feature_substrate_live(&conn, feature).await?;
-    }
-
-    let mut samples = load_locomo(path)?;
-    apply_locomo_limit(&mut samples);
-    let mut rows: Vec<PerQueryRow> = Vec::new();
-
-    for sample in &samples {
-        let memories = extract_observations(sample);
-        let dia_to_source: HashMap<String, String> = memories
-            .iter()
-            .enumerate()
-            .map(|(i, m)| {
-                (
-                    m.dia_id.clone(),
-                    format!("locomo_{}_obs_{}", sample.sample_id, i),
-                )
-            })
-            .collect();
-
-        for (q_idx, qa) in sample.qa.iter().enumerate() {
-            if qa.category == 5 {
-                continue;
-            }
-
-            // base_ids fetched BEFORE the latency Instant so the probe does not
-            // pollute latency_ms; only the rerank/model arms need the base ranking.
-            let needs_base = feature == "rerank" || feature.starts_with("rerank_model");
-            let base_ids_owned: Vec<String> = if needs_base {
-                db.search_memory(&qa.question, 10, None, None, None, None, None, None)
-                    .await?
-                    .iter()
-                    .map(|r| r.source_id.clone())
-                    .collect()
-            } else {
-                vec![]
-            };
-            let base_ids: Vec<&str> = base_ids_owned.iter().map(|s| s.as_str()).collect();
-
-            let t0 = Instant::now();
-            let results = db
-                .search_memory_cross_rerank(
-                    &qa.question,
-                    10,
-                    None,
-                    None,
-                    None,
-                    Some(reranker.clone()),
-                )
-                .await?;
-            let latency_ms = t0.elapsed().as_secs_f64() * 1000.0;
-
-            let relevant_ids: HashSet<String> = qa
-                .evidence
-                .iter()
-                .filter_map(|did| dia_to_source.get(did).cloned())
-                .collect();
-            if relevant_ids.is_empty() {
-                continue;
-            }
-            let result_ids: Vec<&str> = results.iter().map(|r| r.source_id.as_str()).collect();
-            // After result_ids exist and outside the latency window: CE-path probe.
-            let channel_touched = crate::eval::shared::ce_channel_touched(
-                db,
-                feature,
-                &qa.question,
-                &base_ids,
-                &result_ids,
-            )
-            .await?;
-            let grades: HashMap<&str, u8> = result_ids
-                .iter()
-                .map(|id| (*id, if relevant_ids.contains(*id) { 1 } else { 0 }))
-                .collect();
-            let relevant_set: HashSet<&str> = relevant_ids.iter().map(|s| s.as_str()).collect();
-
-            rows.push(PerQueryRow {
-                feature: feature.to_string(),
-                bench: "locomo".to_string(),
-                flag_state: flag_state.to_string(),
-                query_id: format!("{}#q{}", sample.sample_id, q_idx),
-                category: qa.category.to_string(),
-                ndcg10: metrics::ndcg_at_k(&result_ids, &grades, 10),
-                recall5: metrics::recall_at_k(&result_ids, &relevant_set, 5),
-                mrr: metrics::mrr(&result_ids, &relevant_set),
-                latency_ms,
-                graph_skipped: None,
-                temporal_touched: None,
-                channel_touched,
-                cov_blind: None,
-                cov_expanded: None,
-            });
-        }
-    }
-
-    Ok(rows)
+    let needs_base = feature == "rerank" || feature.starts_with("rerank_model");
+    run_locomo_eval_from_db_collect_core(db, path, Some(reranker), feature, flag_state, needs_base)
+        .await
 }
 
 // ---------------------------------------------------------------------------
