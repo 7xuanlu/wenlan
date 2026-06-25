@@ -61,9 +61,7 @@ cargo test -p wenlan-core --lib longmemeval::tests
 
 # Generate eval baselines (slow, needs Qwen 3.5-9B on Metal GPU):
 cargo test -p wenlan-core --test eval_harness save_locomo_baseline -- --ignored --nocapture
-cargo test -p wenlan-core --test eval_harness save_locomo_expanded_baseline -- --ignored --nocapture
 cargo test -p wenlan-core --test eval_harness save_longmemeval_baseline -- --ignored --nocapture
-cargo test -p wenlan-core --test eval_harness save_longmemeval_expanded_baseline -- --ignored --nocapture
 # Baselines saved to <EVAL_BASELINES_DIR>/*.json (gitignored, default ~/.cache/origin-eval).
 ```
 
