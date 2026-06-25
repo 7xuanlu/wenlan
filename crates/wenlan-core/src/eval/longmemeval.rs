@@ -1251,6 +1251,46 @@ async fn run_longmemeval_eval_from_db_collect_core(
             .collect();
         let relevant_set: HashSet<&str> = relevant_source_ids.iter().map(|s| s.as_str()).collect();
 
+        // For page_channel feature: compute both blind (no expansion) and expanded coverage
+        let (cov_blind, cov_expanded) = if use_ce && feature == "page_channel" {
+            let page_src_owned: Vec<(String, Vec<String>)> = {
+                let mut v = Vec::new();
+                for r in &results {
+                    if r.source == "page" {
+                        let srcs: Vec<String> = db
+                            .get_page_sources(&r.source_id)
+                            .await
+                            .unwrap_or_default()
+                            .into_iter()
+                            .map(|ps| ps.memory_source_id)
+                            .collect();
+                        v.push((r.source_id.clone(), srcs));
+                    }
+                }
+                v
+            };
+            let page_sources_map: HashMap<&str, Vec<&str>> = page_src_owned
+                .iter()
+                .map(|(pid, srcs)| (pid.as_str(), srcs.iter().map(|s| s.as_str()).collect()))
+                .collect();
+            let units: Vec<(&str, &str)> = results
+                .iter()
+                .map(|r| (r.source.as_str(), r.source_id.as_str()))
+                .collect();
+            (
+                Some(metrics::coverage_recall(
+                    &metrics::build_coverage_set(&units, &HashMap::new()),
+                    &relevant_set,
+                )),
+                Some(metrics::coverage_recall(
+                    &metrics::build_coverage_set(&units, &page_sources_map),
+                    &relevant_set,
+                )),
+            )
+        } else {
+            (None, None)
+        };
+
         rows.push(PerQueryRow {
             feature: feature.to_string(),
             bench: "lme".to_string(),
@@ -1264,8 +1304,8 @@ async fn run_longmemeval_eval_from_db_collect_core(
             graph_skipped: if gate_on { Some(graph_skipped) } else { None },
             temporal_touched: None,
             channel_touched,
-            cov_blind: None,
-            cov_expanded: None,
+            cov_blind,
+            cov_expanded,
         });
     }
 

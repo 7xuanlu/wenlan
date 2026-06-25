@@ -173,6 +173,19 @@ pub fn coverage_recall(covered: &HashSet<String>, relevant: &HashSet<&str>) -> f
     found as f64 / relevant.len() as f64
 }
 
+/// Marginal coverage lift for a page-channel A/B report.
+///
+/// `pages_on_covered` and `pages_off_covered` are already provenance-expanded
+/// coverage sets for the ON and OFF arms. The reported win metric is the lift
+/// over the memory-only baseline, not the gross ON-arm coverage.
+pub fn marginal_coverage_recall(
+    pages_on_covered: &HashSet<String>,
+    pages_off_covered: &HashSet<String>,
+    relevant: &HashSet<&str>,
+) -> f64 {
+    coverage_recall(pages_on_covered, relevant) - coverage_recall(pages_off_covered, relevant)
+}
+
 /// Negative leakage — count of negative IDs that appear in top-K results.
 pub fn negative_leakage(ranked_ids: &[&str], negative_ids: &HashSet<&str>, k: usize) -> usize {
     let k = k.min(ranked_ids.len());
@@ -622,5 +635,29 @@ mod tests {
         assert!((cb - 1.0 / 3.0).abs() < 1e-9, "blind = 1/3, got {cb}");
         assert!((ce - 1.0).abs() < 1e-9, "expanded = 1.0, got {ce}");
         assert!(ce > cb, "page expansion must lift coverage");
+    }
+
+    #[test]
+    fn marginal_coverage_is_on_minus_off() {
+        let relevant: HashSet<&str> = ["m1", "m2", "m3", "m4"].into_iter().collect();
+        let pages_off = sset(&["m1", "m2"]);
+        let pages_on = sset(&["m1", "m2", "m3"]);
+
+        let expected =
+            coverage_recall(&pages_on, &relevant) - coverage_recall(&pages_off, &relevant);
+        let reported = marginal_coverage_recall(&pages_on, &pages_off, &relevant);
+        assert!(
+            (reported - expected).abs() < 1e-9,
+            "reported marginal coverage must be on-off: got {reported}, expected {expected}"
+        );
+
+        let pages_on_no_new = sset(&["m1", "m2"]);
+        let gross_on = coverage_recall(&pages_on_no_new, &relevant);
+        assert!(gross_on > 0.0, "test setup must expose gross coverage");
+        let reported_no_new = marginal_coverage_recall(&pages_on_no_new, &pages_off, &relevant);
+        assert_eq!(
+            reported_no_new, 0.0,
+            "pages_on with no new covered ids must report zero marginal lift, not gross coverage"
+        );
     }
 }
