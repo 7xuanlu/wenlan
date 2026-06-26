@@ -58,8 +58,8 @@ These are required for feature parity but can follow the P0 review/status/setup 
 
 | Surface | Current source | App status | Action | Daemon compatibility |
 |---|---|---|---|---|
-| `/api/memory/{id}/revisions` | `ListMemoryRevisionsResponse` | missing; app has older `/versions` chain wrapper | add typed memory revision history panel | hide revisions panel if route absent |
-| `/api/pages/{id}/revisions` | `ListPageRevisionsResponse` | missing | add typed page revision panel | hide revisions panel if route absent |
+| `/api/memory/{id}/revisions` | `ListMemoryRevisionsResponse` | typed Rust/Tauri/TS wrapper present; Memory Detail shows non-blocking revision history | keep old version-chain wrapper only as legacy fallback until removed in a later cleanup | hide revisions panel if route absent |
+| `/api/pages/{id}/revisions` | `ListPageRevisionsResponse` | typed Rust/Tauri/TS wrapper present; Page Detail shows non-blocking revision history | reuse for future page diff UI | hide revisions panel if route absent |
 | `/api/pages/{id}/links` | `PageLinksResponse` | typed Rust/Tauri/TS wrappers present; PageDetail uses daemon outbound/inbound links and no longer infers links via `listPages` | keep non-blocking link UI; unresolved outbound labels stay inert | hide links section if route absent or errors |
 | `/api/pages/orphan-links` | `OrphanLinksResponse` | typed Rust/Tauri/TS wrappers present; no dedicated UI yet | add orphan link review or diagnostics section | optional diagnostics until route exists |
 | `/api/pages/{id}/sources` | `PageSourceWithMemory` | present via `getPageSources` | keep and type through `wenlan-types` | optional |

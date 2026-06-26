@@ -314,6 +314,14 @@ impl WenlanClient {
         self.get_json(&path).await
     }
 
+    pub async fn get_memory_revisions(
+        &self,
+        source_id: &str,
+    ) -> Result<wenlan_types::responses::ListMemoryRevisionsResponse, String> {
+        let path = format!("/api/memory/{}/revisions", source_id);
+        self.get_json(&path).await
+    }
+
     pub async fn list_unconfirmed_memories(
         &self,
         limit: i64,
@@ -362,6 +370,14 @@ impl WenlanClient {
         page_id: &str,
     ) -> Result<wenlan_types::responses::PageLinksResponse, String> {
         let path = format!("/api/pages/{}/links", page_id);
+        self.get_json(&path).await
+    }
+
+    pub async fn get_page_revisions(
+        &self,
+        page_id: &str,
+    ) -> Result<wenlan_types::responses::ListPageRevisionsResponse, String> {
+        let path = format!("/api/pages/{}/revisions", page_id);
         self.get_json(&path).await
     }
 
@@ -662,5 +678,61 @@ mod tests {
     fn wenlan_client_exposes_page_link_methods() {
         let _get = WenlanClient::get_page_links;
         let _list = WenlanClient::list_orphan_links;
+    }
+
+    #[test]
+    fn wenlan_client_exposes_revision_history_methods() {
+        let _memory = WenlanClient::get_memory_revisions;
+        let _page = WenlanClient::get_page_revisions;
+    }
+
+    #[test]
+    fn revision_history_responses_deserialize_daemon_payloads() {
+        let memory: wenlan_types::responses::ListMemoryRevisionsResponse =
+            serde_json::from_value(serde_json::json!({
+                "current_source_id": "mem-1",
+                "chain_depth": 1,
+                "entries": [
+                    {
+                        "source_id": "mem-1",
+                        "depth": 0,
+                        "title": "Current",
+                        "content_preview": "Current version",
+                        "last_modified": 10,
+                        "source_agent": "claude-code",
+                        "supersede_mode": "protected_revision",
+                        "delta_summary": "Clarified wording"
+                    }
+                ]
+            }))
+            .unwrap();
+        assert_eq!(memory.current_source_id, "mem-1");
+        assert_eq!(
+            memory.entries[0].delta_summary.as_deref(),
+            Some("Clarified wording")
+        );
+
+        let page: wenlan_types::responses::ListPageRevisionsResponse =
+            serde_json::from_value(serde_json::json!({
+                "page_id": "page-1",
+                "current_version": 2,
+                "user_edited": false,
+                "stale_reason": null,
+                "entries": [
+                    {
+                        "version": 2,
+                        "at": 1782490000000i64,
+                        "edited_by": "distill",
+                        "delta_summary": "Added backlinks",
+                        "incoming_source_ids": ["mem-1"]
+                    }
+                ]
+            }))
+            .unwrap();
+        assert_eq!(page.page_id, "page-1");
+        assert_eq!(
+            page.entries[0].incoming_source_ids.as_ref().unwrap(),
+            &vec!["mem-1".to_string()]
+        );
     }
 }

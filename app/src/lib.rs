@@ -835,6 +835,7 @@ pub fn run() {
             search::get_home_stats,
             search::update_memory_cmd,
             search::get_version_chain_cmd,
+            search::get_memory_revisions,
             search::reclassify_memory_cmd,
             search::add_observation_cmd,
             // Pending revision commands
@@ -896,6 +897,7 @@ pub fn run() {
             search::get_page,
             search::get_page_sources,
             search::get_page_links,
+            search::get_page_revisions,
             search::list_orphan_links,
             search::update_page,
             search::archive_page,

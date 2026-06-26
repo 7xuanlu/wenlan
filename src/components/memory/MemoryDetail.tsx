@@ -4,6 +4,7 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
   getMemoryDetail,
   getEnrichmentStatus,
+  getMemoryRevisions,
   getVersionChain,
   listEntities,
   listAllTags,
@@ -92,6 +93,14 @@ export default function MemoryDetail({
     enabled: !!memory?.supersedes,
   });
 
+  const { data: memoryRevisions } = useQuery({
+    queryKey: ["memory-revisions", sourceId],
+    queryFn: () => getMemoryRevisions(sourceId),
+    enabled: !!sourceId,
+    staleTime: 30_000,
+    retry: false,
+  });
+
   const { data: relatedEntities = [] } = useQuery({
     queryKey: ["entities", undefined, memory?.domain],
     queryFn: () => listEntities(undefined, memory?.domain ?? undefined),
@@ -140,6 +149,7 @@ export default function MemoryDetail({
 
   const invalidate = () => {
     queryClient.invalidateQueries({ queryKey: ["memoryDetail", sourceId] });
+    queryClient.invalidateQueries({ queryKey: ["memory-revisions", sourceId] });
     queryClient.invalidateQueries({ queryKey: ["memories"] });
     queryClient.invalidateQueries({ queryKey: ["memoryStats"] });
   };
@@ -265,6 +275,8 @@ export default function MemoryDetail({
   const facetType = (memory.memory_type ?? "fact") as MemoryType;
   const isConfirmed = memory.confirmed;
   const relatedMemories = relatedSearchResults.slice(0, 5);
+  const revisionEntries = memoryRevisions?.entries ?? [];
+  const hasDaemonRevisionHistory = revisionEntries.length > 0;
 
   return (
     <div className="flex flex-col gap-6">
@@ -895,8 +907,133 @@ export default function MemoryDetail({
         </div>
       </section>
 
+      {/* Revision history from daemon supersession chain */}
+      {hasDaemonRevisionHistory && (
+        <section>
+          <h3
+            className="mb-3 pb-2"
+            style={{
+              fontFamily: "var(--mem-font-heading)",
+              fontSize: "14px",
+              color: "var(--mem-text)",
+              borderBottom: "1px solid var(--mem-border)",
+            }}
+          >
+            Revision History
+          </h3>
+          <div className="flex flex-col gap-1.5">
+            {revisionEntries.map((entry) => {
+              const isCurrent = entry.source_id === memoryRevisions?.current_source_id;
+              const body = (
+                <div className="min-w-0 flex-1">
+                  <div className="flex items-center gap-2 mb-1 flex-wrap">
+                    <span
+                      className="truncate"
+                      style={{
+                        fontFamily: "var(--mem-font-heading)",
+                        fontSize: "13px",
+                        fontWeight: 500,
+                        color: "var(--mem-text)",
+                      }}
+                    >
+                      {entry.title || "Untitled memory"}
+                    </span>
+                    {isCurrent && (
+                      <span
+                        className="px-1.5 py-0.5 rounded text-[10px] font-medium"
+                        style={{
+                          backgroundColor: "var(--mem-indigo-bg)",
+                          color: "var(--mem-accent-indigo)",
+                        }}
+                      >
+                        current
+                      </span>
+                    )}
+                    <span
+                      style={{
+                        fontFamily: "var(--mem-font-mono)",
+                        fontSize: "10px",
+                        color: "var(--mem-text-tertiary)",
+                      }}
+                    >
+                      depth {entry.depth}
+                    </span>
+                    <span
+                      style={{
+                        fontFamily: "var(--mem-font-mono)",
+                        fontSize: "10px",
+                        color: "var(--mem-text-tertiary)",
+                      }}
+                    >
+                      {timeAgo(entry.last_modified)}
+                    </span>
+                  </div>
+                  {entry.delta_summary && (
+                    <p
+                      className="mb-1"
+                      style={{
+                        fontFamily: "var(--mem-font-body)",
+                        fontSize: "12px",
+                        color: "var(--mem-text)",
+                        lineHeight: "1.5",
+                      }}
+                    >
+                      {entry.delta_summary}
+                    </p>
+                  )}
+                  <p
+                    className="line-clamp-2"
+                    style={{
+                      fontFamily: "var(--mem-font-body)",
+                      fontSize: "12px",
+                      color: "var(--mem-text-secondary)",
+                      lineHeight: "1.5",
+                    }}
+                  >
+                    {entry.content_preview}
+                  </p>
+                  {entry.source_agent && (
+                    <p
+                      style={{
+                        fontFamily: "var(--mem-font-mono)",
+                        fontSize: "10px",
+                        color: "var(--mem-text-tertiary)",
+                        marginTop: "4px",
+                      }}
+                    >
+                      {entry.source_agent}
+                    </p>
+                  )}
+                </div>
+              );
+              if (isCurrent) {
+                return (
+                  <div
+                    key={entry.source_id}
+                    className="w-full rounded-lg px-4 py-3"
+                    style={{ backgroundColor: "var(--mem-surface)", border: "1px solid var(--mem-border)" }}
+                  >
+                    {body}
+                  </div>
+                );
+              }
+              return (
+                <button
+                  key={entry.source_id}
+                  onClick={() => onNavigateMemory(entry.source_id)}
+                  className="w-full text-left rounded-lg px-4 py-3 transition-colors duration-150 hover:bg-[var(--mem-hover)]"
+                  style={{ backgroundColor: "var(--mem-surface)", border: "1px solid var(--mem-border)" }}
+                >
+                  {body}
+                </button>
+              );
+            })}
+          </div>
+        </section>
+      )}
+
       {/* Version history */}
-      {memory.supersedes && versionChain.length > 0 && (
+      {!hasDaemonRevisionHistory && memory.supersedes && versionChain.length > 0 && (
         <section>
           <h3
             className="mb-3 pb-2"

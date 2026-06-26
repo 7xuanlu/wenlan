@@ -586,6 +586,26 @@ describe('version chain', () => {
   });
 });
 
+describe('revision history', () => {
+  it('getMemoryRevisions passes sourceId', async () => {
+    mockInvoke.mockResolvedValue({ current_source_id: 'mem-1', chain_depth: 1, entries: [] });
+    await tauri.getMemoryRevisions('mem-1');
+    expect(mockInvoke).toHaveBeenCalledWith('get_memory_revisions', { sourceId: 'mem-1' });
+  });
+
+  it('getPageRevisions passes pageId', async () => {
+    mockInvoke.mockResolvedValue({
+      page_id: 'page-1',
+      current_version: 2,
+      user_edited: false,
+      stale_reason: null,
+      entries: [],
+    });
+    await tauri.getPageRevisions('page-1');
+    expect(mockInvoke).toHaveBeenCalledWith('get_page_revisions', { pageId: 'page-1' });
+  });
+});
+
 describe('pending revisions', () => {
   it('listPendingRevisions passes default limit', async () => {
     mockInvoke.mockResolvedValue([]);

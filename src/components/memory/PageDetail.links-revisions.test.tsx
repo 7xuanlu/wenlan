@@ -10,6 +10,7 @@ const tauriMocks = vi.hoisted(() => ({
   getPageSources: vi.fn(),
   listRegisteredSources: vi.fn(),
   getPageLinks: vi.fn(),
+  getPageRevisions: vi.fn(),
   listPages: vi.fn(),
   updatePage: vi.fn(),
   deletePage: vi.fn(),
@@ -61,6 +62,13 @@ describe("PageDetail page links", () => {
     tauriMocks.getPageSources.mockResolvedValue([]);
     tauriMocks.listRegisteredSources.mockResolvedValue([]);
     tauriMocks.getPageLinks.mockResolvedValue({ outbound: [], inbound: [] });
+    tauriMocks.getPageRevisions.mockResolvedValue({
+      page_id: "page-1",
+      current_version: 1,
+      user_edited: false,
+      stale_reason: null,
+      entries: [],
+    });
     tauriMocks.listPages.mockResolvedValue([]);
     tauriMocks.updatePage.mockResolvedValue(undefined);
     tauriMocks.deletePage.mockResolvedValue(undefined);
@@ -119,6 +127,7 @@ describe("PageDetail page links", () => {
       );
     });
     expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ["page-links", "page-1"] });
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ["page-revisions", "page-1"] });
   });
 
   it("shows source identity for duplicate inbound link labels", async () => {
@@ -175,5 +184,38 @@ describe("PageDetail page links", () => {
     });
     expect(tauriMocks.listPages).not.toHaveBeenCalled();
     expect(screen.queryByLabelText("Page links")).toBeNull();
+  });
+
+  it("renders daemon page revision history", async () => {
+    tauriMocks.getPageRevisions.mockResolvedValue({
+      page_id: "page-1",
+      current_version: 2,
+      user_edited: false,
+      stale_reason: null,
+      entries: [
+        {
+          version: 2,
+          at: Math.floor(Date.now() / 1000),
+          edited_by: "distill",
+          delta_summary: "Added backlinks",
+          incoming_source_ids: ["mem-1"],
+        },
+      ],
+    });
+
+    renderWithQuery(<PageDetail {...defaultProps} />);
+
+    expect(await screen.findByText(/revision history/i)).toBeInTheDocument();
+    expect(screen.getByText(/added backlinks/i)).toBeInTheDocument();
+    expect(within(screen.getByLabelText("Revision history")).getByText("just now")).toBeInTheDocument();
+  });
+
+  it("keeps rendering the page when page revisions route is unavailable", async () => {
+    tauriMocks.getPageRevisions.mockRejectedValue(new Error("404"));
+
+    renderWithQuery(<PageDetail {...defaultProps} />);
+
+    expect(await screen.findByText("Link Test Page")).toBeInTheDocument();
+    expect(screen.queryByText(/revision history/i)).toBeNull();
   });
 });

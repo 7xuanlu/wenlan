@@ -684,6 +684,39 @@ export interface MemoryVersionItem {
   last_modified: number;
 }
 
+export interface MemoryRevisionEntry {
+  source_id: string;
+  depth: number;
+  title: string;
+  content_preview: string;
+  last_modified: number;
+  source_agent?: string | null;
+  supersede_mode?: string | null;
+  delta_summary?: string | null;
+}
+
+export interface ListMemoryRevisionsResponse {
+  current_source_id: string;
+  chain_depth: number;
+  entries: MemoryRevisionEntry[];
+}
+
+export interface PageChangelogEntry {
+  version: number;
+  at: number;
+  edited_by: string;
+  delta_summary?: string | null;
+  incoming_source_ids?: string[] | null;
+}
+
+export interface ListPageRevisionsResponse {
+  page_id: string;
+  current_version: number;
+  user_edited: boolean;
+  stale_reason?: string | null;
+  entries: PageChangelogEntry[];
+}
+
 // ── Memory Page ─────────────────────────────────────────────────────
 
 export interface Entity {
@@ -1143,6 +1176,18 @@ export async function getVersionChain(
   sourceId: string,
 ): Promise<MemoryVersionItem[]> {
   return invoke("get_version_chain_cmd", { sourceId });
+}
+
+export async function getMemoryRevisions(
+  sourceId: string,
+): Promise<ListMemoryRevisionsResponse> {
+  return invoke("get_memory_revisions", { sourceId });
+}
+
+export async function getPageRevisions(
+  pageId: string,
+): Promise<ListPageRevisionsResponse> {
+  return invoke("get_page_revisions", { pageId });
 }
 
 export async function listPendingRevisions(limit?: number): Promise<PendingRevisionItem[]> {

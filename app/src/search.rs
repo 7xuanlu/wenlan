@@ -1120,6 +1120,18 @@ pub async fn get_enrichment_status(
 }
 
 #[tauri::command]
+pub async fn get_memory_revisions(
+    state: tauri::State<'_, State>,
+    source_id: String,
+) -> Result<responses::ListMemoryRevisionsResponse, String> {
+    let client = {
+        let s = state.read().await;
+        s.client.clone()
+    };
+    client.get_memory_revisions(&source_id).await
+}
+
+#[tauri::command]
 pub async fn list_memories_by_ids(
     state: tauri::State<'_, State>,
     ids: Vec<String>,
@@ -2638,6 +2650,18 @@ pub async fn get_page_links(
 ) -> Result<responses::PageLinksResponse, String> {
     let client = { state.read().await.client.clone() };
     client.get_page_links(&page_id).await
+}
+
+#[tauri::command]
+pub async fn get_page_revisions(
+    state: tauri::State<'_, State>,
+    page_id: String,
+) -> Result<responses::ListPageRevisionsResponse, String> {
+    let client = {
+        let s = state.read().await;
+        s.client.clone()
+    };
+    client.get_page_revisions(&page_id).await
 }
 
 #[tauri::command]

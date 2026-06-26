@@ -4,6 +4,7 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
   getPage,
   getPageLinks,
+  getPageRevisions,
   updatePage,
   deletePage,
   clipboardWrite,
@@ -110,6 +111,14 @@ export default function PageDetail({ pageId, onBack, onMemoryClick, onPageClick 
     retry: false,
   });
 
+  const { data: pageRevisions } = useQuery({
+    queryKey: ["page-revisions", pageId],
+    queryFn: () => getPageRevisions(pageId),
+    enabled: !!pageId,
+    staleTime: 30_000,
+    retry: false,
+  });
+
   const outboundTargetByLabel = useMemo(() => {
     const map = new Map<string, string>();
     for (const link of pageLinks?.outbound ?? []) {
@@ -155,6 +164,7 @@ export default function PageDetail({ pageId, onBack, onMemoryClick, onPageClick 
       queryClient.invalidateQueries({ queryKey: ["page", pageId] });
       queryClient.invalidateQueries({ queryKey: ["pages"] });
       queryClient.invalidateQueries({ queryKey: ["page-links", pageId] });
+      queryClient.invalidateQueries({ queryKey: ["page-revisions", pageId] });
       setEditing(false);
     },
   });
@@ -289,6 +299,7 @@ export default function PageDetail({ pageId, onBack, onMemoryClick, onPageClick 
   const outboundLinks = pageLinks?.outbound ?? [];
   const inboundLinks = pageLinks?.inbound ?? [];
   const hasPageLinks = !!pageLinks && (outboundLinks.length > 0 || inboundLinks.length > 0);
+  const pageRevisionEntries = pageRevisions?.entries ?? [];
 
   return (
     <div className="flex flex-col gap-6">
@@ -609,6 +620,91 @@ export default function PageDetail({ pageId, onBack, onMemoryClick, onPageClick 
                 >
                   {inner}
                 </button>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {/* Revision history — daemon page changelog */}
+      {!editing && pageRevisionEntries.length > 0 && (
+        <div aria-label="Revision history">
+          <h3
+            className="mb-2"
+            style={{
+              fontFamily: "var(--mem-font-mono)",
+              fontSize: "11px",
+              fontWeight: 600,
+              letterSpacing: "0.05em",
+              textTransform: "uppercase",
+              color: "var(--mem-text-tertiary)",
+            }}
+          >
+            Revision History
+          </h3>
+          <div className="flex flex-col gap-1.5">
+            {pageRevisionEntries.map((entry) => {
+              const incomingCount = entry.incoming_source_ids?.length ?? 0;
+              return (
+                <div
+                  key={`${entry.version}-${entry.at}`}
+                  className="rounded-lg px-4 py-3"
+                  style={{ backgroundColor: "var(--mem-surface)", border: "1px solid var(--mem-border)" }}
+                >
+                  <div className="flex items-center gap-2 mb-1 flex-wrap">
+                    <span
+                      style={{
+                        fontFamily: "var(--mem-font-mono)",
+                        fontSize: "11px",
+                        fontWeight: 600,
+                        color: "var(--mem-accent-page)",
+                      }}
+                    >
+                      v{entry.version}
+                    </span>
+                    <span
+                      style={{
+                        fontFamily: "var(--mem-font-body)",
+                        fontSize: "12px",
+                        color: "var(--mem-text-secondary)",
+                      }}
+                    >
+                      {entry.edited_by}
+                    </span>
+                    <span
+                      style={{
+                        fontFamily: "var(--mem-font-mono)",
+                        fontSize: "10px",
+                        color: "var(--mem-text-tertiary)",
+                      }}
+                    >
+                      {relativeMs(entry.at * 1000)}
+                    </span>
+                    {incomingCount > 0 && (
+                      <span
+                        style={{
+                          fontFamily: "var(--mem-font-mono)",
+                          fontSize: "10px",
+                          color: "var(--mem-text-tertiary)",
+                        }}
+                      >
+                        {incomingCount} incoming {incomingCount === 1 ? "memory" : "memories"}
+                      </span>
+                    )}
+                  </div>
+                  {entry.delta_summary && (
+                    <p
+                      style={{
+                        fontFamily: "var(--mem-font-body)",
+                        fontSize: "13px",
+                        color: "var(--mem-text)",
+                        lineHeight: "1.5",
+                      }}
+                    >
+                      {entry.delta_summary}
+                    </p>
+                  )}
+                </div>
               );
             })}
           </div>
