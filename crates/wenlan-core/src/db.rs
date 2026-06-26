@@ -16082,8 +16082,12 @@ impl MemoryDB {
     /// sensitive, so the smallest tier number wins. Unknown source ids are
     /// ignored; an empty set stays at the least sensitive tier.
     pub async fn max_source_trust_tier(&self, source_ids: &[String]) -> Result<u8, WenlanError> {
+        if source_ids.is_empty() {
+            return Ok(3); // a genuinely sourceless page is least-sensitive
+        }
         let conn = self.conn.lock().await;
         let mut max_tier = 3u8;
+        let mut resolved = 0usize;
         for source_id in source_ids {
             let mut rows = conn
                 .query(
@@ -16097,12 +16101,22 @@ impl MemoryDB {
                 .await
                 .map_err(|e| WenlanError::VectorDb(e.to_string()))?
             {
+                resolved += 1;
                 let memory_type = row.get::<Option<String>>(0).unwrap_or(None);
                 let tier = crate::pages::trust_tier_for_memory_type(memory_type.as_deref());
                 if tier < max_tier {
                     max_tier = tier;
                 }
             }
+        }
+        // Fail closed when a page lists sources but NONE resolve (every source
+        // memory was deleted/forgotten): a page distilled from now-missing memories
+        // must not silently declassify to tier-3. Treat as tier-1 (most sensitive).
+        // PARTIAL deletion (some resolve, some don't) still uses max-over-resolved
+        // and is a known residual — the robust fix is a write-time max_source_tier
+        // stamp on the page row (follow-up).
+        if resolved == 0 {
+            return Ok(1);
         }
         Ok(max_tier)
     }
@@ -16119,6 +16133,14 @@ impl MemoryDB {
         caller_trust: &str,
         cap: usize,
     ) -> Vec<Page> {
+        // Floor: pages are a tier-2-sensitive CLASS — only full/review trust see
+        // ANY page (mirrors /api/context's outer gate). The per-page effective-tier
+        // check below further restricts within that. Enforced HERE in the one shared
+        // gate so /api/search + /api/memory/search cannot drift looser than
+        // /api/context — without it an unknown caller receives tier-3-sourced pages.
+        if !crate::router::classify::tier_allowed(caller_trust, 2) {
+            return Vec::new();
+        }
         let scoped = crate::pages::scope_filter_pages(raw_pages, caller_space, memory_source_ids);
         let mut tier_ok = Vec::with_capacity(scoped.len());
         for page in scoped {
@@ -24596,6 +24618,51 @@ pub(crate) mod tests {
             !full_ids.contains(&"p_cross"),
             "cross-space page must be dropped even for full trust"
         );
+    }
+
+    // Finding #1 (security review 2026-06-26): the tier-2 CLASS floor must block an
+    // unknown caller from ALL pages even when a page's per-page effective tier is 3
+    // (tier_allowed("unknown",3)=true). Without the floor, /api/search and
+    // /api/memory/search were looser than /api/context. Locked in the shared gate.
+    #[tokio::test]
+    async fn select_visible_pages_blocks_unknown_caller_even_for_tier3() {
+        let (db, _dir) = test_db().await;
+        db.upsert_documents(vec![make_memory_doc(
+            "m_fact3",
+            "The project uses a Cargo workspace.",
+            "fact",
+            "work",
+            "claude-code",
+        )])
+        .await
+        .unwrap();
+        let page = confirmed_page("p_t3", Some("work"), &["m_fact3"]);
+        let no_overlap: std::collections::HashSet<String> = std::collections::HashSet::new();
+
+        let unknown_visible = db
+            .select_visible_pages(vec![page.clone()], Some("work"), &no_overlap, "unknown", 10)
+            .await;
+        assert!(
+            unknown_visible.is_empty(),
+            "unknown caller must see NO pages even for a same-space tier-3 page"
+        );
+
+        let review_visible = db
+            .select_visible_pages(vec![page], Some("work"), &no_overlap, "review", 10)
+            .await;
+        assert_eq!(review_visible.len(), 1, "review trust still sees the tier-3 page");
+    }
+
+    // Finding #2 (security review 2026-06-26): a page whose source memories were all
+    // deleted must NOT declassify to tier-3 (no rows resolve) — fail closed to tier-1.
+    #[tokio::test]
+    async fn max_source_tier_fails_closed_when_no_source_resolves() {
+        let (db, _dir) = test_db().await;
+        let tier = db
+            .max_source_trust_tier(&["gone_1".to_string(), "gone_2".to_string()])
+            .await
+            .unwrap();
+        assert_eq!(tier, 1, "all-sources-missing must fail closed to tier-1");
     }
 
     #[tokio::test]
