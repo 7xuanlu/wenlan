@@ -79,14 +79,14 @@ impl WenlanClient {
         resp.json().await.context("parsing /api/search response")
     }
 
-    /// POST /api/chat-context — contextual knowledge bundle for a query.
+    /// POST /api/context — contextual knowledge bundle for a query.
     ///
     /// Note: `/api/context` (the older endpoint) takes `current_file` +
     /// `cursor_prefix` and is hidden from the public API. The CLI uses
-    /// `/api/chat-context` which accepts a free-form query and returns
+    /// `/api/context` which accepts a free-form query and returns
     /// the same `KnowledgeContext` shape inside its response.
     pub async fn context(&self, query: String) -> Result<KnowledgeContext> {
-        let url = format!("{}/api/chat-context", self.base_url);
+        let url = format!("{}/api/context", self.base_url);
         let req = serde_json::json!({ "query": query });
         let resp = self
             .http
@@ -98,14 +98,11 @@ impl WenlanClient {
         let resp = resp
             .error_for_status()
             .with_context(|| format!("daemon returned error for {}", url))?;
-        let full: serde_json::Value = resp
-            .json()
-            .await
-            .context("parsing /api/chat-context response")?;
+        let full: serde_json::Value = resp.json().await.context("parsing /api/context response")?;
         let knowledge = full
             .get("knowledge")
             .cloned()
-            .ok_or_else(|| anyhow::anyhow!("/api/chat-context response missing `knowledge`"))?;
+            .ok_or_else(|| anyhow::anyhow!("/api/context response missing `knowledge`"))?;
         serde_json::from_value(knowledge).context("parsing knowledge subobject")
     }
 

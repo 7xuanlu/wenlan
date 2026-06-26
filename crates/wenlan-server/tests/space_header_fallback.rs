@@ -163,7 +163,7 @@ async fn search_header_fallback_returns_200() {
     );
 }
 
-// ===== /api/chat-context (handle_chat_context) =====
+// ===== /api/context (handle_context) =====
 
 #[tokio::test]
 async fn chat_context_header_fallback_returns_200() {
@@ -171,7 +171,7 @@ async fn chat_context_header_fallback_returns_200() {
 
     let req = Request::builder()
         .method("POST")
-        .uri("/api/chat-context")
+        .uri("/api/context")
         .header("Content-Type", "application/json")
         .header("X-Origin-Space", "personal")
         .body(Body::from(

@@ -141,7 +141,7 @@ pub struct StatusResponse {
     #[serde(default)]
     pub reranker: RerankerStatus,
     /// Reranker on the LIGHT paths — quick (`/api/search`) + context
-    /// (`/api/chat-context`). Populated when `WENLAN_RERANKER_MODE` is `lite`/`full`.
+    /// (`/api/context`). Populated when `WENLAN_RERANKER_MODE` is `lite`/`full`.
     /// Additive: defaults to `Disabled` so older daemons (which omit it) deserialize cleanly.
     #[serde(default)]
     pub reranker_light: RerankerStatus,

@@ -223,7 +223,7 @@ fn reranker_model_from_env() -> fastembed::RerankerModel {
 /// Governs WHICH retrieval paths get a cross-encoder and which model:
 /// - `Off` (default): no CE anywhere — byte-identical to the pre-mode daemon.
 /// - `Lite`: the light turbo CE (`JINARerankerV1TurboEn`) on the quick
-///   (`/api/search`) and context (`/api/chat-context`) paths AND on an explicit
+///   (`/api/search`) and context (`/api/context`) paths AND on an explicit
 ///   `rerank=true` deep search; the heavy bge-base model is not loaded.
 /// - `Full`: turbo on quick/context, plus the heavy `BGERerankerBase` (pool-10)
 ///   on the explicit `rerank=true` deep path.
@@ -370,7 +370,7 @@ impl RerankerPick {
 }
 
 /// Per-path reranker selection resolved from `(mode, legacy WENLAN_RERANKER_ENABLED)`.
-/// `light` = quick (`/api/search`) + context (`/api/chat-context`);
+/// `light` = quick (`/api/search`) + context (`/api/context`);
 /// `deep`  = `/api/memory/search` with `rerank=true`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct RerankerPlan {

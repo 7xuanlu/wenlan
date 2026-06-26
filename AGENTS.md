@@ -300,7 +300,7 @@ This keeps `wenlan-core` framework-agnostic and testable with `NoopEmitter` in u
 All data flows through the daemon's HTTP API. The desktop app, CLI, and MCP clients all hit it.
 
 - **HTTP API**: Axum on `127.0.0.1:7878`, served by `wenlan-server`. Used by the desktop app, the `wenlan-mcp` MCP server (same workspace, separate binary process), the `wenlan` CLI, and any external tool.
-  - General: `/api/health`, `/api/status`, `/api/search`, `/api/context`, `/api/chat-context`, `/api/ping`
+  - General: `/api/health`, `/api/status`, `/api/search`, `/api/context`, `/api/ping`
   - Ingest: `/api/ingest/text`, `/api/ingest/webpage`, `/api/ingest/memory`
   - Memory CRUD: `/api/memory/store`, `/api/memory/search`, `/api/memory/confirm/{id}`, `/api/memory/list`, `/api/memory/delete/{id}`
   - Knowledge graph: `/api/memory/entities`, `/api/memory/relations`, `/api/memory/observations`

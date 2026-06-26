@@ -281,7 +281,7 @@ pub fn compute_rerank_fetch_pool(
 }
 
 /// Handler-layer cross-encoder rerank for the LIGHT paths (quick `/api/search`,
-/// context `/api/chat-context`). Reorders `results` by the cross-encoder and
+/// context `/api/context`). Reorders `results` by the cross-encoder and
 /// returns the top `limit`.
 ///
 /// Deliberately a STANDALONE step, NOT folded into `search_memory`, so internal
@@ -15457,7 +15457,7 @@ impl MemoryDB {
         // preferences. The old default (`"review"`) silently gated Tier 1
         // chat-context for every agent, which nobody noticed or wanted.
         // Unregistered callers still fall through to `"unknown"` in
-        // `handle_chat_context` and only see Tier 3 (search results).
+        // `handle_context` and only see Tier 3 (search results).
         conn.execute(
             "INSERT INTO agent_connections (id, name, display_name, agent_type, description, enabled, trust_level, last_seen_at, memory_count, created_at, updated_at)
              VALUES (?1, ?2, ?3, 'api', NULL, 1, 'full', NULL, 0, ?4, ?4)",

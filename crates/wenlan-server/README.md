@@ -72,7 +72,7 @@ First build on macOS takes several minutes while `llama.cpp` compiles for Metal.
 ## Main HTTP Surfaces
 
 - Health/status: `/api/health`, `/api/status`, `/api/setup/status`
-- Memory ingest/search: `/api/memory/store`, `/api/memory/search`, `/api/chat-context`
+- Memory ingest/search: `/api/memory/store`, `/api/memory/search`, `/api/context`
 - Review and pages: `/api/memory/list`, `/api/memory/confirm/{id}`, `/api/distill`
 - Model/key setup: `/api/on-device-model`, `/api/on-device-model/download`, `/api/setup/anthropic-key`
 

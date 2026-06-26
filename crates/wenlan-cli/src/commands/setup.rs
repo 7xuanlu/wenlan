@@ -435,7 +435,7 @@ async fn print_reranker_status() {
         fmt(&status.reranker)
     );
     println!(
-        "  light (/api/search + /api/chat-context): {}",
+        "  light (/api/search + /api/context): {}",
         fmt(&status.reranker_light)
     );
     if mode == "off" {

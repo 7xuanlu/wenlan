@@ -158,69 +158,8 @@ pub async fn handle_search(
 
 // ===== Context Endpoints =====
 
-#[derive(Debug, Deserialize)]
-pub struct ContextRequest {
-    pub current_file: String,
-    pub cursor_prefix: String,
-    #[serde(default = "default_limit")]
-    pub limit: usize,
-}
-
-#[derive(Debug, Serialize)]
-pub struct ContextSuggestion {
-    pub content: String,
-    pub score: f32,
-    pub source: String,
-}
-
-#[derive(Debug, Serialize)]
-pub struct ContextResponse {
-    pub suggestions: Vec<ContextSuggestion>,
-    pub took_ms: f64,
-}
-
-/// POST /api/context - Context-aware autocomplete for VS Code
+/// POST /api/context - Trust-gated tiered memory retrieval for LLM context injection
 pub async fn handle_context(
-    State(state): State<Arc<RwLock<ServerState>>>,
-    Json(req): Json<ContextRequest>,
-) -> Result<Json<ContextResponse>, ServerError> {
-    let start = std::time::Instant::now();
-
-    let file_name = std::path::Path::new(&req.current_file)
-        .file_name()
-        .and_then(|n| n.to_str())
-        .unwrap_or(&req.current_file);
-
-    let query = format!("{} {}", file_name, req.cursor_prefix);
-
-    let results = {
-        let s = state.read().await;
-        let db = s.db.as_ref().ok_or(ServerError::DbNotInitialized)?;
-
-        db.search(&query, req.limit, None, None)
-            .await
-            .map_err(|e| ServerError::SearchFailed(e.to_string()))?
-    };
-
-    let suggestions: Vec<ContextSuggestion> = results
-        .into_iter()
-        .map(|r| ContextSuggestion {
-            content: r.content,
-            score: r.score,
-            source: r.source_id,
-        })
-        .collect();
-
-    let took_ms = start.elapsed().as_secs_f64() * 1000.0;
-
-    Ok(Json(ContextResponse {
-        suggestions,
-        took_ms,
-    }))
-}
-
-/// POST /api/chat-context - Trust-gated tiered memory retrieval for LLM context injection
-pub async fn handle_chat_context(
     State(state): State<Arc<RwLock<ServerState>>>,
     headers: HeaderMap,
     crate::space_header::SpaceHeader(header_space): crate::space_header::SpaceHeader,
@@ -620,7 +559,7 @@ pub async fn handle_chat_context(
 
     // ProfileContext.goals is deprecated (migration 45 folded goal -> identity);
     // we still emit it as an empty Vec for wire backward compat with wenlan-mcp
-    // and any external consumers of /api/chat-context until wenlan-types 0.4
+    // and any external consumers of /api/context until wenlan-types 0.4
     // drops the field entirely.
     #[allow(deprecated)]
     let profile = ProfileContext {
@@ -1274,7 +1213,7 @@ mod chat_context_tests {
         let body = r#"{"query":"what programming languages do I know","max_chunks":5}"#;
         let req = Request::builder()
             .method("POST")
-            .uri("/api/chat-context")
+            .uri("/api/context")
             .header("content-type", "application/json")
             .body(Body::from(body))
             .unwrap();

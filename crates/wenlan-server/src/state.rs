@@ -47,7 +47,7 @@ pub struct ServerState {
     /// once the background bge-base load completes.
     pub reranker_status: RerankerStatus,
     /// Cross-encoder for the LIGHT paths — quick (`/api/search`) + context
-    /// (`/api/chat-context`). Wired (turbo) when `WENLAN_RERANKER_MODE` is
+    /// (`/api/context`). Wired (turbo) when `WENLAN_RERANKER_MODE` is
     /// `lite`/`full`. `None` => those paths use plain hybrid ordering.
     pub reranker_light: Option<Arc<dyn Reranker>>,
     /// Observable light-path reranker state for `/api/status`.

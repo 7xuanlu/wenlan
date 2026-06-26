@@ -813,7 +813,7 @@ impl WenlanMcpServer {
         // JSON and pull that field directly — this makes the tool forward-
         // compatible with any new fields the daemon might add.
         let raw: serde_json::Value =
-            try_call!(self.client.post("/api/chat-context", &req), "context load");
+            try_call!(self.client.post("/api/context", &req), "context load");
 
         let context = raw
             .get("context")
