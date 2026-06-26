@@ -16105,6 +16105,34 @@ impl MemoryDB {
         Ok(max_tier)
     }
 
+    /// The ONE shared page-visibility gate used by /api/context,
+    /// /api/memory/search, and /api/search. Order: space-scope (pure) →
+    /// effective-tier (fail-closed) → confirmed/rank/cap. Returns at most `cap`
+    /// pages the caller may see.
+    pub async fn select_visible_pages(
+        &self,
+        raw_pages: Vec<Page>,
+        caller_space: Option<&str>,
+        memory_source_ids: &std::collections::HashSet<String>,
+        caller_trust: &str,
+        cap: usize,
+    ) -> Vec<Page> {
+        let scoped = crate::pages::scope_filter_pages(raw_pages, caller_space, memory_source_ids);
+        let mut tier_ok = Vec::with_capacity(scoped.len());
+        for page in scoped {
+            // fail-closed: a lookup error → treat as most sensitive (tier 1) → drop
+            // unless the caller has full trust.
+            let eff_tier = self
+                .max_source_trust_tier(&page.source_memory_ids)
+                .await
+                .unwrap_or(1);
+            if crate::router::classify::tier_allowed(caller_trust, eff_tier) {
+                tier_ok.push(page);
+            }
+        }
+        crate::pages::select_pages_for_context(&tier_ok, memory_source_ids, cap)
+    }
+
     pub async fn get_memory_space(&self, source_id: &str) -> Result<Option<String>, WenlanError> {
         let conn = self.conn.lock().await;
         let mut rows = conn
@@ -24464,6 +24492,108 @@ pub(crate) mod tests {
 
         let empty_tier = db.max_source_trust_tier(&[]).await.unwrap();
         assert_eq!(empty_tier, 3);
+    }
+
+    /// Helper for select_visible_pages tests: a confirmed, active page with the
+    /// given workspace + source memory ids.
+    fn confirmed_page(id: &str, workspace: Option<&str>, sources: &[&str]) -> Page {
+        Page {
+            id: id.to_string(),
+            title: id.to_string(),
+            summary: None,
+            content: String::new(),
+            entity_id: None,
+            space: None,
+            source_memory_ids: sources.iter().map(|s| s.to_string()).collect(),
+            version: 1,
+            status: "active".to_string(),
+            created_at: String::new(),
+            last_compiled: String::new(),
+            last_modified: String::new(),
+            sources_updated_count: 0,
+            stale_reason: None,
+            user_edited: false,
+            relevance_score: 0.5,
+            last_edited_by: None,
+            last_edited_at: None,
+            last_delta_summary: None,
+            changelog: None,
+            creation_kind: "distilled".to_string(),
+            review_status: "confirmed".to_string(),
+            workspace: workspace.map(|w| w.to_string()),
+        }
+    }
+
+    #[tokio::test]
+    async fn select_visible_pages_gates_by_space_and_tier() {
+        let (db, _dir) = test_db().await;
+        // Source memories: identity (tier1, most sensitive) + fact (tier3).
+        db.upsert_documents(vec![
+            make_memory_doc(
+                "m_identity",
+                "The user's legal name is Lucian.",
+                "identity",
+                "personal",
+                "claude-code",
+            ),
+            make_memory_doc(
+                "m_fact",
+                "The project uses a Cargo workspace.",
+                "fact",
+                "work",
+                "claude-code",
+            ),
+        ])
+        .await
+        .unwrap();
+
+        // Cross-space: workspace != caller space, source not in result set → dropped.
+        let cross = confirmed_page("p_cross", Some("personal"), &["unrelated"]);
+        // Same space, only source is a tier-1 identity memory → tier-gated.
+        let identity_page = confirmed_page("p_identity", Some("work"), &["m_identity"]);
+        // Same space, tier-3 fact source, zero overlap with the result set → kept.
+        let same_space = confirmed_page("p_same", Some("work"), &["m_fact"]);
+
+        let raw = vec![cross.clone(), identity_page.clone(), same_space.clone()];
+        // Zero overlap: the memory result set is empty, so same-space survives on
+        // workspace match alone.
+        let no_overlap: std::collections::HashSet<String> = std::collections::HashSet::new();
+
+        // review trust: tier-1 identity page dropped, cross-space dropped, same-space kept.
+        let review_visible = db
+            .select_visible_pages(raw.clone(), Some("work"), &no_overlap, "review", 10)
+            .await;
+        let review_ids: Vec<&str> = review_visible.iter().map(|p| p.id.as_str()).collect();
+        assert!(
+            review_ids.contains(&"p_same"),
+            "confirmed same-space zero-overlap page must be kept"
+        );
+        assert!(
+            !review_ids.contains(&"p_identity"),
+            "tier-1-sourced page must be dropped for review trust"
+        );
+        assert!(
+            !review_ids.contains(&"p_cross"),
+            "cross-space page must be dropped"
+        );
+
+        // full trust: identity page now allowed; cross-space still dropped.
+        let full_visible = db
+            .select_visible_pages(raw.clone(), Some("work"), &no_overlap, "full", 10)
+            .await;
+        let full_ids: Vec<&str> = full_visible.iter().map(|p| p.id.as_str()).collect();
+        assert!(
+            full_ids.contains(&"p_identity"),
+            "tier-1-sourced page must be kept for full trust"
+        );
+        assert!(
+            full_ids.contains(&"p_same"),
+            "same-space page must be kept for full trust"
+        );
+        assert!(
+            !full_ids.contains(&"p_cross"),
+            "cross-space page must be dropped even for full trust"
+        );
     }
 
     #[tokio::test]
