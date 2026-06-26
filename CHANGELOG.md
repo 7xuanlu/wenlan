@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.9.2](https://github.com/7xuanlu/wenlan/compare/v0.9.1...v0.9.2) (2026-06-26)
+
+
+### Bug Fixes
+
+* repair stale wenlan plugin runtime ([963ab28](https://github.com/7xuanlu/wenlan/commit/963ab2824306ce9200fc7756aa0e2cdc50dfbe1f))
+* surface distilled wiki pages across recall/search surfaces, space + tier gated ([#303](https://github.com/7xuanlu/wenlan/issues/303)) ([d6f770c](https://github.com/7xuanlu/wenlan/commit/d6f770c978e1885a1d8c881705ea4bb9c14e36bc))
+
 ## [0.9.1](https://github.com/7xuanlu/wenlan/compare/v0.9.0...v0.9.1) (2026-06-24)
 
 
