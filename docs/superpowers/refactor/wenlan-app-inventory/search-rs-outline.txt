@@ -177,24 +177,24 @@
 2786: pub async fn remove_source(state: tauri::State<'_, State>, id: String) -> Result<(), String>
 2807: pub async fn list_registered_sources() -> Result<Vec<crate::sources::Source>, String>
 2813: pub async fn sync_registered_source(
-2843: pub async fn get_model_choice() -> Result<(Option<String>, Option<String>), String>
-2849: pub async fn set_model_choice(
-2862: pub async fn get_system_info() -> Result<wenlan_types::system_info::SystemInfo, String>
-2867: pub async fn get_external_llm() -> Result<(Option<String>, Option<String>), String>
-2873: pub async fn set_external_llm(
-2886: pub async fn test_external_llm(
-2900: pub async fn get_on_device_model(
-2916: pub async fn download_on_device_model(
-2935: pub async fn list_recent_retrievals(
-2947: pub async fn list_recent_changes(
-2959: pub async fn list_recent_memories(
-2974: pub async fn list_unconfirmed_memories(
-2986: pub async fn list_recent_pages(
-3001: pub async fn list_recent_relations(
-3016: pub async fn is_run_at_login_enabled() -> Result<bool, String>
-3022: pub async fn set_run_at_login(enabled: bool) -> Result<(), String>
-3030: pub async fn quit_origin_full(app_handle: tauri::AppHandle) -> Result<(), String>
-3037: mod avatar_path_tests
+2843: pub async fn get_model_choice(
+2854: pub async fn set_model_choice(
+2871: pub async fn get_system_info() -> Result<wenlan_types::system_info::SystemInfo, String>
+2876: pub async fn get_external_llm(
+2887: pub async fn set_external_llm(
+2902: pub async fn test_external_llm(
+2916: pub async fn get_on_device_model(
+2932: pub async fn download_on_device_model(
+2951: pub async fn list_recent_retrievals(
+2963: pub async fn list_recent_changes(
+2975: pub async fn list_recent_memories(
+2990: pub async fn list_unconfirmed_memories(
+3002: pub async fn list_recent_pages(
+3017: pub async fn list_recent_relations(
+3032: pub async fn is_run_at_login_enabled() -> Result<bool, String>
+3038: pub async fn set_run_at_login(enabled: bool) -> Result<(), String>
+3046: pub async fn quit_origin_full(app_handle: tauri::AppHandle) -> Result<(), String>
+3053: mod avatar_path_tests
         function: restore_env, avatar_storage_dir_prefers_wenlan_data_dir, avatar_storage_dir_falls_back_to_legacy_origin_data_dir
-3082: mod revision_response_tests
+3098: mod revision_response_tests
         function: store_memory_response_preserves_revision_signals, store_memory_response_defaults_revision_signals_for_old_daemons

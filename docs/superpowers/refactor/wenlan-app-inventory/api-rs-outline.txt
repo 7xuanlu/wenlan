@@ -6,11 +6,11 @@
  29: impl Default for WenlanClient
        method: default
  35: impl WenlanClient
-       method: new, get_json, post_json, put_json, delete_path, delete_json, post_empty, health, import_chat_export, list_pending_imports, list_onboarding_milestones, acknowledge_onboarding_milestone, reset_onboarding_milestones, list_recent_retrievals, list_recent_changes, list_recent_memories, list_unconfirmed_memories, list_recent_pages, list_recent_relations, get_page_sources, test_llm, list_refinements, accept_refinement, reject_refinement, get_config, update_config, get_setup_status, set_setup_completed, get_skip_apps, set_skip_apps, get_skip_title_patterns, set_skip_title_patterns, url
-399: fn empty_update() -> wenlan_types::requests::UpdateConfigRequest
-415: trait UpdateConfigBuilder
-       method: with_skip_apps, with_skip_title_patterns, with_setup_completed
-421: impl UpdateConfigBuilder for wenlan_types::requests::UpdateConfigRequest
-       method: with_skip_apps, with_skip_title_patterns, with_setup_completed
-437: mod tests
-       function: update_config_builder_can_set_setup_completed, setup_status_response_deserializes_daemon_payload, wenlan_client_exposes_refinery_queue_methods
+       method: new, get_json, post_json, put_json, delete_path, delete_json, post_empty, health, import_chat_export, list_pending_imports, list_onboarding_milestones, acknowledge_onboarding_milestone, reset_onboarding_milestones, list_recent_retrievals, list_recent_changes, list_recent_memories, list_unconfirmed_memories, list_recent_pages, list_recent_relations, get_page_sources, test_llm, list_refinements, accept_refinement, reject_refinement, get_config, update_config, get_setup_status, set_setup_completed, get_model_choice, set_model_choice, get_external_llm, set_external_llm, get_skip_apps, set_skip_apps, get_skip_title_patterns, set_skip_title_patterns, url
+431: fn empty_update() -> wenlan_types::requests::UpdateConfigRequest
+447: trait UpdateConfigBuilder
+       method: with_skip_apps, with_skip_title_patterns, with_setup_completed, with_model_choice, with_external_llm
+459: impl UpdateConfigBuilder for wenlan_types::requests::UpdateConfigRequest
+       method: with_skip_apps, with_skip_title_patterns, with_setup_completed, with_model_choice, with_external_llm
+489: mod tests
+       function: update_config_builder_can_set_setup_completed, update_config_builder_patches_model_fields_without_touching_other_config, update_config_builder_patches_external_llm_fields_without_touching_models, setup_status_response_deserializes_daemon_payload, wenlan_client_exposes_refinery_queue_methods, wenlan_client_exposes_daemon_model_config_methods
