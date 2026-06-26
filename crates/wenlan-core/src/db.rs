@@ -11077,8 +11077,10 @@ impl MemoryDB {
     /// timestamp silently demotes the page to maximum decay. Current consumer
     /// (PR-B Task 3 two-stage RRF merge) does not route page rows through recency,
     /// so this is documented as an invariant rather than enforced at the type level.
-    // consumed by search_memory_cross_rerank (page-channel RRF, PR-B Task 3)
-    fn search_result_from_page(page: Page) -> SearchResult {
+    // consumed by search_memory_cross_rerank (page-channel RRF, PR-B Task 3) and
+    // by the additive page path on the search handlers (page-reachability Task 6).
+    // `pub` (not `pub(crate)`) because the additive caller lives in wenlan-server.
+    pub fn search_result_from_page(page: Page) -> SearchResult {
         let last_modified = chrono::DateTime::parse_from_rfc3339(&page.last_modified)
             .map(|dt| dt.timestamp())
             .unwrap_or(0);
