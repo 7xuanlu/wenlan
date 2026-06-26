@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import AddSourceDialog from "../AddSourceDialog";
+import * as tauri from "../../../../lib/tauri";
 
 vi.mock("../../../../lib/tauri");
 vi.mock("@tauri-apps/plugin-dialog", () => ({
@@ -16,6 +17,12 @@ function wrapper({ children }: { children: React.ReactNode }) {
     defaultOptions: { queries: { retry: false } },
   });
   return <QueryClientProvider client={qc}>{children}</QueryClientProvider>;
+}
+
+function createQueryClient() {
+  return new QueryClient({
+    defaultOptions: { queries: { retry: false } },
+  });
 }
 
 describe("AddSourceDialog", () => {
@@ -101,5 +108,45 @@ describe("AddSourceDialog", () => {
       expect(screen.getByText(/no markdown files/i)).toBeInTheDocument();
     });
     expect(screen.getByRole("button", { name: /add source/i })).toBeDisabled();
+  });
+
+  it("invalidates registered sources after a successful add before background sync completes", async () => {
+    const { open } = await import("@tauri-apps/plugin-dialog");
+    const { readDir } = await import("@tauri-apps/plugin-fs");
+    (open as ReturnType<typeof vi.fn>).mockResolvedValue("/Users/test/vault");
+    (readDir as ReturnType<typeof vi.fn>).mockResolvedValue([
+      { name: "note.md", isDirectory: false, isFile: true, isSymlink: false },
+    ]);
+    vi.mocked(tauri.addSource).mockResolvedValue({
+      id: "obsidian-vault",
+      source_type: "obsidian",
+      path: "/Users/test/vault",
+      status: "Active",
+      last_sync: null,
+      file_count: 0,
+      memory_count: 0,
+    });
+    vi.mocked(tauri.syncRegisteredSource).mockReturnValue(new Promise(() => {}));
+
+    const qc = createQueryClient();
+    const invalidateSpy = vi.spyOn(qc, "invalidateQueries");
+    render(
+      <QueryClientProvider client={qc}>
+        <AddSourceDialog onClose={onClose} onSuccess={onSuccess} />
+      </QueryClientProvider>,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: /browse/i }));
+    await waitFor(() => {
+      expect(screen.getByText(/1 markdown files/)).toBeInTheDocument();
+    });
+    fireEvent.click(screen.getByRole("button", { name: /add source/i }));
+
+    await waitFor(() => {
+      expect(onSuccess).toHaveBeenCalled();
+    });
+    expect(invalidateSpy).toHaveBeenCalledWith({
+      queryKey: ["registeredSources"],
+    });
   });
 });

@@ -61,6 +61,50 @@ describe('listWatchPaths', () => {
   });
 });
 
+describe('registered sources', () => {
+  it('listRegisteredSources calls invoke with no args', async () => {
+    mockInvoke.mockResolvedValue([]);
+    await tauri.listRegisteredSources();
+    expect(mockInvoke).toHaveBeenCalledWith('list_registered_sources');
+  });
+
+  it('addSource preserves sourceType arg casing', async () => {
+    const source = {
+      id: 'obsidian-vault',
+      source_type: 'obsidian',
+      path: '/Users/test/vault',
+      status: 'Active',
+      last_sync: null,
+      file_count: 0,
+      memory_count: 0,
+    };
+    mockInvoke.mockResolvedValue(source);
+
+    await expect(tauri.addSource('obsidian', '/Users/test/vault')).resolves.toEqual(source);
+
+    expect(mockInvoke).toHaveBeenCalledWith('add_source', {
+      sourceType: 'obsidian',
+      path: '/Users/test/vault',
+    });
+  });
+
+  it('removeSource passes id', async () => {
+    await tauri.removeSource('obsidian-vault');
+    expect(mockInvoke).toHaveBeenCalledWith('remove_source', { id: 'obsidian-vault' });
+  });
+
+  it('syncRegisteredSource passes id', async () => {
+    const stats = { files_found: 4, ingested: 2, skipped: 1, errors: 0 };
+    mockInvoke.mockResolvedValue(stats);
+
+    await expect(tauri.syncRegisteredSource('obsidian-vault')).resolves.toEqual(stats);
+
+    expect(mockInvoke).toHaveBeenCalledWith('sync_registered_source', {
+      id: 'obsidian-vault',
+    });
+  });
+});
+
 describe('deleteFileChunks', () => {
   it('calls invoke with source and sourceId', async () => {
     await tauri.deleteFileChunks('local_files', 'abc123');

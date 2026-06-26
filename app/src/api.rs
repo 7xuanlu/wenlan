@@ -124,6 +124,24 @@ impl WenlanClient {
             .map_err(|e| format!("Parse {}: {}", path, e))
     }
 
+    async fn delete_empty(&self, path: &str) -> Result<(), String> {
+        let resp = self
+            .client
+            .delete(self.url(path))
+            .send()
+            .await
+            .map_err(|e| format!("HTTP DELETE {}: {}", path, e))?;
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let text = resp.text().await.unwrap_or_default();
+            return Err(format!(
+                "HTTP DELETE {} returned {}: {}",
+                path, status, text
+            ));
+        }
+        Ok(())
+    }
+
     pub async fn delete_json<Req: Serialize, Resp: DeserializeOwned>(
         &self,
         path: &str,
@@ -188,6 +206,34 @@ impl WenlanClient {
         &self,
     ) -> Result<Vec<wenlan_types::import::PendingImport>, String> {
         self.get_json("/api/import/state").await
+    }
+
+    // ── Source registry ──────────────────────────────────────────────
+
+    pub async fn list_sources(&self) -> Result<Vec<wenlan_types::sources::Source>, String> {
+        self.get_json("/api/sources").await
+    }
+
+    pub async fn add_source(
+        &self,
+        source_type: String,
+        path: String,
+    ) -> Result<wenlan_types::sources::Source, String> {
+        let req = wenlan_types::requests::AddSourceRequest { source_type, path };
+        self.post_json("/api/sources", &req).await
+    }
+
+    pub async fn remove_source(&self, id: &str) -> Result<(), String> {
+        let path = format!("/api/sources/{}", id);
+        self.delete_empty(&path).await
+    }
+
+    pub async fn sync_source(
+        &self,
+        id: &str,
+    ) -> Result<wenlan_types::responses::SyncStatsResponse, String> {
+        let path = format!("/api/sources/{}/sync", id);
+        self.post_empty(&path).await
     }
 
     // ── Onboarding milestones ──────────────────────────────────────
@@ -583,5 +629,13 @@ mod tests {
         let _set_model_choice = WenlanClient::set_model_choice;
         let _get_external_llm = WenlanClient::get_external_llm;
         let _set_external_llm = WenlanClient::set_external_llm;
+    }
+
+    #[test]
+    fn wenlan_client_exposes_source_registry_methods() {
+        let _list = WenlanClient::list_sources;
+        let _add = WenlanClient::add_source;
+        let _remove = WenlanClient::remove_source;
+        let _sync = WenlanClient::sync_source;
     }
 }
