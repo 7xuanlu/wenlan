@@ -1356,11 +1356,12 @@ mod context_page_selection_tests {
         }
     }
 
-    /// The `/api/context` page block is wired to `select_pages_for_context(.., 3)`
-    /// (the un-gated selector), NOT the old source-overlap gate. A high-relevance
-    /// page whose source memories do NOT intersect the memory hit pool MUST still
-    /// surface — the exact case the prior `filter_pages_by_source_overlap(.., >=1)`
-    /// gate dropped. This locks the T2 wiring so a revert to the gate fails loud.
+    /// Unit-locks the `select_pages_for_context` SELECTOR (the ranking stage inside
+    /// the `/api/context` gate): a high-relevance page whose source memories do NOT
+    /// intersect the memory hit pool MUST still surface — the exact case the prior
+    /// `filter_pages_by_source_overlap(.., >=1)` hard gate dropped. The full handler
+    /// wiring (now `db.select_visible_pages`, applying space-scope + effective-tier)
+    /// is locked separately by `context_page_block_enforces_space_scope_and_effective_tier`.
     #[test]
     fn context_surfaces_zero_overlap_page_that_old_gate_dropped() {
         // Memory hit pool returned by search_memory for this query.
