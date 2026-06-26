@@ -320,26 +320,35 @@ pub async fn handle_context(
         .map(|r| r.source_id.clone())
         .collect();
 
-    let page_results: Vec<String> = if tier_allowed(&classification.trust_level, 2)
-        && query != "recent context"
-    {
-        let raw_pages = db.search_pages(query, 3, None).await.unwrap_or_default();
-        // Un-gated: rank confirmed pages by relevance (source-overlap is a
-        // tie-break boost, not a hard filter) and take the top 3 (token cap,
-        // matching the search_pages fetch above). The old source-overlap gate
-        // dropped high-relevance pages whose source memories did not intersect
-        // the memory hit pool.
-        let pages = wenlan_core::pages::select_pages_for_context(&raw_pages, &search_source_ids, 3);
-        pages
-            .iter()
-            .map(|c| {
-                let summary = c.summary.as_deref().unwrap_or("");
-                format!("**{}**: {}\n{}", c.title, summary, c.content)
-            })
-            .collect()
-    } else {
-        Vec::new()
-    };
+    let page_results: Vec<String> =
+        if tier_allowed(&classification.trust_level, 2) && query != "recent context" {
+            let raw_pages = db.search_pages(query, 3, None).await.unwrap_or_default();
+            // Space-scope + effective-tier gate (the ONE shared visibility helper):
+            // drop pages whose dedicated workspace is a different caller's space
+            // (with no source-memory overlap) and pages whose effective read-tier
+            // (the max trust tier over their source memories) the caller's trust
+            // does not clear; then rank confirmed pages by relevance and cap at 3.
+            // Closes the cross-space + tier-declassification leaks the un-gated
+            // `select_pages_for_context` selector had on this shipped path.
+            let pages = db
+                .select_visible_pages(
+                    raw_pages,
+                    space_filter,
+                    &search_source_ids,
+                    &classification.trust_level,
+                    3,
+                )
+                .await;
+            pages
+                .iter()
+                .map(|c| {
+                    let summary = c.summary.as_deref().unwrap_or("");
+                    format!("**{}**: {}\n{}", c.title, summary, c.content)
+                })
+                .collect()
+        } else {
+            Vec::new()
+        };
 
     // T18 global-context prelude (opt-in, ship-dark). Read-only: surfaces the
     // pre-built summary_nodes as a `## Corpus Overview` section. The build path
@@ -1254,7 +1263,13 @@ mod distill_request_tests {
 
 #[cfg(test)]
 mod context_page_selection_tests {
+    use crate::state::ServerState;
+    use axum::body::Body;
+    use axum::http::Request;
     use std::collections::HashSet;
+    use std::sync::Arc;
+    use tokio::sync::RwLock;
+    use tower::ServiceExt;
     use wenlan_core::pages::{filter_pages_by_source_overlap, select_pages_for_context, Page};
 
     fn make_page(id: &str, source_ids: &[&str], relevance_score: f32, review_status: &str) -> Page {
@@ -1317,6 +1332,141 @@ mod context_page_selection_tests {
         assert!(
             selected.iter().any(|p| p.id == "page_zero_overlap"),
             "un-gated context path must surface the high-relevance zero-overlap page"
+        );
+    }
+
+    /// Handler-level wiring lock (Task 5): `/api/context` routes its page block
+    /// through `db.select_visible_pages(..)`, which applies the space-scope +
+    /// effective-tier gate. Before the rewire the handler called the un-gated
+    /// `select_pages_for_context`, so for a tier-2 caller a cross-space page AND
+    /// a page distilled from a tier-1 (identity) source both leaked into the
+    /// response. This drives the real handler and asserts both leaks are closed
+    /// while a same-space, tier-3-sourced page still surfaces.
+    #[tokio::test]
+    async fn context_page_block_enforces_space_scope_and_effective_tier() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let emitter: Arc<dyn wenlan_core::events::EventEmitter> =
+            Arc::new(wenlan_core::events::NoopEmitter);
+        let db = wenlan_core::db::MemoryDB::new(tmp.path(), emitter)
+            .await
+            .expect("MemoryDB::new");
+
+        // A tier-2 caller: trust "review" allows tier 2, denies tier 1.
+        db.register_agent("test-agent").await.unwrap();
+        db.update_agent("test-agent", None, None, None, Some("review"), None)
+            .await
+            .unwrap();
+
+        // Source memories: an identity memory (tier 1, most sensitive) and a fact
+        // memory (tier 3). Only their presence in the `memories` table matters —
+        // the effective-tier lookup reads memory_type by source_id.
+        let mem = |source_id: &str, memory_type: &str| wenlan_core::sources::RawDocument {
+            source: "memory".to_string(),
+            source_id: source_id.to_string(),
+            title: format!("memory-{source_id}"),
+            content: "zorblax source memory".to_string(),
+            memory_type: Some(memory_type.to_string()),
+            space: Some("work".to_string()),
+            source_agent: Some("test-agent".to_string()),
+            confidence: Some(0.9),
+            confirmed: Some(true),
+            ..Default::default()
+        };
+        db.upsert_documents(vec![mem("m_identity", "identity"), mem("m_fact", "fact")])
+            .await
+            .unwrap();
+
+        // Three confirmed, active pages, all matching the query keyword "zorblax"
+        // so search_pages returns each as a candidate.
+        let now = chrono::Utc::now().to_rfc3339();
+        // Cross-space: workspace != caller space, source not in result set → DROP.
+        db.insert_page_with_kind(
+            "page_cross",
+            "Zorblax Crossmarker",
+            None,
+            "zorblax crossmarker body",
+            None,
+            None,
+            &["unrelated"],
+            &now,
+            "distilled",
+            "confirmed",
+            Some("other"),
+        )
+        .await
+        .unwrap();
+        // Same space, only source is a tier-1 identity memory → DROP for review.
+        db.insert_page_with_kind(
+            "page_identity",
+            "Zorblax Identmarker",
+            None,
+            "zorblax identmarker body",
+            None,
+            None,
+            &["m_identity"],
+            &now,
+            "distilled",
+            "confirmed",
+            Some("work"),
+        )
+        .await
+        .unwrap();
+        // Same space, tier-3 fact source → KEEP.
+        db.insert_page_with_kind(
+            "page_same",
+            "Zorblax Samemarker",
+            None,
+            "zorblax samemarker body",
+            None,
+            None,
+            &["m_fact"],
+            &now,
+            "distilled",
+            "confirmed",
+            Some("work"),
+        )
+        .await
+        .unwrap();
+
+        let state = Arc::new(RwLock::new(ServerState {
+            db: Some(Arc::new(db)),
+            ..Default::default()
+        }));
+        let app = crate::router::build_router(state);
+
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/context")
+                    .header("x-agent-name", "test-agent")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        r#"{"query":"zorblax","space":"work","max_chunks":5}"#,
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 200, "context call should succeed");
+        let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let parsed: wenlan_types::responses::ChatContextResponse =
+            serde_json::from_slice(&bytes).unwrap();
+        let pages = parsed.knowledge.pages.join("\n");
+
+        assert!(
+            pages.contains("samemarker"),
+            "same-space tier-3 page must surface, got pages: {pages:?}"
+        );
+        assert!(
+            !pages.contains("crossmarker"),
+            "cross-space page must be dropped by the space-scope gate, got pages: {pages:?}"
+        );
+        assert!(
+            !pages.contains("identmarker"),
+            "tier-1-sourced page must be dropped for review trust, got pages: {pages:?}"
         );
     }
 }
