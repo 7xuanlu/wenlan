@@ -16076,6 +16076,35 @@ impl MemoryDB {
         }
     }
 
+    /// Effective read tier over a set of source memories. Tier 1 is most
+    /// sensitive, so the smallest tier number wins. Unknown source ids are
+    /// ignored; an empty set stays at the least sensitive tier.
+    pub async fn max_source_trust_tier(&self, source_ids: &[String]) -> Result<u8, WenlanError> {
+        let conn = self.conn.lock().await;
+        let mut max_tier = 3u8;
+        for source_id in source_ids {
+            let mut rows = conn
+                .query(
+                    "SELECT memory_type FROM memories WHERE source_id = ?1 AND source = 'memory' LIMIT 1",
+                    libsql::params![source_id.clone()],
+                )
+                .await
+                .map_err(|e| WenlanError::VectorDb(format!("max_source_trust_tier: {}", e)))?;
+            if let Some(row) = rows
+                .next()
+                .await
+                .map_err(|e| WenlanError::VectorDb(e.to_string()))?
+            {
+                let memory_type = row.get::<Option<String>>(0).unwrap_or(None);
+                let tier = crate::pages::trust_tier_for_memory_type(memory_type.as_deref());
+                if tier < max_tier {
+                    max_tier = tier;
+                }
+            }
+        }
+        Ok(max_tier)
+    }
+
     pub async fn get_memory_space(&self, source_id: &str) -> Result<Option<String>, WenlanError> {
         let conn = self.conn.lock().await;
         let mut rows = conn
@@ -24397,6 +24426,44 @@ pub(crate) mod tests {
             .unwrap();
         assert_eq!(listed.len(), 1);
         assert_eq!(listed[0].source_id, "mem1");
+    }
+
+    #[tokio::test]
+    async fn max_source_tier_returns_most_sensitive_source_tier() {
+        let (db, _dir) = test_db().await;
+        db.upsert_documents(vec![
+            make_memory_doc(
+                "s_id1",
+                "The user's legal name is Lucian.",
+                "identity",
+                "personal",
+                "claude-code",
+            ),
+            make_memory_doc(
+                "s_fact",
+                "The project uses a Cargo workspace.",
+                "fact",
+                "work",
+                "claude-code",
+            ),
+        ])
+        .await
+        .unwrap();
+
+        let tier = db
+            .max_source_trust_tier(&["s_id1".to_string(), "s_fact".to_string()])
+            .await
+            .unwrap();
+        assert_eq!(tier, 1);
+
+        let fact_tier = db
+            .max_source_trust_tier(&["s_fact".to_string()])
+            .await
+            .unwrap();
+        assert_eq!(fact_tier, 3);
+
+        let empty_tier = db.max_source_trust_tier(&[]).await.unwrap();
+        assert_eq!(empty_tier, 3);
     }
 
     #[tokio::test]
