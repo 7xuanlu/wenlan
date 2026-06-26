@@ -1205,7 +1205,7 @@ pub(crate) enum CtxRetrieval {
 /// Build structured context for a question against an enriched DB.
 ///
 /// Returns the structured context: search_memory results + concept articles.
-/// Matches production `/api/chat-context` assembly pattern.
+/// Matches production `/api/context` assembly pattern.
 /// Flat baseline comes from the retrieval-only pipeline caches.
 async fn build_structured_context(
     db: &MemoryDB,
@@ -1233,7 +1233,7 @@ async fn build_structured_context(
     let mut parts: Vec<String> = Vec::new();
     if include_pages {
         use crate::pages::filter_pages_by_source_overlap;
-        // Structured: concepts + search results (matches production /api/chat-context).
+        // Structured: concepts + search results (matches production /api/context).
         // EVAL_CONCEPT_MIN_OVERLAP env var lets us sweep thresholds without code changes;
         // defaults to the production tuning value (2).
         let min_overlap: usize = std::env::var("EVAL_CONCEPT_MIN_OVERLAP")

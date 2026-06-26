@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-//! `wenlan recall <query>` — POST /api/chat-context (knowledge bundle).
+//! `wenlan recall <query>` — POST /api/context (knowledge bundle).
 
 use anyhow::Result;
 use wenlan_types::responses::KnowledgeContext;

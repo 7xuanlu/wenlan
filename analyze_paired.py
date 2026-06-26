@@ -208,6 +208,21 @@ def analyze_pair(feature, bench, rows):
     drecall = [o2["recall5"] - o1["recall5"] for o1, o2 in paired]
     dmrr = [o2["mrr"] - o1["mrr"] for o1, o2 in paired]
 
+    # For page_channel feature: compute marginal coverage delta
+    # marginal = coverage_on (expanded) - coverage_off (blind).
+    # Compares: ON arm with page->source expansion vs OFF arm with no pages.
+    d_marginal_cov = []
+    for o1, o2 in paired:
+        if feature == "page_channel" and \
+           o1.get("cov_blind") is not None and o1.get("cov_expanded") is not None and \
+           o2.get("cov_blind") is not None and o2.get("cov_expanded") is not None:
+            # o1 (OFF arm): cov_blind (no page expansion)
+            # o2 (ON arm): cov_expanded (page->source expansion)
+            # marginal = on_coverage - off_coverage
+            d_marginal_cov.append(o2["cov_expanded"] - o1["cov_blind"])
+        else:
+            d_marginal_cov.append(0.0)
+
     touched_idx = [i for i, d in enumerate(dndcg) if d != 0.0]
     n_touched = len(touched_idx)
     mean_dndcg_touched = (
@@ -316,6 +331,14 @@ def analyze_pair(feature, bench, rows):
             ),
         }
 
+    # Marginal coverage stats (page_channel feature only)
+    marginal_cov_stats = None
+    if feature == "page_channel" and any(d != 0.0 for d in d_marginal_cov):
+        marginal_cov_stats = {
+            "mean_marginal_cov": statistics.fmean(d_marginal_cov),
+            "raw_values": d_marginal_cov,
+        }
+
     return {
         "feature": feature,
         "bench": bench,
@@ -336,6 +359,7 @@ def analyze_pair(feature, bench, rows):
         "per_touched_temporal": per_touched,
         "attribution_src": attribution_src,
         "attribution_ratio": attribution_ratio,
+        "marginal_coverage": marginal_cov_stats,
     }
 
 

@@ -105,7 +105,7 @@ pub fn is_preference_query(query: &str) -> bool {
 /// - `query`: the raw query string from the caller
 /// - `agent_name`: name of the agent making the request (unused in classification, kept for logging)
 /// - `agent_trust`: trust level string from the agent record (e.g. "full", "review", "unknown")
-/// - `is_context_call`: true when this is a `/api/chat-context` call that needs composition
+/// - `is_context_call`: true when this is a `/api/context` call that needs composition
 pub fn classify_query(
     query: &str,
     _agent_name: &str,

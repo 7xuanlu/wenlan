@@ -403,7 +403,7 @@ async fn t6_context_roundtrip_bug_regression() {
         },
     };
     Mock::given(method("POST"))
-        .and(path("/api/chat-context"))
+        .and(path("/api/context"))
         .respond_with(ResponseTemplate::new(200).set_body_json(&response))
         .mount(&mock)
         .await;
@@ -455,7 +455,7 @@ async fn t7_context_with_domain() {
         },
     };
     Mock::given(method("POST"))
-        .and(path("/api/chat-context"))
+        .and(path("/api/context"))
         .respond_with(ResponseTemplate::new(200).set_body_json(&response))
         .mount(&mock)
         .await;
@@ -701,7 +701,7 @@ async fn t13_context_forward_compat_with_extra_fields() {
 
     let (mock, client) = setup().await;
     Mock::given(method("POST"))
-        .and(path("/api/chat-context"))
+        .and(path("/api/context"))
         .respond_with(ResponseTemplate::new(200).set_body_json(&raw_json))
         .mount(&mock)
         .await;

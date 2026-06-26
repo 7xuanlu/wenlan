@@ -25,7 +25,6 @@ pub fn build_router(state: SharedState) -> Router {
         .route("/api/status", get(routes::handle_status))
         .route("/api/search", post(routes::handle_search))
         .route("/api/context", post(routes::handle_context))
-        .route("/api/chat-context", post(routes::handle_chat_context))
         .route("/api/ping", get(routes::handle_ping))
         .route("/api/llm/test", post(routes::handle_test_llm))
         .route("/api/shutdown", post(routes::handle_shutdown))

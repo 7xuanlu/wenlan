@@ -458,7 +458,7 @@ async fn run_daemon() -> anyhow::Result<()> {
             plan.deep
         );
 
-        // Light paths (quick `/api/search` + context `/api/chat-context`): turbo
+        // Light paths (quick `/api/search` + context `/api/context`): turbo
         // (~146MB), eager-load — small enough not to meaningfully block startup.
         let mut light_reranker: Option<Arc<dyn wenlan_core::reranker::Reranker>> = None;
         if let Some(pick) = plan.light {

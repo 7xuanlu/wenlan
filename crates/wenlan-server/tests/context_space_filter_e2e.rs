@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
-//! E2E acceptance: handle_chat_context filters memories by space across all shelves.
+//! E2E acceptance: handle_context filters memories by space across all shelves.
 //!
-//! Verifies that when `space=alpha` is passed to `/api/chat-context`:
+//! Verifies that when `space=alpha` is passed to `/api/context`:
 //!   - Identity, preference, and decision shelf memories from space=beta do not
 //!     appear in the response.
 //!   - Identity, preference, and decision shelf memories from space=alpha do appear.
@@ -9,13 +9,13 @@
 //!   - The combined `context` string contains no beta-space marker content.
 //!
 //! ## Test level
-//! Full HTTP router via `tower::ServiceExt::oneshot` — the real `handle_chat_context`
+//! Full HTTP router via `tower::ServiceExt::oneshot` — the real `handle_context`
 //! handler is exercised end-to-end through the Axum router. Memories are inserted
 //! directly via `db.upsert_documents` (bypassing the HTTP store handler and its
 //! topic-match logic) then confirmed immediately. This approach is reliable because:
 //!
 //! 1. `load_memories_by_type` filters `confirmed != 0` — confirmed memories only.
-//! 2. `handle_chat_context` gates Tier 1 (identity) and Tier 2 (decisions) behind
+//! 2. `handle_context` gates Tier 1 (identity) and Tier 2 (decisions) behind
 //!    `trust_level = "full"`. The agent used to make the request must be registered
 //!    in the DB with full trust. We call `db.register_agent()` for this — new
 //!    registrations default to "full".
@@ -49,7 +49,7 @@ async fn body_as_json<T: serde::de::DeserializeOwned>(response: axum::http::Resp
     serde_json::from_slice(&bytes).expect("response body is valid JSON of expected type")
 }
 
-/// Call `/api/chat-context` as TEST_AGENT (registered as full-trust) with a space filter.
+/// Call `/api/context` as TEST_AGENT (registered as full-trust) with a space filter.
 async fn chat_context(router: &axum::Router, query: &str, space: &str) -> ChatContextResponse {
     let body = serde_json::json!({
         "query": query,
@@ -61,7 +61,7 @@ async fn chat_context(router: &axum::Router, query: &str, space: &str) -> ChatCo
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri("/api/chat-context")
+                .uri("/api/context")
                 .header("content-type", "application/json")
                 // Send the registered full-trust agent name so all three tiers load.
                 // Without x-agent-name the handler resolves "unknown" trust and skips
@@ -117,7 +117,7 @@ async fn insert_and_confirm(
 async fn context_filters_memories_by_space_across_all_shelves() {
     let (router, _tmp, db) = common::test_app_no_gate().await;
 
-    // Register TEST_AGENT so get_agent() in handle_chat_context resolves it to
+    // Register TEST_AGENT so get_agent() in handle_context resolves it to
     // trust_level="full" (new registrations default to "full" per db.rs:10862).
     // Without this the handler falls back to "unknown" trust and Tier 1 / Tier 2
     // shelves are never loaded.
