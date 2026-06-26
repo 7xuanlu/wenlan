@@ -92,6 +92,32 @@ pub fn select_pages_for_context(
     selected
 }
 
+/// Hard space-scope for the additive page path. Mirrors the RRF gate
+/// (`db.rs:9146-9185`) but is pure: a page survives a *scoped* recall iff its
+/// dedicated `workspace` equals the caller's space OR ≥1 of its source memories
+/// is in the memory result set. NULL workspace never matches a filter. With no
+/// space filter active, all pages pass (caller is unscoped).
+pub fn scope_filter_pages(
+    pages: Vec<Page>,
+    caller_space: Option<&str>,
+    memory_source_ids: &std::collections::HashSet<String>,
+) -> Vec<Page> {
+    let Some(space) = caller_space else {
+        return pages;
+    };
+    pages
+        .into_iter()
+        .filter(|page| {
+            if page.workspace.as_deref() == Some(space) {
+                return true;
+            }
+            page.source_memory_ids
+                .iter()
+                .any(|sid| memory_source_ids.contains(sid.as_str()))
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -282,5 +308,27 @@ mod tests {
         assert_eq!(selected.len(), 2);
         assert_eq!(selected[0].id, "one");
         assert_eq!(selected[1].id, "two");
+    }
+
+    #[test]
+    fn scope_drops_cross_space_page_with_no_source_overlap() {
+        let mut p_other = make_page("p_other", &["x1"]); // workspace None, sources disjoint
+        p_other.workspace = Some("personal".to_string());
+        let mut p_match = make_page("p_match", &["x2"]);
+        p_match.workspace = Some("work".to_string());
+        let p_overlap = make_page("p_overlap", &["m1"]); // workspace None but source in result set
+        let ids: HashSet<String> = ["m1"].iter().map(|s| s.to_string()).collect();
+        let kept = scope_filter_pages(vec![p_other, p_match, p_overlap], Some("work"), &ids);
+        let kept_ids: Vec<_> = kept.iter().map(|p| p.id.as_str()).collect();
+        assert!(kept_ids.contains(&"p_match")); // workspace == caller space
+        assert!(kept_ids.contains(&"p_overlap")); // source overlap
+        assert!(!kept_ids.contains(&"p_other")); // cross-space, no overlap → dropped
+    }
+
+    #[test]
+    fn scope_noop_when_no_space_filter() {
+        let ids: HashSet<String> = HashSet::new();
+        let pages = vec![make_page("a", &["z"])];
+        assert_eq!(scope_filter_pages(pages, None, &ids).len(), 1); // unscoped recall keeps all
     }
 }
