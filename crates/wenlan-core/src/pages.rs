@@ -13,6 +13,15 @@ pub fn new_page_id() -> String {
     format!("page_{}", uuid::Uuid::new_v4())
 }
 
+/// Maps a source memory's `memory_type` to the read-trust tier it sits behind.
+pub fn trust_tier_for_memory_type(memory_type: Option<&str>) -> u8 {
+    match memory_type {
+        Some("identity") | Some("preference") => 1,
+        Some("decision") | Some("correction") => 2,
+        _ => 3,
+    }
+}
+
 /// Filter pages by source overlap with search results.
 ///
 /// A page is contextually relevant if the memories it was compiled from
@@ -123,6 +132,20 @@ mod tests {
             review_status: review_status.to_string(),
             workspace: None,
         }
+    }
+
+    #[test]
+    fn tier_map_identity_and_preference_are_tier1() {
+        assert_eq!(trust_tier_for_memory_type(Some("identity")), 1);
+        assert_eq!(trust_tier_for_memory_type(Some("preference")), 1);
+    }
+
+    #[test]
+    fn tier_map_decision_correction_tier2_else_tier3() {
+        assert_eq!(trust_tier_for_memory_type(Some("decision")), 2);
+        assert_eq!(trust_tier_for_memory_type(Some("correction")), 2);
+        assert_eq!(trust_tier_for_memory_type(Some("fact")), 3);
+        assert_eq!(trust_tier_for_memory_type(None), 3);
     }
 
     #[test]
