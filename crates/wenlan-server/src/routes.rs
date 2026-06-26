@@ -35,6 +35,11 @@ fn default_limit() -> usize {
 pub struct SearchResponse {
     pub results: Vec<wenlan_core::db::SearchResult>,
     pub took_ms: f64,
+    /// Distilled pages surfaced through the shared `select_visible_pages`
+    /// visibility gate (space-scope → effective-tier → confirmed/rank/cap).
+    /// Absent when nothing passed the gate; mirrors `SearchMemoryResponse`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub supplemental_pages: Option<Vec<wenlan_core::db::SearchResult>>,
 }
 
 #[derive(Debug, Serialize)]
@@ -86,6 +91,7 @@ pub async fn handle_status(
 /// POST /api/search - Semantic search endpoint
 pub async fn handle_search(
     State(state): State<Arc<RwLock<ServerState>>>,
+    headers: HeaderMap,
     crate::space_header::SpaceHeader(header_space): crate::space_header::SpaceHeader,
     Json(mut req): Json<SearchRequest>,
 ) -> Result<Json<SearchResponse>, ServerError> {
@@ -153,7 +159,57 @@ pub async fn handle_search(
 
     let took_ms = start.elapsed().as_secs_f64() * 1000.0;
 
-    Ok(Json(SearchResponse { results, took_ms }))
+    // Additive page path: surface gated distilled pages through the
+    // `supplemental_pages` field, routed through the SAME shared
+    // `select_visible_pages` visibility gate (space-scope → effective-tier →
+    // confirmed/rank/cap) used by /api/context and /api/memory/search. Resolve
+    // caller trust from the `x-agent-name` header, fail-CLOSED to "unknown"
+    // (mirror handle_context above). Skipped for the "recent context" sentinel.
+    // Fail CLOSED: any lookup error leaves pages out (never surface ungated).
+    let supplemental_pages = if req.query == "recent context" {
+        None
+    } else {
+        let agent_name = headers
+            .get("x-agent-name")
+            .and_then(|v| v.to_str().ok())
+            .filter(|s| !s.is_empty())
+            .unwrap_or("unknown");
+        let trust_level = if agent_name == "unknown" {
+            "unknown".to_string()
+        } else {
+            db.get_agent(agent_name)
+                .await
+                .ok()
+                .flatten()
+                .map(|a| a.trust_level)
+                .unwrap_or_else(|| "unknown".to_string())
+        };
+        let raw = db
+            .search_pages(&req.query, 3, None)
+            .await
+            .unwrap_or_default();
+        let ids: std::collections::HashSet<String> =
+            results.iter().map(|r| r.source_id.clone()).collect();
+        let visible = db
+            .select_visible_pages(raw, req.space.as_deref(), &ids, &trust_level, 3)
+            .await;
+        if visible.is_empty() {
+            None
+        } else {
+            Some(
+                visible
+                    .into_iter()
+                    .map(wenlan_core::db::MemoryDB::search_result_from_page)
+                    .collect(),
+            )
+        }
+    };
+
+    Ok(Json(SearchResponse {
+        results,
+        took_ms,
+        supplemental_pages,
+    }))
 }
 
 // ===== Context Endpoints =====
@@ -1467,6 +1523,163 @@ mod context_page_selection_tests {
         assert!(
             !pages.contains("identmarker"),
             "tier-1-sourced page must be dropped for review trust, got pages: {pages:?}"
+        );
+    }
+}
+
+#[cfg(test)]
+mod search_supplemental_pages_tests {
+    //! Task 7: `/api/search` surfaces gated distilled pages through the additive
+    //! `supplemental_pages` field, routed through the SAME `select_visible_pages`
+    //! visibility gate as `/api/context` and `/api/memory/search`.
+    use crate::state::ServerState;
+    use axum::body::Body;
+    use axum::http::Request;
+    use std::sync::Arc;
+    use tokio::sync::RwLock;
+    use tower::ServiceExt;
+
+    /// Seed a DB with a tier-2 (`review`) agent, one tier-2 (`decision`) source
+    /// memory in space `work`, plus three confirmed active pages: a same-space
+    /// page sourced from the tier-2 memory (visible to a tier-2 caller), and a
+    /// cross-space page (workspace `other`, disjoint sources → always dropped).
+    /// Returns the wired app router.
+    async fn seeded_app() -> (axum::Router, tempfile::TempDir) {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let emitter: Arc<dyn wenlan_core::events::EventEmitter> =
+            Arc::new(wenlan_core::events::NoopEmitter);
+        let db = wenlan_core::db::MemoryDB::new(tmp.path(), emitter)
+            .await
+            .expect("MemoryDB::new");
+
+        // tier-2 caller: trust "review" allows tier 2, denies tier 1; "unknown"
+        // (no header) denies tier 2.
+        db.register_agent("test-agent").await.unwrap();
+        db.update_agent("test-agent", None, None, None, Some("review"), None)
+            .await
+            .unwrap();
+
+        // A tier-2 (decision) source memory in space "work".
+        let mem = wenlan_core::sources::RawDocument {
+            source: "memory".to_string(),
+            source_id: "m_decision".to_string(),
+            title: "memory-m_decision".to_string(),
+            content: "zorblax source memory".to_string(),
+            memory_type: Some("decision".to_string()),
+            space: Some("work".to_string()),
+            source_agent: Some("test-agent".to_string()),
+            confidence: Some(0.9),
+            confirmed: Some(true),
+            ..Default::default()
+        };
+        db.upsert_documents(vec![mem]).await.unwrap();
+
+        let now = chrono::Utc::now().to_rfc3339();
+        // Cross-space: workspace != caller space, source not in result set → DROP.
+        db.insert_page_with_kind(
+            "page_cross",
+            "Zorblax Crossmarker",
+            None,
+            "zorblax crossmarker body",
+            None,
+            None,
+            &["unrelated"],
+            &now,
+            "distilled",
+            "confirmed",
+            Some("other"),
+        )
+        .await
+        .unwrap();
+        // Same space, tier-2 (decision) source → KEEP for review, DROP for unknown.
+        db.insert_page_with_kind(
+            "page_same",
+            "Zorblax Samemarker",
+            None,
+            "zorblax samemarker body",
+            None,
+            None,
+            &["m_decision"],
+            &now,
+            "distilled",
+            "confirmed",
+            Some("work"),
+        )
+        .await
+        .unwrap();
+
+        let state = Arc::new(RwLock::new(ServerState {
+            db: Some(Arc::new(db)),
+            ..Default::default()
+        }));
+        (crate::router::build_router(state), tmp)
+    }
+
+    /// A tier-2 (`review`) same-space caller gets the same-space, tier-2-sourced
+    /// page in `supplemental_pages`; the cross-space page is dropped.
+    #[tokio::test]
+    async fn search_surfaces_same_space_tier2_page() {
+        let (app, _tmp) = seeded_app().await;
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/search")
+                    .header("x-agent-name", "test-agent")
+                    .header("content-type", "application/json")
+                    .body(Body::from(r#"{"query":"zorblax","space":"work"}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 200, "search call should succeed");
+        let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let parsed: wenlan_types::responses::SearchResponse =
+            serde_json::from_slice(&bytes).unwrap();
+        let pages = parsed
+            .supplemental_pages
+            .expect("tier-2 caller must get supplemental pages");
+        assert!(
+            pages.iter().any(|p| p.source_id == "page_same"),
+            "same-space tier-2 page must surface, got: {:?}",
+            pages.iter().map(|p| &p.source_id).collect::<Vec<_>>()
+        );
+        assert!(
+            !pages.iter().any(|p| p.source_id == "page_cross"),
+            "cross-space page must be dropped by the space-scope gate, got: {:?}",
+            pages.iter().map(|p| &p.source_id).collect::<Vec<_>>()
+        );
+    }
+
+    /// An unknown caller (no `x-agent-name` header → fail-closed "unknown") clears
+    /// no tier above 3; both seeded pages are tier-2/cross-space, so the gate
+    /// drops everything and `supplemental_pages` is `None`.
+    #[tokio::test]
+    async fn search_supplemental_pages_none_for_unknown_caller() {
+        let (app, _tmp) = seeded_app().await;
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/search")
+                    .header("content-type", "application/json")
+                    .body(Body::from(r#"{"query":"zorblax","space":"work"}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 200, "search call should succeed");
+        let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let parsed: wenlan_types::responses::SearchResponse =
+            serde_json::from_slice(&bytes).unwrap();
+        assert!(
+            parsed.supplemental_pages.is_none(),
+            "unknown caller must get no pages, got: {:?}",
+            parsed.supplemental_pages
         );
     }
 }

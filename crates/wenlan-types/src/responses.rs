@@ -155,6 +155,12 @@ pub struct StatusResponse {
 pub struct SearchResponse {
     pub results: Vec<SearchResult>,
     pub took_ms: f64,
+    /// Distilled pages surfaced by the shared visibility gate on `/api/search`.
+    /// Absent when no page rows passed the space-scope + effective-tier gate
+    /// (back-compat: old daemons never set this field; old consumers that
+    /// don't read it are unaffected). Mirrors `SearchMemoryResponse`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub supplemental_pages: Option<Vec<SearchResult>>,
 }
 
 #[doc(hidden)]
@@ -1259,6 +1265,58 @@ mod search_memory_response_tests {
     fn some_supplemental_pages_round_trips() {
         let json = r#"{"results":[],"took_ms":0.5,"supplemental_pages":[]}"#;
         let resp: SearchMemoryResponse = serde_json::from_str(json).expect("deserialize");
+        assert!(
+            resp.supplemental_pages.is_some(),
+            "supplemental_pages should be Some"
+        );
+        assert!(
+            resp.supplemental_pages.unwrap().is_empty(),
+            "empty array should deserialize to empty vec"
+        );
+    }
+}
+
+#[cfg(test)]
+mod search_response_tests {
+    use super::SearchResponse;
+
+    /// Old daemon responses (no `supplemental_pages` key) must deserialize
+    /// successfully with `supplemental_pages == None`. Back-compat guarantee:
+    /// a client built against the new wire type can still read an older
+    /// `/api/search` response that predates the additive page field.
+    #[test]
+    fn back_compat_missing_supplemental_pages_is_none() {
+        let json = r#"{"results":[],"took_ms":1.0}"#;
+        let resp: SearchResponse = serde_json::from_str(json).expect("should deserialize");
+        assert!(
+            resp.supplemental_pages.is_none(),
+            "should be None when key absent"
+        );
+        assert_eq!(resp.took_ms, 1.0);
+    }
+
+    /// `supplemental_pages == None` is omitted on the wire
+    /// (skip_serializing_if = "Option::is_none").
+    #[test]
+    fn none_supplemental_pages_not_serialized() {
+        let resp = SearchResponse {
+            results: vec![],
+            took_ms: 2.0,
+            supplemental_pages: None,
+        };
+        let json = serde_json::to_string(&resp).expect("serialize");
+        assert!(
+            !json.contains("supplemental_pages"),
+            "None field must be omitted from wire: {}",
+            json
+        );
+    }
+
+    /// When pages are present they round-trip correctly.
+    #[test]
+    fn some_supplemental_pages_round_trips() {
+        let json = r#"{"results":[],"took_ms":0.5,"supplemental_pages":[]}"#;
+        let resp: SearchResponse = serde_json::from_str(json).expect("deserialize");
         assert!(
             resp.supplemental_pages.is_some(),
             "supplemental_pages should be Some"
