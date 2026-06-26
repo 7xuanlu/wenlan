@@ -24650,7 +24650,11 @@ pub(crate) mod tests {
         let review_visible = db
             .select_visible_pages(vec![page], Some("work"), &no_overlap, "review", 10)
             .await;
-        assert_eq!(review_visible.len(), 1, "review trust still sees the tier-3 page");
+        assert_eq!(
+            review_visible.len(),
+            1,
+            "review trust still sees the tier-3 page"
+        );
     }
 
     // Finding #2 (security review 2026-06-26): a page whose source memories were all
