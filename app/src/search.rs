@@ -1669,7 +1669,7 @@ pub async fn get_profile(state: tauri::State<'_, State>) -> Result<Option<Profil
             display_name: resp.display_name,
             email: resp.email,
             bio: resp.bio,
-            avatar_path: resp.avatar_path,
+            avatar_path: resolve_profile_avatar_path(resp.avatar_path),
             created_at: resp.created_at,
             updated_at: resp.updated_at,
         })),
@@ -1790,6 +1790,43 @@ fn avatar_storage_dir() -> PathBuf {
     crate::identity_paths::app_data_dir().join("avatars")
 }
 
+fn legacy_avatar_storage_dirs() -> Vec<PathBuf> {
+    let mut dirs = Vec::new();
+    if let Some(custom) = std::env::var_os("ORIGIN_DATA_DIR") {
+        dirs.push(PathBuf::from(custom).join("avatars"));
+    }
+    dirs.push(crate::identity_paths::legacy_app_data_dir().join("avatars"));
+    dirs
+}
+
+fn resolve_profile_avatar_path(avatar_path: Option<String>) -> Option<String> {
+    let avatar_path = avatar_path?;
+    if avatar_path.is_empty() {
+        return None;
+    }
+
+    let path = PathBuf::from(&avatar_path);
+    if path.exists() {
+        return Some(avatar_path);
+    }
+
+    let parent = path.parent()?;
+    if !legacy_avatar_storage_dirs()
+        .iter()
+        .any(|legacy_dir| legacy_dir == parent)
+    {
+        return None;
+    }
+
+    let filename = path.file_name()?;
+    let migrated = avatar_storage_dir().join(filename);
+    if migrated.exists() {
+        return Some(migrated.to_string_lossy().to_string());
+    }
+
+    None
+}
+
 #[tauri::command]
 pub async fn set_avatar(
     state: tauri::State<'_, State>,
@@ -1838,7 +1875,7 @@ pub async fn get_avatar_data_url(state: tauri::State<'_, State>) -> Result<Optio
         Ok(p) => p,
         Err(_) => return Ok(None),
     };
-    let Some(avatar_path) = profile.avatar_path else {
+    let Some(avatar_path) = resolve_profile_avatar_path(profile.avatar_path) else {
         return Ok(None);
     };
 
@@ -1874,7 +1911,7 @@ pub async fn remove_avatar(state: tauri::State<'_, State>) -> Result<(), String>
         Err(_) => return Ok(()),
     };
 
-    if let Some(ref avatar_path) = profile.avatar_path {
+    if let Some(avatar_path) = resolve_profile_avatar_path(profile.avatar_path) {
         let _ = std::fs::remove_file(avatar_path);
     }
 
@@ -3300,6 +3337,91 @@ mod avatar_path_tests {
         assert_eq!(avatar_storage_dir(), legacy.join("avatars"));
 
         restore_env("HOME", previous_home);
+        restore_env("WENLAN_DATA_DIR", previous_wenlan);
+        restore_env("ORIGIN_DATA_DIR", previous_origin);
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn resolves_missing_legacy_avatar_to_wenlan_copy() {
+        let previous_wenlan = std::env::var_os("WENLAN_DATA_DIR");
+        let previous_origin = std::env::var_os("ORIGIN_DATA_DIR");
+        let current = tempfile::tempdir().unwrap();
+        let legacy = tempfile::tempdir().unwrap();
+        let filename = "57515813-4419-4116-bea6-21bc66e1a511.jpg";
+
+        std::env::set_var("WENLAN_DATA_DIR", current.path());
+        std::env::set_var("ORIGIN_DATA_DIR", legacy.path());
+        std::fs::create_dir_all(current.path().join("avatars")).unwrap();
+        std::fs::write(current.path().join("avatars").join(filename), b"avatar").unwrap();
+
+        let legacy_path = legacy.path().join("avatars").join(filename);
+
+        assert_eq!(
+            resolve_profile_avatar_path(Some(legacy_path.to_string_lossy().to_string())),
+            Some(
+                current
+                    .path()
+                    .join("avatars")
+                    .join(filename)
+                    .to_string_lossy()
+                    .to_string()
+            )
+        );
+
+        restore_env("WENLAN_DATA_DIR", previous_wenlan);
+        restore_env("ORIGIN_DATA_DIR", previous_origin);
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn does_not_resolve_arbitrary_missing_path_to_avatar_copy() {
+        let previous_wenlan = std::env::var_os("WENLAN_DATA_DIR");
+        let previous_origin = std::env::var_os("ORIGIN_DATA_DIR");
+        let current = tempfile::tempdir().unwrap();
+        let filename = "same-name.jpg";
+
+        std::env::set_var("WENLAN_DATA_DIR", current.path());
+        std::env::remove_var("ORIGIN_DATA_DIR");
+        std::fs::create_dir_all(current.path().join("avatars")).unwrap();
+        std::fs::write(current.path().join("avatars").join(filename), b"avatar").unwrap();
+
+        let arbitrary_path = current.path().join("downloads").join(filename);
+
+        assert_eq!(
+            resolve_profile_avatar_path(Some(arbitrary_path.to_string_lossy().to_string())),
+            None
+        );
+
+        restore_env("WENLAN_DATA_DIR", previous_wenlan);
+        restore_env("ORIGIN_DATA_DIR", previous_origin);
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn does_not_resolve_non_origin_avatar_dir_to_wenlan_copy() {
+        let previous_wenlan = std::env::var_os("WENLAN_DATA_DIR");
+        let previous_origin = std::env::var_os("ORIGIN_DATA_DIR");
+        let current = tempfile::tempdir().unwrap();
+        let other = tempfile::tempdir().unwrap();
+        let filename = "same-name.jpg";
+
+        std::env::set_var("WENLAN_DATA_DIR", current.path());
+        std::env::remove_var("ORIGIN_DATA_DIR");
+        std::fs::create_dir_all(current.path().join("avatars")).unwrap();
+        std::fs::write(current.path().join("avatars").join(filename), b"avatar").unwrap();
+
+        let non_origin_avatar_path = other
+            .path()
+            .join("not-origin")
+            .join("avatars")
+            .join(filename);
+
+        assert_eq!(
+            resolve_profile_avatar_path(Some(non_origin_avatar_path.to_string_lossy().to_string())),
+            None
+        );
+
         restore_env("WENLAN_DATA_DIR", previous_wenlan);
         restore_env("ORIGIN_DATA_DIR", previous_origin);
     }
