@@ -75,9 +75,9 @@ describe("DecisionLog", () => {
     expect(await screen.findByText("Ship wiki-style concepts")).toBeInTheDocument();
   });
 
-  it("shows domain filter pills", async () => {
+  it("shows space filter pills", async () => {
     render(wrap(<DecisionLog onBack={noop} onSelectMemory={noop} onSelectPage={noop} />));
-    // Wait for data to load via a domain pill
+    // Wait for data to load via a space pill
     const archPill = await screen.findByRole("button", { name: "architecture" });
     expect(archPill).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "product" })).toBeInTheDocument();
@@ -117,12 +117,12 @@ describe("DecisionLog", () => {
     expect(await screen.findByText(/Reversible/)).toBeInTheDocument();
   });
 
-  it("filters by domain when pill is clicked", async () => {
+  it("filters by space when pill is clicked", async () => {
     render(wrap(<DecisionLog onBack={noop} onSelectMemory={noop} onSelectPage={noop} />));
     const architecturePill = await screen.findByRole("button", { name: "architecture" });
     fireEvent.click(architecturePill);
     await waitFor(() => {
-      // After clicking domain pill, listDecisions should be called with that domain
+      // After clicking space pill, listDecisions should be called with that domain wire value
       expect(listDecisions).toHaveBeenCalledWith("architecture", 100);
     });
   });

@@ -175,7 +175,7 @@ export default function MemoryCard({
             {memory.title}
           </p>
 
-          {/* Domain + burst meta */}
+          {/* Space + burst meta */}
           <div
             className="flex items-center gap-2 mt-2 flex-wrap"
             style={{

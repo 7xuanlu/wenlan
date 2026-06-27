@@ -67,4 +67,28 @@ describe("taxonomy and product copy", () => {
       expect(content, file).not.toMatch(/\bDelete this concept\b/i);
     }
   });
+
+  it("uses space language in product-owned UI while preserving domain wire fields", () => {
+    const productOwnedFiles = [
+      "src/components/memory/DecisionLog.tsx",
+      "src/components/memory/MemoryDetail.tsx",
+      "src/components/memory/PageDetail.tsx",
+      "src/components/RecapDetail.tsx",
+      "src/components/MemoryView.tsx",
+      "src/components/memory/AddMemoryForm.tsx",
+      "src/components/memory/NurtureCard.tsx",
+      "src/components/memory/MemoryCard.tsx",
+      "src/components/memory/MemorySearchResult.tsx",
+    ];
+
+    for (const file of productOwnedFiles) {
+      const content = read(file);
+      expect(content, file).not.toMatch(/\bDomain\b/);
+      expect(content, file).not.toMatch(/\bdomain tag\b/i);
+    }
+
+    const tauri = read("src/lib/tauri.ts");
+    expect(tauri).toContain("domain?: string");
+    expect(tauri).toContain("type DomainCompat");
+  });
 });

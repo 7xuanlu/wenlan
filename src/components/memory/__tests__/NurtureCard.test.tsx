@@ -32,7 +32,7 @@ const mockMemory = {
 };
 
 describe("NurtureCard", () => {
-  it("shows type badge and domain", () => {
+  it("shows type badge and space", () => {
     render(<NurtureCard memory={mockMemory} onConfirm={vi.fn()} onDismiss={vi.fn()} onDelete={vi.fn()} />, { wrapper });
     expect(screen.getByText("decision")).toBeInTheDocument();
     expect(screen.getByText("ruru")).toBeInTheDocument();

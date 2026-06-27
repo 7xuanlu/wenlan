@@ -1262,7 +1262,7 @@ export default function MemoryView({ onBack, onSelectFile, onSelectRecap, onSele
                             {recap.summary ?? recap.title}
                           </p>
 
-                          {/* Domain + dot connector */}
+                          {/* Space + dot connector */}
                           <div className="flex items-center gap-1.5 mt-2">
                             {recap.domain && (
                               <span

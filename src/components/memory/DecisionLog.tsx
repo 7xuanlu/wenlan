@@ -61,14 +61,14 @@ function groupByMonth(decisions: MemoryItem[]): Map<string, MemoryItem[]> {
   return groups;
 }
 
-// ── Domain filter pills ────────────────────────────────────────────────
+// ── Space filter pills ─────────────────────────────────────────────────
 
-function DomainPills({
-  domains,
+function SpacePills({
+  spaces,
   selected,
   onSelect,
 }: {
-  domains: string[];
+  spaces: string[];
   selected: string | null;
   onSelect: (d: string | null) => void;
 }) {
@@ -96,7 +96,7 @@ function DomainPills({
       >
         All
       </button>
-      {domains.map((d) => (
+      {spaces.map((d) => (
         <button
           key={d}
           onClick={() => onSelect(d === selected ? null : d)}
@@ -232,7 +232,7 @@ function DecisionEntryRow({
           );
         })()}
 
-        {/* Meta row: domain tag, date, source agent */}
+        {/* Meta row: space tag, date, source agent */}
         <div className="flex items-center gap-2 mt-2" style={{ flexWrap: "wrap" }}>
           {memory.domain && (
             <span
@@ -362,15 +362,15 @@ function DecisionEntryRow({
 // ── Main component ─────────────────────────────────────────────────────
 
 export default function DecisionLog({ onBack, onSelectMemory, onSelectPage: _onSelectPage }: DecisionLogProps) {
-  const [domainFilter, setDomainFilter] = useState<string | null>(null);
+  const [spaceFilter, setSpaceFilter] = useState<string | null>(null);
   const [expandedId, setExpandedId] = useState<string | null>(null);
 
   const { data: decisions = [] } = useQuery({
-    queryKey: ["decisions", domainFilter],
-    queryFn: () => listDecisions(domainFilter ?? undefined, 100),
+    queryKey: ["decisions", spaceFilter],
+    queryFn: () => listDecisions(spaceFilter ?? undefined, 100),
   });
 
-  const { data: domains = [] } = useQuery({
+  const { data: spaces = [] } = useQuery({
     queryKey: ["decisionDomains"],
     queryFn: listDecisionDomains,
   });
@@ -427,8 +427,8 @@ export default function DecisionLog({ onBack, onSelectMemory, onSelectPage: _onS
         </div>
       </div>
 
-      {/* Domain filter pills */}
-      <DomainPills domains={domains} selected={domainFilter} onSelect={setDomainFilter} />
+      {/* Space filter pills */}
+      <SpacePills spaces={spaces} selected={spaceFilter} onSelect={setSpaceFilter} />
 
       {/* Timeline */}
       {decisions.length === 0 ? (

@@ -102,7 +102,7 @@ export default function MemorySearchResult({
           </span>
         )}
 
-        {/* Domain */}
+        {/* Space */}
         {result.domain && (
           <>
             <span style={{ opacity: 0.4 }}>&middot;</span>

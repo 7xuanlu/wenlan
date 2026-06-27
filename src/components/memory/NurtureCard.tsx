@@ -76,7 +76,7 @@ export default function NurtureCard({ memory, onConfirm, onDismiss: _onDismiss, 
   // Only show toggle when expanded text adds meaningful content beyond the summary
   const hasMore = fullText.length > summary.length + 15;
   const facet = memory.memory_type ?? "fact";
-  const domain = memory.domain;
+  const space = memory.domain;
 
   return (
     <div
@@ -100,16 +100,16 @@ export default function NurtureCard({ memory, onConfirm, onDismiss: _onDismiss, 
       }}
     >
       <div className="px-4 py-3">
-        {/* Type badge + domain */}
+        {/* Type badge + space */}
         <div className="flex items-center gap-2 mb-2">
           <span style={{ fontFamily: "var(--mem-font-mono)", fontSize: "10px", color: "var(--mem-text-tertiary)" }}>
             {facet}
           </span>
-          {domain && (
+          {space && (
             <>
               <span style={{ color: "var(--mem-text-tertiary)", fontSize: "10px" }}>&middot;</span>
               <span style={{ fontFamily: "var(--mem-font-mono)", fontSize: "10px", color: "var(--mem-text-tertiary)" }}>
-                {domain}
+                {space}
               </span>
             </>
           )}

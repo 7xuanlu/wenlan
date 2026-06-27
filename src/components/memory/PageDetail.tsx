@@ -181,10 +181,10 @@ export default function PageDetail({ pageId, onBack, onMemoryClick, onPageClick 
 
   const copyAsContext = useCallback(async () => {
     if (!page) return;
-    const domain = page.domain ? `**Domain:** ${page.domain}` : "";
+    const space = page.domain ? `**Space:** ${page.domain}` : "";
     const version = `**Version:** ${page.version}`;
     const compiled = `**Last compiled:** ${page.last_compiled}`;
-    const meta = [domain, version, compiled].filter(Boolean).join("\n");
+    const meta = [space, version, compiled].filter(Boolean).join("\n");
     const text = [
       `## ${page.title}`,
       meta,
