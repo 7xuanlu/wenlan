@@ -113,7 +113,7 @@ describe("PageDetail page links", () => {
     const { user } = renderWithQuery(<PageDetail {...defaultProps} />, client);
 
     expect(await screen.findByText("Link Test Page")).toBeInTheDocument();
-    await user.click(screen.getByTitle("Edit concept"));
+    await user.click(screen.getByTitle("Edit page"));
     const editor = screen.getByRole("textbox");
     fireEvent.change(editor, {
       target: { value: "Intro sentence.\n\nThis page now links [[New Link]]." },

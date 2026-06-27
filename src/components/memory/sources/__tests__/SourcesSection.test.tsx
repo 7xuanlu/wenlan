@@ -94,6 +94,6 @@ describe("SourcesSection", () => {
     await waitFor(() => {
       expect(screen.getByText(/Wenlan\/knowledge/)).toBeInTheDocument();
     });
-    expect(screen.getByText(/12 concept files/)).toBeInTheDocument();
+    expect(screen.getByText(/12 page files/)).toBeInTheDocument();
   });
 });

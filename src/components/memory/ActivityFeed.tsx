@@ -91,13 +91,13 @@ function naturalLanguage(item: AgentActivityItem): string {
       // title is carried in `detail` instead (see handle_delete_memory).
       return "forgot a memory";
     case "page_grow":
-      // Concept title carried in `detail` (concepts aren't in the memories table,
+      // Page title carried in `detail` (pages aren't in the memories table,
       // so the title lookup in list_agent_activity won't find them).
-      return "grew a concept";
+      return "grew a page";
     case "page_create":
       return count > 0
-        ? `compiled ${count} ${memoryWord} into a new concept`
-        : "created a new concept";
+        ? `compiled ${count} ${memoryWord} into a new page`
+        : "created a new page";
     case "steep":
       // The backend headline IS the natural language text for steep events.
       // Written by classify_* functions in refinery.rs.
@@ -117,14 +117,13 @@ function capitalize(s: string): string {
   return s.charAt(0).toUpperCase() + s.slice(1);
 }
 
-/// Extract the concept title out of the activity `detail` field. Concept
-/// events carry their title quoted inside `detail` because concept titles
+/// Extract the page title out of the activity `detail` field. Page
+/// events carry their title quoted inside `detail` because page titles
 /// don't live in the `memories` table and can't be resolved by the activity
-/// lister's title lookup (see memory_routes.rs `handle_delete_memory` and
-/// post_ingest `grow_concept` / refinery `distill_concepts`). Format:
+/// lister's title lookup. Format:
 ///   `grew "React Hooks"`
 ///   `created "React Hooks" from 5 memories`
-function extractConceptTitle(detail: string | null): string | null {
+function extractPageTitle(detail: string | null): string | null {
   if (!detail) return null;
   const m = detail.match(/"([^"]+)"/);
   return m ? m[1] : null;
@@ -145,9 +144,9 @@ function actionLabel(action: string): string {
     case "forget":
       return "Forget";
     case "page_create":
-      return "New concept";
+      return "New page";
     case "page_grow":
-      return "Grow concept";
+      return "Grow page";
     case "steep":
       return "Steep";
     default:
@@ -459,9 +458,9 @@ function ActivityEntry({
 }) {
   const color = accentColor(item.action);
   const memoryIds = parseMemoryIds(item.memory_ids);
-  const isConceptEvent =
+  const isPageEvent =
     item.action === "page_create" || item.action === "page_grow";
-  const conceptTitle = isConceptEvent ? extractConceptTitle(item.detail) : null;
+  const pageTitle = isPageEvent ? extractPageTitle(item.detail) : null;
   const agentDisplay = resolveAgentDisplayName(item.agent_name, connectedAgents);
 
   return (
@@ -549,12 +548,12 @@ function ActivityEntry({
           </span>
         )}
 
-        {/* Concept tag — highlighted, distinct from memory pills.
-            Concept events carry their title in `detail` (concepts don't live
+        {/* Page tag — highlighted, distinct from memory pills.
+            Page events carry their title in `detail` (pages don't live
             in the `memories` table so the title lookup can't resolve them).
-            We render a pill with the concept accent border and a subtle
+            We render a pill with the page accent border and a subtle
             distilled-bg so it's unmistakable amongst the grey memory pills. */}
-        {conceptTitle && (
+        {pageTitle && (
           <div className="flex flex-wrap gap-1.5" style={{ marginTop: 4 }}>
             <span
               className="inline-flex items-center gap-2 rounded-full"
@@ -579,7 +578,7 @@ function ActivityEntry({
                   color: "var(--mem-accent-page)",
                 }}
               >
-                Concept
+                Page
               </span>
               <span
                 style={{
@@ -589,14 +588,14 @@ function ActivityEntry({
                   color: "var(--mem-text)",
                 }}
               >
-                {truncate(conceptTitle, 48)}
+                {truncate(pageTitle, 48)}
               </span>
             </span>
           </div>
         )}
 
         {/* Memory title pills — the source memories that drove the action.
-            For concept events these are the seed memories. */}
+            For page events these are the seed memories. */}
         {item.memory_titles.length > 0 && (
           <div className="flex flex-wrap gap-1.5" style={{ marginTop: 2 }}>
             {item.memory_titles.map((title, ti) => {
@@ -632,11 +631,11 @@ function ActivityEntry({
           </div>
         )}
 
-        {/* Detail text for non-concept actions that carry their subject in
+        {/* Detail text for non-page actions that carry their subject in
             `detail` (rather than via memory_titles lookup).
             - refine: legacy refine detail
             - forget: memory row deleted, title preserved in detail
-            Concept events get the highlighted concept tag above instead. */}
+            Page events get the highlighted page tag above instead. */}
         {(item.action === "refine" || item.action === "forget") &&
           item.detail && (
             <span

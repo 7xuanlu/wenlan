@@ -11,7 +11,7 @@ import {
   getNurtureCards,
   setStability,
   deleteFileChunks,
-  listConcepts,
+  listPages,
 } from "../../lib/tauri";
 import MemoryStream from "./MemoryStream";
 import type { SortMode } from "./MemoryStream";
@@ -68,9 +68,9 @@ export default function SpaceDetail({
     refetchInterval: 10000,
   });
 
-  const { data: concepts = [] } = useQuery({
-    queryKey: ["space-concepts", spaceName],
-    queryFn: () => listConcepts("active", spaceName, 50),
+  const { data: pages = [] } = useQuery({
+    queryKey: ["space-pages", spaceName],
+    queryFn: () => listPages("active", spaceName, 50),
     refetchInterval: 10000,
   });
 
@@ -106,7 +106,7 @@ export default function SpaceDetail({
     onSuccess: () => invalidate(),
   });
 
-  // Nurture cards hidden — confirmation moving to concept level
+  // Nurture cards hidden — confirmation moving to page level
   const SHOW_NURTURE = false;
   const { data: nurtureCards = [] } = useQuery({
     queryKey: ["nurture-cards", space?.name],
@@ -528,8 +528,8 @@ export default function SpaceDetail({
         </section>
       )}
 
-      {/* ── Concepts — card grid ── */}
-      {concepts.length > 0 && (
+      {/* ── Pages — card grid ── */}
+      {pages.length > 0 && (
         <section
           className="pt-4 pb-4"
           style={{
@@ -545,13 +545,13 @@ export default function SpaceDetail({
               color: "var(--mem-text)",
             }}
           >
-            Concepts
+            Pages
           </h3>
           <div
             className="grid gap-3"
             style={{ gridTemplateColumns: "repeat(auto-fill, minmax(220px, 1fr))" }}
           >
-            {concepts.map((c, i) => (
+            {pages.map((c, i) => (
               <button
                 key={c.id}
                 onClick={() => onSelectPage(c.id)}
@@ -604,7 +604,7 @@ export default function SpaceDetail({
         </section>
       )}
 
-      {/* ── Nurture cards (hidden — confirmation moving to concept level) ── */}
+      {/* ── Nurture cards (hidden — confirmation moving to page level) ── */}
       {SHOW_NURTURE && nurtureCards.length > 0 && (
         <section className="flex flex-col gap-2 pt-4">
           <p style={{ fontFamily: "var(--mem-font-body)", fontSize: "13px", color: "var(--mem-text-tertiary)", margin: 0 }}>

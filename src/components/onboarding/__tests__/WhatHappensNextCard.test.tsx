@@ -14,7 +14,7 @@ describe("WhatHappensNextCard", () => {
     expect(screen.getByText(/keep using your AI tools/i)).toBeInTheDocument();
   });
 
-  it("renders Gathering copy with count when memories exist but no concepts", () => {
+  it("renders Gathering copy with count when memories exist but no pages", () => {
     render(<WhatHappensNextCard state="gathering" memoryCount={3} daysInListening={0} />);
     expect(screen.getByText(/3 memor/i)).toBeInTheDocument();
   });

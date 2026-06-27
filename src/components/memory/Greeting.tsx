@@ -19,10 +19,10 @@ function formatDate(): string {
 
 interface Props {
   memoryCount?: number;
-  conceptCount?: number;
+  pageCount?: number;
 }
 
-export function Greeting({ memoryCount, conceptCount }: Props) {
+export function Greeting({ memoryCount, pageCount }: Props) {
   const { data: profile } = useQuery({
     queryKey: ["profile"],
     queryFn: getProfile,
@@ -35,8 +35,8 @@ export function Greeting({ memoryCount, conceptCount }: Props) {
   const date = formatDate();
 
   const stats: string[] = [];
-  if (conceptCount && conceptCount > 0) {
-    stats.push(`${conceptCount} ${conceptCount === 1 ? "concept" : "concepts"}`);
+  if (pageCount && pageCount > 0) {
+    stats.push(`${pageCount} ${pageCount === 1 ? "page" : "pages"}`);
   }
   if (memoryCount && memoryCount > 0) {
     stats.push(`${memoryCount} ${memoryCount === 1 ? "memory" : "memories"}`);

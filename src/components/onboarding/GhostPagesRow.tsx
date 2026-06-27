@@ -10,7 +10,7 @@ export function GhostPagesRow() {
           margin: "0 0 10px 0",
         }}
       >
-        Concepts will appear here as Wenlan finds patterns.
+        Pages will appear here as Wenlan finds patterns.
       </p>
       <div
         className="flex gap-3 pb-2"

@@ -51,6 +51,8 @@ function folderName(path: string): string {
   return path.split("/").filter(Boolean).pop() || path;
 }
 
+const PAGE_LINK_ANCHOR_PREFIX = "#concept:";
+
 const KNOWN_AGENTS: Record<string, string> = {
   "claude-code": "Claude Code",
   "claude-desktop": "Claude Desktop",
@@ -197,7 +199,7 @@ export default function PageDetail({ pageId, onBack, onMemoryClick, onPageClick 
   const handleExportToVault = useCallback(
     async (vaultPath: string) => {
       setExportMenuOpen(false);
-      await exportPageToObsidian(pageId, `${vaultPath}/Wenlan/concepts`);
+      await exportPageToObsidian(pageId, `${vaultPath}/Wenlan/pages`);
       setExported(true);
       setTimeout(() => setExported(false), 2000);
     },
@@ -265,7 +267,7 @@ export default function PageDetail({ pageId, onBack, onMemoryClick, onPageClick 
     .replace(/\[\[([^\]]+)\]\]/g, (_match, inner) => {
       const link = parseWikilink(inner);
       const cid = outboundTargetByLabel.get(normalizeLinkLabel(link.targetLabel));
-      if (cid) return `[${link.displayText}](#concept:${cid})`;
+      if (cid) return `[${link.displayText}](${PAGE_LINK_ANCHOR_PREFIX}${cid})`;
       return link.displayText;
     })
     .trim();
@@ -285,10 +287,10 @@ export default function PageDetail({ pageId, onBack, onMemoryClick, onPageClick 
     const anchor = (e.target as HTMLElement).closest("a");
     if (!anchor) return;
     const href = anchor.getAttribute("href") || "";
-    if (href.startsWith("#concept:")) {
+    if (href.startsWith(PAGE_LINK_ANCHOR_PREFIX)) {
       e.preventDefault();
       e.stopPropagation();
-      onPageClick?.(href.replace("#concept:", ""));
+      onPageClick?.(href.replace(PAGE_LINK_ANCHOR_PREFIX, ""));
     } else if (href.startsWith("#memory:")) {
       e.preventDefault();
       e.stopPropagation();
@@ -351,7 +353,7 @@ export default function PageDetail({ pageId, onBack, onMemoryClick, onPageClick 
                 onClick={() => { setEditContent(page.content); setEditing(true); }}
                 className="p-1.5 rounded-md transition-colors duration-150 hover:bg-[var(--mem-hover-strong)]"
                 style={{ color: "var(--mem-text-tertiary)" }}
-                title="Edit concept"
+                title="Edit page"
               >
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
                   <path d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7" />
@@ -444,10 +446,10 @@ export default function PageDetail({ pageId, onBack, onMemoryClick, onPageClick 
               )}
             </div>
             <button
-              onClick={() => { if (confirm("Delete this concept?")) deleteMutation.mutate(); }}
+              onClick={() => { if (confirm("Delete this page?")) deleteMutation.mutate(); }}
               className="p-1.5 rounded-md transition-colors duration-150 hover:bg-red-500/10"
               style={{ color: "var(--mem-text-tertiary)" }}
-              title="Delete concept"
+              title="Delete page"
             >
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
                 <path d="M3 6h18M8 6V4a2 2 0 012-2h4a2 2 0 012 2v2m3 0v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6h14" />

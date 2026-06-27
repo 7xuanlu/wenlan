@@ -47,9 +47,10 @@ function deriveHomePageState(params: {
   memoryCount: number;
   conceptCount: number;
 }): HomePageState {
-  // Concepts take precedence over memories: if any concept exists the home
-  // page is "alive", even if memories were subsequently deleted (which can
-  // leave conceptCount > 0 while memoryCount == 0).
+  // Pages take precedence over memories: if any page exists the home page is
+  // "alive", even if memories were subsequently deleted. The local counter
+  // still uses the legacy concept name because the daemon activity contract
+  // has not been renamed yet.
   if (params.conceptCount > 0) return "alive";
   if (params.memoryCount > 0) return "gathering";
   if (params.intelligenceReady) return "listening";
@@ -318,7 +319,7 @@ export default function HomePage({
 
   return (
     <div className="flex flex-col gap-8 pb-16">
-      <Greeting memoryCount={memoryCount} conceptCount={conceptCount} />
+      <Greeting memoryCount={memoryCount} pageCount={conceptCount} />
 
       {isEmpty ? (
         <>
@@ -412,7 +413,7 @@ export default function HomePage({
 
       {shouldShowFirstConceptModal && firstConcept && (
         <FirstPageModal
-          concept={firstConcept}
+          page={firstConcept}
           onOpen={(id) => {
             localStorage.removeItem(FIRST_CONCEPT_SHOWN_KEY);
             acknowledge("first-concept");

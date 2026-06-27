@@ -9,7 +9,7 @@ interface Page {
 }
 
 interface Props {
-  concept: Page;
+  page: Page;
   onOpen: (pageId: string) => void;
   onDismiss: () => void;
 }
@@ -18,7 +18,7 @@ interface Props {
 const FOCUSABLE_SELECTOR =
   'a[href], button:not([disabled]), textarea:not([disabled]), input:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])';
 
-export function FirstPageModal({ concept, onOpen, onDismiss }: Props) {
+export function FirstPageModal({ page, onOpen, onDismiss }: Props) {
   const dialogRef = useRef<HTMLDivElement | null>(null);
 
   // Focus trap: on mount focus the first focusable element inside the dialog,
@@ -61,7 +61,7 @@ export function FirstPageModal({ concept, onOpen, onDismiss }: Props) {
     <div
       role="dialog"
       aria-modal="true"
-      aria-labelledby="first-concept-title"
+      aria-labelledby="first-page-title"
       ref={dialogRef}
       style={{
         position: "fixed",
@@ -98,10 +98,10 @@ export function FirstPageModal({ concept, onOpen, onDismiss }: Props) {
             margin: "0 0 8px 0",
           }}
         >
-          First concept compiled
+          First page compiled
         </p>
         <h2
-          id="first-concept-title"
+          id="first-page-title"
           style={{
             fontFamily: "var(--mem-font-heading)",
             fontSize: "22px",
@@ -110,9 +110,9 @@ export function FirstPageModal({ concept, onOpen, onDismiss }: Props) {
             color: "var(--mem-text)",
           }}
         >
-          {concept.title}
+          {page.title}
         </h2>
-        {concept.summary && (
+        {page.summary && (
           <p
             style={{
               fontFamily: "var(--mem-font-body)",
@@ -122,7 +122,7 @@ export function FirstPageModal({ concept, onOpen, onDismiss }: Props) {
               margin: "0 0 16px 0",
             }}
           >
-            {concept.summary}
+            {page.summary}
           </p>
         )}
         <p
@@ -133,7 +133,7 @@ export function FirstPageModal({ concept, onOpen, onDismiss }: Props) {
             margin: "0 0 24px 0",
           }}
         >
-          Compiled from {concept.source_memory_ids.length} memories
+          Compiled from {page.source_memory_ids.length} memories
         </p>
         <div className="flex gap-3 justify-end">
           <button
@@ -151,7 +151,7 @@ export function FirstPageModal({ concept, onOpen, onDismiss }: Props) {
             Dismiss
           </button>
           <button
-            onClick={() => onOpen(concept.id)}
+            onClick={() => onOpen(page.id)}
             style={{
               fontFamily: "var(--mem-font-body)",
               fontSize: "13px",
@@ -163,7 +163,7 @@ export function FirstPageModal({ concept, onOpen, onDismiss }: Props) {
               cursor: "pointer",
             }}
           >
-            Open concept
+            Open page
           </button>
         </div>
       </div>

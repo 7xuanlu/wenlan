@@ -10,20 +10,20 @@ interface Props {
 function copyFor(state: HomePageState, memoryCount: number, daysInListening: number): string | null {
   if (state === "alive") return null;
   if (state === "seed") {
-    return "Wenlan is loading its on-device intelligence. Once it's ready, memories from your agents will start arriving here and compile into concepts.";
+    return "Wenlan is loading its on-device intelligence. Once it's ready, memories from your agents will start arriving here and compile into pages.";
   }
   if (state === "listening") {
     if (daysInListening > 3) {
       return "Still quiet here. You can connect more AI tools from Settings.";
     }
-    return "Keep using your AI tools. Memories will appear here as agents save what they learn. Concepts usually start compiling within a day.";
+    return "Keep using your AI tools. Memories will appear here as agents save what they learn. Pages usually start compiling within a day.";
   }
   // gathering
   if (memoryCount < 5) {
     const plural = memoryCount === 1 ? "memory" : "memories";
-    return `${memoryCount} ${plural} saved. Concepts are compiled automatically — usually within a day of regular use.`;
+    return `${memoryCount} ${plural} saved. Pages are compiled automatically — usually within a day of regular use.`;
   }
-  return `${memoryCount} memories saved. Concepts are compiled when patterns emerge — you should see the first ones soon.`;
+  return `${memoryCount} memories saved. Pages are compiled when patterns emerge — you should see the first ones soon.`;
 }
 
 export function WhatHappensNextCard({ state, memoryCount, daysInListening }: Props) {

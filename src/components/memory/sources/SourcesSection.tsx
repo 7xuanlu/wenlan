@@ -246,7 +246,7 @@ export default function SourcesSection() {
           </p>
           <p className="text-xs text-[var(--mem-text-secondary)] mt-0.5">
             {knowledgeCount !== undefined
-              ? `${knowledgeCount} concept files`
+              ? `${knowledgeCount} page files`
               : "Loading…"}{" "}
             · updates automatically
           </p>

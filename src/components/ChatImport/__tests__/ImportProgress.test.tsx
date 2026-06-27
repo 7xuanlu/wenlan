@@ -9,10 +9,10 @@ describe("ImportProgress", () => {
         stage="stage_a"
         memoriesProcessed={1453}
         memoriesTotal={2143}
-        entityCounts={{ people: 12, projects: 34, concepts: 89, decisions: 312, tools: 47 }}
-        conceptsWritten={0}
-        conceptsTotal={0}
-        conceptTitles={[]}
+        entityCounts={{ people: 12, projects: 34, pages: 89, decisions: 312, tools: 47 }}
+        pagesWritten={0}
+        pagesTotal={0}
+        pageTitles={[]}
       />,
     );
     expect(screen.getByText(/reading/i)).toBeInTheDocument();
@@ -21,16 +21,16 @@ describe("ImportProgress", () => {
     expect(screen.getByText(/34 projects/)).toBeInTheDocument();
   });
 
-  it("shows Stage B compiling state with concept counter", () => {
+  it("shows Stage B compiling state with page counter", () => {
     render(
       <ImportProgress
         stage="stage_b"
         memoriesProcessed={2143}
         memoriesTotal={2143}
-        entityCounts={{ people: 47, projects: 56, concepts: 156, decisions: 412, tools: 89 }}
-        conceptsWritten={3}
-        conceptsTotal={47}
-        conceptTitles={["Rust errors", "React hooks"]}
+        entityCounts={{ people: 47, projects: 56, pages: 156, decisions: 412, tools: 89 }}
+        pagesWritten={3}
+        pagesTotal={47}
+        pageTitles={["Rust errors", "React hooks"]}
       />,
     );
     expect(screen.getByText(/compiling/i)).toBeInTheDocument();
@@ -44,12 +44,12 @@ describe("ImportProgress", () => {
         stage="done"
         memoriesProcessed={2143}
         memoriesTotal={2143}
-        entityCounts={{ people: 47, projects: 56, concepts: 156, decisions: 412, tools: 89 }}
-        conceptsWritten={47}
-        conceptsTotal={47}
-        conceptTitles={[]}
+        entityCounts={{ people: 47, projects: 56, pages: 156, decisions: 412, tools: 89 }}
+        pagesWritten={47}
+        pagesTotal={47}
+        pageTitles={[]}
       />,
     );
-    expect(screen.getByText(/concepts are ready/i)).toBeInTheDocument();
+    expect(screen.getByText(/pages are ready/i)).toBeInTheDocument();
   });
 });

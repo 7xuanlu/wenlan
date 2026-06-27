@@ -44,4 +44,27 @@ describe("taxonomy and product copy", () => {
     expect(importView).not.toContain("[goal]");
     expect(agents).not.toMatch(/\bgoals?\b/i);
   });
+
+  it("keeps user-facing page copy out of legacy concept wording", () => {
+    const productOwnedFiles = [
+      "src/components/onboarding/WhatHappensNextCard.tsx",
+      "src/components/onboarding/FirstPageModal.tsx",
+      "src/components/onboarding/GhostPagesRow.tsx",
+      "src/components/ChatImport/ImportProgress.tsx",
+      "src/components/memory/Greeting.tsx",
+      "src/components/memory/ActivityFeed.tsx",
+      "src/components/memory/PageDetail.tsx",
+      "src/components/memory/SpaceDetail.tsx",
+      "src/components/memory/sources/SourcesSection.tsx",
+    ];
+
+    for (const file of productOwnedFiles) {
+      const content = read(file).replaceAll("#concept:", "#legacy-page-anchor:");
+      expect(content, file).not.toMatch(/\b[Cc]oncepts?\b/);
+      expect(content, file).not.toMatch(/\bconcept files\b/i);
+      expect(content, file).not.toMatch(/\bOpen concept\b/i);
+      expect(content, file).not.toMatch(/\bEdit concept\b/i);
+      expect(content, file).not.toMatch(/\bDelete this concept\b/i);
+    }
+  });
 });

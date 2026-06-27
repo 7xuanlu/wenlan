@@ -9,8 +9,8 @@ vi.mock("../../../lib/tauri");
 
 const MOCK_PAGE: tauri.Page = {
   id: "c1",
-  title: "Test Concept",
-  content: "Some concept content",
+  title: "Test Page",
+  content: "Some page content",
   summary: "A test summary",
   domain: "testing",
   entity_id: null,
@@ -70,7 +70,7 @@ describe("PageDetail export", () => {
       },
     ]);
     vi.mocked(tauri.exportPageToObsidian).mockResolvedValue(
-      "/Users/test/vault/Wenlan/concepts/Test Concept.md",
+      "/Users/test/vault/Wenlan/pages/Test Page.md",
     );
 
     render(
@@ -91,7 +91,7 @@ describe("PageDetail export", () => {
     await waitFor(() => {
       expect(tauri.exportPageToObsidian).toHaveBeenCalledWith(
         "c1",
-        "/Users/test/vault/Wenlan/concepts",
+        "/Users/test/vault/Wenlan/pages",
       );
     });
   });
@@ -161,7 +161,7 @@ describe("PageDetail export", () => {
       },
     ]);
     vi.mocked(tauri.exportPageToObsidian).mockResolvedValue(
-      "/Users/test/vault-two/Wenlan/concepts/Test Concept.md",
+      "/Users/test/vault-two/Wenlan/pages/Test Page.md",
     );
 
     render(
@@ -190,7 +190,7 @@ describe("PageDetail export", () => {
     await waitFor(() => {
       expect(tauri.exportPageToObsidian).toHaveBeenCalledWith(
         "c1",
-        "/Users/test/vault-two/Wenlan/concepts",
+        "/Users/test/vault-two/Wenlan/pages",
       );
     });
   });

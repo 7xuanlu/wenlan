@@ -87,7 +87,7 @@ describe("PageDetail", () => {
 
   beforeEach(() => { vi.clearAllMocks(); });
 
-  it("renders concept title", async () => {
+  it("renders page title", async () => {
     renderWithQuery(<PageDetail {...defaultProps} />);
     expect(await screen.findByText("libSQL Architecture")).toBeTruthy();
   });
@@ -162,9 +162,9 @@ describe("PageDetail", () => {
     const { getPage } = await import("../../lib/tauri");
     (getPage as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
       id: "concept_abc",
-      title: "Simple Concept",
+      title: "Simple Page",
       summary: "No links here",
-      content: "A simple concept with no wikilinks.\n\n## Open Questions\n- None",
+      content: "A simple page with no wikilinks.\n\n## Open Questions\n- None",
       entity_id: null,
       domain: null,
       source_memory_ids: [],
@@ -175,7 +175,7 @@ describe("PageDetail", () => {
       last_modified: "2026-04-07T12:00:00+00:00",
     });
     renderWithQuery(<PageDetail {...defaultProps} />);
-    await screen.findByText("Simple Concept");
+    await screen.findByText("Simple Page");
     expect(screen.queryByLabelText("Page links")).toBeNull();
   });
 
