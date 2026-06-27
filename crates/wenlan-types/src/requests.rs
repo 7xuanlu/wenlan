@@ -413,6 +413,8 @@ pub struct SetDocumentSpaceRequest {
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct SetDocumentTagsRequest {
+    #[serde(default)]
+    pub source: Option<String>,
     pub tags: Vec<String>,
 }
 
@@ -571,5 +573,27 @@ mod list_memories_confirmed_test {
         };
         let s = serde_json::to_string(&req).unwrap();
         assert!(!s.contains("confirmed"), "got: {s}");
+    }
+}
+
+#[cfg(test)]
+mod set_document_tags_test {
+    use super::*;
+
+    #[test]
+    fn set_document_tags_request_accepts_optional_source() {
+        let req: SetDocumentTagsRequest =
+            serde_json::from_str(r#"{"source":"manual","tags":["rust"]}"#).unwrap();
+
+        assert_eq!(req.source.as_deref(), Some("manual"));
+        assert_eq!(req.tags, vec!["rust"]);
+    }
+
+    #[test]
+    fn set_document_tags_request_defaults_source_for_old_payloads() {
+        let req: SetDocumentTagsRequest = serde_json::from_str(r#"{"tags":["rust"]}"#).unwrap();
+
+        assert!(req.source.is_none());
+        assert_eq!(req.tags, vec!["rust"]);
     }
 }
