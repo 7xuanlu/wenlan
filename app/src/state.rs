@@ -38,6 +38,9 @@ pub struct IndexStatus {
     pub files_total: u64,
     pub last_error: Option<String>,
     pub sources_connected: Vec<String>,
+    pub reranker: wenlan_types::responses::RerankerStatus,
+    pub reranker_light: wenlan_types::responses::RerankerStatus,
+    pub reranker_mode: String,
 }
 
 pub struct AppState {
@@ -78,6 +81,9 @@ impl Default for AppState {
                 files_total: 0,
                 last_error: None,
                 sources_connected: vec![],
+                reranker: wenlan_types::responses::RerankerStatus::Disabled,
+                reranker_light: wenlan_types::responses::RerankerStatus::Disabled,
+                reranker_mode: "off".to_string(),
             },
             sources: HashMap::new(),
             watch_paths: vec![],

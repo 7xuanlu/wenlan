@@ -39,7 +39,15 @@ export interface IndexStatus {
   files_total: number;
   last_error: string | null;
   sources_connected: string[];
+  reranker: RerankerStatus;
+  reranker_light: RerankerStatus;
+  reranker_mode: string;
 }
+
+export type RerankerStatus =
+  | { state: "disabled" }
+  | { state: "active"; model_id: string }
+  | { state: "failed"; reason: string };
 
 export interface SourceStatus {
   name: string;

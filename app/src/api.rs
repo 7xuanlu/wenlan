@@ -196,6 +196,10 @@ impl WenlanClient {
         self.get_json("/api/health").await
     }
 
+    pub async fn status(&self) -> Result<wenlan_types::responses::StatusResponse, String> {
+        self.get_json("/api/status").await
+    }
+
     // ── Capture stats ────────────────────────────────────────────────
 
     pub async fn get_capture_stats(&self) -> Result<HashMap<String, u64>, String> {
@@ -696,6 +700,24 @@ mod tests {
 
         assert_eq!(tags, vec!["ai".to_string(), "rust".to_string()]);
         assert_eq!(request.await.unwrap(), "GET /api/tags HTTP/1.1");
+    }
+
+    #[tokio::test]
+    async fn status_uses_daemon_status_endpoint() {
+        let (base_url, request) = serve_json_once(
+            r#"{"is_running":true,"files_indexed":42,"files_total":0,"sources_connected":[],"reranker":{"state":"disabled"},"reranker_light":{"state":"active","model_id":"bge"},"reranker_mode":"lite"}"#,
+        )
+        .await;
+        let client = WenlanClient {
+            client: reqwest::Client::new(),
+            base_url,
+        };
+
+        let status = client.status().await.unwrap();
+
+        assert_eq!(status.files_indexed, 42);
+        assert_eq!(status.reranker_mode, "lite");
+        assert_eq!(request.await.unwrap(), "GET /api/status HTTP/1.1");
     }
 
     #[test]

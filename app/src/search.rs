@@ -630,8 +630,21 @@ pub async fn open_file(path: String) -> Result<(), String> {
 
 #[tauri::command]
 pub async fn get_index_status(state: tauri::State<'_, State>) -> Result<IndexStatus, String> {
-    let state = state.read().await;
-    Ok(state.index_status.clone())
+    let (client, local) = {
+        let state = state.read().await;
+        (state.client.clone(), state.index_status.clone())
+    };
+    let daemon = client.status().await?;
+    Ok(merge_daemon_status(local, daemon))
+}
+
+fn merge_daemon_status(mut local: IndexStatus, daemon: responses::StatusResponse) -> IndexStatus {
+    local.files_indexed = daemon.files_indexed;
+    local.sources_connected = daemon.sources_connected;
+    local.reranker = daemon.reranker;
+    local.reranker_light = daemon.reranker_light;
+    local.reranker_mode = daemon.reranker_mode;
+    local
 }
 
 #[tauri::command]
@@ -3151,6 +3164,59 @@ pub async fn quit_origin_full(app_handle: tauri::AppHandle) -> Result<(), String
     crate::lifecycle::quit_origin(&app_handle)
         .await
         .map_err(|e| e.to_string())
+}
+
+#[cfg(test)]
+mod status_response_tests {
+    use super::*;
+
+    #[test]
+    fn daemon_status_updates_count_and_reranker_without_forcing_indexing_state() {
+        let local = IndexStatus {
+            is_running: false,
+            files_indexed: 3,
+            files_total: 7,
+            last_error: Some("local watcher error".to_string()),
+            sources_connected: vec!["local".to_string()],
+            reranker: wenlan_types::responses::RerankerStatus::Disabled,
+            reranker_light: wenlan_types::responses::RerankerStatus::Disabled,
+            reranker_mode: "off".to_string(),
+        };
+        let daemon = responses::StatusResponse {
+            is_running: true,
+            files_indexed: 42,
+            files_total: 0,
+            sources_connected: vec!["daemon".to_string()],
+            reranker: wenlan_types::responses::RerankerStatus::Failed {
+                reason: "model missing".to_string(),
+            },
+            reranker_light: wenlan_types::responses::RerankerStatus::Active {
+                model_id: "bge-reranker".to_string(),
+            },
+            reranker_mode: "lite".to_string(),
+        };
+
+        let merged = merge_daemon_status(local, daemon);
+
+        assert!(!merged.is_running);
+        assert_eq!(merged.files_indexed, 42);
+        assert_eq!(merged.files_total, 7);
+        assert_eq!(merged.last_error.as_deref(), Some("local watcher error"));
+        assert_eq!(merged.sources_connected, vec!["daemon".to_string()]);
+        assert_eq!(merged.reranker_mode, "lite");
+        assert_eq!(
+            merged.reranker,
+            wenlan_types::responses::RerankerStatus::Failed {
+                reason: "model missing".to_string()
+            }
+        );
+        assert_eq!(
+            merged.reranker_light,
+            wenlan_types::responses::RerankerStatus::Active {
+                model_id: "bge-reranker".to_string()
+            }
+        );
+    }
 }
 
 #[cfg(test)]
