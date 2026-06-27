@@ -247,11 +247,6 @@ export default function ProfilePage({ onBack, onSelectMemory }: ProfilePageProps
     queryFn: () => listMemoriesRich(undefined, "preference", undefined, 20),
   });
 
-  const { data: goals = [] } = useQuery({
-    queryKey: ["memories", "goal"],
-    queryFn: () => listMemoriesRich(undefined, "goal", undefined, 10),
-  });
-
   const profileMutation = useMutation({
     mutationFn: (fields: { name?: string; displayName?: string; email?: string; bio?: string }) =>
       updateProfile(profile!.id, fields.name, fields.displayName, fields.email, fields.bio),
@@ -483,40 +478,6 @@ export default function ProfilePage({ onBack, onSelectMemory }: ProfilePageProps
           </ul>
         </section>
       )}
-
-      {/* ── Current focus (goals) ──────────────────────────────────── */}
-      <section>
-        <h2 style={SECTION_TITLE_STYLE}>Current focus</h2>
-        <p style={SECTION_SUB_STYLE} className="mb-3">
-          what you are working toward
-        </p>
-        {goals.length > 0 ? (
-          <ul>
-            {goals.map((goal) => (
-              <MemoryRow
-                key={goal.source_id}
-                title={goal.title || goal.content.split("\n")[0].slice(0, 80)}
-                snippet={goal.content && goal.title ? goal.content.split("\n")[0].slice(0, 120) : undefined}
-                timestamp={goal.last_modified}
-                accentColor="var(--mem-accent-sage)"
-                onClick={onSelectMemory ? () => onSelectMemory(goal.source_id) : undefined}
-              />
-            ))}
-          </ul>
-        ) : (
-          <p
-            style={{
-              fontFamily: "var(--mem-font-body)",
-              fontSize: 13,
-              fontStyle: "italic",
-              color: "var(--mem-text-tertiary)",
-              paddingTop: 8,
-            }}
-          >
-            No active goals yet
-          </p>
-        )}
-      </section>
     </div>
   );
 }

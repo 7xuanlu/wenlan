@@ -203,21 +203,23 @@ const EXPORT_PROMPT = `Export all of my stored memories and any context you've l
 EVERY line MUST follow this exact format — no exceptions:
 [TYPE] - content
 
-TYPE must be exactly one of: identity, preference, decision, fact, goal
+TYPE must be exactly one of: identity, preference, decision, lesson, gotcha, fact
 
 Where:
 - identity = who I am (name, location, education, family, languages)
 - preference = how I like things (opinions, tastes, working style, rules like "always do X" or "never do Y")
 - decision = choices I made with rationale (tech, career, project directions)
+- lesson = reusable learnings from experience
+- gotcha = pitfalls, traps, or things to avoid
 - fact = things about my work, projects, skills, situation
-- goal = what I'm working toward, aspirations
 
 Example output:
 [identity] - Lives in San Francisco, originally from Taiwan
 [preference] - Prefers concise responses without trailing summaries
 [decision] - Chose Rust + Tauri for the desktop app over Electron
 [preference] - Never use emojis unless explicitly asked
-[goal] - Launch Wenlan memory app by end of Q1
+[lesson] - TDD caught the config regression before launch
+[gotcha] - Tauri rolling::daily suffixes file names with the date
 [fact] - Building a local-first AI memory layer called Wenlan
 
 Rules:
@@ -238,6 +240,8 @@ const TYPE_BADGE_STYLES: Record<string, { bg: string; text: string }> = {
   preference: { bg: "color-mix(in srgb, var(--mem-accent-warm) 15%, transparent)", text: "var(--mem-accent-warm)" },
   fact: { bg: "color-mix(in srgb, var(--mem-accent-glow) 12%, transparent)", text: "var(--mem-accent-glow)" },
   decision: { bg: "color-mix(in srgb, var(--mem-accent-amber) 15%, transparent)", text: "var(--mem-accent-amber)" },
+  lesson: { bg: "color-mix(in srgb, var(--mem-accent-sage) 15%, transparent)", text: "var(--mem-accent-sage)" },
+  gotcha: { bg: "color-mix(in srgb, #ef4444 15%, transparent)", text: "#ef4444" },
   goal: { bg: "color-mix(in srgb, var(--mem-accent-sage) 15%, transparent)", text: "var(--mem-accent-sage)" },
 };
 
@@ -394,7 +398,7 @@ export function ImportView({ onBack, onComplete, wizardMode, onPhaseChange, onSk
             >
               {source !== "other"
                 ? `Copy this prompt, paste into ${SOURCE_LABELS[source]}, then paste the output below.\n\n${EXPORT_PROMPT}`
-                : "Paste any list of facts or memories, one per line.\n\nEach line becomes a separate memory in Wenlan.\nEmpty lines and separators (---, ===) are skipped.\n\nOptionally prefix lines with a type tag:\n[identity] - Lives in San Francisco\n[preference] - Prefers concise responses\n[fact] - Building Wenlan, a local-first AI memory app\n[goal] - Launch by end of Q1\n\nLines without a tag are stored as facts."}
+                : "Paste any list of facts or memories, one per line.\n\nEach line becomes a separate memory in Wenlan.\nEmpty lines and separators (---, ===) are skipped.\n\nOptionally prefix lines with a type tag:\n[identity] - Lives in San Francisco\n[preference] - Prefers concise responses\n[lesson] - TDD caught a config regression before launch\n[gotcha] - Tauri rolling::daily suffixes file names with the date\n[fact] - Building Wenlan, a local-first AI memory app\n\nLines without a tag are stored as facts."}
             </pre>
           </div>
 

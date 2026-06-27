@@ -11,11 +11,27 @@ describe("StructuredEditor", () => {
     expect(screen.getByPlaceholderText("Because...")).toBeInTheDocument();
   });
 
-  test("renders all fields for goal type", () => {
+  test("renders fields for lesson type", () => {
+    const onChange = vi.fn();
+    render(<StructuredEditor memoryType="lesson" onChange={onChange} />);
+    expect(screen.getByPlaceholderText("What was learned")).toBeInTheDocument();
+    expect(screen.getByPlaceholderText("When to apply it")).toBeInTheDocument();
+  });
+
+  test("renders fields for gotcha type", () => {
+    const onChange = vi.fn();
+    render(<StructuredEditor memoryType="gotcha" onChange={onChange} />);
+    expect(screen.getByPlaceholderText("What can go wrong")).toBeInTheDocument();
+    expect(screen.getByPlaceholderText("How to avoid it")).toBeInTheDocument();
+  });
+
+  test("renders legacy goal fields for old rows", () => {
     const onChange = vi.fn();
     render(<StructuredEditor memoryType="goal" onChange={onChange} />);
-    expect(screen.getByPlaceholderText("I want to...")).toBeInTheDocument();
-    expect(screen.getByPlaceholderText("By when")).toBeInTheDocument();
+    expect(screen.getByPlaceholderText("Legacy goal")).toBeInTheDocument();
+    expect(
+      screen.getByText(/legacy goal rows are displayed for migration/i),
+    ).toBeInTheDocument();
   });
 
   test("calls onChange when field is updated", () => {

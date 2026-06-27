@@ -1,12 +1,14 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { useState } from "react";
 
-const SCHEMAS: Record<string, { required: string[]; optional: string[]; labels: Record<string, string> }> = {
+const SCHEMAS: Record<string, { required: string[]; optional: string[]; labels: Record<string, string>; help?: string }> = {
   identity:   { required: ["claim"], optional: ["evidence", "since"], labels: { claim: "I am / I do...", evidence: "How I know this", since: "Since when" } },
   preference: { required: ["preference", "applies_when"], optional: ["strength", "alternatives_rejected"], labels: { preference: "I prefer...", applies_when: "When this applies", strength: "How strongly", alternatives_rejected: "Over what alternatives" } },
   decision:   { required: ["decision", "context"], optional: ["alternatives_considered", "date", "reversible"], labels: { decision: "We decided to...", context: "Because...", alternatives_considered: "Instead of...", date: "When", reversible: "Reversible?" } },
   fact:       { required: ["claim"], optional: ["source", "verified", "domain"], labels: { claim: "The fact", source: "Where I learned this", verified: "Verified?", domain: "Topic area" } },
-  goal:       { required: ["objective"], optional: ["target_date", "milestones", "status", "blockers"], labels: { objective: "I want to...", target_date: "By when", milestones: "Key milestones", status: "Current status", blockers: "What's blocking" } },
+  lesson:     { required: ["lesson"], optional: ["applies_when", "source"], labels: { lesson: "What was learned", applies_when: "When to apply it", source: "Where it came from" } },
+  gotcha:     { required: ["gotcha"], optional: ["avoidance", "trigger"], labels: { gotcha: "What can go wrong", avoidance: "How to avoid it", trigger: "When it happens" } },
+  legacy_goal: { required: ["objective"], optional: ["target_date", "milestones", "status", "blockers"], labels: { objective: "Legacy goal", target_date: "By when", milestones: "Key milestones", status: "Current status", blockers: "What's blocking" }, help: "Legacy goal rows are displayed for migration. New memories should use identity, lesson, gotcha, decision, preference, or fact." },
 };
 
 interface StructuredEditorProps {
@@ -16,7 +18,7 @@ interface StructuredEditorProps {
 }
 
 export default function StructuredEditor({ memoryType, initialFields, onChange }: StructuredEditorProps) {
-  const schema = SCHEMAS[memoryType] ?? SCHEMAS.fact;
+  const schema = memoryType === "goal" ? SCHEMAS.legacy_goal : (SCHEMAS[memoryType] ?? SCHEMAS.fact);
   const [fields, setFields] = useState<Record<string, string>>(initialFields ?? {});
 
   const update = (key: string, value: string) => {
@@ -29,6 +31,18 @@ export default function StructuredEditor({ memoryType, initialFields, onChange }
 
   return (
     <div className="flex flex-col gap-3">
+      {schema.help && (
+        <p
+          style={{
+            fontFamily: "var(--mem-font-body)",
+            fontSize: "12px",
+            color: "var(--mem-text-tertiary)",
+            margin: 0,
+          }}
+        >
+          {schema.help}
+        </p>
+      )}
       {allFields.map((f) => (
         <label key={f} className="flex flex-col gap-1">
           <span style={{

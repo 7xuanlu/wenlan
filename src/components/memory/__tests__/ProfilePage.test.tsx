@@ -3,6 +3,22 @@ import { render, screen } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import ProfilePage from "../ProfilePage";
 
+const listMemoriesRichMock = vi.hoisted(() =>
+  vi.fn().mockImplementation((_domain, type) => {
+    if (type === "preference") {
+      return Promise.resolve([
+        { source_id: "p1", title: "Strict TDD", content: "Always TDD", memory_type: "preference", confirmed: true, pinned: false, last_modified: 1744041600 },
+      ]);
+    }
+    if (type === "identity") {
+      return Promise.resolve([
+        { source_id: "i1", title: "Ship wiki", content: "Launch this weekend", memory_type: "identity", confirmed: true, pinned: false, last_modified: 1744041600 },
+      ]);
+    }
+    return Promise.resolve([]);
+  }),
+);
+
 vi.mock("../../../lib/tauri", () => ({
   getProfile: vi.fn().mockResolvedValue({
     id: "1", name: "Lucian", display_name: "Lucian",
@@ -17,15 +33,7 @@ vi.mock("../../../lib/tauri", () => ({
     generated_at: 1744041600, is_stale: false, memory_count: 5,
   }),
   regenerateNarrative: vi.fn().mockResolvedValue(null),
-  listMemoriesRich: vi.fn().mockImplementation((_domain, type) => {
-    if (type === "preference") return Promise.resolve([
-      { source_id: "p1", title: "Strict TDD", content: "Always TDD", memory_type: "preference", confirmed: true, pinned: false, last_modified: 1744041600 },
-    ]);
-    if (type === "goal") return Promise.resolve([
-      { source_id: "g1", title: "Ship wiki", content: "Launch this weekend", memory_type: "goal", confirmed: true, pinned: false, last_modified: 1744041600 },
-    ]);
-    return Promise.resolve([]);
-  }),
+  listMemoriesRich: listMemoriesRichMock,
   MEMORY_FACETS: [],
   FACET_COLORS: {},
 }));
@@ -48,9 +56,17 @@ describe("ProfilePage (narrative-first)", () => {
     expect(screen.queryByText("Fact")).not.toBeInTheDocument();
   });
 
-  it("shows Current Focus section", async () => {
+  it("does not query or render first-class goal memories", async () => {
     render(wrap(<ProfilePage onBack={() => {}} />));
-    expect(await screen.findByText(/Current focus/)).toBeInTheDocument();
+    await screen.findByText(/solo founder/);
+    expect(listMemoriesRichMock).not.toHaveBeenCalledWith(
+      undefined,
+      "goal",
+      undefined,
+      10,
+    );
+    expect(screen.queryByText(/Current focus/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/No active goals/i)).not.toBeInTheDocument();
   });
 
   it("shows preference pills", async () => {

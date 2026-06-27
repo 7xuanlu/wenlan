@@ -603,7 +603,7 @@ export async function setPrivateBrowsingDetection(enabled: boolean): Promise<voi
 
 // ── Memory Facets ───────────────────────────────────────────────────
 
-export type MemoryType = 'identity' | 'preference' | 'decision' | 'fact' | 'goal';
+export type MemoryType = 'identity' | 'preference' | 'decision' | 'lesson' | 'gotcha' | 'fact';
 
 export interface MemoryFacet {
   type: MemoryType;
@@ -615,21 +615,26 @@ export interface MemoryFacet {
 export const MEMORY_FACETS: MemoryFacet[] = [
   { type: 'identity', label: 'Identity', color: 'indigo', description: 'Who you are, always injected into context' },
   { type: 'preference', label: 'Preference', color: 'orange', description: 'How you like things done, always injected' },
-  { type: 'decision', label: 'Decision', color: 'amber', description: 'Past decisions, retrieved by topic + rationale' },
-  { type: 'fact', label: 'Fact', color: 'zinc', description: 'Known facts, standard hybrid search' },
-  { type: 'goal', label: 'Goal', color: 'emerald', description: 'Active goals, injected at session start' },
+  { type: 'decision', label: 'Decision', color: 'amber', description: 'Choices made with rationale and tradeoffs' },
+  { type: 'lesson', label: 'Lesson', color: 'emerald', description: 'Positive learnings to reuse later' },
+  { type: 'gotcha', label: 'Gotcha', color: 'red', description: 'Traps, failures, and warnings to avoid' },
+  { type: 'fact', label: 'Fact', color: 'zinc', description: 'Durable knowledge, standard hybrid search' },
 ];
 
 // Canonical memory-type colors aligned with Wenlan's --mem-accent-* palette:
 //   identity  -> indigo  (--mem-accent-indigo: depth, foundational)
 //   preference -> orange (--mem-accent-warm: personal, warm)
 //   decision  -> amber   (--mem-accent-amber: weight, decisive)
+//   lesson    -> emerald (--mem-accent-sage: reusable learning)
+//   gotcha    -> red     (warning, avoid)
 //   fact      -> zinc    (neutral, informational)
-//   goal      -> emerald (--mem-accent-sage: growth, organic)
+//   goal      -> emerald (legacy rows only)
 export const FACET_COLORS: Record<string, string> = {
   identity: "bg-indigo-500/20 text-indigo-700 dark:text-indigo-400 border-indigo-500/30",
   preference: "bg-orange-500/20 text-orange-700 dark:text-orange-400 border-orange-500/30",
   decision: "bg-amber-500/20 text-amber-700 dark:text-amber-400 border-amber-500/30",
+  lesson: "bg-emerald-500/20 text-emerald-700 dark:text-emerald-400 border-emerald-500/30",
+  gotcha: "bg-red-500/20 text-red-700 dark:text-red-400 border-red-500/30",
   fact: "bg-zinc-500/20 text-zinc-700 dark:text-zinc-400 border-zinc-500/30",
   goal: "bg-emerald-500/20 text-emerald-700 dark:text-emerald-400 border-emerald-500/30",
 };
@@ -641,7 +646,9 @@ export const STABILITY_TIERS: Record<string, StabilityTier> = {
   preference: "protected",
   fact: "standard",
   decision: "standard",
-  goal: "ephemeral",
+  lesson: "standard",
+  gotcha: "standard",
+  goal: "protected",
 };
 
 export interface PendingRevision {

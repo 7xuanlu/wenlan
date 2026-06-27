@@ -83,7 +83,7 @@ export const TRUST_LEVELS: Record<TrustLevel, TrustLevelDescriptor> = {
   full: {
     label: "Full",
     summary:
-      "Sees everything: identity, preferences, goals, decisions, concepts, and search results.",
+      "Sees everything: identity, preferences, lessons, gotchas, decisions, pages, and search results.",
     detail:
       "This is the default for agents you've explicitly registered — if you walked through setup for it, Wenlan treats it as trusted and gives it access to every tier of context.",
     accent: "var(--mem-accent-indigo)",
@@ -91,14 +91,14 @@ export const TRUST_LEVELS: Record<TrustLevel, TrustLevelDescriptor> = {
   review: {
     label: "Review",
     summary:
-      "Sees goals, decisions, corrections, concepts, and search — but not identity or preferences.",
+      "Sees lessons, gotchas, decisions, corrections, pages, and search — but not identity or preferences.",
     detail:
       "Useful when you want an agent to help with work but not see your personal identity or preferences. Rarely needed for single-user setups.",
     accent: "var(--mem-accent-amber)",
   },
   unknown: {
     label: "Unknown",
-    summary: "Sees search results only. No identity, preferences, or goals.",
+    summary: "Sees search results only. No identity or preferences.",
     detail:
       "Unregistered callers (direct curl, third-party MCP clients you didn't register) land here automatically. Safe fallback for untrusted sources.",
     accent: "var(--mem-accent-warm)",
