@@ -2510,7 +2510,14 @@ pub async fn handle_list_tags(
         .list_all_tags()
         .await
         .map_err(|e| ServerError::Internal(e.to_string()))?;
-    Ok(Json(wenlan_types::responses::TagsResponse { tags }))
+    let document_tags = db
+        .list_document_tags()
+        .await
+        .map_err(|e| ServerError::Internal(e.to_string()))?;
+    Ok(Json(wenlan_types::responses::TagsResponse {
+        tags,
+        document_tags,
+    }))
 }
 
 /// DELETE /api/tags/{name}
@@ -2538,11 +2545,23 @@ pub async fn handle_set_document_tags(
         let s = state.read().await;
         s.db.clone().ok_or(ServerError::DbNotInitialized)?
     };
+    let source = document_tag_source(&req).to_string();
     let tags = db
-        .set_document_tags("memory", &source_id, req.tags)
+        .set_document_tags(&source, &source_id, req.tags)
         .await
         .map_err(|e| ServerError::Internal(e.to_string()))?;
-    Ok(Json(wenlan_types::responses::TagsResponse { tags }))
+    Ok(Json(wenlan_types::responses::TagsResponse {
+        tags,
+        document_tags: HashMap::new(),
+    }))
+}
+
+fn document_tag_source(req: &wenlan_types::requests::SetDocumentTagsRequest) -> &str {
+    req.source
+        .as_deref()
+        .map(str::trim)
+        .filter(|source| !source.is_empty())
+        .unwrap_or("memory")
 }
 
 #[derive(Debug, Deserialize)]
@@ -2598,7 +2617,35 @@ pub async fn handle_suggest_tags(
         }
     }
 
-    Ok(Json(wenlan_types::responses::TagsResponse { tags }))
+    Ok(Json(wenlan_types::responses::TagsResponse {
+        tags,
+        document_tags: HashMap::new(),
+    }))
+}
+
+#[cfg(test)]
+mod tag_route_tests {
+    use super::*;
+
+    #[test]
+    fn document_tag_source_prefers_request_source() {
+        let req = wenlan_types::requests::SetDocumentTagsRequest {
+            source: Some("manual".to_string()),
+            tags: vec!["rust".to_string()],
+        };
+
+        assert_eq!(document_tag_source(&req), "manual");
+    }
+
+    #[test]
+    fn document_tag_source_defaults_to_memory_for_old_payloads() {
+        let req = wenlan_types::requests::SetDocumentTagsRequest {
+            source: None,
+            tags: vec!["rust".to_string()],
+        };
+
+        assert_eq!(document_tag_source(&req), "memory");
+    }
 }
 
 /// GET /api/capture-stats

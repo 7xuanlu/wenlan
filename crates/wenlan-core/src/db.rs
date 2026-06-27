@@ -6734,6 +6734,32 @@ impl MemoryDB {
         Ok(out)
     }
 
+    /// List tags grouped by frontend document key (`source::source_id`).
+    pub async fn list_document_tags(&self) -> Result<HashMap<String, Vec<String>>, WenlanError> {
+        let conn = self.conn.lock().await;
+        let mut rows = conn
+            .query(
+                "SELECT source, source_id, tag FROM document_tags ORDER BY source, source_id, tag",
+                (),
+            )
+            .await
+            .map_err(|e| WenlanError::VectorDb(format!("list_document_tags: {e}")))?;
+        let mut out: HashMap<String, Vec<String>> = HashMap::new();
+        while let Some(row) = rows
+            .next()
+            .await
+            .map_err(|e| WenlanError::VectorDb(e.to_string()))?
+        {
+            let source: String = row.get(0).unwrap_or_default();
+            let source_id: String = row.get(1).unwrap_or_default();
+            let tag: String = row.get(2).unwrap_or_default();
+            out.entry(format!("{source}::{source_id}"))
+                .or_default()
+                .push(tag);
+        }
+        Ok(out)
+    }
+
     /// Get memories that need re-embedding (structured content was set but embedding is stale).
     pub async fn get_reembed_candidates(
         &self,
@@ -39480,6 +39506,42 @@ pub(crate) mod tests {
         let all = db.list_all_tags().await.unwrap();
         // Distinct + sorted: rust appears in both docs but must appear once.
         assert_eq!(all, vec!["rust", "tauri", "wasm"]);
+    }
+
+    #[tokio::test]
+    async fn test_list_document_tags_groups_by_document_key() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db = MemoryDB::new(
+            &tmp.path().join("test.db"),
+            Arc::new(crate::events::NoopEmitter),
+        )
+        .await
+        .unwrap();
+
+        db.set_document_tags(
+            "memory",
+            "doc1",
+            vec!["Rust".to_string(), "Tauri".to_string()],
+        )
+        .await
+        .unwrap();
+        db.set_document_tags(
+            "page",
+            "page1",
+            vec!["Rust".to_string(), "Wiki".to_string()],
+        )
+        .await
+        .unwrap();
+
+        let document_tags = db.list_document_tags().await.unwrap();
+        assert_eq!(
+            document_tags.get("memory::doc1"),
+            Some(&vec!["rust".to_string(), "tauri".to_string()])
+        );
+        assert_eq!(
+            document_tags.get("page::page1"),
+            Some(&vec!["rust".to_string(), "wiki".to_string()])
+        );
     }
 
     // ── migration 51 replay test ──────────────────────────────────────────────

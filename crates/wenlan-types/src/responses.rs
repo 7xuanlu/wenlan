@@ -462,6 +462,8 @@ pub struct VersionChainResponse {
 #[derive(Debug, Serialize, Deserialize)]
 pub struct TagsResponse {
     pub tags: Vec<String>,
+    #[serde(default)]
+    pub document_tags: HashMap<String, Vec<String>>,
 }
 
 // ===== Activity =====
@@ -975,6 +977,33 @@ mod tests {
         let parsed: StoreMemoryResponse = serde_json::from_str(json).unwrap();
         assert_eq!(parsed.enrichment, ""); // default
         assert_eq!(parsed.hint, ""); // default
+    }
+
+    #[test]
+    fn tags_response_defaults_document_tags_for_older_responses() {
+        let json = r#"{"tags":["rust","tauri"]}"#;
+        let parsed: TagsResponse = serde_json::from_str(json).unwrap();
+
+        assert_eq!(parsed.tags, vec!["rust", "tauri"]);
+        assert!(parsed.document_tags.is_empty());
+    }
+
+    #[test]
+    fn tags_response_deserializes_document_tag_map() {
+        let json = r#"{
+            "tags":["rust","tauri"],
+            "document_tags":{"memory::mem1":["rust"],"page::page1":["tauri"]}
+        }"#;
+        let parsed: TagsResponse = serde_json::from_str(json).unwrap();
+
+        assert_eq!(
+            parsed.document_tags.get("memory::mem1"),
+            Some(&vec!["rust".to_string()])
+        );
+        assert_eq!(
+            parsed.document_tags.get("page::page1"),
+            Some(&vec!["tauri".to_string()])
+        );
     }
 
     #[test]
