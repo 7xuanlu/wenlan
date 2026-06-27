@@ -205,6 +205,11 @@ impl WenlanClient {
         Ok(counts)
     }
 
+    pub async fn list_tags(&self) -> Result<Vec<String>, String> {
+        let resp: wenlan_types::responses::TagsResponse = self.get_json("/api/tags").await?;
+        Ok(resp.tags)
+    }
+
     // ── Chat export import ─────────────────────────────────────────
 
     pub async fn import_chat_export(
@@ -677,6 +682,20 @@ mod tests {
 
         assert_eq!(stats.get("total"), Some(&42));
         assert_eq!(request.await.unwrap(), "GET /api/capture-stats HTTP/1.1");
+    }
+
+    #[tokio::test]
+    async fn list_tags_uses_daemon_tags_endpoint() {
+        let (base_url, request) = serve_json_once(r#"{"tags":["ai","rust"]}"#).await;
+        let client = WenlanClient {
+            client: reqwest::Client::new(),
+            base_url,
+        };
+
+        let tags = client.list_tags().await.unwrap();
+
+        assert_eq!(tags, vec!["ai".to_string(), "rust".to_string()]);
+        assert_eq!(request.await.unwrap(), "GET /api/tags HTTP/1.1");
     }
 
     #[test]

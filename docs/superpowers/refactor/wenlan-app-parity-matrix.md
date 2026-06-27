@@ -5,7 +5,7 @@
 - **App branch:** `main`
 - **Wenlan backend source:** `/Users/lucian/Repos/wenlan`
 - **Purpose:** prerequisite matrix before the full `origin-app` -> `wenlan-app` refactor run.
-- **Current status:** refreshed on 2026-06-26 after typed-client, sidecar, MCP bridge, Dock/app-activation, avatar path, neutral theme fallback, Home pending-revision/refinery review work, daemon-backed setup status work, and post-merge API parity wrappers.
+- **Current status:** refreshed on 2026-06-27 after typed-client, sidecar, MCP bridge, Dock/app-activation, avatar path, neutral theme fallback, Home pending-revision/refinery review work, daemon-backed setup status work, post-merge API parity wrappers, `/api/capture-stats`, and daemon-backed global tag inventory.
 
 ## Evidence Snapshot
 
@@ -35,7 +35,8 @@ These block "caught up enough for full refactor run".
 | Surface | Current source | App status | Action | Daemon compatibility |
 |---|---|---|---|---|
 | `/api/health` | `wenlan-server/src/router.rs`; `HealthResponse` | present in `WenlanClient.health` | keep typed daemon reachability gate | required; app cannot proceed without daemon |
-| `/api/status` | `StatusResponse`, `RerankerStatus` | typed response used by `get_capture_stats`; user-facing diagnostics still incomplete | add settings/diagnostics capability surface | required for capability gate; tolerate absent fields by feature-gating |
+| `/api/status` | `StatusResponse`, `RerankerStatus` | typed response is still available for daemon/operator diagnostics; capture totals now use `/api/capture-stats` instead of status fallback | add settings/diagnostics capability surface | required for capability gate; tolerate absent fields by feature-gating |
+| `/api/capture-stats` | daemon capture stats route | `get_capture_stats` calls the dedicated daemon route and maps `total_chunks` to the existing frontend `total` key | keep route-level regression test so it does not drift back to `/api/status` | required for capture-count UI |
 | `/api/refinery/queue` | `ListRefinementsResponse` | typed Rust/Tauri/TS wrappers present; Home Worth-a-glance surfaces proposals | keep Home review lane; consider a dedicated review screen only if queue volume requires it | require route for review queue; hide panel if absent |
 | `/api/refinery/queue/{id}/accept` | `AcceptRefinementResponse` | typed Rust/Tauri/TS wrappers present; Home Accept calls it and invalidates review/recent caches | reuse typed response for any future dedicated review queue | optional until queue route exists |
 | `/api/refinery/queue/{id}/reject` | `RejectRefinementResponse` | typed Rust/Tauri/TS wrappers present; Home Dismiss calls it and invalidates the review queue | reuse typed response for any future dedicated review queue | optional until queue route exists |
@@ -67,6 +68,7 @@ These are required for feature parity but can follow the P0 review/status/setup 
 | `/api/pages/{id}/export` | export response | present as `exportPageToObsidian` | keep; rename "concept" UI/file wording where user-facing | optional |
 | `/api/on-device-model` | config route | present wrapper | keep; type through `wenlan-types` | optional settings section |
 | `/api/llm/test` | config route | present wrapper | keep; type through `wenlan-types` | optional settings section |
+| `/api/tags` | `TagsResponse` | `list_all_tags` now reads the daemon global tag list; document tag maps remain empty because the daemon has no list-all-document-tags envelope yet | add a daemon document-tag map route before reviving tag filters that depend on `document_tags` | global tags available; per-document tag map still deferred |
 
 ## Taxonomy Matrix
 

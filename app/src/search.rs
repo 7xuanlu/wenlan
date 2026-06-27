@@ -2303,10 +2303,14 @@ pub struct TagData {
 }
 
 #[tauri::command]
-pub async fn list_all_tags(_state: tauri::State<'_, State>) -> Result<TagData, String> {
-    // Tags are no longer stored locally in SpaceStore
+pub async fn list_all_tags(state: tauri::State<'_, State>) -> Result<TagData, String> {
+    let client = {
+        let s = state.read().await;
+        s.client.clone()
+    };
+    let tags = client.list_tags().await?;
     Ok(TagData {
-        tags: vec![],
+        tags,
         document_tags: HashMap::new(),
         categories: vec![],
         document_categories: HashMap::new(),
