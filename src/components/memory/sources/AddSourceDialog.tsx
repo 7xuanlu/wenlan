@@ -25,6 +25,7 @@ export default function AddSourceDialog({ onClose, onSuccess }: Props) {
     mutationFn: ({ sourceType, sourcePath }: { sourceType: string; sourcePath: string }) =>
       addSource(sourceType as "obsidian", sourcePath),
     onSuccess: (newSource) => {
+      queryClient.invalidateQueries({ queryKey: ["registeredSources"] });
       // Auto-trigger sync in background (don't await)
       syncRegisteredSource(newSource.id).then(() => {
         queryClient.invalidateQueries({ queryKey: ["registeredSources"] });

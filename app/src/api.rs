@@ -124,6 +124,24 @@ impl WenlanClient {
             .map_err(|e| format!("Parse {}: {}", path, e))
     }
 
+    async fn delete_empty(&self, path: &str) -> Result<(), String> {
+        let resp = self
+            .client
+            .delete(self.url(path))
+            .send()
+            .await
+            .map_err(|e| format!("HTTP DELETE {}: {}", path, e))?;
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let text = resp.text().await.unwrap_or_default();
+            return Err(format!(
+                "HTTP DELETE {} returned {}: {}",
+                path, status, text
+            ));
+        }
+        Ok(())
+    }
+
     pub async fn delete_json<Req: Serialize, Resp: DeserializeOwned>(
         &self,
         path: &str,
@@ -188,6 +206,34 @@ impl WenlanClient {
         &self,
     ) -> Result<Vec<wenlan_types::import::PendingImport>, String> {
         self.get_json("/api/import/state").await
+    }
+
+    // ── Source registry ──────────────────────────────────────────────
+
+    pub async fn list_sources(&self) -> Result<Vec<wenlan_types::sources::Source>, String> {
+        self.get_json("/api/sources").await
+    }
+
+    pub async fn add_source(
+        &self,
+        source_type: String,
+        path: String,
+    ) -> Result<wenlan_types::sources::Source, String> {
+        let req = wenlan_types::requests::AddSourceRequest { source_type, path };
+        self.post_json("/api/sources", &req).await
+    }
+
+    pub async fn remove_source(&self, id: &str) -> Result<(), String> {
+        let path = format!("/api/sources/{}", id);
+        self.delete_empty(&path).await
+    }
+
+    pub async fn sync_source(
+        &self,
+        id: &str,
+    ) -> Result<wenlan_types::responses::SyncStatsResponse, String> {
+        let path = format!("/api/sources/{}/sync", id);
+        self.post_empty(&path).await
     }
 
     // ── Onboarding milestones ──────────────────────────────────────
@@ -260,6 +306,22 @@ impl WenlanClient {
         self.get_json(&path).await
     }
 
+    pub async fn get_enrichment_status(
+        &self,
+        source_id: &str,
+    ) -> Result<wenlan_types::EnrichmentStatusResponse, String> {
+        let path = format!("/api/memory/{}/enrichment-status", source_id);
+        self.get_json(&path).await
+    }
+
+    pub async fn get_memory_revisions(
+        &self,
+        source_id: &str,
+    ) -> Result<wenlan_types::responses::ListMemoryRevisionsResponse, String> {
+        let path = format!("/api/memory/{}/revisions", source_id);
+        self.get_json(&path).await
+    }
+
     pub async fn list_unconfirmed_memories(
         &self,
         limit: i64,
@@ -300,6 +362,33 @@ impl WenlanClient {
         page_id: &str,
     ) -> Result<Vec<wenlan_types::PageSourceWithMemory>, String> {
         let path = format!("/api/pages/{}/sources", page_id);
+        self.get_json(&path).await
+    }
+
+    pub async fn get_page_links(
+        &self,
+        page_id: &str,
+    ) -> Result<wenlan_types::responses::PageLinksResponse, String> {
+        let path = format!("/api/pages/{}/links", page_id);
+        self.get_json(&path).await
+    }
+
+    pub async fn get_page_revisions(
+        &self,
+        page_id: &str,
+    ) -> Result<wenlan_types::responses::ListPageRevisionsResponse, String> {
+        let path = format!("/api/pages/{}/revisions", page_id);
+        self.get_json(&path).await
+    }
+
+    pub async fn list_orphan_links(
+        &self,
+        min_count: Option<usize>,
+    ) -> Result<wenlan_types::responses::OrphanLinksResponse, String> {
+        let path = match min_count {
+            Some(min_count) => format!("/api/pages/orphan-links?min_count={}", min_count),
+            None => "/api/pages/orphan-links".to_string(),
+        };
         self.get_json(&path).await
     }
 
@@ -542,6 +631,27 @@ mod tests {
     }
 
     #[test]
+    fn wenlan_client_exposes_enrichment_status_method() {
+        let _get_enrichment_status = WenlanClient::get_enrichment_status;
+    }
+
+    #[test]
+    fn enrichment_status_response_deserializes_daemon_payload() {
+        let status: wenlan_types::EnrichmentStatusResponse =
+            serde_json::from_value(serde_json::json!({
+                "source_id": "mem-1",
+                "summary": "complete",
+                "steps": [
+                    { "step": "classify", "status": "done", "error": null, "attempts": 1 }
+                ]
+            }))
+            .unwrap();
+
+        assert_eq!(status.source_id, "mem-1");
+        assert_eq!(status.steps[0].step, "classify");
+    }
+
+    #[test]
     fn wenlan_client_exposes_refinery_queue_methods() {
         let _list = WenlanClient::list_refinements;
         let _accept = WenlanClient::accept_refinement;
@@ -554,5 +664,75 @@ mod tests {
         let _set_model_choice = WenlanClient::set_model_choice;
         let _get_external_llm = WenlanClient::get_external_llm;
         let _set_external_llm = WenlanClient::set_external_llm;
+    }
+
+    #[test]
+    fn wenlan_client_exposes_source_registry_methods() {
+        let _list = WenlanClient::list_sources;
+        let _add = WenlanClient::add_source;
+        let _remove = WenlanClient::remove_source;
+        let _sync = WenlanClient::sync_source;
+    }
+
+    #[test]
+    fn wenlan_client_exposes_page_link_methods() {
+        let _get = WenlanClient::get_page_links;
+        let _list = WenlanClient::list_orphan_links;
+    }
+
+    #[test]
+    fn wenlan_client_exposes_revision_history_methods() {
+        let _memory = WenlanClient::get_memory_revisions;
+        let _page = WenlanClient::get_page_revisions;
+    }
+
+    #[test]
+    fn revision_history_responses_deserialize_daemon_payloads() {
+        let memory: wenlan_types::responses::ListMemoryRevisionsResponse =
+            serde_json::from_value(serde_json::json!({
+                "current_source_id": "mem-1",
+                "chain_depth": 1,
+                "entries": [
+                    {
+                        "source_id": "mem-1",
+                        "depth": 0,
+                        "title": "Current",
+                        "content_preview": "Current version",
+                        "last_modified": 10,
+                        "source_agent": "claude-code",
+                        "supersede_mode": "protected_revision",
+                        "delta_summary": "Clarified wording"
+                    }
+                ]
+            }))
+            .unwrap();
+        assert_eq!(memory.current_source_id, "mem-1");
+        assert_eq!(
+            memory.entries[0].delta_summary.as_deref(),
+            Some("Clarified wording")
+        );
+
+        let page: wenlan_types::responses::ListPageRevisionsResponse =
+            serde_json::from_value(serde_json::json!({
+                "page_id": "page-1",
+                "current_version": 2,
+                "user_edited": false,
+                "stale_reason": null,
+                "entries": [
+                    {
+                        "version": 2,
+                        "at": 1782490000000i64,
+                        "edited_by": "distill",
+                        "delta_summary": "Added backlinks",
+                        "incoming_source_ids": ["mem-1"]
+                    }
+                ]
+            }))
+            .unwrap();
+        assert_eq!(page.page_id, "page-1");
+        assert_eq!(
+            page.entries[0].incoming_source_ids.as_ref().unwrap(),
+            &vec!["mem-1".to_string()]
+        );
     }
 }

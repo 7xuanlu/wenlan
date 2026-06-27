@@ -684,6 +684,39 @@ export interface MemoryVersionItem {
   last_modified: number;
 }
 
+export interface MemoryRevisionEntry {
+  source_id: string;
+  depth: number;
+  title: string;
+  content_preview: string;
+  last_modified: number;
+  source_agent?: string | null;
+  supersede_mode?: string | null;
+  delta_summary?: string | null;
+}
+
+export interface ListMemoryRevisionsResponse {
+  current_source_id: string;
+  chain_depth: number;
+  entries: MemoryRevisionEntry[];
+}
+
+export interface PageChangelogEntry {
+  version: number;
+  at: number;
+  edited_by: string;
+  delta_summary?: string | null;
+  incoming_source_ids?: string[] | null;
+}
+
+export interface ListPageRevisionsResponse {
+  page_id: string;
+  current_version: number;
+  user_edited: boolean;
+  stale_reason?: string | null;
+  entries: PageChangelogEntry[];
+}
+
 // ── Memory Page ─────────────────────────────────────────────────────
 
 export interface Entity {
@@ -837,6 +870,31 @@ export interface PageSourceWithMemory {
 /** @deprecated Use {@link PageSourceWithMemory} instead. Kept for gradual migration. */
 export type ConceptSourceWithMemory = PageSourceWithMemory;
 
+export interface PageLinkOutbound {
+  label: string;
+  target_page_id: string | null;
+}
+
+export interface PageLinkInbound {
+  source_page_id: string;
+  label: string;
+}
+
+export interface PageLinksResponse {
+  outbound: PageLinkOutbound[];
+  inbound: PageLinkInbound[];
+}
+
+export interface OrphanLink {
+  label: string;
+  count: number;
+}
+
+export interface OrphanLinksResponse {
+  min_count: number;
+  orphan_labels: OrphanLink[];
+}
+
 export async function getPageSources(
   pageId: string,
 ): Promise<PageSourceWithMemory[]> {
@@ -852,6 +910,14 @@ export async function getConceptSources(
   conceptId: string,
 ): Promise<PageSourceWithMemory[]> {
   return getPageSources(conceptId);
+}
+
+export async function getPageLinks(pageId: string): Promise<PageLinksResponse> {
+  return invoke("get_page_links", { pageId });
+}
+
+export async function listOrphanLinks(minCount?: number): Promise<OrphanLinksResponse> {
+  return invoke("list_orphan_links", { minCount: minCount ?? null });
 }
 
 // ── Profiles & Agent Connections ─────────────────────────────────────
@@ -1022,6 +1088,25 @@ export async function getMemoryDetail(sourceId: string): Promise<MemoryItem | nu
   return memory ? withDomain(memory) : null;
 }
 
+export interface EnrichmentStepStatus {
+  step: string;
+  status: string;
+  error?: string | null;
+  attempts: number;
+}
+
+export interface EnrichmentStatusResponse {
+  source_id: string;
+  summary: string;
+  steps: EnrichmentStepStatus[];
+}
+
+export async function getEnrichmentStatus(
+  sourceId: string,
+): Promise<EnrichmentStatusResponse> {
+  return invoke("get_enrichment_status", { sourceId });
+}
+
 /** Batch-fetch multiple memories by source_id in one round trip. Missing ids are silently omitted. */
 export async function listMemoriesByIds(ids: string[]): Promise<MemoryItem[]> {
   if (ids.length === 0) return [];
@@ -1091,6 +1176,18 @@ export async function getVersionChain(
   sourceId: string,
 ): Promise<MemoryVersionItem[]> {
   return invoke("get_version_chain_cmd", { sourceId });
+}
+
+export async function getMemoryRevisions(
+  sourceId: string,
+): Promise<ListMemoryRevisionsResponse> {
+  return invoke("get_memory_revisions", { sourceId });
+}
+
+export async function getPageRevisions(
+  pageId: string,
+): Promise<ListPageRevisionsResponse> {
+  return invoke("get_page_revisions", { pageId });
 }
 
 export async function listPendingRevisions(limit?: number): Promise<PendingRevisionItem[]> {

@@ -33,6 +33,7 @@ describe("PageDetail export", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     vi.mocked(tauri.getPage).mockResolvedValue(MOCK_PAGE);
+    vi.mocked(tauri.getPageLinks).mockResolvedValue({ outbound: [], inbound: [] });
     vi.mocked(tauri.listPages).mockResolvedValue([MOCK_PAGE]);
   });
 

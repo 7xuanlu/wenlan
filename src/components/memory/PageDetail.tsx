@@ -3,7 +3,8 @@ import { useState, useCallback, useMemo, useRef, useEffect } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
   getPage,
-  listPages,
+  getPageLinks,
+  getPageRevisions,
   updatePage,
   deletePage,
   clipboardWrite,
@@ -11,7 +12,6 @@ import {
   listRegisteredSources,
   getPageSources,
   type MemoryItem,
-  type Page,
 } from "../../lib/tauri";
 import ContentRenderer from "./ContentRenderer";
 
@@ -30,29 +30,21 @@ function relativeTimeFromISO(iso: string): string {
   return `${Math.floor(diff / 86400)}d ago`;
 }
 
-/** Parse [[wikilinks]] from content */
-function parseRelatedConcepts(content: string): Array<{ title: string }> {
-  const links: Array<{ title: string }> = [];
-  const seen = new Set<string>();
-  const wikiLinkRegex = /\[\[([^\]]+)\]\]/g;
-  let match;
-  while ((match = wikiLinkRegex.exec(content)) !== null) {
-    const title = match[1];
-    if (!seen.has(title.toLowerCase())) {
-      seen.add(title.toLowerCase());
-      links.push({ title });
-    }
-  }
-  return links;
+function normalizeLinkLabel(label: string): string {
+  return label.trim().toLowerCase();
 }
 
-/** Build a map of lowercase title → page id for resolved wikilinks */
-function buildPageLookup(pages: Page[]): Map<string, string> {
-  const map = new Map<string, string>();
-  for (const c of pages) {
-    map.set(c.title.toLowerCase(), c.id);
-  }
-  return map;
+function parseWikilink(inner: string): { targetLabel: string; displayText: string } {
+  const pipeIndex = inner.indexOf("|");
+  const rawTarget = pipeIndex >= 0 ? inner.slice(0, pipeIndex) : inner;
+  const headingIndex = rawTarget.indexOf("#");
+  const targetLabel = (headingIndex >= 0 ? rawTarget.slice(0, headingIndex) : rawTarget).trim();
+  const targetDisplay = targetLabel || rawTarget.trim();
+  const alias = pipeIndex >= 0 ? inner.slice(pipeIndex + 1).trim() : "";
+  return {
+    targetLabel,
+    displayText: alias || targetDisplay || inner.trim(),
+  };
 }
 
 function folderName(path: string): string {
@@ -111,13 +103,31 @@ export default function PageDetail({ pageId, onBack, onMemoryClick, onPageClick 
     queryFn: () => getPage(pageId),
   });
 
-  const { data: allPages = [] } = useQuery({
-    queryKey: ["pages-for-links"],
-    queryFn: () => listPages("active"),
-    staleTime: 30000,
+  const { data: pageLinks } = useQuery({
+    queryKey: ["page-links", pageId],
+    queryFn: () => getPageLinks(pageId),
+    enabled: !!pageId,
+    staleTime: 30_000,
+    retry: false,
   });
 
-  const pageLookup = buildPageLookup(allPages);
+  const { data: pageRevisions } = useQuery({
+    queryKey: ["page-revisions", pageId],
+    queryFn: () => getPageRevisions(pageId),
+    enabled: !!pageId,
+    staleTime: 30_000,
+    retry: false,
+  });
+
+  const outboundTargetByLabel = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const link of pageLinks?.outbound ?? []) {
+      if (link.target_page_id) {
+        map.set(normalizeLinkLabel(link.label), link.target_page_id);
+      }
+    }
+    return map;
+  }, [pageLinks]);
 
   const { data: registeredSources = [] } = useQuery({
     queryKey: ["registeredSources"],
@@ -153,6 +163,8 @@ export default function PageDetail({ pageId, onBack, onMemoryClick, onPageClick 
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["page", pageId] });
       queryClient.invalidateQueries({ queryKey: ["pages"] });
+      queryClient.invalidateQueries({ queryKey: ["page-links", pageId] });
+      queryClient.invalidateQueries({ queryKey: ["page-revisions", pageId] });
       setEditing(false);
     },
   });
@@ -244,17 +256,17 @@ export default function PageDetail({ pageId, onBack, onMemoryClick, onPageClick 
   }
 
   const sourceCount = pageSources?.length ?? page.source_memory_ids.length;
-  const relatedPages = parseRelatedConcepts(page.content);
 
   // Strip ## Sources (shown as MemoryCard UI below)
   // Convert [[wikilinks]] to markdown links if they resolve to pages, else plain text
   const cleanedContent = page.content
     .replace(/^#\s+.*\n+/, "") // Strip title heading (displayed separately by UI)
     .replace(/## Sources\n[\s\S]*?(?=\n## |\s*$)/, "")
-    .replace(/\[\[([^\]]+)\]\]/g, (_match, title) => {
-      const cid = pageLookup.get(title.toLowerCase());
-      if (cid) return `[${title}](#concept:${cid})`;
-      return title;
+    .replace(/\[\[([^\]]+)\]\]/g, (_match, inner) => {
+      const link = parseWikilink(inner);
+      const cid = outboundTargetByLabel.get(normalizeLinkLabel(link.targetLabel));
+      if (cid) return `[${link.displayText}](#concept:${cid})`;
+      return link.displayText;
     })
     .trim();
 
@@ -284,10 +296,10 @@ export default function PageDetail({ pageId, onBack, onMemoryClick, onPageClick 
     }
   };
 
-  // Only show Related Pages for wikilinks that resolve to actual pages
-  const resolvedPages = relatedPages
-    .map((rc) => ({ title: rc.title, id: pageLookup.get(rc.title.toLowerCase()) }))
-    .filter((rc): rc is { title: string; id: string } => rc.id != null);
+  const outboundLinks = pageLinks?.outbound ?? [];
+  const inboundLinks = pageLinks?.inbound ?? [];
+  const hasPageLinks = !!pageLinks && (outboundLinks.length > 0 || inboundLinks.length > 0);
+  const pageRevisionEntries = pageRevisions?.entries ?? [];
 
   return (
     <div className="flex flex-col gap-6">
@@ -506,9 +518,9 @@ export default function PageDetail({ pageId, onBack, onMemoryClick, onPageClick 
         </div>
       )}
 
-      {/* Related Pages — from [[wikilinks]] in content */}
-      {!editing && resolvedPages.length > 0 && (
-        <div>
+      {/* Page links — daemon-resolved inbound/outbound relationships */}
+      {!editing && hasPageLinks && (
+        <div aria-label="Page links">
           <h3
             className="mb-2"
             style={{
@@ -520,29 +532,181 @@ export default function PageDetail({ pageId, onBack, onMemoryClick, onPageClick 
               color: "var(--mem-text-tertiary)",
             }}
           >
-            Related Pages
+            Page Links
           </h3>
           <div className="flex flex-col gap-1.5">
-            {resolvedPages.map((rc) => (
-              <button
-                key={rc.id}
-                onClick={() => onPageClick?.(rc.id)}
-                className="w-full text-left rounded-lg px-4 py-3 transition-colors duration-150 cursor-pointer hover:bg-[var(--mem-hover)] group"
-                style={{ backgroundColor: "var(--mem-surface)", border: "1px solid var(--mem-border)" }}
-              >
+            {outboundLinks.map((link, idx) => {
+              const key = `out-${link.label}-${link.target_page_id ?? idx}`;
+              const targetPageId = link.target_page_id;
+              const inner = (
                 <div className="flex items-center gap-2">
                   <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" style={{ color: "var(--mem-accent-page)" }} className="shrink-0">
                     <path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5" />
                   </svg>
                   <span
-                    className="group-hover:text-[var(--mem-accent-indigo)] transition-colors"
+                    className={targetPageId ? "group-hover:text-[var(--mem-accent-indigo)] transition-colors" : undefined}
                     style={{ fontFamily: "var(--mem-font-body)", fontSize: "13px", fontWeight: 500, color: "var(--mem-text)" }}
                   >
-                    {rc.title}
+                    {link.label}
                   </span>
                 </div>
-              </button>
-            ))}
+              );
+              if (!targetPageId) {
+                return (
+                  <div
+                    key={key}
+                    className="w-full text-left rounded-lg px-4 py-3"
+                    style={{ backgroundColor: "var(--mem-surface)", border: "1px solid var(--mem-border)" }}
+                  >
+                    {inner}
+                  </div>
+                );
+              }
+              return (
+                <button
+                  key={key}
+                  onClick={() => onPageClick?.(targetPageId)}
+                  className="w-full text-left rounded-lg px-4 py-3 transition-colors duration-150 cursor-pointer hover:bg-[var(--mem-hover)] group"
+                  style={{ backgroundColor: "var(--mem-surface)", border: "1px solid var(--mem-border)" }}
+                >
+                  {inner}
+                </button>
+              );
+            })}
+            {inboundLinks.map((link, idx) => {
+              const key = `in-${link.source_page_id}-${link.label}-${idx}`;
+              const inner = (
+                <div className="flex items-start gap-2">
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" style={{ color: "var(--mem-accent-indigo)" }} className="shrink-0">
+                    <path d="M7 7h10v10M17 7L7 17" />
+                  </svg>
+                  <div className="min-w-0">
+                    <span
+                      className={onPageClick ? "group-hover:text-[var(--mem-accent-indigo)] transition-colors" : undefined}
+                      style={{ fontFamily: "var(--mem-font-body)", fontSize: "13px", fontWeight: 500, color: "var(--mem-text)" }}
+                    >
+                      {link.label}
+                    </span>
+                    <div
+                      style={{
+                        fontFamily: "var(--mem-font-mono)",
+                        fontSize: "10px",
+                        color: "var(--mem-text-tertiary)",
+                        marginTop: "2px",
+                      }}
+                    >
+                      from {link.source_page_id}
+                    </div>
+                  </div>
+                </div>
+              );
+              if (!onPageClick) {
+                return (
+                  <div
+                    key={key}
+                    className="w-full text-left rounded-lg px-4 py-3"
+                    style={{ backgroundColor: "var(--mem-surface)", border: "1px solid var(--mem-border)" }}
+                  >
+                    {inner}
+                  </div>
+                );
+              }
+              return (
+                <button
+                  key={key}
+                  onClick={() => onPageClick(link.source_page_id)}
+                  className="w-full text-left rounded-lg px-4 py-3 transition-colors duration-150 cursor-pointer hover:bg-[var(--mem-hover)] group"
+                  style={{ backgroundColor: "var(--mem-surface)", border: "1px solid var(--mem-border)" }}
+                >
+                  {inner}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {/* Revision history — daemon page changelog */}
+      {!editing && pageRevisionEntries.length > 0 && (
+        <div aria-label="Revision history">
+          <h3
+            className="mb-2"
+            style={{
+              fontFamily: "var(--mem-font-mono)",
+              fontSize: "11px",
+              fontWeight: 600,
+              letterSpacing: "0.05em",
+              textTransform: "uppercase",
+              color: "var(--mem-text-tertiary)",
+            }}
+          >
+            Revision History
+          </h3>
+          <div className="flex flex-col gap-1.5">
+            {pageRevisionEntries.map((entry) => {
+              const incomingCount = entry.incoming_source_ids?.length ?? 0;
+              return (
+                <div
+                  key={`${entry.version}-${entry.at}`}
+                  className="rounded-lg px-4 py-3"
+                  style={{ backgroundColor: "var(--mem-surface)", border: "1px solid var(--mem-border)" }}
+                >
+                  <div className="flex items-center gap-2 mb-1 flex-wrap">
+                    <span
+                      style={{
+                        fontFamily: "var(--mem-font-mono)",
+                        fontSize: "11px",
+                        fontWeight: 600,
+                        color: "var(--mem-accent-page)",
+                      }}
+                    >
+                      v{entry.version}
+                    </span>
+                    <span
+                      style={{
+                        fontFamily: "var(--mem-font-body)",
+                        fontSize: "12px",
+                        color: "var(--mem-text-secondary)",
+                      }}
+                    >
+                      {entry.edited_by}
+                    </span>
+                    <span
+                      style={{
+                        fontFamily: "var(--mem-font-mono)",
+                        fontSize: "10px",
+                        color: "var(--mem-text-tertiary)",
+                      }}
+                    >
+                      {relativeMs(entry.at * 1000)}
+                    </span>
+                    {incomingCount > 0 && (
+                      <span
+                        style={{
+                          fontFamily: "var(--mem-font-mono)",
+                          fontSize: "10px",
+                          color: "var(--mem-text-tertiary)",
+                        }}
+                      >
+                        {incomingCount} incoming {incomingCount === 1 ? "memory" : "memories"}
+                      </span>
+                    )}
+                  </div>
+                  {entry.delta_summary && (
+                    <p
+                      style={{
+                        fontFamily: "var(--mem-font-body)",
+                        fontSize: "13px",
+                        color: "var(--mem-text)",
+                        lineHeight: "1.5",
+                      }}
+                    >
+                      {entry.delta_summary}
+                    </p>
+                  )}
+                </div>
+              );
+            })}
           </div>
         </div>
       )}

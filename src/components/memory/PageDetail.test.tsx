@@ -58,6 +58,7 @@ vi.mock("../../lib/tauri", () => ({
   listRegisteredSources: vi.fn().mockResolvedValue([
     { id: "obsidian-vault", source_type: "obsidian", path: "/Users/test/vault", status: "Active", last_sync: null, file_count: 10, memory_count: 20 },
   ]),
+  getPageLinks: vi.fn().mockResolvedValue({ outbound: [], inbound: [] }),
   listPages: vi.fn().mockResolvedValue([]),
   updatePage: vi.fn().mockResolvedValue(undefined),
   deletePage: vi.fn().mockResolvedValue(undefined),
@@ -135,29 +136,29 @@ describe("PageDetail", () => {
     expect(topDiv.className).not.toContain("h-screen");
   });
 
-  it("shows Related Pages only for resolved wikilinks", async () => {
-    const { listPages: mockList } = await import("../../lib/tauri");
-    (mockList as ReturnType<typeof vi.fn>).mockResolvedValue([
-      { id: "concept_eg", title: "Entity Graph", summary: null, content: "", entity_id: null, domain: null, source_memory_ids: [], version: 1, status: "active", created_at: "", last_compiled: "", last_modified: "" },
-    ]);
+  it("shows Page Links from daemon page links without listPages inference", async () => {
+    const { getPageLinks, listPages: mockList } = await import("../../lib/tauri");
+    (getPageLinks as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+      outbound: [{ label: "Entity Graph", target_page_id: "concept_eg" }],
+      inbound: [],
+    });
     renderWithQuery(<PageDetail {...defaultProps} />);
-    expect(await screen.findByText("Related Pages")).toBeTruthy();
-    // Entity Graph resolves — should appear as navigable card
+    expect(await screen.findByLabelText("Page links")).toBeTruthy();
     const entityEls = await screen.findAllByText("Entity Graph");
     const cardSpan = entityEls.find((el) => el.tagName === "SPAN");
     expect(cardSpan).toBeTruthy();
-    // Reset mock for other tests
-    (mockList as ReturnType<typeof vi.fn>).mockResolvedValue([]);
+    expect(mockList).not.toHaveBeenCalled();
   });
 
-  it("hides Related Pages when no wikilinks resolve", async () => {
-    // Default mock returns empty pages list — no wikilinks resolve
+  it("hides Page Links when the daemon returns no links", async () => {
+    const { listPages: mockList } = await import("../../lib/tauri");
     renderWithQuery(<PageDetail {...defaultProps} />);
     await screen.findByText("libSQL Architecture");
-    expect(screen.queryByText("Related Pages")).toBeNull();
+    expect(screen.queryByLabelText("Page links")).toBeNull();
+    expect(mockList).not.toHaveBeenCalled();
   });
 
-  it("hides Related Pages section when no wikilinks in content", async () => {
+  it("hides Page Links section when no daemon links in content", async () => {
     const { getPage } = await import("../../lib/tauri");
     (getPage as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
       id: "concept_abc",
@@ -175,7 +176,7 @@ describe("PageDetail", () => {
     });
     renderWithQuery(<PageDetail {...defaultProps} />);
     await screen.findByText("Simple Concept");
-    expect(screen.queryByText("Related Pages")).toBeNull();
+    expect(screen.queryByLabelText("Page links")).toBeNull();
   });
 
   it("shows loading placeholders while source memories are fetching", async () => {

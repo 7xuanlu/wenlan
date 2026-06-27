@@ -114,8 +114,11 @@ Run:
 ```bash
 pnpm vitest run src/lib/tauri.test.ts src/components/memory
 cargo test -p origin-app --lib api::tests search::tests -- --nocapture
-MEMORY_ID=$(curl -s "http://127.0.0.1:7878/api/memory/list?limit=1" | jq -r '.memories[0].id')
-curl -s "http://127.0.0.1:7878/api/memory/${MEMORY_ID}/enrichment-status"
+curl -fsS "http://127.0.0.1:7878/api/health" | jq -e '.status == "ok" and (.version | startswith("0.9."))'
+MEMORY_ID=$(curl -fsS "http://127.0.0.1:7878/api/memory/recent?limit=1" | jq -er '.[0].id')
+test -n "${MEMORY_ID}" && test "${MEMORY_ID}" != "null"
+export MEMORY_ID
+curl -fsS "http://127.0.0.1:7878/api/memory/${MEMORY_ID}/enrichment-status" | jq -e '.source_id == env.MEMORY_ID and (.steps | type == "array")'
 ```
 
 - [ ] **Step 5: Commit**

@@ -61,6 +61,50 @@ describe('listWatchPaths', () => {
   });
 });
 
+describe('registered sources', () => {
+  it('listRegisteredSources calls invoke with no args', async () => {
+    mockInvoke.mockResolvedValue([]);
+    await tauri.listRegisteredSources();
+    expect(mockInvoke).toHaveBeenCalledWith('list_registered_sources');
+  });
+
+  it('addSource preserves sourceType arg casing', async () => {
+    const source = {
+      id: 'obsidian-vault',
+      source_type: 'obsidian',
+      path: '/Users/test/vault',
+      status: 'Active',
+      last_sync: null,
+      file_count: 0,
+      memory_count: 0,
+    };
+    mockInvoke.mockResolvedValue(source);
+
+    await expect(tauri.addSource('obsidian', '/Users/test/vault')).resolves.toEqual(source);
+
+    expect(mockInvoke).toHaveBeenCalledWith('add_source', {
+      sourceType: 'obsidian',
+      path: '/Users/test/vault',
+    });
+  });
+
+  it('removeSource passes id', async () => {
+    await tauri.removeSource('obsidian-vault');
+    expect(mockInvoke).toHaveBeenCalledWith('remove_source', { id: 'obsidian-vault' });
+  });
+
+  it('syncRegisteredSource passes id', async () => {
+    const stats = { files_found: 4, ingested: 2, skipped: 1, errors: 0 };
+    mockInvoke.mockResolvedValue(stats);
+
+    await expect(tauri.syncRegisteredSource('obsidian-vault')).resolves.toEqual(stats);
+
+    expect(mockInvoke).toHaveBeenCalledWith('sync_registered_source', {
+      id: 'obsidian-vault',
+    });
+  });
+});
+
 describe('deleteFileChunks', () => {
   it('calls invoke with source and sourceId', async () => {
     await tauri.deleteFileChunks('local_files', 'abc123');
@@ -246,6 +290,23 @@ describe('unpinMemory', () => {
   it('calls invoke with sourceId', async () => {
     await tauri.unpinMemory('src-id-unpin');
     expect(mockInvoke).toHaveBeenCalledWith('unpin_memory', { sourceId: 'src-id-unpin' });
+  });
+});
+
+describe('enrichment status', () => {
+  it('getEnrichmentStatus passes sourceId', async () => {
+    mockInvoke.mockResolvedValue({
+      source_id: 'mem-1',
+      summary: 'complete',
+      steps: [{ step: 'classify', status: 'done', error: null, attempts: 1 }],
+    });
+
+    const result = await tauri.getEnrichmentStatus('mem-1');
+
+    expect(mockInvoke).toHaveBeenCalledWith('get_enrichment_status', {
+      sourceId: 'mem-1',
+    });
+    expect(result.summary).toBe('complete');
   });
 });
 
@@ -525,6 +586,26 @@ describe('version chain', () => {
   });
 });
 
+describe('revision history', () => {
+  it('getMemoryRevisions passes sourceId', async () => {
+    mockInvoke.mockResolvedValue({ current_source_id: 'mem-1', chain_depth: 1, entries: [] });
+    await tauri.getMemoryRevisions('mem-1');
+    expect(mockInvoke).toHaveBeenCalledWith('get_memory_revisions', { sourceId: 'mem-1' });
+  });
+
+  it('getPageRevisions passes pageId', async () => {
+    mockInvoke.mockResolvedValue({
+      page_id: 'page-1',
+      current_version: 2,
+      user_edited: false,
+      stale_reason: null,
+      entries: [],
+    });
+    await tauri.getPageRevisions('page-1');
+    expect(mockInvoke).toHaveBeenCalledWith('get_page_revisions', { pageId: 'page-1' });
+  });
+});
+
 describe('pending revisions', () => {
   it('listPendingRevisions passes default limit', async () => {
     mockInvoke.mockResolvedValue([]);
@@ -788,5 +869,23 @@ describe('page domain compatibility', () => {
       offset: 2,
     });
     expect(pages[0].domain).toBe('work');
+  });
+});
+
+describe('page links wrappers', () => {
+  it('getPageLinks invokes the daemon page link command', async () => {
+    mockInvoke.mockResolvedValue({ outbound: [], inbound: [] });
+
+    await tauri.getPageLinks('page-1');
+
+    expect(mockInvoke).toHaveBeenCalledWith('get_page_links', { pageId: 'page-1' });
+  });
+
+  it('listOrphanLinks invokes the daemon orphan link command with minCount', async () => {
+    mockInvoke.mockResolvedValue({ min_count: 2, orphan_labels: [] });
+
+    await tauri.listOrphanLinks(2);
+
+    expect(mockInvoke).toHaveBeenCalledWith('list_orphan_links', { minCount: 2 });
   });
 });

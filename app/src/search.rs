@@ -1108,6 +1108,30 @@ pub async fn get_memory_detail(
 }
 
 #[tauri::command]
+pub async fn get_enrichment_status(
+    state: tauri::State<'_, State>,
+    source_id: String,
+) -> Result<wenlan_types::EnrichmentStatusResponse, String> {
+    let client = {
+        let s = state.read().await;
+        s.client.clone()
+    };
+    client.get_enrichment_status(&source_id).await
+}
+
+#[tauri::command]
+pub async fn get_memory_revisions(
+    state: tauri::State<'_, State>,
+    source_id: String,
+) -> Result<responses::ListMemoryRevisionsResponse, String> {
+    let client = {
+        let s = state.read().await;
+        s.client.clone()
+    };
+    client.get_memory_revisions(&source_id).await
+}
+
+#[tauri::command]
 pub async fn list_memories_by_ids(
     state: tauri::State<'_, State>,
     ids: Vec<String>,
@@ -2620,6 +2644,36 @@ pub async fn get_page_sources(
 }
 
 #[tauri::command]
+pub async fn get_page_links(
+    state: tauri::State<'_, State>,
+    page_id: String,
+) -> Result<responses::PageLinksResponse, String> {
+    let client = { state.read().await.client.clone() };
+    client.get_page_links(&page_id).await
+}
+
+#[tauri::command]
+pub async fn get_page_revisions(
+    state: tauri::State<'_, State>,
+    page_id: String,
+) -> Result<responses::ListPageRevisionsResponse, String> {
+    let client = {
+        let s = state.read().await;
+        s.client.clone()
+    };
+    client.get_page_revisions(&page_id).await
+}
+
+#[tauri::command]
+pub async fn list_orphan_links(
+    state: tauri::State<'_, State>,
+    min_count: Option<usize>,
+) -> Result<responses::OrphanLinksResponse, String> {
+    let client = { state.read().await.client.clone() };
+    client.list_orphan_links(min_count).await
+}
+
+#[tauri::command]
 pub async fn export_pages_to_obsidian(
     state: tauri::State<'_, State>,
     vault_path: String,
@@ -2718,7 +2772,7 @@ pub async fn add_source(
         return Err(format!("Path is not a directory: {}", path));
     }
 
-    let st = match source_type.as_str() {
+    match source_type.as_str() {
         "obsidian" => {
             // Accept any folder of markdown files, Obsidian vault or not.
             // Frontend detects .obsidian/ for cosmetic badge purposes.
@@ -2728,18 +2782,33 @@ pub async fn add_source(
             if !crate::sources::obsidian::has_any_markdown(&path_buf) {
                 return Err(format!("No markdown files found in: {}", path));
             }
-            crate::sources::SourceType::Obsidian
+            let client = {
+                let s = state.read().await;
+                s.client.clone()
+            };
+            client.add_source("obsidian".to_string(), path).await
         }
-        "directory" => crate::sources::SourceType::Directory,
-        other => return Err(format!("Unknown source_type: {}", other)),
-    };
+        "directory" => add_directory_source(&state, &watcher, path_buf, &path).await,
+        other => Err(format!("Unknown source_type: {}", other)),
+    }
+}
 
+async fn add_directory_source(
+    state: &tauri::State<'_, State>,
+    watcher: &tauri::State<'_, WatcherState>,
+    path_buf: PathBuf,
+    path: &str,
+) -> Result<crate::sources::Source, String> {
     let dirname = path_buf
         .file_name()
         .map(|n| n.to_string_lossy().to_string())
         .unwrap_or_else(|| "dir".to_string());
     let slug = crate::sources::obsidian::slugify(&dirname);
-    let id = format!("{}-{}", st.as_str(), slug);
+    let id = format!(
+        "{}-{}",
+        crate::sources::SourceType::Directory.as_str(),
+        slug
+    );
 
     let mut cfg = config::load_config();
     if cfg.sources.iter().any(|s| s.path == path_buf) {
@@ -2748,7 +2817,7 @@ pub async fn add_source(
 
     let source = crate::sources::Source {
         id: id.clone(),
-        source_type: st.clone(),
+        source_type: crate::sources::SourceType::Directory,
         path: path_buf.clone(),
         status: crate::sources::SyncStatus::Active,
         last_sync: None,
@@ -2761,22 +2830,20 @@ pub async fn add_source(
     cfg.sources.push(source.clone());
     config::save_config(&cfg).map_err(|e| e.to_string())?;
 
-    if st == crate::sources::SourceType::Directory {
-        {
-            let mut app_state = state.write().await;
-            if !app_state.watch_paths.contains(&path_buf) {
-                app_state.watch_paths.push(path_buf.clone());
-            }
+    {
+        let mut app_state = state.write().await;
+        if !app_state.watch_paths.contains(&path_buf) {
+            app_state.watch_paths.push(path_buf.clone());
         }
-        let mut watcher_guard = watcher.lock().await;
-        if watcher_guard.is_none() {
-            let state_arc = state.inner().clone();
-            *watcher_guard =
-                Some(crate::indexer::create_file_watcher(state_arc).map_err(|e| e.to_string())?);
-        }
-        if let Some(w) = watcher_guard.as_mut() {
-            crate::indexer::watch_path(w, &path_buf).map_err(|e| e.to_string())?;
-        }
+    }
+    let mut watcher_guard = watcher.lock().await;
+    if watcher_guard.is_none() {
+        let state_arc = state.inner().clone();
+        *watcher_guard =
+            Some(crate::indexer::create_file_watcher(state_arc).map_err(|e| e.to_string())?);
+    }
+    if let Some(w) = watcher_guard.as_mut() {
+        crate::indexer::watch_path(w, &path_buf).map_err(|e| e.to_string())?;
     }
 
     Ok(source)
@@ -2784,29 +2851,75 @@ pub async fn add_source(
 
 #[tauri::command]
 pub async fn remove_source(state: tauri::State<'_, State>, id: String) -> Result<(), String> {
-    let mut cfg = config::load_config();
-    let source = cfg
+    let local_source = config::load_config()
         .sources
         .iter()
         .find(|s| s.id == id)
-        .cloned()
-        .ok_or_else(|| format!("Source not found: {}", id))?;
+        .cloned();
 
+    if let Some(source) = local_source {
+        if source.source_type == crate::sources::SourceType::Directory {
+            return remove_directory_source(&state, &id, source).await;
+        }
+    }
+
+    let client = {
+        let s = state.read().await;
+        s.client.clone()
+    };
+    client.remove_source(&id).await
+}
+
+async fn remove_directory_source(
+    state: &tauri::State<'_, State>,
+    id: &str,
+    source: crate::sources::Source,
+) -> Result<(), String> {
+    let mut cfg = config::load_config();
+    if !cfg.sources.iter().any(|s| s.id == id) {
+        return Err(format!("Source not found: {}", id));
+    }
     cfg.sources.retain(|s| s.id != id);
     config::save_config(&cfg).map_err(|e| e.to_string())?;
 
-    {
-        let mut app_state = state.write().await;
-        app_state.watch_paths.retain(|p| p != &source.path);
-    }
-
+    let mut app_state = state.write().await;
+    app_state.watch_paths.retain(|p| p != &source.path);
     Ok(())
 }
 
 #[tauri::command]
-pub async fn list_registered_sources() -> Result<Vec<crate::sources::Source>, String> {
-    let cfg = config::load_config();
-    Ok(cfg.sources)
+pub async fn list_registered_sources(
+    state: tauri::State<'_, State>,
+) -> Result<Vec<crate::sources::Source>, String> {
+    let client = {
+        let s = state.read().await;
+        s.client.clone()
+    };
+    let daemon_sources = client.list_sources().await?;
+    let local_sources = config::load_config().sources;
+    Ok(merge_registered_sources_with_local_directories(
+        daemon_sources,
+        local_sources,
+    ))
+}
+
+fn merge_registered_sources_with_local_directories(
+    mut daemon_sources: Vec<crate::sources::Source>,
+    local_sources: Vec<crate::sources::Source>,
+) -> Vec<crate::sources::Source> {
+    for source in local_sources
+        .into_iter()
+        .filter(|s| s.source_type == crate::sources::SourceType::Directory)
+    {
+        if daemon_sources
+            .iter()
+            .any(|existing| existing.id == source.id || existing.path == source.path)
+        {
+            continue;
+        }
+        daemon_sources.push(source);
+    }
+    daemon_sources
 }
 
 #[tauri::command]
@@ -2814,25 +2927,31 @@ pub async fn sync_registered_source(
     state: tauri::State<'_, State>,
     id: String,
 ) -> Result<SyncStats, String> {
-    let cfg = config::load_config();
-    let source = cfg
+    let local_source = config::load_config()
         .sources
         .iter()
         .find(|s| s.id == id)
-        .cloned()
-        .ok_or_else(|| format!("Source not found: {}", id))?;
+        .cloned();
 
-    if source.source_type != crate::sources::SourceType::Obsidian {
+    if matches!(
+        local_source.as_ref().map(|s| &s.source_type),
+        Some(crate::sources::SourceType::Directory)
+    ) {
         return Err("Only Obsidian sources support manual sync; directory sources use the live file watcher".to_string());
     }
 
-    // The daemon is the canonical writer of `config.sources[*].*` after a
-    // sync — it updates last_sync, file_count, memory_count, and error state
-    // inside `handle_sync_source`. We don't touch config here anymore (it
-    // used to double-count memory_count across the daemon + Tauri writes).
-    crate::sources::sync::sync_obsidian_vault(&source, state.inner())
-        .await
-        .map_err(|e| e.to_string())
+    let client = {
+        let s = state.read().await;
+        s.client.clone()
+    };
+    let stats = client.sync_source(&id).await?;
+    Ok(SyncStats {
+        files_found: stats.files_found,
+        ingested: stats.ingested,
+        skipped: stats.skipped,
+        errors: stats.errors,
+        error_detail: None,
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -3133,5 +3252,56 @@ mod revision_response_tests {
 
         assert!(decoded.triggered_revisions.is_empty());
         assert!(decoded.auto_superseded.is_empty());
+    }
+}
+
+#[cfg(test)]
+mod registered_source_tests {
+    use super::*;
+
+    fn source(
+        id: &str,
+        source_type: crate::sources::SourceType,
+        path: &str,
+    ) -> crate::sources::Source {
+        crate::sources::Source {
+            id: id.to_string(),
+            source_type,
+            path: PathBuf::from(path),
+            status: crate::sources::SyncStatus::Active,
+            last_sync: None,
+            file_count: 0,
+            memory_count: 0,
+            last_sync_errors: 0,
+            last_sync_error_detail: None,
+        }
+    }
+
+    #[test]
+    fn registered_source_listing_keeps_local_directory_sources_only() {
+        let daemon_sources = vec![source(
+            "obsidian-daemon",
+            crate::sources::SourceType::Obsidian,
+            "/Users/test/vault",
+        )];
+        let local_sources = vec![
+            source(
+                "directory-local",
+                crate::sources::SourceType::Directory,
+                "/Users/test/docs",
+            ),
+            source(
+                "obsidian-stale-local",
+                crate::sources::SourceType::Obsidian,
+                "/Users/test/old-vault",
+            ),
+        ];
+
+        let merged = merge_registered_sources_with_local_directories(daemon_sources, local_sources);
+
+        assert_eq!(merged.len(), 2);
+        assert!(merged.iter().any(|s| s.id == "obsidian-daemon"));
+        assert!(merged.iter().any(|s| s.id == "directory-local"));
+        assert!(!merged.iter().any(|s| s.id == "obsidian-stale-local"));
     }
 }

@@ -829,11 +829,13 @@ pub fn run() {
             search::confirm_observation_cmd,
             search::list_memories_cmd,
             search::get_memory_detail,
+            search::get_enrichment_status,
             search::list_memories_by_ids,
             search::get_memory_stats_cmd,
             search::get_home_stats,
             search::update_memory_cmd,
             search::get_version_chain_cmd,
+            search::get_memory_revisions,
             search::reclassify_memory_cmd,
             search::add_observation_cmd,
             // Pending revision commands
@@ -894,6 +896,9 @@ pub fn run() {
             // Page commands
             search::get_page,
             search::get_page_sources,
+            search::get_page_links,
+            search::get_page_revisions,
+            search::list_orphan_links,
             search::update_page,
             search::archive_page,
             search::delete_page,
