@@ -178,7 +178,7 @@ pub fn install_app_plist(launchctl: &dyn LaunchctlExec) -> Result<()> {
 
     let app_path = current_app_path()?;
     let content = APP_PLIST_TEMPLATE
-        .replace("__ORIGIN_APP_PATH__", &app_path.to_string_lossy())
+        .replace("__WENLAN_APP_PATH__", &app_path.to_string_lossy())
         .replace("__LOG_PATH__", &logs.to_string_lossy());
 
     if plist.exists() {
@@ -833,6 +833,12 @@ mod tests {
     }
 
     #[test]
+    fn current_app_plist_template_uses_wenlan_placeholder() {
+        assert!(APP_PLIST_TEMPLATE.contains("__WENLAN_APP_PATH__"));
+        assert!(!APP_PLIST_TEMPLATE.contains("__ORIGIN_APP_PATH__"));
+    }
+
+    #[test]
     #[serial_test::serial]
     fn legacy_app_plist_ownership_accepts_owned_origin_app_path() {
         let _env = EnvGuard::capture();
@@ -924,7 +930,11 @@ mod tests {
         assert!(content.contains("<string>com.wenlan.desktop</string>"));
         assert!(
             !content.contains("__ORIGIN_APP_PATH__"),
-            "placeholder substituted"
+            "legacy placeholder absent"
+        );
+        assert!(
+            !content.contains("__WENLAN_APP_PATH__"),
+            "current placeholder substituted"
         );
 
         let calls = mock.calls.lock().unwrap();

@@ -85,6 +85,7 @@ These are required for feature parity but can follow the P0 review/status/setup 
 |---|---|---|---|
 | Bundle id | `com.origin.desktop` | new installs use `com.wenlan.desktop`; old app state detected | Phase E only |
 | LaunchAgents | `com.origin.desktop`, `com.origin.server` | detect/unload/tombstone old labels; install Wenlan labels | sidecar and data bridge tests |
+| LaunchAgent template | current `com.wenlan.desktop.plist` uses Wenlan placeholders; legacy `com.origin.desktop.plist` retained as bridge artifact | keep legacy template untouched until bridge cleanup | lifecycle template/install tests |
 | Stable app path | `Origin.app` only | accept `/Applications/Wenlan.app` and `~/Applications/Wenlan.app`; detect old `Origin.app` | lifecycle tests |
 | Lifecycle quit command | `quit_wenlan_full` primary; `quit_origin_full` legacy alias | keep Origin alias through bridge release | Tauri wrapper + Rust command tests |
 | Daemon sidecar | `origin-server` | use `wenlan-server`; stop `cargo build -p origin-server` assumption | `cargo build` reaches app code |
