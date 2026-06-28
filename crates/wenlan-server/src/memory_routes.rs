@@ -3206,7 +3206,7 @@ pub async fn handle_get_snapshot_captures_with_content(
 /// Returns the wikilink graph centered on a page: outbound (labels parsed
 /// out of this page's body, with resolved target_page_id when matched) and
 /// inbound (every active page whose body links to this title). Used by
-/// `/read` to surface "3 inbound, 2 broken" without the caller having to
+/// `/pages` to surface "3 inbound, 2 broken" without the caller having to
 /// fetch + parse the full body.
 pub async fn handle_get_page_links(
     State(state): State<Arc<RwLock<ServerState>>>,

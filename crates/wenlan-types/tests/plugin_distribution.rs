@@ -47,3 +47,38 @@ fn plugin_init_repairs_stale_daemon_versions() {
         "SessionStart hook should retry daemon health checks to avoid false down reports"
     );
 }
+
+#[test]
+fn pages_skill_replaces_read() {
+    // `/read` was renamed to `/pages` (browse + preview). The pages skill
+    // must exist, the read skill must be gone, and no user-facing doc may
+    // still advertise `/read`.
+    let pages_path = repo_root().join("plugin/skills/pages/SKILL.md");
+    assert!(
+        pages_path.is_file(),
+        "missing pages skill: {}",
+        pages_path.display()
+    );
+    let read_path = repo_root().join("plugin/skills/read/SKILL.md");
+    assert!(
+        !read_path.exists(),
+        "read skill should be deleted (renamed to /pages): {}",
+        read_path.display()
+    );
+
+    for doc in [
+        "plugin/skills/help/SKILL.md",
+        "plugin/skills/README.md",
+        "plugin/.claude-plugin/README.md",
+    ] {
+        let text = read_text(doc);
+        assert!(
+            !text.contains("/read"),
+            "{doc} still advertises the removed /read command"
+        );
+        assert!(
+            text.contains("/pages"),
+            "{doc} should advertise the /pages command"
+        );
+    }
+}

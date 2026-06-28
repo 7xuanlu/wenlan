@@ -1284,12 +1284,13 @@ impl WenlanMcpServer {
         };
         let resp: SearchPagesResponse =
             try_call!(self.client.post("/api/pages/search", &req), "search_pages");
-        let pretty = serde_json::to_string_pretty(&resp.pages)
-            .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+        // Metadata-only render: never serialize page bodies into the agent's
+        // context. Fetch a single body on demand with get_page.
+        let body = format_page_list(&resp.pages);
         Ok(CallToolResult::success(vec![Content::text(format!(
             "{} pages\n{}",
             resp.pages.len(),
-            pretty
+            body
         ))]))
     }
 
@@ -1615,6 +1616,24 @@ fn build_recent_pages_path(limit: Option<usize>, since_ms: Option<i64>) -> Strin
     path
 }
 
+/// Render a metadata-only listing of pages for MCP tool output: one line
+/// per page as `<id>  <title>  — <summary>`. Deliberately omits `content`
+/// so browsing/searching never dumps full page bodies into the agent's
+/// context — fetch a single body on demand with `get_page`.
+fn format_page_list(pages: &[wenlan_types::Page]) -> String {
+    if pages.is_empty() {
+        return "no pages".to_string();
+    }
+    pages
+        .iter()
+        .map(|p| {
+            let summary = p.summary.as_deref().unwrap_or("(no summary)");
+            format!("{}  {}  — {}", p.id, p.title, summary)
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 /// Percent-encode a string for use in URL query parameter values.
 /// Encodes all characters except unreserved ones (A-Z, a-z, 0-9, `-`, `_`, `.`, `~`).
 fn url_encode_simple(s: &str) -> String {
@@ -1932,7 +1951,7 @@ impl WenlanMcpServer {
     }
 
     #[tool(
-        description = "Fetch a page by id. Returns the full page row including title, summary, body, source memory ids, and metadata. The /read skill uses this for the preview block — agents reading a page should call this rather than guessing the on-disk path, because the md slug is daemon-controlled.",
+        description = "Fetch a page by id. Returns the full page row including title, summary, body, source memory ids, and metadata. The /pages skill uses this for the preview block — agents reading a page should call this rather than guessing the on-disk path, because the md slug is daemon-controlled.",
         annotations(title = "Get page", read_only_hint = true, open_world_hint = false)
     )]
     async fn get_page(
@@ -1943,7 +1962,7 @@ impl WenlanMcpServer {
     }
 
     #[tool(
-        description = "Fetch the wikilink graph centered on one page: `outbound` (labels parsed out of this page's body, with target_page_id set when matched; NULL means broken/orphan) and `inbound` (active pages whose body cites this title). Use this for the /read preview to surface 'N inbound, M broken' without parsing the full body.",
+        description = "Fetch the wikilink graph centered on one page: `outbound` (labels parsed out of this page's body, with target_page_id set when matched; NULL means broken/orphan) and `inbound` (active pages whose body cites this title). Use this for the /pages preview to surface 'N inbound, M broken' without parsing the full body.",
         annotations(
             title = "Get page links",
             read_only_hint = true,
@@ -2432,6 +2451,53 @@ mod tests {
             agent_name.into(),
             user_id.map(String::from),
         )
+    }
+
+    // ===== Page list render (metadata-only) =====
+
+    #[test]
+    fn format_page_list_omits_body() {
+        let page: wenlan_types::Page = serde_json::from_value(serde_json::json!({
+            "id": "page_abc",
+            "title": "Mutex deadlock notes",
+            "summary": "How to avoid self-deadlock with tokio Mutex",
+            "content": "SECRET_BODY_TOKEN should never reach the agent context",
+            "entity_id": null,
+            "source_memory_ids": ["mem_1", "mem_2"],
+            "version": 3,
+            "status": "active",
+            "created_at": "2026-01-01T00:00:00Z",
+            "last_compiled": "2026-01-01T00:00:00Z",
+            "last_modified": "2026-01-01T00:00:00Z",
+            "sources_updated_count": 0,
+            "stale_reason": null,
+            "user_edited": false,
+            "last_edited_by": null,
+            "last_edited_at": null,
+            "last_delta_summary": null,
+            "changelog": null
+        }))
+        .expect("construct Page from json");
+
+        let rendered = format_page_list(std::slice::from_ref(&page));
+        assert!(
+            !rendered.contains("SECRET_BODY_TOKEN"),
+            "page body leaked into list render: {rendered}"
+        );
+        assert!(rendered.contains("page_abc"), "id missing: {rendered}");
+        assert!(
+            rendered.contains("Mutex deadlock notes"),
+            "title missing: {rendered}"
+        );
+        assert!(
+            rendered.contains("How to avoid"),
+            "summary missing: {rendered}"
+        );
+    }
+
+    #[test]
+    fn format_page_list_empty() {
+        assert_eq!(format_page_list(&[]), "no pages");
     }
 
     // ===== Transport resolution (existing) =====

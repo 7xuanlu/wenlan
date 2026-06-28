@@ -244,7 +244,34 @@ update_page(page_id=stale.page_id,
 When `stale_truncated == true`, tell the user "more stale pages
 remain — re-run `/distill` after this pass to continue."
 
-### 3.6 Surface orphan-topic suggestions
+### 3.6 Resolve markdown paths for the report
+
+After every successful `create_page` or `update_page`, resolve the
+on-disk markdown file by page id. Never derive the slug client-side;
+the daemon owns filename collision handling and punctuation rules.
+
+Use `~/.wenlan/pages/.wenlan/state.json`:
+
+```
+Bash: python3 -c '
+import json, os, sys
+state_path = os.path.expanduser("~/.wenlan/pages/.wenlan/state.json")
+pid = sys.argv[1]
+filename = None
+try:
+    with open(state_path) as f:
+        filename = json.load(f).get("pages", {}).get(pid, {}).get("file")
+except FileNotFoundError:
+    pass
+print(f"~/.wenlan/pages/{filename}" if filename else "(no md projection on disk)")
+' "<page_id>"
+```
+
+For new pages, parse `<page_id>` from the `create_page` result line
+(`Created page <id>`). For refreshes, use the known `existing_page_id`
+or `stale.page_id`.
+
+### 3.7 Surface orphan-topic suggestions
 
 `orphan_topics` lists wikilink labels that 2+ existing pages reach
 for but no page is named for. Each entry is a topic-discovery
@@ -278,15 +305,22 @@ Scope `<scope>` is up to date — no new memories to distill.
 ```
 Distilled N page(s) from <total> memories in scope `<scope>`:
   - <Title>  v1, synthesized from <K> sources
+    Open:     ~/.wenlan/pages/<slug>.md
   - <Title>  v3 → v4: +mem_xyz, +250 chars
+    Open:     ~/.wenlan/pages/<slug>.md
   ...
 ```
 
-For each page, `create_page` and `update_page` return a `WriteResult`
-whose `warnings` array carries a pre-formatted delta line from the
-daemon (e.g. `"v3 → v4: +mem_xyz, +250 chars"`). Render it verbatim
-after the title. When `warnings` is empty or the call returned no
-`WriteResult`, fall back to:
+For each page, parse the MCP tool result text:
+
+- `create_page` returns `Created page <id>` plus optional
+  `warning: <delta>` lines.
+- `update_page` returns `Refreshed page <id>` today. Use the known
+  page id and fall back to `refreshed` unless the tool later returns a
+  `warning: <delta>` line.
+
+Render the first `warning: <delta>` payload verbatim after the title
+when present. When no warning line is present, fall back to:
 
 - New page: `v1, synthesized from <K> sources` (K = source_ids length)
 - Refreshed page: `refreshed` (bare, as before)
@@ -308,13 +342,15 @@ topics scatter; would produce a grab-bag page):
 ```
 Refreshed K stale page(s):
   - <Title>  v2 → v3: +mem_abc, +180 chars
+    Open:     ~/.wenlan/pages/<slug>.md
   - <Title>  refreshed
+    Open:     ~/.wenlan/pages/<slug>.md
   ...
 ```
 
-Same delta-line rule as new/refresh clusters: render `warnings[0]`
-from the `update_page` WriteResult verbatim; fall back to `refreshed`
-when absent.
+Same delta-line rule as new/refresh clusters: render the first
+`warning: <delta>` payload from the `update_page` tool output verbatim;
+fall back to `refreshed` when absent.
 
 **If at least one stale page was skipped because `user_edited`:**
 
@@ -337,8 +373,9 @@ just too low quality.
 
 Rules:
 - **Titles, not page ids.** Ids visually truncate; titles read clean.
-- One line per synthesized page. No body in chat — `/read "<title>"`
-  for that.
+- Every synthesized or refreshed page gets its own `Open:` line with
+  the daemon-resolved markdown path. No page body in chat — `/pages
+  "<title>"` to preview one.
 - `<total>` = sum of `source_ids.len()` across the clusters that were
   actually synthesized.
 - If the pass produced fewer pages than expected, it's the clustering

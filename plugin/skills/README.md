@@ -11,6 +11,7 @@ These skills keep the daily interface short:
 /capture     save one durable memory
 /recall      search local memory
 /distill     refresh wiki pages
+/pages [q]   browse + preview distilled pages (picker)
 /review captures|revisions   power-user deep audit; daily flow is /brief
 /forget      delete a memory by ID
 /handoff     end-of-session debrief
@@ -24,11 +25,12 @@ The skills do not store data themselves. They guide Claude Code to use the local
 | Skill | Purpose |
 | --- | --- |
 | `init` | End-to-end setup verifier (daemon + MCP + round-trip). |
-| `help` | One-screen quick reference of the 10 verbs and the daily flow. |
+| `help` | One-screen quick reference of the 11 verbs and the daily flow. |
 | `brief` | Load working context at session start or topic shifts. |
 | `capture` | Save one durable memory: decision, lesson, gotcha, preference, fact, or correction. |
 | `recall` | Query Wenlan for focused context. |
 | `distill` | Refresh wiki pages from accumulated memories. |
+| `pages` | Browse + preview distilled pages via a native picker; query to search by title. |
 | `review` | Power-user deep audit of pending surfaces (captures, revisions). Daily flow handled by `/brief`. |
 | `forget` | Delete a memory by ID. |
 | `handoff` | End-session capture for decisions, lessons, gotchas, and open threads. |
