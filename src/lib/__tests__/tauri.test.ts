@@ -75,6 +75,22 @@ describe("sources, page export, and knowledge wrappers", () => {
     });
   });
 
+  it("testExternalLlm preserves the daemon response envelope", async () => {
+    const { invoke } = await import("@tauri-apps/api/core");
+    const { testExternalLlm } = await import("../tauri");
+    (invoke as ReturnType<typeof vi.fn>).mockResolvedValue({
+      response: "hello",
+    });
+
+    const result = await testExternalLlm("http://localhost:11434/v1", "qwen3");
+
+    expect(result.response).toBe("hello");
+    expect(invoke).toHaveBeenCalledWith("test_external_llm", {
+      endpoint: "http://localhost:11434/v1",
+      model: "qwen3",
+    });
+  });
+
   it("getKnowledgePath calls get_knowledge_path", async () => {
     const { invoke } = await import("@tauri-apps/api/core");
     const { getKnowledgePath } = await import("../tauri");

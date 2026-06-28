@@ -315,10 +315,14 @@ export async function setExternalLlm(
   return invoke("set_external_llm", { endpoint, model });
 }
 
+export interface TestLlmResponse {
+  response: string;
+}
+
 export async function testExternalLlm(
   endpoint: string,
   model: string
-): Promise<string> {
+): Promise<TestLlmResponse> {
   return invoke("test_external_llm", { endpoint, model });
 }
 

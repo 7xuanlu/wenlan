@@ -423,15 +423,17 @@ impl WenlanClient {
         self.get_json(&path).await
     }
 
-    pub async fn test_llm(&self, endpoint: String, model: String) -> Result<String, String> {
+    pub async fn test_llm(
+        &self,
+        endpoint: String,
+        model: String,
+    ) -> Result<wenlan_types::requests::TestLlmResponse, String> {
         let req = wenlan_types::requests::TestLlmRequest {
             endpoint,
             model,
             prompt: None,
         };
-        let resp: wenlan_types::requests::TestLlmResponse =
-            self.post_json("/api/llm/test", &req).await?;
-        Ok(resp.response)
+        self.post_json("/api/llm/test", &req).await
     }
 
     // ── Refinery queue ─────────────────────────────────────────────────────
@@ -862,6 +864,15 @@ mod tests {
         let _get_external_llm = WenlanClient::get_external_llm;
         let _set_external_llm = WenlanClient::set_external_llm;
     }
+
+    #[allow(dead_code)]
+    async fn test_llm_uses_daemon_response_envelope(client: WenlanClient) {
+        let _: Result<wenlan_types::requests::TestLlmResponse, String> =
+            client.test_llm(String::new(), String::new()).await;
+    }
+
+    #[test]
+    fn test_llm_response_type_is_checked() {}
 
     #[test]
     fn wenlan_client_exposes_source_registry_methods() {

@@ -3080,12 +3080,26 @@ pub async fn test_external_llm(
     state: tauri::State<'_, State>,
     endpoint: String,
     model: String,
-) -> Result<String, String> {
+) -> Result<requests::TestLlmResponse, String> {
     let client = {
         let s = state.read().await;
         s.client.clone()
     };
     client.test_llm(endpoint, model).await
+}
+
+#[cfg(test)]
+mod external_llm_command_type_tests {
+    use super::*;
+
+    #[allow(dead_code)]
+    async fn test_external_llm_uses_daemon_response_envelope(state: tauri::State<'_, State>) {
+        let _: Result<requests::TestLlmResponse, String> =
+            test_external_llm(state, String::new(), String::new()).await;
+    }
+
+    #[test]
+    fn test_external_llm_response_type_is_checked() {}
 }
 
 /// Proxy for `GET /api/on-device-model` — returns per-model cache/load state.
