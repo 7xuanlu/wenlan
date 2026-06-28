@@ -280,6 +280,24 @@ pub async fn get_api_key() -> Result<Option<String>, String> {
     }))
 }
 
+#[derive(Debug, Serialize)]
+struct AnthropicKeyRequest {
+    api_key: String,
+}
+
+async fn set_anthropic_key_response(
+    client: &crate::api::WenlanClient,
+    req: &AnthropicKeyRequest,
+) -> Result<responses::SuccessResponse, String> {
+    client.put_json("/api/setup/anthropic-key", req).await
+}
+
+async fn clear_anthropic_key_response(
+    client: &crate::api::WenlanClient,
+) -> Result<responses::SuccessResponse, String> {
+    client.delete_path("/api/setup/anthropic-key").await
+}
+
 #[tauri::command]
 pub async fn set_api_key(state: tauri::State<'_, State>, key: String) -> Result<(), String> {
     let client = {
@@ -287,17 +305,47 @@ pub async fn set_api_key(state: tauri::State<'_, State>, key: String) -> Result<
         s.client.clone()
     };
     if key.trim().is_empty() {
-        client
-            .delete_path::<serde_json::Value>("/api/setup/anthropic-key")
-            .await?;
+        let _resp = clear_anthropic_key_response(&client).await?;
     } else {
-        let body = serde_json::json!({ "api_key": key });
-        client
-            .put_json::<_, serde_json::Value>("/api/setup/anthropic-key", &body)
-            .await?;
+        let body = AnthropicKeyRequest { api_key: key };
+        let _resp = set_anthropic_key_response(&client, &body).await?;
     }
     log::info!("[settings] API key updated");
     Ok(())
+}
+
+#[cfg(test)]
+mod setup_key_response_tests {
+    use super::*;
+
+    #[allow(dead_code)]
+    async fn set_anthropic_key_uses_success_response(client: crate::api::WenlanClient) {
+        let req = AnthropicKeyRequest {
+            api_key: "sk-ant-test".to_string(),
+        };
+        let _: Result<responses::SuccessResponse, String> =
+            set_anthropic_key_response(&client, &req).await;
+    }
+
+    #[allow(dead_code)]
+    async fn clear_anthropic_key_uses_success_response(client: crate::api::WenlanClient) {
+        let _: Result<responses::SuccessResponse, String> =
+            clear_anthropic_key_response(&client).await;
+    }
+
+    #[allow(dead_code)]
+    async fn public_command_keeps_void_surface(state: tauri::State<'_, State>) {
+        let _: Result<(), String> = set_api_key(state, String::new()).await;
+    }
+
+    #[test]
+    fn anthropic_key_request_serializes_daemon_payload() {
+        let req = AnthropicKeyRequest {
+            api_key: "sk-ant-test".to_string(),
+        };
+        let value = serde_json::to_value(req).unwrap();
+        assert_eq!(value, serde_json::json!({ "api_key": "sk-ant-test" }));
+    }
 }
 
 // Phase 5-D Phase 4: route config reads/writes through the daemon so the
