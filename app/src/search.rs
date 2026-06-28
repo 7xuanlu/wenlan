@@ -2213,6 +2213,32 @@ pub async fn get_space(
     Ok(spaces.into_iter().find(|sp| sp.name == name))
 }
 
+#[derive(Debug, Deserialize)]
+struct DeleteSpaceResponse {
+    deleted: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct ToggleSpaceStarredResponse {
+    starred: bool,
+}
+
+async fn delete_space_response(
+    client: &crate::api::WenlanClient,
+    name: &str,
+) -> Result<DeleteSpaceResponse, String> {
+    client.delete_path(&format!("/api/spaces/{}", name)).await
+}
+
+async fn toggle_space_starred_response(
+    client: &crate::api::WenlanClient,
+    name: &str,
+) -> Result<ToggleSpaceStarredResponse, String> {
+    client
+        .post_empty(&format!("/api/spaces/{}/star", name))
+        .await
+}
+
 #[tauri::command]
 pub async fn create_space(
     state: tauri::State<'_, State>,
@@ -2247,11 +2273,11 @@ pub async fn delete_space(
     name: String,
     _memory_action: Option<String>,
 ) -> Result<(), String> {
-    let s = state.read().await;
-    let _resp: serde_json::Value = s
-        .client
-        .delete_path(&format!("/api/spaces/{}", name))
-        .await?;
+    let client = {
+        let s = state.read().await;
+        s.client.clone()
+    };
+    let DeleteSpaceResponse { deleted: _deleted } = delete_space_response(&client, &name).await?;
     Ok(())
 }
 
@@ -2282,15 +2308,12 @@ pub async fn toggle_space_starred(
     state: tauri::State<'_, State>,
     name: String,
 ) -> Result<bool, String> {
-    let s = state.read().await;
-    let resp: serde_json::Value = s
-        .client
-        .post_empty(&format!("/api/spaces/{}/star", name))
-        .await?;
-    Ok(resp
-        .get("starred")
-        .and_then(|v| v.as_bool())
-        .unwrap_or(false))
+    let client = {
+        let s = state.read().await;
+        s.client.clone()
+    };
+    let resp = toggle_space_starred_response(&client, &name).await?;
+    Ok(resp.starred)
 }
 
 // Legacy space commands (local SpaceStore — these are being superseded by daemon spaces)
@@ -2324,17 +2347,18 @@ pub async fn add_space(
         name,
         description: None,
     };
-    let _resp: serde_json::Value = s.client.post_json("/api/spaces", &req).await?;
+    let _space: Space = s.client.post_json("/api/spaces", &req).await?;
     Ok(())
 }
 
 #[tauri::command]
 pub async fn remove_space(state: tauri::State<'_, State>, space_id: String) -> Result<(), String> {
-    let s = state.read().await;
-    let _resp: serde_json::Value = s
-        .client
-        .delete_path(&format!("/api/spaces/{}", space_id))
-        .await?;
+    let client = {
+        let s = state.read().await;
+        s.client.clone()
+    };
+    let DeleteSpaceResponse { deleted: _deleted } =
+        delete_space_response(&client, &space_id).await?;
     Ok(())
 }
 
@@ -2349,7 +2373,7 @@ pub async fn rename_space(
         new_name: Some(new_name),
         description: None,
     };
-    let _resp: serde_json::Value = s
+    let _space: Space = s
         .client
         .put_json(&format!("/api/spaces/{}", space_id), &req)
         .await?;
@@ -2364,6 +2388,47 @@ pub async fn pin_space(state: tauri::State<'_, State>, space_id: String) -> Resu
         .post_empty(&format!("/api/spaces/{}/pin", space_id))
         .await?;
     Ok(())
+}
+
+#[cfg(test)]
+mod space_command_type_tests {
+    use super::*;
+
+    #[allow(dead_code)]
+    async fn delete_space_response_uses_typed_deleted_envelope(client: crate::api::WenlanClient) {
+        let _: Result<DeleteSpaceResponse, String> = delete_space_response(&client, "space").await;
+    }
+
+    #[allow(dead_code)]
+    async fn toggle_space_starred_response_uses_typed_starred_envelope(
+        client: crate::api::WenlanClient,
+    ) {
+        let _: Result<ToggleSpaceStarredResponse, String> =
+            toggle_space_starred_response(&client, "space").await;
+    }
+
+    #[allow(dead_code)]
+    async fn legacy_space_aliases_keep_void_tauri_surface(state: tauri::State<'_, State>) {
+        let _: Result<(), String> =
+            add_space(state.clone(), String::new(), String::new(), String::new()).await;
+        let _: Result<(), String> = remove_space(state.clone(), String::new()).await;
+        let _: Result<(), String> = rename_space(state, String::new(), String::new()).await;
+    }
+
+    #[test]
+    fn space_response_envelopes_deserialize_daemon_payloads() {
+        let deleted: DeleteSpaceResponse = serde_json::from_value(serde_json::json!({
+            "deleted": "Engineering"
+        }))
+        .unwrap();
+        assert_eq!(deleted.deleted, "Engineering");
+
+        let starred: ToggleSpaceStarredResponse = serde_json::from_value(serde_json::json!({
+            "starred": true
+        }))
+        .unwrap();
+        assert!(starred.starred);
+    }
 }
 
 // ── Tags ──────────────────────────────────────────────────────────────

@@ -2,10 +2,10 @@
 
 - **Date:** 2026-06-28
 - **App checkout:** `/Users/lucian/Repos/wenlan-app`
-- **App branch:** `codex/wenlan-app-entity-suggestion-refinery`
+- **App branch:** `codex/wenlan-app-space-response-typing`
 - **Wenlan backend source:** `/Users/lucian/Repos/wenlan`
 - **Purpose:** prerequisite matrix before the full `origin-app` -> `wenlan-app` refactor run.
-- **Current status:** refreshed on 2026-06-28 after typed-client, sidecar, MCP bridge, Dock/app-activation, avatar path, neutral theme fallback, Home pending-revision/refinery review work, daemon-backed setup status work, post-merge API parity wrappers, `/api/capture-stats`, daemon-backed global tag inventory, daemon-backed status/reranker diagnostics, and entity-suggestion action compatibility with the refinery queue.
+- **Current status:** refreshed on 2026-06-28 after typed-client, sidecar, MCP bridge, Dock/app-activation, avatar path, neutral theme fallback, Home pending-revision/refinery review work, daemon-backed setup status work, post-merge API parity wrappers, `/api/capture-stats`, daemon-backed global tag inventory, daemon-backed status/reranker diagnostics, entity-suggestion action compatibility with the refinery queue, and typed space CRUD/star response envelopes.
 
 ## Evidence Snapshot
 
@@ -48,6 +48,7 @@ These block "caught up enough for full refactor run".
 | `/api/memory/contradiction/{source_id}/dismiss` | `ContradictionDismissResponse` | present command returns typed response | surface in review queue | optional if contradictions route absent |
 | `/api/memory/{source_id}/enrichment-status` | `EnrichmentStatusResponse` | typed Rust/Tauri/TS wrapper present; Memory Detail shows non-blocking status when available | keep hidden on old daemons and do not block memory render | optional per-memory route; show unknown state if absent |
 | `/api/sources` | daemon source routes | Obsidian registered source list/add/remove/sync route through daemon-backed Tauri commands; local directory sources remain app-config/watcher compatibility entries merged into `list_registered_sources` | keep legacy source-name commands and directory watcher compatibility only where still needed | required for source management |
+| `/api/spaces` + `/api/spaces/{name}` + `/api/spaces/{name}/star` | daemon space CRUD routes; create/update return `Space`, delete returns `{deleted}`, star returns `{starred}` | primary and legacy Tauri space wrappers now parse typed daemon envelopes while preserving existing frontend return surfaces | keep legacy alias wrappers until older UI callers are removed; move ad hoc delete/star envelopes into shared `wenlan-types` if the daemon stabilizes them there | required for sidebar Space list and filters |
 | `/api/config` | `ConfigResponse`, `UpdateConfigRequest` | switched to `wenlan-types`; wizard completion now updates `setup_completed` through daemon config; app-local builder helper still wraps shared type | converge remaining Settings/local toggles to daemon config or mark them app-local sensors; remove stale comments/helpers when shared defaults exist | required for settings |
 | `/api/setup/status` | daemon setup route | explicit app DTO, Tauri command, TS wrapper, and wizard gating are present | keep as setup source of truth; broaden settings diagnostics around mode/model/key state | required for setup correctness |
 | MCP config bridge | `app/src/mcp_config.rs`, setup wizard | writes `wenlan`; detects and preserves legacy `origin` entries | keep bridge behavior through at least one compatibility release | bridge release required |

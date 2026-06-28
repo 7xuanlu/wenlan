@@ -184,12 +184,12 @@ app/src/search.rs:2125:    pub source_ids: Vec<String>,
 app/src/search.rs:2126:    pub confidence: f64,
 app/src/search.rs:2127:    pub created_at: String,
 app/src/search.rs:2128:}
-app/src/search.rs:2372:pub struct TagData {
-app/src/search.rs:2373:    pub tags: Vec<String>,
-app/src/search.rs:2374:    pub document_tags: HashMap<String, Vec<String>>,
-app/src/search.rs:2375:    pub categories: Vec<String>,
-app/src/search.rs:2376:    pub document_categories: HashMap<String, String>,
-app/src/search.rs:2377:}
+app/src/search.rs:2437:pub struct TagData {
+app/src/search.rs:2438:    pub tags: Vec<String>,
+app/src/search.rs:2439:    pub document_tags: HashMap<String, Vec<String>>,
+app/src/search.rs:2440:    pub categories: Vec<String>,
+app/src/search.rs:2441:    pub document_categories: HashMap<String, String>,
+app/src/search.rs:2442:}
 app/src/sensor/vision.rs:5:pub struct WindowCapture {
 app/src/sensor/vision.rs:6:    pub image: image::DynamicImage,
 app/src/sensor/vision.rs:7:    pub app_name: String,
