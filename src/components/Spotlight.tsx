@@ -8,6 +8,7 @@ import { useEscapeToHide } from "../hooks/useShortcut";
 import SearchInput from "./SearchInput";
 import ResultList from "./ResultList";
 import StatusBar from "./StatusBar";
+import { searchResultTarget } from "../lib/searchResultTarget";
 
 const WINDOW_WIDTH = 580;
 
@@ -39,11 +40,12 @@ function relativeTime(ts: number): string {
 
 interface SpotlightProps {
   onOpenMemory: () => void;
+  onOpenPage?: (pageId: string) => void;
   onOpenRecap: (recap: IndexedFileInfo) => void;
   onEntityClick: (entityId: string) => void;
 }
 
-export default function Spotlight({ onOpenMemory, onOpenRecap, onEntityClick }: SpotlightProps) {
+export default function Spotlight({ onOpenMemory, onOpenPage, onOpenRecap, onEntityClick }: SpotlightProps) {
   const [sourceFilter, setSourceFilter] = useState<string | undefined>(
     undefined,
   );
@@ -108,9 +110,13 @@ export default function Spotlight({ onOpenMemory, onOpenRecap, onEntityClick }: 
     async (index: number) => {
       const result = results[index];
       if (!result) return;
-      if (result.url) {
+      const target = searchResultTarget(result);
+      if (target.kind === "page" && onOpenPage) {
+        onOpenPage(target.pageId);
+        showToast("Opened page");
+      } else if (target.kind === "file") {
         try {
-          await openFile(result.url);
+          await openFile(target.url);
           showToast("Opened file");
         } catch (err) {
           showToast(`Failed to open file: ${err}`);
@@ -122,7 +128,7 @@ export default function Spotlight({ onOpenMemory, onOpenRecap, onEntityClick }: 
         showToast("Copied to clipboard");
       }
     },
-    [results, showToast],
+    [onOpenPage, results, showToast],
   );
 
   const copyResult = useCallback(

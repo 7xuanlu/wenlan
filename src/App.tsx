@@ -48,6 +48,7 @@ export default function App() {
   const [selectedSnapshot, setSelectedSnapshot] = useState<IndexedFileInfo | null>(null);
   const [selectedEntityId, setSelectedEntityId] = useState<string | null>(null);
   const [selectedMemoryId, setSelectedMemoryId] = useState<string | null>(null);
+  const [selectedPageId, setSelectedPageId] = useState<string | null>(null);
   const [initialView, setInitialView] = useState<"import" | null>(null);
   const [prevPage, setPrevPage] = useState<Page>("spotlight");
   const clipboardEnabledRef = useRef(true);
@@ -167,6 +168,7 @@ export default function App() {
       const { sourceId } = event.payload;
       if (sourceId) {
         setSelectedMemoryId(sourceId);
+        setSelectedPageId(null);
         setInitialView(null);
         setPage("home");
         // Ensure main window is visible and focused
@@ -220,16 +222,18 @@ export default function App() {
     <div className="w-screen min-h-screen bg-[var(--bg-secondary)]">
       {page === "spotlight" && (
         <Spotlight
-          onOpenMemory={() => setPage("home")}
-          onOpenRecap={(snap) => { setSelectedSnapshot(snap); setPrevPage("spotlight"); setPage("recap"); }}
-          onEntityClick={(id) => { setSelectedEntityId(id); setPrevPage("spotlight"); setPage("entity"); }}
+          onOpenMemory={() => { setSelectedPageId(null); setPage("home"); }}
+          onOpenPage={(pageId) => { setSelectedPageId(pageId); setSelectedMemoryId(null); setInitialView(null); setPage("home"); }}
+          onOpenRecap={(snap) => { setSelectedPageId(null); setSelectedSnapshot(snap); setPrevPage("spotlight"); setPage("recap"); }}
+          onEntityClick={(id) => { setSelectedPageId(null); setSelectedEntityId(id); setPrevPage("spotlight"); setPage("entity"); }}
         />
       )}
       {page === "home" && (
         <Main
           initialMemoryId={selectedMemoryId}
+          initialPageId={selectedPageId}
           initialView={initialView}
-          onBackFromDetail={() => { setSelectedMemoryId(null); setPage("home"); }}
+          onBackFromDetail={() => { setSelectedMemoryId(null); setSelectedPageId(null); setPage("home"); }}
         />
       )}
       {page === "recap" && selectedSnapshot && (
@@ -240,7 +244,7 @@ export default function App() {
           entityId={selectedEntityId}
           onBack={() => setPage(prevPage)}
           onEntityClick={(id) => setSelectedEntityId(id)}
-          onMemoryClick={(sid) => { setSelectedMemoryId(sid); setInitialView(null); setPage("home"); }}
+          onMemoryClick={(sid) => { setSelectedMemoryId(sid); setSelectedPageId(null); setInitialView(null); setPage("home"); }}
         />
       )}
       <MilestoneToaster />

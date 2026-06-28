@@ -2,10 +2,10 @@
 
 - **Date:** 2026-06-28
 - **App checkout:** `/Users/lucian/Repos/wenlan-app`
-- **App branch:** `codex/wenlan-app-mcp-entry-typing`
+- **App branch:** `codex/wenlan-app-search-supplements`
 - **Wenlan backend source:** `/Users/lucian/Repos/wenlan`
 - **Purpose:** prerequisite matrix before the full `origin-app` -> `wenlan-app` refactor run.
-- **Current status:** refreshed on 2026-06-28 after typed-client, sidecar, MCP bridge, Dock/app-activation, avatar path, neutral theme fallback, Home pending-revision/refinery review work, daemon-backed setup status work, post-merge API parity wrappers, `/api/capture-stats`, daemon-backed global tag inventory, daemon-backed status/reranker diagnostics, entity-suggestion action compatibility with the refinery queue, typed space/page/search/setup response envelopes, and typed MCP setup entry surface.
+- **Current status:** refreshed on 2026-06-28 after typed-client, sidecar, MCP bridge, Dock/app-activation, avatar path, neutral theme fallback, Home pending-revision/refinery review work, daemon-backed setup status work, post-merge API parity wrappers, `/api/capture-stats`, daemon-backed global tag inventory, daemon-backed status/reranker diagnostics, entity-suggestion action compatibility with the refinery queue, typed space/page/search/setup response envelopes, typed MCP setup entry surface, `wenlan-types` 0.9.2, `/api/search` supplemental page consumption/navigation, and shared page-list/search response typing.
 
 ## Evidence Snapshot
 
@@ -17,7 +17,7 @@
 | Runtime identity references | 148 | `Origin`/`origin-server`/`origin-mcp`/`com.origin`/relay residual scan |
 | Stale taxonomy references | 183 | `concept`/`goal`/`domain` residual scan |
 | Source files under `app/src` and `src` | 162 | `docs/superpowers/refactor/wenlan-app-inventory/summary.md` |
-| Wenlan typed request/response declarations in `requests.rs` + `responses.rs` | 99 | `wenlan-types` scan |
+| Wenlan typed request/response declarations in `requests.rs` + `responses.rs` | 115 | `wenlan-types` 0.9.2 scan |
 
 ## Compatibility Gates
 
@@ -37,6 +37,8 @@ These block "caught up enough for full refactor run".
 |---|---|---|---|---|
 | `/api/health` | `wenlan-server/src/router.rs`; `HealthResponse` | present in `WenlanClient.health` | keep typed daemon reachability gate | required; app cannot proceed without daemon |
 | `/api/status` | `StatusResponse`, `RerankerStatus` | `get_index_status` now merges daemon count/source/reranker fields with app-local indexing activity; StatusBar surfaces reranker failures without treating daemon `is_running=true` as perpetual indexing | broaden settings diagnostics if operator detail needs more than the compact StatusBar signal | required for capability gate; tolerate absent fields by feature-gating |
+| `/api/search` | `SearchResponse` in `wenlan-types` 0.9.2 | `search` consumes additive `supplemental_pages` and appends page-channel rows into the existing `SearchResult[]` Tauri surface; page rows route to Page detail instead of copy/file open | design a richer discriminated search response only when the UI needs a separate global Pages section | required for global search; tolerates older daemons that omit `supplemental_pages` |
+| `/api/memory/search` | `SearchMemoryResponse` | `search_memory` consumes additive `supplemental_pages` and appends page-channel rows into the existing `SearchResult[]` Tauri surface; page rows route to Page detail instead of memory detail | keep existing TS surface until a UI-level result union is intentionally designed | required for memory search; tolerates older daemons that omit `supplemental_pages` |
 | `/api/capture-stats` | daemon capture stats route | `get_capture_stats` calls the dedicated daemon route and maps `total_chunks` to the existing frontend `total` key | keep route-level regression test so it does not drift back to `/api/status` | required for capture-count UI |
 | `/api/refinery/queue` | `ListRefinementsResponse` | typed Rust/Tauri/TS wrappers present; Home Worth-a-glance surfaces proposals | keep Home review lane; consider a dedicated review screen only if queue volume requires it | require route for review queue; hide panel if absent |
 | `/api/refinery/queue/{id}/accept` | `AcceptRefinementResponse` | typed Rust/Tauri/TS wrappers present; Home Accept calls it and invalidates review/recent caches | reuse typed response for any future dedicated review queue | optional until queue route exists |
@@ -67,6 +69,7 @@ These are required for feature parity but can follow the P0 review/status/setup 
 | `/api/pages/{id}/links` | `PageLinksResponse` | typed Rust/Tauri/TS wrappers present; PageDetail uses daemon outbound/inbound links and no longer infers links via `listPages` | keep non-blocking link UI; unresolved outbound labels stay inert | hide links section if route absent or errors |
 | `/api/pages/orphan-links` | `OrphanLinksResponse` | typed Rust/Tauri/TS wrappers present; Page Detail shows repeated unresolved labels as a non-blocking diagnostics section | keep hidden on empty/error so older daemons do not block page render; expand to a dedicated review view only if volume requires it | optional diagnostics until route exists |
 | `/api/pages/{id}/sources` | `PageSourceWithMemory` | present via `getPageSources` | keep and type through `wenlan-types` | optional |
+| `/api/pages` + `/api/pages/search` | `SearchPagesResponse` | `list_pages` and `search_pages` now use the shared response envelope instead of a local `ListPagesWire` mirror | keep shared type as the daemon/app contract | optional page browsing/search |
 | `/api/pages/{id}/archive` | `{ status: "archived" }` | typed local Rust status envelope; public Tauri/TS surface remains void | move to shared response type after `wenlan-types` publishes a matching page status envelope | route required for archive action |
 | `DELETE /api/pages/{id}` | `{ status: "deleted" }` | typed local Rust status envelope; public Tauri/TS surface remains void | move to shared response type after `wenlan-types` publishes a matching page status envelope | route required for delete action |
 | `/api/pages/export` | `ExportStats` | typed Rust/Tauri/TS wrapper present as `exportPagesToObsidian` | keep; rename "concept" UI/file wording where user-facing | optional |

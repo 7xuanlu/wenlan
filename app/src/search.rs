@@ -938,7 +938,25 @@ pub async fn search(
         space: None,
     };
     let resp: responses::SearchResponse = s.client.post_json("/api/search", &req).await?;
-    Ok(resp.results)
+    Ok(search_results_from_response(resp))
+}
+
+fn append_supplemental_pages(
+    mut results: Vec<SearchResult>,
+    supplemental_pages: Option<Vec<SearchResult>>,
+) -> Vec<SearchResult> {
+    if let Some(mut pages) = supplemental_pages {
+        results.append(&mut pages);
+    }
+    results
+}
+
+fn search_results_from_response(resp: responses::SearchResponse) -> Vec<SearchResult> {
+    append_supplemental_pages(resp.results, resp.supplemental_pages)
+}
+
+fn search_memory_results_from_response(resp: responses::SearchMemoryResponse) -> Vec<SearchResult> {
+    append_supplemental_pages(resp.results, resp.supplemental_pages)
 }
 
 #[tauri::command]
@@ -959,7 +977,7 @@ pub async fn search_memory(
         .client
         .post_json("/api/memory/search", &daemon_req)
         .await?;
-    Ok(resp.results)
+    Ok(search_memory_results_from_response(resp))
 }
 
 // ── Memory CRUD ───────────────────────────────────────────────────────
@@ -2880,12 +2898,83 @@ mod page_status_command_type_tests {
     }
 }
 
-/// Wire wrapper matching the daemon's `{ "pages": [...] }` response shape.
-/// Kept local to search.rs because `Page` lives in origin-core (not
-/// wenlan-types), so we can't put this in the shared response types.
-#[derive(serde::Deserialize)]
-struct ListPagesWire {
-    pages: Vec<Page>,
+#[cfg(test)]
+mod search_response_type_tests {
+    use super::*;
+
+    fn search_result(source: &str, source_id: &str) -> SearchResult {
+        SearchResult {
+            id: format!("{source_id}-hit"),
+            content: format!("{source} content"),
+            source: source.to_string(),
+            source_id: source_id.to_string(),
+            title: format!("{source} hit"),
+            url: None,
+            chunk_index: 0,
+            last_modified: 0,
+            score: 0.9,
+            chunk_type: None,
+            language: None,
+            semantic_unit: None,
+            memory_type: if source == "memory" {
+                Some("fact".to_string())
+            } else {
+                None
+            },
+            space: None,
+            source_agent: None,
+            confidence: None,
+            confirmed: None,
+            stability: None,
+            supersedes: None,
+            summary: None,
+            entity_id: None,
+            entity_name: None,
+            quality: None,
+            importance: None,
+            event_date: None,
+            is_archived: false,
+            is_recap: false,
+            structured_fields: None,
+            retrieval_cue: None,
+            source_text: None,
+            raw_score: 0.0,
+            version: 1,
+            pending_revision: false,
+            merged_from: None,
+            last_delta_summary: None,
+        }
+    }
+
+    #[test]
+    fn search_results_include_supplemental_pages() {
+        let resp = responses::SearchResponse {
+            results: vec![],
+            took_ms: 1.0,
+            supplemental_pages: Some(vec![search_result("page", "page_1")]),
+        };
+
+        let results = search_results_from_response(resp);
+
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].source, "page");
+        assert_eq!(results[0].source_id, "page_1");
+    }
+
+    #[test]
+    fn search_memory_results_include_supplemental_pages() {
+        let resp = responses::SearchMemoryResponse {
+            results: vec![search_result("memory", "mem_1")],
+            took_ms: 1.0,
+            supplemental_pages: Some(vec![search_result("page", "page_1")]),
+        };
+
+        let results = search_memory_results_from_response(resp);
+
+        assert_eq!(results.len(), 2);
+        assert_eq!(results[0].source, "memory");
+        assert_eq!(results[1].source, "page");
+    }
 }
 
 #[tauri::command]
@@ -2916,7 +3005,7 @@ pub async fn list_pages(
     } else {
         format!("/api/pages?{}", params.join("&"))
     };
-    let resp: ListPagesWire = client.get_json(&path).await?;
+    let resp: responses::SearchPagesResponse = client.get_json(&path).await?;
     Ok(resp.pages)
 }
 
@@ -2932,7 +3021,7 @@ pub async fn search_pages(
         limit,
         page_type: None,
     };
-    let resp: ListPagesWire = client.post_json("/api/pages/search", &req).await?;
+    let resp: responses::SearchPagesResponse = client.post_json("/api/pages/search", &req).await?;
     Ok(resp.pages)
 }
 

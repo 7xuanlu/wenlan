@@ -110,7 +110,7 @@ Already landed in this branch history:
 
 | Area | Evidence |
 |---|---|
-| typed app client | `wenlan-types = "0.9.1"`, `WenlanClient`, `origin_types` residual count 0 |
+| typed app client | `wenlan-types = "0.9.2"`, `WenlanClient`, `origin_types` residual count 0; `/api/search` and `/api/memory/search` preserve additive `supplemental_pages` rows |
 | sidecar bridge | `wenlan-server` and `wenlan-mcp` external bins, `scripts/prepare-sidecars.sh`, direct `cargo build` passes |
 | MCP config bridge | writes `wenlan`, detects and preserves legacy `origin` |
 | stable app path bridge | accepts current `Wenlan.app` paths and legacy `Origin.app` paths |
@@ -138,9 +138,9 @@ Use tools in this order for cross-cutting edits:
 Current practical state:
 
 - `rust-analyzer` is on `PATH`.
-- `codegraph`, `ast-grep`, and `sg` are not globally on `PATH`.
-- CodeGraph was validated through `npx -y @colbymchenry/codegraph` earlier, but later sandbox/network paths sometimes blocked or stalled. Each cross-cutting task must attempt a target-specific CodeGraph probe or record why it was unavailable.
-- ast-grep is available through `npx -y -p @ast-grep/cli sg`; the inventory harness uses that lane.
+- `codegraph` and `sg` are available in the current shell, but this app worktree is outside the Codex writable root, so CodeGraph index access can require sandbox escalation.
+- CodeGraph remains advisory: for the `codex/wenlan-app-search-supplements` checkpoint, `codegraph sync .` succeeded with escalation, but `codegraph query`/`impact` did not resolve `search_results_from_response` or `searchResultTarget`. Use target-specific CodeGraph probes when useful, then fall back to ast-grep, compiler diagnostics, tests, and bounded `rg` for proof.
+- ast-grep is available as `sg`; the inventory harness can also use `npx -y -p @ast-grep/cli sg` when needed.
 
 ## Next Refactor Slices
 

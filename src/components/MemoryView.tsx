@@ -33,6 +33,7 @@ import ViewToggle from "./ViewToggle";
 import ProfilePage from "./memory/ProfilePage";
 import SettingsPage from "./memory/SettingsPage";
 import Sidebar, { SidebarToggleButton } from "./memory/Sidebar";
+import { searchResultTarget } from "../lib/searchResultTarget";
 
 const SOURCE_LABELS: Record<string, string> = {
   local_files: "File",
@@ -247,13 +248,14 @@ interface MemoryViewProps {
   onSelectFile: (file: IndexedFileInfo) => void;
   onSelectRecap: (recap: IndexedFileInfo) => void;
   onSelectMemory?: (sourceId: string) => void;
+  onSelectPage: (pageId: string) => void;
   onImport?: () => void;
 }
 
 const SIDEBAR_KEY = "wenlan-sidebar-collapsed";
 const LEGACY_SIDEBAR_KEY = "origin-sidebar-collapsed";
 
-export default function MemoryView({ onBack, onSelectFile, onSelectRecap, onSelectMemory, onImport }: MemoryViewProps) {
+export default function MemoryView({ onBack, onSelectFile, onSelectRecap, onSelectMemory, onSelectPage, onImport }: MemoryViewProps) {
   const queryClient = useQueryClient();
   const [hoveredId, setHoveredId] = useState<string | null>(null);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(() => {
@@ -333,14 +335,21 @@ export default function MemoryView({ onBack, onSelectFile, onSelectRecap, onSele
 
   const openResult = useCallback(async (index: number) => {
     const result = results[index];
-    if (!result?.url) return;
-    try {
-      await openFile(result.url);
-      showToast("Opened file");
-    } catch (err) {
-      showToast(`Failed to open file: ${err}`);
+    if (!result) return;
+    const target = searchResultTarget(result);
+    if (target.kind === "page") {
+      onSelectPage(target.pageId);
+      return;
     }
-  }, [results, showToast]);
+    if (target.kind === "file") {
+      try {
+        await openFile(target.url);
+        showToast("Opened file");
+      } catch (err) {
+        showToast(`Failed to open file: ${err}`);
+      }
+    }
+  }, [onSelectPage, results, showToast]);
 
   const copyResult = useCallback(async (index: number) => {
     const result = results[index];

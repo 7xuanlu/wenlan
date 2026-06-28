@@ -8,6 +8,7 @@ import {
   searchEntities,
   searchPages,
   deleteFileChunks,
+  type SearchResult,
 } from "../../lib/tauri";
 import ActivityFeed from "./ActivityFeed";
 import { useSearch } from "../../hooks/useSearch";
@@ -31,9 +32,11 @@ import SpaceDetail from "./SpaceDetail";
 import DecisionLog from "./DecisionLog";
 import MemoryCard from "./MemoryCard";
 import { readPreference, writePreference } from "../../lib/preferenceStorage";
+import { searchResultTarget } from "../../lib/searchResultTarget";
 
 interface MainProps {
   initialMemoryId?: string | null;
+  initialPageId?: string | null;
   initialView?: "import" | null;
   onBackFromDetail?: () => void;
 }
@@ -43,10 +46,11 @@ type View = { kind: "home" } | { kind: "stream" } | { kind: "activity" } | { kin
 const SIDEBAR_KEY = "wenlan-sidebar-collapsed";
 const LEGACY_SIDEBAR_KEY = "origin-sidebar-collapsed";
 
-export default function Main({ initialMemoryId, initialView, onBackFromDetail }: MainProps) {
+export default function Main({ initialMemoryId, initialPageId, initialView, onBackFromDetail }: MainProps) {
   const queryClient = useQueryClient();
   const [view, setView] = useState<View>(
     initialMemoryId ? { kind: "memory", sourceId: initialMemoryId }
+    : initialPageId ? { kind: "page", pageId: initialPageId }
     : initialView === "import" ? { kind: "import" }
     : { kind: "home" },
   );
@@ -59,6 +63,12 @@ export default function Main({ initialMemoryId, initialView, onBackFromDetail }:
       setView({ kind: "import" });
     }
   }, [initialView]);
+
+  useEffect(() => {
+    if (initialPageId) {
+      setView({ kind: "page", pageId: initialPageId });
+    }
+  }, [initialPageId]);
 
   // Navigate forward — pushes current view onto history stack
   const navigateTo = (next: View) => {
@@ -186,6 +196,16 @@ export default function Main({ initialMemoryId, initialView, onBackFromDetail }:
       navigateTo({ kind: "memory", sourceId: entityId.replace("memory:", "") });
     } else {
       navigateTo({ kind: "entity", entityId });
+    }
+  };
+
+  const openSearchResult = (result: SearchResult) => {
+    setQuery("");
+    const target = searchResultTarget(result);
+    if (target.kind === "page") {
+      navigateTo({ kind: "page", pageId: target.pageId });
+    } else {
+      navigateTo({ kind: "memory", sourceId: result.source_id });
     }
   };
 
@@ -394,7 +414,7 @@ export default function Main({ initialMemoryId, initialView, onBackFromDetail }:
                       {results.length} memor{results.length !== 1 ? "ies" : "y"} for &ldquo;{query}&rdquo;
                     </p>
                     {results.map((r) => (
-                      <MemorySearchResult key={r.id} result={r} query={query} onClick={(sid) => { setQuery(""); navigateTo({ kind: "memory", sourceId: sid }); }} />
+                      <MemorySearchResult key={r.id} result={r} query={query} onClick={() => openSearchResult(r)} />
                     ))}
                   </>
                 )}
