@@ -502,6 +502,14 @@ pub struct TestLlmResponse {
     pub response: String,
 }
 
+// ===== On-device model =====
+
+/// Body for `POST /api/on-device-model/download`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct OnDeviceModelRequest {
+    pub model_id: String,
+}
+
 // ===== Default value functions =====
 
 fn default_limit() -> usize {
@@ -595,5 +603,21 @@ mod set_document_tags_test {
 
         assert!(req.source.is_none());
         assert_eq!(req.tags, vec!["rust"]);
+    }
+}
+
+#[cfg(test)]
+mod on_device_model_request_test {
+    use super::*;
+
+    #[test]
+    fn on_device_model_request_round_trips_model_id() {
+        let req: OnDeviceModelRequest = serde_json::from_str(r#"{"model_id":"qwen3-4b"}"#).unwrap();
+
+        assert_eq!(req.model_id, "qwen3-4b");
+        assert_eq!(
+            serde_json::to_string(&req).unwrap(),
+            r#"{"model_id":"qwen3-4b"}"#
+        );
     }
 }
