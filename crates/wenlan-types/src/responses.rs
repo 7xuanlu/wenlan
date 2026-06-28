@@ -396,6 +396,30 @@ pub struct ConfigResponse {
     pub external_llm_model: Option<String>,
 }
 
+// ===== On-device model =====
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct OnDeviceModelEntry {
+    pub id: String,
+    pub display_name: String,
+    pub param_count: String,
+    pub ram_required_gb: f64,
+    pub file_size_gb: f64,
+    pub cached: bool,
+}
+
+/// Response envelope for `GET /api/on-device-model`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct OnDeviceModelResponse {
+    /// ID of the model currently loaded in the daemon, if any.
+    pub loaded: Option<String>,
+    /// ID the user has selected in config; may differ from loaded when a
+    /// download is pending or a restart is needed.
+    pub selected: Option<String>,
+    /// All available models with per-model cache/download state.
+    pub models: Vec<OnDeviceModelEntry>,
+}
+
 // ===== Indexed files / chunks =====
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -808,6 +832,50 @@ mod refinement_wire_tests {
         let json = serde_json::to_string(&resp).unwrap();
         let parsed: RejectRefinementResponse = serde_json::from_str(&json).unwrap();
         assert_eq!(parsed.id, "ref_x");
+    }
+}
+
+#[cfg(test)]
+mod on_device_model_response_tests {
+    use super::*;
+
+    #[test]
+    fn on_device_model_response_preserves_selected_loaded_and_models() {
+        let response = OnDeviceModelResponse {
+            loaded: Some("qwen3-4b".to_string()),
+            selected: Some("qwen3-4b".to_string()),
+            models: vec![OnDeviceModelEntry {
+                id: "qwen3-4b".to_string(),
+                display_name: "Qwen3 4B".to_string(),
+                param_count: "4B".to_string(),
+                ram_required_gb: 6.0,
+                file_size_gb: 2.7,
+                cached: true,
+            }],
+        };
+
+        let value = serde_json::to_value(&response).unwrap();
+
+        assert_eq!(value["loaded"], "qwen3-4b");
+        assert_eq!(value["selected"], "qwen3-4b");
+        assert_eq!(value["models"][0]["id"], "qwen3-4b");
+        assert_eq!(value["models"][0]["cached"], true);
+
+        let parsed: OnDeviceModelResponse = serde_json::from_value(value).unwrap();
+        assert_eq!(parsed.loaded.as_deref(), Some("qwen3-4b"));
+        assert_eq!(parsed.selected.as_deref(), Some("qwen3-4b"));
+        assert_eq!(parsed.models.len(), 1);
+        assert!(parsed.models[0].cached);
+    }
+
+    #[test]
+    fn on_device_model_response_allows_null_loaded_and_selected() {
+        let parsed: OnDeviceModelResponse =
+            serde_json::from_str(r#"{"loaded":null,"selected":null,"models":[]}"#).unwrap();
+
+        assert!(parsed.loaded.is_none());
+        assert!(parsed.selected.is_none());
+        assert!(parsed.models.is_empty());
     }
 }
 

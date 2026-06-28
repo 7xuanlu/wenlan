@@ -9,8 +9,8 @@ use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use wenlan_core::config;
 use wenlan_core::on_device_models::{self, OnDeviceModel};
-use wenlan_types::requests::UpdateConfigRequest;
-use wenlan_types::responses::ConfigResponse;
+use wenlan_types::requests::{OnDeviceModelRequest, UpdateConfigRequest};
+use wenlan_types::responses::{ConfigResponse, OnDeviceModelEntry, OnDeviceModelResponse};
 
 fn config_to_response(cfg: &config::Config) -> ConfigResponse {
     ConfigResponse {
@@ -225,27 +225,6 @@ pub async fn handle_clear_anthropic_key(
 
 // ── On-device model endpoints ──────────────────────────────────────────────
 
-#[derive(Debug, Serialize)]
-pub struct OnDeviceModelEntry {
-    pub id: String,
-    pub display_name: String,
-    pub param_count: String,
-    pub ram_required_gb: f64,
-    pub file_size_gb: f64,
-    pub cached: bool,
-}
-
-#[derive(Debug, Serialize)]
-pub struct OnDeviceModelResponse {
-    /// ID of the model currently loaded in the daemon (if any).
-    pub loaded: Option<String>,
-    /// ID the user has selected in config (may differ from loaded if a
-    /// download is pending or a restart is needed).
-    pub selected: Option<String>,
-    /// All available models with per-model cache/download state.
-    pub models: Vec<OnDeviceModelEntry>,
-}
-
 fn model_entry(model: &OnDeviceModel) -> OnDeviceModelEntry {
     OnDeviceModelEntry {
         id: model.id.to_string(),
@@ -280,11 +259,6 @@ pub async fn handle_get_on_device_model(
         selected,
         models,
     }))
-}
-
-#[derive(Debug, Deserialize)]
-pub struct OnDeviceModelRequest {
-    pub model_id: String,
 }
 
 /// POST /api/on-device-model/download — download (if needed) and hot-load a model.

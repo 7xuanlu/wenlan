@@ -40,9 +40,10 @@ pub use pages::{Page, PageEvidence};
 pub use responses::{
     ContradictionDismissResponse, ExportStats, ListMemoryRevisionsResponse,
     ListPageRevisionsResponse, ListRefinementsResponse, MemoryDetail, MemoryRevisionEntry,
-    OrphanLink, OrphanLinksResponse, PageChangelogEntry, PendingRevision, PendingRevisionItem,
-    ProposalAction, RefinementPayload, RefinementProposalSummary, RejectRefinementResponse,
-    RevisionAcceptResponse, RevisionDismissResponse,
+    OnDeviceModelEntry, OnDeviceModelResponse, OrphanLink, OrphanLinksResponse, PageChangelogEntry,
+    PendingRevision, PendingRevisionItem, ProposalAction, RefinementPayload,
+    RefinementProposalSummary, RejectRefinementResponse, RevisionAcceptResponse,
+    RevisionDismissResponse,
 };
 pub use sources::{MemoryType, RawDocument, SourceType, StabilityTier, SyncStatus};
 
