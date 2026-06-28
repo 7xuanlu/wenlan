@@ -1,16 +1,22 @@
-/Users/lucian/Repos/wenlan-app/app/src/api.rs
- 14: pub struct WenlanClient
+/Users/lucian/Repos/wenlan-app/.worktrees/wenlan-app-runtime-doc-refresh/app/src/api.rs
+ 15: pub struct WenlanClient
        field: client, base_url
- 20: pub struct SetupStatusResponse
+ 21: pub struct SetupStatusResponse
        field: setup_completed, mode, anthropic_key_configured, local_model_selected, local_model_loaded, local_model_cached
- 29: impl Default for WenlanClient
+ 31: struct CaptureStatsResponse
+       field: total_chunks
+ 36: pub(crate) struct TagInventoryResponse
+       field: tags, document_tags
+ 42: impl Default for WenlanClient
        method: default
- 35: impl WenlanClient
-       method: new, get_json, post_json, put_json, delete_path, delete_json, post_empty, health, import_chat_export, list_pending_imports, list_sources, add_source, remove_source, sync_source, list_onboarding_milestones, acknowledge_onboarding_milestone, reset_onboarding_milestones, list_recent_retrievals, list_recent_changes, list_recent_memories, get_enrichment_status, get_memory_revisions, list_unconfirmed_memories, list_recent_pages, list_recent_relations, get_page_sources, get_page_links, get_page_revisions, list_orphan_links, test_llm, list_refinements, accept_refinement, reject_refinement, get_config, update_config, get_setup_status, set_setup_completed, get_model_choice, set_model_choice, get_external_llm, set_external_llm, get_skip_apps, set_skip_apps, get_skip_title_patterns, set_skip_title_patterns, url, delete_empty
-520: fn empty_update() -> wenlan_types::requests::UpdateConfigRequest
-536: trait UpdateConfigBuilder
+ 48: impl WenlanClient
+       method: new, get_json, post_json, put_json, delete_path, delete_json, post_empty, health, status, get_capture_stats, list_tags, list_tag_inventory, import_chat_export, list_pending_imports, list_sources, add_source, remove_source, sync_source, list_onboarding_milestones, acknowledge_onboarding_milestone, reset_onboarding_milestones, list_recent_retrievals, list_recent_changes, list_recent_memories, get_enrichment_status, get_memory_revisions, list_unconfirmed_memories, list_recent_pages, list_recent_relations, get_page_sources, get_page_links, get_page_revisions, list_orphan_links, test_llm, list_refinements, accept_refinement, reject_refinement, get_config, update_config, get_setup_status, set_setup_completed, get_model_choice, set_model_choice, get_external_llm, set_external_llm, get_skip_apps, set_skip_apps, get_skip_title_patterns, set_skip_title_patterns, url, delete_empty
+547: fn daemon_port() -> u16
+563: fn empty_update() -> wenlan_types::requests::UpdateConfigRequest
+579: trait UpdateConfigBuilder
        method: with_skip_apps, with_skip_title_patterns, with_setup_completed, with_model_choice, with_external_llm
-548: impl UpdateConfigBuilder for wenlan_types::requests::UpdateConfigRequest
+591: impl UpdateConfigBuilder for wenlan_types::requests::UpdateConfigRequest
        method: with_skip_apps, with_skip_title_patterns, with_setup_completed, with_model_choice, with_external_llm
-578: mod tests
-       function: update_config_builder_can_set_setup_completed, update_config_builder_patches_model_fields_without_touching_other_config, update_config_builder_patches_external_llm_fields_without_touching_models, setup_status_response_deserializes_daemon_payload, wenlan_client_exposes_enrichment_status_method, enrichment_status_response_deserializes_daemon_payload, wenlan_client_exposes_refinery_queue_methods, wenlan_client_exposes_daemon_model_config_methods, wenlan_client_exposes_source_registry_methods, wenlan_client_exposes_page_link_methods, wenlan_client_exposes_revision_history_methods, revision_history_responses_deserialize_daemon_payloads
+621: mod tests
+       struct: PortEnvGuard
+       function: env_lock, serve_json_once, update_config_builder_can_set_setup_completed, update_config_builder_patches_model_fields_without_touching_other_config, update_config_builder_patches_external_llm_fields_without_touching_models, setup_status_response_deserializes_daemon_payload, wenlan_client_prefers_wenlan_port_over_legacy_origin_port, wenlan_client_falls_back_to_legacy_origin_port, capture_stats_uses_daemon_capture_stats_endpoint, list_tags_uses_daemon_tags_endpoint, list_tag_inventory_preserves_document_tag_map, status_uses_daemon_status_endpoint, wenlan_client_exposes_enrichment_status_method, enrichment_status_response_deserializes_daemon_payload, wenlan_client_exposes_refinery_queue_methods, wenlan_client_exposes_daemon_model_config_methods, wenlan_client_exposes_source_registry_methods, wenlan_client_exposes_page_link_methods, wenlan_client_exposes_revision_history_methods, revision_history_responses_deserialize_daemon_payloads

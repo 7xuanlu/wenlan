@@ -1,8 +1,8 @@
 # Wenlan App Parity and Compatibility Matrix
 
-- **Date:** 2026-06-25
+- **Date:** 2026-06-28
 - **App checkout:** `/Users/lucian/Repos/wenlan-app`
-- **App branch:** `main`
+- **App branch:** `codex/wenlan-app-runtime-doc-refresh`
 - **Wenlan backend source:** `/Users/lucian/Repos/wenlan`
 - **Purpose:** prerequisite matrix before the full `origin-app` -> `wenlan-app` refactor run.
 - **Current status:** refreshed on 2026-06-27 after typed-client, sidecar, MCP bridge, Dock/app-activation, avatar path, neutral theme fallback, Home pending-revision/refinery review work, daemon-backed setup status work, post-merge API parity wrappers, `/api/capture-stats`, daemon-backed global tag inventory, and daemon-backed status/reranker diagnostics.
@@ -11,11 +11,11 @@
 
 | Evidence | Current value | Source |
 |---|---:|---|
-| Frontend `invoke(...)` calls | 131 | `docs/superpowers/refactor/wenlan-app-inventory/frontend-invokes.txt` |
-| Registered Tauri commands | 175 | `app/src/lib.rs` + `search-rs-outline.txt` |
+| Frontend `invoke(...)` calls | 156 | `docs/superpowers/refactor/wenlan-app-inventory/frontend-invokes.txt` |
+| Registered Tauri commands | 176 | `app/src/lib.rs` + `search-rs-outline.txt` |
 | Rust `origin_types` references | 0 | `app/src` residual scan |
-| Runtime identity references | 222 | `Origin`/`origin-server`/`origin-mcp`/`com.origin`/relay residual scan |
-| Stale taxonomy references | 241 | `concept`/`goal`/`domain` residual scan |
+| Runtime identity references | 148 | `Origin`/`origin-server`/`origin-mcp`/`com.origin`/relay residual scan |
+| Stale taxonomy references | 183 | `concept`/`goal`/`domain` residual scan |
 | Wenlan typed request/response declarations in `requests.rs` + `responses.rs` | 99 | `wenlan-types` scan |
 
 ## Compatibility Gates
@@ -50,8 +50,8 @@ These block "caught up enough for full refactor run".
 | `/api/config` | `ConfigResponse`, `UpdateConfigRequest` | switched to `wenlan-types`; wizard completion now updates `setup_completed` through daemon config; app-local builder helper still wraps shared type | converge remaining Settings/local toggles to daemon config or mark them app-local sensors; remove stale comments/helpers when shared defaults exist | required for settings |
 | `/api/setup/status` | daemon setup route | explicit app DTO, Tauri command, TS wrapper, and wizard gating are present | keep as setup source of truth; broaden settings diagnostics around mode/model/key state | required for setup correctness |
 | MCP config bridge | `app/src/mcp_config.rs`, setup wizard | writes `wenlan`; detects and preserves legacy `origin` entries | keep bridge behavior through at least one compatibility release | bridge release required |
-| Remote access bridge | `app/src/remote_access.rs` | Origin relay URL and `~/.config/origin-mcp` token/relay id | preserve old token/relay id; define relay endpoint strategy before URL rename | bridge release required |
-| Sidecar build contract | `app/tauri.conf.json`, `package.json`, `scripts/prepare-sidecars.sh` | uses `wenlan-server`/`wenlan-mcp`; `cargo build` passes | keep repeatable sidecar prep; next rename product/runtime identity separately | required before build verification |
+| Remote access bridge | `app/src/remote_access.rs` | token path is `~/.config/wenlan-mcp/token` with legacy `origin-mcp` import fallback; relay URL intentionally remains legacy Origin until endpoint strategy exists | define relay endpoint strategy before URL rename; do not import legacy relay ids blindly | bridge release required |
+| Sidecar build contract | `app/tauri.conf.json`, `package.json`, `scripts/prepare-sidecars.sh` | uses `wenlan`, `wenlan-server`, `wenlan-mcp`, and `cloudflared`; `cargo build` passes after repeatable sidecar prep | keep repeatable sidecar prep; no hand-copying ad hoc binaries | required before build verification |
 
 ## P1 Matrix
 
@@ -74,23 +74,23 @@ These are required for feature parity but can follow the P0 review/status/setup 
 
 | Surface | Current app state | Required action | Gate |
 |---|---|---|---|
-| `goal` memory type | first-class TypeScript union, facet, profile section, import examples | remove first-class type from UI; legacy imports may map to identity/fact per daemon semantics | no visible first-class `Goal` controls before feature catch-up |
-| `concept` copy | deprecated aliases plus visible component/test copy | migrate user-facing copy to Page/wiki wording; keep aliases only as compatibility wrappers | residual scan allowlist required |
-| `domain` copy | entity/memory/page filters and decision route copy | map user-facing wording to spaces where semantically correct; keep daemon back-compat field names | residual scan allowlist required |
-| `Origin` app copy | setup, updater, tests, README, runtime names | replace only after typed API and bridge are green | public identity rename gate |
+| `goal` memory type | removed from advertised TypeScript facet union; `lesson`/`gotcha` added; legacy `goal` remains only for old rows/maps | keep compatibility path only; do not reintroduce first-class Goal UI | `taxonomyCopy`, StructuredEditor, ProfilePage tests |
+| `concept` copy | user-facing copy migrated to Page/wiki language in product-owned surfaces; deprecated aliases remain for API compatibility | keep `Concept = Page`, `listConcepts`, `getConceptSources`, `ActivityKind = "concept"` compatibility wrappers | `taxonomyCopy` + page/onboarding/import tests |
+| `domain` copy | product-owned visible labels use Space; daemon wire keys still use `domain`/`space` compatibility mapping | keep daemon back-compat field names and request keys | `taxonomyCopy`, domain wire tests |
+| `Origin` app copy | product-owned visible copy and runtime names are Wenlan; legacy Origin references remain for bridge paths, tests, fixtures, and compatibility docs | keep legacy references explicit as bridge artifacts; do not globally replace | runtime identity and taxonomy copy tests |
 
 ## Runtime Identity Matrix
 
 | Surface | Current app state | Required action | Gate |
 |---|---|---|---|
-| Bundle id | `com.origin.desktop` | new installs use `com.wenlan.desktop`; old app state detected | Phase E only |
-| LaunchAgents | `com.origin.desktop`, `com.origin.server` | detect/unload/tombstone old labels; install Wenlan labels | sidecar and data bridge tests |
+| Bundle id | `com.wenlan.desktop`; runtime identity test asserts product name, identifier, updater endpoint, package/repo identity | keep legacy Origin state readable through bridge paths | runtime identity tests |
+| LaunchAgents | current labels are `com.wenlan.desktop` and `com.wenlan.server`; legacy `com.origin.desktop`/`com.origin.server` are detected and cleaned only when owned | preserve owned legacy cleanup and foreign-file safety | lifecycle tests |
 | LaunchAgent template | current `com.wenlan.desktop.plist` uses Wenlan placeholders; legacy `com.origin.desktop.plist` retained as bridge artifact | keep legacy template untouched until bridge cleanup | lifecycle template/install tests |
-| Stable app path | `Origin.app` only | accept `/Applications/Wenlan.app` and `~/Applications/Wenlan.app`; detect old `Origin.app` | lifecycle tests |
+| Stable app path | accepts `/Applications/Wenlan.app`, `~/Applications/Wenlan.app`, and legacy `Origin.app` bridge paths | keep old app path detection until bridge cleanup | lifecycle tests |
 | Lifecycle quit command | `quit_wenlan_full` primary; `quit_origin_full` legacy alias | keep Origin alias through bridge release | Tauri wrapper + Rust command tests |
-| Daemon sidecar | `origin-server` | use `wenlan-server`; stop `cargo build -p origin-server` assumption | `cargo build` reaches app code |
-| MCP sidecar | `origin-mcp` | use `wenlan-mcp`; bridge old config key/package | setup wizard tests |
-| Remote relay | `origin-relay.originmemory.workers.dev` | explicit endpoint and stable URL strategy | remote access tests |
+| Daemon sidecar | `wenlan-server` sidecar, plus `wenlan` CLI for service management | keep legacy process cleanup only where bridge behavior requires it | `cargo build` reaches app code |
+| MCP sidecar | `wenlan-mcp` sidecar and setup entry; legacy `origin` MCP config entries are preserved | bridge old config key/package through compatibility release | setup wizard and MCP config tests |
+| Remote relay | `origin-relay.originmemory.workers.dev` intentionally retained | provision/decide Wenlan relay endpoint and relay-id migration before changing URL | remote access tests |
 | Data/config paths | `WENLAN_DATA_DIR` preferred; `ORIGIN_DATA_DIR` legacy fallback | do not open fresh Wenlan path if legacy data exists | migration smoke |
 | UI preference keys | `wenlan-*` / `wenlan:*` primary; Origin-prefixed localStorage keys import-only legacy fallback | preserve user UI state while new writes use Wenlan keys | preference helper + consumer tests |
 | Daemon port env | `WENLAN_PORT` preferred; `ORIGIN_PORT` legacy fallback | keep legacy fallback through bridge release; default to `7878` | `api::tests::wenlan_client_*_port` |

@@ -1,254 +1,262 @@
-/Users/lucian/Repos/wenlan-app/app/src/activity.rs:12:pub struct Activity {
-/Users/lucian/Repos/wenlan-app/app/src/activity.rs:13:    pub id: String,
-/Users/lucian/Repos/wenlan-app/app/src/activity.rs:14:    pub started_at: i64,
-/Users/lucian/Repos/wenlan-app/app/src/activity.rs:15:    pub ended_at: i64,
-/Users/lucian/Repos/wenlan-app/app/src/activity.rs:16:}
-/Users/lucian/Repos/wenlan-app/app/src/activity.rs:19:pub struct ActivitySummary {
-/Users/lucian/Repos/wenlan-app/app/src/activity.rs:20:    pub id: String,
-/Users/lucian/Repos/wenlan-app/app/src/activity.rs:21:    pub started_at: i64,
-/Users/lucian/Repos/wenlan-app/app/src/activity.rs:22:    pub ended_at: i64,
-/Users/lucian/Repos/wenlan-app/app/src/activity.rs:23:    pub is_live: bool,
-/Users/lucian/Repos/wenlan-app/app/src/activity.rs:24:    pub app_names: Vec<String>,
-/Users/lucian/Repos/wenlan-app/app/src/activity.rs:25:}
-/Users/lucian/Repos/wenlan-app/app/src/api.rs:14:pub struct WenlanClient {
-/Users/lucian/Repos/wenlan-app/app/src/api.rs:15:    client: Client,
-/Users/lucian/Repos/wenlan-app/app/src/api.rs:16:    base_url: String,
-/Users/lucian/Repos/wenlan-app/app/src/api.rs:17:}
-/Users/lucian/Repos/wenlan-app/app/src/api.rs:20:pub struct SetupStatusResponse {
-/Users/lucian/Repos/wenlan-app/app/src/api.rs:21:    pub setup_completed: bool,
-/Users/lucian/Repos/wenlan-app/app/src/api.rs:22:    pub mode: String,
-/Users/lucian/Repos/wenlan-app/app/src/api.rs:23:    pub anthropic_key_configured: bool,
-/Users/lucian/Repos/wenlan-app/app/src/api.rs:24:    pub local_model_selected: Option<String>,
-/Users/lucian/Repos/wenlan-app/app/src/api.rs:25:    pub local_model_loaded: Option<String>,
-/Users/lucian/Repos/wenlan-app/app/src/api.rs:26:    pub local_model_cached: bool,
-/Users/lucian/Repos/wenlan-app/app/src/api.rs:27:}
-/Users/lucian/Repos/wenlan-app/app/src/config.rs:41:pub struct Config {
-/Users/lucian/Repos/wenlan-app/app/src/config.rs:42:    /// Legacy field — kept for backward compat with old config files.
-/Users/lucian/Repos/wenlan-app/app/src/config.rs:43:    /// Use `sources` instead. Migrated to Source structs by `migrate()`.
-/Users/lucian/Repos/wenlan-app/app/src/config.rs:44:    #[serde(default)]
-/Users/lucian/Repos/wenlan-app/app/src/config.rs:45:    pub watch_paths: Vec<PathBuf>,
-/Users/lucian/Repos/wenlan-app/app/src/config.rs:46:    #[serde(default)]
-/Users/lucian/Repos/wenlan-app/app/src/config.rs:47:    pub sources: Vec<Source>,
-/Users/lucian/Repos/wenlan-app/app/src/config.rs:48:    #[serde(default)]
-/Users/lucian/Repos/wenlan-app/app/src/config.rs:49:    pub knowledge_path: Option<PathBuf>,
-/Users/lucian/Repos/wenlan-app/app/src/config.rs:50:    #[serde(default)]
-/Users/lucian/Repos/wenlan-app/app/src/config.rs:51:    pub clipboard_enabled: bool,
-/Users/lucian/Repos/wenlan-app/app/src/config.rs:52:    #[serde(default = "default_skip_apps")]
-/Users/lucian/Repos/wenlan-app/app/src/config.rs:53:    pub skip_apps: Vec<String>,
-/Users/lucian/Repos/wenlan-app/app/src/config.rs:54:    #[serde(default = "default_skip_title_patterns")]
-/Users/lucian/Repos/wenlan-app/app/src/config.rs:55:    pub skip_title_patterns: Vec<String>,
-/Users/lucian/Repos/wenlan-app/app/src/config.rs:56:    #[serde(default = "default_true")]
-/Users/lucian/Repos/wenlan-app/app/src/config.rs:57:    pub private_browsing_detection: bool,
-/Users/lucian/Repos/wenlan-app/app/src/config.rs:58:    #[serde(default)]
-/Users/lucian/Repos/wenlan-app/app/src/config.rs:59:    pub setup_completed: bool,
-/Users/lucian/Repos/wenlan-app/app/src/config.rs:60:    #[serde(default)]
-/Users/lucian/Repos/wenlan-app/app/src/config.rs:61:    pub anthropic_api_key: Option<String>,
-/Users/lucian/Repos/wenlan-app/app/src/config.rs:62:    #[serde(default)]
-/Users/lucian/Repos/wenlan-app/app/src/config.rs:63:    pub routine_model: Option<String>,
-/Users/lucian/Repos/wenlan-app/app/src/config.rs:64:    #[serde(default)]
-/Users/lucian/Repos/wenlan-app/app/src/config.rs:65:    pub synthesis_model: Option<String>,
-/Users/lucian/Repos/wenlan-app/app/src/config.rs:66:    #[serde(default)]
-/Users/lucian/Repos/wenlan-app/app/src/config.rs:67:    pub remote_access_enabled: bool,
-/Users/lucian/Repos/wenlan-app/app/src/config.rs:68:    #[serde(default)]
-/Users/lucian/Repos/wenlan-app/app/src/config.rs:69:    pub screen_capture_enabled: bool,
-/Users/lucian/Repos/wenlan-app/app/src/config.rs:70:    #[serde(default)]
-/Users/lucian/Repos/wenlan-app/app/src/config.rs:71:    pub on_device_model: Option<String>,
-/Users/lucian/Repos/wenlan-app/app/src/config.rs:72:    #[serde(default)]
-/Users/lucian/Repos/wenlan-app/app/src/config.rs:73:    pub external_llm_endpoint: Option<String>,
-/Users/lucian/Repos/wenlan-app/app/src/config.rs:74:    #[serde(default)]
-/Users/lucian/Repos/wenlan-app/app/src/config.rs:75:    pub external_llm_model: Option<String>,
-/Users/lucian/Repos/wenlan-app/app/src/config.rs:76:}
-/Users/lucian/Repos/wenlan-app/app/src/events.rs:12:pub struct TauriEmitter {
-/Users/lucian/Repos/wenlan-app/app/src/events.rs:13:    handle: tauri::AppHandle,
-/Users/lucian/Repos/wenlan-app/app/src/events.rs:14:}
-/Users/lucian/Repos/wenlan-app/app/src/mcp_config.rs:7:pub struct McpClient {
-/Users/lucian/Repos/wenlan-app/app/src/mcp_config.rs:8:    pub name: String,
-/Users/lucian/Repos/wenlan-app/app/src/mcp_config.rs:9:    pub client_type: String,
-/Users/lucian/Repos/wenlan-app/app/src/mcp_config.rs:10:    pub config_path: String,
-/Users/lucian/Repos/wenlan-app/app/src/mcp_config.rs:11:    pub detected: bool,
-/Users/lucian/Repos/wenlan-app/app/src/mcp_config.rs:12:    pub already_configured: bool,
-/Users/lucian/Repos/wenlan-app/app/src/mcp_config.rs:13:}
-/Users/lucian/Repos/wenlan-app/app/src/remote_access.rs:108:pub struct RemoteAccessState {
-/Users/lucian/Repos/wenlan-app/app/src/remote_access.rs:109:    pub status: RemoteAccessStatus,
-/Users/lucian/Repos/wenlan-app/app/src/remote_access.rs:110:    pub mcp_child: Option<tauri_plugin_shell::process::CommandChild>,
-/Users/lucian/Repos/wenlan-app/app/src/remote_access.rs:111:    pub tunnel_child: Option<tauri_plugin_shell::process::CommandChild>,
-/Users/lucian/Repos/wenlan-app/app/src/remote_access.rs:112:    pub port: Option<u16>,
-/Users/lucian/Repos/wenlan-app/app/src/remote_access.rs:113:    /// When Cloudflare returned 429 for our most recent tunnel creation.
-/Users/lucian/Repos/wenlan-app/app/src/remote_access.rs:114:    /// Used by `tunnel_health_loop` to enforce a cooldown before burning another quick tunnel.
-/Users/lucian/Repos/wenlan-app/app/src/remote_access.rs:115:    pub last_rate_limit_at: Option<std::time::Instant>,
-/Users/lucian/Repos/wenlan-app/app/src/remote_access.rs:116:}
-/Users/lucian/Repos/wenlan-app/app/src/router/bundle.rs:41:pub struct WindowSnapshot {
-/Users/lucian/Repos/wenlan-app/app/src/router/bundle.rs:42:    pub app_name: String,
-/Users/lucian/Repos/wenlan-app/app/src/router/bundle.rs:43:    pub window_title: String,
-/Users/lucian/Repos/wenlan-app/app/src/router/bundle.rs:44:    pub text: String,
-/Users/lucian/Repos/wenlan-app/app/src/router/bundle.rs:45:    #[allow(dead_code)]
-/Users/lucian/Repos/wenlan-app/app/src/router/bundle.rs:46:    pub observations: Vec<TextObservation>,
-/Users/lucian/Repos/wenlan-app/app/src/router/bundle.rs:47:    pub focused: bool,
-/Users/lucian/Repos/wenlan-app/app/src/router/bundle.rs:48:    pub url: Option<String>,
-/Users/lucian/Repos/wenlan-app/app/src/router/bundle.rs:49:}
-/Users/lucian/Repos/wenlan-app/app/src/router/bundle.rs:53:pub struct ContextBundle {
-/Users/lucian/Repos/wenlan-app/app/src/router/bundle.rs:54:    pub trigger_type: TriggerSource,
-/Users/lucian/Repos/wenlan-app/app/src/router/bundle.rs:55:    pub timestamp: DateTime<Utc>,
-/Users/lucian/Repos/wenlan-app/app/src/router/bundle.rs:56:    #[allow(dead_code)]
-/Users/lucian/Repos/wenlan-app/app/src/router/bundle.rs:57:    pub intent: Option<IntentClassification>,
-/Users/lucian/Repos/wenlan-app/app/src/router/bundle.rs:58:    pub windows: Vec<WindowSnapshot>,
-/Users/lucian/Repos/wenlan-app/app/src/router/bundle.rs:59:    pub raw_text: Option<String>,
-/Users/lucian/Repos/wenlan-app/app/src/router/bundle.rs:60:}
-/Users/lucian/Repos/wenlan-app/app/src/router/keywords.rs:17:pub struct IntentClassification {
-/Users/lucian/Repos/wenlan-app/app/src/router/keywords.rs:18:    pub intent: Intent,
-/Users/lucian/Repos/wenlan-app/app/src/router/keywords.rs:19:    pub confidence: f64,
-/Users/lucian/Repos/wenlan-app/app/src/router/keywords.rs:20:}
-/Users/lucian/Repos/wenlan-app/app/src/search.rs:36:pub struct QuickCaptureRequest {
-/Users/lucian/Repos/wenlan-app/app/src/search.rs:37:    pub title: Option<String>,
-/Users/lucian/Repos/wenlan-app/app/src/search.rs:38:    pub content: String,
-/Users/lucian/Repos/wenlan-app/app/src/search.rs:39:    pub tags: Option<Vec<String>>,
-/Users/lucian/Repos/wenlan-app/app/src/search.rs:40:    pub memory_type: Option<String>,
-/Users/lucian/Repos/wenlan-app/app/src/search.rs:41:    pub domain: Option<String>,
-/Users/lucian/Repos/wenlan-app/app/src/search.rs:42:}
-/Users/lucian/Repos/wenlan-app/app/src/search.rs:45:pub struct StoreMemoryRequest {
-/Users/lucian/Repos/wenlan-app/app/src/search.rs:46:    pub content: String,
-/Users/lucian/Repos/wenlan-app/app/src/search.rs:47:    pub memory_type: Option<String>,
-/Users/lucian/Repos/wenlan-app/app/src/search.rs:48:    pub domain: Option<String>,
-/Users/lucian/Repos/wenlan-app/app/src/search.rs:49:    pub source_agent: Option<String>,
-/Users/lucian/Repos/wenlan-app/app/src/search.rs:50:    pub title: Option<String>,
-/Users/lucian/Repos/wenlan-app/app/src/search.rs:51:    pub tags: Option<Vec<String>>,
-/Users/lucian/Repos/wenlan-app/app/src/search.rs:52:    pub confidence: Option<f32>,
-/Users/lucian/Repos/wenlan-app/app/src/search.rs:53:    pub supersedes: Option<String>,
-/Users/lucian/Repos/wenlan-app/app/src/search.rs:54:    pub structured_fields: Option<serde_json::Value>,
-/Users/lucian/Repos/wenlan-app/app/src/search.rs:55:    pub retrieval_cue: Option<String>,
-/Users/lucian/Repos/wenlan-app/app/src/search.rs:56:}
-/Users/lucian/Repos/wenlan-app/app/src/search.rs:59:pub struct SearchMemoryRequest {
-/Users/lucian/Repos/wenlan-app/app/src/search.rs:60:    pub query: String,
-/Users/lucian/Repos/wenlan-app/app/src/search.rs:61:    pub limit: Option<usize>,
-/Users/lucian/Repos/wenlan-app/app/src/search.rs:62:    pub memory_type: Option<String>,
-/Users/lucian/Repos/wenlan-app/app/src/search.rs:63:    pub domain: Option<String>,
-/Users/lucian/Repos/wenlan-app/app/src/search.rs:64:    pub source_agent: Option<String>,
-/Users/lucian/Repos/wenlan-app/app/src/search.rs:65:}
-/Users/lucian/Repos/wenlan-app/app/src/search.rs:68:pub struct ListMemoriesRequest {
-/Users/lucian/Repos/wenlan-app/app/src/search.rs:69:    pub memory_type: Option<String>,
-/Users/lucian/Repos/wenlan-app/app/src/search.rs:70:    pub domain: Option<String>,
-/Users/lucian/Repos/wenlan-app/app/src/search.rs:71:    pub limit: Option<usize>,
-/Users/lucian/Repos/wenlan-app/app/src/search.rs:72:}
-/Users/lucian/Repos/wenlan-app/app/src/search.rs:77:pub struct StoreMemoryResponse {
-/Users/lucian/Repos/wenlan-app/app/src/search.rs:78:    pub source_id: String,
-/Users/lucian/Repos/wenlan-app/app/src/search.rs:79:    pub warnings: Vec<String>,
-/Users/lucian/Repos/wenlan-app/app/src/search.rs:80:    /// Background-enrichment state from the daemon — `"pending"` when
-/Users/lucian/Repos/wenlan-app/app/src/search.rs:81:    /// classify + extract will run asynchronously, `"not_needed"` when
-/Users/lucian/Repos/wenlan-app/app/src/search.rs:82:    /// no LLM is available. The frontend uses this to drive live-update
-/Users/lucian/Repos/wenlan-app/app/src/search.rs:83:    /// UI (invalidate the stored-memory query once background work lands).
-/Users/lucian/Repos/wenlan-app/app/src/search.rs:84:    /// Defaulted so older daemon responses still deserialize cleanly.
-/Users/lucian/Repos/wenlan-app/app/src/search.rs:85:    #[serde(default)]
-/Users/lucian/Repos/wenlan-app/app/src/search.rs:86:    pub enrichment: String,
-/Users/lucian/Repos/wenlan-app/app/src/search.rs:87:    /// Prose nudge for callers — safe to show to the user. Empty when no
-/Users/lucian/Repos/wenlan-app/app/src/search.rs:88:    /// enrichment will run.
-/Users/lucian/Repos/wenlan-app/app/src/search.rs:89:    #[serde(default)]
-/Users/lucian/Repos/wenlan-app/app/src/search.rs:90:    pub hint: String,
-/Users/lucian/Repos/wenlan-app/app/src/search.rs:91:    /// Protected memories now flagged for human revision by the daemon.
-/Users/lucian/Repos/wenlan-app/app/src/search.rs:92:    #[serde(default)]
-/Users/lucian/Repos/wenlan-app/app/src/search.rs:93:    pub triggered_revisions: Vec<String>,
-/Users/lucian/Repos/wenlan-app/app/src/search.rs:94:    /// Protected memories auto-accepted by a full-trust agent write.
-/Users/lucian/Repos/wenlan-app/app/src/search.rs:95:    #[serde(default)]
-/Users/lucian/Repos/wenlan-app/app/src/search.rs:96:    pub auto_superseded: Vec<String>,
-/Users/lucian/Repos/wenlan-app/app/src/search.rs:97:}
-/Users/lucian/Repos/wenlan-app/app/src/search.rs:528:pub struct RemoteConnectionTest {
-/Users/lucian/Repos/wenlan-app/app/src/search.rs:529:    pub ok: bool,
-/Users/lucian/Repos/wenlan-app/app/src/search.rs:530:    pub latency_ms: Option<u64>,
-/Users/lucian/Repos/wenlan-app/app/src/search.rs:531:    pub error: Option<String>,
-/Users/lucian/Repos/wenlan-app/app/src/search.rs:532:}
-/Users/lucian/Repos/wenlan-app/app/src/search.rs:1274:pub struct BulkDeleteItem {
-/Users/lucian/Repos/wenlan-app/app/src/search.rs:1275:    pub source: String,
-/Users/lucian/Repos/wenlan-app/app/src/search.rs:1276:    pub source_id: String,
-/Users/lucian/Repos/wenlan-app/app/src/search.rs:1277:}
-/Users/lucian/Repos/wenlan-app/app/src/search.rs:2091:pub struct EntitySuggestion {
-/Users/lucian/Repos/wenlan-app/app/src/search.rs:2092:    pub id: String,
-/Users/lucian/Repos/wenlan-app/app/src/search.rs:2093:    pub entity_name: Option<String>,
-/Users/lucian/Repos/wenlan-app/app/src/search.rs:2094:    pub source_ids: Vec<String>,
-/Users/lucian/Repos/wenlan-app/app/src/search.rs:2095:    pub confidence: f64,
-/Users/lucian/Repos/wenlan-app/app/src/search.rs:2096:    pub created_at: String,
-/Users/lucian/Repos/wenlan-app/app/src/search.rs:2097:}
-/Users/lucian/Repos/wenlan-app/app/src/search.rs:2317:pub struct TagData {
-/Users/lucian/Repos/wenlan-app/app/src/search.rs:2318:    pub tags: Vec<String>,
-/Users/lucian/Repos/wenlan-app/app/src/search.rs:2319:    pub document_tags: HashMap<String, Vec<String>>,
-/Users/lucian/Repos/wenlan-app/app/src/search.rs:2320:    pub categories: Vec<String>,
-/Users/lucian/Repos/wenlan-app/app/src/search.rs:2321:    pub document_categories: HashMap<String, String>,
-/Users/lucian/Repos/wenlan-app/app/src/search.rs:2322:}
-/Users/lucian/Repos/wenlan-app/app/src/sensor/vision.rs:5:pub struct WindowCapture {
-/Users/lucian/Repos/wenlan-app/app/src/sensor/vision.rs:6:    pub image: image::DynamicImage,
-/Users/lucian/Repos/wenlan-app/app/src/sensor/vision.rs:7:    pub app_name: String,
-/Users/lucian/Repos/wenlan-app/app/src/sensor/vision.rs:8:    pub window_name: String,
-/Users/lucian/Repos/wenlan-app/app/src/sensor/vision.rs:9:    pub focused: bool,
-/Users/lucian/Repos/wenlan-app/app/src/sensor/vision.rs:10:}
-/Users/lucian/Repos/wenlan-app/app/src/sensor/vision.rs:14:pub struct TextObservation {
-/Users/lucian/Repos/wenlan-app/app/src/sensor/vision.rs:15:    pub text: String,
-/Users/lucian/Repos/wenlan-app/app/src/sensor/vision.rs:16:    pub confidence: f64,
-/Users/lucian/Repos/wenlan-app/app/src/sensor/vision.rs:17:}
-/Users/lucian/Repos/wenlan-app/app/src/sensor/vision.rs:21:pub struct WindowOcrResult {
-/Users/lucian/Repos/wenlan-app/app/src/sensor/vision.rs:22:    pub window_name: String,
-/Users/lucian/Repos/wenlan-app/app/src/sensor/vision.rs:23:    pub app_name: String,
-/Users/lucian/Repos/wenlan-app/app/src/sensor/vision.rs:24:    pub text: String,
-/Users/lucian/Repos/wenlan-app/app/src/sensor/vision.rs:25:    pub observations: Vec<TextObservation>,
-/Users/lucian/Repos/wenlan-app/app/src/sensor/vision.rs:26:    pub focused: bool,
-/Users/lucian/Repos/wenlan-app/app/src/sensor/vision.rs:27:    #[allow(dead_code)]
-/Users/lucian/Repos/wenlan-app/app/src/sensor/vision.rs:28:    pub confidence: f64,
-/Users/lucian/Repos/wenlan-app/app/src/sensor/vision.rs:29:}
-/Users/lucian/Repos/wenlan-app/app/src/sources/local_files.rs:40:pub struct LocalFilesSource {
-/Users/lucian/Repos/wenlan-app/app/src/sources/local_files.rs:41:    watch_paths: Vec<PathBuf>,
-/Users/lucian/Repos/wenlan-app/app/src/sources/local_files.rs:42:    last_sync: Option<i64>,
-/Users/lucian/Repos/wenlan-app/app/src/sources/local_files.rs:43:    document_count: u64,
-/Users/lucian/Repos/wenlan-app/app/src/sources/local_files.rs:44:}
-/Users/lucian/Repos/wenlan-app/app/src/sources/sync.rs:19:pub struct SyncStats {
-/Users/lucian/Repos/wenlan-app/app/src/sources/sync.rs:20:    pub files_found: usize,
-/Users/lucian/Repos/wenlan-app/app/src/sources/sync.rs:21:    pub ingested: usize,
-/Users/lucian/Repos/wenlan-app/app/src/sources/sync.rs:22:    pub skipped: usize,
-/Users/lucian/Repos/wenlan-app/app/src/sources/sync.rs:23:    pub errors: usize,
-/Users/lucian/Repos/wenlan-app/app/src/sources/sync.rs:24:    /// Categorized error detail when `errors > 0`. Known values:
-/Users/lucian/Repos/wenlan-app/app/src/sources/sync.rs:25:    /// "google_drive_offline", "file_read_errors".
-/Users/lucian/Repos/wenlan-app/app/src/sources/sync.rs:26:    #[serde(default, skip_serializing_if = "Option::is_none")]
-/Users/lucian/Repos/wenlan-app/app/src/sources/sync.rs:27:    pub error_detail: Option<String>,
-/Users/lucian/Repos/wenlan-app/app/src/sources/sync.rs:28:}
-/Users/lucian/Repos/wenlan-app/app/src/state.rs:25:pub struct CaptureEvent {
-/Users/lucian/Repos/wenlan-app/app/src/state.rs:26:    pub source: String,
-/Users/lucian/Repos/wenlan-app/app/src/state.rs:27:    pub source_id: String,
-/Users/lucian/Repos/wenlan-app/app/src/state.rs:28:    pub summary: String,
-/Users/lucian/Repos/wenlan-app/app/src/state.rs:29:    pub chunks: usize,
-/Users/lucian/Repos/wenlan-app/app/src/state.rs:30:    /// When true, AI is still processing this capture (LLM Pass 2 pending).
-/Users/lucian/Repos/wenlan-app/app/src/state.rs:31:    pub processing: bool,
-/Users/lucian/Repos/wenlan-app/app/src/state.rs:32:}
-/Users/lucian/Repos/wenlan-app/app/src/state.rs:35:pub struct IndexStatus {
-/Users/lucian/Repos/wenlan-app/app/src/state.rs:36:    pub is_running: bool,
-/Users/lucian/Repos/wenlan-app/app/src/state.rs:37:    pub files_indexed: u64,
-/Users/lucian/Repos/wenlan-app/app/src/state.rs:38:    pub files_total: u64,
-/Users/lucian/Repos/wenlan-app/app/src/state.rs:39:    pub last_error: Option<String>,
-/Users/lucian/Repos/wenlan-app/app/src/state.rs:40:    pub sources_connected: Vec<String>,
-/Users/lucian/Repos/wenlan-app/app/src/state.rs:41:}
-/Users/lucian/Repos/wenlan-app/app/src/state.rs:43:pub struct AppState {
-/Users/lucian/Repos/wenlan-app/app/src/state.rs:44:    /// HTTP client for the origin-server daemon.
-/Users/lucian/Repos/wenlan-app/app/src/state.rs:45:    pub client: WenlanClient,
-/Users/lucian/Repos/wenlan-app/app/src/state.rs:46:    pub index_status: IndexStatus,
-/Users/lucian/Repos/wenlan-app/app/src/state.rs:47:    pub sources: HashMap<String, Box<dyn DataSource>>,
-/Users/lucian/Repos/wenlan-app/app/src/state.rs:48:    pub watch_paths: Vec<PathBuf>,
-/Users/lucian/Repos/wenlan-app/app/src/state.rs:49:    pub clipboard_enabled: bool,
-/Users/lucian/Repos/wenlan-app/app/src/state.rs:50:    pub last_ingestion_at: i64,
-/Users/lucian/Repos/wenlan-app/app/src/state.rs:51:    pub current_activity: Option<Activity>,
-/Users/lucian/Repos/wenlan-app/app/src/state.rs:52:    pub completed_activities: Vec<Activity>,
-/Users/lucian/Repos/wenlan-app/app/src/state.rs:53:    pub app_handle: Option<tauri::AppHandle>,
-/Users/lucian/Repos/wenlan-app/app/src/state.rs:54:    /// Unified trigger channel sender.
-/Users/lucian/Repos/wenlan-app/app/src/state.rs:55:    pub trigger_tx: Option<tokio::sync::mpsc::Sender<crate::trigger::types::TriggerEvent>>,
-/Users/lucian/Repos/wenlan-app/app/src/state.rs:56:    /// Last context bundle received from the router.
-/Users/lucian/Repos/wenlan-app/app/src/state.rs:57:    pub last_context_bundle: Option<crate::router::bundle::ContextBundle>,
-/Users/lucian/Repos/wenlan-app/app/src/state.rs:58:    /// Screen capture enabled.
-/Users/lucian/Repos/wenlan-app/app/src/state.rs:59:    pub screen_capture_enabled: bool,
-/Users/lucian/Repos/wenlan-app/app/src/state.rs:60:    /// Remote access tunnel state.
-/Users/lucian/Repos/wenlan-app/app/src/state.rs:61:    pub remote_access: tokio::sync::Mutex<RemoteAccessState>,
-/Users/lucian/Repos/wenlan-app/app/src/state.rs:62:    /// Rolling in-memory buffer of recent captures for zero-query Spotlight.
-/Users/lucian/Repos/wenlan-app/app/src/state.rs:63:    ///
-/Users/lucian/Repos/wenlan-app/app/src/state.rs:64:    /// Populated by the context consumer (`router/intent.rs`) when it ingests
-/Users/lucian/Repos/wenlan-app/app/src/state.rs:65:    /// a screen/quick-thought capture. Served by the `get_working_memory`
-/Users/lucian/Repos/wenlan-app/app/src/state.rs:66:    /// Tauri command. Lives in the app process because only the app has
-/Users/lucian/Repos/wenlan-app/app/src/state.rs:67:    /// active sensors — captures happen only in the app process.
-/Users/lucian/Repos/wenlan-app/app/src/state.rs:68:    pub working_memory: Arc<tokio::sync::Mutex<WorkingMemory>>,
-/Users/lucian/Repos/wenlan-app/app/src/state.rs:69:}
-/Users/lucian/Repos/wenlan-app/app/src/tray_health.rs:32:pub struct HealthSignal {
-/Users/lucian/Repos/wenlan-app/app/src/tray_health.rs:33:    state: Arc<AtomicU8>,
-/Users/lucian/Repos/wenlan-app/app/src/tray_health.rs:34:    consecutive_down: Arc<AtomicU8>,
-/Users/lucian/Repos/wenlan-app/app/src/tray_health.rs:35:}
+/Users/lucian/Repos/wenlan-app/.worktrees/wenlan-app-runtime-doc-refresh/app/src/activity.rs:12:pub struct Activity {
+/Users/lucian/Repos/wenlan-app/.worktrees/wenlan-app-runtime-doc-refresh/app/src/activity.rs:13:    pub id: String,
+/Users/lucian/Repos/wenlan-app/.worktrees/wenlan-app-runtime-doc-refresh/app/src/activity.rs:14:    pub started_at: i64,
+/Users/lucian/Repos/wenlan-app/.worktrees/wenlan-app-runtime-doc-refresh/app/src/activity.rs:15:    pub ended_at: i64,
+/Users/lucian/Repos/wenlan-app/.worktrees/wenlan-app-runtime-doc-refresh/app/src/activity.rs:16:}
+/Users/lucian/Repos/wenlan-app/.worktrees/wenlan-app-runtime-doc-refresh/app/src/activity.rs:19:pub struct ActivitySummary {
+/Users/lucian/Repos/wenlan-app/.worktrees/wenlan-app-runtime-doc-refresh/app/src/activity.rs:20:    pub id: String,
+/Users/lucian/Repos/wenlan-app/.worktrees/wenlan-app-runtime-doc-refresh/app/src/activity.rs:21:    pub started_at: i64,
+/Users/lucian/Repos/wenlan-app/.worktrees/wenlan-app-runtime-doc-refresh/app/src/activity.rs:22:    pub ended_at: i64,
+/Users/lucian/Repos/wenlan-app/.worktrees/wenlan-app-runtime-doc-refresh/app/src/activity.rs:23:    pub is_live: bool,
+/Users/lucian/Repos/wenlan-app/.worktrees/wenlan-app-runtime-doc-refresh/app/src/activity.rs:24:    pub app_names: Vec<String>,
+/Users/lucian/Repos/wenlan-app/.worktrees/wenlan-app-runtime-doc-refresh/app/src/activity.rs:25:}
+/Users/lucian/Repos/wenlan-app/.worktrees/wenlan-app-runtime-doc-refresh/app/src/api.rs:15:pub struct WenlanClient {
+/Users/lucian/Repos/wenlan-app/.worktrees/wenlan-app-runtime-doc-refresh/app/src/api.rs:16:    client: Client,
+/Users/lucian/Repos/wenlan-app/.worktrees/wenlan-app-runtime-doc-refresh/app/src/api.rs:17:    base_url: String,
+/Users/lucian/Repos/wenlan-app/.worktrees/wenlan-app-runtime-doc-refresh/app/src/api.rs:18:}
+/Users/lucian/Repos/wenlan-app/.worktrees/wenlan-app-runtime-doc-refresh/app/src/api.rs:21:pub struct SetupStatusResponse {
+/Users/lucian/Repos/wenlan-app/.worktrees/wenlan-app-runtime-doc-refresh/app/src/api.rs:22:    pub setup_completed: bool,
+/Users/lucian/Repos/wenlan-app/.worktrees/wenlan-app-runtime-doc-refresh/app/src/api.rs:23:    pub mode: String,
+/Users/lucian/Repos/wenlan-app/.worktrees/wenlan-app-runtime-doc-refresh/app/src/api.rs:24:    pub anthropic_key_configured: bool,
+/Users/lucian/Repos/wenlan-app/.worktrees/wenlan-app-runtime-doc-refresh/app/src/api.rs:25:    pub local_model_selected: Option<String>,
+/Users/lucian/Repos/wenlan-app/.worktrees/wenlan-app-runtime-doc-refresh/app/src/api.rs:26:    pub local_model_loaded: Option<String>,
+/Users/lucian/Repos/wenlan-app/.worktrees/wenlan-app-runtime-doc-refresh/app/src/api.rs:27:    pub local_model_cached: bool,
+/Users/lucian/Repos/wenlan-app/.worktrees/wenlan-app-runtime-doc-refresh/app/src/api.rs:28:}
+/Users/lucian/Repos/wenlan-app/.worktrees/wenlan-app-runtime-doc-refresh/app/src/api.rs:36:pub(crate) struct TagInventoryResponse {
+/Users/lucian/Repos/wenlan-app/.worktrees/wenlan-app-runtime-doc-refresh/app/src/api.rs:37:    pub(crate) tags: Vec<String>,
+/Users/lucian/Repos/wenlan-app/.worktrees/wenlan-app-runtime-doc-refresh/app/src/api.rs:38:    #[serde(default)]
+/Users/lucian/Repos/wenlan-app/.worktrees/wenlan-app-runtime-doc-refresh/app/src/api.rs:39:    pub(crate) document_tags: HashMap<String, Vec<String>>,
+/Users/lucian/Repos/wenlan-app/.worktrees/wenlan-app-runtime-doc-refresh/app/src/api.rs:40:}
+/Users/lucian/Repos/wenlan-app/.worktrees/wenlan-app-runtime-doc-refresh/app/src/config.rs:42:pub struct Config {
+/Users/lucian/Repos/wenlan-app/.worktrees/wenlan-app-runtime-doc-refresh/app/src/config.rs:43:    /// Legacy field — kept for backward compat with old config files.
+/Users/lucian/Repos/wenlan-app/.worktrees/wenlan-app-runtime-doc-refresh/app/src/config.rs:44:    /// Use `sources` instead. Migrated to Source structs by `migrate()`.
+/Users/lucian/Repos/wenlan-app/.worktrees/wenlan-app-runtime-doc-refresh/app/src/config.rs:45:    #[serde(default)]
+/Users/lucian/Repos/wenlan-app/.worktrees/wenlan-app-runtime-doc-refresh/app/src/config.rs:46:    pub watch_paths: Vec<PathBuf>,
+/Users/lucian/Repos/wenlan-app/.worktrees/wenlan-app-runtime-doc-refresh/app/src/config.rs:47:    #[serde(default)]
+/Users/lucian/Repos/wenlan-app/.worktrees/wenlan-app-runtime-doc-refresh/app/src/config.rs:48:    pub sources: Vec<Source>,
+/Users/lucian/Repos/wenlan-app/.worktrees/wenlan-app-runtime-doc-refresh/app/src/config.rs:49:    #[serde(default)]
+/Users/lucian/Repos/wenlan-app/.worktrees/wenlan-app-runtime-doc-refresh/app/src/config.rs:50:    pub knowledge_path: Option<PathBuf>,
+/Users/lucian/Repos/wenlan-app/.worktrees/wenlan-app-runtime-doc-refresh/app/src/config.rs:51:    #[serde(default)]
+/Users/lucian/Repos/wenlan-app/.worktrees/wenlan-app-runtime-doc-refresh/app/src/config.rs:52:    pub clipboard_enabled: bool,
+/Users/lucian/Repos/wenlan-app/.worktrees/wenlan-app-runtime-doc-refresh/app/src/config.rs:53:    #[serde(default = "default_skip_apps")]
+/Users/lucian/Repos/wenlan-app/.worktrees/wenlan-app-runtime-doc-refresh/app/src/config.rs:54:    pub skip_apps: Vec<String>,
+/Users/lucian/Repos/wenlan-app/.worktrees/wenlan-app-runtime-doc-refresh/app/src/config.rs:55:    #[serde(default = "default_skip_title_patterns")]
+/Users/lucian/Repos/wenlan-app/.worktrees/wenlan-app-runtime-doc-refresh/app/src/config.rs:56:    pub skip_title_patterns: Vec<String>,
+/Users/lucian/Repos/wenlan-app/.worktrees/wenlan-app-runtime-doc-refresh/app/src/config.rs:57:    #[serde(default = "default_true")]
+/Users/lucian/Repos/wenlan-app/.worktrees/wenlan-app-runtime-doc-refresh/app/src/config.rs:58:    pub private_browsing_detection: bool,
+/Users/lucian/Repos/wenlan-app/.worktrees/wenlan-app-runtime-doc-refresh/app/src/config.rs:59:    #[serde(default)]
+/Users/lucian/Repos/wenlan-app/.worktrees/wenlan-app-runtime-doc-refresh/app/src/config.rs:60:    pub setup_completed: bool,
+/Users/lucian/Repos/wenlan-app/.worktrees/wenlan-app-runtime-doc-refresh/app/src/config.rs:61:    #[serde(default)]
+/Users/lucian/Repos/wenlan-app/.worktrees/wenlan-app-runtime-doc-refresh/app/src/config.rs:62:    pub anthropic_api_key: Option<String>,
+/Users/lucian/Repos/wenlan-app/.worktrees/wenlan-app-runtime-doc-refresh/app/src/config.rs:63:    #[serde(default)]
+/Users/lucian/Repos/wenlan-app/.worktrees/wenlan-app-runtime-doc-refresh/app/src/config.rs:64:    pub routine_model: Option<String>,
+/Users/lucian/Repos/wenlan-app/.worktrees/wenlan-app-runtime-doc-refresh/app/src/config.rs:65:    #[serde(default)]
+/Users/lucian/Repos/wenlan-app/.worktrees/wenlan-app-runtime-doc-refresh/app/src/config.rs:66:    pub synthesis_model: Option<String>,
+/Users/lucian/Repos/wenlan-app/.worktrees/wenlan-app-runtime-doc-refresh/app/src/config.rs:67:    #[serde(default)]
+/Users/lucian/Repos/wenlan-app/.worktrees/wenlan-app-runtime-doc-refresh/app/src/config.rs:68:    pub remote_access_enabled: bool,
+/Users/lucian/Repos/wenlan-app/.worktrees/wenlan-app-runtime-doc-refresh/app/src/config.rs:69:    #[serde(default)]
+/Users/lucian/Repos/wenlan-app/.worktrees/wenlan-app-runtime-doc-refresh/app/src/config.rs:70:    pub screen_capture_enabled: bool,
+/Users/lucian/Repos/wenlan-app/.worktrees/wenlan-app-runtime-doc-refresh/app/src/config.rs:71:    #[serde(default)]
+/Users/lucian/Repos/wenlan-app/.worktrees/wenlan-app-runtime-doc-refresh/app/src/config.rs:72:    pub on_device_model: Option<String>,
+/Users/lucian/Repos/wenlan-app/.worktrees/wenlan-app-runtime-doc-refresh/app/src/config.rs:73:    #[serde(default)]
+/Users/lucian/Repos/wenlan-app/.worktrees/wenlan-app-runtime-doc-refresh/app/src/config.rs:74:    pub external_llm_endpoint: Option<String>,
+/Users/lucian/Repos/wenlan-app/.worktrees/wenlan-app-runtime-doc-refresh/app/src/config.rs:75:    #[serde(default)]
+/Users/lucian/Repos/wenlan-app/.worktrees/wenlan-app-runtime-doc-refresh/app/src/config.rs:76:    pub external_llm_model: Option<String>,
+/Users/lucian/Repos/wenlan-app/.worktrees/wenlan-app-runtime-doc-refresh/app/src/config.rs:77:}
+/Users/lucian/Repos/wenlan-app/.worktrees/wenlan-app-runtime-doc-refresh/app/src/events.rs:12:pub struct TauriEmitter {
+/Users/lucian/Repos/wenlan-app/.worktrees/wenlan-app-runtime-doc-refresh/app/src/events.rs:13:    handle: tauri::AppHandle,
+/Users/lucian/Repos/wenlan-app/.worktrees/wenlan-app-runtime-doc-refresh/app/src/events.rs:14:}
+/Users/lucian/Repos/wenlan-app/.worktrees/wenlan-app-runtime-doc-refresh/app/src/mcp_config.rs:7:pub struct McpClient {
+/Users/lucian/Repos/wenlan-app/.worktrees/wenlan-app-runtime-doc-refresh/app/src/mcp_config.rs:8:    pub name: String,
+/Users/lucian/Repos/wenlan-app/.worktrees/wenlan-app-runtime-doc-refresh/app/src/mcp_config.rs:9:    pub client_type: String,
+/Users/lucian/Repos/wenlan-app/.worktrees/wenlan-app-runtime-doc-refresh/app/src/mcp_config.rs:10:    pub config_path: String,
+/Users/lucian/Repos/wenlan-app/.worktrees/wenlan-app-runtime-doc-refresh/app/src/mcp_config.rs:11:    pub detected: bool,
+/Users/lucian/Repos/wenlan-app/.worktrees/wenlan-app-runtime-doc-refresh/app/src/mcp_config.rs:12:    pub already_configured: bool,
+/Users/lucian/Repos/wenlan-app/.worktrees/wenlan-app-runtime-doc-refresh/app/src/mcp_config.rs:13:}
+/Users/lucian/Repos/wenlan-app/.worktrees/wenlan-app-runtime-doc-refresh/app/src/remote_access.rs:125:pub struct RemoteAccessState {
+/Users/lucian/Repos/wenlan-app/.worktrees/wenlan-app-runtime-doc-refresh/app/src/remote_access.rs:126:    pub status: RemoteAccessStatus,
+/Users/lucian/Repos/wenlan-app/.worktrees/wenlan-app-runtime-doc-refresh/app/src/remote_access.rs:127:    pub mcp_child: Option<tauri_plugin_shell::process::CommandChild>,
+/Users/lucian/Repos/wenlan-app/.worktrees/wenlan-app-runtime-doc-refresh/app/src/remote_access.rs:128:    pub tunnel_child: Option<tauri_plugin_shell::process::CommandChild>,
+/Users/lucian/Repos/wenlan-app/.worktrees/wenlan-app-runtime-doc-refresh/app/src/remote_access.rs:129:    pub port: Option<u16>,
+/Users/lucian/Repos/wenlan-app/.worktrees/wenlan-app-runtime-doc-refresh/app/src/remote_access.rs:130:    /// When Cloudflare returned 429 for our most recent tunnel creation.
+/Users/lucian/Repos/wenlan-app/.worktrees/wenlan-app-runtime-doc-refresh/app/src/remote_access.rs:131:    /// Used by `tunnel_health_loop` to enforce a cooldown before burning another quick tunnel.
+/Users/lucian/Repos/wenlan-app/.worktrees/wenlan-app-runtime-doc-refresh/app/src/remote_access.rs:132:    pub last_rate_limit_at: Option<std::time::Instant>,
+/Users/lucian/Repos/wenlan-app/.worktrees/wenlan-app-runtime-doc-refresh/app/src/remote_access.rs:133:}
+/Users/lucian/Repos/wenlan-app/.worktrees/wenlan-app-runtime-doc-refresh/app/src/router/bundle.rs:41:pub struct WindowSnapshot {
+/Users/lucian/Repos/wenlan-app/.worktrees/wenlan-app-runtime-doc-refresh/app/src/router/bundle.rs:42:    pub app_name: String,
+/Users/lucian/Repos/wenlan-app/.worktrees/wenlan-app-runtime-doc-refresh/app/src/router/bundle.rs:43:    pub window_title: String,
+/Users/lucian/Repos/wenlan-app/.worktrees/wenlan-app-runtime-doc-refresh/app/src/router/bundle.rs:44:    pub text: String,
+/Users/lucian/Repos/wenlan-app/.worktrees/wenlan-app-runtime-doc-refresh/app/src/router/bundle.rs:45:    #[allow(dead_code)]
+/Users/lucian/Repos/wenlan-app/.worktrees/wenlan-app-runtime-doc-refresh/app/src/router/bundle.rs:46:    pub observations: Vec<TextObservation>,
+/Users/lucian/Repos/wenlan-app/.worktrees/wenlan-app-runtime-doc-refresh/app/src/router/bundle.rs:47:    pub focused: bool,
+/Users/lucian/Repos/wenlan-app/.worktrees/wenlan-app-runtime-doc-refresh/app/src/router/bundle.rs:48:    pub url: Option<String>,
+/Users/lucian/Repos/wenlan-app/.worktrees/wenlan-app-runtime-doc-refresh/app/src/router/bundle.rs:49:}
+/Users/lucian/Repos/wenlan-app/.worktrees/wenlan-app-runtime-doc-refresh/app/src/router/bundle.rs:53:pub struct ContextBundle {
+/Users/lucian/Repos/wenlan-app/.worktrees/wenlan-app-runtime-doc-refresh/app/src/router/bundle.rs:54:    pub trigger_type: TriggerSource,
+/Users/lucian/Repos/wenlan-app/.worktrees/wenlan-app-runtime-doc-refresh/app/src/router/bundle.rs:55:    pub timestamp: DateTime<Utc>,
+/Users/lucian/Repos/wenlan-app/.worktrees/wenlan-app-runtime-doc-refresh/app/src/router/bundle.rs:56:    #[allow(dead_code)]
+/Users/lucian/Repos/wenlan-app/.worktrees/wenlan-app-runtime-doc-refresh/app/src/router/bundle.rs:57:    pub intent: Option<IntentClassification>,
+/Users/lucian/Repos/wenlan-app/.worktrees/wenlan-app-runtime-doc-refresh/app/src/router/bundle.rs:58:    pub windows: Vec<WindowSnapshot>,
+/Users/lucian/Repos/wenlan-app/.worktrees/wenlan-app-runtime-doc-refresh/app/src/router/bundle.rs:59:    pub raw_text: Option<String>,
+/Users/lucian/Repos/wenlan-app/.worktrees/wenlan-app-runtime-doc-refresh/app/src/router/bundle.rs:60:}
+/Users/lucian/Repos/wenlan-app/.worktrees/wenlan-app-runtime-doc-refresh/app/src/router/keywords.rs:17:pub struct IntentClassification {
+/Users/lucian/Repos/wenlan-app/.worktrees/wenlan-app-runtime-doc-refresh/app/src/router/keywords.rs:18:    pub intent: Intent,
+/Users/lucian/Repos/wenlan-app/.worktrees/wenlan-app-runtime-doc-refresh/app/src/router/keywords.rs:19:    pub confidence: f64,
+/Users/lucian/Repos/wenlan-app/.worktrees/wenlan-app-runtime-doc-refresh/app/src/router/keywords.rs:20:}
+/Users/lucian/Repos/wenlan-app/.worktrees/wenlan-app-runtime-doc-refresh/app/src/search.rs:28:pub struct QuickCaptureRequest {
+/Users/lucian/Repos/wenlan-app/.worktrees/wenlan-app-runtime-doc-refresh/app/src/search.rs:29:    pub title: Option<String>,
+/Users/lucian/Repos/wenlan-app/.worktrees/wenlan-app-runtime-doc-refresh/app/src/search.rs:30:    pub content: String,
+/Users/lucian/Repos/wenlan-app/.worktrees/wenlan-app-runtime-doc-refresh/app/src/search.rs:31:    pub tags: Option<Vec<String>>,
+/Users/lucian/Repos/wenlan-app/.worktrees/wenlan-app-runtime-doc-refresh/app/src/search.rs:32:    pub memory_type: Option<String>,
+/Users/lucian/Repos/wenlan-app/.worktrees/wenlan-app-runtime-doc-refresh/app/src/search.rs:33:    pub domain: Option<String>,
+/Users/lucian/Repos/wenlan-app/.worktrees/wenlan-app-runtime-doc-refresh/app/src/search.rs:34:}
+/Users/lucian/Repos/wenlan-app/.worktrees/wenlan-app-runtime-doc-refresh/app/src/search.rs:37:pub struct StoreMemoryRequest {
+/Users/lucian/Repos/wenlan-app/.worktrees/wenlan-app-runtime-doc-refresh/app/src/search.rs:38:    pub content: String,
+/Users/lucian/Repos/wenlan-app/.worktrees/wenlan-app-runtime-doc-refresh/app/src/search.rs:39:    pub memory_type: Option<String>,
+/Users/lucian/Repos/wenlan-app/.worktrees/wenlan-app-runtime-doc-refresh/app/src/search.rs:40:    pub domain: Option<String>,
+/Users/lucian/Repos/wenlan-app/.worktrees/wenlan-app-runtime-doc-refresh/app/src/search.rs:41:    pub source_agent: Option<String>,
+/Users/lucian/Repos/wenlan-app/.worktrees/wenlan-app-runtime-doc-refresh/app/src/search.rs:42:    pub title: Option<String>,
+/Users/lucian/Repos/wenlan-app/.worktrees/wenlan-app-runtime-doc-refresh/app/src/search.rs:43:    pub tags: Option<Vec<String>>,
+/Users/lucian/Repos/wenlan-app/.worktrees/wenlan-app-runtime-doc-refresh/app/src/search.rs:44:    pub confidence: Option<f32>,
+/Users/lucian/Repos/wenlan-app/.worktrees/wenlan-app-runtime-doc-refresh/app/src/search.rs:45:    pub supersedes: Option<String>,
+/Users/lucian/Repos/wenlan-app/.worktrees/wenlan-app-runtime-doc-refresh/app/src/search.rs:46:    pub structured_fields: Option<serde_json::Value>,
+/Users/lucian/Repos/wenlan-app/.worktrees/wenlan-app-runtime-doc-refresh/app/src/search.rs:47:    pub retrieval_cue: Option<String>,
+/Users/lucian/Repos/wenlan-app/.worktrees/wenlan-app-runtime-doc-refresh/app/src/search.rs:48:}
+/Users/lucian/Repos/wenlan-app/.worktrees/wenlan-app-runtime-doc-refresh/app/src/search.rs:51:pub struct SearchMemoryRequest {
+/Users/lucian/Repos/wenlan-app/.worktrees/wenlan-app-runtime-doc-refresh/app/src/search.rs:52:    pub query: String,
+/Users/lucian/Repos/wenlan-app/.worktrees/wenlan-app-runtime-doc-refresh/app/src/search.rs:53:    pub limit: Option<usize>,
+/Users/lucian/Repos/wenlan-app/.worktrees/wenlan-app-runtime-doc-refresh/app/src/search.rs:54:    pub memory_type: Option<String>,
+/Users/lucian/Repos/wenlan-app/.worktrees/wenlan-app-runtime-doc-refresh/app/src/search.rs:55:    pub domain: Option<String>,
+/Users/lucian/Repos/wenlan-app/.worktrees/wenlan-app-runtime-doc-refresh/app/src/search.rs:56:    pub source_agent: Option<String>,
+/Users/lucian/Repos/wenlan-app/.worktrees/wenlan-app-runtime-doc-refresh/app/src/search.rs:57:}
+/Users/lucian/Repos/wenlan-app/.worktrees/wenlan-app-runtime-doc-refresh/app/src/search.rs:60:pub struct ListMemoriesRequest {
+/Users/lucian/Repos/wenlan-app/.worktrees/wenlan-app-runtime-doc-refresh/app/src/search.rs:61:    pub memory_type: Option<String>,
+/Users/lucian/Repos/wenlan-app/.worktrees/wenlan-app-runtime-doc-refresh/app/src/search.rs:62:    pub domain: Option<String>,
+/Users/lucian/Repos/wenlan-app/.worktrees/wenlan-app-runtime-doc-refresh/app/src/search.rs:63:    pub limit: Option<usize>,
+/Users/lucian/Repos/wenlan-app/.worktrees/wenlan-app-runtime-doc-refresh/app/src/search.rs:64:}
+/Users/lucian/Repos/wenlan-app/.worktrees/wenlan-app-runtime-doc-refresh/app/src/search.rs:69:pub struct StoreMemoryResponse {
+/Users/lucian/Repos/wenlan-app/.worktrees/wenlan-app-runtime-doc-refresh/app/src/search.rs:70:    pub source_id: String,
+/Users/lucian/Repos/wenlan-app/.worktrees/wenlan-app-runtime-doc-refresh/app/src/search.rs:71:    pub warnings: Vec<String>,
+/Users/lucian/Repos/wenlan-app/.worktrees/wenlan-app-runtime-doc-refresh/app/src/search.rs:72:    /// Background-enrichment state from the daemon — `"pending"` when
+/Users/lucian/Repos/wenlan-app/.worktrees/wenlan-app-runtime-doc-refresh/app/src/search.rs:73:    /// classify + extract will run asynchronously, `"not_needed"` when
+/Users/lucian/Repos/wenlan-app/.worktrees/wenlan-app-runtime-doc-refresh/app/src/search.rs:74:    /// no LLM is available. The frontend uses this to drive live-update
+/Users/lucian/Repos/wenlan-app/.worktrees/wenlan-app-runtime-doc-refresh/app/src/search.rs:75:    /// UI (invalidate the stored-memory query once background work lands).
+/Users/lucian/Repos/wenlan-app/.worktrees/wenlan-app-runtime-doc-refresh/app/src/search.rs:76:    /// Defaulted so older daemon responses still deserialize cleanly.
+/Users/lucian/Repos/wenlan-app/.worktrees/wenlan-app-runtime-doc-refresh/app/src/search.rs:77:    #[serde(default)]
+/Users/lucian/Repos/wenlan-app/.worktrees/wenlan-app-runtime-doc-refresh/app/src/search.rs:78:    pub enrichment: String,
+/Users/lucian/Repos/wenlan-app/.worktrees/wenlan-app-runtime-doc-refresh/app/src/search.rs:79:    /// Prose nudge for callers — safe to show to the user. Empty when no
+/Users/lucian/Repos/wenlan-app/.worktrees/wenlan-app-runtime-doc-refresh/app/src/search.rs:80:    /// enrichment will run.
+/Users/lucian/Repos/wenlan-app/.worktrees/wenlan-app-runtime-doc-refresh/app/src/search.rs:81:    #[serde(default)]
+/Users/lucian/Repos/wenlan-app/.worktrees/wenlan-app-runtime-doc-refresh/app/src/search.rs:82:    pub hint: String,
+/Users/lucian/Repos/wenlan-app/.worktrees/wenlan-app-runtime-doc-refresh/app/src/search.rs:83:    /// Protected memories now flagged for human revision by the daemon.
+/Users/lucian/Repos/wenlan-app/.worktrees/wenlan-app-runtime-doc-refresh/app/src/search.rs:84:    #[serde(default)]
+/Users/lucian/Repos/wenlan-app/.worktrees/wenlan-app-runtime-doc-refresh/app/src/search.rs:85:    pub triggered_revisions: Vec<String>,
+/Users/lucian/Repos/wenlan-app/.worktrees/wenlan-app-runtime-doc-refresh/app/src/search.rs:86:    /// Protected memories auto-accepted by a full-trust agent write.
+/Users/lucian/Repos/wenlan-app/.worktrees/wenlan-app-runtime-doc-refresh/app/src/search.rs:87:    #[serde(default)]
+/Users/lucian/Repos/wenlan-app/.worktrees/wenlan-app-runtime-doc-refresh/app/src/search.rs:88:    pub auto_superseded: Vec<String>,
+/Users/lucian/Repos/wenlan-app/.worktrees/wenlan-app-runtime-doc-refresh/app/src/search.rs:89:}
+/Users/lucian/Repos/wenlan-app/.worktrees/wenlan-app-runtime-doc-refresh/app/src/search.rs:516:pub struct RemoteConnectionTest {
+/Users/lucian/Repos/wenlan-app/.worktrees/wenlan-app-runtime-doc-refresh/app/src/search.rs:517:    pub ok: bool,
+/Users/lucian/Repos/wenlan-app/.worktrees/wenlan-app-runtime-doc-refresh/app/src/search.rs:518:    pub latency_ms: Option<u64>,
+/Users/lucian/Repos/wenlan-app/.worktrees/wenlan-app-runtime-doc-refresh/app/src/search.rs:519:    pub error: Option<String>,
+/Users/lucian/Repos/wenlan-app/.worktrees/wenlan-app-runtime-doc-refresh/app/src/search.rs:520:}
+/Users/lucian/Repos/wenlan-app/.worktrees/wenlan-app-runtime-doc-refresh/app/src/search.rs:1275:pub struct BulkDeleteItem {
+/Users/lucian/Repos/wenlan-app/.worktrees/wenlan-app-runtime-doc-refresh/app/src/search.rs:1276:    pub source: String,
+/Users/lucian/Repos/wenlan-app/.worktrees/wenlan-app-runtime-doc-refresh/app/src/search.rs:1277:    pub source_id: String,
+/Users/lucian/Repos/wenlan-app/.worktrees/wenlan-app-runtime-doc-refresh/app/src/search.rs:1278:}
+/Users/lucian/Repos/wenlan-app/.worktrees/wenlan-app-runtime-doc-refresh/app/src/search.rs:2122:pub struct EntitySuggestion {
+/Users/lucian/Repos/wenlan-app/.worktrees/wenlan-app-runtime-doc-refresh/app/src/search.rs:2123:    pub id: String,
+/Users/lucian/Repos/wenlan-app/.worktrees/wenlan-app-runtime-doc-refresh/app/src/search.rs:2124:    pub entity_name: Option<String>,
+/Users/lucian/Repos/wenlan-app/.worktrees/wenlan-app-runtime-doc-refresh/app/src/search.rs:2125:    pub source_ids: Vec<String>,
+/Users/lucian/Repos/wenlan-app/.worktrees/wenlan-app-runtime-doc-refresh/app/src/search.rs:2126:    pub confidence: f64,
+/Users/lucian/Repos/wenlan-app/.worktrees/wenlan-app-runtime-doc-refresh/app/src/search.rs:2127:    pub created_at: String,
+/Users/lucian/Repos/wenlan-app/.worktrees/wenlan-app-runtime-doc-refresh/app/src/search.rs:2128:}
+/Users/lucian/Repos/wenlan-app/.worktrees/wenlan-app-runtime-doc-refresh/app/src/search.rs:2348:pub struct TagData {
+/Users/lucian/Repos/wenlan-app/.worktrees/wenlan-app-runtime-doc-refresh/app/src/search.rs:2349:    pub tags: Vec<String>,
+/Users/lucian/Repos/wenlan-app/.worktrees/wenlan-app-runtime-doc-refresh/app/src/search.rs:2350:    pub document_tags: HashMap<String, Vec<String>>,
+/Users/lucian/Repos/wenlan-app/.worktrees/wenlan-app-runtime-doc-refresh/app/src/search.rs:2351:    pub categories: Vec<String>,
+/Users/lucian/Repos/wenlan-app/.worktrees/wenlan-app-runtime-doc-refresh/app/src/search.rs:2352:    pub document_categories: HashMap<String, String>,
+/Users/lucian/Repos/wenlan-app/.worktrees/wenlan-app-runtime-doc-refresh/app/src/search.rs:2353:}
+/Users/lucian/Repos/wenlan-app/.worktrees/wenlan-app-runtime-doc-refresh/app/src/sensor/vision.rs:5:pub struct WindowCapture {
+/Users/lucian/Repos/wenlan-app/.worktrees/wenlan-app-runtime-doc-refresh/app/src/sensor/vision.rs:6:    pub image: image::DynamicImage,
+/Users/lucian/Repos/wenlan-app/.worktrees/wenlan-app-runtime-doc-refresh/app/src/sensor/vision.rs:7:    pub app_name: String,
+/Users/lucian/Repos/wenlan-app/.worktrees/wenlan-app-runtime-doc-refresh/app/src/sensor/vision.rs:8:    pub window_name: String,
+/Users/lucian/Repos/wenlan-app/.worktrees/wenlan-app-runtime-doc-refresh/app/src/sensor/vision.rs:9:    pub focused: bool,
+/Users/lucian/Repos/wenlan-app/.worktrees/wenlan-app-runtime-doc-refresh/app/src/sensor/vision.rs:10:}
+/Users/lucian/Repos/wenlan-app/.worktrees/wenlan-app-runtime-doc-refresh/app/src/sensor/vision.rs:14:pub struct TextObservation {
+/Users/lucian/Repos/wenlan-app/.worktrees/wenlan-app-runtime-doc-refresh/app/src/sensor/vision.rs:15:    pub text: String,
+/Users/lucian/Repos/wenlan-app/.worktrees/wenlan-app-runtime-doc-refresh/app/src/sensor/vision.rs:16:    pub confidence: f64,
+/Users/lucian/Repos/wenlan-app/.worktrees/wenlan-app-runtime-doc-refresh/app/src/sensor/vision.rs:17:}
+/Users/lucian/Repos/wenlan-app/.worktrees/wenlan-app-runtime-doc-refresh/app/src/sensor/vision.rs:21:pub struct WindowOcrResult {
+/Users/lucian/Repos/wenlan-app/.worktrees/wenlan-app-runtime-doc-refresh/app/src/sensor/vision.rs:22:    pub window_name: String,
+/Users/lucian/Repos/wenlan-app/.worktrees/wenlan-app-runtime-doc-refresh/app/src/sensor/vision.rs:23:    pub app_name: String,
+/Users/lucian/Repos/wenlan-app/.worktrees/wenlan-app-runtime-doc-refresh/app/src/sensor/vision.rs:24:    pub text: String,
+/Users/lucian/Repos/wenlan-app/.worktrees/wenlan-app-runtime-doc-refresh/app/src/sensor/vision.rs:25:    pub observations: Vec<TextObservation>,
+/Users/lucian/Repos/wenlan-app/.worktrees/wenlan-app-runtime-doc-refresh/app/src/sensor/vision.rs:26:    pub focused: bool,
+/Users/lucian/Repos/wenlan-app/.worktrees/wenlan-app-runtime-doc-refresh/app/src/sensor/vision.rs:27:    #[allow(dead_code)]
+/Users/lucian/Repos/wenlan-app/.worktrees/wenlan-app-runtime-doc-refresh/app/src/sensor/vision.rs:28:    pub confidence: f64,
+/Users/lucian/Repos/wenlan-app/.worktrees/wenlan-app-runtime-doc-refresh/app/src/sensor/vision.rs:29:}
+/Users/lucian/Repos/wenlan-app/.worktrees/wenlan-app-runtime-doc-refresh/app/src/sources/local_files.rs:40:pub struct LocalFilesSource {
+/Users/lucian/Repos/wenlan-app/.worktrees/wenlan-app-runtime-doc-refresh/app/src/sources/local_files.rs:41:    watch_paths: Vec<PathBuf>,
+/Users/lucian/Repos/wenlan-app/.worktrees/wenlan-app-runtime-doc-refresh/app/src/sources/local_files.rs:42:    last_sync: Option<i64>,
+/Users/lucian/Repos/wenlan-app/.worktrees/wenlan-app-runtime-doc-refresh/app/src/sources/local_files.rs:43:    document_count: u64,
+/Users/lucian/Repos/wenlan-app/.worktrees/wenlan-app-runtime-doc-refresh/app/src/sources/local_files.rs:44:}
+/Users/lucian/Repos/wenlan-app/.worktrees/wenlan-app-runtime-doc-refresh/app/src/sources/sync.rs:19:pub struct SyncStats {
+/Users/lucian/Repos/wenlan-app/.worktrees/wenlan-app-runtime-doc-refresh/app/src/sources/sync.rs:20:    pub files_found: usize,
+/Users/lucian/Repos/wenlan-app/.worktrees/wenlan-app-runtime-doc-refresh/app/src/sources/sync.rs:21:    pub ingested: usize,
+/Users/lucian/Repos/wenlan-app/.worktrees/wenlan-app-runtime-doc-refresh/app/src/sources/sync.rs:22:    pub skipped: usize,
+/Users/lucian/Repos/wenlan-app/.worktrees/wenlan-app-runtime-doc-refresh/app/src/sources/sync.rs:23:    pub errors: usize,
+/Users/lucian/Repos/wenlan-app/.worktrees/wenlan-app-runtime-doc-refresh/app/src/sources/sync.rs:24:    /// Categorized error detail when `errors > 0`. Known values:
+/Users/lucian/Repos/wenlan-app/.worktrees/wenlan-app-runtime-doc-refresh/app/src/sources/sync.rs:25:    /// "google_drive_offline", "file_read_errors".
+/Users/lucian/Repos/wenlan-app/.worktrees/wenlan-app-runtime-doc-refresh/app/src/sources/sync.rs:26:    #[serde(default, skip_serializing_if = "Option::is_none")]
+/Users/lucian/Repos/wenlan-app/.worktrees/wenlan-app-runtime-doc-refresh/app/src/sources/sync.rs:27:    pub error_detail: Option<String>,
+/Users/lucian/Repos/wenlan-app/.worktrees/wenlan-app-runtime-doc-refresh/app/src/sources/sync.rs:28:}
+/Users/lucian/Repos/wenlan-app/.worktrees/wenlan-app-runtime-doc-refresh/app/src/state.rs:25:pub struct CaptureEvent {
+/Users/lucian/Repos/wenlan-app/.worktrees/wenlan-app-runtime-doc-refresh/app/src/state.rs:26:    pub source: String,
+/Users/lucian/Repos/wenlan-app/.worktrees/wenlan-app-runtime-doc-refresh/app/src/state.rs:27:    pub source_id: String,
+/Users/lucian/Repos/wenlan-app/.worktrees/wenlan-app-runtime-doc-refresh/app/src/state.rs:28:    pub summary: String,
+/Users/lucian/Repos/wenlan-app/.worktrees/wenlan-app-runtime-doc-refresh/app/src/state.rs:29:    pub chunks: usize,
+/Users/lucian/Repos/wenlan-app/.worktrees/wenlan-app-runtime-doc-refresh/app/src/state.rs:30:    /// When true, AI is still processing this capture (LLM Pass 2 pending).
+/Users/lucian/Repos/wenlan-app/.worktrees/wenlan-app-runtime-doc-refresh/app/src/state.rs:31:    pub processing: bool,
+/Users/lucian/Repos/wenlan-app/.worktrees/wenlan-app-runtime-doc-refresh/app/src/state.rs:32:}
+/Users/lucian/Repos/wenlan-app/.worktrees/wenlan-app-runtime-doc-refresh/app/src/state.rs:35:pub struct IndexStatus {
+/Users/lucian/Repos/wenlan-app/.worktrees/wenlan-app-runtime-doc-refresh/app/src/state.rs:36:    pub is_running: bool,
+/Users/lucian/Repos/wenlan-app/.worktrees/wenlan-app-runtime-doc-refresh/app/src/state.rs:37:    pub files_indexed: u64,
+/Users/lucian/Repos/wenlan-app/.worktrees/wenlan-app-runtime-doc-refresh/app/src/state.rs:38:    pub files_total: u64,
+/Users/lucian/Repos/wenlan-app/.worktrees/wenlan-app-runtime-doc-refresh/app/src/state.rs:39:    pub last_error: Option<String>,
+/Users/lucian/Repos/wenlan-app/.worktrees/wenlan-app-runtime-doc-refresh/app/src/state.rs:40:    pub sources_connected: Vec<String>,
+/Users/lucian/Repos/wenlan-app/.worktrees/wenlan-app-runtime-doc-refresh/app/src/state.rs:41:    pub reranker: wenlan_types::responses::RerankerStatus,
+/Users/lucian/Repos/wenlan-app/.worktrees/wenlan-app-runtime-doc-refresh/app/src/state.rs:42:    pub reranker_light: wenlan_types::responses::RerankerStatus,
+/Users/lucian/Repos/wenlan-app/.worktrees/wenlan-app-runtime-doc-refresh/app/src/state.rs:43:    pub reranker_mode: String,
+/Users/lucian/Repos/wenlan-app/.worktrees/wenlan-app-runtime-doc-refresh/app/src/state.rs:44:}
+/Users/lucian/Repos/wenlan-app/.worktrees/wenlan-app-runtime-doc-refresh/app/src/state.rs:46:pub struct AppState {
+/Users/lucian/Repos/wenlan-app/.worktrees/wenlan-app-runtime-doc-refresh/app/src/state.rs:47:    /// HTTP client for the Wenlan daemon.
+/Users/lucian/Repos/wenlan-app/.worktrees/wenlan-app-runtime-doc-refresh/app/src/state.rs:48:    pub client: WenlanClient,
+/Users/lucian/Repos/wenlan-app/.worktrees/wenlan-app-runtime-doc-refresh/app/src/state.rs:49:    pub index_status: IndexStatus,
+/Users/lucian/Repos/wenlan-app/.worktrees/wenlan-app-runtime-doc-refresh/app/src/state.rs:50:    pub sources: HashMap<String, Box<dyn DataSource>>,
+/Users/lucian/Repos/wenlan-app/.worktrees/wenlan-app-runtime-doc-refresh/app/src/state.rs:51:    pub watch_paths: Vec<PathBuf>,
+/Users/lucian/Repos/wenlan-app/.worktrees/wenlan-app-runtime-doc-refresh/app/src/state.rs:52:    pub clipboard_enabled: bool,
+/Users/lucian/Repos/wenlan-app/.worktrees/wenlan-app-runtime-doc-refresh/app/src/state.rs:53:    pub last_ingestion_at: i64,
+/Users/lucian/Repos/wenlan-app/.worktrees/wenlan-app-runtime-doc-refresh/app/src/state.rs:54:    pub current_activity: Option<Activity>,
+/Users/lucian/Repos/wenlan-app/.worktrees/wenlan-app-runtime-doc-refresh/app/src/state.rs:55:    pub completed_activities: Vec<Activity>,
+/Users/lucian/Repos/wenlan-app/.worktrees/wenlan-app-runtime-doc-refresh/app/src/state.rs:56:    pub app_handle: Option<tauri::AppHandle>,
+/Users/lucian/Repos/wenlan-app/.worktrees/wenlan-app-runtime-doc-refresh/app/src/state.rs:57:    /// Unified trigger channel sender.
+/Users/lucian/Repos/wenlan-app/.worktrees/wenlan-app-runtime-doc-refresh/app/src/state.rs:58:    pub trigger_tx: Option<tokio::sync::mpsc::Sender<crate::trigger::types::TriggerEvent>>,
+/Users/lucian/Repos/wenlan-app/.worktrees/wenlan-app-runtime-doc-refresh/app/src/state.rs:59:    /// Last context bundle received from the router.
+/Users/lucian/Repos/wenlan-app/.worktrees/wenlan-app-runtime-doc-refresh/app/src/state.rs:60:    pub last_context_bundle: Option<crate::router::bundle::ContextBundle>,
+/Users/lucian/Repos/wenlan-app/.worktrees/wenlan-app-runtime-doc-refresh/app/src/state.rs:61:    /// Screen capture enabled.
+/Users/lucian/Repos/wenlan-app/.worktrees/wenlan-app-runtime-doc-refresh/app/src/state.rs:62:    pub screen_capture_enabled: bool,
+/Users/lucian/Repos/wenlan-app/.worktrees/wenlan-app-runtime-doc-refresh/app/src/state.rs:63:    /// Remote access tunnel state.
+/Users/lucian/Repos/wenlan-app/.worktrees/wenlan-app-runtime-doc-refresh/app/src/state.rs:64:    pub remote_access: tokio::sync::Mutex<RemoteAccessState>,
+/Users/lucian/Repos/wenlan-app/.worktrees/wenlan-app-runtime-doc-refresh/app/src/state.rs:65:    /// Rolling in-memory buffer of recent captures for zero-query Spotlight.
+/Users/lucian/Repos/wenlan-app/.worktrees/wenlan-app-runtime-doc-refresh/app/src/state.rs:66:    ///
+/Users/lucian/Repos/wenlan-app/.worktrees/wenlan-app-runtime-doc-refresh/app/src/state.rs:67:    /// Populated by the context consumer (`router/intent.rs`) when it ingests
+/Users/lucian/Repos/wenlan-app/.worktrees/wenlan-app-runtime-doc-refresh/app/src/state.rs:68:    /// a screen/quick-thought capture. Served by the `get_working_memory`
+/Users/lucian/Repos/wenlan-app/.worktrees/wenlan-app-runtime-doc-refresh/app/src/state.rs:69:    /// Tauri command. Lives in the app process because only the app has
+/Users/lucian/Repos/wenlan-app/.worktrees/wenlan-app-runtime-doc-refresh/app/src/state.rs:70:    /// active sensors — captures happen only in the app process.
+/Users/lucian/Repos/wenlan-app/.worktrees/wenlan-app-runtime-doc-refresh/app/src/state.rs:71:    pub working_memory: Arc<tokio::sync::Mutex<WorkingMemory>>,
+/Users/lucian/Repos/wenlan-app/.worktrees/wenlan-app-runtime-doc-refresh/app/src/state.rs:72:}
+/Users/lucian/Repos/wenlan-app/.worktrees/wenlan-app-runtime-doc-refresh/app/src/tray_health.rs:32:pub struct HealthSignal {
+/Users/lucian/Repos/wenlan-app/.worktrees/wenlan-app-runtime-doc-refresh/app/src/tray_health.rs:33:    state: Arc<AtomicU8>,
+/Users/lucian/Repos/wenlan-app/.worktrees/wenlan-app-runtime-doc-refresh/app/src/tray_health.rs:34:    consecutive_down: Arc<AtomicU8>,
+/Users/lucian/Repos/wenlan-app/.worktrees/wenlan-app-runtime-doc-refresh/app/src/tray_health.rs:35:}

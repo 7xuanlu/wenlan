@@ -13,11 +13,22 @@ count_matches() {
   { rg -n "$pattern" "$@" || true; } | wc -l | tr -d ' '
 }
 
+count_inventory_calls() {
+  local file="$1"
+  { rg "^.+:[0-9]+:.*\\binvoke(<[^>]+>)?\\(" "$file" || true; } | wc -l | tr -d ' '
+}
+
 "${SG[@]}" outline "$ROOT/src/lib/tauri.ts" > "$OUT/tauri-ts-outline.txt"
 "${SG[@]}" outline "$ROOT/app/src/api.rs" > "$OUT/api-rs-outline.txt"
 "${SG[@]}" outline "$ROOT/app/src/search.rs" > "$OUT/search-rs-outline.txt"
-"${SG[@]}" run -p 'invoke($CMD, $$$ARGS)' -l ts "$ROOT/src" \
-  | LC_ALL=C sort -t: -k1,1 -k2,2n > "$OUT/frontend-invokes.txt"
+{
+  for lang in ts tsx; do
+    "${SG[@]}" run -p 'invoke($CMD)' -l "$lang" "$ROOT/src" || true
+    "${SG[@]}" run -p 'invoke($CMD, $$$ARGS)' -l "$lang" "$ROOT/src" || true
+    "${SG[@]}" run -p 'invoke<$TYPE>($CMD)' -l "$lang" "$ROOT/src" || true
+    "${SG[@]}" run -p 'invoke<$TYPE>($CMD, $$$ARGS)' -l "$lang" "$ROOT/src" || true
+  done
+} | LC_ALL=C sort -u -t: -k1,1 -k2,2n > "$OUT/frontend-invokes.txt"
 "${SG[@]}" run -p 'pub struct $NAME { $$$FIELDS }' -l rs "$ROOT/app/src" \
   | LC_ALL=C sort -t: -k1,1 -k2,2n > "$OUT/rust-structs.txt"
 
@@ -28,7 +39,7 @@ count_matches() {
   echo
   echo "## Counts"
   printf -- "- frontend invoke calls: "
-  count_matches "invoke\\(" "$ROOT/src/lib/tauri.ts"
+  count_inventory_calls "$OUT/frontend-invokes.txt"
   printf -- "- registered Tauri commands: "
   count_matches "search::" "$ROOT/app/src/lib.rs"
   printf -- "- origin_types references in Rust app code: "
