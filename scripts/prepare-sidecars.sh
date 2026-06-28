@@ -4,42 +4,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
-is_wenlan_backend_dir() {
-  local dir="$1"
-  [[ -f "$dir/Cargo.toml" && -d "$dir/crates/wenlan-server" && -d "$dir/crates/wenlan-mcp" && -d "$dir/crates/wenlan-cli" ]]
-}
-
-resolve_backend_dir() {
-  local candidate
-  if [[ -n "${WENLAN_BACKEND_DIR:-}" ]]; then
-    candidate="$WENLAN_BACKEND_DIR"
-    if [[ "$candidate" != /* ]]; then
-      candidate="$REPO_ROOT/$candidate"
-    fi
-    if ! is_wenlan_backend_dir "$candidate"; then
-      echo "error: WENLAN_BACKEND_DIR is not a Wenlan backend checkout: $candidate" >&2
-      exit 1
-    fi
-    (cd "$candidate" && pwd)
-    return
-  fi
-
-  for candidate in \
-    "$REPO_ROOT/../wenlan" \
-    "$REPO_ROOT/../../../wenlan" \
-    "$REPO_ROOT/../.."
-  do
-    if is_wenlan_backend_dir "$candidate"; then
-      (cd "$candidate" && pwd)
-      return
-    fi
-  done
-
-  echo "error: could not find Wenlan backend checkout; set WENLAN_BACKEND_DIR" >&2
-  exit 1
-}
-
-BACKEND_DIR="$(resolve_backend_dir)"
+BACKEND_DIR="$(bash "$SCRIPT_DIR/resolve-backend-dir.sh" "$REPO_ROOT")"
 
 PROFILE="debug"
 FORCE_BUILD=false

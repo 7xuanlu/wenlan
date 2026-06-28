@@ -7,7 +7,7 @@
   "packageManager": "pnpm@10.28.2",
   "scripts": {
     "dev": "vite",
-    "dev:daemon": "BACKEND=${WENLAN_BACKEND_DIR:-../..}; cargo build --manifest-path \"$BACKEND/Cargo.toml\" -p wenlan-server && (lsof -ti :7878 | xargs kill -9 2>/dev/null; sleep 0.3; \"$BACKEND/target/debug/wenlan-server\" &)",
+    "dev:daemon": "BACKEND=$(bash scripts/resolve-backend-dir.sh) && cargo build --manifest-path \"$BACKEND/Cargo.toml\" -p wenlan-server && (lsof -ti :7878 | xargs kill -9 2>/dev/null; sleep 0.3; \"$BACKEND/target/debug/wenlan-server\" &)",
     "dev:all": "pnpm clean:dev && pnpm dev:daemon && pnpm tauri dev",
     "build": "tsc -b && vite build",
     "prepare:sidecars": "bash scripts/prepare-sidecars.sh",
