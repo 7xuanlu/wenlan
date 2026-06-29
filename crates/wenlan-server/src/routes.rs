@@ -754,14 +754,17 @@ pub async fn handle_distill(
     // background refinery calls `distill_pages_scoped` directly with the
     // daemon LLM; that path is the one that synthesizes inline. Two
     // triggers, one shared function, no behavior drift inside the function.
-    let s = state.read().await;
-    let db =
-        s.db.as_ref()
-            .ok_or(ServerError::Internal("DB not initialized".into()))?;
-    let prompts = &s.prompts;
-    let tuning = &s.tuning.distillation;
-    let llm = s.llm.as_ref();
-    let api_llm = s.api_llm.as_ref();
+    let (db, prompts, tuning, llm, api_llm) = {
+        let s = state.read().await;
+        (
+            s.db.clone(),
+            s.prompts.clone(),
+            s.tuning.distillation.clone(),
+            s.llm.clone(),
+            s.api_llm.clone(),
+        )
+    };
+    let db = db.ok_or(ServerError::Internal("DB not initialized".into()))?;
 
     let knowledge_path = {
         let config = wenlan_core::config::load_config();
@@ -770,7 +773,7 @@ pub async fn handle_distill(
 
     let target = match req.target.as_deref() {
         Some(raw) if !raw.is_empty() => {
-            match wenlan_core::refinery::resolve_distill_target(db, raw).await? {
+            match wenlan_core::refinery::resolve_distill_target(&db, raw).await? {
                 Some(t) => Some(t),
                 None => {
                     return Ok(Json(serde_json::json!({
@@ -785,32 +788,19 @@ pub async fn handle_distill(
         _ => None,
     };
 
-    // Force path: clear user_edited and run a full deep_distill_single.
+    // Force path: only clear user_edited after an LLM is available to run the
+    // rewrite. A skipped no-LLM response must not unlock user prose.
     // Only valid when target resolves to a single page; all other targets
     // (entity, domain, none) return a hint payload.
     if req.force {
         match &target {
             Some(wenlan_core::synthesis::distill::DistillTarget::Page(page_id)) => {
-                db.clear_user_edited(page_id)
-                    .await
-                    .map_err(|e| ServerError::Internal(e.to_string()))?;
-                let prefer_llm = api_llm.or(llm);
-                if prefer_llm.map(|p| p.is_available()).unwrap_or(false) {
-                    let updated = wenlan_core::refinery::deep_distill_single(
-                        db,
-                        prefer_llm,
-                        prompts,
-                        page_id,
-                        knowledge_path.as_deref(),
-                    )
-                    .await?;
-                    return Ok(Json(serde_json::json!({
-                        "status": "ok",
-                        "force": true,
-                        "page_id": page_id,
-                        "updated": updated,
-                    })));
-                } else {
+                let prefer_llm = api_llm.as_ref().or(llm.as_ref());
+                if !prefer_llm
+                    .as_ref()
+                    .map(|provider| provider.is_available())
+                    .unwrap_or(false)
+                {
                     return Ok(Json(serde_json::json!({
                         "status": "skipped",
                         "force": true,
@@ -819,6 +809,23 @@ pub async fn handle_distill(
                         "hint": "force rebuild needs an LLM in the daemon — install an on-device model or set an Anthropic key via `wenlan setup` / `/origin:doctor`",
                     })));
                 }
+                db.clear_user_edited(page_id)
+                    .await
+                    .map_err(|e| ServerError::Internal(e.to_string()))?;
+                let updated = wenlan_core::refinery::deep_distill_single(
+                    &db,
+                    prefer_llm,
+                    &prompts,
+                    page_id,
+                    knowledge_path.as_deref(),
+                )
+                .await?;
+                return Ok(Json(serde_json::json!({
+                    "status": "ok",
+                    "force": true,
+                    "page_id": page_id,
+                    "updated": updated,
+                })));
             }
             _ => {
                 return Ok(Json(serde_json::json!({
@@ -842,10 +849,10 @@ pub async fn handle_distill(
     };
 
     let result = wenlan_core::refinery::distill_pages_scoped(
-        db,
+        &db,
         None, // route never invokes daemon LLM; caller synthesizes pending
-        prompts,
-        tuning,
+        &prompts,
+        &tuning,
         knowledge_path.as_deref(),
         target,
     )
@@ -989,33 +996,37 @@ pub async fn handle_redistill(
     State(state): State<Arc<RwLock<ServerState>>>,
     Path(page_id): Path<String>,
 ) -> Result<Json<serde_json::Value>, ServerError> {
-    let s = state.read().await;
-    let db =
-        s.db.as_ref()
-            .ok_or(ServerError::Internal("DB not initialized".into()))?;
-    let llm = s.llm.as_ref();
-    let api_llm = s.api_llm.as_ref();
-    let prompts = &s.prompts;
+    let (db, llm, api_llm, prompts) = {
+        let s = state.read().await;
+        (
+            s.db.clone(),
+            s.llm.clone(),
+            s.api_llm.clone(),
+            s.prompts.clone(),
+        )
+    };
+    let db = db.ok_or(ServerError::Internal("DB not initialized".into()))?;
 
     let knowledge_path = {
         let config = wenlan_core::config::load_config();
         Some(config.knowledge_path_or_default())
     };
 
-    // Clear user_edited and mark stale so the CAS gate inside
-    // deep_distill_single (require_stale=true) lets this pass through.
-    // This preserves the original contract of the route: always recompile
-    // the page regardless of its current stale state.
-    db.clear_user_edited(&page_id)
-        .await
-        .map_err(|e| ServerError::Internal(e.to_string()))?;
-
-    let prefer_llm = api_llm.or(llm);
-    if prefer_llm.map(|p| p.is_available()).unwrap_or(false) {
+    let prefer_llm = api_llm.as_ref().or(llm.as_ref());
+    if prefer_llm
+        .as_ref()
+        .map(|provider| provider.is_available())
+        .unwrap_or(false)
+    {
+        // Clear user_edited and mark stale only when the rewrite can actually
+        // run. The skipped no-LLM path must leave user prose locked.
+        db.clear_user_edited(&page_id)
+            .await
+            .map_err(|e| ServerError::Internal(e.to_string()))?;
         let updated = wenlan_core::refinery::deep_distill_single(
-            db,
+            &db,
             prefer_llm,
-            prompts,
+            &prompts,
             &page_id,
             knowledge_path.as_deref(),
         )
@@ -1314,6 +1325,138 @@ mod distill_request_tests {
     fn distill_request_rejects_unknown_field() {
         let r = serde_json::from_str::<DistillRequest>(r#"{"bogus":true}"#);
         assert!(r.is_err(), "deny_unknown_fields should reject unknown keys");
+    }
+}
+
+#[cfg(test)]
+mod redistill_contract_tests {
+    use axum::body::Body;
+    use axum::http::Request;
+    use std::sync::Arc;
+    use tokio::sync::RwLock;
+    use tower::ServiceExt;
+
+    use crate::state::ServerState;
+
+    async fn seeded_user_edited_page(
+        page_id: &str,
+    ) -> (
+        axum::Router,
+        Arc<wenlan_core::db::MemoryDB>,
+        tempfile::TempDir,
+    ) {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let emitter: Arc<dyn wenlan_core::events::EventEmitter> =
+            Arc::new(wenlan_core::events::NoopEmitter);
+        let db = Arc::new(
+            wenlan_core::db::MemoryDB::new(tmp.path(), emitter)
+                .await
+                .expect("MemoryDB::new"),
+        );
+        let now = chrono::Utc::now().to_rfc3339();
+        db.insert_page(
+            page_id,
+            "Manual page",
+            None,
+            "original body",
+            None,
+            None,
+            &["mem_1"],
+            &now,
+        )
+        .await
+        .expect("insert page");
+        db.update_page_content(page_id, "user prose", &["mem_1"], "fs_edit")
+            .await
+            .expect("mark page user edited");
+        let page = db
+            .get_page(page_id)
+            .await
+            .expect("get page")
+            .expect("page exists");
+        assert!(page.user_edited, "precondition: page is user edited");
+
+        let state = Arc::new(RwLock::new(ServerState {
+            db: Some(db.clone()),
+            ..Default::default()
+        }));
+        (crate::router::build_router(state), db, tmp)
+    }
+
+    #[tokio::test]
+    async fn page_redistill_without_llm_does_not_clear_user_edited() {
+        let (app, db, _tmp) = seeded_user_edited_page("page_direct").await;
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/distill/page_direct")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), 200);
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let payload: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(payload["status"], "skipped");
+
+        let page = db
+            .get_page("page_direct")
+            .await
+            .expect("get page")
+            .expect("page exists");
+        assert!(
+            page.user_edited,
+            "skipped no-LLM re-distill must not unlock user-edited prose"
+        );
+        assert_ne!(
+            page.stale_reason.as_deref(),
+            Some("manual_force"),
+            "skipped no-LLM re-distill must not mark a manual force rewrite"
+        );
+    }
+
+    #[tokio::test]
+    async fn force_target_redistill_without_llm_does_not_clear_user_edited() {
+        let (app, db, _tmp) = seeded_user_edited_page("page_force").await;
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/distill")
+                    .header("content-type", "application/json")
+                    .body(Body::from(r#"{"target":"page_force","force":true}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), 200);
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let payload: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(payload["status"], "skipped");
+        assert_eq!(payload["force"], true);
+
+        let page = db
+            .get_page("page_force")
+            .await
+            .expect("get page")
+            .expect("page exists");
+        assert!(
+            page.user_edited,
+            "skipped no-LLM force re-distill must not unlock user-edited prose"
+        );
+        assert_ne!(
+            page.stale_reason.as_deref(),
+            Some("manual_force"),
+            "skipped no-LLM force re-distill must not mark a manual force rewrite"
+        );
     }
 }
 
