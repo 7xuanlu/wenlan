@@ -1,0 +1,62 @@
+#!/usr/bin/env bash
+# agent-rigor pre-push hook (L3).
+# Generalized from a working project's .githooks/pre-push.
+#
+# Job: run the full linter plus the FAST test tier (unit/library tests only).
+# Target under ~90s. Skip entirely on docs-only pushes, because these checks
+# exist to catch broken code and a docs change cannot break code.
+#
+# Do NOT run coverage or slow integration tests here. Those are L5 (informational
+# in CI) and L7 (manual). A slow push gate trains people to use --no-verify.
+set -euo pipefail
+
+ZERO_SHA="0000000000000000000000000000000000000000"
+# Files that, when they are the ONLY thing changed, make this a docs-only push.
+DOCS_RE='^(README\.md|CHANGELOG\.md|LICENSE|CONTRIBUTING\.md|SECURITY\.md|CODE_OF_CONDUCT\.md|docs/.*|\.github/.*\.md)$'
+
+all_changed=""
+while read -r local_ref local_sha remote_ref remote_sha; do
+    [ -z "${local_ref:-}" ] && continue
+    [ "$local_sha" = "$ZERO_SHA" ] && continue
+    if [ "$remote_sha" = "$ZERO_SHA" ]; then
+        base=$(git merge-base "$local_sha" origin/main 2>/dev/null \
+            || git rev-list --max-parents=0 "$local_sha" | head -n 1)
+    else
+        base="$remote_sha"
+    fi
+    changed=$(git diff --name-only "$base" "$local_sha" 2>/dev/null || true)
+    [ -n "$changed" ] && all_changed=$(printf '%s\n%s' "$all_changed" "$changed")
+done
+
+all_changed=$(printf '%s' "$all_changed" | sed '/^$/d')
+
+if [ -n "$all_changed" ]; then
+    non_docs=$(printf '%s\n' "$all_changed" | grep -vE "$DOCS_RE" || true)
+    if [ -z "$non_docs" ]; then
+        count=$(printf '%s\n' "$all_changed" | wc -l | tr -d ' ')
+        echo "Pre-push: docs-only push ($count file(s)), skipping lint + tests."
+        exit 0
+    fi
+fi
+
+echo "Pre-push: running fast checks..."
+
+# TODO: full linter. Examples:
+#   cargo clippy --workspace --all-targets -- -D warnings
+#   npx eslint . | golangci-lint run ./... | ruff check .
+echo "  Linting..."
+cargo clippy --workspace --all-targets -- -D warnings 2>&1 || {
+    echo "FAIL: lint errors found. Fix before pushing."
+    exit 1
+}
+
+# TODO: FAST test tier only (unit/library). NOT integration, NOT coverage.
+#   cargo test --workspace --lib --quiet
+#   npm test | go test -short ./... | pytest -m "not slow"
+echo "  Running fast tests..."
+cargo test --workspace --lib --quiet 2>&1 || {
+    echo "FAIL: tests failed. Fix before pushing."
+    exit 1
+}
+
+echo "Pre-push: all fast checks passed. Safe to push (CI runs the full suite)."
