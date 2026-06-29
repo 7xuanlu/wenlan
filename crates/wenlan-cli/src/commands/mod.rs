@@ -4,6 +4,7 @@
 pub mod agents;
 pub mod list;
 pub mod mcp;
+pub mod pages;
 pub mod recall;
 pub mod search;
 pub mod service;

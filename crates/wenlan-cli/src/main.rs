@@ -82,6 +82,14 @@ enum Commands {
         /// Query to recall context for.
         query: String,
     },
+    /// Browse distilled pages, or open one in your editor by title query.
+    Pages {
+        /// Title/filename substring. Omit to list pages newest-first.
+        query: Option<String>,
+        /// Max pages to list (newest-first). 0 = all. Ignored when a query opens a page.
+        #[arg(short, long, default_value_t = 20)]
+        limit: usize,
+    },
     /// Store a memory. Provide text positionally, or use --file, or pipe via stdin.
     Store {
         /// Content text. If omitted and --file unset, read from stdin.
@@ -150,6 +158,7 @@ async fn main() -> anyhow::Result<()> {
         Commands::Recall { query } => {
             commands::recall::run(&client, format, cli.quiet, query).await?
         }
+        Commands::Pages { query, limit } => commands::pages::run(format, cli.quiet, query, limit)?,
         Commands::Store {
             text,
             file,
