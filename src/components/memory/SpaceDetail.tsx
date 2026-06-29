@@ -94,7 +94,7 @@ export default function SpaceDetail({
   });
 
   const deleteMutation = useMutation({
-    mutationFn: (memoryAction: string) => deleteSpace(spaceName, memoryAction),
+    mutationFn: () => deleteSpace(spaceName),
     onSuccess: () => {
       invalidate();
       onBack();
@@ -217,7 +217,7 @@ export default function SpaceDetail({
               Keep
             </button>
             <button
-              onClick={() => deleteMutation.mutate("unassign")}
+              onClick={() => deleteMutation.mutate()}
               className="px-3 py-1 rounded-md text-xs transition-colors duration-150 hover:bg-red-500/10"
               style={{ color: "var(--mem-text-tertiary)" }}
             >
@@ -307,21 +307,15 @@ export default function SpaceDetail({
           }}
         >
           <span style={{ fontFamily: "var(--mem-font-body)", fontSize: "12px", color: "var(--mem-text-secondary)" }}>
-            Keep {space.memory_count} {space.memory_count === 1 ? "memory" : "memories"}?
+            Memories keep their current space tag after this daemon removes the space.
           </span>
           <button
-            onClick={() => deleteMutation.mutate("unassign")}
-            className="px-2 py-0.5 rounded text-xs font-medium transition-colors duration-150 hover:brightness-110"
-            style={{ backgroundColor: "var(--mem-accent-sage)", color: "white" }}
-          >
-            Keep
-          </button>
-          <button
-            onClick={() => deleteMutation.mutate("delete")}
+            aria-label="Confirm delete space"
+            onClick={() => deleteMutation.mutate()}
             className="px-2 py-0.5 rounded text-xs font-medium transition-colors duration-150 hover:bg-red-500/15"
             style={{ color: "#ef4444" }}
           >
-            Delete
+            Delete space
           </button>
           <button
             onClick={() => setDeleteStep(null)}

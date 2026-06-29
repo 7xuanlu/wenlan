@@ -509,8 +509,8 @@ export async function updateSpace(
   return invoke("update_space", { name, newName, description: description ?? null });
 }
 
-export async function deleteSpace(name: string, memoryAction?: string): Promise<void> {
-  return invoke("delete_space", { name, memoryAction: memoryAction ?? null });
+export async function deleteSpace(name: string): Promise<void> {
+  return invoke("delete_space", { name });
 }
 
 export async function confirmSpace(name: string): Promise<void> {

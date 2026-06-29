@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 
 vi.mock("../../lib/tauri", () => ({
@@ -24,6 +24,7 @@ vi.mock("../../lib/tauri", () => ({
 }));
 
 import {
+  deleteSpace,
   getSpace,
   listMemoriesRich,
   listEntities,
@@ -33,6 +34,7 @@ import SpaceDetail from "./SpaceDetail";
 const mockGetSpace = vi.mocked(getSpace);
 const mockListMemoriesRich = vi.mocked(listMemoriesRich);
 const mockListEntities = vi.mocked(listEntities);
+const mockDeleteSpace = vi.mocked(deleteSpace);
 
 function renderWithQuery(ui: React.ReactElement) {
   const qc = new QueryClient({
@@ -163,5 +165,53 @@ describe("SpaceDetail context header", () => {
     expect(
       await screen.findByText("12 entities"),
     ).toBeInTheDocument();
+  });
+
+  it("deletes a space with only the daemon-supported keep behavior", async () => {
+    renderWithQuery(
+      <SpaceDetail
+        spaceName="Origin"
+        onBack={() => {}}
+        onSelectMemory={() => {}}
+        onSelectPage={() => {}}
+        onEntityClick={() => {}}
+      />,
+    );
+
+    fireEvent.click(await screen.findByTitle("Delete space"));
+
+    expect(screen.queryByText("Delete")).not.toBeInTheDocument();
+    expect(screen.queryByText(/Keep 47 memories/)).not.toBeInTheDocument();
+    expect(
+      screen.getByText(/Memories keep their current space tag/),
+    ).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Confirm delete space" }));
+
+    await waitFor(() => {
+      const calls = mockDeleteSpace.mock.calls;
+      expect(calls[calls.length - 1]).toEqual(["Origin"]);
+    });
+  });
+
+  it("discards a suggested space without unsupported memoryAction arguments", async () => {
+    mockGetSpace.mockResolvedValue({ ...baseSpace, suggested: true });
+
+    renderWithQuery(
+      <SpaceDetail
+        spaceName="Origin"
+        onBack={() => {}}
+        onSelectMemory={() => {}}
+        onSelectPage={() => {}}
+        onEntityClick={() => {}}
+      />,
+    );
+
+    fireEvent.click(await screen.findByText("Discard"));
+
+    await waitFor(() => {
+      const calls = mockDeleteSpace.mock.calls;
+      expect(calls[calls.length - 1]).toEqual(["Origin"]);
+    });
   });
 });

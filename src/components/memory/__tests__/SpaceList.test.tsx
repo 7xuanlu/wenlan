@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import SpaceList from "../SpaceList";
+import { deleteSpace } from "../../../lib/tauri";
 
 vi.mock("../../../lib/tauri", () => ({
   listSpaces: vi.fn().mockResolvedValue([
@@ -20,6 +21,7 @@ function wrapper({ children }: { children: React.ReactNode }) {
 
 describe("SpaceList", () => {
   const onSelectSpace = vi.fn();
+  const mockDeleteSpace = vi.mocked(deleteSpace);
 
   beforeEach(() => {
     vi.clearAllMocks();
@@ -53,5 +55,18 @@ describe("SpaceList", () => {
     fireEvent.contextMenu(screen.getByText("work"));
     expect(screen.getByText("Rename")).toBeTruthy();
     expect(screen.getByText("Delete space")).toBeTruthy();
+  });
+
+  it("deletes a space without unsupported memoryAction arguments", async () => {
+    render(<SpaceList onSelectSpace={onSelectSpace} />, { wrapper });
+    await waitFor(() => screen.getByText("work"));
+
+    fireEvent.contextMenu(screen.getByText("work"));
+    fireEvent.click(screen.getByText("Delete space"));
+
+    await waitFor(() => {
+      const calls = mockDeleteSpace.mock.calls;
+      expect(calls[calls.length - 1]).toEqual(["work"]);
+    });
   });
 });

@@ -544,9 +544,9 @@ describe('spaces', () => {
     expect(mockInvoke).toHaveBeenCalledWith('update_space', { name: 'work', newName: 'career', description: 'Career stuff' });
   });
 
-  it('deleteSpace passes name and memoryAction', async () => {
-    await tauri.deleteSpace('work', 'unassign');
-    expect(mockInvoke).toHaveBeenCalledWith('delete_space', { name: 'work', memoryAction: 'unassign' });
+  it('deleteSpace passes only the space name supported by the daemon API', async () => {
+    await tauri.deleteSpace('work');
+    expect(mockInvoke).toHaveBeenCalledWith('delete_space', { name: 'work' });
   });
 
   it('confirmSpace passes name', async () => {

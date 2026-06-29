@@ -81,8 +81,7 @@ export default function SpaceList({ onSelectSpace }: SpaceListProps) {
   });
 
   const deleteMutation = useMutation({
-    mutationFn: ({ name, memoryAction }: { name: string; memoryAction: string }) =>
-      deleteSpace(name, memoryAction),
+    mutationFn: (name: string) => deleteSpace(name),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["spaces"] });
       queryClient.invalidateQueries({ queryKey: ["memories"] });
@@ -446,7 +445,7 @@ export default function SpaceList({ onSelectSpace }: SpaceListProps) {
           </button>
           <div style={{ height: "1px", backgroundColor: "var(--mem-border)", margin: "2px 0" }} />
           <button
-            onClick={() => deleteMutation.mutate({ name: contextMenu.spaceName, memoryAction: "unassign" })}
+            onClick={() => deleteMutation.mutate(contextMenu.spaceName)}
             className="w-full text-left px-3 py-1.5 text-xs transition-colors duration-150 hover:bg-red-500/10"
             style={{ fontFamily: "var(--mem-font-body)", color: "#ef4444" }}
           >
