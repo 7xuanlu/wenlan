@@ -1,92 +1,85 @@
 ---
 name: pages
 description: >
-  Browse and preview distilled wiki pages from inside Claude Code. With no
+  Browse distilled wiki pages from inside Claude Code and open one. With no
   argument, lists recent pages in a native picker; with a query, searches by
-  title. Pick one to see its identity (title, summary, sources, links) and the
-  local md path. Full body lives on disk — open with the user's editor.
-  Invoked as `/pages [query]`.
+  title. Picking one opens its markdown file in your default editor; on a
+  headless terminal it prints the prose. The body is never rendered as a
+  metadata card. Invoked as `/pages [query]`.
 argument-hint: "[query]"
-allowed-tools: ["mcp__plugin_wenlan_wenlan__list_pages_recent", "mcp__plugin_wenlan_wenlan__search_pages", "mcp__plugin_wenlan_wenlan__get_page", "mcp__plugin_wenlan_wenlan__get_page_links", "AskUserQuestion", "Bash"]
+allowed-tools: ["mcp__plugin_wenlan_wenlan__list_pages_recent", "mcp__plugin_wenlan_wenlan__search_pages", "AskUserQuestion", "Bash"]
 ---
 
 # /pages
 
-Browse the wiki, pick a page, preview it. `/pages` is **navigation +
-preview, not full text**. The body is on disk; chat stays scannable.
+Find a distilled page and **open it**. `/pages` is a finder, not a viewer —
+its job is to resolve which page you mean and hand the markdown to your editor.
+Pages live as `.md` files in `~/.wenlan/pages/`; your editor renders and
+searches them better than chat can.
 
-Two halves: a **picker** (find the page) and a **preview block** (show
-its identity). Never dump a page body into chat — that's what the
-editor and the `Open:` path are for.
+The flow: **resolve candidates → pick (native picker) → open the file**. No
+metadata card, no body dumped into chat.
 
-## 1. Build the candidate list
+## 1. Resolve candidates (metadata only)
 
-Resolve a short list of pages, metadata only (id + title + snippet) —
-never the body.
+Never read the body here — only id + title + snippet.
 
-- **No argument** → recent pages:
+- **`/pages <id>`** where the arg starts with `page_` (or legacy `concept_`)
+  → skip the picker, go straight to step 3 with that id.
 
-  ```
-  list_pages_recent(limit=10)
-  ```
-
-  Returns a JSON array of activity items: `{ id, title, snippet,
-  timestamp_ms, badge }`. No `content` field — that's the point.
-
-- **Argument given** → search by title/topic:
+- **`/pages <query>`** → search by title/topic (daemon does real semantic search):
 
   ```
   search_pages(query="<arg>", limit=10)
   ```
 
-  Returns `{ "pages": [...] }`. The MCP tool already renders each hit
-  as a one-line metadata row (`<id>  <title>  — <summary>`); it does
-  **not** dump bodies. Read the `id` and `title` per row.
+  Returns `{ "pages": [...] }`, rendered one metadata row per hit
+  (`<id>  <title>  — <summary>`) — no bodies. Parse `id` + `title` per row.
+  If exactly **one** hit, skip the picker → step 3. If several → step 2.
 
-If the list is empty, tell the user "no pages found — run `/distill
-[topic]` to synthesize one" and stop. Never derive a slug client-side
-to guess a path; the daemon owns slugs.
+- **`/pages`** (no argument) → recent pages:
 
-## 2. Present the native picker
+  ```
+  list_pages_recent(limit=10)
+  ```
 
-Show the candidates with the **native multiple-choice picker** (the
-arrow-key prompt, same UI as a permission ask) via `AskUserQuestion` —
-not a prose list. The user scans options, not paragraphs.
+  Returns activity items `{ id, title, snippet, timestamp_ms, badge }` — no
+  `content` field. Go to step 2.
+
+If the list is empty, say "no pages found — run `/distill [topic]` to
+synthesize one" and stop. Never derive a slug client-side; the daemon owns it.
+
+## 2. Native picker (the search lives in "Other")
+
+Present the candidates with `AskUserQuestion` — the arrow-key picker, not a
+prose list.
 
 Rules:
 
-- One option per page. **Label** = the page title (trim to a few words
-  if long). **Description** = the snippet/summary + relative age
-  (e.g. "mutex deadlock notes · 2d ago").
-- Order by recency/relevance as returned; mark the **first** option
-  recommended.
-- The picker caps at 4 options. When more pages exist, show the top 3
-  and **always** add a final option **"Search by title…"** so every
-  page stays reachable despite the cap. When the user picks it, prompt
-  for a query and re-run step 1 with `search_pages`.
-- With ≤3 pages, list them all and still append "Search by title…".
+- One option per page. **Label** = the title (trim long ones). **Description**
+  = the snippet/summary. Order by recency/relevance as returned; mark the
+  **first** option recommended. Keep a label→id map in mind — the picker
+  returns the chosen label, you open its id.
+- The picker caps at **4 options**. Show up to 4 real pages. There is **no
+  "Search by title…" option** — an explicit option can't capture typed text.
+  Instead, put the search hint in the **question text**:
 
-The search escape is mandatory — it's what keeps the 4-option cap from
-hiding pages.
+  > `Which page to open? (or pick **Other** and type a title/topic to search)`
 
-## 3. Preview the picked page
+  The native **"Other"** choice is the only free-text box a skill gets. When
+  the user picks Other and types text, treat it as a **search query** → re-run
+  `search_pages(query=<that text>, limit=10)` → re-present this picker. This is
+  the no-prose search escape; it keeps every page reachable past the 4-cap.
 
-Once the user selects a page, fetch it by id and emit the preview
-block. Resolve the on-disk md path by id — never slugify client-side
-(skill heuristics drift from the canonical `slugify()` on apostrophes
-and punctuation).
+## 3. Open the page
 
-```
-get_page(page_id="<id>")
-```
+Resolve the on-disk filename **by id** (never slugify client-side — skill
+heuristics drift from the daemon's `slugify()` on apostrophes/punctuation),
+then open it. Run one Bash block with the id substituted:
 
-The response wraps `{ "page": {...} }`. Read `title`, `summary`,
-`space`, `version`, `source_memory_ids`, `user_edited`, `stale_reason`,
-and the edit fields off the page. Then look up the md filename in
-`~/.wenlan/pages/.wenlan/state.json`:
-
-```
-Bash: python3 -c '
+```bash
+PID="<id>"
+P=$(python3 -c '
 import json, os, sys
 state_path = os.path.expanduser("~/.wenlan/pages/.wenlan/state.json")
 pid = sys.argv[1]
@@ -96,88 +89,39 @@ try:
         filename = json.load(f).get("pages", {}).get(pid, {}).get("file")
 except FileNotFoundError:
     pass
-print(f"~/.wenlan/pages/{filename}" if filename else "(no md projection on disk)")
-' "<id>"
+print(os.path.expanduser(f"~/.wenlan/pages/{filename}") if filename else "")
+' "$PID")
+if [ -z "$P" ]; then
+  echo "(no md on disk for $PID — run /distill to (re)synthesize it)"
+else
+  # Open in your OS default app for .md (you pick it once in Finder > Get Info >
+  # Open With). No editor hardcoded. cat only on a headless box.
+  open "$P" 2>/dev/null || xdg-open "$P" 2>/dev/null || cat "$P"
+  echo "Opened $P"
+fi
 ```
 
-### Output shape
-
-Always print exactly these lines (no body):
-
-```
-Title:    <title>
-Version:  v<N> — <last_edited_by> <relative_time> (<last_delta_summary>)
-Summary:  <one sentence>
-Sources:  <N> memories
-Space:    <space or (none)>
-Links:    <N inbound, M outbound (<K> broken)>
-Open:     ~/.wenlan/pages/<slug>.md
-⚠ Stale: <stale_reason> — run /distill to refresh
-```
-
-**Lock banner rule:**
-
-When `user_edited == true`, prepend this line as the very first line of
-the rendered output, before the title:
-
-```
-🔒 You've edited this page. Auto-refresh paused. `/distill rebuild <page-id>` to unlock.
-```
-
-Substitute `<page-id>` with the actual `page.id`. When `user_edited` is
-false or absent, omit this line. The lock means daemon distill cycles
-will not auto-rewrite this page's prose from sources — edits stay until
-the user runs `/distill rebuild` to wipe and regenerate.
-
-**Version line rules:**
-
-- Always show `v<N>`. When `version` is null or missing, omit the line.
-- Append ` — <last_edited_by>` when populated (e.g. `re_distill`, `user`, `agent`).
-- Append relative time when `last_edited_at` is set (e.g. `2h ago`, `3d ago`).
-- Append `(<last_delta_summary>)` when the field is non-empty.
-- Examples:
-  - `v1 — synthesized 4h ago`
-  - `v4 — re_distill 2h ago (+mem_xyz, +250 chars)`
-  - `v3 — user 1d ago`
-
-**Stale warning rule:**
-
-- Emit the `⚠ Stale:` line only when `stale_reason` is non-null/non-empty.
-- Render `stale_reason` verbatim (values like `source_updated`,
-  `new_memories` are human-readable enough).
-
-**Links line rules:** Call `get_page_links(page_id="<id>")` right after
-`get_page` and count:
-
-- inbound = `len(inbound)`
-- outbound = `len(outbound)`
-- broken = outbound entries where `target_page_id` is null
-
-Omit the parenthetical when broken is zero. Drop the line entirely if
-inbound + outbound is zero.
-
-Don't paraphrase the title, don't trim the summary, don't decorate the
-preview. The block is one screen, predictable, easy to skim.
-
-If the user wants the full body, they open the md file in their editor
-(Obsidian, VS Code, glow, bat, …). The plugin doesn't render markdown
-better than their tools do.
-
-## Shortcuts
-
-- `/pages <id>` where `<arg>` starts with `page_` (or legacy `concept_`)
-  → skip the picker, fetch that page directly, emit the preview block.
-- `/pages` with a query that resolves to exactly one page → skip the
-  picker, preview it directly.
+- **Run this block with the command sandbox DISABLED.** `open` / `xdg-open`
+  launch a GUI app through LaunchServices, which a sandboxed shell cannot reach —
+  it fails with `kLSUnknownErr (-10810) "Couldn't communicate with a helper
+  application"`, and the chain then falls through to `cat`, dumping the whole
+  body into chat (the thing this skill exists to avoid). With the sandbox off the
+  editor actually opens; only a genuinely headless box (no window server) then
+  falls to `glow` / `cat`. One-time: allowlist `open` so it stops prompting.
+- Opens in your **OS default `.md` app** — `open` (macOS) / `xdg-open` (Linux) /
+  `cat` (headless). No editor is hardcoded; you control which app via Finder ▸ Get
+  Info ▸ Open With. If `open` appears to do nothing, your `.md` default is a
+  no-window app (e.g. Xcode) — repoint it once to your editor and every page opens
+  there.
+- Print exactly the one `Opened <path>` line the block emits. Don't add a
+  metadata card, version/links/stale block, or summary — the file is the view.
 
 ## When to use
 
-- User asks "show me the page on X", "what pages do I have", "browse my
-  wiki", "preview that page".
-- After `/distill` finishes, `/pages "<title>"` to inspect a changed page.
+- "show me the page on X", "open that page", "what pages do I have", "browse my wiki".
+- After `/distill`, `/pages "<title>"` to open a changed page in your editor.
 
 ## When NOT to use
 
-- Raw memory lookups → use `/recall`.
-- Reading the full body → open the md file in the user's editor, or
-  `ls ~/.wenlan/pages/` to see them all.
+- Raw memory lookups → `/recall`.
+- Just listing files → `ls ~/.wenlan/pages/`.
