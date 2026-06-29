@@ -14,6 +14,7 @@
     "prepare:sidecars:tauri-build": "bash scripts/prepare-tauri-build-sidecars.sh",
     "build:daemon": "pnpm prepare:sidecars",
     "build:all": "pnpm build:daemon && pnpm build",
+    "build:app:local": "pnpm tauri build --bundles app --config app/tauri.local-bundle.conf.json",
     "release:daemon": "bash scripts/prepare-sidecars.sh --release --force-build",
     "release": "pnpm clean:release && pnpm release:daemon && CXXFLAGS='-std=c++17' pnpm tauri build",
     "release:dmg": "rm -f target/release/bundle/macos/rw.*.dmg && mkdir -p target/release/bundle/dmg && node -e \"const v=require('./package.json').version; const f='target/release/bundle/dmg/Wenlan_'+v+'_aarch64.dmg'; require('fs').rmSync(f,{force:true}); const {execSync}=require('child_process'); execSync('hdiutil create -volname Wenlan -srcfolder target/release/bundle/macos -ov -format UDZO '+f,{stdio:'inherit'}); console.log('Created',f);\"",

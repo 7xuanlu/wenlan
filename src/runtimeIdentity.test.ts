@@ -88,6 +88,35 @@ describe("runtime product identity", () => {
     expect(tauri.build.beforeBuildCommand).toContain("prepare:sidecars:tauri-build");
   });
 
+  it("has a local app-bundle validation script that does not require updater signing keys", () => {
+    const pkg = JSON.parse(
+      readFileSync(resolve(root, "package.json"), "utf8"),
+    );
+    const tauri = JSON.parse(
+      readFileSync(resolve(root, "app/tauri.conf.json"), "utf8"),
+    );
+    const localBundle = JSON.parse(
+      readFileSync(resolve(root, "app/tauri.local-bundle.conf.json"), "utf8"),
+    );
+
+    expect(tauri.bundle.createUpdaterArtifacts).toBe(true);
+    expect(localBundle.bundle.createUpdaterArtifacts).toBe(false);
+    expect(pkg.scripts["build:app:local"]).toContain("tauri build --bundles app");
+    expect(pkg.scripts["build:app:local"]).toContain(
+      "--config app/tauri.local-bundle.conf.json",
+    );
+    expect(pkg.scripts["build:app:local"]).not.toContain("--no-bundle");
+
+    const productionReleaseScripts = Object.entries(pkg.scripts).filter(
+      ([name]) => name === "release" || name.startsWith("release:"),
+    );
+    expect(productionReleaseScripts.length).toBeGreaterThan(0);
+    for (const [, script] of productionReleaseScripts) {
+      expect(script).not.toContain("build:app:local");
+      expect(script).not.toContain("tauri.local-bundle.conf.json");
+    }
+  });
+
   it("keeps product-owned visible copy on Wenlan", () => {
     const productOwnedFiles = [
       "src/components/memory/SettingsPage.tsx",

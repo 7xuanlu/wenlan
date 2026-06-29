@@ -87,4 +87,4 @@ Built application at target/release/wenlan-app
 
 ## Runtime Notes
 
-After this change, the app process and Dock item are still visible as `wenlan-app` in dev mode because Tauri dev runs the unbundled debug binary. The code now sets the app icon from `app/icons/icon.png` immediately at startup and again through the reveal paths. A bundled `.app` launch remains the stronger Dock-icon proof because it carries the bundle identifier and `.icns` metadata.
+After this change, the app process and Dock item are still visible as `wenlan-app` in dev mode because Tauri dev runs the unbundled debug binary. The code now sets the app icon from `app/icons/icon.png` immediately at startup and again through the reveal paths. A bundled `.app` launch remains the stronger Dock/bundle evidence because it carries the bundle identifier and `.icns` metadata.

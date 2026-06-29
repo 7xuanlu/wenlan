@@ -2,10 +2,10 @@
 
 - **Date:** 2026-06-29 UTC / 2026-06-28 PDT
 - **App checkout:** `/Users/lucian/Repos/wenlan-app`
-- **App branch:** `codex/wenlan-app-runtime-assets`
+- **App branch:** `codex/wenlan-app-bundled-runtime`
 - **Wenlan backend source:** `/Users/lucian/Repos/wenlan`
 - **Purpose:** prerequisite matrix before the full `origin-app` -> `wenlan-app` refactor run.
-- **Current status:** refreshed on 2026-06-29 after typed-client, sidecar, MCP bridge, Dock/app-activation, avatar path, neutral theme fallback, Home pending-revision/refinery review work, daemon-backed setup status work, post-merge API parity wrappers, `/api/capture-stats`, daemon-backed global tag inventory, daemon-backed status/reranker diagnostics, entity-suggestion action compatibility with the refinery queue, typed space/page/search/setup response envelopes, typed MCP setup entry surface, `wenlan-types` 0.9.2, `/api/search` supplemental page consumption/navigation, shared page-list/search response typing, daemon-config-backed settings toggles, daemon data-root alignment for sidecar plus launchd, Intelligence setup copy moved from Concept to Page language, repeatable Tauri sidecar prep before validation, route-diff revalidation in `docs/superpowers/refactor/2026-06-29-wenlan-app-api-parity-revalidation.md`, and startup Dock-icon/reveal fallback work in `docs/superpowers/refactor/2026-06-29-wenlan-app-runtime-assets.md`.
+- **Current status:** refreshed on 2026-06-29 after typed-client, sidecar, MCP bridge, Dock/app-activation, avatar path, neutral theme fallback, Home pending-revision/refinery review work, daemon-backed setup status work, post-merge API parity wrappers, `/api/capture-stats`, daemon-backed global tag inventory, daemon-backed status/reranker diagnostics, entity-suggestion action compatibility with the refinery queue, typed space/page/search/setup response envelopes, typed MCP setup entry surface, `wenlan-types` 0.9.2, `/api/search` supplemental page consumption/navigation, shared page-list/search response typing, daemon-config-backed settings toggles, daemon data-root alignment for sidecar plus launchd, Intelligence setup copy moved from Concept to Page language, repeatable Tauri sidecar prep before validation, route-diff revalidation in `docs/superpowers/refactor/2026-06-29-wenlan-app-api-parity-revalidation.md`, startup Dock-icon/reveal fallback work in `docs/superpowers/refactor/2026-06-29-wenlan-app-runtime-assets.md`, and local bundled `.app` validation in `docs/superpowers/refactor/2026-06-29-wenlan-app-bundled-runtime.md`.
 
 ## Evidence Snapshot
 
@@ -95,7 +95,7 @@ These are required for feature parity but can follow the P0 review/status/setup 
 | Surface | Current app state | Required action | Gate |
 |---|---|---|---|
 | Bundle id | `com.wenlan.desktop`; runtime identity test asserts product name, identifier, updater endpoint, package/repo identity | keep legacy Origin state readable through bridge paths | runtime identity tests |
-| Dock icon and startup reveal | setup sets the full app icon before activation policy and keeps a delayed backend reveal pass if frontend readiness does not expose the main window | keep bundled `.app` launch as the stronger Dock-icon proof because dev mode runs an unbundled binary | runtime identity and macOS lib tests |
+| Dock icon, bundle identity, and startup reveal | setup sets the full app icon before activation policy, keeps a delayed backend reveal pass if frontend readiness does not expose the main window, and `pnpm build:app:local` produces a local `Wenlan.app` bundle without updater signing keys | keep bundled `.app` launch as the stronger Dock/bundle evidence because dev mode runs an unbundled binary; production updater artifacts remain enabled in `app/tauri.conf.json` | runtime identity, local bundle validation, and macOS lib tests |
 | LaunchAgents | current labels are `com.wenlan.desktop` and `com.wenlan.server`; legacy `com.origin.desktop`/`com.origin.server` are detected and cleaned only when owned | preserve owned legacy cleanup and foreign-file safety | lifecycle tests |
 | LaunchAgent template | current `com.wenlan.desktop.plist` uses Wenlan placeholders; legacy `com.origin.desktop.plist` retained as bridge artifact | keep legacy template untouched until bridge cleanup | lifecycle template/install tests |
 | Stable app path | accepts `/Applications/Wenlan.app`, `~/Applications/Wenlan.app`, and legacy `Origin.app` bridge paths | keep old app path detection until bridge cleanup | lifecycle tests |
@@ -116,6 +116,7 @@ Go when all are true:
 - CodeGraph evaluation is recorded, `.codegraph/` is ignored, and cross-cutting edits use `codegraph sync` plus target-specific `query`/`impact`/`affected` probes before changing behavior.
 - `pnpm install --frozen-lockfile --offline` exits 0.
 - `pnpm test` exits 0.
+- `pnpm build:app:local` exits 0 and produces `target/release/bundle/macos/Wenlan.app` without requiring `TAURI_SIGNING_PRIVATE_KEY`.
 - `cargo build` exits 0 with the repeatable `wenlan-server`/`wenlan-mcp` sidecar strategy.
 - Remaining public rename work is gated by bridge classification: keep legacy Origin state readable, then migrate visible product/runtime identity in separate commits.
 
