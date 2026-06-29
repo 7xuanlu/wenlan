@@ -529,6 +529,14 @@ export async function deleteSpace(name: string): Promise<void> {
   return invoke("delete_space", { name });
 }
 
+export interface MoveSpaceResponse {
+  affected: number;
+}
+
+export async function moveSpace(from: string, to: string): Promise<MoveSpaceResponse> {
+  return invoke("move_space", { from, to });
+}
+
 export async function confirmSpace(name: string): Promise<void> {
   return invoke("confirm_space", { name });
 }

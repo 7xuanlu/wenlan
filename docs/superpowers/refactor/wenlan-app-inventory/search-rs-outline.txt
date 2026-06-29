@@ -163,105 +163,106 @@ app/src/search.rs
 2397: pub async fn create_space(
 2408: pub async fn update_space(
 2425: pub async fn delete_space(state: tauri::State<'_, State>, name: String) -> Result<(), String>
-2435: pub async fn confirm_space(state: tauri::State<'_, State>, name: String) -> Result<(), String>
-2445: pub async fn reorder_space(
-2457: pub async fn toggle_space_starred(
-2471: pub async fn set_document_space(
-2489: pub async fn add_space(
-2505: pub async fn remove_space(state: tauri::State<'_, State>, space_id: String) -> Result<(), String>
-2516: pub async fn rename_space(
-2534: pub async fn pin_space(state: tauri::State<'_, State>, space_id: String) -> Result<(), String>
-2544: mod space_command_type_tests
-        function: delete_space_response_uses_typed_deleted_envelope, toggle_space_starred_response_uses_typed_starred_envelope, legacy_space_aliases_keep_void_tauri_surface, space_response_envelopes_deserialize_daemon_payloads
-2587: pub struct TagData
+2435: pub async fn move_space(
+2448: pub async fn confirm_space(state: tauri::State<'_, State>, name: String) -> Result<(), String>
+2458: pub async fn reorder_space(
+2470: pub async fn toggle_space_starred(
+2484: pub async fn set_document_space(
+2502: pub async fn add_space(
+2518: pub async fn remove_space(state: tauri::State<'_, State>, space_id: String) -> Result<(), String>
+2529: pub async fn rename_space(
+2547: pub async fn pin_space(state: tauri::State<'_, State>, space_id: String) -> Result<(), String>
+2557: mod space_command_type_tests
+        function: delete_space_response_uses_typed_deleted_envelope, toggle_space_starred_response_uses_typed_starred_envelope, move_space_command_uses_typed_affected_envelope, legacy_space_aliases_keep_void_tauri_surface, space_response_envelopes_deserialize_daemon_payloads
+2606: pub struct TagData
         field: tags, document_tags, categories, document_categories
-2595: struct SetDocumentTagsRequest
+2614: struct SetDocumentTagsRequest
         field: source, tags
-2601: pub async fn list_all_tags(state: tauri::State<'_, State>) -> Result<TagData, String>
-2610: fn tag_data_from_inventory(inventory: crate::api::TagInventoryResponse) -> TagData
-2620: pub async fn set_document_tags(
-2635: pub async fn delete_tag(state: tauri::State<'_, State>, name: String) -> Result<(), String>
-2643: pub async fn suggest_tags(
-2689: fn percent_encode(s: &str) -> String
-2704: pub async fn get_working_memory(
-2719: pub async fn get_session_snapshots(
-2729: pub async fn get_snapshot_captures(
-2740: pub async fn get_snapshot_captures_with_content(
-2754: pub async fn delete_snapshot(
-2769: pub async fn get_nurture_cards_cmd(
-2780: pub async fn correct_memory_cmd(
-2795: struct CorrectMemoryResponse
+2620: pub async fn list_all_tags(state: tauri::State<'_, State>) -> Result<TagData, String>
+2629: fn tag_data_from_inventory(inventory: crate::api::TagInventoryResponse) -> TagData
+2639: pub async fn set_document_tags(
+2654: pub async fn delete_tag(state: tauri::State<'_, State>, name: String) -> Result<(), String>
+2662: pub async fn suggest_tags(
+2708: fn percent_encode(s: &str) -> String
+2723: pub async fn get_working_memory(
+2738: pub async fn get_session_snapshots(
+2748: pub async fn get_snapshot_captures(
+2759: pub async fn get_snapshot_captures_with_content(
+2773: pub async fn delete_snapshot(
+2788: pub async fn get_nurture_cards_cmd(
+2799: pub async fn correct_memory_cmd(
+2814: struct CorrectMemoryResponse
         field: corrected, source_id
-2800: async fn correct_memory_response(
-2811: mod remaining_json_command_type_tests
+2819: async fn correct_memory_response(
+2830: mod remaining_json_command_type_tests
         function: delete_agent_response_uses_typed_deleted_envelope, correct_memory_response_uses_typed_correction_envelope, public_commands_keep_existing_surfaces, remaining_response_envelopes_deserialize_daemon_payloads
-2859: struct GetPageWire
+2878: struct GetPageWire
         field: page
-2864: pub async fn get_page(state: tauri::State<'_, State>, id: String) -> Result<Option<Page>, String>
-2888: pub async fn update_page(
-2906: pub async fn archive_page(state: tauri::State<'_, State>, id: String) -> Result<(), String>
-2913: pub async fn delete_page(state: tauri::State<'_, State>, id: String) -> Result<(), String>
-2920: struct PageStatusResponse
+2883: pub async fn get_page(state: tauri::State<'_, State>, id: String) -> Result<Option<Page>, String>
+2907: pub async fn update_page(
+2925: pub async fn archive_page(state: tauri::State<'_, State>, id: String) -> Result<(), String>
+2932: pub async fn delete_page(state: tauri::State<'_, State>, id: String) -> Result<(), String>
+2939: struct PageStatusResponse
         field: status
-2924: async fn archive_page_response(
-2933: async fn delete_page_response(
-2941: mod page_status_command_type_tests
+2943: async fn archive_page_response(
+2952: async fn delete_page_response(
+2960: mod page_status_command_type_tests
         function: archive_page_response_uses_typed_status_envelope, delete_page_response_uses_typed_status_envelope, page_commands_keep_void_tauri_surface, page_status_response_deserializes_daemon_payloads
-2977: mod search_response_type_tests
+2996: mod search_response_type_tests
         function: search_result, search_results_include_supplemental_pages, search_memory_results_include_supplemental_pages
-3056: pub async fn list_pages(
-3088: pub async fn search_pages(
-3104: pub async fn get_page_sources(
-3113: pub async fn get_page_links(
-3122: pub async fn get_page_revisions(
-3134: pub async fn list_orphan_links(
-3143: pub async fn export_pages_to_obsidian(
-3157: pub async fn export_page_to_obsidian(
-3169: mod export_command_type_tests
+3075: pub async fn list_pages(
+3107: pub async fn search_pages(
+3123: pub async fn get_page_sources(
+3132: pub async fn get_page_links(
+3141: pub async fn get_page_revisions(
+3153: pub async fn list_orphan_links(
+3162: pub async fn export_pages_to_obsidian(
+3176: pub async fn export_page_to_obsidian(
+3188: mod export_command_type_tests
         function: export_page_to_obsidian_uses_daemon_export_response, export_page_to_obsidian_response_type_is_checked
-3183: pub async fn get_knowledge_path(state: tauri::State<'_, State>) -> Result<String, String>
-3190: pub async fn count_knowledge_files(state: tauri::State<'_, State>) -> Result<u64, String>
-3199: pub async fn get_rejection_log(
-3211: pub async fn list_decisions_cmd(
-3226: pub async fn list_decision_domains_cmd(
-3240: pub async fn add_source(
-3275: async fn add_directory_source(
-3332: pub async fn remove_source(state: tauri::State<'_, State>, id: String) -> Result<(), String>
-3352: async fn remove_directory_source(
-3370: pub async fn list_registered_sources(
-3385: fn merge_registered_sources_with_local_directories(
-3405: pub async fn sync_registered_source(
-3441: pub async fn get_model_choice(
-3452: pub async fn set_model_choice(
-3469: pub async fn get_system_info() -> Result<wenlan_types::system_info::SystemInfo, String>
-3474: pub async fn get_external_llm(
-3485: pub async fn set_external_llm(
-3500: pub async fn test_external_llm(
-3513: mod external_llm_command_type_tests
+3202: pub async fn get_knowledge_path(state: tauri::State<'_, State>) -> Result<String, String>
+3209: pub async fn count_knowledge_files(state: tauri::State<'_, State>) -> Result<u64, String>
+3218: pub async fn get_rejection_log(
+3230: pub async fn list_decisions_cmd(
+3245: pub async fn list_decision_domains_cmd(
+3259: pub async fn add_source(
+3294: async fn add_directory_source(
+3351: pub async fn remove_source(state: tauri::State<'_, State>, id: String) -> Result<(), String>
+3371: async fn remove_directory_source(
+3389: pub async fn list_registered_sources(
+3404: fn merge_registered_sources_with_local_directories(
+3424: pub async fn sync_registered_source(
+3460: pub async fn get_model_choice(
+3471: pub async fn set_model_choice(
+3488: pub async fn get_system_info() -> Result<wenlan_types::system_info::SystemInfo, String>
+3493: pub async fn get_external_llm(
+3504: pub async fn set_external_llm(
+3519: pub async fn test_external_llm(
+3532: mod external_llm_command_type_tests
         function: test_external_llm_uses_daemon_response_envelope, test_external_llm_response_type_is_checked
-3528: pub async fn get_on_device_model(
-3541: pub async fn download_on_device_model(
-3553: mod on_device_model_command_type_tests
+3547: pub async fn get_on_device_model(
+3560: pub async fn download_on_device_model(
+3572: mod on_device_model_command_type_tests
         function: get_on_device_model_uses_typed_response, on_device_model_command_response_type_is_checked
-3568: pub async fn list_recent_retrievals(
-3580: pub async fn list_recent_changes(
-3592: pub async fn list_recent_memories(
-3607: pub async fn list_unconfirmed_memories(
-3619: pub async fn list_recent_pages(
-3634: pub async fn list_recent_relations(
-3649: pub async fn is_run_at_login_enabled() -> Result<bool, String>
-3655: pub async fn set_run_at_login(enabled: bool) -> Result<(), String>
-3663: pub async fn quit_wenlan_full(app_handle: tauri::AppHandle) -> Result<(), String>
-3670: pub async fn quit_origin_full(app_handle: tauri::AppHandle) -> Result<(), String>
-3675: mod lifecycle_command_tests
+3587: pub async fn list_recent_retrievals(
+3599: pub async fn list_recent_changes(
+3611: pub async fn list_recent_memories(
+3626: pub async fn list_unconfirmed_memories(
+3638: pub async fn list_recent_pages(
+3653: pub async fn list_recent_relations(
+3668: pub async fn is_run_at_login_enabled() -> Result<bool, String>
+3674: pub async fn set_run_at_login(enabled: bool) -> Result<(), String>
+3682: pub async fn quit_wenlan_full(app_handle: tauri::AppHandle) -> Result<(), String>
+3689: pub async fn quit_origin_full(app_handle: tauri::AppHandle) -> Result<(), String>
+3694: mod lifecycle_command_tests
         function: exposes_wenlan_and_legacy_quit_commands
-3686: mod status_response_tests
+3705: mod status_response_tests
         function: daemon_status_updates_count_and_reranker_without_forcing_indexing_state
-3739: mod tag_data_tests
+3758: mod tag_data_tests
         function: set_document_tags_request_serializes_source_and_tags, tag_data_from_inventory_preserves_document_tags
-3776: mod avatar_path_tests
+3795: mod avatar_path_tests
         function: restore_env, avatar_storage_dir_prefers_wenlan_data_dir, avatar_storage_dir_prefers_wenlan_data_dir_when_both_are_set, avatar_storage_dir_falls_back_to_legacy_origin_data_dir, avatar_storage_dir_uses_legacy_default_when_current_empty_and_legacy_has_avatars, resolves_missing_legacy_avatar_to_wenlan_copy, does_not_resolve_arbitrary_missing_path_to_avatar_copy, does_not_resolve_non_origin_avatar_dir_to_wenlan_copy
-3947: mod revision_response_tests
+3966: mod revision_response_tests
         function: store_memory_response_preserves_revision_signals, store_memory_response_defaults_revision_signals_for_old_daemons
-3989: mod registered_source_tests
+4008: mod registered_source_tests
         function: source, registered_source_listing_keeps_local_directory_sources_only

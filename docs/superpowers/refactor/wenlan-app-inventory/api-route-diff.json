@@ -3,8 +3,8 @@
   "backendRoot": "wenlan",
   "counts": {
     "backendRoutes": 123,
-    "appSourceRoutes": 111,
-    "missingInApp": 12,
+    "appSourceRoutes": 112,
+    "missingInApp": 11,
     "appOnly": 0
   },
   "backendRoutes": [
@@ -2063,6 +2063,15 @@
       ]
     },
     {
+      "normalized": "/api/spaces/{}/move-to/{}",
+      "paths": [
+        "/api/spaces/{}/move-to/{}"
+      ],
+      "files": [
+        "app/src/api.rs"
+      ]
+    },
+    {
       "normalized": "/api/spaces/{}/pin",
       "paths": [
         "/api/spaces/{}/pin"
@@ -2203,15 +2212,6 @@
       "normalized": "/api/ping",
       "paths": [
         "/api/ping"
-      ],
-      "files": [
-        "crates/wenlan-server/src/router.rs"
-      ]
-    },
-    {
-      "normalized": "/api/spaces/{}/move-to/{}",
-      "paths": [
-        "/api/spaces/{from}/move-to/{to}"
       ],
       "files": [
         "crates/wenlan-server/src/router.rs"

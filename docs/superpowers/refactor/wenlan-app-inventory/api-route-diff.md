@@ -6,8 +6,8 @@
 ## Counts
 
 - backend route paths: 123
-- app source route paths: 111
-- backend routes with no direct app source path: 12
+- app source route paths: 112
+- backend routes with no direct app source path: 11
 - app source paths with no backend router path: 0
 
 ## Backend Routes With No Direct App Source Path
@@ -21,7 +21,6 @@
 - `/api/memory/link-entity`
 - `/api/memory/relations`
 - `/api/ping`
-- `/api/spaces/{from}/move-to/{to}`
 - `/api/steep`
 - `/ws/updates`
 

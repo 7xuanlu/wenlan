@@ -2432,6 +2432,19 @@ pub async fn delete_space(state: tauri::State<'_, State>, name: String) -> Resul
 }
 
 #[tauri::command]
+pub async fn move_space(
+    state: tauri::State<'_, State>,
+    from: String,
+    to: String,
+) -> Result<crate::api::MoveSpaceResponse, String> {
+    let client = {
+        let s = state.read().await;
+        s.client.clone()
+    };
+    client.move_space(&from, &to).await
+}
+
+#[tauri::command]
 pub async fn confirm_space(state: tauri::State<'_, State>, name: String) -> Result<(), String> {
     let s = state.read().await;
     let _resp: responses::SuccessResponse = s
@@ -2555,6 +2568,12 @@ mod space_command_type_tests {
     ) {
         let _: Result<ToggleSpaceStarredResponse, String> =
             toggle_space_starred_response(&client, "space").await;
+    }
+
+    #[allow(dead_code)]
+    async fn move_space_command_uses_typed_affected_envelope(state: tauri::State<'_, State>) {
+        let _: Result<crate::api::MoveSpaceResponse, String> =
+            move_space(state, "Inbox".to_string(), "Archive".to_string()).await;
     }
 
     #[allow(dead_code)]

@@ -549,6 +549,13 @@ describe('spaces', () => {
     expect(mockInvoke).toHaveBeenCalledWith('delete_space', { name: 'work' });
   });
 
+  it('moveSpace passes source and destination space names', async () => {
+    mockInvoke.mockResolvedValue({ affected: 7 });
+    const result = await tauri.moveSpace('Inbox', 'Archive');
+    expect(result).toEqual({ affected: 7 });
+    expect(mockInvoke).toHaveBeenCalledWith('move_space', { from: 'Inbox', to: 'Archive' });
+  });
+
   it('confirmSpace passes name', async () => {
     await tauri.confirmSpace('work');
     expect(mockInvoke).toHaveBeenCalledWith('confirm_space', { name: 'work' });

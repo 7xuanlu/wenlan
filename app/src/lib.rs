@@ -879,6 +879,7 @@ pub fn run() {
             search::create_space,
             search::update_space,
             search::delete_space,
+            search::move_space,
             search::confirm_space,
             search::reorder_space,
             search::toggle_space_starred,

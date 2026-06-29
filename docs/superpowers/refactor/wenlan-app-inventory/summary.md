@@ -1,8 +1,8 @@
 # Wenlan App Structural Inventory
 
 ## Counts
-- frontend invoke calls: 154
-- registered Tauri commands: 177
+- frontend invoke calls: 155
+- registered Tauri commands: 178
 - origin_types references in Rust app code: 0
 - runtime identity references: 152
 - stale taxonomy references: 182

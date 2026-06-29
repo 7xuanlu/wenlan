@@ -54,149 +54,150 @@ src/lib/tauri.ts:510:  return invoke("get_space", { name });
 src/lib/tauri.ts:517:  return invoke("create_space", { name, description: description ?? null });
 src/lib/tauri.ts:525:  return invoke("update_space", { name, newName, description: description ?? null });
 src/lib/tauri.ts:529:  return invoke("delete_space", { name });
-src/lib/tauri.ts:533:  return invoke("confirm_space", { name });
-src/lib/tauri.ts:537:  return invoke("reorder_space", { name, newOrder });
-src/lib/tauri.ts:541:  return invoke("toggle_space_starred", { name });
-src/lib/tauri.ts:549:  return invoke("set_document_space", { source, sourceId, spaceId });
-src/lib/tauri.ts:557:  return invoke("add_space", { name, icon, color });
-src/lib/tauri.ts:561:  return invoke("remove_space", { spaceId });
-src/lib/tauri.ts:568:  return invoke("rename_space", { spaceId, newName });
-src/lib/tauri.ts:572:  return invoke("pin_space", { spaceId });
-src/lib/tauri.ts:589:  return invoke("get_session_snapshots", { limit: limit ?? 10 });
-src/lib/tauri.ts:601:  return invoke("get_snapshot_captures", { snapshotId });
-src/lib/tauri.ts:615:  return invoke("get_snapshot_captures_with_content", { snapshotId });
-src/lib/tauri.ts:619:  return invoke("delete_snapshot", { snapshotId });
-src/lib/tauri.ts:625:  return invoke("get_skip_apps");
-src/lib/tauri.ts:629:  return invoke("set_skip_apps", { apps });
-src/lib/tauri.ts:633:  return invoke("get_skip_title_patterns");
-src/lib/tauri.ts:637:  return invoke("set_skip_title_patterns", { patterns });
-src/lib/tauri.ts:641:  return invoke("get_private_browsing_detection");
-src/lib/tauri.ts:645:  return invoke("set_private_browsing_detection", { enabled });
-src/lib/tauri.ts:967:  return invoke("get_page_links", { pageId });
-src/lib/tauri.ts:971:  return invoke("list_orphan_links", { minCount: minCount ?? null });
-src/lib/tauri.ts:1010:  return invoke("create_entity_cmd", {
-src/lib/tauri.ts:1011:    name,
-src/lib/tauri.ts:1012:    entityType,
-src/lib/tauri.ts:1013:    domain: domain ?? null,
-src/lib/tauri.ts:1014:  });
-src/lib/tauri.ts:1048:  return invoke("update_observation_cmd", { observationId, content });
-src/lib/tauri.ts:1052:  return invoke("delete_observation_cmd", { observationId });
-src/lib/tauri.ts:1061:  return invoke("add_observation_cmd", {
-src/lib/tauri.ts:1062:    entityId,
-src/lib/tauri.ts:1063:    content,
-src/lib/tauri.ts:1064:    sourceAgent: sourceAgent ?? null,
-src/lib/tauri.ts:1065:    confidence: confidence ?? null,
-src/lib/tauri.ts:1066:  });
-src/lib/tauri.ts:1070:  return invoke("delete_entity_cmd", { entityId });
-src/lib/tauri.ts:1074:  return invoke("confirm_entity_cmd", { entityId, confirmed });
-src/lib/tauri.ts:1078:  return invoke("confirm_observation_cmd", { observationId, confirmed });
-src/lib/tauri.ts:1117:  return invoke("store_memory", { req });
-src/lib/tauri.ts:1158:  return invoke("get_enrichment_status", { sourceId });
-src/lib/tauri.ts:1169:  return invoke("get_memory_stats_cmd");
-src/lib/tauri.ts:1200:  return invoke("get_home_stats");
-src/lib/tauri.ts:1210:  return invoke("update_memory_cmd", {
-src/lib/tauri.ts:1211:    sourceId,
-src/lib/tauri.ts:1212:    content: content ?? null,
-src/lib/tauri.ts:1213:    domain: domain ?? null,
-src/lib/tauri.ts:1214:    confirmed: confirmed ?? null,
-src/lib/tauri.ts:1215:    memoryType: memoryType ?? null,
-src/lib/tauri.ts:1216:  });
-src/lib/tauri.ts:1223:  return invoke("reclassify_memory_cmd", { sourceId, memoryType });
-src/lib/tauri.ts:1229:  return invoke("get_version_chain_cmd", { sourceId });
-src/lib/tauri.ts:1235:  return invoke("get_memory_revisions", { sourceId });
-src/lib/tauri.ts:1241:  return invoke("get_page_revisions", { pageId });
-src/lib/tauri.ts:1245:  return invoke("list_pending_revisions", { limit: limit ?? null });
-src/lib/tauri.ts:1249:  return invoke("accept_pending_revision", { sourceId });
-src/lib/tauri.ts:1253:  return invoke("dismiss_pending_revision", { sourceId });
-src/lib/tauri.ts:1257:  return invoke("dismiss_contradiction", { sourceId });
-src/lib/tauri.ts:1261:  return invoke("confirm_memory", { sourceId, confirmed });
-src/lib/tauri.ts:1265:  return invoke("get_pending_revision", { sourceId });
-src/lib/tauri.ts:1320:  return invoke("list_refinements", { limit: limit ?? null });
-src/lib/tauri.ts:1324:  return invoke("accept_refinement", { id });
-src/lib/tauri.ts:1328:  return invoke("reject_refinement", { id });
-src/lib/tauri.ts:1334:  return invoke("get_entity_suggestions_cmd");
-src/lib/tauri.ts:1358:  return invoke("update_page", { id, content });
-src/lib/tauri.ts:1367:  return invoke("delete_page", { id });
-src/lib/tauri.ts:1376:  return invoke("archive_page", { id });
-src/lib/tauri.ts:1448:  return invoke<RetrievalEvent[]>("list_recent_retrievals", { limit: limit ?? 10 });
-src/lib/tauri.ts:1452:  return invoke<PageChange[]>("list_recent_changes", { limit: limit ?? 10 });
-src/lib/tauri.ts:1479:  return invoke<RecentActivityItem[]>("list_recent_memories", {
-src/lib/tauri.ts:1480:    limit,
-src/lib/tauri.ts:1481:    sinceMs: sinceMs ?? null,
-src/lib/tauri.ts:1482:  });
-src/lib/tauri.ts:1488:  return invoke<RecentActivityItem[]>("list_unconfirmed_memories", { limit });
-src/lib/tauri.ts:1495:  return invoke<RecentActivityItem[]>("list_recent_pages", {
-src/lib/tauri.ts:1496:    limit,
-src/lib/tauri.ts:1497:    sinceMs: sinceMs ?? null,
-src/lib/tauri.ts:1498:  });
-src/lib/tauri.ts:1523:  return invoke<RecentRelation[]>("list_recent_relations", {
-src/lib/tauri.ts:1524:    limit: limit ?? 10,
-src/lib/tauri.ts:1525:    sinceMs: sinceMs ?? null,
-src/lib/tauri.ts:1526:  });
-src/lib/tauri.ts:1542:  return invoke("export_pages_to_obsidian", { vaultPath });
-src/lib/tauri.ts:1556:  return invoke("export_page_to_obsidian", { pageId, vaultPath });
-src/lib/tauri.ts:1570:  return invoke("get_knowledge_path");
-src/lib/tauri.ts:1574:  return invoke("count_knowledge_files");
-src/lib/tauri.ts:1580:  return invoke<Profile | null>("get_profile");
-src/lib/tauri.ts:1591:  return invoke("update_profile", {
-src/lib/tauri.ts:1592:    id,
-src/lib/tauri.ts:1593:    name: name ?? null,
-src/lib/tauri.ts:1594:    display_name: displayName ?? null,
-src/lib/tauri.ts:1595:    email: email ?? null,
-src/lib/tauri.ts:1596:    bio: bio ?? null,
-src/lib/tauri.ts:1597:    avatar_path: avatarPath ?? null,
-src/lib/tauri.ts:1598:  });
-src/lib/tauri.ts:1604:  return invoke<AgentConnection[]>("list_agents");
-src/lib/tauri.ts:1608:  return invoke<AgentConnection | null>("get_agent", { name });
-src/lib/tauri.ts:1622:  return invoke("update_agent", {
-src/lib/tauri.ts:1623:    name,
-src/lib/tauri.ts:1624:    agent_type: updates.agentType ?? null,
-src/lib/tauri.ts:1625:    description: updates.description ?? null,
-src/lib/tauri.ts:1626:    enabled: updates.enabled ?? null,
-src/lib/tauri.ts:1627:    trust_level: updates.trustLevel ?? null,
-src/lib/tauri.ts:1628:    display_name: updates.displayName ?? null,
-src/lib/tauri.ts:1629:  });
-src/lib/tauri.ts:1633:  return invoke("delete_agent", { name });
-src/lib/tauri.ts:1639:  return invoke("pin_memory", { sourceId });
-src/lib/tauri.ts:1643:  return invoke("unpin_memory", { sourceId });
-src/lib/tauri.ts:1668:  return invoke("import_memories_cmd", {
-src/lib/tauri.ts:1669:    source,
-src/lib/tauri.ts:1670:    content,
-src/lib/tauri.ts:1671:    label: label ?? null,
-src/lib/tauri.ts:1672:  });
-src/lib/tauri.ts:1689:  return invoke<ImportChatExportResponse>("import_chat_export", { path });
-src/lib/tauri.ts:1693:  return invoke<string>("save_temp_file", { bytes: Array.from(bytes), filename });
-src/lib/tauri.ts:1721:  return invoke<PendingImport[]>("list_pending_imports");
-src/lib/tauri.ts:1727:  return invoke("set_avatar", { sourcePath });
-src/lib/tauri.ts:1731:  return invoke<string | null>("get_avatar_data_url");
-src/lib/tauri.ts:1735:  return invoke("remove_avatar");
-src/lib/tauri.ts:1749:  return invoke("should_show_wizard");
-src/lib/tauri.ts:1762:  return invoke("get_setup_status");
-src/lib/tauri.ts:1766:  return invoke("get_setup_completed");
-src/lib/tauri.ts:1770:  return invoke("set_setup_completed", { completed });
-src/lib/tauri.ts:1774:  return invoke("detect_mcp_clients_cmd");
-src/lib/tauri.ts:1778:  return invoke("write_mcp_config", { clientType });
-src/lib/tauri.ts:1789:  return invoke("get_wenlan_mcp_entry");
-src/lib/tauri.ts:1810:  return invoke("list_onboarding_milestones");
-src/lib/tauri.ts:1814:  return invoke("acknowledge_onboarding_milestone", { id });
-src/lib/tauri.ts:1818:  return invoke("reset_onboarding_milestones");
-src/lib/tauri.ts:1840:  return invoke("get_briefing");
-src/lib/tauri.ts:1844:  return invoke("get_pending_contradictions");
-src/lib/tauri.ts:1857:  return invoke("get_profile_narrative");
-src/lib/tauri.ts:1861:  return invoke("regenerate_narrative");
-src/lib/tauri.ts:1882:  return invoke("list_agent_activity", {
-src/lib/tauri.ts:1883:    limit: limit ?? 50,
-src/lib/tauri.ts:1884:    agentName: agentName ?? null,
-src/lib/tauri.ts:1885:    since: since ?? null,
-src/lib/tauri.ts:1886:  });
-src/lib/tauri.ts:1900:  return invoke<RemoteAccessStatus>("toggle_remote_access", { enabled });
-src/lib/tauri.ts:1904:  return invoke<RemoteAccessStatus>("get_remote_access_status");
-src/lib/tauri.ts:1908:  return invoke<string>("rotate_remote_token");
-src/lib/tauri.ts:1921:  return invoke<RemoteConnectionTest>("test_remote_mcp_connection");
-src/lib/tauri.ts:1935:  return invoke("set_stability_cmd", { sourceId, stability });
-src/lib/tauri.ts:1939:  return invoke("correct_memory_cmd", { sourceId, correctionPrompt });
-src/lib/tauri.ts:1956:  return invoke("list_decision_domains_cmd", {});
-src/lib/tauri.ts:1962:  return invoke("is_run_at_login_enabled");
-src/lib/tauri.ts:1966:  return invoke("set_run_at_login", { enabled });
-src/lib/tauri.ts:1970:  return invoke("quit_wenlan_full");
-src/lib/tauri.ts:1975:  return invoke("quit_origin_full");
+src/lib/tauri.ts:537:  return invoke("move_space", { from, to });
+src/lib/tauri.ts:541:  return invoke("confirm_space", { name });
+src/lib/tauri.ts:545:  return invoke("reorder_space", { name, newOrder });
+src/lib/tauri.ts:549:  return invoke("toggle_space_starred", { name });
+src/lib/tauri.ts:557:  return invoke("set_document_space", { source, sourceId, spaceId });
+src/lib/tauri.ts:565:  return invoke("add_space", { name, icon, color });
+src/lib/tauri.ts:569:  return invoke("remove_space", { spaceId });
+src/lib/tauri.ts:576:  return invoke("rename_space", { spaceId, newName });
+src/lib/tauri.ts:580:  return invoke("pin_space", { spaceId });
+src/lib/tauri.ts:597:  return invoke("get_session_snapshots", { limit: limit ?? 10 });
+src/lib/tauri.ts:609:  return invoke("get_snapshot_captures", { snapshotId });
+src/lib/tauri.ts:623:  return invoke("get_snapshot_captures_with_content", { snapshotId });
+src/lib/tauri.ts:627:  return invoke("delete_snapshot", { snapshotId });
+src/lib/tauri.ts:633:  return invoke("get_skip_apps");
+src/lib/tauri.ts:637:  return invoke("set_skip_apps", { apps });
+src/lib/tauri.ts:641:  return invoke("get_skip_title_patterns");
+src/lib/tauri.ts:645:  return invoke("set_skip_title_patterns", { patterns });
+src/lib/tauri.ts:649:  return invoke("get_private_browsing_detection");
+src/lib/tauri.ts:653:  return invoke("set_private_browsing_detection", { enabled });
+src/lib/tauri.ts:975:  return invoke("get_page_links", { pageId });
+src/lib/tauri.ts:979:  return invoke("list_orphan_links", { minCount: minCount ?? null });
+src/lib/tauri.ts:1018:  return invoke("create_entity_cmd", {
+src/lib/tauri.ts:1019:    name,
+src/lib/tauri.ts:1020:    entityType,
+src/lib/tauri.ts:1021:    domain: domain ?? null,
+src/lib/tauri.ts:1022:  });
+src/lib/tauri.ts:1056:  return invoke("update_observation_cmd", { observationId, content });
+src/lib/tauri.ts:1060:  return invoke("delete_observation_cmd", { observationId });
+src/lib/tauri.ts:1069:  return invoke("add_observation_cmd", {
+src/lib/tauri.ts:1070:    entityId,
+src/lib/tauri.ts:1071:    content,
+src/lib/tauri.ts:1072:    sourceAgent: sourceAgent ?? null,
+src/lib/tauri.ts:1073:    confidence: confidence ?? null,
+src/lib/tauri.ts:1074:  });
+src/lib/tauri.ts:1078:  return invoke("delete_entity_cmd", { entityId });
+src/lib/tauri.ts:1082:  return invoke("confirm_entity_cmd", { entityId, confirmed });
+src/lib/tauri.ts:1086:  return invoke("confirm_observation_cmd", { observationId, confirmed });
+src/lib/tauri.ts:1125:  return invoke("store_memory", { req });
+src/lib/tauri.ts:1166:  return invoke("get_enrichment_status", { sourceId });
+src/lib/tauri.ts:1177:  return invoke("get_memory_stats_cmd");
+src/lib/tauri.ts:1208:  return invoke("get_home_stats");
+src/lib/tauri.ts:1218:  return invoke("update_memory_cmd", {
+src/lib/tauri.ts:1219:    sourceId,
+src/lib/tauri.ts:1220:    content: content ?? null,
+src/lib/tauri.ts:1221:    domain: domain ?? null,
+src/lib/tauri.ts:1222:    confirmed: confirmed ?? null,
+src/lib/tauri.ts:1223:    memoryType: memoryType ?? null,
+src/lib/tauri.ts:1224:  });
+src/lib/tauri.ts:1231:  return invoke("reclassify_memory_cmd", { sourceId, memoryType });
+src/lib/tauri.ts:1237:  return invoke("get_version_chain_cmd", { sourceId });
+src/lib/tauri.ts:1243:  return invoke("get_memory_revisions", { sourceId });
+src/lib/tauri.ts:1249:  return invoke("get_page_revisions", { pageId });
+src/lib/tauri.ts:1253:  return invoke("list_pending_revisions", { limit: limit ?? null });
+src/lib/tauri.ts:1257:  return invoke("accept_pending_revision", { sourceId });
+src/lib/tauri.ts:1261:  return invoke("dismiss_pending_revision", { sourceId });
+src/lib/tauri.ts:1265:  return invoke("dismiss_contradiction", { sourceId });
+src/lib/tauri.ts:1269:  return invoke("confirm_memory", { sourceId, confirmed });
+src/lib/tauri.ts:1273:  return invoke("get_pending_revision", { sourceId });
+src/lib/tauri.ts:1328:  return invoke("list_refinements", { limit: limit ?? null });
+src/lib/tauri.ts:1332:  return invoke("accept_refinement", { id });
+src/lib/tauri.ts:1336:  return invoke("reject_refinement", { id });
+src/lib/tauri.ts:1342:  return invoke("get_entity_suggestions_cmd");
+src/lib/tauri.ts:1366:  return invoke("update_page", { id, content });
+src/lib/tauri.ts:1375:  return invoke("delete_page", { id });
+src/lib/tauri.ts:1384:  return invoke("archive_page", { id });
+src/lib/tauri.ts:1456:  return invoke<RetrievalEvent[]>("list_recent_retrievals", { limit: limit ?? 10 });
+src/lib/tauri.ts:1460:  return invoke<PageChange[]>("list_recent_changes", { limit: limit ?? 10 });
+src/lib/tauri.ts:1487:  return invoke<RecentActivityItem[]>("list_recent_memories", {
+src/lib/tauri.ts:1488:    limit,
+src/lib/tauri.ts:1489:    sinceMs: sinceMs ?? null,
+src/lib/tauri.ts:1490:  });
+src/lib/tauri.ts:1496:  return invoke<RecentActivityItem[]>("list_unconfirmed_memories", { limit });
+src/lib/tauri.ts:1503:  return invoke<RecentActivityItem[]>("list_recent_pages", {
+src/lib/tauri.ts:1504:    limit,
+src/lib/tauri.ts:1505:    sinceMs: sinceMs ?? null,
+src/lib/tauri.ts:1506:  });
+src/lib/tauri.ts:1531:  return invoke<RecentRelation[]>("list_recent_relations", {
+src/lib/tauri.ts:1532:    limit: limit ?? 10,
+src/lib/tauri.ts:1533:    sinceMs: sinceMs ?? null,
+src/lib/tauri.ts:1534:  });
+src/lib/tauri.ts:1550:  return invoke("export_pages_to_obsidian", { vaultPath });
+src/lib/tauri.ts:1564:  return invoke("export_page_to_obsidian", { pageId, vaultPath });
+src/lib/tauri.ts:1578:  return invoke("get_knowledge_path");
+src/lib/tauri.ts:1582:  return invoke("count_knowledge_files");
+src/lib/tauri.ts:1588:  return invoke<Profile | null>("get_profile");
+src/lib/tauri.ts:1599:  return invoke("update_profile", {
+src/lib/tauri.ts:1600:    id,
+src/lib/tauri.ts:1601:    name: name ?? null,
+src/lib/tauri.ts:1602:    display_name: displayName ?? null,
+src/lib/tauri.ts:1603:    email: email ?? null,
+src/lib/tauri.ts:1604:    bio: bio ?? null,
+src/lib/tauri.ts:1605:    avatar_path: avatarPath ?? null,
+src/lib/tauri.ts:1606:  });
+src/lib/tauri.ts:1612:  return invoke<AgentConnection[]>("list_agents");
+src/lib/tauri.ts:1616:  return invoke<AgentConnection | null>("get_agent", { name });
+src/lib/tauri.ts:1630:  return invoke("update_agent", {
+src/lib/tauri.ts:1631:    name,
+src/lib/tauri.ts:1632:    agent_type: updates.agentType ?? null,
+src/lib/tauri.ts:1633:    description: updates.description ?? null,
+src/lib/tauri.ts:1634:    enabled: updates.enabled ?? null,
+src/lib/tauri.ts:1635:    trust_level: updates.trustLevel ?? null,
+src/lib/tauri.ts:1636:    display_name: updates.displayName ?? null,
+src/lib/tauri.ts:1637:  });
+src/lib/tauri.ts:1641:  return invoke("delete_agent", { name });
+src/lib/tauri.ts:1647:  return invoke("pin_memory", { sourceId });
+src/lib/tauri.ts:1651:  return invoke("unpin_memory", { sourceId });
+src/lib/tauri.ts:1676:  return invoke("import_memories_cmd", {
+src/lib/tauri.ts:1677:    source,
+src/lib/tauri.ts:1678:    content,
+src/lib/tauri.ts:1679:    label: label ?? null,
+src/lib/tauri.ts:1680:  });
+src/lib/tauri.ts:1697:  return invoke<ImportChatExportResponse>("import_chat_export", { path });
+src/lib/tauri.ts:1701:  return invoke<string>("save_temp_file", { bytes: Array.from(bytes), filename });
+src/lib/tauri.ts:1729:  return invoke<PendingImport[]>("list_pending_imports");
+src/lib/tauri.ts:1735:  return invoke("set_avatar", { sourcePath });
+src/lib/tauri.ts:1739:  return invoke<string | null>("get_avatar_data_url");
+src/lib/tauri.ts:1743:  return invoke("remove_avatar");
+src/lib/tauri.ts:1757:  return invoke("should_show_wizard");
+src/lib/tauri.ts:1770:  return invoke("get_setup_status");
+src/lib/tauri.ts:1774:  return invoke("get_setup_completed");
+src/lib/tauri.ts:1778:  return invoke("set_setup_completed", { completed });
+src/lib/tauri.ts:1782:  return invoke("detect_mcp_clients_cmd");
+src/lib/tauri.ts:1786:  return invoke("write_mcp_config", { clientType });
+src/lib/tauri.ts:1797:  return invoke("get_wenlan_mcp_entry");
+src/lib/tauri.ts:1818:  return invoke("list_onboarding_milestones");
+src/lib/tauri.ts:1822:  return invoke("acknowledge_onboarding_milestone", { id });
+src/lib/tauri.ts:1826:  return invoke("reset_onboarding_milestones");
+src/lib/tauri.ts:1848:  return invoke("get_briefing");
+src/lib/tauri.ts:1852:  return invoke("get_pending_contradictions");
+src/lib/tauri.ts:1865:  return invoke("get_profile_narrative");
+src/lib/tauri.ts:1869:  return invoke("regenerate_narrative");
+src/lib/tauri.ts:1890:  return invoke("list_agent_activity", {
+src/lib/tauri.ts:1891:    limit: limit ?? 50,
+src/lib/tauri.ts:1892:    agentName: agentName ?? null,
+src/lib/tauri.ts:1893:    since: since ?? null,
+src/lib/tauri.ts:1894:  });
+src/lib/tauri.ts:1908:  return invoke<RemoteAccessStatus>("toggle_remote_access", { enabled });
+src/lib/tauri.ts:1912:  return invoke<RemoteAccessStatus>("get_remote_access_status");
+src/lib/tauri.ts:1916:  return invoke<string>("rotate_remote_token");
+src/lib/tauri.ts:1929:  return invoke<RemoteConnectionTest>("test_remote_mcp_connection");
+src/lib/tauri.ts:1943:  return invoke("set_stability_cmd", { sourceId, stability });
+src/lib/tauri.ts:1947:  return invoke("correct_memory_cmd", { sourceId, correctionPrompt });
+src/lib/tauri.ts:1964:  return invoke("list_decision_domains_cmd", {});
+src/lib/tauri.ts:1970:  return invoke("is_run_at_login_enabled");
+src/lib/tauri.ts:1974:  return invoke("set_run_at_login", { enabled });
+src/lib/tauri.ts:1978:  return invoke("quit_wenlan_full");
+src/lib/tauri.ts:1983:  return invoke("quit_origin_full");

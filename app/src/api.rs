@@ -56,6 +56,11 @@ pub struct OnDeviceModelResponse {
     pub models: Vec<OnDeviceModelEntry>,
 }
 
+#[derive(Debug, Clone, serde::Deserialize, serde::Serialize, PartialEq, Eq)]
+pub struct MoveSpaceResponse {
+    pub affected: usize,
+}
+
 #[derive(Debug, Clone, serde::Serialize)]
 struct OnDeviceModelRequest {
     model_id: String,
@@ -250,6 +255,15 @@ impl WenlanClient {
         req: wenlan_types::requests::IngestWebpageRequest,
     ) -> Result<wenlan_types::responses::IngestResponse, String> {
         self.post_json("/api/ingest/webpage", &req).await
+    }
+
+    pub async fn move_space(&self, from: &str, to: &str) -> Result<MoveSpaceResponse, String> {
+        let path = format!(
+            "/api/spaces/{}/move-to/{}",
+            percent_encode_path_segment(from),
+            percent_encode_path_segment(to)
+        );
+        self.post_empty(&path).await
     }
 
     // ── Chat export import ─────────────────────────────────────────
@@ -644,6 +658,18 @@ fn daemon_port() -> u16 {
                 .and_then(|v| v.parse().ok())
         })
         .unwrap_or(7878)
+}
+
+fn percent_encode_path_segment(value: &str) -> String {
+    value
+        .bytes()
+        .flat_map(|byte| match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~' => {
+                vec![byte as char]
+            }
+            _ => format!("%{byte:02X}").chars().collect(),
+        })
+        .collect()
 }
 
 // `UpdateConfigRequest` does not derive `Default` in wenlan-types, so
@@ -1096,6 +1122,45 @@ mod tests {
                 "content": "A durable article body.",
                 "metadata": {"source": "manual-url"}
             })
+        );
+    }
+
+    #[tokio::test]
+    async fn move_space_uses_daemon_space_move_endpoint() {
+        let (base_url, request) = serve_json_once(r#"{"affected":7}"#).await;
+        let client = WenlanClient {
+            client: reqwest::Client::new(),
+            base_url,
+        };
+
+        let resp = client.move_space("Inbox", "Archive").await.unwrap();
+
+        assert_eq!(resp.affected, 7);
+        let request = request.await.unwrap();
+        assert_eq!(
+            request.lines().next().unwrap_or_default(),
+            "POST /api/spaces/Inbox/move-to/Archive HTTP/1.1"
+        );
+    }
+
+    #[tokio::test]
+    async fn move_space_percent_encodes_space_names_as_path_segments() {
+        let (base_url, request) = serve_json_once(r#"{"affected":2}"#).await;
+        let client = WenlanClient {
+            client: reqwest::Client::new(),
+            base_url,
+        };
+
+        let resp = client
+            .move_space("Work/Clients?old=true", "Archive#2026")
+            .await
+            .unwrap();
+
+        assert_eq!(resp.affected, 2);
+        let request = request.await.unwrap();
+        assert_eq!(
+            request.lines().next().unwrap_or_default(),
+            "POST /api/spaces/Work%2FClients%3Fold%3Dtrue/move-to/Archive%232026 HTTP/1.1"
         );
     }
 

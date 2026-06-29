@@ -40,6 +40,9 @@ app/src/api.rs:54:    pub loaded: Option<String>,
 app/src/api.rs:55:    pub selected: Option<String>,
 app/src/api.rs:56:    pub models: Vec<OnDeviceModelEntry>,
 app/src/api.rs:57:}
+app/src/api.rs:60:pub struct MoveSpaceResponse {
+app/src/api.rs:61:    pub affected: usize,
+app/src/api.rs:62:}
 app/src/config.rs:45:pub struct Config {
 app/src/config.rs:46:    /// Legacy field — kept for backward compat with old config files.
 app/src/config.rs:47:    /// Use `sources` instead. Migrated to Source structs by `migrate()`.
@@ -188,12 +191,12 @@ app/src/search.rs:2279:    pub source_ids: Vec<String>,
 app/src/search.rs:2280:    pub confidence: f64,
 app/src/search.rs:2281:    pub created_at: String,
 app/src/search.rs:2282:}
-app/src/search.rs:2587:pub struct TagData {
-app/src/search.rs:2588:    pub tags: Vec<String>,
-app/src/search.rs:2589:    pub document_tags: HashMap<String, Vec<String>>,
-app/src/search.rs:2590:    pub categories: Vec<String>,
-app/src/search.rs:2591:    pub document_categories: HashMap<String, String>,
-app/src/search.rs:2592:}
+app/src/search.rs:2606:pub struct TagData {
+app/src/search.rs:2607:    pub tags: Vec<String>,
+app/src/search.rs:2608:    pub document_tags: HashMap<String, Vec<String>>,
+app/src/search.rs:2609:    pub categories: Vec<String>,
+app/src/search.rs:2610:    pub document_categories: HashMap<String, String>,
+app/src/search.rs:2611:}
 app/src/sensor/vision.rs:5:pub struct WindowCapture {
 app/src/sensor/vision.rs:6:    pub image: image::DynamicImage,
 app/src/sensor/vision.rs:7:    pub app_name: String,
