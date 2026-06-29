@@ -21096,7 +21096,7 @@ impl MemoryDB {
     }
 
     /// Outbound links from a page. Used by `/api/pages/{id}/links` and the
-    /// `/read` preview's link-count line.
+    /// `/pages` preview's link-count line.
     pub async fn get_page_outbound_links(
         &self,
         source_page_id: &str,

@@ -25,7 +25,7 @@ Wenlan plugin — daily verbs
   /capture <x>  save one durable memory in flow
   /recall <q>   search local memory
   /distill [t]  synthesize pages from clusters (scoped to current repo)
-  /read <p>     preview a distilled page inline
+  /pages [q]    browse + open distilled pages (wenlan pages)
   /review <surface>   deep audit (surface = captures|revisions); /brief handles daily
   /forget <id>  delete a memory by ID
   /handoff      end-of-session ritual (session log + captures)
