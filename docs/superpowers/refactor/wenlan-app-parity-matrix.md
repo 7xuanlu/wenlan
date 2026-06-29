@@ -2,10 +2,10 @@
 
 - **Date:** 2026-06-29 UTC / 2026-06-28 PDT
 - **App checkout:** `/Users/lucian/Repos/wenlan-app`
-- **App branch:** `codex/wenlan-app-bundled-runtime`
+- **App branch:** `codex/wenlan-app-api-parity-next`
 - **Wenlan backend source:** `/Users/lucian/Repos/wenlan`
 - **Purpose:** prerequisite matrix before the full `origin-app` -> `wenlan-app` refactor run.
-- **Current status:** refreshed on 2026-06-29 after typed-client, sidecar, MCP bridge, Dock/app-activation, avatar path, neutral theme fallback, Home pending-revision/refinery review work, daemon-backed setup status work, post-merge API parity wrappers, `/api/capture-stats`, daemon-backed global tag inventory, daemon-backed status/reranker diagnostics, entity-suggestion action compatibility with the refinery queue, typed space/page/search/setup response envelopes, typed MCP setup entry surface, `wenlan-types` 0.9.2, `/api/search` supplemental page consumption/navigation, shared page-list/search response typing, daemon-config-backed settings toggles, daemon data-root alignment for sidecar plus launchd, Intelligence setup copy moved from Concept to Page language, repeatable Tauri sidecar prep before validation, route-diff revalidation in `docs/superpowers/refactor/2026-06-29-wenlan-app-api-parity-revalidation.md`, startup Dock-icon/reveal fallback work in `docs/superpowers/refactor/2026-06-29-wenlan-app-runtime-assets.md`, and local bundled `.app` validation in `docs/superpowers/refactor/2026-06-29-wenlan-app-bundled-runtime.md`.
+- **Current status:** refreshed on 2026-06-29 after typed-client, sidecar, MCP bridge, Dock/app-activation, avatar path, neutral theme fallback, Home pending-revision/refinery review work, daemon-backed setup status work, post-merge API parity wrappers, `/api/capture-stats`, daemon-backed global tag inventory, daemon-backed status/reranker diagnostics, entity-suggestion action compatibility with the refinery queue, typed space/page/search/setup response envelopes, typed MCP setup entry surface, `wenlan-types` 0.9.2, `/api/search` supplemental page consumption/navigation, shared page-list/search response typing, daemon-config-backed settings toggles, daemon data-root alignment for sidecar plus launchd, Intelligence setup copy moved from Concept to Page language, repeatable Tauri sidecar prep before validation, route-diff revalidation in `docs/superpowers/refactor/2026-06-29-wenlan-app-api-parity-revalidation.md`, startup Dock-icon/reveal fallback work in `docs/superpowers/refactor/2026-06-29-wenlan-app-runtime-assets.md`, local bundled `.app` validation in `docs/superpowers/refactor/2026-06-29-wenlan-app-bundled-runtime.md`, and reproducible API route-diff tooling in `docs/superpowers/refactor/2026-06-29-wenlan-app-route-diff-tooling.md`.
 
 ## Evidence Snapshot
 
@@ -14,9 +14,10 @@
 | Frontend `invoke(...)` calls | 153 | `docs/superpowers/refactor/wenlan-app-inventory/frontend-invokes.txt` |
 | Registered Tauri commands | 176 | `app/src/lib.rs` + `search-rs-outline.txt` |
 | Rust `origin_types` references | 0 | `app/src` residual scan |
-| Runtime identity references | 148 | `Origin`/`origin-server`/`origin-mcp`/`com.origin`/relay residual scan |
+| Runtime identity references | 152 | `Origin`/`origin-server`/`origin-mcp`/`com.origin`/relay residual scan |
 | Stale taxonomy references | 182 | `concept`/`goal`/`domain` residual scan |
 | Source files under `app/src` and `src` | 164 | `docs/superpowers/refactor/wenlan-app-inventory/summary.md` |
+| API route diff | 123 backend paths / 110 app paths / 13 missing app direct paths / 0 app-only paths | `docs/superpowers/refactor/wenlan-app-inventory/api-route-diff.md` |
 | Wenlan typed request/response declarations in `requests.rs` + `responses.rs` | 115 | `wenlan-types` 0.9.2 scan |
 
 ## Compatibility Gates
@@ -113,6 +114,7 @@ Go when all are true:
 
 - This matrix is committed.
 - `bash scripts/refactor/inventory.sh` runs and generated summary is current.
+- `pnpm refactor:api-routes` runs and generated route-diff artifacts are current.
 - CodeGraph evaluation is recorded, `.codegraph/` is ignored, and cross-cutting edits use `codegraph sync` plus target-specific `query`/`impact`/`affected` probes before changing behavior.
 - `pnpm install --frozen-lockfile --offline` exits 0.
 - `pnpm test` exits 0.

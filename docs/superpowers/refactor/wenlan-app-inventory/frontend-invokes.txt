@@ -52,7 +52,7 @@ src/lib/tauri.ts:490:  return invoke("list_spaces");
 src/lib/tauri.ts:494:  return invoke("get_space", { name });
 src/lib/tauri.ts:501:  return invoke("create_space", { name, description: description ?? null });
 src/lib/tauri.ts:509:  return invoke("update_space", { name, newName, description: description ?? null });
-src/lib/tauri.ts:513:  return invoke("delete_space", { name, memoryAction: memoryAction ?? null });
+src/lib/tauri.ts:513:  return invoke("delete_space", { name });
 src/lib/tauri.ts:517:  return invoke("confirm_space", { name });
 src/lib/tauri.ts:521:  return invoke("reorder_space", { name, newOrder });
 src/lib/tauri.ts:525:  return invoke("toggle_space_starred", { name });

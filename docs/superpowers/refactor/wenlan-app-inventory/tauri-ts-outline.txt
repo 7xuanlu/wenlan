@@ -102,7 +102,7 @@ src/lib/tauri.ts
  493: export async function getSpace(name: string): Promise<Space | null> {
  497: export async function createSpace(
  504: export async function updateSpace(
- 512: export async function deleteSpace(name: string, memoryAction?: string): Promise<void> {
+ 512: export async function deleteSpace(name: string): Promise<void> {
  516: export async function confirmSpace(name: string): Promise<void> {
  520: export async function reorderSpace(name: string, newOrder: number): Promise<void> {
  524: export async function toggleSpaceStarred(name: string): Promise<boolean> {
