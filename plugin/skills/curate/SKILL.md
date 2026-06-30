@@ -81,7 +81,18 @@ The item carries the revised text but **not the original**. If the user wants to
 compare before deciding, `recall` the `target_source_id` first and show both.
 (Surfacing the original inline is a daemon follow-up.)
 
-Bare `/curate` (no arg) prints this help block and exits. Does not auto-walk.
+## Bare `/curate` (no arg) → straight to the picker
+
+No arg means "show me what needs me." Do NOT print this help, and do NOT
+auto-walk captures. Go straight to the **revisions** picker, because under the
+attention-gate model the only items that need a human are conflicts:
+
+1. Call `list_pending_revisions`. If non-empty → walk it as native cards exactly
+   like `/curate revisions` (group rows by `revision_source_id`, ≤4 per card,
+   Accept / Dismiss / Skip).
+2. If empty → say so in one line ("Nothing needs you — no pending conflicts.")
+   and stop. Captures are meant to decay; mention `/curate captures` only as an
+   opt-in deep audit the user can run if they *want* to, never as a backlog.
 
 ## When to use
 
