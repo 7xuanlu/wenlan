@@ -79,8 +79,10 @@ argument, pass it through. Otherwise infer scope from the working directory and
 the conversation so far — don't ask the user.
 
 ```
-context(topic="<args or inferred>", space=<resolved>)
+context(topic="<args or inferred>"[, space="<resolved>"])
 ```
+
+Omit `space` when the resolver returns an empty value.
 
 **Scope inference rules:**
 

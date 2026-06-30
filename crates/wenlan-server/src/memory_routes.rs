@@ -187,13 +187,12 @@ pub async fn handle_store_memory(
             let s = state.read().await;
             s.db.clone().ok_or(ServerError::DbNotInitialized)?
         };
-        if db
-            .get_space(&space)
+        if let Some(registered_space) = db
+            .registered_space_or_none(Some(&space))
             .await
             .map_err(|e| ServerError::Internal(e.to_string()))?
-            .is_some()
         {
-            req.space = Some(space);
+            req.space = Some(registered_space);
             None
         } else {
             tracing::warn!(

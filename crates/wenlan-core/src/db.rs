@@ -6197,6 +6197,21 @@ impl MemoryDB {
         }
     }
 
+    pub async fn registered_space_or_none(
+        &self,
+        name: Option<&str>,
+    ) -> Result<Option<String>, WenlanError> {
+        let Some(name) = name.map(str::trim).filter(|s| !s.is_empty()) else {
+            return Ok(None);
+        };
+
+        if self.get_space(name).await?.is_some() {
+            Ok(Some(name.to_string()))
+        } else {
+            Ok(None)
+        }
+    }
+
     pub async fn create_space(
         &self,
         name: &str,

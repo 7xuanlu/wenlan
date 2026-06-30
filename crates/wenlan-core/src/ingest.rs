@@ -130,17 +130,20 @@ pub async fn run_classification_enrichment(
                     };
                 }
                 if final_domain.is_none() {
-                    if let Some(space) = c.space.as_deref().map(str::trim).filter(|s| !s.is_empty())
-                    {
-                        match db.get_space(space).await {
-                            Ok(Some(_)) => final_domain = Some(space.to_string()),
-                            Ok(None) => log::warn!(
+                    let proposed_space =
+                        c.space.as_deref().map(str::trim).filter(|s| !s.is_empty());
+                    match db.registered_space_or_none(c.space.as_deref()).await {
+                        Ok(Some(space)) => final_domain = Some(space),
+                        Ok(None) => {
+                            if let Some(space) = proposed_space {
+                                log::warn!(
                                 "[ingest] ignoring unregistered classifier space {:?}; memory remains unscoped",
                                 space
-                            ),
-                            Err(e) => {
-                                log::warn!("[ingest] classifier space lookup failed: {e}")
+                            );
                             }
+                        }
+                        Err(e) => {
+                            log::warn!("[ingest] classifier space lookup failed: {e}")
                         }
                     }
                 }

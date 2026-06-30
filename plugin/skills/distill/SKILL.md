@@ -62,13 +62,14 @@ Call the bundled resolver:
     space="$(printf '%s\n' "$resolved" | cut -f1)"
     source_layer="$(printf '%s\n' "$resolved" | cut -f2)"
 
-Pass `space="$space"` to the `distill` MCP tool only when `space` is
-non-empty, to scope cluster discovery. Print one line before the call:
+The `distill` MCP tool has no separate `space` parameter. Use the resolved
+non-empty space as `target` unless an explicit target argument or rebuild target
+is already being forwarded. Print one line before the call:
 
     Resolved space: <space> (from <source-layer>)
 
-If `space` is empty, print `Resolved space: none (unscoped)` and omit the
-space filter.
+If `space` is empty, print `Resolved space: none (unscoped)` and omit `target`
+unless the user supplied an explicit target.
 
 ## Flow
 
@@ -101,7 +102,7 @@ For `/distill <arg>` → forward `<arg>` to `target`.
 ### 2. Call the MCP tool
 
 ```
-distill(target="<scope>", space=<resolved>)
+distill(target="<scope>")
 ```
 
 The tool returns the daemon's full JSON payload as text. Parse it as

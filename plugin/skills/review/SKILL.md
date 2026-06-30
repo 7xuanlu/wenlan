@@ -21,21 +21,16 @@ Power-user audit lever. Most users do not need /review in daily flow:
 
 Use /review only when you want the deep walk those skills intentionally do not force.
 
-## Resolve the active space
+## Scope note
 
-Call the bundled resolver before listing pending memories:
-
-    resolved="$("$CLAUDE_PLUGIN_ROOT/bin/resolve-space.sh" --cwd "$PWD" 2>/dev/null)"
-    space="$(printf '%s\n' "$resolved" | cut -f1)"
-
-Pass `space="$space"` as a filter to the pending-list MCP call only when
-`space` is non-empty, so the review is scoped to the active bucket when
-one exists. If `space` is empty, omit the filter and review globally.
+`list_pending` and `list_pending_revisions` do not currently accept a
+`space` parameter. Do not pass a space filter here; review is global until
+the MCP schema adds scoped review support.
 
 ## Scoped invocation
 
 - `/review captures`: walk every unconfirmed memory (`list_pending`,
-  unfiltered by session). Per item: accept (`confirm_memory`), edit
+  global, unfiltered by session). Per item: accept (`confirm_memory`), edit
   (`capture` with `supersedes=<old_id>` then `forget(old_id)`), or
   reject (`forget`).
 
