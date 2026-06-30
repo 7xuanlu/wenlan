@@ -1,14 +1,14 @@
 ---
 name: curate
 description: >
-  Power-user audit of Wenlan's pending surfaces: accept, reject, or edit
-  unconfirmed captures and pending revisions. Most users want `/brief` for
-  revisions; that handles the daily flow. Use `/curate` only for explicit
-  deep-walk audits after bulk imports, or when you want to walk the full
-  queue rather than the top 3 shown in /brief.
+  Power-user audit of Wenlan's pending surfaces: accept or dismiss pending
+  revisions (conflicts/merges), or audit unconfirmed captures. Most users want
+  `/brief` for revisions; that handles the daily flow. Use `/curate` only for
+  explicit deep-walk audits after bulk imports, or to walk the full queue rather
+  than the top 3 shown in /brief.
   Invoked as `/curate captures` or `/curate revisions`.
 argument-hint: "captures | revisions"
-allowed-tools: ["mcp__plugin_wenlan_wenlan__list_pending", "mcp__plugin_wenlan_wenlan__list_pending_revisions", "mcp__plugin_wenlan_wenlan__confirm_memory", "mcp__plugin_wenlan_wenlan__forget", "mcp__plugin_wenlan_wenlan__capture", "mcp__plugin_wenlan_wenlan__accept_revision", "mcp__plugin_wenlan_wenlan__dismiss_revision", "mcp__plugin_wenlan_wenlan__recall", "AskUserQuestion"]
+allowed-tools: ["Bash", "AskUserQuestion", "mcp__plugin_wenlan_wenlan__list_pending", "mcp__plugin_wenlan_wenlan__confirm_memory", "mcp__plugin_wenlan_wenlan__forget", "mcp__plugin_wenlan_wenlan__capture", "mcp__plugin_wenlan_wenlan__recall"]
 ---
 
 # /curate
@@ -24,9 +24,9 @@ Use /curate only when you want the deep walk those skills intentionally do not f
 **Captures are meant to decay.** A capture lands unconfirmed and, if nothing ever
 conflicts with it, it quietly fades — that is by design, not a backlog you owe the
 system. The only items that *need* a human are genuine conflicts (a contradiction,
-or a richer re-capture worth merging); those surface as pending revisions in
-`/brief`. `/curate captures` is an **opt-in audit** for when you *want* to seal a
-batch (e.g. after a bulk import), not a daily chore to zero out.
+or a richer re-capture worth merging); those surface as pending revisions. `/curate
+captures` is an **opt-in audit** for when you *want* to seal a batch (e.g. after a
+bulk import), not a daily chore to zero out.
 
 ## Decide in native cards, not prose
 
@@ -41,58 +41,63 @@ of ≤4:
 1. List the pending items (per section below).
 2. Take the next ≤4. Build ONE `AskUserQuestion` call:
    - one **question** per item — `question` is the item's content, trimmed to ~1-2 lines.
-   - `header`: a short tag, ≤12 chars (the memory type, or `Capture 3`).
+   - `header`: a short tag, ≤12 chars (the memory type, or `Revision 3`).
    - `options`: the actions for that section (below).
-   - The card always adds an "Other" slot — that is the **edit** path.
+   - The card always adds an "Other" slot.
 3. Apply each answer (below), then repeat with the next ≤4 until the queue is empty.
 4. Cancel / close the card = **no mutation**. "Skip" is the safe per-item escape.
 
-## `/curate captures`
+## `/curate revisions` (and bare `/curate`) → via the `wenlan` CLI
 
-`list_pending` lists every unconfirmed memory (pass `space` only if the user named
-one, e.g. "curate work captures"; otherwise leave it off for all pending). Each
-memory has a `source_id`. Per item, options:
+Revisions go through the **CLI**, not MCP — no deferred-tool round-trip, so the
+picker comes up fast. Resolve the binary once, then list:
+
+```
+W="$(command -v wenlan || echo "$HOME/.wenlan/bin/wenlan")"
+"$W" --format json curate
+```
+
+That prints a JSON array; each element is ONE logical revision (the CLI already
+groups the per-chunk rows and joins their text, so you never see a mid-sentence
+fragment):
+
+- `target_source_id` — the memory this revision would replace; the **action key**.
+- `content` — the full revised text.
+- `source_agent` — who proposed it (or `null` = daemon).
+
+Walk it as native cards (≤4 per card). Per revision, options:
+
+- **Accept** → the revision replaces the original memory.
+- **Dismiss** → drop the revision, keep the original.
+- **Skip** → nothing.
+
+After the card returns, apply the picks in ONE Bash call (skips run nothing):
+
+```
+"$W" curate accept <target_source_id>      # for each Accept
+"$W" curate dismiss <target_source_id>     # for each Dismiss
+```
+
+If the array is empty, say so in one line ("Nothing needs you — no pending
+conflicts.") and stop. Captures are meant to decay; mention `/curate captures`
+only as an opt-in deep audit the user can run if they *want* to, never as a backlog.
+
+The list carries the revised text but **not the original**. If the user wants to
+compare before deciding, `recall` the `target_source_id` first and show both.
+(Surfacing the original inline is a daemon follow-up.)
+
+## `/curate captures` (opt-in audit, MCP)
+
+The captures path is the rare opt-in audit, so it stays on MCP. `list_pending`
+lists every unconfirmed memory (pass `space` only if the user named one, e.g.
+"curate work captures"; otherwise leave it off for all pending). Each memory has a
+`source_id`. Per item, options:
 
 - **Accept** → `confirm_memory(memory_id=<source_id>)`
 - **Reject** → `forget(memory_id=<source_id>)`
 - **Skip** → nothing
 - *Other (typed text)* → edit: `capture(content=<text>, supersedes=<source_id>)`,
   then `forget(memory_id=<source_id>)`.
-
-## `/curate revisions`
-
-The pending-revision surface is now **conflicts and merges only** — a same-entity
-contradiction, or a materially-richer re-capture worth folding into the original.
-A plain unconfirmed capture never lands here, and a ~identical re-capture dedups
-silently (no card). So every revision in this queue is a real decision.
-
-`list_pending_revisions` returns **one row per chunk** — a long revision spans
-several rows sharing the same `revision_source_id`. **Group rows by
-`revision_source_id` and join their `revision_content` in order**, so each card is
-ONE logical revision, not a mid-sentence fragment. `revision_content` (joined) is
-the new text; `target_source_id` is the memory it would replace. Per revision,
-options:
-
-- **Accept** → `accept_revision(target_source_id=<target_source_id>)`
-- **Dismiss** → `dismiss_revision(target_source_id=<target_source_id>)`
-- **Skip** → nothing
-
-The item carries the revised text but **not the original**. If the user wants to
-compare before deciding, `recall` the `target_source_id` first and show both.
-(Surfacing the original inline is a daemon follow-up.)
-
-## Bare `/curate` (no arg) → straight to the picker
-
-No arg means "show me what needs me." Do NOT print this help, and do NOT
-auto-walk captures. Go straight to the **revisions** picker, because under the
-attention-gate model the only items that need a human are conflicts:
-
-1. Call `list_pending_revisions`. If non-empty → walk it as native cards exactly
-   like `/curate revisions` (group rows by `revision_source_id`, ≤4 per card,
-   Accept / Dismiss / Skip).
-2. If empty → say so in one line ("Nothing needs you — no pending conflicts.")
-   and stop. Captures are meant to decay; mention `/curate captures` only as an
-   opt-in deep audit the user can run if they *want* to, never as a backlog.
 
 ## When to use
 
@@ -108,4 +113,5 @@ attention-gate model the only items that need a human are conflicts:
 
 ## Cost
 
-Read-only until the user picks an action in a card. No LLM calls. Cheap.
+Read-only until the user picks an action in a card. Revisions go through the
+local `wenlan` CLI (daemon round-trip ~milliseconds, no LLM). Cheap.
