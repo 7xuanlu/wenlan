@@ -39,6 +39,23 @@ describe('getIndexStatus', () => {
   });
 });
 
+describe('getPipelineStatus', () => {
+  it('calls invoke with no args', async () => {
+    mockInvoke.mockResolvedValue({
+      enrichment: {},
+      entity_linking: { linked: 0, unlinked: 0 },
+      refinement_queue: [],
+      recaps: 0,
+      types: {},
+      quality: {},
+    });
+
+    await tauri.getPipelineStatus();
+
+    expect(mockInvoke).toHaveBeenCalledWith('get_pipeline_status');
+  });
+});
+
 describe('addWatchPath', () => {
   it('calls invoke with path arg', async () => {
     await tauri.addWatchPath('/home/user/docs');

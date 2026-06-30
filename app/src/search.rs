@@ -610,6 +610,31 @@ pub async fn get_capture_stats(
     s.client.get_capture_stats().await
 }
 
+#[tauri::command]
+pub async fn get_pipeline_status(
+    state: tauri::State<'_, State>,
+) -> Result<crate::api::PipelineStatusResponse, String> {
+    let client = {
+        let s = state.read().await;
+        s.client.clone()
+    };
+    client.pipeline_status().await
+}
+
+#[cfg(test)]
+mod pipeline_status_command_type_tests {
+    use super::*;
+
+    #[allow(dead_code)]
+    async fn get_pipeline_status_uses_typed_response(state: tauri::State<'_, State>) {
+        let _: Result<crate::api::PipelineStatusResponse, String> =
+            get_pipeline_status(state).await;
+    }
+
+    #[test]
+    fn pipeline_status_command_response_type_is_checked() {}
+}
+
 // ── Trigger/sensor commands ───────────────────────────────────────────
 
 #[tauri::command]

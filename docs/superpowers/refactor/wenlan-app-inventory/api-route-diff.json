@@ -3,9 +3,9 @@
   "backendRoot": "wenlan",
   "counts": {
     "backendRoutes": 123,
-    "appSourceRoutes": 114,
-    "missingInApp": 9,
-    "classifiedMissingInApp": 9,
+    "appSourceRoutes": 115,
+    "missingInApp": 8,
+    "classifiedMissingInApp": 8,
     "unclassifiedMissingInApp": 0,
     "appOnly": 0
   },
@@ -1210,6 +1210,16 @@
       ]
     },
     {
+      "normalized": "/api/debug/pipeline",
+      "paths": [
+        "/api/debug/pipeline"
+      ],
+      "files": [
+        "app/src/api.rs",
+        "src/components/memory/settings/DiagnosticsSection.tsx"
+      ]
+    },
+    {
       "normalized": "/api/decisions",
       "paths": [
         "/api/decisions?limit=200"
@@ -2184,21 +2194,6 @@
         "status": "intentional",
         "rationale": "Context bundles are trust-gated MCP/agent calls, not a desktop user command.",
         "next_action": "Keep hidden unless a diagnostics context panel is designed."
-      }
-    },
-    {
-      "normalized": "/api/debug/pipeline",
-      "paths": [
-        "/api/debug/pipeline"
-      ],
-      "files": [
-        "crates/wenlan-server/src/router.rs"
-      ],
-      "classification": {
-        "category": "operator_diagnostics",
-        "status": "design_ready",
-        "rationale": "This returns raw pipeline state; the app already has user-facing status and reranker diagnostics.",
-        "next_action": "Implement the read-only Settings diagnostics panel described in docs/superpowers/refactor/2026-06-29-wenlan-app-settings-diagnostics-design.md."
       }
     },
     {

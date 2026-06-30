@@ -14,6 +14,7 @@ export type SettingsSection =
   | "sources"
   | "agents"
   | "intelligence"
+  | "diagnostics"
   | "general";
 
 export interface SettingsGroup {
@@ -54,6 +55,18 @@ export const SETTINGS_GROUPS: SettingsGroup[] = [
       <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
         <circle cx="12" cy="12" r="9" />
         <path d="M12 3v18M3 12h18M5.6 5.6l12.8 12.8M18.4 5.6L5.6 18.4" />
+      </svg>
+    ),
+  },
+  {
+    id: "diagnostics",
+    label: "Diagnostics",
+    hint: "Daemon pipeline health",
+    icon: (
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
+        <path d="M4 19V5" />
+        <path d="M4 19h16" />
+        <path d="M8 15l3-3 3 2 4-6" />
       </svg>
     ),
   },

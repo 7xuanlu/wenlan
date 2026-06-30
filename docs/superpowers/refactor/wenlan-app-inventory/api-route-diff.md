@@ -6,9 +6,9 @@
 ## Counts
 
 - backend route paths: 123
-- app source route paths: 114
-- backend routes with no direct app source path: 9
-- classified backend route gaps: 9
+- app source route paths: 115
+- backend routes with no direct app source path: 8
+- classified backend route gaps: 8
 - unclassified backend route gaps: 0
 - app source paths with no backend router path: 0
 
@@ -18,7 +18,6 @@
 |---|---|---|---|
 | `/api/config/skip-apps` | `superseded_route` | intentional | No app work unless the daemon removes the legacy route. |
 | `/api/context` | `agent_route` | intentional | Keep hidden unless a diagnostics context panel is designed. |
-| `/api/debug/pipeline` | `operator_diagnostics` | design_ready | Implement the read-only Settings diagnostics panel described in docs/superpowers/refactor/2026-06-29-wenlan-app-settings-diagnostics-design.md. |
 | `/api/memory/entities/{entity_id}/observations` | `alternate_route` | intentional | No direct wrapper unless the generic observation route is deprecated. |
 | `/api/memory/link-entity` | `graph_authoring` | design_required | Design a graph-authoring or entity-suggestion acceptance flow before exposing. |
 | `/api/memory/relations` | `graph_authoring` | design_required | Design a relation editor/review flow with provenance and undo states. |

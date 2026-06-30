@@ -420,6 +420,30 @@ export async function getCaptureStats(): Promise<CaptureStats> {
   return invoke("get_capture_stats");
 }
 
+export interface PipelineEntityLinkingStatus {
+  linked: number;
+  unlinked: number;
+}
+
+export interface PipelineQueueEntry {
+  action: string;
+  status: string;
+  count: number;
+}
+
+export interface PipelineStatusResponse {
+  enrichment: Record<string, number>;
+  entity_linking: PipelineEntityLinkingStatus;
+  refinement_queue: PipelineQueueEntry[];
+  recaps: number;
+  types: Record<string, number>;
+  quality: Record<string, number>;
+}
+
+export async function getPipelineStatus(): Promise<PipelineStatusResponse> {
+  return invoke("get_pipeline_status");
+}
+
 // ── Tags ────────────────────────────────────────────────────────────────
 
 export interface TagData {

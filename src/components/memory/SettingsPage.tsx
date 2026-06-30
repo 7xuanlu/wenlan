@@ -23,6 +23,7 @@ import SourcesSection from "./sources/SourcesSection";
 import { ImportFlow } from "../ChatImport/ImportFlow";
 import { RemoteAccessPanel } from "./RemoteAccessPanel";
 import { ApiKeyCard, OnDeviceModelCard, useApiKeyStatus } from "../intelligence/IntelligenceSetup";
+import DiagnosticsSection from "./settings/DiagnosticsSection";
 
 const THEME_OPTIONS: { value: Theme; label: string; icon: React.ReactNode }[] = [
   {
@@ -822,6 +823,9 @@ export default function SettingsPage({
       {section === "intelligence" && (
       <IntelligenceSection delay={0} />
       )}
+
+      {/* Diagnostics (group: diagnostics) */}
+      {section === "diagnostics" && <DiagnosticsSection />}
 
       {/* Filters section hidden — legacy ambient capture, not relevant with memory-layer pivot */}
 

@@ -859,6 +859,7 @@ pub fn run() {
             search::rebuild_activities,
             search::trigger_manual_capture,
             search::get_capture_stats,
+            search::get_pipeline_status,
             search::list_all_tags,
             search::set_document_tags,
             search::delete_tag,

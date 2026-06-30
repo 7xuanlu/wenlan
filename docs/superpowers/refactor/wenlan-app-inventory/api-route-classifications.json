@@ -12,12 +12,6 @@
       "rationale": "Context bundles are trust-gated MCP/agent calls, not a desktop user command.",
       "next_action": "Keep hidden unless a diagnostics context panel is designed."
     },
-    "/api/debug/pipeline": {
-      "category": "operator_diagnostics",
-      "status": "design_ready",
-      "rationale": "This returns raw pipeline state; the app already has user-facing status and reranker diagnostics.",
-      "next_action": "Implement the read-only Settings diagnostics panel described in docs/superpowers/refactor/2026-06-29-wenlan-app-settings-diagnostics-design.md."
-    },
     "/api/memory/entities/{entity_id}/observations": {
       "category": "alternate_route",
       "status": "intentional",
