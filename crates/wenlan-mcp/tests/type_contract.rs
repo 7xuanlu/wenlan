@@ -2091,7 +2091,10 @@ async fn t_list_pending_uses_post_with_confirmed_false() {
 
     let server = make_server(client);
     let result = server
-        .list_pending_impl(ListPendingParams { limit: Some(10) })
+        .list_pending_impl(ListPendingParams {
+            limit: Some(10),
+            space: None,
+        })
         .await
         .expect("list_pending_impl failed");
 

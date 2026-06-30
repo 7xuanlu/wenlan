@@ -32,7 +32,7 @@ forget(memory_id="<source_id>")
 - For corrections, prefer storing a new memory with `supersedes` pointing
   at the old one. That preserves history. Use `/capture` with the
   `supersedes` arg instead.
-- Bulk deletions — call `/review` first, confirm with the user,
+- Bulk deletions — call `/curate` first, confirm with the user,
   then delete one at a time.
 
 ## Safety

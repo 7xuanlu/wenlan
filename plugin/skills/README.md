@@ -12,7 +12,7 @@ These skills keep the daily interface short:
 /recall      search local memory
 /distill     refresh wiki pages
 /pages [q]   browse + open distilled pages (wenlan pages)
-/review captures|revisions   power-user deep audit; daily flow is /brief
+/curate captures|revisions   power-user deep audit; daily flow is /brief
 /forget      delete a memory by ID
 /handoff     end-of-session debrief
 /debrief     alias for /handoff
@@ -31,7 +31,7 @@ The skills do not store data themselves. They guide Claude Code to use the local
 | `recall` | Query Wenlan for focused context. |
 | `distill` | Refresh wiki pages from accumulated memories. |
 | `pages` | Browse + open distilled pages by delegating to the `wenlan pages` CLI; query to open by title. |
-| `review` | Power-user deep audit of pending surfaces (captures, revisions). Daily flow handled by `/brief`. |
+| `curate` | Power-user deep audit of pending surfaces (captures, revisions). Daily flow handled by `/brief`. |
 | `forget` | Delete a memory by ID. |
 | `handoff` | End-session capture for decisions, lessons, gotchas, and open threads. |
 | `debrief` | Alias for `handoff` — symmetric with `brief`. |

@@ -110,6 +110,11 @@ enum Commands {
         #[arg(short = 't', long = "type")]
         memory_type: Option<String>,
     },
+    /// Walk pending revisions (conflicts / merges) awaiting your accept or dismiss.
+    Curate {
+        #[command(subcommand)]
+        action: Option<commands::curate::CurateAction>,
+    },
     /// Manage registered agents (list / show / edit).
     Agents {
         #[command(subcommand)]
@@ -166,6 +171,9 @@ async fn main() -> anyhow::Result<()> {
         } => commands::store::run(&client, format, cli.quiet, text, file, memory_type).await?,
         Commands::List { limit, memory_type } => {
             commands::list::run(&client, format, cli.quiet, limit, memory_type).await?
+        }
+        Commands::Curate { action } => {
+            commands::curate::run(&client, format, cli.quiet, action).await?
         }
         Commands::Agents { cmd } => commands::agents::run(&client, format, cli.quiet, cmd).await?,
         Commands::Space { cmd } => commands::space::run(&client, format, cli.quiet, cmd).await?,

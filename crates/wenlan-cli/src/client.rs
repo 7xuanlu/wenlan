@@ -13,8 +13,8 @@ use anyhow::{Context, Result};
 use wenlan_types::{
     requests::{ListMemoriesRequest, SearchRequest, StoreMemoryRequest, UpdateAgentRequest},
     responses::{
-        AgentResponse, HealthResponse, KnowledgeContext, ListMemoriesResponse, SearchResponse,
-        StoreMemoryResponse,
+        AgentResponse, HealthResponse, KnowledgeContext, ListMemoriesResponse, PendingRevisionItem,
+        RevisionAcceptResponse, RevisionDismissResponse, SearchResponse, StoreMemoryResponse,
     },
 };
 
@@ -271,5 +271,68 @@ impl WenlanClient {
         resp.json()
             .await
             .context("parsing /api/agents/{name} update response")
+    }
+
+    /// GET /api/memory/pending-revisions — staged revisions awaiting human accept/dismiss.
+    pub async fn list_pending_revisions(&self, limit: usize) -> Result<Vec<PendingRevisionItem>> {
+        let url = format!(
+            "{}/api/memory/pending-revisions?limit={}",
+            self.base_url, limit
+        );
+        let resp = self
+            .http
+            .get(&url)
+            .send()
+            .await
+            .with_context(|| format!("GET {} failed (is the daemon running?)", url))?;
+        let resp = resp
+            .error_for_status()
+            .with_context(|| format!("daemon returned error for {}", url))?;
+        resp.json()
+            .await
+            .context("parsing /api/memory/pending-revisions response")
+    }
+
+    /// POST /api/memory/revision/{target_source_id}/accept — replace the original with the revision.
+    pub async fn accept_revision(&self, target_source_id: &str) -> Result<RevisionAcceptResponse> {
+        let url = format!(
+            "{}/api/memory/revision/{}/accept",
+            self.base_url, target_source_id
+        );
+        let resp = self
+            .http
+            .post(&url)
+            .send()
+            .await
+            .with_context(|| format!("POST {} failed", url))?;
+        let resp = resp
+            .error_for_status()
+            .with_context(|| format!("daemon returned error for {}", url))?;
+        resp.json()
+            .await
+            .context("parsing accept-revision response")
+    }
+
+    /// POST /api/memory/revision/{target_source_id}/dismiss — drop the revision, keep the original.
+    pub async fn dismiss_revision(
+        &self,
+        target_source_id: &str,
+    ) -> Result<RevisionDismissResponse> {
+        let url = format!(
+            "{}/api/memory/revision/{}/dismiss",
+            self.base_url, target_source_id
+        );
+        let resp = self
+            .http
+            .post(&url)
+            .send()
+            .await
+            .with_context(|| format!("POST {} failed", url))?;
+        let resp = resp
+            .error_for_status()
+            .with_context(|| format!("daemon returned error for {}", url))?;
+        resp.json()
+            .await
+            .context("parsing dismiss-revision response")
     }
 }

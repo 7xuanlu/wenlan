@@ -24,6 +24,8 @@ dirs = { workspace = true }
 reqwest = { version = "0.12", features = ["json", "rustls-tls"], default-features = false }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+# `similar` for the original->revision word-diff shown in /curate cards.
+similar = "2"
 service-manager = { workspace = true }
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 anyhow = "1"
