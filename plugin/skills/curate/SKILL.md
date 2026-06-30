@@ -54,9 +54,12 @@ memory has a `source_id`. Per item, options:
 
 ## `/curate revisions`
 
-`list_pending_revisions` lists every pending revision (no cap). Each item is a
-proposed rewrite of an existing memory: `revision_content` is the new text,
-`target_source_id` is the memory it would replace. Per item, options:
+`list_pending_revisions` returns **one row per chunk** — a long revision spans
+several rows sharing the same `revision_source_id`. **Group rows by
+`revision_source_id` and join their `revision_content` in order**, so each card is
+ONE logical revision, not a mid-sentence fragment. `revision_content` (joined) is
+the new text; `target_source_id` is the memory it would replace. Per revision,
+options:
 
 - **Accept** → `accept_revision(target_source_id=<target_source_id>)`
 - **Dismiss** → `dismiss_revision(target_source_id=<target_source_id>)`
