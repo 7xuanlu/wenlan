@@ -48,6 +48,17 @@ pub(crate) async fn registered_request_space(
     Ok(registered)
 }
 
+pub(crate) async fn registered_read_space(
+    db: &wenlan_core::db::MemoryDB,
+    requested: &Option<String>,
+    context: &str,
+) -> Result<Option<String>, ServerError> {
+    if requested.as_deref().map(str::trim) == Some("uncategorized") {
+        return Ok(Some("uncategorized".to_string()));
+    }
+    registered_request_space(db, requested, context).await
+}
+
 // ===== Profile Types =====
 
 #[derive(Debug, Serialize)]
@@ -1022,7 +1033,7 @@ pub async fn handle_search_memory(
         let reranker = s.reranker.clone();
         (db, reranker)
     };
-    req.space = registered_request_space(&db, &req.space, "search_memory").await?;
+    req.space = registered_read_space(&db, &req.space, "search_memory").await?;
 
     let results = {
         if req.rerank {
@@ -1206,7 +1217,7 @@ pub async fn handle_list_memories(
         let s = state.read().await;
         s.db.clone().ok_or(ServerError::DbNotInitialized)?
     }; // guard dropped here
-    req.space = registered_request_space(&db, &req.space, "list_memories").await?;
+    req.space = registered_read_space(&db, &req.space, "list_memories").await?;
     let memories = db
         .list_filtered_confirmed(
             Some("memory"),
@@ -1520,7 +1531,7 @@ pub async fn handle_list_entities(
         let s = state.read().await;
         s.db.clone().ok_or(ServerError::DbNotInitialized)?
     };
-    req.space = registered_request_space(&db, &req.space, "list_entities").await?;
+    req.space = registered_read_space(&db, &req.space, "list_entities").await?;
     let entities = db
         .list_entities(req.entity_type.as_deref(), req.space.as_deref())
         .await
@@ -2917,7 +2928,7 @@ pub async fn handle_list_decisions(
         .get("space")
         .or_else(|| params.get("domain"))
         .cloned();
-    let space = registered_request_space(&db, &space, "decisions").await?;
+    let space = registered_read_space(&db, &space, "decisions").await?;
     let limit: usize = params
         .get("limit")
         .and_then(|v| v.parse().ok())

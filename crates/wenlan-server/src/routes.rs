@@ -105,7 +105,7 @@ pub async fn handle_search(
         let db = s.db.clone().ok_or(ServerError::DbNotInitialized)?;
         (db, s.reranker_light.clone())
     };
-    req.space = crate::memory_routes::registered_request_space(&db, &req.space, "search").await?;
+    req.space = crate::memory_routes::registered_read_space(&db, &req.space, "search").await?;
 
     let results = if req.source_filter.as_deref() == Some("memory") {
         match reranker_light {
@@ -249,8 +249,7 @@ pub async fn handle_context(
         let db = s.db.clone().ok_or(ServerError::DbNotInitialized)?;
         (db, s.access_tracker.clone(), s.reranker_light.clone())
     }; // guard dropped here
-    req.space =
-        crate::memory_routes::registered_request_space(&db_arc, &req.space, "context").await?;
+    req.space = crate::memory_routes::registered_read_space(&db_arc, &req.space, "context").await?;
     let db = db_arc.as_ref();
 
     let agent_trust = if agent_name == "unknown" {

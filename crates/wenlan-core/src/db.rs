@@ -12752,9 +12752,13 @@ impl MemoryDB {
             idx += 1;
         }
         if let Some(d) = space {
-            conditions.push(format!("space = ?{}", idx));
-            params.push(d.to_string().into());
-            idx += 1;
+            if d == "uncategorized" {
+                conditions.push("space IS NULL".to_string());
+            } else {
+                conditions.push(format!("space = ?{}", idx));
+                params.push(d.to_string().into());
+                idx += 1;
+            }
         }
         if let Some(c) = confirmed {
             if c {

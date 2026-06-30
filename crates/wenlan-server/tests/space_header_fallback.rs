@@ -243,6 +243,61 @@ async fn search_memory_unregistered_header_falls_back_to_unscoped() {
     );
 }
 
+#[tokio::test]
+async fn search_memory_uncategorized_filter_matches_only_null_space() {
+    let (router, _tmp, db) = common::test_app().await;
+    db.create_space("alpha", None, false).await.unwrap();
+    seed_confirmed_memory(
+        &db,
+        "uncategorized_search_memory",
+        "uncategorized sentinel search match from null space",
+        None,
+    )
+    .await;
+    seed_confirmed_memory(
+        &db,
+        "alpha_search_memory",
+        "uncategorized sentinel search match from alpha space",
+        Some("alpha"),
+    )
+    .await;
+
+    let req = Request::builder()
+        .method("POST")
+        .uri("/api/memory/search")
+        .header("Content-Type", "application/json")
+        .body(Body::from(
+            serde_json::json!({
+                "query": "uncategorized sentinel search match",
+                "space": "uncategorized",
+                "limit": 10
+            })
+            .to_string(),
+        ))
+        .unwrap();
+
+    let res = router.oneshot(req).await.unwrap();
+    assert_eq!(
+        res.status(),
+        StatusCode::OK,
+        "search_memory must return 200"
+    );
+    let body: SearchMemoryResponse = body_as_json(res).await;
+    let ids = body
+        .results
+        .iter()
+        .map(|result| result.source_id.as_str())
+        .collect::<Vec<_>>();
+    assert!(
+        ids.contains(&"uncategorized_search_memory"),
+        "uncategorized must include NULL-space memory; got {ids:?}"
+    );
+    assert!(
+        !ids.contains(&"alpha_search_memory"),
+        "uncategorized must not become unscoped and include registered-space memories; got {ids:?}"
+    );
+}
+
 // ===== /api/memory/list (handle_list_memories) =====
 
 #[tokio::test]
@@ -306,6 +361,61 @@ async fn list_memories_unregistered_header_falls_back_to_unscoped() {
             .iter()
             .map(|memory| &memory.source_id)
             .collect::<Vec<_>>()
+    );
+}
+
+#[tokio::test]
+async fn list_memories_uncategorized_filter_matches_only_null_space() {
+    let (router, _tmp, db) = common::test_app().await;
+    db.create_space("alpha", None, false).await.unwrap();
+    seed_confirmed_memory(
+        &db,
+        "uncategorized_list_memory",
+        "uncategorized list sentinel null space",
+        None,
+    )
+    .await;
+    seed_confirmed_memory(
+        &db,
+        "alpha_list_memory",
+        "uncategorized list sentinel alpha space",
+        Some("alpha"),
+    )
+    .await;
+
+    let req = Request::builder()
+        .method("POST")
+        .uri("/api/memory/list")
+        .header("Content-Type", "application/json")
+        .body(Body::from(
+            serde_json::json!({
+                "space": "uncategorized",
+                "limit": 10,
+                "confirmed": true
+            })
+            .to_string(),
+        ))
+        .unwrap();
+
+    let res = router.oneshot(req).await.unwrap();
+    assert_eq!(
+        res.status(),
+        StatusCode::OK,
+        "list_memories must return 200"
+    );
+    let body: ListMemoriesResponse = body_as_json(res).await;
+    let ids = body
+        .memories
+        .iter()
+        .map(|memory| memory.source_id.as_str())
+        .collect::<Vec<_>>();
+    assert!(
+        ids.contains(&"uncategorized_list_memory"),
+        "uncategorized must include NULL-space memories; got {ids:?}"
+    );
+    assert!(
+        !ids.contains(&"alpha_list_memory"),
+        "uncategorized must not become unscoped and include registered-space memories; got {ids:?}"
     );
 }
 
@@ -373,6 +483,57 @@ async fn search_unregistered_header_falls_back_to_unscoped() {
             .iter()
             .map(|result| &result.source_id)
             .collect::<Vec<_>>()
+    );
+}
+
+#[tokio::test]
+async fn search_uncategorized_filter_matches_only_null_space() {
+    let (router, _tmp, db) = common::test_app().await;
+    db.create_space("alpha", None, false).await.unwrap();
+    seed_confirmed_memory(
+        &db,
+        "uncategorized_general_search",
+        "uncategorized general sentinel null space",
+        None,
+    )
+    .await;
+    seed_confirmed_memory(
+        &db,
+        "alpha_general_search",
+        "uncategorized general sentinel alpha space",
+        Some("alpha"),
+    )
+    .await;
+
+    let req = Request::builder()
+        .method("POST")
+        .uri("/api/search")
+        .header("Content-Type", "application/json")
+        .body(Body::from(
+            serde_json::json!({
+                "query": "uncategorized general sentinel",
+                "space": "uncategorized",
+                "limit": 10
+            })
+            .to_string(),
+        ))
+        .unwrap();
+
+    let res = router.oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::OK, "search must return 200");
+    let body: SearchResponse = body_as_json(res).await;
+    let ids = body
+        .results
+        .iter()
+        .map(|result| result.source_id.as_str())
+        .collect::<Vec<_>>();
+    assert!(
+        ids.contains(&"uncategorized_general_search"),
+        "uncategorized must include NULL-space memory; got {ids:?}"
+    );
+    assert!(
+        !ids.contains(&"alpha_general_search"),
+        "uncategorized must not become unscoped and include registered-space memories; got {ids:?}"
     );
 }
 
@@ -641,6 +802,52 @@ async fn decisions_empty_query_space_falls_back_to_unscoped() {
             .iter()
             .map(|decision| &decision.source_id)
             .collect::<Vec<_>>()
+    );
+}
+
+#[tokio::test]
+async fn list_entities_uncategorized_filter_matches_only_null_space() {
+    let (router, _tmp, db) = common::test_app().await;
+    db.create_space("alpha", None, false).await.unwrap();
+    db.store_entity("Uncategorized Entity", "person", None, None, None)
+        .await
+        .expect("seed uncategorized entity must store");
+    db.store_entity("Alpha Entity", "person", Some("alpha"), None, None)
+        .await
+        .expect("seed alpha entity must store");
+
+    let req = Request::builder()
+        .method("POST")
+        .uri("/api/memory/entities/list")
+        .header("Content-Type", "application/json")
+        .body(Body::from(
+            serde_json::json!({
+                "space": "uncategorized"
+            })
+            .to_string(),
+        ))
+        .unwrap();
+
+    let res = router.oneshot(req).await.unwrap();
+    assert_eq!(
+        res.status(),
+        StatusCode::OK,
+        "list_entities must return 200"
+    );
+    let body: serde_json::Value = body_as_json(res).await;
+    let names = body["entities"]
+        .as_array()
+        .expect("entities must be an array")
+        .iter()
+        .filter_map(|entity| entity["name"].as_str())
+        .collect::<Vec<_>>();
+    assert!(
+        names.contains(&"Uncategorized Entity"),
+        "uncategorized must include NULL-space entities; got {names:?}"
+    );
+    assert!(
+        !names.contains(&"Alpha Entity"),
+        "uncategorized must not become unscoped and include registered-space entities; got {names:?}"
     );
 }
 
