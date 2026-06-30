@@ -22,27 +22,83 @@ app/src/api.rs:25:    pub local_model_selected: Option<String>,
 app/src/api.rs:26:    pub local_model_loaded: Option<String>,
 app/src/api.rs:27:    pub local_model_cached: bool,
 app/src/api.rs:28:}
-app/src/api.rs:36:pub(crate) struct TagInventoryResponse {
-app/src/api.rs:37:    pub(crate) tags: Vec<String>,
-app/src/api.rs:38:    #[serde(default)]
-app/src/api.rs:39:    pub(crate) document_tags: HashMap<String, Vec<String>>,
-app/src/api.rs:40:}
-app/src/api.rs:43:pub struct OnDeviceModelEntry {
-app/src/api.rs:44:    pub id: String,
-app/src/api.rs:45:    pub display_name: String,
-app/src/api.rs:46:    pub param_count: String,
-app/src/api.rs:47:    pub ram_required_gb: f64,
-app/src/api.rs:48:    pub file_size_gb: f64,
-app/src/api.rs:49:    pub cached: bool,
-app/src/api.rs:50:}
-app/src/api.rs:53:pub struct OnDeviceModelResponse {
-app/src/api.rs:54:    pub loaded: Option<String>,
-app/src/api.rs:55:    pub selected: Option<String>,
-app/src/api.rs:56:    pub models: Vec<OnDeviceModelEntry>,
-app/src/api.rs:57:}
-app/src/api.rs:60:pub struct MoveSpaceResponse {
-app/src/api.rs:61:    pub affected: usize,
-app/src/api.rs:62:}
+app/src/api.rs:36:pub struct PipelineStatusResponse {
+app/src/api.rs:37:    pub enrichment: BTreeMap<String, u64>,
+app/src/api.rs:38:    pub entity_linking: PipelineEntityLinkingStatus,
+app/src/api.rs:39:    pub refinement_queue: Vec<PipelineQueueEntry>,
+app/src/api.rs:40:    pub recaps: u64,
+app/src/api.rs:41:    pub types: BTreeMap<String, u64>,
+app/src/api.rs:42:    pub quality: BTreeMap<String, u64>,
+app/src/api.rs:43:}
+app/src/api.rs:46:pub struct PipelineEntityLinkingStatus {
+app/src/api.rs:47:    pub linked: u64,
+app/src/api.rs:48:    pub unlinked: u64,
+app/src/api.rs:49:}
+app/src/api.rs:52:pub struct PipelineQueueEntry {
+app/src/api.rs:53:    pub action: String,
+app/src/api.rs:54:    pub status: String,
+app/src/api.rs:55:    pub count: u64,
+app/src/api.rs:56:}
+app/src/api.rs:59:pub(crate) struct TagInventoryResponse {
+app/src/api.rs:60:    pub(crate) tags: Vec<String>,
+app/src/api.rs:61:    #[serde(default)]
+app/src/api.rs:62:    pub(crate) document_tags: HashMap<String, Vec<String>>,
+app/src/api.rs:63:}
+app/src/api.rs:66:pub struct OnDeviceModelEntry {
+app/src/api.rs:67:    pub id: String,
+app/src/api.rs:68:    pub display_name: String,
+app/src/api.rs:69:    pub param_count: String,
+app/src/api.rs:70:    pub ram_required_gb: f64,
+app/src/api.rs:71:    pub file_size_gb: f64,
+app/src/api.rs:72:    pub cached: bool,
+app/src/api.rs:73:}
+app/src/api.rs:76:pub struct OnDeviceModelResponse {
+app/src/api.rs:77:    pub loaded: Option<String>,
+app/src/api.rs:78:    pub selected: Option<String>,
+app/src/api.rs:79:    pub models: Vec<OnDeviceModelEntry>,
+app/src/api.rs:80:}
+app/src/api.rs:83:pub struct MoveSpaceResponse {
+app/src/api.rs:84:    pub affected: usize,
+app/src/api.rs:85:}
+app/src/api.rs:95:pub struct DistillReviewResponse {
+app/src/api.rs:96:    pub pages_created: usize,
+app/src/api.rs:97:    pub scoped: bool,
+app/src/api.rs:98:    pub created_ids: Vec<String>,
+app/src/api.rs:99:    pub pending: Vec<DistillPendingCluster>,
+app/src/api.rs:100:    pub stale_pages: Vec<DistillStalePage>,
+app/src/api.rs:101:    pub stale_truncated: bool,
+app/src/api.rs:102:    pub orphan_topics: Vec<DistillOrphanTopic>,
+app/src/api.rs:103:}
+app/src/api.rs:107:pub struct DistillPendingCluster {
+app/src/api.rs:108:    pub source_ids: Vec<String>,
+app/src/api.rs:109:    pub contents: Vec<String>,
+app/src/api.rs:110:    pub entity_id: Option<String>,
+app/src/api.rs:111:    pub entity_name: Option<String>,
+app/src/api.rs:112:    pub space: Option<String>,
+app/src/api.rs:113:    pub estimated_tokens: usize,
+app/src/api.rs:114:    pub centroid_embedding: Option<Vec<f32>>,
+app/src/api.rs:115:    pub existing_page_id: Option<String>,
+app/src/api.rs:116:    pub existing_page_title: Option<String>,
+app/src/api.rs:117:    pub new_memory_count: Option<usize>,
+app/src/api.rs:118:}
+app/src/api.rs:122:pub struct DistillStalePage {
+app/src/api.rs:123:    pub page_id: String,
+app/src/api.rs:124:    pub title: String,
+app/src/api.rs:125:    pub summary: Option<String>,
+app/src/api.rs:126:    pub source_memory_ids: Vec<String>,
+app/src/api.rs:127:    pub sources_updated_count: Option<usize>,
+app/src/api.rs:128:    pub stale_reason: Option<String>,
+app/src/api.rs:129:    pub user_edited: Option<bool>,
+app/src/api.rs:130:}
+app/src/api.rs:134:pub struct DistillOrphanTopic {
+app/src/api.rs:135:    pub label: String,
+app/src/api.rs:136:    pub count: usize,
+app/src/api.rs:137:}
+app/src/api.rs:141:pub struct PageRedistillResponse {
+app/src/api.rs:142:    pub status: String,
+app/src/api.rs:143:    pub updated: bool,
+app/src/api.rs:144:    pub hint: Option<String>,
+app/src/api.rs:145:}
 app/src/config.rs:45:pub struct Config {
 app/src/config.rs:46:    /// Legacy field — kept for backward compat with old config files.
 app/src/config.rs:47:    /// Use `sources` instead. Migrated to Source structs by `migrate()`.
@@ -175,28 +231,28 @@ app/src/search.rs:88:    /// Protected memories auto-accepted by a full-trust ag
 app/src/search.rs:89:    #[serde(default)]
 app/src/search.rs:90:    pub auto_superseded: Vec<String>,
 app/src/search.rs:91:}
-app/src/search.rs:666:pub struct RemoteConnectionTest {
-app/src/search.rs:667:    pub ok: bool,
-app/src/search.rs:668:    pub latency_ms: Option<u64>,
-app/src/search.rs:669:    pub error: Option<String>,
-app/src/search.rs:670:}
-app/src/search.rs:1420:pub struct BulkDeleteItem {
-app/src/search.rs:1421:    pub source: String,
-app/src/search.rs:1422:    pub source_id: String,
-app/src/search.rs:1423:}
-app/src/search.rs:2276:pub struct EntitySuggestion {
-app/src/search.rs:2277:    pub id: String,
-app/src/search.rs:2278:    pub entity_name: Option<String>,
-app/src/search.rs:2279:    pub source_ids: Vec<String>,
-app/src/search.rs:2280:    pub confidence: f64,
-app/src/search.rs:2281:    pub created_at: String,
-app/src/search.rs:2282:}
-app/src/search.rs:2606:pub struct TagData {
-app/src/search.rs:2607:    pub tags: Vec<String>,
-app/src/search.rs:2608:    pub document_tags: HashMap<String, Vec<String>>,
-app/src/search.rs:2609:    pub categories: Vec<String>,
-app/src/search.rs:2610:    pub document_categories: HashMap<String, String>,
-app/src/search.rs:2611:}
+app/src/search.rs:691:pub struct RemoteConnectionTest {
+app/src/search.rs:692:    pub ok: bool,
+app/src/search.rs:693:    pub latency_ms: Option<u64>,
+app/src/search.rs:694:    pub error: Option<String>,
+app/src/search.rs:695:}
+app/src/search.rs:1468:pub struct BulkDeleteItem {
+app/src/search.rs:1469:    pub source: String,
+app/src/search.rs:1470:    pub source_id: String,
+app/src/search.rs:1471:}
+app/src/search.rs:2324:pub struct EntitySuggestion {
+app/src/search.rs:2325:    pub id: String,
+app/src/search.rs:2326:    pub entity_name: Option<String>,
+app/src/search.rs:2327:    pub source_ids: Vec<String>,
+app/src/search.rs:2328:    pub confidence: f64,
+app/src/search.rs:2329:    pub created_at: String,
+app/src/search.rs:2330:}
+app/src/search.rs:2658:pub struct TagData {
+app/src/search.rs:2659:    pub tags: Vec<String>,
+app/src/search.rs:2660:    pub document_tags: HashMap<String, Vec<String>>,
+app/src/search.rs:2661:    pub categories: Vec<String>,
+app/src/search.rs:2662:    pub document_categories: HashMap<String, String>,
+app/src/search.rs:2663:}
 app/src/sensor/vision.rs:5:pub struct WindowCapture {
 app/src/sensor/vision.rs:6:    pub image: image::DynamicImage,
 app/src/sensor/vision.rs:7:    pub app_name: String,

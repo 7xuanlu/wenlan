@@ -1,23 +1,23 @@
 # Wenlan App Parity and Compatibility Matrix
 
-- **Date:** 2026-06-29 UTC / 2026-06-28 PDT
-- **App checkout:** `/Users/lucian/Repos/wenlan-app/.worktrees/wenlan-app-settings-diagnostics`
-- **App branch:** `codex/wenlan-app-settings-diagnostics`
+- **Date:** 2026-06-30 UTC / 2026-06-29 PDT
+- **App checkout:** `/Users/lucian/Repos/wenlan-app/.worktrees/wenlan-app-migration-revalidation`
+- **App branch:** `codex/wenlan-app-migration-revalidation`
 - **Wenlan backend source:** `/Users/lucian/Repos/wenlan`
 - **Purpose:** prerequisite matrix before the full `origin-app` -> `wenlan-app` refactor run.
-- **Current status:** refreshed on 2026-06-29 after typed-client, sidecar, MCP bridge, Dock/app-activation, avatar path, neutral theme fallback, Home pending-revision/refinery review work, daemon-backed setup status work, post-merge API parity wrappers, `/api/capture-stats`, daemon-backed global tag inventory, daemon-backed status/reranker diagnostics, entity-suggestion action compatibility with the refinery queue, typed space/page/search/setup response envelopes, typed MCP setup entry surface, `wenlan-types` 0.9.2, `/api/search` supplemental page consumption/navigation, shared page-list/search response typing, daemon-config-backed settings toggles, daemon data-root alignment for sidecar plus launchd, Intelligence setup copy moved from Concept to Page language, repeatable Tauri sidecar prep before validation, route-diff revalidation in `docs/superpowers/refactor/2026-06-29-wenlan-app-api-parity-revalidation.md`, startup Dock-icon/reveal fallback work in `docs/superpowers/refactor/2026-06-29-wenlan-app-runtime-assets.md`, local bundled `.app` validation in `docs/superpowers/refactor/2026-06-29-wenlan-app-bundled-runtime.md`, reproducible API route-diff tooling in `docs/superpowers/refactor/2026-06-29-wenlan-app-route-diff-tooling.md`, route-gap classification in `docs/superpowers/refactor/2026-06-29-wenlan-app-route-gap-classification.md`, graph-authoring design boundary in `docs/superpowers/refactor/2026-06-29-wenlan-app-graph-authoring-design.md`, Settings diagnostics design boundary in `docs/superpowers/refactor/2026-06-29-wenlan-app-settings-diagnostics-design.md`, typed webpage ingest wrapper work in `docs/superpowers/refactor/2026-06-29-wenlan-app-webpage-ingest-wrapper.md`, typed space move wrapper work in `docs/superpowers/refactor/2026-06-29-wenlan-app-space-move-wrapper.md`, PR #47 global `/api/distill` review-panel work, and the remaining route-gap audit in `docs/superpowers/refactor/2026-06-29-wenlan-app-remaining-route-gaps.md`.
+- **Current status:** refreshed on 2026-06-30 UTC after typed-client, sidecar, MCP bridge, Dock/app-activation, avatar path, neutral theme fallback, Home pending-revision/refinery review work, daemon-backed setup status work, post-merge API parity wrappers, `/api/capture-stats`, daemon-backed global tag inventory, daemon-backed status/reranker diagnostics, entity-suggestion action compatibility with the refinery queue, typed space/page/search/setup response envelopes, typed MCP setup entry surface, `wenlan-types` 0.9.2, `/api/search` supplemental page consumption/navigation, shared page-list/search response typing, daemon-config-backed settings toggles, daemon data-root alignment for sidecar plus launchd, Intelligence setup copy moved from Concept to Page language, repeatable Tauri sidecar prep before validation, route-diff revalidation in `docs/superpowers/refactor/2026-06-29-wenlan-app-api-parity-revalidation.md`, startup Dock-icon/reveal fallback work in `docs/superpowers/refactor/2026-06-29-wenlan-app-runtime-assets.md`, local bundled `.app` validation in `docs/superpowers/refactor/2026-06-29-wenlan-app-bundled-runtime.md`, reproducible API route-diff tooling in `docs/superpowers/refactor/2026-06-29-wenlan-app-route-diff-tooling.md`, route-gap classification in `docs/superpowers/refactor/2026-06-29-wenlan-app-route-gap-classification.md`, graph-authoring design boundary in `docs/superpowers/refactor/2026-06-29-wenlan-app-graph-authoring-design.md`, Settings diagnostics implementation in PR #53, typed webpage ingest wrapper work in `docs/superpowers/refactor/2026-06-29-wenlan-app-webpage-ingest-wrapper.md`, typed space move wrapper work in `docs/superpowers/refactor/2026-06-29-wenlan-app-space-move-wrapper.md`, PR #47 global `/api/distill` review-panel work, and the P1 closure audit in `docs/superpowers/refactor/2026-06-30-wenlan-app-p1-closure.md`.
 
 ## Evidence Snapshot
 
 | Evidence | Current value | Source |
 |---|---:|---|
-| Frontend `invoke(...)` calls | 155 | `docs/superpowers/refactor/wenlan-app-inventory/frontend-invokes.txt` |
-| Registered Tauri commands | 178 | `app/src/lib.rs` + `search-rs-outline.txt` |
+| Frontend `invoke(...)` calls | 158 | `docs/superpowers/refactor/wenlan-app-inventory/frontend-invokes.txt` |
+| Registered Tauri commands | 181 | `app/src/lib.rs` + `search-rs-outline.txt` |
 | Rust `origin_types` references | 0 | `app/src` residual scan |
 | Runtime identity references | 152 | `Origin`/`origin-server`/`origin-mcp`/`com.origin`/relay residual scan |
-| Stale taxonomy references | 182 | `concept`/`goal`/`domain` residual scan |
-| Source files under `app/src` and `src` | 165 | `docs/superpowers/refactor/wenlan-app-inventory/summary.md` |
-| API route diff | 123 backend paths / 114 app paths / 9 missing app direct paths / 9 classified / 0 unclassified / 0 app-only paths | `docs/superpowers/refactor/wenlan-app-inventory/api-route-diff.md` |
+| Stale taxonomy references | 184 | `concept`/`goal`/`domain` residual scan |
+| Source files under `app/src` and `src` | 169 | `docs/superpowers/refactor/wenlan-app-inventory/summary.md` |
+| API route diff | 123 backend paths / 115 app paths / 8 missing app direct paths / 8 classified / 0 unclassified / 0 app-only paths | `docs/superpowers/refactor/wenlan-app-inventory/api-route-diff.md` |
 | Wenlan typed request/response declarations in `requests.rs` + `responses.rs` | 115 | `wenlan-types` 0.9.2 scan |
 
 ## Compatibility Gates
@@ -78,7 +78,7 @@ These are required for feature parity but can follow the P0 review/status/setup 
 | `/api/pages/{id}/export` | `ExportPageResponse` | typed Rust/Tauri/TS wrapper present as `exportPageToObsidian`; preserves daemon response envelope | keep; rename "concept" UI/file wording where user-facing | optional |
 | `/api/ingest/webpage` | `IngestWebpageRequest` / `IngestResponse` | typed Rust client, Tauri command, and TS wrapper present; no visible URL-ingest flow yet | design URL ingest flow separately before surfacing in UI | optional ingest surface; typed seam available |
 | `/api/distill` + `/api/distill/{page_id}` | global distill returns review payloads without daemon synthesis when called without `target`/`force`; both page re-distill entry points can clear `user_edited` before a safe desktop confirmation contract exists | global `/api/distill` review wrapper and Home review panel are present; it sends an empty request and exposes no per-page re-distill command/button | keep global review surface; fix backend page re-distill contract and add no-LLM `user_edited` regression tests before adding PageDetail rebuild UI | global review is safe on 0.9.x; page re-distill needs a safer daemon contract |
-| remaining direct route gaps | `/api/config/skip-apps`, `/api/context`, `/api/debug/pipeline`, `/api/memory/entities/{entity_id}/observations`, `/api/memory/link-entity`, `/api/memory/relations`, `/api/ping`, `/api/steep`, `/ws/updates` | classified in `docs/superpowers/refactor/2026-06-29-wenlan-app-remaining-route-gaps.md`; graph-authoring boundary proposed in `docs/superpowers/refactor/2026-06-29-wenlan-app-graph-authoring-design.md`; read-only Settings diagnostics proposed in `docs/superpowers/refactor/2026-06-29-wenlan-app-settings-diagnostics-design.md` | implement `/api/debug/pipeline` as read-only Settings diagnostics; avoid raw wrappers for superseded, agent/operator maintenance, and graph-authoring routes | not required for desktop P0/P1 parity except the optional read-only diagnostics surface |
+| remaining direct route gaps | `/api/config/skip-apps`, `/api/context`, `/api/memory/entities/{entity_id}/observations`, `/api/memory/link-entity`, `/api/memory/relations`, `/api/ping`, `/api/steep`, `/ws/updates` | generated route diff shows all 8 gaps classified; graph-authoring boundary proposed in `docs/superpowers/refactor/2026-06-29-wenlan-app-graph-authoring-design.md`; `/api/debug/pipeline` is now implemented through the Settings diagnostics panel | keep superseded, redundant, alternate, agent, operator-maintenance, graph-authoring, and WebSocket-architecture gaps classified; avoid raw write wrappers for graph and maintenance routes | not required for desktop P0/P1 parity |
 | `/api/on-device-model` | server-owned model DTOs | Rust/Tauri/TS wrappers use local typed mirrors; `serde_json::Value` removed from the app route | move `OnDeviceModel*` DTOs into `wenlan-types` upstream, then replace local mirrors | optional settings section |
 | `/api/llm/test` | `TestLlmRequest` / `TestLlmResponse` | typed Rust/Tauri/TS wrapper present as `testExternalLlm`; preserves daemon response envelope | keep response envelope; settings UI may display `response` if surfaced later | optional settings section |
 | `/api/tags` | `TagsResponse` | `list_all_tags` reads the daemon global tag list and preserves additive `document_tags` maps when available; older daemons default to an empty map | merge daemon `document_tags` response support before relying on per-document tag filters in release notes | global tags available; per-document tag map gated by daemon version |
@@ -110,6 +110,47 @@ These are required for feature parity but can follow the P0 review/status/setup 
 | Data/config paths | `WENLAN_DATA_DIR` preferred; `ORIGIN_DATA_DIR` legacy fallback | do not open fresh Wenlan path if legacy data exists | migration smoke |
 | UI preference keys | `wenlan-*` / `wenlan:*` primary; Origin-prefixed localStorage keys import-only legacy fallback | preserve user UI state while new writes use Wenlan keys | preference helper + consumer tests |
 | Daemon port env | `WENLAN_PORT` preferred; `ORIGIN_PORT` legacy fallback | keep legacy fallback through bridge release; default to `7878` | `api::tests::wenlan_client_*_port` |
+
+## P1 Closure Audit
+
+The 2026-06-30 UTC revalidation treats P0/P1 daemon API parity as closed for
+the migration branch, with the following explicit boundaries:
+
+- Raw route parity is green: `pnpm refactor:api-routes --json` reports 123
+  backend routes, 115 app route strings, 8 missing app direct routes, all 8
+  classified, 0 unclassified, and 0 app-only routes.
+- The 8 remaining direct route gaps are not unimplemented desktop features:
+  they are superseded compatibility routes, agent routes, alternate routes,
+  graph-authoring writes, redundant health, operator maintenance, or a
+  deliberate WebSocket architecture gap.
+- Graph authoring remains backend-first and product-gated. The app must not
+  add raw `/api/memory/link-entity` or `/api/memory/relations` wrappers until
+  the daemon exposes typed provenance, validation, and recovery semantics.
+- `/api/steep` remains deferred. A manual maintenance button needs a separate
+  design covering cost, capability, progress, failure, and cancellation states.
+- `/ws/updates` remains an architecture decision, not a wrapper task. The app
+  currently uses Tauri events, query invalidation, and polling.
+- Legacy Origin state remains a compatibility bridge. Do not delete old MCP
+  config, token, relay id, LaunchAgent, app path, or data path state during the
+  migration closure pass.
+
+Baseline evidence from the closure worktree:
+
+- `codegraph init -i .` indexed 179 files, 2,688 nodes, and 6,648 edges.
+- `codegraph status .` reported the index up to date.
+- `pnpm prepare:sidecars` prepared `wenlan`, `wenlan-server`, `wenlan-mcp`, and
+  `cloudflared` sidecars from `/Users/lucian/Repos/wenlan/target/debug`.
+- `pnpm test` passed on rerun: 53 files, 441 tests passed, 1 skipped. The first
+  run showed one `SetupWizard` failure that did not reproduce in a single-test
+  run, the full file, an adjacent subset, or the full rerun.
+- `cargo test --manifest-path app/Cargo.toml` passed: 216 tests.
+- `pnpm build` passed with the existing Vite dynamic-import and large-chunk
+  warnings.
+- `pnpm tauri dev` launched `target/debug/wenlan-app`; macOS reported process
+  `wenlan-app` with window title `Wenlan`, and live `/api/health`,
+  `/api/status`, and `/api/debug/pipeline` probes returned HTTP 200 against
+  daemon `0.9.1`. The user-provided runtime screenshot showed Home loaded with
+  10 pages and 6205 memories.
 
 ## Go/No-Go Before Full Refactor Run
 
