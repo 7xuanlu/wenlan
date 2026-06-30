@@ -35,7 +35,7 @@ pub enum DistillTarget {
 /// Resolution order:
 /// 1. Strings starting with `page_` or `concept_` are treated as page ids.
 /// 2. Exact entity name match (via `MemoryDB::resolve_entity_by_name`).
-/// 3. Exact domain match (any memory with that domain).
+/// 3. Exact registered space match.
 /// 4. Otherwise `None` — caller decides whether to fail loudly or fall through.
 pub async fn resolve_distill_target(
     db: &MemoryDB,
@@ -54,7 +54,7 @@ pub async fn resolve_distill_target(
             name: s.to_string(),
         }));
     }
-    if db.space_has_memories(s).await? {
+    if db.registered_space_or_none(Some(s)).await?.is_some() {
         return Ok(Some(DistillTarget::Domain(s.to_string())));
     }
     Ok(None)
@@ -1333,6 +1333,29 @@ mod tests {
     use crate::llm_provider::MockProvider;
     use std::sync::Arc;
     use tempfile::TempDir;
+
+    #[tokio::test]
+    async fn resolve_distill_target_ignores_unregistered_memory_space() {
+        let (db, _db_dir) = crate::db::tests::test_db().await;
+        let now_ts = chrono::Utc::now().timestamp();
+
+        {
+            let conn = db.conn.lock().await;
+            conn.execute(
+                "INSERT INTO memories (id, source_id, title, content, chunk_index, chunk_type, memory_type, space, source_agent, created_at, last_modified, confirmed, stability, source) \
+                 VALUES (?1, ?1, ?1, 'orphaned unregistered space content', 0, 'text', 'fact', 'ghost', 'claude-code', ?2, ?2, 1, 'confirmed', 'memory')",
+                libsql::params!["mem_orphan_space".to_string(), now_ts],
+            )
+            .await
+            .unwrap();
+        }
+
+        let target = resolve_distill_target(&db, "ghost").await.unwrap();
+        assert!(
+            target.is_none(),
+            "unregistered legacy memory labels must not resolve as distill space targets: {target:?}"
+        );
+    }
 
     #[tokio::test]
     async fn recompile_single_page_re_projects_md_when_path_passed() {

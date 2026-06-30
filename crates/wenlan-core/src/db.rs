@@ -6516,6 +6516,29 @@ impl MemoryDB {
         let mut rows = conn
             .query(
                 "SELECT COUNT(*) FROM spaces WHERE name = ?1",
+                libsql::params![from],
+            )
+            .await
+            .map_err(|e| WenlanError::VectorDb(format!("reassign source lookup: {}", e)))?;
+        let source_count = if let Some(row) = rows
+            .next()
+            .await
+            .map_err(|e| WenlanError::VectorDb(e.to_string()))?
+        {
+            row.get::<i64>(0).unwrap_or(0)
+        } else {
+            0
+        };
+        drop(rows);
+        if source_count == 0 {
+            return Err(WenlanError::VectorDb(format!(
+                "source space not found: {from}"
+            )));
+        }
+
+        let mut rows = conn
+            .query(
+                "SELECT COUNT(*) FROM spaces WHERE name = ?1",
                 libsql::params![to],
             )
             .await
@@ -13936,8 +13959,8 @@ impl MemoryDB {
         Ok(())
     }
 
-    /// True if any non-archived memory carries the given space. Used by the
-    /// distillation target resolver as a "does this scope exist" check.
+    /// True if any non-archived memory carries the given space. Legacy data probe:
+    /// registered spaces, not memory rows, define valid user-facing scopes.
     pub async fn space_has_memories(&self, space: &str) -> Result<bool, WenlanError> {
         let conn = self.conn.lock().await;
         let mut rows = conn
@@ -20822,9 +20845,9 @@ impl MemoryDB {
 
     /// Scoped successor to `find_matching_page` for cluster-dedup (P2).
     /// Entity-first, then embedding cosine, but constrained:
-    ///  - `workspace` (when Some): only pages whose `space` matches are eligible.
-    ///    `None` = no workspace constraint (P3 adds a dedicated workspace axis;
-    ///    until then we scope on the `space` column we have).
+    ///  - `workspace` (when Some): only pages whose `workspace` matches are eligible,
+    ///    falling back to `space` for legacy pages that predate the workspace column.
+    ///    `None` = no workspace constraint.
     ///  - only `review_status='confirmed'` pages are dedup targets (an unconfirmed
     ///    authored page is not a consolidation anchor).
     ///  - when `allow_user_edited=false`, a `user_edited` match is REFUSED (returns
@@ -20840,7 +20863,8 @@ impl MemoryDB {
         // Entity-first, but scoped.
         if let Some(eid) = entity_id {
             if let Some(page) = self.get_page_by_entity(eid).await? {
-                let ws_ok = workspace.is_none_or(|w| page.space.as_deref() == Some(w));
+                let page_workspace = page.workspace.as_deref().or(page.space.as_deref());
+                let ws_ok = workspace.is_none_or(|w| page_workspace == Some(w));
                 let status_ok = page.review_status == "confirmed";
                 if ws_ok && status_ok && (allow_user_edited || !page.user_edited) {
                     return Ok(Some(page));
@@ -20861,7 +20885,7 @@ impl MemoryDB {
                  FROM pages c
                  WHERE c.status = 'active' AND c.embedding IS NOT NULL
                    AND COALESCE(c.review_status, 'confirmed') = 'confirmed'
-                   AND (?2 IS NULL OR c.space = ?2)
+                   AND (?2 IS NULL OR COALESCE(c.workspace, c.space) = ?2)
                  ORDER BY dist ASC LIMIT 1",
                 libsql::params![emb_sql, workspace],
             )
@@ -40424,6 +40448,123 @@ pub(crate) mod tests {
         assert!(
             db.get_space("baz").await.unwrap().is_none(),
             "failed move must not auto-create destination space"
+        );
+    }
+
+    #[tokio::test]
+    async fn reassign_memories_space_rejects_unregistered_source() {
+        let (db, _td) = test_db().await;
+
+        db.create_space("dest", None, false).await.unwrap();
+
+        let doc = make_memory_doc(
+            "mem_orphan_source_1",
+            "Orphaned memory in an unregistered source space.",
+            "knowledge",
+            "ghost",
+            "agent",
+        );
+        db.upsert_documents(vec![doc]).await.unwrap();
+
+        let now = chrono::Utc::now().to_rfc3339();
+        db.insert_page_with_kind(
+            "page_orphan_source",
+            "Orphan Source",
+            None,
+            "page carrying an unregistered workspace label",
+            None,
+            Some("recap"),
+            &["mem_orphan_source_1"],
+            &now,
+            "authored",
+            "confirmed",
+            Some("ghost"),
+        )
+        .await
+        .unwrap();
+
+        let err = db
+            .reassign_memories_space("ghost", "dest")
+            .await
+            .expect_err("move must reject an unregistered source space");
+        assert!(
+            err.to_string().contains("source space not found"),
+            "unexpected error: {err}"
+        );
+
+        let orphan_space_count = db
+            .list_memories(Some("ghost"), None, None, None, 10)
+            .await
+            .unwrap()
+            .len();
+        assert!(
+            orphan_space_count >= 1,
+            "failed move must leave orphaned source memories in place"
+        );
+
+        let moved_count = db
+            .list_memories(Some("dest"), None, None, None, 10)
+            .await
+            .unwrap()
+            .len();
+        assert_eq!(
+            moved_count, 0,
+            "failed move must not reassign orphaned memories into the destination"
+        );
+
+        let page = db.get_page("page_orphan_source").await.unwrap().unwrap();
+        assert_eq!(
+            page.workspace.as_deref(),
+            Some("ghost"),
+            "failed move must not rewrite pages.workspace for an unregistered source"
+        );
+    }
+
+    #[tokio::test]
+    async fn find_matching_page_scoped_filters_by_workspace_column() {
+        let (db, _td) = test_db().await;
+        let now = chrono::Utc::now().to_rfc3339();
+
+        db.insert_page_with_kind(
+            "page_workspace_match",
+            "Workspace Match",
+            Some("workspace scoped duplicate matcher calibration phrase"),
+            "Workspace scoped duplicate matcher calibration phrase with enough body text to embed consistently.",
+            None,
+            Some("recap"),
+            &[],
+            &now,
+            "authored",
+            "confirmed",
+            Some("work"),
+        )
+        .await
+        .unwrap();
+
+        let embedding = db
+            .generate_embeddings(&[
+                "workspace scoped duplicate matcher calibration phrase".to_string()
+            ])
+            .unwrap()
+            .remove(0);
+
+        let matched = db
+            .find_matching_page_scoped(None, &embedding, 0.85, Some("work"), false)
+            .await
+            .unwrap();
+        assert_eq!(
+            matched.as_ref().map(|page| page.id.as_str()),
+            Some("page_workspace_match"),
+            "workspace-scoped matching must use pages.workspace, not pages.space category"
+        );
+
+        let mismatched = db
+            .find_matching_page_scoped(None, &embedding, 0.85, Some("personal"), false)
+            .await
+            .unwrap();
+        assert!(
+            mismatched.is_none(),
+            "workspace-scoped matching must not match pages from other workspaces"
         );
     }
 

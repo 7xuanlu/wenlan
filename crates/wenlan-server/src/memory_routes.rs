@@ -1937,8 +1937,9 @@ pub async fn handle_get_nurture_cards(
         let s = state.read().await;
         s.db.clone().ok_or(ServerError::DbNotInitialized)?
     };
+    let space = registered_request_space(&db, &query.space, "nurture").await?;
     let cards = db
-        .get_nurture_cards(query.limit, query.space.as_deref())
+        .get_nurture_cards(query.limit, space.as_deref())
         .await
         .map_err(|e| ServerError::Internal(e.to_string()))?;
     Ok(Json(NurtureCardsResponse { cards }))
@@ -2913,6 +2914,7 @@ pub async fn handle_list_decisions(
         .get("space")
         .or_else(|| params.get("domain"))
         .cloned();
+    let space = registered_request_space(&db, &space, "decisions").await?;
     let limit: usize = params
         .get("limit")
         .and_then(|v| v.parse().ok())

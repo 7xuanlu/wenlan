@@ -10,8 +10,9 @@ use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use tower::ServiceExt;
 use wenlan_types::responses::{
-    ChatContextResponse, CreateEntityResponse, CreatePageResponse, ListMemoriesResponse,
-    SearchMemoryResponse, SearchResponse, StoreMemoryResponse,
+    ChatContextResponse, CreateEntityResponse, CreatePageResponse, DecisionsResponse,
+    ListMemoriesResponse, NurtureCardsResponse, SearchMemoryResponse, SearchResponse,
+    StoreMemoryResponse,
 };
 
 async fn seed_confirmed_memory(
@@ -20,12 +21,23 @@ async fn seed_confirmed_memory(
     content: &str,
     space: Option<&str>,
 ) {
+    seed_memory_with_stability(db, source_id, content, "fact", "confirmed", space).await;
+}
+
+async fn seed_memory_with_stability(
+    db: &std::sync::Arc<wenlan_core::db::MemoryDB>,
+    source_id: &str,
+    content: &str,
+    memory_type: &str,
+    stability: &str,
+    space: Option<&str>,
+) {
     db.upsert_documents(vec![wenlan_core::sources::RawDocument {
         source: "memory".to_string(),
         source_id: source_id.to_string(),
         title: format!("title-{source_id}"),
         content: content.to_string(),
-        memory_type: Some("fact".to_string()),
+        memory_type: Some(memory_type.to_string()),
         space: space.map(str::to_string),
         last_modified: chrono::Utc::now().timestamp(),
         pending_revision: false,
@@ -33,9 +45,9 @@ async fn seed_confirmed_memory(
     }])
     .await
     .expect("seed memory must upsert");
-    db.confirm_memory(source_id)
+    db.set_stability(source_id, stability)
         .await
-        .expect("seed memory must confirm");
+        .expect("seed memory must set requested stability");
 }
 
 async fn body_as_json<T: serde::de::DeserializeOwned>(response: axum::http::Response<Body>) -> T {
@@ -489,6 +501,146 @@ async fn list_entities_unregistered_header_falls_back_to_unscoped() {
     assert!(
         names.contains(&"Unscoped Space Fallback Entity"),
         "unregistered space headers must not filter out unscoped entities; got {names:?}"
+    );
+}
+
+// ===== GET /api/memory/nurture (handle_get_nurture_cards) =====
+
+#[tokio::test]
+async fn nurture_unregistered_query_space_falls_back_to_unscoped() {
+    let (router, _tmp, db) = common::test_app().await;
+    seed_memory_with_stability(
+        &db,
+        "unscoped_nurture_memory",
+        "unregistered nurture fallback should include this telescope collimation memory",
+        "fact",
+        "new",
+        None,
+    )
+    .await;
+
+    let req = Request::builder()
+        .method("GET")
+        .uri("/api/memory/nurture?space=ghost-nurture-space&limit=10")
+        .body(Body::empty())
+        .unwrap();
+
+    let res = router.oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::OK, "nurture must return 200");
+    let body: NurtureCardsResponse = body_as_json(res).await;
+    assert!(
+        body.cards
+            .iter()
+            .any(|card| card.source_id == "unscoped_nurture_memory"),
+        "unregistered query spaces must not filter out unscoped nurture cards; got {:?}",
+        body.cards
+            .iter()
+            .map(|card| &card.source_id)
+            .collect::<Vec<_>>()
+    );
+}
+
+#[tokio::test]
+async fn nurture_empty_query_space_falls_back_to_unscoped() {
+    let (router, _tmp, db) = common::test_app().await;
+    seed_memory_with_stability(
+        &db,
+        "empty_query_nurture_memory",
+        "empty nurture query space should include this lap steel tuning memory",
+        "fact",
+        "new",
+        None,
+    )
+    .await;
+
+    let req = Request::builder()
+        .method("GET")
+        .uri("/api/memory/nurture?space=&limit=10")
+        .body(Body::empty())
+        .unwrap();
+
+    let res = router.oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::OK, "nurture must return 200");
+    let body: NurtureCardsResponse = body_as_json(res).await;
+    assert!(
+        body.cards
+            .iter()
+            .any(|card| card.source_id == "empty_query_nurture_memory"),
+        "empty query spaces must not filter out unscoped nurture cards; got {:?}",
+        body.cards
+            .iter()
+            .map(|card| &card.source_id)
+            .collect::<Vec<_>>()
+    );
+}
+
+// ===== GET /api/decisions (handle_list_decisions) =====
+
+#[tokio::test]
+async fn decisions_unregistered_query_space_falls_back_to_unscoped() {
+    let (router, _tmp, db) = common::test_app().await;
+    seed_memory_with_stability(
+        &db,
+        "unscoped_decision_memory",
+        "unregistered decision fallback should include this parser combinator decision",
+        "decision",
+        "confirmed",
+        None,
+    )
+    .await;
+
+    let req = Request::builder()
+        .method("GET")
+        .uri("/api/decisions?space=ghost-decision-space&limit=10")
+        .body(Body::empty())
+        .unwrap();
+
+    let res = router.oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::OK, "decisions must return 200");
+    let body: DecisionsResponse = body_as_json(res).await;
+    assert!(
+        body.decisions
+            .iter()
+            .any(|decision| decision.source_id == "unscoped_decision_memory"),
+        "unregistered query spaces must not filter out unscoped decisions; got {:?}",
+        body.decisions
+            .iter()
+            .map(|decision| &decision.source_id)
+            .collect::<Vec<_>>()
+    );
+}
+
+#[tokio::test]
+async fn decisions_empty_query_space_falls_back_to_unscoped() {
+    let (router, _tmp, db) = common::test_app().await;
+    seed_memory_with_stability(
+        &db,
+        "empty_query_decision_memory",
+        "empty decision query space should include this storage adapter decision",
+        "decision",
+        "confirmed",
+        None,
+    )
+    .await;
+
+    let req = Request::builder()
+        .method("GET")
+        .uri("/api/decisions?space=&limit=10")
+        .body(Body::empty())
+        .unwrap();
+
+    let res = router.oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::OK, "decisions must return 200");
+    let body: DecisionsResponse = body_as_json(res).await;
+    assert!(
+        body.decisions
+            .iter()
+            .any(|decision| decision.source_id == "empty_query_decision_memory"),
+        "empty query spaces must not filter out unscoped decisions; got {:?}",
+        body.decisions
+            .iter()
+            .map(|decision| &decision.source_id)
+            .collect::<Vec<_>>()
     );
 }
 
