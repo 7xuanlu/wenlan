@@ -2611,6 +2611,8 @@ mod tests {
         .await
         .unwrap();
 
+        db.create_space("work", None, false).await.unwrap();
+
         let source_id = "mem_eval_classify_1";
         let content = "Moved the launch review to 2026-02-10 since the demo slipped a week.";
         let doc = RawDocument {
