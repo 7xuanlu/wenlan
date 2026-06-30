@@ -23,6 +23,31 @@ use wenlan_types::responses::{
 };
 use wenlan_types::sources::{stability_tier, MemoryType, RawDocument, StabilityTier};
 
+async fn registered_request_space(
+    db: &wenlan_core::db::MemoryDB,
+    requested: &Option<String>,
+    context: &str,
+) -> Result<Option<String>, ServerError> {
+    let proposed = requested
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty());
+    let registered = db
+        .registered_space_or_none(requested.as_deref())
+        .await
+        .map_err(|e| ServerError::Internal(e.to_string()))?;
+    if registered.is_none() {
+        if let Some(space) = proposed {
+            tracing::warn!(
+                "[memory] ignoring unregistered space {:?} for {}; storing unscoped",
+                space,
+                context
+            );
+        }
+    }
+    Ok(registered)
+}
+
 // ===== Profile Types =====
 
 #[derive(Debug, Serialize)]
@@ -1259,6 +1284,7 @@ pub async fn handle_create_entity(
             .cloned()
             .ok_or(ServerError::DbNotInitialized)?
     };
+    req.space = registered_request_space(&db, &req.space, "create_entity").await?;
     let result = wenlan_core::post_write::create_entity(&db, req, &agent).await?;
     Ok(Json(CreateEntityResponse {
         id: result.id,
@@ -2096,16 +2122,6 @@ pub async fn handle_create_page(
     crate::space_header::SpaceHeader(header_space): crate::space_header::SpaceHeader,
     Json(mut req): Json<CreateConceptRequest>,
 ) -> Result<Json<CreatePageResponse>, ServerError> {
-    // Apply X-Origin-Space header as fallback only when body omits `space`.
-    // Clone before consuming so workspace fallback can use the same value.
-    if req.space.is_none() {
-        req.space = header_space.clone();
-    }
-    // Apply X-Origin-Space header as fallback for `workspace` as well.
-    // `workspace` is the P3 dedicated scope axis; `space` is the category column.
-    if req.workspace.is_none() {
-        req.workspace = header_space;
-    }
     let agent = extract_agent_name(&headers, None);
     let db = {
         let s = state.read().await;
@@ -2113,6 +2129,22 @@ pub async fn handle_create_page(
             .cloned()
             .ok_or(ServerError::DbNotInitialized)?
     };
+
+    // Apply X-Origin-Space header as fallback only when body omits `space`.
+    // Clone before consuming so workspace fallback can use the same value.
+    if req.space.is_none() {
+        req.space = header_space.clone();
+    }
+    // HTTP/MCP `space` remains the legacy scope input. Persist it only when it
+    // names a registered space, and mirror it to `workspace` for P3 scoping when
+    // no explicit workspace was supplied.
+    req.space = registered_request_space(&db, &req.space, "create_page space").await?;
+    if req.workspace.is_none() {
+        req.workspace = req.space.clone();
+    } else {
+        req.workspace =
+            registered_request_space(&db, &req.workspace, "create_page workspace").await?;
+    }
     let knowledge_path = wenlan_core::config::load_config().knowledge_path_or_default();
     let result =
         wenlan_core::post_write::create_page(&db, req, &agent, Some(knowledge_path.as_path()))

@@ -263,6 +263,7 @@ async fn list_entities_header_fallback_returns_200() {
 #[tokio::test]
 async fn create_entity_uses_header_when_body_omits_space() {
     let (router, _tmp, db) = common::test_app().await;
+    db.create_space("career", None, false).await.unwrap();
 
     let req = Request::builder()
         .method("POST")
@@ -298,11 +299,52 @@ async fn create_entity_uses_header_when_body_omits_space() {
     );
 }
 
+#[tokio::test]
+async fn create_entity_unregistered_header_space_is_not_stored_or_auto_created() {
+    let (router, _tmp, db) = common::test_app().await;
+
+    let req = Request::builder()
+        .method("POST")
+        .uri("/api/memory/entities")
+        .header("Content-Type", "application/json")
+        .header("X-Origin-Space", "surprise-entity")
+        .body(Body::from(
+            serde_json::json!({
+                "name": "test_ent_unregistered_header",
+                "entity_type": "person"
+            })
+            .to_string(),
+        ))
+        .unwrap();
+
+    let res = router.oneshot(req).await.unwrap();
+    assert_eq!(
+        res.status(),
+        StatusCode::OK,
+        "create_entity must return 200"
+    );
+
+    let created: CreateEntityResponse = body_as_json(res).await;
+    let detail = db
+        .get_entity_detail(&created.id)
+        .await
+        .expect("get_entity_detail must not fail");
+    assert_eq!(
+        detail.entity.space, None,
+        "unregistered header spaces must not be persisted to entities"
+    );
+    assert!(
+        db.get_space("surprise-entity").await.unwrap().is_none(),
+        "unregistered header spaces must not auto-create a spaces row"
+    );
+}
+
 // ===== POST /api/pages (handle_create_page) =====
 
 #[tokio::test]
 async fn create_page_uses_header_when_body_omits_space() {
     let (router, _tmp, db) = common::test_app_no_gate().await;
+    db.create_space("career", None, false).await.unwrap();
 
     // Seed a source memory via HTTP so we have a valid source_id to cite.
     let content = "Rust is a systems programming language with memory safety guarantees";
@@ -370,5 +412,88 @@ async fn create_page_uses_header_when_body_omits_space() {
         Some("career"),
         "created page must have space=career from header, got: {:?}",
         page.space
+    );
+    assert_eq!(
+        page.workspace.as_deref(),
+        Some("career"),
+        "created page must have workspace=career from header, got: {:?}",
+        page.workspace
+    );
+}
+
+#[tokio::test]
+async fn create_page_unregistered_header_space_is_not_stored_or_auto_created() {
+    let (router, _tmp, db) = common::test_app_no_gate().await;
+
+    let content = "Rust is a systems programming language with memory safety guarantees";
+    let store_res = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/memory/store")
+                .header("Content-Type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({
+                        "content": content,
+                        "memory_type": "fact"
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        store_res.status(),
+        StatusCode::OK,
+        "seed memory store must return 200"
+    );
+    let stored: StoreMemoryResponse = body_as_json(store_res).await;
+    let source_id = stored.source_id;
+
+    let page_content = "Rust provides memory safety through ownership and borrowing.";
+    let create_res = router
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/pages")
+                .header("Content-Type", "application/json")
+                .header("X-Origin-Space", "surprise-page")
+                .body(Body::from(
+                    serde_json::json!({
+                        "title": "Rust Systems Language Unscoped",
+                        "content": page_content,
+                        "source_memory_ids": [source_id]
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        create_res.status(),
+        StatusCode::OK,
+        "create_page must return 200"
+    );
+
+    let created: CreatePageResponse = body_as_json(create_res).await;
+    let page = db
+        .get_page(&created.id)
+        .await
+        .expect("get_page must not fail")
+        .expect("page must exist after creation");
+    assert_eq!(
+        page.space, None,
+        "unregistered header spaces must not be copied into pages.space"
+    );
+    assert_eq!(
+        page.workspace, None,
+        "unregistered header spaces must not be persisted to pages.workspace"
+    );
+    assert!(
+        db.get_space("surprise-page").await.unwrap().is_none(),
+        "unregistered header spaces must not auto-create a spaces row"
     );
 }

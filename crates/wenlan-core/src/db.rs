@@ -6273,12 +6273,16 @@ impl MemoryDB {
             .map_err(|e| WenlanError::VectorDb(format!("update_space begin: {}", e)))?;
 
         let txn_result = async {
-            conn.execute(
+            let updated_spaces = conn
+                .execute(
                 "UPDATE spaces SET name = ?1, description = ?2, updated_at = ?3 WHERE name = ?4",
                 libsql::params![new_name, description, now, name],
             )
-            .await
-            .map_err(|e| WenlanError::VectorDb(format!("update_space: {}", e)))?;
+                .await
+                .map_err(|e| WenlanError::VectorDb(format!("update_space: {}", e)))?;
+            if updated_spaces == 0 {
+                return Err(WenlanError::NotFound(format!("space '{name}' not found")));
+            }
 
             if name != new_name {
                 conn.execute(
@@ -31428,6 +31432,78 @@ pub(crate) mod tests {
             scoped.workspace.as_deref(),
             Some("career"),
             "rename must update pages.workspace values"
+        );
+    }
+
+    #[tokio::test]
+    async fn update_space_missing_source_does_not_cascade_orphaned_rows() {
+        let (db, _dir) = test_db().await;
+        db.create_space("career", None, false).await.unwrap();
+
+        db.upsert_documents(vec![RawDocument {
+            source: "memory".to_string(),
+            source_id: "orphan_space_mem".to_string(),
+            title: "Orphan Space Memory".to_string(),
+            content: "orphaned memory row with a missing source space".to_string(),
+            last_modified: chrono::Utc::now().timestamp(),
+            memory_type: Some("fact".to_string()),
+            space: Some("ghost".to_string()),
+            ..Default::default()
+        }])
+        .await
+        .unwrap();
+        db.store_entity("Ghost Entity", "person", Some("ghost"), None, None)
+            .await
+            .unwrap();
+
+        let now = chrono::Utc::now().to_rfc3339();
+        db.insert_page_with_kind(
+            "page_orphan_space",
+            "Orphan Space Page",
+            None,
+            "orphaned page using pages.space as a missing source space",
+            None,
+            Some("ghost"),
+            &[],
+            &now,
+            "authored",
+            "confirmed",
+            Some("ghost"),
+        )
+        .await
+        .unwrap();
+
+        let result = db.update_space("ghost", "career", None).await;
+        assert!(result.is_err(), "renaming a missing source space must fail");
+
+        let memory_space = db.get_memory_space("orphan_space_mem").await.unwrap();
+        assert_eq!(
+            memory_space.as_deref(),
+            Some("ghost"),
+            "failed rename must not cascade orphaned memory rows"
+        );
+
+        let entities = db.list_entities(None, None).await.unwrap();
+        let entity = entities
+            .iter()
+            .find(|entity| entity.name == "Ghost Entity")
+            .expect("ghost entity should exist");
+        assert_eq!(
+            entity.space.as_deref(),
+            Some("ghost"),
+            "failed rename must not cascade orphaned entity rows"
+        );
+
+        let page = db.get_page("page_orphan_space").await.unwrap().unwrap();
+        assert_eq!(
+            page.space.as_deref(),
+            Some("ghost"),
+            "failed rename must not cascade orphaned pages.space rows"
+        );
+        assert_eq!(
+            page.workspace.as_deref(),
+            Some("ghost"),
+            "failed rename must not cascade orphaned pages.workspace rows"
         );
     }
 

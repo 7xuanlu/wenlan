@@ -115,11 +115,11 @@ fn space_default_overwrite_existing_entry() {
 fn space_default_no_default_set_prints_fallback_message() {
     let tmp = tempfile::tempdir().expect("mktempdir");
 
-    // No default has been set — CLI should print the fallback note.
+    // No default has been set — CLI should print the unscoped fallback note.
     cli()
         .env("HOME", tmp.path())
         .args(["space", "default"])
         .assert()
         .success()
-        .stdout(predicates::str::contains("personal"));
+        .stdout(predicates::str::contains("unscoped"));
 }

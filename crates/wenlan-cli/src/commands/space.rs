@@ -211,7 +211,10 @@ async fn move_cmd(
 ) -> Result<()> {
     let n = client.move_space(from, to).await?;
     if !quiet {
-        println!("Moved {} memories from '{}' to '{}'.", n, from, to);
+        println!(
+            "Moved {} memory rows from '{}' to '{}'; pages and entities were cascaded.",
+            n, from, to
+        );
     }
     Ok(())
 }
