@@ -21,6 +21,13 @@ Power-user audit lever. Most users do not need /curate in daily flow:
 
 Use /curate only when you want the deep walk those skills intentionally do not force.
 
+**Captures are meant to decay.** A capture lands unconfirmed and, if nothing ever
+conflicts with it, it quietly fades — that is by design, not a backlog you owe the
+system. The only items that *need* a human are genuine conflicts (a contradiction,
+or a richer re-capture worth merging); those surface as pending revisions in
+`/brief`. `/curate captures` is an **opt-in audit** for when you *want* to seal a
+batch (e.g. after a bulk import), not a daily chore to zero out.
+
 ## Decide in native cards, not prose
 
 Walk the queue with `AskUserQuestion` — the same native picker `/pages` uses.
@@ -53,6 +60,11 @@ memory has a `source_id`. Per item, options:
   then `forget(memory_id=<source_id>)`.
 
 ## `/curate revisions`
+
+The pending-revision surface is now **conflicts and merges only** — a same-entity
+contradiction, or a materially-richer re-capture worth folding into the original.
+A plain unconfirmed capture never lands here, and a ~identical re-capture dedups
+silently (no card). So every revision in this queue is a real decision.
 
 `list_pending_revisions` returns **one row per chunk** — a long revision spans
 several rows sharing the same `revision_source_id`. **Group rows by

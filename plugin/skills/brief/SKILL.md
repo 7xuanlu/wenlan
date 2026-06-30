@@ -154,3 +154,5 @@ Run `/curate revisions` to walk the rest.
 Do not auto-action anything. The user picks per item.
 
 Note: this block surfaces *all* pending revisions, not just this session's, because revisions are about memories you may still be using right now, regardless of when the contradiction was flagged.
+
+The revision surface is **conflicts and merges only** — a same-entity contradiction, or a materially-richer re-capture worth folding into the original. A plain unconfirmed capture never lands here (captures are meant to decay unless they conflict), and a ~identical re-capture dedups silently. So an empty result is the normal, healthy case, not a sign you're behind.
