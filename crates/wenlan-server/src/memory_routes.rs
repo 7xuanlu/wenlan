@@ -4134,7 +4134,7 @@ mod dismiss_revision_tests {
         (Arc::new(RwLock::new(server_state)), tmp)
     }
 
-    /// HTTP contract for the external origin-app caller. `POST
+    /// HTTP contract for the external wenlan-app caller. `POST
     /// /api/memory/revision/{id}/dismiss` UNSTAGES the revision — it clears the
     /// false `pending_revision` + `supersedes` link and keeps BOTH memories as
     /// independent rows. It must NOT delete. Regression guard against the old

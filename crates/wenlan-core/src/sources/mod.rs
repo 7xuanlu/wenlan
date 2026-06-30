@@ -77,10 +77,10 @@ pub fn compute_effective_confidence(
 
 /// Trait that all data source connectors must implement.
 ///
-/// Intentionally duplicated in `origin-app/app/src/sources/data_source.rs`
-/// because origin-app has no wenlan-core dependency (Phase 5-D PR2). The
+/// Intentionally duplicated in `wenlan-app/app/src/sources/data_source.rs`
+/// because wenlan-app has no wenlan-core dependency (Phase 5-D PR2). The
 /// two trait declarations are identical except for the error type
-/// (`WenlanError` here, `AppError` in origin-app). The shared data shapes
+/// (`WenlanError` here, `AppError` in wenlan-app). The shared data shapes
 /// (`RawDocument`, `SourceStatus`) live in wenlan-types so connectors can
 /// move freely between crates.
 #[async_trait]

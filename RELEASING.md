@@ -1,6 +1,6 @@
 # Releasing Wenlan (daemon side)
 
-This document covers releases of the local runtime: `wenlan` CLI, `wenlan-server` daemon, `wenlan-mcp` connector, and shared crates (`wenlan-types`, `wenlan-core`). The desktop app ships from [7xuanlu/origin-app](https://github.com/7xuanlu/origin-app) on its own release cadence.
+This document covers releases of the local runtime: `wenlan` CLI, `wenlan-server` daemon, `wenlan-mcp` connector, and shared crates (`wenlan-types`, `wenlan-core`). The desktop app ships from [7xuanlu/wenlan-app](https://github.com/7xuanlu/wenlan-app) on its own release cadence.
 
 ## How release-please works
 
@@ -39,7 +39,7 @@ The `release.yml` workflow validates that the pushed tag version matches `versio
 6. Publishes `wenlan-mcp` and `wenlan` to npm.
 7. Updates the Homebrew tap for `wenlan-mcp`.
 
-`wenlan-mcp` now lives in this monorepo under `crates/wenlan-mcp` and shares the workspace Apache-2.0 license. The desktop DMG is still built from [origin-app](https://github.com/7xuanlu/origin-app); see its `RELEASING.md` for that pipeline.
+`wenlan-mcp` now lives in this monorepo under `crates/wenlan-mcp` and shares the workspace Apache-2.0 license. The desktop DMG is still built from [wenlan-app](https://github.com/7xuanlu/wenlan-app); see its `RELEASING.md` for that pipeline.
 
 ## Required secrets
 

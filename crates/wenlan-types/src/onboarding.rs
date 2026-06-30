@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-//! Onboarding milestone wire types. Shared with wenlan-mcp + origin-app.
+//! Onboarding milestone wire types. Shared with wenlan-mcp + wenlan-app.
 
 use serde::{Deserialize, Serialize};
 use std::str::FromStr;
