@@ -34,6 +34,9 @@ pub struct EnrichmentOpts {
     pub initial_memory_type: String,
     /// Domain/space the sync path already resolved, if any.
     pub initial_domain: Option<String>,
+    /// True when the caller explicitly supplied a space/domain but the sync path
+    /// rejected it as unregistered and stored the row unscoped.
+    pub rejected_explicit_domain: bool,
     /// Supersede mode the sync path computed for `initial_memory_type`.
     pub initial_supersede_mode: String,
     /// Structured fields the caller supplied (skips the extract LLM call).
@@ -129,7 +132,7 @@ pub async fn run_classification_enrichment(
                         "hide".to_string()
                     };
                 }
-                if final_domain.is_none() {
+                if final_domain.is_none() && !opts.rejected_explicit_domain {
                     let proposed_space =
                         c.space.as_deref().map(str::trim).filter(|s| !s.is_empty());
                     match db.registered_space_or_none(c.space.as_deref()).await {
@@ -145,6 +148,15 @@ pub async fn run_classification_enrichment(
                         Err(e) => {
                             log::warn!("[ingest] classifier space lookup failed: {e}")
                         }
+                    }
+                } else if opts.rejected_explicit_domain {
+                    let proposed_space =
+                        c.space.as_deref().map(str::trim).filter(|s| !s.is_empty());
+                    if let Some(space) = proposed_space {
+                        log::warn!(
+                            "[ingest] ignoring classifier space {:?}; request space was explicitly rejected",
+                            space
+                        );
                     }
                 }
                 final_quality = c.quality;
@@ -394,6 +406,7 @@ mod tests {
         EnrichmentOpts {
             initial_memory_type: "fact".to_string(),
             initial_domain: None,
+            rejected_explicit_domain: false,
             initial_supersede_mode: "hide".to_string(),
             initial_structured_fields: None,
             agent_supplied_memory_type: false,
@@ -512,6 +525,56 @@ mod tests {
         assert!(
             db.get_space("origin").await.unwrap().is_none(),
             "unregistered classifier spaces must not create a space row"
+        );
+    }
+
+    #[tokio::test]
+    async fn canonical_enrichment_preserves_rejected_explicit_space_as_unscoped() {
+        let (db, _dir) = test_db().await;
+        db.create_space("work", None, false).await.unwrap();
+        let source_id = "mem_canon_rejected_explicit_space";
+        let content = "An explicitly rejected space should stay uncategorized after enrichment.";
+        db.upsert_documents(vec![seed_doc(source_id, content)])
+            .await
+            .unwrap();
+
+        let llm: Arc<dyn LlmProvider> = Arc::new(SequencedMockProvider::new(vec![
+            r#"{"memory_type":"fact","domain":"work","quality":"high","tags":["scope"]}"#,
+            r#"{"retrieval_cue":"scope regression"}"#,
+        ]));
+
+        let prompts = PromptRegistry::default();
+        let refinery = RefineryConfig::default();
+        let distillation = DistillationConfig::default();
+        let opts = EnrichmentOpts {
+            rejected_explicit_domain: true,
+            ..opts_no_agent_overrides()
+        };
+
+        let outcome = run_canonical_enrichment(
+            &db,
+            source_id,
+            content,
+            None,
+            Some(&llm),
+            &prompts,
+            &refinery,
+            &distillation,
+            None,
+            &opts,
+            None,
+        )
+        .await;
+
+        assert_eq!(
+            outcome.final_domain, None,
+            "classifier space must not override an explicitly rejected request space"
+        );
+
+        let (_mt, space) = db.get_memory_classification(source_id).await.unwrap();
+        assert_eq!(
+            space, None,
+            "memory must remain uncategorized after enrichment"
         );
     }
 

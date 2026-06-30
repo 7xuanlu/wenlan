@@ -789,6 +789,7 @@ pub async fn handle_store_memory(
         let entity_id_clone = resolved_entity_id.clone();
         let initial_memory_type = memory_type_str.clone();
         let initial_domain = final_domain.clone();
+        let rejected_explicit_domain = ignored_unregistered_space.is_some();
         // Already moved into the doc above — rebuild from the same formula
         // the RawDocument constructor used.
         let initial_supersede_mode = if memory_type_str == "decision" {
@@ -832,6 +833,7 @@ pub async fn handle_store_memory(
                 let opts = wenlan_core::ingest::EnrichmentOpts {
                     initial_memory_type: initial_memory_type.clone(),
                     initial_domain: initial_domain.clone(),
+                    rejected_explicit_domain,
                     initial_supersede_mode: initial_supersede_mode.clone(),
                     initial_structured_fields: initial_structured_fields.clone(),
                     agent_supplied_memory_type,
