@@ -23,7 +23,7 @@ use wenlan_types::responses::{
 };
 use wenlan_types::sources::{stability_tier, MemoryType, RawDocument, StabilityTier};
 
-async fn registered_request_space(
+pub(crate) async fn registered_request_space(
     db: &wenlan_core::db::MemoryDB,
     requested: &Option<String>,
     context: &str,
@@ -39,7 +39,7 @@ async fn registered_request_space(
     if registered.is_none() {
         if let Some(space) = proposed {
             tracing::warn!(
-                "[memory] ignoring unregistered space {:?} for {}; storing unscoped",
+                "[memory] ignoring unregistered space {:?} for {}; using unscoped fallback",
                 space,
                 context
             );
@@ -1013,17 +1013,18 @@ pub async fn handle_search_memory(
         req.space = header_space;
     }
     let start = std::time::Instant::now();
-
-    let results = {
+    let (db, reranker) = {
         // Snapshot the Arcs we need before any await so we never hold the
         // read guard across the search call (LLM reranker or model load can
         // be slow; see AGENTS.md "Async and locking" guidance).
-        let (db, reranker) = {
-            let s = state.read().await;
-            let db = s.db.as_ref().ok_or(ServerError::DbNotInitialized)?.clone();
-            let reranker = s.reranker.clone();
-            (db, reranker)
-        };
+        let s = state.read().await;
+        let db = s.db.as_ref().ok_or(ServerError::DbNotInitialized)?.clone();
+        let reranker = s.reranker.clone();
+        (db, reranker)
+    };
+    req.space = registered_request_space(&db, &req.space, "search_memory").await?;
+
+    let results = {
         if req.rerank {
             if reranker.is_none() {
                 tracing::warn!(
@@ -1205,6 +1206,7 @@ pub async fn handle_list_memories(
         let s = state.read().await;
         s.db.clone().ok_or(ServerError::DbNotInitialized)?
     }; // guard dropped here
+    req.space = registered_request_space(&db, &req.space, "list_memories").await?;
     let memories = db
         .list_filtered_confirmed(
             Some("memory"),
@@ -1514,8 +1516,11 @@ pub async fn handle_list_entities(
     if req.space.is_none() {
         req.space = header_space;
     }
-    let s = state.read().await;
-    let db = s.db.as_ref().ok_or(ServerError::DbNotInitialized)?;
+    let db = {
+        let s = state.read().await;
+        s.db.clone().ok_or(ServerError::DbNotInitialized)?
+    };
+    req.space = registered_request_space(&db, &req.space, "list_entities").await?;
     let entities = db
         .list_entities(req.entity_type.as_deref(), req.space.as_deref())
         .await
@@ -2523,7 +2528,10 @@ pub async fn handle_set_document_space(
         let s = state.read().await;
         s.db.clone().ok_or(ServerError::DbNotInitialized)?
     };
-    db.update_memory_space(&source_id, &req.space_name)
+    let requested_space = Some(req.space_name);
+    let registered_space =
+        registered_request_space(&db, &requested_space, "set_document_space").await?;
+    db.update_memory_space_opt(&source_id, registered_space.as_deref())
         .await
         .map_err(|e| ServerError::Internal(e.to_string()))?;
     Ok(Json(wenlan_types::responses::SuccessResponse { ok: true }))
@@ -2804,7 +2812,9 @@ pub async fn handle_update_memory(
             .map_err(|e| ServerError::Internal(e.to_string()))?;
     }
     if let Some(space) = &req.space {
-        db.update_memory_space(&id, space)
+        let registered_space =
+            registered_request_space(&db, &Some(space.clone()), "update_memory").await?;
+        db.update_memory_space_opt(&id, registered_space.as_deref())
             .await
             .map_err(|e| ServerError::Internal(e.to_string()))?;
     }

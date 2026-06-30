@@ -7038,6 +7038,14 @@ impl MemoryDB {
         source_id: &str,
         space: &str,
     ) -> Result<(), WenlanError> {
+        self.update_memory_space_opt(source_id, Some(space)).await
+    }
+
+    pub async fn update_memory_space_opt(
+        &self,
+        source_id: &str,
+        space: Option<&str>,
+    ) -> Result<(), WenlanError> {
         let conn = self.conn.lock().await;
         conn.execute(
             "UPDATE memories SET space = ?1 WHERE source_id = ?2",
