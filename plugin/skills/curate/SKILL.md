@@ -65,6 +65,14 @@ fragment):
 - `content` — the full revised text.
 - `source_agent` — who proposed it (or `null` = daemon).
 
+**Read the JSON straight into the card — in one step, no shell tooling.** Each
+element's `content` is the card question (trim to ~1–2 lines inline as you write
+it); `target_source_id` is the action key. Parse the array yourself — do not pipe
+it through `jq`/`python`/`awk` to reshape first. That extra round-trip is what
+makes the picker feel slow (each retry is a model turn) and is failure-prone
+(quoting, sandboxed temp paths); the model reads JSON natively, so go from CLI
+output to card directly.
+
 Walk it as native cards (≤4 per card). Per revision, options:
 
 - **Accept** → the revision replaces the original memory.
