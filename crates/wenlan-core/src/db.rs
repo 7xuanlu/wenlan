@@ -14870,8 +14870,9 @@ impl MemoryDB {
         &self,
         query: &str,
         limit: usize,
+        space: Option<&str>,
     ) -> Result<Vec<SearchResult>, WenlanError> {
-        self.search_memory(query, limit, Some("fact"), None, None, None, None, None)
+        self.search_memory(query, limit, Some("fact"), space, None, None, None, None)
             .await
     }
 
@@ -28561,7 +28562,7 @@ pub(crate) mod tests {
         db.upsert_documents(docs).await.unwrap();
 
         let results = db
-            .search_corrections_by_topic("Rust error handling unwrap", 5)
+            .search_corrections_by_topic("Rust error handling unwrap", 5, None)
             .await
             .unwrap();
         assert!(!results.is_empty(), "should find fact memory by topic");
