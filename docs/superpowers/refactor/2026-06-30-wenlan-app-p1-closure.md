@@ -6,7 +6,8 @@
 - **Backend source:** `/Users/lucian/Repos/wenlan`
 - **Backend source revision:** `5f3ec0dc9abf03ae00bb9e7a26e773910288c06a`
 - **Base:** `origin/main` at `557840e` after PR #53
-- **Status:** Closure candidate with runtime launch evidence refreshed. PR review/merge still remains before the migration goal can be considered complete.
+- **Merged checkpoint:** PR #54, merge commit `965721bdccb9f7cfae1d1efa8b6bcd53ffec9af7`
+- **Status:** P0/P1 migration closure checkpoint merged. Deferred graph-authoring, maintenance, WebSocket, and palette work remains out of scope for this closure pass.
 
 ## Scope
 
@@ -188,16 +189,24 @@ The route diff therefore has no unclassified migration blocker.
 5. **Visual palette work is out of scope.** The neutral theme is acceptable for
    migration closure; color direction can be revisited separately.
 
-## Completion Gaps
+## Post-Merge Status
 
-The migration goal should stay active until this closure checkpoint is reviewed
-and merged. The remaining gap is process, not implementation:
+PR #54 merged this closure checkpoint into `main` after GitHub CI passed. No
+unclassified P0/P1 desktop parity blocker remains in this audit.
 
-- PR review/merge for this closure checkpoint.
+The remaining deferred items are explicit product/backend architecture decisions,
+not migration closure gaps:
+
+- graph authoring needs daemon-level typed proposal, validation, provenance, and
+  recovery semantics before desktop UI work;
+- `/api/steep` needs a separate maintenance design before surfacing;
+- `/ws/updates` needs an explicit app-event architecture decision before
+  replacing the current Tauri event, polling, and query invalidation flow;
+- visual palette exploration is separate from daemon/API migration closure.
 
 ## Review Prompt
 
-Use this prompt if a boule review is available before merging:
+Historical prompt used for the pre-merge closure review:
 
 ```text
 /boule:debate Review docs/superpowers/refactor/2026-06-30-wenlan-app-p1-closure.md and docs/superpowers/refactor/wenlan-app-parity-matrix.md for the origin-app to wenlan-app migration closure checkpoint.

@@ -2,10 +2,10 @@
 
 - **Date:** 2026-06-30 UTC / 2026-06-29 PDT
 - **App checkout:** `/Users/lucian/Repos/wenlan-app/.worktrees/wenlan-app-migration-revalidation`
-- **App branch:** `codex/wenlan-app-migration-revalidation`
+- **App branch:** `codex/wenlan-app-post-merge-closure`
 - **Wenlan backend source:** `/Users/lucian/Repos/wenlan`
-- **Purpose:** prerequisite matrix before the full `origin-app` -> `wenlan-app` refactor run.
-- **Current status:** refreshed on 2026-06-30 UTC after typed-client, sidecar, MCP bridge, Dock/app-activation, avatar path, neutral theme fallback, Home pending-revision/refinery review work, daemon-backed setup status work, post-merge API parity wrappers, `/api/capture-stats`, daemon-backed global tag inventory, daemon-backed status/reranker diagnostics, entity-suggestion action compatibility with the refinery queue, typed space/page/search/setup response envelopes, typed MCP setup entry surface, `wenlan-types` 0.9.2, `/api/search` supplemental page consumption/navigation, shared page-list/search response typing, daemon-config-backed settings toggles, daemon data-root alignment for sidecar plus launchd, Intelligence setup copy moved from Concept to Page language, repeatable Tauri sidecar prep before validation, route-diff revalidation in `docs/superpowers/refactor/2026-06-29-wenlan-app-api-parity-revalidation.md`, startup Dock-icon/reveal fallback work in `docs/superpowers/refactor/2026-06-29-wenlan-app-runtime-assets.md`, local bundled `.app` validation in `docs/superpowers/refactor/2026-06-29-wenlan-app-bundled-runtime.md`, reproducible API route-diff tooling in `docs/superpowers/refactor/2026-06-29-wenlan-app-route-diff-tooling.md`, route-gap classification in `docs/superpowers/refactor/2026-06-29-wenlan-app-route-gap-classification.md`, graph-authoring design boundary in `docs/superpowers/refactor/2026-06-29-wenlan-app-graph-authoring-design.md`, Settings diagnostics implementation in PR #53, typed webpage ingest wrapper work in `docs/superpowers/refactor/2026-06-29-wenlan-app-webpage-ingest-wrapper.md`, typed space move wrapper work in `docs/superpowers/refactor/2026-06-29-wenlan-app-space-move-wrapper.md`, PR #47 global `/api/distill` review-panel work, and the P1 closure audit in `docs/superpowers/refactor/2026-06-30-wenlan-app-p1-closure.md`.
+- **Purpose:** post-merge parity and compatibility record for the `origin-app` -> `wenlan-app` migration checkpoint.
+- **Current status:** PR #54 merged the P1 closure audit after typed-client, sidecar, MCP bridge, Dock/app-activation, avatar path, neutral theme fallback, Home pending-revision/refinery review work, daemon-backed setup status work, post-merge API parity wrappers, `/api/capture-stats`, daemon-backed global tag inventory, daemon-backed status/reranker diagnostics, entity-suggestion action compatibility with the refinery queue, typed space/page/search/setup response envelopes, typed MCP setup entry surface, `wenlan-types` 0.9.2, `/api/search` supplemental page consumption/navigation, shared page-list/search response typing, daemon-config-backed settings toggles, daemon data-root alignment for sidecar plus launchd, Intelligence setup copy moved from Concept to Page language, repeatable Tauri sidecar prep before validation, route-diff revalidation in `docs/superpowers/refactor/2026-06-29-wenlan-app-api-parity-revalidation.md`, startup Dock-icon/reveal fallback work in `docs/superpowers/refactor/2026-06-29-wenlan-app-runtime-assets.md`, local bundled `.app` validation in `docs/superpowers/refactor/2026-06-29-wenlan-app-bundled-runtime.md`, reproducible API route-diff tooling in `docs/superpowers/refactor/2026-06-29-wenlan-app-route-diff-tooling.md`, route-gap classification in `docs/superpowers/refactor/2026-06-29-wenlan-app-route-gap-classification.md`, graph-authoring design boundary in `docs/superpowers/refactor/2026-06-29-wenlan-app-graph-authoring-design.md`, Settings diagnostics implementation in PR #53, typed webpage ingest wrapper work in `docs/superpowers/refactor/2026-06-29-wenlan-app-webpage-ingest-wrapper.md`, typed space move wrapper work in `docs/superpowers/refactor/2026-06-29-wenlan-app-space-move-wrapper.md`, PR #47 global `/api/distill` review-panel work, and the P1 closure audit in `docs/superpowers/refactor/2026-06-30-wenlan-app-p1-closure.md`.
 
 ## Evidence Snapshot
 
@@ -113,9 +113,12 @@ These are required for feature parity but can follow the P0 review/status/setup 
 
 ## P1 Closure Audit
 
-The 2026-06-30 UTC revalidation treats P0/P1 daemon API parity as closed for
-the migration branch, with the following explicit boundaries:
+The 2026-06-30 UTC revalidation and PR #54 merge treat P0/P1 daemon API parity
+as closed for the desktop migration checkpoint, with the following explicit
+boundaries:
 
+- PR #54 merged the closure checkpoint into `main` at
+  `965721bdccb9f7cfae1d1efa8b6bcd53ffec9af7`.
 - Raw route parity is green: `pnpm refactor:api-routes --json` reports 123
   backend routes, 115 app route strings, 8 missing app direct routes, all 8
   classified, 0 unclassified, and 0 app-only routes.
