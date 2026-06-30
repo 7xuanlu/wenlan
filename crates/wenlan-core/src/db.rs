@@ -16390,31 +16390,79 @@ impl MemoryDB {
     /// Accept a pending revision for a target memory. The `target_source_id` is the
     /// original memory being superseded. This finds the pending revision that supersedes it,
     /// activates it, and suppresses the original. Both UPDATEs are wrapped in BEGIN/COMMIT.
-    pub async fn accept_pending_revision(&self, target_source_id: &str) -> Result<(), WenlanError> {
-        let conn = self.conn.lock().await;
-
-        // Find the pending revision that supersedes this target
+    /// Resolve an accept/dismiss `id` to `(revision_source_id, target_source_id)`.
+    ///
+    /// `id` may be the revision's OWN `source_id` (exact — what the curate cards
+    /// key on, so the named revision is acted on even when several compete for
+    /// one target) or the target memory's `source_id` (legacy callers: the
+    /// NEWEST pending revision superseding it, deterministic by `last_modified`).
+    /// A revision's id never equals its target's, so the revision-first lookup is
+    /// unambiguous. Returns `None` if neither matches a pending revision.
+    async fn resolve_pending_revision(
+        conn: &libsql::Connection,
+        id: &str,
+    ) -> Result<Option<(String, String)>, WenlanError> {
+        // 1. `id` is the revision's own source_id (exact).
         let mut rows = conn
             .query(
-                "SELECT source_id FROM memories WHERE supersedes = ?1 AND pending_revision = 1 AND source = 'memory' LIMIT 1",
-                libsql::params![target_source_id.to_string()],
+                "SELECT source_id, supersedes FROM memories \
+                 WHERE source_id = ?1 AND pending_revision = 1 AND supersedes IS NOT NULL AND source = 'memory' LIMIT 1",
+                libsql::params![id.to_string()],
             )
             .await
-            .map_err(|e| WenlanError::VectorDb(format!("accept_pending_revision query: {}", e)))?;
-
-        let revision_source_id: String = if let Some(row) = rows
+            .map_err(|e| WenlanError::VectorDb(format!("resolve_pending_revision rev: {e}")))?;
+        if let Some(row) = rows
             .next()
             .await
             .map_err(|e| WenlanError::VectorDb(e.to_string()))?
         {
-            row.get::<String>(0)
-                .map_err(|e| WenlanError::VectorDb(e.to_string()))?
-        } else {
-            return Err(WenlanError::NotFound(format!(
-                "No pending revision for source_id: {}",
-                target_source_id
-            )));
-        };
+            let rev = row
+                .get::<String>(0)
+                .map_err(|e| WenlanError::VectorDb(e.to_string()))?;
+            let target = row
+                .get::<String>(1)
+                .map_err(|e| WenlanError::VectorDb(e.to_string()))?;
+            return Ok(Some((rev, target)));
+        }
+
+        // 2. `id` is the target (legacy): newest pending revision superseding it.
+        let mut rows = conn
+            .query(
+                "SELECT source_id, supersedes FROM memories \
+                 WHERE supersedes = ?1 AND pending_revision = 1 AND source = 'memory' \
+                 ORDER BY last_modified DESC LIMIT 1",
+                libsql::params![id.to_string()],
+            )
+            .await
+            .map_err(|e| WenlanError::VectorDb(format!("resolve_pending_revision target: {e}")))?;
+        if let Some(row) = rows
+            .next()
+            .await
+            .map_err(|e| WenlanError::VectorDb(e.to_string()))?
+        {
+            let rev = row
+                .get::<String>(0)
+                .map_err(|e| WenlanError::VectorDb(e.to_string()))?;
+            let target = row
+                .get::<String>(1)
+                .map_err(|e| WenlanError::VectorDb(e.to_string()))?;
+            return Ok(Some((rev, target)));
+        }
+
+        Ok(None)
+    }
+
+    /// Accept a pending revision identified by `id` (the revision's own
+    /// `source_id`, or — legacy — its target's). Activates exactly that revision
+    /// (all its chunk rows) and suppresses its target. Sibling revisions are left
+    /// pending. Returns `(target_source_id, revision_source_id)`.
+    pub async fn accept_pending_revision(&self, id: &str) -> Result<(String, String), WenlanError> {
+        let conn = self.conn.lock().await;
+        let (revision_source_id, target_source_id) = Self::resolve_pending_revision(&conn, id)
+            .await?
+            .ok_or_else(|| {
+                WenlanError::NotFound(format!("No pending revision for source_id: {}", id))
+            })?;
 
         conn.execute("BEGIN", ())
             .await
@@ -16437,7 +16485,7 @@ impl MemoryDB {
         let suppress_result = conn
             .execute(
                 "UPDATE memories SET confirmed = 0, stability = 'new' WHERE source_id = ?1",
-                libsql::params![target_source_id.to_string()],
+                libsql::params![target_source_id.clone()],
             )
             .await;
         if let Err(e) = suppress_result {
@@ -16452,30 +16500,37 @@ impl MemoryDB {
             .await
             .map_err(|e| WenlanError::VectorDb(format!("accept_pending_revision commit: {}", e)))?;
 
-        Ok(())
+        Ok((target_source_id, revision_source_id))
     }
 
-    /// Dismiss a pending revision for a target memory. Deletes the pending revision,
-    /// leaving the original unchanged.
+    /// Dismiss a pending revision identified by `id` (the revision's own
+    /// `source_id`, or — legacy — its target's). UNSTAGES exactly that one
+    /// revision — clears its `pending_revision` + `supersedes` so it survives
+    /// as an independent memory (not deleted); sibling revisions and the
+    /// original are untouched. Returns `(target_source_id, revision_source_id)`.
     pub async fn dismiss_pending_revision(
         &self,
-        target_source_id: &str,
-    ) -> Result<(), WenlanError> {
+        id: &str,
+    ) -> Result<(String, String), WenlanError> {
         let conn = self.conn.lock().await;
-        let rows_affected = conn
-            .execute(
-                "DELETE FROM memories WHERE supersedes = ?1 AND pending_revision = 1 AND source = 'memory'",
-                libsql::params![target_source_id.to_string()],
-            )
-            .await
-            .map_err(|e| WenlanError::VectorDb(format!("dismiss_pending_revision: {}", e)))?;
-        if rows_affected == 0 {
-            return Err(WenlanError::NotFound(format!(
-                "No pending revision for source_id: {}",
-                target_source_id
-            )));
-        }
-        Ok(())
+        let (revision_source_id, target_source_id) = Self::resolve_pending_revision(&conn, id)
+            .await?
+            .ok_or_else(|| {
+                WenlanError::NotFound(format!("No pending revision for source_id: {}", id))
+            })?;
+        // Unstage, not delete: "dismiss" means "this is NOT a revision of the
+        // target", so drop the false revision link (clear pending_revision +
+        // supersedes) and keep the memory as an independent row. Deleting it
+        // would destroy a distinct captured memory whenever the staging was a
+        // false positive (the topic-match treadmill). A genuinely unwanted
+        // capture is removed separately via `forget`.
+        conn.execute(
+            "UPDATE memories SET pending_revision = 0, supersedes = NULL WHERE source_id = ?1",
+            libsql::params![revision_source_id.clone()],
+        )
+        .await
+        .map_err(|e| WenlanError::VectorDb(format!("dismiss_pending_revision: {}", e)))?;
+        Ok((target_source_id, revision_source_id))
     }
 
     pub async fn get_pending_revision_for(
@@ -21573,139 +21628,6 @@ impl MemoryDB {
             .unwrap_or((None, None, None))
     }
 
-    // ===== Topic Match Helpers =====
-
-    /// Fetch lightweight candidate memories for topic matching.
-    /// Prefers same space + memory_type but does not require them.
-    /// Returns candidates with space/type metadata so the caller can compute
-    /// tiered thresholds (exact match → lower threshold, no match → higher).
-    pub async fn topic_match_candidates(
-        &self,
-        space: Option<&str>,
-        memory_type: Option<&str>,
-        max_candidates: usize,
-    ) -> Result<Vec<crate::topic_match::TopicMatchCandidate>, WenlanError> {
-        let conn = self.conn.lock().await;
-
-        // Build a flexible query: prefer same space+type, but include all recent
-        // chunk_index=0 memories as candidates. ORDER BY gives priority to exact
-        // space+type matches, then partial, then everything else.
-        let sql = "SELECT source_id, title, content, entity_id, embedding, space, memory_type
-                   FROM memories
-                   WHERE chunk_index = 0 AND pending_revision = 0
-                   ORDER BY
-                     CASE WHEN space = ?1 AND memory_type = ?2 THEN 0
-                          WHEN space = ?1 OR memory_type = ?2 THEN 1
-                          ELSE 2 END,
-                     last_modified DESC
-                   LIMIT ?3";
-        let mut rows = conn
-            .query(
-                sql,
-                libsql::params![
-                    space.unwrap_or(""),
-                    memory_type.unwrap_or(""),
-                    max_candidates as i64
-                ],
-            )
-            .await
-            .map_err(|e| WenlanError::VectorDb(format!("topic_match_candidates: {e}")))?;
-
-        let mut candidates = Vec::new();
-        while let Some(row) = rows
-            .next()
-            .await
-            .map_err(|e| WenlanError::VectorDb(e.to_string()))?
-        {
-            let source_id: String = row
-                .get(0)
-                .map_err(|e| WenlanError::VectorDb(format!("topic_cand source_id: {e}")))?;
-            let title: String = row.get::<String>(1).unwrap_or_default();
-            let content: String = row
-                .get(2)
-                .map_err(|e| WenlanError::VectorDb(format!("topic_cand content: {e}")))?;
-            let entity_id: Option<String> = row.get::<Option<String>>(3).unwrap_or(None);
-            // Decode F32_BLOB (little-endian f32 bytes)
-            let embedding: Vec<f32> = row
-                .get::<Vec<u8>>(4)
-                .unwrap_or_default()
-                .chunks_exact(4)
-                .map(|b| f32::from_le_bytes([b[0], b[1], b[2], b[3]]))
-                .collect();
-            let cand_space: Option<String> = row.get::<Option<String>>(5).unwrap_or(None);
-            let cand_type: Option<String> = row.get::<Option<String>>(6).unwrap_or(None);
-            candidates.push(crate::topic_match::TopicMatchCandidate {
-                source_id,
-                title,
-                content,
-                entity_id,
-                embedding,
-                space: cand_space,
-                memory_type: cand_type,
-            });
-        }
-        Ok(candidates)
-    }
-
-    /// FTS5-based title matching for topic matching.
-    ///
-    /// Queries `memories_fts` with a `title:` column filter and returns the
-    /// `source_id` values that match. The caller intersects this set with
-    /// the pre-fetched candidates in Rust.
-    ///
-    /// Words shorter than 2 chars are skipped so that tokens like "SQL",
-    /// "API", "Go" are retained while noise particles like "a" are dropped.
-    pub async fn topic_match_title_fts(
-        &self,
-        title: &str,
-        candidate_source_ids: &[&str],
-    ) -> Result<Vec<String>, WenlanError> {
-        // Build list of significant words (2+ char, alphanumeric only).
-        let words: Vec<String> = title
-            .split(|c: char| !c.is_alphanumeric())
-            .filter(|w| w.len() >= 2)
-            .map(|w| format!("title:{w}"))
-            .collect();
-
-        if words.is_empty() || candidate_source_ids.is_empty() {
-            return Ok(Vec::new());
-        }
-
-        let fts_query = words.join(" OR ");
-
-        let conn = self.conn.lock().await;
-        let mut rows = conn
-            .query(
-                "SELECT c.source_id
-                 FROM memories_fts fts
-                 JOIN memories c ON fts.rowid = c.rowid
-                 WHERE memories_fts MATCH ?1
-                   AND c.chunk_index = 0
-                   AND c.pending_revision = 0",
-                libsql::params![fts_query],
-            )
-            .await
-            .map_err(|e| WenlanError::VectorDb(format!("topic_match_title_fts: {e}")))?;
-
-        // Collect matching source_ids and intersect with candidate set.
-        let candidate_set: std::collections::HashSet<&str> =
-            candidate_source_ids.iter().copied().collect();
-        let mut matched = Vec::new();
-        while let Some(row) = rows
-            .next()
-            .await
-            .map_err(|e| WenlanError::VectorDb(e.to_string()))?
-        {
-            let sid: String = row
-                .get(0)
-                .map_err(|e| WenlanError::VectorDb(format!("topic_title_fts sid: {e}")))?;
-            if candidate_set.contains(sid.as_str()) {
-                matched.push(sid);
-            }
-        }
-        Ok(matched)
-    }
-
     // ===== Concept Sources Join Table Methods =====
 
     /// Link a memory to a concept in the page_sources join table.
@@ -22051,30 +21973,6 @@ impl MemoryDB {
             WenlanError::VectorDb(format!("cleanup_orphaned_page_sources commit: {e}"))
         })?;
         Ok(rows_affected as usize)
-    }
-
-    /// Check if a memory is protected from in-place upsert (confirmed or high-stability).
-    pub async fn is_memory_protected(&self, source_id: &str) -> Result<bool, WenlanError> {
-        let conn = self.conn.lock().await;
-        let mut rows = conn
-            .query(
-                "SELECT confirmed, stability FROM memories WHERE source_id = ?1 AND chunk_index = 0 LIMIT 1",
-                libsql::params![source_id],
-            )
-            .await
-            .map_err(|e| WenlanError::VectorDb(format!("is_memory_protected: {e}")))?;
-        if let Some(row) = rows
-            .next()
-            .await
-            .map_err(|e| WenlanError::VectorDb(e.to_string()))?
-        {
-            let confirmed: i64 = row.get(0).unwrap_or(0);
-            let stability: Option<String> = row.get::<Option<String>>(1).unwrap_or(None);
-            Ok(confirmed != 0
-                || matches!(stability.as_deref(), Some("learned") | Some("confirmed")))
-        } else {
-            Ok(false)
-        }
     }
 
     /// Build the two candidate pools for T14 dual-pool resolution.
@@ -28814,7 +28712,7 @@ pub(crate) mod tests {
         };
         db.upsert_documents(vec![revision]).await.unwrap();
 
-        // Dismiss the revision
+        // Dismiss the revision (now = unstage: drop the false link, keep both rows)
         db.dismiss_pending_revision("dismiss_target").await.unwrap();
 
         // Original should still be visible
@@ -28824,14 +28722,151 @@ pub(crate) mod tests {
             ids.contains(&"dismiss_target"),
             "original should remain after dismiss"
         );
+
+        // The dismissed revision must SURVIVE as an independent memory. Dismiss
+        // unlinks a falsely-staged revision (clears pending_revision + supersedes)
+        // rather than deleting a distinct captured memory. get_memory_detail
+        // filters pending_revision = 0, so a still-staged row returns None.
+        let revision = db
+            .get_memory_detail("dismiss_revision")
+            .await
+            .unwrap()
+            .expect(
+                "dismissed revision must survive as an independent memory (unstage, not delete)",
+            );
         assert!(
-            !ids.contains(&"dismiss_revision"),
-            "dismissed revision should be deleted"
+            revision.supersedes.is_none(),
+            "dismiss must clear the false supersedes link"
         );
 
-        // No more pending revision
+        // No longer a pending revision against the target.
         let pr = db.get_pending_revision_for("dismiss_target").await.unwrap();
         assert!(pr.is_none());
+    }
+
+    /// When several revisions compete for ONE target, accepting by the
+    /// revision's own `source_id` must activate exactly that revision — not an
+    /// arbitrary `LIMIT 1` pick. Regression for the curate accept-by-target bug.
+    #[tokio::test]
+    async fn accept_by_revision_id_picks_exact_revision() {
+        let (db, _dir) = test_db().await;
+
+        let target = RawDocument {
+            source: "memory".to_string(),
+            source_id: "multi_target".to_string(),
+            title: "Original".to_string(),
+            content: "original".to_string(),
+            confirmed: Some(true),
+            ..Default::default()
+        };
+        let rev_old = RawDocument {
+            source: "memory".to_string(),
+            source_id: "multi_rev_old".to_string(),
+            title: "RevOld".to_string(),
+            content: "older revision".to_string(),
+            confirmed: Some(false),
+            supersedes: Some("multi_target".to_string()),
+            pending_revision: true,
+            last_modified: 100,
+            ..Default::default()
+        };
+        let rev_new = RawDocument {
+            source: "memory".to_string(),
+            source_id: "multi_rev_new".to_string(),
+            title: "RevNew".to_string(),
+            content: "newer revision".to_string(),
+            confirmed: Some(false),
+            supersedes: Some("multi_target".to_string()),
+            pending_revision: true,
+            last_modified: 200,
+            ..Default::default()
+        };
+        db.upsert_documents(vec![target, rev_old, rev_new])
+            .await
+            .unwrap();
+
+        // Accept the OLDER revision by its own id — the arbitrary LIMIT-1 pick
+        // would more likely grab the newer one.
+        db.accept_pending_revision("multi_rev_old").await.unwrap();
+
+        let mems = db.list_memories(None, None, None, None, 100).await.unwrap();
+        let ids: Vec<&str> = mems.iter().map(|m| m.source_id.as_str()).collect();
+        assert!(
+            ids.contains(&"multi_rev_old"),
+            "named revision is now active"
+        );
+        assert!(!ids.contains(&"multi_target"), "target suppressed");
+
+        // The sibling revision must remain pending, untouched.
+        let pending = db.list_pending_revisions(10).await.unwrap();
+        let pending_ids: Vec<&str> = pending
+            .iter()
+            .map(|p| p.revision_source_id.as_str())
+            .collect();
+        assert_eq!(
+            pending_ids,
+            vec!["multi_rev_new"],
+            "only the un-accepted sibling stays pending"
+        );
+    }
+
+    /// Dismissing one revision by its own `source_id` must unstage only that
+    /// revision — not every sibling revision sharing the target. Regression for
+    /// the old `DELETE WHERE supersedes = target` sibling-nuke.
+    #[tokio::test]
+    async fn dismiss_by_revision_id_removes_only_that_revision() {
+        let (db, _dir) = test_db().await;
+
+        let target = RawDocument {
+            source: "memory".to_string(),
+            source_id: "dm_target".to_string(),
+            title: "Original".to_string(),
+            content: "original".to_string(),
+            confirmed: Some(true),
+            ..Default::default()
+        };
+        let rev_a = RawDocument {
+            source: "memory".to_string(),
+            source_id: "dm_rev_a".to_string(),
+            title: "RevA".to_string(),
+            content: "revision a".to_string(),
+            confirmed: Some(false),
+            supersedes: Some("dm_target".to_string()),
+            pending_revision: true,
+            last_modified: 100,
+            ..Default::default()
+        };
+        let rev_b = RawDocument {
+            source: "memory".to_string(),
+            source_id: "dm_rev_b".to_string(),
+            title: "RevB".to_string(),
+            content: "revision b".to_string(),
+            confirmed: Some(false),
+            supersedes: Some("dm_target".to_string()),
+            pending_revision: true,
+            last_modified: 200,
+            ..Default::default()
+        };
+        db.upsert_documents(vec![target, rev_a, rev_b])
+            .await
+            .unwrap();
+
+        db.dismiss_pending_revision("dm_rev_a").await.unwrap();
+
+        // Only rev_b should remain pending; the target is untouched.
+        let pending = db.list_pending_revisions(10).await.unwrap();
+        let pending_ids: Vec<&str> = pending
+            .iter()
+            .map(|p| p.revision_source_id.as_str())
+            .collect();
+        assert_eq!(
+            pending_ids,
+            vec!["dm_rev_b"],
+            "sibling revision must survive a single-revision dismiss"
+        );
+        let mems = db.list_memories(None, None, None, None, 100).await.unwrap();
+        let ids: Vec<&str> = mems.iter().map(|m| m.source_id.as_str()).collect();
+        assert!(ids.contains(&"dm_target"), "target untouched by dismiss");
     }
 
     // ==================== list_pending_revisions ====================
@@ -36202,367 +36237,6 @@ pub(crate) mod tests {
         assert_eq!(sources.len(), 1, "valid row should be intact");
     }
 
-    // ---- topic_match_candidates ----
-
-    #[tokio::test]
-    async fn test_topic_match_candidates_filters() {
-        let (db, _dir) = test_db().await;
-
-        // Insert memories with different domain/type combinations.
-        db.upsert_documents(vec![make_memory_doc(
-            "m_work_know",
-            "Work knowledge content",
-            "knowledge",
-            "work",
-            "agent",
-        )])
-        .await
-        .unwrap();
-        db.upsert_documents(vec![make_memory_doc(
-            "m_work_pref",
-            "Work preference content",
-            "preference",
-            "work",
-            "agent",
-        )])
-        .await
-        .unwrap();
-        db.upsert_documents(vec![make_memory_doc(
-            "m_personal_know",
-            "Personal knowledge content",
-            "knowledge",
-            "personal",
-            "agent",
-        )])
-        .await
-        .unwrap();
-
-        // Query for domain=work, type=knowledge — exact match should come first.
-        let candidates = db
-            .topic_match_candidates(Some("work"), Some("knowledge"), 100)
-            .await
-            .unwrap();
-
-        let ids: Vec<&str> = candidates.iter().map(|c| c.source_id.as_str()).collect();
-        assert!(
-            ids.contains(&"m_work_know"),
-            "m_work_know should be in candidates"
-        );
-        // Flexible matching: all candidates returned, exact match prioritized
-        assert!(
-            ids[0] == "m_work_know",
-            "exact domain+type match should be first"
-        );
-        // Other memories are also returned (lower priority)
-        assert!(ids.len() == 3, "all 3 memories should be candidates");
-    }
-
-    #[tokio::test]
-    async fn test_topic_match_candidates_works_with_missing_filters() {
-        let (db, _dir) = test_db().await;
-
-        db.upsert_documents(vec![make_memory_doc(
-            "m1",
-            "Some content",
-            "knowledge",
-            "work",
-            "agent",
-        )])
-        .await
-        .unwrap();
-
-        // Missing domain => still returns candidates (flexible matching).
-        let candidates = db
-            .topic_match_candidates(None, Some("knowledge"), 100)
-            .await
-            .unwrap();
-        assert!(
-            !candidates.is_empty(),
-            "missing domain should still return candidates"
-        );
-
-        // Missing type => still returns candidates.
-        let candidates = db
-            .topic_match_candidates(Some("work"), None, 100)
-            .await
-            .unwrap();
-        assert!(
-            !candidates.is_empty(),
-            "missing type should still return candidates"
-        );
-    }
-
-    #[tokio::test]
-    async fn test_topic_match_candidates_respects_max() {
-        let (db, _dir) = test_db().await;
-
-        for i in 0..5 {
-            let sid = format!("m_max_{i}");
-            let content = format!("Content item number {i} about some topic");
-            db.upsert_documents(vec![make_memory_doc(
-                &sid,
-                &content,
-                "knowledge",
-                "work",
-                "agent",
-            )])
-            .await
-            .unwrap();
-        }
-
-        let candidates = db
-            .topic_match_candidates(Some("work"), Some("knowledge"), 3)
-            .await
-            .unwrap();
-        assert!(
-            candidates.len() <= 3,
-            "max_candidates limit should be respected"
-        );
-    }
-
-    // ---- find_topic_match tiered thresholds ----
-
-    /// Helper: store a memory and return its embedding for use in topic-match tests.
-    async fn store_and_embed(
-        db: &MemoryDB,
-        source_id: &str,
-        content: &str,
-        memory_type: &str,
-        space: &str,
-    ) -> Vec<f32> {
-        db.upsert_documents(vec![make_memory_doc(
-            source_id,
-            content,
-            memory_type,
-            space,
-            "agent",
-        )])
-        .await
-        .unwrap();
-        db.generate_embeddings(&[content.to_string()])
-            .unwrap()
-            .into_iter()
-            .next()
-            .unwrap()
-    }
-
-    #[tokio::test]
-    async fn test_find_topic_match_exact_tier() {
-        let (db, _dir) = test_db().await;
-        let config = crate::tuning::TopicMatchConfig::default();
-
-        // Store a memory about Rust async patterns
-        let _ = store_and_embed(
-            &db,
-            "m_rust",
-            "Rust async patterns use tokio runtime with spawn and select macros",
-            "knowledge",
-            "rust-project",
-        )
-        .await;
-
-        // Query with SAME domain+type — should use exact tier (0.70)
-        let query_emb = db
-            .generate_embeddings(&[
-                "Rust async patterns with tokio runtime and spawn for concurrency".to_string(),
-            ])
-            .unwrap()
-            .into_iter()
-            .next()
-            .unwrap();
-
-        let result = crate::topic_match::find_topic_match(
-            &db,
-            "Rust async patterns",
-            Some("knowledge"),
-            Some("rust-project"),
-            None,
-            &query_emb,
-            &config,
-        )
-        .await
-        .unwrap();
-
-        assert!(
-            result.matched_source_id.is_some(),
-            "exact tier (domain+type match) should find a match"
-        );
-        assert_eq!(result.matched_source_id.as_deref(), Some("m_rust"));
-    }
-
-    #[tokio::test]
-    async fn test_find_topic_match_partial_tier_different_type() {
-        let (db, _dir) = test_db().await;
-        let config = crate::tuning::TopicMatchConfig::default();
-
-        let _ = store_and_embed(
-            &db,
-            "m_db",
-            "PostgreSQL database with pgvector extension for vector search",
-            "decision",
-            "myproject",
-        )
-        .await;
-
-        // Query with same domain but DIFFERENT type — partial tier (0.80)
-        let query_emb = db
-            .generate_embeddings(&[
-                "PostgreSQL database using pgvector for vector similarity search".to_string(),
-            ])
-            .unwrap()
-            .into_iter()
-            .next()
-            .unwrap();
-
-        let result = crate::topic_match::find_topic_match(
-            &db,
-            "Database choice",
-            Some("fact"),
-            Some("myproject"),
-            None,
-            &query_emb,
-            &config,
-        )
-        .await
-        .unwrap();
-
-        // Similarity should be high enough for partial tier
-        assert!(
-            result.matched_source_id.is_some(),
-            "partial tier (same domain, different type) should match when similarity is high"
-        );
-    }
-
-    #[tokio::test]
-    async fn test_find_topic_match_no_domain_still_matches() {
-        let (db, _dir) = test_db().await;
-        let config = crate::tuning::TopicMatchConfig::default();
-
-        let _ = store_and_embed(
-            &db,
-            "m_theme",
-            "Dark mode theme preference for all editors and terminals",
-            "preference",
-            "personal",
-        )
-        .await;
-
-        // Query with NO domain — should still find match if similarity is very high
-        let query_emb = db
-            .generate_embeddings(&[
-                "Dark mode theme preference for all editors and terminals".to_string()
-            ])
-            .unwrap()
-            .into_iter()
-            .next()
-            .unwrap();
-
-        let result = crate::topic_match::find_topic_match(
-            &db,
-            "Theme preference",
-            None,
-            None,
-            None,
-            &query_emb,
-            &config,
-        )
-        .await
-        .unwrap();
-
-        // Near-identical content should pass even the semantic-only tier (0.90)
-        assert!(
-            result.matched_source_id.is_some(),
-            "semantic-only tier should match with very high similarity"
-        );
-    }
-
-    #[tokio::test]
-    async fn test_find_topic_match_different_topic_no_match() {
-        let (db, _dir) = test_db().await;
-        let config = crate::tuning::TopicMatchConfig::default();
-
-        let _ = store_and_embed(
-            &db,
-            "m_frontend",
-            "React 19 with server components for the frontend UI layer",
-            "decision",
-            "myproject",
-        )
-        .await;
-
-        // Query about a completely different topic
-        let query_emb = db
-            .generate_embeddings(&[
-                "Kubernetes deployment strategy using blue-green rollouts for zero downtime"
-                    .to_string(),
-            ])
-            .unwrap()
-            .into_iter()
-            .next()
-            .unwrap();
-
-        let result = crate::topic_match::find_topic_match(
-            &db,
-            "Deployment strategy",
-            Some("decision"),
-            Some("myproject"),
-            None,
-            &query_emb,
-            &config,
-        )
-        .await
-        .unwrap();
-
-        assert!(
-            result.matched_source_id.is_none(),
-            "completely different topic should not match even with same domain+type"
-        );
-    }
-
-    #[tokio::test]
-    async fn test_find_topic_match_below_partial_threshold_no_match() {
-        let (db, _dir) = test_db().await;
-        let config = crate::tuning::TopicMatchConfig::default();
-
-        let _ = store_and_embed(
-            &db,
-            "m_auth",
-            "JWT authentication with RS256 signing for API endpoints",
-            "decision",
-            "backend",
-        )
-        .await;
-
-        // Somewhat related content but different domain+type — needs 0.80 for partial tier
-        let query_emb = db
-            .generate_embeddings(&[
-                "OAuth2 authorization flow with PKCE for mobile app login".to_string()
-            ])
-            .unwrap()
-            .into_iter()
-            .next()
-            .unwrap();
-
-        let result = crate::topic_match::find_topic_match(
-            &db,
-            "Auth approach",
-            Some("fact"),
-            Some("mobile"),
-            None,
-            &query_emb,
-            &config,
-        )
-        .await
-        .unwrap();
-
-        // Related but different enough that it should NOT match at the none tier (0.90)
-        // This tests that the tiered thresholds actually prevent false positives
-        assert!(
-            result.matched_source_id.is_none(),
-            "related-but-different content should not match across domain+type at high threshold"
-        );
-    }
-
     // ---- upsert_memory_in_place ----
 
     #[tokio::test]
@@ -36696,108 +36370,6 @@ pub(crate) mod tests {
             "changelog should be capped at {cap} entries, got {}",
             changelog.len()
         );
-    }
-
-    // ---- is_memory_protected ----
-
-    #[tokio::test]
-    async fn test_is_memory_protected_confirmed() {
-        let (db, _dir) = test_db().await;
-        let doc = make_memory_doc(
-            "mem_prot_conf",
-            "Content to protect.",
-            "knowledge",
-            "work",
-            "agent",
-        );
-        db.upsert_documents(vec![doc]).await.unwrap();
-
-        // Initially not protected.
-        assert!(!db.is_memory_protected("mem_prot_conf").await.unwrap());
-
-        // Set confirmed=1 directly.
-        {
-            let conn = db.conn.lock().await;
-            conn.execute(
-                "UPDATE memories SET confirmed = 1 WHERE source_id = 'mem_prot_conf'",
-                (),
-            )
-            .await
-            .unwrap();
-        }
-
-        assert!(
-            db.is_memory_protected("mem_prot_conf").await.unwrap(),
-            "confirmed memory should be protected"
-        );
-    }
-
-    #[tokio::test]
-    async fn test_is_memory_protected_stability_learned() {
-        let (db, _dir) = test_db().await;
-        let doc = make_memory_doc(
-            "mem_prot_stab",
-            "Content to protect by stability.",
-            "knowledge",
-            "work",
-            "agent",
-        );
-        db.upsert_documents(vec![doc]).await.unwrap();
-
-        // Initially not protected (stability='new' by default).
-        assert!(!db.is_memory_protected("mem_prot_stab").await.unwrap());
-
-        // Set stability='learned'.
-        {
-            let conn = db.conn.lock().await;
-            conn.execute(
-                "UPDATE memories SET stability = 'learned' WHERE source_id = 'mem_prot_stab'",
-                (),
-            )
-            .await
-            .unwrap();
-        }
-
-        assert!(
-            db.is_memory_protected("mem_prot_stab").await.unwrap(),
-            "stability='learned' memory should be protected"
-        );
-    }
-
-    #[tokio::test]
-    async fn test_is_memory_protected_stability_confirmed() {
-        let (db, _dir) = test_db().await;
-        let doc = make_memory_doc(
-            "mem_prot_stab2",
-            "Content for stability confirmed.",
-            "knowledge",
-            "work",
-            "agent",
-        );
-        db.upsert_documents(vec![doc]).await.unwrap();
-
-        {
-            let conn = db.conn.lock().await;
-            conn.execute(
-                "UPDATE memories SET stability = 'confirmed' WHERE source_id = 'mem_prot_stab2'",
-                (),
-            )
-            .await
-            .unwrap();
-        }
-
-        assert!(
-            db.is_memory_protected("mem_prot_stab2").await.unwrap(),
-            "stability='confirmed' memory should be protected"
-        );
-    }
-
-    #[tokio::test]
-    async fn test_is_memory_protected_nonexistent() {
-        let (db, _dir) = test_db().await;
-        // Non-existent source_id should return false, not an error.
-        let result = db.is_memory_protected("no_such_id").await.unwrap();
-        assert!(!result, "non-existent memory should not be protected");
     }
 
     // ---- set_page_stale / clear_page_staleness / list_stale_pages ----
@@ -37126,86 +36698,6 @@ pub(crate) mod tests {
 
         assert_eq!(results.len(), 1, "should only return the existing memory");
         assert_eq!(results[0].source_id, "sid_real");
-    }
-
-    // ---- topic_match_title_fts ----
-
-    #[tokio::test]
-    async fn test_topic_match_title_fts_basic() {
-        let (db, _dir) = test_db().await;
-
-        // Insert a memory whose title contains a searchable word.
-        let doc = crate::sources::RawDocument {
-            source: "memory".to_string(),
-            source_id: "fts_mem".to_string(),
-            title: "Rust programming tips".to_string(),
-            content: "Some content about Rust programming.".to_string(),
-            memory_type: Some("knowledge".to_string()),
-            space: Some("work".to_string()),
-            source_agent: Some("agent".to_string()),
-            confidence: Some(0.9),
-            confirmed: Some(false),
-            supersede_mode: "hide".to_string(),
-            last_modified: chrono::Utc::now().timestamp(),
-            ..Default::default()
-        };
-        db.upsert_documents(vec![doc]).await.unwrap();
-
-        // Searching for "Rust" in title should match "fts_mem".
-        let matched = db
-            .topic_match_title_fts("Rust programming", &["fts_mem"])
-            .await
-            .unwrap();
-        assert!(
-            matched.contains(&"fts_mem".to_string()),
-            "fts_mem should match title search for 'Rust'"
-        );
-    }
-
-    #[tokio::test]
-    async fn test_topic_match_title_fts_candidate_filter() {
-        let (db, _dir) = test_db().await;
-
-        // Insert two memories with similar titles.
-        for sid in &["fts_a", "fts_b"] {
-            let doc = crate::sources::RawDocument {
-                source: "memory".to_string(),
-                source_id: sid.to_string(),
-                title: format!("Machine learning notes {sid}"),
-                content: format!("Content for {sid}"),
-                memory_type: Some("knowledge".to_string()),
-                space: Some("work".to_string()),
-                source_agent: Some("agent".to_string()),
-                confidence: Some(0.9),
-                confirmed: Some(false),
-                supersede_mode: "hide".to_string(),
-                last_modified: chrono::Utc::now().timestamp(),
-                ..Default::default()
-            };
-            db.upsert_documents(vec![doc]).await.unwrap();
-        }
-
-        // Only pass "fts_a" as a candidate — "fts_b" should be excluded even if it matches FTS.
-        let matched = db
-            .topic_match_title_fts("Machine learning", &["fts_a"])
-            .await
-            .unwrap();
-        assert!(matched.contains(&"fts_a".to_string()), "fts_a should match");
-        assert!(
-            !matched.contains(&"fts_b".to_string()),
-            "fts_b not in candidate set, should be excluded"
-        );
-    }
-
-    #[tokio::test]
-    async fn test_topic_match_title_fts_empty_candidates() {
-        let (db, _dir) = test_db().await;
-
-        let matched = db.topic_match_title_fts("anything", &[]).await.unwrap();
-        assert!(
-            matched.is_empty(),
-            "empty candidate set should yield empty result"
-        );
     }
 
     // ==================== Migration 43: enrichment_steps ====================

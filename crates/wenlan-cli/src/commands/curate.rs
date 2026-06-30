@@ -3,13 +3,12 @@
 //!
 //! CLI-first replacement for the `/curate` skill's deferred-MCP round-trips: the
 //! skill Bashes `wenlan --format json curate` to list, then
-//! `wenlan curate accept|dismiss <target_source_id>` to act, so it pays no
+//! `wenlan curate accept|dismiss <revision_source_id>` to act, so it pays no
 //! ToolSearch hop. Scope is revisions only (the attention-gated surface that
 //! actually needs a human); pending captures stay on the rare opt-in MCP path.
 
 use anyhow::Result;
 use serde::Serialize;
-use similar::{ChangeTag, TextDiff};
 use wenlan_types::responses::PendingRevisionItem;
 
 use crate::client::WenlanClient;
@@ -18,13 +17,21 @@ use crate::output::{print_json, OutputFormat};
 /// One logical revision: all per-chunk rows sharing a `revision_source_id`, joined.
 #[derive(Debug, Clone, Serialize, PartialEq)]
 pub struct GroupedRevision {
-    /// The memory this revision would replace; the accept/dismiss action key.
+    /// The memory this revision would replace (shown for context).
     pub target_source_id: String,
-    /// The staged revision row id (kept for diagnostics / round-tripping).
+    /// The staged revision row id — the accept/dismiss action key, so the
+    /// *named* revision is acted on even when several compete for one target.
     pub revision_source_id: String,
     /// Full revision text, chunks joined in order.
     pub content: String,
     pub source_agent: Option<String>,
+    /// Current text of the memory this revision would replace, fetched via
+    /// `/api/memory/{id}/detail`. `None` if the original could not be fetched.
+    pub original: Option<String>,
+    /// A labeled `OLD:` / `NEW:` preview of original -> revision, for the card to
+    /// drop straight into an `AskUserQuestion` option preview. `None` when the
+    /// original is unavailable (the card falls back to showing `content`).
+    pub diff: Option<String>,
 }
 
 #[derive(clap::Subcommand, Debug)]
@@ -37,13 +44,13 @@ pub enum CurateAction {
     },
     /// Accept a revision: replace the original memory with the revised text.
     Accept {
-        /// `target_source_id` of the revision (from the list output).
-        target_source_id: String,
+        /// `revision_source_id` of the revision (from the list output).
+        revision_source_id: String,
     },
     /// Dismiss a revision: drop it, keep the original memory.
     Dismiss {
-        /// `target_source_id` of the revision (from the list output).
-        target_source_id: String,
+        /// `revision_source_id` of the revision (from the list output).
+        revision_source_id: String,
     },
 }
 
@@ -59,8 +66,8 @@ pub async fn run(
         limit: DEFAULT_LIMIT,
     }) {
         CurateAction::Revisions { limit } => list_revisions(client, format, quiet, limit).await,
-        CurateAction::Accept { target_source_id } => {
-            let resp = client.accept_revision(&target_source_id).await?;
+        CurateAction::Accept { revision_source_id } => {
+            let resp = client.accept_revision(&revision_source_id).await?;
             if quiet {
                 return Ok(());
             }
@@ -75,8 +82,8 @@ pub async fn run(
             }
             Ok(())
         }
-        CurateAction::Dismiss { target_source_id } => {
-            let resp = client.dismiss_revision(&target_source_id).await?;
+        CurateAction::Dismiss { revision_source_id } => {
+            let resp = client.dismiss_revision(&revision_source_id).await?;
             if quiet {
                 return Ok(());
             }
@@ -101,7 +108,8 @@ async fn list_revisions(
     limit: usize,
 ) -> Result<()> {
     let items = client.list_pending_revisions(limit).await?;
-    let groups = group_revisions(items);
+    let mut groups = group_revisions(items);
+    enrich_with_diffs(client, &mut groups).await;
     if quiet {
         return Ok(());
     }
@@ -111,6 +119,21 @@ async fn list_revisions(
         OutputFormat::Auto => unreachable!("Auto resolved by main before dispatch"),
     }
     Ok(())
+}
+
+/// Fetch each revision's ORIGINAL memory (via `/api/memory/{id}/detail`) and
+/// build an OLD/NEW preview so the card shows what it would replace. One extra
+/// local HTTP round-trip per revision (~ms); a fetch miss leaves `original` /
+/// `diff` as `None` and the card falls back to showing the revised text.
+async fn enrich_with_diffs(client: &WenlanClient, groups: &mut [GroupedRevision]) {
+    for g in groups.iter_mut() {
+        if let Ok(detail) = client.get_memory_detail(&g.target_source_id).await {
+            if let Some(mem) = detail.memory {
+                g.diff = Some(revision_preview(&mem.content, &g.content));
+                g.original = Some(mem.content);
+            }
+        }
+    }
 }
 
 fn print_table(groups: &[GroupedRevision]) {
@@ -124,15 +147,17 @@ fn print_table(groups: &[GroupedRevision]) {
         if groups.len() == 1 { "" } else { "s" }
     );
     for g in groups {
-        let snippet = if g.content.chars().count() > 100 {
-            format!("{}...", g.content.chars().take(97).collect::<String>())
+        // Prefer the OLD/NEW preview (shows what it replaces) over the raw revision text.
+        let body = g.diff.as_deref().unwrap_or(g.content.as_str());
+        let snippet = if body.chars().count() > 160 {
+            format!("{}...", body.chars().take(157).collect::<String>())
         } else {
-            g.content.clone()
+            body.to_string()
         };
         let agent = g.source_agent.as_deref().unwrap_or("daemon");
-        println!("  {}  ·  ({})  {}", g.target_source_id, agent, snippet);
+        println!("  {}  ·  ({})  {}", g.revision_source_id, agent, snippet);
     }
-    println!("accept/dismiss: wenlan curate accept|dismiss <target_source_id>");
+    println!("accept/dismiss: wenlan curate accept|dismiss <revision_source_id>");
 }
 
 /// Group per-chunk `PendingRevisionItem` rows into one logical revision each.
@@ -165,6 +190,8 @@ fn group_revisions(items: Vec<PendingRevisionItem>) -> Vec<GroupedRevision> {
                         revision_source_id: it.revision_source_id,
                         content: piece.to_string(),
                         source_agent: it.source_agent,
+                        original: None,
+                        diff: None,
                     },
                 );
             }
@@ -176,52 +203,34 @@ fn group_revisions(items: Vec<PendingRevisionItem>) -> Vec<GroupedRevision> {
         .collect()
 }
 
-/// Render a `git diff --word-diff`-style inline diff of `original` -> `revision`:
-/// unchanged words stay plain, deletions wrap `[-...-]`, insertions wrap `{+...+}`.
-/// Consecutive same-kind tokens coalesce into one run so prose reads cleanly.
-// ponytail: no production caller since the JSON-card refactor (979e74b1) dropped
-// shell-side diff rendering. Kept (with tests) as staged for the /curate picker's
-// revision-diff view. Wire it into the card output, or delete fn + its 3 tests.
-#[allow(dead_code)]
-fn word_diff(original: &str, revision: &str) -> String {
-    fn wrap(tag: ChangeTag, text: &str, out: &mut String) {
-        if text.is_empty() {
-            return;
-        }
-        match tag {
-            ChangeTag::Delete => {
-                out.push_str("[-");
-                out.push_str(text);
-                out.push_str("-]");
-            }
-            ChangeTag::Insert => {
-                out.push_str("{+");
-                out.push_str(text);
-                out.push_str("+}");
-            }
-            ChangeTag::Equal => out.push_str(text),
-        }
-    }
+/// Max chars per OLD/NEW block. The card preview box collapses to ~4 lines, and a
+/// long OLD block wraps past the fold and hides NEW's label — so clip each block
+/// short enough that both labels stay visible. The full text lives in the memory.
+const BLOCK_CHARS: usize = 100;
 
-    let diff = TextDiff::from_words(original, revision);
-    let mut out = String::new();
-    let mut run_tag: Option<ChangeTag> = None;
-    let mut run = String::new();
-    for change in diff.iter_all_changes() {
-        let tag = change.tag();
-        if run_tag != Some(tag) {
-            if let Some(prev) = run_tag {
-                wrap(prev, &run, &mut out);
-            }
-            run.clear();
-            run_tag = Some(tag);
-        }
-        run.push_str(change.value());
+/// Card-ready preview of `original` -> `revision`: two labeled blocks, `OLD:` then
+/// a blank line then `NEW:`. A word-level inline diff was tried first but read as
+/// unreadable confetti for these revisions (the dual-pool dedup matches a *new*
+/// memory to an unrelated old one, so almost every word differs). Plain labeled
+/// old/new, blank-line separated so OLD's wrapped tail can't blur into NEW, is what
+/// a human can actually scan. Bounded so the model echoes little and the picker
+/// stays fast.
+fn revision_preview(original: &str, revision: &str) -> String {
+    format!(
+        "OLD: {}\n\nNEW: {}",
+        clip(original, BLOCK_CHARS),
+        clip(revision, BLOCK_CHARS)
+    )
+}
+
+/// Flatten whitespace to single spaces and clip to `max` chars (char-safe).
+fn clip(s: &str, max: usize) -> String {
+    let flat = s.split_whitespace().collect::<Vec<_>>().join(" ");
+    if flat.chars().count() <= max {
+        flat
+    } else {
+        format!("{}…", flat.chars().take(max).collect::<String>())
     }
-    if let Some(prev) = run_tag {
-        wrap(prev, &run, &mut out);
-    }
-    out
 }
 
 #[cfg(test)]
@@ -273,33 +282,46 @@ mod tests {
     }
 
     #[test]
-    fn word_diff_identical_text_is_verbatim_no_markers() {
-        let d = word_diff("alpha beta gamma", "alpha beta gamma");
-        assert_eq!(d, "alpha beta gamma");
-    }
-
-    #[test]
-    fn word_diff_replaced_word_wraps_old_and_new_keeps_rest_plain() {
-        let d = word_diff("alpha beta gamma", "alpha delta gamma");
-        assert!(d.contains("[-") && d.contains("beta"), "delete marked: {d}");
+    fn preview_labels_old_and_new_no_word_diff_markers() {
+        let p = revision_preview("the original text here", "the revised text now");
         assert!(
-            d.contains("{+") && d.contains("delta"),
-            "insert marked: {d}"
+            p.contains("OLD: the original text here"),
+            "old labeled: {p}"
         );
+        assert!(p.contains("NEW: the revised text now"), "new labeled: {p}");
         assert!(
-            !d.contains("[-alpha") && !d.contains("alpha-]"),
-            "alpha plain: {d}"
-        );
-        assert!(
-            !d.contains("[-gamma") && !d.contains("gamma-]"),
-            "gamma plain: {d}"
+            !p.contains("[-") && !p.contains("{+"),
+            "no word-diff confetti: {p}"
         );
     }
 
     #[test]
-    fn word_diff_pure_insertion_marks_only_inserted_words() {
-        let d = word_diff("alpha gamma", "alpha beta gamma");
-        assert!(d.contains("{+") && d.contains("beta"), "insert marked: {d}");
-        assert!(!d.contains("[-"), "nothing deleted: {d}");
+    fn preview_separates_old_and_new_with_blank_line() {
+        // The card preview box collapses to a few lines; a blank line between the
+        // blocks keeps OLD's wrapped tail from blurring into NEW (the screenshot
+        // "old and new is hard to see / not good formatted" complaint).
+        let p = revision_preview("alpha", "beta");
+        let lines: Vec<&str> = p.lines().collect();
+        let old_idx = lines.iter().position(|l| l.starts_with("OLD:")).unwrap();
+        let new_idx = lines.iter().position(|l| l.starts_with("NEW:")).unwrap();
+        assert!(new_idx > old_idx + 1, "blank line between blocks: {p:?}");
+        assert_eq!(lines[old_idx + 1], "", "separator line is blank: {p:?}");
+    }
+
+    #[test]
+    fn preview_flattens_whitespace_and_clips_long_text() {
+        let long_original = "word ".repeat(80); // 400 chars, whitespace-heavy
+        let p = revision_preview(&long_original, "a short revision");
+        assert!(p.contains("NEW: a short revision"), "new shown: {p}");
+        assert!(p.contains('…'), "long original clipped: {p}");
+        let old_line = p.lines().find(|l| l.starts_with("OLD:")).unwrap();
+        assert!(
+            !old_line.contains("  "),
+            "whitespace flattened (no double spaces): {old_line}"
+        );
+        assert!(
+            old_line.chars().count() <= "OLD: ".len() + BLOCK_CHARS + 1,
+            "old line bounded: {old_line}"
+        );
     }
 }

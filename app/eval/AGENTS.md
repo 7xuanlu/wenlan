@@ -74,7 +74,7 @@ Three sibling subdirs live alongside `data/` and are tracked in git:
 
 - `app/eval/kg_fixtures/*.toml` - hand-curated entity + relation ground-truth, consumed by `eval::kg_faithfulness`. See root `AGENTS.md` "KG-faithfulness bench".
 - `app/eval/page_fixtures/*.toml` - hand-curated source memories + distilled page bodies, consumed by `eval::page_faithfulness`. See root `AGENTS.md` "Page-distillation faithfulness bench".
-- `app/eval/fixtures/*.toml` - 41 LoCoMo/LME fixtures vendored from `7xuanlu/origin-app` (PR #148). Used by `eval_harness.rs` integration tests.
+- `app/eval/fixtures/*.toml` - 41 LoCoMo/LME fixtures vendored from `7xuanlu/wenlan-app` (PR #148). Used by `eval_harness.rs` integration tests.
 
 ---
 
