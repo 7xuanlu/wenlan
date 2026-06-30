@@ -1974,7 +1974,7 @@ pub async fn handle_list_pages(
     let space = params
         .get("space")
         .or_else(|| params.get("domain"))
-        .map(|s| s.as_str());
+        .cloned();
     let limit: usize = params
         .get("limit")
         .and_then(|l| l.parse().ok())
@@ -1984,10 +1984,13 @@ pub async fn handle_list_pages(
         .and_then(|o| o.parse().ok())
         .unwrap_or(0);
 
-    let s = state.read().await;
-    let db = s.db.as_ref().ok_or(ServerError::DbNotInitialized)?;
+    let db = {
+        let s = state.read().await;
+        s.db.clone().ok_or(ServerError::DbNotInitialized)?
+    };
+    let space = registered_request_space(&db, &space, "list_pages").await?;
     let pages = db
-        .list_pages_by_space(status, space, limit, offset)
+        .list_pages_by_space(status, space.as_deref(), limit, offset)
         .await
         .map_err(|e| ServerError::SearchFailed(e.to_string()))?;
     Ok(Json(serde_json::json!({ "pages": pages })))

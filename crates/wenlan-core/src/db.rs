@@ -22617,7 +22617,7 @@ impl MemoryDB {
             bind.push(libsql::Value::Text(eid.to_string()));
         }
         if let Some(d) = domain_filter {
-            sql.push_str(" AND space = ?");
+            sql.push_str(" AND COALESCE(workspace, space) = ?");
             bind.push(libsql::Value::Text(d.to_string()));
         }
         sql.push_str(" ORDER BY last_modified DESC LIMIT 10");
@@ -37415,6 +37415,41 @@ pub(crate) mod tests {
             .unwrap();
         assert_eq!(both.len(), 1);
         assert_eq!(both[0].id, "page_origin");
+    }
+
+    #[tokio::test]
+    async fn list_stale_pages_scoped_filters_by_workspace_column() {
+        let (db, _dir) = test_db().await;
+        let now = chrono::Utc::now().to_rfc3339();
+
+        db.insert_page_with_kind(
+            "page_workspace_stale",
+            "Workspace Stale",
+            None,
+            "content",
+            None,
+            Some("recap"),
+            &[],
+            &now,
+            "authored",
+            "confirmed",
+            Some("origin"),
+        )
+        .await
+        .unwrap();
+        db.set_page_stale("page_workspace_stale", "source_updated")
+            .await
+            .unwrap();
+
+        let by_workspace = db
+            .list_stale_pages_scoped("source_updated", None, Some("origin"))
+            .await
+            .unwrap();
+        let ids: Vec<&str> = by_workspace.iter().map(|p| p.id.as_str()).collect();
+        assert!(
+            ids.contains(&"page_workspace_stale"),
+            "scoped stale page lookup must use pages.workspace, falling back to pages.space; got {ids:?}"
+        );
     }
 
     #[tokio::test]

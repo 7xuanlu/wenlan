@@ -47,6 +47,12 @@ async fn list_pages_filters_by_space() {
     let (router, _tmp, db) = common::test_app().await;
 
     let now = chrono::Utc::now().to_rfc3339();
+    db.create_space("alpha", None, false)
+        .await
+        .expect("alpha space must be registered");
+    db.create_space("beta", None, false)
+        .await
+        .expect("beta space must be registered");
 
     // Insert two pages — one per space.
     db.insert_page(
@@ -101,5 +107,63 @@ async fn list_pages_filters_by_space() {
             .iter()
             .map(|p| p.title.as_str())
             .collect::<Vec<_>>()
+    );
+}
+
+#[tokio::test]
+async fn list_pages_unregistered_query_space_falls_back_to_unscoped() {
+    let (router, _tmp, db) = common::test_app().await;
+
+    let now = chrono::Utc::now().to_rfc3339();
+    db.insert_page(
+        "page_unscoped_fallback",
+        "Unscoped Fallback Page",
+        None,
+        "Content that should remain visible when an unregistered page space is ignored.",
+        None,
+        None,
+        &[],
+        &now,
+    )
+    .await
+    .expect("insert unscoped page must succeed");
+
+    let response = list_pages(&router, Some("ghost-pages-space")).await;
+    let titles: Vec<&str> = response.pages.iter().map(|p| p.title.as_str()).collect();
+
+    assert!(
+        titles.contains(&"Unscoped Fallback Page"),
+        "unregistered page query spaces must not filter out unscoped page listings; got: {titles:?}"
+    );
+    assert!(
+        db.get_space("ghost-pages-space").await.unwrap().is_none(),
+        "read-only page filters must not auto-create an unregistered spaces row"
+    );
+}
+
+#[tokio::test]
+async fn list_pages_empty_query_space_falls_back_to_unscoped() {
+    let (router, _tmp, db) = common::test_app().await;
+
+    let now = chrono::Utc::now().to_rfc3339();
+    db.insert_page(
+        "page_empty_space_fallback",
+        "Empty Space Fallback Page",
+        None,
+        "Content that should remain visible when the page space query is empty.",
+        None,
+        None,
+        &[],
+        &now,
+    )
+    .await
+    .expect("insert unscoped page must succeed");
+
+    let response = list_pages(&router, Some("")).await;
+    let titles: Vec<&str> = response.pages.iter().map(|p| p.title.as_str()).collect();
+
+    assert!(
+        titles.contains(&"Empty Space Fallback Page"),
+        "empty page query spaces must not filter out unscoped page listings; got: {titles:?}"
     );
 }
