@@ -6354,6 +6354,27 @@ impl MemoryDB {
             .map_err(|e| WenlanError::VectorDb(format!("delete_space begin: {}", e)))?;
 
         let txn_result = async {
+            let mut source_rows = conn
+                .query(
+                    "SELECT COUNT(*) FROM spaces WHERE name = ?1",
+                    libsql::params![name],
+                )
+                .await
+                .map_err(|e| WenlanError::VectorDb(format!("delete_space source lookup: {}", e)))?;
+            let source_count = if let Some(row) = source_rows
+                .next()
+                .await
+                .map_err(|e| WenlanError::VectorDb(e.to_string()))?
+            {
+                row.get::<i64>(0).unwrap_or(0)
+            } else {
+                0
+            };
+            drop(source_rows);
+            if source_count == 0 {
+                return Err(WenlanError::NotFound(format!("space '{name}' not found")));
+            }
+
             match memory_action {
                 "keep" => { /* do nothing — orphan memories with space tag intact */ }
                 "unassign" => {
@@ -6394,6 +6415,11 @@ impl MemoryDB {
                 }
                 other if other.starts_with("move:") => {
                     let target = &other[5..];
+                    if target == name {
+                        return Err(WenlanError::Validation(
+                            "destination space must differ from source space".to_string(),
+                        ));
+                    }
                     let mut rows = conn
                         .query(
                             "SELECT COUNT(*) FROM spaces WHERE name = ?1",
@@ -6455,9 +6481,13 @@ impl MemoryDB {
                 _ => { /* unknown action — treat as keep */ }
             }
 
-            conn.execute("DELETE FROM spaces WHERE name = ?1", libsql::params![name])
+            let deleted_spaces = conn
+                .execute("DELETE FROM spaces WHERE name = ?1", libsql::params![name])
                 .await
                 .map_err(|e| WenlanError::VectorDb(format!("delete_space: {}", e)))?;
+            if deleted_spaces != 1 {
+                return Err(WenlanError::NotFound(format!("space '{name}' not found")));
+            }
 
             conn.execute("COMMIT", ())
                 .await
@@ -31577,6 +31607,124 @@ pub(crate) mod tests {
             scoped.workspace.as_deref(),
             Some("new"),
             "delete-space move must update pages.workspace values"
+        );
+    }
+
+    #[tokio::test]
+    async fn delete_space_move_rejects_same_source_and_destination() {
+        let (db, _dir) = test_db().await;
+        db.create_space("same", None, false).await.unwrap();
+
+        db.upsert_documents(vec![RawDocument {
+            source: "memory".to_string(),
+            source_id: "same_space_mem".to_string(),
+            title: "Same Space Memory".to_string(),
+            content: "memory row that should remain scoped to the same space".to_string(),
+            last_modified: chrono::Utc::now().timestamp(),
+            memory_type: Some("fact".to_string()),
+            space: Some("same".to_string()),
+            ..Default::default()
+        }])
+        .await
+        .unwrap();
+
+        let result = db.delete_space("same", "move:same").await;
+        assert!(
+            result.is_err(),
+            "moving a space into itself must fail before deleting the space row"
+        );
+        assert!(
+            db.get_space("same").await.unwrap().is_some(),
+            "failed self-move must not delete the source/destination space"
+        );
+        let memory_space = db.get_memory_space("same_space_mem").await.unwrap();
+        assert_eq!(
+            memory_space.as_deref(),
+            Some("same"),
+            "failed self-move must leave memory rows scoped to the existing space"
+        );
+    }
+
+    #[tokio::test]
+    async fn delete_space_move_missing_source_does_not_cascade_orphaned_rows() {
+        let (db, _dir) = test_db().await;
+        db.create_space("new", None, false).await.unwrap();
+
+        db.upsert_documents(vec![RawDocument {
+            source: "memory".to_string(),
+            source_id: "delete_orphan_space_mem".to_string(),
+            title: "Delete Orphan Space Memory".to_string(),
+            content: "orphaned memory row that should not be moved by missing-source delete"
+                .to_string(),
+            last_modified: chrono::Utc::now().timestamp(),
+            memory_type: Some("fact".to_string()),
+            space: Some("ghost".to_string()),
+            ..Default::default()
+        }])
+        .await
+        .unwrap();
+        db.store_entity("Delete Ghost Entity", "person", Some("ghost"), None, None)
+            .await
+            .unwrap();
+
+        let now = chrono::Utc::now().to_rfc3339();
+        db.insert_page_with_kind(
+            "page_delete_orphan_space",
+            "Delete Orphan Space Page",
+            None,
+            "orphaned page that should not move when source space row is missing",
+            None,
+            Some("ghost"),
+            &[],
+            &now,
+            "authored",
+            "confirmed",
+            Some("ghost"),
+        )
+        .await
+        .unwrap();
+
+        let result = db.delete_space("ghost", "move:new").await;
+        assert!(
+            result.is_err(),
+            "moving from a missing source space must fail"
+        );
+
+        let memory_space = db
+            .get_memory_space("delete_orphan_space_mem")
+            .await
+            .unwrap();
+        assert_eq!(
+            memory_space.as_deref(),
+            Some("ghost"),
+            "failed delete-space move must not cascade orphaned memory rows"
+        );
+
+        let entities = db.list_entities(None, None).await.unwrap();
+        let entity = entities
+            .iter()
+            .find(|entity| entity.name == "Delete Ghost Entity")
+            .expect("ghost entity should exist");
+        assert_eq!(
+            entity.space.as_deref(),
+            Some("ghost"),
+            "failed delete-space move must not cascade orphaned entity rows"
+        );
+
+        let page = db
+            .get_page("page_delete_orphan_space")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            page.space.as_deref(),
+            Some("ghost"),
+            "failed delete-space move must not cascade orphaned pages.space rows"
+        );
+        assert_eq!(
+            page.workspace.as_deref(),
+            Some("ghost"),
+            "failed delete-space move must not cascade orphaned pages.workspace rows"
         );
     }
 
