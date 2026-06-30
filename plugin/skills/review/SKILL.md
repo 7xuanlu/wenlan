@@ -28,8 +28,9 @@ Call the bundled resolver before listing pending memories:
     resolved="$("$CLAUDE_PLUGIN_ROOT/bin/resolve-space.sh" --cwd "$PWD" 2>/dev/null)"
     space="$(printf '%s\n' "$resolved" | cut -f1)"
 
-Pass `space="$space"` as a filter to the pending-list MCP call so the
-review is scoped to the active bucket.
+Pass `space="$space"` as a filter to the pending-list MCP call only when
+`space` is non-empty, so the review is scoped to the active bucket when
+one exists. If `space` is empty, omit the filter and review globally.
 
 ## Scoped invocation
 

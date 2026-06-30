@@ -176,6 +176,37 @@ pub async fn handle_store_memory(
     if req.space.is_none() {
         req.space = header_space;
     }
+    let requested_space = req
+        .space
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string);
+    let ignored_unregistered_space = if let Some(space) = requested_space {
+        let db = {
+            let s = state.read().await;
+            s.db.clone().ok_or(ServerError::DbNotInitialized)?
+        };
+        if db
+            .get_space(&space)
+            .await
+            .map_err(|e| ServerError::Internal(e.to_string()))?
+            .is_some()
+        {
+            req.space = Some(space);
+            None
+        } else {
+            tracing::warn!(
+                "[memory] ignoring unregistered space {:?}; storing memory uncategorized",
+                space
+            );
+            req.space = None;
+            Some(space)
+        }
+    } else {
+        req.space = None;
+        None
+    };
     let trimmed_content = req.content.trim();
     if trimmed_content.len() < 10 {
         return Err(ServerError::ValidationError(
@@ -280,11 +311,16 @@ pub async fn handle_store_memory(
     let caller_supplied_structured_fields = req.structured_fields.is_some();
 
     // Phase 2b-validate: split into warnings (schema-validation only) and extraction_method (status label).
-    let (warnings, extraction_method) = compute_warnings_and_extraction(
+    let (mut warnings, extraction_method) = compute_warnings_and_extraction(
         extracted_fields.as_deref(),
         req.structured_fields.as_ref(),
         &memory_type_str,
     );
+    if let Some(space) = ignored_unregistered_space.as_deref() {
+        warnings.push(format!(
+            "Space '{space}' is not registered; stored uncategorized. Run `wenlan space add {space}` before using it."
+        ));
+    }
 
     // Phase 2c: Entity resolution
     let resolved_entity_id = if let Some(ref direct_id) = req.entity_id {
@@ -640,14 +676,6 @@ pub async fn handle_store_memory(
             .await
             .map_err(|e| ServerError::IngestFailed(e.to_string()))?
     };
-
-    if let Some(ref domain) = final_domain {
-        if let Some(db) = db_fallback.as_ref() {
-            if let Err(e) = db.auto_create_space_if_needed(domain).await {
-                tracing::warn!("[memory] auto-create space failed: {e}");
-            }
-        }
-    }
 
     if chunks_created == 0 {
         return Err(ServerError::ValidationError(

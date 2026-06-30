@@ -64,7 +64,7 @@ pub struct EnrichmentOutcome {
 }
 
 /// Phase 1 of the canonical enrichment, in isolation: LLM classify + extract +
-/// `apply_enrichment` + auto-create-space + tags. Returns the resolved
+/// `apply_enrichment` + tags. Returns the resolved
 /// classification (also written to the row via `apply_enrichment`).
 ///
 /// This is the reusable unit. `run_canonical_enrichment` calls it as its Phase 1
@@ -130,7 +130,19 @@ pub async fn run_classification_enrichment(
                     };
                 }
                 if final_domain.is_none() {
-                    final_domain = c.space;
+                    if let Some(space) = c.space.as_deref().map(str::trim).filter(|s| !s.is_empty())
+                    {
+                        match db.get_space(space).await {
+                            Ok(Some(_)) => final_domain = Some(space.to_string()),
+                            Ok(None) => log::warn!(
+                                "[ingest] ignoring unregistered classifier space {:?}; memory remains unscoped",
+                                space
+                            ),
+                            Err(e) => {
+                                log::warn!("[ingest] classifier space lookup failed: {e}")
+                            }
+                        }
+                    }
                 }
                 final_quality = c.quality;
                 final_importance = c.importance;
@@ -196,16 +208,6 @@ pub async fn run_classification_enrichment(
         .await
     {
         log::warn!("[ingest] apply_enrichment failed: {e}");
-    }
-
-    // Auto-create a space for the classified domain if one came back from
-    // classify and the sync path didn't already see it.
-    if let Some(ref domain) = final_domain {
-        if opts.initial_domain.as_deref() != Some(domain.as_str()) {
-            if let Err(e) = db.auto_create_space_if_needed(domain).await {
-                log::warn!("[ingest] auto-create space failed: {e}");
-            }
-        }
     }
 
     // Write tags to MemoryDB.
@@ -406,6 +408,7 @@ mod tests {
     #[tokio::test]
     async fn canonical_enrichment_classifies_and_persists() {
         let (db, _dir) = test_db().await;
+        db.create_space("work", None, false).await.unwrap();
         let source_id = "mem_canon_test_1";
         let content =
             "Switched the team standup to 9am on 2026-01-15 because mornings work better.";
@@ -457,6 +460,56 @@ mod tests {
         let (mt, space) = db.get_memory_classification(source_id).await.unwrap();
         assert_eq!(mt.as_deref(), Some("preference"));
         assert_eq!(space.as_deref(), Some("work"));
+    }
+
+    #[tokio::test]
+    async fn canonical_enrichment_ignores_unregistered_classifier_space() {
+        let (db, _dir) = test_db().await;
+        let source_id = "mem_canon_unregistered_space";
+        let content = "A model-classified memory should not create an origin space again.";
+        db.upsert_documents(vec![seed_doc(source_id, content)])
+            .await
+            .unwrap();
+
+        let llm: Arc<dyn LlmProvider> = Arc::new(SequencedMockProvider::new(vec![
+            r#"{"memory_type":"fact","domain":"origin","quality":"high","tags":["naming"]}"#,
+            r#"{"retrieval_cue":"origin naming regression"}"#,
+        ]));
+
+        let prompts = PromptRegistry::default();
+        let refinery = RefineryConfig::default();
+        let distillation = DistillationConfig::default();
+        let opts = opts_no_agent_overrides();
+
+        let outcome = run_canonical_enrichment(
+            &db,
+            source_id,
+            content,
+            None,
+            Some(&llm),
+            &prompts,
+            &refinery,
+            &distillation,
+            None,
+            &opts,
+            None,
+        )
+        .await;
+
+        assert_eq!(
+            outcome.final_domain, None,
+            "unregistered classifier spaces must be ignored"
+        );
+
+        let (_mt, space) = db.get_memory_classification(source_id).await.unwrap();
+        assert_eq!(
+            space, None,
+            "unregistered classifier spaces must not be persisted"
+        );
+        assert!(
+            db.get_space("origin").await.unwrap().is_none(),
+            "unregistered classifier spaces must not create a space row"
+        );
     }
 
     /// With no LLM available, Phase 1 is skipped entirely (no classify/extract),

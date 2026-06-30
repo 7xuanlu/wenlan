@@ -195,7 +195,7 @@ async fn default_cmd(
             }
             None => {
                 if !quiet {
-                    println!("(no default space set; resolver layer-6 fallback is \"personal\")");
+                    println!("(no default space set; unscoped calls omit the space)");
                 }
             }
         },

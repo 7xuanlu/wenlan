@@ -23,6 +23,7 @@ async fn body_as_json<T: serde::de::DeserializeOwned>(response: axum::http::Resp
 #[tokio::test]
 async fn header_used_when_body_omits_space() {
     let (router, _tmp, db) = common::test_app().await;
+    db.create_space("career", None, false).await.unwrap();
 
     let req = Request::builder()
         .method("POST")
@@ -56,6 +57,7 @@ async fn header_used_when_body_omits_space() {
 #[tokio::test]
 async fn body_space_wins_over_header() {
     let (router, _tmp, db) = common::test_app().await;
+    db.create_space("health", None, false).await.unwrap();
 
     let req = Request::builder()
         .method("POST")
@@ -84,6 +86,50 @@ async fn body_space_wins_over_header() {
         space.as_deref(),
         Some("health"),
         "stored memory must have space=health from body (not career from header), got: {space:?}"
+    );
+}
+
+#[tokio::test]
+async fn unregistered_header_space_is_not_stored_or_auto_created() {
+    let (router, _tmp, db) = common::test_app().await;
+
+    let req = Request::builder()
+        .method("POST")
+        .uri("/api/memory/store")
+        .header("Content-Type", "application/json")
+        .header("X-Origin-Space", "surprise-topic")
+        .body(Body::from(
+            serde_json::json!({
+                "content": "unregistered header space should stay uncategorized",
+                "memory_type": "fact"
+            })
+            .to_string(),
+        ))
+        .unwrap();
+
+    let res = router.oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::OK, "store must return 200");
+
+    let stored: StoreMemoryResponse = body_as_json(res).await;
+    let space = db
+        .get_memory_space(&stored.source_id)
+        .await
+        .expect("get_memory_space must not fail");
+    assert_eq!(
+        space, None,
+        "unregistered resolved spaces must not be persisted to memories"
+    );
+    assert!(
+        db.get_space("surprise-topic").await.unwrap().is_none(),
+        "unregistered resolved spaces must not auto-create a spaces row"
+    );
+    assert!(
+        stored
+            .warnings
+            .iter()
+            .any(|w| w.contains("surprise-topic") && w.contains("not registered")),
+        "response should suggest registering the ignored space; warnings={:?}",
+        stored.warnings
     );
 }
 

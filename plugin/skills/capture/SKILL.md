@@ -34,15 +34,17 @@ Call the bundled resolver:
     space="$(printf '%s\n' "$resolved" | cut -f1)"
     source_layer="$(printf '%s\n' "$resolved" | cut -f2)"
 
-Pass `space="$space"` to the `capture` MCP tool. Before every capture,
-also print:
+Pass `space="$space"` to the `capture` MCP tool only when `space` is
+non-empty. Before every capture, also print:
 
     Resolved space: <space> (from <source-layer>)
 
-If the resolved space did not previously exist, the daemon auto-creates
-it. When `source_layer` is `arg`, also print:
+If `space` is empty, print:
 
-    Created new space '<space>' from arg. Register with `wenlan space add <space>` to silence.
+    Resolved space: none (unscoped)
+
+Unknown spaces are not auto-created. Register a new space first with
+`wenlan space add <space>`, or omit `space` to store uncategorized.
 
 ## How to invoke
 
@@ -54,7 +56,7 @@ conversation — don't make the user type it.
 capture(content="<args, written as a full sentence with WHY>",
         memory_type="<picked from the 6 types>",
         entity="<primary entity name, if any>",
-        space=<resolved>)
+        space=<resolved if non-empty>)
 ```
 
 ### `memory_type` — agent picks one of 6
@@ -86,7 +88,7 @@ omit `entity`.
 
 - cwd inside a repo → repo name (e.g. `~/Repos/wenlan/...` → `"wenlan"`).
 - Outside any repo → most recent topic from the conversation, or omit.
-- Always pass `space` when scope is known; if uncertain, run `list_spaces`
+- Pass `space` only when scope is known; if uncertain, run `list_spaces`
   later (post-PR-C) or omit.
 
 ### Multiple entities or relations

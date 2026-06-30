@@ -62,10 +62,13 @@ Call the bundled resolver:
     space="$(printf '%s\n' "$resolved" | cut -f1)"
     source_layer="$(printf '%s\n' "$resolved" | cut -f2)"
 
-Pass `space="$space"` to the `distill` MCP tool to scope cluster
-discovery. Print one line before the call:
+Pass `space="$space"` to the `distill` MCP tool only when `space` is
+non-empty, to scope cluster discovery. Print one line before the call:
 
     Resolved space: <space> (from <source-layer>)
+
+If `space` is empty, print `Resolved space: none (unscoped)` and omit the
+space filter.
 
 ## Flow
 

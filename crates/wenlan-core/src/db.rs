@@ -6283,6 +6283,24 @@ impl MemoryDB {
                 .map_err(|e| {
                     WenlanError::VectorDb(format!("update_space cascade entities: {}", e))
                 })?;
+
+                conn.execute(
+                    "UPDATE pages SET space = ?1 WHERE space = ?2",
+                    libsql::params![new_name, name],
+                )
+                .await
+                .map_err(|e| {
+                    WenlanError::VectorDb(format!("update_space cascade pages.space: {}", e))
+                })?;
+
+                conn.execute(
+                    "UPDATE pages SET workspace = ?1 WHERE workspace = ?2",
+                    libsql::params![new_name, name],
+                )
+                .await
+                .map_err(|e| {
+                    WenlanError::VectorDb(format!("update_space cascade pages.workspace: {}", e))
+                })?;
             }
 
             conn.execute("COMMIT", ())
@@ -6357,6 +6375,31 @@ impl MemoryDB {
                 }
                 other if other.starts_with("move:") => {
                     let target = &other[5..];
+                    let mut rows = conn
+                        .query(
+                            "SELECT COUNT(*) FROM spaces WHERE name = ?1",
+                            libsql::params![target],
+                        )
+                        .await
+                        .map_err(|e| {
+                            WenlanError::VectorDb(format!("delete_space move target lookup: {}", e))
+                        })?;
+                    let target_count = if let Some(row) = rows
+                        .next()
+                        .await
+                        .map_err(|e| WenlanError::VectorDb(e.to_string()))?
+                    {
+                        row.get::<i64>(0).unwrap_or(0)
+                    } else {
+                        0
+                    };
+                    drop(rows);
+                    if target_count == 0 {
+                        return Err(WenlanError::VectorDb(format!(
+                            "destination space not found: {target}"
+                        )));
+                    }
+
                     conn.execute(
                         "UPDATE memories SET space = ?1 WHERE space = ?2",
                         libsql::params![target, name],
@@ -6372,6 +6415,22 @@ impl MemoryDB {
                     .await
                     .map_err(|e| {
                         WenlanError::VectorDb(format!("delete_space move entities: {}", e))
+                    })?;
+                    conn.execute(
+                        "UPDATE pages SET space = ?1 WHERE space = ?2",
+                        libsql::params![target, name],
+                    )
+                    .await
+                    .map_err(|e| {
+                        WenlanError::VectorDb(format!("delete_space move pages.space: {}", e))
+                    })?;
+                    conn.execute(
+                        "UPDATE pages SET workspace = ?1 WHERE workspace = ?2",
+                        libsql::params![target, name],
+                    )
+                    .await
+                    .map_err(|e| {
+                        WenlanError::VectorDb(format!("delete_space move pages.workspace: {}", e))
                     })?;
                 }
                 _ => { /* unknown action — treat as keep */ }
@@ -6395,9 +6454,9 @@ impl MemoryDB {
         Ok(())
     }
 
-    /// Bulk-reassign all memories and entities from `from` space to `to` space.
+    /// Bulk-reassign all memories, entities, and space-scoped pages from `from` space to `to` space.
     /// Returns the number of memory rows (chunks) updated.
-    /// Auto-creates the destination space if it is not already registered.
+    /// Requires the destination space to already be registered.
     pub async fn reassign_memories_space(
         &self,
         from: &str,
@@ -6405,16 +6464,28 @@ impl MemoryDB {
     ) -> Result<usize, WenlanError> {
         let conn = self.conn.lock().await;
 
-        // Auto-create destination space if not registered yet.
-        let id = uuid::Uuid::new_v4().to_string();
-        let now = chrono::Utc::now().timestamp() as f64;
-        conn.execute(
-            "INSERT OR IGNORE INTO spaces (id, name, description, suggested, sort_order, created_at, updated_at)
-             SELECT ?1, ?2, NULL, 0, COALESCE(MAX(sort_order), -1) + 1, ?3, ?3 FROM spaces",
-            libsql::params![id, to, now],
-        )
-        .await
-        .map_err(|e| WenlanError::VectorDb(format!("reassign auto-create-dest: {}", e)))?;
+        let mut rows = conn
+            .query(
+                "SELECT COUNT(*) FROM spaces WHERE name = ?1",
+                libsql::params![to],
+            )
+            .await
+            .map_err(|e| WenlanError::VectorDb(format!("reassign target lookup: {}", e)))?;
+        let target_count = if let Some(row) = rows
+            .next()
+            .await
+            .map_err(|e| WenlanError::VectorDb(e.to_string()))?
+        {
+            row.get::<i64>(0).unwrap_or(0)
+        } else {
+            0
+        };
+        drop(rows);
+        if target_count == 0 {
+            return Err(WenlanError::VectorDb(format!(
+                "destination space not found: {to}"
+            )));
+        }
 
         conn.execute("BEGIN", ())
             .await
@@ -6435,6 +6506,20 @@ impl MemoryDB {
             )
             .await
             .map_err(|e| WenlanError::VectorDb(format!("reassign entities: {}", e)))?;
+
+            conn.execute(
+                "UPDATE pages SET space = ?1 WHERE space = ?2",
+                libsql::params![to, from],
+            )
+            .await
+            .map_err(|e| WenlanError::VectorDb(format!("reassign pages.space: {}", e)))?;
+
+            conn.execute(
+                "UPDATE pages SET workspace = ?1 WHERE workspace = ?2",
+                libsql::params![to, from],
+            )
+            .await
+            .map_err(|e| WenlanError::VectorDb(format!("reassign pages.workspace: {}", e)))?;
 
             conn.execute("COMMIT", ()).await.map_err(|e| {
                 WenlanError::VectorDb(format!("reassign_memories_space commit: {}", e))
@@ -6549,23 +6634,6 @@ impl MemoryDB {
             false
         };
         Ok(starred)
-    }
-
-    pub async fn auto_create_space_if_needed(&self, space: &str) -> Result<(), WenlanError> {
-        if space.is_empty() {
-            return Ok(());
-        }
-        let conn = self.conn.lock().await;
-        let id = uuid::Uuid::new_v4().to_string();
-        let now = chrono::Utc::now().timestamp() as f64;
-        conn.execute(
-            "INSERT OR IGNORE INTO spaces (id, name, description, suggested, created_at, updated_at)
-             VALUES (?1, ?2, NULL, 1, ?3, ?4)",
-            libsql::params![id, space, now, now],
-        )
-        .await
-        .map_err(|e| WenlanError::VectorDb(format!("auto_create_space: {}", e)))?;
-        Ok(())
     }
 
     // ===== Private Helpers =====
@@ -31290,28 +31358,135 @@ pub(crate) mod tests {
     }
 
     #[tokio::test]
-    async fn test_auto_create_space_if_needed() {
+    async fn update_space_cascades_pages_space_and_workspace() {
         let (db, _dir) = test_db().await;
-        db.run_migrations(&crate::events::NoopEmitter)
-            .await
-            .unwrap();
-
-        // First call creates a suggested space
-        db.auto_create_space_if_needed("health").await.unwrap();
-        let s = db.get_space("health").await.unwrap().unwrap();
-        assert!(s.suggested);
-        assert_eq!(s.name, "health");
-
-        // Second call is a no-op
-        db.auto_create_space_if_needed("health").await.unwrap();
-        let spaces = db.list_spaces().await.unwrap();
-        assert_eq!(spaces.len(), 1);
-
-        // Doesn't affect manually created spaces
         db.create_space("work", None, false).await.unwrap();
-        db.auto_create_space_if_needed("work").await.unwrap();
-        let s = db.get_space("work").await.unwrap().unwrap();
-        assert!(!s.suggested); // Stays confirmed
+
+        let now = chrono::Utc::now().to_rfc3339();
+        db.insert_page_with_kind(
+            "page_legacy_work",
+            "Legacy Work",
+            None,
+            "legacy page using pages.space as the space axis",
+            None,
+            Some("work"),
+            &[],
+            &now,
+            "authored",
+            "confirmed",
+            None,
+        )
+        .await
+        .unwrap();
+        db.insert_page_with_kind(
+            "page_workspace_work",
+            "Workspace Work",
+            None,
+            "newer page using pages.workspace as the space axis",
+            None,
+            Some("recap"),
+            &[],
+            &now,
+            "authored",
+            "confirmed",
+            Some("work"),
+        )
+        .await
+        .unwrap();
+
+        db.update_space("work", "career", None).await.unwrap();
+
+        let legacy = db.get_page("page_legacy_work").await.unwrap().unwrap();
+        assert_eq!(
+            legacy.space.as_deref(),
+            Some("career"),
+            "rename must update legacy pages.space values"
+        );
+
+        let scoped = db.get_page("page_workspace_work").await.unwrap().unwrap();
+        assert_eq!(
+            scoped.space.as_deref(),
+            Some("recap"),
+            "rename must not overwrite page category values that differ from the old space"
+        );
+        assert_eq!(
+            scoped.workspace.as_deref(),
+            Some("career"),
+            "rename must update pages.workspace values"
+        );
+    }
+
+    #[tokio::test]
+    async fn delete_space_move_cascades_pages_space_and_workspace() {
+        let (db, _dir) = test_db().await;
+        db.create_space("old", None, false).await.unwrap();
+        db.create_space("new", None, false).await.unwrap();
+
+        let now = chrono::Utc::now().to_rfc3339();
+        db.insert_page_with_kind(
+            "page_delete_move_legacy",
+            "Delete Move Legacy",
+            None,
+            "legacy page using pages.space as the space axis",
+            None,
+            Some("old"),
+            &[],
+            &now,
+            "authored",
+            "confirmed",
+            None,
+        )
+        .await
+        .unwrap();
+        db.insert_page_with_kind(
+            "page_delete_move_workspace",
+            "Delete Move Workspace",
+            None,
+            "newer page using pages.workspace as the space axis",
+            None,
+            Some("recap"),
+            &[],
+            &now,
+            "authored",
+            "confirmed",
+            Some("old"),
+        )
+        .await
+        .unwrap();
+
+        db.delete_space("old", "move:new").await.unwrap();
+
+        assert!(
+            db.get_space("old").await.unwrap().is_none(),
+            "source space row must be deleted"
+        );
+
+        let legacy = db
+            .get_page("page_delete_move_legacy")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            legacy.space.as_deref(),
+            Some("new"),
+            "delete-space move must update legacy pages.space values"
+        );
+
+        let scoped = db
+            .get_page("page_delete_move_workspace")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            scoped.space.as_deref(),
+            Some("recap"),
+            "delete-space move must not overwrite page category values that differ from the old space"
+        );
+        assert_eq!(
+            scoped.workspace.as_deref(),
+            Some("new"),
+            "delete-space move must update pages.workspace values"
+        );
     }
 
     // ==================== migration 11: structured_fields + retrieval_cue ====================
@@ -39832,6 +40007,76 @@ pub(crate) mod tests {
         assert_eq!(foo_count, 0, "foo should have 0 memories after move");
     }
 
+    #[tokio::test]
+    async fn reassign_memories_space_cascades_pages_space_and_workspace() {
+        let (db, _td) = test_db().await;
+
+        db.create_space("src", None, false).await.unwrap();
+        db.create_space("dest", None, false).await.unwrap();
+
+        let doc = make_memory_doc(
+            "mem_page_move_1",
+            "Memory in src with an associated page.",
+            "knowledge",
+            "src",
+            "agent",
+        );
+        db.upsert_documents(vec![doc]).await.unwrap();
+
+        let now = chrono::Utc::now().to_rfc3339();
+        db.insert_page_with_kind(
+            "page_legacy_src",
+            "Legacy Src",
+            None,
+            "legacy page using pages.space as the space axis",
+            None,
+            Some("src"),
+            &["mem_page_move_1"],
+            &now,
+            "authored",
+            "confirmed",
+            None,
+        )
+        .await
+        .unwrap();
+        db.insert_page_with_kind(
+            "page_workspace_src",
+            "Workspace Src",
+            None,
+            "newer page using pages.workspace as the space axis",
+            None,
+            Some("recap"),
+            &["mem_page_move_1"],
+            &now,
+            "authored",
+            "confirmed",
+            Some("src"),
+        )
+        .await
+        .unwrap();
+
+        db.reassign_memories_space("src", "dest").await.unwrap();
+
+        let legacy = db.get_page("page_legacy_src").await.unwrap().unwrap();
+        assert_eq!(
+            legacy.space.as_deref(),
+            Some("dest"),
+            "space move must update legacy pages.space values"
+        );
+
+        let scoped = db.get_page("page_workspace_src").await.unwrap().unwrap();
+        assert_eq!(
+            scoped.space.as_deref(),
+            Some("recap"),
+            "space move must not overwrite page category values that differ from the old space"
+        );
+        assert_eq!(
+            scoped.workspace.as_deref(),
+            Some("dest"),
+            "space move must update pages.workspace values"
+        );
+    }
+
     /// Contract test for Task 11: `apply_enrichment` must persist
     /// `event_date` and `event_end` to the `memories` table so the
     /// extracted temporal fields survive the async enrichment phase.
@@ -39887,10 +40132,9 @@ pub(crate) mod tests {
     }
 
     #[tokio::test]
-    async fn reassign_memories_space_auto_creates_dest() {
+    async fn reassign_memories_space_rejects_unregistered_destination() {
         let (db, _td) = test_db().await;
 
-        // Only create the source space — destination "baz" does not exist yet.
         db.create_space("src", None, false).await.unwrap();
 
         let doc = make_memory_doc(
@@ -39902,16 +40146,27 @@ pub(crate) mod tests {
         );
         db.upsert_documents(vec![doc]).await.unwrap();
 
-        // Move without pre-creating "baz".
-        let affected = db.reassign_memories_space("src", "baz").await.unwrap();
-        assert!(affected >= 1, "expected >= 1 row updated, got {}", affected);
-
-        // "baz" must now appear in list_spaces.
-        let spaces = db.list_spaces().await.unwrap();
+        let err = db
+            .reassign_memories_space("src", "baz")
+            .await
+            .expect_err("move must reject an unregistered destination space");
         assert!(
-            spaces.iter().any(|s| s.name == "baz"),
-            "destination space 'baz' should be registered after move, got: {:?}",
-            spaces.iter().map(|s| &s.name).collect::<Vec<_>>()
+            err.to_string().contains("destination space not found"),
+            "unexpected error: {err}"
+        );
+
+        let source_count = db
+            .list_memories(Some("src"), None, None, None, 10)
+            .await
+            .unwrap()
+            .len();
+        assert!(
+            source_count >= 1,
+            "failed move must leave source memories in place"
+        );
+        assert!(
+            db.get_space("baz").await.unwrap().is_none(),
+            "failed move must not auto-create destination space"
         );
     }
 

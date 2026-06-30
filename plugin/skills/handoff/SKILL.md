@@ -115,18 +115,22 @@ captures:
     space="$(printf '%s\n' "$resolved" | cut -f1)"
     source_layer="$(printf '%s\n' "$resolved" | cut -f2)"
 
-    echo "Resolved space: $space (from $source_layer)"
+    if [ -n "$space" ]; then
+      echo "Resolved space: $space (from $source_layer)"
+    else
+      echo "Resolved space: none (unscoped)"
+    fi
 
-Pass `space="$space"` to every `capture(...)` call in the loop. /handoff
-does not accept a `space:X` inline arg — if the user wants a different
-space, they set `WENLAN_SPACE` before invoking.
+Pass `space="$space"` to every `capture(...)` call in the loop only when
+`space` is non-empty. /handoff does not accept a `space:X` inline arg — if
+the user wants a different space, they set `WENLAN_SPACE` before invoking.
 
 ### 4. MCP captures (one per item)
 
 For each non-trivial item, call with the mapped `memory_type`:
 
 ```
-capture(content="<one self-contained sentence with WHY>", memory_type="<decision|lesson|gotcha|preference|fact>", space=<resolved>)
+capture(content="<one self-contained sentence with WHY>", memory_type="<decision|lesson|gotcha|preference|fact>", space=<resolved if non-empty>)
 ```
 
 Atomic: one decision per call. Don't merge multiple items into one
