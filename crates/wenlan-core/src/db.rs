@@ -12492,10 +12492,10 @@ impl MemoryDB {
         let conn = self.conn.lock().await;
         let supersedes_exclusion = "AND pending_revision = 0 AND source_id NOT IN (SELECT supersedes FROM memories WHERE supersedes IS NOT NULL AND pending_revision = 0 AND source = 'memory' GROUP BY supersedes)";
 
-        let space_clause = if space_filter.is_some() {
-            "AND space = ?3"
-        } else {
-            ""
+        let space_clause = match space_filter {
+            Some("uncategorized") => "AND space IS NULL",
+            Some(_) => "AND space = ?3",
+            None => "",
         };
 
         let sql = format!(
@@ -12537,15 +12537,18 @@ impl MemoryDB {
             supersedes_exclusion, space_clause
         );
 
-        let mut rows = if let Some(space) = space_filter {
-            conn.query(
-                &sql,
-                libsql::params![memory_type.to_string(), limit as i64, space.to_string()],
-            )
-            .await
-        } else {
-            conn.query(&sql, libsql::params![memory_type.to_string(), limit as i64])
+        let mut rows = match space_filter {
+            Some("uncategorized") | None => {
+                conn.query(&sql, libsql::params![memory_type.to_string(), limit as i64])
+                    .await
+            }
+            Some(space) => {
+                conn.query(
+                    &sql,
+                    libsql::params![memory_type.to_string(), limit as i64, space.to_string()],
+                )
                 .await
+            }
         }
         .map_err(|e| WenlanError::VectorDb(format!("load_memories_by_type: {}", e)))?;
 
@@ -16428,10 +16431,10 @@ impl MemoryDB {
         domain_filter: Option<&str>,
     ) -> Result<Vec<MemoryItem>, WenlanError> {
         let conn = self.conn.lock().await;
-        let space_clause = if domain_filter.is_some() {
-            "AND c.space = ?2"
-        } else {
-            ""
+        let space_clause = match domain_filter {
+            Some("uncategorized") => "AND c.space IS NULL",
+            Some(_) => "AND c.space = ?2",
+            None => "",
         };
         let sql = format!(
             "SELECT c.source_id, c.title, c.content, c.summary, c.memory_type, c.space,
@@ -16463,11 +16466,12 @@ impl MemoryDB {
             space_clause
         );
 
-        let mut rows = if let Some(space) = domain_filter {
-            conn.query(&sql, libsql::params![limit as i64, space.to_string()])
-                .await
-        } else {
-            conn.query(&sql, libsql::params![limit as i64]).await
+        let mut rows = match domain_filter {
+            Some("uncategorized") | None => conn.query(&sql, libsql::params![limit as i64]).await,
+            Some(space) => {
+                conn.query(&sql, libsql::params![limit as i64, space.to_string()])
+                    .await
+            }
         }
         .map_err(|e| WenlanError::VectorDb(format!("get_nurture_cards: {}", e)))?;
 
@@ -20437,8 +20441,17 @@ impl MemoryDB {
         offset: usize,
     ) -> Result<Vec<Page>, WenlanError> {
         let conn = self.conn.lock().await;
-        let (sql, params): (String, Vec<libsql::Value>) = if let Some(d) = space {
-            (
+        let (sql, params): (String, Vec<libsql::Value>) = match space {
+            Some("uncategorized") => (
+                "SELECT id, title, summary, content, entity_id, space, source_memory_ids, version, status, created_at, last_compiled, last_modified, COALESCE(sources_updated_count, 0), stale_reason, COALESCE(user_edited, 0), COALESCE(changelog, '[]'), COALESCE(creation_kind, 'distilled'), COALESCE(review_status, 'confirmed'), workspace
+                 FROM pages WHERE status = ?1 AND space IS NULL ORDER BY last_modified DESC LIMIT ?2 OFFSET ?3".to_string(),
+                vec![
+                    libsql::Value::Text(status.to_string()),
+                    libsql::Value::Integer(limit as i64),
+                    libsql::Value::Integer(offset as i64),
+                ],
+            ),
+            Some(d) => (
                 "SELECT id, title, summary, content, entity_id, space, source_memory_ids, version, status, created_at, last_compiled, last_modified, COALESCE(sources_updated_count, 0), stale_reason, COALESCE(user_edited, 0), COALESCE(changelog, '[]'), COALESCE(creation_kind, 'distilled'), COALESCE(review_status, 'confirmed'), workspace
                  FROM pages WHERE status = ?1 AND space = ?2 ORDER BY last_modified DESC LIMIT ?3 OFFSET ?4".to_string(),
                 vec![
@@ -20447,9 +20460,8 @@ impl MemoryDB {
                     libsql::Value::Integer(limit as i64),
                     libsql::Value::Integer(offset as i64),
                 ],
-            )
-        } else {
-            (
+            ),
+            None => (
                 "SELECT id, title, summary, content, entity_id, space, source_memory_ids, version, status, created_at, last_compiled, last_modified, COALESCE(sources_updated_count, 0), stale_reason, COALESCE(user_edited, 0), COALESCE(changelog, '[]'), COALESCE(creation_kind, 'distilled'), COALESCE(review_status, 'confirmed'), workspace
                  FROM pages WHERE status = ?1 ORDER BY last_modified DESC LIMIT ?2 OFFSET ?3".to_string(),
                 vec![
@@ -20457,7 +20469,7 @@ impl MemoryDB {
                     libsql::Value::Integer(limit as i64),
                     libsql::Value::Integer(offset as i64),
                 ],
-            )
+            ),
         };
         let mut rows = conn
             .query(&sql, libsql::params_from_iter(params))

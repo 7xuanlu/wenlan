@@ -1948,7 +1948,7 @@ pub async fn handle_get_nurture_cards(
         let s = state.read().await;
         s.db.clone().ok_or(ServerError::DbNotInitialized)?
     };
-    let space = registered_request_space(&db, &query.space, "nurture").await?;
+    let space = registered_read_space(&db, &query.space, "nurture").await?;
     let cards = db
         .get_nurture_cards(query.limit, space.as_deref())
         .await
@@ -1999,7 +1999,7 @@ pub async fn handle_list_pages(
         let s = state.read().await;
         s.db.clone().ok_or(ServerError::DbNotInitialized)?
     };
-    let space = registered_request_space(&db, &space, "list_pages").await?;
+    let space = registered_read_space(&db, &space, "list_pages").await?;
     let pages = db
         .list_pages_by_space(status, space.as_deref(), limit, offset)
         .await

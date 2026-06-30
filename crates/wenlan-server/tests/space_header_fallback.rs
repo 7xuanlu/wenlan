@@ -735,6 +735,110 @@ async fn nurture_empty_query_space_falls_back_to_unscoped() {
     );
 }
 
+#[tokio::test]
+async fn nurture_uncategorized_filter_matches_only_null_space() {
+    let (router, _tmp, db) = common::test_app().await;
+    db.create_space("alpha", None, false).await.unwrap();
+    seed_memory_with_stability(
+        &db,
+        "uncategorized_nurture_memory",
+        "uncategorized nurture sentinel null space",
+        "fact",
+        "new",
+        None,
+    )
+    .await;
+    seed_memory_with_stability(
+        &db,
+        "alpha_nurture_memory",
+        "uncategorized nurture sentinel alpha space",
+        "fact",
+        "new",
+        Some("alpha"),
+    )
+    .await;
+
+    let req = Request::builder()
+        .method("GET")
+        .uri("/api/memory/nurture?space=uncategorized&limit=10")
+        .body(Body::empty())
+        .unwrap();
+
+    let res = router.oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::OK, "nurture must return 200");
+    let body: NurtureCardsResponse = body_as_json(res).await;
+    let ids = body
+        .cards
+        .iter()
+        .map(|card| card.source_id.as_str())
+        .collect::<Vec<_>>();
+    assert!(
+        ids.contains(&"uncategorized_nurture_memory"),
+        "uncategorized must include NULL-space nurture cards; got {ids:?}"
+    );
+    assert!(
+        !ids.contains(&"alpha_nurture_memory"),
+        "uncategorized must not become unscoped and include registered-space nurture cards; got {ids:?}"
+    );
+}
+
+// ===== GET /api/pages (handle_list_pages) =====
+
+#[tokio::test]
+async fn list_pages_uncategorized_filter_matches_only_null_space() {
+    let (router, _tmp, db) = common::test_app().await;
+    db.create_space("alpha", None, false).await.unwrap();
+    let now = chrono::Utc::now().to_rfc3339();
+    db.insert_page(
+        "uncategorized_page",
+        "Uncategorized Page",
+        None,
+        "uncategorized page body",
+        None,
+        None,
+        &[],
+        &now,
+    )
+    .await
+    .expect("seed uncategorized page must store");
+    db.insert_page(
+        "alpha_page",
+        "Alpha Page",
+        None,
+        "alpha page body",
+        None,
+        Some("alpha"),
+        &[],
+        &now,
+    )
+    .await
+    .expect("seed alpha page must store");
+
+    let req = Request::builder()
+        .method("GET")
+        .uri("/api/pages?space=uncategorized&limit=10")
+        .body(Body::empty())
+        .unwrap();
+
+    let res = router.oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::OK, "list pages must return 200");
+    let body: serde_json::Value = body_as_json(res).await;
+    let ids = body["pages"]
+        .as_array()
+        .expect("pages must be an array")
+        .iter()
+        .filter_map(|page| page["id"].as_str())
+        .collect::<Vec<_>>();
+    assert!(
+        ids.contains(&"uncategorized_page"),
+        "uncategorized must include NULL-space pages; got {ids:?}"
+    );
+    assert!(
+        !ids.contains(&"alpha_page"),
+        "uncategorized must not become unscoped and include registered-space pages; got {ids:?}"
+    );
+}
+
 // ===== GET /api/decisions (handle_list_decisions) =====
 
 #[tokio::test]
@@ -802,6 +906,53 @@ async fn decisions_empty_query_space_falls_back_to_unscoped() {
             .iter()
             .map(|decision| &decision.source_id)
             .collect::<Vec<_>>()
+    );
+}
+
+#[tokio::test]
+async fn decisions_uncategorized_filter_matches_only_null_space() {
+    let (router, _tmp, db) = common::test_app().await;
+    db.create_space("alpha", None, false).await.unwrap();
+    seed_memory_with_stability(
+        &db,
+        "uncategorized_decision_memory",
+        "uncategorized decision sentinel null space",
+        "decision",
+        "confirmed",
+        None,
+    )
+    .await;
+    seed_memory_with_stability(
+        &db,
+        "alpha_decision_memory",
+        "uncategorized decision sentinel alpha space",
+        "decision",
+        "confirmed",
+        Some("alpha"),
+    )
+    .await;
+
+    let req = Request::builder()
+        .method("GET")
+        .uri("/api/decisions?space=uncategorized&limit=10")
+        .body(Body::empty())
+        .unwrap();
+
+    let res = router.oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::OK, "decisions must return 200");
+    let body: DecisionsResponse = body_as_json(res).await;
+    let ids = body
+        .decisions
+        .iter()
+        .map(|decision| decision.source_id.as_str())
+        .collect::<Vec<_>>();
+    assert!(
+        ids.contains(&"uncategorized_decision_memory"),
+        "uncategorized must include NULL-space decisions; got {ids:?}"
+    );
+    assert!(
+        !ids.contains(&"alpha_decision_memory"),
+        "uncategorized must not become unscoped and include registered-space decisions; got {ids:?}"
     );
 }
 
