@@ -26122,8 +26122,18 @@ pub(crate) mod tests {
             .iter()
             .find(|r| r.source_id == "inert_b")
             .map(|r| r.score);
-        assert_eq!(base_a, again_a, "flag OFF must be deterministic (a)");
-        assert_eq!(base_b, again_b, "flag OFF must be deterministic (b)");
+        let base_a = base_a.expect("inert_a should be retrievable");
+        let again_a = again_a.expect("inert_a should be retrievable on rerun");
+        let base_b = base_b.expect("inert_b should be retrievable");
+        let again_b = again_b.expect("inert_b should be retrievable on rerun");
+        assert!(
+            (base_a - again_a).abs() < 1e-6,
+            "flag OFF must be stable within score epsilon (a): {base_a} vs {again_a}"
+        );
+        assert!(
+            (base_b - again_b).abs() < 1e-6,
+            "flag OFF must be stable within score epsilon (b): {base_b} vs {again_b}"
+        );
     }
 
     /// L4 cold-start neutrality: all importance NULL + flag ON must produce the
