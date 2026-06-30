@@ -209,6 +209,11 @@ pub struct ListPendingParams {
     )]
     #[serde(default, deserialize_with = "deserialize_optional_usize_lenient")]
     pub limit: Option<usize>,
+    #[schemars(
+        description = "Scope to a space (e.g. 'work', 'personal'). Auto-detected from conversation if omitted."
+    )]
+    #[serde(default, alias = "domain")]
+    pub space: Option<String>,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
@@ -918,7 +923,7 @@ impl WenlanMcpServer {
         let limit = params.limit.unwrap_or(20).min(100);
         let req = ListMemoriesRequest {
             memory_type: None,
-            space: None,
+            space: effective_space(&params.space),
             confirmed: Some(false),
             limit,
         };
@@ -2398,7 +2403,11 @@ impl ServerHandler for WenlanMcpServer {
              - General world facts or documentation that aren't personal to this user (e.g., \"Rust has a borrow \
                checker\", \"PostgreSQL supports JSONB\") — those are not memory material.\n\
              - Your own inferences about the user that they didn't express. Store what they said; infer from that \
-               when responding.\n\n\
+               when responding.\n\
+             - Agent operating rules — standing \"always X\" / \"never Y\" directives about how an agent should \
+               behave (workflow, escalation, tooling). Those are obey-tier instructions for the agent's own config \
+               (CLAUDE.md / AGENTS.md / MEMORY.md), not shared memory. Store the user's preference as a fact \
+               (\"prefers TDD because…\"); never the agent-facing rule (\"always run TDD first\").\n\n\
              CONTENT QUALITY — this is where you make the biggest difference:\n\
              - Specific beats vague: \"prefers Rust for CLI tools because of compile-time safety\" > \"likes Rust\"\n\
              - Include the WHY: the backend can classify \"dark mode\" as a preference, but only you know\n\

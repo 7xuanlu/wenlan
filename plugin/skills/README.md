@@ -12,7 +12,7 @@ These skills keep the daily interface short:
 /recall      search local memory
 /distill     refresh wiki pages
 /pages [q]   browse + open distilled pages (wenlan pages)
-/review captures|revisions   power-user deep audit; daily flow is /brief
+/curate captures|revisions   power-user deep audit; daily flow is /brief
 /forget      delete a memory by ID
 /handoff     end-of-session debrief
 /debrief     alias for /handoff
