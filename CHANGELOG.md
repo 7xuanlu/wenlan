@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.9.3](https://github.com/7xuanlu/wenlan/compare/v0.9.2...v0.9.3) (2026-06-29)
+
+
+### Bug Fixes
+
+* add `wenlan pages` CLI; /pages skill browses + opens via it ([#307](https://github.com/7xuanlu/wenlan/issues/307)) ([f29b5ff](https://github.com/7xuanlu/wenlan/commit/f29b5ff15c4795de6994a9561f452242d6657595))
+* include document tag map in tags response ([#304](https://github.com/7xuanlu/wenlan/issues/304)) ([1fdd5f3](https://github.com/7xuanlu/wenlan/commit/1fdd5f300015b015ff63e6f39a617184cef5361e))
+* share on-device model DTOs ([e401bc3](https://github.com/7xuanlu/wenlan/commit/e401bc3798bac804abf7d4069d8f7fc62ce78a6f))
+
 ## [0.9.2](https://github.com/7xuanlu/wenlan/compare/v0.9.1...v0.9.2) (2026-06-26)
 
 

@@ -9,6 +9,7 @@
 
 use anyhow::Result;
 use serde::Serialize;
+use similar::{ChangeTag, TextDiff};
 use wenlan_types::responses::PendingRevisionItem;
 
 use crate::client::WenlanClient;
@@ -175,6 +176,54 @@ fn group_revisions(items: Vec<PendingRevisionItem>) -> Vec<GroupedRevision> {
         .collect()
 }
 
+/// Render a `git diff --word-diff`-style inline diff of `original` -> `revision`:
+/// unchanged words stay plain, deletions wrap `[-...-]`, insertions wrap `{+...+}`.
+/// Consecutive same-kind tokens coalesce into one run so prose reads cleanly.
+// ponytail: no production caller since the JSON-card refactor (979e74b1) dropped
+// shell-side diff rendering. Kept (with tests) as staged for the /curate picker's
+// revision-diff view. Wire it into the card output, or delete fn + its 3 tests.
+#[allow(dead_code)]
+fn word_diff(original: &str, revision: &str) -> String {
+    fn wrap(tag: ChangeTag, text: &str, out: &mut String) {
+        if text.is_empty() {
+            return;
+        }
+        match tag {
+            ChangeTag::Delete => {
+                out.push_str("[-");
+                out.push_str(text);
+                out.push_str("-]");
+            }
+            ChangeTag::Insert => {
+                out.push_str("{+");
+                out.push_str(text);
+                out.push_str("+}");
+            }
+            ChangeTag::Equal => out.push_str(text),
+        }
+    }
+
+    let diff = TextDiff::from_words(original, revision);
+    let mut out = String::new();
+    let mut run_tag: Option<ChangeTag> = None;
+    let mut run = String::new();
+    for change in diff.iter_all_changes() {
+        let tag = change.tag();
+        if run_tag != Some(tag) {
+            if let Some(prev) = run_tag {
+                wrap(prev, &run, &mut out);
+            }
+            run.clear();
+            run_tag = Some(tag);
+        }
+        run.push_str(change.value());
+    }
+    if let Some(prev) = run_tag {
+        wrap(prev, &run, &mut out);
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -221,5 +270,36 @@ mod tests {
         assert_eq!(groups.len(), 2);
         assert_eq!(groups[0].revision_source_id, "rev_2");
         assert_eq!(groups[1].revision_source_id, "rev_1");
+    }
+
+    #[test]
+    fn word_diff_identical_text_is_verbatim_no_markers() {
+        let d = word_diff("alpha beta gamma", "alpha beta gamma");
+        assert_eq!(d, "alpha beta gamma");
+    }
+
+    #[test]
+    fn word_diff_replaced_word_wraps_old_and_new_keeps_rest_plain() {
+        let d = word_diff("alpha beta gamma", "alpha delta gamma");
+        assert!(d.contains("[-") && d.contains("beta"), "delete marked: {d}");
+        assert!(
+            d.contains("{+") && d.contains("delta"),
+            "insert marked: {d}"
+        );
+        assert!(
+            !d.contains("[-alpha") && !d.contains("alpha-]"),
+            "alpha plain: {d}"
+        );
+        assert!(
+            !d.contains("[-gamma") && !d.contains("gamma-]"),
+            "gamma plain: {d}"
+        );
+    }
+
+    #[test]
+    fn word_diff_pure_insertion_marks_only_inserted_words() {
+        let d = word_diff("alpha gamma", "alpha beta gamma");
+        assert!(d.contains("{+") && d.contains("beta"), "insert marked: {d}");
+        assert!(!d.contains("[-"), "nothing deleted: {d}");
     }
 }
