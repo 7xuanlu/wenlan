@@ -1,7 +1,7 @@
 {
   "name": "wenlan",
   "description": "AI work memory for Claude Code. Carries sessions, decisions, lessons, and project context forward, then turns them into searchable memory and wiki pages.",
-  "version": "0.9.3",
+  "version": "0.9.5",
   "author": {
     "name": "Qi-Xuan Lu",
     "url": "https://github.com/7xuanlu"

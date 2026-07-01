@@ -154,7 +154,7 @@ fn doc_path_references_resolve() {
     for f in git_ls_files(&root, "*.md") {
         // Skip docs that legitimately reference aspirational / moved / extracted paths:
         // plan & design docs (not-yet-created), and AUDIT.md historical audits (may
-        // reference code since extracted to other repos, e.g. the Tauri app -> origin-app).
+        // reference code since extracted to other repos, e.g. the Tauri app -> wenlan-app).
         if f.starts_with("docs/plans/")
             || f.starts_with("docs/superpowers/")
             || f.ends_with("AUDIT.md")

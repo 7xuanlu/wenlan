@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.9.5](https://github.com/7xuanlu/wenlan/compare/v0.9.4...v0.9.5) (2026-06-30)
+
+
+### Bug Fixes
+
+* /curate revision queue overhaul — diff preview, dismiss=unstage, dead-code cleanup ([#311](https://github.com/7xuanlu/wenlan/issues/311)) ([d072a38](https://github.com/7xuanlu/wenlan/commit/d072a380c8fe819bc896176e4d5a6705d424cf49))
+
+## [0.9.4](https://github.com/7xuanlu/wenlan/compare/v0.9.3...v0.9.4) (2026-06-30)
+
+
+### Bug Fixes
+
+* pages/curate CLI-first browse + Wenlan capture-guidance boundary ([#310](https://github.com/7xuanlu/wenlan/issues/310)) ([682ba36](https://github.com/7xuanlu/wenlan/commit/682ba360e304646dbec206b6616cb18a9f7eae32))
+* preserve edited pages on skipped re-distill ([ab84bdd](https://github.com/7xuanlu/wenlan/commit/ab84bdd63080a4473b2d7d583a2ee1be35202ecc))
+
 ## [0.9.3](https://github.com/7xuanlu/wenlan/compare/v0.9.2...v0.9.3) (2026-06-29)
 
 

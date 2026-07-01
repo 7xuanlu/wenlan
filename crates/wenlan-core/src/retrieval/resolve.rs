@@ -64,9 +64,7 @@ pub(crate) struct Candidate {
 
 impl Candidate {
     /// A candidate is *protected* (never auto-mutated) when pinned or when its
-    /// stability tier is explicitly `protected`. Note this is intentionally
-    /// narrower than `MemoryDB::is_memory_protected` (which also treats any
-    /// `confirmed`/`learned` row as protected); T14's whole point is to
+    /// stability tier is explicitly `protected`. T14's whole point is to
     /// soft-suppress *confirmed* stale facts, so only pin / explicit-protected
     /// status blocks the auto-mutation.
     pub fn is_protected(&self) -> bool {

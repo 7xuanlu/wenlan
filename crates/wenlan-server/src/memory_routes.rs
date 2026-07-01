@@ -387,73 +387,6 @@ pub async fn handle_store_memory(
         None
     };
 
-    // --- Topic-match check (pre-batcher, protected-flag only) ---
-    //
-    // Used solely to flag `pending_revision` when an incoming memory's topic
-    // overlaps a PROTECTED memory (stability = "protected"). For non-protected
-    // topic matches we used to upsert in place; that silently collapsed
-    // distinct captures that happened to share topic context (same entity /
-    // domain / type + similar phrasing). The 2026-05-11 /handoff incident
-    // documented in `lesson_topic_match_entity_bypass.md` lost 5 of 7 atomic
-    // captures to this path.
-    //
-    // New contract: non-protected topic matches do NOT short-circuit the write
-    // path. Every capture stores as a new memory with a fresh `source_id`.
-    // Any consolidation of similar-but-distinct memories is a refinery
-    // concern, not a write-path concern (matches Mem0 v2.0 + the dominant
-    // production memory-system pattern: hash-only dedup at write, periodic
-    // consolidation later).
-    let mut topic_match_protected_id: Option<String> = None;
-    let mut topic_match_similarity: Option<f64> = None;
-    {
-        let (db_arc, topic_cfg) = {
-            let s = state.read().await;
-            (s.db.clone(), s.tuning.refinery.topic_match.clone())
-        };
-
-        if let Some(ref db) = db_arc {
-            // Compute embedding synchronously (CPU-bound, no DB lock needed).
-            let embedding_result = db.generate_embeddings(&[trimmed_content.to_string()]);
-
-            if let Ok(ref embeddings) = embedding_result {
-                if let Some(content_embedding) = embeddings.first() {
-                    let match_result = wenlan_core::topic_match::find_topic_match(
-                        db,
-                        &title,
-                        validated_memory_type.as_deref(),
-                        req.space.as_deref(),
-                        resolved_entity_id.as_deref(),
-                        content_embedding,
-                        &topic_cfg,
-                    )
-                    .await;
-
-                    if let Ok(ref result) = match_result {
-                        if let Some(ref matched_source_id) = result.matched_source_id {
-                            let is_protected = db
-                                .is_memory_protected(matched_source_id)
-                                .await
-                                .unwrap_or(false);
-
-                            if is_protected {
-                                tracing::info!(
-                                    "[topic_match] matched protected memory {matched_source_id}, \
-                                     storing as new pending_revision"
-                                );
-                                topic_match_protected_id = Some(matched_source_id.clone());
-                                topic_match_similarity = result.signals.embedding_similarity;
-                            }
-                            // Non-protected topic match: no longer collapsed
-                            // into the existing row. The incoming memory
-                            // stores as new; periodic consolidation belongs
-                            // in the refinery.
-                        }
-                    }
-                }
-            }
-        }
-    }
-
     // Phase 3: Confidence + auto-confirm + supersede gating
     let memory_type = Some(memory_type_str.clone());
     let tier = stability_tier(memory_type.as_deref());
@@ -477,17 +410,8 @@ pub async fn handle_store_memory(
     };
     let confirmed = Some(stability == "confirmed");
 
-    // A topic-match against a protected memory also flags this as a pending revision.
-    let pending_revision = topic_match_protected_id.is_some();
-    // Agent-declared supersedes takes priority. If caller didn't pass one and
-    // topic-match against a protected memory fired, auto-set supersedes so the
-    // new memory is properly linked as a revision-of-protected. Without this,
-    // list_pending_revisions (filters by `supersedes IS NOT NULL`) can't find
-    // the row and /brief surfaces nothing.
-    let final_supersedes = req
-        .supersedes
-        .clone()
-        .or_else(|| topic_match_protected_id.clone());
+    let pending_revision = false;
+    let final_supersedes = req.supersedes.clone();
 
     let agent_for_activity = {
         let s = state.read().await;
@@ -936,53 +860,6 @@ pub async fn handle_store_memory(
         ("not_needed".to_string(), String::new())
     };
 
-    // Trust-tier auto-supersede: if the capture came from a full-trust agent
-    // and embedding similarity is high enough, auto-accept the revision
-    // instead of surfacing it for human review via /brief.
-    const TRUST_AUTO_SUPERSEDE_SIM_THRESHOLD: f64 = 0.9;
-    let mut auto_superseded: Vec<String> = Vec::new();
-    let triggered_revisions: Vec<String> = if let Some(ref matched_id) = topic_match_protected_id {
-        let sim = topic_match_similarity.unwrap_or(0.0);
-        if trust_level == "full" && sim > TRUST_AUTO_SUPERSEDE_SIM_THRESHOLD {
-            // Clone db Arc before awaiting — must not hold state guard across .await.
-            let db_for_accept = {
-                let s = state.read().await;
-                s.db.clone()
-            };
-            if let Some(ref db) = db_for_accept {
-                match wenlan_core::post_write::accept_pending_revision(
-                    db,
-                    matched_id,
-                    &agent_for_activity,
-                )
-                .await
-                {
-                    Ok(_) => {
-                        tracing::info!(
-                            "[trust_auto_supersede] auto-superseded {matched_id} \
-                             (trust=full, sim={sim:.3})"
-                        );
-                        auto_superseded.push(matched_id.clone());
-                        Vec::new() // triggered_revisions empty when auto-superseded
-                    }
-                    Err(e) => {
-                        tracing::warn!(
-                            "[trust_auto_supersede] accept_pending_revision failed for \
-                             {matched_id}: {e}; falling back to /brief surface"
-                        );
-                        vec![matched_id.clone()]
-                    }
-                }
-            } else {
-                vec![matched_id.clone()]
-            }
-        } else {
-            vec![matched_id.clone()]
-        }
-    } else {
-        Vec::new()
-    };
-
     Ok(Json(StoreMemoryResponse {
         source_id,
         chunks_created,
@@ -993,8 +870,6 @@ pub async fn handle_store_memory(
         extraction_method,
         enrichment,
         hint,
-        triggered_revisions,
-        auto_superseded,
     }))
 }
 
@@ -4317,6 +4192,109 @@ mod dismiss_contradiction_tests {
         assert!(
             !flagged.contains(source_id),
             "memory should be cleared from needs-review after dismiss"
+        );
+    }
+}
+
+#[cfg(test)]
+mod dismiss_revision_tests {
+    use axum::body::Body;
+    use axum::http::{Request, StatusCode};
+    use std::sync::Arc;
+    use tokio::sync::RwLock;
+    use tower::ServiceExt;
+    use wenlan_types::sources::RawDocument;
+
+    use crate::state::ServerState;
+
+    async fn build_state_with_db() -> (Arc<RwLock<ServerState>>, tempfile::TempDir) {
+        let tmp = tempfile::tempdir().expect("failed to create tempdir");
+        let emitter: Arc<dyn wenlan_core::events::EventEmitter> =
+            Arc::new(wenlan_core::events::NoopEmitter);
+        let db = wenlan_core::db::MemoryDB::new(tmp.path(), emitter)
+            .await
+            .expect("MemoryDB::new should succeed");
+        let server_state = ServerState {
+            db: Some(Arc::new(db)),
+            ..Default::default()
+        };
+        (Arc::new(RwLock::new(server_state)), tmp)
+    }
+
+    /// HTTP contract for the external wenlan-app caller. `POST
+    /// /api/memory/revision/{id}/dismiss` UNSTAGES the revision — it clears the
+    /// false `pending_revision` + `supersedes` link and keeps BOTH memories as
+    /// independent rows. It must NOT delete. Regression guard against the old
+    /// DELETE-on-Dismiss behavior that destroyed a distinct captured memory
+    /// whenever the staging was a false positive.
+    #[tokio::test]
+    async fn dismiss_revision_endpoint_unstages_and_keeps_both() {
+        let (state, _tmp) = build_state_with_db().await;
+        {
+            let s = state.read().await;
+            let db = s.db.as_ref().unwrap();
+            let target = RawDocument {
+                source: "memory".to_string(),
+                source_id: "rev_dismiss_target".to_string(),
+                title: "Original".to_string(),
+                content: "I prefer tabs over spaces".to_string(),
+                memory_type: Some("preference".to_string()),
+                confirmed: Some(true),
+                ..Default::default()
+            };
+            let revision = RawDocument {
+                source: "memory".to_string(),
+                source_id: "rev_dismiss_revision".to_string(),
+                title: "Revision".to_string(),
+                content: "A distinct fact that was falsely staged as a revision".to_string(),
+                memory_type: Some("preference".to_string()),
+                confirmed: Some(false),
+                supersedes: Some("rev_dismiss_target".to_string()),
+                pending_revision: true,
+                ..Default::default()
+            };
+            db.upsert_documents(vec![target, revision]).await.unwrap();
+        }
+
+        let app = crate::router::build_router(state.clone());
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/memory/revision/rev_dismiss_revision/dismiss")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            resp.status(),
+            StatusCode::OK,
+            "dismiss revision endpoint should return 200"
+        );
+
+        // Both memories must SURVIVE — dismiss unstages, it does not delete.
+        // get_memory_detail filters pending_revision = 0, so a still-staged or
+        // deleted row would return None here.
+        let s = state.read().await;
+        let db = s.db.as_ref().unwrap();
+        let revision = db
+            .get_memory_detail("rev_dismiss_revision")
+            .await
+            .unwrap()
+            .expect(
+                "dismissed revision must survive as an independent memory (unstage, not delete)",
+            );
+        assert!(
+            revision.supersedes.is_none(),
+            "dismiss must clear the false supersedes link"
+        );
+        assert!(
+            db.get_memory_detail("rev_dismiss_target")
+                .await
+                .unwrap()
+                .is_some(),
+            "the original target must remain after dismiss"
         );
     }
 }

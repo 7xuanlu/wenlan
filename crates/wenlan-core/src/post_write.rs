@@ -794,6 +794,8 @@ pub async fn accept_pending_revision(
     id: &str,
     agent: &str,
 ) -> Result<wenlan_types::RevisionAcceptResponse, WenlanError> {
+    // `id` may be the revision's own source_id (exact) or its target's (legacy);
+    // the DB resolves it and returns the actual (target, revision) pair acted on.
     let (target_source_id, revision_source_id) = db.accept_pending_revision(id).await?;
     log_activity_best_effort(db, agent, "revision_accept", &target_source_id).await;
 

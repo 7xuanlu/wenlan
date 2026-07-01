@@ -94,7 +94,8 @@ pub struct AcceptOutcome {
 /// Defaults:
 /// - `entity_merge`: existing entity (source_ids[1]) wins as canonical, new (source_ids[0]) folds in as alias.
 /// - `relation_conflict`: new relation (source_ids[0]) wins, existing (source_ids[1]) deleted.
-/// - `detect_contradiction`: previously-stored memory (source_ids[1]) flagged pending_revision=1.
+/// - `detect_contradiction`: acknowledge-and-resolve only — neither memory is mutated
+///   (a pure contradiction keeps both facts; the SUPERSEDES auto-merge is daemon-side).
 /// - `suggest_entity`, `dedup_merge`, unknown: returns Validation (422).
 pub async fn apply_refinement(
     db: &MemoryDB,
@@ -137,10 +138,16 @@ pub async fn apply_refinement(
             db.supersede_relation(existing_id, new_id).await?;
         }
         "detect_contradiction" => {
-            let existing_mem = prop.source_ids.get(1).ok_or_else(|| {
+            // Validate the proposal shape, then acknowledge-and-resolve below —
+            // do NOT mutate either memory. A pure contradiction keeps both facts;
+            // the auto-merge (SUPERSEDES) case is handled daemon-side in
+            // process_refinement_queue, never here. Flagging pending_revision
+            // without a supersedes link quarantined the memory (hidden from
+            // retrieval, absent from /curate, no path to clear). ponytail: accept
+            // = clear it from the review queue, nothing more.
+            prop.source_ids.get(1).ok_or_else(|| {
                 WenlanError::Validation("detect_contradiction missing source_ids[1]".into())
             })?;
-            db.flag_memory_for_revision(existing_mem).await?;
         }
         "suggest_entity" => {
             return Err(WenlanError::Validation(
@@ -322,6 +329,37 @@ pub struct ResolveOutcome {
     pub flagged_for_review: Vec<String>,
     /// refinement proposal ids filed for near-duplicate consolidation.
     pub dedup_proposals: Vec<String>,
+}
+
+/// Minimum count of new content tokens an incoming memory must add over an
+/// existing near-duplicate before the re-capture earns a human merge card.
+/// Below this the two read as ~identical and dedup silently.
+const MIN_NEW_CONTENT_TOKENS: usize = 4;
+
+/// Content tokens of `s`: lowercased alphanumeric words of length >= 4. Short
+/// function words ("now", "the", "use") are dropped so a trivial restatement
+/// reads as ~identical to the original.
+// ponytail: lexical token-overlap, not semantics — a faithful paraphrase that
+// reuses no surface words reads as "richer", a keyword-stuffed restatement reads
+// as "identical". Upgrade path: the resolve LLM already sees both texts; have it
+// emit a `richer:bool` alongside `duplicates[]` once a judge variant is wired.
+fn content_tokens(s: &str) -> std::collections::HashSet<String> {
+    s.to_lowercase()
+        .split(|c: char| !c.is_alphanumeric())
+        .filter(|w| w.chars().count() >= 4)
+        .map(|w| w.to_string())
+        .collect()
+}
+
+/// True when `incoming` adds at least `MIN_NEW_CONTENT_TOKENS` content tokens
+/// absent from `existing` — the re-capture carries materially new information,
+/// not a restatement. Gates whether a near-duplicate earns a consolidation card.
+fn is_materially_richer(incoming: &str, existing: &str) -> bool {
+    let existing_tokens = content_tokens(existing);
+    content_tokens(incoming)
+        .difference(&existing_tokens)
+        .count()
+        >= MIN_NEW_CONTENT_TOKENS
 }
 
 /// T14 — resolve an incoming memory against two candidate pools in ONE LLM call.
@@ -512,15 +550,24 @@ pub async fn resolve_dual_pool(
 
     // --- Duplicates: file a consolidation proposal, do NOT collapse. ---
     for idx in decision.duplicates {
-        // Resolve the candidate's source_id from whichever pool the index hits.
-        let dup_id = match index_to_pool(idx, a_len, b_len) {
-            Some(Pool::A) => pool_a.get(idx).map(|c| c.source_id.clone()),
+        // Resolve the candidate's source_id + content from whichever pool the index hits.
+        let dup = match index_to_pool(idx, a_len, b_len) {
+            Some(Pool::A) => pool_a
+                .get(idx)
+                .map(|c| (c.source_id.clone(), c.content.clone())),
             Some(Pool::B) => pool_b_offset(idx, a_len, b_len)
                 .and_then(|o| pool_b.get(o))
-                .map(|c| c.source_id.clone()),
+                .map(|c| (c.source_id.clone(), c.content.clone())),
             None => None,
         };
-        let Some(dup_id) = dup_id else { continue };
+        let Some((dup_id, dup_content)) = dup else {
+            continue;
+        };
+        // Narrow-the-gate (v1): only a materially-richer re-capture earns a human
+        // merge card; a ~identical restatement dedups silently (no revision row).
+        if !is_materially_richer(&incoming.content, &dup_content) {
+            continue;
+        }
         let prop_id = format!("ref_dual_{}", uuid::Uuid::new_v4().simple());
         if let Err(e) = db
             .insert_refinement_proposal(
@@ -912,7 +959,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn apply_refinement_detect_contradiction_flags_existing() {
+    async fn apply_refinement_detect_contradiction_does_not_quarantine() {
         let (db, _tmp) = test_db().await;
         let new_mem = format!("mem_{}", uuid::Uuid::new_v4().simple());
         let existing_mem = format!("mem_{}", uuid::Uuid::new_v4().simple());
@@ -963,7 +1010,12 @@ mod tests {
             .await
             .unwrap();
         let f: i64 = rows.next().await.unwrap().unwrap().get(0).unwrap();
-        assert_eq!(f, 1, "existing memory should be flagged for revision");
+        assert_eq!(
+            f, 0,
+            "existing memory must NOT be quarantined: flagging pending_revision \
+             without a supersedes link hides it from /curate and all retrieval \
+             with no way to clear (the contradiction-accept quarantine bug)"
+        );
 
         let mut rows = conn
             .query(
@@ -973,7 +1025,7 @@ mod tests {
             .await
             .unwrap();
         let f: i64 = rows.next().await.unwrap().unwrap().get(0).unwrap();
-        assert_eq!(f, 0, "new memory should NOT be flagged");
+        assert_eq!(f, 0, "new memory should NOT be flagged either");
     }
 
     #[tokio::test]
@@ -1937,10 +1989,13 @@ mod tests {
             "confirmed",
         )
         .await;
+        // Materially richer re-capture: keeps the original clause (so it stays a
+        // Pool-A near-duplicate) but adds new content tokens -> earns a merge card.
         seed_memory(
             &db,
             "mem_inc",
-            "I use the Rust programming language for all backend services now",
+            "I use the Rust programming language for all backend services, \
+             specifically the tokio async runtime and libsql persistence",
             "fact",
             Some("engineering"),
             None,
@@ -1991,6 +2046,95 @@ mod tests {
             pending.iter().any(|p| p.action == "consolidate_duplicate"),
             "consolidation proposal should be in the queue"
         );
+    }
+
+    #[tokio::test]
+    async fn test_apply_near_identical_duplicate_files_no_proposal() {
+        // A re-capture that adds nothing material ("now" is the only delta) must
+        // dedup silently — no consolidation card for the human to clear.
+        let (db, _tmp) = test_db().await;
+        seed_memory(
+            &db,
+            "mem_dup",
+            "I use the Rust programming language for all backend services",
+            "fact",
+            Some("engineering"),
+            None,
+            None,
+            1000,
+            None,
+            false,
+            "confirmed",
+        )
+        .await;
+        seed_memory(
+            &db,
+            "mem_inc",
+            "I use the Rust programming language for all backend services now",
+            "fact",
+            Some("engineering"),
+            None,
+            None,
+            2000,
+            None,
+            false,
+            "confirmed",
+        )
+        .await;
+        let incoming = db
+            .get_incoming_for_resolution("mem_inc")
+            .await
+            .unwrap()
+            .unwrap();
+        let (pa, _pb) = db
+            .build_resolution_pools(
+                &incoming,
+                crate::retrieval::resolve::ResolutionConfig::default(),
+            )
+            .await
+            .unwrap();
+        assert!(!pa.is_empty(), "precondition: near-duplicate is in Pool A");
+        // LLM still flags Pool-A index 0 as a duplicate; the richer-gate, not the
+        // LLM, is what suppresses the card.
+        let llm = stub_llm(r#"{"duplicates":[0],"invalidates":[]}"#);
+        let prompts = PromptRegistry::default();
+        let dyn_em = noop_emitter();
+        let outcome =
+            temp_env::async_with_vars([("WENLAN_ENABLE_DUAL_POOL_RESOLVE", Some("1"))], async {
+                resolve_dual_pool(&db, "mem_inc", Some(&llm), &prompts, &dyn_em)
+                    .await
+                    .unwrap()
+            })
+            .await;
+        assert!(
+            outcome.dedup_proposals.is_empty(),
+            "~identical re-capture should dedup silently, no consolidation card"
+        );
+        let pending = db.get_pending_refinements().await.unwrap();
+        assert!(
+            !pending.iter().any(|p| p.action == "consolidate_duplicate"),
+            "no consolidation proposal should be queued for a ~identical re-capture"
+        );
+    }
+
+    #[test]
+    fn materially_richer_predicate() {
+        // Identical text adds nothing -> not richer.
+        assert!(!is_materially_richer(
+            "I use the Rust programming language for all backend services",
+            "I use the Rust programming language for all backend services"
+        ));
+        // A trivial restatement (only the short word "now" added) -> not richer.
+        assert!(!is_materially_richer(
+            "I use the Rust programming language for all backend services now",
+            "I use the Rust programming language for all backend services"
+        ));
+        // Substantial new content (several new content tokens) -> richer.
+        assert!(is_materially_richer(
+            "I use the Rust programming language for all backend services, \
+             specifically tokio async runtime with libsql database persistence and axum routing",
+            "I use the Rust programming language for all backend services"
+        ));
     }
 
     #[tokio::test]

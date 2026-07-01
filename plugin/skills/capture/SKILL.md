@@ -125,6 +125,10 @@ covers extraction.
 - Tool output, command results, architecture dumps
 - Single-word acknowledgments
 - Things the user can trivially re-derive (file paths, recent git history)
+- Agent operating rules — "always X" / "never Y" directives about how the
+  agent should behave. Those belong in CLAUDE.md / AGENTS.md / MEMORY.md (the
+  obey tier), not Wenlan. Capture the user's *preference* ("prefers TDD
+  because…"), not the agent-facing *rule* ("always run TDD first").
 
 ## Atomic ideas
 
