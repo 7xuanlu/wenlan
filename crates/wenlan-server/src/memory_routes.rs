@@ -364,18 +364,28 @@ pub async fn handle_store_memory(
                                 .await
                                 .unwrap_or(false);
 
-                            if is_protected {
+                            // Only stage a revision when the new memory is a
+                            // NEAR-DUPLICATE of the protected one (revision_threshold,
+                            // ~0.88). The topic-match tiers (0.70+) cluster *related*
+                            // memories; a distinct fact sharing an entity/topic embeds
+                            // in [0.70, 0.88) and must NOT stage as a revision (that
+                            // produced a curate-queue treadmill of false revisions).
+                            let is_revision = wenlan_core::topic_match::is_revision_candidate(
+                                result.signals.embedding_similarity,
+                                topic_cfg.revision_threshold,
+                            );
+                            if is_protected && is_revision {
                                 tracing::info!(
-                                    "[topic_match] matched protected memory {matched_source_id}, \
-                                     storing as new pending_revision"
+                                    "[topic_match] matched protected memory {matched_source_id} \
+                                     at near-dup similarity, staging pending_revision"
                                 );
                                 topic_match_protected_id = Some(matched_source_id.clone());
                                 topic_match_similarity = result.signals.embedding_similarity;
                             }
-                            // Non-protected topic match: no longer collapsed
-                            // into the existing row. The incoming memory
-                            // stores as new; periodic consolidation belongs
-                            // in the refinery.
+                            // Non-protected match, OR protected but below the
+                            // near-dup bar: not collapsed into the existing row.
+                            // The incoming memory stores as new; periodic
+                            // consolidation belongs in the refinery.
                         }
                     }
                 }

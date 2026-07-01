@@ -16390,31 +16390,79 @@ impl MemoryDB {
     /// Accept a pending revision for a target memory. The `target_source_id` is the
     /// original memory being superseded. This finds the pending revision that supersedes it,
     /// activates it, and suppresses the original. Both UPDATEs are wrapped in BEGIN/COMMIT.
-    pub async fn accept_pending_revision(&self, target_source_id: &str) -> Result<(), WenlanError> {
-        let conn = self.conn.lock().await;
-
-        // Find the pending revision that supersedes this target
+    /// Resolve an accept/dismiss `id` to `(revision_source_id, target_source_id)`.
+    ///
+    /// `id` may be the revision's OWN `source_id` (exact — what the curate cards
+    /// key on, so the named revision is acted on even when several compete for
+    /// one target) or the target memory's `source_id` (legacy callers: the
+    /// NEWEST pending revision superseding it, deterministic by `last_modified`).
+    /// A revision's id never equals its target's, so the revision-first lookup is
+    /// unambiguous. Returns `None` if neither matches a pending revision.
+    async fn resolve_pending_revision(
+        conn: &libsql::Connection,
+        id: &str,
+    ) -> Result<Option<(String, String)>, WenlanError> {
+        // 1. `id` is the revision's own source_id (exact).
         let mut rows = conn
             .query(
-                "SELECT source_id FROM memories WHERE supersedes = ?1 AND pending_revision = 1 AND source = 'memory' LIMIT 1",
-                libsql::params![target_source_id.to_string()],
+                "SELECT source_id, supersedes FROM memories \
+                 WHERE source_id = ?1 AND pending_revision = 1 AND supersedes IS NOT NULL AND source = 'memory' LIMIT 1",
+                libsql::params![id.to_string()],
             )
             .await
-            .map_err(|e| WenlanError::VectorDb(format!("accept_pending_revision query: {}", e)))?;
-
-        let revision_source_id: String = if let Some(row) = rows
+            .map_err(|e| WenlanError::VectorDb(format!("resolve_pending_revision rev: {e}")))?;
+        if let Some(row) = rows
             .next()
             .await
             .map_err(|e| WenlanError::VectorDb(e.to_string()))?
         {
-            row.get::<String>(0)
-                .map_err(|e| WenlanError::VectorDb(e.to_string()))?
-        } else {
-            return Err(WenlanError::NotFound(format!(
-                "No pending revision for source_id: {}",
-                target_source_id
-            )));
-        };
+            let rev = row
+                .get::<String>(0)
+                .map_err(|e| WenlanError::VectorDb(e.to_string()))?;
+            let target = row
+                .get::<String>(1)
+                .map_err(|e| WenlanError::VectorDb(e.to_string()))?;
+            return Ok(Some((rev, target)));
+        }
+
+        // 2. `id` is the target (legacy): newest pending revision superseding it.
+        let mut rows = conn
+            .query(
+                "SELECT source_id, supersedes FROM memories \
+                 WHERE supersedes = ?1 AND pending_revision = 1 AND source = 'memory' \
+                 ORDER BY last_modified DESC LIMIT 1",
+                libsql::params![id.to_string()],
+            )
+            .await
+            .map_err(|e| WenlanError::VectorDb(format!("resolve_pending_revision target: {e}")))?;
+        if let Some(row) = rows
+            .next()
+            .await
+            .map_err(|e| WenlanError::VectorDb(e.to_string()))?
+        {
+            let rev = row
+                .get::<String>(0)
+                .map_err(|e| WenlanError::VectorDb(e.to_string()))?;
+            let target = row
+                .get::<String>(1)
+                .map_err(|e| WenlanError::VectorDb(e.to_string()))?;
+            return Ok(Some((rev, target)));
+        }
+
+        Ok(None)
+    }
+
+    /// Accept a pending revision identified by `id` (the revision's own
+    /// `source_id`, or — legacy — its target's). Activates exactly that revision
+    /// (all its chunk rows) and suppresses its target. Sibling revisions are left
+    /// pending. Returns `(target_source_id, revision_source_id)`.
+    pub async fn accept_pending_revision(&self, id: &str) -> Result<(String, String), WenlanError> {
+        let conn = self.conn.lock().await;
+        let (revision_source_id, target_source_id) = Self::resolve_pending_revision(&conn, id)
+            .await?
+            .ok_or_else(|| {
+                WenlanError::NotFound(format!("No pending revision for source_id: {}", id))
+            })?;
 
         conn.execute("BEGIN", ())
             .await
@@ -16437,7 +16485,7 @@ impl MemoryDB {
         let suppress_result = conn
             .execute(
                 "UPDATE memories SET confirmed = 0, stability = 'new' WHERE source_id = ?1",
-                libsql::params![target_source_id.to_string()],
+                libsql::params![target_source_id.clone()],
             )
             .await;
         if let Err(e) = suppress_result {
@@ -16452,30 +16500,30 @@ impl MemoryDB {
             .await
             .map_err(|e| WenlanError::VectorDb(format!("accept_pending_revision commit: {}", e)))?;
 
-        Ok(())
+        Ok((target_source_id, revision_source_id))
     }
 
-    /// Dismiss a pending revision for a target memory. Deletes the pending revision,
-    /// leaving the original unchanged.
+    /// Dismiss a pending revision identified by `id` (the revision's own
+    /// `source_id`, or — legacy — its target's). Deletes exactly that one
+    /// revision (all its chunk rows); sibling revisions and the original are
+    /// untouched. Returns `(target_source_id, revision_source_id)`.
     pub async fn dismiss_pending_revision(
         &self,
-        target_source_id: &str,
-    ) -> Result<(), WenlanError> {
+        id: &str,
+    ) -> Result<(String, String), WenlanError> {
         let conn = self.conn.lock().await;
-        let rows_affected = conn
-            .execute(
-                "DELETE FROM memories WHERE supersedes = ?1 AND pending_revision = 1 AND source = 'memory'",
-                libsql::params![target_source_id.to_string()],
-            )
-            .await
-            .map_err(|e| WenlanError::VectorDb(format!("dismiss_pending_revision: {}", e)))?;
-        if rows_affected == 0 {
-            return Err(WenlanError::NotFound(format!(
-                "No pending revision for source_id: {}",
-                target_source_id
-            )));
-        }
-        Ok(())
+        let (revision_source_id, target_source_id) = Self::resolve_pending_revision(&conn, id)
+            .await?
+            .ok_or_else(|| {
+                WenlanError::NotFound(format!("No pending revision for source_id: {}", id))
+            })?;
+        conn.execute(
+            "DELETE FROM memories WHERE source_id = ?1",
+            libsql::params![revision_source_id.clone()],
+        )
+        .await
+        .map_err(|e| WenlanError::VectorDb(format!("dismiss_pending_revision: {}", e)))?;
+        Ok((target_source_id, revision_source_id))
     }
 
     pub async fn get_pending_revision_for(
@@ -28832,6 +28880,131 @@ pub(crate) mod tests {
         // No more pending revision
         let pr = db.get_pending_revision_for("dismiss_target").await.unwrap();
         assert!(pr.is_none());
+    }
+
+    /// When several revisions compete for ONE target, accepting by the
+    /// revision's own `source_id` must activate exactly that revision — not an
+    /// arbitrary `LIMIT 1` pick. Regression for the curate accept-by-target bug.
+    #[tokio::test]
+    async fn accept_by_revision_id_picks_exact_revision() {
+        let (db, _dir) = test_db().await;
+
+        let target = RawDocument {
+            source: "memory".to_string(),
+            source_id: "multi_target".to_string(),
+            title: "Original".to_string(),
+            content: "original".to_string(),
+            confirmed: Some(true),
+            ..Default::default()
+        };
+        let rev_old = RawDocument {
+            source: "memory".to_string(),
+            source_id: "multi_rev_old".to_string(),
+            title: "RevOld".to_string(),
+            content: "older revision".to_string(),
+            confirmed: Some(false),
+            supersedes: Some("multi_target".to_string()),
+            pending_revision: true,
+            last_modified: 100,
+            ..Default::default()
+        };
+        let rev_new = RawDocument {
+            source: "memory".to_string(),
+            source_id: "multi_rev_new".to_string(),
+            title: "RevNew".to_string(),
+            content: "newer revision".to_string(),
+            confirmed: Some(false),
+            supersedes: Some("multi_target".to_string()),
+            pending_revision: true,
+            last_modified: 200,
+            ..Default::default()
+        };
+        db.upsert_documents(vec![target, rev_old, rev_new])
+            .await
+            .unwrap();
+
+        // Accept the OLDER revision by its own id — the arbitrary LIMIT-1 pick
+        // would more likely grab the newer one.
+        db.accept_pending_revision("multi_rev_old").await.unwrap();
+
+        let mems = db.list_memories(None, None, None, None, 100).await.unwrap();
+        let ids: Vec<&str> = mems.iter().map(|m| m.source_id.as_str()).collect();
+        assert!(
+            ids.contains(&"multi_rev_old"),
+            "named revision is now active"
+        );
+        assert!(!ids.contains(&"multi_target"), "target suppressed");
+
+        // The sibling revision must remain pending, untouched.
+        let pending = db.list_pending_revisions(10).await.unwrap();
+        let pending_ids: Vec<&str> = pending
+            .iter()
+            .map(|p| p.revision_source_id.as_str())
+            .collect();
+        assert_eq!(
+            pending_ids,
+            vec!["multi_rev_new"],
+            "only the un-accepted sibling stays pending"
+        );
+    }
+
+    /// Dismissing one revision by its own `source_id` must delete only that
+    /// row — not every sibling revision sharing the target. Regression for the
+    /// `DELETE WHERE supersedes = target` sibling-nuke.
+    #[tokio::test]
+    async fn dismiss_by_revision_id_removes_only_that_revision() {
+        let (db, _dir) = test_db().await;
+
+        let target = RawDocument {
+            source: "memory".to_string(),
+            source_id: "dm_target".to_string(),
+            title: "Original".to_string(),
+            content: "original".to_string(),
+            confirmed: Some(true),
+            ..Default::default()
+        };
+        let rev_a = RawDocument {
+            source: "memory".to_string(),
+            source_id: "dm_rev_a".to_string(),
+            title: "RevA".to_string(),
+            content: "revision a".to_string(),
+            confirmed: Some(false),
+            supersedes: Some("dm_target".to_string()),
+            pending_revision: true,
+            last_modified: 100,
+            ..Default::default()
+        };
+        let rev_b = RawDocument {
+            source: "memory".to_string(),
+            source_id: "dm_rev_b".to_string(),
+            title: "RevB".to_string(),
+            content: "revision b".to_string(),
+            confirmed: Some(false),
+            supersedes: Some("dm_target".to_string()),
+            pending_revision: true,
+            last_modified: 200,
+            ..Default::default()
+        };
+        db.upsert_documents(vec![target, rev_a, rev_b])
+            .await
+            .unwrap();
+
+        db.dismiss_pending_revision("dm_rev_a").await.unwrap();
+
+        // Only rev_b should remain pending; the target is untouched.
+        let pending = db.list_pending_revisions(10).await.unwrap();
+        let pending_ids: Vec<&str> = pending
+            .iter()
+            .map(|p| p.revision_source_id.as_str())
+            .collect();
+        assert_eq!(
+            pending_ids,
+            vec!["dm_rev_b"],
+            "sibling revision must survive a single-revision dismiss"
+        );
+        let mems = db.list_memories(None, None, None, None, 100).await.unwrap();
+        let ids: Vec<&str> = mems.iter().map(|m| m.source_id.as_str()).collect();
+        assert!(ids.contains(&"dm_target"), "target untouched by dismiss");
     }
 
     // ==================== list_pending_revisions ====================

@@ -13,8 +13,9 @@ use anyhow::{Context, Result};
 use wenlan_types::{
     requests::{ListMemoriesRequest, SearchRequest, StoreMemoryRequest, UpdateAgentRequest},
     responses::{
-        AgentResponse, HealthResponse, KnowledgeContext, ListMemoriesResponse, PendingRevisionItem,
-        RevisionAcceptResponse, RevisionDismissResponse, SearchResponse, StoreMemoryResponse,
+        AgentResponse, HealthResponse, KnowledgeContext, ListMemoriesResponse,
+        MemoryDetailResponse, PendingRevisionItem, RevisionAcceptResponse, RevisionDismissResponse,
+        SearchResponse, StoreMemoryResponse,
     },
 };
 
@@ -293,12 +294,10 @@ impl WenlanClient {
             .context("parsing /api/memory/pending-revisions response")
     }
 
-    /// POST /api/memory/revision/{target_source_id}/accept — replace the original with the revision.
-    pub async fn accept_revision(&self, target_source_id: &str) -> Result<RevisionAcceptResponse> {
-        let url = format!(
-            "{}/api/memory/revision/{}/accept",
-            self.base_url, target_source_id
-        );
+    /// POST /api/memory/revision/{id}/accept — replace the original with the revision.
+    /// `id` is the revision's own `source_id` (the daemon also accepts a target id, legacy).
+    pub async fn accept_revision(&self, id: &str) -> Result<RevisionAcceptResponse> {
+        let url = format!("{}/api/memory/revision/{}/accept", self.base_url, id);
         let resp = self
             .http
             .post(&url)
@@ -313,15 +312,10 @@ impl WenlanClient {
             .context("parsing accept-revision response")
     }
 
-    /// POST /api/memory/revision/{target_source_id}/dismiss — drop the revision, keep the original.
-    pub async fn dismiss_revision(
-        &self,
-        target_source_id: &str,
-    ) -> Result<RevisionDismissResponse> {
-        let url = format!(
-            "{}/api/memory/revision/{}/dismiss",
-            self.base_url, target_source_id
-        );
+    /// POST /api/memory/revision/{id}/dismiss — drop the revision, keep the original.
+    /// `id` is the revision's own `source_id` (the daemon also accepts a target id, legacy).
+    pub async fn dismiss_revision(&self, id: &str) -> Result<RevisionDismissResponse> {
+        let url = format!("{}/api/memory/revision/{}/dismiss", self.base_url, id);
         let resp = self
             .http
             .post(&url)
@@ -334,5 +328,24 @@ impl WenlanClient {
         resp.json()
             .await
             .context("parsing dismiss-revision response")
+    }
+
+    /// GET /api/memory/{id}/detail — the assembled (chunks-joined) memory by source_id.
+    /// Used by `wenlan curate` to fetch the ORIGINAL a revision would replace, so the
+    /// card can show an original->revision diff.
+    pub async fn get_memory_detail(&self, source_id: &str) -> Result<MemoryDetailResponse> {
+        let url = format!("{}/api/memory/{}/detail", self.base_url, source_id);
+        let resp = self
+            .http
+            .get(&url)
+            .send()
+            .await
+            .with_context(|| format!("GET {} failed (is the daemon running?)", url))?;
+        let resp = resp
+            .error_for_status()
+            .with_context(|| format!("daemon returned error for {}", url))?;
+        resp.json()
+            .await
+            .context("parsing /api/memory/{id}/detail response")
     }
 }

@@ -218,9 +218,43 @@ pub fn cosine_similarity(a: &[f32], b: &[f32]) -> f64 {
     }
 }
 
+/// Whether a topic match is a genuine REVISION candidate (a near-duplicate
+/// re-capture of the matched memory) rather than a distinct fact that merely
+/// shares topic context.
+///
+/// `find_topic_match` clusters *related* memories with permissive tiered
+/// thresholds (0.70 same-entity / same space+type, up to 0.90). Those tiers are
+/// right for consolidation/page grouping but far too low to mean "this is an
+/// edit of that fact": two distinct facts about the same entity routinely embed
+/// in `[0.70, 0.88)`. Staging every such match against a protected memory as a
+/// `pending_revision` produced a curate-queue treadmill of false revisions.
+///
+/// A revision is a NEAR-DUPLICATE, so gate staging on the higher
+/// `revision_threshold` (default 0.88, mirroring the dual-pool Pool-A cosine).
+/// Below it the match is real topic context but not an edit — the caller stores
+/// the capture as a new memory (the established non-collapse contract) and lets
+/// the refinery consolidate later.
+pub fn is_revision_candidate(similarity: Option<f64>, revision_threshold: f64) -> bool {
+    similarity.is_some_and(|s| s >= revision_threshold)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn revision_candidate_requires_near_duplicate_not_topic_match() {
+        // A match at the 0.70 topic tier is NOT a revision — distinct facts
+        // about the same entity embed in [0.70, 0.88) and must store as new,
+        // not stage as a false revision (the curate-queue treadmill).
+        assert!(!is_revision_candidate(Some(0.72), 0.88));
+        assert!(!is_revision_candidate(Some(0.85), 0.88));
+        // Exactly at and above the near-dup bar = a genuine re-capture.
+        assert!(is_revision_candidate(Some(0.88), 0.88));
+        assert!(is_revision_candidate(Some(0.93), 0.88));
+        // No similarity recorded → never a revision candidate.
+        assert!(!is_revision_candidate(None, 0.88));
+    }
 
     #[test]
     fn cosine_similarity_identical() {

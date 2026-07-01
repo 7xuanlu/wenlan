@@ -61,38 +61,50 @@ That prints a JSON array; each element is ONE logical revision (the CLI already
 groups the per-chunk rows and joins their text, so you never see a mid-sentence
 fragment):
 
-- `target_source_id` — the memory this revision would replace; the **action key**.
+- `revision_source_id` — the staged revision; the **action key** for accept/dismiss.
+  Keying on this (not the target) means the *named* revision is acted on even when
+  several compete for one memory.
+- `target_source_id` — the memory this revision would replace (context only).
 - `content` — the full revised text.
 - `source_agent` — who proposed it (or `null` = daemon).
+- `original` — the current text the revision would replace (`null` if unavailable).
+- `diff` — a card-ready, length-bounded `OLD:` / `NEW:` preview of what the
+  revision would replace (two labeled lines, original then revision, each clipped).
+  `null` when `original` is unavailable.
 
 **Read the JSON straight into the card — in one step, no shell tooling.** Each
 element's `content` is the card question (trim to ~1–2 lines inline as you write
-it); `target_source_id` is the action key. Parse the array yourself — do not pipe
+it); `revision_source_id` is the action key. Parse the array yourself — do not pipe
 it through `jq`/`python`/`awk` to reshape first. That extra round-trip is what
 makes the picker feel slow (each retry is a model turn) and is failure-prone
 (quoting, sandboxed temp paths); the model reads JSON natively, so go from CLI
 output to card directly.
 
+**Show the diff so the user isn't approving blind.** Put `diff` verbatim into the
+`preview` field of the **Accept** option — `AskUserQuestion` renders `preview` in a
+monospace box and switches to a side-by-side layout, so it reads like a git diff.
+If `diff` is `null`, omit the preview and keep `content` as the question. Don't
+reformat the diff — it's already card-ready and length-bounded for the picker.
+
 Walk it as native cards (≤4 per card). Per revision, options:
 
-- **Accept** → the revision replaces the original memory.
+- **Accept** → the revision replaces the original memory. (carries the `diff` preview)
 - **Dismiss** → drop the revision, keep the original.
 - **Skip** → nothing.
 
 After the card returns, apply the picks in ONE Bash call (skips run nothing):
 
 ```
-"$W" curate accept <target_source_id>      # for each Accept
-"$W" curate dismiss <target_source_id>     # for each Dismiss
+"$W" curate accept <revision_source_id>      # for each Accept
+"$W" curate dismiss <revision_source_id>     # for each Dismiss
 ```
 
 If the array is empty, say so in one line ("Nothing needs you — no pending
 conflicts.") and stop. Captures are meant to decay; mention `/curate captures`
 only as an opt-in deep audit the user can run if they *want* to, never as a backlog.
 
-The list carries the revised text but **not the original**. If the user wants to
-compare before deciding, `recall` the `target_source_id` first and show both.
-(Surfacing the original inline is a daemon follow-up.)
+The list now carries the `original` and a ready-made `diff` alongside the revised
+`content`, so the user can see what changed without a separate lookup.
 
 ## `/curate captures` (opt-in audit, MCP)
 

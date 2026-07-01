@@ -243,6 +243,9 @@ fn d_080_topic() -> f64 {
 fn d_090_topic() -> f64 {
     0.90
 }
+fn d_088_topic() -> f64 {
+    0.88
+}
 fn d_20_topic() -> usize {
     20
 }
@@ -262,6 +265,14 @@ pub struct TopicMatchConfig {
     /// Embedding threshold when neither domain nor type matches (semantic only).
     #[serde(default = "d_090_topic")]
     pub threshold_none: f64,
+    /// Near-duplicate bar for treating a topic match against a PROTECTED memory
+    /// as a `pending_revision`. The tiers above cluster *related* memories
+    /// (0.70+) for consolidation; a revision must be a near-duplicate re-capture,
+    /// not a distinct fact sharing topic context, so staging uses this higher bar
+    /// (mirrors the dual-pool Pool-A 0.88 cosine). Below it the capture stores as
+    /// new. See `topic_match::is_revision_candidate`.
+    #[serde(default = "d_088_topic")]
+    pub revision_threshold: f64,
     /// Maximum number of candidate memories to consider.
     #[serde(default = "d_20_topic")]
     pub max_candidates: usize,
@@ -276,6 +287,7 @@ impl Default for TopicMatchConfig {
             threshold_exact: 0.70,
             threshold_partial: 0.80,
             threshold_none: 0.90,
+            revision_threshold: 0.88,
             max_candidates: 20,
             changelog_cap: 50,
         }
