@@ -17,7 +17,7 @@
 
 <p align="center">
   <a href="#claude-code-in-30-seconds"><img alt="Claude Code" src="https://img.shields.io/badge/Claude%20Code-plugin-5D4E75"></a>
-  <a href="#mcp-only-setup"><img alt="OpenAI Codex" src="https://img.shields.io/badge/OpenAI%20Codex-MCP-111827"></a>
+  <a href="#codex-plugin-local-development"><img alt="OpenAI Codex" src="https://img.shields.io/badge/OpenAI%20Codex-plugin-111827"></a>
   <a href="#mcp-only-setup"><img alt="Cursor" src="https://img.shields.io/badge/Cursor-MCP-111111"></a>
   <a href="#mcp-only-setup"><img alt="VS Code" src="https://img.shields.io/badge/VS%20Code-MCP-007ACC"></a>
   <a href="#mcp-only-setup"><img alt="Claude Desktop" src="https://img.shields.io/badge/Claude%20Desktop-MCP-D97757"></a>
@@ -71,9 +71,32 @@ Then try `/brief`, `/capture <decision>`, or `/handoff` inside Claude Code.
 
 Plugin details and daily commands: [plugin/](plugin/.claude-plugin/README.md).
 
+### Codex plugin (local development)
+
+The Codex plugin lives in [plugin-codex](plugin-codex/) and is exposed through the repo-local marketplace at [.agents/plugins/marketplace.json](.agents/plugins/marketplace.json). It adds `/init`, `/brief`, and `/capture` skills plus a `wenlan` MCP server.
+
+From this repo:
+
+```bash
+npx -y wenlan setup
+codex plugin marketplace add .
+codex plugin add wenlan@wenlan-local
+```
+
+Start a new Codex thread after installing so the skills and MCP server load. Then try `/init`, `/brief`, or `/capture <memory>`.
+
+For plugin development, reinstall after plugin edits:
+
+```bash
+python3 ~/.codex/skills/.system/plugin-creator/scripts/update_plugin_cachebuster.py plugin-codex
+codex plugin add wenlan@wenlan-local
+```
+
+The plugin runner uses `~/.wenlan/bin/wenlan-mcp` when available and falls back to `npx -y wenlan-mcp@^0.9.5`. It passes `--agent-name codex` so captures are labeled as Codex writes.
+
 ### MCP-only setup
 
-Use this if you want Wenlan tools in Claude Code without the plugin, or in Codex, Cursor, Claude Desktop, VS Code, or Gemini CLI.
+Use this if you want Wenlan tools in Claude Code without the plugin, or in Codex without slash skills, Cursor, Claude Desktop, VS Code, or Gemini CLI.
 
 ```bash
 npx -y wenlan setup
