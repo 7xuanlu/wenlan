@@ -1,0 +1,7 @@
+{
+  "mcpServers": {
+    "wenlan": {
+      "command": "./bin/wenlan-mcp-runner.sh"
+    }
+  }
+}
