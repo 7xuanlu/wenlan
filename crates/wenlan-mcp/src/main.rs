@@ -5,7 +5,7 @@ use clap::{Parser, Subcommand};
 use rmcp::{transport::stdio, ServiceExt};
 use wenlan_mcp::client::{discover_origin_url, WenlanClient};
 use wenlan_mcp::tools::{TransportMode, WenlanMcpServer};
-use wenlan_mcp::{auth, serve, token};
+use wenlan_mcp::{serve, token};
 
 #[derive(Parser)]
 #[command(
@@ -176,7 +176,7 @@ async fn run_serve(
             .host
             .parse()
             .map_err(|_| anyhow::anyhow!("Invalid host address: {}", args.host))?;
-        if !auth::is_loopback(&host_addr) {
+        if !host_addr.is_loopback() {
             anyhow::bail!(
                 "--no-auth is only allowed on loopback addresses (127.0.0.1 or ::1), not {}",
                 args.host

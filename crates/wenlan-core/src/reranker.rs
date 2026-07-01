@@ -7,11 +7,9 @@
 //! ablation showed cross-encoder rerank is the single largest contributor
 //! across their math layers + channels (-30.7pp when removed).
 //!
-//! Three impls:
+//! Two impls:
 //! - [`CrossEncoderReranker`] — fastembed `TextRerank` (default).
 //! - [`NoopReranker`] — passthrough, preserves input order. Tests + opt-out.
-//! - LLM reranker stays in [`crate::rerank`] as `LlmEngine::rerank_results`
-//!   for A/B comparison on the eval harness. Refactor into trait in a follow-up.
 //!
 //! Trait is sync because fastembed's `TextRerank::rerank` is sync CPU work.
 //! Async callers should wrap calls in `tokio::task::spawn_blocking` to avoid

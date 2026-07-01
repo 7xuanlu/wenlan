@@ -5,4 +5,3 @@
 //! `sensor::vision` live in the app crate for now. They'll move into
 //! wenlan-core once `sensor::vision::WindowOcrResult` + friends land here.
 pub mod classify;
-pub mod content_score;

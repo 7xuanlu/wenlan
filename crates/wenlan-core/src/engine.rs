@@ -192,169 +192,6 @@ impl LlmEngine {
         &self.prompts
     }
 
-    /// Format raw OCR text using the LLM with unconstrained generation + JSON extraction.
-    /// Returns None if inference fails, times out, or output is not valid JSON.
-    #[allow(dead_code)]
-    pub fn format_ocr_text(
-        &self,
-        raw_text: &str,
-        app_name: &str,
-        window_title: Option<&str>,
-        spaces: &[String],
-    ) -> Option<FormattedResult> {
-        let start = Instant::now();
-
-        // Input is already sanitized+structured from the capture pipeline
-        // Truncate input at word boundary
-        let truncated = truncate_at_word_boundary(raw_text, MAX_INPUT_CHARS);
-
-        let window_title = window_title.unwrap_or("Unknown");
-
-        // Build ChatML prompt for Qwen3 (with thinking disabled)
-        let spaces_str = spaces.join(", ");
-        let system_prompt = self
-            .prompts
-            .format_ocr_text
-            .replace("{spaces}", &spaces_str);
-        let prompt = format!(
-            "<|im_start|>system\n\
-             {system_prompt}\n\
-             <|im_end|>\n\
-             <|im_start|>user\n\
-             App: {app_name}\n\
-             Window: {window_title}\n\n\
-             {truncated}\n\
-             <|im_end|>\n\
-             <|im_start|>assistant\n",
-        );
-
-        // Tokenize
-        let tokens = match self.model.str_to_token(&prompt, AddBos::Always) {
-            Ok(t) => t,
-            Err(e) => {
-                log::warn!("[llm_engine] tokenization failed: {e}");
-                return None;
-            }
-        };
-
-        log::info!("[llm_engine] prompt tokens={}", tokens.len());
-
-        // Truncate prompt tokens so there's room for output within context window
-        let max_prompt_tokens = CTX_SIZE as usize - MAX_OUTPUT_TOKENS as usize;
-        let tokens = if tokens.len() > max_prompt_tokens {
-            log::warn!(
-                "[llm_engine] prompt tokens ({}) exceed budget ({}), truncating",
-                tokens.len(),
-                max_prompt_tokens
-            );
-            tokens[..max_prompt_tokens].to_vec()
-        } else {
-            tokens
-        };
-
-        // Create per-call context -- n_batch must be >= prompt token count
-        let n_batch = tokens.len().max(512) as u32;
-        let ctx_params = LlamaContextParams::default()
-            .with_n_ctx(Some(NonZeroU32::new(CTX_SIZE).unwrap()))
-            .with_n_batch(n_batch);
-
-        let mut ctx = match self.model.new_context(&self.backend, ctx_params) {
-            Ok(c) => c,
-            Err(e) => {
-                log::warn!("[llm_engine] context creation failed: {e}");
-                return None;
-            }
-        };
-
-        // Fill batch with prompt tokens
-        let mut batch = LlamaBatch::new(tokens.len(), 1);
-        for (i, token) in tokens.iter().enumerate() {
-            if let Err(e) = batch.add(*token, i as i32, &[0], i == tokens.len() - 1) {
-                log::warn!("[llm_engine] batch add failed: {e}");
-                return None;
-            }
-        }
-
-        // Decode prompt
-        if let Err(e) = ctx.decode(&mut batch) {
-            log::warn!("[llm_engine] prompt decode failed: {e}");
-            return None;
-        }
-
-        // Build sampler chain -- unconstrained generation (no grammar)
-        let mut sampler =
-            LlamaSampler::chain_simple([LlamaSampler::temp(0.3), LlamaSampler::dist(42)]);
-
-        // Generate tokens
-        let mut decoder = encoding_rs::UTF_8.new_decoder();
-        let mut output = String::new();
-        let mut n_cur = batch.n_tokens();
-
-        while n_cur < MAX_OUTPUT_TOKENS {
-            // Check timeout
-            if start.elapsed() > INFERENCE_TIMEOUT {
-                log::warn!("[llm_engine] inference timeout after {:?}", start.elapsed());
-                break;
-            }
-
-            let token = sampler.sample(&ctx, batch.n_tokens() - 1);
-            sampler.accept(token);
-
-            if self.model.is_eog_token(token) {
-                break;
-            }
-
-            match self.model.token_to_piece(token, &mut decoder, true, None) {
-                Ok(piece) => output.push_str(&piece),
-                Err(e) => {
-                    log::warn!("[llm_engine] token decode failed: {e}");
-                    break;
-                }
-            }
-
-            batch.clear();
-            if let Err(e) = batch.add(token, n_cur, &[0], true) {
-                log::warn!("[llm_engine] batch add failed: {e}");
-                break;
-            }
-
-            if let Err(e) = ctx.decode(&mut batch) {
-                log::warn!("[llm_engine] decode failed: {e}");
-                break;
-            }
-
-            n_cur += 1;
-        }
-
-        log::info!(
-            "[llm_engine] generated {} chars in {:?}",
-            output.len(),
-            start.elapsed()
-        );
-
-        // Strip any residual <think> tags (safety net), then extract JSON
-        let cleaned = strip_think_tags(&output);
-        let json_str = extract_json(&cleaned).unwrap_or(&cleaned);
-
-        // Parse JSON output
-        match serde_json::from_str::<FormattedResult>(json_str) {
-            Ok(result) => {
-                if result.formatted_text.is_empty() {
-                    log::debug!("[llm_engine] empty formatted_text, skipping");
-                    return None;
-                }
-                Some(result)
-            }
-            Err(e) => {
-                log::warn!(
-                    "[llm_engine] JSON parse failed: {e}, output: {}",
-                    &output[..output.floor_char_boundary(200)]
-                );
-                None
-            }
-        }
-    }
-
     /// Generic inference helper: tokenize prompt, run generation, return raw output string.
     /// Used by refinement prompts (dedup merge, extract patterns, detect contradiction).
     pub fn run_inference(
@@ -474,25 +311,12 @@ impl LlmEngine {
         }
     }
 
-    /// Build a long-lived context that the caller owns. Designed for the
-    /// `OnDeviceProvider` worker thread: one allocation, then `clear_kv_cache()`
-    /// between requests instead of `new_context()` every call.
-    ///
-    /// `n_batch` is set to `ctx_size` so any prompt up to the context window
-    /// fits in a single `decode()` call. `n_ubatch` defaults to the same value.
-    ///
-    /// Returns `None` if Metal context creation fails (caller should log and
-    /// fall back to per-call context creation, which is still valid).
-    pub fn build_persistent_context(&self, ctx_size: u32) -> Option<LlamaContext<'_>> {
-        self.build_persistent_context_with_seq_max(ctx_size, 1)
-    }
-
     /// Build a long-lived context with `n_seq_max` parallel sequence slots.
     /// Used by the continuous-batching worker (Option B / S2): one
     /// `LlamaContext` decodes up to `n_seq_max` independent sequences in
     /// parallel via llama.cpp's continuous-batching scheduler.
     ///
-    /// At `n_seq_max == 1` this is byte-equivalent to `build_persistent_context`
+    /// At `n_seq_max == 1` this is byte-equivalent to a single-sequence context
     /// (the underlying llama.cpp default for `n_seq_max` is 1). The KV cache
     /// budget per sequence is `ctx_size / n_seq_max` — callers must enforce
     /// per-seq prompt+output bounds accordingly.
