@@ -56,6 +56,12 @@ jobs:
               - '.github/workflows/ci.yml'
             plugin:
               - 'plugin/**'
+              - 'plugin-codex/**'
+              - '.agents/plugins/**'
+              - 'plugin-contract.json'
+              - 'scripts/validate-codex-plugin-slice.py'
+              - 'scripts/validate-plugin-contract.py'
+              - 'scripts/validate-plugin-contract.test.sh'
               - '.claude-plugin/**'
             npm:
               - 'crates/*/npm/**'
@@ -371,7 +377,14 @@ jobs:
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
       - name: Validate plugin.json schema
-        run: jq -e '.name and .version and .description and .repository' plugin/.claude-plugin/plugin.json
+        run: |
+          jq -e '.name and .version and .description and .repository' plugin/.claude-plugin/plugin.json
+          jq -e '.name and .version and .description and .repository and .skills and .mcpServers' plugin-codex/.codex-plugin/plugin.json
+      - name: Validate plugin contracts
+        run: |
+          python3 scripts/validate-codex-plugin-slice.py
+          python3 scripts/validate-plugin-contract.py
+          bash scripts/validate-plugin-contract.test.sh
       - name: Validate skill frontmatter
         run: |
           for f in plugin/skills/*/SKILL.md; do

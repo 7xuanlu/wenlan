@@ -94,6 +94,14 @@ codex plugin add wenlan@wenlan-local
 
 The plugin runner uses `~/.wenlan/bin/wenlan-mcp` when available and falls back to `npx -y wenlan-mcp@^0.9.5`. It passes `--agent-name codex` so captures are labeled as Codex writes.
 
+The shared Claude/Codex plugin inventory lives in [plugin-contract.json](plugin-contract.json). Before changing plugin skills, manifests, MCP runner wiring, or the local marketplace, run:
+
+```bash
+python3 scripts/validate-codex-plugin-slice.py
+python3 scripts/validate-plugin-contract.py
+bash scripts/validate-plugin-contract.test.sh
+```
+
 ### MCP-only setup
 
 Use this if you want Wenlan tools in Claude Code without the plugin, or in Codex without slash skills, Cursor, Claude Desktop, VS Code, or Gemini CLI.
