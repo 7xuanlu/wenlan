@@ -90,8 +90,6 @@ fn store_response(source_id: &str) -> StoreMemoryResponse {
         extraction_method: "none".into(),
         enrichment: String::new(),
         hint: String::new(),
-        triggered_revisions: vec![],
-        auto_superseded: vec![],
     }
 }
 

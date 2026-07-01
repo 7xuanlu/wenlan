@@ -94,7 +94,8 @@ pub struct AcceptOutcome {
 /// Defaults:
 /// - `entity_merge`: existing entity (source_ids[1]) wins as canonical, new (source_ids[0]) folds in as alias.
 /// - `relation_conflict`: new relation (source_ids[0]) wins, existing (source_ids[1]) deleted.
-/// - `detect_contradiction`: previously-stored memory (source_ids[1]) flagged pending_revision=1.
+/// - `detect_contradiction`: acknowledge-and-resolve only — neither memory is mutated
+///   (a pure contradiction keeps both facts; the SUPERSEDES auto-merge is daemon-side).
 /// - `suggest_entity`, `dedup_merge`, unknown: returns Validation (422).
 pub async fn apply_refinement(
     db: &MemoryDB,
@@ -137,10 +138,16 @@ pub async fn apply_refinement(
             db.supersede_relation(existing_id, new_id).await?;
         }
         "detect_contradiction" => {
-            let existing_mem = prop.source_ids.get(1).ok_or_else(|| {
+            // Validate the proposal shape, then acknowledge-and-resolve below —
+            // do NOT mutate either memory. A pure contradiction keeps both facts;
+            // the auto-merge (SUPERSEDES) case is handled daemon-side in
+            // process_refinement_queue, never here. Flagging pending_revision
+            // without a supersedes link quarantined the memory (hidden from
+            // retrieval, absent from /curate, no path to clear). ponytail: accept
+            // = clear it from the review queue, nothing more.
+            prop.source_ids.get(1).ok_or_else(|| {
                 WenlanError::Validation("detect_contradiction missing source_ids[1]".into())
             })?;
-            db.flag_memory_for_revision(existing_mem).await?;
         }
         "suggest_entity" => {
             return Err(WenlanError::Validation(
@@ -952,7 +959,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn apply_refinement_detect_contradiction_flags_existing() {
+    async fn apply_refinement_detect_contradiction_does_not_quarantine() {
         let (db, _tmp) = test_db().await;
         let new_mem = format!("mem_{}", uuid::Uuid::new_v4().simple());
         let existing_mem = format!("mem_{}", uuid::Uuid::new_v4().simple());
@@ -1003,7 +1010,12 @@ mod tests {
             .await
             .unwrap();
         let f: i64 = rows.next().await.unwrap().unwrap().get(0).unwrap();
-        assert_eq!(f, 1, "existing memory should be flagged for revision");
+        assert_eq!(
+            f, 0,
+            "existing memory must NOT be quarantined: flagging pending_revision \
+             without a supersedes link hides it from /curate and all retrieval \
+             with no way to clear (the contradiction-accept quarantine bug)"
+        );
 
         let mut rows = conn
             .query(
@@ -1013,7 +1025,7 @@ mod tests {
             .await
             .unwrap();
         let f: i64 = rows.next().await.unwrap().unwrap().get(0).unwrap();
-        assert_eq!(f, 0, "new memory should NOT be flagged");
+        assert_eq!(f, 0, "new memory should NOT be flagged either");
     }
 
     #[tokio::test]

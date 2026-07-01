@@ -41,18 +41,6 @@ pub struct StoreMemoryResponse {
     /// fields as failure. Empty when the store completed fully sync.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub hint: String,
-    /// Source IDs of protected memories now flagged for human revision
-    /// because this capture's topic-match upsert fired against them. Empty
-    /// when no contradictions detected. Skills should surface these inline
-    /// to the user with accept/dismiss verbs (see `accept_revision` /
-    /// `dismiss_revision` MCP tools).
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub triggered_revisions: Vec<String>,
-    /// Source IDs of protected memories auto-accepted by the daemon because
-    /// the capture came from a full-trust agent and embedding similarity
-    /// exceeded the auto-supersede threshold. No human action needed.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub auto_superseded: Vec<String>,
 }
 
 fn default_extraction_method() -> String {
@@ -1088,8 +1076,6 @@ mod tests {
             extraction_method: "none".into(),
             enrichment: "not_needed".into(),
             hint: String::new(),
-            triggered_revisions: vec![],
-            auto_superseded: vec![],
         };
         let json = serde_json::to_string(&response).unwrap();
         assert!(json.contains("\"enrichment\":\"not_needed\""));
@@ -1100,94 +1086,6 @@ mod tests {
         let parsed: StoreMemoryResponse = serde_json::from_str(&json).unwrap();
         assert_eq!(parsed.enrichment, "not_needed");
         assert_eq!(parsed.hint, "");
-    }
-
-    #[test]
-    fn store_memory_response_triggered_revisions_serializes_when_non_empty() {
-        let r = StoreMemoryResponse {
-            source_id: "mem_new".into(),
-            chunks_created: 1,
-            memory_type: "fact".into(),
-            entity_id: None,
-            quality: None,
-            warnings: vec![],
-            extraction_method: "none".into(),
-            enrichment: "not_needed".into(),
-            hint: String::new(),
-            triggered_revisions: vec!["mem_target_abc".to_string()],
-            auto_superseded: vec![],
-        };
-        let json = serde_json::to_string(&r).unwrap();
-        assert!(
-            json.contains("\"triggered_revisions\":[\"mem_target_abc\"]"),
-            "triggered_revisions must appear in JSON when non-empty, got: {json}"
-        );
-    }
-
-    #[test]
-    fn store_memory_response_triggered_revisions_skips_when_empty() {
-        let r = StoreMemoryResponse {
-            source_id: "mem_new".into(),
-            chunks_created: 1,
-            memory_type: "fact".into(),
-            entity_id: None,
-            quality: None,
-            warnings: vec![],
-            extraction_method: "none".into(),
-            enrichment: "not_needed".into(),
-            hint: String::new(),
-            triggered_revisions: vec![],
-            auto_superseded: vec![],
-        };
-        let json = serde_json::to_string(&r).unwrap();
-        assert!(
-            !json.contains("triggered_revisions"),
-            "triggered_revisions must be absent from JSON when empty, got: {json}"
-        );
-    }
-
-    #[test]
-    fn store_memory_response_auto_superseded_serializes_when_non_empty() {
-        let r = StoreMemoryResponse {
-            source_id: "mem_new".into(),
-            chunks_created: 1,
-            memory_type: "fact".into(),
-            entity_id: None,
-            quality: None,
-            warnings: vec![],
-            extraction_method: "none".into(),
-            enrichment: "not_needed".into(),
-            hint: String::new(),
-            triggered_revisions: vec![],
-            auto_superseded: vec!["mem_old_abc".to_string()],
-        };
-        let json = serde_json::to_string(&r).unwrap();
-        assert!(
-            json.contains("\"auto_superseded\":[\"mem_old_abc\"]"),
-            "auto_superseded must appear in JSON when non-empty, got: {json}"
-        );
-    }
-
-    #[test]
-    fn store_memory_response_auto_superseded_skips_when_empty() {
-        let r = StoreMemoryResponse {
-            source_id: "mem_new".into(),
-            chunks_created: 1,
-            memory_type: "fact".into(),
-            entity_id: None,
-            quality: None,
-            warnings: vec![],
-            extraction_method: "none".into(),
-            enrichment: "not_needed".into(),
-            hint: String::new(),
-            triggered_revisions: vec![],
-            auto_superseded: vec![],
-        };
-        let json = serde_json::to_string(&r).unwrap();
-        assert!(
-            !json.contains("auto_superseded"),
-            "auto_superseded must be absent from JSON when empty, got: {json}"
-        );
     }
 
     #[test]
