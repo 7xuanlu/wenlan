@@ -16504,9 +16504,10 @@ impl MemoryDB {
     }
 
     /// Dismiss a pending revision identified by `id` (the revision's own
-    /// `source_id`, or — legacy — its target's). Deletes exactly that one
-    /// revision (all its chunk rows); sibling revisions and the original are
-    /// untouched. Returns `(target_source_id, revision_source_id)`.
+    /// `source_id`, or — legacy — its target's). UNSTAGES exactly that one
+    /// revision — clears its `pending_revision` + `supersedes` so it survives
+    /// as an independent memory (not deleted); sibling revisions and the
+    /// original are untouched. Returns `(target_source_id, revision_source_id)`.
     pub async fn dismiss_pending_revision(
         &self,
         id: &str,
@@ -16517,8 +16518,14 @@ impl MemoryDB {
             .ok_or_else(|| {
                 WenlanError::NotFound(format!("No pending revision for source_id: {}", id))
             })?;
+        // Unstage, not delete: "dismiss" means "this is NOT a revision of the
+        // target", so drop the false revision link (clear pending_revision +
+        // supersedes) and keep the memory as an independent row. Deleting it
+        // would destroy a distinct captured memory whenever the staging was a
+        // false positive (the topic-match treadmill). A genuinely unwanted
+        // capture is removed separately via `forget`.
         conn.execute(
-            "DELETE FROM memories WHERE source_id = ?1",
+            "UPDATE memories SET pending_revision = 0, supersedes = NULL WHERE source_id = ?1",
             libsql::params![revision_source_id.clone()],
         )
         .await
@@ -28862,7 +28869,7 @@ pub(crate) mod tests {
         };
         db.upsert_documents(vec![revision]).await.unwrap();
 
-        // Dismiss the revision
+        // Dismiss the revision (now = unstage: drop the false link, keep both rows)
         db.dismiss_pending_revision("dismiss_target").await.unwrap();
 
         // Original should still be visible
@@ -28872,12 +28879,24 @@ pub(crate) mod tests {
             ids.contains(&"dismiss_target"),
             "original should remain after dismiss"
         );
+
+        // The dismissed revision must SURVIVE as an independent memory. Dismiss
+        // unlinks a falsely-staged revision (clears pending_revision + supersedes)
+        // rather than deleting a distinct captured memory. get_memory_detail
+        // filters pending_revision = 0, so a still-staged row returns None.
+        let revision = db
+            .get_memory_detail("dismiss_revision")
+            .await
+            .unwrap()
+            .expect(
+                "dismissed revision must survive as an independent memory (unstage, not delete)",
+            );
         assert!(
-            !ids.contains(&"dismiss_revision"),
-            "dismissed revision should be deleted"
+            revision.supersedes.is_none(),
+            "dismiss must clear the false supersedes link"
         );
 
-        // No more pending revision
+        // No longer a pending revision against the target.
         let pr = db.get_pending_revision_for("dismiss_target").await.unwrap();
         assert!(pr.is_none());
     }
@@ -28948,9 +28967,9 @@ pub(crate) mod tests {
         );
     }
 
-    /// Dismissing one revision by its own `source_id` must delete only that
-    /// row — not every sibling revision sharing the target. Regression for the
-    /// `DELETE WHERE supersedes = target` sibling-nuke.
+    /// Dismissing one revision by its own `source_id` must unstage only that
+    /// revision — not every sibling revision sharing the target. Regression for
+    /// the old `DELETE WHERE supersedes = target` sibling-nuke.
     #[tokio::test]
     async fn dismiss_by_revision_id_removes_only_that_revision() {
         let (db, _dir) = test_db().await;

@@ -89,7 +89,9 @@ reformat the diff — it's already card-ready and length-bounded for the picker.
 Walk it as native cards (≤4 per card). Per revision, options:
 
 - **Accept** → the revision replaces the original memory. (carries the `diff` preview)
-- **Dismiss** → drop the revision, keep the original.
+- **Dismiss** → it was NOT an edit: unstage the false revision link and keep BOTH
+  memories as independent rows. (Non-destructive — nothing is deleted. To delete a
+  genuinely unwanted capture, use `/curate captures` → Reject.)
 - **Skip** → nothing.
 
 After the card returns, apply the picks in ONE Bash call (skips run nothing):

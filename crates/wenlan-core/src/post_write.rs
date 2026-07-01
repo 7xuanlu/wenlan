@@ -808,7 +808,8 @@ pub async fn accept_pending_revision(
 
 /// Dismiss a pending memory revision. Canonical entry for both
 /// agent-triggered (`/api/memory/revision/{id}/dismiss`) and daemon-internal
-/// triggers. Deletes the pending revision row; the original is untouched.
+/// triggers. Unstages the pending revision (clears its revision link, keeping
+/// the memory as an independent row); the original is untouched.
 /// Returns `NotFound` if no pending revision exists for the target.
 pub async fn dismiss_pending_revision(
     db: &MemoryDB,

@@ -312,7 +312,7 @@ impl WenlanClient {
             .context("parsing accept-revision response")
     }
 
-    /// POST /api/memory/revision/{id}/dismiss — drop the revision, keep the original.
+    /// POST /api/memory/revision/{id}/dismiss — unstage the false revision: keep BOTH it and the original.
     /// `id` is the revision's own `source_id` (the daemon also accepts a target id, legacy).
     pub async fn dismiss_revision(&self, id: &str) -> Result<RevisionDismissResponse> {
         let url = format!("{}/api/memory/revision/{}/dismiss", self.base_url, id);
